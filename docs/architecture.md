@@ -443,7 +443,125 @@ on its own column:
   when find-missing (Epic 8) later removes a parent row.
 
 The `list --parent <id>` filter walks this column directly; the
-forthcoming MCP server can map a tree by recursive listings.
+MCP server (Epic 11) exposes the same filter so an LLM client can
+map a tree by recursive listings.
+
+## Stdio MCP server
+
+The MCP server is the JSON-RPC-over-stdio surface
+(`internal/mcp`). It exposes every CLI verb as an MCP tool so an
+MCP-capable LLM client can drive Spawns without going through the
+shell. The server is **long-lived** per SRD §3.3: config is loaded
+once at startup; in-flight edits to `~/.claude-director/config.toml`
+don't take effect until the next `serve --stdio` invocation.
+
+### Drift-free schema generation
+
+The tool list is generated from `internal/api/manifest.Verbs` — the
+same single source of truth that drives the CLI flag definitions
+and the reference docs (`cli-reference.md`, `mcp-reference.md`).
+Adding a verb to the manifest exposes it via MCP on the next server
+start with NO source changes in `internal/mcp`. The
+drift-by-construction invariant is pinned by
+`TestToolsListMatchesManifest` in `internal/mcp/server_test.go`:
+the test enumerates `manifest.Verbs` at run time and compares the
+result against `tools/list`'s output, so a new manifest verb that
+isn't filtered automatically extends the test.
+
+### Layer map
+
+```
+  Claude Code (MCP client)
+            │
+            │  JSON-RPC 2.0, line-delimited JSON on stdin/stdout
+            ▼
+  internal/mcp/server.go (initialize, tools/list, tools/call)
+            │
+            │  Dispatcher.Call(ctx, name, args)
+            ▼
+  internal/mcp/dispatch.go::LiveDispatcher (switch on verb name)
+            │
+            │  typed params struct → api function call
+            ▼
+  internal/api/* (Spawn, Status, SendKeys, …)
+```
+
+### Filtered verbs
+
+Two verbs are deliberately filtered out of `tools/list`:
+
+- `hook` — internal; only Claude Code's hook machinery calls it
+  through the per-Spawn `--settings` payload. Exposing it via MCP
+  would let an LLM client manufacture state transitions.
+- `serve` — self-referential. An MCP client calling `serve` inside
+  the same server would deadlock.
+
+The filter lives in `internal/mcp/server.go::ExposedVerb`.
+
+### Name mapping
+
+MCP tool names use underscores (`send_keys`); manifest verb names
+use hyphens (`send-keys`). `ToolName` + `VerbNameFromTool` are
+symmetric inverses, pinned by `TestToolNameMapping`. The mapping is
+faithful because no current verb name carries an underscore — if
+that changes, the round-trip test will catch it.
+
+### Error envelope
+
+Tool-call failures return a JSON-RPC error response with the
+canonical SRD §13.1 err_name in the `data` field:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "error": {
+    "code": -32000,
+    "message": "spawn id-x: not found",
+    "data": {
+      "err_name": "ErrSpawnNotFound",
+      "err_description": "ErrSpawnNotFound: spawn id-x: not found"
+    }
+  }
+}
+```
+
+The err_name table is populated at server startup by
+`registerMCPErrors` in cmd/, which walks the CLI's `errCatalog`. The
+two views — CLI envelope and MCP error response — surface the same
+canonical names for the same wrapped errors.
+
+### Success envelope
+
+Tool-call success returns the verb's typed result, JSON-encoded,
+wrapped in MCP's content shape:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "content": [
+      {"type": "text", "text": "{\"claude_instance_id\":\"id-x\"}"}
+    ]
+  }
+}
+```
+
+This mirrors the CLI's stdout shape — a script reading the CLI and
+an MCP client see the same JSON. The content array is single-text-
+part for v1; richer types (resource URIs, images) are out of scope.
+
+### Registration
+
+```sh
+claude mcp add claude-director /path/to/claude-director serve --stdio
+```
+
+Claude Code stores this in its MCP config and launches the binary
+on session start. The binary's `~/.claude-director/config.toml` is
+the same one the CLI uses; SRD §3.3 says edits take effect on the
+next session.
 
 ## Permission relay
 
