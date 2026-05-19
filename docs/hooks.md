@@ -123,6 +123,72 @@ inject the verb list into the new conversation so the model knows the
 supervision API surface. See `architecture.md` and the install skill's
 README for details — Epic 12 owns this.
 
+## PermissionRequest relay path
+
+When a Spawn's `relay_mode=on`, the hook handler takes a second branch
+on PermissionRequest events: after the normal state-tracking UPSERT
+(state → `check_permission`), it enters a polling loop and only
+returns when the orchestrator's `decide` verb has written a row in
+`permission_requests`. See `permissions.md` for the user-facing
+contract; this section covers the implementation.
+
+### Polling loop
+
+`internal/hook/polling.go` implements `Poll(ctx, store, clock, cfg,
+id, rng)`. Each iteration:
+
+1. `GetPermissionRequest(id)`:
+   - `sql.ErrNoRows` → row was preempted (typically by a fresh
+     DELETE-INSERT on a new PermissionRequest event for the same
+     Spawn). Return fail-closed.
+   - other SQL error → increment a retry counter; abandon after 5
+     consecutive errors (`pollMaxReadRetries`).
+   - row found, decision NULL → sleep and loop.
+   - row found, decision populated → return the decision.
+2. Check the timeout deadline; if expired → return fail-closed.
+3. Sleep `max(50ms, base + uniform(0, jitter))`. The 50ms floor is
+   load-bearing: a misconfigured `relay.poll_base_ms=0,
+   relay.poll_jitter_ms=0` must not pin CPU.
+
+The sleeper uses `time.NewTimer + select` so `ctx.Done()` preempts
+the sleep cleanly. The loop never sleeps past the deadline.
+
+### Writing the envelope
+
+The handler emits exactly one line on stdout — the
+`hookSpecificOutput` envelope per SRD §6.3. Non-PermissionRequest
+events leave stdout empty (state-tracking has no envelope contract).
+
+### `CLAUDE_DIRECTOR_RELAY_MODE` env var
+
+The handler reads the relay mode from
+`os.Getenv("CLAUDE_DIRECTOR_RELAY_MODE")`, NOT from the DB's
+`spawns.relay_mode` column. This separation is the SRD §6.5
+fail-closed safety guarantee: a DB-unreachable or schema-mismatch
+failure still surfaces the correct relay decision because the env
+var was set on the Spawn's tmux session at launch time (Epic 3) and
+survives any DB-side breakage.
+
+### Fail-closed boundary
+
+`internal/hook/handler.go` runs a `failClosed` helper on every
+pre-relay failure path (instance-id missing, payload read, classify,
+UPSERT, session-id). When `relayActive` is true, the helper writes a
+deny envelope before returning. `runRelay` itself runs the polling
+loop and writes either the decision envelope or — on
+timeout/ctx-cancel/preemption/read-retry-exhaustion — a deny
+envelope. See `permissions.md` for the enumerated failure modes.
+
+### Per-Spawn UNIQUE on `permission_requests`
+
+The store schema's `permission_requests.claude_instance_id` has a
+UNIQUE constraint (Epic 3). A second PermissionRequest event for the
+same Spawn DELETEs the old row before INSERTing the new one (all in
+one transaction). The old row's polling loop sees `sql.ErrNoRows` on
+its next read and fails closed — preventing the original request
+from being "answered" by a decision intended for a different
+request.
+
 ## References
 
 - Claude Code hooks: <https://docs.claude.com/en/docs/claude-code/hooks>

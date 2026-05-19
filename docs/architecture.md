@@ -445,6 +445,98 @@ on its own column:
 The `list --parent <id>` filter walks this column directly; the
 forthcoming MCP server can map a tree by recursive listings.
 
+## Permission relay
+
+Orchestrators can intercept tool permission requests from Spawns and
+decide allow/deny out-of-band. Conceptually:
+
+```
+  Claude Code ─PermissionRequest hook→ claude-director hook (polling)
+                                            ↑
+                                            │ writes decision
+                                            │
+                        orchestrator → claude-director decide
+```
+
+### Components
+
+- **`internal/hook/envelope.go`** — `EncodeDecision(behavior, reason)`
+  serializes the SRD §6.3 `hookSpecificOutput` envelope. The deny-
+  default-message ("Denied by orchestrator") and the allow-message-
+  omission rule both live here.
+
+- **`internal/hook/polling.go`** — `Poll` is the loop. Pure function
+  taking `(ctx, store, clock, cfg.Relay, id, *rand.Rand)`. The
+  clock seam lets tests inject a fast variant; the rng is per-call
+  so the jitter is deterministic in tests.
+
+- **`internal/hook/permission.go`** — `runRelay` orchestrates the
+  PermissionRequest relay path: UPSERT the open row, call `Poll`,
+  write the envelope. Always emits an envelope before returning.
+
+- **`internal/hook/handler.go`** — branches into `runRelay` when the
+  event is `PermissionRequest` AND `CLAUDE_DIRECTOR_RELAY_MODE=on`.
+  Every pre-relay failure path emits a deny envelope when relay is
+  active (SRD §6.4).
+
+- **`internal/store/permission.go`** — three primitives:
+  - `UpsertOpenPermissionRequest`: DELETE-INSERT in one tx.
+  - `GetPermissionRequest`: the polling-loop read.
+  - `DecidePermissionRequest`: the race-free decide UPDATE.
+
+- **`internal/api/decide.go`** — verb wrapper. State guards
+  (`ErrRelayModeOff`, `ErrSpawnNotFound`, `ErrInvalidDecision`)
+  before the UPDATE, plus the RowsAffected==0 disambiguation
+  (`ErrAlreadyDecided` vs `ErrNoOpenPermissionRequest`).
+
+### Polling cadence + the 50ms floor
+
+The per-iteration sleep is
+`max(50ms, cfg.PollBaseMs + uniform(0, cfg.PollJitterMs))`. SRD §6.2
+specifies the floor explicitly so a misconfigured 0+0 config can't
+pin CPU. The default config (`100ms + 0..100ms`) gives ~150-200ms
+average iterations — fast enough that human-driven decide calls
+land within a frame of UI rendering, slow enough that the SQLite
+read budget is unimportant.
+
+### Fail-closed boundary
+
+SRD §6.4 enumerates the failure modes. They split into two scopes:
+
+**Pre-relay (handler-level):** instance-id missing/invalid, payload
+read failure, classify failure, UPSERT failure, session-id write
+failure. The handler's `failClosed` helper writes a deny envelope
+when `relayActive` is true.
+
+**Inside the polling loop:** timeout expiry, `ctx.Done()`, row
+preempted via `sql.ErrNoRows`, read-retry budget exhausted.
+`runRelay` checks `PollResult.Decision` and writes a deny envelope
+when it's empty.
+
+The cmd/-side `runHook` ALSO has a pre-Handle fail-closed: if the
+config can't be loaded or the store can't be opened, runHook itself
+writes the deny envelope before returning. This is the SRD §6.5
+"env-var, not DB" guarantee — even a store-open failure on a
+relay-on Spawn still surfaces deny.
+
+### Why DELETE-INSERT, not UPSERT-via-INSERT-OR-REPLACE
+
+The two-statement DELETE+INSERT inside one transaction is the
+simpler form: the UNIQUE constraint stays on, and the only
+observable in-flight state is "no row" (which the polling loop
+catches via `sql.ErrNoRows`). `INSERT OR REPLACE` works in SQLite
+but interacts oddly with the `ON DELETE CASCADE` FK on
+`permission_requests` and doesn't reset `created_at` cleanly without
+explicit column lists.
+
+### Send-keys interaction
+
+`internal/api/sendkeys.go`'s precondition: when `relay_mode=on` AND
+`state=check_permission`, return `ErrSendKeysWhileRelayed`. The
+relay path owns the modal answer; a pane-side keystroke would race
+the relay's decide write. The guard was added in Epic 4 (stubbed);
+Epic 10 activates it end-to-end.
+
 ## Resume
 
 Bringing a terminated Spawn back to life via `claude --resume`. Same
