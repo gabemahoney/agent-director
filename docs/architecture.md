@@ -303,6 +303,92 @@ synthesized in stage 4. The handler's binary path is resolved via
 macOS) so it is always the same binary version that ran the `spawn`
 call.
 
+## Interact: `send-keys` + `read-pane`
+
+After Epic 4 a tracked Spawn becomes externally drivable: an orchestrator
+can deliver text into its tmux pane and read the rendered TUI back out
+without attaching to the session. The two verbs are typed Go functions
+in `internal/api`, each calling exactly one method on the shared
+`*tmux.Client` (`SendKeys` / `CapturePane`). Cross-reference SRD §4.3
+(send-keys multiline semantics), SRD §12 (verb shapes),
+`reference/send-keys-research.md` (empirical LF/CR behavior),
+`reference/pane-output-research.md` (capture-pane sanitization).
+
+### `send-keys`
+
+Submits text into a live Spawn's first pane. Three behaviors are
+load-bearing:
+
+- **`\r` (CR, 0x0D) stripped before tmux receives the argv.** Per
+  `reference/send-keys-research.md` "CR caveat", a literal CR in the
+  payload would submit the buffer at the position the CR appears —
+  splitting one logical message into multiple submissions. The verb
+  removes CR bytes pre-send so only the trailing Enter submits.
+
+- **`\n` (LF, 0x0A) passed through verbatim.** Claude Code's input
+  handler treats LF as "insert newline in input box", not as a submit.
+  A multi-line payload composes as one message. The argv to tmux is
+  *one* element containing the literal LFs; tmux's own quoting handles
+  them.
+
+- **`press_enter` (default true) appends a single Enter.** Implemented
+  as a *separate* `tmux send-keys -t <name>:0.0 Enter` call after the
+  text. Mixing the submit byte into the text argv would re-introduce
+  the same "premature submission" failure mode the CR strip prevents.
+
+State precondition: the row's `state` must be one of `waiting`,
+`working`, `ask_user`, `check_permission`. `pending`, `ended`, and
+`missing` reject with `ErrSpawnNotInteractive`. `pending` is excluded
+because the TUI is not yet up — the first SessionStart hook flips
+`pending` to `waiting`, after which the Spawn is reachable.
+
+Relay-mode guard: when `relay_mode=on` AND `state=check_permission`,
+the permission relay (Epic 10) owns the modal answer. SendKeys refuses
+with `ErrSendKeysWhileRelayed` so the relay's `decide()` write isn't
+racing a pane-side keystroke. The full relay path lands in Epic 10;
+Epic 4 stubs the guard so the precondition surface is correct from
+day one.
+
+### `read-pane`
+
+Captures the last N lines of a Spawn's first pane via
+`tmux capture-pane -p -t <name>:0.0 -S -<n>`. Default `n=25`, no upper
+cap (SRD §12 explicitly leaves the bound to the caller).
+
+ANSI handling:
+
+- **Default (`ansi=false`) — strip ANSI escape sequences, preserve
+  unicode glyphs.** `tmux capture-pane -p` (without `-e`) already
+  removes most SGR / cursor escapes server-side; `internal/tmux.StripANSI`
+  scrubs any residuals with a byte-oriented regex (`\x1b\[[0-9;]*[a-zA-Z]`)
+  that never touches non-ASCII bytes. The TUI glyphs Claude uses
+  (`❯` U+276F, `⎿` U+23BF, `🐝` U+1F41D, box-drawing chars) survive —
+  the orchestrator reads them as state signal per
+  `reference/pane-output-research.md` "State-signal value".
+
+- **`ansi=true` — return raw bytes from tmux exactly as captured.**
+  Useful for a future TUI viewer mirroring the pane to a browser, or
+  for debugging color-coded diffs. No transformation between tmux
+  stdout and the JSON `pane` field.
+
+Errors: `ErrSpawnNotFound` (unknown id), `ErrTmuxCaptureFailed`
+(transport-layer tmux failure — e.g. the session vanished between the
+row lookup and the capture call). Unlike `send-keys`, `read-pane` has
+*no* state precondition: a caller can inspect an `ended` Spawn's final
+pane bytes as a post-mortem.
+
+### Layer boundaries
+
+- `internal/api/sendkeys.go` and `internal/api/readpane.go` are the
+  verb surfaces — typed params in, typed result + error out, errors
+  matched via `errors.Is`.
+- They call `internal/store` for the row lookup and `internal/tmux` for
+  the wire op. Each verb is one row read plus one or two tmux calls.
+- No SQL strings, no shell, no `&&`/`|`/`$VAR` at any layer (SRD §4.3,
+  §14.3). tmux invocations go through `*tmux.Client.SendKeys` /
+  `CapturePane`, both of which use direct `exec.Command` with the text
+  as a single argv element.
+
 ## Test Harness
 
 Every functional Epic (Epics 3-13) is gated by a Docker-based integration
