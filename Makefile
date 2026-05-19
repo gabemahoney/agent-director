@@ -1,4 +1,4 @@
-.PHONY: all build test generate lint test-image test-image-smoke
+.PHONY: all build test generate lint test-image test-image-smoke test-docker
 
 # Pinned Claude Code version. Per SRD §15.2 the harness's image must install
 # *this* version of @anthropic-ai/claude-code; bumping it requires re-running
@@ -49,5 +49,29 @@ test-image-smoke: test-image
 		exit 1; \
 	fi
 
-# test-docker (canonical command form for every functional Epic's gate) is
-# added in Task 3 of Epic 2 once the harness-smoke testplan exists.
+# test-docker is the canonical command form every functional Epic's
+# Progression Contract references. Exact form is fixed here — changing it
+# requires updating every Epic ticket that gates on it.
+#
+#   EPIC      — testplan slug (required). Resolved by the driver to the t1
+#               collector whose title contains the slug.
+#   DRIVER_MODE — "shell" (default for harness-smoke; no API calls) or
+#                 "claude" (real driver-Claude; requires
+#                 ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN to be set
+#                 in the calling environment).
+#
+# Auth env vars are inherited from the host process — never hard-coded. CI
+# sources them from secrets; see `.github/workflows/integration.yml` and
+# docs/architecture.md "Test Harness" for the operator setup.
+test-docker: test-image
+	@if [ -z "$(EPIC)" ]; then \
+		echo "ERROR: EPIC is required. Example: make test-docker EPIC=harness-smoke" >&2; \
+		exit 2; \
+	fi
+	docker run --rm \
+		-e EPIC=$(EPIC) \
+		-e DRIVER_MODE=$${DRIVER_MODE:-shell} \
+		-e ANTHROPIC_API_KEY \
+		-e CLAUDE_CODE_OAUTH_TOKEN \
+		-v "$(CURDIR)/tickets/testplans:/work/tickets/testplans:ro" \
+		$(TEST_IMAGE)

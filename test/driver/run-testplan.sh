@@ -47,25 +47,71 @@ if [[ -z "${EPIC:-}" ]]; then
 fi
 
 TESTPLAN_ROOT="${TESTPLAN_ROOT:-/work/tickets/testplans}"
-EPIC_DIR="${TESTPLAN_ROOT}/${EPIC}"
 
-if [[ ! -d "$EPIC_DIR" ]]; then
-    err "no such testplan: ${EPIC_DIR} not found"
+if [[ ! -d "$TESTPLAN_ROOT" ]]; then
+    err "no such testplan: ${TESTPLAN_ROOT} not mounted into the container"
     emit "$(emit_summary 0 0 0)"
     exit 3
 fi
 
-# Each t1 collector lives at testplans/<epic>/<bee>/<t1>/. Find every t2 case
-# file under any nested t1 collector beneath EPIC_DIR.
-mapfile -t CASE_FILES < <(find "$EPIC_DIR" -type f -name 't2.*.md' | sort)
+# Resolve EPIC slug to a t1 collector path. Two lookup forms:
+#   1. Literal directory: TESTPLAN_ROOT/<EPIC>/ (matches the Epic ticket's
+#      "<epic-slug>/" shorthand if anyone ever lays out testplans that way).
+#   2. Title match: grep every t1.*.md frontmatter for a title containing
+#      the EPIC slug as a case-insensitive substring (the convention bees
+#      actually produces, since the on-disk layout is <bee>/<t1>/...).
+T1_FILE=""
 
-if [[ "${#CASE_FILES[@]}" -eq 0 ]]; then
-    err "testplan ${EPIC} has no t2 cases"
+if [[ -d "${TESTPLAN_ROOT}/${EPIC}" ]]; then
+    T1_FILE="$(find "${TESTPLAN_ROOT}/${EPIC}" -maxdepth 3 -type f -name 't1.*.md' | head -n 1)"
+fi
+
+if [[ -z "$T1_FILE" ]]; then
+    # Match titles like "Epic 2 — harness-smoke testplan" given EPIC=harness-smoke.
+    while IFS= read -r candidate; do
+        if grep -qiE "^title:.*${EPIC}" "$candidate"; then
+            T1_FILE="$candidate"
+            break
+        fi
+    done < <(find "$TESTPLAN_ROOT" -type f -name 't1.*.md')
+fi
+
+if [[ -z "$T1_FILE" ]]; then
+    err "no such testplan: nothing under ${TESTPLAN_ROOT} matches EPIC=${EPIC}"
+    emit "$(emit_summary 0 0 0)"
+    exit 3
+fi
+
+T1_DIR="$(dirname "$T1_FILE")"
+
+# Read the t1 collector's `children:` list (YAML frontmatter, order-preserving).
+# This is the canonical case order — alphabetical basename sort would scramble
+# paired cases like the smoke-2 / smoke-3 DB-isolation pair.
+mapfile -t CASE_IDS < <(awk '
+    /^---$/ {fm = !fm; next}
+    fm && /^children:/ {in_children = 1; next}
+    fm && in_children && /^[a-zA-Z_]/ {in_children = 0}
+    fm && in_children && /^- / {sub(/^- /, ""); print}
+' "$T1_FILE")
+
+if [[ "${#CASE_IDS[@]}" -eq 0 ]]; then
+    err "testplan ${EPIC} (t1 at ${T1_FILE}) has no t2 children listed"
     emit "$(emit_summary 0 0 0)"
     exit 4
 fi
 
-err "loaded ${#CASE_FILES[@]} t2 case(s) from ${EPIC_DIR}"
+CASE_FILES=()
+for case_id in "${CASE_IDS[@]}"; do
+    case_file="${T1_DIR}/${case_id}/${case_id}.md"
+    if [[ ! -r "$case_file" ]]; then
+        err "missing case body for ${case_id}: ${case_file}"
+        emit "$(emit_summary 0 0 0)"
+        exit 5
+    fi
+    CASE_FILES+=("$case_file")
+done
+
+err "loaded ${#CASE_FILES[@]} t2 case(s) from ${T1_FILE}"
 
 DRIVER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROMPT_TEMPLATE="${DRIVER_DIR}/prompt.md"

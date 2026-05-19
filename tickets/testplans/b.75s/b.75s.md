@@ -5,6 +5,7 @@ title: Test plans for claude-director
 parent: null
 children:
 - t1.75s.95
+- t1.75s.by
 reference_materials: null
 created_at: '2026-05-18T18:55:38.304852'
 status: pupa
