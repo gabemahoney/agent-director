@@ -135,13 +135,8 @@ synthesizes for each spawn.
 | Permissions arrays (`permissions.allow` / `deny` / `ask`) | CONCAT. Template entries first, per-call appended. This mirrors how Claude Code itself merges its `permissions` block across settings tiers. |
 | `claude_args` | Per-call non-nil REPLACES the template's slice wholesale. Per-call nil falls back to the template. Explicit empty (`[]`) replaces with empty. |
 
-The permissions concat is deliberate — it's the one merge rule that
-intentionally accumulates rather than overwrites, so a template
-saying "always allow Bash(npm test)" can be augmented by per-call
-"and also allow Bash(jq)" without the call having to repeat the
-template's list. This matches Claude Code's own settings-tier merge
-for `permissions.allow|deny|ask` (the per-tier arrays are
-concatenated rather than replaced).
+Omitting per-call permissions inherits the template's entries
+unchanged.
 
 ### Reserved per-invocation params
 

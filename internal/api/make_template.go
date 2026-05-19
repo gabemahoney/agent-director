@@ -2,8 +2,8 @@ package api
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 
@@ -47,50 +47,26 @@ type MakeTemplateResult struct {
 // Behavior (SRD §10):
 //
 //   - Name safety: validated via config.ValidateTemplateName.
+//   - RelayMode (when non-empty) must be "on" or "off".
 //   - Templates dir is lazy-created (mode 0700) if missing.
-//   - Overwrite is rejected with ErrTemplateExists. Callers delete
-//     the file and re-run if they really mean to clobber.
-//   - The write is atomic: a temp file is written in the same dir,
-//     then os.Rename swaps it onto <name>.toml. A process killed
-//     mid-write leaves the tempfile behind but never a half-written
-//     real target.
-//
-// The verb does NOT accept reserved-per-invocation params (template,
-// claude_instance_id, tmux_session_name) — see MakeTemplateParams.
-// Those are caught at the CLI flag layer rather than here so the
-// CLI's flag parsing rejects them with ErrInvalidFlags rather than
-// a verb-layer error. (Defense in depth: if a future MCP caller
-// sneaks them in, the CLI catalog wouldn't catch it. That's a
-// separate hardening Epic if it ever matters; today the surface is
-// CLI-only.)
+//   - Overwrite is rejected with ErrTemplateExists via O_EXCL — the
+//     final target is opened atomically, so a racing writer either
+//     wins the create and we error, or we win and they error.
 func MakeTemplate(params MakeTemplateParams) (MakeTemplateResult, error) {
 	if err := config.ValidateTemplateName(params.Name); err != nil {
 		return MakeTemplateResult{}, err
 	}
+	if err := validateTemplateRelayMode(params.RelayMode); err != nil {
+		return MakeTemplateResult{}, err
+	}
 
-	dir, err := config.EnsureTemplatesDir()
-	if err != nil {
+	if _, err := config.EnsureTemplatesDir(); err != nil {
 		return MakeTemplateResult{}, err
 	}
 
 	target, err := config.TemplatePath(params.Name)
 	if err != nil {
 		return MakeTemplateResult{}, err
-	}
-
-	// Existence check: os.Stat returns nil err iff the file exists.
-	// A subsequent racing creation between this check and the
-	// os.Rename below is the classic TOCTOU window; we accept that
-	// gap because the alternative (open with O_CREATE|O_EXCL on the
-	// final path) defeats the atomic-rename pattern. The narrow race
-	// would still leave the target file present and the rename
-	// would clobber an existing file from a different writer — but
-	// in practice make-template is a human-driven verb and the race
-	// is benign.
-	if _, err := os.Stat(target); err == nil {
-		return MakeTemplateResult{}, fmt.Errorf("%w: %s", config.ErrTemplateExists, target)
-	} else if !os.IsNotExist(err) {
-		return MakeTemplateResult{}, fmt.Errorf("api: stat template target: %w", err)
 	}
 
 	file := config.TemplateFile{
@@ -113,37 +89,33 @@ func MakeTemplate(params MakeTemplateParams) (MakeTemplateResult, error) {
 		return MakeTemplateResult{}, fmt.Errorf("api: encode template TOML: %w", err)
 	}
 
-	tmp, err := os.CreateTemp(dir, "."+params.Name+".toml.*")
+	f, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return MakeTemplateResult{}, fmt.Errorf("api: create tempfile: %w", err)
+		if errors.Is(err, os.ErrExist) {
+			return MakeTemplateResult{}, fmt.Errorf("%w: %s", config.ErrTemplateExists, target)
+		}
+		return MakeTemplateResult{}, fmt.Errorf("api: create template: %w", err)
 	}
-	tmpPath := tmp.Name()
-	cleanupTmp := func() { _ = os.Remove(tmpPath) }
-
-	if _, err := io.Copy(tmp, &buf); err != nil {
-		_ = tmp.Close()
-		cleanupTmp()
+	if _, err := f.Write(buf.Bytes()); err != nil {
+		_ = f.Close()
+		_ = os.Remove(target)
 		return MakeTemplateResult{}, fmt.Errorf("api: write template body: %w", err)
 	}
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		cleanupTmp()
-		return MakeTemplateResult{}, fmt.Errorf("api: chmod tempfile: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		cleanupTmp()
-		return MakeTemplateResult{}, fmt.Errorf("api: sync tempfile: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		cleanupTmp()
-		return MakeTemplateResult{}, fmt.Errorf("api: close tempfile: %w", err)
-	}
-
-	if err := os.Rename(tmpPath, target); err != nil {
-		cleanupTmp()
-		return MakeTemplateResult{}, fmt.Errorf("api: rename template into place: %w", err)
+	if err := f.Close(); err != nil {
+		_ = os.Remove(target)
+		return MakeTemplateResult{}, fmt.Errorf("api: close template: %w", err)
 	}
 
 	return MakeTemplateResult{Path: filepath.Clean(target)}, nil
+}
+
+// validateTemplateRelayMode rejects an unrecognized relay_mode at write
+// time so the file never lands with a value LoadTemplate would later
+// reject as ErrTemplateMalformed.
+func validateTemplateRelayMode(m string) error {
+	switch m {
+	case "", "on", "off":
+		return nil
+	}
+	return fmt.Errorf("%w: relay_mode %q (want on/off)", config.ErrTemplateMalformed, m)
 }

@@ -39,12 +39,6 @@ var ErrTemplateMalformed = errors.New("ErrTemplateMalformed")
 // and re-runs if they really mean to.
 var ErrTemplateExists = errors.New("ErrTemplateExists")
 
-// ErrTemplateReservedParam is returned by MakeTemplate when the
-// caller tries to bake one of the reserved-per-call params
-// (`template`, `claude_instance_id`, `tmux_session_name`) into a
-// template. Per SRD §10: those fields must be per-invocation.
-var ErrTemplateReservedParam = errors.New("ErrTemplateReservedParam")
-
 // TemplatesDir returns the absolute path of the templates directory.
 // Tilde expansion uses the current user's HOME; an empty HOME (test
 // environments that strip it) is left literal so the caller can
@@ -84,6 +78,9 @@ func ValidateTemplateName(name string) error {
 	}
 	if strings.ContainsAny(name, "/\\") {
 		return fmt.Errorf("%w: path separators are not allowed", ErrTemplateNameUnsafe)
+	}
+	if strings.ContainsAny(name, " \t\n\r") {
+		return fmt.Errorf("%w: whitespace is not allowed", ErrTemplateNameUnsafe)
 	}
 	if strings.Contains(name, "..") {
 		return fmt.Errorf("%w: %q contains path-traversal substring", ErrTemplateNameUnsafe, name)

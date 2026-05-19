@@ -49,7 +49,6 @@ var errCatalog = []struct {
 	{"ErrTemplateNotFound", config.ErrTemplateNotFound},
 	{"ErrTemplateMalformed", config.ErrTemplateMalformed},
 	{"ErrTemplateExists", config.ErrTemplateExists},
-	{"ErrTemplateReservedParam", config.ErrTemplateReservedParam},
 	{"ErrProbeUnsupported", probe.ErrProbeUnsupported},
 	{"ErrSpawnNotResumable", api.ErrSpawnNotResumable},
 	{"ErrNoSessionId", api.ErrNoSessionId},

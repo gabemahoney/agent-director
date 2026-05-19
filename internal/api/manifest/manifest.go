@@ -419,7 +419,7 @@ var Verbs = []VerbDef{
 		ErrorNames: []string{
 			"ErrTemplateNameUnsafe",
 			"ErrTemplateExists",
-			"ErrTemplateReservedParam",
+			"ErrTemplateMalformed",
 		},
 	},
 	{

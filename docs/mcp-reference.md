@@ -273,7 +273,7 @@ Save a reusable spawn preset. The TOML file lands under ~/.claude-director/templ
 
 - `ErrTemplateNameUnsafe`
 - `ErrTemplateExists`
-- `ErrTemplateReservedParam`
+- `ErrTemplateMalformed`
 
 ## Tool: list
 
