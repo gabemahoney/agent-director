@@ -42,7 +42,7 @@ who already knows what the script does. Rewrite it.
    - *What this is:* claude-director is a single Go binary. The
      install script copies that binary into `~/.claude-director/bin/`
      and adds it to your PATH. We need to know where to copy *from*.
-   - *Three options:*
+   - *Four options:*
      - **(a) Download a pre-built release from GitHub** *(recommended
        for new users)*. The script `curl -L`s the right asset for
        your OS/arch from
@@ -56,10 +56,36 @@ who already knows what the script does. Rewrite it.
        makes sense if you're re-installing or upgrading an existing
        install. The script falls back to this automatically if
        neither (a) nor (b) is specified.
-   - *Default:* if the skill was launched from a checked-out tree
-     **and** `./bin/claude-director` exists, propose (b) with that
-     absolute path — it's faster than re-downloading. Otherwise
-     propose (a).
+     - **(d) Build from source now, then install.** Run `make build` in
+       this checkout to produce a fresh `./bin/claude-director`, then
+       point install.sh at it. No install.sh change needed: the
+       orchestrator runs `make build` first, then
+       `install.sh --binary ./bin/claude-director`. Prereq: Go 1.22+ on
+       PATH.
+   - *Default:* depends on what the orchestrator detects about the
+     launch environment.
+     - **In a checked-out tree with Go available** → propose **(d)**
+       *build from source*. This installs the binary that matches the
+       operator's current source tree, which is almost always what they
+       actually want.
+     - **In a checked-out tree but no Go (or `make build` would fail)**
+       → propose **(a)** *download from release* and SAY SO. Don't try
+       to use a possibly-stale `./bin/claude-director`.
+     - **Not in a checked-out tree** (install.sh was curled to a tmp
+       path, or invoked from an arbitrary directory) → propose **(a)**
+       *download from release*.
+     - **`./bin/claude-director` exists but operator wants it
+       specifically** → that's option (b); they ask for it explicitly.
+       Never default to it.
+
+   **Why we don't default to the existing local binary:** a binary at
+   `./bin/claude-director` may have been built off a stale branch or a
+   previous session's incomplete edit. Installing it silently
+   substitutes "trust what was compiled before" for the operator's
+   likely intent of "install the current source". Always force a fresh
+   build or a release download unless the operator explicitly says "use
+   the binary at this path".
+
    - *Reversibility:* picking wrong is cheap. The next
      `uninstall.sh --purge` resets to a clean slate, and you can
      re-run `install.sh` with a different source any time.
