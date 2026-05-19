@@ -74,6 +74,7 @@ func handlers(st *store.Store, cfg config.Config) map[string]func([]string) erro
 		"find-missing":  func(args []string) error { return findMissingHandlerWith(st, cfg, args) },
 		"expire":        func(args []string) error { return expireHandlerWith(st, cfg, args) },
 		"delete":        func(args []string) error { return deleteHandlerWith(st, args) },
+		"serve":         func(args []string) error { return serveHandlerWith(st, cfg, args) },
 	}
 }
 

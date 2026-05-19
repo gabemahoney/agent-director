@@ -480,6 +480,20 @@ var Verbs = []VerbDef{
 		},
 	},
 	{
+		Name:        "serve",
+		Description: "Start the stdio MCP server. Long-lived process that exposes every other verb as an MCP tool over JSON-RPC on stdin/stdout. Typically registered with `claude mcp add claude-director <binary-path> serve --stdio`.",
+		Params: []ParamDef{
+			{
+				Name:        "stdio",
+				Type:        "bool",
+				Description: "Enter the stdio MCP loop (required for v1; other transports may land in future Epics).",
+				Required:    true,
+			},
+		},
+		ResultFields: []FieldDef{},
+		ErrorNames:   []string{},
+	},
+	{
 		Name:        "hook",
 		Description: "Internal: invoked by Claude Code on lifecycle events via the per-Spawn --settings hooks. Reads payload JSON from stdin, writes a row UPSERT, exits 0 (state-tracking fail-open).",
 		Params: []ParamDef{

@@ -315,6 +315,22 @@ _None._
 - `ErrTmuxNotAvailable`
 - `ErrTmuxSendKeys`
 
+## serve
+
+Start the stdio MCP server. Long-lived process that exposes every other verb as an MCP tool over JSON-RPC on stdin/stdout. Typically registered with `claude mcp add claude-director <binary-path> serve --stdio`.
+
+### Parameters
+
+- `stdio` (bool, required): Enter the stdio MCP loop (required for v1; other transports may land in future Epics).
+
+### Result
+
+_None._
+
+### Errors
+
+_None._
+
 ## hook
 
 Internal: invoked by Claude Code on lifecycle events via the per-Spawn --settings hooks. Reads payload JSON from stdin, writes a row UPSERT, exits 0 (state-tracking fail-open).
