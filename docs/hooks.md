@@ -115,13 +115,69 @@ The install skill (Epic 12) adds two persistent hook entries to the
 user's `~/.claude/settings.json`:
 
 - `claude-director help` on `SessionStart`
-- `claude-director help` on `SessionEnd reason=compact`
+- `claude-director help` on `SessionEnd matcher=compact`
 
-These are *not* per-Spawn; they fire on every Claude session the
-operator runs, regardless of whether claude-director launched it. They
-inject the verb list into the new conversation so the model knows the
-supervision API surface. See `architecture.md` and the install skill's
-README for details — Epic 12 owns this.
+These are **not** per-Spawn; they fire on every Claude session the
+operator runs, regardless of whether claude-director launched it.
+They inject the verb list into the new conversation so the model
+knows the supervision API surface after a `/compact` or fresh
+session. Mirrors the `bees sting` pattern.
+
+### Why both events
+
+- **`SessionStart`** — a brand-new Claude session starts with no
+  context about claude-director. The hook injects the verb list so
+  the model can reference `mcp__claude-director__spawn` and friends
+  immediately.
+- **`SessionEnd matcher=compact`** — `/compact` is Claude Code's
+  manual conversation compaction. It tears down the current session
+  and starts a fresh one. The compact-side hook fires BEFORE the
+  new session boots, so by the time SessionStart runs, the verb
+  list is already queued for re-injection.
+
+### Why not embed in the synthesized `--settings`?
+
+The per-Spawn hooks are injected inline via `--settings` at spawn
+time and only apply to Spawns claude-director launched. The
+`help`-on-SessionStart pair, by contrast, must fire on EVERY Claude
+session — including the operator's own interactive ones where
+they want to spawn something from inside Claude. That requires
+persistent settings, not per-Spawn settings.
+
+The asymmetry is deliberate: per-Spawn state-tracking is for
+claude-director's own correctness; persistent help is for the
+operator's discoverability.
+
+### Idempotency and preserve-other-hooks
+
+The install script uses `jq` to add the entries to
+`hooks.SessionStart` and `hooks.SessionEnd` (with matcher=compact)
+without disturbing what's already there. Re-running `install.sh`
+matches existing entries by command string and skips duplicates
+(SRD §16.2 idempotency).
+
+The uninstall script matches entries by the install-root prefix in
+their `command` field — it removes ONLY what install.sh wrote.
+Pre-existing user hooks in those events stay verbatim.
+
+### What `claude-director help` actually outputs
+
+The persistent hook runs `claude-director help` which produces the
+manifest-driven verb list as JSON. Claude Code captures the hook's
+stdout and injects it as a system-message tool-availability hint
+in the new conversation. The model sees the same surface a script
+reading the CLI's `--help` would.
+
+### Caveat — install fail-closed gap
+
+If `claude-director` is missing from PATH at session start time
+(e.g. mid-uninstall), the hook fails to invoke and Claude Code
+falls back to no-injection — the conversation proceeds without the
+verb list. This is the install-side analogue of the
+permissions.md "structural caveat": fail-closed requires the
+binary to actually run. The install script's upgrade-safety
+pattern (versioned binary + atomic symlink swap) is specifically
+designed to keep this window closed.
 
 ## PermissionRequest relay path
 

@@ -446,6 +446,78 @@ The `list --parent <id>` filter walks this column directly; the
 MCP server (Epic 11) exposes the same filter so an LLM client can
 map a tree by recursive listings.
 
+## Install layout
+
+The `skills/install-claude-director/` skill (Epic 12) lays out the
+on-disk install so an operator can run, upgrade, and uninstall
+claude-director with one script.
+
+### On-disk shape
+
+```
+~/.claude-director/
+├── bin/
+│   ├── claude-director            → claude-director.<vtag>  (symlink)
+│   ├── claude-director.<vtag>     (the binary; mode 0755)
+│   └── claude-director.<oldvtag>  (retained on upgrade for rollback)
+├── state.db                       (mode 0600)
+├── state.db-wal                   (when WAL is active)
+├── state.db-shm
+├── templates/                     (mode 0700; created lazily)
+│   └── <name>.toml                (mode 0600)
+├── config.toml                    (operator-owned; not created here)
+└── errors.log                     (touched on first hook-fire failure)
+
+~/.local/bin/claude-director       → ~/.claude-director/bin/claude-director   (optional)
+
+~/.claude/settings.json
+└── hooks
+    ├── SessionStart  → [{hooks: [{type: command, command: "<bin> help"}]}]
+    └── SessionEnd    → [{matcher: "compact", hooks: [{type: command, command: "<bin> help"}]}]
+```
+
+### Upgrade-safety pattern
+
+Live Spawns hold references to the binary path their hooks invoke.
+Overwriting in place would be an exec-while-overwrite hazard: a
+hook firing mid-rename could see a partial file. The install
+script's pattern:
+
+1. Write the new binary at a versioned path
+   (`claude-director.<vtag>`).
+2. Atomically swap the canonical symlink to point at the new file
+   (`ln -sfn <new> .canonical.new && mv -f .canonical.new
+   canonical`).
+3. Leave the previous versioned binary in place for manual rollback.
+
+The rename is a single inode swap on POSIX filesystems; any hook
+that snapshots the symlink target sees either the old or the new
+binary, never a torn write.
+
+### Uninstall semantics
+
+`uninstall.sh` removes ONLY what `install.sh` wrote: the binary,
+any versioned siblings, the optional PATH symlink, and the two
+hook entries it injected (matched by the install root prefix in
+their command string). Other user hooks in `SessionStart` /
+`SessionEnd` survive verbatim. `~/.claude-director/` itself is
+preserved by default — operators frequently want to keep templates
+and state.db across reinstalls.
+
+`--purge` is the explicit nuke path: a full `rm -rf
+~/.claude-director` with an interactive confirmation
+(`--force` skips the prompt). State, templates, and any local
+edits to `config.toml` are lost.
+
+### ErrSchemaMismatch recovery
+
+v1 has no migration story (SRD §19 Q11). If `claude-director help`
+reports `ErrSchemaMismatch` after an upgrade, the recovery is
+`rm ~/.claude-director/state.db*` followed by a re-run. Spawn
+history in the DB is lost; JSONL transcripts under
+`~/.claude/projects/` survive independently and can be re-resumed
+by id (the operator's notes) via `claude-director resume`.
+
 ## Stdio MCP server
 
 The MCP server is the JSON-RPC-over-stdio surface
