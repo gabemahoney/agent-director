@@ -945,17 +945,12 @@ target tuple:
 | darwin | amd64 | Mach-O 64 LE | n/a (no system linker) |
 | darwin | arm64 | Mach-O 64 LE | n/a (no system linker) |
 
-Windows is explicitly **not supported** per SRD §16.1. The
-state-tracking hook layer depends on POSIX process-env semantics
-(`/proc/<pid>/environ` on Linux, `sysctl(KERN_PROCARGS2)` on
-macOS) that have no clean Windows analogue.
+Windows is not supported (SRD §16.1).
 
-The Linux statically-linked story is load-bearing: it means a
-single binary runs on every glibc and musl distribution without
-recompilation. Achieved via `CGO_ENABLED=0` plus
-`modernc.org/sqlite` — a pure-Go SQLite driver, so no libsqlite3
-needed. The release-binaries-smoke target verifies static linkage
-on every release via `ldd` ("not a dynamic executable").
+Linux binaries are statically linked via `CGO_ENABLED=0` plus
+`modernc.org/sqlite` (pure-Go SQLite driver, no libsqlite3
+dependency). The `release-binaries-smoke` target verifies static
+linkage on every release via `ldd` ("not a dynamic executable").
 
 ### Semver policy
 
@@ -982,9 +977,9 @@ documented in `skills/release-claude-director/SKILL.md`. Behavior:
 1. Validate the semver tag.
 2. Verify `gh` (GitHub CLI) is authenticated.
 3. Confirm the working tree is clean (no uncommitted edits).
-4. Confirm the current branch matches `--branch` (default `main`).
-5. Confirm the tag doesn't already exist.
-6. `git tag $VERSION && git push origin $VERSION`.
+4. Confirm the tag doesn't already exist.
+5. Confirm the current branch matches `--branch` (default `main`).
+6. `git tag -a $VERSION -m "$VERSION" && git push origin $VERSION`.
 7. `make release-binaries` — cross-compiles the four targets.
 8. Template release notes from `git log <prev-tag>..HEAD`,
    grouped by Epic ID where commit messages reference one.
@@ -1004,10 +999,6 @@ in `internal/store/store.go` requires:
 3. Active Spawns whose JSONL transcripts under
    `~/.claude/projects/` are still on disk can be re-resumed by id
    via `claude-director resume`.
-
-A future major version may add a real migration layer; for v1 the
-deliberate trade-off was a smaller surface area at the cost of
-upgrade friction.
 
 ## Test Harness
 

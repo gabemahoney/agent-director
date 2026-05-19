@@ -19,19 +19,20 @@ standard coreutils — no Go, no SDKs.
    `v0.1.0-rc1` would be rejected). Documented in
    `docs/architecture.md` "Semver policy".
 
-2. **Pre-flight.**
+2. **Pre-flight** (checked in this order):
+   - `gh` must be authenticated against the repo's GitHub remote.
    - Working tree must be clean (`git status --porcelain` is empty).
      A release that snapshots dirty state is forbidden; the script
      aborts immediately.
-   - `gh` must be authenticated against the repo's GitHub remote.
+   - The new tag must NOT already exist.
    - The current branch must be `main` (configurable via
      `--branch`).
-   - The new tag must NOT already exist.
 
-3. **Tag.** `git tag $VERSION && git push origin $VERSION`. After
-   this point, partial failure (e.g. release upload fails) leaves
-   the tag in place. The operator may need to `git push --delete
-   origin $VERSION && git tag -d $VERSION` to retry.
+3. **Tag.** `git tag -a $VERSION -m "$VERSION" && git push origin
+   $VERSION`. After this point, partial failure (e.g. release upload
+   fails) leaves the tag in place. The operator may need to
+   `git push --delete origin $VERSION && git tag -d $VERSION` to
+   retry.
 
 4. **Build the four binaries.** Delegates to `make release-binaries`
    (Epic 13 Task 1). Outputs land in `./dist/`.

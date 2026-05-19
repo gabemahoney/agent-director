@@ -112,6 +112,28 @@ fi
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 mkdir -p "$REPO_ROOT/dist"
 NOTES_FILE="$REPO_ROOT/dist/release-notes.md"
+
+# Resolve the github owner/repo for the curl URLs in release notes.
+# Prefer `gh repo view` (authoritative when the user is logged in);
+# fall back to parsing `git remote get-url origin`. If both fail
+# the URL stays as `<owner>/<repo>` placeholders so the operator
+# sees the broken link in the dry-run preview.
+REPO_SLUG="<owner>/<repo>"
+if command -v gh >/dev/null 2>&1; then
+    if slug=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null) && [[ -n "$slug" ]]; then
+        REPO_SLUG="$slug"
+    fi
+fi
+if [[ "$REPO_SLUG" == "<owner>/<repo>" ]]; then
+    if origin=$(git remote get-url origin 2>/dev/null); then
+        # Accept either https://github.com/<o>/<r>(.git)? or git@github.com:<o>/<r>(.git)?
+        slug=$(printf '%s' "$origin" | sed -E 's#^(https://github\.com/|git@github\.com:)##; s#\.git$##')
+        if [[ "$slug" != "$origin" && -n "$slug" ]]; then
+            REPO_SLUG="$slug"
+        fi
+    fi
+fi
+
 cat > "$NOTES_FILE" <<NOTES
 # $VERSION
 
@@ -165,11 +187,11 @@ Download the binary for your platform and place it on PATH. See
 
 \`\`\`sh
 # macOS arm64 (Apple Silicon):
-curl -L -o claude-director https://github.com/<owner>/<repo>/releases/download/$VERSION/claude-director-darwin-arm64
+curl -L -o claude-director https://github.com/${REPO_SLUG}/releases/download/$VERSION/claude-director-darwin-arm64
 chmod +x claude-director
 
 # Linux amd64:
-curl -L -o claude-director https://github.com/<owner>/<repo>/releases/download/$VERSION/claude-director-linux-amd64
+curl -L -o claude-director https://github.com/${REPO_SLUG}/releases/download/$VERSION/claude-director-linux-amd64
 chmod +x claude-director
 \`\`\`
 
