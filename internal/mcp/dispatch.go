@@ -136,7 +136,10 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		if err := unmarshalSnake(args, &p); err != nil {
 			return nil, err
 		}
-		return api.Kill(d.store, d.tmuxClient, p)
+		// nil logger: the MCP-side caller sees errors via the API
+		// envelope; the swallowed-tmux WARN is most useful to the
+		// interactive CLI operator, not a long-lived MCP client.
+		return api.Kill(d.store, d.tmuxClient, nil, p)
 
 	case "pause":
 		var p api.PauseParams

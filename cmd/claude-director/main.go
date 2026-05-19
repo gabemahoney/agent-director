@@ -65,7 +65,7 @@ func handlers(st *store.Store, cfg config.Config) map[string]func([]string) erro
 		"get":       func(args []string) error { return getHandlerWith(st, args) },
 		"send-keys": func(args []string) error { return sendKeysHandlerWith(st, args) },
 		"read-pane": func(args []string) error { return readPaneHandlerWith(st, args) },
-		"kill":      func(args []string) error { return killHandlerWith(st, args) },
+		"kill":      func(args []string) error { return killHandlerWith(st, cfg, args) },
 		"pause":     func(args []string) error { return pauseHandlerWith(st, cfg, args) },
 		"list":          func(args []string) error { return listHandlerWith(st, args) },
 		"make-template": func(args []string) error { return makeTemplateHandlerWith(args) },

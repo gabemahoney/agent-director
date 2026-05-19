@@ -322,9 +322,10 @@ func resumeHandlerWith(st *store.Store, cfg config.Config, args []string) error 
 }
 
 // killHandlerWith implements `claude-director kill`. The verb is
-// idempotent on terminal states and swallows tmux failures (see
-// api.Kill); the CLI surface is therefore intentionally narrow.
-func killHandlerWith(st *store.Store, args []string) error {
+// idempotent on terminal states and swallows tmux failures at the
+// verb surface (see api.Kill); a swallowed failure is logged at WARN
+// to the configured error log so an interactive operator can see it.
+func killHandlerWith(st *store.Store, cfg config.Config, args []string) error {
 	var p api.KillParams
 	fs := flag.NewFlagSet("kill", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -335,7 +336,7 @@ func killHandlerWith(st *store.Store, args []string) error {
 	if p.ClaudeInstanceID == "" {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--claude-instance-id is required")
 	}
-	result, err := api.Kill(st, tmuxClient, p)
+	result, err := api.Kill(st, tmuxClient, newRecoveryLogger(cfg), p)
 	if err != nil {
 		name, desc := classifyError(err)
 		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))

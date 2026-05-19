@@ -10,6 +10,15 @@ type KillTmux interface {
 	KillSession(name string) error
 }
 
+// KillLogger is the narrow log surface Kill uses to surface
+// swallowed tmux failures at WARN level. *log.Logger satisfies it;
+// tests inject a recording fake to inspect the message. nil is
+// accepted (Kill stays silent) so callers that don't care still
+// compile against the previous interface.
+type KillLogger interface {
+	Printf(format string, v ...any)
+}
+
 // KillParams is the typed parameter shape for the kill verb.
 type KillParams struct {
 	ClaudeInstanceID string `json:"claude_instance_id"`
@@ -27,16 +36,18 @@ type KillResult struct{}
 //   - Terminal state (ended / missing) → no-op success: the session is
 //     either already gone or we never tracked it as live.
 //   - Otherwise → tmux.KillSession is invoked; any tmux failure is
-//     swallowed. The intent is "make sure that session is gone";
-//     "session was already gone" satisfies that intent, so a
-//     non-zero tmux exit (e.g. another orchestrator killed it first)
-//     is indistinguishable from success at this layer.
+//     swallowed AT THE VERB SURFACE (post-condition "session gone" is
+//     satisfied either way, and find-missing reconciles the row), but
+//     the error is emitted at WARN level via lg so an operator running
+//     `claude-director kill` interactively can see permission /
+//     stale-TMUX_TMPDIR / etc. diagnostics without having to wait for
+//     the next reconciliation pass.
 //
 // Note: kill does NOT promise state cleanup — the row stays in its
 // pre-kill state until find-missing (Epic 8) reconciles it. SRD §5
 // pins this intentionally so a hung tmux session and a freshly killed
 // one are reconciled by the same audit path.
-func Kill(s *store.Store, t KillTmux, params KillParams) (KillResult, error) {
+func Kill(s *store.Store, t KillTmux, lg KillLogger, params KillParams) (KillResult, error) {
 	row, err := s.GetSpawn(params.ClaudeInstanceID)
 	if err != nil {
 		return KillResult{}, err
@@ -46,10 +57,15 @@ func Kill(s *store.Store, t KillTmux, params KillParams) (KillResult, error) {
 		return KillResult{}, nil
 	}
 
-	// Swallow tmux errors: a missing/gone session is the desired
-	// post-condition, and reporting the failure here would force
-	// callers to distinguish "already dead" from "really failed",
-	// which they can't usefully act on at this layer.
-	_ = t.KillSession(row.TmuxSessionName)
+	// Swallow tmux errors at the verb surface (the post-condition is
+	// "session gone"; find-missing will reconcile the row regardless),
+	// but log them so an operator running kill interactively can see
+	// the underlying tmux failure.
+	if err := t.KillSession(row.TmuxSessionName); err != nil {
+		if lg != nil {
+			lg.Printf("WARN: kill: tmux kill-session for spawn %s failed: %v (find-missing will reconcile)",
+				params.ClaudeInstanceID, err)
+		}
+	}
 	return KillResult{}, nil
 }
