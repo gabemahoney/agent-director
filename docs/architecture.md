@@ -1081,11 +1081,8 @@ upgrade friction.
 
 ## Test Harness
 
-Every functional Epic (Epics 3-13) is gated by a Docker-based integration
-harness rather than `go test ./...`. The harness was built in Epic 2; this
-section captures what it is, how to extend it, and the rules the gate
-depends on. Cross-reference SRD §15 (testing strategy), §17 (audit
-standard), §18 (CI environment).
+Every functional Epic is gated by a Docker-based integration harness rather
+than `go test ./...`.
 
 ### Container
 
@@ -1160,42 +1157,26 @@ research notes under `reference/`:
 hard-coded in the Makefile. CI sources them from secrets (see
 `.github/workflows/integration.yml`).
 
-Multi-container parallelism is clean because there is no shared
-`~/.claude.json` to race on. Test credentials should be CI-secret-scoped,
-distinct from the operator's primary account.
+Test credentials should be CI-secret-scoped, distinct from the operator's
+primary account.
 
-The shell `DRIVER_MODE` runs without any credential — Epic 2's
-`harness-smoke` gate runs that way so PR CI can stay credentialless. Real
-driver-Claude runs (`DRIVER_MODE=claude`) require one of the env vars.
+`DRIVER_MODE=shell` runs without any credential. `DRIVER_MODE=claude`
+requires one of the env vars above.
 
 ### testplans hive convention
 
-`tickets/testplans/` is a bees hive (registered in Epic 1's bootstrap
-commit). One t1 collector per Epic; t2 cases are plain-English bodies. The
-driver does not read tier labels — it reads `t1.*.md` and `t2.*.md` files
-directly — so the hive's tier-label naming (`Collector` / `Test case`) is
-purely cosmetic. Each t2 body has a fenced ```bash``` block that the shell
-driver mode executes; the same prose is also what the `claude` driver mode
-hands to the driver-Claude as its spec.
+`tickets/testplans/` is a bees hive. One t1 collector per Epic; t2 cases
+are plain-English bodies. The driver reads `t1.*.md` and `t2.*.md` files
+directly. Each t2 body has a fenced ```bash``` block executed by
+`DRIVER_MODE=shell`; the same prose is the spec the `DRIVER_MODE=claude`
+path hands to the driver-Claude.
 
 ### Pinned Claude Code version
 
-The harness installs `@anthropic-ai/claude-code@2.1.120`. The pin is
-load-bearing: every empirical behavior the harness relies on (env-var
-auth, settings merge, hook surface) was validated against this version in
-the notes under `reference/*-research.md`.
-
-**Bump policy.** A pin bump (`CLAUDE_CODE_VERSION` in `Makefile` and the
-`ARG` in `test/Dockerfile`) requires re-running each empirical research
-note under `reference/` against the new version *before* merging:
-
-- `reference/docker-auth-research.md`
-- `reference/anthropic-api-key-auth-research.md`
-- `reference/max-account-auth-research.md`
-- `reference/claude-settings-research.md`
-
-Any note that no longer reproduces is a blocker. Update the note + bump
-the pin in the same PR; never bump silently.
+The harness installs `@anthropic-ai/claude-code@2.1.120`. Pin sites:
+`CLAUDE_CODE_VERSION` in `Makefile`, the `ARG` in `test/Dockerfile`.
+Empirical behaviors the harness relies on (env-var auth, settings merge,
+hook surface) are recorded in `reference/*-research.md`.
 
 ### CI lane
 
@@ -1204,20 +1185,13 @@ the pin in the same PR; never bump silently.
 - `linux-integration` — runs `make test-docker EPIC=harness-smoke` on
   `ubuntu-latest` for every PR and push to `main`. Auth env vars come
   from `${{ secrets.ANTHROPIC_API_KEY }}` and
-  `${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}`. Neither is required for the
-  default shell mode, but the secrets pipeline is wired so opt-in
-  credentialed runs work without repo edits.
+  `${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}`.
 - `macos-stub` — runs on `macos-latest`, exits 0 with a stub message.
   Epic 8 (sysctl-based liveness probe) will swap this for a real macOS
   test that exercises the sysctl path. SRD §19 Q7.
 
 ### Audit standard
 
-The harness's `make test-docker` output is the *input* to the orchestrator
-audit, not the gate itself. SRD §17 requires first-hand audit: the
-orchestrator runs `make test-docker` themselves, reads the JSON stream
-case-by-case, confirms each case actually executed and passed, and signals
-"continue" to advance the Epic. No blind approval, no auto-retry.
-
-Cross-reference: SRD §15 (testing strategy), §17 (orchestrator-in-the-loop
-gate), §18 Q10 (Docker test credential injection).
+Per SRD §17, the orchestrator runs `make test-docker` first-hand, reads
+the per-case JSON stream, and signals "continue" only after confirming
+each case executed and passed.
