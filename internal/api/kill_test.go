@@ -52,30 +52,29 @@ func TestKillSwallowsTmuxFailure(t *testing.T) {
 	}
 }
 
-func TestKillEndedRowIsNoop(t *testing.T) {
+func TestKillTerminalStateIsNoop(t *testing.T) {
 	// Terminal states skip the tmux call entirely. The row's session
 	// may or may not still exist on disk; either way, the intent is
 	// already satisfied.
-	s := openStoreWithRow(t, "id-k-3", "cd-k-3", store.StateEnded, "off")
-	tmux := &recordingKillTmux{}
-
-	if _, err := api.Kill(s, tmux, api.KillParams{ClaudeInstanceID: "id-k-3"}); err != nil {
-		t.Fatalf("Kill: %v", err)
+	cases := []struct {
+		state string
+		id    string
+		sess  string
+	}{
+		{store.StateEnded, "id-k-3", "cd-k-3"},
+		{store.StateMissing, "id-k-4", "cd-k-4"},
 	}
-	if len(tmux.calls) != 0 {
-		t.Errorf("ended row triggered tmux call: %v", tmux.calls)
-	}
-}
-
-func TestKillMissingStateIsNoop(t *testing.T) {
-	s := openStoreWithRow(t, "id-k-4", "cd-k-4", store.StateMissing, "off")
-	tmux := &recordingKillTmux{}
-
-	if _, err := api.Kill(s, tmux, api.KillParams{ClaudeInstanceID: "id-k-4"}); err != nil {
-		t.Fatalf("Kill: %v", err)
-	}
-	if len(tmux.calls) != 0 {
-		t.Errorf("missing row triggered tmux call: %v", tmux.calls)
+	for _, tc := range cases {
+		t.Run(tc.state, func(t *testing.T) {
+			s := openStoreWithRow(t, tc.id, tc.sess, tc.state, "off")
+			tmux := &recordingKillTmux{}
+			if _, err := api.Kill(s, tmux, api.KillParams{ClaudeInstanceID: tc.id}); err != nil {
+				t.Fatalf("Kill: %v", err)
+			}
+			if len(tmux.calls) != 0 {
+				t.Errorf("%s row triggered tmux call: %v", tc.state, tmux.calls)
+			}
+		})
 	}
 }
 
