@@ -38,6 +38,9 @@ Nothing flows back upward and nothing skips a layer.
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.claude-director/config.toml`. Read-only after load. | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `internal/api/*`; `cmd/*`. |
 | `internal/api` | Stable verb-handler surface used by CLI + MCP + hooks. Typed Go functions only — no SQL, no MCP framing. | stdlib; `internal/api/manifest`; (later) `internal/store` and `internal/config`. | Raw SQL; MCP framing; hook IO. |
 | `internal/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. | stdlib only — leaf package. | `internal/store`, `internal/config`, `internal/api/*` (other than this package), `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
+| `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). Builds env maps, synthesizes `--settings` JSON, and asks `internal/tmux` to start the session. Inserts the `pending` row via `internal/store`. | stdlib; `internal/config`; `internal/store`; `internal/tmux`; `github.com/google/uuid` for UUID4 minting. | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
+| `internal/tmux` | Thin client over the tmux binary. Each operation is one `exec.Command` invocation. Provides `NewSession`, `HasSession`, `KillSession`, `ListPanes`. | stdlib (`bytes`, `os/exec`, `strings`, `strconv`, `sort`). | Shell processes (`/bin/sh`), template / config / store packages, anything other than direct `exec.Command`. |
+| `internal/hook` | Reads payload JSON from stdin, classifies per SRD §5.2, writes the row UPSERT, exits 0 (state-tracking fail-open). | stdlib; `internal/store`. | `internal/tmux`; `internal/spawn`; `internal/config` (the cmd-side wrapper loads config; the package itself stays narrow). |
 
 ### `internal/store`
 
@@ -192,6 +195,113 @@ callers; cmd/ knows nothing about SQL. Any PR that introduces a back-edge
 ```
 
 Cite SRD §2 for the overall component decomposition this diagram realizes.
+
+## State Machine
+
+A Spawn's lifecycle is tracked in the `state` column of `spawns`. Every
+state value comes from the SRD §5.1 enum; transitions are driven either
+by hook events (SRD §5.2) or by direct verb action (`pause`, `resume`,
+`expire`, `delete`).
+
+```
+pending  ──spawn() launches tmux session
+  │
+  ▼   SessionStart hook fires
+waiting  ◄─── Stop, Notification (and SessionEnd reason=clear|compact
+  │           soft refresh: bumps last_seen_at, no state change)
+  │
+  ▼   UserPromptSubmit / PreToolUse(non-AUQ) / PostToolUse
+working  ─────────────────────────────────────┐
+  │                                            │
+  │  PreToolUse(AskUserQuestion)               │ PermissionRequest
+  ▼                                            ▼
+ask_user                                  check_permission
+  │                                            │
+  │   send-keys, etc.                          │   decide() writes
+  └────────────►  working / waiting   ◄────────┘   permission_requests.decision
+                                                   (Epic 10)
+
+waiting / working / ask_user / check_permission
+  │
+  ▼   SessionEnd hook (real end)
+ended
+
+waiting / working / ask_user / check_permission
+  │
+  ▼   find-missing (Epic 8): DB live row, no live tmux/Claude
+missing
+  │
+  ▼   resume() relaunches with --resume (Epic 9)
+waiting (after SessionStart fires)
+```
+
+### Event → state mapping (SRD §5.2)
+
+| Event | Tool / reason carve-out | Resulting state |
+| --- | --- | --- |
+| `SessionStart` | — | `waiting` (also writes `claude_session_id` from `transcript_path`) |
+| `UserPromptSubmit` | — | `working` |
+| `PreToolUse` | `tool_name = AskUserQuestion` | `ask_user` |
+| `PreToolUse` | any other tool | `working` |
+| `PostToolUse` | — | `working` |
+| `Stop` | — | `waiting` |
+| `Notification` | — | `waiting` |
+| `PermissionRequest` | — | `check_permission` (relay-mode envelope is Epic 10) |
+| `SessionEnd` | `reason ∈ {clear, compact}` | soft refresh — `last_seen_at` only |
+| `SessionEnd` | any other reason | `ended` (also sets `ended_at`) |
+| unknown event | — | soft refresh + info-level log entry |
+
+`missing` is only written by `find-missing` (Epic 8). `pending` is only
+written by `spawn()`; the first SessionStart hook flips it to `waiting`.
+
+State-tracking hook writes are fail-open: any internal failure logs and
+exits 0 (SRD §3.2). A missed UPSERT never blocks Claude.
+
+## Spawn Parameter Resolution
+
+`spawn` is implemented as a four-stage pipeline. The boundaries exist
+so each stage can be tested in isolation against synthesized input.
+
+```
+  caller params         (CLI flags / MCP tool input)
+       │
+       ▼
+   ┌─────────┐   template merge (Epic 7 — stub today)
+   │ Resolve │
+   └────┬────┘
+        ▼
+   ┌──────────┐   SRD §7.2: cwd shape/existence/type;
+   │ Validate │   relay_mode; denied flags; reserved env keys.
+   └────┬─────┘   No side effects on failure.
+        ▼
+   ┌────────────┐   SRD §7.3: UUID4 if no claude_instance_id;
+   │ ApplyDefaults│  <basename(cwd)>-<id[:8]> session name;
+   └────┬───────┘   relay_mode from config. Collision check via store.
+        ▼
+   ┌────────┐   SRD §7.4: pending row insert; env compose;
+   │ Launch │   --settings JSON synthesis; tmux new-session via direct argv.
+   └────┬───┘   Fire-and-forget — returns claude_instance_id.
+        ▼
+   claude_instance_id (state stays `pending` until SessionStart fires)
+```
+
+Layer boundaries (load-bearing):
+
+- `internal/spawn` calls `internal/store` (one `InsertPending` UPSERT
+  and one `LiveSpawnExists` collision read) and `internal/tmux` (one
+  `NewSession` argv). Nothing else.
+- `internal/hook` calls `internal/store` (state UPSERT + session-id
+  write). Never `internal/tmux`, never `internal/spawn`.
+- `internal/api` is the thin verb-handler surface: it composes
+  `internal/spawn` calls for the `spawn` verb and direct
+  `internal/store` reads for `status` / `get`. No SQL strings, no tmux
+  argv at this layer.
+
+The hook handler is invoked via the per-Spawn `--settings` JSON
+synthesized in stage 4. The handler's binary path is resolved via
+`os.Executable()` (`/proc/self/exe` on Linux, `_NSGetExecutablePath` on
+macOS) so it is always the same binary version that ran the `spawn`
+call.
 
 ## Test Harness
 
