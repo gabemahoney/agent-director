@@ -13,7 +13,7 @@ Trigger phrases: "install claude-director", "set up claude-director",
 `install.sh` has flags that materially change the install. Do NOT pick
 them silently. Walk the operator through each choice with
 `AskUserQuestion`, echo the resolved flag set back for confirmation,
-then execute. Keep it tight — four questions, then a confirm.
+then execute. Keep it tight — three questions, then a confirm.
 
 ### How to phrase each question
 
@@ -35,7 +35,23 @@ If a question reads like "Binary source (`--binary <path>`): use this,
 or point elsewhere?" you have failed. That is a question for someone
 who already knows what the script does. Rewrite it.
 
-### The four questions
+### How the install writes the binary
+
+The install script copies the new binary into a sibling temp file
+under `~/.claude-director/bin/`, then `mv`s it over the canonical
+`~/.claude-director/bin/claude-director`. `mv` within one filesystem
+is atomic at the inode level, so concurrent readers see either the
+old binary or the new — never a half-written file. A running process
+(say, an in-flight Spawn whose hooks reference this binary) holds the
+old inode, so its current exec is unaffected by the swap.
+
+The previous binary is *not* retained by default. Pass `--keep-prior`
+on upgrade to have install.sh snapshot the existing binary to
+`~/.claude-director/bin/claude-director.prior` before the swap. That
+gives you a one-step rollback (`mv .prior canonical`); without it,
+re-install the previous tag via `install.sh --from-release v<old>`.
+
+### The three questions
 
 1. **Where should the binary come from? (`--from-release` / `--binary <path>`)**
 
@@ -126,31 +142,7 @@ who already knows what the script does. Rewrite it.
      any symlink it created. If you skip and want one later, re-run
      `install.sh --symlink-dir <dir>`.
 
-3. **Version label for this install (`--version v<N>`)**
-
-   - *What this is:* on upgrade, the script keeps the previous
-     binary at a *versioned* path
-     (`claude-director.v0.1.0`, etc.) and atomically swaps the
-     unversioned `claude-director` symlink to the new one. The
-     `--version` flag controls the suffix used for that side-by-side
-     copy. It's purely a label — it doesn't gate features.
-   - *Options:*
-     - **(a) Let the script auto-detect.** It runs `<binary> --version`
-       and uses whatever that prints.
-     - **(b) Supply a semver tag yourself**, e.g. `v0.1.0`. Useful if
-       you're installing a specific tagged release and want the
-       on-disk artifact to match.
-   - *Default:* (a). For v1 the binary doesn't yet implement
-     `--version`, so the script falls back to a `t<timestamp>`
-     suffix automatically. **Say this in the question** — don't let
-     the operator be surprised by `claude-director.t20260519-130000`
-     showing up on disk.
-   - *Reversibility:* completely cosmetic. Wrong label → next
-     upgrade overwrites it. Rollback uses the versioned-path naming;
-     if your label is gibberish, rollback still works but reads
-     funny.
-
-4. **Register the MCP server with Claude Code? (`--register-mcp`)**
+3. **Register the MCP server with Claude Code? (`--register-mcp`)**
 
    - *What this is:* MCP (Model Context Protocol) is how Claude Code
      learns about external tool servers it can call. Registering
@@ -175,16 +167,19 @@ who already knows what the script does. Rewrite it.
      To remove: `claude mcp remove claude-director` or
      `uninstall.sh --mcp-also`.
 
-5. **Confirm and execute**
+4. **Confirm and execute**
    - Display the assembled `bash install.sh <resolved flags>` command
      line back to the operator.
    - Ask "ready to run?" with `AskUserQuestion`. Only on an explicit
      "yes" execute the script. A "no" or any modification answer means
      loop back to the relevant question, not silently re-pick.
+   - If this is an upgrade and the operator wants a single-step
+     rollback path, add `--keep-prior`. Otherwise leave it off;
+     a re-install with `--from-release v<old>` is the fallback.
 
 Do NOT skip this dialog because flags "look obvious from context".
-The operator may want a non-default path, MCP off, or a specific
-version label. Inferring intent is the failure mode this section
+The operator may want a non-default path, MCP off, or a `--keep-prior`
+rollback snapshot. Inferring intent is the failure mode this section
 exists to prevent.
 
 ## What this skill does
@@ -212,9 +207,13 @@ This skill runs `install.sh` from the same directory. The script:
    the downloaded asset against an expected hash before install.
 
    On upgrade (existing binary detected), the new binary is written
-   to a version-suffixed path AND the canonical filename is swapped
-   atomically — live Spawns' next hook invocation picks up the new
-   binary cleanly without an exec-while-overwrite hazard.
+   to a sibling temp file (`claude-director.tmp.$$`) and `mv`'d over
+   the canonical path. `mv` within one filesystem is atomic at the
+   inode level — concurrent readers see either the old binary or
+   the new, never half; a running process holds the old inode, so an
+   in-flight exec is unaffected by the swap. With `--keep-prior` the
+   prior binary is snapshotted to `claude-director.prior` before the
+   swap for a one-step rollback.
 
 4. **Rejects whitespace in the install path.** Per SRD §4.3 tmux's
    direct-argv invocation does not tolerate spaces in the binary
@@ -350,7 +349,7 @@ destructive *additions*.
 - Removes the two help hook entries (only the entries this skill
   added; other user hooks are preserved).
 - Removes the binary at `~/.claude-director/bin/claude-director` and
-  any versioned siblings.
+  the `.prior` snapshot if one is present.
 - Unlinks the PATH symlink if one was created.
 - With `--purge`: also removes `~/.claude-director/` entirely
   (including state.db + templates). Requires confirmation unless
@@ -359,11 +358,18 @@ destructive *additions*.
 
 ## Upgrade rollback
 
-The previous binary is retained at its version-suffixed path. To
-roll back: `ln -sfn ~/.claude-director/bin/claude-director.v<old>
-~/.claude-director/bin/claude-director`. There's no automatic rollback
-because v1 has no migration story (per SRD §19 Q11); a schema-incompat
-upgrade means `rm state.db` and re-warm.
+If you used `install.sh --keep-prior` on the previous install, the
+previous binary is at `~/.claude-director/bin/claude-director.prior`.
+To roll back:
+
+    mv ~/.claude-director/bin/claude-director.prior \
+       ~/.claude-director/bin/claude-director
+
+If you didn't pass `--keep-prior`, re-install the previous version via
+`install.sh --from-release v<old-tag>`.
+
+There's no automatic rollback because v1 has no migration story (per
+SRD §19 Q11); a schema-incompat upgrade means `rm state.db` and re-warm.
 
 ## ErrSchemaMismatch recovery
 

@@ -446,9 +446,8 @@ claude-director with one script.
 ```
 ~/.claude-director/
 ├── bin/
-│   ├── claude-director            → claude-director.<vtag>  (symlink)
-│   ├── claude-director.<vtag>     (the binary; mode 0755)
-│   └── claude-director.<oldvtag>  (retained on upgrade for rollback)
+│   ├── claude-director            (the binary; regular file, mode 0755)
+│   └── claude-director.prior      (optional rollback snapshot; --keep-prior)
 ├── state.db                       (mode 0600)
 ├── state.db-wal                   (when WAL is active)
 ├── state.db-shm
@@ -467,23 +466,36 @@ claude-director with one script.
 
 ### Upgrade-safety pattern
 
-The install script:
+The install script uses the standard single-binary CLI install
+pattern (gh, kubectl, terraform): write to a sibling temp path,
+then `mv` over the target. `mv` within one filesystem is atomic at
+the inode level — concurrent readers see either the old binary or
+the new, never half. A running process holds the old inode, so an
+in-flight exec is unaffected by the swap.
 
-1. Writes the new binary at a versioned path
-   (`claude-director.<vtag>`).
-2. Atomically swaps the canonical symlink to point at the new file
-   (`ln -sfn <new> .canonical.new && mv -f .canonical.new canonical`).
-3. Leaves the previous versioned binary in place for manual rollback.
+1. Write the new binary at `claude-director.tmp.$$` next to the
+   target.
+2. `chmod 0755` the temp file.
+3. `mv` it onto `claude-director`.
+
+Optional `--keep-prior` snapshots the existing binary to
+`claude-director.prior` before step 3, giving a one-step rollback
+(`mv .prior canonical`). Without it, rollback is a re-install of the
+previous tag via `install.sh --from-release v<old>`. The
+version-manager pattern (canonical symlink → versioned files) was
+considered and rejected for b.43y: it only earns its complexity when
+multiple concurrent versions are actually being managed.
 
 ### Uninstall semantics
 
-`uninstall.sh` removes ONLY what `install.sh` wrote: the binary,
-any versioned siblings, the optional PATH symlink, and the two
-hook entries it injected (matched by the install root prefix in
-their command string). Other user hooks in `SessionStart` /
-`SessionEnd` survive verbatim. `~/.claude-director/` itself is
-preserved by default — operators frequently want to keep templates
-and state.db across reinstalls.
+`uninstall.sh` removes ONLY what `install.sh` wrote: the canonical
+binary, the optional `.prior` rollback snapshot (and any
+legacy versioned-binary siblings left over from pre-b.43y installs),
+the optional PATH symlink, and the two hook entries it injected
+(matched by the install root prefix in their command string). Other
+user hooks in `SessionStart` / `SessionEnd` survive verbatim.
+`~/.claude-director/` itself is preserved by default — operators
+frequently want to keep templates and state.db across reinstalls.
 
 `--purge` is the explicit nuke path: a full `rm -rf
 ~/.claude-director` with an interactive confirmation

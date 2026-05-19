@@ -4,7 +4,7 @@
 # Per SRD §16.2. By default:
 #   - Remove the two help hook entries from ~/.claude/settings.json
 #     (preserving any other user hooks).
-#   - Remove the canonical binary symlink + every versioned sibling
+#   - Remove the canonical binary and any `.prior` rollback snapshot
 #     under ~/.claude-director/bin/.
 #   - Remove the PATH symlink (if found at any of the standard
 #     locations or at --symlink-dir).
@@ -93,7 +93,8 @@ if [[ -f "$DEFAULT_SETTINGS_PATH" ]]; then
 fi
 
 # --------------------------------------------------------------------
-# Remove binaries (canonical + versioned siblings).
+# Remove binaries (canonical + .prior snapshot + any legacy
+# versioned-binary siblings from pre-b.43y installs).
 # --------------------------------------------------------------------
 
 if [[ -d "$DEFAULT_BIN_DIR" ]]; then

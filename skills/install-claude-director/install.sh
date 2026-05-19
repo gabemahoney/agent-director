@@ -24,11 +24,10 @@
 #                        no symlink.
 #   --no-symlink         Suppress symlink creation regardless of dir.
 #   --register-mcp       Run `claude mcp add` for the stdio server.
-#   --version <vN>       Override the version suffix used for the
-#                        versioned binary path. Default: extracted
-#                        from the binary's `--version` output, falling
-#                        back to a timestamp if --version is not
-#                        supported by the binary yet (v1).
+#   --keep-prior         Before overwriting an existing binary,
+#                        snapshot it to <target>.prior (overwriting
+#                        any previous .prior). Roll back with
+#                        `mv <target>.prior <target>`. Default OFF.
 #
 # Exit codes:
 #   0  success
@@ -58,7 +57,7 @@ SYMLINK_DIR=""
 SYMLINK_DEFAULT=""
 NO_SYMLINK=0
 REGISTER_MCP=0
-VERSION_TAG=""
+KEEP_PRIOR=0
 
 # GitHub repo slug used by --from-release. Matches go.mod's module path
 # and the release.sh asset naming.
@@ -91,8 +90,8 @@ while [[ $# -gt 0 ]]; do
             NO_SYMLINK=1; shift ;;
         --register-mcp)
             REGISTER_MCP=1; shift ;;
-        --version)
-            VERSION_TAG="$2"; shift 2 ;;
+        --keep-prior)
+            KEEP_PRIOR=1; shift ;;
         -h|--help)
             sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
             exit 0 ;;
@@ -333,25 +332,6 @@ if [[ "$FROM_RELEASE" -eq 0 && "${VERSION_CHECK_REQUIRED:-1}" -eq 1 ]]; then
 fi
 
 # --------------------------------------------------------------------
-# Version tag (used for the side-by-side path on upgrade)
-# --------------------------------------------------------------------
-
-if [[ -z "$VERSION_TAG" ]]; then
-    # Prefer the binary's own `version` verb. Old binaries without the
-    # verb (or without an ldflags-stamped Version) fall back to a
-    # timestamp so the side-by-side path is still unique.
-    v=$("$BINARY_SRC" version 2>/dev/null \
-        | jq -r '.version // empty' 2>/dev/null \
-        || true)
-    if [[ -n "$v" && "$v" != "dev" ]]; then
-        VERSION_TAG="$v"
-    else
-        VERSION_TAG="t$(date +%Y%m%d-%H%M%S)"
-    fi
-fi
-echo "  version : $VERSION_TAG"
-
-# --------------------------------------------------------------------
 # Create install root + bin dir
 # --------------------------------------------------------------------
 
@@ -361,22 +341,34 @@ mkdir -p "$DEFAULT_BIN_DIR"
 chmod 0755 "$DEFAULT_BIN_DIR"
 
 # --------------------------------------------------------------------
-# Place binary at versioned path; swap canonical symlink atomically.
+# Atomic install: write to a sibling temp path, then mv over the target.
+#
+# `mv` within the same filesystem is atomic at the inode level —
+# concurrent readers see either the old binary or the new, never half.
+# A running process holds the old inode reference, so an in-flight
+# exec is unaffected by the swap.
+#
+# This is the standard pattern for single-binary CLI installers
+# (gh, kubectl, terraform). The version-manager pattern (canonical
+# symlink → versioned files) is only worth the complexity when you
+# actually manage multiple concurrent versions; we don't.
 # --------------------------------------------------------------------
 
-VERSIONED="${DEFAULT_BIN_DIR}/claude-director.${VERSION_TAG}"
 CANONICAL="${DEFAULT_BIN_DIR}/claude-director"
+PRIOR="${CANONICAL}.prior"
+TMP="${CANONICAL}.tmp.$$"
 
-# `install` (BSD/GNU) copies atomically and sets mode in one go.
-install -m 0755 "$BINARY_SRC" "$VERSIONED"
+if [[ "$KEEP_PRIOR" -eq 1 && -f "$CANONICAL" ]]; then
+    cp -f "$CANONICAL" "$PRIOR"
+    chmod 0755 "$PRIOR"
+    echo "  prior   : snapshotted to $PRIOR"
+fi
 
-# Atomic symlink swap: write `.canonical.new` as a symlink, then
-# rename onto canonical. `ln -sfn` is the idiomatic single-step form,
-# but the rename trick is portable to older `ln` variants too.
-ln -sfn "$VERSIONED" "${CANONICAL}.new"
-mv -f "${CANONICAL}.new" "$CANONICAL"
+cp "$BINARY_SRC" "$TMP"
+chmod 0755 "$TMP"
+mv "$TMP" "$CANONICAL"
 
-echo "  binary  : $CANONICAL → $VERSIONED"
+echo "  binary  : $CANONICAL"
 
 # --------------------------------------------------------------------
 # Optional PATH symlink
