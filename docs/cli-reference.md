@@ -25,7 +25,7 @@ Launch a tracked Claude Code instance inside a new tmux session. Fire-and-forget
 ### Parameters
 
 - `cwd` (string, required): Absolute (or ~/-prefixed) path the Spawn's Claude starts in. Required.
-- `template` (string, optional): Optional named template under ~/.claude-director/templates/. Epic 7 wires the real template merge.
+- `template` (string, optional): Optional named template under ~/.claude-director/templates/. Per-call params layer on top per SRD §7.1 (scalars replace; maps merge; permissions arrays concat; claude_args replaces wholesale).
 - `claude_instance_id` (string, optional): Optional explicit id (UUID4 minted when absent). Collision against a live row returns ErrInstanceIdCollision.
 - `label` ([]string (k=v), optional): Repeated KEY=VALUE pairs. Each becomes CLAUDE_DIRECTOR_LABEL_<UPPER_KEY> on the session env and persists in labels.
 - `allow` ([]string, optional): Repeated permissions.allow entries concatenated with the user / project tiers.
@@ -51,6 +51,9 @@ Launch a tracked Claude Code instance inside a new tmux session. Fire-and-forget
 - `ErrInstanceIdCollision`
 - `ErrTmuxNotAvailable`
 - `ErrTmuxSessionCreate`
+- `ErrTemplateNotFound`
+- `ErrTemplateMalformed`
+- `ErrTemplateNameUnsafe`
 
 ## status
 

@@ -69,11 +69,108 @@ type Resolved struct {
 	SpawnParams
 }
 
-// Resolve folds template values into per-call params. TODO(epic-7):
-// template merge per SRD §7.1 — load template via internal/config, apply
-// per-tier merge rules (scalars replace, maps merge by key, arrays inside
-// permissions concatenate). For Epic 3 we deliberately punt: the caller's
-// fields are the resolved fields.
+// Resolve folds template values into per-call params per SRD §7.1.
+//
+// Merge rules (template is the base; per-call layered on top):
+//
+//   - Scalars (CWD, RelayMode): per-call non-empty REPLACES the
+//     template value. Per-call empty falls back to template.
+//   - Top-level maps (ExtraEnv, ClaudeDirectorLabels): merge by key.
+//     Template keys survive; per-call keys win on collision. Either
+//     side may be nil — the result is nil only when both are nil.
+//   - Permissions arrays (Allow, Deny, Ask): CONCAT. Template entries
+//     come first, per-call entries appended. A nil per-call
+//     Permissions field falls back to the template's value wholesale
+//     (no concat happens because there's nothing to append).
+//   - ClaudeArgs: per-call non-nil REPLACES the template's slice
+//     wholesale. A nil per-call slice falls back to the template.
+//     Explicit empty (len=0, non-nil) replaces (with an empty slice).
+//
+// When p.Template is empty (the common path for ad-hoc spawns) Resolve
+// is a near no-op: it returns the params verbatim wrapped in Resolved.
+// The function never mutates p.
 func Resolve(p SpawnParams, _ config.Config) (Resolved, error) {
-	return Resolved{SpawnParams: p}, nil
+	if p.Template == "" {
+		return Resolved{SpawnParams: p}, nil
+	}
+
+	tmpl, err := config.LoadTemplate(p.Template)
+	if err != nil {
+		return Resolved{}, err
+	}
+
+	merged := p
+
+	// Scalars: per-call empty falls back to template.
+	if merged.CWD == "" {
+		merged.CWD = tmpl.CWD
+	}
+	if merged.RelayMode == "" {
+		merged.RelayMode = tmpl.RelayMode
+	}
+
+	// Maps: merge with per-call winning on collision.
+	merged.ExtraEnv = mergeStringMap(tmpl.ExtraEnv, merged.ExtraEnv)
+	merged.ClaudeDirectorLabels = mergeStringMap(tmpl.ClaudeDirectorLabels, merged.ClaudeDirectorLabels)
+
+	// ClaudeArgs: per-call replace wholesale. nil per-call → use
+	// template. Explicit empty (`[]`) replaces with empty.
+	if merged.ClaudeArgs == nil {
+		// Defensive copy of the template slice so the caller can't
+		// mutate the cached template state via the resolved struct.
+		if tmpl.ClaudeArgs != nil {
+			merged.ClaudeArgs = append([]string(nil), tmpl.ClaudeArgs...)
+		}
+	}
+
+	// Permissions: concat each leaf array. Per-call nil → use template.
+	switch {
+	case merged.Permissions == nil && tmpl.Permissions == nil:
+		// no permissions on either side; merged stays nil
+	case merged.Permissions == nil:
+		merged.Permissions = &Permissions{
+			Allow: append([]string(nil), tmpl.Permissions.Allow...),
+			Deny:  append([]string(nil), tmpl.Permissions.Deny...),
+			Ask:   append([]string(nil), tmpl.Permissions.Ask...),
+		}
+	case tmpl.Permissions == nil:
+		// per-call only; keep merged.Permissions as-is
+	default:
+		merged.Permissions = &Permissions{
+			Allow: concatStrings(tmpl.Permissions.Allow, merged.Permissions.Allow),
+			Deny:  concatStrings(tmpl.Permissions.Deny, merged.Permissions.Deny),
+			Ask:   concatStrings(tmpl.Permissions.Ask, merged.Permissions.Ask),
+		}
+	}
+
+	return Resolved{SpawnParams: merged}, nil
+}
+
+// mergeStringMap layers `over` on top of `base`. Per-call wins on
+// collision. Returns nil iff both inputs are nil; otherwise allocates
+// a fresh map so neither input is observably mutated.
+func mergeStringMap(base, over map[string]string) map[string]string {
+	if base == nil && over == nil {
+		return nil
+	}
+	out := make(map[string]string, len(base)+len(over))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range over {
+		out[k] = v
+	}
+	return out
+}
+
+// concatStrings returns a fresh slice with `base` first, then `over`.
+// Either side may be nil. The result is nil only when both are nil.
+func concatStrings(base, over []string) []string {
+	if base == nil && over == nil {
+		return nil
+	}
+	out := make([]string, 0, len(base)+len(over))
+	out = append(out, base...)
+	out = append(out, over...)
+	return out
 }

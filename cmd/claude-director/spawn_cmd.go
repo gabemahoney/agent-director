@@ -54,7 +54,7 @@ func parseSpawnFlags(args []string) (spawn.SpawnParams, error) {
 	fs := flag.NewFlagSet("spawn", flag.ContinueOnError)
 	fs.SetOutput(io.Discard) // we surface errors via the JSON envelope
 	fs.StringVar(&p.CWD, "cwd", "", "absolute / ~-prefixed cwd for the Spawn")
-	fs.StringVar(&p.Template, "template", "", "named template (Epic 7)")
+	fs.StringVar(&p.Template, "template", "", "named template stored under ~/.claude-director/templates/<name>.toml")
 	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "explicit instance id (default: minted UUID4)")
 	fs.StringVar(&p.RelayMode, "relay-mode", "", "on / off (default: config defaults.relay_mode)")
 	fs.Var(newKVSlice(&labelKVs, "--label"), "label", "k=v (repeatable)")

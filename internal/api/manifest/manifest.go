@@ -70,7 +70,7 @@ var Verbs = []VerbDef{
 			{
 				Name:        "template",
 				Type:        "string",
-				Description: "Optional named template under ~/.claude-director/templates/. Epic 7 wires the real template merge.",
+				Description: "Optional named template under ~/.claude-director/templates/. Per-call params layer on top per SRD §7.1 (scalars replace; maps merge; permissions arrays concat; claude_args replaces wholesale).",
 			},
 			{
 				Name:        "claude_instance_id",
@@ -131,6 +131,9 @@ var Verbs = []VerbDef{
 			"ErrInstanceIdCollision",
 			"ErrTmuxNotAvailable",
 			"ErrTmuxSessionCreate",
+			"ErrTemplateNotFound",
+			"ErrTemplateMalformed",
+			"ErrTemplateNameUnsafe",
 		},
 	},
 	{
