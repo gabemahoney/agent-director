@@ -119,6 +119,57 @@ func (c *Client) KillSession(name string) error {
 	return fmt.Errorf("%w: %s: %v", ErrTmuxKillFailed, trimOutput(out), err)
 }
 
+// paneTarget is the canonical tmux pane address claude-director uses for
+// every send-keys / capture-pane invocation. tmux session creation runs
+// without a window/pane suffix, so the first pane is always at index 0
+// inside window 0. Pinning this here keeps callers from constructing
+// ad-hoc targets and accidentally hitting a sibling pane.
+func paneTarget(name string) string { return name + ":0.0" }
+
+// SendKeys delivers text to the named tmux session's first pane via
+// `tmux send-keys -t <name>:0.0 <text>`. text is passed as a single argv
+// element — tmux handles its own quoting, so the caller does not need to
+// shell-escape spaces or special characters. `\r` stripping and the
+// optional trailing Enter are the verb layer's responsibility (SRD §4.3,
+// reference/send-keys-research.md) — this method is the raw tmux wire.
+//
+// On a non-zero tmux exit the error chain contains ErrTmuxSendKeys plus the
+// tmux stderr blob; on a missing tmux binary, ErrTmuxNotAvailable.
+func (c *Client) SendKeys(name, text string) error {
+	out, err := c.run(binaryName, "send-keys", "-t", paneTarget(name), text)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, ErrTmuxNotAvailable) {
+		return err
+	}
+	return fmt.Errorf("%w: %s: %v", ErrTmuxSendKeys, trimOutput(out), err)
+}
+
+// CapturePane returns the last nLines lines of the named tmux session's
+// first pane, captured via `tmux capture-pane -p -t <name>:0.0 -S -<n>`.
+// Default ANSI handling: tmux's `-p` (without `-e`) already strips SGR
+// colors and cursor moves; the verb-layer ANSI-strip helper handles the
+// remaining residuals when the caller asks for them (the default).
+//
+// nLines is passed through verbatim — callers wanting "all available
+// scrollback" set it to a large number. There is no upper cap; SRD §12
+// explicitly leaves the bound to the caller.
+//
+// On a non-zero tmux exit the error chain contains ErrTmuxCaptureFailed
+// plus the tmux stderr blob; on a missing tmux binary, ErrTmuxNotAvailable.
+func (c *Client) CapturePane(name string, nLines int) (string, error) {
+	scroll := "-" + strconv.Itoa(nLines)
+	out, err := c.run(binaryName, "capture-pane", "-p", "-t", paneTarget(name), "-S", scroll)
+	if err != nil {
+		if errors.Is(err, ErrTmuxNotAvailable) {
+			return "", err
+		}
+		return "", fmt.Errorf("%w: %s: %v", ErrTmuxCaptureFailed, trimOutput(out), err)
+	}
+	return string(out), nil
+}
+
 // ListPanes returns the PIDs of every pane inside session name. tmux's
 // list-panes is asked for `#{pane_pid}` only; lines that fail to parse as
 // integers are skipped (a future tmux version that decorates the format

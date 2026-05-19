@@ -72,6 +72,46 @@ func TestNewSessionArgvComposition(t *testing.T) {
 			},
 			wantCmd: []string{"tmux", "list-panes", "-t", "foo", "-F", "#{pane_pid}"},
 		},
+		{
+			name: "send-keys with a space-bearing string lands as one argv element",
+			fn: func(c *Client) error {
+				return c.SendKeys("foo", "hello world")
+			},
+			wantCmd: []string{"tmux", "send-keys", "-t", "foo:0.0", "hello world"},
+		},
+		{
+			name: "send-keys preserves an embedded literal newline in one argv element",
+			fn: func(c *Client) error {
+				return c.SendKeys("foo", "multi\nline\ntext")
+			},
+			wantCmd: []string{"tmux", "send-keys", "-t", "foo:0.0", "multi\nline\ntext"},
+		},
+		{
+			name: "send-keys passes the literal Enter token through as the text argv",
+			fn: func(c *Client) error {
+				// The verb layer composes Enter as a separate send-keys
+				// call; this case pins that the client does not transform
+				// the string "Enter" — tmux interprets it as the keysym.
+				return c.SendKeys("foo", "Enter")
+			},
+			wantCmd: []string{"tmux", "send-keys", "-t", "foo:0.0", "Enter"},
+		},
+		{
+			name: "capture-pane with n=25 emits -S -25 (not omitted, not -0)",
+			fn: func(c *Client) error {
+				_, err := c.CapturePane("foo", 25)
+				return err
+			},
+			wantCmd: []string{"tmux", "capture-pane", "-p", "-t", "foo:0.0", "-S", "-25"},
+		},
+		{
+			name: "capture-pane with a large n widens the scrollback verbatim",
+			fn: func(c *Client) error {
+				_, err := c.CapturePane("foo", 1000)
+				return err
+			},
+			wantCmd: []string{"tmux", "capture-pane", "-p", "-t", "foo:0.0", "-S", "-1000"},
+		},
 	}
 
 	for _, tc := range cases {
@@ -161,6 +201,72 @@ func TestListPanesParsesPids(t *testing.T) {
 	want := []int{123, 456, 789}
 	if !reflect.DeepEqual(pids, want) {
 		t.Fatalf("pids = %v; want %v", pids, want)
+	}
+}
+
+func TestCapturePaneReturnsStdout(t *testing.T) {
+	// Capture's job is to surface the raw pane text — pin that the bytes
+	// returned are exactly what tmux wrote on stdout, including a trailing
+	// newline. ANSI handling happens at a higher layer.
+	cap := &captured{stdout: []byte("first line\nsecond line\n")}
+	c := &Client{run: cap.runner()}
+	got, err := c.CapturePane("foo", 25)
+	if err != nil {
+		t.Fatalf("CapturePane: %v", err)
+	}
+	if got != "first line\nsecond line\n" {
+		t.Fatalf("got %q; want exact stdout passthrough", got)
+	}
+}
+
+func TestSendKeysWrapsTmuxFailure(t *testing.T) {
+	// A non-zero tmux exit should surface as ErrTmuxSendKeys with the
+	// stderr blob in the chain — the verb layer's state-precondition
+	// errors are distinct, so callers must be able to errors.Is the
+	// transport failure cleanly.
+	cap := &captured{
+		stdout: []byte("can't find pane: foo:0.0"),
+		err:    &exec.ExitError{},
+	}
+	c := &Client{run: cap.runner()}
+	err := c.SendKeys("foo", "hi")
+	if !errors.Is(err, ErrTmuxSendKeys) {
+		t.Fatalf("err = %v; want ErrTmuxSendKeys", err)
+	}
+	if !strings.Contains(err.Error(), "can't find pane") {
+		t.Fatalf("err message %q does not include tmux stderr blob", err.Error())
+	}
+}
+
+func TestCapturePaneWrapsTmuxFailure(t *testing.T) {
+	cap := &captured{
+		stdout: []byte("can't find session: ghost"),
+		err:    &exec.ExitError{},
+	}
+	c := &Client{run: cap.runner()}
+	_, err := c.CapturePane("ghost", 25)
+	if !errors.Is(err, ErrTmuxCaptureFailed) {
+		t.Fatalf("err = %v; want ErrTmuxCaptureFailed", err)
+	}
+}
+
+func TestSendKeysMapsExecMissingToTmuxNotAvailable(t *testing.T) {
+	cap := &captured{err: fmt.Errorf("%w: %v",
+		ErrTmuxNotAvailable, &exec.Error{Name: "tmux", Err: exec.ErrNotFound})}
+	c := &Client{run: cap.runner()}
+	err := c.SendKeys("foo", "hi")
+	if !errors.Is(err, ErrTmuxNotAvailable) {
+		t.Fatalf("err = %v; want ErrTmuxNotAvailable", err)
+	}
+}
+
+func TestCapturePaneMapsExecMissingToTmuxNotAvailable(t *testing.T) {
+	cap := &captured{err: fmt.Errorf("%w: %v",
+		ErrTmuxNotAvailable, &exec.Error{Name: "tmux", Err: exec.ErrNotFound})}
+	c := &Client{run: cap.runner()}
+	_, err := c.CapturePane("foo", 25)
+	if !errors.Is(err, ErrTmuxNotAvailable) {
+		t.Fatalf("err = %v; want ErrTmuxNotAvailable", err)
 	}
 }
 

@@ -29,3 +29,15 @@ var ErrTmuxKillFailed = errors.New("tmux: kill-session failed")
 // from ErrTmuxSessionCreate / ErrTmuxKillFailed so error envelopes are
 // specific to the operation that produced them.
 var ErrTmuxListPanesFailed = errors.New("tmux: list-panes failed")
+
+// ErrTmuxSendKeys is returned when `tmux send-keys` exits non-zero — most
+// commonly because the named session has no live pane. Callers use this
+// to distinguish a transport-layer tmux failure from the verb-layer
+// state-precondition errors (ErrSpawnNotInteractive et al.).
+var ErrTmuxSendKeys = errors.New("tmux: send-keys failed")
+
+// ErrTmuxCaptureFailed is returned when `tmux capture-pane` exits non-zero —
+// the session vanished mid-call, the pane disappeared, etc. Distinct from
+// ErrSpawnNotFound (which is a store-layer concept) so the verb surface
+// can report a missing tmux session differently from a missing DB row.
+var ErrTmuxCaptureFailed = errors.New("tmux: capture-pane failed")
