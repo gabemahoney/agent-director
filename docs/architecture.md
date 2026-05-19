@@ -192,3 +192,146 @@ callers; cmd/ knows nothing about SQL. Any PR that introduces a back-edge
 ```
 
 Cite SRD §2 for the overall component decomposition this diagram realizes.
+
+## Test Harness
+
+Every functional Epic (Epics 3-13) is gated by a Docker-based integration
+harness rather than `go test ./...`. The harness was built in Epic 2; this
+section captures what it is, how to extend it, and the rules the gate
+depends on. Cross-reference SRD §15 (testing strategy), §17 (audit
+standard), §18 (CI environment).
+
+### Container
+
+`test/Dockerfile` builds `claude-director-test`:
+
+- Base: `debian:bookworm-slim`.
+- Installs `tmux`, `nodejs` 20, `jq`, `sqlite3`, `git`.
+- Installs `@anthropic-ai/claude-code@<pinned>` (see "Pinned Claude Code
+  version" below).
+- Copies in the pre-built `claude-director` binary from `./bin/`.
+- Runs as a non-root `tester` user with `HOME=/home/tester`.
+- Default command is `/opt/driver/run-testplan.sh`.
+
+The image is built via `make test-image`. `make test-image-smoke` exercises
+it standalone: confirms `claude --version` reports the pinned version,
+`claude-director help` exits 0, and the driver rejects an unknown EPIC.
+
+### Driver
+
+`test/driver/run-testplan.sh` is the container entrypoint. Contract:
+
+1. `EPIC` env var names the testplan slug. The driver resolves it to a
+   `t1.*.md` collector under `/work/tickets/testplans/` (mounted read-only
+   by `make test-docker`), either by literal subdirectory or by
+   `title:.*<EPIC>` frontmatter match.
+2. Case order comes from the t1's `children:` YAML list. Alphabetical
+   basename sort would scramble paired cases (e.g. the smoke-2 / smoke-3
+   DB-isolation pair) — `children:` preserves authoring order.
+3. Before each t2 case, the driver invokes `test/driver/db-reset.sh`: it
+   removes `~/.claude-director/state.db` + WAL/SHM, kills tmux sessions
+   matching the `cd-` prefix, then calls `claude-director help` to
+   rebuild schema v1.
+4. For each case, the driver runs in one of two modes:
+   - `DRIVER_MODE=shell` (default) — extracts the t2 body's fenced
+     ```bash``` block and executes it directly. No API calls. Used by
+     `harness-smoke` and by any other testplan whose cases are observable
+     shell-level checks.
+   - `DRIVER_MODE=claude` — concatenates `test/driver/prompt.md` + the t2
+     body and runs `claude --print --output-format json` against it. The
+     driver-Claude reads the t2's "Pass criteria" section and emits a
+     single JSON verdict (`{"verdict":"pass|fail","details":"..."}`) as
+     its stop output.
+5. Output is one JSON object per case on stdout (`{"case","status","details"}`)
+   followed by a summary line (`{"summary":{"total","pass","fail"}}`). The
+   driver exits 0 iff every case passes.
+
+### Canonical command
+
+```
+make test-docker EPIC=<slug>
+```
+
+Fixed signature. Every functional Epic's Progression Contract references
+this verbatim; changing the form would require updating every gated Epic
+ticket. Required env: `EPIC`. Optional: `DRIVER_MODE`, `ANTHROPIC_API_KEY`,
+`CLAUDE_CODE_OAUTH_TOKEN`.
+
+### Auth
+
+The harness is env-var auth only (no file mounts). Per the empirical
+research notes under `reference/`:
+
+- *API-key accounts:* pass `ANTHROPIC_API_KEY=sk-ant-...` via `-e`. See
+  `reference/anthropic-api-key-auth-research.md`.
+- *Max / OAuth accounts:* pass `CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...`
+  via `-e`. The token must be a long-lived one minted by
+  `claude setup-token`, *not* the short-lived access token from
+  `~/.claude-maxauth/.credentials.json` (which expires in ~9h). See
+  `reference/max-account-auth-research.md`.
+
+`make test-docker` inherits both env vars from the calling process — never
+hard-coded in the Makefile. CI sources them from secrets (see
+`.github/workflows/integration.yml`).
+
+Multi-container parallelism is clean because there is no shared
+`~/.claude.json` to race on. Test credentials should be CI-secret-scoped,
+distinct from the operator's primary account.
+
+The shell `DRIVER_MODE` runs without any credential — Epic 2's
+`harness-smoke` gate runs that way so PR CI can stay credentialless. Real
+driver-Claude runs (`DRIVER_MODE=claude`) require one of the env vars.
+
+### testplans hive convention
+
+`tickets/testplans/` is a bees hive (registered in Epic 1's bootstrap
+commit). One t1 collector per Epic; t2 cases are plain-English bodies. The
+driver does not read tier labels — it reads `t1.*.md` and `t2.*.md` files
+directly — so the hive's tier-label naming (`Collector` / `Test case`) is
+purely cosmetic. Each t2 body has a fenced ```bash``` block that the shell
+driver mode executes; the same prose is also what the `claude` driver mode
+hands to the driver-Claude as its spec.
+
+### Pinned Claude Code version
+
+The harness installs `@anthropic-ai/claude-code@2.1.120`. The pin is
+load-bearing: every empirical behavior the harness relies on (env-var
+auth, settings merge, hook surface) was validated against this version in
+the notes under `reference/*-research.md`.
+
+**Bump policy.** A pin bump (`CLAUDE_CODE_VERSION` in `Makefile` and the
+`ARG` in `test/Dockerfile`) requires re-running each empirical research
+note under `reference/` against the new version *before* merging:
+
+- `reference/docker-auth-research.md`
+- `reference/anthropic-api-key-auth-research.md`
+- `reference/max-account-auth-research.md`
+- `reference/claude-settings-research.md`
+
+Any note that no longer reproduces is a blocker. Update the note + bump
+the pin in the same PR; never bump silently.
+
+### CI lane
+
+`.github/workflows/integration.yml` defines two jobs:
+
+- `linux-integration` — runs `make test-docker EPIC=harness-smoke` on
+  `ubuntu-latest` for every PR and push to `main`. Auth env vars come
+  from `${{ secrets.ANTHROPIC_API_KEY }}` and
+  `${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}`. Neither is required for the
+  default shell mode, but the secrets pipeline is wired so opt-in
+  credentialed runs work without repo edits.
+- `macos-stub` — runs on `macos-latest`, exits 0 with a stub message.
+  Epic 8 (sysctl-based liveness probe) will swap this for a real macOS
+  test that exercises the sysctl path. SRD §19 Q7.
+
+### Audit standard
+
+The harness's `make test-docker` output is the *input* to the orchestrator
+audit, not the gate itself. SRD §17 requires first-hand audit: the
+orchestrator runs `make test-docker` themselves, reads the JSON stream
+case-by-case, confirms each case actually executed and passed, and signals
+"continue" to advance the Epic. No blind approval, no auto-retry.
+
+Cross-reference: SRD §15 (testing strategy), §17 (orchestrator-in-the-loop
+gate), §18 Q10 (Docker test credential injection).

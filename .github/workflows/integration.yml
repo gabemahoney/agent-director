@@ -1,0 +1,50 @@
+name: integration
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel in-flight runs of the same PR/branch when a new commit arrives —
+# the harness is the expensive lane so two stacked runs is wasteful.
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-integration:
+    name: Docker harness — harness-smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Build claude-director binary
+        run: make build
+
+      - name: Run make test-docker EPIC=harness-smoke
+        env:
+          # Either env var is sufficient for the driver-Claude path
+          # (DRIVER_MODE=claude). The default DRIVER_MODE=shell does not
+          # need a credential, but we still wire them through so a PR
+          # author who opts into the credentialed lane gets it from CI
+          # secrets, never plaintext in the repo. See
+          # docs/architecture.md "Test Harness — CI auth".
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: make test-docker EPIC=harness-smoke
+
+  macos-stub:
+    name: macOS lane (stub — activated by Epic 8)
+    runs-on: macos-latest
+    steps:
+      - name: Stub message
+        run: |
+          echo "macOS integration lane is currently a stub."
+          echo "Epic 8 (sysctl-based liveness probe) will swap this for a"
+          echo "real macOS test that exercises the sysctl path. Until then,"
+          echo "this job exits 0 to keep the matrix green and prove the"
+          echo "macOS runner is wired up. See SRD §19 Q7."
