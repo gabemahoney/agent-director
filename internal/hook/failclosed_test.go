@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/gabemahoney/claude-director/internal/config"
 	"github.com/gabemahoney/claude-director/internal/hook"
@@ -189,12 +188,17 @@ func TestFailClosedPollingTimeout(t *testing.T) {
 		getRows: []store.PermissionRow{{Decision: ""}},
 		getErrs: []error{nil},
 	}
+	// Virtual clock drives the 1s timeout without burning wall-clock.
+	now, restore := setupVirtualClock(t)
+	defer restore()
+	clock := &advancingClock{now: now}
 	if err := hook.Handle(context.Background(),
 		strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`),
 		stdout, st,
 		hook.HandleConfig{
-			Env: envWith("id-1"),
-			Cfg: config.Relay{TimeoutSeconds: 1, PollBaseMs: 0, PollJitterMs: 0},
+			Env:   envWith("id-1"),
+			Cfg:   config.Relay{TimeoutSeconds: 1, PollBaseMs: 0, PollJitterMs: 0},
+			Clock: clock,
 		},
 		newSilentLogger()); err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -209,17 +213,19 @@ func TestFailClosedContextCancelDuringPoll(t *testing.T) {
 		getRows: []store.PermissionRow{{Decision: ""}},
 		getErrs: []error{nil},
 	}
+	now, restore := setupVirtualClock(t)
+	defer restore()
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		cancel()
-	}()
+	// Cancel synchronously after the 2nd virtual sleep — no goroutine,
+	// no wall-clock wait.
+	clock := &advancingClock{now: now, cancel: cancel, cancelAfter: 2}
 	if err := hook.Handle(ctx,
 		strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`),
 		stdout, st,
 		hook.HandleConfig{
-			Env: envWith("id-1"),
-			Cfg: config.Relay{TimeoutSeconds: 60, PollBaseMs: 50, PollJitterMs: 0},
+			Env:   envWith("id-1"),
+			Cfg:   config.Relay{TimeoutSeconds: 60, PollBaseMs: 50, PollJitterMs: 0},
+			Clock: clock,
 		},
 		newSilentLogger()); err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -243,8 +249,9 @@ func TestFailClosedRowPreemptedDuringPoll(t *testing.T) {
 		strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`),
 		stdout, st,
 		hook.HandleConfig{
-			Env: envWith("id-1"),
-			Cfg: config.Relay{TimeoutSeconds: 30, PollBaseMs: 0, PollJitterMs: 0},
+			Env:   envWith("id-1"),
+			Cfg:   config.Relay{TimeoutSeconds: 30, PollBaseMs: 0, PollJitterMs: 0},
+			Clock: fastClock{},
 		},
 		newSilentLogger()); err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -265,8 +272,9 @@ func TestFailClosedReadRetryBudgetExhausted(t *testing.T) {
 		strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`),
 		stdout, st,
 		hook.HandleConfig{
-			Env: envWith("id-1"),
-			Cfg: config.Relay{TimeoutSeconds: 30, PollBaseMs: 0, PollJitterMs: 0},
+			Env:   envWith("id-1"),
+			Cfg:   config.Relay{TimeoutSeconds: 30, PollBaseMs: 0, PollJitterMs: 0},
+			Clock: fastClock{},
 		},
 		newSilentLogger()); err != nil {
 		t.Fatalf("Handle: %v", err)

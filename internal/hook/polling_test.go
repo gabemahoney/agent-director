@@ -55,6 +55,38 @@ func (fastClock) Sleep(ctx context.Context, _ time.Duration) {
 	}
 }
 
+// advancingClock is a virtual-time sleeper. Each Sleep call records
+// the requested duration and advances a *time.Time the test owns,
+// so Poll's deadline math (against the injected nowFunc) progresses
+// without any real wall-clock wait. cancelAfter triggers ctx
+// cancellation after a fixed iteration count so the ctx-cancel test
+// runs synchronously.
+type advancingClock struct {
+	now         *time.Time
+	sleeps      []time.Duration
+	cancel      context.CancelFunc
+	cancelAfter int // ≥1 to enable; cancels after the Nth Sleep call.
+}
+
+func (c *advancingClock) Sleep(_ context.Context, d time.Duration) {
+	c.sleeps = append(c.sleeps, d)
+	*c.now = c.now.Add(d)
+	if c.cancelAfter > 0 && len(c.sleeps) >= c.cancelAfter && c.cancel != nil {
+		c.cancel()
+		c.cancel = nil // one-shot
+	}
+}
+
+// setupVirtualClock installs a fresh virtual time origin and the
+// SetNowFunc restorer. Returns the virtual now pointer (callers pass
+// to advancingClock) plus a cleanup that the test must defer.
+func setupVirtualClock(t *testing.T) (*time.Time, func()) {
+	t.Helper()
+	now := time.Unix(0, 0)
+	restore := hook.SetNowFunc(func() time.Time { return now })
+	return &now, restore
+}
+
 func newRNG() *rand.Rand { return rand.New(rand.NewSource(1)) }
 
 func TestPollReturnsDecisionWhenAvailable(t *testing.T) {
@@ -119,20 +151,33 @@ func TestPollReadRetryBudget(t *testing.T) {
 
 func TestPollTimeoutFailsClosed(t *testing.T) {
 	// Row stays undecided forever; timeout=1s drives the loop to
-	// give up. Use real clock to honor real-time deadline.
+	// give up. Drives the deadline math on virtual time so the test
+	// pays zero real wall-clock for the 1s timeout.
 	st := &scriptedPollStore{
 		rows: []scriptedRow{{row: store.PermissionRow{Decision: ""}}},
 	}
-	start := time.Now()
-	res := hook.Poll(context.Background(), st, hook.DefaultPollClock(),
+	now, restore := setupVirtualClock(t)
+	defer restore()
+	clock := &advancingClock{now: now}
+
+	res := hook.Poll(context.Background(), st, clock,
 		config.Relay{TimeoutSeconds: 1, PollBaseMs: 0, PollJitterMs: 0},
 		"id-1", newRNG())
-	elapsed := time.Since(start)
+
 	if res.Decision != "" {
 		t.Errorf("expected timeout fail-closed; got %+v", res)
 	}
-	if elapsed < 800*time.Millisecond || elapsed > 3*time.Second {
-		t.Errorf("elapsed = %v; want ~1s", elapsed)
+	if res.Why != "polling timeout exceeded" {
+		t.Errorf("Why = %q; want 'polling timeout exceeded'", res.Why)
+	}
+	// Sleeps should sum to ≈ 1s (the timeout); the loop never sleeps
+	// past the deadline so the last sleep is clamped.
+	var total time.Duration
+	for _, d := range clock.sleeps {
+		total += d
+	}
+	if total < 900*time.Millisecond || total > 1100*time.Millisecond {
+		t.Errorf("total virtual sleep = %v; want ≈ 1s (within the deadline)", total)
 	}
 }
 
@@ -140,23 +185,29 @@ func TestPollCtxCancelFailsClosed(t *testing.T) {
 	st := &scriptedPollStore{
 		rows: []scriptedRow{{row: store.PermissionRow{Decision: ""}}},
 	}
+	now, restore := setupVirtualClock(t)
+	defer restore()
+
 	ctx, cancel := context.WithCancel(context.Background())
-	// Cancel after a brief delay.
-	go func() {
-		time.Sleep(20 * time.Millisecond)
-		cancel()
-	}()
-	res := hook.Poll(ctx, st, hook.DefaultPollClock(),
+	// The clock cancels ctx synchronously after the 3rd virtual
+	// sleep — no goroutine, no wall-clock wait.
+	clock := &advancingClock{now: now, cancel: cancel, cancelAfter: 3}
+
+	res := hook.Poll(ctx, st, clock,
 		config.Relay{TimeoutSeconds: 60, PollBaseMs: 5, PollJitterMs: 5},
 		"id-1", newRNG())
 	if res.Decision != "" {
 		t.Errorf("expected ctx-cancel fail-closed; got %+v", res)
 	}
+	if res.Why == "" {
+		t.Errorf("Why diagnostic empty for ctx-cancel exit")
+	}
 }
 
 func TestPollFloorEnforced(t *testing.T) {
 	// SRD §6.2 invariant: PollBaseMs=0 + PollJitterMs=0 must NOT pin
-	// CPU. The 50ms floor is the safety net.
+	// CPU. The 50ms floor is the safety net. Asserted by inspecting
+	// each recorded virtual sleep — no real wall-clock time burned.
 	st := &scriptedPollStore{
 		rows: []scriptedRow{
 			{row: store.PermissionRow{Decision: ""}},
@@ -165,16 +216,23 @@ func TestPollFloorEnforced(t *testing.T) {
 			{row: store.PermissionRow{Decision: "allow", DecisionReason: ""}},
 		},
 	}
-	start := time.Now()
-	res := hook.Poll(context.Background(), st, hook.DefaultPollClock(),
+	now, restore := setupVirtualClock(t)
+	defer restore()
+	clock := &advancingClock{now: now}
+
+	res := hook.Poll(context.Background(), st, clock,
 		config.Relay{TimeoutSeconds: 30, PollBaseMs: 0, PollJitterMs: 0},
 		"id-1", newRNG())
-	elapsed := time.Since(start)
 	if res.Decision != "allow" {
 		t.Fatalf("expected allow after 4 polls; got %+v", res)
 	}
-	// 3 sleeps of >=50ms each → >= 150ms.
-	if elapsed < 150*time.Millisecond {
-		t.Errorf("elapsed = %v; want >= 150ms (3 sleeps × 50ms floor)", elapsed)
+	// 3 sleeps between 4 polls; every one must be ≥ pollFloor (50ms).
+	if len(clock.sleeps) != 3 {
+		t.Fatalf("recorded sleeps = %v; want exactly 3 between 4 polls", clock.sleeps)
+	}
+	for i, d := range clock.sleeps {
+		if d < 50*time.Millisecond {
+			t.Errorf("sleep[%d] = %v; want >= 50ms floor", i, d)
+		}
 	}
 }

@@ -17,6 +17,12 @@ import (
 // the most aggressive setting.
 const pollFloor = 50 * time.Millisecond
 
+// nowFunc is the wall-clock seam Poll uses for its deadline math.
+// Held as a package var so tests can inject a virtual clock that
+// advances only when the fake sleeper is invoked — see
+// internal/hook/export_test.go. Defaults to time.Now in production.
+var nowFunc = time.Now
+
 // pollMaxReadRetries is the upper bound on consecutive SQL read
 // failures the polling loop tolerates before giving up. Each retry
 // pays the floor sleep so a flapping DB doesn't burn CPU. Past the
@@ -85,7 +91,7 @@ func Poll(ctx context.Context, s PollStore, clock PollClock, cfg config.Relay, i
 		// SRD §11 default is 600s; guard against a config that pinned 0.
 		timeout = 600 * time.Second
 	}
-	deadline := time.Now().Add(timeout)
+	deadline := nowFunc().Add(timeout)
 
 	readFails := 0
 	for {
@@ -94,7 +100,12 @@ func Poll(ctx context.Context, s PollStore, clock PollClock, cfg config.Relay, i
 		if err := ctx.Err(); err != nil {
 			return PollResult{Why: "ctx cancelled: " + err.Error()}
 		}
-		if time.Now().After(deadline) {
+		// `!Before` (i.e. now >= deadline) handles the virtual-clock
+		// edge case where Sleep clamps sleep=remaining and leaves
+		// nowFunc() == deadline exactly; `After` alone would spin in
+		// that case (real wall-clock time would have stepped past in
+		// production, masking the issue).
+		if !nowFunc().Before(deadline) {
 			return PollResult{Why: "polling timeout exceeded"}
 		}
 
@@ -132,7 +143,7 @@ func Poll(ctx context.Context, s PollStore, clock PollClock, cfg config.Relay, i
 			sleep = pollFloor
 		}
 		// Never sleep past the deadline.
-		if remaining := time.Until(deadline); remaining < sleep {
+		if remaining := deadline.Sub(nowFunc()); remaining < sleep {
 			sleep = remaining
 		}
 		if sleep > 0 {
