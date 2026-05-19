@@ -1,0 +1,175 @@
+package spawn
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/gabemahoney/claude-director/internal/config"
+)
+
+// hookEventName is the event-key string used in Claude Code's settings.
+// Listed in stable order so the synthesized JSON is reproducible (Go's
+// json.Marshal sorts keys alphabetically anyway; the slice exists so
+// tests can iterate the canonical 8 events without hardcoding the list).
+type hookEventName string
+
+const (
+	hookSessionStart      hookEventName = "SessionStart"
+	hookUserPromptSubmit  hookEventName = "UserPromptSubmit"
+	hookPreToolUse        hookEventName = "PreToolUse"
+	hookPostToolUse       hookEventName = "PostToolUse"
+	hookStop              hookEventName = "Stop"
+	hookNotification      hookEventName = "Notification"
+	hookSessionEnd        hookEventName = "SessionEnd"
+	hookPermissionRequest hookEventName = "PermissionRequest"
+)
+
+// hookEvents enumerates the 8 events claude-director registers on every
+// Spawn (SRD §6.1). Two of them (PreToolUse, PermissionRequest) carry a
+// `"matcher": "*"` field; the matcherFields set names those.
+var hookEvents = []hookEventName{
+	hookSessionStart, hookUserPromptSubmit, hookPreToolUse,
+	hookPostToolUse, hookStop, hookNotification, hookSessionEnd,
+	hookPermissionRequest,
+}
+
+var matcherFields = map[hookEventName]bool{
+	hookPreToolUse:        true,
+	hookPermissionRequest: true,
+}
+
+// synthesizeSettings builds the inline JSON passed to `claude --settings`.
+// Returns the JSON string and any error from os.Executable / json encoding.
+//
+// Shape (SRD §6.1):
+//
+//	{
+//	  "hooks": {
+//	    "<EventName>": [{"hooks":[{"type":"command","command":"<bin> hook"}]}],
+//	    ... (and "PreToolUse"/"PermissionRequest" carry matcher "*")
+//	  },
+//	  "permissions": { "allow": [...], "deny": [...], "ask": [...] }
+//	}
+//
+// `<bin>` is the absolute path to the currently-running claude-director
+// binary (os.Executable, then filepath.Abs as belt-and-braces). The path
+// is rendered through strconv.Quote-style escaping defensively even
+// though tmux's direct-argv delivery does not require shell-escaping —
+// SRD §4.3 calls for that belt-and-suspenders treatment.
+//
+// The `permissions` block is included whenever the caller supplied any
+// non-empty allow/deny/ask array OR when cfg.Defaults.DisableAskUserQuestion
+// is true (which prepends "AskUserQuestion" to deny). When omitted, Claude
+// Code's tier merge runs against the user/project settings only.
+func synthesizeSettings(r Resolved, cfg config.Config) (string, error) {
+	exe, err := executablePath()
+	if err != nil {
+		return "", fmt.Errorf("resolve claude-director path: %w", err)
+	}
+	exe = quoteIfWhitespace(exe)
+	cmd := exe + " hook"
+
+	hooks := map[string]any{}
+	for _, evt := range hookEvents {
+		entry := map[string]any{
+			"hooks": []any{
+				map[string]any{"type": "command", "command": cmd},
+			},
+		}
+		if matcherFields[evt] {
+			entry["matcher"] = "*"
+		}
+		hooks[string(evt)] = []any{entry}
+	}
+
+	top := map[string]any{"hooks": hooks}
+
+	allow, deny, ask := mergePermissions(r.Permissions, cfg.Defaults.DisableAskUserQuestion)
+	if len(allow) > 0 || len(deny) > 0 || len(ask) > 0 {
+		perm := map[string]any{}
+		if len(allow) > 0 {
+			perm["allow"] = allow
+		}
+		if len(deny) > 0 {
+			perm["deny"] = deny
+		}
+		if len(ask) > 0 {
+			perm["ask"] = ask
+		}
+		top["permissions"] = perm
+	}
+
+	out, err := json.Marshal(top)
+	if err != nil {
+		return "", fmt.Errorf("marshal settings: %w", err)
+	}
+	return string(out), nil
+}
+
+// mergePermissions assembles the final allow/deny/ask slices. When
+// disable_askuserquestion is on, "AskUserQuestion" is prepended to the
+// deny list per SRD §11 (additive over user / project tiers, which Claude
+// Code merges itself).
+//
+// The function preserves caller order within each slice; the prepend on
+// deny is the only mutation. Callers passing nil for Permissions still
+// get the auto-deny when the config flag is set.
+func mergePermissions(p *Permissions, disableAUQ bool) (allow, deny, ask []string) {
+	if p != nil {
+		allow = append(allow, p.Allow...)
+		deny = append(deny, p.Deny...)
+		ask = append(ask, p.Ask...)
+	}
+	if disableAUQ {
+		// Prepend so the auto-deny appears first in the final array — a
+		// readability convention only; Claude Code's matcher doesn't care
+		// about order within a single tier.
+		deny = append([]string{"AskUserQuestion"}, deny...)
+	}
+	return allow, deny, ask
+}
+
+// executablePath returns the absolute path to the currently-running
+// binary. Linux's /proc/self/exe and macOS's _NSGetExecutablePath are
+// both wrapped by os.Executable; we follow up with filepath.Abs in case
+// os.Executable returned a symlink-y path.
+//
+// Held as a var so tests can stub it without touching the actual filesystem.
+var executablePath = func() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Abs(exe)
+}
+
+// quoteIfWhitespace defensively double-quotes a path that contains
+// whitespace. The install skill rejects whitespace install destinations
+// (SRD §4.3) so this branch is unreachable in production; the quoting
+// is here so a hand-edited install of the binary under (e.g.)
+// "/Users/some name/bin/claude-director" cannot trigger a split-on-space
+// bug if the synthesized JSON ever flows through a shell-quoting
+// downstream (which it currently doesn't — tmux delivers direct argv).
+func quoteIfWhitespace(p string) string {
+	if !strings.ContainsAny(p, " \t\n") {
+		return p
+	}
+	// Wrap in double quotes and escape any internal quotes / backslashes.
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range p {
+		switch r {
+		case '\\':
+			b.WriteString(`\\`)
+		case '"':
+			b.WriteString(`\"`)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
