@@ -153,6 +153,26 @@ Terminate the Spawn's tmux session. Idempotent on terminal states (ended/missing
 
 - `ErrSpawnNotFound`
 
+## Tool: pause
+
+Politely shut down a waiting Spawn by sending `/exit` and waiting up to pause.timeout_seconds for the row to reach `ended`. One-shot — no caller-side polling. Terminal states (ended/missing) are no-op success.
+
+### Input schema
+
+- `claude_instance_id`: type=string, required=true — Id of the Spawn to pause.
+
+### Output schema
+
+- (no output fields)
+
+### Errors
+
+- `ErrSpawnNotFound`
+- `ErrSpawnNotPausable`
+- `ErrPauseTimeout`
+- `ErrTmuxNotAvailable`
+- `ErrTmuxSendKeys`
+
 ## Tool: hook
 
 Internal: invoked by Claude Code on lifecycle events via the per-Spawn --settings hooks. Reads payload JSON from stdin, writes a row UPSERT, exits 0 (state-tracking fail-open).

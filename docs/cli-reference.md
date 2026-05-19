@@ -153,6 +153,26 @@ _None._
 
 - `ErrSpawnNotFound`
 
+## pause
+
+Politely shut down a waiting Spawn by sending `/exit` and waiting up to pause.timeout_seconds for the row to reach `ended`. One-shot — no caller-side polling. Terminal states (ended/missing) are no-op success.
+
+### Parameters
+
+- `claude_instance_id` (string, required): Id of the Spawn to pause.
+
+### Result
+
+_None._
+
+### Errors
+
+- `ErrSpawnNotFound`
+- `ErrSpawnNotPausable`
+- `ErrPauseTimeout`
+- `ErrTmuxNotAvailable`
+- `ErrTmuxSendKeys`
+
 ## hook
 
 Internal: invoked by Claude Code on lifecycle events via the per-Spawn --settings hooks. Reads payload JSON from stdin, writes a row UPSERT, exits 0 (state-tracking fail-open).

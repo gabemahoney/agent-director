@@ -40,6 +40,8 @@ var errCatalog = []struct {
 	{"ErrSchemaMismatch", store.ErrSchemaMismatch},
 	{"ErrSpawnNotInteractive", api.ErrSpawnNotInteractive},
 	{"ErrSendKeysWhileRelayed", api.ErrSendKeysWhileRelayed},
+	{"ErrSpawnNotPausable", api.ErrSpawnNotPausable},
+	{"ErrPauseTimeout", api.ErrPauseTimeout},
 }
 
 // classifyError returns the canonical err_name and an err_description for

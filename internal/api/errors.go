@@ -15,6 +15,19 @@ import "errors"
 // wait for the first hook to flip to waiting.
 var ErrSpawnNotInteractive = errors.New("ErrSpawnNotInteractive")
 
+// ErrSpawnNotPausable is returned by the pause verb when the target
+// Spawn's state is not pausable (SRD §9). Pausable means `waiting`;
+// `pending` / `working` / `ask_user` / `check_permission` all reject.
+// `ended` / `missing` are not errors — they are no-op success, since
+// the desired post-condition is already true.
+var ErrSpawnNotPausable = errors.New("ErrSpawnNotPausable")
+
+// ErrPauseTimeout is returned by the pause verb when the target Spawn
+// did not transition to `ended` within `pause.timeout_seconds` after
+// the `/exit` command was sent. The caller's recourse is to retry or
+// escalate to `kill`.
+var ErrPauseTimeout = errors.New("ErrPauseTimeout")
+
 // ErrSendKeysWhileRelayed is returned when a caller tries to send keys
 // into a Spawn that is currently sitting on a relayed permission prompt
 // (relay_mode=on AND state=check_permission). The relay path needs to

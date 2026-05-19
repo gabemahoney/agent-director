@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -161,6 +162,32 @@ func parseReadPaneFlags(args []string) (api.ReadPaneParams, error) {
 		return p, fmt.Errorf("--claude-instance-id is required")
 	}
 	return p, nil
+}
+
+// pauseHandlerWith implements `claude-director pause`. The verb's
+// timeout is configurable but the polling cadence is fixed in the API
+// layer; the CLI is intentionally a thin flag-to-params translator.
+//
+// ctx is rooted at context.Background() — the CLI process is short-
+// lived and an OS signal terminates it directly. The MCP server (Epic
+// 11) will wire request-scoped cancellation here.
+func pauseHandlerWith(st *store.Store, cfg config.Config, args []string) error {
+	var p api.PauseParams
+	fs := flag.NewFlagSet("pause", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the Spawn to pause")
+	if err := fs.Parse(args); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+	}
+	if p.ClaudeInstanceID == "" {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", "--claude-instance-id is required")
+	}
+	result, err := api.Pause(context.Background(), st, tmuxClient, cfg.Pause, p)
+	if err != nil {
+		name, desc := classifyError(err)
+		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+	}
+	return writeJSON(os.Stdout, result)
 }
 
 // killHandlerWith implements `claude-director kill`. The verb is

@@ -262,6 +262,26 @@ var Verbs = []VerbDef{
 		},
 	},
 	{
+		Name:        "pause",
+		Description: "Politely shut down a waiting Spawn by sending `/exit` and waiting up to pause.timeout_seconds for the row to reach `ended`. One-shot — no caller-side polling. Terminal states (ended/missing) are no-op success.",
+		Params: []ParamDef{
+			{
+				Name:        "claude_instance_id",
+				Type:        "string",
+				Description: "Id of the Spawn to pause.",
+				Required:    true,
+			},
+		},
+		ResultFields: []FieldDef{},
+		ErrorNames: []string{
+			"ErrSpawnNotFound",
+			"ErrSpawnNotPausable",
+			"ErrPauseTimeout",
+			"ErrTmuxNotAvailable",
+			"ErrTmuxSendKeys",
+		},
+	},
+	{
 		Name:        "hook",
 		Description: "Internal: invoked by Claude Code on lifecycle events via the per-Spawn --settings hooks. Reads payload JSON from stdin, writes a row UPSERT, exits 0 (state-tracking fail-open).",
 		Params: []ParamDef{
