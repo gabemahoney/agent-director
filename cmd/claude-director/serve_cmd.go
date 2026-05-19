@@ -7,6 +7,8 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/gabemahoney/claude-director/internal/api"
 	"github.com/gabemahoney/claude-director/internal/config"
@@ -50,7 +52,32 @@ func serveHandlerWith(st *store.Store, cfg config.Config, args []string) error {
 	// transport.
 	logger := newMCPLogger(cfg)
 	server := mcp.New(dispatcher, logger)
-	return server.Serve(context.Background(), os.Stdin, os.Stdout)
+
+	// Signal-aware ctx so SIGINT / SIGTERM (e.g. Kubernetes graceful
+	// shutdown) flow as cancellation instead of killing the process
+	// outright — defers (store close, WAL checkpoint) must run.
+	ctx, stop := newSignalCtx()
+	defer stop()
+
+	// bufio.Scanner inside Serve blocks on stdin, so ctx alone won't
+	// unblock it. Close stdin on cancellation so Serve can return.
+	stdin := os.Stdin
+	go func() {
+		<-ctx.Done()
+		_ = stdin.Close()
+	}()
+
+	return server.Serve(ctx, stdin, os.Stdout)
+}
+
+// newSignalCtx returns a context that is canceled when the process
+// receives SIGINT or SIGTERM. Callers MUST defer the returned stop so
+// the ctx is canceled (and signal handlers removed) on normal exit too.
+//
+// Extracted as a package-level helper so the signal wiring is unit-
+// testable without spawning a subprocess.
+func newSignalCtx() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 }
 
 // newMCPLogger routes MCP operational diagnostics to the configured
