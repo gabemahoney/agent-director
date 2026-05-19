@@ -445,6 +445,105 @@ on its own column:
 The `list --parent <id>` filter walks this column directly; the
 forthcoming MCP server can map a tree by recursive listings.
 
+## Resume
+
+Bringing a terminated Spawn back to life via `claude --resume`. Same
+`claude_instance_id`, fresh tmux session, same JSONL transcript.
+
+### Verb (`internal/api/resume.go`)
+
+Guards run in order; every error path is side-effect-free (no DB
+mutation, no half-created tmux session):
+
+1. `GetSpawn` → `ErrSpawnNotFound` on unknown id.
+2. State must be `ended` or `missing` → otherwise
+   `ErrSpawnNotResumable`. The verb refuses to touch a live Spawn.
+3. `claude_session_id` populated → otherwise `ErrNoSessionId`. A
+   Spawn killed before its first SessionStart hook fired has no
+   rotated session id to point `--resume` at.
+4. JSONL transcript file exists on disk → otherwise
+   `ErrJsonlMissing`. Pure `os.Stat` pre-flight; no read.
+5. Canonical tmux session name is free → otherwise the wrapped
+   `tmux.ErrTmuxSessionCreate` sentinel. Resume does NOT auto-kill
+   a stale session; the operator cleans up manually.
+6. Re-derive `parent_id` from caller's `CLAUDE_DIRECTOR_INSTANCE_ID`
+   env (NULL when unset). The DB write happens **before** the tmux
+   launch — if launch fails, the parent stamp is a harmless stale
+   value the next retry will overwrite.
+7. `spawn.Relaunch` composes env + synthesized settings + the resume
+   argv, fires `tmux new-session -d -s <name> -c <cwd> -e KEY=VAL ...
+   claude --resume <session_id> --settings <json> [user claude_args]`.
+   Fire-and-forget — no readiness wait.
+
+The verb does NOT change the row's `state` or `ended_at`. Those
+transitions happen when the resurrected Claude's first SessionStart
+hook fires (see below).
+
+### parent_id re-derivation (SRD §7.5)
+
+`parent_id` records **who currently owns this Spawn**, not who
+originally created it:
+
+- Resume from a bare shell → `parent_id = NULL`.
+- Resume from inside another Spawn → `parent_id = caller's id`.
+- A Spawn originally parented to A and later resumed by B → `parent_id
+  = B`.
+
+The FK `ON DELETE SET NULL` cascade (Epic 3 schema) handles the
+"former parent gets deleted" case orthogonally.
+
+### SessionStart hook side of the contract
+
+`ApplyHookTransition` treats every transition to a non-terminal state
+as a chance to clear `ended_at`:
+
+- Fresh spawn `pending → waiting`: `ended_at` was already NULL; the
+  `ended_at = NULL` write is a no-op.
+- Resurrection `ended/missing → waiting`: `ended_at` is cleared so
+  the row's metadata reflects the active life rather than the dead
+  past.
+
+`claude_session_id` is overwritten by the same hook payload's
+`transcript_path` basename. Claude Code rotates the UUID on every
+`--resume`, so the column carries the freshly-rotated value after
+the hook fires — the next resume from THIS resurrected lifetime uses
+the new id, pointing at the new JSONL.
+
+### JSONL path resolver (`internal/spawn/jsonl.go`)
+
+```
+~/.claude/projects/<slug(cwd)>/<session_id>.jsonl
+```
+
+`slug(cwd)` replaces every rune outside `[A-Za-z0-9-]` with `-`. Each
+rune (single-byte or multi-byte UTF-8) collapses to **one** dash.
+
+**Intentional divergence from `SanitizeSessionName`:** the tmux
+session-name sanitizer (Epic 3) preserves `_`; the JSONL slug does
+NOT. Future cleanups that unify the two would break resume — the
+on-disk JSONL layout is owned by Claude Code, and any divergence
+makes the pre-flight Stat miss the real file. The asymmetry is
+load-bearing; pinned by
+`TestSlugDivergenceFromTmuxSanitizer`.
+
+### What's not carried over
+
+Two pieces of state are NOT stored on the row and therefore can't be
+reconstructed on resume:
+
+- **`Permissions`** — the synthesized `--settings` JSON carries fresh
+  hook entries on resume but no `permissions` block. A future Epic
+  may store the original spawn's permissions for round-trip parity;
+  for v1 the contract is "resume gets Claude Code's tier-stack
+  permissions plus the hooks."
+- **`ExtraEnv`** — the original spawn's extra env vars (e.g.
+  `ANTHROPIC_API_KEY`) are NOT replayed. Auth on resume comes from
+  the caller's shell env, which tmux propagates to the new session
+  by default.
+
+Callers needing identical-spawn semantics should use a template
+(`--template`) and resume into a re-spawn rather than `resume`.
+
 ## Crash recovery and DB hygiene
 
 Three verbs cooperate to keep the DB honest in the face of crashes,
