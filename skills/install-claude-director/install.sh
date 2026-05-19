@@ -24,6 +24,12 @@
 #                        no symlink.
 #   --no-symlink         Suppress symlink creation regardless of dir.
 #   --register-mcp       Run `claude mcp add` for the stdio server.
+#   --no-hooks           Skip the ~/.claude/settings.json hook
+#                        injection step entirely. settings.json is
+#                        left byte-identical (no .bak backup, no
+#                        edit). Default OFF — defaulting to skip
+#                        would defeat install.sh's main value over a
+#                        bare binary copy.
 #   --keep-prior         Before overwriting an existing binary,
 #                        snapshot it to <target>.prior (overwriting
 #                        any previous .prior). Roll back with
@@ -57,6 +63,7 @@ SYMLINK_DIR=""
 SYMLINK_DEFAULT=""
 NO_SYMLINK=0
 REGISTER_MCP=0
+NO_HOOKS=0
 KEEP_PRIOR=0
 
 # GitHub repo slug used by --from-release. Matches go.mod's module path
@@ -90,6 +97,8 @@ while [[ $# -gt 0 ]]; do
             NO_SYMLINK=1; shift ;;
         --register-mcp)
             REGISTER_MCP=1; shift ;;
+        --no-hooks)
+            NO_HOOKS=1; shift ;;
         --keep-prior)
             KEEP_PRIOR=1; shift ;;
         -h|--help)
@@ -404,66 +413,74 @@ fi
 
 # --------------------------------------------------------------------
 # Hook injection — additive merge into ~/.claude/settings.json
+#
+# Skipped entirely under --no-hooks: settings.json is not read, not
+# backed up, not written. There's no edit, so there's nothing to back
+# up — leaving settings.json byte-identical to its pre-install state.
 # --------------------------------------------------------------------
 
-mkdir -p "$(dirname "$DEFAULT_SETTINGS_PATH")"
-
-# Read existing settings or start from {}.
-if [[ -f "$DEFAULT_SETTINGS_PATH" ]]; then
-    existing=$(<"$DEFAULT_SETTINGS_PATH")
-    if ! printf '%s' "$existing" | jq empty >/dev/null 2>&1; then
-        echo "install.sh: ~/.claude/settings.json is not valid JSON" >&2
-        exit 4
-    fi
+if [[ "$NO_HOOKS" -eq 1 ]]; then
+    echo "  hooks   : skipped (--no-hooks)"
 else
-    existing='{}'
+    mkdir -p "$(dirname "$DEFAULT_SETTINGS_PATH")"
+
+    # Read existing settings or start from {}.
+    if [[ -f "$DEFAULT_SETTINGS_PATH" ]]; then
+        existing=$(<"$DEFAULT_SETTINGS_PATH")
+        if ! printf '%s' "$existing" | jq empty >/dev/null 2>&1; then
+            echo "install.sh: ~/.claude/settings.json is not valid JSON" >&2
+            exit 4
+        fi
+    else
+        existing='{}'
+    fi
+
+    # Our hook entries are uniquely identified by the command string
+    # (the canonical binary path + " help"). Idempotency check: only add
+    # if the command isn't already present in that event's hook list.
+    help_cmd="${CANONICAL} help"
+
+    # Merge logic (jq):
+    #   - Ensure hooks.SessionStart is an array; append our entry if not
+    #     already there (matched by command).
+    #   - Ensure hooks.SessionEnd is an array; append our compact-matcher
+    #     entry if not already there.
+    new_settings=$(printf '%s' "$existing" | jq \
+        --arg cmd "$help_cmd" '
+            .hooks //= {}
+            | .hooks.SessionStart //= []
+            | .hooks.SessionEnd //= []
+            | (
+                if any(.hooks.SessionStart[]?; .hooks[]?.command == $cmd)
+                  then .
+                  else .hooks.SessionStart += [{"hooks":[{"type":"command","command":$cmd}]}]
+                end
+            )
+            | (
+                if any(.hooks.SessionEnd[]?; .matcher == "compact" and (.hooks[]?.command == $cmd))
+                  then .
+                  else .hooks.SessionEnd += [{"matcher":"compact","hooks":[{"type":"command","command":$cmd}]}]
+                end
+            )
+        ')
+
+    # Backup-before-edit: snapshot the prior settings.json (if any) into a
+    # timestamped .bak alongside the original so a regressed jq filter is
+    # recoverable. Only the *prior* contents are backed up; in-place
+    # re-runs of the install will keep the most recent pre-edit copy.
+    if [[ -f "$DEFAULT_SETTINGS_PATH" ]]; then
+        backup_settings="${DEFAULT_SETTINGS_PATH}.bak.$(date +%Y%m%d-%H%M%S)"
+        cp -f "$DEFAULT_SETTINGS_PATH" "$backup_settings"
+        echo "  backup  : $backup_settings"
+    fi
+
+    # Atomic write: tempfile + mv.
+    tmp_settings="${DEFAULT_SETTINGS_PATH}.new"
+    printf '%s\n' "$new_settings" > "$tmp_settings"
+    mv -f "$tmp_settings" "$DEFAULT_SETTINGS_PATH"
+
+    echo "  hooks   : injected into $DEFAULT_SETTINGS_PATH"
 fi
-
-# Our hook entries are uniquely identified by the command string
-# (the canonical binary path + " help"). Idempotency check: only add
-# if the command isn't already present in that event's hook list.
-help_cmd="${CANONICAL} help"
-
-# Merge logic (jq):
-#   - Ensure hooks.SessionStart is an array; append our entry if not
-#     already there (matched by command).
-#   - Ensure hooks.SessionEnd is an array; append our compact-matcher
-#     entry if not already there.
-new_settings=$(printf '%s' "$existing" | jq \
-    --arg cmd "$help_cmd" '
-        .hooks //= {}
-        | .hooks.SessionStart //= []
-        | .hooks.SessionEnd //= []
-        | (
-            if any(.hooks.SessionStart[]?; .hooks[]?.command == $cmd)
-              then .
-              else .hooks.SessionStart += [{"hooks":[{"type":"command","command":$cmd}]}]
-            end
-        )
-        | (
-            if any(.hooks.SessionEnd[]?; .matcher == "compact" and (.hooks[]?.command == $cmd))
-              then .
-              else .hooks.SessionEnd += [{"matcher":"compact","hooks":[{"type":"command","command":$cmd}]}]
-            end
-        )
-    ')
-
-# Backup-before-edit: snapshot the prior settings.json (if any) into a
-# timestamped .bak alongside the original so a regressed jq filter is
-# recoverable. Only the *prior* contents are backed up; in-place
-# re-runs of the install will keep the most recent pre-edit copy.
-if [[ -f "$DEFAULT_SETTINGS_PATH" ]]; then
-    backup_settings="${DEFAULT_SETTINGS_PATH}.bak.$(date +%Y%m%d-%H%M%S)"
-    cp -f "$DEFAULT_SETTINGS_PATH" "$backup_settings"
-    echo "  backup  : $backup_settings"
-fi
-
-# Atomic write: tempfile + mv.
-tmp_settings="${DEFAULT_SETTINGS_PATH}.new"
-printf '%s\n' "$new_settings" > "$tmp_settings"
-mv -f "$tmp_settings" "$DEFAULT_SETTINGS_PATH"
-
-echo "  hooks   : injected into $DEFAULT_SETTINGS_PATH"
 
 # --------------------------------------------------------------------
 # Optional MCP registration

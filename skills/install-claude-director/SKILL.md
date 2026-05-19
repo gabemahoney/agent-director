@@ -13,7 +13,7 @@ Trigger phrases: "install claude-director", "set up claude-director",
 `install.sh` has flags that materially change the install. Do NOT pick
 them silently. Walk the operator through each choice with
 `AskUserQuestion`, echo the resolved flag set back for confirmation,
-then execute. Keep it tight — three questions, then a confirm.
+then execute. Keep it tight — four questions, then a confirm.
 
 ### How to phrase each question
 
@@ -51,7 +51,7 @@ on upgrade to have install.sh snapshot the existing binary to
 gives you a one-step rollback (`mv .prior canonical`); without it,
 re-install the previous tag via `install.sh --from-release v<old>`.
 
-### The three questions
+### The four questions
 
 1. **Where should the binary come from? (`--from-release` / `--binary <path>`)**
 
@@ -167,7 +167,45 @@ re-install the previous tag via `install.sh --from-release v<old>`.
      To remove: `claude mcp remove claude-director` or
      `uninstall.sh --mcp-also`.
 
-4. **Confirm and execute**
+4. **Inject persistent help hooks into `~/.claude/settings.json`? (`--no-hooks`)**
+
+   - *What this is:* claude-director ships a `help` verb that prints
+     its entire manifest (every verb, every error code) as JSON. The
+     install adds two hook entries to `~/.claude/settings.json` that
+     fire `claude-director help` at two moments:
+       - **SessionStart** — when any Claude Code session starts under
+         your user, the manifest is piped into the new session's
+         context, so the model knows the verb surface from turn 1.
+       - **SessionEnd with matcher=compact** — fires just before
+         `/compact` truncates context, so the post-compact Claude
+         still knows what verbs exist.
+     Without these hooks, every Claude that wants to drive
+     claude-director has to be hand-told what verbs exist — either by
+     pasting `claude-director help` into a prompt, or by relying on
+     the operator-Claude to introduce the API surface.
+   - *Options:*
+     - **(a) Inject the hooks** *(recommended for almost all
+       installs)*. The merge is additive — existing user hooks at
+       those events are preserved, and re-running the install is
+       idempotent (duplicate entries are detected and skipped). The
+       install also snapshots `~/.claude/settings.json` to a
+       timestamped `.bak` first.
+     - **(b) Skip the hook injection (`--no-hooks`)**. Pick this if
+       you want to manage how Claudes learn about claude-director
+       yourself (e.g. via per-project CLAUDE.md, hand-paste, or some
+       other mechanism). With this flag, settings.json is left
+       byte-identical to its pre-install state — no edit, no .bak.
+   - *Default:* (a) — inject. This is the single biggest reason
+     install.sh exists over a bare binary copy. Defaulting to skip
+     would make the install almost useless for the orchestrator use
+     case.
+   - *Reversibility:* fully reversible. `uninstall.sh` removes the
+     two entries (preserving any other user hooks at those events),
+     and the pre-edit `.bak` snapshot is retained for manual
+     rollback. Re-injecting later is a re-run of `install.sh`
+     without `--no-hooks`.
+
+5. **Confirm and execute**
    - Display the assembled `bash install.sh <resolved flags>` command
      line back to the operator.
    - Ask "ready to run?" with `AskUserQuestion`. Only on an explicit
@@ -224,7 +262,8 @@ This skill runs `install.sh` from the same directory. The script:
    `internal/store.ensureSchema` creates `state.db` (mode 0600) and
    stamps the schema version.
 
-6. **Injects persistent hooks** into `~/.claude/settings.json`:
+6. **Injects persistent hooks** into `~/.claude/settings.json`
+   (unless `--no-hooks` was passed):
    - `SessionStart` → `claude-director help`
    - `SessionEnd` with matcher `reason=compact` → `claude-director help`
 
@@ -235,7 +274,13 @@ This skill runs `install.sh` from the same directory. The script:
 
    The merge is additive: existing user hooks are preserved. Re-running
    the install is idempotent — duplicate entries are detected and
-   skipped.
+   skipped. The pre-edit contents of `settings.json` are snapshotted
+   to a timestamped `.bak` sibling before the merge writes.
+
+   With `--no-hooks`, this step is skipped entirely: settings.json is
+   not read, not backed up, not written — left byte-identical to its
+   pre-install state. The post-install summary reports
+   `hooks   : skipped (--no-hooks)`.
 
 7. **Optional MCP registration.** With `--register-mcp`, runs
    `claude mcp add claude-director ~/.claude-director/bin/claude-director serve --stdio`.
