@@ -73,15 +73,9 @@ source of truth for which schema this binary expects. On `Open`:
   this case. Bumping schema versions in the future will mean adding a
   migration step into `ensureSchema`, not editing v1 DDL.
 
-**Concurrency.** `Open` calls `db.SetMaxOpenConns(1)` on the underlying
-`*sql.DB`. Combined with `journal_mode=WAL` and `foreign_keys=ON` (both
-applied via DSN PRAGMAs so every connection the pool dials in starts in the
-right state), this gives us a single in-process writer with cheap concurrent
-readers — exactly the model SRD §13.3 requires. WAL plus one writer
-sidesteps `database is locked` retry loops; readers see committed snapshots
-without blocking writes. PRAGMAs are verified after open: if SQLite ever
-silently downgrades them, `Open` fails loudly instead of yielding a
-half-broken Store.
+**Concurrency.** `Open` calls `db.SetMaxOpenConns(1)`. `journal_mode=WAL`
+and `foreign_keys=ON` are applied via DSN PRAGMAs and verified after open;
+a silent downgrade fails `Open` rather than yielding a half-broken Store.
 
 **File-system contract.** The parent directory (`~/.claude-director/` by
 default) is created with mode 0700, and the database file is chmodded to
@@ -106,18 +100,15 @@ Each `VerbDef` entry records:
 A package-level `var Verbs []VerbDef` holds the ordered registry, and
 `Lookup(name)` returns a single entry by name.
 
-**Why a single source of truth.** Three downstream consumers derive from
-`Verbs`:
+**Consumers of `Verbs`.**
 
-1. The CLI dispatch table in `cmd/claude-director/main.go` (which verbs the
-   binary accepts and how `help` enumerates them).
-2. The MCP tool schema served in `mcp` mode (Epic 11).
-3. The generated reference docs `docs/cli-reference.md` and
-   `docs/mcp-reference.md`, written by `tools/gen-docs` (Task 6 of Epic 1).
+1. CLI dispatch table in `cmd/claude-director/main.go`.
+2. MCP tool schema served in `mcp` mode (Epic 11).
+3. Generated reference docs `docs/cli-reference.md` and
+   `docs/mcp-reference.md`, written by `tools/gen-docs`.
 
-Adding or modifying a verb anywhere other than `internal/api/manifest`
-drifts the surface from the manifest and is caught by the CI doc-drift gate
-(re-runs `go generate` and fails if any tracked file changes).
+Verb additions/edits go in `internal/api/manifest` only; the CI doc-drift
+gate re-runs `go generate` and fails if any tracked file changes.
 
 **How to add a verb.**
 

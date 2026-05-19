@@ -61,8 +61,8 @@ func TestUnknownVerbWritesErrorEnvelope(t *testing.T) {
 				t.Errorf("stdout=%q want empty", stdout)
 			}
 			env := parseEnvelope(t, stderr)
-			if env.ErrName == "" {
-				t.Errorf("err_name empty in %q", stderr)
+			if env.ErrName != "ErrUnknownVerb" {
+				t.Errorf("err_name = %q, want %q", env.ErrName, "ErrUnknownVerb")
 			}
 			if env.ErrDescription == "" {
 				t.Errorf("err_description empty in %q", stderr)
