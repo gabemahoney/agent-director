@@ -389,6 +389,72 @@ pane bytes as a post-mortem.
   `CapturePane`, both of which use direct `exec.Command` with the text
   as a single argv element.
 
+## Stop semantics
+
+Two verbs terminate a Spawn — `kill` (immediate, forceful) and `pause`
+(graceful, bounded). They make different promises about the Spawn's
+final state and need to be reached for in different situations.
+
+### `kill`
+
+`internal/api/kill.go` is a thin pass-through:
+
+1. Row lookup. Unknown id → `ErrSpawnNotFound`.
+2. Terminal state (`ended` / `missing`) → return success without a
+   tmux call. The post-condition ("session is gone") is already true.
+3. Otherwise → invoke `tmux.KillSession` against the row's
+   `tmux_session_name`. Any tmux error is **swallowed**: the verb's
+   post-condition is "session is gone", and "session was already
+   gone" satisfies that. Callers can't usefully distinguish the two,
+   so the verb doesn't ask them to.
+
+**Kill does NOT promise state cleanup.** The row stays in its
+pre-kill state until find-missing (Epic 8) reconciles it. SRD §5
+pins this intentionally: a hung tmux session and a freshly killed
+one are both made consistent by the same audit path, rather than
+having two separate state-mutation surfaces racing each other.
+
+A consequence: a sequence of `kill → status` will show the killed
+Spawn still in `waiting` (or whichever live state it was in) until
+the next find-missing cron run. That is the SRD-defined behavior,
+not a bug.
+
+### `pause`
+
+`internal/api/pause.go` is the only verb with a polling loop:
+
+1. Row lookup. Unknown id → `ErrSpawnNotFound`.
+2. Terminal state (`ended` / `missing`) → no-op success.
+3. State == `waiting` → send `/exit` + Enter via two
+   `tmux.SendKeys` calls (matching the send-keys verb's submit
+   pattern), then poll the row's state column at
+   `pausePollInterval` (200ms in production) until either
+   `state == ended` (return success) or `pause.timeout_seconds`
+   elapses (`ErrPauseTimeout`). `ctx.Done()` short-circuits the
+   loop with `ctx.Err()`.
+4. State ∈ {`pending`, `working`, `ask_user`, `check_permission`}
+   → `ErrSpawnNotPausable`. The verb does NOT send `/exit` in
+   these states because the leading slash would be interpreted as
+   input text by a working / asking Spawn, silently producing the
+   wrong outcome.
+
+Pause is **one-shot**. There is no incremental progress callback —
+callers wanting that should poll `status` themselves.
+
+### kill vs find-missing
+
+Because kill leaves the row in its pre-kill live state, find-missing
+(Epic 8) is the canonical reconciliation path. The flow:
+
+1. Operator runs `kill <id>`.
+2. tmux session goes away; row still says `waiting`.
+3. find-missing scans rows in live states, asks tmux about their
+   sessions, and flips any whose session is gone to `missing`.
+4. Subsequent `status <id>` reports `missing`.
+
+A caller that needs an immediate state-of-the-world should chain
+`kill` + (manual) row-state inspection or wait for the cron.
+
 ## Test Harness
 
 Every functional Epic (Epics 3-13) is gated by a Docker-based integration
