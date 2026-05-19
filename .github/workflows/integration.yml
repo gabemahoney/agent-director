@@ -37,14 +37,23 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: make test-docker EPIC=harness-smoke
 
-  macos-stub:
-    name: macOS lane (stub — activated by Epic 8)
+  macos-probe:
+    # Exercises the sysctl-based liveness prober on actual macOS so the
+    # build-tagged probe_darwin.go path is verified against the real
+    # KERN_PROCARGS2 surface. The unit test launches a child with
+    # CLAUDE_DIRECTOR_INSTANCE_ID set and polls until the prober sees
+    # it. See SRD §19 Q7.
+    name: macOS lane — probe sysctl path
     runs-on: macos-latest
     steps:
-      - name: Stub message
-        run: |
-          echo "macOS integration lane is currently a stub."
-          echo "Epic 8 (sysctl-based liveness probe) will swap this for a"
-          echo "real macOS test that exercises the sysctl path. Until then,"
-          echo "this job exits 0 to keep the matrix green and prove the"
-          echo "macOS runner is wired up. See SRD §19 Q7."
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Cross-compile darwin build sanity
+        run: go build ./...
+
+      - name: Run probe darwin tests
+        run: go test ./internal/probe/...
