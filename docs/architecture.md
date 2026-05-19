@@ -296,9 +296,9 @@ call.
 
 ## Interact: `send-keys` + `read-pane`
 
-After Epic 4 a tracked Spawn becomes externally drivable: an orchestrator
-can deliver text into its tmux pane and read the rendered TUI back out
-without attaching to the session. The two verbs are typed Go functions
+A tracked Spawn is externally drivable: an orchestrator can deliver text
+into its tmux pane and read the rendered TUI back out without attaching
+to the session. The two verbs are typed Go functions
 in `internal/api`, each calling exactly one method on the shared
 `*tmux.Client` (`SendKeys` / `CapturePane`). Cross-reference SRD §4.3
 (send-keys multiline semantics), SRD §12 (verb shapes),
@@ -357,10 +357,9 @@ ANSI handling:
   the orchestrator reads them as state signal per
   `reference/pane-output-research.md` "State-signal value".
 
-- **`ansi=true` — return raw bytes from tmux exactly as captured.**
-  Useful for a future TUI viewer mirroring the pane to a browser, or
-  for debugging color-coded diffs. No transformation between tmux
-  stdout and the JSON `pane` field.
+- **`ansi=true` — `tmux capture-pane -p -e` is invoked.** The `-e` flag
+  tells tmux to emit SGR / cursor escapes in its output; the bytes are
+  returned verbatim with no verb-layer strip.
 
 Errors: `ErrSpawnNotFound` (unknown id), `ErrTmuxCaptureFailed`
 (transport-layer tmux failure — e.g. the session vanished between the

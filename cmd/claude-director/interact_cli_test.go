@@ -34,9 +34,6 @@ func seedSpawnRow(t *testing.T, dbPath, instanceID, sessionName, state, relayMod
 // before the test seeds a row directly via raw SQL.
 func bootstrapDB(t *testing.T, home string) {
 	t.Helper()
-	if _, _, code := runCLI(t, "help"); code != 0 {
-		// runCLI uses its own t.TempDir; we need a HOME-stable run.
-	}
 	if _, _, code := runCLIWithHome(t, home, "help"); code != 0 {
 		t.Fatalf("help bootstrap exit = %d", code)
 	}

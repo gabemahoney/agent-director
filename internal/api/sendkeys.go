@@ -49,10 +49,6 @@ type SendKeysResult struct{}
 // ErrSendKeysWhileRelayed so the relay's decide() write isn't racing a
 // pane-side keystroke.
 func SendKeys(s *store.Store, tmux SendKeysTmux, params SendKeysParams) (SendKeysResult, error) {
-	if params.ClaudeInstanceID == "" {
-		return SendKeysResult{}, fmt.Errorf("%w: claude_instance_id is required", ErrSpawnNotInteractive)
-	}
-
 	row, err := s.GetSpawn(params.ClaudeInstanceID)
 	if err != nil {
 		return SendKeysResult{}, err
