@@ -87,6 +87,70 @@ default) is created with mode 0700, and the database file is chmodded to
 Cross-reference: SRD §4.2 (canonical DDL), §4.5 (layer boundaries), §13.3
 (single-writer + WAL rationale).
 
+### `internal/api/manifest` — Verb Registry
+
+**What it is.** A single Go source file at
+`internal/api/manifest/manifest.go` driven by a `//go:generate` directive.
+Each `VerbDef` entry records:
+
+- the verb name,
+- a one-line description,
+- its parameters (name, type, description, required flag),
+- its result fields (name, type, description), and
+- the set of error names it may emit.
+
+A package-level `var Verbs []VerbDef` holds the ordered registry, and
+`Lookup(name)` returns a single entry by name.
+
+**Why a single source of truth.** Three downstream consumers derive from
+`Verbs`:
+
+1. The CLI dispatch table in `cmd/claude-director/main.go` (which verbs the
+   binary accepts and how `help` enumerates them).
+2. The MCP tool schema served in `mcp` mode (Epic 11).
+3. The generated reference docs `docs/cli-reference.md` and
+   `docs/mcp-reference.md`, written by `tools/gen-docs` (Task 6 of Epic 1).
+
+Adding or modifying a verb anywhere other than `internal/api/manifest`
+drifts the surface from the manifest and is caught by the CI doc-drift gate
+(re-runs `go generate` and fails if any tracked file changes).
+
+**How to add a verb.**
+
+1. Add a `VerbDef` literal to `Verbs` in
+   `internal/api/manifest/manifest.go`. Populate `Name`, `Description`,
+   `Params`, `ResultFields`, and `ErrorNames` (empty slice, not nil, when
+   the verb has no error conditions).
+2. Implement the handler in `internal/api` (typed parameter struct in,
+   typed result struct out, returning a Go `error`). Keep SQL inside
+   `internal/store`; the handler calls store primitives.
+3. Wire the verb into the CLI dispatch map in
+   `cmd/claude-director/main.go` so argv routes to the new handler.
+4. Run `make generate` to regenerate `docs/cli-reference.md` and
+   `docs/mcp-reference.md` from the manifest.
+5. Verify idempotency: re-run `make generate` and confirm `git status`
+   shows no diff. A second run that produces a diff means the generator is
+   non-deterministic — fix it before merging.
+
+**Prohibitions.**
+
+- Do not hand-edit `docs/cli-reference.md` or `docs/mcp-reference.md`.
+  They are auto-generated; the CI drift gate will fail.
+- Do not define CLI flags outside the manifest. New params go in the
+  matching `VerbDef.Params` literal.
+- Do not hand-write MCP tool schemas. The MCP server reads from `Verbs`.
+- Do not have `internal/api/manifest` import `internal/store`,
+  `internal/config`, or anything under `cmd/`. The package is stdlib-only
+  by design so the generator (which imports it) stays trivially buildable.
+
+**CLI JSON-output discipline.**
+
+> Every CLI verb emits exactly one JSON object on stdout; errors emit JSON
+> `{err_name, err_description}` on stderr; no banners, no progress, no
+> prose preamble. Enforced by code review against SRD §12.3 and §16.3.
+
+See `docs/cli-reference.md` and `docs/mcp-reference.md` — auto-generated; do not edit.
+
 ### Layer boundary diagram
 
 ```
