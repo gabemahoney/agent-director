@@ -156,6 +156,27 @@ _None._
 
 - `ErrSpawnNotFound`
 
+## resume
+
+Bring a terminated (ended/missing) Spawn back to life via `claude --resume`. Same claude_instance_id, fresh tmux session, same JSONL transcript. parent_id is re-derived from the caller's CLAUDE_DIRECTOR_INSTANCE_ID env var on every resume.
+
+### Parameters
+
+- `claude_instance_id` (string, required): Id of the terminated Spawn to resurrect.
+
+### Result
+
+- `claude_instance_id` (string): The same id passed in (resume preserves the instance id across resurrection).
+
+### Errors
+
+- `ErrSpawnNotFound`
+- `ErrSpawnNotResumable`
+- `ErrNoSessionId`
+- `ErrJsonlMissing`
+- `ErrTmuxNotAvailable`
+- `ErrTmuxSessionCreate`
+
 ## find-missing
 
 Reconcile DB state against live processes. Scans live-state rows (including pending), diffs against the OS probe (Linux /proc / macOS sysctl), transitions unprobeable rows to `missing`. Degraded-mode guard: 0 readable processes + ≥1 live rows → log warning + refuse to write.

@@ -271,6 +271,28 @@ func pauseHandlerWith(st *store.Store, cfg config.Config, args []string) error {
 	return writeJSON(os.Stdout, result)
 }
 
+// resumeHandlerWith implements `claude-director resume`. The verb
+// reads the spawn-time row out of the store and restarts claude via
+// tmux with `--resume <session_id>`. Same id, fresh tmux session.
+func resumeHandlerWith(st *store.Store, cfg config.Config, args []string) error {
+	var p api.ResumeParams
+	fs := flag.NewFlagSet("resume", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the terminated Spawn to resurrect")
+	if err := fs.Parse(args); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+	}
+	if p.ClaudeInstanceID == "" {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", "--claude-instance-id is required")
+	}
+	result, err := api.Resume(st, tmuxClient, cfg, p)
+	if err != nil {
+		name, desc := classifyError(err)
+		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+	}
+	return writeJSON(os.Stdout, result)
+}
+
 // killHandlerWith implements `claude-director kill`. The verb is
 // idempotent on terminal states and swallows tmux failures (see
 // api.Kill); the CLI surface is therefore intentionally narrow.

@@ -208,8 +208,15 @@ func (s *Store) ApplyHookTransition(instanceID, newState string, softRefresh boo
 		}
 		return nil
 	}
+	// Non-terminal transitions clear ended_at. This handles the resume
+	// path (SRD §8.1): SessionStart on a resurrected Claude transitions
+	// the row from ended/missing back to waiting; ended_at must reset
+	// so the row's metadata reflects the active life. For fresh-spawn
+	// pending→waiting transitions the column was already NULL, so the
+	// `ended_at = NULL` is a no-op there.
 	const q = `UPDATE spawns
-                  SET state = ?, last_seen_at = CURRENT_TIMESTAMP
+                  SET state = ?, last_seen_at = CURRENT_TIMESTAMP,
+                      ended_at = NULL
                 WHERE claude_instance_id = ?`
 	_, err := s.db.Exec(q, newState, instanceID)
 	if err != nil {
@@ -226,6 +233,41 @@ func (s *Store) SetSessionID(instanceID, sessionID string) error {
 	_, err := s.db.Exec(q, sessionID, instanceID)
 	if err != nil {
 		return fmt.Errorf("store: set session id: %w", err)
+	}
+	return nil
+}
+
+// SetParentID writes the parent_id column. Used by resume to re-derive
+// parent on every resurrection (SRD §7.5 — parent_id records who
+// currently owns this Spawn, not who originally created it).
+//
+// An empty parent argument writes NULL (matches the original spawn
+// path's "no caller env var" semantics). A non-empty value sets that
+// id directly; the FK constraint with ON DELETE SET NULL means a
+// later parent delete cascades naturally.
+//
+// A missing target row is treated as ErrSpawnNotFound so callers can
+// distinguish "I asked to update a nonexistent row" from "the update
+// silently no-op'd" (which would be the case if we just emitted an
+// UPDATE without a row-count check).
+func (s *Store) SetParentID(instanceID, parentID string) error {
+	const q = `UPDATE spawns SET parent_id = ? WHERE claude_instance_id = ?`
+	var parent any
+	if parentID != "" {
+		parent = parentID
+	} else {
+		parent = nil
+	}
+	res, err := s.db.Exec(q, parent, instanceID)
+	if err != nil {
+		return fmt.Errorf("store: set parent id: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: set parent id rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: %s", ErrSpawnNotFound, instanceID)
 	}
 	return nil
 }

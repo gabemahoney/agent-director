@@ -156,6 +156,72 @@ func TestApplyHookTransitionEndedSetsEndedAt(t *testing.T) {
 	}
 }
 
+// TestApplyHookTransitionResurrectionClearsEndedAt pins SRD §8.1's
+// resurrection behavior: when SessionStart on a previously-ended (or
+// missing) Spawn fires, the row's state moves back to `waiting` and
+// `ended_at` is cleared so the row's metadata reflects the active
+// life. This is the hook-side half of the resume contract — resume
+// itself doesn't touch state; only SessionStart does.
+func TestApplyHookTransitionResurrectionClearsEndedAt(t *testing.T) {
+	s, _ := openTempStore(t)
+	id := "55555555-aaaa-4bbb-8ccc-000000000099"
+	if err := s.InsertPending(Spawn{
+		ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-tmp", RelayMode: "off",
+	}); err != nil {
+		t.Fatalf("InsertPending: %v", err)
+	}
+	// Move the row to ended so ended_at gets stamped.
+	if err := s.ApplyHookTransition(id, StateEnded, false); err != nil {
+		t.Fatalf("transition to ended: %v", err)
+	}
+	got, err := s.GetSpawn(id)
+	if err != nil {
+		t.Fatalf("GetSpawn after ended: %v", err)
+	}
+	if got.EndedAt == nil {
+		t.Fatal("precondition: ended_at not set after ended transition")
+	}
+
+	// Simulate the SessionStart hook firing on the resurrected Claude.
+	if err := s.ApplyHookTransition(id, StateWaiting, false); err != nil {
+		t.Fatalf("resurrection transition: %v", err)
+	}
+	got, err = s.GetSpawn(id)
+	if err != nil {
+		t.Fatalf("GetSpawn after resurrection: %v", err)
+	}
+	if got.State != StateWaiting {
+		t.Errorf("state = %q; want waiting", got.State)
+	}
+	if got.EndedAt != nil {
+		t.Errorf("ended_at = %v; want nil after resurrection", got.EndedAt)
+	}
+}
+
+// TestApplyHookTransitionFreshSpawnLeavesEndedAtNil is the regression
+// guard for the cleared-on-non-terminal behavior: a fresh-spawn
+// pending→waiting transition must not break — ended_at was already
+// NULL, the column stays NULL.
+func TestApplyHookTransitionFreshSpawnLeavesEndedAtNil(t *testing.T) {
+	s, _ := openTempStore(t)
+	id := "55555555-aaaa-4bbb-8ccc-000000000098"
+	if err := s.InsertPending(Spawn{
+		ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-tmp", RelayMode: "off",
+	}); err != nil {
+		t.Fatalf("InsertPending: %v", err)
+	}
+	if err := s.ApplyHookTransition(id, StateWaiting, false); err != nil {
+		t.Fatalf("transition: %v", err)
+	}
+	got, err := s.GetSpawn(id)
+	if err != nil {
+		t.Fatalf("GetSpawn: %v", err)
+	}
+	if got.EndedAt != nil {
+		t.Errorf("fresh spawn ended_at = %v; want nil", got.EndedAt)
+	}
+}
+
 func TestApplyHookTransitionSoftRefreshLeavesState(t *testing.T) {
 	s, _ := openTempStore(t)
 	id := "66666666-aaaa-4bbb-8ccc-000000000006"

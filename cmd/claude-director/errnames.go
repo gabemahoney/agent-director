@@ -51,6 +51,9 @@ var errCatalog = []struct {
 	{"ErrTemplateExists", config.ErrTemplateExists},
 	{"ErrTemplateReservedParam", config.ErrTemplateReservedParam},
 	{"ErrProbeUnsupported", probe.ErrProbeUnsupported},
+	{"ErrSpawnNotResumable", api.ErrSpawnNotResumable},
+	{"ErrNoSessionId", api.ErrNoSessionId},
+	{"ErrJsonlMissing", api.ErrJsonlMissing},
 }
 
 // classifyError returns the canonical err_name and an err_description for
