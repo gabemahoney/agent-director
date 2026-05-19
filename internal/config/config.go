@@ -115,21 +115,29 @@ func Load(path string) (Config, error) {
 	cfg := Default()
 
 	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return Default(), nil
+	switch {
+	case err == nil:
+		if _, err := toml.Decode(string(data), &cfg); err != nil {
+			return resolvePaths(Default(), home), &ConfigError{Path: path, Err: err}
 		}
-		return Default(), &ConfigError{Path: path, Err: err}
+	case errors.Is(err, os.ErrNotExist):
+		// fall through with cfg = Default(); path resolution still applies so
+		// callers always get fully-resolved paths regardless of file presence.
+	default:
+		return resolvePaths(Default(), home), &ConfigError{Path: path, Err: err}
 	}
 
-	if _, err := toml.Decode(string(data), &cfg); err != nil {
-		return Default(), &ConfigError{Path: path, Err: err}
-	}
+	return resolvePaths(cfg, home), nil
+}
 
+// resolvePaths applies the SRD §11 path rules to every filesystem-bearing
+// field in cfg. Called unconditionally so Default()'s "~/" placeholders are
+// always expanded before reaching callers.
+func resolvePaths(cfg Config, home string) Config {
 	base := filepath.Join(home, ".claude-director")
 	cfg.Store.DbPath = resolvePathField(cfg.Store.DbPath, home, base)
 	cfg.Log.ErrorLogPath = resolvePathField(cfg.Log.ErrorLogPath, home, base)
-	return cfg, nil
+	return cfg
 }
 
 // expandTilde replaces a leading "~/" with the given home directory. If

@@ -57,14 +57,31 @@ func TestDefaultMatchesSRD(t *testing.T) {
 	}
 }
 
-func TestLoadMissingFileReturnsDefaults(t *testing.T) {
+func TestLoadMissingFileReturnsResolvedDefaults(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "does-not-exist.toml")
 	cfg, err := config.Load(missing)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg != config.Default() {
-		t.Errorf("got %+v, want Default()", cfg)
+	home, herr := os.UserHomeDir()
+	if herr != nil {
+		t.Fatalf("UserHomeDir: %v", herr)
+	}
+	// Default() values use "~/" placeholders that Load must expand on the
+	// missing-file branch too — un-resolved tilde paths reaching store.Open
+	// or log output would be a real-world bug.
+	wantDB := filepath.Join(home, ".claude-director/state.db")
+	wantLog := filepath.Join(home, ".claude-director/errors.log")
+	if cfg.Store.DbPath != wantDB {
+		t.Errorf("Store.DbPath = %q, want %q", cfg.Store.DbPath, wantDB)
+	}
+	if cfg.Log.ErrorLogPath != wantLog {
+		t.Errorf("Log.ErrorLogPath = %q, want %q", cfg.Log.ErrorLogPath, wantLog)
+	}
+	// All non-path defaults must still match Default() unchanged.
+	def := config.Default()
+	if cfg.Defaults != def.Defaults || cfg.Relay != def.Relay || cfg.Pause != def.Pause {
+		t.Errorf("non-path defaults drifted from Default():\n got=%+v\nwant=%+v", cfg, def)
 	}
 }
 

@@ -54,9 +54,20 @@ relay_mode = "on"
 			if cerr.Unwrap() == nil {
 				t.Errorf("ConfigError should wrap the underlying parse error, got nil")
 			}
-			// On parse failure Load returns Default() so callers can keep running.
-			if cfg != config.Default() {
-				t.Errorf("on malformed file, expected Default(), got %+v", cfg)
+			// On parse failure Load returns Default() (post path-resolution) so
+			// callers can keep running with usable, expanded paths.
+			home, herr := os.UserHomeDir()
+			if herr != nil {
+				t.Fatalf("UserHomeDir: %v", herr)
+			}
+			wantDB := filepath.Join(home, ".claude-director/state.db")
+			wantLog := filepath.Join(home, ".claude-director/errors.log")
+			def := config.Default()
+			if cfg.Store.DbPath != wantDB || cfg.Log.ErrorLogPath != wantLog {
+				t.Errorf("path fields not resolved on error: %+v", cfg)
+			}
+			if cfg.Defaults != def.Defaults || cfg.Relay != def.Relay || cfg.Pause != def.Pause {
+				t.Errorf("non-path defaults drifted on error: got=%+v want=%+v", cfg, def)
 			}
 		})
 	}
