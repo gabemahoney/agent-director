@@ -95,6 +95,11 @@ func deleteHandlerWith(st *store.Store, args []string) error {
 // format or a trailing `d` for days. SRD §11 uses days for retention
 // because the user-facing config is days; this keeps `--older-than`
 // consistent with that.
+//
+// Negative durations are rejected: the store treats `older <= 0` as
+// "delete every terminal row", so silently accepting `--older-than -2h`
+// would reap the entire terminal history. A caller that really wants
+// the all-rows behavior should pass `0d` explicitly.
 func parseDaysOrDuration(s string) (time.Duration, error) {
 	if n := len(s); n > 1 && s[n-1] == 'd' {
 		var days int
@@ -108,6 +113,9 @@ func parseDaysOrDuration(s string) (time.Duration, error) {
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil {
+		return 0, errInvalidDuration(s)
+	}
+	if d < 0 {
 		return 0, errInvalidDuration(s)
 	}
 	return d, nil

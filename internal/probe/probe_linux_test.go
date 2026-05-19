@@ -63,11 +63,13 @@ func TestLinuxProberIgnoresUnrelatedEnv(t *testing.T) {
 	}
 
 	const unrelated = "probe-test-unrelated"
+	const sentinel = "probe-test-positive-sentinel"
 
 	cmd := exec.Command("sleep", "10")
 	cmd.Env = append(os.Environ(),
 		"CLAUDE_DIRECTOR_INSTANCE_IDX="+unrelated, // off-by-one suffix
 		"CLAUDE_DIRECTOR_NOT_INSTANCE_ID="+unrelated,
+		"CLAUDE_DIRECTOR_INSTANCE_ID="+sentinel, // matching prefix; positive control
 	)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start child: %v", err)
@@ -77,11 +79,25 @@ func TestLinuxProberIgnoresUnrelatedEnv(t *testing.T) {
 		_, _ = cmd.Process.Wait()
 	})
 
-	time.Sleep(200 * time.Millisecond)
-
-	got, err := probe.New().Probe(context.Background())
-	if err != nil {
-		t.Fatalf("Probe: %v", err)
+	// Poll until the kernel has exposed /proc/<pid>/environ for the
+	// child (asserted by the positive-sentinel id appearing in the
+	// probe's output). Without the poll, a vacuous "probe hasn't seen
+	// anything yet" result would silently pass the negative check.
+	deadline := time.Now().Add(2 * time.Second)
+	var got map[string]struct{}
+	for {
+		var err error
+		got, err = probe.New().Probe(context.Background())
+		if err != nil {
+			t.Fatalf("Probe: %v", err)
+		}
+		if _, ok := got[sentinel]; ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("probe never saw sentinel %q; child env not exposed?", sentinel)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	if _, ok := got[unrelated]; ok {
 		t.Errorf("Probe wrongly returned %q for an off-prefix env var", unrelated)

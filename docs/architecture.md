@@ -852,22 +852,9 @@ a single foreign-owned process can't poison the whole probe.
 ### Degraded-mode guard (SRD §14.6)
 
 When the probe returns zero IDs AND the DB has ≥1 live-state row,
-`find-missing` logs a warning and writes nothing. The most common
-cause is the cron entry running as the wrong user — for example, the
-operator created Spawns as their interactive user, then a systemd
-timer fires as `root` or the `claude-director` service account; the
-walker can't read foreign-uid `environ` files; the DB has live rows
-the walker can't see. Mass-marking those rows `missing` would
-corrupt state on the next find-missing run by the right user (the
-rows would still look alive to that walker, but the DB now claims
-otherwise).
-
-The guard is intentionally NOT an error — cron should not pager. It
-is a warning logged to `cfg.log.error_log_path`. Operators monitor
-that file (or hook it to syslog) and notice the message.
-
-The legitimate 0-live-rows + 0-probe-IDs case is distinguished and
-treated as a fast no-op success.
+`find-missing` writes nothing and logs a warning to
+`cfg.log.error_log_path`. The legitimate 0-live-rows + 0-probe-IDs
+case is distinguished and treated as a fast no-op success.
 
 ### `find-missing`
 
@@ -914,9 +901,10 @@ failure — every id in the input is attempted; the map records the
 outcome.
 
 `delete` bypasses every state-precondition guard. A live-state row
-is removed by id exactly the same way a terminal row is; the orphan
-tmux session is the caller's problem. The verb does NOT touch tmux
-or JSONL transcripts.
+is removed by id exactly the same way a terminal row is. The verb
+does NOT touch tmux or JSONL transcripts; the
+`permission_requests` row(s) FK-referencing the spawn are removed
+by the schema's `ON DELETE CASCADE`.
 
 ### Cron user invariant
 
