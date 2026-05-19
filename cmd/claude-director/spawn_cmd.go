@@ -57,6 +57,7 @@ func parseSpawnFlags(args []string) (spawn.SpawnParams, error) {
 	fs.StringVar(&p.Template, "template", "", "named template stored under ~/.claude-director/templates/<name>.toml")
 	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "explicit instance id (default: minted UUID4)")
 	fs.StringVar(&p.RelayMode, "relay-mode", "", "on / off (default: config defaults.relay_mode)")
+	fs.BoolVar(&p.NoPreTrust, "no-pre-trust", false, "skip pre-writing ~/.claude.json's trust key for cwd (bug b.f75); default off (pre-trust IS performed)")
 	fs.Var(newKVSlice(&labelKVs, "--label"), "label", "k=v (repeatable)")
 	fs.Var(newKVSlice(&extraEnvKVs, "--extra-env"), "extra-env", "K=V (repeatable)")
 	fs.Var(newStringSlice(&allow), "allow", "permissions.allow entry (repeatable)")

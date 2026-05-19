@@ -3,11 +3,18 @@ package spawn
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/gabemahoney/claude-director/internal/config"
 	"github.com/gabemahoney/claude-director/internal/store"
 )
+
+// preTrustWarn is where pre-trust warnings land — missing-file or
+// best-effort failures. Held as a var so tests can capture without
+// touching os.Stderr (which the test harness drains for the JSON error
+// envelope).
+var preTrustWarn io.Writer = os.Stderr
 
 // TmuxClient is the narrow tmux surface Launch needs. *tmux.Client
 // satisfies it; tests pass a fake that records argv without launching
@@ -47,6 +54,22 @@ func Launch(s *store.Store, tmuxClient TmuxClient, r Resolved, cfg config.Config
 	settings, err := synthesizeSettings(r, cfg)
 	if err != nil {
 		return "", err
+	}
+
+	// Pre-trust the cwd in ~/.claude.json so the spawned Claude Code
+	// skips its workspace-trust dialog (bug b.f75). Best-effort: any
+	// failure (missing file on truly-fresh machines, parse error, perm
+	// issue) is surfaced as a soft warning to stderr but does not block
+	// the spawn — the operator will see the trust dialog in that case
+	// and can dismiss it manually.
+	if !r.NoPreTrust {
+		if err := preTrustCwd(r.CWD); err != nil {
+			if errors.Is(err, ErrClaudeJSONMissing) {
+				fmt.Fprintf(preTrustWarn, "claude-director: pre-trust skipped (~/.claude.json absent); spawn may block on Claude Code's trust dialog\n")
+			} else {
+				fmt.Fprintf(preTrustWarn, "claude-director: pre-trust failed: %v\n", err)
+			}
+		}
 	}
 
 	command := []string{claudeBinary, "--settings", settings}

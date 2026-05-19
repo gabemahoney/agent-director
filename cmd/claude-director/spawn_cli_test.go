@@ -157,6 +157,72 @@ func TestSpawnCLIHappyPath(t *testing.T) {
 	}
 }
 
+// TestSpawnCLIPreTrustWritesClaudeJSON pins bug b.f75 at the CLI
+// boundary: `claude-director spawn --cwd <fresh>` with no other flags
+// writes hasTrustDialogAccepted=true into ~/.claude.json for the
+// resolved cwd before exec'ing tmux. HOME is overridden to a per-test
+// tmpdir so the operator's real ~/.claude.json is never touched.
+func TestSpawnCLIPreTrustWritesClaudeJSON(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	home := t.TempDir()
+	// Seed an empty ~/.claude.json so preTrustCwd has a file to mutate
+	// (the missing-file path is the AC#5 case, covered elsewhere).
+	claudeJSON := filepath.Join(home, ".claude.json")
+	if err := os.WriteFile(claudeJSON, []byte(`{"projects":{}}`), 0o600); err != nil {
+		t.Fatalf("seed claude.json: %v", err)
+	}
+	cwd := t.TempDir()
+
+	_, stderr, code := runSpawnCLI(t, home, fakeDir, "spawn", "--cwd", cwd)
+	if code != 0 {
+		t.Fatalf("exit = %d; stderr=%s", code, stderr)
+	}
+
+	raw, err := os.ReadFile(claudeJSON)
+	if err != nil {
+		t.Fatalf("read claude.json: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("parse claude.json: %v (raw=%q)", err, string(raw))
+	}
+	projects, _ := got["projects"].(map[string]any)
+	entry, ok := projects[cwd].(map[string]any)
+	if !ok {
+		t.Fatalf("projects[%q] missing after spawn: %v", cwd, projects)
+	}
+	if b, _ := entry["hasTrustDialogAccepted"].(bool); !b {
+		t.Errorf("hasTrustDialogAccepted = %v; want true", entry["hasTrustDialogAccepted"])
+	}
+}
+
+// TestSpawnCLINoPreTrustFlagSkipsWrite pins AC #2: --no-pre-trust opts
+// out of the workspace-trust pre-write.
+func TestSpawnCLINoPreTrustFlagSkipsWrite(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	home := t.TempDir()
+	claudeJSON := filepath.Join(home, ".claude.json")
+	if err := os.WriteFile(claudeJSON, []byte(`{"projects":{}}`), 0o600); err != nil {
+		t.Fatalf("seed claude.json: %v", err)
+	}
+	cwd := t.TempDir()
+
+	_, stderr, code := runSpawnCLI(t, home, fakeDir, "spawn", "--cwd", cwd, "--no-pre-trust")
+	if code != 0 {
+		t.Fatalf("exit = %d; stderr=%s", code, stderr)
+	}
+
+	raw, _ := os.ReadFile(claudeJSON)
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("parse claude.json: %v", err)
+	}
+	projects, _ := got["projects"].(map[string]any)
+	if _, present := projects[cwd]; present {
+		t.Errorf("projects[%q] was written despite --no-pre-trust", cwd)
+	}
+}
+
 func TestSpawnCLIRelativeCwdErrCwdNotAPath(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()

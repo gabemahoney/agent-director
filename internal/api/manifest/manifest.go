@@ -112,6 +112,11 @@ var Verbs = []VerbDef{
 				Type:        "[]string (after --)",
 				Description: "Pass-through argv to `claude` after the supervisor's own flags. Denied: --settings, --resume, --continue, --print, --output-format.",
 			},
+			{
+				Name:        "no-pre-trust",
+				Type:        "bool",
+				Description: "Skip pre-writing projects.<cwd>.hasTrustDialogAccepted=true into ~/.claude.json. Default off (pre-trust IS performed so Claude Code skips its workspace-trust dialog and the Spawn becomes interactive immediately).",
+			},
 		},
 		ResultFields: []FieldDef{
 			{

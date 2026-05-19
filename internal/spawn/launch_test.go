@@ -3,6 +3,7 @@ package spawn
 import (
 	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -397,6 +398,100 @@ func contains(haystack, needle string) bool {
 		}
 	}
 	return false
+}
+
+// TestLaunchPreTrustsCwdByDefault pins the b.f75 fix at the Launch
+// integration boundary: with NoPreTrust=false (the default), Launch
+// writes hasTrustDialogAccepted=true into ~/.claude.json for the
+// resolved cwd before exec'ing tmux.
+func TestLaunchPreTrustsCwdByDefault(t *testing.T) {
+	withStubExe(t, "/bin/claude-director")
+	t.Setenv(envInstanceID, "")
+	stub := withStubClaudeJSON(t)
+	// Seed an empty projects map so preTrustCwd has a file to read+rewrite.
+	if err := os.WriteFile(stub, []byte(`{"projects":{}}`), 0o600); err != nil {
+		t.Fatalf("seed claude.json: %v", err)
+	}
+
+	s, r, cfg := newStoreAndLaunchInputs(t)
+	if _, err := Launch(s, &captureTmux{}, r, cfg); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	got := readClaudeJSON(t, stub)
+	projects, ok := got["projects"].(map[string]any)
+	if !ok {
+		t.Fatalf("projects missing: %T", got["projects"])
+	}
+	entry, ok := projects[r.CWD].(map[string]any)
+	if !ok {
+		t.Fatalf("projects[%q] missing after Launch", r.CWD)
+	}
+	if b, _ := entry["hasTrustDialogAccepted"].(bool); !b {
+		t.Errorf("hasTrustDialogAccepted = %v; want true", entry["hasTrustDialogAccepted"])
+	}
+}
+
+// TestLaunchNoPreTrustFlagSkipsWrite pins AC #2: --no-pre-trust
+// (NoPreTrust=true) opts out of the ~/.claude.json write entirely.
+func TestLaunchNoPreTrustFlagSkipsWrite(t *testing.T) {
+	withStubExe(t, "/bin/claude-director")
+	t.Setenv(envInstanceID, "")
+	stub := withStubClaudeJSON(t)
+	if err := os.WriteFile(stub, []byte(`{"projects":{}}`), 0o600); err != nil {
+		t.Fatalf("seed claude.json: %v", err)
+	}
+
+	s, r, cfg := newStoreAndLaunchInputs(t)
+	r.NoPreTrust = true
+	if _, err := Launch(s, &captureTmux{}, r, cfg); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	got := readClaudeJSON(t, stub)
+	projects, _ := got["projects"].(map[string]any)
+	if _, present := projects[r.CWD]; present {
+		t.Errorf("projects[%q] was written despite NoPreTrust=true", r.CWD)
+	}
+}
+
+// TestLaunchMissingClaudeJSONDoesNotBlockSpawn pins AC #5: when
+// ~/.claude.json doesn't exist (truly-fresh-machine case), Launch
+// still proceeds to insert the row and start the tmux session — the
+// soft warning lands in preTrustWarn but the spawn is not blocked.
+func TestLaunchMissingClaudeJSONDoesNotBlockSpawn(t *testing.T) {
+	withStubExe(t, "/bin/claude-director")
+	t.Setenv(envInstanceID, "")
+	// Stub points at a path we never create — preTrustCwd will surface
+	// ErrClaudeJSONMissing, and Launch should swallow it.
+	withStubClaudeJSON(t)
+
+	// Redirect the warn writer so the test's stderr stays clean and we
+	// can assert the warning text.
+	var warn captureWriter
+	saved := preTrustWarn
+	preTrustWarn = &warn
+	t.Cleanup(func() { preTrustWarn = saved })
+
+	s, r, cfg := newStoreAndLaunchInputs(t)
+	tmux := &captureTmux{}
+	if _, err := Launch(s, tmux, r, cfg); err != nil {
+		t.Fatalf("Launch should succeed despite missing claude.json: %v", err)
+	}
+	if !tmux.got.called {
+		t.Errorf("tmux.NewSession not called; pre-trust failure should not block the spawn")
+	}
+	if warn.buf == "" {
+		t.Errorf("expected a warning written to preTrustWarn; got empty")
+	}
+}
+
+// captureWriter is an io.Writer that records writes as a string.
+type captureWriter struct{ buf string }
+
+func (c *captureWriter) Write(p []byte) (int, error) {
+	c.buf += string(p)
+	return len(p), nil
 }
 
 func TestLaunchSecondInsertSurfacesCollision(t *testing.T) {

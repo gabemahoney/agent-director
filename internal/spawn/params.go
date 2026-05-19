@@ -47,6 +47,14 @@ type SpawnParams struct {
 	// RelayMode is "on" / "off" / "" (use config default). Mirrored into
 	// CLAUDE_DIRECTOR_RELAY_MODE on the session env for the hook.
 	RelayMode string
+
+	// NoPreTrust opts out of the workspace-trust pre-write into
+	// ~/.claude.json. Default false (= pre-trust IS performed) skips
+	// Claude Code's trust dialog so the spawn is interactive within
+	// ~5s. Setting this to true preserves today's behavior where the
+	// operator must answer the trust dialog manually for an unseen cwd
+	// (per bug b.f75).
+	NoPreTrust bool
 }
 
 // Permissions captures the three SRD §6.1 arrays. Nil entries are omitted
