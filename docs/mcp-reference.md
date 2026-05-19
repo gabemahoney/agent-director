@@ -153,6 +153,32 @@ Terminate the Spawn's tmux session. Idempotent on terminal states (ended/missing
 
 - `ErrSpawnNotFound`
 
+## Tool: make-template
+
+Save a reusable spawn preset. The TOML file lands under ~/.claude-director/templates/<name>.toml; spawn --template <name> applies it. Reserved per-invocation params (template, claude_instance_id, tmux_session_name) are NOT accepted.
+
+### Input schema
+
+- `name`: type=string, required=true — Template name. Must be filename-safe (no path separators, no leading dot, no `..`).
+- `cwd`: type=string, required=false — Bake a default cwd into the template. Per-call --cwd overrides.
+- `relay_mode`: type=string, required=false — Bake a default relay_mode (on/off). Per-call --relay-mode overrides.
+- `claude_args`: type=[]string, required=false — Bake default Claude argv. Per-call --claude-args REPLACES the template's array wholesale (not concat).
+- `extra_env`: type=map[string]string, required=false — Bake env-var entries. Per-call --extra-env merges by key; per-call wins on collision.
+- `label`: type=[]string, required=false — Bake label k=v entries. Per-call --label merges by key; per-call wins on collision.
+- `allow`: type=[]string, required=false — Bake permissions.allow entries. Per-call --allow CONCATENATES (does not replace).
+- `deny`: type=[]string, required=false — Bake permissions.deny entries. Per-call --deny CONCATENATES.
+- `ask`: type=[]string, required=false — Bake permissions.ask entries. Per-call --ask CONCATENATES.
+
+### Output schema
+
+- `path`: type=string — Absolute path of the written template file.
+
+### Errors
+
+- `ErrTemplateNameUnsafe`
+- `ErrTemplateExists`
+- `ErrTemplateReservedParam`
+
 ## Tool: list
 
 Enumerate Spawn rows. All filters AND together. Returned order is unspecified — callers sort with jq etc.

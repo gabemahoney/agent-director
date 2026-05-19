@@ -262,6 +262,66 @@ var Verbs = []VerbDef{
 		},
 	},
 	{
+		Name:        "make-template",
+		Description: "Save a reusable spawn preset. The TOML file lands under ~/.claude-director/templates/<name>.toml; spawn --template <name> applies it. Reserved per-invocation params (template, claude_instance_id, tmux_session_name) are NOT accepted.",
+		Params: []ParamDef{
+			{
+				Name:        "name",
+				Type:        "string",
+				Description: "Template name. Must be filename-safe (no path separators, no leading dot, no `..`).",
+				Required:    true,
+			},
+			{
+				Name:        "cwd",
+				Type:        "string",
+				Description: "Bake a default cwd into the template. Per-call --cwd overrides.",
+			},
+			{
+				Name:        "relay_mode",
+				Type:        "string",
+				Description: "Bake a default relay_mode (on/off). Per-call --relay-mode overrides.",
+			},
+			{
+				Name:        "claude_args",
+				Type:        "[]string",
+				Description: "Bake default Claude argv. Per-call --claude-args REPLACES the template's array wholesale (not concat).",
+			},
+			{
+				Name:        "extra_env",
+				Type:        "map[string]string",
+				Description: "Bake env-var entries. Per-call --extra-env merges by key; per-call wins on collision.",
+			},
+			{
+				Name:        "label",
+				Type:        "[]string",
+				Description: "Bake label k=v entries. Per-call --label merges by key; per-call wins on collision.",
+			},
+			{
+				Name:        "allow",
+				Type:        "[]string",
+				Description: "Bake permissions.allow entries. Per-call --allow CONCATENATES (does not replace).",
+			},
+			{
+				Name:        "deny",
+				Type:        "[]string",
+				Description: "Bake permissions.deny entries. Per-call --deny CONCATENATES.",
+			},
+			{
+				Name:        "ask",
+				Type:        "[]string",
+				Description: "Bake permissions.ask entries. Per-call --ask CONCATENATES.",
+			},
+		},
+		ResultFields: []FieldDef{
+			{Name: "path", Type: "string", Description: "Absolute path of the written template file."},
+		},
+		ErrorNames: []string{
+			"ErrTemplateNameUnsafe",
+			"ErrTemplateExists",
+			"ErrTemplateReservedParam",
+		},
+	},
+	{
 		Name:        "list",
 		Description: "Enumerate Spawn rows. All filters AND together. Returned order is unspecified — callers sort with jq etc.",
 		Params: []ParamDef{

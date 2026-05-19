@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/gabemahoney/claude-director/internal/api"
+	"github.com/gabemahoney/claude-director/internal/config"
 	"github.com/gabemahoney/claude-director/internal/spawn"
 	"github.com/gabemahoney/claude-director/internal/store"
 	"github.com/gabemahoney/claude-director/internal/tmux"
@@ -43,6 +44,11 @@ var errCatalog = []struct {
 	{"ErrSpawnNotPausable", api.ErrSpawnNotPausable},
 	{"ErrPauseTimeout", api.ErrPauseTimeout},
 	{"ErrListInvalidLabel", api.ErrListInvalidLabel},
+	{"ErrTemplateNameUnsafe", config.ErrTemplateNameUnsafe},
+	{"ErrTemplateNotFound", config.ErrTemplateNotFound},
+	{"ErrTemplateMalformed", config.ErrTemplateMalformed},
+	{"ErrTemplateExists", config.ErrTemplateExists},
+	{"ErrTemplateReservedParam", config.ErrTemplateReservedParam},
 }
 
 // classifyError returns the canonical err_name and an err_description for

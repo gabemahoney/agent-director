@@ -153,6 +153,32 @@ _None._
 
 - `ErrSpawnNotFound`
 
+## make-template
+
+Save a reusable spawn preset. The TOML file lands under ~/.claude-director/templates/<name>.toml; spawn --template <name> applies it. Reserved per-invocation params (template, claude_instance_id, tmux_session_name) are NOT accepted.
+
+### Parameters
+
+- `name` (string, required): Template name. Must be filename-safe (no path separators, no leading dot, no `..`).
+- `cwd` (string, optional): Bake a default cwd into the template. Per-call --cwd overrides.
+- `relay_mode` (string, optional): Bake a default relay_mode (on/off). Per-call --relay-mode overrides.
+- `claude_args` ([]string, optional): Bake default Claude argv. Per-call --claude-args REPLACES the template's array wholesale (not concat).
+- `extra_env` (map[string]string, optional): Bake env-var entries. Per-call --extra-env merges by key; per-call wins on collision.
+- `label` ([]string, optional): Bake label k=v entries. Per-call --label merges by key; per-call wins on collision.
+- `allow` ([]string, optional): Bake permissions.allow entries. Per-call --allow CONCATENATES (does not replace).
+- `deny` ([]string, optional): Bake permissions.deny entries. Per-call --deny CONCATENATES.
+- `ask` ([]string, optional): Bake permissions.ask entries. Per-call --ask CONCATENATES.
+
+### Result
+
+- `path` (string): Absolute path of the written template file.
+
+### Errors
+
+- `ErrTemplateNameUnsafe`
+- `ErrTemplateExists`
+- `ErrTemplateReservedParam`
+
 ## list
 
 Enumerate Spawn rows. All filters AND together. Returned order is unspecified — callers sort with jq etc.

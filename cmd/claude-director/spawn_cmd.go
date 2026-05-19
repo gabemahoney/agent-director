@@ -165,6 +165,50 @@ func parseReadPaneFlags(args []string) (api.ReadPaneParams, error) {
 	return p, nil
 }
 
+// makeTemplateHandlerWith implements `claude-director make-template`.
+// Flags mirror the per-call spawn surface minus the three reserved
+// per-invocation params (template, claude-instance-id, tmux-session-name).
+func makeTemplateHandlerWith(args []string) error {
+	var (
+		labelKVs    map[string]string
+		extraEnvKVs map[string]string
+		allow       []string
+		deny        []string
+		ask         []string
+		claudeArgs  []string
+	)
+	var p api.MakeTemplateParams
+	fs := flag.NewFlagSet("make-template", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&p.Name, "name", "", "template name (filename-safe; required)")
+	fs.StringVar(&p.CWD, "cwd", "", "bake a default cwd")
+	fs.StringVar(&p.RelayMode, "relay-mode", "", "bake a default relay_mode (on/off)")
+	fs.Var(newKVSlice(&labelKVs, "--label"), "label", "k=v (repeatable)")
+	fs.Var(newKVSlice(&extraEnvKVs, "--extra-env"), "extra-env", "K=V (repeatable)")
+	fs.Var(newStringSlice(&allow), "allow", "permissions.allow entry (repeatable)")
+	fs.Var(newStringSlice(&deny), "deny", "permissions.deny entry (repeatable)")
+	fs.Var(newStringSlice(&ask), "ask", "permissions.ask entry (repeatable)")
+	fs.Var(newStringSlice(&claudeArgs), "claude-args", "single claude arg (repeatable; replaces template's array wholesale at spawn time)")
+	if err := fs.Parse(args); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+	}
+	if p.Name == "" {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", "--name is required")
+	}
+	p.ClaudeDirectorLabels = labelKVs
+	p.ExtraEnv = extraEnvKVs
+	p.ClaudeArgs = claudeArgs
+	if len(allow) > 0 || len(deny) > 0 || len(ask) > 0 {
+		p.Permissions = &api.MakeTemplatePermissions{Allow: allow, Deny: deny, Ask: ask}
+	}
+	result, err := api.MakeTemplate(p)
+	if err != nil {
+		name, desc := classifyError(err)
+		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+	}
+	return writeJSON(os.Stdout, result)
+}
+
 // listHandlerWith implements `claude-director list`. Each filter flag
 // corresponds 1:1 with a ListParams field; the API layer enforces the
 // label key=value form.
