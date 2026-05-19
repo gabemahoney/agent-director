@@ -45,7 +45,8 @@ func matrixCases() map[string]matrixCase {
 		}
 	}
 	return map[string]matrixCase{
-		"help": {args: `{}`},
+		"help":    {args: `{}`},
+		"version": {args: `{}`},
 
 		// spawn: a non-existent cwd makes Validate return ErrCwdNotFound
 		// before tmux is touched, so the test has no real-tmux side

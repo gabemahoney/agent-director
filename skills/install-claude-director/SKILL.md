@@ -63,28 +63,35 @@ who already knows what the script does. Rewrite it.
        `install.sh --binary ./bin/claude-director`. Prereq: Go 1.22+ on
        PATH.
    - *Default:* depends on what the orchestrator detects about the
-     launch environment.
-     - **In a checked-out tree with Go available** → propose **(d)**
-       *build from source*. This installs the binary that matches the
-       operator's current source tree, which is almost always what they
-       actually want.
+     launch environment. As of b.q3b, install.sh refuses option (b)
+     when `./bin/claude-director`'s embedded commit doesn't match
+     `git rev-parse HEAD` — so "use the local binary" is only proposed
+     when it's provably fresh.
+     - **In a checked-out tree, Go available, `./bin/claude-director`
+       exists AND `claude-director version` reports a `commit` that
+       matches `git rev-parse HEAD`** → propose **(b)** *use the
+       local binary*. It's the artifact of this exact source tree;
+       no rebuild needed.
+     - **In a checked-out tree with Go available but no fresh local
+       binary** (missing, or `commit` doesn't match HEAD) → propose
+       **(d)** *build from source*. The orchestrator runs `make build`
+       to produce a binary that matches the current tree, then points
+       install.sh at it.
      - **In a checked-out tree but no Go (or `make build` would fail)**
        → propose **(a)** *download from release* and SAY SO. Don't try
        to use a possibly-stale `./bin/claude-director`.
      - **Not in a checked-out tree** (install.sh was curled to a tmp
        path, or invoked from an arbitrary directory) → propose **(a)**
        *download from release*.
-     - **`./bin/claude-director` exists but operator wants it
-       specifically** → that's option (b); they ask for it explicitly.
-       Never default to it.
 
-   **Why we don't default to the existing local binary:** a binary at
+   **Why the version-check matters:** absent a check, a binary at
    `./bin/claude-director` may have been built off a stale branch or a
    previous session's incomplete edit. Installing it silently
    substitutes "trust what was compiled before" for the operator's
-   likely intent of "install the current source". Always force a fresh
-   build or a release download unless the operator explicitly says "use
-   the binary at this path".
+   likely intent of "install the current source". install.sh now reads
+   the binary's `version` verb and refuses option (b) unless the
+   embedded commit matches HEAD — so the orchestrator can safely
+   default to (b) when fresh, and falls through to (d)/(a) when not.
 
    - *Reversibility:* picking wrong is cheap. The next
      `uninstall.sh --purge` resets to a clean slate, and you can

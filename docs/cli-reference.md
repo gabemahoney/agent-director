@@ -331,6 +331,23 @@ _None._
 
 _None._
 
+## version
+
+Print the binary's build-time version stamp as JSON ({version, commit}). Used by install.sh to verify a local binary matches the current source tree before installing it.
+
+### Parameters
+
+_None._
+
+### Result
+
+- `version` (string): Human-readable version stamp from `git describe --tags --always --dirty` at build time. "dev" for unstamped builds.
+- `commit` (string): Full git SHA the binary was built from. "unknown" for unstamped builds.
+
+### Errors
+
+_None._
+
 ## hook
 
 Internal: invoked by Claude Code on lifecycle events via the per-Spawn --settings hooks. Reads payload JSON from stdin, writes a row UPSERT, exits 0 (state-tracking fail-open).

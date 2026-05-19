@@ -10,10 +10,21 @@ CLAUDE_CODE_VERSION ?= 2.1.120
 # under a different name without editing the file.
 TEST_IMAGE ?= claude-director-test
 
+# Version stamp embedded via -ldflags -X. Resolved at make time so a
+# bare `go build` (no make) still works — it just falls back to the
+# defaults in internal/version. The shell fallbacks let `make build`
+# survive when run outside a git checkout (e.g. from a release tarball):
+# git describe / rev-parse return empty and we substitute the package
+# defaults.
+VERSION_PKG     := github.com/gabemahoney/claude-director/internal/version
+VERSION_STR     := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT_SHA      := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
+VERSION_LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION_STR) -X $(VERSION_PKG).Commit=$(COMMIT_SHA)
+
 all: generate build
 
 build:
-	CGO_ENABLED=0 go build -o ./bin/claude-director ./cmd/claude-director
+	CGO_ENABLED=0 go build -ldflags="$(VERSION_LDFLAGS)" -o ./bin/claude-director ./cmd/claude-director
 
 test:
 	go test ./...
@@ -92,7 +103,7 @@ release-binaries:
 		out="dist/claude-director-$${os}-$${arch}"; \
 		echo "  -> $${out}"; \
 		CGO_ENABLED=0 GOOS=$${os} GOARCH=$${arch} \
-			go build -trimpath -ldflags="-s -w" \
+			go build -trimpath -ldflags="-s -w $(VERSION_LDFLAGS)" \
 			-o "$${out}" ./cmd/claude-director || exit 1; \
 	done
 	@echo "[release] sizes:"

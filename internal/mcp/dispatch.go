@@ -53,6 +53,9 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		}
 		return map[string]any{"verbs": verbs}, nil
 
+	case "version":
+		return api.Version()
+
 	case "spawn":
 		// Field names match what the manifest publishes via tools/list
 		// (and what docs/mcp-reference.md advertises). Labels arrive as

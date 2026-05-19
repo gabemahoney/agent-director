@@ -60,6 +60,7 @@ func handlers(st *store.Store, cfg config.Config) map[string]func([]string) erro
 	return map[string]func([]string) error{
 		"help":      helpHandler,
 		"--help":    helpHandler,
+		"version":   versionHandler,
 		"spawn":     func(args []string) error { return spawnHandlerWith(st, cfg, args) },
 		"status":    func(args []string) error { return statusHandlerWith(st, args) },
 		"get":       func(args []string) error { return getHandlerWith(st, args) },
@@ -187,6 +188,31 @@ func helpHandler(_ []string) error {
 		return errDispatch
 	}
 	payload, err := json.Marshal(helpResult{Verbs: verbs})
+	if err != nil {
+		if werr := writeError(os.Stderr, errJSONMarshal, err.Error()); werr != nil {
+			return werr
+		}
+		return errDispatch
+	}
+	if _, err := fmt.Fprintln(os.Stdout, string(payload)); err != nil {
+		return err
+	}
+	return nil
+}
+
+// versionHandler implements the `version` verb. Prints
+// {"version": "<stamp>", "commit": "<sha>"} per the manifest. The api
+// layer's Version() never errors; the same envelope path as helpHandler
+// is kept for uniformity.
+func versionHandler(_ []string) error {
+	res, err := api.Version()
+	if err != nil {
+		if werr := writeError(os.Stderr, errJSONMarshal, err.Error()); werr != nil {
+			return werr
+		}
+		return errDispatch
+	}
+	payload, err := json.Marshal(res)
 	if err != nil {
 		if werr := writeError(os.Stderr, errJSONMarshal, err.Error()); werr != nil {
 			return werr

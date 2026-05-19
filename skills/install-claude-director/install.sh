@@ -239,6 +239,11 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Defaults to 1; cleared to 0 only when BINARY_SRC came from PATH
+# (option (c)), since "whatever's on PATH" makes no claim about the
+# operator's source tree.
+VERSION_CHECK_REQUIRED=1
+
 if [[ -z "$BINARY_SRC" ]]; then
     # Prefer the in-repo build (skills/install-claude-director sits two
     # levels under the repo root; bin/ is at the root).
@@ -247,6 +252,7 @@ if [[ -z "$BINARY_SRC" ]]; then
         BINARY_SRC="$candidate"
     elif command -v claude-director >/dev/null 2>&1; then
         BINARY_SRC="$(command -v claude-director)"
+        VERSION_CHECK_REQUIRED=0
     else
         echo "install.sh: no source binary found." >&2
         echo "  Tried: $candidate" >&2
@@ -262,13 +268,82 @@ fi
 echo "  source  : $BINARY_SRC"
 
 # --------------------------------------------------------------------
+# Source-tree version check
+#
+# When the operator points install.sh at a local binary (either via
+# --binary or via the in-repo ./bin/claude-director fallback) AND
+# install.sh itself lives inside a git checkout, refuse to install a
+# binary whose embedded commit doesn't match the checkout's HEAD.
+# Catches the "operator forgot to `make build` after pulling new
+# code" footgun — installing a stale artifact silently is exactly
+# what b.qag flagged.
+#
+# Skipped when:
+#   - --from-release was used (the asset is by construction not the
+#     operator's source tree)
+#   - install.sh is not inside a git checkout (curled tarball case)
+#   - BINARY_SRC came from `command -v` (option (c)): there's no
+#     promise it was built from this tree, and the user explicitly
+#     asked for "whatever's on PATH"
+# --------------------------------------------------------------------
+
+if [[ "$FROM_RELEASE" -eq 0 && "${VERSION_CHECK_REQUIRED:-1}" -eq 1 ]]; then
+    # Find the script's repo root (walking up from SCRIPT_DIR). The
+    # script-path is what tells us "this checkout"; CWD might be
+    # somewhere unrelated.
+    repo_root=""
+    probe="$SCRIPT_DIR"
+    while [[ "$probe" != "/" && -n "$probe" ]]; do
+        if [[ -d "$probe/.git" ]]; then
+            repo_root="$probe"; break
+        fi
+        probe="$(dirname "$probe")"
+    done
+
+    if [[ -n "$repo_root" ]] && head_sha=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null); then
+        # Run the binary's `version` verb. An older binary without the
+        # verb will exit non-zero / emit an err_name envelope; jq -e
+        # returns non-zero if .commit is absent or null. Either way we
+        # land in the mismatch path with bin_commit empty.
+        bin_commit=$("$BINARY_SRC" version 2>/dev/null \
+            | jq -er '.commit // empty' 2>/dev/null \
+            || true)
+
+        if [[ -z "$bin_commit" || "$bin_commit" == "unknown" || "$bin_commit" != "$head_sha" ]]; then
+            echo "install.sh: source-tree version check failed." >&2
+            echo "  binary  : $BINARY_SRC" >&2
+            if [[ -z "$bin_commit" ]]; then
+                echo "  built from: <no version stamp — binary is older than this verb, or built without ldflags>" >&2
+            elif [[ "$bin_commit" == "unknown" ]]; then
+                echo "  built from: <unstamped — likely a plain 'go build' without -ldflags>" >&2
+            else
+                echo "  built from: $bin_commit" >&2
+            fi
+            echo "  HEAD    : $head_sha ($repo_root)" >&2
+            echo "" >&2
+            echo "  The binary at $BINARY_SRC was not built from this checkout's" >&2
+            echo "  current HEAD. Installing it would silently substitute stale code" >&2
+            echo "  for the source you're sitting on. Either:" >&2
+            echo "    - rebuild it first:    make build" >&2
+            echo "    - or download release: rerun with --from-release (omit --binary)" >&2
+            exit 3
+        fi
+        echo "  version-check: binary commit matches HEAD ($head_sha)"
+    fi
+fi
+
+# --------------------------------------------------------------------
 # Version tag (used for the side-by-side path on upgrade)
 # --------------------------------------------------------------------
 
 if [[ -z "$VERSION_TAG" ]]; then
-    # Try the binary's own --version (Epic 13 will land this); fall
-    # back to a timestamp for v1.
-    if v=$("$BINARY_SRC" --version 2>/dev/null) && [[ -n "$v" ]]; then
+    # Prefer the binary's own `version` verb. Old binaries without the
+    # verb (or without an ldflags-stamped Version) fall back to a
+    # timestamp so the side-by-side path is still unique.
+    v=$("$BINARY_SRC" version 2>/dev/null \
+        | jq -r '.version // empty' 2>/dev/null \
+        || true)
+    if [[ -n "$v" && "$v" != "dev" ]]; then
         VERSION_TAG="$v"
     else
         VERSION_TAG="t$(date +%Y%m%d-%H%M%S)"

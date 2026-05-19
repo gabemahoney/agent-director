@@ -494,6 +494,24 @@ var Verbs = []VerbDef{
 		ErrorNames:   []string{},
 	},
 	{
+		Name:        "version",
+		Description: "Print the binary's build-time version stamp as JSON ({version, commit}). Used by install.sh to verify a local binary matches the current source tree before installing it.",
+		Params:      []ParamDef{},
+		ResultFields: []FieldDef{
+			{
+				Name:        "version",
+				Type:        "string",
+				Description: "Human-readable version stamp from `git describe --tags --always --dirty` at build time. \"dev\" for unstamped builds.",
+			},
+			{
+				Name:        "commit",
+				Type:        "string",
+				Description: "Full git SHA the binary was built from. \"unknown\" for unstamped builds.",
+			},
+		},
+		ErrorNames: []string{},
+	},
+	{
 		Name:        "hook",
 		Description: "Internal: invoked by Claude Code on lifecycle events via the per-Spawn --settings hooks. Reads payload JSON from stdin, writes a row UPSERT, exits 0 (state-tracking fail-open).",
 		Params: []ParamDef{
