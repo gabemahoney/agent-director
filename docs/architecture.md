@@ -389,6 +389,62 @@ pane bytes as a post-mortem.
   `CapturePane`, both of which use direct `exec.Command` with the text
   as a single argv element.
 
+## Label model
+
+Labels are caller-owned tags on a Spawn, surfaced two ways and never
+re-read after spawn time.
+
+### Sources of truth
+
+The **DB is canonical** (SRD §11). The `spawns.labels` column carries
+a JSON object with the verbatim caller-supplied keys and values. The
+`list` verb's label filter consults this column via
+`json_extract(labels, '$.<key>') = '<value>'`.
+
+The **env-var emission** is a derived view, set on the tmux session at
+creation time so the Spawn's own shell can introspect its labels and
+child processes can inherit them. Each entry becomes:
+
+```
+CLAUDE_DIRECTOR_LABEL_<NORMALIZED_KEY> = <value>
+```
+
+where `<NORMALIZED_KEY>` is the caller key uppercased with every
+non-alphanumeric rune replaced by `_` (SRD §7.2 step 5). The
+transformation is **unidirectional** — the env-var name does not
+need to round-trip back to the DB key. A key like `my-key` produces
+env `CLAUDE_DIRECTOR_LABEL_MY_KEY=val` while the DB row keeps
+`"my-key":"val"` verbatim.
+
+### Hooks do NOT mutate labels
+
+State-tracking hooks (SRD §3.2) do not read or write the labels
+column. Labels live in their own data plane:
+
+- Set at `spawn` time only.
+- Never changed by SessionStart / UserPromptSubmit / PreToolUse /
+  SessionEnd / etc.
+- The env-var view is similarly frozen at session creation; tmux
+  does not re-evaluate `-e` flags after the session starts.
+
+If a future caller needs mutable labels, that's a deliberate new
+surface — not a hook-side-effect snowball.
+
+### parent_id
+
+`parent_id` is auto-derived alongside labels at spawn time, but lives
+on its own column:
+
+- `internal/spawn/launch.go` reads `os.Getenv("CLAUDE_DIRECTOR_INSTANCE_ID")`
+  in the spawning process.
+- If set, that value is written to the new row's `parent_id`.
+- If unset (operator running from a plain shell), `parent_id` is NULL.
+- The schema's `ON DELETE SET NULL` on the FK keeps orphans clean
+  when find-missing (Epic 8) later removes a parent row.
+
+The `list --parent <id>` filter walks this column directly; the
+forthcoming MCP server can map a tree by recursive listings.
+
 ## Stop semantics
 
 Two verbs terminate a Spawn — `kill` (immediate, forceful) and `pause`
