@@ -127,12 +127,18 @@ DRIVER_MODE="${DRIVER_MODE:-claude}"
 run_case_shell() {
     # In shell mode the t2 body's fenced ```bash block is the script to
     # execute. Pass iff exit 0; fail otherwise. The DB-reset fixture runs
-    # before each case to enforce isolation.
+    # before each case to enforce isolation — and its failure must
+    # surface as a fail case rather than silently letting the case body
+    # run against unreset state (pre-fix: `|| true` swallowed it and the
+    # credentialed lane lost its teeth).
     local case_file="$1"
     local case_id
     case_id="$(basename "$(dirname "$case_file")")"
 
-    bash "$DB_RESET" >&2 || true
+    if ! bash "$DB_RESET" >&2; then
+        emit "$(emit_case "$case_id" fail "db-reset failed (exit non-zero before case body)")"
+        return 1
+    fi
 
     local script
     script="$(awk '/^```bash$/{flag=1;next}/^```$/{flag=0}flag' "$case_file")"
@@ -159,7 +165,10 @@ run_case_claude() {
     local case_id
     case_id="$(basename "$(dirname "$case_file")")"
 
-    bash "$DB_RESET" >&2 || true
+    if ! bash "$DB_RESET" >&2; then
+        emit "$(emit_case "$case_id" fail "db-reset failed (exit non-zero before case body)")"
+        return 1
+    fi
 
     if [[ ! -r "$PROMPT_TEMPLATE" ]]; then
         emit "$(emit_case "$case_id" fail "missing driver prompt: $PROMPT_TEMPLATE")"
@@ -181,10 +190,28 @@ $(cat "$case_file")"
     fi
 
     # Driver-Claude is asked to return a single JSON object with a "verdict"
-    # field of "pass" or "fail" and a brief "details" string.
-    local verdict details
-    verdict="$(printf '%s' "$reply" | jq -r '.result // empty' | jq -r '.verdict // "fail"' 2>/dev/null || echo fail)"
-    details="$(printf '%s' "$reply" | jq -r '.result // empty' | jq -r '.details // ""' 2>/dev/null || true)"
+    # field of "pass" or "fail" and a brief "details" string. The pre-fix
+    # pipeline coerced any jq parse error to a silent "fail", which means
+    # a real pass returning an unexpected JSON shape was indistinguishable
+    # from a real failure (and vice versa). Replaced with explicit error
+    # capture so a parse failure surfaces the raw reply in the envelope.
+    local verdict details result_json
+    if ! result_json="$(printf '%s' "$reply" | jq -r '.result // empty' 2>&1)"; then
+        emit "$(emit_case "$case_id" fail "parse error extracting .result from claude reply: ${reply:0:400}")"
+        return 1
+    fi
+    if [[ -z "$result_json" ]]; then
+        emit "$(emit_case "$case_id" fail "claude reply had empty .result: ${reply:0:400}")"
+        return 1
+    fi
+    if ! verdict="$(printf '%s' "$result_json" | jq -r '.verdict // "fail"' 2>&1)"; then
+        emit "$(emit_case "$case_id" fail "parse error extracting .verdict from .result: result=${result_json:0:400}")"
+        return 1
+    fi
+    if ! details="$(printf '%s' "$result_json" | jq -r '.details // ""' 2>&1)"; then
+        emit "$(emit_case "$case_id" fail "parse error extracting .details from .result: result=${result_json:0:400}")"
+        return 1
+    fi
 
     if [[ "$verdict" == "pass" ]]; then
         emit "$(emit_case "$case_id" pass "$details")"
