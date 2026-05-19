@@ -99,6 +99,26 @@ func TestReadPaneHasInteractErrorNames(t *testing.T) {
 	}
 }
 
+// TestListHasSRDErrorNames pins the list entry's error catalog against
+// SRD §13.1: the label k=v parse rejection is the only verb-surface
+// error; the verb has no state precondition and no transport-layer tmux.
+func TestListHasSRDErrorNames(t *testing.T) {
+	v, ok := manifest.Lookup("list")
+	if !ok {
+		t.Fatal("list not in manifest")
+	}
+	want := []string{"ErrListInvalidLabel"}
+	have := map[string]bool{}
+	for _, n := range v.ErrorNames {
+		have[n] = true
+	}
+	for _, n := range want {
+		if !have[n] {
+			t.Errorf("list.ErrorNames missing %q", n)
+		}
+	}
+}
+
 // TestKillHasSRDErrorNames pins the kill entry's error catalog against
 // SRD §13.1: kill swallows tmux failures and is idempotent on terminal
 // states, so the only surface error is the row-lookup miss.

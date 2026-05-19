@@ -417,9 +417,6 @@ column. Labels live in their own data plane:
 - The env-var view is similarly frozen at session creation; tmux
   does not re-evaluate `-e` flags after the session starts.
 
-If a future caller needs mutable labels, that's a deliberate new
-surface — not a hook-side-effect snowball.
-
 ### parent_id
 
 `parent_id` is auto-derived alongside labels at spawn time, but lives

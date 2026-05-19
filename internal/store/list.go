@@ -54,8 +54,8 @@ func (s *Store) ListSpawns(f ListFilters) ([]Spawn, error) {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			where = append(where, "json_extract(labels, '$.' || ?) = ?")
-			args = append(args, k, f.Labels[k])
+			where = append(where, "json_extract(labels, ?) = ?")
+			args = append(args, jsonPathFlatKey(k), f.Labels[k])
 		}
 	}
 
@@ -120,4 +120,17 @@ func (s *Store) ListSpawns(f ListFilters) ([]Spawn, error) {
 		return nil, fmt.Errorf("store: list spawns iterate: %w", err)
 	}
 	return out, nil
+}
+
+// jsonPathFlatKey returns the SQLite JSONPath expression that matches a
+// FLAT (single-level) object key, even when the key contains JSONPath
+// metacharacters like `.`, `[`, or `"`. The key is wrapped in double
+// quotes with `\` and `"` escaped per JSON string syntax. Without this,
+// a label key like `project.team` would be parsed as a nested
+// `$.project.team` lookup and never match the flat-key labels blob
+// encodeLabels writes.
+func jsonPathFlatKey(key string) string {
+	esc := strings.ReplaceAll(key, `\`, `\\`)
+	esc = strings.ReplaceAll(esc, `"`, `\"`)
+	return `$."` + esc + `"`
 }

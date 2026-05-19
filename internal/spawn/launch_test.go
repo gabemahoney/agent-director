@@ -62,6 +62,7 @@ func newStoreAndLaunchInputs(t *testing.T) (*store.Store, Resolved, config.Confi
 
 func TestLaunchInsertsPendingAndCallsTmux(t *testing.T) {
 	withStubExe(t, "/bin/claude-director")
+	t.Setenv(envInstanceID, "") // ensure no parent leakage from the host shell
 	s, r, cfg := newStoreAndLaunchInputs(t)
 	tmux := &captureTmux{}
 
@@ -125,6 +126,7 @@ func TestLaunchInsertsPendingAndCallsTmux(t *testing.T) {
 
 func TestLaunchTmuxFailureLeavesRowPending(t *testing.T) {
 	withStubExe(t, "/bin/claude-director")
+	t.Setenv(envInstanceID, "") // ensure no parent leakage from the host shell
 	s, r, cfg := newStoreAndLaunchInputs(t)
 	tmux := &captureTmux{err: errors.New("tmux: name collision")}
 
@@ -399,6 +401,7 @@ func contains(haystack, needle string) bool {
 
 func TestLaunchSecondInsertSurfacesCollision(t *testing.T) {
 	withStubExe(t, "/bin/claude-director")
+	t.Setenv(envInstanceID, "") // ensure no parent leakage from the host shell
 	s, r, cfg := newStoreAndLaunchInputs(t)
 	tmux := &captureTmux{}
 	if _, err := Launch(s, tmux, r, cfg); err != nil {
