@@ -28,7 +28,7 @@ type PauseStore interface {
 
 // PauseParams is the typed parameter shape for the pause verb.
 type PauseParams struct {
-	ClaudeInstanceID string
+	ClaudeInstanceID string `json:"claude_instance_id"`
 }
 
 // PauseResult is the typed return shape — empty today. Reserved so

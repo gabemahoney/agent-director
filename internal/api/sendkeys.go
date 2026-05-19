@@ -15,9 +15,11 @@ type SendKeysTmux interface {
 }
 
 // SendKeysParams is the typed parameter shape for the send-keys verb.
+// JSON tags use snake_case so MCP clients can decode into the struct
+// directly via the dispatcher's unmarshalSnake helper.
 type SendKeysParams struct {
-	ClaudeInstanceID string
-	Text             string
+	ClaudeInstanceID string `json:"claude_instance_id"`
+	Text             string `json:"text"`
 }
 
 // SendKeysResult is the typed return shape. Empty struct today; reserved

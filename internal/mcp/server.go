@@ -19,7 +19,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 
@@ -381,6 +380,3 @@ func VerbNameFromTool(toolName string) string {
 	return string(out)
 }
 
-// Ensure log.Logger satisfies the Stdlib seam (compile-time check).
-var _ = log.New
-var _ = fmt.Sprintf

@@ -29,7 +29,7 @@ type ResumeTmux interface {
 
 // ResumeParams is the typed parameter shape for the resume verb.
 type ResumeParams struct {
-	ClaudeInstanceID string
+	ClaudeInstanceID string `json:"claude_instance_id"`
 }
 
 // ResumeResult is the typed return shape. The id field is the same

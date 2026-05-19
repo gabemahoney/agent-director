@@ -54,30 +54,48 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		return map[string]any{"verbs": verbs}, nil
 
 	case "spawn":
+		// Field names match what the manifest publishes via tools/list
+		// (and what docs/mcp-reference.md advertises). Labels arrive as
+		// a []string of "k=v" entries; permissions arrive as three
+		// independent allow/deny/ask arrays, not a nested object.
 		var raw struct {
-			CWD                  string            `json:"cwd"`
-			Template             string            `json:"template"`
-			ClaudeInstanceID     string            `json:"claude_instance_id"`
-			TmuxSessionName      string            `json:"tmux_session_name"`
-			ExtraEnv             map[string]string `json:"extra_env"`
-			ClaudeDirectorLabels map[string]string `json:"claude_director_labels"`
-			ClaudeArgs           []string          `json:"claude_args"`
-			Permissions          *spawn.Permissions `json:"permissions"`
-			RelayMode            string            `json:"relay_mode"`
+			CWD              string            `json:"cwd"`
+			Template         string            `json:"template"`
+			ClaudeInstanceID string            `json:"claude_instance_id"`
+			Label            []string          `json:"label"`
+			Allow            []string          `json:"allow"`
+			Deny             []string          `json:"deny"`
+			Ask              []string          `json:"ask"`
+			RelayMode        string            `json:"relay-mode"`
+			ExtraEnv         map[string]string `json:"extra-env"`
+			ClaudeArgs       []string          `json:"claude_args"`
 		}
 		if err := json.Unmarshal(args, &raw); err != nil {
 			return nil, fmt.Errorf("decode spawn params: %w", err)
+		}
+		labels := make(map[string]string, len(raw.Label))
+		for _, kv := range raw.Label {
+			k, v, ok := splitKV(kv)
+			if !ok {
+				return nil, fmt.Errorf("invalid label %q (want key=value)", kv)
+			}
+			labels[k] = v
 		}
 		p := spawn.SpawnParams{
 			CWD:                  raw.CWD,
 			Template:             raw.Template,
 			ClaudeInstanceID:     raw.ClaudeInstanceID,
-			TmuxSessionName:      raw.TmuxSessionName,
 			ExtraEnv:             raw.ExtraEnv,
-			ClaudeDirectorLabels: raw.ClaudeDirectorLabels,
+			ClaudeDirectorLabels: labels,
 			ClaudeArgs:           raw.ClaudeArgs,
-			Permissions:          raw.Permissions,
 			RelayMode:            raw.RelayMode,
+		}
+		if len(raw.Allow) > 0 || len(raw.Deny) > 0 || len(raw.Ask) > 0 {
+			p.Permissions = &spawn.Permissions{
+				Allow: raw.Allow,
+				Deny:  raw.Deny,
+				Ask:   raw.Ask,
+			}
 		}
 		return api.Spawn(d.store, d.tmuxClient, d.cfg, p)
 

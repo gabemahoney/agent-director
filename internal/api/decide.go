@@ -31,9 +31,9 @@ type DecideStore interface {
 // deny with an empty Reason the envelope defaults to
 // "Denied by orchestrator" — see hook.EncodeDecision.
 type DecideParams struct {
-	ClaudeInstanceID string
-	Decision         string
-	Reason           string
+	ClaudeInstanceID string `json:"claude_instance_id"`
+	Decision         string `json:"decision"`
+	Reason           string `json:"reason"`
 }
 
 // DecideResult is the typed return shape. Empty today; reserved so a

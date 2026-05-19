@@ -12,7 +12,7 @@ type KillTmux interface {
 
 // KillParams is the typed parameter shape for the kill verb.
 type KillParams struct {
-	ClaudeInstanceID string
+	ClaudeInstanceID string `json:"claude_instance_id"`
 }
 
 // KillResult is the typed return shape — empty today, reserved so

@@ -22,9 +22,9 @@ const DefaultReadPaneLines = 25
 // omits the field gets the documented default. There is no upper cap
 // (SRD §12 explicitly leaves the bound to the caller).
 type ReadPaneParams struct {
-	ClaudeInstanceID string
-	NLines           int
-	ANSI             bool
+	ClaudeInstanceID string `json:"claude_instance_id"`
+	NLines           int    `json:"n_lines"`
+	ANSI             bool   `json:"ansi"`
 }
 
 // ReadPaneResult is the typed return shape — a single `pane` string field

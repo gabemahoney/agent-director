@@ -10,9 +10,11 @@ A single Go binary that:
 
 ## Surfaces
 
-- **CLI** — `claude-director spawn | send-keys | list | wipe | find-missing | install | mcp` (see SRD and `--help` for the canonical list).
+- **CLI** — `claude-director <verb> ...` for every verb in
+  `internal/api/manifest`. See `docs/cli-reference.md` for the canonical
+  list.
 - **Hook entrypoint** — the same binary invoked by Claude Code on hook events (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, Notification, SessionEnd, PermissionRequest).
-- **MCP server** — same binary in `mcp` mode, stdio transport, lifetime scoped to a single Claude Code session.
+- **Stdio MCP server** — same binary invoked as `claude-director serve --stdio`. Stdio transport, lifetime scoped to a single Claude Code session.
 
 ## Data
 
@@ -547,13 +549,10 @@ isn't filtered automatically extends the test.
 
 ### Filtered verbs
 
-Two verbs are deliberately filtered out of `tools/list`:
+`tools/list` omits two verbs:
 
-- `hook` — internal; only Claude Code's hook machinery calls it
-  through the per-Spawn `--settings` payload. Exposing it via MCP
-  would let an LLM client manufacture state transitions.
-- `serve` — self-referential. An MCP client calling `serve` inside
-  the same server would deadlock.
+- `hook` — internal entrypoint invoked by Claude Code's hook machinery.
+- `serve` — the MCP server itself.
 
 The filter lives in `internal/mcp/server.go::ExposedVerb`.
 
