@@ -147,10 +147,15 @@ func (c *Client) SendKeys(name, text string) error {
 }
 
 // CapturePane returns the last nLines lines of the named tmux session's
-// first pane, captured via `tmux capture-pane -p -t <name>:0.0 -S -<n>`.
-// Default ANSI handling: tmux's `-p` (without `-e`) already strips SGR
-// colors and cursor moves; the verb-layer ANSI-strip helper handles the
-// remaining residuals when the caller asks for them (the default).
+// first pane.
+//
+// When ansi is true the invocation is
+// `tmux capture-pane -p -e -t <name>:0.0 -S -<n>`: `-e` tells tmux to
+// emit ANSI escape sequences for SGR colors / cursor moves so the
+// caller can re-render or inspect the original styling. When ansi is
+// false `-e` is omitted and tmux returns the rendered text without
+// escapes; the verb-layer ANSI-strip helper still runs on top to
+// scrub any residual sequences that survive the default render.
 //
 // nLines is passed through verbatim — callers wanting "all available
 // scrollback" set it to a large number. There is no upper cap; SRD §12
@@ -158,9 +163,14 @@ func (c *Client) SendKeys(name, text string) error {
 //
 // On a non-zero tmux exit the error chain contains ErrTmuxCaptureFailed
 // plus the tmux stderr blob; on a missing tmux binary, ErrTmuxNotAvailable.
-func (c *Client) CapturePane(name string, nLines int) (string, error) {
+func (c *Client) CapturePane(name string, nLines int, ansi bool) (string, error) {
 	scroll := "-" + strconv.Itoa(nLines)
-	out, err := c.run(binaryName, "capture-pane", "-p", "-t", paneTarget(name), "-S", scroll)
+	args := []string{"capture-pane", "-p"}
+	if ansi {
+		args = append(args, "-e")
+	}
+	args = append(args, "-t", paneTarget(name), "-S", scroll)
+	out, err := c.run(binaryName, args...)
 	if err != nil {
 		if errors.Is(err, ErrTmuxNotAvailable) {
 			return "", err

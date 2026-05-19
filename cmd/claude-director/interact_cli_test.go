@@ -187,6 +187,40 @@ func TestReadPaneCLIANSIPreservesEscapes(t *testing.T) {
 	if !strings.Contains(stdout, "\\u001b[31m") {
 		t.Errorf("stdout missing raw escape codes under --ansi: %q", stdout)
 	}
+	// b.s12: tmux only emits ANSI escapes when called with `-e`. Verify
+	// the underlying capture-pane invocation included it under --ansi.
+	logBytes, err := os.ReadFile(filepath.Join(home, "fake-tmux.log"))
+	if err != nil {
+		t.Fatalf("read fake-tmux log: %v", err)
+	}
+	log := string(logBytes)
+	if !strings.Contains(log, "\n-e\n") {
+		t.Errorf("fake-tmux log missing -e flag under --ansi (tmux strips escapes without it): %s", log)
+	}
+}
+
+func TestReadPaneCLIDefaultOmitsDashE(t *testing.T) {
+	// Companion to TestReadPaneCLIANSIPreservesEscapes. Default mode
+	// (no --ansi) must NOT pass -e — claude-director strips residuals
+	// at the verb layer.
+	fakeDir := buildFakeTmux(t)
+	home := t.TempDir()
+	bootstrapDB(t, home)
+	dbPath := filepath.Join(home, ".claude-director", "state.db")
+	seedSpawnRow(t, dbPath, "id-rp-cli-default-e", "cd-rp-cli-de", "waiting", "off")
+
+	_, stderr, code := runSpawnCLI(t, home, fakeDir,
+		"read-pane", "--claude-instance-id", "id-rp-cli-default-e")
+	if code != 0 {
+		t.Fatalf("read-pane exit = %d; stderr=%s", code, stderr)
+	}
+	logBytes, err := os.ReadFile(filepath.Join(home, "fake-tmux.log"))
+	if err != nil {
+		t.Fatalf("read fake-tmux log: %v", err)
+	}
+	if strings.Contains(string(logBytes), "\n-e\n") {
+		t.Errorf("fake-tmux log unexpectedly contains -e under default (no --ansi): %s", string(logBytes))
+	}
 }
 
 func TestReadPaneCLICustomLineCount(t *testing.T) {

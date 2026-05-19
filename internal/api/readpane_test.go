@@ -10,8 +10,8 @@ import (
 )
 
 // fakeCaptureTmux is a recording fake for ReadPane. It returns the
-// scripted body for every CapturePane call and records the (name, nLines)
-// argv. failErr is the error to return when non-nil.
+// scripted body for every CapturePane call and records the
+// (name, nLines, ansi) argv. failErr is the error to return when non-nil.
 type fakeCaptureTmux struct {
 	wantName  string
 	wantLines int
@@ -20,13 +20,15 @@ type fakeCaptureTmux struct {
 
 	gotName  string
 	gotLines int
+	gotANSI  bool
 	calls    int
 }
 
-func (f *fakeCaptureTmux) CapturePane(name string, nLines int) (string, error) {
+func (f *fakeCaptureTmux) CapturePane(name string, nLines int, ansi bool) (string, error) {
 	f.calls++
 	f.gotName = name
 	f.gotLines = nLines
+	f.gotANSI = ansi
 	if f.failErr != nil {
 		return "", f.failErr
 	}
@@ -67,6 +69,38 @@ func TestReadPaneANSITrueReturnsRawBytes(t *testing.T) {
 	if !strings.Contains(res.Pane, "\x1b[") {
 		t.Fatalf("raw mode must preserve escape codes; got %q", res.Pane)
 	}
+}
+
+func TestReadPaneForwardsANSIFlagToTmux(t *testing.T) {
+	// Per b.s12: ANSI=true must reach the tmux layer so the underlying
+	// `capture-pane` call adds `-e`. Without that, tmux strips escapes
+	// before claude-director ever sees them and the "raw bytes" promise
+	// of `--ansi=true` collapses.
+	t.Run("ansi=true forwards true", func(t *testing.T) {
+		s := openStoreWithRow(t, "id-rp-ansi-on", "cd-x", store.StateWaiting, "off")
+		tmux := &fakeCaptureTmux{body: "x"}
+		if _, err := api.ReadPane(s, tmux, api.ReadPaneParams{
+			ClaudeInstanceID: "id-rp-ansi-on",
+			ANSI:             true,
+		}); err != nil {
+			t.Fatalf("ReadPane: %v", err)
+		}
+		if !tmux.gotANSI {
+			t.Fatalf("CapturePane(ansi=%v); want true", tmux.gotANSI)
+		}
+	})
+	t.Run("ansi=false (default) forwards false", func(t *testing.T) {
+		s := openStoreWithRow(t, "id-rp-ansi-off", "cd-x", store.StateWaiting, "off")
+		tmux := &fakeCaptureTmux{body: "x"}
+		if _, err := api.ReadPane(s, tmux, api.ReadPaneParams{
+			ClaudeInstanceID: "id-rp-ansi-off",
+		}); err != nil {
+			t.Fatalf("ReadPane: %v", err)
+		}
+		if tmux.gotANSI {
+			t.Fatalf("CapturePane(ansi=%v); want false", tmux.gotANSI)
+		}
+	})
 }
 
 func TestReadPaneDefaultLineCountIsTwentyFive(t *testing.T) {

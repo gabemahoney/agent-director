@@ -7,8 +7,9 @@ import (
 
 // ReadPaneTmux is the narrow tmux surface ReadPane needs. *tmux.Client
 // satisfies it; tests pass a recording fake that returns scripted bytes.
+// The ansi parameter forwards to tmux's `-e` flag — see CapturePane.
 type ReadPaneTmux interface {
-	CapturePane(name string, nLines int) (string, error)
+	CapturePane(name string, nLines int, ansi bool) (string, error)
 }
 
 // DefaultReadPaneLines is the SRD §12 default for n_lines when the caller
@@ -59,7 +60,7 @@ func ReadPane(s *store.Store, t ReadPaneTmux, params ReadPaneParams) (ReadPaneRe
 		n = DefaultReadPaneLines
 	}
 
-	pane, err := t.CapturePane(row.TmuxSessionName, n)
+	pane, err := t.CapturePane(row.TmuxSessionName, n, params.ANSI)
 	if err != nil {
 		return ReadPaneResult{}, err
 	}

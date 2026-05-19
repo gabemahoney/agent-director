@@ -97,17 +97,25 @@ func TestNewSessionArgvComposition(t *testing.T) {
 			wantCmd: []string{"tmux", "send-keys", "-t", "foo:0.0", "Enter"},
 		},
 		{
-			name: "capture-pane with n=25 emits -S -25 (not omitted, not -0)",
+			name: "capture-pane with ansi=false omits -e (tmux strips escapes by default)",
 			fn: func(c *Client) error {
-				_, err := c.CapturePane("foo", 25)
+				_, err := c.CapturePane("foo", 25, false)
 				return err
 			},
 			wantCmd: []string{"tmux", "capture-pane", "-p", "-t", "foo:0.0", "-S", "-25"},
 		},
 		{
+			name: "capture-pane with ansi=true passes -e so tmux preserves escape sequences",
+			fn: func(c *Client) error {
+				_, err := c.CapturePane("foo", 25, true)
+				return err
+			},
+			wantCmd: []string{"tmux", "capture-pane", "-p", "-e", "-t", "foo:0.0", "-S", "-25"},
+		},
+		{
 			name: "capture-pane with a large n widens the scrollback verbatim",
 			fn: func(c *Client) error {
-				_, err := c.CapturePane("foo", 1000)
+				_, err := c.CapturePane("foo", 1000, false)
 				return err
 			},
 			wantCmd: []string{"tmux", "capture-pane", "-p", "-t", "foo:0.0", "-S", "-1000"},
@@ -210,7 +218,7 @@ func TestCapturePaneReturnsStdout(t *testing.T) {
 	// newline. ANSI handling happens at a higher layer.
 	cap := &captured{stdout: []byte("first line\nsecond line\n")}
 	c := &Client{run: cap.runner()}
-	got, err := c.CapturePane("foo", 25)
+	got, err := c.CapturePane("foo", 25, false)
 	if err != nil {
 		t.Fatalf("CapturePane: %v", err)
 	}
@@ -244,7 +252,7 @@ func TestCapturePaneWrapsTmuxFailure(t *testing.T) {
 		err:    &exec.ExitError{},
 	}
 	c := &Client{run: cap.runner()}
-	_, err := c.CapturePane("ghost", 25)
+	_, err := c.CapturePane("ghost", 25, false)
 	if !errors.Is(err, ErrTmuxCaptureFailed) {
 		t.Fatalf("err = %v; want ErrTmuxCaptureFailed", err)
 	}
@@ -264,7 +272,7 @@ func TestCapturePaneMapsExecMissingToTmuxNotAvailable(t *testing.T) {
 	cap := &captured{err: fmt.Errorf("%w: %v",
 		ErrTmuxNotAvailable, &exec.Error{Name: "tmux", Err: exec.ErrNotFound})}
 	c := &Client{run: cap.runner()}
-	_, err := c.CapturePane("foo", 25)
+	_, err := c.CapturePane("foo", 25, false)
 	if !errors.Is(err, ErrTmuxNotAvailable) {
 		t.Fatalf("err = %v; want ErrTmuxNotAvailable", err)
 	}
