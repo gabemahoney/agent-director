@@ -8,10 +8,12 @@ import (
 )
 
 // SendKeysTmux is the narrow tmux surface SendKeys needs. *tmux.Client
-// satisfies it; tests pass a recording fake that captures each text/Enter
-// argv without launching real tmux.
+// satisfies it; tests pass a recording fake that captures the text +
+// press_enter pair without launching real tmux. The tmux client owns
+// the literal-text-then-Enter sequencing internally — see
+// (*tmux.Client).SendKeys for the wire shape.
 type SendKeysTmux interface {
-	SendKeys(name, text string) error
+	SendKeys(name, text string, pressEnter bool) error
 }
 
 // SendKeysParams is the typed parameter shape for the send-keys verb.
@@ -67,15 +69,10 @@ func SendKeys(s *store.Store, tmux SendKeysTmux, params SendKeysParams) (SendKey
 	}
 
 	cleaned := strings.ReplaceAll(params.Text, "\r", "")
-	if err := tmux.SendKeys(row.TmuxSessionName, cleaned); err != nil {
-		return SendKeysResult{}, err
-	}
-
-	// Enter is delivered as a separate send-keys call so tmux interprets
-	// the literal token as the keysym. Mixing the submit byte into the
-	// text argv would re-introduce the same "premature submission"
-	// failure mode the \r strip prevents.
-	if err := tmux.SendKeys(row.TmuxSessionName, "Enter"); err != nil {
+	// The tmux client handles the literal-text-then-real-Enter split
+	// internally (see (*tmux.Client).SendKeys); the verb hands it the
+	// cleaned text plus pressEnter=true.
+	if err := tmux.SendKeys(row.TmuxSessionName, cleaned, true); err != nil {
 		return SendKeysResult{}, err
 	}
 

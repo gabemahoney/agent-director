@@ -11,10 +11,11 @@ import (
 
 // PauseTmux is the narrow tmux surface Pause needs. *tmux.Client
 // satisfies it; tests pass the same recording fake the send-keys
-// tests use because pause emits two SendKeys calls (`/exit` then
-// Enter) — no other tmux verbs are involved.
+// tests use. pause issues exactly one SendKeys call carrying `/exit`
+// with pressEnter=true — the tmux client owns the literal-text-then-
+// real-Enter split internally.
 type PauseTmux interface {
-	SendKeys(name, text string) error
+	SendKeys(name, text string, pressEnter bool) error
 }
 
 // PauseStore is the narrow store surface Pause needs: a row lookup for
@@ -87,14 +88,9 @@ func Pause(ctx context.Context, s PauseStore, t PauseTmux, cfg config.Pause, par
 			ErrSpawnNotPausable, params.ClaudeInstanceID, row.State)
 	}
 
-	// /exit followed by a separate Enter — matches the send-keys verb's
-	// submit pattern. If the first tmux call fails, propagate the
-	// transport error (caller can't pause without the input call
-	// succeeding).
-	if err := t.SendKeys(row.TmuxSessionName, "/exit"); err != nil {
-		return PauseResult{}, err
-	}
-	if err := t.SendKeys(row.TmuxSessionName, "Enter"); err != nil {
+	// /exit + submit — the tmux client owns the literal-text-then-
+	// real-Enter split internally (see (*tmux.Client).SendKeys).
+	if err := t.SendKeys(row.TmuxSessionName, "/exit", true); err != nil {
 		return PauseResult{}, err
 	}
 

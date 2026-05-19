@@ -44,14 +44,21 @@ func (f *scriptedPauseStore) GetSpawnState(id string) (string, error) {
 }
 
 // pauseTmuxRecorder is the SendKeys-only fake — pause emits exactly
-// two send-keys calls (`/exit` then `Enter`) on the happy path.
+// one SendKeys call (`/exit` with pressEnter=true). The literal-text-
+// then-real-Enter split is owned by *tmux.Client.
 type pauseTmuxRecorder struct {
-	calls [][2]string
+	calls []pauseRecordedSend
 	fail  error
 }
 
-func (p *pauseTmuxRecorder) SendKeys(name, text string) error {
-	p.calls = append(p.calls, [2]string{name, text})
+type pauseRecordedSend struct {
+	name       string
+	text       string
+	pressEnter bool
+}
+
+func (p *pauseTmuxRecorder) SendKeys(name, text string, pressEnter bool) error {
+	p.calls = append(p.calls, pauseRecordedSend{name: name, text: text, pressEnter: pressEnter})
 	return p.fail
 }
 
@@ -111,9 +118,8 @@ func TestPauseWaitingTransitionsToEnded(t *testing.T) {
 		config.Pause{TimeoutSeconds: 10}, api.PauseParams{ClaudeInstanceID: "id-p-3"}); err != nil {
 		t.Fatalf("Pause: %v", err)
 	}
-	want := [][2]string{
-		{"cd-3", "/exit"},
-		{"cd-3", "Enter"},
+	want := []pauseRecordedSend{
+		{name: "cd-3", text: "/exit", pressEnter: true},
 	}
 	if len(tmux.calls) != len(want) {
 		t.Fatalf("tmux calls = %v; want %v", tmux.calls, want)
@@ -263,9 +269,10 @@ func TestPauseSendKeysFailurePropagates(t *testing.T) {
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("err = %v; want sentinel chain", err)
 	}
-	// The first call attempted /exit, second never ran because the
-	// first returned an error.
+	// Exactly one SendKeys attempt — the tmux client owns the
+	// literal-text-then-Enter split internally, so api-side recording
+	// sees a single (failed) call.
 	if len(tmux.calls) != 1 {
-		t.Errorf("send-keys calls = %d; want 1 (only /exit attempted)", len(tmux.calls))
+		t.Errorf("send-keys calls = %d; want 1 (single /exit attempt)", len(tmux.calls))
 	}
 }

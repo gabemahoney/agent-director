@@ -126,17 +126,46 @@ func (c *Client) KillSession(name string) error {
 // ad-hoc targets and accidentally hitting a sibling pane.
 func paneTarget(name string) string { return name + ":0.0" }
 
-// SendKeys delivers text to the named tmux session's first pane via
-// `tmux send-keys -t <name>:0.0 <text>`. text is passed as a single argv
-// element — tmux handles its own quoting, so the caller does not need to
-// shell-escape spaces or special characters. `\r` stripping and the
-// optional trailing Enter are the verb layer's responsibility (SRD §4.3,
-// reference/send-keys-research.md) — this method is the raw tmux wire.
+// SendKeys delivers text to the named tmux session's first pane. The
+// text call uses `-l` (literal) so any argv element that exactly matches
+// a keysym (`Enter`, `Tab`, `C-c`, `BSpace`, …) or starts with `-` is
+// treated as text rather than a key event. Without `-l`, a caller that
+// composes `"Enter the password"` would have tmux fire a real Enter
+// keypress on the first token and submit the buffer prematurely
+// (worse: a Spawn-driving Claude composing a multi-token payload could
+// accidentally fire C-c into the target).
 //
-// On a non-zero tmux exit the error chain contains ErrTmuxSendKeys plus the
-// tmux stderr blob; on a missing tmux binary, ErrTmuxNotAvailable.
-func (c *Client) SendKeys(name, text string) error {
-	out, err := c.run(binaryName, "send-keys", "-t", paneTarget(name), text)
+// When pressEnter is true a SECOND tmux send-keys call (without `-l`)
+// delivers a real `Enter` keystroke as the submit. The split into two
+// calls is deliberate — the trailing Enter must be a real key event so
+// Claude's input handler sees the submit, while the text payload must
+// be literal so its bytes are never interpreted as keystrokes.
+//
+// `\r` stripping in text is the verb layer's responsibility (SRD §4.3,
+// reference/send-keys-research.md).
+//
+// On a non-zero tmux exit the error chain contains ErrTmuxSendKeys plus
+// the tmux stderr blob; on a missing tmux binary, ErrTmuxNotAvailable.
+// If the literal-text call succeeds but the Enter call fails, the
+// buffer is already typed into the pane — the caller observes the
+// error and surfaces it, but the partial state is not rolled back
+// (tmux exposes no atomic "type + submit" primitive).
+func (c *Client) SendKeys(name, text string, pressEnter bool) error {
+	if err := c.sendKeysCall(name, []string{"-l", text}); err != nil {
+		return err
+	}
+	if !pressEnter {
+		return nil
+	}
+	return c.sendKeysCall(name, []string{"Enter"})
+}
+
+// sendKeysCall is the per-invocation wire to tmux send-keys. Factored
+// out so the literal-text and submit-Enter paths share identical error
+// shaping. payload is appended after the -t target argv.
+func (c *Client) sendKeysCall(name string, payload []string) error {
+	args := append([]string{"send-keys", "-t", paneTarget(name)}, payload...)
+	out, err := c.run(binaryName, args...)
 	if err == nil {
 		return nil
 	}

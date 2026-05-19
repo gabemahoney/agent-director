@@ -10,18 +10,25 @@ import (
 	"github.com/gabemahoney/claude-director/internal/store"
 )
 
-// recordingTmux records each (session, text) pair its SendKeys is asked to
-// emit, in order. Programmable failure lets a case prove the verb wires
-// the error chain back to the caller unchanged.
+// recordingTmux records each (session, text, pressEnter) triple its
+// SendKeys is asked to emit, in order. The literal-text-then-real-Enter
+// split is owned by *tmux.Client; the api verb makes exactly one
+// SendKeys call per send-keys invocation.
 type recordingTmux struct {
-	calls   [][2]string
-	failOn  int    // 0-based call index that should return err; -1 to never fail
+	calls   []recordedSend
+	failOn  int // 0-based call index that should return err; -1 to never fail
 	failErr error
 }
 
-func (r *recordingTmux) SendKeys(name, text string) error {
+type recordedSend struct {
+	name       string
+	text       string
+	pressEnter bool
+}
+
+func (r *recordingTmux) SendKeys(name, text string, pressEnter bool) error {
 	idx := len(r.calls)
-	r.calls = append(r.calls, [2]string{name, text})
+	r.calls = append(r.calls, recordedSend{name: name, text: text, pressEnter: pressEnter})
 	if r.failOn >= 0 && idx == r.failOn {
 		return r.failErr
 	}
@@ -71,9 +78,8 @@ func TestSendKeysSingleLineWithEnter(t *testing.T) {
 		t.Fatalf("SendKeys: %v", err)
 	}
 
-	want := [][2]string{
-		{"cd-tmp", "hello"},
-		{"cd-tmp", "Enter"},
+	want := []recordedSend{
+		{name: "cd-tmp", text: "hello", pressEnter: true},
 	}
 	if !reflect.DeepEqual(tmux.calls, want) {
 		t.Fatalf("calls = %v; want %v", tmux.calls, want)
@@ -95,9 +101,8 @@ func TestSendKeysMultilinePreservesLF(t *testing.T) {
 		t.Fatalf("SendKeys: %v", err)
 	}
 
-	want := [][2]string{
-		{"cd-tmp", "line one\nline two"},
-		{"cd-tmp", "Enter"},
+	want := []recordedSend{
+		{name: "cd-tmp", text: "line one\nline two", pressEnter: true},
 	}
 	if !reflect.DeepEqual(tmux.calls, want) {
 		t.Fatalf("calls = %v; want %v", tmux.calls, want)
@@ -120,9 +125,8 @@ func TestSendKeysStripsCR(t *testing.T) {
 	}
 
 	// CR stripped; LF preserved. Composed text is "abcd\nef".
-	want := [][2]string{
-		{"cd-tmp", "abcd\nef"},
-		{"cd-tmp", "Enter"},
+	want := []recordedSend{
+		{name: "cd-tmp", text: "abcd\nef", pressEnter: true},
 	}
 	if !reflect.DeepEqual(tmux.calls, want) {
 		t.Fatalf("calls = %v; want %v", tmux.calls, want)
@@ -193,9 +197,8 @@ func TestSendKeysCheckPermissionWithRelayOff(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SendKeys: %v", err)
 	}
-	want := [][2]string{
-		{"cd-tmp", "1"},
-		{"cd-tmp", "Enter"},
+	want := []recordedSend{
+		{name: "cd-tmp", text: "1", pressEnter: true},
 	}
 	if !reflect.DeepEqual(tmux.calls, want) {
 		t.Fatalf("calls = %v; want %v", tmux.calls, want)
@@ -232,10 +235,11 @@ func TestSendKeysPropagatesTmuxError(t *testing.T) {
 	if !errors.Is(err, errSentinel) {
 		t.Fatalf("err = %v; want errSentinel chain", err)
 	}
-	// The text was attempted; the trailing Enter must NOT have been
-	// emitted (early return on first failure).
+	// Exactly one SendKeys attempt — the tmux client owns the
+	// literal-text-then-Enter split internally now, so api-side
+	// recording sees a single failed call rather than two attempts.
 	if len(tmux.calls) != 1 {
-		t.Fatalf("calls = %v; want exactly 1 (text attempt only)", tmux.calls)
+		t.Fatalf("calls = %v; want exactly 1 (single SendKeys attempt)", tmux.calls)
 	}
 }
 
@@ -260,9 +264,8 @@ func TestSendKeysEmptyTextSubmits(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SendKeys: %v", err)
 	}
-	want := [][2]string{
-		{"cd-tmp", ""},
-		{"cd-tmp", "Enter"},
+	want := []recordedSend{
+		{name: "cd-tmp", text: "", pressEnter: true},
 	}
 	if !reflect.DeepEqual(tmux.calls, want) {
 		t.Fatalf("calls = %v; want %v", tmux.calls, want)

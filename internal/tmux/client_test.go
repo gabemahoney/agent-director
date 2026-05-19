@@ -25,6 +25,24 @@ func (c *captured) runner() runner {
 	}
 }
 
+// multiCaptured is the captured equivalent that retains EVERY runner
+// invocation rather than overwriting on each call. Used to assert the
+// SendKeys orchestration emits both the literal-text call AND the
+// trailing real-Enter call in the right order.
+type multiCaptured struct {
+	calls  [][]string
+	stdout []byte
+	err    error
+}
+
+func (c *multiCaptured) runner() runner {
+	return func(name string, args ...string) ([]byte, error) {
+		argv := append([]string{name}, args...)
+		c.calls = append(c.calls, argv)
+		return c.stdout, c.err
+	}
+}
+
 func TestNewSessionArgvComposition(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -73,28 +91,28 @@ func TestNewSessionArgvComposition(t *testing.T) {
 			wantCmd: []string{"tmux", "list-panes", "-t", "foo", "-F", "#{pane_pid}"},
 		},
 		{
-			name: "send-keys with a space-bearing string lands as one argv element",
+			name: "send-keys text-only uses -l (literal) so a keysym-like word doesn't fire as a keystroke",
 			fn: func(c *Client) error {
-				return c.SendKeys("foo", "hello world")
+				return c.SendKeys("foo", "hello world", false)
 			},
-			wantCmd: []string{"tmux", "send-keys", "-t", "foo:0.0", "hello world"},
+			wantCmd: []string{"tmux", "send-keys", "-t", "foo:0.0", "-l", "hello world"},
 		},
 		{
-			name: "send-keys preserves an embedded literal newline in one argv element",
+			name: "send-keys text-only preserves an embedded literal newline in one argv element",
 			fn: func(c *Client) error {
-				return c.SendKeys("foo", "multi\nline\ntext")
+				return c.SendKeys("foo", "multi\nline\ntext", false)
 			},
-			wantCmd: []string{"tmux", "send-keys", "-t", "foo:0.0", "multi\nline\ntext"},
+			wantCmd: []string{"tmux", "send-keys", "-t", "foo:0.0", "-l", "multi\nline\ntext"},
 		},
 		{
-			name: "send-keys passes the literal Enter token through as the text argv",
+			name: "send-keys text that looks like a keysym is forced literal by -l",
 			fn: func(c *Client) error {
-				// The verb layer composes Enter as a separate send-keys
-				// call; this case pins that the client does not transform
-				// the string "Enter" — tmux interprets it as the keysym.
-				return c.SendKeys("foo", "Enter")
+				// Pre-fix this fired a real Enter keystroke and would
+				// have submitted whatever else was in the input buffer.
+				// `-l` keeps it text.
+				return c.SendKeys("foo", "Enter", false)
 			},
-			wantCmd: []string{"tmux", "send-keys", "-t", "foo:0.0", "Enter"},
+			wantCmd: []string{"tmux", "send-keys", "-t", "foo:0.0", "-l", "Enter"},
 		},
 		{
 			name: "capture-pane with ansi=false omits -e (tmux strips escapes by default)",
@@ -133,6 +151,62 @@ func TestNewSessionArgvComposition(t *testing.T) {
 				t.Fatalf("argv mismatch\n got=%v\nwant=%v", cap.args, tc.wantCmd)
 			}
 		})
+	}
+}
+
+// TestSendKeysEmitsLiteralTextThenRealEnter pins the bug-fixed wire
+// shape: the literal text call uses `-l` (so a keysym-shaped token
+// like "Enter the password" is text, not a real Enter event), and the
+// trailing submit call is a separate send-keys invocation WITHOUT `-l`
+// so tmux interprets `Enter` as the keysym.
+//
+// Pre-fix, a single un-l'd call would have made tmux fire a real Enter
+// on the first matching token and submit a partial buffer.
+func TestSendKeysEmitsLiteralTextThenRealEnter(t *testing.T) {
+	cap := &multiCaptured{}
+	c := &Client{run: cap.runner()}
+	if err := c.SendKeys("foo", "Enter the password", true); err != nil {
+		t.Fatalf("SendKeys: %v", err)
+	}
+
+	want := [][]string{
+		{"tmux", "send-keys", "-t", "foo:0.0", "-l", "Enter the password"},
+		{"tmux", "send-keys", "-t", "foo:0.0", "Enter"},
+	}
+	if !reflect.DeepEqual(cap.calls, want) {
+		t.Fatalf("argv mismatch\n got=%v\nwant=%v", cap.calls, want)
+	}
+}
+
+// TestSendKeysOmitsEnterCallWhenPressEnterFalse pins that pressEnter=false
+// suppresses the second tmux send-keys invocation — useful for callers
+// that want to compose text into the input buffer without submitting.
+func TestSendKeysOmitsEnterCallWhenPressEnterFalse(t *testing.T) {
+	cap := &multiCaptured{}
+	c := &Client{run: cap.runner()}
+	if err := c.SendKeys("foo", "draft text", false); err != nil {
+		t.Fatalf("SendKeys: %v", err)
+	}
+
+	want := [][]string{
+		{"tmux", "send-keys", "-t", "foo:0.0", "-l", "draft text"},
+	}
+	if !reflect.DeepEqual(cap.calls, want) {
+		t.Fatalf("argv mismatch\n got=%v\nwant=%v", cap.calls, want)
+	}
+}
+
+// TestSendKeysFirstCallFailureSkipsEnter pins that if the literal-text
+// call returns an error, the trailing Enter call is NOT issued — the
+// caller should never see a stray submit after a typing failure.
+func TestSendKeysFirstCallFailureSkipsEnter(t *testing.T) {
+	cap := &multiCaptured{err: &exec.ExitError{}, stdout: []byte("can't find pane")}
+	c := &Client{run: cap.runner()}
+	if err := c.SendKeys("foo", "hi", true); err == nil {
+		t.Fatalf("SendKeys returned nil; want a tmux error")
+	}
+	if len(cap.calls) != 1 {
+		t.Fatalf("expected exactly 1 tmux call after first-call failure; got %d (%v)", len(cap.calls), cap.calls)
 	}
 }
 
@@ -237,7 +311,7 @@ func TestSendKeysWrapsTmuxFailure(t *testing.T) {
 		err:    &exec.ExitError{},
 	}
 	c := &Client{run: cap.runner()}
-	err := c.SendKeys("foo", "hi")
+	err := c.SendKeys("foo", "hi", false)
 	if !errors.Is(err, ErrTmuxSendKeys) {
 		t.Fatalf("err = %v; want ErrTmuxSendKeys", err)
 	}
@@ -262,7 +336,7 @@ func TestSendKeysMapsExecMissingToTmuxNotAvailable(t *testing.T) {
 	cap := &captured{err: fmt.Errorf("%w: %v",
 		ErrTmuxNotAvailable, &exec.Error{Name: "tmux", Err: exec.ErrNotFound})}
 	c := &Client{run: cap.runner()}
-	err := c.SendKeys("foo", "hi")
+	err := c.SendKeys("foo", "hi", false)
 	if !errors.Is(err, ErrTmuxNotAvailable) {
 		t.Fatalf("err = %v; want ErrTmuxNotAvailable", err)
 	}
