@@ -163,6 +163,28 @@ func parseReadPaneFlags(args []string) (api.ReadPaneParams, error) {
 	return p, nil
 }
 
+// killHandlerWith implements `claude-director kill`. The verb is
+// idempotent on terminal states and swallows tmux failures (see
+// api.Kill); the CLI surface is therefore intentionally narrow.
+func killHandlerWith(st *store.Store, args []string) error {
+	var p api.KillParams
+	fs := flag.NewFlagSet("kill", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the Spawn to kill")
+	if err := fs.Parse(args); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+	}
+	if p.ClaudeInstanceID == "" {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", "--claude-instance-id is required")
+	}
+	result, err := api.Kill(st, tmuxClient, p)
+	if err != nil {
+		name, desc := classifyError(err)
+		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+	}
+	return writeJSON(os.Stdout, result)
+}
+
 // getHandlerWith implements `claude-director get`.
 func getHandlerWith(st *store.Store, args []string) error {
 	var id string

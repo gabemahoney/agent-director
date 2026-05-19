@@ -5,8 +5,8 @@
 //
 // Behavior:
 //   - argv[0] basename "tmux" + first argv in {"new-session", "send-keys",
-//     "capture-pane"} → write argv to $FAKE_TMUX_LOG (one argv element per
-//     line, then a "---" record separator) and exit 0.
+//     "capture-pane", "kill-session"} → write argv to $FAKE_TMUX_LOG (one
+//     argv element per line, then a "---" record separator) and exit 0.
 //   - "capture-pane" additionally writes $FAKE_TMUX_PANE_OUTPUT (or a
 //     deterministic stub when unset) to stdout so callers can exercise
 //     read-pane's bytes-back path.
@@ -40,7 +40,7 @@ func main() {
 	}
 
 	switch sub {
-	case "new-session", "send-keys":
+	case "new-session", "send-keys", "kill-session":
 		logArgv()
 	case "capture-pane":
 		logArgv()

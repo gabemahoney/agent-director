@@ -246,6 +246,22 @@ var Verbs = []VerbDef{
 		},
 	},
 	{
+		Name:        "kill",
+		Description: "Terminate the Spawn's tmux session. Idempotent on terminal states (ended/missing). Does NOT promise state cleanup — the row stays in its prior state until find-missing reconciles it.",
+		Params: []ParamDef{
+			{
+				Name:        "claude_instance_id",
+				Type:        "string",
+				Description: "Id of the Spawn to kill.",
+				Required:    true,
+			},
+		},
+		ResultFields: []FieldDef{},
+		ErrorNames: []string{
+			"ErrSpawnNotFound",
+		},
+	},
+	{
 		Name:        "hook",
 		Description: "Internal: invoked by Claude Code on lifecycle events via the per-Spawn --settings hooks. Reads payload JSON from stdin, writes a row UPSERT, exits 0 (state-tracking fail-open).",
 		Params: []ParamDef{

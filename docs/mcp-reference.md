@@ -137,6 +137,22 @@ Capture the last N lines of a tracked Spawn's tmux pane. Default 25 lines, no up
 - `ErrTmuxNotAvailable`
 - `ErrTmuxCaptureFailed`
 
+## Tool: kill
+
+Terminate the Spawn's tmux session. Idempotent on terminal states (ended/missing). Does NOT promise state cleanup — the row stays in its prior state until find-missing reconciles it.
+
+### Input schema
+
+- `claude_instance_id`: type=string, required=true — Id of the Spawn to kill.
+
+### Output schema
+
+- (no output fields)
+
+### Errors
+
+- `ErrSpawnNotFound`
+
 ## Tool: hook
 
 Internal: invoked by Claude Code on lifecycle events via the per-Spawn --settings hooks. Reads payload JSON from stdin, writes a row UPSERT, exits 0 (state-tracking fail-open).
