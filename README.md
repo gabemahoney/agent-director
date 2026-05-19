@@ -43,18 +43,18 @@ up `state.db`, and installs the SessionStart/SessionEnd help hooks.
 Optionally pass `--register-mcp` to also register the stdio MCP server.
 
 If you'd rather download the binary yourself first (and then point
-the installer at it), grab the asset for your platform from
-[v0.1.0](https://github.com/gabemahoney/claude-director/releases/tag/v0.1.0):
+the installer at it), grab the asset for your platform from the
+[latest release](https://github.com/gabemahoney/claude-director/releases/latest):
 
 ```sh
 # Linux amd64:
-curl -L -o claude-director https://github.com/gabemahoney/claude-director/releases/download/v0.1.0/claude-director-linux-amd64
+curl -L -o claude-director https://github.com/gabemahoney/claude-director/releases/latest/download/claude-director-linux-amd64
 # Linux arm64:
-curl -L -o claude-director https://github.com/gabemahoney/claude-director/releases/download/v0.1.0/claude-director-linux-arm64
+curl -L -o claude-director https://github.com/gabemahoney/claude-director/releases/latest/download/claude-director-linux-arm64
 # macOS Intel:
-curl -L -o claude-director https://github.com/gabemahoney/claude-director/releases/download/v0.1.0/claude-director-darwin-amd64
+curl -L -o claude-director https://github.com/gabemahoney/claude-director/releases/latest/download/claude-director-darwin-amd64
 # macOS Apple Silicon:
-curl -L -o claude-director https://github.com/gabemahoney/claude-director/releases/download/v0.1.0/claude-director-darwin-arm64
+curl -L -o claude-director https://github.com/gabemahoney/claude-director/releases/latest/download/claude-director-darwin-arm64
 
 chmod +x claude-director
 bash skills/install-claude-director/install.sh --binary ./claude-director
