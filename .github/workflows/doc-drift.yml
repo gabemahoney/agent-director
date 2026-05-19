@@ -1,0 +1,24 @@
+name: doc-drift
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  doc-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+      - name: Regenerate docs
+        run: make generate
+      - name: Check for drift
+        run: |
+          if ! git diff --exit-code docs/; then
+            echo "::error::Generated docs are out of date. Run 'make generate' locally and commit the result."
+            git diff docs/
+            exit 1
+          fi
