@@ -29,9 +29,35 @@ SQLite file; everything else is tmux.
 
 ### Install
 
+Quickest path — `install.sh --from-release` auto-detects your OS/arch
+and downloads the matching binary from GitHub Releases:
+
 ```sh
-make build
-skills/install-claude-director/install.sh
+curl -fsSL https://raw.githubusercontent.com/gabemahoney/claude-director/main/skills/install-claude-director/install.sh \
+  -o /tmp/install-claude-director.sh
+bash /tmp/install-claude-director.sh --from-release
+```
+
+The script sets up `~/.claude-director/`, drops a PATH symlink, warms
+up `state.db`, and installs the SessionStart/SessionEnd help hooks.
+Optionally pass `--register-mcp` to also register the stdio MCP server.
+
+If you'd rather download the binary yourself first (and then point
+the installer at it), grab the asset for your platform from
+[v0.1.0](https://github.com/gabemahoney/claude-director/releases/tag/v0.1.0):
+
+```sh
+# Linux amd64:
+curl -L -o claude-director https://github.com/gabemahoney/claude-director/releases/download/v0.1.0/claude-director-linux-amd64
+# Linux arm64:
+curl -L -o claude-director https://github.com/gabemahoney/claude-director/releases/download/v0.1.0/claude-director-linux-arm64
+# macOS Intel:
+curl -L -o claude-director https://github.com/gabemahoney/claude-director/releases/download/v0.1.0/claude-director-darwin-amd64
+# macOS Apple Silicon:
+curl -L -o claude-director https://github.com/gabemahoney/claude-director/releases/download/v0.1.0/claude-director-darwin-arm64
+
+chmod +x claude-director
+bash skills/install-claude-director/install.sh --binary ./claude-director
 ```
 
 Optional flags:
@@ -43,15 +69,19 @@ Optional flags:
   OS/arch from GitHub Releases (latest, or a specific tag) and install
   it. Pair with `--sha256 <hex>` to verify the download.
 
-<!-- TODO(b.xor): once v0.1.0 is published to GitHub Releases, replace
-     the lead `make build` snippet above with the curl one-liner:
+#### From source (contributors)
 
-       curl -fsSL https://raw.githubusercontent.com/gabemahoney/claude-director/main/skills/install-claude-director/install.sh \
-         -o /tmp/install-claude-director.sh
-       bash /tmp/install-claude-director.sh --from-release
+If you've cloned this repo and want to install the binary you just
+built:
 
-     The from-source snippet stays as a secondary option for
-     contributors and operators who want to build from a checkout. -->
+```sh
+make build
+bash skills/install-claude-director/install.sh --binary ./bin/claude-director
+```
+
+`install.sh` version-checks the local binary against `git rev-parse HEAD`
+and refuses option `--binary` if the artifact is stale — re-run
+`make build` to refresh it.
 
 
 ### First spawn
