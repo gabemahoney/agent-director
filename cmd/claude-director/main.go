@@ -11,10 +11,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 
 	"github.com/gabemahoney/claude-director/internal/api"
 	"github.com/gabemahoney/claude-director/internal/config"
+	"github.com/gabemahoney/claude-director/internal/hook"
 	"github.com/gabemahoney/claude-director/internal/store"
 )
 
@@ -51,6 +53,74 @@ func handlers() map[string]func([]string) error {
 		"help":   helpHandler,
 		"--help": helpHandler,
 	}
+}
+
+// hookExitCode is the exit code the hook verb always uses.
+//
+// State-tracking hooks fail-open per SRD §3.2: any internal failure logs
+// to the error log and the process exits 0 with no stdout. The relay-mode
+// permission decision envelope (Epic 10) will branch off this contract;
+// for Epic 3 every hook event takes the state-tracking fail-open path.
+const hookExitCode = 0
+
+// runHook is the hook-verb entry point. It is invoked directly from run()
+// before the normal store-setup-and-dispatch path so that *every* failure
+// mode (missing config, store open failure, malformed payload, DB
+// unreachable) yields exit 0 with empty stdout. State-tracking hooks
+// MUST NOT block Claude Code.
+//
+// The function never returns an error; it logs and returns.
+func runHook() int {
+	logger := newHookLogger()
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		// Fail-open: log and exit 0. Config malformed cannot block Claude.
+		hookLog(logger, "hook: load config: %v", err)
+		return hookExitCode
+	}
+	st, err := store.Open(cfg.Store.DbPath)
+	if err != nil {
+		hookLog(logger, "hook: open store: %v", err)
+		return hookExitCode
+	}
+	defer st.Close()
+
+	if err := hook.Handle(os.Stdin, hook.OSGetenv, st, logger); err != nil {
+		hookLog(logger, "hook: handle: %v", err)
+	}
+	return hookExitCode
+}
+
+// newHookLogger opens the configured error_log_path (best-effort) and
+// returns a *log.Logger writing to it. On any open failure it falls back
+// to stderr — the hook MUST still log somewhere because diagnostic
+// silence on the hot path is harder to debug than a stderr blast.
+func newHookLogger() *log.Logger {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return log.New(os.Stderr, "claude-director-hook ", log.LstdFlags)
+	}
+	if cfg.Log.ErrorLogPath == "" {
+		return log.New(os.Stderr, "claude-director-hook ", log.LstdFlags)
+	}
+	f, err := os.OpenFile(cfg.Log.ErrorLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return log.New(os.Stderr, "claude-director-hook ", log.LstdFlags)
+	}
+	// Best-effort: the file is intentionally leaked for the lifetime of
+	// the hook fire (short-lived process; the OS reclaims the fd on exit).
+	return log.New(f, "claude-director-hook ", log.LstdFlags)
+}
+
+// hookLog is a small wrapper so the hook code path uses one log-line
+// format consistently. Callers pass nil for logger only in tests; in
+// production newHookLogger always returns a non-nil *log.Logger.
+func hookLog(logger *log.Logger, format string, args ...any) {
+	if logger == nil {
+		return
+	}
+	logger.Printf(format, args...)
 }
 
 // helpResult is the top-level JSON envelope for the help verb. The single
@@ -155,7 +225,16 @@ func setupStore() (*store.Store, error) {
 // Startup wiring (config + store) runs on every invocation — including
 // `help` — to satisfy Epic 1 AC #4 (idempotent dir/file creation) and
 // AC #5 (ErrSchemaMismatch surfaces).
+//
+// The hook verb is special-cased: it bypasses the normal store-setup-and-
+// dispatch path so every failure mode is fail-open per SRD §3.2. The
+// branch is keyed off os.Args[1] before anything else so a missing
+// config or broken DB cannot block Claude Code's hook fire.
 func run() int {
+	if len(os.Args) > 1 && os.Args[1] == "hook" {
+		return runHook()
+	}
+
 	st, err := setupStore()
 	if err != nil {
 		if errors.Is(err, errDispatch) {
