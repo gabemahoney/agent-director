@@ -17,3 +17,97 @@ _None._
 ### Errors
 
 _None._
+
+## spawn
+
+Launch a tracked Claude Code instance inside a new tmux session. Fire-and-forget: returns the claude_instance_id; state moves from pending to waiting on the first SessionStart hook.
+
+### Parameters
+
+- `cwd` (string, required): Absolute (or ~/-prefixed) path the Spawn's Claude starts in. Required.
+- `template` (string, optional): Optional named template under ~/.claude-director/templates/. Epic 7 wires the real template merge.
+- `claude_instance_id` (string, optional): Optional explicit id (UUID4 minted when absent). Collision against a live row returns ErrInstanceIdCollision.
+- `label` ([]string (k=v), optional): Repeated KEY=VALUE pairs. Each becomes CLAUDE_DIRECTOR_LABEL_<UPPER_KEY> on the session env and persists in labels.
+- `allow` ([]string, optional): Repeated permissions.allow entries concatenated with the user / project tiers.
+- `deny` ([]string, optional): Repeated permissions.deny entries concatenated with the user / project tiers.
+- `ask` ([]string, optional): Repeated permissions.ask entries concatenated with the user / project tiers.
+- `relay-mode` (string, optional): on / off. Empty falls back to config defaults.relay_mode (default off).
+- `extra-env` ([]string (K=V), optional): Repeated KEY=VALUE pairs injected on the tmux session env. Reserved keys (CLAUDE_DIRECTOR_*) rejected; auth env vars (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN) allowed.
+- `claude_args` ([]string (after --), optional): Pass-through argv to `claude` after the supervisor's own flags. Denied: --settings, --resume, --continue, --print, --output-format.
+
+### Result
+
+- `claude_instance_id` (string): The id (caller-supplied or freshly-minted UUID4) the row is tracked under.
+
+### Errors
+
+- `ErrCwdMissing`
+- `ErrCwdNotAPath`
+- `ErrCwdNotFound`
+- `ErrCwdNotADirectory`
+- `ErrRelayModeInvalid`
+- `ErrSpawnDeniedFlag`
+- `ErrReservedEnvKey`
+- `ErrInstanceIdCollision`
+- `ErrTmuxNotAvailable`
+- `ErrTmuxSessionCreate`
+
+## status
+
+Return the current state of a tracked Spawn (pending/waiting/working/ask_user/check_permission/ended/missing).
+
+### Parameters
+
+- `claude_instance_id` (string, required): Id of the Spawn to inspect.
+
+### Result
+
+- `state` (string): Current state column value.
+
+### Errors
+
+- `ErrSpawnNotFound`
+
+## get
+
+Return the full DB row for a tracked Spawn (id, parent, state, cwd, session name, args, relay mode, session_id, labels, timestamps).
+
+### Parameters
+
+- `claude_instance_id` (string, required): Id of the Spawn to fetch.
+
+### Result
+
+- `claude_instance_id` (string): Stable id of the Spawn.
+- `parent_id` (string): Parent Spawn id (CLAUDE_DIRECTOR_INSTANCE_ID env at spawn time), empty when launched by a human shell.
+- `state` (string): Current state column value.
+- `cwd` (string): Canonicalized cwd.
+- `tmux_session_name` (string): tmux session under which the Spawn is running.
+- `claude_args` ([]string): Verbatim argv passed through to claude after --settings.
+- `relay_mode` (string): on / off.
+- `jsonl_path` (string): Last known transcript path (populated by Epic 9).
+- `claude_session_id` (string): Claude Code session UUID, extracted from SessionStart hook's transcript_path.
+- `labels` (map[string]string): Caller-supplied labels.
+- `started_at` (timestamp): Row insert time.
+- `last_seen_at` (timestamp): Last hook UPSERT time.
+- `ended_at` (timestamp?): Set when state moves to ended (omitted while live).
+
+### Errors
+
+- `ErrSpawnNotFound`
+
+## hook
+
+Internal: invoked by Claude Code on lifecycle events via the per-Spawn --settings hooks. Reads payload JSON from stdin, writes a row UPSERT, exits 0 (state-tracking fail-open).
+
+### Parameters
+
+- `stdin` (json, required): Claude Code hook payload (hook_event_name, transcript_path, tool_name, reason, ...).
+
+### Result
+
+_None._
+
+### Errors
+
+_None._

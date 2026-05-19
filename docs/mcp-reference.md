@@ -17,3 +17,97 @@ Print the manifest-derived list of verbs as JSON; intended for SessionStart / Se
 ### Errors
 
 - (none)
+
+## Tool: spawn
+
+Launch a tracked Claude Code instance inside a new tmux session. Fire-and-forget: returns the claude_instance_id; state moves from pending to waiting on the first SessionStart hook.
+
+### Input schema
+
+- `cwd`: type=string, required=true — Absolute (or ~/-prefixed) path the Spawn's Claude starts in. Required.
+- `template`: type=string, required=false — Optional named template under ~/.claude-director/templates/. Epic 7 wires the real template merge.
+- `claude_instance_id`: type=string, required=false — Optional explicit id (UUID4 minted when absent). Collision against a live row returns ErrInstanceIdCollision.
+- `label`: type=[]string (k=v), required=false — Repeated KEY=VALUE pairs. Each becomes CLAUDE_DIRECTOR_LABEL_<UPPER_KEY> on the session env and persists in labels.
+- `allow`: type=[]string, required=false — Repeated permissions.allow entries concatenated with the user / project tiers.
+- `deny`: type=[]string, required=false — Repeated permissions.deny entries concatenated with the user / project tiers.
+- `ask`: type=[]string, required=false — Repeated permissions.ask entries concatenated with the user / project tiers.
+- `relay-mode`: type=string, required=false — on / off. Empty falls back to config defaults.relay_mode (default off).
+- `extra-env`: type=[]string (K=V), required=false — Repeated KEY=VALUE pairs injected on the tmux session env. Reserved keys (CLAUDE_DIRECTOR_*) rejected; auth env vars (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN) allowed.
+- `claude_args`: type=[]string (after --), required=false — Pass-through argv to `claude` after the supervisor's own flags. Denied: --settings, --resume, --continue, --print, --output-format.
+
+### Output schema
+
+- `claude_instance_id`: type=string — The id (caller-supplied or freshly-minted UUID4) the row is tracked under.
+
+### Errors
+
+- `ErrCwdMissing`
+- `ErrCwdNotAPath`
+- `ErrCwdNotFound`
+- `ErrCwdNotADirectory`
+- `ErrRelayModeInvalid`
+- `ErrSpawnDeniedFlag`
+- `ErrReservedEnvKey`
+- `ErrInstanceIdCollision`
+- `ErrTmuxNotAvailable`
+- `ErrTmuxSessionCreate`
+
+## Tool: status
+
+Return the current state of a tracked Spawn (pending/waiting/working/ask_user/check_permission/ended/missing).
+
+### Input schema
+
+- `claude_instance_id`: type=string, required=true — Id of the Spawn to inspect.
+
+### Output schema
+
+- `state`: type=string — Current state column value.
+
+### Errors
+
+- `ErrSpawnNotFound`
+
+## Tool: get
+
+Return the full DB row for a tracked Spawn (id, parent, state, cwd, session name, args, relay mode, session_id, labels, timestamps).
+
+### Input schema
+
+- `claude_instance_id`: type=string, required=true — Id of the Spawn to fetch.
+
+### Output schema
+
+- `claude_instance_id`: type=string — Stable id of the Spawn.
+- `parent_id`: type=string — Parent Spawn id (CLAUDE_DIRECTOR_INSTANCE_ID env at spawn time), empty when launched by a human shell.
+- `state`: type=string — Current state column value.
+- `cwd`: type=string — Canonicalized cwd.
+- `tmux_session_name`: type=string — tmux session under which the Spawn is running.
+- `claude_args`: type=[]string — Verbatim argv passed through to claude after --settings.
+- `relay_mode`: type=string — on / off.
+- `jsonl_path`: type=string — Last known transcript path (populated by Epic 9).
+- `claude_session_id`: type=string — Claude Code session UUID, extracted from SessionStart hook's transcript_path.
+- `labels`: type=map[string]string — Caller-supplied labels.
+- `started_at`: type=timestamp — Row insert time.
+- `last_seen_at`: type=timestamp — Last hook UPSERT time.
+- `ended_at`: type=timestamp? — Set when state moves to ended (omitted while live).
+
+### Errors
+
+- `ErrSpawnNotFound`
+
+## Tool: hook
+
+Internal: invoked by Claude Code on lifecycle events via the per-Spawn --settings hooks. Reads payload JSON from stdin, writes a row UPSERT, exits 0 (state-tracking fail-open).
+
+### Input schema
+
+- `stdin`: type=json, required=true — Claude Code hook payload (hook_event_name, transcript_path, tool_name, reason, ...).
+
+### Output schema
+
+- (no output fields)
+
+### Errors
+
+- (none)

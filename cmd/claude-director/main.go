@@ -48,10 +48,20 @@ const configPath = "~/.claude-director/config.toml"
 
 // handlers maps verb names to their implementations. `help` and `--help`
 // route to the same function so their stdout is byte-identical (SRD §12.3).
-func handlers() map[string]func([]string) error {
+// st + cfg are captured in closures so each verb sees the same already-
+// opened store / loaded config — opening twice would be wasteful and risk
+// divergence between run()'s startup and a verb's view of the world.
+//
+// `hook` is intentionally NOT in this table — runHook() short-circuits
+// the dispatch loop before setupStore() so hook fires can't be blocked
+// by config/store failures (SRD §3.2 fail-open invariant).
+func handlers(st *store.Store, cfg config.Config) map[string]func([]string) error {
 	return map[string]func([]string) error{
 		"help":   helpHandler,
 		"--help": helpHandler,
+		"spawn":  func(args []string) error { return spawnHandlerWith(st, cfg, args) },
+		"status": func(args []string) error { return statusHandlerWith(st, args) },
+		"get":    func(args []string) error { return getHandlerWith(st, args) },
 	}
 }
 
@@ -188,19 +198,21 @@ func dispatch(argv []string, table map[string]func([]string) error) error {
 	return handler(argv[1:])
 }
 
-// setupStore loads config and opens the store, applying Epic 1 AC #4
-// (idempotent dir/file creation at 0700/0600) and AC #5
-// (ErrSchemaMismatch surfaces as JSON on stderr).
+// setupStoreAndCfg loads config and opens the store, applying Epic 1
+// AC #4 (idempotent dir/file creation at 0700/0600) and AC #5
+// (ErrSchemaMismatch surfaces as JSON on stderr). The Config is
+// returned alongside so verb handlers can see the same view startup
+// observed.
 //
 // On any error it writes the JSON envelope to stderr and returns
 // errDispatch so run() can exit non-zero without double-printing.
-func setupStore() (*store.Store, error) {
+func setupStoreAndCfg() (*store.Store, config.Config, error) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		if werr := writeError(os.Stderr, errConfigMalformed, err.Error()); werr != nil {
-			return nil, werr
+			return nil, config.Config{}, werr
 		}
-		return nil, errDispatch
+		return nil, config.Config{}, errDispatch
 	}
 
 	// config.Load fully resolves path fields (SRD §11), so DbPath is already
@@ -212,11 +224,11 @@ func setupStore() (*store.Store, error) {
 			name = "ErrSchemaMismatch"
 		}
 		if werr := writeError(os.Stderr, name, err.Error()); werr != nil {
-			return nil, werr
+			return nil, config.Config{}, werr
 		}
-		return nil, errDispatch
+		return nil, config.Config{}, errDispatch
 	}
-	return st, nil
+	return st, cfg, nil
 }
 
 // run is the testable body of main. Returning an int lets main use
@@ -235,7 +247,7 @@ func run() int {
 		return runHook()
 	}
 
-	st, err := setupStore()
+	st, cfg, err := setupStoreAndCfg()
 	if err != nil {
 		if errors.Is(err, errDispatch) {
 			return 1
@@ -245,7 +257,7 @@ func run() int {
 	}
 	defer st.Close()
 
-	if err := dispatch(os.Args[1:], handlers()); err != nil {
+	if err := dispatch(os.Args[1:], handlers(st, cfg)); err != nil {
 		if errors.Is(err, errDispatch) {
 			return 1
 		}

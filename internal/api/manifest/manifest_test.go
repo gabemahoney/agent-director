@@ -7,15 +7,43 @@ import (
 	"github.com/gabemahoney/claude-director/internal/api/manifest"
 )
 
-// TestVerbsHasExactlyOneEntry asserts the manifest is bootstrap-sized. When
-// Epic 2+ workers add their first verb this will fail — that's the intended
-// signal to update this expectation and the rest of the test surface.
-func TestVerbsHasExactlyOneEntry(t *testing.T) {
-	if got, want := len(manifest.Verbs), 1; got != want {
-		t.Fatalf("len(manifest.Verbs) = %d, want %d", got, want)
+// TestVerbsContainsEpic3Surface confirms the manifest now carries the
+// Epic 3 verbs (spawn, status, get, hook) alongside the bootstrap help
+// entry. Future Epics that add verbs append to this list; mismatches
+// here are the canary that catches a missing manifest entry.
+func TestVerbsContainsEpic3Surface(t *testing.T) {
+	want := []string{"help", "spawn", "status", "get", "hook"}
+	if got := len(manifest.Verbs); got != len(want) {
+		t.Fatalf("len(manifest.Verbs) = %d, want %d (names %v)", got, len(want), want)
 	}
-	if got, want := manifest.Verbs[0].Name, "help"; got != want {
-		t.Fatalf("manifest.Verbs[0].Name = %q, want %q", got, want)
+	for i, name := range want {
+		if manifest.Verbs[i].Name != name {
+			t.Errorf("manifest.Verbs[%d].Name = %q, want %q", i, manifest.Verbs[i].Name, name)
+		}
+	}
+}
+
+// TestSpawnHasAllSRDErrorNames asserts the spawn entry advertises every
+// validation / launch error name from SRD §13.1. Doc drift CI catches the
+// reference-doc side; this test pins the source-of-truth side.
+func TestSpawnHasAllSRDErrorNames(t *testing.T) {
+	v, ok := manifest.Lookup("spawn")
+	if !ok {
+		t.Fatal("spawn not in manifest")
+	}
+	want := []string{
+		"ErrCwdMissing", "ErrCwdNotAPath", "ErrCwdNotFound", "ErrCwdNotADirectory",
+		"ErrRelayModeInvalid", "ErrSpawnDeniedFlag", "ErrReservedEnvKey",
+		"ErrInstanceIdCollision", "ErrTmuxNotAvailable", "ErrTmuxSessionCreate",
+	}
+	have := map[string]bool{}
+	for _, n := range v.ErrorNames {
+		have[n] = true
+	}
+	for _, n := range want {
+		if !have[n] {
+			t.Errorf("spawn.ErrorNames missing %q", n)
+		}
 	}
 }
 
