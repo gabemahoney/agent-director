@@ -670,11 +670,8 @@ decide allow/deny out-of-band. Conceptually:
 
 The per-iteration sleep is
 `max(50ms, cfg.PollBaseMs + uniform(0, cfg.PollJitterMs))`. SRD §6.2
-specifies the floor explicitly so a misconfigured 0+0 config can't
-pin CPU. The default config (`100ms + 0..100ms`) gives ~150-200ms
-average iterations — fast enough that human-driven decide calls
-land within a frame of UI rendering, slow enough that the SQLite
-read budget is unimportant.
+specifies the floor explicitly so a misconfigured 0+0 config cannot
+pin CPU. Default: `100ms + 0..100ms`.
 
 ### Fail-closed boundary
 
@@ -695,16 +692,6 @@ config can't be loaded or the store can't be opened, runHook itself
 writes the deny envelope before returning. This is the SRD §6.5
 "env-var, not DB" guarantee — even a store-open failure on a
 relay-on Spawn still surfaces deny.
-
-### Why DELETE-INSERT, not UPSERT-via-INSERT-OR-REPLACE
-
-The two-statement DELETE+INSERT inside one transaction is the
-simpler form: the UNIQUE constraint stays on, and the only
-observable in-flight state is "no row" (which the polling loop
-catches via `sql.ErrNoRows`). `INSERT OR REPLACE` works in SQLite
-but interacts oddly with the `ON DELETE CASCADE` FK on
-`permission_requests` and doesn't reset `created_at` cleanly without
-explicit column lists.
 
 ### Send-keys interaction
 

@@ -54,7 +54,12 @@ func runRelay(
 	raw json.RawMessage,
 ) {
 	var pp permissionPayload
-	_ = json.Unmarshal(raw, &pp)
+	if err := json.Unmarshal(raw, &pp); err != nil {
+		// We still continue (fail-closed-deny is emitted at the bottom of
+		// the runRelay path if UpsertOpenPermissionRequest can't proceed),
+		// but log so a post-mortem can see why an audit row is blank.
+		logf(logger, "relay: unmarshal payload (instance=%s): %v", instanceID, err)
+	}
 	toolInput := string(pp.ToolInput)
 	if toolInput == "" {
 		toolInput = "null"

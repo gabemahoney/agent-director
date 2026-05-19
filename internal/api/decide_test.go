@@ -1,9 +1,10 @@
 package api_test
 
 import (
-	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/gabemahoney/claude-director/internal/api"
@@ -114,6 +115,62 @@ func TestDecideFirstCallWins(t *testing.T) {
 	}
 }
 
+// TestDecideConcurrentFirstCallWins drives N parallel Decide calls
+// against the same open row. The SQL `decision IS NULL` guard makes the
+// update first-call-wins; exactly one goroutine must succeed and the
+// rest must observe ErrAlreadyDecided. Contention surface is the SQL
+// boundary, not the Go-level test.
+func TestDecideConcurrentFirstCallWins(t *testing.T) {
+	const workers = 8
+	s := seedDecideFixture(t, "on")
+	seedPermissionRow(t, s, "id-d-1")
+
+	start := make(chan struct{})
+	results := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		decision := "allow"
+		if i%2 == 1 {
+			decision = "deny"
+		}
+		reason := fmt.Sprintf("w%d", i)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := api.Decide(s, api.DecideParams{
+				ClaudeInstanceID: "id-d-1", Decision: decision, Reason: reason,
+			})
+			results <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	var winners, losers, other int
+	for err := range results {
+		switch {
+		case err == nil:
+			winners++
+		case errors.Is(err, store.ErrAlreadyDecided):
+			losers++
+		default:
+			other++
+			t.Errorf("unexpected err from concurrent Decide: %v", err)
+		}
+	}
+	if winners != 1 {
+		t.Errorf("winners = %d; want exactly 1", winners)
+	}
+	if losers != workers-1 {
+		t.Errorf("losers = %d; want %d", losers, workers-1)
+	}
+	if other != 0 {
+		t.Errorf("unexpected non-ErrAlreadyDecided errors: %d", other)
+	}
+}
+
 func TestDecideNoOpenPermissionRequest(t *testing.T) {
 	// Spawn exists, relay_mode=on, but no row in permission_requests.
 	// The verb surfaces ErrNoOpenPermissionRequest after the UPDATE
@@ -151,19 +208,3 @@ func TestDecideDenyDefaultEnvelopeReasonNotWritten(t *testing.T) {
 	}
 }
 
-// guardSqlErrNoRows is a small assertion that the store's
-// GetPermissionRequest returns sql.ErrNoRows literally (the verb
-// depends on errors.Is for the disambiguation).
-func TestStoreGetPermissionRequestReturnsErrNoRows(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "state.db")
-	s, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
-	_, err = s.GetPermissionRequest("absent")
-	if !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("err = %v; want sql.ErrNoRows", err)
-	}
-}

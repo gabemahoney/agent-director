@@ -23,7 +23,7 @@ Code feeds it the payload JSON on stdin.
 | `PostToolUse` | — | `working` |
 | `Stop` | — | `waiting` |
 | `Notification` | — | `waiting` |
-| `PermissionRequest` | `*` (all tools) | `check_permission` (Epic 10 relay path is a stub today) |
+| `PermissionRequest` | `*` (all tools) | `check_permission` |
 | `SessionEnd` | reason ∈ {`clear`, `compact`} | soft refresh: bumps `last_seen_at`, state unchanged |
 | `SessionEnd` | any other reason | `ended` (also sets `ended_at`) |
 
@@ -49,10 +49,9 @@ All log entries land in `~/.claude-director/errors.log` (configurable
 via `[log] error_log_path` in `config.toml`). A missed state update is
 annoying but never breaks a Claude session.
 
-The relay-mode `PermissionRequest` path will be fail-*closed* (default
-to `deny` on any internal error) once Epic 10 lands. Until then,
-PermissionRequest events take the same fail-open route as every other
-state-tracking event.
+The relay-mode `PermissionRequest` path is fail-*closed*: any internal
+error emits a `deny` decision envelope on stdout before the hook exits.
+See "Permission relay" in `architecture.md`.
 
 ## Fire order
 
@@ -70,9 +69,9 @@ user (~/.claude/settings.json)
 claude-director's hook is *last among user-installed tiers*. For state
 tracking this is fine — by the time our hook runs, every user hook has
 already had its turn; our UPSERT lands on top with the most recent
-`last_seen_at`. For relay-mode permission decisions (Epic 10) this
-ordering will matter: our decision envelope on stdout is the one Claude
-consumes, regardless of what earlier-running user hooks emit.
+`last_seen_at`. For relay-mode permission decisions the ordering
+matters: our decision envelope on stdout is the one Claude consumes,
+regardless of what earlier-running user hooks emit.
 
 ## Misbehaving user hooks
 
@@ -89,8 +88,8 @@ malformed stdout. Each of these has a different blast radius:
   runs and writes its UPSERT either way; the row state is independent
   of whether the tool was actually executed.
 - **Malformed user hook stdout** — irrelevant for state-tracking hooks
-  (they don't emit stdout), but a poorly-formed permission-decision
-  envelope from a user hook could confuse the relay path in Epic 10.
+  (they don't emit stdout). A poorly-formed permission-decision
+  envelope from a user hook could confuse the relay path;
   claude-director's relay hook is always last, so it wins the decision
   channel.
 
