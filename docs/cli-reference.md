@@ -96,6 +96,28 @@ Return the full DB row for a tracked Spawn (id, parent, state, cwd, session name
 
 - `ErrSpawnNotFound`
 
+## send-keys
+
+Send text into a tracked Spawn's tmux pane. `\r` bytes are stripped (prevent premature submission); `\n` bytes are preserved (composed-but-unsubmitted newlines in Claude's input box); press_enter (default true) appends a single Enter to submit.
+
+### Parameters
+
+- `claude_instance_id` (string, required): Id of the live Spawn to drive.
+- `text` (string, required): Text to type into the Spawn's input. `\r` stripped pre-send; `\n` preserved as newline-in-input.
+- `press_enter` (bool, optional): When true (default), append a single Enter after the text to submit the composed buffer. CLI exposes the inverse as `--no-enter`.
+
+### Result
+
+_None._
+
+### Errors
+
+- `ErrSpawnNotFound`
+- `ErrSpawnNotInteractive`
+- `ErrSendKeysWhileRelayed`
+- `ErrTmuxNotAvailable`
+- `ErrTmuxSendKeys`
+
 ## hook
 
 Internal: invoked by Claude Code on lifecycle events via the per-Spawn --settings hooks. Reads payload JSON from stdin, writes a row UPSERT, exits 0 (state-tracking fail-open).

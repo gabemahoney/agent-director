@@ -57,11 +57,12 @@ const configPath = "~/.claude-director/config.toml"
 // by config/store failures (SRD §3.2 fail-open invariant).
 func handlers(st *store.Store, cfg config.Config) map[string]func([]string) error {
 	return map[string]func([]string) error{
-		"help":   helpHandler,
-		"--help": helpHandler,
-		"spawn":  func(args []string) error { return spawnHandlerWith(st, cfg, args) },
-		"status": func(args []string) error { return statusHandlerWith(st, args) },
-		"get":    func(args []string) error { return getHandlerWith(st, args) },
+		"help":      helpHandler,
+		"--help":    helpHandler,
+		"spawn":     func(args []string) error { return spawnHandlerWith(st, cfg, args) },
+		"status":    func(args []string) error { return statusHandlerWith(st, args) },
+		"get":       func(args []string) error { return getHandlerWith(st, args) },
+		"send-keys": func(args []string) error { return sendKeysHandlerWith(st, args) },
 	}
 }
 

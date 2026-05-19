@@ -14,10 +14,14 @@ import (
 	"github.com/gabemahoney/claude-director/internal/tmux"
 )
 
-// tmuxClient is the runtime tmux client wired in by spawnHandlerWith. Held
-// as a package-level var so the cmd-level integration tests can swap it
-// for a fake-tmux binary without touching production code paths.
-var tmuxClient spawn.TmuxClient = tmux.New()
+// tmuxClient is the runtime tmux client wired into the verb handlers.
+// Held as a *tmux.Client (the concrete type) rather than a narrowest-
+// interface alias so every verb that needs a different subset of tmux ops
+// (spawn → NewSession, send-keys → SendKeys, read-pane → CapturePane) can
+// pull from one shared client. Cmd-level integration tests swap behavior
+// by prepending a fake-tmux binary onto PATH; no field replacement is
+// required.
+var tmuxClient = tmux.New()
 
 // spawnHandlerWith implements `claude-director spawn`. Called via a closure
 // from handlers() so the store + config opened by setupStoreAndCfg are
@@ -84,6 +88,46 @@ func statusHandlerWith(st *store.Store, args []string) error {
 		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
 	}
 	return writeJSON(os.Stdout, res)
+}
+
+// sendKeysHandlerWith implements `claude-director send-keys`. The store is
+// re-used from setupStoreAndCfg via the closure; the tmux client is the
+// shared package-level *tmux.Client which already satisfies
+// api.SendKeysTmux via its SendKeys method.
+func sendKeysHandlerWith(st *store.Store, args []string) error {
+	params, err := parseSendKeysFlags(args)
+	if err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+	}
+	if _, err := api.SendKeys(st, tmuxClient, params); err != nil {
+		name, desc := classifyError(err)
+		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+	}
+	return writeJSON(os.Stdout, struct{}{})
+}
+
+// parseSendKeysFlags carves argv into a SendKeysParams. `--text` is
+// required and may contain literal `\n` / `\r` from the caller — the verb
+// strips `\r` and preserves `\n` per SRD §4.3. `--no-enter` flips the
+// default-true press_enter to false.
+func parseSendKeysFlags(args []string) (api.SendKeysParams, error) {
+	var p api.SendKeysParams
+	var noEnter bool
+	fs := flag.NewFlagSet("send-keys", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the Spawn to drive")
+	fs.StringVar(&p.Text, "text", "", "text to type into the Spawn's input")
+	fs.BoolVar(&noEnter, "no-enter", false, "do not append a trailing Enter (default: append)")
+	if err := fs.Parse(args); err != nil {
+		return p, err
+	}
+	if p.ClaudeInstanceID == "" {
+		return p, fmt.Errorf("--claude-instance-id is required")
+	}
+	// Empty --text is allowed (a press-Enter-only call has no body); the
+	// verb-layer state guard still applies.
+	p.PressEnter = !noEnter
+	return p, nil
 }
 
 // getHandlerWith implements `claude-director get`.

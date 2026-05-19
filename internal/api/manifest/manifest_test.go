@@ -7,12 +7,13 @@ import (
 	"github.com/gabemahoney/claude-director/internal/api/manifest"
 )
 
-// TestVerbsContainsEpic3Surface confirms the manifest now carries the
-// Epic 3 verbs (spawn, status, get, hook) alongside the bootstrap help
-// entry. Future Epics that add verbs append to this list; mismatches
-// here are the canary that catches a missing manifest entry.
-func TestVerbsContainsEpic3Surface(t *testing.T) {
-	want := []string{"help", "spawn", "status", "get", "hook"}
+// TestVerbsContainsExpectedSurface pins the canonical verb order. Each
+// Epic that adds a verb appends to this slice; the test catches a missing
+// manifest entry on the source-of-truth side (the doc-drift gate catches
+// it on the reference-doc side). Order matters: the generator walks Verbs
+// in slice order, so a reorder produces a diff in docs/cli-reference.md.
+func TestVerbsContainsExpectedSurface(t *testing.T) {
+	want := []string{"help", "spawn", "status", "get", "send-keys", "hook"}
 	if got := len(manifest.Verbs); got != len(want) {
 		t.Fatalf("len(manifest.Verbs) = %d, want %d (names %v)", got, len(want), want)
 	}
@@ -43,6 +44,32 @@ func TestSpawnHasAllSRDErrorNames(t *testing.T) {
 	for _, n := range want {
 		if !have[n] {
 			t.Errorf("spawn.ErrorNames missing %q", n)
+		}
+	}
+}
+
+// TestSendKeysHasInteractErrorNames pins the send-keys entry's error
+// catalog against the SRD §13.1 surface: the state-precondition guard,
+// the Epic-10 relay stub, and the two transport-layer tmux sentinels.
+func TestSendKeysHasInteractErrorNames(t *testing.T) {
+	v, ok := manifest.Lookup("send-keys")
+	if !ok {
+		t.Fatal("send-keys not in manifest")
+	}
+	want := []string{
+		"ErrSpawnNotFound",
+		"ErrSpawnNotInteractive",
+		"ErrSendKeysWhileRelayed",
+		"ErrTmuxNotAvailable",
+		"ErrTmuxSendKeys",
+	}
+	have := map[string]bool{}
+	for _, n := range v.ErrorNames {
+		have[n] = true
+	}
+	for _, n := range want {
+		if !have[n] {
+			t.Errorf("send-keys.ErrorNames missing %q", n)
 		}
 	}
 }

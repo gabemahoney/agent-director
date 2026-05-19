@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/gabemahoney/claude-director/internal/api"
 	"github.com/gabemahoney/claude-director/internal/spawn"
 	"github.com/gabemahoney/claude-director/internal/store"
 	"github.com/gabemahoney/claude-director/internal/tmux"
@@ -34,7 +35,11 @@ var errCatalog = []struct {
 	{"ErrTmuxSessionCreate", tmux.ErrTmuxSessionCreate},
 	{"ErrTmuxKillFailed", tmux.ErrTmuxKillFailed},
 	{"ErrTmuxListPanesFailed", tmux.ErrTmuxListPanesFailed},
+	{"ErrTmuxSendKeys", tmux.ErrTmuxSendKeys},
+	{"ErrTmuxCaptureFailed", tmux.ErrTmuxCaptureFailed},
 	{"ErrSchemaMismatch", store.ErrSchemaMismatch},
+	{"ErrSpawnNotInteractive", api.ErrSpawnNotInteractive},
+	{"ErrSendKeysWhileRelayed", api.ErrSendKeysWhileRelayed},
 }
 
 // classifyError returns the canonical err_name and an err_description for
