@@ -6,6 +6,7 @@ import (
 
 	"github.com/gabemahoney/claude-director/internal/api"
 	"github.com/gabemahoney/claude-director/internal/config"
+	"github.com/gabemahoney/claude-director/internal/probe"
 	"github.com/gabemahoney/claude-director/internal/spawn"
 	"github.com/gabemahoney/claude-director/internal/store"
 	"github.com/gabemahoney/claude-director/internal/tmux"
@@ -49,6 +50,7 @@ var errCatalog = []struct {
 	{"ErrTemplateMalformed", config.ErrTemplateMalformed},
 	{"ErrTemplateExists", config.ErrTemplateExists},
 	{"ErrTemplateReservedParam", config.ErrTemplateReservedParam},
+	{"ErrProbeUnsupported", probe.ErrProbeUnsupported},
 }
 
 // classifyError returns the canonical err_name and an err_description for

@@ -265,6 +265,50 @@ var Verbs = []VerbDef{
 		},
 	},
 	{
+		Name:        "find-missing",
+		Description: "Reconcile DB state against live processes. Scans live-state rows (including pending), diffs against the OS probe (Linux /proc / macOS sysctl), transitions unprobeable rows to `missing`. Degraded-mode guard: 0 readable processes + ≥1 live rows → log warning + refuse to write.",
+		Params:      []ParamDef{},
+		ResultFields: []FieldDef{
+			{Name: "count", Type: "int", Description: "Number of rows transitioned to missing on this sweep."},
+			{Name: "ids", Type: "[]string", Description: "Sorted IDs of rows transitioned to missing."},
+		},
+		ErrorNames: []string{
+			"ErrProbeUnsupported",
+		},
+	},
+	{
+		Name:        "expire",
+		Description: "Remove terminal-state rows (ended/missing) whose ended_at is older than the retention window. Default window is config defaults.expire_retention_days; --older-than overrides. Does NOT touch tmux or JSONL transcripts.",
+		Params: []ParamDef{
+			{
+				Name:        "older_than",
+				Type:        "duration",
+				Description: "Duration override (e.g. `7d`, `2h`, `0d`). When omitted, defaults.expire_retention_days from config applies.",
+			},
+		},
+		ResultFields: []FieldDef{
+			{Name: "count", Type: "int", Description: "Number of rows removed."},
+			{Name: "ids", Type: "[]string", Description: "Sorted IDs of rows removed."},
+		},
+		ErrorNames: []string{},
+	},
+	{
+		Name:        "delete",
+		Description: "Admin batch removal by claude_instance_id. Bypasses all guards. Does NOT touch tmux sessions or JSONL transcripts. Per-row result map records ok/error per id; the batch never aborts on a partial failure.",
+		Params: []ParamDef{
+			{
+				Name:        "claude_instance_id",
+				Type:        "[]string",
+				Description: "Id(s) to delete. Repeatable on CLI; JSON array via MCP.",
+				Required:    true,
+			},
+		},
+		ResultFields: []FieldDef{
+			{Name: "results", Type: "map[string]string", Description: "Per-id result: \"ok\" on success, an err_name string on failure."},
+		},
+		ErrorNames: []string{},
+	},
+	{
 		Name:        "make-template",
 		Description: "Save a reusable spawn preset. The TOML file lands under ~/.claude-director/templates/<name>.toml; spawn --template <name> applies it. Reserved per-invocation params (template, claude_instance_id, tmux_session_name) are NOT accepted.",
 		Params: []ParamDef{

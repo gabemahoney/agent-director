@@ -68,6 +68,9 @@ func handlers(st *store.Store, cfg config.Config) map[string]func([]string) erro
 		"pause":     func(args []string) error { return pauseHandlerWith(st, cfg, args) },
 		"list":          func(args []string) error { return listHandlerWith(st, args) },
 		"make-template": func(args []string) error { return makeTemplateHandlerWith(args) },
+		"find-missing":  func(args []string) error { return findMissingHandlerWith(st, cfg, args) },
+		"expire":        func(args []string) error { return expireHandlerWith(st, cfg, args) },
+		"delete":        func(args []string) error { return deleteHandlerWith(st, args) },
 	}
 }
 

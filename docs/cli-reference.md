@@ -156,6 +156,56 @@ _None._
 
 - `ErrSpawnNotFound`
 
+## find-missing
+
+Reconcile DB state against live processes. Scans live-state rows (including pending), diffs against the OS probe (Linux /proc / macOS sysctl), transitions unprobeable rows to `missing`. Degraded-mode guard: 0 readable processes + ≥1 live rows → log warning + refuse to write.
+
+### Parameters
+
+_None._
+
+### Result
+
+- `count` (int): Number of rows transitioned to missing on this sweep.
+- `ids` ([]string): Sorted IDs of rows transitioned to missing.
+
+### Errors
+
+- `ErrProbeUnsupported`
+
+## expire
+
+Remove terminal-state rows (ended/missing) whose ended_at is older than the retention window. Default window is config defaults.expire_retention_days; --older-than overrides. Does NOT touch tmux or JSONL transcripts.
+
+### Parameters
+
+- `older_than` (duration, optional): Duration override (e.g. `7d`, `2h`, `0d`). When omitted, defaults.expire_retention_days from config applies.
+
+### Result
+
+- `count` (int): Number of rows removed.
+- `ids` ([]string): Sorted IDs of rows removed.
+
+### Errors
+
+_None._
+
+## delete
+
+Admin batch removal by claude_instance_id. Bypasses all guards. Does NOT touch tmux sessions or JSONL transcripts. Per-row result map records ok/error per id; the batch never aborts on a partial failure.
+
+### Parameters
+
+- `claude_instance_id` ([]string, required): Id(s) to delete. Repeatable on CLI; JSON array via MCP.
+
+### Result
+
+- `results` (map[string]string): Per-id result: "ok" on success, an err_name string on failure.
+
+### Errors
+
+_None._
+
 ## make-template
 
 Save a reusable spawn preset. The TOML file lands under ~/.claude-director/templates/<name>.toml; spawn --template <name> applies it. Reserved per-invocation params (template, claude_instance_id, tmux_session_name) are NOT accepted.

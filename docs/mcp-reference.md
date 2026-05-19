@@ -156,6 +156,56 @@ Terminate the Spawn's tmux session. Idempotent on terminal states (ended/missing
 
 - `ErrSpawnNotFound`
 
+## Tool: find-missing
+
+Reconcile DB state against live processes. Scans live-state rows (including pending), diffs against the OS probe (Linux /proc / macOS sysctl), transitions unprobeable rows to `missing`. Degraded-mode guard: 0 readable processes + ≥1 live rows → log warning + refuse to write.
+
+### Input schema
+
+- (no input fields)
+
+### Output schema
+
+- `count`: type=int — Number of rows transitioned to missing on this sweep.
+- `ids`: type=[]string — Sorted IDs of rows transitioned to missing.
+
+### Errors
+
+- `ErrProbeUnsupported`
+
+## Tool: expire
+
+Remove terminal-state rows (ended/missing) whose ended_at is older than the retention window. Default window is config defaults.expire_retention_days; --older-than overrides. Does NOT touch tmux or JSONL transcripts.
+
+### Input schema
+
+- `older_than`: type=duration, required=false — Duration override (e.g. `7d`, `2h`, `0d`). When omitted, defaults.expire_retention_days from config applies.
+
+### Output schema
+
+- `count`: type=int — Number of rows removed.
+- `ids`: type=[]string — Sorted IDs of rows removed.
+
+### Errors
+
+- (none)
+
+## Tool: delete
+
+Admin batch removal by claude_instance_id. Bypasses all guards. Does NOT touch tmux sessions or JSONL transcripts. Per-row result map records ok/error per id; the batch never aborts on a partial failure.
+
+### Input schema
+
+- `claude_instance_id`: type=[]string, required=true — Id(s) to delete. Repeatable on CLI; JSON array via MCP.
+
+### Output schema
+
+- `results`: type=map[string]string — Per-id result: "ok" on success, an err_name string on failure.
+
+### Errors
+
+- (none)
+
 ## Tool: make-template
 
 Save a reusable spawn preset. The TOML file lands under ~/.claude-director/templates/<name>.toml; spawn --template <name> applies it. Reserved per-invocation params (template, claude_instance_id, tmux_session_name) are NOT accepted.
