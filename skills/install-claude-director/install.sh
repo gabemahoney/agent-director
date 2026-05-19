@@ -254,6 +254,16 @@ new_settings=$(printf '%s' "$existing" | jq \
         )
     ')
 
+# Backup-before-edit: snapshot the prior settings.json (if any) into a
+# timestamped .bak alongside the original so a regressed jq filter is
+# recoverable. Only the *prior* contents are backed up; in-place
+# re-runs of the install will keep the most recent pre-edit copy.
+if [[ -f "$DEFAULT_SETTINGS_PATH" ]]; then
+    backup_settings="${DEFAULT_SETTINGS_PATH}.bak.$(date +%Y%m%d-%H%M%S)"
+    cp -f "$DEFAULT_SETTINGS_PATH" "$backup_settings"
+    echo "  backup  : $backup_settings"
+fi
+
 # Atomic write: tempfile + mv.
 tmp_settings="${DEFAULT_SETTINGS_PATH}.new"
 printf '%s\n' "$new_settings" > "$tmp_settings"

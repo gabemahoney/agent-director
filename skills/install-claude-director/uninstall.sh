@@ -80,9 +80,14 @@ if [[ -f "$DEFAULT_SETTINGS_PATH" ]]; then
                 )
               ]
         ')
+        # Backup-before-edit (symmetric with install.sh) so a regressed
+        # jq filter is recoverable from a timestamped .bak.
+        backup_settings="${DEFAULT_SETTINGS_PATH}.bak.$(date +%Y%m%d-%H%M%S)"
+        cp -f "$DEFAULT_SETTINGS_PATH" "$backup_settings"
         tmp="${DEFAULT_SETTINGS_PATH}.new"
         printf '%s\n' "$new" > "$tmp"
         mv -f "$tmp" "$DEFAULT_SETTINGS_PATH"
+        echo "uninstall.sh: backed up prior settings to $backup_settings"
         echo "uninstall.sh: removed help hook entries from $DEFAULT_SETTINGS_PATH"
     fi
 fi

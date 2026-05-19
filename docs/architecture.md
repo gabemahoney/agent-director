@@ -467,21 +467,13 @@ claude-director with one script.
 
 ### Upgrade-safety pattern
 
-Live Spawns hold references to the binary path their hooks invoke.
-Overwriting in place would be an exec-while-overwrite hazard: a
-hook firing mid-rename could see a partial file. The install
-script's pattern:
+The install script:
 
-1. Write the new binary at a versioned path
+1. Writes the new binary at a versioned path
    (`claude-director.<vtag>`).
-2. Atomically swap the canonical symlink to point at the new file
-   (`ln -sfn <new> .canonical.new && mv -f .canonical.new
-   canonical`).
-3. Leave the previous versioned binary in place for manual rollback.
-
-The rename is a single inode swap on POSIX filesystems; any hook
-that snapshots the symlink target sees either the old or the new
-binary, never a torn write.
+2. Atomically swaps the canonical symlink to point at the new file
+   (`ln -sfn <new> .canonical.new && mv -f .canonical.new canonical`).
+3. Leaves the previous versioned binary in place for manual rollback.
 
 ### Uninstall semantics
 
