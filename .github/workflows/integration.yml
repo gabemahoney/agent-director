@@ -11,10 +11,21 @@ concurrency:
   group: integration-${{ github.ref }}
   cancel-in-progress: true
 
+# Least-privilege GITHUB_TOKEN. The test workflow only needs to read the
+# repo's source; it does not write commits, comment on PRs, or publish
+# artifacts. An overly-permissive default would let a compromised
+# dependency in a future workflow step do more than it should.
+permissions:
+  contents: read
+
 jobs:
   linux-integration:
     name: Docker harness — harness-smoke
     runs-on: ubuntu-latest
+    # Hard cap on runtime; a hung Docker build or harness step otherwise
+    # consumes runner minutes indefinitely. 30m is well above the
+    # observed ~5–10m for harness-smoke under normal load.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -45,6 +56,10 @@ jobs:
     # it. See SRD §19 Q7.
     name: macOS lane — probe sysctl path
     runs-on: macos-latest
+    # Same 30m cap as the linux job; the unit test should finish in
+    # under a minute but the runner provisioning + checkout can add
+    # several minutes on a cold-cache day.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
