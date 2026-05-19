@@ -1,4 +1,5 @@
-.PHONY: all build test generate lint test-image test-image-smoke test-docker
+.PHONY: all build test generate lint test-image test-image-smoke test-docker \
+        release-binaries release-binaries-smoke
 
 # Pinned Claude Code version. Per SRD §15.2 the harness's image must install
 # *this* version of @anthropic-ai/claude-code; bumping it requires re-running
@@ -75,3 +76,63 @@ test-docker: test-image
 		-e CLAUDE_CODE_OAUTH_TOKEN \
 		-v "$(CURDIR)/tickets/testplans:/work/tickets/testplans:ro" \
 		$(TEST_IMAGE)
+
+# release-binaries cross-compiles the four supported targets into ./dist/.
+# CGO_ENABLED=0 + modernc.org/sqlite (pure Go SQLite) yields fully static
+# binaries on linux/* and standalone Mach-O on darwin/*. The -s -w
+# ldflags strip the symbol + debug tables to halve the artifact size.
+#
+# Per SRD §16.1: mac + linux only. Windows is not supported.
+release-binaries:
+	@mkdir -p dist
+	@echo "[release] building 4 binaries into ./dist/"
+	@for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do \
+		os=$${target%/*}; arch=$${target#*/}; \
+		out="dist/claude-director-$${os}-$${arch}"; \
+		echo "  -> $${out}"; \
+		CGO_ENABLED=0 GOOS=$${os} GOARCH=$${arch} \
+			go build -trimpath -ldflags="-s -w" \
+			-o "$${out}" ./cmd/claude-director || exit 1; \
+	done
+	@echo "[release] sizes:"
+	@du -h dist/claude-director-* | sed 's/^/  /'
+
+# release-binaries-smoke runs static-linkage + magic-byte + host-arch
+# runnability checks. We avoid `file(1)` because it's not in the
+# minimal harness image; instead, read the first 4 magic bytes via
+# od and match against ELF (0x7F454C46) or Mach-O 64-bit LE
+# (0xCFFAEDFE). Arch-within-format is checked by exec where possible
+# and skipped for cross-arch (cross-exec needs QEMU).
+#
+# All steps run inside one shell so an early `exit 1` stops the
+# whole recipe (Make's default is one-shell-per-line, which would
+# silently swallow the failure).
+release-binaries-smoke: release-binaries
+	@set -eu; \
+	echo "[smoke] magic-byte check on each artifact"; \
+	for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do \
+		os=$${target%/*}; arch=$${target#*/}; \
+		out="dist/claude-director-$${os}-$${arch}"; \
+		magic=$$(od -A n -t x1 -N 4 "$${out}" | tr -d ' '); \
+		case "$${os}_$${magic}" in \
+			linux_7f454c46)  echo "  $${out}: ELF (OK)" ;; \
+			darwin_cffaedfe) echo "  $${out}: Mach-O 64 LE (OK)" ;; \
+			darwin_feedfacf) echo "  $${out}: Mach-O 64 BE (OK)" ;; \
+			*) echo "  FAIL: unexpected magic $${magic} for $${out} (os=$${os})"; exit 1 ;; \
+		esac; \
+	done; \
+	echo "[smoke] static-link check on linux binaries (ldd → 'not a dynamic executable')"; \
+	for arch in amd64 arm64; do \
+		out="dist/claude-director-linux-$${arch}"; \
+		if ldd "$${out}" 2>&1 | grep -q "not a dynamic executable"; then \
+			echo "  $${out}: statically linked"; \
+		else \
+			echo "  FAIL: $${out} is not statically linked"; \
+			ldd "$${out}" 2>&1 | sed 's/^/    /'; \
+			exit 1; \
+		fi; \
+	done; \
+	echo "[smoke] host-arch exec (linux-amd64 help)"; \
+	./dist/claude-director-linux-amd64 help | jq -e '.verbs | length > 0' >/dev/null \
+		|| { echo "FAIL: linux-amd64 help did not return a non-empty verb list"; exit 1; }; \
+	echo "[smoke] OK — all 4 binaries built, linked, and the host-arch one runs"
