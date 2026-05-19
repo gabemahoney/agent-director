@@ -787,31 +787,23 @@ the new id, pointing at the new JSONL.
 `slug(cwd)` replaces every rune outside `[A-Za-z0-9-]` with `-`. Each
 rune (single-byte or multi-byte UTF-8) collapses to **one** dash.
 
-**Intentional divergence from `SanitizeSessionName`:** the tmux
-session-name sanitizer (Epic 3) preserves `_`; the JSONL slug does
-NOT. Future cleanups that unify the two would break resume — the
-on-disk JSONL layout is owned by Claude Code, and any divergence
-makes the pre-flight Stat miss the real file. The asymmetry is
-load-bearing; pinned by
+`slug(cwd)` differs from `SanitizeSessionName` (Epic 3): `_` is
+replaced with `-` here, preserved there. The JSONL layout is owned
+by Claude Code, so the two slug rules are not symmetric. Pinned by
 `TestSlugDivergenceFromTmuxSanitizer`.
 
 ### What's not carried over
 
-Two pieces of state are NOT stored on the row and therefore can't be
+Two pieces of state are NOT stored on the row and are not
 reconstructed on resume:
 
 - **`Permissions`** — the synthesized `--settings` JSON carries fresh
-  hook entries on resume but no `permissions` block. A future Epic
-  may store the original spawn's permissions for round-trip parity;
-  for v1 the contract is "resume gets Claude Code's tier-stack
-  permissions plus the hooks."
+  hook entries on resume but no `permissions` block. Resume relies
+  on Claude Code's tier-stack permissions.
 - **`ExtraEnv`** — the original spawn's extra env vars (e.g.
   `ANTHROPIC_API_KEY`) are NOT replayed. Auth on resume comes from
   the caller's shell env, which tmux propagates to the new session
   by default.
-
-Callers needing identical-spawn semantics should use a template
-(`--template`) and resume into a re-spawn rather than `resume`.
 
 ## Crash recovery and DB hygiene
 

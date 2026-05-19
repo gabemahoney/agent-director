@@ -88,7 +88,7 @@ Return the full DB row for a tracked Spawn (id, parent, state, cwd, session name
 - `tmux_session_name`: type=string — tmux session under which the Spawn is running.
 - `claude_args`: type=[]string — Verbatim argv passed through to claude after --settings.
 - `relay_mode`: type=string — on / off.
-- `jsonl_path`: type=string — Last known transcript path (populated by Epic 9).
+- `jsonl_path`: type=string — Last known transcript path. Empty until a future Epic persists it; resume composes the path on demand from cwd + claude_session_id.
 - `claude_session_id`: type=string — Claude Code session UUID, extracted from SessionStart hook's transcript_path.
 - `labels`: type=map[string]string — Caller-supplied labels.
 - `started_at`: type=timestamp — Row insert time.

@@ -177,7 +177,7 @@ var Verbs = []VerbDef{
 			{Name: "tmux_session_name", Type: "string", Description: "tmux session under which the Spawn is running."},
 			{Name: "claude_args", Type: "[]string", Description: "Verbatim argv passed through to claude after --settings."},
 			{Name: "relay_mode", Type: "string", Description: "on / off."},
-			{Name: "jsonl_path", Type: "string", Description: "Last known transcript path (populated by Epic 9)."},
+			{Name: "jsonl_path", Type: "string", Description: "Last known transcript path. Empty until a future Epic persists it; resume composes the path on demand from cwd + claude_session_id."},
 			{Name: "claude_session_id", Type: "string", Description: "Claude Code session UUID, extracted from SessionStart hook's transcript_path."},
 			{Name: "labels", Type: "map[string]string", Description: "Caller-supplied labels."},
 			{Name: "started_at", Type: "timestamp", Description: "Row insert time."},

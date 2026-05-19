@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -295,5 +296,75 @@ func TestParentFKEnforced(t *testing.T) {
 	if err := s.InsertPending(sp); err == nil {
 		t.Fatalf("expected FK violation for non-existent parent")
 	}
+}
+
+// TestSetParentID pins the three SetParentID behaviors used by Resume:
+// non-empty parent writes the value, empty parent writes NULL (matches the
+// original spawn path's "no caller env var" semantics), and a missing
+// target row returns ErrSpawnNotFound (distinguishing "asked to update a
+// nonexistent row" from "the update silently no-op'd").
+func TestSetParentID(t *testing.T) {
+	s, _ := openTempStore(t)
+
+	// Bootstrap a parent + child row.
+	parent := Spawn{
+		ClaudeInstanceID: "parent-1",
+		CWD:              "/tmp", TmuxSessionName: "cd-parent", RelayMode: "off",
+	}
+	if err := s.InsertPending(parent); err != nil {
+		t.Fatalf("insert parent: %v", err)
+	}
+	child := Spawn{
+		ClaudeInstanceID: "child-1",
+		CWD:              "/tmp", TmuxSessionName: "cd-child", RelayMode: "off",
+	}
+	if err := s.InsertPending(child); err != nil {
+		t.Fatalf("insert child: %v", err)
+	}
+
+	t.Run("sets_non_empty_parent", func(t *testing.T) {
+		if err := s.SetParentID("child-1", "parent-1"); err != nil {
+			t.Fatalf("SetParentID: %v", err)
+		}
+		row, err := s.GetSpawn("child-1")
+		if err != nil {
+			t.Fatalf("GetSpawn: %v", err)
+		}
+		if row.ParentID != "parent-1" {
+			t.Errorf("ParentID = %q, want %q", row.ParentID, "parent-1")
+		}
+	})
+
+	t.Run("empty_writes_null", func(t *testing.T) {
+		if err := s.SetParentID("child-1", ""); err != nil {
+			t.Fatalf("SetParentID: %v", err)
+		}
+		row, err := s.GetSpawn("child-1")
+		if err != nil {
+			t.Fatalf("GetSpawn: %v", err)
+		}
+		// GetSpawn applies COALESCE(parent_id, '') so the Go field is
+		// empty whether the column is NULL or an empty string. Verify
+		// the underlying column directly via raw SQL.
+		var got sql.NullString
+		if err := s.db.QueryRow(
+			"SELECT parent_id FROM spawns WHERE claude_instance_id = ?", "child-1",
+		).Scan(&got); err != nil {
+			t.Fatalf("raw select: %v", err)
+		}
+		if got.Valid {
+			t.Errorf("parent_id column = %q (Valid=true); want NULL", got.String)
+		}
+		if row.ParentID != "" {
+			t.Errorf("ParentID = %q, want empty", row.ParentID)
+		}
+	})
+
+	t.Run("missing_row_returns_err_spawn_not_found", func(t *testing.T) {
+		err := s.SetParentID("does-not-exist", "parent-1")
+		if !errors.Is(err, ErrSpawnNotFound) {
+			t.Fatalf("err = %v; want ErrSpawnNotFound", err)
+		}
+	})
 }
 
