@@ -812,6 +812,26 @@ Per-OS implementations are selected by build tags:
   `envp[0..]`. `envFromProcArgs2` skips past the argv section to
   reach the env, then scans for the prefix.
 
+  The kinfo_proc walker (`parse_kinfo.go`) carries two XNU-version-
+  sensitive constants: `kinfoProcSize` (sizeof struct kinfo_proc) and
+  `kinfoProcPIDOffset` (byte offset of extern_proc.p_pid). Both are
+  pinned to XNU 11.x (macOS 14 / 15) and are NOT a kernel ABI
+  guarantee — a future macOS major bump that resizes the struct will
+  silently drift the stride-based walker. The parser's plausibility
+  guard catches that: if more than 10% of decoded PIDs fall outside
+  `[1, 4_194_304]`, `parsePIDsFromSysctlBuf` returns
+  `ErrProbeUnsupported` and `find-missing` fails closed rather than
+  emitting a garbage probe set.
+
+  **macOS-major bump policy.** When supporting a new macOS major:
+  compile the matching XNU sources (Apple publishes them at
+  `apple-oss-distributions/xnu`), re-derive `kinfoProcSize` +
+  `kinfoProcPIDOffset` from `<bsd/sys/proc.h>` + `<bsd/sys/sysctl.h>`,
+  refresh the constant comments in `parse_kinfo.go`, and re-run
+  `GOOS=darwin GOARCH=arm64 go build ./...` plus the prober's
+  integration test under that macOS version. The plausibility guard
+  is a safety net, not a substitute for the bump.
+
 - **Other** — the fallback returns `ErrProbeUnsupported` so
   `find-missing` fails closed rather than silently treating "no
   per-OS impl" as "no live processes".

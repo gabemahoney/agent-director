@@ -66,30 +66,17 @@ func (darwinProber) Probe(ctx context.Context) (map[string]struct{}, error) {
 // (CTL_KERN, KERN_PROC, KERN_PROC_ALL) which is the stable XNU
 // surface; SysctlRaw under the hood double-calls (once to get the
 // required size, once with a sized buffer).
+//
+// The byte-level parsing + plausibility sanity check lives in
+// parse_darwin.go (build-tag-free) so the regression-test surface is
+// callable from any platform. ErrProbeUnsupported flows back to
+// find-missing on a struct-layout drift.
 func listPIDs() ([]int, error) {
 	buf, err := unix.SysctlRaw("kern.proc.all")
 	if err != nil {
 		return nil, err
 	}
-	const kinfoProcSize = 648 // sizeof(struct kinfo_proc) on macOS
-	if len(buf) < kinfoProcSize {
-		return nil, nil
-	}
-	n := len(buf) / kinfoProcSize
-	out := make([]int, 0, n)
-	for i := 0; i < n; i++ {
-		// kp_proc.p_pid lives at offset 40 in struct kinfo_proc
-		// (extern_proc.p_pid offset; verified against XNU 11.x).
-		pidOff := i*kinfoProcSize + 40
-		if pidOff+4 > len(buf) {
-			break
-		}
-		pid := int(binary.LittleEndian.Uint32(buf[pidOff : pidOff+4]))
-		if pid > 0 {
-			out = append(out, pid)
-		}
-	}
-	return out, nil
+	return parsePIDsFromSysctlBuf(buf)
 }
 
 // procArgs reads KERN_PROCARGS2 for a single PID. Permission-denied
