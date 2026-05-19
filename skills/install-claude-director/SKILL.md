@@ -8,6 +8,52 @@ description: Install (or upgrade) claude-director on this machine. Runs the bund
 Trigger phrases: "install claude-director", "set up claude-director",
 "upgrade claude-director on this machine".
 
+## Operator dialog (do BEFORE running install.sh)
+
+`install.sh` has flags that materially change the install. Do NOT pick
+them silently. Walk the operator through each choice with
+`AskUserQuestion`, echo the resolved flag set back for confirmation,
+then execute. Keep it tight — four questions, then a confirm.
+
+1. **Binary source (`--binary <path>`)**
+   - In a checked-out tree, propose `./bin/claude-director` (resolved
+     to an absolute path) as the default. Confirm the operator wants
+     this binary, or accept an explicit path.
+   - If neither the in-repo build nor `command -v claude-director`
+     resolves, surface that to the operator instead of guessing.
+
+2. **PATH symlink (`--symlink-dir <dir>` or `--no-symlink`)**
+   - If `~/.local/bin` exists AND is on `PATH`, offer it as the
+     default.
+   - Otherwise ask explicitly. Offer `--no-symlink` (invoke via the
+     full `~/.claude-director/bin/claude-director` path) as a
+     first-class choice — don't bury it.
+
+3. **Version tag (`--version v<N>`)**
+   - The binary may not yet support `--version`. If `"$BINARY" --version`
+     fails, the script falls back to a `t<timestamp>` suffix. SAY SO
+     in the dialog — don't silently fall through.
+   - Offer the operator the chance to supply a semver (e.g. `v1.0.0`)
+     if they have one.
+
+4. **MCP registration (`--register-mcp`)**
+   - Default OFF. Ask: "register the stdio MCP server with `claude` so
+     this binary's verbs are advertised inside Claude Code sessions?"
+   - If yes, show the exact command that will be run:
+     `claude mcp add claude-director <CANONICAL> serve --stdio`.
+
+5. **Confirm and execute**
+   - Display the assembled `bash install.sh <resolved flags>` command
+     line back to the operator.
+   - Ask "ready to run?" with `AskUserQuestion`. Only on an explicit
+     "yes" execute the script. A "no" or any modification answer means
+     loop back to the relevant question, not silently re-pick.
+
+Do NOT skip this dialog because flags "look obvious from context".
+The operator may want a non-default path, MCP off, or a specific
+version label. Inferring intent is the failure mode this section
+exists to prevent.
+
 ## What this skill does
 
 This skill runs `install.sh` from the same directory. The script:
@@ -75,7 +121,39 @@ This skill runs `install.sh` from the same directory. The script:
 
 ## Uninstall
 
-Run `uninstall.sh` from the same directory:
+### Operator dialog (do BEFORE running uninstall.sh)
+
+Uninstall has destructive flags that erase state and external
+registrations. Drive an `AskUserQuestion` dialog for each before
+invoking the script. Three questions, then a confirm.
+
+1. **Purge state (`--purge`)**
+   - Default OFF. Ask: "also `rm -rf ~/.claude-director/`? This
+     deletes `state.db` (Spawn history, schema version) and any
+     templates under that directory. Hook entries and the binary
+     are removed regardless of this answer."
+   - If yes, name the directory and the files at stake explicitly
+     in the question — operators should know what they're losing.
+
+2. **Skip the purge confirm prompt (`--force`)**
+   - Only ask if the operator chose `--purge`. Default OFF.
+   - Wording: "skip the script's interactive `[y/N]` confirm? The
+     dialog you just answered already counts as confirmation."
+   - Choosing `--force` here is fine, but require an explicit
+     "yes, skip the prompt" — do NOT bundle it with `--purge`
+     silently.
+
+3. **Deregister MCP (`--mcp-also`)**
+   - Default OFF. Ask: "also run `claude mcp remove claude-director`
+     so it disappears from Claude Code's MCP server list?"
+   - Only relevant if the operator originally installed with
+     `--register-mcp`. Mention that explicitly.
+
+4. **Confirm and execute**
+   - Display the assembled `bash uninstall.sh <resolved flags>`.
+   - Ask "ready to run?". Only on explicit "yes" execute.
+
+### What uninstall.sh does
 
 - Removes the two help hook entries (only the entries this skill
   added; other user hooks are preserved).
