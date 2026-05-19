@@ -445,6 +445,124 @@ on its own column:
 The `list --parent <id>` filter walks this column directly; the
 forthcoming MCP server can map a tree by recursive listings.
 
+## Crash recovery and DB hygiene
+
+Three verbs cooperate to keep the DB honest in the face of crashes,
+manual kills, and accumulated history: `find-missing` (reconcile),
+`expire` (age-out terminal rows), `delete` (admin force-removal).
+All three are designed to run on cron at different cadences.
+
+### Probe layer (`internal/probe`)
+
+The prober answers one question: *which `CLAUDE_DIRECTOR_INSTANCE_ID`
+values are currently observable in live process env blocks?* It is
+the ground truth `find-missing` diffs against the DB.
+
+Per-OS implementations are selected by build tags:
+
+- **Linux (`probe_linux.go`)** — walks `/proc/<pid>/environ` for every
+  numeric PID entry. The `environ` pseudo-file is the NUL-separated
+  `KEY=VAL` block the kernel exposes. Default permissions make it
+  owner-readable only — that's load-bearing: a `find-missing` run as
+  the wrong user simply can't see the env vars and falls into the
+  degraded-mode guard rather than corrupting state.
+
+- **macOS (`probe_darwin.go`)** — `sysctl("kern.proc.all")` returns
+  the kinfo_proc array; per PID, `sysctl("kern.procargs2", pid)`
+  returns the argv+env blob. The KERN_PROCARGS2 layout is
+  `uint32 argc` + null-terminated `exec_path` + `argv[0..argc-1]` +
+  `envp[0..]`. `envFromProcArgs2` skips past the argv section to
+  reach the env, then scans for the prefix.
+
+- **Other** — the fallback returns `ErrProbeUnsupported` so
+  `find-missing` fails closed rather than silently treating "no
+  per-OS impl" as "no live processes".
+
+Permission-denied / process-gone errors mid-walk are skipped silently;
+a single foreign-owned process can't poison the whole probe.
+
+### Degraded-mode guard (SRD §14.6)
+
+When the probe returns zero IDs AND the DB has ≥1 live-state row,
+`find-missing` logs a warning and writes nothing. The most common
+cause is the cron entry running as the wrong user — for example, the
+operator created Spawns as their interactive user, then a systemd
+timer fires as `root` or the `claude-director` service account; the
+walker can't read foreign-uid `environ` files; the DB has live rows
+the walker can't see. Mass-marking those rows `missing` would
+corrupt state on the next find-missing run by the right user (the
+rows would still look alive to that walker, but the DB now claims
+otherwise).
+
+The guard is intentionally NOT an error — cron should not pager. It
+is a warning logged to `cfg.log.error_log_path`. Operators monitor
+that file (or hook it to syslog) and notice the message.
+
+The legitimate 0-live-rows + 0-probe-IDs case is distinguished and
+treated as a fast no-op success.
+
+### `find-missing`
+
+`internal/api/find_missing.go`:
+
+1. `ListLiveSpawnIDs` returns every row where `state NOT IN (ended,
+   missing)`. This includes `pending` — SRD §5.2 explicitly scans
+   pending rows so a Spawn whose tmux died before SessionStart fired
+   still reconciles correctly.
+2. `probe.Probe()` collects live IDs.
+3. Degraded-mode guard fires when warranted (see above).
+4. Per row in the set-difference: `MarkSpawnMissing` sets
+   `state='missing'` and `ended_at = now`. Per-row failures (e.g.
+   transient SQLite I/O error) are logged and the sweep continues —
+   one bad row does not abort the others.
+
+The verb does NOT touch tmux. A row marked `missing` may still have
+an orphaned tmux session if (somehow) the env-var check misfired
+without the tmux process exiting. The operator clears those manually;
+`claude-director kill` is the supported path.
+
+### `expire`
+
+`internal/api/expire.go` calls
+`store.DeleteTerminalOlderThan(duration)`, which executes a
+`DELETE ... RETURNING claude_instance_id` against rows whose
+`state IN (ended, missing)` AND `ended_at IS NOT NULL` AND
+`ended_at < now - duration`.
+
+- Default duration: `cfg.Defaults.ExpireRetentionDays * 24h` (config
+  default is 31 days).
+- `--older-than 0d` reaps every terminal row.
+- NULL `ended_at` is preserved (conservative — would only happen for
+  hand-edited or legacy rows).
+- Live-state rows are never touched.
+- The verb does NOT touch tmux or JSONL transcripts.
+
+### `delete`
+
+`internal/api/delete.go` is the admin force-removal verb. It
+processes ids one at a time, returning a per-row map of
+`{id: "ok" | "<err_name>"}`. The batch never aborts on a partial
+failure — every id in the input is attempted; the map records the
+outcome.
+
+`delete` bypasses every state-precondition guard. A live-state row
+is removed by id exactly the same way a terminal row is; the orphan
+tmux session is the caller's problem. The verb does NOT touch tmux
+or JSONL transcripts.
+
+### Cron user invariant
+
+All three verbs assume they run as the same user that owns the
+Spawns (or as root). `find-missing` exposes mismatches via the
+degraded-mode guard. `expire` and `delete` are pure DB operations
+and don't depend on probe permissions; running them as the wrong
+user is harmless (they just operate on whatever rows the DB happens
+to hold).
+
+The recommended operator setup is a systemd user-timer or a personal
+crontab — not a system-level cron — so the userland identity matches
+the Spawn-launching identity automatically.
+
 ## Stop semantics
 
 Two verbs terminate a Spawn — `kill` (immediate, forceful) and `pause`
