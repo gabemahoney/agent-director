@@ -262,6 +262,43 @@ var Verbs = []VerbDef{
 		},
 	},
 	{
+		Name:        "list",
+		Description: "Enumerate Spawn rows. All filters AND together. Returned order is unspecified — callers sort with jq etc.",
+		Params: []ParamDef{
+			{
+				Name:        "state",
+				Type:        "[]string",
+				Description: "Filter by state. Multiple values OR together. Comma-separated on CLI; JSON array via MCP.",
+			},
+			{
+				Name:        "label",
+				Type:        "[]string",
+				Description: "Filter by label k=v. Repeatable on CLI; each entry must contain a literal `=`. Multiple entries AND together.",
+			},
+			{
+				Name:        "parent",
+				Type:        "string",
+				Description: "Filter by parent_id exact match.",
+			},
+			{
+				Name:        "cwd",
+				Type:        "string",
+				Description: "Filter by canonicalized cwd exact match.",
+			},
+			{
+				Name:        "limit",
+				Type:        "int",
+				Description: "Cap result count. 0 / omitted means no cap.",
+			},
+		},
+		ResultFields: []FieldDef{
+			{Name: "spawns", Type: "[]Spawn", Description: "Matching rows. Empty array when none match (never null)."},
+		},
+		ErrorNames: []string{
+			"ErrListInvalidLabel",
+		},
+	},
+	{
 		Name:        "pause",
 		Description: "Politely shut down a waiting Spawn by sending `/exit` and waiting up to pause.timeout_seconds for the row to reach `ended`. One-shot — no caller-side polling. Terminal states (ended/missing) are no-op success.",
 		Params: []ParamDef{

@@ -66,6 +66,7 @@ func handlers(st *store.Store, cfg config.Config) map[string]func([]string) erro
 		"read-pane": func(args []string) error { return readPaneHandlerWith(st, args) },
 		"kill":      func(args []string) error { return killHandlerWith(st, args) },
 		"pause":     func(args []string) error { return pauseHandlerWith(st, cfg, args) },
+		"list":      func(args []string) error { return listHandlerWith(st, args) },
 	}
 }
 

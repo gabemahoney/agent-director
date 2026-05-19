@@ -42,6 +42,7 @@ var errCatalog = []struct {
 	{"ErrSendKeysWhileRelayed", api.ErrSendKeysWhileRelayed},
 	{"ErrSpawnNotPausable", api.ErrSpawnNotPausable},
 	{"ErrPauseTimeout", api.ErrPauseTimeout},
+	{"ErrListInvalidLabel", api.ErrListInvalidLabel},
 }
 
 // classifyError returns the canonical err_name and an err_description for

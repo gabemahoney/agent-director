@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/gabemahoney/claude-director/internal/api"
 	"github.com/gabemahoney/claude-director/internal/config"
@@ -162,6 +163,42 @@ func parseReadPaneFlags(args []string) (api.ReadPaneParams, error) {
 		return p, fmt.Errorf("--claude-instance-id is required")
 	}
 	return p, nil
+}
+
+// listHandlerWith implements `claude-director list`. Each filter flag
+// corresponds 1:1 with a ListParams field; the API layer enforces the
+// label key=value form.
+func listHandlerWith(st *store.Store, args []string) error {
+	var (
+		stateRaw string
+		labels   []string
+	)
+	var p api.ListParams
+	fs := flag.NewFlagSet("list", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&stateRaw, "state", "", "comma-separated states to filter (e.g. waiting,working)")
+	fs.Var(newStringSlice(&labels), "label", "label k=v filter (repeatable; multiple AND together)")
+	fs.StringVar(&p.Parent, "parent", "", "filter by parent_id exact match")
+	fs.StringVar(&p.Cwd, "cwd", "", "filter by canonicalized cwd exact match")
+	fs.IntVar(&p.Limit, "limit", 0, "cap result count (0 = no cap)")
+	if err := fs.Parse(args); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+	}
+	if stateRaw != "" {
+		for _, s := range strings.Split(stateRaw, ",") {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				p.State = append(p.State, s)
+			}
+		}
+	}
+	p.Labels = labels
+	result, err := api.List(st, p)
+	if err != nil {
+		name, desc := classifyError(err)
+		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+	}
+	return writeJSON(os.Stdout, result)
 }
 
 // pauseHandlerWith implements `claude-director pause`. The verb's

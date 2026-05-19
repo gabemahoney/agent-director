@@ -153,6 +153,26 @@ _None._
 
 - `ErrSpawnNotFound`
 
+## list
+
+Enumerate Spawn rows. All filters AND together. Returned order is unspecified — callers sort with jq etc.
+
+### Parameters
+
+- `state` ([]string, optional): Filter by state. Multiple values OR together. Comma-separated on CLI; JSON array via MCP.
+- `label` ([]string, optional): Filter by label k=v. Repeatable on CLI; each entry must contain a literal `=`. Multiple entries AND together.
+- `parent` (string, optional): Filter by parent_id exact match.
+- `cwd` (string, optional): Filter by canonicalized cwd exact match.
+- `limit` (int, optional): Cap result count. 0 / omitted means no cap.
+
+### Result
+
+- `spawns` ([]Spawn): Matching rows. Empty array when none match (never null).
+
+### Errors
+
+- `ErrListInvalidLabel`
+
 ## pause
 
 Politely shut down a waiting Spawn by sending `/exit` and waiting up to pause.timeout_seconds for the row to reach `ended`. One-shot — no caller-side polling. Terminal states (ended/missing) are no-op success.
