@@ -3,6 +3,7 @@ package main_test
 import (
 	"database/sql"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -154,6 +155,129 @@ func TestSendKeysCLIErrSendKeysWhileRelayed(t *testing.T) {
 	if env.ErrName != "ErrSendKeysWhileRelayed" {
 		t.Errorf("err_name = %q; want ErrSendKeysWhileRelayed", env.ErrName)
 	}
+}
+
+func TestReadPaneCLIHappyPath(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	home := t.TempDir()
+	bootstrapDB(t, home)
+	dbPath := filepath.Join(home, ".claude-director", "state.db")
+	seedSpawnRow(t, dbPath, "id-rp-cli-1", "cd-rp-cli-1", "waiting", "off")
+
+	stdout, stderr, code := runSpawnCLIWithExtraEnv(t, home, fakeDir,
+		map[string]string{"FAKE_TMUX_PANE_OUTPUT": "\x1b[31m❯\x1b[0m hi\n"},
+		"read-pane", "--claude-instance-id", "id-rp-cli-1")
+	if code != 0 {
+		t.Fatalf("read-pane exit = %d; stderr=%s", code, stderr)
+	}
+	// Default mode strips ANSI but preserves the unicode prompt glyph.
+	if !strings.Contains(stdout, "❯ hi") {
+		t.Errorf("stdout missing stripped pane content: %q", stdout)
+	}
+	if strings.Contains(stdout, "\\u001b[") {
+		t.Errorf("stdout contains escape codes; default should strip: %q", stdout)
+	}
+
+	// fake-tmux logs the capture-pane invocation with -S -25 default.
+	logBytes, err := os.ReadFile(filepath.Join(home, "fake-tmux.log"))
+	if err != nil {
+		t.Fatalf("read fake-tmux log: %v", err)
+	}
+	log := string(logBytes)
+	if !strings.Contains(log, "capture-pane") {
+		t.Errorf("fake-tmux log missing capture-pane: %s", log)
+	}
+	if !strings.Contains(log, "-25") {
+		t.Errorf("fake-tmux log missing -S -25 default: %s", log)
+	}
+	if !strings.Contains(log, "cd-rp-cli-1:0.0") {
+		t.Errorf("fake-tmux log missing pane target: %s", log)
+	}
+}
+
+func TestReadPaneCLIANSIPreservesEscapes(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	home := t.TempDir()
+	bootstrapDB(t, home)
+	dbPath := filepath.Join(home, ".claude-director", "state.db")
+	seedSpawnRow(t, dbPath, "id-rp-cli-2", "cd-rp-cli-2", "waiting", "off")
+
+	stdout, stderr, code := runSpawnCLIWithExtraEnv(t, home, fakeDir,
+		map[string]string{"FAKE_TMUX_PANE_OUTPUT": "\x1b[31mred\x1b[0m text"},
+		"read-pane", "--claude-instance-id", "id-rp-cli-2", "--ansi")
+	if code != 0 {
+		t.Fatalf("read-pane exit = %d; stderr=%s", code, stderr)
+	}
+	// JSON encodes the escape byte (0x1b) as . Both forms prove
+	// the raw bytes survived.
+	if !strings.Contains(stdout, "\\u001b[31m") {
+		t.Errorf("stdout missing raw escape codes under --ansi: %q", stdout)
+	}
+}
+
+func TestReadPaneCLICustomLineCount(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	home := t.TempDir()
+	bootstrapDB(t, home)
+	dbPath := filepath.Join(home, ".claude-director", "state.db")
+	seedSpawnRow(t, dbPath, "id-rp-cli-3", "cd-rp-cli-3", "waiting", "off")
+
+	_, stderr, code := runSpawnCLI(t, home, fakeDir,
+		"read-pane", "--claude-instance-id", "id-rp-cli-3", "--n-lines", "100")
+	if code != 0 {
+		t.Fatalf("read-pane exit = %d; stderr=%s", code, stderr)
+	}
+	logBytes, _ := os.ReadFile(filepath.Join(home, "fake-tmux.log"))
+	if !strings.Contains(string(logBytes), "-100") {
+		t.Errorf("fake-tmux log missing -S -100 override: %s", string(logBytes))
+	}
+}
+
+func TestReadPaneCLIErrSpawnNotFound(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	home := t.TempDir()
+	bootstrapDB(t, home)
+
+	_, stderr, code := runSpawnCLI(t, home, fakeDir,
+		"read-pane", "--claude-instance-id", "absent")
+	if code == 0 {
+		t.Fatalf("expected non-zero exit; got 0 (stderr=%s)", stderr)
+	}
+	env := parseEnvelope(t, stderr)
+	if env.ErrName != "ErrSpawnNotFound" {
+		t.Errorf("err_name = %q; want ErrSpawnNotFound", env.ErrName)
+	}
+}
+
+// runSpawnCLIWithExtraEnv extends runSpawnCLI by injecting additional env
+// vars (used by the read-pane tests to swap fake-tmux's stub pane output).
+// The PATH / HOME / FAKE_TMUX_LOG vars are still set, identical to
+// runSpawnCLI; the extras are appended.
+func runSpawnCLIWithExtraEnv(t *testing.T, home, fakeTmuxDir string, extras map[string]string, args ...string) (string, string, int) {
+	t.Helper()
+	cmd := exec.Command(binaryPath, args...)
+	env := []string{
+		"PATH=" + fakeTmuxDir + ":" + os.Getenv("PATH"),
+		"HOME=" + home,
+		"FAKE_TMUX_LOG=" + filepath.Join(home, "fake-tmux.log"),
+	}
+	for k, v := range extras {
+		env = append(env, k+"="+v)
+	}
+	cmd.Env = env
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			t.Fatalf("unexpected exec error: %v", err)
+		}
+	}
+	return stdout.String(), stderr.String(), exitCode
 }
 
 func TestSendKeysCLIMissingInstanceID(t *testing.T) {

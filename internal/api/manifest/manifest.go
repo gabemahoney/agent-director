@@ -217,6 +217,40 @@ var Verbs = []VerbDef{
 		},
 	},
 	{
+		Name:        "read-pane",
+		Description: "Capture the last N lines of a tracked Spawn's tmux pane. Default 25 lines, no upper cap. Default ANSI handling strips escape codes but preserves unicode TUI glyphs (❯, ⎿, 🐝). `ansi=true` returns raw bytes.",
+		Params: []ParamDef{
+			{
+				Name:        "claude_instance_id",
+				Type:        "string",
+				Description: "Id of the Spawn to read.",
+				Required:    true,
+			},
+			{
+				Name:        "n_lines",
+				Type:        "int",
+				Description: "Number of trailing pane lines to return. Defaults to 25 when 0/omitted. No upper cap.",
+			},
+			{
+				Name:        "ansi",
+				Type:        "bool",
+				Description: "When true, return raw bytes from tmux (escape codes preserved). When false (default), strip ANSI sequences while preserving unicode glyphs.",
+			},
+		},
+		ResultFields: []FieldDef{
+			{
+				Name:        "pane",
+				Type:        "string",
+				Description: "Captured pane text. ANSI handling depends on the `ansi` parameter.",
+			},
+		},
+		ErrorNames: []string{
+			"ErrSpawnNotFound",
+			"ErrTmuxNotAvailable",
+			"ErrTmuxCaptureFailed",
+		},
+	},
+	{
 		Name:        "hook",
 		Description: "Internal: invoked by Claude Code on lifecycle events via the per-Spawn --settings hooks. Reads payload JSON from stdin, writes a row UPSERT, exits 0 (state-tracking fail-open).",
 		Params: []ParamDef{

@@ -118,6 +118,26 @@ _None._
 - `ErrTmuxNotAvailable`
 - `ErrTmuxSendKeys`
 
+## read-pane
+
+Capture the last N lines of a tracked Spawn's tmux pane. Default 25 lines, no upper cap. Default ANSI handling strips escape codes but preserves unicode TUI glyphs (❯, ⎿, 🐝). `ansi=true` returns raw bytes.
+
+### Parameters
+
+- `claude_instance_id` (string, required): Id of the Spawn to read.
+- `n_lines` (int, optional): Number of trailing pane lines to return. Defaults to 25 when 0/omitted. No upper cap.
+- `ansi` (bool, optional): When true, return raw bytes from tmux (escape codes preserved). When false (default), strip ANSI sequences while preserving unicode glyphs.
+
+### Result
+
+- `pane` (string): Captured pane text. ANSI handling depends on the `ansi` parameter.
+
+### Errors
+
+- `ErrSpawnNotFound`
+- `ErrTmuxNotAvailable`
+- `ErrTmuxCaptureFailed`
+
 ## hook
 
 Internal: invoked by Claude Code on lifecycle events via the per-Spawn --settings hooks. Reads payload JSON from stdin, writes a row UPSERT, exits 0 (state-tracking fail-open).

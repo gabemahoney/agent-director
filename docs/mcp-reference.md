@@ -118,6 +118,26 @@ Send text into a tracked Spawn's tmux pane. `\r` bytes are stripped (prevent pre
 - `ErrTmuxNotAvailable`
 - `ErrTmuxSendKeys`
 
+## Tool: read-pane
+
+Capture the last N lines of a tracked Spawn's tmux pane. Default 25 lines, no upper cap. Default ANSI handling strips escape codes but preserves unicode TUI glyphs (❯, ⎿, 🐝). `ansi=true` returns raw bytes.
+
+### Input schema
+
+- `claude_instance_id`: type=string, required=true — Id of the Spawn to read.
+- `n_lines`: type=int, required=false — Number of trailing pane lines to return. Defaults to 25 when 0/omitted. No upper cap.
+- `ansi`: type=bool, required=false — When true, return raw bytes from tmux (escape codes preserved). When false (default), strip ANSI sequences while preserving unicode glyphs.
+
+### Output schema
+
+- `pane`: type=string — Captured pane text. ANSI handling depends on the `ansi` parameter.
+
+### Errors
+
+- `ErrSpawnNotFound`
+- `ErrTmuxNotAvailable`
+- `ErrTmuxCaptureFailed`
+
 ## Tool: hook
 
 Internal: invoked by Claude Code on lifecycle events via the per-Spawn --settings hooks. Reads payload JSON from stdin, writes a row UPSERT, exits 0 (state-tracking fail-open).

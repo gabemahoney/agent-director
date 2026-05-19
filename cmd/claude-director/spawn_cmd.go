@@ -130,6 +130,42 @@ func parseSendKeysFlags(args []string) (api.SendKeysParams, error) {
 	return p, nil
 }
 
+// readPaneHandlerWith implements `claude-director read-pane`. The handler
+// trusts the api layer for ANSI handling and default-lines fallback;
+// argv parsing here is purely flag-to-params translation.
+func readPaneHandlerWith(st *store.Store, args []string) error {
+	params, err := parseReadPaneFlags(args)
+	if err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+	}
+	result, err := api.ReadPane(st, tmuxClient, params)
+	if err != nil {
+		name, desc := classifyError(err)
+		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+	}
+	return writeJSON(os.Stdout, result)
+}
+
+// parseReadPaneFlags carves argv into a ReadPaneParams. The default for
+// --n-lines is the same package-level constant the verb uses, so a CLI
+// caller omitting the flag and an MCP caller passing 0 land on the same
+// number.
+func parseReadPaneFlags(args []string) (api.ReadPaneParams, error) {
+	var p api.ReadPaneParams
+	fs := flag.NewFlagSet("read-pane", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the Spawn to read")
+	fs.IntVar(&p.NLines, "n-lines", api.DefaultReadPaneLines, "number of trailing pane lines to return")
+	fs.BoolVar(&p.ANSI, "ansi", false, "return raw bytes (escape codes preserved); default strips ANSI but preserves unicode glyphs")
+	if err := fs.Parse(args); err != nil {
+		return p, err
+	}
+	if p.ClaudeInstanceID == "" {
+		return p, fmt.Errorf("--claude-instance-id is required")
+	}
+	return p, nil
+}
+
 // getHandlerWith implements `claude-director get`.
 func getHandlerWith(st *store.Store, args []string) error {
 	var id string

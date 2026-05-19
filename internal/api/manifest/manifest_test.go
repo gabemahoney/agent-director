@@ -13,7 +13,7 @@ import (
 // it on the reference-doc side). Order matters: the generator walks Verbs
 // in slice order, so a reorder produces a diff in docs/cli-reference.md.
 func TestVerbsContainsExpectedSurface(t *testing.T) {
-	want := []string{"help", "spawn", "status", "get", "send-keys", "hook"}
+	want := []string{"help", "spawn", "status", "get", "send-keys", "read-pane", "hook"}
 	if got := len(manifest.Verbs); got != len(want) {
 		t.Fatalf("len(manifest.Verbs) = %d, want %d (names %v)", got, len(want), want)
 	}
@@ -70,6 +70,31 @@ func TestSendKeysHasInteractErrorNames(t *testing.T) {
 	for _, n := range want {
 		if !have[n] {
 			t.Errorf("send-keys.ErrorNames missing %q", n)
+		}
+	}
+}
+
+// TestReadPaneHasInteractErrorNames pins the read-pane entry's error
+// catalog against the SRD §13.1 surface: the row-lookup miss and the two
+// transport-layer tmux sentinels. read-pane has no state precondition, so
+// no ErrSpawnNotInteractive.
+func TestReadPaneHasInteractErrorNames(t *testing.T) {
+	v, ok := manifest.Lookup("read-pane")
+	if !ok {
+		t.Fatal("read-pane not in manifest")
+	}
+	want := []string{
+		"ErrSpawnNotFound",
+		"ErrTmuxNotAvailable",
+		"ErrTmuxCaptureFailed",
+	}
+	have := map[string]bool{}
+	for _, n := range v.ErrorNames {
+		have[n] = true
+	}
+	for _, n := range want {
+		if !have[n] {
+			t.Errorf("read-pane.ErrorNames missing %q", n)
 		}
 	}
 }
