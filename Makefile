@@ -75,6 +75,7 @@ test-docker: test-image
 		-e ANTHROPIC_API_KEY \
 		-e CLAUDE_CODE_OAUTH_TOKEN \
 		-v "$(CURDIR)/tickets/testplans:/work/tickets/testplans:ro" \
+		-v "$(CURDIR):/work/source:ro" \
 		$(TEST_IMAGE)
 
 # release-binaries cross-compiles the four supported targets into ./dist/.

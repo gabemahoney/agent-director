@@ -6,6 +6,12 @@ FROM debian:bookworm-slim
 # reference/*-research.md before merging. See docs/architecture.md.
 ARG CLAUDE_CODE_VERSION=2.1.120
 
+# Go toolchain version. Used by the epic-13-release testplan, which
+# runs `make release-binaries` inside the container to verify the
+# cross-compile pipeline produces the four supported artifacts. Bump
+# in lockstep with the project's go.mod `go` directive.
+ARG GO_VERSION=1.22.10
+
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
@@ -17,12 +23,17 @@ RUN apt-get update \
         git \
         gnupg \
         jq \
+        make \
         sqlite3 \
         tmux \
  && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
  && apt-get install -y --no-install-recommends nodejs \
  && rm -rf /var/lib/apt/lists/* \
  && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+ && arch=$(dpkg --print-architecture) \
+ && curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${arch}.tar.gz" \
+      | tar -C /usr/local -xz \
+ && ln -s /usr/local/go/bin/go /usr/local/bin/go \
  && useradd --create-home --shell /bin/bash --uid 1000 tester
 
 # Pre-built binary + driver assets are produced by the host Makefile.

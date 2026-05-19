@@ -59,8 +59,11 @@ if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     exit 2
 fi
 
-# `gh` must be on PATH (we use it for the release create).
-if ! command -v gh >/dev/null 2>&1; then
+# `gh` must be on PATH (we use it for the release create). Skipped
+# on --dry-run since dry runs never call gh — testing the notes
+# templater without a configured GitHub CLI is a common case (CI
+# environments, container harnesses).
+if [[ "$DRY_RUN" -eq 0 ]] && ! command -v gh >/dev/null 2>&1; then
     echo "release.sh: 'gh' (GitHub CLI) not found on PATH" >&2
     echo "  install via your package manager and run 'gh auth login'" >&2
     exit 2

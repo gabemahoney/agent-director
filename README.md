@@ -39,6 +39,21 @@ SQLite file; everything else is tmux.
 
 ### Install
 
+**From a release** (recommended once `v0.1.0` ships):
+
+```sh
+# Pick the binary for your platform:
+#   linux-amd64, linux-arm64, darwin-amd64, darwin-arm64
+curl -L -o claude-director \
+    https://github.com/<owner>/<repo>/releases/latest/download/claude-director-linux-amd64
+chmod +x claude-director
+
+# Run the install skill with --binary pointing at the download:
+skills/install-claude-director/install.sh --binary ./claude-director
+```
+
+**From source** (during development):
+
 ```sh
 # Build the binary (Go 1.22+):
 make build
@@ -46,6 +61,11 @@ make build
 # Run the install skill:
 skills/install-claude-director/install.sh
 ```
+
+The four supported targets (`linux/amd64`, `linux/arm64`,
+`darwin/amd64`, `darwin/arm64`) ship as statically-linked binaries —
+no glibc dependency on Linux, no library dance on macOS. Windows
+is not supported.
 
 The script:
 
