@@ -29,8 +29,29 @@ SQLite file; everything else is tmux.
 
 ### Install
 
-Quickest path — `install.sh --from-release` auto-detects your OS/arch
-and downloads the matching binary from GitHub Releases:
+#### From inside Claude Code (recommended)
+
+If you already have Claude Code running, just say:
+
+> **install claude-director**
+
+That triggers the `install-claude-director` skill, which walks you
+through four choices interactively (binary source, PATH symlink,
+MCP registration, persistent help hooks) and then runs `install.sh`
+with the resolved flags. Each question explains itself — assume no
+prior knowledge — so a new user can answer without reading anything
+else first.
+
+The skill ships in this repo at
+[`skills/install-claude-director/`](skills/install-claude-director/SKILL.md)
+and is auto-discoverable by Claude Code if you've cloned the repo
+under a directory it indexes. If not, point Claude Code at the
+SKILL.md once and from then on the trigger phrase works.
+
+#### From a shell (no Claude Code)
+
+`install.sh --from-release` auto-detects your OS/arch and downloads
+the matching binary from GitHub Releases:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/gabemahoney/claude-director/main/skills/install-claude-director/install.sh \
@@ -40,7 +61,8 @@ bash /tmp/install-claude-director.sh --from-release
 
 The script sets up `~/.claude-director/`, drops a PATH symlink, warms
 up `state.db`, and installs the SessionStart/SessionEnd help hooks.
-Optionally pass `--register-mcp` to also register the stdio MCP server.
+Optionally pass `--register-mcp` to also register the stdio MCP
+server, or `--no-hooks` to leave `~/.claude/settings.json` untouched.
 
 If you'd rather download the binary yourself first (and then point
 the installer at it), grab the asset for your platform from the
