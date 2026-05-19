@@ -2,7 +2,6 @@ package hook
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -123,12 +122,3 @@ func logf(logger *log.Logger, format string, args ...any) {
 // Compile-time assertion that *store.Store satisfies HookStore. Keeps the
 // production wiring honest if the interface or the store grows.
 var _ HookStore = (*store.Store)(nil)
-
-// Sentinel re-exports so cmd/ can do errors.Is on the canonical names
-// without re-importing io.
-var (
-	_ = ErrPayloadTooLarge
-	_ = ErrInstanceIDMissing
-	_ = ErrInstanceIDInvalid
-	_ = errors.Is // keep errors imported even if cmd/ does the matching
-)

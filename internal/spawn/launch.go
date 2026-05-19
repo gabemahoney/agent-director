@@ -1,9 +1,9 @@
 package spawn
 
 import (
+	"errors"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/gabemahoney/claude-director/internal/config"
 	"github.com/gabemahoney/claude-director/internal/store"
@@ -66,11 +66,11 @@ func Launch(s *store.Store, tmuxClient TmuxClient, r Resolved, cfg config.Config
 		Labels:           r.ClaudeDirectorLabels,
 	}
 	if err := s.InsertPending(row); err != nil {
-		// SQLite's UNIQUE / PRIMARY KEY collision text is driver-specific;
-		// matching the substring keeps the surface stable across driver
-		// versions. The pre-check in ApplyDefaults catches most races; this
-		// is the belt-and-suspenders fallback for racing callers.
-		if isPrimaryKeyCollision(err) {
+		// store.InsertPending returns ErrPrimaryKeyCollision when SQLite
+		// reports a PK/UNIQUE constraint violation (detected via
+		// *sqlite.Error code, not message text). The pre-check in
+		// ApplyDefaults catches most races; this maps the TOCTOU fallback.
+		if errors.Is(err, store.ErrPrimaryKeyCollision) {
 			return "", fmt.Errorf("%w: %s", ErrInstanceIdCollision, r.ClaudeInstanceID)
 		}
 		return "", err
@@ -86,23 +86,3 @@ func Launch(s *store.Store, tmuxClient TmuxClient, r Resolved, cfg config.Config
 	return r.ClaudeInstanceID, nil
 }
 
-// isPrimaryKeyCollision matches SQLite's driver-emitted error text for
-// PRIMARY KEY / UNIQUE violations. modernc/sqlite does not surface a
-// machine-readable code through the standard error chain, so substring
-// match is pragmatic and stable enough for the surface mapping.
-func isPrimaryKeyCollision(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	for _, sub := range []string{
-		"UNIQUE constraint failed",
-		"PRIMARY KEY",
-		"constraint failed: spawns.claude_instance_id",
-	} {
-		if strings.Contains(msg, sub) {
-			return true
-		}
-	}
-	return false
-}

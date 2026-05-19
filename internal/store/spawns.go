@@ -6,11 +6,20 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 // ErrSpawnNotFound is returned by lookup-by-id methods when no row matches
 // the supplied claude_instance_id. Callers use errors.Is to detect.
 var ErrSpawnNotFound = errors.New("ErrSpawnNotFound")
+
+// ErrPrimaryKeyCollision is returned by InsertPending when SQLite reports a
+// PRIMARY KEY or UNIQUE constraint violation. Detected via *sqlite.Error
+// Code() against SQLITE_CONSTRAINT_PRIMARYKEY / SQLITE_CONSTRAINT_UNIQUE,
+// so callers don't string-match the driver's prose.
+var ErrPrimaryKeyCollision = errors.New("store: primary key collision")
 
 // State constants mirror the SRD §5.1 enum. They live here (the package
 // that owns the column's text values) so the rest of the codebase has
@@ -88,6 +97,13 @@ func (s *Store) InsertPending(sp Spawn) error {
 		argsJSON, sp.RelayMode, labelsJSON,
 	)
 	if err != nil {
+		var serr *sqlite.Error
+		if errors.As(err, &serr) {
+			switch serr.Code() {
+			case sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY, sqlite3.SQLITE_CONSTRAINT_UNIQUE:
+				return fmt.Errorf("%w: %s", ErrPrimaryKeyCollision, sp.ClaudeInstanceID)
+			}
+		}
 		return fmt.Errorf("store: insert pending: %w", err)
 	}
 	return nil

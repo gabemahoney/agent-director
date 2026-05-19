@@ -173,7 +173,7 @@ See `docs/cli-reference.md` and `docs/mcp-reference.md` — auto-generated; do n
    internal/config -----> consumed by cmd and internal/api/*
                           (never imports internal/store)
 
-Future Epics fill in sibling packages under internal/ at the api layer:
+Sibling packages under internal/ at the api layer:
     internal/spawn   - lifecycle of Claude Code child processes
     internal/hook    - hook-event entrypoint logic
     internal/tmux    - tmux session orchestration

@@ -203,4 +203,3 @@ func TestResolveInstanceIDMissingErr(t *testing.T) {
 	}
 }
 
-var _ = io.EOF

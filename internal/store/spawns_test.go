@@ -2,7 +2,6 @@ package store
 
 import (
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -298,13 +297,3 @@ func TestParentFKEnforced(t *testing.T) {
 	}
 }
 
-// TestStoreUsesSingleDB makes sure tests that swap DB files via t.TempDir
-// don't accidentally share state. The check is a one-liner sanity test
-// guarding against subtle filesystem reuse.
-func TestStoreUsesSingleDB(t *testing.T) {
-	t1 := t.TempDir()
-	t2 := t.TempDir()
-	if filepath.Clean(t1) == filepath.Clean(t2) {
-		t.Fatalf("t.TempDir returned the same dir twice")
-	}
-}

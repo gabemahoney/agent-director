@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"sort"
 	"testing"
 
 	"github.com/gabemahoney/claude-director/internal/config"
@@ -298,12 +297,3 @@ func slicesEqual(a, b []string) bool {
 	return true
 }
 
-// keys returns the sorted keys of a map for stable diff output.
-func keys(m map[string]string) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}

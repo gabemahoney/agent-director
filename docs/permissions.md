@@ -96,19 +96,6 @@ shell).
 Operators who want to restrict callers from using this flag should not
 let untrusted parties spawn Claude instances through claude-director.
 
-## Relay mode (forward reference)
-
-When `relay_mode = on`, the `PermissionRequest` hook enters a polling
-loop and emits a decision envelope on stdout — `allow` / `deny` driven
-by the operator's `decide` verb. This is Epic 10's deliverable; the
-relay path is a stub in Epic 3 (PermissionRequest events take the
-state-tracking route and exit 0 with no envelope).
-
-In relay mode, the per-Spawn `permissions` block is still applied at
-Claude Code's matcher layer — relay only kicks in for tool uses that
-the matcher classifies as `ask`. Allows and denies short-circuit before
-the relay loop.
-
 ## Relay mode
 
 A Spawn launched with `--relay-mode=on` hands every PermissionRequest
