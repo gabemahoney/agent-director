@@ -39,6 +39,20 @@ Optional flags:
 - `--register-mcp` — register the stdio MCP server with Claude Code.
 - `--symlink-dir <dir>` — override the default PATH-symlink directory.
 - `--binary <path>` — install from an explicit source binary.
+- `--from-release [tag]` — download a pre-built binary for this host's
+  OS/arch from GitHub Releases (latest, or a specific tag) and install
+  it. Pair with `--sha256 <hex>` to verify the download.
+
+<!-- TODO(b.xor): once v0.1.0 is published to GitHub Releases, replace
+     the lead `make build` snippet above with the curl one-liner:
+
+       curl -fsSL https://raw.githubusercontent.com/gabemahoney/claude-director/main/skills/install-claude-director/install.sh \
+         -o /tmp/install-claude-director.sh
+       bash /tmp/install-claude-director.sh --from-release
+
+     The from-source snippet stays as a secondary option for
+     contributors and operators who want to build from a checkout. -->
+
 
 ### First spawn
 

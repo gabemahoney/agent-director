@@ -9,6 +9,16 @@
 #   --binary <path>      Source binary to install. Defaults to looking
 #                        next to the script first, then to whatever
 #                        `command -v claude-director` resolves to.
+#   --from-release [tag] Download a pre-built binary for this host's
+#                        OS/arch from GitHub Releases and install it.
+#                        With no tag, resolves the latest release via
+#                        `gh release view` (if available) or
+#                        `curl + jq` against api.github.com. Mutually
+#                        exclusive with --binary.
+#   --sha256 <hex>       Verify the downloaded asset against this
+#                        sha256 (lowercase hex, 64 chars). Only
+#                        meaningful with --from-release. Optional —
+#                        omit to skip verification.
 #   --symlink-dir <dir>  Drop a PATH symlink at <dir>/claude-director.
 #                        Default: ~/.local/bin if on PATH; otherwise
 #                        no symlink.
@@ -41,11 +51,18 @@ readonly DEFAULT_BIN_DIR="${DEFAULT_INSTALL_ROOT}/bin"
 readonly DEFAULT_SETTINGS_PATH="${HOME}/.claude/settings.json"
 
 BINARY_SRC=""
+FROM_RELEASE=0
+FROM_RELEASE_TAG=""
+SHA256_EXPECTED=""
 SYMLINK_DIR=""
 SYMLINK_DEFAULT=""
 NO_SYMLINK=0
 REGISTER_MCP=0
 VERSION_TAG=""
+
+# GitHub repo slug used by --from-release. Matches go.mod's module path
+# and the release.sh asset naming.
+readonly RELEASE_REPO_SLUG="gabemahoney/claude-director"
 
 # Pick a sensible default symlink dir: ~/.local/bin if on PATH.
 if printf '%s' ":${PATH}:" | grep -q ":${HOME}/.local/bin:"; then
@@ -56,6 +73,18 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --binary)
             BINARY_SRC="$2"; shift 2 ;;
+        --from-release)
+            FROM_RELEASE=1
+            # Optional tag argument: accept only if the next arg
+            # doesn't look like another flag.
+            if [[ $# -ge 2 && -n "${2:-}" && "${2:-}" != -* ]]; then
+                FROM_RELEASE_TAG="$2"; shift 2
+            else
+                shift
+            fi
+            ;;
+        --sha256)
+            SHA256_EXPECTED="$2"; shift 2 ;;
         --symlink-dir)
             SYMLINK_DIR="$2"; shift 2 ;;
         --no-symlink)
@@ -75,6 +104,19 @@ done
 
 [[ -z "$SYMLINK_DIR" && "$NO_SYMLINK" -eq 0 ]] && SYMLINK_DIR="$SYMLINK_DEFAULT"
 
+if [[ "$FROM_RELEASE" -eq 1 && -n "$BINARY_SRC" ]]; then
+    echo "install.sh: --from-release and --binary are mutually exclusive" >&2
+    exit 2
+fi
+if [[ -n "$SHA256_EXPECTED" && "$FROM_RELEASE" -eq 0 ]]; then
+    echo "install.sh: --sha256 only applies with --from-release" >&2
+    exit 2
+fi
+if [[ -n "$SHA256_EXPECTED" && ! "$SHA256_EXPECTED" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "install.sh: --sha256 must be 64 lowercase hex characters" >&2
+    exit 2
+fi
+
 # --------------------------------------------------------------------
 # Pre-flight
 # --------------------------------------------------------------------
@@ -90,13 +132,16 @@ if [[ "$DEFAULT_INSTALL_ROOT" =~ [[:space:]] ]]; then
 fi
 
 # claude + tmux must be on PATH.
-for tool in claude tmux jq; do
+required_tools=(claude tmux jq)
+[[ "$FROM_RELEASE" -eq 1 ]] && required_tools+=(curl)
+for tool in "${required_tools[@]}"; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "install.sh: required tool not found on PATH: $tool" >&2
         case "$tool" in
             claude) echo "  Install Claude Code first: https://claude.com/claude-code" >&2 ;;
             tmux)   echo "  Install tmux via your package manager (apt/brew/dnf/etc.)." >&2 ;;
             jq)     echo "  Install jq via your package manager (we use it to safely edit settings.json)." >&2 ;;
+            curl)   echo "  --from-release downloads via curl; install it via your package manager." >&2 ;;
         esac
         exit 2
     fi
@@ -105,6 +150,88 @@ done
 echo "install.sh: pre-flight OK"
 echo "  claude  : $(claude --version 2>/dev/null || echo '<unknown>')"
 echo "  tmux    : $(tmux -V 2>/dev/null || echo '<unknown>')"
+
+# --------------------------------------------------------------------
+# --from-release: resolve tag, download asset for this OS/arch, hand
+# the temp path to the rest of the install flow as if --binary had
+# been passed.
+# --------------------------------------------------------------------
+
+if [[ "$FROM_RELEASE" -eq 1 ]]; then
+    case "$(uname -s)" in
+        Linux)  rel_os="linux" ;;
+        Darwin) rel_os="darwin" ;;
+        *)
+            echo "install.sh: --from-release: unsupported OS $(uname -s)" >&2
+            echo "  release.sh only publishes linux and darwin builds." >&2
+            exit 3 ;;
+    esac
+    case "$(uname -m)" in
+        x86_64|amd64)   rel_arch="amd64" ;;
+        arm64|aarch64)  rel_arch="arm64" ;;
+        *)
+            echo "install.sh: --from-release: unsupported arch $(uname -m)" >&2
+            exit 3 ;;
+    esac
+    asset="claude-director-${rel_os}-${rel_arch}"
+
+    # Resolve the tag if the operator didn't supply one. Prefer `gh`
+    # (carries the operator's auth, avoids the unauthenticated API
+    # rate limit); fall back to curl + jq against the public API.
+    if [[ -z "$FROM_RELEASE_TAG" ]]; then
+        if command -v gh >/dev/null 2>&1; then
+            FROM_RELEASE_TAG=$(gh release view --repo "$RELEASE_REPO_SLUG" \
+                --json tagName -q .tagName 2>/dev/null || true)
+        fi
+        if [[ -z "$FROM_RELEASE_TAG" ]]; then
+            api_url="https://api.github.com/repos/${RELEASE_REPO_SLUG}/releases/latest"
+            FROM_RELEASE_TAG=$(curl -fsSL "$api_url" 2>/dev/null \
+                | jq -r '.tag_name // empty' 2>/dev/null || true)
+        fi
+        if [[ -z "$FROM_RELEASE_TAG" || "$FROM_RELEASE_TAG" == "null" ]]; then
+            echo "install.sh: --from-release: no releases published for $RELEASE_REPO_SLUG yet" >&2
+            echo "  options:" >&2
+            echo "    - build from source: make build && bash $0" >&2
+            echo "    - point at a local binary: bash $0 --binary <path>" >&2
+            exit 3
+        fi
+    fi
+    echo "  release : $RELEASE_REPO_SLUG @ $FROM_RELEASE_TAG ($asset)"
+
+    asset_url="https://github.com/${RELEASE_REPO_SLUG}/releases/download/${FROM_RELEASE_TAG}/${asset}"
+    tmp_bin="$(mktemp -t claude-director.XXXXXX)"
+    # Defer-cleanup the tempfile on any exit path that doesn't move
+    # past the BINARY_SRC assignment. install -m 0755 later in the
+    # script copies the contents into place, so the tempfile being
+    # cleaned up at script exit is fine.
+    trap 'rm -f "$tmp_bin"' EXIT
+    if ! curl -fsSL --retry 2 -o "$tmp_bin" "$asset_url"; then
+        echo "install.sh: --from-release: failed to download $asset_url" >&2
+        echo "  check that the asset exists for $FROM_RELEASE_TAG on $RELEASE_REPO_SLUG." >&2
+        exit 3
+    fi
+
+    if [[ -n "$SHA256_EXPECTED" ]]; then
+        if command -v sha256sum >/dev/null 2>&1; then
+            actual=$(sha256sum "$tmp_bin" | awk '{print $1}')
+        elif command -v shasum >/dev/null 2>&1; then
+            actual=$(shasum -a 256 "$tmp_bin" | awk '{print $1}')
+        else
+            echo "install.sh: --sha256: neither sha256sum nor shasum available" >&2
+            exit 3
+        fi
+        if [[ "$actual" != "$SHA256_EXPECTED" ]]; then
+            echo "install.sh: --from-release: sha256 mismatch" >&2
+            echo "  expected: $SHA256_EXPECTED" >&2
+            echo "  actual  : $actual" >&2
+            exit 3
+        fi
+        echo "  sha256  : verified"
+    fi
+
+    chmod +x "$tmp_bin"
+    BINARY_SRC="$tmp_bin"
+fi
 
 # --------------------------------------------------------------------
 # Locate source binary

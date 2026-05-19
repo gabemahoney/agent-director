@@ -15,32 +15,132 @@ them silently. Walk the operator through each choice with
 `AskUserQuestion`, echo the resolved flag set back for confirmation,
 then execute. Keep it tight — four questions, then a confirm.
 
-1. **Binary source (`--binary <path>`)**
-   - In a checked-out tree, propose `./bin/claude-director` (resolved
-     to an absolute path) as the default. Confirm the operator wants
-     this binary, or accept an explicit path.
-   - If neither the in-repo build nor `command -v claude-director`
-     resolves, surface that to the operator instead of guessing.
+### How to phrase each question
 
-2. **PATH symlink (`--symlink-dir <dir>` or `--no-symlink`)**
-   - If `~/.local/bin` exists AND is on `PATH`, offer it as the
-     default.
-   - Otherwise ask explicitly. Offer `--no-symlink` (invoke via the
-     full `~/.claude-director/bin/claude-director` path) as a
-     first-class choice — don't bury it.
+**Assume the operator has never seen this project before.** Don't lead
+with the flag name. Each `AskUserQuestion` must include four parts,
+in this order:
 
-3. **Version tag (`--version v<N>`)**
-   - The binary may not yet support `--version`. If `"$BINARY" --version`
-     fails, the script falls back to a `t<timestamp>` suffix. SAY SO
-     in the dialog — don't silently fall through.
-   - Offer the operator the chance to supply a semver (e.g. `v1.0.0`)
-     if they have one.
+1. **What this choice means** — one sentence of plain-English context.
+   What is `--symlink-dir`? What is MCP? Don't assume.
+2. **The options, with the trade-off** — not just "a, b, or c" but
+   *why you'd pick each one*. Mark the recommended option.
+3. **The default**, clearly labeled, and *why* it's the default given
+   what was detected about this machine.
+4. **What happens if they get it wrong** — one phrase. Is it
+   reversible? Does it break things, or just produce a suboptimal
+   setup the next uninstall can fix?
 
-4. **MCP registration (`--register-mcp`)**
-   - Default OFF. Ask: "register the stdio MCP server with `claude` so
-     this binary's verbs are advertised inside Claude Code sessions?"
-   - If yes, show the exact command that will be run:
-     `claude mcp add claude-director <CANONICAL> serve --stdio`.
+If a question reads like "Binary source (`--binary <path>`): use this,
+or point elsewhere?" you have failed. That is a question for someone
+who already knows what the script does. Rewrite it.
+
+### The four questions
+
+1. **Where should the binary come from? (`--from-release` / `--binary <path>`)**
+
+   - *What this is:* claude-director is a single Go binary. The
+     install script copies that binary into `~/.claude-director/bin/`
+     and adds it to your PATH. We need to know where to copy *from*.
+   - *Three options:*
+     - **(a) Download a pre-built release from GitHub** *(recommended
+       for new users)*. The script `curl -L`s the right asset for
+       your OS/arch from
+       `https://github.com/gabemahoney/claude-director/releases/latest`.
+       No Go toolchain needed. Flag: `--from-release`.
+     - **(b) Use a binary already built or downloaded locally.** If
+       you've run `make build` in a checkout, point at `./bin/claude-director`.
+       If you downloaded a tarball yourself, point at that. Flag:
+       `--binary <path>`.
+     - **(c) Use whatever `claude-director` is on `PATH` today.** Only
+       makes sense if you're re-installing or upgrading an existing
+       install. The script falls back to this automatically if
+       neither (a) nor (b) is specified.
+   - *Default:* if the skill was launched from a checked-out tree
+     **and** `./bin/claude-director` exists, propose (b) with that
+     absolute path — it's faster than re-downloading. Otherwise
+     propose (a).
+   - *Reversibility:* picking wrong is cheap. The next
+     `uninstall.sh --purge` resets to a clean slate, and you can
+     re-run `install.sh` with a different source any time.
+
+   If `--from-release` is selected but the repo has no releases yet,
+   the script exits with a clear error. Don't paper over that —
+   surface it to the operator and loop back to (b) or (c).
+
+2. **Should the binary go on `PATH` via a symlink? (`--symlink-dir <dir>` or `--no-symlink`)**
+
+   - *What this is:* the binary lives at
+     `~/.claude-director/bin/claude-director`. For you to type
+     `claude-director` from any shell, that directory needs to be on
+     `PATH`, **or** we need to drop a symlink somewhere that already
+     is. A symlink is a file that points at another file — running it
+     runs the target.
+   - *Options:*
+     - **(a) Drop a symlink in `~/.local/bin`** *(recommended if it
+       exists and is on PATH)*. This is the standard place for
+       per-user binaries on Linux/macOS.
+     - **(b) Drop a symlink in some other PATH directory** (e.g.
+       `~/bin`, `/usr/local/bin`). Pass the directory.
+     - **(c) Skip the symlink entirely (`--no-symlink`)**. You invoke
+       claude-director via the full path
+       `~/.claude-director/bin/claude-director`, or add that bin/
+       directory to `PATH` yourself.
+   - *Default:* (a) if `~/.local/bin` exists and is already on
+     `PATH`. Otherwise ask explicitly — don't silently fall back to
+     (c), because the operator probably wants a working command.
+   - *Reversibility:* fully reversible. The uninstall script removes
+     any symlink it created. If you skip and want one later, re-run
+     `install.sh --symlink-dir <dir>`.
+
+3. **Version label for this install (`--version v<N>`)**
+
+   - *What this is:* on upgrade, the script keeps the previous
+     binary at a *versioned* path
+     (`claude-director.v0.1.0`, etc.) and atomically swaps the
+     unversioned `claude-director` symlink to the new one. The
+     `--version` flag controls the suffix used for that side-by-side
+     copy. It's purely a label — it doesn't gate features.
+   - *Options:*
+     - **(a) Let the script auto-detect.** It runs `<binary> --version`
+       and uses whatever that prints.
+     - **(b) Supply a semver tag yourself**, e.g. `v0.1.0`. Useful if
+       you're installing a specific tagged release and want the
+       on-disk artifact to match.
+   - *Default:* (a). For v1 the binary doesn't yet implement
+     `--version`, so the script falls back to a `t<timestamp>`
+     suffix automatically. **Say this in the question** — don't let
+     the operator be surprised by `claude-director.t20260519-130000`
+     showing up on disk.
+   - *Reversibility:* completely cosmetic. Wrong label → next
+     upgrade overwrites it. Rollback uses the versioned-path naming;
+     if your label is gibberish, rollback still works but reads
+     funny.
+
+4. **Register the MCP server with Claude Code? (`--register-mcp`)**
+
+   - *What this is:* MCP (Model Context Protocol) is how Claude Code
+     learns about external tool servers it can call. Registering
+     claude-director as an MCP server makes its verbs (`spawn`,
+     `send-keys`, `read-pane`, etc.) callable *from inside Claude
+     Code sessions* as `mcp__claude-director__spawn` and friends —
+     i.e., an orchestrating Claude can drive a Spawn without
+     shelling out. Without this, you can still use claude-director
+     by typing `claude-director ...` in a shell.
+   - *Options:*
+     - **(a) Register now (`--register-mcp`).** The script runs
+       `claude mcp add claude-director <path> serve --stdio`. Pick
+       this if you plan to have one Claude orchestrate other
+       Claudes.
+     - **(b) Skip.** Pick this if you'll only invoke claude-director
+       from scripts or your shell.
+   - *Default:* (b) — OFF. Registering MCP is a power-user feature;
+     defaulting it on would clutter the MCP list of operators who
+     don't need it.
+   - *Reversibility:* fully reversible. To add it later:
+     `claude mcp add claude-director ~/.claude-director/bin/claude-director serve --stdio`.
+     To remove: `claude mcp remove claude-director` or
+     `uninstall.sh --mcp-also`.
 
 5. **Confirm and execute**
    - Display the assembled `bash install.sh <resolved flags>` command
@@ -67,10 +167,16 @@ This skill runs `install.sh` from the same directory. The script:
 
 3. **Copies the binary** to `~/.claude-director/bin/claude-director`
    (mode 0755). The source is determined by:
+   - `--from-release [tag]` if supplied — the script downloads the
+     asset for this host's OS/arch from GitHub Releases (resolving
+     the latest tag via `gh` or `curl + jq` if none was given), OR
    - `--binary <path>` if supplied, OR
    - `$(dirname $0)/../../bin/claude-director` (the in-repo build) if
      this skill was invoked from a checked-out tree, OR
    - the currently-running `claude-director` resolved via `command -v`.
+
+   With `--from-release`, an optional `--sha256 <hex>` flag verifies
+   the downloaded asset against an expected hash before install.
 
    On upgrade (existing binary detected), the new binary is written
    to a version-suffixed path AND the canonical filename is swapped
@@ -127,27 +233,80 @@ Uninstall has destructive flags that erase state and external
 registrations. Drive an `AskUserQuestion` dialog for each before
 invoking the script. Three questions, then a confirm.
 
-1. **Purge state (`--purge`)**
-   - Default OFF. Ask: "also `rm -rf ~/.claude-director/`? This
-     deletes `state.db` (Spawn history, schema version) and any
-     templates under that directory. Hook entries and the binary
-     are removed regardless of this answer."
-   - If yes, name the directory and the files at stake explicitly
-     in the question — operators should know what they're losing.
+Same content-shape rule as the install dialog: each question must
+include (1) what the choice means in plain English, (2) the
+trade-off between the options, (3) the default and why, (4) what's
+at stake if you pick wrong — and here especially, **what is
+irreversible**. Uninstall deletes things; the operator needs to know
+which deletes are recoverable from the filesystem and which are not.
 
-2. **Skip the purge confirm prompt (`--force`)**
-   - Only ask if the operator chose `--purge`. Default OFF.
-   - Wording: "skip the script's interactive `[y/N]` confirm? The
-     dialog you just answered already counts as confirmation."
-   - Choosing `--force` here is fine, but require an explicit
-     "yes, skip the prompt" — do NOT bundle it with `--purge`
-     silently.
+What the script removes *unconditionally* (the operator does not need
+to opt into these): the two help-hooks injected into
+`~/.claude/settings.json`, the binary under
+`~/.claude-director/bin/`, and the PATH symlink if one exists. State
+the baseline up front so the questions are only about the
+destructive *additions*.
 
-3. **Deregister MCP (`--mcp-also`)**
-   - Default OFF. Ask: "also run `claude mcp remove claude-director`
-     so it disappears from Claude Code's MCP server list?"
-   - Only relevant if the operator originally installed with
-     `--register-mcp`. Mention that explicitly.
+1. **Also delete `state.db` and templates? (`--purge`)**
+
+   - *What this is:* by default uninstall removes the binary and
+     hooks but leaves `~/.claude-director/` itself in place — so
+     `state.db` (the SQLite database with every Spawn's id,
+     transcript pointer, and history) and any templates you've
+     created with `make-template` survive. `--purge` adds
+     `rm -rf ~/.claude-director/` on top.
+   - *Options:*
+     - **(a) Keep state (default).** Re-installing later picks up
+       your existing Spawn history and templates.
+     - **(b) Purge everything (`--purge`).** Clean-slate
+       uninstall. Good if you're done with claude-director for
+       good, or troubleshooting a corrupt state.db.
+   - *Default:* (a). Don't delete user data without an explicit
+     ask.
+   - *Reversibility:* **(b) is destructive and irreversible.**
+     `state.db` is not backed up. Templates are not backed up. The
+     JSONL transcripts of each Spawn live under
+     `~/.claude/projects/` and survive — but their mapping to
+     claude_instance_ids is in `state.db`, so a purge means you'd
+     have to grep transcripts by hand to find a specific session.
+
+2. **Skip the script's `[y/N]` safety prompt? (`--force`)** *(only ask if (b) above was chosen)*
+
+   - *What this is:* with `--purge`, `uninstall.sh` prints
+     `--purge will rm -rf ~/.claude-director/ — proceed? [y/N]`
+     and waits for a reply. `--force` suppresses that prompt.
+   - *Options:*
+     - **(a) Keep the prompt (default).** One more chance to back
+       out at the shell.
+     - **(b) Skip it (`--force`).** The `AskUserQuestion` you just
+       answered counts as confirmation; the extra prompt is
+       redundant.
+   - *Default:* (a). Belt-and-suspenders by default; the operator
+     can opt into (b) explicitly.
+   - *Reversibility:* once `--force` plus `--purge` runs, the
+     directory is gone with no further chance to abort. The
+     `--force` flag itself does nothing without `--purge`.
+
+3. **Also deregister the MCP server? (`--mcp-also`)**
+
+   - *What this is:* if you installed with `--register-mcp`,
+     Claude Code remembers claude-director in its MCP server
+     list. Without `--mcp-also`, that registration outlives the
+     uninstall — Claude Code will still list claude-director but
+     fail to connect to it.
+   - *Options:*
+     - **(a) Leave the MCP registration alone (default).** Pick
+       this if you never registered MCP, or you want to keep the
+       registration for a later re-install.
+     - **(b) Also run `claude mcp remove claude-director`.** Pick
+       this if you registered MCP and want a clean
+       no-claude-director-at-all state.
+   - *Default:* (a). The `claude mcp remove` command is harmless
+     if there's no registration, but defaulting it on would imply
+     the operator registered MCP — which they may not have.
+   - *Reversibility:* completely reversible. Re-register at any
+     time with
+     `claude mcp add claude-director ~/.claude-director/bin/claude-director serve --stdio`.
 
 4. **Confirm and execute**
    - Display the assembled `bash uninstall.sh <resolved flags>`.
