@@ -114,6 +114,76 @@ hook fires last and emits the decision envelope Claude consumes).
 A misbehaving user hook can still suppress claude-director's state
 recording — see `hooks.md` for the caveat and mitigations.
 
+## Templates and per-call merge
+
+A claude-director **template** is a TOML file at
+`~/.claude-director/templates/<name>.toml` that bakes a default
+spawn-parameter set. Per-call `--template <name>` layers the per-call
+params on top per a fixed merge contract (SRD §7.1).
+
+Templates are not the same as Claude Code's `settings.json` tier
+stack. The tier stack belongs to Claude Code; templates belong to
+claude-director and feed *into* the `--settings` JSON the supervisor
+synthesizes for each spawn.
+
+### Merge rules
+
+| Field shape | Rule |
+|---|---|
+| Scalar (`cwd`, `relay_mode`) | Per-call non-empty REPLACES; per-call empty falls back to template. |
+| Map (`extra_env`, `claude_director_labels`) | Top-level merge. Template keys survive; per-call keys win on collision. |
+| Permissions arrays (`permissions.allow` / `deny` / `ask`) | CONCAT. Template entries first, per-call appended. This mirrors how Claude Code itself merges its `permissions` block across settings tiers. |
+| `claude_args` | Per-call non-nil REPLACES the template's slice wholesale. Per-call nil falls back to the template. Explicit empty (`[]`) replaces with empty. |
+
+The permissions concat is deliberate — it's the one merge rule that
+intentionally accumulates rather than overwrites, so a template
+saying "always allow Bash(npm test)" can be augmented by per-call
+"and also allow Bash(jq)" without the call having to repeat the
+template's list. This matches Claude Code's own settings-tier merge
+for `permissions.allow|deny|ask` (the per-tier arrays are
+concatenated rather than replaced).
+
+### Reserved per-invocation params
+
+A template MUST NOT bake any of:
+
+- `template` (recursion would be ill-defined)
+- `claude_instance_id` (must be per-invocation for uniqueness)
+- `tmux_session_name` (derived from the id + cwd)
+
+`make-template` rejects these at the CLI flag layer; a hand-edited
+template carrying them surfaces `ErrTemplateMalformed` on load.
+
+### Example
+
+```toml
+# ~/.claude-director/templates/dev.toml
+cwd        = "/home/me/repos/widget"
+relay_mode = "off"
+claude_args = ["--model", "opus"]
+
+[claude_director_labels]
+project = "widget"
+env     = "dev"
+
+[permissions]
+allow = ["Bash(npm test)", "Bash(npm run lint)"]
+deny  = ["Bash(rm)"]
+```
+
+```sh
+claude-director spawn --template dev --label other=bar --allow 'Bash(jq)'
+```
+
+Resulting per-spawn merge:
+
+- `cwd`            → `/home/me/repos/widget` (template)
+- `relay_mode`     → `off` (template)
+- `claude_args`    → `["--model", "opus"]` (template; no per-call replacement)
+- `claude_director_labels` → `{project=widget, env=dev, other=bar}` (merged)
+- `permissions.allow` → `["Bash(npm test)", "Bash(npm run lint)", "Bash(jq)"]` (concat)
+- `permissions.deny`  → `["Bash(rm)"]` (template only)
+
 ## Where to go next
 
 - `hooks.md` — per-event state-tracking + fail-open invariant.
