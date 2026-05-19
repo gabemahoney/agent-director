@@ -1,3 +1,14 @@
 reference/
 bin/
 dist/
+
+# Bee hives live in the enclosing project folder, not the repo. Only the
+# testplans hive (consumed by the Docker harness) stays in-tree. If a future
+# `tickets/<Other>/` directory appears inside the repo it should NOT be
+# committed — the hive belongs outside.
+tickets/*
+!tickets/testplans/
+!tickets/testplans/**
+
+# macOS Finder cruft
+.DS_Store

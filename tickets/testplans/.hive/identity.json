@@ -13,7 +13,6 @@
       "Test cases"
     ]
   },
-  "description": "Per-Epic plain-English test plans consumed by the Docker harness (built in Epic 2). Each t1 is an Epic collector; each t2 is a single plain-English test case.",
   "status_values": [
     "pupa",
     "worker",
