@@ -108,16 +108,14 @@ func sendKeysHandlerWith(st *store.Store, args []string) error {
 
 // parseSendKeysFlags carves argv into a SendKeysParams. `--text` is
 // required and may contain literal `\n` / `\r` from the caller — the verb
-// strips `\r` and preserves `\n` per SRD §4.3. `--no-enter` flips the
-// default-true press_enter to false.
+// strips `\r` and preserves `\n` per SRD §4.3 and always appends a single
+// trailing Enter.
 func parseSendKeysFlags(args []string) (api.SendKeysParams, error) {
 	var p api.SendKeysParams
-	var noEnter bool
 	fs := flag.NewFlagSet("send-keys", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the Spawn to drive")
 	fs.StringVar(&p.Text, "text", "", "text to type into the Spawn's input")
-	fs.BoolVar(&noEnter, "no-enter", false, "do not append a trailing Enter (default: append)")
 	if err := fs.Parse(args); err != nil {
 		return p, err
 	}
@@ -126,7 +124,6 @@ func parseSendKeysFlags(args []string) (api.SendKeysParams, error) {
 	}
 	// Empty --text is allowed (a press-Enter-only call has no body); the
 	// verb-layer state guard still applies.
-	p.PressEnter = !noEnter
 	return p, nil
 }
 

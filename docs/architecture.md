@@ -331,7 +331,7 @@ load-bearing:
   *one* element containing the literal LFs; tmux's own quoting handles
   them.
 
-- **`press_enter` (default true) appends a single Enter.** Implemented
+- **A single Enter is always appended after the text.** Implemented
   as a *separate* `tmux send-keys -t <name>:0.0 Enter` call after the
   text. Mixing the submit byte into the text argv would re-introduce
   the same "premature submission" failure mode the CR strip prevents.

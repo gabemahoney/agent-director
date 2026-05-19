@@ -79,32 +79,6 @@ func TestSendKeysCLIHappyPath(t *testing.T) {
 	}
 }
 
-func TestSendKeysCLINoEnter(t *testing.T) {
-	fakeDir := buildFakeTmux(t)
-	home := t.TempDir()
-	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".claude-director", "state.db")
-	seedSpawnRow(t, dbPath, "id-sk-2", "cd-sk-2", "waiting", "off")
-
-	_, stderr, code := runSpawnCLI(t, home, fakeDir,
-		"send-keys", "--claude-instance-id", "id-sk-2", "--text", "draft", "--no-enter")
-	if code != 0 {
-		t.Fatalf("send-keys exit = %d; stderr=%s", code, stderr)
-	}
-	logBytes, err := os.ReadFile(filepath.Join(home, "fake-tmux.log"))
-	if err != nil {
-		t.Fatalf("read fake-tmux log: %v", err)
-	}
-	log := string(logBytes)
-	// One send-keys call only — the text. No Enter.
-	if got := strings.Count(log, "send-keys"); got != 1 {
-		t.Errorf("send-keys invocation count = %d; want 1 (no Enter)\nlog=%s", got, log)
-	}
-	if strings.Contains(log, "\nEnter\n") {
-		t.Errorf("fake-tmux log contained an Enter token under --no-enter: %s", log)
-	}
-}
-
 func TestSendKeysCLIErrSpawnNotInteractive(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()

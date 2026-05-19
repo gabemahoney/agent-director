@@ -67,7 +67,6 @@ func TestSendKeysSingleLineWithEnter(t *testing.T) {
 	if _, err := api.SendKeys(s, tmux, api.SendKeysParams{
 		ClaudeInstanceID: "id-1",
 		Text:             "hello",
-		PressEnter:       true,
 	}); err != nil {
 		t.Fatalf("SendKeys: %v", err)
 	}
@@ -92,7 +91,6 @@ func TestSendKeysMultilinePreservesLF(t *testing.T) {
 	if _, err := api.SendKeys(s, tmux, api.SendKeysParams{
 		ClaudeInstanceID: "id-2",
 		Text:             "line one\nline two",
-		PressEnter:       true,
 	}); err != nil {
 		t.Fatalf("SendKeys: %v", err)
 	}
@@ -117,7 +115,6 @@ func TestSendKeysStripsCR(t *testing.T) {
 	if _, err := api.SendKeys(s, tmux, api.SendKeysParams{
 		ClaudeInstanceID: "id-3",
 		Text:             "ab\rcd\r\nef",
-		PressEnter:       true,
 	}); err != nil {
 		t.Fatalf("SendKeys: %v", err)
 	}
@@ -126,29 +123,6 @@ func TestSendKeysStripsCR(t *testing.T) {
 	want := [][2]string{
 		{"cd-tmp", "abcd\nef"},
 		{"cd-tmp", "Enter"},
-	}
-	if !reflect.DeepEqual(tmux.calls, want) {
-		t.Fatalf("calls = %v; want %v", tmux.calls, want)
-	}
-}
-
-func TestSendKeysNoEnter(t *testing.T) {
-	// PressEnter=false leaves the composed text in the input box without
-	// submitting. A subsequent send-keys can append more text or send
-	// Enter on its own.
-	s := openStoreWithRow(t, "id-4", "cd-tmp", store.StateWaiting, "off")
-	tmux := newTmux()
-
-	if _, err := api.SendKeys(s, tmux, api.SendKeysParams{
-		ClaudeInstanceID: "id-4",
-		Text:             "hello",
-		PressEnter:       false,
-	}); err != nil {
-		t.Fatalf("SendKeys: %v", err)
-	}
-
-	want := [][2]string{
-		{"cd-tmp", "hello"},
 	}
 	if !reflect.DeepEqual(tmux.calls, want) {
 		t.Fatalf("calls = %v; want %v", tmux.calls, want)
@@ -165,7 +139,6 @@ func TestSendKeysRejectsPendingState(t *testing.T) {
 	_, err := api.SendKeys(s, tmux, api.SendKeysParams{
 		ClaudeInstanceID: "id-5",
 		Text:             "hi",
-		PressEnter:       true,
 	})
 	if !errors.Is(err, api.ErrSpawnNotInteractive) {
 		t.Fatalf("err = %v; want ErrSpawnNotInteractive", err)
@@ -182,7 +155,6 @@ func TestSendKeysRejectsEndedState(t *testing.T) {
 	_, err := api.SendKeys(s, tmux, api.SendKeysParams{
 		ClaudeInstanceID: "id-6",
 		Text:             "hi",
-		PressEnter:       true,
 	})
 	if !errors.Is(err, api.ErrSpawnNotInteractive) {
 		t.Fatalf("err = %v; want ErrSpawnNotInteractive", err)
@@ -199,7 +171,6 @@ func TestSendKeysCheckPermissionWithRelayOn(t *testing.T) {
 	_, err := api.SendKeys(s, tmux, api.SendKeysParams{
 		ClaudeInstanceID: "id-7",
 		Text:             "1",
-		PressEnter:       true,
 	})
 	if !errors.Is(err, api.ErrSendKeysWhileRelayed) {
 		t.Fatalf("err = %v; want ErrSendKeysWhileRelayed", err)
@@ -219,7 +190,6 @@ func TestSendKeysCheckPermissionWithRelayOff(t *testing.T) {
 	if _, err := api.SendKeys(s, tmux, api.SendKeysParams{
 		ClaudeInstanceID: "id-8",
 		Text:             "1",
-		PressEnter:       true,
 	}); err != nil {
 		t.Fatalf("SendKeys: %v", err)
 	}
@@ -239,7 +209,6 @@ func TestSendKeysSpawnNotFound(t *testing.T) {
 	_, err := api.SendKeys(s, tmux, api.SendKeysParams{
 		ClaudeInstanceID: "absent",
 		Text:             "hi",
-		PressEnter:       true,
 	})
 	if !errors.Is(err, store.ErrSpawnNotFound) {
 		t.Fatalf("err = %v; want ErrSpawnNotFound", err)
@@ -259,7 +228,6 @@ func TestSendKeysPropagatesTmuxError(t *testing.T) {
 	_, err := api.SendKeys(s, tmux, api.SendKeysParams{
 		ClaudeInstanceID: "id-10",
 		Text:             "hi",
-		PressEnter:       true,
 	})
 	if !errors.Is(err, errSentinel) {
 		t.Fatalf("err = %v; want errSentinel chain", err)
@@ -277,19 +245,18 @@ func TestSendKeysPropagatesTmuxError(t *testing.T) {
 // is preserved).
 var errSentinel = errors.New("test sentinel")
 
-func TestSendKeysEmptyTextWithEnterSubmits(t *testing.T) {
-	// An empty text + PressEnter=true is a valid "submit the existing
-	// buffer" call — the equivalent of pressing Enter at the keyboard
-	// when the user already has text composed. The verb sends an empty
-	// text then the Enter. (tmux will accept an empty argv for send-keys
-	// as a no-op; we mirror that.)
+func TestSendKeysEmptyTextSubmits(t *testing.T) {
+	// An empty text is a valid "submit the existing buffer" call — the
+	// equivalent of pressing Enter at the keyboard when the user already
+	// has text composed. The verb sends an empty text then the Enter.
+	// (tmux will accept an empty argv for send-keys as a no-op; we mirror
+	// that.)
 	s := openStoreWithRow(t, "id-11", "cd-tmp", store.StateWaiting, "off")
 	tmux := newTmux()
 
 	if _, err := api.SendKeys(s, tmux, api.SendKeysParams{
 		ClaudeInstanceID: "id-11",
 		Text:             "",
-		PressEnter:       true,
 	}); err != nil {
 		t.Fatalf("SendKeys: %v", err)
 	}

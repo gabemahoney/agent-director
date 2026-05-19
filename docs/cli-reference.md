@@ -98,13 +98,12 @@ Return the full DB row for a tracked Spawn (id, parent, state, cwd, session name
 
 ## send-keys
 
-Send text into a tracked Spawn's tmux pane. `\r` bytes are stripped (prevent premature submission); `\n` bytes are preserved (composed-but-unsubmitted newlines in Claude's input box); press_enter (default true) appends a single Enter to submit.
+Send text into a tracked Spawn's tmux pane. `\r` bytes are stripped (prevent premature submission); `\n` bytes are preserved (composed-but-unsubmitted newlines in Claude's input box); a single Enter is always appended to submit the composed buffer.
 
 ### Parameters
 
 - `claude_instance_id` (string, required): Id of the live Spawn to drive.
 - `text` (string, required): Text to type into the Spawn's input. `\r` stripped pre-send; `\n` preserved as newline-in-input.
-- `press_enter` (bool, optional): When true (default), append a single Enter after the text to submit the composed buffer. CLI exposes the inverse as `--no-enter`.
 
 ### Result
 

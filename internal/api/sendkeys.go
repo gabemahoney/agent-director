@@ -15,14 +15,9 @@ type SendKeysTmux interface {
 }
 
 // SendKeysParams is the typed parameter shape for the send-keys verb.
-// PressEnter is a *bool so the JSON / flag layer can distinguish "absent"
-// (default true) from "explicitly false" without ambiguity. The CLI
-// resolves the pointer before calling SendKeys; an MCP caller passing
-// `press_enter:false` does the same.
 type SendKeysParams struct {
 	ClaudeInstanceID string
 	Text             string
-	PressEnter       bool
 }
 
 // SendKeysResult is the typed return shape. Empty struct today; reserved
@@ -40,9 +35,9 @@ type SendKeysResult struct{}
 //   - `\n` (LF, 0x0A) bytes are PRESERVED — Claude's input handler treats
 //     LF as "insert newline in input box", not as a submit. Multi-line
 //     prompts compose as one message.
-//   - PressEnter (default true at the CLI) appends a single Enter via a
-//     separate `tmux send-keys -t <name>:0.0 Enter` call after the text.
-//     That is the single submit.
+//   - A single Enter is always appended via a separate
+//     `tmux send-keys -t <name>:0.0 Enter` call after the text. That is
+//     the single submit.
 //
 // State precondition: the Spawn must be in a live, interactive state
 // (waiting / working / ask_user / check_permission). pending Spawns have
@@ -78,14 +73,12 @@ func SendKeys(s *store.Store, tmux SendKeysTmux, params SendKeysParams) (SendKey
 		return SendKeysResult{}, err
 	}
 
-	if params.PressEnter {
-		// Enter is delivered as a separate send-keys call so tmux
-		// interprets the literal token as the keysym. Mixing the
-		// submit byte into the text argv would re-introduce the same
-		// "premature submission" failure mode the \r strip prevents.
-		if err := tmux.SendKeys(row.TmuxSessionName, "Enter"); err != nil {
-			return SendKeysResult{}, err
-		}
+	// Enter is delivered as a separate send-keys call so tmux interprets
+	// the literal token as the keysym. Mixing the submit byte into the
+	// text argv would re-introduce the same "premature submission"
+	// failure mode the \r strip prevents.
+	if err := tmux.SendKeys(row.TmuxSessionName, "Enter"); err != nil {
+		return SendKeysResult{}, err
 	}
 
 	return SendKeysResult{}, nil
