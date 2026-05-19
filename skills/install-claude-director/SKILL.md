@@ -145,25 +145,33 @@ re-install the previous tag via `install.sh --from-release v<old>`.
 3. **Register the MCP server with Claude Code? (`--register-mcp`)**
 
    - *What this is:* MCP (Model Context Protocol) is how Claude Code
-     learns about external tool servers it can call. Registering
-     claude-director as an MCP server makes its verbs (`spawn`,
-     `send-keys`, `read-pane`, etc.) callable *from inside Claude
-     Code sessions* as `mcp__claude-director__spawn` and friends —
-     i.e., an orchestrating Claude can drive a Spawn without
-     shelling out. Without this, you can still use claude-director
-     by typing `claude-director ...` in a shell.
+     learns about external tool servers and exposes their operations
+     as first-class typed tools. Registering claude-director as an
+     MCP server makes its verbs (`spawn`, `send-keys`, `read-pane`,
+     etc.) appear in any Claude session's tool list as
+     `mcp__claude-director__spawn` and friends — typed inputs,
+     structured outputs, schema-validated, no shell-escaping
+     headaches. *This does NOT affect whether Claudes can drive
+     claude-director* — they can call the CLI via their `Bash` tool
+     either way. It only changes whether claude-director's API is
+     exposed as a typed tool surface or has to be shelled out to.
    - *Options:*
      - **(a) Register now (`--register-mcp`).** The script runs
-       `claude mcp add claude-director <path> serve --stdio`. Pick
-       this if you plan to have one Claude orchestrate other
-       Claudes.
-     - **(b) Skip.** Pick this if you'll only invoke claude-director
-       from scripts or your shell.
-   - *Default:* (b) — OFF. Registering MCP is a power-user feature;
-     defaulting it on would clutter the MCP list of operators who
-     don't need it.
+       `claude mcp add claude-director -- <path> serve --stdio`.
+       claude-director's verbs become typed MCP tools in every
+       Claude session. Pick this for orchestrator setups, or any
+       workflow where you want Claudes to discover claude-director's
+       API automatically.
+     - **(b) Skip.** claude-director stays a CLI: a Claude can still
+       call it via `Bash` (e.g. `claude-director spawn ...`), and
+       humans use it from the shell. Pick this if you don't want it
+       cluttering every session's MCP tool list, or you'll only call
+       it from scripts/cron.
+   - *Default:* (b) — OFF. MCP registration is the right call for
+     orchestrator setups, but off-by-default keeps the tool list
+     lean for operators who don't need it. Easy to flip on later.
    - *Reversibility:* fully reversible. To add it later:
-     `claude mcp add claude-director ~/.claude-director/bin/claude-director serve --stdio`.
+     `claude mcp add claude-director -- ~/.claude-director/bin/claude-director serve --stdio`.
      To remove: `claude mcp remove claude-director` or
      `uninstall.sh --mcp-also`.
 
