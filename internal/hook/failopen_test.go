@@ -2,16 +2,21 @@ package hook
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"log"
 	"strings"
 	"testing"
+
+	"github.com/gabemahoney/claude-director/internal/config"
+	"github.com/gabemahoney/claude-director/internal/store"
 )
 
-// flakyStore is a HookStore double whose transition / session-id calls
-// return programmable errors. Used to drive the DB-unreachable
-// fail-open branches without actually crashing SQLite.
+// flakyStore is a HookStore double whose state-tracking calls return
+// programmable errors. The relay-side methods (UpsertOpenPermissionRequest,
+// GetPermissionRequest) are no-ops here — the fail-open suite only
+// exercises the state-tracking path.
 type flakyStore struct {
 	transitionErr error
 	sessionErr    error
@@ -27,6 +32,12 @@ func (f *flakyStore) SetSessionID(string, string) error {
 	f.sessionN++
 	return f.sessionErr
 }
+func (f *flakyStore) UpsertOpenPermissionRequest(string, string, string) error {
+	return nil
+}
+func (f *flakyStore) GetPermissionRequest(string) (store.PermissionRow, error) {
+	return store.PermissionRow{}, nil
+}
 
 // captureLog wraps a *log.Logger writing to a bytes.Buffer so tests can
 // assert *that* an error was logged without pinning the exact phrasing.
@@ -36,12 +47,23 @@ func captureLog(t *testing.T) (*log.Logger, *bytes.Buffer) {
 	return log.New(buf, "", 0), buf
 }
 
+// callHandle is a small convenience adapter for the legacy fail-open
+// suite: thread context.Background, an io.Discard stdout, and an
+// empty HandleConfig.Env (so RELAY_MODE is never "on" — fail-open
+// branch).
+func callHandle(stdin io.Reader, env func(string) string, st HookStore, logger *log.Logger) error {
+	return Handle(context.Background(), stdin, io.Discard, st, HandleConfig{
+		Env: env,
+		Cfg: config.Relay{},
+	}, logger)
+}
+
 func TestHandleMissingInstanceIDExitsZero(t *testing.T) {
 	logger, buf := captureLog(t)
 	stdin := strings.NewReader(`{"hook_event_name":"SessionStart"}`)
 	st := &flakyStore{}
 	env := func(string) string { return "" } // no env var
-	if err := Handle(stdin, env, st, logger); err != nil {
+	if err := callHandle(stdin, env, st, logger); err != nil {
 		t.Fatalf("Handle returned err = %v; want nil (fail-open)", err)
 	}
 	if st.transitionN != 0 {
@@ -57,7 +79,7 @@ func TestHandleMalformedPayloadExitsZero(t *testing.T) {
 	stdin := strings.NewReader("not json")
 	st := &flakyStore{}
 	env := func(string) string { return "id-123" }
-	if err := Handle(stdin, env, st, logger); err != nil {
+	if err := callHandle(stdin, env, st, logger); err != nil {
 		t.Fatalf("Handle returned err = %v; want nil (fail-open)", err)
 	}
 	if st.transitionN != 0 {
@@ -70,11 +92,10 @@ func TestHandleMalformedPayloadExitsZero(t *testing.T) {
 
 func TestHandlePayloadTooLargeExitsZero(t *testing.T) {
 	logger, buf := captureLog(t)
-	// MaxPayloadBytes+1 bytes of 'a' — caps at exactly the limit.
 	huge := strings.Repeat("a", int(MaxPayloadBytes)+1)
 	st := &flakyStore{}
 	env := func(string) string { return "id-123" }
-	if err := Handle(strings.NewReader(huge), env, st, logger); err != nil {
+	if err := callHandle(strings.NewReader(huge), env, st, logger); err != nil {
 		t.Fatalf("Handle returned err = %v; want nil (fail-open)", err)
 	}
 	if st.transitionN != 0 {
@@ -90,7 +111,7 @@ func TestHandleStoreTransitionErrorExitsZero(t *testing.T) {
 	stdin := strings.NewReader(`{"hook_event_name":"SessionStart"}`)
 	st := &flakyStore{transitionErr: errors.New("db unreachable")}
 	env := func(string) string { return "id-123" }
-	if err := Handle(stdin, env, st, logger); err != nil {
+	if err := callHandle(stdin, env, st, logger); err != nil {
 		t.Fatalf("Handle returned err = %v; want nil (fail-open)", err)
 	}
 	if st.transitionN != 1 {
@@ -106,7 +127,7 @@ func TestHandleSessionIDErrorExitsZero(t *testing.T) {
 	stdin := strings.NewReader(`{"hook_event_name":"SessionStart","transcript_path":"/x/abc.jsonl"}`)
 	st := &flakyStore{sessionErr: errors.New("db unreachable")}
 	env := func(string) string { return "id-123" }
-	if err := Handle(stdin, env, st, logger); err != nil {
+	if err := callHandle(stdin, env, st, logger); err != nil {
 		t.Fatalf("Handle returned err = %v; want nil (fail-open)", err)
 	}
 	if st.sessionN != 1 {
@@ -119,7 +140,7 @@ func TestHandleHappyPathWritesBothColumns(t *testing.T) {
 	stdin := strings.NewReader(`{"hook_event_name":"SessionStart","transcript_path":"/x/abc.jsonl"}`)
 	st := &flakyStore{}
 	env := func(string) string { return "id-123" }
-	if err := Handle(stdin, env, st, logger); err != nil {
+	if err := callHandle(stdin, env, st, logger); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
 	if st.transitionN != 1 {
@@ -134,18 +155,16 @@ func TestHandleNilLoggerDoesNotPanic(t *testing.T) {
 	stdin := strings.NewReader(`{"hook_event_name":"SessionStart"}`)
 	st := &flakyStore{}
 	env := func(string) string { return "id-123" }
-	if err := Handle(stdin, env, st, nil); err != nil {
+	if err := callHandle(stdin, env, st, nil); err != nil {
 		t.Fatalf("Handle returned %v; want nil", err)
 	}
 }
 
 func TestReadPayloadEnforcesCap(t *testing.T) {
-	// Read exactly MaxPayloadBytes — must succeed.
 	exact := bytes.Repeat([]byte{'x'}, int(MaxPayloadBytes))
 	if _, err := ReadPayload(bytes.NewReader(exact)); err != nil {
 		t.Fatalf("ReadPayload at cap: %v", err)
 	}
-	// Read MaxPayloadBytes+1 — must fail with ErrPayloadTooLarge.
 	over := bytes.Repeat([]byte{'x'}, int(MaxPayloadBytes)+1)
 	_, err := ReadPayload(bytes.NewReader(over))
 	if !errors.Is(err, ErrPayloadTooLarge) {
@@ -184,5 +203,4 @@ func TestResolveInstanceIDMissingErr(t *testing.T) {
 	}
 }
 
-// _ var keeps io imported even if a test rewrite drops it.
 var _ = io.EOF

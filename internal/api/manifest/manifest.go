@@ -265,6 +265,37 @@ var Verbs = []VerbDef{
 		},
 	},
 	{
+		Name:        "decide",
+		Description: "Orchestrator's allow/deny verdict on an open PermissionRequest. Race-free first-call-wins via a single-statement UPDATE guarded by `decision IS NULL`. Only callable on Spawns with relay_mode=on.",
+		Params: []ParamDef{
+			{
+				Name:        "claude_instance_id",
+				Type:        "string",
+				Description: "Id of the Spawn sitting on the PermissionRequest.",
+				Required:    true,
+			},
+			{
+				Name:        "decision",
+				Type:        "string",
+				Description: "Either `allow` or `deny`.",
+				Required:    true,
+			},
+			{
+				Name:        "reason",
+				Type:        "string",
+				Description: "Free-text message surfaced to Claude. On `deny` with empty reason the envelope defaults to \"Denied by orchestrator\".",
+			},
+		},
+		ResultFields: []FieldDef{},
+		ErrorNames: []string{
+			"ErrSpawnNotFound",
+			"ErrRelayModeOff",
+			"ErrNoOpenPermissionRequest",
+			"ErrAlreadyDecided",
+			"ErrInvalidDecision",
+		},
+	},
+	{
 		Name:        "resume",
 		Description: "Bring a terminated (ended/missing) Spawn back to life via `claude --resume`. Same claude_instance_id, fresh tmux session, same JSONL transcript. parent_id is re-derived from the caller's CLAUDE_DIRECTOR_INSTANCE_ID env var on every resume.",
 		Params: []ParamDef{

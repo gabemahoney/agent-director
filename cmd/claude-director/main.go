@@ -7,6 +7,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -68,6 +69,7 @@ func handlers(st *store.Store, cfg config.Config) map[string]func([]string) erro
 		"pause":     func(args []string) error { return pauseHandlerWith(st, cfg, args) },
 		"list":          func(args []string) error { return listHandlerWith(st, args) },
 		"make-template": func(args []string) error { return makeTemplateHandlerWith(args) },
+		"decide":        func(args []string) error { return decideHandlerWith(st, args) },
 		"resume":        func(args []string) error { return resumeHandlerWith(st, cfg, args) },
 		"find-missing":  func(args []string) error { return findMissingHandlerWith(st, cfg, args) },
 		"expire":        func(args []string) error { return expireHandlerWith(st, cfg, args) },
@@ -86,27 +88,47 @@ const hookExitCode = 0
 // runHook is the hook-verb entry point. It is invoked directly from run()
 // before the normal store-setup-and-dispatch path so that *every* failure
 // mode (missing config, store open failure, malformed payload, DB
-// unreachable) yields exit 0 with empty stdout. State-tracking hooks
-// MUST NOT block Claude Code.
+// unreachable) yields exit 0 with empty stdout (state-tracking) or a
+// deny envelope (relay-on per SRD §6.4 fail-closed boundary).
+//
+// The relay-active determination is made FROM ENV (CLAUDE_DIRECTOR_RELAY_MODE)
+// before any disk I/O — SRD §6.5 — so even a store-open failure on a
+// relay-on Spawn still emits a valid deny envelope.
 //
 // The function never returns an error; it logs and returns.
 func runHook() int {
 	logger := newHookLogger()
+	stdout := os.Stdout
+	relayActive := os.Getenv(hook.EnvRelayMode) == hook.RelayModeOn
+
+	// Pre-Handle fail-closed: if relay is active and we can't get far
+	// enough to even invoke hook.Handle, emit deny here. Handle itself
+	// owns fail-closed past this point.
+	earlyFailClosed := func(why string) {
+		hookLog(logger, "hook: %s", why)
+		if relayActive {
+			fmt.Fprintln(stdout, hook.EncodeDecision("deny", ""))
+		}
+	}
 
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		// Fail-open: log and exit 0. Config malformed cannot block Claude.
-		hookLog(logger, "hook: load config: %v", err)
+		earlyFailClosed(fmt.Sprintf("load config: %v", err))
 		return hookExitCode
 	}
 	st, err := store.Open(cfg.Store.DbPath)
 	if err != nil {
-		hookLog(logger, "hook: open store: %v", err)
+		earlyFailClosed(fmt.Sprintf("open store: %v", err))
 		return hookExitCode
 	}
 	defer st.Close()
 
-	if err := hook.Handle(os.Stdin, hook.OSGetenv, st, logger); err != nil {
+	hc := hook.HandleConfig{
+		Env:   hook.OSGetenv,
+		Cfg:   cfg.Relay,
+		Clock: hook.DefaultPollClock(),
+	}
+	if err := hook.Handle(context.Background(), os.Stdin, stdout, st, hc, logger); err != nil {
 		hookLog(logger, "hook: handle: %v", err)
 	}
 	return hookExitCode

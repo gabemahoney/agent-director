@@ -156,6 +156,28 @@ Terminate the Spawn's tmux session. Idempotent on terminal states (ended/missing
 
 - `ErrSpawnNotFound`
 
+## Tool: decide
+
+Orchestrator's allow/deny verdict on an open PermissionRequest. Race-free first-call-wins via a single-statement UPDATE guarded by `decision IS NULL`. Only callable on Spawns with relay_mode=on.
+
+### Input schema
+
+- `claude_instance_id`: type=string, required=true — Id of the Spawn sitting on the PermissionRequest.
+- `decision`: type=string, required=true — Either `allow` or `deny`.
+- `reason`: type=string, required=false — Free-text message surfaced to Claude. On `deny` with empty reason the envelope defaults to "Denied by orchestrator".
+
+### Output schema
+
+- (no output fields)
+
+### Errors
+
+- `ErrSpawnNotFound`
+- `ErrRelayModeOff`
+- `ErrNoOpenPermissionRequest`
+- `ErrAlreadyDecided`
+- `ErrInvalidDecision`
+
 ## Tool: resume
 
 Bring a terminated (ended/missing) Spawn back to life via `claude --resume`. Same claude_instance_id, fresh tmux session, same JSONL transcript. parent_id is re-derived from the caller's CLAUDE_DIRECTOR_INSTANCE_ID env var on every resume.

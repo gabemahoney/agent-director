@@ -271,6 +271,34 @@ func pauseHandlerWith(st *store.Store, cfg config.Config, args []string) error {
 	return writeJSON(os.Stdout, result)
 }
 
+// decideHandlerWith implements `claude-director decide`. The handler
+// rejects empty flags up front; the API layer guards the
+// allow|deny enum (ErrInvalidDecision) as defense in depth for MCP
+// callers that bypass the CLI flag parser.
+func decideHandlerWith(st *store.Store, args []string) error {
+	var p api.DecideParams
+	fs := flag.NewFlagSet("decide", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the Spawn awaiting a decision")
+	fs.StringVar(&p.Decision, "decision", "", "allow or deny")
+	fs.StringVar(&p.Reason, "reason", "", "optional message surfaced to Claude")
+	if err := fs.Parse(args); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+	}
+	if p.ClaudeInstanceID == "" {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", "--claude-instance-id is required")
+	}
+	if p.Decision == "" {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", "--decision is required (allow|deny)")
+	}
+	result, err := api.Decide(st, p)
+	if err != nil {
+		name, desc := classifyError(err)
+		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+	}
+	return writeJSON(os.Stdout, result)
+}
+
 // resumeHandlerWith implements `claude-director resume`. The verb
 // reads the spawn-time row out of the store and restarts claude via
 // tmux with `--resume <session_id>`. Same id, fresh tmux session.

@@ -1,0 +1,142 @@
+package hook
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"math/rand"
+	"time"
+
+	"github.com/gabemahoney/claude-director/internal/config"
+	"github.com/gabemahoney/claude-director/internal/store"
+)
+
+// pollFloor is the minimum per-iteration sleep. SRD §6.2: a
+// misconfigured `poll_base_ms=0, poll_jitter_ms=0` must not pin the
+// CPU; this floor guarantees we sleep at least 50ms per loop even on
+// the most aggressive setting.
+const pollFloor = 50 * time.Millisecond
+
+// pollMaxReadRetries is the upper bound on consecutive SQL read
+// failures the polling loop tolerates before giving up. Each retry
+// pays the floor sleep so a flapping DB doesn't burn CPU. Past the
+// budget the loop fails closed (deny envelope).
+const pollMaxReadRetries = 5
+
+// PollResult captures the outcome of one polling-loop run. Decision
+// is the empty string when the loop exited without a definitive
+// answer (timeout / ctx / preemption / exhaustion); the handler
+// translates that into a deny envelope at the boundary.
+type PollResult struct {
+	Decision string
+	Reason   string
+	Why      string // human-readable reason for diagnostics; not echoed to Claude.
+}
+
+// PollStore is the narrow surface the loop reads. *store.Store
+// satisfies it via GetPermissionRequest.
+type PollStore interface {
+	GetPermissionRequest(instanceID string) (store.PermissionRow, error)
+}
+
+// PollClock is the sleeper seam. Production uses time.NewTimer to
+// honor ctx.Done; tests can inject a fast variant.
+type PollClock interface {
+	Sleep(ctx context.Context, d time.Duration)
+}
+
+// realPollClock is the production sleeper. It uses time.NewTimer so
+// ctx.Done preempts the sleep cleanly.
+type realPollClock struct{}
+
+func (realPollClock) Sleep(ctx context.Context, d time.Duration) {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-ctx.Done():
+	}
+}
+
+// DefaultPollClock returns the production sleeper. Tests inject their
+// own.
+func DefaultPollClock() PollClock { return realPollClock{} }
+
+// Poll runs the SRD §6.2 relay polling loop. Behavior per iteration:
+//
+//  1. Read the permission_requests row by instance id.
+//     - sql.ErrNoRows → another hook event preempted; fail-closed deny.
+//     - any other error → bounded retry (pollMaxReadRetries); if the
+//       retry budget is exhausted, fail-closed deny.
+//     - decision still NULL → sleep and loop.
+//     - decision populated → return it.
+//  2. The per-iteration sleep is `max(pollFloor, cfg.PollBaseMs + uniform(0, cfg.PollJitterMs))`.
+//     ctx.Done preempts the sleep (the realPollClock uses a Timer +
+//     select).
+//  3. The overall loop is capped by cfg.TimeoutSeconds. On expiry the
+//     loop returns a fail-closed deny without making one more poll
+//     (the timeout boundary is the answer the operator agreed to).
+//
+// The polling loop NEVER writes to permission_requests — SRD §6.2
+// invariant. Only decide() owns the decision columns.
+func Poll(ctx context.Context, s PollStore, clock PollClock, cfg config.Relay, instanceID string, rng *rand.Rand) PollResult {
+	timeout := time.Duration(cfg.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		// SRD §11 default is 600s; guard against a config that pinned 0.
+		timeout = 600 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+
+	readFails := 0
+	for {
+		// Honor ctx before each iteration so a fast cancel doesn't
+		// pay a full sleep.
+		if err := ctx.Err(); err != nil {
+			return PollResult{Why: "ctx cancelled: " + err.Error()}
+		}
+		if time.Now().After(deadline) {
+			return PollResult{Why: "polling timeout exceeded"}
+		}
+
+		row, err := s.GetPermissionRequest(instanceID)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			// Preempted — typically another PermissionRequest event
+			// for the same Spawn DELETE-INSERTed a fresh row and the
+			// older row's poll loop is still spinning. Fail closed.
+			return PollResult{Why: "row preempted (deleted) during poll"}
+		case err != nil:
+			readFails++
+			if readFails > pollMaxReadRetries {
+				return PollResult{Why: "exceeded read-retry budget: " + err.Error()}
+			}
+			clock.Sleep(ctx, pollFloor)
+			continue
+		}
+
+		if row.Decision != "" {
+			return PollResult{
+				Decision: row.Decision,
+				Reason:   row.DecisionReason,
+				Why:      "decided",
+			}
+		}
+
+		// Still pending → sleep and loop.
+		readFails = 0
+		sleep := time.Duration(cfg.PollBaseMs) * time.Millisecond
+		if cfg.PollJitterMs > 0 {
+			sleep += time.Duration(rng.Intn(cfg.PollJitterMs)) * time.Millisecond
+		}
+		if sleep < pollFloor {
+			sleep = pollFloor
+		}
+		// Never sleep past the deadline.
+		if remaining := time.Until(deadline); remaining < sleep {
+			sleep = remaining
+		}
+		if sleep > 0 {
+			clock.Sleep(ctx, sleep)
+		}
+	}
+}

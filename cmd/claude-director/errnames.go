@@ -54,6 +54,10 @@ var errCatalog = []struct {
 	{"ErrSpawnNotResumable", api.ErrSpawnNotResumable},
 	{"ErrNoSessionId", api.ErrNoSessionId},
 	{"ErrJsonlMissing", api.ErrJsonlMissing},
+	{"ErrRelayModeOff", api.ErrRelayModeOff},
+	{"ErrInvalidDecision", api.ErrInvalidDecision},
+	{"ErrNoOpenPermissionRequest", store.ErrNoOpenPermissionRequest},
+	{"ErrAlreadyDecided", store.ErrAlreadyDecided},
 }
 
 // classifyError returns the canonical err_name and an err_description for
