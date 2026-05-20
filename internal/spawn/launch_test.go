@@ -16,6 +16,10 @@ import (
 
 // captureTmux is a TmuxClient test double — records the argv that
 // Launch would have handed tmux, and returns a programmable error.
+// failOnSessionName injects a NewSession failure only when the
+// supplied name matches — used by the live-collision case so the
+// "tmux already has this name" path can be exercised without a real
+// tmux.
 type captureTmux struct {
 	got struct {
 		name    string
@@ -24,7 +28,8 @@ type captureTmux struct {
 		command []string
 		called  bool
 	}
-	err error
+	err               error
+	failOnSessionName string
 }
 
 func (c *captureTmux) NewSession(name, cwd string, envs map[string]string, command []string) error {
@@ -33,6 +38,9 @@ func (c *captureTmux) NewSession(name, cwd string, envs map[string]string, comma
 	c.got.cwd = cwd
 	c.got.envs = envs
 	c.got.command = command
+	if c.failOnSessionName != "" && name == c.failOnSessionName {
+		return errors.New("tmux: duplicate session: can't create session")
+	}
 	return c.err
 }
 
@@ -492,6 +500,66 @@ type captureWriter struct{ buf string }
 func (c *captureWriter) Write(p []byte) (int, error) {
 	c.buf += string(p)
 	return len(p), nil
+}
+
+// TestLaunchPassesUserSuppliedTmuxSessionName pins SR-4.1 + SR-3.1: a
+// caller-supplied TmuxSessionName flows verbatim into
+// TmuxClient.NewSession and into the persisted spawns row — no
+// sanitization, no suffix.
+func TestLaunchPassesUserSuppliedTmuxSessionName(t *testing.T) {
+	withStubExe(t, "/bin/claude-director")
+	t.Setenv(envInstanceID, "")
+	s, r, cfg := newStoreAndLaunchInputs(t)
+	r.ClaudeInstanceID = "id-user-name"
+	r.TmuxSessionName = "bot-claude-status"
+	r.TmuxSessionNameSupplied = true
+	tmux := &captureTmux{}
+
+	if _, err := Launch(s, tmux, r, cfg); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if tmux.got.name != "bot-claude-status" {
+		t.Errorf("tmux.NewSession name = %q; want bot-claude-status (verbatim, no decoration)", tmux.got.name)
+	}
+	row, err := s.GetSpawn("id-user-name")
+	if err != nil {
+		t.Fatalf("GetSpawn: %v", err)
+	}
+	if row.TmuxSessionName != "bot-claude-status" {
+		t.Errorf("row.TmuxSessionName = %q; want bot-claude-status", row.TmuxSessionName)
+	}
+}
+
+// TestLaunchSurfacesTmuxNewSessionFailureUnchanged pins SR-2.4 + SR-4.1:
+// a NewSession failure (incl. tmux's own live-name-collision refusal)
+// wraps through unchanged — no ErrTmuxSessionNameTaken, no new spawn
+// state. The pending row is left for find-missing.
+func TestLaunchSurfacesTmuxNewSessionFailureUnchanged(t *testing.T) {
+	withStubExe(t, "/bin/claude-director")
+	t.Setenv(envInstanceID, "")
+	s, r, cfg := newStoreAndLaunchInputs(t)
+	r.ClaudeInstanceID = "id-collide"
+	r.TmuxSessionName = "bot-claude-status"
+	r.TmuxSessionNameSupplied = true
+	tmux := &captureTmux{failOnSessionName: "bot-claude-status"}
+
+	_, err := Launch(s, tmux, r, cfg)
+	if err == nil {
+		t.Fatal("expected Launch to surface NewSession failure")
+	}
+	// No typed sentinel: the wrapped tmux error must surface as-is.
+	if errors.Is(err, ErrTmuxSessionNameEmpty) ||
+		errors.Is(err, ErrTmuxSessionNameInvalid) ||
+		errors.Is(err, ErrTmuxSessionNameTooLong) {
+		t.Errorf("collision must not be classified as a name-validation sentinel: %v", err)
+	}
+	row, getErr := s.GetSpawn("id-collide")
+	if getErr != nil {
+		t.Fatalf("GetSpawn: %v", getErr)
+	}
+	if row.State != store.StatePending {
+		t.Errorf("State after NewSession failure = %q; want pending (find-missing reconciles)", row.State)
+	}
 }
 
 func TestLaunchSecondInsertSurfacesCollision(t *testing.T) {
