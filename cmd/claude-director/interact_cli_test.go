@@ -30,6 +30,51 @@ func seedSpawnRow(t *testing.T, dbPath, instanceID, sessionName, state, relayMod
 	}
 }
 
+// seedOpenPermissionRequest inserts an open permission_requests row
+// (decision/decision_reason left NULL) for the given Spawn so the
+// get-verb CLI tests can drive the `state=check_permission` happy-path
+// and the SR-8.5 absence cases. Tool name and tool_input are pure
+// parameters per SR-8.2 — no hardcoded literals inside the helper.
+// Caller is responsible for inserting the parent spawn row first; the
+// FK on claude_instance_id would reject otherwise.
+func seedOpenPermissionRequest(t *testing.T, dbPath, instanceID, toolName, toolInput string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`
+        INSERT INTO permission_requests (claude_instance_id, tool_name, tool_input)
+        VALUES (?, ?, ?)
+    `, instanceID, toolName, toolInput); err != nil {
+		t.Fatalf("seed permission row: %v", err)
+	}
+}
+
+// markPermissionRequestDecided flips decision (and optionally
+// decision_reason) on the open row, simulating a prior-cycle decision.
+// Used by the M1-gating CLI test that asserts api.Get ignores decided
+// rows even while the spawn is back at check_permission.
+func markPermissionRequestDecided(t *testing.T, dbPath, instanceID, decision string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer db.Close()
+	res, err := db.Exec(`
+        UPDATE permission_requests SET decision = ? WHERE claude_instance_id = ?
+    `, decision, instanceID)
+	if err != nil {
+		t.Fatalf("mark decided: %v", err)
+	}
+	n, _ := res.RowsAffected()
+	if n != 1 {
+		t.Fatalf("mark decided affected %d rows; want 1 (row missing?)", n)
+	}
+}
+
 // bootstrapDB runs `claude-director help` once so the schema is created
 // before the test seeds a row directly via raw SQL.
 func bootstrapDB(t *testing.T, home string) {

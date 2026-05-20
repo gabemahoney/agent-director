@@ -474,3 +474,173 @@ func TestSpawnCLICwdMissing(t *testing.T) {
 		t.Errorf("err_name = %q; want ErrCwdMissing", env.ErrName)
 	}
 }
+
+// TestGetCLICheckPermissionOpenRow pins SR-8.3 case 1: spawn at
+// check_permission with an open permission_requests row → `get`
+// response carries a populated permission_request sub-object with all
+// four documented fields. tool_input must round-trip as the raw JSON
+// string byte-for-byte (no parse/re-emit per req-review m2).
+func TestGetCLICheckPermissionOpenRow(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	home := t.TempDir()
+	bootstrapDB(t, home)
+	dbPath := filepath.Join(home, ".claude-director", "state.db")
+
+	const id = "id-gp-1"
+	const toolName = "Read"
+	const toolInput = `{"file":"/tmp/x","mode":"rw"}`
+	seedSpawnRow(t, dbPath, id, "cd-gp-1", "check_permission", "on")
+	seedOpenPermissionRequest(t, dbPath, id, toolName, toolInput)
+
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir,
+		"get", "--claude-instance-id", id)
+	if code != 0 {
+		t.Fatalf("get exit = %d; stderr=%s", code, stderr)
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(stdout), &m); err != nil {
+		t.Fatalf("parse stdout %q: %v", stdout, err)
+	}
+	pr, ok := m["permission_request"].(map[string]any)
+	if !ok {
+		t.Fatalf("permission_request missing or not an object: %v (raw=%s)", m["permission_request"], stdout)
+	}
+	if got, _ := pr["tool_name"].(string); got != toolName {
+		t.Errorf("tool_name = %v; want %q", pr["tool_name"], toolName)
+	}
+	if got, _ := pr["tool_input"].(string); got != toolInput {
+		t.Errorf("tool_input = %v; want %q (raw JSON string, no parse/re-emit)", pr["tool_input"], toolInput)
+	}
+	if _, ok := pr["requested_at"].(string); !ok {
+		t.Errorf("requested_at missing or not a string: %v", pr["requested_at"])
+	}
+	// request_id JSON-unmarshals to float64 for any[]; just assert non-zero.
+	if rid, _ := pr["request_id"].(float64); rid == 0 {
+		t.Errorf("request_id = %v; want non-zero", pr["request_id"])
+	}
+}
+
+// TestGetCLICheckPermissionNoRow pins SR-8.3 case 2: spawn at
+// check_permission with NO permission_requests row → `get` response
+// omits the permission_request key entirely. Also pins SR-8.5 +
+// req-review nit n1: key absence is asserted via map unmarshal, not
+// substring match. A future regression that emits
+// `"permission_request": null` would FAIL this test (null unmarshals
+// to a present key with a nil value, so `_, ok := m["..."]; ok` is
+// true).
+func TestGetCLICheckPermissionNoRowOmitsField(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	home := t.TempDir()
+	bootstrapDB(t, home)
+	dbPath := filepath.Join(home, ".claude-director", "state.db")
+
+	const id = "id-gp-2"
+	seedSpawnRow(t, dbPath, id, "cd-gp-2", "check_permission", "on")
+
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir,
+		"get", "--claude-instance-id", id)
+	if code != 0 {
+		t.Fatalf("get exit = %d; stderr=%s", code, stderr)
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(stdout), &m); err != nil {
+		t.Fatalf("parse stdout %q: %v", stdout, err)
+	}
+	if _, present := m["permission_request"]; present {
+		t.Errorf("permission_request key present in JSON; want absent (omitempty must drop a nil pointer, not emit null). raw=%s", stdout)
+	}
+}
+
+// TestGetCLICheckPermissionDecidedRowOmitsField pins SR-8.3 case 3 +
+// req-review MAJOR M1: even though the spawn is at check_permission
+// and a permission_requests row exists, a non-empty decision means
+// the row was decided in a prior cycle and the verb MUST treat it as
+// absent. If api.Get is regressed to gate only on sql.ErrNoRows, this
+// test fails.
+func TestGetCLICheckPermissionDecidedRowOmitsField(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	home := t.TempDir()
+	bootstrapDB(t, home)
+	dbPath := filepath.Join(home, ".claude-director", "state.db")
+
+	const id = "id-gp-3"
+	seedSpawnRow(t, dbPath, id, "cd-gp-3", "check_permission", "on")
+	seedOpenPermissionRequest(t, dbPath, id, "Bash", `{"cmd":"ls"}`)
+	markPermissionRequestDecided(t, dbPath, id, "allow")
+
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir,
+		"get", "--claude-instance-id", id)
+	if code != 0 {
+		t.Fatalf("get exit = %d; stderr=%s", code, stderr)
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(stdout), &m); err != nil {
+		t.Fatalf("parse stdout %q: %v", stdout, err)
+	}
+	if _, present := m["permission_request"]; present {
+		t.Errorf("permission_request key present despite decided row; want absent (M1: gate on pr.Decision == \"\"). raw=%s", stdout)
+	}
+}
+
+// TestGetCLINonCheckPermissionStateOmitsField pins SR-8.3 case 4: when
+// state != check_permission and no permission row exists, the existing
+// SpawnRow assertions still hold and permission_request is absent.
+func TestGetCLINonCheckPermissionStateOmitsField(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	home := t.TempDir()
+	bootstrapDB(t, home)
+	dbPath := filepath.Join(home, ".claude-director", "state.db")
+
+	const id = "id-gp-4"
+	seedSpawnRow(t, dbPath, id, "cd-gp-4", "waiting", "on")
+
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir,
+		"get", "--claude-instance-id", id)
+	if code != 0 {
+		t.Fatalf("get exit = %d; stderr=%s", code, stderr)
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(stdout), &m); err != nil {
+		t.Fatalf("parse stdout %q: %v", stdout, err)
+	}
+	if _, present := m["permission_request"]; present {
+		t.Errorf("permission_request key present for state=waiting; want absent. raw=%s", stdout)
+	}
+	// Existing SpawnRow assertions still pass.
+	if m["state"] != "waiting" {
+		t.Errorf("state = %v; want waiting", m["state"])
+	}
+	if m["tmux_session_name"] != "cd-gp-4" {
+		t.Errorf("tmux_session_name = %v; want cd-gp-4", m["tmux_session_name"])
+	}
+}
+
+// TestGetCLINonCheckPermissionStateWithStaleRowOmitsField pins SR-8.3
+// case 5: even when an open permission_requests row coincidentally
+// exists (e.g. residue from a prior cycle), the verb MUST gate on
+// STATE, not on row presence. If api.Get regresses to call
+// GetPermissionRequest unconditionally, this test fails because the
+// stale row would surface.
+func TestGetCLINonCheckPermissionStateWithStaleRowOmitsField(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	home := t.TempDir()
+	bootstrapDB(t, home)
+	dbPath := filepath.Join(home, ".claude-director", "state.db")
+
+	const id = "id-gp-5"
+	seedSpawnRow(t, dbPath, id, "cd-gp-5", "waiting", "on")
+	seedOpenPermissionRequest(t, dbPath, id, "Read", `{"file":"/etc/hosts"}`)
+
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir,
+		"get", "--claude-instance-id", id)
+	if code != 0 {
+		t.Fatalf("get exit = %d; stderr=%s", code, stderr)
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(stdout), &m); err != nil {
+		t.Fatalf("parse stdout %q: %v", stdout, err)
+	}
+	if _, present := m["permission_request"]; present {
+		t.Errorf("permission_request key present for state=waiting with stale open row; want absent (verb gates on state, not row presence). raw=%s", stdout)
+	}
+}
