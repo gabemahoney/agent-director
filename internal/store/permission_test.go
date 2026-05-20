@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // openTestStore opens a fresh on-disk SQLite store under t.TempDir().
@@ -266,3 +267,49 @@ func TestDecidePermissionRequestEmptyReasonStored(t *testing.T) {
 	}
 }
 
+// TestGetPermissionRequestExposesRequestIDAndCreatedAt pins SRD §SR-2.1
+// for Epic t1.jm1.61: GetPermissionRequest projects request_id and
+// created_at into the returned PermissionRow so api.Get can render them
+// on the `permission_request` field of the `get` verb's response.
+//
+// Cross-checks RequestID against the raw read via readPermRow (the
+// shared helper above) to catch a silent drift where the SELECT scans
+// the columns in the wrong order. Verifies CreatedAt is non-zero and
+// within a sane window of the seed time — pins that the TIMESTAMP
+// column scans into time.Time rather than landing as the zero value.
+func TestGetPermissionRequestExposesRequestIDAndCreatedAt(t *testing.T) {
+	s := openTestStore(t)
+	const id = "spawn-fields"
+	seedSpawnForPerm(t, s, id, "on")
+
+	before := time.Now().UTC().Add(-1 * time.Second)
+	if err := s.UpsertOpenPermissionRequest(id, "Read", `{"file":"/tmp/x"}`); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	after := time.Now().UTC().Add(1 * time.Second)
+
+	rawReqID, _, _, _, _ := readPermRow(t, s, id)
+
+	got, err := s.GetPermissionRequest(id)
+	if err != nil {
+		t.Fatalf("GetPermissionRequest: %v", err)
+	}
+	if got.RequestID == 0 {
+		t.Errorf("RequestID = 0; want non-zero autoincrement id")
+	}
+	if got.RequestID != rawReqID {
+		t.Errorf("RequestID = %d; raw read returned %d (SELECT projection may be out of order)", got.RequestID, rawReqID)
+	}
+	if got.CreatedAt.IsZero() {
+		t.Errorf("CreatedAt is zero; want a populated TIMESTAMP scanned from the column")
+	}
+	if got.CreatedAt.Before(before) || got.CreatedAt.After(after) {
+		t.Errorf("CreatedAt = %v; want in [%v, %v]", got.CreatedAt, before, after)
+	}
+	if got.ToolName != "Read" || got.ToolInput != `{"file":"/tmp/x"}` {
+		t.Errorf("ToolName/ToolInput drifted: name=%q input=%q", got.ToolName, got.ToolInput)
+	}
+	if got.Decision != "" || got.DecisionReason != "" {
+		t.Errorf("open row surfaced as decided: decision=%q reason=%q", got.Decision, got.DecisionReason)
+	}
+}

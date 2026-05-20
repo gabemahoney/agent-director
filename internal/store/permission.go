@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // ErrNoOpenPermissionRequest is returned by decide() when no row
@@ -22,11 +23,13 @@ var ErrAlreadyDecided = errors.New("ErrAlreadyDecided")
 // Empty Decision / DecisionReason mean "not yet decided" (the
 // column is NULL); the polling loop treats that as "keep waiting".
 type PermissionRow struct {
+	RequestID        int64
 	ClaudeInstanceID string
 	ToolName         string
 	ToolInput        string
 	Decision         string
 	DecisionReason   string
+	CreatedAt        time.Time
 }
 
 // UpsertOpenPermissionRequest replaces any existing permission_requests
@@ -74,15 +77,16 @@ func (s *Store) UpsertOpenPermissionRequest(instanceID, toolName, toolInputJSON 
 // iteration and never writes here.
 func (s *Store) GetPermissionRequest(instanceID string) (PermissionRow, error) {
 	const q = `
-		SELECT claude_instance_id, tool_name, tool_input,
-		       COALESCE(decision, ''), COALESCE(decision_reason, '')
+		SELECT request_id, claude_instance_id, tool_name, tool_input,
+		       COALESCE(decision, ''), COALESCE(decision_reason, ''),
+		       created_at
 		  FROM permission_requests
 		 WHERE claude_instance_id = ?
 	`
 	row := s.db.QueryRow(q, instanceID)
 	var r PermissionRow
-	err := row.Scan(&r.ClaudeInstanceID, &r.ToolName, &r.ToolInput,
-		&r.Decision, &r.DecisionReason)
+	err := row.Scan(&r.RequestID, &r.ClaudeInstanceID, &r.ToolName, &r.ToolInput,
+		&r.Decision, &r.DecisionReason, &r.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PermissionRow{}, sql.ErrNoRows
 	}
