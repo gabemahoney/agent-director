@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -46,13 +47,26 @@ func buildFakeTmux(t *testing.T) string {
 // has its own ~/.claude-director DB.
 func runSpawnCLI(t *testing.T, home, fakeTmuxDir string, args ...string) (string, string, int) {
 	t.Helper()
+	return runSpawnCLIEnv(t, home, fakeTmuxDir, nil, args...)
+}
+
+// runSpawnCLIEnv is the same as runSpawnCLI plus an optional extraEnv
+// map appended to the child env. Used by tests that need to inject
+// fake-tmux failure-injection vars (e.g. FAKE_TMUX_FAIL_NEWSESSION_NAME)
+// without rebuilding the binary.
+func runSpawnCLIEnv(t *testing.T, home, fakeTmuxDir string, extraEnv map[string]string, args ...string) (string, string, int) {
+	t.Helper()
 	cmd := exec.Command(binaryPath, args...)
 	logPath := filepath.Join(home, "fake-tmux.log")
-	cmd.Env = []string{
+	env := []string{
 		"PATH=" + fakeTmuxDir + ":" + os.Getenv("PATH"),
 		"HOME=" + home,
 		"FAKE_TMUX_LOG=" + logPath,
 	}
+	for k, v := range extraEnv {
+		env = append(env, k+"="+v)
+	}
+	cmd.Env = env
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -296,6 +310,153 @@ func TestStatusCLIMissingFlag(t *testing.T) {
 	if env.ErrName != "ErrInvalidFlags" {
 		t.Errorf("err_name = %q; want ErrInvalidFlags", env.ErrName)
 	}
+}
+
+// TestSpawnCLITmuxSessionNameHappyPath pins SR-1.1 + SR-3.1 + SR-4.1
+// end-to-end: --tmux-session-name <name> reaches the persisted row
+// verbatim and the fake-tmux log shows the same name on `-s`.
+func TestSpawnCLITmuxSessionNameHappyPath(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	home := t.TempDir()
+	cwd := t.TempDir()
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir,
+		"spawn", "--cwd", cwd, "--tmux-session-name", "bot-claude-status")
+	if code != 0 {
+		t.Fatalf("exit = %d; stderr=%s", code, stderr)
+	}
+	var res spawnResult
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+		t.Fatalf("parse stdout %q: %v", stdout, err)
+	}
+	getOut, _, code := runSpawnCLI(t, home, fakeDir,
+		"get", "--claude-instance-id", res.ClaudeInstanceID)
+	if code != 0 {
+		t.Fatalf("get exit = %d", code)
+	}
+	var row map[string]any
+	if err := json.Unmarshal([]byte(getOut), &row); err != nil {
+		t.Fatalf("parse get %q: %v", getOut, err)
+	}
+	if row["tmux_session_name"] != "bot-claude-status" {
+		t.Errorf("get.tmux_session_name = %v; want bot-claude-status", row["tmux_session_name"])
+	}
+	logBytes, _ := os.ReadFile(filepath.Join(home, "fake-tmux.log"))
+	if !strings.Contains(string(logBytes), "\nbot-claude-status\n") {
+		t.Errorf("fake-tmux log missing the user-supplied session name: %s", logBytes)
+	}
+}
+
+// TestSpawnCLITmuxSessionNameOmittedDefaults pins SR-1.1: bare-omit of
+// --tmux-session-name keeps today's composeSessionName behavior.
+func TestSpawnCLITmuxSessionNameOmittedDefaults(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	home := t.TempDir()
+	cwd := t.TempDir()
+	stdout, _, code := runSpawnCLI(t, home, fakeDir, "spawn", "--cwd", cwd)
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	var res spawnResult
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+		t.Fatalf("parse stdout: %v", err)
+	}
+	getOut, _, _ := runSpawnCLI(t, home, fakeDir,
+		"get", "--claude-instance-id", res.ClaudeInstanceID)
+	var row map[string]any
+	if err := json.Unmarshal([]byte(getOut), &row); err != nil {
+		t.Fatalf("parse get: %v", err)
+	}
+	name, _ := row["tmux_session_name"].(string)
+	// <basename(cwd)>-<id[:8]>. cwd basename is the tempdir's leaf
+	// (varies per run); assert via shape regex.
+	if !regexp.MustCompile(`^[A-Za-z0-9_-]+-[0-9a-f]{8}$`).MatchString(name) {
+		t.Errorf("tmux_session_name = %q; want <basename>-<id[:8]> shape", name)
+	}
+}
+
+// TestSpawnCLITmuxSessionNameValidationFailures covers each new sentinel
+// driven by parseEnvelope's err_name. Reserved char, control char,
+// >64 bytes, explicit empty, non-UTF-8.
+func TestSpawnCLITmuxSessionNameValidationFailures(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	cwd := t.TempDir()
+	cases := []struct {
+		name    string
+		value   string
+		argEq   bool // pass as --tmux-session-name=<value> to allow explicit empty
+		wantErr string
+	}{
+		{"reserved colon", "bad:name", false, "ErrTmuxSessionNameInvalid"},
+		{"reserved dot", "bad.name", false, "ErrTmuxSessionNameInvalid"},
+		{"reserved hash", "bad#name", false, "ErrTmuxSessionNameInvalid"},
+		{"control SOH", "bad\x01name", false, "ErrTmuxSessionNameInvalid"},
+		// NUL (\x00) cannot be passed through exec on linux; unit test
+		// covers that branch (TestValidateTmuxSessionName).
+		{"control DEL", "bad\x7fname", false, "ErrTmuxSessionNameInvalid"},
+		{"non-UTF-8", string([]byte{0xff, 0xfe, 0x80}), false, "ErrTmuxSessionNameInvalid"},
+		{"too long", strings.Repeat("a", 65), false, "ErrTmuxSessionNameTooLong"},
+		{"explicit empty", "", true, "ErrTmuxSessionNameEmpty"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			var args []string
+			if tc.argEq {
+				args = []string{"spawn", "--cwd", cwd, "--tmux-session-name="}
+			} else {
+				args = []string{"spawn", "--cwd", cwd, "--tmux-session-name", tc.value}
+			}
+			_, stderr, code := runSpawnCLI(t, home, fakeDir, args...)
+			if code == 0 {
+				t.Fatalf("expected non-zero exit; stderr=%q", stderr)
+			}
+			env := parseEnvelope(t, stderr)
+			if env.ErrName != tc.wantErr {
+				t.Errorf("err_name = %q; want %q (stderr=%q)", env.ErrName, tc.wantErr, stderr)
+			}
+		})
+	}
+}
+
+// TestSpawnCLITmuxSessionNameLiveCollision pins SR-2.4 + SR-4.1: when
+// tmux refuses new-session because the name is already live, the wrapped
+// tmux error surfaces — NO ErrTmuxSessionNameTaken sentinel. The
+// fake-tmux fixture is configured via FAKE_TMUX_FAIL_NEWSESSION_NAME so
+// no real tmux is needed.
+func TestSpawnCLITmuxSessionNameLiveCollision(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	home := t.TempDir()
+	cwd := t.TempDir()
+	_, stderr, code := runSpawnCLIEnv(t, home, fakeDir,
+		map[string]string{"FAKE_TMUX_FAIL_NEWSESSION_NAME": "bot-claude-status"},
+		"spawn", "--cwd", cwd, "--tmux-session-name", "bot-claude-status")
+	if code == 0 {
+		t.Fatalf("expected non-zero exit; stderr=%q", stderr)
+	}
+	if strings.Contains(stderr, "ErrTmuxSessionNameTaken") {
+		t.Errorf("collision must not surface ErrTmuxSessionNameTaken: %q", stderr)
+	}
+	env := parseEnvelope(t, lastJSONLine(stderr))
+	// The wrapped tmux error is classified via the existing tmux
+	// sentinel catalog — pin the exact name so a future re-classification
+	// surfaces here.
+	if env.ErrName != "ErrTmuxSessionCreate" {
+		t.Errorf("err_name = %q; want ErrTmuxSessionCreate (wrapped tmux error)", env.ErrName)
+	}
+}
+
+// lastJSONLine returns the last non-empty line of s that begins with `{`.
+// Used to skip soft warning lines (e.g. pre-trust skipped) that the spawn
+// path may emit on stderr ahead of the JSON envelope.
+func lastJSONLine(s string) string {
+	lines := strings.Split(s, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		ln := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(ln, "{") {
+			return ln
+		}
+	}
+	return s
 }
 
 // TestSpawnCLICwdMissing covers the bare-required-flag case: no --cwd

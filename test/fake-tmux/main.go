@@ -12,6 +12,9 @@
 //     read-pane's bytes-back path.
 //   - "has-session" → exit 1 (matches tmux's "no such session" exit so
 //     spawn's HasSession-then-create flow doesn't trip a false positive).
+//   - "new-session" with $FAKE_TMUX_FAIL_NEWSESSION_NAME set → exit 1
+//     with a mock duplicate-name message on stderr when -s <name>
+//     matches the env var (simulates tmux's live-collision refusal).
 //   - anything else → exit 0 with no side effects.
 //
 // The implementation is deliberately stripped down: no JSON output, no
@@ -40,7 +43,19 @@ func main() {
 	}
 
 	switch sub {
-	case "new-session", "send-keys", "kill-session":
+	case "new-session":
+		logArgv()
+		// Optional per-name failure injection. Real tmux refuses to
+		// create a session whose name matches a currently-live one;
+		// this mimics that for the spawn-CLI live-collision tests
+		// without requiring a real tmux on the test host.
+		if fail := os.Getenv("FAKE_TMUX_FAIL_NEWSESSION_NAME"); fail != "" {
+			if sessionNameFromArgs(os.Args[2:]) == fail {
+				fmt.Fprintf(os.Stderr, "duplicate session: can't create session: %s\n", fail)
+				os.Exit(1)
+			}
+		}
+	case "send-keys", "kill-session":
 		logArgv()
 	case "capture-pane":
 		logArgv()
@@ -55,6 +70,22 @@ func main() {
 		}
 	}
 	os.Exit(0)
+}
+
+// sessionNameFromArgs returns the value passed to tmux's `-s` flag (the
+// session name) in either split (`-s name`) or equals (`-s=name`) form.
+// Returns "" if not found. Mirrors the production caller's argv shape;
+// fake-tmux does no real flag parsing.
+func sessionNameFromArgs(args []string) string {
+	for i, a := range args {
+		switch {
+		case a == "-s" && i+1 < len(args):
+			return args[i+1]
+		case len(a) > 3 && a[:3] == "-s=":
+			return a[3:]
+		}
+	}
+	return ""
 }
 
 // logArgv appends the current argv (one element per line, followed by a
