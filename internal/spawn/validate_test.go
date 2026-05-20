@@ -252,6 +252,76 @@ func TestSettingSourcesIsNotDenied(t *testing.T) {
 	}
 }
 
+// TestValidateTmuxSessionName covers SR-2.1, SR-2.2, SR-2.3, SR-2.5 for
+// the new --tmux-session-name validator. The gate is
+// SpawnParams.TmuxSessionNameSupplied: when false, Validate must not
+// fire on a zero-value field (regression against the flag-omitted
+// default-synthesis path).
+func TestValidateTmuxSessionName(t *testing.T) {
+	cwd := t.TempDir()
+	cases := []struct {
+		name     string
+		supplied bool
+		value    string
+		want     error
+	}{
+		{"omitted flag bypasses check", false, "", nil},
+		{"omitted flag with stale value also bypasses", false, "anything", nil},
+		{"explicit empty trips Empty", true, "", ErrTmuxSessionNameEmpty},
+		{"reserved char colon", true, "bad:name", ErrTmuxSessionNameInvalid},
+		{"reserved char hash", true, "bad#name", ErrTmuxSessionNameInvalid},
+		{"reserved char dot", true, "bad.name", ErrTmuxSessionNameInvalid},
+		{"control char NUL", true, "bad\x00name", ErrTmuxSessionNameInvalid},
+		{"control char SOH", true, "bad\x01name", ErrTmuxSessionNameInvalid},
+		{"control char tab", true, "bad\tname", ErrTmuxSessionNameInvalid},
+		{"control char newline", true, "bad\nname", ErrTmuxSessionNameInvalid},
+		{"control char DEL", true, "bad\x7fname", ErrTmuxSessionNameInvalid},
+		{"non-UTF-8 bytes", true, string([]byte{0xff, 0xfe, 0x80}), ErrTmuxSessionNameInvalid},
+		{"exactly max-byte allowed", true, strings.Repeat("a", 64), nil},
+		{"one byte over max trips TooLong", true, strings.Repeat("a", 65), ErrTmuxSessionNameTooLong},
+		{"happy path simple", true, "bot-claude-status", nil},
+		{"happy path with slash", true, "team/bot-1", nil},
+		{"happy path with space", true, "bot one", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := Resolved{SpawnParams: SpawnParams{
+				CWD:                     cwd,
+				TmuxSessionName:         tc.value,
+				TmuxSessionNameSupplied: tc.supplied,
+			}}
+			err := Validate(&r)
+			if tc.want == nil {
+				if err != nil {
+					t.Fatalf("Validate: unexpected err %v", err)
+				}
+				return
+			}
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("Validate err = %v; want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestValidateTmuxSessionNameRunsAfterExtraEnv pins the SR-2.1 precedence:
+// the new check runs as the last step in Validate, after env-key
+// validation. Constructed so multiple checks would fail — assertion is
+// that the reserved-env-key error fires first.
+func TestValidateTmuxSessionNameRunsAfterExtraEnv(t *testing.T) {
+	cwd := t.TempDir()
+	r := Resolved{SpawnParams: SpawnParams{
+		CWD:                     cwd,
+		ExtraEnv:                map[string]string{"CLAUDE_DIRECTOR_FOO": "bar"},
+		TmuxSessionName:         "bad:name",
+		TmuxSessionNameSupplied: true,
+	}}
+	err := Validate(&r)
+	if !errors.Is(err, ErrReservedEnvKey) {
+		t.Fatalf("err = %v; want ErrReservedEnvKey to outrank ErrTmuxSessionNameInvalid", err)
+	}
+}
+
 // TestValidateTildeCwd exercises the "~/" expansion branch — Validate
 // must canonicalize it against the running user's home directory before
 // running EvalSymlinks.

@@ -130,6 +130,25 @@ func TestComposeSessionName(t *testing.T) {
 	}
 }
 
+// TestApplyDefaultsPreservesUserSuppliedTmuxSessionName pins the Epic 1
+// regression: when the caller supplied a non-empty TmuxSessionName,
+// ApplyDefaults must leave it byte-for-byte alone — no composeSessionName
+// suffix, no sanitization (SR-3.1).
+func TestApplyDefaultsPreservesUserSuppliedTmuxSessionName(t *testing.T) {
+	r := Resolved{SpawnParams: SpawnParams{
+		CWD:                     "/home/horde/projects/foo",
+		ClaudeInstanceID:        "abcdef1234567890",
+		TmuxSessionName:         "bot-claude-status",
+		TmuxSessionNameSupplied: true,
+	}}
+	if err := ApplyDefaults(&r, config.Default(), &fakeChecker{}); err != nil {
+		t.Fatalf("ApplyDefaults: %v", err)
+	}
+	if r.TmuxSessionName != "bot-claude-status" {
+		t.Fatalf("TmuxSessionName = %q; want %q (no decoration)", r.TmuxSessionName, "bot-claude-status")
+	}
+}
+
 func TestComposeSessionNameAllBadBasename(t *testing.T) {
 	r := Resolved{SpawnParams: SpawnParams{
 		CWD:              "/////",

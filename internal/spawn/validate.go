@@ -6,7 +6,15 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
+
+// MaxTmuxSessionNameBytes caps caller-supplied --tmux-session-name values
+// at the UTF-8 byte length the validator accepts. 64 bytes fits any
+// tmux status-bar width and leaves room above the 8-char id suffix the
+// synthesized-name path appends; it is NOT a tmux-imposed limit
+// (SR-2.2).
+const MaxTmuxSessionNameBytes = 64
 
 // deniedClaudeArgs is the set of flags claude-director must own end-to-end.
 // --settings would race with our hook synthesis; --resume/--continue would
@@ -57,6 +65,41 @@ func Validate(r *Resolved) error {
 	}
 	if err := validateExtraEnv(r.ExtraEnv); err != nil {
 		return err
+	}
+	if r.TmuxSessionNameSupplied {
+		if err := validateTmuxSessionName(r.TmuxSessionName); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateTmuxSessionName applies SR-2.1, SR-2.2, SR-2.3. The function
+// is only invoked when the caller explicitly supplied a value
+// (gated upstream via SpawnParams.TmuxSessionNameSupplied). The
+// validator rejects empty, byte length > MaxTmuxSessionNameBytes,
+// non-UTF-8, '#', ':', '.', and ASCII control characters
+// (\x00-\x1f / \x7f). It does NOT silently rewrite — callers must
+// pick a name they want byte-for-byte (contrast with
+// SanitizeSessionName, which is a defaulting concern).
+func validateTmuxSessionName(name string) error {
+	if name == "" {
+		return fmt.Errorf("%w: --tmux-session-name was supplied with an empty value", ErrTmuxSessionNameEmpty)
+	}
+	if len(name) > MaxTmuxSessionNameBytes {
+		return fmt.Errorf("%w: %d bytes (max %d)", ErrTmuxSessionNameTooLong, len(name), MaxTmuxSessionNameBytes)
+	}
+	if !utf8.ValidString(name) {
+		return fmt.Errorf("%w: not valid UTF-8", ErrTmuxSessionNameInvalid)
+	}
+	for i := 0; i < len(name); i++ {
+		b := name[i]
+		switch {
+		case b == '#', b == ':', b == '.':
+			return fmt.Errorf("%w: contains reserved character %q", ErrTmuxSessionNameInvalid, b)
+		case b <= 0x1f, b == 0x7f:
+			return fmt.Errorf("%w: contains ASCII control byte 0x%02x", ErrTmuxSessionNameInvalid, b)
+		}
 	}
 	return nil
 }

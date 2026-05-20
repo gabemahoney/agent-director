@@ -19,6 +19,15 @@ type SpawnParams struct {
 	// defaults pass synthesizes <sanitize(basename(cwd))>-<id[:8]>.
 	TmuxSessionName string
 
+	// TmuxSessionNameSupplied distinguishes "caller explicitly passed
+	// --tmux-session-name (possibly empty)" from "caller omitted the
+	// flag". The CLI parser sets this via flag.FlagSet.Visit; an
+	// explicit empty supplied value trips ErrTmuxSessionNameEmpty,
+	// while a bare omission falls through to composeSessionName.
+	// Templates never set this — templates cannot supply
+	// tmux_session_name (SR-5.2).
+	TmuxSessionNameSupplied bool
+
 	// ClaudeInstanceID is an explicit override. Almost always empty so the
 	// defaults pass mints a UUID4. When supplied, validation checks it
 	// against the store for live-state collisions before INSERT.

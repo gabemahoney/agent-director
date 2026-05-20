@@ -47,3 +47,21 @@ var ErrReservedEnvKey = errors.New("ErrReservedEnvKey")
 // (anything except `ended` / `missing`). The check is a TOCTOU-safe pair
 // with SQLite's PRIMARY KEY constraint at INSERT time.
 var ErrInstanceIdCollision = errors.New("ErrInstanceIdCollision")
+
+// ErrTmuxSessionNameEmpty is returned when the caller explicitly supplied
+// --tmux-session-name with an empty value. Omitting the flag entirely is
+// NOT equivalent (that path falls through to composeSessionName).
+var ErrTmuxSessionNameEmpty = errors.New("ErrTmuxSessionNameEmpty")
+
+// ErrTmuxSessionNameInvalid is returned when the caller-supplied
+// --tmux-session-name contains any of '#', ':', '.', an ASCII control
+// character (\x00-\x1f / \x7f), or is not valid UTF-8. The validator
+// does NOT silently rewrite — callers must pick a name they want
+// byte-for-byte.
+var ErrTmuxSessionNameInvalid = errors.New("ErrTmuxSessionNameInvalid")
+
+// ErrTmuxSessionNameTooLong is returned when the caller-supplied
+// --tmux-session-name exceeds MaxTmuxSessionNameBytes UTF-8 bytes.
+// The cap is an app-layer convenience (operator readability + room for
+// the defaulted-name's 8-char id suffix), not a tmux-imposed limit.
+var ErrTmuxSessionNameTooLong = errors.New("ErrTmuxSessionNameTooLong")
