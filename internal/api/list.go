@@ -28,11 +28,12 @@ type ListStore interface {
 // "k=v" strings — List parses it into the store's typed filter map
 // so the JSON / CLI / MCP surfaces share one validation seam.
 type ListParams struct {
-	State  []string
-	Labels []string
-	Parent string
-	Cwd    string
-	Limit  int
+	State           []string
+	Labels          []string
+	Parent          string
+	Cwd             string
+	TmuxSessionName string
+	Limit           int
 }
 
 // ListRow mirrors a returned Spawn at the JSON wire level. The store
@@ -85,11 +86,12 @@ func List(s ListStore, params ListParams) (ListResult, error) {
 	}
 
 	rows, err := s.ListSpawns(store.ListFilters{
-		State:  params.State,
-		Labels: labels,
-		Parent: params.Parent,
-		Cwd:    params.Cwd,
-		Limit:  params.Limit,
+		State:           params.State,
+		Labels:          labels,
+		Parent:          params.Parent,
+		Cwd:             params.Cwd,
+		TmuxSessionName: params.TmuxSessionName,
+		Limit:           params.Limit,
 	})
 	if err != nil {
 		return ListResult{}, err
