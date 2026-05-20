@@ -56,6 +56,7 @@ func parseSpawnFlags(args []string) (spawn.SpawnParams, error) {
 	fs.StringVar(&p.CWD, "cwd", "", "absolute / ~-prefixed cwd for the Spawn")
 	fs.StringVar(&p.Template, "template", "", "named template stored under ~/.claude-director/templates/<name>.toml")
 	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "explicit instance id (default: minted UUID4)")
+	fs.StringVar(&p.TmuxSessionName, "tmux-session-name", "", "explicit tmux session name (default: <basename(cwd)>-<id[:8]>); rejects ':' '.' '#', control chars, and >64 bytes; no DB uniqueness check, name reuse across ended spawns supported")
 	fs.StringVar(&p.RelayMode, "relay-mode", "", "on / off (default: config defaults.relay_mode)")
 	fs.BoolVar(&p.NoPreTrust, "no-pre-trust", false, "skip pre-writing ~/.claude.json's trust key for cwd (bug b.f75); default off (pre-trust IS performed)")
 	fs.Var(newKVSlice(&labelKVs, "--label"), "label", "k=v (repeatable)")
@@ -66,6 +67,15 @@ func parseSpawnFlags(args []string) (spawn.SpawnParams, error) {
 	if err := fs.Parse(args); err != nil {
 		return p, err
 	}
+	// Distinguish "--tmux-session-name omitted" from
+	// "--tmux-session-name=" (explicit empty). Omitted falls through to
+	// composeSessionName defaulting; explicit empty must surface
+	// ErrTmuxSessionNameEmpty at Validate time.
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "tmux-session-name" {
+			p.TmuxSessionNameSupplied = true
+		}
+	})
 	p.ClaudeDirectorLabels = labelKVs
 	p.ExtraEnv = extraEnvKVs
 	p.Permissions = buildPermissions(allow, deny, ask)

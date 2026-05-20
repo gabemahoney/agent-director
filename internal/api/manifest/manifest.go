@@ -117,6 +117,11 @@ var Verbs = []VerbDef{
 				Type:        "bool",
 				Description: "Skip pre-writing projects.<cwd>.hasTrustDialogAccepted=true into ~/.claude.json. Default off (pre-trust IS performed so Claude Code skips its workspace-trust dialog and the Spawn becomes interactive immediately).",
 			},
+			{
+				Name:        "tmux-session-name",
+				Type:        "string",
+				Description: "Optional explicit tmux session name. Empty/omitted falls back to <basename(cwd)>-<id[:8]>. Validated app-side: rejects empty (when supplied), '#' ':' '.', ASCII control chars, non-UTF-8, and >64 bytes. NO DB uniqueness check; live-collision surfaces as the wrapped tmux new-session error. Name reuse across ended spawns is supported.",
+			},
 		},
 		ResultFields: []FieldDef{
 			{
@@ -134,6 +139,9 @@ var Verbs = []VerbDef{
 			"ErrSpawnDeniedFlag",
 			"ErrReservedEnvKey",
 			"ErrInstanceIdCollision",
+			"ErrTmuxSessionNameEmpty",
+			"ErrTmuxSessionNameInvalid",
+			"ErrTmuxSessionNameTooLong",
 			"ErrTmuxNotAvailable",
 			"ErrTmuxSessionCreate",
 			"ErrTemplateNotFound",
