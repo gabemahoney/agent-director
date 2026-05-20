@@ -13,14 +13,17 @@ import (
 // JSON value via json_extract. Parent matches the column verbatim;
 // "" means no parent filter (NOT "rows with NULL parent_id" —
 // distinguishing that case is a future concern). Cwd matches the
-// canonicalized cwd column. Limit caps the result count; 0 means no
-// limit.
+// canonicalized cwd column. TmuxSessionName matches the
+// tmux_session_name column exact-byte; "" means no filter (the
+// filter is correlation across live/ended rows, not uniqueness
+// enforcement). Limit caps the result count; 0 means no limit.
 type ListFilters struct {
-	State  []string
-	Labels map[string]string
-	Parent string
-	Cwd    string
-	Limit  int
+	State           []string
+	Labels          map[string]string
+	Parent          string
+	Cwd             string
+	TmuxSessionName string
+	Limit           int
 }
 
 // ListSpawns runs the filtered query and returns rows in unspecified
@@ -67,6 +70,11 @@ func (s *Store) ListSpawns(f ListFilters) ([]Spawn, error) {
 	if f.Cwd != "" {
 		where = append(where, "cwd = ?")
 		args = append(args, f.Cwd)
+	}
+
+	if f.TmuxSessionName != "" {
+		where = append(where, "tmux_session_name = ?")
+		args = append(args, f.TmuxSessionName)
 	}
 
 	q := `SELECT claude_instance_id, COALESCE(parent_id, ''), state, cwd,
