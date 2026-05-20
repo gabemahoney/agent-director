@@ -85,6 +85,21 @@ func synthesizeSettings(r Resolved, cfg config.Config) (string, error) {
 		hooks[string(evt)] = []any{entry}
 	}
 
+	if cfg.Defaults.InjectHelpHook {
+		bin, err := helpHookBinPath()
+		if err != nil {
+			return "", fmt.Errorf("resolve help-hook binary path: %w", err)
+		}
+		bin = quoteIfWhitespace(bin)
+		helpEntry := map[string]any{
+			"hooks": []any{
+				map[string]any{"type": "command", "command": bin + " help"},
+			},
+		}
+		existing, _ := hooks[string(hookSessionStart)].([]any)
+		hooks[string(hookSessionStart)] = append(existing, helpEntry)
+	}
+
 	top := map[string]any{"hooks": hooks}
 
 	allow, deny, ask := mergePermissions(r.Permissions, cfg.Defaults.DisableAskUserQuestion)
@@ -144,6 +159,22 @@ var executablePath = func() (string, error) {
 		return "", err
 	}
 	return filepath.Abs(exe)
+}
+
+// helpHookBinPath returns the canonical install-tree path of the
+// claude-director binary used in the inject_help_hook SessionStart
+// entry. The hook fires inside a Spawn whose PATH may not include
+// ~/.local/bin, so the entry must embed the absolute install path
+// (~/.claude-director/bin/claude-director after ~ expansion) rather
+// than rely on PATH resolution.
+//
+// Held as a var so tests can stub it without touching $HOME.
+var helpHookBinPath = func() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".claude-director", "bin", "claude-director"), nil
 }
 
 // quoteIfWhitespace defensively double-quotes a path that contains

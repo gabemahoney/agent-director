@@ -325,6 +325,26 @@ synthesized in stage 4. The handler's binary path is resolved via
 macOS) so it is always the same binary version that ran the `spawn`
 call.
 
+### Opt-in dynamic help-hook injection
+
+When `defaults.inject_help_hook = true` is set in `config.toml`,
+stage 4 also appends a second `SessionStart` entry to the synthesized
+`--settings`: a single `command` of
+`~/.claude-director/bin/claude-director help` (post `~` expansion).
+This mirrors the static hook `install.sh` writes into
+`~/.claude/settings.json`, but routes through `--settings` instead of
+disk so a Spawn whose `CLAUDE_CONFIG_DIR` is fresh (or otherwise
+missing the static entry) still receives the help manifest on
+SessionStart.
+
+The flag is off by default; the install dialog's Q4 toggles both halves
+together — `Q4=yes` writes the static `settings.json` hook *and* sets
+the config flag; `Q4=no` (`install.sh --no-hooks`) leaves both
+unchanged. The hook command is the absolute install path rather than
+a bare `claude-director` because the spawned Claude's PATH may not
+include `~/.local/bin` and the hook fires before any shell-rc
+manipulation can run.
+
 ## Interact: `send-keys` + `read-pane`
 
 A tracked Spawn is externally drivable: an orchestrator can deliver text

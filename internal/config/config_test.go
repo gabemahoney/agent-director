@@ -41,6 +41,7 @@ func TestDefaultMatchesSRD(t *testing.T) {
 		{"Defaults.RelayMode", d.Defaults.RelayMode, "off"},
 		{"Defaults.ExpireRetentionDays", d.Defaults.ExpireRetentionDays, 31},
 		{"Defaults.DisableAskUserQuestion", d.Defaults.DisableAskUserQuestion, false},
+		{"Defaults.InjectHelpHook", d.Defaults.InjectHelpHook, false},
 		{"Relay.PollBaseMs", d.Relay.PollBaseMs, 100},
 		{"Relay.PollJitterMs", d.Relay.PollJitterMs, 100},
 		{"Relay.TimeoutSeconds", d.Relay.TimeoutSeconds, 600},

@@ -32,6 +32,37 @@ claude-director never writes hooks or permissions to disk on behalf of a
 Spawn. The synthesized JSON exists only for the lifetime of the tmux
 session, and no cleanup is needed.
 
+## `defaults.inject_help_hook` config
+
+`config.toml`:
+
+```toml
+[defaults]
+inject_help_hook = true
+```
+
+Off by default. When true, every Spawn's synthesized `--settings`
+appends one extra `SessionStart` hook entry whose command is the
+absolute install path `~/.claude-director/bin/claude-director help`
+(post `~` expansion). The state-tracking SessionStart entry is unchanged
+and fires alongside it.
+
+The flag exists to cover the dynamic case the operator's static
+`~/.claude/settings.json` injection cannot reach: a Spawn that inherits
+(or is given) a fresh `CLAUDE_CONFIG_DIR` whose `settings.json` does not
+yet carry the help hook. With this flag set, every Spawn this binary
+creates is self-describing to its first Claude turn regardless of the
+config dir.
+
+`install.sh` toggles the flag in lockstep with the static hook write —
+the Q4 "inject persistent help hooks?" answer drives both halves
+together. `--no-hooks` skips both. `uninstall.sh` reverses both.
+
+The hook command is an absolute path rather than a bare
+`claude-director` because the spawned Claude's PATH may not include
+`~/.local/bin`, and the hook fires before any shell-rc manipulation
+could amend PATH.
+
 ## The five-tier merge
 
 Claude Code merges settings from up to five sources in this order

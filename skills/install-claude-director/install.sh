@@ -483,6 +483,69 @@ else
 fi
 
 # --------------------------------------------------------------------
+# inject_help_hook config flag — opt-in dynamic per-Spawn help hook.
+#
+# Driven by the same Q4 (inject persistent help hooks?) signal: when
+# the operator picked "yes" (i.e. did NOT pass --no-hooks),
+# claude-director should also tag its own Spawns with a help hook
+# regardless of the Spawn's CLAUDE_CONFIG_DIR. install.sh sets the
+# flag here; the binary reads it at spawn-synth time.
+#
+# Q4=no (--no-hooks) leaves config.toml untouched — the flag stays at
+# its zero-value default of false.
+# --------------------------------------------------------------------
+
+if [[ "$NO_HOOKS" -eq 0 ]]; then
+    CONFIG_TOML="${DEFAULT_INSTALL_ROOT}/config.toml"
+    if [[ -f "$CONFIG_TOML" ]]; then
+        backup_cfg="${CONFIG_TOML}.bak.$(date +%Y%m%d-%H%M%S)"
+        cp -f "$CONFIG_TOML" "$backup_cfg"
+        # awk merge: rewrite an existing inject_help_hook line under
+        # [defaults] to =true; if [defaults] exists but lacks the key,
+        # append it inside the section; if no [defaults] section exists
+        # at all, add one at end of file. Preserves every other key
+        # and section verbatim.
+        merged=$(awk '
+            BEGIN { written = 0; in_defaults = 0 }
+            /^\[/ {
+                if (in_defaults && !written) {
+                    print "inject_help_hook = true"
+                    written = 1
+                }
+                in_defaults = ($0 ~ /^\[defaults\][[:space:]]*$/) ? 1 : 0
+                print
+                next
+            }
+            in_defaults && /^[[:space:]]*inject_help_hook[[:space:]]*=/ {
+                print "inject_help_hook = true"
+                written = 1
+                next
+            }
+            { print }
+            END {
+                if (in_defaults && !written) {
+                    print "inject_help_hook = true"
+                    written = 1
+                }
+                if (!written) {
+                    print ""
+                    print "[defaults]"
+                    print "inject_help_hook = true"
+                }
+            }
+        ' "$CONFIG_TOML")
+        tmp_cfg="${CONFIG_TOML}.new"
+        printf '%s\n' "$merged" > "$tmp_cfg"
+        mv -f "$tmp_cfg" "$CONFIG_TOML"
+        echo "  config  : merged inject_help_hook=true into $CONFIG_TOML (backup $backup_cfg)"
+    else
+        printf '[defaults]\ninject_help_hook = true\n' > "$CONFIG_TOML"
+        chmod 0600 "$CONFIG_TOML"
+        echo "  config  : created $CONFIG_TOML with inject_help_hook=true"
+    fi
+fi
+
+# --------------------------------------------------------------------
 # Optional MCP registration
 # --------------------------------------------------------------------
 

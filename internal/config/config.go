@@ -32,6 +32,13 @@ type Defaults struct {
 	RelayMode              string `toml:"relay_mode"`
 	ExpireRetentionDays    int    `toml:"expire_retention_days"`
 	DisableAskUserQuestion bool   `toml:"disable_askuserquestion"`
+	// InjectHelpHook controls dynamic per-Spawn injection of a
+	// SessionStart hook that runs `claude-director help`. Off by
+	// default — operators opt in via install.sh (Q4=yes) so a Spawn's
+	// inherited CLAUDE_CONFIG_DIR no longer has to carry the help hook
+	// statically. See docs/settings.md and architecture.md "Spawn
+	// launch" for the merge implications.
+	InjectHelpHook bool `toml:"inject_help_hook,omitempty"`
 }
 
 // Relay holds polling and timeout knobs for the relay loop.
@@ -63,6 +70,7 @@ func Default() Config {
 			RelayMode:              "off",
 			ExpireRetentionDays:    31,
 			DisableAskUserQuestion: false,
+			InjectHelpHook:         false,
 		},
 		Relay: Relay{
 			PollBaseMs:     100,

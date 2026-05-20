@@ -93,6 +93,71 @@ if [[ -f "$DEFAULT_SETTINGS_PATH" ]]; then
 fi
 
 # --------------------------------------------------------------------
+# Reverse install.sh's defaults.inject_help_hook merge: drop that key
+# from config.toml. If [defaults] is left empty (no other keys, only
+# blank lines or comments), drop the section header too. Symmetric
+# with install.sh's Q4=yes config merge.
+# --------------------------------------------------------------------
+
+CONFIG_TOML="${DEFAULT_INSTALL_ROOT}/config.toml"
+if [[ -f "$CONFIG_TOML" ]]; then
+    cleaned=$(awk '
+        function flush_defaults() {
+            has_content = 0
+            for (i = 1; i <= n; i++) {
+                stripped = lines[i]
+                sub(/^[[:space:]]+/, "", stripped)
+                if (stripped != "" && stripped !~ /^#/) {
+                    has_content = 1
+                    break
+                }
+            }
+            if (has_content) {
+                print header
+                for (i = 1; i <= n; i++) print lines[i]
+            }
+            delete lines
+            n = 0
+            header = ""
+        }
+        BEGIN { in_defaults = 0; n = 0; header = "" }
+        /^\[/ {
+            if (in_defaults) {
+                flush_defaults()
+                in_defaults = 0
+            }
+            if ($0 ~ /^\[defaults\][[:space:]]*$/) {
+                in_defaults = 1
+                header = $0
+                next
+            }
+            print
+            next
+        }
+        in_defaults {
+            if ($0 ~ /^[[:space:]]*inject_help_hook[[:space:]]*=/) {
+                next
+            }
+            lines[++n] = $0
+            next
+        }
+        { print }
+        END {
+            if (in_defaults) flush_defaults()
+        }
+    ' "$CONFIG_TOML")
+    original=$(<"$CONFIG_TOML")
+    if [[ "$cleaned" != "$original" ]]; then
+        backup_cfg="${CONFIG_TOML}.bak.$(date +%Y%m%d-%H%M%S)"
+        cp -f "$CONFIG_TOML" "$backup_cfg"
+        tmp_cfg="${CONFIG_TOML}.new"
+        printf '%s\n' "$cleaned" > "$tmp_cfg"
+        mv -f "$tmp_cfg" "$CONFIG_TOML"
+        echo "uninstall.sh: cleared inject_help_hook from $CONFIG_TOML (backup $backup_cfg)"
+    fi
+fi
+
+# --------------------------------------------------------------------
 # Remove binaries (canonical + .prior snapshot + any legacy
 # versioned-binary siblings from pre-b.43y installs).
 # --------------------------------------------------------------------

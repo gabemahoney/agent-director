@@ -19,6 +19,16 @@ func withStubExe(t *testing.T, path string) {
 	t.Cleanup(func() { executablePath = saved })
 }
 
+// withStubHelpBin redirects helpHookBinPath for the duration of a test
+// so the inject_help_hook branch can assert on a known absolute path
+// without depending on the real $HOME.
+func withStubHelpBin(t *testing.T, path string) {
+	t.Helper()
+	saved := helpHookBinPath
+	helpHookBinPath = func() (string, error) { return path, nil }
+	t.Cleanup(func() { helpHookBinPath = saved })
+}
+
 // settingsShape is the minimal JSON shape we assert on. Keeping it loose
 // (any-typed value for nested objects) lets the tests focus on the
 // presence-and-structure invariants rather than re-spec'ing Claude Code's
@@ -207,6 +217,137 @@ func TestSynthesizeSettingsDisabledFalseLeavesDenyAlone(t *testing.T) {
 	)
 	if strings.Contains(jsonStr, "AskUserQuestion") {
 		t.Fatalf("settings JSON should not mention AskUserQuestion when disabled-flag=false: %s", jsonStr)
+	}
+}
+
+// TestSynthesizeSettingsInjectHelpHookTrue asserts that when the
+// inject_help_hook config flag is on, the SessionStart hook list grows
+// by exactly one entry whose command is "<canonical-bin> help" — the
+// hook claude-director's install.sh writes statically into
+// ~/.claude/settings.json. The pre-existing state-tracking SessionStart
+// entry must remain alongside it.
+func TestSynthesizeSettingsInjectHelpHookTrue(t *testing.T) {
+	withStubExe(t, "/usr/local/bin/claude-director")
+	withStubHelpBin(t, "/home/operator/.claude-director/bin/claude-director")
+	cfg := config.Default()
+	cfg.Defaults.InjectHelpHook = true
+	jsonStr, err := synthesizeSettings(
+		Resolved{SpawnParams: SpawnParams{ClaudeInstanceID: "id"}},
+		cfg,
+	)
+	if err != nil {
+		t.Fatalf("synthesizeSettings: %v", err)
+	}
+	var top map[string]any
+	if err := json.Unmarshal([]byte(jsonStr), &top); err != nil {
+		t.Fatalf("Unmarshal: %v\n%s", err, jsonStr)
+	}
+	hooks, _ := top["hooks"].(map[string]any)
+	entries, _ := hooks["SessionStart"].([]any)
+	if len(entries) != 2 {
+		t.Fatalf("SessionStart: got %d entries; want 2 (state-tracking + help-injection)", len(entries))
+	}
+	// Collect every command across all entries.
+	var commands []string
+	for _, e := range entries {
+		entry, _ := e.(map[string]any)
+		hl, _ := entry["hooks"].([]any)
+		for _, h := range hl {
+			cmdEntry, _ := h.(map[string]any)
+			cmd, _ := cmdEntry["command"].(string)
+			commands = append(commands, cmd)
+		}
+	}
+	wantHook := "/usr/local/bin/claude-director hook"
+	wantHelp := "/home/operator/.claude-director/bin/claude-director help"
+	var sawHook, sawHelp bool
+	for _, c := range commands {
+		if c == wantHook {
+			sawHook = true
+		}
+		if c == wantHelp {
+			sawHelp = true
+		}
+	}
+	if !sawHook {
+		t.Errorf("state-tracking SessionStart hook missing; commands=%v", commands)
+	}
+	if !sawHelp {
+		t.Errorf("inject_help_hook command missing; commands=%v", commands)
+	}
+}
+
+// TestSynthesizeSettingsInjectHelpHookFalse asserts that when the
+// inject_help_hook config flag is off (default), the SessionStart hook
+// list shape is unchanged from today's behavior — exactly one entry,
+// the state-tracking hook. Tightens the regression surface around the
+// new conditional code path.
+func TestSynthesizeSettingsInjectHelpHookFalse(t *testing.T) {
+	withStubExe(t, "/usr/local/bin/claude-director")
+	// Stub help-bin to a path that would be obvious if it leaked in.
+	withStubHelpBin(t, "/SHOULD-NOT-APPEAR/claude-director")
+	cfg := config.Default()
+	cfg.Defaults.InjectHelpHook = false
+	jsonStr, err := synthesizeSettings(
+		Resolved{SpawnParams: SpawnParams{ClaudeInstanceID: "id"}},
+		cfg,
+	)
+	if err != nil {
+		t.Fatalf("synthesizeSettings: %v", err)
+	}
+	if strings.Contains(jsonStr, "SHOULD-NOT-APPEAR") {
+		t.Fatalf("help-hook binary path leaked into JSON despite InjectHelpHook=false:\n%s", jsonStr)
+	}
+	if strings.Contains(jsonStr, " help") {
+		t.Fatalf("`help` command appeared in JSON despite InjectHelpHook=false:\n%s", jsonStr)
+	}
+	var top map[string]any
+	if err := json.Unmarshal([]byte(jsonStr), &top); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	hooks, _ := top["hooks"].(map[string]any)
+	entries, _ := hooks["SessionStart"].([]any)
+	if len(entries) != 1 {
+		t.Fatalf("SessionStart: got %d entries; want 1 (state-tracking only)", len(entries))
+	}
+}
+
+// TestSynthesizeSettingsInjectHelpHookQuotesWhitespacePath confirms
+// that an install path containing whitespace ends up defensively
+// double-quoted in the help-hook command. The synth's pre-flight
+// blocks this in production (SRD §4.3), but the quoting matches the
+// state-tracking hook path's belt-and-suspenders behavior so a
+// hand-edited install can't trigger a split-on-space bug.
+func TestSynthesizeSettingsInjectHelpHookQuotesWhitespacePath(t *testing.T) {
+	withStubExe(t, "/usr/local/bin/claude-director")
+	withStubHelpBin(t, "/opt/with space/claude-director")
+	cfg := config.Default()
+	cfg.Defaults.InjectHelpHook = true
+	jsonStr, _ := synthesizeSettings(
+		Resolved{SpawnParams: SpawnParams{ClaudeInstanceID: "id"}},
+		cfg,
+	)
+	var top map[string]any
+	if err := json.Unmarshal([]byte(jsonStr), &top); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	hooks, _ := top["hooks"].(map[string]any)
+	entries, _ := hooks["SessionStart"].([]any)
+	var found string
+	for _, e := range entries {
+		entry, _ := e.(map[string]any)
+		hl, _ := entry["hooks"].([]any)
+		for _, h := range hl {
+			cmdEntry, _ := h.(map[string]any)
+			cmd, _ := cmdEntry["command"].(string)
+			if strings.HasSuffix(cmd, " help") {
+				found = cmd
+			}
+		}
+	}
+	want := `"/opt/with space/claude-director" help`
+	if found != want {
+		t.Fatalf("help-hook command = %q; want %q", found, want)
 	}
 }
 
