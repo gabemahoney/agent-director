@@ -196,6 +196,7 @@ var Verbs = []VerbDef{
 			{Name: "started_at", Type: "timestamp", Description: "Row insert time."},
 			{Name: "last_seen_at", Type: "timestamp", Description: "Last hook UPSERT time."},
 			{Name: "ended_at", Type: "timestamp?", Description: "Set when state moves to ended (omitted while live)."},
+			{Name: "permission_request", Type: "object?", Description: "Open permission request awaiting orchestrator decision. Present only when state == check_permission AND an undecided permission_requests row exists for the spawn; omitted entirely (not null) otherwise. Sub-fields: request_id (int) — autoincrement id of the row; tool_name (string) — Claude Code tool that triggered the request; tool_input (string) — raw JSON string of the tool's input as stored, NOT a nested object (consumers parse it themselves); requested_at (RFC3339 timestamp) — created_at of the row."},
 		},
 		ErrorNames: []string{
 			"ErrSpawnNotFound",
