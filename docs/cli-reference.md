@@ -35,6 +35,7 @@ Launch a tracked Claude Code instance inside a new tmux session. Fire-and-forget
 - `extra-env` ([]string (K=V), optional): Repeated KEY=VALUE pairs injected on the tmux session env. Reserved keys (CLAUDE_DIRECTOR_*) rejected; auth env vars (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN) allowed.
 - `claude_args` ([]string (after --), optional): Pass-through argv to `claude` after the supervisor's own flags. Denied: --settings, --resume, --continue, --print, --output-format.
 - `no-pre-trust` (bool, optional): Skip pre-writing projects.<cwd>.hasTrustDialogAccepted=true into ~/.claude.json. Default off (pre-trust IS performed so Claude Code skips its workspace-trust dialog and the Spawn becomes interactive immediately).
+- `tmux-session-name` (string, optional): Optional explicit tmux session name. Empty/omitted falls back to <basename(cwd)>-<id[:8]>. Validated app-side: rejects empty (when supplied), '#' ':' '.', ASCII control chars, non-UTF-8, and >64 bytes. NO DB uniqueness check; live-collision surfaces as the wrapped tmux new-session error. Name reuse across ended spawns is supported.
 
 ### Result
 
@@ -50,6 +51,9 @@ Launch a tracked Claude Code instance inside a new tmux session. Fire-and-forget
 - `ErrSpawnDeniedFlag`
 - `ErrReservedEnvKey`
 - `ErrInstanceIdCollision`
+- `ErrTmuxSessionNameEmpty`
+- `ErrTmuxSessionNameInvalid`
+- `ErrTmuxSessionNameTooLong`
 - `ErrTmuxNotAvailable`
 - `ErrTmuxSessionCreate`
 - `ErrTemplateNotFound`
