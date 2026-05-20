@@ -138,6 +138,24 @@ A collision against a currently-live tmux session surfaces as
 tmux's own `new-session` error (no app-layer sentinel). Omitting
 the flag preserves today's `composeSessionName` default.
 
+#### Finding a Spawn by its tmux session name
+
+`list` accepts `--tmux-session-name <name>` to narrow rows by the
+column verbatim — useful when the operator picked the name (above)
+and wants to round-trip back from `tmux ls` to the persisted Spawn
+without consulting the id:
+
+```sh
+claude-director list --tmux-session-name bot-claude-status
+```
+
+The filter is exact-match, AND-combines with `--state`, `--label`,
+`--parent`, `--cwd`, and `--limit`, and returns both live and ended
+rows whose `tmux_session_name` matches — name reuse across ended
+spawns is supported, so a single name can correlate to multiple
+historic rows. Omitting the flag preserves today's permissive
+behavior.
+
 ## Common workflows
 
 ### Drive a Spawn from another Claude

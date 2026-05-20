@@ -290,6 +290,7 @@ Enumerate Spawn rows. All filters AND together. Returned order is unspecified �
 - `label`: type=[]string, required=false — Filter by label k=v. Repeatable on CLI; each entry must contain a literal `=`. Multiple entries AND together.
 - `parent`: type=string, required=false — Filter by parent_id exact match.
 - `cwd`: type=string, required=false — Filter by canonicalized cwd exact match.
+- `tmux-session-name`: type=string, required=false — Filter by tmux session name exact match. Returns any live or ended row whose tmux_session_name equals the value byte-for-byte; correlation across re-uses, not uniqueness enforcement.
 - `limit`: type=int, required=false — Cap result count. 0 / omitted means no cap.
 
 ### Output schema
