@@ -235,6 +235,7 @@ func listHandlerWith(st *store.Store, args []string) error {
 	fs.Var(newStringSlice(&labels), "label", "label k=v filter (repeatable; multiple AND together)")
 	fs.StringVar(&p.Parent, "parent", "", "filter by parent_id exact match")
 	fs.StringVar(&p.Cwd, "cwd", "", "filter by canonicalized cwd exact match")
+	fs.StringVar(&p.TmuxSessionName, "tmux-session-name", "", "filter by tmux session name exact match")
 	fs.IntVar(&p.Limit, "limit", 0, "cap result count (0 = no cap)")
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())

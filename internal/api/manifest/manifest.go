@@ -460,6 +460,11 @@ var Verbs = []VerbDef{
 				Description: "Filter by canonicalized cwd exact match.",
 			},
 			{
+				Name:        "tmux-session-name",
+				Type:        "string",
+				Description: "Filter by tmux session name exact match. Returns any live or ended row whose tmux_session_name equals the value byte-for-byte; correlation across re-uses, not uniqueness enforcement.",
+			},
+			{
 				Name:        "limit",
 				Type:        "int",
 				Description: "Cap result count. 0 / omitted means no cap.",
