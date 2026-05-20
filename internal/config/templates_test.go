@@ -98,6 +98,34 @@ mystery_field = "wat"
 	}
 }
 
+// TestLoadTemplateRejectsReservedTmuxSessionNameKey pins SR-5.1: a
+// template MUST NOT be allowed to set tmux_session_name. The existing
+// meta.Undecoded() walk already rejects the key (TemplateFile has no
+// matching field), but this test explicitly names tmux_session_name so
+// a future struct addition can't silently re-enable it.
+func TestLoadTemplateRejectsReservedTmuxSessionNameKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if _, err := config.EnsureTemplatesDir(); err != nil {
+		t.Fatalf("EnsureTemplatesDir: %v", err)
+	}
+	body := `cwd = "/tmp"
+tmux_session_name = "rogue-name"
+`
+	if err := os.WriteFile(
+		filepath.Join(home, ".claude-director", "templates", "reserved.toml"),
+		[]byte(body), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	_, err := config.LoadTemplate("reserved")
+	if !errors.Is(err, config.ErrTemplateMalformed) {
+		t.Fatalf("err = %v; want ErrTemplateMalformed (tmux_session_name is reserved)", err)
+	}
+	if !strings.Contains(err.Error(), "tmux_session_name") {
+		t.Errorf("err message must name the reserved key, got: %v", err)
+	}
+}
+
 func TestLoadTemplateRejectsBadRelayMode(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
