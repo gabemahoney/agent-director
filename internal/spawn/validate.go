@@ -43,8 +43,8 @@ const reservedEnvKeyPrefix = "CLAUDE_DIRECTOR_"
 //  3. claude_args contains no denied flag (both --flag VALUE and
 //     --flag=VALUE forms).
 //  4. extra_env contains no CLAUDE_DIRECTOR_* key.
-//  5. claude_director_labels normalization is a no-op here; the prefix
-//     guard in §7.2 step 5 lands at env-composition time.
+//  5. labels normalization is a no-op here; the prefix guard in §7.2
+//     step 5 lands at env-composition time.
 func Validate(r *Resolved) error {
 	if err := validateCwd(r); err != nil {
 		return err

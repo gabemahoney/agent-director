@@ -131,7 +131,7 @@ synthesizes for each spawn.
 | Field shape | Rule |
 |---|---|
 | Scalar (`cwd`, `relay_mode`) | Per-call non-empty REPLACES; per-call empty falls back to template. |
-| Map (`extra_env`, `claude_director_labels`) | Top-level merge. Template keys survive; per-call keys win on collision. |
+| Map (`extra_env`, `labels`) | Top-level merge. Template keys survive; per-call keys win on collision. |
 | Permissions arrays (`permissions.allow` / `deny` / `ask`) | CONCAT. Template entries first, per-call appended. This mirrors how Claude Code itself merges its `permissions` block across settings tiers. |
 | `claude_args` | Per-call non-nil REPLACES the template's slice wholesale. Per-call nil falls back to the template. Explicit empty (`[]`) replaces with empty. |
 
@@ -157,7 +157,7 @@ cwd        = "/home/me/repos/widget"
 relay_mode = "off"
 claude_args = ["--model", "opus"]
 
-[claude_director_labels]
+[labels]
 project = "widget"
 env     = "dev"
 
@@ -175,7 +175,7 @@ Resulting per-spawn merge:
 - `cwd`            → `/home/me/repos/widget` (template)
 - `relay_mode`     → `off` (template)
 - `claude_args`    → `["--model", "opus"]` (template; no per-call replacement)
-- `claude_director_labels` → `{project=widget, env=dev, other=bar}` (merged)
+- `labels` → `{project=widget, env=dev, other=bar}` (merged)
 - `permissions.allow` → `["Bash(npm test)", "Bash(npm run lint)", "Bash(jq)"]` (concat)
 - `permissions.deny`  → `["Bash(rm)"]` (template only)
 

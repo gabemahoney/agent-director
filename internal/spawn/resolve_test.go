@@ -48,7 +48,7 @@ cwd = "/tmp"
 relay_mode = "off"
 claude_args = ["--model", "opus"]
 
-[claude_director_labels]
+[labels]
 project = "foo"
 
 [permissions]
@@ -100,7 +100,7 @@ func TestResolveLabelMapsMergeWithPerCallWinning(t *testing.T) {
 	// Template has project=foo + env=dev. Per-call adds owner=alice and
 	// overrides project=bar. Expected: bar / dev / alice.
 	withTemplate(t, "base", `
-[claude_director_labels]
+[labels]
 project = "foo"
 env = "dev"
 `)
@@ -255,7 +255,7 @@ func TestResolveBaseTemplateNotMutatedByResolve(t *testing.T) {
 	// re-loading the template: a second Resolve should still see the
 	// unmodified template values.
 	withTemplate(t, "base", `
-[claude_director_labels]
+[labels]
 project = "foo"
 `)
 	r1, err := spawn.Resolve(spawn.SpawnParams{Template: "base"}, config.Default())

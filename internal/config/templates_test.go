@@ -2,8 +2,10 @@ package config_test
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gabemahoney/claude-director/internal/config"
@@ -132,7 +134,7 @@ func TestLoadTemplateValidFileDecodes(t *testing.T) {
 relay_mode = "off"
 claude_args = ["--model", "opus"]
 
-[claude_director_labels]
+[labels]
 project = "foo"
 
 [permissions]
@@ -159,4 +161,61 @@ allow = ["Bash(jq)"]
 	if tf.Permissions == nil || tf.Permissions.Allow[0] != "Bash(jq)" {
 		t.Errorf("Permissions: %+v", tf.Permissions)
 	}
+}
+
+func TestLoadTemplateDeprecatedLabelsKeyStillLoadsWithWarning(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if _, err := config.EnsureTemplatesDir(); err != nil {
+		t.Fatalf("EnsureTemplatesDir: %v", err)
+	}
+	body := `cwd = "/tmp"
+
+[claude_director_labels]
+project = "legacy"
+`
+	if err := os.WriteFile(
+		filepath.Join(home, ".claude-director", "templates", "old.toml"),
+		[]byte(body), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	msg := captureStderr(t, func() {
+		tf, err := config.LoadTemplate("old")
+		if err != nil {
+			t.Fatalf("LoadTemplate: %v (want success on deprecated key)", err)
+		}
+		if tf.ClaudeDirectorLabels["project"] != "legacy" {
+			t.Errorf("legacy key not folded into Labels: %v", tf.ClaudeDirectorLabels)
+		}
+		if tf.DeprecatedLabels != nil {
+			t.Errorf("DeprecatedLabels not cleared after fold: %v", tf.DeprecatedLabels)
+		}
+	})
+	if !strings.Contains(msg, "deprecated") || !strings.Contains(msg, "claude_director_labels") {
+		t.Errorf("expected deprecation warning on stderr, got: %q", msg)
+	}
+}
+
+// captureStderr redirects os.Stderr while fn runs and returns whatever
+// it wrote. Restores stderr unconditionally.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	orig := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stderr = w
+
+	done := make(chan []byte, 1)
+	go func() {
+		b, _ := io.ReadAll(r)
+		done <- b
+	}()
+
+	defer func() { os.Stderr = orig }()
+	fn()
+	_ = w.Close()
+	return string(<-done)
 }
