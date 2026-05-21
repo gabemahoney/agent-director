@@ -31,7 +31,7 @@ type HandleConfig struct {
 
 // Handle is the entry point cmd/ dispatches into. It reads the payload
 // from stdin, classifies the event, applies the row UPSERT, and — when
-// the event is PermissionRequest AND CLAUDE_DIRECTOR_RELAY_MODE=on —
+// the event is PermissionRequest AND AGENT_DIRECTOR_RELAY_MODE=on —
 // runs the relay flow (DELETE-INSERT + polling loop + envelope on
 // stdout per SRD §6.2/§6.3).
 //

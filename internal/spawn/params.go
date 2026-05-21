@@ -34,13 +34,13 @@ type SpawnParams struct {
 	ClaudeInstanceID string
 
 	// ExtraEnv injects KEY=VAL env vars on the tmux session. Reserved
-	// keys (CLAUDE_DIRECTOR_*) are rejected; auth env vars
+	// keys (AGENT_DIRECTOR_*) are rejected; auth env vars
 	// (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN) are explicitly allowed.
 	ExtraEnv map[string]string
 
 	// AgentDirectorLabels are caller-owned tags. Each key is normalized to
 	// env-var form (uppercase, non-alphanumeric → '_') and exposed as
-	// CLAUDE_DIRECTOR_LABEL_<UPPER_KEY>=<VAL> on the session env. The
+	// AGENT_DIRECTOR_LABEL_<UPPER_KEY>=<VAL> on the session env. The
 	// labels also persist into the spawns.labels JSON column.
 	AgentDirectorLabels map[string]string
 
@@ -54,7 +54,7 @@ type SpawnParams struct {
 	Permissions *Permissions
 
 	// RelayMode is "on" / "off" / "" (use config default). Mirrored into
-	// CLAUDE_DIRECTOR_RELAY_MODE on the session env for the hook.
+	// AGENT_DIRECTOR_RELAY_MODE on the session env for the hook.
 	RelayMode string
 
 	// NoPreTrust opts out of the workspace-trust pre-write into

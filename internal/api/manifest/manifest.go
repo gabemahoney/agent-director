@@ -80,7 +80,7 @@ var Verbs = []VerbDef{
 			{
 				Name:        "label",
 				Type:        "[]string (k=v)",
-				Description: "Repeated KEY=VALUE pairs. Each becomes CLAUDE_DIRECTOR_LABEL_<UPPER_KEY> on the session env and persists in labels.",
+				Description: "Repeated KEY=VALUE pairs. Each becomes AGENT_DIRECTOR_LABEL_<UPPER_KEY> on the session env and persists in labels.",
 			},
 			{
 				Name:        "allow",
@@ -105,7 +105,7 @@ var Verbs = []VerbDef{
 			{
 				Name:        "extra-env",
 				Type:        "[]string (K=V)",
-				Description: "Repeated KEY=VALUE pairs injected on the tmux session env. Reserved keys (CLAUDE_DIRECTOR_*) rejected; auth env vars (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN) allowed.",
+				Description: "Repeated KEY=VALUE pairs injected on the tmux session env. Reserved keys (AGENT_DIRECTOR_*) rejected; auth env vars (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN) allowed.",
 			},
 			{
 				Name:        "claude_args",
@@ -184,7 +184,7 @@ var Verbs = []VerbDef{
 		},
 		ResultFields: []FieldDef{
 			{Name: "claude_instance_id", Type: "string", Description: "Stable id of the Spawn."},
-			{Name: "parent_id", Type: "string", Description: "Parent Spawn id (CLAUDE_DIRECTOR_INSTANCE_ID env at spawn time), empty when launched by a human shell."},
+			{Name: "parent_id", Type: "string", Description: "Parent Spawn id (AGENT_DIRECTOR_INSTANCE_ID env at spawn time), empty when launched by a human shell."},
 			{Name: "state", Type: "string", Description: "Current state column value."},
 			{Name: "cwd", Type: "string", Description: "Canonicalized cwd."},
 			{Name: "tmux_session_name", Type: "string", Description: "tmux session under which the Spawn is running."},
@@ -311,7 +311,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "resume",
-		Description: "Bring a terminated (ended/missing) Spawn back to life via `claude --resume`. Same claude_instance_id, fresh tmux session, same JSONL transcript. parent_id is re-derived from the caller's CLAUDE_DIRECTOR_INSTANCE_ID env var on every resume.",
+		Description: "Bring a terminated (ended/missing) Spawn back to life via `claude --resume`. Same claude_instance_id, fresh tmux session, same JSONL transcript. parent_id is re-derived from the caller's AGENT_DIRECTOR_INSTANCE_ID env var on every resume.",
 		Params: []ParamDef{
 			{
 				Name:        "claude_instance_id",

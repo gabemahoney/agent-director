@@ -20,7 +20,7 @@ func runCLIWithStdin(t *testing.T, home, stdin string, args ...string) (string, 
 	cmd.Env = []string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + home,
-		"CLAUDE_DIRECTOR_INSTANCE_ID=" + os.Getenv("CLAUDE_DIRECTOR_INSTANCE_ID"),
+		"AGENT_DIRECTOR_INSTANCE_ID=" + os.Getenv("AGENT_DIRECTOR_INSTANCE_ID"),
 	}
 	cmd.Stdin = strings.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
@@ -114,7 +114,7 @@ func TestHookCLISessionStartTransitionsToWaiting(t *testing.T) {
 
 	payload := `{"hook_event_name":"SessionStart","transcript_path":"/x/y/abc-uuid.jsonl"}`
 	stdout, stderr, code := runCLIWithEnv(t, home,
-		map[string]string{"CLAUDE_DIRECTOR_INSTANCE_ID": "id-hook-1"},
+		map[string]string{"AGENT_DIRECTOR_INSTANCE_ID": "id-hook-1"},
 		payload, "hook")
 	if code != 0 {
 		t.Fatalf("hook exit = %d; want 0\nstderr=%s", code, stderr)
@@ -136,7 +136,7 @@ func TestHookCLIMissingEnvExitsZero(t *testing.T) {
 	if _, _, code := runCLIWithStdin(t, home, "", "help"); code != 0 {
 		t.Fatalf("help bootstrap exit = %d", code)
 	}
-	// No CLAUDE_DIRECTOR_INSTANCE_ID set — fail-open, exit 0 with no stdout.
+	// No AGENT_DIRECTOR_INSTANCE_ID set — fail-open, exit 0 with no stdout.
 	stdout, _, code := runCLIWithEnv(t, home, nil,
 		`{"hook_event_name":"SessionStart"}`, "hook")
 	if code != 0 {
@@ -156,7 +156,7 @@ func TestHookCLIPreToolUseAskUserSetsAskUser(t *testing.T) {
 	insertPendingRow(t, dbPath, "id-hook-2")
 	payload := `{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion"}`
 	_, stderr, code := runCLIWithEnv(t, home,
-		map[string]string{"CLAUDE_DIRECTOR_INSTANCE_ID": "id-hook-2"},
+		map[string]string{"AGENT_DIRECTOR_INSTANCE_ID": "id-hook-2"},
 		payload, "hook")
 	if code != 0 {
 		t.Fatalf("hook exit = %d; want 0\nstderr=%s", code, stderr)
@@ -176,7 +176,7 @@ func TestHookCLISessionEndCompactIsSoftRefresh(t *testing.T) {
 	insertPendingRow(t, dbPath, "id-hook-3")
 	// Bump to waiting first so soft-refresh has a non-pending baseline.
 	_, _, _ = runCLIWithEnv(t, home,
-		map[string]string{"CLAUDE_DIRECTOR_INSTANCE_ID": "id-hook-3"},
+		map[string]string{"AGENT_DIRECTOR_INSTANCE_ID": "id-hook-3"},
 		`{"hook_event_name":"SessionStart","transcript_path":"/x/abc.jsonl"}`, "hook")
 	state, _ := readSpawnRow(t, dbPath, "id-hook-3")
 	if state != "waiting" {
@@ -184,7 +184,7 @@ func TestHookCLISessionEndCompactIsSoftRefresh(t *testing.T) {
 	}
 	// Now compact — must NOT change state.
 	_, _, code := runCLIWithEnv(t, home,
-		map[string]string{"CLAUDE_DIRECTOR_INSTANCE_ID": "id-hook-3"},
+		map[string]string{"AGENT_DIRECTOR_INSTANCE_ID": "id-hook-3"},
 		`{"hook_event_name":"SessionEnd","reason":"compact"}`, "hook")
 	if code != 0 {
 		t.Fatalf("hook exit = %d; want 0", code)
@@ -203,7 +203,7 @@ func TestHookCLISessionEndUserQuitIsEnded(t *testing.T) {
 	dbPath := filepath.Join(home, ".agent-director", "state.db")
 	insertPendingRow(t, dbPath, "id-hook-4")
 	_, _, code := runCLIWithEnv(t, home,
-		map[string]string{"CLAUDE_DIRECTOR_INSTANCE_ID": "id-hook-4"},
+		map[string]string{"AGENT_DIRECTOR_INSTANCE_ID": "id-hook-4"},
 		`{"hook_event_name":"SessionEnd","reason":"user_quit"}`, "hook")
 	if code != 0 {
 		t.Fatalf("hook exit = %d; want 0", code)

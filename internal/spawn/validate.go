@@ -33,9 +33,9 @@ var deniedClaudeArgs = map[string]struct{}{
 
 // reservedEnvKeyPrefix names the env-var namespace claude-director owns.
 // Anything starting with this prefix would alias one of our routing vars
-// (CLAUDE_DIRECTOR_INSTANCE_ID, CLAUDE_DIRECTOR_RELAY_MODE,
-// CLAUDE_DIRECTOR_LABEL_*) so we reject it at validation time.
-const reservedEnvKeyPrefix = "CLAUDE_DIRECTOR_"
+// (AGENT_DIRECTOR_INSTANCE_ID, AGENT_DIRECTOR_RELAY_MODE,
+// AGENT_DIRECTOR_LABEL_*) so we reject it at validation time.
+const reservedEnvKeyPrefix = "AGENT_DIRECTOR_"
 
 // Validate runs the SRD §7.2 checks in order and short-circuits on the
 // first failure. No file or tmux side effects on any error. The Resolved
@@ -50,7 +50,7 @@ const reservedEnvKeyPrefix = "CLAUDE_DIRECTOR_"
 //  2. relay_mode is "on" / "off" / "" if set.
 //  3. claude_args contains no denied flag (both --flag VALUE and
 //     --flag=VALUE forms).
-//  4. extra_env contains no CLAUDE_DIRECTOR_* key.
+//  4. extra_env contains no AGENT_DIRECTOR_* key.
 //  5. labels normalization is a no-op here; the prefix guard in §7.2
 //     step 5 lands at env-composition time.
 func Validate(r *Resolved) error {
@@ -183,7 +183,7 @@ func validateClaudeArgs(args []string) error {
 
 // validateExtraEnv applies SRD §7.2 step 4. The check is case-sensitive
 // (POSIX env vars are case-sensitive) and matches the SRD §14.4 carve-out
-// for auth env vars — those do NOT carry the CLAUDE_DIRECTOR_ prefix and
+// for auth env vars — those do NOT carry the AGENT_DIRECTOR_ prefix and
 // pass through.
 func validateExtraEnv(env map[string]string) error {
 	for k := range env {

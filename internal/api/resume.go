@@ -13,7 +13,7 @@ import (
 // resumeEnvInstanceID is the env-var key resume reads to re-derive
 // parent_id (SRD §7.5). Mirrored verbatim from spawn's constant of
 // the same name; both refer to the same operational concept.
-const resumeEnvInstanceID = "CLAUDE_DIRECTOR_INSTANCE_ID"
+const resumeEnvInstanceID = "AGENT_DIRECTOR_INSTANCE_ID"
 
 // ResumeStore is the narrow store surface Resume needs.
 type ResumeStore interface {

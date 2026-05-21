@@ -163,10 +163,10 @@ func TestSpawnCLIHappyPath(t *testing.T) {
 	if !strings.Contains(logContent, "--settings") {
 		t.Errorf("fake-tmux log missing --settings: %s", logContent)
 	}
-	if !strings.Contains(logContent, "CLAUDE_DIRECTOR_INSTANCE_ID="+res.ClaudeInstanceID) {
+	if !strings.Contains(logContent, "AGENT_DIRECTOR_INSTANCE_ID="+res.ClaudeInstanceID) {
 		t.Errorf("fake-tmux log missing instance-id env: %s", logContent)
 	}
-	if !strings.Contains(logContent, "CLAUDE_DIRECTOR_LABEL_ROLE=worker") {
+	if !strings.Contains(logContent, "AGENT_DIRECTOR_LABEL_ROLE=worker") {
 		t.Errorf("fake-tmux log missing label env: %s", logContent)
 	}
 }
@@ -271,7 +271,7 @@ func TestSpawnCLIReservedEnvKey(t *testing.T) {
 	home := t.TempDir()
 	cwd := t.TempDir()
 	_, stderr, code := runSpawnCLI(t, home, fakeDir,
-		"spawn", "--cwd", cwd, "--extra-env", "CLAUDE_DIRECTOR_FOO=bar")
+		"spawn", "--cwd", cwd, "--extra-env", "AGENT_DIRECTOR_FOO=bar")
 	if code == 0 {
 		t.Fatalf("expected non-zero exit; got 0")
 	}

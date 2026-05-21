@@ -56,13 +56,13 @@ func (f *flakyRelayStore) GetPermissionRequest(string) (store.PermissionRow, err
 }
 
 // envWith returns a func(string)string that sets RELAY_MODE=on and
-// CLAUDE_DIRECTOR_INSTANCE_ID=id; everything else empty.
+// AGENT_DIRECTOR_INSTANCE_ID=id; everything else empty.
 func envWith(id string) func(string) string {
 	return func(k string) string {
 		switch k {
 		case hook.EnvRelayMode:
 			return hook.RelayModeOn
-		case "CLAUDE_DIRECTOR_INSTANCE_ID":
+		case "AGENT_DIRECTOR_INSTANCE_ID":
 			return id
 		}
 		return ""
@@ -97,14 +97,14 @@ func newSilentLogger() *log.Logger {
 	return log.New(io.Discard, "", 0)
 }
 
-// 1. Invalid CLAUDE_DIRECTOR_INSTANCE_ID (missing) → deny envelope.
+// 1. Invalid AGENT_DIRECTOR_INSTANCE_ID (missing) → deny envelope.
 func TestFailClosedMissingInstanceID(t *testing.T) {
 	stdout := &bytes.Buffer{}
 	env := func(k string) string {
 		if k == hook.EnvRelayMode {
 			return hook.RelayModeOn
 		}
-		return "" // CLAUDE_DIRECTOR_INSTANCE_ID empty
+		return "" // AGENT_DIRECTOR_INSTANCE_ID empty
 	}
 	st := &flakyRelayStore{}
 	if err := hook.Handle(context.Background(),
@@ -117,14 +117,14 @@ func TestFailClosedMissingInstanceID(t *testing.T) {
 	assertDenyEnvelope(t, stdout)
 }
 
-// 2. Invalid CLAUDE_DIRECTOR_INSTANCE_ID (contains slash) → deny.
+// 2. Invalid AGENT_DIRECTOR_INSTANCE_ID (contains slash) → deny.
 func TestFailClosedInvalidInstanceID(t *testing.T) {
 	stdout := &bytes.Buffer{}
 	env := func(k string) string {
 		switch k {
 		case hook.EnvRelayMode:
 			return hook.RelayModeOn
-		case "CLAUDE_DIRECTOR_INSTANCE_ID":
+		case "AGENT_DIRECTOR_INSTANCE_ID":
 			return "id/with/slash"
 		}
 		return ""

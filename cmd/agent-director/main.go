@@ -93,7 +93,7 @@ const hookExitCode = 0
 // unreachable) yields exit 0 with empty stdout (state-tracking) or a
 // deny envelope (relay-on per SRD §6.4 fail-closed boundary).
 //
-// The relay-active determination is made FROM ENV (CLAUDE_DIRECTOR_RELAY_MODE)
+// The relay-active determination is made FROM ENV (AGENT_DIRECTOR_RELAY_MODE)
 // before any disk I/O — SRD §6.5 — so even a store-open failure on a
 // relay-on Spawn still emits a valid deny envelope.
 //

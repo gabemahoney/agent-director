@@ -38,7 +38,7 @@ var ErrRelayModeInvalid = errors.New("ErrRelayModeInvalid")
 var ErrSpawnDeniedFlag = errors.New("ErrSpawnDeniedFlag")
 
 // ErrReservedEnvKey is returned when extra_env contains a key matching the
-// CLAUDE_DIRECTOR_* prefix (case-sensitive). Auth env vars
+// AGENT_DIRECTOR_* prefix (case-sensitive). Auth env vars
 // (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN) are explicitly allowed.
 var ErrReservedEnvKey = errors.New("ErrReservedEnvKey")
 

@@ -122,14 +122,14 @@ func TestLaunchInsertsPendingAndCallsTmux(t *testing.T) {
 	}
 
 	// Env vars composed correctly.
-	if tmux.got.envs["CLAUDE_DIRECTOR_INSTANCE_ID"] != "id-launch-1" {
-		t.Errorf("env CLAUDE_DIRECTOR_INSTANCE_ID = %q", tmux.got.envs["CLAUDE_DIRECTOR_INSTANCE_ID"])
+	if tmux.got.envs["AGENT_DIRECTOR_INSTANCE_ID"] != "id-launch-1" {
+		t.Errorf("env AGENT_DIRECTOR_INSTANCE_ID = %q", tmux.got.envs["AGENT_DIRECTOR_INSTANCE_ID"])
 	}
-	if tmux.got.envs["CLAUDE_DIRECTOR_RELAY_MODE"] != "off" {
-		t.Errorf("env CLAUDE_DIRECTOR_RELAY_MODE = %q", tmux.got.envs["CLAUDE_DIRECTOR_RELAY_MODE"])
+	if tmux.got.envs["AGENT_DIRECTOR_RELAY_MODE"] != "off" {
+		t.Errorf("env AGENT_DIRECTOR_RELAY_MODE = %q", tmux.got.envs["AGENT_DIRECTOR_RELAY_MODE"])
 	}
-	if tmux.got.envs["CLAUDE_DIRECTOR_LABEL_ROLE"] != "worker" {
-		t.Errorf("env CLAUDE_DIRECTOR_LABEL_ROLE = %q", tmux.got.envs["CLAUDE_DIRECTOR_LABEL_ROLE"])
+	if tmux.got.envs["AGENT_DIRECTOR_LABEL_ROLE"] != "worker" {
+		t.Errorf("env AGENT_DIRECTOR_LABEL_ROLE = %q", tmux.got.envs["AGENT_DIRECTOR_LABEL_ROLE"])
 	}
 }
 
@@ -228,10 +228,10 @@ func TestLaunchEmitsEnvForNonAlphanumericLabelKey(t *testing.T) {
 	}
 
 	wantEnv := map[string]string{
-		"CLAUDE_DIRECTOR_LABEL_MY_KEY":      "v1",
-		"CLAUDE_DIRECTOR_LABEL_X_Y_Z":       "v2",
-		"CLAUDE_DIRECTOR_LABEL_ALREADY_OK":  "v3",
-		"CLAUDE_DIRECTOR_LABEL_WITH_SPACES": "v4",
+		"AGENT_DIRECTOR_LABEL_MY_KEY":      "v1",
+		"AGENT_DIRECTOR_LABEL_X_Y_Z":       "v2",
+		"AGENT_DIRECTOR_LABEL_ALREADY_OK":  "v3",
+		"AGENT_DIRECTOR_LABEL_WITH_SPACES": "v4",
 	}
 	for k, v := range wantEnv {
 		if tmux.got.envs[k] != v {
@@ -252,7 +252,7 @@ func TestLaunchEmitsEnvForNonAlphanumericLabelKey(t *testing.T) {
 }
 
 // TestLaunchParentIDNullWhenEnvUnset pins SRD §7.5: a Spawn launched
-// from a plain shell (with no CLAUDE_DIRECTOR_INSTANCE_ID set) has a
+// from a plain shell (with no AGENT_DIRECTOR_INSTANCE_ID set) has a
 // NULL parent_id. The store materializes NULL as the empty string in
 // the Go struct; the test asserts that contract.
 func TestLaunchParentIDNullWhenEnvUnset(t *testing.T) {
@@ -276,7 +276,7 @@ func TestLaunchParentIDNullWhenEnvUnset(t *testing.T) {
 }
 
 // TestLaunchParentIDInheritsCallerEnv pins SRD §7.5: when the spawning
-// process has CLAUDE_DIRECTOR_INSTANCE_ID set, that value lands in the
+// process has AGENT_DIRECTOR_INSTANCE_ID set, that value lands in the
 // new row's parent_id.
 func TestLaunchParentIDInheritsCallerEnv(t *testing.T) {
 	withStubExe(t, "/bin/claude-director")

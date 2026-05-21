@@ -12,11 +12,11 @@ func TestComposeEnvBaseKeys(t *testing.T) {
 		RelayMode:        "on",
 	}}
 	env := composeEnv(r)
-	if env["CLAUDE_DIRECTOR_INSTANCE_ID"] != "id-abc" {
-		t.Errorf("CLAUDE_DIRECTOR_INSTANCE_ID = %q; want id-abc", env["CLAUDE_DIRECTOR_INSTANCE_ID"])
+	if env["AGENT_DIRECTOR_INSTANCE_ID"] != "id-abc" {
+		t.Errorf("AGENT_DIRECTOR_INSTANCE_ID = %q; want id-abc", env["AGENT_DIRECTOR_INSTANCE_ID"])
 	}
-	if env["CLAUDE_DIRECTOR_RELAY_MODE"] != "on" {
-		t.Errorf("CLAUDE_DIRECTOR_RELAY_MODE = %q; want on", env["CLAUDE_DIRECTOR_RELAY_MODE"])
+	if env["AGENT_DIRECTOR_RELAY_MODE"] != "on" {
+		t.Errorf("AGENT_DIRECTOR_RELAY_MODE = %q; want on", env["AGENT_DIRECTOR_RELAY_MODE"])
 	}
 }
 
@@ -33,10 +33,10 @@ func TestComposeEnvLabelsAreNormalized(t *testing.T) {
 	}}
 	env := composeEnv(r)
 	cases := map[string]string{
-		"CLAUDE_DIRECTOR_LABEL_MY_KEY":     "v1",
-		"CLAUDE_DIRECTOR_LABEL_ANOTHER_K":  "v2",
-		"CLAUDE_DIRECTOR_LABEL_ALREADYOK":  "v3",
-		"CLAUDE_DIRECTOR_LABEL_123NUMERIC": "v4",
+		"AGENT_DIRECTOR_LABEL_MY_KEY":     "v1",
+		"AGENT_DIRECTOR_LABEL_ANOTHER_K":  "v2",
+		"AGENT_DIRECTOR_LABEL_ALREADYOK":  "v3",
+		"AGENT_DIRECTOR_LABEL_123NUMERIC": "v4",
 	}
 	for k, want := range cases {
 		if env[k] != want {

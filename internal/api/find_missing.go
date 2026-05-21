@@ -34,7 +34,7 @@ type FindMissingLogger interface {
 //
 //  1. List live-state IDs (anything not ended/missing, including
 //     pending — SRD §5.2 explicitly scans pending).
-//  2. Probe the OS for live CLAUDE_DIRECTOR_INSTANCE_ID values.
+//  2. Probe the OS for live AGENT_DIRECTOR_INSTANCE_ID values.
 //  3. Degraded-mode guard (SRD §14.6): if the probe returned 0 IDs
 //     AND there are ≥1 live-state rows, log a warning and return
 //     count=0, ids=nil with nil error. The most common cause is the

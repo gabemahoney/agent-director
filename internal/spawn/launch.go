@@ -31,7 +31,7 @@ var claudeBinary = "claude"
 // envInstanceID names the env var Launch reads to populate parent_id on
 // the new row (SRD §7.5). When set, the caller is itself a Spawn whose
 // Claude shell is invoking us; the value becomes the new row's parent.
-const envInstanceID = "CLAUDE_DIRECTOR_INSTANCE_ID"
+const envInstanceID = "AGENT_DIRECTOR_INSTANCE_ID"
 
 // Launch is the fire-and-forget half of `spawn` (SRD §7.4). The function:
 //

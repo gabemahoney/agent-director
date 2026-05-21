@@ -207,7 +207,7 @@ func containsStr(s, sub string) bool {
 func TestResumeHappyPathLaunchesAndUpdatesParent(t *testing.T) {
 	// Set caller env so parent_id derivation has something to bind.
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("CLAUDE_DIRECTOR_INSTANCE_ID", "caller-id")
+	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "caller-id")
 
 	row := baseRow()
 	seedJsonl(t, row.CWD, row.ClaudeSessionID)
@@ -247,15 +247,15 @@ func TestResumeHappyPathLaunchesAndUpdatesParent(t *testing.T) {
 		t.Errorf("command tail missing user claude_args: %v", tail)
 	}
 
-	if tm.gotEnvs["CLAUDE_DIRECTOR_INSTANCE_ID"] != "id-r-1" {
-		t.Errorf("env CLAUDE_DIRECTOR_INSTANCE_ID = %q; want id-r-1",
-			tm.gotEnvs["CLAUDE_DIRECTOR_INSTANCE_ID"])
+	if tm.gotEnvs["AGENT_DIRECTOR_INSTANCE_ID"] != "id-r-1" {
+		t.Errorf("env AGENT_DIRECTOR_INSTANCE_ID = %q; want id-r-1",
+			tm.gotEnvs["AGENT_DIRECTOR_INSTANCE_ID"])
 	}
-	if tm.gotEnvs["CLAUDE_DIRECTOR_LABEL_PROJECT"] != "foo" {
+	if tm.gotEnvs["AGENT_DIRECTOR_LABEL_PROJECT"] != "foo" {
 		t.Errorf("label env lost on resume: %v", tm.gotEnvs)
 	}
 
-	// parent_id derivation: caller env had CLAUDE_DIRECTOR_INSTANCE_ID=caller-id.
+	// parent_id derivation: caller env had AGENT_DIRECTOR_INSTANCE_ID=caller-id.
 	if st.setParentCalls != 1 || st.setParentArgs != [2]string{"id-r-1", "caller-id"} {
 		t.Errorf("SetParentID calls=%d args=%v; want 1 [id-r-1 caller-id]",
 			st.setParentCalls, st.setParentArgs)
@@ -263,10 +263,10 @@ func TestResumeHappyPathLaunchesAndUpdatesParent(t *testing.T) {
 }
 
 func TestResumeFromBareShellSetsParentNull(t *testing.T) {
-	// No CLAUDE_DIRECTOR_INSTANCE_ID in caller env → SetParentID is
+	// No AGENT_DIRECTOR_INSTANCE_ID in caller env → SetParentID is
 	// called with empty parent (the store writes NULL).
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("CLAUDE_DIRECTOR_INSTANCE_ID", "")
+	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "")
 
 	row := baseRow()
 	seedJsonl(t, row.CWD, row.ClaudeSessionID)
@@ -285,7 +285,7 @@ func TestResumeMissingStateAlsoResumes(t *testing.T) {
 	// Per Epic 9 AC #2: a row marked `missing` by find-missing resumes
 	// the same way an `ended` row does.
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("CLAUDE_DIRECTOR_INSTANCE_ID", "")
+	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "")
 	row := baseRow()
 	row.State = store.StateMissing
 	seedJsonl(t, row.CWD, row.ClaudeSessionID)
@@ -306,7 +306,7 @@ func TestResumeLaunchFailureLeavesRowUnchanged(t *testing.T) {
 	// itself — only the eventual SessionStart hook flips them. So a
 	// caller seeing the error can retry without DB cleanup.
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("CLAUDE_DIRECTOR_INSTANCE_ID", "")
+	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "")
 	row := baseRow()
 	seedJsonl(t, row.CWD, row.ClaudeSessionID)
 	st := &recordingResumeStore{row: row}
