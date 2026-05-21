@@ -1,4 +1,4 @@
-// Package hook implements the `claude-director hook` verb: the lifecycle
+// Package hook implements the `agent-director hook` verb: the lifecycle
 // handler Claude Code invokes via the synthesized --settings JSON. The
 // handler reads a payload from stdin, classifies the event per SRD §5.2,
 // writes a row UPSERT, and exits 0 (state-tracking fail-open).

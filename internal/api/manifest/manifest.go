@@ -1,4 +1,4 @@
-// Package manifest is the single source of truth for the claude-director
+// Package manifest is the single source of truth for the agent-director
 // CLI/MCP verb surface.
 //
 // Each VerbDef entry records a verb's name, description, parameters, result
@@ -15,7 +15,7 @@ package manifest
 
 //go:generate go run github.com/gabemahoney/agent-director/tools/gen-docs
 
-// VerbDef describes one CLI/MCP verb exposed by claude-director.
+// VerbDef describes one CLI/MCP verb exposed by agent-director.
 type VerbDef struct {
 	Name         string
 	Description  string
@@ -500,7 +500,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "serve",
-		Description: "Start the stdio MCP server. Long-lived process that exposes every other verb as an MCP tool over JSON-RPC on stdin/stdout. Typically registered with `claude mcp add claude-director <binary-path> serve --stdio`.",
+		Description: "Start the stdio MCP server. Long-lived process that exposes every other verb as an MCP tool over JSON-RPC on stdin/stdout. Typically registered with `claude mcp add agent-director <binary-path> serve --stdio`.",
 		Params: []ParamDef{
 			{
 				Name:        "stdio",
