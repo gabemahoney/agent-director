@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gabemahoney/claude-director/internal/api/manifest"
-	"github.com/gabemahoney/claude-director/internal/config"
-	"github.com/gabemahoney/claude-director/internal/mcp"
+	"github.com/gabemahoney/agent-director/internal/api/manifest"
+	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/mcp"
 )
 
 // fakeDispatcher is the test-side dispatcher. It records every call

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gabemahoney/claude-director/internal/spawn"
+	"github.com/gabemahoney/agent-director/internal/spawn"
 )
 
 // TestJsonlPathSlugParity pins the slug rule byte-for-byte. Any

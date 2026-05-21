@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gabemahoney/claude-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // SendKeysTmux is the narrow tmux surface SendKeys needs. *tmux.Client

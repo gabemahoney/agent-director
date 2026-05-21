@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gabemahoney/claude-director/internal/probe"
+	"github.com/gabemahoney/agent-director/internal/probe"
 )
 
 // TestLinuxProberFindsLiveID launches a child shell with the env var

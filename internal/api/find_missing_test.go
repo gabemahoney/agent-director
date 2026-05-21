@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gabemahoney/claude-director/internal/api"
+	"github.com/gabemahoney/agent-director/internal/api"
 )
 
 // fakeFindMissingStore is the narrow store the verb sees. liveIDs is

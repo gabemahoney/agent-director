@@ -6,8 +6,8 @@ import (
 	"io"
 	"os"
 
-	"github.com/gabemahoney/claude-director/internal/config"
-	"github.com/gabemahoney/claude-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // preTrustWarn is where pre-trust warnings land — missing-file or

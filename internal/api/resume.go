@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/gabemahoney/claude-director/internal/config"
-	"github.com/gabemahoney/claude-director/internal/spawn"
-	"github.com/gabemahoney/claude-director/internal/store"
-	"github.com/gabemahoney/claude-director/internal/tmux"
+	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/spawn"
+	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
 // resumeEnvInstanceID is the env-var key resume reads to re-derive

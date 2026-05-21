@@ -1,8 +1,8 @@
 package spawn
 
 import (
-	"github.com/gabemahoney/claude-director/internal/config"
-	"github.com/gabemahoney/claude-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // RelaunchInput captures the SRD §8.1 inputs Resume needs to relaunch

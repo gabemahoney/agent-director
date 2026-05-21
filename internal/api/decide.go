@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/gabemahoney/claude-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // ErrRelayModeOff is returned by decide() when the target Spawn's

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gabemahoney/claude-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // ErrListInvalidLabel is returned when a caller-supplied label filter

@@ -15,10 +15,10 @@ import (
 	"log"
 	"os"
 
-	"github.com/gabemahoney/claude-director/internal/api"
-	"github.com/gabemahoney/claude-director/internal/config"
-	"github.com/gabemahoney/claude-director/internal/hook"
-	"github.com/gabemahoney/claude-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/api"
+	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/hook"
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // errorEnvelope is the JSON shape emitted on stderr for CLI-level errors.

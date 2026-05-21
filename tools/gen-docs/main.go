@@ -22,7 +22,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/gabemahoney/claude-director/internal/api/manifest"
+	"github.com/gabemahoney/agent-director/internal/api/manifest"
 )
 
 // genHeader is the first content line of every generated doc file. It

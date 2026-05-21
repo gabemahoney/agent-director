@@ -9,7 +9,7 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/gabemahoney/claude-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/config"
 )
 
 // CLAUDE_DIRECTOR_RELAY_MODE env-var values per SRD §6.5. The hook

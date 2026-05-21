@@ -1,7 +1,7 @@
 package api
 
 import (
-	"github.com/gabemahoney/claude-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // KillTmux is the narrow tmux surface Kill needs. *tmux.Client

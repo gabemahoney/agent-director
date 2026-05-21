@@ -1,8 +1,8 @@
 package api
 
 import (
-	"github.com/gabemahoney/claude-director/internal/store"
-	"github.com/gabemahoney/claude-director/internal/tmux"
+	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
 // ReadPaneTmux is the narrow tmux surface ReadPane needs. *tmux.Client

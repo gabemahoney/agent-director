@@ -1,6 +1,6 @@
 package api
 
-import "github.com/gabemahoney/claude-director/internal/api/manifest"
+import "github.com/gabemahoney/agent-director/internal/api/manifest"
 
 // Help returns the manifest-derived list of verbs as a slice of VerbSummary.
 //

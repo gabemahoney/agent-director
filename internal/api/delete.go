@@ -3,7 +3,7 @@ package api
 import (
 	"errors"
 
-	"github.com/gabemahoney/claude-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // DeleteStore is the narrow store surface Delete needs.

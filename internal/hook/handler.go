@@ -6,8 +6,8 @@ import (
 	"io"
 	"log"
 
-	"github.com/gabemahoney/claude-director/internal/config"
-	"github.com/gabemahoney/claude-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // HookStore is the narrow store surface the handler needs. Production

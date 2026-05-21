@@ -4,7 +4,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/gabemahoney/claude-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/config"
 )
 
 // ExpireStore is the narrow store surface Expire needs.

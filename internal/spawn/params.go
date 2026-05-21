@@ -1,6 +1,6 @@
 package spawn
 
-import "github.com/gabemahoney/claude-director/internal/config"
+import "github.com/gabemahoney/agent-director/internal/config"
 
 // SpawnParams is the caller-supplied input to a `spawn` call. Field names
 // map onto SRD §12 verb parameters (PascalCase here per Go convention; the

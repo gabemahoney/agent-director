@@ -4,7 +4,7 @@ import (
 	"context"
 	"sort"
 
-	"github.com/gabemahoney/claude-director/internal/probe"
+	"github.com/gabemahoney/agent-director/internal/probe"
 )
 
 // FindMissingStore is the narrow store surface FindMissing needs.

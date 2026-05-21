@@ -7,8 +7,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/gabemahoney/claude-director/internal/api"
-	"github.com/gabemahoney/claude-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/api"
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // seedDecideFixture opens a real store and inserts a Spawn row with a

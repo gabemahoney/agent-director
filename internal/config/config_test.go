@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gabemahoney/claude-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/config"
 )
 
 // makeConfigFile writes content into a temp directory and returns the path.

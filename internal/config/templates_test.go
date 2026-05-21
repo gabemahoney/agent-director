@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gabemahoney/claude-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/config"
 )
 
 func TestValidateTemplateNameAccepts(t *testing.T) {

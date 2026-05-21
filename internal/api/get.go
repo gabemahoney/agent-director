@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/gabemahoney/claude-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // PermissionRequestInfo is the open permission_requests row projection

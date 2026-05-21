@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gabemahoney/claude-director/internal/hook"
+	"github.com/gabemahoney/agent-director/internal/hook"
 )
 
 // TestEncodeDecisionShape pins the byte-level structure per SRD §6.3.

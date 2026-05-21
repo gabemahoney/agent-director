@@ -13,7 +13,7 @@
 // dependencies flow downward toward internal/store, never sideways or up.
 package manifest
 
-//go:generate go run github.com/gabemahoney/claude-director/tools/gen-docs
+//go:generate go run github.com/gabemahoney/agent-director/tools/gen-docs
 
 // VerbDef describes one CLI/MCP verb exposed by claude-director.
 type VerbDef struct {

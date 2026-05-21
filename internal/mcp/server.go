@@ -22,7 +22,7 @@ import (
 	"io"
 	"log"
 
-	"github.com/gabemahoney/claude-director/internal/api/manifest"
+	"github.com/gabemahoney/agent-director/internal/api/manifest"
 )
 
 // ProtocolVersion is the MCP protocol version this server advertises.

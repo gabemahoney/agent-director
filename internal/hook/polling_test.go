@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gabemahoney/claude-director/internal/config"
-	"github.com/gabemahoney/claude-director/internal/hook"
-	"github.com/gabemahoney/claude-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/hook"
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // scriptedPollStore is the seam the Poll loop reads from. The
