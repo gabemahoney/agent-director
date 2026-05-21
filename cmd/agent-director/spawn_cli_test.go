@@ -172,7 +172,7 @@ func TestSpawnCLIHappyPath(t *testing.T) {
 }
 
 // TestSpawnCLIPreTrustWritesClaudeJSON pins bug b.f75 at the CLI
-// boundary: `claude-director spawn --cwd <fresh>` with no other flags
+// boundary: `agent-director spawn --cwd <fresh>` with no other flags
 // writes hasTrustDialogAccepted=true into ~/.claude.json for the
 // resolved cwd before exec'ing tmux. HOME is overridden to a per-test
 // tmpdir so the operator's real ~/.claude.json is never touched.

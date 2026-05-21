@@ -16,7 +16,7 @@ import (
 // (SR-2.2).
 const MaxTmuxSessionNameBytes = 64
 
-// deniedClaudeArgs is the set of flags claude-director must own end-to-end.
+// deniedClaudeArgs is the set of flags agent-director must own end-to-end.
 // --settings would race with our hook synthesis; --resume/--continue would
 // bypass our session-id tracking; --print/--output-format exit before any
 // hook fires so the supervision model breaks (SRD §7.2 step 3).
@@ -31,7 +31,7 @@ var deniedClaudeArgs = map[string]struct{}{
 	"--output-format": {},
 }
 
-// reservedEnvKeyPrefix names the env-var namespace claude-director owns.
+// reservedEnvKeyPrefix names the env-var namespace agent-director owns.
 // Anything starting with this prefix would alias one of our routing vars
 // (AGENT_DIRECTOR_INSTANCE_ID, AGENT_DIRECTOR_RELAY_MODE,
 // AGENT_DIRECTOR_LABEL_*) so we reject it at validation time.

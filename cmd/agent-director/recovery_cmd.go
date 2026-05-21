@@ -14,7 +14,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
-// findMissingHandlerWith implements `claude-director find-missing`.
+// findMissingHandlerWith implements `agent-director find-missing`.
 // The verb takes no flags. The prober is selected by build tags
 // (probe.New). Warnings (e.g. degraded-mode guard) route through the
 // configured error log so cron operators see them in their usual
@@ -37,7 +37,7 @@ func findMissingHandlerWith(st *store.Store, cfg config.Config, args []string) e
 	return writeJSON(os.Stdout, result)
 }
 
-// expireHandlerWith implements `claude-director expire`. --older-than
+// expireHandlerWith implements `agent-director expire`. --older-than
 // accepts the same form Go's time.ParseDuration handles, plus a `d`
 // suffix for days (Go's parser does not). Absent flag → cfg default.
 func expireHandlerWith(st *store.Store, cfg config.Config, args []string) error {
@@ -69,7 +69,7 @@ func expireHandlerWith(st *store.Store, cfg config.Config, args []string) error 
 	return writeJSON(os.Stdout, result)
 }
 
-// deleteHandlerWith implements `claude-director delete`. --claude-instance-id
+// deleteHandlerWith implements `agent-director delete`. --claude-instance-id
 // is repeatable; at least one is required. The per-row result map is
 // the entire JSON envelope.
 func deleteHandlerWith(st *store.Store, args []string) error {
@@ -143,5 +143,5 @@ func newRecoveryLogger(cfg config.Config) *log.Logger {
 			dest = f
 		}
 	}
-	return log.New(dest, "claude-director ", log.LstdFlags)
+	return log.New(dest, "agent-director ", log.LstdFlags)
 }

@@ -27,7 +27,7 @@ const (
 	hookPermissionRequest hookEventName = "PermissionRequest"
 )
 
-// hookEvents enumerates the 8 events claude-director registers on every
+// hookEvents enumerates the 8 events agent-director registers on every
 // Spawn (SRD §6.1). Two of them (PreToolUse, PermissionRequest) carry a
 // `"matcher": "*"` field; the matcherFields set names those.
 var hookEvents = []hookEventName{
@@ -54,7 +54,7 @@ var matcherFields = map[hookEventName]bool{
 //	  "permissions": { "allow": [...], "deny": [...], "ask": [...] }
 //	}
 //
-// `<bin>` is the absolute path to the currently-running claude-director
+// `<bin>` is the absolute path to the currently-running agent-director
 // binary (os.Executable, then filepath.Abs as belt-and-braces). The path
 // is rendered through strconv.Quote-style escaping defensively even
 // though tmux's direct-argv delivery does not require shell-escaping —
@@ -67,7 +67,7 @@ var matcherFields = map[hookEventName]bool{
 func synthesizeSettings(r Resolved, cfg config.Config) (string, error) {
 	exe, err := executablePath()
 	if err != nil {
-		return "", fmt.Errorf("resolve claude-director path: %w", err)
+		return "", fmt.Errorf("resolve agent-director path: %w", err)
 	}
 	exe = quoteIfWhitespace(exe)
 	cmd := exe + " hook"
@@ -162,10 +162,10 @@ var executablePath = func() (string, error) {
 }
 
 // helpHookBinPath returns the canonical install-tree path of the
-// claude-director binary used in the inject_help_hook SessionStart
+// agent-director binary used in the inject_help_hook SessionStart
 // entry. The hook fires inside a Spawn whose PATH may not include
 // ~/.local/bin, so the entry must embed the absolute install path
-// (~/.agent-director/bin/claude-director after ~ expansion) rather
+// (~/.agent-director/bin/agent-director after ~ expansion) rather
 // than rely on PATH resolution.
 //
 // Held as a var so tests can stub it without touching $HOME.
@@ -174,14 +174,14 @@ var helpHookBinPath = func() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".agent-director", "bin", "claude-director"), nil
+	return filepath.Join(home, ".agent-director", "bin", "agent-director"), nil
 }
 
 // quoteIfWhitespace defensively double-quotes a path that contains
 // whitespace. The install skill rejects whitespace install destinations
 // (SRD §4.3) so this branch is unreachable in production; the quoting
 // is here so a hand-edited install of the binary under (e.g.)
-// "/Users/some name/bin/claude-director" cannot trigger a split-on-space
+// "/Users/some name/bin/agent-director" cannot trigger a split-on-space
 // bug if the synthesized JSON ever flows through a shell-quoting
 // downstream (which it currently doesn't — tmux delivers direct argv).
 func quoteIfWhitespace(p string) string {

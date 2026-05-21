@@ -29,7 +29,7 @@ type SendKeysParams struct {
 // without breaking the JSON wire shape.
 type SendKeysResult struct{}
 
-// SendKeys is the verb-handler entry point for `claude-director send-keys`.
+// SendKeys is the verb-handler entry point for `agent-director send-keys`.
 // Behavior (SRD §4.3 + reference/send-keys-research.md):
 //
 //   - `\r` (CR, 0x0D) bytes in Text are STRIPPED before invoking tmux. CR

@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// binaryName is the program claude-director invokes. Held as a var (not a
+// binaryName is the program agent-director invokes. Held as a var (not a
 // const) so tests can swap it for a fake-tmux helper without monkey-patching
 // the exec layer.
 var binaryName = "tmux"
@@ -119,7 +119,7 @@ func (c *Client) KillSession(name string) error {
 	return fmt.Errorf("%w: %s: %v", ErrTmuxKillFailed, trimOutput(out), err)
 }
 
-// paneTarget is the canonical tmux pane address claude-director uses for
+// paneTarget is the canonical tmux pane address agent-director uses for
 // every send-keys / capture-pane invocation. tmux session creation runs
 // without a window/pane suffix, so the first pane is always at index 0
 // inside window 0. Pinning this here keeps callers from constructing

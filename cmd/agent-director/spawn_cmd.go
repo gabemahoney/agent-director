@@ -25,7 +25,7 @@ import (
 // required.
 var tmuxClient = tmux.New()
 
-// spawnHandlerWith implements `claude-director spawn`. Called via a closure
+// spawnHandlerWith implements `agent-director spawn`. Called via a closure
 // from handlers() so the store + config opened by setupStoreAndCfg are
 // reused rather than reopened.
 func spawnHandlerWith(st *store.Store, cfg config.Config, args []string) error {
@@ -90,7 +90,7 @@ func parseSpawnFlags(args []string) (spawn.SpawnParams, error) {
 	return p, nil
 }
 
-// statusHandlerWith implements `claude-director status`.
+// statusHandlerWith implements `agent-director status`.
 func statusHandlerWith(st *store.Store, args []string) error {
 	var id string
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
@@ -110,7 +110,7 @@ func statusHandlerWith(st *store.Store, args []string) error {
 	return writeJSON(os.Stdout, res)
 }
 
-// sendKeysHandlerWith implements `claude-director send-keys`. The store is
+// sendKeysHandlerWith implements `agent-director send-keys`. The store is
 // re-used from setupStoreAndCfg via the closure; the tmux client is the
 // shared package-level *tmux.Client which already satisfies
 // api.SendKeysTmux via its SendKeys method.
@@ -147,7 +147,7 @@ func parseSendKeysFlags(args []string) (api.SendKeysParams, error) {
 	return p, nil
 }
 
-// readPaneHandlerWith implements `claude-director read-pane`. The handler
+// readPaneHandlerWith implements `agent-director read-pane`. The handler
 // trusts the api layer for ANSI handling and default-lines fallback;
 // argv parsing here is purely flag-to-params translation.
 func readPaneHandlerWith(st *store.Store, args []string) error {
@@ -183,7 +183,7 @@ func parseReadPaneFlags(args []string) (api.ReadPaneParams, error) {
 	return p, nil
 }
 
-// makeTemplateHandlerWith implements `claude-director make-template`.
+// makeTemplateHandlerWith implements `agent-director make-template`.
 // Flags mirror the per-call spawn surface minus the three reserved
 // per-invocation params (template, claude-instance-id, tmux-session-name).
 func makeTemplateHandlerWith(args []string) error {
@@ -227,7 +227,7 @@ func makeTemplateHandlerWith(args []string) error {
 	return writeJSON(os.Stdout, result)
 }
 
-// listHandlerWith implements `claude-director list`. Each filter flag
+// listHandlerWith implements `agent-director list`. Each filter flag
 // corresponds 1:1 with a ListParams field; the API layer enforces the
 // label key=value form.
 func listHandlerWith(st *store.Store, args []string) error {
@@ -264,7 +264,7 @@ func listHandlerWith(st *store.Store, args []string) error {
 	return writeJSON(os.Stdout, result)
 }
 
-// pauseHandlerWith implements `claude-director pause`. The verb's
+// pauseHandlerWith implements `agent-director pause`. The verb's
 // timeout is configurable but the polling cadence is fixed in the API
 // layer; the CLI is intentionally a thin flag-to-params translator.
 //
@@ -290,7 +290,7 @@ func pauseHandlerWith(st *store.Store, cfg config.Config, args []string) error {
 	return writeJSON(os.Stdout, result)
 }
 
-// decideHandlerWith implements `claude-director decide`. The handler
+// decideHandlerWith implements `agent-director decide`. The handler
 // rejects empty flags up front; the API layer guards the
 // allow|deny enum (ErrInvalidDecision) as defense in depth for MCP
 // callers that bypass the CLI flag parser.
@@ -318,7 +318,7 @@ func decideHandlerWith(st *store.Store, args []string) error {
 	return writeJSON(os.Stdout, result)
 }
 
-// resumeHandlerWith implements `claude-director resume`. The verb
+// resumeHandlerWith implements `agent-director resume`. The verb
 // reads the spawn-time row out of the store and restarts claude via
 // tmux with `--resume <session_id>`. Same id, fresh tmux session.
 func resumeHandlerWith(st *store.Store, cfg config.Config, args []string) error {
@@ -340,7 +340,7 @@ func resumeHandlerWith(st *store.Store, cfg config.Config, args []string) error 
 	return writeJSON(os.Stdout, result)
 }
 
-// killHandlerWith implements `claude-director kill`. The verb is
+// killHandlerWith implements `agent-director kill`. The verb is
 // idempotent on terminal states and swallows tmux failures at the
 // verb surface (see api.Kill); a swallowed failure is logged at WARN
 // to the configured error log so an interactive operator can see it.
@@ -363,7 +363,7 @@ func killHandlerWith(st *store.Store, cfg config.Config, args []string) error {
 	return writeJSON(os.Stdout, result)
 }
 
-// getHandlerWith implements `claude-director get`.
+// getHandlerWith implements `agent-director get`.
 func getHandlerWith(st *store.Store, args []string) error {
 	var id string
 	fs := flag.NewFlagSet("get", flag.ContinueOnError)

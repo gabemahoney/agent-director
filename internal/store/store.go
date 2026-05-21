@@ -1,4 +1,4 @@
-// Package store is the single layer permitted to touch SQL in claude-director.
+// Package store is the single layer permitted to touch SQL in agent-director.
 //
 // Per SRD §4.5, no other package may import database/sql or speak SQL directly.
 // Callers receive a *Store with typed methods (added in later Tasks); raw

@@ -39,7 +39,7 @@ type KillResult struct{}
 //     swallowed AT THE VERB SURFACE (post-condition "session gone" is
 //     satisfied either way, and find-missing reconciles the row), but
 //     the error is emitted at WARN level via lg so an operator running
-//     `claude-director kill` interactively can see permission /
+//     `agent-director kill` interactively can see permission /
 //     stale-TMUX_TMPDIR / etc. diagnostics without having to wait for
 //     the next reconciliation pass.
 //

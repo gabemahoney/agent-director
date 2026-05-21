@@ -39,7 +39,7 @@ type settingsShape struct {
 }
 
 func TestSynthesizeSettingsContainsAllEightHooks(t *testing.T) {
-	withStubExe(t, "/usr/local/bin/claude-director")
+	withStubExe(t, "/usr/local/bin/agent-director")
 	jsonStr, err := synthesizeSettings(
 		Resolved{SpawnParams: SpawnParams{ClaudeInstanceID: "id"}},
 		config.Default(),
@@ -66,7 +66,7 @@ func TestSynthesizeSettingsContainsAllEightHooks(t *testing.T) {
 }
 
 func TestSynthesizeSettingsMatcherFields(t *testing.T) {
-	withStubExe(t, "/usr/local/bin/claude-director")
+	withStubExe(t, "/usr/local/bin/agent-director")
 	jsonStr, _ := synthesizeSettings(
 		Resolved{SpawnParams: SpawnParams{ClaudeInstanceID: "id"}},
 		config.Default(),
@@ -108,18 +108,18 @@ func TestSynthesizeSettingsMatcherFields(t *testing.T) {
 }
 
 func TestSynthesizeSettingsBinaryPathIsAbsolute(t *testing.T) {
-	withStubExe(t, "/opt/claude-director/bin/claude-director")
+	withStubExe(t, "/opt/agent-director/bin/agent-director")
 	jsonStr, _ := synthesizeSettings(
 		Resolved{SpawnParams: SpawnParams{ClaudeInstanceID: "id"}},
 		config.Default(),
 	)
-	if !strings.Contains(jsonStr, "/opt/claude-director/bin/claude-director hook") {
+	if !strings.Contains(jsonStr, "/opt/agent-director/bin/agent-director hook") {
 		t.Fatalf("settings JSON does not embed the absolute path: %s", jsonStr)
 	}
 }
 
 func TestSynthesizeSettingsQuotesPathWithWhitespace(t *testing.T) {
-	withStubExe(t, "/opt/with space/claude-director")
+	withStubExe(t, "/opt/with space/agent-director")
 	jsonStr, _ := synthesizeSettings(
 		Resolved{SpawnParams: SpawnParams{ClaudeInstanceID: "id"}},
 		config.Default(),
@@ -137,7 +137,7 @@ func TestSynthesizeSettingsQuotesPathWithWhitespace(t *testing.T) {
 	hl, _ := entry["hooks"].([]any)
 	cmdEntry, _ := hl[0].(map[string]any)
 	cmd, _ := cmdEntry["command"].(string)
-	want := `"/opt/with space/claude-director" hook`
+	want := `"/opt/with space/agent-director" hook`
 	if cmd != want {
 		t.Fatalf("command = %q; want %q (path with whitespace should be defensively quoted)", cmd, want)
 	}
@@ -223,12 +223,12 @@ func TestSynthesizeSettingsDisabledFalseLeavesDenyAlone(t *testing.T) {
 // TestSynthesizeSettingsInjectHelpHookTrue asserts that when the
 // inject_help_hook config flag is on, the SessionStart hook list grows
 // by exactly one entry whose command is "<canonical-bin> help" — the
-// hook claude-director's install.sh writes statically into
+// hook agent-director's install.sh writes statically into
 // ~/.claude/settings.json. The pre-existing state-tracking SessionStart
 // entry must remain alongside it.
 func TestSynthesizeSettingsInjectHelpHookTrue(t *testing.T) {
-	withStubExe(t, "/usr/local/bin/claude-director")
-	withStubHelpBin(t, "/home/operator/.agent-director/bin/claude-director")
+	withStubExe(t, "/usr/local/bin/agent-director")
+	withStubHelpBin(t, "/home/operator/.agent-director/bin/agent-director")
 	cfg := config.Default()
 	cfg.Defaults.InjectHelpHook = true
 	jsonStr, err := synthesizeSettings(
@@ -258,8 +258,8 @@ func TestSynthesizeSettingsInjectHelpHookTrue(t *testing.T) {
 			commands = append(commands, cmd)
 		}
 	}
-	wantHook := "/usr/local/bin/claude-director hook"
-	wantHelp := "/home/operator/.agent-director/bin/claude-director help"
+	wantHook := "/usr/local/bin/agent-director hook"
+	wantHelp := "/home/operator/.agent-director/bin/agent-director help"
 	var sawHook, sawHelp bool
 	for _, c := range commands {
 		if c == wantHook {
@@ -283,9 +283,9 @@ func TestSynthesizeSettingsInjectHelpHookTrue(t *testing.T) {
 // the state-tracking hook. Tightens the regression surface around the
 // new conditional code path.
 func TestSynthesizeSettingsInjectHelpHookFalse(t *testing.T) {
-	withStubExe(t, "/usr/local/bin/claude-director")
+	withStubExe(t, "/usr/local/bin/agent-director")
 	// Stub help-bin to a path that would be obvious if it leaked in.
-	withStubHelpBin(t, "/SHOULD-NOT-APPEAR/claude-director")
+	withStubHelpBin(t, "/SHOULD-NOT-APPEAR/agent-director")
 	cfg := config.Default()
 	cfg.Defaults.InjectHelpHook = false
 	jsonStr, err := synthesizeSettings(
@@ -319,8 +319,8 @@ func TestSynthesizeSettingsInjectHelpHookFalse(t *testing.T) {
 // state-tracking hook path's belt-and-suspenders behavior so a
 // hand-edited install can't trigger a split-on-space bug.
 func TestSynthesizeSettingsInjectHelpHookQuotesWhitespacePath(t *testing.T) {
-	withStubExe(t, "/usr/local/bin/claude-director")
-	withStubHelpBin(t, "/opt/with space/claude-director")
+	withStubExe(t, "/usr/local/bin/agent-director")
+	withStubHelpBin(t, "/opt/with space/agent-director")
 	cfg := config.Default()
 	cfg.Defaults.InjectHelpHook = true
 	jsonStr, _ := synthesizeSettings(
@@ -345,7 +345,7 @@ func TestSynthesizeSettingsInjectHelpHookQuotesWhitespacePath(t *testing.T) {
 			}
 		}
 	}
-	want := `"/opt/with space/claude-director" help`
+	want := `"/opt/with space/agent-director" help`
 	if found != want {
 		t.Fatalf("help-hook command = %q; want %q", found, want)
 	}
@@ -380,7 +380,7 @@ func equalStringList(got any, want []string) bool {
 // against regressions where a hook gets dropped or the command is rendered
 // without the full path.
 func TestSynthesizeSettingsRoundTrip(t *testing.T) {
-	abs, err := filepath.Abs("/usr/local/bin/claude-director")
+	abs, err := filepath.Abs("/usr/local/bin/agent-director")
 	if err != nil {
 		t.Fatalf("filepath.Abs: %v", err)
 	}

@@ -65,9 +65,9 @@ func Launch(s *store.Store, tmuxClient TmuxClient, r Resolved, cfg config.Config
 	if !r.NoPreTrust {
 		if err := preTrustCwd(r.CWD); err != nil {
 			if errors.Is(err, ErrClaudeJSONMissing) {
-				fmt.Fprintf(preTrustWarn, "claude-director: pre-trust skipped (~/.claude.json absent); spawn may block on Claude Code's trust dialog\n")
+				fmt.Fprintf(preTrustWarn, "agent-director: pre-trust skipped (~/.claude.json absent); spawn may block on Claude Code's trust dialog\n")
 			} else {
-				fmt.Fprintf(preTrustWarn, "claude-director: pre-trust failed: %v\n", err)
+				fmt.Fprintf(preTrustWarn, "agent-director: pre-trust failed: %v\n", err)
 			}
 		}
 	}

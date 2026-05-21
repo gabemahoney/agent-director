@@ -18,13 +18,13 @@ var binaryPath string
 // this package. Building once per package run avoids per-test compile cost
 // and keeps the race-detector run cheap.
 func TestMain(m *testing.M) {
-	tmp, err := os.MkdirTemp("", "claude-director-test-")
+	tmp, err := os.MkdirTemp("", "agent-director-test-")
 	if err != nil {
 		panic(err)
 	}
 	defer os.RemoveAll(tmp)
 
-	binaryPath = filepath.Join(tmp, "claude-director")
+	binaryPath = filepath.Join(tmp, "agent-director")
 	build := exec.Command("go", "build", "-o", binaryPath, ".")
 	build.Stdout = os.Stdout
 	build.Stderr = os.Stderr

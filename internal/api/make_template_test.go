@@ -31,7 +31,7 @@ func TestMakeTemplateWritesReadableTOML(t *testing.T) {
 		CWD:                  "/tmp",
 		RelayMode:            "off",
 		ClaudeArgs:           []string{"--model", "opus"},
-		AgentDirectorLabels: map[string]string{"project": "claude-director"},
+		AgentDirectorLabels: map[string]string{"project": "agent-director"},
 		Permissions: &api.MakeTemplatePermissions{
 			Allow: []string{"Bash(npm test)"},
 		},
@@ -78,7 +78,7 @@ func TestMakeTemplateWritesReadableTOML(t *testing.T) {
 	if got.ClaudeArgs[0] != "--model" || got.ClaudeArgs[1] != "opus" {
 		t.Errorf("ClaudeArgs = %v; want [--model opus]", got.ClaudeArgs)
 	}
-	if got.AgentDirectorLabels["project"] != "claude-director" {
+	if got.AgentDirectorLabels["project"] != "agent-director" {
 		t.Errorf("Labels = %v", got.AgentDirectorLabels)
 	}
 	if got.Permissions == nil || got.Permissions.Allow[0] != "Bash(npm test)" {

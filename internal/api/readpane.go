@@ -35,7 +35,7 @@ type ReadPaneResult struct {
 	Pane string `json:"pane"`
 }
 
-// ReadPane is the verb-handler entry point for `claude-director read-pane`.
+// ReadPane is the verb-handler entry point for `agent-director read-pane`.
 // Behavior (SRD §12 + reference/pane-output-research.md):
 //
 //   - NLines=0 → DefaultReadPaneLines (25). No upper cap; callers asking

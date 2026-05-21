@@ -1,5 +1,5 @@
 // Package config implements TOML-backed configuration loading for
-// claude-director, per SRD §11.
+// agent-director, per SRD §11.
 //
 // Load() returns Default() when the file is absent, and a typed
 // *ConfigError wrapping the parse error when the file is malformed.
@@ -33,7 +33,7 @@ type Defaults struct {
 	ExpireRetentionDays    int    `toml:"expire_retention_days"`
 	DisableAskUserQuestion bool   `toml:"disable_askuserquestion"`
 	// InjectHelpHook controls dynamic per-Spawn injection of a
-	// SessionStart hook that runs `claude-director help`. Off by
+	// SessionStart hook that runs `agent-director help`. Off by
 	// default — operators opt in via install.sh (Q4=yes) so a Spawn's
 	// inherited CLAUDE_CONFIG_DIR no longer has to carry the help hook
 	// statically. See docs/settings.md and architecture.md "Spawn

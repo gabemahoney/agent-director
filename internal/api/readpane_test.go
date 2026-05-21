@@ -74,7 +74,7 @@ func TestReadPaneANSITrueReturnsRawBytes(t *testing.T) {
 func TestReadPaneForwardsANSIFlagToTmux(t *testing.T) {
 	// Per b.s12: ANSI=true must reach the tmux layer so the underlying
 	// `capture-pane` call adds `-e`. Without that, tmux strips escapes
-	// before claude-director ever sees them and the "raw bytes" promise
+	// before agent-director ever sees them and the "raw bytes" promise
 	// of `--ansi=true` collapses.
 	t.Run("ansi=true forwards true", func(t *testing.T) {
 		s := openStoreWithRow(t, "id-rp-ansi-on", "cd-x", store.StateWaiting, "off")

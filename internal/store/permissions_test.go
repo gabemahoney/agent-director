@@ -22,7 +22,7 @@ func statMode(t *testing.T, path string) os.FileMode {
 // "subdir" parent itself) and returns the resolved DB and parent paths.
 func openAt(t *testing.T) (dbPath, parentDir string) {
 	t.Helper()
-	parentDir = filepath.Join(t.TempDir(), "claude-director")
+	parentDir = filepath.Join(t.TempDir(), "agent-director")
 	dbPath = filepath.Join(parentDir, "state.db")
 	s, err := Open(dbPath)
 	if err != nil {

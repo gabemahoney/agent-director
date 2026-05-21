@@ -75,7 +75,7 @@ func markPermissionRequestDecided(t *testing.T, dbPath, instanceID, decision str
 	}
 }
 
-// bootstrapDB runs `claude-director help` once so the schema is created
+// bootstrapDB runs `agent-director help` once so the schema is created
 // before the test seeds a row directly via raw SQL.
 func bootstrapDB(t *testing.T, home string) {
 	t.Helper()
@@ -243,7 +243,7 @@ func TestReadPaneCLIANSIPreservesEscapes(t *testing.T) {
 
 func TestReadPaneCLIDefaultOmitsDashE(t *testing.T) {
 	// Companion to TestReadPaneCLIANSIPreservesEscapes. Default mode
-	// (no --ansi) must NOT pass -e — claude-director strips residuals
+	// (no --ansi) must NOT pass -e — agent-director strips residuals
 	// at the verb layer.
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()

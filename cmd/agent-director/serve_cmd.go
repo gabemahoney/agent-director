@@ -19,7 +19,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
-// serveHandlerWith implements `claude-director serve --stdio`.
+// serveHandlerWith implements `agent-director serve --stdio`.
 // Without --stdio, prints usage. The verb is long-lived per SRD §3.3:
 // once started, the process loops until stdin EOF (the MCP client
 // has hung up) or a fatal stdio error.
@@ -38,9 +38,9 @@ func serveHandlerWith(st *store.Store, cfg config.Config, args []string) error {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if !stdioFlag {
-		fmt.Fprintln(os.Stderr, "usage: claude-director serve --stdio")
+		fmt.Fprintln(os.Stderr, "usage: agent-director serve --stdio")
 		fmt.Fprintln(os.Stderr, "  Run the stdio MCP server. Register with:")
-		fmt.Fprintln(os.Stderr, "    claude mcp add claude-director <binary-path> serve --stdio")
+		fmt.Fprintln(os.Stderr, "    claude mcp add agent-director <binary-path> serve --stdio")
 		return nil
 	}
 
@@ -90,7 +90,7 @@ func newMCPLogger(cfg config.Config) *log.Logger {
 			dest = f
 		}
 	}
-	return log.New(dest, "claude-director-mcp ", log.LstdFlags)
+	return log.New(dest, "agent-director-mcp ", log.LstdFlags)
 }
 
 // registerMCPErrors populates the MCP server's err-name probe table
