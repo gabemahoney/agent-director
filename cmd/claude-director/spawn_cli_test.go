@@ -644,3 +644,110 @@ func TestGetCLINonCheckPermissionStateWithStaleRowOmitsField(t *testing.T) {
 		t.Errorf("permission_request key present for state=waiting with stale open row; want absent (verb gates on state, not row presence). raw=%s", stdout)
 	}
 }
+
+// TestSpawnCLITemplateClaudeArgsAppliedWhenNoTrailingArgs pins bug b.qjk:
+// template claude_args were silently wiped when no trailing `--` args were
+// supplied. Template-only path must flow through to the spawned command line.
+func TestSpawnCLITemplateClaudeArgsAppliedWhenNoTrailingArgs(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	home := t.TempDir()
+	cwd := t.TempDir()
+
+	// Write a template with claude_args into the home's templates dir.
+	tplDir := filepath.Join(home, ".claude-director", "templates")
+	if err := os.MkdirAll(tplDir, 0o700); err != nil {
+		t.Fatalf("mkdir templates: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tplDir, "tpl-b-qjk.toml"), []byte(`claude_args = ["--foo"]`+"\n"), 0o600); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
+
+	// Spawn with template but NO trailing `--` args.
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir,
+		"spawn", "--cwd", cwd, "--template", "tpl-b-qjk")
+	if code != 0 {
+		t.Fatalf("exit = %d; stderr=%s", code, stderr)
+	}
+	var res spawnResult
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+		t.Fatalf("parse stdout %q: %v", stdout, err)
+	}
+
+	// The fake-tmux log must show --foo reached the command line.
+	logBytes, err := os.ReadFile(filepath.Join(home, "fake-tmux.log"))
+	if err != nil {
+		t.Fatalf("read fake-tmux log: %v", err)
+	}
+	if !strings.Contains(string(logBytes), "\n--foo\n") {
+		t.Errorf("fake-tmux log missing --foo; template claude_args were not applied. log=%s", logBytes)
+	}
+
+	// get must round-trip claude_args as ["--foo"].
+	getOut, _, code := runSpawnCLI(t, home, fakeDir,
+		"get", "--claude-instance-id", res.ClaudeInstanceID)
+	if code != 0 {
+		t.Fatalf("get exit = %d", code)
+	}
+	var row map[string]any
+	if err := json.Unmarshal([]byte(getOut), &row); err != nil {
+		t.Fatalf("parse get %q: %v", getOut, err)
+	}
+	args, _ := row["claude_args"].([]any)
+	if len(args) != 1 || args[0] != "--foo" {
+		t.Errorf("get.claude_args = %v; want [--foo]", args)
+	}
+}
+
+// TestSpawnCLIPerCallClaudeArgsReplacesTemplate verifies that trailing `--`
+// args wholesale-replace the template's claude_args (not merge).
+func TestSpawnCLIPerCallClaudeArgsReplacesTemplate(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	home := t.TempDir()
+	cwd := t.TempDir()
+
+	tplDir := filepath.Join(home, ".claude-director", "templates")
+	if err := os.MkdirAll(tplDir, 0o700); err != nil {
+		t.Fatalf("mkdir templates: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tplDir, "tpl-replace.toml"), []byte(`claude_args = ["--foo"]`+"\n"), 0o600); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
+
+	// Spawn with template AND per-call trailing args.
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir,
+		"spawn", "--cwd", cwd, "--template", "tpl-replace", "--", "--bar")
+	if code != 0 {
+		t.Fatalf("exit = %d; stderr=%s", code, stderr)
+	}
+	var res spawnResult
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+		t.Fatalf("parse stdout %q: %v", stdout, err)
+	}
+
+	logBytes, err := os.ReadFile(filepath.Join(home, "fake-tmux.log"))
+	if err != nil {
+		t.Fatalf("read fake-tmux log: %v", err)
+	}
+	logContent := string(logBytes)
+	if !strings.Contains(logContent, "\n--bar\n") {
+		t.Errorf("fake-tmux log missing --bar (per-call arg). log=%s", logContent)
+	}
+	if strings.Contains(logContent, "\n--foo\n") {
+		t.Errorf("fake-tmux log contains --foo; per-call must wholesale-replace template args. log=%s", logContent)
+	}
+
+	// get must round-trip claude_args as ["--bar"].
+	getOut, _, code := runSpawnCLI(t, home, fakeDir,
+		"get", "--claude-instance-id", res.ClaudeInstanceID)
+	if code != 0 {
+		t.Fatalf("get exit = %d", code)
+	}
+	var row map[string]any
+	if err := json.Unmarshal([]byte(getOut), &row); err != nil {
+		t.Fatalf("parse get %q: %v", getOut, err)
+	}
+	args, _ := row["claude_args"].([]any)
+	if len(args) != 1 || args[0] != "--bar" {
+		t.Errorf("get.claude_args = %v; want [--bar]", args)
+	}
+}

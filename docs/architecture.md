@@ -259,9 +259,10 @@ so each stage can be tested in isolation against synthesized input.
   caller params         (CLI flags / MCP tool input)
        │
        ▼
-   ┌─────────┐   template merge (Epic 7 — stub today)
-   │ Resolve │
-   └────┬────┘
+   ┌─────────┐   template merge: caller fields overlay template
+   │ Resolve │   defaults; nil caller field → template value kept.
+   └────┬────┘   ClaudeArgs: nil means caller supplied nothing
+        │        (template wins); non-nil replaces wholesale.
         ▼
    ┌──────────┐   SRD §7.2: cwd shape/existence/type;
    │ Validate │   relay_mode; denied flags; reserved env keys.

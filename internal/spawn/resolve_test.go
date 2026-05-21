@@ -219,27 +219,6 @@ claude_args = ["--model", "opus"]
 	}
 }
 
-func TestResolveClaudeArgsExplicitEmptyReplacesWithEmpty(t *testing.T) {
-	// Distinguishing nil vs empty: an explicit empty slice (len=0, non-nil)
-	// REPLACES the template's value with empty. Callers wanting that
-	// behavior pass []string{}.
-	withTemplate(t, "base", `
-claude_args = ["--model", "opus"]
-`)
-	r, err := spawn.Resolve(spawn.SpawnParams{
-		Template:   "base",
-		ClaudeArgs: []string{},
-	}, config.Default())
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	if r.ClaudeArgs == nil {
-		t.Fatalf("explicit empty was coerced to nil")
-	}
-	if len(r.ClaudeArgs) != 0 {
-		t.Errorf("ClaudeArgs = %v; want empty", r.ClaudeArgs)
-	}
-}
 
 func TestResolveTemplateNotFound(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())

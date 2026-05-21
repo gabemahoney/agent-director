@@ -79,7 +79,14 @@ func parseSpawnFlags(args []string) (spawn.SpawnParams, error) {
 	p.ClaudeDirectorLabels = labelKVs
 	p.ExtraEnv = extraEnvKVs
 	p.Permissions = buildPermissions(allow, deny, ask)
-	p.ClaudeArgs = fs.Args() // everything after `--`
+	// flag.FlagSet.Args() returns a non-nil empty slice when nothing
+	// follows the `--` separator. Treat "no trailing args" as "not
+	// supplied" so spawn.Resolve's nil-falls-back-to-template branch
+	// fires; non-empty trailing args replace the template wholesale.
+	// Mirrors the TmuxSessionNameSupplied sentinel pattern above.
+	if rest := fs.Args(); len(rest) > 0 {
+		p.ClaudeArgs = rest
+	}
 	return p, nil
 }
 
