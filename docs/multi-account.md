@@ -1,7 +1,7 @@
 # Multi-Account
 
 Launching a Spawn against a different Claude account than the
-operator's default. claude-director's `extra_env` parameter is the
+operator's default. agent-director's `extra_env` parameter is the
 single mechanism for this — no file mounts, no profile directories,
 no `CLAUDE_CONFIG_DIR` redirection.
 
@@ -28,7 +28,7 @@ proves the env var is *the* auth path, not a fallback to a cached file.
 ## Passing the env var at spawn time
 
 ```
-claude-director spawn \
+agent-director spawn \
   --cwd /work/project-foo \
   --extra-env ANTHROPIC_API_KEY=sk-ant-api-test-...
 ```
@@ -36,14 +36,14 @@ claude-director spawn \
 Or for a Max account:
 
 ```
-claude-director spawn \
+agent-director spawn \
   --cwd /work/project-foo \
   --extra-env CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
 ```
 
-The reserved-key validation (SRD §7.2 step 4) rejects `CLAUDE_DIRECTOR_*`
+The reserved-key validation (SRD §7.2 step 4) rejects `AGENT_DIRECTOR_*`
 keys but *does not reserve* the auth env vars — they pass through to
-the tmux session and into Claude verbatim. claude-director never logs
+the tmux session and into Claude verbatim. agent-director never logs
 the value (only the key name on validation paths) and never persists it
 to disk.
 
@@ -61,7 +61,7 @@ claude setup-token
 # → emits a long-lived sk-ant-oat01-... token
 
 # Store the token securely (e.g. a CI secret), then pass at spawn time:
-claude-director spawn \
+agent-director spawn \
   --cwd /work/project-bar \
   --extra-env CLAUDE_CODE_OAUTH_TOKEN="$LONG_LIVED_TOKEN"
 ```

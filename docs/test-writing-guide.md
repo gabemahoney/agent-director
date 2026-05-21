@@ -197,7 +197,7 @@ Maps to <Epic AC #N or "Subtask <id>">.
 
 ## Setup
 What state must already exist before this case runs. The DB-reset fixture
-already gives you a fresh `~/.claude-director/state.db` and clean
+already gives you a fresh `~/.agent-director/state.db` and clean
 `tmux` namespace — don't re-do that work.
 
 ## Steps
@@ -222,7 +222,7 @@ set -euo pipefail
 ### Per-case isolation
 
 Before each t2 case, the driver runs `test/driver/db-reset.sh` which
-clears `~/.claude-director/state.db`, kills tmux sessions matching the
+clears `~/.agent-director/state.db`, kills tmux sessions matching the
 `cd-` prefix, and re-creates the DB at schema v1. Cases should rely on
 that clean state; never reach into a sibling case's leftovers. If you
 *want* to test isolation (as the harness-smoke `smoke-2` + `smoke-3` pair

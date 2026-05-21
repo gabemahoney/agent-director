@@ -1,4 +1,4 @@
-# claude-director
+# agent-director
 
 Supervise long-running Claude Code sessions ("Spawns") from a script,
 another Claude, or an MCP-capable LLM client. One Go binary; one
@@ -33,9 +33,9 @@ SQLite file; everything else is tmux.
 
 If you already have Claude Code running, just say:
 
-> **install claude-director**
+> **install agent-director**
 
-That triggers the `install-claude-director` skill, which walks you
+That triggers the `install-agent-director` skill, which walks you
 through four choices interactively (binary source, PATH symlink,
 MCP registration, persistent help hooks) and then runs `install.sh`
 with the resolved flags. Each question explains itself — assume no
@@ -43,7 +43,7 @@ prior knowledge — so a new user can answer without reading anything
 else first.
 
 The skill ships in this repo at
-[`skills/install-claude-director/`](skills/install-claude-director/SKILL.md)
+[`skills/install-agent-director/`](skills/install-agent-director/SKILL.md)
 and is auto-discoverable by Claude Code if you've cloned the repo
 under a directory it indexes. If not, point Claude Code at the
 SKILL.md once and from then on the trigger phrase works.
@@ -54,32 +54,32 @@ SKILL.md once and from then on the trigger phrase works.
 the matching binary from GitHub Releases:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/gabemahoney/claude-director/main/skills/install-claude-director/install.sh \
-  -o /tmp/install-claude-director.sh
-bash /tmp/install-claude-director.sh --from-release
+curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/skills/install-agent-director/install.sh \
+  -o /tmp/install-agent-director.sh
+bash /tmp/install-agent-director.sh --from-release
 ```
 
-The script sets up `~/.claude-director/`, drops a PATH symlink, warms
+The script sets up `~/.agent-director/`, drops a PATH symlink, warms
 up `state.db`, and installs the SessionStart/SessionEnd help hooks.
 Optionally pass `--register-mcp` to also register the stdio MCP
 server, or `--no-hooks` to leave `~/.claude/settings.json` untouched.
 
 If you'd rather download the binary yourself first (and then point
 the installer at it), grab the asset for your platform from the
-[latest release](https://github.com/gabemahoney/claude-director/releases/latest):
+[latest release](https://github.com/gabemahoney/agent-director/releases/latest):
 
 ```sh
 # Linux amd64:
-curl -L -o claude-director https://github.com/gabemahoney/claude-director/releases/latest/download/claude-director-linux-amd64
+curl -L -o agent-director https://github.com/gabemahoney/agent-director/releases/latest/download/agent-director-linux-amd64
 # Linux arm64:
-curl -L -o claude-director https://github.com/gabemahoney/claude-director/releases/latest/download/claude-director-linux-arm64
+curl -L -o agent-director https://github.com/gabemahoney/agent-director/releases/latest/download/agent-director-linux-arm64
 # macOS Intel:
-curl -L -o claude-director https://github.com/gabemahoney/claude-director/releases/latest/download/claude-director-darwin-amd64
+curl -L -o agent-director https://github.com/gabemahoney/agent-director/releases/latest/download/agent-director-darwin-amd64
 # macOS Apple Silicon:
-curl -L -o claude-director https://github.com/gabemahoney/claude-director/releases/latest/download/claude-director-darwin-arm64
+curl -L -o agent-director https://github.com/gabemahoney/agent-director/releases/latest/download/agent-director-darwin-arm64
 
-chmod +x claude-director
-bash skills/install-claude-director/install.sh --binary ./claude-director
+chmod +x agent-director
+bash skills/install-agent-director/install.sh --binary ./agent-director
 ```
 
 Optional flags:
@@ -98,7 +98,7 @@ built:
 
 ```sh
 make build
-bash skills/install-claude-director/install.sh --binary ./bin/claude-director
+bash skills/install-agent-director/install.sh --binary ./bin/agent-director
 ```
 
 `install.sh` version-checks the local binary against `git rev-parse HEAD`
@@ -109,15 +109,15 @@ and refuses option `--binary` if the artifact is stale — re-run
 ### First spawn
 
 ```sh
-id=$(claude-director spawn --cwd "$PWD" | jq -r '.claude_instance_id')
+id=$(agent-director spawn --cwd "$PWD" | jq -r '.claude_instance_id')
 
-claude-director list --state waiting
+agent-director list --state waiting
 
-claude-director send-keys --claude-instance-id "$id" --text "what is 2+2?"
+agent-director send-keys --claude-instance-id "$id" --text "what is 2+2?"
 
-claude-director read-pane --claude-instance-id "$id"
+agent-director read-pane --claude-instance-id "$id"
 
-claude-director pause --claude-instance-id "$id"
+agent-director pause --claude-instance-id "$id"
 ```
 
 #### Naming the tmux session yourself
@@ -127,7 +127,7 @@ test harnesses, or manual-debug operators can pick a readable session
 name instead of the default `<basename(cwd)>-<id[:8]>`:
 
 ```sh
-claude-director spawn --cwd "$PWD" --tmux-session-name bot-claude-status
+agent-director spawn --cwd "$PWD" --tmux-session-name bot-claude-status
 ```
 
 Rules (validated app-side, no silent rewrite): the name must be
@@ -146,7 +146,7 @@ and wants to round-trip back from `tmux ls` to the persisted Spawn
 without consulting the id:
 
 ```sh
-claude-director list --tmux-session-name bot-claude-status
+agent-director list --tmux-session-name bot-claude-status
 ```
 
 The filter is exact-match, AND-combines with `--state`, `--label`,
@@ -161,32 +161,32 @@ behavior.
 ### Drive a Spawn from another Claude
 
 Install with `--register-mcp`. Inside the orchestrating Claude the
-verbs appear as `mcp__claude-director__spawn`,
-`mcp__claude-director__send_keys`, etc.
+verbs appear as `mcp__agent-director__spawn`,
+`mcp__agent-director__send_keys`, etc.
 
 ### Intercept permission prompts
 
 ```sh
-id=$(claude-director spawn --cwd "$PWD" --relay-mode=on \
+id=$(agent-director spawn --cwd "$PWD" --relay-mode=on \
        | jq -r '.claude_instance_id')
 
 # When Claude hits a PermissionRequest, state goes to check_permission.
-claude-director decide --claude-instance-id "$id" \
+agent-director decide --claude-instance-id "$id" \
     --decision allow --reason "tool is on the allow-list"
 ```
 
 ### Templates
 
 ```sh
-claude-director make-template --name dev --cwd /repos/widget \
+agent-director make-template --name dev --cwd /repos/widget \
     --label project=widget --allow 'Bash(npm test)'
 
-claude-director spawn --template dev --label run=$(date +%s)
+agent-director spawn --template dev --label run=$(date +%s)
 ```
 
 ## Configuration
 
-`~/.claude-director/config.toml` (created on first run; all fields
+`~/.agent-director/config.toml` (created on first run; all fields
 optional):
 
 ```toml
@@ -204,15 +204,15 @@ timeout_seconds = 600
 timeout_seconds = 30
 
 [store]
-db_path = "~/.claude-director/state.db"
+db_path = "~/.agent-director/state.db"
 
 [log]
-error_log_path = "~/.claude-director/errors.log"
+error_log_path = "~/.agent-director/errors.log"
 ```
 
 ## Uninstall
 
 ```sh
-skills/install-claude-director/uninstall.sh           # preserve state.db + templates
-skills/install-claude-director/uninstall.sh --purge   # remove everything
+skills/install-agent-director/uninstall.sh           # preserve state.db + templates
+skills/install-agent-director/uninstall.sh --purge   # remove everything
 ```

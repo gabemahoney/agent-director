@@ -1,8 +1,8 @@
 # Permissions
 
-How claude-director's per-Spawn `permissions` block accumulates with the
+How agent-director's per-Spawn `permissions` block accumulates with the
 user's `~/.claude/settings.json` and project-level settings. The merge
-is performed by Claude Code, not by claude-director — this document
+is performed by Claude Code, not by agent-director — this document
 describes the resulting behavior so operators can predict what a Spawn
 will allow / deny / ask for.
 
@@ -36,7 +36,7 @@ Tiers (lowest precedence first):
 1. `~/.claude/settings.json` (user)
 2. `.claude/settings.json` (project, in Spawn's cwd)
 3. `.claude/settings.local.json` (local)
-4. claude-director's `--settings` (per-Spawn)
+4. agent-director's `--settings` (per-Spawn)
 5. Managed policy (organization)
 
 ### Worked example
@@ -79,14 +79,14 @@ user / project tiers still apply.
 
 To re-enable AUQ for a specific Spawn while keeping the global config
 off, either flip the config (affects every Spawn) or use a separate
-config file via `CLAUDE_DIRECTOR_CONFIG` (not yet wired; tracked for a
+config file via `AGENT_DIRECTOR_CONFIG` (not yet wired; tracked for a
 future Epic). The cleanest current option is to spawn the special-case
-Spawn from an alternate `HOME` whose `~/.claude-director/config.toml`
+Spawn from an alternate `HOME` whose `~/.agent-director/config.toml`
 does not have the flag set.
 
 ## `--dangerously-skip-permissions`
 
-claude-director **does not strip** this flag. A caller passing
+agent-director **does not strip** this flag. A caller passing
 `--dangerously-skip-permissions` through `claude_args` bypasses Claude
 Code's permission engine entirely — the per-Spawn `permissions` block
 becomes irrelevant for that Spawn. This is intentional per the PRD
@@ -94,7 +94,7 @@ becomes irrelevant for that Spawn. This is intentional per the PRD
 shell).
 
 Operators who want to restrict callers from using this flag should not
-let untrusted parties spawn Claude instances through claude-director.
+let untrusted parties spawn Claude instances through agent-director.
 
 ## Relay mode
 
@@ -107,7 +107,7 @@ on policy rather than a human at the keyboard.
 
 1. Claude Code fires the PermissionRequest hook with the tool name +
    tool input.
-2. The hook handler reads `CLAUDE_DIRECTOR_RELAY_MODE` from its env
+2. The hook handler reads `AGENT_DIRECTOR_RELAY_MODE` from its env
    (NOT the DB — see "Fail-closed boundary" below).
 3. If the env var is `on`, the handler:
    - UPSERTs the row into `permission_requests` (DELETE-INSERT in
@@ -119,7 +119,7 @@ on policy rather than a human at the keyboard.
    - On a decided row → writes the decision envelope to stdout.
    - On timeout / ctx-cancel / row preempted / read-retry exhaustion
      → writes a deny envelope (fail-closed).
-4. The orchestrator calls `claude-director decide --claude-instance-id
+4. The orchestrator calls `agent-director decide --claude-instance-id
    <id> --decision allow|deny --reason "..."` to write the decision.
 5. The hook's polling loop sees the decision on its next read and
    emits the envelope.
@@ -149,12 +149,12 @@ SRD §6.3 / Claude Code 2.x nested shape:
 
 ### Fail-closed boundary (SRD §6.4)
 
-When `CLAUDE_DIRECTOR_RELAY_MODE=on` the hook handler treats every
+When `AGENT_DIRECTOR_RELAY_MODE=on` the hook handler treats every
 failure mode as a deny. SRD §6.4 enumerates these:
 
 | Failure | Outcome |
 |---|---|
-| `CLAUDE_DIRECTOR_INSTANCE_ID` missing / invalid | deny envelope |
+| `AGENT_DIRECTOR_INSTANCE_ID` missing / invalid | deny envelope |
 | Config load failure | deny envelope |
 | Store open failure | deny envelope |
 | stdin payload read failure | deny envelope |
@@ -171,7 +171,7 @@ still follows the regular state-tracking fail-open path — Claude
 Code drops envelopes on non-permission events anyway, so emitting
 one there is harmless noise.
 
-**Structural caveat.** Fail-closed requires the `claude-director`
+**Structural caveat.** Fail-closed requires the `agent-director`
 binary to actually run. If Claude Code can't invoke it at all —
 binary missing, PATH not set, settings JSON unparseable — Claude
 Code falls back to its native permission dialog. From the
@@ -181,7 +181,7 @@ install time (Epic 12's job).
 
 ### Why env-var, not DB
 
-`CLAUDE_DIRECTOR_RELAY_MODE` is set on the Spawn's tmux session at
+`AGENT_DIRECTOR_RELAY_MODE` is set on the Spawn's tmux session at
 launch (SRD §6.5). The hook reads it from the OS process env, NOT
 from the spawns row's `relay_mode` column. This separation preserves
 the fail-closed safety guarantee across multiple failure modes:
