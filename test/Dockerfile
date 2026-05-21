@@ -56,14 +56,14 @@ RUN apt-get update \
  && useradd --create-home --shell /bin/bash --uid 1000 tester
 
 # Pre-built binary + driver assets are produced by the host Makefile.
-COPY bin/claude-director /usr/local/bin/claude-director
+COPY bin/agent-director /usr/local/bin/agent-director
 COPY test/driver /opt/driver
 # The install skill ships alongside the binary so the epic-12-install
 # testplan can exercise it without a separate mount. Path mirrors the
-# repo layout (`skills/install-claude-director/`) so test scripts can
+# repo layout (`skills/install-agent-director/`) so test scripts can
 # reference it portably.
 COPY skills /opt/skills
-RUN chmod 0755 /usr/local/bin/claude-director \
+RUN chmod 0755 /usr/local/bin/agent-director \
  && chmod -R 0755 /opt/driver \
  && chown -R tester:tester /opt/driver \
  && chmod -R 0755 /opt/skills \
