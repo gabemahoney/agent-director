@@ -165,7 +165,7 @@ var executablePath = func() (string, error) {
 // claude-director binary used in the inject_help_hook SessionStart
 // entry. The hook fires inside a Spawn whose PATH may not include
 // ~/.local/bin, so the entry must embed the absolute install path
-// (~/.claude-director/bin/claude-director after ~ expansion) rather
+// (~/.agent-director/bin/claude-director after ~ expansion) rather
 // than rely on PATH resolution.
 //
 // Held as a var so tests can stub it without touching $HOME.
@@ -174,7 +174,7 @@ var helpHookBinPath = func() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".claude-director", "bin", "claude-director"), nil
+	return filepath.Join(home, ".agent-director", "bin", "claude-director"), nil
 }
 
 // quoteIfWhitespace defensively double-quotes a path that contains

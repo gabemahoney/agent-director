@@ -10,7 +10,7 @@ type SpawnParams struct {
 	// Absolute or "~/"-prefixed; validation canonicalizes via EvalSymlinks.
 	CWD string
 
-	// Template names a stored template under ~/.claude-director/templates/.
+	// Template names a stored template under ~/.agent-director/templates/.
 	// Epic 3 leaves the template merge a no-op (the field is preserved so
 	// Epic 7 can fold real template loading in without API churn).
 	Template string

@@ -228,7 +228,7 @@ func TestSynthesizeSettingsDisabledFalseLeavesDenyAlone(t *testing.T) {
 // entry must remain alongside it.
 func TestSynthesizeSettingsInjectHelpHookTrue(t *testing.T) {
 	withStubExe(t, "/usr/local/bin/claude-director")
-	withStubHelpBin(t, "/home/operator/.claude-director/bin/claude-director")
+	withStubHelpBin(t, "/home/operator/.agent-director/bin/claude-director")
 	cfg := config.Default()
 	cfg.Defaults.InjectHelpHook = true
 	jsonStr, err := synthesizeSettings(
@@ -259,7 +259,7 @@ func TestSynthesizeSettingsInjectHelpHookTrue(t *testing.T) {
 		}
 	}
 	wantHook := "/usr/local/bin/claude-director hook"
-	wantHelp := "/home/operator/.claude-director/bin/claude-director help"
+	wantHelp := "/home/operator/.agent-director/bin/claude-director help"
 	var sawHook, sawHelp bool
 	for _, c := range commands {
 		if c == wantHook {

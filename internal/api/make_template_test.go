@@ -39,13 +39,13 @@ func TestMakeTemplateWritesReadableTOML(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MakeTemplate: %v", err)
 	}
-	wantPath := filepath.Join(home, ".claude-director", "templates", "dev.toml")
+	wantPath := filepath.Join(home, ".agent-director", "templates", "dev.toml")
 	if res.Path != wantPath {
 		t.Errorf("Path = %q; want %q", res.Path, wantPath)
 	}
 
 	// File exists with mode 0600 inside dir 0700.
-	dirInfo, err := os.Stat(filepath.Join(home, ".claude-director", "templates"))
+	dirInfo, err := os.Stat(filepath.Join(home, ".agent-director", "templates"))
 	if err != nil {
 		t.Fatalf("stat dir: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestMakeTemplateLeavesNoHalfWrittenFileOnEncoderFailure(t *testing.T) {
 	// the target path with a directory entry — the existence check
 	// will catch it before any temp file is created.
 	home := withTempHome(t)
-	dir := filepath.Join(home, ".claude-director", "templates")
+	dir := filepath.Join(home, ".agent-director", "templates")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}

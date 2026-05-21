@@ -88,7 +88,7 @@ func TestSendKeysCLIHappyPath(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
 	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".claude-director", "state.db")
+	dbPath := filepath.Join(home, ".agent-director", "state.db")
 	seedSpawnRow(t, dbPath, "id-sk-1", "cd-sk-1", "waiting", "off")
 
 	stdout, stderr, code := runSpawnCLI(t, home, fakeDir,
@@ -125,7 +125,7 @@ func TestSendKeysCLIErrSpawnNotInteractive(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
 	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".claude-director", "state.db")
+	dbPath := filepath.Join(home, ".agent-director", "state.db")
 	seedSpawnRow(t, dbPath, "id-sk-3", "cd-sk-3", "ended", "off")
 
 	_, stderr, code := runSpawnCLI(t, home, fakeDir,
@@ -159,7 +159,7 @@ func TestSendKeysCLIErrSendKeysWhileRelayed(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
 	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".claude-director", "state.db")
+	dbPath := filepath.Join(home, ".agent-director", "state.db")
 	seedSpawnRow(t, dbPath, "id-sk-4", "cd-sk-4", "check_permission", "on")
 
 	_, stderr, code := runSpawnCLI(t, home, fakeDir,
@@ -177,7 +177,7 @@ func TestReadPaneCLIHappyPath(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
 	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".claude-director", "state.db")
+	dbPath := filepath.Join(home, ".agent-director", "state.db")
 	seedSpawnRow(t, dbPath, "id-rp-cli-1", "cd-rp-cli-1", "waiting", "off")
 
 	stdout, stderr, code := runSpawnCLIWithExtraEnv(t, home, fakeDir,
@@ -215,7 +215,7 @@ func TestReadPaneCLIANSIPreservesEscapes(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
 	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".claude-director", "state.db")
+	dbPath := filepath.Join(home, ".agent-director", "state.db")
 	seedSpawnRow(t, dbPath, "id-rp-cli-2", "cd-rp-cli-2", "waiting", "off")
 
 	stdout, stderr, code := runSpawnCLIWithExtraEnv(t, home, fakeDir,
@@ -248,7 +248,7 @@ func TestReadPaneCLIDefaultOmitsDashE(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
 	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".claude-director", "state.db")
+	dbPath := filepath.Join(home, ".agent-director", "state.db")
 	seedSpawnRow(t, dbPath, "id-rp-cli-default-e", "cd-rp-cli-de", "waiting", "off")
 
 	_, stderr, code := runSpawnCLI(t, home, fakeDir,
@@ -269,7 +269,7 @@ func TestReadPaneCLICustomLineCount(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
 	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".claude-director", "state.db")
+	dbPath := filepath.Join(home, ".agent-director", "state.db")
 	seedSpawnRow(t, dbPath, "id-rp-cli-3", "cd-rp-cli-3", "waiting", "off")
 
 	_, stderr, code := runSpawnCLI(t, home, fakeDir,

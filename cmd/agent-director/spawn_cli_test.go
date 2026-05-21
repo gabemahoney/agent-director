@@ -44,7 +44,7 @@ func buildFakeTmux(t *testing.T) string {
 // runSpawnCLI is a thin wrapper around exec.Command that runs the built
 // CLI with PATH manipulated so the fake-tmux binary wins over any
 // system-installed tmux. HOME is overridden to t.TempDir() so each test
-// has its own ~/.claude-director DB.
+// has its own ~/.agent-director DB.
 func runSpawnCLI(t *testing.T, home, fakeTmuxDir string, args ...string) (string, string, int) {
 	t.Helper()
 	return runSpawnCLIEnv(t, home, fakeTmuxDir, nil, args...)
@@ -484,7 +484,7 @@ func TestGetCLICheckPermissionOpenRow(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
 	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".claude-director", "state.db")
+	dbPath := filepath.Join(home, ".agent-director", "state.db")
 
 	const id = "id-gp-1"
 	const toolName = "Read"
@@ -532,7 +532,7 @@ func TestGetCLICheckPermissionNoRowOmitsField(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
 	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".claude-director", "state.db")
+	dbPath := filepath.Join(home, ".agent-director", "state.db")
 
 	const id = "id-gp-2"
 	seedSpawnRow(t, dbPath, id, "cd-gp-2", "check_permission", "on")
@@ -561,7 +561,7 @@ func TestGetCLICheckPermissionDecidedRowOmitsField(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
 	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".claude-director", "state.db")
+	dbPath := filepath.Join(home, ".agent-director", "state.db")
 
 	const id = "id-gp-3"
 	seedSpawnRow(t, dbPath, id, "cd-gp-3", "check_permission", "on")
@@ -589,7 +589,7 @@ func TestGetCLINonCheckPermissionStateOmitsField(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
 	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".claude-director", "state.db")
+	dbPath := filepath.Join(home, ".agent-director", "state.db")
 
 	const id = "id-gp-4"
 	seedSpawnRow(t, dbPath, id, "cd-gp-4", "waiting", "on")
@@ -625,7 +625,7 @@ func TestGetCLINonCheckPermissionStateWithStaleRowOmitsField(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
 	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".claude-director", "state.db")
+	dbPath := filepath.Join(home, ".agent-director", "state.db")
 
 	const id = "id-gp-5"
 	seedSpawnRow(t, dbPath, id, "cd-gp-5", "waiting", "on")
@@ -654,7 +654,7 @@ func TestSpawnCLITemplateClaudeArgsAppliedWhenNoTrailingArgs(t *testing.T) {
 	cwd := t.TempDir()
 
 	// Write a template with claude_args into the home's templates dir.
-	tplDir := filepath.Join(home, ".claude-director", "templates")
+	tplDir := filepath.Join(home, ".agent-director", "templates")
 	if err := os.MkdirAll(tplDir, 0o700); err != nil {
 		t.Fatalf("mkdir templates: %v", err)
 	}
@@ -705,7 +705,7 @@ func TestSpawnCLIPerCallClaudeArgsReplacesTemplate(t *testing.T) {
 	home := t.TempDir()
 	cwd := t.TempDir()
 
-	tplDir := filepath.Join(home, ".claude-director", "templates")
+	tplDir := filepath.Join(home, ".agent-director", "templates")
 	if err := os.MkdirAll(tplDir, 0o700); err != nil {
 		t.Fatalf("mkdir templates: %v", err)
 	}

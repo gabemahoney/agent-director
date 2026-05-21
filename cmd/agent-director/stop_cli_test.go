@@ -11,7 +11,7 @@ func TestKillCLIHappyPath(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
 	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".claude-director", "state.db")
+	dbPath := filepath.Join(home, ".agent-director", "state.db")
 	seedSpawnRow(t, dbPath, "id-kill-1", "cd-kill-1", "waiting", "off")
 
 	stdout, stderr, code := runSpawnCLI(t, home, fakeDir,
@@ -56,7 +56,7 @@ func TestKillCLIEndedRowIsNoop(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
 	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".claude-director", "state.db")
+	dbPath := filepath.Join(home, ".agent-director", "state.db")
 	seedSpawnRow(t, dbPath, "id-kill-2", "cd-kill-2", "ended", "off")
 
 	_, stderr, code := runSpawnCLI(t, home, fakeDir,
@@ -78,7 +78,7 @@ func TestPauseCLIEndedRowIsNoop(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
 	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".claude-director", "state.db")
+	dbPath := filepath.Join(home, ".agent-director", "state.db")
 	seedSpawnRow(t, dbPath, "id-pause-1", "cd-pause-1", "ended", "off")
 
 	stdout, stderr, code := runSpawnCLI(t, home, fakeDir,
@@ -99,7 +99,7 @@ func TestPauseCLIWorkingStateRejected(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
 	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".claude-director", "state.db")
+	dbPath := filepath.Join(home, ".agent-director", "state.db")
 	seedSpawnRow(t, dbPath, "id-pause-2", "cd-pause-2", "working", "off")
 
 	_, stderr, code := runSpawnCLI(t, home, fakeDir,

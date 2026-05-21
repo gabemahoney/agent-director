@@ -25,7 +25,7 @@ import (
 // has hung up) or a fatal stdio error.
 //
 // Config is loaded ONCE at startup; in-flight edits to
-// ~/.claude-director/config.toml do not take effect until the next
+// ~/.agent-director/config.toml do not take effect until the next
 // `serve` invocation. SRD §3.3 makes this explicit so operators
 // don't have to wonder why a tweak to relay.timeout_seconds didn't
 // stick.

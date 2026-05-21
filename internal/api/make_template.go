@@ -43,7 +43,7 @@ type MakeTemplateResult struct {
 	Path string `json:"path"`
 }
 
-// MakeTemplate writes a new template to ~/.claude-director/templates/.
+// MakeTemplate writes a new template to ~/.agent-director/templates/.
 // Behavior (SRD §10):
 //
 //   - Name safety: validated via config.ValidateTemplateName.

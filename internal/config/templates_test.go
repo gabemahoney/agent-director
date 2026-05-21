@@ -87,7 +87,7 @@ func TestLoadTemplateRejectsUnknownKey(t *testing.T) {
 mystery_field = "wat"
 `
 	if err := os.WriteFile(
-		filepath.Join(home, ".claude-director", "templates", "rogue.toml"),
+		filepath.Join(home, ".agent-director", "templates", "rogue.toml"),
 		[]byte(body), 0o600); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestLoadTemplateRejectsReservedTmuxSessionNameKey(t *testing.T) {
 tmux_session_name = "rogue-name"
 `
 	if err := os.WriteFile(
-		filepath.Join(home, ".claude-director", "templates", "reserved.toml"),
+		filepath.Join(home, ".agent-director", "templates", "reserved.toml"),
 		[]byte(body), 0o600); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestLoadTemplateRejectsBadRelayMode(t *testing.T) {
 	}
 	body := `relay_mode = "bogus"`
 	if err := os.WriteFile(
-		filepath.Join(home, ".claude-director", "templates", "bad.toml"),
+		filepath.Join(home, ".agent-director", "templates", "bad.toml"),
 		[]byte(body), 0o600); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -168,7 +168,7 @@ project = "foo"
 allow = ["Bash(jq)"]
 `
 	if err := os.WriteFile(
-		filepath.Join(home, ".claude-director", "templates", "valid.toml"),
+		filepath.Join(home, ".agent-director", "templates", "valid.toml"),
 		[]byte(body), 0o600); err != nil {
 		t.Fatalf("seed: %v", err)
 	}

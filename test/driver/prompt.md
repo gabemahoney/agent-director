@@ -35,7 +35,7 @@ followed by one t2 case body.
   driver Claude would consume API credit and loop.
 - Do not modify the testplan files. They are mounted read-only.
 - The DB-reset fixture (`/opt/driver/db-reset.sh`) runs *before* you start.
-  You inherit a clean `~/.claude-director/state.db`. If a case asks for an
+  You inherit a clean `~/.agent-director/state.db`. If a case asks for an
   empty DB as a precondition, that is already true.
 
 ## Audit context

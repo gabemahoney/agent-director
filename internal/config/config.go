@@ -4,7 +4,7 @@
 // Load() returns Default() when the file is absent, and a typed
 // *ConfigError wrapping the parse error when the file is malformed.
 // Path fields support leading "~/" expansion and relative-path resolution
-// against "~/.claude-director/". Shell variables like $HOME are preserved
+// against "~/.agent-director/". Shell variables like $HOME are preserved
 // literally.
 package config
 
@@ -81,10 +81,10 @@ func Default() Config {
 			TimeoutSeconds: 30,
 		},
 		Store: Store{
-			DbPath: "~/.claude-director/state.db",
+			DbPath: "~/.agent-director/state.db",
 		},
 		Log: Log{
-			ErrorLogPath: "~/.claude-director/errors.log",
+			ErrorLogPath: "~/.agent-director/errors.log",
 		},
 	}
 }
@@ -114,7 +114,7 @@ func (e *ConfigError) Unwrap() error {
 // Path fields (Store.DbPath, Log.ErrorLogPath) are post-processed:
 //   - A leading "~/" is expanded to the current user's home directory.
 //   - A relative path (neither absolute nor "~/"-prefixed) is resolved
-//     against "~/.claude-director/", since the hook handler runs in
+//     against "~/.agent-director/", since the hook handler runs in
 //     Claude's CWD rather than the director's own directory.
 //   - "$VAR" patterns are left literal — no shell expansion.
 func Load(path string) (Config, error) {
@@ -142,7 +142,7 @@ func Load(path string) (Config, error) {
 // field in cfg. Called unconditionally so Default()'s "~/" placeholders are
 // always expanded before reaching callers.
 func resolvePaths(cfg Config, home string) Config {
-	base := filepath.Join(home, ".claude-director")
+	base := filepath.Join(home, ".agent-director")
 	cfg.Store.DbPath = resolvePathField(cfg.Store.DbPath, home, base)
 	cfg.Log.ErrorLogPath = resolvePathField(cfg.Log.ErrorLogPath, home, base)
 	return cfg

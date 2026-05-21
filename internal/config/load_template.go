@@ -7,7 +7,7 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// LoadTemplate reads ~/.claude-director/templates/<name>.toml and
+// LoadTemplate reads ~/.agent-director/templates/<name>.toml and
 // decodes it into a TemplateFile.
 //
 // Behavior (SRD §10.2):

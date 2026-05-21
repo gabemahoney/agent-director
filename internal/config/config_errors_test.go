@@ -60,8 +60,8 @@ relay_mode = "on"
 			if herr != nil {
 				t.Fatalf("UserHomeDir: %v", herr)
 			}
-			wantDB := filepath.Join(home, ".claude-director/state.db")
-			wantLog := filepath.Join(home, ".claude-director/errors.log")
+			wantDB := filepath.Join(home, ".agent-director/state.db")
+			wantLog := filepath.Join(home, ".agent-director/errors.log")
 			def := config.Default()
 			if cfg.Store.DbPath != wantDB || cfg.Log.ErrorLogPath != wantLog {
 				t.Errorf("path fields not resolved on error: %+v", cfg)

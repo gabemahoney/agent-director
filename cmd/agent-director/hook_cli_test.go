@@ -109,7 +109,7 @@ func TestHookCLISessionStartTransitionsToWaiting(t *testing.T) {
 	if _, _, code := runCLIWithStdin(t, home, "", "help"); code != 0 {
 		t.Fatalf("help bootstrap exit = %d", code)
 	}
-	dbPath := filepath.Join(home, ".claude-director", "state.db")
+	dbPath := filepath.Join(home, ".agent-director", "state.db")
 	insertPendingRow(t, dbPath, "id-hook-1")
 
 	payload := `{"hook_event_name":"SessionStart","transcript_path":"/x/y/abc-uuid.jsonl"}`
@@ -152,7 +152,7 @@ func TestHookCLIPreToolUseAskUserSetsAskUser(t *testing.T) {
 	if _, _, code := runCLIWithStdin(t, home, "", "help"); code != 0 {
 		t.Fatalf("help bootstrap exit = %d", code)
 	}
-	dbPath := filepath.Join(home, ".claude-director", "state.db")
+	dbPath := filepath.Join(home, ".agent-director", "state.db")
 	insertPendingRow(t, dbPath, "id-hook-2")
 	payload := `{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion"}`
 	_, stderr, code := runCLIWithEnv(t, home,
@@ -172,7 +172,7 @@ func TestHookCLISessionEndCompactIsSoftRefresh(t *testing.T) {
 	if _, _, code := runCLIWithStdin(t, home, "", "help"); code != 0 {
 		t.Fatalf("help bootstrap exit = %d", code)
 	}
-	dbPath := filepath.Join(home, ".claude-director", "state.db")
+	dbPath := filepath.Join(home, ".agent-director", "state.db")
 	insertPendingRow(t, dbPath, "id-hook-3")
 	// Bump to waiting first so soft-refresh has a non-pending baseline.
 	_, _, _ = runCLIWithEnv(t, home,
@@ -200,7 +200,7 @@ func TestHookCLISessionEndUserQuitIsEnded(t *testing.T) {
 	if _, _, code := runCLIWithStdin(t, home, "", "help"); code != 0 {
 		t.Fatalf("help bootstrap exit = %d", code)
 	}
-	dbPath := filepath.Join(home, ".claude-director", "state.db")
+	dbPath := filepath.Join(home, ".agent-director", "state.db")
 	insertPendingRow(t, dbPath, "id-hook-4")
 	_, _, code := runCLIWithEnv(t, home,
 		map[string]string{"CLAUDE_DIRECTOR_INSTANCE_ID": "id-hook-4"},

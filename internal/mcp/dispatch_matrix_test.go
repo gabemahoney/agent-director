@@ -72,7 +72,7 @@ func matrixCases() map[string]matrixCase {
 		"expire":       {args: `{"older_than":"7d"}`},
 
 		// make-template needs an isolated HOME so we don't litter the
-		// developer's ~/.claude-director/templates/ on test runs. The
+		// developer's ~/.agent-director/templates/ on test runs. The
 		// per-subtest t.Setenv handles that.
 		"make-template": {args: `{"name":"dispatch-matrix-test"}`},
 
@@ -105,7 +105,7 @@ func TestToolsCallDispatchMatrix(t *testing.T) {
 			}
 
 			// Isolate HOME so make-template (and any future verb that
-			// touches ~/.claude-director/) writes into a temp dir that
+			// touches ~/.agent-director/) writes into a temp dir that
 			// the runtime cleans up.
 			t.Setenv("HOME", t.TempDir())
 

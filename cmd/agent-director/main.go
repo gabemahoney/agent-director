@@ -45,7 +45,7 @@ const (
 var errDispatch = errors.New("dispatch error")
 
 // configPath is the canonical TOML config location.
-const configPath = "~/.claude-director/config.toml"
+const configPath = "~/.agent-director/config.toml"
 
 // handlers maps verb names to their implementations. `help` and `--help`
 // route to the same function so their stdout is byte-identical (SRD §12.3).

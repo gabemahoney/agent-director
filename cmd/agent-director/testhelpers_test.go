@@ -42,7 +42,7 @@ type errorEnvelope struct {
 
 // runCLI invokes the built binary with args under a HOME=t.TempDir()
 // override and returns stdout, stderr, exit code. The HOME override keeps
-// every invocation from touching the developer's real ~/.claude-director/
+// every invocation from touching the developer's real ~/.agent-director/
 // when state.db is opened during startup.
 func runCLI(t *testing.T, args ...string) (string, string, int) {
 	t.Helper()

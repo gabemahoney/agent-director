@@ -10,14 +10,14 @@ import (
 	"github.com/gabemahoney/agent-director/internal/spawn"
 )
 
-// withTemplate seeds a TOML template under $HOME/.claude-director/templates/
+// withTemplate seeds a TOML template under $HOME/.agent-director/templates/
 // for the duration of a test. Returns the temp HOME directory in case
 // the caller wants to introspect on-disk state.
 func withTemplate(t *testing.T, name, body string) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	dir := filepath.Join(home, ".claude-director", "templates")
+	dir := filepath.Join(home, ".agent-director", "templates")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}

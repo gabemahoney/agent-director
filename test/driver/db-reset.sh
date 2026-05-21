@@ -3,7 +3,7 @@
 # from a clean state (SRD §15.2).
 #
 # Contract:
-#   1. Remove ~/.claude-director/state.db and its WAL/SHM siblings if present.
+#   1. Remove ~/.agent-director/state.db and its WAL/SHM siblings if present.
 #   2. Kill any tmux sessions whose names start with `cd-` (the harness's
 #      reserved prefix for spawn sessions — see SRD §6).
 #   3. Re-create the DB by calling `claude-director help`, which exercises
@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-CD_DIR="${HOME}/.claude-director"
+CD_DIR="${HOME}/.agent-director"
 STATE_DB="${CD_DIR}/state.db"
 
 # Drop the DB and its WAL/SHM sidecars.
