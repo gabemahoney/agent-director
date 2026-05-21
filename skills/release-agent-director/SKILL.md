@@ -1,11 +1,11 @@
 ---
-name: release-claude-director
-description: Cut a new claude-director release. Validates semver, ensures the working tree is clean, tags the commit, builds all four supported binaries (linux/darwin × amd64/arm64), generates release notes from the commit history since the previous tag (grouped by Epic ID where commit messages reference one), and publishes a GitHub release with the four artifacts attached. Use this skill when the user says "release claude-director", "cut a release", or "publish v<X.Y.Z>".
+name: release-agent-director
+description: Cut a new agent-director release. Validates semver, ensures the working tree is clean, tags the commit, builds all four supported binaries (linux/darwin × amd64/arm64), generates release notes from the commit history since the previous tag (grouped by Epic ID where commit messages reference one), and publishes a GitHub release with the four artifacts attached. Use this skill when the user says "release agent-director", "cut a release", or "publish v<X.Y.Z>".
 ---
 
 ## When to invoke
 
-Trigger phrases: "release claude-director", "cut a release",
+Trigger phrases: "release agent-director", "cut a release",
 "publish v<X.Y.Z>", "tag and release".
 
 ## What this skill does
