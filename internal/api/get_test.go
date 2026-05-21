@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gabemahoney/claude-director/internal/api"
-	"github.com/gabemahoney/claude-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/api"
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // openGetFixture seeds a Spawn at the given state with an explicit

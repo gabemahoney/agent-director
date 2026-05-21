@@ -1,6 +1,6 @@
 package spawn
 
-import "github.com/gabemahoney/claude-director/internal/config"
+import "github.com/gabemahoney/agent-director/internal/config"
 
 // SpawnParams is the caller-supplied input to a `spawn` call. Field names
 // map onto SRD §12 verb parameters (PascalCase here per Go convention; the
@@ -10,7 +10,7 @@ type SpawnParams struct {
 	// Absolute or "~/"-prefixed; validation canonicalizes via EvalSymlinks.
 	CWD string
 
-	// Template names a stored template under ~/.claude-director/templates/.
+	// Template names a stored template under ~/.agent-director/templates/.
 	// Epic 3 leaves the template merge a no-op (the field is preserved so
 	// Epic 7 can fold real template loading in without API churn).
 	Template string
@@ -34,15 +34,15 @@ type SpawnParams struct {
 	ClaudeInstanceID string
 
 	// ExtraEnv injects KEY=VAL env vars on the tmux session. Reserved
-	// keys (CLAUDE_DIRECTOR_*) are rejected; auth env vars
+	// keys (AGENT_DIRECTOR_*) are rejected; auth env vars
 	// (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN) are explicitly allowed.
 	ExtraEnv map[string]string
 
-	// ClaudeDirectorLabels are caller-owned tags. Each key is normalized to
+	// AgentDirectorLabels are caller-owned tags. Each key is normalized to
 	// env-var form (uppercase, non-alphanumeric → '_') and exposed as
-	// CLAUDE_DIRECTOR_LABEL_<UPPER_KEY>=<VAL> on the session env. The
+	// AGENT_DIRECTOR_LABEL_<UPPER_KEY>=<VAL> on the session env. The
 	// labels also persist into the spawns.labels JSON column.
-	ClaudeDirectorLabels map[string]string
+	AgentDirectorLabels map[string]string
 
 	// ClaudeArgs is the verbatim argv passed through to `claude` after
 	// --settings. The denied-flag check rejects supervisor-owned flags.
@@ -54,7 +54,7 @@ type SpawnParams struct {
 	Permissions *Permissions
 
 	// RelayMode is "on" / "off" / "" (use config default). Mirrored into
-	// CLAUDE_DIRECTOR_RELAY_MODE on the session env for the hook.
+	// AGENT_DIRECTOR_RELAY_MODE on the session env for the hook.
 	RelayMode string
 
 	// NoPreTrust opts out of the workspace-trust pre-write into
@@ -92,7 +92,7 @@ type Resolved struct {
 //
 //   - Scalars (CWD, RelayMode): per-call non-empty REPLACES the
 //     template value. Per-call empty falls back to template.
-//   - Top-level maps (ExtraEnv, ClaudeDirectorLabels): merge by key.
+//   - Top-level maps (ExtraEnv, AgentDirectorLabels): merge by key.
 //     Template keys survive; per-call keys win on collision. Either
 //     side may be nil — the result is nil only when both are nil.
 //   - Permissions arrays (Allow, Deny, Ask): CONCAT. Template entries
@@ -128,7 +128,7 @@ func Resolve(p SpawnParams, _ config.Config) (Resolved, error) {
 
 	// Maps: merge with per-call winning on collision.
 	merged.ExtraEnv = mergeStringMap(tmpl.ExtraEnv, merged.ExtraEnv)
-	merged.ClaudeDirectorLabels = mergeStringMap(tmpl.ClaudeDirectorLabels, merged.ClaudeDirectorLabels)
+	merged.AgentDirectorLabels = mergeStringMap(tmpl.AgentDirectorLabels, merged.AgentDirectorLabels)
 
 	// ClaudeArgs: per-call replace wholesale. nil per-call → use
 	// template. Explicit empty (`[]`) replaces with empty.

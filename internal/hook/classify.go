@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gabemahoney/claude-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // Tool name carve-outs.

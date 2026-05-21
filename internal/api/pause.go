@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/gabemahoney/claude-director/internal/config"
-	"github.com/gabemahoney/claude-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // PauseTmux is the narrow tmux surface Pause needs. *tmux.Client

@@ -6,8 +6,8 @@ import (
 	"io"
 	"os"
 
-	"github.com/gabemahoney/claude-director/internal/config"
-	"github.com/gabemahoney/claude-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // preTrustWarn is where pre-trust warnings land — missing-file or
@@ -31,7 +31,7 @@ var claudeBinary = "claude"
 // envInstanceID names the env var Launch reads to populate parent_id on
 // the new row (SRD §7.5). When set, the caller is itself a Spawn whose
 // Claude shell is invoking us; the value becomes the new row's parent.
-const envInstanceID = "CLAUDE_DIRECTOR_INSTANCE_ID"
+const envInstanceID = "AGENT_DIRECTOR_INSTANCE_ID"
 
 // Launch is the fire-and-forget half of `spawn` (SRD §7.4). The function:
 //
@@ -65,9 +65,9 @@ func Launch(s *store.Store, tmuxClient TmuxClient, r Resolved, cfg config.Config
 	if !r.NoPreTrust {
 		if err := preTrustCwd(r.CWD); err != nil {
 			if errors.Is(err, ErrClaudeJSONMissing) {
-				fmt.Fprintf(preTrustWarn, "claude-director: pre-trust skipped (~/.claude.json absent); spawn may block on Claude Code's trust dialog\n")
+				fmt.Fprintf(preTrustWarn, "agent-director: pre-trust skipped (~/.claude.json absent); spawn may block on Claude Code's trust dialog\n")
 			} else {
-				fmt.Fprintf(preTrustWarn, "claude-director: pre-trust failed: %v\n", err)
+				fmt.Fprintf(preTrustWarn, "agent-director: pre-trust failed: %v\n", err)
 			}
 		}
 	}
@@ -86,7 +86,7 @@ func Launch(s *store.Store, tmuxClient TmuxClient, r Resolved, cfg config.Config
 		TmuxSessionName:  r.TmuxSessionName,
 		ClaudeArgs:       r.ClaudeArgs,
 		RelayMode:        r.RelayMode,
-		Labels:           r.ClaudeDirectorLabels,
+		Labels:           r.AgentDirectorLabels,
 	}
 	if err := s.InsertPending(row); err != nil {
 		// store.InsertPending returns ErrPrimaryKeyCollision when SQLite

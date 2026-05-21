@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gabemahoney/claude-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/google/uuid"
 )
 

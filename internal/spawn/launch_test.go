@@ -10,8 +10,8 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/gabemahoney/claude-director/internal/config"
-	"github.com/gabemahoney/claude-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // captureTmux is a TmuxClient test double — records the argv that
@@ -62,7 +62,7 @@ func newStoreAndLaunchInputs(t *testing.T) (*store.Store, Resolved, config.Confi
 		TmuxSessionName:  "cd-launch-1",
 		RelayMode:        "off",
 		ClaudeArgs:       []string{"--model", "opus"},
-		ClaudeDirectorLabels: map[string]string{
+		AgentDirectorLabels: map[string]string{
 			"role": "worker",
 		},
 	}}
@@ -70,7 +70,7 @@ func newStoreAndLaunchInputs(t *testing.T) (*store.Store, Resolved, config.Confi
 }
 
 func TestLaunchInsertsPendingAndCallsTmux(t *testing.T) {
-	withStubExe(t, "/bin/claude-director")
+	withStubExe(t, "/bin/agent-director")
 	t.Setenv(envInstanceID, "") // ensure no parent leakage from the host shell
 	s, r, cfg := newStoreAndLaunchInputs(t)
 	tmux := &captureTmux{}
@@ -122,19 +122,19 @@ func TestLaunchInsertsPendingAndCallsTmux(t *testing.T) {
 	}
 
 	// Env vars composed correctly.
-	if tmux.got.envs["CLAUDE_DIRECTOR_INSTANCE_ID"] != "id-launch-1" {
-		t.Errorf("env CLAUDE_DIRECTOR_INSTANCE_ID = %q", tmux.got.envs["CLAUDE_DIRECTOR_INSTANCE_ID"])
+	if tmux.got.envs["AGENT_DIRECTOR_INSTANCE_ID"] != "id-launch-1" {
+		t.Errorf("env AGENT_DIRECTOR_INSTANCE_ID = %q", tmux.got.envs["AGENT_DIRECTOR_INSTANCE_ID"])
 	}
-	if tmux.got.envs["CLAUDE_DIRECTOR_RELAY_MODE"] != "off" {
-		t.Errorf("env CLAUDE_DIRECTOR_RELAY_MODE = %q", tmux.got.envs["CLAUDE_DIRECTOR_RELAY_MODE"])
+	if tmux.got.envs["AGENT_DIRECTOR_RELAY_MODE"] != "off" {
+		t.Errorf("env AGENT_DIRECTOR_RELAY_MODE = %q", tmux.got.envs["AGENT_DIRECTOR_RELAY_MODE"])
 	}
-	if tmux.got.envs["CLAUDE_DIRECTOR_LABEL_ROLE"] != "worker" {
-		t.Errorf("env CLAUDE_DIRECTOR_LABEL_ROLE = %q", tmux.got.envs["CLAUDE_DIRECTOR_LABEL_ROLE"])
+	if tmux.got.envs["AGENT_DIRECTOR_LABEL_ROLE"] != "worker" {
+		t.Errorf("env AGENT_DIRECTOR_LABEL_ROLE = %q", tmux.got.envs["AGENT_DIRECTOR_LABEL_ROLE"])
 	}
 }
 
 func TestLaunchTmuxFailureLeavesRowPending(t *testing.T) {
-	withStubExe(t, "/bin/claude-director")
+	withStubExe(t, "/bin/agent-director")
 	t.Setenv(envInstanceID, "") // ensure no parent leakage from the host shell
 	s, r, cfg := newStoreAndLaunchInputs(t)
 	tmux := &captureTmux{err: errors.New("tmux: name collision")}
@@ -158,7 +158,7 @@ func TestLaunchTmuxFailureLeavesRowPending(t *testing.T) {
 // happy-path test; this one reads the raw column directly so a future
 // change to the column format (e.g. base64, msgpack) breaks the test.
 func TestLaunchSerializesLabelsAsJSON(t *testing.T) {
-	withStubExe(t, "/bin/claude-director")
+	withStubExe(t, "/bin/agent-director")
 	t.Setenv(envInstanceID, "") // ensure no parent leakage from the host shell
 
 	dbPath := filepath.Join(t.TempDir(), "state.db")
@@ -173,8 +173,8 @@ func TestLaunchSerializesLabelsAsJSON(t *testing.T) {
 		ClaudeInstanceID: "id-labels-json",
 		TmuxSessionName:  "cd-labels-json",
 		RelayMode:        "off",
-		ClaudeDirectorLabels: map[string]string{
-			"project": "claude-director",
+		AgentDirectorLabels: map[string]string{
+			"project": "agent-director",
 			"env":     "dev",
 		},
 	}}
@@ -197,7 +197,7 @@ func TestLaunchSerializesLabelsAsJSON(t *testing.T) {
 	// JSON object representations differ only in key order; both keys
 	// must be present with their literal values. A substring check is
 	// resilient to encoder-determined key ordering.
-	for _, want := range []string{`"project":"claude-director"`, `"env":"dev"`} {
+	for _, want := range []string{`"project":"agent-director"`, `"env":"dev"`} {
 		if !contains(labelsCol, want) {
 			t.Errorf("labels column %q missing %q", labelsCol, want)
 		}
@@ -209,13 +209,13 @@ func TestLaunchSerializesLabelsAsJSON(t *testing.T) {
 // the env-var name. The DB column keeps the original key verbatim
 // (SRD §19 Q12) — the test asserts both.
 func TestLaunchEmitsEnvForNonAlphanumericLabelKey(t *testing.T) {
-	withStubExe(t, "/bin/claude-director")
+	withStubExe(t, "/bin/agent-director")
 	t.Setenv(envInstanceID, "")
 
 	s, r, cfg := newStoreAndLaunchInputs(t)
 	r.ClaudeInstanceID = "id-label-norm"
 	r.TmuxSessionName = "cd-label-norm"
-	r.ClaudeDirectorLabels = map[string]string{
+	r.AgentDirectorLabels = map[string]string{
 		"my-key":      "v1",
 		"x.y.z":       "v2",
 		"already_ok":  "v3",
@@ -228,10 +228,10 @@ func TestLaunchEmitsEnvForNonAlphanumericLabelKey(t *testing.T) {
 	}
 
 	wantEnv := map[string]string{
-		"CLAUDE_DIRECTOR_LABEL_MY_KEY":      "v1",
-		"CLAUDE_DIRECTOR_LABEL_X_Y_Z":       "v2",
-		"CLAUDE_DIRECTOR_LABEL_ALREADY_OK":  "v3",
-		"CLAUDE_DIRECTOR_LABEL_WITH_SPACES": "v4",
+		"AGENT_DIRECTOR_LABEL_MY_KEY":      "v1",
+		"AGENT_DIRECTOR_LABEL_X_Y_Z":       "v2",
+		"AGENT_DIRECTOR_LABEL_ALREADY_OK":  "v3",
+		"AGENT_DIRECTOR_LABEL_WITH_SPACES": "v4",
 	}
 	for k, v := range wantEnv {
 		if tmux.got.envs[k] != v {
@@ -244,7 +244,7 @@ func TestLaunchEmitsEnvForNonAlphanumericLabelKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSpawn: %v", err)
 	}
-	for k, v := range r.ClaudeDirectorLabels {
+	for k, v := range r.AgentDirectorLabels {
 		if row.Labels[k] != v {
 			t.Errorf("labels[%q] = %q; want %q", k, row.Labels[k], v)
 		}
@@ -252,11 +252,11 @@ func TestLaunchEmitsEnvForNonAlphanumericLabelKey(t *testing.T) {
 }
 
 // TestLaunchParentIDNullWhenEnvUnset pins SRD §7.5: a Spawn launched
-// from a plain shell (with no CLAUDE_DIRECTOR_INSTANCE_ID set) has a
+// from a plain shell (with no AGENT_DIRECTOR_INSTANCE_ID set) has a
 // NULL parent_id. The store materializes NULL as the empty string in
 // the Go struct; the test asserts that contract.
 func TestLaunchParentIDNullWhenEnvUnset(t *testing.T) {
-	withStubExe(t, "/bin/claude-director")
+	withStubExe(t, "/bin/agent-director")
 	t.Setenv(envInstanceID, "")
 
 	s, r, cfg := newStoreAndLaunchInputs(t)
@@ -276,10 +276,10 @@ func TestLaunchParentIDNullWhenEnvUnset(t *testing.T) {
 }
 
 // TestLaunchParentIDInheritsCallerEnv pins SRD §7.5: when the spawning
-// process has CLAUDE_DIRECTOR_INSTANCE_ID set, that value lands in the
+// process has AGENT_DIRECTOR_INSTANCE_ID set, that value lands in the
 // new row's parent_id.
 func TestLaunchParentIDInheritsCallerEnv(t *testing.T) {
-	withStubExe(t, "/bin/claude-director")
+	withStubExe(t, "/bin/agent-director")
 	t.Setenv(envInstanceID, "id-the-parent")
 
 	s, r, cfg := newStoreAndLaunchInputs(t)
@@ -318,7 +318,7 @@ func TestLaunchParentIDInheritsCallerEnv(t *testing.T) {
 // child's parent_id flips to NULL — orphans are not surfaced as a
 // foreign-key constraint failure to callers.
 func TestLaunchParentDeleteCascadesToChild(t *testing.T) {
-	withStubExe(t, "/bin/claude-director")
+	withStubExe(t, "/bin/agent-director")
 	t.Setenv(envInstanceID, "id-cascade-parent")
 
 	dbPath := filepath.Join(t.TempDir(), "state.db")
@@ -413,7 +413,7 @@ func contains(haystack, needle string) bool {
 // writes hasTrustDialogAccepted=true into ~/.claude.json for the
 // resolved cwd before exec'ing tmux.
 func TestLaunchPreTrustsCwdByDefault(t *testing.T) {
-	withStubExe(t, "/bin/claude-director")
+	withStubExe(t, "/bin/agent-director")
 	t.Setenv(envInstanceID, "")
 	stub := withStubClaudeJSON(t)
 	// Seed an empty projects map so preTrustCwd has a file to read+rewrite.
@@ -443,7 +443,7 @@ func TestLaunchPreTrustsCwdByDefault(t *testing.T) {
 // TestLaunchNoPreTrustFlagSkipsWrite pins AC #2: --no-pre-trust
 // (NoPreTrust=true) opts out of the ~/.claude.json write entirely.
 func TestLaunchNoPreTrustFlagSkipsWrite(t *testing.T) {
-	withStubExe(t, "/bin/claude-director")
+	withStubExe(t, "/bin/agent-director")
 	t.Setenv(envInstanceID, "")
 	stub := withStubClaudeJSON(t)
 	if err := os.WriteFile(stub, []byte(`{"projects":{}}`), 0o600); err != nil {
@@ -468,7 +468,7 @@ func TestLaunchNoPreTrustFlagSkipsWrite(t *testing.T) {
 // still proceeds to insert the row and start the tmux session — the
 // soft warning lands in preTrustWarn but the spawn is not blocked.
 func TestLaunchMissingClaudeJSONDoesNotBlockSpawn(t *testing.T) {
-	withStubExe(t, "/bin/claude-director")
+	withStubExe(t, "/bin/agent-director")
 	t.Setenv(envInstanceID, "")
 	// Stub points at a path we never create — preTrustCwd will surface
 	// ErrClaudeJSONMissing, and Launch should swallow it.
@@ -507,7 +507,7 @@ func (c *captureWriter) Write(p []byte) (int, error) {
 // TmuxClient.NewSession and into the persisted spawns row — no
 // sanitization, no suffix.
 func TestLaunchPassesUserSuppliedTmuxSessionName(t *testing.T) {
-	withStubExe(t, "/bin/claude-director")
+	withStubExe(t, "/bin/agent-director")
 	t.Setenv(envInstanceID, "")
 	s, r, cfg := newStoreAndLaunchInputs(t)
 	r.ClaudeInstanceID = "id-user-name"
@@ -535,7 +535,7 @@ func TestLaunchPassesUserSuppliedTmuxSessionName(t *testing.T) {
 // wraps through unchanged — no ErrTmuxSessionNameTaken, no new spawn
 // state. The pending row is left for find-missing.
 func TestLaunchSurfacesTmuxNewSessionFailureUnchanged(t *testing.T) {
-	withStubExe(t, "/bin/claude-director")
+	withStubExe(t, "/bin/agent-director")
 	t.Setenv(envInstanceID, "")
 	s, r, cfg := newStoreAndLaunchInputs(t)
 	r.ClaudeInstanceID = "id-collide"
@@ -563,7 +563,7 @@ func TestLaunchSurfacesTmuxNewSessionFailureUnchanged(t *testing.T) {
 }
 
 func TestLaunchSecondInsertSurfacesCollision(t *testing.T) {
-	withStubExe(t, "/bin/claude-director")
+	withStubExe(t, "/bin/agent-director")
 	t.Setenv(envInstanceID, "") // ensure no parent leakage from the host shell
 	s, r, cfg := newStoreAndLaunchInputs(t)
 	tmux := &captureTmux{}

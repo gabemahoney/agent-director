@@ -7,12 +7,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gabemahoney/claude-director/internal/api"
-	"github.com/gabemahoney/claude-director/internal/config"
-	"github.com/gabemahoney/claude-director/internal/probe"
-	"github.com/gabemahoney/claude-director/internal/spawn"
-	"github.com/gabemahoney/claude-director/internal/store"
-	"github.com/gabemahoney/claude-director/internal/tmux"
+	"github.com/gabemahoney/agent-director/internal/api"
+	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/probe"
+	"github.com/gabemahoney/agent-director/internal/spawn"
+	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
 // LiveDispatcher routes MCP tool calls to internal/api functions
@@ -89,7 +89,7 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 			Template:             raw.Template,
 			ClaudeInstanceID:     raw.ClaudeInstanceID,
 			ExtraEnv:             raw.ExtraEnv,
-			ClaudeDirectorLabels: labels,
+			AgentDirectorLabels: labels,
 			ClaudeArgs:           raw.ClaudeArgs,
 			RelayMode:            raw.RelayMode,
 		}
@@ -206,7 +206,7 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 			RelayMode:            raw.RelayMode,
 			ClaudeArgs:           raw.ClaudeArgs,
 			ExtraEnv:             raw.ExtraEnv,
-			ClaudeDirectorLabels: labels,
+			AgentDirectorLabels: labels,
 		}
 		if len(raw.Allow) > 0 || len(raw.Deny) > 0 || len(raw.Ask) > 0 {
 			p.Permissions = &api.MakeTemplatePermissions{

@@ -1,6 +1,6 @@
 package api
 
-import "github.com/gabemahoney/claude-director/internal/version"
+import "github.com/gabemahoney/agent-director/internal/version"
 
 // VersionResult is the JSON shape returned by the `version` verb.
 type VersionResult struct {

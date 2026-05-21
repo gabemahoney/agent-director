@@ -7,7 +7,7 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// LoadTemplate reads ~/.claude-director/templates/<name>.toml and
+// LoadTemplate reads ~/.agent-director/templates/<name>.toml and
 // decodes it into a TemplateFile.
 //
 // Behavior (SRD §10.2):
@@ -56,21 +56,6 @@ func LoadTemplate(name string) (TemplateFile, error) {
 	if tf.RelayMode != "" && tf.RelayMode != "on" && tf.RelayMode != "off" {
 		return TemplateFile{}, fmt.Errorf("%w: %s: relay_mode=%q (want on/off)",
 			ErrTemplateMalformed, name, tf.RelayMode)
-	}
-
-	if len(tf.DeprecatedLabels) > 0 {
-		fmt.Fprintf(os.Stderr,
-			"template %q: \"claude_director_labels\" is deprecated, use \"labels\" — existing templates still load, will be removed in v0.3.0\n",
-			name)
-		if tf.ClaudeDirectorLabels == nil {
-			tf.ClaudeDirectorLabels = make(map[string]string, len(tf.DeprecatedLabels))
-		}
-		for k, v := range tf.DeprecatedLabels {
-			if _, ok := tf.ClaudeDirectorLabels[k]; !ok {
-				tf.ClaudeDirectorLabels[k] = v
-			}
-		}
-		tf.DeprecatedLabels = nil
 	}
 
 	return tf, nil

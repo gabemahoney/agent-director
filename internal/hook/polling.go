@@ -7,8 +7,8 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/gabemahoney/claude-director/internal/config"
-	"github.com/gabemahoney/claude-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // pollFloor is the minimum per-iteration sleep. SRD §6.2: a

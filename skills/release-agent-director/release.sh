@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# release.sh — cut a claude-director release.
+# release.sh — cut an agent-director release.
 #
 # Per SRD §16.1 + §16.4. Validates semver, ensures the working tree
 # is clean, tags the commit, builds the four supported binaries via
@@ -187,12 +187,12 @@ Download the binary for your platform and place it on PATH. See
 
 \`\`\`sh
 # macOS arm64 (Apple Silicon):
-curl -L -o claude-director https://github.com/${REPO_SLUG}/releases/download/$VERSION/claude-director-darwin-arm64
-chmod +x claude-director
+curl -L -o agent-director https://github.com/${REPO_SLUG}/releases/download/$VERSION/agent-director-darwin-arm64
+chmod +x agent-director
 
 # Linux amd64:
-curl -L -o claude-director https://github.com/${REPO_SLUG}/releases/download/$VERSION/claude-director-linux-amd64
-chmod +x claude-director
+curl -L -o agent-director https://github.com/${REPO_SLUG}/releases/download/$VERSION/agent-director-linux-amd64
+chmod +x agent-director
 \`\`\`
 
 ## Supported platforms
@@ -242,10 +242,10 @@ fi
 # --------------------------------------------------------------------
 
 binaries=(
-    "$REPO_ROOT/dist/claude-director-linux-amd64"
-    "$REPO_ROOT/dist/claude-director-linux-arm64"
-    "$REPO_ROOT/dist/claude-director-darwin-amd64"
-    "$REPO_ROOT/dist/claude-director-darwin-arm64"
+    "$REPO_ROOT/dist/agent-director-linux-amd64"
+    "$REPO_ROOT/dist/agent-director-linux-arm64"
+    "$REPO_ROOT/dist/agent-director-darwin-amd64"
+    "$REPO_ROOT/dist/agent-director-darwin-arm64"
 )
 for b in "${binaries[@]}"; do
     if [[ ! -x "$b" ]]; then

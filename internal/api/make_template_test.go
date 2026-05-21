@@ -9,8 +9,8 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/gabemahoney/claude-director/internal/api"
-	"github.com/gabemahoney/claude-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/api"
+	"github.com/gabemahoney/agent-director/internal/config"
 )
 
 // withTempHome points $HOME at a per-test temp dir so the templates
@@ -31,7 +31,7 @@ func TestMakeTemplateWritesReadableTOML(t *testing.T) {
 		CWD:                  "/tmp",
 		RelayMode:            "off",
 		ClaudeArgs:           []string{"--model", "opus"},
-		ClaudeDirectorLabels: map[string]string{"project": "claude-director"},
+		AgentDirectorLabels: map[string]string{"project": "agent-director"},
 		Permissions: &api.MakeTemplatePermissions{
 			Allow: []string{"Bash(npm test)"},
 		},
@@ -39,13 +39,13 @@ func TestMakeTemplateWritesReadableTOML(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MakeTemplate: %v", err)
 	}
-	wantPath := filepath.Join(home, ".claude-director", "templates", "dev.toml")
+	wantPath := filepath.Join(home, ".agent-director", "templates", "dev.toml")
 	if res.Path != wantPath {
 		t.Errorf("Path = %q; want %q", res.Path, wantPath)
 	}
 
 	// File exists with mode 0600 inside dir 0700.
-	dirInfo, err := os.Stat(filepath.Join(home, ".claude-director", "templates"))
+	dirInfo, err := os.Stat(filepath.Join(home, ".agent-director", "templates"))
 	if err != nil {
 		t.Fatalf("stat dir: %v", err)
 	}
@@ -78,8 +78,8 @@ func TestMakeTemplateWritesReadableTOML(t *testing.T) {
 	if got.ClaudeArgs[0] != "--model" || got.ClaudeArgs[1] != "opus" {
 		t.Errorf("ClaudeArgs = %v; want [--model opus]", got.ClaudeArgs)
 	}
-	if got.ClaudeDirectorLabels["project"] != "claude-director" {
-		t.Errorf("Labels = %v", got.ClaudeDirectorLabels)
+	if got.AgentDirectorLabels["project"] != "agent-director" {
+		t.Errorf("Labels = %v", got.AgentDirectorLabels)
 	}
 	if got.Permissions == nil || got.Permissions.Allow[0] != "Bash(npm test)" {
 		t.Errorf("Permissions.Allow lost: %+v", got.Permissions)
@@ -132,7 +132,7 @@ func TestMakeTemplateRoundTripsThroughLoadTemplate(t *testing.T) {
 		RelayMode:            "on",
 		ClaudeArgs:           []string{"--print"},
 		ExtraEnv:             map[string]string{"ANTHROPIC_API_KEY": "sk-test"},
-		ClaudeDirectorLabels: map[string]string{"env": "dev", "owner": "alice"},
+		AgentDirectorLabels: map[string]string{"env": "dev", "owner": "alice"},
 		Permissions: &api.MakeTemplatePermissions{
 			Allow: []string{"Bash(jq)", "Read(/etc)"},
 			Deny:  []string{"Bash(rm)"},
@@ -157,8 +157,8 @@ func TestMakeTemplateRoundTripsThroughLoadTemplate(t *testing.T) {
 	if got.ExtraEnv["ANTHROPIC_API_KEY"] != "sk-test" {
 		t.Errorf("ExtraEnv lost")
 	}
-	if got.ClaudeDirectorLabels["env"] != "dev" || got.ClaudeDirectorLabels["owner"] != "alice" {
-		t.Errorf("Labels lost: %v", got.ClaudeDirectorLabels)
+	if got.AgentDirectorLabels["env"] != "dev" || got.AgentDirectorLabels["owner"] != "alice" {
+		t.Errorf("Labels lost: %v", got.AgentDirectorLabels)
 	}
 	if got.Permissions == nil ||
 		len(got.Permissions.Allow) != 2 || got.Permissions.Allow[0] != "Bash(jq)" ||
@@ -175,7 +175,7 @@ func TestMakeTemplateLeavesNoHalfWrittenFileOnEncoderFailure(t *testing.T) {
 	// the target path with a directory entry — the existence check
 	// will catch it before any temp file is created.
 	home := withTempHome(t)
-	dir := filepath.Join(home, ".claude-director", "templates")
+	dir := filepath.Join(home, ".agent-director", "templates")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}

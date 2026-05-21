@@ -1,5 +1,5 @@
 // Package probe discovers live Claude processes by their
-// CLAUDE_DIRECTOR_INSTANCE_ID env var. The set returned by Probe is
+// AGENT_DIRECTOR_INSTANCE_ID env var. The set returned by Probe is
 // the ground truth find-missing diffs against the DB's live-state
 // rows (SRD §4.4).
 //
@@ -31,7 +31,7 @@ import (
 var ErrProbeUnsupported = errors.New("ErrProbeUnsupported")
 
 // Prober is the narrow interface internal/api.FindMissing depends on.
-// Implementations return the set of CLAUDE_DIRECTOR_INSTANCE_ID
+// Implementations return the set of AGENT_DIRECTOR_INSTANCE_ID
 // values currently observable in process env blocks.
 //
 // The set form (map[string]struct{}) is the diff-friendly shape — a
@@ -44,7 +44,7 @@ type Prober interface {
 // EnvKey is the env-var name that identifies a tracked Spawn. Held
 // as a constant here (rather than re-typing the string in the linux
 // + darwin walkers) so a future rename has one point of truth.
-const EnvKey = "CLAUDE_DIRECTOR_INSTANCE_ID"
+const EnvKey = "AGENT_DIRECTOR_INSTANCE_ID"
 
 // New returns the per-OS Prober. The implementation is selected by
 // build tags at compile time; the factory exists so callers can swap

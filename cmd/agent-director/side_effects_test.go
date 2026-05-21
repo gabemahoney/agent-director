@@ -10,9 +10,9 @@ import (
 	_ "modernc.org/sqlite" // raw driver access for the tamper helper
 )
 
-// directorDir returns the path to the .claude-director directory under home.
+// directorDir returns the path to the .agent-director directory under home.
 func directorDir(home string) string {
-	return filepath.Join(home, ".claude-director")
+	return filepath.Join(home, ".agent-director")
 }
 
 // stateDB returns the path to state.db under home.
@@ -42,7 +42,7 @@ func TestHelpCreatesDirAndDBOnFirstRun(t *testing.T) {
 
 	dir := directorDir(home)
 	if mode := statMode(t, dir); mode != 0o700 {
-		t.Errorf(".claude-director mode = %o, want 0700", mode)
+		t.Errorf(".agent-director mode = %o, want 0700", mode)
 	}
 	db := stateDB(home)
 	if mode := statMode(t, db); mode != 0o600 {
@@ -69,7 +69,7 @@ func TestHelpIdempotentAcrossInvocations(t *testing.T) {
 		t.Errorf("second stdout empty")
 	}
 	if got := statMode(t, directorDir(home)); got != firstDirMode {
-		t.Errorf(".claude-director mode changed: %o -> %o", firstDirMode, got)
+		t.Errorf(".agent-director mode changed: %o -> %o", firstDirMode, got)
 	}
 	if got := statMode(t, stateDB(home)); got != firstDBMode {
 		t.Errorf("state.db mode changed: %o -> %o", firstDBMode, got)

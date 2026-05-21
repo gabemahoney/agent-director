@@ -96,10 +96,10 @@ func TestValidateOrder(t *testing.T) {
 			want: ErrSpawnDeniedFlag,
 		},
 		{
-			name: "reserved env key CLAUDE_DIRECTOR_FOO",
+			name: "reserved env key AGENT_DIRECTOR_FOO",
 			in: SpawnParams{
 				CWD:      cwdGood,
-				ExtraEnv: map[string]string{"CLAUDE_DIRECTOR_FOO": "bar"},
+				ExtraEnv: map[string]string{"AGENT_DIRECTOR_FOO": "bar"},
 			},
 			want: ErrReservedEnvKey,
 		},
@@ -312,7 +312,7 @@ func TestValidateTmuxSessionNameRunsAfterExtraEnv(t *testing.T) {
 	cwd := t.TempDir()
 	r := Resolved{SpawnParams: SpawnParams{
 		CWD:                     cwd,
-		ExtraEnv:                map[string]string{"CLAUDE_DIRECTOR_FOO": "bar"},
+		ExtraEnv:                map[string]string{"AGENT_DIRECTOR_FOO": "bar"},
 		TmuxSessionName:         "bad:name",
 		TmuxSessionNameSupplied: true,
 	}}

@@ -1,4 +1,4 @@
-// Package hook implements the `claude-director hook` verb: the lifecycle
+// Package hook implements the `agent-director hook` verb: the lifecycle
 // handler Claude Code invokes via the synthesized --settings JSON. The
 // handler reads a payload from stdin, classifies the event per SRD §5.2,
 // writes a row UPSERT, and exits 0 (state-tracking fail-open).
@@ -29,18 +29,18 @@ var ErrPayloadTooLarge = errors.New("hook: payload exceeds 1 MiB")
 
 // ErrInstanceIDMissing is returned by ResolveInstanceID when the env var
 // is unset or empty.
-var ErrInstanceIDMissing = errors.New("hook: CLAUDE_DIRECTOR_INSTANCE_ID missing")
+var ErrInstanceIDMissing = errors.New("hook: AGENT_DIRECTOR_INSTANCE_ID missing")
 
 // ErrInstanceIDInvalid is returned by ResolveInstanceID when the env var
 // value contains characters that would let the hook handler reach a
 // different row than the one its env was provisioned for (path
 // separators, NULs, control bytes).
-var ErrInstanceIDInvalid = errors.New("hook: CLAUDE_DIRECTOR_INSTANCE_ID invalid")
+var ErrInstanceIDInvalid = errors.New("hook: AGENT_DIRECTOR_INSTANCE_ID invalid")
 
 // envInstanceID names the env var the synthesized --settings JSON
 // inherits from the tmux session — set once at spawn time, inherited by
 // Claude and every subprocess.
-const envInstanceID = "CLAUDE_DIRECTOR_INSTANCE_ID"
+const envInstanceID = "AGENT_DIRECTOR_INSTANCE_ID"
 
 // ReadPayload reads up to MaxPayloadBytes from stdin and returns the
 // resulting blob. Reads exceeding the cap return ErrPayloadTooLarge with
@@ -64,7 +64,7 @@ func ReadPayload(r io.Reader) (json.RawMessage, error) {
 	return json.RawMessage(buf), nil
 }
 
-// ResolveInstanceID reads CLAUDE_DIRECTOR_INSTANCE_ID from the env map.
+// ResolveInstanceID reads AGENT_DIRECTOR_INSTANCE_ID from the env map.
 // The accepted shape is "non-empty string, no path separators, no NUL or
 // control bytes" — UUID4 is the production producer (spawn.ApplyDefaults)
 // but the hook accepts any matching-shape value so a test rig can

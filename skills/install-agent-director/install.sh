@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh — install or upgrade claude-director on this machine.
+# install.sh — install or upgrade agent-director on this machine.
 #
 # Per SRD §16.2. The script is deliberately bash + jq + standard
 # coreutils — no Go, no exotic deps. The Apiary skill harness invokes
@@ -8,7 +8,7 @@
 # Flags:
 #   --binary <path>      Source binary to install. Defaults to looking
 #                        next to the script first, then to whatever
-#                        `command -v claude-director` resolves to.
+#                        `command -v agent-director` resolves to.
 #   --from-release [tag] Download a pre-built binary for this host's
 #                        OS/arch from GitHub Releases and install it.
 #                        With no tag, resolves the latest release via
@@ -19,7 +19,7 @@
 #                        sha256 (lowercase hex, 64 chars). Only
 #                        meaningful with --from-release. Optional —
 #                        omit to skip verification.
-#   --symlink-dir <dir>  Drop a PATH symlink at <dir>/claude-director.
+#   --symlink-dir <dir>  Drop a PATH symlink at <dir>/agent-director.
 #                        Default: ~/.local/bin if on PATH; otherwise
 #                        no symlink.
 #   --no-symlink         Suppress symlink creation regardless of dir.
@@ -51,7 +51,7 @@ set -euo pipefail
 # Defaults + flag parsing
 # --------------------------------------------------------------------
 
-readonly DEFAULT_INSTALL_ROOT="${HOME}/.claude-director"
+readonly DEFAULT_INSTALL_ROOT="${HOME}/.agent-director"
 readonly DEFAULT_BIN_DIR="${DEFAULT_INSTALL_ROOT}/bin"
 readonly DEFAULT_SETTINGS_PATH="${HOME}/.claude/settings.json"
 
@@ -68,7 +68,7 @@ KEEP_PRIOR=0
 
 # GitHub repo slug used by --from-release. Matches go.mod's module path
 # and the release.sh asset naming.
-readonly RELEASE_REPO_SLUG="gabemahoney/claude-director"
+readonly RELEASE_REPO_SLUG="gabemahoney/agent-director"
 
 # Pick a sensible default symlink dir: ~/.local/bin if on PATH.
 if printf '%s' ":${PATH}:" | grep -q ":${HOME}/.local/bin:"; then
@@ -181,7 +181,7 @@ if [[ "$FROM_RELEASE" -eq 1 ]]; then
             echo "install.sh: --from-release: unsupported arch $(uname -m)" >&2
             exit 3 ;;
     esac
-    asset="claude-director-${rel_os}-${rel_arch}"
+    asset="agent-director-${rel_os}-${rel_arch}"
 
     # Resolve the tag if the operator didn't supply one. Prefer `gh`
     # (carries the operator's auth, avoids the unauthenticated API
@@ -207,7 +207,7 @@ if [[ "$FROM_RELEASE" -eq 1 ]]; then
     echo "  release : $RELEASE_REPO_SLUG @ $FROM_RELEASE_TAG ($asset)"
 
     asset_url="https://github.com/${RELEASE_REPO_SLUG}/releases/download/${FROM_RELEASE_TAG}/${asset}"
-    tmp_bin="$(mktemp -t claude-director.XXXXXX)"
+    tmp_bin="$(mktemp -t agent-director.XXXXXX)"
     # Defer-cleanup the tempfile on any exit path that doesn't move
     # past the BINARY_SRC assignment. install -m 0755 later in the
     # script copies the contents into place, so the tempfile being
@@ -253,18 +253,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERSION_CHECK_REQUIRED=1
 
 if [[ -z "$BINARY_SRC" ]]; then
-    # Prefer the in-repo build (skills/install-claude-director sits two
+    # Prefer the in-repo build (skills/install-agent-director sits two
     # levels under the repo root; bin/ is at the root).
-    candidate="${SCRIPT_DIR}/../../bin/claude-director"
+    candidate="${SCRIPT_DIR}/../../bin/agent-director"
     if [[ -x "$candidate" ]]; then
         BINARY_SRC="$candidate"
-    elif command -v claude-director >/dev/null 2>&1; then
-        BINARY_SRC="$(command -v claude-director)"
+    elif command -v agent-director >/dev/null 2>&1; then
+        BINARY_SRC="$(command -v agent-director)"
         VERSION_CHECK_REQUIRED=0
     else
         echo "install.sh: no source binary found." >&2
         echo "  Tried: $candidate" >&2
-        echo "  Tried: command -v claude-director" >&2
+        echo "  Tried: command -v agent-director" >&2
         echo "  Pass --binary <path> to override." >&2
         exit 3
     fi
@@ -279,7 +279,7 @@ echo "  source  : $BINARY_SRC"
 # Source-tree version check
 #
 # When the operator points install.sh at a local binary (either via
-# --binary or via the in-repo ./bin/claude-director fallback) AND
+# --binary or via the in-repo ./bin/agent-director fallback) AND
 # install.sh itself lives inside a git checkout, refuse to install a
 # binary whose embedded commit doesn't match the checkout's HEAD.
 # Catches the "operator forgot to `make build` after pulling new
@@ -363,7 +363,7 @@ chmod 0755 "$DEFAULT_BIN_DIR"
 # actually manage multiple concurrent versions; we don't.
 # --------------------------------------------------------------------
 
-CANONICAL="${DEFAULT_BIN_DIR}/claude-director"
+CANONICAL="${DEFAULT_BIN_DIR}/agent-director"
 PRIOR="${CANONICAL}.prior"
 TMP="${CANONICAL}.tmp.$$"
 
@@ -389,7 +389,7 @@ if [[ "$NO_SYMLINK" -eq 0 && -n "$SYMLINK_DIR" ]]; then
     elif [[ "$SYMLINK_DIR" =~ [[:space:]] ]]; then
         echo "  symlink : skipped — $SYMLINK_DIR contains whitespace"
     else
-        target="${SYMLINK_DIR}/claude-director"
+        target="${SYMLINK_DIR}/agent-director"
         ln -sfn "$CANONICAL" "${target}.new"
         mv -f "${target}.new" "$target"
         echo "  symlink : $target → $CANONICAL"
@@ -397,7 +397,7 @@ if [[ "$NO_SYMLINK" -eq 0 && -n "$SYMLINK_DIR" ]]; then
 fi
 
 # --------------------------------------------------------------------
-# Warm up state.db via `claude-director help`
+# Warm up state.db via `agent-director help`
 # --------------------------------------------------------------------
 
 if "$CANONICAL" help >/dev/null 2>&1; then
@@ -407,7 +407,7 @@ if "$CANONICAL" help >/dev/null 2>&1; then
         echo "  state.db: $(stat -c '%a' "$state_db" 2>/dev/null || stat -f '%Lp' "$state_db") at $state_db"
     fi
 else
-    echo "install.sh: store warmup (claude-director help) failed" >&2
+    echo "install.sh: store warmup (agent-director help) failed" >&2
     exit 5
 fi
 
@@ -487,7 +487,7 @@ fi
 #
 # Driven by the same Q4 (inject persistent help hooks?) signal: when
 # the operator picked "yes" (i.e. did NOT pass --no-hooks),
-# claude-director should also tag its own Spawns with a help hook
+# agent-director should also tag its own Spawns with a help hook
 # regardless of the Spawn's CLAUDE_CONFIG_DIR. install.sh sets the
 # flag here; the binary reads it at spawn-synth time.
 #
@@ -550,7 +550,7 @@ fi
 # --------------------------------------------------------------------
 
 if [[ "$REGISTER_MCP" -eq 1 ]]; then
-    if claude mcp add claude-director "$CANONICAL" serve --stdio 2>/dev/null; then
+    if claude mcp add agent-director "$CANONICAL" serve --stdio 2>/dev/null; then
         echo "  mcp     : registered with claude mcp"
     else
         echo "  mcp     : registration failed (continuing anyway)" >&2

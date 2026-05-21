@@ -1,7 +1,7 @@
 ---
 id: b.75s
 type: bee
-title: Test plans for claude-director
+title: Test plans for agent-director
 parent: null
 children:
 - t1.75s.95

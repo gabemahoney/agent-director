@@ -1,8 +1,8 @@
 package spawn
 
 import (
-	"github.com/gabemahoney/claude-director/internal/config"
-	"github.com/gabemahoney/claude-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // RelaunchInput captures the SRD §8.1 inputs Resume needs to relaunch
@@ -47,7 +47,7 @@ func Relaunch(in RelaunchInput, tmuxClient TmuxClient, cfg config.Config) error 
 		TmuxSessionName:      in.Row.TmuxSessionName,
 		RelayMode:            in.Row.RelayMode,
 		ClaudeArgs:           in.Row.ClaudeArgs,
-		ClaudeDirectorLabels: in.Row.Labels,
+		AgentDirectorLabels: in.Row.Labels,
 	}}
 
 	envs := composeEnv(r)

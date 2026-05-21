@@ -1,4 +1,4 @@
-// Command claude-director is the CLI entrypoint for the claude-director tool.
+// Command agent-director is the CLI entrypoint for the agent-director tool.
 //
 // This file provides the argv dispatch skeleton and the startup wiring that
 // every invocation performs (config load + store open). Real verb handlers
@@ -15,10 +15,10 @@ import (
 	"log"
 	"os"
 
-	"github.com/gabemahoney/claude-director/internal/api"
-	"github.com/gabemahoney/claude-director/internal/config"
-	"github.com/gabemahoney/claude-director/internal/hook"
-	"github.com/gabemahoney/claude-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/api"
+	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/hook"
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // errorEnvelope is the JSON shape emitted on stderr for CLI-level errors.
@@ -45,7 +45,7 @@ const (
 var errDispatch = errors.New("dispatch error")
 
 // configPath is the canonical TOML config location.
-const configPath = "~/.claude-director/config.toml"
+const configPath = "~/.agent-director/config.toml"
 
 // handlers maps verb names to their implementations. `help` and `--help`
 // route to the same function so their stdout is byte-identical (SRD §12.3).
@@ -93,7 +93,7 @@ const hookExitCode = 0
 // unreachable) yields exit 0 with empty stdout (state-tracking) or a
 // deny envelope (relay-on per SRD §6.4 fail-closed boundary).
 //
-// The relay-active determination is made FROM ENV (CLAUDE_DIRECTOR_RELAY_MODE)
+// The relay-active determination is made FROM ENV (AGENT_DIRECTOR_RELAY_MODE)
 // before any disk I/O — SRD §6.5 — so even a store-open failure on a
 // relay-on Spawn still emits a valid deny envelope.
 //
@@ -143,18 +143,18 @@ func runHook() int {
 func newHookLogger() *log.Logger {
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		return log.New(os.Stderr, "claude-director-hook ", log.LstdFlags)
+		return log.New(os.Stderr, "agent-director-hook ", log.LstdFlags)
 	}
 	if cfg.Log.ErrorLogPath == "" {
-		return log.New(os.Stderr, "claude-director-hook ", log.LstdFlags)
+		return log.New(os.Stderr, "agent-director-hook ", log.LstdFlags)
 	}
 	f, err := os.OpenFile(cfg.Log.ErrorLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
-		return log.New(os.Stderr, "claude-director-hook ", log.LstdFlags)
+		return log.New(os.Stderr, "agent-director-hook ", log.LstdFlags)
 	}
 	// Best-effort: the file is intentionally leaked for the lifetime of
 	// the hook fire (short-lived process; the OS reclaims the fd on exit).
-	return log.New(f, "claude-director-hook ", log.LstdFlags)
+	return log.New(f, "agent-director-hook ", log.LstdFlags)
 }
 
 // hookLog is a small wrapper so the hook code path uses one log-line
@@ -249,7 +249,7 @@ func dispatch(argv []string, table map[string]func([]string) error) error {
 	handler, ok := table[verb]
 	if !ok {
 		if werr := writeError(os.Stderr, errUnknownVerb,
-			fmt.Sprintf("unknown verb %q; try 'claude-director help'", verb)); werr != nil {
+			fmt.Sprintf("unknown verb %q; try 'agent-director help'", verb)); werr != nil {
 			return werr
 		}
 		return errDispatch

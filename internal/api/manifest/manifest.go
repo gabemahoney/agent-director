@@ -1,4 +1,4 @@
-// Package manifest is the single source of truth for the claude-director
+// Package manifest is the single source of truth for the agent-director
 // CLI/MCP verb surface.
 //
 // Each VerbDef entry records a verb's name, description, parameters, result
@@ -13,9 +13,9 @@
 // dependencies flow downward toward internal/store, never sideways or up.
 package manifest
 
-//go:generate go run github.com/gabemahoney/claude-director/tools/gen-docs
+//go:generate go run github.com/gabemahoney/agent-director/tools/gen-docs
 
-// VerbDef describes one CLI/MCP verb exposed by claude-director.
+// VerbDef describes one CLI/MCP verb exposed by agent-director.
 type VerbDef struct {
 	Name         string
 	Description  string
@@ -70,7 +70,7 @@ var Verbs = []VerbDef{
 			{
 				Name:        "template",
 				Type:        "string",
-				Description: "Optional named template under ~/.claude-director/templates/. Per-call params layer on top per SRD §7.1 (scalars replace; maps merge; permissions arrays concat; claude_args replaces wholesale).",
+				Description: "Optional named template under ~/.agent-director/templates/. Per-call params layer on top per SRD §7.1 (scalars replace; maps merge; permissions arrays concat; claude_args replaces wholesale).",
 			},
 			{
 				Name:        "claude_instance_id",
@@ -80,7 +80,7 @@ var Verbs = []VerbDef{
 			{
 				Name:        "label",
 				Type:        "[]string (k=v)",
-				Description: "Repeated KEY=VALUE pairs. Each becomes CLAUDE_DIRECTOR_LABEL_<UPPER_KEY> on the session env and persists in labels.",
+				Description: "Repeated KEY=VALUE pairs. Each becomes AGENT_DIRECTOR_LABEL_<UPPER_KEY> on the session env and persists in labels.",
 			},
 			{
 				Name:        "allow",
@@ -105,7 +105,7 @@ var Verbs = []VerbDef{
 			{
 				Name:        "extra-env",
 				Type:        "[]string (K=V)",
-				Description: "Repeated KEY=VALUE pairs injected on the tmux session env. Reserved keys (CLAUDE_DIRECTOR_*) rejected; auth env vars (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN) allowed.",
+				Description: "Repeated KEY=VALUE pairs injected on the tmux session env. Reserved keys (AGENT_DIRECTOR_*) rejected; auth env vars (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN) allowed.",
 			},
 			{
 				Name:        "claude_args",
@@ -184,7 +184,7 @@ var Verbs = []VerbDef{
 		},
 		ResultFields: []FieldDef{
 			{Name: "claude_instance_id", Type: "string", Description: "Stable id of the Spawn."},
-			{Name: "parent_id", Type: "string", Description: "Parent Spawn id (CLAUDE_DIRECTOR_INSTANCE_ID env at spawn time), empty when launched by a human shell."},
+			{Name: "parent_id", Type: "string", Description: "Parent Spawn id (AGENT_DIRECTOR_INSTANCE_ID env at spawn time), empty when launched by a human shell."},
 			{Name: "state", Type: "string", Description: "Current state column value."},
 			{Name: "cwd", Type: "string", Description: "Canonicalized cwd."},
 			{Name: "tmux_session_name", Type: "string", Description: "tmux session under which the Spawn is running."},
@@ -311,7 +311,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "resume",
-		Description: "Bring a terminated (ended/missing) Spawn back to life via `claude --resume`. Same claude_instance_id, fresh tmux session, same JSONL transcript. parent_id is re-derived from the caller's CLAUDE_DIRECTOR_INSTANCE_ID env var on every resume.",
+		Description: "Bring a terminated (ended/missing) Spawn back to life via `claude --resume`. Same claude_instance_id, fresh tmux session, same JSONL transcript. parent_id is re-derived from the caller's AGENT_DIRECTOR_INSTANCE_ID env var on every resume.",
 		Params: []ParamDef{
 			{
 				Name:        "claude_instance_id",
@@ -378,7 +378,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "make-template",
-		Description: "Save a reusable spawn preset. The TOML file lands under ~/.claude-director/templates/<name>.toml; spawn --template <name> applies it. Reserved per-invocation params (template, claude_instance_id, tmux_session_name) are NOT accepted.",
+		Description: "Save a reusable spawn preset. The TOML file lands under ~/.agent-director/templates/<name>.toml; spawn --template <name> applies it. Reserved per-invocation params (template, claude_instance_id, tmux_session_name) are NOT accepted.",
 		Params: []ParamDef{
 			{
 				Name:        "name",
@@ -500,7 +500,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "serve",
-		Description: "Start the stdio MCP server. Long-lived process that exposes every other verb as an MCP tool over JSON-RPC on stdin/stdout. Typically registered with `claude mcp add claude-director <binary-path> serve --stdio`.",
+		Description: "Start the stdio MCP server. Long-lived process that exposes every other verb as an MCP tool over JSON-RPC on stdin/stdout. Typically registered with `claude mcp add agent-director <binary-path> serve --stdio`.",
 		Params: []ParamDef{
 			{
 				Name:        "stdio",

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/gabemahoney/claude-director/internal/api"
+	"github.com/gabemahoney/agent-director/internal/api"
 )
 
 // TestParamsStructsDecodeSnakeCaseJSON pins the MCP-side wire contract:

@@ -1,8 +1,8 @@
-# Driver-Claude prompt — claude-director Docker test harness
+# Driver-Claude prompt — agent-director Docker test harness
 
-You are the *driver Claude* for the claude-director Docker test harness. The
+You are the *driver Claude* for the agent-director Docker test harness. The
 operator runs `make test-docker EPIC=<n>` on the host; the host builds an
-image with `claude` (pinned 2.1.120), the `claude-director` binary, `tmux`,
+image with `claude` (pinned 2.1.120), the `agent-director` binary, `tmux`,
 `jq`, and `sqlite3`; you are launched inside that container with this prompt
 followed by one t2 case body.
 
@@ -11,9 +11,9 @@ followed by one t2 case body.
 1. Read the t2 case body. Each `t2.*.md` file is plain English: a Setup
    section, a Steps section, and a Pass criteria section. Treat it as your
    spec.
-2. Execute the steps yourself, calling shell tools (`bash`, `claude-director`,
+2. Execute the steps yourself, calling shell tools (`bash`, `agent-director`,
    `sqlite3`, `jq`) as needed. The container's working dir is `/home/tester`,
-   HOME is `/home/tester`, and `claude-director` is on PATH.
+   HOME is `/home/tester`, and `agent-director` is on PATH.
 3. Decide pass or fail strictly against the t2's "Pass criteria" section. Do
    not approve a case whose criteria you could not actually verify.
 4. Emit your verdict as a single JSON object — your final stop output — in
@@ -35,7 +35,7 @@ followed by one t2 case body.
   driver Claude would consume API credit and loop.
 - Do not modify the testplan files. They are mounted read-only.
 - The DB-reset fixture (`/opt/driver/db-reset.sh`) runs *before* you start.
-  You inherit a clean `~/.claude-director/state.db`. If a case asks for an
+  You inherit a clean `~/.agent-director/state.db`. If a case asks for an
   empty DB as a precondition, that is already true.
 
 ## Audit context

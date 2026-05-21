@@ -1,4 +1,4 @@
-# claude-director — Architecture
+# agent-director — Architecture
 
 ## What it is
 
@@ -10,17 +10,17 @@ A single Go binary that:
 
 ## Surfaces
 
-- **CLI** — `claude-director <verb> ...` for every verb in
+- **CLI** — `agent-director <verb> ...` for every verb in
   `internal/api/manifest`. See `docs/cli-reference.md` for the canonical
   list.
 - **Hook entrypoint** — the same binary invoked by Claude Code on hook events (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, Notification, SessionEnd, PermissionRequest).
-- **Stdio MCP server** — same binary invoked as `claude-director serve --stdio`. Stdio transport, lifetime scoped to a single Claude Code session.
+- **Stdio MCP server** — same binary invoked as `agent-director serve --stdio`. Stdio transport, lifetime scoped to a single Claude Code session.
 
 ## Data
 
-- SQLite at `~/.claude-director/state.db` for spawn state, parent/child links, permission requests, and labels.
-- TOML config at `~/.claude-director/config.toml`.
-- Templates as plain files in `~/.claude-director/templates/`.
+- SQLite at `~/.agent-director/state.db` for spawn state, parent/child links, permission requests, and labels.
+- TOML config at `~/.agent-director/config.toml`.
+- Templates as plain files in `~/.agent-director/templates/`.
 
 See the SRD (Apiary Ideas hive: `t1.jus.x5`) for the full design.
 
@@ -35,9 +35,9 @@ Nothing flows back upward and nothing skips a layer.
 
 | Path | Responsibility | Allowed imports | Prohibited imports |
 | --- | --- | --- | --- |
-| `cmd/claude-director` | CLI entrypoint: argv dispatch, exit codes, JSON error envelopes. Wires `internal/config` and `internal/api/*` into runnable verbs. | stdlib; any `internal/api/*`; `internal/config`; `internal/store` only via constructor wiring. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management that bypasses `internal/api`. |
+| `cmd/agent-director` | CLI entrypoint: argv dispatch, exit codes, JSON error envelopes. Wires `internal/config` and `internal/api/*` into runnable verbs. | stdlib; any `internal/api/*`; `internal/config`; `internal/store` only via constructor wiring. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management that bypasses `internal/api`. |
 | `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v1 per SRD §4.2), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `internal/api/*`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
-| `internal/config` | Loads, validates, and serves the TOML config at `~/.claude-director/config.toml`. Read-only after load. | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `internal/api/*`; `cmd/*`. |
+| `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `internal/api/*`; `cmd/*`. |
 | `internal/api` | Stable verb-handler surface used by CLI + MCP + hooks. Typed Go functions only — no SQL, no MCP framing. | stdlib; `internal/api/manifest`; (later) `internal/store` and `internal/config`. | Raw SQL; MCP framing; hook IO. |
 | `internal/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. | stdlib only — leaf package. | `internal/store`, `internal/config`, `internal/api/*` (other than this package), `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
 | `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). Builds env maps, synthesizes `--settings` JSON, and asks `internal/tmux` to start the session. Inserts the `pending` row via `internal/store`. | stdlib; `internal/config`; `internal/store`; `internal/tmux`; `github.com/google/uuid` for UUID4 minting. | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
@@ -79,7 +79,7 @@ source of truth for which schema this binary expects. On `Open`:
 and `foreign_keys=ON` are applied via DSN PRAGMAs and verified after open;
 a silent downgrade fails `Open` rather than yielding a half-broken Store.
 
-**File-system contract.** The parent directory (`~/.claude-director/` by
+**File-system contract.** The parent directory (`~/.agent-director/` by
 default) is created with mode 0700, and the database file is chmodded to
 0600 on every `Open`. Repeated opens never widen permissions. A leading
 `~/` in the path is expanded against `os/user.Current().HomeDir`.
@@ -104,7 +104,7 @@ A package-level `var Verbs []VerbDef` holds the ordered registry, and
 
 **Consumers of `Verbs`.**
 
-1. CLI dispatch table in `cmd/claude-director/main.go`.
+1. CLI dispatch table in `cmd/agent-director/main.go`.
 2. MCP tool schema served in `mcp` mode (Epic 11).
 3. Generated reference docs `docs/cli-reference.md` and
    `docs/mcp-reference.md`, written by `tools/gen-docs`.
@@ -122,7 +122,7 @@ gate re-runs `go generate` and fails if any tracked file changes.
    typed result struct out, returning a Go `error`). Keep SQL inside
    `internal/store`; the handler calls store primitives.
 3. Wire the verb into the CLI dispatch map in
-   `cmd/claude-director/main.go` so argv routes to the new handler.
+   `cmd/agent-director/main.go` so argv routes to the new handler.
 4. Run `make generate` to regenerate `docs/cli-reference.md` and
    `docs/mcp-reference.md` from the manifest.
 5. Verify idempotency: re-run `make generate` and confirm `git status`
@@ -152,7 +152,7 @@ See `docs/cli-reference.md` and `docs/mcp-reference.md` — auto-generated; do n
 
 ```
                 +-------------------------+
-                |   cmd/claude-director   |
+                |   cmd/agent-director   |
                 |   (CLI dispatch, exit   |
                 |    codes, JSON errors)  |
                 +-----------+-------------+
@@ -331,7 +331,7 @@ call.
 When `defaults.inject_help_hook = true` is set in `config.toml`,
 stage 4 also appends a second `SessionStart` entry to the synthesized
 `--settings`: a single `command` of
-`~/.claude-director/bin/claude-director help` (post `~` expansion).
+`~/.agent-director/bin/agent-director help` (post `~` expansion).
 This mirrors the static hook `install.sh` writes into
 `~/.claude/settings.json`, but routes through `--settings` instead of
 disk so a Spawn whose `CLAUDE_CONFIG_DIR` is fresh (or otherwise
@@ -342,7 +342,7 @@ The flag is off by default; the install dialog's Q4 toggles both halves
 together — `Q4=yes` writes the static `settings.json` hook *and* sets
 the config flag; `Q4=no` (`install.sh --no-hooks`) leaves both
 unchanged. The hook command is the absolute install path rather than
-a bare `claude-director` because the spawned Claude's PATH may not
+a bare `agent-director` because the spawned Claude's PATH may not
 include `~/.local/bin` and the hook fires before any shell-rc
 manipulation can run.
 
@@ -448,14 +448,14 @@ creation time so the Spawn's own shell can introspect its labels and
 child processes can inherit them. Each entry becomes:
 
 ```
-CLAUDE_DIRECTOR_LABEL_<NORMALIZED_KEY> = <value>
+AGENT_DIRECTOR_LABEL_<NORMALIZED_KEY> = <value>
 ```
 
 where `<NORMALIZED_KEY>` is the caller key uppercased with every
 non-alphanumeric rune replaced by `_` (SRD §7.2 step 5). The
 transformation is **unidirectional** — the env-var name does not
 need to round-trip back to the DB key. A key like `my-key` produces
-env `CLAUDE_DIRECTOR_LABEL_MY_KEY=val` while the DB row keeps
+env `AGENT_DIRECTOR_LABEL_MY_KEY=val` while the DB row keeps
 `"my-key":"val"` verbatim.
 
 ### Hooks do NOT mutate labels
@@ -474,7 +474,7 @@ column. Labels live in their own data plane:
 `parent_id` is auto-derived alongside labels at spawn time, but lives
 on its own column:
 
-- `internal/spawn/launch.go` reads `os.Getenv("CLAUDE_DIRECTOR_INSTANCE_ID")`
+- `internal/spawn/launch.go` reads `os.Getenv("AGENT_DIRECTOR_INSTANCE_ID")`
   in the spawning process.
 - If set, that value is written to the new row's `parent_id`.
 - If unset (operator running from a plain shell), `parent_id` is NULL.
@@ -487,17 +487,17 @@ map a tree by recursive listings.
 
 ## Install layout
 
-The `skills/install-claude-director/` skill (Epic 12) lays out the
+The `skills/install-agent-director/` skill (Epic 12) lays out the
 on-disk install so an operator can run, upgrade, and uninstall
-claude-director with one script.
+agent-director with one script.
 
 ### On-disk shape
 
 ```
-~/.claude-director/
+~/.agent-director/
 ├── bin/
-│   ├── claude-director            (the binary; regular file, mode 0755)
-│   └── claude-director.prior      (optional rollback snapshot; --keep-prior)
+│   ├── agent-director            (the binary; regular file, mode 0755)
+│   └── agent-director.prior      (optional rollback snapshot; --keep-prior)
 ├── state.db                       (mode 0600)
 ├── state.db-wal                   (when WAL is active)
 ├── state.db-shm
@@ -506,7 +506,7 @@ claude-director with one script.
 ├── config.toml                    (operator-owned; not created here)
 └── errors.log                     (touched on first hook-fire failure)
 
-~/.local/bin/claude-director       → ~/.claude-director/bin/claude-director   (optional)
+~/.local/bin/agent-director       → ~/.agent-director/bin/agent-director   (optional)
 
 ~/.claude/settings.json
 └── hooks
@@ -523,13 +523,13 @@ the inode level — concurrent readers see either the old binary or
 the new, never half. A running process holds the old inode, so an
 in-flight exec is unaffected by the swap.
 
-1. Write the new binary at `claude-director.tmp.$$` next to the
+1. Write the new binary at `agent-director.tmp.$$` next to the
    target.
 2. `chmod 0755` the temp file.
-3. `mv` it onto `claude-director`.
+3. `mv` it onto `agent-director`.
 
 Optional `--keep-prior` snapshots the existing binary to
-`claude-director.prior` before step 3, giving a one-step rollback
+`agent-director.prior` before step 3, giving a one-step rollback
 (`mv .prior canonical`). Without it, rollback is a re-install of the
 previous tag via `install.sh --from-release v<old>`. The
 version-manager pattern (canonical symlink → versioned files) was
@@ -544,22 +544,22 @@ legacy versioned-binary siblings left over from pre-b.43y installs),
 the optional PATH symlink, and the two hook entries it injected
 (matched by the install root prefix in their command string). Other
 user hooks in `SessionStart` / `SessionEnd` survive verbatim.
-`~/.claude-director/` itself is preserved by default — operators
+`~/.agent-director/` itself is preserved by default — operators
 frequently want to keep templates and state.db across reinstalls.
 
 `--purge` is the explicit nuke path: a full `rm -rf
-~/.claude-director` with an interactive confirmation
+~/.agent-director` with an interactive confirmation
 (`--force` skips the prompt). State, templates, and any local
 edits to `config.toml` are lost.
 
 ### ErrSchemaMismatch recovery
 
-v1 has no migration story (SRD §19 Q11). If `claude-director help`
+v1 has no migration story (SRD §19 Q11). If `agent-director help`
 reports `ErrSchemaMismatch` after an upgrade, the recovery is
-`rm ~/.claude-director/state.db*` followed by a re-run. Spawn
+`rm ~/.agent-director/state.db*` followed by a re-run. Spawn
 history in the DB is lost; JSONL transcripts under
 `~/.claude/projects/` survive independently and can be re-resumed
-by id (the operator's notes) via `claude-director resume`.
+by id (the operator's notes) via `agent-director resume`.
 
 ## Stdio MCP server
 
@@ -567,7 +567,7 @@ The MCP server is the JSON-RPC-over-stdio surface
 (`internal/mcp`). It exposes every CLI verb as an MCP tool so an
 MCP-capable LLM client can drive Spawns without going through the
 shell. The server is **long-lived** per SRD §3.3: config is loaded
-once at startup; in-flight edits to `~/.claude-director/config.toml`
+once at startup; in-flight edits to `~/.agent-director/config.toml`
 don't take effect until the next `serve --stdio` invocation.
 
 ### Drift-free schema generation
@@ -667,11 +667,11 @@ part for v1; richer types (resource URIs, images) are out of scope.
 ### Registration
 
 ```sh
-claude mcp add claude-director /path/to/claude-director serve --stdio
+claude mcp add agent-director /path/to/agent-director serve --stdio
 ```
 
 Claude Code stores this in its MCP config and launches the binary
-on session start. The binary's `~/.claude-director/config.toml` is
+on session start. The binary's `~/.agent-director/config.toml` is
 the same one the CLI uses; SRD §3.3 says edits take effect on the
 next session.
 
@@ -681,11 +681,11 @@ Orchestrators can intercept tool permission requests from Spawns and
 decide allow/deny out-of-band. Conceptually:
 
 ```
-  Claude Code ─PermissionRequest hook→ claude-director hook (polling)
+  Claude Code ─PermissionRequest hook→ agent-director hook (polling)
                                             ↑
                                             │ writes decision
                                             │
-                        orchestrator → claude-director decide
+                        orchestrator → agent-director decide
 ```
 
 ### Components
@@ -705,7 +705,7 @@ decide allow/deny out-of-band. Conceptually:
   write the envelope. Always emits an envelope before returning.
 
 - **`internal/hook/handler.go`** — branches into `runRelay` when the
-  event is `PermissionRequest` AND `CLAUDE_DIRECTOR_RELAY_MODE=on`.
+  event is `PermissionRequest` AND `AGENT_DIRECTOR_RELAY_MODE=on`.
   Every pre-relay failure path emits a deny envelope when relay is
   active (SRD §6.4).
 
@@ -775,7 +775,7 @@ mutation, no half-created tmux session):
 5. Canonical tmux session name is free → otherwise the wrapped
    `tmux.ErrTmuxSessionCreate` sentinel. Resume does NOT auto-kill
    a stale session; the operator cleans up manually.
-6. Re-derive `parent_id` from caller's `CLAUDE_DIRECTOR_INSTANCE_ID`
+6. Re-derive `parent_id` from caller's `AGENT_DIRECTOR_INSTANCE_ID`
    env (NULL when unset). The DB write happens **before** the tmux
    launch — if launch fails, the parent stamp is a harmless stale
    value the next retry will overwrite.
@@ -854,7 +854,7 @@ All three are designed to run on cron at different cadences.
 
 ### Probe layer (`internal/probe`)
 
-The prober answers one question: *which `CLAUDE_DIRECTOR_INSTANCE_ID`
+The prober answers one question: *which `AGENT_DIRECTOR_INSTANCE_ID`
 values are currently observable in live process env blocks?* It is
 the ground truth `find-missing` diffs against the DB.
 
@@ -926,7 +926,7 @@ case is distinguished and treated as a fast no-op success.
 The verb does NOT touch tmux. A row marked `missing` may still have
 an orphaned tmux session if (somehow) the env-var check misfired
 without the tmux process exiting. The operator clears those manually;
-`claude-director kill` is the supported path.
+`agent-director kill` is the supported path.
 
 ### `expire`
 
@@ -1017,7 +1017,7 @@ reconciliation path. The flow:
 
 ### Supported platforms
 
-claude-director ships as four pre-built static binaries, one per
+agent-director ships as four pre-built static binaries, one per
 target tuple:
 
 | OS | Arch | Format | Static |
@@ -1036,11 +1036,11 @@ linkage on every release via `ldd` ("not a dynamic executable").
 
 ### Semver policy
 
-claude-director uses strict `vMAJOR.MINOR.PATCH` semantic
+agent-director uses strict `vMAJOR.MINOR.PATCH` semantic
 versioning. For v1:
 
 - **MAJOR**: bumped on any wire-shape change to the CLI JSON
-  envelope, the MCP tool schemas, or `~/.claude-director/config.toml`.
+  envelope, the MCP tool schemas, or `~/.agent-director/config.toml`.
   Operators script against these surfaces; we don't break them
   without a major.
 - **MINOR**: new verbs, new manifest entries, new config knobs.
@@ -1053,8 +1053,8 @@ toward a release happens on a branch; the tag lands once.
 
 ### The release skill
 
-`skills/release-claude-director/release.sh` automates the workflow
-documented in `skills/release-claude-director/SKILL.md`. Behavior:
+`skills/release-agent-director/release.sh` automates the workflow
+documented in `skills/release-agent-director/SKILL.md`. Behavior:
 
 1. Validate the semver tag.
 2. Verify `gh` (GitHub CLI) is authenticated.
@@ -1077,10 +1077,10 @@ v1 has no migration story (SRD §19 Q11). Bumping `schemaVersion`
 in `internal/store/store.go` requires:
 
 1. Document the schema change in the release notes.
-2. Tell operators to `rm ~/.claude-director/state.db*` post-upgrade.
+2. Tell operators to `rm ~/.agent-director/state.db*` post-upgrade.
 3. Active Spawns whose JSONL transcripts under
    `~/.claude/projects/` are still on disk can be re-resumed by id
-   via `claude-director resume`.
+   via `agent-director resume`.
 
 ## Test Harness
 
@@ -1089,19 +1089,19 @@ than `go test ./...`.
 
 ### Container
 
-`test/Dockerfile` builds `claude-director-test`:
+`test/Dockerfile` builds `agent-director-test`:
 
 - Base: `debian:bookworm-slim`.
 - Installs `tmux`, `nodejs` 20, `jq`, `sqlite3`, `git`.
 - Installs `@anthropic-ai/claude-code@<pinned>` (see "Pinned Claude Code
   version" below).
-- Copies in the pre-built `claude-director` binary from `./bin/`.
+- Copies in the pre-built `agent-director` binary from `./bin/`.
 - Runs as a non-root `tester` user with `HOME=/home/tester`.
 - Default command is `/opt/driver/run-testplan.sh`.
 
 The image is built via `make test-image`. `make test-image-smoke` exercises
 it standalone: confirms `claude --version` reports the pinned version,
-`claude-director help` exits 0, and the driver rejects an unknown EPIC.
+`agent-director help` exits 0, and the driver rejects an unknown EPIC.
 
 ### Driver
 
@@ -1115,8 +1115,8 @@ it standalone: confirms `claude --version` reports the pinned version,
    basename sort would scramble paired cases (e.g. the smoke-2 / smoke-3
    DB-isolation pair) — `children:` preserves authoring order.
 3. Before each t2 case, the driver invokes `test/driver/db-reset.sh`: it
-   removes `~/.claude-director/state.db` + WAL/SHM, kills tmux sessions
-   matching the `cd-` prefix, then calls `claude-director help` to
+   removes `~/.agent-director/state.db` + WAL/SHM, kills tmux sessions
+   matching the `cd-` prefix, then calls `agent-director help` to
    rebuild schema v1.
 4. For each case, the driver runs in one of two modes:
    - `DRIVER_MODE=shell` (default) — extracts the t2 body's fenced

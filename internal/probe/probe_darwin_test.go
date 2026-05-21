@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gabemahoney/claude-director/internal/probe"
+	"github.com/gabemahoney/agent-director/internal/probe"
 )
 
 // TestDarwinProberFindsLiveID is the darwin counterpart of the Linux

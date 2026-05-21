@@ -4,16 +4,16 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/gabemahoney/claude-director/internal/config"
-	"github.com/gabemahoney/claude-director/internal/spawn"
-	"github.com/gabemahoney/claude-director/internal/store"
-	"github.com/gabemahoney/claude-director/internal/tmux"
+	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/spawn"
+	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
 // resumeEnvInstanceID is the env-var key resume reads to re-derive
 // parent_id (SRD §7.5). Mirrored verbatim from spawn's constant of
 // the same name; both refer to the same operational concept.
-const resumeEnvInstanceID = "CLAUDE_DIRECTOR_INSTANCE_ID"
+const resumeEnvInstanceID = "AGENT_DIRECTOR_INSTANCE_ID"
 
 // ResumeStore is the narrow store surface Resume needs.
 type ResumeStore interface {

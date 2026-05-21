@@ -17,7 +17,7 @@ import (
 // own algorithm. A "future cleanup" that unifies this with the tmux
 // session-name sanitizer (SanitizeSessionName, which preserves `_`)
 // would break resume — the on-disk JSONL path is determined by Claude
-// Code itself, not by claude-director, so any divergence makes the
+// Code itself, not by agent-director, so any divergence makes the
 // resume pre-flight Stat fail. The asymmetry is intentional.
 //
 // JsonlPath does NOT touch the filesystem; it only composes the path.

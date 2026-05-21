@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gabemahoney/claude-director/internal/spawn"
+	"github.com/gabemahoney/agent-director/internal/spawn"
 )
 
 // stringSliceValue implements flag.Value for repeated --flag X / --flag X

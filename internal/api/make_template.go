@@ -9,7 +9,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/gabemahoney/claude-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/config"
 )
 
 // MakeTemplateParams is the typed parameter shape for the
@@ -22,7 +22,7 @@ type MakeTemplateParams struct {
 	RelayMode            string
 	ClaudeArgs           []string
 	ExtraEnv             map[string]string
-	ClaudeDirectorLabels map[string]string
+	AgentDirectorLabels map[string]string
 	Permissions          *MakeTemplatePermissions
 }
 
@@ -43,7 +43,7 @@ type MakeTemplateResult struct {
 	Path string `json:"path"`
 }
 
-// MakeTemplate writes a new template to ~/.claude-director/templates/.
+// MakeTemplate writes a new template to ~/.agent-director/templates/.
 // Behavior (SRD §10):
 //
 //   - Name safety: validated via config.ValidateTemplateName.
@@ -74,7 +74,7 @@ func MakeTemplate(params MakeTemplateParams) (MakeTemplateResult, error) {
 		RelayMode:            params.RelayMode,
 		ClaudeArgs:           params.ClaudeArgs,
 		ExtraEnv:             params.ExtraEnv,
-		ClaudeDirectorLabels: params.ClaudeDirectorLabels,
+		AgentDirectorLabels: params.AgentDirectorLabels,
 	}
 	if params.Permissions != nil {
 		file.Permissions = &config.TemplatePermissions{

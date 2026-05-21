@@ -9,14 +9,14 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/gabemahoney/claude-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/config"
 )
 
-// CLAUDE_DIRECTOR_RELAY_MODE env-var values per SRD §6.5. The hook
+// AGENT_DIRECTOR_RELAY_MODE env-var values per SRD §6.5. The hook
 // reads this from the process env (NOT the DB) so a DB-unreachable
 // failure still surfaces the right boundary.
 const (
-	EnvRelayMode = "CLAUDE_DIRECTOR_RELAY_MODE"
+	EnvRelayMode = "AGENT_DIRECTOR_RELAY_MODE"
 	RelayModeOn  = "on"
 	RelayModeOff = "off"
 )
@@ -39,7 +39,7 @@ type RelayStore interface {
 }
 
 // runRelay is the relay-mode branch invoked from Handle when the
-// event is PermissionRequest AND CLAUDE_DIRECTOR_RELAY_MODE=on. It
+// event is PermissionRequest AND AGENT_DIRECTOR_RELAY_MODE=on. It
 // owns the full happy + failure flow per SRD §6.2 + §6.4 and ALWAYS
 // writes an envelope to stdout before returning — every failure path
 // becomes a deny envelope so Claude Code never hangs.

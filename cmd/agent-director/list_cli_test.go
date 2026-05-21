@@ -151,7 +151,7 @@ func TestListCLITmuxSessionNameAndCombinesWithState(t *testing.T) {
 }
 
 // TestListCLIHelpVerbDocumentsTmuxSessionNameParam pins demo-script
-// step 7: `claude-director help` (the verb that does emit JSON;
+// step 7: `agent-director help` (the verb that does emit JSON;
 // per-verb `-h` discards output by design — see fs.SetOutput in
 // listHandlerWith) documents `tmux-session-name` as one of `list`'s
 // params via the manifest. The generated `docs/cli-reference.md` is

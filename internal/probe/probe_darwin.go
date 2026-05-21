@@ -22,7 +22,7 @@ import (
 //   string  envp[0..], each '\0'-terminated, list ends at empty string
 //
 // We skip past argc + exec + argv to reach envp, then scan for
-// CLAUDE_DIRECTOR_INSTANCE_ID=... entries.
+// AGENT_DIRECTOR_INSTANCE_ID=... entries.
 type darwinProber struct{}
 
 func newProber() Prober { return darwinProber{} }

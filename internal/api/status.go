@@ -1,6 +1,6 @@
 package api
 
-import "github.com/gabemahoney/claude-director/internal/store"
+import "github.com/gabemahoney/agent-director/internal/store"
 
 // StatusResult is the typed return shape of Status — exactly the row's
 // state value, surfaced as a one-key JSON object on the CLI.

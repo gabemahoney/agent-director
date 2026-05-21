@@ -3,19 +3,19 @@
 # from a clean state (SRD §15.2).
 #
 # Contract:
-#   1. Remove ~/.claude-director/state.db and its WAL/SHM siblings if present.
+#   1. Remove ~/.agent-director/state.db and its WAL/SHM siblings if present.
 #   2. Kill any tmux sessions whose names start with `cd-` (the harness's
 #      reserved prefix for spawn sessions — see SRD §6).
-#   3. Re-create the DB by calling `claude-director help`, which exercises
-#      setupStore() in cmd/claude-director/main.go and rebuilds schema v1.
+#   3. Re-create the DB by calling `agent-director help`, which exercises
+#      setupStore() in cmd/agent-director/main.go and rebuilds schema v1.
 #
 # Idempotent. Safe to call twice in a row. Exit 0 on success; non-zero only
-# if claude-director help itself fails (which would mean the binary or
+# if agent-director help itself fails (which would mean the binary or
 # config is broken).
 
 set -euo pipefail
 
-CD_DIR="${HOME}/.claude-director"
+CD_DIR="${HOME}/.agent-director"
 STATE_DB="${CD_DIR}/state.db"
 
 # Drop the DB and its WAL/SHM sidecars.
@@ -33,11 +33,11 @@ if command -v tmux >/dev/null 2>&1; then
     rm -f /tmp/.cd-sessions
 fi
 
-# Rebuild the DB. `claude-director help` runs setupStore() which creates the
+# Rebuild the DB. `agent-director help` runs setupStore() which creates the
 # dir at 0700 and the DB at 0600 with schema v1 stamped — Epic 1 AC #4.
 # Stdout is silenced because the fixture's stderr is the only channel we
 # expose to the driver.
-if ! claude-director help >/dev/null; then
-    echo "db-reset: claude-director help failed; binary or config is broken" >&2
+if ! agent-director help >/dev/null; then
+    echo "db-reset: agent-director help failed; binary or config is broken" >&2
     exit 1
 fi

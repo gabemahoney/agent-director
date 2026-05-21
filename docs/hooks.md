@@ -1,6 +1,6 @@
 # Hooks
 
-How claude-director's per-Spawn state-tracking hooks coexist with the
+How agent-director's per-Spawn state-tracking hooks coexist with the
 operator's own Claude Code hooks. Each Spawn gets eight hook entries
 synthesized into its `--settings`; they fire on every Claude lifecycle
 event and write the row UPSERT that powers `status` / `get` / `list`.
@@ -10,8 +10,8 @@ For Claude Code's own hooks reference, see:
 
 ## The eight state-tracking hooks
 
-claude-director registers one entry per event listed below. Each entry
-runs the same command — `<abs-path>/claude-director hook` — and Claude
+agent-director registers one entry per event listed below. Each entry
+runs the same command — `<abs-path>/agent-director hook` — and Claude
 Code feeds it the payload JSON on stdin.
 
 | Event | Tool matcher | Resulting state (SRD §5.2) |
@@ -37,7 +37,7 @@ update.
 State-tracking hooks **must never block Claude Code**. The `hook` verb
 exits 0 with empty stdout on every internal failure:
 
-- Missing `CLAUDE_DIRECTOR_INSTANCE_ID` env → exit 0, log entry.
+- Missing `AGENT_DIRECTOR_INSTANCE_ID` env → exit 0, log entry.
 - Malformed JSON payload → exit 0, log entry.
 - Payload over 1 MiB → exit 0, log entry.
 - Config malformed → exit 0, log entry.
@@ -45,7 +45,7 @@ exits 0 with empty stdout on every internal failure:
 - DB write failure → exit 0, log entry.
 - Unknown event name → exit 0, soft refresh, log entry.
 
-All log entries land in `~/.claude-director/errors.log` (configurable
+All log entries land in `~/.agent-director/errors.log` (configurable
 via `[log] error_log_path` in `config.toml`). A missed state update is
 annoying but never breaks a Claude session.
 
@@ -62,11 +62,11 @@ order (see `settings.md`). Lower tiers fire first:
 user (~/.claude/settings.json)
   → project (.claude/settings.json in cwd)
     → local (.claude/settings.local.json)
-      → claude-director (per-Spawn --settings)
+      → agent-director (per-Spawn --settings)
         → policy (managed)
 ```
 
-claude-director's hook is *last among user-installed tiers*. For state
+agent-director's hook is *last among user-installed tiers*. For state
 tracking this is fine — by the time our hook runs, every user hook has
 already had its turn; our UPSERT lands on top with the most recent
 `last_seen_at`. For relay-mode permission decisions the ordering
@@ -80,27 +80,27 @@ malformed stdout. Each of these has a different blast radius:
 
 - **Slow user hook** — Claude Code waits for every hook entry to return
   before consuming the event. A 30-second user-script hook stalls the
-  entire pipeline; claude-director's state UPSERT doesn't land until
+  entire pipeline; agent-director's state UPSERT doesn't land until
   the user hook returns. The `status` verb will keep showing the
   pre-event state during the stall.
 - **Non-zero user hook** — for `PreToolUse`, a non-zero exit can block
-  the tool call (Claude Code's policy). claude-director's hook still
+  the tool call (Claude Code's policy). agent-director's hook still
   runs and writes its UPSERT either way; the row state is independent
   of whether the tool was actually executed.
 - **Malformed user hook stdout** — irrelevant for state-tracking hooks
   (they don't emit stdout). A poorly-formed permission-decision
   envelope from a user hook could confuse the relay path;
-  claude-director's relay hook is always last, so it wins the decision
+  agent-director's relay hook is always last, so it wins the decision
   channel.
 
 The recommended mitigation is to put hooks the operator does NOT want
-running inside claude-director Spawns behind a `CLAUDE_DIRECTOR_INSTANCE_ID`
+running inside agent-director Spawns behind a `AGENT_DIRECTOR_INSTANCE_ID`
 env-var guard:
 
 ```bash
 # Inside ~/.claude/settings.json hook command:
-if [ -n "$CLAUDE_DIRECTOR_INSTANCE_ID" ]; then
-  exit 0  # skip user hook for claude-director Spawns
+if [ -n "$AGENT_DIRECTOR_INSTANCE_ID" ]; then
+  exit 0  # skip user hook for agent-director Spawns
 fi
 # ... normal user-hook body ...
 ```
@@ -113,11 +113,11 @@ This lets the operator opt-out per Spawn surface without flipping
 The install skill (Epic 12) adds two persistent hook entries to the
 user's `~/.claude/settings.json`:
 
-- `claude-director help` on `SessionStart`
-- `claude-director help` on `SessionEnd matcher=compact`
+- `agent-director help` on `SessionStart`
+- `agent-director help` on `SessionEnd matcher=compact`
 
 These are **not** per-Spawn; they fire on every Claude session the
-operator runs, regardless of whether claude-director launched it.
+operator runs, regardless of whether agent-director launched it.
 They inject the verb list into the new conversation so the model
 knows the supervision API surface after a `/compact` or fresh
 session. Mirrors the `bees sting` pattern.
@@ -125,8 +125,8 @@ session. Mirrors the `bees sting` pattern.
 ### Why both events
 
 - **`SessionStart`** — a brand-new Claude session starts with no
-  context about claude-director. The hook injects the verb list so
-  the model can reference `mcp__claude-director__spawn` and friends
+  context about agent-director. The hook injects the verb list so
+  the model can reference `mcp__agent-director__spawn` and friends
   immediately.
 - **`SessionEnd matcher=compact`** — `/compact` is Claude Code's
   manual conversation compaction. It tears down the current session
@@ -137,14 +137,14 @@ session. Mirrors the `bees sting` pattern.
 ### Why not embed in the synthesized `--settings`?
 
 The per-Spawn hooks are injected inline via `--settings` at spawn
-time and only apply to Spawns claude-director launched. The
+time and only apply to Spawns agent-director launched. The
 `help`-on-SessionStart pair, by contrast, must fire on EVERY Claude
 session — including the operator's own interactive ones where
 they want to spawn something from inside Claude. That requires
 persistent settings, not per-Spawn settings.
 
 The asymmetry is deliberate: per-Spawn state-tracking is for
-claude-director's own correctness; persistent help is for the
+agent-director's own correctness; persistent help is for the
 operator's discoverability.
 
 ### Idempotency and preserve-other-hooks
@@ -159,9 +159,9 @@ The uninstall script matches entries by the install-root prefix in
 their `command` field — it removes ONLY what install.sh wrote.
 Pre-existing user hooks in those events stay verbatim.
 
-### What `claude-director help` actually outputs
+### What `agent-director help` actually outputs
 
-The persistent hook runs `claude-director help` which produces the
+The persistent hook runs `agent-director help` which produces the
 manifest-driven verb list as JSON. Claude Code captures the hook's
 stdout and injects it as a system-message tool-availability hint
 in the new conversation. The model sees the same surface a script
@@ -169,7 +169,7 @@ reading the CLI's `--help` would.
 
 ### Caveat — install fail-closed gap
 
-If `claude-director` is missing from PATH at session start time
+If `agent-director` is missing from PATH at session start time
 (e.g. mid-uninstall), the hook fails to invoke and Claude Code
 falls back to no-injection — the conversation proceeds without the
 verb list. This is the install-side analogue of the
@@ -214,10 +214,10 @@ The handler emits exactly one line on stdout — the
 `hookSpecificOutput` envelope per SRD §6.3. Non-PermissionRequest
 events leave stdout empty (state-tracking has no envelope contract).
 
-### `CLAUDE_DIRECTOR_RELAY_MODE` env var
+### `AGENT_DIRECTOR_RELAY_MODE` env var
 
 The handler reads the relay mode from
-`os.Getenv("CLAUDE_DIRECTOR_RELAY_MODE")`, NOT from the DB's
+`os.Getenv("AGENT_DIRECTOR_RELAY_MODE")`, NOT from the DB's
 `spawns.relay_mode` column. This separation is the SRD §6.5
 fail-closed safety guarantee: a DB-unreachable or schema-mismatch
 failure still surfaces the correct relay decision because the env

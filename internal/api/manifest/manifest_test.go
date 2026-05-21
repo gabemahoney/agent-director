@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/gabemahoney/claude-director/internal/api/manifest"
+	"github.com/gabemahoney/agent-director/internal/api/manifest"
 )
 
 // TestVerbsContainsExpectedSurface pins the canonical verb order. Each

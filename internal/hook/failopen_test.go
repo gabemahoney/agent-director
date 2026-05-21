@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gabemahoney/claude-director/internal/config"
-	"github.com/gabemahoney/claude-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // flakyStore is a HookStore double whose state-tracking calls return

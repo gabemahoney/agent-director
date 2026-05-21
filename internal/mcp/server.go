@@ -1,5 +1,5 @@
 // Package mcp implements a stdio Model Context Protocol server that
-// exposes claude-director's CLI verbs as MCP tools (SRD §3.3, §4.1).
+// exposes agent-director's CLI verbs as MCP tools (SRD §3.3, §4.1).
 //
 // The protocol is JSON-RPC 2.0 over line-delimited JSON on stdin/stdout.
 // Three methods are wired: `initialize` (capability negotiation),
@@ -22,7 +22,7 @@ import (
 	"io"
 	"log"
 
-	"github.com/gabemahoney/claude-director/internal/api/manifest"
+	"github.com/gabemahoney/agent-director/internal/api/manifest"
 )
 
 // ProtocolVersion is the MCP protocol version this server advertises.
@@ -35,7 +35,7 @@ const ProtocolVersion = "2024-11-05"
 // code "0.1.0" — Epic 13 (release) will replace this with a build-
 // time injected string.
 const (
-	ServerName    = "claude-director"
+	ServerName    = "agent-director"
 	ServerVersion = "0.1.0"
 )
 

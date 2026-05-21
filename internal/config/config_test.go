@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gabemahoney/claude-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/config"
 )
 
 // makeConfigFile writes content into a temp directory and returns the path.
@@ -46,8 +46,8 @@ func TestDefaultMatchesSRD(t *testing.T) {
 		{"Relay.PollJitterMs", d.Relay.PollJitterMs, 100},
 		{"Relay.TimeoutSeconds", d.Relay.TimeoutSeconds, 600},
 		{"Pause.TimeoutSeconds", d.Pause.TimeoutSeconds, 30},
-		{"Store.DbPath", d.Store.DbPath, "~/.claude-director/state.db"},
-		{"Log.ErrorLogPath", d.Log.ErrorLogPath, "~/.claude-director/errors.log"},
+		{"Store.DbPath", d.Store.DbPath, "~/.agent-director/state.db"},
+		{"Log.ErrorLogPath", d.Log.ErrorLogPath, "~/.agent-director/errors.log"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -71,8 +71,8 @@ func TestLoadMissingFileReturnsResolvedDefaults(t *testing.T) {
 	// Default() values use "~/" placeholders that Load must expand on the
 	// missing-file branch too — un-resolved tilde paths reaching store.Open
 	// or log output would be a real-world bug.
-	wantDB := filepath.Join(home, ".claude-director/state.db")
-	wantLog := filepath.Join(home, ".claude-director/errors.log")
+	wantDB := filepath.Join(home, ".agent-director/state.db")
+	wantLog := filepath.Join(home, ".agent-director/errors.log")
 	if cfg.Store.DbPath != wantDB {
 		t.Errorf("Store.DbPath = %q, want %q", cfg.Store.DbPath, wantDB)
 	}
@@ -160,11 +160,11 @@ error_log_path = "logs/errors.log"
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	wantDB := filepath.Join(home, ".claude-director", "foo.db")
+	wantDB := filepath.Join(home, ".agent-director", "foo.db")
 	if cfg.Store.DbPath != wantDB {
 		t.Errorf("Store.DbPath: got %q, want %q", cfg.Store.DbPath, wantDB)
 	}
-	wantLog := filepath.Join(home, ".claude-director", "logs", "errors.log")
+	wantLog := filepath.Join(home, ".agent-director", "logs", "errors.log")
 	if cfg.Log.ErrorLogPath != wantLog {
 		t.Errorf("Log.ErrorLogPath: got %q, want %q", cfg.Log.ErrorLogPath, wantLog)
 	}

@@ -6,8 +6,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/gabemahoney/claude-director/internal/api"
-	"github.com/gabemahoney/claude-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/api"
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // recordingTmux records each (session, text, pressEnter) triple its

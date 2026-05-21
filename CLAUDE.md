@@ -1,4 +1,4 @@
-# claude-director
+# agent-director
 
 ## Documentation Locations
 

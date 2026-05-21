@@ -1,5 +1,5 @@
 // Command fake-tmux is a test helper that records its argv to a file and
-// exits 0. cmd/claude-director's integration tests put this binary on
+// exits 0. cmd/agent-director's integration tests put this binary on
 // PATH ahead of the real tmux so a spawn / send-keys / read-pane
 // invocation can be exercised end-to-end without launching a real Claude.
 //

@@ -18,13 +18,13 @@ var binaryPath string
 // this package. Building once per package run avoids per-test compile cost
 // and keeps the race-detector run cheap.
 func TestMain(m *testing.M) {
-	tmp, err := os.MkdirTemp("", "claude-director-test-")
+	tmp, err := os.MkdirTemp("", "agent-director-test-")
 	if err != nil {
 		panic(err)
 	}
 	defer os.RemoveAll(tmp)
 
-	binaryPath = filepath.Join(tmp, "claude-director")
+	binaryPath = filepath.Join(tmp, "agent-director")
 	build := exec.Command("go", "build", "-o", binaryPath, ".")
 	build.Stdout = os.Stdout
 	build.Stderr = os.Stderr
@@ -42,7 +42,7 @@ type errorEnvelope struct {
 
 // runCLI invokes the built binary with args under a HOME=t.TempDir()
 // override and returns stdout, stderr, exit code. The HOME override keeps
-// every invocation from touching the developer's real ~/.claude-director/
+// every invocation from touching the developer's real ~/.agent-director/
 // when state.db is opened during startup.
 func runCLI(t *testing.T, args ...string) (string, string, int) {
 	t.Helper()

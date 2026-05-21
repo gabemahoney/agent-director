@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gabemahoney/claude-director/internal/probe"
+	"github.com/gabemahoney/agent-director/internal/probe"
 )
 
 // TestLinuxProberFindsLiveID launches a child shell with the env var
@@ -55,7 +55,7 @@ func TestLinuxProberFindsLiveID(t *testing.T) {
 }
 
 // TestLinuxProberIgnoresUnrelatedEnv proves the walker filters by the
-// exact CLAUDE_DIRECTOR_INSTANCE_ID prefix. A child with a similar-
+// exact AGENT_DIRECTOR_INSTANCE_ID prefix. A child with a similar-
 // looking-but-different env var must NOT show up in the probe set.
 func TestLinuxProberIgnoresUnrelatedEnv(t *testing.T) {
 	if _, err := os.Stat("/proc"); err != nil {
@@ -67,9 +67,9 @@ func TestLinuxProberIgnoresUnrelatedEnv(t *testing.T) {
 
 	cmd := exec.Command("sleep", "10")
 	cmd.Env = append(os.Environ(),
-		"CLAUDE_DIRECTOR_INSTANCE_IDX="+unrelated, // off-by-one suffix
-		"CLAUDE_DIRECTOR_NOT_INSTANCE_ID="+unrelated,
-		"CLAUDE_DIRECTOR_INSTANCE_ID="+sentinel, // matching prefix; positive control
+		"AGENT_DIRECTOR_INSTANCE_IDX="+unrelated, // off-by-one suffix
+		"AGENT_DIRECTOR_NOT_INSTANCE_ID="+unrelated,
+		"AGENT_DIRECTOR_INSTANCE_ID="+sentinel, // matching prefix; positive control
 	)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start child: %v", err)

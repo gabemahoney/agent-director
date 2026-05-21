@@ -18,14 +18,8 @@ type TemplateFile struct {
 	RelayMode            string               `toml:"relay_mode,omitempty"`
 	ClaudeArgs           []string             `toml:"claude_args,omitempty"`
 	ExtraEnv             map[string]string    `toml:"extra_env,omitempty"`
-	ClaudeDirectorLabels map[string]string    `toml:"labels,omitempty"`
+	AgentDirectorLabels map[string]string    `toml:"labels,omitempty"`
 	Permissions          *TemplatePermissions `toml:"permissions,omitempty"`
-
-	// DeprecatedLabels carries the legacy [claude_director_labels] table
-	// from old templates. LoadTemplate folds it into ClaudeDirectorLabels
-	// and emits a soft warning. Slated for removal in v0.3.0. MakeTemplate
-	// never populates this — encoder skips via omitempty.
-	DeprecatedLabels map[string]string `toml:"claude_director_labels,omitempty"`
 }
 
 // TemplatePermissions mirrors the SRD §6.1 three-arrays surface. Each
