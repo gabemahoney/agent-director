@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
-# uninstall.sh — reverse a claude-director install.
+# uninstall.sh — reverse an agent-director install.
 #
 # Per SRD §16.2. By default:
 #   - Remove the two help hook entries from ~/.claude/settings.json
 #     (preserving any other user hooks).
 #   - Remove the canonical binary and any `.prior` rollback snapshot
-#     under ~/.claude-director/bin/.
+#     under ~/.agent-director/bin/.
 #   - Remove the PATH symlink (if found at any of the standard
 #     locations or at --symlink-dir).
-#   - Leave ~/.claude-director/ intact (the operator may want to
+#   - Leave ~/.agent-director/ intact (the operator may want to
 #     keep their templates / state.db history).
 #
 # Flags:
-#   --purge              Also rm -rf ~/.claude-director (templates +
+#   --purge              Also rm -rf ~/.agent-director (templates +
 #                        state.db). Requires --force or an interactive
 #                        confirmation.
 #   --force              Skip the --purge confirmation prompt.
-#   --mcp-also           Also run `claude mcp remove claude-director`.
+#   --mcp-also           Also run `claude mcp remove agent-director`.
 #   --symlink-dir <dir>  Look for the PATH symlink at <dir>; default
 #                        is ~/.local/bin.
 
 set -euo pipefail
 
-readonly DEFAULT_INSTALL_ROOT="${HOME}/.claude-director"
+readonly DEFAULT_INSTALL_ROOT="${HOME}/.agent-director"
 readonly DEFAULT_BIN_DIR="${DEFAULT_INSTALL_ROOT}/bin"
 readonly DEFAULT_SETTINGS_PATH="${HOME}/.claude/settings.json"
 
@@ -63,7 +63,7 @@ if [[ -f "$DEFAULT_SETTINGS_PATH" ]]; then
         echo "uninstall.sh: ~/.claude/settings.json is not valid JSON; leaving it alone" >&2
     else
         new=$(printf '%s' "$existing" | jq \
-            --arg prefix "${DEFAULT_BIN_DIR}/claude-director" '
+            --arg prefix "${DEFAULT_BIN_DIR}/agent-director" '
             .hooks //= {}
             | .hooks.SessionStart //= []
             | .hooks.SessionEnd //= []
@@ -163,7 +163,7 @@ fi
 # --------------------------------------------------------------------
 
 if [[ -d "$DEFAULT_BIN_DIR" ]]; then
-    for f in "$DEFAULT_BIN_DIR"/claude-director "$DEFAULT_BIN_DIR"/claude-director.*; do
+    for f in "$DEFAULT_BIN_DIR"/agent-director "$DEFAULT_BIN_DIR"/agent-director.*; do
         [[ -e "$f" || -L "$f" ]] || continue
         rm -f "$f"
     done
@@ -174,9 +174,9 @@ fi
 # Remove PATH symlink (if any).
 # --------------------------------------------------------------------
 
-if [[ -L "${SYMLINK_DIR}/claude-director" ]]; then
-    rm -f "${SYMLINK_DIR}/claude-director"
-    echo "uninstall.sh: removed symlink ${SYMLINK_DIR}/claude-director"
+if [[ -L "${SYMLINK_DIR}/agent-director" ]]; then
+    rm -f "${SYMLINK_DIR}/agent-director"
+    echo "uninstall.sh: removed symlink ${SYMLINK_DIR}/agent-director"
 fi
 
 # --------------------------------------------------------------------
@@ -185,8 +185,8 @@ fi
 
 if [[ "$MCP_ALSO" -eq 1 ]]; then
     if command -v claude >/dev/null 2>&1; then
-        claude mcp remove claude-director 2>/dev/null || true
-        echo "uninstall.sh: deregistered claude-director from MCP"
+        claude mcp remove agent-director 2>/dev/null || true
+        echo "uninstall.sh: deregistered agent-director from MCP"
     fi
 fi
 
