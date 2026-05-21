@@ -8,7 +8,7 @@ CLAUDE_CODE_VERSION ?= 2.1.120
 
 # Docker image tag the harness uses. Override-friendly so CI can publish
 # under a different name without editing the file.
-TEST_IMAGE ?= claude-director-test
+TEST_IMAGE ?= agent-director-test
 
 # Version stamp embedded via -ldflags -X. Resolved at make time so a
 # bare `go build` (no make) still works — it just falls back to the
@@ -16,7 +16,7 @@ TEST_IMAGE ?= claude-director-test
 # survive when run outside a git checkout (e.g. from a release tarball):
 # git describe / rev-parse return empty and we substitute the package
 # defaults.
-VERSION_PKG     := github.com/gabemahoney/claude-director/internal/version
+VERSION_PKG     := github.com/gabemahoney/agent-director/internal/version
 VERSION_STR     := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT_SHA      := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 VERSION_LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION_STR) -X $(VERSION_PKG).Commit=$(COMMIT_SHA)
@@ -24,7 +24,7 @@ VERSION_LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION_STR) -X $(VERSION_PKG).Co
 all: generate build
 
 build:
-	CGO_ENABLED=0 go build -ldflags="$(VERSION_LDFLAGS)" -o ./bin/claude-director ./cmd/claude-director
+	CGO_ENABLED=0 go build -ldflags="$(VERSION_LDFLAGS)" -o ./bin/agent-director ./cmd/agent-director
 
 test:
 	go test ./...
@@ -45,14 +45,14 @@ test-image: build
 		.
 
 # Image smoke. Confirms the build succeeds, the pinned Claude version is the
-# one we expect, claude-director help exits 0 from inside the container, and
+# one we expect, agent-director help exits 0 from inside the container, and
 # the driver script returns a clear failure for an unknown EPIC.
 test-image-smoke: test-image
 	@echo "[smoke] claude --version inside the image"
 	docker run --rm $(TEST_IMAGE) claude --version | grep -F '$(CLAUDE_CODE_VERSION)' \
 		|| (echo "ERROR: pinned claude version $(CLAUDE_CODE_VERSION) not reported"; exit 1)
-	@echo "[smoke] claude-director help inside the image"
-	docker run --rm $(TEST_IMAGE) claude-director help | jq -e '.verbs | length > 0' >/dev/null
+	@echo "[smoke] agent-director help inside the image"
+	docker run --rm $(TEST_IMAGE) agent-director help | jq -e '.verbs | length > 0' >/dev/null
 	@echo "[smoke] driver rejects unknown EPIC"
 	@if docker run --rm -e EPIC=nonexistent $(TEST_IMAGE) /opt/driver/run-testplan.sh 2>&1 | grep -q 'no such testplan'; then \
 		echo "[smoke] OK"; \
@@ -100,14 +100,14 @@ release-binaries:
 	@echo "[release] building 4 binaries into ./dist/"
 	@for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do \
 		os=$${target%/*}; arch=$${target#*/}; \
-		out="dist/claude-director-$${os}-$${arch}"; \
+		out="dist/agent-director-$${os}-$${arch}"; \
 		echo "  -> $${out}"; \
 		CGO_ENABLED=0 GOOS=$${os} GOARCH=$${arch} \
 			go build -trimpath -ldflags="-s -w $(VERSION_LDFLAGS)" \
-			-o "$${out}" ./cmd/claude-director || exit 1; \
+			-o "$${out}" ./cmd/agent-director || exit 1; \
 	done
 	@echo "[release] sizes:"
-	@du -h dist/claude-director-* | sed 's/^/  /'
+	@du -h dist/agent-director-* | sed 's/^/  /'
 
 # release-binaries-smoke runs static-linkage + magic-byte + host-arch
 # runnability checks. We avoid `file(1)` because it's not in the
@@ -124,7 +124,7 @@ release-binaries-smoke: release-binaries
 	echo "[smoke] magic-byte check on each artifact"; \
 	for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do \
 		os=$${target%/*}; arch=$${target#*/}; \
-		out="dist/claude-director-$${os}-$${arch}"; \
+		out="dist/agent-director-$${os}-$${arch}"; \
 		magic=$$(od -A n -t x1 -N 4 "$${out}" | tr -d ' '); \
 		case "$${os}_$${magic}" in \
 			linux_7f454c46)  echo "  $${out}: ELF (OK)" ;; \
@@ -135,7 +135,7 @@ release-binaries-smoke: release-binaries
 	done; \
 	echo "[smoke] static-link check on linux binaries (ldd → 'not a dynamic executable')"; \
 	for arch in amd64 arm64; do \
-		out="dist/claude-director-linux-$${arch}"; \
+		out="dist/agent-director-linux-$${arch}"; \
 		if ldd "$${out}" 2>&1 | grep -q "not a dynamic executable"; then \
 			echo "  $${out}: statically linked"; \
 		else \
@@ -145,6 +145,6 @@ release-binaries-smoke: release-binaries
 		fi; \
 	done; \
 	echo "[smoke] host-arch exec (linux-amd64 help)"; \
-	./dist/claude-director-linux-amd64 help | jq -e '.verbs | length > 0' >/dev/null \
+	./dist/agent-director-linux-amd64 help | jq -e '.verbs | length > 0' >/dev/null \
 		|| { echo "FAIL: linux-amd64 help did not return a non-empty verb list"; exit 1; }; \
 	echo "[smoke] OK — all 4 binaries built, linked, and the host-arch one runs"

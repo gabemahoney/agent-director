@@ -25,14 +25,14 @@ Launch a tracked Claude Code instance inside a new tmux session. Fire-and-forget
 ### Parameters
 
 - `cwd` (string, required): Absolute (or ~/-prefixed) path the Spawn's Claude starts in. Required.
-- `template` (string, optional): Optional named template under ~/.claude-director/templates/. Per-call params layer on top per SRD §7.1 (scalars replace; maps merge; permissions arrays concat; claude_args replaces wholesale).
+- `template` (string, optional): Optional named template under ~/.agent-director/templates/. Per-call params layer on top per SRD §7.1 (scalars replace; maps merge; permissions arrays concat; claude_args replaces wholesale).
 - `claude_instance_id` (string, optional): Optional explicit id (UUID4 minted when absent). Collision against a live row returns ErrInstanceIdCollision.
-- `label` ([]string (k=v), optional): Repeated KEY=VALUE pairs. Each becomes CLAUDE_DIRECTOR_LABEL_<UPPER_KEY> on the session env and persists in labels.
+- `label` ([]string (k=v), optional): Repeated KEY=VALUE pairs. Each becomes AGENT_DIRECTOR_LABEL_<UPPER_KEY> on the session env and persists in labels.
 - `allow` ([]string, optional): Repeated permissions.allow entries concatenated with the user / project tiers.
 - `deny` ([]string, optional): Repeated permissions.deny entries concatenated with the user / project tiers.
 - `ask` ([]string, optional): Repeated permissions.ask entries concatenated with the user / project tiers.
 - `relay-mode` (string, optional): on / off. Empty falls back to config defaults.relay_mode (default off).
-- `extra-env` ([]string (K=V), optional): Repeated KEY=VALUE pairs injected on the tmux session env. Reserved keys (CLAUDE_DIRECTOR_*) rejected; auth env vars (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN) allowed.
+- `extra-env` ([]string (K=V), optional): Repeated KEY=VALUE pairs injected on the tmux session env. Reserved keys (AGENT_DIRECTOR_*) rejected; auth env vars (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN) allowed.
 - `claude_args` ([]string (after --), optional): Pass-through argv to `claude` after the supervisor's own flags. Denied: --settings, --resume, --continue, --print, --output-format.
 - `no-pre-trust` (bool, optional): Skip pre-writing projects.<cwd>.hasTrustDialogAccepted=true into ~/.claude.json. Default off (pre-trust IS performed so Claude Code skips its workspace-trust dialog and the Spawn becomes interactive immediately).
 - `tmux-session-name` (string, optional): Optional explicit tmux session name. Empty/omitted falls back to <basename(cwd)>-<id[:8]>. Validated app-side: rejects empty (when supplied), '#' ':' '.', ASCII control chars, non-UTF-8, and >64 bytes. NO DB uniqueness check; live-collision surfaces as the wrapped tmux new-session error. Name reuse across ended spawns is supported.
@@ -87,7 +87,7 @@ Return the full DB row for a tracked Spawn (id, parent, state, cwd, session name
 ### Result
 
 - `claude_instance_id` (string): Stable id of the Spawn.
-- `parent_id` (string): Parent Spawn id (CLAUDE_DIRECTOR_INSTANCE_ID env at spawn time), empty when launched by a human shell.
+- `parent_id` (string): Parent Spawn id (AGENT_DIRECTOR_INSTANCE_ID env at spawn time), empty when launched by a human shell.
 - `state` (string): Current state column value.
 - `cwd` (string): Canonicalized cwd.
 - `tmux_session_name` (string): tmux session under which the Spawn is running.
@@ -186,7 +186,7 @@ _None._
 
 ## resume
 
-Bring a terminated (ended/missing) Spawn back to life via `claude --resume`. Same claude_instance_id, fresh tmux session, same JSONL transcript. parent_id is re-derived from the caller's CLAUDE_DIRECTOR_INSTANCE_ID env var on every resume.
+Bring a terminated (ended/missing) Spawn back to life via `claude --resume`. Same claude_instance_id, fresh tmux session, same JSONL transcript. parent_id is re-derived from the caller's AGENT_DIRECTOR_INSTANCE_ID env var on every resume.
 
 ### Parameters
 
@@ -257,7 +257,7 @@ _None._
 
 ## make-template
 
-Save a reusable spawn preset. The TOML file lands under ~/.claude-director/templates/<name>.toml; spawn --template <name> applies it. Reserved per-invocation params (template, claude_instance_id, tmux_session_name) are NOT accepted.
+Save a reusable spawn preset. The TOML file lands under ~/.agent-director/templates/<name>.toml; spawn --template <name> applies it. Reserved per-invocation params (template, claude_instance_id, tmux_session_name) are NOT accepted.
 
 ### Parameters
 
@@ -324,7 +324,7 @@ _None._
 
 ## serve
 
-Start the stdio MCP server. Long-lived process that exposes every other verb as an MCP tool over JSON-RPC on stdin/stdout. Typically registered with `claude mcp add claude-director <binary-path> serve --stdio`.
+Start the stdio MCP server. Long-lived process that exposes every other verb as an MCP tool over JSON-RPC on stdin/stdout. Typically registered with `claude mcp add agent-director <binary-path> serve --stdio`.
 
 ### Parameters
 

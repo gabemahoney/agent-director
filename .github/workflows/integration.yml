@@ -33,7 +33,7 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
-      - name: Build claude-director binary
+      - name: Build agent-director binary
         run: make build
 
       - name: Run make test-docker EPIC=harness-smoke
@@ -52,7 +52,7 @@ jobs:
     # Exercises the sysctl-based liveness prober on actual macOS so the
     # build-tagged probe_darwin.go path is verified against the real
     # KERN_PROCARGS2 surface. The unit test launches a child with
-    # CLAUDE_DIRECTOR_INSTANCE_ID set and polls until the prober sees
+    # AGENT_DIRECTOR_INSTANCE_ID set and polls until the prober sees
     # it. See SRD §19 Q7.
     name: macOS lane — probe sysctl path
     runs-on: macos-latest
