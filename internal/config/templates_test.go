@@ -182,8 +182,8 @@ allow = ["Bash(jq)"]
 	if len(tf.ClaudeArgs) != 2 || tf.ClaudeArgs[0] != "--model" {
 		t.Errorf("ClaudeArgs: %v", tf.ClaudeArgs)
 	}
-	if tf.ClaudeDirectorLabels["project"] != "foo" {
-		t.Errorf("Labels: %v", tf.ClaudeDirectorLabels)
+	if tf.AgentDirectorLabels["project"] != "foo" {
+		t.Errorf("Labels: %v", tf.AgentDirectorLabels)
 	}
 	if tf.Permissions == nil || tf.Permissions.Allow[0] != "Bash(jq)" {
 		t.Errorf("Permissions: %+v", tf.Permissions)

@@ -86,7 +86,7 @@ func Launch(s *store.Store, tmuxClient TmuxClient, r Resolved, cfg config.Config
 		TmuxSessionName:  r.TmuxSessionName,
 		ClaudeArgs:       r.ClaudeArgs,
 		RelayMode:        r.RelayMode,
-		Labels:           r.ClaudeDirectorLabels,
+		Labels:           r.AgentDirectorLabels,
 	}
 	if err := s.InsertPending(row); err != nil {
 		// store.InsertPending returns ErrPrimaryKeyCollision when SQLite

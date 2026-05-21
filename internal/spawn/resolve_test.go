@@ -67,8 +67,8 @@ allow = ["Bash(jq)"]
 	if len(r.ClaudeArgs) != 2 || r.ClaudeArgs[0] != "--model" {
 		t.Errorf("ClaudeArgs = %v", r.ClaudeArgs)
 	}
-	if r.ClaudeDirectorLabels["project"] != "foo" {
-		t.Errorf("Labels = %v", r.ClaudeDirectorLabels)
+	if r.AgentDirectorLabels["project"] != "foo" {
+		t.Errorf("Labels = %v", r.AgentDirectorLabels)
 	}
 	if r.Permissions == nil || r.Permissions.Allow[0] != "Bash(jq)" {
 		t.Errorf("Permissions = %+v", r.Permissions)
@@ -106,7 +106,7 @@ env = "dev"
 `)
 	r, err := spawn.Resolve(spawn.SpawnParams{
 		Template: "base",
-		ClaudeDirectorLabels: map[string]string{
+		AgentDirectorLabels: map[string]string{
 			"owner":   "alice",
 			"project": "bar",
 		},
@@ -115,8 +115,8 @@ env = "dev"
 		t.Fatalf("Resolve: %v", err)
 	}
 	want := map[string]string{"project": "bar", "env": "dev", "owner": "alice"}
-	if !mapsEqual(r.ClaudeDirectorLabels, want) {
-		t.Errorf("Labels = %v; want %v", r.ClaudeDirectorLabels, want)
+	if !mapsEqual(r.AgentDirectorLabels, want) {
+		t.Errorf("Labels = %v; want %v", r.AgentDirectorLabels, want)
 	}
 }
 
@@ -241,14 +241,14 @@ project = "foo"
 	if err != nil {
 		t.Fatalf("first Resolve: %v", err)
 	}
-	r1.ClaudeDirectorLabels["project"] = "corrupted"
+	r1.AgentDirectorLabels["project"] = "corrupted"
 
 	r2, err := spawn.Resolve(spawn.SpawnParams{Template: "base"}, config.Default())
 	if err != nil {
 		t.Fatalf("second Resolve: %v", err)
 	}
-	if r2.ClaudeDirectorLabels["project"] != "foo" {
-		t.Errorf("template state was mutated: %v", r2.ClaudeDirectorLabels)
+	if r2.AgentDirectorLabels["project"] != "foo" {
+		t.Errorf("template state was mutated: %v", r2.AgentDirectorLabels)
 	}
 }
 

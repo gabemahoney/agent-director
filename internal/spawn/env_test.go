@@ -24,7 +24,7 @@ func TestComposeEnvLabelsAreNormalized(t *testing.T) {
 	r := Resolved{SpawnParams: SpawnParams{
 		ClaudeInstanceID: "id-abc",
 		RelayMode:        "off",
-		ClaudeDirectorLabels: map[string]string{
+		AgentDirectorLabels: map[string]string{
 			"my-key":     "v1",
 			"another.k":  "v2",
 			"alreadyOK":  "v3",
@@ -72,7 +72,7 @@ func TestComposeEnvDeterministic(t *testing.T) {
 	r := Resolved{SpawnParams: SpawnParams{
 		ClaudeInstanceID:     "id",
 		RelayMode:            "off",
-		ClaudeDirectorLabels: map[string]string{"k1": "v1", "k2": "v2"},
+		AgentDirectorLabels: map[string]string{"k1": "v1", "k2": "v2"},
 		ExtraEnv:             map[string]string{"E": "1"},
 	}}
 	env1 := composeEnv(r)

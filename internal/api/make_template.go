@@ -22,7 +22,7 @@ type MakeTemplateParams struct {
 	RelayMode            string
 	ClaudeArgs           []string
 	ExtraEnv             map[string]string
-	ClaudeDirectorLabels map[string]string
+	AgentDirectorLabels map[string]string
 	Permissions          *MakeTemplatePermissions
 }
 
@@ -74,7 +74,7 @@ func MakeTemplate(params MakeTemplateParams) (MakeTemplateResult, error) {
 		RelayMode:            params.RelayMode,
 		ClaudeArgs:           params.ClaudeArgs,
 		ExtraEnv:             params.ExtraEnv,
-		ClaudeDirectorLabels: params.ClaudeDirectorLabels,
+		AgentDirectorLabels: params.AgentDirectorLabels,
 	}
 	if params.Permissions != nil {
 		file.Permissions = &config.TemplatePermissions{

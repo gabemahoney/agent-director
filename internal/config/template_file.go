@@ -18,7 +18,7 @@ type TemplateFile struct {
 	RelayMode            string               `toml:"relay_mode,omitempty"`
 	ClaudeArgs           []string             `toml:"claude_args,omitempty"`
 	ExtraEnv             map[string]string    `toml:"extra_env,omitempty"`
-	ClaudeDirectorLabels map[string]string    `toml:"labels,omitempty"`
+	AgentDirectorLabels map[string]string    `toml:"labels,omitempty"`
 	Permissions          *TemplatePermissions `toml:"permissions,omitempty"`
 }
 

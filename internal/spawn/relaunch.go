@@ -47,7 +47,7 @@ func Relaunch(in RelaunchInput, tmuxClient TmuxClient, cfg config.Config) error 
 		TmuxSessionName:      in.Row.TmuxSessionName,
 		RelayMode:            in.Row.RelayMode,
 		ClaudeArgs:           in.Row.ClaudeArgs,
-		ClaudeDirectorLabels: in.Row.Labels,
+		AgentDirectorLabels: in.Row.Labels,
 	}}
 
 	envs := composeEnv(r)

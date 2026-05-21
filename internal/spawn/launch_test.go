@@ -62,7 +62,7 @@ func newStoreAndLaunchInputs(t *testing.T) (*store.Store, Resolved, config.Confi
 		TmuxSessionName:  "cd-launch-1",
 		RelayMode:        "off",
 		ClaudeArgs:       []string{"--model", "opus"},
-		ClaudeDirectorLabels: map[string]string{
+		AgentDirectorLabels: map[string]string{
 			"role": "worker",
 		},
 	}}
@@ -173,7 +173,7 @@ func TestLaunchSerializesLabelsAsJSON(t *testing.T) {
 		ClaudeInstanceID: "id-labels-json",
 		TmuxSessionName:  "cd-labels-json",
 		RelayMode:        "off",
-		ClaudeDirectorLabels: map[string]string{
+		AgentDirectorLabels: map[string]string{
 			"project": "claude-director",
 			"env":     "dev",
 		},
@@ -215,7 +215,7 @@ func TestLaunchEmitsEnvForNonAlphanumericLabelKey(t *testing.T) {
 	s, r, cfg := newStoreAndLaunchInputs(t)
 	r.ClaudeInstanceID = "id-label-norm"
 	r.TmuxSessionName = "cd-label-norm"
-	r.ClaudeDirectorLabels = map[string]string{
+	r.AgentDirectorLabels = map[string]string{
 		"my-key":      "v1",
 		"x.y.z":       "v2",
 		"already_ok":  "v3",
@@ -244,7 +244,7 @@ func TestLaunchEmitsEnvForNonAlphanumericLabelKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSpawn: %v", err)
 	}
-	for k, v := range r.ClaudeDirectorLabels {
+	for k, v := range r.AgentDirectorLabels {
 		if row.Labels[k] != v {
 			t.Errorf("labels[%q] = %q; want %q", k, row.Labels[k], v)
 		}

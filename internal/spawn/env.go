@@ -23,10 +23,10 @@ import "strings"
 // both → "MY_KEY") use the iteration order of the input map; the SRD does
 // not specify a tiebreak. Callers should not rely on order.
 func composeEnv(r Resolved) map[string]string {
-	out := make(map[string]string, 2+len(r.ClaudeDirectorLabels)+len(r.ExtraEnv))
+	out := make(map[string]string, 2+len(r.AgentDirectorLabels)+len(r.ExtraEnv))
 	out["CLAUDE_DIRECTOR_INSTANCE_ID"] = r.ClaudeInstanceID
 	out["CLAUDE_DIRECTOR_RELAY_MODE"] = r.RelayMode
-	for k, v := range r.ClaudeDirectorLabels {
+	for k, v := range r.AgentDirectorLabels {
 		out["CLAUDE_DIRECTOR_LABEL_"+normalizeLabelKey(k)] = v
 	}
 	for k, v := range r.ExtraEnv {

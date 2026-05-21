@@ -89,7 +89,7 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 			Template:             raw.Template,
 			ClaudeInstanceID:     raw.ClaudeInstanceID,
 			ExtraEnv:             raw.ExtraEnv,
-			ClaudeDirectorLabels: labels,
+			AgentDirectorLabels: labels,
 			ClaudeArgs:           raw.ClaudeArgs,
 			RelayMode:            raw.RelayMode,
 		}
@@ -206,7 +206,7 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 			RelayMode:            raw.RelayMode,
 			ClaudeArgs:           raw.ClaudeArgs,
 			ExtraEnv:             raw.ExtraEnv,
-			ClaudeDirectorLabels: labels,
+			AgentDirectorLabels: labels,
 		}
 		if len(raw.Allow) > 0 || len(raw.Deny) > 0 || len(raw.Ask) > 0 {
 			p.Permissions = &api.MakeTemplatePermissions{

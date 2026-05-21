@@ -31,7 +31,7 @@ func TestMakeTemplateWritesReadableTOML(t *testing.T) {
 		CWD:                  "/tmp",
 		RelayMode:            "off",
 		ClaudeArgs:           []string{"--model", "opus"},
-		ClaudeDirectorLabels: map[string]string{"project": "claude-director"},
+		AgentDirectorLabels: map[string]string{"project": "claude-director"},
 		Permissions: &api.MakeTemplatePermissions{
 			Allow: []string{"Bash(npm test)"},
 		},
@@ -78,8 +78,8 @@ func TestMakeTemplateWritesReadableTOML(t *testing.T) {
 	if got.ClaudeArgs[0] != "--model" || got.ClaudeArgs[1] != "opus" {
 		t.Errorf("ClaudeArgs = %v; want [--model opus]", got.ClaudeArgs)
 	}
-	if got.ClaudeDirectorLabels["project"] != "claude-director" {
-		t.Errorf("Labels = %v", got.ClaudeDirectorLabels)
+	if got.AgentDirectorLabels["project"] != "claude-director" {
+		t.Errorf("Labels = %v", got.AgentDirectorLabels)
 	}
 	if got.Permissions == nil || got.Permissions.Allow[0] != "Bash(npm test)" {
 		t.Errorf("Permissions.Allow lost: %+v", got.Permissions)
@@ -132,7 +132,7 @@ func TestMakeTemplateRoundTripsThroughLoadTemplate(t *testing.T) {
 		RelayMode:            "on",
 		ClaudeArgs:           []string{"--print"},
 		ExtraEnv:             map[string]string{"ANTHROPIC_API_KEY": "sk-test"},
-		ClaudeDirectorLabels: map[string]string{"env": "dev", "owner": "alice"},
+		AgentDirectorLabels: map[string]string{"env": "dev", "owner": "alice"},
 		Permissions: &api.MakeTemplatePermissions{
 			Allow: []string{"Bash(jq)", "Read(/etc)"},
 			Deny:  []string{"Bash(rm)"},
@@ -157,8 +157,8 @@ func TestMakeTemplateRoundTripsThroughLoadTemplate(t *testing.T) {
 	if got.ExtraEnv["ANTHROPIC_API_KEY"] != "sk-test" {
 		t.Errorf("ExtraEnv lost")
 	}
-	if got.ClaudeDirectorLabels["env"] != "dev" || got.ClaudeDirectorLabels["owner"] != "alice" {
-		t.Errorf("Labels lost: %v", got.ClaudeDirectorLabels)
+	if got.AgentDirectorLabels["env"] != "dev" || got.AgentDirectorLabels["owner"] != "alice" {
+		t.Errorf("Labels lost: %v", got.AgentDirectorLabels)
 	}
 	if got.Permissions == nil ||
 		len(got.Permissions.Allow) != 2 || got.Permissions.Allow[0] != "Bash(jq)" ||

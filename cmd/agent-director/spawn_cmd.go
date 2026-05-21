@@ -76,7 +76,7 @@ func parseSpawnFlags(args []string) (spawn.SpawnParams, error) {
 			p.TmuxSessionNameSupplied = true
 		}
 	})
-	p.ClaudeDirectorLabels = labelKVs
+	p.AgentDirectorLabels = labelKVs
 	p.ExtraEnv = extraEnvKVs
 	p.Permissions = buildPermissions(allow, deny, ask)
 	// flag.FlagSet.Args() returns a non-nil empty slice when nothing
@@ -213,7 +213,7 @@ func makeTemplateHandlerWith(args []string) error {
 	if p.Name == "" {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--name is required")
 	}
-	p.ClaudeDirectorLabels = labelKVs
+	p.AgentDirectorLabels = labelKVs
 	p.ExtraEnv = extraEnvKVs
 	p.ClaudeArgs = claudeArgs
 	if len(allow) > 0 || len(deny) > 0 || len(ask) > 0 {
