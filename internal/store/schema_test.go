@@ -10,6 +10,9 @@ import (
 
 // openTempStore opens a Store under t.TempDir and registers cleanup.
 // Returns the resolved DB path so tests can re-open it raw if they need to.
+// The canonical public form lives in internal/testsupport/storefix; this
+// copy stays here because schema_test.go is package store (white-box) and
+// cannot import a package that imports store (circular import).
 func openTempStore(t *testing.T) (*Store, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "state.db")
