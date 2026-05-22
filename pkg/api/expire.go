@@ -3,8 +3,6 @@ package api
 import (
 	"sort"
 	"time"
-
-	"github.com/gabemahoney/agent-director/internal/config"
 )
 
 // ExpireStore is the narrow store surface Expire needs.
@@ -29,8 +27,8 @@ type ExpireLogger interface {
 // Expire removes terminal-state rows older than the retention window
 // (SRD §12). Behavior:
 //
-//   - olderThan nil → uses cfg.Defaults.ExpireRetentionDays
-//     (interpreted as days).
+//   - olderThan nil → uses retentionDays to compute the cutoff
+//     (interpreted as days; 0 means "reap all terminal rows").
 //   - olderThan non-nil → exact duration. A zero or negative duration
 //     reaps every terminal row, irrespective of ended_at.
 //   - Per-row failures inside DeleteTerminalOlderThan are propagated
@@ -40,8 +38,8 @@ type ExpireLogger interface {
 //     transient I/O failure mid-iteration.)
 //
 // Live-state rows are untouched.
-func Expire(s ExpireStore, cfg config.Config, olderThan *time.Duration, lg ExpireLogger) (ExpireResult, error) {
-	d := time.Duration(cfg.Defaults.ExpireRetentionDays) * 24 * time.Hour
+func Expire(s ExpireStore, retentionDays int, olderThan *time.Duration, lg ExpireLogger) (ExpireResult, error) {
+	d := time.Duration(retentionDays) * 24 * time.Hour
 	if olderThan != nil {
 		d = *olderThan
 	}
@@ -65,5 +63,5 @@ func (c *Client) Expire(olderThan *time.Duration) (ExpireResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return ExpireResult{}, err
 	}
-	return Expire(c.st, c.cfg, olderThan, c.logger)
+	return Expire(c.st, c.cfg.Defaults.ExpireRetentionDays, olderThan, c.logger)
 }

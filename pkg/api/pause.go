@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
@@ -23,7 +22,7 @@ type PauseTmux interface {
 // *store.Store satisfies both methods; tests fake the surface so the
 // polling cadence can be driven without touching SQLite.
 type PauseStore interface {
-	GetSpawn(instanceID string) (store.Spawn, error)
+	GetSpawn(instanceID string) (Spawn, error)
 	GetSpawnState(instanceID string) (string, error)
 }
 
@@ -50,7 +49,7 @@ var pausePollInterval = 200 * time.Millisecond
 var pauseSleep = time.Sleep
 
 // Pause politely shuts down a live Spawn by sending `/exit` to its
-// pane and waiting up to cfg.TimeoutSeconds for the row to transition
+// pane and waiting up to timeoutSeconds for the row to transition
 // to `ended`. Behavior (SRD §9):
 //
 //   - Unknown id → ErrSpawnNotFound surfaces from the store.
@@ -72,7 +71,7 @@ var pauseSleep = time.Sleep
 // timeout expires, or when ctx is cancelled. There is no incremental
 // progress callback — callers wanting that should poll `status`
 // themselves and skip pause.
-func Pause(ctx context.Context, s PauseStore, t PauseTmux, cfg config.Pause, params PauseParams) (PauseResult, error) {
+func Pause(ctx context.Context, s PauseStore, t PauseTmux, timeoutSeconds int, params PauseParams) (PauseResult, error) {
 	row, err := s.GetSpawn(params.ClaudeInstanceID)
 	if err != nil {
 		return PauseResult{}, err
@@ -94,7 +93,7 @@ func Pause(ctx context.Context, s PauseStore, t PauseTmux, cfg config.Pause, par
 		return PauseResult{}, err
 	}
 
-	timeout := time.Duration(cfg.TimeoutSeconds) * time.Second
+	timeout := time.Duration(timeoutSeconds) * time.Second
 	deadline := time.Now().Add(timeout)
 
 	for {
@@ -135,5 +134,5 @@ func (c *Client) Pause(ctx context.Context, params PauseParams) (PauseResult, er
 	if err := c.checkClosed(); err != nil {
 		return PauseResult{}, err
 	}
-	return Pause(ctx, c.st, c.tmuxClient, c.cfg.Pause, params)
+	return Pause(ctx, c.st, c.tmuxClient, c.cfg.Pause.TimeoutSeconds, params)
 }

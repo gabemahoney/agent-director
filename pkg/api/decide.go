@@ -20,9 +20,9 @@ var ErrInvalidDecision = errors.New("ErrInvalidDecision")
 
 // DecideStore is the narrow store surface Decide needs.
 type DecideStore interface {
-	GetSpawn(instanceID string) (store.Spawn, error)
+	GetSpawn(instanceID string) (Spawn, error)
 	DecidePermissionRequest(instanceID, decision, reason string) (bool, error)
-	GetPermissionRequest(instanceID string) (store.PermissionRow, error)
+	GetPermissionRequest(instanceID string) (PermissionRow, error)
 }
 
 // DecideParams is the typed parameter shape for the decide verb.

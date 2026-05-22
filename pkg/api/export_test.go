@@ -9,3 +9,11 @@ func SetPauseTestKnobs(interval time.Duration, sleeper func(time.Duration)) {
 	pausePollInterval = interval
 	pauseSleep = sleeper
 }
+
+// FindMissing exposes the unexported findMissingImpl for white-box unit tests
+// in package api_test. External callers use (c *Client).FindMissing instead.
+var FindMissing = findMissingImpl
+
+// Resume exposes the unexported resumeImpl for white-box unit tests in
+// package api_test. External callers use (c *Client).Resume instead.
+var Resume = resumeImpl

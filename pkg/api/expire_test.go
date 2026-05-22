@@ -22,7 +22,7 @@ func (r *recordingExpireLogger) Printf(string, ...any) { r.lines++ }
 func TestExpireOlderThan1HourRemovesOldTerminalRows(t *testing.T) {
 	s, _ := apitest.SeedExpireFixture(t)
 	d := time.Hour
-	res, err := api.Expire(s, config.Default(), &d, &recordingExpireLogger{})
+	res, err := api.Expire(s, config.Default().Defaults.ExpireRetentionDays, &d, &recordingExpireLogger{})
 	if err != nil {
 		t.Fatalf("Expire: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestExpireYoungTerminalRowsSurvive(t *testing.T) {
 	s, _ := apitest.SeedExpireFixture(t)
 	// 24h window: nothing in the fixture is that old.
 	d := 24 * time.Hour
-	res, err := api.Expire(s, config.Default(), &d, &recordingExpireLogger{})
+	res, err := api.Expire(s, config.Default().Defaults.ExpireRetentionDays, &d, &recordingExpireLogger{})
 	if err != nil {
 		t.Fatalf("Expire: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestExpireZeroDurationReapsAllTerminalRows(t *testing.T) {
 	// survive.
 	s, _ := apitest.SeedExpireFixture(t)
 	d := time.Duration(0)
-	res, err := api.Expire(s, config.Default(), &d, &recordingExpireLogger{})
+	res, err := api.Expire(s, config.Default().Defaults.ExpireRetentionDays, &d, &recordingExpireLogger{})
 	if err != nil {
 		t.Fatalf("Expire: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestExpireZeroDurationReapsAllTerminalRows(t *testing.T) {
 func TestExpireDoesNotTouchLiveRows(t *testing.T) {
 	s, _ := apitest.SeedExpireFixture(t)
 	d := time.Duration(0)
-	if _, err := api.Expire(s, config.Default(), &d, &recordingExpireLogger{}); err != nil {
+	if _, err := api.Expire(s, config.Default().Defaults.ExpireRetentionDays, &d, &recordingExpireLogger{}); err != nil {
 		t.Fatalf("Expire: %v", err)
 	}
 	if _, err := s.GetSpawn("row-waiting-live"); err != nil {
@@ -82,7 +82,7 @@ func TestExpireDoesNotTouchNullEndedAt(t *testing.T) {
 	// no-touch, which is the conservative default.
 	s, _ := apitest.SeedExpireFixture(t)
 	d := time.Duration(0)
-	if _, err := api.Expire(s, config.Default(), &d, &recordingExpireLogger{}); err != nil {
+	if _, err := api.Expire(s, config.Default().Defaults.ExpireRetentionDays, &d, &recordingExpireLogger{}); err != nil {
 		t.Fatalf("Expire: %v", err)
 	}
 	if _, err := s.GetSpawn("row-ended-null-at"); err != nil {
@@ -95,7 +95,7 @@ func TestExpireDefaultRetentionFromConfig(t *testing.T) {
 	// cfg.Defaults.ExpireRetentionDays. The fixture rows are at most
 	// 2h old; with the default 31-day window nothing should be reaped.
 	s, _ := apitest.SeedExpireFixture(t)
-	res, err := api.Expire(s, config.Default(), nil, &recordingExpireLogger{})
+	res, err := api.Expire(s, config.Default().Defaults.ExpireRetentionDays, nil, &recordingExpireLogger{})
 	if err != nil {
 		t.Fatalf("Expire: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestExpirePropagatesStoreErrors(t *testing.T) {
 	// must propagate. The verb-side logger is informed.
 	s := &stubExpireStore{err: errors.New("boom")}
 	lg := &recordingExpireLogger{}
-	_, err := api.Expire(s, config.Default(), nil, lg)
+	_, err := api.Expire(s, config.Default().Defaults.ExpireRetentionDays, nil, lg)
 	if err == nil {
 		t.Fatalf("expected error; got nil")
 	}

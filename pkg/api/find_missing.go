@@ -29,8 +29,12 @@ type FindMissingLogger interface {
 	Printf(format string, v ...any)
 }
 
-// FindMissing reconciles the DB's live-state rows against the prober
-// (SRD §4.4 + §5.2). Behavior:
+// findMissingImpl is the unexported verb handler called by
+// (c *Client).FindMissing. It takes probe.Prober directly and is not
+// part of the public API surface; external consumers use the Client
+// method instead.
+//
+// Behavior (SRD §4.4 + §5.2):
 //
 //  1. List live-state IDs (anything not ended/missing, including
 //     pending — SRD §5.2 explicitly scans pending).
@@ -50,7 +54,7 @@ type FindMissingLogger interface {
 // Returns the sweep result. nil error iff the prober + store calls
 // succeeded; a hard prober error (e.g. /proc unreachable) bubbles up
 // because there's nothing useful the verb can do without it.
-func FindMissing(ctx context.Context, s FindMissingStore, p probe.Prober, lg FindMissingLogger) (FindMissingResult, error) {
+func findMissingImpl(ctx context.Context, s FindMissingStore, p probe.Prober, lg FindMissingLogger) (FindMissingResult, error) {
 	liveIDs, err := s.ListLiveSpawnIDs()
 	if err != nil {
 		return FindMissingResult{}, err
@@ -95,5 +99,5 @@ func (c *Client) FindMissing(ctx context.Context) (FindMissingResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return FindMissingResult{}, err
 	}
-	return FindMissing(ctx, c.st, probe.New(), c.logger)
+	return findMissingImpl(ctx, c.st, probe.New(), c.logger)
 }

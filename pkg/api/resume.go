@@ -17,7 +17,7 @@ const resumeEnvInstanceID = "AGENT_DIRECTOR_INSTANCE_ID"
 
 // ResumeStore is the narrow store surface Resume needs.
 type ResumeStore interface {
-	GetSpawn(instanceID string) (store.Spawn, error)
+	GetSpawn(instanceID string) (Spawn, error)
 	SetParentID(instanceID, parentID string) error
 }
 
@@ -39,8 +39,9 @@ type ResumeResult struct {
 	ClaudeInstanceID string `json:"claude_instance_id"`
 }
 
-// Resume brings a terminated Spawn back to life via
-// `claude --resume <session_id>` in a fresh tmux session (SRD §8.1).
+// resumeImpl is the unexported verb handler called by (c *Client).Resume.
+// It takes internal types directly and is not part of the public API surface;
+// external consumers use the Client method instead.
 //
 // Guards (in order; each error path is side-effect-free — no DB
 // mutation, no half-created tmux session):
@@ -70,7 +71,7 @@ type ResumeResult struct {
 // On launch failure (tmux refuses, claude binary missing, etc.) the
 // row's state stays `ended` / `missing` — the caller sees the error
 // and can retry.
-func Resume(s ResumeStore, t ResumeTmux, cfg config.Config, params ResumeParams) (ResumeResult, error) {
+func resumeImpl(s ResumeStore, t ResumeTmux, cfg config.Config, params ResumeParams) (ResumeResult, error) {
 	row, err := s.GetSpawn(params.ClaudeInstanceID)
 	if err != nil {
 		return ResumeResult{}, err
@@ -129,5 +130,5 @@ func (c *Client) Resume(params ResumeParams) (ResumeResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return ResumeResult{}, err
 	}
-	return Resume(c.st, c.tmuxClient, c.cfg, params)
+	return resumeImpl(c.st, c.tmuxClient, c.cfg, params)
 }

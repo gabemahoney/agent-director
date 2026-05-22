@@ -7,6 +7,12 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
+// SendKeysStore is the narrow store surface SendKeys needs. *store.Store
+// satisfies it; tests pass the real store.
+type SendKeysStore interface {
+	GetSpawn(instanceID string) (Spawn, error)
+}
+
 // SendKeysTmux is the narrow tmux surface SendKeys needs. *tmux.Client
 // satisfies it; tests pass a recording fake that captures the text +
 // press_enter pair without launching real tmux. The tmux client owns
@@ -52,7 +58,7 @@ type SendKeysResult struct{}
 // permission relay (Epic 10) owns the answer. SendKeys refuses with
 // ErrSendKeysWhileRelayed so the relay's decide() write isn't racing a
 // pane-side keystroke.
-func SendKeys(s *store.Store, tmux SendKeysTmux, params SendKeysParams) (SendKeysResult, error) {
+func SendKeys(s SendKeysStore, tmux SendKeysTmux, params SendKeysParams) (SendKeysResult, error) {
 	row, err := s.GetSpawn(params.ClaudeInstanceID)
 	if err != nil {
 		return SendKeysResult{}, err

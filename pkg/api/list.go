@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // ErrListInvalidLabel is returned when a caller-supplied label filter
@@ -19,7 +17,7 @@ var ErrListInvalidLabel = errors.New("ErrListInvalidLabel")
 // satisfies it via ListSpawns; tests fake the surface so the verb's
 // filter-translation can be exercised without driving SQLite.
 type ListStore interface {
-	ListSpawns(f store.ListFilters) ([]store.Spawn, error)
+	ListSpawns(f ListFilters) ([]Spawn, error)
 }
 
 // ListParams is the typed parameter shape for the list verb.
@@ -85,7 +83,7 @@ func List(s ListStore, params ListParams) (ListResult, error) {
 		labels[raw[:idx]] = raw[idx+1:]
 	}
 
-	rows, err := s.ListSpawns(store.ListFilters{
+	rows, err := s.ListSpawns(ListFilters{
 		State:           params.State,
 		Labels:          labels,
 		Parent:          params.Parent,

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/pkg/api"
-	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
@@ -78,7 +77,7 @@ func TestPauseEndedRowIsNoop(t *testing.T) {
 	tmux := &pauseTmuxRecorder{}
 
 	if _, err := api.Pause(context.Background(), f, tmux,
-		config.Pause{TimeoutSeconds: 1}, api.PauseParams{ClaudeInstanceID: "id-p-1"}); err != nil {
+		1, api.PauseParams{ClaudeInstanceID: "id-p-1"}); err != nil {
 		t.Fatalf("Pause: %v", err)
 	}
 	if len(tmux.calls) != 0 {
@@ -94,7 +93,7 @@ func TestPauseMissingRowIsNoop(t *testing.T) {
 	tmux := &pauseTmuxRecorder{}
 
 	if _, err := api.Pause(context.Background(), f, tmux,
-		config.Pause{TimeoutSeconds: 1}, api.PauseParams{ClaudeInstanceID: "id-p-2"}); err != nil {
+		1, api.PauseParams{ClaudeInstanceID: "id-p-2"}); err != nil {
 		t.Fatalf("Pause: %v", err)
 	}
 	if len(tmux.calls) != 0 {
@@ -115,7 +114,7 @@ func TestPauseWaitingTransitionsToEnded(t *testing.T) {
 	tmux := &pauseTmuxRecorder{}
 
 	if _, err := api.Pause(context.Background(), f, tmux,
-		config.Pause{TimeoutSeconds: 10}, api.PauseParams{ClaudeInstanceID: "id-p-3"}); err != nil {
+		10, api.PauseParams{ClaudeInstanceID: "id-p-3"}); err != nil {
 		t.Fatalf("Pause: %v", err)
 	}
 	want := []pauseRecordedSend{
@@ -150,7 +149,7 @@ func TestPauseWaitingTimesOut(t *testing.T) {
 
 	start := time.Now()
 	_, err := api.Pause(context.Background(), f, tmux,
-		config.Pause{TimeoutSeconds: 1}, api.PauseParams{ClaudeInstanceID: "id-p-4"})
+		1, api.PauseParams{ClaudeInstanceID: "id-p-4"})
 	elapsed := time.Since(start)
 
 	if !errors.Is(err, api.ErrPauseTimeout) {
@@ -180,7 +179,7 @@ func TestPauseUnpausableStatesRejected(t *testing.T) {
 			tmux := &pauseTmuxRecorder{}
 
 			_, err := api.Pause(context.Background(), f, tmux,
-				config.Pause{TimeoutSeconds: 1}, api.PauseParams{ClaudeInstanceID: "id-x"})
+				1, api.PauseParams{ClaudeInstanceID: "id-x"})
 			if !errors.Is(err, api.ErrSpawnNotPausable) {
 				t.Fatalf("state=%s: err = %v; want ErrSpawnNotPausable", c.state, err)
 			}
@@ -197,7 +196,7 @@ func TestPauseUnknownIdReturnsErrSpawnNotFound(t *testing.T) {
 	tmux := &pauseTmuxRecorder{}
 
 	_, err := api.Pause(context.Background(), f, tmux,
-		config.Pause{TimeoutSeconds: 1}, api.PauseParams{ClaudeInstanceID: "absent"})
+		1, api.PauseParams{ClaudeInstanceID: "absent"})
 	if !errors.Is(err, store.ErrSpawnNotFound) {
 		t.Fatalf("err = %v; want ErrSpawnNotFound", err)
 	}
@@ -227,7 +226,7 @@ func TestPauseHonorsContextCancel(t *testing.T) {
 	wrapped := &countingPauseStore{inner: f, polls: &pollCount, cancelAfter: 2, cancel: cancel}
 
 	_, err := api.Pause(ctx, wrapped, tmux,
-		config.Pause{TimeoutSeconds: 30}, api.PauseParams{ClaudeInstanceID: "id-p-c"})
+		30, api.PauseParams{ClaudeInstanceID: "id-p-c"})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v; want context.Canceled", err)
 	}
@@ -265,7 +264,7 @@ func TestPauseSendKeysFailurePropagates(t *testing.T) {
 	tmux := &pauseTmuxRecorder{fail: sentinel}
 
 	_, err := api.Pause(context.Background(), f, tmux,
-		config.Pause{TimeoutSeconds: 5}, api.PauseParams{ClaudeInstanceID: "id-p-sk"})
+		5, api.PauseParams{ClaudeInstanceID: "id-p-sk"})
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("err = %v; want sentinel chain", err)
 	}

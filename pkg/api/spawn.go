@@ -13,15 +13,10 @@ type SpawnResult struct {
 	ClaudeInstanceID string `json:"claude_instance_id"`
 }
 
-// Spawn is the verb-handler entry point for `agent-director spawn`. It
-// runs the SRD §7.1 → §7.4 pipeline: Resolve (template merge, currently
-// a no-op stub), Validate, ApplyDefaults (with collision check), Launch
-// (fire-and-forget tmux new-session + pending row insert).
-//
-// All SRD §13.1 errors flow up through this function untouched — the
-// CLI / MCP layer matches them via errors.Is and emits the canonical
-// err_name envelope.
-func Spawn(s *store.Store, tmuxClient spawn.TmuxClient, cfg config.Config, params spawn.SpawnParams) (SpawnResult, error) {
+// runSpawn is the unexported verb handler called by (c *Client).Spawn.
+// It takes internal types directly and is not part of the public API surface;
+// external consumers use the Client method instead.
+func runSpawn(s *store.Store, tmuxClient spawn.TmuxClient, cfg config.Config, params spawn.SpawnParams) (SpawnResult, error) {
 	r, err := spawn.Resolve(params, cfg)
 	if err != nil {
 		return SpawnResult{}, err
@@ -46,5 +41,5 @@ func (c *Client) Spawn(params SpawnParams) (SpawnResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return SpawnResult{}, err
 	}
-	return Spawn(c.st, c.tmuxClient, c.cfg, params)
+	return runSpawn(c.st, c.tmuxClient, c.cfg, params)
 }

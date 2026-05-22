@@ -2,6 +2,12 @@ package api
 
 import "github.com/gabemahoney/agent-director/internal/store"
 
+// KillStore is the narrow store surface Kill needs. *store.Store
+// satisfies it; tests pass the real store or a recording fake.
+type KillStore interface {
+	GetSpawn(instanceID string) (Spawn, error)
+}
+
 // KillTmux is the narrow tmux surface Kill needs. *tmux.Client
 // satisfies it; tests pass a recording fake that captures the kill argv.
 type KillTmux interface {
@@ -45,7 +51,7 @@ type KillResult struct{}
 // pre-kill state until find-missing (Epic 8) reconciles it. SRD §5
 // pins this intentionally so a hung tmux session and a freshly killed
 // one are reconciled by the same audit path.
-func Kill(s *store.Store, t KillTmux, lg KillLogger, params KillParams) (KillResult, error) {
+func Kill(s KillStore, t KillTmux, lg KillLogger, params KillParams) (KillResult, error) {
 	row, err := s.GetSpawn(params.ClaudeInstanceID)
 	if err != nil {
 		return KillResult{}, err

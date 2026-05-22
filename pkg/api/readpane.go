@@ -1,9 +1,14 @@
 package api
 
 import (
-	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
+
+// ReadPaneStore is the narrow store surface ReadPane needs. *store.Store
+// satisfies it; tests pass the real store.
+type ReadPaneStore interface {
+	GetSpawn(instanceID string) (Spawn, error)
+}
 
 // ReadPaneTmux is the narrow tmux surface ReadPane needs. *tmux.Client
 // satisfies it; tests pass a recording fake that returns scripted bytes.
@@ -49,7 +54,7 @@ type ReadPaneResult struct {
 // Errors: ErrSpawnNotFound when the id is unknown; ErrTmuxCaptureFailed
 // for transport-layer tmux failures (e.g. the session vanished between
 // the row lookup and the capture call).
-func ReadPane(s *store.Store, t ReadPaneTmux, params ReadPaneParams) (ReadPaneResult, error) {
+func ReadPane(s ReadPaneStore, t ReadPaneTmux, params ReadPaneParams) (ReadPaneResult, error) {
 	row, err := s.GetSpawn(params.ClaudeInstanceID)
 	if err != nil {
 		return ReadPaneResult{}, err

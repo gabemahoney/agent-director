@@ -4,8 +4,6 @@ import (
 	"database/sql"
 	"errors"
 	"time"
-
-	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // PermissionRequestInfo is the open permission_requests row projection
@@ -43,8 +41,8 @@ type SpawnRow struct {
 // methods on *store.Store; defined as an interface so api.Get's
 // permission-fetch branch is testable without raw SQL fixtures.
 type GetStore interface {
-	GetSpawn(instanceID string) (store.Spawn, error)
-	GetPermissionRequest(instanceID string) (store.PermissionRow, error)
+	GetSpawn(instanceID string) (Spawn, error)
+	GetPermissionRequest(instanceID string) (PermissionRow, error)
 }
 
 // Get returns the full Spawn row for the given claude_instance_id. Missing
