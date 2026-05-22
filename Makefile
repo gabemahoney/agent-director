@@ -1,4 +1,4 @@
-.PHONY: all build test generate lint test-image test-image-smoke test-docker \
+.PHONY: all build test generate lint err-coherence test-image test-image-smoke test-docker \
         release-binaries release-binaries-smoke
 
 # Pinned Claude Code version. Per SRD §15.2 the harness's image must install
@@ -44,6 +44,15 @@ errnames-json:
 
 lint:
 	go vet ./...
+
+# err-coherence runs the five-way err_name coherence gate. It asserts that:
+#   (a) handler-referenced sentinels ⊆ errnames.Catalog
+#   (b) api-origin Catalog entries ⊆ pkg/api exported Err* vars
+#   (c) callable-verb manifest ErrorNames ⊆ errnames.Catalog
+#   (d) errnames.Catalog ⊆ callable-verb manifest ErrorNames
+#   (e) catalog.json and surface.json match their generators (via sub-tests)
+err-coherence:
+	go test ./pkg/api/errnames/ -run "TestFiveWayCoherence|TestCatalogJSONUpToDate|TestSurfaceJSONUpToDate" -v
 
 # Build the Docker test harness image. Always rebuilds the binary first so
 # the image picks up the latest source.

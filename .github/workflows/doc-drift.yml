@@ -36,3 +36,19 @@ jobs:
             git diff pkg/api/errnames/catalog.json
             exit 1
           fi
+      - name: Check err-name coherence
+        run: make err-coherence
+      - name: Check catalog.json up-to-date
+        run: |
+          make errnames-json
+          if ! git diff --exit-code pkg/api/errnames/catalog.json; then
+            echo "::error::pkg/api/errnames/catalog.json is stale. Run 'make errnames-json' and commit the result."
+            exit 1
+          fi
+      - name: Check surface.json up-to-date
+        run: |
+          make surface-json
+          if ! git diff --exit-code pkg/api/manifest/surface.json; then
+            echo "::error::pkg/api/manifest/surface.json is stale. Run 'make surface-json' and commit the result."
+            exit 1
+          fi
