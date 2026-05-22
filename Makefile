@@ -1,5 +1,6 @@
 .PHONY: all build test generate lint err-coherence test-image test-image-smoke test-docker \
-        release-binaries release-binaries-smoke
+        release-binaries release-binaries-smoke \
+        libagent_director clean-cabi
 
 # Pinned Claude Code version. Per SRD §15.2 the harness's image must install
 # *this* version of @anthropic-ai/claude-code; bumping it requires re-running
@@ -167,3 +168,20 @@ release-binaries-smoke: release-binaries
 	./dist/agent-director-linux-amd64 help | jq -e '.verbs | length > 0' >/dev/null \
 		|| { echo "FAIL: linux-amd64 help did not return a non-empty verb list"; exit 1; }; \
 	echo "[smoke] OK — all 4 binaries built, linked, and the host-arch one runs"
+
+# dist/ is created on demand by libagent_director.
+dist/:
+	mkdir -p dist
+
+# libagent_director builds the C-shared library for linux/amd64 into dist/.
+# CGO_ENABLED=1 is required; this target intentionally does NOT affect the
+# static CLI produced by `make build` (CGO_ENABLED=0 remains the default).
+# After the build, check-cabi-header asserts every exported symbol starts
+# with `ad_` so a naming drift fails fast instead of silently shipping.
+libagent_director: dist/
+	CGO_ENABLED=1 go build -buildmode=c-shared -o dist/libagent_director.so ./pkg/cabi
+	go run ./tools/check-cabi-header dist/libagent_director.h
+
+# clean-cabi removes the c-shared artifacts produced by libagent_director.
+clean-cabi:
+	rm -f dist/libagent_director.so dist/libagent_director.h
