@@ -22,6 +22,24 @@ const defaultConfigPath = "~/.agent-director/config.toml"
 // (tier 3 of the three-tier StorePath precedence).
 const defaultStorePath = "~/.agent-director/state.db"
 
+// TmuxClient is the interface the Client uses to drive tmux sessions. The
+// production *tmux.Client satisfies it automatically (no production-code
+// changes were required to align the method signatures). Tests can inject a
+// *tmuxfix.Recorder via Options.TmuxClient to capture calls without launching
+// a real tmux process.
+type TmuxClient interface {
+	// NewSession creates a new detached tmux session.
+	NewSession(name, cwd string, envs map[string]string, command []string) error
+	// HasSession reports whether the named session currently exists.
+	HasSession(name string) (bool, error)
+	// KillSession terminates the named session.
+	KillSession(name string) error
+	// SendKeys delivers text to the named session's first pane.
+	SendKeys(name, text string, pressEnter bool) error
+	// CapturePane returns the last nLines of the named session's first pane.
+	CapturePane(name string, nLines int, ansi bool) (string, error)
+}
+
 // Client is the opaque handle through which callers interact with
 // agent-director. Obtain one via New; release resources with Close.
 //
@@ -30,7 +48,7 @@ const defaultStorePath = "~/.agent-director/state.db"
 // goroutines are race-free.
 type Client struct {
 	st         *store.Store
-	tmuxClient *tmux.Client
+	tmuxClient TmuxClient
 	cfg        config.Config
 	logger     *log.Logger
 	mu         sync.Mutex
@@ -118,10 +136,19 @@ func New(opts Options) (*Client, error) {
 		return nil, fmt.Errorf("api: open store: %w", err)
 	}
 
-	// Step 5 — construct tmux client.
-	tc := tmux.New()
-	if opts.TmuxCommand != "" {
-		tc = tmux.NewWithBinary(opts.TmuxCommand)
+	// Step 5 — resolve tmux client.
+	// opts.TmuxClient is an opt-in injection seam for tests (e.g. a
+	// *tmuxfix.Recorder). When nil (the production default), a real
+	// *tmux.Client is constructed from TmuxCommand or the PATH default.
+	var tc TmuxClient
+	if opts.TmuxClient != nil {
+		tc = opts.TmuxClient
+	} else {
+		if opts.TmuxCommand != "" {
+			tc = tmux.NewWithBinary(opts.TmuxCommand)
+		} else {
+			tc = tmux.New()
+		}
 	}
 
 	return &Client{

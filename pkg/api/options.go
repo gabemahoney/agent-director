@@ -43,4 +43,13 @@ type Options struct {
 	// on first use, matching the pre-refactor behavior of the binary.
 	// The CLI's setupClient sets this to true.
 	CreateIfMissing bool
+
+	// TmuxClient is an optional injection seam for tests. When non-nil it
+	// is used as-is instead of constructing a production *tmux.Client from
+	// TmuxCommand or the PATH default. Pass a *tmuxfix.Recorder here to
+	// capture tmux calls without launching real tmux. Setting this field
+	// does not change the behavior of any production code path — it is
+	// only consulted by New; a nil value (the zero default) preserves the
+	// original construction logic exactly.
+	TmuxClient TmuxClient
 }
