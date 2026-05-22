@@ -20,12 +20,6 @@ type Entry struct {
 	Err  error
 }
 
-// ErrUnknownTool is returned by the MCP dispatcher when the requested
-// tool name is not in the registered verb list. Declared here (not in
-// internal/mcp) so that internal/mcp can import pkg/api/errnames without
-// a cycle: internal/mcp → pkg/api/errnames → pkg/api, but not back.
-var ErrUnknownTool = errors.New("ErrUnknownTool")
-
 // Catalog is the canonical err_name lookup table for all agent-director
 // error paths. The CLI's Classify, the MCP server's classifyDispatchError,
 // and (later) pkg/cabi's JSON encoder all consume this table — there is
@@ -62,11 +56,16 @@ var Catalog = []Entry{
 	{Name: "ErrSpawnNotFound", Err: store.ErrSpawnNotFound},
 	{Name: "ErrTmuxNotAvailable", Err: tmux.ErrTmuxNotAvailable},
 	{Name: "ErrTmuxSessionCreate", Err: tmux.ErrTmuxSessionCreate},
-	{Name: "ErrTmuxKillFailed", Err: tmux.ErrTmuxKillFailed},
-	{Name: "ErrTmuxListPanesFailed", Err: tmux.ErrTmuxListPanesFailed},
+	// ErrTmuxKillFailed is intentionally absent: kill.go swallows tmux
+	// kill-session failures (the verb's post-condition is satisfied regardless),
+	// so this sentinel never surfaces to API callers and needs no catalog entry.
+	// ErrTmuxListPanesFailed is intentionally absent: tmux.ListPanes is not
+	// called by any pkg/api verb handler, so this error never reaches callers.
 	{Name: "ErrTmuxSendKeys", Err: tmux.ErrTmuxSendKeys},
 	{Name: "ErrTmuxCaptureFailed", Err: tmux.ErrTmuxCaptureFailed},
-	{Name: "ErrSchemaMismatch", Err: store.ErrSchemaMismatch},
+	// ErrSchemaMismatch is intentionally absent: it surfaces from store
+	// initialization (pkg/api.NewClient), not from individual verb handlers.
+	// cmd/agent-director handles it via direct errors.Is before any verb call.
 	{Name: "ErrSpawnNotInteractive", Err: api.ErrSpawnNotInteractive},
 	{Name: "ErrSendKeysWhileRelayed", Err: api.ErrSendKeysWhileRelayed},
 	{Name: "ErrSpawnNotPausable", Err: api.ErrSpawnNotPausable},
@@ -84,10 +83,12 @@ var Catalog = []Entry{
 	{Name: "ErrInvalidDecision", Err: api.ErrInvalidDecision},
 	{Name: "ErrNoOpenPermissionRequest", Err: store.ErrNoOpenPermissionRequest},
 	{Name: "ErrAlreadyDecided", Err: store.ErrAlreadyDecided},
-	// ErrUnknownTool is the MCP dispatcher's sentinel for unrecognized tool
-	// names. It is declared in this package (not internal/mcp) to keep the
-	// import graph cycle-free: internal/mcp → pkg/api/errnames, never back.
-	{Name: "ErrUnknownTool", Err: ErrUnknownTool},
+	// ErrUnknownTool is intentionally absent from this Catalog: it is a
+	// dispatch-level MCP error (not a verb-surface error) declared and handled
+	// directly in internal/mcp. internal/mcp.classifyDispatchError checks for
+	// it before falling back to errnames.Classify, so no catalog entry is
+	// needed. Keeping it here would require a catalog entry not backed by any
+	// callable verb's ErrorNames, violating the five-way coherence invariant.
 }
 
 // Classify returns the canonical err_name and err_description for an error

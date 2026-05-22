@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 
@@ -240,18 +241,24 @@ func (s *Server) handleToolCall(ctx context.Context, req *Request, respond func(
 	}, nil)
 }
 
-// ErrUnknownTool is a re-export of errnames.ErrUnknownTool for callers
-// that already import internal/mcp. The canonical declaration lives in
-// pkg/api/errnames to avoid an import cycle
-// (internal/mcp → pkg/api/errnames, not the reverse).
-var ErrUnknownTool = errnames.ErrUnknownTool
+// ErrUnknownTool is returned by the MCP dispatcher when the requested
+// tool name is not in the registered verb list. Declared here (not in
+// pkg/api/errnames) because it is a dispatch-level error, not a
+// verb-surface error: it has no callable VerbDef.ErrorNames entry and
+// must not appear in errnames.Catalog (doing so would violate the
+// five-way coherence invariant). The import direction is
+// internal/mcp → pkg/api/errnames; the sentinel lives at the call site.
+var ErrUnknownTool = errors.New("ErrUnknownTool")
 
 // classifyDispatchError extracts the typed err_name from a Dispatcher
-// error. The Dispatcher's Call method may wrap any of the SRD §13.1
-// sentinels via `%w`; we walk errnames.Catalog via errors.Is to recover
-// the canonical name. Unrecognized errors collapse to "ErrInternal" —
-// matching the CLI's Classify behavior.
+// error. ErrUnknownTool is checked explicitly first (it is a dispatch-level
+// sentinel not in errnames.Catalog); all other errors are classified via
+// errnames.Classify, which walks the Catalog via errors.Is. Unrecognized
+// errors collapse to "ErrInternal" — matching the CLI's Classify behavior.
 func classifyDispatchError(err error) (name, description string) {
+	if errors.Is(err, ErrUnknownTool) {
+		return "ErrUnknownTool", err.Error()
+	}
 	return errnames.Classify(err)
 }
 

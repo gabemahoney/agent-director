@@ -64,18 +64,19 @@ var packageOf = map[string]string{
 	"ErrTmuxSessionNameTooLong": "spawn",
 
 	// internal/store
+	// ErrSchemaMismatch is intentionally absent: it is a store-initialization
+	// error (not a verb error) removed from Catalog in Task 7.
 	"ErrSpawnNotFound":           "store",
-	"ErrSchemaMismatch":          "store",
 	"ErrNoOpenPermissionRequest": "store",
 	"ErrAlreadyDecided":          "store",
 
 	// internal/tmux
-	"ErrTmuxNotAvailable":    "tmux",
-	"ErrTmuxSessionCreate":   "tmux",
-	"ErrTmuxKillFailed":      "tmux",
-	"ErrTmuxListPanesFailed": "tmux",
-	"ErrTmuxSendKeys":        "tmux",
-	"ErrTmuxCaptureFailed":   "tmux",
+	// ErrTmuxKillFailed and ErrTmuxListPanesFailed are intentionally absent:
+	// they were removed from Catalog in Task 7 (never surfaced to API callers).
+	"ErrTmuxNotAvailable":  "tmux",
+	"ErrTmuxSessionCreate": "tmux",
+	"ErrTmuxSendKeys":      "tmux",
+	"ErrTmuxCaptureFailed": "tmux",
 
 	// internal/config
 	"ErrTemplateNameUnsafe": "config",
@@ -98,8 +99,8 @@ var packageOf = map[string]string{
 	"ErrRelayModeOff":         "api",
 	"ErrInvalidDecision":      "api",
 
-	// pkg/api/errnames
-	"ErrUnknownTool": "errnames",
+	// ErrUnknownTool is intentionally absent: it was moved from pkg/api/errnames
+	// to internal/mcp in Task 7 (dispatch-level error, not a verb-surface error).
 }
 
 func main() {

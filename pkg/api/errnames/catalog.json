@@ -70,16 +70,6 @@
     "description": ""
   },
   {
-    "name": "ErrTmuxKillFailed",
-    "package": "tmux",
-    "description": ""
-  },
-  {
-    "name": "ErrTmuxListPanesFailed",
-    "package": "tmux",
-    "description": ""
-  },
-  {
     "name": "ErrTmuxSendKeys",
     "package": "tmux",
     "description": ""
@@ -87,11 +77,6 @@
   {
     "name": "ErrTmuxCaptureFailed",
     "package": "tmux",
-    "description": ""
-  },
-  {
-    "name": "ErrSchemaMismatch",
-    "package": "store",
     "description": ""
   },
   {
@@ -177,11 +162,6 @@
   {
     "name": "ErrAlreadyDecided",
     "package": "store",
-    "description": ""
-  },
-  {
-    "name": "ErrUnknownTool",
-    "package": "errnames",
     "description": ""
   }
 ]
