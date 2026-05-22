@@ -7,8 +7,15 @@ import "errors"
 // errors.Is to detect it.
 var ErrClientClosed = errors.New("api: client is closed")
 
-// Verb-surface error sentinels per SRD §13.1. The CLI's errCatalog matches
-// via errors.Is so the canonical err_name envelope is stable.
+// Verb-surface error sentinels per SRD §13.1. These sentinels MUST have a
+// matching entry in pkg/api/errnames.Catalog. Coherence is enforced by the
+// catalog test in pkg/api/errnames/catalog_test.go (Task 6, subtask ib).
+// Adding a sentinel here without a Catalog entry will cause the doc-drift
+// CI gate to diverge and the full test suite to fail.
+//
+// Note: pkg/api cannot import pkg/api/errnames (that would create a cycle
+// since errnames imports pkg/api). The dependency direction is
+// pkg/api/errnames → pkg/api. Coherence is runtime-tested, not static.
 
 // ErrSpawnNotInteractive is returned by interactive verbs (send-keys, and
 // any future verb that drives the Spawn's input) when the target Spawn's
