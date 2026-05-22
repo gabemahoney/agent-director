@@ -29,12 +29,12 @@ const defaultStorePath = "~/.agent-director/state.db"
 // concurrent Close calls and (Task 2+) verb method calls from multiple
 // goroutines are race-free.
 type Client struct {
-	st          *store.Store
-	tmuxClient  *tmux.Client
-	cfg         config.Config
-	logger      *log.Logger
-	mu          sync.Mutex
-	closed      bool
+	st         *store.Store
+	tmuxClient *tmux.Client
+	cfg        config.Config
+	logger     *log.Logger
+	mu         sync.Mutex
+	closed     bool
 }
 
 // New constructs a Client from opts, wiring config, store, and tmux.
