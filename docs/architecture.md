@@ -273,6 +273,8 @@ Cite SRD §2 for the overall component decomposition this diagram realizes.
 
 ### `pkg/cabi` — C-ABI envelope shape and panic-recovery contract
 
+For the caller-surface topology overview and the no-duplication invariant, see [Caller surfaces and shared API](#caller-surfaces-and-shared-api).
+
 `pkg/cabi` is declared as `package main` — Go's `buildmode=c-shared` requires
 the entry package to carry that name, but conceptually this is the C-ABI shim;
 the path `pkg/cabi` is the canonical reference throughout this document.
@@ -349,11 +351,6 @@ are explicitly prohibited in `pkg/cabi` source: `internal/store`,
   `context.WithTimeout`; absent or ≤ 0 means `context.Background()` with no
   deadline. Other verbs ignore the field entirely.
 
-> **T7 forward pointer.** The full caller-surface topology section — describing
-> the three `pkg/api.Client` consumers (`cmd/agent-director`, `internal/mcp`,
-> `pkg/cabi`), the dispatch-flow diagram, and the "no duplicated business logic"
-> statement — is deferred to the T7 reconciliation pass.
-
 ### Build paths and isolation invariant
 
 agent-director has two distinct build paths that must remain independent:
@@ -380,6 +377,41 @@ naming drift before the artifact ships.
 `pkg/cabi` would pull cgo into the CLI build path and break static
 linkage. The invariant is enforced at test time by
 `cmd/agent-director/cabi_isolation_test.go`.
+
+## Caller surfaces and shared API
+
+agent-director exposes three distinct caller surfaces: the CLI subprocess (`cmd/agent-director`), reached by shelling out to the binary; the in-process Go consumer, which imports `pkg/api` directly and calls `*pkg/api.Client` methods; and foreign-language callers via `pkg/cabi`, which load `libagent_director.so` and call `ad_*` C exports — TS/Bun is the primary consumer today, with Python planned.
+
+no business logic is duplicated between the CLI and `pkg/cabi`; both dispatch through `pkg/api.Client`
+
+The CLI marshals errors via `pkg/api/errnames.Catalog`: `cmd/agent-director`'s envelope writer calls `errnames.Classify` to map every Go error sentinel to its canonical `err_name` string.
+
+`pkg/cabi` reuses the same catalog for its own JSON error envelopes — there is no parallel sentinel table; the only cabi-scoped addition is `ErrUnknownHandle`, registered in the catalog with `Scope: "cabi"` and exempt from the per-verb `manifest.ErrorNames` cross-check.
+
+```
+  CLI subprocess         in-process Go consumer    foreign wrapper (TS/Bun via pkg/cabi)
+  (cmd/agent-director)   (import pkg/api)          (libagent_director.so)
+         │                      │                          │
+         │                      │                  +----------------+
+         │                      │                  |   pkg/cabi     |
+         │                      │                  | (ad_* exports) |
+         │                      │                  +-------+--------+
+         │                      │                          │
+         └──────────────────────┴──────────────────────────┘
+                                │   client.X(params)
+                                ▼
+                   +--------------------------+
+                   |     pkg/api.Client       |
+                   | (verb-handler home;      |
+                   |  owns store/tmux/cfg)    |
+                   +-----------+--------------+
+                    │      │      │      │    │
+                    ▼      ▼      ▼      ▼    ▼
+               internal/ internal/ internal/ internal/ internal/
+               store     tmux      spawn     config    probe
+```
+
+Every arrow from a caller surface terminates at `pkg/api.Client`; no surface short-circuits to a lower layer.
 
 ## State Machine
 
