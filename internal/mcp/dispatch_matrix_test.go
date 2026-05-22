@@ -160,7 +160,7 @@ func TestToolsCallDispatchMatrix(t *testing.T) {
 func openMatrixStore(t *testing.T) *store.Store {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "state.db")
-	s, err := store.Open(path)
+	s, err := store.OpenOrInit(path)
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}

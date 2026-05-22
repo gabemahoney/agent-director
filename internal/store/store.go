@@ -17,10 +17,16 @@ import (
 	_ "modernc.org/sqlite" // pure-Go SQLite driver registered as "sqlite"
 )
 
-// ErrSchemaMismatch is returned by Open when the SQLite user_version is
-// non-zero and does not match the schema version this binary understands.
-// Callers should use errors.Is to detect it.
+// ErrSchemaMismatch is returned by Open/OpenOrInit when the SQLite
+// user_version is non-zero and does not match the schema version this binary
+// understands. Callers should use errors.Is to detect it.
 var ErrSchemaMismatch = errors.New("store: schema version mismatch")
+
+// ErrStoreNotInitialized is returned by Open when the database file does not
+// exist. It signals that the caller should either run OpenOrInit (which
+// creates the file and applies the schema) or report a useful error to the
+// user. Callers should use errors.Is to detect it.
+var ErrStoreNotInitialized = errors.New("store: database not initialized")
 
 // schemaVersion is the current schema version this package writes and reads.
 // Bump (and add a migration) whenever the DDL in schema.go changes.
@@ -40,10 +46,10 @@ type Store struct {
 	db *sql.DB
 }
 
-// Open prepares the SQLite database at path, creating its parent directory
-// and the file itself when missing, applying file-mode constraints, opening
-// a single-connection pool, enabling WAL + foreign keys, and ensuring the
-// schema is at the current version.
+// Open opens an existing SQLite database at path. It does NOT create the
+// parent directory or the database file; if the file is absent it returns
+// ErrStoreNotInitialized. Use OpenOrInit when create-if-missing behavior is
+// required (e.g. CLI first-run).
 //
 // A leading "~/" in path is expanded against the current user's home dir.
 //
@@ -55,11 +61,43 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("store: resolve path: %w", err)
 	}
 
+	if _, err := os.Stat(resolved); os.IsNotExist(err) {
+		return nil, fmt.Errorf("store: %w", ErrStoreNotInitialized)
+	} else if err != nil {
+		return nil, fmt.Errorf("store: stat db file: %w", err)
+	}
+
+	return openDB(resolved)
+}
+
+// OpenOrInit prepares the SQLite database at path, creating its parent
+// directory and the file itself when missing, applying file-mode constraints,
+// opening a single-connection pool, enabling WAL + foreign keys, and ensuring
+// the schema is at the current version.
+//
+// A leading "~/" in path is expanded against the current user's home dir.
+//
+// On any error the caller does not need to close anything — OpenOrInit cleans
+// up the partially-opened *sql.DB before returning.
+func OpenOrInit(path string) (*Store, error) {
+	resolved, err := expandTilde(path)
+	if err != nil {
+		return nil, fmt.Errorf("store: resolve path: %w", err)
+	}
+
 	parent := filepath.Dir(resolved)
 	if err := os.MkdirAll(parent, parentDirMode); err != nil {
 		return nil, fmt.Errorf("store: create parent dir: %w", err)
 	}
 
+	return openDB(resolved)
+}
+
+// openDB dials a SQLite connection at the given (already-resolved, already-
+// present-or-newly-created) path, verifies PRAGMAs, enforces file mode, and
+// ensures the schema is current. It is the shared backend for Open and
+// OpenOrInit.
+func openDB(resolved string) (*Store, error) {
 	// foreign_keys is a per-connection PRAGMA, so set it via DSN so every
 	// connection the pool dials in starts with FKs enforced. journal_mode
 	// persists in the DB header, but we set it via DSN too for symmetry

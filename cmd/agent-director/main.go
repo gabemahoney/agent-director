@@ -118,7 +118,7 @@ func runHook() int {
 		earlyFailClosed(fmt.Sprintf("load config: %v", err))
 		return hookExitCode
 	}
-	st, err := store.Open(cfg.Store.DbPath)
+	st, err := store.OpenOrInit(cfg.Store.DbPath)
 	if err != nil {
 		earlyFailClosed(fmt.Sprintf("open store: %v", err))
 		return hookExitCode
@@ -276,7 +276,7 @@ func setupStoreAndCfg() (*store.Store, config.Config, error) {
 
 	// config.Load fully resolves path fields (SRD §11), so DbPath is already
 	// $HOME-expanded — no further tilde handling needed at the CLI layer.
-	st, err := store.Open(cfg.Store.DbPath)
+	st, err := store.OpenOrInit(cfg.Store.DbPath)
 	if err != nil {
 		name := errStoreOpen
 		if errors.Is(err, store.ErrSchemaMismatch) {

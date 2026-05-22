@@ -45,7 +45,7 @@ func newTmux() *recordingTmux { return &recordingTmux{failOn: -1} }
 func openStoreWithRow(t *testing.T, id, sessionName, state, relayMode string) *store.Store {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "state.db")
-	s, err := store.Open(path)
+	s, err := store.OpenOrInit(path)
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}

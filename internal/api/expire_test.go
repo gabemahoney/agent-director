@@ -22,7 +22,7 @@ import (
 func seedExpireFixture(t *testing.T) (*store.Store, string) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	s, err := store.Open(dbPath)
+	s, err := store.OpenOrInit(dbPath)
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}

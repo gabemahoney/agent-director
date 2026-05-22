@@ -13,7 +13,7 @@ import (
 func openTempStore(t *testing.T) (*Store, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "state.db")
-	s, err := Open(path)
+	s, err := OpenOrInit(path)
 	if err != nil {
 		t.Fatalf("Open(%q) failed: %v", path, err)
 	}
@@ -53,7 +53,7 @@ func TestOpenCreatesSchemaV1(t *testing.T) {
 func TestOpenIsIdempotent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 	for i := 0; i < 2; i++ {
-		s, err := Open(path)
+		s, err := OpenOrInit(path)
 		if err != nil {
 			t.Fatalf("Open #%d: %v", i, err)
 		}
