@@ -37,6 +37,11 @@ generate:
 surface-json:
 	go generate ./pkg/api/manifest/...
 
+# errnames-json regenerates pkg/api/errnames/catalog.json from the err_name catalog.
+# Also run by 'make generate' via the //go:generate directive in pkg/api/errnames/doc.go.
+errnames-json:
+	go generate ./pkg/api/errnames/...
+
 lint:
 	go vet ./...
 

@@ -29,3 +29,10 @@ jobs:
             git diff pkg/api/manifest/surface.json
             exit 1
           fi
+      - name: Check for drift in catalog.json
+        run: |
+          if ! git diff --exit-code pkg/api/errnames/catalog.json; then
+            echo "::error::pkg/api/errnames/catalog.json is out of date. Run 'make errnames-json' locally and commit the result."
+            git diff pkg/api/errnames/catalog.json
+            exit 1
+          fi
