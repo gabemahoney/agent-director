@@ -1,7 +1,8 @@
 .PHONY: all build test generate lint err-coherence nondet-coverage \
         test-image test-image-smoke test-docker \
         release-binaries release-binaries-smoke \
-        libagent_director clean-cabi
+        libagent_director clean-cabi \
+        consumer-dryrun
 
 # Pinned Claude Code version. Per SRD §15.2 the harness's image must install
 # *this* version of @anthropic-ai/claude-code; bumping it requires re-running
@@ -192,3 +193,11 @@ libagent_director: dist/
 # clean-cabi removes the c-shared artifacts produced by libagent_director.
 clean-cabi:
 	rm -f dist/libagent_director.so dist/libagent_director.h
+
+# consumer-dryrun builds the tools/consumer-dryrun mini-module, which imports
+# pkg/api from a separate Go module via a replace directive. A clean build
+# proves that external consumers can compile against pkg/api without
+# referencing any internal/* package directly. Go's visibility rules enforce
+# this: any attempt to import internal/* from outside the module would fail.
+consumer-dryrun:
+	cd tools/consumer-dryrun && go build ./...

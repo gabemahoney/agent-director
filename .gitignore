@@ -2,6 +2,9 @@ reference/
 bin/
 dist/
 tmpbin/
+# `make consumer-dryrun` leaves this binary in-tree as a side effect of
+# `go build ./...` from inside the mini-module.
+tools/consumer-dryrun/agent-director-consumer-dryrun
 
 # Bee hives live in the enclosing project folder, not the repo. Only the
 # testplans hive (consumed by the Docker harness) stays in-tree. If a future
