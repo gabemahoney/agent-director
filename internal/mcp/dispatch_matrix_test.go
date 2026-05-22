@@ -4,16 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/api/manifest"
-	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/mcp"
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
-	"github.com/gabemahoney/agent-director/internal/tmux"
+	api "github.com/gabemahoney/agent-director/pkg/api"
 )
 
 // matrixID is the sentinel claude_instance_id used across every verb
@@ -109,13 +109,38 @@ func TestToolsCallDispatchMatrix(t *testing.T) {
 			// the runtime cleans up.
 			t.Setenv("HOME", t.TempDir())
 
-			s := openMatrixStore(t)
-			if tc.setup != nil {
-				tc.setup(t, s)
+			dir := t.TempDir()
+			storePath := filepath.Join(dir, "state.db")
+			cfgPath := filepath.Join(dir, "config.toml")
+			if err := os.WriteFile(cfgPath, []byte(""), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
 			}
-			d := mcp.NewLiveDispatcher(s, tmux.New(), config.Default())
 
-			_, err := d.Call(context.Background(), mcp.ToolName(v.Name), json.RawMessage(tc.args))
+			// Seed the store via a short-lived handle before the client
+			// opens it, matching the newTestClientWithRows pattern used in
+			// pkg/api/methods_test.go.
+			if tc.setup != nil {
+				s, err := store.OpenOrInit(storePath)
+				if err != nil {
+					t.Fatalf("store.OpenOrInit: %v", err)
+				}
+				tc.setup(t, s)
+				_ = s.Close()
+			}
+
+			client, err := api.New(api.Options{
+				StorePath:       storePath,
+				ConfigPath:      cfgPath,
+				CreateIfMissing: true,
+			})
+			if err != nil {
+				t.Fatalf("api.New: %v", err)
+			}
+			t.Cleanup(func() { _ = client.Close() })
+
+			d := mcp.NewLiveDispatcher(client)
+
+			_, err = d.Call(context.Background(), mcp.ToolName(v.Name), json.RawMessage(tc.args))
 
 			// Round-trip proof for verbs taking claude_instance_id: the
 			// store was seeded at matrixID, so a healthy decode finds
@@ -153,19 +178,6 @@ func TestToolsCallDispatchMatrix(t *testing.T) {
 			}
 		})
 	}
-}
-
-// openMatrixStore opens a fresh on-disk SQLite store under t.TempDir().
-// Used per-subtest so verb cases don't see each other's seeded rows.
-func openMatrixStore(t *testing.T) *store.Store {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "state.db")
-	s, err := store.OpenOrInit(path)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	return s
 }
 
 // seedMatrixSpawn inserts one Spawn row at the requested state and

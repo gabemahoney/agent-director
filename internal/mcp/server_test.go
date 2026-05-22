@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/api/manifest"
-	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/mcp"
 )
 
@@ -305,19 +304,11 @@ func TestUnknownToolReturnsErrUnknownTool(t *testing.T) {
 	// The MCP server's dispatcher (LiveDispatcher) returns ErrUnknownTool
 	// when the tool name isn't in its switch. The fake dispatcher
 	// doesn't replicate that, so this test pins via the live dispatcher
-	// directly. We construct one with nil store/tmux because the
-	// unknown-tool path short-circuits before touching them.
-	d := mcp.NewLiveDispatcher(nil, nil, defaultCfg())
+	// directly. We construct one with a nil client because the
+	// unknown-tool path short-circuits before any client method is called.
+	d := mcp.NewLiveDispatcher(nil)
 	_, err := d.Call(context.Background(), "totally_made_up_tool", json.RawMessage(`{}`))
 	if !errors.Is(err, mcp.ErrUnknownTool) {
 		t.Fatalf("err = %v; want ErrUnknownTool", err)
 	}
-}
-
-// defaultCfg constructs a fully-formed config.Config for tests that
-// don't care about specific values. Avoids importing config from
-// test files (Go's import cycle rules permit it but it's cleaner to
-// keep the helper local).
-func defaultCfg() config.Config {
-	return config.Default()
 }
