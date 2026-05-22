@@ -320,7 +320,7 @@ verified by three complementary test layers:
    deliberate panic via the `_inject_panic` seam, and asserts the recovered
    `ErrInternal` envelope is returned without crashing the process. The
    build-tag forwarding pattern: a `dlopenBuildTags` package-level variable,
-   seeded by tag-gated `init()` files (e.g. `buildtags_dlopen_panic.go`), is
+   seeded by tag-gated `init()` files (e.g. `buildtags_panic_inject.go`), is
    read by the dlopen `TestMain` to forward `cabi_panic_inject` into the
    `go build` command that compiles the `.so`. The deliberate-panic sentinel is
    compiled out of production builds — it is only present when the
