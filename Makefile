@@ -32,6 +32,11 @@ test:
 generate:
 	go generate ./...
 
+# surface-json regenerates pkg/api/manifest/surface.json from the manifest.
+# Also run by 'make generate' via the //go:generate directive in pkg/api/manifest/doc.go.
+surface-json:
+	go generate ./pkg/api/manifest/...
+
 lint:
 	go vet ./...
 

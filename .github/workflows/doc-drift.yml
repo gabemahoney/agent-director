@@ -13,12 +13,19 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: 'go.mod'
-      - name: Regenerate docs
+      - name: Regenerate docs and surface.json
         run: make generate
-      - name: Check for drift
+      - name: Check for drift in docs/
         run: |
           if ! git diff --exit-code docs/; then
             echo "::error::Generated docs are out of date. Run 'make generate' locally and commit the result."
             git diff docs/
+            exit 1
+          fi
+      - name: Check for drift in surface.json
+        run: |
+          if ! git diff --exit-code pkg/api/manifest/surface.json; then
+            echo "::error::pkg/api/manifest/surface.json is out of date. Run 'make surface-json' locally and commit the result."
+            git diff pkg/api/manifest/surface.json
             exit 1
           fi
