@@ -301,6 +301,29 @@ inner closure guarded by `defer recover()`. A panic occurring mid-call returns
 an `ErrInternal` envelope to the caller; it never crosses the C boundary. This
 is a hard invariant: no Go panic may propagate into C.
 
+**Verb shape: thin marshal-and-dispatch.** Every `ad_*` export is a thin
+wrapper: parse JSON params → resolve handle via the registry (or skip for
+handle-free verbs) → call the matching `*pkg/api.Client` method → serialize
+the result. No business logic lives in `pkg/cabi`; the package imports only
+`pkg/api`, `pkg/api/errnames`, and `pkg/api/manifest`. The following imports
+are explicitly prohibited in `pkg/cabi` source: `internal/store`,
+`internal/tmux`, `internal/spawn`, `internal/config`, and `internal/probe`.
+
+- **Handle-free verbs.** `ad_version` is the sole handle-free verb in v1.
+  The authoritative set is the `handleFreeVerbs` map in `dispatch.go` — no
+  other file in `pkg/cabi` may hard-code this list.
+- **`ErrUnknownHandle`.** A cabi-only sentinel registered in
+  `pkg/api/errnames.Catalog` with `Scope: "cabi"`. The five-way coherence
+  gate exempts `cabi`-scoped entries from the per-verb `manifest.ErrorNames`
+  cross-check — no CLI verb emits `ErrUnknownHandle`, so it must appear in
+  the catalog and the Go sentinel set but not in any `VerbDef.ErrorNames`
+  slice.
+- **`timeout_ms`.** Verbs whose `pkg/api` signature takes a
+  `context.Context` (`ad_pause`, `ad_find_missing`) read an optional
+  `timeout_ms` integer from the JSON params and construct a
+  `context.WithTimeout`; absent or ≤ 0 means `context.Background()` with no
+  deadline. Other verbs ignore the field entirely.
+
 > **T7 forward pointer.** The full caller-surface topology section — describing
 > the three `pkg/api.Client` consumers (`cmd/agent-director`, `internal/mcp`,
 > `pkg/cabi`), the dispatch-flow diagram, and the "no duplicated business logic"
