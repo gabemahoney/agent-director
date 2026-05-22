@@ -93,8 +93,9 @@ agent-director spawn \
 
 ```go
 result, err := c.Spawn(api.SpawnParams{
-    CWD:       "/repos/widget",
-    RelayMode: "on",
+    CWD:              "/tmp",
+    RelayMode:        "on",
+    ClaudeInstanceID: "claude_example",
     AgentDirectorLabels: map[string]string{
         "project": "widget",
     },
@@ -185,7 +186,7 @@ agent-director send-keys \
 ```
 
 ```go
-_, err = c.SendKeys(api.SendKeysParams{
+_, err := c.SendKeys(api.SendKeysParams{
     ClaudeInstanceID: "claude_2026-05-22T18-23-15",
     Text:             "what is 2+2?",
 })
@@ -217,7 +218,7 @@ agent-director kill \
 ```
 
 ```go
-_, err = c.Kill(api.KillParams{
+_, err := c.Kill(api.KillParams{
     ClaudeInstanceID: "claude_2026-05-22T18-23-15",
 })
 if err != nil {
