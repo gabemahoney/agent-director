@@ -18,10 +18,10 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"log"
 
+	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
@@ -240,53 +240,19 @@ func (s *Server) handleToolCall(ctx context.Context, req *Request, respond func(
 	}, nil)
 }
 
-// ErrUnknownTool is returned by a Dispatcher when the tool name is
-// not in the registered list. The server maps it to MCP -32601 in
-// classifyDispatchError below.
-var ErrUnknownTool = errors.New("ErrUnknownTool")
+// ErrUnknownTool is a re-export of errnames.ErrUnknownTool for callers
+// that already import internal/mcp. The canonical declaration lives in
+// pkg/api/errnames to avoid an import cycle
+// (internal/mcp → pkg/api/errnames, not the reverse).
+var ErrUnknownTool = errnames.ErrUnknownTool
 
 // classifyDispatchError extracts the typed err_name from a Dispatcher
 // error. The Dispatcher's Call method may wrap any of the SRD §13.1
-// sentinels via `%w`; we use errors.Is against a small probe set to
-// recover the canonical name. Unrecognized errors collapse to
-// "ErrInternal" — matching the CLI's classifyError behavior.
+// sentinels via `%w`; we walk errnames.Catalog via errors.Is to recover
+// the canonical name. Unrecognized errors collapse to "ErrInternal" —
+// matching the CLI's Classify behavior.
 func classifyDispatchError(err error) (name, description string) {
-	if err == nil {
-		return "", ""
-	}
-	for _, ec := range errProbes {
-		if errors.Is(err, ec.err) {
-			return ec.name, err.Error()
-		}
-	}
-	return "ErrInternal", err.Error()
-}
-
-// errProbes is the local probe set the MCP server uses to translate
-// dispatcher errors into canonical err_names. Kept as a small table
-// rather than re-using the CLI's errCatalog so this package stays
-// importable without circular dependencies.
-var errProbes []errorProbe
-
-// errorProbe is one entry in the err-name lookup table. RegisterError
-// is the registration seam — the CLI wiring populates this from its
-// own catalog so the two views never drift.
-type errorProbe struct {
-	name string
-	err  error
-}
-
-// RegisterError adds (or replaces) an entry in the probe set. Called
-// from cmd/ during MCP wiring so the server inherits the CLI's
-// canonical err_name table.
-func RegisterError(name string, err error) {
-	for i, p := range errProbes {
-		if p.name == name {
-			errProbes[i].err = err
-			return
-		}
-	}
-	errProbes = append(errProbes, errorProbe{name: name, err: err})
+	return errnames.Classify(err)
 }
 
 // InitializeResult is the MCP initialize response payload.

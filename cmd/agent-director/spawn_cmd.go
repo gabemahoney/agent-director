@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 )
 
 // spawnHandlerWith implements `agent-director spawn`. Called via a closure
@@ -21,8 +22,8 @@ func spawnHandlerWith(client *pkgapi.Client, args []string) error {
 	}
 	result, err := client.Spawn(params)
 	if err != nil {
-		name, desc := classifyError(err)
-		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	return writeJSON(os.Stdout, result)
 }
@@ -90,8 +91,8 @@ func statusHandlerWith(client *pkgapi.Client, args []string) error {
 	}
 	res, err := client.Status(id)
 	if err != nil {
-		name, desc := classifyError(err)
-		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	return writeJSON(os.Stdout, res)
 }
@@ -103,8 +104,8 @@ func sendKeysHandlerWith(client *pkgapi.Client, args []string) error {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if _, err := client.SendKeys(params); err != nil {
-		name, desc := classifyError(err)
-		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	return writeJSON(os.Stdout, struct{}{})
 }
@@ -140,8 +141,8 @@ func readPaneHandlerWith(client *pkgapi.Client, args []string) error {
 	}
 	result, err := client.ReadPane(params)
 	if err != nil {
-		name, desc := classifyError(err)
-		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	return writeJSON(os.Stdout, result)
 }
@@ -204,8 +205,8 @@ func makeTemplateHandlerWith(client *pkgapi.Client, args []string) error {
 	}
 	result, err := client.MakeTemplate(p)
 	if err != nil {
-		name, desc := classifyError(err)
-		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	return writeJSON(os.Stdout, result)
 }
@@ -241,8 +242,8 @@ func listHandlerWith(client *pkgapi.Client, args []string) error {
 	p.Labels = labels
 	result, err := client.List(p)
 	if err != nil {
-		name, desc := classifyError(err)
-		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	return writeJSON(os.Stdout, result)
 }
@@ -267,8 +268,8 @@ func pauseHandlerWith(client *pkgapi.Client, args []string) error {
 	}
 	result, err := client.Pause(context.Background(), p)
 	if err != nil {
-		name, desc := classifyError(err)
-		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	return writeJSON(os.Stdout, result)
 }
@@ -295,8 +296,8 @@ func decideHandlerWith(client *pkgapi.Client, args []string) error {
 	}
 	result, err := client.Decide(p)
 	if err != nil {
-		name, desc := classifyError(err)
-		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	return writeJSON(os.Stdout, result)
 }
@@ -317,8 +318,8 @@ func resumeHandlerWith(client *pkgapi.Client, args []string) error {
 	}
 	result, err := client.Resume(p)
 	if err != nil {
-		name, desc := classifyError(err)
-		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	return writeJSON(os.Stdout, result)
 }
@@ -340,8 +341,8 @@ func killHandlerWith(client *pkgapi.Client, args []string) error {
 	}
 	result, err := client.Kill(p)
 	if err != nil {
-		name, desc := classifyError(err)
-		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	return writeJSON(os.Stdout, result)
 }
@@ -360,8 +361,8 @@ func getHandlerWith(client *pkgapi.Client, args []string) error {
 	}
 	res, err := client.Get(id)
 	if err != nil {
-		name, desc := classifyError(err)
-		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	return writeJSON(os.Stdout, res)
 }

@@ -50,8 +50,6 @@ func serveHandlerWith(cfg config.Config, args []string) error {
 		return nil
 	}
 
-	registerMCPErrors()
-
 	// Construct a SEPARATE Client for the MCP dispatcher (Pin H4).
 	// Logger: nil so Kill/FindMissing/Expire WARN paths are silent for MCP.
 	// CreateIfMissing: true so the MCP server can create the DB on first run.
@@ -114,18 +112,3 @@ func newMCPLogger(cfg config.Config) *log.Logger {
 	return log.New(dest, "agent-director-mcp ", log.LstdFlags)
 }
 
-// registerMCPErrors populates the MCP server's err-name probe table
-// from the CLI's errCatalog. This keeps the two views synchronized:
-// the CLI's classifyError and the MCP server's classifyDispatchError
-// surface the same canonical names for the same wrapped errors.
-//
-// Called once per `serve --stdio` invocation; idempotent across
-// multiple calls in the same process.
-func registerMCPErrors() {
-	for _, ec := range errCatalog {
-		mcp.RegisterError(ec.name, ec.err)
-	}
-	// Also register internal/mcp's own sentinel so a tools/call for
-	// an unrecognized verb surfaces a stable err_name.
-	mcp.RegisterError("ErrUnknownTool", mcp.ErrUnknownTool)
-}

@@ -18,7 +18,7 @@ import (
 )
 
 // Template-storage errors. Names match the API surface promised by
-// SRD §13.1; the CLI's errCatalog maps these via errors.Is.
+// SRD §13.1; pkg/api/errnames.Catalog maps these via errors.Is.
 
 // ErrTemplateNameUnsafe is returned when a template name fails the
 // pre-flight safety check. Path traversal (`../foo`), absolute paths,
