@@ -1,4 +1,5 @@
 .PHONY: all build test generate lint err-coherence nondet-coverage \
+        check-doccomments \
         test-image test-image-smoke test-docker \
         release-binaries release-binaries-smoke \
         libagent_director clean-cabi \
@@ -56,6 +57,13 @@ lint:
 #   (e) catalog.json and surface.json match their generators (via sub-tests)
 err-coherence:
 	go test ./pkg/api/errnames/ -run "TestFiveWayCoherence|TestCatalogJSONUpToDate|TestSurfaceJSONUpToDate" -v
+
+# check-doccomments asserts that every exported identifier in pkg/api has a
+# non-empty doc comment. Exits non-zero with per-identifier diagnostics if
+# any are missing. Run this locally when adding a new exported symbol to
+# ensure it is documented before pushing. Wired into the doc-drift CI gate.
+check-doccomments:
+	go run ./tools/check-doccomments -package ./pkg/api
 
 # nondet-coverage checks that every callable verb in manifest.CallableVerbs()
 # has a top-level key in test/envelope-diff/nondeterministic.json and vice
