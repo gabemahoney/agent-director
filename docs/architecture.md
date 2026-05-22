@@ -40,11 +40,12 @@ still holds: nothing in `internal/` imports `pkg/api`.
 
 | Path | Responsibility | Allowed imports | Prohibited imports |
 | --- | --- | --- | --- |
-| `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`; every non-hook verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. | stdlib; `pkg/api`; `internal/hook`; `internal/config` and `internal/store` (error sentinels only) in `setupClient`; `internal/config` in `runHook` and `newHookLogger`. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook`, `newHookLogger`, and `setupClient`'s logger bootstrap. |
+| `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`; every non-hook verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. | stdlib; `pkg/api`; `pkg/api/errnames`; `internal/hook`; `internal/config` and `internal/store` (error sentinels only) in `setupClient`; `internal/config` in `runHook` and `newHookLogger`. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook`, `newHookLogger`, and `setupClient`'s logger bootstrap. |
 | `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, `KillTmux`, `KillLogger`, etc.), params/result types, and error sentinels. Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director` and `internal/mcp`. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`. | Direct `database/sql`; raw SQL strings; MCP framing. |
 | `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v1 per SRD §4.2), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
-| `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. | stdlib; `pkg/api`; `pkg/api/manifest`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
+| `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, `TrimNamePrefix` for envelope-text normalisation, and `ErrUnknownTool`. The `Catalog` is consumed by `cmd/agent-director`'s envelope writer, `internal/mcp`'s `classifyDispatchError`, and (future) `pkg/cabi`'s JSON encoder. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
+| `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. `classifyDispatchError` delegates to `errnames.Classify`. | stdlib; `pkg/api`; `pkg/api/manifest`; `pkg/api/errnames`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
 | `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
 | `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). Builds env maps, synthesizes `--settings` JSON, and asks `internal/tmux` to start the session. Inserts the `pending` row via `internal/store`. | stdlib; `internal/config`; `internal/store`; `internal/tmux`; `github.com/google/uuid` for UUID4 minting. | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
 | `internal/tmux` | Thin client over the tmux binary. Each operation is one `exec.Command` invocation. Provides `NewSession`, `HasSession`, `KillSession`, `ListPanes`. | stdlib (`bytes`, `os/exec`, `strings`, `strconv`, `sort`). | Shell processes (`/bin/sh`), template / config / store packages, anything other than direct `exec.Command`. |
@@ -731,12 +732,12 @@ canonical SRD §13.1 err_name in the `data` field:
 }
 ```
 
-The err_name table is populated at server startup by
-`registerMCPErrors` in cmd/, which walks the CLI's `errCatalog`. The
-two views — CLI envelope and MCP error response — surface the same
-canonical names for the same wrapped errors. (The table-walk wiring
-still lives in `cmd/agent-director` for now; it will move to a shared
-package in Task 6.)
+The err_name string is resolved at call time by `errnames.Classify`
+(from `pkg/api/errnames`) — the single source of truth for the
+err_name mapping. Both the CLI's JSON envelope writer and the MCP
+server's `classifyDispatchError` delegate to `errnames.Classify`,
+so the same canonical names appear in both surfaces for the same
+wrapped errors. See the [err_name catalog](#err_name-catalog) subsection below.
 
 ### Success envelope
 
@@ -758,6 +759,48 @@ wrapped in MCP's content shape:
 This mirrors the CLI's stdout shape — a script reading the CLI and
 an MCP client see the same JSON. The content array is single-text-
 part for v1; richer types (resource URIs, images) are out of scope.
+
+### err_name catalog
+
+`pkg/api/errnames` is the single source of truth for all err_name
+strings in agent-director. No other package declares or owns these
+strings; callers read them through this package only.
+
+**`Catalog []Entry`** — the canonical lookup table. Each `Entry` has:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `Name` | `string` | The canonical err_name string (e.g. `"ErrSpawnNotFound"`). |
+| `Err` | `error` | The sentinel error the name maps to. Matching uses `errors.Is`, so `%w`-wrapped errors resolve correctly. |
+
+**`Classify(err error) (name, description string)`** — walks `Catalog`
+via `errors.Is` and returns the first matching entry's `Name` plus
+`err.Error()` as the description. Errors not present in the catalog
+collapse to `"ErrInternal"` — production paths should never reach
+this; tests pin canonical names directly.
+
+**`TrimNamePrefix(name, description string) string`** — strips the
+redundant `"ErrName: "` prefix from a description string when present.
+Used by the CLI's `writeApiError` so the envelope reads cleanly instead
+of carrying the err_name in both the `err_name` field and the
+`err_description` text.
+
+**`ErrUnknownTool`** — the MCP dispatcher's sentinel for unrecognised
+tool names. Declared in `pkg/api/errnames` (not `internal/mcp`) so
+that `internal/mcp` can import `pkg/api/errnames` without a cycle:
+`internal/mcp → pkg/api/errnames → pkg/api`, never back.
+
+**`catalog.json`** — a machine-readable snapshot of `Catalog`,
+generated deterministically by `go generate ./pkg/api/errnames/...`.
+The doc-drift CI gate (`make doc-drift`) enforces that the checked-in
+`catalog.json` stays in sync with the Go source.
+
+**Consumers:** `cmd/agent-director`'s envelope writer and
+`internal/mcp`'s `classifyDispatchError` both call `errnames.Classify`
+directly — there is no register-then-classify two-step; the `Catalog`
+slice itself is the declaration. Task 7 of this Epic will add a
+coherence test asserting the four-way invariant: handler-emitted
+sentinels ↔ `Catalog` ↔ manifest `ErrorNames` ↔ exported sentinels.
 
 ### Registration
 
