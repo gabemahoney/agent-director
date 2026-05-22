@@ -1,0 +1,146 @@
+# pkg/api doc-comment checklist
+#
+# TRANSIENT WORKING ARTIFACT — for Task T2 (t2.qe2.9x.6a) only.
+# Once every row reads "documented", this file becomes a historical
+# snapshot. The durable enforcer is the AST checker added in Subtask
+# 6a.m4 (tools/check-doccomments), which runs in CI on every commit.
+#
+# Statuses
+#   documented   non-empty, substantive comment present — no action needed
+#   seed-exists  comment exists but is minimal/trivial; needs enhancement
+#   missing      no doc comment at all
+#
+# Sections are alphabetised within each group.
+# Format: IDENT_NAME<TAB>STATUS
+# Easy to grep: grep seed-exists pkg/api/.doc-checklist.txt
+#
+# Package-level doc (doc.go): documented
+#
+# Total identifiers: 102
+#   types 54 · funcs 14 · methods 16 · sentinels/vars 17 · consts 1
+
+
+## ── TYPES ────────────────────────────────────────────────────────────────────
+
+Client	documented
+DecideParams	documented
+DecideResult	documented
+DecideStore	documented
+DeleteResult	documented
+DeleteStore	documented
+ExpireLogger	documented
+ExpireResult	documented
+ExpireStore	documented
+FindMissingLogger	documented
+FindMissingResult	documented
+FindMissingStore	documented
+GetStore	documented
+KillLogger	documented
+KillParams	documented
+KillResult	documented
+KillStore	documented
+KillTmux	documented
+ListFilters	documented
+ListParams	documented
+ListResult	documented
+ListRow	documented
+ListStore	documented
+MakeTemplateParams	documented
+MakeTemplatePermissions	documented
+MakeTemplateResult	documented
+Options	documented
+PauseParams	documented
+PauseResult	documented
+PauseStore	documented
+PauseTmux	documented
+PermissionRequestInfo	documented
+PermissionRow	documented
+Permissions	documented
+ReadPaneParams	documented
+ReadPaneResult	documented
+ReadPaneStore	documented
+ReadPaneTmux	documented
+ResumeParams	documented
+ResumeResult	documented
+ResumeStore	documented
+ResumeTmux	documented
+SendKeysParams	documented
+SendKeysResult	documented
+SendKeysStore	documented
+SendKeysTmux	documented
+Spawn	documented
+SpawnParams	documented
+SpawnResult	documented
+SpawnRow	documented
+StatusResult	documented
+StatusStore	documented
+VerbSummary	documented
+VersionResult	documented
+
+
+## ── FUNCS (package-level) ────────────────────────────────────────────────────
+
+Decide	documented
+Delete	documented
+Expire	documented
+Get	documented
+Help	documented
+Kill	documented
+List	documented
+MakeTemplate	documented
+New	documented
+Pause	documented
+ReadPane	documented
+SendKeys	documented
+Status	documented
+Version	documented
+
+
+## ── METHODS (Client) ─────────────────────────────────────────────────────────
+#
+# All verb-method wrappers currently have minimal one-liner comments.
+# Task c6 must add "// CLI: agent-director <verb>" + "// Errors:" blocks.
+# (*Client).Close already has a full, complete multi-paragraph comment.
+
+(*Client).Close	documented
+(*Client).Decide	documented
+(*Client).Delete	documented
+(*Client).Expire	documented
+(*Client).FindMissing	documented
+(*Client).Get	documented
+(*Client).Kill	documented
+(*Client).List	documented
+(*Client).MakeTemplate	documented
+(*Client).Pause	documented
+(*Client).ReadPane	documented
+(*Client).Resume	documented
+(*Client).SendKeys	documented
+(*Client).Spawn	documented
+(*Client).Status	documented
+(*Client).Version	documented
+
+
+## ── SENTINELS / VARS ─────────────────────────────────────────────────────────
+
+ErrAlreadyDecided	documented
+ErrClientClosed	documented
+ErrInvalidDecision	documented
+ErrJsonlMissing	documented
+ErrListInvalidLabel	documented
+ErrNoOpenPermissionRequest	documented
+ErrNoSessionId	documented
+ErrPauseTimeout	documented
+ErrRelayModeOff	documented
+ErrSchemaMismatch	documented
+ErrSendKeysWhileRelayed	documented
+ErrSpawnNotFound	documented
+ErrSpawnNotInteractive	documented
+ErrSpawnNotPausable	documented
+ErrSpawnNotResumable	documented
+ErrStoreNotInitialized	documented
+ErrTmuxSessionCreate	documented
+
+
+## ── CONSTS ───────────────────────────────────────────────────────────────────
+
+DefaultReadPaneLines	documented
