@@ -29,6 +29,7 @@ type ResumeTmux interface {
 
 // ResumeParams is the typed parameter shape for the resume verb.
 type ResumeParams struct {
+	// ClaudeInstanceID identifies the terminated Spawn to resurrect.
 	ClaudeInstanceID string `json:"claude_instance_id"`
 }
 
@@ -36,6 +37,8 @@ type ResumeParams struct {
 // id the caller passed in; resume preserves the instance id across
 // the resurrection (SRD §8.1).
 type ResumeResult struct {
+	// ClaudeInstanceID is the id of the resurrected Spawn — identical to the
+	// value passed in ResumeParams.ClaudeInstanceID.
 	ClaudeInstanceID string `json:"claude_instance_id"`
 }
 
@@ -123,9 +126,24 @@ func resumeImpl(s ResumeStore, t ResumeTmux, cfg config.Config, params ResumePar
 	return ResumeResult{ClaudeInstanceID: params.ClaudeInstanceID}, nil
 }
 
-// Resume brings a terminated (ended/missing) Spawn back to life via
-// `claude --resume`. The same claude_instance_id is preserved across
-// the resurrection.
+// Resume brings a terminated (ended/missing) Spawn back to life by launching
+// `claude --resume` in a fresh tmux session pointed at the same JSONL
+// transcript. The claude_instance_id is preserved across the resurrection;
+// state transitions back to waiting when the first SessionStart hook fires.
+//
+// CLI: agent-director resume
+//
+// Errors:
+//   - [ErrSpawnNotFound]: no row exists for the instance id.
+//   - [ErrSpawnNotResumable]: state is not ended or missing (a live Spawn
+//     must be killed or paused before it can be resumed).
+//   - [ErrNoSessionId]: claude_session_id is empty — the Spawn was killed
+//     before its first SessionStart hook; delete and re-spawn instead.
+//   - [ErrJsonlMissing]: the JSONL transcript file does not exist on disk.
+//   - ErrTmuxNotAvailable: tmux binary is not on PATH.
+//   - [ErrTmuxSessionCreate]: a tmux session with the same name already exists.
+//
+// Nondeterminism: none.
 func (c *Client) Resume(params ResumeParams) (ResumeResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return ResumeResult{}, err

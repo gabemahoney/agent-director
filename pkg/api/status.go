@@ -9,6 +9,8 @@ type StatusStore interface {
 // StatusResult is the typed return shape of Status — exactly the row's
 // state value, surfaced as a one-key JSON object on the CLI.
 type StatusResult struct {
+	// State is the current lifecycle state of the Spawn. One of:
+	// pending, waiting, working, ask_user, check_permission, ended, missing.
 	State string `json:"state"`
 }
 
@@ -23,7 +25,15 @@ func Status(s StatusStore, instanceID string) (StatusResult, error) {
 	return StatusResult{State: state}, nil
 }
 
-// Status returns the current state of a tracked Spawn.
+// Status returns the current state column (pending/waiting/working/ask_user/
+// check_permission/ended/missing) for the identified Spawn.
+//
+// CLI: agent-director status
+//
+// Errors:
+//   - [ErrSpawnNotFound]: no row exists for claudeInstanceID.
+//
+// Nondeterminism: none.
 func (c *Client) Status(claudeInstanceID string) (StatusResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return StatusResult{}, err

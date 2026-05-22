@@ -7,10 +7,9 @@ import (
 	"time"
 )
 
-// ErrListInvalidLabel is returned when a caller-supplied label filter
-// cannot be parsed as `key=value`. The error name is stable so the
-// CLI envelope can pin it; the description carries the offending raw
-// input.
+// ErrListInvalidLabel is returned by the list verb when a caller-supplied
+// label filter cannot be parsed as `key=value`. The error name is stable so
+// the CLI envelope can pin it; the description carries the offending raw input.
 var ErrListInvalidLabel = errors.New("ErrListInvalidLabel")
 
 // ListStore is the narrow store surface List needs. *store.Store
@@ -26,12 +25,21 @@ type ListStore interface {
 // "k=v" strings — List parses it into the store's typed filter map
 // so the JSON / CLI / MCP surfaces share one validation seam.
 type ListParams struct {
-	State           []string
-	Labels          []string
-	Parent          string
-	Cwd             string
+	// State filters by lifecycle state. Multiple values OR together.
+	// Nil/empty means no state filter (all states returned).
+	State []string
+	// Labels filters by label key=value pairs. Each entry must be "k=v"
+	// (returns [ErrListInvalidLabel] otherwise). Multiple entries AND together.
+	Labels []string
+	// Parent filters by parent_id exact match. Empty means no filter.
+	Parent string
+	// Cwd filters by canonicalized cwd exact match. Empty means no filter.
+	Cwd string
+	// TmuxSessionName filters by tmux session name exact match. Empty means
+	// no filter. Matches both live and ended rows.
 	TmuxSessionName string
-	Limit           int
+	// Limit caps the number of rows returned. 0 means no cap.
+	Limit int
 }
 
 // ListRow mirrors a returned Spawn at the JSON wire level. The store
@@ -39,22 +47,33 @@ type ListParams struct {
 // §12 list shape promises so future store-internal additions don't
 // leak silently.
 type ListRow struct {
-	ClaudeInstanceID string            `json:"claude_instance_id"`
-	ParentID         string            `json:"parent_id,omitempty"`
-	State            string            `json:"state"`
-	CWD              string            `json:"cwd"`
-	TmuxSessionName  string            `json:"tmux_session_name"`
-	RelayMode        string            `json:"relay_mode"`
-	Labels           map[string]string `json:"labels"`
-	StartedAt        time.Time         `json:"started_at"`
-	LastSeenAt       time.Time         `json:"last_seen_at"`
-	EndedAt          *time.Time        `json:"ended_at,omitempty"`
+	// ClaudeInstanceID is the stable id of the Spawn.
+	ClaudeInstanceID string `json:"claude_instance_id"`
+	// ParentID is the id of the spawning Spawn. Omitted from JSON when empty.
+	ParentID string `json:"parent_id,omitempty"`
+	// State is the current lifecycle state.
+	State string `json:"state"`
+	// CWD is the canonicalized working directory the Spawn was started in.
+	CWD string `json:"cwd"`
+	// TmuxSessionName is the tmux session name for the Spawn.
+	TmuxSessionName string `json:"tmux_session_name"`
+	// RelayMode is "on" or "off".
+	RelayMode string `json:"relay_mode"`
+	// Labels are the caller-supplied key-value tags set at spawn time.
+	Labels map[string]string `json:"labels"`
+	// StartedAt is the row-insert time.
+	StartedAt time.Time `json:"started_at"`
+	// LastSeenAt is the most recent hook UPSERT time.
+	LastSeenAt time.Time `json:"last_seen_at"`
+	// EndedAt is set when state moves to ended. Omitted from JSON while live.
+	EndedAt *time.Time `json:"ended_at,omitempty"`
 }
 
 // ListResult is the typed return shape. Spawns is always a non-nil
 // slice (possibly empty) so the JSON envelope encodes as `[]`, never
 // `null`.
 type ListResult struct {
+	// Spawns is the slice of matching rows. Never nil — encodes as [] when empty.
 	Spawns []ListRow `json:"spawns"`
 }
 
@@ -113,9 +132,17 @@ func List(s ListStore, params ListParams) (ListResult, error) {
 	return ListResult{Spawns: out}, nil
 }
 
-// List enumerates Spawn rows matching the supplied filters. All filters AND
-// together. When no rows match, ListResult.Spawns is a non-nil empty slice
-// (JSON-stability invariant).
+// List enumerates Spawn rows matching the supplied filter set. All filters AND
+// together; an absent filter is permissive. State values OR together. When no
+// rows match, ListResult.Spawns is a non-nil empty slice. Returned order is
+// unspecified.
+//
+// CLI: agent-director list
+//
+// Errors:
+//   - [ErrListInvalidLabel]: a Labels entry is not in "key=value" form.
+//
+// Nondeterminism: none.
 func (c *Client) List(params ListParams) (ListResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return ListResult{}, err

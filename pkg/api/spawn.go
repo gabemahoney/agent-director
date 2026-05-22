@@ -10,6 +10,9 @@ import (
 // directly to its single-JSON-object stdout (SRD §12.3); the MCP server
 // returns it as the tool result.
 type SpawnResult struct {
+	// ClaudeInstanceID is the id under which the new Spawn is tracked.
+	// Nondeterministic when SpawnParams.ClaudeInstanceID was empty — a
+	// UUID4 is minted per call.
 	ClaudeInstanceID string `json:"claude_instance_id"`
 }
 
@@ -35,8 +38,32 @@ func runSpawn(s *store.Store, tmuxClient spawn.TmuxClient, cfg config.Config, pa
 }
 
 // Spawn launches a tracked Claude Code instance inside a new tmux session.
-// It is fire-and-forget: the call returns the claude_instance_id immediately;
-// state transitions from pending to waiting on the first SessionStart hook.
+// The call returns immediately with the claude_instance_id; the Spawn's state
+// transitions from pending to waiting when the first SessionStart hook fires.
+// Use [Client.Status] or [Client.Get] to observe progress.
+//
+// CLI: agent-director spawn
+//
+// Errors:
+//   - ErrCwdMissing: params.CWD was not supplied.
+//   - ErrCwdNotAPath: CWD is not a valid filesystem path.
+//   - ErrCwdNotFound: CWD does not exist on disk.
+//   - ErrCwdNotADirectory: CWD exists but is a file, not a directory.
+//   - ErrRelayModeInvalid: RelayMode is not "on", "off", or "".
+//   - ErrSpawnDeniedFlag: a denied claude flag was passed in ClaudeArgs.
+//   - ErrReservedEnvKey: ExtraEnv contains a reserved AGENT_DIRECTOR_* key.
+//   - ErrInstanceIdCollision: ClaudeInstanceID is already in use by a live row.
+//   - ErrTmuxSessionNameEmpty: TmuxSessionName was supplied but is empty.
+//   - ErrTmuxSessionNameInvalid: TmuxSessionName contains illegal characters.
+//   - ErrTmuxSessionNameTooLong: TmuxSessionName exceeds 64 bytes.
+//   - ErrTmuxNotAvailable: tmux binary is not on PATH or returns an error.
+//   - [ErrTmuxSessionCreate]: tmux new-session exited non-zero.
+//   - ErrTemplateNotFound: the named template file does not exist.
+//   - ErrTemplateMalformed: the template TOML could not be parsed.
+//   - ErrTemplateNameUnsafe: the template name contains path-unsafe characters.
+//
+// Nondeterminism: .claude_instance_id — a UUID4 is minted when
+// SpawnParams.ClaudeInstanceID is empty; the value differs on every call.
 func (c *Client) Spawn(params SpawnParams) (SpawnResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return SpawnResult{}, err

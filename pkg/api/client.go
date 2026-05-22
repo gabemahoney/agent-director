@@ -49,6 +49,32 @@ type Client struct {
 // On any error a nil *Client is returned together with a descriptive,
 // errors.Is-matchable error. The constructor never leaves partially-
 // opened resources behind.
+//
+// # Construction errors
+//
+// The two most common typed construction errors are:
+//
+//   - [ErrStoreNotInitialized]: returned when opts.CreateIfMissing is false
+//     (the library default) and the database file does not exist. Either set
+//     CreateIfMissing: true or initialize the store out-of-band before calling
+//     New.
+//
+//   - [ErrSchemaMismatch]: returned when the database file exists but was
+//     created by a different schema version. The store cannot be used; the
+//     operator must remove the database file and start fresh.
+//
+// Both are detectable via errors.Is:
+//
+//	client, err := api.New(api.Options{})
+//	if errors.Is(err, api.ErrStoreNotInitialized) { /* ... */ }
+//	if errors.Is(err, api.ErrSchemaMismatch)       { /* ... */ }
+//
+// # Lifecycle guarantee
+//
+// [Client.Close] is safe to call exactly once after New succeeds. It releases
+// the store connection and any tmux-client resources. The idempotent close
+// contract means a deferred Close is always safe even if the caller also calls
+// Close explicitly on an early return path.
 func New(opts Options) (*Client, error) {
 	// Step 1 — resolve ConfigPath default.
 	cfgPath := opts.ConfigPath

@@ -25,6 +25,7 @@ type KillLogger interface {
 
 // KillParams is the typed parameter shape for the kill verb.
 type KillParams struct {
+	// ClaudeInstanceID identifies the Spawn whose tmux session will be killed.
 	ClaudeInstanceID string `json:"claude_instance_id"`
 }
 
@@ -74,8 +75,18 @@ func Kill(s KillStore, t KillTmux, lg KillLogger, params KillParams) (KillResult
 	return KillResult{}, nil
 }
 
-// Kill terminates the Spawn's tmux session. Idempotent on terminal states.
-// Swallowed tmux failures are logged to c.logger at WARN level.
+// Kill terminates the Spawn's tmux session. Idempotent on terminal states
+// (ended/missing) — calling Kill on an already-gone Spawn is a no-op success.
+// Kill does NOT update the row's state column; the row transitions to missing
+// on the next find-missing reconciliation pass. Tmux failures are swallowed
+// at the verb surface and logged at WARN level to c.logger.
+//
+// CLI: agent-director kill
+//
+// Errors:
+//   - [ErrSpawnNotFound]: no row exists for the instance id.
+//
+// Nondeterminism: none.
 func (c *Client) Kill(params KillParams) (KillResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return KillResult{}, err

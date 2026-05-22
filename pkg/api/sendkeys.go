@@ -26,8 +26,12 @@ type SendKeysTmux interface {
 // JSON tags use snake_case so MCP clients can decode into the struct
 // directly via the dispatcher's unmarshalSnake helper.
 type SendKeysParams struct {
+	// ClaudeInstanceID identifies the Spawn whose pane will receive the text.
 	ClaudeInstanceID string `json:"claude_instance_id"`
-	Text             string `json:"text"`
+	// Text is the string to deliver to the Spawn's pane. CR bytes (0x0D) are
+	// stripped before delivery; LF bytes (0x0A) are preserved as input newlines.
+	// A single Enter is always appended to submit the composed buffer.
+	Text string `json:"text"`
 }
 
 // SendKeysResult is the typed return shape. Empty struct today; reserved
@@ -98,8 +102,23 @@ func isInteractiveState(state string) bool {
 	return false
 }
 
-// SendKeys sends text into a tracked Spawn's tmux pane. `\r` bytes are
-// stripped; `\n` bytes are preserved; a single Enter is always appended.
+// SendKeys sends text into a tracked Spawn's tmux pane. CR bytes (0x0D) are
+// stripped before delivery to prevent premature submission; LF bytes (0x0A)
+// are preserved as composed newlines in Claude's input box. A single Enter is
+// always appended to submit the composed buffer.
+//
+// CLI: agent-director send-keys
+//
+// Errors:
+//   - [ErrSpawnNotFound]: no row exists for the instance id.
+//   - [ErrSpawnNotInteractive]: the Spawn's state is not one of waiting,
+//     working, ask_user, or check_permission.
+//   - [ErrSendKeysWhileRelayed]: relay_mode is on and state is
+//     check_permission; the relay path owns the modal answer.
+//   - ErrTmuxNotAvailable: tmux binary is not on PATH.
+//   - ErrTmuxSendKeys: tmux send-keys exited non-zero.
+//
+// Nondeterminism: none.
 func (c *Client) SendKeys(params SendKeysParams) (SendKeysResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return SendKeysResult{}, err

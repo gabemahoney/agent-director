@@ -18,8 +18,11 @@ type FindMissingStore interface {
 // rows transitioned to `missing` on this sweep; IDs is the sorted
 // list (sorted so the JSON envelope is deterministic across runs).
 type FindMissingResult struct {
-	Count int      `json:"count"`
-	IDs   []string `json:"ids"`
+	// Count is the number of rows transitioned to missing on this sweep.
+	Count int `json:"count"`
+	// IDs is the sorted slice of instance ids transitioned to missing.
+	// Always non-nil — encodes as [] when no rows were transitioned.
+	IDs []string `json:"ids"`
 }
 
 // FindMissingLogger is the narrow log surface FindMissing uses for
@@ -93,8 +96,21 @@ func findMissingImpl(ctx context.Context, s FindMissingStore, p probe.Prober, lg
 	return FindMissingResult{Count: len(missing), IDs: missing}, nil
 }
 
-// FindMissing reconciles DB state against live processes. ctx is the first
-// argument per SRD §12 (preserving CLI ctx semantics).
+// FindMissing reconciles DB state against live OS processes. It scans all
+// live-state rows (including pending), probes the OS for live
+// AGENT_DIRECTOR_INSTANCE_ID env values, and transitions any row whose
+// process is no longer observable to missing. Intended for periodic cron use.
+//
+// Degraded-mode guard: if the probe returns zero ids but live DB rows exist,
+// the sweep is aborted and a warning is logged — the most common cause is
+// the cron running as a different user than the Spawn owner.
+//
+// CLI: agent-director find-missing
+//
+// Errors:
+//   - ErrProbeUnsupported: the current OS/platform has no probe implementation.
+//
+// Nondeterminism: none.
 func (c *Client) FindMissing(ctx context.Context) (FindMissingResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return FindMissingResult{}, err

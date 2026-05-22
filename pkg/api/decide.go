@@ -31,9 +31,14 @@ type DecideStore interface {
 // deny with an empty Reason the envelope defaults to
 // "Denied by orchestrator" — see hook.EncodeDecision.
 type DecideParams struct {
+	// ClaudeInstanceID identifies the Spawn whose open permission request is
+	// being decided.
 	ClaudeInstanceID string `json:"claude_instance_id"`
-	Decision         string `json:"decision"`
-	Reason           string `json:"reason"`
+	// Decision is the orchestrator's verdict: "allow" or "deny".
+	Decision string `json:"decision"`
+	// Reason is the optional free-text message surfaced to Claude on deny.
+	// When empty on a deny, the hook envelope defaults to "Denied by orchestrator".
+	Reason string `json:"reason"`
 }
 
 // DecideResult is the typed return shape. Empty today; reserved so a
@@ -100,8 +105,22 @@ func Decide(s DecideStore, params DecideParams) (DecideResult, error) {
 		store.ErrNoOpenPermissionRequest, params.ClaudeInstanceID)
 }
 
-// Decide writes the orchestrator's allow/deny verdict on an open
-// PermissionRequest. Only callable on Spawns with relay_mode=on.
+// Decide writes the orchestrator's allow or deny verdict on the open
+// PermissionRequest for the identified Spawn. Only callable on Spawns with
+// relay_mode=on. The underlying UPDATE is race-free (first-call-wins guarded
+// by `decision IS NULL`); a concurrent call by a second orchestrator returns
+// [ErrAlreadyDecided].
+//
+// CLI: agent-director decide
+//
+// Errors:
+//   - [ErrSpawnNotFound]: no row exists for the instance id.
+//   - [ErrRelayModeOff]: the Spawn's relay_mode is not "on".
+//   - [ErrNoOpenPermissionRequest]: no undecided permission request exists.
+//   - [ErrAlreadyDecided]: a concurrent caller already wrote a verdict.
+//   - [ErrInvalidDecision]: Decision is not "allow" or "deny".
+//
+// Nondeterminism: none.
 func (c *Client) Decide(params DecideParams) (DecideResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return DecideResult{}, err

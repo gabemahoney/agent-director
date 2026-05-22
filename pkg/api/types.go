@@ -6,7 +6,9 @@ import "github.com/gabemahoney/agent-director/internal/spawn"
 // projection of manifest.VerbDef restricted to the two fields the help
 // output exposes. JSON tags are lowercase to match SRD §12.3 conventions.
 type VerbSummary struct {
-	Name        string `json:"name"`
+	// Name is the canonical CLI/MCP verb name (e.g. "spawn", "send-keys").
+	Name string `json:"name"`
+	// Description is the one-line verb description from the manifest.
 	Description string `json:"description"`
 }
 

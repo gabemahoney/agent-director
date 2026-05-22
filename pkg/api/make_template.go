@@ -17,13 +17,28 @@ import (
 // the SRD §10 surface; reserved per-invocation params (template,
 // claude_instance_id, tmux_session_name) are intentionally absent.
 type MakeTemplateParams struct {
-	Name                 string
-	CWD                  string
-	RelayMode            string
-	ClaudeArgs           []string
-	ExtraEnv             map[string]string
+	// Name is the template filename (without extension). Must be filename-safe:
+	// no path separators, no leading dot, no "..". Required.
+	Name string
+	// CWD is an optional default working directory to bake into the template.
+	// Per-call --cwd overrides at spawn time.
+	CWD string
+	// RelayMode is an optional default relay mode: "on", "off", or "" (inherit
+	// config default). Per-call --relay-mode overrides at spawn time.
+	RelayMode string
+	// ClaudeArgs is an optional default argv passed through to claude. Per-call
+	// --claude-args REPLACES the template array wholesale (not concatenated).
+	ClaudeArgs []string
+	// ExtraEnv is an optional map of env-var overrides to bake in. Per-call
+	// --extra-env entries merge by key; per-call wins on collision.
+	ExtraEnv map[string]string
+	// AgentDirectorLabels is an optional map of label k=v pairs to bake in.
+	// Per-call --label entries merge by key; per-call wins on collision.
 	AgentDirectorLabels map[string]string
-	Permissions          *MakeTemplatePermissions
+	// Permissions is an optional permission overlay. Nil means no permissions
+	// baked in; a non-nil value with empty arrays serializes as explicit [].
+	// Per-call --allow/--deny/--ask entries CONCATENATE with the template's arrays.
+	Permissions *MakeTemplatePermissions
 }
 
 // MakeTemplatePermissions is the params-side mirror of the on-disk
@@ -31,15 +46,20 @@ type MakeTemplateParams struct {
 // permissions baked in"; an empty struct means "explicit empty
 // arrays". The merge path at spawn time distinguishes the two.
 type MakeTemplatePermissions struct {
+	// Allow is the list of permission patterns to allow at spawn time.
 	Allow []string
-	Deny  []string
-	Ask   []string
+	// Deny is the list of permission patterns to deny at spawn time.
+	Deny []string
+	// Ask is the list of permission patterns to ask about at spawn time.
+	Ask []string
 }
 
 // MakeTemplateResult is the typed return shape. Path is the absolute
 // path of the written file, useful for tests and for CLI users who
 // want to inspect the result.
 type MakeTemplateResult struct {
+	// Path is the absolute path of the written template TOML file.
+	// Nondeterministic: reflects ~/.agent-director/templates/ on the host.
 	Path string `json:"path"`
 }
 
@@ -120,8 +140,21 @@ func validateTemplateRelayMode(m string) error {
 	return fmt.Errorf("%w: relay_mode %q (want on/off)", config.ErrTemplateMalformed, m)
 }
 
-// MakeTemplate saves a reusable spawn preset to
-// ~/.agent-director/templates/<name>.toml.
+// MakeTemplate writes a reusable spawn preset to
+// ~/.agent-director/templates/<name>.toml. The file is created exclusively
+// (O_EXCL); overwriting an existing template returns [ErrTemplateExists].
+// Use the template name with SpawnParams.Template to apply it at spawn time.
+//
+// CLI: agent-director make-template
+//
+// Errors:
+//   - ErrTemplateNameUnsafe: Name contains path-unsafe characters (path
+//     separators, leading dot, or "..").
+//   - ErrTemplateExists: a template with that name already exists.
+//   - ErrTemplateMalformed: RelayMode is not "on", "off", or "".
+//
+// Nondeterminism: .path — the absolute path reflects the host's templates
+// directory (~/.agent-director/templates/) and varies across environments.
 func (c *Client) MakeTemplate(params MakeTemplateParams) (MakeTemplateResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return MakeTemplateResult{}, err

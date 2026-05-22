@@ -15,6 +15,9 @@ type DeleteStore interface {
 // to either "ok" (deleted) or the canonical err_name from the CLI's
 // errCatalog. Always non-nil so JSON encodes deterministically.
 type DeleteResult struct {
+	// Results maps each requested id to its outcome: "ok" on success,
+	// or an err_name string (e.g. "ErrSpawnNotFound") on failure.
+	// The map is always non-nil and contains one entry per input id.
 	Results map[string]string `json:"results"`
 }
 
@@ -53,9 +56,16 @@ func Delete(s DeleteStore, ids []string) (DeleteResult, error) {
 	return DeleteResult{Results: results}, nil
 }
 
-// Delete is admin batch removal by claude_instance_id. It bypasses all
-// guards and never touches tmux sessions or JSONL transcripts. Per-row
-// errors are recorded in DeleteResult.Results rather than aborting the batch.
+// Delete removes one or more Spawn rows by id, bypassing all state guards.
+// Each id is processed independently; a missing id records ErrSpawnNotFound in
+// the result map rather than aborting the batch. Does not touch tmux sessions
+// or JSONL transcripts. Per-row outcomes are in DeleteResult.Results.
+//
+// CLI: agent-director delete
+//
+// Errors: none at the verb level; per-row outcomes are in DeleteResult.Results.
+//
+// Nondeterminism: none.
 func (c *Client) Delete(claudeInstanceIDs []string) (DeleteResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return DeleteResult{}, err

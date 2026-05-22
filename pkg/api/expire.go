@@ -14,8 +14,11 @@ type ExpireStore interface {
 // the sorted IDs. The slice is non-nil so JSON encodes as `[]` even on
 // a no-op sweep.
 type ExpireResult struct {
-	Count int      `json:"count"`
-	IDs   []string `json:"ids"`
+	// Count is the number of terminal rows removed.
+	Count int `json:"count"`
+	// IDs is the sorted slice of instance ids that were removed. Always
+	// non-nil — encodes as [] when no rows were expired.
+	IDs []string `json:"ids"`
 }
 
 // ExpireLogger is the narrow log surface Expire writes per-row
@@ -57,8 +60,17 @@ func Expire(s ExpireStore, retentionDays int, olderThan *time.Duration, lg Expir
 }
 
 // Expire removes terminal-state rows (ended/missing) whose ended_at is older
-// than the retention window. olderThan overrides the config default when
-// non-nil. Does NOT touch tmux sessions or JSONL transcripts.
+// than the retention window. When olderThan is nil the window comes from
+// defaults.expire_retention_days in config.toml; a non-nil value overrides it.
+// Passing a zero or negative duration reaps every terminal row. Live-state rows
+// and rows with NULL ended_at are never touched. Does not affect tmux sessions
+// or JSONL transcripts.
+//
+// CLI: agent-director expire
+//
+// Errors: none (verb-level errors are reported per-row in ExpireResult.IDs).
+//
+// Nondeterminism: none.
 func (c *Client) Expire(olderThan *time.Duration) (ExpireResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return ExpireResult{}, err

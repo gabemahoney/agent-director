@@ -28,6 +28,7 @@ type PauseStore interface {
 
 // PauseParams is the typed parameter shape for the pause verb.
 type PauseParams struct {
+	// ClaudeInstanceID identifies the Spawn to pause gracefully.
 	ClaudeInstanceID string `json:"claude_instance_id"`
 }
 
@@ -127,9 +128,23 @@ func Pause(ctx context.Context, s PauseStore, t PauseTmux, timeoutSeconds int, p
 	}
 }
 
-// Pause politely shuts down a waiting Spawn by sending `/exit` and waiting up
-// to pause.timeout_seconds for the row to reach `ended`. ctx is the first
-// argument per SRD §12 (preserving CLI ctx semantics).
+// Pause politely shuts down a waiting Spawn by sending `/exit` and polling
+// until the row reaches ended, or until the configured timeout
+// (pause.timeout_seconds in config.toml) elapses. Terminal states
+// (ended/missing) are treated as no-op success. Pause is one-shot — no
+// incremental progress callback; ctx cancellation short-circuits the poll.
+//
+// CLI: agent-director pause
+//
+// Errors:
+//   - [ErrSpawnNotFound]: no row exists for the instance id.
+//   - [ErrSpawnNotPausable]: state is not waiting (pending/working/ask_user/
+//     check_permission cannot be paused; use kill for immediate termination).
+//   - [ErrPauseTimeout]: the Spawn did not reach ended within the timeout.
+//   - ErrTmuxNotAvailable: tmux binary is not on PATH.
+//   - ErrTmuxSendKeys: tmux send-keys for the /exit command failed.
+//
+// Nondeterminism: none.
 func (c *Client) Pause(ctx context.Context, params PauseParams) (PauseResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return PauseResult{}, err

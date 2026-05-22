@@ -1,4 +1,59 @@
-// Package api is the exported facade for agent-director.
+// Package api is the public Go module surface for agent-director.
+//
+// Import path: github.com/gabemahoney/agent-director/pkg/api
+//
+// # Overview
+//
+// agent-director spawns, tracks, and drives Claude Code instances inside tmux
+// sessions. pkg/api is the single entry point for Go library callers: it
+// exposes an opaque [Client] handle with one method per CLI verb. The CLI
+// binary (cmd/agent-director) and the stdio MCP server (internal/mcp) both
+// dispatch through this same Client — no business logic is duplicated.
+//
+// # Client lifecycle
+//
+// Construct a Client with [New], call verb methods, then release resources with
+// [Client.Close]:
+//
+//	client, err := api.New(api.Options{})
+//	if err != nil {
+//	    // handle construction error
+//	}
+//	defer client.Close()
+//
+//	result, err := client.Spawn(api.SpawnParams{CWD: "/path/to/project"})
+//
+// [Client.Close] is idempotent — calling it more than once is safe and returns
+// nil each time. After Close returns, any verb method call on the same Client
+// returns [ErrClientClosed].
+//
+// # Error handling
+//
+// All errors returned by Client methods are matched via [errors.Is]. Each verb
+// method that can fail with a typed condition lists its sentinels in an
+// "Errors:" block in its own godoc. Sentinels exported directly from this
+// package (pkg/api) are named api.ErrXxx; some sentinels originate in
+// internal packages but are re-exported here for caller convenience (see
+// [ErrSpawnNotFound], [ErrTmuxSessionCreate], etc.).
+//
+// Construction errors from [New] can be detected as follows:
+//
+//	client, err := api.New(api.Options{CreateIfMissing: false})
+//	if errors.Is(err, api.ErrStoreNotInitialized) {
+//	    // store does not exist; run with CreateIfMissing:true or init first
+//	}
+//	if errors.Is(err, api.ErrSchemaMismatch) {
+//	    // DB schema version mismatch; operator must re-initialize the store
+//	}
+//
+// # Verb reference
+//
+// For per-verb CLI usage see docs/cli-reference.md (generated from the
+// manifest). For the rendered Go API reference see
+// https://pkg.go.dev/github.com/gabemahoney/agent-director/pkg/api.
+// The [pkg/api/manifest] package is the single source of truth for verb
+// names, parameters, result fields, and error names; it is consumed by the
+// CLI, MCP server, and the doc-drift CI gate.
 //
 // # Design contract
 //
