@@ -125,7 +125,7 @@ func (c *Client) Close() error {
 // checkClosed is a mutex-guarded helper used by every verb method. It acquires
 // the Client's mutex, checks the closed flag, and returns ErrClientClosed if
 // the Client has been closed. The lock is released before returning so the
-// caller holds no lock when it invokes the underlying internal/api function.
+// caller holds no lock when it invokes the underlying handler function.
 //
 // Correct usage:
 //

@@ -9,7 +9,7 @@
 //
 // Key invariants kept here verbatim so code review can grep for them:
 //
-//  1. No business logic in cmd/ — every verb is implemented in internal/api
+//  1. No business logic in cmd/ — every verb is implemented in pkg/api
 //     or lower; cmd/ only marshals results to JSON and calls New().
 //
 //  2. No schema-init side effects in the constructor — New() with
