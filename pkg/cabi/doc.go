@@ -82,4 +82,4 @@
 // Actual CGO annotations and C export bodies are added in T2 and T3. This
 // package skeleton establishes the package shell, documentation contract, and
 // the internal handle registry only.
-package cabi
+package main

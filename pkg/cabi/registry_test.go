@@ -1,4 +1,4 @@
-package cabi
+package main
 
 import (
 	"fmt"
