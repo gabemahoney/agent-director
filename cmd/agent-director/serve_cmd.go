@@ -10,13 +10,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/gabemahoney/agent-director/internal/api"
-	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/mcp"
-	"github.com/gabemahoney/agent-director/internal/probe"
-	"github.com/gabemahoney/agent-director/internal/spawn"
-	"github.com/gabemahoney/agent-director/internal/store"
-	"github.com/gabemahoney/agent-director/internal/tmux"
+	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
 )
 
 // serveHandlerWith implements `agent-director serve --stdio`.
@@ -29,7 +24,15 @@ import (
 // `serve` invocation. SRD §3.3 makes this explicit so operators
 // don't have to wonder why a tweak to relay.timeout_seconds didn't
 // stick.
-func serveHandlerWith(st *store.Store, cfg config.Config, args []string) error {
+//
+// Task 4 (MCP refactor) will update mcp.NewLiveDispatcher to accept a
+// *pkgapi.Client directly. Until then, the bridge accessors BridgeStore,
+// BridgeTmuxClient, and BridgeConfig are used to extract the underlying
+// fields.
+//
+// TODO(Task4): replace mcp.NewLiveDispatcher bridge with
+// mcp.NewLiveDispatcher(client) once the dispatcher is refactored.
+func serveHandlerWith(client *pkgapi.Client, args []string) error {
 	var stdioFlag bool
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -46,11 +49,14 @@ func serveHandlerWith(st *store.Store, cfg config.Config, args []string) error {
 
 	registerMCPErrors()
 
-	dispatcher := mcp.NewLiveDispatcher(st, tmuxClient, cfg)
+	// Task 4 bridge: extract st, tmux, cfg from the Client until
+	// mcp.NewLiveDispatcher is updated to accept *pkgapi.Client.
+	// TODO(Task4): remove BridgeStore/BridgeTmuxClient/BridgeConfig calls.
+	dispatcher := mcp.NewLiveDispatcher(client.BridgeStore(), client.BridgeTmuxClient(), client.BridgeConfig())
 	// MCP server logs go to the configured error log (or stderr
 	// fallback) — NOT stdout, which is reserved for the JSON-RPC
 	// transport.
-	logger := newMCPLogger(cfg)
+	logger := newMCPLogger(client)
 	server := mcp.New(dispatcher, logger)
 
 	// Signal-aware ctx so SIGINT / SIGTERM (e.g. Kubernetes graceful
@@ -83,7 +89,11 @@ func newSignalCtx() (context.Context, context.CancelFunc) {
 // newMCPLogger routes MCP operational diagnostics to the configured
 // error log. Stdout is reserved for the JSON-RPC transport, so the
 // log destination must NOT be stdout.
-func newMCPLogger(cfg config.Config) *log.Logger {
+//
+// TODO(Task4): remove this helper (or replace BridgeConfig with a
+// direct logger accessor) when Task 4 cleans up the bridge.
+func newMCPLogger(client *pkgapi.Client) *log.Logger {
+	cfg := client.BridgeConfig()
 	dest := io.Writer(os.Stderr)
 	if cfg.Log.ErrorLogPath != "" {
 		if f, err := os.OpenFile(cfg.Log.ErrorLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
@@ -108,12 +118,3 @@ func registerMCPErrors() {
 	// an unrecognized verb surfaces a stable err_name.
 	mcp.RegisterError("ErrUnknownTool", mcp.ErrUnknownTool)
 }
-
-// Compile-time references so the imports stay live when the
-// dispatcher's full surface is consumed by tests.
-var (
-	_ = api.Spawn
-	_ = spawn.Permissions{}
-	_ = probe.New
-	_ = tmux.New
-)

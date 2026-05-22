@@ -15,10 +15,11 @@ import (
 	"log"
 	"os"
 
-	"github.com/gabemahoney/agent-director/internal/api"
+	internalapi "github.com/gabemahoney/agent-director/internal/api"
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/store"
+	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
 )
 
 // errorEnvelope is the JSON shape emitted on stderr for CLI-level errors.
@@ -49,33 +50,32 @@ const configPath = "~/.agent-director/config.toml"
 
 // handlers maps verb names to their implementations. `help` and `--help`
 // route to the same function so their stdout is byte-identical (SRD §12.3).
-// st + cfg are captured in closures so each verb sees the same already-
-// opened store / loaded config — opening twice would be wasteful and risk
-// divergence between run()'s startup and a verb's view of the world.
+// client is captured in closures so each verb sees the same already-opened
+// Client — construction is done once in run() via setupClient().
 //
 // `hook` is intentionally NOT in this table — runHook() short-circuits
-// the dispatch loop before setupStore() so hook fires can't be blocked
+// the dispatch loop before setupClient() so hook fires can't be blocked
 // by config/store failures (SRD §3.2 fail-open invariant).
-func handlers(st *store.Store, cfg config.Config) map[string]func([]string) error {
+func handlers(client *pkgapi.Client) map[string]func([]string) error {
 	return map[string]func([]string) error{
-		"help":      helpHandler,
-		"--help":    helpHandler,
-		"version":   versionHandler,
-		"spawn":     func(args []string) error { return spawnHandlerWith(st, cfg, args) },
-		"status":    func(args []string) error { return statusHandlerWith(st, args) },
-		"get":       func(args []string) error { return getHandlerWith(st, args) },
-		"send-keys": func(args []string) error { return sendKeysHandlerWith(st, args) },
-		"read-pane": func(args []string) error { return readPaneHandlerWith(st, args) },
-		"kill":      func(args []string) error { return killHandlerWith(st, cfg, args) },
-		"pause":     func(args []string) error { return pauseHandlerWith(st, cfg, args) },
-		"list":          func(args []string) error { return listHandlerWith(st, args) },
-		"make-template": func(args []string) error { return makeTemplateHandlerWith(args) },
-		"decide":        func(args []string) error { return decideHandlerWith(st, args) },
-		"resume":        func(args []string) error { return resumeHandlerWith(st, cfg, args) },
-		"find-missing":  func(args []string) error { return findMissingHandlerWith(st, cfg, args) },
-		"expire":        func(args []string) error { return expireHandlerWith(st, cfg, args) },
-		"delete":        func(args []string) error { return deleteHandlerWith(st, args) },
-		"serve":         func(args []string) error { return serveHandlerWith(st, cfg, args) },
+		"help":          func(args []string) error { return helpHandler(client, args) },
+		"--help":        func(args []string) error { return helpHandler(client, args) },
+		"version":       func(args []string) error { return versionHandler(client, args) },
+		"spawn":         func(args []string) error { return spawnHandlerWith(client, args) },
+		"status":        func(args []string) error { return statusHandlerWith(client, args) },
+		"get":           func(args []string) error { return getHandlerWith(client, args) },
+		"send-keys":     func(args []string) error { return sendKeysHandlerWith(client, args) },
+		"read-pane":     func(args []string) error { return readPaneHandlerWith(client, args) },
+		"kill":          func(args []string) error { return killHandlerWith(client, args) },
+		"pause":         func(args []string) error { return pauseHandlerWith(client, args) },
+		"list":          func(args []string) error { return listHandlerWith(client, args) },
+		"make-template": func(args []string) error { return makeTemplateHandlerWith(client, args) },
+		"decide":        func(args []string) error { return decideHandlerWith(client, args) },
+		"resume":        func(args []string) error { return resumeHandlerWith(client, args) },
+		"find-missing":  func(args []string) error { return findMissingHandlerWith(client, args) },
+		"expire":        func(args []string) error { return expireHandlerWith(client, args) },
+		"delete":        func(args []string) error { return deleteHandlerWith(client, args) },
+		"serve":         func(args []string) error { return serveHandlerWith(client, args) },
 	}
 }
 
@@ -96,6 +96,11 @@ const hookExitCode = 0
 // The relay-active determination is made FROM ENV (AGENT_DIRECTOR_RELAY_MODE)
 // before any disk I/O — SRD §6.5 — so even a store-open failure on a
 // relay-on Spawn still emits a valid deny envelope.
+//
+// SRD §3.2 EXEMPTION: runHook retains its own config.Load + store.Open calls
+// and does NOT go through setupClient. This is required by SRD §3.2 fail-open:
+// hook fires must never be blocked by config or store failures. The pkg/api.Client
+// startup path is intentionally bypassed here.
 //
 // The function never returns an error; it logs and returns.
 func runHook() int {
@@ -140,6 +145,11 @@ func runHook() int {
 // returns a *log.Logger writing to it. On any open failure it falls back
 // to stderr — the hook MUST still log somewhere because diagnostic
 // silence on the hot path is harder to debug than a stderr blast.
+//
+// SRD §3.2 EXEMPTION (second exempt site): newHookLogger calls config.Load
+// independently so the hook-path logger can be constructed before any other
+// disk I/O fails. This is intentional and must not be collapsed into
+// setupClient's load.
 func newHookLogger() *log.Logger {
 	cfg, err := config.Load(configPath)
 	if err != nil {
@@ -170,17 +180,17 @@ func hookLog(logger *log.Logger, format string, args ...any) {
 // helpResult is the top-level JSON envelope for the help verb. The single
 // "verbs" field mirrors the manifest's ResultFields for the help verb.
 type helpResult struct {
-	Verbs []api.VerbSummary `json:"verbs"`
+	Verbs []internalapi.VerbSummary `json:"verbs"`
 }
 
-// helpHandler implements the help verb. It calls api.Help, wraps the
-// result in {"verbs": [...]}, marshals to single-line JSON (SRD §12.3
-// "exactly one JSON object on stdout"), and writes it to stdout with a
-// trailing newline.
-func helpHandler(_ []string) error {
-	verbs, err := api.Help()
+// helpHandler implements the help verb. `help` is Callable:false in the
+// manifest — it does NOT route through the Client facade. It calls
+// internal/api.Help() directly. When Task 5 moves the implementation, the
+// import will follow; the call site here is unchanged.
+func helpHandler(_ *pkgapi.Client, _ []string) error {
+	verbs, err := internalapi.Help()
 	if err != nil {
-		// api.Help never errors today, but if a future implementation
+		// internal/api.Help never errors today, but if a future implementation
 		// changes that, surface it via the dispatch envelope path.
 		if werr := writeError(os.Stderr, errJSONMarshal, err.Error()); werr != nil {
 			return werr
@@ -201,11 +211,11 @@ func helpHandler(_ []string) error {
 }
 
 // versionHandler implements the `version` verb. Prints
-// {"version": "<stamp>", "commit": "<sha>"} per the manifest. The api
-// layer's Version() never errors; the same envelope path as helpHandler
-// is kept for uniformity.
-func versionHandler(_ []string) error {
-	res, err := api.Version()
+// {"version": "<stamp>", "commit": "<sha>"} per the manifest. The client's
+// Version() never errors; the same envelope path as helpHandler is kept
+// for uniformity.
+func versionHandler(client *pkgapi.Client, _ []string) error {
+	res, err := client.Version()
 	if err != nil {
 		if werr := writeError(os.Stderr, errJSONMarshal, err.Error()); werr != nil {
 			return werr
@@ -257,37 +267,56 @@ func dispatch(argv []string, table map[string]func([]string) error) error {
 	return handler(argv[1:])
 }
 
-// setupStoreAndCfg loads config and opens the store, applying Epic 1
-// AC #4 (idempotent dir/file creation at 0700/0600) and AC #5
-// (ErrSchemaMismatch surfaces as JSON on stderr). The Config is
-// returned alongside so verb handlers can see the same view startup
-// observed.
+// setupClient constructs the pkg/api.Client used by every non-hook verb.
 //
-// On any error it writes the JSON envelope to stderr and returns
-// errDispatch so run() can exit non-zero without double-printing.
-func setupStoreAndCfg() (*store.Store, config.Config, error) {
+// Design pins (see Task 3 spec):
+//   - Pin 1 (CreateIfMissing=true): the CLI is the one place that opts in to
+//     first-run store creation; library callers get the strict default.
+//   - Pin 2 (StorePath omitted): leaving StorePath="" lets the three-tier
+//     precedence in pkg/api.New honor cfg.Store.DbPath, so users who set a
+//     custom [store] db_path in their TOML get that path byte-identical to
+//     pre-refactor behavior.
+//   - Pin 3 (Logger=newRecoveryLogger): SRD §14.6 and §5 WARN messages must
+//     reach cfg.Log.ErrorLogPath. We call config.Load once here to build the
+//     logger BEFORE calling pkg/api.New, which also loads config internally.
+//     The duplicate load is intentional — the alternative would require a
+//     circular bootstrap. See Task 3 subtask vk for rationale.
+//
+// On any error it writes the JSON envelope to stderr and returns errDispatch
+// so run() can exit non-zero without double-printing.
+func setupClient() (*pkgapi.Client, error) {
+	// Preliminary config load to construct the recovery logger (Pin 3).
+	// pkg/api.New will load config again internally; this duplicate is
+	// acceptable — see Pin 3 comment above.
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		if werr := writeError(os.Stderr, errConfigMalformed, err.Error()); werr != nil {
-			return nil, config.Config{}, werr
+			return nil, werr
 		}
-		return nil, config.Config{}, errDispatch
+		return nil, errDispatch
 	}
+	logger := newRecoveryLogger(cfg)
 
-	// config.Load fully resolves path fields (SRD §11), so DbPath is already
-	// $HOME-expanded — no further tilde handling needed at the CLI layer.
-	st, err := store.OpenOrInit(cfg.Store.DbPath)
+	client, err := pkgapi.New(pkgapi.Options{
+		ConfigPath:      configPath,
+		CreateIfMissing: true, // Pin 1
+		// StorePath intentionally omitted (Pin 2).
+		Logger: logger, // Pin 3
+	})
 	if err != nil {
 		name := errStoreOpen
-		if errors.Is(err, store.ErrSchemaMismatch) {
+		switch {
+		case errors.Is(err, store.ErrSchemaMismatch):
 			name = "ErrSchemaMismatch"
+		case errors.Is(err, store.ErrStoreNotInitialized):
+			name = errStoreOpen
 		}
 		if werr := writeError(os.Stderr, name, err.Error()); werr != nil {
-			return nil, config.Config{}, werr
+			return nil, werr
 		}
-		return nil, config.Config{}, errDispatch
+		return nil, errDispatch
 	}
-	return st, cfg, nil
+	return client, nil
 }
 
 // run is the testable body of main. Returning an int lets main use
@@ -306,7 +335,7 @@ func run() int {
 		return runHook()
 	}
 
-	st, cfg, err := setupStoreAndCfg()
+	client, err := setupClient()
 	if err != nil {
 		if errors.Is(err, errDispatch) {
 			return 1
@@ -314,9 +343,9 @@ func run() int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	defer st.Close()
+	defer client.Close()
 
-	if err := dispatch(os.Args[1:], handlers(st, cfg)); err != nil {
+	if err := dispatch(os.Args[1:], handlers(client)); err != nil {
 		if errors.Is(err, errDispatch) {
 			return 1
 		}

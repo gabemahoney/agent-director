@@ -141,6 +141,29 @@ func (c *Client) checkClosed() error {
 	return nil
 }
 
+// BridgeStore returns the underlying *store.Store. This is a temporary bridge
+// used exclusively by cmd/agent-director/serve_cmd.go to pass st to
+// mcp.NewLiveDispatcher until Task 4 (the MCP refactor) updates the dispatcher
+// to accept a *Client directly.
+//
+// TODO(Task4): remove once mcp.NewLiveDispatcher accepts *Client.
+func (c *Client) BridgeStore() *store.Store { return c.st }
+
+// BridgeConfig returns the loaded config.Config. This is a temporary bridge
+// used exclusively by cmd/agent-director/serve_cmd.go to pass cfg to
+// mcp.NewLiveDispatcher until Task 4 (the MCP refactor) updates the dispatcher
+// to accept a *Client directly.
+//
+// TODO(Task4): remove once mcp.NewLiveDispatcher accepts *Client.
+func (c *Client) BridgeConfig() config.Config { return c.cfg }
+
+// BridgeTmuxClient returns the underlying *tmux.Client. This is a temporary
+// bridge used exclusively by cmd/agent-director/serve_cmd.go to pass the tmux
+// client to mcp.NewLiveDispatcher until Task 4.
+//
+// TODO(Task4): remove once mcp.NewLiveDispatcher accepts *Client.
+func (c *Client) BridgeTmuxClient() *tmux.Client { return c.tmuxClient }
+
 // resolveStorePath applies the three-tier StorePath precedence rule:
 //  1. opts.StorePath if non-empty (tilde-expanded).
 //  2. cfg.Store.DbPath if non-empty (already expanded by config.Load).
