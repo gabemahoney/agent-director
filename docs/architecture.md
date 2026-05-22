@@ -329,6 +329,33 @@ are explicitly prohibited in `pkg/cabi` source: `internal/store`,
 > `pkg/cabi`), the dispatch-flow diagram, and the "no duplicated business logic"
 > statement — is deferred to the T7 reconciliation pass.
 
+### Build paths and isolation invariant
+
+agent-director has two distinct build paths that must remain independent:
+
+| Path | Command | CGO | Output |
+| --- | --- | --- | --- |
+| Static CLI | `make build` | `CGO_ENABLED=0` | `bin/agent-director` |
+| C-ABI shared library | `make libagent_director` | `CGO_ENABLED=1` | `dist/libagent_director.so` + `dist/libagent_director.h` |
+
+`make build` (the default) **never** requires cgo. Only `pkg/cabi` uses
+cgo, and only when compiled via `make libagent_director`. The two build
+modes are completely orthogonal — building the CLI does not touch
+`pkg/cabi`, and building the shared library does not affect the CLI
+binary.
+
+**Header validation.** After `make libagent_director` compiles the `.so`,
+the Makefile immediately runs `go run ./tools/check-cabi-header
+dist/libagent_director.h`. This tool parses the generated header and
+fails the build if any exported symbol lacks the `ad_` prefix, catching
+naming drift before the artifact ships.
+
+**Isolation invariant.** `cmd/agent-director/` does NOT import
+`pkg/cabi`. The CLI binary is a pure `CGO_ENABLED=0` artifact; importing
+`pkg/cabi` would pull cgo into the CLI build path and break static
+linkage. The invariant is enforced at test time by
+`cmd/agent-director/cabi_isolation_test.go`.
+
 ## State Machine
 
 A Spawn's lifecycle is tracked in the `state` column of `spawns`. Every
