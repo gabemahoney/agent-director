@@ -40,13 +40,12 @@ still holds: nothing in `internal/` imports `pkg/api`.
 
 | Path | Responsibility | Allowed imports | Prohibited imports |
 | --- | --- | --- | --- |
-| `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`; every non-hook verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. `cmd/` dispatches through `pkg/api.Client`, which currently delegates to `internal/api`. **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. | stdlib; `pkg/api`; `internal/hook`; `internal/config` and `internal/store` (error sentinels only) in `setupClient`; `internal/config` in `runHook` and `newHookLogger`; `internal/api` for `help` only (until Task 5 moves the implementation). | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook`, `newHookLogger`, and `setupClient`'s logger bootstrap. |
-| `pkg/api` | **New public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director` and `internal/mcp` (both are now sole consumers of this facade). `internal/api` is being progressively reduced. | stdlib; `internal/api`; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`. | Direct `database/sql`; raw SQL strings; MCP framing; business logic (stays in `internal/api` or lower). |
-| `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v1 per SRD §4.2), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `internal/api/*`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
-| `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `internal/api/*`; `cmd/*`. |
-| `internal/api` | Verb-handler implementations; consumed by `pkg/api` (which delegates to it) and by `cmd/agent-director` for `help` only (until Task 5). MCP no longer imports `internal/api` directly — it goes through `pkg/api.Client`. Typed Go functions only — no SQL, no MCP framing. | stdlib; `internal/api/manifest`; `internal/store`; `internal/config`. | Raw SQL; MCP framing; hook IO; `pkg/api`; `cmd/*`. |
-| `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. | stdlib; `pkg/api`; `internal/api/manifest`. | `internal/api` (non-manifest); `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
-| `internal/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. | stdlib only — leaf package. | `internal/store`, `internal/config`, `internal/api/*` (other than this package), `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
+| `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`; every non-hook verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. | stdlib; `pkg/api`; `internal/hook`; `internal/config` and `internal/store` (error sentinels only) in `setupClient`; `internal/config` in `runHook` and `newHookLogger`. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook`, `newHookLogger`, and `setupClient`'s logger bootstrap. |
+| `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, `KillTmux`, `KillLogger`, etc.), params/result types, and error sentinels. Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director` and `internal/mcp`. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`. | Direct `database/sql`; raw SQL strings; MCP framing. |
+| `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v1 per SRD §4.2), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
+| `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
+| `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. | stdlib; `pkg/api`; `pkg/api/manifest`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
+| `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
 | `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). Builds env maps, synthesizes `--settings` JSON, and asks `internal/tmux` to start the session. Inserts the `pending` row via `internal/store`. | stdlib; `internal/config`; `internal/store`; `internal/tmux`; `github.com/google/uuid` for UUID4 minting. | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
 | `internal/tmux` | Thin client over the tmux binary. Each operation is one `exec.Command` invocation. Provides `NewSession`, `HasSession`, `KillSession`, `ListPanes`. | stdlib (`bytes`, `os/exec`, `strings`, `strconv`, `sort`). | Shell processes (`/bin/sh`), template / config / store packages, anything other than direct `exec.Command`. |
 | `internal/hook` | Reads payload JSON from stdin, classifies per SRD §5.2, writes the row UPSERT, exits 0 (state-tracking fail-open). | stdlib; `internal/store`. | `internal/tmux`; `internal/spawn`; `internal/config` (the cmd-side wrapper loads config; the package itself stays narrow). |
@@ -160,10 +159,10 @@ default) is created with mode 0700, and the database file is chmodded to
 Cross-reference: SRD §4.2 (canonical DDL), §4.5 (layer boundaries), §13.3
 (single-writer + WAL rationale).
 
-### `internal/api/manifest` — Verb Registry
+### `pkg/api/manifest` — Verb Registry
 
 **What it is.** A single Go source file at
-`internal/api/manifest/manifest.go` driven by a `//go:generate` directive.
+`pkg/api/manifest/manifest.go` driven by a `//go:generate` directive.
 Each `VerbDef` entry records:
 
 - the verb name,
@@ -182,21 +181,21 @@ A package-level `var Verbs []VerbDef` holds the ordered registry, and
 3. Generated reference docs `docs/cli-reference.md` and
    `docs/mcp-reference.md`, written by `tools/gen-docs`.
 
-Verb additions/edits go in `internal/api/manifest` only; the CI doc-drift
+Verb additions/edits go in `pkg/api/manifest` only; the CI doc-drift
 gate re-runs `go generate` and fails if any tracked file changes.
 
 **How to add a verb.**
 
 1. Add a `VerbDef` literal to `Verbs` in
-   `internal/api/manifest/manifest.go`. Populate `Name`, `Description`,
+   `pkg/api/manifest/manifest.go`. Populate `Name`, `Description`,
    `Params`, `ResultFields`, and `ErrorNames` (empty slice, not nil, when
    the verb has no error conditions).
-2. Implement the handler in `internal/api` (typed parameter struct in,
+2. Implement the handler in `pkg/api` (typed parameter struct in,
    typed result struct out, returning a Go `error`). Keep SQL inside
    `internal/store`; the handler calls store primitives.
-3. Add a method on `pkg/api.Client` that delegates to the new
-   `internal/api` handler. Then add a closure in the `handlers(client)`
-   map in `cmd/agent-director/main.go`: parse flags into a params struct,
+3. Add a method on `pkg/api.Client` that calls the new handler. Then
+   add a closure in the `handlers(client)` map in
+   `cmd/agent-director/main.go`: parse flags into a params struct,
    call `client.VerbName(params)`, and marshal the result as JSON via
    `writeJSON`. The `cmd/` file must contain no implementation logic —
    only flag parsing, the `client.X(params)` call, and JSON output.
@@ -213,7 +212,7 @@ gate re-runs `go generate` and fails if any tracked file changes.
 - Do not define CLI flags outside the manifest. New params go in the
   matching `VerbDef.Params` literal.
 - Do not hand-write MCP tool schemas. The MCP server reads from `Verbs`.
-- Do not have `internal/api/manifest` import `internal/store`,
+- Do not have `pkg/api/manifest` import `internal/store`,
   `internal/config`, or anything under `cmd/`. The package is stdlib-only
   by design so the generator (which imports it) stays trivially buildable.
 
@@ -237,16 +236,9 @@ See `docs/cli-reference.md` and `docs/mcp-reference.md` — auto-generated; do n
                             v
                 +-------------------------+
                 |   pkg/api               |
-                |   (public Client facade;|
+                |   (verb-handler home;   |
+                |    public Client facade;|
                 |    owns store/tmux/cfg) |
-                +-----------+-------------+
-                            |
-                            v
-                +-------------------------+
-                |   internal/api/*        |
-                |   manifest, (future)    |
-                |   spawn, hook, mcp,     |
-                |   tmux, probe           |
                 +-----------+-------------+
                             |
                             v
@@ -256,10 +248,10 @@ See `docs/cli-reference.md` and `docs/mcp-reference.md` — auto-generated; do n
                 |    schema v1 / SRD §4.2)|
                 +-------------------------+
 
-   internal/config -----> consumed by pkg/api, cmd, and internal/api/*
+   internal/config -----> consumed by pkg/api and cmd/
                           (never imports internal/store)
 
-Sibling packages under internal/ at the api layer:
+Sibling packages under internal/ consumed by pkg/api:
     internal/spawn   - lifecycle of Claude Code child processes
     internal/hook    - hook-event entrypoint logic
     internal/tmux    - tmux session orchestration
@@ -268,7 +260,7 @@ Sibling packages under internal/ at the api layer:
 
 The arrow direction is a hard rule. internal/store knows nothing about its
 callers; cmd/ knows nothing about SQL. Any PR that introduces a back-edge
-(e.g. internal/store importing internal/api) should be rejected at review.
+(e.g. internal/store importing pkg/api) should be rejected at review.
 ```
 
 Cite SRD §2 for the overall component decomposition this diagram realizes.
@@ -399,10 +391,9 @@ Layer boundaries (load-bearing):
   `NewSession` argv). Nothing else.
 - `internal/hook` calls `internal/store` (state UPSERT + session-id
   write). Never `internal/tmux`, never `internal/spawn`.
-- `internal/api` is the thin verb-handler surface: it composes
-  `internal/spawn` calls for the `spawn` verb and direct
-  `internal/store` reads for `status` / `get`. No SQL strings, no tmux
-  argv at this layer.
+- `pkg/api` is the verb-handler surface: it composes `internal/spawn`
+  calls for the `spawn` verb and direct `internal/store` reads for
+  `status` / `get`. No SQL strings, no tmux argv at this layer.
 
 The hook handler is invoked via the per-Spawn `--settings` JSON
 synthesized in stage 4. The handler's binary path is resolved via
@@ -435,7 +426,7 @@ manipulation can run.
 A tracked Spawn is externally drivable: an orchestrator can deliver text
 into its tmux pane and read the rendered TUI back out without attaching
 to the session. The two verbs are typed Go functions
-in `internal/api`, each calling exactly one method on the shared
+in `pkg/api`, each calling exactly one method on the shared
 `*tmux.Client` (`SendKeys` / `CapturePane`). Cross-reference SRD §4.3
 (send-keys multiline semantics), SRD §12 (verb shapes),
 `reference/send-keys-research.md` (empirical LF/CR behavior),
@@ -505,7 +496,7 @@ pane bytes as a post-mortem.
 
 ### Layer boundaries
 
-- `internal/api/sendkeys.go` and `internal/api/readpane.go` are the
+- `pkg/api/sendkeys.go` and `pkg/api/readpane.go` are the
   verb surfaces — typed params in, typed result + error out, errors
   matched via `errors.Is`.
 - They call `internal/store` for the row lookup and `internal/tmux` for
@@ -656,7 +647,7 @@ don't take effect until the next `serve --stdio` invocation.
 
 ### Drift-free schema generation
 
-The tool list is generated from `internal/api/manifest.Verbs` — the
+The tool list is generated from `pkg/api/manifest.Verbs` — the
 same single source of truth that drives the CLI flag definitions
 and the reference docs (`cli-reference.md`, `mcp-reference.md`).
 Adding a verb to the manifest exposes it via MCP on the next server
@@ -690,11 +681,7 @@ outputs is structurally prevented.
                          │  client.X(params)
                          ▼
                pkg/api.Client
-               (shared facade; holds store, tmux, config)
-                         │
-                         ▼
-               internal/api/*
-               (Spawn, Status, SendKeys, …)
+               (verb-handler home; holds store, tmux, config)
 ```
 
 ### Per-Client logger (Pin H4)
@@ -822,7 +809,7 @@ decide allow/deny out-of-band. Conceptually:
   - `GetPermissionRequest`: the polling-loop read.
   - `DecidePermissionRequest`: the race-free decide UPDATE.
 
-- **`internal/api/decide.go`** — verb wrapper. State guards
+- **`pkg/api/decide.go`** — verb wrapper. State guards
   (`ErrRelayModeOff`, `ErrSpawnNotFound`, `ErrInvalidDecision`)
   before the UPDATE, plus the RowsAffected==0 disambiguation
   (`ErrAlreadyDecided` vs `ErrNoOpenPermissionRequest`).
@@ -856,7 +843,7 @@ relay-on Spawn still surfaces deny.
 
 ### Send-keys interaction
 
-`internal/api/sendkeys.go`'s precondition: when `relay_mode=on` AND
+`pkg/api/sendkeys.go`'s precondition: when `relay_mode=on` AND
 `state=check_permission`, return `ErrSendKeysWhileRelayed`. The
 relay path owns the modal answer; a pane-side keystroke would race
 the relay's decide write. The guard was added in Epic 4 (stubbed);
@@ -867,7 +854,7 @@ Epic 10 activates it end-to-end.
 Bringing a terminated Spawn back to life via `claude --resume`. Same
 `claude_instance_id`, fresh tmux session, same JSONL transcript.
 
-### Verb (`internal/api/resume.go`)
+### Verb (`pkg/api/resume.go`)
 
 Guards run in order; every error path is side-effect-free (no DB
 mutation, no half-created tmux session):
@@ -1018,7 +1005,7 @@ case is distinguished and treated as a fast no-op success.
 
 ### `find-missing`
 
-`internal/api/find_missing.go`:
+`pkg/api/find_missing.go`:
 
 1. `ListLiveSpawnIDs` returns every row where `state NOT IN (ended,
    missing)`. This includes `pending` — SRD §5.2 explicitly scans
@@ -1038,7 +1025,7 @@ without the tmux process exiting. The operator clears those manually;
 
 ### `expire`
 
-`internal/api/expire.go` calls
+`pkg/api/expire.go` calls
 `store.DeleteTerminalOlderThan(duration)`, which executes a
 `DELETE ... RETURNING claude_instance_id` against rows whose
 `state IN (ended, missing)` AND `ended_at IS NOT NULL` AND
@@ -1054,7 +1041,7 @@ without the tmux process exiting. The operator clears those manually;
 
 ### `delete`
 
-`internal/api/delete.go` is the admin force-removal verb. It
+`pkg/api/delete.go` is the admin force-removal verb. It
 processes ids one at a time, returning a per-row map of
 `{id: "ok" | "<err_name>"}`. The batch never aborts on a partial
 failure — every id in the input is attempted; the map records the
