@@ -271,6 +271,41 @@ callers; cmd/ knows nothing about SQL. Any PR that introduces a back-edge
 
 Cite SRD §2 for the overall component decomposition this diagram realizes.
 
+### `pkg/cabi` — C-ABI envelope shape and panic-recovery contract
+
+`pkg/cabi` is declared as `package main` — Go's `buildmode=c-shared` requires
+the entry package to carry that name, but conceptually this is the C-ABI shim;
+the path `pkg/cabi` is the canonical reference throughout this document.
+
+**JSON envelope shape.** Every exported `ad_*` function returns a UTF-8 JSON
+object allocated on the C heap. Three forms are possible:
+
+- **Success** — structural equivalence to the CLI's `stdout` envelope for the
+  same verb. Verb-specific top-level fields (e.g. `{"handle": "..."}` for
+  `ad_open`); no `err_name` key present.
+- **Documented error** — `{"err_name": "...", "err_description": "..."}` where
+  both strings are drawn from `pkg/api/errnames.Catalog`. The same catalog
+  drives the CLI and MCP error envelopes; `pkg/cabi` does not maintain a
+  parallel copy.
+- **Undocumented / internal error** — `{"err_name": "ErrInternal",
+  "err_description": "<sanitized>"}`. Caught via `recover()` inside every
+  exported function body. Sanitization strips absolute filesystem paths and Go
+  stack-frame lines, then caps the description at 512 bytes. The un-sanitized
+  error chain is emitted to the `pkg/cabi` debug logger (active when
+  `AGENT_DIRECTOR_DEBUG` is set) before the sanitized form crosses the C
+  boundary, preserving post-mortem fidelity without leaking internals to
+  foreign callers.
+
+**Panic-recovery contract.** Every exported C function body is wrapped in an
+inner closure guarded by `defer recover()`. A panic occurring mid-call returns
+an `ErrInternal` envelope to the caller; it never crosses the C boundary. This
+is a hard invariant: no Go panic may propagate into C.
+
+> **T7 forward pointer.** The full caller-surface topology section — describing
+> the three `pkg/api.Client` consumers (`cmd/agent-director`, `internal/mcp`,
+> `pkg/cabi`), the dispatch-flow diagram, and the "no duplicated business logic"
+> statement — is deferred to the T7 reconciliation pass.
+
 ## State Machine
 
 A Spawn's lifecycle is tracked in the `state` column of `spawns`. Every
