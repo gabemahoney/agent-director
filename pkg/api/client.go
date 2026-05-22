@@ -122,6 +122,25 @@ func (c *Client) Close() error {
 	return c.st.Close()
 }
 
+// checkClosed is a mutex-guarded helper used by every verb method. It acquires
+// the Client's mutex, checks the closed flag, and returns ErrClientClosed if
+// the Client has been closed. The lock is released before returning so the
+// caller holds no lock when it invokes the underlying internal/api function.
+//
+// Correct usage:
+//
+//	if err := c.checkClosed(); err != nil {
+//	    return ZeroResult{}, err
+//	}
+func (c *Client) checkClosed() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return ErrClientClosed
+	}
+	return nil
+}
+
 // resolveStorePath applies the three-tier StorePath precedence rule:
 //  1. opts.StorePath if non-empty (tilde-expanded).
 //  2. cfg.Store.DbPath if non-empty (already expanded by config.Load).
