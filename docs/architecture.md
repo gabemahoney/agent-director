@@ -44,7 +44,7 @@ still holds: nothing in `internal/` imports `pkg/api`.
 | `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, `KillTmux`, `KillLogger`, etc.), params/result types, and error sentinels. Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director` and `internal/mcp`. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`. | Direct `database/sql`; raw SQL strings; MCP framing. |
 | `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v1 per SRD §4.2), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
-| `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, `TrimNamePrefix` for envelope-text normalisation, and `ErrUnknownTool`. The `Catalog` is consumed by `cmd/agent-director`'s envelope writer, `internal/mcp`'s `classifyDispatchError`, and (future) `pkg/cabi`'s JSON encoder. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
+| `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. The `Catalog` is consumed by `cmd/agent-director`'s envelope writer, `internal/mcp`'s `classifyDispatchError`, and (future) `pkg/cabi`'s JSON encoder. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
 | `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. `classifyDispatchError` delegates to `errnames.Classify`. | stdlib; `pkg/api`; `pkg/api/manifest`; `pkg/api/errnames`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
 | `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
 | `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). Builds env maps, synthesizes `--settings` JSON, and asks `internal/tmux` to start the session. Inserts the `pending` row via `internal/store`. | stdlib; `internal/config`; `internal/store`; `internal/tmux`; `github.com/google/uuid` for UUID4 minting. | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
@@ -200,9 +200,13 @@ gate re-runs `go generate` and fails if any tracked file changes.
    call `client.VerbName(params)`, and marshal the result as JSON via
    `writeJSON`. The `cmd/` file must contain no implementation logic —
    only flag parsing, the `client.X(params)` call, and JSON output.
-4. Run `make generate` to regenerate `docs/cli-reference.md` and
+4. If the verb emits new error sentinels, follow the checklist in
+   [Err-name five-way coherence](#err-name-five-way-coherence) before
+   proceeding — the CI drift gate will fail if any of the five sources
+   are out of sync.
+5. Run `make generate` to regenerate `docs/cli-reference.md` and
    `docs/mcp-reference.md` from the manifest.
-5. Verify idempotency: re-run `make generate` and confirm `git status`
+6. Verify idempotency: re-run `make generate` and confirm `git status`
    shows no diff. A second run that produces a diff means the generator is
    non-deterministic — fix it before merging.
 
@@ -785,10 +789,12 @@ Used by the CLI's `writeApiError` so the envelope reads cleanly instead
 of carrying the err_name in both the `err_name` field and the
 `err_description` text.
 
-**`ErrUnknownTool`** — the MCP dispatcher's sentinel for unrecognised
-tool names. Declared in `pkg/api/errnames` (not `internal/mcp`) so
-that `internal/mcp` can import `pkg/api/errnames` without a cycle:
-`internal/mcp → pkg/api/errnames → pkg/api`, never back.
+**`ErrUnknownTool`** — declared in `internal/mcp/server.go` because it is
+a dispatch-level error (the MCP transport layer detected an unknown tool
+name), not a verb-surface error. As a result it is NOT in `errnames.Catalog`
+(which is verb-surface only). `internal/mcp/server.go::classifyDispatchError`
+special-cases `errors.Is(err, ErrUnknownTool)` before delegating to
+`errnames.Classify` for verb-surface errors.
 
 **`catalog.json`** — a machine-readable snapshot of `Catalog`,
 generated deterministically by `go generate ./pkg/api/errnames/...`.
@@ -798,9 +804,79 @@ The doc-drift CI gate (`make doc-drift`) enforces that the checked-in
 **Consumers:** `cmd/agent-director`'s envelope writer and
 `internal/mcp`'s `classifyDispatchError` both call `errnames.Classify`
 directly — there is no register-then-classify two-step; the `Catalog`
-slice itself is the declaration. Task 7 of this Epic will add a
-coherence test asserting the four-way invariant: handler-emitted
-sentinels ↔ `Catalog` ↔ manifest `ErrorNames` ↔ exported sentinels.
+slice itself is the declaration. See [Err-name five-way coherence](#err-name-five-way-coherence)
+for the invariant that keeps all five sources in sync.
+
+### Err-name five-way coherence
+
+The err_name system enforces a five-way invariant: five separate sources of truth must stay
+mutually consistent whenever a sentinel is added, renamed, or removed.
+
+**The five sources**
+
+| # | Source | Location |
+| --- | --- | --- |
+| (a) | Sentinels referenced by handler code via `fmt.Errorf("%w: ...", X)` | `pkg/api/*.go` |
+| (b) | Entries in `pkg/api/errnames.Catalog` | `pkg/api/errnames/catalog.go` |
+| (c) | Per-verb `ErrorNames` slices in callable verbs from `manifest.CallableVerbs()` | `pkg/api/manifest/manifest.go` |
+| (d) | Exported `var Err*` declarations in `pkg/api` | `pkg/api/errors.go` |
+| (e) | Committed JSON snapshots regenerated from Go source | `pkg/api/errnames/catalog.json`, `pkg/api/manifest/surface.json` |
+
+Non-callable verbs (`help`, `serve`, `hook`) are **intentionally excluded** from source (c):
+they have no handler code in `pkg/api/*.go`, so including their `ErrorNames` would produce
+false-positive coherence failures.
+
+**Enforced check directions**
+
+Adding or removing a sentinel requires updating all relevant sources; editing the manifest
+or catalog Go source requires regenerating the corresponding JSON file.
+
+- **(a) → (b)**: Every sentinel referenced in handler code must have a Catalog entry.
+  Enforced by `TestFiveWayCoherence` check 1 (runtime).
+- **(c) → (b)**: Every `ErrorNames` entry in a callable verb must have a Catalog entry.
+  Enforced by `TestFiveWayCoherence` check 3 (runtime).
+- **(b) → (c)**: Every Catalog entry must appear in at least one callable verb's `ErrorNames`.
+  Enforced by `TestFiveWayCoherence` check 4 (runtime).
+- **(b) → (d)** *(compile-time)*: `catalog.go` imports `pkg/api` and references `api.ErrX`
+  directly — a missing `var` declaration is a build failure, not a test failure. This is
+  why `TestFiveWayCoherence` check 2 has no `t.Errorf`; the compiler already enforces it.
+- **(e) freshness**: `TestCatalogJSONUpToDate` and `TestSurfaceJSONUpToDate` re-run the
+  generators and diff the output against the committed files. A stale JSON file fails the
+  test with a clear "run `make errnames-json`" / "run `make surface-json`" message.
+
+**Documented exclusions**
+
+- `ErrInternal` is the `Classify` fallback for unrecognized errors. It is not in the Catalog
+  and is not enforced by the coherence check.
+- Catalog entries whose sentinels are declared in `internal/*` packages (e.g.
+  `tmux.ErrTmuxNotAvailable`, `store.ErrSpawnNotFound`) do not appear in `exportedSentinels`
+  and are therefore excluded from check 2. Their coherence with the Catalog is enforced at
+  compile time — `catalog.go` imports and references them directly.
+- Non-callable verbs (`help`, `serve`, `hook`) are excluded from the manifest-side coherence
+  checks (source (c)).
+
+**CI enforcement**
+
+`.github/workflows/doc-drift.yml` runs on every PR and push to `main`:
+
+1. `make err-coherence` runs `TestFiveWayCoherence`, `TestCatalogJSONUpToDate`, and
+   `TestSurfaceJSONUpToDate` in-process, covering all five sources.
+2. Explicit drift gates re-run `make errnames-json` and `make surface-json` and fail if
+   the committed JSON files differ from the regenerated output.
+
+**Adding a new sentinel**
+
+1. Add `var ErrFoo = errors.New("ErrFoo: ...")` to `pkg/api/errors.go`.
+2. Reference it from handler code: `return fmt.Errorf("%w: ...", ErrFoo)`.
+3. Add a Catalog row in `pkg/api/errnames/catalog.go`: `{Name: "ErrFoo", Err: api.ErrFoo}`.
+4. Add it to the relevant verb's `ErrorNames` slice in `pkg/api/manifest/manifest.go`.
+5. Add a `packageOf` map entry in `pkg/api/errnames/generate.go`. **This map is
+   hand-maintained** — `errors.New` returns a plain `*errorString` with no package
+   attribution that reflection can recover, so the generator cannot infer the origin
+   package automatically. A missing entry causes the generator to exit 1 with an explicit
+   error message.
+6. Run `make errnames-json && make surface-json` to refresh the committed JSON outputs.
+7. Run `make err-coherence` locally to confirm all five checks pass before pushing.
 
 ### Registration
 
