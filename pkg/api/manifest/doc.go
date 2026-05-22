@@ -7,7 +7,7 @@
 // error_names catalog. Downstream Epics (pkg/cabi, TS/Bun bindings,
 // envelope-diff harness) consume this file without importing internal/*.
 //
-// The source of truth is internal/api/manifest.Verbs. Run
+// The source of truth is pkg/api/manifest.Verbs. Run
 // `go generate ./pkg/api/manifest/...` (or `make surface-json`) to
 // regenerate surface.json after any manifest change.
 //

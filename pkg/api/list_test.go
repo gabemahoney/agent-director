@@ -6,7 +6,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/gabemahoney/agent-director/internal/api"
+	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 

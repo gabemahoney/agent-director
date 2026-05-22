@@ -4,7 +4,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/gabemahoney/agent-director/internal/api"
+	api "github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/spawn"
@@ -18,7 +18,7 @@ import (
 // the err_description is the wrapped error's full message.
 //
 // Adding a new sentinel: append it here and to the appropriate VerbDef's
-// ErrorNames slice in internal/api/manifest. The mismatch is caught by
+// ErrorNames slice in pkg/api/manifest. The mismatch is caught by
 // the doc-drift CI gate if either side falls behind.
 var errCatalog = []struct {
 	name string

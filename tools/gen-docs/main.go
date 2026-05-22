@@ -1,12 +1,12 @@
 // Command gen-docs regenerates docs/cli-reference.md and docs/mcp-reference.md
-// from the canonical verb manifest in internal/api/manifest.
+// from the canonical verb manifest in pkg/api/manifest.
 //
 // Invoked by:
 //
 //	go generate ./...
 //
 // triggered by a //go:generate directive inside the manifest package. The
-// directive runs with CWD = internal/api/manifest, so this tool walks up
+// directive runs with CWD = pkg/api/manifest, so this tool walks up
 // the directory tree until it finds a go.mod and treats that directory as
 // the repo root.
 //
@@ -22,7 +22,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/gabemahoney/agent-director/internal/api/manifest"
+	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
 // genHeader is the first content line of every generated doc file. It

@@ -108,3 +108,11 @@ func Get(s GetStore, instanceID string) (SpawnRow, error) {
 
 	return out, nil
 }
+
+// Get returns the full DB row for a tracked Spawn.
+func (c *Client) Get(claudeInstanceID string) (SpawnRow, error) {
+	if err := c.checkClosed(); err != nil {
+		return SpawnRow{}, err
+	}
+	return Get(c.st, claudeInstanceID)
+}

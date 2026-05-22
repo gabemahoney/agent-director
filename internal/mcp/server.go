@@ -6,7 +6,7 @@
 // `tools/list` (verb advertisement), `tools/call` (verb dispatch).
 // Notifications (`notifications/initialized`) are accepted and dropped.
 //
-// The tool list is generated from `internal/api/manifest.Verbs`, the
+// The tool list is generated from `pkg/api/manifest.Verbs`, the
 // same single source of truth that drives the CLI flags and the
 // reference docs — adding a new verb to the manifest exposes it via
 // MCP on next server start with no source changes here. The
@@ -22,7 +22,7 @@ import (
 	"io"
 	"log"
 
-	"github.com/gabemahoney/agent-director/internal/api/manifest"
+	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
 // ProtocolVersion is the MCP protocol version this server advertises.

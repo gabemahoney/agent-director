@@ -1,7 +1,7 @@
 //go:build ignore
 
 // generate.go produces pkg/api/manifest/surface.json from the canonical
-// internal/api/manifest.Verbs slice.
+// pkg/api/manifest.Verbs slice.
 //
 // Run via:
 //
@@ -29,7 +29,7 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/gabemahoney/agent-director/internal/api/manifest"
+	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
 // surface is the top-level shape of surface.json.

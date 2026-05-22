@@ -2,7 +2,7 @@
 //
 // This file provides the argv dispatch skeleton and the startup wiring that
 // every invocation performs (config load + store open). Real verb handlers
-// live in internal/api; this file marshals their results to JSON per
+// live in pkg/api; this file marshals their results to JSON per
 // SRD §12.3.
 package main
 
@@ -15,7 +15,6 @@ import (
 	"log"
 	"os"
 
-	internalapi "github.com/gabemahoney/agent-director/internal/api"
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -180,17 +179,16 @@ func hookLog(logger *log.Logger, format string, args ...any) {
 // helpResult is the top-level JSON envelope for the help verb. The single
 // "verbs" field mirrors the manifest's ResultFields for the help verb.
 type helpResult struct {
-	Verbs []internalapi.VerbSummary `json:"verbs"`
+	Verbs []pkgapi.VerbSummary `json:"verbs"`
 }
 
 // helpHandler implements the help verb. `help` is Callable:false in the
 // manifest — it does NOT route through the Client facade. It calls
-// internal/api.Help() directly. When Task 5 moves the implementation, the
-// import will follow; the call site here is unchanged.
+// pkg/api.Help() directly.
 func helpHandler(_ *pkgapi.Client, _ []string) error {
-	verbs, err := internalapi.Help()
+	verbs, err := pkgapi.Help()
 	if err != nil {
-		// internal/api.Help never errors today, but if a future implementation
+		// pkg/api.Help never errors today, but if a future implementation
 		// changes that, surface it via the dispatch envelope path.
 		if werr := writeError(os.Stderr, errJSONMarshal, err.Error()); werr != nil {
 			return werr

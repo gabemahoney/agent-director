@@ -11,7 +11,7 @@ A single Go binary that:
 ## Surfaces
 
 - **CLI** — `agent-director <verb> ...` for every verb in
-  `internal/api/manifest`. See `docs/cli-reference.md` for the canonical
+  `pkg/api/manifest`. See `docs/cli-reference.md` for the canonical
   list.
 - **Hook entrypoint** — the same binary invoked by Claude Code on hook events (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, Notification, SessionEnd, PermissionRequest).
 - **Stdio MCP server** — same binary invoked as `agent-director serve --stdio`. Stdio transport, lifetime scoped to a single Claude Code session.
@@ -27,15 +27,14 @@ See the SRD (Apiary Ideas hive: `t1.jus.x5`) for the full design.
 ## Package Layout & Layer Boundaries
 
 The binary is layered so each package owns exactly one concern. Imports flow
-in one direction only: `cmd/` depends on `pkg/api`, which currently delegates
-to `internal/api/*`, which depends on `internal/store` (and on `internal/config`
-for read-only configuration).
+in one direction only: `cmd/` depends on `pkg/api`, which depends on
+`internal/store` (and on `internal/config` for read-only configuration).
 Nothing flows back upward and nothing skips a layer.
 
-`pkg/api` is the new public facade sitting above `internal/api`,
-`internal/store`, `internal/config`, and `internal/tmux`; it is consumed by
-`cmd/agent-director` and `internal/mcp`. The downward-only
-dependency rule still holds: nothing in `internal/` imports `pkg/api`.
+`pkg/api` is the canonical verb-handler home sitting above `internal/store`,
+`internal/config`, `internal/tmux`, and `internal/probe`; it is consumed by
+`cmd/agent-director` and `internal/mcp`. The downward-only dependency rule
+still holds: nothing in `internal/` imports `pkg/api`.
 
 ### Package inventory
 

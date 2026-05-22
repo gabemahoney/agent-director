@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gabemahoney/agent-director/internal/api/manifest"
+	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 	api "github.com/gabemahoney/agent-director/pkg/api"
 )
 

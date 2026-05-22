@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gabemahoney/agent-director/internal/api/manifest"
+	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 	"github.com/gabemahoney/agent-director/internal/mcp"
 )
 
