@@ -379,6 +379,25 @@ naming drift before the artifact ships.
 linkage. The invariant is enforced at test time by
 `cmd/agent-director/cabi_isolation_test.go`.
 
+## Public API
+
+`pkg/api` is the stable public Go module surface for agent-director. Go library
+callers, the stdio MCP server (`internal/mcp`), and the CLI binary
+(`cmd/agent-director`) all dispatch through the same `*pkg/api.Client`; no
+business logic is duplicated across surfaces.
+
+**Canonical module path:** `github.com/gabemahoney/agent-director/pkg/api`
+
+**API reference:** https://pkg.go.dev/github.com/gabemahoney/agent-director/pkg/api
+
+**Consumer quick start:** See `pkg/api/README.md` for installation,
+construction, and a first-call example.
+
+**Enforcement:** `tools/check-doccomments` is an AST walker that requires every
+exported identifier in `pkg/api` to carry a doc comment. It runs in the
+doc-drift CI gate (`.github/workflows/doc-drift.yml`) on every PR and push to
+main. Undocumented symbols fail the build rather than accumulating silently.
+
 ## Caller surfaces and shared API
 
 agent-director exposes three distinct caller surfaces: the CLI subprocess (`cmd/agent-director`), reached by shelling out to the binary; the in-process Go consumer, which imports `pkg/api` directly and calls `*pkg/api.Client` methods; and foreign-language callers via `pkg/cabi`, which load `libagent_director.so` and call `ad_*` C exports — TS/Bun is the primary consumer today, with Python planned.
