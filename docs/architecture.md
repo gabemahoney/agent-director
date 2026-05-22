@@ -27,8 +27,9 @@ See the SRD (Apiary Ideas hive: `t1.jus.x5`) for the full design.
 ## Package Layout & Layer Boundaries
 
 The binary is layered so each package owns exactly one concern. Imports flow
-in one direction only: `cmd/` depends on `internal/api/*`, which depends on
-`internal/store` (and on `internal/config` for read-only configuration).
+in one direction only: `cmd/` depends on `pkg/api`, which currently delegates
+to `internal/api/*`, which depends on `internal/store` (and on `internal/config`
+for read-only configuration).
 Nothing flows back upward and nothing skips a layer.
 
 `pkg/api` is the new public facade sitting above `internal/api`,
@@ -40,7 +41,7 @@ dependency rule still holds: nothing in `internal/` imports `pkg/api`.
 
 | Path | Responsibility | Allowed imports | Prohibited imports |
 | --- | --- | --- | --- |
-| `cmd/agent-director` | CLI entrypoint: argv dispatch, exit codes, JSON error envelopes. Wires `internal/config` and `internal/api/*` into runnable verbs. | stdlib; any `internal/api/*`; `internal/config`; `internal/store` only via constructor wiring. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management that bypasses `internal/api`. |
+| `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`; every non-hook verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. `cmd/` dispatches through `pkg/api.Client`, which currently delegates to `internal/api`. **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. | stdlib; `pkg/api`; `internal/hook`; `internal/config` and `internal/store` (error sentinels only) in `setupClient`; `internal/config` in `runHook` and `newHookLogger`; `internal/api` for `help` only (until Task 5 moves the implementation). | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook`, `newHookLogger`, and `setupClient`'s logger bootstrap. |
 | `pkg/api` | **New public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns store, tmux, and config internally; will expose one method per CLI verb (Task 2+); idempotent `Close`. Consumed by `cmd/agent-director` and (later) `internal/mcp`. `internal/api` is being progressively reduced. | stdlib; `internal/api`; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`. | Direct `database/sql`; raw SQL strings; MCP framing; business logic (stays in `internal/api` or lower). |
 | `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v1 per SRD §4.2), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `internal/api/*`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `internal/api/*`; `cmd/*`. |
@@ -49,6 +50,29 @@ dependency rule still holds: nothing in `internal/` imports `pkg/api`.
 | `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). Builds env maps, synthesizes `--settings` JSON, and asks `internal/tmux` to start the session. Inserts the `pending` row via `internal/store`. | stdlib; `internal/config`; `internal/store`; `internal/tmux`; `github.com/google/uuid` for UUID4 minting. | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
 | `internal/tmux` | Thin client over the tmux binary. Each operation is one `exec.Command` invocation. Provides `NewSession`, `HasSession`, `KillSession`, `ListPanes`. | stdlib (`bytes`, `os/exec`, `strings`, `strconv`, `sort`). | Shell processes (`/bin/sh`), template / config / store packages, anything other than direct `exec.Command`. |
 | `internal/hook` | Reads payload JSON from stdin, classifies per SRD §5.2, writes the row UPSERT, exits 0 (state-tracking fail-open). | stdlib; `internal/store`. | `internal/tmux`; `internal/spawn`; `internal/config` (the cmd-side wrapper loads config; the package itself stays narrow). |
+
+### No-business-logic-in-cmd contract
+
+The thin-shim rule is now grep-enforceable. In `cmd/agent-director/`
+source files (excluding `*_test.go`), the following symbols must appear
+**only** in the named exemption sites:
+
+| Symbol | Permitted in |
+| --- | --- |
+| `store.Open` / `store.OpenOrInit` | `runHook` only |
+| `config.Load` | `runHook`, `newHookLogger`, and `setupClient`'s logger bootstrap (Pin 3) only |
+| `tmux.New` | none — `cmd/` must not construct a tmux client directly; `pkg/api.New` owns it |
+
+Any occurrence outside those sites is a layer-boundary violation and should
+be rejected at review. The enforcement command:
+
+```sh
+grep -rn "store\.Open\|config\.Load\|tmux\.New" cmd/agent-director/ \
+  | grep -v '_test\.go'
+```
+
+Expected output after this refactor: only lines inside `runHook`,
+`newHookLogger`, and `setupClient`.
 
 ### `pkg/api` Client lifecycle
 
@@ -170,8 +194,12 @@ gate re-runs `go generate` and fails if any tracked file changes.
 2. Implement the handler in `internal/api` (typed parameter struct in,
    typed result struct out, returning a Go `error`). Keep SQL inside
    `internal/store`; the handler calls store primitives.
-3. Wire the verb into the CLI dispatch map in
-   `cmd/agent-director/main.go` so argv routes to the new handler.
+3. Add a method on `pkg/api.Client` that delegates to the new
+   `internal/api` handler. Then add a closure in the `handlers(client)`
+   map in `cmd/agent-director/main.go`: parse flags into a params struct,
+   call `client.VerbName(params)`, and marshal the result as JSON via
+   `writeJSON`. The `cmd/` file must contain no implementation logic —
+   only flag parsing, the `client.X(params)` call, and JSON output.
 4. Run `make generate` to regenerate `docs/cli-reference.md` and
    `docs/mcp-reference.md` from the manifest.
 5. Verify idempotency: re-run `make generate` and confirm `git status`
