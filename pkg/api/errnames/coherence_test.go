@@ -35,10 +35,14 @@ func TestFiveWayCoherence(t *testing.T) {
 		t.Fatalf("ScanHandlerSentinels: %v", err)
 	}
 
-	// (b) Catalog names.
+	// (b) Catalog names + cabi-scoped subset.
 	catalogNames := make([]string, 0, len(errnames.Catalog))
+	var cabiScopedNames []string
 	for _, entry := range errnames.Catalog {
 		catalogNames = append(catalogNames, entry.Name)
+		if entry.Scope == "cabi" {
+			cabiScopedNames = append(cabiScopedNames, entry.Name)
+		}
 	}
 
 	// (c) ErrorNames from callable verbs only.
@@ -59,7 +63,11 @@ func TestFiveWayCoherence(t *testing.T) {
 	// catalog.go imports pkg/api and references api.ErrX directly, so any
 	// api-origin Catalog entry whose sentinel is missing from pkg/api will
 	// fail compilation. Loop omitted per engineering guide dead-code rule.
-	for _, f := range computeCoherenceDiff(handlerEmitted, catalogNames, manifestNames, exportedNames) {
+	//
+	// cabiScopedNames: cabi-scoped Catalog entries (e.g. ErrUnknownHandle) are
+	// exempt from Check 3 (b⊆c) — no callable verb declares them in ErrorNames
+	// because they originate exclusively in pkg/cabi's dispatch layer.
+	for _, f := range computeCoherenceDiff(handlerEmitted, catalogNames, manifestNames, exportedNames, cabiScopedNames) {
 		t.Errorf("%s", f.Message)
 	}
 }

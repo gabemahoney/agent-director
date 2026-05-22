@@ -27,12 +27,18 @@ type CoherenceFinding struct {
 // TestFiveWayCoherence against caller-supplied string slices. It returns one
 // CoherenceFinding per violation.
 //
-// The four sets correspond to:
+// The four required sets correspond to:
 //
 //	handlerEmitted    — (a) sentinels referenced in pkg/api handler code
 //	catalogNames      — (b) Name fields from errnames.Catalog
 //	manifestErrorNames — (c) per-verb ErrorNames from callable manifest verbs
 //	exportedSentinels  — (d) package-level var Err* declarations in pkg/api
+//
+// cabiScopedNames (fifth parameter) lists the subset of catalogNames whose
+// Catalog entries carry Scope:"cabi". These entries are exempt from Check 3
+// ((b)⊆(c)) because no callable verb declares them in its ErrorNames — they
+// originate exclusively in pkg/cabi's dispatch layer, not in any verb handler.
+// Pass nil when no cabi-scoped entries exist.
 //
 // exportedSentinels is accepted for API symmetry; the compile-time guarantee
 // that Catalog entries referencing pkg/api vars are consistent with the
@@ -43,11 +49,13 @@ func computeCoherenceDiff(
 	catalogNames,
 	manifestErrorNames,
 	exportedSentinels []string,
+	cabiScopedNames []string,
 ) []CoherenceFinding {
 	var findings []CoherenceFinding
 
 	catalogSet := toSet(catalogNames)
 	manifestSet := toSet(manifestErrorNames)
+	cabiSet := toSet(cabiScopedNames)
 
 	// ── Check 1: (a) ⊆ (b) ──────────────────────────────────────────────────
 	// Every sentinel referenced in handler code must have a Catalog entry.
@@ -80,13 +88,21 @@ func computeCoherenceDiff(
 		}
 	}
 
-	// ── Check 3: (b) ⊆ (c) (ErrInternal excepted) ──────────────────────────
+	// ── Check 3: (b) ⊆ (c) (ErrInternal + cabi-scoped entries excepted) ─────
 	// Every Catalog entry must appear in at least one callable verb's ErrorNames.
-	// Exception: "ErrInternal" is the Classify fallback; it is never in the manifest.
+	// Exceptions:
+	//   • "ErrInternal" — the Classify fallback; intentionally absent from manifest.
+	//   • cabi-scoped entries — C-ABI-only sentinels (e.g. ErrUnknownHandle) that
+	//     originate in pkg/cabi's dispatch layer and are never emitted by any
+	//     pkg/api verb handler. They appear in the Catalog for envelope construction
+	//     but have no corresponding manifest.ErrorNames entry by design.
 	const errInternalException = "ErrInternal"
 	for _, name := range catalogNames {
 		if name == errInternalException {
 			continue
+		}
+		if _, ok := cabiSet[name]; ok {
+			continue // cabi-scoped: exempt from manifest cross-check
 		}
 		if _, ok := manifestSet[name]; !ok {
 			findings = append(findings, CoherenceFinding{
@@ -116,6 +132,7 @@ func TestDiffCatalogVsManifest(t *testing.T) {
 		[]string{"ErrX"},  // catalogNames — ErrX registered in Catalog
 		nil,               // manifestErrorNames — no verb lists it
 		[]string{"ErrX"},  // exportedSentinels — declared in pkg/api
+		nil,               // cabiScopedNames — ErrX is not cabi-scoped
 	)
 
 	if len(findings) != 1 {
@@ -146,6 +163,7 @@ func TestDiffManifestVsCatalog(t *testing.T) {
 		nil,               // catalogNames — no Catalog entry for ErrX
 		[]string{"ErrX"},  // manifestErrorNames — a callable verb lists ErrX
 		nil,               // exportedSentinels — empty
+		nil,               // cabiScopedNames — none
 	)
 
 	if len(findings) != 1 {
@@ -173,6 +191,7 @@ func TestDiffHandlerVsCatalog(t *testing.T) {
 		nil,               // catalogNames — no Catalog entry
 		nil,               // manifestErrorNames — empty
 		[]string{"ErrX"},  // exportedSentinels — declared in pkg/api
+		nil,               // cabiScopedNames — none
 	)
 
 	if len(findings) != 1 {
@@ -199,6 +218,7 @@ func TestDiffNoDriftClean(t *testing.T) {
 		[]string{"ErrX"}, // catalogNames
 		[]string{"ErrX"}, // manifestErrorNames
 		[]string{"ErrX"}, // exportedSentinels
+		nil,              // cabiScopedNames — none
 	)
 
 	if len(findings) != 0 {
@@ -217,6 +237,7 @@ func TestDiffExclusions(t *testing.T) {
 		[]string{"ErrInternal"}, // catalogNames — it lives in the Catalog
 		nil,                     // manifestErrorNames — no verb lists it (by design)
 		nil,                     // exportedSentinels — not a pkg/api var
+		nil,                     // cabiScopedNames — none
 	)
 
 	if len(findings) != 0 {
@@ -236,6 +257,7 @@ func TestDiffMultipleDriftDirections(t *testing.T) {
 		[]string{"ErrB"},          // catalogNames
 		nil,                       // manifestErrorNames
 		[]string{"ErrA", "ErrB"},  // exportedSentinels
+		nil,                       // cabiScopedNames — none
 	)
 
 	if len(findings) != 2 {
