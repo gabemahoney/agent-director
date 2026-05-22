@@ -301,6 +301,31 @@ inner closure guarded by `defer recover()`. A panic occurring mid-call returns
 an `ErrInternal` envelope to the caller; it never crosses the C boundary. This
 is a hard invariant: no Go panic may propagate into C.
 
+**Test enforcement — three layers.** The recover() + ErrInternal contract is
+verified by three complementary test layers:
+
+1. **In-process (`pkg/cabi/lifecycle_panic_test.go`)** — exercises `recover()`
+   at the Go level by injecting deliberate panics into the exported function
+   closures and asserting the returned envelope is a well-formed `ErrInternal`
+   object (landed in T2).
+2. **Per-verb fuzz (`pkg/cabi/fuzz_corpus_test.go` + `fuzz_verbs_test.go`)** —
+   one `FuzzAd<Verb>` target per manifest verb (T6). Each target runs a
+   22-entry seed corpus covering malformed JSON, wrong-type fields, truncated
+   UTF-8, oversized payloads, injection-style strings, depth-bomb nesting, and
+   valid-with-noise inputs. Every target asserts that the returned envelope is
+   well-formed JSON (a top-level object carrying either success keys or the
+   `err_name`+`err_description` pair, never both, never mixed).
+3. **dlopen-driven panic (`pkg/cabi/dlopen_panic_test.go`, gated
+   `cabi_dlopen && cabi_panic_inject`, T6)** — dlopens the real `.so`, fires a
+   deliberate panic via the `_inject_panic` seam, and asserts the recovered
+   `ErrInternal` envelope is returned without crashing the process. The
+   build-tag forwarding pattern: a `dlopenBuildTags` package-level variable,
+   seeded by tag-gated `init()` files (e.g. `buildtags_dlopen_panic.go`), is
+   read by the dlopen `TestMain` to forward `cabi_panic_inject` into the
+   `go build` command that compiles the `.so`. The deliberate-panic sentinel is
+   compiled out of production builds — it is only present when the
+   `cabi_panic_inject` build tag is set.
+
 **Verb shape: thin marshal-and-dispatch.** Every `ad_*` export is a thin
 wrapper: parse JSON params → resolve handle via the registry (or skip for
 handle-free verbs) → call the matching `*pkg/api.Client` method → serialize
