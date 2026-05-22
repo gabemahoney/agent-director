@@ -1555,3 +1555,21 @@ hook surface) are recorded in `reference/*-research.md`.
 Per SRD §17, the orchestrator runs `make test-docker` first-hand, reads
 the per-case JSON stream, and signals "continue" only after confirming
 each case executed and passed.
+
+### Envelope-diff regression harness
+
+`test/envelope-diff/` (Go test package `envelope_diff`) is the SR-7.4 regression gate: the canonical proof that `cmd/agent-director` and `*pkg/api.Client` return structurally-equivalent envelopes for every callable verb.
+
+For each verb in `manifest.CallableVerbs()`, the harness copies a fixture store to a temp directory, runs the freshly-built `agent-director` binary as a subprocess (capturing stdout, stderr, and exit code), then invokes the same verb in-process via `*pkg/api.Client`. Each side is reduced to a single envelope per the shape contract — stdout when exit is 0, stderr when exit is non-zero. Both envelopes are normalized via sorted-key JSON re-encode, filtered through the per-verb non-determinism manifest at `test/envelope-diff/nondeterministic.json`, and structurally diffed. Mismatches are reported as path-style failures (e.g. `.spawns[0].claude_instance_id`).
+
+**File roles** (one per concern, no cross-layer logic):
+
+- `harness.go` — fixture-copy helper and one-time CLI/fake-tmux binary build (`sync.Once`).
+- `runners.go` — `runCLI` (subprocess) and `runClient` (in-process) plus per-verb dispatch.
+- `selectors.go` — path matching with `[*]` wildcard support.
+- `diff.go` — JSON normalization and structural diff.
+- `manifest_loader.go` — loads and validates `nondeterministic.json`.
+
+`test/envelope-diff/nondeterministic.json` is verb-keyed: each callable verb maps to the field paths excluded from the diff (generated IDs, timestamps, `version.version`/`version.commit`, and any other documented non-deterministic fields). A missing entry for a non-deterministic field causes the diff to fail. The Task 6 coverage gate, wired into the doc-drift CI check (SR-8.3), enforces that the manifest lists every verb in `manifest.CallableVerbs()` — no more, no fewer; adding a callable verb without a corresponding manifest entry fails CI.
+
+**Epic scope.** Task 1 builds the scaffold and unit tests. Per-verb success cases (Task 3) and documented-error cases (Task 4) follow. CI wiring (Task 5) and the nondeterministic.json completeness check (Task 6) close the Epic. `serve` and `hook` are excluded — they are non-callable and carry no envelope contract.
