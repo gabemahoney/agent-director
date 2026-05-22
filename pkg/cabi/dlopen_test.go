@@ -79,8 +79,24 @@ func runTestMain(m *testing.M) int {
 	soPath := filepath.Join(tmpDir, "libagent_director_test.so")
 
 	// Build WITHOUT cabi_dlopen tag: the .so must be the production artifact.
-	// CGO_ENABLED=1 is forced regardless of the host environment setting.
-	cmd := exec.Command("go", "build", "-buildmode=c-shared", "-o", soPath, ".")
+	// cabi_dlopen gates dlopen_helper.go (test-harness cgo that cannot be
+	// compiled into the .so alongside the //export directives). CGO_ENABLED=1
+	// is forced regardless of the host environment setting.
+	//
+	// All other active test-build tags (e.g. cabi_panic_inject) ARE forwarded
+	// so that optional seams inside the .so match the test binary's tag set.
+	buildArgs := []string{"build", "-buildmode=c-shared", "-o", soPath}
+	var soTags []string
+	for _, tag := range dlopenBuildTags {
+		if tag != "cabi_dlopen" {
+			soTags = append(soTags, tag)
+		}
+	}
+	if len(soTags) > 0 {
+		buildArgs = append(buildArgs, "-tags", strings.Join(soTags, " "))
+	}
+	buildArgs = append(buildArgs, ".")
+	cmd := exec.Command("go", buildArgs...)
 	cmd.Dir = pkgDir
 	cmd.Env = envWithCGO(os.Environ())
 	if out, buildErr := cmd.CombinedOutput(); buildErr != nil {
