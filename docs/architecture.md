@@ -34,7 +34,7 @@ Nothing flows back upward and nothing skips a layer.
 
 `pkg/api` is the new public facade sitting above `internal/api`,
 `internal/store`, `internal/config`, and `internal/tmux`; it is consumed by
-`cmd/agent-director` and (later, Epic 11) `internal/mcp`. The downward-only
+`cmd/agent-director` and `internal/mcp`. The downward-only
 dependency rule still holds: nothing in `internal/` imports `pkg/api`.
 
 ### Package inventory
@@ -42,10 +42,11 @@ dependency rule still holds: nothing in `internal/` imports `pkg/api`.
 | Path | Responsibility | Allowed imports | Prohibited imports |
 | --- | --- | --- | --- |
 | `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`; every non-hook verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. `cmd/` dispatches through `pkg/api.Client`, which currently delegates to `internal/api`. **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. | stdlib; `pkg/api`; `internal/hook`; `internal/config` and `internal/store` (error sentinels only) in `setupClient`; `internal/config` in `runHook` and `newHookLogger`; `internal/api` for `help` only (until Task 5 moves the implementation). | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook`, `newHookLogger`, and `setupClient`'s logger bootstrap. |
-| `pkg/api` | **New public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns store, tmux, and config internally; will expose one method per CLI verb (Task 2+); idempotent `Close`. Consumed by `cmd/agent-director` and (later) `internal/mcp`. `internal/api` is being progressively reduced. | stdlib; `internal/api`; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`. | Direct `database/sql`; raw SQL strings; MCP framing; business logic (stays in `internal/api` or lower). |
+| `pkg/api` | **New public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director` and `internal/mcp` (both are now sole consumers of this facade). `internal/api` is being progressively reduced. | stdlib; `internal/api`; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`. | Direct `database/sql`; raw SQL strings; MCP framing; business logic (stays in `internal/api` or lower). |
 | `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v1 per SRD §4.2), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `internal/api/*`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `internal/api/*`; `cmd/*`. |
-| `internal/api` | Stable verb-handler surface used by CLI + MCP + hooks. Typed Go functions only — no SQL, no MCP framing. | stdlib; `internal/api/manifest`; (later) `internal/store` and `internal/config`. | Raw SQL; MCP framing; hook IO. |
+| `internal/api` | Verb-handler implementations; consumed by `pkg/api` (which delegates to it) and by `cmd/agent-director` for `help` only (until Task 5). MCP no longer imports `internal/api` directly — it goes through `pkg/api.Client`. Typed Go functions only — no SQL, no MCP framing. | stdlib; `internal/api/manifest`; `internal/store`; `internal/config`. | Raw SQL; MCP framing; hook IO; `pkg/api`; `cmd/*`. |
+| `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. | stdlib; `pkg/api`; `internal/api/manifest`. | `internal/api` (non-manifest); `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
 | `internal/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. | stdlib only — leaf package. | `internal/store`, `internal/config`, `internal/api/*` (other than this package), `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
 | `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). Builds env maps, synthesizes `--settings` JSON, and asks `internal/tmux` to start the session. Inserts the `pending` row via `internal/store`. | stdlib; `internal/config`; `internal/store`; `internal/tmux`; `github.com/google/uuid` for UUID4 minting. | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
 | `internal/tmux` | Thin client over the tmux binary. Each operation is one `exec.Command` invocation. Provides `NewSession`, `HasSession`, `KillSession`, `ListPanes`. | stdlib (`bytes`, `os/exec`, `strings`, `strconv`, `sort`). | Shell processes (`/bin/sh`), template / config / store packages, anything other than direct `exec.Command`. |
@@ -669,21 +670,43 @@ isn't filtered automatically extends the test.
 
 ### Layer map
 
+Both the CLI and the MCP server dispatch through the same `pkg/api.Client`
+facade. `LiveDispatcher` holds a single `*pkg/api.Client`; each tool `case`
+in `LiveDispatcher.Call` decodes the MCP JSON args and calls `client.X(…)`.
+There is no longer a parallel dispatch path mirroring the CLI's — both
+surfaces share the same facade. Every verb call from CLI or MCP routes
+through the same Client method, so behavioral divergence between CLI and MCP
+outputs is structurally prevented.
+
 ```
-  Claude Code (MCP client)
-            │
-            │  JSON-RPC 2.0, line-delimited JSON on stdin/stdout
-            ▼
-  internal/mcp/server.go (initialize, tools/list, tools/call)
-            │
-            │  Dispatcher.Call(ctx, name, args)
-            ▼
-  internal/mcp/dispatch.go::LiveDispatcher (switch on verb name)
-            │
-            │  typed params struct → api function call
-            ▼
-  internal/api/* (Spawn, Status, SendKeys, …)
+  cmd/agent-director                 internal/mcp/server.go
+  (CLI: flag parse → client.X)       (MCP: JSON-RPC 2.0 on stdin/stdout)
+          │                                      │
+          │                          Dispatcher.Call(ctx, name, args)
+          │                                      │
+          │                          internal/mcp/dispatch.go::LiveDispatcher
+          │                          (switch on verb name; decode JSON args)
+          │                                      │
+          └──────────────┬────────────────────────┘
+                         │  client.X(params)
+                         ▼
+               pkg/api.Client
+               (shared facade; holds store, tmux, config)
+                         │
+                         ▼
+               internal/api/*
+               (Spawn, Status, SendKeys, …)
 ```
+
+### Per-Client logger (Pin H4)
+
+`serveHandlerWith` constructs a **separate** `*pkg/api.Client` for the MCP
+dispatcher, with `Options.Logger: nil`. This preserves the pre-refactor
+behavior where Kill/FindMissing/Expire swallow their tmux WARN logs on the
+MCP path — those warnings are most useful to the interactive CLI operator,
+not a long-lived MCP client. The CLI's main Client (constructed in
+`setupClient`) and the MCP's Client have distinct logger ownership; neither
+shares the other's `log.Logger`.
 
 ### Filtered verbs
 
@@ -725,7 +748,9 @@ canonical SRD §13.1 err_name in the `data` field:
 The err_name table is populated at server startup by
 `registerMCPErrors` in cmd/, which walks the CLI's `errCatalog`. The
 two views — CLI envelope and MCP error response — surface the same
-canonical names for the same wrapped errors.
+canonical names for the same wrapped errors. (The table-walk wiring
+still lives in `cmd/agent-director` for now; it will move to a shared
+package in Task 6.)
 
 ### Success envelope
 
