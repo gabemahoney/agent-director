@@ -3,52 +3,17 @@ package api_test
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"sync"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
-// seedDecideFixture opens a real store and inserts a Spawn row with a
-// configurable relay_mode. The caller separately seeds the
-// permission_requests row via raw SQL — the only way to drive the
-// "row absent" branch without going through the hook handler.
-func seedDecideFixture(t *testing.T, relayMode string) *store.Store {
-	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "state.db")
-	s, err := store.OpenOrInit(dbPath)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
-	if err := s.InsertPending(store.Spawn{
-		ClaudeInstanceID: "id-d-1",
-		CWD:              "/tmp",
-		TmuxSessionName:  "cd-d-1",
-		RelayMode:        relayMode,
-	}); err != nil {
-		t.Fatalf("InsertPending: %v", err)
-	}
-	// Transition into check_permission so it looks realistic.
-	if err := s.ApplyHookTransition("id-d-1", store.StateCheckPermission, false); err != nil {
-		t.Fatalf("transition: %v", err)
-	}
-	return s
-}
-
-func seedPermissionRow(t *testing.T, s *store.Store, id string) {
-	t.Helper()
-	if err := s.UpsertOpenPermissionRequest(id, "Bash", `{"cmd":"echo"}`); err != nil {
-		t.Fatalf("UpsertOpenPermissionRequest: %v", err)
-	}
-}
-
 func TestDecideRelayOffRejected(t *testing.T) {
-	s := seedDecideFixture(t, "off")
-	seedPermissionRow(t, s, "id-d-1")
+	s, _ := apitest.SeedDecideFixture(t, "off")
+	apitest.SeedPermissionRow(t, s, "id-d-1")
 	_, err := api.Decide(s, api.DecideParams{
 		ClaudeInstanceID: "id-d-1", Decision: "allow",
 	})
@@ -58,7 +23,7 @@ func TestDecideRelayOffRejected(t *testing.T) {
 }
 
 func TestDecideUnknownSpawn(t *testing.T) {
-	s := seedDecideFixture(t, "on")
+	s, _ := apitest.SeedDecideFixture(t, "on")
 	_, err := api.Decide(s, api.DecideParams{
 		ClaudeInstanceID: "absent", Decision: "allow",
 	})
@@ -68,8 +33,8 @@ func TestDecideUnknownSpawn(t *testing.T) {
 }
 
 func TestDecideInvalidDecision(t *testing.T) {
-	s := seedDecideFixture(t, "on")
-	seedPermissionRow(t, s, "id-d-1")
+	s, _ := apitest.SeedDecideFixture(t, "on")
+	apitest.SeedPermissionRow(t, s, "id-d-1")
 	_, err := api.Decide(s, api.DecideParams{
 		ClaudeInstanceID: "id-d-1", Decision: "perhaps",
 	})
@@ -82,8 +47,8 @@ func TestDecideFirstCallWins(t *testing.T) {
 	// Two consecutive decides on the same open row. The first writes
 	// allow; the second sees the populated decision column and the
 	// `decision IS NULL` guard short-circuits the UPDATE.
-	s := seedDecideFixture(t, "on")
-	seedPermissionRow(t, s, "id-d-1")
+	s, _ := apitest.SeedDecideFixture(t, "on")
+	apitest.SeedPermissionRow(t, s, "id-d-1")
 
 	if _, err := api.Decide(s, api.DecideParams{
 		ClaudeInstanceID: "id-d-1", Decision: "allow", Reason: "ok",
@@ -122,8 +87,8 @@ func TestDecideFirstCallWins(t *testing.T) {
 // boundary, not the Go-level test.
 func TestDecideConcurrentFirstCallWins(t *testing.T) {
 	const workers = 8
-	s := seedDecideFixture(t, "on")
-	seedPermissionRow(t, s, "id-d-1")
+	s, _ := apitest.SeedDecideFixture(t, "on")
+	apitest.SeedPermissionRow(t, s, "id-d-1")
 
 	start := make(chan struct{})
 	results := make(chan error, workers)
@@ -175,7 +140,7 @@ func TestDecideNoOpenPermissionRequest(t *testing.T) {
 	// Spawn exists, relay_mode=on, but no row in permission_requests.
 	// The verb surfaces ErrNoOpenPermissionRequest after the UPDATE
 	// no-ops and the follow-up SELECT returns sql.ErrNoRows.
-	s := seedDecideFixture(t, "on")
+	s, _ := apitest.SeedDecideFixture(t, "on")
 	_, err := api.Decide(s, api.DecideParams{
 		ClaudeInstanceID: "id-d-1", Decision: "allow",
 	})
@@ -190,8 +155,8 @@ func TestDecideDenyDefaultEnvelopeReasonNotWritten(t *testing.T) {
 	// hook.EncodeDecision, NOT in the DB. This test pins that
 	// boundary: an empty reason on the verb produces a NULL reason
 	// column.
-	s := seedDecideFixture(t, "on")
-	seedPermissionRow(t, s, "id-d-1")
+	s, _ := apitest.SeedDecideFixture(t, "on")
+	apitest.SeedPermissionRow(t, s, "id-d-1")
 	if _, err := api.Decide(s, api.DecideParams{
 		ClaudeInstanceID: "id-d-1", Decision: "deny", Reason: "",
 	}); err != nil {

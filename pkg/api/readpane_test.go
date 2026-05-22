@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
@@ -36,7 +37,7 @@ func (f *fakeCaptureTmux) CapturePane(name string, nLines int, ansi bool) (strin
 }
 
 func TestReadPaneDefaultStripsANSIPreservesGlyphs(t *testing.T) {
-	s := openStoreWithRow(t, "id-rp-1", "cd-rp-1", store.StateWaiting, "off")
+	s, _ := apitest.OpenStoreWithRow(t, "id-rp-1", "cd-rp-1", store.StateWaiting, "off")
 	tmux := &fakeCaptureTmux{
 		body: "\x1b[31m❯\x1b[0m what is 2+2?\n\x1b[1m4\x1b[0m\n🐝 Brewed for 1s\n",
 	}
@@ -53,7 +54,7 @@ func TestReadPaneDefaultStripsANSIPreservesGlyphs(t *testing.T) {
 }
 
 func TestReadPaneANSITrueReturnsRawBytes(t *testing.T) {
-	s := openStoreWithRow(t, "id-rp-2", "cd-rp-2", store.StateWaiting, "off")
+	s, _ := apitest.OpenStoreWithRow(t, "id-rp-2", "cd-rp-2", store.StateWaiting, "off")
 	raw := "\x1b[31m❯\x1b[0m question"
 	tmux := &fakeCaptureTmux{body: raw}
 	res, err := api.ReadPane(s, tmux, api.ReadPaneParams{
@@ -77,7 +78,7 @@ func TestReadPaneForwardsANSIFlagToTmux(t *testing.T) {
 	// before agent-director ever sees them and the "raw bytes" promise
 	// of `--ansi=true` collapses.
 	t.Run("ansi=true forwards true", func(t *testing.T) {
-		s := openStoreWithRow(t, "id-rp-ansi-on", "cd-x", store.StateWaiting, "off")
+		s, _ := apitest.OpenStoreWithRow(t, "id-rp-ansi-on", "cd-x", store.StateWaiting, "off")
 		tmux := &fakeCaptureTmux{body: "x"}
 		if _, err := api.ReadPane(s, tmux, api.ReadPaneParams{
 			ClaudeInstanceID: "id-rp-ansi-on",
@@ -90,7 +91,7 @@ func TestReadPaneForwardsANSIFlagToTmux(t *testing.T) {
 		}
 	})
 	t.Run("ansi=false (default) forwards false", func(t *testing.T) {
-		s := openStoreWithRow(t, "id-rp-ansi-off", "cd-x", store.StateWaiting, "off")
+		s, _ := apitest.OpenStoreWithRow(t, "id-rp-ansi-off", "cd-x", store.StateWaiting, "off")
 		tmux := &fakeCaptureTmux{body: "x"}
 		if _, err := api.ReadPane(s, tmux, api.ReadPaneParams{
 			ClaudeInstanceID: "id-rp-ansi-off",
@@ -107,7 +108,7 @@ func TestReadPaneDefaultLineCountIsTwentyFive(t *testing.T) {
 	// NLines=0 (the zero value) must fall back to DefaultReadPaneLines.
 	// The fake records whatever the verb asked for; pinning 25 here is
 	// the public contract.
-	s := openStoreWithRow(t, "id-rp-3", "cd-rp-3", store.StateWaiting, "off")
+	s, _ := apitest.OpenStoreWithRow(t, "id-rp-3", "cd-rp-3", store.StateWaiting, "off")
 	tmux := &fakeCaptureTmux{body: "x\n"}
 	if _, err := api.ReadPane(s, tmux, api.ReadPaneParams{
 		ClaudeInstanceID: "id-rp-3",
@@ -125,7 +126,7 @@ func TestReadPaneDefaultLineCountIsTwentyFive(t *testing.T) {
 func TestReadPaneCustomLineCountPassesThrough(t *testing.T) {
 	// SRD §12: no upper cap. The verb must pass any positive number
 	// through to tmux verbatim.
-	s := openStoreWithRow(t, "id-rp-4", "cd-rp-4", store.StateWaiting, "off")
+	s, _ := apitest.OpenStoreWithRow(t, "id-rp-4", "cd-rp-4", store.StateWaiting, "off")
 	tmux := &fakeCaptureTmux{body: "x\n"}
 	if _, err := api.ReadPane(s, tmux, api.ReadPaneParams{
 		ClaudeInstanceID: "id-rp-4",
@@ -142,7 +143,7 @@ func TestReadPaneUsesTmuxSessionNameFromRow(t *testing.T) {
 	// The verb must read the row's tmux_session_name, not the caller's
 	// instance id. Different rows produce different sessions; mixing
 	// them up would let one Spawn read another's pane.
-	s := openStoreWithRow(t, "id-rp-5", "cd-magic-session", store.StateWaiting, "off")
+	s, _ := apitest.OpenStoreWithRow(t, "id-rp-5", "cd-magic-session", store.StateWaiting, "off")
 	tmux := &fakeCaptureTmux{body: "x\n"}
 	if _, err := api.ReadPane(s, tmux, api.ReadPaneParams{
 		ClaudeInstanceID: "id-rp-5",
@@ -155,7 +156,7 @@ func TestReadPaneUsesTmuxSessionNameFromRow(t *testing.T) {
 }
 
 func TestReadPaneSpawnNotFound(t *testing.T) {
-	s := openStoreWithRow(t, "id-rp-6", "cd-rp-6", store.StateWaiting, "off")
+	s, _ := apitest.OpenStoreWithRow(t, "id-rp-6", "cd-rp-6", store.StateWaiting, "off")
 	tmux := &fakeCaptureTmux{body: "x\n"}
 	_, err := api.ReadPane(s, tmux, api.ReadPaneParams{
 		ClaudeInstanceID: "absent",
@@ -169,7 +170,7 @@ func TestReadPaneSpawnNotFound(t *testing.T) {
 }
 
 func TestReadPaneTmuxCaptureFailed(t *testing.T) {
-	s := openStoreWithRow(t, "id-rp-7", "cd-rp-7", store.StateWaiting, "off")
+	s, _ := apitest.OpenStoreWithRow(t, "id-rp-7", "cd-rp-7", store.StateWaiting, "off")
 	tmux := &fakeCaptureTmux{failErr: errReadPaneSentinel}
 	_, err := api.ReadPane(s, tmux, api.ReadPaneParams{
 		ClaudeInstanceID: "id-rp-7",
@@ -183,7 +184,7 @@ func TestReadPaneWorksOnEndedSpawn(t *testing.T) {
 	// Unlike send-keys, read-pane has NO state precondition — a caller
 	// inspecting an ended Spawn's final pane bytes is a valid use case
 	// (post-mortem capture). The row lookup is the only gate.
-	s := openStoreWithRow(t, "id-rp-8", "cd-rp-8", store.StateEnded, "off")
+	s, _ := apitest.OpenStoreWithRow(t, "id-rp-8", "cd-rp-8", store.StateEnded, "off")
 	tmux := &fakeCaptureTmux{body: "final state"}
 	res, err := api.ReadPane(s, tmux, api.ReadPaneParams{
 		ClaudeInstanceID: "id-rp-8",

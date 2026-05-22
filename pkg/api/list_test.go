@@ -2,67 +2,12 @@ package api_test
 
 import (
 	"errors"
-	"path/filepath"
 	"sort"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/pkg/api"
-	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
-
-// seedListFixture inserts 6 spawn rows with mixed states/labels/parents/
-// cwds so each filter case has both matching and non-matching rows to
-// distinguish "filter worked" from "everything happened to match".
-//
-// Layout (each row's instance id reads as a quick identity):
-//
-//   row-a-wait-foo:        waiting, labels project=foo+env=dev, cwd /tmp,  no parent
-//   row-b-wait-foo-other:  waiting, label  project=foo,         cwd /tmp,  parent=row-a-wait-foo
-//   row-c-work-bar:        working, label  project=bar,         cwd /tmp,  no parent
-//   row-d-ended-foo:       ended,   label  project=foo,         cwd /opt,  no parent
-//   row-e-ask:             ask_user, no labels,                 cwd /tmp,  no parent
-//   row-f-wait-no-label:   waiting, no labels,                  cwd /opt,  no parent
-func seedListFixture(t *testing.T) *store.Store {
-	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "state.db")
-	s, err := store.OpenOrInit(dbPath)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
-	insert := func(id, parent, state, cwd string, labels map[string]string) {
-		t.Helper()
-		row := store.Spawn{
-			ClaudeInstanceID: id,
-			ParentID:         parent,
-			CWD:              cwd,
-			TmuxSessionName:  "cd-" + id,
-			RelayMode:        "off",
-			Labels:           labels,
-		}
-		if err := s.InsertPending(row); err != nil {
-			t.Fatalf("InsertPending %s: %v", id, err)
-		}
-		if state != store.StatePending {
-			if err := s.ApplyHookTransition(id, state, false); err != nil {
-				t.Fatalf("ApplyHookTransition %s: %v", id, err)
-			}
-		}
-	}
-
-	insert("row-a-wait-foo", "", store.StateWaiting, "/tmp",
-		map[string]string{"project": "foo", "env": "dev"})
-	insert("row-b-wait-foo-other", "row-a-wait-foo", store.StateWaiting, "/tmp",
-		map[string]string{"project": "foo"})
-	insert("row-c-work-bar", "", store.StateWorking, "/tmp",
-		map[string]string{"project": "bar"})
-	insert("row-d-ended-foo", "", store.StateEnded, "/opt",
-		map[string]string{"project": "foo"})
-	insert("row-e-ask", "", store.StateAskUser, "/tmp", nil)
-	insert("row-f-wait-no-label", "", store.StateWaiting, "/opt", nil)
-	return s
-}
 
 // idsOf is a small projection so test diffs read as a sorted id slice
 // rather than a wall of Spawn structs. Sort is applied because the
@@ -78,7 +23,7 @@ func idsOf(rows []api.ListRow) []string {
 }
 
 func TestListNoFiltersReturnsAllRows(t *testing.T) {
-	s := seedListFixture(t)
+	s, _ := apitest.SeedListFixture(t)
 	res, err := api.List(s, api.ListParams{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -93,7 +38,7 @@ func TestListNoFiltersReturnsAllRows(t *testing.T) {
 }
 
 func TestListSingleStateFilter(t *testing.T) {
-	s := seedListFixture(t)
+	s, _ := apitest.SeedListFixture(t)
 	res, err := api.List(s, api.ListParams{State: []string{"waiting"}})
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -107,7 +52,7 @@ func TestListSingleStateFilter(t *testing.T) {
 func TestListMultiStateFilter(t *testing.T) {
 	// state filter is OR within the slice, AND with other filters
 	// (none used here).
-	s := seedListFixture(t)
+	s, _ := apitest.SeedListFixture(t)
 	res, err := api.List(s, api.ListParams{State: []string{"working", "ended"}})
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -119,7 +64,7 @@ func TestListMultiStateFilter(t *testing.T) {
 }
 
 func TestListSingleLabelFilter(t *testing.T) {
-	s := seedListFixture(t)
+	s, _ := apitest.SeedListFixture(t)
 	res, err := api.List(s, api.ListParams{Labels: []string{"project=foo"}})
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -131,7 +76,7 @@ func TestListSingleLabelFilter(t *testing.T) {
 }
 
 func TestListMultipleLabelsAndTogether(t *testing.T) {
-	s := seedListFixture(t)
+	s, _ := apitest.SeedListFixture(t)
 	res, err := api.List(s, api.ListParams{
 		Labels: []string{"project=foo", "env=dev"},
 	})
@@ -146,7 +91,7 @@ func TestListMultipleLabelsAndTogether(t *testing.T) {
 }
 
 func TestListParentFilter(t *testing.T) {
-	s := seedListFixture(t)
+	s, _ := apitest.SeedListFixture(t)
 	res, err := api.List(s, api.ListParams{Parent: "row-a-wait-foo"})
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -158,7 +103,7 @@ func TestListParentFilter(t *testing.T) {
 }
 
 func TestListCwdFilter(t *testing.T) {
-	s := seedListFixture(t)
+	s, _ := apitest.SeedListFixture(t)
 	res, err := api.List(s, api.ListParams{Cwd: "/opt"})
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -170,7 +115,7 @@ func TestListCwdFilter(t *testing.T) {
 }
 
 func TestListLimitCapsResults(t *testing.T) {
-	s := seedListFixture(t)
+	s, _ := apitest.SeedListFixture(t)
 	res, err := api.List(s, api.ListParams{Limit: 2})
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -185,7 +130,7 @@ func TestListCombinedFiltersAndTogether(t *testing.T) {
 	// Matches row-a (project=foo, waiting, /tmp) and row-b (project=foo,
 	// waiting, /tmp). Excludes row-c (working), row-d (/opt + ended),
 	// row-e (no label), row-f (no label).
-	s := seedListFixture(t)
+	s, _ := apitest.SeedListFixture(t)
 	res, err := api.List(s, api.ListParams{
 		State:  []string{"waiting"},
 		Labels: []string{"project=foo"},
@@ -201,7 +146,7 @@ func TestListCombinedFiltersAndTogether(t *testing.T) {
 }
 
 func TestListInvalidLabelSyntaxRejected(t *testing.T) {
-	s := seedListFixture(t)
+	s, _ := apitest.SeedListFixture(t)
 	// `foo` has no `=` → ErrListInvalidLabel; store never invoked.
 	_, err := api.List(s, api.ListParams{Labels: []string{"foo"}})
 	if !errors.Is(err, api.ErrListInvalidLabel) {
@@ -210,7 +155,7 @@ func TestListInvalidLabelSyntaxRejected(t *testing.T) {
 }
 
 func TestListEmptyLabelKeyRejected(t *testing.T) {
-	s := seedListFixture(t)
+	s, _ := apitest.SeedListFixture(t)
 	// `=value` has an empty key — would coerce json_extract into a
 	// degenerate path. Reject at the verb seam.
 	_, err := api.List(s, api.ListParams{Labels: []string{"=value"}})
@@ -223,7 +168,7 @@ func TestListResultSliceNeverNil(t *testing.T) {
 	// JSON-stability invariant: even a no-match query encodes as
 	// `{"spawns": []}`, never `{"spawns": null}`. Callers that walk
 	// the slice without nil checks (jq, the MCP client) depend on it.
-	s := seedListFixture(t)
+	s, _ := apitest.SeedListFixture(t)
 	res, err := api.List(s, api.ListParams{Labels: []string{"nothing-matches=here"}})
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -239,7 +184,7 @@ func TestListResultSliceNeverNil(t *testing.T) {
 func TestListTmuxSessionNameFilterNarrows(t *testing.T) {
 	// Fixture rows all carry tmux_session_name = "cd-" + id. The filter
 	// is byte-exact, so picking one of those names returns just that row.
-	s := seedListFixture(t)
+	s, _ := apitest.SeedListFixture(t)
 	res, err := api.List(s, api.ListParams{TmuxSessionName: "cd-row-c-work-bar"})
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -253,7 +198,7 @@ func TestListTmuxSessionNameFilterNarrows(t *testing.T) {
 func TestListTmuxSessionNameFilterNoMatchEmpty(t *testing.T) {
 	// A non-matching name returns an empty (non-nil) slice — same
 	// JSON-stability invariant as TestListResultSliceNeverNil.
-	s := seedListFixture(t)
+	s, _ := apitest.SeedListFixture(t)
 	res, err := api.List(s, api.ListParams{TmuxSessionName: "nonexistent"})
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -270,7 +215,7 @@ func TestListTmuxSessionNameAndCombinesWithState(t *testing.T) {
 	// AND-combine: tmux name pinpoints one row; pairing it with a state
 	// that does NOT match that row must return zero rows. (Confirms the
 	// filter is AND'd, not OR'd.)
-	s := seedListFixture(t)
+	s, _ := apitest.SeedListFixture(t)
 	res, err := api.List(s, api.ListParams{
 		TmuxSessionName: "cd-row-c-work-bar",
 		State:           []string{"waiting"},
@@ -298,7 +243,7 @@ func TestListTmuxSessionNameAndCombinesWithState(t *testing.T) {
 func TestListTmuxSessionNameEmptyIsPermissive(t *testing.T) {
 	// Explicit empty string in ListParams must not emit a SQL clause —
 	// the result must equal the no-filter result.
-	s := seedListFixture(t)
+	s, _ := apitest.SeedListFixture(t)
 	res, err := api.List(s, api.ListParams{TmuxSessionName: ""})
 	if err != nil {
 		t.Fatalf("List: %v", err)

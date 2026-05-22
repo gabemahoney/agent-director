@@ -14,20 +14,8 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
-
-// seedStore creates a valid initialised store at path and immediately closes
-// it, leaving a well-formed SQLite file on disk.
-func seedStore(t *testing.T, path string) {
-	t.Helper()
-	s, err := store.OpenOrInit(path)
-	if err != nil {
-		t.Fatalf("seedStore OpenOrInit(%q): %v", path, err)
-	}
-	if err := s.Close(); err != nil {
-		t.Fatalf("seedStore Close: %v", err)
-	}
-}
 
 // writeConfig writes TOML content to path, creating parent dirs as needed.
 func writeConfig(t *testing.T, path, content string) {
@@ -120,7 +108,7 @@ func TestNewDefaultsPreexistingStore(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	seedStore(t, filepath.Join(home, ".agent-director", "state.db"))
+	apitest.SeedStore(t, filepath.Join(home, ".agent-director", "state.db"))
 
 	client, err := api.New(api.Options{})
 	if err != nil {
@@ -141,7 +129,7 @@ func TestStorePathFromConfig(t *testing.T) {
 	elsewhere := filepath.Join(home, "elsewhere.db")
 
 	writeConfig(t, cfgPath, fmt.Sprintf("[store]\ndb_path = %q\n", elsewhere))
-	seedStore(t, elsewhere)
+	apitest.SeedStore(t, elsewhere)
 
 	client, err := api.New(api.Options{ConfigPath: cfgPath})
 	if err != nil {
@@ -162,7 +150,7 @@ func TestStorePathOptionsWins(t *testing.T) {
 
 	writeConfig(t, cfgPath, fmt.Sprintf("[store]\ndb_path = %q\n", elsewhere))
 	// Seed only the override path; elsewhere.db intentionally absent.
-	seedStore(t, override)
+	apitest.SeedStore(t, override)
 
 	client, err := api.New(api.Options{StorePath: override, ConfigPath: cfgPath})
 	if err != nil {
@@ -195,7 +183,7 @@ func TestTildeExpansion(t *testing.T) {
 	storePath := filepath.Join(home, storeBase)
 	cfgPath := filepath.Join(home, cfgBase)
 
-	seedStore(t, storePath)
+	apitest.SeedStore(t, storePath)
 	writeConfig(t, cfgPath, "")
 
 	t.Cleanup(func() {
@@ -224,7 +212,7 @@ func TestTildeExpansion(t *testing.T) {
 func TestDoubleClose(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	seedStore(t, filepath.Join(home, ".agent-director", "state.db"))
+	apitest.SeedStore(t, filepath.Join(home, ".agent-director", "state.db"))
 
 	client, err := api.New(api.Options{})
 	if err != nil {
@@ -246,7 +234,7 @@ func TestConcurrentClose(t *testing.T) {
 	const n = 8
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	seedStore(t, filepath.Join(home, ".agent-director", "state.db"))
+	apitest.SeedStore(t, filepath.Join(home, ".agent-director", "state.db"))
 
 	client, err := api.New(api.Options{})
 	if err != nil {
@@ -276,7 +264,7 @@ func TestSchemaMismatch(t *testing.T) {
 	cfgPath := filepath.Join(home, "cfg.toml")
 
 	// Bootstrap a valid v1 store, then corrupt its schema version.
-	seedStore(t, dbPath)
+	apitest.SeedStore(t, dbPath)
 	stampUserVersion(t, dbPath, 99)
 
 	writeConfig(t, cfgPath, fmt.Sprintf("[store]\ndb_path = %q\n", dbPath))

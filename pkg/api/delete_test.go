@@ -2,51 +2,15 @@ package api_test
 
 import (
 	"errors"
-	"path/filepath"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
-// seedDeleteFixture seeds three rows: a live one, an ended one, and a
-// row used as the absent baseline (its id is unique so the test can
-// pass a known-bad id alongside).
-func seedDeleteFixture(t *testing.T) *store.Store {
-	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "state.db")
-	s, err := store.OpenOrInit(dbPath)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
-	for _, sp := range []struct {
-		id, state string
-	}{
-		{"row-live", store.StateWaiting},
-		{"row-ended", store.StateEnded},
-	} {
-		row := store.Spawn{
-			ClaudeInstanceID: sp.id,
-			CWD:              "/tmp",
-			TmuxSessionName:  "cd-" + sp.id,
-			RelayMode:        "off",
-		}
-		if err := s.InsertPending(row); err != nil {
-			t.Fatalf("InsertPending %s: %v", sp.id, err)
-		}
-		if sp.state != store.StatePending {
-			if err := s.ApplyHookTransition(sp.id, sp.state, false); err != nil {
-				t.Fatalf("transition %s: %v", sp.id, err)
-			}
-		}
-	}
-	return s
-}
-
 func TestDeleteSingleValidIdReturnsOk(t *testing.T) {
-	s := seedDeleteFixture(t)
+	s, _ := apitest.SeedDeleteFixture(t)
 	res, err := api.Delete(s, []string{"row-ended"})
 	if err != nil {
 		t.Fatalf("Delete: %v", err)
@@ -60,7 +24,7 @@ func TestDeleteSingleValidIdReturnsOk(t *testing.T) {
 }
 
 func TestDeleteBatchOfValidIdsAllReportOk(t *testing.T) {
-	s := seedDeleteFixture(t)
+	s, _ := apitest.SeedDeleteFixture(t)
 	res, err := api.Delete(s, []string{"row-live", "row-ended"})
 	if err != nil {
 		t.Fatalf("Delete: %v", err)
@@ -73,7 +37,7 @@ func TestDeleteBatchOfValidIdsAllReportOk(t *testing.T) {
 func TestDeleteMixedValidAndBogusReportsPerRow(t *testing.T) {
 	// Per Epic 8 AC #3: partial-failure batch returns the per-row
 	// map; the batch DOES NOT abort on the bogus id.
-	s := seedDeleteFixture(t)
+	s, _ := apitest.SeedDeleteFixture(t)
 	res, err := api.Delete(s, []string{"row-live", "absent", "row-ended"})
 	if err != nil {
 		t.Fatalf("Delete: %v", err)
@@ -103,7 +67,7 @@ func TestDeleteOnLiveRowBypassesGuards(t *testing.T) {
 	// is removed exactly the same way a terminal row is. The orphan
 	// tmux session (if any) is left running; the verb makes no claim
 	// about it.
-	s := seedDeleteFixture(t)
+	s, _ := apitest.SeedDeleteFixture(t)
 	res, err := api.Delete(s, []string{"row-live"})
 	if err != nil {
 		t.Fatalf("Delete: %v", err)
@@ -118,7 +82,7 @@ func TestDeleteEmptyIdSliceReturnsEmptyMap(t *testing.T) {
 	// returns a non-nil empty map. The CLI rejects this at flag parse
 	// (--claude-instance-id is required ≥1), but a future MCP caller
 	// could in principle pass [].
-	s := seedDeleteFixture(t)
+	s, _ := apitest.SeedDeleteFixture(t)
 	res, err := api.Delete(s, []string{})
 	if err != nil {
 		t.Fatalf("Delete: %v", err)

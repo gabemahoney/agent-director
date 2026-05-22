@@ -2,11 +2,11 @@ package api_test
 
 import (
 	"errors"
-	"path/filepath"
 	"reflect"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
@@ -38,37 +38,8 @@ func (r *recordingTmux) SendKeys(name, text string, pressEnter bool) error {
 // newTmux constructs a recording fake that never fails.
 func newTmux() *recordingTmux { return &recordingTmux{failOn: -1} }
 
-// openStoreWithRow inserts a single Spawn row at the requested state and
-// relay_mode and returns the open Store. The helper keeps each test case
-// terse: the test author names a state, the helper handles InsertPending +
-// ApplyHookTransition mechanics.
-func openStoreWithRow(t *testing.T, id, sessionName, state, relayMode string) *store.Store {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "state.db")
-	s, err := store.OpenOrInit(path)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
-	if err := s.InsertPending(store.Spawn{
-		ClaudeInstanceID: id,
-		CWD:              "/tmp",
-		TmuxSessionName:  sessionName,
-		RelayMode:        relayMode,
-	}); err != nil {
-		t.Fatalf("InsertPending: %v", err)
-	}
-	if state != store.StatePending {
-		if err := s.ApplyHookTransition(id, state, false); err != nil {
-			t.Fatalf("ApplyHookTransition(%s): %v", state, err)
-		}
-	}
-	return s
-}
-
 func TestSendKeysSingleLineWithEnter(t *testing.T) {
-	s := openStoreWithRow(t, "id-1", "cd-tmp", store.StateWaiting, "off")
+	s, _ := apitest.OpenStoreWithRow(t, "id-1", "cd-tmp", store.StateWaiting, "off")
 	tmux := newTmux()
 
 	if _, err := api.SendKeys(s, tmux, api.SendKeysParams{
@@ -91,7 +62,7 @@ func TestSendKeysMultilinePreservesLF(t *testing.T) {
 	// composes a newline in Claude's input box and does NOT submit. Only
 	// the trailing Enter submits — so a multi-line text must produce
 	// exactly two tmux calls (the text once, Enter once).
-	s := openStoreWithRow(t, "id-2", "cd-tmp", store.StateWorking, "off")
+	s, _ := apitest.OpenStoreWithRow(t, "id-2", "cd-tmp", store.StateWorking, "off")
 	tmux := newTmux()
 
 	if _, err := api.SendKeys(s, tmux, api.SendKeysParams{
@@ -114,7 +85,7 @@ func TestSendKeysStripsCR(t *testing.T) {
 	// anywhere in the payload would submit the partial buffer at that
 	// position — split one logical message into multiple submissions.
 	// The verb strips CRs pre-send so only the trailing Enter submits.
-	s := openStoreWithRow(t, "id-3", "cd-tmp", store.StateWaiting, "off")
+	s, _ := apitest.OpenStoreWithRow(t, "id-3", "cd-tmp", store.StateWaiting, "off")
 	tmux := newTmux()
 
 	if _, err := api.SendKeys(s, tmux, api.SendKeysParams{
@@ -137,7 +108,7 @@ func TestSendKeysRejectsPendingState(t *testing.T) {
 	// pending Spawns have not received their first SessionStart hook;
 	// the TUI is not yet up. Treating pending as interactive would let
 	// a caller race the bootstrap window.
-	s := openStoreWithRow(t, "id-5", "cd-tmp", store.StatePending, "off")
+	s, _ := apitest.OpenStoreWithRow(t, "id-5", "cd-tmp", store.StatePending, "off")
 	tmux := newTmux()
 
 	_, err := api.SendKeys(s, tmux, api.SendKeysParams{
@@ -153,7 +124,7 @@ func TestSendKeysRejectsPendingState(t *testing.T) {
 }
 
 func TestSendKeysRejectsEndedState(t *testing.T) {
-	s := openStoreWithRow(t, "id-6", "cd-tmp", store.StateEnded, "off")
+	s, _ := apitest.OpenStoreWithRow(t, "id-6", "cd-tmp", store.StateEnded, "off")
 	tmux := newTmux()
 
 	_, err := api.SendKeys(s, tmux, api.SendKeysParams{
@@ -169,7 +140,7 @@ func TestSendKeysCheckPermissionWithRelayOn(t *testing.T) {
 	// relay_mode=on AND state=check_permission means the relay path (Epic
 	// 10) owns the answer. Sending pane-side keystrokes would race the
 	// decide() write. Return the stub guard error.
-	s := openStoreWithRow(t, "id-7", "cd-tmp", store.StateCheckPermission, "on")
+	s, _ := apitest.OpenStoreWithRow(t, "id-7", "cd-tmp", store.StateCheckPermission, "on")
 	tmux := newTmux()
 
 	_, err := api.SendKeys(s, tmux, api.SendKeysParams{
@@ -188,7 +159,7 @@ func TestSendKeysCheckPermissionWithRelayOff(t *testing.T) {
 	// relay_mode=off means no relay is consuming the modal — the
 	// orchestrator drives the answer via send-keys directly. The
 	// state-precondition guard must allow this combination.
-	s := openStoreWithRow(t, "id-8", "cd-tmp", store.StateCheckPermission, "off")
+	s, _ := apitest.OpenStoreWithRow(t, "id-8", "cd-tmp", store.StateCheckPermission, "off")
 	tmux := newTmux()
 
 	if _, err := api.SendKeys(s, tmux, api.SendKeysParams{
@@ -206,7 +177,7 @@ func TestSendKeysCheckPermissionWithRelayOff(t *testing.T) {
 }
 
 func TestSendKeysSpawnNotFound(t *testing.T) {
-	s := openStoreWithRow(t, "id-9", "cd-tmp", store.StateWaiting, "off")
+	s, _ := apitest.OpenStoreWithRow(t, "id-9", "cd-tmp", store.StateWaiting, "off")
 	tmux := newTmux()
 
 	_, err := api.SendKeys(s, tmux, api.SendKeysParams{
@@ -222,7 +193,7 @@ func TestSendKeysPropagatesTmuxError(t *testing.T) {
 	// A transport-layer tmux failure must surface to the caller without
 	// being remapped to a verb-surface error. errors.Is must still see
 	// the underlying tmux sentinel.
-	s := openStoreWithRow(t, "id-10", "cd-tmp", store.StateWaiting, "off")
+	s, _ := apitest.OpenStoreWithRow(t, "id-10", "cd-tmp", store.StateWaiting, "off")
 	tmux := &recordingTmux{
 		failOn:  0,
 		failErr: errSentinel,
@@ -255,7 +226,7 @@ func TestSendKeysEmptyTextSubmits(t *testing.T) {
 	// has text composed. The verb sends an empty text then the Enter.
 	// (tmux will accept an empty argv for send-keys as a no-op; we mirror
 	// that.)
-	s := openStoreWithRow(t, "id-11", "cd-tmp", store.StateWaiting, "off")
+	s, _ := apitest.OpenStoreWithRow(t, "id-11", "cd-tmp", store.StateWaiting, "off")
 	tmux := newTmux()
 
 	if _, err := api.SendKeys(s, tmux, api.SendKeysParams{

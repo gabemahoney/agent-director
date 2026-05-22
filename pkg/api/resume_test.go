@@ -2,13 +2,11 @@ package api_test
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/gabemahoney/agent-director/internal/config"
-	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
@@ -62,24 +60,6 @@ func (r *recordingResumeTmux) NewSession(name, cwd string, envs map[string]strin
 	r.gotEnvs = envs
 	r.gotCommand = command
 	return r.newSessionErr
-}
-
-// seedJsonl writes a minimal placeholder JSONL file at the path
-// JsonlPath(cwd, sessionID) resolves to. Returns the resolved path
-// so tests that want to delete it can.
-func seedJsonl(t *testing.T, cwd, sessionID string) string {
-	t.Helper()
-	p, err := spawn.JsonlPath(cwd, sessionID)
-	if err != nil {
-		t.Fatalf("JsonlPath: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
-		t.Fatalf("mkdir jsonl parent: %v", err)
-	}
-	if err := os.WriteFile(p, []byte("{}\n"), 0o600); err != nil {
-		t.Fatalf("write jsonl: %v", err)
-	}
-	return p
 }
 
 func baseRow() store.Spawn {
@@ -167,7 +147,7 @@ func TestResumeJsonlMissingReturnsErrJsonlMissing(t *testing.T) {
 func TestResumeStaleTmuxSessionReturnsErrTmuxSessionCreate(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	row := baseRow()
-	seedJsonl(t, row.CWD, row.ClaudeSessionID)
+	apitest.SeedJsonl(t, row.CWD, row.ClaudeSessionID)
 	st := &recordingResumeStore{row: row}
 	tm := &recordingResumeTmux{hasSessionResult: true}
 
@@ -210,7 +190,7 @@ func TestResumeHappyPathLaunchesAndUpdatesParent(t *testing.T) {
 	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "caller-id")
 
 	row := baseRow()
-	seedJsonl(t, row.CWD, row.ClaudeSessionID)
+	apitest.SeedJsonl(t, row.CWD, row.ClaudeSessionID)
 	st := &recordingResumeStore{row: row}
 	tm := &recordingResumeTmux{}
 
@@ -269,7 +249,7 @@ func TestResumeFromBareShellSetsParentNull(t *testing.T) {
 	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "")
 
 	row := baseRow()
-	seedJsonl(t, row.CWD, row.ClaudeSessionID)
+	apitest.SeedJsonl(t, row.CWD, row.ClaudeSessionID)
 	st := &recordingResumeStore{row: row}
 	tm := &recordingResumeTmux{}
 
@@ -288,7 +268,7 @@ func TestResumeMissingStateAlsoResumes(t *testing.T) {
 	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "")
 	row := baseRow()
 	row.State = store.StateMissing
-	seedJsonl(t, row.CWD, row.ClaudeSessionID)
+	apitest.SeedJsonl(t, row.CWD, row.ClaudeSessionID)
 	st := &recordingResumeStore{row: row}
 	tm := &recordingResumeTmux{}
 
@@ -308,7 +288,7 @@ func TestResumeLaunchFailureLeavesRowUnchanged(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "")
 	row := baseRow()
-	seedJsonl(t, row.CWD, row.ClaudeSessionID)
+	apitest.SeedJsonl(t, row.CWD, row.ClaudeSessionID)
 	st := &recordingResumeStore{row: row}
 	launchErr := errors.New("tmux: simulated failure")
 	tm := &recordingResumeTmux{newSessionErr: launchErr}

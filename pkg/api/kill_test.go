@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
@@ -37,7 +38,7 @@ func (r *recordingKillTmux) KillSession(name string) error {
 }
 
 func TestKillLiveRowInvokesTmux(t *testing.T) {
-	s := openStoreWithRow(t, "id-k-1", "cd-k-1", store.StateWaiting, "off")
+	s, _ := apitest.OpenStoreWithRow(t, "id-k-1", "cd-k-1", store.StateWaiting, "off")
 	tmux := &recordingKillTmux{}
 
 	if _, err := api.Kill(s, tmux, nil, api.KillParams{ClaudeInstanceID: "id-k-1"}); err != nil {
@@ -55,7 +56,7 @@ func TestKillSwallowsTmuxFailure(t *testing.T) {
 	// SRD §5: kill's post-condition is "session is gone". A non-zero
 	// tmux exit ("session already gone") satisfies that post-condition,
 	// so the verb returns nil rather than forcing callers to distinguish.
-	s := openStoreWithRow(t, "id-k-2", "cd-k-2", store.StateWaiting, "off")
+	s, _ := apitest.OpenStoreWithRow(t, "id-k-2", "cd-k-2", store.StateWaiting, "off")
 	tmux := &recordingKillTmux{failErr: errors.New("can't find session: cd-k-2")}
 
 	if _, err := api.Kill(s, tmux, nil, api.KillParams{ClaudeInstanceID: "id-k-2"}); err != nil {
@@ -80,7 +81,7 @@ func TestKillTerminalStateIsNoop(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.state, func(t *testing.T) {
-			s := openStoreWithRow(t, tc.id, tc.sess, tc.state, "off")
+			s, _ := apitest.OpenStoreWithRow(t, tc.id, tc.sess, tc.state, "off")
 			tmux := &recordingKillTmux{}
 			if _, err := api.Kill(s, tmux, nil, api.KillParams{ClaudeInstanceID: tc.id}); err != nil {
 				t.Fatalf("Kill: %v", err)
@@ -93,7 +94,7 @@ func TestKillTerminalStateIsNoop(t *testing.T) {
 }
 
 func TestKillUnknownIdReturnsErrSpawnNotFound(t *testing.T) {
-	s := openStoreWithRow(t, "id-k-5", "cd-k-5", store.StateWaiting, "off")
+	s, _ := apitest.OpenStoreWithRow(t, "id-k-5", "cd-k-5", store.StateWaiting, "off")
 	tmux := &recordingKillTmux{}
 
 	_, err := api.Kill(s, tmux, nil, api.KillParams{ClaudeInstanceID: "absent"})
@@ -112,7 +113,7 @@ func TestKillUnknownIdReturnsErrSpawnNotFound(t *testing.T) {
 // tmux error so an interactive operator can diagnose the failure in
 // the moment.
 func TestKillSwallowedTmuxFailureLogsAtWARN(t *testing.T) {
-	s := openStoreWithRow(t, "id-k-warn", "cd-k-warn", store.StateWaiting, "off")
+	s, _ := apitest.OpenStoreWithRow(t, "id-k-warn", "cd-k-warn", store.StateWaiting, "off")
 	tmuxErr := errors.New("ErrTmuxKillFailed: stale TMUX_TMPDIR")
 	tmux := &recordingKillTmux{failErr: tmuxErr}
 	lg := &recordingKillLogger{}
@@ -140,7 +141,7 @@ func TestKillSwallowedTmuxFailureLogsAtWARN(t *testing.T) {
 // tmux.KillSession does NOT emit any log line. We don't want
 // operators sifting through WARN noise on the happy path.
 func TestKillSilentOnTmuxSuccess(t *testing.T) {
-	s := openStoreWithRow(t, "id-k-quiet", "cd-k-quiet", store.StateWaiting, "off")
+	s, _ := apitest.OpenStoreWithRow(t, "id-k-quiet", "cd-k-quiet", store.StateWaiting, "off")
 	tmux := &recordingKillTmux{} // failErr nil → success
 	lg := &recordingKillLogger{}
 
@@ -157,7 +158,7 @@ func TestKillIsIdempotentAcrossRepeatedCalls(t *testing.T) {
 	// that out-of-band (Epic 8). Repeated kills must therefore behave
 	// identically: each one invokes tmux.KillSession (cheap), each one
 	// returns nil, no error sticks.
-	s := openStoreWithRow(t, "id-k-6", "cd-k-6", store.StateWaiting, "off")
+	s, _ := apitest.OpenStoreWithRow(t, "id-k-6", "cd-k-6", store.StateWaiting, "off")
 	tmux := &recordingKillTmux{failErr: errors.New("session gone")}
 
 	for i := 0; i < 3; i++ {
