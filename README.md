@@ -10,6 +10,9 @@ SQLite file; everything else is tmux.
   on stdout, typed errors on stderr.
 - An **MCP server** (`serve --stdio`) that exposes the same verbs to
   an LLM client.
+- A **Go library** (`github.com/gabemahoney/agent-director/pkg/api`) —
+  typed client for all verbs, no subprocess or network hop. See
+  [`pkg/api/README.md`](pkg/api/README.md).
 - A **permission relay** (`relay_mode=on` + `decide`) so an orchestrator
   can intercept `PreToolUse` permission prompts and answer
   allow/deny out-of-band.
