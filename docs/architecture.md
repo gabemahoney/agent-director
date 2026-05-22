@@ -31,11 +31,17 @@ in one direction only: `cmd/` depends on `internal/api/*`, which depends on
 `internal/store` (and on `internal/config` for read-only configuration).
 Nothing flows back upward and nothing skips a layer.
 
+`pkg/api` is the new public facade sitting above `internal/api`,
+`internal/store`, `internal/config`, and `internal/tmux`; it is consumed by
+`cmd/agent-director` and (later, Epic 11) `internal/mcp`. The downward-only
+dependency rule still holds: nothing in `internal/` imports `pkg/api`.
+
 ### Package inventory
 
 | Path | Responsibility | Allowed imports | Prohibited imports |
 | --- | --- | --- | --- |
 | `cmd/agent-director` | CLI entrypoint: argv dispatch, exit codes, JSON error envelopes. Wires `internal/config` and `internal/api/*` into runnable verbs. | stdlib; any `internal/api/*`; `internal/config`; `internal/store` only via constructor wiring. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management that bypasses `internal/api`. |
+| `pkg/api` | **New public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns store, tmux, and config internally; will expose one method per CLI verb (Task 2+); idempotent `Close`. Consumed by `cmd/agent-director` and (later) `internal/mcp`. `internal/api` is being progressively reduced. | stdlib; `internal/api`; `internal/store`; `internal/config`; `internal/tmux`. | Direct `database/sql`; raw SQL strings; MCP framing; business logic (stays in `internal/api` or lower). |
 | `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v1 per SRD §4.2), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `internal/api/*`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `internal/api/*`; `cmd/*`. |
 | `internal/api` | Stable verb-handler surface used by CLI + MCP + hooks. Typed Go functions only — no SQL, no MCP framing. | stdlib; `internal/api/manifest`; (later) `internal/store` and `internal/config`. | Raw SQL; MCP framing; hook IO. |
@@ -43,6 +49,49 @@ Nothing flows back upward and nothing skips a layer.
 | `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). Builds env maps, synthesizes `--settings` JSON, and asks `internal/tmux` to start the session. Inserts the `pending` row via `internal/store`. | stdlib; `internal/config`; `internal/store`; `internal/tmux`; `github.com/google/uuid` for UUID4 minting. | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
 | `internal/tmux` | Thin client over the tmux binary. Each operation is one `exec.Command` invocation. Provides `NewSession`, `HasSession`, `KillSession`, `ListPanes`. | stdlib (`bytes`, `os/exec`, `strings`, `strconv`, `sort`). | Shell processes (`/bin/sh`), template / config / store packages, anything other than direct `exec.Command`. |
 | `internal/hook` | Reads payload JSON from stdin, classifies per SRD §5.2, writes the row UPSERT, exits 0 (state-tracking fail-open). | stdlib; `internal/store`. | `internal/tmux`; `internal/spawn`; `internal/config` (the cmd-side wrapper loads config; the package itself stays narrow). |
+
+### `pkg/api` Client lifecycle
+
+`pkg/api.Client` is the opaque handle through which all callers interact with
+agent-director. No exported fields; obtain a client via `New(opts Options)`,
+release with `Close()`.
+
+**`Options` fields.**
+
+| Field | Default | Notes |
+| --- | --- | --- |
+| `StorePath` | three-tier resolution (see below) | Tilde-expanded by `New`. |
+| `ConfigPath` | `~/.agent-director/config.toml` | Tilde-expanded by `New`. |
+| `TmuxCommand` | binary on `PATH` | Override for testing or unusual installs. |
+| `Logger` | `log.New(io.Discard, …)` | CLI passes a real logger; MCP callers pass nil (intentional silence). |
+| `CreateIfMissing` | `false` | CLI sets `true` to preserve first-run UX (see below). |
+
+**StorePath three-tier precedence.** `New` resolves the store path in order:
+
+1. `Options.StorePath` if non-empty (tilde-expanded).
+2. `cfg.Store.DbPath` loaded from the resolved `ConfigPath`, if non-empty.
+3. Hardcoded fallback `~/.agent-director/state.db` (tilde-expanded).
+
+This preserves existing CLI behavior: a user with a custom `[store] db_path`
+in `config.toml` continues to hit that path without any extra flags or env
+vars.
+
+**No schema-init side effects — the key invariant** (kept here verbatim for
+code review):
+
+> When `CreateIfMissing` is `false` (the library default), `New` will NOT
+> create the database file or its parent directory, and will NOT run any DDL.
+> A missing store returns a typed error wrapping `store.ErrStoreNotInitialized`
+> detectable via `errors.Is`.
+
+CLI callers set `Options.CreateIfMissing = true` to preserve the pre-refactor
+first-run UX: the store is created automatically on first invocation, matching
+what the binary did before the facade was introduced.
+
+**`Close`.** Releases store and tmux resources. Idempotent: a second call
+returns `nil` without double-closing the underlying `*store.Store`. After
+`Close` returns, any subsequent verb method call on the client returns the
+sentinel `ErrClientClosed` (detectable via `errors.Is`).
 
 ### `internal/store`
 
@@ -159,6 +208,13 @@ See `docs/cli-reference.md` and `docs/mcp-reference.md` — auto-generated; do n
                             |
                             v
                 +-------------------------+
+                |   pkg/api               |
+                |   (public Client facade;|
+                |    owns store/tmux/cfg) |
+                +-----------+-------------+
+                            |
+                            v
+                +-------------------------+
                 |   internal/api/*        |
                 |   manifest, (future)    |
                 |   spawn, hook, mcp,     |
@@ -172,7 +228,7 @@ See `docs/cli-reference.md` and `docs/mcp-reference.md` — auto-generated; do n
                 |    schema v1 / SRD §4.2)|
                 +-------------------------+
 
-   internal/config -----> consumed by cmd and internal/api/*
+   internal/config -----> consumed by pkg/api, cmd, and internal/api/*
                           (never imports internal/store)
 
 Sibling packages under internal/ at the api layer:
