@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/mcp"
 	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
 )
@@ -25,14 +26,16 @@ import (
 // don't have to wonder why a tweak to relay.timeout_seconds didn't
 // stick.
 //
-// Task 4 (MCP refactor) will update mcp.NewLiveDispatcher to accept a
-// *pkgapi.Client directly. Until then, the bridge accessors BridgeStore,
-// BridgeTmuxClient, and BridgeConfig are used to extract the underlying
-// fields.
+// Pin H4: the MCP dispatcher uses a SEPARATE *pkgapi.Client constructed
+// with Options.Logger: nil. This preserves the pre-refactor behavior where
+// Kill/FindMissing/Expire swallowed their tmux WARN logs on the MCP path
+// (those warnings are most useful to the interactive CLI operator, not a
+// long-lived MCP client). The two Clients have distinct logger ownership.
 //
-// TODO(Task4): replace mcp.NewLiveDispatcher bridge with
-// mcp.NewLiveDispatcher(client) once the dispatcher is refactored.
-func serveHandlerWith(client *pkgapi.Client, args []string) error {
+// Pin H6: cfg is threaded in directly from run() via setupClient() so
+// newMCPLogger can receive it without a Client.Config() accessor, which
+// would leak internal/config.Config into pkg/api's public surface.
+func serveHandlerWith(cfg config.Config, args []string) error {
 	var stdioFlag bool
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -49,14 +52,24 @@ func serveHandlerWith(client *pkgapi.Client, args []string) error {
 
 	registerMCPErrors()
 
-	// Task 4 bridge: extract st, tmux, cfg from the Client until
-	// mcp.NewLiveDispatcher is updated to accept *pkgapi.Client.
-	// TODO(Task4): remove BridgeStore/BridgeTmuxClient/BridgeConfig calls.
-	dispatcher := mcp.NewLiveDispatcher(client.BridgeStore(), client.BridgeTmuxClient(), client.BridgeConfig())
+	// Construct a SEPARATE Client for the MCP dispatcher (Pin H4).
+	// Logger: nil so Kill/FindMissing/Expire WARN paths are silent for MCP.
+	// CreateIfMissing: true so the MCP server can create the DB on first run.
+	mcpClient, err := pkgapi.New(pkgapi.Options{
+		ConfigPath:      configPath,
+		CreateIfMissing: true,
+		Logger:          nil, // intentional: MCP path discards WARN logs (Pin H4)
+	})
+	if err != nil {
+		return writeApiErrorAndDispatch("ErrStoreOpen", err.Error())
+	}
+	defer mcpClient.Close()
+
+	dispatcher := mcp.NewLiveDispatcher(mcpClient)
 	// MCP server logs go to the configured error log (or stderr
 	// fallback) — NOT stdout, which is reserved for the JSON-RPC
-	// transport.
-	logger := newMCPLogger(client)
+	// transport. cfg is passed directly (Pin H6).
+	logger := newMCPLogger(cfg)
 	server := mcp.New(dispatcher, logger)
 
 	// Signal-aware ctx so SIGINT / SIGTERM (e.g. Kubernetes graceful
@@ -90,10 +103,8 @@ func newSignalCtx() (context.Context, context.CancelFunc) {
 // error log. Stdout is reserved for the JSON-RPC transport, so the
 // log destination must NOT be stdout.
 //
-// TODO(Task4): remove this helper (or replace BridgeConfig with a
-// direct logger accessor) when Task 4 cleans up the bridge.
-func newMCPLogger(client *pkgapi.Client) *log.Logger {
-	cfg := client.BridgeConfig()
+// cfg is passed directly from run() (Pin H6 — no Client.Config() accessor).
+func newMCPLogger(cfg config.Config) *log.Logger {
 	dest := io.Writer(os.Stderr)
 	if cfg.Log.ErrorLogPath != "" {
 		if f, err := os.OpenFile(cfg.Log.ErrorLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {

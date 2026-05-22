@@ -50,13 +50,13 @@ const configPath = "~/.agent-director/config.toml"
 
 // handlers maps verb names to their implementations. `help` and `--help`
 // route to the same function so their stdout is byte-identical (SRD §12.3).
-// client is captured in closures so each verb sees the same already-opened
-// Client — construction is done once in run() via setupClient().
+// client and cfg are captured in closures so each verb sees the same
+// already-opened Client — construction is done once in run() via setupClient().
 //
 // `hook` is intentionally NOT in this table — runHook() short-circuits
 // the dispatch loop before setupClient() so hook fires can't be blocked
 // by config/store failures (SRD §3.2 fail-open invariant).
-func handlers(client *pkgapi.Client) map[string]func([]string) error {
+func handlers(client *pkgapi.Client, cfg config.Config) map[string]func([]string) error {
 	return map[string]func([]string) error{
 		"help":          func(args []string) error { return helpHandler(client, args) },
 		"--help":        func(args []string) error { return helpHandler(client, args) },
@@ -75,7 +75,7 @@ func handlers(client *pkgapi.Client) map[string]func([]string) error {
 		"find-missing":  func(args []string) error { return findMissingHandlerWith(client, args) },
 		"expire":        func(args []string) error { return expireHandlerWith(client, args) },
 		"delete":        func(args []string) error { return deleteHandlerWith(client, args) },
-		"serve":         func(args []string) error { return serveHandlerWith(client, args) },
+		"serve":         func(args []string) error { return serveHandlerWith(cfg, args) },
 	}
 }
 
@@ -281,19 +281,22 @@ func dispatch(argv []string, table map[string]func([]string) error) error {
 //     logger BEFORE calling pkg/api.New, which also loads config internally.
 //     The duplicate load is intentional — the alternative would require a
 //     circular bootstrap. See Task 3 subtask vk for rationale.
+//   - Pin H6 (no Client.Config() accessor): cfg is returned directly so
+//     serveHandlerWith can pass it to newMCPLogger without a pkg/api accessor
+//     that would leak internal/config.Config into the library's public surface.
 //
 // On any error it writes the JSON envelope to stderr and returns errDispatch
 // so run() can exit non-zero without double-printing.
-func setupClient() (*pkgapi.Client, error) {
+func setupClient() (*pkgapi.Client, config.Config, error) {
 	// Preliminary config load to construct the recovery logger (Pin 3).
 	// pkg/api.New will load config again internally; this duplicate is
 	// acceptable — see Pin 3 comment above.
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		if werr := writeError(os.Stderr, errConfigMalformed, err.Error()); werr != nil {
-			return nil, werr
+			return nil, config.Config{}, werr
 		}
-		return nil, errDispatch
+		return nil, config.Config{}, errDispatch
 	}
 	logger := newRecoveryLogger(cfg)
 
@@ -312,11 +315,11 @@ func setupClient() (*pkgapi.Client, error) {
 			name = errStoreOpen
 		}
 		if werr := writeError(os.Stderr, name, err.Error()); werr != nil {
-			return nil, werr
+			return nil, config.Config{}, werr
 		}
-		return nil, errDispatch
+		return nil, config.Config{}, errDispatch
 	}
-	return client, nil
+	return client, cfg, nil
 }
 
 // run is the testable body of main. Returning an int lets main use
@@ -335,7 +338,7 @@ func run() int {
 		return runHook()
 	}
 
-	client, err := setupClient()
+	client, cfg, err := setupClient()
 	if err != nil {
 		if errors.Is(err, errDispatch) {
 			return 1
@@ -345,7 +348,7 @@ func run() int {
 	}
 	defer client.Close()
 
-	if err := dispatch(os.Args[1:], handlers(client)); err != nil {
+	if err := dispatch(os.Args[1:], handlers(client, cfg)); err != nil {
 		if errors.Is(err, errDispatch) {
 			return 1
 		}
