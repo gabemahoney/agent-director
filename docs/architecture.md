@@ -1007,6 +1007,11 @@ or catalog Go source requires regenerating the corresponding JSON file.
    `TestSurfaceJSONUpToDate` in-process, covering all five sources.
 2. Explicit drift gates re-run `make errnames-json` and `make surface-json` and fail if
    the committed JSON files differ from the regenerated output.
+3. `make nondet-coverage` runs `tools/check-nondet` to enforce bidirectional alignment
+   between `manifest.CallableVerbs()` and `test/envelope-diff/nondeterministic.json`: a
+   **missing verb** (callable verb present in the manifest but absent as a JSON key) or an
+   **extraneous key** (JSON key that names a non-callable verb) both fail the step. See
+   [envelope-diff harness](#envelope-diff-harness) for the full non-determinism model.
 
 **Adding a new sentinel**
 

@@ -1,4 +1,5 @@
-.PHONY: all build test generate lint err-coherence test-image test-image-smoke test-docker \
+.PHONY: all build test generate lint err-coherence nondet-coverage \
+        test-image test-image-smoke test-docker \
         release-binaries release-binaries-smoke \
         libagent_director clean-cabi
 
@@ -54,6 +55,12 @@ lint:
 #   (e) catalog.json and surface.json match their generators (via sub-tests)
 err-coherence:
 	go test ./pkg/api/errnames/ -run "TestFiveWayCoherence|TestCatalogJSONUpToDate|TestSurfaceJSONUpToDate" -v
+
+# nondet-coverage checks that every callable verb in manifest.CallableVerbs()
+# has a top-level key in test/envelope-diff/nondeterministic.json and vice
+# versa. Exits non-zero with a descriptive message on any mismatch.
+nondet-coverage:
+	go run ./tools/check-nondet test/envelope-diff/nondeterministic.json
 
 # Build the Docker test harness image. Always rebuilds the binary first so
 # the image picks up the latest source.

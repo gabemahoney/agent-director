@@ -52,3 +52,5 @@ jobs:
             echo "::error::pkg/api/manifest/surface.json is stale. Run 'make surface-json' and commit the result."
             exit 1
           fi
+      - name: Check nondeterministic.json coverage
+        run: make nondet-coverage
