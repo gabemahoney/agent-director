@@ -448,65 +448,131 @@ collect_cabi_artifacts() {
         return 3
     fi
 
-    local commit
+    local commit run_id
     commit="$(git rev-parse HEAD)"
-    log build "looking up $CABI_WORKFLOW run for $BRANCH @ ${commit:0:12}"
 
-    # gh run list returns newest first. Filter to success.
-    local matches_json
-    if ! matches_json=$(gh run list \
-            --workflow="$CABI_WORKFLOW" \
-            --branch="$BRANCH" \
-            --commit="$commit" \
-            --status=success \
-            --json databaseId,headSha,conclusion,status \
-            --limit 5 2>/dev/null); then
-        log build "gh run list failed for $CABI_WORKFLOW" >&2
-        return 3
+    # RELEASE_FORCE_RUN_ID=<id> is a debug-only override used by tests
+    # to drive collect_cabi_artifacts against a known run (e.g. a
+    # known-red run to exercise the matrix-red halt). Production
+    # releases must NOT set it.
+    if [[ -n "${RELEASE_FORCE_RUN_ID:-}" ]]; then
+        run_id="$RELEASE_FORCE_RUN_ID"
+        log build "RELEASE_FORCE_RUN_ID set — using run id $run_id (debug override)"
+        # Even with a forced id, re-check the conclusion: a green
+        # release MUST NOT be cut against a red matrix run.
+        local forced_concl
+        forced_concl=$(gh run view "$run_id" --json conclusion -q .conclusion 2>/dev/null || true)
+        if [[ "$forced_concl" != "success" ]]; then
+            log build "CI matrix is red on \$COMMIT (run $run_id conclusion=$forced_concl); fix before releasing" >&2
+            return 3
+        fi
+    else
+        log build "looking up $CABI_WORKFLOW run for $BRANCH @ ${commit:0:12}"
+
+        # Two lookups so we can distinguish "no run exists" from "run
+        # exists but is red" — the latter gets a more actionable error
+        # ("CI matrix is red on $COMMIT") than the former ("no run").
+        local all_runs_json success_runs_json count_all count_ok concl
+        if ! all_runs_json=$(gh run list \
+                --workflow="$CABI_WORKFLOW" \
+                --branch="$BRANCH" \
+                --commit="$commit" \
+                --json databaseId,headSha,conclusion,status \
+                --limit 5 2>/dev/null); then
+            log build "gh run list failed for $CABI_WORKFLOW" >&2
+            return 3
+        fi
+        success_runs_json=$(gh run list \
+                --workflow="$CABI_WORKFLOW" \
+                --branch="$BRANCH" \
+                --commit="$commit" \
+                --status=success \
+                --json databaseId,headSha,conclusion,status \
+                --limit 5 2>/dev/null || true)
+
+        count_all=$(printf '%s' "$all_runs_json" | tr -cd '{' | wc -c | tr -d ' ')
+        count_ok=$(printf '%s' "$success_runs_json" | tr -cd '{' | wc -c | tr -d ' ')
+
+        if [[ "$count_all" -eq 0 ]]; then
+            log build "no $CABI_WORKFLOW run on $BRANCH @ ${commit:0:12}" >&2
+            log build "wait for the matrix to run on this commit before releasing" >&2
+            return 3
+        fi
+        if [[ "$count_ok" -eq 0 ]]; then
+            concl=$(printf '%s' "$all_runs_json" | sed -n 's/.*"conclusion":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+            log build "CI matrix is red on \$COMMIT (conclusion=${concl:-unknown}); fix before releasing" >&2
+            return 3
+        fi
+        if [[ "$count_ok" -gt 1 ]]; then
+            log build "ambiguous: $count_ok successful $CABI_WORKFLOW runs on $BRANCH @ ${commit:0:12}" >&2
+            log build "pin the release commit so only one matrix run is associated with it" >&2
+            return 3
+        fi
+        run_id=$(printf '%s' "$success_runs_json" | sed -n 's/.*"databaseId":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
+        if [[ -z "$run_id" ]]; then
+            log build "could not parse run id from gh run list output" >&2
+            return 3
+        fi
+        log build "using cabi-matrix run id: $run_id (conclusion=success)"
     fi
 
-    local count run_id
-    count=$(printf '%s' "$matches_json" | tr -cd '{' | wc -c | tr -d ' ')
-    if [[ "$count" -eq 0 ]]; then
-        log build "no successful $CABI_WORKFLOW run on $BRANCH @ ${commit:0:12}" >&2
-        log build "wait for the matrix to go green on this commit before releasing" >&2
-        return 3
-    fi
-    if [[ "$count" -gt 1 ]]; then
-        log build "ambiguous: $count successful $CABI_WORKFLOW runs on $BRANCH @ ${commit:0:12}" >&2
-        log build "pin the release commit so only one matrix run is associated with it" >&2
-        return 3
-    fi
-    run_id=$(printf '%s' "$matches_json" | sed -n 's/.*"databaseId":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
-    if [[ -z "$run_id" ]]; then
-        log build "could not parse run id from gh run list output" >&2
-        return 3
-    fi
-    log build "using cabi-matrix run id: $run_id"
-
+    # Accumulate platforms that failed to download/verify so we can
+    # emit ONE summary message that distinguishes the darwin/arm64
+    # self-hosted-runner case (specific operator action) from the
+    # generic GitHub-hosted leg failures.
     local platform out_dir lib
+    local missing_platforms=()
     for platform in "${CABI_PLATFORMS[@]}"; do
         out_dir="$REPO_ROOT/dist/cabi/$platform"
         mkdir -p "$out_dir"
+
+        # AD_RELEASE_SIMULATE_DARWIN_ARM64_OFFLINE=1 simulates the
+        # darwin/arm64 self-hosted runner being offline. The cabi-matrix
+        # run might still exist (with the leg failing) or might not have
+        # the artifact at all. Either way the release script must halt
+        # with the specific self-hosted-runner message. This flag is
+        # exercised by the Docker testplan.
+        if [[ "$platform" == "darwin-arm64" \
+              && "${AD_RELEASE_SIMULATE_DARWIN_ARM64_OFFLINE:-0}" -eq 1 ]]; then
+            log build "AD_RELEASE_SIMULATE_DARWIN_ARM64_OFFLINE=1 — pretending darwin/arm64 artifact is absent"
+            missing_platforms+=("darwin-arm64")
+            continue
+        fi
+
         log build "downloading pkg-cabi-$platform → $out_dir"
         if ! gh run download "$run_id" \
                 --name "pkg-cabi-$platform" \
                 --dir "$out_dir" >/dev/null 2>&1; then
-            log build "gh run download failed for pkg-cabi-$platform" >&2
-            log build "ensure the darwin/arm64 self-hosted runner was online and that all three legs succeeded" >&2
-            return 3
+            missing_platforms+=("$platform")
+            continue
         fi
         lib="$out_dir/$(cabi_lib_basename "$platform")"
         if [[ ! -f "$lib" ]]; then
             log build "missing expected library $lib after download" >&2
-            return 3
+            missing_platforms+=("$platform")
+            continue
         fi
         if [[ ! -f "$out_dir/libagent_director.h" ]]; then
             log build "missing expected header $out_dir/libagent_director.h after download" >&2
-            return 3
+            missing_platforms+=("$platform")
+            continue
         fi
         log build "  OK $platform: $(basename "$lib") + libagent_director.h"
     done
+
+    # Refuse to ship a partial 2-of-3 under any circumstance.
+    if (( ${#missing_platforms[@]} > 0 )); then
+        local p
+        for p in "${missing_platforms[@]}"; do
+            if [[ "$p" == "darwin-arm64" ]]; then
+                log build "darwin/arm64 leg unavailable; bring self-hosted runner online before retrying" >&2
+            else
+                log build "$p leg unavailable; re-run CI matrix before retrying" >&2
+            fi
+        done
+        log build "halting before tag/publish/gh-release — no partial 2-of-3 release" >&2
+        return 3
+    fi
 
     # Stage a canonical header copy at dist/cabi/include/libagent_director.h.
     # The header is platform-independent — any per-platform copy will do.
