@@ -433,6 +433,64 @@ The CLI marshals errors via `pkg/api/errnames.Catalog`: `cmd/agent-director`'s e
 
 Every arrow from a caller surface terminates at `pkg/api.Client`; no surface short-circuits to a lower layer.
 
+## TS/Bun client
+
+`pkg/ts-bun-client/` is the TypeScript client library for agent-director. It is the primary foreign-language consumer of `pkg/cabi` and ships as a Bun-native ESM package (`type: "module"`, `target: "bun"`).
+
+### FFI boundary
+
+The TS client calls into `libagent_director.so` (or `.dylib` on macOS) via Bun's built-in FFI (`bun:ffi`). The shared library is produced by `make libagent_director` from `pkg/cabi`. The FFI layer lives in `src/ffi.ts` (internal, not re-exported); it dlopens the native library at startup and exposes typed wrappers around the `ad_*` C exports. Callers consume `src/client.ts`'s `Client` class — the FFI surface is never exposed directly.
+
+```
+  @CHANGEME-H3/agent-director (TS/Bun)
+       │
+       │  src/client.ts  (public Client class)
+       │        │
+       │  src/ffi.ts     (internal bun:ffi dlopen)
+       │        │
+       ▼        ▼
+  libagent_director.so  (pkg/cabi, CGO_ENABLED=1)
+       │
+       ▼
+  pkg/api.Client
+```
+
+### Per-platform optional-dependency packaging
+
+The native shared library is platform-specific. `pkg/ts-bun-client/` uses npm's `optionalDependencies` mechanism to ship a separate sub-package for each supported platform:
+
+| npm package | Platform |
+| --- | --- |
+| `@CHANGEME-H3/agent-director-linux-x64` | Linux x86-64 |
+| `@CHANGEME-H3/agent-director-darwin-x64` | macOS Intel |
+| `@CHANGEME-H3/agent-director-darwin-arm64` | macOS Apple Silicon |
+
+`src/platform.ts` (internal, not re-exported) resolves which sub-package is available at runtime and returns the absolute path to the `.so`/`.dylib` for the FFI layer to dlopen. Only one optional dependency is expected to be installed on any given machine; the others are silently absent.
+
+The scope `@CHANGEME-H3` is a deliberate placeholder: any accidental `npm publish` fails on the invalid scope, and `grep` surfaces every site that needs to be updated when the real scope is chosen.
+
+### Package layout
+
+```
+pkg/ts-bun-client/
+├── package.json          name: @CHANGEME-H3/agent-director, version 0.0.0
+├── tsconfig.json         strict, ES2022 + ESNext.Disposable, declaration-only to dist/
+├── .eslintrc.cjs         @typescript-eslint strict rules
+├── build.ts              Bun.build (ESM) → tsc (declarations)
+├── src/
+│   ├── index.ts          public re-exports (client, errors, types)
+│   ├── client.ts         Client class (T2)
+│   ├── ffi.ts            bun:ffi dlopen + callVerb (T3, internal)
+│   ├── errors.ts         typed error subclasses (T4)
+│   ├── types.ts          param/result types (T4)
+│   ├── platform.ts       platform resolver (T5, internal)
+│   └── internal/         internal helpers
+├── test/                 bun:test suite
+└── dist/                 build output (gitignored)
+```
+
+Error catalog and verb-binding details are deferred to later sections (added by T3 and T4).
+
 ## State Machine
 
 A Spawn's lifecycle is tracked in the `state` column of `spawns`. Every
