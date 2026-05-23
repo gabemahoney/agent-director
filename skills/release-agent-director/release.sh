@@ -717,30 +717,64 @@ publish_phase() {
     phase_begin publish
     local plain_version="${VERSION#v}"
 
-    # Read the umbrella package name once. Used to drive both the H3
-    # placeholder check and the optional-deps prefix.
     local pkg_root="$REPO_ROOT/pkg/ts-bun-client"
     local pkg_json="$pkg_root/package.json"
     if [[ ! -f "$pkg_json" ]]; then
         log publish "missing $pkg_json — TS package layout invariant violated" >&2
         exit 6
     fi
-    local pkg_name
-    pkg_name=$(grep -E '^[[:space:]]*"name":' "$pkg_json" | head -n 1 | sed -E 's/.*"name":[[:space:]]*"([^"]+)".*/\1/')
 
-    # H3 gate. The placeholder package name is the canonical "H3
-    # unresolved" signal. Dry-run still warns but proceeds (so the
-    # dry-run path exercises the full pipeline including
-    # version-bump and npm pack); live runs halt here.
-    if [[ "$pkg_name" == *CHANGEME-H3* ]]; then
+    # ----------------------------------------------------------------
+    # H3 gate: must be the FIRST action inside publish_phase so no
+    # `npm publish` ever runs against a placeholder name.
+    #
+    # We inspect ALL FOUR package.jsons (umbrella + 3 per-platform
+    # sub-packages). Any one carrying the H3 sentinel halts the live
+    # run. The sentinel matches `@CHANGEME-H3/...` and the alternative
+    # `@TBD/...` so that whichever placeholder convention E5 ultimately
+    # settled on is caught.
+    #
+    # Manual verification procedure (for operator rehearsal):
+    #   1. Temporarily revert one of the four package.json files to a
+    #      placeholder name (e.g. `git checkout HEAD~N -- <file>`).
+    #   2. Run `./release.sh v<X.Y.Z> --release`.
+    #   3. Observe the [publish] H3 halt with exit code 6 BEFORE any
+    #      `npm publish` is invoked.
+    #   4. `git checkout -- <file>` to restore and retry.
+    # ----------------------------------------------------------------
+    local h3_sentinel_re='^@?(CHANGEME-H3|TBD)/'
+    local p3 name3 placeholder_pkgs=()
+    for p3 in \
+        "$pkg_json" \
+        "$pkg_root/platforms/linux-x64/package.json" \
+        "$pkg_root/platforms/darwin-x64/package.json" \
+        "$pkg_root/platforms/darwin-arm64/package.json"; do
+        if [[ ! -f "$p3" ]]; then
+            log publish "missing $p3 — TS package layout invariant violated" >&2
+            exit 6
+        fi
+        name3=$(grep -E '^[[:space:]]*"name":' "$p3" | head -n 1 | sed -E 's/.*"name":[[:space:]]*"([^"]+)".*/\1/')
+        if [[ "$name3" =~ $h3_sentinel_re ]]; then
+            placeholder_pkgs+=("${p3#$REPO_ROOT/}=$name3")
+        fi
+    done
+
+    if (( ${#placeholder_pkgs[@]} > 0 )); then
         if [[ "$DRY_RUN" -eq 0 ]]; then
-            log publish "H3 unresolved: npm package name is still '$pkg_name'" >&2
-            log publish "claim an npm name and update pkg/ts-bun-client/package.json + platforms/*/package.json first" >&2
+            log publish "H3 unresolved: claim npm name first" >&2
+            log publish "the following ${#placeholder_pkgs[@]} package.json file(s) still carry a placeholder name:" >&2
+            local pp
+            for pp in "${placeholder_pkgs[@]}"; do
+                log publish "  ${pp%%=*}  →  ${pp##*=}" >&2
+            done
             log publish "see docs/release-blockers.md for the H3 resolution checklist" >&2
             exit 6
         fi
-        log publish "(dry-run) H3 unresolved (name=$pkg_name) — would halt in a live run"
+        log publish "(dry-run) H3 unresolved (${#placeholder_pkgs[@]} package.json with placeholder names) — would halt in a live run"
     fi
+
+    local pkg_name
+    pkg_name=$(grep -E '^[[:space:]]*"name":' "$pkg_json" | head -n 1 | sed -E 's/.*"name":[[:space:]]*"([^"]+)".*/\1/')
 
     # Live runs require NPM_TOKEN. Dry-run does not, since
     # `npm publish --dry-run` and `npm pack` don't authenticate.
