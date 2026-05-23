@@ -2,6 +2,7 @@
         check-doccomments \
         test-image test-image-smoke test-docker \
         release-binaries release-binaries-smoke \
+        release-shellcheck release-bats \
         libagent_director clean-cabi \
         consumer-dryrun \
         ts-helper fake-tmux \
@@ -251,3 +252,26 @@ agent-director: build
 # bunfig.toml and the local package.json are in scope.
 envelope-diff-ts: agent-director ts-helper fake-tmux
 	cd pkg/ts-bun-client && bun test test/envelope-diff.test.ts test/envelope-diff-invariants.test.ts
+
+# release-shellcheck runs shellcheck against release.sh. The target is a
+# no-op when shellcheck is not installed locally so that bare `make` runs
+# do not require it; CI installs it (cabi-matrix uses ubuntu's packaged
+# shellcheck). Add `SC2086` etc. to the disable list inline in release.sh
+# rather than globally here.
+release-shellcheck:
+	@if command -v shellcheck >/dev/null 2>&1; then \
+		echo "[release-shellcheck] shellcheck skills/release-agent-director/release.sh"; \
+		shellcheck -s bash skills/release-agent-director/release.sh; \
+	else \
+		echo "[release-shellcheck] shellcheck not installed — skipping"; \
+	fi
+
+# release-bats runs the bats unit tests under skills/release-agent-director/tests/.
+# Same install gate as release-shellcheck: skip cleanly when bats is absent.
+release-bats:
+	@if command -v bats >/dev/null 2>&1; then \
+		echo "[release-bats] bats skills/release-agent-director/tests/"; \
+		bats skills/release-agent-director/tests/; \
+	else \
+		echo "[release-bats] bats not installed — skipping"; \
+	fi
