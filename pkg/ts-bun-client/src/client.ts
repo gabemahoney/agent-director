@@ -2,6 +2,7 @@ import { expandTilde } from "./internal/tilde.js";
 import { callOpen, callClose } from "./internal/bootstrapFfi.js";
 import { ErrClientClosed, errorFromEnvelope } from "./errors.js";
 import type { ClientOptions } from "./types.js";
+import { callVerb } from "./ffi.js";
 
 // Re-export so callers don't need separate imports.
 export { AgentDirectorError, ErrClientClosed } from "./errors.js";
@@ -146,10 +147,148 @@ export class Client {
   }
 
   // -------------------------------------------------------------------------
-  // Verb stubs — implemented in T3.
+  // Verb methods — one per callable verb in src/internal/verbs.ts.
+  //
+  // Each method:
+  //   1. Calls _assertOpen() to guard against post-close calls.
+  //   2. Delegates to callVerb<P, R>(verbName, handle, params) which routes
+  //      through the dedicated worker thread (see src/ffi.ts).
+  //
+  // The handle is always this._handle! (non-null because _assertOpen() passed).
+  // "version" is the only handle-free verb; it passes null as the handle.
+  //
+  // Types: P and R are `Record<string, unknown>` placeholders until T4 lands
+  // proper per-verb Params/Result types. The .d.ts will sharpen in T4.
   // -------------------------------------------------------------------------
-  // (Future verb methods will call this._assertOpen() first, then dispatch
-  // via the worker proxy from T3.)
+
+  /** spawn — launch a tracked Claude Code instance in a new tmux session. */
+  async spawn(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    this._assertOpen();
+    return callVerb<Record<string, unknown>, Record<string, unknown>>(
+      "spawn", this._handle!, params
+    );
+  }
+
+  /** status — get the current state of a Spawn. */
+  async status(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    this._assertOpen();
+    return callVerb<Record<string, unknown>, Record<string, unknown>>(
+      "status", this._handle!, params
+    );
+  }
+
+  /** get — fetch the full Spawn record. */
+  async get(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    this._assertOpen();
+    return callVerb<Record<string, unknown>, Record<string, unknown>>(
+      "get", this._handle!, params
+    );
+  }
+
+  /** sendKeys — send keystrokes to a Spawn's tmux pane. */
+  async sendKeys(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    this._assertOpen();
+    return callVerb<Record<string, unknown>, Record<string, unknown>>(
+      "send-keys", this._handle!, params
+    );
+  }
+
+  /** readPane — read the current contents of a Spawn's tmux pane. */
+  async readPane(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    this._assertOpen();
+    return callVerb<Record<string, unknown>, Record<string, unknown>>(
+      "read-pane", this._handle!, params
+    );
+  }
+
+  /** kill — terminate a Spawn's tmux session. */
+  async kill(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    this._assertOpen();
+    return callVerb<Record<string, unknown>, Record<string, unknown>>(
+      "kill", this._handle!, params
+    );
+  }
+
+  /** decide — resolve a pending permission request. */
+  async decide(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    this._assertOpen();
+    return callVerb<Record<string, unknown>, Record<string, unknown>>(
+      "decide", this._handle!, params
+    );
+  }
+
+  /** resume — restart a terminated Spawn via `claude --resume`. */
+  async resume(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    this._assertOpen();
+    return callVerb<Record<string, unknown>, Record<string, unknown>>(
+      "resume", this._handle!, params
+    );
+  }
+
+  /** findMissing — reconcile Spawns whose tmux sessions have disappeared. */
+  async findMissing(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    this._assertOpen();
+    return callVerb<Record<string, unknown>, Record<string, unknown>>(
+      "find-missing", this._handle!, params
+    );
+  }
+
+  /** expire — remove terminal-state rows older than the retention window. */
+  async expire(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    this._assertOpen();
+    return callVerb<Record<string, unknown>, Record<string, unknown>>(
+      "expire", this._handle!, params
+    );
+  }
+
+  /** delete — hard-delete Spawn rows by id. */
+  async delete(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    this._assertOpen();
+    return callVerb<Record<string, unknown>, Record<string, unknown>>(
+      "delete", this._handle!, params
+    );
+  }
+
+  /** makeTemplate — save a reusable spawn preset. */
+  async makeTemplate(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    this._assertOpen();
+    return callVerb<Record<string, unknown>, Record<string, unknown>>(
+      "make-template", this._handle!, params
+    );
+  }
+
+  /** list — query Spawns with optional filter params. */
+  async list(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    this._assertOpen();
+    return callVerb<Record<string, unknown>, Record<string, unknown>>(
+      "list", this._handle!, params
+    );
+  }
+
+  /** pause — politely shut down a waiting Spawn. */
+  async pause(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    this._assertOpen();
+    return callVerb<Record<string, unknown>, Record<string, unknown>>(
+      "pause", this._handle!, params
+    );
+  }
+
+  /**
+   * version — return the binary's build-time version stamp.
+   *
+   * This is the only handle-free verb: it passes null instead of the Client
+   * handle because the C-ABI ignores any handle field for ad_version.
+   */
+  async version(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    this._assertOpen();
+    return callVerb<Record<string, unknown>, Record<string, unknown>>(
+      "version", null, params
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Test helpers
+  // -------------------------------------------------------------------------
 
   /**
    * _assertOpenForTests exposes _assertOpen to test code without forcing

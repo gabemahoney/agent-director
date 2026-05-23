@@ -521,6 +521,44 @@ A `Client` object owns exactly one Go-side `pkg/api.Client` behind an opaque han
 
 **Tilde expansion** is handled entirely on the TS side, in `src/internal/tilde.ts`, before any path value crosses the FFI boundary. The C-ABI and `pkg/api.New` never receive a leading `~`.
 
+### FFI call recipe
+
+Every verb call from `Client` follows this six-step recipe. The steps split across two files:
+
+**`src/internal/worker.ts`** (runs inside the `node:worker_threads` Worker):
+1. **Encode params** — verb params object is JSON-stringified and merged with the opaque handle (as `{"handle":"<token>", ...verb-params}`). Handle-free verbs (`version`) omit the handle. Result is a null-terminated UTF-8 `Buffer`.
+2. **Call C symbol** — `lib.symbols.ad_<verb>(ptr(inputBuf))` returns a native `Pointer` to the heap-allocated response string.
+3. **Copy CString** — `new CString(rawPtr).toString()` copies the C string into a JS string.
+4. **Free pointer** — `ad_free_cstring(rawPtr)` runs in a `try/finally` block via `FreeGuard` (`src/internal/freeGuard.ts`). The error path frees too; the guard ensures exactly-once free even if `toString()` throws.
+
+**`src/internal/workerProxy.ts`** (main thread, post-worker):
+5. **Parse JSON** — `JSON.parse(jsonString)` on the main thread, where the error-class graph is loaded once.
+6. **Return or throw** — if `err_name` is present in the parsed envelope, `errorFromEnvelope()` creates a typed `AgentDirectorError` subclass and the Promise rejects. Otherwise the parsed value is resolved.
+
+**Why a dedicated worker?**
+Bun FFI has no per-symbol `async: true` marker. Without the worker, every `ad_*` call would block the JS event loop for the duration of the Go-side operation. A single dedicated `node:worker_threads` Worker is the off-main-thread mechanism. One worker per process (not a pool): the Go runtime inside the shared library carries process-global state (the handle registry), so multiple parallel dlopen handles would split that state.
+
+**`src/ffi.ts`** exposes the thin public facade `callVerb<P, R>(verb, handle, params)` that routes to `workerProxy.dispatch` and casts the result. The callable verb list and symbol names live in `src/internal/verbs.ts` (mirrors `manifest.CallableVerbs()`).
+
+```
+Client.sendKeys(params)
+  │
+  ▼  src/ffi.ts → callVerb("send-keys", handle, params)
+  │
+  ▼  src/internal/workerProxy.ts → dispatch() [main thread]
+     posts {id, op:"send-keys", handle, paramsJSON} to Worker
+  │
+  ▼  src/internal/worker.ts [worker thread]
+     encode → ad_send_keys(ptr(buf)) → copy CString → free (finally) → post result
+  │
+  ▼  workerProxy receives {type:"result", jsonString}
+     JSON.parse → check err_name → resolve or reject
+  │
+  ▼  Client.sendKeys(params): Promise<SendKeysResult>
+```
+
+The `ad_free_cstring` pointer is guarded by `FreeGuard<T>` (generic over the pointer type), which nulls the internal reference before calling the underlying free function so a second free is always a no-op.
+
 ## State Machine
 
 A Spawn's lifecycle is tracked in the `state` column of `spawns`. Every
