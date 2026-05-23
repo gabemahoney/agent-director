@@ -43,6 +43,121 @@ log() {
 }
 
 # --------------------------------------------------------------------
+# Phase outcome tracking + report
+# --------------------------------------------------------------------
+
+# Phases append "<phase>:OK" or "<phase>:FAIL:<reason>" on entry/exit.
+# report_phase reads this array on EXIT and prints the final summary.
+PHASE_RESULTS=()
+CURRENT_PHASE=""
+
+phase_begin() {
+    CURRENT_PHASE="$1"
+}
+
+phase_ok() {
+    local phase="$1"
+    PHASE_RESULTS+=("${phase}:OK")
+    CURRENT_PHASE=""
+}
+
+phase_fail() {
+    local phase="$1" reason="${2:-unspecified}"
+    PHASE_RESULTS+=("${phase}:FAIL:${reason}")
+    CURRENT_PHASE=""
+}
+
+# corrective_action prints the per-phase recovery guidance.
+corrective_action() {
+    case "$1" in
+        preflight)
+            log report "  → fix the pre-flight error and re-run; no state has been mutated"
+            ;;
+        notes)
+            log report "  → notes templater failed; inspect git log range and re-run"
+            ;;
+        build)
+            log report "  → rebuild artifacts; verify the cabi-matrix run is green on the release commit"
+            ;;
+        verify)
+            log report "  → fix the regression on the release commit before retrying — never ship a red verify"
+            ;;
+        tag)
+            log report "  → delete the remote tag, then re-run:"
+            log report "      git push --delete origin $VERSION && git tag -d $VERSION"
+            ;;
+        publish)
+            log report "  → increment VERSION and re-run; same-version retries are forbidden"
+            log report "    (an already-published npm version cannot be silently re-published)"
+            ;;
+        gh-release)
+            log report "  → the tag and npm publish already succeeded — do NOT increment VERSION"
+            log report "  → re-run \`gh release create $VERSION\` manually with the assets in ./dist/"
+            ;;
+        *)
+            log report "  → no specific recovery guidance for phase $1"
+            ;;
+    esac
+}
+
+cleanup_npmrc_if_any() {
+    if [[ -n "${NPMRC_PATH:-}" && -f "$NPMRC_PATH" ]]; then
+        rm -f "$NPMRC_PATH"
+    fi
+}
+
+report_phase() {
+    local rc=$?
+    cleanup_npmrc_if_any
+    log report "==== release summary for $VERSION ===="
+
+    # If we died mid-phase the current-phase didn't append its own
+    # FAIL entry; synthesize one so the user sees the broken phase.
+    if [[ -n "$CURRENT_PHASE" ]]; then
+        PHASE_RESULTS+=("${CURRENT_PHASE}:FAIL:exit=$rc")
+        CURRENT_PHASE=""
+    fi
+
+    local entry phase status reason
+    local -a succeeded=() failed=()
+    for entry in "${PHASE_RESULTS[@]}"; do
+        phase="${entry%%:*}"
+        status="${entry#*:}"
+        if [[ "$status" == OK ]]; then
+            succeeded+=("$phase")
+        else
+            reason="${status#FAIL:}"
+            failed+=("${phase}:${reason}")
+        fi
+    done
+
+    if (( ${#succeeded[@]} > 0 )); then
+        log report "succeeded phases:"
+        for phase in "${succeeded[@]}"; do
+            log report "  ✓ ${phase}"
+        done
+    fi
+    if (( ${#failed[@]} > 0 )); then
+        log report "failed phases:"
+        for entry in "${failed[@]}"; do
+            phase="${entry%%:*}"
+            reason="${entry#*:}"
+            log report "  ✗ ${phase} — ${reason}"
+            corrective_action "$phase"
+        done
+        log report "==== release FAILED (exit $rc) ===="
+    elif (( ${#succeeded[@]} > 0 )); then
+        if [[ "$DRY_RUN" -eq 1 ]]; then
+            log report "==== dry-run OK ===="
+        else
+            log report "==== release OK ===="
+        fi
+    fi
+}
+
+trap report_phase EXIT
+
+# --------------------------------------------------------------------
 # Flag parsing
 # --------------------------------------------------------------------
 
@@ -73,6 +188,7 @@ done
 # --------------------------------------------------------------------
 
 preflight_phase() {
+    phase_begin preflight
     # Semver: v?MAJOR.MINOR.PATCH only. No pre-release tags in v1.
     if [[ -z "$VERSION" ]]; then
         log preflight "VERSION is required (e.g. v0.1.0)" >&2
@@ -131,6 +247,7 @@ preflight_phase() {
     else
         log preflight "mode    : LIVE — irreversible steps WILL execute"
     fi
+    phase_ok preflight
 }
 
 # --------------------------------------------------------------------
@@ -138,6 +255,7 @@ preflight_phase() {
 # --------------------------------------------------------------------
 
 notes_phase() {
+    phase_begin notes
     PREV_TAG=$(git tag --list "v*.*.*" --sort=-version:refname | head -n 1 || true)
     if [[ -n "$PREV_TAG" ]]; then
         LOG_RANGE="${PREV_TAG}..HEAD"
@@ -234,6 +352,7 @@ Windows is not supported (SRD §16.1).
 NOTES
 
     log notes "written to $NOTES_FILE"
+    phase_ok notes
 }
 
 # --------------------------------------------------------------------
@@ -348,20 +467,25 @@ collect_cabi_artifacts() {
 }
 
 build_phase() {
+    phase_begin build
     if [[ "$NO_BUILD" -eq 1 ]]; then
         log build "--no-build set — assuming ./dist/ is already populated"
+        phase_ok build
         return 0
     fi
     log build "building release binaries (4 CLI platforms)"
     if ! (cd "$REPO_ROOT" && make release-binaries) > >(while IFS= read -r l; do printf '[build] %s\n' "$l"; done); then
         log build "release-binaries build failed" >&2
+        phase_fail build "release-binaries failed"
         exit 3
     fi
     log build "collecting pkg/cabi artifacts (3 v1 platforms)"
     if ! collect_cabi_artifacts; then
+        phase_fail build "collect_cabi_artifacts failed"
         exit 3
     fi
     log build "OK"
+    phase_ok build
 }
 
 # --------------------------------------------------------------------
@@ -398,6 +522,7 @@ host_cabi_platform() {
 # Each step that fails halts release with exit code 5 and a clear
 # [verify] FAIL <step> message naming the failed sub-step.
 verify_phase() {
+    phase_begin verify
     local host_plat
     if host_plat=$(host_cabi_platform); then
         AD_CABI_DIR="$REPO_ROOT/dist/cabi/$host_plat"
@@ -411,6 +536,7 @@ verify_phase() {
     if ! (cd "$REPO_ROOT" && go test -race -count=1 ./test/smoke/go/...) \
             > >(while IFS= read -r l; do printf '[verify] %s\n' "$l"; done); then
         log verify "FAIL go-smoke" >&2
+        phase_fail verify "go-smoke"
         exit 5
     fi
 
@@ -418,6 +544,7 @@ verify_phase() {
     if ! (cd "$REPO_ROOT/pkg/ts-bun-client" && bun run smoke) \
             > >(while IFS= read -r l; do printf '[verify] %s\n' "$l"; done); then
         log verify "FAIL ts-smoke" >&2
+        phase_fail verify "ts-smoke"
         exit 5
     fi
 
@@ -428,6 +555,7 @@ verify_phase() {
     if ! (cd "$REPO_ROOT" && go test -count=1 ./test/envelope-diff/...) \
             > >(while IFS= read -r l; do printf '[verify] %s\n' "$l"; done); then
         log verify "FAIL envelope-diff-go" >&2
+        phase_fail verify "envelope-diff-go"
         exit 5
     fi
     # TS side: the make target wires up agent-director + ts-helper +
@@ -435,10 +563,12 @@ verify_phase() {
     if ! (cd "$REPO_ROOT" && make envelope-diff-ts) \
             > >(while IFS= read -r l; do printf '[verify] %s\n' "$l"; done); then
         log verify "FAIL envelope-diff-ts" >&2
+        phase_fail verify "envelope-diff-ts"
         exit 5
     fi
 
     log verify "OK"
+    phase_ok verify
 }
 
 # --------------------------------------------------------------------
@@ -454,20 +584,24 @@ verify_phase() {
 # sub-path tag (pkg/api/$VERSION) to satisfy Go's module tag protocol;
 # the conditional below detects that case automatically.
 tag_phase() {
+    phase_begin tag
     if [[ "$DRY_RUN" -eq 1 ]]; then
         log tag "(dry-run) would push $VERSION"
         if [[ -f "$REPO_ROOT/pkg/api/go.mod" ]]; then
             log tag "(dry-run) would also push pkg/api/$VERSION (separate Go module detected)"
         fi
+        phase_ok tag
         return 0
     fi
     log tag "pushing $VERSION"
     if ! git tag -a "$VERSION" -m "Release $VERSION"; then
         log tag "git tag failed" >&2
+        phase_fail tag "git tag failed"
         exit 7
     fi
     if ! git push origin "$VERSION"; then
         log tag "git push of $VERSION failed" >&2
+        phase_fail tag "git push failed"
         exit 7
     fi
     if [[ -f "$REPO_ROOT/pkg/api/go.mod" ]]; then
@@ -475,14 +609,17 @@ tag_phase() {
         log tag "pkg/api has separate go.mod — also pushing $submod_tag"
         if ! git tag -a "$submod_tag" -m "Release $submod_tag"; then
             log tag "git tag $submod_tag failed" >&2
+            phase_fail tag "git tag $submod_tag failed"
             exit 7
         fi
         if ! git push origin "$submod_tag"; then
             log tag "git push of $submod_tag failed" >&2
+            phase_fail tag "git push of $submod_tag failed"
             exit 7
         fi
     fi
     log tag "pushed $VERSION"
+    phase_ok tag
 }
 
 # --------------------------------------------------------------------
@@ -527,6 +664,7 @@ stage_cabi_into_platforms() {
 }
 
 publish_phase() {
+    phase_begin publish
     local plain_version="${VERSION#v}"
 
     # Read the umbrella package name once. Used to drive both the H3
@@ -597,21 +735,16 @@ publish_phase() {
     fi
 
     # Write a transient .npmrc with the token, used by `npm publish`.
-    # Trapped cleanup ensures the file (and any extracted token) is
-    # gone even on hard exits.
-    local NPMRC="$pkg_root/.npmrc"
-    cleanup_npmrc() {
-        if [[ -f "$NPMRC" ]]; then
-            rm -f "$NPMRC"
-            log publish "cleaned up transient .npmrc"
-        fi
-    }
-    trap cleanup_npmrc EXIT
+    # The EXIT trap below (report_phase) calls cleanup_npmrc_if_any so
+    # the file (and any extracted token) is gone even on hard exits —
+    # do NOT install a separate EXIT trap here; that would override the
+    # report-phase trap installed at the top of the script.
+    NPMRC_PATH="$pkg_root/.npmrc"
     if [[ -n "${NPM_TOKEN:-}" ]]; then
-        printf '//registry.npmjs.org/:_authToken=%s\nalways-auth=true\n' "$NPM_TOKEN" > "$NPMRC"
-        chmod 600 "$NPMRC"
+        printf '//registry.npmjs.org/:_authToken=%s\nalways-auth=true\n' "$NPM_TOKEN" > "$NPMRC_PATH"
+        chmod 600 "$NPMRC_PATH"
     else
-        : > "$NPMRC"
+        : > "$NPMRC_PATH"
     fi
 
     # Publish order: platform sub-packages first so the umbrella's
@@ -681,7 +814,9 @@ publish_phase() {
         fi
     fi
 
+    cleanup_npmrc_if_any
     log publish "OK"
+    phase_ok publish
 }
 
 # --------------------------------------------------------------------
@@ -717,6 +852,7 @@ release_assets() {
 }
 
 ghrelease_phase() {
+    phase_begin gh-release
     release_assets
 
     if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -726,6 +862,7 @@ ghrelease_phase() {
             log gh-release "  $(basename "$a") ($(printf '%s' "$a" | sed "s|$REPO_ROOT/||"))"
         done
         log gh-release "(dry-run) would run: gh release create $VERSION --title $VERSION --notes-file $NOTES_FILE <assets>"
+        phase_ok gh-release
         return 0
     fi
 
@@ -737,9 +874,11 @@ ghrelease_phase() {
         log gh-release "the tag $VERSION is pushed AND the npm packages are published" >&2
         log gh-release "do NOT increment version — re-run 'gh release create' manually with the assets in ./dist/" >&2
         log gh-release "  gh release create $VERSION ${RELEASE_ASSETS[*]} --title $VERSION --notes-file $NOTES_FILE" >&2
+        phase_fail gh-release "gh release create failed"
         exit 4
     fi
     log gh-release "OK — $VERSION published with ${#RELEASE_ASSETS[@]} assets"
+    phase_ok gh-release
 }
 
 # --------------------------------------------------------------------

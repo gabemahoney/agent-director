@@ -18,7 +18,7 @@
  *   1. Build each sub-package binary for its target platform.
  *   2. Run `bun run version-bump-publish --version X.Y.Z` to rewrite the
  *      `file:` entries to `^X.Y.Z` registry pins.
- *   3. Publish the three sub-packages first (`npm publish` in each platforms/*/).
+ *   3. Publish the three sub-packages first (`npm publish` in each platforms/* subdir).
  *   4. Publish the top-level package.
  *
  * Running this script with the same version twice is a no-op on the second
