@@ -350,18 +350,18 @@ var errorCases = []errorCase{
 
 	// ── find-missing / ErrProbeUnsupported ───────────────────────────────
 	// ErrProbeUnsupported is emitted by probe_unsupported.go (build tag
-	// !linux && !darwin). On linux/amd64 (primary CI host) probe_linux.go
-	// is compiled instead and reads /proc — ErrProbeUnsupported cannot be
-	// triggered without injecting a fake prober into Client.FindMissing.
-	// The row must exist for TestErrorTableCoverage; the subtest skips on
-	// Linux via the skip hook.
+	// !linux && !darwin). Both linux and darwin compile a native prober
+	// (probe_linux.go reads /proc, probe_darwin.go reads kinfo) — neither
+	// can surface ErrProbeUnsupported without injecting a fake prober into
+	// Client.FindMissing. The row must exist for TestErrorTableCoverage;
+	// the subtest skips on linux+darwin via the skip hook.
 	{
 		verb:    "find-missing",
 		errName: "ErrProbeUnsupported",
 		skip: func(t *testing.T) {
 			t.Helper()
-			if runtime.GOOS == "linux" {
-				t.Skip("ErrProbeUnsupported not triggerable on linux/amd64 (probe_linux.go reads /proc; probe_unsupported.go excluded by build tag)")
+			if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
+				t.Skipf("ErrProbeUnsupported not triggerable on %s (native prober compiled; probe_unsupported.go excluded by build tag)", runtime.GOOS)
 			}
 		},
 		seed: func(t *testing.T) (string, map[string]any) {
