@@ -402,6 +402,25 @@ Windows is not supported (SRD §16.1).
 NOTES
 
     log notes "written to $NOTES_FILE"
+
+    # Append the toolchain-pin diff section if any pins changed since
+    # the previous release tag. SRD §SR-2.3 requires release notes
+    # surface these changes; the diff helper is silent when there is
+    # nothing to report so the appended block is a no-op for releases
+    # that did not bump a pin.
+    local diff_helper="$REPO_ROOT/skills/release-agent-director/toolchain-pin-diff.sh"
+    if [[ -x "$diff_helper" ]]; then
+        local pin_diff_section
+        if pin_diff_section=$(TOOLCHAIN_DIFF_PREV_LABEL="${PREV_TAG:-previous release}" \
+                "$diff_helper" "${PREV_TAG:-}" 2>/dev/null) && [[ -n "$pin_diff_section" ]]; then
+            printf '%s\n' "$pin_diff_section" >> "$NOTES_FILE"
+            log notes "appended toolchain-pin diff section"
+        else
+            log notes "no toolchain-pin changes vs ${PREV_TAG:-(none)}"
+        fi
+    else
+        log notes "toolchain-pin-diff.sh missing/not-executable; skipping pin diff"
+    fi
     phase_ok notes
 }
 

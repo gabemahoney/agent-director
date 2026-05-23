@@ -1757,6 +1757,35 @@ In dry-run mode the script executes phases 1-4 fully, runs the
 tag-phase in "would-push" preview mode, and exits before any
 irreversible step.
 
+#### Toolchain-pin diff in release notes
+
+Per SRD §SR-2.3 any change to a pinned C toolchain version must be
+surfaced in the release notes. `skills/release-agent-director/
+toolchain-pin-diff.sh` extracts the pins from
+`.github/workflows/cabi-matrix.yml` at the current commit AND at
+the previous release tag, then prints a markdown section listing
+only the differences:
+
+```
+## Toolchain pin changes since v0.1.0
+
+- `gcc(linux-amd64)`: gcc-10 → gcc-11
+- `xcode(darwin-amd64)`: Xcode 14.3 → Xcode 15.2
+- `bun`: 1.2.0 → 1.3.13
+```
+
+The notes phase appends this section to `dist/release-notes.md`
+when there are differences and is silent otherwise. Pins tracked:
+
+- `gcc-NN` (linux/amd64 leg's `apt-get install` line).
+- `Xcode_X.Y.app` (darwin/amd64 leg's `xcode-select -switch` line).
+- `BUN_VERSION: 'x.y.z'` (workflow env scalar).
+
+The darwin/arm64 leg's Xcode pin lives on the self-hosted runner
+itself (operator-configured per `docs/self-hosted-runner-setup.md`)
+and is NOT diffed by this helper; bumps to it are surfaced by the
+operator in the release notes manually.
+
 #### Go module tagging convention
 
 The `pkg/api` Go module is in-repo and shares the root `go.mod` —
