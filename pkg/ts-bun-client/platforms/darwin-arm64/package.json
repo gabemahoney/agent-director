@@ -1,0 +1,8 @@
+{
+  "name": "@CHANGEME-H3/agent-director-darwin-arm64",
+  "version": "0.0.0",
+  "type": "module",
+  "os": ["darwin"],
+  "cpu": ["arm64"],
+  "files": ["libagent_director.dylib", "README-binary-source.md"]
+}

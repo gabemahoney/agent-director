@@ -26,6 +26,19 @@ export class AgentDirectorError extends Error {
   }
 }
 
+// ---------------------------------------------------------------------------
+// TS-only error allow-list for T10 catalog-drift check
+//
+// The following classes have no counterpart in pkg/api/errnames/catalog.json.
+// The T10 allow-list must include all names listed here so CI does not flag
+// them as unexpected error classes:
+//
+//   "ErrClientClosed"          — client already closed
+//   "ErrUnsupportedPlatform"   — process.platform/arch not in supported set
+//   "ErrPlatformPackageMissing"— optional sub-package not installed / binary absent
+//   "ErrBunVersionTooOld"      — Bun.version below MIN_BUN_VERSION
+// ---------------------------------------------------------------------------
+
 /**
  * ErrClientClosed — thrown when a verb method (or _assertOpen) is called on a
  * Client that has already been closed.
@@ -44,6 +57,59 @@ export class ErrClientClosed extends AgentDirectorError {
       "client is closed: call new Client() to obtain a fresh handle"
     );
     this.name = "ErrClientClosed";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/**
+ * ErrUnsupportedPlatform — thrown when `process.platform` + `process.arch`
+ * produce a tuple that has no corresponding native sub-package.
+ *
+ * TS-ONLY ERROR — allow-list entry: "ErrUnsupportedPlatform"
+ */
+export class ErrUnsupportedPlatform extends AgentDirectorError {
+  constructor(tuple: string) {
+    super(
+      "",
+      "ErrUnsupportedPlatform",
+      `platform/arch tuple "${tuple}" is not supported; supported: linux-x64, darwin-x64, darwin-arm64`
+    );
+    this.name = "ErrUnsupportedPlatform";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/**
+ * ErrPlatformPackageMissing — thrown when the optional npm sub-package for
+ * the current platform is not installed, or when its native binary file is
+ * absent from the installed package directory.
+ *
+ * TS-ONLY ERROR — allow-list entry: "ErrPlatformPackageMissing"
+ */
+export class ErrPlatformPackageMissing extends AgentDirectorError {
+  constructor(pkgName: string, detail?: string) {
+    const desc = detail
+      ? `native sub-package "${pkgName}" is not usable: ${detail}`
+      : `native sub-package "${pkgName}" is not installed or its binary is absent`;
+    super("", "ErrPlatformPackageMissing", desc);
+    this.name = "ErrPlatformPackageMissing";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/**
+ * ErrBunVersionTooOld — thrown when Bun.version is below the declared minimum.
+ *
+ * TS-ONLY ERROR — allow-list entry: "ErrBunVersionTooOld"
+ */
+export class ErrBunVersionTooOld extends AgentDirectorError {
+  constructor(actual: string, minimum: string) {
+    super(
+      "",
+      "ErrBunVersionTooOld",
+      `Bun ${actual} is below the minimum required version ${minimum}; upgrade Bun to continue`
+    );
+    this.name = "ErrBunVersionTooOld";
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }

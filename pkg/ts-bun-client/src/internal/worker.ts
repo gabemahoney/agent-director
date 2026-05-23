@@ -4,7 +4,7 @@
  * This module runs INSIDE a node:worker_threads Worker. It is never imported
  * by the main thread. Its sole job is:
  *
- *  1. At startup: resolve the native library path, dlopen it, post {type:"ready"}.
+ *  1. At startup: resolve the native library path via loadNative(), post {type:"ready"}.
  *  2. On every message: receive {id, op, handle, paramsJSON}, build the
  *     single-arg JSON for the C symbol, call it, copy the returned C string
  *     to JS, free the native pointer (try/finally so the error path also
@@ -35,12 +35,10 @@
  */
 
 import { parentPort } from "node:worker_threads";
-import { dlopen, FFIType, CString, ptr, suffix, type Pointer } from "bun:ffi";
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
-import { VERBS, kebabToUnderscore, isHandleFree } from "./verbs.js";
+import { CString, ptr, type Pointer } from "bun:ffi";
+import { kebabToUnderscore, isHandleFree } from "./verbs.js";
 import { FreeGuard } from "./freeGuard.js";
-import { BINDING_SYMBOL_NAMES } from "./bindingSpec.js";
+import { loadNative, type NativeLib } from "../platform.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -79,67 +77,27 @@ function fatalStartup(message: string): never {
 }
 
 // ---------------------------------------------------------------------------
-// Resolve native library path
+// Load native library via the platform resolver
 // ---------------------------------------------------------------------------
-// From src/internal/ (import.meta.dir), repo root is 4 levels up.
-// This mirrors bootstrapFfi.ts's path resolution.
-const libPath = resolve(
-  import.meta.dir,
-  "../../../../dist/libagent_director." + suffix
-);
 
-if (!existsSync(libPath)) {
-  fatalStartup(`native library not found: ${libPath} (platform: ${process.platform}-${process.arch})`);
-}
-
-// ---------------------------------------------------------------------------
-// Build the dlopen binding spec
-// ---------------------------------------------------------------------------
-// We use FFIType.ptr as the return type (not FFIType.cstring) so we get the
-// raw Pointer back and can both read via new CString(ptr) AND free via
-// ad_free_cstring(ptr). This matches bootstrapFfi.ts's pattern.
-
-const verbBindings: Record<string, { args: readonly [FFIType]; returns: FFIType }> = {};
-
-for (const verb of VERBS) {
-  verbBindings["ad_" + kebabToUnderscore(verb)] = {
-    args: [FFIType.cstring] as const,
-    returns: FFIType.ptr,
-  };
-}
-
-const bindingSpec = {
-  ad_open: { args: [FFIType.cstring] as const, returns: FFIType.ptr },
-  ad_close: { args: [FFIType.cstring] as const, returns: FFIType.ptr },
-  ad_free_cstring: { args: [FFIType.ptr] as const, returns: FFIType.void },
-  ...verbBindings,
-};
-
-// Sanity: every expected symbol has an entry.
-for (const sym of BINDING_SYMBOL_NAMES) {
-  if (!(sym in bindingSpec)) {
-    fatalStartup(`binding spec is missing symbol: ${sym}`);
+function doLoadNative(): NativeLib {
+  try {
+    const { lib } = loadNative();
+    return lib;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    fatalStartup(`Failed to load native library: ${msg}`);
   }
 }
 
-// ---------------------------------------------------------------------------
-// dlopen
-// ---------------------------------------------------------------------------
-let lib: ReturnType<typeof dlopen>;
-
-try {
-  lib = dlopen(libPath, bindingSpec);
-} catch (e) {
-  const msg = e instanceof Error ? e.message : String(e);
-  fatalStartup(`dlopen failed (${libPath}): ${msg}`);
-}
+const lib = doLoadNative();
 
 // Signal readiness to the main thread.
 port.postMessage({ id: -1, type: "ready" } satisfies WorkerResponse);
 
-// Convenience: get a symbol as a CStringFn, casting through unknown.
+// Convenience: get a symbol from the loaded library as a CStringFn.
 function getSymbol(name: string): CStringFn {
-  const sym = (lib.symbols as Record<string, unknown>)[name];
+  const sym = lib[name];
   if (typeof sym !== "function") {
     throw new Error(`symbol not found in loaded library: ${name}`);
   }

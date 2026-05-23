@@ -1,3 +1,10 @@
 dist/
 node_modules/
 *.tsbuildinfo
+
+# Native binaries dropped by CI / prepare-platforms — never committed.
+platforms/*/libagent_director.so
+platforms/*/libagent_director.dylib
+
+# Temp dirs created by install-resolution test
+test/.tmp-*

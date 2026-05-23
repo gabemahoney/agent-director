@@ -457,17 +457,83 @@ The TS client calls into `libagent_director.so` (or `.dylib` on macOS) via Bun's
 
 ### Per-platform optional-dependency packaging
 
-The native shared library is platform-specific. `pkg/ts-bun-client/` uses npm's `optionalDependencies` mechanism to ship a separate sub-package for each supported platform:
+**Distribution model.** `pkg/ts-bun-client/` follows the [esbuild distribution
+model](https://esbuild.github.io/getting-started/#download-a-build) for native
+binaries: the top-level package ships zero `.so`/`.dylib` files; each
+supported platform gets its own optional sub-package that carries exactly one
+native shared library. `npm install` (and `bun install`) resolve only the
+sub-package that matches `os` + `cpu` on the installing host, leaving the
+others absent.
 
-| npm package | Platform |
-| --- | --- |
-| `@CHANGEME-H3/agent-director-linux-x64` | Linux x86-64 |
-| `@CHANGEME-H3/agent-director-darwin-x64` | macOS Intel |
-| `@CHANGEME-H3/agent-director-darwin-arm64` | macOS Apple Silicon |
+**Sub-packages (v1 — three platforms):**
 
-`src/platform.ts` (internal, not re-exported) resolves which sub-package is available at runtime and returns the absolute path to the `.so`/`.dylib` for the FFI layer to dlopen. Only one optional dependency is expected to be installed on any given machine; the others are silently absent.
+| npm package | Platform | Binary file |
+| --- | --- | --- |
+| `@CHANGEME-H3/agent-director-linux-x64` | Linux x86-64 | `libagent_director.so` |
+| `@CHANGEME-H3/agent-director-darwin-x64` | macOS Intel | `libagent_director.dylib` |
+| `@CHANGEME-H3/agent-director-darwin-arm64` | macOS Apple Silicon | `libagent_director.dylib` |
 
-The scope `@CHANGEME-H3` is a deliberate placeholder: any accidental `npm publish` fails on the invalid scope, and `grep` surfaces every site that needs to be updated when the real scope is chosen.
+> **v2 note — linux-arm64 deferred.** Linux ARM64 (`linux-arm64`) is not
+> supported in v1 — no cross-compile toolchain is wired yet. A fourth
+> sub-package `@CHANGEME-H3/agent-director-linux-arm64` will be added in v2.
+
+Each sub-package lives under `pkg/ts-bun-client/platforms/<tuple>/` and
+contains only `package.json`, `README-binary-source.md`, and (CI-injected)
+the native binary. The binary is gitignored; CI drops it in after
+`make libagent_director` for the matching target.
+
+For local development, `bun run prepare-platforms` copies the already-built
+`dist/libagent_director.so` into `platforms/linux-x64/`, then `bun install`
+links it into `node_modules/`.
+
+**Resolver flow — `src/platform.ts`.**
+
+`src/platform.ts` (internal, not re-exported from `src/index.ts`) implements a
+five-step resolution sequence:
+
+1. **Bun version check.** Compare `Bun.version` against `MIN_BUN_VERSION`
+   (`"1.0.21"`). Fail fast with `ErrBunVersionTooOld` before attempting any
+   module resolution.
+2. **Tuple lookup.** Build `<process.platform>-<process.arch>` and look it up
+   in a static map. An unsupported tuple throws `ErrUnsupportedPlatform`.
+3. **Sub-package resolution.** Call `import.meta.resolve("<subpkg>/package.json")`
+   (Bun-synchronous, returns a `file://` URL). On failure (package not
+   installed), throw `ErrPlatformPackageMissing`.
+4. **Binary existence check.** Compute the binary path from the resolved
+   package directory and call `existsSync`. If absent, throw
+   `ErrPlatformPackageMissing` (message differentiates the two missing cases).
+5. **dlopen.** Call Bun's `dlopen(libPath, buildBindingSpec())` with the full
+   18-symbol binding spec (built from `buildBindingSpec()` in
+   `src/internal/bindingSpec.ts`). Return `{ lib: symbols, libPath }`.
+
+`loadNative()` is the public entry point (real globals); `_loadNativeInternal(opts)`
+is the DI-able overload used by tests to inject `platform`, `arch`, and
+`bunVersion` without monkey-patching process globals.
+
+**Three platform error subclasses** (all TS-only — see T10 allow-list):
+
+| Class | Thrown when | Key field in message |
+| --- | --- | --- |
+| `ErrBunVersionTooOld` | `Bun.version` < `1.0.21` | actual version + minimum |
+| `ErrUnsupportedPlatform` | tuple not in supported set | tuple string (e.g. `linux-arm64`) |
+| `ErrPlatformPackageMissing` | sub-package not installed or binary absent | sub-package name |
+
+**version-bump script.** `scripts/version-bump.ts` is a publish-time helper.
+During local development the top-level `optionalDependencies` entries use
+`file:./platforms/<tuple>` paths so `bun install` resolves them from the
+workspace. Before publishing to npm, CI runs:
+
+```sh
+bun run version-bump-publish --version X.Y.Z
+```
+
+This rewrites the three `file:` entries to `^X.Y.Z` registry pins. The script
+is idempotent (running twice with the same version is a no-op). After publish,
+`git checkout package.json` restores the `file:` paths for local development.
+
+The scope `@CHANGEME-H3` is a deliberate placeholder: any accidental `npm publish`
+fails on the invalid scope, and `grep` surfaces every site that needs updating
+when the real scope is chosen.
 
 ### Package layout
 

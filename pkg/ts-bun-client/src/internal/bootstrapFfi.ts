@@ -1,31 +1,28 @@
 /**
  * bootstrapFfi — thin synchronous dlopen wrapper used by the Client
- * constructor and close() BEFORE the T3 worker-proxy is wired.
+ * constructor and close().
  *
- * TODO (T3): Replace direct dlopen here with worker-proxy dispatch so
- * that verb calls run off the main thread. The "open" and "close" ops
- * can keep their synchronous, main-thread semantics (they are brief and
- * handle-less / handle-acquisition ops respectively); T3's dispatcher
- * will provide a compatible callSync("open", ...) / callSync("close", ...)
- * API that this file can delegate to once it lands.
+ * Only three symbols are needed here: ad_open, ad_close, ad_free_cstring.
+ * The full binding spec (all 18 symbols) is used by worker.ts via loadNative().
+ *
+ * Library path resolution delegates to platform.ts::resolveNativePath() so
+ * that all platforms (linux-x64, darwin-x64, darwin-arm64) resolve their
+ * binary from the correct optional sub-package, and so this file shares the
+ * same path logic as the worker.
  *
  * Internal — NOT re-exported from src/index.ts.
  */
 
-import { dlopen, FFIType, suffix, CString, ptr, type Pointer } from "bun:ffi";
-import * as path from "node:path";
+import { dlopen, FFIType, CString, ptr, type Pointer } from "bun:ffi";
+import { resolveNativePath } from "../platform.js";
 
 // ---------------------------------------------------------------------------
-// Library path resolution
+// Library path resolution + dlopen
 // ---------------------------------------------------------------------------
-// Hard-coded relative path: dist/libagent_director.{so|dylib} at repo root.
-// T5 (platform resolver) will expose a proper resolver once it ships; until
-// then this hard-code is expected and intentional per the T2 scope comment.
-const _soPath = path.resolve(
-  // import.meta.dir = .../pkg/ts-bun-client/src/internal
-  import.meta.dir,
-  "../../../../dist/libagent_director." + suffix
-);
+// resolveNativePath() checks the Bun version and optional sub-package on
+// first import of this module (module-level eager init). If the platform
+// package is missing or the binary absent it throws before dlopen is reached.
+const _soPath = resolveNativePath();
 
 // ---------------------------------------------------------------------------
 // FFI symbol declarations

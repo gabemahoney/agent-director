@@ -12,13 +12,19 @@
         "typescript": ">=5.2.0",
       },
       "optionalDependencies": {
-        "@CHANGEME-H3/agent-director-darwin-arm64": "0.0.0",
-        "@CHANGEME-H3/agent-director-darwin-x64": "0.0.0",
-        "@CHANGEME-H3/agent-director-linux-x64": "0.0.0",
+        "@CHANGEME-H3/agent-director-darwin-arm64": "file:./platforms/darwin-arm64",
+        "@CHANGEME-H3/agent-director-darwin-x64": "file:./platforms/darwin-x64",
+        "@CHANGEME-H3/agent-director-linux-x64": "file:./platforms/linux-x64",
       },
     },
   },
   "packages": {
+    "@CHANGEME-H3/agent-director-darwin-arm64": ["@CHANGEME-H3/agent-director-darwin-arm64@file:platforms/darwin-arm64", {}],
+
+    "@CHANGEME-H3/agent-director-darwin-x64": ["@CHANGEME-H3/agent-director-darwin-x64@file:platforms/darwin-x64", {}],
+
+    "@CHANGEME-H3/agent-director-linux-x64": ["@CHANGEME-H3/agent-director-linux-x64@file:platforms/linux-x64", {}],
+
     "@eslint-community/eslint-utils": ["@eslint-community/eslint-utils@4.9.1", "", { "dependencies": { "eslint-visitor-keys": "^3.4.3" }, "peerDependencies": { "eslint": "^6.0.0 || ^7.0.0 || >=8.0.0" } }, "sha512-phrYmNiYppR7znFEdqgfWHXR6NCkZEK7hwWDHZUjit/2/U0r6XvkDl0SYnoM51Hq7FhCGdLDT6zxCCOY1hexsQ=="],
 
     "@eslint-community/regexpp": ["@eslint-community/regexpp@4.12.2", "", {}, "sha512-EriSTlt5OC9/7SXkRSCAhfSxxoSUgBm33OH+IkwbdpgoqsSsUg7y3uh+IICI/Qg4BBWr3U2i39RpmycbxMq4ew=="],

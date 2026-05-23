@@ -9,6 +9,9 @@ export { Client } from "./client.js";
 export {
   AgentDirectorError,
   ErrClientClosed,
+  ErrUnsupportedPlatform,
+  ErrPlatformPackageMissing,
+  ErrBunVersionTooOld,
   errorFromEnvelope,
   // Catalog-derived subclasses (34 entries from pkg/api/errnames/catalog.json).
   ErrCwdMissing,

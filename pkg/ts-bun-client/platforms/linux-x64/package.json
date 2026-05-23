@@ -1,0 +1,8 @@
+{
+  "name": "@CHANGEME-H3/agent-director-linux-x64",
+  "version": "0.0.0",
+  "type": "module",
+  "os": ["linux"],
+  "cpu": ["x64"],
+  "files": ["libagent_director.so", "README-binary-source.md"]
+}

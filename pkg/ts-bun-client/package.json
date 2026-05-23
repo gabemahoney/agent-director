@@ -21,12 +21,14 @@
     "build": "bun run build.ts",
     "lint": "eslint src/ --ext .ts",
     "typecheck": "tsc --noEmit --project tsconfig.typecheck.json",
-    "test": "bun test"
+    "test": "bun test",
+    "prepare-platforms": "bun run scripts/prepare-platforms.ts",
+    "version-bump-publish": "bun run scripts/version-bump.ts"
   },
   "optionalDependencies": {
-    "@CHANGEME-H3/agent-director-linux-x64": "0.0.0",
-    "@CHANGEME-H3/agent-director-darwin-x64": "0.0.0",
-    "@CHANGEME-H3/agent-director-darwin-arm64": "0.0.0"
+    "@CHANGEME-H3/agent-director-linux-x64": "file:./platforms/linux-x64",
+    "@CHANGEME-H3/agent-director-darwin-x64": "file:./platforms/darwin-x64",
+    "@CHANGEME-H3/agent-director-darwin-arm64": "file:./platforms/darwin-arm64"
   },
   "devDependencies": {
     "typescript": ">=5.2.0",
