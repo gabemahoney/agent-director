@@ -491,6 +491,36 @@ pkg/ts-bun-client/
 
 Error catalog and verb-binding details are deferred to later sections (added by T3 and T4).
 
+### Client lifecycle
+
+A `Client` object owns exactly one Go-side `pkg/api.Client` behind an opaque handle string.
+
+**Construction.** `new Client(opts)` is synchronous. The constructor:
+
+1. Applies tilde expansion (TS-side, via `src/internal/tilde.ts`) to `storePath` and `configPath` so the C-ABI always receives absolute paths.
+2. Calls `ad_open` (over Bun FFI) with a JSON params envelope: `{ "store_path": "...", "config_path": "...", "tmux_command": "...", "create_if_missing": true|false }`.
+3. Parses the returned JSON envelope. On `{ "handle": "<token>" }` → stores the handle. On `{ "err_name": "...", "err_description": "..." }` → throws a typed `AgentDirectorError` subclass.
+
+**`close()`.**
+
+- Calls `ad_close` with `{ "handle": "<token>" }`.
+- Parses the returned envelope. On an error envelope, warns via the optional `logger` but does **not** throw (idempotency guarantee).
+- Nulls the internal handle field and sets `_open = false`.
+- **Idempotent**: a second `close()` call is a no-op.
+
+**`[Symbol.dispose]()`** delegates to `close()`, enabling `using` blocks (Explicit Resource Management):
+
+```ts
+{
+  using client = new Client({ storePath: "~/.agent-director/state.db" });
+  // use client …
+} // client.close() called automatically here
+```
+
+**`_assertOpen()`** is called at the top of every verb method. It throws `ErrClientClosed` (a TS-only error subclass, not in the shared Go catalog) if the client has already been closed.
+
+**Tilde expansion** is handled entirely on the TS side, in `src/internal/tilde.ts`, before any path value crosses the FFI boundary. The C-ABI and `pkg/api.New` never receive a leading `~`.
+
 ## State Machine
 
 A Spawn's lifecycle is tracked in the `state` column of `spawns`. Every
