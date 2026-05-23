@@ -1623,4 +1623,4 @@ go test ./test/smoke/go/... -race -count=2
 
 `-race` shakes out goroutine-level data races in `pkg/api` and its dependencies. `-count=2` runs each subtest twice in the same process, exposing inter-test state leakage (e.g., package-level singletons or temp files not cleaned up between runs).
 
-**CI.** Task T6 (t2.qe2.9x.gh) wires the smoke target into the CI matrix on linux/amd64. Until then, run it locally with the command above.
+**CI.** The `.github/workflows/go-smoke.yml` workflow runs `go test -race -count=1 -v ./test/smoke/go/...` on `ubuntu-latest` (linux/amd64) on every pull request and push to `main`. Cross-platform extension to macOS and Windows is Epic 6.
