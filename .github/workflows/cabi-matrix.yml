@@ -40,6 +40,13 @@
 #                   (xcodebuild with a clang-fallback), it does not
 #                   install or switch.
 #
+# Bun pinning policy
+# ------------------
+# Bun is installed per-leg from the official bun.sh installer pinned to
+# BUN_VERSION below, matching test/Dockerfile so the harness and the CI
+# matrix exercise the same Bun runtime. No third-party setup-bun action
+# is used — same SHA-pin-audit avoidance as setup-xcode.
+#
 # Third-party action pinning policy
 # ---------------------------------
 # Every `uses:` reference below is pinned by full commit SHA with a
@@ -75,6 +82,12 @@ concurrency:
 permissions:
   contents: read
 
+# Bun runtime version installed per leg. Kept in lockstep with
+# test/Dockerfile's ARG BUN_VERSION so a bump touches both files in the
+# same commit.
+env:
+  BUN_VERSION: '1.3.13'
+
 jobs:
   build-and-test:
     name: ${{ matrix.name }}
@@ -91,10 +104,16 @@ jobs:
             runs-on: ubuntu-22.04
             lib_ext: so
             lib_name: libagent_director.so
+            # platform_dir is the TS package's platforms/<dir>/ slot
+            # this leg's built native lib gets staged into so the
+            # pkg/ts-bun-client smoke / envelope-diff suites can resolve
+            # it via import.meta.resolve.
+            platform_dir: linux-x64
           - name: darwin-amd64
             runs-on: macos-13
             lib_ext: dylib
             lib_name: libagent_director.dylib
+            platform_dir: darwin-x64
           - name: darwin-arm64
             # Full conjunctive label tuple. GitHub matches all labels
             # together; spelling out `darwin-arm64` ensures the workflow
@@ -102,25 +121,31 @@ jobs:
             runs-on: [self-hosted, macOS, ARM64, darwin-arm64]
             lib_ext: dylib
             lib_name: libagent_director.dylib
+            platform_dir: darwin-arm64
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
+      # setup-go with built-in cache disabled. The Epic body requires
+      # cache keys include both runner.os AND runner.arch so darwin/arm64
+      # cannot fall back to a darwin/amd64-built cache; setup-go's
+      # default cache key is runner.os only and cannot be customised.
+      # The pkg/cabi build is fast enough that skipping the module cache
+      # is acceptable on a first-deal. If cache cost becomes a problem,
+      # a later Task can wire actions/cache with explicit os+arch keys.
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
         with:
           go-version-file: 'go.mod'
+          cache: false
 
       # ---------------------------------------------------------------
       # C-toolchain pin per leg + build-info capture
       # ---------------------------------------------------------------
       #
       # Each leg writes a build-info-*.txt file recording the active
-      # toolchain version. T3's artifact-upload step bundles these into
-      # the leg's published artifact so the Epic 7 release pipeline can
-      # attribute the toolchain version it shipped with.
-      #
-      # The capture commands deliberately tee through a file rather than
-      # only echoing to the log so the artifact carries the exact text
-      # the operator saw on the runner.
+      # toolchain version. The artifact-upload step at the end of the
+      # job bundles these into the leg's published artifact so the
+      # Epic 7 release pipeline can attribute the toolchain version it
+      # shipped with.
 
       - name: Pin gcc-11 and capture build-info (linux-amd64)
         if: matrix.name == 'linux-amd64'
@@ -143,9 +168,6 @@ jobs:
         if: matrix.name == 'darwin-amd64'
         run: |
           set -euo pipefail
-          # Xcode 15.2 ships pre-installed on the macos-13 image at this
-          # path. Listing /Applications/ first emits a helpful diagnostic
-          # if a future image change ever drops it.
           ls -1d /Applications/Xcode_*.app | tee build-info-xcode.txt
           sudo xcode-select -switch /Applications/Xcode_15.2.app
           echo "---" | tee -a build-info-xcode.txt
@@ -157,10 +179,6 @@ jobs:
         if: matrix.name == 'darwin-arm64'
         run: |
           set -euo pipefail
-          # The self-hosted runner's Xcode (or Command Line Tools) is
-          # pinned by operator configuration; we only RECORD what is
-          # active. If only CLT is installed, xcodebuild is absent and
-          # we fall back to clang --version so the leg does not break.
           if command -v xcodebuild >/dev/null 2>&1; then
             xcodebuild -version | tee build-info-xcode.txt
           else
@@ -171,8 +189,174 @@ jobs:
           xcode-select -p | tee -a build-info-xcode.txt
           clang --version | tee -a build-info-xcode.txt
 
-      # T2 placeholder. Real build/smoke/envelope-diff steps land in T3
-      # (per-leg build steps) and T4 (darwin/arm64 specifics).
-      - name: Identify leg
+      # ---------------------------------------------------------------
+      # Bun install (every leg)
+      # ---------------------------------------------------------------
+      #
+      # Installed into RUNNER_TEMP/.bun so the self-hosted runner's home
+      # directory is not polluted across jobs. The installer is the
+      # official bun.sh one-liner pinned by BUN_VERSION above.
+      - name: Install Bun ${{ env.BUN_VERSION }}
+        shell: bash
         run: |
-          echo "leg=${{ matrix.name }} runs-on=${{ matrix.runs-on }} lib=${{ matrix.lib_name }}"
+          set -euo pipefail
+          export BUN_INSTALL="${RUNNER_TEMP}/.bun"
+          curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}"
+          echo "${BUN_INSTALL}/bin" >> "$GITHUB_PATH"
+          "${BUN_INSTALL}/bin/bun" --version
+
+      # ---------------------------------------------------------------
+      # Build pkg/cabi shared library
+      # ---------------------------------------------------------------
+      #
+      # CGO_ENABLED=1 + -buildmode=c-shared emits the leg-native .so or
+      # .dylib plus a generated C header. The output lands in dist/
+      # (matches the `make libagent_director` target's output dir and
+      # what pkg/ts-bun-client/scripts/prepare-platforms.ts expects when
+      # used locally). The header is at dist/libagent_director.h per
+      # Go's -buildmode=c-shared convention.
+      - name: Build pkg/cabi shared library
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          CGO_ENABLED=1 go build -buildmode=c-shared \
+            -o "dist/${{ matrix.lib_name }}" \
+            ./pkg/cabi
+          ls -la dist/
+
+      # ---------------------------------------------------------------
+      # Build agent-director CLI binary
+      # ---------------------------------------------------------------
+      #
+      # Epic 3's envelope-diff harness spawns the CLI as a subprocess
+      # (SRD §SR-7.4) and diffs its stdout/stderr envelope against an
+      # in-process pkg/api invocation. The CLI binary must therefore
+      # exist on disk before the envelope-diff steps run. Lands at
+      # bin/agent-director, mirroring `make build`'s output path.
+      #
+      # Not uploaded as a workflow artifact by this job — Epic 7 owns
+      # CLI binary release artifacts (four cross-compiled binaries per
+      # SRD §SR-9). This matrix exists to exercise tests, not to ship.
+      - name: Build agent-director CLI binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+          CGO_ENABLED=1 go build -o bin/agent-director ./cmd/agent-director
+          ls -la bin/
+
+      # ---------------------------------------------------------------
+      # Stage native lib into TS platform sub-package
+      # ---------------------------------------------------------------
+      #
+      # pkg/ts-bun-client resolves the native library via
+      # `import.meta.resolve("@CHANGEME-H3/agent-director-<plat>/...")`,
+      # which in turn relies on the file:./platforms/<plat>/ optional
+      # dependency declared in pkg/ts-bun-client/package.json. We do
+      # NOT use scripts/prepare-platforms.ts here because that script
+      # copies the same darwin .dylib into BOTH platforms/darwin-x64
+      # and platforms/darwin-arm64 (correct for a single-machine dev
+      # loop, wrong for a per-leg matrix where each darwin leg only
+      # owns one platform_dir).
+      - name: Stage built lib into TS platform sub-package
+        shell: bash
+        run: |
+          set -euo pipefail
+          target_dir="pkg/ts-bun-client/platforms/${{ matrix.platform_dir }}"
+          mkdir -p "$target_dir"
+          cp "dist/${{ matrix.lib_name }}" "$target_dir/${{ matrix.lib_name }}"
+          ls -la "$target_dir/"
+
+      # ---------------------------------------------------------------
+      # Bun install (one-shot per leg)
+      # ---------------------------------------------------------------
+      #
+      # --frozen-lockfile bails on any drift between package.json /
+      # bun.lock so the cached lockfile is the single source of truth.
+      - name: Bun install
+        shell: bash
+        working-directory: pkg/ts-bun-client
+        run: |
+          set -euo pipefail
+          bun install --frozen-lockfile
+
+      # ---------------------------------------------------------------
+      # Run Go smoke test (Epic 4 deliverable)
+      # ---------------------------------------------------------------
+      - name: Run Go smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -race -count=1 -v ./test/smoke/go/...
+
+      # ---------------------------------------------------------------
+      # Run TS/Bun smoke test (Epic 5 deliverable)
+      # ---------------------------------------------------------------
+      #
+      # Drives Epic 5 via the canonical `bun run smoke` script declared
+      # in pkg/ts-bun-client/package.json so this workflow does not have
+      # to know which test files the smoke comprises. The TS library's
+      # platform resolver finds the just-staged native lib in
+      # pkg/ts-bun-client/platforms/${{ matrix.platform_dir }} via
+      # import.meta.resolve; no env-var override is needed.
+      - name: Run TS/Bun smoke test
+        shell: bash
+        working-directory: pkg/ts-bun-client
+        run: |
+          set -euo pipefail
+          bun run smoke
+
+      # ---------------------------------------------------------------
+      # Run Go-side envelope-diff regression (Epic 3 deliverable)
+      # ---------------------------------------------------------------
+      #
+      # Mirrors integration.yml's envelope-diff job: builds the
+      # fake-tmux shim, points AGENT_DIRECTOR_FAKE_TMUX_DIR at it, and
+      # points AGENT_DIRECTOR_TEST_BINARY at the just-built CLI binary.
+      - name: Build fake-tmux shim
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p test/fake-tmux
+          CGO_ENABLED=0 go build -o test/fake-tmux/tmux ./test/fake-tmux
+
+      - name: Run Go envelope-diff regression
+        shell: bash
+        env:
+          AGENT_DIRECTOR_TEST_BINARY: ${{ github.workspace }}/bin/agent-director
+          AGENT_DIRECTOR_FAKE_TMUX_DIR: ${{ github.workspace }}/test/fake-tmux
+        run: |
+          set -euo pipefail
+          go test -count=1 ./test/envelope-diff/...
+
+      # ---------------------------------------------------------------
+      # Run TS-side envelope-diff regression (Epic 5 deliverable)
+      # ---------------------------------------------------------------
+      - name: Run TS envelope-diff regression
+        shell: bash
+        working-directory: pkg/ts-bun-client
+        run: |
+          set -euo pipefail
+          bun run envelope-diff
+
+      # ---------------------------------------------------------------
+      # Upload per-leg artifact
+      # ---------------------------------------------------------------
+      #
+      # Bundles the native lib, the generated C header, and any
+      # build-info-*.txt capture files from the toolchain-pin step into
+      # one named artifact per leg so Epic 7's release pipeline can
+      # collect them. Retention is 7 days — enough for the release
+      # pipeline to fetch on a green main commit; release artifacts
+      # themselves are produced by Epic 7's separate workflow.
+      - name: Upload pkg/cabi artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: pkg-cabi-${{ matrix.name }}
+          path: |
+            dist/${{ matrix.lib_name }}
+            dist/libagent_director.h
+            build-info-*.txt
+          if-no-files-found: error
+          retention-days: 7

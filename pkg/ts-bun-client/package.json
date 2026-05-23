@@ -23,6 +23,8 @@
     "lint": "eslint src/ --ext .ts",
     "typecheck": "tsc --noEmit --project tsconfig.typecheck.json",
     "test": "bun test",
+    "smoke": "bun test test/smoke/ test/smoke-invariants.test.ts",
+    "envelope-diff": "bun test test/envelope-diff.test.ts test/envelope-diff-invariants.test.ts",
     "prepare-platforms": "bun run scripts/prepare-platforms.ts",
     "version-bump-publish": "bun run scripts/version-bump.ts",
     "prepublishOnly": "bun run scripts/check-not-placeholder.ts"
