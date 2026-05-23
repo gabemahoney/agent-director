@@ -19,6 +19,34 @@
 # or integration.yml. Those three continue to enforce the linux/amd64-only
 # gates they owned before this Epic.
 #
+# C toolchain pinning policy (SRD §SR-2.3)
+# ----------------------------------------
+# Each leg pins its C toolchain to a deliberate version that surfaces in
+# build-info-*.txt artifacts. Bumping a pin is a release-note-worthy
+# change. The pins per leg:
+#
+#   linux-amd64   → gcc-11 (the ubuntu-22.04 default major; locked via
+#                   update-alternatives so a future image change cannot
+#                   silently switch to a different gcc).
+#   darwin-amd64  → Xcode 15.2 selected via sudo xcode-select -switch on
+#                   /Applications/Xcode_15.2.app, which ships pre-installed
+#                   on the macos-13 runner image. No third-party
+#                   setup-xcode action is used; this avoids needing to
+#                   audit-pin a maxim-lobanov/setup-xcode commit SHA.
+#   darwin-arm64  → the self-hosted runner's Xcode (or Xcode Command Line
+#                   Tools) is pinned by operator configuration per the
+#                   docs/self-hosted-runner-setup.md Prerequisites
+#                   section. The workflow only RECORDS the active version
+#                   (xcodebuild with a clang-fallback), it does not
+#                   install or switch.
+#
+# Third-party action pinning policy
+# ---------------------------------
+# Every `uses:` reference below is pinned by full commit SHA with a
+# trailing tag comment, matching the convention already used by
+# integration.yml / doc-drift.yml / go-smoke.yml. Bumping a SHA is a
+# deliberate change reviewed as such.
+#
 # Local actionlint
 # ----------------
 #   go install github.com/rhysd/actionlint/cmd/actionlint@v1.6.27
@@ -75,8 +103,76 @@ jobs:
             lib_ext: dylib
             lib_name: libagent_director.dylib
     steps:
-      # T1 skeleton placeholder. Real build/smoke/envelope-diff steps land
-      # in T3 (per-leg build steps) and T4 (darwin/arm64 specifics).
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
+        with:
+          go-version-file: 'go.mod'
+
+      # ---------------------------------------------------------------
+      # C-toolchain pin per leg + build-info capture
+      # ---------------------------------------------------------------
+      #
+      # Each leg writes a build-info-*.txt file recording the active
+      # toolchain version. T3's artifact-upload step bundles these into
+      # the leg's published artifact so the Epic 7 release pipeline can
+      # attribute the toolchain version it shipped with.
+      #
+      # The capture commands deliberately tee through a file rather than
+      # only echoing to the log so the artifact carries the exact text
+      # the operator saw on the runner.
+
+      - name: Pin gcc-11 and capture build-info (linux-amd64)
+        if: matrix.name == 'linux-amd64'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-11 g++-11
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 100
+          sudo update-alternatives --set gcc /usr/bin/gcc-11
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-11 100
+          sudo update-alternatives --set g++ /usr/bin/g++-11
+          gcc --version | tee build-info-gcc.txt
+          {
+            echo "---"
+            echo "update-alternatives --query gcc:"
+            update-alternatives --query gcc | head -n 20
+          } | tee -a build-info-gcc.txt
+
+      - name: Pin Xcode 15.2 and capture build-info (darwin-amd64)
+        if: matrix.name == 'darwin-amd64'
+        run: |
+          set -euo pipefail
+          # Xcode 15.2 ships pre-installed on the macos-13 image at this
+          # path. Listing /Applications/ first emits a helpful diagnostic
+          # if a future image change ever drops it.
+          ls -1d /Applications/Xcode_*.app | tee build-info-xcode.txt
+          sudo xcode-select -switch /Applications/Xcode_15.2.app
+          echo "---" | tee -a build-info-xcode.txt
+          xcode-select -p | tee -a build-info-xcode.txt
+          xcodebuild -version | tee -a build-info-xcode.txt
+          clang --version | tee -a build-info-xcode.txt
+
+      - name: Capture host Xcode/CLT version (darwin-arm64)
+        if: matrix.name == 'darwin-arm64'
+        run: |
+          set -euo pipefail
+          # The self-hosted runner's Xcode (or Command Line Tools) is
+          # pinned by operator configuration; we only RECORD what is
+          # active. If only CLT is installed, xcodebuild is absent and
+          # we fall back to clang --version so the leg does not break.
+          if command -v xcodebuild >/dev/null 2>&1; then
+            xcodebuild -version | tee build-info-xcode.txt
+          else
+            echo "xcodebuild not present (CLT only); recording clang --version instead" \
+              | tee build-info-xcode.txt
+          fi
+          echo "---" | tee -a build-info-xcode.txt
+          xcode-select -p | tee -a build-info-xcode.txt
+          clang --version | tee -a build-info-xcode.txt
+
+      # T2 placeholder. Real build/smoke/envelope-diff steps land in T3
+      # (per-leg build steps) and T4 (darwin/arm64 specifics).
       - name: Identify leg
         run: |
           echo "leg=${{ matrix.name }} runs-on=${{ matrix.runs-on }} lib=${{ matrix.lib_name }}"
