@@ -1837,4 +1837,79 @@ go test ./test/smoke/go/... -race -count=2
 
 `-race` shakes out goroutine-level data races in `pkg/api` and its dependencies. `-count=2` runs each subtest twice in the same process, exposing inter-test state leakage (e.g., package-level singletons or temp files not cleaned up between runs).
 
+### ts-helper wrapper CLI
+
+`test/smoke/ts-helper/` is a small Go binary compiled exclusively with the
+`helper` build tag (`go build -tags helper`).  It bridges Go fixture-seed
+helpers into the TypeScript smoke test suite so that Bun-side tests can shell
+out to it for store / template setup without reimplementing the seeding logic
+in TypeScript.
+
+**Why a subprocess instead of reusing the apitest package directly?**
+
+The existing `pkg/api/apitest` helpers all accept `*testing.T` and are
+designed for Go-internal use.  Bun's test runner cannot call Go functions
+in-process.  A thin CLI wrapper is the minimal seam that avoids duplicating
+store-schema knowledge and state-machine details in a second language.
+
+**Build tag isolation.**
+
+`pkg/api/export_for_helper.go` carries `//go:build helper` and lives in
+package `api`.  It exposes `HelperSeedSpawn`, `HelperSeedParentChild`,
+`HelperSeedPermissionRequest`, `HelperSeedTemplate`, and `HelperInitStore` —
+functions that open the SQLite store directly (via `internal/store`) and write
+fixture rows without going through a `pkg/api.Client`.  Because the file is
+excluded from all non-helper builds, the production `agent-director` binary and
+`go test ./...` (no tag) are completely unaffected.
+
+**Subcommand contract.**
+
+Every subcommand follows the same I/O contract:
+
+| Outcome | stdout | stderr | exit code |
+| --- | --- | --- | --- |
+| success | exactly one line of JSON | empty | 0 |
+| failure | empty | error message | 1 |
+
+The single-line JSON guarantee means Bun tests can parse results with
+`JSON.parse(stdout.trim())` without worrying about multi-line output.  stderr
+emptiness on success means a non-empty stderr is an unambiguous failure signal.
+
+**Available subcommands.**
+
+| Subcommand | Key flags | Result shape |
+| --- | --- | --- |
+| `seed-spawn` | `--store`, `--state`, `--id`, `--cwd`, `--create-store` | `{"claude_instance_id": "..."}` |
+| `seed-parent-child` | `--store`, `--parent-id`, `--child-id` | `{"parent_id": "...", "child_id": "..."}` |
+| `seed-permission-request` | `--store`, `--spawn-id`, `--tool` | `{"request_id": <number>}` |
+| `seed-template` | `--templates-dir`, `--name`, `--body` | `{"path": "..."}` |
+| `seed-empty-store` | `--store` | `{"path": "..."}` |
+| `json-schema` | — | machine-readable result-shape map for all subcommands |
+
+**Makefile target.**
+
+`make ts-helper` builds `bin/ts-helper`.  The target lists every
+`.go` source under `test/smoke/ts-helper/` and
+`pkg/api/export_for_helper.go` as prerequisites so Make's mtime tracking
+makes subsequent runs no-ops when nothing has changed.
+
+**Bun integration — `TS_HELPER_PATH`.**
+
+`pkg/ts-bun-client/bunfig.toml` registers `./test/setup.ts` as a Bun preload:
+
+```toml
+[test]
+preload = ["./test/setup.ts"]
+```
+
+`test/setup.ts` runs `make ts-helper` synchronously (via `Bun.spawnSync`)
+before any test starts.  On success it sets `process.env.TS_HELPER_PATH` to
+the absolute path of `bin/ts-helper`.  On failure it prints a clear message
+and calls `process.exit(1)` so the whole test run aborts immediately.
+
+Because the make target is incremental, a cached build adds only a few
+milliseconds of overhead to the suite.  Individual smoke tests can retrieve
+the path with `process.env.TS_HELPER_PATH` and shell out to specific
+subcommands.
+
 **CI.** The `.github/workflows/go-smoke.yml` workflow runs `go test -race -count=1 -v ./test/smoke/go/...` on `ubuntu-latest` (linux/amd64) on every pull request and push to `main`. Cross-platform extension to macOS and Windows is Epic 6.

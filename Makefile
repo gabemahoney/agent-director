@@ -3,7 +3,8 @@
         test-image test-image-smoke test-docker \
         release-binaries release-binaries-smoke \
         libagent_director clean-cabi \
-        consumer-dryrun
+        consumer-dryrun \
+        ts-helper
 
 # Pinned Claude Code version. Per SRD §15.2 the harness's image must install
 # *this* version of @anthropic-ai/claude-code; bumping it requires re-running
@@ -209,3 +210,15 @@ clean-cabi:
 # this: any attempt to import internal/* from outside the module would fail.
 consumer-dryrun:
 	cd tools/consumer-dryrun && go build ./...
+
+# ts-helper builds the fixture-seeding CLI used by TypeScript smoke tests.
+# Compiled exclusively with -tags helper so production binaries are unaffected.
+# modernc.org/sqlite is pure Go; CGO_ENABLED=0 suffices.
+# The target is incremental: it depends on every source file that feeds the
+# binary, so make skips the build when nothing has changed.
+TS_HELPER_SRCS := $(wildcard test/smoke/ts-helper/*.go) pkg/api/export_for_helper.go
+
+bin/ts-helper: $(TS_HELPER_SRCS)
+	CGO_ENABLED=0 go build -tags helper -o bin/ts-helper ./test/smoke/ts-helper/
+
+ts-helper: bin/ts-helper
