@@ -87,9 +87,11 @@ func cmdSeedSpawn(args []string, stdout, stderr io.Writer) int {
 
 	var (
 		storePath   = fs.String("store", "", "path to SQLite store file (required)")
-		state       = fs.String("state", "waiting", "spawn state (waiting|working|ended|…)")
+		state       = fs.String("state", "waiting", "spawn state (waiting|working|ended|check_permission|…)")
 		cwd         = fs.String("cwd", "/tmp", "working directory for the spawn row")
 		id          = fs.String("id", "", "claude_instance_id (UUID); auto-generated if empty")
+		relayMode   = fs.String("relay-mode", "off", "relay_mode value (on|off); defaults to off")
+		sessionID   = fs.String("session-id", "", "claude_session_id; non-empty enables resume pre-flight")
 		createStore = fs.Bool("create-store", false, "create the store if it does not exist")
 	)
 
@@ -105,7 +107,7 @@ func cmdSeedSpawn(args []string, stdout, stderr io.Writer) int {
 		*id = uuid.NewString()
 	}
 
-	instanceID, err := api.HelperSeedSpawn(*storePath, *id, *state, *cwd, *createStore)
+	instanceID, err := api.HelperSeedSpawn(*storePath, *id, *state, *cwd, *relayMode, *sessionID, *createStore)
 	if err != nil {
 		printError(stderr, err)
 		return 1
@@ -294,6 +296,7 @@ func cmdSeedEmptyStore(args []string, stdout, stderr io.Writer) int {
 var resultSchemas = map[string]map[string]string{
 	"seed-spawn": {
 		"claude_instance_id": "string",
+		// New flags available: --relay-mode (on|off), --session-id
 	},
 	"seed-parent-child": {
 		"parent_id": "string",

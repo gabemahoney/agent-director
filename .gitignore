@@ -21,3 +21,6 @@ tickets/*
 
 # macOS Finder cruft
 .DS_Store
+
+# Test stub binaries — built by `make fake-tmux` / `make ts-helper`.
+test/fake-tmux/tmux

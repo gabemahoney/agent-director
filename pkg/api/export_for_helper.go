@@ -27,11 +27,14 @@ import (
 //   - state: target state (e.g. "waiting", "working", "ended"). Defaults to
 //     "waiting" if empty.
 //   - cwd: working directory stored on the row; defaults to "/tmp" if empty.
+//   - relayMode: relay_mode value ("on"|"off"|""). Defaults to "off" if empty.
+//   - sessionID: if non-empty, calls s.SetSessionID after InsertPending so the
+//     row has a claude_session_id (required by the resume verb's pre-flight).
 //   - createStore: if true the store is created when missing (OpenOrInit);
 //     if false the store must already exist (Open).
 //
 // Returns the claude_instance_id that was written.
-func HelperSeedSpawn(dbPath, id, state, cwd string, createStore bool) (string, error) {
+func HelperSeedSpawn(dbPath, id, state, cwd, relayMode, sessionID string, createStore bool) (string, error) {
 	var (
 		s   *store.Store
 		err error
@@ -55,14 +58,23 @@ func HelperSeedSpawn(dbPath, id, state, cwd string, createStore bool) (string, e
 	if state == "" {
 		state = store.StateWaiting
 	}
+	if relayMode == "" {
+		relayMode = "off"
+	}
 
 	if err := s.InsertPending(store.Spawn{
 		ClaudeInstanceID: id,
 		CWD:              cwd,
 		TmuxSessionName:  "ts-" + id,
-		RelayMode:        "off",
+		RelayMode:        relayMode,
 	}); err != nil {
 		return "", fmt.Errorf("HelperSeedSpawn: InsertPending: %w", err)
+	}
+
+	if sessionID != "" {
+		if err := s.SetSessionID(id, sessionID); err != nil {
+			return "", fmt.Errorf("HelperSeedSpawn: SetSessionID %q: %w", sessionID, err)
+		}
 	}
 
 	if state != store.StatePending {

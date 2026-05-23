@@ -4,7 +4,7 @@
         release-binaries release-binaries-smoke \
         libagent_director clean-cabi \
         consumer-dryrun \
-        ts-helper
+        ts-helper fake-tmux
 
 # Pinned Claude Code version. Per SRD §15.2 the harness's image must install
 # *this* version of @anthropic-ai/claude-code; bumping it requires re-running
@@ -222,3 +222,12 @@ bin/ts-helper: $(TS_HELPER_SRCS)
 	CGO_ENABLED=0 go build -tags helper -o bin/ts-helper ./test/smoke/ts-helper/
 
 ts-helper: bin/ts-helper
+
+# fake-tmux builds the test-only tmux stub used by TypeScript smoke tests.
+# The stub records argv calls and exits 0 so spawn/send-keys/read-pane/kill
+# can be exercised end-to-end without a real tmux. Compiled with CGO_ENABLED=0
+# (pure Go, no libc dependency).
+test/fake-tmux/tmux: test/fake-tmux/main.go
+	CGO_ENABLED=0 go build -o test/fake-tmux/tmux ./test/fake-tmux/
+
+fake-tmux: test/fake-tmux/tmux

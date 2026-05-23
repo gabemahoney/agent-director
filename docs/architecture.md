@@ -1912,4 +1912,110 @@ milliseconds of overhead to the suite.  Individual smoke tests can retrieve
 the path with `process.env.TS_HELPER_PATH` and shell out to specific
 subcommands.
 
+### TS smoke-test harness
+
+`pkg/ts-bun-client/test/` contains the Bun smoke-test suite for every callable
+verb.  It exercises `pkg/ts-bun-client/src/` end-to-end through the real
+`libagent_director.so` FFI boundary.
+
+**Directory layout.**
+
+```
+test/
+  setup.ts                   # Bun preload: builds ts-helper + fake-tmux
+  smoke-invariants.test.ts   # Meta-test enforcing coverage contracts
+  smoke/
+    spawn.test.ts            # One file per verb (happy + error path)
+    status.test.ts
+    get.test.ts
+    send-keys.test.ts
+    read-pane.test.ts
+    kill.test.ts
+    decide.test.ts
+    resume.test.ts
+    find-missing.test.ts
+    expire.test.ts
+    delete.test.ts
+    make-template.test.ts
+    list.test.ts
+    pause.test.ts
+    version.test.ts
+  internal/
+    tempHome.ts              # withTempHome() helper
+    helper.ts                # runHelper() wrapper for ts-helper subprocess
+```
+
+**`withTempHome` helper.**
+
+`test/internal/tempHome.ts` exports `withTempHome(testFn)`.  It creates a fresh
+`mkdtemp` directory, sets `process.env.HOME` and `process.env.PATH` in the main
+thread, runs `testFn(homeDir)`, then restores env and cleans up the temp dir (on
+success) or preserves it (on failure, for inspection).
+
+**FFI worker isolation caveat.**  Bun Worker threads inherit a snapshot of the
+OS-level environment at spawn time and do NOT reflect subsequent `process.env`
+mutations in the parent thread.  The FFI worker (which runs all C-ABI calls)
+therefore sees the ORIGINAL `HOME` and `PATH` regardless of what
+`withTempHome` sets.  Three consequences affect test design:
+
+1. **tmux binary** — verbs that invoke tmux (`spawn`, `send-keys`, `read-pane`,
+   `resume`) must pass `tmuxCommand: <path-to-fake-tmux>` explicitly to the
+   `Client` constructor so the worker uses the fake-tmux stub rather than the
+   real binary found on its PATH snapshot.
+
+2. **HOME-relative paths** — `make-template` writes to
+   `~/.agent-director/templates/` using Go's `os.UserHomeDir()` in the worker,
+   which resolves to the REAL home (`/home/horde`), not the per-test temp dir.
+   Tests that check `result.path` assert the filename suffix only, not a
+   `startsWith(homeDir)` prefix, and delete the file in a `finally` block.
+
+3. **JSONL paths** — `resume`'s pre-flight `os.Stat` for the JSONL transcript
+   likewise resolves under the real HOME.  Resume tests create the JSONL
+   placeholder at `${REAL_HOME}/.claude/projects/${slug(cwd)}/${sessionId}.jsonl`
+   (where `REAL_HOME` is captured at module-load time, before any `withTempHome`
+   override) and delete it in a `finally` block.
+
+**`AGENT_DIRECTOR_INSTANCE_ID` and the FK constraint.**
+
+When tests run inside a live Claude session the environment variable
+`AGENT_DIRECTOR_INSTANCE_ID` is set to the session's UUID.  The FFI worker
+inherits this value and passes it as `parent_id` on every `InsertPending` and
+`SetParentID` call.  Because the test stores are fresh SQLite files that do not
+contain a row for the session UUID, the FOREIGN KEY constraint fails.
+
+Any smoke test that exercises a verb that writes `parent_id` (`spawn`,
+`resume`) pre-seeds a row with `id = process.env.AGENT_DIRECTOR_INSTANCE_ID`
+in the same store before calling the verb.  This satisfies the FK constraint
+without modifying the worker's inherited environment.
+
+**fake-tmux stub.**
+
+`test/fake-tmux/main.go` is a minimal Go binary that accepts any tmux subcommand
+and exits 0 — allowing smoke tests to call verbs that would otherwise need a live
+tmux session.  For `capture-pane` it writes a fixed stub string to stdout so
+`read-pane` tests can assert the return value is non-empty.  The binary is built
+by `make fake-tmux` (which `test/setup.ts` calls before any test runs).
+
+**`runHelper` wrapper.**
+
+`test/internal/helper.ts` exports `runHelper(subcommand, args)`.  It shells out
+to `bin/ts-helper` via `Bun.spawnSync`, throws on non-zero exit, and returns
+parsed JSON from stdout.  Smoke tests use it to seed SQLite rows and
+filesystem fixtures that would otherwise require duplicating Go's state-machine
+logic in TypeScript.
+
+**`smoke-invariants.test.ts` meta-test.**
+
+Three static assertions are enforced by grepping test file contents:
+
+| Assert | Rule |
+| --- | --- |
+| (a) | Every verb in `src/internal/verbs.ts::VERBS` has a `test/smoke/<verb>.test.ts` file. |
+| (b) | Every smoke file imports `withTempHome` and calls it. |
+| (c) | Every smoke file outside the allow-list contains `instanceof Err` or `toBeInstanceOf(Err`. |
+
+Allow-list for (c): `version`, `expire`, `delete`, `find-missing` — verbs whose
+manifests declare no verb-level ErrorNames (errors surface in result maps or are
+untriggerable on Linux).
+
 **CI.** The `.github/workflows/go-smoke.yml` workflow runs `go test -race -count=1 -v ./test/smoke/go/...` on `ubuntu-latest` (linux/amd64) on every pull request and push to `main`. Cross-platform extension to macOS and Windows is Epic 6.
