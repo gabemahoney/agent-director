@@ -1,8 +1,12 @@
 {
+  "// BLOCKED-on-H3": "Operator must claim an npm name; see docs/release-blockers.md",
   "name": "@CHANGEME-H3/agent-director-linux-x64",
   "version": "0.0.0",
   "type": "module",
   "os": ["linux"],
   "cpu": ["x64"],
-  "files": ["libagent_director.so", "README-binary-source.md"]
+  "files": ["libagent_director.so", "README-binary-source.md"],
+  "scripts": {
+    "prepublishOnly": "bun run ../../scripts/check-not-placeholder.ts"
+  }
 }

@@ -535,6 +535,15 @@ The scope `@CHANGEME-H3` is a deliberate placeholder: any accidental `npm publis
 fails on the invalid scope, and `grep` surfaces every site that needs updating
 when the real scope is chosen.
 
+### Release blockers
+
+**H3 (npm package name) is the only current release blocker.** The four
+packages cannot be published until the operator claims a real npm org scope and
+replaces every `@CHANGEME-H3/` occurrence in lockstep. A `prepublishOnly` hook
+in each `package.json` runs `scripts/check-not-placeholder.ts` and aborts any
+accidental publish while the placeholder is still in place. Full resolution
+checklist: [docs/release-blockers.md](release-blockers.md).
+
 ### Package layout
 
 ```

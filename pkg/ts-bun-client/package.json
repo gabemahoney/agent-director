@@ -1,4 +1,5 @@
 {
+  "// BLOCKED-on-H3": "Operator must claim an npm name; see docs/release-blockers.md",
   "name": "@CHANGEME-H3/agent-director",
   "version": "0.0.0",
   "type": "module",
@@ -23,7 +24,8 @@
     "typecheck": "tsc --noEmit --project tsconfig.typecheck.json",
     "test": "bun test",
     "prepare-platforms": "bun run scripts/prepare-platforms.ts",
-    "version-bump-publish": "bun run scripts/version-bump.ts"
+    "version-bump-publish": "bun run scripts/version-bump.ts",
+    "prepublishOnly": "bun run scripts/check-not-placeholder.ts"
   },
   "optionalDependencies": {
     "@CHANGEME-H3/agent-director-linux-x64": "file:./platforms/linux-x64",

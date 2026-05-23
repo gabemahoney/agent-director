@@ -1,0 +1,35 @@
+# Changelog
+
+All notable changes to `@CHANGEME-H3/agent-director` will be documented here.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+
+- Initial TypeScript/Bun client implementation (`pkg/ts-bun-client/`).
+- Bun FFI boundary over `pkg/cabi` C-ABI (`src/ffi.ts`, `src/internal/bindingSpec.ts`).
+- Public `Client` class with full verb surface: `spawn`, `status`, `list`,
+  `stop`, `send`, `read`, `resume`, `hooks` (`src/client.ts`).
+- Typed error hierarchy mirroring the Go catalog (`src/errors.ts`).
+- Platform resolver with optional-dependency sub-packages for linux-x64,
+  darwin-x64, darwin-arm64 (`src/platform.ts`).
+- Off-main-thread worker for FFI calls (`src/worker.ts`).
+- `prepublishOnly` guard (`scripts/check-not-placeholder.ts`) that aborts
+  publish if the package name still contains the `CHANGEME-H3` placeholder.
+- Full bun:test suite (163 tests) covering FFI binding, envelope-diff
+  invariants, error catalog drift, platform resolution, and smoke tests.
+
+### Blocked
+
+**Publish BLOCKED on H3 — see [docs/release-blockers.md](../../docs/release-blockers.md).**
+
+The package scope `@CHANGEME-H3/` is a placeholder pending operator selection
+of a real npm org name (blocker H3). All four packages (`agent-director`,
+`agent-director-linux-x64`, `agent-director-darwin-x64`,
+`agent-director-darwin-arm64`) must be renamed in lockstep when H3 is resolved.
+No npm publish will proceed until H3 is claimed and the names are updated.
+
+[Unreleased]: https://github.com/gabemahoney/agent-director/compare/HEAD...HEAD
