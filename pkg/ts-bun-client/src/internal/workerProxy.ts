@@ -45,6 +45,8 @@ interface WorkerResponse {
 interface PendingEntry {
   resolve: (value: unknown) => void;
   reject: (reason: Error) => void;
+  /** The op (verb) name that originated this dispatch; passed to errorFromEnvelope. */
+  op: string;
 }
 
 // Error envelope shape returned by Go C-ABI on failure.
@@ -95,6 +97,15 @@ function _rejectAll(reason: Error): void {
  */
 function _spawnWorker(): void {
   const worker = new Worker(new URL("./worker.ts", import.meta.url));
+
+  // unref() so this worker thread does not keep the main event loop alive
+  // after all test/application code completes. Bun's default is already
+  // ref:false, but calling unref() explicitly documents the intent and is
+  // required when the worker is spawned from inside another worker thread
+  // (e.g. bun test's per-file isolate) where the nesting rules differ.
+  if (typeof (worker as unknown as { unref?: () => void }).unref === "function") {
+    (worker as unknown as { unref: () => void }).unref();
+  }
 
   _readyPromise = new Promise<void>((resolve, reject) => {
     _readyResolve = resolve;
@@ -147,7 +158,7 @@ function _spawnWorker(): void {
     }
 
     if (isErrorEnvelope(parsed)) {
-      entry.reject(errorFromEnvelope(parsed));
+      entry.reject(errorFromEnvelope(entry.op, parsed.err_name, parsed.err_description));
       return;
     }
 
@@ -229,7 +240,7 @@ export const workerProxy: {
     const paramsJSON = JSON.stringify(params ?? {});
 
     return new Promise<unknown>((resolve, reject) => {
-      _pending.set(id, { resolve, reject });
+      _pending.set(id, { resolve, reject, op });
 
       _worker!.postMessage({ id, op, handle, paramsJSON });
     });

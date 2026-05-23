@@ -2,6 +2,23 @@ import { expandTilde } from "./internal/tilde.js";
 import { callOpen, callClose } from "./internal/bootstrapFfi.js";
 import { ErrClientClosed, errorFromEnvelope } from "./errors.js";
 import type { ClientOptions } from "./types.js";
+import type {
+  SpawnParams, SpawnResult,
+  StatusParams, StatusResult,
+  GetParams, GetResult,
+  SendKeysParams, SendKeysResult,
+  ReadPaneParams, ReadPaneResult,
+  KillParams, KillResult,
+  DecideParams, DecideResult,
+  ResumeParams, ResumeResult,
+  FindMissingParams, FindMissingResult,
+  ExpireParams, ExpireResult,
+  DeleteParams, DeleteResult,
+  MakeTemplateParams, MakeTemplateResult,
+  ListParams, ListResult,
+  PauseParams, PauseResult,
+  VersionParams, VersionResult,
+} from "./types.js";
 import { callVerb } from "./ffi.js";
 
 // Re-export so callers don't need separate imports.
@@ -85,7 +102,7 @@ export class Client {
     const env = JSON.parse(envelopeJSON) as OpenEnvelope;
 
     if (isErrorEnvelope(env)) {
-      throw errorFromEnvelope(env);
+      throw errorFromEnvelope("open", env.err_name, env.err_description);
     }
 
     this._handle = (env as OpenSuccessEnvelope).handle;
@@ -156,121 +173,90 @@ export class Client {
   //
   // The handle is always this._handle! (non-null because _assertOpen() passed).
   // "version" is the only handle-free verb; it passes null as the handle.
-  //
-  // Types: P and R are `Record<string, unknown>` placeholders until T4 lands
-  // proper per-verb Params/Result types. The .d.ts will sharpen in T4.
   // -------------------------------------------------------------------------
 
   /** spawn — launch a tracked Claude Code instance in a new tmux session. */
-  async spawn(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async spawn(params: SpawnParams): Promise<SpawnResult> {
     this._assertOpen();
-    return callVerb<Record<string, unknown>, Record<string, unknown>>(
-      "spawn", this._handle!, params
-    );
+    return callVerb<SpawnParams, SpawnResult>("spawn", this._handle!, params);
   }
 
   /** status — get the current state of a Spawn. */
-  async status(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async status(params: StatusParams): Promise<StatusResult> {
     this._assertOpen();
-    return callVerb<Record<string, unknown>, Record<string, unknown>>(
-      "status", this._handle!, params
-    );
+    return callVerb<StatusParams, StatusResult>("status", this._handle!, params);
   }
 
   /** get — fetch the full Spawn record. */
-  async get(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async get(params: GetParams): Promise<GetResult> {
     this._assertOpen();
-    return callVerb<Record<string, unknown>, Record<string, unknown>>(
-      "get", this._handle!, params
-    );
+    return callVerb<GetParams, GetResult>("get", this._handle!, params);
   }
 
   /** sendKeys — send keystrokes to a Spawn's tmux pane. */
-  async sendKeys(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async sendKeys(params: SendKeysParams): Promise<SendKeysResult> {
     this._assertOpen();
-    return callVerb<Record<string, unknown>, Record<string, unknown>>(
-      "send-keys", this._handle!, params
-    );
+    return callVerb<SendKeysParams, SendKeysResult>("send-keys", this._handle!, params);
   }
 
   /** readPane — read the current contents of a Spawn's tmux pane. */
-  async readPane(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async readPane(params: ReadPaneParams): Promise<ReadPaneResult> {
     this._assertOpen();
-    return callVerb<Record<string, unknown>, Record<string, unknown>>(
-      "read-pane", this._handle!, params
-    );
+    return callVerb<ReadPaneParams, ReadPaneResult>("read-pane", this._handle!, params);
   }
 
   /** kill — terminate a Spawn's tmux session. */
-  async kill(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async kill(params: KillParams): Promise<KillResult> {
     this._assertOpen();
-    return callVerb<Record<string, unknown>, Record<string, unknown>>(
-      "kill", this._handle!, params
-    );
+    return callVerb<KillParams, KillResult>("kill", this._handle!, params);
   }
 
   /** decide — resolve a pending permission request. */
-  async decide(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async decide(params: DecideParams): Promise<DecideResult> {
     this._assertOpen();
-    return callVerb<Record<string, unknown>, Record<string, unknown>>(
-      "decide", this._handle!, params
-    );
+    return callVerb<DecideParams, DecideResult>("decide", this._handle!, params);
   }
 
   /** resume — restart a terminated Spawn via `claude --resume`. */
-  async resume(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async resume(params: ResumeParams): Promise<ResumeResult> {
     this._assertOpen();
-    return callVerb<Record<string, unknown>, Record<string, unknown>>(
-      "resume", this._handle!, params
-    );
+    return callVerb<ResumeParams, ResumeResult>("resume", this._handle!, params);
   }
 
   /** findMissing — reconcile Spawns whose tmux sessions have disappeared. */
-  async findMissing(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async findMissing(params: FindMissingParams): Promise<FindMissingResult> {
     this._assertOpen();
-    return callVerb<Record<string, unknown>, Record<string, unknown>>(
-      "find-missing", this._handle!, params
-    );
+    return callVerb<FindMissingParams, FindMissingResult>("find-missing", this._handle!, params);
   }
 
   /** expire — remove terminal-state rows older than the retention window. */
-  async expire(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async expire(params: ExpireParams): Promise<ExpireResult> {
     this._assertOpen();
-    return callVerb<Record<string, unknown>, Record<string, unknown>>(
-      "expire", this._handle!, params
-    );
+    return callVerb<ExpireParams, ExpireResult>("expire", this._handle!, params);
   }
 
   /** delete — hard-delete Spawn rows by id. */
-  async delete(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async delete(params: DeleteParams): Promise<DeleteResult> {
     this._assertOpen();
-    return callVerb<Record<string, unknown>, Record<string, unknown>>(
-      "delete", this._handle!, params
-    );
+    return callVerb<DeleteParams, DeleteResult>("delete", this._handle!, params);
   }
 
   /** makeTemplate — save a reusable spawn preset. */
-  async makeTemplate(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async makeTemplate(params: MakeTemplateParams): Promise<MakeTemplateResult> {
     this._assertOpen();
-    return callVerb<Record<string, unknown>, Record<string, unknown>>(
-      "make-template", this._handle!, params
-    );
+    return callVerb<MakeTemplateParams, MakeTemplateResult>("make-template", this._handle!, params);
   }
 
   /** list — query Spawns with optional filter params. */
-  async list(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async list(params: ListParams): Promise<ListResult> {
     this._assertOpen();
-    return callVerb<Record<string, unknown>, Record<string, unknown>>(
-      "list", this._handle!, params
-    );
+    return callVerb<ListParams, ListResult>("list", this._handle!, params);
   }
 
   /** pause — politely shut down a waiting Spawn. */
-  async pause(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async pause(params: PauseParams): Promise<PauseResult> {
     this._assertOpen();
-    return callVerb<Record<string, unknown>, Record<string, unknown>>(
-      "pause", this._handle!, params
-    );
+    return callVerb<PauseParams, PauseResult>("pause", this._handle!, params);
   }
 
   /**
@@ -279,11 +265,9 @@ export class Client {
    * This is the only handle-free verb: it passes null instead of the Client
    * handle because the C-ABI ignores any handle field for ad_version.
    */
-  async version(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async version(params: VersionParams): Promise<VersionResult> {
     this._assertOpen();
-    return callVerb<Record<string, unknown>, Record<string, unknown>>(
-      "version", null, params
-    );
+    return callVerb<VersionParams, VersionResult>("version", null, params);
   }
 
   // -------------------------------------------------------------------------

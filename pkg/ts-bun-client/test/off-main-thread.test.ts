@@ -121,7 +121,7 @@ describe("off-main-thread worker dispatch", () => {
         expect(elapsed).toBeLessThan(200);
 
         // Sanity: the version verb returns a "version" field.
-        expect(typeof (result as Record<string, unknown>).version).toBe("string");
+        expect(typeof (result as unknown as Record<string, unknown>).version).toBe("string");
       } finally {
         client?.close();
         removeTmpDir(dir);

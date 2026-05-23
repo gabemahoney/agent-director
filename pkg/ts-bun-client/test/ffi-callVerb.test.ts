@@ -66,7 +66,7 @@ describe("callVerb recipe", () => {
     "(b) dispatch rejecting with AgentDirectorError propagates correctly",
     withDispatch(
       async (_op, _handle, _params) => {
-        throw new AgentDirectorError("ErrUnknownHandle", "unknown handle");
+        throw new AgentDirectorError("spawn", "ErrUnknownHandle", "unknown handle");
       },
       async () => {
         let caught: unknown;
