@@ -19,8 +19,11 @@
 # Exit codes:
 #   0  success
 #   2  pre-flight failure (bad version, dirty tree, missing gh, etc.)
-#   3  build failure
+#   3  build failure (release-binaries, cabi-collection)
 #   4  GitHub release create failure
+#   5  verify-phase failure (go smoke, ts smoke, envelope-diff)
+#   6  publish-phase failure (npm publish, H3 unresolved)
+#   7  tag-phase failure (tag push)
 #
 # Sourcing:
 #   `_RELEASE_SH_SOURCE_ONLY=1 source release.sh` loads the phase
@@ -362,6 +365,83 @@ build_phase() {
 }
 
 # --------------------------------------------------------------------
+# Phase: verify
+# --------------------------------------------------------------------
+
+# host_cabi_platform echoes "linux-amd64" / "darwin-amd64" / "darwin-arm64"
+# matching the host runner architecture. Verify uses it to point
+# AD_CABI_DIR at the per-platform .so/.dylib the TS bindings load.
+host_cabi_platform() {
+    local os arch
+    case "$(uname -s)" in
+        Linux)  os=linux ;;
+        Darwin) os=darwin ;;
+        *) log verify "unsupported host OS: $(uname -s)" >&2; return 1 ;;
+    esac
+    case "$(uname -m)" in
+        x86_64|amd64) arch=amd64 ;;
+        arm64|aarch64) arch=arm64 ;;
+        *) log verify "unsupported host arch: $(uname -m)" >&2; return 1 ;;
+    esac
+    if [[ "$os" == "linux" && "$arch" == "arm64" ]]; then
+        log verify "host is linux/arm64 — no v1 cabi build for this host; smoke + envelope-diff will run against dev-checkout libs" >&2
+        return 1
+    fi
+    echo "${os}-${arch}"
+}
+
+# verify_phase runs:
+#   1. Go smoke    — test/smoke/go (Epic 4)
+#   2. TS smoke    — pkg/ts-bun-client (Epic 5)
+#   3. envelope-diff — Go side + TS side (Epics 3 + 5)
+#
+# Each step that fails halts release with exit code 5 and a clear
+# [verify] FAIL <step> message naming the failed sub-step.
+verify_phase() {
+    local host_plat
+    if host_plat=$(host_cabi_platform); then
+        AD_CABI_DIR="$REPO_ROOT/dist/cabi/$host_plat"
+        export AD_CABI_DIR
+        log verify "AD_CABI_DIR=$AD_CABI_DIR (host cabi platform: $host_plat)"
+    else
+        log verify "no host cabi platform — TS smoke + envelope-diff will fall back to dev-checkout libs" >&2
+    fi
+
+    log verify "step 1/3: go smoke (./test/smoke/go/...)"
+    if ! (cd "$REPO_ROOT" && go test -race -count=1 ./test/smoke/go/...) \
+            > >(while IFS= read -r l; do printf '[verify] %s\n' "$l"; done); then
+        log verify "FAIL go-smoke" >&2
+        exit 5
+    fi
+
+    log verify "step 2/3: ts smoke (pkg/ts-bun-client smoke suite)"
+    if ! (cd "$REPO_ROOT/pkg/ts-bun-client" && bun run smoke) \
+            > >(while IFS= read -r l; do printf '[verify] %s\n' "$l"; done); then
+        log verify "FAIL ts-smoke" >&2
+        exit 5
+    fi
+
+    log verify "step 3/3: envelope-diff (go side + ts side)"
+    # Go side: the envelope-diff suite lives under test/envelope-diff/...
+    # and is exercised via the standard `go test` invocation. We only
+    # need the leaf go tests, not the whole tree.
+    if ! (cd "$REPO_ROOT" && go test -count=1 ./test/envelope-diff/...) \
+            > >(while IFS= read -r l; do printf '[verify] %s\n' "$l"; done); then
+        log verify "FAIL envelope-diff-go" >&2
+        exit 5
+    fi
+    # TS side: the make target wires up agent-director + ts-helper +
+    # fake-tmux preconditions and then runs the TS envelope-diff suite.
+    if ! (cd "$REPO_ROOT" && make envelope-diff-ts) \
+            > >(while IFS= read -r l; do printf '[verify] %s\n' "$l"; done); then
+        log verify "FAIL envelope-diff-ts" >&2
+        exit 5
+    fi
+
+    log verify "OK"
+}
+
+# --------------------------------------------------------------------
 # Tag + push (still inline; refactored to phase function in later tasks)
 # --------------------------------------------------------------------
 
@@ -409,6 +489,7 @@ main() {
     preflight_phase
     notes_phase
     build_phase
+    verify_phase
 
     if [[ "$DRY_RUN" -eq 1 ]]; then
         log dry-run "skipping tag, publish, and gh-release create"
