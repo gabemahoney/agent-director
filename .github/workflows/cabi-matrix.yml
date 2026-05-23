@@ -381,7 +381,10 @@ jobs:
           AGENT_DIRECTOR_FAKE_TMUX_DIR: ${{ github.workspace }}/test/fake-tmux
         run: |
           set -euo pipefail
-          go test -count=1 ./test/envelope-diff/...
+          # See the smoke-test step for the LC_UUID/darwin-Sequoia rationale.
+          # External linker requires cgo; CGO_ENABLED=1 is the default on
+          # darwin/arm64 and linux/amd64.
+          go test -count=1 -ldflags='-linkmode=external' ./test/envelope-diff/...
 
       # ---------------------------------------------------------------
       # Run TS-side envelope-diff regression (Epic 5 deliverable)
