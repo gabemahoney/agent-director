@@ -193,10 +193,14 @@ jobs:
         if: matrix.name == 'darwin-arm64'
         run: |
           set -euo pipefail
-          if command -v xcodebuild >/dev/null 2>&1; then
+          # `command -v xcodebuild` is misleading on macOS: /usr/bin/xcodebuild
+          # is always present as a stub, but it errors out unless a full Xcode.app
+          # is selected as the developer dir (CLT-only machines fail). Invoke it
+          # and fall back to clang --version on stub-failure.
+          if xcodebuild -version >/dev/null 2>&1; then
             xcodebuild -version | tee build-info-xcode.txt
           else
-            echo "xcodebuild not present (CLT only); recording clang --version instead" \
+            echo "xcodebuild not runnable (CLT-only or no Xcode.app selected); recording clang --version instead" \
               | tee build-info-xcode.txt
           fi
           echo "---" | tee -a build-info-xcode.txt
