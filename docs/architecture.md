@@ -1734,10 +1734,23 @@ first failing phase:
    per-platform optional dependency packages. Halts at this step
    with a clear "H3 unresolved" error if the npm name is still the
    `@CHANGEME-H3/agent-director` placeholder.
-7. **gh-release** — `gh release create $VERSION` with the four CLI
-   binaries, the three platform `.so`/`.dylib` files, and the
-   canonical header as attached assets; release notes embedded via
-   `--notes-file`.
+7. **gh-release** — `gh release create $VERSION` with exactly
+   **8 attached assets**:
+   - 4 CLI binaries: `agent-director-linux-amd64`,
+     `agent-director-linux-arm64`, `agent-director-darwin-amd64`,
+     `agent-director-darwin-arm64` (the four-binary set is preserved
+     per SRD SR-9; the v1 three-platform restriction applies only to
+     cabi artifacts, not CLI binaries).
+   - 3 pkg/cabi shared libraries: `dist/cabi/linux-amd64/libagent_director.so`,
+     `dist/cabi/darwin-amd64/libagent_director.dylib`,
+     `dist/cabi/darwin-arm64/libagent_director.dylib`.
+   - 1 canonical C header: `dist/cabi/include/libagent_director.h`
+     (the header is platform-independent; the canonical copy is
+     staged at this stable path by `collect_cabi_artifacts()` in the
+     build phase).
+
+   Release notes are embedded via `--notes-file` (not an attached
+   asset).
 
 The script DEFAULTS to `--dry-run`. Live runs require `--release`.
 In dry-run mode the script executes phases 1-4 fully, runs the

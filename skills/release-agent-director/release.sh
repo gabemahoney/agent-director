@@ -685,33 +685,61 @@ publish_phase() {
 }
 
 # --------------------------------------------------------------------
-# GH release (still inline; refactored to phase function in later tasks)
+# Phase: gh-release
 # --------------------------------------------------------------------
 
-ghrelease_phase() {
-    local binaries=(
+# release_assets builds the canonical asset list:
+#   4 CLI binaries (preserved per SR-9 — independent of cabi platform set)
+#   3 cabi shared libraries (.so/.dylib — one per v1 cabi platform)
+#   1 platform-independent C header (canonical copy from T1)
+#
+# Returns assets via the global RELEASE_ASSETS array so callers can
+# iterate. Exits the script with code 4 if any expected asset is
+# missing on disk.
+release_assets() {
+    RELEASE_ASSETS=(
         "$REPO_ROOT/dist/agent-director-linux-amd64"
         "$REPO_ROOT/dist/agent-director-linux-arm64"
         "$REPO_ROOT/dist/agent-director-darwin-amd64"
         "$REPO_ROOT/dist/agent-director-darwin-arm64"
+        "$REPO_ROOT/dist/cabi/linux-amd64/libagent_director.so"
+        "$REPO_ROOT/dist/cabi/darwin-amd64/libagent_director.dylib"
+        "$REPO_ROOT/dist/cabi/darwin-arm64/libagent_director.dylib"
+        "$REPO_ROOT/dist/cabi/include/libagent_director.h"
     )
-    local b
-    for b in "${binaries[@]}"; do
-        if [[ ! -x "$b" ]]; then
-            log gh-release "missing binary $b — run make release-binaries first" >&2
-            exit 3
+    local a
+    for a in "${RELEASE_ASSETS[@]}"; do
+        if [[ ! -f "$a" ]]; then
+            log gh-release "missing asset $a — was build_phase + collect_cabi_artifacts run?" >&2
+            exit 4
         fi
     done
+}
 
-    log gh-release "creating GitHub release $VERSION"
-    if ! gh release create "$VERSION" "${binaries[@]}" \
+ghrelease_phase() {
+    release_assets
+
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        log gh-release "(dry-run) would attach ${#RELEASE_ASSETS[@]} assets:"
+        local a
+        for a in "${RELEASE_ASSETS[@]}"; do
+            log gh-release "  $(basename "$a") ($(printf '%s' "$a" | sed "s|$REPO_ROOT/||"))"
+        done
+        log gh-release "(dry-run) would run: gh release create $VERSION --title $VERSION --notes-file $NOTES_FILE <assets>"
+        return 0
+    fi
+
+    log gh-release "creating GitHub release $VERSION with ${#RELEASE_ASSETS[@]} assets"
+    if ! gh release create "$VERSION" "${RELEASE_ASSETS[@]}" \
             --title "$VERSION" \
             --notes-file "$NOTES_FILE"; then
-        log gh-release "gh release create failed" >&2
-        log gh-release "the tag $VERSION is still pushed; re-run after fixing the underlying issue" >&2
-        log gh-release "OR delete the tag with: git push --delete origin $VERSION && git tag -d $VERSION" >&2
+        log gh-release "FAIL gh release create" >&2
+        log gh-release "the tag $VERSION is pushed AND the npm packages are published" >&2
+        log gh-release "do NOT increment version — re-run 'gh release create' manually with the assets in ./dist/" >&2
+        log gh-release "  gh release create $VERSION ${RELEASE_ASSETS[*]} --title $VERSION --notes-file $NOTES_FILE" >&2
         exit 4
     fi
+    log gh-release "OK — $VERSION published with ${#RELEASE_ASSETS[@]} assets"
 }
 
 # --------------------------------------------------------------------
