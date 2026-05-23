@@ -442,13 +442,47 @@ verify_phase() {
 }
 
 # --------------------------------------------------------------------
-# Tag + push (still inline; refactored to phase function in later tasks)
+# Phase: tag
 # --------------------------------------------------------------------
 
+# tag_phase pushes the agent-director release tag. The Go module at
+# pkg/api/ is in-repo and shares the same go.mod as the root (no
+# separate pkg/api/go.mod). Module resolution therefore relies on the
+# single root tag — `go list -m github.com/gabemahoney/agent-director/
+# pkg/api@$VERSION` resolves via the root tag. If pkg/api/ is ever
+# split into its own module, this phase must additionally push a
+# sub-path tag (pkg/api/$VERSION) to satisfy Go's module tag protocol;
+# the conditional below detects that case automatically.
 tag_phase() {
-    log tag "tagging $VERSION on $BRANCH"
-    git tag -a "$VERSION" -m "Release $VERSION"
-    git push origin "$VERSION"
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        log tag "(dry-run) would push $VERSION"
+        if [[ -f "$REPO_ROOT/pkg/api/go.mod" ]]; then
+            log tag "(dry-run) would also push pkg/api/$VERSION (separate Go module detected)"
+        fi
+        return 0
+    fi
+    log tag "pushing $VERSION"
+    if ! git tag -a "$VERSION" -m "Release $VERSION"; then
+        log tag "git tag failed" >&2
+        exit 7
+    fi
+    if ! git push origin "$VERSION"; then
+        log tag "git push of $VERSION failed" >&2
+        exit 7
+    fi
+    if [[ -f "$REPO_ROOT/pkg/api/go.mod" ]]; then
+        local submod_tag="pkg/api/$VERSION"
+        log tag "pkg/api has separate go.mod — also pushing $submod_tag"
+        if ! git tag -a "$submod_tag" -m "Release $submod_tag"; then
+            log tag "git tag $submod_tag failed" >&2
+            exit 7
+        fi
+        if ! git push origin "$submod_tag"; then
+            log tag "git push of $submod_tag failed" >&2
+            exit 7
+        fi
+    fi
+    log tag "pushed $VERSION"
 }
 
 # --------------------------------------------------------------------
@@ -490,9 +524,10 @@ main() {
     notes_phase
     build_phase
     verify_phase
+    tag_phase
 
     if [[ "$DRY_RUN" -eq 1 ]]; then
-        log dry-run "skipping tag, publish, and gh-release create"
+        log dry-run "skipping publish and gh-release create"
         echo "------ release notes preview ------"
         cat "$NOTES_FILE"
         echo "------ end preview ------"
@@ -500,7 +535,6 @@ main() {
         exit 0
     fi
 
-    tag_phase
     ghrelease_phase
     log release "done — $VERSION published"
 }

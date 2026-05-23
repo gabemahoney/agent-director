@@ -1699,22 +1699,60 @@ toward a release happens on a branch; the tag lands once.
 ### The release skill
 
 `skills/release-agent-director/release.sh` automates the workflow
-documented in `skills/release-agent-director/SKILL.md`. Behavior:
+documented in `skills/release-agent-director/SKILL.md`. The script
+is organized as a phased pipeline; phases are ordered
+most-reversible to least-reversible and the script halts on the
+first failing phase:
 
-1. Validate the semver tag.
-2. Verify `gh` (GitHub CLI) is authenticated.
-3. Confirm the working tree is clean (no uncommitted edits).
-4. Confirm the tag doesn't already exist.
-5. Confirm the current branch matches `--branch` (default `main`).
-6. `git tag -a $VERSION -m "$VERSION" && git push origin $VERSION`.
-7. `make release-binaries` — cross-compiles the four targets.
-8. Template release notes from `git log <prev-tag>..HEAD`,
-   grouped by Epic ID where commit messages reference one.
-9. `gh release create $VERSION dist/* --notes-file <generated>`.
+1. **pre-flight** — validate semver, verify `gh` is on PATH (live
+   runs only), confirm the working tree is clean, confirm the tag
+   does not already exist, confirm the current branch matches
+   `--branch` (default `main`).
+2. **notes** — template `dist/release-notes.md` from
+   `git log <prev-tag>..HEAD`, grouped by Epic ID where commit
+   messages reference one.
+3. **build** — `make release-binaries` cross-compiles the four CLI
+   targets into `dist/`. `collect_cabi_artifacts()` then locates the
+   green `cabi-matrix.yml` workflow run for the release commit and
+   downloads `pkg-cabi-<platform>` artifacts (`.so`/`.dylib` plus
+   the C header) into `dist/cabi/<platform>/` for the three v1
+   cabi platforms (linux/amd64, darwin/amd64, darwin/arm64). One
+   canonical header is staged at `dist/cabi/include/libagent_director.h`
+   for the gh-release phase to attach.
+4. **verify** — Go smoke (`test/smoke/go/...`), TS smoke
+   (`pkg/ts-bun-client`), and Go + TS envelope-diff. Each sub-step
+   failure halts the release with exit code 5. `AD_CABI_DIR` is
+   exported so the TS suite loads the just-built `dist/cabi/`
+   library, not a dev-checkout build.
+5. **tag** — `git tag -a $VERSION -m "Release $VERSION" && git push
+   origin $VERSION`. **Point of no return.** The Go module
+   resolution relies on the single root tag because `pkg/api/`
+   shares the root `go.mod`; if `pkg/api/go.mod` is ever added the
+   script also pushes the `pkg/api/$VERSION` sub-path tag that Go's
+   module protocol requires.
+6. **publish** — npm publish for the umbrella package and the three
+   per-platform optional dependency packages. Halts at this step
+   with a clear "H3 unresolved" error if the npm name is still the
+   `@CHANGEME-H3/agent-director` placeholder.
+7. **gh-release** — `gh release create $VERSION` with the four CLI
+   binaries, the three platform `.so`/`.dylib` files, and the
+   canonical header as attached assets; release notes embedded via
+   `--notes-file`.
 
-`--dry-run` skips steps 6-9 and prints the templated notes. Used
-for CI smoke tests and pre-tag reviews. The dry-run path also
-relaxes the `gh` requirement since it never actually calls `gh`.
+The script DEFAULTS to `--dry-run`. Live runs require `--release`.
+In dry-run mode the script executes phases 1-4 fully, runs the
+tag-phase in "would-push" preview mode, and exits before any
+irreversible step.
+
+#### Go module tagging convention
+
+The `pkg/api` Go module is in-repo and shares the root `go.mod` —
+no separate `pkg/api/go.mod` exists. Consumers resolve
+`github.com/gabemahoney/agent-director/pkg/api@$VERSION` via the
+single root tag. If the package is ever split into its own module
+the release script must additionally push `pkg/api/$VERSION` (the
+sub-path tag Go's module protocol requires); `tag_phase` already
+detects this case via `[[ -f pkg/api/go.mod ]]`.
 
 ### ErrSchemaMismatch on upgrade
 
