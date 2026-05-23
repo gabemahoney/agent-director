@@ -605,6 +605,19 @@ build_phase() {
     phase_begin build
     if [[ "$NO_BUILD" -eq 1 ]]; then
         log build "--no-build set — assuming ./dist/ is already populated"
+        # Even with --no-build, cabi collection still runs unless the
+        # caller ALSO set AD_RELEASE_SKIP_CABI=1. This decouples the
+        # two escape hatches so the Docker testplan can exercise the
+        # cabi-collection halt paths (matrix-red, darwin/arm64 offline)
+        # without paying the local `make release-binaries` cost.
+        if [[ "${AD_RELEASE_SKIP_CABI:-0}" -ne 1 ]]; then
+            log build "running collect_cabi_artifacts (cabi collection still active under --no-build)"
+            if ! collect_cabi_artifacts; then
+                phase_fail build "collect_cabi_artifacts failed"
+                exit 3
+            fi
+        fi
+        log build "OK"
         phase_ok build
         return 0
     fi
