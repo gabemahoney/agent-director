@@ -1,20 +1,43 @@
 #!/usr/bin/env bash
 # release.sh — cut an agent-director release.
 #
-# Phased pipeline:
+# Phased pipeline (ordered most-reversible → least-reversible):
 #
-#   pre-flight → notes → build → verify → tag → publish → gh-release → report
+#   preflight → notes → build → verify → tag → publish → gh-release → report
 #
-# Each phase is a function; phases are ordered most-reversible to
-# least-reversible. The script halts on the first failing phase and
-# the report phase prints which phases succeeded.
+# Each phase is a function. The script halts on the first failing phase
+# and the report phase prints which phases succeeded + a corrective
+# action for the failure.
 #
 # Usage:
 #   VERSION=v0.1.0 ./release.sh [--dry-run|--release] [--branch main] [--no-build]
 #   ./release.sh v0.1.0 [--dry-run|--release] [--branch main] [--no-build]
 #
-# The script DEFAULTS to --dry-run. Pass --release to actually push tags,
-# publish to npm, and create the GitHub release.
+# The script DEFAULTS to --dry-run. Pass --release to enable irreversible
+# steps (git push --tags, npm publish, gh release create).
+#
+# What --dry-run does:
+#   - preflight, notes, build, verify    → run REAL
+#   - tag                                → logs "(dry-run) would push $VERSION"; no git push
+#   - publish                            → uses `npm publish --dry-run --ignore-scripts` per package;
+#                                          skips the `npm view` duplicate check (no network)
+#   - gh-release                         → logs the asset list it would attach; no `gh release create`
+#   - report                             → runs REAL (summary, corrective actions)
+#
+# What --release does:
+#   - Same phases, but tag actually pushes, publish actually invokes
+#     `npm publish`, gh-release actually invokes `gh release create`.
+#   - Requires NPM_TOKEN in the environment.
+#   - Requires the npm package name to be resolved (no CHANGEME-H3 placeholder).
+#   - Requires `gh` authenticated and on PATH.
+#
+# Environment escape hatches (for local rehearsal / Docker testplan):
+#   AD_RELEASE_SKIP_CABI=1   skip `gh run download` of pkg-cabi-* artifacts
+#                            (useful when no green cabi-matrix run exists,
+#                            e.g. running release.sh on a feature branch)
+#   AD_RELEASE_SIMULATE_DARWIN_ARM64_OFFLINE=1
+#                            simulate the darwin/arm64 self-hosted runner
+#                            being offline (covered by T9)
 #
 # Exit codes:
 #   0  success
@@ -106,9 +129,36 @@ cleanup_npmrc_if_any() {
     fi
 }
 
+# restore_pkg_jsons_if_dryrun rolls back the in-place mutations the
+# publish phase makes to package.json files when running in dry-run.
+# Live runs intentionally leave the mutations in place — the rewritten
+# versions are part of the published artifacts. Dry-run must leave the
+# workspace clean so the script can be re-run without a pre-flight
+# "working tree is dirty" failure.
+restore_pkg_jsons_if_dryrun() {
+    if [[ "${DRY_RUN:-1}" -ne 1 ]]; then
+        return 0
+    fi
+    if [[ -z "${REPO_ROOT:-}" ]]; then
+        return 0
+    fi
+    local f
+    for f in \
+        pkg/ts-bun-client/package.json \
+        pkg/ts-bun-client/platforms/linux-x64/package.json \
+        pkg/ts-bun-client/platforms/darwin-x64/package.json \
+        pkg/ts-bun-client/platforms/darwin-arm64/package.json; do
+        if [[ -f "$REPO_ROOT/$f" ]] && git -C "$REPO_ROOT" diff --quiet -- "$f" 2>/dev/null; then
+            continue
+        fi
+        git -C "$REPO_ROOT" checkout -- "$f" >/dev/null 2>&1 || true
+    done
+}
+
 report_phase() {
     local rc=$?
     cleanup_npmrc_if_any
+    restore_pkg_jsons_if_dryrun
     log report "==== release summary for $VERSION ===="
 
     # If we died mid-phase the current-phase didn't append its own
@@ -756,7 +806,9 @@ publish_phase() {
         pkg_dir="$pkg_root/platforms/$plat_subdir"
         pkg_full_name=$(grep -E '^[[:space:]]*"name":' "$pkg_dir/package.json" | head -n 1 | sed -E 's/.*"name":[[:space:]]*"([^"]+)".*/\1/')
         log publish "publishing $pkg_full_name@$plain_version"
-        if command -v npm >/dev/null 2>&1; then
+        # npm view is a live registry lookup; skip in dry-run so the
+        # script does not need network access during local rehearsal.
+        if [[ "$DRY_RUN" -eq 0 ]] && command -v npm >/dev/null 2>&1; then
             view_out=$(cd "$pkg_dir" && npm view "${pkg_full_name}@${plain_version}" version 2>/dev/null || true)
             if [[ -n "$view_out" ]]; then
                 log publish "$pkg_full_name@$plain_version is already published" >&2
@@ -766,7 +818,12 @@ publish_phase() {
         fi
         if [[ "$DRY_RUN" -eq 1 ]]; then
             if command -v npm >/dev/null 2>&1; then
-                if ! (cd "$pkg_dir" && npm publish --dry-run) \
+                # --ignore-scripts skips prepublishOnly. The per-package
+                # check-not-placeholder.ts guard is redundant during dry-run
+                # because publish_phase already executed the H3 check
+                # explicitly above; running it again here would always fail
+                # while H3 is unresolved and break the dry-run pipeline.
+                if ! (cd "$pkg_dir" && npm publish --dry-run --ignore-scripts) \
                         > >(while IFS= read -r l; do printf '[publish] %s\n' "$l"; done); then
                     log publish "FAIL $pkg_full_name (dry-run validation)" >&2
                     exit 6
@@ -787,7 +844,7 @@ publish_phase() {
     # Umbrella package last.
     pkg_full_name=$(grep -E '^[[:space:]]*"name":' "$pkg_json" | head -n 1 | sed -E 's/.*"name":[[:space:]]*"([^"]+)".*/\1/')
     log publish "publishing umbrella $pkg_full_name@$plain_version"
-    if command -v npm >/dev/null 2>&1; then
+    if [[ "$DRY_RUN" -eq 0 ]] && command -v npm >/dev/null 2>&1; then
         view_out=$(cd "$pkg_root" && npm view "${pkg_full_name}@${plain_version}" version 2>/dev/null || true)
         if [[ -n "$view_out" ]]; then
             log publish "$pkg_full_name@$plain_version is already published" >&2
@@ -797,7 +854,7 @@ publish_phase() {
     fi
     if [[ "$DRY_RUN" -eq 1 ]]; then
         if command -v npm >/dev/null 2>&1; then
-            if ! (cd "$pkg_root" && npm publish --dry-run) \
+            if ! (cd "$pkg_root" && npm publish --dry-run --ignore-scripts) \
                     > >(while IFS= read -r l; do printf '[publish] %s\n' "$l"; done); then
                 log publish "FAIL $pkg_full_name (dry-run validation)" >&2
                 exit 6
@@ -842,13 +899,24 @@ release_assets() {
         "$REPO_ROOT/dist/cabi/darwin-arm64/libagent_director.dylib"
         "$REPO_ROOT/dist/cabi/include/libagent_director.h"
     )
-    local a
+    local a missing=0
     for a in "${RELEASE_ASSETS[@]}"; do
         if [[ ! -f "$a" ]]; then
-            log gh-release "missing asset $a — was build_phase + collect_cabi_artifacts run?" >&2
-            exit 4
+            # Dry-run can legitimately reach gh-release without every
+            # artifact present (e.g. --no-build or AD_RELEASE_SKIP_CABI).
+            # Live runs treat any missing asset as fatal.
+            if [[ "$DRY_RUN" -eq 1 ]]; then
+                log gh-release "(dry-run) missing asset $a — would be required in live run"
+                missing=$((missing + 1))
+            else
+                log gh-release "missing asset $a — was build_phase + collect_cabi_artifacts run?" >&2
+                exit 4
+            fi
         fi
     done
+    if [[ "$DRY_RUN" -eq 1 && $missing -gt 0 ]]; then
+        log gh-release "(dry-run) $missing of ${#RELEASE_ASSETS[@]} assets absent; live runs require all present"
+    fi
 }
 
 ghrelease_phase() {
@@ -892,18 +960,15 @@ main() {
     verify_phase
     tag_phase
     publish_phase
+    ghrelease_phase
 
     if [[ "$DRY_RUN" -eq 1 ]]; then
-        log dry-run "skipping gh-release create"
         echo "------ release notes preview ------"
         cat "$NOTES_FILE"
         echo "------ end preview ------"
-        log dry-run "OK"
-        exit 0
+    else
+        log release "done — $VERSION published"
     fi
-
-    ghrelease_phase
-    log release "done — $VERSION published"
 }
 
 # Allow tests to source this file without running main.
