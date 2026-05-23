@@ -336,7 +336,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          go test -race -count=1 -v ./test/smoke/go/...
+          # -linkmode=external forces the external linker (clang/ld) for the
+          # test binary. Go 1.22's internal linker can emit Mach-O binaries
+          # without LC_UUID on darwin/arm64, which macOS Sequoia 15+ dyld
+          # rejects with `dyld: missing LC_UUID load command`. The external
+          # linker always emits LC_UUID. Safe + ~free on linux too.
+          go test -race -count=1 -v -ldflags='-linkmode=external' ./test/smoke/go/...
 
       # ---------------------------------------------------------------
       # Run TS/Bun smoke test (Epic 5 deliverable)
