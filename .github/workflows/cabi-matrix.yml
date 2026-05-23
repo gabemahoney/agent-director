@@ -1,0 +1,82 @@
+# cabi-matrix: cross-platform build + smoke + envelope-diff for pkg/cabi.
+#
+# Owns Epic 6 of bee b.qe2. Three v1 legs:
+#
+#   linux-amd64   → GitHub-hosted ubuntu-22.04 (pinned, never *-latest)
+#   darwin-amd64  → GitHub-hosted macos-13     (pinned, never *-latest)
+#   darwin-arm64  → operator-owned self-hosted runner registered with the
+#                   full label tuple [self-hosted, macOS, ARM64, darwin-arm64].
+#                   Bare `self-hosted` is intentionally NOT used so the
+#                   workflow cannot accidentally route to a different
+#                   self-hosted runner if one is added later. See
+#                   docs/self-hosted-runner-setup.md for the runbook.
+#
+# linux/arm64 is deferred to v2 for pkg/cabi per the Epic body. The CLI
+# binary set keeps linux/arm64 — that is Epic 7's release script, not this
+# matrix.
+#
+# Coexistence: this workflow does NOT modify doc-drift.yml, go-smoke.yml,
+# or integration.yml. Those three continue to enforce the linux/amd64-only
+# gates they owned before this Epic.
+#
+# Local actionlint
+# ----------------
+#   go install github.com/rhysd/actionlint/cmd/actionlint@v1.6.27
+#   actionlint .github/workflows/cabi-matrix.yml
+
+name: cabi-matrix
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Workflow-level concurrency. Cancels superseded PR runs so two stacked
+# commits do not queue two darwin/arm64 jobs on the single self-hosted
+# machine. Per-SHA (job-level) groups still let each distinct main-branch
+# commit queue its own job; queue bounding on the physical machine is
+# enforced operator-side via the runner's job-concurrency settings (see
+# docs/self-hosted-runner-setup.md Operations section).
+concurrency:
+  group: cabi-matrix-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least-privilege GITHUB_TOKEN: this workflow only reads the repo and
+# uploads artifacts via actions/upload-artifact (which uses an ephemeral
+# token scoped by GitHub). No PR comments, no commits, no release writes.
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 30
+    strategy:
+      # fail-fast: false so one leg's failure does not cancel observation
+      # of the others. Cross-platform regressions frequently land on only
+      # one leg and we want all three reports on every commit.
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-amd64
+            runs-on: ubuntu-22.04
+            lib_ext: so
+            lib_name: libagent_director.so
+          - name: darwin-amd64
+            runs-on: macos-13
+            lib_ext: dylib
+            lib_name: libagent_director.dylib
+          - name: darwin-arm64
+            # Full conjunctive label tuple. GitHub matches all labels
+            # together; spelling out `darwin-arm64` ensures the workflow
+            # cannot accidentally route to a different self-hosted runner.
+            runs-on: [self-hosted, macOS, ARM64, darwin-arm64]
+            lib_ext: dylib
+            lib_name: libagent_director.dylib
+    steps:
+      # T1 skeleton placeholder. Real build/smoke/envelope-diff steps land
+      # in T3 (per-leg build steps) and T4 (darwin/arm64 specifics).
+      - name: Identify leg
+        run: |
+          echo "leg=${{ matrix.name }} runs-on=${{ matrix.runs-on }} lib=${{ matrix.lib_name }}"
