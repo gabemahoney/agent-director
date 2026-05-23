@@ -93,6 +93,16 @@ jobs:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 30
+    # Skip the GitHub-hosted darwin-amd64 leg on pull_request events to
+    # save the 10x macOS billing multiplier on private-repo Actions
+    # minutes. The leg still runs on pushes to main and via
+    # workflow_dispatch, so release branches and tagged releases are
+    # fully validated. linux-amd64 + self-hosted darwin/arm64 cover the
+    # cross-platform regression surface for PR review.
+    if: >-
+      matrix.name != 'darwin-amd64'
+      || github.event_name == 'push'
+      || github.event_name == 'workflow_dispatch'
     # Job-level concurrency keyed on (leg, commit SHA). Workflow-level
     # concurrency above is keyed on github.ref + cancel-in-progress so
     # intra-PR pushes cancel prior runs as a whole. The per-leg
