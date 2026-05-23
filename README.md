@@ -13,6 +13,10 @@ SQLite file; everything else is tmux.
 - A **Go library** (`github.com/gabemahoney/agent-director/pkg/api`) —
   typed client for all verbs, no subprocess or network hop. See
   [`pkg/api/README.md`](pkg/api/README.md).
+- A **TypeScript/Bun client** (`@CHANGEME-H3/agent-director`) — FFI-backed,
+  same API surface as the Go library, zero subprocess or network hop. See
+  [`pkg/ts-bun-client/README.md`](pkg/ts-bun-client/README.md).
+  ⚠️ Publish blocked on H3 (npm scope name claim pending).
 - A **permission relay** (`relay_mode=on` + `decide`) so an orchestrator
   can intercept `PreToolUse` permission prompts and answer
   allow/deny out-of-band.
