@@ -93,6 +93,20 @@ jobs:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 30
+    # Job-level concurrency keyed on (leg, commit SHA). Workflow-level
+    # concurrency above is keyed on github.ref + cancel-in-progress so
+    # intra-PR pushes cancel prior runs as a whole. The per-leg
+    # per-SHA group here bounds the queue on the single self-hosted
+    # darwin/arm64 machine without cancelling distinct main-branch
+    # commits: two pushes to the same SHA (rare; only manual
+    # workflow_dispatch reruns) coalesce; distinct SHAs each run once.
+    # cancel-in-progress is intentionally false here so a long-running
+    # darwin/arm64 job is never cancelled by a sibling leg failing
+    # fast — fail-fast: false already covers that case at the strategy
+    # level, but this is the second guard.
+    concurrency:
+      group: cabi-matrix-${{ matrix.name }}-${{ github.sha }}
+      cancel-in-progress: false
     strategy:
       # fail-fast: false so one leg's failure does not cancel observation
       # of the others. Cross-platform regressions frequently land on only
@@ -226,6 +240,36 @@ jobs:
           ls -la dist/
 
       # ---------------------------------------------------------------
+      # darwin/arm64-only: verify the dylib is genuinely arm64-native
+      # ---------------------------------------------------------------
+      #
+      # Defends against an accidental x86_64 build slipping through on
+      # the self-hosted Mac — for example, if the operator's Go install
+      # is somehow set up to target amd64 instead of the host arch.
+      # `file` and `lipo -info` are the canonical Mach-O arch inspectors;
+      # we capture both into build-info-arch.txt (uploaded as part of
+      # the artifact) AND fail the step if either does not mention
+      # `arm64`. Subtask wt verifies on a test branch that perturbing
+      # the build to produce a non-arm64 dylib trips this guard.
+      - name: Verify arm64-native dylib (darwin-arm64)
+        if: matrix.name == 'darwin-arm64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          lib="dist/${{ matrix.lib_name }}"
+          file "$lib"           | tee build-info-arch.txt
+          echo "---"            | tee -a build-info-arch.txt
+          lipo -info "$lib"     | tee -a build-info-arch.txt
+          if ! file "$lib" | grep -q "arm64"; then
+            echo "::error::file did not report arm64 for $lib (got: $(file "$lib"))"
+            exit 1
+          fi
+          if ! lipo -info "$lib" | grep -q "arm64"; then
+            echo "::error::lipo -info did not report arm64 for $lib"
+            exit 1
+          fi
+
+      # ---------------------------------------------------------------
       # Build agent-director CLI binary
       # ---------------------------------------------------------------
       #
@@ -344,12 +388,16 @@ jobs:
       # Upload per-leg artifact
       # ---------------------------------------------------------------
       #
-      # Bundles the native lib, the generated C header, and any
-      # build-info-*.txt capture files from the toolchain-pin step into
-      # one named artifact per leg so Epic 7's release pipeline can
-      # collect them. Retention is 7 days — enough for the release
-      # pipeline to fetch on a green main commit; release artifacts
-      # themselves are produced by Epic 7's separate workflow.
+      # Bundles the native lib, the generated C header, and the
+      # build-info-*.txt capture files (gcc on linux-amd64; xcode on
+      # both darwin legs; arch on darwin-arm64) into one named
+      # artifact per leg so Epic 7's release pipeline can collect
+      # them. The `build-info-*.txt` glob is sufficient by itself —
+      # `build-info-arch.txt` is named explicitly below for
+      # documentary clarity per subtask fv.7k. Retention is 7 days —
+      # enough for the release pipeline to fetch on a green main
+      # commit; release artifacts themselves are produced by Epic 7's
+      # separate workflow.
       - name: Upload pkg/cabi artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
@@ -358,5 +406,6 @@ jobs:
             dist/${{ matrix.lib_name }}
             dist/libagent_director.h
             build-info-*.txt
+            build-info-arch.txt
           if-no-files-found: error
           retention-days: 7
