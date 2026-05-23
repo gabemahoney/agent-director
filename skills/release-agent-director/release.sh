@@ -486,6 +486,205 @@ tag_phase() {
 }
 
 # --------------------------------------------------------------------
+# Phase: publish (npm)
+# --------------------------------------------------------------------
+
+# Maps cabi-matrix platform names to npm sub-package directory names
+# (the optional-dependencies live under pkg/ts-bun-client/platforms/<dir>/).
+# The cabi-matrix names use `amd64` while npm convention uses `x64`.
+npm_subdir_for_platform() {
+    case "$1" in
+        linux-amd64)   echo "linux-x64" ;;
+        darwin-amd64)  echo "darwin-x64" ;;
+        darwin-arm64)  echo "darwin-arm64" ;;
+        *) log publish "unknown cabi platform: $1" >&2; return 1 ;;
+    esac
+}
+
+# stage_cabi_into_platforms copies the downloaded dist/cabi/<platform>/
+# libagent_director.{so,dylib} into the corresponding
+# pkg/ts-bun-client/platforms/<npm-subdir>/ directory so `npm publish`
+# picks it up. The cabi header is not part of the npm packages — only
+# the binary plus the existing README-binary-source.md.
+stage_cabi_into_platforms() {
+    local platform npm_subdir src_lib dest_dir lib_name
+    for platform in "${CABI_PLATFORMS[@]}"; do
+        npm_subdir=$(npm_subdir_for_platform "$platform") || return 1
+        lib_name=$(cabi_lib_basename "$platform") || return 1
+        src_lib="$REPO_ROOT/dist/cabi/$platform/$lib_name"
+        dest_dir="$REPO_ROOT/pkg/ts-bun-client/platforms/$npm_subdir"
+        if [[ ! -f "$src_lib" ]]; then
+            if [[ "${AD_RELEASE_SKIP_CABI:-0}" -eq 1 || "$NO_BUILD" -eq 1 ]]; then
+                log publish "(staging) missing $src_lib — skipping under AD_RELEASE_SKIP_CABI/--no-build"
+                continue
+            fi
+            log publish "missing cabi artifact $src_lib — was build phase run?" >&2
+            return 1
+        fi
+        log publish "staging $src_lib → $dest_dir/$lib_name"
+        cp "$src_lib" "$dest_dir/$lib_name"
+    done
+}
+
+publish_phase() {
+    local plain_version="${VERSION#v}"
+
+    # Read the umbrella package name once. Used to drive both the H3
+    # placeholder check and the optional-deps prefix.
+    local pkg_root="$REPO_ROOT/pkg/ts-bun-client"
+    local pkg_json="$pkg_root/package.json"
+    if [[ ! -f "$pkg_json" ]]; then
+        log publish "missing $pkg_json — TS package layout invariant violated" >&2
+        exit 6
+    fi
+    local pkg_name
+    pkg_name=$(grep -E '^[[:space:]]*"name":' "$pkg_json" | head -n 1 | sed -E 's/.*"name":[[:space:]]*"([^"]+)".*/\1/')
+
+    # H3 gate. The placeholder package name is the canonical "H3
+    # unresolved" signal. Dry-run still warns but proceeds (so the
+    # dry-run path exercises the full pipeline including
+    # version-bump and npm pack); live runs halt here.
+    if [[ "$pkg_name" == *CHANGEME-H3* ]]; then
+        if [[ "$DRY_RUN" -eq 0 ]]; then
+            log publish "H3 unresolved: npm package name is still '$pkg_name'" >&2
+            log publish "claim an npm name and update pkg/ts-bun-client/package.json + platforms/*/package.json first" >&2
+            log publish "see docs/release-blockers.md for the H3 resolution checklist" >&2
+            exit 6
+        fi
+        log publish "(dry-run) H3 unresolved (name=$pkg_name) — would halt in a live run"
+    fi
+
+    # Live runs require NPM_TOKEN. Dry-run does not, since
+    # `npm publish --dry-run` and `npm pack` don't authenticate.
+    if [[ "$DRY_RUN" -eq 0 && -z "${NPM_TOKEN:-}" ]]; then
+        log publish "NPM_TOKEN not set in environment" >&2
+        log publish "release runner must supply NPM_TOKEN (never bake into the script)" >&2
+        exit 6
+    fi
+
+    # Stage cabi binaries into the per-platform npm directories.
+    if ! stage_cabi_into_platforms; then
+        exit 6
+    fi
+
+    # Rewrite version on every package.json (umbrella + 3 platforms).
+    log publish "stamping version $plain_version onto umbrella + 3 platform package.jsons"
+    local p target_json
+    for p in "$pkg_json" \
+             "$pkg_root/platforms/linux-x64/package.json" \
+             "$pkg_root/platforms/darwin-x64/package.json" \
+             "$pkg_root/platforms/darwin-arm64/package.json"; do
+        target_json="$p"
+        if [[ ! -f "$target_json" ]]; then
+            log publish "missing $target_json" >&2
+            exit 6
+        fi
+        # In-place rewrite the top-level "version" key. sed is sufficient
+        # because version is a simple scalar; we keep formatting stable.
+        if ! sed -i.bak -E "s/(^[[:space:]]*\"version\":[[:space:]]*\")[^\"]+(\")/\1${plain_version}\2/" "$target_json"; then
+            log publish "failed to rewrite version in $target_json" >&2
+            exit 6
+        fi
+        rm -f "${target_json}.bak"
+    done
+
+    # version-bump the optional-deps file: pins → ^version registry pins.
+    log publish "rewriting optionalDependencies file: pins to ^$plain_version"
+    if ! (cd "$pkg_root" && bun run scripts/version-bump.ts --version "$plain_version") \
+            > >(while IFS= read -r l; do printf '[publish] %s\n' "$l"; done); then
+        log publish "version-bump.ts failed" >&2
+        exit 6
+    fi
+
+    # Write a transient .npmrc with the token, used by `npm publish`.
+    # Trapped cleanup ensures the file (and any extracted token) is
+    # gone even on hard exits.
+    local NPMRC="$pkg_root/.npmrc"
+    cleanup_npmrc() {
+        if [[ -f "$NPMRC" ]]; then
+            rm -f "$NPMRC"
+            log publish "cleaned up transient .npmrc"
+        fi
+    }
+    trap cleanup_npmrc EXIT
+    if [[ -n "${NPM_TOKEN:-}" ]]; then
+        printf '//registry.npmjs.org/:_authToken=%s\nalways-auth=true\n' "$NPM_TOKEN" > "$NPMRC"
+        chmod 600 "$NPMRC"
+    else
+        : > "$NPMRC"
+    fi
+
+    # Publish order: platform sub-packages first so the umbrella's
+    # ^version pins resolve. Each step uses npm view to detect a
+    # prior publish at the same version — that path errors out so the
+    # operator must increment the version for the retry.
+    local pkg_dir pkg_subname pkg_full_name view_out
+    for plat_subdir in linux-x64 darwin-x64 darwin-arm64; do
+        pkg_dir="$pkg_root/platforms/$plat_subdir"
+        pkg_full_name=$(grep -E '^[[:space:]]*"name":' "$pkg_dir/package.json" | head -n 1 | sed -E 's/.*"name":[[:space:]]*"([^"]+)".*/\1/')
+        log publish "publishing $pkg_full_name@$plain_version"
+        if command -v npm >/dev/null 2>&1; then
+            view_out=$(cd "$pkg_dir" && npm view "${pkg_full_name}@${plain_version}" version 2>/dev/null || true)
+            if [[ -n "$view_out" ]]; then
+                log publish "$pkg_full_name@$plain_version is already published" >&2
+                log publish "version already published, increment version for retry" >&2
+                exit 6
+            fi
+        fi
+        if [[ "$DRY_RUN" -eq 1 ]]; then
+            if command -v npm >/dev/null 2>&1; then
+                if ! (cd "$pkg_dir" && npm publish --dry-run) \
+                        > >(while IFS= read -r l; do printf '[publish] %s\n' "$l"; done); then
+                    log publish "FAIL $pkg_full_name (dry-run validation)" >&2
+                    exit 6
+                fi
+            else
+                log publish "(dry-run) npm not on PATH — skipping packaging validation for $pkg_full_name"
+            fi
+        else
+            if ! (cd "$pkg_dir" && npm publish) \
+                    > >(while IFS= read -r l; do printf '[publish] %s\n' "$l"; done); then
+                log publish "FAIL $pkg_full_name (npm publish)" >&2
+                log publish "corrective action: increment VERSION and re-run; same-version retries are forbidden" >&2
+                exit 6
+            fi
+        fi
+    done
+
+    # Umbrella package last.
+    pkg_full_name=$(grep -E '^[[:space:]]*"name":' "$pkg_json" | head -n 1 | sed -E 's/.*"name":[[:space:]]*"([^"]+)".*/\1/')
+    log publish "publishing umbrella $pkg_full_name@$plain_version"
+    if command -v npm >/dev/null 2>&1; then
+        view_out=$(cd "$pkg_root" && npm view "${pkg_full_name}@${plain_version}" version 2>/dev/null || true)
+        if [[ -n "$view_out" ]]; then
+            log publish "$pkg_full_name@$plain_version is already published" >&2
+            log publish "version already published, increment version for retry" >&2
+            exit 6
+        fi
+    fi
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        if command -v npm >/dev/null 2>&1; then
+            if ! (cd "$pkg_root" && npm publish --dry-run) \
+                    > >(while IFS= read -r l; do printf '[publish] %s\n' "$l"; done); then
+                log publish "FAIL $pkg_full_name (dry-run validation)" >&2
+                exit 6
+            fi
+        else
+            log publish "(dry-run) npm not on PATH — skipping packaging validation for $pkg_full_name"
+        fi
+    else
+        if ! (cd "$pkg_root" && npm publish) \
+                > >(while IFS= read -r l; do printf '[publish] %s\n' "$l"; done); then
+            log publish "FAIL $pkg_full_name (npm publish)" >&2
+            log publish "corrective action: increment VERSION and re-run; same-version retries are forbidden" >&2
+            exit 6
+        fi
+    fi
+
+    log publish "OK"
+}
+
+# --------------------------------------------------------------------
 # GH release (still inline; refactored to phase function in later tasks)
 # --------------------------------------------------------------------
 
@@ -525,9 +724,10 @@ main() {
     build_phase
     verify_phase
     tag_phase
+    publish_phase
 
     if [[ "$DRY_RUN" -eq 1 ]]; then
-        log dry-run "skipping publish and gh-release create"
+        log dry-run "skipping gh-release create"
         echo "------ release notes preview ------"
         cat "$NOTES_FILE"
         echo "------ end preview ------"
