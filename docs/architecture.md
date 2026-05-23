@@ -639,13 +639,27 @@ Every C-ABI error envelope carries two string fields: `err_name` (the canonical 
 export class ErrSpawnNotFound extends AgentDirectorError {}
 ```
 
-**TS-only errors.** `ErrClientClosed` is a TS-only error not present in the Go catalog. It is listed in the T10 allow-list (`test/errors-catalog-drift.test.ts`) so the drift gate does not flag it.
+**TS-only errors.** Four subclasses have no counterpart in the Go catalog:
+`ErrClientClosed`, `ErrUnsupportedPlatform`, `ErrPlatformPackageMissing`, and
+`ErrBunVersionTooOld`. Their names are centralised in a single `as const` array
+exported from `pkg/ts-bun-client/src/internal/tsOnlyErrors.ts::TS_ONLY_ERROR_NAMES`.
+The catalog-drift test imports this constant and removes those names from both
+sides before comparing, so CI never flags them as unexpected classes. Each
+subclass in `src/errors.ts` carries a comment cross-referencing this module.
 
 **Factory.** `errorFromEnvelope(verb, err_name, err_description): AgentDirectorError` in `src/errors.ts`. Maintains an internal `ERROR_TABLE` literal that maps every `err_name` string to its constructor. Unknown `err_name` values produce a plain `AgentDirectorError` with a `console.warn` so callers are not silently swallowed.
 
 **Wiring.** `src/internal/workerProxy.ts` calls `errorFromEnvelope(entry.op, parsed.err_name, parsed.err_description)` on the main thread when a verb result envelope contains `err_name`. The `entry.op` (the verb name stored in the pending-dispatch map alongside resolve/reject) provides the `verb` argument.
 
-**Catalog drift test.** T10 adds `pkg/ts-bun-client/test/errors-catalog-drift.test.ts`, which reads `pkg/api/errnames/catalog.json` at test time, imports `src/errors.ts`, and asserts that every catalog entry has a corresponding subclass and every exported `Err*` class (except the T10 allow-list) appears in the catalog. This keeps the TS error surface from silently drifting from the Go one.
+**Catalog drift enforcement gate.** `pkg/ts-bun-client/test/errors-catalog-drift.test.ts`
+reads `pkg/api/errnames/catalog.json` at test time (the single source of truth,
+produced by Epic 1's `go generate ./pkg/api/errnames/...` mechanism), imports
+`src/errors.ts`, and asserts that every catalog entry has a corresponding
+`AgentDirectorError` subclass and that every exported `Err*` subclass (after
+removing the TS-only allow-list from `src/internal/tsOnlyErrors.ts`) appears in
+the catalog. On mismatch the test reports a two-sided diff: names present in the
+catalog but absent from TS, and names present in TS but absent from the catalog.
+This keeps the TS error surface from silently drifting from the Go one.
 
 ## State Machine
 

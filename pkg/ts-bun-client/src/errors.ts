@@ -1,3 +1,7 @@
+// TS-only allow-list — imported so the drift test can reference the same
+// constant. See src/internal/tsOnlyErrors.ts for the full rationale.
+export { TS_ONLY_ERROR_NAMES } from "./internal/tsOnlyErrors.js";
+
 /**
  * AgentDirectorError — base class for all typed errors surfaced by this
  * client library.
@@ -27,27 +31,27 @@ export class AgentDirectorError extends Error {
 }
 
 // ---------------------------------------------------------------------------
-// TS-only error allow-list for T10 catalog-drift check
+// TS-only error classes
 //
-// The following classes have no counterpart in pkg/api/errnames/catalog.json.
-// The T10 allow-list must include all names listed here so CI does not flag
-// them as unexpected error classes:
+// The following four classes have no counterpart in pkg/api/errnames/catalog.json.
+// Their names are centralised in src/internal/tsOnlyErrors.ts::TS_ONLY_ERROR_NAMES
+// (exported from this file for convenience). The catalog-drift test imports
+// that constant and filters these names out before comparing against the Go
+// catalog, so CI never flags them as unexpected.
 //
-//   "ErrClientClosed"          — client already closed
-//   "ErrUnsupportedPlatform"   — process.platform/arch not in supported set
-//   "ErrPlatformPackageMissing"— optional sub-package not installed / binary absent
-//   "ErrBunVersionTooOld"      — Bun.version below MIN_BUN_VERSION
+//   "ErrClientClosed"           — client lifecycle (src/internal/tsOnlyErrors.ts)
+//   "ErrUnsupportedPlatform"    — platform detection (src/internal/tsOnlyErrors.ts)
+//   "ErrPlatformPackageMissing" — missing optional sub-package (src/internal/tsOnlyErrors.ts)
+//   "ErrBunVersionTooOld"       — runtime version guard (src/internal/tsOnlyErrors.ts)
 // ---------------------------------------------------------------------------
 
 /**
  * ErrClientClosed — thrown when a verb method (or _assertOpen) is called on a
  * Client that has already been closed.
  *
- * TS-ONLY ERROR — this error has no counterpart in the shared Go errnames
- * catalog. It must be listed in the T10 allow-list for the catalog-drift test
- * so CI does not flag it as an unexpected error class.
- *
- * Allow-list entry: "ErrClientClosed" (TS-only, not in pkg/api/errnames/catalog.json)
+ * TS-ONLY ERROR — no counterpart in pkg/api/errnames/catalog.json.
+ * Listed in `src/internal/tsOnlyErrors.ts::TS_ONLY_ERROR_NAMES` so the
+ * catalog-drift test never flags it as an unexpected class.
  */
 export class ErrClientClosed extends AgentDirectorError {
   constructor() {
@@ -65,7 +69,8 @@ export class ErrClientClosed extends AgentDirectorError {
  * ErrUnsupportedPlatform — thrown when `process.platform` + `process.arch`
  * produce a tuple that has no corresponding native sub-package.
  *
- * TS-ONLY ERROR — allow-list entry: "ErrUnsupportedPlatform"
+ * TS-ONLY ERROR — no counterpart in pkg/api/errnames/catalog.json.
+ * Listed in `src/internal/tsOnlyErrors.ts::TS_ONLY_ERROR_NAMES`.
  */
 export class ErrUnsupportedPlatform extends AgentDirectorError {
   constructor(tuple: string) {
@@ -84,7 +89,8 @@ export class ErrUnsupportedPlatform extends AgentDirectorError {
  * the current platform is not installed, or when its native binary file is
  * absent from the installed package directory.
  *
- * TS-ONLY ERROR — allow-list entry: "ErrPlatformPackageMissing"
+ * TS-ONLY ERROR — no counterpart in pkg/api/errnames/catalog.json.
+ * Listed in `src/internal/tsOnlyErrors.ts::TS_ONLY_ERROR_NAMES`.
  */
 export class ErrPlatformPackageMissing extends AgentDirectorError {
   constructor(pkgName: string, detail?: string) {
@@ -100,7 +106,8 @@ export class ErrPlatformPackageMissing extends AgentDirectorError {
 /**
  * ErrBunVersionTooOld — thrown when Bun.version is below the declared minimum.
  *
- * TS-ONLY ERROR — allow-list entry: "ErrBunVersionTooOld"
+ * TS-ONLY ERROR — no counterpart in pkg/api/errnames/catalog.json.
+ * Listed in `src/internal/tsOnlyErrors.ts::TS_ONLY_ERROR_NAMES`.
  */
 export class ErrBunVersionTooOld extends AgentDirectorError {
   constructor(actual: string, minimum: string) {
