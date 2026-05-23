@@ -24,6 +24,11 @@ ARG GO_VERSION=1.22.10
 ARG GO_SHA256_AMD64=736ce492a19d756a92719a6121226087ccd91b652ed5caec40ad6dbfb2252092
 ARG GO_SHA256_ARM64=5213c5e32fde3bd7da65516467b7ffbfe40d2bb5a5f58105e387eef450583eec
 
+# Bun runtime version. Used by the ts-bun-lib testplan and any future Epic
+# that exercises the TypeScript/Bun client library inside the container.
+# Pinned for reproducibility; bump requires re-running ts-bun-lib testplan.
+ARG BUN_VERSION=1.3.13
+
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
@@ -40,10 +45,14 @@ RUN apt-get update \
         make \
         sqlite3 \
         tmux \
+        unzip \
  && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
  && apt-get install -y --no-install-recommends nodejs \
  && rm -rf /var/lib/apt/lists/* \
  && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+ && curl -fsSL https://bun.sh/install | BUN_INSTALL=/opt/bun bash -s "bun-v${BUN_VERSION}" \
+ && ln -s /opt/bun/bin/bun /usr/local/bin/bun \
+ && bun --version \
  && arch=$(dpkg --print-architecture) \
  && case "$arch" in \
         amd64) go_sha256="${GO_SHA256_AMD64}" ;; \
