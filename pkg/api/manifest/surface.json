@@ -546,9 +546,9 @@
         {
           "name": "count",
           "type": "int",
-          "description": "Number of rows transitioned to missing on this sweep.",
+          "description": "Number of rows transitioned to missing on this sweep. Zero is a legitimate happy-path result when nothing needed reaping (or when the degraded-mode guard refused to write).",
           "nullable": false,
-          "allow_empty": false,
+          "allow_empty": true,
           "allowed_values": null
         },
         {
@@ -584,9 +584,9 @@
         {
           "name": "count",
           "type": "int",
-          "description": "Number of rows removed.",
+          "description": "Number of rows removed. Zero is a legitimate happy-path result when no terminal rows matched the retention window.",
           "nullable": false,
-          "allow_empty": false,
+          "allow_empty": true,
           "allowed_values": null
         },
         {

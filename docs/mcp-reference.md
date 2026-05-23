@@ -215,7 +215,7 @@ Reconcile DB state against live processes. Scans live-state rows (including pend
 
 ### Output schema
 
-- `count`: type=int — Number of rows transitioned to missing on this sweep.
+- `count`: type=int — Number of rows transitioned to missing on this sweep. Zero is a legitimate happy-path result when nothing needed reaping (or when the degraded-mode guard refused to write).
 - `ids`: type=[]string — Sorted IDs of rows transitioned to missing.
 
 ### Errors
@@ -232,7 +232,7 @@ Remove terminal-state rows (ended/missing) whose ended_at is older than the rete
 
 ### Output schema
 
-- `count`: type=int — Number of rows removed.
+- `count`: type=int — Number of rows removed. Zero is a legitimate happy-path result when no terminal rows matched the retention window.
 - `ids`: type=[]string — Sorted IDs of rows removed.
 
 ### Errors

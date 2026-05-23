@@ -17,7 +17,9 @@ import (
 //
 // Field-presence rules:
 //   - Nullable=true: field must exist on the struct; value may be zero/nil.
-//   - AllowEmpty=true: field must exist; value may be an empty collection.
+//   - AllowEmpty=true: field must exist; value may be the empty form of its
+//     type. Slice/map kinds must be non-nil but may be length-zero; scalar
+//     kinds may be the zero value (e.g. empty string, 0, false).
 //   - AllowedValues != nil: field must be one of the listed values.
 //   - Default (none of the above): field must exist AND be non-zero.
 func AssertResultMatchesManifest(t testing.TB, verbDef manifest.VerbDef, result any) {
@@ -65,8 +67,14 @@ func AssertResultMatchesManifest(t testing.TB, verbDef manifest.VerbDef, result 
 			continue
 		}
 
-		// AllowEmpty: collection may be empty slice/map, but must not be nil
-		// (for pointer-backed collections). Scalar fields still get the non-zero check.
+		// AllowEmpty: per the manifest's semantics, the field is permitted
+		// to be the empty value of its type. For slice/map kinds the empty
+		// form must be a non-nil empty collection (pkg/api verbs normalize
+		// nil→[] explicitly so callers never see `null` on the wire). For
+		// scalar kinds (string, int, bool, pointer) the zero value is
+		// acceptable as the "empty form" — strings like `parent_id` /
+		// `jsonl_path` / `claude_session_id` are documented as routinely
+		// empty when the relevant field has not yet been populated.
 		if fd.AllowEmpty {
 			k := fv.Kind()
 			if k == reflect.Slice || k == reflect.Map {
@@ -76,7 +84,8 @@ func AssertResultMatchesManifest(t testing.TB, verbDef manifest.VerbDef, result 
 				}
 				continue
 			}
-			// Non-collection AllowEmpty fields still get the non-zero check.
+			// Scalar field with AllowEmpty=true: zero value is acceptable.
+			continue
 		}
 
 		// Default: must be non-zero.

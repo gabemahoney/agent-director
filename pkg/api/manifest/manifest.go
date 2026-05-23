@@ -489,7 +489,7 @@ var Verbs = []VerbDef{
 		HandleFree:  false,
 		Params:      []ParamDef{},
 		ResultFields: []FieldDef{
-			{Name: "count", Type: "int", Description: "Number of rows transitioned to missing on this sweep.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
+			{Name: "count", Type: "int", Description: "Number of rows transitioned to missing on this sweep. Zero is a legitimate happy-path result when nothing needed reaping (or when the degraded-mode guard refused to write).", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "ids", Type: "[]string", Description: "Sorted IDs of rows transitioned to missing.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 		},
 		ErrorNames: []string{
@@ -513,7 +513,7 @@ var Verbs = []VerbDef{
 			},
 		},
 		ResultFields: []FieldDef{
-			{Name: "count", Type: "int", Description: "Number of rows removed.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
+			{Name: "count", Type: "int", Description: "Number of rows removed. Zero is a legitimate happy-path result when no terminal rows matched the retention window.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "ids", Type: "[]string", Description: "Sorted IDs of rows removed.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 		},
 		ErrorNames: []string{},
