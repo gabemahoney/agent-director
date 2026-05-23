@@ -4,7 +4,8 @@
         release-binaries release-binaries-smoke \
         libagent_director clean-cabi \
         consumer-dryrun \
-        ts-helper fake-tmux
+        ts-helper fake-tmux \
+        agent-director envelope-diff-ts
 
 # Pinned Claude Code version. Per SRD §15.2 the harness's image must install
 # *this* version of @anthropic-ai/claude-code; bumping it requires re-running
@@ -31,7 +32,7 @@ all: generate build
 build:
 	CGO_ENABLED=0 go build -ldflags="$(VERSION_LDFLAGS)" -o ./bin/agent-director ./cmd/agent-director
 
-test:
+test: envelope-diff-ts
 	go test ./...
 
 generate:
@@ -231,3 +232,22 @@ test/fake-tmux/tmux: test/fake-tmux/main.go
 	CGO_ENABLED=0 go build -o test/fake-tmux/tmux ./test/fake-tmux/
 
 fake-tmux: test/fake-tmux/tmux
+
+# agent-director is a focused alias for `make build` used by the TS
+# envelope-diff harness and setup.ts.  Incremental: re-running with no source
+# changes is a fast no-op because `build` itself is not phony (the binary
+# exists and is up-to-date).  Listed in .PHONY above so `make agent-director`
+# always delegates to the build recipe.
+agent-director: build
+
+# envelope-diff-ts runs the TS-side envelope-diff regression suite.
+#
+# Dependencies:
+#   agent-director — ensures bin/agent-director is built
+#   ts-helper      — ensures bin/ts-helper is built
+#   fake-tmux      — ensures test/fake-tmux/tmux is built
+#
+# The test runner is invoked from the pkg/ts-bun-client directory so that
+# bunfig.toml and the local package.json are in scope.
+envelope-diff-ts: agent-director ts-helper fake-tmux
+	cd pkg/ts-bun-client && bun test test/envelope-diff.test.ts test/envelope-diff-invariants.test.ts

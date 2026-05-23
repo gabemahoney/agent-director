@@ -2019,3 +2019,96 @@ manifests declare no verb-level ErrorNames (errors surface in result maps or are
 untriggerable on Linux).
 
 **CI.** The `.github/workflows/go-smoke.yml` workflow runs `go test -race -count=1 -v ./test/smoke/go/...` on `ubuntu-latest` (linux/amd64) on every pull request and push to `main`. Cross-platform extension to macOS and Windows is Epic 6.
+
+### TS envelope-diff regression
+
+`pkg/ts-bun-client/test/envelope-diff.test.ts` is the TypeScript counterpart to
+Epic 3's Go-side envelope-diff harness.  Both suites run the same 15 callable
+verbs against identical SQLite fixtures and assert that the CLI subprocess output
+and the Bun Client wrapper output are structurally identical — catching any
+divergence introduced by the FFI bindings, parameter marshalling, or result
+deserialization.
+
+**How it works.**
+
+For each verb the test:
+
+1. Seeds a single SQLite store using `bin/ts-helper` (the same fixture seeders
+   used by the smoke tests).
+2. Copies the seeded store byte-for-byte to two temp-home directories (`homeA`
+   and `homeB`) so that both sides start from an identical on-disk state —
+   including timestamps that would otherwise diverge if seeded independently.
+3. Runs the CLI subprocess via `runCli(args, cliEnv(homeA))` and captures
+   stdout/stderr.
+4. Calls the Bun Client wrapper with equivalent parameters, pointing its
+   `storePath` at `homeB/.agent-director/state.db`.
+5. Calls `assertEnvelopesEqual(cliResult, tsResult, { ignorePaths })` where
+   `ignorePaths` comes from `loadIgnorePathsForVerb(verb)`.
+
+Each describe block contains a **success path** test and (for verbs that expose
+verb-level errors) an **error path** test.
+
+**Reuse of `nondeterministic.json`.**
+
+`test/internal/loadIgnorePaths.ts` reads Epic 3's
+`test/envelope-diff/nondeterministic.json` at module-load time and caches it.
+`loadIgnorePathsForVerb(verb)` returns the selector array for that verb; callers
+pass it directly as `ignorePaths` to `assertEnvelopesEqual`.  This keeps both
+suites synchronized: adding a selector to the JSON file silences the field in
+both the Go and TS diffs simultaneously.
+
+**`assertEnvelopesEqual` (structuralDiff.ts).**
+
+`test/internal/structuralDiff.ts` implements a recursive structural diff using
+the same dot-bracket path notation as Epic 3's `diff.go`:
+
+- Field access: `.foo`, `.foo.bar`
+- Array index: `.arr[0]`
+- Wildcard selector (in ignore list only): `.arr[*]` matches any `.arr[N]`
+
+On any mismatch all divergences are collected and thrown together so a single
+test run surfaces every problem at once.
+
+**`runCli` (cliRunner.ts).**
+
+`test/internal/cliRunner.ts` exports `runCli(args, env)`.  It spawns
+`bin/agent-director` via `Bun.spawnSync`, captures stdout and stderr as strings,
+and returns `{ stdout, stderr, exitCode }`.  The CLI binary path defaults to
+`process.env.CLI_PATH` (set by `test/setup.ts`) or is resolved relative to the
+repo root.
+
+**fake-tmux and PATH.**
+
+Both the CLI subprocess and the FFI worker must resolve `tmux` to the fake stub.
+For the CLI, `runCli` receives a `cliEnv` object that prepends `FAKE_TMUX_DIR`
+to `PATH`.  For the Client side, the FFI worker inherits the real OS PATH at
+spawn time; tests pass `tmuxCommand: FAKE_TMUX_BIN` explicitly to the `Client`
+constructor (the same pattern used in smoke tests).
+
+**Meta-test (`envelope-diff-invariants.test.ts`).**
+
+Five static assertions are enforced by grepping file contents — no test
+execution required, completes in under 1 second:
+
+| Assert | Rule |
+| --- | --- |
+| (a) | Every verb in `VERBS` has a `describe("verb", ...)` block in `envelope-diff.test.ts`. |
+| (b) | Every verb has a `"success path"` test. |
+| (c) | Every verb outside the allow-list has an `"error path"` test inside its describe block. |
+| (d) | `nondeterministic.json` contains an entry for every verb in `VERBS`. |
+| (e) | `assertEnvelopesEqual` call count equals `loadIgnorePathsForVerb` call count. |
+
+Allow-list for (c): `version`, `expire`, `delete`, `find-missing`.
+
+**`make envelope-diff-ts`.**
+
+The Makefile target builds all three required binaries incrementally, then
+runs the two test files:
+
+```
+envelope-diff-ts: agent-director ts-helper fake-tmux
+    cd pkg/ts-bun-client && bun test test/envelope-diff.test.ts test/envelope-diff-invariants.test.ts
+```
+
+It is wired into `make test` so `go test ./...` will not run unless the TS
+envelope-diff suite passes first.

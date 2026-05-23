@@ -1,18 +1,20 @@
 /**
- * Bun test preload — builds bin/ts-helper and test/fake-tmux/tmux
- * (incrementally) before any test runs.
+ * Bun test preload — builds bin/ts-helper, test/fake-tmux/tmux, and
+ * bin/agent-director (incrementally) before any test runs.
  *
  * Loaded by Bun's test runner via bunfig.toml:
  *   [test]
  *   preload = ["./test/setup.ts"]
  *
  * Contract:
- *   - If `make ts-helper` exits non-zero the whole test run aborts.
+ *   - If any make target exits non-zero the whole test run aborts.
  *   - After this module completes, process.env.TS_HELPER_PATH is the
  *     absolute path to bin/ts-helper; individual tests can shell out to it.
  *   - process.env.FAKE_TMUX_DIR is the directory containing the fake tmux
  *     binary; withTempHome prepends it to PATH so spawn/send-keys/etc. hit
  *     the stub instead of the real tmux.
+ *   - process.env.CLI_PATH is the absolute path to bin/agent-director; the
+ *     envelope-diff tests use it to spawn CLI subprocesses.
  *   - Subsequent `bun test` runs are fast because the make targets are
  *     incremental (no-op when sources are unchanged).
  */
@@ -24,6 +26,7 @@ import { resolve } from "path";
 const repoRoot = resolve(import.meta.dir, "../../..");
 const helperBin = resolve(repoRoot, "bin/ts-helper");
 const fakeTmuxDir = resolve(repoRoot, "test/fake-tmux");
+const cliBin = resolve(repoRoot, "bin/agent-director");
 
 // ── ts-helper ─────────────────────────────────────────────────────────────
 const helperProc = Bun.spawnSync(["make", "-C", repoRoot, "ts-helper"], {
@@ -51,5 +54,22 @@ if (tmuxProc.exitCode !== 0) {
   process.exit(1);
 }
 
+// ── agent-director CLI binary ─────────────────────────────────────────────
+// `make agent-director` is an alias for `make build`; it is incremental and
+// fast when sources are unchanged.  Required by the envelope-diff tests that
+// spawn the real CLI as a subprocess.
+const cliProc = Bun.spawnSync(["make", "-C", repoRoot, "agent-director"], {
+  stdout: "inherit",
+  stderr: "inherit",
+});
+
+if (cliProc.exitCode !== 0) {
+  console.error(
+    `[setup] make agent-director failed (exit ${cliProc.exitCode}); envelope-diff tests will fail.`
+  );
+  process.exit(1);
+}
+
 process.env.TS_HELPER_PATH = helperBin;
 process.env.FAKE_TMUX_DIR = fakeTmuxDir;
+process.env.CLI_PATH = cliBin;

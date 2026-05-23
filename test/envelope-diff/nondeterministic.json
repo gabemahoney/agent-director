@@ -1,7 +1,9 @@
 {
   "decide": [],
   "delete": [],
-  "expire": [],
+  "expire": [
+    ".ids"
+  ],
   "find-missing": [],
   "get": [],
   "kill": [],
