@@ -24,6 +24,32 @@ A single Go binary that:
 
 See the SRD (Apiary Ideas hive: `t1.jus.x5`) for the full design.
 
+## Cross-platform CI matrix
+
+`pkg/cabi` ships on three v1 platforms — `linux/amd64`, `darwin/amd64`,
+and `darwin/arm64` — and `.github/workflows/cabi-matrix.yml` runs the
+per-language smoke and envelope-diff suites on every leg on every
+commit. `linux/arm64` is deferred to v2 for `pkg/cabi`; the CLI binary
+set still keeps `linux/arm64` (released by Epic 7).
+
+The matrix uses native runners exclusively (no Zig / QEMU cross-compile):
+
+- `linux-amd64`, `darwin-amd64` → GitHub-hosted (pinned `ubuntu-22.04`
+  and `macos-13` images; no `*-latest` floating tags).
+- `darwin-arm64` → operator-owned **self-hosted** runner registered
+  with the full label tuple `[self-hosted, macOS, ARM64, darwin-arm64]`.
+  Bare `self-hosted` is not used so the workflow cannot accidentally
+  route to a different self-hosted runner.
+
+C toolchain versions are pinned per leg (gcc-11 on linux, Xcode 15.2
+on darwin/amd64, operator-pinned Xcode/CLT on darwin/arm64) and
+captured into `build-info-*.txt` artifacts so Epic 7's release
+pipeline can attribute the toolchain shipped with each artifact.
+
+Operator setup of the self-hosted runner — including the public-repo
+security posture — is documented in
+[`docs/self-hosted-runner-setup.md`](self-hosted-runner-setup.md).
+
 ## Package Layout & Layer Boundaries
 
 The binary is layered so each package owns exactly one concern. Imports flow
