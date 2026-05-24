@@ -439,17 +439,69 @@ function atomicWriteSkillTree(
 }
 
 // ---------------------------------------------------------------------------
+// OutputBudget (SR-1.6)
+// Default-quiet: ≤ 5 lines combined across stdout + stderr. Verbose mode
+// (AD_POSTINSTALL_VERBOSE=1|true|yes) lifts the cap. Every emitted line is
+// prefixed `agent-director: `. The newer-branch warning carries
+// neverSuppress=true so it always reaches stderr (still counts against the
+// cap; defensive in case future code emits before reaching the warning).
+// ---------------------------------------------------------------------------
+
+const OUTPUT_LINE_PREFIX = "agent-director: ";
+const DEFAULT_LINE_CAP = 5;
+
+class OutputBudget {
+  private emitted = 0;
+
+  constructor(
+    private readonly verbose: boolean,
+    private readonly cap: number = DEFAULT_LINE_CAP,
+  ) {}
+
+  info(message: string): void {
+    this.emit("stdout", message, false);
+  }
+
+  warn(message: string, options: { neverSuppress?: boolean } = {}): void {
+    this.emit("stderr", message, options.neverSuppress === true);
+  }
+
+  error(message: string, options: { neverSuppress?: boolean } = {}): void {
+    this.emit("stderr", message, options.neverSuppress === true);
+  }
+
+  private emit(
+    stream: "stdout" | "stderr",
+    message: string,
+    neverSuppress: boolean,
+  ): void {
+    if (!this.verbose && !neverSuppress && this.emitted >= this.cap) {
+      return; // budget exhausted; drop silently per SR-1.6
+    }
+    const line = `${OUTPUT_LINE_PREFIX}${message}\n`;
+    if (stream === "stdout") {
+      process.stdout.write(line);
+    } else {
+      process.stderr.write(line);
+    }
+    this.emitted += 1;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // main() — three-way decision + atomic-write
-// Output goes through direct process.stdout/stderr.write here; T4 will route
-// it through an OutputBudget helper that enforces the SR-1.6 five-line cap.
+// All output flows through OutputBudget. The identical branch never reaches
+// the budget at all (zero output by construction).
 // ---------------------------------------------------------------------------
 
 const HOME_TILDE_DEST = "~/.claude/skills/install-agent-director/";
 
 function main(): number {
   const verbose = isVerbose();
+  const out = new OutputBudget(verbose);
+
   if (verbose) {
-    process.stdout.write("agent-director: postinstall start\n");
+    out.info("postinstall start");
   }
 
   const here = fileURLToPath(import.meta.url);
@@ -457,8 +509,8 @@ function main(): number {
   try {
     packageRoot = resolvePackageRoot(here);
   } catch (err) {
-    process.stderr.write(
-      `agent-director: postinstall: ${err instanceof Error ? err.message : String(err)}\n`,
+    out.error(
+      `postinstall: ${err instanceof Error ? err.message : String(err)}`,
     );
     return 1;
   }
@@ -467,15 +519,13 @@ function main(): number {
   const skillsParent = dirname(destDir);
 
   if (verbose) {
-    process.stdout.write(`agent-director: source=${sourceDir}\n`);
-    process.stdout.write(`agent-director: dest=${destDir}\n`);
+    out.info(`source=${sourceDir}`);
+    out.info(`dest=${destDir}`);
   }
 
   // Source must exist — otherwise the published tarball is malformed.
   if (!existsSync(sourceDir)) {
-    process.stderr.write(
-      `agent-director: postinstall: bundled skill body missing at ${sourceDir}\n`,
-    );
+    out.error(`postinstall: bundled skill body missing at ${sourceDir}`);
     return 1;
   }
 
@@ -492,22 +542,16 @@ function main(): number {
   const destExists = existsSync(destDir);
 
   if (verbose) {
-    process.stdout.write(
-      `agent-director: source-version=${sourceVersion}\n`,
-    );
+    out.info(`source-version=${sourceVersion}`);
   }
 
   if (destExists) {
-    // identical branch: tree-hash match → silent no-op
+    // identical branch: tree-hash match → silent no-op (no emits)
     const sourceHash = treeHash(sourceDir);
     const destHash = treeHash(destDir);
     if (verbose) {
-      process.stdout.write(
-        `agent-director: source-tree-hash=${sourceHash}\n`,
-      );
-      process.stdout.write(
-        `agent-director: dest-tree-hash=${destHash}\n`,
-      );
+      out.info(`source-tree-hash=${sourceHash}`);
+      out.info(`dest-tree-hash=${destHash}`);
     }
     if (sourceHash === destHash) {
       return 0;
@@ -515,14 +559,13 @@ function main(): number {
     // newer branch: dest version strictly greater than source per semver §11
     const destVersion = readFrontmatterVersion(destSkillMd);
     if (verbose) {
-      process.stdout.write(
-        `agent-director: dest-version=${destVersion}\n`,
-      );
+      out.info(`dest-version=${destVersion}`);
     }
     const cmp = compareSemver(destVersion, sourceVersion);
     if (cmp > 0) {
-      process.stderr.write(
-        `agent-director: skill at ${HOME_TILDE_DEST} is version ${destVersion} (newer than package's ${sourceVersion}); leaving operator copy in place\n`,
+      out.warn(
+        `skill at ${HOME_TILDE_DEST} is version ${destVersion} (newer than package's ${sourceVersion}); leaving operator copy in place`,
+        { neverSuppress: true },
       );
       return 0;
     }
@@ -533,24 +576,21 @@ function main(): number {
   try {
     const result = atomicWriteSkillTree(sourceDir, destDir, skillsParent);
     if (result.backupError !== null) {
-      process.stderr.write(
-        `agent-director: backup of prior skill failed: ${result.backupError.message}; proceeding with overwrite\n`,
+      out.warn(
+        `backup of prior skill failed: ${result.backupError.message}; proceeding with overwrite`,
+        { neverSuppress: true },
       );
     }
     if (verbose) {
       if (result.backupPath !== null && result.backupError === null) {
-        process.stdout.write(
-          `agent-director: backed up prior skill to ${result.backupPath}\n`,
-        );
+        out.info(`backed up prior skill to ${result.backupPath}`);
       }
-      process.stdout.write(
-        `agent-director: installed skill at ${destDir}\n`,
-      );
+      out.info(`installed skill at ${destDir}`);
     }
     return 0;
   } catch (err) {
-    process.stderr.write(
-      `agent-director: postinstall: atomic write failed: ${err instanceof Error ? err.message : String(err)}\n`,
+    out.error(
+      `postinstall: atomic write failed: ${err instanceof Error ? err.message : String(err)}`,
     );
     return 1;
   }
