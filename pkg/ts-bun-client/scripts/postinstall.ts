@@ -26,8 +26,20 @@
  * the platform refusal lands in Epic 2 T2.
  */
 
-import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { randomBytes, createHash } from "node:crypto";
+import {
+  closeSync,
+  copyFileSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -252,24 +264,296 @@ export function treeHash(root: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// main() — stub. T3 fills in the three-way branch + atomic-write algorithm.
+// Defensive tmp cleanup (SR-1.5)
+// Scan ${HOME}/.claude/skills/ for siblings whose name begins with the literal
+// prefix ".install-agent-director.tmp." and rmSync them recursively. Must
+// NOT match the destination "install-agent-director" itself, nor any backup
+// sibling "install-agent-director.bak.<ts>".
 // ---------------------------------------------------------------------------
+
+const TMP_PREFIX = ".install-agent-director.tmp.";
+
+function cleanupOrphanedTmpSiblings(skillsParent: string): void {
+  let entries;
+  try {
+    entries = readdirSync(skillsParent, { withFileTypes: true });
+  } catch {
+    return; // parent doesn't exist yet — nothing to clean
+  }
+  for (const ent of entries) {
+    if (!ent.name.startsWith(TMP_PREFIX)) continue;
+    const full = join(skillsParent, ent.name);
+    try {
+      rmSync(full, { recursive: true, force: true });
+    } catch {
+      // best-effort; don't abort the install over a leftover we can't remove
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Recursive copy (SR-1.5)
+// Mirrors the source tree under a fresh destination directory. Symlinks in
+// the source (package content, not operator-supplied) are followed and
+// materialized as regular files. fsyncs every written file and the containing
+// directories so a crash-before-rename leaves nothing half-flushed.
+// ---------------------------------------------------------------------------
+
+function fsyncDir(dir: string): void {
+  // POSIX: open + fsync the directory inode so the entry rename is durable.
+  try {
+    const fd = openSync(dir, "r");
+    try {
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    // fsync on a directory may not be supported on every fs; non-fatal.
+  }
+}
+
+function fsyncFile(path: string): void {
+  try {
+    const fd = openSync(path, "r");
+    try {
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    // non-fatal
+  }
+}
+
+function copyTree(src: string, dest: string): void {
+  const st = statSync(src); // follows symlinks → regular files materialized
+  if (st.isDirectory()) {
+    mkdirSync(dest, { recursive: true, mode: st.mode & 0o777 });
+    const entries = readdirSync(src, { withFileTypes: true });
+    for (const ent of entries) {
+      const childSrc = join(src, ent.name);
+      const childDest = join(dest, ent.name);
+      copyTree(childSrc, childDest);
+    }
+    fsyncDir(dest);
+    return;
+  }
+  if (st.isFile()) {
+    copyFileSync(src, dest);
+    fsyncFile(dest);
+    return;
+  }
+  // Anything else (FIFO, socket, char/block device) is not expected in a
+  // skill body and is silently skipped.
+}
+
+// ---------------------------------------------------------------------------
+// Atomic-write algorithm (SR-1.5)
+//   1. Compute tmp dir under skillsParent: ".install-agent-director.tmp.<pid>.<8hex>"
+//   2. Copy source tree into tmp dir; fsync files + dir.
+//   3. If prior dest exists, copy to "install-agent-director.bak.<unix-ts>" (best-effort).
+//   4. If prior dest exists, rmSync it.
+//   5. rename(tmp, dest).
+//   6. On rename failure: rmSync tmp and propagate.
+// ---------------------------------------------------------------------------
+
+type AtomicWriteResult = {
+  backupPath: string | null;
+  backupError: Error | null;
+};
+
+function atomicWriteSkillTree(
+  source: string,
+  dest: string,
+  skillsParent: string,
+): AtomicWriteResult {
+  const pid = process.pid;
+  const rand = randomBytes(8).toString("hex").slice(0, 8);
+  const tmpDir = join(skillsParent, `${TMP_PREFIX}${pid}.${rand}`);
+
+  // 1+2: stage tmp tree
+  try {
+    copyTree(source, tmpDir);
+  } catch (err) {
+    try {
+      rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+    throw err;
+  }
+
+  // 3: best-effort backup of prior dest, if any
+  let backupPath: string | null = null;
+  let backupError: Error | null = null;
+  const priorExists = existsSync(dest);
+  if (priorExists) {
+    const ts = Math.floor(Date.now() / 1000);
+    backupPath = join(skillsParent, `install-agent-director.bak.${ts}`);
+    try {
+      // If a same-second backup somehow already exists, fall back to a
+      // collision-safe sibling so we never overwrite an older backup.
+      let target = backupPath;
+      let suffix = 0;
+      while (existsSync(target)) {
+        suffix += 1;
+        target = `${backupPath}.${suffix}`;
+      }
+      backupPath = target;
+      copyTree(dest, backupPath);
+    } catch (err) {
+      backupError = err instanceof Error ? err : new Error(String(err));
+      // continue per SR-1.5: backup is best-effort; never abort the overwrite
+    }
+  }
+
+  // 4: remove prior dest so rename target is clear
+  if (priorExists) {
+    try {
+      rmSync(dest, { recursive: true, force: true });
+    } catch (err) {
+      try {
+        rmSync(tmpDir, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+      throw err;
+    }
+  }
+
+  // 5: rename tmp into place
+  try {
+    renameSync(tmpDir, dest);
+  } catch (err) {
+    try {
+      rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+    throw err;
+  }
+  fsyncDir(dirname(dest));
+
+  return { backupPath, backupError };
+}
+
+// ---------------------------------------------------------------------------
+// main() — three-way decision + atomic-write
+// Output goes through direct process.stdout/stderr.write here; T4 will route
+// it through an OutputBudget helper that enforces the SR-1.6 five-line cap.
+// ---------------------------------------------------------------------------
+
+const HOME_TILDE_DEST = "~/.claude/skills/install-agent-director/";
 
 function main(): number {
   const verbose = isVerbose();
   if (verbose) {
     process.stdout.write("agent-director: postinstall start\n");
   }
-  // T3 will compose the helpers below into the three-way branches.
+
   const here = fileURLToPath(import.meta.url);
-  const packageRoot = resolvePackageRoot(here);
+  let packageRoot: string;
+  try {
+    packageRoot = resolvePackageRoot(here);
+  } catch (err) {
+    process.stderr.write(
+      `agent-director: postinstall: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    return 1;
+  }
   const sourceDir = resolveSourceSkillDir(packageRoot);
   const destDir = resolveDestSkillDir();
+  const skillsParent = dirname(destDir);
+
   if (verbose) {
     process.stdout.write(`agent-director: source=${sourceDir}\n`);
     process.stdout.write(`agent-director: dest=${destDir}\n`);
   }
-  return 0;
+
+  // Source must exist — otherwise the published tarball is malformed.
+  if (!existsSync(sourceDir)) {
+    process.stderr.write(
+      `agent-director: postinstall: bundled skill body missing at ${sourceDir}\n`,
+    );
+    return 1;
+  }
+
+  // Ensure ${HOME}/.claude/skills/ exists.
+  mkdirSync(skillsParent, { recursive: true });
+
+  // Defensive cleanup of any prior interrupted run's tmp tree.
+  cleanupOrphanedTmpSiblings(skillsParent);
+
+  // Three-way decision.
+  const sourceSkillMd = join(sourceDir, "SKILL.md");
+  const destSkillMd = join(destDir, "SKILL.md");
+  const sourceVersion = readFrontmatterVersion(sourceSkillMd);
+  const destExists = existsSync(destDir);
+
+  if (verbose) {
+    process.stdout.write(
+      `agent-director: source-version=${sourceVersion}\n`,
+    );
+  }
+
+  if (destExists) {
+    // identical branch: tree-hash match → silent no-op
+    const sourceHash = treeHash(sourceDir);
+    const destHash = treeHash(destDir);
+    if (verbose) {
+      process.stdout.write(
+        `agent-director: source-tree-hash=${sourceHash}\n`,
+      );
+      process.stdout.write(
+        `agent-director: dest-tree-hash=${destHash}\n`,
+      );
+    }
+    if (sourceHash === destHash) {
+      return 0;
+    }
+    // newer branch: dest version strictly greater than source per semver §11
+    const destVersion = readFrontmatterVersion(destSkillMd);
+    if (verbose) {
+      process.stdout.write(
+        `agent-director: dest-version=${destVersion}\n`,
+      );
+    }
+    const cmp = compareSemver(destVersion, sourceVersion);
+    if (cmp > 0) {
+      process.stderr.write(
+        `agent-director: skill at ${HOME_TILDE_DEST} is version ${destVersion} (newer than package's ${sourceVersion}); leaving operator copy in place\n`,
+      );
+      return 0;
+    }
+    // older-or-absent branch: fall through to atomic write
+  }
+
+  // older-or-absent branch — atomic write + best-effort backup
+  try {
+    const result = atomicWriteSkillTree(sourceDir, destDir, skillsParent);
+    if (result.backupError !== null) {
+      process.stderr.write(
+        `agent-director: backup of prior skill failed: ${result.backupError.message}; proceeding with overwrite\n`,
+      );
+    }
+    if (verbose) {
+      if (result.backupPath !== null && result.backupError === null) {
+        process.stdout.write(
+          `agent-director: backed up prior skill to ${result.backupPath}\n`,
+        );
+      }
+      process.stdout.write(
+        `agent-director: installed skill at ${destDir}\n`,
+      );
+    }
+    return 0;
+  } catch (err) {
+    process.stderr.write(
+      `agent-director: postinstall: atomic write failed: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    return 1;
+  }
 }
 
 // Run if invoked directly (not when imported by a sibling test).
