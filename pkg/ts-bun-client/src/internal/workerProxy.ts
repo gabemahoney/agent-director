@@ -95,8 +95,22 @@ function _rejectAll(reason: Error): void {
  * _spawnWorker creates the dedicated Worker and wires its event handlers.
  * Called at most once per process (unless shutdown() is called first).
  */
+// Resolve the worker file URL for both dev mode and the bundled tarball.
+// In dev mode `import.meta.url` points at this source file
+// (.../src/internal/workerProxy.ts) and the sibling worker source lives
+// next to it. After bundling, this code is inlined into dist/index.js
+// and `import.meta.url` points at the bundle root, so the worker lives
+// at dist/internal/worker.js. Bun.build does not rewrite the
+// `new URL(..., import.meta.url)` pattern, so we have to pick the right
+// relative path ourselves.
+function _resolveWorkerURL(): URL {
+  return import.meta.url.endsWith("workerProxy.ts")
+    ? new URL("./worker.ts", import.meta.url)
+    : new URL("./internal/worker.js", import.meta.url);
+}
+
 function _spawnWorker(): void {
-  const worker = new Worker(new URL("./worker.ts", import.meta.url));
+  const worker = new Worker(_resolveWorkerURL());
 
   // unref() so this worker thread does not keep the main event loop alive
   // after all test/application code completes. Bun's default is already
