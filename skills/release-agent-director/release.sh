@@ -678,9 +678,15 @@ host_cabi_platform() {
 }
 
 # verify_phase runs:
-#   1. Go smoke    — test/smoke/go (Epic 4)
-#   2. TS smoke    — pkg/ts-bun-client (Epic 5)
-#   3. envelope-diff — Go side + TS side (Epics 3 + 5)
+#   1. Go smoke              — test/smoke/go (Epic 4)
+#   2. TS smoke              — pkg/ts-bun-client (Epic 5)
+#   3. envelope-diff         — Go side + TS side (Epics 3 + 5)
+#   4. postinstall tarball verify — SRD §SR-8 (Plan Bee b.3d3 Epic 4 T2).
+#      Stages a release-stamped copy of the umbrella + install skill,
+#      runs `bun pm pack` against it, installs the tarball into a temp
+#      HOME, and asserts the bundled skill body landed at
+#      `${HOME}/.claude/skills/install-agent-director/` with frontmatter
+#      `version:` equal to the release tag.
 #
 # Each step that fails halts release with exit code 5 and a clear
 # [verify] FAIL <step> message naming the failed sub-step.
@@ -711,7 +717,7 @@ verify_phase() {
         exit 5
     fi
 
-    log verify "step 3/3: envelope-diff (go side + ts side)"
+    log verify "step 3/4: envelope-diff (go side + ts side)"
     # Go side: the envelope-diff suite lives under test/envelope-diff/...
     # and is exercised via the standard `go test` invocation. We only
     # need the leaf go tests, not the whole tree.
@@ -729,6 +735,105 @@ verify_phase() {
         phase_fail verify "envelope-diff-ts"
         exit 5
     fi
+
+    # ----------------------------------------------------------------
+    # step 4/4: postinstall tarball verify (SRD §SR-8)
+    #
+    # Pack the umbrella with `bun pm pack` against a staged copy whose
+    # `package.json` `version` and `SKILL.md` frontmatter `version:` have
+    # been stamped to the release tag — i.e. the shape v0.4.1+ consumers
+    # will see on npm. Install the tarball into a temp HOME and assert
+    # the postinstall placed `install-agent-director/` at the expected
+    # path with the expected frontmatter version.
+    #
+    # This step catches a class of regression the FFI smoke does not:
+    # files-glob omissions, postinstall-path-resolution issues, prepack
+    # staging failures, trustedDependencies handling. Anything mid-flight
+    # halts the release at exit 5 before the tag is pushed.
+    # ----------------------------------------------------------------
+    log verify "step 4/4: postinstall tarball verify (skill body lands under temp HOME)"
+    local plain_v="${VERSION#v}"
+    local stage_dir
+    stage_dir="$(mktemp -d "${TMPDIR:-/tmp}/verify-postinstall.XXXXXX")"
+    local tmp_home tmp_workdir
+    tmp_home="$(mktemp -d "${TMPDIR:-/tmp}/verify-postinstall-home.XXXXXX")"
+    tmp_workdir="$(mktemp -d "${TMPDIR:-/tmp}/verify-postinstall-proj.XXXXXX")"
+    # shellcheck disable=SC2064  # we want the variables resolved now
+    trap "rm -rf '$stage_dir' '$tmp_home' '$tmp_workdir'" RETURN
+
+    local verify_ok=1
+    {
+        # Stage the umbrella + the canonical skill source into a writable
+        # working tree, then stamp them to the release tag.
+        mkdir -p "$stage_dir/pkg/ts-bun-client"
+        mkdir -p "$stage_dir/skills"
+        cp -a "$REPO_ROOT/pkg/ts-bun-client/." "$stage_dir/pkg/ts-bun-client/"
+        cp -a "$REPO_ROOT/skills/install-agent-director" "$stage_dir/skills/"
+
+        # Wipe any stray dev artifacts the cp -a dragged in.
+        rm -rf "$stage_dir/pkg/ts-bun-client/node_modules"
+        rm -rf "$stage_dir/pkg/ts-bun-client/skills"
+
+        # Stamp the umbrella package.json + SKILL.md to plain_v.
+        jq --arg v "$plain_v" '.version = $v' \
+            "$stage_dir/pkg/ts-bun-client/package.json" \
+            > "$stage_dir/pkg/ts-bun-client/package.json.tmp"
+        mv "$stage_dir/pkg/ts-bun-client/package.json.tmp" \
+            "$stage_dir/pkg/ts-bun-client/package.json"
+        sed -i.bak "s/^version: .*/version: $plain_v/" \
+            "$stage_dir/skills/install-agent-director/SKILL.md"
+        rm -f "$stage_dir/skills/install-agent-director/SKILL.md.bak"
+
+        # Install dev deps + bun-build so the files glob has dist/* to pack.
+        if ! (cd "$stage_dir/pkg/ts-bun-client" \
+                && bun install --no-progress >/dev/null 2>&1 \
+                && bun run build >/dev/null 2>&1 \
+                && bun pm pack >/dev/null 2>&1); then
+            verify_ok=0
+        fi
+
+        if [[ "$verify_ok" -eq 1 ]]; then
+            local tgz
+            tgz="$(ls "$stage_dir/pkg/ts-bun-client/"agent-director-*.tgz 2>/dev/null | head -n 1)"
+            if [[ -z "$tgz" || ! -f "$tgz" ]]; then
+                verify_ok=0
+            else
+                # Consumer fixture: trust the package so the postinstall
+                # actually fires (bun's untrusted-package default blocks it).
+                cat > "$tmp_workdir/package.json" <<'CONSUMER_PKG'
+{
+  "name": "release-verify-consumer",
+  "version": "0.0.0",
+  "trustedDependencies": ["agent-director"]
+}
+CONSUMER_PKG
+                if ! (cd "$tmp_workdir" && HOME="$tmp_home" bun add "file:$tgz" >/dev/null 2>&1); then
+                    verify_ok=0
+                fi
+            fi
+        fi
+
+        if [[ "$verify_ok" -eq 1 ]]; then
+            local landed="$tmp_home/.claude/skills/install-agent-director/SKILL.md"
+            if [[ ! -f "$landed" ]]; then
+                verify_ok=0
+            else
+                local landed_v
+                landed_v="$(awk '/^version:/ {print $2; exit}' "$landed" | tr -d '\r' | sed 's/^"//;s/"$//;s/^'\''//;s/'\''$//')"
+                if [[ "$landed_v" != "$plain_v" ]]; then
+                    log verify "  landed SKILL.md frontmatter version=$landed_v; expected $plain_v" >&2
+                    verify_ok=0
+                fi
+            fi
+        fi
+    }
+
+    if [[ "$verify_ok" -ne 1 ]]; then
+        log verify "FAIL postinstall-tarball-verify" >&2
+        phase_fail verify "postinstall-tarball-verify"
+        exit 5
+    fi
+    log verify "  postinstall verify OK: SKILL.md frontmatter version=$plain_v under $tmp_home/.claude/skills/install-agent-director/"
 
     log verify "OK"
     phase_ok verify
