@@ -447,9 +447,87 @@ cabi_lib_basename() {
     esac
 }
 
+# dispatch_and_wait_cabi_matrix: trigger a workflow_dispatch of
+# cabi-matrix.yml with the release version input, then poll for the new
+# run id and wait for it to complete. Used by build_phase in live mode
+# so the published pkg/cabi .so/.dylib carries the release-tag stamp
+# rather than the un-tagged `git describe` output from a merge commit.
+# See bee b.pu8 for the regression that motivated this path.
+#
+# Sets RELEASE_DISPATCHED_RUN_ID on success so collect_cabi_artifacts
+# downloads from THIS specific run instead of looking up the most-recent
+# matching run on HEAD. Returns non-zero (caller exits 3) on dispatch,
+# poll-timeout, or run-failure.
+dispatch_and_wait_cabi_matrix() {
+    : "${CABI_WORKFLOW:=cabi-matrix.yml}"
+    local version_input="$1"
+
+    if ! command -v gh >/dev/null 2>&1; then
+        log build "gh not on PATH — cannot dispatch $CABI_WORKFLOW" >&2
+        return 1
+    fi
+
+    # High-water mark: the most-recent workflow_dispatch run id BEFORE
+    # we dispatch. After dispatch we poll for a run with id > this
+    # watermark; this defends against the unlikely-but-possible race
+    # where two operators run release.sh simultaneously and we'd
+    # otherwise pick up the wrong dispatched run.
+    local watermark
+    watermark=$(gh run list --workflow="$CABI_WORKFLOW" --event=workflow_dispatch \
+        --limit 1 --json databaseId --jq '.[0].databaseId // 0' 2>/dev/null || echo 0)
+    if [[ -z "$watermark" ]]; then watermark=0; fi
+    log build "dispatching $CABI_WORKFLOW (workflow_dispatch) on $BRANCH with version=$version_input"
+    if ! gh workflow run "$CABI_WORKFLOW" --ref "$BRANCH" -f version="$version_input" >/dev/null 2>&1; then
+        log build "gh workflow run failed for $CABI_WORKFLOW" >&2
+        return 1
+    fi
+
+    # Poll for the new run id. GH typically registers the run within a
+    # few seconds; allow up to ~90s under load.
+    local attempt new_id=""
+    for attempt in $(seq 1 30); do
+        sleep 3
+        new_id=$(gh run list --workflow="$CABI_WORKFLOW" --event=workflow_dispatch \
+            --limit 5 --json databaseId \
+            --jq "map(select(.databaseId > ${watermark})) | first | .databaseId // empty" 2>/dev/null || true)
+        if [[ -n "$new_id" ]]; then
+            break
+        fi
+    done
+    if [[ -z "$new_id" ]]; then
+        log build "timed out waiting for new $CABI_WORKFLOW workflow_dispatch run (90s)" >&2
+        return 1
+    fi
+    log build "dispatched cabi-matrix run id: $new_id"
+    log build "waiting for run $new_id to complete (cabi-matrix typically takes 15+ minutes)"
+
+    # gh run watch --exit-status exits non-zero if the run did not
+    # conclude successfully, which we surface as a build-phase fail.
+    if ! gh run watch "$new_id" --exit-status \
+            > >(while IFS= read -r l; do printf '[build] %s\n' "$l"; done); then
+        log build "cabi-matrix run $new_id did not finish successfully — see GH Actions UI" >&2
+        return 1
+    fi
+    log build "cabi-matrix run $new_id completed successfully"
+
+    # Surface the run id to collect_cabi_artifacts via the documented
+    # env override below.
+    RELEASE_DISPATCHED_RUN_ID="$new_id"
+    export RELEASE_DISPATCHED_RUN_ID
+    return 0
+}
+
 # collect_cabi_artifacts: find the green cabi-matrix run on the release
 # commit and `gh run download` each pkg-cabi-<platform> artifact into
 # ./dist/cabi/<platform>/. Halts on zero or ambiguous matches.
+#
+# Run-id selection precedence (highest first):
+#   1. RELEASE_DISPATCHED_RUN_ID — set by dispatch_and_wait_cabi_matrix
+#      on live release runs. We trust the watch already verified
+#      conclusion=success, so no re-check.
+#   2. RELEASE_FORCE_RUN_ID — debug-only override used by tests.
+#   3. Lookup-by-commit — the original behavior, used by dry-run and
+#      any flow that has not pre-dispatched a run.
 collect_cabi_artifacts() {
     : "${CABI_WORKFLOW:=cabi-matrix.yml}"
 
@@ -471,11 +549,10 @@ collect_cabi_artifacts() {
     local commit run_id
     commit="$(git rev-parse HEAD)"
 
-    # RELEASE_FORCE_RUN_ID=<id> is a debug-only override used by tests
-    # to drive collect_cabi_artifacts against a known run (e.g. a
-    # known-red run to exercise the matrix-red halt). Production
-    # releases must NOT set it.
-    if [[ -n "${RELEASE_FORCE_RUN_ID:-}" ]]; then
+    if [[ -n "${RELEASE_DISPATCHED_RUN_ID:-}" ]]; then
+        run_id="$RELEASE_DISPATCHED_RUN_ID"
+        log build "using dispatched cabi-matrix run id: $run_id (release version-stamped)"
+    elif [[ -n "${RELEASE_FORCE_RUN_ID:-}" ]]; then
         run_id="$RELEASE_FORCE_RUN_ID"
         log build "RELEASE_FORCE_RUN_ID set — using run id $run_id (debug override)"
         # Even with a forced id, re-check the conclusion: a green
@@ -611,6 +688,27 @@ collect_cabi_artifacts() {
     log build "canonical header staged at dist/cabi/include/libagent_director.h"
 }
 
+# maybe_dispatch_cabi_for_release: in live mode, dispatch a
+# workflow_dispatch run of cabi-matrix.yml with the release version
+# input so the published pkg/cabi shared library is stamped with the
+# release tag (bee b.pu8). Dry-run and AD_RELEASE_SKIP_CABI=1 short-
+# circuit this: dry-run preserves the historical "find existing run on
+# commit" behavior (so local rehearsal doesn't burn a real CI run) and
+# the SKIP escape hatch continues to bypass cabi entirely.
+maybe_dispatch_cabi_for_release() {
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        log build "(dry-run) would dispatch $CABI_WORKFLOW with version=$VERSION; falling back to existing-run lookup"
+        return 0
+    fi
+    if [[ "${AD_RELEASE_SKIP_CABI:-0}" -eq 1 ]]; then
+        log build "AD_RELEASE_SKIP_CABI=1 — skipping cabi-matrix dispatch"
+        return 0
+    fi
+    if ! dispatch_and_wait_cabi_matrix "$VERSION"; then
+        return 1
+    fi
+}
+
 build_phase() {
     phase_begin build
     if [[ "$NO_BUILD" -eq 1 ]]; then
@@ -621,6 +719,10 @@ build_phase() {
         # cabi-collection halt paths (matrix-red, darwin/arm64 offline)
         # without paying the local `make release-binaries` cost.
         if [[ "${AD_RELEASE_SKIP_CABI:-0}" -ne 1 ]]; then
+            if ! maybe_dispatch_cabi_for_release; then
+                phase_fail build "dispatch_and_wait_cabi_matrix failed"
+                exit 3
+            fi
             log build "running collect_cabi_artifacts (cabi collection still active under --no-build)"
             if ! collect_cabi_artifacts; then
                 phase_fail build "collect_cabi_artifacts failed"
@@ -635,6 +737,13 @@ build_phase() {
     if ! (cd "$REPO_ROOT" && make release-binaries) > >(while IFS= read -r l; do printf '[build] %s\n' "$l"; done); then
         log build "release-binaries build failed" >&2
         phase_fail build "release-binaries failed"
+        exit 3
+    fi
+    # Live release: dispatch a version-stamped cabi-matrix run BEFORE
+    # collecting artifacts so the .so/.dylib carries the release tag
+    # in its internal/version.Version stamp. See bee b.pu8.
+    if ! maybe_dispatch_cabi_for_release; then
+        phase_fail build "dispatch_and_wait_cabi_matrix failed"
         exit 3
     fi
     log build "collecting pkg/cabi artifacts (2 v1 platforms)"
