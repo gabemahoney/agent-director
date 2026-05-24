@@ -1,9 +1,12 @@
 # cabi-matrix: cross-platform build + smoke + envelope-diff for pkg/cabi.
 #
-# Owns Epic 6 of bee b.qe2. Three v1 legs:
+# Owns Epic 6 of bee b.qe2. Two v1 legs (darwin/amd64 dropped 2026-05-24
+# per operator decision — no Intel Mac users to serve and GH-hosted
+# macos-13 minutes carry a 10x billing multiplier):
 #
-#   linux-amd64   → GitHub-hosted ubuntu-22.04 (pinned, never *-latest)
-#   darwin-amd64  → GitHub-hosted macos-13     (pinned, never *-latest)
+#   linux-amd64   → operator-owned self-hosted Reno runner registered with
+#                   the full label tuple [self-hosted, Linux, X64,
+#                   linux-amd64].
 #   darwin-arm64  → operator-owned self-hosted runner registered with the
 #                   full label tuple [self-hosted, macOS, ARM64, darwin-arm64].
 #                   Bare `self-hosted` is intentionally NOT used so the
@@ -11,9 +14,9 @@
 #                   self-hosted runner if one is added later. See
 #                   docs/self-hosted-runner-setup.md for the runbook.
 #
-# linux/arm64 is deferred to v2 for pkg/cabi per the Epic body. The CLI
-# binary set keeps linux/arm64 — that is Epic 7's release script, not this
-# matrix.
+# linux/arm64 and darwin/amd64 are both out of scope for pkg/cabi v1. The
+# CLI binary set keeps linux/arm64 — that is Epic 7's release script, not
+# this matrix.
 #
 # Coexistence: this workflow does NOT modify doc-drift.yml, go-smoke.yml,
 # or integration.yml. Those three continue to enforce the linux/amd64-only
@@ -25,14 +28,9 @@
 # build-info-*.txt artifacts. Bumping a pin is a release-note-worthy
 # change. The pins per leg:
 #
-#   linux-amd64   → gcc-11 (the ubuntu-22.04 default major; locked via
-#                   update-alternatives so a future image change cannot
-#                   silently switch to a different gcc).
-#   darwin-amd64  → Xcode 15.2 selected via sudo xcode-select -switch on
-#                   /Applications/Xcode_15.2.app, which ships pre-installed
-#                   on the macos-13 runner image. No third-party
-#                   setup-xcode action is used; this avoids needing to
-#                   audit-pin a maxim-lobanov/setup-xcode commit SHA.
+#   linux-amd64   → gcc-11 selected via CC/CXX env vars (works on the
+#                   self-hosted Reno runner without passwordless sudo;
+#                   apt fallback only runs if gcc-11 is missing).
 #   darwin-arm64  → the self-hosted runner's Xcode (or Xcode Command Line
 #                   Tools) is pinned by operator configuration per the
 #                   docs/self-hosted-runner-setup.md Prerequisites
@@ -109,8 +107,8 @@ jobs:
       cancel-in-progress: false
     strategy:
       # fail-fast: false so one leg's failure does not cancel observation
-      # of the others. Cross-platform regressions frequently land on only
-      # one leg and we want all three reports on every commit.
+      # of the other. Cross-platform regressions frequently land on only
+      # one leg and we want both reports on every commit.
       fail-fast: false
       matrix:
         include:
@@ -130,11 +128,6 @@ jobs:
             # pkg/ts-bun-client smoke / envelope-diff suites can resolve
             # it via import.meta.resolve.
             platform_dir: linux-x64
-          - name: darwin-amd64
-            runs-on: macos-13
-            lib_ext: dylib
-            lib_name: libagent_director.dylib
-            platform_dir: darwin-x64
           - name: darwin-arm64
             # Full conjunctive label tuple. GitHub matches all labels
             # together; spelling out `darwin-arm64` ensures the workflow
@@ -192,17 +185,6 @@ jobs:
           # Persist CC/CXX for subsequent steps in this job.
           echo "CC=$(command -v gcc-11)"  >> "$GITHUB_ENV"
           echo "CXX=$(command -v g++-11)" >> "$GITHUB_ENV"
-
-      - name: Pin Xcode 15.2 and capture build-info (darwin-amd64)
-        if: matrix.name == 'darwin-amd64'
-        run: |
-          set -euo pipefail
-          ls -1d /Applications/Xcode_*.app | tee build-info-xcode.txt
-          sudo xcode-select -switch /Applications/Xcode_15.2.app
-          echo "---" | tee -a build-info-xcode.txt
-          xcode-select -p | tee -a build-info-xcode.txt
-          xcodebuild -version | tee -a build-info-xcode.txt
-          clang --version | tee -a build-info-xcode.txt
 
       - name: Capture host Xcode/CLT version (darwin-arm64)
         if: matrix.name == 'darwin-arm64'
@@ -316,12 +298,10 @@ jobs:
       # pkg/ts-bun-client resolves the native library via
       # `import.meta.resolve("@agent-director/<plat>/...")`,
       # which in turn relies on the file:./platforms/<plat>/ optional
-      # dependency declared in pkg/ts-bun-client/package.json. We do
-      # NOT use scripts/prepare-platforms.ts here because that script
-      # copies the same darwin .dylib into BOTH platforms/darwin-x64
-      # and platforms/darwin-arm64 (correct for a single-machine dev
-      # loop, wrong for a per-leg matrix where each darwin leg only
-      # owns one platform_dir).
+      # dependency declared in pkg/ts-bun-client/package.json. The
+      # matrix stages exactly the leg-native lib into its own
+      # platform_dir; scripts/prepare-platforms.ts is the dev-loop
+      # alternative for a single machine staging both targets.
       - name: Stage built lib into TS platform sub-package
         shell: bash
         run: |
@@ -416,8 +396,8 @@ jobs:
       # ---------------------------------------------------------------
       #
       # Bundles the native lib, the generated C header, and the
-      # build-info-*.txt capture files (gcc on linux-amd64; xcode on
-      # both darwin legs; arch on darwin-arm64) into one named
+      # build-info-*.txt capture files (gcc on linux-amd64; xcode +
+      # arch on darwin-arm64) into one named
       # artifact per leg so Epic 7's release pipeline can collect
       # them. The `build-info-*.txt` glob is sufficient by itself —
       # `build-info-arch.txt` is named explicitly below for

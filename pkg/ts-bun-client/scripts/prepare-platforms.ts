@@ -28,11 +28,6 @@ const copies: { src: string; dest: string; optional: boolean }[] = [
   },
   {
     src: resolve(repoRoot, "dist", "libagent_director.dylib"),
-    dest: resolve(pkgDir, "platforms", "darwin-x64", "libagent_director.dylib"),
-    optional: true,
-  },
-  {
-    src: resolve(repoRoot, "dist", "libagent_director.dylib"),
     dest: resolve(pkgDir, "platforms", "darwin-arm64", "libagent_director.dylib"),
     optional: true,
   },

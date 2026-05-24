@@ -7,8 +7,11 @@
  *   - linux-x64 sub-package: contains libagent_director.so, package.json,
  *     README-binary-source.md (binary may be absent on darwin CI — asserted
  *     per files array only when the file exists on disk).
- *   - darwin-x64/darwin-arm64: contain package.json + README-binary-source.md;
+ *   - darwin-arm64: contains package.json + README-binary-source.md;
  *     binary asserted present only when it actually exists on this host.
+ *
+ * v1 platform set is {linux-x64, darwin-arm64}; darwin-x64 was dropped
+ * 2026-05-24.
  *
  * Each directory's pack output is fetched once and shared across sub-tests to
  * keep total subprocess overhead low.
@@ -72,12 +75,11 @@ function getPackFiles(dir: string): string[] {
   return files;
 }
 
-// Pre-warm all four pack calls before tests run (avoids per-test subprocess
+// Pre-warm all three pack calls before tests run (avoids per-test subprocess
 // overhead and lets bun run tests faster after the initial fetch).
 const allDirs = [
   pkgDir,
   resolve(pkgDir, "platforms", "linux-x64"),
-  resolve(pkgDir, "platforms", "darwin-x64"),
   resolve(pkgDir, "platforms", "darwin-arm64"),
 ];
 for (const d of allDirs) getPackFiles(d);
@@ -112,11 +114,6 @@ const subPkgs: SubPkgSpec[] = [
     name: "linux-x64",
     dir: resolve(pkgDir, "platforms", "linux-x64"),
     binaryName: "libagent_director.so",
-  },
-  {
-    name: "darwin-x64",
-    dir: resolve(pkgDir, "platforms", "darwin-x64"),
-    binaryName: "libagent_director.dylib",
   },
   {
     name: "darwin-arm64",

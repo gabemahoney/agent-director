@@ -56,7 +56,7 @@ more precise toolchain attribution in release notes.
 | Requirement | Why |
 | --- | --- |
 | Apple Silicon Mac (ARM64) | The leg is `darwin-arm64`; an Intel host cannot serve it. |
-| macOS 13 (Ventura) or newer | Matches the GitHub-hosted darwin-amd64 leg's minimum. |
+| macOS 13 (Ventura) or newer | Conservative floor — matches the historical darwin-amd64 leg's minimum (the leg itself was dropped 2026-05-24). |
 | Xcode or Xcode Command Line Tools installed | CGO requires `clang`. |
 | `xcode-select -p` resolves to a developer directory | Required for `clang` invocations. |
 | Network egress to `github.com` and `objects.githubusercontent.com` | The runner polls GitHub for jobs. |
@@ -313,23 +313,22 @@ ready to pick up a workflow run.
      `workflow_dispatch` if/when the workflow exposes one.
 
 3. **Watch dispatch.** Open the Actions tab for the resulting run.
-   The `cabi-matrix.yml` workflow lists three jobs:
-   `linux-amd64`, `darwin-amd64`, and `darwin-arm64`. The third job
-   should reach the **In progress** state within ~30 seconds and the
-   job sidebar should display:
+   The `cabi-matrix.yml` workflow lists two jobs: `linux-amd64` and
+   `darwin-arm64`. The second job should reach the **In progress**
+   state within ~30 seconds and the job sidebar should display:
 
    - **Runner**: `<HOSTNAME>-darwin-arm64`
    - **Labels**: `self-hosted`, `macOS`, `ARM64`, `darwin-arm64`
 
    If the `darwin-arm64` job stays **Queued** indefinitely while the
-   other two legs progress, the most common causes are:
+   other leg progresses, the most common causes are:
    - the runner is offline (`./svc.sh status` on the Mac);
    - the registered labels do not include `darwin-arm64` (Settings →
      Runners → click the runner → check labels);
    - the workflow is paused pending fork-PR approval (Section 4.1).
 
 4. **Confirm green completion.** When the `darwin-arm64` job
-   finishes, the **Artifacts** tab on the run summary lists three
+   finishes, the **Artifacts** tab on the run summary lists two
    `pkg/cabi`-* artifacts (one per leg) — including the
    `darwin-arm64` artifact, which carries the
    `libagent_director.dylib`, `libagent_director.h`, and

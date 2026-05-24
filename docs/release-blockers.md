@@ -12,7 +12,7 @@ description of what it gates, and the steps to resolve it.
 
 ### Resolution
 
-The four npm packages shipped by Epic 5 (`pkg/ts-bun-client/`) have been
+The npm packages shipped by Epic 5 (`pkg/ts-bun-client/`) have been
 renamed off the `@CHANGEME-H3/` placeholder scope. The resolved layout follows
 the [esbuild distribution model](https://esbuild.github.io/getting-started/#download-a-build):
 an unscoped umbrella package plus per-platform scoped sub-packages.
@@ -21,15 +21,18 @@ an unscoped umbrella package plus per-platform scoped sub-packages.
 | --- | --- |
 | `agent-director` | `pkg/ts-bun-client/` |
 | `@agent-director/linux-x64` | `pkg/ts-bun-client/platforms/linux-x64/` |
-| `@agent-director/darwin-x64` | `pkg/ts-bun-client/platforms/darwin-x64/` |
 | `@agent-director/darwin-arm64` | `pkg/ts-bun-client/platforms/darwin-arm64/` |
 
 The `@agent-director` npm org is claimed separately by the operator before the
 first live publish.
 
+> **Platform-set update (2026-05-24).** `@agent-director/darwin-x64` (Intel
+> Mac) was dropped from the v1 set on the same day H3 was resolved. The
+> remaining packages above are the full v1 publishing set.
+
 ### What H3 gated (historical)
 
-- **Epic 5** — npm publish of the four packages above.
+- **Epic 5** — npm publish of the packages above.
 - **Epic 7** — the npm-publish step in the coordinated release pipeline.
 
 ### Publish guard (still active)

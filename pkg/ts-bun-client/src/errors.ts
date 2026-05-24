@@ -77,7 +77,7 @@ export class ErrUnsupportedPlatform extends AgentDirectorError {
     super(
       "",
       "ErrUnsupportedPlatform",
-      `platform/arch tuple "${tuple}" is not supported; supported: linux-x64, darwin-x64, darwin-arm64`
+      `platform/arch tuple "${tuple}" is not supported; supported: linux-x64, darwin-arm64`
     );
     this.name = "ErrUnsupportedPlatform";
     Object.setPrototypeOf(this, new.target.prototype);

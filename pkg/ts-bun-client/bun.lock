@@ -13,15 +13,12 @@
       },
       "optionalDependencies": {
         "@agent-director/darwin-arm64": "file:./platforms/darwin-arm64",
-        "@agent-director/darwin-x64": "file:./platforms/darwin-x64",
         "@agent-director/linux-x64": "file:./platforms/linux-x64",
       },
     },
   },
   "packages": {
     "@agent-director/darwin-arm64": ["@agent-director/darwin-arm64@file:platforms/darwin-arm64", {}],
-
-    "@agent-director/darwin-x64": ["@agent-director/darwin-x64@file:platforms/darwin-x64", {}],
 
     "@agent-director/linux-x64": ["@agent-director/linux-x64@file:platforms/linux-x64", {}],
 

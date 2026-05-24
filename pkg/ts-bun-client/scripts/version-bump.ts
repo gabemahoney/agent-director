@@ -1,5 +1,5 @@
 /**
- * version-bump.ts — rewrites the three optionalDependencies `file:` entries
+ * version-bump.ts — rewrites the two optionalDependencies `file:` entries
  * in pkg/ts-bun-client/package.json to `^<version>` pins for publishing.
  *
  * Usage:
@@ -7,18 +7,17 @@
  *
  * ─── Local development vs. publish-time flow ──────────────────────────────
  *
- * During local development the three optional sub-packages are wired via
+ * During local development the two optional sub-packages are wired via
  * `file:` paths so `bun install` resolves them from the workspace:
  *
  *   "@agent-director/linux-x64":  "file:./platforms/linux-x64"
- *   "@agent-director/darwin-x64": "file:./platforms/darwin-x64"
  *   "@agent-director/darwin-arm64": "file:./platforms/darwin-arm64"
  *
  * Before publishing to npm, CI must:
  *   1. Build each sub-package binary for its target platform.
  *   2. Run `bun run version-bump-publish --version X.Y.Z` to rewrite the
  *      `file:` entries to `^X.Y.Z` registry pins.
- *   3. Publish the three sub-packages first (`npm publish` in each platforms/* subdir).
+ *   3. Publish the two sub-packages first (`npm publish` in each platforms/* subdir).
  *   4. Publish the top-level package.
  *
  * Running this script with the same version twice is a no-op on the second
@@ -73,7 +72,6 @@ const pkg = JSON.parse(raw) as {
 const optDeps = pkg.optionalDependencies ?? {};
 const OPTIONAL_NAMES = [
   "@agent-director/linux-x64",
-  "@agent-director/darwin-x64",
   "@agent-director/darwin-arm64",
 ];
 

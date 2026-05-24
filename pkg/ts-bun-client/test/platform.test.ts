@@ -5,9 +5,9 @@
  * every error branch without live binaries or process-global monkey-patching.
  *
  * Cases:
- *   (a) Unsupported tuple (linux/arm64) → ErrUnsupportedPlatform
+ *   (a) Unsupported tuple (linux/arm64, darwin/x64) → ErrUnsupportedPlatform
  *   (b) Bun version below minimum       → ErrBunVersionTooOld
- *   (c) Sub-package installed but binary absent (darwin/x64 on linux) → ErrPlatformPackageMissing
+ *   (c) Sub-package installed but binary absent (darwin/arm64 on linux) → ErrPlatformPackageMissing
  *   (d) Real linux/amd64 happy path     → { lib, libPath } with ad_open callable
  */
 
@@ -42,6 +42,20 @@ describe("platform resolver — unsupported tuple", () => {
     expect(() => resolveNativePath({ platform: "win32", arch: "x64" })).toThrow(
       ErrUnsupportedPlatform
     );
+  });
+
+  test("darwin/x64 (Intel Mac) → throws ErrUnsupportedPlatform", () => {
+    // darwin/x64 was dropped from v1 on 2026-05-24; no Intel Mac users to
+    // serve and the macos-13 GH-hosted runner billing multiplier (10x) was
+    // not worth the spend.
+    let caught: unknown;
+    try {
+      resolveNativePath({ platform: "darwin", arch: "x64" });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(ErrUnsupportedPlatform);
+    expect((caught as ErrUnsupportedPlatform).errDescription).toContain("darwin-x64");
   });
 });
 
@@ -87,25 +101,10 @@ describe("platform resolver — Bun version too old", () => {
 // ---------------------------------------------------------------------------
 
 describe("platform resolver — platform package missing or binary absent", () => {
-  test("darwin/x64 on linux → throws ErrPlatformPackageMissing", () => {
-    // darwin-x64 is installed (bun install with file: resolves all three) but
-    // has no .dylib binary → resolveNativePath throws ErrPlatformPackageMissing.
-    // If for some reason the package isn't installed, import.meta.resolve throws
-    // and we also get ErrPlatformPackageMissing — either path is correct.
-    let caught: unknown;
-    try {
-      resolveNativePath({ platform: "darwin", arch: "x64" });
-    } catch (e) {
-      caught = e;
-    }
-    expect(caught).toBeInstanceOf(ErrPlatformPackageMissing);
-    expect(caught).toBeInstanceOf(AgentDirectorError);
-    const err = caught as ErrPlatformPackageMissing;
-    expect(err.errName).toBe("ErrPlatformPackageMissing");
-    expect(err.errDescription).toContain("darwin-x64");
-  });
-
   test("darwin/arm64 on linux → throws ErrPlatformPackageMissing", () => {
+    // darwin-arm64 is installed (bun install with file: resolves both
+    // optionalDependencies) but has no .dylib binary on a linux host →
+    // resolveNativePath throws ErrPlatformPackageMissing.
     let caught: unknown;
     try {
       resolveNativePath({ platform: "darwin", arch: "arm64" });
@@ -113,6 +112,10 @@ describe("platform resolver — platform package missing or binary absent", () =
       caught = e;
     }
     expect(caught).toBeInstanceOf(ErrPlatformPackageMissing);
+    expect(caught).toBeInstanceOf(AgentDirectorError);
+    const err = caught as ErrPlatformPackageMissing;
+    expect(err.errName).toBe("ErrPlatformPackageMissing");
+    expect(err.errDescription).toContain("darwin-arm64");
   });
 });
 

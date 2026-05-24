@@ -6,9 +6,9 @@
  * The full binding spec (all 18 symbols) is used by worker.ts via loadNative().
  *
  * Library path resolution delegates to platform.ts::resolveNativePath() so
- * that all platforms (linux-x64, darwin-x64, darwin-arm64) resolve their
- * binary from the correct optional sub-package, and so this file shares the
- * same path logic as the worker.
+ * that all platforms (linux-x64, darwin-arm64) resolve their binary from the
+ * correct optional sub-package, and so this file shares the same path logic
+ * as the worker.
  *
  * Internal — NOT re-exported from src/index.ts.
  */

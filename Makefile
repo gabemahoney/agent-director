@@ -128,16 +128,17 @@ test-docker: test-image
 		-v "$(CURDIR):/work/source:ro" \
 		$(TEST_IMAGE)
 
-# release-binaries cross-compiles the four supported targets into ./dist/.
+# release-binaries cross-compiles the three supported targets into ./dist/.
 # CGO_ENABLED=0 + modernc.org/sqlite (pure Go SQLite) yields fully static
 # binaries on linux/* and standalone Mach-O on darwin/*. The -s -w
 # ldflags strip the symbol + debug tables to halve the artifact size.
 #
 # Per SRD §16.1: mac + linux only. Windows is not supported.
+# darwin/amd64 was dropped from v1 on 2026-05-24.
 release-binaries:
 	@mkdir -p dist
-	@echo "[release] building 4 binaries into ./dist/"
-	@for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do \
+	@echo "[release] building 3 binaries into ./dist/"
+	@for target in linux/amd64 linux/arm64 darwin/arm64; do \
 		os=$${target%/*}; arch=$${target#*/}; \
 		out="dist/agent-director-$${os}-$${arch}"; \
 		echo "  -> $${out}"; \
@@ -161,7 +162,7 @@ release-binaries:
 release-binaries-smoke: release-binaries
 	@set -eu; \
 	echo "[smoke] magic-byte check on each artifact"; \
-	for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do \
+	for target in linux/amd64 linux/arm64 darwin/arm64; do \
 		os=$${target%/*}; arch=$${target#*/}; \
 		out="dist/agent-director-$${os}-$${arch}"; \
 		magic=$$(od -A n -t x1 -N 4 "$${out}" | tr -d ' '); \
@@ -186,7 +187,7 @@ release-binaries-smoke: release-binaries
 	echo "[smoke] host-arch exec (linux-amd64 help)"; \
 	./dist/agent-director-linux-amd64 help | jq -e '.verbs | length > 0' >/dev/null \
 		|| { echo "FAIL: linux-amd64 help did not return a non-empty verb list"; exit 1; }; \
-	echo "[smoke] OK — all 4 binaries built, linked, and the host-arch one runs"
+	echo "[smoke] OK — all 3 binaries built, linked, and the host-arch one runs"
 
 # dist/ is created on demand by libagent_director.
 dist/:

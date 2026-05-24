@@ -146,7 +146,6 @@ restore_pkg_jsons_if_dryrun() {
     for f in \
         pkg/ts-bun-client/package.json \
         pkg/ts-bun-client/platforms/linux-x64/package.json \
-        pkg/ts-bun-client/platforms/darwin-x64/package.json \
         pkg/ts-bun-client/platforms/darwin-arm64/package.json; do
         if [[ -f "$REPO_ROOT/$f" ]] && git -C "$REPO_ROOT" diff --quiet -- "$f" 2>/dev/null; then
             continue
@@ -392,11 +391,12 @@ chmod +x agent-director
 
 ## Supported platforms
 
-- **CLI binaries** (four platforms): linux/amd64, linux/arm64
-  (statically linked, no glibc dependency), darwin/amd64, darwin/arm64
-  (Mach-O 64).
-- **pkg/cabi** shared libraries (three platforms in v1): linux/amd64,
-  darwin/amd64, darwin/arm64. linux/arm64 cabi is deferred to v2.
+- **CLI binaries** (three platforms): linux/amd64, linux/arm64
+  (statically linked, no glibc dependency), darwin/arm64
+  (Mach-O 64). darwin/amd64 was dropped from v1 on 2026-05-24.
+- **pkg/cabi** shared libraries (two platforms in v1): linux/amd64,
+  darwin/arm64. linux/arm64 cabi is deferred to v2; darwin/amd64
+  was dropped on 2026-05-24.
 
 Windows is not supported (SRD §16.1).
 NOTES
@@ -428,11 +428,12 @@ NOTES
 # Phase: build
 # --------------------------------------------------------------------
 
-# CABI_PLATFORMS is the canonical v1 set. linux/arm64 is intentionally
-# absent — cabi v1 ships three platforms only. The four-platform CLI
+# CABI_PLATFORMS is the canonical v1 set. linux/arm64 and darwin/amd64
+# are intentionally absent — cabi v1 ships two platforms only
+# (darwin/amd64 dropped 2026-05-24 per operator decision). The CLI
 # binary set is independent of this restriction; that is built locally
 # by `make release-binaries`.
-CABI_PLATFORMS=(linux-amd64 darwin-amd64 darwin-arm64)
+CABI_PLATFORMS=(linux-amd64 darwin-arm64)
 
 # cabi_lib_basename echoes the per-platform shared-library filename.
 # linux uses .so, darwin uses .dylib. Used by both collect_cabi_artifacts
@@ -621,13 +622,13 @@ build_phase() {
         phase_ok build
         return 0
     fi
-    log build "building release binaries (4 CLI platforms)"
+    log build "building release binaries (3 CLI platforms)"
     if ! (cd "$REPO_ROOT" && make release-binaries) > >(while IFS= read -r l; do printf '[build] %s\n' "$l"; done); then
         log build "release-binaries build failed" >&2
         phase_fail build "release-binaries failed"
         exit 3
     fi
-    log build "collecting pkg/cabi artifacts (3 v1 platforms)"
+    log build "collecting pkg/cabi artifacts (2 v1 platforms)"
     if ! collect_cabi_artifacts; then
         phase_fail build "collect_cabi_artifacts failed"
         exit 3
@@ -640,9 +641,10 @@ build_phase() {
 # Phase: verify
 # --------------------------------------------------------------------
 
-# host_cabi_platform echoes "linux-amd64" / "darwin-amd64" / "darwin-arm64"
-# matching the host runner architecture. Verify uses it to point
-# AD_CABI_DIR at the per-platform .so/.dylib the TS bindings load.
+# host_cabi_platform echoes "linux-amd64" / "darwin-arm64" matching the
+# host runner architecture. Verify uses it to point AD_CABI_DIR at the
+# per-platform .so/.dylib the TS bindings load. darwin/amd64 hosts are
+# rejected as unsupported under v1 (dropped 2026-05-24).
 host_cabi_platform() {
     local os arch
     case "$(uname -s)" in
@@ -657,6 +659,10 @@ host_cabi_platform() {
     esac
     if [[ "$os" == "linux" && "$arch" == "arm64" ]]; then
         log verify "host is linux/arm64 — no v1 cabi build for this host; smoke + envelope-diff will run against dev-checkout libs" >&2
+        return 1
+    fi
+    if [[ "$os" == "darwin" && "$arch" == "amd64" ]]; then
+        log verify "host is darwin/amd64 — dropped from v1 (2026-05-24); smoke + envelope-diff will run against dev-checkout libs" >&2
         return 1
     fi
     echo "${os}-${arch}"
@@ -780,7 +786,6 @@ tag_phase() {
 npm_subdir_for_platform() {
     case "$1" in
         linux-amd64)   echo "linux-x64" ;;
-        darwin-amd64)  echo "darwin-x64" ;;
         darwin-arm64)  echo "darwin-arm64" ;;
         *) log publish "unknown cabi platform: $1" >&2; return 1 ;;
     esac
@@ -826,14 +831,14 @@ publish_phase() {
     # H3 gate: must be the FIRST action inside publish_phase so no
     # `npm publish` ever runs against a placeholder name.
     #
-    # We inspect ALL FOUR package.jsons (umbrella + 3 per-platform
+    # We inspect ALL THREE package.jsons (umbrella + 2 per-platform
     # sub-packages). Any one carrying the H3 sentinel halts the live
     # run. The sentinel matches `@CHANGEME-H3/...` and the alternative
     # `@TBD/...` so that whichever placeholder convention E5 ultimately
     # settled on is caught.
     #
     # Manual verification procedure (for operator rehearsal):
-    #   1. Temporarily revert one of the four package.json files to a
+    #   1. Temporarily revert one of the three package.json files to a
     #      placeholder name (e.g. `git checkout HEAD~N -- <file>`).
     #   2. Run `./release.sh v<X.Y.Z> --release`.
     #   3. Observe the [publish] H3 halt with exit code 6 BEFORE any
@@ -845,7 +850,6 @@ publish_phase() {
     for p3 in \
         "$pkg_json" \
         "$pkg_root/platforms/linux-x64/package.json" \
-        "$pkg_root/platforms/darwin-x64/package.json" \
         "$pkg_root/platforms/darwin-arm64/package.json"; do
         if [[ ! -f "$p3" ]]; then
             log publish "missing $p3 — TS package layout invariant violated" >&2
@@ -887,12 +891,11 @@ publish_phase() {
         exit 6
     fi
 
-    # Rewrite version on every package.json (umbrella + 3 platforms).
-    log publish "stamping version $plain_version onto umbrella + 3 platform package.jsons"
+    # Rewrite version on every package.json (umbrella + 2 platforms).
+    log publish "stamping version $plain_version onto umbrella + 2 platform package.jsons"
     local p target_json
     for p in "$pkg_json" \
              "$pkg_root/platforms/linux-x64/package.json" \
-             "$pkg_root/platforms/darwin-x64/package.json" \
              "$pkg_root/platforms/darwin-arm64/package.json"; do
         target_json="$p"
         if [[ ! -f "$target_json" ]]; then
@@ -934,7 +937,7 @@ publish_phase() {
     # prior publish at the same version — that path errors out so the
     # operator must increment the version for the retry.
     local pkg_dir pkg_subname pkg_full_name view_out
-    for plat_subdir in linux-x64 darwin-x64 darwin-arm64; do
+    for plat_subdir in linux-x64 darwin-arm64; do
         pkg_dir="$pkg_root/platforms/$plat_subdir"
         pkg_full_name=$(grep -E '^[[:space:]]*"name":' "$pkg_dir/package.json" | head -n 1 | sed -E 's/.*"name":[[:space:]]*"([^"]+)".*/\1/')
         log publish "publishing $pkg_full_name@$plain_version"
@@ -1013,8 +1016,8 @@ publish_phase() {
 # --------------------------------------------------------------------
 
 # release_assets builds the canonical asset list:
-#   4 CLI binaries (preserved per SR-9 — independent of cabi platform set)
-#   3 cabi shared libraries (.so/.dylib — one per v1 cabi platform)
+#   3 CLI binaries (darwin/amd64 dropped 2026-05-24 — see CABI_PLATFORMS)
+#   2 cabi shared libraries (.so/.dylib — one per v1 cabi platform)
 #   1 platform-independent C header (canonical copy from T1)
 #
 # Returns assets via the global RELEASE_ASSETS array so callers can
@@ -1024,10 +1027,8 @@ release_assets() {
     RELEASE_ASSETS=(
         "$REPO_ROOT/dist/agent-director-linux-amd64"
         "$REPO_ROOT/dist/agent-director-linux-arm64"
-        "$REPO_ROOT/dist/agent-director-darwin-amd64"
         "$REPO_ROOT/dist/agent-director-darwin-arm64"
         "$REPO_ROOT/dist/cabi/linux-amd64/libagent_director.so"
-        "$REPO_ROOT/dist/cabi/darwin-amd64/libagent_director.dylib"
         "$REPO_ROOT/dist/cabi/darwin-arm64/libagent_director.dylib"
         "$REPO_ROOT/dist/cabi/include/libagent_director.h"
     )

@@ -43,11 +43,11 @@ export const MIN_BUN_VERSION = "1.0.21";
 
 /**
  * Supported platform/arch tuples → npm sub-package names.
- * linux-arm64 is deferred to v2.
+ * v1 scope is {linux-x64, darwin-arm64}; linux-arm64 is deferred to v2,
+ * darwin-x64 was dropped 2026-05-24 (no Intel Mac users to serve).
  */
 const SUPPORTED_TUPLES = new Map<string, string>([
   ["linux-x64", "@agent-director/linux-x64"],
-  ["darwin-x64", "@agent-director/darwin-x64"],
   ["darwin-arm64", "@agent-director/darwin-arm64"],
 ]);
 

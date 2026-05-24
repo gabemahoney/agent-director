@@ -4,7 +4,7 @@
 #
 # Stubs `gh` on PATH and exercises:
 #   - single-match success → populates ./dist/cabi/<platform>/ for the
-#     three v1 platforms + canonical header.
+#     two v1 platforms + canonical header.
 #   - zero-match halt with a specific error message.
 #   - multi-match halt with a specific error message.
 #
@@ -65,7 +65,6 @@ case "\$1" in
                 # Synthesize the expected files.
                 case "\$art" in
                     pkg-cabi-linux-amd64)  touch "\$dir/libagent_director.so"  "\$dir/libagent_director.h" ;;
-                    pkg-cabi-darwin-amd64) touch "\$dir/libagent_director.dylib" "\$dir/libagent_director.h" ;;
                     pkg-cabi-darwin-arm64) touch "\$dir/libagent_director.dylib" "\$dir/libagent_director.h" ;;
                     *) echo "unknown artifact: \$art" >&2; exit 1 ;;
                 esac
@@ -84,8 +83,6 @@ EOF
     [ "$status" -eq 0 ]
     [ -f "dist/cabi/linux-amd64/libagent_director.so" ]
     [ -f "dist/cabi/linux-amd64/libagent_director.h" ]
-    [ -f "dist/cabi/darwin-amd64/libagent_director.dylib" ]
-    [ -f "dist/cabi/darwin-amd64/libagent_director.h" ]
     [ -f "dist/cabi/darwin-arm64/libagent_director.dylib" ]
     [ -f "dist/cabi/darwin-arm64/libagent_director.h" ]
     [ -f "dist/cabi/include/libagent_director.h" ]

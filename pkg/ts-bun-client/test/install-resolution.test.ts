@@ -5,10 +5,12 @@
  * On linux/amd64, asserts:
  *   - node_modules/@agent-director/linux-x64/ EXISTS (symlink/dir)
  *   - node_modules/@agent-director/linux-x64/libagent_director.so EXISTS
- *   - node_modules/@agent-director/darwin-x64/ either does not exist
+ *   - node_modules/@agent-director/darwin-arm64/ either does not exist
  *     OR exists but lacks the .dylib binary (bun may install all file: optional
  *     deps regardless of os/cpu, but binaries are only present for the host platform)
- *   - same for darwin-arm64
+ *
+ * v1 platform set is {linux-x64, darwin-arm64}; darwin-x64 was dropped
+ * 2026-05-24.
  *
  * Skipped (not failed) on non-linux hosts with a console.log.
  *
@@ -72,15 +74,12 @@ describe("install resolution — platform-specific optional dependencies", () =>
       `Expected ${linuxBinary} to exist (run bun run prepare-platforms first)`
     ).toBe(true);
 
-    // darwin packages: if bun installed them (it does for file: deps), they
-    // must NOT have a .dylib binary — that's a cross-platform protection check.
-    const darwinX64Dylib = resolve(nmBase, "darwin-x64", "libagent_director.dylib");
+    // darwin-arm64: if bun installed it (it does for file: deps), it must
+    // NOT have a .dylib binary on a linux host — that's a cross-platform
+    // protection check. darwin-x64 is no longer a v1 platform so we do not
+    // assert its absence (no platforms/darwin-x64 directory exists in the
+    // worktree).
     const darwinArm64Dylib = resolve(nmBase, "darwin-arm64", "libagent_director.dylib");
-
-    expect(
-      existsSync(darwinX64Dylib),
-      "darwin-x64 dylib must not exist on linux/x64 host"
-    ).toBe(false);
 
     expect(
       existsSync(darwinArm64Dylib),

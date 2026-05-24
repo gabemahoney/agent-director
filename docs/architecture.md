@@ -24,27 +24,35 @@ A single Go binary that:
 
 See the SRD (Apiary Ideas hive: `t1.jus.x5`) for the full design.
 
+## Supported platforms (v1)
+
+The v1 supported-platform set is **`linux/amd64`** and **`darwin/arm64`**.
+`darwin/amd64` (Intel Mac) was **dropped on 2026-05-24**: no Intel Mac
+users to serve, and the GitHub-hosted `macos-13` runner image carries
+a 10x billing multiplier that no longer paid for itself. `linux/arm64`
+remains a v2 candidate for `pkg/cabi`; the CLI binary set still ships a
+`linux/arm64` Go-only binary (no cgo, no native library — released by
+Epic 7).
+
 ## Cross-platform CI matrix
 
-`pkg/cabi` ships on three v1 platforms — `linux/amd64`, `darwin/amd64`,
-and `darwin/arm64` — and `.github/workflows/cabi-matrix.yml` runs the
-per-language smoke and envelope-diff suites on every leg on every
-commit. `linux/arm64` is deferred to v2 for `pkg/cabi`; the CLI binary
-set still keeps `linux/arm64` (released by Epic 7).
+`pkg/cabi` ships on the two v1 platforms above; `.github/workflows/cabi-matrix.yml`
+runs the per-language smoke and envelope-diff suites on every leg on
+every commit.
 
 The matrix uses native runners exclusively (no Zig / QEMU cross-compile):
 
-- `linux-amd64`, `darwin-amd64` → GitHub-hosted (pinned `ubuntu-22.04`
-  and `macos-13` images; no `*-latest` floating tags).
+- `linux-amd64` → operator-owned **self-hosted** Reno runner registered
+  with the full label tuple `[self-hosted, Linux, X64, linux-amd64]`.
 - `darwin-arm64` → operator-owned **self-hosted** runner registered
   with the full label tuple `[self-hosted, macOS, ARM64, darwin-arm64]`.
   Bare `self-hosted` is not used so the workflow cannot accidentally
   route to a different self-hosted runner.
 
-C toolchain versions are pinned per leg (gcc-11 on linux, Xcode 15.2
-on darwin/amd64, operator-pinned Xcode/CLT on darwin/arm64) and
-captured into `build-info-*.txt` artifacts so Epic 7's release
-pipeline can attribute the toolchain shipped with each artifact.
+C toolchain versions are pinned per leg (gcc-11 on linux via CC/CXX env
+vars, operator-pinned Xcode/CLT on darwin/arm64) and captured into
+`build-info-*.txt` artifacts so Epic 7's release pipeline can attribute
+the toolchain shipped with each artifact.
 
 Operator setup of the self-hosted runner — including the public-repo
 security posture — is documented in
@@ -491,17 +499,18 @@ native shared library. `npm install` (and `bun install`) resolve only the
 sub-package that matches `os` + `cpu` on the installing host, leaving the
 others absent.
 
-**Sub-packages (v1 — three platforms):**
+**Sub-packages (v1 — two platforms):**
 
 | npm package | Platform | Binary file |
 | --- | --- | --- |
 | `@agent-director/linux-x64` | Linux x86-64 | `libagent_director.so` |
-| `@agent-director/darwin-x64` | macOS Intel | `libagent_director.dylib` |
 | `@agent-director/darwin-arm64` | macOS Apple Silicon | `libagent_director.dylib` |
 
-> **v2 note — linux-arm64 deferred.** Linux ARM64 (`linux-arm64`) is not
-> supported in v1 — no cross-compile toolchain is wired yet. A fourth
-> sub-package `@agent-director/linux-arm64` will be added in v2.
+> **v1 scope note (2026-05-24).** `@agent-director/darwin-x64` (macOS
+> Intel) was **dropped** from the v1 set — no Intel Mac users to serve
+> and the GH-hosted `macos-13` 10x billing multiplier was not worth the
+> spend. Linux ARM64 (`linux-arm64`) remains deferred to v2; a
+> sub-package `@agent-director/linux-arm64` will be added then.
 
 Each sub-package lives under `pkg/ts-bun-client/platforms/<tuple>/` and
 contains only `package.json`, `README-binary-source.md`, and (CI-injected)
@@ -1708,14 +1717,14 @@ first failing phase:
 2. **notes** — template `dist/release-notes.md` from
    `git log <prev-tag>..HEAD`, grouped by Epic ID where commit
    messages reference one.
-3. **build** — `make release-binaries` cross-compiles the four CLI
+3. **build** — `make release-binaries` cross-compiles the three CLI
    targets into `dist/`. `collect_cabi_artifacts()` then locates the
    green `cabi-matrix.yml` workflow run for the release commit and
    downloads `pkg-cabi-<platform>` artifacts (`.so`/`.dylib` plus
-   the C header) into `dist/cabi/<platform>/` for the three v1
-   cabi platforms (linux/amd64, darwin/amd64, darwin/arm64). One
-   canonical header is staged at `dist/cabi/include/libagent_director.h`
-   for the gh-release phase to attach.
+   the C header) into `dist/cabi/<platform>/` for the two v1
+   cabi platforms (linux/amd64, darwin/arm64). One canonical header
+   is staged at `dist/cabi/include/libagent_director.h` for the
+   gh-release phase to attach.
 4. **verify** — Go smoke (`test/smoke/go/...`), TS smoke
    (`pkg/ts-bun-client`), and Go + TS envelope-diff. Each sub-step
    failure halts the release with exit code 5. `AD_CABI_DIR` is
@@ -1727,20 +1736,18 @@ first failing phase:
    shares the root `go.mod`; if `pkg/api/go.mod` is ever added the
    script also pushes the `pkg/api/$VERSION` sub-path tag that Go's
    module protocol requires.
-6. **publish** — npm publish for the umbrella package and the three
+6. **publish** — npm publish for the umbrella package and the two
    per-platform optional dependency packages. Halts at this step
    with a clear "H3 unresolved" error if the npm name ever regresses
    to the `@CHANGEME-H3/agent-director` placeholder (forward-going
    tripwire; H3 itself was resolved 2026-05-24).
 7. **gh-release** — `gh release create $VERSION` with exactly
-   **8 attached assets**:
-   - 4 CLI binaries: `agent-director-linux-amd64`,
-     `agent-director-linux-arm64`, `agent-director-darwin-amd64`,
-     `agent-director-darwin-arm64` (the four-binary set is preserved
-     per SRD SR-9; the v1 three-platform restriction applies only to
-     cabi artifacts, not CLI binaries).
-   - 3 pkg/cabi shared libraries: `dist/cabi/linux-amd64/libagent_director.so`,
-     `dist/cabi/darwin-amd64/libagent_director.dylib`,
+   **6 attached assets**:
+   - 3 CLI binaries: `agent-director-linux-amd64`,
+     `agent-director-linux-arm64`, `agent-director-darwin-arm64`
+     (`darwin/amd64` was dropped from v1 on 2026-05-24 alongside the
+     cabi platform set).
+   - 2 pkg/cabi shared libraries: `dist/cabi/linux-amd64/libagent_director.so`,
      `dist/cabi/darwin-arm64/libagent_director.dylib`.
    - 1 canonical C header: `dist/cabi/include/libagent_director.h`
      (the header is platform-independent; the canonical copy is
@@ -1776,7 +1783,9 @@ The notes phase appends this section to `dist/release-notes.md`
 when there are differences and is silent otherwise. Pins tracked:
 
 - `gcc-NN` (linux/amd64 leg's `apt-get install` line).
-- `Xcode_X.Y.app` (darwin/amd64 leg's `xcode-select -switch` line).
+- `Xcode_X.Y.app` (no longer present in the workflow after the
+  2026-05-24 darwin/amd64 drop; the regex is retained so a diff
+  against an older release tag still surfaces the removal).
 - `BUN_VERSION: 'x.y.z'` (workflow env scalar).
 
 The darwin/arm64 leg's Xcode pin lives on the self-hosted runner

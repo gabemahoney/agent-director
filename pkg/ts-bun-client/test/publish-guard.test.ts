@@ -5,9 +5,9 @@
  *     contains "CHANGEME-H3".
  * (b) Guard exits 0 when invoked from a directory whose package.json has a
  *     real (non-placeholder) name.
- * (c) Static assertion: all four real package.json files in the worktree have
+ * (c) Static assertion: all three real package.json files in the worktree have
  *     a scripts.prepublishOnly entry that invokes check-not-placeholder.
- * (d) Post-H3-resolution invariant: none of the four real package.json files
+ * (d) Post-H3-resolution invariant: none of the three real package.json files
  *     carries the CHANGEME-H3 placeholder in its name. The guard remains a
  *     forward-going tripwire against re-introducing a placeholder.
  *
@@ -91,15 +91,14 @@ describe("publish-guard — real name", () => {
 });
 
 // ---------------------------------------------------------------------------
-// (c) Static: all four package.json files wire prepublishOnly to the guard
-// (d) Static: none of the four package.json files carries the H3 placeholder
+// (c) Static: all three package.json files wire prepublishOnly to the guard
+// (d) Static: none of the three package.json files carries the H3 placeholder
 // ---------------------------------------------------------------------------
 
 describe("publish-guard — wiring assertions", () => {
   const packageFiles = [
     resolve(pkgDir, "package.json"),
     resolve(pkgDir, "platforms", "linux-x64", "package.json"),
-    resolve(pkgDir, "platforms", "darwin-x64", "package.json"),
     resolve(pkgDir, "platforms", "darwin-arm64", "package.json"),
   ];
 

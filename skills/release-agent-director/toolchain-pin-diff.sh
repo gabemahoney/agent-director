@@ -3,25 +3,25 @@
 # pin changes since the previous release tag.
 #
 # Per SRD §SR-2.3, any change to a pinned C toolchain version (gcc on
-# linux/amd64, Xcode on darwin/amd64+arm64, and the Bun runtime
-# version used for the TS smoke leg) must be surfaced in release
-# notes. release.sh invokes this script after the notes phase
-# templates the per-Epic git-log section and BEFORE gh-release reads
-# the notes file.
+# linux/amd64 and the Bun runtime version used for the TS smoke leg)
+# must be surfaced in release notes. release.sh invokes this script
+# after the notes phase templates the per-Epic git-log section and
+# BEFORE gh-release reads the notes file.
 #
 # Pin sources:
 #   - `.github/workflows/cabi-matrix.yml`
 #       * `gcc-11`  — apt package name on the linux-amd64 leg.
 #                     Token: `apt-get install -y --no-install-recommends gcc-NN`.
-#       * `Xcode 15.2` — selected via `xcode-select -switch
-#                      /Applications/Xcode_15.2.app` on darwin-amd64.
-#                      Token: `Xcode_<X.Y>.app`.
 #       * `BUN_VERSION: '<x.y.z>'` — workflow env scalar.
 #   - The darwin-arm64 leg's Xcode pin is operator-configured on the
 #     self-hosted runner (not in the workflow file); see
 #     `docs/self-hosted-runner-setup.md`. It is therefore NOT diffed
 #     here — its changes are surfaced in the release notes manually
 #     by the operator when bumping.
+#   - darwin/amd64 was dropped from v1 on 2026-05-24, so its Xcode pin
+#     no longer exists in the workflow file. The extraction below is
+#     retained as a regex-no-op for backward compatibility with older
+#     refs that still contained the pin.
 #
 # Extraction strategy: pure grep/sed regex over the workflow YAML at
 # both the current commit and the previous release tag. We
@@ -76,7 +76,10 @@ extract_pins() {
     fi
 
     # Xcode_X.Y.app pin. The xcode-select -switch invocation on the
-    # darwin-amd64 leg is the source of truth.
+    # darwin-amd64 leg was the source of truth before darwin/amd64 was
+    # dropped (2026-05-24). The extraction is retained so a diff
+    # against an older release tag still surfaces the removal as a
+    # toolchain-pin change.
     local xcode_pin
     xcode_pin=$(printf '%s' "$content" | grep -Eo 'Xcode_[0-9]+(\.[0-9]+)?(\.app)?' | head -n 1 || true)
     if [[ -n "$xcode_pin" ]]; then

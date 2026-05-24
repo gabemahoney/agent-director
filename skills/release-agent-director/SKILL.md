@@ -1,6 +1,6 @@
 ---
 name: release-agent-director
-description: Cut a coordinated agent-director release. Builds four CLI binaries plus pkg/cabi shared libraries on three v1 platforms (linux/amd64, darwin/amd64, darwin/arm64), tags the commit, publishes the umbrella npm package plus three per-platform optional dependencies, and creates a GitHub release with all artifacts attached. Runs as a phased pipeline (preflight → notes → build → verify → tag → publish → gh-release → report) ordered most-reversible to least-reversible, with halt-on-failure semantics. Defaults to --dry-run; pass --release to execute irreversible steps. Use this skill when the user says "release agent-director", "cut a release", or "publish v<X.Y.Z>".
+description: Cut a coordinated agent-director release. Builds three CLI binaries plus pkg/cabi shared libraries on two v1 platforms (linux/amd64, darwin/arm64 — darwin/amd64 dropped 2026-05-24), tags the commit, publishes the umbrella npm package plus two per-platform optional dependencies, and creates a GitHub release with all artifacts attached. Runs as a phased pipeline (preflight → notes → build → verify → tag → publish → gh-release → report) ordered most-reversible to least-reversible, with halt-on-failure semantics. Defaults to --dry-run; pass --release to execute irreversible steps. Use this skill when the user says "release agent-director", "cut a release", or "publish v<X.Y.Z>".
 ---
 
 ## When to invoke
@@ -20,19 +20,19 @@ first failing phase. Every phase prefixes its stdout/stderr with
 |---|---|---|
 | `preflight` | none — read-only | semver normalization; gh on PATH; working tree clean; tag does not exist locally; current branch matches `--branch` |
 | `notes` | local file write | template `dist/release-notes.md` from `git log <prev-tag>..HEAD` grouped by Epic ID |
-| `build` | local file write | `make release-binaries` (4 CLI platforms) + `gh run download` of `pkg-cabi-<platform>` for the 3 v1 cabi platforms |
+| `build` | local file write | `make release-binaries` (3 CLI platforms) + `gh run download` of `pkg-cabi-<platform>` for the 2 v1 cabi platforms |
 | `verify` | local file write | go smoke (`test/smoke/go/...`) + ts smoke + envelope-diff (go + ts) against the just-built artifacts |
 | `tag` | **POINT OF NO RETURN** | `git tag -a $VERSION` and `git push origin $VERSION` |
-| `publish` | **irreversible** | `npm publish` 3 per-platform optional packages, then the umbrella; same-version retries forbidden |
-| `gh-release` | irreversible | `gh release create $VERSION` with 4 CLI binaries + 3 cabi libs + 1 canonical header |
+| `publish` | **irreversible** | `npm publish` 2 per-platform optional packages, then the umbrella; same-version retries forbidden |
+| `gh-release` | irreversible | `gh release create $VERSION` with 3 CLI binaries + 2 cabi libs + 1 canonical header |
 | `report` | read-only | final summary; on failure, names the failed phase + the phase-specific corrective action |
 
 ## Pre-flight checklist
 
 Before invoking `./release.sh v<X.Y.Z> --release`, verify all six:
 
-1. **No placeholder names.** None of the four `package.json` files
-   (`pkg/ts-bun-client/package.json` + the three under
+1. **No placeholder names.** None of the three `package.json` files
+   (`pkg/ts-bun-client/package.json` + the two under
    `platforms/*/`) contain the `@CHANGEME-H3/...` or `@TBD/...`
    placeholder. H3 itself was resolved on 2026-05-24 (see
    `docs/release-blockers.md`); the publish-phase sentinel remains
@@ -43,11 +43,11 @@ Before invoking `./release.sh v<X.Y.Z> --release`, verify all six:
    | select(.labels[].name=="darwin-arm64") | .status'` — must
    report `online`. The runbook for bringing it up is
    `docs/self-hosted-runner-setup.md`.
-3. **CI matrix green on the release commit.** All three legs of
+3. **CI matrix green on the release commit.** Both legs of
    `.github/workflows/cabi-matrix.yml` (`linux-amd64`,
-   `darwin-amd64`, `darwin-arm64`) succeeded on the exact commit
-   you intend to tag. The build phase will hard-fail (`[build] CI
-   matrix is red on $COMMIT`) if not.
+   `darwin-arm64`) succeeded on the exact commit you intend to
+   tag. The build phase will hard-fail (`[build] CI matrix is red
+   on $COMMIT`) if not.
 4. **Envelope-diff green.** Both the Go suite (`go test
    ./test/envelope-diff/...`) and the TS suite (`make
    envelope-diff-ts`) succeed locally. The verify phase re-runs
@@ -176,7 +176,7 @@ top.
 ## See also
 
 - `docs/architecture.md` "Release engineering" — the canonical
-  architectural reference for the four-CLI / three-cabi /
+  architectural reference for the three-CLI / two-cabi /
   one-header asset list and the Go module tagging convention.
 - `docs/release-blockers.md` — H3 npm-name resolution checklist.
 - `docs/self-hosted-runner-setup.md` — operator runbook for

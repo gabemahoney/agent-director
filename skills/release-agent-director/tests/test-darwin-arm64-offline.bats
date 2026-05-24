@@ -63,7 +63,6 @@ case "\$1" in
                 mkdir -p "\$dir"
                 case "\$art" in
                     pkg-cabi-linux-amd64)  touch "\$dir/libagent_director.so"  "\$dir/libagent_director.h" ;;
-                    pkg-cabi-darwin-amd64) touch "\$dir/libagent_director.dylib" "\$dir/libagent_director.h" ;;
                     pkg-cabi-darwin-arm64) touch "\$dir/libagent_director.dylib" "\$dir/libagent_director.h" ;;
                 esac
                 exit 0
@@ -82,7 +81,6 @@ EOF
     [[ "$output" == *"darwin/arm64 leg unavailable; bring self-hosted runner online before retrying"* ]]
     # Belt-and-suspenders: the generic message must NOT also appear.
     [[ "$output" != *"linux-amd64 leg unavailable"* ]]
-    [[ "$output" != *"darwin-amd64 leg unavailable"* ]]
 }
 
 @test "gh run download failure on darwin-arm64 emits the self-hosted-runner message" {
@@ -100,8 +98,8 @@ EOF
     [[ "$output" != *"darwin/arm64 leg unavailable"* ]]
 }
 
-@test "no partial 2-of-3 release: halt names every missing platform" {
-    # Simulate two legs missing: linux-amd64 + darwin-arm64.
+@test "no partial 1-of-2 release: halt names every missing platform" {
+    # Simulate both legs missing: linux-amd64 + darwin-arm64.
     write_gh_stub "linux-amd64"
     AD_RELEASE_SIMULATE_DARWIN_ARM64_OFFLINE=1 run collect_cabi_artifacts
     [ "$status" -ne 0 ]
