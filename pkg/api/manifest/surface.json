@@ -718,6 +718,15 @@
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null
+        },
+        {
+          "name": "overwrite",
+          "type": "bool",
+          "description": "Replace any existing template at this name atomically. Default false preserves O_EXCL create-only semantics.",
+          "required": false,
+          "nullable": false,
+          "allow_empty": false,
+          "allowed_values": null
         }
       ],
       "result_fields": [
