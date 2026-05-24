@@ -21,23 +21,24 @@ first failing phase. Every phase prefixes its stdout/stderr with
 | `preflight` | none — read-only | semver normalization; gh on PATH; working tree clean; tag does not exist locally; current branch matches `--branch` |
 | `notes` | local file write | template `dist/release-notes.md` from `git log <prev-tag>..HEAD` grouped by Epic ID |
 | `build` | local file write | `make release-binaries` (3 CLI platforms) + `gh run download` of `pkg-cabi-<platform>` for the 2 v1 cabi platforms |
-| `verify` | local file write | go smoke (`test/smoke/go/...`) + ts smoke + envelope-diff (go + ts) against the just-built artifacts |
+| `verify` | local file write | go smoke (`test/smoke/go/...`) + ts smoke + envelope-diff (go + ts) + **postinstall tarball verify** (SRD §SR-8; v0.4.1+): `bun pm pack` against a release-stamped staging copy → install under temp `HOME` → assert bundled `SKILL.md` frontmatter `version:` matches the release tag |
 | `tag` | **POINT OF NO RETURN** | `git tag -a $VERSION` and `git push origin $VERSION` |
-| `publish` | **irreversible** | `npm publish` 2 per-platform optional packages, then the umbrella; same-version retries forbidden |
+| `publish` | **irreversible** | in-place stamp version onto umbrella + 2 sub-package `package.json` files + **`skills/install-agent-director/SKILL.md` frontmatter `version:`** (SR-4.1 lockstep, v0.4.1+); caret-pin `optionalDependencies` (umbrella); `prepublishOnly` re-checks (placeholder name, version skew, `os`/`cpu` drift, opt-deps range — SR-3.1 + SR-3.3 + SR-4.1); `npm publish` 2 per-platform optional packages, then the umbrella; same-version retries forbidden |
 | `gh-release` | irreversible | `gh release create $VERSION` with 3 CLI binaries + 2 cabi libs + 1 canonical header |
 | `report` | read-only | final summary; on failure, names the failed phase + the phase-specific corrective action |
 
 ## Pre-flight checklist
 
-Before invoking `./release.sh v<X.Y.Z> --release`, verify all six:
+Before invoking `./release.sh v<X.Y.Z> --release`, verify all seven:
 
 1. **No placeholder names.** None of the three `package.json` files
    (`pkg/ts-bun-client/package.json` + the two under
    `platforms/*/`) contain the `@CHANGEME-H3/...` or `@TBD/...`
    placeholder. H3 itself was resolved on 2026-05-24 (see
    `docs/release-blockers.md`); the publish-phase sentinel remains
-   in place as a forward-going tripwire and halts before any
-   `npm publish` if a placeholder is ever re-introduced.
+   in place as a forward-going tripwire (now Guard 0 of
+   `pkg/ts-bun-client/scripts/prepublish-guards.ts`) and halts before
+   any `npm publish` if a placeholder is ever re-introduced.
 2. **Self-hosted darwin/arm64 runner online.** Check with
    `gh api /repos/<owner>/<repo>/actions/runners | jq '.runners[]
    | select(.labels[].name=="darwin-arm64") | .status'` — must
@@ -61,6 +62,20 @@ Before invoking `./release.sh v<X.Y.Z> --release`, verify all six:
 6. **`gh auth status` authenticated** against the repo's GitHub
    remote (read+push). Required by `gh run list`/`gh run download`
    (build phase) and `gh release create` (gh-release phase).
+7. **v0.4.1+ artifacts in lockstep.** The umbrella's
+   `pkg/ts-bun-client/scripts/postinstall.ts` is shipped via the
+   umbrella's `files` glob (alongside `skills/install-agent-director/**`,
+   staged at pack time by the `prepack` hook
+   `scripts/stage-skill.ts`), and the SKILL.md frontmatter `version:`
+   field is the source of truth the postinstall + release pipeline
+   read. The `publish` phase keeps the umbrella `package.json`
+   `version` and the SKILL.md frontmatter `version:` in lockstep at
+   bump time; `prepublishOnly` (Guard 1) refuses to publish if they
+   drift. The `verify` phase's step 4/4 packs the umbrella into a
+   tarball, installs it under a temp `HOME`, and asserts the
+   postinstall placed the skill body with the right frontmatter
+   version — so a regression in the published-shape tarball is
+   caught before the tag is pushed.
 
 The existing semver / clean-tree / branch / tag-not-exists gates
 remain enforced by the preflight phase and are restated here so the
@@ -117,7 +132,7 @@ human-readable index for forward planning.
 | `preflight` | nothing | Fix the reported error and re-run. No state has been changed. |
 | `notes` | `dist/release-notes.md` written | Inspect `git log` range; re-run. |
 | `build` | `dist/` populated | If `cabi-matrix.yml` is red: fix the regression on the release commit and wait for a green run, then re-run. If darwin/arm64 leg is unavailable: bring the self-hosted runner online (`docs/self-hosted-runner-setup.md`) and re-run. |
-| `verify` | local builds, no remote state | Fix the regression. **Never ship a red verify** — that is the entire point of this gate. |
+| `verify` | local builds, no remote state | Fix the regression. **Never ship a red verify** — that is the entire point of this gate. If step 4/4 (postinstall tarball verify) fails, the regression is in the umbrella's `files` glob, the `prepack` skill-staging hook (`scripts/stage-skill.ts`), or `scripts/postinstall.ts` itself — none of which are remote-state mutations, so you can iterate freely until verify is green. |
 | `tag` | **tag pushed to remote** | Delete the remote tag and try again: `git push --delete origin v<X.Y.Z> && git tag -d v<X.Y.Z>`. Re-run from the top once the underlying cause is fixed. |
 | `publish` | **npm packages published** | The published version is gone — **same-version retries are forbidden**. Increment VERSION (PATCH bump), re-run from the top. The npm registry will accept the new version; the partially-published old version stays as a record. **Never silent re-publish.** |
 | `gh-release` | tag pushed + npm published; GH release not created | Do **NOT** increment VERSION — the tag and npm publish already succeeded for that version. Re-run `gh release create` manually with the assets in `./dist/`. The report phase prints the exact command. |
@@ -132,6 +147,20 @@ would break consumers' install reproducibility. The only valid
 retry path is to bump the version (PATCH for a re-publish, MINOR
 or MAJOR if the recovery patch is meaningful) and re-run from the
 top.
+
+### `prepublishOnly` guards (v0.4.1+)
+
+`pkg/ts-bun-client/scripts/prepublish-guards.ts` runs synchronously
+inside `npm publish` / `bun publish` for the umbrella and blocks the
+publish on any of four invariant violations (SRD §SR-3.1 + §SR-3.3 +
+§SR-4.1). Each is a hard release-blocker; fix and re-run.
+
+| Guard | Invariant | Recovery |
+|---|---|---|
+| Placeholder name | umbrella `name` does not contain `CHANGEME-H3` | Edit `pkg/ts-bun-client/package.json` `name`; see `docs/release-blockers.md`. |
+| Version skew | `package.json` `version` == `SKILL.md` frontmatter `version:` | Re-run `publish_phase`'s lockstep stamp — both fields move together. If you edited one by hand, re-run the release. |
+| `os`/`cpu` drift | umbrella `os` == `["linux","darwin"]` AND `cpu` == `["x64","arm64"]`, exact match including element order | Restore the SR-3.1 pin in `pkg/ts-bun-client/package.json`. If a future Epic legitimately reorders or expands the supported set, update the SR-3.1 pin in the SRD and in `prepublish-guards.ts` together. |
+| Opt-deps range | umbrella `optionalDependencies[@agent-director/linux-x64]` and `[@agent-director/darwin-arm64]` both equal `^<umbrella.version>` | Re-run `bun run scripts/version-bump.ts --version <X.Y.Z>` from `pkg/ts-bun-client/` (the canonical pin-rewriter, invoked by `publish_phase`). |
 
 ## Flags
 

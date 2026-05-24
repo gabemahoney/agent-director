@@ -2,6 +2,8 @@
   "name": "agent-director",
   "version": "0.0.0",
   "type": "module",
+  "os": ["linux", "darwin"],
+  "cpu": ["x64", "arm64"],
   "engines": {
     "bun": ">=1.0.21"
   },
@@ -9,7 +11,9 @@
     "dist/**/*.js",
     "dist/**/*.d.ts",
     "!dist/**/*.test.*",
-    "README.md"
+    "README.md",
+    "scripts/postinstall.ts",
+    "skills/install-agent-director/**"
   ],
   "exports": {
     ".": {
@@ -25,8 +29,11 @@
     "smoke": "bun test test/smoke/ test/smoke-invariants.test.ts",
     "envelope-diff": "bun test test/envelope-diff.test.ts test/envelope-diff-invariants.test.ts",
     "prepare-platforms": "bun run scripts/prepare-platforms.ts",
+    "stage-skill": "bun run scripts/stage-skill.ts",
+    "prepack": "bun run scripts/stage-skill.ts",
+    "postinstall": "bun run scripts/postinstall.ts",
     "version-bump-publish": "bun run scripts/version-bump.ts",
-    "prepublishOnly": "bun run scripts/check-not-placeholder.ts"
+    "prepublishOnly": "bun run scripts/prepublish-guards.ts"
   },
   "optionalDependencies": {
     "@agent-director/linux-x64": "file:./platforms/linux-x64",

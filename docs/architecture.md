@@ -997,6 +997,75 @@ The `list --parent <id>` filter walks this column directly; the
 MCP server (Epic 11) exposes the same filter so an LLM client can
 map a tree by recursive listings.
 
+## Install flows
+
+There are two complementary install surfaces, separated by what they
+touch on disk. **Pattern A** (the npm postinstall) ships
+`/install-agent-director` into Claude Code's skill registry so the
+operator can discover the install skill in one step; **Pattern B**
+(the install skill itself) is the only path that touches the CLI
+binary, state DB, and Claude Code hooks. Pattern A is silent; Pattern
+B is explicit and operator-confirmed.
+
+### Pattern A — Postinstall skill copy
+
+When the umbrella package is installed:
+
+```
+bun add agent-director
+  → bun resolves umbrella + platform sub-package
+  → bun runs pkg/ts-bun-client/scripts/postinstall.ts
+      → host-pair gate (linux/x64 or darwin/arm64, else exit 1)
+      → ${HOME}/.claude/skills/install-agent-director/ atomic copy
+        of the bundled skill body
+  → claude /install-agent-director is now invokable in any Claude
+    Code session run by that operator
+```
+
+The postinstall **only** writes under `${HOME}/.claude/skills/`
+(plus a sibling tmp dir and an optional timestamped backup). It does
+NOT touch `~/.local/bin/agent-director`, `~/.agent-director/`,
+`~/.claude/settings.json`, or `~/.claude/config.toml`. Those side
+effects are reserved for Pattern B's `install.sh`. Keeping
+postinstall narrow protects operators who install the library purely
+to import it from TypeScript code and never want the CLI / state DB
+/ hooks materialized.
+
+The three-way decision (identical / older-or-absent / newer) is
+governed by the YAML frontmatter `version:` field on
+`SKILL.md`. Authoritative spec lives in SRD `t1.fg3.7i` SR-1.4.
+
+### Pattern B — `install.sh` (the install skill)
+
+Invoked from inside Claude Code via `/install-agent-director` (which
+runs the skill body Pattern A copied), or directly via
+`bash skills/install-agent-director/install.sh`:
+
+```
+claude /install-agent-director (or `bash install.sh`)
+  → install.sh preflight gates (OS/CPU, --binary arch probe,
+    required tools on PATH, whitespace-free install path)
+  → write CLI binary to ~/.agent-director/bin/agent-director
+  → warm up ~/.agent-director/state.db
+  → merge SessionStart + SessionEnd hooks into ~/.claude/settings.json
+  → optional ~/.local/bin/agent-director PATH symlink
+```
+
+Pattern B is where the CLI / state / hooks side effects happen.
+
+### Pattern B fallback (postinstall skipped)
+
+When `bun add --ignore-scripts agent-director` (or any client that
+suppresses lifecycle scripts) is used, the postinstall does not run.
+Pattern B is still reachable two ways:
+
+1. Manual: `cp -r node_modules/agent-director/skills/install-agent-director ~/.claude/skills/` then invoke the skill.
+2. Direct: invoke `claude /install-agent-director` — the skill body
+   knows how to copy itself into `~/.claude/skills/` as a side
+   effect of running install.sh.
+
+Same end state in both cases.
+
 ## Install layout
 
 The `skills/install-agent-director/` skill (Epic 12) lays out the

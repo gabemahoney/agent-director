@@ -10,6 +10,68 @@ bun add agent-director
 
 Requires Bun >=1.0.21. The package ships a prebuilt shared library for each supported platform via optional dependencies — they install automatically on `bun add`.
 
+On install, a postinstall script copies the `install-agent-director` skill body into `~/.claude/skills/install-agent-director/` so `claude /install-agent-director` is immediately discoverable in Claude Code. The postinstall only writes under `~/.claude/skills/`; it does not touch PATH, `~/.agent-director/`, or your Claude Code settings.
+
+Bun blocks dependency postinstalls by default. Trust this package so the skill copy can run:
+
+```sh
+bun pm trust agent-director
+```
+
+Or pre-declare it in your `package.json` before `bun add`:
+
+```json
+{
+  "trustedDependencies": ["agent-director"]
+}
+```
+
+### Verbose install logs
+
+Set `AD_POSTINSTALL_VERBOSE=1` (also accepts `true` / `yes`, case-insensitive) before `bun add` to see what the postinstall resolved and decided. The default is quiet — five lines maximum.
+
+### Skipping the postinstall
+
+`bun add --ignore-scripts agent-director` installs the library without running the postinstall. The skill is not copied. To get skill discoverability after the fact, either:
+
+```sh
+cp -r node_modules/agent-director/skills/install-agent-director ~/.claude/skills/
+```
+
+or, once the library is on disk, invoke `claude /install-agent-director` from any Claude Code session — the install skill copies itself into `~/.claude/skills/` as a side effect of running.
+
+### How the postinstall decides whether to overwrite
+
+The skill body carries a `version:` field in its YAML frontmatter. On every install the postinstall reads the bundled version and the version already on disk:
+
+- **Same version** — no filesystem changes, no output.
+- **Older or missing on disk** — overwrite, leaving a timestamped `install-agent-director.bak.<unix-ts>` sibling under `~/.claude/skills/`.
+- **Newer on disk** — leave it alone, single-line warning to stderr.
+
+The authoritative behavior contract lives in Idea Bee `b.fg3`.
+
+## Supported platforms
+
+**Supported** — install + library + skill all work:
+
+- `linux/x64` (Linux on x86_64)
+- `darwin/arm64` (Apple Silicon Mac)
+
+**Refused at install time by npm/bun** — the umbrella's `os`/`cpu` fields fail resolution and no postinstall runs:
+
+- Windows (any architecture)
+- FreeBSD, OpenBSD, and other non-Linux/non-Darwin OSes
+- any architecture not in `[x64, arm64]` (e.g. `ia32`, `mips`, `arm`)
+
+**Refused by the postinstall after npm/bun admits the install** — the umbrella runs but the postinstall exits non-zero with an `agent-director: unsupported host` message before any filesystem write:
+
+- `darwin/x64` (Intel Mac)
+- `linux/arm64`
+
+The refusal is two-layered because npm/bun's `os` and `cpu` fields are a cross-product, not a per-pair set: the coarse gate cannot distinguish "supported pair" from "supported OS plus supported arch in any combination." The postinstall's host-pair check catches the two cross-product members that should not actually install.
+
+See Idea Bee `b.fg3` for cross-platform expansion status.
+
 ## Quick start
 
 `using` block (preferred):
