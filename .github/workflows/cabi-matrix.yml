@@ -115,7 +115,14 @@ jobs:
       matrix:
         include:
           - name: linux-amd64
-            runs-on: ubuntu-22.04
+            # Full conjunctive label tuple targeting the operator's
+            # self-hosted Reno runner (Ubuntu 24.04, i9-9820X). Mirrors
+            # the darwin-arm64 entry's defensive labeling so the workflow
+            # cannot accidentally route to a different self-hosted runner
+            # if one is added later. Falls through to queuing if Reno is
+            # offline (deliberate — we'd rather queue than silently route
+            # to a GH-hosted runner and re-incur billable minutes).
+            runs-on: [self-hosted, Linux, X64, linux-amd64]
             lib_ext: so
             lib_name: libagent_director.so
             # platform_dir is the TS package's platforms/<dir>/ slot
@@ -165,18 +172,26 @@ jobs:
         if: matrix.name == 'linux-amd64'
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-11 g++-11
-          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 100
-          sudo update-alternatives --set gcc /usr/bin/gcc-11
-          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-11 100
-          sudo update-alternatives --set g++ /usr/bin/g++-11
-          gcc --version | tee build-info-gcc.txt
+          # Route the leg-pinned compiler via CC/CXX env vars instead of
+          # update-alternatives so the step works on self-hosted runners
+          # without passwordless sudo. cgo + go build respect CC/CXX.
+          # If gcc-11 is missing (rare — Reno keeps it preinstalled),
+          # try apt; on a self-hosted runner without sudo this will fail
+          # loudly and the operator can install manually.
+          if ! command -v gcc-11 >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends gcc-11 g++-11
+          fi
+          gcc-11 --version | tee build-info-gcc.txt
           {
             echo "---"
-            echo "update-alternatives --query gcc:"
-            update-alternatives --query gcc | head -n 20
+            echo "selected via CC/CXX env (not update-alternatives):"
+            echo "CC=$(command -v gcc-11)"
+            echo "CXX=$(command -v g++-11)"
           } | tee -a build-info-gcc.txt
+          # Persist CC/CXX for subsequent steps in this job.
+          echo "CC=$(command -v gcc-11)"  >> "$GITHUB_ENV"
+          echo "CXX=$(command -v g++-11)" >> "$GITHUB_ENV"
 
       - name: Pin Xcode 15.2 and capture build-info (darwin-amd64)
         if: matrix.name == 'darwin-amd64'
