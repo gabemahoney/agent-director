@@ -1,0 +1,26 @@
+{
+  "decide": [],
+  "delete": [],
+  "expire": [
+    ".ids"
+  ],
+  "find-missing": [],
+  "get": [],
+  "kill": [],
+  "list": [],
+  "make-template": [
+    ".path"
+  ],
+  "pause": [],
+  "read-pane": [],
+  "resume": [],
+  "send-keys": [],
+  "spawn": [
+    ".claude_instance_id"
+  ],
+  "status": [],
+  "version": [
+    ".commit",
+    ".version"
+  ]
+}

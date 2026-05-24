@@ -6,7 +6,7 @@
 // `tools/list` (verb advertisement), `tools/call` (verb dispatch).
 // Notifications (`notifications/initialized`) are accepted and dropped.
 //
-// The tool list is generated from `internal/api/manifest.Verbs`, the
+// The tool list is generated from `pkg/api/manifest.Verbs`, the
 // same single source of truth that drives the CLI flags and the
 // reference docs — adding a new verb to the manifest exposes it via
 // MCP on next server start with no source changes here. The
@@ -22,7 +22,8 @@ import (
 	"io"
 	"log"
 
-	"github.com/gabemahoney/agent-director/internal/api/manifest"
+	"github.com/gabemahoney/agent-director/pkg/api/errnames"
+	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
 // ProtocolVersion is the MCP protocol version this server advertises.
@@ -240,53 +241,25 @@ func (s *Server) handleToolCall(ctx context.Context, req *Request, respond func(
 	}, nil)
 }
 
-// ErrUnknownTool is returned by a Dispatcher when the tool name is
-// not in the registered list. The server maps it to MCP -32601 in
-// classifyDispatchError below.
+// ErrUnknownTool is returned by the MCP dispatcher when the requested
+// tool name is not in the registered verb list. Declared here (not in
+// pkg/api/errnames) because it is a dispatch-level error, not a
+// verb-surface error: it has no callable VerbDef.ErrorNames entry and
+// must not appear in errnames.Catalog (doing so would violate the
+// five-way coherence invariant). The import direction is
+// internal/mcp → pkg/api/errnames; the sentinel lives at the call site.
 var ErrUnknownTool = errors.New("ErrUnknownTool")
 
 // classifyDispatchError extracts the typed err_name from a Dispatcher
-// error. The Dispatcher's Call method may wrap any of the SRD §13.1
-// sentinels via `%w`; we use errors.Is against a small probe set to
-// recover the canonical name. Unrecognized errors collapse to
-// "ErrInternal" — matching the CLI's classifyError behavior.
+// error. ErrUnknownTool is checked explicitly first (it is a dispatch-level
+// sentinel not in errnames.Catalog); all other errors are classified via
+// errnames.Classify, which walks the Catalog via errors.Is. Unrecognized
+// errors collapse to "ErrInternal" — matching the CLI's Classify behavior.
 func classifyDispatchError(err error) (name, description string) {
-	if err == nil {
-		return "", ""
+	if errors.Is(err, ErrUnknownTool) {
+		return "ErrUnknownTool", err.Error()
 	}
-	for _, ec := range errProbes {
-		if errors.Is(err, ec.err) {
-			return ec.name, err.Error()
-		}
-	}
-	return "ErrInternal", err.Error()
-}
-
-// errProbes is the local probe set the MCP server uses to translate
-// dispatcher errors into canonical err_names. Kept as a small table
-// rather than re-using the CLI's errCatalog so this package stays
-// importable without circular dependencies.
-var errProbes []errorProbe
-
-// errorProbe is one entry in the err-name lookup table. RegisterError
-// is the registration seam — the CLI wiring populates this from its
-// own catalog so the two views never drift.
-type errorProbe struct {
-	name string
-	err  error
-}
-
-// RegisterError adds (or replaces) an entry in the probe set. Called
-// from cmd/ during MCP wiring so the server inherits the CLI's
-// canonical err_name table.
-func RegisterError(name string, err error) {
-	for i, p := range errProbes {
-		if p.name == name {
-			errProbes[i].err = err
-			return
-		}
-	}
-	errProbes = append(errProbes, errorProbe{name: name, err: err})
+	return errnames.Classify(err)
 }
 
 // InitializeResult is the MCP initialize response payload.

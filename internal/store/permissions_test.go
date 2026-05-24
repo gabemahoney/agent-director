@@ -18,13 +18,13 @@ func statMode(t *testing.T, path string) os.FileMode {
 	return info.Mode().Perm()
 }
 
-// openAt constructs path = tmp/subdir/state.db (so Open has to create the
-// "subdir" parent itself) and returns the resolved DB and parent paths.
+// openAt constructs path = tmp/subdir/state.db (so OpenOrInit has to create
+// the "subdir" parent itself) and returns the resolved DB and parent paths.
 func openAt(t *testing.T) (dbPath, parentDir string) {
 	t.Helper()
 	parentDir = filepath.Join(t.TempDir(), "agent-director")
 	dbPath = filepath.Join(parentDir, "state.db")
-	s, err := Open(dbPath)
+	s, err := OpenOrInit(dbPath)
 	if err != nil {
 		t.Fatalf("Open(%q): %v", dbPath, err)
 	}

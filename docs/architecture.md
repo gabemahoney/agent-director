@@ -11,7 +11,7 @@ A single Go binary that:
 ## Surfaces
 
 - **CLI** — `agent-director <verb> ...` for every verb in
-  `internal/api/manifest`. See `docs/cli-reference.md` for the canonical
+  `pkg/api/manifest`. See `docs/cli-reference.md` for the canonical
   list.
 - **Hook entrypoint** — the same binary invoked by Claude Code on hook events (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, Notification, SessionEnd, PermissionRequest).
 - **Stdio MCP server** — same binary invoked as `agent-director serve --stdio`. Stdio transport, lifetime scoped to a single Claude Code session.
@@ -24,25 +24,134 @@ A single Go binary that:
 
 See the SRD (Apiary Ideas hive: `t1.jus.x5`) for the full design.
 
+## Supported platforms (v1)
+
+The v1 supported-platform set is **`linux/amd64`** and **`darwin/arm64`**.
+`darwin/amd64` (Intel Mac) was **dropped on 2026-05-24**: no Intel Mac
+users to serve, and the GitHub-hosted `macos-13` runner image carries
+a 10x billing multiplier that no longer paid for itself. `linux/arm64`
+remains a v2 candidate for `pkg/cabi`; the CLI binary set still ships a
+`linux/arm64` Go-only binary (no cgo, no native library — released by
+Epic 7).
+
+## Cross-platform CI matrix
+
+`pkg/cabi` ships on the two v1 platforms above; `.github/workflows/cabi-matrix.yml`
+runs the per-language smoke and envelope-diff suites on every leg on
+every commit.
+
+The matrix uses native runners exclusively (no Zig / QEMU cross-compile):
+
+- `linux-amd64` → operator-owned **self-hosted** Reno runner registered
+  with the full label tuple `[self-hosted, Linux, X64, linux-amd64]`.
+- `darwin-arm64` → operator-owned **self-hosted** runner registered
+  with the full label tuple `[self-hosted, macOS, ARM64, darwin-arm64]`.
+  Bare `self-hosted` is not used so the workflow cannot accidentally
+  route to a different self-hosted runner.
+
+C toolchain versions are pinned per leg (gcc-11 on linux via CC/CXX env
+vars, operator-pinned Xcode/CLT on darwin/arm64) and captured into
+`build-info-*.txt` artifacts so Epic 7's release pipeline can attribute
+the toolchain shipped with each artifact.
+
+Operator setup of the self-hosted runner — including the public-repo
+security posture — is documented in
+[`docs/self-hosted-runner-setup.md`](self-hosted-runner-setup.md).
+
 ## Package Layout & Layer Boundaries
 
 The binary is layered so each package owns exactly one concern. Imports flow
-in one direction only: `cmd/` depends on `internal/api/*`, which depends on
+in one direction only: `cmd/` depends on `pkg/api`, which depends on
 `internal/store` (and on `internal/config` for read-only configuration).
 Nothing flows back upward and nothing skips a layer.
+
+`pkg/api` is the canonical verb-handler home sitting above `internal/store`,
+`internal/config`, `internal/tmux`, and `internal/probe`; it is consumed by
+`cmd/agent-director` and `internal/mcp`. The downward-only dependency rule
+still holds: nothing in `internal/` imports `pkg/api`.
 
 ### Package inventory
 
 | Path | Responsibility | Allowed imports | Prohibited imports |
 | --- | --- | --- | --- |
-| `cmd/agent-director` | CLI entrypoint: argv dispatch, exit codes, JSON error envelopes. Wires `internal/config` and `internal/api/*` into runnable verbs. | stdlib; any `internal/api/*`; `internal/config`; `internal/store` only via constructor wiring. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management that bypasses `internal/api`. |
-| `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v1 per SRD §4.2), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `internal/api/*`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
-| `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `internal/api/*`; `cmd/*`. |
-| `internal/api` | Stable verb-handler surface used by CLI + MCP + hooks. Typed Go functions only — no SQL, no MCP framing. | stdlib; `internal/api/manifest`; (later) `internal/store` and `internal/config`. | Raw SQL; MCP framing; hook IO. |
-| `internal/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. | stdlib only — leaf package. | `internal/store`, `internal/config`, `internal/api/*` (other than this package), `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
+| `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`; every non-hook verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. | stdlib; `pkg/api`; `pkg/api/errnames`; `internal/hook`; `internal/config` and `internal/store` (error sentinels only) in `setupClient`; `internal/config` in `runHook` and `newHookLogger`. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook`, `newHookLogger`, and `setupClient`'s logger bootstrap. |
+| `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, `KillTmux`, `KillLogger`, etc.), params/result types, and error sentinels. Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director` and `internal/mcp`. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`. | Direct `database/sql`; raw SQL strings; MCP framing. |
+| `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v1 per SRD §4.2), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
+| `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
+| `pkg/api/apitest` | Test seed helpers extracted from `pkg/api/*_test.go` for cross-package importing. Provides `Seed*` functions (`SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`) that set up fixture DB rows and filesystem state for `test/envelope-diff` and future Epic 4/5 smoke tests. Non-test package (regular `.go` files) so it can be imported by harnesses outside `pkg/api`. | stdlib; `internal/store`; `internal/spawn`. | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
+| `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. The `Catalog` is consumed by `cmd/agent-director`'s envelope writer, `internal/mcp`'s `classifyDispatchError`, and (future) `pkg/cabi`'s JSON encoder. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
+| `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. `classifyDispatchError` delegates to `errnames.Classify`. | stdlib; `pkg/api`; `pkg/api/manifest`; `pkg/api/errnames`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
+| `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
 | `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). Builds env maps, synthesizes `--settings` JSON, and asks `internal/tmux` to start the session. Inserts the `pending` row via `internal/store`. | stdlib; `internal/config`; `internal/store`; `internal/tmux`; `github.com/google/uuid` for UUID4 minting. | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
 | `internal/tmux` | Thin client over the tmux binary. Each operation is one `exec.Command` invocation. Provides `NewSession`, `HasSession`, `KillSession`, `ListPanes`. | stdlib (`bytes`, `os/exec`, `strings`, `strconv`, `sort`). | Shell processes (`/bin/sh`), template / config / store packages, anything other than direct `exec.Command`. |
 | `internal/hook` | Reads payload JSON from stdin, classifies per SRD §5.2, writes the row UPSERT, exits 0 (state-tracking fail-open). | stdlib; `internal/store`. | `internal/tmux`; `internal/spawn`; `internal/config` (the cmd-side wrapper loads config; the package itself stays narrow). |
+| `pkg/cabi` | **C-ABI shim exposing `pkg/api` to foreign callers (Bun/Python) via `ad_`-prefixed C exports.** Internal handle registry maps opaque tokens to `*pkg/api.Client` instances (thread-safe, package singleton). One-directional dependency: nothing in the module imports `pkg/cabi`. | stdlib; `pkg/api`; `pkg/api/errnames`; `pkg/api/manifest`; `cgo` (active only when building with `-buildmode=c-shared`). | `cmd/*`; `internal/*`; `pkg/api/errnames/testdata`. |
+
+### No-business-logic-in-cmd contract
+
+The thin-shim rule is now grep-enforceable. In `cmd/agent-director/`
+source files (excluding `*_test.go`), the following symbols must appear
+**only** in the named exemption sites:
+
+| Symbol | Permitted in |
+| --- | --- |
+| `store.Open` / `store.OpenOrInit` | `runHook` only |
+| `config.Load` | `runHook`, `newHookLogger`, and `setupClient`'s logger bootstrap (Pin 3) only |
+| `tmux.New` | none — `cmd/` must not construct a tmux client directly; `pkg/api.New` owns it |
+
+Any occurrence outside those sites is a layer-boundary violation and should
+be rejected at review. The enforcement command:
+
+```sh
+grep -rn "store\.Open\|config\.Load\|tmux\.New" cmd/agent-director/ \
+  | grep -v '_test\.go'
+```
+
+Expected output after this refactor: only lines inside `runHook`,
+`newHookLogger`, and `setupClient`.
+
+### `pkg/api` Client lifecycle
+
+`pkg/api.Client` is the opaque handle through which all callers interact with
+agent-director. No exported fields; obtain a client via `New(opts Options)`,
+release with `Close()`.
+
+**`Options` fields.**
+
+| Field | Default | Notes |
+| --- | --- | --- |
+| `StorePath` | three-tier resolution (see below) | Tilde-expanded by `New`. |
+| `ConfigPath` | `~/.agent-director/config.toml` | Tilde-expanded by `New`. |
+| `TmuxCommand` | binary on `PATH` | Override for testing or unusual installs. |
+| `Logger` | `log.New(io.Discard, …)` | CLI passes a real logger; MCP callers pass nil (intentional silence). |
+| `CreateIfMissing` | `false` | CLI sets `true` to preserve first-run UX (see below). |
+
+**StorePath three-tier precedence.** `New` resolves the store path in order:
+
+1. `Options.StorePath` if non-empty (tilde-expanded).
+2. `cfg.Store.DbPath` loaded from the resolved `ConfigPath`, if non-empty.
+3. Hardcoded fallback `~/.agent-director/state.db` (tilde-expanded).
+
+This preserves existing CLI behavior: a user with a custom `[store] db_path`
+in `config.toml` continues to hit that path without any extra flags or env
+vars.
+
+**No schema-init side effects — the key invariant** (kept here verbatim for
+code review):
+
+> When `CreateIfMissing` is `false` (the library default), `New` will NOT
+> create the database file or its parent directory, and will NOT run any DDL.
+> A missing store returns a typed error wrapping `store.ErrStoreNotInitialized`
+> detectable via `errors.Is`.
+
+CLI callers set `Options.CreateIfMissing = true` to preserve the pre-refactor
+first-run UX: the store is created automatically on first invocation, matching
+what the binary did before the facade was introduced.
+
+**`Close`.** Releases store and tmux resources. Idempotent: a second call
+returns `nil` without double-closing the underlying `*store.Store`. After
+`Close` returns, any subsequent verb method call on the client returns the
+sentinel `ErrClientClosed` (detectable via `errors.Is`).
 
 ### `internal/store`
 
@@ -87,10 +196,10 @@ default) is created with mode 0700, and the database file is chmodded to
 Cross-reference: SRD §4.2 (canonical DDL), §4.5 (layer boundaries), §13.3
 (single-writer + WAL rationale).
 
-### `internal/api/manifest` — Verb Registry
+### `pkg/api/manifest` — Verb Registry
 
 **What it is.** A single Go source file at
-`internal/api/manifest/manifest.go` driven by a `//go:generate` directive.
+`pkg/api/manifest/manifest.go` driven by a `//go:generate` directive.
 Each `VerbDef` entry records:
 
 - the verb name,
@@ -109,23 +218,31 @@ A package-level `var Verbs []VerbDef` holds the ordered registry, and
 3. Generated reference docs `docs/cli-reference.md` and
    `docs/mcp-reference.md`, written by `tools/gen-docs`.
 
-Verb additions/edits go in `internal/api/manifest` only; the CI doc-drift
+Verb additions/edits go in `pkg/api/manifest` only; the CI doc-drift
 gate re-runs `go generate` and fails if any tracked file changes.
 
 **How to add a verb.**
 
 1. Add a `VerbDef` literal to `Verbs` in
-   `internal/api/manifest/manifest.go`. Populate `Name`, `Description`,
+   `pkg/api/manifest/manifest.go`. Populate `Name`, `Description`,
    `Params`, `ResultFields`, and `ErrorNames` (empty slice, not nil, when
    the verb has no error conditions).
-2. Implement the handler in `internal/api` (typed parameter struct in,
+2. Implement the handler in `pkg/api` (typed parameter struct in,
    typed result struct out, returning a Go `error`). Keep SQL inside
    `internal/store`; the handler calls store primitives.
-3. Wire the verb into the CLI dispatch map in
-   `cmd/agent-director/main.go` so argv routes to the new handler.
-4. Run `make generate` to regenerate `docs/cli-reference.md` and
+3. Add a method on `pkg/api.Client` that calls the new handler. Then
+   add a closure in the `handlers(client)` map in
+   `cmd/agent-director/main.go`: parse flags into a params struct,
+   call `client.VerbName(params)`, and marshal the result as JSON via
+   `writeJSON`. The `cmd/` file must contain no implementation logic —
+   only flag parsing, the `client.X(params)` call, and JSON output.
+4. If the verb emits new error sentinels, follow the checklist in
+   [Err-name five-way coherence](#err-name-five-way-coherence) before
+   proceeding — the CI drift gate will fail if any of the five sources
+   are out of sync.
+5. Run `make generate` to regenerate `docs/cli-reference.md` and
    `docs/mcp-reference.md` from the manifest.
-5. Verify idempotency: re-run `make generate` and confirm `git status`
+6. Verify idempotency: re-run `make generate` and confirm `git status`
    shows no diff. A second run that produces a diff means the generator is
    non-deterministic — fix it before merging.
 
@@ -136,7 +253,7 @@ gate re-runs `go generate` and fails if any tracked file changes.
 - Do not define CLI flags outside the manifest. New params go in the
   matching `VerbDef.Params` literal.
 - Do not hand-write MCP tool schemas. The MCP server reads from `Verbs`.
-- Do not have `internal/api/manifest` import `internal/store`,
+- Do not have `pkg/api/manifest` import `internal/store`,
   `internal/config`, or anything under `cmd/`. The package is stdlib-only
   by design so the generator (which imports it) stays trivially buildable.
 
@@ -159,10 +276,10 @@ See `docs/cli-reference.md` and `docs/mcp-reference.md` — auto-generated; do n
                             |
                             v
                 +-------------------------+
-                |   internal/api/*        |
-                |   manifest, (future)    |
-                |   spawn, hook, mcp,     |
-                |   tmux, probe           |
+                |   pkg/api               |
+                |   (verb-handler home;   |
+                |    public Client facade;|
+                |    owns store/tmux/cfg) |
                 +-----------+-------------+
                             |
                             v
@@ -172,10 +289,10 @@ See `docs/cli-reference.md` and `docs/mcp-reference.md` — auto-generated; do n
                 |    schema v1 / SRD §4.2)|
                 +-------------------------+
 
-   internal/config -----> consumed by cmd and internal/api/*
+   internal/config -----> consumed by pkg/api and cmd/
                           (never imports internal/store)
 
-Sibling packages under internal/ at the api layer:
+Sibling packages under internal/ consumed by pkg/api:
     internal/spawn   - lifecycle of Claude Code child processes
     internal/hook    - hook-event entrypoint logic
     internal/tmux    - tmux session orchestration
@@ -184,10 +301,406 @@ Sibling packages under internal/ at the api layer:
 
 The arrow direction is a hard rule. internal/store knows nothing about its
 callers; cmd/ knows nothing about SQL. Any PR that introduces a back-edge
-(e.g. internal/store importing internal/api) should be rejected at review.
+(e.g. internal/store importing pkg/api) should be rejected at review.
 ```
 
 Cite SRD §2 for the overall component decomposition this diagram realizes.
+
+### `pkg/cabi` — C-ABI envelope shape and panic-recovery contract
+
+For the caller-surface topology overview and the no-duplication invariant, see [Caller surfaces and shared API](#caller-surfaces-and-shared-api).
+
+`pkg/cabi` is declared as `package main` — Go's `buildmode=c-shared` requires
+the entry package to carry that name, but conceptually this is the C-ABI shim;
+the path `pkg/cabi` is the canonical reference throughout this document.
+
+**JSON envelope shape.** Every exported `ad_*` function returns a UTF-8 JSON
+object allocated on the C heap. Three forms are possible:
+
+- **Success** — structural equivalence to the CLI's `stdout` envelope for the
+  same verb. Verb-specific top-level fields (e.g. `{"handle": "..."}` for
+  `ad_open`); no `err_name` key present.
+- **Documented error** — `{"err_name": "...", "err_description": "..."}` where
+  both strings are drawn from `pkg/api/errnames.Catalog`. The same catalog
+  drives the CLI and MCP error envelopes; `pkg/cabi` does not maintain a
+  parallel copy.
+- **Undocumented / internal error** — `{"err_name": "ErrInternal",
+  "err_description": "<sanitized>"}`. Caught via `recover()` inside every
+  exported function body. Sanitization strips absolute filesystem paths and Go
+  stack-frame lines, then caps the description at 512 bytes. The un-sanitized
+  error chain is emitted to the `pkg/cabi` debug logger (active when
+  `AGENT_DIRECTOR_DEBUG` is set) before the sanitized form crosses the C
+  boundary, preserving post-mortem fidelity without leaking internals to
+  foreign callers.
+
+**Panic-recovery contract.** Every exported C function body is wrapped in an
+inner closure guarded by `defer recover()`. A panic occurring mid-call returns
+an `ErrInternal` envelope to the caller; it never crosses the C boundary. This
+is a hard invariant: no Go panic may propagate into C.
+
+**Test enforcement — three layers.** The recover() + ErrInternal contract is
+verified by three complementary test layers:
+
+1. **In-process (`pkg/cabi/lifecycle_panic_test.go`)** — exercises `recover()`
+   at the Go level by injecting deliberate panics into the exported function
+   closures and asserting the returned envelope is a well-formed `ErrInternal`
+   object (landed in T2).
+2. **Per-verb fuzz (`pkg/cabi/fuzz_corpus_test.go` + `fuzz_verbs_test.go`)** —
+   one `FuzzAd<Verb>` target per manifest verb (T6). Each target runs a
+   22-entry seed corpus covering malformed JSON, wrong-type fields, truncated
+   UTF-8, oversized payloads, injection-style strings, depth-bomb nesting, and
+   valid-with-noise inputs. Every target asserts that the returned envelope is
+   well-formed JSON (a top-level object carrying either success keys or the
+   `err_name`+`err_description` pair, never both, never mixed).
+3. **dlopen-driven panic (`pkg/cabi/dlopen_panic_test.go`, gated
+   `cabi_dlopen && cabi_panic_inject`, T6)** — dlopens the real `.so`, fires a
+   deliberate panic via the `_inject_panic` seam, and asserts the recovered
+   `ErrInternal` envelope is returned without crashing the process. The
+   build-tag forwarding pattern: a `dlopenBuildTags` package-level variable,
+   seeded by tag-gated `init()` files (e.g. `buildtags_panic_inject.go`), is
+   read by the dlopen `TestMain` to forward `cabi_panic_inject` into the
+   `go build` command that compiles the `.so`. The deliberate-panic sentinel is
+   compiled out of production builds — it is only present when the
+   `cabi_panic_inject` build tag is set.
+
+**Verb shape: thin marshal-and-dispatch.** Every `ad_*` export is a thin
+wrapper: parse JSON params → resolve handle via the registry (or skip for
+handle-free verbs) → call the matching `*pkg/api.Client` method → serialize
+the result. No business logic lives in `pkg/cabi`; the package imports only
+`pkg/api`, `pkg/api/errnames`, and `pkg/api/manifest`. The following imports
+are explicitly prohibited in `pkg/cabi` source: `internal/store`,
+`internal/tmux`, `internal/spawn`, `internal/config`, and `internal/probe`.
+
+- **Handle-free verbs.** `ad_version` is the sole handle-free verb in v1.
+  The authoritative set is the `handleFreeVerbs` map in `dispatch.go` — no
+  other file in `pkg/cabi` may hard-code this list.
+- **`ErrUnknownHandle`.** A cabi-only sentinel registered in
+  `pkg/api/errnames.Catalog` with `Scope: "cabi"`. The five-way coherence
+  gate exempts `cabi`-scoped entries from the per-verb `manifest.ErrorNames`
+  cross-check — no CLI verb emits `ErrUnknownHandle`, so it must appear in
+  the catalog and the Go sentinel set but not in any `VerbDef.ErrorNames`
+  slice.
+- **`timeout_ms`.** Verbs whose `pkg/api` signature takes a
+  `context.Context` (`ad_pause`, `ad_find_missing`) read an optional
+  `timeout_ms` integer from the JSON params and construct a
+  `context.WithTimeout`; absent or ≤ 0 means `context.Background()` with no
+  deadline. Other verbs ignore the field entirely.
+
+### Build paths and isolation invariant
+
+agent-director has two distinct build paths that must remain independent:
+
+| Path | Command | CGO | Output |
+| --- | --- | --- | --- |
+| Static CLI | `make build` | `CGO_ENABLED=0` | `bin/agent-director` |
+| C-ABI shared library | `make libagent_director` | `CGO_ENABLED=1` | `dist/libagent_director.so` + `dist/libagent_director.h` |
+
+`make build` (the default) **never** requires cgo. Only `pkg/cabi` uses
+cgo, and only when compiled via `make libagent_director`. The two build
+modes are completely orthogonal — building the CLI does not touch
+`pkg/cabi`, and building the shared library does not affect the CLI
+binary.
+
+**Header validation.** After `make libagent_director` compiles the `.so`,
+the Makefile immediately runs `go run ./tools/check-cabi-header
+dist/libagent_director.h`. This tool parses the generated header and
+fails the build if any exported symbol lacks the `ad_` prefix, catching
+naming drift before the artifact ships.
+
+**Isolation invariant.** `cmd/agent-director/` does NOT import
+`pkg/cabi`. The CLI binary is a pure `CGO_ENABLED=0` artifact; importing
+`pkg/cabi` would pull cgo into the CLI build path and break static
+linkage. The invariant is enforced at test time by
+`cmd/agent-director/cabi_isolation_test.go`.
+
+## Public API
+
+`pkg/api` is the stable public Go module surface for agent-director. Go library
+callers, the stdio MCP server (`internal/mcp`), and the CLI binary
+(`cmd/agent-director`) all dispatch through the same `*pkg/api.Client`; no
+business logic is duplicated across surfaces.
+
+**Canonical module path:** `github.com/gabemahoney/agent-director/pkg/api`
+
+**API reference:** https://pkg.go.dev/github.com/gabemahoney/agent-director/pkg/api
+
+**Consumer quick start:** See `pkg/api/README.md` for installation,
+construction, and a first-call example.
+
+**Enforcement:** `tools/check-doccomments` is an AST walker that requires every
+exported identifier in `pkg/api` to carry a doc comment. It runs in the
+doc-drift CI gate (`.github/workflows/doc-drift.yml`) on every PR and push to
+main. Undocumented symbols fail the build rather than accumulating silently.
+
+## Caller surfaces and shared API
+
+agent-director exposes three distinct caller surfaces: the CLI subprocess (`cmd/agent-director`), reached by shelling out to the binary; the in-process Go consumer, which imports `pkg/api` directly and calls `*pkg/api.Client` methods; and foreign-language callers via `pkg/cabi`, which load `libagent_director.so` and call `ad_*` C exports — TS/Bun is the primary consumer today, with Python planned.
+
+no business logic is duplicated between the CLI and `pkg/cabi`; both dispatch through `pkg/api.Client`
+
+The CLI marshals errors via `pkg/api/errnames.Catalog`: `cmd/agent-director`'s envelope writer calls `errnames.Classify` to map every Go error sentinel to its canonical `err_name` string.
+
+`pkg/cabi` reuses the same catalog for its own JSON error envelopes — there is no parallel sentinel table; the only cabi-scoped addition is `ErrUnknownHandle`, registered in the catalog with `Scope: "cabi"` and exempt from the per-verb `manifest.ErrorNames` cross-check.
+
+```
+  CLI subprocess         in-process Go consumer    foreign wrapper (TS/Bun via pkg/cabi)
+  (cmd/agent-director)   (import pkg/api)          (libagent_director.so)
+         │                      │                          │
+         │                      │                  +----------------+
+         │                      │                  |   pkg/cabi     |
+         │                      │                  | (ad_* exports) |
+         │                      │                  +-------+--------+
+         │                      │                          │
+         └──────────────────────┴──────────────────────────┘
+                                │   client.X(params)
+                                ▼
+                   +--------------------------+
+                   |     pkg/api.Client       |
+                   | (verb-handler home;      |
+                   |  owns store/tmux/cfg)    |
+                   +-----------+--------------+
+                    │      │      │      │    │
+                    ▼      ▼      ▼      ▼    ▼
+               internal/ internal/ internal/ internal/ internal/
+               store     tmux      spawn     config    probe
+```
+
+Every arrow from a caller surface terminates at `pkg/api.Client`; no surface short-circuits to a lower layer.
+
+## TS/Bun client
+
+`pkg/ts-bun-client/` is the TypeScript client library for agent-director. It is the primary foreign-language consumer of `pkg/cabi` and ships as a Bun-native ESM package (`type: "module"`, `target: "bun"`).
+
+### FFI boundary
+
+The TS client calls into `libagent_director.so` (or `.dylib` on macOS) via Bun's built-in FFI (`bun:ffi`). The shared library is produced by `make libagent_director` from `pkg/cabi`. The FFI layer lives in `src/ffi.ts` (internal, not re-exported); it dlopens the native library at startup and exposes typed wrappers around the `ad_*` C exports. Callers consume `src/client.ts`'s `Client` class — the FFI surface is never exposed directly.
+
+```
+  agent-director (TS/Bun)
+       │
+       │  src/client.ts  (public Client class)
+       │        │
+       │  src/ffi.ts     (internal bun:ffi dlopen)
+       │        │
+       ▼        ▼
+  libagent_director.so  (pkg/cabi, CGO_ENABLED=1)
+       │
+       ▼
+  pkg/api.Client
+```
+
+### Per-platform optional-dependency packaging
+
+**Distribution model.** `pkg/ts-bun-client/` follows the [esbuild distribution
+model](https://esbuild.github.io/getting-started/#download-a-build) for native
+binaries: the top-level package ships zero `.so`/`.dylib` files; each
+supported platform gets its own optional sub-package that carries exactly one
+native shared library. `npm install` (and `bun install`) resolve only the
+sub-package that matches `os` + `cpu` on the installing host, leaving the
+others absent.
+
+**Sub-packages (v1 — two platforms):**
+
+| npm package | Platform | Binary file |
+| --- | --- | --- |
+| `@agent-director/linux-x64` | Linux x86-64 | `libagent_director.so` |
+| `@agent-director/darwin-arm64` | macOS Apple Silicon | `libagent_director.dylib` |
+
+> **v1 scope note (2026-05-24).** `@agent-director/darwin-x64` (macOS
+> Intel) was **dropped** from the v1 set — no Intel Mac users to serve
+> and the GH-hosted `macos-13` 10x billing multiplier was not worth the
+> spend. Linux ARM64 (`linux-arm64`) remains deferred to v2; a
+> sub-package `@agent-director/linux-arm64` will be added then.
+
+Each sub-package lives under `pkg/ts-bun-client/platforms/<tuple>/` and
+contains only `package.json`, `README-binary-source.md`, and (CI-injected)
+the native binary. The binary is gitignored; CI drops it in after
+`make libagent_director` for the matching target.
+
+For local development, `bun run prepare-platforms` copies the already-built
+`dist/libagent_director.so` into `platforms/linux-x64/`, then `bun install`
+links it into `node_modules/`.
+
+**Resolver flow — `src/platform.ts`.**
+
+`src/platform.ts` (internal, not re-exported from `src/index.ts`) implements a
+five-step resolution sequence:
+
+1. **Bun version check.** Compare `Bun.version` against `MIN_BUN_VERSION`
+   (`"1.0.21"`). Fail fast with `ErrBunVersionTooOld` before attempting any
+   module resolution.
+2. **Tuple lookup.** Build `<process.platform>-<process.arch>` and look it up
+   in a static map. An unsupported tuple throws `ErrUnsupportedPlatform`.
+3. **Sub-package resolution.** Call `import.meta.resolve("<subpkg>/package.json")`
+   (Bun-synchronous, returns a `file://` URL). On failure (package not
+   installed), throw `ErrPlatformPackageMissing`.
+4. **Binary existence check.** Compute the binary path from the resolved
+   package directory and call `existsSync`. If absent, throw
+   `ErrPlatformPackageMissing` (message differentiates the two missing cases).
+5. **dlopen.** Call Bun's `dlopen(libPath, buildBindingSpec())` with the full
+   18-symbol binding spec (built from `buildBindingSpec()` in
+   `src/internal/bindingSpec.ts`). Return `{ lib: symbols, libPath }`.
+
+`loadNative()` is the public entry point (real globals); `_loadNativeInternal(opts)`
+is the DI-able overload used by tests to inject `platform`, `arch`, and
+`bunVersion` without monkey-patching process globals.
+
+**Three platform error subclasses** (all TS-only — see T10 allow-list):
+
+| Class | Thrown when | Key field in message |
+| --- | --- | --- |
+| `ErrBunVersionTooOld` | `Bun.version` < `1.0.21` | actual version + minimum |
+| `ErrUnsupportedPlatform` | tuple not in supported set | tuple string (e.g. `linux-arm64`) |
+| `ErrPlatformPackageMissing` | sub-package not installed or binary absent | sub-package name |
+
+**version-bump script.** `scripts/version-bump.ts` is a publish-time helper.
+During local development the top-level `optionalDependencies` entries use
+`file:./platforms/<tuple>` paths so `bun install` resolves them from the
+workspace. Before publishing to npm, CI runs:
+
+```sh
+bun run version-bump-publish --version X.Y.Z
+```
+
+This rewrites the three `file:` entries to `^X.Y.Z` registry pins. The script
+is idempotent (running twice with the same version is a no-op). After publish,
+`git checkout package.json` restores the `file:` paths for local development.
+
+### Release blockers
+
+The npm-name blocker (H3) was resolved on 2026-05-24: the umbrella package
+publishes as `agent-director` (unscoped) and the three per-platform sub-packages
+publish under the `@agent-director` scope. The `prepublishOnly` hook in each
+`package.json` runs `scripts/check-not-placeholder.ts`, which remains a
+forward-going tripwire against re-introducing the `CHANGEME-H3` sentinel. The
+H3 entry in [docs/release-blockers.md](release-blockers.md) records the
+resolution and is kept as the template for any future release blockers.
+
+### Package layout
+
+```
+pkg/ts-bun-client/
+├── package.json          name: agent-director, version 0.0.0
+├── tsconfig.json         strict, ES2022 + ESNext.Disposable, declaration-only to dist/
+├── .eslintrc.cjs         @typescript-eslint strict rules
+├── build.ts              Bun.build (ESM) → tsc (declarations)
+├── src/
+│   ├── index.ts          public re-exports (client, errors, types)
+│   ├── client.ts         Client class (T2)
+│   ├── ffi.ts            bun:ffi dlopen + callVerb (T3, internal)
+│   ├── errors.ts         typed error subclasses (T4)
+│   ├── types.ts          param/result types (T4)
+│   ├── platform.ts       platform resolver (T5, internal)
+│   └── internal/         internal helpers
+├── test/                 bun:test suite
+└── dist/                 build output (gitignored)
+```
+
+Error catalog and verb-binding details are deferred to later sections (added by T3 and T4).
+
+### Client lifecycle
+
+A `Client` object owns exactly one Go-side `pkg/api.Client` behind an opaque handle string.
+
+**Construction.** `new Client(opts)` is synchronous. The constructor:
+
+1. Applies tilde expansion (TS-side, via `src/internal/tilde.ts`) to `storePath` and `configPath` so the C-ABI always receives absolute paths.
+2. Calls `ad_open` (over Bun FFI) with a JSON params envelope: `{ "store_path": "...", "config_path": "...", "tmux_command": "...", "create_if_missing": true|false }`.
+3. Parses the returned JSON envelope. On `{ "handle": "<token>" }` → stores the handle. On `{ "err_name": "...", "err_description": "..." }` → throws a typed `AgentDirectorError` subclass.
+
+**`close()`.**
+
+- Calls `ad_close` with `{ "handle": "<token>" }`.
+- Parses the returned envelope. On an error envelope, warns via the optional `logger` but does **not** throw (idempotency guarantee).
+- Nulls the internal handle field and sets `_open = false`.
+- **Idempotent**: a second `close()` call is a no-op.
+
+**`[Symbol.dispose]()`** delegates to `close()`, enabling `using` blocks (Explicit Resource Management):
+
+```ts
+{
+  using client = new Client({ storePath: "~/.agent-director/state.db" });
+  // use client …
+} // client.close() called automatically here
+```
+
+**`_assertOpen()`** is called at the top of every verb method. It throws `ErrClientClosed` (a TS-only error subclass, not in the shared Go catalog) if the client has already been closed.
+
+**Tilde expansion** is handled entirely on the TS side, in `src/internal/tilde.ts`, before any path value crosses the FFI boundary. The C-ABI and `pkg/api.New` never receive a leading `~`.
+
+### FFI call recipe
+
+Every verb call from `Client` follows this six-step recipe. The steps split across two files:
+
+**`src/internal/worker.ts`** (runs inside the `node:worker_threads` Worker):
+1. **Encode params** — verb params object is JSON-stringified and merged with the opaque handle (as `{"handle":"<token>", ...verb-params}`). Handle-free verbs (`version`) omit the handle. Result is a null-terminated UTF-8 `Buffer`.
+2. **Call C symbol** — `lib.symbols.ad_<verb>(ptr(inputBuf))` returns a native `Pointer` to the heap-allocated response string.
+3. **Copy CString** — `new CString(rawPtr).toString()` copies the C string into a JS string.
+4. **Free pointer** — `ad_free_cstring(rawPtr)` runs in a `try/finally` block via `FreeGuard` (`src/internal/freeGuard.ts`). The error path frees too; the guard ensures exactly-once free even if `toString()` throws.
+
+**`src/internal/workerProxy.ts`** (main thread, post-worker):
+5. **Parse JSON** — `JSON.parse(jsonString)` on the main thread, where the error-class graph is loaded once.
+6. **Return or throw** — if `err_name` is present in the parsed envelope, `errorFromEnvelope()` creates a typed `AgentDirectorError` subclass and the Promise rejects. Otherwise the parsed value is resolved.
+
+**Why a dedicated worker?**
+Bun FFI has no per-symbol `async: true` marker. Without the worker, every `ad_*` call would block the JS event loop for the duration of the Go-side operation. A single dedicated `node:worker_threads` Worker is the off-main-thread mechanism. One worker per process (not a pool): the Go runtime inside the shared library carries process-global state (the handle registry), so multiple parallel dlopen handles would split that state.
+
+**`src/ffi.ts`** exposes the thin public facade `callVerb<P, R>(verb, handle, params)` that routes to `workerProxy.dispatch` and casts the result. The callable verb list and symbol names live in `src/internal/verbs.ts` (mirrors `manifest.CallableVerbs()`).
+
+```
+Client.sendKeys(params)
+  │
+  ▼  src/ffi.ts → callVerb("send-keys", handle, params)
+  │
+  ▼  src/internal/workerProxy.ts → dispatch() [main thread]
+     posts {id, op:"send-keys", handle, paramsJSON} to Worker
+  │
+  ▼  src/internal/worker.ts [worker thread]
+     encode → ad_send_keys(ptr(buf)) → copy CString → free (finally) → post result
+  │
+  ▼  workerProxy receives {type:"result", jsonString}
+     JSON.parse → check err_name → resolve or reject
+  │
+  ▼  Client.sendKeys(params): Promise<SendKeysResult>
+```
+
+The `ad_free_cstring` pointer is guarded by `FreeGuard<T>` (generic over the pointer type), which nulls the internal reference before calling the underlying free function so a second free is always a no-op.
+
+### Error mapping
+
+Every C-ABI error envelope carries two string fields: `err_name` (the canonical error name, e.g. `"ErrSpawnNotFound"`) and `err_description` (a human-readable detail string). The TS client translates these into a typed class hierarchy so callers can catch specific errors with `instanceof`.
+
+**Catalog source.** `pkg/api/errnames/catalog.json` is the single source of truth for every named error the Go binary can emit. It contains 34 entries at time of writing (T4). Each entry has a `name` field (the `err_name` string) and an optional `scope` field (`"cabi"` for the `ErrUnknownHandle` entry, which is generated by the handle-registry, not a pkg/api verb).
+
+**Base class.** `src/errors.ts::AgentDirectorError extends Error`. Constructor: `(verb: string, err_name: string, err_description: string)`. Sets `this.name = this.constructor.name` so subclass names propagate correctly through the prototype chain. Readonly fields: `verb`, `errName`, `errDescription`. Message format: `"${err_name}: ${err_description}"`.
+
+**Subclasses.** One `Err<Name> extends AgentDirectorError {}` per catalog entry. Bodies are empty — class identity is the sole value-add. Example:
+
+```ts
+export class ErrSpawnNotFound extends AgentDirectorError {}
+```
+
+**TS-only errors.** Four subclasses have no counterpart in the Go catalog:
+`ErrClientClosed`, `ErrUnsupportedPlatform`, `ErrPlatformPackageMissing`, and
+`ErrBunVersionTooOld`. Their names are centralised in a single `as const` array
+exported from `pkg/ts-bun-client/src/internal/tsOnlyErrors.ts::TS_ONLY_ERROR_NAMES`.
+The catalog-drift test imports this constant and removes those names from both
+sides before comparing, so CI never flags them as unexpected classes. Each
+subclass in `src/errors.ts` carries a comment cross-referencing this module.
+
+**Factory.** `errorFromEnvelope(verb, err_name, err_description): AgentDirectorError` in `src/errors.ts`. Maintains an internal `ERROR_TABLE` literal that maps every `err_name` string to its constructor. Unknown `err_name` values produce a plain `AgentDirectorError` with a `console.warn` so callers are not silently swallowed.
+
+**Wiring.** `src/internal/workerProxy.ts` calls `errorFromEnvelope(entry.op, parsed.err_name, parsed.err_description)` on the main thread when a verb result envelope contains `err_name`. The `entry.op` (the verb name stored in the pending-dispatch map alongside resolve/reject) provides the `verb` argument.
+
+**Catalog drift enforcement gate.** `pkg/ts-bun-client/test/errors-catalog-drift.test.ts`
+reads `pkg/api/errnames/catalog.json` at test time (the single source of truth,
+produced by Epic 1's `go generate ./pkg/api/errnames/...` mechanism), imports
+`src/errors.ts`, and asserts that every catalog entry has a corresponding
+`AgentDirectorError` subclass and that every exported `Err*` subclass (after
+removing the TS-only allow-list from `src/internal/tsOnlyErrors.ts`) appears in
+the catalog. On mismatch the test reports a two-sided diff: names present in the
+catalog but absent from TS, and names present in TS but absent from the catalog.
+This keeps the TS error surface from silently drifting from the Go one.
 
 ## State Machine
 
@@ -315,10 +828,9 @@ Layer boundaries (load-bearing):
   `NewSession` argv). Nothing else.
 - `internal/hook` calls `internal/store` (state UPSERT + session-id
   write). Never `internal/tmux`, never `internal/spawn`.
-- `internal/api` is the thin verb-handler surface: it composes
-  `internal/spawn` calls for the `spawn` verb and direct
-  `internal/store` reads for `status` / `get`. No SQL strings, no tmux
-  argv at this layer.
+- `pkg/api` is the verb-handler surface: it composes `internal/spawn`
+  calls for the `spawn` verb and direct `internal/store` reads for
+  `status` / `get`. No SQL strings, no tmux argv at this layer.
 
 The hook handler is invoked via the per-Spawn `--settings` JSON
 synthesized in stage 4. The handler's binary path is resolved via
@@ -351,7 +863,7 @@ manipulation can run.
 A tracked Spawn is externally drivable: an orchestrator can deliver text
 into its tmux pane and read the rendered TUI back out without attaching
 to the session. The two verbs are typed Go functions
-in `internal/api`, each calling exactly one method on the shared
+in `pkg/api`, each calling exactly one method on the shared
 `*tmux.Client` (`SendKeys` / `CapturePane`). Cross-reference SRD §4.3
 (send-keys multiline semantics), SRD §12 (verb shapes),
 `reference/send-keys-research.md` (empirical LF/CR behavior),
@@ -421,7 +933,7 @@ pane bytes as a post-mortem.
 
 ### Layer boundaries
 
-- `internal/api/sendkeys.go` and `internal/api/readpane.go` are the
+- `pkg/api/sendkeys.go` and `pkg/api/readpane.go` are the
   verb surfaces — typed params in, typed result + error out, errors
   matched via `errors.Is`.
 - They call `internal/store` for the row lookup and `internal/tmux` for
@@ -572,7 +1084,7 @@ don't take effect until the next `serve --stdio` invocation.
 
 ### Drift-free schema generation
 
-The tool list is generated from `internal/api/manifest.Verbs` — the
+The tool list is generated from `pkg/api/manifest.Verbs` — the
 same single source of truth that drives the CLI flag definitions
 and the reference docs (`cli-reference.md`, `mcp-reference.md`).
 Adding a verb to the manifest exposes it via MCP on the next server
@@ -585,21 +1097,39 @@ isn't filtered automatically extends the test.
 
 ### Layer map
 
+Both the CLI and the MCP server dispatch through the same `pkg/api.Client`
+facade. `LiveDispatcher` holds a single `*pkg/api.Client`; each tool `case`
+in `LiveDispatcher.Call` decodes the MCP JSON args and calls `client.X(…)`.
+There is no longer a parallel dispatch path mirroring the CLI's — both
+surfaces share the same facade. Every verb call from CLI or MCP routes
+through the same Client method, so behavioral divergence between CLI and MCP
+outputs is structurally prevented.
+
 ```
-  Claude Code (MCP client)
-            │
-            │  JSON-RPC 2.0, line-delimited JSON on stdin/stdout
-            ▼
-  internal/mcp/server.go (initialize, tools/list, tools/call)
-            │
-            │  Dispatcher.Call(ctx, name, args)
-            ▼
-  internal/mcp/dispatch.go::LiveDispatcher (switch on verb name)
-            │
-            │  typed params struct → api function call
-            ▼
-  internal/api/* (Spawn, Status, SendKeys, …)
+  cmd/agent-director                 internal/mcp/server.go
+  (CLI: flag parse → client.X)       (MCP: JSON-RPC 2.0 on stdin/stdout)
+          │                                      │
+          │                          Dispatcher.Call(ctx, name, args)
+          │                                      │
+          │                          internal/mcp/dispatch.go::LiveDispatcher
+          │                          (switch on verb name; decode JSON args)
+          │                                      │
+          └──────────────┬────────────────────────┘
+                         │  client.X(params)
+                         ▼
+               pkg/api.Client
+               (verb-handler home; holds store, tmux, config)
 ```
+
+### Per-Client logger (Pin H4)
+
+`serveHandlerWith` constructs a **separate** `*pkg/api.Client` for the MCP
+dispatcher, with `Options.Logger: nil`. This preserves the pre-refactor
+behavior where Kill/FindMissing/Expire swallow their tmux WARN logs on the
+MCP path — those warnings are most useful to the interactive CLI operator,
+not a long-lived MCP client. The CLI's main Client (constructed in
+`setupClient`) and the MCP's Client have distinct logger ownership; neither
+shares the other's `log.Logger`.
 
 ### Filtered verbs
 
@@ -638,10 +1168,12 @@ canonical SRD §13.1 err_name in the `data` field:
 }
 ```
 
-The err_name table is populated at server startup by
-`registerMCPErrors` in cmd/, which walks the CLI's `errCatalog`. The
-two views — CLI envelope and MCP error response — surface the same
-canonical names for the same wrapped errors.
+The err_name string is resolved at call time by `errnames.Classify`
+(from `pkg/api/errnames`) — the single source of truth for the
+err_name mapping. Both the CLI's JSON envelope writer and the MCP
+server's `classifyDispatchError` delegate to `errnames.Classify`,
+so the same canonical names appear in both surfaces for the same
+wrapped errors. See the [err_name catalog](#err_name-catalog) subsection below.
 
 ### Success envelope
 
@@ -663,6 +1195,125 @@ wrapped in MCP's content shape:
 This mirrors the CLI's stdout shape — a script reading the CLI and
 an MCP client see the same JSON. The content array is single-text-
 part for v1; richer types (resource URIs, images) are out of scope.
+
+### err_name catalog
+
+`pkg/api/errnames` is the single source of truth for all err_name
+strings in agent-director. No other package declares or owns these
+strings; callers read them through this package only.
+
+**`Catalog []Entry`** — the canonical lookup table. Each `Entry` has:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `Name` | `string` | The canonical err_name string (e.g. `"ErrSpawnNotFound"`). |
+| `Err` | `error` | The sentinel error the name maps to. Matching uses `errors.Is`, so `%w`-wrapped errors resolve correctly. |
+
+**`Classify(err error) (name, description string)`** — walks `Catalog`
+via `errors.Is` and returns the first matching entry's `Name` plus
+`err.Error()` as the description. Errors not present in the catalog
+collapse to `"ErrInternal"` — production paths should never reach
+this; tests pin canonical names directly.
+
+**`TrimNamePrefix(name, description string) string`** — strips the
+redundant `"ErrName: "` prefix from a description string when present.
+Used by the CLI's `writeApiError` so the envelope reads cleanly instead
+of carrying the err_name in both the `err_name` field and the
+`err_description` text.
+
+**`ErrUnknownTool`** — declared in `internal/mcp/server.go` because it is
+a dispatch-level error (the MCP transport layer detected an unknown tool
+name), not a verb-surface error. As a result it is NOT in `errnames.Catalog`
+(which is verb-surface only). `internal/mcp/server.go::classifyDispatchError`
+special-cases `errors.Is(err, ErrUnknownTool)` before delegating to
+`errnames.Classify` for verb-surface errors.
+
+**`catalog.json`** — a machine-readable snapshot of `Catalog`,
+generated deterministically by `go generate ./pkg/api/errnames/...`.
+The doc-drift CI gate (`make doc-drift`) enforces that the checked-in
+`catalog.json` stays in sync with the Go source.
+
+**Consumers:** `cmd/agent-director`'s envelope writer and
+`internal/mcp`'s `classifyDispatchError` both call `errnames.Classify`
+directly — there is no register-then-classify two-step; the `Catalog`
+slice itself is the declaration. See [Err-name five-way coherence](#err-name-five-way-coherence)
+for the invariant that keeps all five sources in sync.
+
+### Err-name five-way coherence
+
+The err_name system enforces a five-way invariant: five separate sources of truth must stay
+mutually consistent whenever a sentinel is added, renamed, or removed.
+
+**The five sources**
+
+| # | Source | Location |
+| --- | --- | --- |
+| (a) | Sentinels referenced by handler code via `fmt.Errorf("%w: ...", X)` | `pkg/api/*.go` |
+| (b) | Entries in `pkg/api/errnames.Catalog` | `pkg/api/errnames/catalog.go` |
+| (c) | Per-verb `ErrorNames` slices in callable verbs from `manifest.CallableVerbs()` | `pkg/api/manifest/manifest.go` |
+| (d) | Exported `var Err*` declarations in `pkg/api` | `pkg/api/errors.go` |
+| (e) | Committed JSON snapshots regenerated from Go source | `pkg/api/errnames/catalog.json`, `pkg/api/manifest/surface.json` |
+
+Non-callable verbs (`help`, `serve`, `hook`) are **intentionally excluded** from source (c):
+they have no handler code in `pkg/api/*.go`, so including their `ErrorNames` would produce
+false-positive coherence failures.
+
+**Enforced check directions**
+
+Adding or removing a sentinel requires updating all relevant sources; editing the manifest
+or catalog Go source requires regenerating the corresponding JSON file.
+
+- **(a) → (b)**: Every sentinel referenced in handler code must have a Catalog entry.
+  Enforced by `TestFiveWayCoherence` check 1 (runtime).
+- **(c) → (b)**: Every `ErrorNames` entry in a callable verb must have a Catalog entry.
+  Enforced by `TestFiveWayCoherence` check 3 (runtime).
+- **(b) → (c)**: Every Catalog entry must appear in at least one callable verb's `ErrorNames`.
+  Enforced by `TestFiveWayCoherence` check 4 (runtime).
+- **(b) → (d)** *(compile-time)*: `catalog.go` imports `pkg/api` and references `api.ErrX`
+  directly — a missing `var` declaration is a build failure, not a test failure. This is
+  why `TestFiveWayCoherence` check 2 has no `t.Errorf`; the compiler already enforces it.
+- **(e) freshness**: `TestCatalogJSONUpToDate` and `TestSurfaceJSONUpToDate` re-run the
+  generators and diff the output against the committed files. A stale JSON file fails the
+  test with a clear "run `make errnames-json`" / "run `make surface-json`" message.
+
+**Documented exclusions**
+
+- `ErrInternal` is the `Classify` fallback for unrecognized errors. It is not in the Catalog
+  and is not enforced by the coherence check.
+- Catalog entries whose sentinels are declared in `internal/*` packages (e.g.
+  `tmux.ErrTmuxNotAvailable`, `store.ErrSpawnNotFound`) do not appear in `exportedSentinels`
+  and are therefore excluded from check 2. Their coherence with the Catalog is enforced at
+  compile time — `catalog.go` imports and references them directly.
+- Non-callable verbs (`help`, `serve`, `hook`) are excluded from the manifest-side coherence
+  checks (source (c)).
+
+**CI enforcement**
+
+`.github/workflows/doc-drift.yml` runs on every PR and push to `main`:
+
+1. `make err-coherence` runs `TestFiveWayCoherence`, `TestCatalogJSONUpToDate`, and
+   `TestSurfaceJSONUpToDate` in-process, covering all five sources.
+2. Explicit drift gates re-run `make errnames-json` and `make surface-json` and fail if
+   the committed JSON files differ from the regenerated output.
+3. `make nondet-coverage` runs `tools/check-nondet` to enforce bidirectional alignment
+   between `manifest.CallableVerbs()` and `test/envelope-diff/nondeterministic.json`: a
+   **missing verb** (callable verb present in the manifest but absent as a JSON key) or an
+   **extraneous key** (JSON key that names a non-callable verb) both fail the step. See
+   [envelope-diff harness](#envelope-diff-harness) for the full non-determinism model.
+
+**Adding a new sentinel**
+
+1. Add `var ErrFoo = errors.New("ErrFoo: ...")` to `pkg/api/errors.go`.
+2. Reference it from handler code: `return fmt.Errorf("%w: ...", ErrFoo)`.
+3. Add a Catalog row in `pkg/api/errnames/catalog.go`: `{Name: "ErrFoo", Err: api.ErrFoo}`.
+4. Add it to the relevant verb's `ErrorNames` slice in `pkg/api/manifest/manifest.go`.
+5. Add a `packageOf` map entry in `pkg/api/errnames/generate.go`. **This map is
+   hand-maintained** — `errors.New` returns a plain `*errorString` with no package
+   attribution that reflection can recover, so the generator cannot infer the origin
+   package automatically. A missing entry causes the generator to exit 1 with an explicit
+   error message.
+6. Run `make errnames-json && make surface-json` to refresh the committed JSON outputs.
+7. Run `make err-coherence` locally to confirm all five checks pass before pushing.
 
 ### Registration
 
@@ -714,7 +1365,7 @@ decide allow/deny out-of-band. Conceptually:
   - `GetPermissionRequest`: the polling-loop read.
   - `DecidePermissionRequest`: the race-free decide UPDATE.
 
-- **`internal/api/decide.go`** — verb wrapper. State guards
+- **`pkg/api/decide.go`** — verb wrapper. State guards
   (`ErrRelayModeOff`, `ErrSpawnNotFound`, `ErrInvalidDecision`)
   before the UPDATE, plus the RowsAffected==0 disambiguation
   (`ErrAlreadyDecided` vs `ErrNoOpenPermissionRequest`).
@@ -748,7 +1399,7 @@ relay-on Spawn still surfaces deny.
 
 ### Send-keys interaction
 
-`internal/api/sendkeys.go`'s precondition: when `relay_mode=on` AND
+`pkg/api/sendkeys.go`'s precondition: when `relay_mode=on` AND
 `state=check_permission`, return `ErrSendKeysWhileRelayed`. The
 relay path owns the modal answer; a pane-side keystroke would race
 the relay's decide write. The guard was added in Epic 4 (stubbed);
@@ -759,7 +1410,7 @@ Epic 10 activates it end-to-end.
 Bringing a terminated Spawn back to life via `claude --resume`. Same
 `claude_instance_id`, fresh tmux session, same JSONL transcript.
 
-### Verb (`internal/api/resume.go`)
+### Verb (`pkg/api/resume.go`)
 
 Guards run in order; every error path is side-effect-free (no DB
 mutation, no half-created tmux session):
@@ -910,7 +1561,7 @@ case is distinguished and treated as a fast no-op success.
 
 ### `find-missing`
 
-`internal/api/find_missing.go`:
+`pkg/api/find_missing.go`:
 
 1. `ListLiveSpawnIDs` returns every row where `state NOT IN (ended,
    missing)`. This includes `pending` — SRD §5.2 explicitly scans
@@ -930,7 +1581,7 @@ without the tmux process exiting. The operator clears those manually;
 
 ### `expire`
 
-`internal/api/expire.go` calls
+`pkg/api/expire.go` calls
 `store.DeleteTerminalOlderThan(duration)`, which executes a
 `DELETE ... RETURNING claude_instance_id` against rows whose
 `state IN (ended, missing)` AND `ended_at IS NOT NULL` AND
@@ -946,7 +1597,7 @@ without the tmux process exiting. The operator clears those manually;
 
 ### `delete`
 
-`internal/api/delete.go` is the admin force-removal verb. It
+`pkg/api/delete.go` is the admin force-removal verb. It
 processes ids one at a time, returning a per-row map of
 `{id: "ok" | "<err_name>"}`. The batch never aborts on a partial
 failure — every id in the input is attempted; the map records the
@@ -1054,22 +1705,103 @@ toward a release happens on a branch; the tag lands once.
 ### The release skill
 
 `skills/release-agent-director/release.sh` automates the workflow
-documented in `skills/release-agent-director/SKILL.md`. Behavior:
+documented in `skills/release-agent-director/SKILL.md`. The script
+is organized as a phased pipeline; phases are ordered
+most-reversible to least-reversible and the script halts on the
+first failing phase:
 
-1. Validate the semver tag.
-2. Verify `gh` (GitHub CLI) is authenticated.
-3. Confirm the working tree is clean (no uncommitted edits).
-4. Confirm the tag doesn't already exist.
-5. Confirm the current branch matches `--branch` (default `main`).
-6. `git tag -a $VERSION -m "$VERSION" && git push origin $VERSION`.
-7. `make release-binaries` — cross-compiles the four targets.
-8. Template release notes from `git log <prev-tag>..HEAD`,
-   grouped by Epic ID where commit messages reference one.
-9. `gh release create $VERSION dist/* --notes-file <generated>`.
+1. **pre-flight** — validate semver, verify `gh` is on PATH (live
+   runs only), confirm the working tree is clean, confirm the tag
+   does not already exist, confirm the current branch matches
+   `--branch` (default `main`).
+2. **notes** — template `dist/release-notes.md` from
+   `git log <prev-tag>..HEAD`, grouped by Epic ID where commit
+   messages reference one.
+3. **build** — `make release-binaries` cross-compiles the three CLI
+   targets into `dist/`. `collect_cabi_artifacts()` then locates the
+   green `cabi-matrix.yml` workflow run for the release commit and
+   downloads `pkg-cabi-<platform>` artifacts (`.so`/`.dylib` plus
+   the C header) into `dist/cabi/<platform>/` for the two v1
+   cabi platforms (linux/amd64, darwin/arm64). One canonical header
+   is staged at `dist/cabi/include/libagent_director.h` for the
+   gh-release phase to attach.
+4. **verify** — Go smoke (`test/smoke/go/...`), TS smoke
+   (`pkg/ts-bun-client`), and Go + TS envelope-diff. Each sub-step
+   failure halts the release with exit code 5. `AD_CABI_DIR` is
+   exported so the TS suite loads the just-built `dist/cabi/`
+   library, not a dev-checkout build.
+5. **tag** — `git tag -a $VERSION -m "Release $VERSION" && git push
+   origin $VERSION`. **Point of no return.** The Go module
+   resolution relies on the single root tag because `pkg/api/`
+   shares the root `go.mod`; if `pkg/api/go.mod` is ever added the
+   script also pushes the `pkg/api/$VERSION` sub-path tag that Go's
+   module protocol requires.
+6. **publish** — npm publish for the umbrella package and the two
+   per-platform optional dependency packages. Halts at this step
+   with a clear "H3 unresolved" error if the npm name ever regresses
+   to the `@CHANGEME-H3/agent-director` placeholder (forward-going
+   tripwire; H3 itself was resolved 2026-05-24).
+7. **gh-release** — `gh release create $VERSION` with exactly
+   **6 attached assets**:
+   - 3 CLI binaries: `agent-director-linux-amd64`,
+     `agent-director-linux-arm64`, `agent-director-darwin-arm64`
+     (`darwin/amd64` was dropped from v1 on 2026-05-24 alongside the
+     cabi platform set).
+   - 2 pkg/cabi shared libraries: `dist/cabi/linux-amd64/libagent_director.so`,
+     `dist/cabi/darwin-arm64/libagent_director.dylib`.
+   - 1 canonical C header: `dist/cabi/include/libagent_director.h`
+     (the header is platform-independent; the canonical copy is
+     staged at this stable path by `collect_cabi_artifacts()` in the
+     build phase).
 
-`--dry-run` skips steps 6-9 and prints the templated notes. Used
-for CI smoke tests and pre-tag reviews. The dry-run path also
-relaxes the `gh` requirement since it never actually calls `gh`.
+   Release notes are embedded via `--notes-file` (not an attached
+   asset).
+
+The script DEFAULTS to `--dry-run`. Live runs require `--release`.
+In dry-run mode the script executes phases 1-4 fully, runs the
+tag-phase in "would-push" preview mode, and exits before any
+irreversible step.
+
+#### Toolchain-pin diff in release notes
+
+Per SRD §SR-2.3 any change to a pinned C toolchain version must be
+surfaced in the release notes. `skills/release-agent-director/
+toolchain-pin-diff.sh` extracts the pins from
+`.github/workflows/cabi-matrix.yml` at the current commit AND at
+the previous release tag, then prints a markdown section listing
+only the differences:
+
+```
+## Toolchain pin changes since v0.1.0
+
+- `gcc(linux-amd64)`: gcc-10 → gcc-11
+- `xcode(darwin-amd64)`: Xcode 14.3 → Xcode 15.2
+- `bun`: 1.2.0 → 1.3.13
+```
+
+The notes phase appends this section to `dist/release-notes.md`
+when there are differences and is silent otherwise. Pins tracked:
+
+- `gcc-NN` (linux/amd64 leg's `apt-get install` line).
+- `Xcode_X.Y.app` (no longer present in the workflow after the
+  2026-05-24 darwin/amd64 drop; the regex is retained so a diff
+  against an older release tag still surfaces the removal).
+- `BUN_VERSION: 'x.y.z'` (workflow env scalar).
+
+The darwin/arm64 leg's Xcode pin lives on the self-hosted runner
+itself (operator-configured per `docs/self-hosted-runner-setup.md`)
+and is NOT diffed by this helper; bumps to it are surfaced by the
+operator in the release notes manually.
+
+#### Go module tagging convention
+
+The `pkg/api` Go module is in-repo and shares the root `go.mod` —
+no separate `pkg/api/go.mod` exists. Consumers resolve
+`github.com/gabemahoney/agent-director/pkg/api@$VERSION` via the
+single root tag. If the package is ever split into its own module
+the release script must additionally push `pkg/api/$VERSION` (the
+sub-path tag Go's module protocol requires); `tag_phase` already
+detects this case via `[[ -f pkg/api/go.mod ]]`.
 
 ### ErrSchemaMismatch on upgrade
 
@@ -1198,3 +1930,321 @@ hook surface) are recorded in `reference/*-research.md`.
 Per SRD §17, the orchestrator runs `make test-docker` first-hand, reads
 the per-case JSON stream, and signals "continue" only after confirming
 each case executed and passed.
+
+### Envelope-diff regression harness
+
+`test/envelope-diff/` (Go test package `envelope_diff`) is the SR-7.4 regression gate: the canonical proof that `cmd/agent-director` and `*pkg/api.Client` return structurally-equivalent envelopes for every callable verb.
+
+For each verb in `manifest.CallableVerbs()`, the harness copies a fixture store to a temp directory, runs the freshly-built `agent-director` binary as a subprocess (capturing stdout, stderr, and exit code), then invokes the same verb in-process via `*pkg/api.Client`. Each side is reduced to a single envelope per the shape contract — stdout when exit is 0, stderr when exit is non-zero. Both envelopes are normalized via sorted-key JSON re-encode, filtered through the per-verb non-determinism manifest at `test/envelope-diff/nondeterministic.json`, and structurally diffed. Mismatches are reported as path-style failures (e.g. `.spawns[0].claude_instance_id`).
+
+**File roles** (one per concern, no cross-layer logic):
+
+- `harness.go` — fixture-copy helper and one-time CLI/fake-tmux binary build (`sync.Once`).
+- `runners.go` — `runCLI` (subprocess) and `runClient` (in-process) plus per-verb dispatch.
+- `selectors.go` — path matching with `[*]` wildcard support.
+- `diff.go` — JSON normalization and structural diff.
+- `manifest_loader.go` — loads and validates `nondeterministic.json`.
+- `nondeterministic.json` — per-verb selector manifest; every callable verb in `manifest.CallableVerbs()` is a key, deterministic verbs carry `[]`.
+- `nondeterministic.md` — selector grammar and decision tree for classifying fields as deterministic or non-deterministic; consult before adding or removing entries.
+
+`test/envelope-diff/nondeterministic.json` is verb-keyed: every callable verb in `manifest.CallableVerbs()` maps to the field-path selectors excluded from the diff (generated IDs, build stamps, call-time timestamps, and any other documented non-deterministic fields); deterministic verbs carry `[]`. See `test/envelope-diff/nondeterministic.md` for the selector grammar and the decision tree for classifying fields. A missing entry for a non-deterministic field causes the diff to fail. The Task 6 coverage gate, wired into the doc-drift CI check (SR-8.3), enforces that the manifest lists every callable verb in `manifest.CallableVerbs()` — no more, no fewer; adding a callable verb without a corresponding manifest entry fails CI.
+
+**Epic scope.** Task 1 builds the scaffold and unit tests. Per-verb success cases (Task 3) and documented-error cases (Task 4) follow. CI wiring (Task 5) and the nondeterministic.json completeness check (Task 6) close the Epic. `serve` and `hook` are excluded — they are non-callable and carry no envelope contract.
+
+**Error-coverage contract.** Every callable verb with non-empty `ErrorNames` has at least one error-path subtest in `test/envelope-diff/error_cases.go` asserting that CLI and Client envelopes carry an identical `err_name` and a matching `err_description` (prefix-match policy documented in `test/envelope-diff/nondeterministic.md`). `TestErrorTableCoverage` is the CI gate enforcing this: it iterates `manifest.CallableVerbs()` and fails if any verb with non-empty `ErrorNames` lacks a corresponding `error_cases.go` row, so new error sentinels cannot land without coverage — analogous to the `nondeterministic.json` completeness gate that enforces every callable verb is represented in the non-determinism manifest. Two entries are explicitly exempted: `ErrTemplateExists` for `make-template` (its `err_description` embeds an absolute temp-dir path that the prefix-match policy cannot normalize across the two fixture copies on Linux; `ErrTemplateNameUnsafe` provides alternative make-template coverage) and `ErrProbeUnsupported` for `find-missing` (only compiled on non-linux/non-darwin targets via build tags; the empty-store success path covers find-missing on CI).
+
+**CI integration.** The harness runs in CI via the `envelope-diff` job in `.github/workflows/integration.yml` on every PR and push to main. The job builds the CLI binary (`tmpbin/agent-director`) and the fake-tmux helper (`tmpbin/faketmux/tmux`) from the commit under test, then runs `go test ./test/envelope-diff/...` with `AGENT_DIRECTOR_TEST_BINARY` and `AGENT_DIRECTOR_FAKE_TMUX_DIR` set to absolute workspace paths so the test process does not pay the build cost a second time.
+
+### Go smoke test
+
+`test/smoke/go/` is the canonical home for the Go-side smoke test. Its purpose is to exercise every callable verb through `pkg/api.Client` exactly as an external consumer would — no subprocess invocations, no access to `internal/` implementation details.
+
+**Verb coverage.** `manifest.CallableVerbs()` drives the verb list (15 verbs). `serve` and `hook` have `Callable=false` and are excluded.
+
+**Import constraint.** The smoke target imports only `pkg/api`, `pkg/api/manifest`, and `internal/testsupport/*`. Imports of `internal/api`, `internal/store`, or any other `internal/` package are prohibited and enforced at test time by `test/smoke/go/import_graph_test.go` (Task c8). This keeps the smoke test honest as a consumer: if `pkg/api` does not expose something, the smoke test cannot reach around it.
+
+**No verb chaining.** Each subtest receives a fresh store and a fresh tmux recorder. Preconditions (e.g., a live Spawn row required by `status` or `send-keys`) are injected by the `internal/testsupport` seeders — never produced by calling another verb first. This makes subtests independent and order-invariant; a subtest failure cannot cascade into later subtests through shared state.
+
+**Race and repeatability.** The smoke target must pass under:
+
+```sh
+go test ./test/smoke/go/... -race -count=2
+```
+
+`-race` shakes out goroutine-level data races in `pkg/api` and its dependencies. `-count=2` runs each subtest twice in the same process, exposing inter-test state leakage (e.g., package-level singletons or temp files not cleaned up between runs).
+
+### ts-helper wrapper CLI
+
+`test/smoke/ts-helper/` is a small Go binary compiled exclusively with the
+`helper` build tag (`go build -tags helper`).  It bridges Go fixture-seed
+helpers into the TypeScript smoke test suite so that Bun-side tests can shell
+out to it for store / template setup without reimplementing the seeding logic
+in TypeScript.
+
+**Why a subprocess instead of reusing the apitest package directly?**
+
+The existing `pkg/api/apitest` helpers all accept `*testing.T` and are
+designed for Go-internal use.  Bun's test runner cannot call Go functions
+in-process.  A thin CLI wrapper is the minimal seam that avoids duplicating
+store-schema knowledge and state-machine details in a second language.
+
+**Build tag isolation.**
+
+`pkg/api/export_for_helper.go` carries `//go:build helper` and lives in
+package `api`.  It exposes `HelperSeedSpawn`, `HelperSeedParentChild`,
+`HelperSeedPermissionRequest`, `HelperSeedTemplate`, and `HelperInitStore` —
+functions that open the SQLite store directly (via `internal/store`) and write
+fixture rows without going through a `pkg/api.Client`.  Because the file is
+excluded from all non-helper builds, the production `agent-director` binary and
+`go test ./...` (no tag) are completely unaffected.
+
+**Subcommand contract.**
+
+Every subcommand follows the same I/O contract:
+
+| Outcome | stdout | stderr | exit code |
+| --- | --- | --- | --- |
+| success | exactly one line of JSON | empty | 0 |
+| failure | empty | error message | 1 |
+
+The single-line JSON guarantee means Bun tests can parse results with
+`JSON.parse(stdout.trim())` without worrying about multi-line output.  stderr
+emptiness on success means a non-empty stderr is an unambiguous failure signal.
+
+**Available subcommands.**
+
+| Subcommand | Key flags | Result shape |
+| --- | --- | --- |
+| `seed-spawn` | `--store`, `--state`, `--id`, `--cwd`, `--create-store` | `{"claude_instance_id": "..."}` |
+| `seed-parent-child` | `--store`, `--parent-id`, `--child-id` | `{"parent_id": "...", "child_id": "..."}` |
+| `seed-permission-request` | `--store`, `--spawn-id`, `--tool` | `{"request_id": <number>}` |
+| `seed-template` | `--templates-dir`, `--name`, `--body` | `{"path": "..."}` |
+| `seed-empty-store` | `--store` | `{"path": "..."}` |
+| `json-schema` | — | machine-readable result-shape map for all subcommands |
+
+**Makefile target.**
+
+`make ts-helper` builds `bin/ts-helper`.  The target lists every
+`.go` source under `test/smoke/ts-helper/` and
+`pkg/api/export_for_helper.go` as prerequisites so Make's mtime tracking
+makes subsequent runs no-ops when nothing has changed.
+
+**Bun integration — `TS_HELPER_PATH`.**
+
+`pkg/ts-bun-client/bunfig.toml` registers `./test/setup.ts` as a Bun preload:
+
+```toml
+[test]
+preload = ["./test/setup.ts"]
+```
+
+`test/setup.ts` runs `make ts-helper` synchronously (via `Bun.spawnSync`)
+before any test starts.  On success it sets `process.env.TS_HELPER_PATH` to
+the absolute path of `bin/ts-helper`.  On failure it prints a clear message
+and calls `process.exit(1)` so the whole test run aborts immediately.
+
+Because the make target is incremental, a cached build adds only a few
+milliseconds of overhead to the suite.  Individual smoke tests can retrieve
+the path with `process.env.TS_HELPER_PATH` and shell out to specific
+subcommands.
+
+### TS smoke-test harness
+
+`pkg/ts-bun-client/test/` contains the Bun smoke-test suite for every callable
+verb.  It exercises `pkg/ts-bun-client/src/` end-to-end through the real
+`libagent_director.so` FFI boundary.
+
+**Directory layout.**
+
+```
+test/
+  setup.ts                   # Bun preload: builds ts-helper + fake-tmux
+  smoke-invariants.test.ts   # Meta-test enforcing coverage contracts
+  smoke/
+    spawn.test.ts            # One file per verb (happy + error path)
+    status.test.ts
+    get.test.ts
+    send-keys.test.ts
+    read-pane.test.ts
+    kill.test.ts
+    decide.test.ts
+    resume.test.ts
+    find-missing.test.ts
+    expire.test.ts
+    delete.test.ts
+    make-template.test.ts
+    list.test.ts
+    pause.test.ts
+    version.test.ts
+  internal/
+    tempHome.ts              # withTempHome() helper
+    helper.ts                # runHelper() wrapper for ts-helper subprocess
+```
+
+**`withTempHome` helper.**
+
+`test/internal/tempHome.ts` exports `withTempHome(testFn)`.  It creates a fresh
+`mkdtemp` directory, sets `process.env.HOME` and `process.env.PATH` in the main
+thread, runs `testFn(homeDir)`, then restores env and cleans up the temp dir (on
+success) or preserves it (on failure, for inspection).
+
+**FFI worker isolation caveat.**  Bun Worker threads inherit a snapshot of the
+OS-level environment at spawn time and do NOT reflect subsequent `process.env`
+mutations in the parent thread.  The FFI worker (which runs all C-ABI calls)
+therefore sees the ORIGINAL `HOME` and `PATH` regardless of what
+`withTempHome` sets.  Three consequences affect test design:
+
+1. **tmux binary** — verbs that invoke tmux (`spawn`, `send-keys`, `read-pane`,
+   `resume`) must pass `tmuxCommand: <path-to-fake-tmux>` explicitly to the
+   `Client` constructor so the worker uses the fake-tmux stub rather than the
+   real binary found on its PATH snapshot.
+
+2. **HOME-relative paths** — `make-template` writes to
+   `~/.agent-director/templates/` using Go's `os.UserHomeDir()` in the worker,
+   which resolves to the REAL home (`/home/horde`), not the per-test temp dir.
+   Tests that check `result.path` assert the filename suffix only, not a
+   `startsWith(homeDir)` prefix, and delete the file in a `finally` block.
+
+3. **JSONL paths** — `resume`'s pre-flight `os.Stat` for the JSONL transcript
+   likewise resolves under the real HOME.  Resume tests create the JSONL
+   placeholder at `${REAL_HOME}/.claude/projects/${slug(cwd)}/${sessionId}.jsonl`
+   (where `REAL_HOME` is captured at module-load time, before any `withTempHome`
+   override) and delete it in a `finally` block.
+
+**`AGENT_DIRECTOR_INSTANCE_ID` and the FK constraint.**
+
+When tests run inside a live Claude session the environment variable
+`AGENT_DIRECTOR_INSTANCE_ID` is set to the session's UUID.  The FFI worker
+inherits this value and passes it as `parent_id` on every `InsertPending` and
+`SetParentID` call.  Because the test stores are fresh SQLite files that do not
+contain a row for the session UUID, the FOREIGN KEY constraint fails.
+
+Any smoke test that exercises a verb that writes `parent_id` (`spawn`,
+`resume`) pre-seeds a row with `id = process.env.AGENT_DIRECTOR_INSTANCE_ID`
+in the same store before calling the verb.  This satisfies the FK constraint
+without modifying the worker's inherited environment.
+
+**fake-tmux stub.**
+
+`test/fake-tmux/main.go` is a minimal Go binary that accepts any tmux subcommand
+and exits 0 — allowing smoke tests to call verbs that would otherwise need a live
+tmux session.  For `capture-pane` it writes a fixed stub string to stdout so
+`read-pane` tests can assert the return value is non-empty.  The binary is built
+by `make fake-tmux` (which `test/setup.ts` calls before any test runs).
+
+**`runHelper` wrapper.**
+
+`test/internal/helper.ts` exports `runHelper(subcommand, args)`.  It shells out
+to `bin/ts-helper` via `Bun.spawnSync`, throws on non-zero exit, and returns
+parsed JSON from stdout.  Smoke tests use it to seed SQLite rows and
+filesystem fixtures that would otherwise require duplicating Go's state-machine
+logic in TypeScript.
+
+**`smoke-invariants.test.ts` meta-test.**
+
+Three static assertions are enforced by grepping test file contents:
+
+| Assert | Rule |
+| --- | --- |
+| (a) | Every verb in `src/internal/verbs.ts::VERBS` has a `test/smoke/<verb>.test.ts` file. |
+| (b) | Every smoke file imports `withTempHome` and calls it. |
+| (c) | Every smoke file outside the allow-list contains `instanceof Err` or `toBeInstanceOf(Err`. |
+
+Allow-list for (c): `version`, `expire`, `delete`, `find-missing` — verbs whose
+manifests declare no verb-level ErrorNames (errors surface in result maps or are
+untriggerable on Linux).
+
+**CI.** The `.github/workflows/go-smoke.yml` workflow runs `go test -race -count=1 -v ./test/smoke/go/...` on `ubuntu-latest` (linux/amd64) on every pull request and push to `main`. Cross-platform extension to macOS and Windows is Epic 6.
+
+### TS envelope-diff regression
+
+`pkg/ts-bun-client/test/envelope-diff.test.ts` is the TypeScript counterpart to
+Epic 3's Go-side envelope-diff harness.  Both suites run the same 15 callable
+verbs against identical SQLite fixtures and assert that the CLI subprocess output
+and the Bun Client wrapper output are structurally identical — catching any
+divergence introduced by the FFI bindings, parameter marshalling, or result
+deserialization.
+
+**How it works.**
+
+For each verb the test:
+
+1. Seeds a single SQLite store using `bin/ts-helper` (the same fixture seeders
+   used by the smoke tests).
+2. Copies the seeded store byte-for-byte to two temp-home directories (`homeA`
+   and `homeB`) so that both sides start from an identical on-disk state —
+   including timestamps that would otherwise diverge if seeded independently.
+3. Runs the CLI subprocess via `runCli(args, cliEnv(homeA))` and captures
+   stdout/stderr.
+4. Calls the Bun Client wrapper with equivalent parameters, pointing its
+   `storePath` at `homeB/.agent-director/state.db`.
+5. Calls `assertEnvelopesEqual(cliResult, tsResult, { ignorePaths })` where
+   `ignorePaths` comes from `loadIgnorePathsForVerb(verb)`.
+
+Each describe block contains a **success path** test and (for verbs that expose
+verb-level errors) an **error path** test.
+
+**Reuse of `nondeterministic.json`.**
+
+`test/internal/loadIgnorePaths.ts` reads Epic 3's
+`test/envelope-diff/nondeterministic.json` at module-load time and caches it.
+`loadIgnorePathsForVerb(verb)` returns the selector array for that verb; callers
+pass it directly as `ignorePaths` to `assertEnvelopesEqual`.  This keeps both
+suites synchronized: adding a selector to the JSON file silences the field in
+both the Go and TS diffs simultaneously.
+
+**`assertEnvelopesEqual` (structuralDiff.ts).**
+
+`test/internal/structuralDiff.ts` implements a recursive structural diff using
+the same dot-bracket path notation as Epic 3's `diff.go`:
+
+- Field access: `.foo`, `.foo.bar`
+- Array index: `.arr[0]`
+- Wildcard selector (in ignore list only): `.arr[*]` matches any `.arr[N]`
+
+On any mismatch all divergences are collected and thrown together so a single
+test run surfaces every problem at once.
+
+**`runCli` (cliRunner.ts).**
+
+`test/internal/cliRunner.ts` exports `runCli(args, env)`.  It spawns
+`bin/agent-director` via `Bun.spawnSync`, captures stdout and stderr as strings,
+and returns `{ stdout, stderr, exitCode }`.  The CLI binary path defaults to
+`process.env.CLI_PATH` (set by `test/setup.ts`) or is resolved relative to the
+repo root.
+
+**fake-tmux and PATH.**
+
+Both the CLI subprocess and the FFI worker must resolve `tmux` to the fake stub.
+For the CLI, `runCli` receives a `cliEnv` object that prepends `FAKE_TMUX_DIR`
+to `PATH`.  For the Client side, the FFI worker inherits the real OS PATH at
+spawn time; tests pass `tmuxCommand: FAKE_TMUX_BIN` explicitly to the `Client`
+constructor (the same pattern used in smoke tests).
+
+**Meta-test (`envelope-diff-invariants.test.ts`).**
+
+Five static assertions are enforced by grepping file contents — no test
+execution required, completes in under 1 second:
+
+| Assert | Rule |
+| --- | --- |
+| (a) | Every verb in `VERBS` has a `describe("verb", ...)` block in `envelope-diff.test.ts`. |
+| (b) | Every verb has a `"success path"` test. |
+| (c) | Every verb outside the allow-list has an `"error path"` test inside its describe block. |
+| (d) | `nondeterministic.json` contains an entry for every verb in `VERBS`. |
+| (e) | `assertEnvelopesEqual` call count equals `loadIgnorePathsForVerb` call count. |
+
+Allow-list for (c): `version`, `expire`, `delete`, `find-missing`.
+
+**`make envelope-diff-ts`.**
+
+The Makefile target builds all three required binaries incrementally, then
+runs the two test files:
+
+```
+envelope-diff-ts: agent-director ts-helper fake-tmux
+    cd pkg/ts-bun-client && bun test test/envelope-diff.test.ts test/envelope-diff-invariants.test.ts
+```
+
+It is wired into `make test` so `go test ./...` will not run unless the TS
+envelope-diff suite passes first.

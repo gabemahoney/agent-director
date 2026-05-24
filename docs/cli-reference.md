@@ -215,7 +215,7 @@ _None._
 
 ### Result
 
-- `count` (int): Number of rows transitioned to missing on this sweep.
+- `count` (int): Number of rows transitioned to missing on this sweep. Zero is a legitimate happy-path result when nothing needed reaping (or when the degraded-mode guard refused to write).
 - `ids` ([]string): Sorted IDs of rows transitioned to missing.
 
 ### Errors
@@ -232,7 +232,7 @@ Remove terminal-state rows (ended/missing) whose ended_at is older than the rete
 
 ### Result
 
-- `count` (int): Number of rows removed.
+- `count` (int): Number of rows removed. Zero is a legitimate happy-path result when no terminal rows matched the retention window.
 - `ids` ([]string): Sorted IDs of rows removed.
 
 ### Errors

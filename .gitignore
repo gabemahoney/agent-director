@@ -1,6 +1,15 @@
 reference/
 bin/
 dist/
+tmpbin/
+# `make consumer-dryrun` leaves this binary in-tree as a side effect of
+# `go build ./...` from inside the mini-module.
+tools/consumer-dryrun/agent-director-consumer-dryrun
+# Repo-root `go build ./...` drops the main-package binaries next to go.mod.
+# These are build artifacts (not source) — installable via `make install`.
+/agent-director
+/cabi
+/check-doccomments
 
 # Bee hives live in the enclosing project folder, not the repo. Only the
 # testplans hive (consumed by the Docker harness) stays in-tree. If a future
@@ -12,3 +21,6 @@ tickets/*
 
 # macOS Finder cruft
 .DS_Store
+
+# Test stub binaries — built by `make fake-tmux` / `make ts-helper`.
+test/fake-tmux/tmux

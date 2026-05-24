@@ -10,6 +10,12 @@ SQLite file; everything else is tmux.
   on stdout, typed errors on stderr.
 - An **MCP server** (`serve --stdio`) that exposes the same verbs to
   an LLM client.
+- A **Go library** (`github.com/gabemahoney/agent-director/pkg/api`) —
+  typed client for all verbs, no subprocess or network hop. See
+  [`pkg/api/README.md`](pkg/api/README.md).
+- A **TypeScript/Bun client** (`agent-director`) — FFI-backed,
+  same API surface as the Go library, zero subprocess or network hop. See
+  [`pkg/ts-bun-client/README.md`](pkg/ts-bun-client/README.md).
 - A **permission relay** (`relay_mode=on` + `decide`) so an orchestrator
   can intercept `PreToolUse` permission prompts and answer
   allow/deny out-of-band.
@@ -73,8 +79,6 @@ the installer at it), grab the asset for your platform from the
 curl -L -o agent-director https://github.com/gabemahoney/agent-director/releases/latest/download/agent-director-linux-amd64
 # Linux arm64:
 curl -L -o agent-director https://github.com/gabemahoney/agent-director/releases/latest/download/agent-director-linux-arm64
-# macOS Intel:
-curl -L -o agent-director https://github.com/gabemahoney/agent-director/releases/latest/download/agent-director-darwin-amd64
 # macOS Apple Silicon:
 curl -L -o agent-director https://github.com/gabemahoney/agent-director/releases/latest/download/agent-director-darwin-arm64
 
@@ -105,6 +109,25 @@ bash skills/install-agent-director/install.sh --binary ./bin/agent-director
 and refuses option `--binary` if the artifact is stale — re-run
 `make build` to refresh it.
 
+#### C-ABI shared library (optional)
+
+A C-ABI shared library lets any language with `dlopen` / `LoadLibrary`
+support call agent-director directly — Bun via FFI today, Python and
+others later. It is not required for normal CLI or MCP use.
+
+```sh
+make libagent_director
+```
+
+Produces `dist/libagent_director.so` and `dist/libagent_director.h`.
+Requires `CGO_ENABLED=1` and a C toolchain on the build host. The
+standard `make build` (CLI) remains `CGO_ENABLED=0` and is unaffected.
+
+To remove the build artifacts:
+
+```sh
+make clean-cabi
+```
 
 ### First spawn
 

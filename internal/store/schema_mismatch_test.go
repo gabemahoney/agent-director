@@ -39,7 +39,7 @@ func TestOpenReturnsErrSchemaMismatch(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "state.db")
 
 			// Bootstrap a real v1 DB, close it, then corrupt user_version.
-			s, err := Open(path)
+			s, err := OpenOrInit(path)
 			if err != nil {
 				t.Fatalf("initial Open: %v", err)
 			}

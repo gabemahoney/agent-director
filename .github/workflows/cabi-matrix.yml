@@ -1,0 +1,418 @@
+# cabi-matrix: cross-platform build + smoke + envelope-diff for pkg/cabi.
+#
+# Owns Epic 6 of bee b.qe2. Two v1 legs (darwin/amd64 dropped 2026-05-24
+# per operator decision — no Intel Mac users to serve and GH-hosted
+# macos-13 minutes carry a 10x billing multiplier):
+#
+#   linux-amd64   → operator-owned self-hosted Reno runner registered with
+#                   the full label tuple [self-hosted, Linux, X64,
+#                   linux-amd64].
+#   darwin-arm64  → operator-owned self-hosted runner registered with the
+#                   full label tuple [self-hosted, macOS, ARM64, darwin-arm64].
+#                   Bare `self-hosted` is intentionally NOT used so the
+#                   workflow cannot accidentally route to a different
+#                   self-hosted runner if one is added later. See
+#                   docs/self-hosted-runner-setup.md for the runbook.
+#
+# linux/arm64 and darwin/amd64 are both out of scope for pkg/cabi v1. The
+# CLI binary set keeps linux/arm64 — that is Epic 7's release script, not
+# this matrix.
+#
+# Coexistence: this workflow does NOT modify doc-drift.yml, go-smoke.yml,
+# or integration.yml. Those three continue to enforce the linux/amd64-only
+# gates they owned before this Epic.
+#
+# C toolchain pinning policy (SRD §SR-2.3)
+# ----------------------------------------
+# Each leg pins its C toolchain to a deliberate version that surfaces in
+# build-info-*.txt artifacts. Bumping a pin is a release-note-worthy
+# change. The pins per leg:
+#
+#   linux-amd64   → gcc-11 selected via CC/CXX env vars (works on the
+#                   self-hosted Reno runner without passwordless sudo;
+#                   apt fallback only runs if gcc-11 is missing).
+#   darwin-arm64  → the self-hosted runner's Xcode (or Xcode Command Line
+#                   Tools) is pinned by operator configuration per the
+#                   docs/self-hosted-runner-setup.md Prerequisites
+#                   section. The workflow only RECORDS the active version
+#                   (xcodebuild with a clang-fallback), it does not
+#                   install or switch.
+#
+# Bun pinning policy
+# ------------------
+# Bun is installed per-leg from the official bun.sh installer pinned to
+# BUN_VERSION below, matching test/Dockerfile so the harness and the CI
+# matrix exercise the same Bun runtime. No third-party setup-bun action
+# is used — same SHA-pin-audit avoidance as setup-xcode.
+#
+# Third-party action pinning policy
+# ---------------------------------
+# Every `uses:` reference below is pinned by full commit SHA with a
+# trailing tag comment, matching the convention already used by
+# integration.yml / doc-drift.yml / go-smoke.yml. Bumping a SHA is a
+# deliberate change reviewed as such.
+#
+# Local actionlint
+# ----------------
+#   go install github.com/rhysd/actionlint/cmd/actionlint@v1.6.27
+#   actionlint .github/workflows/cabi-matrix.yml
+
+name: cabi-matrix
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Workflow-level concurrency. Cancels superseded PR runs so two stacked
+# commits do not queue two darwin/arm64 jobs on the single self-hosted
+# machine. Per-SHA (job-level) groups still let each distinct main-branch
+# commit queue its own job; queue bounding on the physical machine is
+# enforced operator-side via the runner's job-concurrency settings (see
+# docs/self-hosted-runner-setup.md Operations section).
+concurrency:
+  group: cabi-matrix-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least-privilege GITHUB_TOKEN: this workflow only reads the repo and
+# uploads artifacts via actions/upload-artifact (which uses an ephemeral
+# token scoped by GitHub). No PR comments, no commits, no release writes.
+permissions:
+  contents: read
+
+# Bun runtime version installed per leg. Kept in lockstep with
+# test/Dockerfile's ARG BUN_VERSION so a bump touches both files in the
+# same commit.
+env:
+  BUN_VERSION: '1.3.13'
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 30
+    # Job-level concurrency keyed on (leg, commit SHA). Workflow-level
+    # concurrency above is keyed on github.ref + cancel-in-progress so
+    # intra-PR pushes cancel prior runs as a whole. The per-leg
+    # per-SHA group here bounds the queue on the single self-hosted
+    # darwin/arm64 machine without cancelling distinct main-branch
+    # commits: two pushes to the same SHA (rare; only manual
+    # workflow_dispatch reruns) coalesce; distinct SHAs each run once.
+    # cancel-in-progress is intentionally false here so a long-running
+    # darwin/arm64 job is never cancelled by a sibling leg failing
+    # fast — fail-fast: false already covers that case at the strategy
+    # level, but this is the second guard.
+    concurrency:
+      group: cabi-matrix-${{ matrix.name }}-${{ github.sha }}
+      cancel-in-progress: false
+    strategy:
+      # fail-fast: false so one leg's failure does not cancel observation
+      # of the other. Cross-platform regressions frequently land on only
+      # one leg and we want both reports on every commit.
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-amd64
+            # Full conjunctive label tuple targeting the operator's
+            # self-hosted Reno runner (Ubuntu 24.04, i9-9820X). Mirrors
+            # the darwin-arm64 entry's defensive labeling so the workflow
+            # cannot accidentally route to a different self-hosted runner
+            # if one is added later. Falls through to queuing if Reno is
+            # offline (deliberate — we'd rather queue than silently route
+            # to a GH-hosted runner and re-incur billable minutes).
+            runs-on: [self-hosted, Linux, X64, linux-amd64]
+            lib_ext: so
+            lib_name: libagent_director.so
+            # platform_dir is the TS package's platforms/<dir>/ slot
+            # this leg's built native lib gets staged into so the
+            # pkg/ts-bun-client smoke / envelope-diff suites can resolve
+            # it via import.meta.resolve.
+            platform_dir: linux-x64
+          - name: darwin-arm64
+            # Full conjunctive label tuple. GitHub matches all labels
+            # together; spelling out `darwin-arm64` ensures the workflow
+            # cannot accidentally route to a different self-hosted runner.
+            runs-on: [self-hosted, macOS, ARM64, darwin-arm64]
+            lib_ext: dylib
+            lib_name: libagent_director.dylib
+            platform_dir: darwin-arm64
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      # setup-go with built-in cache disabled. The Epic body requires
+      # cache keys include both runner.os AND runner.arch so darwin/arm64
+      # cannot fall back to a darwin/amd64-built cache; setup-go's
+      # default cache key is runner.os only and cannot be customised.
+      # The pkg/cabi build is fast enough that skipping the module cache
+      # is acceptable on a first-deal. If cache cost becomes a problem,
+      # a later Task can wire actions/cache with explicit os+arch keys.
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
+        with:
+          go-version-file: 'go.mod'
+          cache: false
+
+      # ---------------------------------------------------------------
+      # C-toolchain pin per leg + build-info capture
+      # ---------------------------------------------------------------
+      #
+      # Each leg writes a build-info-*.txt file recording the active
+      # toolchain version. The artifact-upload step at the end of the
+      # job bundles these into the leg's published artifact so the
+      # Epic 7 release pipeline can attribute the toolchain version it
+      # shipped with.
+
+      - name: Pin gcc-11 and capture build-info (linux-amd64)
+        if: matrix.name == 'linux-amd64'
+        run: |
+          set -euo pipefail
+          # Route the leg-pinned compiler via CC/CXX env vars instead of
+          # update-alternatives so the step works on self-hosted runners
+          # without passwordless sudo. cgo + go build respect CC/CXX.
+          # If gcc-11 is missing (rare — Reno keeps it preinstalled),
+          # try apt; on a self-hosted runner without sudo this will fail
+          # loudly and the operator can install manually.
+          if ! command -v gcc-11 >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends gcc-11 g++-11
+          fi
+          gcc-11 --version | tee build-info-gcc.txt
+          {
+            echo "---"
+            echo "selected via CC/CXX env (not update-alternatives):"
+            echo "CC=$(command -v gcc-11)"
+            echo "CXX=$(command -v g++-11)"
+          } | tee -a build-info-gcc.txt
+          # Persist CC/CXX for subsequent steps in this job.
+          echo "CC=$(command -v gcc-11)"  >> "$GITHUB_ENV"
+          echo "CXX=$(command -v g++-11)" >> "$GITHUB_ENV"
+
+      - name: Capture host Xcode/CLT version (darwin-arm64)
+        if: matrix.name == 'darwin-arm64'
+        run: |
+          set -euo pipefail
+          # `command -v xcodebuild` is misleading on macOS: /usr/bin/xcodebuild
+          # is always present as a stub, but it errors out unless a full Xcode.app
+          # is selected as the developer dir (CLT-only machines fail). Invoke it
+          # and fall back to clang --version on stub-failure.
+          if xcodebuild -version >/dev/null 2>&1; then
+            xcodebuild -version | tee build-info-xcode.txt
+          else
+            echo "xcodebuild not runnable (CLT-only or no Xcode.app selected); recording clang --version instead" \
+              | tee build-info-xcode.txt
+          fi
+          echo "---" | tee -a build-info-xcode.txt
+          xcode-select -p | tee -a build-info-xcode.txt
+          clang --version | tee -a build-info-xcode.txt
+
+      # ---------------------------------------------------------------
+      # Bun install (every leg)
+      # ---------------------------------------------------------------
+      #
+      # Installed into RUNNER_TEMP/.bun so the self-hosted runner's home
+      # directory is not polluted across jobs. The installer is the
+      # official bun.sh one-liner pinned by BUN_VERSION above.
+      - name: Install Bun ${{ env.BUN_VERSION }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export BUN_INSTALL="${RUNNER_TEMP}/.bun"
+          curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}"
+          echo "${BUN_INSTALL}/bin" >> "$GITHUB_PATH"
+          "${BUN_INSTALL}/bin/bun" --version
+
+      # ---------------------------------------------------------------
+      # Build pkg/cabi shared library
+      # ---------------------------------------------------------------
+      #
+      # CGO_ENABLED=1 + -buildmode=c-shared emits the leg-native .so or
+      # .dylib plus a generated C header. The output lands in dist/
+      # (matches the `make libagent_director` target's output dir and
+      # what pkg/ts-bun-client/scripts/prepare-platforms.ts expects when
+      # used locally). The header is at dist/libagent_director.h per
+      # Go's -buildmode=c-shared convention.
+      - name: Build pkg/cabi shared library
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          CGO_ENABLED=1 go build -buildmode=c-shared \
+            -o "dist/${{ matrix.lib_name }}" \
+            ./pkg/cabi
+          ls -la dist/
+
+      # ---------------------------------------------------------------
+      # darwin/arm64-only: verify the dylib is genuinely arm64-native
+      # ---------------------------------------------------------------
+      #
+      # Defends against an accidental x86_64 build slipping through on
+      # the self-hosted Mac — for example, if the operator's Go install
+      # is somehow set up to target amd64 instead of the host arch.
+      # `file` and `lipo -info` are the canonical Mach-O arch inspectors;
+      # we capture both into build-info-arch.txt (uploaded as part of
+      # the artifact) AND fail the step if either does not mention
+      # `arm64`. Subtask wt verifies on a test branch that perturbing
+      # the build to produce a non-arm64 dylib trips this guard.
+      - name: Verify arm64-native dylib (darwin-arm64)
+        if: matrix.name == 'darwin-arm64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          lib="dist/${{ matrix.lib_name }}"
+          file "$lib"           | tee build-info-arch.txt
+          echo "---"            | tee -a build-info-arch.txt
+          lipo -info "$lib"     | tee -a build-info-arch.txt
+          if ! file "$lib" | grep -q "arm64"; then
+            echo "::error::file did not report arm64 for $lib (got: $(file "$lib"))"
+            exit 1
+          fi
+          if ! lipo -info "$lib" | grep -q "arm64"; then
+            echo "::error::lipo -info did not report arm64 for $lib"
+            exit 1
+          fi
+
+      # ---------------------------------------------------------------
+      # Build agent-director CLI binary
+      # ---------------------------------------------------------------
+      #
+      # Epic 3's envelope-diff harness spawns the CLI as a subprocess
+      # (SRD §SR-7.4) and diffs its stdout/stderr envelope against an
+      # in-process pkg/api invocation. The CLI binary must therefore
+      # exist on disk before the envelope-diff steps run. Lands at
+      # bin/agent-director, mirroring `make build`'s output path.
+      #
+      # Not uploaded as a workflow artifact by this job — Epic 7 owns
+      # CLI binary release artifacts (four cross-compiled binaries per
+      # SRD §SR-9). This matrix exists to exercise tests, not to ship.
+      - name: Build agent-director CLI binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+          CGO_ENABLED=1 go build -o bin/agent-director ./cmd/agent-director
+          ls -la bin/
+
+      # ---------------------------------------------------------------
+      # Stage native lib into TS platform sub-package
+      # ---------------------------------------------------------------
+      #
+      # pkg/ts-bun-client resolves the native library via
+      # `import.meta.resolve("@agent-director/<plat>/...")`,
+      # which in turn relies on the file:./platforms/<plat>/ optional
+      # dependency declared in pkg/ts-bun-client/package.json. The
+      # matrix stages exactly the leg-native lib into its own
+      # platform_dir; scripts/prepare-platforms.ts is the dev-loop
+      # alternative for a single machine staging both targets.
+      - name: Stage built lib into TS platform sub-package
+        shell: bash
+        run: |
+          set -euo pipefail
+          target_dir="pkg/ts-bun-client/platforms/${{ matrix.platform_dir }}"
+          mkdir -p "$target_dir"
+          cp "dist/${{ matrix.lib_name }}" "$target_dir/${{ matrix.lib_name }}"
+          ls -la "$target_dir/"
+
+      # ---------------------------------------------------------------
+      # Bun install (one-shot per leg)
+      # ---------------------------------------------------------------
+      #
+      # --frozen-lockfile bails on any drift between package.json /
+      # bun.lock so the cached lockfile is the single source of truth.
+      - name: Bun install
+        shell: bash
+        working-directory: pkg/ts-bun-client
+        run: |
+          set -euo pipefail
+          bun install --frozen-lockfile
+
+      # ---------------------------------------------------------------
+      # Run Go smoke test (Epic 4 deliverable)
+      # ---------------------------------------------------------------
+      - name: Run Go smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          # -linkmode=external forces the external linker (clang/ld) for the
+          # test binary. Go 1.22's internal linker can emit Mach-O binaries
+          # without LC_UUID on darwin/arm64, which macOS Sequoia 15+ dyld
+          # rejects with `dyld: missing LC_UUID load command`. The external
+          # linker always emits LC_UUID. Safe + ~free on linux too.
+          go test -race -count=1 -v -ldflags='-linkmode=external' ./test/smoke/go/...
+
+      # ---------------------------------------------------------------
+      # Run TS/Bun smoke test (Epic 5 deliverable)
+      # ---------------------------------------------------------------
+      #
+      # Drives Epic 5 via the canonical `bun run smoke` script declared
+      # in pkg/ts-bun-client/package.json so this workflow does not have
+      # to know which test files the smoke comprises. The TS library's
+      # platform resolver finds the just-staged native lib in
+      # pkg/ts-bun-client/platforms/${{ matrix.platform_dir }} via
+      # import.meta.resolve; no env-var override is needed.
+      - name: Run TS/Bun smoke test
+        shell: bash
+        working-directory: pkg/ts-bun-client
+        run: |
+          set -euo pipefail
+          bun run smoke
+
+      # ---------------------------------------------------------------
+      # Run Go-side envelope-diff regression (Epic 3 deliverable)
+      # ---------------------------------------------------------------
+      #
+      # Mirrors integration.yml's envelope-diff job: builds the
+      # fake-tmux shim, points AGENT_DIRECTOR_FAKE_TMUX_DIR at it, and
+      # points AGENT_DIRECTOR_TEST_BINARY at the just-built CLI binary.
+      - name: Build fake-tmux shim
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p test/fake-tmux
+          CGO_ENABLED=0 go build -o test/fake-tmux/tmux ./test/fake-tmux
+
+      - name: Run Go envelope-diff regression
+        shell: bash
+        env:
+          AGENT_DIRECTOR_TEST_BINARY: ${{ github.workspace }}/bin/agent-director
+          AGENT_DIRECTOR_FAKE_TMUX_DIR: ${{ github.workspace }}/test/fake-tmux
+        run: |
+          set -euo pipefail
+          # See the smoke-test step for the LC_UUID/darwin-Sequoia rationale.
+          # External linker requires cgo; CGO_ENABLED=1 is the default on
+          # darwin/arm64 and linux/amd64.
+          go test -count=1 -ldflags='-linkmode=external' ./test/envelope-diff/...
+
+      # ---------------------------------------------------------------
+      # Run TS-side envelope-diff regression (Epic 5 deliverable)
+      # ---------------------------------------------------------------
+      - name: Run TS envelope-diff regression
+        shell: bash
+        working-directory: pkg/ts-bun-client
+        run: |
+          set -euo pipefail
+          bun run envelope-diff
+
+      # ---------------------------------------------------------------
+      # Upload per-leg artifact
+      # ---------------------------------------------------------------
+      #
+      # Bundles the native lib, the generated C header, and the
+      # build-info-*.txt capture files (gcc on linux-amd64; xcode +
+      # arch on darwin-arm64) into one named
+      # artifact per leg so Epic 7's release pipeline can collect
+      # them. The `build-info-*.txt` glob is sufficient by itself —
+      # `build-info-arch.txt` is named explicitly below for
+      # documentary clarity per subtask fv.7k. Retention is 7 days —
+      # enough for the release pipeline to fetch on a green main
+      # commit; release artifacts themselves are produced by Epic 7's
+      # separate workflow.
+      - name: Upload pkg/cabi artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: pkg-cabi-${{ matrix.name }}
+          path: |
+            dist/${{ matrix.lib_name }}
+            dist/libagent_director.h
+            build-info-*.txt
+            build-info-arch.txt
+          if-no-files-found: error
+          retention-days: 7

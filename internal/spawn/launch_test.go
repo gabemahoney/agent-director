@@ -50,7 +50,7 @@ func (c *captureTmux) NewSession(name, cwd string, envs map[string]string, comma
 func newStoreAndLaunchInputs(t *testing.T) (*store.Store, Resolved, config.Config) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	s, err := store.Open(dbPath)
+	s, err := store.OpenOrInit(dbPath)
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestLaunchSerializesLabelsAsJSON(t *testing.T) {
 	t.Setenv(envInstanceID, "") // ensure no parent leakage from the host shell
 
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	s, err := store.Open(dbPath)
+	s, err := store.OpenOrInit(dbPath)
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
@@ -322,7 +322,7 @@ func TestLaunchParentDeleteCascadesToChild(t *testing.T) {
 	t.Setenv(envInstanceID, "id-cascade-parent")
 
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	s, err := store.Open(dbPath)
+	s, err := store.OpenOrInit(dbPath)
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}

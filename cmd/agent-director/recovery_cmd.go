@@ -8,28 +8,28 @@ import (
 	"os"
 	"time"
 
-	"github.com/gabemahoney/agent-director/internal/api"
 	"github.com/gabemahoney/agent-director/internal/config"
-	"github.com/gabemahoney/agent-director/internal/probe"
-	"github.com/gabemahoney/agent-director/internal/store"
+	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 )
 
 // findMissingHandlerWith implements `agent-director find-missing`.
 // The verb takes no flags. The prober is selected by build tags
 // (probe.New). Warnings (e.g. degraded-mode guard) route through the
-// configured error log so cron operators see them in their usual
+// configured error log — the Client was constructed with a recovery
+// logger (setupClient Pin 3) so cron operators see them in their usual
 // monitoring stream.
-func findMissingHandlerWith(st *store.Store, cfg config.Config, args []string) error {
+func findMissingHandlerWith(client *pkgapi.Client, args []string) error {
 	fs := flag.NewFlagSet("find-missing", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 
-	result, err := api.FindMissing(context.Background(), st, probe.New(), newRecoveryLogger(cfg))
+	result, err := client.FindMissing(context.Background())
 	if err != nil {
-		name, desc := classifyError(err)
-		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	if result.IDs == nil {
 		result.IDs = []string{}
@@ -40,7 +40,7 @@ func findMissingHandlerWith(st *store.Store, cfg config.Config, args []string) e
 // expireHandlerWith implements `agent-director expire`. --older-than
 // accepts the same form Go's time.ParseDuration handles, plus a `d`
 // suffix for days (Go's parser does not). Absent flag → cfg default.
-func expireHandlerWith(st *store.Store, cfg config.Config, args []string) error {
+func expireHandlerWith(client *pkgapi.Client, args []string) error {
 	var olderThanStr string
 	fs := flag.NewFlagSet("expire", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -58,10 +58,10 @@ func expireHandlerWith(st *store.Store, cfg config.Config, args []string) error 
 		older = &d
 	}
 
-	result, err := api.Expire(st, cfg, older, newRecoveryLogger(cfg))
+	result, err := client.Expire(older)
 	if err != nil {
-		name, desc := classifyError(err)
-		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	if result.IDs == nil {
 		result.IDs = []string{}
@@ -72,7 +72,7 @@ func expireHandlerWith(st *store.Store, cfg config.Config, args []string) error 
 // deleteHandlerWith implements `agent-director delete`. --claude-instance-id
 // is repeatable; at least one is required. The per-row result map is
 // the entire JSON envelope.
-func deleteHandlerWith(st *store.Store, args []string) error {
+func deleteHandlerWith(client *pkgapi.Client, args []string) error {
 	var ids []string
 	fs := flag.NewFlagSet("delete", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -83,10 +83,10 @@ func deleteHandlerWith(st *store.Store, args []string) error {
 	if len(ids) == 0 {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--claude-instance-id is required (≥1)")
 	}
-	result, err := api.Delete(st, ids)
+	result, err := client.Delete(ids)
 	if err != nil {
-		name, desc := classifyError(err)
-		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	return writeJSON(os.Stdout, result)
 }
@@ -131,11 +131,13 @@ func (e *durationParseError) Error() string {
 	return "invalid duration: " + e.Raw + " (expected Go duration form like \"12h\" or trailing-d days like \"7d\")"
 }
 
-// newRecoveryLogger returns the *log.Logger used by the cron-shaped
-// verbs (find-missing, expire). The destination is the configured
+// newRecoveryLogger returns the *log.Logger used by setupClient (Pin 3) to
+// construct the recovery logger injected into the pkg/api.Client at startup.
+// The Client's verb methods (Kill, FindMissing, Expire) surface WARN messages
+// via c.logger — SRD §14.6 and §5. The destination is the configured
 // error log path, falling back to stderr if the file can't be opened.
-// Best-effort: file is leaked for the lifetime of the verb call (the
-// short-lived CLI process; the OS reclaims on exit).
+// Best-effort: file is leaked for the lifetime of the CLI process; the OS
+// reclaims on exit.
 func newRecoveryLogger(cfg config.Config) *log.Logger {
 	dest := io.Writer(os.Stderr)
 	if cfg.Log.ErrorLogPath != "" {

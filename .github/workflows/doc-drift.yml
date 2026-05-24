@@ -1,3 +1,24 @@
+# doc-drift: generated-file and doc-comment drift gate.
+#
+# This workflow enforces two invariants:
+#
+#  1. Generated files (docs/, manifest/surface.json, errnames/catalog.json)
+#     stay in sync with their generators. Any PR that touches a generator
+#     without running `make generate` will fail here.
+#
+#  2. Every exported identifier in pkg/api has a non-empty doc comment
+#     (enforced by tools/check-doccomments, added in subtask 6a.m4). This is
+#     the TRIPWIRE: add a new exported symbol to pkg/api without a doc comment
+#     and the "Check pkg/api doc comments" step below will fail with a clear
+#     per-identifier diagnostic.
+#
+#     To reproduce locally:  make check-doccomments
+#     To fix:                add a // comment immediately before each flagged
+#                            declaration, then push again.
+#
+#     The checker is tested by tools/check-doccomments/main_test.go (baseline
+#     fixtures) and extended by the test-writer in subtask 6a.5f.
+
 name: doc-drift
 
 on:
@@ -9,16 +30,50 @@ jobs:
   doc-drift:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
         with:
           go-version-file: 'go.mod'
-      - name: Regenerate docs
+      - name: Check pkg/api doc comments
+        run: make check-doccomments
+      - name: Regenerate docs and surface.json
         run: make generate
-      - name: Check for drift
+      - name: Check for drift in docs/
         run: |
           if ! git diff --exit-code docs/; then
             echo "::error::Generated docs are out of date. Run 'make generate' locally and commit the result."
             git diff docs/
             exit 1
           fi
+      - name: Check for drift in surface.json
+        run: |
+          if ! git diff --exit-code pkg/api/manifest/surface.json; then
+            echo "::error::pkg/api/manifest/surface.json is out of date. Run 'make surface-json' locally and commit the result."
+            git diff pkg/api/manifest/surface.json
+            exit 1
+          fi
+      - name: Check for drift in catalog.json
+        run: |
+          if ! git diff --exit-code pkg/api/errnames/catalog.json; then
+            echo "::error::pkg/api/errnames/catalog.json is out of date. Run 'make errnames-json' locally and commit the result."
+            git diff pkg/api/errnames/catalog.json
+            exit 1
+          fi
+      - name: Check err-name coherence
+        run: make err-coherence
+      - name: Check catalog.json up-to-date
+        run: |
+          make errnames-json
+          if ! git diff --exit-code pkg/api/errnames/catalog.json; then
+            echo "::error::pkg/api/errnames/catalog.json is stale. Run 'make errnames-json' and commit the result."
+            exit 1
+          fi
+      - name: Check surface.json up-to-date
+        run: |
+          make surface-json
+          if ! git diff --exit-code pkg/api/manifest/surface.json; then
+            echo "::error::pkg/api/manifest/surface.json is stale. Run 'make surface-json' and commit the result."
+            exit 1
+          fi
+      - name: Check nondeterministic.json coverage
+        run: make nondet-coverage

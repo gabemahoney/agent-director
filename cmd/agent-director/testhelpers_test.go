@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
 )
 
 // binaryPath is set by TestMain to the path of a freshly-built binary used
@@ -83,4 +85,37 @@ func parseEnvelope(t *testing.T, raw string) errorEnvelope {
 		t.Fatalf("stderr is not JSON-parseable: %v\nstderr=%q", err, raw)
 	}
 	return env
+}
+
+// newTestClient constructs an isolated *pkgapi.Client for in-process tests.
+// It creates a fresh HOME in t.TempDir(), writes a minimal (empty) config
+// TOML, and opens the store with CreateIfMissing=true — matching the
+// production setupClient Pin 1/2 contract. The client is closed via
+// t.Cleanup so callers need not call Close themselves.
+//
+// Tests that invoke the CLI as a subprocess (the majority) should continue
+// to use runCLI / runSpawnCLI; newTestClient is for tests that drive
+// handler functions directly.
+func newTestClient(t *testing.T) *pkgapi.Client {
+	t.Helper()
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	// Write an empty TOML so config.Load finds a valid (but default) file.
+	cfgPath := filepath.Join(tmpHome, "config.toml")
+	if err := os.WriteFile(cfgPath, []byte(""), 0o600); err != nil {
+		t.Fatalf("newTestClient: write config: %v", err)
+	}
+
+	client, err := pkgapi.New(pkgapi.Options{
+		ConfigPath:      cfgPath,
+		CreateIfMissing: true,
+		// StorePath omitted (Pin 2): resolves via cfg.Store.DbPath which
+		// config.Load expands against HOME set above.
+	})
+	if err != nil {
+		t.Fatalf("newTestClient: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	return client
 }

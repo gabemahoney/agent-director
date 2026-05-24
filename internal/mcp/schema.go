@@ -1,7 +1,7 @@
 package mcp
 
 import (
-	"github.com/gabemahoney/agent-director/internal/api/manifest"
+	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
 // buildInputSchema converts a manifest VerbDef into a JSON Schema

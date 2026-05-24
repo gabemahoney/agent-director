@@ -12,7 +12,7 @@ import (
 // when the row is absent, so callers can use errors.Is for disambiguation.
 func TestGetPermissionRequestReturnsErrNoRows(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	s, err := Open(dbPath)
+	s, err := OpenOrInit(dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

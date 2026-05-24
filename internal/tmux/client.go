@@ -47,8 +47,17 @@ type Client struct {
 	run runner
 }
 
-// New constructs a Client backed by the real tmux binary.
+// New constructs a Client backed by the real tmux binary on PATH.
 func New() *Client { return &Client{run: defaultRunner} }
+
+// NewWithBinary constructs a Client that invokes binary instead of the
+// default "tmux" on PATH. Useful when the operator has tmux installed at a
+// non-standard location or when Options.TmuxCommand overrides the path.
+func NewWithBinary(binary string) *Client {
+	return &Client{run: func(_ string, args ...string) ([]byte, error) {
+		return defaultRunner(binary, args...)
+	}}
+}
 
 // NewSession creates a detached tmux session named name with starting
 // directory cwd, the given env vars injected via repeated -e KEY=VAL, and
