@@ -163,6 +163,18 @@ agent-director kill --claude-instance-id <id>
 await client.kill({ claude_instance_id: "<id>" });
 ```
 
+### makeTemplate
+
+Save a reusable spawn preset. Pass `overwrite: true` to atomically replace an existing template; omit the field to keep the default rejection on collision.
+
+```sh
+agent-director make-template --name dev --cwd /repos/widget --overwrite
+```
+
+```ts
+await client.makeTemplate({ name: "dev", cwd: "/repos/widget", overwrite: true });
+```
+
 ## Versioning
 
 The library version equals the agent-director release tag — released in lockstep:
