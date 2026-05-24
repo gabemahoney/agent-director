@@ -566,6 +566,15 @@ collect_cabi_artifacts() {
             missing_platforms+=("$platform")
             continue
         fi
+        # cabi-matrix.yml uploads with `path: dist/${lib_name}` etc., so
+        # the artifact archive preserves the `dist/` prefix. After gh run
+        # download extracts into $out_dir/, the libs land at
+        # $out_dir/dist/<lib>. Flatten that subdir so downstream paths
+        # ($out_dir/<lib>) hold regardless of upload-side layout.
+        if [[ -d "$out_dir/dist" ]]; then
+            mv "$out_dir/dist/"* "$out_dir/" 2>/dev/null || true
+            rmdir "$out_dir/dist" 2>/dev/null || true
+        fi
         lib="$out_dir/$(cabi_lib_basename "$platform")"
         if [[ ! -f "$lib" ]]; then
             log build "missing expected library $lib after download" >&2
