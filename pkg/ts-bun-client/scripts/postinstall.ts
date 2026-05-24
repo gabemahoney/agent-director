@@ -505,6 +505,20 @@ function main(): number {
   }
 
   const here = fileURLToPath(import.meta.url);
+
+  // Dev-tree guard. The postinstall is meant to fire when the umbrella is
+  // installed as a dependency (i.e. the script lives under node_modules/).
+  // Inside the dev checkout — say a maintainer running `bun install` in
+  // pkg/ts-bun-client/ — there is no consumer to copy the skill into; we
+  // silently no-op so the maintainer's real ~/.claude/skills/ is never
+  // touched by a routine dev install.
+  if (!here.includes("/node_modules/")) {
+    if (verbose) {
+      out.info("postinstall skipped (dev tree; not under node_modules/)");
+    }
+    return 0;
+  }
+
   let packageRoot: string;
   try {
     packageRoot = resolvePackageRoot(here);

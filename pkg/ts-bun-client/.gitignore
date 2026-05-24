@@ -8,3 +8,8 @@ platforms/*/libagent_director.dylib
 
 # Temp dirs created by install-resolution test
 test/.tmp-*
+
+# Skill body staged at pack time by scripts/stage-skill.ts (the prepack
+# hook). Source of truth lives at ${REPO_ROOT}/skills/install-agent-director/;
+# the staged copy is purely a packaging artifact and must never be committed.
+skills/
