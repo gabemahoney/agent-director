@@ -156,8 +156,9 @@ case "${uname_s}/${uname_m}" in
         ;;
 esac
 
-# claude + tmux must be on PATH.
-required_tools=(claude tmux jq)
+# claude + tmux must be on PATH. `file` is required for the --binary
+# architecture probe (SR-2.2) — hard requirement; never silent-skip.
+required_tools=(claude tmux jq file)
 [[ "$FROM_RELEASE" -eq 1 ]] && required_tools+=(curl)
 for tool in "${required_tools[@]}"; do
     if ! command -v "$tool" >/dev/null 2>&1; then
@@ -166,6 +167,7 @@ for tool in "${required_tools[@]}"; do
             claude) echo "  Install Claude Code first: https://claude.com/claude-code" >&2 ;;
             tmux)   echo "  Install tmux via your package manager (apt/brew/dnf/etc.)." >&2 ;;
             jq)     echo "  Install jq via your package manager (we use it to safely edit settings.json)." >&2 ;;
+            file)   echo "  Install file via your package manager (apt install file / brew install file-formula / dnf install file). Required for the --binary architecture probe." >&2 ;;
             curl)   echo "  --from-release downloads via curl; install it via your package manager." >&2 ;;
         esac
         exit 2
