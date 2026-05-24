@@ -1025,6 +1025,26 @@ publish_phase() {
         rm -f "${target_json}.bak"
     done
 
+    # Lockstep bump: rewrite skills/install-agent-director/SKILL.md
+    # frontmatter `version:` to the same release tag (SRD §SR-4.1 +
+    # Plan Bee b.3d3 Epic 4 T3). The prepublish-guards.ts check (Epic 4
+    # T1) enforces this invariant; the bump here is what keeps the
+    # invariant honored on every release. Both the package.json sed
+    # loop above and this line are part of the same release-time bump
+    # — they MUST land in lockstep so the umbrella that gets published
+    # matches the skill body it ships.
+    local skill_md="$REPO_ROOT/skills/install-agent-director/SKILL.md"
+    if [[ ! -f "$skill_md" ]]; then
+        log publish "missing $skill_md — SR-4.1 lockstep bump cannot complete" >&2
+        exit 6
+    fi
+    log publish "stamping SKILL.md frontmatter version: $plain_version"
+    if ! sed -i.bak -E "s/^(version:[[:space:]]*).+$/\1${plain_version}/" "$skill_md"; then
+        log publish "failed to rewrite SKILL.md frontmatter version" >&2
+        exit 6
+    fi
+    rm -f "${skill_md}.bak"
+
     # version-bump the optional-deps file: pins → ^version registry pins.
     log publish "rewriting optionalDependencies file: pins to ^$plain_version"
     if ! (cd "$pkg_root" && bun run scripts/version-bump.ts --version "$plain_version") \
