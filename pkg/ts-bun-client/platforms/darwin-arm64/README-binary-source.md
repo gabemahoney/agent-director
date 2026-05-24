@@ -1,4 +1,4 @@
-# @CHANGEME-H3/agent-director-darwin-arm64
+# @agent-director/darwin-arm64
 
 This package ships the native shared library `libagent_director.dylib` for macOS ARM64 (Apple Silicon).
 

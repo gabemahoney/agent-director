@@ -6,62 +6,42 @@ description of what it gates, and the steps to resolve it.
 
 ---
 
-## H3 — npm package name (OPEN)
+## H3 — npm package name (RESOLVED 2026-05-24)
 
-**Status:** Unresolved. No publish may proceed until H3 is claimed.
+**Status:** Resolved.
 
-### What H3 is
+### Resolution
 
-The four npm packages shipped by Epic 5 (`pkg/ts-bun-client/`) currently carry
-the placeholder scope `@CHANGEME-H3/`. The placeholder is intentional: any
-accidental `npm publish` fails on the invalid scope, and every site that needs
-updating is grep-able via `CHANGEME-H3`.
+The four npm packages shipped by Epic 5 (`pkg/ts-bun-client/`) have been
+renamed off the `@CHANGEME-H3/` placeholder scope. The resolved layout follows
+the [esbuild distribution model](https://esbuild.github.io/getting-started/#download-a-build):
+an unscoped umbrella package plus per-platform scoped sub-packages.
 
-The four packages are:
-
-| Package | Directory |
+| Resolved name | Directory |
 | --- | --- |
-| `@CHANGEME-H3/agent-director` | `pkg/ts-bun-client/` |
-| `@CHANGEME-H3/agent-director-linux-x64` | `pkg/ts-bun-client/platforms/linux-x64/` |
-| `@CHANGEME-H3/agent-director-darwin-x64` | `pkg/ts-bun-client/platforms/darwin-x64/` |
-| `@CHANGEME-H3/agent-director-darwin-arm64` | `pkg/ts-bun-client/platforms/darwin-arm64/` |
+| `agent-director` | `pkg/ts-bun-client/` |
+| `@agent-director/linux-x64` | `pkg/ts-bun-client/platforms/linux-x64/` |
+| `@agent-director/darwin-x64` | `pkg/ts-bun-client/platforms/darwin-x64/` |
+| `@agent-director/darwin-arm64` | `pkg/ts-bun-client/platforms/darwin-arm64/` |
 
-### What H3 gates
+The `@agent-director` npm org is claimed separately by the operator before the
+first live publish.
+
+### What H3 gated (historical)
 
 - **Epic 5** — npm publish of the four packages above.
-- **Epic 7** — the npm-publish step in the coordinated release pipeline depends
-  on the real scope being set before it runs.
+- **Epic 7** — the npm-publish step in the coordinated release pipeline.
 
-### Resolution steps
-
-1. **Claim the scope.** Operator registers or confirms a scoped npm org (e.g.
-   `@my-org`) on npmjs.com.
-2. **Update the four `package.json` files in lockstep.** Replace every
-   `@CHANGEME-H3/` occurrence with the real scope in:
-   - `pkg/ts-bun-client/package.json`
-   - `pkg/ts-bun-client/platforms/linux-x64/package.json`
-   - `pkg/ts-bun-client/platforms/darwin-x64/package.json`
-   - `pkg/ts-bun-client/platforms/darwin-arm64/package.json`
-3. **Update `optionalDependencies`.** The top-level `package.json` references
-   the three sub-packages by name; these references must also be updated.
-4. **Update `README.md`.** Replace all `@CHANGEME-H3/` references with the real
-   scope in `pkg/ts-bun-client/README.md`.
-5. **Update `docs/architecture.md`.** Replace placeholder scope strings in the
-   TS/Bun client section.
-6. **Remove the `// BLOCKED-on-H3` comment fields** from all four
-   `package.json` files.
-7. **Smoke-test via a test registry.** Run `npm publish --dry-run` from each of
-   the four package directories; confirm each exits 0 (prepublishOnly guard
-   passes, scope resolves).
-8. **Publish publicly.** Run the Epic 7 coordinated release pipeline.
-
-### Publish guard
+### Publish guard (still active)
 
 A `prepublishOnly` hook in every `package.json` runs
 `pkg/ts-bun-client/scripts/check-not-placeholder.ts`, which exits 1 if
-`package.json`'s `name` still contains `CHANGEME-H3`. The guard fires before
-any registry communication, so an accidental `npm publish` with the placeholder
-in place is stopped immediately.
+`package.json`'s `name` ever contains `CHANGEME-H3` again. The guard is kept
+as a forward-going tripwire against re-introducing a placeholder name in any
+future refactor or rename. The matching sentinel regex
+(`^@?(CHANGEME-H3|TBD)/`) in `skills/release-agent-director/release.sh` is
+kept in place for the same reason; it currently finds zero matches in the
+cleaned package.jsons.
 
 ---
 

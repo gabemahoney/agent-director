@@ -7,8 +7,9 @@
  *     real (non-placeholder) name.
  * (c) Static assertion: all four real package.json files in the worktree have
  *     a scripts.prepublishOnly entry that invokes check-not-placeholder.
- * (d) Static assertion: all four real package.json files have the
- *     "// BLOCKED-on-H3" marker field.
+ * (d) Post-H3-resolution invariant: none of the four real package.json files
+ *     carries the CHANGEME-H3 placeholder in its name. The guard remains a
+ *     forward-going tripwire against re-introducing a placeholder.
  *
  * NOTE on npm publish --dry-run and prepublishOnly:
  * npm has historically skipped pre-publish hooks (prepublishOnly) when run
@@ -91,6 +92,7 @@ describe("publish-guard — real name", () => {
 
 // ---------------------------------------------------------------------------
 // (c) Static: all four package.json files wire prepublishOnly to the guard
+// (d) Static: none of the four package.json files carries the H3 placeholder
 // ---------------------------------------------------------------------------
 
 describe("publish-guard — wiring assertions", () => {
@@ -120,25 +122,18 @@ describe("publish-guard — wiring assertions", () => {
     });
   }
 
-  // ---------------------------------------------------------------------------
-  // (d) Static: all four package.json files have the BLOCKED-on-H3 marker
-  // ---------------------------------------------------------------------------
-
   for (const pkgFile of packageFiles) {
     const label = pkgFile.replace(pkgDir + "/", "");
 
-    test(`${label}: has "// BLOCKED-on-H3" marker field`, () => {
-      const pkg = JSON.parse(readFileSync(pkgFile, "utf8")) as Record<
-        string,
-        unknown
-      >;
-      const marker = pkg["// BLOCKED-on-H3"];
+    test(`${label}: name no longer contains the CHANGEME-H3 placeholder`, () => {
+      const pkg = JSON.parse(readFileSync(pkgFile, "utf8")) as {
+        name?: string;
+      };
+      expect(typeof pkg.name).toBe("string");
       expect(
-        marker,
-        `${label} is missing the "// BLOCKED-on-H3" marker field`
-      ).toBeDefined();
-      expect(typeof marker).toBe("string");
-      expect(marker as string).toContain("release-blockers.md");
+        (pkg.name ?? "").includes("CHANGEME-H3"),
+        `${label} name still contains the CHANGEME-H3 placeholder (got: ${pkg.name})`
+      ).toBe(false);
     });
   }
 });

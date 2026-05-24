@@ -31,11 +31,13 @@ first failing phase. Every phase prefixes its stdout/stderr with
 
 Before invoking `./release.sh v<X.Y.Z> --release`, verify all six:
 
-1. **H3 resolved.** None of the four `package.json` files
+1. **No placeholder names.** None of the four `package.json` files
    (`pkg/ts-bun-client/package.json` + the three under
    `platforms/*/`) contain the `@CHANGEME-H3/...` or `@TBD/...`
-   placeholder. The publish phase halts before any `npm publish` if
-   placeholders remain. See `docs/release-blockers.md`.
+   placeholder. H3 itself was resolved on 2026-05-24 (see
+   `docs/release-blockers.md`); the publish-phase sentinel remains
+   in place as a forward-going tripwire and halts before any
+   `npm publish` if a placeholder is ever re-introduced.
 2. **Self-hosted darwin/arm64 runner online.** Check with
    `gh api /repos/<owner>/<repo>/actions/runners | jq '.runners[]
    | select(.labels[].name=="darwin-arm64") | .status'` — must

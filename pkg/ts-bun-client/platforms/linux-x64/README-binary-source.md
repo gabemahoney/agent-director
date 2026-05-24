@@ -1,4 +1,4 @@
-# @CHANGEME-H3/agent-director-linux-x64
+# @agent-director/linux-x64
 
 This package ships the native shared library `libagent_director.so` for Linux x64.
 

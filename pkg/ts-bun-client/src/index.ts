@@ -1,5 +1,5 @@
 /**
- * Public entry point for @CHANGEME-H3/agent-director.
+ * Public entry point for agent-director.
  *
  * ffi.ts and platform.ts are internal — they are NOT re-exported here.
  */

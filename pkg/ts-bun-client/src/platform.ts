@@ -1,5 +1,5 @@
 /**
- * platform — native library resolver for @CHANGEME-H3/agent-director.
+ * platform — native library resolver for agent-director.
  *
  * Implements the five-step resolution sequence:
  *   1. Check Bun.version against MIN_BUN_VERSION → ErrBunVersionTooOld
@@ -46,9 +46,9 @@ export const MIN_BUN_VERSION = "1.0.21";
  * linux-arm64 is deferred to v2.
  */
 const SUPPORTED_TUPLES = new Map<string, string>([
-  ["linux-x64", "@CHANGEME-H3/agent-director-linux-x64"],
-  ["darwin-x64", "@CHANGEME-H3/agent-director-darwin-x64"],
-  ["darwin-arm64", "@CHANGEME-H3/agent-director-darwin-arm64"],
+  ["linux-x64", "@agent-director/linux-x64"],
+  ["darwin-x64", "@agent-director/darwin-x64"],
+  ["darwin-arm64", "@agent-director/darwin-arm64"],
 ]);
 
 // ---------------------------------------------------------------------------

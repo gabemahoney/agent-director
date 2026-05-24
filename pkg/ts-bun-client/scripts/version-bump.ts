@@ -10,9 +10,9 @@
  * During local development the three optional sub-packages are wired via
  * `file:` paths so `bun install` resolves them from the workspace:
  *
- *   "@CHANGEME-H3/agent-director-linux-x64":  "file:./platforms/linux-x64"
- *   "@CHANGEME-H3/agent-director-darwin-x64": "file:./platforms/darwin-x64"
- *   "@CHANGEME-H3/agent-director-darwin-arm64": "file:./platforms/darwin-arm64"
+ *   "@agent-director/linux-x64":  "file:./platforms/linux-x64"
+ *   "@agent-director/darwin-x64": "file:./platforms/darwin-x64"
+ *   "@agent-director/darwin-arm64": "file:./platforms/darwin-arm64"
  *
  * Before publishing to npm, CI must:
  *   1. Build each sub-package binary for its target platform.
@@ -72,9 +72,9 @@ const pkg = JSON.parse(raw) as {
 
 const optDeps = pkg.optionalDependencies ?? {};
 const OPTIONAL_NAMES = [
-  "@CHANGEME-H3/agent-director-linux-x64",
-  "@CHANGEME-H3/agent-director-darwin-x64",
-  "@CHANGEME-H3/agent-director-darwin-arm64",
+  "@agent-director/linux-x64",
+  "@agent-director/darwin-x64",
+  "@agent-director/darwin-arm64",
 ];
 
 // ---------------------------------------------------------------------------

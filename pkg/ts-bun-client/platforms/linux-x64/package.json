@@ -1,6 +1,5 @@
 {
-  "// BLOCKED-on-H3": "Operator must claim an npm name; see docs/release-blockers.md",
-  "name": "@CHANGEME-H3/agent-director-linux-x64",
+  "name": "@agent-director/linux-x64",
   "version": "0.0.0",
   "type": "module",
   "os": ["linux"],

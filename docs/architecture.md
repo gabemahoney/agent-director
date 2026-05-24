@@ -468,7 +468,7 @@ Every arrow from a caller surface terminates at `pkg/api.Client`; no surface sho
 The TS client calls into `libagent_director.so` (or `.dylib` on macOS) via Bun's built-in FFI (`bun:ffi`). The shared library is produced by `make libagent_director` from `pkg/cabi`. The FFI layer lives in `src/ffi.ts` (internal, not re-exported); it dlopens the native library at startup and exposes typed wrappers around the `ad_*` C exports. Callers consume `src/client.ts`'s `Client` class — the FFI surface is never exposed directly.
 
 ```
-  @CHANGEME-H3/agent-director (TS/Bun)
+  agent-director (TS/Bun)
        │
        │  src/client.ts  (public Client class)
        │        │
@@ -495,13 +495,13 @@ others absent.
 
 | npm package | Platform | Binary file |
 | --- | --- | --- |
-| `@CHANGEME-H3/agent-director-linux-x64` | Linux x86-64 | `libagent_director.so` |
-| `@CHANGEME-H3/agent-director-darwin-x64` | macOS Intel | `libagent_director.dylib` |
-| `@CHANGEME-H3/agent-director-darwin-arm64` | macOS Apple Silicon | `libagent_director.dylib` |
+| `@agent-director/linux-x64` | Linux x86-64 | `libagent_director.so` |
+| `@agent-director/darwin-x64` | macOS Intel | `libagent_director.dylib` |
+| `@agent-director/darwin-arm64` | macOS Apple Silicon | `libagent_director.dylib` |
 
 > **v2 note — linux-arm64 deferred.** Linux ARM64 (`linux-arm64`) is not
 > supported in v1 — no cross-compile toolchain is wired yet. A fourth
-> sub-package `@CHANGEME-H3/agent-director-linux-arm64` will be added in v2.
+> sub-package `@agent-director/linux-arm64` will be added in v2.
 
 Each sub-package lives under `pkg/ts-bun-client/platforms/<tuple>/` and
 contains only `package.json`, `README-binary-source.md`, and (CI-injected)
@@ -557,24 +557,21 @@ This rewrites the three `file:` entries to `^X.Y.Z` registry pins. The script
 is idempotent (running twice with the same version is a no-op). After publish,
 `git checkout package.json` restores the `file:` paths for local development.
 
-The scope `@CHANGEME-H3` is a deliberate placeholder: any accidental `npm publish`
-fails on the invalid scope, and `grep` surfaces every site that needs updating
-when the real scope is chosen.
-
 ### Release blockers
 
-**H3 (npm package name) is the only current release blocker.** The four
-packages cannot be published until the operator claims a real npm org scope and
-replaces every `@CHANGEME-H3/` occurrence in lockstep. A `prepublishOnly` hook
-in each `package.json` runs `scripts/check-not-placeholder.ts` and aborts any
-accidental publish while the placeholder is still in place. Full resolution
-checklist: [docs/release-blockers.md](release-blockers.md).
+The npm-name blocker (H3) was resolved on 2026-05-24: the umbrella package
+publishes as `agent-director` (unscoped) and the three per-platform sub-packages
+publish under the `@agent-director` scope. The `prepublishOnly` hook in each
+`package.json` runs `scripts/check-not-placeholder.ts`, which remains a
+forward-going tripwire against re-introducing the `CHANGEME-H3` sentinel. The
+H3 entry in [docs/release-blockers.md](release-blockers.md) records the
+resolution and is kept as the template for any future release blockers.
 
 ### Package layout
 
 ```
 pkg/ts-bun-client/
-├── package.json          name: @CHANGEME-H3/agent-director, version 0.0.0
+├── package.json          name: agent-director, version 0.0.0
 ├── tsconfig.json         strict, ES2022 + ESNext.Disposable, declaration-only to dist/
 ├── .eslintrc.cjs         @typescript-eslint strict rules
 ├── build.ts              Bun.build (ESM) → tsc (declarations)
@@ -1732,8 +1729,9 @@ first failing phase:
    module protocol requires.
 6. **publish** — npm publish for the umbrella package and the three
    per-platform optional dependency packages. Halts at this step
-   with a clear "H3 unresolved" error if the npm name is still the
-   `@CHANGEME-H3/agent-director` placeholder.
+   with a clear "H3 unresolved" error if the npm name ever regresses
+   to the `@CHANGEME-H3/agent-director` placeholder (forward-going
+   tripwire; H3 itself was resolved 2026-05-24).
 7. **gh-release** — `gh release create $VERSION` with exactly
    **8 attached assets**:
    - 4 CLI binaries: `agent-director-linux-amd64`,

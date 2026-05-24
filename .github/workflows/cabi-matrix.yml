@@ -314,7 +314,7 @@ jobs:
       # ---------------------------------------------------------------
       #
       # pkg/ts-bun-client resolves the native library via
-      # `import.meta.resolve("@CHANGEME-H3/agent-director-<plat>/...")`,
+      # `import.meta.resolve("@agent-director/<plat>/...")`,
       # which in turn relies on the file:./platforms/<plat>/ optional
       # dependency declared in pkg/ts-bun-client/package.json. We do
       # NOT use scripts/prepare-platforms.ts here because that script

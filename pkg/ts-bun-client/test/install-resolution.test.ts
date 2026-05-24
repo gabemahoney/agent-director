@@ -3,9 +3,9 @@
  * resolves the matching platform sub-package in node_modules/.
  *
  * On linux/amd64, asserts:
- *   - node_modules/@CHANGEME-H3/agent-director-linux-x64/ EXISTS (symlink/dir)
- *   - node_modules/@CHANGEME-H3/agent-director-linux-x64/libagent_director.so EXISTS
- *   - node_modules/@CHANGEME-H3/agent-director-darwin-x64/ either does not exist
+ *   - node_modules/@agent-director/linux-x64/ EXISTS (symlink/dir)
+ *   - node_modules/@agent-director/linux-x64/libagent_director.so EXISTS
+ *   - node_modules/@agent-director/darwin-x64/ either does not exist
  *     OR exists but lacks the .dylib binary (bun may install all file: optional
  *     deps regardless of os/cpu, but binaries are only present for the host platform)
  *   - same for darwin-arm64
@@ -30,7 +30,7 @@ import { spawnSync } from "node:child_process";
 // ---------------------------------------------------------------------------
 
 const pkgDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const nmBase = resolve(pkgDir, "node_modules", "@CHANGEME-H3");
+const nmBase = resolve(pkgDir, "node_modules", "@agent-director");
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -59,7 +59,7 @@ describe("install resolution — platform-specific optional dependencies", () =>
     }
 
     // linux-x64 MUST be present in node_modules.
-    const linuxX64 = resolve(nmBase, "agent-director-linux-x64");
+    const linuxX64 = resolve(nmBase, "linux-x64");
     expect(
       existsSync(linuxX64),
       `Expected ${linuxX64} to exist after bun install`
@@ -74,8 +74,8 @@ describe("install resolution — platform-specific optional dependencies", () =>
 
     // darwin packages: if bun installed them (it does for file: deps), they
     // must NOT have a .dylib binary — that's a cross-platform protection check.
-    const darwinX64Dylib = resolve(nmBase, "agent-director-darwin-x64", "libagent_director.dylib");
-    const darwinArm64Dylib = resolve(nmBase, "agent-director-darwin-arm64", "libagent_director.dylib");
+    const darwinX64Dylib = resolve(nmBase, "darwin-x64", "libagent_director.dylib");
+    const darwinArm64Dylib = resolve(nmBase, "darwin-arm64", "libagent_director.dylib");
 
     expect(
       existsSync(darwinX64Dylib),

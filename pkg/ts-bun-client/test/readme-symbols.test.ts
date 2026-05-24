@@ -66,10 +66,8 @@ const ALLOW_LIST = new Set([
   "TextDecoder",
   "TextEncoder",
   // Common keywords / abbreviations that start uppercase in docs
-  "CHANGEME", // placeholder scope token in "@CHANGEME-H3/agent-director"
   "CLI",
   "FFI",
-  "H3",
   "ID",
   "SQLite",
 ]);

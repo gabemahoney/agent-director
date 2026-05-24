@@ -1,6 +1,5 @@
 {
-  "// BLOCKED-on-H3": "Operator must claim an npm name; see docs/release-blockers.md",
-  "name": "@CHANGEME-H3/agent-director",
+  "name": "agent-director",
   "version": "0.0.0",
   "type": "module",
   "engines": {
@@ -30,9 +29,9 @@
     "prepublishOnly": "bun run scripts/check-not-placeholder.ts"
   },
   "optionalDependencies": {
-    "@CHANGEME-H3/agent-director-linux-x64": "file:./platforms/linux-x64",
-    "@CHANGEME-H3/agent-director-darwin-x64": "file:./platforms/darwin-x64",
-    "@CHANGEME-H3/agent-director-darwin-arm64": "file:./platforms/darwin-arm64"
+    "@agent-director/linux-x64": "file:./platforms/linux-x64",
+    "@agent-director/darwin-x64": "file:./platforms/darwin-x64",
+    "@agent-director/darwin-arm64": "file:./platforms/darwin-arm64"
   },
   "devDependencies": {
     "typescript": ">=5.2.0",

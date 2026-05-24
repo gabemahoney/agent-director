@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@CHANGEME-H3/agent-director",
+      "name": "agent-director",
       "devDependencies": {
         "@typescript-eslint/eslint-plugin": "^7.0.0",
         "@typescript-eslint/parser": "^7.0.0",
@@ -12,18 +12,18 @@
         "typescript": ">=5.2.0",
       },
       "optionalDependencies": {
-        "@CHANGEME-H3/agent-director-darwin-arm64": "file:./platforms/darwin-arm64",
-        "@CHANGEME-H3/agent-director-darwin-x64": "file:./platforms/darwin-x64",
-        "@CHANGEME-H3/agent-director-linux-x64": "file:./platforms/linux-x64",
+        "@agent-director/darwin-arm64": "file:./platforms/darwin-arm64",
+        "@agent-director/darwin-x64": "file:./platforms/darwin-x64",
+        "@agent-director/linux-x64": "file:./platforms/linux-x64",
       },
     },
   },
   "packages": {
-    "@CHANGEME-H3/agent-director-darwin-arm64": ["@CHANGEME-H3/agent-director-darwin-arm64@file:platforms/darwin-arm64", {}],
+    "@agent-director/darwin-arm64": ["@agent-director/darwin-arm64@file:platforms/darwin-arm64", {}],
 
-    "@CHANGEME-H3/agent-director-darwin-x64": ["@CHANGEME-H3/agent-director-darwin-x64@file:platforms/darwin-x64", {}],
+    "@agent-director/darwin-x64": ["@agent-director/darwin-x64@file:platforms/darwin-x64", {}],
 
-    "@CHANGEME-H3/agent-director-linux-x64": ["@CHANGEME-H3/agent-director-linux-x64@file:platforms/linux-x64", {}],
+    "@agent-director/linux-x64": ["@agent-director/linux-x64@file:platforms/linux-x64", {}],
 
     "@eslint-community/eslint-utils": ["@eslint-community/eslint-utils@4.9.1", "", { "dependencies": { "eslint-visitor-keys": "^3.4.3" }, "peerDependencies": { "eslint": "^6.0.0 || ^7.0.0 || >=8.0.0" } }, "sha512-phrYmNiYppR7znFEdqgfWHXR6NCkZEK7hwWDHZUjit/2/U0r6XvkDl0SYnoM51Hq7FhCGdLDT6zxCCOY1hexsQ=="],
 

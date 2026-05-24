@@ -1,14 +1,11 @@
-# @CHANGEME-H3/agent-director
+# agent-director
 
 TypeScript/Bun client for the agent-director CLI (FFI-backed; shares the Go API surface 1:1).
-
-> [!WARNING]
-> **Publish blocked on H3**: The npm scope `@CHANGEME-H3` is a placeholder pending name claim. All APIs are stable; only `npm publish` is blocked until the scope is resolved. Search-and-replace `CHANGEME-H3` once the name is confirmed.
 
 ## Install
 
 ```sh
-bun add @CHANGEME-H3/agent-director
+bun add agent-director
 ```
 
 Requires Bun >=1.0.21. The package ships a prebuilt shared library for each supported platform via optional dependencies — they install automatically on `bun add`.
@@ -110,7 +107,7 @@ The library version equals the agent-director release tag — released in lockst
 
 | npm package | CLI binary |
 |---|---|
-| `@CHANGEME-H3/agent-director@v0.5.0` | `agent-director CLI v0.5.0` |
+| `agent-director@v0.5.0` | `agent-director CLI v0.5.0` |
 
 ## Supported Bun versions
 
@@ -121,7 +118,7 @@ Minimum: `>=1.0.21` (set in `engines.bun`). Tested on Bun 1.3.x as of this relea
 Every error thrown by this package extends `AgentDirectorError`. A typed subclass is generated for each `err_name` in the shared catalog so you can catch by subclass:
 
 ```ts
-import { Client, ErrSpawnNotFound } from "@CHANGEME-H3/agent-director";
+import { Client, ErrSpawnNotFound } from "agent-director";
 try {
   await client.status({ claude_instance_id: "bogus" });
 } catch (e) {
