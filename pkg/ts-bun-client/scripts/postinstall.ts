@@ -45,6 +45,29 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // ---------------------------------------------------------------------------
+// Host-pair refusal (SR-3.2)
+// Runs before everything else — the dev-tree guard, source resolution, and
+// any filesystem operation. Catches the darwin/x64 and linux/arm64 cross-
+// product members admitted by the umbrella's coarse `os`/`cpu` gate
+// (package.json SR-3.1) that should NOT actually install on this host.
+// Refused hosts exit 1 with a single stderr line in the SR-3.2 format.
+// ---------------------------------------------------------------------------
+
+{
+  const platform = process.platform;
+  const arch = process.arch;
+  const supported =
+    (platform === "linux" && arch === "x64") ||
+    (platform === "darwin" && arch === "arm64");
+  if (!supported) {
+    process.stderr.write(
+      `agent-director: unsupported host: ${platform}/${arch}. Supported: linux/x64, darwin/arm64. See b.fg3 for cross-platform expansion status.\n`,
+    );
+    process.exit(1);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
