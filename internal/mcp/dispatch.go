@@ -7,34 +7,27 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gabemahoney/agent-director/internal/api"
-	"github.com/gabemahoney/agent-director/internal/config"
-	"github.com/gabemahoney/agent-director/internal/probe"
-	"github.com/gabemahoney/agent-director/internal/spawn"
-	"github.com/gabemahoney/agent-director/internal/store"
-	"github.com/gabemahoney/agent-director/internal/tmux"
+	"github.com/gabemahoney/agent-director/pkg/api/manifest"
+	api "github.com/gabemahoney/agent-director/pkg/api"
 )
 
-// LiveDispatcher routes MCP tool calls to internal/api functions
-// using the live production wiring. One instance per MCP server
-// process; the store + tmux client + config are opened once at
+// LiveDispatcher routes MCP tool calls to pkg/api.Client methods.
+// One instance per MCP server process; the Client is opened once at
 // startup per SRD §3.3.
 type LiveDispatcher struct {
-	store     *store.Store
-	tmuxClient *tmux.Client
-	cfg       config.Config
+	client *api.Client
 }
 
-// NewLiveDispatcher constructs the dispatcher with the supplied
-// wiring. The caller (cmd/-side) opens the store and config; this
-// type is a thin facade that owns the tool-name → api function map.
-func NewLiveDispatcher(st *store.Store, tmuxClient *tmux.Client, cfg config.Config) *LiveDispatcher {
-	return &LiveDispatcher{store: st, tmuxClient: tmuxClient, cfg: cfg}
+// NewLiveDispatcher constructs the dispatcher with the supplied Client.
+// The caller (cmd/-side) opens the Client; this type is a thin facade
+// that owns the tool-name → Client method map.
+func NewLiveDispatcher(client *api.Client) *LiveDispatcher {
+	return &LiveDispatcher{client: client}
 }
 
 // Call routes one tool call. The tool name comes in as the MCP form
 // (underscores); we convert to the verb form (hyphens) before
-// dispatching to the api package.
+// dispatching to the Client.
 //
 // Each tool decodes the MCP arguments map into its typed params
 // struct via json.Unmarshal round-trip; the manifest's per-param
@@ -47,14 +40,17 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 
 	switch verbName {
 	case "help":
-		verbs, err := api.Help()
-		if err != nil {
-			return nil, err
+		out := make([]api.VerbSummary, 0, len(manifest.Verbs))
+		for _, v := range manifest.Verbs {
+			out = append(out, api.VerbSummary{
+				Name:        v.Name,
+				Description: v.Description,
+			})
 		}
-		return map[string]any{"verbs": verbs}, nil
+		return map[string]any{"verbs": out}, nil
 
 	case "version":
-		return api.Version()
+		return d.client.Version()
 
 	case "spawn":
 		// Field names match what the manifest publishes via tools/list
@@ -84,23 +80,23 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 			}
 			labels[k] = v
 		}
-		p := spawn.SpawnParams{
-			CWD:                  raw.CWD,
-			Template:             raw.Template,
-			ClaudeInstanceID:     raw.ClaudeInstanceID,
-			ExtraEnv:             raw.ExtraEnv,
+		p := api.SpawnParams{
+			CWD:                 raw.CWD,
+			Template:            raw.Template,
+			ClaudeInstanceID:    raw.ClaudeInstanceID,
+			ExtraEnv:            raw.ExtraEnv,
 			AgentDirectorLabels: labels,
-			ClaudeArgs:           raw.ClaudeArgs,
-			RelayMode:            raw.RelayMode,
+			ClaudeArgs:          raw.ClaudeArgs,
+			RelayMode:           raw.RelayMode,
 		}
 		if len(raw.Allow) > 0 || len(raw.Deny) > 0 || len(raw.Ask) > 0 {
-			p.Permissions = &spawn.Permissions{
+			p.Permissions = &api.Permissions{
 				Allow: raw.Allow,
 				Deny:  raw.Deny,
 				Ask:   raw.Ask,
 			}
 		}
-		return api.Spawn(d.store, d.tmuxClient, d.cfg, p)
+		return d.client.Spawn(p)
 
 	case "status":
 		var p struct {
@@ -109,7 +105,7 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		if err := json.Unmarshal(args, &p); err != nil {
 			return nil, fmt.Errorf("decode status params: %w", err)
 		}
-		return api.Status(d.store, p.ClaudeInstanceID)
+		return d.client.Status(p.ClaudeInstanceID)
 
 	case "get":
 		var p struct {
@@ -118,21 +114,21 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		if err := json.Unmarshal(args, &p); err != nil {
 			return nil, fmt.Errorf("decode get params: %w", err)
 		}
-		return api.Get(d.store, p.ClaudeInstanceID)
+		return d.client.Get(p.ClaudeInstanceID)
 
 	case "send-keys":
 		var p api.SendKeysParams
 		if err := unmarshalSnake(args, &p); err != nil {
 			return nil, err
 		}
-		return api.SendKeys(d.store, d.tmuxClient, p)
+		return d.client.SendKeys(p)
 
 	case "read-pane":
 		var p api.ReadPaneParams
 		if err := unmarshalSnake(args, &p); err != nil {
 			return nil, err
 		}
-		return api.ReadPane(d.store, d.tmuxClient, p)
+		return d.client.ReadPane(p)
 
 	case "kill":
 		var p api.KillParams
@@ -142,21 +138,23 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		// nil logger: the MCP-side caller sees errors via the API
 		// envelope; the swallowed-tmux WARN is most useful to the
 		// interactive CLI operator, not a long-lived MCP client.
-		return api.Kill(d.store, d.tmuxClient, nil, p)
+		// The MCP Client is constructed with Options.Logger: nil so
+		// c.logger is already a discard logger — no explicit nil pass needed.
+		return d.client.Kill(p)
 
 	case "pause":
 		var p api.PauseParams
 		if err := unmarshalSnake(args, &p); err != nil {
 			return nil, err
 		}
-		return api.Pause(ctx, d.store, d.tmuxClient, d.cfg.Pause, p)
+		return d.client.Pause(ctx, p)
 
 	case "resume":
 		var p api.ResumeParams
 		if err := unmarshalSnake(args, &p); err != nil {
 			return nil, err
 		}
-		return api.Resume(d.store, d.tmuxClient, d.cfg, p)
+		return d.client.Resume(p)
 
 	case "list":
 		var raw struct {
@@ -169,7 +167,7 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		if err := json.Unmarshal(args, &raw); err != nil {
 			return nil, fmt.Errorf("decode list params: %w", err)
 		}
-		return api.List(d.store, api.ListParams{
+		return d.client.List(api.ListParams{
 			State:  raw.State,
 			Labels: raw.Label,
 			Parent: raw.Parent,
@@ -179,15 +177,15 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 
 	case "make-template":
 		var raw struct {
-			Name                 string                       `json:"name"`
-			CWD                  string                       `json:"cwd"`
-			RelayMode            string                       `json:"relay_mode"`
-			ClaudeArgs           []string                     `json:"claude_args"`
-			ExtraEnv             map[string]string            `json:"extra_env"`
-			Label                []string                     `json:"label"`
-			Allow                []string                     `json:"allow"`
-			Deny                 []string                     `json:"deny"`
-			Ask                  []string                     `json:"ask"`
+			Name       string            `json:"name"`
+			CWD        string            `json:"cwd"`
+			RelayMode  string            `json:"relay_mode"`
+			ClaudeArgs []string          `json:"claude_args"`
+			ExtraEnv   map[string]string `json:"extra_env"`
+			Label      []string          `json:"label"`
+			Allow      []string          `json:"allow"`
+			Deny       []string          `json:"deny"`
+			Ask        []string          `json:"ask"`
 		}
 		if err := json.Unmarshal(args, &raw); err != nil {
 			return nil, fmt.Errorf("decode make-template params: %w", err)
@@ -201,11 +199,11 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 			labels[k] = v
 		}
 		p := api.MakeTemplateParams{
-			Name:                 raw.Name,
-			CWD:                  raw.CWD,
-			RelayMode:            raw.RelayMode,
-			ClaudeArgs:           raw.ClaudeArgs,
-			ExtraEnv:             raw.ExtraEnv,
+			Name:                raw.Name,
+			CWD:                 raw.CWD,
+			RelayMode:           raw.RelayMode,
+			ClaudeArgs:          raw.ClaudeArgs,
+			ExtraEnv:            raw.ExtraEnv,
 			AgentDirectorLabels: labels,
 		}
 		if len(raw.Allow) > 0 || len(raw.Deny) > 0 || len(raw.Ask) > 0 {
@@ -215,10 +213,10 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 				Ask:   raw.Ask,
 			}
 		}
-		return api.MakeTemplate(p)
+		return d.client.MakeTemplate(p)
 
 	case "find-missing":
-		return api.FindMissing(ctx, d.store, probe.New(), nil)
+		return d.client.FindMissing(ctx)
 
 	case "expire":
 		var raw struct {
@@ -229,13 +227,13 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		}
 		var older *time.Duration
 		if raw.OlderThan != "" {
-			d, err := parseDuration(raw.OlderThan)
+			dur, err := parseDuration(raw.OlderThan)
 			if err != nil {
 				return nil, fmt.Errorf("expire older_than: %w", err)
 			}
-			older = &d
+			older = &dur
 		}
-		return api.Expire(d.store, d.cfg, older, nil)
+		return d.client.Expire(older)
 
 	case "delete":
 		var raw struct {
@@ -247,14 +245,14 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		if len(raw.ClaudeInstanceID) == 0 {
 			return nil, fmt.Errorf("delete: claude_instance_id is required (≥1)")
 		}
-		return api.Delete(d.store, raw.ClaudeInstanceID)
+		return d.client.Delete(raw.ClaudeInstanceID)
 
 	case "decide":
 		var p api.DecideParams
 		if err := unmarshalSnake(args, &p); err != nil {
 			return nil, err
 		}
-		return api.Decide(d.store, p)
+		return d.client.Decide(p)
 
 	default:
 		return nil, fmt.Errorf("%w: %s", ErrUnknownTool, toolName)

@@ -1,0 +1,173 @@
+[
+  {
+    "name": "ErrCwdMissing",
+    "package": "spawn",
+    "description": ""
+  },
+  {
+    "name": "ErrCwdNotAPath",
+    "package": "spawn",
+    "description": ""
+  },
+  {
+    "name": "ErrCwdNotFound",
+    "package": "spawn",
+    "description": ""
+  },
+  {
+    "name": "ErrCwdNotADirectory",
+    "package": "spawn",
+    "description": ""
+  },
+  {
+    "name": "ErrRelayModeInvalid",
+    "package": "spawn",
+    "description": ""
+  },
+  {
+    "name": "ErrSpawnDeniedFlag",
+    "package": "spawn",
+    "description": ""
+  },
+  {
+    "name": "ErrReservedEnvKey",
+    "package": "spawn",
+    "description": ""
+  },
+  {
+    "name": "ErrInstanceIdCollision",
+    "package": "spawn",
+    "description": ""
+  },
+  {
+    "name": "ErrTmuxSessionNameEmpty",
+    "package": "spawn",
+    "description": ""
+  },
+  {
+    "name": "ErrTmuxSessionNameInvalid",
+    "package": "spawn",
+    "description": ""
+  },
+  {
+    "name": "ErrTmuxSessionNameTooLong",
+    "package": "spawn",
+    "description": ""
+  },
+  {
+    "name": "ErrSpawnNotFound",
+    "package": "store",
+    "description": ""
+  },
+  {
+    "name": "ErrTmuxNotAvailable",
+    "package": "tmux",
+    "description": ""
+  },
+  {
+    "name": "ErrTmuxSessionCreate",
+    "package": "tmux",
+    "description": ""
+  },
+  {
+    "name": "ErrTmuxSendKeys",
+    "package": "tmux",
+    "description": ""
+  },
+  {
+    "name": "ErrTmuxCaptureFailed",
+    "package": "tmux",
+    "description": ""
+  },
+  {
+    "name": "ErrSpawnNotInteractive",
+    "package": "api",
+    "description": ""
+  },
+  {
+    "name": "ErrSendKeysWhileRelayed",
+    "package": "api",
+    "description": ""
+  },
+  {
+    "name": "ErrSpawnNotPausable",
+    "package": "api",
+    "description": ""
+  },
+  {
+    "name": "ErrPauseTimeout",
+    "package": "api",
+    "description": ""
+  },
+  {
+    "name": "ErrListInvalidLabel",
+    "package": "api",
+    "description": ""
+  },
+  {
+    "name": "ErrTemplateNameUnsafe",
+    "package": "config",
+    "description": ""
+  },
+  {
+    "name": "ErrTemplateNotFound",
+    "package": "config",
+    "description": ""
+  },
+  {
+    "name": "ErrTemplateMalformed",
+    "package": "config",
+    "description": ""
+  },
+  {
+    "name": "ErrTemplateExists",
+    "package": "config",
+    "description": ""
+  },
+  {
+    "name": "ErrProbeUnsupported",
+    "package": "probe",
+    "description": ""
+  },
+  {
+    "name": "ErrSpawnNotResumable",
+    "package": "api",
+    "description": ""
+  },
+  {
+    "name": "ErrNoSessionId",
+    "package": "api",
+    "description": ""
+  },
+  {
+    "name": "ErrJsonlMissing",
+    "package": "api",
+    "description": ""
+  },
+  {
+    "name": "ErrRelayModeOff",
+    "package": "api",
+    "description": ""
+  },
+  {
+    "name": "ErrInvalidDecision",
+    "package": "api",
+    "description": ""
+  },
+  {
+    "name": "ErrNoOpenPermissionRequest",
+    "package": "store",
+    "description": ""
+  },
+  {
+    "name": "ErrAlreadyDecided",
+    "package": "store",
+    "description": ""
+  },
+  {
+    "name": "ErrUnknownHandle",
+    "package": "cabi",
+    "description": "",
+    "scope": "cabi"
+  }
+]

@@ -1,0 +1,64 @@
+# go-smoke: linux/amd64 enforcement of the pkg/api Go smoke test.
+#
+# This workflow verifies that every entry in manifest.CallableVerbs() has a
+# passing smoke subtest under test/smoke/go/ on linux/amd64. It runs the same
+# command a developer would run locally:
+#
+#   go test -race -count=1 -v ./test/smoke/go/...
+#
+# Cross-platform extension (macOS, windows) is Epic 6.
+#
+# Tripwire procedure
+# ------------------
+# To re-verify the failure mode this workflow uniquely catches, push a branch
+# that removes a `json:"..."` struct tag from a pkg/api result struct (e.g.
+# delete the `json:"id"` tag on ListItem.ID) without touching the manifest.
+# The reflection-driven AssertResultMatchesManifest helper walks json tags to
+# match manifest.FieldDef.Name against Go fields, so removing the tag breaks
+# the match and the smoke fails with an error pointing at
+# AssertResultMatchesManifest and naming the manifest field + Go struct type.
+#
+# A simpler "edit a ResultFields entry in the manifest" perturbation is NOT
+# specific to go-smoke — doc-drift.yml (Epic 1) already catches manifest-side
+# drift via surface.json regen, so the tripwire would not distinguish go-smoke
+# from doc-drift. The json-tag removal is the canonical perturbation here.
+#
+# Local actionlint
+# ----------------
+#   go install github.com/rhysd/actionlint/cmd/actionlint@v1.6.27
+#   actionlint .github/workflows/go-smoke.yml
+
+name: go-smoke
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel in-flight runs of the same PR/branch when a new commit arrives;
+# the smoke is fast (~seconds) so cancellation rarely matters, but the
+# convention matches integration.yml.
+concurrency:
+  group: go-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least-privilege GITHUB_TOKEN: the smoke only needs to read the repo.
+permissions:
+  contents: read
+
+jobs:
+  go-smoke-linux-amd64:
+    name: Go smoke — linux/amd64
+    runs-on: ubuntu-latest
+    # Hard cap on runtime; the smoke completes in well under a minute under
+    # normal load. 10m absorbs cold-cache runner provisioning.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Run Go smoke test
+        run: go test -race -count=1 -v ./test/smoke/go/...

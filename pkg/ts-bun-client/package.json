@@ -1,0 +1,42 @@
+{
+  "name": "agent-director",
+  "version": "0.0.0",
+  "type": "module",
+  "engines": {
+    "bun": ">=1.0.21"
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "!dist/**/*.test.*",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "bun run build.ts",
+    "lint": "eslint src/ --ext .ts",
+    "typecheck": "tsc --noEmit --project tsconfig.typecheck.json",
+    "test": "bun test",
+    "smoke": "bun test test/smoke/ test/smoke-invariants.test.ts",
+    "envelope-diff": "bun test test/envelope-diff.test.ts test/envelope-diff-invariants.test.ts",
+    "prepare-platforms": "bun run scripts/prepare-platforms.ts",
+    "version-bump-publish": "bun run scripts/version-bump.ts",
+    "prepublishOnly": "bun run scripts/check-not-placeholder.ts"
+  },
+  "optionalDependencies": {
+    "@agent-director/linux-x64": "file:./platforms/linux-x64",
+    "@agent-director/darwin-arm64": "file:./platforms/darwin-arm64"
+  },
+  "devDependencies": {
+    "typescript": ">=5.2.0",
+    "bun-types": "latest",
+    "eslint": "^8.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0"
+  }
+}

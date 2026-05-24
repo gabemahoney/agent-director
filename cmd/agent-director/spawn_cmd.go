@@ -9,34 +9,21 @@ import (
 	"os"
 	"strings"
 
-	"github.com/gabemahoney/agent-director/internal/api"
-	"github.com/gabemahoney/agent-director/internal/config"
-	"github.com/gabemahoney/agent-director/internal/spawn"
-	"github.com/gabemahoney/agent-director/internal/store"
-	"github.com/gabemahoney/agent-director/internal/tmux"
+	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 )
 
-// tmuxClient is the runtime tmux client wired into the verb handlers.
-// Held as a *tmux.Client (the concrete type) rather than a narrowest-
-// interface alias so every verb that needs a different subset of tmux ops
-// (spawn → NewSession, send-keys → SendKeys, read-pane → CapturePane) can
-// pull from one shared client. Cmd-level integration tests swap behavior
-// by prepending a fake-tmux binary onto PATH; no field replacement is
-// required.
-var tmuxClient = tmux.New()
-
 // spawnHandlerWith implements `agent-director spawn`. Called via a closure
-// from handlers() so the store + config opened by setupStoreAndCfg are
-// reused rather than reopened.
-func spawnHandlerWith(st *store.Store, cfg config.Config, args []string) error {
+// from handlers() so the Client constructed by setupClient is reused.
+func spawnHandlerWith(client *pkgapi.Client, args []string) error {
 	params, err := parseSpawnFlags(args)
 	if err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
-	result, err := api.Spawn(st, tmuxClient, cfg, params)
+	result, err := client.Spawn(params)
 	if err != nil {
-		name, desc := classifyError(err)
-		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	return writeJSON(os.Stdout, result)
 }
@@ -44,8 +31,8 @@ func spawnHandlerWith(st *store.Store, cfg config.Config, args []string) error {
 // parseSpawnFlags carves the argv into a SpawnParams. Stdlib `flag`
 // covers most of it; the `--` separator pulls the remainder into
 // ClaudeArgs verbatim.
-func parseSpawnFlags(args []string) (spawn.SpawnParams, error) {
-	var p spawn.SpawnParams
+func parseSpawnFlags(args []string) (pkgapi.SpawnParams, error) {
+	var p pkgapi.SpawnParams
 	var (
 		labelKVs         map[string]string
 		extraEnvKVs      map[string]string
@@ -91,7 +78,7 @@ func parseSpawnFlags(args []string) (spawn.SpawnParams, error) {
 }
 
 // statusHandlerWith implements `agent-director status`.
-func statusHandlerWith(st *store.Store, args []string) error {
+func statusHandlerWith(client *pkgapi.Client, args []string) error {
 	var id string
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -102,26 +89,23 @@ func statusHandlerWith(st *store.Store, args []string) error {
 	if id == "" {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--claude-instance-id is required")
 	}
-	res, err := api.Status(st, id)
+	res, err := client.Status(id)
 	if err != nil {
-		name, desc := classifyError(err)
-		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	return writeJSON(os.Stdout, res)
 }
 
-// sendKeysHandlerWith implements `agent-director send-keys`. The store is
-// re-used from setupStoreAndCfg via the closure; the tmux client is the
-// shared package-level *tmux.Client which already satisfies
-// api.SendKeysTmux via its SendKeys method.
-func sendKeysHandlerWith(st *store.Store, args []string) error {
+// sendKeysHandlerWith implements `agent-director send-keys`.
+func sendKeysHandlerWith(client *pkgapi.Client, args []string) error {
 	params, err := parseSendKeysFlags(args)
 	if err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
-	if _, err := api.SendKeys(st, tmuxClient, params); err != nil {
-		name, desc := classifyError(err)
-		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+	if _, err := client.SendKeys(params); err != nil {
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	return writeJSON(os.Stdout, struct{}{})
 }
@@ -130,8 +114,8 @@ func sendKeysHandlerWith(st *store.Store, args []string) error {
 // required and may contain literal `\n` / `\r` from the caller — the verb
 // strips `\r` and preserves `\n` per SRD §4.3 and always appends a single
 // trailing Enter.
-func parseSendKeysFlags(args []string) (api.SendKeysParams, error) {
-	var p api.SendKeysParams
+func parseSendKeysFlags(args []string) (pkgapi.SendKeysParams, error) {
+	var p pkgapi.SendKeysParams
 	fs := flag.NewFlagSet("send-keys", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the Spawn to drive")
@@ -150,15 +134,15 @@ func parseSendKeysFlags(args []string) (api.SendKeysParams, error) {
 // readPaneHandlerWith implements `agent-director read-pane`. The handler
 // trusts the api layer for ANSI handling and default-lines fallback;
 // argv parsing here is purely flag-to-params translation.
-func readPaneHandlerWith(st *store.Store, args []string) error {
+func readPaneHandlerWith(client *pkgapi.Client, args []string) error {
 	params, err := parseReadPaneFlags(args)
 	if err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
-	result, err := api.ReadPane(st, tmuxClient, params)
+	result, err := client.ReadPane(params)
 	if err != nil {
-		name, desc := classifyError(err)
-		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	return writeJSON(os.Stdout, result)
 }
@@ -167,12 +151,12 @@ func readPaneHandlerWith(st *store.Store, args []string) error {
 // --n-lines is the same package-level constant the verb uses, so a CLI
 // caller omitting the flag and an MCP caller passing 0 land on the same
 // number.
-func parseReadPaneFlags(args []string) (api.ReadPaneParams, error) {
-	var p api.ReadPaneParams
+func parseReadPaneFlags(args []string) (pkgapi.ReadPaneParams, error) {
+	var p pkgapi.ReadPaneParams
 	fs := flag.NewFlagSet("read-pane", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the Spawn to read")
-	fs.IntVar(&p.NLines, "n-lines", api.DefaultReadPaneLines, "number of trailing pane lines to return")
+	fs.IntVar(&p.NLines, "n-lines", pkgapi.DefaultReadPaneLines, "number of trailing pane lines to return")
 	fs.BoolVar(&p.ANSI, "ansi", false, "return raw bytes (escape codes preserved); default strips ANSI but preserves unicode glyphs")
 	if err := fs.Parse(args); err != nil {
 		return p, err
@@ -186,7 +170,7 @@ func parseReadPaneFlags(args []string) (api.ReadPaneParams, error) {
 // makeTemplateHandlerWith implements `agent-director make-template`.
 // Flags mirror the per-call spawn surface minus the three reserved
 // per-invocation params (template, claude-instance-id, tmux-session-name).
-func makeTemplateHandlerWith(args []string) error {
+func makeTemplateHandlerWith(client *pkgapi.Client, args []string) error {
 	var (
 		labelKVs    map[string]string
 		extraEnvKVs map[string]string
@@ -195,7 +179,7 @@ func makeTemplateHandlerWith(args []string) error {
 		ask         []string
 		claudeArgs  []string
 	)
-	var p api.MakeTemplateParams
+	var p pkgapi.MakeTemplateParams
 	fs := flag.NewFlagSet("make-template", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&p.Name, "name", "", "template name (filename-safe; required)")
@@ -217,12 +201,12 @@ func makeTemplateHandlerWith(args []string) error {
 	p.ExtraEnv = extraEnvKVs
 	p.ClaudeArgs = claudeArgs
 	if len(allow) > 0 || len(deny) > 0 || len(ask) > 0 {
-		p.Permissions = &api.MakeTemplatePermissions{Allow: allow, Deny: deny, Ask: ask}
+		p.Permissions = &pkgapi.MakeTemplatePermissions{Allow: allow, Deny: deny, Ask: ask}
 	}
-	result, err := api.MakeTemplate(p)
+	result, err := client.MakeTemplate(p)
 	if err != nil {
-		name, desc := classifyError(err)
-		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	return writeJSON(os.Stdout, result)
 }
@@ -230,12 +214,12 @@ func makeTemplateHandlerWith(args []string) error {
 // listHandlerWith implements `agent-director list`. Each filter flag
 // corresponds 1:1 with a ListParams field; the API layer enforces the
 // label key=value form.
-func listHandlerWith(st *store.Store, args []string) error {
+func listHandlerWith(client *pkgapi.Client, args []string) error {
 	var (
 		stateRaw string
 		labels   []string
 	)
-	var p api.ListParams
+	var p pkgapi.ListParams
 	fs := flag.NewFlagSet("list", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&stateRaw, "state", "", "comma-separated states to filter (e.g. waiting,working)")
@@ -256,10 +240,10 @@ func listHandlerWith(st *store.Store, args []string) error {
 		}
 	}
 	p.Labels = labels
-	result, err := api.List(st, p)
+	result, err := client.List(p)
 	if err != nil {
-		name, desc := classifyError(err)
-		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	return writeJSON(os.Stdout, result)
 }
@@ -271,8 +255,8 @@ func listHandlerWith(st *store.Store, args []string) error {
 // ctx is rooted at context.Background() — the CLI process is short-
 // lived and an OS signal terminates it directly. The MCP server (Epic
 // 11) will wire request-scoped cancellation here.
-func pauseHandlerWith(st *store.Store, cfg config.Config, args []string) error {
-	var p api.PauseParams
+func pauseHandlerWith(client *pkgapi.Client, args []string) error {
+	var p pkgapi.PauseParams
 	fs := flag.NewFlagSet("pause", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the Spawn to pause")
@@ -282,10 +266,10 @@ func pauseHandlerWith(st *store.Store, cfg config.Config, args []string) error {
 	if p.ClaudeInstanceID == "" {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--claude-instance-id is required")
 	}
-	result, err := api.Pause(context.Background(), st, tmuxClient, cfg.Pause, p)
+	result, err := client.Pause(context.Background(), p)
 	if err != nil {
-		name, desc := classifyError(err)
-		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	return writeJSON(os.Stdout, result)
 }
@@ -294,8 +278,8 @@ func pauseHandlerWith(st *store.Store, cfg config.Config, args []string) error {
 // rejects empty flags up front; the API layer guards the
 // allow|deny enum (ErrInvalidDecision) as defense in depth for MCP
 // callers that bypass the CLI flag parser.
-func decideHandlerWith(st *store.Store, args []string) error {
-	var p api.DecideParams
+func decideHandlerWith(client *pkgapi.Client, args []string) error {
+	var p pkgapi.DecideParams
 	fs := flag.NewFlagSet("decide", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the Spawn awaiting a decision")
@@ -310,10 +294,10 @@ func decideHandlerWith(st *store.Store, args []string) error {
 	if p.Decision == "" {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--decision is required (allow|deny)")
 	}
-	result, err := api.Decide(st, p)
+	result, err := client.Decide(p)
 	if err != nil {
-		name, desc := classifyError(err)
-		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	return writeJSON(os.Stdout, result)
 }
@@ -321,8 +305,8 @@ func decideHandlerWith(st *store.Store, args []string) error {
 // resumeHandlerWith implements `agent-director resume`. The verb
 // reads the spawn-time row out of the store and restarts claude via
 // tmux with `--resume <session_id>`. Same id, fresh tmux session.
-func resumeHandlerWith(st *store.Store, cfg config.Config, args []string) error {
-	var p api.ResumeParams
+func resumeHandlerWith(client *pkgapi.Client, args []string) error {
+	var p pkgapi.ResumeParams
 	fs := flag.NewFlagSet("resume", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the terminated Spawn to resurrect")
@@ -332,10 +316,10 @@ func resumeHandlerWith(st *store.Store, cfg config.Config, args []string) error 
 	if p.ClaudeInstanceID == "" {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--claude-instance-id is required")
 	}
-	result, err := api.Resume(st, tmuxClient, cfg, p)
+	result, err := client.Resume(p)
 	if err != nil {
-		name, desc := classifyError(err)
-		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	return writeJSON(os.Stdout, result)
 }
@@ -344,8 +328,8 @@ func resumeHandlerWith(st *store.Store, cfg config.Config, args []string) error 
 // idempotent on terminal states and swallows tmux failures at the
 // verb surface (see api.Kill); a swallowed failure is logged at WARN
 // to the configured error log so an interactive operator can see it.
-func killHandlerWith(st *store.Store, cfg config.Config, args []string) error {
-	var p api.KillParams
+func killHandlerWith(client *pkgapi.Client, args []string) error {
+	var p pkgapi.KillParams
 	fs := flag.NewFlagSet("kill", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the Spawn to kill")
@@ -355,16 +339,16 @@ func killHandlerWith(st *store.Store, cfg config.Config, args []string) error {
 	if p.ClaudeInstanceID == "" {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--claude-instance-id is required")
 	}
-	result, err := api.Kill(st, tmuxClient, newRecoveryLogger(cfg), p)
+	result, err := client.Kill(p)
 	if err != nil {
-		name, desc := classifyError(err)
-		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	return writeJSON(os.Stdout, result)
 }
 
 // getHandlerWith implements `agent-director get`.
-func getHandlerWith(st *store.Store, args []string) error {
+func getHandlerWith(client *pkgapi.Client, args []string) error {
 	var id string
 	fs := flag.NewFlagSet("get", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -375,10 +359,10 @@ func getHandlerWith(st *store.Store, args []string) error {
 	if id == "" {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--claude-instance-id is required")
 	}
-	res, err := api.Get(st, id)
+	res, err := client.Get(id)
 	if err != nil {
-		name, desc := classifyError(err)
-		return writeApiErrorAndDispatch(name, errMessageStartsWithName(name, desc))
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
 	return writeJSON(os.Stdout, res)
 }

@@ -10,13 +10,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/gabemahoney/agent-director/internal/api"
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/mcp"
-	"github.com/gabemahoney/agent-director/internal/probe"
-	"github.com/gabemahoney/agent-director/internal/spawn"
-	"github.com/gabemahoney/agent-director/internal/store"
-	"github.com/gabemahoney/agent-director/internal/tmux"
+	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
 )
 
 // serveHandlerWith implements `agent-director serve --stdio`.
@@ -29,7 +25,17 @@ import (
 // `serve` invocation. SRD §3.3 makes this explicit so operators
 // don't have to wonder why a tweak to relay.timeout_seconds didn't
 // stick.
-func serveHandlerWith(st *store.Store, cfg config.Config, args []string) error {
+//
+// Pin H4: the MCP dispatcher uses a SEPARATE *pkgapi.Client constructed
+// with Options.Logger: nil. This preserves the pre-refactor behavior where
+// Kill/FindMissing/Expire swallowed their tmux WARN logs on the MCP path
+// (those warnings are most useful to the interactive CLI operator, not a
+// long-lived MCP client). The two Clients have distinct logger ownership.
+//
+// Pin H6: cfg is threaded in directly from run() via setupClient() so
+// newMCPLogger can receive it without a Client.Config() accessor, which
+// would leak internal/config.Config into pkg/api's public surface.
+func serveHandlerWith(cfg config.Config, args []string) error {
 	var stdioFlag bool
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -44,12 +50,23 @@ func serveHandlerWith(st *store.Store, cfg config.Config, args []string) error {
 		return nil
 	}
 
-	registerMCPErrors()
+	// Construct a SEPARATE Client for the MCP dispatcher (Pin H4).
+	// Logger: nil so Kill/FindMissing/Expire WARN paths are silent for MCP.
+	// CreateIfMissing: true so the MCP server can create the DB on first run.
+	mcpClient, err := pkgapi.New(pkgapi.Options{
+		ConfigPath:      configPath,
+		CreateIfMissing: true,
+		Logger:          nil, // intentional: MCP path discards WARN logs (Pin H4)
+	})
+	if err != nil {
+		return writeApiErrorAndDispatch("ErrStoreOpen", err.Error())
+	}
+	defer mcpClient.Close()
 
-	dispatcher := mcp.NewLiveDispatcher(st, tmuxClient, cfg)
+	dispatcher := mcp.NewLiveDispatcher(mcpClient)
 	// MCP server logs go to the configured error log (or stderr
 	// fallback) — NOT stdout, which is reserved for the JSON-RPC
-	// transport.
+	// transport. cfg is passed directly (Pin H6).
 	logger := newMCPLogger(cfg)
 	server := mcp.New(dispatcher, logger)
 
@@ -83,6 +100,8 @@ func newSignalCtx() (context.Context, context.CancelFunc) {
 // newMCPLogger routes MCP operational diagnostics to the configured
 // error log. Stdout is reserved for the JSON-RPC transport, so the
 // log destination must NOT be stdout.
+//
+// cfg is passed directly from run() (Pin H6 — no Client.Config() accessor).
 func newMCPLogger(cfg config.Config) *log.Logger {
 	dest := io.Writer(os.Stderr)
 	if cfg.Log.ErrorLogPath != "" {
@@ -93,27 +112,3 @@ func newMCPLogger(cfg config.Config) *log.Logger {
 	return log.New(dest, "agent-director-mcp ", log.LstdFlags)
 }
 
-// registerMCPErrors populates the MCP server's err-name probe table
-// from the CLI's errCatalog. This keeps the two views synchronized:
-// the CLI's classifyError and the MCP server's classifyDispatchError
-// surface the same canonical names for the same wrapped errors.
-//
-// Called once per `serve --stdio` invocation; idempotent across
-// multiple calls in the same process.
-func registerMCPErrors() {
-	for _, ec := range errCatalog {
-		mcp.RegisterError(ec.name, ec.err)
-	}
-	// Also register internal/mcp's own sentinel so a tools/call for
-	// an unrecognized verb surfaces a stable err_name.
-	mcp.RegisterError("ErrUnknownTool", mcp.ErrUnknownTool)
-}
-
-// Compile-time references so the imports stay live when the
-// dispatcher's full surface is consumed by tests.
-var (
-	_ = api.Spawn
-	_ = spawn.Permissions{}
-	_ = probe.New
-	_ = tmux.New
-)

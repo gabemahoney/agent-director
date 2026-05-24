@@ -1,5 +1,12 @@
-.PHONY: all build test generate lint test-image test-image-smoke test-docker \
-        release-binaries release-binaries-smoke
+.PHONY: all build test generate lint err-coherence nondet-coverage \
+        check-doccomments \
+        test-image test-image-smoke test-docker \
+        release-binaries release-binaries-smoke \
+        release-shellcheck release-bats \
+        libagent_director clean-cabi \
+        consumer-dryrun \
+        ts-helper fake-tmux \
+        agent-director envelope-diff-ts
 
 # Pinned Claude Code version. Per SRD §15.2 the harness's image must install
 # *this* version of @anthropic-ai/claude-code; bumping it requires re-running
@@ -26,14 +33,46 @@ all: generate build
 build:
 	CGO_ENABLED=0 go build -ldflags="$(VERSION_LDFLAGS)" -o ./bin/agent-director ./cmd/agent-director
 
-test:
+test: envelope-diff-ts
 	go test ./...
 
 generate:
 	go generate ./...
 
+# surface-json regenerates pkg/api/manifest/surface.json from the manifest.
+# Also run by 'make generate' via the //go:generate directive in pkg/api/manifest/doc.go.
+surface-json:
+	go generate ./pkg/api/manifest/...
+
+# errnames-json regenerates pkg/api/errnames/catalog.json from the err_name catalog.
+# Also run by 'make generate' via the //go:generate directive in pkg/api/errnames/doc.go.
+errnames-json:
+	go generate ./pkg/api/errnames/...
+
 lint:
 	go vet ./...
+
+# err-coherence runs the five-way err_name coherence gate. It asserts that:
+#   (a) handler-referenced sentinels ⊆ errnames.Catalog
+#   (b) api-origin Catalog entries ⊆ pkg/api exported Err* vars
+#   (c) callable-verb manifest ErrorNames ⊆ errnames.Catalog
+#   (d) errnames.Catalog ⊆ callable-verb manifest ErrorNames
+#   (e) catalog.json and surface.json match their generators (via sub-tests)
+err-coherence:
+	go test ./pkg/api/errnames/ -run "TestFiveWayCoherence|TestCatalogJSONUpToDate|TestSurfaceJSONUpToDate" -v
+
+# check-doccomments asserts that every exported identifier in pkg/api has a
+# non-empty doc comment. Exits non-zero with per-identifier diagnostics if
+# any are missing. Run this locally when adding a new exported symbol to
+# ensure it is documented before pushing. Wired into the doc-drift CI gate.
+check-doccomments:
+	go run ./tools/check-doccomments -package ./pkg/api
+
+# nondet-coverage checks that every callable verb in manifest.CallableVerbs()
+# has a top-level key in test/envelope-diff/nondeterministic.json and vice
+# versa. Exits non-zero with a descriptive message on any mismatch.
+nondet-coverage:
+	go run ./tools/check-nondet test/envelope-diff/nondeterministic.json
 
 # Build the Docker test harness image. Always rebuilds the binary first so
 # the image picks up the latest source.
@@ -89,16 +128,17 @@ test-docker: test-image
 		-v "$(CURDIR):/work/source:ro" \
 		$(TEST_IMAGE)
 
-# release-binaries cross-compiles the four supported targets into ./dist/.
+# release-binaries cross-compiles the three supported targets into ./dist/.
 # CGO_ENABLED=0 + modernc.org/sqlite (pure Go SQLite) yields fully static
 # binaries on linux/* and standalone Mach-O on darwin/*. The -s -w
 # ldflags strip the symbol + debug tables to halve the artifact size.
 #
 # Per SRD §16.1: mac + linux only. Windows is not supported.
+# darwin/amd64 was dropped from v1 on 2026-05-24.
 release-binaries:
 	@mkdir -p dist
-	@echo "[release] building 4 binaries into ./dist/"
-	@for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do \
+	@echo "[release] building 3 binaries into ./dist/"
+	@for target in linux/amd64 linux/arm64 darwin/arm64; do \
 		os=$${target%/*}; arch=$${target#*/}; \
 		out="dist/agent-director-$${os}-$${arch}"; \
 		echo "  -> $${out}"; \
@@ -122,7 +162,7 @@ release-binaries:
 release-binaries-smoke: release-binaries
 	@set -eu; \
 	echo "[smoke] magic-byte check on each artifact"; \
-	for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do \
+	for target in linux/amd64 linux/arm64 darwin/arm64; do \
 		os=$${target%/*}; arch=$${target#*/}; \
 		out="dist/agent-director-$${os}-$${arch}"; \
 		magic=$$(od -A n -t x1 -N 4 "$${out}" | tr -d ' '); \
@@ -147,4 +187,92 @@ release-binaries-smoke: release-binaries
 	echo "[smoke] host-arch exec (linux-amd64 help)"; \
 	./dist/agent-director-linux-amd64 help | jq -e '.verbs | length > 0' >/dev/null \
 		|| { echo "FAIL: linux-amd64 help did not return a non-empty verb list"; exit 1; }; \
-	echo "[smoke] OK — all 4 binaries built, linked, and the host-arch one runs"
+	echo "[smoke] OK — all 3 binaries built, linked, and the host-arch one runs"
+
+# dist/ is created on demand by libagent_director.
+dist/:
+	mkdir -p dist
+
+# libagent_director builds the C-shared library for linux/amd64 into dist/.
+# CGO_ENABLED=1 is required; this target intentionally does NOT affect the
+# static CLI produced by `make build` (CGO_ENABLED=0 remains the default).
+# After the build, check-cabi-header asserts every exported symbol starts
+# with `ad_` so a naming drift fails fast instead of silently shipping.
+libagent_director: dist/
+	CGO_ENABLED=1 go build -buildmode=c-shared -o dist/libagent_director.so ./pkg/cabi
+	go run ./tools/check-cabi-header dist/libagent_director.h
+
+# clean-cabi removes the c-shared artifacts produced by libagent_director.
+clean-cabi:
+	rm -f dist/libagent_director.so dist/libagent_director.h
+
+# consumer-dryrun builds the tools/consumer-dryrun mini-module, which imports
+# pkg/api from a separate Go module via a replace directive. A clean build
+# proves that external consumers can compile against pkg/api without
+# referencing any internal/* package directly. Go's visibility rules enforce
+# this: any attempt to import internal/* from outside the module would fail.
+consumer-dryrun:
+	cd tools/consumer-dryrun && go build ./...
+
+# ts-helper builds the fixture-seeding CLI used by TypeScript smoke tests.
+# Compiled exclusively with -tags helper so production binaries are unaffected.
+# modernc.org/sqlite is pure Go; CGO_ENABLED=0 suffices.
+# The target is incremental: it depends on every source file that feeds the
+# binary, so make skips the build when nothing has changed.
+TS_HELPER_SRCS := $(wildcard test/smoke/ts-helper/*.go) pkg/api/export_for_helper.go
+
+bin/ts-helper: $(TS_HELPER_SRCS)
+	CGO_ENABLED=0 go build -tags helper -o bin/ts-helper ./test/smoke/ts-helper/
+
+ts-helper: bin/ts-helper
+
+# fake-tmux builds the test-only tmux stub used by TypeScript smoke tests.
+# The stub records argv calls and exits 0 so spawn/send-keys/read-pane/kill
+# can be exercised end-to-end without a real tmux. Compiled with CGO_ENABLED=0
+# (pure Go, no libc dependency).
+test/fake-tmux/tmux: test/fake-tmux/main.go
+	CGO_ENABLED=0 go build -o test/fake-tmux/tmux ./test/fake-tmux/
+
+fake-tmux: test/fake-tmux/tmux
+
+# agent-director is a focused alias for `make build` used by the TS
+# envelope-diff harness and setup.ts.  Incremental: re-running with no source
+# changes is a fast no-op because `build` itself is not phony (the binary
+# exists and is up-to-date).  Listed in .PHONY above so `make agent-director`
+# always delegates to the build recipe.
+agent-director: build
+
+# envelope-diff-ts runs the TS-side envelope-diff regression suite.
+#
+# Dependencies:
+#   agent-director — ensures bin/agent-director is built
+#   ts-helper      — ensures bin/ts-helper is built
+#   fake-tmux      — ensures test/fake-tmux/tmux is built
+#
+# The test runner is invoked from the pkg/ts-bun-client directory so that
+# bunfig.toml and the local package.json are in scope.
+envelope-diff-ts: agent-director ts-helper fake-tmux
+	cd pkg/ts-bun-client && bun test test/envelope-diff.test.ts test/envelope-diff-invariants.test.ts
+
+# release-shellcheck runs shellcheck against release.sh. The target is a
+# no-op when shellcheck is not installed locally so that bare `make` runs
+# do not require it; CI installs it (cabi-matrix uses ubuntu's packaged
+# shellcheck). Add `SC2086` etc. to the disable list inline in release.sh
+# rather than globally here.
+release-shellcheck:
+	@if command -v shellcheck >/dev/null 2>&1; then \
+		echo "[release-shellcheck] shellcheck skills/release-agent-director/release.sh"; \
+		shellcheck -s bash skills/release-agent-director/release.sh; \
+	else \
+		echo "[release-shellcheck] shellcheck not installed — skipping"; \
+	fi
+
+# release-bats runs the bats unit tests under skills/release-agent-director/tests/.
+# Same install gate as release-shellcheck: skip cleanly when bats is absent.
+release-bats:
+	@if command -v bats >/dev/null 2>&1; then \
+		echo "[release-bats] bats skills/release-agent-director/tests/"; \
+		bats skills/release-agent-director/tests/; \
+	else \
+		echo "[release-bats] bats not installed — skipping"; \
+	fi

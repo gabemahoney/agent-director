@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gabemahoney/agent-director/internal/api/manifest"
-	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/mcp"
+	"github.com/gabemahoney/agent-director/internal/spawn"
+	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
 // fakeDispatcher is the test-side dispatcher. It records every call
@@ -201,11 +201,11 @@ func TestToolsCallSuccessResultShape(t *testing.T) {
 }
 
 func TestToolsCallErrorCarriesErrName(t *testing.T) {
-	// A typed sentinel registered via RegisterError must surface in
-	// the response's error.data.err_name field.
-	sentinel := errors.New("ErrCustomSentinel")
-	mcp.RegisterError("ErrCustomSentinel", sentinel)
-	d := &fakeDispatcher{err: sentinel}
+	// A catalog sentinel wrapped with %w must surface its canonical
+	// err_name in the response's error.data.err_name field.
+	// Uses spawn.ErrCwdMissing (in errnames.Catalog) as a representative.
+	wrapped := errors.Join(spawn.ErrCwdMissing, errors.New("context detail"))
+	d := &fakeDispatcher{err: wrapped}
 	resp := runOne(t, d, mcp.Request{
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`1`),
@@ -220,8 +220,8 @@ func TestToolsCallErrorCarriesErrName(t *testing.T) {
 	if err := json.Unmarshal(dataBody, &data); err != nil {
 		t.Fatalf("parse data: %v", err)
 	}
-	if data.ErrName != "ErrCustomSentinel" {
-		t.Errorf("err_name = %q; want ErrCustomSentinel", data.ErrName)
+	if data.ErrName != "ErrCwdMissing" {
+		t.Errorf("err_name = %q; want ErrCwdMissing", data.ErrName)
 	}
 }
 
@@ -305,19 +305,11 @@ func TestUnknownToolReturnsErrUnknownTool(t *testing.T) {
 	// The MCP server's dispatcher (LiveDispatcher) returns ErrUnknownTool
 	// when the tool name isn't in its switch. The fake dispatcher
 	// doesn't replicate that, so this test pins via the live dispatcher
-	// directly. We construct one with nil store/tmux because the
-	// unknown-tool path short-circuits before touching them.
-	d := mcp.NewLiveDispatcher(nil, nil, defaultCfg())
+	// directly. We construct one with a nil client because the
+	// unknown-tool path short-circuits before any client method is called.
+	d := mcp.NewLiveDispatcher(nil)
 	_, err := d.Call(context.Background(), "totally_made_up_tool", json.RawMessage(`{}`))
 	if !errors.Is(err, mcp.ErrUnknownTool) {
 		t.Fatalf("err = %v; want ErrUnknownTool", err)
 	}
-}
-
-// defaultCfg constructs a fully-formed config.Config for tests that
-// don't care about specific values. Avoids importing config from
-// test files (Go's import cycle rules permit it but it's cleaner to
-// keep the helper local).
-func defaultCfg() config.Config {
-	return config.Default()
 }
