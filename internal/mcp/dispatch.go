@@ -186,6 +186,7 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 			Allow      []string          `json:"allow"`
 			Deny       []string          `json:"deny"`
 			Ask        []string          `json:"ask"`
+			Overwrite  bool              `json:"overwrite"`
 		}
 		if err := json.Unmarshal(args, &raw); err != nil {
 			return nil, fmt.Errorf("decode make-template params: %w", err)
@@ -205,6 +206,7 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 			ClaudeArgs:          raw.ClaudeArgs,
 			ExtraEnv:            raw.ExtraEnv,
 			AgentDirectorLabels: labels,
+			Overwrite:           raw.Overwrite,
 		}
 		if len(raw.Allow) > 0 || len(raw.Deny) > 0 || len(raw.Ask) > 0 {
 			p.Permissions = &api.MakeTemplatePermissions{

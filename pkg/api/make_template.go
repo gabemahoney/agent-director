@@ -39,6 +39,16 @@ type MakeTemplateParams struct {
 	// baked in; a non-nil value with empty arrays serializes as explicit [].
 	// Per-call --allow/--deny/--ask entries CONCATENATE with the template's arrays.
 	Permissions *MakeTemplatePermissions
+	// Overwrite selects the write algorithm at the final file-write step.
+	// When true, the encoded TOML body is written via an atomic
+	// sibling-tempfile algorithm: os.CreateTemp in the templates directory,
+	// write, close, then os.Rename(2) over the target path — replacing any
+	// existing file. When false (the Go zero value), the existing
+	// O_EXCL create-only path is used and a pre-existing target yields
+	// ErrTemplateExists. All precondition checks (name safety, relay-mode
+	// validation, templates-dir creation, TOML encode) run identically on
+	// both branches; Overwrite is consulted only at the write step.
+	Overwrite bool
 }
 
 // MakeTemplatePermissions is the params-side mirror of the on-disk
@@ -69,9 +79,16 @@ type MakeTemplateResult struct {
 //   - Name safety: validated via config.ValidateTemplateName.
 //   - RelayMode (when non-empty) must be "on" or "off".
 //   - Templates dir is lazy-created (mode 0700) if missing.
-//   - Overwrite is rejected with ErrTemplateExists via O_EXCL — the
-//     final target is opened atomically, so a racing writer either
-//     wins the create and we error, or we win and they error.
+//   - Write step branches on params.Overwrite:
+//   - Overwrite == true: the encoded body is written to a sibling
+//     tempfile via os.CreateTemp, closed, then os.Rename'd over the
+//     target path. The rename is atomic on POSIX, so a pre-existing
+//     template is replaced in place and no half-written file is ever
+//     observable at the target path. Any failure between CreateTemp
+//     and Rename removes the tempfile before returning.
+//   - Overwrite == false (zero value): the target is opened with
+//     O_WRONLY|O_CREATE|O_EXCL; a pre-existing target yields
+//     ErrTemplateExists with the absolute target path embedded.
 func MakeTemplate(params MakeTemplateParams) (MakeTemplateResult, error) {
 	if err := config.ValidateTemplateName(params.Name); err != nil {
 		return MakeTemplateResult{}, err
@@ -107,6 +124,35 @@ func MakeTemplate(params MakeTemplateParams) (MakeTemplateResult, error) {
 	var buf bytes.Buffer
 	if err := toml.NewEncoder(&buf).Encode(file); err != nil {
 		return MakeTemplateResult{}, fmt.Errorf("api: encode template TOML: %w", err)
+	}
+
+	if params.Overwrite {
+		templatesDir := filepath.Dir(target)
+		tmp, err := os.CreateTemp(templatesDir, "."+params.Name+".toml.tmp.*")
+		if err != nil {
+			return MakeTemplateResult{}, fmt.Errorf("api: create template tempfile: %w", err)
+		}
+		tempPath := tmp.Name()
+		cleanup := func() {
+			if rmErr := os.Remove(tempPath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+				// best-effort cleanup; ignore non-ENOENT errors
+				_ = rmErr
+			}
+		}
+		if _, err := tmp.Write(buf.Bytes()); err != nil {
+			_ = tmp.Close()
+			cleanup()
+			return MakeTemplateResult{}, fmt.Errorf("api: write template body: %w", err)
+		}
+		if err := tmp.Close(); err != nil {
+			cleanup()
+			return MakeTemplateResult{}, fmt.Errorf("api: close template: %w", err)
+		}
+		if err := os.Rename(tempPath, target); err != nil {
+			cleanup()
+			return MakeTemplateResult{}, fmt.Errorf("api: rename template into place: %w", err)
+		}
+		return MakeTemplateResult{Path: filepath.Clean(target)}, nil
 	}
 
 	f, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)

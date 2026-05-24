@@ -466,6 +466,7 @@ func dispatchMakeTemplate(c *api.Client, params map[string]any) ([]byte, bool) {
 		ClaudeArgs:          strSliceParam(params, "claude_args"),
 		ExtraEnv:            strMapParam(params, "extra_env"),
 		AgentDirectorLabels: strMapParam(params, "labels"),
+		Overwrite:           boolParam(params, "overwrite"),
 	}
 	res, err := c.MakeTemplate(p)
 	if err != nil {

@@ -626,6 +626,15 @@ var Verbs = []VerbDef{
 				AllowEmpty:    true,
 				AllowedValues: nil,
 			},
+			{
+				Name:          "overwrite",
+				Type:          "bool",
+				Description:   "Replace any existing template at this name atomically. Default false preserves O_EXCL create-only semantics.",
+				Required:      false,
+				Nullable:      false,
+				AllowEmpty:    false,
+				AllowedValues: nil,
+			},
 		},
 		ResultFields: []FieldDef{
 			{Name: "path", Type: "string", Description: "Absolute path of the written template file.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
