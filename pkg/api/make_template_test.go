@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/BurntSushi/toml"
@@ -401,5 +403,93 @@ func TestMakeTemplate_OverwriteTrue_CreatesWhenAbsent(t *testing.T) {
 	if !bytes.Equal(absentEnv, replaceEnv) {
 		t.Errorf("envelopes differ after stripping .path\nabsent: %s\nreplace: %s",
 			string(absentEnv), string(replaceEnv))
+	}
+}
+
+// TestMakeTemplate_OverwriteTrue_ConcurrentAtomicity pins the SR-1.7
+// linearisation invariant: under N concurrent Overwrite=true writers
+// against the same Name, the on-disk file body must equal exactly one
+// of the N writer's encoded bodies — never zero-byte, never partial
+// TOML, never a Frankenstein splice of two writers' outputs. The
+// underlying mechanism is os.Rename atomicity on the same filesystem,
+// but this test is mechanism-agnostic: it observes the post-condition.
+//
+// Constants mirror the Epic 2 Docker testplan case
+// `overwrite-4-concurrent-atomicity` (N=4 writers, iterations=3).
+func TestMakeTemplate_OverwriteTrue_ConcurrentAtomicity(t *testing.T) {
+	withTempHome(t)
+	const (
+		name       = "concur"
+		N          = 4
+		iterations = 3
+	)
+
+	for iter := 0; iter < iterations; iter++ {
+		// Pre-clean: drop any leftover target file and any orphan
+		// tempfiles from prior iterations. Don't assert on errors —
+		// the file may legitimately not exist on the first pass.
+		target, err := config.TemplatePath(name)
+		if err != nil {
+			t.Fatalf("iter=%d: TemplatePath: %v", iter, err)
+		}
+		_ = os.Remove(target)
+		dir := filepath.Dir(target)
+		if entries, err := os.ReadDir(dir); err == nil {
+			prefix := "." + name + ".toml.tmp."
+			for _, e := range entries {
+				if strings.HasPrefix(e.Name(), prefix) {
+					_ = os.Remove(filepath.Join(dir, e.Name()))
+				}
+			}
+		}
+
+		// Build N distinguishable parameter sets. Vary the label so
+		// each encoded body is byte-different and we can read back
+		// which writer's bytes landed on disk.
+		writers := make([]api.MakeTemplateParams, N)
+		wantLabels := make(map[string]bool, N)
+		for i := 0; i < N; i++ {
+			label := fmt.Sprintf("writer-%d", i)
+			wantLabels[label] = true
+			writers[i] = api.MakeTemplateParams{
+				Name:                name,
+				CWD:                 "/tmp",
+				RelayMode:           "off",
+				AgentDirectorLabels: map[string]string{"writer": label},
+				Overwrite:           true,
+			}
+		}
+
+		release := make(chan struct{})
+		var wg sync.WaitGroup
+		for i := 0; i < N; i++ {
+			wg.Add(1)
+			go func(p api.MakeTemplateParams) {
+				defer wg.Done()
+				<-release
+				if _, err := api.MakeTemplate(p); err != nil {
+					t.Errorf("iter=%d MakeTemplate(%s): %v", iter, p.AgentDirectorLabels["writer"], err)
+				}
+			}(writers[i])
+		}
+		close(release)
+		wg.Wait()
+
+		body, err := os.ReadFile(target)
+		if err != nil {
+			t.Fatalf("iter=%d: read on-disk template: %v", iter, err)
+		}
+		if len(body) == 0 {
+			t.Fatalf("iter=%d: on-disk template is zero-byte (atomicity violated)", iter)
+		}
+		var got config.TemplateFile
+		if _, err := toml.Decode(string(body), &got); err != nil {
+			t.Fatalf("iter=%d: toml.Decode (partial/torn write?): %v\nbody:\n%s", iter, err, string(body))
+		}
+		observed := got.AgentDirectorLabels["writer"]
+		if !wantLabels[observed] {
+			t.Fatalf("iter=%d: observed writer label %q matches no input; wanted one of %v\nbody:\n%s",
+				iter, observed, wantLabels, string(body))
+		}
 	}
 }
