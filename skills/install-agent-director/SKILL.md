@@ -1,6 +1,7 @@
 ---
 name: install-agent-director
 description: Install (or upgrade) agent-director on this machine. Runs the bundled install.sh against the user's ~/ — creates ~/.agent-director/ with the binary, warms up state.db, and injects two persistent `agent-director help` hooks into ~/.claude/settings.json (SessionStart + SessionEnd reason=compact). Use this skill when the user says "install agent-director", "set up agent-director", or "upgrade agent-director on this machine".
+version: 0.4.1
 ---
 
 ## When to invoke
@@ -232,9 +233,50 @@ exists to prevent.
 
 This skill runs `install.sh` from the same directory. The script:
 
-1. **Pre-flights.** Verifies `claude` and `tmux` are on PATH. Aborts
-   with a clear message if either is missing — agent-director
-   cannot do useful work without them.
+1. **Pre-flights.** Runs the following checks in order; any failure
+   aborts with exit code `2` and a clear message:
+
+   1. **Whitespace-in-install-path** — `$HOME` must not contain
+      whitespace (SRD §4.3; tmux's direct-argv invocation requires
+      shell-safe paths).
+   2. **OS/CPU gate (SR-2.1).** `uname -s` / `uname -m` must report
+      one of the supported tuples: `Linux/x86_64` or `Darwin/arm64`.
+      Every other combination (Windows, FreeBSD, `Linux/aarch64`,
+      `Darwin/x86_64`, etc.) is hard-refused with a message naming
+      the supported set and referencing Idea Bee `b.fg3` for
+      cross-platform expansion status.
+   3. **Required tools on PATH.** `claude`, `tmux`, `jq`, and
+      `file` must all resolve via `command -v`. The `file(1)` tool
+      is mandatory because step 6 below relies on it to probe
+      `--binary` artifacts (never silent-skip per SR-2.2);
+      install via `apt install file` / `brew install file-formula`
+      / `dnf install file`. `curl` is also required when
+      `--from-release` is supplied.
+   4. **`--from-release` resolution** (if applicable) — downloads
+      the matching asset for `$(uname -s)`/`$(uname -m)` from GitHub
+      Releases; optional `--sha256` verifies the asset.
+   5. **`--binary` path/executability resolution** — settles
+      `BINARY_SRC` from `--binary <path>`, the in-repo build, or
+      `command -v agent-director`; verifies it is an executable
+      regular file.
+   6. **`--binary` architecture probe (SR-2.2).** Runs `file(1)`
+      against `BINARY_SRC` and pattern-matches against the host
+      pair captured by step 2:
+      - `Linux/x86_64`: file output must contain `ELF 64-bit LSB`
+        AND (`x86-64` OR `x86_64`).
+      - `Darwin/arm64`: file output must contain `Mach-O` AND
+        (`arm64` OR `arm64e`).
+
+      Mismatch (e.g. operator passes a darwin-arm64 artifact on
+      Linux/x86_64) aborts with exit `2` and a message naming the
+      binary, the detected architecture excerpt, and the host pair.
+      The probe is independent of the OS/CPU gate above: even on a
+      supported host, a wrong-arch binary is refused here.
+   7. **Source-tree version check** — when the binary came from a
+      local source (`--binary` or the in-repo build) AND install.sh
+      lives inside a git checkout, the binary's embedded commit
+      must match `HEAD`. Catches the "operator forgot to
+      `make build` after pulling new code" footgun.
 
 2. **Creates `~/.agent-director/`** (mode 0700) if missing, plus
    `~/.agent-director/bin/` for the binary.

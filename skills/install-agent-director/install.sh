@@ -139,8 +139,26 @@ if [[ "$DEFAULT_INSTALL_ROOT" =~ [[:space:]] ]]; then
     exit 2
 fi
 
-# claude + tmux must be on PATH.
-required_tools=(claude tmux jq)
+# SRD §SR-2.1 / Idea Bee b.fg3: hard-refuse any host outside the v0.4.1
+# supported set {Linux/x86_64, Darwin/arm64} at preflight time, mirroring
+# the umbrella's npm/bun-side os/cpu gate + postinstall host-pair refusal
+# (Pattern A). install.sh is the direct-invocation surface (Pattern B
+# fallback + Pattern A second step); without this gate an operator on an
+# unsupported host could still copy a wrong-arch CLI into place.
+uname_s="$(uname -s)"
+uname_m="$(uname -m)"
+case "${uname_s}/${uname_m}" in
+    Linux/x86_64|Darwin/arm64)
+        ;;
+    *)
+        echo "install.sh: unsupported host: ${uname_s}/${uname_m}. Supported: Linux/x86_64, Darwin/arm64. See b.fg3 for cross-platform expansion status." >&2
+        exit 2
+        ;;
+esac
+
+# claude + tmux must be on PATH. `file` is required for the --binary
+# architecture probe (SR-2.2) — hard requirement; never silent-skip.
+required_tools=(claude tmux jq file)
 [[ "$FROM_RELEASE" -eq 1 ]] && required_tools+=(curl)
 for tool in "${required_tools[@]}"; do
     if ! command -v "$tool" >/dev/null 2>&1; then
@@ -149,6 +167,7 @@ for tool in "${required_tools[@]}"; do
             claude) echo "  Install Claude Code first: https://claude.com/claude-code" >&2 ;;
             tmux)   echo "  Install tmux via your package manager (apt/brew/dnf/etc.)." >&2 ;;
             jq)     echo "  Install jq via your package manager (we use it to safely edit settings.json)." >&2 ;;
+            file)   echo "  Install file via your package manager (apt install file / brew install file-formula / dnf install file). Required for the --binary architecture probe." >&2 ;;
             curl)   echo "  --from-release downloads via curl; install it via your package manager." >&2 ;;
         esac
         exit 2
@@ -274,6 +293,47 @@ if [[ ! -x "$BINARY_SRC" ]]; then
     exit 3
 fi
 echo "  source  : $BINARY_SRC"
+
+# --------------------------------------------------------------------
+# --binary architecture probe (SR-2.2, preflight step 6)
+#
+# Catches the case where a supported host receives a wrong-arch binary
+# (e.g. operator passes a darwin-arm64 artifact on a Linux/x86_64 host).
+# Runs file(1) against $BINARY_SRC and pattern-matches against the
+# host pair captured by the OS/CPU gate (T1). On mismatch: exit 2 with
+# the SR-2.2 message. file(1) is a hard preflight requirement (T2 +
+# required_tools); never silent-skip.
+#
+# Multiple substring matches joined by && rather than a single regex —
+# file's output format varies subtly across distros (`x86-64` vs
+# `x86_64`), and a brittle regex would silently misclassify a valid
+# binary on a future toolchain.
+# --------------------------------------------------------------------
+
+file_out="$(file -L -b "$BINARY_SRC")"
+arch_ok=0
+case "${uname_s}/${uname_m}" in
+    Linux/x86_64)
+        if grep -q "ELF 64-bit LSB" <<<"$file_out" \
+            && { grep -q "x86-64" <<<"$file_out" || grep -q "x86_64" <<<"$file_out"; }; then
+            arch_ok=1
+        fi
+        ;;
+    Darwin/arm64)
+        if grep -q "Mach-O" <<<"$file_out" \
+            && { grep -q "arm64e" <<<"$file_out" || grep -q "arm64" <<<"$file_out"; }; then
+            arch_ok=1
+        fi
+        ;;
+esac
+
+if [[ "$arch_ok" -ne 1 ]]; then
+    # Distil the diagnostic excerpt from file's output — first ~60 chars
+    # is plenty to surface "Mach-O arm64" or "ELF 64-bit LSB x86-64".
+    detected="$(printf '%s' "$file_out" | head -c 80 | tr '\n' ' ')"
+    echo "install.sh: --binary $BINARY_SRC: architecture mismatch (binary appears to be ${detected}; host is ${uname_s}/${uname_m}). Did you pass the wrong --binary?" >&2
+    exit 2
+fi
 
 # --------------------------------------------------------------------
 # Source-tree version check
