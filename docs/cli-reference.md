@@ -270,6 +270,7 @@ Save a reusable spawn preset. The TOML file lands under ~/.agent-director/templa
 - `allow` ([]string, optional): Bake permissions.allow entries. Per-call --allow CONCATENATES (does not replace).
 - `deny` ([]string, optional): Bake permissions.deny entries. Per-call --deny CONCATENATES.
 - `ask` ([]string, optional): Bake permissions.ask entries. Per-call --ask CONCATENATES.
+- `overwrite` (bool, optional): Replace any existing template at this name atomically. Default false preserves O_EXCL create-only semantics.
 
 ### Result
 

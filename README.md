@@ -207,6 +207,8 @@ agent-director make-template --name dev --cwd /repos/widget \
 agent-director spawn --template dev --label run=$(date +%s)
 ```
 
+Pass `--overwrite` to replace any existing template atomically; without the flag, an existing template causes `ErrTemplateExists`.
+
 ## Configuration
 
 `~/.agent-director/config.toml` (created on first run; all fields

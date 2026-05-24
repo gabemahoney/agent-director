@@ -336,23 +336,31 @@ var successCases = []successCase{
 	},
 
 	// ── make-template ─────────────────────────────────────────────────────
-	// make-template creates HOME/.agent-director/templates/<name>.toml and
+	// make-template overwrite-existing: SeedErrTemplateExists pre-populates
+	// HOME/.agent-director/templates/<name>.toml so the --overwrite path
+	// exercises the atomic rename(2) write algorithm (SR-1.7) on a real
+	// collision.  Without --overwrite this would yield ErrTemplateExists;
+	// with it, the encoded body replaces the pre-existing file and the verb
 	// returns its absolute path.  The ".path" field is excluded from diff
 	// (nondeterministic.json) because the path embeds the ephemeral homeDir.
-	// config.EnsureTemplatesDir() lazy-creates the templates/ subdir.
 	{
 		verb: "make-template",
 		seed: func(t *testing.T) (string, map[string]any) {
 			t.Helper()
-			dir := t.TempDir()
-			apitest.SeedStore(t, filepath.Join(dir, "state.db"))
-			return dir, map[string]any{"name": "test-tmpl"}
+			srcDir, name := apitest.SeedErrTemplateExists(t)
+			return srcDir, map[string]any{"name": name}
 		},
 		params: func(ctx map[string]any) map[string]any {
-			return map[string]any{"name": ctx["name"]}
+			return map[string]any{
+				"name":      ctx["name"],
+				"overwrite": true,
+			}
 		},
 		cliArgv: func(ctx map[string]any) []string {
-			return []string{"make-template", "--name", ctx["name"].(string)}
+			return []string{"make-template",
+				"--name", ctx["name"].(string),
+				"--overwrite",
+			}
 		},
 	},
 

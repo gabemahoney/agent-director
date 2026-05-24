@@ -191,6 +191,7 @@ func makeTemplateHandlerWith(client *pkgapi.Client, args []string) error {
 	fs.Var(newStringSlice(&deny), "deny", "permissions.deny entry (repeatable)")
 	fs.Var(newStringSlice(&ask), "ask", "permissions.ask entry (repeatable)")
 	fs.Var(newStringSlice(&claudeArgs), "claude-args", "single claude arg (repeatable; replaces template's array wholesale at spawn time)")
+	fs.BoolVar(&p.Overwrite, "overwrite", false, "replace any existing template atomically (default false preserves O_EXCL create-only)")
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
