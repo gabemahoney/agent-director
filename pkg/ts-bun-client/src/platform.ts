@@ -94,6 +94,11 @@ export interface PlatformLoadOpts {
  * resolveNativePath performs the platform check and sub-package lookup,
  * returning the absolute path to the native shared library.
  *
+ * If process.env.AD_CABI_DIR is set, the binary is loaded from
+ * "${AD_CABI_DIR}/libagent_director.{so,dylib}" instead of the npm
+ * sub-package. release.sh's verify_phase exports this so smoke tests
+ * can run before the cabi artifacts have been staged into platforms/.
+ *
  * Throws one of:
  *   ErrBunVersionTooOld      — Bun version < MIN_BUN_VERSION
  *   ErrUnsupportedPlatform   — platform/arch tuple not in SUPPORTED_TUPLES
@@ -116,6 +121,22 @@ export function resolveNativePath(opts: PlatformLoadOpts = {}): string {
     throw new ErrUnsupportedPlatform(tuple);
   }
 
+  const binaryExt = platform === "darwin" ? "dylib" : "so";
+  const binaryName = `libagent_director.${binaryExt}`;
+
+  // Step 2.5: AD_CABI_DIR escape hatch (release.sh verify, dev checkouts).
+  const cabiDir = process.env.AD_CABI_DIR;
+  if (cabiDir) {
+    const cabiPath = join(cabiDir, binaryName);
+    if (!existsSync(cabiPath)) {
+      throw new ErrPlatformPackageMissing(
+        subpkgName,
+        `AD_CABI_DIR is set but "${binaryName}" not found in ${cabiDir}`
+      );
+    }
+    return cabiPath;
+  }
+
   // Step 3: Locate sub-package via Bun's module resolver.
   // import.meta.resolve returns a file:// URL relative to this source file.
   let pkgDir: string;
@@ -129,8 +150,6 @@ export function resolveNativePath(opts: PlatformLoadOpts = {}): string {
   }
 
   // Step 4: Compute and verify binary path.
-  const binaryExt = platform === "darwin" ? "dylib" : "so";
-  const binaryName = `libagent_director.${binaryExt}`;
   const libPath = join(pkgDir, binaryName);
 
   if (!existsSync(libPath)) {
