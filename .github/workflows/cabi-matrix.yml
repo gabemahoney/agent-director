@@ -63,6 +63,21 @@ on:
   pull_request:
   push:
     branches: [main]
+  # workflow_dispatch is invoked by skills/release-agent-director/release.sh
+  # during the build phase of a live release cut. The `version` input is
+  # baked into the pkg/cabi shared library via -ldflags so consumers calling
+  # `client.version({})` see the release tag (e.g. "v0.4.5") instead of the
+  # plain `git describe` derived from the merge commit. Non-dispatch
+  # triggers (pull_request, push to main) leave the input empty and the
+  # build step falls back to `git describe --tags --always`. See bee b.pu8
+  # for the regression that motivated this trigger.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version stamp for pkg/cabi (e.g. v0.4.5). Empty → git describe.'
+        required: false
+        type: string
+        default: ''
 
 # Workflow-level concurrency. Cancels superseded PR runs so two stacked
 # commits do not queue two darwin/arm64 jobs on the single self-hosted
@@ -232,10 +247,31 @@ jobs:
       # Go's -buildmode=c-shared convention.
       - name: Build pkg/cabi shared library
         shell: bash
+        env:
+          # Surfaced via env so the shell can `[ -n "$INPUT_VERSION" ]`
+          # without the `${{ }}` expansion landing inside a quoted bash
+          # string (which actionlint flags as SC2086-style mis-quoting).
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
           set -euo pipefail
           mkdir -p dist
+          # Stamp the cabi shared library with the release version via
+          # -ldflags -X. For workflow_dispatch with a `version` input
+          # (driven by release.sh) we use that exact string. For
+          # pull_request / push triggers the input is empty and we fall
+          # back to `git describe --tags --always` — the same form used
+          # by the Makefile's release-binaries target. See bee b.pu8 for
+          # the bug this fixes ({version:"dev", commit:"unknown"} on
+          # shipped pkg/cabi artifacts).
+          VERSION_STAMP="$INPUT_VERSION"
+          if [[ -z "$VERSION_STAMP" ]]; then
+            VERSION_STAMP="$(git describe --tags --always 2>/dev/null || echo dev)"
+          fi
+          COMMIT_SHA="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+          echo "cabi stamp: version=$VERSION_STAMP commit=$COMMIT_SHA"
+          VERSION_PKG="github.com/gabemahoney/agent-director/internal/version"
           CGO_ENABLED=1 go build -buildmode=c-shared \
+            -ldflags="-X ${VERSION_PKG}.Version=${VERSION_STAMP} -X ${VERSION_PKG}.Commit=${COMMIT_SHA}" \
             -o "dist/${{ matrix.lib_name }}" \
             ./pkg/cabi
           ls -la dist/
