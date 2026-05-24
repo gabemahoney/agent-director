@@ -294,6 +294,12 @@ export interface MakeTemplateParams {
   deny?: string[];
   /** permissions.ask entries. */
   ask?: string[];
+  /**
+   * When true, an existing template at this name is replaced atomically
+   * via a sibling-tempfile + rename. When omitted or false, the
+   * existing-template rejection runs (v0.4.2 behaviour).
+   */
+  overwrite?: boolean;
 }
 
 /** Mirrors pkg/api/make_template.go::MakeTemplateResult */
