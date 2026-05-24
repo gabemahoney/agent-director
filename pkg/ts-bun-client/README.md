@@ -50,6 +50,28 @@ The skill body carries a `version:` field in its YAML frontmatter. On every inst
 
 The authoritative behavior contract lives in Idea Bee `b.fg3`.
 
+## Supported platforms
+
+**Supported** — install + library + skill all work:
+
+- `linux/x64` (Linux on x86_64)
+- `darwin/arm64` (Apple Silicon Mac)
+
+**Refused at install time by npm/bun** — the umbrella's `os`/`cpu` fields fail resolution and no postinstall runs:
+
+- Windows (any architecture)
+- FreeBSD, OpenBSD, and other non-Linux/non-Darwin OSes
+- any architecture not in `[x64, arm64]` (e.g. `ia32`, `mips`, `arm`)
+
+**Refused by the postinstall after npm/bun admits the install** — the umbrella runs but the postinstall exits non-zero with an `agent-director: unsupported host` message before any filesystem write:
+
+- `darwin/x64` (Intel Mac)
+- `linux/arm64`
+
+The refusal is two-layered because npm/bun's `os` and `cpu` fields are a cross-product, not a per-pair set: the coarse gate cannot distinguish "supported pair" from "supported OS plus supported arch in any combination." The postinstall's host-pair check catches the two cross-product members that should not actually install.
+
+See Idea Bee `b.fg3` for cross-platform expansion status.
+
 ## Quick start
 
 `using` block (preferred):
