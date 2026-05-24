@@ -139,6 +139,23 @@ if [[ "$DEFAULT_INSTALL_ROOT" =~ [[:space:]] ]]; then
     exit 2
 fi
 
+# SRD §SR-2.1 / Idea Bee b.fg3: hard-refuse any host outside the v0.4.1
+# supported set {Linux/x86_64, Darwin/arm64} at preflight time, mirroring
+# the umbrella's npm/bun-side os/cpu gate + postinstall host-pair refusal
+# (Pattern A). install.sh is the direct-invocation surface (Pattern B
+# fallback + Pattern A second step); without this gate an operator on an
+# unsupported host could still copy a wrong-arch CLI into place.
+uname_s="$(uname -s)"
+uname_m="$(uname -m)"
+case "${uname_s}/${uname_m}" in
+    Linux/x86_64|Darwin/arm64)
+        ;;
+    *)
+        echo "install.sh: unsupported host: ${uname_s}/${uname_m}. Supported: Linux/x86_64, Darwin/arm64. See b.fg3 for cross-platform expansion status." >&2
+        exit 2
+        ;;
+esac
+
 # claude + tmux must be on PATH.
 required_tools=(claude tmux jq)
 [[ "$FROM_RELEASE" -eq 1 ]] && required_tools+=(curl)
