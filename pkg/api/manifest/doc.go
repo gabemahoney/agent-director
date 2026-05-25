@@ -4,7 +4,7 @@
 // surface.json is the machine-readable representation of the full verb
 // surface: per-verb callable/handle_free flags, parameter and result field
 // definitions with Nullable/AllowEmpty/AllowedValues markers, and the
-// error_names catalog. Downstream Epics (pkg/cabi, TS/Bun bindings,
+// error_names catalog. Downstream Epics (TS/Bun bindings,
 // envelope-diff harness) consume this file without importing internal/*.
 //
 // The source of truth is pkg/api/manifest.Verbs. Run

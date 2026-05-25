@@ -602,9 +602,9 @@ shared Go-runtime state to preserve across calls.
 
 ### Error mapping
 
-Every C-ABI error envelope carries two string fields: `err_name` (the canonical error name, e.g. `"ErrSpawnNotFound"`) and `err_description` (a human-readable detail string). The TS client translates these into a typed class hierarchy so callers can catch specific errors with `instanceof`.
+Every agent-director error envelope carries two string fields: `err_name` (the canonical error name, e.g. `"ErrSpawnNotFound"`) and `err_description` (a human-readable detail string). The TS client translates these into a typed class hierarchy so callers can catch specific errors with `instanceof`.
 
-**Catalog source.** `pkg/api/errnames/catalog.json` is the single source of truth for every named error the Go binary can emit. It contains 34 entries at time of writing. Each entry has a `name` field (the `err_name` string) and an optional `scope` field (`"cabi"` was used historically for the `ErrUnknownHandle` entry, which originated in the now-removed `pkg/cabi` handle registry; it is retained in the catalog for symmetry but is not emitted by any current code path).
+**Catalog source.** `pkg/api/errnames/catalog.json` is the single source of truth for every named error the Go binary can emit. It contains 33 entries at time of writing. Each entry has a `name` field (the `err_name` string) and a `package` field naming the origin Go package.
 
 **Base class.** `src/errors.ts::AgentDirectorError extends Error`. Constructor: `(verb: string, err_name: string, err_description: string)`. Sets `this.name = this.constructor.name` so subclass names propagate correctly through the prototype chain. Readonly fields: `verb`, `errName`, `errDescription`. Message format: `"${err_name}: ${err_description}"`.
 

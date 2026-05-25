@@ -5,7 +5,7 @@ export { TS_ONLY_ERROR_NAMES } from "./internal/tsOnlyErrors.js";
  *
  * `verb` names the callable verb that triggered the error (e.g. "spawn").
  * `errName` is the canonical error name from the Go errnames catalog.
- * `errDescription` is the human-readable description from the C-ABI envelope.
+ * `errDescription` is the human-readable description from the subprocess error envelope.
  * `message` is formatted as "${errName}: ${errDescription}".
  */
 export declare class AgentDirectorError extends Error {
@@ -13,7 +13,7 @@ export declare class AgentDirectorError extends Error {
     readonly verb: string;
     /** Canonical error name, matching the Go errnames catalog (e.g. "ErrSpawnNotFound"). */
     readonly errName: string;
-    /** Human-readable description forwarded from the C-ABI envelope. */
+    /** Human-readable description forwarded from the subprocess error envelope. */
     readonly errDescription: string;
     constructor(verb: string, err_name: string, err_description: string);
 }
@@ -218,12 +218,9 @@ export declare class ErrNoOpenPermissionRequest extends AgentDirectorError {
 /** Mirrors ErrAlreadyDecided (package: store) */
 export declare class ErrAlreadyDecided extends AgentDirectorError {
 }
-/** Mirrors ErrUnknownHandle (package: cabi, scope: cabi) */
-export declare class ErrUnknownHandle extends AgentDirectorError {
-}
 /**
  * errorFromEnvelope creates a typed AgentDirectorError subclass from the
- * C-ABI error envelope fields.
+ * subprocess error envelope fields.
  *
  * @param verb            The verb name that produced the error (e.g. "spawn").
  * @param err_name        The canonical error name from the envelope.

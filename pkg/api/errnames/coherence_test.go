@@ -35,14 +35,10 @@ func TestFiveWayCoherence(t *testing.T) {
 		t.Fatalf("ScanHandlerSentinels: %v", err)
 	}
 
-	// (b) Catalog names + cabi-scoped subset.
+	// (b) Catalog names.
 	catalogNames := make([]string, 0, len(errnames.Catalog))
-	var cabiScopedNames []string
 	for _, entry := range errnames.Catalog {
 		catalogNames = append(catalogNames, entry.Name)
-		if entry.Scope == "cabi" {
-			cabiScopedNames = append(cabiScopedNames, entry.Name)
-		}
 	}
 
 	// (c) ErrorNames from callable verbs only.
@@ -63,12 +59,19 @@ func TestFiveWayCoherence(t *testing.T) {
 	// catalog.go imports pkg/api and references api.ErrX directly, so any
 	// api-origin Catalog entry whose sentinel is missing from pkg/api will
 	// fail compilation. Loop omitted per engineering guide dead-code rule.
-	//
-	// cabiScopedNames: cabi-scoped Catalog entries (e.g. ErrUnknownHandle) are
-	// exempt from Check 3 (b⊆c) — no callable verb declares them in ErrorNames
-	// because they originate exclusively in pkg/cabi's dispatch layer.
-	for _, f := range computeCoherenceDiff(handlerEmitted, catalogNames, manifestNames, exportedNames, cabiScopedNames) {
+	for _, f := range computeCoherenceDiff(handlerEmitted, catalogNames, manifestNames, exportedNames) {
 		t.Errorf("%s", f.Message)
+	}
+}
+
+// TestNoCabiResidue is a regression guard for bug b.me4. The cabi layer was
+// removed in PR #12; if anyone re-adds the ErrUnknownHandle sentinel, this
+// test fires before review can drift.
+func TestNoCabiResidue(t *testing.T) {
+	for _, entry := range errnames.Catalog {
+		if entry.Name == "ErrUnknownHandle" {
+			t.Errorf("ErrUnknownHandle re-added to Catalog; the cabi layer is gone — remove this entry")
+		}
 	}
 }
 

@@ -131,9 +131,10 @@ function slugifyCwd(cwd: string): string {
  * trimNamePrefix mirrors Go's errnames.TrimNamePrefix: strips the redundant
  * "ErrName: " prefix from desc when present, returning the bare message.
  *
- * The C-ABI path does NOT call TrimNamePrefix before building the envelope, so
+ * Sentinel `.Error()` strings include the leading "ErrName: " by convention, so
  * adErr.errDescription is "ErrFoo: message" while the CLI strips it to just
- * "message".  Applying the same strip here makes the two sides comparable.
+ * "message" via TrimNamePrefix. Applying the same strip here makes the two
+ * sides comparable.
  */
 function trimNamePrefix(name: string, desc: string): string {
   const prefix = name + ":";
@@ -149,7 +150,8 @@ function trimNamePrefix(name: string, desc: string): string {
  *
  * - err_name: exact equality
  * - err_description: compared after stripping the redundant "ErrName: " prefix
- *   that the C-ABI includes but the CLI strips via TrimNamePrefix.
+ *   carried by the sentinel's .Error() string but stripped by the CLI via
+ *   TrimNamePrefix.
  */
 function assertErrorEnvelopes(cliStderr: string, tsErr: unknown): void {
   expect(tsErr).toBeInstanceOf(AgentDirectorError);
