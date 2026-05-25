@@ -35,6 +35,17 @@ export interface ClientOptions {
   createIfMissing?: boolean;
   /** Optional logger for client-side warnings (e.g., non-fatal close errors). */
   logger?: Logger;
+  /**
+   * Per-call timeout for the subprocess Client, in milliseconds. Default: 30000 (30 s).
+   *
+   * When a subprocess call exceeds this threshold the Client sends SIGTERM,
+   * waits up to 2 seconds for a graceful exit, then sends SIGKILL. The
+   * in-flight call's promise rejects with ErrCallTimeout.
+   *
+   * Zero or negative values are rejected at Client construction time.
+   * (SRD SR-6.1)
+   */
+  callTimeoutMs?: number;
 }
 
 // ---------------------------------------------------------------------------

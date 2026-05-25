@@ -12,6 +12,11 @@ export {
   ErrUnsupportedPlatform,
   ErrPlatformPackageMissing,
   ErrBunVersionTooOld,
+  // Subprocess-pipeline TS-only errors (additive; SRD Epic A SR-2.3/SR-4.3/SR-5.4/SR-6.5).
+  ErrCliNotExecutable,
+  ErrConsumerSignal,
+  ErrCallTimeout,
+  ErrUnknownErrorName,
   errorFromEnvelope,
   // Catalog-derived subclasses (34 entries from pkg/api/errnames/catalog.json).
   ErrCwdMissing,

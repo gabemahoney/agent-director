@@ -13,10 +13,14 @@
  * at pkg/api/errnames/catalog.json.
  *
  * Membership criteria:
- *  - ErrClientClosed       — client lifecycle error, no Go equivalent.
- *  - ErrUnsupportedPlatform — platform detection error, raised before any IPC.
+ *  - ErrClientClosed          — client lifecycle error, no Go equivalent.
+ *  - ErrUnsupportedPlatform   — platform detection error, raised before any IPC.
  *  - ErrPlatformPackageMissing — optional sub-package absent; no Go equivalent.
- *  - ErrBunVersionTooOld   — runtime version guard; no Go equivalent.
+ *  - ErrBunVersionTooOld      — runtime version guard; no Go equivalent.
+ *  - ErrCliNotExecutable      — binary lacks execute permission; no Go equivalent (SRD SR-2.3).
+ *  - ErrConsumerSignal        — subprocess killed by OS signal; no Go equivalent (SRD SR-5.4).
+ *  - ErrCallTimeout           — per-call timeout elapsed; no Go equivalent (SRD SR-6.5).
+ *  - ErrUnknownErrorName      — unrecognised err_name in envelope; no Go equivalent (SRD SR-4.3).
  *
  * When adding a new TS-only subclass: add its name here AND add a comment in
  * src/errors.ts near the subclass cross-referencing this allow-list.
@@ -26,6 +30,10 @@ export const TS_ONLY_ERROR_NAMES = [
   "ErrUnsupportedPlatform",
   "ErrPlatformPackageMissing",
   "ErrBunVersionTooOld",
+  "ErrCliNotExecutable",
+  "ErrConsumerSignal",
+  "ErrCallTimeout",
+  "ErrUnknownErrorName",
 ] as const;
 
 /** Type alias for the individual allow-listed names. */
