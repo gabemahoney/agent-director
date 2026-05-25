@@ -44,6 +44,7 @@ RUN apt-get update \
         gnupg \
         jq \
         make \
+        procps \
         sqlite3 \
         tmux \
         unzip \
