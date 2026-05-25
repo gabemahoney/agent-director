@@ -325,3 +325,60 @@ describe("argv builder — pause", () => {
     expect(flagValue(argv, "--claude-instance-id")).toBe("id-pause");
   });
 });
+
+// ---------------------------------------------------------------------------
+// global flags (b.32k)
+// ---------------------------------------------------------------------------
+describe("argv builder — global flags (b.32k)", () => {
+  test("no globalOpts → no global flags injected", () => {
+    const argv = buildArgv(CLI, "version", {});
+    expect(argv).toEqual([CLI, "version"]);
+  });
+
+  test("storePath only → --store-path appears BEFORE verb token", () => {
+    const argv = buildArgv(CLI, "version", {}, { storePath: "/tmp/foo.db" });
+    expect(argv).toEqual([CLI, "--store-path", "/tmp/foo.db", "version"]);
+  });
+
+  test("home only → --home appears BEFORE verb token", () => {
+    const argv = buildArgv(CLI, "version", {}, { home: "/tmp/h" });
+    expect(argv).toEqual([CLI, "--home", "/tmp/h", "version"]);
+  });
+
+  test("tmuxCommand only → --tmux-command appears BEFORE verb token", () => {
+    const argv = buildArgv(CLI, "version", {}, { tmuxCommand: "/usr/bin/tmux" });
+    expect(argv).toEqual([CLI, "--tmux-command", "/usr/bin/tmux", "version"]);
+  });
+
+  test("all three globals → emitted in stable order before verb", () => {
+    const argv = buildArgv(CLI, "version", {}, {
+      storePath: "/tmp/foo.db",
+      home: "/tmp/h",
+      tmuxCommand: "/usr/bin/tmux",
+    });
+    expect(argv).toEqual([
+      CLI,
+      "--store-path", "/tmp/foo.db",
+      "--home", "/tmp/h",
+      "--tmux-command", "/usr/bin/tmux",
+      "version",
+    ]);
+  });
+
+  test("globals + verb flags → globals before verb, verb flags after", () => {
+    const argv = buildArgv(CLI, "status", { claude_instance_id: "id-1" }, {
+      storePath: "/tmp/foo.db",
+    });
+    expect(argv).toEqual([
+      CLI,
+      "--store-path", "/tmp/foo.db",
+      "status",
+      "--claude-instance-id", "id-1",
+    ]);
+  });
+
+  test("empty globalOpts object → no flags emitted (parity with undefined)", () => {
+    const argv = buildArgv(CLI, "version", {}, {});
+    expect(argv).toEqual([CLI, "version"]);
+  });
+});

@@ -12,21 +12,47 @@ export interface Logger {
 /**
  * Options accepted by the `Client` constructor (SRD SR-1.2).
  *
- * `storePath` is the only required field. The others are optional overrides;
- * absent fields fall back to the same three-tier defaults as `pkg/api.Options`
- * (config-file value, then hardcoded fallback).
+ * All fields are optional. When omitted, the bundled CLI binary's own
+ * three-tier default resolution applies (config.toml value, then the CLI's
+ * hardcoded fallback such as `~/.agent-director/state.db`). The TS Client
+ * does NOT provide a fallback; it forwards user input verbatim to keep the
+ * CLI as the single source of truth for default resolution. See bug b.32k.
  *
  * Tilde expansion is handled TS-side by `src/internal/tilde.ts` before paths
  * are forwarded to the CLI subprocess, so the subprocess never receives a
  * leading `~`.
  */
 export interface ClientOptions {
-    /** Path to the SQLite store file. Tilde-expanded before being forwarded. */
-    storePath: string;
-    /** Path to the TOML config file. Tilde-expanded before being forwarded. */
-    configPath?: string;
-    /** Override the tmux binary. Defaults to the binary on PATH. */
+    /**
+     * Path to the SQLite store file. Tilde-expanded before being forwarded as
+     * `--store-path` to the CLI subprocess.
+     *
+     * When omitted, the CLI's three-tier default resolution applies:
+     *   1. CLI flag (this field, when set) → 2. cfg.Store.DbPath in
+     *   ~/.agent-director/config.toml → 3. hardcoded fallback
+     *   ~/.agent-director/state.db.
+     *
+     * The TS Client no longer provides a fallback (b.32k).
+     */
+    storePath?: string;
+    /**
+     * Override the tmux binary. Tilde-expanded before being forwarded as
+     * `--tmux-command` to the CLI subprocess. When omitted, the CLI looks up
+     * `tmux` on PATH.
+     */
     tmuxCommand?: string;
+    /**
+     * Override HOME for the duration of every subprocess call this Client
+     * issues. Tilde-expanded before being forwarded as `--home` to the CLI
+     * subprocess.
+     *
+     * When omitted, the CLI subprocess inherits HOME from the calling process
+     * environment (which is the correct default — set HOME at the
+     * test-process level via withTempHome or similar). Set this only when you
+     * need the CLI to resolve `~/...` paths against a specific directory that
+     * differs from the calling process's HOME. b.32k.
+     */
+    home?: string;
     /**
      * When `true`, create the store and initialize the database schema if the
      * store file does not yet exist. When `false` (the default), opening a

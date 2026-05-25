@@ -526,9 +526,9 @@ pkg/ts-bun-client/
 A `Client` (aliased from `SubprocessClient`) owns no Go-side resources;
 each verb call is a one-shot subprocess.
 
-**Construction.** `new Client(opts)` is synchronous. The constructor:
+**Construction.** `new Client(opts)` is synchronous. All `ClientOptions` fields are optional; omitted fields fall through to the CLI's own default-resolution (the CLI is the single source of truth — the TS Client provides no fallback values, b.32k). The constructor:
 
-1. Applies tilde expansion (TS-side, via `src/internal/tilde.ts`) to `storePath` and `configPath` so the CLI subprocess always receives absolute paths.
+1. Applies tilde expansion (TS-side, via `src/internal/tilde.ts`) to `storePath`, `home`, and `tmuxCommand` so the CLI subprocess always receives absolute paths.
 2. Calls `resolveCliPath()` once (steps in [Per-platform optional-dependency packaging](#per-platform-optional-dependency-packaging) above) and caches the binary path on the instance.
 3. Stores the caller-supplied options for forwarding on each verb call. No subprocess is spawned at construction time; `client.version({})` is the canonical "is the binary functional" smoke.
 
@@ -542,7 +542,7 @@ each verb call is a one-shot subprocess.
 
 ```ts
 {
-  using client = new Client({ storePath: "~/.agent-director/state.db" });
+  using client = new Client({});
   // use client …
 } // client.close() called automatically here
 ```
@@ -561,9 +561,13 @@ Every verb call from `Client` follows this four-step recipe inside
 1. **Build argv.** `src/internal/argv.ts` maps the verb name + params
    object to the canonical CLI argv (e.g. `["send-keys",
    "--claude-instance-id", "<id>", "--text", "..."]`). Per-Client
-   options (`storePath`, `configPath`, `tmuxCommand`) are prepended as
-   global flags. JSON-only fields go through `--params-json` for
-   verbs that accept it.
+   global options (`storePath`, `home`, `tmuxCommand`) are prepended
+   BEFORE the verb token as `--store-path`, `--home`,
+   `--tmux-command` so the CLI's global-flag pre-scan
+   (`cmd/agent-director/global_flags.go`) strips them prior to
+   per-verb dispatch. Each is emitted only when the corresponding
+   `ClientOptions` field was set by the caller (b.32k). JSON-only
+   fields go through `--params-json` for verbs that accept it.
 2. **Spawn the CLI.** `src/internal/spawner.ts` calls `Bun.spawn`
    against the resolved `_cliPath`, pipes stdin (closed),
    captures stdout and stderr, and respects `callTimeoutMs` (default
