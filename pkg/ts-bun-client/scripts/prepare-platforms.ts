@@ -1,17 +1,16 @@
 /**
- * prepare-platforms.ts — copies the built native library into each
- * matching platform sub-package directory for local development.
+ * prepare-platforms.ts — copies the built CLI binary into each matching
+ * platform sub-package directory for local development.
  *
- * Run from pkg/ts-bun-client/ after `make libagent_director`:
+ * Run from pkg/ts-bun-client/ after `make release-binaries`:
  *
  *   bun run prepare-platforms
  *
- * This script only copies the linux-x64 binary (since we are on linux/amd64).
- * Darwin binaries must be built on a macOS host and placed manually.
- * The binary files are gitignored — they are never committed.
+ * The CLI binaries are gitignored under platforms/*/bin/ — they are never
+ * committed. release.sh handles the same staging during publish.
  */
 
-import { copyFileSync, existsSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, chmodSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -19,16 +18,15 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const pkgDir = resolve(scriptDir, "..");
 const repoRoot = resolve(pkgDir, "../../..");
 
-// Map of: dist source → destination in platforms/
 const copies: { src: string; dest: string; optional: boolean }[] = [
   {
-    src: resolve(repoRoot, "dist", "libagent_director.so"),
-    dest: resolve(pkgDir, "platforms", "linux-x64", "libagent_director.so"),
+    src: resolve(repoRoot, "dist", "agent-director-linux-amd64"),
+    dest: resolve(pkgDir, "platforms", "linux-x64", "bin", "agent-director"),
     optional: false,
   },
   {
-    src: resolve(repoRoot, "dist", "libagent_director.dylib"),
-    dest: resolve(pkgDir, "platforms", "darwin-arm64", "libagent_director.dylib"),
+    src: resolve(repoRoot, "dist", "agent-director-darwin-arm64"),
+    dest: resolve(pkgDir, "platforms", "darwin-arm64", "bin", "agent-director"),
     optional: true,
   },
 ];
@@ -40,13 +38,15 @@ for (const { src, dest, optional } of copies) {
       console.log(`prepare-platforms: skipping ${src} (not present on this host)`);
     } else {
       console.error(
-        `prepare-platforms: ERROR — ${src} not found. Run 'make libagent_director' first.`
+        `prepare-platforms: ERROR — ${src} not found. Run 'make release-binaries' first.`
       );
       errors++;
     }
     continue;
   }
+  mkdirSync(dirname(dest), { recursive: true });
   copyFileSync(src, dest);
+  chmodSync(dest, 0o755);
   console.log(`prepare-platforms: copied ${src} → ${dest}`);
 }
 

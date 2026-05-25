@@ -4,7 +4,7 @@
   "type": "module",
   "os": ["darwin"],
   "cpu": ["arm64"],
-  "files": ["libagent_director.dylib", "README-binary-source.md"],
+  "files": ["bin/agent-director", "README-binary-source.md"],
   "publishConfig": {
     "access": "public"
   },

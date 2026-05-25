@@ -31,20 +31,12 @@
 #   - Requires the npm package name to be resolved (no CHANGEME-H3 placeholder).
 #   - Requires `gh` authenticated and on PATH.
 #
-# Environment escape hatches (for local rehearsal / Docker testplan):
-#   AD_RELEASE_SKIP_CABI=1   skip `gh run download` of pkg-cabi-* artifacts
-#                            (useful when no green cabi-matrix run exists,
-#                            e.g. running release.sh on a feature branch)
-#   AD_RELEASE_SIMULATE_DARWIN_ARM64_OFFLINE=1
-#                            simulate the darwin/arm64 self-hosted runner
-#                            being offline (covered by T9)
-#
 # Exit codes:
 #   0  success
 #   2  pre-flight failure (bad version, dirty tree, missing gh, etc.)
-#   3  build failure (release-binaries, cabi-collection)
+#   3  build failure (release-binaries)
 #   4  GitHub release create failure
-#   5  verify-phase failure (go smoke, ts smoke, envelope-diff)
+#   5  verify-phase failure (bun pack / install / version smoke)
 #   6  publish-phase failure (npm publish, H3 unresolved)
 #   7  tag-phase failure (tag push)
 #
@@ -100,7 +92,7 @@ corrective_action() {
             log report "  → notes templater failed; inspect git log range and re-run"
             ;;
         build)
-            log report "  → rebuild artifacts; verify the cabi-matrix run is green on the release commit"
+            log report "  → rebuild artifacts (make release-binaries) and re-run"
             ;;
         verify)
             log report "  → fix the regression on the release commit before retrying — never ship a red verify"
@@ -250,17 +242,14 @@ preflight_phase() {
         exit 2
     fi
 
-    # gh required for live runs. Dry-run still needs it for `gh run list`
-    # in the cabi-collection step, but tolerates missing gh by skipping
-    # that helper (build_phase exposes a NO_CABI escape hatch — set via
-    # AD_RELEASE_SKIP_CABI=1 — for local previews without auth'd gh).
+    # gh required for live runs only — used for the gh-release phase.
     if ! command -v gh >/dev/null 2>&1; then
         if [[ "$DRY_RUN" -eq 0 ]]; then
             log preflight "'gh' (GitHub CLI) not found on PATH" >&2
             log preflight "install via your package manager and run 'gh auth login'" >&2
             exit 2
         fi
-        log preflight "'gh' not on PATH — dry-run will skip cabi-artifact collection" >&2
+        log preflight "'gh' not on PATH — dry-run gh-release will be a logged no-op"
     fi
 
     # Working tree must be clean.
@@ -394,33 +383,15 @@ chmod +x agent-director
 - **CLI binaries** (three platforms): linux/amd64, linux/arm64
   (statically linked, no glibc dependency), darwin/arm64
   (Mach-O 64). darwin/amd64 was dropped from v1 on 2026-05-24.
-- **pkg/cabi** shared libraries (two platforms in v1): linux/amd64,
-  darwin/arm64. linux/arm64 cabi is deferred to v2; darwin/amd64
-  was dropped on 2026-05-24.
+- **TS Client** (`agent-director` npm umbrella + per-platform
+  optional sub-packages `@agent-director/linux-x64` and
+  `@agent-director/darwin-arm64`) spawns the bundled CLI as a
+  subprocess; no FFI / native library.
 
 Windows is not supported (SRD §16.1).
 NOTES
 
     log notes "written to $NOTES_FILE"
-
-    # Append the toolchain-pin diff section if any pins changed since
-    # the previous release tag. SRD §SR-2.3 requires release notes
-    # surface these changes; the diff helper is silent when there is
-    # nothing to report so the appended block is a no-op for releases
-    # that did not bump a pin.
-    local diff_helper="$REPO_ROOT/skills/release-agent-director/toolchain-pin-diff.sh"
-    if [[ -x "$diff_helper" ]]; then
-        local pin_diff_section
-        if pin_diff_section=$(TOOLCHAIN_DIFF_PREV_LABEL="${PREV_TAG:-previous release}" \
-                "$diff_helper" "${PREV_TAG:-}" 2>/dev/null) && [[ -n "$pin_diff_section" ]]; then
-            printf '%s\n' "$pin_diff_section" >> "$NOTES_FILE"
-            log notes "appended toolchain-pin diff section"
-        else
-            log notes "no toolchain-pin changes vs ${PREV_TAG:-(none)}"
-        fi
-    else
-        log notes "toolchain-pin-diff.sh missing/not-executable; skipping pin diff"
-    fi
     phase_ok notes
 }
 
@@ -428,307 +399,45 @@ NOTES
 # Phase: build
 # --------------------------------------------------------------------
 
-# CABI_PLATFORMS is the canonical v1 set. linux/arm64 and darwin/amd64
-# are intentionally absent — cabi v1 ships two platforms only
-# (darwin/amd64 dropped 2026-05-24 per operator decision). The CLI
-# binary set is independent of this restriction; that is built locally
-# by `make release-binaries`.
-CABI_PLATFORMS=(linux-amd64 darwin-arm64)
+# CLI_PLATFORMS maps cross-compile target triples to the npm
+# sub-package directory name that ships the binary. The CLI cross-
+# compile produces ./dist/agent-director-<os>-<arch>; we stage each
+# into pkg/ts-bun-client/platforms/<npm-subdir>/bin/agent-director.
+CLI_PLATFORMS=(
+    "linux-amd64=linux-x64"
+    "darwin-arm64=darwin-arm64"
+)
 
-# cabi_lib_basename echoes the per-platform shared-library filename.
-# linux uses .so, darwin uses .dylib. Used by both collect_cabi_artifacts
-# and the gh-release phase (T5) when listing assets.
-cabi_lib_basename() {
-    local platform="$1"
-    case "$platform" in
-        linux-*)  echo "libagent_director.so" ;;
-        darwin-*) echo "libagent_director.dylib" ;;
-        *) log build "unknown cabi platform: $platform" >&2; return 1 ;;
-    esac
-}
-
-# dispatch_and_wait_cabi_matrix: trigger a workflow_dispatch of
-# cabi-matrix.yml with the release version input, then poll for the new
-# run id and wait for it to complete. Used by build_phase in live mode
-# so the published pkg/cabi .so/.dylib carries the release-tag stamp
-# rather than the un-tagged `git describe` output from a merge commit.
-# See bee b.pu8 for the regression that motivated this path.
-#
-# Sets RELEASE_DISPATCHED_RUN_ID on success so collect_cabi_artifacts
-# downloads from THIS specific run instead of looking up the most-recent
-# matching run on HEAD. Returns non-zero (caller exits 3) on dispatch,
-# poll-timeout, or run-failure.
-dispatch_and_wait_cabi_matrix() {
-    : "${CABI_WORKFLOW:=cabi-matrix.yml}"
-    local version_input="$1"
-
-    if ! command -v gh >/dev/null 2>&1; then
-        log build "gh not on PATH — cannot dispatch $CABI_WORKFLOW" >&2
-        return 1
-    fi
-
-    # High-water mark: the most-recent workflow_dispatch run id BEFORE
-    # we dispatch. After dispatch we poll for a run with id > this
-    # watermark; this defends against the unlikely-but-possible race
-    # where two operators run release.sh simultaneously and we'd
-    # otherwise pick up the wrong dispatched run.
-    local watermark
-    watermark=$(gh run list --workflow="$CABI_WORKFLOW" --event=workflow_dispatch \
-        --limit 1 --json databaseId --jq '.[0].databaseId // 0' 2>/dev/null || echo 0)
-    if [[ -z "$watermark" ]]; then watermark=0; fi
-    log build "dispatching $CABI_WORKFLOW (workflow_dispatch) on $BRANCH with version=$version_input"
-    if ! gh workflow run "$CABI_WORKFLOW" --ref "$BRANCH" -f version="$version_input" >/dev/null 2>&1; then
-        log build "gh workflow run failed for $CABI_WORKFLOW" >&2
-        return 1
-    fi
-
-    # Poll for the new run id. GH typically registers the run within a
-    # few seconds; allow up to ~90s under load.
-    local attempt new_id=""
-    for attempt in $(seq 1 30); do
-        sleep 3
-        new_id=$(gh run list --workflow="$CABI_WORKFLOW" --event=workflow_dispatch \
-            --limit 5 --json databaseId \
-            --jq "map(select(.databaseId > ${watermark})) | first | .databaseId // empty" 2>/dev/null || true)
-        if [[ -n "$new_id" ]]; then
-            break
+# stage_cli_into_platforms copies the cross-compiled binaries into
+# the corresponding pkg/ts-bun-client/platforms/<dir>/bin/agent-director.
+# Called from build_phase after `make release-binaries`. The release-
+# binaries-smoke target verifies the binaries themselves; this helper
+# only does the staging.
+stage_cli_into_platforms() {
+    local entry src npm_subdir dest_dir
+    for entry in "${CLI_PLATFORMS[@]}"; do
+        local cross="${entry%=*}"
+        npm_subdir="${entry#*=}"
+        src="$REPO_ROOT/dist/agent-director-${cross}"
+        dest_dir="$REPO_ROOT/pkg/ts-bun-client/platforms/$npm_subdir/bin"
+        if [[ ! -f "$src" ]]; then
+            log build "missing $src — was make release-binaries run?" >&2
+            return 1
         fi
+        mkdir -p "$dest_dir"
+        cp "$src" "$dest_dir/agent-director"
+        chmod 0755 "$dest_dir/agent-director"
+        log build "  staged $src → $dest_dir/agent-director"
     done
-    if [[ -z "$new_id" ]]; then
-        log build "timed out waiting for new $CABI_WORKFLOW workflow_dispatch run (90s)" >&2
-        return 1
-    fi
-    log build "dispatched cabi-matrix run id: $new_id"
-    log build "waiting for run $new_id to complete (cabi-matrix typically takes 15+ minutes)"
-
-    # gh run watch --exit-status exits non-zero if the run did not
-    # conclude successfully, which we surface as a build-phase fail.
-    if ! gh run watch "$new_id" --exit-status \
-            > >(while IFS= read -r l; do printf '[build] %s\n' "$l"; done); then
-        log build "cabi-matrix run $new_id did not finish successfully — see GH Actions UI" >&2
-        return 1
-    fi
-    log build "cabi-matrix run $new_id completed successfully"
-
-    # Surface the run id to collect_cabi_artifacts via the documented
-    # env override below.
-    RELEASE_DISPATCHED_RUN_ID="$new_id"
-    export RELEASE_DISPATCHED_RUN_ID
-    return 0
-}
-
-# collect_cabi_artifacts: find the green cabi-matrix run on the release
-# commit and `gh run download` each pkg-cabi-<platform> artifact into
-# ./dist/cabi/<platform>/. Halts on zero or ambiguous matches.
-#
-# Run-id selection precedence (highest first):
-#   1. RELEASE_DISPATCHED_RUN_ID — set by dispatch_and_wait_cabi_matrix
-#      on live release runs. We trust the watch already verified
-#      conclusion=success, so no re-check.
-#   2. RELEASE_FORCE_RUN_ID — debug-only override used by tests.
-#   3. Lookup-by-commit — the original behavior, used by dry-run and
-#      any flow that has not pre-dispatched a run.
-collect_cabi_artifacts() {
-    : "${CABI_WORKFLOW:=cabi-matrix.yml}"
-
-    if [[ "${AD_RELEASE_SKIP_CABI:-0}" -eq 1 ]]; then
-        log build "AD_RELEASE_SKIP_CABI=1 — skipping cabi artifact collection"
-        return 0
-    fi
-
-    if ! command -v gh >/dev/null 2>&1; then
-        # Pre-flight allowed dry-run to proceed without gh; honor that.
-        if [[ "$DRY_RUN" -eq 1 ]]; then
-            log build "gh not on PATH — dry-run skipping cabi artifact collection"
-            return 0
-        fi
-        log build "gh not on PATH — cannot download cabi artifacts" >&2
-        return 3
-    fi
-
-    local commit run_id
-    commit="$(git rev-parse HEAD)"
-
-    if [[ -n "${RELEASE_DISPATCHED_RUN_ID:-}" ]]; then
-        run_id="$RELEASE_DISPATCHED_RUN_ID"
-        log build "using dispatched cabi-matrix run id: $run_id (release version-stamped)"
-    elif [[ -n "${RELEASE_FORCE_RUN_ID:-}" ]]; then
-        run_id="$RELEASE_FORCE_RUN_ID"
-        log build "RELEASE_FORCE_RUN_ID set — using run id $run_id (debug override)"
-        # Even with a forced id, re-check the conclusion: a green
-        # release MUST NOT be cut against a red matrix run.
-        local forced_concl
-        forced_concl=$(gh run view "$run_id" --json conclusion -q .conclusion 2>/dev/null || true)
-        if [[ "$forced_concl" != "success" ]]; then
-            log build "CI matrix is red on \$COMMIT (run $run_id conclusion=$forced_concl); fix before releasing" >&2
-            return 3
-        fi
-    else
-        log build "looking up $CABI_WORKFLOW run for $BRANCH @ ${commit:0:12}"
-
-        # Two lookups so we can distinguish "no run exists" from "run
-        # exists but is red" — the latter gets a more actionable error
-        # ("CI matrix is red on $COMMIT") than the former ("no run").
-        local all_runs_json success_runs_json count_all count_ok concl
-        if ! all_runs_json=$(gh run list \
-                --workflow="$CABI_WORKFLOW" \
-                --branch="$BRANCH" \
-                --commit="$commit" \
-                --json databaseId,headSha,conclusion,status \
-                --limit 5 2>/dev/null); then
-            log build "gh run list failed for $CABI_WORKFLOW" >&2
-            return 3
-        fi
-        success_runs_json=$(gh run list \
-                --workflow="$CABI_WORKFLOW" \
-                --branch="$BRANCH" \
-                --commit="$commit" \
-                --status=success \
-                --json databaseId,headSha,conclusion,status \
-                --limit 5 2>/dev/null || true)
-
-        count_all=$(printf '%s' "$all_runs_json" | tr -cd '{' | wc -c | tr -d ' ')
-        count_ok=$(printf '%s' "$success_runs_json" | tr -cd '{' | wc -c | tr -d ' ')
-
-        if [[ "$count_all" -eq 0 ]]; then
-            log build "no $CABI_WORKFLOW run on $BRANCH @ ${commit:0:12}" >&2
-            log build "wait for the matrix to run on this commit before releasing" >&2
-            return 3
-        fi
-        if [[ "$count_ok" -eq 0 ]]; then
-            concl=$(printf '%s' "$all_runs_json" | sed -n 's/.*"conclusion":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
-            log build "CI matrix is red on \$COMMIT (conclusion=${concl:-unknown}); fix before releasing" >&2
-            return 3
-        fi
-        if [[ "$count_ok" -gt 1 ]]; then
-            log build "ambiguous: $count_ok successful $CABI_WORKFLOW runs on $BRANCH @ ${commit:0:12}" >&2
-            log build "pin the release commit so only one matrix run is associated with it" >&2
-            return 3
-        fi
-        run_id=$(printf '%s' "$success_runs_json" | sed -n 's/.*"databaseId":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
-        if [[ -z "$run_id" ]]; then
-            log build "could not parse run id from gh run list output" >&2
-            return 3
-        fi
-        log build "using cabi-matrix run id: $run_id (conclusion=success)"
-    fi
-
-    # Accumulate platforms that failed to download/verify so we can
-    # emit ONE summary message that distinguishes the darwin/arm64
-    # self-hosted-runner case (specific operator action) from the
-    # generic GitHub-hosted leg failures.
-    local platform out_dir lib
-    local missing_platforms=()
-    for platform in "${CABI_PLATFORMS[@]}"; do
-        out_dir="$REPO_ROOT/dist/cabi/$platform"
-        mkdir -p "$out_dir"
-
-        # AD_RELEASE_SIMULATE_DARWIN_ARM64_OFFLINE=1 simulates the
-        # darwin/arm64 self-hosted runner being offline. The cabi-matrix
-        # run might still exist (with the leg failing) or might not have
-        # the artifact at all. Either way the release script must halt
-        # with the specific self-hosted-runner message. This flag is
-        # exercised by the Docker testplan.
-        if [[ "$platform" == "darwin-arm64" \
-              && "${AD_RELEASE_SIMULATE_DARWIN_ARM64_OFFLINE:-0}" -eq 1 ]]; then
-            log build "AD_RELEASE_SIMULATE_DARWIN_ARM64_OFFLINE=1 — pretending darwin/arm64 artifact is absent"
-            missing_platforms+=("darwin-arm64")
-            continue
-        fi
-
-        log build "downloading pkg-cabi-$platform → $out_dir"
-        if ! gh run download "$run_id" \
-                --name "pkg-cabi-$platform" \
-                --dir "$out_dir" >/dev/null 2>&1; then
-            missing_platforms+=("$platform")
-            continue
-        fi
-        # cabi-matrix.yml uploads with `path: dist/${lib_name}` etc., so
-        # the artifact archive preserves the `dist/` prefix. After gh run
-        # download extracts into $out_dir/, the libs land at
-        # $out_dir/dist/<lib>. Flatten that subdir so downstream paths
-        # ($out_dir/<lib>) hold regardless of upload-side layout.
-        if [[ -d "$out_dir/dist" ]]; then
-            mv "$out_dir/dist/"* "$out_dir/" 2>/dev/null || true
-            rmdir "$out_dir/dist" 2>/dev/null || true
-        fi
-        lib="$out_dir/$(cabi_lib_basename "$platform")"
-        if [[ ! -f "$lib" ]]; then
-            log build "missing expected library $lib after download" >&2
-            missing_platforms+=("$platform")
-            continue
-        fi
-        if [[ ! -f "$out_dir/libagent_director.h" ]]; then
-            log build "missing expected header $out_dir/libagent_director.h after download" >&2
-            missing_platforms+=("$platform")
-            continue
-        fi
-        log build "  OK $platform: $(basename "$lib") + libagent_director.h"
-    done
-
-    # Refuse to ship a partial 2-of-3 under any circumstance.
-    if (( ${#missing_platforms[@]} > 0 )); then
-        local p
-        for p in "${missing_platforms[@]}"; do
-            if [[ "$p" == "darwin-arm64" ]]; then
-                log build "darwin/arm64 leg unavailable; bring self-hosted runner online before retrying" >&2
-            else
-                log build "$p leg unavailable; re-run CI matrix before retrying" >&2
-            fi
-        done
-        log build "halting before tag/publish/gh-release — no partial 2-of-3 release" >&2
-        return 3
-    fi
-
-    # Stage a canonical header copy at dist/cabi/include/libagent_director.h.
-    # The header is platform-independent — any per-platform copy will do.
-    mkdir -p "$REPO_ROOT/dist/cabi/include"
-    cp "$REPO_ROOT/dist/cabi/${CABI_PLATFORMS[0]}/libagent_director.h" \
-       "$REPO_ROOT/dist/cabi/include/libagent_director.h"
-    log build "canonical header staged at dist/cabi/include/libagent_director.h"
-}
-
-# maybe_dispatch_cabi_for_release: in live mode, dispatch a
-# workflow_dispatch run of cabi-matrix.yml with the release version
-# input so the published pkg/cabi shared library is stamped with the
-# release tag (bee b.pu8). Dry-run and AD_RELEASE_SKIP_CABI=1 short-
-# circuit this: dry-run preserves the historical "find existing run on
-# commit" behavior (so local rehearsal doesn't burn a real CI run) and
-# the SKIP escape hatch continues to bypass cabi entirely.
-maybe_dispatch_cabi_for_release() {
-    : "${CABI_WORKFLOW:=cabi-matrix.yml}"
-    if [[ "$DRY_RUN" -eq 1 ]]; then
-        log build "(dry-run) would dispatch $CABI_WORKFLOW with version=$VERSION; falling back to existing-run lookup"
-        return 0
-    fi
-    if [[ "${AD_RELEASE_SKIP_CABI:-0}" -eq 1 ]]; then
-        log build "AD_RELEASE_SKIP_CABI=1 — skipping cabi-matrix dispatch"
-        return 0
-    fi
-    if ! dispatch_and_wait_cabi_matrix "$VERSION"; then
-        return 1
-    fi
 }
 
 build_phase() {
     phase_begin build
     if [[ "$NO_BUILD" -eq 1 ]]; then
         log build "--no-build set — assuming ./dist/ is already populated"
-        # Even with --no-build, cabi collection still runs unless the
-        # caller ALSO set AD_RELEASE_SKIP_CABI=1. This decouples the
-        # two escape hatches so the Docker testplan can exercise the
-        # cabi-collection halt paths (matrix-red, darwin/arm64 offline)
-        # without paying the local `make release-binaries` cost.
-        if [[ "${AD_RELEASE_SKIP_CABI:-0}" -ne 1 ]]; then
-            if ! maybe_dispatch_cabi_for_release; then
-                phase_fail build "dispatch_and_wait_cabi_matrix failed"
-                exit 3
-            fi
-            log build "running collect_cabi_artifacts (cabi collection still active under --no-build)"
-            if ! collect_cabi_artifacts; then
-                phase_fail build "collect_cabi_artifacts failed"
-                exit 3
-            fi
+        if ! stage_cli_into_platforms; then
+            phase_fail build "stage_cli_into_platforms failed"
+            exit 3
         fi
         log build "OK"
         phase_ok build
@@ -740,16 +449,9 @@ build_phase() {
         phase_fail build "release-binaries failed"
         exit 3
     fi
-    # Live release: dispatch a version-stamped cabi-matrix run BEFORE
-    # collecting artifacts so the .so/.dylib carries the release tag
-    # in its internal/version.Version stamp. See bee b.pu8.
-    if ! maybe_dispatch_cabi_for_release; then
-        phase_fail build "dispatch_and_wait_cabi_matrix failed"
-        exit 3
-    fi
-    log build "collecting pkg/cabi artifacts (2 v1 platforms)"
-    if ! collect_cabi_artifacts; then
-        phase_fail build "collect_cabi_artifacts failed"
+    log build "staging CLI binaries into per-platform npm sub-packages"
+    if ! stage_cli_into_platforms; then
+        phase_fail build "stage_cli_into_platforms failed"
         exit 3
     fi
     log build "OK"
@@ -760,191 +462,160 @@ build_phase() {
 # Phase: verify
 # --------------------------------------------------------------------
 
-# host_cabi_platform echoes "linux-amd64" / "darwin-arm64" matching the
-# host runner architecture. Verify uses it to point AD_CABI_DIR at the
-# per-platform .so/.dylib the TS bindings load. darwin/amd64 hosts are
-# rejected as unsupported under v1 (dropped 2026-05-24).
-host_cabi_platform() {
-    local os arch
-    case "$(uname -s)" in
-        Linux)  os=linux ;;
-        Darwin) os=darwin ;;
-        *) log verify "unsupported host OS: $(uname -s)" >&2; return 1 ;;
-    esac
-    case "$(uname -m)" in
-        x86_64|amd64) arch=amd64 ;;
-        arm64|aarch64) arch=arm64 ;;
-        *) log verify "unsupported host arch: $(uname -m)" >&2; return 1 ;;
-    esac
-    if [[ "$os" == "linux" && "$arch" == "arm64" ]]; then
-        log verify "host is linux/arm64 — no v1 cabi build for this host; smoke + envelope-diff will run against dev-checkout libs" >&2
-        return 1
-    fi
-    if [[ "$os" == "darwin" && "$arch" == "amd64" ]]; then
-        log verify "host is darwin/amd64 — dropped from v1 (2026-05-24); smoke + envelope-diff will run against dev-checkout libs" >&2
-        return 1
-    fi
-    echo "${os}-${arch}"
-}
-
-# verify_phase runs:
-#   1. Go smoke              — test/smoke/go (Epic 4)
-#   2. TS smoke              — pkg/ts-bun-client (Epic 5)
-#   3. envelope-diff         — Go side + TS side (Epics 3 + 5)
-#   4. postinstall tarball verify — SRD §SR-8 (Plan Bee b.3d3 Epic 4 T2).
-#      Stages a release-stamped copy of the umbrella + install skill,
-#      runs `bun pm pack` against it, installs the tarball into a temp
-#      HOME, and asserts the bundled skill body landed at
-#      `${HOME}/.claude/skills/install-agent-director/` with frontmatter
-#      `version:` equal to the release tag.
+# verify_phase packs the umbrella with `bun pm pack` against a staged
+# copy whose `package.json` `version` and `SKILL.md` frontmatter
+# `version:` have been stamped to the release tag — i.e. the shape
+# consumers will see on npm. Installs the tarball into a temp HOME
+# (with the host's matching platform sub-package wired in via
+# `file:`) and runs verify-installed-pkg.ts --smoke against the
+# installed package: constructs a Client and asserts `client.version()`
+# returns a well-formed { version, commit } envelope.
 #
-# Each step that fails halts release with exit code 5 and a clear
-# [verify] FAIL <step> message naming the failed sub-step.
+# This catches a class of regression a unit-test pass does not:
+# files-glob omissions, postinstall-path-resolution issues, prepack
+# staging failures, optional-deps wiring, CLI-binary resolution from
+# require.resolve. Anything mid-flight halts the release at exit 5
+# before the tag is pushed.
 verify_phase() {
     phase_begin verify
-    local host_plat
-    if host_plat=$(host_cabi_platform); then
-        AD_CABI_DIR="$REPO_ROOT/dist/cabi/$host_plat"
-        export AD_CABI_DIR
-        log verify "AD_CABI_DIR=$AD_CABI_DIR (host cabi platform: $host_plat)"
-    else
-        log verify "no host cabi platform — TS smoke + envelope-diff will fall back to dev-checkout libs" >&2
-    fi
-
-    log verify "step 1/3: go smoke (./test/smoke/go/...)"
-    if ! (cd "$REPO_ROOT" && go test -race -count=1 ./test/smoke/go/...) \
-            > >(while IFS= read -r l; do printf '[verify] %s\n' "$l"; done); then
-        log verify "FAIL go-smoke" >&2
-        phase_fail verify "go-smoke"
-        exit 5
-    fi
-
-    log verify "step 2/3: ts smoke (pkg/ts-bun-client smoke suite)"
-    if ! (cd "$REPO_ROOT/pkg/ts-bun-client" && bun run smoke) \
-            > >(while IFS= read -r l; do printf '[verify] %s\n' "$l"; done); then
-        log verify "FAIL ts-smoke" >&2
-        phase_fail verify "ts-smoke"
-        exit 5
-    fi
-
-    log verify "step 3/4: envelope-diff (go side + ts side)"
-    # Go side: the envelope-diff suite lives under test/envelope-diff/...
-    # and is exercised via the standard `go test` invocation. We only
-    # need the leaf go tests, not the whole tree.
-    if ! (cd "$REPO_ROOT" && go test -count=1 ./test/envelope-diff/...) \
-            > >(while IFS= read -r l; do printf '[verify] %s\n' "$l"; done); then
-        log verify "FAIL envelope-diff-go" >&2
-        phase_fail verify "envelope-diff-go"
-        exit 5
-    fi
-    # TS side: the make target wires up agent-director + ts-helper +
-    # fake-tmux preconditions and then runs the TS envelope-diff suite.
-    if ! (cd "$REPO_ROOT" && make envelope-diff-ts) \
-            > >(while IFS= read -r l; do printf '[verify] %s\n' "$l"; done); then
-        log verify "FAIL envelope-diff-ts" >&2
-        phase_fail verify "envelope-diff-ts"
-        exit 5
-    fi
-
-    # ----------------------------------------------------------------
-    # step 4/4: postinstall tarball verify (SRD §SR-8)
-    #
-    # Pack the umbrella with `bun pm pack` against a staged copy whose
-    # `package.json` `version` and `SKILL.md` frontmatter `version:` have
-    # been stamped to the release tag — i.e. the shape v0.4.1+ consumers
-    # will see on npm. Install the tarball into a temp HOME and assert
-    # the postinstall placed `install-agent-director/` at the expected
-    # path with the expected frontmatter version.
-    #
-    # This step catches a class of regression the FFI smoke does not:
-    # files-glob omissions, postinstall-path-resolution issues, prepack
-    # staging failures, trustedDependencies handling. Anything mid-flight
-    # halts the release at exit 5 before the tag is pushed.
-    # ----------------------------------------------------------------
-    log verify "step 4/4: postinstall tarball verify (skill body lands under temp HOME)"
     local plain_v="${VERSION#v}"
-    local stage_dir
-    stage_dir="$(mktemp -d "${TMPDIR:-/tmp}/verify-postinstall.XXXXXX")"
-    local tmp_home tmp_workdir
-    tmp_home="$(mktemp -d "${TMPDIR:-/tmp}/verify-postinstall-home.XXXXXX")"
-    tmp_workdir="$(mktemp -d "${TMPDIR:-/tmp}/verify-postinstall-proj.XXXXXX")"
+
+    # Map host → npm sub-package name (must match SUPPORTED_TUPLES in
+    # pkg/ts-bun-client/src/internal/platformResolve.ts).
+    local host_os host_arch host_subpkg_dir
+    case "$(uname -s)" in
+        Linux)  host_os=linux ;;
+        Darwin) host_os=darwin ;;
+        *) log verify "unsupported host OS: $(uname -s)" >&2
+           phase_fail verify "unsupported host OS"; exit 5 ;;
+    esac
+    case "$(uname -m)" in
+        x86_64|amd64) host_arch=x64 ;;
+        arm64|aarch64) host_arch=arm64 ;;
+        *) log verify "unsupported host arch: $(uname -m)" >&2
+           phase_fail verify "unsupported host arch"; exit 5 ;;
+    esac
+    host_subpkg_dir="${host_os}-${host_arch}"
+    if [[ ! -d "$REPO_ROOT/pkg/ts-bun-client/platforms/$host_subpkg_dir" ]]; then
+        log verify "host has no matching platform sub-package: $host_subpkg_dir" >&2
+        log verify "(supported: linux-x64, darwin-arm64)" >&2
+        phase_fail verify "no host platform sub-package"
+        exit 5
+    fi
+
+    local stage_dir tmp_home tmp_workdir
+    stage_dir="$(mktemp -d "${TMPDIR:-/tmp}/verify.XXXXXX")"
+    tmp_home="$(mktemp -d "${TMPDIR:-/tmp}/verify-home.XXXXXX")"
+    tmp_workdir="$(mktemp -d "${TMPDIR:-/tmp}/verify-proj.XXXXXX")"
     # shellcheck disable=SC2064  # we want the variables resolved now
     trap "rm -rf '$stage_dir' '$tmp_home' '$tmp_workdir'" RETURN
 
-    local verify_ok=1
-    {
-        # Stage the umbrella + the canonical skill source into a writable
-        # working tree, then stamp them to the release tag.
-        mkdir -p "$stage_dir/pkg/ts-bun-client"
-        mkdir -p "$stage_dir/skills"
-        cp -a "$REPO_ROOT/pkg/ts-bun-client/." "$stage_dir/pkg/ts-bun-client/"
-        cp -a "$REPO_ROOT/skills/install-agent-director" "$stage_dir/skills/"
+    log verify "step 1/2: bun pack umbrella + host platform sub-package"
 
-        # Wipe any stray dev artifacts the cp -a dragged in.
-        rm -rf "$stage_dir/pkg/ts-bun-client/node_modules"
-        rm -rf "$stage_dir/pkg/ts-bun-client/skills"
+    # Stage the umbrella + platforms + skill source into a writable
+    # working tree, then stamp them to the release tag.
+    mkdir -p "$stage_dir/pkg/ts-bun-client"
+    mkdir -p "$stage_dir/skills"
+    cp -a "$REPO_ROOT/pkg/ts-bun-client/." "$stage_dir/pkg/ts-bun-client/"
+    cp -a "$REPO_ROOT/skills/install-agent-director" "$stage_dir/skills/"
 
-        # Stamp the umbrella package.json + SKILL.md to plain_v.
+    # Wipe any stray dev artifacts the cp -a dragged in.
+    rm -rf "$stage_dir/pkg/ts-bun-client/node_modules"
+    rm -rf "$stage_dir/pkg/ts-bun-client/skills"
+
+    # Stamp the umbrella package.json + SKILL.md to plain_v.
+    jq --arg v "$plain_v" '.version = $v' \
+        "$stage_dir/pkg/ts-bun-client/package.json" \
+        > "$stage_dir/pkg/ts-bun-client/package.json.tmp"
+    mv "$stage_dir/pkg/ts-bun-client/package.json.tmp" \
+        "$stage_dir/pkg/ts-bun-client/package.json"
+    # Stamp platform sub-package versions too — the umbrella's
+    # optionalDependencies file: refs resolve against these.
+    local pdir
+    for pdir in linux-x64 darwin-arm64; do
         jq --arg v "$plain_v" '.version = $v' \
-            "$stage_dir/pkg/ts-bun-client/package.json" \
-            > "$stage_dir/pkg/ts-bun-client/package.json.tmp"
-        mv "$stage_dir/pkg/ts-bun-client/package.json.tmp" \
-            "$stage_dir/pkg/ts-bun-client/package.json"
-        sed -i.bak "s/^version: .*/version: $plain_v/" \
-            "$stage_dir/skills/install-agent-director/SKILL.md"
-        rm -f "$stage_dir/skills/install-agent-director/SKILL.md.bak"
+            "$stage_dir/pkg/ts-bun-client/platforms/$pdir/package.json" \
+            > "$stage_dir/pkg/ts-bun-client/platforms/$pdir/package.json.tmp"
+        mv "$stage_dir/pkg/ts-bun-client/platforms/$pdir/package.json.tmp" \
+           "$stage_dir/pkg/ts-bun-client/platforms/$pdir/package.json"
+    done
+    sed -i.bak "s/^version: .*/version: $plain_v/" \
+        "$stage_dir/skills/install-agent-director/SKILL.md"
+    rm -f "$stage_dir/skills/install-agent-director/SKILL.md.bak"
 
-        # Install dev deps + bun-build so the files glob has dist/* to pack.
-        if ! (cd "$stage_dir/pkg/ts-bun-client" \
-                && bun install --no-progress >/dev/null 2>&1 \
-                && bun run build >/dev/null 2>&1 \
-                && bun pm pack >/dev/null 2>&1); then
-            verify_ok=0
-        fi
+    # Install dev deps + bun-build so the files glob has dist/* to pack.
+    if ! (cd "$stage_dir/pkg/ts-bun-client" \
+            && bun install --no-progress >/dev/null 2>&1 \
+            && bun run build >/dev/null 2>&1 \
+            && bun pm pack >/dev/null 2>&1); then
+        log verify "FAIL bun-pack" >&2
+        phase_fail verify "bun-pack"
+        exit 5
+    fi
 
-        if [[ "$verify_ok" -eq 1 ]]; then
-            local tgz
-            tgz="$(ls "$stage_dir/pkg/ts-bun-client/"agent-director-*.tgz 2>/dev/null | head -n 1)"
-            if [[ -z "$tgz" || ! -f "$tgz" ]]; then
-                verify_ok=0
-            else
-                # Consumer fixture: trust the package so the postinstall
-                # actually fires (bun's untrusted-package default blocks it).
-                cat > "$tmp_workdir/package.json" <<'CONSUMER_PKG'
+    local tgz
+    tgz="$(ls "$stage_dir/pkg/ts-bun-client/"agent-director-*.tgz 2>/dev/null | head -n 1)"
+    if [[ -z "$tgz" || ! -f "$tgz" ]]; then
+        log verify "FAIL bun-pack: no tarball produced" >&2
+        phase_fail verify "bun-pack: no tarball"
+        exit 5
+    fi
+
+    log verify "step 2/2: install tarball + run client.version() smoke"
+
+    # Consumer fixture: trust the package so the postinstall actually
+    # fires (bun's untrusted-package default blocks it). We pin the
+    # umbrella to the local tarball and the host's platform sub-package
+    # to the staged copy so require.resolve('@agent-director/<host>/package.json')
+    # finds a real CLI binary at bin/agent-director.
+    cat > "$tmp_workdir/package.json" <<CONSUMER_PKG
 {
   "name": "release-verify-consumer",
   "version": "0.0.0",
-  "trustedDependencies": ["agent-director"]
+  "trustedDependencies": ["agent-director", "@agent-director/${host_subpkg_dir}"]
 }
 CONSUMER_PKG
-                if ! (cd "$tmp_workdir" && HOME="$tmp_home" bun add "file:$tgz" >/dev/null 2>&1); then
-                    verify_ok=0
-                fi
-            fi
-        fi
 
-        if [[ "$verify_ok" -eq 1 ]]; then
-            local landed="$tmp_home/.claude/skills/install-agent-director/SKILL.md"
-            if [[ ! -f "$landed" ]]; then
-                verify_ok=0
-            else
-                local landed_v
-                landed_v="$(awk '/^version:/ {print $2; exit}' "$landed" | tr -d '\r' | sed 's/^"//;s/"$//;s/^'\''//;s/'\''$//')"
-                if [[ "$landed_v" != "$plain_v" ]]; then
-                    log verify "  landed SKILL.md frontmatter version=$landed_v; expected $plain_v" >&2
-                    verify_ok=0
-                fi
-            fi
-        fi
-    }
-
-    if [[ "$verify_ok" -ne 1 ]]; then
-        log verify "FAIL postinstall-tarball-verify" >&2
-        phase_fail verify "postinstall-tarball-verify"
+    if ! (cd "$tmp_workdir" && HOME="$tmp_home" \
+            bun add "file:$tgz" "@agent-director/${host_subpkg_dir}@file:$stage_dir/pkg/ts-bun-client/platforms/$host_subpkg_dir" \
+            >/dev/null 2>&1); then
+        log verify "FAIL bun-add (tarball + platform sub-package)" >&2
+        phase_fail verify "bun-add"
         exit 5
     fi
-    log verify "  postinstall verify OK: SKILL.md frontmatter version=$plain_v under $tmp_home/.claude/skills/install-agent-director/"
 
+    # Sanity: the postinstall should have landed the install skill
+    # under the temp HOME with the release-stamped frontmatter.
+    local landed="$tmp_home/.claude/skills/install-agent-director/SKILL.md"
+    if [[ ! -f "$landed" ]]; then
+        log verify "FAIL postinstall: SKILL.md not landed at $landed" >&2
+        phase_fail verify "postinstall: SKILL.md not landed"
+        exit 5
+    fi
+    local landed_v
+    landed_v="$(awk '/^version:/ {print $2; exit}' "$landed" | tr -d '\r' | sed 's/^"//;s/"$//;s/^'\''//;s/'\''$//')"
+    if [[ "$landed_v" != "$plain_v" ]]; then
+        log verify "FAIL postinstall: SKILL.md frontmatter version=$landed_v; expected $plain_v" >&2
+        phase_fail verify "postinstall: SKILL.md version mismatch"
+        exit 5
+    fi
+
+    # Smoke: construct a Client against the installed package and
+    # assert client.version() returns a well-formed envelope.
+    local smoke_script="$REPO_ROOT/pkg/ts-bun-client/scripts/verify-installed-pkg.ts"
+    if [[ ! -f "$smoke_script" ]]; then
+        log verify "FAIL: verify-installed-pkg.ts missing at $smoke_script" >&2
+        phase_fail verify "smoke script missing"
+        exit 5
+    fi
+    if ! (cd "$tmp_workdir" && HOME="$tmp_home" bun "$smoke_script" --smoke) \
+            > >(while IFS= read -r l; do printf '[verify] %s\n' "$l"; done); then
+        log verify "FAIL client.version() smoke against installed tarball" >&2
+        phase_fail verify "version() smoke"
+        exit 5
+    fi
+
+    log verify "  postinstall verify OK: SKILL.md frontmatter version=$plain_v under $tmp_home/.claude/skills/install-agent-director/"
     log verify "OK"
     phase_ok verify
 }
@@ -1004,42 +675,6 @@ tag_phase() {
 # Phase: publish (npm)
 # --------------------------------------------------------------------
 
-# Maps cabi-matrix platform names to npm sub-package directory names
-# (the optional-dependencies live under pkg/ts-bun-client/platforms/<dir>/).
-# The cabi-matrix names use `amd64` while npm convention uses `x64`.
-npm_subdir_for_platform() {
-    case "$1" in
-        linux-amd64)   echo "linux-x64" ;;
-        darwin-arm64)  echo "darwin-arm64" ;;
-        *) log publish "unknown cabi platform: $1" >&2; return 1 ;;
-    esac
-}
-
-# stage_cabi_into_platforms copies the downloaded dist/cabi/<platform>/
-# libagent_director.{so,dylib} into the corresponding
-# pkg/ts-bun-client/platforms/<npm-subdir>/ directory so `npm publish`
-# picks it up. The cabi header is not part of the npm packages — only
-# the binary plus the existing README-binary-source.md.
-stage_cabi_into_platforms() {
-    local platform npm_subdir src_lib dest_dir lib_name
-    for platform in "${CABI_PLATFORMS[@]}"; do
-        npm_subdir=$(npm_subdir_for_platform "$platform") || return 1
-        lib_name=$(cabi_lib_basename "$platform") || return 1
-        src_lib="$REPO_ROOT/dist/cabi/$platform/$lib_name"
-        dest_dir="$REPO_ROOT/pkg/ts-bun-client/platforms/$npm_subdir"
-        if [[ ! -f "$src_lib" ]]; then
-            if [[ "${AD_RELEASE_SKIP_CABI:-0}" -eq 1 || "$NO_BUILD" -eq 1 ]]; then
-                log publish "(staging) missing $src_lib — skipping under AD_RELEASE_SKIP_CABI/--no-build"
-                continue
-            fi
-            log publish "missing cabi artifact $src_lib — was build phase run?" >&2
-            return 1
-        fi
-        log publish "staging $src_lib → $dest_dir/$lib_name"
-        cp "$src_lib" "$dest_dir/$lib_name"
-    done
-}
-
 publish_phase() {
     phase_begin publish
     local plain_version="${VERSION#v}"
@@ -1057,17 +692,7 @@ publish_phase() {
     #
     # We inspect ALL THREE package.jsons (umbrella + 2 per-platform
     # sub-packages). Any one carrying the H3 sentinel halts the live
-    # run. The sentinel matches `@CHANGEME-H3/...` and the alternative
-    # `@TBD/...` so that whichever placeholder convention E5 ultimately
-    # settled on is caught.
-    #
-    # Manual verification procedure (for operator rehearsal):
-    #   1. Temporarily revert one of the three package.json files to a
-    #      placeholder name (e.g. `git checkout HEAD~N -- <file>`).
-    #   2. Run `./release.sh v<X.Y.Z> --release`.
-    #   3. Observe the [publish] H3 halt with exit code 6 BEFORE any
-    #      `npm publish` is invoked.
-    #   4. `git checkout -- <file>` to restore and retry.
+    # run.
     # ----------------------------------------------------------------
     local h3_sentinel_re='^@?(CHANGEME-H3|TBD)/'
     local p3 name3 placeholder_pkgs=()
@@ -1110,11 +735,6 @@ publish_phase() {
         exit 6
     fi
 
-    # Stage cabi binaries into the per-platform npm directories.
-    if ! stage_cabi_into_platforms; then
-        exit 6
-    fi
-
     # Rewrite version on every package.json (umbrella + 2 platforms).
     log publish "stamping version $plain_version onto umbrella + 2 platform package.jsons"
     local p target_json
@@ -1139,10 +759,7 @@ publish_phase() {
     # frontmatter `version:` to the same release tag (SRD §SR-4.1 +
     # Plan Bee b.3d3 Epic 4 T3). The prepublish-guards.ts check (Epic 4
     # T1) enforces this invariant; the bump here is what keeps the
-    # invariant honored on every release. Both the package.json sed
-    # loop above and this line are part of the same release-time bump
-    # — they MUST land in lockstep so the umbrella that gets published
-    # matches the skill body it ships.
+    # invariant honored on every release.
     local skill_md="$REPO_ROOT/skills/install-agent-director/SKILL.md"
     if [[ ! -f "$skill_md" ]]; then
         log publish "missing $skill_md — SR-4.1 lockstep bump cannot complete" >&2
@@ -1165,9 +782,7 @@ publish_phase() {
 
     # Write a transient .npmrc with the token, used by `npm publish`.
     # The EXIT trap below (report_phase) calls cleanup_npmrc_if_any so
-    # the file (and any extracted token) is gone even on hard exits —
-    # do NOT install a separate EXIT trap here; that would override the
-    # report-phase trap installed at the top of the script.
+    # the file (and any extracted token) is gone even on hard exits.
     NPMRC_PATH="$pkg_root/.npmrc"
     if [[ -n "${NPM_TOKEN:-}" ]]; then
         printf '//registry.npmjs.org/:_authToken=%s\nalways-auth=true\n' "$NPM_TOKEN" > "$NPMRC_PATH"
@@ -1180,13 +795,11 @@ publish_phase() {
     # ^version pins resolve. Each step uses npm view to detect a
     # prior publish at the same version — that path errors out so the
     # operator must increment the version for the retry.
-    local pkg_dir pkg_subname pkg_full_name view_out
+    local pkg_dir pkg_full_name view_out plat_subdir
     for plat_subdir in linux-x64 darwin-arm64; do
         pkg_dir="$pkg_root/platforms/$plat_subdir"
         pkg_full_name=$(grep -E '^[[:space:]]*"name":' "$pkg_dir/package.json" | head -n 1 | sed -E 's/.*"name":[[:space:]]*"([^"]+)".*/\1/')
         log publish "publishing $pkg_full_name@$plain_version"
-        # npm view is a live registry lookup; skip in dry-run so the
-        # script does not need network access during local rehearsal.
         if [[ "$DRY_RUN" -eq 0 ]] && command -v npm >/dev/null 2>&1; then
             view_out=$(cd "$pkg_dir" && npm view "${pkg_full_name}@${plain_version}" version 2>/dev/null || true)
             if [[ -n "$view_out" ]]; then
@@ -1197,11 +810,6 @@ publish_phase() {
         fi
         if [[ "$DRY_RUN" -eq 1 ]]; then
             if command -v npm >/dev/null 2>&1; then
-                # --ignore-scripts skips prepublishOnly. The per-package
-                # check-not-placeholder.ts guard is redundant during dry-run
-                # because publish_phase already executed the H3 check
-                # explicitly above; running it again here would always fail
-                # while H3 is unresolved and break the dry-run pipeline.
                 if ! (cd "$pkg_dir" && npm publish --dry-run --ignore-scripts) \
                         > >(while IFS= read -r l; do printf '[publish] %s\n' "$l"; done); then
                     log publish "FAIL $pkg_full_name (dry-run validation)" >&2
@@ -1259,11 +867,7 @@ publish_phase() {
 # Phase: gh-release
 # --------------------------------------------------------------------
 
-# release_assets builds the canonical asset list:
-#   3 CLI binaries (darwin/amd64 dropped 2026-05-24 — see CABI_PLATFORMS)
-#   2 cabi shared libraries (.so/.dylib — one per v1 cabi platform)
-#   1 platform-independent C header (canonical copy from T1)
-#
+# release_assets builds the canonical asset list: 3 CLI binaries.
 # Returns assets via the global RELEASE_ASSETS array so callers can
 # iterate. Exits the script with code 4 if any expected asset is
 # missing on disk.
@@ -1272,21 +876,15 @@ release_assets() {
         "$REPO_ROOT/dist/agent-director-linux-amd64"
         "$REPO_ROOT/dist/agent-director-linux-arm64"
         "$REPO_ROOT/dist/agent-director-darwin-arm64"
-        "$REPO_ROOT/dist/cabi/linux-amd64/libagent_director.so"
-        "$REPO_ROOT/dist/cabi/darwin-arm64/libagent_director.dylib"
-        "$REPO_ROOT/dist/cabi/include/libagent_director.h"
     )
     local a missing=0
     for a in "${RELEASE_ASSETS[@]}"; do
         if [[ ! -f "$a" ]]; then
-            # Dry-run can legitimately reach gh-release without every
-            # artifact present (e.g. --no-build or AD_RELEASE_SKIP_CABI).
-            # Live runs treat any missing asset as fatal.
             if [[ "$DRY_RUN" -eq 1 ]]; then
                 log gh-release "(dry-run) missing asset $a — would be required in live run"
                 missing=$((missing + 1))
             else
-                log gh-release "missing asset $a — was build_phase + collect_cabi_artifacts run?" >&2
+                log gh-release "missing asset $a — was build_phase run?" >&2
                 exit 4
             fi
         fi

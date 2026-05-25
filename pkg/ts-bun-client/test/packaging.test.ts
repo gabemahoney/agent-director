@@ -3,8 +3,8 @@
  * `npm pack --dry-run --json`.
  *
  * Assertions:
- *   - Top-level tarball: zero .so/.dylib files.
- *   - linux-x64 sub-package: contains libagent_director.so, package.json,
+ *   - Top-level tarball: zero .so/.dylib files (no native libraries shipped).
+ *   - linux-x64 sub-package: contains bin/agent-director, package.json,
  *     README-binary-source.md (binary may be absent on darwin CI — asserted
  *     per files array only when the file exists on disk).
  *   - darwin-arm64: contains package.json + README-binary-source.md;
@@ -106,19 +106,19 @@ describe("packaging — top-level tarball", () => {
 interface SubPkgSpec {
   name: string;
   dir: string;
-  binaryName: string;
+  binaryRelPath: string;
 }
 
 const subPkgs: SubPkgSpec[] = [
   {
     name: "linux-x64",
     dir: resolve(pkgDir, "platforms", "linux-x64"),
-    binaryName: "libagent_director.so",
+    binaryRelPath: "bin/agent-director",
   },
   {
     name: "darwin-arm64",
     dir: resolve(pkgDir, "platforms", "darwin-arm64"),
-    binaryName: "libagent_director.dylib",
+    binaryRelPath: "bin/agent-director",
   },
 ];
 
@@ -135,25 +135,24 @@ describe("packaging — sub-package tarballs", () => {
       expect(files.some((f) => f === "README-binary-source.md")).toBe(true);
     });
 
-    test(`${spec.name}: pack includes binary when present on this host`, () => {
-      const binaryPath = resolve(spec.dir, spec.binaryName);
+    test(`${spec.name}: pack includes CLI binary when present on this host`, () => {
+      const binaryPath = resolve(spec.dir, spec.binaryRelPath);
       if (!existsSync(binaryPath)) {
         console.log(
-          `packaging.test.ts: ${spec.name} binary absent on this host (${process.platform}) — skipping binary-in-tarball assertion`
+          `packaging.test.ts: ${spec.name} CLI binary absent on this host (${process.platform}) — skipping binary-in-tarball assertion`
         );
         return;
       }
       const files = getPackFiles(spec.dir);
-      expect(files.some((f) => f === spec.binaryName)).toBe(true);
+      expect(files.some((f) => f === spec.binaryRelPath)).toBe(true);
     });
 
-    test(`${spec.name}: pack contains no binaries from other platforms`, () => {
+    test(`${spec.name}: pack contains no .so/.dylib files`, () => {
       const files = getPackFiles(spec.dir);
       const nativeFiles = files.filter(
         (f) => f.endsWith(".so") || f.endsWith(".dylib")
       );
-      const unexpected = nativeFiles.filter((f) => f !== spec.binaryName);
-      expect(unexpected).toEqual([]);
+      expect(nativeFiles).toEqual([]);
     });
   }
 });

@@ -105,7 +105,7 @@ describe("publish-guard — wiring assertions", () => {
   for (const pkgFile of packageFiles) {
     const label = pkgFile.replace(pkgDir + "/", "");
 
-    test(`${label}: scripts.prepublishOnly invokes check-not-placeholder`, () => {
+    test(`${label}: scripts.prepublishOnly invokes a placeholder guard`, () => {
       const pkg = JSON.parse(readFileSync(pkgFile, "utf8")) as {
         scripts?: Record<string, string>;
       };
@@ -114,9 +114,11 @@ describe("publish-guard — wiring assertions", () => {
         prepublishOnly,
         `${label} is missing scripts.prepublishOnly`
       ).toBeDefined();
+      // Umbrella uses prepublish-guards.ts (superset that includes the
+      // placeholder check); sub-packages use check-not-placeholder.ts directly.
       expect(
-        /check-not-placeholder/.test(prepublishOnly ?? ""),
-        `${label} scripts.prepublishOnly does not invoke check-not-placeholder (got: ${prepublishOnly})`
+        /check-not-placeholder|prepublish-guards/.test(prepublishOnly ?? ""),
+        `${label} scripts.prepublishOnly does not invoke a placeholder guard (got: ${prepublishOnly})`
       ).toBe(true);
     });
   }

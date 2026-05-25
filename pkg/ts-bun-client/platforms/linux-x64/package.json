@@ -4,7 +4,7 @@
   "type": "module",
   "os": ["linux"],
   "cpu": ["x64"],
-  "files": ["libagent_director.so", "README-binary-source.md"],
+  "files": ["bin/agent-director", "README-binary-source.md"],
   "publishConfig": {
     "access": "public"
   },
