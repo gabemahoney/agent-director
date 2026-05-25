@@ -97,6 +97,14 @@ export class SubprocessClient {
   // TRANSITIONAL(b.eiv): remove once CLI exposes --store-path or --home flag (Epic G or later)
   readonly #homeOverride: string | null;
   /**
+   * Directory portion of `opts.tmuxCommand`, cached for subprocess PATH
+   * injection. The CLI binary uses `exec.LookPath("tmux")` to find tmux, so
+   * we prepend this directory to PATH in every spawn env when set. Matches
+   * the FFI Client's behavior of routing tmux through the supplied path
+   * (which it did via `pkg/api.Options.TmuxCommand` directly).
+   */
+  readonly #tmuxDir: string | null;
+  /**
    * FFI-shape parity stub. The FFI Client stores a handle string here; the
    * subprocess model has no handle concept (each call opens and closes the
    * store independently), so this is always null. Exposed for tests that
@@ -151,6 +159,12 @@ export class SubprocessClient {
     const storeParent = dirname(expandedStore);
     this.#homeOverride =
       basename(storeParent) === ".agent-director" ? dirname(storeParent) : null;
+
+    // Cache tmuxCommand's directory for PATH prefix injection at spawn time.
+    // The CLI uses exec.LookPath("tmux"), so prepending the dir lets a caller
+    // route tmux to a stub binary (test fake-tmux) without modifying the
+    // caller's process-level PATH.
+    this.#tmuxDir = opts.tmuxCommand ? dirname(expandTilde(opts.tmuxCommand)) : null;
 
     this.#open = true;
     this.#tail = Promise.resolve();
@@ -244,6 +258,14 @@ export class SubprocessClient {
     if (this.#homeOverride !== null) {
       // TRANSITIONAL(b.eiv): remove once CLI exposes --store-path or --home flag (Epic G or later)
       spawnEnv["HOME"] = this.#homeOverride;
+    }
+    if (this.#tmuxDir !== null) {
+      // Prepend the tmuxCommand directory so the CLI's exec.LookPath("tmux")
+      // finds the caller-supplied stub before any system tmux.
+      const priorPath = spawnEnv["PATH"] ?? "";
+      spawnEnv["PATH"] = priorPath
+        ? `${this.#tmuxDir}:${priorPath}`
+        : this.#tmuxDir;
     }
 
     const proc = Bun.spawn({

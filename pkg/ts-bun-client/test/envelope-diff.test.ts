@@ -688,7 +688,7 @@ describe("resume", () => {
       const cwd = "/tmp";
       const slug = slugifyCwd(cwd);
 
-      const { homeA, storeB, cleanup } = prepareStores((store) => {
+      const { homeA, homeB, storeB, cleanup } = prepareStores((store) => {
         runHelper("seed-spawn", {
           store,
           id: resumeId,
@@ -708,15 +708,15 @@ describe("resume", () => {
 
       // JSONL for CLI (HOME=homeA)
       const jsonlDirA = path.join(homeA, ".claude", "projects", slug);
-      const jsonlFileA = path.join(jsonlDirA, `${sessId}.jsonl`);
       fs.mkdirSync(jsonlDirA, { recursive: true });
-      fs.writeFileSync(jsonlFileA, "{}\n");
+      fs.writeFileSync(path.join(jsonlDirA, `${sessId}.jsonl`), "{}\n");
 
-      // JSONL for Client (FFI worker uses REAL_HOME)
-      const jsonlDirReal = path.join(REAL_HOME, ".claude", "projects", slug);
-      const jsonlFileReal = path.join(jsonlDirReal, `${sessId}.jsonl`);
-      fs.mkdirSync(jsonlDirReal, { recursive: true });
-      fs.writeFileSync(jsonlFileReal, "{}\n");
+      // JSONL for Client. Post-cutover the subprocess Client injects HOME=homeB
+      // (from #homeOverride derived from storeB's canonical layout), so the CLI
+      // subprocess resolves the JSONL path under homeB.
+      const jsonlDirB = path.join(homeB, ".claude", "projects", slug);
+      fs.mkdirSync(jsonlDirB, { recursive: true });
+      fs.writeFileSync(path.join(jsonlDirB, `${sessId}.jsonl`), "{}\n");
 
       try {
         const cli = runCli(
@@ -735,12 +735,6 @@ describe("resume", () => {
           ignorePaths: loadIgnorePathsForVerb("resume"),
         });
       } finally {
-        // Clean up JSONL at real HOME (CLI JSONL is inside homeA, cleaned by cleanup()).
-        try {
-          fs.unlinkSync(jsonlFileReal);
-        } catch {
-          /* best-effort */
-        }
         cleanup();
       }
     },
