@@ -12,34 +12,17 @@ import (
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
-// ErrUnknownHandle is the cabi-only sentinel returned when a C-ABI verb call
-// references a handle that is absent from, or has been removed from, the
-// internal pkg/cabi handle registry (e.g. after the client was closed via
-// ad_close, or when ad_open was never called for that token).
-//
-// This error is never emitted by any pkg/api verb method. Its catalog entry
-// carries Scope:"cabi" so the five-way coherence gate treats it as exempt from
-// the per-verb manifest.ErrorNames cross-check.
-var ErrUnknownHandle = errors.New("ErrUnknownHandle: unknown or invalid client handle")
-
 // Entry pairs an err_name string with the sentinel error it names.
 // Catalog is walked via errors.Is, so %w-wrapped errors are matched
 // correctly.
 type Entry struct {
 	Name string
 	Err  error
-	// Scope is empty ("") for standard verb-surface errors and "cabi" for
-	// C-ABI-only sentinels (e.g. ErrUnknownHandle). Cabi-scoped entries are
-	// exempt from the per-verb manifest.ErrorNames cross-check in the
-	// five-way coherence gate because no callable verb declares them in its
-	// ErrorNames — they originate exclusively in pkg/cabi's dispatch layer.
-	Scope string
 }
 
 // Catalog is the canonical err_name lookup table for all agent-director
-// error paths. The CLI's Classify, the MCP server's classifyDispatchError,
-// and (later) pkg/cabi's JSON encoder all consume this table — there is
-// exactly one source of truth.
+// error paths. The CLI's Classify and the MCP server's classifyDispatchError
+// consume this table — there is exactly one source of truth.
 //
 // Ordering is preserved from the original cmd/agent-director/errnames.go
 // errCatalog for diff hygiene; no current entry wraps another, so
@@ -105,12 +88,6 @@ var Catalog = []Entry{
 	// it before falling back to errnames.Classify, so no catalog entry is
 	// needed. Keeping it here would require a catalog entry not backed by any
 	// callable verb's ErrorNames, violating the five-way coherence invariant.
-
-	// ErrUnknownHandle is a cabi-only sentinel: it originates exclusively in
-	// pkg/cabi's handle-resolution layer and is never emitted by any pkg/api
-	// verb method. The Scope:"cabi" marker exempts it from the per-verb
-	// manifest.ErrorNames cross-check in the five-way coherence gate.
-	{Name: "ErrUnknownHandle", Err: ErrUnknownHandle, Scope: "cabi"},
 }
 
 // Classify returns the canonical err_name and err_description for an error

@@ -127,11 +127,14 @@ export interface ListRow {
 // Verb Params / Result interfaces
 //
 // One pair per callable verb in src/internal/verbs.ts.
-// Params wire names follow the JSON tags in pkg/cabi/verbs_*.go.
+// Params field names follow the CLI flag names accepted by the
+// agent-director CLI subprocess (kebab-case flags map to snake_case keys
+// here). For verbs where pkg/api exposes a Params struct, the json tags on
+// that struct are authoritative.
 // Result wire names follow the json:"..." tags on pkg/api result structs.
 // ---------------------------------------------------------------------------
 
-/** Mirrors pkg/cabi/verbs_read.go::ad_spawn params */
+/** Mirrors pkg/api.SpawnParams (json tags) — alias of internal/spawn.SpawnParams. */
 export interface SpawnParams {
   /** Absolute (or ~/-prefixed) path the Spawn's Claude starts in. Required. */
   cwd: string;
@@ -165,7 +168,7 @@ export interface SpawnResult {
   claude_instance_id: string;
 }
 
-/** Mirrors pkg/cabi/verbs_read.go::ad_status params */
+/** Mirrors the `status` CLI verb's --claude-instance-id flag (pkg/api.Client.Status arg). */
 export interface StatusParams {
   /** Id of the Spawn to inspect. */
   claude_instance_id: string;
@@ -177,7 +180,7 @@ export interface StatusResult {
   state: string;
 }
 
-/** Mirrors pkg/cabi/verbs_read.go::ad_get params */
+/** Mirrors the `get` CLI verb's --claude-instance-id flag (pkg/api.Client.Get arg). */
 export interface GetParams {
   /** Id of the Spawn to fetch. */
   claude_instance_id: string;
@@ -205,7 +208,7 @@ export interface GetResult {
   permission_request?: PermissionRequestInfo | null;
 }
 
-/** Mirrors pkg/cabi/verbs_read.go::ad_send_keys params (pkg/api.SendKeysParams json tags) */
+/** Mirrors pkg/api.SendKeysParams (json tags). */
 export interface SendKeysParams {
   /** Id of the Spawn whose pane will receive the text. */
   claude_instance_id: string;
@@ -217,7 +220,7 @@ export interface SendKeysParams {
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface SendKeysResult {}
 
-/** Mirrors pkg/cabi/verbs_read.go::ad_read_pane params (pkg/api.ReadPaneParams json tags) */
+/** Mirrors pkg/api.ReadPaneParams (json tags). */
 export interface ReadPaneParams {
   /** Id of the Spawn whose pane will be captured. */
   claude_instance_id: string;
@@ -233,7 +236,7 @@ export interface ReadPaneResult {
   pane: string;
 }
 
-/** Mirrors pkg/cabi/verbs_control.go::ad_kill params (pkg/api.KillParams json tags) */
+/** Mirrors pkg/api.KillParams (json tags). */
 export interface KillParams {
   /** Id of the Spawn to kill. */
   claude_instance_id: string;
@@ -243,7 +246,7 @@ export interface KillParams {
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface KillResult {}
 
-/** Mirrors pkg/cabi/verbs_control.go::ad_decide params (pkg/api.DecideParams json tags) */
+/** Mirrors pkg/api.DecideParams (json tags). */
 export interface DecideParams {
   /** Id of the Spawn whose open permission request is being decided. */
   claude_instance_id: string;
@@ -257,7 +260,7 @@ export interface DecideParams {
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface DecideResult {}
 
-/** Mirrors pkg/cabi/verbs_control.go::ad_resume params (pkg/api.ResumeParams json tags) */
+/** Mirrors pkg/api.ResumeParams (json tags). */
 export interface ResumeParams {
   /** Id of the terminated Spawn to resurrect. */
   claude_instance_id: string;
@@ -269,7 +272,7 @@ export interface ResumeResult {
   claude_instance_id: string;
 }
 
-/** Mirrors pkg/cabi/verbs_control.go::ad_find_missing params */
+/** Mirrors the `find-missing` CLI verb's --timeout flag (pkg/api.Client.FindMissing ctx deadline). */
 export interface FindMissingParams {
   /** Optional deadline for the OS probe sweep (milliseconds). 0/omitted = no deadline. */
   timeout_ms?: number;
@@ -283,7 +286,7 @@ export interface FindMissingResult {
   ids: string[];
 }
 
-/** Mirrors pkg/cabi/verbs_admin.go::ad_expire params */
+/** Mirrors the `expire` CLI verb's --older-than flag (pkg/api.Client.Expire arg). */
 export interface ExpireParams {
   /**
    * Duration override (e.g. "7d", "2h", "0d"). When omitted, the config
@@ -300,7 +303,7 @@ export interface ExpireResult {
   ids: string[];
 }
 
-/** Mirrors pkg/cabi/verbs_admin.go::ad_delete params */
+/** Mirrors the `delete` CLI verb's --claude-instance-id flag(s) (pkg/api.Client.Delete arg). */
 export interface DeleteParams {
   /** Id(s) to delete. */
   claude_instance_id: string[];
@@ -312,7 +315,7 @@ export interface DeleteResult {
   results: Record<string, string>;
 }
 
-/** Mirrors pkg/cabi/verbs_admin.go::ad_make_template params */
+/** Mirrors pkg/api.MakeTemplateParams (json tags). */
 export interface MakeTemplateParams {
   /** Template filename (without extension). Must be filename-safe. Required. */
   name: string;
@@ -346,7 +349,7 @@ export interface MakeTemplateResult {
   path: string;
 }
 
-/** Mirrors pkg/cabi/verbs_read.go::ad_list params */
+/** Mirrors pkg/api.ListParams (json tags). */
 export interface ListParams {
   /** Filter by state (multiple values OR together). */
   state?: string[];
@@ -368,7 +371,7 @@ export interface ListResult {
   spawns: ListRow[];
 }
 
-/** Mirrors pkg/cabi/verbs_control.go::ad_pause params (pkg/api.PauseParams json tags) */
+/** Mirrors pkg/api.PauseParams (json tags). */
 export interface PauseParams {
   /** Id of the Spawn to pause gracefully. */
   claude_instance_id: string;
@@ -378,7 +381,7 @@ export interface PauseParams {
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface PauseResult {}
 
-/** Mirrors pkg/cabi/verbs_admin.go::ad_version params (handle-free; no user params). */
+/** Mirrors the `version` CLI verb (no user params; pkg/api.Client.Version takes none). */
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface VersionParams {}
 

@@ -66,7 +66,6 @@ import {
   ErrInvalidDecision,
   ErrNoOpenPermissionRequest,
   ErrAlreadyDecided,
-  ErrUnknownHandle,
 } from "../src/index.js";
 `;
 

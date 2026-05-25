@@ -163,11 +163,5 @@
     "name": "ErrAlreadyDecided",
     "package": "store",
     "description": ""
-  },
-  {
-    "name": "ErrUnknownHandle",
-    "package": "cabi",
-    "description": "",
-    "scope": "cabi"
   }
 ]

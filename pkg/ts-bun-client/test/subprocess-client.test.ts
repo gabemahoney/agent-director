@@ -367,7 +367,7 @@ describe("SubprocessClient — public index.ts surface unchanged", () => {
     "ErrPlatformPackageMissing",
     "ErrBunVersionTooOld",
     "errorFromEnvelope",
-    // Catalog-derived (34 entries).
+    // Catalog-derived (33 entries).
     "ErrCwdMissing",
     "ErrCwdNotAPath",
     "ErrCwdNotFound",
@@ -401,7 +401,6 @@ describe("SubprocessClient — public index.ts surface unchanged", () => {
     "ErrInvalidDecision",
     "ErrNoOpenPermissionRequest",
     "ErrAlreadyDecided",
-    "ErrUnknownHandle",
   ] as const;
 
   test.each([...expectedExports])("index.ts still exports %s", (name) => {

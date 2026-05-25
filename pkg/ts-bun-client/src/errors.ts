@@ -8,7 +8,7 @@ export { TS_ONLY_ERROR_NAMES } from "./internal/tsOnlyErrors.js";
  *
  * `verb` names the callable verb that triggered the error (e.g. "spawn").
  * `errName` is the canonical error name from the Go errnames catalog.
- * `errDescription` is the human-readable description from the C-ABI envelope.
+ * `errDescription` is the human-readable description from the subprocess error envelope.
  * `message` is formatted as "${errName}: ${errDescription}".
  */
 export class AgentDirectorError extends Error {
@@ -16,7 +16,7 @@ export class AgentDirectorError extends Error {
   readonly verb: string;
   /** Canonical error name, matching the Go errnames catalog (e.g. "ErrSpawnNotFound"). */
   readonly errName: string;
-  /** Human-readable description forwarded from the C-ABI envelope. */
+  /** Human-readable description forwarded from the subprocess error envelope. */
   readonly errDescription: string;
 
   constructor(verb: string, err_name: string, err_description: string) {
@@ -233,7 +233,7 @@ export class ErrUnknownErrorName extends AgentDirectorError {
 // ---------------------------------------------------------------------------
 // Catalog-derived error subclasses
 //
-// One subclass per entry in pkg/api/errnames/catalog.json (34 entries).
+// One subclass per entry in pkg/api/errnames/catalog.json (33 entries).
 // Bodies are empty: subclass identity is the sole value-add over the base class.
 // The factory (errorFromEnvelope) at the bottom of this file maps err_name
 // strings to these constructors.
@@ -305,8 +305,6 @@ export class ErrInvalidDecision extends AgentDirectorError {}
 export class ErrNoOpenPermissionRequest extends AgentDirectorError {}
 /** Mirrors ErrAlreadyDecided (package: store) */
 export class ErrAlreadyDecided extends AgentDirectorError {}
-/** Mirrors ErrUnknownHandle (package: cabi, scope: cabi) */
-export class ErrUnknownHandle extends AgentDirectorError {}
 
 // ---------------------------------------------------------------------------
 // errorFromEnvelope — catalog-aware factory
@@ -319,8 +317,9 @@ type ErrConstructor = new (
 ) => AgentDirectorError;
 
 /**
- * Lookup table from err_name strings (from the C-ABI error envelope) to their
- * typed constructor. Derived from pkg/api/errnames/catalog.json — 34 entries.
+ * Lookup table from err_name strings (from the agent-director error envelope)
+ * to their typed constructor. Derived from pkg/api/errnames/catalog.json — 33
+ * entries.
  *
  * This is the most-grepped table in the project; keep it readable and in
  * alphabetical order within each package group.
@@ -365,13 +364,11 @@ const ERROR_TABLE = {
   ErrTemplateExists,
   // probe package
   ErrProbeUnsupported,
-  // cabi package (scope: cabi)
-  ErrUnknownHandle,
 } as const satisfies Readonly<Record<string, ErrConstructor>>;
 
 /**
  * errorFromEnvelope creates a typed AgentDirectorError subclass from the
- * C-ABI error envelope fields.
+ * subprocess error envelope fields.
  *
  * @param verb            The verb name that produced the error (e.g. "spawn").
  * @param err_name        The canonical error name from the envelope.
