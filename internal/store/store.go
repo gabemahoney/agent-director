@@ -99,10 +99,20 @@ func OpenOrInit(path string) (*Store, error) {
 // OpenOrInit.
 func openDB(resolved string) (*Store, error) {
 	// foreign_keys is a per-connection PRAGMA, so set it via DSN so every
-	// connection the pool dials in starts with FKs enforced. journal_mode
-	// persists in the DB header, but we set it via DSN too for symmetry
-	// and so a freshly-deleted DB file picks up WAL on first contact.
-	dsn := resolved + "?_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"
+	// connection the pool dials in starts with FKs enforced.
+	//
+	// busy_timeout tells the driver to retry-with-backoff for up to 10s
+	// on SQLITE_BUSY instead of failing on the first lock collision. With
+	// N hook processes hitting the same DB file during burst-spawn, this
+	// is the floor of correctness for any multi-writer SQLite system.
+	//
+	// journal_mode is intentionally NOT set here. WAL persists in the DB
+	// header; re-running PRAGMA journal_mode=WAL on every connection forces
+	// a write-lock acquisition and is what caused the b.x2m burst-spawn
+	// bug. We set WAL once at fresh-DB init (see ensureJournalModeWAL) and
+	// trust the header thereafter; verifyPragmas keeps reading it
+	// (read-only form, no lock) to confirm.
+	dsn := resolved + "?_pragma=busy_timeout(10000)&_pragma=foreign_keys(1)"
 
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -112,6 +122,11 @@ func openDB(resolved string) (*Store, error) {
 	// readers never observe a half-applied transaction and SQLite's own
 	// "database is locked" retry loop is bypassed.
 	db.SetMaxOpenConns(1)
+
+	if err := ensureJournalModeWAL(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 
 	if err := verifyPragmas(db); err != nil {
 		_ = db.Close()
@@ -154,8 +169,29 @@ func expandTilde(path string) (string, error) {
 	return filepath.Join(u.HomeDir, strings.TrimPrefix(path, "~/")), nil
 }
 
-// verifyPragmas confirms the DSN-supplied PRAGMAs took effect. journal_mode
-// is requested as WAL and foreign_keys as 1 (SRD §4.5 / §13.3); if either
+// ensureJournalModeWAL sets journal_mode=WAL exactly once per DB file —
+// only when the header doesn't already report WAL. Reading PRAGMA
+// journal_mode is a lock-free header read; the write-form PRAGMA only
+// runs on a genuinely fresh DB (or one whose header was reset by hand),
+// which avoids the per-connection write-lock contention that caused
+// b.x2m. busy_timeout (set in the DSN) covers the rare case where two
+// processes race to initialize the same fresh DB.
+func ensureJournalModeWAL(db *sql.DB) error {
+	var mode string
+	if err := db.QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil {
+		return fmt.Errorf("store: read journal_mode: %w", err)
+	}
+	if mode == "wal" {
+		return nil
+	}
+	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		return fmt.Errorf("store: set journal_mode=wal: %w", err)
+	}
+	return nil
+}
+
+// verifyPragmas confirms the required PRAGMAs are in effect. journal_mode
+// is checked as WAL and foreign_keys as 1 (SRD §4.5 / §13.3); if either
 // silently downgraded we want a loud failure at Open, not a mysterious
 // data-integrity bug later.
 func verifyPragmas(db *sql.DB) error {
