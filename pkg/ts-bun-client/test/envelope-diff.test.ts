@@ -711,9 +711,8 @@ describe("resume", () => {
       fs.mkdirSync(jsonlDirA, { recursive: true });
       fs.writeFileSync(path.join(jsonlDirA, `${sessId}.jsonl`), "{}\n");
 
-      // JSONL for Client. Post-cutover the subprocess Client injects HOME=homeB
-      // (from #homeOverride derived from storeB's canonical layout), so the CLI
-      // subprocess resolves the JSONL path under homeB.
+      // JSONL for Client. The TS Client forwards --home homeB to the CLI
+      // subprocess (b.32k), so the CLI resolves the JSONL path under homeB.
       const jsonlDirB = path.join(homeB, ".claude", "projects", slug);
       fs.mkdirSync(jsonlDirB, { recursive: true });
       fs.writeFileSync(path.join(jsonlDirB, `${sessId}.jsonl`), "{}\n");
@@ -727,6 +726,7 @@ describe("resume", () => {
 
         using client = new Client({
           storePath: storeB,
+          home: homeB,
           tmuxCommand: FAKE_TMUX_BIN,
         });
         const ts = await client.resume({ claude_instance_id: resumeId });

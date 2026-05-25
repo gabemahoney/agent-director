@@ -29,10 +29,9 @@
  * Internal — NOT re-exported from src/index.ts until Epic B.
  */
 
-import { dirname, basename } from "node:path";
 import { resolveCliPath } from "./platformResolve.js";
 import { expandTilde } from "./tilde.js";
-import { buildArgv } from "./argv.js";
+import { buildArgv, type GlobalArgvOptions } from "./argv.js";
 import { ErrSubprocessCrash } from "./spawner.js";
 import { isErrorEnvelope, throwFromEnvelope } from "./errorMap.js";
 // b.6o1: inline npm package version so version() returns the published semver
@@ -88,27 +87,15 @@ export class SubprocessClient {
   /** Whether this client is still open. */
   #open: boolean;
   /**
-   * Derived HOME directory for subprocess env injection. When `storePath`
-   * follows the `<home>/.agent-director/<file>` convention (i.e. the CLI's
-   * default store location relative to HOME), this field holds `<home>` so
-   * that every subprocess spawned by this client inherits the right HOME and
-   * therefore opens the correct store. Null when the pattern doesn't match
-   * (subprocess inherits process.env.HOME as-is).
+   * Global-flag overrides forwarded to every subprocess invocation as
+   * `--store-path` / `--home` / `--tmux-command` before the verb token.
    *
-   * This bridges the semantic gap between the FFI model (storePath forwarded
-   * directly to the C-ABI) and the subprocess model (CLI reads store from
-   * HOME-relative config defaults).
+   * Values are tilde-expanded at construction time and stored verbatim;
+   * fields are undefined when the caller did not supply that ClientOption,
+   * in which case the CLI's own default-resolution applies (b.32k removed
+   * the prior TS-side heuristics that mirrored CLI internals).
    */
-  // TRANSITIONAL(b.eiv): remove once CLI exposes --store-path or --home flag (Epic G or later)
-  readonly #homeOverride: string | null;
-  /**
-   * Directory portion of `opts.tmuxCommand`, cached for subprocess PATH
-   * injection. The CLI binary uses `exec.LookPath("tmux")` to find tmux, so
-   * we prepend this directory to PATH in every spawn env when set. Matches
-   * the FFI Client's behavior of routing tmux through the supplied path
-   * (which it did via `pkg/api.Options.TmuxCommand` directly).
-   */
-  readonly #tmuxDir: string | null;
+  readonly #globalOpts: GlobalArgvOptions;
   /**
    * FFI-shape parity stub. The FFI Client stores a handle string here; the
    * subprocess model has no handle concept (each call opens and closes the
@@ -148,28 +135,16 @@ export class SubprocessClient {
     // or ErrCliNotExecutable on any resolution failure.
     this.#cliPath = opts2._cliPath ?? resolveCliPath();
 
-    // Derive HOME override from storePath when it follows the standard
-    // `<home>/.agent-director/<file>` convention. The CLI opens the store
-    // relative to HOME (no --store-path flag), so we inject HOME into every
-    // subprocess env to ensure it opens the caller's intended store.
-    //
-    // Example: storePath = "/tmp/ed-hb-xyz/.agent-director/state.db"
-    //          → homeOverride = "/tmp/ed-hb-xyz"
-    //
-    // If storePath doesn't follow this pattern (e.g. a bare
-    // "/tmp/state.db"), homeOverride is null and the subprocess inherits
-    // process.env.HOME unchanged (correct when the caller controls HOME via
-    // withTempHome or a similar mechanism).
-    const expandedStore = expandTilde(opts.storePath);
-    const storeParent = dirname(expandedStore);
-    this.#homeOverride =
-      basename(storeParent) === ".agent-director" ? dirname(storeParent) : null;
-
-    // Cache tmuxCommand's directory for PATH prefix injection at spawn time.
-    // The CLI uses exec.LookPath("tmux"), so prepending the dir lets a caller
-    // route tmux to a stub binary (test fake-tmux) without modifying the
-    // caller's process-level PATH.
-    this.#tmuxDir = opts.tmuxCommand ? dirname(expandTilde(opts.tmuxCommand)) : null;
+    // b.32k: forward user-supplied storePath / tmuxCommand / home verbatim to
+    // the CLI via the global flags it now exposes. Tilde-expand TS-side so
+    // the subprocess never sees a leading `~`. When a field is undefined the
+    // CLI's own three-tier default-resolution applies (single source of
+    // truth — no TS-side fallback).
+    const g: GlobalArgvOptions = {};
+    if (opts.storePath !== undefined) g.storePath = expandTilde(opts.storePath);
+    if (opts.tmuxCommand !== undefined) g.tmuxCommand = expandTilde(opts.tmuxCommand);
+    if (opts.home !== undefined) g.home = expandTilde(opts.home);
+    this.#globalOpts = g;
 
     this.#open = true;
     this.#tail = Promise.resolve();
@@ -253,25 +228,16 @@ export class SubprocessClient {
    * Called from within the serialization queue.
    */
   async #doCall<R>(verb: VerbName, params: unknown): Promise<R> {
-    const argv = buildArgv(this.#cliPath, verb, params);
+    const argv = buildArgv(this.#cliPath, verb, params, this.#globalOpts);
     const startMs = Date.now();
 
-    // Build subprocess env: snapshot process.env at call time (SRD SR-1.4),
-    // then overlay HOME when #homeOverride is set so the CLI opens the store
-    // that matches the storePath passed to the Client constructor.
+    // Snapshot process.env at call time per SRD SR-1.4 so the subprocess
+    // inherits the consumer's env (HOME, PATH, etc.) as it stood when the
+    // call was made. b.32k removed the TS-side HOME-from-storePath heuristic
+    // and the PATH-prefix-from-tmuxCommand hack; those concerns are now
+    // expressed through the CLI's --home / --tmux-command global flags
+    // (set in this.#globalOpts) instead of env mutation.
     const spawnEnv: Record<string, string> = { ...process.env } as Record<string, string>;
-    if (this.#homeOverride !== null) {
-      // TRANSITIONAL(b.eiv): remove once CLI exposes --store-path or --home flag (Epic G or later)
-      spawnEnv["HOME"] = this.#homeOverride;
-    }
-    if (this.#tmuxDir !== null) {
-      // Prepend the tmuxCommand directory so the CLI's exec.LookPath("tmux")
-      // finds the caller-supplied stub before any system tmux.
-      const priorPath = spawnEnv["PATH"] ?? "";
-      spawnEnv["PATH"] = priorPath
-        ? `${this.#tmuxDir}:${priorPath}`
-        : this.#tmuxDir;
-    }
 
     const proc = Bun.spawn({
       cmd: argv,

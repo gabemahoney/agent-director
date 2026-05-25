@@ -83,7 +83,7 @@ See Idea Bee `b.fg3` for cross-platform expansion status.
 `using` block (preferred):
 
 ```ts
-using client = new Client({ storePath: "~/.agent-director/state.db" });
+using client = new Client({});
 const v = await client.version({});
 console.log(v.version);
 ```
@@ -91,7 +91,7 @@ console.log(v.version);
 Explicit `try/finally` (portable fallback):
 
 ```ts
-const client = new Client({ storePath: "~/.agent-director/state.db" });
+const client = new Client({});
 try {
   const v = await client.version({});
   console.log(v.version);
@@ -100,7 +100,15 @@ try {
 }
 ```
 
-`storePath` is the only required constructor option. Tilde expansion (`~` → home directory) is handled automatically before paths are forwarded to the CLI subprocess. The `using` form calls `client.close()` automatically at block exit and requires Bun >=1.0.21 (or a TypeScript project with `"lib": ["ESNext.Disposable"]`).
+All constructor options are optional. Omitted fields fall back to the CLI binary's own three-tier default resolution (config.toml value, then hardcoded fallback such as `~/.agent-director/state.db`) — the CLI is the single source of truth for defaults. Tilde expansion (`~` → home directory) is handled automatically before paths are forwarded to the CLI subprocess. The `using` form calls `client.close()` automatically at block exit and requires Bun >=1.0.21 (or a TypeScript project with `"lib": ["ESNext.Disposable"]`).
+
+`ClientOptions` overrides forward verbatim to the CLI subprocess as global flags:
+
+- `storePath` → `--store-path`
+- `home` → `--home`
+- `tmuxCommand` → `--tmux-command`
+
+Set them only when the consumer needs to override the CLI's default for that field.
 
 ## Verb examples
 
