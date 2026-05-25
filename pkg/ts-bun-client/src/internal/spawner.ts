@@ -130,7 +130,7 @@ export async function runSubprocess(argv: string[]): Promise<SpawnOutcome> {
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
     proc.exited,
-  ]).then(([out, err, _exit]) => [out, err]);
+  ]).then(([out, err]) => [out, err]);
 
   // exitCode and signalCode are populated after proc.exited resolves.
   const exitCode = proc.exitCode;

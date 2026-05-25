@@ -224,7 +224,7 @@ export class SubprocessClient {
         new Response(proc.stdout).text(),
         new Response(proc.stderr).text(),
         proc.exited,
-      ]).then(([out, err, _code]) => [out, err]);
+      ]).then(([out, err]) => [out, err]);
     } finally {
       // Clear the call-level timeout regardless of outcome (SR-6.3).
       clearTimeout(timeoutHandle);

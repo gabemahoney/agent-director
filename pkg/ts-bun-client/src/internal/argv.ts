@@ -30,13 +30,11 @@ import type {
   KillParams,
   DecideParams,
   ResumeParams,
-  FindMissingParams,
   ExpireParams,
   DeleteParams,
   MakeTemplateParams,
   ListParams,
   PauseParams,
-  VersionParams,
 } from "../types.js";
 
 // ---------------------------------------------------------------------------
@@ -64,7 +62,7 @@ export function buildArgv(cliPath: string, verb: VerbName, params: unknown): str
 function buildVerbFlags(verb: VerbName, params: unknown): string[] {
   switch (verb) {
     case "version":
-      return buildVersion(params as VersionParams);
+      return buildVersion();
     case "spawn":
       return buildSpawn(params as SpawnParams);
     case "status":
@@ -82,7 +80,7 @@ function buildVerbFlags(verb: VerbName, params: unknown): string[] {
     case "resume":
       return buildResume(params as ResumeParams);
     case "find-missing":
-      return buildFindMissing(params as FindMissingParams);
+      return buildFindMissing();
     case "expire":
       return buildExpire(params as ExpireParams);
     case "delete":
@@ -106,7 +104,7 @@ function buildVerbFlags(verb: VerbName, params: unknown): string[] {
 // Per-verb builders
 // ---------------------------------------------------------------------------
 
-function buildVersion(_params: VersionParams): string[] {
+function buildVersion(): string[] {
   return ["version"];
 }
 
@@ -200,7 +198,7 @@ function buildResume(p: ResumeParams): string[] {
   return ["resume", "--claude-instance-id", p.claude_instance_id];
 }
 
-function buildFindMissing(_p: FindMissingParams): string[] {
+function buildFindMissing(): string[] {
   // The CLI exposes no flags for find-missing; timeout_ms is not a CLI flag.
   return ["find-missing"];
 }
