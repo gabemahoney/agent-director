@@ -518,6 +518,9 @@ verify_phase() {
     mkdir -p "$stage_dir/skills"
     cp -a "$REPO_ROOT/pkg/ts-bun-client/." "$stage_dir/pkg/ts-bun-client/"
     cp -a "$REPO_ROOT/skills/install-agent-director" "$stage_dir/skills/"
+    # src/internal/errorMap.ts imports catalog.json via a cross-pkg relative path.
+    mkdir -p "$stage_dir/pkg/api/errnames"
+    cp "$REPO_ROOT/pkg/api/errnames/catalog.json" "$stage_dir/pkg/api/errnames/catalog.json"
 
     # Wipe any stray dev artifacts the cp -a dragged in.
     rm -rf "$stage_dir/pkg/ts-bun-client/node_modules"
