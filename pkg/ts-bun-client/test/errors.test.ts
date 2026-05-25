@@ -8,6 +8,13 @@
  *   4. errorFromEnvelope factory returns the correct typed subclass.
  *   5. Unknown err_name → base AgentDirectorError + console.warn.
  *   6. .message format is "${err_name}: ${err_description}".
+ *
+ * Epic A additions (T-A1):
+ *   7. ErrCliNotExecutable — fields, name, instanceof chain.
+ *   8. ErrConsumerSignal — fields, name, instanceof chain.
+ *   9. ErrCallTimeout — fields, name, instanceof chain.
+ *  10. ErrUnknownErrorName — fields, name, instanceof chain, envelope field.
+ *  11. All four new classes appear in TS_ONLY_ERROR_NAMES (drift-test allow-list).
  */
 
 import { test, expect, describe, spyOn } from "bun:test";
@@ -17,6 +24,15 @@ import {
   ErrClientClosed,
   ErrTmuxSessionCreate,
   errorFromEnvelope,
+  // Epic A new TS-only classes (Task A1). These imports will fail to compile
+  // until the engineer adds the classes to src/errors.ts and re-exports them
+  // from src/index.ts. Run `bun test errors.test.ts` after the engineer
+  // completes Task A1 to verify green.
+  ErrCliNotExecutable,
+  ErrConsumerSignal,
+  ErrCallTimeout,
+  ErrUnknownErrorName,
+  TS_ONLY_ERROR_NAMES,
 } from "../src/errors.js";
 
 // ---------------------------------------------------------------------------
@@ -158,5 +174,166 @@ describe("AgentDirectorError .message format", () => {
   test("factory-produced error has correct message", () => {
     const err = errorFromEnvelope("resume", "ErrSpawnNotResumable", "state is working");
     expect(err.message).toBe("ErrSpawnNotResumable: state is working");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Epic A — Case 7: ErrCliNotExecutable (Task A1, SR-2.3)
+// ---------------------------------------------------------------------------
+describe("ErrCliNotExecutable (TS-only, SR-2.3)", () => {
+  test("extends AgentDirectorError and Error", () => {
+    const err = new ErrCliNotExecutable("/opt/bin/agent-director");
+    expect(err).toBeInstanceOf(ErrCliNotExecutable);
+    expect(err).toBeInstanceOf(AgentDirectorError);
+    expect(err).toBeInstanceOf(Error);
+  });
+
+  test(".name is 'ErrCliNotExecutable'", () => {
+    const err = new ErrCliNotExecutable("/path/to/binary");
+    expect(err.name).toBe("ErrCliNotExecutable");
+  });
+
+  test(".errName is 'ErrCliNotExecutable'", () => {
+    const err = new ErrCliNotExecutable("/path/to/binary");
+    expect(err.errName).toBe("ErrCliNotExecutable");
+  });
+
+  test("message includes the binary path", () => {
+    const path = "/some/specific/path/agent-director";
+    const err = new ErrCliNotExecutable(path);
+    expect(err.message).toContain(path);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Epic A — Case 8: ErrConsumerSignal (Task A1, SR-5.4)
+// ---------------------------------------------------------------------------
+describe("ErrConsumerSignal (TS-only, SR-5.4)", () => {
+  test("extends AgentDirectorError and Error", () => {
+    const err = new ErrConsumerSignal("spawn", "SIGINT");
+    expect(err).toBeInstanceOf(ErrConsumerSignal);
+    expect(err).toBeInstanceOf(AgentDirectorError);
+    expect(err).toBeInstanceOf(Error);
+  });
+
+  test(".name is 'ErrConsumerSignal'", () => {
+    const err = new ErrConsumerSignal("status", "SIGTERM");
+    expect(err.name).toBe("ErrConsumerSignal");
+  });
+
+  test(".errName is 'ErrConsumerSignal'", () => {
+    const err = new ErrConsumerSignal("list", "SIGINT");
+    expect(err.errName).toBe("ErrConsumerSignal");
+  });
+
+  test(".verb reflects the verb that was executing", () => {
+    const err = new ErrConsumerSignal("get", "SIGTERM");
+    expect(err.verb).toBe("get");
+  });
+
+  test("message or a dedicated field carries the signal name", () => {
+    const err = new ErrConsumerSignal("kill", "SIGINT");
+    // The signal name must be surfaced somewhere observable: either in the
+    // message or as a dedicated property. Both are acceptable.
+    const hasSignalInMessage = err.message.includes("SIGINT");
+    const hasSignalProp =
+      "signal" in err && (err as unknown as { signal: string }).signal === "SIGINT";
+    expect(hasSignalInMessage || hasSignalProp).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Epic A — Case 9: ErrCallTimeout (Task A1, SR-6.5)
+// ---------------------------------------------------------------------------
+describe("ErrCallTimeout (TS-only, SR-6.5)", () => {
+  test("extends AgentDirectorError and Error", () => {
+    const err = new ErrCallTimeout("list", 31000, 30000);
+    expect(err).toBeInstanceOf(ErrCallTimeout);
+    expect(err).toBeInstanceOf(AgentDirectorError);
+    expect(err).toBeInstanceOf(Error);
+  });
+
+  test(".name is 'ErrCallTimeout'", () => {
+    const err = new ErrCallTimeout("spawn", 31000, 30000);
+    expect(err.name).toBe("ErrCallTimeout");
+  });
+
+  test(".errName is 'ErrCallTimeout'", () => {
+    const err = new ErrCallTimeout("version", 1001, 1000);
+    expect(err.errName).toBe("ErrCallTimeout");
+  });
+
+  test(".verb reflects the timed-out verb", () => {
+    const err = new ErrCallTimeout("decide", 5100, 5000);
+    expect(err.verb).toBe("decide");
+  });
+
+  test("elapsedMs and timeoutMs fields carry the numeric values", () => {
+    const err = new ErrCallTimeout("resume", 35000, 30000);
+    // SR-6.5: error carries the elapsed time and the configured timeout.
+    expect(err.elapsedMs).toBe(35000);
+    expect(err.timeoutMs).toBe(30000);
+    // Also present in the message.
+    expect(err.message).toContain("35000");
+    expect(err.message).toContain("30000");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Epic A — Case 10: ErrUnknownErrorName (Task A1, SR-4.3)
+// ---------------------------------------------------------------------------
+describe("ErrUnknownErrorName (TS-only, SR-4.3)", () => {
+  const syntheticEnvelope = {
+    err_name: "ErrTotallyBogus",
+    err_description: "something that does not exist",
+    extra_field: "preserved",
+  };
+
+  test("extends AgentDirectorError and Error", () => {
+    const err = new ErrUnknownErrorName("ErrTotallyBogus", syntheticEnvelope);
+    expect(err).toBeInstanceOf(ErrUnknownErrorName);
+    expect(err).toBeInstanceOf(AgentDirectorError);
+    expect(err).toBeInstanceOf(Error);
+  });
+
+  test(".name is 'ErrUnknownErrorName'", () => {
+    const err = new ErrUnknownErrorName("ErrTotallyBogus", syntheticEnvelope);
+    expect(err.name).toBe("ErrUnknownErrorName");
+  });
+
+  test(".errName is 'ErrUnknownErrorName'", () => {
+    const err = new ErrUnknownErrorName("ErrTotallyBogus", syntheticEnvelope);
+    expect(err.errName).toBe("ErrUnknownErrorName");
+  });
+
+  test(".unknownName carries the offending name and message contains it", () => {
+    const err = new ErrUnknownErrorName("ErrTotallyBogus", syntheticEnvelope);
+    // SR-4.3: error carries the offending name.
+    expect(err.unknownName).toBe("ErrTotallyBogus");
+    expect(err.message).toContain("ErrTotallyBogus");
+  });
+
+  test(".envelope preserves the full envelope payload", () => {
+    const err = new ErrUnknownErrorName("ErrTotallyBogus", syntheticEnvelope);
+    // SR-4.3: the full envelope payload is carried for diagnostic use.
+    expect(err.envelope).toBeDefined();
+    expect((err.envelope as typeof syntheticEnvelope).err_name).toBe("ErrTotallyBogus");
+    expect((err.envelope as typeof syntheticEnvelope).extra_field).toBe("preserved");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Epic A — Case 11: all four new classes in TS_ONLY_ERROR_NAMES (Task A1)
+// ---------------------------------------------------------------------------
+describe("TS_ONLY_ERROR_NAMES allow-list includes all four new Epic-A classes", () => {
+  const allowSet = new Set<string>(TS_ONLY_ERROR_NAMES as readonly string[]);
+
+  test.each([
+    "ErrCliNotExecutable",
+    "ErrConsumerSignal",
+    "ErrCallTimeout",
+    "ErrUnknownErrorName",
+  ] as const)("%s is in TS_ONLY_ERROR_NAMES", (name) => {
+    expect(allowSet.has(name)).toBe(true);
   });
 });

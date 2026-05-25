@@ -33,7 +33,7 @@ export class AgentDirectorError extends Error {
 // ---------------------------------------------------------------------------
 // TS-only error classes
 //
-// The following four classes have no counterpart in pkg/api/errnames/catalog.json.
+// The following classes have no counterpart in pkg/api/errnames/catalog.json.
 // Their names are centralised in src/internal/tsOnlyErrors.ts::TS_ONLY_ERROR_NAMES
 // (exported from this file for convenience). The catalog-drift test imports
 // that constant and filters these names out before comparing against the Go
@@ -43,6 +43,10 @@ export class AgentDirectorError extends Error {
 //   "ErrUnsupportedPlatform"    — platform detection (src/internal/tsOnlyErrors.ts)
 //   "ErrPlatformPackageMissing" — missing optional sub-package (src/internal/tsOnlyErrors.ts)
 //   "ErrBunVersionTooOld"       — runtime version guard (src/internal/tsOnlyErrors.ts)
+//   "ErrCliNotExecutable"       — binary exists but lacks execute permission (SR-2.3)
+//   "ErrConsumerSignal"         — subprocess killed by OS signal (SR-5.2/SR-5.4)
+//   "ErrCallTimeout"            — per-call timeout elapsed (SR-6.2/SR-6.5)
+//   "ErrUnknownErrorName"       — err_name not in catalog; TS catalog out of sync (SR-4.3)
 // ---------------------------------------------------------------------------
 
 /**
@@ -117,6 +121,111 @@ export class ErrBunVersionTooOld extends AgentDirectorError {
       `Bun ${actual} is below the minimum required version ${minimum}; upgrade Bun to continue`
     );
     this.name = "ErrBunVersionTooOld";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/**
+ * ErrCliNotExecutable — thrown when the resolved CLI binary exists on disk but
+ * does not have execute permission for the current process's effective uid/gid.
+ *
+ * TS-ONLY ERROR — no counterpart in pkg/api/errnames/catalog.json.
+ * Listed in `src/internal/tsOnlyErrors.ts::TS_ONLY_ERROR_NAMES`.
+ * Implements SRD SR-2.3.
+ */
+export class ErrCliNotExecutable extends AgentDirectorError {
+  constructor(path: string) {
+    super(
+      "",
+      "ErrCliNotExecutable",
+      `binary "${path}" exists but lacks execute permission; check file mode (chmod +x)`
+    );
+    this.name = "ErrCliNotExecutable";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/**
+ * ErrConsumerSignal — thrown when an in-flight subprocess call is killed by an
+ * OS signal (e.g. SIGTERM, SIGINT delivered to the consumer process group).
+ *
+ * TS-ONLY ERROR — no counterpart in pkg/api/errnames/catalog.json.
+ * Listed in `src/internal/tsOnlyErrors.ts::TS_ONLY_ERROR_NAMES`.
+ * Implements SRD SR-5.2/SR-5.4.
+ */
+export class ErrConsumerSignal extends AgentDirectorError {
+  /** The signal name that killed the subprocess (e.g. "SIGTERM", "SIGINT"). */
+  readonly signal: string;
+
+  constructor(verb: string, signal: string) {
+    super(
+      verb,
+      "ErrConsumerSignal",
+      `subprocess was killed by signal ${signal}`
+    );
+    this.signal = signal;
+    this.name = "ErrConsumerSignal";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/**
+ * ErrCallTimeout — thrown when the per-call timeout (ClientOptions.callTimeoutMs,
+ * default 30 s) elapses before the subprocess exits. The subprocess is sent SIGTERM
+ * then SIGKILL before the error is surfaced.
+ *
+ * TS-ONLY ERROR — no counterpart in pkg/api/errnames/catalog.json.
+ * Listed in `src/internal/tsOnlyErrors.ts::TS_ONLY_ERROR_NAMES`.
+ * Implements SRD SR-6.2/SR-6.5.
+ */
+export class ErrCallTimeout extends AgentDirectorError {
+  /** Approximate elapsed time in milliseconds when the timeout fired. */
+  readonly elapsedMs: number;
+  /** The configured timeout threshold in milliseconds. */
+  readonly timeoutMs: number;
+
+  constructor(verb: string, elapsedMs: number, timeoutMs: number) {
+    super(
+      verb,
+      "ErrCallTimeout",
+      `call timed out after ${elapsedMs}ms (configured limit: ${timeoutMs}ms)`
+    );
+    this.elapsedMs = elapsedMs;
+    this.timeoutMs = timeoutMs;
+    this.name = "ErrCallTimeout";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/**
+ * ErrUnknownErrorName — thrown when a subprocess JSON envelope contains an
+ * `err_name` field that is not present in the static catalog-derived error map.
+ * This indicates the Go-side catalog has a new entry that the TS catalog has
+ * not yet been regenerated to include.
+ *
+ * Constructor: `new ErrUnknownErrorName(unknownName, envelope)`
+ *   - `unknownName` — the unrecognised err_name string from the envelope.
+ *   - `envelope`    — the full envelope payload for diagnostic use.
+ *
+ * TS-ONLY ERROR — no counterpart in pkg/api/errnames/catalog.json.
+ * Listed in `src/internal/tsOnlyErrors.ts::TS_ONLY_ERROR_NAMES`.
+ * Implements SRD SR-4.3.
+ */
+export class ErrUnknownErrorName extends AgentDirectorError {
+  /** The unrecognised err_name string from the envelope. Also in `.message`. */
+  readonly unknownName: string;
+  /** The full envelope payload for diagnostic use. */
+  readonly envelope: unknown;
+
+  constructor(unknownName: string, envelope: unknown) {
+    super(
+      "",
+      "ErrUnknownErrorName",
+      `unknown err_name "${unknownName}" in subprocess envelope; TS catalog may be out of sync with Go catalog`
+    );
+    this.unknownName = unknownName;
+    this.envelope = envelope;
+    this.name = "ErrUnknownErrorName";
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
