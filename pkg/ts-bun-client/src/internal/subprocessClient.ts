@@ -29,7 +29,9 @@
  * Internal — NOT re-exported from src/index.ts until Epic B.
  */
 
+import { dirname, basename } from "node:path";
 import { resolveCliPath } from "./platformResolve.js";
+import { expandTilde } from "./tilde.js";
 import { buildArgv } from "./argv.js";
 import { ErrSubprocessCrash } from "./spawner.js";
 import { isErrorEnvelope, throwFromEnvelope } from "./errorMap.js";
@@ -81,6 +83,29 @@ export class SubprocessClient {
   /** Whether this client is still open. */
   #open: boolean;
   /**
+   * Derived HOME directory for subprocess env injection. When `storePath`
+   * follows the `<home>/.agent-director/<file>` convention (i.e. the CLI's
+   * default store location relative to HOME), this field holds `<home>` so
+   * that every subprocess spawned by this client inherits the right HOME and
+   * therefore opens the correct store. Null when the pattern doesn't match
+   * (subprocess inherits process.env.HOME as-is).
+   *
+   * This bridges the semantic gap between the FFI model (storePath forwarded
+   * directly to the C-ABI) and the subprocess model (CLI reads store from
+   * HOME-relative config defaults).
+   */
+  // TRANSITIONAL(b.eiv): remove once CLI exposes --store-path or --home flag (Epic G or later)
+  readonly #homeOverride: string | null;
+  /**
+   * FFI-shape parity stub. The FFI Client stores a handle string here; the
+   * subprocess model has no handle concept (each call opens and closes the
+   * store independently), so this is always null. Exposed for tests that
+   * cast to the FFI Client shape to inspect lifecycle state.
+   *
+   * @internal Tests only.
+   */
+  readonly _handle: null = null;
+  /**
    * Chained-Promise queue. Every call chains its spawn body onto #tail so
    * that at most one subprocess per Client is running at any time (SR-3.4).
    * The tail always resolves (never rejects) so subsequent calls proceed even
@@ -110,6 +135,23 @@ export class SubprocessClient {
     // or ErrCliNotExecutable on any resolution failure.
     this.#cliPath = opts2._cliPath ?? resolveCliPath();
 
+    // Derive HOME override from storePath when it follows the standard
+    // `<home>/.agent-director/<file>` convention. The CLI opens the store
+    // relative to HOME (no --store-path flag), so we inject HOME into every
+    // subprocess env to ensure it opens the caller's intended store.
+    //
+    // Example: storePath = "/tmp/ed-hb-xyz/.agent-director/state.db"
+    //          → homeOverride = "/tmp/ed-hb-xyz"
+    //
+    // If storePath doesn't follow this pattern (e.g. a bare
+    // "/tmp/state.db"), homeOverride is null and the subprocess inherits
+    // process.env.HOME unchanged (correct when the caller controls HOME via
+    // withTempHome or a similar mechanism).
+    const expandedStore = expandTilde(opts.storePath);
+    const storeParent = dirname(expandedStore);
+    this.#homeOverride =
+      basename(storeParent) === ".agent-director" ? dirname(storeParent) : null;
+
     this.#open = true;
     this.#tail = Promise.resolve();
   }
@@ -137,6 +179,17 @@ export class SubprocessClient {
   /** Throw ErrClientClosed if the client has been closed. */
   #assertOpen(): void {
     if (!this.#open) throw new ErrClientClosed();
+  }
+
+  /**
+   * _assertOpenForTests exposes #assertOpen to test code without forcing
+   * public visibility. Mirrors the same helper on the FFI Client so that
+   * client-lifecycle tests compile against either implementation.
+   *
+   * @internal Tests only — do not call from application code.
+   */
+  _assertOpenForTests(): void {
+    this.#assertOpen();
   }
 
   // -------------------------------------------------------------------------
@@ -184,17 +237,22 @@ export class SubprocessClient {
     const argv = buildArgv(this.#cliPath, verb, params);
     const startMs = Date.now();
 
+    // Build subprocess env: snapshot process.env at call time (SRD SR-1.4),
+    // then overlay HOME when #homeOverride is set so the CLI opens the store
+    // that matches the storePath passed to the Client constructor.
+    const spawnEnv: Record<string, string> = { ...process.env } as Record<string, string>;
+    if (this.#homeOverride !== null) {
+      // TRANSITIONAL(b.eiv): remove once CLI exposes --store-path or --home flag (Epic G or later)
+      spawnEnv["HOME"] = this.#homeOverride;
+    }
+
     const proc = Bun.spawn({
       cmd: argv,
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
       detached: false,
-      // Pass a snapshot of process.env at call time so runtime mutations
-      // (e.g. LOG_FILE set in tests) are visible to the subprocess. Bun.spawn
-      // without an explicit env snapshots env at process start, not at spawn
-      // time (SRD SR-1.4).
-      env: { ...process.env },
+      env: spawnEnv,
     });
 
     // Close stdin immediately — no verb needs stdin input (SRD SR-1.3).
@@ -246,8 +304,29 @@ export class SubprocessClient {
       throw new ErrConsumerSignal(verb, signalCode);
     }
 
-    // Non-zero exit: subprocess crashed (config failure, store-open failure…).
+    // Non-zero exit: either a domain error or a crash.
+    //
+    // The CLI binary writes API-level error envelopes to STDERR (as JSON) and
+    // exits non-zero (SRD §CLI-wire: writeApiErrorAndDispatch). Diagnostic
+    // lines (e.g. "pre-trust skipped…") may precede the JSON envelope on
+    // stderr. We scan from the last line backwards to find the first JSON
+    // object that is an error envelope and re-throw it as a typed error.
+    // If no envelope is found, fall through to ErrSubprocessCrash (crash path).
     if (exitCode !== 0) {
+      const stderrLines = stderrText.trimEnd().split("\n");
+      for (let i = stderrLines.length - 1; i >= 0; i--) {
+        const line = stderrLines[i].trim();
+        if (!line.startsWith("{")) continue;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (isErrorEnvelope(parsed)) {
+          throwFromEnvelope(verb, parsed);
+        }
+      }
       throw new ErrSubprocessCrash(exitCode, null, stderrText);
     }
 

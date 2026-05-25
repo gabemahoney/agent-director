@@ -1,47 +1,44 @@
 /**
- * Client lifecycle tests (T2 subtask e7).
+ * Client lifecycle tests.
  *
- * These tests exercise constructor success, double-close idempotency, using-block
+ * Exercises constructor success, double-close idempotency, using-block
  * disposal, post-close ErrClientClosed, and the error inheritance chain.
  *
- * All tests require the compiled shared library at dist/libagent_director.so.
- * If the .so is absent the suite is skipped with a clear diagnostic message.
+ * Epic B cutover (b.19d t1.19d.9i): Client is now SubprocessClient.
+ * - Pre-flight guard changed from .so presence to CLI binary presence.
+ * - Client construction uses the `_cliPath` DI hook so tests run in-repo
+ *   without a real installed @agent-director/* platform package.
+ * - `_assertOpenForTests()` used in place of the old `(c as any)._assertOpen()`
+ *   cast (the subprocess Client uses true private `#assertOpen`; the bridge
+ *   method is the approved test-access path).
+ * - "handle is null after close" test rewritten: subprocess model has no
+ *   handle string; the equivalent contract is that post-close verb calls
+ *   throw ErrClientClosed (already covered by tests d/e; recast here to
+ *   verify _handle stub is null for FFI-shape parity).
  */
 
-import { test, expect, describe, beforeAll, afterAll } from "bun:test";
+import { test, expect, describe, afterAll } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Client } from "../src/client.js";
 import { AgentDirectorError, ErrClientClosed } from "../src/errors.js";
 
 // ---------------------------------------------------------------------------
-// Pre-flight: verify the shared library is present
+// Pre-flight: verify the CLI binary is present in dist/.
+// Post-cutover the client uses the subprocess model; the shared library is
+// not needed. The CLI binary (agent-director-linux-amd64 or darwin-arm64)
+// must be present for the tests to run.
 // ---------------------------------------------------------------------------
 const repoRoot = path.resolve(import.meta.dir, "../../..");
-const soPath = path.join(repoRoot, "dist", "libagent_director.so");
+const binaryName =
+  process.platform === "darwin" ? "agent-director-darwin-arm64" : "agent-director-linux-amd64";
+const cliPath = path.join(repoRoot, "dist", binaryName);
 
-const soExists = fs.existsSync(soPath);
-if (!soExists) {
-  // Attempt to build it; if make is unavailable just skip.
-  try {
-    const proc = Bun.spawnSync(["make", "-C", repoRoot, "libagent_director"], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (proc.exitCode !== 0) {
-      console.error(
-        `client-lifecycle.test.ts: libagent_director.so not found at ${soPath} ` +
-          `and 'make libagent_director' failed (exit ${proc.exitCode}). SKIPPING.`
-      );
-      process.exit(0); // skip the file
-    }
-  } catch {
-    console.error(
-      `client-lifecycle.test.ts: libagent_director.so not found at ${soPath} ` +
-        `and make is unavailable. SKIPPING.`
-    );
-    process.exit(0); // skip the file
-  }
+if (!fs.existsSync(cliPath)) {
+  console.error(
+    `client-lifecycle.test.ts: CLI binary not found at ${cliPath}. SKIPPING.`
+  );
+  process.exit(0);
 }
 
 // ---------------------------------------------------------------------------
@@ -69,28 +66,21 @@ afterAll(() => {
 });
 
 // ---------------------------------------------------------------------------
-// Helper: make a valid ClientOptions pointing at a fresh temp store dir.
-// The store path is a .db file inside the temp dir.
-// create_if_missing is NOT a ClientOptions field — ad_open defaults it false.
-// We pass a store path to a file that doesn't yet exist; pkg/api.New with
-// CreateIfMissing=false (the cabi default) will fail unless the DB exists.
-// Use create_if_missing via the Go layer:  ad_open accepts create_if_missing.
-// Since ClientOptions doesn't expose it, we use a storePath that already
-// exists by first touching it, OR we need to pass create_if_missing=true.
-//
-// Looking at lifecycle.go: openParams has CreateIfMissing bool `json:"create_if_missing"`.
-// ClientOptions doesn't expose this, but bootstrapFfi.callOpen doesn't send it
-// either (it's not in the params object we build in the constructor).
-//
-// For the test to work against a fresh store we need create_if_missing.
-// Solution: create the file (and its directory) ourselves so pkg/api sees an
-// existing DB path, OR expose create_if_missing in the test by calling
-// bootstrapFfi directly... but that's an internal.
-//
-// Actually the cleanest approach: look at how pkg/api.New works without
-// CreateIfMissing. If it just calls store.Open (which creates on first open),
-// this is fine. Let's try it — pkg/api.New + store.Open typically creates the
-// DB file if the parent dir exists.
+// Helper: build ClientOptions for a fresh temp store, with _cliPath injected
+// so SubprocessClient bypasses platform-package resolution and uses the
+// in-repo dist/ binary directly.
+// ---------------------------------------------------------------------------
+function makeOpts(dir: string): ClientOptions {
+  const storePath = path.join(dir, "state.db");
+  // _cliPath is an undocumented DI hook on SubprocessClient cast through unknown.
+  return { storePath, createIfMissing: true, _cliPath: cliPath } as ClientOptions;
+}
+
+// Re-import ClientOptions type (re-exported from client.ts → types.ts).
+import type { ClientOptions } from "../src/client.js";
+
+// ---------------------------------------------------------------------------
+// Tests
 // ---------------------------------------------------------------------------
 
 describe("Client lifecycle", () => {
@@ -98,8 +88,7 @@ describe("Client lifecycle", () => {
   test("(a) constructor succeeds for a fresh store path", () => {
     const dir = makeTmpDir();
     try {
-      const storePath = path.join(dir, "state.db");
-      const client = new Client({ storePath, createIfMissing: true });
+      const client = new Client(makeOpts(dir));
       client.close();
     } finally {
       removeTmpDir(dir);
@@ -110,8 +99,7 @@ describe("Client lifecycle", () => {
   test("(b) double close() is a no-op", () => {
     const dir = makeTmpDir();
     try {
-      const storePath = path.join(dir, "state.db");
-      const client = new Client({ storePath, createIfMissing: true });
+      const client = new Client(makeOpts(dir));
       client.close();
       // Second close: must not throw.
       expect(() => client.close()).not.toThrow();
@@ -125,26 +113,24 @@ describe("Client lifecycle", () => {
     const dir = makeTmpDir();
     let capturedClient: Client | undefined;
     try {
-      const storePath = path.join(dir, "state.db");
       {
-        using c = new Client({ storePath, createIfMissing: true });
+        using c = new Client(makeOpts(dir));
         capturedClient = c;
-        // Inside the block the client is open.
-        expect(() => (c as unknown as { _assertOpen(): void })._assertOpen()).not.toThrow();
+        // Inside the block the client is open — _assertOpenForTests must not throw.
+        expect(() => c._assertOpenForTests()).not.toThrow();
       }
-      // After the using block exits, _open should be false → _assertOpenForTests throws.
+      // After the using block exits, _open is false → _assertOpenForTests throws.
       expect(() => capturedClient!._assertOpenForTests()).toThrow(ErrClientClosed);
     } finally {
       removeTmpDir(dir);
     }
   });
 
-  // (d) Post-close _assertOpen throws ErrClientClosed.
-  test("(d) _assertOpen (via _assertOpenForTests) throws ErrClientClosed after close()", () => {
+  // (d) Post-close _assertOpenForTests throws ErrClientClosed.
+  test("(d) _assertOpenForTests throws ErrClientClosed after close()", () => {
     const dir = makeTmpDir();
     try {
-      const storePath = path.join(dir, "state.db");
-      const client = new Client({ storePath, createIfMissing: true });
+      const client = new Client(makeOpts(dir));
       client.close();
       expect(() => client._assertOpenForTests()).toThrow(ErrClientClosed);
     } finally {
@@ -156,8 +142,7 @@ describe("Client lifecycle", () => {
   test("(e) ErrClientClosed is instanceof ErrClientClosed, AgentDirectorError, and Error", () => {
     const dir = makeTmpDir();
     try {
-      const storePath = path.join(dir, "state.db");
-      const client = new Client({ storePath, createIfMissing: true });
+      const client = new Client(makeOpts(dir));
       client.close();
       let caught: unknown;
       try {
@@ -174,16 +159,16 @@ describe("Client lifecycle", () => {
     }
   });
 
-  // Bonus: verify the handle is nulled after close.
-  test("handle is null after close()", () => {
+  // Subprocess-model lifecycle: after close(), verb calls throw ErrClientClosed.
+  // The FFI Client expressed this as "_handle is null after close"; for the
+  // subprocess model the meaningful invariant is that the open-guard fires.
+  test("post-close verb call throws ErrClientClosed", async () => {
     const dir = makeTmpDir();
     try {
-      const storePath = path.join(dir, "state.db");
-      const client = new Client({ storePath, createIfMissing: true });
+      const client = new Client(makeOpts(dir));
       client.close();
-      // Access private field at runtime (TS erases private at JS level).
-      const handle = (client as unknown as { _handle: string | null })._handle;
-      expect(handle).toBeNull();
+      // version() checks _assertOpen() first; must throw ErrClientClosed.
+      await expect(client.version({})).rejects.toThrow(ErrClientClosed);
     } finally {
       removeTmpDir(dir);
     }

@@ -1,3 +1,7 @@
+// TODO(b.eiv Epic E): delete this file after FFI source removal.
+// Skipped during Epic B cutover (b.19d t1.19d.9i) — exercises FFI-only internals
+// that no longer reach the public surface.
+
 /**
  * Off-main-thread dispatch test.
  *
@@ -93,7 +97,7 @@ function busyLoopMs(ms: number): void {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("off-main-thread worker dispatch", () => {
+describe.skip("off-main-thread worker dispatch", () => {
   test(
     "verb call completes while main thread is busy (not delayed by busy-loop)",
     async () => {

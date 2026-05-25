@@ -1,3 +1,7 @@
+// TODO(b.eiv Epic E): delete this file after FFI source removal.
+// Skipped during Epic B cutover (b.19d t1.19d.9i) — exercises FFI-only internals
+// that no longer reach the public surface.
+
 /**
  * Verb-binding coverage test.
  *
@@ -17,7 +21,7 @@ import { test, expect, describe } from "bun:test";
 import { VERBS, kebabToUnderscore } from "../src/internal/verbs.js";
 import { BINDING_SYMBOL_NAMES } from "../src/ffi.js";
 
-describe("FFI binding coverage", () => {
+describe.skip("FFI binding coverage", () => {
   test("BINDING_SYMBOL_NAMES exactly matches expected symbol set", () => {
     const expected = new Set<string>([
       "ad_open",

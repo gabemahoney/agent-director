@@ -1,3 +1,7 @@
+// TODO(b.eiv Epic E): delete this file after FFI source removal.
+// Skipped during Epic B cutover (b.19d t1.19d.9i) — exercises FFI-only internals
+// that no longer reach the public surface.
+
 /**
  * Unit tests for FreeGuard (src/internal/freeGuard.ts).
  *
@@ -7,7 +11,7 @@
 import { test, expect, describe } from "bun:test";
 import { FreeGuard } from "../../src/internal/freeGuard.js";
 
-describe("FreeGuard", () => {
+describe.skip("FreeGuard", () => {
   // (a) First free() invokes the underlying free function exactly once with
   //     the original pointer.
   test("(a) first free() invokes the underlying function with the pointer", () => {

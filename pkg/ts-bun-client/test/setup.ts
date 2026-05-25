@@ -20,6 +20,7 @@
  */
 
 import { resolve } from "path";
+import { mkdirSync, copyFileSync, chmodSync } from "fs";
 
 // The repo root is three levels above this file:
 //   test/setup.ts → test/ → pkg/ts-bun-client/ → pkg/ → (repo root)
@@ -73,3 +74,28 @@ if (cliProc.exitCode !== 0) {
 process.env.TS_HELPER_PATH = helperBin;
 process.env.FAKE_TMUX_DIR = fakeTmuxDir;
 process.env.CLI_PATH = cliBin;
+
+// ── Stage CLI binary into platform packages for resolveCliPath() ──────────
+// Post-Epic-B-cutover: SubprocessClient uses resolveCliPath() which resolves
+// the binary via @agent-director/linux-x64/bin/agent-director. The platform
+// packages ship only package.json + README (no binary committed); setup stages
+// the just-built bin/agent-director into both the platforms/ source tree and
+// the node_modules copy so resolveCliPath() succeeds for the test run.
+//
+// Linux-only: darwin-arm64 has its own CI path. The copy is idempotent;
+// copyFileSync overwrites an existing file of the same name.
+if (process.platform === "linux") {
+  const pkgDir = resolve(import.meta.dir, "..");
+
+  const destDirs = [
+    resolve(pkgDir, "platforms", "linux-x64", "bin"),
+    resolve(pkgDir, "node_modules", "@agent-director", "linux-x64", "bin"),
+  ];
+
+  for (const dir of destDirs) {
+    mkdirSync(dir, { recursive: true });
+    const dest = resolve(dir, "agent-director");
+    copyFileSync(cliBin, dest);
+    chmodSync(dest, 0o755);
+  }
+}

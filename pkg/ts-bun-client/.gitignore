@@ -5,6 +5,8 @@ node_modules/
 # Native binaries dropped by CI / prepare-platforms — never committed.
 platforms/*/libagent_director.so
 platforms/*/libagent_director.dylib
+# CLI binary staged by test/setup.ts for local resolveCliPath() resolution.
+platforms/*/bin/
 
 # Temp dirs created by install-resolution test
 test/.tmp-*
