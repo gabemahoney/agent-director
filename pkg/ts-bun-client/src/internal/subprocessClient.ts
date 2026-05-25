@@ -29,7 +29,6 @@
  * Internal — NOT re-exported from src/index.ts until Epic B.
  */
 
-import { expandTilde } from "./tilde.js";
 import { resolveCliPath } from "./platformResolve.js";
 import { buildArgv } from "./argv.js";
 import { ErrSubprocessCrash } from "./spawner.js";
@@ -77,8 +76,6 @@ export class SubprocessClient {
   readonly #cliPath: string;
   /** Per-call timeout in milliseconds. */
   readonly #callTimeoutMs: number;
-  /** Tilde-expanded store path (stored for future use in Epic B env injection). */
-  readonly #storePath: string;
   /** Optional logger for non-fatal warnings. */
   readonly #logger: ClientOptions["logger"];
   /** Whether this client is still open. */
@@ -101,9 +98,6 @@ export class SubprocessClient {
       );
     }
     this.#callTimeoutMs = rawTimeout;
-
-    // Expand tilde in paths TS-side so the CLI receives absolute paths via env.
-    this.#storePath = expandTilde(opts.storePath);
 
     this.#logger = opts.logger;
 
