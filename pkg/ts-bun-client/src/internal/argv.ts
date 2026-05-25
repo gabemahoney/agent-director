@@ -1,10 +1,10 @@
 /**
  * argv.ts — verb-driven argv builder for the subprocess Client.
  *
- * Exports a single pure function `buildArgv(cliPath, verb, params)` that
- * converts typed verb parameters into a complete CLI argv array:
+ * Exports a single pure function `buildArgv(cliPath, verb, params, globalOpts?)`
+ * that converts typed verb parameters into a complete CLI argv array:
  *
- *   [cliPath, verbName, ...flags]
+ *   [cliPath, ...globalFlags, verbName, ...verbFlags]
  *
  * Rules:
  *   - Long-flag form only (e.g. --cwd, --claude-instance-id).
@@ -14,6 +14,9 @@
  *   - Optional fields are omitted when undefined / falsy.
  *   - Boolean flags (--no-pre-trust, --ansi, --overwrite) are only appended
  *     when the field is explicitly true.
+ *   - Global flags (b.32k: --store-path, --home, --tmux-command) appear
+ *     BEFORE the verb token so the CLI's global-flag parser in
+ *     cmd/agent-director/global_flags.go strips them prior to verb dispatch.
  *
  * Implements SRD SR-1.2 (argv construction is verb-driven and shell-free).
  *
@@ -42,17 +45,64 @@ import type {
 // ---------------------------------------------------------------------------
 
 /**
- * buildArgv converts a CLI binary path, verb name, and typed parameters into
- * a complete CLI argv array: [cliPath, verbName, ...flags].
+ * GlobalArgvOptions — values for the three global CLI flags introduced by
+ * bug b.32k. Each field is optional; when undefined the corresponding flag
+ * is omitted from argv and the CLI's own default-resolution kicks in.
  *
- * @param cliPath The absolute path to the CLI binary (argv[0]).
- * @param verb    The kebab-case verb name (must be a VerbName).
- * @param params  The typed params object for the verb.
- * @returns       The full argv array starting with cliPath.
+ * Tilde-expansion is the caller's responsibility (typically done at Client
+ * construction time via src/internal/tilde.ts).
  */
-export function buildArgv(cliPath: string, verb: VerbName, params: unknown): string[] {
+export interface GlobalArgvOptions {
+  /** Tilde-expanded path forwarded to the CLI as `--store-path`. */
+  storePath?: string;
+  /** Tilde-expanded path forwarded to the CLI as `--home`. */
+  home?: string;
+  /** Tilde-expanded path forwarded to the CLI as `--tmux-command`. */
+  tmuxCommand?: string;
+}
+
+/**
+ * buildArgv converts a CLI binary path, verb name, and typed parameters into
+ * a complete CLI argv array:
+ *
+ *   [cliPath, ...globalFlags, verbName, ...verbFlags]
+ *
+ * Global flags are inserted BEFORE the verb token because the CLI's
+ * `parseGlobalFlags` pre-scan operates on os.Args[1:] before verb dispatch
+ * (see cmd/agent-director/global_flags.go). b.32k.
+ *
+ * @param cliPath    The absolute path to the CLI binary (argv[0]).
+ * @param verb       The kebab-case verb name (must be a VerbName).
+ * @param params     The typed params object for the verb.
+ * @param globalOpts Optional global-flag values (--store-path / --home /
+ *                   --tmux-command). When undefined or all-fields-omitted,
+ *                   no global flags appear in argv and the CLI applies its
+ *                   own default-resolution.
+ * @returns          The full argv array starting with cliPath.
+ */
+export function buildArgv(
+  cliPath: string,
+  verb: VerbName,
+  params: unknown,
+  globalOpts?: GlobalArgvOptions
+): string[] {
+  const globalFlags = buildGlobalFlags(globalOpts);
   const verbFlags = buildVerbFlags(verb, params);
-  return [cliPath, ...verbFlags];
+  return [cliPath, ...globalFlags, ...verbFlags];
+}
+
+/**
+ * buildGlobalFlags returns the global-flag tokens that go BEFORE the verb
+ * name. Each flag is emitted in two-token `--flag value` form only when the
+ * corresponding field on globalOpts is set.
+ */
+function buildGlobalFlags(opts: GlobalArgvOptions | undefined): string[] {
+  if (!opts) return [];
+  const f: string[] = [];
+  if (opts.storePath !== undefined) f.push("--store-path", opts.storePath);
+  if (opts.home !== undefined) f.push("--home", opts.home);
+  if (opts.tmuxCommand !== undefined) f.push("--tmux-command", opts.tmuxCommand);
+  return f;
 }
 
 /**
