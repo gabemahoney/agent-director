@@ -65,7 +65,7 @@ function slugifyCwd(cwd: string): string {
 
 test("resume: happy path — relaunches an ended spawn", async () => {
   await withTempHome(async (homeDir) => {
-    const storePath = path.join(homeDir, "state.db");
+    const storePath = path.join(homeDir, ".agent-director", "state.db");
     const spawnId = "smoke-resume-id";
     const cwd = "/tmp";
     const sessionId = `sess-${spawnId}`;
@@ -112,7 +112,7 @@ test("resume: happy path — relaunches an ended spawn", async () => {
 
 test("resume: error — unknown id → ErrSpawnNotFound", async () => {
   await withTempHome(async (homeDir) => {
-    const storePath = path.join(homeDir, "state.db");
+    const storePath = path.join(homeDir, ".agent-director", "state.db");
     using client = new Client({ storePath, createIfMissing: true });
 
     let caught: unknown;
