@@ -17,7 +17,7 @@ const BOGUS_ID = "smoke-bogus-id-does-not-exist";
 
 test("kill: happy path — terminates a working spawn", async () => {
   await withTempHome(async (homeDir) => {
-    const storePath = path.join(homeDir, "state.db");
+    const storePath = path.join(homeDir, ".agent-director", "state.db");
     const spawnId = "smoke-kill-id";
 
     runHelper("seed-spawn", {
@@ -36,7 +36,7 @@ test("kill: happy path — terminates a working spawn", async () => {
 
 test("kill: error — unknown id → ErrSpawnNotFound", async () => {
   await withTempHome(async (homeDir) => {
-    const storePath = path.join(homeDir, "state.db");
+    const storePath = path.join(homeDir, ".agent-director", "state.db");
     using client = new Client({ storePath, createIfMissing: true });
 
     let caught: unknown;

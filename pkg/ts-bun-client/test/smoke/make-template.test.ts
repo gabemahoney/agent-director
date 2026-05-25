@@ -21,7 +21,7 @@ test("make-template: happy path — writes template file under HOME", async () =
   await withTempHome(async (homeDir) => {
     // Use a run-unique name so ErrTemplateExists never fires across runs.
     const templateName = `smoke-template-${Date.now()}`;
-    const storePath = path.join(homeDir, "state.db");
+    const storePath = path.join(homeDir, ".agent-director", "state.db");
     using client = new Client({ storePath, createIfMissing: true });
     let templatePath: string | undefined;
     try {
@@ -44,7 +44,7 @@ test("make-template: happy path — writes template file under HOME", async () =
 
 test("make-template: error — unsafe name with path separator → ErrTemplateNameUnsafe", async () => {
   await withTempHome(async (homeDir) => {
-    const storePath = path.join(homeDir, "state.db");
+    const storePath = path.join(homeDir, ".agent-director", "state.db");
     using client = new Client({ storePath, createIfMissing: true });
 
     let caught: unknown;

@@ -17,7 +17,7 @@ import { Client, ErrSpawnNotPausable, AgentDirectorError } from "../../src/index
 
 test("pause: happy path — no-op for already-terminal spawn", async () => {
   await withTempHome(async (homeDir) => {
-    const storePath = path.join(homeDir, "state.db");
+    const storePath = path.join(homeDir, ".agent-director", "state.db");
     const spawnId = "smoke-pause-id";
 
     // Seed in ended state — pause short-circuits before any tmux call.
@@ -37,7 +37,7 @@ test("pause: happy path — no-op for already-terminal spawn", async () => {
 
 test("pause: error — working spawn is not pausable → ErrSpawnNotPausable", async () => {
   await withTempHome(async (homeDir) => {
-    const storePath = path.join(homeDir, "state.db");
+    const storePath = path.join(homeDir, ".agent-director", "state.db");
     const spawnId = "smoke-pause-err-id";
 
     // Seed in working state — pause rejects this state with ErrSpawnNotPausable.

@@ -18,7 +18,7 @@ import type { ExpireResult } from "../../src/index.js";
 
 test("expire: happy path — reaps ended rows with older_than=0d", async () => {
   await withTempHome(async (homeDir) => {
-    const storePath = path.join(homeDir, "state.db");
+    const storePath = path.join(homeDir, ".agent-director", "state.db");
     const spawnId = "smoke-expire-id";
 
     runHelper("seed-spawn", {

@@ -33,7 +33,8 @@
     "prepack": "bun run build && bun run scripts/stage-skill.ts",
     "postinstall": "bun run scripts/postinstall.ts",
     "version-bump-publish": "bun run scripts/version-bump.ts",
-    "prepublishOnly": "bun run scripts/prepublish-guards.ts"
+    "prepublishOnly": "bun run scripts/prepublish-guards.ts",
+    "verify-installed-pkg": "bun run scripts/verify-installed-pkg.ts"
   },
   "optionalDependencies": {
     "@agent-director/linux-x64": "file:./platforms/linux-x64",

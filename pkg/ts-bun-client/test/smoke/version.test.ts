@@ -16,7 +16,7 @@ import type { VersionResult } from "../../src/index.js";
 
 test("version: happy path — returns version and commit strings", async () => {
   await withTempHome(async (homeDir) => {
-    const storePath = path.join(homeDir, "state.db");
+    const storePath = path.join(homeDir, ".agent-director", "state.db");
     using client = new Client({ storePath, createIfMissing: true });
     const result: VersionResult = await client.version({});
     expect(typeof result.version).toBe("string");

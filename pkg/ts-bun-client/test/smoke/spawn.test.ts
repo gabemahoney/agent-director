@@ -30,7 +30,7 @@ const OUTER_INSTANCE_ID = process.env.AGENT_DIRECTOR_INSTANCE_ID;
 
 test("spawn: happy path — creates instance with valid cwd", async () => {
   await withTempHome(async (homeDir) => {
-    const storePath = path.join(homeDir, "state.db");
+    const storePath = path.join(homeDir, ".agent-director", "state.db");
 
     // Pre-seed the parent row so the FK constraint is satisfied when the worker
     // sets parent_id = OUTER_INSTANCE_ID on the new spawn row.
@@ -52,7 +52,7 @@ test("spawn: happy path — creates instance with valid cwd", async () => {
 
 test("spawn: error — empty cwd → ErrCwdMissing", async () => {
   await withTempHome(async (homeDir) => {
-    const storePath = path.join(homeDir, "state.db");
+    const storePath = path.join(homeDir, ".agent-director", "state.db");
     using client = new Client({ storePath, createIfMissing: true });
     await expect(
       client.spawn({ cwd: "" })

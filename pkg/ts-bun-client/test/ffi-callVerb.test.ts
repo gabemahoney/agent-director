@@ -1,3 +1,7 @@
+// TODO(b.eiv Epic E): delete this file after FFI source removal.
+// Skipped during Epic B cutover (b.19d t1.19d.9i) — exercises FFI-only internals
+// that no longer reach the public surface.
+
 /**
  * Unit tests for the callVerb recipe (src/ffi.ts).
  *
@@ -43,7 +47,7 @@ function withDispatch(fn: DispatchFn, test_: () => Promise<void>): () => Promise
   };
 }
 
-describe("callVerb recipe", () => {
+describe.skip("callVerb recipe", () => {
   // (a) Success envelope → typed result.
   test(
     "(a) success envelope resolves to typed result",

@@ -20,12 +20,13 @@
  * Internal — NOT re-exported from src/index.ts.
  */
 
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import * as errors from "../errors.js";
+// Inline the catalog at bundle time so the packed tarball never needs a
+// filesystem path relative to import.meta.dir (which breaks in consumers).
+import catalogJson from "../../../../pkg/api/errnames/catalog.json" with { type: "json" };
 
 // ---------------------------------------------------------------------------
-// Catalog loader (module-load-time, synchronous)
+// Catalog loader (module-load-time, bundler-inlined)
 // ---------------------------------------------------------------------------
 
 interface CatalogEntry {
@@ -35,16 +36,7 @@ interface CatalogEntry {
   scope?: string;
 }
 
-// Resolve catalog.json relative to this source file:
-//   src/internal/errorMap.ts → ../../../../pkg/api/errnames/catalog.json
-const _catalogPath = resolve(
-  // import.meta.dir is the directory of the current source file (Bun-specific).
-  import.meta.dir,
-  "../../../../pkg/api/errnames/catalog.json"
-);
-
-const _catalogRaw = readFileSync(_catalogPath, "utf-8");
-const _catalog = JSON.parse(_catalogRaw) as CatalogEntry[];
+const _catalog = catalogJson as CatalogEntry[];
 
 // ---------------------------------------------------------------------------
 // Constructor type alias

@@ -26,7 +26,7 @@ const BOGUS_ID = "smoke-bogus-id-does-not-exist";
 
 test("read-pane: happy path — returns pane text from fake-tmux stub", async () => {
   await withTempHome(async (homeDir) => {
-    const storePath = path.join(homeDir, "state.db");
+    const storePath = path.join(homeDir, ".agent-director", "state.db");
     const spawnId = "smoke-read-pane-id";
 
     runHelper("seed-spawn", {
@@ -49,7 +49,7 @@ test("read-pane: happy path — returns pane text from fake-tmux stub", async ()
 
 test("read-pane: error — unknown id → ErrSpawnNotFound", async () => {
   await withTempHome(async (homeDir) => {
-    const storePath = path.join(homeDir, "state.db");
+    const storePath = path.join(homeDir, ".agent-director", "state.db");
     using client = new Client({ storePath, createIfMissing: true });
 
     let caught: unknown;

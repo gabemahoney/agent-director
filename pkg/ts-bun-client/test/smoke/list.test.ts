@@ -16,7 +16,7 @@ import type { ListResult } from "../../src/index.js";
 
 test("list: happy path — returns seeded spawns array", async () => {
   await withTempHome(async (homeDir) => {
-    const storePath = path.join(homeDir, "state.db");
+    const storePath = path.join(homeDir, ".agent-director", "state.db");
     const spawnId = "smoke-list-id";
 
     runHelper("seed-spawn", {
@@ -39,7 +39,7 @@ test("list: happy path — returns seeded spawns array", async () => {
 
 test("list: error — invalid label format → ErrListInvalidLabel", async () => {
   await withTempHome(async (homeDir) => {
-    const storePath = path.join(homeDir, "state.db");
+    const storePath = path.join(homeDir, ".agent-director", "state.db");
     using client = new Client({ storePath, createIfMissing: true });
 
     let caught: unknown;
