@@ -8,8 +8,7 @@
 //	go generate ./pkg/api/errnames/...
 //	make errnames-json
 //
-// The output schema is locked for downstream consumption (Epic 2 pkg/cabi,
-// Epic 5 TS/Bun bindings):
+// The output schema is locked for downstream consumption (TS/Bun bindings):
 //
 //	[
 //	  {"name": "ErrCwdMissing", "package": "spawn", "description": ""},
@@ -39,15 +38,10 @@ import (
 )
 
 // entryOutput is the per-entry JSON shape.
-//
-// scope is omitempty: standard verb-surface entries omit it; cabi-only entries
-// emit "cabi". Downstream consumers (pkg/cabi, Epic 5 TS/Bun bindings) can
-// use this marker to distinguish C-ABI-only sentinels from verb-surface errors.
 type entryOutput struct {
 	Name        string `json:"name"`
 	Package     string `json:"package"`
 	Description string `json:"description"`
-	Scope       string `json:"scope,omitempty"`
 }
 
 // packageOf maps each err_name to the short package suffix of the package
@@ -106,11 +100,6 @@ var packageOf = map[string]string{
 
 	// ErrUnknownTool is intentionally absent: it was moved from pkg/api/errnames
 	// to internal/mcp in Task 7 (dispatch-level error, not a verb-surface error).
-
-	// pkg/api/errnames — cabi-only sentinel. "cabi" is used as the package
-	// tag to signal the C-ABI origin; the sentinel is declared in this package
-	// but its semantic home is pkg/cabi's dispatch layer.
-	"ErrUnknownHandle": "cabi",
 }
 
 func main() {
@@ -125,7 +114,6 @@ func main() {
 			Name:        entry.Name,
 			Package:     pkg,
 			Description: "",
-			Scope:       entry.Scope,
 		})
 	}
 

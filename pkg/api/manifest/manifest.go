@@ -821,8 +821,9 @@ func CallableVerbs() []VerbDef {
 
 // HandleFreeVerbs returns the subset of Verbs that can be invoked without
 // a *pkg/api.Client handle. SR-2.1: this is the single source of truth
-// for handle-free dispatch in the cabi layer (Epic 2) and downstream
-// language bindings.
+// for handle-free dispatch — used by downstream language bindings (e.g. the
+// TS subprocess client's version() call) to bypass the open-client
+// requirement for verbs that don't need session state.
 func HandleFreeVerbs() []VerbDef {
 	out := make([]VerbDef, 0, len(Verbs))
 	for _, v := range Verbs {

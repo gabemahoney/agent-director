@@ -22,12 +22,11 @@ describe("types-exports: runtime namespace", () => {
     expect(typeof mod.ErrClientClosed).toBe("function");
     expect(typeof mod.ErrTmuxNotAvailable).toBe("function");
     expect(typeof mod.ErrCwdMissing).toBe("function");
-    expect(typeof mod.ErrUnknownHandle).toBe("function");
     expect(typeof mod.errorFromEnvelope).toBe("function");
     expect(typeof mod.Client).toBe("function");
   });
 
-  test("all 34 catalog error subclasses are exported", async () => {
+  test("all 33 catalog error subclasses are exported", async () => {
     const mod = await import("../src/index.js") as Record<string, unknown>;
     const catalogNames = [
       "ErrCwdMissing",
@@ -63,9 +62,8 @@ describe("types-exports: runtime namespace", () => {
       "ErrInvalidDecision",
       "ErrNoOpenPermissionRequest",
       "ErrAlreadyDecided",
-      "ErrUnknownHandle",
     ];
-    expect(catalogNames).toHaveLength(34);
+    expect(catalogNames).toHaveLength(33);
     for (const name of catalogNames) {
       expect(typeof mod[name], `${name} should be a function`).toBe("function");
     }
