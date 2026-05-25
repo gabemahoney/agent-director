@@ -3,7 +3,6 @@
         test-image test-image-smoke test-docker \
         release-binaries release-binaries-smoke \
         release-shellcheck release-bats \
-        libagent_director clean-cabi \
         consumer-dryrun \
         ts-helper fake-tmux \
         agent-director envelope-diff-ts
@@ -189,23 +188,6 @@ release-binaries-smoke: release-binaries
 		|| { echo "FAIL: linux-amd64 help did not return a non-empty verb list"; exit 1; }; \
 	echo "[smoke] OK — all 3 binaries built, linked, and the host-arch one runs"
 
-# dist/ is created on demand by libagent_director.
-dist/:
-	mkdir -p dist
-
-# libagent_director builds the C-shared library for linux/amd64 into dist/.
-# CGO_ENABLED=1 is required; this target intentionally does NOT affect the
-# static CLI produced by `make build` (CGO_ENABLED=0 remains the default).
-# After the build, check-cabi-header asserts every exported symbol starts
-# with `ad_` so a naming drift fails fast instead of silently shipping.
-libagent_director: dist/
-	CGO_ENABLED=1 go build -buildmode=c-shared -o dist/libagent_director.so ./pkg/cabi
-	go run ./tools/check-cabi-header dist/libagent_director.h
-
-# clean-cabi removes the c-shared artifacts produced by libagent_director.
-clean-cabi:
-	rm -f dist/libagent_director.so dist/libagent_director.h
-
 # consumer-dryrun builds the tools/consumer-dryrun mini-module, which imports
 # pkg/api from a separate Go module via a replace directive. A clean build
 # proves that external consumers can compile against pkg/api without
@@ -256,9 +238,8 @@ envelope-diff-ts: agent-director ts-helper fake-tmux
 
 # release-shellcheck runs shellcheck against release.sh. The target is a
 # no-op when shellcheck is not installed locally so that bare `make` runs
-# do not require it; CI installs it (cabi-matrix uses ubuntu's packaged
-# shellcheck). Add `SC2086` etc. to the disable list inline in release.sh
-# rather than globally here.
+# do not require it. Add `SC2086` etc. to the disable list inline in
+# release.sh rather than globally here.
 release-shellcheck:
 	@if command -v shellcheck >/dev/null 2>&1; then \
 		echo "[release-shellcheck] shellcheck skills/release-agent-director/release.sh"; \
@@ -267,12 +248,9 @@ release-shellcheck:
 		echo "[release-shellcheck] shellcheck not installed — skipping"; \
 	fi
 
-# release-bats runs the bats unit tests under skills/release-agent-director/tests/.
-# Same install gate as release-shellcheck: skip cleanly when bats is absent.
+# release-bats was retired alongside the cabi-matrix removal — the only
+# bats tests under skills/release-agent-director/tests/ exercised the
+# deleted cabi-collection paths. The target is kept as a no-op so any
+# stale CI lane that still calls it stays green.
 release-bats:
-	@if command -v bats >/dev/null 2>&1; then \
-		echo "[release-bats] bats skills/release-agent-director/tests/"; \
-		bats skills/release-agent-director/tests/; \
-	else \
-		echo "[release-bats] bats not installed — skipping"; \
-	fi
+	@echo "[release-bats] no release bats tests in tree — skipping"

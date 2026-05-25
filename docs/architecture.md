@@ -26,37 +26,17 @@ See the SRD (Apiary Ideas hive: `t1.jus.x5`) for the full design.
 
 ## Supported platforms (v1)
 
-The v1 supported-platform set is **`linux/amd64`** and **`darwin/arm64`**.
-`darwin/amd64` (Intel Mac) was **dropped on 2026-05-24**: no Intel Mac
-users to serve, and the GitHub-hosted `macos-13` runner image carries
-a 10x billing multiplier that no longer paid for itself. `linux/arm64`
-remains a v2 candidate for `pkg/cabi`; the CLI binary set still ships a
-`linux/arm64` Go-only binary (no cgo, no native library — released by
-Epic 7).
+The v1 supported-platform set is **`linux/amd64`**, **`linux/arm64`**,
+and **`darwin/arm64`**. `darwin/amd64` (Intel Mac) was **dropped on
+2026-05-24** (no Intel Mac users to serve). The CLI is released for
+all three; the TS Client's npm sub-packages ship the CLI binary for
+linux-x64 and darwin-arm64.
 
-## Cross-platform CI matrix
-
-`pkg/cabi` ships on the two v1 platforms above; `.github/workflows/cabi-matrix.yml`
-runs the per-language smoke and envelope-diff suites on every leg on
-every commit.
-
-The matrix uses native runners exclusively (no Zig / QEMU cross-compile):
-
-- `linux-amd64` → operator-owned **self-hosted** Reno runner registered
-  with the full label tuple `[self-hosted, Linux, X64, linux-amd64]`.
-- `darwin-arm64` → operator-owned **self-hosted** runner registered
-  with the full label tuple `[self-hosted, macOS, ARM64, darwin-arm64]`.
-  Bare `self-hosted` is not used so the workflow cannot accidentally
-  route to a different self-hosted runner.
-
-C toolchain versions are pinned per leg (gcc-11 on linux via CC/CXX env
-vars, operator-pinned Xcode/CLT on darwin/arm64) and captured into
-`build-info-*.txt` artifacts so Epic 7's release pipeline can attribute
-the toolchain shipped with each artifact.
-
-Operator setup of the self-hosted runner — including the public-repo
-security posture — is documented in
-[`docs/self-hosted-runner-setup.md`](self-hosted-runner-setup.md).
+All three binaries are pure `CGO_ENABLED=0` cross-compiles (pure-Go
+SQLite via `modernc.org/sqlite`). There is no FFI / shared-library
+build path; the b.eiv refactor (b.19d) replaced the previous `pkg/cabi`
+FFI surface with a subprocess-CLI architecture where the TS Client
+spawns the CLI binary per verb call.
 
 ## Package Layout & Layer Boundaries
 
@@ -79,13 +59,12 @@ still holds: nothing in `internal/` imports `pkg/api`.
 | `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v1 per SRD §4.2), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
 | `pkg/api/apitest` | Test seed helpers extracted from `pkg/api/*_test.go` for cross-package importing. Provides `Seed*` functions (`SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`) that set up fixture DB rows and filesystem state for `test/envelope-diff` and future Epic 4/5 smoke tests. Non-test package (regular `.go` files) so it can be imported by harnesses outside `pkg/api`. | stdlib; `internal/store`; `internal/spawn`. | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
-| `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. The `Catalog` is consumed by `cmd/agent-director`'s envelope writer, `internal/mcp`'s `classifyDispatchError`, and (future) `pkg/cabi`'s JSON encoder. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
+| `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. The `Catalog` is consumed by `cmd/agent-director`'s envelope writer and `internal/mcp`'s `classifyDispatchError`. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
 | `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. `classifyDispatchError` delegates to `errnames.Classify`. | stdlib; `pkg/api`; `pkg/api/manifest`; `pkg/api/errnames`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
 | `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
 | `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). Builds env maps, synthesizes `--settings` JSON, and asks `internal/tmux` to start the session. Inserts the `pending` row via `internal/store`. | stdlib; `internal/config`; `internal/store`; `internal/tmux`; `github.com/google/uuid` for UUID4 minting. | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
 | `internal/tmux` | Thin client over the tmux binary. Each operation is one `exec.Command` invocation. Provides `NewSession`, `HasSession`, `KillSession`, `ListPanes`. | stdlib (`bytes`, `os/exec`, `strings`, `strconv`, `sort`). | Shell processes (`/bin/sh`), template / config / store packages, anything other than direct `exec.Command`. |
 | `internal/hook` | Reads payload JSON from stdin, classifies per SRD §5.2, writes the row UPSERT, exits 0 (state-tracking fail-open). | stdlib; `internal/store`. | `internal/tmux`; `internal/spawn`; `internal/config` (the cmd-side wrapper loads config; the package itself stays narrow). |
-| `pkg/cabi` | **C-ABI shim exposing `pkg/api` to foreign callers (Bun/Python) via `ad_`-prefixed C exports.** Internal handle registry maps opaque tokens to `*pkg/api.Client` instances (thread-safe, package singleton). One-directional dependency: nothing in the module imports `pkg/cabi`. | stdlib; `pkg/api`; `pkg/api/errnames`; `pkg/api/manifest`; `cgo` (active only when building with `-buildmode=c-shared`). | `cmd/*`; `internal/*`; `pkg/api/errnames/testdata`. |
 
 ### No-business-logic-in-cmd contract
 
@@ -306,112 +285,25 @@ callers; cmd/ knows nothing about SQL. Any PR that introduces a back-edge
 
 Cite SRD §2 for the overall component decomposition this diagram realizes.
 
-### `pkg/cabi` — C-ABI envelope shape and panic-recovery contract
+### Build paths
 
-For the caller-surface topology overview and the no-duplication invariant, see [Caller surfaces and shared API](#caller-surfaces-and-shared-api).
-
-`pkg/cabi` is declared as `package main` — Go's `buildmode=c-shared` requires
-the entry package to carry that name, but conceptually this is the C-ABI shim;
-the path `pkg/cabi` is the canonical reference throughout this document.
-
-**JSON envelope shape.** Every exported `ad_*` function returns a UTF-8 JSON
-object allocated on the C heap. Three forms are possible:
-
-- **Success** — structural equivalence to the CLI's `stdout` envelope for the
-  same verb. Verb-specific top-level fields (e.g. `{"handle": "..."}` for
-  `ad_open`); no `err_name` key present.
-- **Documented error** — `{"err_name": "...", "err_description": "..."}` where
-  both strings are drawn from `pkg/api/errnames.Catalog`. The same catalog
-  drives the CLI and MCP error envelopes; `pkg/cabi` does not maintain a
-  parallel copy.
-- **Undocumented / internal error** — `{"err_name": "ErrInternal",
-  "err_description": "<sanitized>"}`. Caught via `recover()` inside every
-  exported function body. Sanitization strips absolute filesystem paths and Go
-  stack-frame lines, then caps the description at 512 bytes. The un-sanitized
-  error chain is emitted to the `pkg/cabi` debug logger (active when
-  `AGENT_DIRECTOR_DEBUG` is set) before the sanitized form crosses the C
-  boundary, preserving post-mortem fidelity without leaking internals to
-  foreign callers.
-
-**Panic-recovery contract.** Every exported C function body is wrapped in an
-inner closure guarded by `defer recover()`. A panic occurring mid-call returns
-an `ErrInternal` envelope to the caller; it never crosses the C boundary. This
-is a hard invariant: no Go panic may propagate into C.
-
-**Test enforcement — three layers.** The recover() + ErrInternal contract is
-verified by three complementary test layers:
-
-1. **In-process (`pkg/cabi/lifecycle_panic_test.go`)** — exercises `recover()`
-   at the Go level by injecting deliberate panics into the exported function
-   closures and asserting the returned envelope is a well-formed `ErrInternal`
-   object (landed in T2).
-2. **Per-verb fuzz (`pkg/cabi/fuzz_corpus_test.go` + `fuzz_verbs_test.go`)** —
-   one `FuzzAd<Verb>` target per manifest verb (T6). Each target runs a
-   22-entry seed corpus covering malformed JSON, wrong-type fields, truncated
-   UTF-8, oversized payloads, injection-style strings, depth-bomb nesting, and
-   valid-with-noise inputs. Every target asserts that the returned envelope is
-   well-formed JSON (a top-level object carrying either success keys or the
-   `err_name`+`err_description` pair, never both, never mixed).
-3. **dlopen-driven panic (`pkg/cabi/dlopen_panic_test.go`, gated
-   `cabi_dlopen && cabi_panic_inject`, T6)** — dlopens the real `.so`, fires a
-   deliberate panic via the `_inject_panic` seam, and asserts the recovered
-   `ErrInternal` envelope is returned without crashing the process. The
-   build-tag forwarding pattern: a `dlopenBuildTags` package-level variable,
-   seeded by tag-gated `init()` files (e.g. `buildtags_panic_inject.go`), is
-   read by the dlopen `TestMain` to forward `cabi_panic_inject` into the
-   `go build` command that compiles the `.so`. The deliberate-panic sentinel is
-   compiled out of production builds — it is only present when the
-   `cabi_panic_inject` build tag is set.
-
-**Verb shape: thin marshal-and-dispatch.** Every `ad_*` export is a thin
-wrapper: parse JSON params → resolve handle via the registry (or skip for
-handle-free verbs) → call the matching `*pkg/api.Client` method → serialize
-the result. No business logic lives in `pkg/cabi`; the package imports only
-`pkg/api`, `pkg/api/errnames`, and `pkg/api/manifest`. The following imports
-are explicitly prohibited in `pkg/cabi` source: `internal/store`,
-`internal/tmux`, `internal/spawn`, `internal/config`, and `internal/probe`.
-
-- **Handle-free verbs.** `ad_version` is the sole handle-free verb in v1.
-  The authoritative set is the `handleFreeVerbs` map in `dispatch.go` — no
-  other file in `pkg/cabi` may hard-code this list.
-- **`ErrUnknownHandle`.** A cabi-only sentinel registered in
-  `pkg/api/errnames.Catalog` with `Scope: "cabi"`. The five-way coherence
-  gate exempts `cabi`-scoped entries from the per-verb `manifest.ErrorNames`
-  cross-check — no CLI verb emits `ErrUnknownHandle`, so it must appear in
-  the catalog and the Go sentinel set but not in any `VerbDef.ErrorNames`
-  slice.
-- **`timeout_ms`.** Verbs whose `pkg/api` signature takes a
-  `context.Context` (`ad_pause`, `ad_find_missing`) read an optional
-  `timeout_ms` integer from the JSON params and construct a
-  `context.WithTimeout`; absent or ≤ 0 means `context.Background()` with no
-  deadline. Other verbs ignore the field entirely.
-
-### Build paths and isolation invariant
-
-agent-director has two distinct build paths that must remain independent:
+agent-director ships a single Go build path:
 
 | Path | Command | CGO | Output |
 | --- | --- | --- | --- |
-| Static CLI | `make build` | `CGO_ENABLED=0` | `bin/agent-director` |
-| C-ABI shared library | `make libagent_director` | `CGO_ENABLED=1` | `dist/libagent_director.so` + `dist/libagent_director.h` |
+| Static CLI (host) | `make build` | `CGO_ENABLED=0` | `bin/agent-director` |
+| Release cross-compile (3 platforms) | `make release-binaries` | `CGO_ENABLED=0` | `dist/agent-director-{linux-amd64,linux-arm64,darwin-arm64}` |
 
-`make build` (the default) **never** requires cgo. Only `pkg/cabi` uses
-cgo, and only when compiled via `make libagent_director`. The two build
-modes are completely orthogonal — building the CLI does not touch
-`pkg/cabi`, and building the shared library does not affect the CLI
-binary.
+The CLI is statically linked everywhere (pure-Go SQLite via
+`modernc.org/sqlite`). Linux binaries pass an `ldd → "not a dynamic
+executable"` check in `make release-binaries-smoke`.
 
-**Header validation.** After `make libagent_director` compiles the `.so`,
-the Makefile immediately runs `go run ./tools/check-cabi-header
-dist/libagent_director.h`. This tool parses the generated header and
-fails the build if any exported symbol lacks the `ad_` prefix, catching
-naming drift before the artifact ships.
+### TS Client → CLI subprocess
 
-**Isolation invariant.** `cmd/agent-director/` does NOT import
-`pkg/cabi`. The CLI binary is a pure `CGO_ENABLED=0` artifact; importing
-`pkg/cabi` would pull cgo into the CLI build path and break static
-linkage. The invariant is enforced at test time by
-`cmd/agent-director/cabi_isolation_test.go`.
+There is no FFI / shared-library path. The TS Client (`pkg/ts-bun-client`)
+spawns the bundled CLI binary as a subprocess per verb call; see
+[TS/Bun client library — Subprocess Client](#tsbun-client-library-pkgts-bun-client)
+below.
 
 ## Public API
 
@@ -434,77 +326,99 @@ main. Undocumented symbols fail the build rather than accumulating silently.
 
 ## Caller surfaces and shared API
 
-agent-director exposes three distinct caller surfaces: the CLI subprocess (`cmd/agent-director`), reached by shelling out to the binary; the in-process Go consumer, which imports `pkg/api` directly and calls `*pkg/api.Client` methods; and foreign-language callers via `pkg/cabi`, which load `libagent_director.so` and call `ad_*` C exports — TS/Bun is the primary consumer today, with Python planned.
+agent-director exposes two caller surfaces. The CLI subprocess
+(`cmd/agent-director`), reached by shelling out to the binary, serves
+both shell operators and the TS Client (`pkg/ts-bun-client`), which
+spawns one CLI subprocess per verb call. The in-process Go consumer
+imports `pkg/api` directly and calls `*pkg/api.Client` methods, no
+process boundary.
 
-no business logic is duplicated between the CLI and `pkg/cabi`; both dispatch through `pkg/api.Client`
+No business logic is duplicated between the CLI and the TS Client;
+both terminate at `pkg/api.Client`.
 
-The CLI marshals errors via `pkg/api/errnames.Catalog`: `cmd/agent-director`'s envelope writer calls `errnames.Classify` to map every Go error sentinel to its canonical `err_name` string.
-
-`pkg/cabi` reuses the same catalog for its own JSON error envelopes — there is no parallel sentinel table; the only cabi-scoped addition is `ErrUnknownHandle`, registered in the catalog with `Scope: "cabi"` and exempt from the per-verb `manifest.ErrorNames` cross-check.
+The CLI marshals errors via `pkg/api/errnames.Catalog`:
+`cmd/agent-director`'s envelope writer calls `errnames.Classify` to
+map every Go error sentinel to its canonical `err_name` string. The
+TS Client lifts the same `err_name` strings out of the CLI's stderr
+envelope and rethrows them as the matching `Err*` subclass.
 
 ```
-  CLI subprocess         in-process Go consumer    foreign wrapper (TS/Bun via pkg/cabi)
-  (cmd/agent-director)   (import pkg/api)          (libagent_director.so)
-         │                      │                          │
-         │                      │                  +----------------+
-         │                      │                  |   pkg/cabi     |
-         │                      │                  | (ad_* exports) |
-         │                      │                  +-------+--------+
-         │                      │                          │
-         └──────────────────────┴──────────────────────────┘
-                                │   client.X(params)
-                                ▼
-                   +--------------------------+
-                   |     pkg/api.Client       |
-                   | (verb-handler home;      |
-                   |  owns store/tmux/cfg)    |
-                   +-----------+--------------+
-                    │      │      │      │    │
-                    ▼      ▼      ▼      ▼    ▼
-               internal/ internal/ internal/ internal/ internal/
-               store     tmux      spawn     config    probe
+  CLI / TS Client                in-process Go consumer
+  (cmd/agent-director,           (import pkg/api)
+   pkg/ts-bun-client via
+   subprocess spawn)
+         │                              │
+         │   stdin/stdout JSON          │   client.X(params)
+         │   envelopes                  │
+         └──────────────┬───────────────┘
+                        ▼
+           +--------------------------+
+           |     pkg/api.Client       |
+           | (verb-handler home;      |
+           |  owns store/tmux/cfg)    |
+           +-----------+--------------+
+            │      │      │      │    │
+            ▼      ▼      ▼      ▼    ▼
+       internal/ internal/ internal/ internal/ internal/
+       store     tmux      spawn     config    probe
 ```
 
 Every arrow from a caller surface terminates at `pkg/api.Client`; no surface short-circuits to a lower layer.
 
-## TS/Bun client
+## TS/Bun client library (`pkg/ts-bun-client`)
 
-`pkg/ts-bun-client/` is the TypeScript client library for agent-director. It is the primary foreign-language consumer of `pkg/cabi` and ships as a Bun-native ESM package (`type: "module"`, `target: "bun"`).
+`pkg/ts-bun-client/` is the TypeScript client library for agent-director.
+It ships as a Bun-native ESM package (`type: "module"`, `target: "bun"`)
+and spawns the bundled CLI binary as a subprocess per verb call.
 
-### FFI boundary
+### Subprocess Client (post-b.eiv architecture)
 
-The TS client calls into `libagent_director.so` (or `.dylib` on macOS) via Bun's built-in FFI (`bun:ffi`). The shared library is produced by `make libagent_director` from `pkg/cabi`. The FFI layer lives in `src/ffi.ts` (internal, not re-exported); it dlopens the native library at startup and exposes typed wrappers around the `ad_*` C exports. Callers consume `src/client.ts`'s `Client` class — the FFI surface is never exposed directly.
+The public `Client` is `src/internal/subprocessClient.ts` (re-exported
+from `src/client.ts`). For every verb call the Client spawns the
+bundled `agent-director` CLI binary with a JSON params envelope on
+argv, reads the stdout JSON envelope back, and returns it (or throws
+the matching `Err*` subclass for stderr error envelopes).
 
 ```
   agent-director (TS/Bun)
        │
-       │  src/client.ts  (public Client class)
+       │  src/client.ts            (public Client = SubprocessClient)
        │        │
-       │  src/ffi.ts     (internal bun:ffi dlopen)
+       │  src/internal/
+       │     subprocessClient.ts   (per-call spawn + parse)
+       │     spawner.ts            (Bun.spawn wrapper, stderr/stdout pumps)
+       │     platformResolve.ts    (one-shot binary path resolution)
+       │     argv.ts               (verb name + JSON params → argv)
+       │     errorMap.ts           (stderr envelope → typed Err* class)
        │        │
        ▼        ▼
-  libagent_director.so  (pkg/cabi, CGO_ENABLED=1)
+  agent-director CLI subprocess  (bin/agent-director)
        │
        ▼
   pkg/api.Client
 ```
 
+There is no FFI, no shared library, no worker thread. The replaced
+`bun:ffi` path lived briefly in `pkg/cabi` + `src/ffi.ts` + a dedicated
+worker; the b.eiv refactor (b.19d) replaced it with the per-call
+subprocess model.
+
 ### Per-platform optional-dependency packaging
 
 **Distribution model.** `pkg/ts-bun-client/` follows the [esbuild distribution
 model](https://esbuild.github.io/getting-started/#download-a-build) for native
-binaries: the top-level package ships zero `.so`/`.dylib` files; each
-supported platform gets its own optional sub-package that carries exactly one
-native shared library. `npm install` (and `bun install`) resolve only the
-sub-package that matches `os` + `cpu` on the installing host, leaving the
-others absent.
+binaries: the top-level package ships zero binaries; each supported
+platform gets its own optional sub-package that carries exactly one CLI
+binary at `bin/agent-director`. `npm install` (and `bun install`)
+resolve only the sub-package that matches `os` + `cpu` on the installing
+host, leaving the others absent.
 
 **Sub-packages (v1 — two platforms):**
 
 | npm package | Platform | Binary file |
 | --- | --- | --- |
-| `@agent-director/linux-x64` | Linux x86-64 | `libagent_director.so` |
-| `@agent-director/darwin-arm64` | macOS Apple Silicon | `libagent_director.dylib` |
+| `@agent-director/linux-x64` | Linux x86-64 | `bin/agent-director` |
+| `@agent-director/darwin-arm64` | macOS Apple Silicon | `bin/agent-director` |
 
 > **v1 scope note (2026-05-24).** `@agent-director/darwin-x64` (macOS
 > Intel) was **dropped** from the v1 set — no Intel Mac users to serve
@@ -513,58 +427,60 @@ others absent.
 > sub-package `@agent-director/linux-arm64` will be added then.
 
 Each sub-package lives under `pkg/ts-bun-client/platforms/<tuple>/` and
-contains only `package.json`, `README-binary-source.md`, and (CI-injected)
-the native binary. The binary is gitignored; CI drops it in after
-`make libagent_director` for the matching target.
+contains only `package.json`, `README-binary-source.md`, and
+(release-injected) the CLI binary under `bin/agent-director`. The
+binary is gitignored; `release.sh` stages it after `make
+release-binaries` cross-compiles.
 
-For local development, `bun run prepare-platforms` copies the already-built
-`dist/libagent_director.so` into `platforms/linux-x64/`, then `bun install`
-links it into `node_modules/`.
+For local development, `bun run prepare-platforms` copies the matching
+`dist/agent-director-<os>-<arch>` into `platforms/<tuple>/bin/agent-director`.
+The TS test preload (`test/setup.ts`) does the same at test time so
+`resolveCliPath()` succeeds against the in-repo binary.
 
-**Resolver flow — `src/platform.ts`.**
+**Resolver flow — `src/internal/platformResolve.ts`.**
 
-`src/platform.ts` (internal, not re-exported from `src/index.ts`) implements a
-five-step resolution sequence:
+`platformResolve.ts` (internal, not re-exported from `src/index.ts`)
+implements a five-step resolution sequence performed once at Client
+construction time (one-shot; not per-call):
 
 1. **Bun version check.** Compare `Bun.version` against `MIN_BUN_VERSION`
    (`"1.0.21"`). Fail fast with `ErrBunVersionTooOld` before attempting any
    module resolution.
 2. **Tuple lookup.** Build `<process.platform>-<process.arch>` and look it up
    in a static map. An unsupported tuple throws `ErrUnsupportedPlatform`.
-3. **Sub-package resolution.** Call `import.meta.resolve("<subpkg>/package.json")`
-   (Bun-synchronous, returns a `file://` URL). On failure (package not
-   installed), throw `ErrPlatformPackageMissing`.
-4. **Binary existence check.** Compute the binary path from the resolved
-   package directory and call `existsSync`. If absent, throw
-   `ErrPlatformPackageMissing` (message differentiates the two missing cases).
-5. **dlopen.** Call Bun's `dlopen(libPath, buildBindingSpec())` with the full
-   18-symbol binding spec (built from `buildBindingSpec()` in
-   `src/internal/bindingSpec.ts`). Return `{ lib: symbols, libPath }`.
+3. **Sub-package resolution.** Call
+   `import.meta.resolve("<subpkg>/package.json")` (Bun-synchronous,
+   returns a `file://` URL). On failure (package not installed), throw
+   `ErrPlatformPackageMissing`. Construct
+   `<pkgDir>/bin/agent-director`.
+4. **Stat the binary.** `statSync` on the resolved path; if absent,
+   throw `ErrPlatformPackageMissing` (the message differentiates the
+   two missing cases).
+5. **Execute-bit check.** Check `S_IXUSR | S_IXGRP | S_IXOTH` against
+   the current uid/gid; if not executable throw `ErrCliNotExecutable`.
 
-`loadNative()` is the public entry point (real globals); `_loadNativeInternal(opts)`
-is the DI-able overload used by tests to inject `platform`, `arch`, and
-`bunVersion` without monkey-patching process globals.
-
-**Three platform error subclasses** (all TS-only — see T10 allow-list):
+**Four platform error subclasses** (all TS-only):
 
 | Class | Thrown when | Key field in message |
 | --- | --- | --- |
 | `ErrBunVersionTooOld` | `Bun.version` < `1.0.21` | actual version + minimum |
 | `ErrUnsupportedPlatform` | tuple not in supported set | tuple string (e.g. `linux-arm64`) |
 | `ErrPlatformPackageMissing` | sub-package not installed or binary absent | sub-package name |
+| `ErrCliNotExecutable` | binary exists but lacks execute permission | binary path |
 
 **version-bump script.** `scripts/version-bump.ts` is a publish-time helper.
 During local development the top-level `optionalDependencies` entries use
 `file:./platforms/<tuple>` paths so `bun install` resolves them from the
-workspace. Before publishing to npm, CI runs:
+workspace. Before publishing to npm, `release.sh` runs:
 
 ```sh
 bun run version-bump-publish --version X.Y.Z
 ```
 
-This rewrites the three `file:` entries to `^X.Y.Z` registry pins. The script
-is idempotent (running twice with the same version is a no-op). After publish,
-`git checkout package.json` restores the `file:` paths for local development.
+This rewrites the two `file:` entries to `^X.Y.Z` registry pins. The
+script is idempotent (running twice with the same version is a no-op).
+After publish, `git checkout package.json` restores the `file:` paths
+for local development.
 
 ### Release blockers
 
@@ -583,36 +499,43 @@ pkg/ts-bun-client/
 ├── package.json          name: agent-director, version 0.0.0
 ├── tsconfig.json         strict, ES2022 + ESNext.Disposable, declaration-only to dist/
 ├── .eslintrc.cjs         @typescript-eslint strict rules
-├── build.ts              Bun.build (ESM) → tsc (declarations)
+├── build.ts              Bun.build (ESM, single entry) → tsc (declarations)
 ├── src/
 │   ├── index.ts          public re-exports (client, errors, types)
-│   ├── client.ts         Client class (T2)
-│   ├── ffi.ts            bun:ffi dlopen + callVerb (T3, internal)
-│   ├── errors.ts         typed error subclasses (T4)
-│   ├── types.ts          param/result types (T4)
-│   ├── platform.ts       platform resolver (T5, internal)
-│   └── internal/         internal helpers
+│   ├── client.ts         thin re-export: Client = SubprocessClient
+│   ├── errors.ts         typed error subclasses
+│   ├── types.ts          param/result types
+│   └── internal/
+│       ├── subprocessClient.ts  per-call CLI spawn + envelope parse
+│       ├── spawner.ts           Bun.spawn wrapper, stderr/stdout pumps
+│       ├── platformResolve.ts   one-shot CLI binary path resolver
+│       ├── argv.ts              verb name + JSON params → argv
+│       ├── errorMap.ts          stderr envelope → typed Err* class
+│       ├── verbs.ts             callable-verb list (mirrors manifest.CallableVerbs)
+│       ├── tilde.ts             `~` → home expansion
+│       └── tsOnlyErrors.ts      TS-only error allow-list (catalog-drift exemption)
+├── platforms/            per-platform npm sub-packages
+│   ├── linux-x64/        @agent-director/linux-x64 → bin/agent-director
+│   └── darwin-arm64/     @agent-director/darwin-arm64 → bin/agent-director
 ├── test/                 bun:test suite
 └── dist/                 build output (gitignored)
 ```
 
-Error catalog and verb-binding details are deferred to later sections (added by T3 and T4).
-
 ### Client lifecycle
 
-A `Client` object owns exactly one Go-side `pkg/api.Client` behind an opaque handle string.
+A `Client` (aliased from `SubprocessClient`) owns no Go-side resources;
+each verb call is a one-shot subprocess.
 
 **Construction.** `new Client(opts)` is synchronous. The constructor:
 
-1. Applies tilde expansion (TS-side, via `src/internal/tilde.ts`) to `storePath` and `configPath` so the C-ABI always receives absolute paths.
-2. Calls `ad_open` (over Bun FFI) with a JSON params envelope: `{ "store_path": "...", "config_path": "...", "tmux_command": "...", "create_if_missing": true|false }`.
-3. Parses the returned JSON envelope. On `{ "handle": "<token>" }` → stores the handle. On `{ "err_name": "...", "err_description": "..." }` → throws a typed `AgentDirectorError` subclass.
+1. Applies tilde expansion (TS-side, via `src/internal/tilde.ts`) to `storePath` and `configPath` so the CLI subprocess always receives absolute paths.
+2. Calls `resolveCliPath()` once (steps in [Per-platform optional-dependency packaging](#per-platform-optional-dependency-packaging) above) and caches the binary path on the instance.
+3. Stores the caller-supplied options for forwarding on each verb call. No subprocess is spawned at construction time; `client.version({})` is the canonical "is the binary functional" smoke.
 
 **`close()`.**
 
-- Calls `ad_close` with `{ "handle": "<token>" }`.
-- Parses the returned envelope. On an error envelope, warns via the optional `logger` but does **not** throw (idempotency guarantee).
-- Nulls the internal handle field and sets `_open = false`.
+- Sets `_open = false` so subsequent verb calls throw `ErrClientClosed`.
+- Has no subprocess to terminate (every verb call is its own short-lived subprocess) — so it cannot fail mid-call.
 - **Idempotent**: a second `close()` call is a no-op.
 
 **`[Symbol.dispose]()`** delegates to `close()`, enabling `using` blocks (Explicit Resource Management):
@@ -626,51 +549,58 @@ A `Client` object owns exactly one Go-side `pkg/api.Client` behind an opaque han
 
 **`_assertOpen()`** is called at the top of every verb method. It throws `ErrClientClosed` (a TS-only error subclass, not in the shared Go catalog) if the client has already been closed.
 
-**Tilde expansion** is handled entirely on the TS side, in `src/internal/tilde.ts`, before any path value crosses the FFI boundary. The C-ABI and `pkg/api.New` never receive a leading `~`.
+**Tilde expansion** is handled entirely on the TS side, in
+`src/internal/tilde.ts`, before any path value is forwarded to the CLI
+subprocess. The subprocess never receives a leading `~`.
 
-### FFI call recipe
+### Subprocess call recipe
 
-Every verb call from `Client` follows this six-step recipe. The steps split across two files:
+Every verb call from `Client` follows this four-step recipe inside
+`src/internal/subprocessClient.ts`:
 
-**`src/internal/worker.ts`** (runs inside the `node:worker_threads` Worker):
-1. **Encode params** — verb params object is JSON-stringified and merged with the opaque handle (as `{"handle":"<token>", ...verb-params}`). Handle-free verbs (`version`) omit the handle. Result is a null-terminated UTF-8 `Buffer`.
-2. **Call C symbol** — `lib.symbols.ad_<verb>(ptr(inputBuf))` returns a native `Pointer` to the heap-allocated response string.
-3. **Copy CString** — `new CString(rawPtr).toString()` copies the C string into a JS string.
-4. **Free pointer** — `ad_free_cstring(rawPtr)` runs in a `try/finally` block via `FreeGuard` (`src/internal/freeGuard.ts`). The error path frees too; the guard ensures exactly-once free even if `toString()` throws.
-
-**`src/internal/workerProxy.ts`** (main thread, post-worker):
-5. **Parse JSON** — `JSON.parse(jsonString)` on the main thread, where the error-class graph is loaded once.
-6. **Return or throw** — if `err_name` is present in the parsed envelope, `errorFromEnvelope()` creates a typed `AgentDirectorError` subclass and the Promise rejects. Otherwise the parsed value is resolved.
-
-**Why a dedicated worker?**
-Bun FFI has no per-symbol `async: true` marker. Without the worker, every `ad_*` call would block the JS event loop for the duration of the Go-side operation. A single dedicated `node:worker_threads` Worker is the off-main-thread mechanism. One worker per process (not a pool): the Go runtime inside the shared library carries process-global state (the handle registry), so multiple parallel dlopen handles would split that state.
-
-**`src/ffi.ts`** exposes the thin public facade `callVerb<P, R>(verb, handle, params)` that routes to `workerProxy.dispatch` and casts the result. The callable verb list and symbol names live in `src/internal/verbs.ts` (mirrors `manifest.CallableVerbs()`).
+1. **Build argv.** `src/internal/argv.ts` maps the verb name + params
+   object to the canonical CLI argv (e.g. `["send-keys",
+   "--claude-instance-id", "<id>", "--text", "..."]`). Per-Client
+   options (`storePath`, `configPath`, `tmuxCommand`) are prepended as
+   global flags. JSON-only fields go through `--params-json` for
+   verbs that accept it.
+2. **Spawn the CLI.** `src/internal/spawner.ts` calls `Bun.spawn`
+   against the resolved `_cliPath`, pipes stdin (closed),
+   captures stdout and stderr, and respects `callTimeoutMs` (default
+   30 s).
+3. **Parse the envelope.** On exit code 0, parse stdout as a JSON
+   object → return it. On non-zero exit, parse stderr as a JSON
+   error envelope (`{ "err_name": "...", "err_description": "..." }`)
+   via `src/internal/errorMap.ts` and throw the matching typed
+   `AgentDirectorError` subclass.
+4. **Timeout / signal handling.** A per-call timer drives a SIGTERM →
+   SIGKILL escalation when the budget is exceeded; the resulting
+   rejection is `ErrCallTimeout`. Externally-killed subprocesses
+   reject with `ErrConsumerSignal`.
 
 ```
 Client.sendKeys(params)
   │
-  ▼  src/ffi.ts → callVerb("send-keys", handle, params)
+  ▼  src/internal/subprocessClient.ts → callVerb("send-keys", params)
   │
-  ▼  src/internal/workerProxy.ts → dispatch() [main thread]
-     posts {id, op:"send-keys", handle, paramsJSON} to Worker
+  ▼  argv.ts → [verb, ...flags]
   │
-  ▼  src/internal/worker.ts [worker thread]
-     encode → ad_send_keys(ptr(buf)) → copy CString → free (finally) → post result
+  ▼  spawner.ts → Bun.spawn(_cliPath, argv, { stdin: "ignore", stdout: "pipe", stderr: "pipe" })
   │
-  ▼  workerProxy receives {type:"result", jsonString}
-     JSON.parse → check err_name → resolve or reject
+  ▼  read stdout to EOF; await exit
   │
-  ▼  Client.sendKeys(params): Promise<SendKeysResult>
+  ▼  exit 0  → JSON.parse(stdout) → resolve
+     exit !=0 → JSON.parse(stderr) → errorMap.ts → throw Err* subclass
 ```
 
-The `ad_free_cstring` pointer is guarded by `FreeGuard<T>` (generic over the pointer type), which nulls the internal reference before calling the underlying free function so a second free is always a no-op.
+Spawn-per-call is the same model the shell CLI uses. There is no
+shared Go-runtime state to preserve across calls.
 
 ### Error mapping
 
 Every C-ABI error envelope carries two string fields: `err_name` (the canonical error name, e.g. `"ErrSpawnNotFound"`) and `err_description` (a human-readable detail string). The TS client translates these into a typed class hierarchy so callers can catch specific errors with `instanceof`.
 
-**Catalog source.** `pkg/api/errnames/catalog.json` is the single source of truth for every named error the Go binary can emit. It contains 34 entries at time of writing (T4). Each entry has a `name` field (the `err_name` string) and an optional `scope` field (`"cabi"` for the `ErrUnknownHandle` entry, which is generated by the handle-registry, not a pkg/api verb).
+**Catalog source.** `pkg/api/errnames/catalog.json` is the single source of truth for every named error the Go binary can emit. It contains 34 entries at time of writing. Each entry has a `name` field (the `err_name` string) and an optional `scope` field (`"cabi"` was used historically for the `ErrUnknownHandle` entry, which originated in the now-removed `pkg/cabi` handle registry; it is retained in the catalog for symmetry but is not emitted by any current code path).
 
 **Base class.** `src/errors.ts::AgentDirectorError extends Error`. Constructor: `(verb: string, err_name: string, err_description: string)`. Sets `this.name = this.constructor.name` so subclass names propagate correctly through the prototype chain. Readonly fields: `verb`, `errName`, `errDescription`. Message format: `"${err_name}: ${err_description}"`.
 
@@ -690,7 +620,7 @@ subclass in `src/errors.ts` carries a comment cross-referencing this module.
 
 **Factory.** `errorFromEnvelope(verb, err_name, err_description): AgentDirectorError` in `src/errors.ts`. Maintains an internal `ERROR_TABLE` literal that maps every `err_name` string to its constructor. Unknown `err_name` values produce a plain `AgentDirectorError` with a `console.warn` so callers are not silently swallowed.
 
-**Wiring.** `src/internal/workerProxy.ts` calls `errorFromEnvelope(entry.op, parsed.err_name, parsed.err_description)` on the main thread when a verb result envelope contains `err_name`. The `entry.op` (the verb name stored in the pending-dispatch map alongside resolve/reject) provides the `verb` argument.
+**Wiring.** `src/internal/errorMap.ts` calls `errorFromEnvelope(verb, parsed.err_name, parsed.err_description)` from `subprocessClient.ts` when the CLI exits non-zero and stderr parses as an error envelope.
 
 **Catalog drift enforcement gate.** `pkg/ts-bun-client/test/errors-catalog-drift.test.ts`
 reads `pkg/api/errnames/catalog.json` at test time (the single source of truth,
@@ -1787,18 +1717,18 @@ first failing phase:
    `git log <prev-tag>..HEAD`, grouped by Epic ID where commit
    messages reference one.
 3. **build** — `make release-binaries` cross-compiles the three CLI
-   targets into `dist/`. `collect_cabi_artifacts()` then locates the
-   green `cabi-matrix.yml` workflow run for the release commit and
-   downloads `pkg-cabi-<platform>` artifacts (`.so`/`.dylib` plus
-   the C header) into `dist/cabi/<platform>/` for the two v1
-   cabi platforms (linux/amd64, darwin/arm64). One canonical header
-   is staged at `dist/cabi/include/libagent_director.h` for the
-   gh-release phase to attach.
-4. **verify** — Go smoke (`test/smoke/go/...`), TS smoke
-   (`pkg/ts-bun-client`), and Go + TS envelope-diff. Each sub-step
-   failure halts the release with exit code 5. `AD_CABI_DIR` is
-   exported so the TS suite loads the just-built `dist/cabi/`
-   library, not a dev-checkout build.
+   targets into `dist/agent-director-{linux-amd64,linux-arm64,darwin-arm64}`
+   (`CGO_ENABLED=0`, pure-Go SQLite). Each binary is staged into the
+   matching `pkg/ts-bun-client/platforms/<dir>/bin/agent-director` so
+   `npm publish` later picks it up via the sub-package `files` glob.
+4. **verify** — Stage a release-stamped copy of the umbrella, `bun pm
+   pack` it, install the tarball into a temp `HOME` alongside the host's
+   platform sub-package, and run `scripts/verify-installed-pkg.ts --smoke`
+   against the installed package. The smoke asserts the postinstall
+   placed `~/.claude/skills/install-agent-director/` with the right
+   frontmatter version AND that `client.version()` returns a well-formed
+   `{ version, commit }` envelope. Any sub-step failure halts with exit
+   code 5.
 5. **tag** — `git tag -a $VERSION -m "Release $VERSION" && git push
    origin $VERSION`. **Point of no return.** The Go module
    resolution relies on the single root tag because `pkg/api/`
@@ -1810,52 +1740,17 @@ first failing phase:
    with a clear "H3 unresolved" error if the npm name ever regresses
    to the `@CHANGEME-H3/agent-director` placeholder (forward-going
    tripwire; H3 itself was resolved 2026-05-24).
-7. **gh-release** — `gh release create $VERSION` with exactly
-   **6 attached assets**:
-   - 3 CLI binaries: `agent-director-linux-amd64`,
-     `agent-director-linux-arm64`, `agent-director-darwin-arm64`
-     (`darwin/amd64` was dropped from v1 on 2026-05-24 alongside the
-     cabi platform set).
-   - 2 pkg/cabi shared libraries: `dist/cabi/linux-amd64/libagent_director.so`,
-     `dist/cabi/darwin-arm64/libagent_director.dylib`.
-   - 1 canonical C header: `dist/cabi/include/libagent_director.h`
-     (the header is platform-independent; the canonical copy is
-     staged at this stable path by `collect_cabi_artifacts()` in the
-     build phase).
-
-   Release notes are embedded via `--notes-file` (not an attached
-   asset).
+7. **gh-release** — `gh release create $VERSION` with exactly **3
+   attached assets** — the three CLI binaries:
+   `agent-director-linux-amd64`, `agent-director-linux-arm64`,
+   `agent-director-darwin-arm64`. `darwin/amd64` was dropped from v1
+   on 2026-05-24. Release notes are embedded via `--notes-file` (not
+   an attached asset).
 
 The script DEFAULTS to `--dry-run`. Live runs require `--release`.
 In dry-run mode the script executes phases 1-4 fully, runs the
 tag-phase in "would-push" preview mode, and exits before any
 irreversible step.
-
-#### Toolchain-pin diff in release notes
-
-Per SRD §SR-2.3 any change to a pinned C toolchain version must be
-surfaced in the release notes. `skills/release-agent-director/
-toolchain-pin-diff.sh` extracts the pins from
-`.github/workflows/cabi-matrix.yml` at the current commit AND at
-the previous release tag, then prints a markdown section listing
-only the differences:
-
-```
-## Toolchain pin changes since v0.1.0
-
-- `gcc(linux-amd64)`: gcc-10 → gcc-11
-- `xcode(darwin-amd64)`: Xcode 14.3 → Xcode 15.2
-- `bun`: 1.2.0 → 1.3.13
-```
-
-The notes phase appends this section to `dist/release-notes.md`
-when there are differences and is silent otherwise. Pins tracked:
-
-- `gcc-NN` (linux/amd64 leg's `apt-get install` line).
-- `Xcode_X.Y.app` (no longer present in the workflow after the
-  2026-05-24 darwin/amd64 drop; the regex is retained so a diff
-  against an older release tag still surfaces the removal).
-- `BUN_VERSION: 'x.y.z'` (workflow env scalar).
 
 The darwin/arm64 leg's Xcode pin lives on the self-hosted runner
 itself (operator-configured per `docs/self-hosted-runner-setup.md`)
@@ -2119,9 +2014,9 @@ subcommands.
 
 ### TS smoke-test harness
 
-`pkg/ts-bun-client/test/` contains the Bun smoke-test suite for every callable
-verb.  It exercises `pkg/ts-bun-client/src/` end-to-end through the real
-`libagent_director.so` FFI boundary.
+`pkg/ts-bun-client/test/` contains the Bun smoke-test suite for every
+callable verb. It exercises `pkg/ts-bun-client/src/` end-to-end by
+spawning the real CLI binary per verb call.
 
 **Directory layout.**
 
@@ -2157,41 +2052,44 @@ test/
 thread, runs `testFn(homeDir)`, then restores env and cleans up the temp dir (on
 success) or preserves it (on failure, for inspection).
 
-**FFI worker isolation caveat.**  Bun Worker threads inherit a snapshot of the
-OS-level environment at spawn time and do NOT reflect subsequent `process.env`
-mutations in the parent thread.  The FFI worker (which runs all C-ABI calls)
-therefore sees the ORIGINAL `HOME` and `PATH` regardless of what
-`withTempHome` sets.  Three consequences affect test design:
+**Subprocess environment isolation caveat.** Each verb call spawns the
+CLI binary in a fresh subprocess. By default the subprocess inherits
+the parent's process environment, but `withTempHome` only sets
+`process.env` in the main test thread — the CLI subprocess sees the
+modified environment at spawn time, but verbs that resolve paths
+relative to `HOME` (Go's `os.UserHomeDir()`) read the same value the
+parent's `HOME` env var points at. Smoke tests use the explicit
+`Client` options where possible:
 
 1. **tmux binary** — verbs that invoke tmux (`spawn`, `send-keys`, `read-pane`,
-   `resume`) must pass `tmuxCommand: <path-to-fake-tmux>` explicitly to the
-   `Client` constructor so the worker uses the fake-tmux stub rather than the
-   real binary found on its PATH snapshot.
+   `resume`) pass `tmuxCommand: <path-to-fake-tmux>` explicitly to the
+   `Client` constructor so the CLI subprocess uses the fake-tmux stub
+   rather than the real binary on PATH.
 
 2. **HOME-relative paths** — `make-template` writes to
-   `~/.agent-director/templates/` using Go's `os.UserHomeDir()` in the worker,
-   which resolves to the REAL home (`/home/horde`), not the per-test temp dir.
-   Tests that check `result.path` assert the filename suffix only, not a
-   `startsWith(homeDir)` prefix, and delete the file in a `finally` block.
+   `~/.agent-director/templates/` using Go's `os.UserHomeDir()` inside
+   the CLI subprocess. Tests that check `result.path` assert the
+   filename suffix only and delete the file in a `finally` block.
 
-3. **JSONL paths** — `resume`'s pre-flight `os.Stat` for the JSONL transcript
-   likewise resolves under the real HOME.  Resume tests create the JSONL
-   placeholder at `${REAL_HOME}/.claude/projects/${slug(cwd)}/${sessionId}.jsonl`
-   (where `REAL_HOME` is captured at module-load time, before any `withTempHome`
-   override) and delete it in a `finally` block.
+3. **JSONL paths** — `resume`'s pre-flight `os.Stat` for the JSONL
+   transcript resolves under the subprocess's inherited HOME. Resume
+   tests create the JSONL placeholder at
+   `${HOME}/.claude/projects/${slug(cwd)}/${sessionId}.jsonl` and
+   delete it in a `finally` block.
 
 **`AGENT_DIRECTOR_INSTANCE_ID` and the FK constraint.**
 
 When tests run inside a live Claude session the environment variable
-`AGENT_DIRECTOR_INSTANCE_ID` is set to the session's UUID.  The FFI worker
-inherits this value and passes it as `parent_id` on every `InsertPending` and
-`SetParentID` call.  Because the test stores are fresh SQLite files that do not
-contain a row for the session UUID, the FOREIGN KEY constraint fails.
+`AGENT_DIRECTOR_INSTANCE_ID` is set to the session's UUID. The CLI
+subprocess inherits this value and passes it as `parent_id` on every
+`InsertPending` and `SetParentID` call. Because the test stores are
+fresh SQLite files that do not contain a row for the session UUID, the
+FOREIGN KEY constraint fails.
 
 Any smoke test that exercises a verb that writes `parent_id` (`spawn`,
 `resume`) pre-seeds a row with `id = process.env.AGENT_DIRECTOR_INSTANCE_ID`
-in the same store before calling the verb.  This satisfies the FK constraint
-without modifying the worker's inherited environment.
+in the same store before calling the verb. This satisfies the FK
+constraint without altering the subprocess's inherited environment.
 
 **fake-tmux stub.**
 
@@ -2228,11 +2126,11 @@ untriggerable on Linux).
 ### TS envelope-diff regression
 
 `pkg/ts-bun-client/test/envelope-diff.test.ts` is the TypeScript counterpart to
-Epic 3's Go-side envelope-diff harness.  Both suites run the same 15 callable
-verbs against identical SQLite fixtures and assert that the CLI subprocess output
-and the Bun Client wrapper output are structurally identical — catching any
-divergence introduced by the FFI bindings, parameter marshalling, or result
-deserialization.
+Epic 3's Go-side envelope-diff harness. Both suites run the same 15 callable
+verbs against identical SQLite fixtures and assert that the CLI subprocess
+output and the Bun Client wrapper output are structurally identical —
+catching any divergence introduced by argv construction, JSON parameter
+marshalling, or stdout-envelope deserialization in the TS Client.
 
 **How it works.**
 
@@ -2284,11 +2182,12 @@ repo root.
 
 **fake-tmux and PATH.**
 
-Both the CLI subprocess and the FFI worker must resolve `tmux` to the fake stub.
-For the CLI, `runCli` receives a `cliEnv` object that prepends `FAKE_TMUX_DIR`
-to `PATH`.  For the Client side, the FFI worker inherits the real OS PATH at
-spawn time; tests pass `tmuxCommand: FAKE_TMUX_BIN` explicitly to the `Client`
-constructor (the same pattern used in smoke tests).
+Both the side-by-side CLI subprocess (`runCli`) and the Client's
+per-verb CLI subprocesses must resolve `tmux` to the fake stub. For
+`runCli`, the `cliEnv` object prepends `FAKE_TMUX_DIR` to `PATH`. For
+the Client side, tests pass `tmuxCommand: FAKE_TMUX_BIN` explicitly to
+the `Client` constructor (the same pattern used in smoke tests) so the
+spawned CLI uses the stub regardless of its inherited PATH.
 
 **Meta-test (`envelope-diff-invariants.test.ts`).**
 

@@ -17,12 +17,13 @@ export interface Logger {
  * (config-file value, then hardcoded fallback).
  *
  * Tilde expansion is handled TS-side by `src/internal/tilde.ts` before paths
- * cross the FFI boundary, so the C-ABI never receives a leading `~`.
+ * are forwarded to the CLI subprocess, so the subprocess never receives a
+ * leading `~`.
  */
 export interface ClientOptions {
-    /** Path to the SQLite store file. Tilde-expanded before crossing FFI. */
+    /** Path to the SQLite store file. Tilde-expanded before being forwarded. */
     storePath: string;
-    /** Path to the TOML config file. Tilde-expanded before crossing FFI. */
+    /** Path to the TOML config file. Tilde-expanded before being forwarded. */
     configPath?: string;
     /** Override the tmux binary. Defaults to the binary on PATH. */
     tmuxCommand?: string;
