@@ -77,19 +77,25 @@ process.env.CLI_PATH = cliBin;
 
 // ── Stage CLI binary into platform packages for resolveCliPath() ──────────
 // Post-Epic-B-cutover: SubprocessClient uses resolveCliPath() which resolves
-// the binary via @agent-director/linux-x64/bin/agent-director. The platform
+// the binary via @agent-director/<platform>/bin/agent-director. The platform
 // packages ship only package.json + README (no binary committed); setup stages
 // the just-built bin/agent-director into both the platforms/ source tree and
 // the node_modules copy so resolveCliPath() succeeds for the test run.
 //
-// Linux-only: darwin-arm64 has its own CI path. The copy is idempotent;
-// copyFileSync overwrites an existing file of the same name.
-if (process.platform === "linux") {
+// Cross-platform: stages the host's matching platform-package only. The copy
+// is idempotent; copyFileSync overwrites an existing file of the same name.
+const platformTuple = (() => {
+  if (process.platform === "linux" && process.arch === "x64") return "linux-x64";
+  if (process.platform === "darwin" && process.arch === "arm64") return "darwin-arm64";
+  return null;
+})();
+
+if (platformTuple !== null) {
   const pkgDir = resolve(import.meta.dir, "..");
 
   const destDirs = [
-    resolve(pkgDir, "platforms", "linux-x64", "bin"),
-    resolve(pkgDir, "node_modules", "@agent-director", "linux-x64", "bin"),
+    resolve(pkgDir, "platforms", platformTuple, "bin"),
+    resolve(pkgDir, "node_modules", "@agent-director", platformTuple, "bin"),
   ];
 
   for (const dir of destDirs) {
