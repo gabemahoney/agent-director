@@ -16,7 +16,7 @@ import { Client, ErrInvalidDecision, AgentDirectorError } from "../../src/index.
 
 test("decide: happy path — allows an open permission request", async () => {
   await withTempHome(async (homeDir) => {
-    const storePath = path.join(homeDir, "state.db");
+    const storePath = path.join(homeDir, ".agent-director", "state.db");
     const spawnId = "smoke-decide-id";
 
     // Seed spawn in check_permission state with relay_mode=on (required by decide).
@@ -47,7 +47,7 @@ test("decide: happy path — allows an open permission request", async () => {
 
 test("decide: error — invalid decision string → ErrInvalidDecision", async () => {
   await withTempHome(async (homeDir) => {
-    const storePath = path.join(homeDir, "state.db");
+    const storePath = path.join(homeDir, ".agent-director", "state.db");
     using client = new Client({ storePath, createIfMissing: true });
 
     let caught: unknown;

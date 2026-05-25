@@ -23,7 +23,7 @@ const BOGUS_ID = "smoke-bogus-id-does-not-exist";
 
 test("delete: happy path — removes a seeded spawn row", async () => {
   await withTempHome(async (homeDir) => {
-    const storePath = path.join(homeDir, "state.db");
+    const storePath = path.join(homeDir, ".agent-director", "state.db");
     const spawnId = "smoke-delete-id";
 
     runHelper("seed-spawn", {
@@ -44,7 +44,7 @@ test("delete: happy path — removes a seeded spawn row", async () => {
 
 test("delete: documented error behavior — unknown id records ErrSpawnNotFound in results map", async () => {
   await withTempHome(async (homeDir) => {
-    const storePath = path.join(homeDir, "state.db");
+    const storePath = path.join(homeDir, ".agent-director", "state.db");
     using client = new Client({ storePath, createIfMissing: true });
 
     // delete never throws at the verb level; per-row errors are in the map.
