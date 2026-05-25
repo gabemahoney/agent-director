@@ -1,6 +1,8 @@
 # agent-director
 
-TypeScript/Bun client for the agent-director CLI (FFI-backed; shares the Go API surface 1:1).
+TypeScript/Bun client for the agent-director CLI. Shares the Go API
+surface 1:1. The `Client` spawns the bundled `agent-director` CLI
+binary as a subprocess per verb call — no FFI, no network hop.
 
 ## Install
 
@@ -8,7 +10,11 @@ TypeScript/Bun client for the agent-director CLI (FFI-backed; shares the Go API 
 bun add agent-director
 ```
 
-Requires Bun >=1.0.21. The package ships a prebuilt shared library for each supported platform via optional dependencies — they install automatically on `bun add`.
+Requires Bun >=1.0.21. The package ships the prebuilt CLI binary for
+each supported platform via optional dependencies — they install
+automatically on `bun add`. The `Client` resolves the host's binary
+at construction time via `import.meta.resolve('@agent-director/<host>/package.json')`
+and spawns it for every verb call.
 
 On install, a postinstall script copies the `install-agent-director` skill body into `~/.claude/skills/install-agent-director/` so `claude /install-agent-director` is immediately discoverable in Claude Code. The postinstall only writes under `~/.claude/skills/`; it does not touch PATH, `~/.agent-director/`, or your Claude Code settings.
 
@@ -94,7 +100,7 @@ try {
 }
 ```
 
-`storePath` is the only required constructor option. Tilde expansion (`~` → home directory) is handled automatically before paths cross the FFI boundary. The `using` form calls `client.close()` automatically at block exit and requires Bun >=1.0.21 (or a TypeScript project with `"lib": ["ESNext.Disposable"]`).
+`storePath` is the only required constructor option. Tilde expansion (`~` → home directory) is handled automatically before paths are forwarded to the CLI subprocess. The `using` form calls `client.close()` automatically at block exit and requires Bun >=1.0.21 (or a TypeScript project with `"lib": ["ESNext.Disposable"]`).
 
 ## Verb examples
 
@@ -208,4 +214,4 @@ The full `err_name` catalog is in [`../../pkg/api/errnames/catalog.json`](../../
 
 ## Architecture
 
-See [`../../docs/architecture.md`](../../docs/architecture.md) for the internal design. Dedicated subsections cover: Client lifecycle, FFI call recipe, Per-platform packaging, Error mapping, TS smoke-test harness, and TS envelope-diff regression.
+See [`../../docs/architecture.md`](../../docs/architecture.md) for the internal design. Dedicated subsections cover: Client lifecycle, the subprocess call recipe, Per-platform packaging, Error mapping, TS smoke-test harness, and TS envelope-diff regression.

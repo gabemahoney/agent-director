@@ -1,7 +1,5 @@
 /**
  * Public entry point for agent-director.
- *
- * ffi.ts and platform.ts are internal — they are NOT re-exported here.
  */
 export { Client } from "./client.js";
 export { AgentDirectorError, ErrClientClosed, ErrUnsupportedPlatform, ErrPlatformPackageMissing, ErrBunVersionTooOld, ErrCliNotExecutable, ErrConsumerSignal, ErrCallTimeout, ErrUnknownErrorName, errorFromEnvelope, ErrCwdMissing, ErrCwdNotAPath, ErrCwdNotFound, ErrCwdNotADirectory, ErrRelayModeInvalid, ErrSpawnDeniedFlag, ErrReservedEnvKey, ErrInstanceIdCollision, ErrTmuxSessionNameEmpty, ErrTmuxSessionNameInvalid, ErrTmuxSessionNameTooLong, ErrSpawnNotFound, ErrTmuxNotAvailable, ErrTmuxSessionCreate, ErrTmuxSendKeys, ErrTmuxCaptureFailed, ErrSpawnNotInteractive, ErrSendKeysWhileRelayed, ErrSpawnNotPausable, ErrPauseTimeout, ErrListInvalidLabel, ErrTemplateNameUnsafe, ErrTemplateNotFound, ErrTemplateMalformed, ErrTemplateExists, ErrProbeUnsupported, ErrSpawnNotResumable, ErrNoSessionId, ErrJsonlMissing, ErrRelayModeOff, ErrInvalidDecision, ErrNoOpenPermissionRequest, ErrAlreadyDecided, ErrUnknownHandle, } from "./errors.js";

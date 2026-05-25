@@ -2,10 +2,8 @@ dist/
 node_modules/
 *.tsbuildinfo
 
-# Native binaries dropped by CI / prepare-platforms — never committed.
-platforms/*/libagent_director.so
-platforms/*/libagent_director.dylib
-# CLI binary staged by test/setup.ts for local resolveCliPath() resolution.
+# CLI binary staged by release.sh / prepare-platforms / test/setup.ts —
+# never committed.
 platforms/*/bin/
 
 # Temp dirs created by install-resolution test

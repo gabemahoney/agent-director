@@ -17,7 +17,6 @@ children:
 - t1.75s.nd
 - t1.75s.f7
 - t1.75s.q3
-- t1.75s.nv
 - t1.75s.hw
 - t1.75s.ny
 reference_materials: null
