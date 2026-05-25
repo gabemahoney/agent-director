@@ -696,6 +696,7 @@ collect_cabi_artifacts() {
 # commit" behavior (so local rehearsal doesn't burn a real CI run) and
 # the SKIP escape hatch continues to bypass cabi entirely.
 maybe_dispatch_cabi_for_release() {
+    : "${CABI_WORKFLOW:=cabi-matrix.yml}"
     if [[ "$DRY_RUN" -eq 1 ]]; then
         log build "(dry-run) would dispatch $CABI_WORKFLOW with version=$VERSION; falling back to existing-run lookup"
         return 0
