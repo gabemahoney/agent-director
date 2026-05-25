@@ -35,6 +35,9 @@ import { expandTilde } from "./tilde.js";
 import { buildArgv } from "./argv.js";
 import { ErrSubprocessCrash } from "./spawner.js";
 import { isErrorEnvelope, throwFromEnvelope } from "./errorMap.js";
+// b.6o1: inline npm package version so version() returns the published semver
+// (stamped by release.sh) instead of the CLI's git-describe build stamp.
+import pkgJson from "../../package.json" with { type: "json" };
 import {
   ErrClientClosed,
   ErrConsumerSignal,
@@ -64,6 +67,8 @@ import type {
 const DEFAULT_CALL_TIMEOUT_MS = 30_000;
 // Graceful window between SIGTERM and SIGKILL. SRD SR-6.2.
 const SIGKILL_GRACE_MS = 2_000;
+// b.6o1: npm package version, inlined at bundle time from package.json.
+const NPM_PACKAGE_VERSION: string = pkgJson.version;
 
 /**
  * SubprocessClient drives the bundled agent-director CLI binary as one
@@ -462,9 +467,14 @@ export class SubprocessClient {
     return this.#enqueue<PauseResult>("pause", params);
   }
 
-  /** version — return the binary's build-time version stamp. */
+  /** version — return the npm package version (b.6o1) plus the CLI's commit SHA. */
   async version(params: VersionParams): Promise<VersionResult> {
     this.#assertOpen();
-    return this.#enqueue<VersionResult>("version", params);
+    const cliResp = await this.#enqueue<VersionResult>("version", params);
+    // b.6o1: override CLI git-describe stamp with the npm package version
+    // so semver gating against agent-director@X.Y.Z works for consumers.
+    // Spread cliResp so any extra envelope fields (used by stub-binary tests)
+    // survive the wrapper.
+    return { ...cliResp, version: NPM_PACKAGE_VERSION };
   }
 }

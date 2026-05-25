@@ -13,6 +13,9 @@ import * as path from "path";
 import { withTempHome } from "../internal/tempHome.js";
 import { Client } from "../../src/index.js";
 import type { VersionResult } from "../../src/index.js";
+// b.6o1: version() returns the npm package version (not the CLI's git-describe
+// stamp). Import package.json so we can assert the exact string.
+import pkgJson from "../../package.json" with { type: "json" };
 
 test("version: happy path — returns version and commit strings", async () => {
   await withTempHome(async (homeDir) => {
@@ -21,6 +24,8 @@ test("version: happy path — returns version and commit strings", async () => {
     const result: VersionResult = await client.version({});
     expect(typeof result.version).toBe("string");
     expect(result.version.length).toBeGreaterThan(0);
+    // b.6o1: .version must equal the npm package version.
+    expect(result.version).toBe(pkgJson.version);
     expect(typeof result.commit).toBe("string");
     expect(result.commit.length).toBeGreaterThan(0);
   });

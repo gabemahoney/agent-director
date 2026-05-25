@@ -41,7 +41,11 @@ try {
     fail(`large-stdout call failed: ${e?.message ?? e}`);
   }
 
-  if (typeof v.version !== "string" || v.version !== "0.0.0-stub") {
+  // b.6o1: the TS Client overrides .version with its own npm package version,
+  // so we no longer assert the stub's emitted "0.0.0-stub" string. The point
+  // of this case is that the stdout drain survives ~200 KB without deadlock —
+  // proven by the _pad field below — not the version field's contents.
+  if (typeof v.version !== "string" || v.version.length === 0) {
     fail(`large-stdout: bad version: ${JSON.stringify(v.version)}`);
   }
   if (typeof v.commit !== "string") {

@@ -358,8 +358,8 @@ export interface VersionParams {}
 
 /** Mirrors pkg/api/version.go::VersionResult */
 export interface VersionResult {
-  /** Human-readable version stamp. "dev" for unstamped builds. */
+  /** npm package version (e.g. "0.5.0"). Sourced from the installed agent-director package's package.json — not the CLI binary. See b.6o1. */
   version: string;
-  /** Full git SHA. "unknown" for unstamped builds. */
+  /** CLI binary's full git SHA. "unknown" for unstamped builds. */
   commit: string;
 }

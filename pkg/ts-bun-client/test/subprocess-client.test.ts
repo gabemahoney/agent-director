@@ -39,6 +39,9 @@ import * as path from "node:path";
 
 import { SubprocessClient } from "../src/internal/subprocessClient.js";
 import { ErrCallTimeout, ErrConsumerSignal } from "../src/errors.js";
+// b.6o1: version() now overrides the CLI's version field with the npm
+// package version. Import it here so we can assert the post-fix shape.
+import pkgJson from "../package.json" with { type: "json" };
 
 // Case 6 reads src/index.ts as source text to avoid triggering the module-level
 // FFI bootstrap (bootstrapFfi.ts → resolveNativePath() throws when the native
@@ -216,9 +219,12 @@ describe("SubprocessClient — rejection does not wedge queue", () => {
         // Second call: fixture succeeds (marker file exists now).
         const result = await c.version({});
         expect(result).toBeDefined();
-        // The fixture returns {"version":"ok-after-fail","commit":"abc123"}
+        // The fixture returns {"version":"ok-after-fail","commit":"abc123"}.
+        // b.6o1: the wrapper overrides .version with the npm package version,
+        // but .commit still passes through unchanged.
         const r = result as Record<string, unknown>;
-        expect(r["version"]).toBe("ok-after-fail");
+        expect(r["version"]).toBe(pkgJson.version);
+        expect(r["commit"]).toBe("abc123");
       } finally {
         if (prevMarker === undefined) {
           delete process.env.CALL_MARKER_FILE;
@@ -308,6 +314,43 @@ describe("SubprocessClient — signal handling", () => {
       expect(hasSignalInfo).toBe(true);
     },
     { timeout: 15000 }
+  );
+});
+
+// ---------------------------------------------------------------------------
+// b.6o1 regression: version() returns npm package version, not CLI build stamp
+// ---------------------------------------------------------------------------
+describe("SubprocessClient — version() returns npm package version (b.6o1)", () => {
+  test(
+    "CLI returns git-describe version → wrapper overrides with pkg.json version; commit passes through",
+    async () => {
+      // sleep-and-respond.js emits {"version":"fixture-1.0.0","commit":"aabbccddeeff"}.
+      // With SLEEP_MS=0 it responds immediately, simulating a CLI build-stamp
+      // version distinct from the npm package version.
+      const prevSleepMs = process.env.SLEEP_MS;
+      process.env.SLEEP_MS = "0";
+
+      try {
+        const fixturePath = path.join(FIXTURES, "sleep-and-respond.js");
+        const client = makeClient(fixturePath, { callTimeoutMs: 5000 });
+        type ClientV = { version(p: object): Promise<{ version: string; commit: string }> };
+        const result = await (client as unknown as ClientV).version({});
+
+        // The wrapper substitutes its own pkg.json version regardless of what
+        // the CLI emitted ("fixture-1.0.0" here).
+        expect(result.version).toBe(pkgJson.version);
+        expect(result.version).not.toBe("fixture-1.0.0");
+        // commit is passed through unchanged from the CLI envelope.
+        expect(result.commit).toBe("aabbccddeeff");
+      } finally {
+        if (prevSleepMs === undefined) {
+          delete process.env.SLEEP_MS;
+        } else {
+          process.env.SLEEP_MS = prevSleepMs;
+        }
+      }
+    },
+    { timeout: 10000 }
   );
 });
 
