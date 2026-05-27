@@ -149,6 +149,30 @@ func TestApplyDefaultsPreservesUserSuppliedTmuxSessionName(t *testing.T) {
 	}
 }
 
+// TestComposeSessionNameSanitizesDotInInstanceID is the b.gqe regression
+// test: a dot in ClaudeInstanceID must not survive into TmuxSessionName.
+// tmux silently maps '.' → '_' on session creation, causing stored name /
+// real name divergence and breaking send-keys.
+func TestComposeSessionNameSanitizesDotInInstanceID(t *testing.T) {
+	r := Resolved{SpawnParams: SpawnParams{
+		CWD:              "/home/horde/projects/foo",
+		ClaudeInstanceID: "b.18k-fix-test",
+	}}
+	cfg := config.Default()
+	if err := ApplyDefaults(&r, cfg, &fakeChecker{}); err != nil {
+		t.Fatalf("ApplyDefaults: %v", err)
+	}
+	if strings.Contains(r.TmuxSessionName, ".") {
+		t.Fatalf("TmuxSessionName = %q; contains dot (diverges from real tmux name)", r.TmuxSessionName)
+	}
+	// Pin the exact value: basename "foo", idTail first 8 chars of "b.18k-fix-test"
+	// = "b.18k-fi" → sanitized → "b-18k-fi", so result = "foo-b-18k-fi".
+	want := "foo-b-18k-fi"
+	if r.TmuxSessionName != want {
+		t.Fatalf("TmuxSessionName = %q; want %q", r.TmuxSessionName, want)
+	}
+}
+
 func TestComposeSessionNameAllBadBasename(t *testing.T) {
 	r := Resolved{SpawnParams: SpawnParams{
 		CWD:              "/////",
