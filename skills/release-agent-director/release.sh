@@ -536,25 +536,19 @@ verify_phase() {
     rm -rf "$stage_dir/pkg/ts-bun-client/node_modules"
     rm -rf "$stage_dir/pkg/ts-bun-client/skills"
 
-    # Stamp the umbrella package.json + SKILL.md to plain_v.
-    jq --arg v "$plain_v" '.version = $v' \
-        "$stage_dir/pkg/ts-bun-client/package.json" \
-        > "$stage_dir/pkg/ts-bun-client/package.json.tmp"
-    mv "$stage_dir/pkg/ts-bun-client/package.json.tmp" \
-        "$stage_dir/pkg/ts-bun-client/package.json"
-    # Stamp platform sub-package versions too — the umbrella's
-    # optionalDependencies file: refs resolve against these.
-    local pdir
-    for pdir in linux-x64 darwin-arm64; do
-        jq --arg v "$plain_v" '.version = $v' \
-            "$stage_dir/pkg/ts-bun-client/platforms/$pdir/package.json" \
-            > "$stage_dir/pkg/ts-bun-client/platforms/$pdir/package.json.tmp"
-        mv "$stage_dir/pkg/ts-bun-client/platforms/$pdir/package.json.tmp" \
-           "$stage_dir/pkg/ts-bun-client/platforms/$pdir/package.json"
-    done
-    sed -i.bak "s/^version: .*/version: $plain_v/" \
-        "$stage_dir/skills/install-agent-director/SKILL.md"
-    rm -f "$stage_dir/skills/install-agent-director/SKILL.md.bak"
+    # Stamp version sites via version-bump.ts.
+    # Skip opt-deps: verify_phase tests the packed tarball via local bun
+    # install, which needs file: paths intact for sub-package resolution.
+    if ! (cd "$stage_dir/pkg/ts-bun-client" && bun run scripts/version-bump.ts \
+            --version "$plain_v" \
+            --target umbrella-version \
+            --target platform-version \
+            --target skill-frontmatter) \
+            > >(while IFS= read -r l; do printf '[verify] %s\n' "$l"; done); then
+        log verify "version-bump.ts failed" >&2
+        phase_fail verify "version-bump.ts"
+        exit 5
+    fi
 
     # Install dev deps + bun-build so the files glob has dist/* to pack.
     if ! (cd "$stage_dir/pkg/ts-bun-client" \
@@ -776,45 +770,9 @@ publish_phase() {
         log publish "(dry-run) H3 unresolved (${#placeholder_pkgs[@]} package.json with placeholder names) — would halt in a live run"
     fi
 
-    # Rewrite version on every package.json (umbrella + 2 platforms).
-    log publish "stamping version $plain_version onto umbrella + 2 platform package.jsons"
-    local p target_json
-    for p in "$stage_dir/pkg/ts-bun-client/package.json" \
-             "$stage_dir/pkg/ts-bun-client/platforms/linux-x64/package.json" \
-             "$stage_dir/pkg/ts-bun-client/platforms/darwin-arm64/package.json"; do
-        target_json="$p"
-        if [[ ! -f "$target_json" ]]; then
-            log publish "missing $target_json" >&2
-            exit 6
-        fi
-        # In-place rewrite the top-level "version" key. sed is sufficient
-        # because version is a simple scalar; we keep formatting stable.
-        if ! sed -i.bak -E "s/(^[[:space:]]*\"version\":[[:space:]]*\")[^\"]+(\")/\1${plain_version}\2/" "$target_json"; then
-            log publish "failed to rewrite version in $target_json" >&2
-            exit 6
-        fi
-        rm -f "${target_json}.bak"
-    done
-
-    # Lockstep bump: rewrite skills/install-agent-director/SKILL.md
-    # frontmatter `version:` to the same release tag (SRD §SR-4.1 +
-    # Plan Bee b.3d3 Epic 4 T3). The prepublish-guards.ts check (Epic 4
-    # T1) enforces this invariant; the bump here is what keeps the
-    # invariant honored on every release.
-    local skill_md="$stage_dir/skills/install-agent-director/SKILL.md"
-    if [[ ! -f "$skill_md" ]]; then
-        log publish "missing $skill_md — SR-4.1 lockstep bump cannot complete" >&2
-        exit 6
-    fi
-    log publish "stamping SKILL.md frontmatter version: $plain_version"
-    if ! sed -i.bak -E "s/^(version:[[:space:]]*).+$/\1${plain_version}/" "$skill_md"; then
-        log publish "failed to rewrite SKILL.md frontmatter version" >&2
-        exit 6
-    fi
-    rm -f "${skill_md}.bak"
-
-    # version-bump the optional-deps file: pins → ^version registry pins.
-    log publish "rewriting optionalDependencies file: pins to ^$plain_version"
+    # Stamp all five version-stamp sites (umbrella + platforms + opt-deps +
+    # SKILL.md frontmatter) via version-bump.ts — single source of truth.
+    log publish "stamping all version sites to $plain_version via version-bump.ts"
     if ! (cd "$stage_dir/pkg/ts-bun-client" && bun run scripts/version-bump.ts --version "$plain_version") \
             > >(while IFS= read -r l; do printf '[publish] %s\n' "$l"; done); then
         log publish "version-bump.ts failed" >&2
