@@ -78,8 +78,13 @@ const NPM_PACKAGE_VERSION: string = pkgJson.version;
  * and validates callTimeoutMs.
  */
 export class SubprocessClient {
-  /** Absolute path to the resolved CLI binary. Cached at construction. */
-  readonly #cliPath: string;
+  /**
+   * DI override path for tests. When set, this path is used verbatim on every
+   * spawn instead of calling resolveCliPath(). Undefined in production, where
+   * resolveCliPath() is called fresh on each spawn (b.i5y: per-call resolution
+   * so filesystem churn between construction and spawn is not fatal).
+   */
+  readonly #cliPathOverride: string | undefined;
   /** Per-call timeout in milliseconds. */
   readonly #callTimeoutMs: number;
   /** Optional logger for non-fatal warnings. */
@@ -130,10 +135,19 @@ export class SubprocessClient {
     // inject a fixture binary path without needing the real platform package.
     const opts2 = opts as unknown as ClientOptions & { _cliPath?: string };
 
-    // Resolve and stat the CLI binary at construction (one-shot per SR-2.4).
-    // Throws ErrBunVersionTooOld, ErrUnsupportedPlatform, ErrPlatformPackageMissing,
-    // or ErrCliNotExecutable on any resolution failure.
-    this.#cliPath = opts2._cliPath ?? resolveCliPath();
+    // Eager resolution at construction (SR-2.4): surface ErrBunVersionTooOld,
+    // ErrUnsupportedPlatform, ErrPlatformPackageMissing, ErrCliNotExecutable
+    // immediately on construction so callers don't wait for the first verb call.
+    // The resolved path is NOT cached — #doCall calls resolveCliPath() again per
+    // spawn so the binary can be replaced/upgraded without ENOENT (b.i5y fix).
+    // When _cliPath is provided (tests), skip resolution entirely and store the
+    // override; it is used verbatim on every spawn.
+    if (opts2._cliPath !== undefined) {
+      this.#cliPathOverride = opts2._cliPath;
+    } else {
+      resolveCliPath(); // eager throw on platform/install errors; result discarded
+      this.#cliPathOverride = undefined;
+    }
 
     // b.32k: forward user-supplied storePath / tmuxCommand / home verbatim to
     // the CLI via the global flags it now exposes. Tilde-expand TS-side so
@@ -228,7 +242,11 @@ export class SubprocessClient {
    * Called from within the serialization queue.
    */
   async #doCall<R>(verb: VerbName, params: unknown): Promise<R> {
-    const argv = buildArgv(this.#cliPath, verb, params, this.#globalOpts);
+    // Resolve the CLI binary path fresh on every spawn (b.i5y: avoids ENOENT
+    // when the binary is replaced between construction and this call). Tests
+    // inject a fixed path via #cliPathOverride; production always re-resolves.
+    const cliPath = this.#cliPathOverride ?? resolveCliPath();
+    const argv = buildArgv(cliPath, verb, params, this.#globalOpts);
     const startMs = Date.now();
 
     // Snapshot process.env at call time per SRD SR-1.4 so the subprocess

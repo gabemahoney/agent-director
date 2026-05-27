@@ -32,7 +32,7 @@
  * Tests in this file depend on this behaviour for LOG_FILE / CALL_MARKER_FILE.
  */
 
-import { test, expect, describe, afterAll } from "bun:test";
+import { test, expect, describe, afterAll, mock } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -42,6 +42,19 @@ import { ErrCallTimeout, ErrConsumerSignal } from "../src/errors.js";
 // b.6o1: version() now overrides the CLI's version field with the npm
 // package version. Import it here so we can assert the post-fix shape.
 import pkgJson from "../package.json" with { type: "json" };
+
+// b.i5y: intercept resolveCliPath for the per-call re-resolution describe block.
+// Falls through to the real implementation when resolveCliPathImpl is null,
+// so tests that use _cliPath (and never call resolveCliPath) are unaffected.
+import { resolveCliPath as _realResolveCliPath } from "../src/internal/platformResolve.js";
+let resolveCliPathImpl: (() => string) | null = null;
+
+mock.module("../src/internal/platformResolve.js", () => ({
+  resolveCliPath: (...args: Parameters<typeof _realResolveCliPath>) => {
+    if (resolveCliPathImpl !== null) return resolveCliPathImpl();
+    return _realResolveCliPath(...args);
+  },
+}));
 
 // Case 6 reads src/index.ts as source text to avoid triggering the module-level
 // FFI bootstrap (bootstrapFfi.ts → resolveNativePath() throws when the native
@@ -414,4 +427,68 @@ describe("SubprocessClient — public index.ts surface unchanged", () => {
     expect(INDEX_SRC).toContain("ErrCallTimeout");
     expect(INDEX_SRC).toContain("ErrUnknownErrorName");
   });
+});
+
+// ---------------------------------------------------------------------------
+// b.i5y regression: per-call re-resolution — spawn-2 uses the binary that
+// resolveCliPath() returns at spawn-2 time, not the one resolved at construction.
+//
+// Shape: construct SubprocessClient WITHOUT _cliPath so the production
+// resolution path runs. A controlled mock of resolveCliPath() returns the v1
+// binary path for the constructor's eager check and for spawn-1, then returns
+// the v2 binary path for spawn-2. Post-fix (per-call re-resolution): spawn-2
+// invokes the v2 binary and returns "v2commit". Pre-fix (cached at
+// construction): spawn-2 would re-use the v1 path and return "v1commit",
+// failing the assertion.
+// ---------------------------------------------------------------------------
+describe("SubprocessClient — b.i5y: resolveCliPath() called per spawn, not cached at construction", () => {
+  const FIXTURES_BI5Y = path.resolve(import.meta.dir, "fixtures/b-i5y");
+
+  test(
+    "spawn-2 uses binary returned by resolveCliPath() at spawn-2 time (not construction-time cache)",
+    async () => {
+      const v1Bin = path.join(FIXTURES_BI5Y, "version-v1.sh");
+      const v2Bin = path.join(FIXTURES_BI5Y, "version-v2.sh");
+
+      // resolveCliPathImpl is called:
+      //   call 1: construction eager-check (post-fix: result discarded)
+      //   call 2: spawn-1 (#doCall re-resolves per-call in post-fix)
+      //   call 3: spawn-2 (#doCall re-resolves per-call in post-fix)
+      // Pre-fix cached call-1 result and never called resolveCliPath() again
+      // from #doCall, so calls 2 and 3 would not happen pre-fix.
+      let callIdx = 0;
+      resolveCliPathImpl = () => {
+        callIdx++;
+        if (callIdx <= 2) return v1Bin; // ctor eager-check + spawn-1
+        return v2Bin;                   // spawn-2 and beyond
+      };
+
+      try {
+        const opts = makeOpts(); // storePath, createIfMissing, callTimeoutMs
+        // Construct WITHOUT _cliPath — triggers production resolveCliPath() path.
+        const client = new SubprocessClient(
+          opts as unknown as ConstructorParameters<typeof SubprocessClient>[0]
+        );
+
+        type ClientV = { version(p: object): Promise<{ version: string; commit: string }> };
+        const c = client as unknown as ClientV;
+
+        // spawn-1: resolveCliPath() call #2 → v1 binary → "v1commit"
+        const r1 = await c.version({});
+        expect(r1.commit).toBe("v1commit");
+
+        // spawn-2: resolveCliPath() call #3 → v2 binary (post-fix) → "v2commit"
+        // Pre-fix: would have used cached v1 path → "v1commit" → assertion fails.
+        const r2 = await c.version({});
+        expect(r2.commit).toBe("v2commit");
+
+        // 3 calls total: 1 ctor eager-check + 2 spawns. Pins the call count so
+        // a cached implementation cannot pass vacuously.
+        expect(callIdx).toBe(3);
+      } finally {
+        resolveCliPathImpl = null;
+      }
+    },
+    { timeout: 15000 }
+  );
 });
