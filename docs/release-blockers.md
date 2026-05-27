@@ -37,14 +37,14 @@ first live publish.
 
 ### Publish guard (still active)
 
-A `prepublishOnly` hook in every `package.json` runs
-`pkg/ts-bun-client/scripts/check-not-placeholder.ts`, which exits 1 if
-`package.json`'s `name` ever contains `CHANGEME-H3` again. The guard is kept
-as a forward-going tripwire against re-introducing a placeholder name in any
-future refactor or rename. The matching sentinel regex
-(`^@?(CHANGEME-H3|TBD)/`) in `skills/release-agent-director/release.sh` is
-kept in place for the same reason; it currently finds zero matches in the
-cleaned package.jsons.
+A `prepublishOnly` hook in every sub-package `package.json` runs
+`pkg/ts-bun-client/scripts/prepublish-guards.ts` with
+`PREPUBLISH_GUARD_MODE=subpackage`, which exits 1 if `package.json`'s `name`
+ever matches the placeholder sentinel set again. The guard is kept as a
+forward-going tripwire against re-introducing a placeholder name in any future
+refactor or rename. The canonical sentinel regex (`PLACEHOLDER_RE`,
+`/^@?(CHANGEME-H3|TBD)\//`) is defined once at the top of
+`prepublish-guards.ts` — a one-line change adds any new sentinel (SR-3.3).
 
 ---
 

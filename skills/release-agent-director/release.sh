@@ -734,14 +734,10 @@ publish_phase() {
     # ----------------------------------------------------------------
     # H3 gate: first action AFTER stage population so the gate scans
     # staged copies pre-mutation (SR-2.3). No `npm publish` ever runs
-    # against a placeholder name.
-    #
-    # We inspect ALL THREE package.jsons (umbrella + 2 per-platform
-    # sub-packages). Any one carrying the H3 sentinel halts the live
-    # run.
+    # against a placeholder name. Uses the unified prepublish-guards.ts
+    # (subpackage mode) against all three staged package.jsons.
     # ----------------------------------------------------------------
-    local h3_sentinel_re='^@?(CHANGEME-H3|TBD)/'
-    local p3 name3 placeholder_pkgs=()
+    local p3 p3_rc
     for p3 in \
         "$stage_dir/pkg/ts-bun-client/package.json" \
         "$stage_dir/pkg/ts-bun-client/platforms/linux-x64/package.json" \
@@ -750,28 +746,22 @@ publish_phase() {
             log publish "missing $p3 — TS package layout invariant violated" >&2
             exit 6
         fi
-        name3=$(grep -E '^[[:space:]]*"name":' "$p3" | head -n 1 | sed -E 's/.*"name":[[:space:]]*"([^"]+)".*/\1/')
-        if [[ "$name3" =~ $h3_sentinel_re ]]; then
-            placeholder_pkgs+=("${p3#"$stage_dir/"}=$name3")
+        (cd "$(dirname "$p3")" && PREPUBLISH_GUARD_MODE=subpackage bun run "$REPO_ROOT/pkg/ts-bun-client/scripts/prepublish-guards.ts")
+        p3_rc=$?
+        if (( p3_rc != 0 )); then
+            if [[ "$DRY_RUN" -eq 0 ]]; then
+                log publish "H3 placeholder gate failed for ${p3#"$stage_dir/"} (exit $p3_rc); see docs/release-blockers.md" >&2
+                exit 6
+            fi
+            log publish "(dry-run) H3 placeholder gate would fail for ${p3#"$stage_dir/"} — would halt in a live run"
         fi
     done
 
-    if (( ${#placeholder_pkgs[@]} > 0 )); then
-        if [[ "$DRY_RUN" -eq 0 ]]; then
-            log publish "H3 unresolved: claim npm name first" >&2
-            log publish "the following ${#placeholder_pkgs[@]} package.json file(s) still carry a placeholder name:" >&2
-            local pp
-            for pp in "${placeholder_pkgs[@]}"; do
-                log publish "  ${pp%%=*}  →  ${pp##*=}" >&2
-            done
-            log publish "see docs/release-blockers.md for the H3 resolution checklist" >&2
-            exit 6
-        fi
-        log publish "(dry-run) H3 unresolved (${#placeholder_pkgs[@]} package.json with placeholder names) — would halt in a live run"
-    fi
-
     # Stamp all five version-stamp sites (umbrella + platforms + opt-deps +
     # SKILL.md frontmatter) via version-bump.ts — single source of truth.
+    # The H3 placeholder gate above (prepublish-guards.ts in subpackage mode)
+    # already covers the placeholder-check responsibility that the old inline
+    # `placeholder_pkgs` loop served.
     log publish "stamping all version sites to $plain_version via version-bump.ts"
     if ! (cd "$stage_dir/pkg/ts-bun-client" && bun run scripts/version-bump.ts --version "$plain_version") \
             > >(while IFS= read -r l; do printf '[publish] %s\n' "$l"; done); then
