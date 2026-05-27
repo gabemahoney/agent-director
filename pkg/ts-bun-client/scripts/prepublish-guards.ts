@@ -3,8 +3,8 @@
  * `agent-director` package. Aborts any `npm publish` / `bun publish` if any
  * of the four invariants is violated:
  *
- *   0. Placeholder-name guard (existing, preserved from check-not-placeholder.ts):
- *      umbrella package.json `name` must not contain `CHANGEME-H3`.
+ *   0. Placeholder-name guard:
+ *      package.json `name` must not match PLACEHOLDER_RE.
  *   1. Version skew (SR-4.1):
  *      umbrella `version` must equal the frontmatter `version:` of
  *      skills/install-agent-director/SKILL.md.
@@ -16,7 +16,14 @@
  *      entries MUST equal `^<umbrella.version>` (the caret-pin convention
  *      applied by the version-bump utility).
  *
- * Invoked as: `bun run scripts/prepublish-guards.ts` from the umbrella's
+ * Mode selector: PREPUBLISH_GUARD_MODE
+ *   unset/empty   → full four-guard composite (default; umbrella publish)
+ *   "subpackage"  → placeholder + version-sanity only (platform sub-packages)
+ *   anything else → exit 1 with stderr "unknown PREPUBLISH_GUARD_MODE=<val>"
+ *
+ * SR-3.3: adding a new placeholder name is a one-line change to PLACEHOLDER_RE.
+ *
+ * Invoked as: `bun run scripts/prepublish-guards.ts` from the package's
  * directory (npm/bun publish CWDs the package dir before lifecycle scripts).
  *
  * Stdlib-only imports (node:fs, node:path), no third-party deps.
@@ -24,6 +31,23 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+
+// ---------------------------------------------------------------------------
+// Canonical placeholder regex — SR-3.3: one-line change to add new sentinels
+// ---------------------------------------------------------------------------
+
+const PLACEHOLDER_RE = /^@?(CHANGEME-H3|TBD)\//;
+
+// ---------------------------------------------------------------------------
+// Mode selector
+// ---------------------------------------------------------------------------
+
+const GUARD_MODE = process.env.PREPUBLISH_GUARD_MODE ?? "";
+
+if (GUARD_MODE !== "" && GUARD_MODE !== "subpackage") {
+  console.error(`prepublish-guards: unknown PREPUBLISH_GUARD_MODE=${GUARD_MODE}`);
+  process.exit(1);
+}
 
 const cwd = process.cwd();
 const pkgPath = join(cwd, "package.json");
@@ -35,7 +59,7 @@ function fail(msg: string): never {
 }
 
 // ---------------------------------------------------------------------------
-// Load umbrella package.json
+// Load package.json
 // ---------------------------------------------------------------------------
 
 let pkg: {
@@ -52,17 +76,29 @@ try {
 }
 
 // ---------------------------------------------------------------------------
-// Guard 0 — placeholder name (existing, preserved from check-not-placeholder)
+// Guard 0 — placeholder name
 // ---------------------------------------------------------------------------
 
-if (typeof pkg.name === "string" && pkg.name.includes("CHANGEME-H3")) {
-  fail(`publish blocked: package.json name contains CHANGEME-H3 placeholder; see docs/release-blockers.md`);
+if (typeof pkg.name === "string" && PLACEHOLDER_RE.test(pkg.name)) {
+  fail(`publish blocked: package.json name contains placeholder (${pkg.name}); see docs/release-blockers.md`);
 }
+
+// ---------------------------------------------------------------------------
+// Version sanity (prerequisite for Guards 1 and 3)
+// ---------------------------------------------------------------------------
 
 if (typeof pkg.version !== "string" || pkg.version.length === 0) {
   fail(`publish blocked: package.json version is missing or empty`);
 }
 const umbrellaVersion = pkg.version;
+
+// ---------------------------------------------------------------------------
+// subpackage mode: placeholder + version-sanity only; skip Guards 1–3
+// ---------------------------------------------------------------------------
+
+if (GUARD_MODE === "subpackage") {
+  process.exit(0);
+}
 
 // ---------------------------------------------------------------------------
 // Guard 1 — version skew (SR-4.1)

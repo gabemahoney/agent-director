@@ -9,6 +9,6 @@
     "access": "public"
   },
   "scripts": {
-    "prepublishOnly": "bun run ../../scripts/check-not-placeholder.ts"
+    "prepublishOnly": "PREPUBLISH_GUARD_MODE=subpackage bun run ../../scripts/prepublish-guards.ts"
   }
 }
