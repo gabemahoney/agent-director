@@ -39,6 +39,37 @@
 #   failure). No env-var bypass knobs exist; any new knob requires an
 #   explicit SRD change.
 #
+# Mode-bit audit (2026-05-27 / T4B / b.nss):
+#   After v0.5.1 was published on 2026-05-27 (b.gza incident), 13 tracked
+#   .sh/.js files lost their +x bit (100755→100644), clustered in
+#   pkg/ts-bun-client/test/fixtures/epic-a/, skills/install-agent-director/,
+#   skills/release-agent-director/, and test/driver/.
+#
+#   All non-publish phases were audited for live-tree mode-bit drift:
+#
+#   - notes_phase:     writes only dist/release-notes.md (gitignored, root
+#                      .gitignore:dist/). The two "chmod +x" strings in that
+#                      file are markdown prose inside the <<NOTES HEREDOC, not
+#                      executed commands.
+#   - build_phase /
+#     stage_cli_into_platforms:
+#                      chmod 0755 targets pkg/ts-bun-client/platforms/*/bin/
+#                      agent-director — gitignored by pkg/ts-bun-client/
+#                      .gitignore rule "platforms/*/bin/". No tracked file
+#                      is touched.
+#   - verify_phase:    all cp -a operations land in mktemp stage dirs
+#                      (verify.XXXXXX, verify-home.XXXXXX, verify-proj.XXXXXX)
+#                      cleaned up via a RETURN trap. No live-tree writes.
+#   - tag_phase:       git tag + git push only. Zero file writes.
+#   - gh-release phase: gh release create uploads from dist/ (gitignored).
+#                      Zero file writes to the live tree.
+#   - report_phase:    cleanup + stdout only. No file writes.
+#   - publish_phase:   covered by T4A (db3422e); stage dir pattern confirmed.
+#
+#   Conclusion: no in-script cause found. The b.gza mode-bit loss is host-side
+#   (e.g. filesystem, git-checkout, or editor interaction during the release
+#   run) and is tracked by OTQ-3 follow-up bee if it persists.
+#
 # Exit codes:
 #   0  success
 #   2  pre-flight failure (bad version, dirty tree, missing gh, etc.)
