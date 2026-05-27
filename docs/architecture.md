@@ -1678,6 +1678,8 @@ reconciliation path. The flow:
 
 ## Release engineering
 
+Pre-release operator checklist: see bee `b.dc1` in the `Release` hive.
+
 ### Supported platforms
 
 agent-director ships as four pre-built static binaries, one per
@@ -1777,7 +1779,7 @@ other postconditions) via
 `skills/release-agent-director/test-release-postconditions.sh`.
 
 The darwin/arm64 leg's Xcode pin lives on the self-hosted runner
-itself (operator-configured per `docs/self-hosted-runner-setup.md`)
+itself (operator-maintained out-of-band on the operator's Mac)
 and is NOT diffed by this helper; bumps to it are surfaced by the
 operator in the release notes manually.
 

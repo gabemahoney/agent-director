@@ -1,0 +1,29 @@
+name: pre-release-verify-mac
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch, tag, or SHA to verify'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify-mac:
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Print ref + SHA + describe
+        run: |
+          echo "ref: ${{ inputs.ref }}"
+          echo "sha: $(git rev-parse HEAD)"
+          echo "describe: $(git describe --tags --always)"
+
+      - name: Run verify-installed-pkg-full
+        run: make verify-installed-pkg-full
