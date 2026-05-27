@@ -24,8 +24,12 @@
  * run (idempotent): if all three entries already contain `^X.Y.Z` the file
  * is not rewritten.
  *
- * To restore `file:` paths for local development after a publish dry-run:
- *   git checkout pkg/ts-bun-client/package.json
+ * Restoring `file:` paths after the script runs:
+ *   - Direct script use: `git checkout pkg/ts-bun-client/package.json`
+ *     restores the `file:` entries for local development.
+ *   - Via release.sh pipeline: no restore needed — publish_phase operates
+ *     exclusively on a temporary stage directory (T4A invariant); the live
+ *     working tree is never modified.
  * ─────────────────────────────────────────────────────────────────────────
  */
 
