@@ -31,6 +31,14 @@
 #   - Requires the npm package name to be resolved (no CHANGEME-H3 placeholder).
 #   - Requires `gh` authenticated and on PATH.
 #
+# Escape-hatch knobs:
+#   --no-build is the sole release-time escape-hatch. It assumes the
+#   build artifacts in ./dist/ are already correct and skips `make
+#   release-binaries`. Use only when rebuilding would reproduce identical
+#   binaries (e.g. a same-commit retry after a transient build infra
+#   failure). No env-var bypass knobs exist; any new knob requires an
+#   explicit SRD change.
+#
 # Exit codes:
 #   0  success
 #   2  pre-flight failure (bad version, dirty tree, missing gh, etc.)
@@ -65,6 +73,12 @@ log() {
 # report_phase reads this array on EXIT and prints the final summary.
 PHASE_RESULTS=()
 CURRENT_PHASE=""
+
+# Script-level paths for cleanup helpers called from the EXIT trap.
+# Both default to empty so cleanup is a no-op when the phase that sets
+# them never ran (e.g. the script failed before publish_phase).
+STAGE_DIR=""
+# NPMRC_PATH is set by publish_phase when it writes the transient token file.
 
 phase_begin() {
     CURRENT_PHASE="$1"
@@ -115,41 +129,31 @@ corrective_action() {
     esac
 }
 
+cleanup_stage_dir_if_any() {
+    if [[ -n "${STAGE_DIR:-}" && -d "$STAGE_DIR" ]]; then
+        rm -rf "$STAGE_DIR"
+    fi
+}
+
 cleanup_npmrc_if_any() {
     if [[ -n "${NPMRC_PATH:-}" && -f "$NPMRC_PATH" ]]; then
         rm -f "$NPMRC_PATH"
     fi
 }
 
-# restore_pkg_jsons_if_dryrun rolls back the in-place mutations the
-# publish phase makes to package.json files when running in dry-run.
-# Live runs intentionally leave the mutations in place — the rewritten
-# versions are part of the published artifacts. Dry-run must leave the
-# workspace clean so the script can be re-run without a pre-flight
-# "working tree is dirty" failure.
-restore_pkg_jsons_if_dryrun() {
-    if [[ "${DRY_RUN:-1}" -ne 1 ]]; then
-        return 0
-    fi
-    if [[ -z "${REPO_ROOT:-}" ]]; then
-        return 0
-    fi
-    local f
-    for f in \
-        pkg/ts-bun-client/package.json \
-        pkg/ts-bun-client/platforms/linux-x64/package.json \
-        pkg/ts-bun-client/platforms/darwin-arm64/package.json; do
-        if [[ -f "$REPO_ROOT/$f" ]] && git -C "$REPO_ROOT" diff --quiet -- "$f" 2>/dev/null; then
-            continue
-        fi
-        git -C "$REPO_ROOT" checkout -- "$f" >/dev/null 2>&1 || true
-    done
-}
-
+# report_phase is registered as the EXIT trap. It is responsible for
+# cleanup and the final release summary. Because publish_phase now
+# operates exclusively on a temporary stage directory (never mutating
+# the live working tree), no in-tree rollback is required here.
+# Cleanup responsibilities:
+#   1. cleanup_stage_dir_if_any — remove the publish stage temp dir
+#   2. cleanup_npmrc_if_any     — remove the transient .npmrc token file
+# Both are no-ops if the respective paths were never set (e.g. the
+# script failed before publish_phase ran).
 report_phase() {
     local rc=$?
+    cleanup_stage_dir_if_any
     cleanup_npmrc_if_any
-    restore_pkg_jsons_if_dryrun
     log report "==== release summary for $VERSION ===="
 
     # If we died mid-phase the current-phase didn't append its own
@@ -202,6 +206,10 @@ trap report_phase EXIT
 # Flag parsing
 # --------------------------------------------------------------------
 
+# Surviving escape-hatch knob: --no-build (see "Escape-hatch knobs" in
+# the file header). No env-var bypass knobs exist in this script; any
+# new escape-hatch flag requires explicit SRD approval to prevent
+# accidental silent-skip releases.
 DRY_RUN=1
 EXPLICIT_RELEASE=0
 BRANCH="main"
@@ -689,9 +697,48 @@ publish_phase() {
         exit 6
     fi
 
+    # Live runs require NPM_TOKEN. Dry-run does not, since
+    # `npm publish --dry-run` and `npm pack` don't authenticate.
+    # Check before creating the stage dir so we fail fast on bad credentials.
+    if [[ "$DRY_RUN" -eq 0 && -z "${NPM_TOKEN:-}" ]]; then
+        log publish "NPM_TOKEN not set in environment" >&2
+        log publish "release runner must supply NPM_TOKEN (never bake into the script)" >&2
+        exit 6
+    fi
+
+    # Create a temporary publish stage directory — all mutations (version
+    # stamps, SKILL.md rewrite, version-bump.ts, .npmrc) operate inside
+    # this tree; the live working tree is never written.
+    local stage_dir
+    stage_dir="$(mktemp -d "${TMPDIR:-/tmp}/publish.XXXXXX")"
+    # Publish the global so the EXIT trap's cleanup_stage_dir_if_any can
+    # remove it even if publish_phase exits early.
+    STAGE_DIR="$stage_dir"
+    mkdir -p "$stage_dir/pkg/ts-bun-client"
+    mkdir -p "$stage_dir/skills"
+    cp -a "$REPO_ROOT/pkg/ts-bun-client/." "$stage_dir/pkg/ts-bun-client/"
+    cp -a "$REPO_ROOT/skills/install-agent-director" "$stage_dir/skills/"
+    # catalog.json: src/internal/errorMap.ts imports it at Bun.build time
+    # (prepack triggers 'bun run build', which re-bundles from source and
+    # needs this file). Mirror it — same reason verify_phase does.
+    mkdir -p "$stage_dir/pkg/api/errnames"
+    cp "$REPO_ROOT/pkg/api/errnames/catalog.json" "$stage_dir/pkg/api/errnames/catalog.json"
+    # Strip dev artifacts the cp -a dragged in (mirrors verify_phase's
+    # strip block).
+    rm -rf "$stage_dir/pkg/ts-bun-client/node_modules"
+    rm -rf "$stage_dir/pkg/ts-bun-client/skills"
+    # Install deps so prepack's `bun run build` chain (bun bundle + tsc
+    # --emitDeclarationOnly) can resolve bun-types and other devDependencies.
+    # mirrors verify_phase's bun install before bun pm pack.
+    if ! (cd "$stage_dir/pkg/ts-bun-client" && bun install --no-progress >/dev/null 2>&1); then
+        log publish "FAIL bun-install" >&2
+        exit 6
+    fi
+
     # ----------------------------------------------------------------
-    # H3 gate: must be the FIRST action inside publish_phase so no
-    # `npm publish` ever runs against a placeholder name.
+    # H3 gate: first action AFTER stage population so the gate scans
+    # staged copies pre-mutation (SR-2.3). No `npm publish` ever runs
+    # against a placeholder name.
     #
     # We inspect ALL THREE package.jsons (umbrella + 2 per-platform
     # sub-packages). Any one carrying the H3 sentinel halts the live
@@ -700,16 +747,16 @@ publish_phase() {
     local h3_sentinel_re='^@?(CHANGEME-H3|TBD)/'
     local p3 name3 placeholder_pkgs=()
     for p3 in \
-        "$pkg_json" \
-        "$pkg_root/platforms/linux-x64/package.json" \
-        "$pkg_root/platforms/darwin-arm64/package.json"; do
+        "$stage_dir/pkg/ts-bun-client/package.json" \
+        "$stage_dir/pkg/ts-bun-client/platforms/linux-x64/package.json" \
+        "$stage_dir/pkg/ts-bun-client/platforms/darwin-arm64/package.json"; do
         if [[ ! -f "$p3" ]]; then
             log publish "missing $p3 — TS package layout invariant violated" >&2
             exit 6
         fi
         name3=$(grep -E '^[[:space:]]*"name":' "$p3" | head -n 1 | sed -E 's/.*"name":[[:space:]]*"([^"]+)".*/\1/')
         if [[ "$name3" =~ $h3_sentinel_re ]]; then
-            placeholder_pkgs+=("${p3#$REPO_ROOT/}=$name3")
+            placeholder_pkgs+=("${p3#"$stage_dir/"}=$name3")
         fi
     done
 
@@ -727,23 +774,12 @@ publish_phase() {
         log publish "(dry-run) H3 unresolved (${#placeholder_pkgs[@]} package.json with placeholder names) — would halt in a live run"
     fi
 
-    local pkg_name
-    pkg_name=$(grep -E '^[[:space:]]*"name":' "$pkg_json" | head -n 1 | sed -E 's/.*"name":[[:space:]]*"([^"]+)".*/\1/')
-
-    # Live runs require NPM_TOKEN. Dry-run does not, since
-    # `npm publish --dry-run` and `npm pack` don't authenticate.
-    if [[ "$DRY_RUN" -eq 0 && -z "${NPM_TOKEN:-}" ]]; then
-        log publish "NPM_TOKEN not set in environment" >&2
-        log publish "release runner must supply NPM_TOKEN (never bake into the script)" >&2
-        exit 6
-    fi
-
     # Rewrite version on every package.json (umbrella + 2 platforms).
     log publish "stamping version $plain_version onto umbrella + 2 platform package.jsons"
     local p target_json
-    for p in "$pkg_json" \
-             "$pkg_root/platforms/linux-x64/package.json" \
-             "$pkg_root/platforms/darwin-arm64/package.json"; do
+    for p in "$stage_dir/pkg/ts-bun-client/package.json" \
+             "$stage_dir/pkg/ts-bun-client/platforms/linux-x64/package.json" \
+             "$stage_dir/pkg/ts-bun-client/platforms/darwin-arm64/package.json"; do
         target_json="$p"
         if [[ ! -f "$target_json" ]]; then
             log publish "missing $target_json" >&2
@@ -763,7 +799,7 @@ publish_phase() {
     # Plan Bee b.3d3 Epic 4 T3). The prepublish-guards.ts check (Epic 4
     # T1) enforces this invariant; the bump here is what keeps the
     # invariant honored on every release.
-    local skill_md="$REPO_ROOT/skills/install-agent-director/SKILL.md"
+    local skill_md="$stage_dir/skills/install-agent-director/SKILL.md"
     if [[ ! -f "$skill_md" ]]; then
         log publish "missing $skill_md — SR-4.1 lockstep bump cannot complete" >&2
         exit 6
@@ -777,16 +813,17 @@ publish_phase() {
 
     # version-bump the optional-deps file: pins → ^version registry pins.
     log publish "rewriting optionalDependencies file: pins to ^$plain_version"
-    if ! (cd "$pkg_root" && bun run scripts/version-bump.ts --version "$plain_version") \
+    if ! (cd "$stage_dir/pkg/ts-bun-client" && bun run scripts/version-bump.ts --version "$plain_version") \
             > >(while IFS= read -r l; do printf '[publish] %s\n' "$l"; done); then
         log publish "version-bump.ts failed" >&2
         exit 6
     fi
 
     # Write a transient .npmrc with the token, used by `npm publish`.
+    # Lands inside the stage dir so the live tree is never written.
     # The EXIT trap below (report_phase) calls cleanup_npmrc_if_any so
     # the file (and any extracted token) is gone even on hard exits.
-    NPMRC_PATH="$pkg_root/.npmrc"
+    NPMRC_PATH="$stage_dir/pkg/ts-bun-client/.npmrc"
     if [[ -n "${NPM_TOKEN:-}" ]]; then
         printf '//registry.npmjs.org/:_authToken=%s\nalways-auth=true\n' "$NPM_TOKEN" > "$NPMRC_PATH"
         chmod 600 "$NPMRC_PATH"
@@ -800,7 +837,7 @@ publish_phase() {
     # operator must increment the version for the retry.
     local pkg_dir pkg_full_name view_out plat_subdir
     for plat_subdir in linux-x64 darwin-arm64; do
-        pkg_dir="$pkg_root/platforms/$plat_subdir"
+        pkg_dir="$stage_dir/pkg/ts-bun-client/platforms/$plat_subdir"
         pkg_full_name=$(grep -E '^[[:space:]]*"name":' "$pkg_dir/package.json" | head -n 1 | sed -E 's/.*"name":[[:space:]]*"([^"]+)".*/\1/')
         log publish "publishing $pkg_full_name@$plain_version"
         if [[ "$DRY_RUN" -eq 0 ]] && command -v npm >/dev/null 2>&1; then
@@ -832,10 +869,10 @@ publish_phase() {
     done
 
     # Umbrella package last.
-    pkg_full_name=$(grep -E '^[[:space:]]*"name":' "$pkg_json" | head -n 1 | sed -E 's/.*"name":[[:space:]]*"([^"]+)".*/\1/')
+    pkg_full_name=$(grep -E '^[[:space:]]*"name":' "$stage_dir/pkg/ts-bun-client/package.json" | head -n 1 | sed -E 's/.*"name":[[:space:]]*"([^"]+)".*/\1/')
     log publish "publishing umbrella $pkg_full_name@$plain_version"
     if [[ "$DRY_RUN" -eq 0 ]] && command -v npm >/dev/null 2>&1; then
-        view_out=$(cd "$pkg_root" && npm view "${pkg_full_name}@${plain_version}" version 2>/dev/null || true)
+        view_out=$(cd "$stage_dir/pkg/ts-bun-client" && npm view "${pkg_full_name}@${plain_version}" version 2>/dev/null || true)
         if [[ -n "$view_out" ]]; then
             log publish "$pkg_full_name@$plain_version is already published" >&2
             log publish "version already published, increment version for retry" >&2
@@ -844,7 +881,7 @@ publish_phase() {
     fi
     if [[ "$DRY_RUN" -eq 1 ]]; then
         if command -v npm >/dev/null 2>&1; then
-            if ! (cd "$pkg_root" && npm publish --dry-run --ignore-scripts) \
+            if ! (cd "$stage_dir/pkg/ts-bun-client" && npm publish --dry-run --ignore-scripts) \
                     > >(while IFS= read -r l; do printf '[publish] %s\n' "$l"; done); then
                 log publish "FAIL $pkg_full_name (dry-run validation)" >&2
                 exit 6
@@ -853,7 +890,7 @@ publish_phase() {
             log publish "(dry-run) npm not on PATH — skipping packaging validation for $pkg_full_name"
         fi
     else
-        if ! (cd "$pkg_root" && npm publish) \
+        if ! (cd "$stage_dir/pkg/ts-bun-client" && npm publish) \
                 > >(while IFS= read -r l; do printf '[publish] %s\n' "$l"; done); then
             log publish "FAIL $pkg_full_name (npm publish)" >&2
             log publish "corrective action: increment VERSION and re-run; same-version retries are forbidden" >&2
