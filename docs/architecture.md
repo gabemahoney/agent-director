@@ -510,10 +510,12 @@ modified, even if they contain the word `version:`.
 
 The npm-name blocker (H3) was resolved on 2026-05-24: the umbrella package
 publishes as `agent-director` (unscoped) and the three per-platform sub-packages
-publish under the `@agent-director` scope. The `prepublishOnly` hook in each
-`package.json` runs `scripts/check-not-placeholder.ts`, which remains a
-forward-going tripwire against re-introducing the `CHANGEME-H3` sentinel. The
-H3 entry in [docs/release-blockers.md](release-blockers.md) records the
+publish under the `@agent-director` scope. The `prepublishOnly` hook in each sub-package `package.json` invokes
+`scripts/prepublish-guards.ts` with `PREPUBLISH_GUARD_MODE=subpackage` as the
+consolidated tripwire against re-introducing the `CHANGEME-H3` sentinel. The
+canonical placeholder regex (`PLACEHOLDER_RE`) is defined once at the top of
+that script — the single source of truth for the full sentinel set. The H3
+entry in [docs/release-blockers.md](release-blockers.md) records the
 resolution and is kept as the template for any future release blockers.
 
 ### Package layout
