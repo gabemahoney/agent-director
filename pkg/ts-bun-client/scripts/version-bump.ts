@@ -1,9 +1,17 @@
 /**
- * version-bump.ts — rewrites the two optionalDependencies `file:` entries
- * in pkg/ts-bun-client/package.json to `^<version>` pins for publishing.
+ * version-bump.ts — rewrites version-stamp sites for publishing.
  *
  * Usage:
- *   bun run scripts/version-bump.ts --version X.Y.Z
+ *   bun run scripts/version-bump.ts --version X.Y.Z [--target <selector>] ...
+ *
+ * Selectors (--target flag, repeatable):
+ *   umbrella-version   — umbrella package.json::version
+ *   platform-version   — both platform package.json::version fields
+ *   skill-frontmatter  — skills/install-agent-director/SKILL.md frontmatter version:
+ *   opt-deps           — umbrella package.json::optionalDependencies file: → ^X.Y.Z
+ *
+ * When --target is omitted, all four selectors run in the canonical order:
+ *   platform-version → umbrella-version → opt-deps → skill-frontmatter
  *
  * ─── Local development vs. publish-time flow ──────────────────────────────
  *
@@ -15,25 +23,21 @@
  *
  * Before publishing to npm, CI must:
  *   1. Build each sub-package binary for its target platform.
- *   2. Run `bun run version-bump-publish --version X.Y.Z` to rewrite the
- *      `file:` entries to `^X.Y.Z` registry pins.
+ *   2. Run `bun run version-bump-publish --version X.Y.Z` to stamp all
+ *      version-stamp sites (umbrella, platforms, skill SKILL.md, opt-deps).
  *   3. Publish the two sub-packages first (`npm publish` in each platforms/* subdir).
  *   4. Publish the top-level package.
  *
- * Running this script with the same version twice is a no-op on the second
- * run (idempotent): if all three entries already contain `^X.Y.Z` the file
- * is not rewritten.
+ * All targets are idempotent: if a file is already at target version the
+ * write is skipped and "already at <version> — skipped" is logged.
  *
- * Restoring `file:` paths after the script runs:
- *   - Direct script use: `git checkout pkg/ts-bun-client/package.json`
- *     restores the `file:` entries for local development.
- *   - Via release.sh pipeline: no restore needed — publish_phase operates
- *     exclusively on a temporary stage directory (T4A invariant); the live
- *     working tree is never modified.
+ * Path resolution works from both source tree and stage-dir copy
+ * (both preserve the same relative layout: scriptDir is always under
+ * <root>/pkg/ts-bun-client/scripts/).
  * ─────────────────────────────────────────────────────────────────────────
  */
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -42,65 +46,297 @@ import { fileURLToPath } from "node:url";
 // ---------------------------------------------------------------------------
 
 const args = process.argv.slice(2);
+
 const versionIdx = args.indexOf("--version");
 if (versionIdx === -1 || !args[versionIdx + 1]) {
-  console.error("Usage: bun run scripts/version-bump.ts --version X.Y.Z");
+  console.error(
+    "Usage: bun run scripts/version-bump.ts --version X.Y.Z [--target <selector>...]"
+  );
   process.exit(1);
 }
 const version = args[versionIdx + 1];
 
 // Validate: must be X.Y.Z with optional leading zeros.
 if (!/^\d+\.\d+\.\d+$/.test(version)) {
-  console.error(`Error: version "${version}" is not valid semver (expected X.Y.Z)`);
+  console.error(
+    `Error: version "${version}" is not valid semver (expected X.Y.Z)`
+  );
   process.exit(1);
 }
 
-const pin = `^${version}`;
-
 // ---------------------------------------------------------------------------
-// Locate and read package.json
+// Parse --target flags (repeatable)
 // ---------------------------------------------------------------------------
 
-const scriptDir = dirname(fileURLToPath(import.meta.url));
-const pkgPath = resolve(scriptDir, "../package.json");
+const VALID_SELECTORS = [
+  "umbrella-version",
+  "platform-version",
+  "skill-frontmatter",
+  "opt-deps",
+] as const;
+type Selector = (typeof VALID_SELECTORS)[number];
 
-const raw = readFileSync(pkgPath, "utf8");
-// Use JSON.parse / JSON.stringify to preserve semantic correctness.
-// We do a string replacement on the serialized output to preserve formatting
-// as closely as possible rather than re-serializing with a fresh stringify.
-const pkg = JSON.parse(raw) as {
-  optionalDependencies: Record<string, string>;
-  [k: string]: unknown;
-};
-
-const optDeps = pkg.optionalDependencies ?? {};
-const OPTIONAL_NAMES = [
-  "@agent-director/linux-x64",
-  "@agent-director/darwin-arm64",
-];
-
-// ---------------------------------------------------------------------------
-// Idempotency check
-// ---------------------------------------------------------------------------
-
-const alreadyPinned = OPTIONAL_NAMES.every((name) => optDeps[name] === pin);
-if (alreadyPinned) {
-  console.log(`version-bump: already at ${pin} — no changes needed.`);
-  process.exit(0);
-}
-
-// ---------------------------------------------------------------------------
-// Rewrite
-// ---------------------------------------------------------------------------
-
-for (const name of OPTIONAL_NAMES) {
-  if (name in optDeps) {
-    optDeps[name] = pin;
+const targets: Selector[] = [];
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === "--target") {
+    const sel = args[i + 1];
+    if (!sel) {
+      console.error("Error: --target requires a selector argument");
+      process.exit(1);
+    }
+    if (!(VALID_SELECTORS as readonly string[]).includes(sel)) {
+      console.error(
+        `Error: unknown --target "${sel}". Valid selectors: ${VALID_SELECTORS.join(", ")}`
+      );
+      process.exit(1);
+    }
+    targets.push(sel as Selector);
+    i++;
   }
 }
 
-// Re-serialize with 2-space indent (matches the existing file style).
-const updated = JSON.stringify(pkg, null, 2) + "\n";
-writeFileSync(pkgPath, updated, "utf8");
+// Canonical run-all order: platform-version first so platform package.json
+// versions are consistent before the umbrella is stamped; skill-frontmatter
+// last because it is the most structurally sensitive operation.
+const ALL_SELECTORS: Selector[] = [
+  "platform-version",
+  "umbrella-version",
+  "opt-deps",
+  "skill-frontmatter",
+];
 
-console.log(`version-bump: rewrote optionalDependencies to ${pin} in ${pkgPath}`);
+// When no --target is given, run all selectors in canonical order.
+const selectedTargets: Selector[] =
+  targets.length > 0 ? targets : [...ALL_SELECTORS];
+
+// ---------------------------------------------------------------------------
+// Path resolution — works from both source tree and stage-dir copy
+// ---------------------------------------------------------------------------
+
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+
+interface RepoPaths {
+  /** pkg/ts-bun-client/package.json */
+  umbrellaJson: string;
+  /** [linux-x64/package.json, darwin-arm64/package.json] */
+  platformJsons: [string, string];
+  /** [skills/install-agent-director/SKILL.md] */
+  skillMds: [string];
+}
+
+function resolveRepoPaths(dir: string): RepoPaths {
+  return {
+    umbrellaJson: resolve(dir, "../package.json"),
+    platformJsons: [
+      resolve(dir, "../platforms/linux-x64/package.json"),
+      resolve(dir, "../platforms/darwin-arm64/package.json"),
+    ],
+    skillMds: [
+      resolve(dir, "../../../skills/install-agent-director/SKILL.md"),
+    ],
+  };
+}
+
+const paths = resolveRepoPaths(scriptDir);
+
+// ---------------------------------------------------------------------------
+// Target: umbrella-version
+// ---------------------------------------------------------------------------
+
+function bumpUmbrellaVersion(pkgPath: string, ver: string): void {
+  const raw = readFileSync(pkgPath, "utf8");
+  const pkg = JSON.parse(raw) as { version?: string; [k: string]: unknown };
+  if (pkg.version === ver) {
+    console.log(`version-bump [umbrella-version]: already at ${ver} — skipped`);
+    return;
+  }
+  pkg.version = ver;
+  writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n", "utf8");
+  console.log(
+    `version-bump [umbrella-version]: set version=${ver} in ${pkgPath}`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Target: platform-version
+// ---------------------------------------------------------------------------
+
+function bumpPlatformVersions(pkgPaths: [string, string], ver: string): void {
+  for (const pkgPath of pkgPaths) {
+    const raw = readFileSync(pkgPath, "utf8");
+    const pkg = JSON.parse(raw) as { version?: string; [k: string]: unknown };
+    if (pkg.version === ver) {
+      console.log(
+        `version-bump [platform-version]: already at ${ver} — skipped (${pkgPath})`
+      );
+      continue;
+    }
+    pkg.version = ver;
+    writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n", "utf8");
+    console.log(
+      `version-bump [platform-version]: set version=${ver} in ${pkgPath}`
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Target: skill-frontmatter
+// ---------------------------------------------------------------------------
+
+function bumpSkillFrontmatter(skillPaths: [string], ver: string): void {
+  const [skillMdPath] = skillPaths;
+  const raw = readFileSync(skillMdPath, "utf8");
+  const lines = raw.split("\n");
+
+  // File must begin with the YAML frontmatter opening delimiter.
+  if (lines[0] !== "---") {
+    console.error(
+      `version-bump [skill-frontmatter]: ${skillMdPath}: does not begin with '---' (frontmatter required)`
+    );
+    process.exit(1);
+  }
+
+  // Find the closing '---' (search from line 1 to skip the opener).
+  const closeIdx = lines.indexOf("---", 1);
+  if (closeIdx === -1) {
+    console.error(
+      `version-bump [skill-frontmatter]: ${skillMdPath}: no closing '---' found`
+    );
+    process.exit(1);
+  }
+
+  // Frontmatter block is lines[1 .. closeIdx-1].
+  const frontmatter = lines.slice(1, closeIdx);
+
+  // Collect indices of version: lines within the frontmatter only.
+  const versionLineIndices: number[] = [];
+  for (let i = 0; i < frontmatter.length; i++) {
+    if (/^version:\s*/.test(frontmatter[i])) {
+      versionLineIndices.push(i);
+    }
+  }
+
+  if (versionLineIndices.length === 0) {
+    console.error(
+      `version-bump [skill-frontmatter]: ${skillMdPath}: no version line in frontmatter`
+    );
+    process.exit(1);
+  }
+  if (versionLineIndices.length > 1) {
+    console.error(
+      `version-bump [skill-frontmatter]: ${skillMdPath}: ${versionLineIndices.length} version lines in frontmatter (expected 1)`
+    );
+    process.exit(1);
+  }
+
+  const fmIdx = versionLineIndices[0];
+  const currentLine = frontmatter[fmIdx];
+
+  // Parse current value — strip optional surrounding quotes for comparison.
+  const currentMatch = currentLine.match(/^version:\s*(.+)$/);
+  const rawVal = currentMatch ? currentMatch[1].trim() : "";
+  const currentVal = rawVal.replace(/^["']|["']$/g, "");
+
+  // Idempotence: skip write if already at target version.
+  if (currentVal === ver) {
+    console.log(
+      `version-bump [skill-frontmatter]: already at ${ver} — skipped`
+    );
+    return;
+  }
+
+  // Replace the version line. Write unquoted (canonical YAML scalar form).
+  frontmatter[fmIdx] = `version: ${ver}`;
+
+  // Reassemble: opening --- + (mutated) frontmatter + closing --- + body.
+  // lines.slice(closeIdx) starts with the closing '---' then the body.
+  const updated = ["---", ...frontmatter, ...lines.slice(closeIdx)].join("\n");
+  writeFileSync(skillMdPath, updated, "utf8");
+  console.log(
+    `version-bump [skill-frontmatter]: set version=${ver} in ${skillMdPath}`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Target: opt-deps
+// ---------------------------------------------------------------------------
+
+function bumpOptDeps(pkgPath: string, ver: string): void {
+  const pin = `^${ver}`;
+  const raw = readFileSync(pkgPath, "utf8");
+  const pkg = JSON.parse(raw) as {
+    optionalDependencies?: Record<string, string>;
+    [k: string]: unknown;
+  };
+
+  const optDeps = pkg.optionalDependencies ?? {};
+  const OPTIONAL_NAMES = [
+    "@agent-director/linux-x64",
+    "@agent-director/darwin-arm64",
+  ];
+
+  const alreadyPinned = OPTIONAL_NAMES.every((name) => optDeps[name] === pin);
+  if (alreadyPinned) {
+    console.log(`version-bump [opt-deps]: already at ${pin} — skipped`);
+    return;
+  }
+
+  for (const name of OPTIONAL_NAMES) {
+    if (name in optDeps) {
+      optDeps[name] = pin;
+    }
+  }
+  writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n", "utf8");
+  console.log(
+    `version-bump [opt-deps]: rewrote optionalDependencies to ${pin} in ${pkgPath}`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Path validation — all target paths must exist before any mutation runs
+// ---------------------------------------------------------------------------
+
+function requiredPaths(sel: Selector): string[] {
+  switch (sel) {
+    case "umbrella-version": return [paths.umbrellaJson];
+    case "platform-version": return [...paths.platformJsons];
+    case "skill-frontmatter": return [...paths.skillMds];
+    case "opt-deps":         return [paths.umbrellaJson];
+  }
+}
+
+const missingPaths: string[] = [];
+for (const sel of selectedTargets) {
+  for (const p of requiredPaths(sel)) {
+    if (!existsSync(p)) {
+      missingPaths.push(`[${sel}] ${p}`);
+    }
+  }
+}
+if (missingPaths.length > 0) {
+  for (const m of missingPaths) {
+    console.error(`version-bump: missing required file: ${m}`);
+  }
+  process.exit(1);
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch
+// ---------------------------------------------------------------------------
+
+for (const target of selectedTargets) {
+  switch (target) {
+    case "umbrella-version":
+      bumpUmbrellaVersion(paths.umbrellaJson, version);
+      break;
+    case "platform-version":
+      bumpPlatformVersions(paths.platformJsons, version);
+      break;
+    case "skill-frontmatter":
+      bumpSkillFrontmatter(paths.skillMds, version);
+      break;
+    case "opt-deps":
+      bumpOptDeps(paths.umbrellaJson, version);
+      break;
+  }
+}
