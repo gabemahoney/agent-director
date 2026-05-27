@@ -53,7 +53,8 @@ func ApplyDefaults(r *Resolved, cfg config.Config, store CollisionChecker) error
 }
 
 // composeSessionName builds the canonical session name from the canonical
-// cwd basename plus the first 8 chars of the instance ID. Stable input →
+// cwd basename plus the first 8 chars of the instance ID; both segments are
+// passed through SanitizeSessionName (same slug rules). Stable input →
 // stable name, so resume can re-derive it.
 func composeSessionName(cwd, instanceID string) string {
 	base := filepath.Base(cwd)
@@ -62,6 +63,7 @@ func composeSessionName(cwd, instanceID string) string {
 	if len(idTail) > 8 {
 		idTail = idTail[:8]
 	}
+	idTail = SanitizeSessionName(idTail)
 	return slug + "-" + idTail
 }
 
