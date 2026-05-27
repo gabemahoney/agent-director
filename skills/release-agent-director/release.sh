@@ -536,9 +536,14 @@ verify_phase() {
     rm -rf "$stage_dir/pkg/ts-bun-client/node_modules"
     rm -rf "$stage_dir/pkg/ts-bun-client/skills"
 
-    # Stamp all five version-stamp sites (umbrella + platforms + opt-deps +
-    # SKILL.md frontmatter) via version-bump.ts — single source of truth.
-    if ! (cd "$stage_dir/pkg/ts-bun-client" && bun run scripts/version-bump.ts --version "$plain_v") \
+    # Stamp version sites via version-bump.ts.
+    # Skip opt-deps: verify_phase tests the packed tarball via local bun
+    # install, which needs file: paths intact for sub-package resolution.
+    if ! (cd "$stage_dir/pkg/ts-bun-client" && bun run scripts/version-bump.ts \
+            --version "$plain_v" \
+            --target umbrella-version \
+            --target platform-version \
+            --target skill-frontmatter) \
             > >(while IFS= read -r l; do printf '[verify] %s\n' "$l"; done); then
         log verify "version-bump.ts failed" >&2
         phase_fail verify "version-bump.ts"
