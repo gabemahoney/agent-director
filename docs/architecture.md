@@ -720,7 +720,7 @@ so each stage can be tested in isolation against synthesized input.
    └────┬───────┘   relay_mode from config. Collision check via store.
         ▼
    ┌────────┐   SRD §7.4: pending row insert; env compose;
-   │ Launch │   --settings JSON synthesis; pre-trust cwd in ~/.claude.json;
+   │ Launch │   --settings JSON synthesis; pre-trust cwd in .claude.json;
    └────┬───┘   tmux new-session via direct argv. Fire-and-forget.
         ▼
    claude_instance_id (state stays `pending` until SessionStart fires)
@@ -733,8 +733,10 @@ created or one you trust?" modal the first time it sees a new cwd. The
 modal blocks before `SessionStart` fires, so a Spawn into a fresh cwd
 sits in `pending` forever and `send-keys` refuses to drive it (the
 precondition is a live state). Before exec'ing tmux, `internal/spawn`
-reads `~/.claude.json`, sets
-`projects.<canonical cwd>.hasTrustDialogAccepted = true`, and writes
+resolves the target `.claude.json`: if the spawn's `extra_env` supplies
+`CLAUDE_CONFIG_DIR`, that directory is used (`<CLAUDE_CONFIG_DIR>/.claude.json`);
+otherwise the operator's `~/.claude.json` is used. It then sets
+`projects.<canonical cwd>.hasTrustDialogAccepted = true` and writes
 the file back atomically (temp + rename) so a torn write against the
 operator's own Claude Code session is impossible. The same file is
 written by the operator's Claude Code itself; concurrent updates use
@@ -744,10 +746,10 @@ end up with the same key set to `true`) is safe.
 `--no-pre-trust` (`SpawnParams.NoPreTrust`) opts out for callers that
 explicitly want the human-in-the-loop trust dialog — e.g. spawning into
 a directory handed in by an untrusted caller. The flag defaults off, so
-pre-trust is the default behavior. When the file does not exist (truly
-fresh Claude Code install), the write is skipped and a soft warning
-lands on stderr; the spawn proceeds and the trust dialog is unavoidable
-in that case.
+pre-trust is the default behavior. When the resolved file does not exist (truly
+fresh Claude Code install, or a fresh `CLAUDE_CONFIG_DIR`), the write is
+skipped and a soft warning lands on stderr; the spawn proceeds and the
+trust dialog is unavoidable in that case.
 
 Only `hasTrustDialogAccepted` is touched. Sibling keys
 (`hasCompletedProjectOnboarding`, `hasClaudeMdExternalIncludesApproved`,

@@ -34,7 +34,7 @@ Launch a tracked Claude Code instance inside a new tmux session. Fire-and-forget
 - `relay-mode`: type=string, required=false — on / off. Empty falls back to config defaults.relay_mode (default off).
 - `extra-env`: type=[]string (K=V), required=false — Repeated KEY=VALUE pairs injected on the tmux session env. Reserved keys (AGENT_DIRECTOR_*) rejected; auth env vars (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN) allowed.
 - `claude_args`: type=[]string (after --), required=false — Pass-through argv to `claude` after the supervisor's own flags. Denied: --settings, --resume, --continue, --print, --output-format.
-- `no-pre-trust`: type=bool, required=false — Skip pre-writing projects.<cwd>.hasTrustDialogAccepted=true into ~/.claude.json. Default off (pre-trust IS performed so Claude Code skips its workspace-trust dialog and the Spawn becomes interactive immediately).
+- `no-pre-trust`: type=bool, required=false — Skip pre-writing projects.<cwd>.hasTrustDialogAccepted=true into the spawn's .claude.json (resolves to <CLAUDE_CONFIG_DIR>/.claude.json if CLAUDE_CONFIG_DIR is set in extra-env, otherwise ~/.claude.json). Default off (pre-trust IS performed so Claude Code skips its workspace-trust dialog and the Spawn becomes interactive immediately).
 - `tmux-session-name`: type=string, required=false — Optional explicit tmux session name. Empty/omitted falls back to <basename(cwd)>-<id[:8]>. Validated app-side: rejects empty (when supplied), '#' ':' '.', ASCII control chars, non-UTF-8, and >64 bytes. NO DB uniqueness check; live-collision surfaces as the wrapped tmux new-session error. Name reuse across ended spawns is supported.
 
 ### Output schema
