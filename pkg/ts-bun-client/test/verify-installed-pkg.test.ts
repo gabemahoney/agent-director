@@ -200,7 +200,7 @@ describe("verify-installed-pkg --full driver shape", () => {
       const result = await runScript(["--smoke", "--full"]);
 
       expect(result.exitCode).toBe(1);
-      expect(result.stderr.length).toBeGreaterThan(0);
+      expect(result.stderr).toContain("mutually exclusive");
       expect(result.stderr).not.toMatch(/UnhandledPromiseRejection/);
     },
     10_000
