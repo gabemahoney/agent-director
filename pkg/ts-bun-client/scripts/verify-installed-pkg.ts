@@ -4,10 +4,14 @@
  *
  * Usage:
  *   bun run scripts/verify-installed-pkg.ts --smoke
+ *   bun run scripts/verify-installed-pkg.ts --full
  *
  * Modes:
  *   --smoke   Basic functional check: construct a Client, call version(),
  *             assert the response shape. Exits 0 on success, non-zero on
+ *             any failure.
+ *   --full    Runs --smoke assertions first, then executes the makeTemplate
+ *             overwrite gauntlet (SR-1.2). Exits 0 on success, non-zero on
  *             any failure.
  *
  * Dev-only env vars (for in-repo development; not used in production):
@@ -20,9 +24,6 @@
  *
  * Production codepath: bare `import { Client } from "agent-director"` with no
  * env var overrides. The packed tarball must resolve correctly.
- *
- * b.iaq SR-1.5: the --full mode (makeTemplate assertion) will be added in
- * Task D1. Leave a placeholder comment where it will go.
  */
 
 import * as fs from "node:fs";
@@ -34,10 +35,19 @@ import * as path from "node:path";
 // ---------------------------------------------------------------------------
 
 const args = process.argv.slice(2);
+const smokeFlag = args.includes("--smoke");
+const fullFlag = args.includes("--full");
 
-if (!args.includes("--smoke")) {
+if (smokeFlag && fullFlag) {
   process.stderr.write(
-    "verify-installed-pkg: no mode flag supplied. Usage: verify-installed-pkg.ts --smoke\n"
+    "verify-installed-pkg: --smoke and --full are mutually exclusive\n"
+  );
+  process.exit(1);
+}
+
+if (!smokeFlag && !fullFlag) {
+  process.stderr.write(
+    "verify-installed-pkg: no mode flag supplied. Usage: verify-installed-pkg.ts --smoke | --full\n"
   );
   process.exit(1);
 }
@@ -52,20 +62,28 @@ if (!args.includes("--smoke")) {
 // script can be run without a packed tarball during development.
 // ---------------------------------------------------------------------------
 
-type ClientCtor = new(opts: Record<string, unknown>) => {
+type ClientInstance = {
   version(p: Record<never, never>): Promise<unknown>;
+  makeTemplate(p: { name: string; overwrite?: boolean; cwd?: string }): Promise<{ path: string }>;
   close(): void;
 };
 
+type ClientCtor = new(opts: Record<string, unknown>) => ClientInstance;
+
+type ErrTemplateExistsCtor = new(...args: unknown[]) => Error;
+
 let Client: ClientCtor;
+let ErrTemplateExists: ErrTemplateExistsCtor;
 
 const devPath = process.env.AD_VERIFY_AGAINST;
 if (devPath) {
-  const mod = await import(devPath) as { Client: ClientCtor };
+  const mod = await import(devPath) as { Client: ClientCtor; ErrTemplateExists: ErrTemplateExistsCtor };
   Client = mod.Client;
+  ErrTemplateExists = mod.ErrTemplateExists;
 } else {
-  const mod = await import("agent-director") as { Client: ClientCtor };
+  const mod = await import("agent-director") as { Client: ClientCtor; ErrTemplateExists: ErrTemplateExistsCtor };
   Client = mod.Client;
+  ErrTemplateExists = mod.ErrTemplateExists;
 }
 
 // ---------------------------------------------------------------------------
@@ -107,8 +125,6 @@ async function runSmoke(): Promise<void> {
       );
     }
 
-    // TODO(b.iaq Task D1): add --full mode with makeTemplate({overwrite: true}) assertion per SRD SR-9.2.
-
     client.close();
   } finally {
     try {
@@ -119,12 +135,121 @@ async function runSmoke(): Promise<void> {
   }
 }
 
-try {
+// ---------------------------------------------------------------------------
+// --full mode: run --smoke, then the makeTemplate overwrite gauntlet (SR-1.2).
+// ---------------------------------------------------------------------------
+
+class StepFailure extends Error {
+  readonly step: string;
+  constructor(step: string) {
+    super(step);
+    this.step = step;
+  }
+}
+
+async function runFull(): Promise<void> {
   await runSmoke();
-  console.log("verify-installed-pkg --smoke: OK");
-  process.exit(0);
-} catch (err) {
-  const msg = err instanceof Error ? err.message : String(err);
-  process.stderr.write(`verify-installed-pkg --smoke: FAILED — ${msg}\n`);
-  process.exit(1);
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ad-verify-full-"));
+  const storePath = path.join(tmpDir, "state.db");
+  const devCliPath = process.env.AD_CLI_PATH;
+
+  const ctorOpts: Record<string, unknown> = {
+    storePath,
+    createIfMissing: true,
+  };
+  if (devCliPath) {
+    ctorOpts._cliPath = devCliPath;
+  }
+
+  const client = new Client(ctorOpts);
+
+  // Use a run-unique name so a leftover from a crashed prior run never causes
+  // makeTemplate-create to spuriously fail with ErrTemplateExists.
+  const templateName = `verify-overwrite-${Date.now()}`;
+  let templatePath: string | undefined;
+
+  try {
+    // makeTemplate-create: first call with overwrite:false should succeed.
+    try {
+      const r = await client.makeTemplate({ name: templateName, overwrite: false });
+      templatePath = r.path;
+    } catch {
+      throw new StepFailure("makeTemplate-create");
+    }
+
+    // makeTemplate-collision: repeat call should return ErrTemplateExists.
+    let collisionErr: unknown;
+    try {
+      await client.makeTemplate({ name: templateName, overwrite: false });
+    } catch (e) {
+      collisionErr = e;
+    }
+    if (!(collisionErr instanceof ErrTemplateExists)) {
+      throw new StepFailure("makeTemplate-collision");
+    }
+
+    // makeTemplate-overwrite: same call with overwrite:true should succeed.
+    let overwriteResult!: { path: string };
+    try {
+      overwriteResult = await client.makeTemplate({
+        name: templateName,
+        overwrite: true,
+        cwd: tmpDir,
+      });
+    } catch {
+      throw new StepFailure("makeTemplate-overwrite");
+    }
+
+    // makeTemplate-reread: file must reflect step 3's cwd, not step 1's absence.
+    try {
+      const contents = fs.readFileSync(overwriteResult.path, "utf8");
+      if (!contents.includes(tmpDir)) {
+        throw new Error("cwd marker absent from template file");
+      }
+    } catch {
+      throw new StepFailure("makeTemplate-reread");
+    }
+
+    client.close();
+  } finally {
+    if (templatePath) {
+      try { fs.unlinkSync(templatePath); } catch { /* best-effort */ }
+    }
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // best-effort cleanup
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch
+// ---------------------------------------------------------------------------
+
+if (smokeFlag) {
+  try {
+    await runSmoke();
+    console.log("verify-installed-pkg --smoke: OK");
+    process.exit(0);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`verify-installed-pkg --smoke: FAILED — ${msg}\n`);
+    process.exit(1);
+  }
+} else {
+  try {
+    await runFull();
+    console.log("verify-installed-pkg --full: OK");
+    process.exit(0);
+  } catch (err) {
+    if (err instanceof StepFailure) {
+      process.stderr.write(`FAIL ${err.step}\n`);
+    } else {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`verify-installed-pkg --full: FAILED — ${msg}\n`);
+    }
+    process.exit(1);
+  }
 }
