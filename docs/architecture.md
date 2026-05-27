@@ -474,7 +474,8 @@ immediately (see Construction step 2 below):
 **version-bump script.** `scripts/version-bump.ts` is a publish-time helper.
 During local development the top-level `optionalDependencies` entries use
 `file:./platforms/<tuple>` paths so `bun install` resolves them from the
-workspace. Before publishing to npm, `release.sh` runs:
+workspace. Before publishing to npm, `publish_phase` runs the script against
+the stage directory (never the live working tree):
 
 ```sh
 bun run version-bump-publish --version X.Y.Z
@@ -482,8 +483,8 @@ bun run version-bump-publish --version X.Y.Z
 
 This rewrites the two `file:` entries to `^X.Y.Z` registry pins. The
 script is idempotent (running twice with the same version is a no-op).
-After publish, `git checkout package.json` restores the `file:` paths
-for local development.
+Because the script targets the stage copy, not the live `package.json`,
+no post-publish restore step is needed.
 
 ### Release blockers
 
@@ -1747,11 +1748,15 @@ first failing phase:
    shares the root `go.mod`; if `pkg/api/go.mod` is ever added the
    script also pushes the `pkg/api/$VERSION` sub-path tag that Go's
    module protocol requires.
-6. **publish** — npm publish for the umbrella package and the two
-   per-platform optional dependency packages. Halts at this step
-   with a clear "H3 unresolved" error if the npm name ever regresses
-   to the `@CHANGEME-H3/agent-director` placeholder (forward-going
-   tripwire; H3 itself was resolved 2026-05-24).
+6. **publish** — Creates a `mktemp -d` stage directory, populates it
+   via `cp -a` from `pkg/ts-bun-client/` and
+   `skills/install-agent-director/`, then stamps version and SKILL.md
+   frontmatter against the stage copies. `version-bump.ts` and
+   `npm publish` run from the stage; the live working tree is never
+   written during publish. Halts with a clear "H3 unresolved" error if
+   the npm name ever regresses to the `@CHANGEME-H3/agent-director`
+   placeholder (forward-going tripwire; H3 itself was resolved
+   2026-05-24).
 7. **gh-release** — `gh release create $VERSION` with exactly **3
    attached assets** — the three CLI binaries:
    `agent-director-linux-amd64`, `agent-director-linux-arm64`,
@@ -1764,10 +1769,35 @@ In dry-run mode the script executes phases 1-4 fully, runs the
 tag-phase in "would-push" preview mode, and exits before any
 irreversible step.
 
+**Clean-tree invariant.** `git status --porcelain` must be empty in
+the working tree after any dry-run or live release. All publish
+mutations are confined to the stage directory; no phase writes to
+tracked files. `make release-smoke` asserts this invariant (and three
+other postconditions) via
+`skills/release-agent-director/test-release-postconditions.sh`.
+
 The darwin/arm64 leg's Xcode pin lives on the self-hosted runner
 itself (operator-configured per `docs/self-hosted-runner-setup.md`)
 and is NOT diffed by this helper; bumps to it are surfaced by the
 operator in the release notes manually.
+
+#### Stage directory and EXIT trap
+
+`cleanup_stage_dir_if_any` removes the `$STAGE_DIR` temp directory
+created by `publish_phase`; it is a no-op when `STAGE_DIR` is unset
+or the directory no longer exists. Any future helper that introduces
+a new stage-dir-style temp resource should follow the same pattern:
+set a script-level variable, write a dedicated cleanup function, and
+register it in `report_phase`'s cleanup sequence.
+
+`report_phase` is the sole EXIT trap. Its cleanup order is fixed:
+
+1. `cleanup_stage_dir_if_any` — remove the publish stage temp dir
+2. `cleanup_npmrc_if_any` — remove the transient `.npmrc` token file
+3. print release summary
+
+Both helpers are no-ops if the corresponding paths were never set
+(e.g. the script failed before `publish_phase` ran).
 
 #### Go module tagging convention
 
