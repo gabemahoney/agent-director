@@ -122,7 +122,7 @@
         {
           "name": "no-pre-trust",
           "type": "bool",
-          "description": "Skip pre-writing projects.\u003ccwd\u003e.hasTrustDialogAccepted=true into ~/.claude.json. Default off (pre-trust IS performed so Claude Code skips its workspace-trust dialog and the Spawn becomes interactive immediately).",
+          "description": "Skip pre-writing projects.\u003ccwd\u003e.hasTrustDialogAccepted=true into the spawn's .claude.json (resolves to \u003cCLAUDE_CONFIG_DIR\u003e/.claude.json if CLAUDE_CONFIG_DIR is set in extra-env, otherwise ~/.claude.json). Default off (pre-trust IS performed so Claude Code skips its workspace-trust dialog and the Spawn becomes interactive immediately).",
           "required": false,
           "nullable": false,
           "allow_empty": false,

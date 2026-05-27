@@ -195,7 +195,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "no-pre-trust",
 				Type:          "bool",
-				Description:   "Skip pre-writing projects.<cwd>.hasTrustDialogAccepted=true into ~/.claude.json. Default off (pre-trust IS performed so Claude Code skips its workspace-trust dialog and the Spawn becomes interactive immediately).",
+				Description:   "Skip pre-writing projects.<cwd>.hasTrustDialogAccepted=true into the spawn's .claude.json (resolves to <CLAUDE_CONFIG_DIR>/.claude.json if CLAUDE_CONFIG_DIR is set in extra-env, otherwise ~/.claude.json). Default off (pre-trust IS performed so Claude Code skips its workspace-trust dialog and the Spawn becomes interactive immediately).",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
