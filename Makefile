@@ -5,7 +5,8 @@
         release-shellcheck release-bats release-smoke \
         consumer-dryrun \
         ts-helper fake-tmux \
-        agent-director envelope-diff-ts
+        agent-director envelope-diff-ts \
+        verify-installed-pkg-full
 
 # Pinned Claude Code version. Per SRD §15.2 the harness's image must install
 # *this* version of @anthropic-ai/claude-code; bumping it requires re-running
@@ -261,10 +262,8 @@ envelope-diff-ts: agent-director ts-helper fake-tmux
 # respective script rather than globally here.
 release-shellcheck:
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		echo "[release-shellcheck] shellcheck skills/release-agent-director/release.sh"; \
-		shellcheck -s bash skills/release-agent-director/release.sh; \
-		echo "[release-shellcheck] shellcheck skills/release-agent-director/test-release-postconditions.sh"; \
-		shellcheck -s bash skills/release-agent-director/test-release-postconditions.sh; \
+		echo "[release-shellcheck] shellcheck skills/release-agent-director/release.sh skills/release-agent-director/lib/stage-cli.sh skills/release-agent-director/test-release-postconditions.sh"; \
+		shellcheck -s bash skills/release-agent-director/release.sh skills/release-agent-director/lib/stage-cli.sh skills/release-agent-director/test-release-postconditions.sh; \
 	else \
 		echo "[release-shellcheck] shellcheck not installed — skipping"; \
 	fi
@@ -283,3 +282,41 @@ release-smoke:
 # stale CI lane that still calls it stays green.
 release-bats:
 	@echo "[release-bats] no release bats tests in tree — skipping"
+
+# verify-installed-pkg-full performs a self-contained end-to-end install
+# verification of the ts-bun-client package against a real packed tarball.
+# It builds the release binaries, stages the host CLI into the platform
+# sub-packages, packs the umbrella tarball, installs it into an isolated
+# consumer project, and runs the --full makeTemplate gauntlet driver.
+# Temp HOME and consumer project dir are cleaned up via EXIT trap.
+verify-installed-pkg-full: SHELL = /bin/bash
+verify-installed-pkg-full: release-binaries
+	@set -eu; \
+	REPO_ROOT="$$(pwd)"; \
+	log() { local lvl="$$1"; shift; echo "[$$lvl] $$*"; }; \
+	_OS=$$(uname -s | tr '[:upper:]' '[:lower:]'); \
+	_ARCH=$$(uname -m); \
+	case "$${_OS}-$${_ARCH}" in \
+		linux-x86_64)  _HOST_CROSS="linux-amd64"; _HOST_PKG="linux-x64" ;; \
+		darwin-arm64)  _HOST_CROSS="darwin-arm64"; _HOST_PKG="darwin-arm64" ;; \
+		*) echo "unsupported host: $${_OS}-$${_ARCH}" >&2; exit 1 ;; \
+	esac; \
+	echo "[verify-installed-pkg-full] staging CLI into platform packages"; \
+	. "$$REPO_ROOT/skills/release-agent-director/lib/stage-cli.sh"; \
+	CLI_PLATFORMS=("$${_HOST_CROSS}=$${_HOST_PKG}"); \
+	stage_cli_into_platforms; \
+	TMP_STAGING=$$(mktemp -d); \
+	TMP_HOME=$$(mktemp -d); \
+	TMP_CONSUMER=$$(mktemp -d); \
+	trap 'rm -rf "$$TMP_STAGING" "$$TMP_HOME" "$$TMP_CONSUMER"' EXIT; \
+	echo "[verify-installed-pkg-full] packing umbrella tarball"; \
+	cd "$$REPO_ROOT/pkg/ts-bun-client" && bun run build && bun pm pack --destination "$$TMP_STAGING"; \
+	TARBALL=$$(ls "$$TMP_STAGING"/*.tgz); \
+	echo "[verify-installed-pkg-full] installing into consumer project"; \
+	cd "$$TMP_CONSUMER"; \
+	printf '{"name":"verify-consumer","version":"1.0.0","type":"module"}\n' > package.json; \
+	HOME="$$TMP_HOME" bun add "$$TARBALL"; \
+	HOME="$$TMP_HOME" bun add "file:$$REPO_ROOT/pkg/ts-bun-client/platforms/$$_HOST_PKG"; \
+	echo "[verify-installed-pkg-full] running --full gauntlet"; \
+	cp "$$REPO_ROOT/pkg/ts-bun-client/scripts/verify-installed-pkg.ts" "$$TMP_CONSUMER/"; \
+	HOME="$$TMP_HOME" bun "$$TMP_CONSUMER/verify-installed-pkg.ts" --full
