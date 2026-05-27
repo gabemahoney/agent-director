@@ -471,20 +471,40 @@ immediately (see Construction step 2 below):
 | `ErrPlatformPackageMissing` | sub-package not installed or binary absent | sub-package name |
 | `ErrCliNotExecutable` | binary exists but lacks execute permission | binary path |
 
-**version-bump script.** `scripts/version-bump.ts` is a publish-time helper.
-During local development the top-level `optionalDependencies` entries use
-`file:./platforms/<tuple>` paths so `bun install` resolves them from the
-workspace. Before publishing to npm, `publish_phase` runs the script against
-the stage directory (never the live working tree):
+**version-bump script.** `scripts/version-bump.ts` is the canonical tool for
+all version-stamp mutations at publish time. Both `publish_phase` and
+`verify_phase` call it against their respective stage directories (never the
+live working tree). A bare invocation with no `--target` stamps all five
+version-bearing sites in one pass:
 
 ```sh
 bun run version-bump-publish --version X.Y.Z
 ```
 
-This rewrites the two `file:` entries to `^X.Y.Z` registry pins. The
-script is idempotent (running twice with the same version is a no-op).
-Because the script targets the stage copy, not the live `package.json`,
-no post-publish restore step is needed.
+The five sites and their four `--target` selectors:
+
+| `--target` selector | File(s) | Field |
+| --- | --- | --- |
+| `platform-version` | `platforms/linux-x64/package.json`, `platforms/darwin-arm64/package.json` | `version` |
+| `umbrella-version` | `package.json` | `version` |
+| `opt-deps` | `package.json` | `optionalDependencies` (`file:` → `^X.Y.Z` pins) |
+| `skill-frontmatter` | `skills/install-agent-director/SKILL.md` | frontmatter `version:` |
+
+Omitting `--target` runs all four selectors in canonical order:
+`platform-version` → `umbrella-version` → `opt-deps` → `skill-frontmatter`.
+The flag is repeatable for targeted single-site runs.
+
+**Idempotence.** Every target skips the write if the file already carries the
+target version, logging `version-bump [<target>]: already at <version> —
+skipped`. Running the script twice with the same version produces zero file
+writes on the second pass.
+
+**OTQ-2 frontmatter robustness.** The `skill-frontmatter` target is strictly
+frontmatter-scoped: the file must open with `---` and the frontmatter block
+extends to the next `---`. Exactly one `version:` line must appear inside that
+block — zero or multiple `version:` lines → non-zero exit with a descriptive
+error. Lines after the closing `---` (the document body) are never scanned or
+modified, even if they contain the word `version:`.
 
 ### Release blockers
 
@@ -1750,13 +1770,14 @@ first failing phase:
    module protocol requires.
 6. **publish** — Creates a `mktemp -d` stage directory, populates it
    via `cp -a` from `pkg/ts-bun-client/` and
-   `skills/install-agent-director/`, then stamps version and SKILL.md
-   frontmatter against the stage copies. `version-bump.ts` and
-   `npm publish` run from the stage; the live working tree is never
-   written during publish. Halts with a clear "H3 unresolved" error if
-   the npm name ever regresses to the `@CHANGEME-H3/agent-director`
-   placeholder (forward-going tripwire; H3 itself was resolved
-   2026-05-24).
+   `skills/install-agent-director/`, then runs `version-bump.ts
+   --version X.Y.Z` against the stage tree to stamp all five sites
+   (umbrella version, both platform versions, SKILL.md frontmatter
+   `version:`, and `optionalDependencies` `file:` pins). `npm publish`
+   runs from the stage; the live working tree is never written during
+   publish. Halts with a clear "H3 unresolved" error if the npm name
+   ever regresses to the `@CHANGEME-H3/agent-director` placeholder
+   (forward-going tripwire; H3 itself was resolved 2026-05-24).
 7. **gh-release** — `gh release create $VERSION` with exactly **3
    attached assets** — the three CLI binaries:
    `agent-director-linux-amd64`, `agent-director-linux-arm64`,
