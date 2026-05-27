@@ -260,8 +260,8 @@ envelope-diff-ts: agent-director ts-helper fake-tmux
 # release.sh rather than globally here.
 release-shellcheck:
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		echo "[release-shellcheck] shellcheck skills/release-agent-director/release.sh"; \
-		shellcheck -s bash skills/release-agent-director/release.sh; \
+		echo "[release-shellcheck] shellcheck skills/release-agent-director/release.sh skills/release-agent-director/lib/stage-cli.sh"; \
+		shellcheck -s bash skills/release-agent-director/release.sh skills/release-agent-director/lib/stage-cli.sh; \
 	else \
 		echo "[release-shellcheck] shellcheck not installed — skipping"; \
 	fi
