@@ -2,15 +2,15 @@
 # test-release-postconditions-negative.sh — negative-path validation companion
 # for test-release-postconditions.sh (T4C-S3).
 #
-# Synthetically injects two failure conditions into an isolated worktree to
+# Synthetically injects four failure conditions into an isolated worktree to
 # confirm that the postcondition assertion logic (mirrored from
 # test-release-postconditions.sh) exits non-zero with an identifying
 # ASSERT-FAIL diagnostic — i.e., the harness is not a vacuous pass.
 #
 # Experiment 1 — dirty-tree injection:
-#   After release.sh v0.0.0 --dry-run, appends a space to the tracked file
-#   pkg/ts-bun-client/package.json, then runs the clean-tree assertion
-#   (git status --porcelain).  Confirms ASSERT-FAIL on stderr.
+#   After release.sh v0.0.0 --dry-run --branch HEAD, appends a space to the
+#   tracked file pkg/ts-bun-client/package.json, then runs the clean-tree
+#   assertion (git status --porcelain).  Confirms ASSERT-FAIL on stderr.
 #
 # Experiment 2 — mode-flip injection:
 #   After restoring the worktree to clean state, strips the executable bit
@@ -18,9 +18,18 @@
 #   runs the mode-bit assertion (git diff --raw HEAD).  Confirms ASSERT-FAIL
 #   on stderr.
 #
-# Both experiments run in the SAME temp worktree to avoid a second Go
-# cross-compile.  The dirty-tree from experiment 1 is reversed via
-# `git checkout --` before experiment 2 so the mode-flip baseline is clean.
+# Experiment 3 — release-notes missing injection:
+#   After restoring the executable bit, deletes dist/release-notes.md (which
+#   the dry-run's notes_phase created), then runs the release-notes assertion
+#   ([[ ! -s dist/release-notes.md ]]).  Confirms ASSERT-FAIL on stderr.
+#
+# Experiment 4 — stray-tarball injection:
+#   Touches a *.tgz file under pkg/ts-bun-client/, then runs the no-tgz
+#   assertion (find … -name '*.tgz').  Confirms ASSERT-FAIL on stderr.
+#
+# All four experiments run in the SAME temp worktree to avoid a second Go
+# cross-compile.  Each injection is reversed before the next experiment so
+# every baseline check starts from a clean state.
 #
 # No residue is left in the operator's working tree:
 #   The worktree is removed via `git worktree remove --force` on EXIT.
@@ -29,7 +38,7 @@
 #   bash skills/release-agent-director/test-release-postconditions-negative.sh
 #
 # Exit codes:
-#   0  both experiments confirmed the assertions catch their respective failures
+#   0  all 4 experiments confirmed the assertions catch their respective failures
 #   1  an experiment did NOT catch the failure (harness would miss the regression)
 
 set -euo pipefail
@@ -66,7 +75,7 @@ assert_no_operator_residue() {
 }
 
 # --------------------------------------------------------------------
-# Create worktree and run dry-run (shared between both experiments)
+# Create worktree and run dry-run (shared between all experiments)
 # --------------------------------------------------------------------
 experiment_worktree="$(mktemp -d "${TMPDIR:-/tmp}/release-neg.XXXXXX")"
 rmdir "$experiment_worktree"
@@ -74,9 +83,9 @@ git -C "$REPO_ROOT" worktree add --detach "$experiment_worktree"
 
 printf '[neg-test] running dry-run in temp worktree (tree state will be tested)\n'
 dry_run_rc=0
-(cd "$experiment_worktree" && ./skills/release-agent-director/release.sh v0.0.0 --dry-run) || dry_run_rc=$?
+(cd "$experiment_worktree" && ./skills/release-agent-director/release.sh v0.0.0 --dry-run --branch HEAD) || dry_run_rc=$?
 if [[ $dry_run_rc -ne 0 ]]; then
-    printf '[neg-test] NOTE: dry-run exited %d — non-postcondition failure; tree state still valid for injection tests\n' "$dry_run_rc" >&2
+    printf '[neg-test] NOTE: dry-run exited %d — non-postcondition failure; phases before failure still ran (notes, build)\n' "$dry_run_rc" >&2
 fi
 
 # -----------------------------------------------------------------------
@@ -134,6 +143,59 @@ else
     exit 1
 fi
 
+# Restore worktree to clean state before experiment 3.
+chmod +x "$experiment_worktree/skills/release-agent-director/release.sh"
+
+# -----------------------------------------------------------------------
+# Experiment 3: Release-notes missing
+# -----------------------------------------------------------------------
+printf '[neg-test] experiment 3: release-notes missing injection\n'
+
+# Baseline: dist/release-notes.md must exist after dry-run (notes_phase creates it).
+if [[ ! -s "$experiment_worktree/dist/release-notes.md" ]]; then
+    printf '[neg-test] FAIL — dist/release-notes.md missing after dry-run (notes_phase regression?)\n' >&2
+    exit 1
+fi
+printf '[neg-test] baseline OK — dist/release-notes.md exists before injection\n'
+
+# Inject: delete the release notes file.
+rm "$experiment_worktree/dist/release-notes.md"
+
+# Run assertion (identical logic to harness postcondition 3).
+if [[ ! -s "$experiment_worktree/dist/release-notes.md" ]]; then
+    printf 'ASSERT-FAIL: dist/release-notes.md assertion: file missing or empty\n' >&2
+    printf '[neg-test] experiment 3 PASS — missing release-notes correctly detected (ASSERT-FAIL, would exit non-zero in harness)\n'
+else
+    printf '[neg-test] FAIL — missing release-notes NOT detected by dist/release-notes.md assertion\n' >&2
+    exit 1
+fi
+
+# -----------------------------------------------------------------------
+# Experiment 4: Stray tarball injection
+# -----------------------------------------------------------------------
+printf '[neg-test] experiment 4: stray-tarball injection\n'
+
+# Baseline: no .tgz under pkg/ts-bun-client/ before injection.
+baseline_tgz="$(find "$experiment_worktree/pkg/ts-bun-client" -name '*.tgz' 2>/dev/null || true)"
+if [[ -n "$baseline_tgz" ]]; then
+    printf '[neg-test] FAIL — .tgz present before injection (unexpected): %s\n' "$baseline_tgz" >&2
+    exit 1
+fi
+printf '[neg-test] baseline OK — no .tgz files before injection\n'
+
+# Inject: create a stray tarball under pkg/ts-bun-client/.
+touch "$experiment_worktree/pkg/ts-bun-client/agent-director-ts-bun-client-0.0.0.tgz"
+
+# Run assertion (identical logic to harness postcondition 4).
+assert4_output="$(find "$experiment_worktree/pkg/ts-bun-client" -name '*.tgz' 2>/dev/null || true)"
+if [[ -n "$assert4_output" ]]; then
+    printf 'ASSERT-FAIL: no-tgz assertion: %s\n' "$assert4_output" >&2
+    printf '[neg-test] experiment 4 PASS — stray tarball correctly detected (ASSERT-FAIL, would exit non-zero in harness)\n'
+else
+    printf '[neg-test] FAIL — stray tarball NOT detected by no-tgz assertion\n' >&2
+    exit 1
+fi
+
 # cleanup trap removes the worktree; also clear the var so the trap is a no-op
 # (we want to confirm residue in operator tree AFTER cleanup).
 git -C "$REPO_ROOT" worktree remove --force "$experiment_worktree" 2>/dev/null || true
@@ -141,4 +203,4 @@ experiment_worktree=""
 
 assert_no_operator_residue
 
-printf '[neg-test] both experiments PASSED — assertion logic correctly identifies both failure conditions with ASSERT-FAIL diagnostics\n'
+printf '[neg-test] all 4 experiments PASSED — assertion logic correctly identifies all four failure conditions with ASSERT-FAIL diagnostics\n'
