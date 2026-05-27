@@ -387,7 +387,7 @@ the matching `Err*` subclass for stderr error envelopes).
        │  src/internal/
        │     subprocessClient.ts   (per-call spawn + parse)
        │     spawner.ts            (Bun.spawn wrapper, stderr/stdout pumps)
-       │     platformResolve.ts    (one-shot binary path resolution)
+       │     platformResolve.ts    (binary path resolver; called per-spawn in production)
        │     argv.ts               (verb name + JSON params → argv)
        │     errorMap.ts           (stderr envelope → typed Err* class)
        │        │
@@ -440,8 +440,11 @@ The TS test preload (`test/setup.ts`) does the same at test time so
 **Resolver flow — `src/internal/platformResolve.ts`.**
 
 `platformResolve.ts` (internal, not re-exported from `src/index.ts`)
-implements a five-step resolution sequence performed once at Client
-construction time (one-shot; not per-call):
+implements a five-step resolution sequence. In production it is called
+on every verb spawn — not cached — so the client recovers transparently
+from a binary replacement between construction and spawn (b.i5y). It is
+also called once eagerly at construction to surface install errors
+immediately (see Construction step 2 below):
 
 1. **Bun version check.** Compare `Bun.version` against `MIN_BUN_VERSION`
    (`"1.0.21"`). Fail fast with `ErrBunVersionTooOld` before attempting any
@@ -508,7 +511,7 @@ pkg/ts-bun-client/
 │   └── internal/
 │       ├── subprocessClient.ts  per-call CLI spawn + envelope parse
 │       ├── spawner.ts           Bun.spawn wrapper, stderr/stdout pumps
-│       ├── platformResolve.ts   one-shot CLI binary path resolver
+│       ├── platformResolve.ts   CLI binary path resolver (called per-spawn in production)
 │       ├── argv.ts              verb name + JSON params → argv
 │       ├── errorMap.ts          stderr envelope → typed Err* class
 │       ├── verbs.ts             callable-verb list (mirrors manifest.CallableVerbs)
@@ -529,7 +532,7 @@ each verb call is a one-shot subprocess.
 **Construction.** `new Client(opts)` is synchronous. All `ClientOptions` fields are optional; omitted fields fall through to the CLI's own default-resolution (the CLI is the single source of truth — the TS Client provides no fallback values, b.32k). The constructor:
 
 1. Applies tilde expansion (TS-side, via `src/internal/tilde.ts`) to `storePath`, `home`, and `tmuxCommand` so the CLI subprocess always receives absolute paths.
-2. Calls `resolveCliPath()` once (steps in [Per-platform optional-dependency packaging](#per-platform-optional-dependency-packaging) above) and caches the binary path on the instance.
+2. Calls `resolveCliPath()` eagerly to surface platform/install errors at construction time (ErrUnsupportedPlatform, ErrPlatformPackageMissing, ErrCliNotExecutable, ErrBunVersionTooOld), but does **not** cache the result. Each verb call re-resolves the binary path fresh so that a binary replacement between construction and spawn (e.g. a background `bun install` upgrading the global package) does not cause ENOENT failures on long-lived clients.
 3. Stores the caller-supplied options for forwarding on each verb call. No subprocess is spawned at construction time; `client.version({})` is the canonical "is the binary functional" smoke.
 
 **`close()`.**
@@ -568,10 +571,11 @@ Every verb call from `Client` follows this four-step recipe inside
    per-verb dispatch. Each is emitted only when the corresponding
    `ClientOptions` field was set by the caller (b.32k). JSON-only
    fields go through `--params-json` for verbs that accept it.
-2. **Spawn the CLI.** `src/internal/spawner.ts` calls `Bun.spawn`
-   against the resolved `_cliPath`, pipes stdin (closed),
-   captures stdout and stderr, and respects `callTimeoutMs` (default
-   30 s).
+2. **Spawn the CLI.** `resolveCliPath()` is called fresh to obtain the
+   binary path (production) or the `_cliPath` DI override is used verbatim
+   (tests). `src/internal/spawner.ts` then calls `Bun.spawn` with that
+   path, pipes stdin (closed), captures stdout and stderr, and respects
+   `callTimeoutMs` (default 30 s).
 3. **Parse the envelope.** On exit code 0, parse stdout as a JSON
    object → return it. On non-zero exit, parse stderr as a JSON
    error envelope (`{ "err_name": "...", "err_description": "..." }`)
@@ -589,7 +593,9 @@ Client.sendKeys(params)
   │
   ▼  argv.ts → [verb, ...flags]
   │
-  ▼  spawner.ts → Bun.spawn(_cliPath, argv, { stdin: "ignore", stdout: "pipe", stderr: "pipe" })
+  ▼  resolveCliPath() → cliPath (fresh per-call)
+  │
+  ▼  spawner.ts → Bun.spawn(cliPath, argv, { stdin: "ignore", stdout: "pipe", stderr: "pipe" })
   │
   ▼  read stdout to EOF; await exit
   │

@@ -12,9 +12,10 @@ bun add agent-director
 
 Requires Bun >=1.0.21. The package ships the prebuilt CLI binary for
 each supported platform via optional dependencies — they install
-automatically on `bun add`. The `Client` resolves the host's binary
-at construction time via `import.meta.resolve('@agent-director/<host>/package.json')`
-and spawns it for every verb call.
+automatically on `bun add`. The `Client` verifies the binary is present at construction time so install
+errors surface immediately, then re-resolves its path on every verb call so
+a binary replacement (e.g. a background `bun install`) is handled
+transparently.
 
 On install, a postinstall script copies the `install-agent-director` skill body into `~/.claude/skills/install-agent-director/` so `claude /install-agent-director` is immediately discoverable in Claude Code. The postinstall only writes under `~/.claude/skills/`; it does not touch PATH, `~/.agent-director/`, or your Claude Code settings.
 
