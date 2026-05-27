@@ -6,7 +6,8 @@
         consumer-dryrun \
         ts-helper fake-tmux \
         agent-director envelope-diff-ts \
-        verify-installed-pkg-full
+        verify-installed-pkg-full \
+        verify-prerelease-linux
 
 # Pinned Claude Code version. Per SRD §15.2 the harness's image must install
 # *this* version of @anthropic-ai/claude-code; bumping it requires re-running
@@ -320,3 +321,45 @@ verify-installed-pkg-full: release-binaries
 	echo "[verify-installed-pkg-full] running --full gauntlet"; \
 	cp "$$REPO_ROOT/pkg/ts-bun-client/scripts/verify-installed-pkg.ts" "$$TMP_CONSUMER/"; \
 	HOME="$$TMP_HOME" bun "$$TMP_CONSUMER/verify-installed-pkg.ts" --full
+
+# verify-prerelease-linux runs the pre-release Linux Docker verify gate.
+# Stages the linux-amd64 CLI binary, packs the umbrella tarball on the host,
+# copies the linux-x64 platform sub-package into the staging tmpdir, then mounts
+# everything into the test container and runs the consumer-install + --full flow.
+# OTQ-1 resolution: test/Dockerfile already pins Bun (BUN_VERSION=1.3.13) and
+# installs it; this recipe reuses $(TEST_IMAGE) from make test-image —
+# no new Dockerfile added.
+verify-prerelease-linux: SHELL = /bin/bash
+verify-prerelease-linux: release-binaries
+	@set -eu; \
+	REPO_ROOT="$$(pwd)"; \
+	log() { local lvl="$$1"; shift; echo "[$$lvl] $$*"; }; \
+	TMP_STAGING=$$(mktemp -d); \
+	trap 'rm -rf "$$TMP_STAGING"' EXIT; \
+	log verify-prerelease-linux "staging linux-x64 CLI binary"; \
+	. "$$REPO_ROOT/skills/release-agent-director/lib/stage-cli.sh"; \
+	CLI_PLATFORMS=("linux-amd64=linux-x64"); \
+	stage_cli_into_platforms \
+		|| { printf 'FAIL stage-cli\n' >&2; exit 1; }; \
+	log verify-prerelease-linux "packing umbrella tarball → $$TMP_STAGING"; \
+	( cd "$$REPO_ROOT/pkg/ts-bun-client" && bun run build && bun pm pack --destination "$$TMP_STAGING" ) \
+		|| { printf 'FAIL bun-pack\n' >&2; exit 1; }; \
+	log verify-prerelease-linux "copying linux-x64 platform sub-package into staging dir"; \
+	mkdir -p "$$TMP_STAGING/platforms"; \
+	cp -r "$$REPO_ROOT/pkg/ts-bun-client/platforms/linux-x64" "$$TMP_STAGING/platforms/linux-x64" \
+		|| { printf 'FAIL copy-platform\n' >&2; exit 1; }; \
+	log verify-prerelease-linux "building/reusing $(TEST_IMAGE)"; \
+	$(MAKE) test-image \
+		|| { printf 'FAIL test-image\n' >&2; exit 1; }; \
+	VERIFY_SCRIPT="$$REPO_ROOT/pkg/ts-bun-client/scripts/verify-installed-pkg.ts"; \
+	INNER_CMD="set -eu; C=\$$(mktemp -d); cd \$$C && jq -n '{name:\"verify-consumer\",version:\"1.0.0\",type:\"module\"}' > package.json && bun add /staging/*.tgz && bun add file:/staging/platforms/linux-x64 && bun /verify.ts --full"; \
+	if [[ -n "$${VERIFY_PRERELEASE_DRY_RUN:-}" ]]; then \
+		echo "docker run --rm -v \"$$TMP_STAGING\":/staging:ro -v \"$$VERIFY_SCRIPT\":/verify.ts:ro $(TEST_IMAGE) bash -c \"$$INNER_CMD\""; \
+		exit 0; \
+	fi; \
+	docker run --rm \
+		-v "$$TMP_STAGING":/staging:ro \
+		-v "$$VERIFY_SCRIPT":/verify.ts:ro \
+		$(TEST_IMAGE) \
+		bash -c "$$INNER_CMD" \
+		|| { printf 'FAIL docker-run\n' >&2; exit 1; }
