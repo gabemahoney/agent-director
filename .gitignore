@@ -24,3 +24,6 @@ tickets/*
 
 # Test stub binaries — built by `make fake-tmux` / `make ts-helper`.
 test/fake-tmux/tmux
+
+# Team coordination scratch dir dropped by multi-agent workflows.
+.claude/
