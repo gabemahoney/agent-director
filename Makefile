@@ -2,7 +2,7 @@
         check-doccomments \
         test-image test-image-smoke test-docker test-docker-install-mode \
         release-binaries release-binaries-smoke \
-        release-shellcheck release-bats \
+        release-shellcheck release-bats release-smoke \
         consumer-dryrun \
         ts-helper fake-tmux \
         agent-director envelope-diff-ts
@@ -254,17 +254,28 @@ agent-director: build
 envelope-diff-ts: agent-director ts-helper fake-tmux
 	cd pkg/ts-bun-client && bun test test/envelope-diff.test.ts test/envelope-diff-invariants.test.ts
 
-# release-shellcheck runs shellcheck against release.sh. The target is a
-# no-op when shellcheck is not installed locally so that bare `make` runs
-# do not require it. Add `SC2086` etc. to the disable list inline in
-# release.sh rather than globally here.
+# release-shellcheck runs shellcheck against release.sh and the
+# test-release-postconditions.sh harness. The target is a no-op when
+# shellcheck is not installed locally so that bare `make` runs do not
+# require it. Add `SC2086` etc. to the disable list inline in the
+# respective script rather than globally here.
 release-shellcheck:
 	@if command -v shellcheck >/dev/null 2>&1; then \
 		echo "[release-shellcheck] shellcheck skills/release-agent-director/release.sh"; \
 		shellcheck -s bash skills/release-agent-director/release.sh; \
+		echo "[release-shellcheck] shellcheck skills/release-agent-director/test-release-postconditions.sh"; \
+		shellcheck -s bash skills/release-agent-director/test-release-postconditions.sh; \
 	else \
 		echo "[release-shellcheck] shellcheck not installed — skipping"; \
 	fi
+
+# release-smoke runs the post-dry-run assertion harness end-to-end from a
+# temp git worktree. Verifies that a dry-run leaves the tree clean, causes
+# no mode-bit flips, produces dist/release-notes.md, and leaves no .tgz
+# under pkg/ts-bun-client/. Requires Go + bun on PATH (same as a normal
+# release run).
+release-smoke:
+	bash skills/release-agent-director/test-release-postconditions.sh
 
 # release-bats was retired alongside the cabi-matrix removal — the only
 # bats tests under skills/release-agent-director/tests/ exercised the
