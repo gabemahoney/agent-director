@@ -1,6 +1,6 @@
 .PHONY: all build test generate lint err-coherence nondet-coverage \
         check-doccomments \
-        test-image test-image-smoke test-docker \
+        test-image test-image-smoke test-docker test-docker-install-mode \
         release-binaries release-binaries-smoke \
         release-shellcheck release-bats \
         consumer-dryrun \
@@ -125,6 +125,24 @@ test-docker: test-image
 		-e CLAUDE_CODE_OAUTH_TOKEN \
 		-v "$(CURDIR)/tickets/testplans:/work/tickets/testplans:ro" \
 		-v "$(CURDIR):/work/source:ro" \
+		$(TEST_IMAGE)
+
+# test-docker-install-mode runs the b.r3j install-mode regression suite
+# inside the harness container. Each scenario invokes install.sh under a
+# per-scenario sandbox $HOME (and umask/--keep-prior variations) and
+# asserts the canonical ~/.agent-director/bin/agent-director lands at
+# literal mode 0755 via `stat -c %a` — not just `-x`. Also pins
+# install.sh's defensive exit 3 on a 0644 source.
+#
+# Mounted read-only from the host so editing the script doesn't require
+# an image rebuild. The script itself depends only on the bundled
+# agent-director binary already staged at /usr/local/bin/agent-director
+# and the install skill at /opt/skills/install-agent-director/ — both
+# baked into the harness image.
+test-docker-install-mode: test-image
+	docker run --rm \
+		-v "$(CURDIR)/test/install-mode:/opt/install-mode:ro" \
+		--entrypoint /opt/install-mode/run.sh \
 		$(TEST_IMAGE)
 
 # release-binaries cross-compiles the three supported targets into ./dist/.
