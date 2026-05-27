@@ -8,9 +8,10 @@ import (
 	"path/filepath"
 )
 
-// claudeJSONPath is the path to Claude Code's per-user state file. Held as
-// a var so tests can swap it for a temp file without monkey-patching
-// os.UserHomeDir.
+// claudeJSONPath returns the default $HOME/.claude.json path. Held as a var
+// so tests can swap it for a temp file without monkey-patching os.UserHomeDir.
+// preTrustCwd uses this only when the spawn's ExtraEnv does not contain
+// CLAUDE_CONFIG_DIR.
 var claudeJSONPath = func() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -19,15 +20,19 @@ var claudeJSONPath = func() (string, error) {
 	return filepath.Join(home, ".claude.json"), nil
 }
 
-// ErrClaudeJSONMissing is the sentinel surfaced when ~/.claude.json does
-// not exist at pre-trust time. It is intentionally NOT in the §13.1
+// ErrClaudeJSONMissing is the sentinel surfaced when the resolved .claude.json
+// does not exist at pre-trust time. It is intentionally NOT in the §13.1
 // error catalog — preTrustCwd swallows it (with a warning to the
 // recovery logger) since the trust dialog is unavoidable on a truly-
 // fresh machine and we don't want to block the spawn on it.
 var ErrClaudeJSONMissing = errors.New("ErrClaudeJSONMissing")
 
-// preTrustCwd flips ~/.claude.json's projects[<cwd>].hasTrustDialogAccepted
+// preTrustCwd flips the spawn's .claude.json projects[<cwd>].hasTrustDialogAccepted
 // to true so the spawned Claude Code skips its workspace-trust dialog.
+//
+// The target file is resolved from extraEnv with this precedence (bug b.18k):
+//   - If extraEnv["CLAUDE_CONFIG_DIR"] is non-empty → <CLAUDE_CONFIG_DIR>/.claude.json
+//   - Otherwise → $HOME/.claude.json (via claudeJSONPath, stubbed by tests)
 //
 // Behavior (per bug b.f75):
 //
@@ -35,10 +40,10 @@ var ErrClaudeJSONMissing = errors.New("ErrClaudeJSONMissing")
 //     file via temp+rename. The window for a torn write against the
 //     operator's own Claude Code is small but real; last-writer wins
 //     is acceptable per the bug's concurrency note.
-//   - If the file does not exist (truly-fresh Claude Code install),
-//     return ErrClaudeJSONMissing — Launch swallows that with a warn.
-//     The spawn will block on the trust dialog as before. Not our
-//     problem to materialize the file out of thin air.
+//   - If the file does not exist (truly-fresh Claude Code install, or a
+//     fresh CLAUDE_CONFIG_DIR), return ErrClaudeJSONMissing — Launch
+//     swallows that with a warn. The spawn will block on the trust dialog
+//     as before. Not our problem to materialize the file out of thin air.
 //   - Only the single key hasTrustDialogAccepted is set. We don't touch
 //     hasCompletedProjectOnboarding or any other workspace-init keys
 //     because those have semantics beyond trust.
@@ -48,10 +53,16 @@ var ErrClaudeJSONMissing = errors.New("ErrClaudeJSONMissing")
 // The function preserves unknown top-level keys and unknown per-project
 // keys verbatim via the json.RawMessage typed map. A future Claude Code
 // release adding a new key under .projects.<path> will round-trip safely.
-func preTrustCwd(cwd string) error {
-	path, err := claudeJSONPath()
-	if err != nil {
-		return fmt.Errorf("pre-trust: resolve home: %w", err)
+func preTrustCwd(cwd string, extraEnv map[string]string) error {
+	var path string
+	if dir := extraEnv["CLAUDE_CONFIG_DIR"]; dir != "" {
+		path = filepath.Join(dir, ".claude.json")
+	} else {
+		var err error
+		path, err = claudeJSONPath()
+		if err != nil {
+			return fmt.Errorf("pre-trust: resolve home: %w", err)
+		}
 	}
 
 	raw, err := os.ReadFile(path)

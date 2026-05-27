@@ -2,8 +2,9 @@
 
 Launching a Spawn against a different Claude account than the
 operator's default. agent-director's `extra_env` parameter is the
-single mechanism for this — no file mounts, no profile directories,
-no `CLAUDE_CONFIG_DIR` redirection.
+single mechanism for this — no file mounts, no profile directories.
+If `CLAUDE_CONFIG_DIR` is supplied via `extra_env`, the pretrust write
+targets `<CLAUDE_CONFIG_DIR>/.claude.json` instead of `$HOME/.claude.json`.
 
 For Claude Code's own auth reference, see:
 
@@ -82,9 +83,10 @@ fighting over a shared credential file. Each Spawn gets a fresh
   read JSONL transcript history that was created by a specific account,
   the JSONL lives in `~/.claude/projects/<slug(cwd)>/` on the host
   filesystem — which is account-scoped. Env-var auth does not redirect
-  this path. For resume use cases (Epic 9), the JSONL must be on the
-  expected disk path; setting `CLAUDE_CONFIG_DIR` per Spawn is a future
-  hook if multi-account resume becomes a hard requirement.
+  this path. `CLAUDE_CONFIG_DIR` in `extra_env` is already honored for
+  the pretrust write (see above), but JSONL resume-path redirection
+  remains unimplemented; for resume use cases (Epic 9), the JSONL must
+  still be on the expected disk path.
 - **Concurrent operator + Spawn sessions on the same account.** Two
   Claude sessions sharing one OAuth token are fine for env-var auth
   (no contention) but share the same usage / rate-limit pool. Use

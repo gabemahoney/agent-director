@@ -42,7 +42,7 @@ func TestPreTrustCreatesEntryInExistingFile(t *testing.T) {
 	}
 
 	cwd := "/tmp/cd-smoke-new"
-	if err := preTrustCwd(cwd); err != nil {
+	if err := preTrustCwd(cwd, nil); err != nil {
 		t.Fatalf("preTrustCwd: %v", err)
 	}
 
@@ -98,7 +98,7 @@ func TestPreTrustUpdatesExistingEntry(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	if err := preTrustCwd("/tmp/cd-existing"); err != nil {
+	if err := preTrustCwd("/tmp/cd-existing", nil); err != nil {
 		t.Fatalf("preTrustCwd: %v", err)
 	}
 
@@ -123,7 +123,7 @@ func TestPreTrustUpdatesExistingEntry(t *testing.T) {
 func TestPreTrustMissingFileReturnsSentinel(t *testing.T) {
 	withStubClaudeJSON(t) // file does not exist; helper just sets the path.
 
-	err := preTrustCwd("/tmp/some-cwd")
+	err := preTrustCwd("/tmp/some-cwd", nil)
 	if !errors.Is(err, ErrClaudeJSONMissing) {
 		t.Fatalf("err = %v; want ErrClaudeJSONMissing", err)
 	}
@@ -138,7 +138,7 @@ func TestPreTrustAtomicRenameLeavesNoTempFile(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	if err := preTrustCwd("/tmp/x"); err != nil {
+	if err := preTrustCwd("/tmp/x", nil); err != nil {
 		t.Fatalf("preTrustCwd: %v", err)
 	}
 
@@ -173,7 +173,7 @@ func TestPreTrustConcurrentSpawnsDoNotCorrupt(t *testing.T) {
 		i := i
 		go func() {
 			defer wg.Done()
-			_ = preTrustCwd(filepath.Join("/tmp/concurrent", string(rune('a'+i))))
+			_ = preTrustCwd(filepath.Join("/tmp/concurrent", string(rune('a'+i))), nil)
 		}()
 	}
 	wg.Wait()
@@ -208,7 +208,7 @@ func TestPreTrustEmptyFileTreatedAsEmptyObject(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	if err := preTrustCwd("/tmp/empty-case"); err != nil {
+	if err := preTrustCwd("/tmp/empty-case", nil); err != nil {
 		t.Fatalf("preTrustCwd: %v", err)
 	}
 
@@ -217,6 +217,110 @@ func TestPreTrustEmptyFileTreatedAsEmptyObject(t *testing.T) {
 	entry := projects["/tmp/empty-case"].(map[string]any)
 	if v, _ := entry["hasTrustDialogAccepted"].(bool); !v {
 		t.Errorf("hasTrustDialogAccepted not true after seeding empty file: %v", entry)
+	}
+}
+
+// TestPreTrustUsesClaudeConfigDirOverride pins the b.18k fix: when
+// extraEnv["CLAUDE_CONFIG_DIR"] points to a dir that has a .claude.json,
+// preTrustCwd must mutate that file and leave the stub (home) file unchanged.
+func TestPreTrustUsesClaudeConfigDirOverride(t *testing.T) {
+	// Set up the stub home file and seed it so we can verify it is untouched.
+	homePath := withStubClaudeJSON(t)
+	homeSeed := `{"projects":{},"userID":"home-user"}`
+	if err := os.WriteFile(homePath, []byte(homeSeed), 0o600); err != nil {
+		t.Fatalf("seed home stub: %v", err)
+	}
+	homeBytes, err := os.ReadFile(homePath)
+	if err != nil {
+		t.Fatalf("read home stub before call: %v", err)
+	}
+
+	// Set up an override dir with its own .claude.json.
+	overrideDir := t.TempDir()
+	overridePath := filepath.Join(overrideDir, ".claude.json")
+	if err := os.WriteFile(overridePath, []byte(`{"projects":{}}`), 0o600); err != nil {
+		t.Fatalf("seed override: %v", err)
+	}
+
+	cwd := "/tmp/override-cwd"
+	extraEnv := map[string]string{"CLAUDE_CONFIG_DIR": overrideDir}
+	if err := preTrustCwd(cwd, extraEnv); err != nil {
+		t.Fatalf("preTrustCwd: %v", err)
+	}
+
+	// Override file must have gained the projects entry.
+	got := readClaudeJSON(t, overridePath)
+	projects, ok := got["projects"].(map[string]any)
+	if !ok {
+		t.Fatalf("override projects missing: %T", got["projects"])
+	}
+	entry, ok := projects[cwd].(map[string]any)
+	if !ok {
+		t.Fatalf("override projects[%q] missing", cwd)
+	}
+	if b, _ := entry["hasTrustDialogAccepted"].(bool); !b {
+		t.Errorf("override hasTrustDialogAccepted = %v; want true", entry["hasTrustDialogAccepted"])
+	}
+
+	// Home stub file must be byte-equal to its seed — untouched.
+	afterBytes, err := os.ReadFile(homePath)
+	if err != nil {
+		t.Fatalf("read home stub after call: %v", err)
+	}
+	if string(afterBytes) != string(homeBytes) {
+		t.Errorf("home stub was mutated; want byte-equal to seed\nbefore: %s\nafter:  %s", homeBytes, afterBytes)
+	}
+
+	// Additionally confirm the home file's projects map has no entry for the override cwd.
+	homeGot := readClaudeJSON(t, homePath)
+	if homeProjects, ok := homeGot["projects"].(map[string]any); ok {
+		if _, present := homeProjects[cwd]; present {
+			t.Errorf("home stub projects[%q] should be absent but is present", cwd)
+		}
+	}
+}
+
+// TestPreTrustClaudeConfigDirMissingFileSurfacesSentinel pins the b.18k
+// soft-warn contract for the override path: when CLAUDE_CONFIG_DIR points to
+// an existing directory that has no .claude.json, preTrustCwd returns
+// ErrClaudeJSONMissing (same behavior as the home-path missing-file case).
+func TestPreTrustClaudeConfigDirMissingFileSurfacesSentinel(t *testing.T) {
+	overrideDir := t.TempDir() // exists but .claude.json not created inside it
+	extraEnv := map[string]string{"CLAUDE_CONFIG_DIR": overrideDir}
+
+	err := preTrustCwd("/tmp/missing-override-cwd", extraEnv)
+	if !errors.Is(err, ErrClaudeJSONMissing) {
+		t.Fatalf("err = %v; want ErrClaudeJSONMissing", err)
+	}
+}
+
+// TestPreTrustEmptyClaudeConfigDirFallsBack pins the b.18k fix-sketch
+// point 1: an empty-string CLAUDE_CONFIG_DIR value is equivalent to "not
+// set", so preTrustCwd must fall back to the home claudeJSONPath stub.
+func TestPreTrustEmptyClaudeConfigDirFallsBack(t *testing.T) {
+	homePath := withStubClaudeJSON(t)
+	if err := os.WriteFile(homePath, []byte(`{"projects":{}}`), 0o600); err != nil {
+		t.Fatalf("seed home stub: %v", err)
+	}
+
+	cwd := "/tmp/fallback-cwd"
+	extraEnv := map[string]string{"CLAUDE_CONFIG_DIR": ""} // empty → fall back
+	if err := preTrustCwd(cwd, extraEnv); err != nil {
+		t.Fatalf("preTrustCwd: %v", err)
+	}
+
+	// Home stub must have gained the entry.
+	got := readClaudeJSON(t, homePath)
+	projects, ok := got["projects"].(map[string]any)
+	if !ok {
+		t.Fatalf("projects missing: %T", got["projects"])
+	}
+	entry, ok := projects[cwd].(map[string]any)
+	if !ok {
+		t.Fatalf("projects[%q] missing in home stub; empty CLAUDE_CONFIG_DIR should fall back", cwd)
+	}
+	if b, _ := entry["hasTrustDialogAccepted"].(bool); !b {
+		t.Errorf("hasTrustDialogAccepted = %v; want true", entry["hasTrustDialogAccepted"])
 	}
 }
 
