@@ -310,6 +310,8 @@ verify-installed-pkg-full: release-binaries
 	TMP_HOME=$$(mktemp -d); \
 	TMP_CONSUMER=$$(mktemp -d); \
 	trap 'rm -rf "$$TMP_STAGING" "$$TMP_HOME" "$$TMP_CONSUMER"' EXIT; \
+	echo "[verify-installed-pkg-full] installing devDependencies (bun-types, typescript) for build"; \
+	cd "$$REPO_ROOT/pkg/ts-bun-client" && bun install --no-progress >/dev/null; \
 	echo "[verify-installed-pkg-full] packing umbrella tarball"; \
 	cd "$$REPO_ROOT/pkg/ts-bun-client" && bun run build && bun pm pack --destination "$$TMP_STAGING"; \
 	TARBALL=$$(ls "$$TMP_STAGING"/*.tgz); \
