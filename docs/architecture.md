@@ -676,8 +676,8 @@ by hook events (SRD §5.2) or by direct verb action (`pause`, `resume`,
 pending  ──spawn() launches tmux session
   │
   ▼   SessionStart hook fires
-waiting  ◄─── Stop, Notification (and SessionEnd reason=clear|compact
-  │           soft refresh: bumps last_seen_at, no state change)
+waiting  ◄─── Stop
+  │           (soft refreshes only, no transition: SessionEnd reason=clear|compact, Notification)
   │
   ▼   UserPromptSubmit / PreToolUse(non-AUQ) / PostToolUse
 working  ─────────────────────────────────────┐
@@ -714,7 +714,7 @@ waiting (after SessionStart fires)
 | `PreToolUse` | any other tool | `working` |
 | `PostToolUse` | — | `working` |
 | `Stop` | — | `waiting` |
-| `Notification` | — | `waiting` |
+| `Notification` | — | soft refresh — `last_seen_at` only (display-only signal; `Stop` owns the idle→`waiting` transition) |
 | `PermissionRequest` | — | `check_permission` (relay-mode envelope is Epic 10) |
 | `SessionEnd` | `reason ∈ {clear, compact}` | soft refresh — `last_seen_at` only |
 | `SessionEnd` | any other reason | `ended` (also sets `ended_at`) |
