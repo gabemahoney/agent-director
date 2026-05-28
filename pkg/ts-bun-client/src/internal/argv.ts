@@ -211,13 +211,15 @@ function buildGet(p: GetParams): string[] {
 }
 
 function buildSendKeys(p: SendKeysParams): string[] {
-  return [
+  const f: string[] = [
     "send-keys",
     "--claude-instance-id",
     p.claude_instance_id,
     "--text",
     p.text,
   ];
+  if (p.allow_pending === true) f.push("--allow-pending");
+  return f;
 }
 
 function buildReadPane(p: ReadPaneParams): string[] {
@@ -225,6 +227,7 @@ function buildReadPane(p: ReadPaneParams): string[] {
   if (p.n_lines !== undefined && p.n_lines > 0)
     f.push("--n-lines", String(p.n_lines));
   if (p.ansi === true) f.push("--ansi");
+  if (p.allow_pending === true) f.push("--allow-pending");
   return f;
 }
 

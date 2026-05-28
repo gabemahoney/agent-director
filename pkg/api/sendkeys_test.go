@@ -2,12 +2,13 @@ package api_test
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
-	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // recordingTmux records each (session, text, pressEnter) triple its
@@ -211,6 +212,70 @@ func TestSendKeysPropagatesTmuxError(t *testing.T) {
 	// recording sees a single failed call rather than two attempts.
 	if len(tmux.calls) != 1 {
 		t.Fatalf("calls = %v; want exactly 1 (single SendKeys attempt)", tmux.calls)
+	}
+}
+
+// TestSendKeysAllowPendingPermitsOnlyPending pins the AllowPending flag
+// semantics: true bypasses the guard for pending but not for ended/missing;
+// false (default) keeps the guard for pending.
+func TestSendKeysAllowPendingPermitsOnlyPending(t *testing.T) {
+	cases := []struct {
+		name         string
+		state        string
+		allowPending bool
+		wantErr      error // nil means success
+	}{
+		{
+			name:         "allow_pending=true + state=pending → success",
+			state:        store.StatePending,
+			allowPending: true,
+			wantErr:      nil,
+		},
+		{
+			name:         "allow_pending=true + state=ended → ErrSpawnNotInteractive",
+			state:        store.StateEnded,
+			allowPending: true,
+			wantErr:      api.ErrSpawnNotInteractive,
+		},
+		{
+			name:         "allow_pending=true + state=missing → ErrSpawnNotInteractive",
+			state:        store.StateMissing,
+			allowPending: true,
+			wantErr:      api.ErrSpawnNotInteractive,
+		},
+		{
+			name:         "allow_pending=false + state=pending → ErrSpawnNotInteractive",
+			state:        store.StatePending,
+			allowPending: false,
+			wantErr:      api.ErrSpawnNotInteractive,
+		},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			id := fmt.Sprintf("id-ap-%d", i)
+			s, _ := apitest.OpenStoreWithRow(t, id, "cd-ap-"+fmt.Sprint(i), tc.state, "off")
+			tmux := newTmux()
+			_, err := api.SendKeys(s, tmux, api.SendKeysParams{
+				ClaudeInstanceID: id,
+				Text:             "hello",
+				AllowPending:     tc.allowPending,
+			})
+			if tc.wantErr == nil {
+				if err != nil {
+					t.Fatalf("SendKeys: unexpected error: %v", err)
+				}
+				if len(tmux.calls) != 1 {
+					t.Fatalf("tmux.calls = %v; want exactly 1 call", tmux.calls)
+				}
+			} else {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("err = %v; want %v", err, tc.wantErr)
+				}
+				if len(tmux.calls) != 0 {
+					t.Fatalf("tmux was called for rejected state: %v", tmux.calls)
+				}
+			}
+		})
 	}
 }
 

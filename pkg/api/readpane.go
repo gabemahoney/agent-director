@@ -36,6 +36,10 @@ type ReadPaneParams struct {
 	// are stripped while unicode TUI glyphs are preserved. When true raw bytes
 	// from tmux capture-pane -e are returned verbatim.
 	ANSI bool `json:"ansi"`
+	// AllowPending is accepted for surface symmetry with send-keys. ReadPane
+	// has no state guard (any state including pending/ended/missing is always
+	// readable), so this field has no behavioral effect today.
+	AllowPending bool `json:"allow_pending"`
 }
 
 // ReadPaneResult is the typed return shape — a single `pane` string field
@@ -88,8 +92,9 @@ func ReadPane(s ReadPaneStore, t ReadPaneTmux, params ReadPaneParams) (ReadPaneR
 // upper cap. By default ANSI escape sequences are stripped while unicode TUI
 // glyphs are preserved; set ANSI:true to receive raw bytes.
 //
-// Unlike SendKeys, ReadPane has no state precondition: an ended or missing
-// Spawn's final pane contents can be read as a post-mortem.
+// Unlike SendKeys, ReadPane has no state precondition: any state (including
+// pending and ended/missing) is readable as-is. AllowPending is accepted for
+// surface symmetry with send-keys but has no behavioral effect here.
 //
 // CLI: agent-director read-pane
 //

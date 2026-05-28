@@ -19,21 +19,21 @@ import (
 func TestParamsStructsDecodeSnakeCaseJSON(t *testing.T) {
 	t.Run("SendKeysParams", func(t *testing.T) {
 		var p api.SendKeysParams
-		if err := json.Unmarshal([]byte(`{"claude_instance_id":"id-1","text":"hello"}`), &p); err != nil {
+		if err := json.Unmarshal([]byte(`{"claude_instance_id":"id-1","text":"hello","allow_pending":true}`), &p); err != nil {
 			t.Fatalf("unmarshal: %v", err)
 		}
-		if p.ClaudeInstanceID != "id-1" || p.Text != "hello" {
-			t.Errorf("decoded = %+v; want {ClaudeInstanceID:id-1, Text:hello}", p)
+		if p.ClaudeInstanceID != "id-1" || p.Text != "hello" || !p.AllowPending {
+			t.Errorf("decoded = %+v; want {ClaudeInstanceID:id-1, Text:hello, AllowPending:true}", p)
 		}
 	})
 
 	t.Run("ReadPaneParams", func(t *testing.T) {
 		var p api.ReadPaneParams
-		if err := json.Unmarshal([]byte(`{"claude_instance_id":"id-2","n_lines":42,"ansi":true}`), &p); err != nil {
+		if err := json.Unmarshal([]byte(`{"claude_instance_id":"id-2","n_lines":42,"ansi":true,"allow_pending":true}`), &p); err != nil {
 			t.Fatalf("unmarshal: %v", err)
 		}
-		if p.ClaudeInstanceID != "id-2" || p.NLines != 42 || !p.ANSI {
-			t.Errorf("decoded = %+v; want {ClaudeInstanceID:id-2, NLines:42, ANSI:true}", p)
+		if p.ClaudeInstanceID != "id-2" || p.NLines != 42 || !p.ANSI || !p.AllowPending {
+			t.Errorf("decoded = %+v; want {ClaudeInstanceID:id-2, NLines:42, ANSI:true, AllowPending:true}", p)
 		}
 	})
 

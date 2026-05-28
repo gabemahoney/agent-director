@@ -196,6 +196,32 @@ describe("argv builder — send-keys", () => {
     expect(flagValue(argv, "--claude-instance-id")).toBe("id-sk");
     expect(flagValue(argv, "--text")).toBe("hello world");
   });
+
+  test("allow_pending: true → --allow-pending present", () => {
+    const argv = buildArgv(CLI, "send-keys", {
+      claude_instance_id: "id-sk",
+      text: "hi",
+      allow_pending: true,
+    });
+    expect(hasFlag(argv, "--allow-pending")).toBe(true);
+  });
+
+  test("allow_pending: false → --allow-pending absent", () => {
+    const argv = buildArgv(CLI, "send-keys", {
+      claude_instance_id: "id-sk",
+      text: "hi",
+      allow_pending: false,
+    });
+    expect(hasFlag(argv, "--allow-pending")).toBe(false);
+  });
+
+  test("allow_pending omitted → --allow-pending absent", () => {
+    const argv = buildArgv(CLI, "send-keys", {
+      claude_instance_id: "id-sk",
+      text: "hi",
+    });
+    expect(hasFlag(argv, "--allow-pending")).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -220,6 +246,29 @@ describe("argv builder — read-pane", () => {
       ansi: false,
     });
     expect(hasFlag(argv, "--ansi")).toBe(false);
+  });
+
+  test("allow_pending: true → --allow-pending present", () => {
+    const argv = buildArgv(CLI, "read-pane", {
+      claude_instance_id: "id-rp",
+      allow_pending: true,
+    });
+    expect(hasFlag(argv, "--allow-pending")).toBe(true);
+  });
+
+  test("allow_pending: false → --allow-pending absent", () => {
+    const argv = buildArgv(CLI, "read-pane", {
+      claude_instance_id: "id-rp",
+      allow_pending: false,
+    });
+    expect(hasFlag(argv, "--allow-pending")).toBe(false);
+  });
+
+  test("allow_pending omitted → --allow-pending absent", () => {
+    const argv = buildArgv(CLI, "read-pane", {
+      claude_instance_id: "id-rp",
+    });
+    expect(hasFlag(argv, "--allow-pending")).toBe(false);
   });
 });
 

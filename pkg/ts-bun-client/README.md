@@ -166,6 +166,39 @@ agent-director send-keys --claude-instance-id <id> --text "what is 2+2?"
 await client.sendKeys({ claude_instance_id: "<id>", text: "what is 2+2?" });
 ```
 
+Pass `allow_pending: true` to also permit sending to a `pending` Spawn (state
+before `SessionStart` fires). The primary use case is dismissing interactive
+prompts that Claude Code renders before the session becomes interactive — for
+example the `--dangerously-load-development-channels` safety warning. `ended`
+and `missing` Spawns are still rejected regardless of the flag.
+
+```ts
+await client.sendKeys({
+  claude_instance_id: "<id>",
+  text: "",        // press Enter to dismiss the pre-SessionStart prompt
+  allow_pending: true,
+});
+```
+
+### readPane
+
+Read the last N lines of a Spawn's tmux pane (default 25).
+
+```sh
+agent-director read-pane --claude-instance-id <id> --n-lines 50
+```
+
+```ts
+const result = await client.readPane({ claude_instance_id: "<id>", n_lines: 50 });
+console.log(result.pane);
+```
+
+`readPane` has no state guard — it works on `pending`, `ended`, and `missing`
+Spawns as well as live ones. The `allow_pending` flag is accepted for symmetry
+with `sendKeys` but has no behavioral effect.
+
+---
+
 ### kill
 
 Terminate a Spawn's tmux session.

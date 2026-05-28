@@ -373,6 +373,15 @@
           "nullable": false,
           "allow_empty": false,
           "allowed_values": null
+        },
+        {
+          "name": "allow_pending",
+          "type": "bool",
+          "description": "When true, also permit send-keys on a pending Spawn (pre-SessionStart use case). ended/missing Spawns are still rejected even with this flag set.",
+          "required": false,
+          "nullable": false,
+          "allow_empty": false,
+          "allowed_values": null
         }
       ],
       "result_fields": [],
@@ -412,6 +421,15 @@
           "name": "ansi",
           "type": "bool",
           "description": "When true, return raw bytes from tmux (escape codes preserved). When false (default), strip ANSI sequences while preserving unicode glyphs.",
+          "required": false,
+          "nullable": false,
+          "allow_empty": false,
+          "allowed_values": null
+        },
+        {
+          "name": "allow_pending",
+          "type": "bool",
+          "description": "Accepted for surface symmetry with send-keys. ReadPane has no state guard (pending/ended/missing are all readable), so this flag has no behavioral effect.",
           "required": false,
           "nullable": false,
           "allow_empty": false,

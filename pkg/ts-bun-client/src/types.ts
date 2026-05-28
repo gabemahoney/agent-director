@@ -214,6 +214,11 @@ export interface SendKeysParams {
   claude_instance_id: string;
   /** Text to deliver to the pane. CR bytes stripped; LF preserved; Enter appended. */
   text: string;
+  /**
+   * When true, also permit send-keys on a pending Spawn (pre-SessionStart
+   * use case). ended/missing Spawns are still rejected even with this flag.
+   */
+  allow_pending?: boolean;
 }
 
 /** Mirrors pkg/api/sendkeys.go::SendKeysResult (empty; reserved for future fields). */
@@ -228,6 +233,12 @@ export interface ReadPaneParams {
   n_lines?: number;
   /** When true return raw bytes (ANSI preserved); when false strip ANSI (default). */
   ansi?: boolean;
+  /**
+   * Accepted for surface symmetry with send-keys. ReadPane has no state
+   * guard (any state including pending/ended/missing is always readable),
+   * so this flag has no behavioral effect.
+   */
+  allow_pending?: boolean;
 }
 
 /** Mirrors pkg/api/readpane.go::ReadPaneResult */
