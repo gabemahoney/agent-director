@@ -422,9 +422,9 @@ chmod +x agent-director
 - **CLI binaries** (three platforms): linux/amd64, linux/arm64
   (statically linked, no glibc dependency), darwin/arm64
   (Mach-O 64). darwin/amd64 was dropped from v1 on 2026-05-24.
-- **TS Client** (`agent-director` npm umbrella + per-platform
-  optional sub-packages `@agent-director/linux-x64` and
-  `@agent-director/darwin-arm64`) spawns the bundled CLI as a
+- **TS Client** (\`agent-director\` npm umbrella + per-platform
+  optional sub-packages \`@agent-director/linux-x64\` and
+  \`@agent-director/darwin-arm64\`) spawns the bundled CLI as a
   subprocess; no FFI / native library.
 
 Windows is not supported (SRD §16.1).
