@@ -22,7 +22,7 @@ Code feeds it the payload JSON on stdin.
 | `PreToolUse` | tool=`AskUserQuestion` | `ask_user` |
 | `PostToolUse` | — | `working` |
 | `Stop` | — | `waiting` |
-| `Notification` | — | `waiting` |
+| `Notification` | — | soft refresh — bumps `last_seen_at`, state unchanged |
 | `PermissionRequest` | `*` (all tools) | `check_permission` |
 | `SessionEnd` | reason ∈ {`clear`, `compact`} | soft refresh: bumps `last_seen_at`, state unchanged |
 | `SessionEnd` | any other reason | `ended` (also sets `ended_at`) |

@@ -60,7 +60,7 @@ type ClassifyResult struct {
 	NewState string
 
 	// SoftRefresh is true for events that should bump last_seen_at without
-	// changing state — SessionEnd reason=clear|compact and unknown events.
+	// changing state — SessionEnd reason=clear|compact, Notification, and unknown events.
 	SoftRefresh bool
 
 	// SessionID is the basename-without-extension of transcript_path when
@@ -109,7 +109,7 @@ func ClassifyEvent(raw json.RawMessage) (ClassifyResult, error) {
 	case "Stop":
 		res.NewState = store.StateWaiting
 	case "Notification":
-		res.NewState = store.StateWaiting
+		res.SoftRefresh = true
 	case "PermissionRequest":
 		res.NewState = store.StateCheckPermission
 	case "SessionEnd":

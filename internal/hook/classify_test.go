@@ -51,9 +51,9 @@ func TestClassifyEventSRDTable(t *testing.T) {
 			wantState: store.StateWaiting,
 		},
 		{
-			name:      "Notification",
-			payload:   map[string]any{"hook_event_name": "Notification"},
-			wantState: store.StateWaiting,
+			name:     "Notification",
+			payload:  map[string]any{"hook_event_name": "Notification"},
+			wantSoft: true,
 		},
 		{
 			name:      "PermissionRequest",
