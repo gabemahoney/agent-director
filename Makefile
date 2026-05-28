@@ -263,8 +263,8 @@ envelope-diff-ts: agent-director ts-helper fake-tmux
 # respective script rather than globally here.
 release-shellcheck:
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		echo "[release-shellcheck] shellcheck skills/release-agent-director/release.sh skills/release-agent-director/lib/stage-cli.sh skills/release-agent-director/test-release-postconditions.sh"; \
-		shellcheck -s bash skills/release-agent-director/release.sh skills/release-agent-director/lib/stage-cli.sh skills/release-agent-director/test-release-postconditions.sh; \
+		echo "[release-shellcheck] shellcheck skills/release-agent-director/release.sh skills/release-agent-director/lib/stage-cli.sh skills/release-agent-director/test-release-postconditions.sh skills/release-agent-director/test-notes-phase-heredoc.sh"; \
+		shellcheck -s bash skills/release-agent-director/release.sh skills/release-agent-director/lib/stage-cli.sh skills/release-agent-director/test-release-postconditions.sh skills/release-agent-director/test-notes-phase-heredoc.sh; \
 	else \
 		echo "[release-shellcheck] shellcheck not installed — skipping"; \
 	fi
@@ -274,7 +274,10 @@ release-shellcheck:
 # no mode-bit flips, produces dist/release-notes.md, and leaves no .tgz
 # under pkg/ts-bun-client/. Requires Go + bun on PATH (same as a normal
 # release run).
+# Also runs the heredoc backtick regression test (b.85s) which exercises
+# notes_phase directly without a full dry-run.
 release-smoke:
+	bash skills/release-agent-director/test-notes-phase-heredoc.sh
 	bash skills/release-agent-director/test-release-postconditions.sh
 
 # release-bats was retired alongside the cabi-matrix removal — the only
