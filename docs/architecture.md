@@ -857,10 +857,21 @@ load-bearing:
   the same "premature submission" failure mode the CR strip prevents.
 
 State precondition: the row's `state` must be one of `waiting`,
-`working`, `ask_user`, `check_permission`. `pending`, `ended`, and
-`missing` reject with `ErrSpawnNotInteractive`. `pending` is excluded
-because the TUI is not yet up — the first SessionStart hook flips
-`pending` to `waiting`, after which the Spawn is reachable.
+`working`, `ask_user`, `check_permission`. `ended` and `missing` always
+reject with `ErrSpawnNotInteractive` — there is no pane to write to.
+`pending` also rejects by default; pass `allow_pending: true` to bypass
+the check for the pre-SessionStart window (see below). The first
+SessionStart hook flips `pending` to `waiting`, after which the Spawn is
+reachable without the flag.
+
+`allow_pending` opt-in: when `allow_pending=true` AND `state=pending`, the
+state check is skipped and text is delivered directly to the tmux pane. The
+canonical use case is dismissing interactive prompts that Claude Code renders
+*before* SessionStart — e.g. the `--dangerously-load-development-channels`
+warning. Without the flag a caller in this situation deadlocks: the prompt
+blocks SessionStart, so the state never advances, and `send-keys` keeps
+rejecting with `ErrSpawnNotInteractive`. `ended`/`missing` are still rejected
+even when `allow_pending=true`.
 
 Relay-mode guard: when `relay_mode=on` AND `state=check_permission`,
 the permission relay (Epic 10) owns the modal answer. SendKeys refuses

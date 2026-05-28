@@ -12,6 +12,7 @@ CLI and MCP server; no subprocess or network hop required.
   - [Status](#status)
   - [List](#list)
   - [SendKeys](#sendkeys)
+  - [ReadPane](#readpane)
   - [Kill](#kill)
 - [Version mapping](#version-mapping)
 - [Errors](#errors)
@@ -201,6 +202,61 @@ Most-likely sentinel errors: `ErrSpawnNotFound`,
 check_permission`), `ErrSendKeysWhileRelayed` (relay_mode=on and state
 is `check_permission` — the relay path owns the answer). See
 `(*Client).SendKeys` godoc.
+
+#### `AllowPending` — pre-SessionStart opt-in
+
+By default `SendKeys` rejects a `pending` Spawn with
+`ErrSpawnNotInteractive`. Set `AllowPending: true` to bypass that check
+and send text directly into the tmux pane while the Spawn is still in
+`pending` state.
+
+**Use case:** Claude Code renders some interactive prompts *before* its
+`SessionStart` hook fires — for example the
+`--dangerously-load-development-channels` safety warning. The Spawn stays
+`pending` until the user (or orchestrator) dismisses the prompt, so the
+hook never fires and the state never advances. `AllowPending: true` lets
+a caller detect and dismiss such prompts without deadlocking.
+
+`ended` and `missing` Spawns are still rejected regardless of
+`AllowPending` — there is no pane to write to.
+
+```go
+_, err := c.SendKeys(api.SendKeysParams{
+    ClaudeInstanceID: "claude_2026-05-22T18-23-15",
+    Text:             "",       // press Enter to dismiss the prompt
+    AllowPending:     true,
+})
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+---
+
+### ReadPane
+
+Capture the last N lines of a tracked Spawn's tmux pane. Default 25 lines;
+no upper cap. ANSI escape codes are stripped by default (pass `ANSI: true`
+to get raw bytes).
+
+```bash
+agent-director read-pane \
+  --claude-instance-id claude_2026-05-22T18-23-15 \
+  --n-lines 50
+```
+
+Call `c.ReadPane(api.ReadPaneParams{ClaudeInstanceID: id, NLines: 50})`.
+Returns `ReadPaneResult` (`.Pane` string). Most-likely sentinel errors:
+`ErrSpawnNotFound`, `ErrTmuxCaptureFailed`. See `(*Client).ReadPane` godoc.
+
+#### `AllowPending` — surface symmetry with `send-keys`
+
+`ReadPane` has **no state guard** — it can read the pane of a `pending`,
+`ended`, or `missing` Spawn just as easily as a live one (provided tmux still
+holds the session). Passing `AllowPending: true` is accepted but has no
+behavioral effect. The flag exists only so callers that pair `readPane` +
+`sendKeys` with `allow_pending: true` can set the same option on both calls
+without special-casing.
 
 ---
 

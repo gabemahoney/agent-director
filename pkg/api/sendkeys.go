@@ -32,6 +32,12 @@ type SendKeysParams struct {
 	// stripped before delivery; LF bytes (0x0A) are preserved as input newlines.
 	// A single Enter is always appended to submit the composed buffer.
 	Text string `json:"text"`
+	// AllowPending relaxes the interactive-state guard to also allow pending
+	// Spawns. Use this when you need to pre-load text before the first
+	// SessionStart hook fires (e.g. inserting an initial prompt while the TUI
+	// is still booting). ended/missing Spawns are still rejected even with
+	// this flag set.
+	AllowPending bool `json:"allow_pending"`
 }
 
 // SendKeysResult is the typed return shape. Empty struct today; reserved
@@ -57,6 +63,8 @@ type SendKeysResult struct{}
 // (waiting / working / ask_user / check_permission). pending Spawns have
 // not yet booted their TUI; ended / missing Spawns have nothing to type
 // into. A non-interactive state surfaces ErrSpawnNotInteractive.
+// Set AllowPending=true to also permit pending Spawns (pre-SessionStart
+// use case); ended/missing are still rejected.
 //
 // Relay-mode guard: when relay_mode=on AND state=check_permission, the
 // permission relay (Epic 10) owns the answer. SendKeys refuses with
@@ -68,7 +76,7 @@ func SendKeys(s SendKeysStore, tmux SendKeysTmux, params SendKeysParams) (SendKe
 		return SendKeysResult{}, err
 	}
 
-	if !isInteractiveState(row.State) {
+	if !isInteractiveState(row.State) && !(params.AllowPending && row.State == store.StatePending) {
 		return SendKeysResult{}, fmt.Errorf("%w: spawn %s state=%s",
 			ErrSpawnNotInteractive, params.ClaudeInstanceID, row.State)
 	}
@@ -112,7 +120,7 @@ func isInteractiveState(state string) bool {
 // Errors:
 //   - [ErrSpawnNotFound]: no row exists for the instance id.
 //   - [ErrSpawnNotInteractive]: the Spawn's state is not one of waiting,
-//     working, ask_user, or check_permission.
+//     working, ask_user, check_permission, or (with AllowPending=true) pending.
 //   - [ErrSendKeysWhileRelayed]: relay_mode is on and state is
 //     check_permission; the relay path owns the modal answer.
 //   - ErrTmuxNotAvailable: tmux binary is not on PATH.

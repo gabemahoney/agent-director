@@ -330,6 +330,39 @@ func runSpawnCLIWithExtraEnv(t *testing.T, home, fakeTmuxDir string, extras map[
 	return stdout.String(), stderr.String(), exitCode
 }
 
+func TestSendKeysCLIAllowPendingFlag(t *testing.T) {
+	// --allow-pending must be parsed and forwarded: a pending Spawn that
+	// would normally return ErrSpawnNotInteractive succeeds with the flag.
+	fakeDir := buildFakeTmux(t)
+	home := t.TempDir()
+	bootstrapDB(t, home)
+	dbPath := filepath.Join(home, ".agent-director", "state.db")
+	seedSpawnRow(t, dbPath, "id-sk-ap-1", "cd-sk-ap-1", "pending", "off")
+
+	_, stderr, code := runSpawnCLI(t, home, fakeDir,
+		"send-keys", "--allow-pending", "--claude-instance-id", "id-sk-ap-1", "--text", "hello")
+	if code != 0 {
+		t.Fatalf("send-keys --allow-pending exit = %d; stderr=%s", code, stderr)
+	}
+}
+
+func TestReadPaneCLIAllowPendingFlag(t *testing.T) {
+	// --allow-pending is a no-op for read-pane (no state guard), but must
+	// be parsed without error and the command must succeed on a pending Spawn.
+	fakeDir := buildFakeTmux(t)
+	home := t.TempDir()
+	bootstrapDB(t, home)
+	dbPath := filepath.Join(home, ".agent-director", "state.db")
+	seedSpawnRow(t, dbPath, "id-rp-ap-cli-1", "cd-rp-ap-cli-1", "pending", "off")
+
+	_, stderr, code := runSpawnCLIWithExtraEnv(t, home, fakeDir,
+		map[string]string{"FAKE_TMUX_PANE_OUTPUT": "pending pane\n"},
+		"read-pane", "--allow-pending", "--claude-instance-id", "id-rp-ap-cli-1")
+	if code != 0 {
+		t.Fatalf("read-pane --allow-pending exit = %d; stderr=%s", code, stderr)
+	}
+}
+
 func TestSendKeysCLIMissingInstanceID(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()

@@ -113,6 +113,7 @@ Send text into a tracked Spawn's tmux pane. `\r` bytes are stripped (prevent pre
 
 - `claude_instance_id` (string, required): Id of the live Spawn to drive.
 - `text` (string, required): Text to type into the Spawn's input. `\r` stripped pre-send; `\n` preserved as newline-in-input.
+- `allow_pending` (bool, optional): When true, also permit send-keys on a pending Spawn (pre-SessionStart use case). ended/missing Spawns are still rejected even with this flag set.
 
 ### Result
 
@@ -135,6 +136,7 @@ Capture the last N lines of a tracked Spawn's tmux pane. Default 25 lines, no up
 - `claude_instance_id` (string, required): Id of the Spawn to read.
 - `n_lines` (int, optional): Number of trailing pane lines to return. Defaults to 25 when 0/omitted. No upper cap.
 - `ansi` (bool, optional): When true, return raw bytes from tmux (escape codes preserved). When false (default), strip ANSI sequences while preserving unicode glyphs.
+- `allow_pending` (bool, optional): Accepted for surface symmetry with send-keys. ReadPane has no state guard (pending/ended/missing are all readable), so this flag has no behavioral effect.
 
 ### Result
 

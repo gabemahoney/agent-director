@@ -2,12 +2,13 @@ package api_test
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
-	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // fakeCaptureTmux is a recording fake for ReadPane. It returns the
@@ -194,6 +195,28 @@ func TestReadPaneWorksOnEndedSpawn(t *testing.T) {
 	}
 	if res.Pane != "final state" {
 		t.Fatalf("Pane = %q; want %q", res.Pane, "final state")
+	}
+}
+
+// TestReadPaneAllowPendingIsNoOp confirms ReadPane has no state guard:
+// both allow_pending=true and allow_pending=false succeed on a pending Spawn.
+func TestReadPaneAllowPendingIsNoOp(t *testing.T) {
+	for _, allowPending := range []bool{true, false} {
+		allowPending := allowPending
+		t.Run(fmt.Sprintf("allow_pending=%v", allowPending), func(t *testing.T) {
+			s, _ := apitest.OpenStoreWithRow(t, "id-rp-ap-"+fmt.Sprint(allowPending), "cd-rp-ap", store.StatePending, "off")
+			tmux := &fakeCaptureTmux{body: "pane content"}
+			res, err := api.ReadPane(s, tmux, api.ReadPaneParams{
+				ClaudeInstanceID: "id-rp-ap-" + fmt.Sprint(allowPending),
+				AllowPending:     allowPending,
+			})
+			if err != nil {
+				t.Fatalf("ReadPane(allow_pending=%v, state=pending): %v", allowPending, err)
+			}
+			if res.Pane != "pane content" {
+				t.Fatalf("Pane = %q; want %q", res.Pane, "pane content")
+			}
+		})
 	}
 }
 

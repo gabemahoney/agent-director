@@ -120,6 +120,7 @@ func parseSendKeysFlags(args []string) (pkgapi.SendKeysParams, error) {
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the Spawn to drive")
 	fs.StringVar(&p.Text, "text", "", "text to type into the Spawn's input")
+	fs.BoolVar(&p.AllowPending, "allow-pending", false, "allow send-keys on a pending Spawn (pre-SessionStart use case); ended/missing still rejected")
 	if err := fs.Parse(args); err != nil {
 		return p, err
 	}
@@ -158,6 +159,7 @@ func parseReadPaneFlags(args []string) (pkgapi.ReadPaneParams, error) {
 	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the Spawn to read")
 	fs.IntVar(&p.NLines, "n-lines", pkgapi.DefaultReadPaneLines, "number of trailing pane lines to return")
 	fs.BoolVar(&p.ANSI, "ansi", false, "return raw bytes (escape codes preserved); default strips ANSI but preserves unicode glyphs")
+	fs.BoolVar(&p.AllowPending, "allow-pending", false, "accepted for surface symmetry with send-keys; read-pane has no state guard so this flag has no effect")
 	if err := fs.Parse(args); err != nil {
 		return p, err
 	}
