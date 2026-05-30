@@ -313,3 +313,51 @@ func TestGetPermissionRequestExposesRequestIDAndCreatedAt(t *testing.T) {
 		t.Errorf("open row surfaced as decided: decision=%q reason=%q", got.Decision, got.DecisionReason)
 	}
 }
+
+// TestDecidePermissionRequestTimeoutThenAllowIsRejected pins the
+// acceptance criterion for b.uer: after runRelay's timeout writes
+// DecidePermissionRequest("deny","timeout"), a subsequent call with
+// ("allow","anything") must return (false, nil) — first-call-wins is
+// race-free and the timeout decision must not be clobberable.
+//
+// This simulates the exact sequence the timeout path produces:
+//  1. Upsert opens the row (NULL decision).
+//  2. Timeout fires → DecidePermissionRequest("deny","timeout") → true.
+//  3. Later caller tries DecidePermissionRequest("allow","user-approved") → false.
+//  4. Row still reads deny/timeout.
+func TestDecidePermissionRequestTimeoutThenAllowIsRejected(t *testing.T) {
+	s := openTestStore(t)
+	const id = "spawn-timeout-seq"
+	seedSpawnForPerm(t, s, id, "on")
+
+	if err := s.UpsertOpenPermissionRequest(id, "Bash", `{"command":"ls"}`); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	// Step 2: timeout path writes deny/timeout.
+	updated, err := s.DecidePermissionRequest(id, "deny", "timeout")
+	if err != nil {
+		t.Fatalf("timeout decide: %v", err)
+	}
+	if !updated {
+		t.Fatalf("timeout decide returned updated=false; want true (open row must accept first decide)")
+	}
+
+	// Step 3: a subsequent allow attempt must be rejected (first-call-wins).
+	updated, err = s.DecidePermissionRequest(id, "allow", "user-approved")
+	if err != nil {
+		t.Fatalf("subsequent allow decide: %v", err)
+	}
+	if updated {
+		t.Fatalf("subsequent allow decide returned updated=true; want false (timeout decision must not be clobberable — first-call-wins per SRD §6.2)")
+	}
+
+	// Step 4: row must still carry deny/timeout, not allow/user-approved.
+	_, _, _, decision, reason := readPermRow(t, s, id)
+	if !decision.Valid || decision.String != "deny" {
+		t.Errorf("decision = (%v, %q); want (valid, deny) — timeout decision must persist", decision.Valid, decision.String)
+	}
+	if !reason.Valid || reason.String != "timeout" {
+		t.Errorf("reason = (%v, %q); want (valid, timeout) — timeout reason must persist", reason.Valid, reason.String)
+	}
+}

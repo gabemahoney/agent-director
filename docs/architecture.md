@@ -1450,6 +1450,34 @@ relay path owns the modal answer; a pane-side keystroke would race
 the relay's decide write. The guard was added in Epic 4 (stubbed);
 Epic 10 activates it end-to-end.
 
+### Invariant — relay-listener pairing
+
+If `spawns.state = check_permission`, then either a `runRelay`
+polling loop is alive consuming `decide()` writes, OR
+`permission_requests.decision` is non-NULL. A bot must never be
+sitting in "waiting for permission" with no listener AND no
+decision; if both are false, the spawn is stranded and any external
+surface (e.g. a Slack approval message from CSCB) would be a lying
+ghost — buttons that go nowhere.
+
+The AD code paths that satisfy this invariant:
+
+- **Normal flow**: hook fires → state=`check_permission` →
+  `runRelay` polling loop runs → either `decide()` is called
+  (decision set) or the loop times out and writes
+  `decision='deny'`, `decision_reason='timeout'`, then transitions
+  state back to `working`.
+- **Process death**: the `find-missing` reconciler catches dead
+  processes and transitions state to `missing`, which is no longer
+  `check_permission`.
+
+Edge case: a panic inside `runRelay` AFTER
+`UpsertOpenPermissionRequest` but BEFORE the loop iterates can
+leave state=`check_permission` with decision=NULL if the
+surrounding Claude Code instance is still alive (so `find-missing`
+doesn't catch it). If this becomes observable in production, file a
+follow-up.
+
 ## Resume
 
 Bringing a terminated Spawn back to life via `claude --resume`. Same
