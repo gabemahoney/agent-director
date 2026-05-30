@@ -18,6 +18,7 @@ type HookStore interface {
 	SetSessionID(instanceID, sessionID string) error
 	UpsertOpenPermissionRequest(instanceID, toolName, toolInputJSON string) error
 	GetPermissionRequest(instanceID string) (store.PermissionRow, error)
+	DecidePermissionRequest(instanceID, decision, reason string) (bool, error)
 }
 
 // HandleConfig bundles the inputs Handle takes beyond the store and

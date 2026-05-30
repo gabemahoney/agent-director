@@ -38,6 +38,9 @@ func (f *flakyStore) UpsertOpenPermissionRequest(string, string, string) error {
 func (f *flakyStore) GetPermissionRequest(string) (store.PermissionRow, error) {
 	return store.PermissionRow{}, nil
 }
+func (f *flakyStore) DecidePermissionRequest(string, string, string) (bool, error) {
+	return false, nil
+}
 
 // captureLog wraps a *log.Logger writing to a bytes.Buffer so tests can
 // assert *that* an error was logged without pinning the exact phrasing.

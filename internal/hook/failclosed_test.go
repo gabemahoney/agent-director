@@ -28,12 +28,30 @@ type flakyRelayStore struct {
 	transitionErr  error
 	sessionErr     error
 	upsertErr      error
+	decideErr      error
 	getRows        []store.PermissionRow
 	getErrs        []error
 	idx            atomic.Int32
+
+	// Recorded calls — inspected by tests that assert call ordering.
+	decideArgs     []decideCall
+	transitionArgs []transitionCall
 }
 
-func (f *flakyRelayStore) ApplyHookTransition(string, string, bool) error {
+type decideCall struct {
+	InstanceID string
+	Decision   string
+	Reason     string
+}
+
+type transitionCall struct {
+	InstanceID  string
+	NewState    string
+	SoftRefresh bool
+}
+
+func (f *flakyRelayStore) ApplyHookTransition(instanceID, newState string, softRefresh bool) error {
+	f.transitionArgs = append(f.transitionArgs, transitionCall{instanceID, newState, softRefresh})
 	return f.transitionErr
 }
 func (f *flakyRelayStore) SetSessionID(string, string) error {
@@ -41,6 +59,13 @@ func (f *flakyRelayStore) SetSessionID(string, string) error {
 }
 func (f *flakyRelayStore) UpsertOpenPermissionRequest(string, string, string) error {
 	return f.upsertErr
+}
+func (f *flakyRelayStore) DecidePermissionRequest(instanceID, decision, reason string) (bool, error) {
+	f.decideArgs = append(f.decideArgs, decideCall{instanceID, decision, reason})
+	if f.decideErr != nil {
+		return false, f.decideErr
+	}
+	return true, nil
 }
 func (f *flakyRelayStore) GetPermissionRequest(string) (store.PermissionRow, error) {
 	n := f.idx.Add(1) - 1
