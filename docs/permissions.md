@@ -165,6 +165,19 @@ failure mode as a deny. SRD §6.4 enumerates these:
 | Row preempted (`sql.ErrNoRows` during poll) | deny envelope |
 | Read-retry budget exhausted (5 consecutive read errors) | deny envelope |
 
+#### Relay timeout default and override
+
+The polling timeout (`relay.timeout_seconds`) defaults to **86400 seconds (1 day)**.
+The previous default of 600 s (10 min) was too short for human-paced approval
+flows — a Slack approval that arrives after a meeting or overnight would silently
+produce a deny. Operators who want a tighter bound can override it in
+`~/.agent-director/config.toml`:
+
+```toml
+[relay]
+timeout_seconds = 3600   # example: 1-hour window
+```
+
 The fail-closed boundary is scoped to PermissionRequest events. A
 non-PermissionRequest event with `RELAY_MODE=on` (e.g. SessionStart)
 still follows the regular state-tracking fail-open path — Claude

@@ -44,7 +44,7 @@ func TestDefaultMatchesSRD(t *testing.T) {
 		{"Defaults.InjectHelpHook", d.Defaults.InjectHelpHook, false},
 		{"Relay.PollBaseMs", d.Relay.PollBaseMs, 100},
 		{"Relay.PollJitterMs", d.Relay.PollJitterMs, 100},
-		{"Relay.TimeoutSeconds", d.Relay.TimeoutSeconds, 600},
+		{"Relay.TimeoutSeconds", d.Relay.TimeoutSeconds, 86400},
 		{"Pause.TimeoutSeconds", d.Pause.TimeoutSeconds, 30},
 		{"Store.DbPath", d.Store.DbPath, "~/.agent-director/state.db"},
 		{"Log.ErrorLogPath", d.Log.ErrorLogPath, "~/.agent-director/errors.log"},
@@ -99,8 +99,8 @@ func TestLoadPartialOverridePreservesDefaults(t *testing.T) {
 	if cfg.Relay.PollJitterMs != 100 {
 		t.Errorf("PollJitterMs default lost: got %d", cfg.Relay.PollJitterMs)
 	}
-	if cfg.Relay.TimeoutSeconds != 600 {
-		t.Errorf("Relay.TimeoutSeconds default lost: got %d", cfg.Relay.TimeoutSeconds)
+	if cfg.Relay.TimeoutSeconds != 86400 {
+		t.Errorf("Relay.TimeoutSeconds default lost: got %d, want 86400", cfg.Relay.TimeoutSeconds)
 	}
 	if cfg.Defaults.RelayMode != "off" {
 		t.Errorf("Defaults.RelayMode default lost: got %q", cfg.Defaults.RelayMode)
@@ -185,4 +185,14 @@ func TestLoadPreservesAbsolutePath(t *testing.T) {
 // quoted wraps s in TOML double-quoted-string syntax with minimal escaping.
 func quoted(s string) string {
 	return "\"" + strings.ReplaceAll(s, "\\", "\\\\") + "\""
+}
+
+// TestDefault_RelayTimeoutAtLeastOneDay locks in the fix for b.p48: a 10-minute
+// default was silently breaking overnight human-approval flows (Slack approval,
+// overnight operator review). The default must be at least one full day.
+func TestDefault_RelayTimeoutAtLeastOneDay(t *testing.T) {
+	d := config.Default()
+	if d.Relay.TimeoutSeconds < 86400 {
+		t.Errorf("Relay.TimeoutSeconds = %d; want >= 86400 (1 day) — human-paced approval flows (Slack approval, overnight operator review) require a multi-hour default (b.p48)", d.Relay.TimeoutSeconds)
+	}
 }

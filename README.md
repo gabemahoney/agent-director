@@ -204,7 +204,7 @@ disable_askuserquestion = false
 [relay]
 poll_base_ms = 100
 poll_jitter_ms = 100
-timeout_seconds = 600
+timeout_seconds = 86400
 
 [pause]
 timeout_seconds = 30
