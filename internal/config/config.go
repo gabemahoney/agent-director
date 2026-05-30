@@ -75,7 +75,7 @@ func Default() Config {
 		Relay: Relay{
 			PollBaseMs:     100,
 			PollJitterMs:   100,
-			TimeoutSeconds: 600,
+			TimeoutSeconds: 86400,
 		},
 		Pause: Pause{
 			TimeoutSeconds: 30,

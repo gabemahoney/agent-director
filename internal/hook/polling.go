@@ -88,8 +88,9 @@ func DefaultPollClock() PollClock { return realPollClock{} }
 func Poll(ctx context.Context, s PollStore, clock PollClock, cfg config.Relay, instanceID string, rng *rand.Rand) PollResult {
 	timeout := time.Duration(cfg.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
-		// SRD §11 default is 600s; guard against a config that pinned 0.
-		timeout = 600 * time.Second
+		// Match config.Default().Relay.TimeoutSeconds (86400s / 1 day);
+		// guard against a config that pinned 0 or negative. See b.p48.
+		timeout = 86400 * time.Second
 	}
 	deadline := nowFunc().Add(timeout)
 
