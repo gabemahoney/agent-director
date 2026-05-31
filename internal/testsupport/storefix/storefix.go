@@ -6,6 +6,7 @@ package storefix
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -130,7 +131,7 @@ func SeedCheckPermission(t *testing.T, s *store.Store, id string) store.Spawn {
 	if err := s.ApplyHookTransition(id, store.StateCheckPermission, false); err != nil {
 		t.Fatalf("storefix.SeedCheckPermission: ApplyHookTransition(%q, check_permission): %v", id, err)
 	}
-	if err := s.UpsertOpenPermissionRequest(id, TestRequestTokenA, "Bash", `{"cmd":"echo hello"}`); err != nil {
+	if err := s.UpsertOpenPermissionRequest(id, TestRequestTokenA, "Bash", `{"cmd":"echo hello"}`, 0); err != nil {
 		t.Fatalf("storefix.SeedCheckPermission: UpsertOpenPermissionRequest(%q): %v", id, err)
 	}
 	row, err := s.GetSpawn(id)
@@ -215,6 +216,66 @@ func SeedExpiredCandidate(t *testing.T, s *store.Store, dbPath, id string, age t
 	return row
 }
 
+// SeedClosedPermissionRequests seeds n decided (closed) permission_requests rows for
+// instanceID with deterministic decided_at values suitable for cap-eviction tests.
+// For each row i in [0, n): an open row is inserted via UpsertOpenPermissionRequest,
+// immediately closed via DecidePermissionRequest (decision="deny",
+// reason=DecisionReasonOperator), then its decided_at is backdated to
+// baseTime+i*step via a raw sql.DB connection (mirrors SeedExpiredCandidate).
+//
+// The spawn row is created if it does not already exist. dbPath must be the
+// SQLite file path returned by OpenTempStore. Returns the request tokens in
+// insertion order so callers can assert on specific rows.
+func SeedClosedPermissionRequests(t *testing.T, s *store.Store, dbPath, instanceID string, n int, baseTime time.Time, step time.Duration) []string {
+	t.Helper()
+
+	// Ensure spawn row exists (permission_requests FK → spawns).
+	if err := s.InsertPending(defaultSpawn(instanceID)); err != nil {
+		if _, getErr := s.GetSpawn(instanceID); getErr != nil {
+			t.Fatalf("storefix.SeedClosedPermissionRequests: ensure spawn %q: InsertPending: %v; GetSpawn: %v", instanceID, err, getErr)
+		}
+		// Spawn already exists — proceed.
+	}
+
+	tokens := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		// UUIDv4-shaped token: version nibble=4, variant nibble=a (10xx binary).
+		tok := fmt.Sprintf("%08x-0000-4000-a000-%012x", i, i)
+
+		if err := s.UpsertOpenPermissionRequest(instanceID, tok, "Bash", `{"cmd":"echo"}`, 0); err != nil {
+			t.Fatalf("storefix.SeedClosedPermissionRequests: UpsertOpenPermissionRequest(%q, %q): %v", instanceID, tok, err)
+		}
+		updated, err := s.DecidePermissionRequest(instanceID, tok, "deny", store.DecisionReasonOperator)
+		if err != nil {
+			t.Fatalf("storefix.SeedClosedPermissionRequests: DecidePermissionRequest(%q, %q): %v", instanceID, tok, err)
+		}
+		if !updated {
+			t.Fatalf("storefix.SeedClosedPermissionRequests: DecidePermissionRequest(%q, %q) returned updated=false", instanceID, tok)
+		}
+		tokens = append(tokens, tok)
+	}
+
+	// Backdate decided_at for all rows via a single raw connection — the only
+	// way to set controlled timestamps without modifying production store methods.
+	raw, err := sql.Open("sqlite", "file:"+dbPath)
+	if err != nil {
+		t.Fatalf("storefix.SeedClosedPermissionRequests: open raw db %q: %v", dbPath, err)
+	}
+	defer func() { _ = raw.Close() }()
+
+	for i, tok := range tokens {
+		decidedAt := baseTime.Add(time.Duration(i) * step).UTC().Format("2006-01-02 15:04:05")
+		if _, err := raw.Exec(
+			`UPDATE permission_requests SET decided_at = ? WHERE claude_instance_id = ? AND request_token = ?`,
+			decidedAt, instanceID, tok,
+		); err != nil {
+			t.Fatalf("storefix.SeedClosedPermissionRequests: backdate decided_at for (%q, %q): %v", instanceID, tok, err)
+		}
+	}
+
+	return tokens
+}
+
 // SeedOpenPermissionRequests seeds N open permission_requests rows for instanceID,
 // one per token in tokens, by calling UpsertOpenPermissionRequest. Intended for
 // parallel-hook ordering, state-machine retention, find-missing multi-row, and
@@ -222,7 +283,7 @@ func SeedExpiredCandidate(t *testing.T, s *store.Store, dbPath, id string, age t
 func SeedOpenPermissionRequests(t *testing.T, s *store.Store, instanceID string, tokens []string) {
 	t.Helper()
 	for _, tok := range tokens {
-		if err := s.UpsertOpenPermissionRequest(instanceID, tok, "Bash", `{"cmd":"echo"}`); err != nil {
+		if err := s.UpsertOpenPermissionRequest(instanceID, tok, "Bash", `{"cmd":"echo"}`, 0); err != nil {
 			t.Fatalf("storefix.SeedOpenPermissionRequests: UpsertOpenPermissionRequest(%q, %q): %v", instanceID, tok, err)
 		}
 	}

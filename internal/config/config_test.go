@@ -45,6 +45,7 @@ func TestDefaultMatchesSRD(t *testing.T) {
 		{"Relay.PollBaseMs", d.Relay.PollBaseMs, 100},
 		{"Relay.PollJitterMs", d.Relay.PollJitterMs, 100},
 		{"Relay.TimeoutSeconds", d.Relay.TimeoutSeconds, 86400},
+		{"Relay.PermissionRequestCap", d.Relay.PermissionRequestCap, 1000},
 		{"Pause.TimeoutSeconds", d.Pause.TimeoutSeconds, 30},
 		{"Store.DbPath", d.Store.DbPath, "~/.agent-director/state.db"},
 		{"Log.ErrorLogPath", d.Log.ErrorLogPath, "~/.agent-director/errors.log"},
@@ -55,6 +56,13 @@ func TestDefaultMatchesSRD(t *testing.T) {
 				t.Errorf("got %v, want %v", tc.got, tc.want)
 			}
 		})
+	}
+}
+
+func TestRelayConfigDefaultCapIs1000(t *testing.T) {
+	d := config.Default()
+	if d.Relay.PermissionRequestCap != 1000 {
+		t.Errorf("Relay.PermissionRequestCap = %d, want 1000", d.Relay.PermissionRequestCap)
 	}
 }
 
@@ -107,6 +115,27 @@ func TestLoadPartialOverridePreservesDefaults(t *testing.T) {
 	}
 	if cfg.Pause.TimeoutSeconds != 30 {
 		t.Errorf("Pause.TimeoutSeconds default lost: got %d", cfg.Pause.TimeoutSeconds)
+	}
+}
+
+func TestLoadPermissionRequestCapOverride(t *testing.T) {
+	path := makeConfigFile(t, "[relay]\npermission_request_cap = 500\n")
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Relay.PermissionRequestCap != 500 {
+		t.Errorf("PermissionRequestCap override not applied: got %d, want 500", cfg.Relay.PermissionRequestCap)
+	}
+	// Untouched relay fields keep their defaults.
+	if cfg.Relay.PollBaseMs != 100 {
+		t.Errorf("PollBaseMs default lost: got %d, want 100", cfg.Relay.PollBaseMs)
+	}
+	if cfg.Relay.PollJitterMs != 100 {
+		t.Errorf("PollJitterMs default lost: got %d, want 100", cfg.Relay.PollJitterMs)
+	}
+	if cfg.Relay.TimeoutSeconds != 86400 {
+		t.Errorf("TimeoutSeconds default lost: got %d, want 86400", cfg.Relay.TimeoutSeconds)
 	}
 }
 

@@ -55,7 +55,7 @@ func mintRequestToken() (string, error) {
 // Slack message. *store.Store satisfies it.
 type RelayStore interface {
 	PollStore
-	UpsertOpenPermissionRequest(instanceID, requestToken, toolName, toolInputJSON string) error
+	UpsertOpenPermissionRequest(instanceID, requestToken, toolName, toolInputJSON string, cap int) error
 	DecidePermissionRequest(instanceID, requestToken, decision, reason string) (bool, error)
 	ApplyHookTransition(instanceID, newState string, softRefresh bool) error
 }
@@ -105,7 +105,17 @@ func runRelay(
 		return
 	}
 
-	if err := st.UpsertOpenPermissionRequest(instanceID, requestToken, pp.ToolName, toolInput); err != nil {
+	cap := cfg.PermissionRequestCap
+	if cap < 0 {
+		// Mirror the TimeoutSeconds <= 0 guard in internal/hook/polling.go:94-99
+		// (introduced for b.p48): a negative cap silently falls back to the
+		// default (1000) rather than surfacing a config error at runtime.
+		// Cap == 0 is intentional (operator opt-in to unbounded growth) and
+		// must NOT be collapsed to 1000 here.
+		cap = 1000
+	}
+
+	if err := st.UpsertOpenPermissionRequest(instanceID, requestToken, pp.ToolName, toolInput, cap); err != nil {
 		logf(logger, "relay: upsert (instance=%s, token=%s): %v", instanceID, requestToken, err)
 		_, _ = fmt.Fprintln(stdout, EncodeDecision("deny", ""))
 		return

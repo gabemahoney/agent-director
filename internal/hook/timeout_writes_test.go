@@ -74,7 +74,7 @@ func TestFailClosedTimeoutWritesDBBeforeStdout(t *testing.T) {
 		w, st,
 		hook.HandleConfig{
 			Env:   envWith(instanceID),
-			Cfg:   config.Relay{TimeoutSeconds: 1, PollBaseMs: 0, PollJitterMs: 0},
+			Cfg:   config.Relay{TimeoutSeconds: 1, PollBaseMs: 0, PollJitterMs: 0, PermissionRequestCap: 0},
 			Clock: clock,
 		},
 		newSilentLogger()); err != nil {
@@ -155,7 +155,7 @@ func TestRelayTimeoutPersistsDenyDecision(t *testing.T) {
 		stdout, st,
 		hook.HandleConfig{
 			Env:   envWith(instanceID),
-			Cfg:   config.Relay{TimeoutSeconds: 1, PollBaseMs: 0, PollJitterMs: 0},
+			Cfg:   config.Relay{TimeoutSeconds: 1, PollBaseMs: 0, PollJitterMs: 0, PermissionRequestCap: 0},
 			Clock: clock,
 		},
 		newSilentLogger()); err != nil {
