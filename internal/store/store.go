@@ -30,7 +30,7 @@ var ErrStoreNotInitialized = errors.New("store: database not initialized")
 
 // schemaVersion is the current schema version this package writes and reads.
 // Bump (and add a migration) whenever the DDL in schema.go changes.
-const schemaVersion = 1
+const schemaVersion = 2
 
 // dbFileMode is the mode the SQLite file itself is forced to on every Open.
 // 0600 = owner read/write only.

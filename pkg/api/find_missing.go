@@ -12,6 +12,11 @@ import (
 type FindMissingStore interface {
 	ListLiveSpawnIDs() ([]string, error)
 	MarkSpawnMissing(instanceID string) error
+	// CloseOrphanedPermissionRequests denies all open permission_requests rows
+	// for a Spawn that has just been marked missing, so any relay polling loop
+	// for that Spawn receives a fail-closed deny rather than spinning to its own
+	// internal timeout (SR-5.4).
+	CloseOrphanedPermissionRequests(instanceID string) error
 }
 
 // FindMissingResult is the typed return shape. Count is the number of
@@ -87,6 +92,15 @@ func findMissingImpl(ctx context.Context, s FindMissingStore, p probe.Prober, lg
 				lg.Printf("find-missing: MarkSpawnMissing(%s): %v (continuing)", id, err)
 			}
 			continue
+		}
+		// Close any open permission_requests rows so relay polling loops
+		// observe a fail-closed deny rather than spinning to their own timeout
+		// (SR-5.4). Errors are logged and skipped — MarkSpawnMissing already
+		// succeeded, so the Spawn is reconciled even if the row-close fails.
+		if err := s.CloseOrphanedPermissionRequests(id); err != nil {
+			if lg != nil {
+				lg.Printf("find-missing: CloseOrphanedPermissionRequests(%s): %v (continuing)", id, err)
+			}
 		}
 		missing = append(missing, id)
 	}

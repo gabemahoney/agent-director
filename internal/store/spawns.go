@@ -201,6 +201,15 @@ func (s *Store) LiveSpawnExists(instanceID string) (bool, error) {
 //   - When newState is `ended`, ended_at is also set to CURRENT_TIMESTAMP.
 //   - When softRefresh=true, only last_seen_at is bumped (state stays).
 //
+// Multi-row retention (SR-5.1/SR-5.2): when newState is `working`, the
+// transition is guarded by OpenPermissionRequestsForSpawn. If one or more
+// open permission_requests rows still exist for this Spawn, the UPDATE is
+// skipped and nil is returned — the Spawn stays at check_permission until
+// every row has been decided. This makes the working-transition safe under
+// parallel concurrent hooks: each runRelay timeout path calls
+// ApplyHookTransition(working) for its own row; the last row's call is the
+// one that actually advances the state.
+//
 // The function is a no-op (returns nil) when no row matches the id —
 // state-tracking hooks fail-open per SRD §3.2, so a hook racing against
 // `delete` should not produce a visible error.
@@ -223,6 +232,19 @@ func (s *Store) ApplyHookTransition(instanceID, newState string, softRefresh boo
 			return fmt.Errorf("store: ended transition: %w", err)
 		}
 		return nil
+	}
+	// Multi-row retention guard: only advance to `working` when all open
+	// permission_requests rows for this Spawn have been decided. If any
+	// remain open, skip the transition (stay at check_permission) without
+	// error — this is a deliberate hold, not a failure.
+	if newState == StateWorking {
+		openRows, err := s.OpenPermissionRequestsForSpawn(instanceID)
+		if err != nil {
+			return fmt.Errorf("store: working transition open-row check: %w", err)
+		}
+		if len(openRows) > 0 {
+			return nil
+		}
 	}
 	// Non-terminal transitions clear ended_at. This handles the resume
 	// path (SRD §8.1): SessionStart on a resurrected Claude transitions

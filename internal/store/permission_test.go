@@ -4,16 +4,22 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 )
 
+// Canonical UUIDv4 request_token constants for white-box store tests.
+// Mirrors storefix.TestRequestToken{A,B,C} (same values) but declared here
+// to avoid a circular import (package store → storefix → store).
+const (
+	tokenA = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"
+	tokenB = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb"
+	tokenC = "cccccccc-cccc-4ccc-accc-cccccccccccc"
+)
+
 // openTestStore opens a fresh on-disk SQLite store under t.TempDir().
-// Tests use a real *sql.DB rather than mocks so the permission_requests
-// invariants (FK, UNIQUE, transactional DELETE+INSERT) are exercised
-// end to end. The store is cleaned up on test exit.
+// Tests use a real *sql.DB rather than mocks so permission_requests
+// invariants (FK, UNIQUE, transactional INSERT) are exercised end to end.
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "state.db")
@@ -25,8 +31,8 @@ func openTestStore(t *testing.T) *Store {
 	return s
 }
 
-// seedSpawnForPerm inserts a minimal spawn row so permission_requests'
-// FK has a target. The id is the only thing callers care about.
+// seedSpawnForPerm inserts a minimal spawn row so permission_requests' FK
+// has a target. The id is the only thing callers care about.
 func seedSpawnForPerm(t *testing.T, s *Store, id, relayMode string) {
 	t.Helper()
 	if err := s.InsertPending(Spawn{
@@ -39,26 +45,24 @@ func seedSpawnForPerm(t *testing.T, s *Store, id, relayMode string) {
 	}
 }
 
-// readPermRow is a direct-DB read that returns the row's request_id,
-// tool_name, tool_input, and the RAW decision/decision_reason columns
-// (NULL-preserving). Used so tests can distinguish a NULL column from
-// an empty-string column — the public GetPermissionRequest COALESCEs
-// both to "" and would mask the difference.
-func readPermRow(t *testing.T, s *Store, instanceID string) (requestID int64, toolName, toolInput string, decision, reason sql.NullString) {
+// readPermRow reads one permission_requests row by (instanceID, requestToken).
+// Returns raw NULL-preserving decision/decision_reason columns so tests can
+// distinguish NULL from "".
+func readPermRow(t *testing.T, s *Store, instanceID, requestToken string) (requestID int64, toolName, toolInput string, decision, reason sql.NullString) {
 	t.Helper()
 	row := s.db.QueryRow(`
 		SELECT request_id, tool_name, tool_input, decision, decision_reason
 		  FROM permission_requests
-		 WHERE claude_instance_id = ?
-	`, instanceID)
+		 WHERE claude_instance_id = ? AND request_token = ?
+	`, instanceID, requestToken)
 	if err := row.Scan(&requestID, &toolName, &toolInput, &decision, &reason); err != nil {
-		t.Fatalf("scan permission_requests for %s: %v", instanceID, err)
+		t.Fatalf("scan permission_requests for (%s, %s): %v", instanceID, requestToken, err)
 	}
 	return
 }
 
-// countPermRows returns how many permission_requests rows match the
-// given instance id — pins the UNIQUE invariant after an upsert.
+// countPermRows returns the number of permission_requests rows for the given
+// instance (all tokens combined) — used to pin the multi-row append semantics.
 func countPermRows(t *testing.T, s *Store, instanceID string) int {
 	t.Helper()
 	var n int
@@ -70,140 +74,97 @@ func countPermRows(t *testing.T, s *Store, instanceID string) int {
 	return n
 }
 
-// TestUpsertOpenPermissionRequestReplacesPriorRow pins the SRD §6.2
-// invariant: at most one outstanding request per Spawn. A second
-// upsert against the same claude_instance_id must replace (not stack)
-// the prior row, and because the impl is DELETE-then-INSERT the new
-// row gets a FRESH AUTOINCREMENT request_id — a future
-// `INSERT OR REPLACE` refactor would land here too and the test still
-// passes; what the test really catches is "two rows now exist" or
-// "request_id didn't change" — the latter would mean the row was
-// updated in place (which would silently let `decision` persist from
-// a prior decide, breaking the polling loop's preemption detection).
-func TestUpsertOpenPermissionRequestReplacesPriorRow(t *testing.T) {
+// TestUpsertOpenPermissionRequestAppendsRow pins the v2 multi-row semantics
+// per SRD §6.2: at most one outstanding row per (claude_instance_id,
+// request_token). Distinct pairs produce distinct rows (parallel permission
+// requests for the same Spawn coexist); a repeated pair surfaces
+// ErrRequestTokenCollision; the original row is intact.
+func TestUpsertOpenPermissionRequestAppendsRow(t *testing.T) {
 	s := openTestStore(t)
-	const id = "spawn-1"
+	const id = "spawn-append"
 	seedSpawnForPerm(t, s, id, "on")
 
-	if err := s.UpsertOpenPermissionRequest(id, "tool_A", `{"a":1}`); err != nil {
-		t.Fatalf("first upsert: %v", err)
+	// Two distinct tokens → two rows.
+	if err := s.UpsertOpenPermissionRequest(id, tokenA, "tool_A", `{"a":1}`); err != nil {
+		t.Fatalf("upsert tokenA: %v", err)
 	}
-	reqIDA, _, _, _, _ := readPermRow(t, s, id)
-
-	if err := s.UpsertOpenPermissionRequest(id, "tool_B", `{"b":2}`); err != nil {
-		t.Fatalf("second upsert: %v", err)
+	if err := s.UpsertOpenPermissionRequest(id, tokenB, "tool_B", `{"b":2}`); err != nil {
+		t.Fatalf("upsert tokenB: %v", err)
 	}
-
-	if got := countPermRows(t, s, id); got != 1 {
-		t.Fatalf("row count after upsert = %d; want exactly 1 (UNIQUE constraint must hold)", got)
+	if got := countPermRows(t, s, id); got != 2 {
+		t.Fatalf("row count after two distinct upserts = %d; want 2", got)
 	}
 
-	reqIDB, toolName, toolInput, decision, reason := readPermRow(t, s, id)
-	if reqIDB == reqIDA {
-		t.Errorf("request_id unchanged across upsert (%d → %d); DELETE+INSERT replaced inserts should produce a new autoincrement id — an UPDATE-in-place refactor would silently retain a prior `decision` and break preemption detection", reqIDA, reqIDB)
+	// Each row carries correct fields.
+	_, toolName, toolInput, decision, _ := readPermRow(t, s, id, tokenA)
+	if toolName != "tool_A" || toolInput != `{"a":1}` {
+		t.Errorf("tokenA: tool_name=%q tool_input=%q; want tool_A/{\"a\":1}", toolName, toolInput)
 	}
+	if decision.Valid {
+		t.Errorf("tokenA: decision.Valid=true; fresh row must start undecided")
+	}
+
+	_, toolName, toolInput, decision, _ = readPermRow(t, s, id, tokenB)
 	if toolName != "tool_B" || toolInput != `{"b":2}` {
-		t.Errorf("after second upsert: tool_name=%q tool_input=%q; want tool_B / {b:2}", toolName, toolInput)
+		t.Errorf("tokenB: tool_name=%q tool_input=%q; want tool_B/{\"b\":2}", toolName, toolInput)
 	}
-	if decision.Valid || reason.Valid {
-		t.Errorf("upsert wrote non-NULL decision/reason (decision.Valid=%v reason.Valid=%v); a fresh row must start un-decided", decision.Valid, reason.Valid)
+	if decision.Valid {
+		t.Errorf("tokenB: decision.Valid=true; fresh row must start undecided")
 	}
 
-	// FK cascade: deleting the spawn must drop the permission_requests
-	// row too. Mirrors the schema's ON DELETE CASCADE on
-	// permission_requests.claude_instance_id.
+	// Repeated (instance_id, request_token) → ErrRequestTokenCollision.
+	err := s.UpsertOpenPermissionRequest(id, tokenA, "tool_A2", `{"a":99}`)
+	if !errors.Is(err, ErrRequestTokenCollision) {
+		t.Fatalf("third upsert (same token): err = %v; want ErrRequestTokenCollision", err)
+	}
+	// Original row unmodified after collision.
+	_, toolName, toolInput, _, _ = readPermRow(t, s, id, tokenA)
+	if toolName != "tool_A" || toolInput != `{"a":1}` {
+		t.Errorf("tokenA after collision: tool_name=%q tool_input=%q; want original values", toolName, toolInput)
+	}
+
+	// FK cascade: spawn delete drops all permission_requests rows.
 	if _, err := s.db.Exec(`DELETE FROM spawns WHERE claude_instance_id = ?`, id); err != nil {
 		t.Fatalf("delete spawn: %v", err)
 	}
 	if got := countPermRows(t, s, id); got != 0 {
-		t.Errorf("permission_requests row count after spawn delete = %d; want 0 (ON DELETE CASCADE must remove orphan rows)", got)
+		t.Errorf("permission_requests rows after spawn delete = %d; want 0 (ON DELETE CASCADE)", got)
 	}
 }
 
-// TestUpsertOpenPermissionRequestProducesNoRowMidTx pins the
-// transactional atomicity of the DELETE+INSERT pair. A concurrent
-// reader iterating GetPermissionRequest while a writer repeatedly
-// upserts must NEVER observe a moment when the row is gone — that
-// would be the regression signature of someone splitting the tx into
-// two auto-committed statements.
-//
-// The asymmetry to a regression: if the writer ran DELETE + INSERT
-// outside a tx, the reader thread would see sql.ErrNoRows in the
-// window between the two statements. We assert no reader iteration
-// ever returns sql.ErrNoRows after the initial seed.
-func TestUpsertOpenPermissionRequestProducesNoRowMidTx(t *testing.T) {
+// TestUpsertOpenPermissionRequestCollisionLeavesRowIntact asserts that a
+// UNIQUE-constraint collision leaves the original row intact and the error
+// wraps ErrRequestTokenCollision.
+func TestUpsertOpenPermissionRequestCollisionLeavesRowIntact(t *testing.T) {
 	s := openTestStore(t)
-	const id = "spawn-tx"
+	const id = "spawn-collision"
 	seedSpawnForPerm(t, s, id, "on")
-	if err := s.UpsertOpenPermissionRequest(id, "seed", `{}`); err != nil {
-		t.Fatalf("seed upsert: %v", err)
+
+	if err := s.UpsertOpenPermissionRequest(id, tokenA, "original", `{"x":1}`); err != nil {
+		t.Fatalf("initial upsert: %v", err)
 	}
-
-	const writes = 200
-	var (
-		wg          sync.WaitGroup
-		stop        atomic.Bool
-		noRowSeen   atomic.Bool
-		readerReads atomic.Int64
-	)
-
-	// Reader: hammer GetPermissionRequest until the writer signals stop.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for !stop.Load() {
-			_, err := s.GetPermissionRequest(id)
-			readerReads.Add(1)
-			if errors.Is(err, sql.ErrNoRows) {
-				noRowSeen.Store(true)
-				return
-			}
-			if err != nil {
-				t.Errorf("reader: unexpected err: %v", err)
-				return
-			}
-		}
-	}()
-
-	// Writer: keep replacing the row.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		defer stop.Store(true)
-		for i := 0; i < writes; i++ {
-			if err := s.UpsertOpenPermissionRequest(id, "tool", `{}`); err != nil {
-				t.Errorf("writer iter %d: %v", i, err)
-				return
-			}
-		}
-	}()
-
-	wg.Wait()
-
-	if noRowSeen.Load() {
-		t.Fatalf("reader observed sql.ErrNoRows during concurrent upsert sequence — DELETE+INSERT is not atomic; was the surrounding tx removed?")
+	if err := s.UpsertOpenPermissionRequest(id, tokenA, "collision", `{"x":2}`); !errors.Is(err, ErrRequestTokenCollision) {
+		t.Fatalf("collision upsert: err = %v; want ErrRequestTokenCollision", err)
 	}
-	if readerReads.Load() == 0 {
-		t.Fatalf("reader observed zero iterations; concurrency test didn't actually run")
+	_, toolName, toolInput, decision, _ := readPermRow(t, s, id, tokenA)
+	if toolName != "original" || toolInput != `{"x":1}` {
+		t.Errorf("row after collision: tool_name=%q tool_input=%q; want original values", toolName, toolInput)
+	}
+	if decision.Valid {
+		t.Errorf("row after collision: decision.Valid=true; must remain undecided")
 	}
 }
 
-// TestDecidePermissionRequestOnlyAffectsOpenRow pins the race-free
-// first-call-wins behavior the api.Decide verb depends on. The first
-// decide flips decision from NULL → "allow"/"deny" and returns
-// updated=true; a second decide on the same row finds decision IS NOT
-// NULL, matches no rows, and returns updated=false. The verb layer
-// uses that signal to disambiguate ErrAlreadyDecided from
-// ErrNoOpenPermissionRequest via a follow-up SELECT.
+// TestDecidePermissionRequestOnlyAffectsOpenRow pins first-call-wins behavior.
 func TestDecidePermissionRequestOnlyAffectsOpenRow(t *testing.T) {
 	s := openTestStore(t)
 	const id = "spawn-decide"
 	seedSpawnForPerm(t, s, id, "on")
-	if err := s.UpsertOpenPermissionRequest(id, "Read", `{"file":"/etc/hosts"}`); err != nil {
+	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Read", `{"file":"/etc/hosts"}`); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
-	updated, err := s.DecidePermissionRequest(id, "allow", "trusted")
+	updated, err := s.DecidePermissionRequest(id, tokenA, "allow", "trusted")
 	if err != nil {
 		t.Fatalf("first decide: %v", err)
 	}
@@ -211,43 +172,34 @@ func TestDecidePermissionRequestOnlyAffectsOpenRow(t *testing.T) {
 		t.Fatalf("first decide returned updated=false; want true (open row should be flipped)")
 	}
 
-	updated, err = s.DecidePermissionRequest(id, "deny", "second attempt")
+	updated, err = s.DecidePermissionRequest(id, tokenA, "deny", "second attempt")
 	if err != nil {
 		t.Fatalf("second decide: %v", err)
 	}
 	if updated {
-		t.Fatalf("second decide returned updated=true; want false (already-decided row must NOT be re-flipped — first-call-wins per SRD §6.2)")
+		t.Fatalf("second decide returned updated=true; want false (first-call-wins per SRD §6.2)")
 	}
 
-	// And the row's persisted decision must be the FIRST one — the
-	// guard `WHERE decision IS NULL` must prevent the second UPDATE
-	// from clobbering reason too.
-	_, _, _, decision, reason := readPermRow(t, s, id)
+	_, _, _, decision, reason := readPermRow(t, s, id, tokenA)
 	if !decision.Valid || decision.String != "allow" {
-		t.Errorf("decision = (%v, %q); want (valid, allow) — first-call-wins violated", decision.Valid, decision.String)
+		t.Errorf("decision = (%v, %q); want (valid, allow)", decision.Valid, decision.String)
 	}
 	if !reason.Valid || reason.String != "trusted" {
-		t.Errorf("reason = (%v, %q); want (valid, trusted) — second decide leaked into reason column", reason.Valid, reason.String)
+		t.Errorf("reason = (%v, %q); want (valid, trusted)", reason.Valid, reason.String)
 	}
 }
 
-// TestDecidePermissionRequestEmptyReasonStored pins the consumer-side
-// behavior for decide-with-empty-reason: GetPermissionRequest reports
-// DecisionReason as the empty string, never as a special "absent"
-// sentinel. The underlying column is intentionally NULL (the envelope
-// default "Denied by orchestrator" is applied at envelope-encode time,
-// not at DB-write time — see internal/api/decide_test.go for the
-// matching api-layer pin), and GetPermissionRequest COALESCEs NULL to
-// "" so callers don't have to NULL-check.
+// TestDecidePermissionRequestEmptyReasonStored pins that an empty reason
+// surfaces as "" via GetPermissionRequest's COALESCE (not as a special sentinel).
 func TestDecidePermissionRequestEmptyReasonStored(t *testing.T) {
 	s := openTestStore(t)
 	const id = "spawn-empty-reason"
 	seedSpawnForPerm(t, s, id, "on")
-	if err := s.UpsertOpenPermissionRequest(id, "Read", `{}`); err != nil {
+	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Read", `{}`); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
-	updated, err := s.DecidePermissionRequest(id, "deny", "")
+	updated, err := s.DecidePermissionRequest(id, tokenA, "deny", "")
 	if err != nil {
 		t.Fatalf("decide: %v", err)
 	}
@@ -255,7 +207,7 @@ func TestDecidePermissionRequestEmptyReasonStored(t *testing.T) {
 		t.Fatalf("decide returned updated=false; want true")
 	}
 
-	got, err := s.GetPermissionRequest(id)
+	got, err := s.GetPermissionRequest(id, tokenA)
 	if err != nil {
 		t.Fatalf("GetPermissionRequest: %v", err)
 	}
@@ -263,34 +215,26 @@ func TestDecidePermissionRequestEmptyReasonStored(t *testing.T) {
 		t.Errorf("Decision = %q; want deny", got.Decision)
 	}
 	if got.DecisionReason != "" {
-		t.Errorf("DecisionReason = %q; want \"\" (empty reason must surface as empty string via the COALESCE in GetPermissionRequest)", got.DecisionReason)
+		t.Errorf("DecisionReason = %q; want \"\" (COALESCE must map NULL to empty string)", got.DecisionReason)
 	}
 }
 
-// TestGetPermissionRequestExposesRequestIDAndCreatedAt pins SRD §SR-2.1
-// for Epic t1.jm1.61: GetPermissionRequest projects request_id and
-// created_at into the returned PermissionRow so api.Get can render them
-// on the `permission_request` field of the `get` verb's response.
-//
-// Cross-checks RequestID against the raw read via readPermRow (the
-// shared helper above) to catch a silent drift where the SELECT scans
-// the columns in the wrong order. Verifies CreatedAt is non-zero and
-// within a sane window of the seed time — pins that the TIMESTAMP
-// column scans into time.Time rather than landing as the zero value.
+// TestGetPermissionRequestExposesRequestIDAndCreatedAt pins SR-2.1:
+// GetPermissionRequest projects request_id, created_at, and request_token.
 func TestGetPermissionRequestExposesRequestIDAndCreatedAt(t *testing.T) {
 	s := openTestStore(t)
 	const id = "spawn-fields"
 	seedSpawnForPerm(t, s, id, "on")
 
 	before := time.Now().UTC().Add(-1 * time.Second)
-	if err := s.UpsertOpenPermissionRequest(id, "Read", `{"file":"/tmp/x"}`); err != nil {
+	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Read", `{"file":"/tmp/x"}`); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 	after := time.Now().UTC().Add(1 * time.Second)
 
-	rawReqID, _, _, _, _ := readPermRow(t, s, id)
+	rawReqID, _, _, _, _ := readPermRow(t, s, id, tokenA)
 
-	got, err := s.GetPermissionRequest(id)
+	got, err := s.GetPermissionRequest(id, tokenA)
 	if err != nil {
 		t.Fatalf("GetPermissionRequest: %v", err)
 	}
@@ -300,8 +244,11 @@ func TestGetPermissionRequestExposesRequestIDAndCreatedAt(t *testing.T) {
 	if got.RequestID != rawReqID {
 		t.Errorf("RequestID = %d; raw read returned %d (SELECT projection may be out of order)", got.RequestID, rawReqID)
 	}
+	if got.RequestToken != tokenA {
+		t.Errorf("RequestToken = %q; want %q", got.RequestToken, tokenA)
+	}
 	if got.CreatedAt.IsZero() {
-		t.Errorf("CreatedAt is zero; want a populated TIMESTAMP scanned from the column")
+		t.Errorf("CreatedAt is zero; want populated TIMESTAMP")
 	}
 	if got.CreatedAt.Before(before) || got.CreatedAt.After(after) {
 		t.Errorf("CreatedAt = %v; want in [%v, %v]", got.CreatedAt, before, after)
@@ -314,50 +261,99 @@ func TestGetPermissionRequestExposesRequestIDAndCreatedAt(t *testing.T) {
 	}
 }
 
-// TestDecidePermissionRequestTimeoutThenAllowIsRejected pins the
-// acceptance criterion for b.uer: after runRelay's timeout writes
-// DecidePermissionRequest("deny","timeout"), a subsequent call with
-// ("allow","anything") must return (false, nil) — first-call-wins is
-// race-free and the timeout decision must not be clobberable.
-//
-// This simulates the exact sequence the timeout path produces:
-//  1. Upsert opens the row (NULL decision).
-//  2. Timeout fires → DecidePermissionRequest("deny","timeout") → true.
-//  3. Later caller tries DecidePermissionRequest("allow","user-approved") → false.
-//  4. Row still reads deny/timeout.
+// TestDecidePermissionRequestTimeoutThenAllowIsRejected pins that a timeout
+// decide is not clobberable by a subsequent allow (first-call-wins per SRD §6.2).
 func TestDecidePermissionRequestTimeoutThenAllowIsRejected(t *testing.T) {
 	s := openTestStore(t)
 	const id = "spawn-timeout-seq"
 	seedSpawnForPerm(t, s, id, "on")
 
-	if err := s.UpsertOpenPermissionRequest(id, "Bash", `{"command":"ls"}`); err != nil {
+	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{"command":"ls"}`); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
-	// Step 2: timeout path writes deny/timeout.
-	updated, err := s.DecidePermissionRequest(id, "deny", "timeout")
+	updated, err := s.DecidePermissionRequest(id, tokenA, "deny", DecisionReasonTimeout)
 	if err != nil {
 		t.Fatalf("timeout decide: %v", err)
 	}
 	if !updated {
-		t.Fatalf("timeout decide returned updated=false; want true (open row must accept first decide)")
+		t.Fatalf("timeout decide returned updated=false; want true")
 	}
 
-	// Step 3: a subsequent allow attempt must be rejected (first-call-wins).
-	updated, err = s.DecidePermissionRequest(id, "allow", "user-approved")
+	updated, err = s.DecidePermissionRequest(id, tokenA, "allow", "user-approved")
 	if err != nil {
 		t.Fatalf("subsequent allow decide: %v", err)
 	}
 	if updated {
-		t.Fatalf("subsequent allow decide returned updated=true; want false (timeout decision must not be clobberable — first-call-wins per SRD §6.2)")
+		t.Fatalf("subsequent allow returned updated=true; timeout decision must not be clobberable")
 	}
 
-	// Step 4: row must still carry deny/timeout, not allow/user-approved.
-	_, _, _, decision, reason := readPermRow(t, s, id)
+	_, _, _, decision, reason := readPermRow(t, s, id, tokenA)
 	if !decision.Valid || decision.String != "deny" {
-		t.Errorf("decision = (%v, %q); want (valid, deny) — timeout decision must persist", decision.Valid, decision.String)
+		t.Errorf("decision = (%v, %q); want (valid, deny)", decision.Valid, decision.String)
 	}
-	if !reason.Valid || reason.String != "timeout" {
-		t.Errorf("reason = (%v, %q); want (valid, timeout) — timeout reason must persist", reason.Valid, reason.String)
+	if !reason.Valid || reason.String != DecisionReasonTimeout {
+		t.Errorf("reason = (%v, %q); want (valid, %q)", reason.Valid, reason.String, DecisionReasonTimeout)
+	}
+}
+
+// TestAmbiguousDecide asserts ErrAmbiguousRequest is returned when empty
+// token + N>1 open rows, and is NOT returned when only 1 open row exists.
+func TestAmbiguousDecide(t *testing.T) {
+	t.Run("two_open_rows", func(t *testing.T) {
+		s := openTestStore(t)
+		const id = "spawn-ambiguous"
+		seedSpawnForPerm(t, s, id, "on")
+		if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{}`); err != nil {
+			t.Fatalf("upsert tokenA: %v", err)
+		}
+		if err := s.UpsertOpenPermissionRequest(id, tokenB, "Read", `{}`); err != nil {
+			t.Fatalf("upsert tokenB: %v", err)
+		}
+
+		updated, err := s.DecidePermissionRequest(id, "", "allow", "")
+		if !errors.Is(err, ErrAmbiguousRequest) {
+			t.Fatalf("err = %v; want ErrAmbiguousRequest", err)
+		}
+		if updated {
+			t.Errorf("updated = true on ErrAmbiguousRequest; want false")
+		}
+		// Both rows must remain undecided.
+		_, _, _, decA, _ := readPermRow(t, s, id, tokenA)
+		if decA.Valid {
+			t.Errorf("tokenA decided after ErrAmbiguousRequest; want NULL decision")
+		}
+		_, _, _, decB, _ := readPermRow(t, s, id, tokenB)
+		if decB.Valid {
+			t.Errorf("tokenB decided after ErrAmbiguousRequest; want NULL decision")
+		}
+	})
+
+	t.Run("one_open_row", func(t *testing.T) {
+		s := openTestStore(t)
+		const id = "spawn-single"
+		seedSpawnForPerm(t, s, id, "on")
+		if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{}`); err != nil {
+			t.Fatalf("upsert tokenA: %v", err)
+		}
+
+		_, err := s.DecidePermissionRequest(id, "", "allow", "")
+		if errors.Is(err, ErrAmbiguousRequest) {
+			t.Fatalf("ErrAmbiguousRequest returned for single open row; must not trigger")
+		}
+	})
+}
+
+// TestDecisionReasonCanonicalConstants pins the exact string values of the
+// three DecisionReason* constants per SR-1.3.
+func TestDecisionReasonCanonicalConstants(t *testing.T) {
+	if DecisionReasonOperator != "operator" {
+		t.Errorf("DecisionReasonOperator = %q; want %q", DecisionReasonOperator, "operator")
+	}
+	if DecisionReasonTimeout != "timeout" {
+		t.Errorf("DecisionReasonTimeout = %q; want %q", DecisionReasonTimeout, "timeout")
+	}
+	if DecisionReasonFindMissing != "find_missing" {
+		t.Errorf("DecisionReasonFindMissing = %q; want %q", DecisionReasonFindMissing, "find_missing")
 	}
 }

@@ -18,26 +18,34 @@ var ErrRelayModeOff = errors.New("ErrRelayModeOff")
 // neither "allow" nor "deny". SRD §6.3 pins the two-valued surface.
 var ErrInvalidDecision = errors.New("ErrInvalidDecision")
 
+// ErrMissingRequestToken is returned by Decide when RequestToken is empty.
+// The token uniquely identifies the permission-request row to decide; without
+// it the call is rejected at the API layer regardless of CLI gating.
+var ErrMissingRequestToken = errors.New("ErrMissingRequestToken")
+
 // DecideStore is the narrow store surface Decide needs.
 type DecideStore interface {
 	GetSpawn(instanceID string) (Spawn, error)
-	DecidePermissionRequest(instanceID, decision, reason string) (bool, error)
-	GetPermissionRequest(instanceID string) (PermissionRow, error)
+	DecidePermissionRequest(instanceID, requestToken, decision, reason string) (bool, error)
+	GetPermissionRequest(instanceID, requestToken string) (PermissionRow, error)
 }
 
 // DecideParams is the typed parameter shape for the decide verb.
-// Decision is either "allow" or "deny"; Reason is the optional
-// free-text message the orchestrator wants surfaced to Claude. On a
-// deny with an empty Reason the envelope defaults to
-// "Denied by orchestrator" — see hook.EncodeDecision.
+// Decision is either "allow" or "deny"; Reason is accepted for wire
+// compatibility but is currently discarded — the canonical
+// DecisionReasonOperator is persisted regardless of its value.
 type DecideParams struct {
 	// ClaudeInstanceID identifies the Spawn whose open permission request is
 	// being decided.
 	ClaudeInstanceID string `json:"claude_instance_id"`
+	// RequestToken is the UUIDv4 token minted by runRelay for the specific
+	// permission request being decided. Required; empty string is rejected at
+	// the API layer (ErrMissingRequestToken) as well as at the CLI layer.
+	RequestToken string `json:"request_token"`
 	// Decision is the orchestrator's verdict: "allow" or "deny".
 	Decision string `json:"decision"`
-	// Reason is the optional free-text message surfaced to Claude on deny.
-	// When empty on a deny, the hook envelope defaults to "Denied by orchestrator".
+	// Reason is currently discarded on deny; the canonical DecisionReasonOperator
+	// is persisted regardless. Reserved for future schema additions.
 	Reason string `json:"reason"`
 }
 
@@ -47,18 +55,27 @@ type DecideParams struct {
 type DecideResult struct{}
 
 // Decide writes the orchestrator's allow/deny verdict to the open
-// permission_requests row (SRD §6.2). Behavior:
+// permission_requests row identified by the (claude_instance_id, request_token)
+// pair (SRD §6.2). request_token is required — it uniquely identifies the
+// specific row minted by runRelay for this request. Behavior:
 //
+//   - Empty request_token → ErrMissingRequestToken (validated at this layer,
+//     not just at the CLI).
 //   - Unknown id → ErrSpawnNotFound from the store.
 //   - Spawn's relay_mode != "on" → ErrRelayModeOff. decide is a
 //     no-op outside relay mode; the verb refuses rather than write
 //     a row Claude will never look at.
 //   - Invalid decision string → ErrInvalidDecision.
-//   - Single-statement UPDATE writes (decision, reason, updated_at)
-//     guarded by `decision IS NULL`. RowsAffected==0 disambiguates
-//     "no row" (ErrNoOpenPermissionRequest) from "already decided"
-//     (ErrAlreadyDecided) via a follow-up SELECT.
+//   - Single-statement UPDATE writes (decision, decision_reason, decided_at)
+//     guarded by `decision IS NULL AND request_token = ?`.
+//     RowsAffected==0 disambiguates "no row" (ErrNoOpenPermissionRequest)
+//     from "already decided" (ErrAlreadyDecided) via a follow-up SELECT.
+//   - params.Reason is currently discarded; DecisionReasonOperator is always
+//     written for deny decisions regardless of its value.
 func Decide(s DecideStore, params DecideParams) (DecideResult, error) {
+	if params.RequestToken == "" {
+		return DecideResult{}, fmt.Errorf("%w: request_token is required", ErrMissingRequestToken)
+	}
 	if params.Decision != "allow" && params.Decision != "deny" {
 		return DecideResult{}, fmt.Errorf("%w: %q", ErrInvalidDecision, params.Decision)
 	}
@@ -72,7 +89,14 @@ func Decide(s DecideStore, params DecideParams) (DecideResult, error) {
 			ErrRelayModeOff, params.ClaudeInstanceID, row.RelayMode)
 	}
 
-	updated, err := s.DecidePermissionRequest(params.ClaudeInstanceID, params.Decision, params.Reason)
+	// Use the canonical operator reason for deny; empty string for allow.
+	// decision_reason in the DB is always one of the store.DecisionReason*
+	// constants for operator-originated decisions.
+	dbReason := ""
+	if params.Decision == "deny" {
+		dbReason = store.DecisionReasonOperator
+	}
+	updated, err := s.DecidePermissionRequest(params.ClaudeInstanceID, params.RequestToken, params.Decision, dbReason)
 	if err != nil {
 		return DecideResult{}, err
 	}
@@ -84,9 +108,8 @@ func Decide(s DecideStore, params DecideParams) (DecideResult, error) {
 	// already written. Disambiguate via a follow-up SELECT. The race
 	// window here is benign: if a concurrent caller has written a
 	// decision since our UPDATE, we'll report ErrAlreadyDecided; if
-	// the row was preempted by a fresh DELETE-INSERT we'll see
-	// "no row" again and report ErrNoOpenPermissionRequest.
-	pr, err := s.GetPermissionRequest(params.ClaudeInstanceID)
+	// the row no longer exists we'll report ErrNoOpenPermissionRequest.
+	pr, err := s.GetPermissionRequest(params.ClaudeInstanceID, params.RequestToken)
 	if errors.Is(err, sql.ErrNoRows) {
 		return DecideResult{}, fmt.Errorf("%w: %s", store.ErrNoOpenPermissionRequest, params.ClaudeInstanceID)
 	}
@@ -114,6 +137,7 @@ func Decide(s DecideStore, params DecideParams) (DecideResult, error) {
 // CLI: agent-director decide
 //
 // Errors:
+//   - [ErrMissingRequestToken]: RequestToken is empty.
 //   - [ErrSpawnNotFound]: no row exists for the instance id.
 //   - [ErrRelayModeOff]: the Spawn's relay_mode is not "on".
 //   - [ErrNoOpenPermissionRequest]: no undecided permission request exists.

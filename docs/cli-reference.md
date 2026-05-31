@@ -99,7 +99,7 @@ Return the full DB row for a tracked Spawn (id, parent, state, cwd, session name
 - `started_at` (timestamp): Row insert time.
 - `last_seen_at` (timestamp): Last hook UPSERT time.
 - `ended_at` (timestamp?): Set when state moves to ended (omitted while live).
-- `permission_request` (object?): Open permission request awaiting orchestrator decision. Present only when state == check_permission AND an undecided permission_requests row exists for the spawn; omitted entirely (not null) otherwise. Sub-fields: request_id (int) — autoincrement id of the row; tool_name (string) — Claude Code tool that triggered the request; tool_input (string) — raw JSON string of the tool's input as stored, NOT a nested object (consumers parse it themselves); requested_at (RFC3339 timestamp) — created_at of the row.
+- `permission_requests` ([]object): All open (undecided) permission requests awaiting orchestrator decision. Always a non-null array ([] when empty). Populated only when state == check_permission; empty array for all other states. Each element: request_id (int) — autoincrement row id; request_token (string) — UUIDv4 token minted by runRelay, pass to decide verb to target this row; tool_name (string) — Claude Code tool that triggered the request; tool_input (string) — raw JSON string of the tool's input, NOT a nested object (consumers parse it themselves); requested_at (RFC3339 timestamp) — created_at of the row.
 
 ### Errors
 
@@ -171,8 +171,9 @@ Orchestrator's allow/deny verdict on an open PermissionRequest. Race-free first-
 ### Parameters
 
 - `claude_instance_id` (string, required): Id of the Spawn sitting on the PermissionRequest.
+- `request_token` (string, required): UUIDv4 token identifying the specific permission request to decide. Minted by runRelay per-request; required to enforce per-row isolation when multiple concurrent requests exist for the same Spawn.
 - `decision` (string, required): Either `allow` or `deny`.
-- `reason` (string, optional): Free-text message surfaced to Claude. On `deny` with empty reason the envelope defaults to "Denied by orchestrator".
+- `reason` (string, optional): Currently discarded on deny; the canonical DecisionReasonOperator is persisted regardless. Reserved for future schema additions.
 
 ### Result
 
@@ -180,10 +181,12 @@ _None._
 
 ### Errors
 
+- `ErrMissingRequestToken`
 - `ErrSpawnNotFound`
 - `ErrRelayModeOff`
 - `ErrNoOpenPermissionRequest`
 - `ErrAlreadyDecided`
+- `ErrAmbiguousRequest`
 - `ErrInvalidDecision`
 
 ## resume

@@ -1,8 +1,6 @@
 package api
 
 import (
-	"database/sql"
-	"errors"
 	"time"
 )
 
@@ -13,6 +11,9 @@ import (
 type PermissionRequestInfo struct {
 	// RequestID is the autoincrement primary key of the permission_requests row.
 	RequestID int64 `json:"request_id"`
+	// RequestToken is the UUIDv4 token minted by runRelay for this request.
+	// Callers pass it back to the decide verb to target a specific row.
+	RequestToken string `json:"request_token"`
 	// ToolName is the Claude Code tool that triggered the permission request
 	// (e.g. "Bash", "Write").
 	ToolName string `json:"tool_name"`
@@ -64,10 +65,12 @@ type SpawnRow struct {
 	// EndedAt is set when state moves to ended. Omitted from JSON (omitempty)
 	// while the Spawn is live.
 	EndedAt *time.Time `json:"ended_at,omitempty"`
-	// PermissionRequest is the open permission request awaiting an orchestrator
-	// decision. Present only when state is check_permission AND an undecided
-	// permission_requests row exists; omitted entirely (not null) otherwise.
-	PermissionRequest *PermissionRequestInfo `json:"permission_request,omitempty"`
+	// PermissionRequests is the slice of open permission requests awaiting
+	// orchestrator decisions. Populated only when state is check_permission;
+	// always a non-nil slice (encodes as [] when empty, never null, never
+	// omitted). Callers use the request_token of each element to target a
+	// specific row with the decide verb.
+	PermissionRequests []PermissionRequestInfo `json:"permission_requests"`
 }
 
 // GetStore is the narrow store surface Get needs. Matches the existing
@@ -75,40 +78,40 @@ type SpawnRow struct {
 // permission-fetch branch is testable without raw SQL fixtures.
 type GetStore interface {
 	GetSpawn(instanceID string) (Spawn, error)
-	GetPermissionRequest(instanceID string) (PermissionRow, error)
+	OpenPermissionRequestsForSpawn(instanceID string) ([]PermissionRow, error)
 }
 
 // Get returns the full Spawn row for the given claude_instance_id. Missing
 // rows surface store.ErrSpawnNotFound for the CLI to translate.
 //
-// When the spawn's state is `check_permission` AND an open
-// permission_requests row exists for it (Decision == ""), the response's
-// PermissionRequest pointer is populated. Otherwise the pointer stays
-// nil and omitempty drops it from the JSON output.
+// When the spawn's state is `check_permission`, all open (undecided)
+// permission_requests rows are fetched and projected into the
+// PermissionRequests slice. For all other states the slice is left as
+// an empty non-nil slice (encodes as []).
 //
-// Req-review M1: the open-row predicate gates on `pr.Decision == ""`,
-// NOT just on sql.ErrNoRows — a decided row from a prior cycle is
-// treated identically to "no row." This matters when the same spawn
-// re-enters check_permission after a previous decision was written.
+// Open-rows-only contract: closed (decided) rows are never visible in
+// the PermissionRequests output. OpenPermissionRequestsForSpawn enforces
+// this at the SQL layer (decision IS NULL predicate).
 func Get(s GetStore, instanceID string) (SpawnRow, error) {
 	row, err := s.GetSpawn(instanceID)
 	if err != nil {
 		return SpawnRow{}, err
 	}
 	out := SpawnRow{
-		ClaudeInstanceID: row.ClaudeInstanceID,
-		ParentID:         row.ParentID,
-		State:            row.State,
-		CWD:              row.CWD,
-		TmuxSessionName:  row.TmuxSessionName,
-		ClaudeArgs:       row.ClaudeArgs,
-		RelayMode:        row.RelayMode,
-		JSONLPath:        row.JSONLPath,
-		ClaudeSessionID:  row.ClaudeSessionID,
-		Labels:           row.Labels,
-		StartedAt:        row.StartedAt,
-		LastSeenAt:       row.LastSeenAt,
-		EndedAt:          row.EndedAt,
+		ClaudeInstanceID:   row.ClaudeInstanceID,
+		ParentID:           row.ParentID,
+		State:              row.State,
+		CWD:                row.CWD,
+		TmuxSessionName:    row.TmuxSessionName,
+		ClaudeArgs:         row.ClaudeArgs,
+		RelayMode:          row.RelayMode,
+		JSONLPath:          row.JSONLPath,
+		ClaudeSessionID:    row.ClaudeSessionID,
+		Labels:             row.Labels,
+		StartedAt:          row.StartedAt,
+		LastSeenAt:         row.LastSeenAt,
+		EndedAt:            row.EndedAt,
+		PermissionRequests: []PermissionRequestInfo{},
 	}
 	// Normalize: callers reading `claude_args:null` cannot distinguish
 	// from `[]`; always emit a non-nil slice for the JSON output.
@@ -120,21 +123,19 @@ func Get(s GetStore, instanceID string) (SpawnRow, error) {
 	}
 
 	if out.State == "check_permission" {
-		pr, err := s.GetPermissionRequest(instanceID)
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
-			// No open row — field stays nil.
-		case err != nil:
+		prs, err := s.OpenPermissionRequestsForSpawn(instanceID)
+		if err != nil {
 			return SpawnRow{}, err
-		case pr.Decision == "":
-			out.PermissionRequest = &PermissionRequestInfo{
-				RequestID:   pr.RequestID,
-				ToolName:    pr.ToolName,
-				ToolInput:   pr.ToolInput,
-				RequestedAt: pr.CreatedAt,
-			}
 		}
-		// pr.Decision != "" → decided in a prior cycle, treat as absent.
+		for _, pr := range prs {
+			out.PermissionRequests = append(out.PermissionRequests, PermissionRequestInfo{
+				RequestID:    pr.RequestID,
+				RequestToken: pr.RequestToken,
+				ToolName:     pr.ToolName,
+				ToolInput:    pr.ToolInput,
+				RequestedAt:  pr.CreatedAt,
+			})
+		}
 	}
 
 	return out, nil
@@ -142,7 +143,7 @@ func Get(s GetStore, instanceID string) (SpawnRow, error) {
 
 // Get returns the full DB row for a tracked Spawn: state, cwd, tmux session
 // name, relay mode, session id, labels, timestamps, and (when applicable) the
-// open permission-request details.
+// open permission-requests slice.
 //
 // CLI: agent-director get
 //

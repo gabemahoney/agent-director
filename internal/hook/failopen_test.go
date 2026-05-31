@@ -32,13 +32,13 @@ func (f *flakyStore) SetSessionID(string, string) error {
 	f.sessionN++
 	return f.sessionErr
 }
-func (f *flakyStore) UpsertOpenPermissionRequest(string, string, string) error {
+func (f *flakyStore) UpsertOpenPermissionRequest(_, _, _, _ string) error {
 	return nil
 }
-func (f *flakyStore) GetPermissionRequest(string) (store.PermissionRow, error) {
+func (f *flakyStore) GetPermissionRequest(_, _ string) (store.PermissionRow, error) {
 	return store.PermissionRow{}, nil
 }
-func (f *flakyStore) DecidePermissionRequest(string, string, string) (bool, error) {
+func (f *flakyStore) DecidePermissionRequest(_, _, _, _ string) (bool, error) {
 	return false, nil
 }
 

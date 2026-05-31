@@ -68,6 +68,7 @@ var packageOf = map[string]string{
 	"ErrSpawnNotFound":           "store",
 	"ErrNoOpenPermissionRequest": "store",
 	"ErrAlreadyDecided":          "store",
+	"ErrAmbiguousRequest":        "store",
 
 	// internal/tmux
 	// ErrTmuxKillFailed and ErrTmuxListPanesFailed are intentionally absent:
@@ -97,6 +98,7 @@ var packageOf = map[string]string{
 	"ErrJsonlMissing":         "api",
 	"ErrRelayModeOff":         "api",
 	"ErrInvalidDecision":      "api",
+	"ErrMissingRequestToken":  "api",
 
 	// ErrUnknownTool is intentionally absent: it was moved from pkg/api/errnames
 	// to internal/mcp in Task 7 (dispatch-level error, not a verb-surface error).

@@ -87,8 +87,11 @@ func TestFailClosedTimeoutWritesDBBeforeStdout(t *testing.T) {
 		t.Fatalf("DecidePermissionRequest was never called; expected one call with (deny, timeout)")
 	}
 	dc := st.decideArgs[0]
-	if dc.InstanceID != instanceID || dc.Decision != "deny" || dc.Reason != "timeout" {
-		t.Errorf("decideArgs[0] = %+v; want {%s deny timeout}", dc, instanceID)
+	if dc.InstanceID != instanceID || dc.Decision != "deny" || dc.Reason != store.DecisionReasonTimeout {
+		t.Errorf("decideArgs[0] = %+v; want {%s deny %s}", dc, instanceID, store.DecisionReasonTimeout)
+	}
+	if dc.RequestToken == "" {
+		t.Errorf("decideArgs[0].RequestToken is empty; want non-empty minted token")
 	}
 
 	// --- Assert working transition happened ---
@@ -162,7 +165,7 @@ func TestRelayTimeoutPersistsDenyDecision(t *testing.T) {
 	// At least one decide call must have decision=deny reason=timeout.
 	var foundDeny bool
 	for _, d := range st.decideArgs {
-		if d.Decision == "deny" && d.Reason == "timeout" {
+		if d.Decision == "deny" && d.Reason == store.DecisionReasonTimeout {
 			foundDeny = true
 			break
 		}

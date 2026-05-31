@@ -34,6 +34,10 @@ func (f *fakeFindMissingStore) MarkSpawnMissing(id string) error {
 	return nil
 }
 
+func (f *fakeFindMissingStore) CloseOrphanedPermissionRequests(_ string) error {
+	return nil
+}
+
 // fakeProber returns a fixed set; nil err.
 type fakeProber struct {
 	set map[string]struct{}
