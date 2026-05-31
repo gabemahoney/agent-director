@@ -21,7 +21,7 @@ import (
 func TestGetPermissionOpenRow(t *testing.T) {
 	s, _ := apitest.SeedDecideFixture(t, "on")
 	const rawInput = `{"file":"/tmp/x","mode":"rw"}`
-	if err := s.UpsertOpenPermissionRequest("id-d-1", storefix.TestRequestTokenA, "Read", rawInput); err != nil {
+	if err := s.UpsertOpenPermissionRequest("id-d-1", storefix.TestRequestTokenA, "Read", rawInput, 0); err != nil {
 		t.Fatalf("UpsertOpenPermissionRequest: %v", err)
 	}
 
@@ -205,7 +205,7 @@ func TestGetPermissionToolInputBytePassthrough(t *testing.T) {
 	// Non-canonical whitespace + key order. Any JSON round-trip would
 	// produce {"command":"ls","extra":"x"} with no spaces.
 	const noncanonical = `{ "command" : "ls" , "extra":"x" }`
-	if err := s.UpsertOpenPermissionRequest("id-d-1", storefix.TestRequestTokenA, "Bash", noncanonical); err != nil {
+	if err := s.UpsertOpenPermissionRequest("id-d-1", storefix.TestRequestTokenA, "Bash", noncanonical, 0); err != nil {
 		t.Fatalf("UpsertOpenPermissionRequest: %v", err)
 	}
 

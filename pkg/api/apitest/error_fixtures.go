@@ -117,7 +117,7 @@ func SeedErrAlreadyDecided(t *testing.T) (*store.Store, string) {
 	s, dbPath := openErrStore(t)
 	const id = "id-err-ad-1"
 	insertErrRow(t, s, id, store.StateCheckPermission, "on")
-	if err := s.UpsertOpenPermissionRequest(id, storefix.TestRequestTokenA, "Bash", `{"cmd":"echo"}`); err != nil {
+	if err := s.UpsertOpenPermissionRequest(id, storefix.TestRequestTokenA, "Bash", `{"cmd":"echo"}`, 0); err != nil {
 		t.Fatalf("SeedErrAlreadyDecided: UpsertOpenPermissionRequest: %v", err)
 	}
 	// Pre-decide the row so the next decide() sees RowsAffected==0 and
