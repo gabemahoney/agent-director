@@ -116,9 +116,12 @@ func (s *Store) UpsertOpenPermissionRequest(instanceID, requestToken, toolName, 
 			excess := currentCount - cap
 			_, err = tx.Exec(`
 				DELETE FROM permission_requests
-				 WHERE decision IS NOT NULL
-				 ORDER BY decided_at ASC
-				 LIMIT ?
+				 WHERE rowid IN (
+				     SELECT rowid FROM permission_requests
+				      WHERE decision IS NOT NULL
+				      ORDER BY decided_at ASC
+				      LIMIT ?
+				 )
 			`, excess)
 			if err != nil {
 				_ = tx.Rollback()

@@ -612,3 +612,283 @@ func TestDecisionReasonCanonicalConstants(t *testing.T) {
 		t.Errorf("DecisionReasonFindMissing = %q; want %q", DecisionReasonFindMissing, "find_missing")
 	}
 }
+
+// openTempStoreWithPath opens a fresh on-disk SQLite store under t.TempDir()
+// and returns both the store and the DB file path. Used by cap-eviction tests
+// that need a raw sql.DB connection to backdate decided_at timestamps.
+// (Cannot use storefix.OpenTempStore here: storefix imports store, which would
+// create a circular import from package store test files.)
+func openTempStoreWithPath(t *testing.T) (*Store, string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "state.db")
+	s, err := OpenOrInit(path)
+	if err != nil {
+		t.Fatalf("OpenOrInit(%q): %v", path, err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s, path
+}
+
+// seedClosedPermRequests seeds n decided (closed) permission_requests rows for
+// instanceID with deterministic decided_at values. The spawn row is created if
+// absent. Returns tokens in insertion order (index 0 = oldest decided_at).
+// Mirrors storefix.SeedClosedPermissionRequests without the cross-package import.
+func seedClosedPermRequests(t *testing.T, s *Store, dbPath, instanceID string, n int, baseTime time.Time, step time.Duration) []string {
+	t.Helper()
+
+	// Ensure spawn row exists.
+	if err := s.InsertPending(Spawn{
+		ClaudeInstanceID: instanceID,
+		CWD:              "/tmp",
+		TmuxSessionName:  "sess-" + instanceID,
+		RelayMode:        "off",
+	}); err != nil {
+		// Already exists — check it's really there.
+		if _, getErr := s.GetSpawn(instanceID); getErr != nil {
+			t.Fatalf("seedClosedPermRequests: ensure spawn %q: InsertPending: %v; GetSpawn: %v", instanceID, err, getErr)
+		}
+	}
+
+	tokens := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		tok := fmt.Sprintf("%08x-0000-4000-a000-%012x", i, i)
+		if err := s.UpsertOpenPermissionRequest(instanceID, tok, "Bash", `{"cmd":"echo"}`, 0); err != nil {
+			t.Fatalf("seedClosedPermRequests: UpsertOpenPermissionRequest(%q, %q): %v", instanceID, tok, err)
+		}
+		updated, err := s.DecidePermissionRequest(instanceID, tok, "deny", DecisionReasonOperator)
+		if err != nil {
+			t.Fatalf("seedClosedPermRequests: DecidePermissionRequest(%q, %q): %v", instanceID, tok, err)
+		}
+		if !updated {
+			t.Fatalf("seedClosedPermRequests: DecidePermissionRequest(%q, %q) returned updated=false", instanceID, tok)
+		}
+		tokens = append(tokens, tok)
+	}
+
+	// Backdate decided_at via a raw connection to get controlled timestamps.
+	raw, err := sql.Open("sqlite", "file:"+dbPath)
+	if err != nil {
+		t.Fatalf("seedClosedPermRequests: open raw db %q: %v", dbPath, err)
+	}
+	defer func() { _ = raw.Close() }()
+
+	for i, tok := range tokens {
+		decidedAt := baseTime.Add(time.Duration(i) * step).UTC().Format("2006-01-02 15:04:05")
+		if _, err := raw.Exec(
+			`UPDATE permission_requests SET decided_at = ? WHERE claude_instance_id = ? AND request_token = ?`,
+			decidedAt, instanceID, tok,
+		); err != nil {
+			t.Fatalf("seedClosedPermRequests: backdate decided_at for %q tok %q: %v", instanceID, tok, err)
+		}
+	}
+	return tokens
+}
+
+// countAllPermRows returns the total number of permission_requests rows
+// across all instance IDs — used to pin global cap-eviction semantics.
+func countAllPermRows(t *testing.T, s *Store) int {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM permission_requests`).Scan(&n); err != nil {
+		t.Fatalf("count all permission_requests: %v", err)
+	}
+	return n
+}
+
+// TestUpsertEvictsOldestClosedRowsOverCap pins SR-11.4's eviction selector and
+// Epic AC #6. Table-driven across cap values {10, 100, 1000}; per N: (a) at-cap
+// sub-case — 1 row evicted; (b) over-cap sub-case — 6 rows evicted in one pass.
+// Evicted rows are always the oldest by decided_at ASC.
+func TestUpsertEvictsOldestClosedRowsOverCap(t *testing.T) {
+	for _, N := range []int{10, 100, 1000} {
+		N := N
+		t.Run(fmt.Sprintf("cap_%d", N), func(t *testing.T) {
+			t.Run("at_cap", func(t *testing.T) {
+				s, dbPath := openTempStoreWithPath(t)
+				base := time.Now().UTC().Add(-2 * time.Hour)
+				tokens := seedClosedPermRequests(t, s, dbPath, "evict-at", N, base, time.Minute)
+
+				const newTok = "ffffffff-ffff-4fff-afff-ffffffffffff"
+				if err := s.UpsertOpenPermissionRequest("evict-at", newTok, "Bash", `{}`, N); err != nil {
+					t.Fatalf("upsert: %v", err)
+				}
+
+				// Total count = N (N seeded + 1 new open - 1 evicted = N).
+				if got := countAllPermRows(t, s); got != N {
+					t.Errorf("post-call count = %d; want %d", got, N)
+				}
+				// Oldest seeded row (tokens[0]) must be absent.
+				var c int
+				if err := s.db.QueryRow(`SELECT COUNT(*) FROM permission_requests WHERE request_token = ?`, tokens[0]).Scan(&c); err != nil {
+					t.Fatalf("check oldest row: %v", err)
+				}
+				if c != 0 {
+					t.Errorf("oldest closed row (tokens[0]) still present; want evicted")
+				}
+				// New open row present.
+				if err := s.db.QueryRow(`SELECT COUNT(*) FROM permission_requests WHERE request_token = ?`, newTok).Scan(&c); err != nil {
+					t.Fatalf("check new open row: %v", err)
+				}
+				if c != 1 {
+					t.Errorf("new open row absent; want present")
+				}
+				// N-1 closed rows preserved.
+				if err := s.db.QueryRow(`SELECT COUNT(*) FROM permission_requests WHERE decision IS NOT NULL`).Scan(&c); err != nil {
+					t.Fatalf("count closed: %v", err)
+				}
+				if c != N-1 {
+					t.Errorf("closed row count = %d; want %d (all but oldest preserved)", c, N-1)
+				}
+			})
+
+			t.Run("over_cap_on_entry", func(t *testing.T) {
+				s, dbPath := openTempStoreWithPath(t)
+				base := time.Now().UTC().Add(-2 * time.Hour)
+				tokens := seedClosedPermRequests(t, s, dbPath, "evict-over", N+5, base, time.Minute)
+
+				const newTok = "eeeeeeee-eeee-4eee-aeee-eeeeeeeeeeee"
+				if err := s.UpsertOpenPermissionRequest("evict-over", newTok, "Bash", `{}`, N); err != nil {
+					t.Fatalf("upsert: %v", err)
+				}
+
+				// Total = N (N+5 seeded + 1 new open - 6 evicted = N).
+				if got := countAllPermRows(t, s); got != N {
+					t.Errorf("post-call count = %d; want %d (6 evicted in one pass)", got, N)
+				}
+				// 6 oldest closed rows must be absent.
+				for i := 0; i < 6; i++ {
+					var c int
+					if err := s.db.QueryRow(`SELECT COUNT(*) FROM permission_requests WHERE request_token = ?`, tokens[i]).Scan(&c); err != nil {
+						t.Fatalf("check evicted row[%d]: %v", i, err)
+					}
+					if c != 0 {
+						t.Errorf("evicted row[%d] (token %s) still present", i, tokens[i])
+					}
+				}
+				// New open row present.
+				var c int
+				if err := s.db.QueryRow(`SELECT COUNT(*) FROM permission_requests WHERE request_token = ?`, newTok).Scan(&c); err != nil {
+					t.Fatalf("check new open: %v", err)
+				}
+				if c != 1 {
+					t.Errorf("new open row absent")
+				}
+			})
+		})
+	}
+}
+
+// TestUpsertNeverEvictsOpenRows pins SR-11.4's open-row exclusion and Epic AC #7.
+// Open rows (decision IS NULL) are never eviction candidates; upsert returns nil
+// when no closed rows exist to evict (SR-3.1).
+func TestUpsertNeverEvictsOpenRows(t *testing.T) {
+	const cap = 5
+
+	t.Run("all_open", func(t *testing.T) {
+		s := openTestStore(t)
+		const id = "open-only"
+		seedSpawnForPerm(t, s, id, "on")
+
+		// Seed cap open rows.
+		for i := 0; i < cap; i++ {
+			tok := fmt.Sprintf("%08x-0000-4000-a000-%012x", i, i)
+			if err := s.UpsertOpenPermissionRequest(id, tok, "Bash", `{}`, cap); err != nil {
+				t.Fatalf("seed open row %d: %v", i, err)
+			}
+		}
+
+		// One more upsert: cap+1 rows, all open — no closed rows to evict.
+		const extraTok = "ffffffff-ffff-4fff-afff-ffffffffffff"
+		if err := s.UpsertOpenPermissionRequest(id, extraTok, "Bash", `{}`, cap); err != nil {
+			t.Errorf("upsert with all-open: err = %v; want nil (SR-3.1: never errors when no closed rows)", err)
+		}
+
+		// All cap+1 rows present.
+		if got := countPermRows(t, s, id); got != cap+1 {
+			t.Errorf("post-call count = %d; want %d", got, cap+1)
+		}
+		// All rows have decision IS NULL.
+		var closed int
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM permission_requests WHERE claude_instance_id = ? AND decision IS NOT NULL`, id).Scan(&closed); err != nil {
+			t.Fatalf("count closed: %v", err)
+		}
+		if closed != 0 {
+			t.Errorf("closed rows = %d; want 0 (open rows must never be evicted)", closed)
+		}
+	})
+
+	t.Run("one_closed", func(t *testing.T) {
+		s, dbPath := openTempStoreWithPath(t)
+		const id = "open-plus-closed"
+
+		// Use seedClosedPermRequests with n=1 to create spawn and one closed row,
+		// then seed cap-1 open rows (spawn already exists).
+		base := time.Now().UTC().Add(-1 * time.Hour)
+		closedTokens := seedClosedPermRequests(t, s, dbPath, id, 1, base, time.Minute)
+
+		// Seed cap-1 open rows (spawn already exists).
+		for i := 0; i < cap-1; i++ {
+			tok := fmt.Sprintf("%08x-1111-4111-a111-%012x", i, i)
+			if err := s.UpsertOpenPermissionRequest(id, tok, "Bash", `{}`, 0); err != nil {
+				t.Fatalf("seed open row %d: %v", i, err)
+			}
+		}
+		// State: 1 closed + (cap-1) open = cap rows total.
+
+		// Upsert one more open row with cap=cap → total = cap+1 → evict 1 closed.
+		const newTok = "dddddddd-dddd-4ddd-addd-dddddddddddd"
+		if err := s.UpsertOpenPermissionRequest(id, newTok, "Bash", `{}`, cap); err != nil {
+			t.Fatalf("upsert: %v", err)
+		}
+
+		// Post-call: cap rows (1 closed evicted, (cap-1) open + 1 new open remain).
+		if got := countAllPermRows(t, s); got != cap {
+			t.Errorf("post-call count = %d; want %d", got, cap)
+		}
+		// The closed row is gone.
+		var c int
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM permission_requests WHERE request_token = ?`, closedTokens[0]).Scan(&c); err != nil {
+			t.Fatalf("check closed row: %v", err)
+		}
+		if c != 0 {
+			t.Errorf("closed row still present; want evicted")
+		}
+		// All remaining rows are open.
+		var openCount int
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM permission_requests WHERE decision IS NULL`).Scan(&openCount); err != nil {
+			t.Fatalf("count open: %v", err)
+		}
+		if openCount != cap {
+			t.Errorf("open row count = %d; want %d", openCount, cap)
+		}
+	})
+}
+
+// TestRelayConfigCapZeroDisablesEviction pins SR-11.2's cap=0 semantics and
+// Epic AC #9. cap=0 (config.Relay{PermissionRequestCap: 0}) disables eviction
+// entirely; closed rows accumulate without bound.
+func TestRelayConfigCapZeroDisablesEviction(t *testing.T) {
+	s, dbPath := openTempStoreWithPath(t)
+	const n = 2000
+	base := time.Now().UTC().Add(-1 * time.Hour)
+	seedClosedPermRequests(t, s, dbPath, "zero-cap", n, base, time.Second)
+
+	// Upsert with cap=0 (from config.Relay{PermissionRequestCap: 0}).
+	const newTok = "00000000-0000-4000-a000-000000000001"
+	if err := s.UpsertOpenPermissionRequest("zero-cap", newTok, "Bash", `{}`, 0); err != nil {
+		t.Fatalf("upsert with cap=0: %v", err)
+	}
+
+	// All 2000 closed + 1 new open = 2001 rows; zero evicted.
+	if got := countAllPermRows(t, s); got != n+1 {
+		t.Errorf("post-call count = %d; want %d (cap=0 disables eviction entirely)", got, n+1)
+	}
+	// Confirm no eviction: exactly 1 open row, 2000 closed.
+	var openCount int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM permission_requests WHERE decision IS NULL`).Scan(&openCount); err != nil {
+		t.Fatalf("count open: %v", err)
+	}
+	if openCount != 1 {
+		t.Errorf("open row count = %d; want 1", openCount)
+	}
+}

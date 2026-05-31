@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -218,5 +219,55 @@ func TestGetPermissionToolInputBytePassthrough(t *testing.T) {
 	if got.ToolInput != noncanonical {
 		t.Errorf("ToolInput = %q; want byte-identical %q (no re-encode, no whitespace normalization)",
 			got.ToolInput, noncanonical)
+	}
+}
+
+// TestGetPermissionEvictedRow pins SR-11.6 and Epic AC #11: after cap-driven
+// eviction removes a closed row, calling GetPermission for the evicted token
+// must surface ErrPermissionRequestNotFound — the same sentinel returned for
+// a token that never existed. There is no separate "evicted" signal.
+//
+// Setup: 5 closed rows are seeded with deterministic decided_at values;
+// tokens[0] is the oldest (baseTime+0*step) and is the eviction target.
+// A single UpsertOpenPermissionRequest call with cap=5 pushes the total to 6
+// and triggers eviction of that oldest closed row. The newly inserted open
+// row (TestRequestTokenB) must remain readable after eviction.
+func TestGetPermissionEvictedRow(t *testing.T) {
+	s, dbPath := apitest.SeedDecideFixture(t, "on")
+
+	// Cap sourced from a config.Relay fixture — not a literal (per ticket AC).
+	relayConf := config.Relay{PermissionRequestCap: 5}
+	const instanceID = "id-d-1"
+
+	// Seed 5 closed rows. tokens[0] has the oldest decided_at
+	// (baseTime + 0*step) and will be the first evicted when cap is exceeded.
+	baseTime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	tokens := storefix.SeedClosedPermissionRequests(t, s, dbPath, instanceID, 5, baseTime, time.Minute)
+	evictedToken := tokens[0]
+
+	// Insert one open row with cap=5. This is the 6th row in the store,
+	// triggering in-transaction eviction of the oldest closed row (evictedToken).
+	// TestRequestTokenB is the survivor we cross-check below.
+	if err := s.UpsertOpenPermissionRequest(instanceID, storefix.TestRequestTokenB, "Bash", `{"cmd":"ls"}`, relayConf.PermissionRequestCap); err != nil {
+		t.Fatalf("UpsertOpenPermissionRequest (survivor): %v", err)
+	}
+
+	// The evicted token must surface ErrPermissionRequestNotFound — wire-
+	// indistinguishable from a token that was never written.
+	_, err := api.GetPermission(s, api.GetPermissionParams{RequestToken: evictedToken})
+	if !errors.Is(err, api.ErrPermissionRequestNotFound) {
+		t.Fatalf("evicted token: err = %v; want ErrPermissionRequestNotFound", err)
+	}
+
+	// Cross-check: the open row inserted by the evicting Upsert call is still
+	// readable and carries no decision (no collateral mutation).
+	survivor, err := api.GetPermission(s, api.GetPermissionParams{
+		RequestToken: storefix.TestRequestTokenB,
+	})
+	if err != nil {
+		t.Fatalf("survivor open row should still be readable after eviction: %v", err)
+	}
+	if survivor.Decision != nil {
+		t.Errorf("survivor row Decision = %v; want nil (eviction must not mutate non-evicted rows)", *survivor.Decision)
 	}
 }
