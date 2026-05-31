@@ -34,6 +34,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
@@ -202,12 +203,14 @@ var errorCases = []errorCase{
 		params: func(_ map[string]any) map[string]any {
 			return map[string]any{
 				"claude_instance_id": "id-err-rmo-1",
+				"request_token":      storefix.TestRequestTokenA,
 				"decision":           "allow",
 			}
 		},
 		cliArgv: func(_ map[string]any) []string {
 			return []string{"decide",
 				"--claude-instance-id", "id-err-rmo-1",
+				"--request-token", storefix.TestRequestTokenA,
 				"--decision", "allow",
 			}
 		},
@@ -227,12 +230,14 @@ var errorCases = []errorCase{
 		params: func(_ map[string]any) map[string]any {
 			return map[string]any{
 				"claude_instance_id": "id-err-nopr-1",
+				"request_token":      storefix.TestRequestTokenA,
 				"decision":           "allow",
 			}
 		},
 		cliArgv: func(_ map[string]any) []string {
 			return []string{"decide",
 				"--claude-instance-id", "id-err-nopr-1",
+				"--request-token", storefix.TestRequestTokenA,
 				"--decision", "allow",
 			}
 		},
@@ -241,6 +246,7 @@ var errorCases = []errorCase{
 	// ── decide / ErrAlreadyDecided ────────────────────────────────────────
 	// relay_mode=on, row exists but decision already written: UPDATE
 	// no-ops, follow-up SELECT finds non-NULL decision.
+	// SeedErrAlreadyDecided pre-decides the row using TestRequestTokenA.
 	{
 		verb:    "decide",
 		errName: "ErrAlreadyDecided",
@@ -252,12 +258,14 @@ var errorCases = []errorCase{
 		params: func(_ map[string]any) map[string]any {
 			return map[string]any{
 				"claude_instance_id": "id-err-ad-1",
+				"request_token":      storefix.TestRequestTokenA,
 				"decision":           "deny",
 			}
 		},
 		cliArgv: func(_ map[string]any) []string {
 			return []string{"decide",
 				"--claude-instance-id", "id-err-ad-1",
+				"--request-token", storefix.TestRequestTokenA,
 				"--decision", "deny",
 			}
 		},

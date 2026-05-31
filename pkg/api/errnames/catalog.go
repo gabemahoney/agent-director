@@ -82,6 +82,7 @@ var Catalog = []Entry{
 	{Name: "ErrInvalidDecision", Err: api.ErrInvalidDecision},
 	{Name: "ErrNoOpenPermissionRequest", Err: store.ErrNoOpenPermissionRequest},
 	{Name: "ErrAlreadyDecided", Err: store.ErrAlreadyDecided},
+	{Name: "ErrAmbiguousRequest", Err: store.ErrAmbiguousRequest},
 	// ErrUnknownTool is intentionally absent from this Catalog: it is a
 	// dispatch-level MCP error (not a verb-surface error) declared and handled
 	// directly in internal/mcp. internal/mcp.classifyDispatchError checks for

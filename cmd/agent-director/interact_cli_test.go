@@ -30,14 +30,20 @@ func seedSpawnRow(t *testing.T, dbPath, instanceID, sessionName, state, relayMod
 	}
 }
 
+// testRequestToken is a canonical UUIDv4 token used by CLI integration tests
+// that need to insert permission_requests rows directly via raw SQL. It matches
+// storefix.TestRequestTokenA so test data is consistent across packages.
+const testRequestToken = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"
+
 // seedOpenPermissionRequest inserts an open permission_requests row
 // (decision/decision_reason left NULL) for the given Spawn so the
 // get-verb CLI tests can drive the `state=check_permission` happy-path
 // and the SR-8.5 absence cases. Tool name and tool_input are pure
 // parameters per SR-8.2 — no hardcoded literals inside the helper.
-// Caller is responsible for inserting the parent spawn row first; the
-// FK on claude_instance_id would reject otherwise.
-func seedOpenPermissionRequest(t *testing.T, dbPath, instanceID, toolName, toolInput string) {
+// requestToken must be a valid UUIDv4 (use testRequestToken for the
+// canonical single-row case). Caller is responsible for inserting the
+// parent spawn row first; the FK on claude_instance_id would reject otherwise.
+func seedOpenPermissionRequest(t *testing.T, dbPath, instanceID, requestToken, toolName, toolInput string) {
 	t.Helper()
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
@@ -45,9 +51,9 @@ func seedOpenPermissionRequest(t *testing.T, dbPath, instanceID, toolName, toolI
 	}
 	defer db.Close()
 	if _, err := db.Exec(`
-        INSERT INTO permission_requests (claude_instance_id, tool_name, tool_input)
-        VALUES (?, ?, ?)
-    `, instanceID, toolName, toolInput); err != nil {
+        INSERT INTO permission_requests (claude_instance_id, request_token, tool_name, tool_input)
+        VALUES (?, ?, ?, ?)
+    `, instanceID, requestToken, toolName, toolInput); err != nil {
 		t.Fatalf("seed permission row: %v", err)
 	}
 }

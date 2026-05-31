@@ -490,7 +490,7 @@ func TestGetCLICheckPermissionOpenRow(t *testing.T) {
 	const toolName = "Read"
 	const toolInput = `{"file":"/tmp/x","mode":"rw"}`
 	seedSpawnRow(t, dbPath, id, "cd-gp-1", "check_permission", "on")
-	seedOpenPermissionRequest(t, dbPath, id, toolName, toolInput)
+	seedOpenPermissionRequest(t, dbPath, id, testRequestToken, toolName, toolInput)
 
 	stdout, stderr, code := runSpawnCLI(t, home, fakeDir,
 		"get", "--claude-instance-id", id)
@@ -565,7 +565,7 @@ func TestGetCLICheckPermissionDecidedRowOmitsField(t *testing.T) {
 
 	const id = "id-gp-3"
 	seedSpawnRow(t, dbPath, id, "cd-gp-3", "check_permission", "on")
-	seedOpenPermissionRequest(t, dbPath, id, "Bash", `{"cmd":"ls"}`)
+	seedOpenPermissionRequest(t, dbPath, id, testRequestToken, "Bash", `{"cmd":"ls"}`)
 	markPermissionRequestDecided(t, dbPath, id, "allow")
 
 	stdout, stderr, code := runSpawnCLI(t, home, fakeDir,
@@ -629,7 +629,7 @@ func TestGetCLINonCheckPermissionStateWithStaleRowOmitsField(t *testing.T) {
 
 	const id = "id-gp-5"
 	seedSpawnRow(t, dbPath, id, "cd-gp-5", "waiting", "on")
-	seedOpenPermissionRequest(t, dbPath, id, "Read", `{"file":"/etc/hosts"}`)
+	seedOpenPermissionRequest(t, dbPath, id, testRequestToken, "Read", `{"file":"/etc/hosts"}`)
 
 	stdout, stderr, code := runSpawnCLI(t, home, fakeDir,
 		"get", "--claude-instance-id", id)

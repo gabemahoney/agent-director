@@ -29,6 +29,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
@@ -244,8 +245,10 @@ func init() {
 		SeedKind: seedCheckPermission,
 		SeedID:   "smoke-decide-id",
 		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
+			// SeedCheckPermission seeds the open row using storefix.TestRequestTokenA.
 			return c.Decide(api.DecideParams{
 				ClaudeInstanceID: id,
+				RequestToken:     storefix.TestRequestTokenA,
 				Decision:         "allow",
 			})
 		},

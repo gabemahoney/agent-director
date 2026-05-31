@@ -489,6 +489,15 @@
           "allowed_values": null
         },
         {
+          "name": "request_token",
+          "type": "string",
+          "description": "UUIDv4 token identifying the specific permission request to decide. Minted by runRelay per-request; required to enforce per-row isolation when multiple concurrent requests exist for the same Spawn.",
+          "required": true,
+          "nullable": false,
+          "allow_empty": false,
+          "allowed_values": null
+        },
+        {
           "name": "decision",
           "type": "string",
           "description": "Either `allow` or `deny`.",
@@ -516,6 +525,7 @@
         "ErrRelayModeOff",
         "ErrNoOpenPermissionRequest",
         "ErrAlreadyDecided",
+        "ErrAmbiguousRequest",
         "ErrInvalidDecision"
       ]
     },

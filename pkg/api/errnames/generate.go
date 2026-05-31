@@ -68,6 +68,7 @@ var packageOf = map[string]string{
 	"ErrSpawnNotFound":           "store",
 	"ErrNoOpenPermissionRequest": "store",
 	"ErrAlreadyDecided":          "store",
+	"ErrAmbiguousRequest":        "store",
 
 	// internal/tmux
 	// ErrTmuxKillFailed and ErrTmuxListPanesFailed are intentionally absent:

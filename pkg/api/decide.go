@@ -34,6 +34,10 @@ type DecideParams struct {
 	// ClaudeInstanceID identifies the Spawn whose open permission request is
 	// being decided.
 	ClaudeInstanceID string `json:"claude_instance_id"`
+	// RequestToken is the UUIDv4 token minted by runRelay for the specific
+	// permission request being decided. Required; empty string returns
+	// ErrInvalidFlags from the CLI layer and is rejected at the store level.
+	RequestToken string `json:"request_token"`
 	// Decision is the orchestrator's verdict: "allow" or "deny".
 	Decision string `json:"decision"`
 	// Reason is the optional free-text message surfaced to Claude on deny.
@@ -72,8 +76,14 @@ func Decide(s DecideStore, params DecideParams) (DecideResult, error) {
 			ErrRelayModeOff, params.ClaudeInstanceID, row.RelayMode)
 	}
 
-	// TODO(Task-E): pass requestToken from params instead of ""; Task E adds the CLI flag.
-	updated, err := s.DecidePermissionRequest(params.ClaudeInstanceID, "", params.Decision, params.Reason)
+	// Use the canonical operator reason for deny; empty string for allow.
+	// decision_reason in the DB is always one of the store.DecisionReason*
+	// constants for operator-originated decisions.
+	dbReason := ""
+	if params.Decision == "deny" {
+		dbReason = store.DecisionReasonOperator
+	}
+	updated, err := s.DecidePermissionRequest(params.ClaudeInstanceID, params.RequestToken, params.Decision, dbReason)
 	if err != nil {
 		return DecideResult{}, err
 	}
@@ -85,10 +95,8 @@ func Decide(s DecideStore, params DecideParams) (DecideResult, error) {
 	// already written. Disambiguate via a follow-up SELECT. The race
 	// window here is benign: if a concurrent caller has written a
 	// decision since our UPDATE, we'll report ErrAlreadyDecided; if
-	// the row was preempted by a fresh DELETE-INSERT we'll see
-	// "no row" again and report ErrNoOpenPermissionRequest.
-	// TODO(Task-E): pass requestToken from params instead of ""; Task E adds the CLI flag.
-	pr, err := s.GetPermissionRequest(params.ClaudeInstanceID, "")
+	// the row no longer exists we'll report ErrNoOpenPermissionRequest.
+	pr, err := s.GetPermissionRequest(params.ClaudeInstanceID, params.RequestToken)
 	if errors.Is(err, sql.ErrNoRows) {
 		return DecideResult{}, fmt.Errorf("%w: %s", store.ErrNoOpenPermissionRequest, params.ClaudeInstanceID)
 	}
