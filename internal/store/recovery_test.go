@@ -43,7 +43,7 @@ func TestFindMissingMultiRow(t *testing.T) {
 	// Seed 3 open rows with distinct tokens.
 	tokens := []string{tokenA, tokenB, tokenC}
 	for _, tok := range tokens {
-		if err := s.UpsertOpenPermissionRequest(id, tok, "Bash", `{"cmd":"echo"}`); err != nil {
+		if err := s.UpsertOpenPermissionRequest(id, tok, "Bash", `{"cmd":"echo"}`, 0); err != nil {
 			t.Fatalf("UpsertOpenPermissionRequest(%q): %v", tok, err)
 		}
 	}
@@ -87,7 +87,7 @@ func TestFindMissingSingleRow(t *testing.T) {
 	const id = "fm-single-row-1"
 
 	seedCheckPermissionSpawn(t, s, id)
-	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Read", `{"file":"/etc/hosts"}`); err != nil {
+	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Read", `{"file":"/etc/hosts"}`, 0); err != nil {
 		t.Fatalf("UpsertOpenPermissionRequest: %v", err)
 	}
 

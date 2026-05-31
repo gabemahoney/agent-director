@@ -325,10 +325,10 @@ func TestStateMachineMultiRowRetention(t *testing.T) {
 		if err := s.ApplyHookTransition(id, StateCheckPermission, false); err != nil {
 			t.Fatalf("transition to check_permission: %v", err)
 		}
-		if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{"cmd":"ls"}`); err != nil {
+		if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{"cmd":"ls"}`, 0); err != nil {
 			t.Fatalf("upsert tokenA: %v", err)
 		}
-		if err := s.UpsertOpenPermissionRequest(id, tokenB, "Read", `{"file":"/etc"}`); err != nil {
+		if err := s.UpsertOpenPermissionRequest(id, tokenB, "Read", `{"file":"/etc"}`, 0); err != nil {
 			t.Fatalf("upsert tokenB: %v", err)
 		}
 
@@ -378,7 +378,7 @@ func TestStateMachineMultiRowRetention(t *testing.T) {
 		if err := s.ApplyHookTransition(id, StateCheckPermission, false); err != nil {
 			t.Fatalf("transition to check_permission: %v", err)
 		}
-		if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{"cmd":"pwd"}`); err != nil {
+		if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{"cmd":"pwd"}`, 0); err != nil {
 			t.Fatalf("upsert tokenA: %v", err)
 		}
 

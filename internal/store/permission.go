@@ -68,25 +68,67 @@ type PermissionRow struct {
 }
 
 // UpsertOpenPermissionRequest INSERTs one row per (instanceID, requestToken)
-// pair. The old DELETE-then-INSERT transaction is gone; the v2 schema's
-// composite UNIQUE(claude_instance_id, request_token) allows parallel rows
-// for the same Spawn to coexist (SR-3.1). A second call with the same pair
-// returns ErrRequestTokenCollision; the first row is unmodified.
+// pair. The v2 schema's composite UNIQUE(claude_instance_id, request_token)
+// allows parallel rows for the same Spawn to coexist (SR-3.1). A second call
+// with the same pair returns ErrRequestTokenCollision; the first row is
+// unmodified.
 //
 // The new row has decision=NULL; the polling loop sees that as "still open"
 // and keeps waiting. Only DecidePermissionRequest writes the decision columns.
-func (s *Store) UpsertOpenPermissionRequest(instanceID, requestToken, toolName, toolInputJSON string) error {
-	_, err := s.db.Exec(`
+//
+// cap controls post-INSERT eviction of closed (decision IS NOT NULL) rows.
+// When cap > 0 and the total row count exceeds cap after the INSERT, the
+// oldest closed rows (ordered by decided_at ASC) are deleted to bring the
+// count back to cap. cap == 0 disables eviction entirely. cap < 0 is treated
+// identically to cap == 0 (eviction disabled) — negative cap handling belongs
+// at the call site.
+//
+// The INSERT and optional DELETE run inside a single transaction; a collision
+// on the UNIQUE constraint causes an immediate rollback and surfaces
+// ErrRequestTokenCollision.
+func (s *Store) UpsertOpenPermissionRequest(instanceID, requestToken, toolName, toolInputJSON string, cap int) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: upsert permission begin tx: %w", err)
+	}
+
+	_, err = tx.Exec(`
 		INSERT INTO permission_requests
 		  (claude_instance_id, request_token, tool_name, tool_input)
 		VALUES (?, ?, ?, ?)
 	`, instanceID, requestToken, toolName, toolInputJSON)
 	if err != nil {
+		_ = tx.Rollback()
 		var serr *sqlite.Error
 		if errors.As(err, &serr) && serr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE {
 			return fmt.Errorf("%w: (%s, %s)", ErrRequestTokenCollision, instanceID, requestToken)
 		}
 		return fmt.Errorf("store: upsert permission insert: %w", err)
+	}
+
+	if cap > 0 {
+		var currentCount int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM permission_requests`).Scan(&currentCount); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("store: upsert permission count: %w", err)
+		}
+		if currentCount > cap {
+			excess := currentCount - cap
+			_, err = tx.Exec(`
+				DELETE FROM permission_requests
+				 WHERE decision IS NOT NULL
+				 ORDER BY decided_at ASC
+				 LIMIT ?
+			`, excess)
+			if err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("store: upsert permission evict: %w", err)
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: upsert permission commit: %w", err)
 	}
 	return nil
 }

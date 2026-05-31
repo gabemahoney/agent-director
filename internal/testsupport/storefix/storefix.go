@@ -131,7 +131,7 @@ func SeedCheckPermission(t *testing.T, s *store.Store, id string) store.Spawn {
 	if err := s.ApplyHookTransition(id, store.StateCheckPermission, false); err != nil {
 		t.Fatalf("storefix.SeedCheckPermission: ApplyHookTransition(%q, check_permission): %v", id, err)
 	}
-	if err := s.UpsertOpenPermissionRequest(id, TestRequestTokenA, "Bash", `{"cmd":"echo hello"}`); err != nil {
+	if err := s.UpsertOpenPermissionRequest(id, TestRequestTokenA, "Bash", `{"cmd":"echo hello"}`, 0); err != nil {
 		t.Fatalf("storefix.SeedCheckPermission: UpsertOpenPermissionRequest(%q): %v", id, err)
 	}
 	row, err := s.GetSpawn(id)
@@ -242,7 +242,7 @@ func SeedClosedPermissionRequests(t *testing.T, s *store.Store, dbPath, instance
 		// UUIDv4-shaped token: version nibble=4, variant nibble=a (10xx binary).
 		tok := fmt.Sprintf("%08x-0000-4000-a000-%012x", i, i)
 
-		if err := s.UpsertOpenPermissionRequest(instanceID, tok, "Bash", `{"cmd":"echo"}`); err != nil {
+		if err := s.UpsertOpenPermissionRequest(instanceID, tok, "Bash", `{"cmd":"echo"}`, 0); err != nil {
 			t.Fatalf("storefix.SeedClosedPermissionRequests: UpsertOpenPermissionRequest(%q, %q): %v", instanceID, tok, err)
 		}
 		updated, err := s.DecidePermissionRequest(instanceID, tok, "deny", store.DecisionReasonOperator)
@@ -283,7 +283,7 @@ func SeedClosedPermissionRequests(t *testing.T, s *store.Store, dbPath, instance
 func SeedOpenPermissionRequests(t *testing.T, s *store.Store, instanceID string, tokens []string) {
 	t.Helper()
 	for _, tok := range tokens {
-		if err := s.UpsertOpenPermissionRequest(instanceID, tok, "Bash", `{"cmd":"echo"}`); err != nil {
+		if err := s.UpsertOpenPermissionRequest(instanceID, tok, "Bash", `{"cmd":"echo"}`, 0); err != nil {
 			t.Fatalf("storefix.SeedOpenPermissionRequests: UpsertOpenPermissionRequest(%q, %q): %v", instanceID, tok, err)
 		}
 	}

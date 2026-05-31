@@ -135,7 +135,7 @@ func SeedDecideFixture(t *testing.T, relayMode string) (*store.Store, string) {
 // TestRequestTokenA as the canonical single-row test token.
 func SeedPermissionRow(t *testing.T, s *store.Store, id string) {
 	t.Helper()
-	if err := s.UpsertOpenPermissionRequest(id, storefix.TestRequestTokenA, "Bash", `{"cmd":"echo"}`); err != nil {
+	if err := s.UpsertOpenPermissionRequest(id, storefix.TestRequestTokenA, "Bash", `{"cmd":"echo"}`, 0); err != nil {
 		t.Fatalf("SeedPermissionRow: UpsertOpenPermissionRequest: %v", err)
 	}
 }
