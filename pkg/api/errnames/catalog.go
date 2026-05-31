@@ -83,6 +83,7 @@ var Catalog = []Entry{
 	{Name: "ErrMissingRequestToken", Err: api.ErrMissingRequestToken},
 	{Name: "ErrNoOpenPermissionRequest", Err: store.ErrNoOpenPermissionRequest},
 	{Name: "ErrAlreadyDecided", Err: store.ErrAlreadyDecided},
+	{Name: "ErrPermissionRequestNotFound", Err: store.ErrPermissionRequestNotFound},
 	{Name: "ErrAmbiguousRequest", Err: store.ErrAmbiguousRequest},
 	// ErrUnknownTool is intentionally absent from this Catalog: it is a
 	// dispatch-level MCP error (not a verb-surface error) declared and handled

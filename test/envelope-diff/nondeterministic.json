@@ -6,6 +6,10 @@
   ],
   "find-missing": [],
   "get": [],
+  "get-permission": [
+    ".request_id",
+    ".requested_at"
+  ],
   "kill": [],
   "list": [],
   "make-template": [

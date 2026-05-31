@@ -65,10 +65,11 @@ var packageOf = map[string]string{
 	// internal/store
 	// ErrSchemaMismatch is intentionally absent: it is a store-initialization
 	// error (not a verb error) removed from Catalog in Task 7.
-	"ErrSpawnNotFound":           "store",
-	"ErrNoOpenPermissionRequest": "store",
-	"ErrAlreadyDecided":          "store",
-	"ErrAmbiguousRequest":        "store",
+	"ErrSpawnNotFound":             "store",
+	"ErrNoOpenPermissionRequest":   "store",
+	"ErrAlreadyDecided":            "store",
+	"ErrPermissionRequestNotFound": "store",
+	"ErrAmbiguousRequest":          "store",
 
 	// internal/tmux
 	// ErrTmuxKillFailed and ErrTmuxListPanesFailed are intentionally absent:

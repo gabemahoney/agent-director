@@ -53,16 +53,35 @@ func AssertResultMatchesManifest(t testing.TB, verbDef manifest.VerbDef, result 
 		}
 		_ = sf // available if we need type info
 
+		// Nullable: a nil value bypasses AllowedValues (the field is permitted
+		// to be JSON null per the manifest contract; the enum applies only
+		// when the field is materialized). Check nullable *before* AllowedValues
+		// so a nil *string field on a get-permission open row doesn't surface
+		// as `"<nil>" not in allowed set [allow deny]`.
+		if fd.Nullable {
+			k := fv.Kind()
+			if (k == reflect.Ptr || k == reflect.Interface) && fv.IsNil() {
+				continue
+			}
+			// Non-nil nullable field: fall through to AllowedValues / type checks.
+		}
+
 		// AllowedValues: value must be one of the listed strings.
 		if len(fd.AllowedValues) > 0 {
-			strVal := fmt.Sprintf("%v", fv.Interface())
+			val := fv.Interface()
+			// Nullable enum fields are *string — dereference for the
+			// comparison so the check applies to the inner value.
+			if fv.Kind() == reflect.Ptr && !fv.IsNil() {
+				val = fv.Elem().Interface()
+			}
+			strVal := fmt.Sprintf("%v", val)
 			if !contains(fd.AllowedValues, strVal) {
 				t.Errorf("AssertResultMatchesManifest(%s): field %q = %q not in allowed set %v",
 					verbDef.Name, fd.Name, strVal, fd.AllowedValues)
 			}
 		}
 
-		// Nullable: allowed to be zero/nil — just verify field exists (done above).
+		// Nullable non-nil values may still skip the non-zero check below.
 		if fd.Nullable {
 			continue
 		}

@@ -226,6 +226,26 @@ var successCases = []successCase{
 		},
 	},
 
+	// ── get-permission ────────────────────────────────────────────────────
+	// Token-only lookup: seed an open permission_requests row and read it
+	// back. The result carries 8 fields; nondeterminism.json must exclude
+	// request_id (autoincrement) and requested_at (CURRENT_TIMESTAMP).
+	{
+		verb: "get-permission",
+		seed: func(t *testing.T) (string, map[string]any) {
+			t.Helper()
+			s, dbPath := apitest.SeedDecideFixture(t, "on")
+			apitest.SeedPermissionRow(t, s, "id-d-1")
+			return filepath.Dir(dbPath), nil
+		},
+		params: func(_ map[string]any) map[string]any {
+			return map[string]any{"request_token": storefix.TestRequestTokenA}
+		},
+		cliArgv: func(_ map[string]any) []string {
+			return []string{"get-permission", "--request-token", storefix.TestRequestTokenA}
+		},
+	},
+
 	// ── resume ────────────────────────────────────────────────────────────
 	// resume needs:
 	//   1. An ended row with ClaudeSessionID set (so the JSONL Stat can run).

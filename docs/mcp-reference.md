@@ -189,6 +189,29 @@ Orchestrator's allow/deny verdict on an open PermissionRequest. Race-free first-
 - `ErrAmbiguousRequest`
 - `ErrInvalidDecision`
 
+## Tool: get-permission
+
+Fetch a single permission_requests row by request_token. Token-only lookup (SR-3.5: UUIDv4 is globally selective); no claude_instance_id required. Nullable columns (decision, decision_reason, decided_at) surface as JSON null while the row is open.
+
+### Input schema
+
+- `request_token`: type=string, required=true — UUIDv4 token identifying the permission_requests row to fetch.
+
+### Output schema
+
+- `request_token`: type=string — UUIDv4 token the row is keyed under (echoed back).
+- `request_id`: type=int — Autoincrement primary key of the permission_requests row.
+- `tool_name`: type=string — Claude Code tool that triggered the permission request (e.g. "Bash", "Write").
+- `tool_input`: type=string — Raw JSON string of the tool's input as stored in the DB; NOT a nested JSON object. Passes through byte-identical from the DB column — consumers parse it themselves.
+- `requested_at`: type=timestamp — RFC3339 timestamp when the row was created (maps from the created_at DB column).
+- `decision`: type=string? — "allow" or "deny" once decided; null while the row is open (decision IS NULL in the DB).
+- `decision_reason`: type=string? — Canonical decision-reason string for deny rows (operator / timeout / find_missing per SR-1.3); null for open rows AND for allow rows (closed-allow carries no reason).
+- `decided_at`: type=timestamp? — RFC3339 timestamp when the verdict was written; null while the row is open.
+
+### Errors
+
+- `ErrPermissionRequestNotFound`
+
 ## Tool: resume
 
 Bring a terminated (ended/missing) Spawn back to life via `claude --resume`. Same claude_instance_id, fresh tmux session, same JSONL transcript. parent_id is re-derived from the caller's AGENT_DIRECTOR_INSTANCE_ID env var on every resume.

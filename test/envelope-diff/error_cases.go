@@ -271,6 +271,27 @@ var errorCases = []errorCase{
 		},
 	},
 
+	// ── get-permission / ErrPermissionRequestNotFound ────────────────────
+	// Token-only lookup against an empty store: GetPermissionRequestByToken
+	// returns ErrPermissionRequestNotFound for any token that was never
+	// written. The token is a valid UUIDv4 shape so any future format
+	// validation at the CLI layer would still pass through to the store.
+	{
+		verb:    "get-permission",
+		errName: "ErrPermissionRequestNotFound",
+		seed: func(t *testing.T) (string, map[string]any) {
+			t.Helper()
+			dbPath := apitest.SeedEmptyStore(t)
+			return filepath.Dir(dbPath), nil
+		},
+		params: func(_ map[string]any) map[string]any {
+			return map[string]any{"request_token": storefix.TestRequestTokenA}
+		},
+		cliArgv: func(_ map[string]any) []string {
+			return []string{"get-permission", "--request-token", storefix.TestRequestTokenA}
+		},
+	},
+
 	// ── resume / ErrSpawnNotResumable ─────────────────────────────────────
 	// Most representative resume error: state check fires before JSONL
 	// stat or tmux new-session, so no filesystem dependency.
