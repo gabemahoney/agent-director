@@ -57,7 +57,7 @@ func TestDecideFirstCallWins(t *testing.T) {
 	}
 
 	// Read directly to verify the write landed.
-	row, err := s.GetPermissionRequest("id-d-1")
+	row, err := s.GetPermissionRequest("id-d-1", "")
 	if err != nil {
 		t.Fatalf("GetPermissionRequest: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestDecideFirstCallWins(t *testing.T) {
 	}
 
 	// Reason from the first decide must not have been clobbered.
-	row, _ = s.GetPermissionRequest("id-d-1")
+	row, _ = s.GetPermissionRequest("id-d-1", "")
 	if row.DecisionReason != "ok" {
 		t.Errorf("reason clobbered by second decide: %q", row.DecisionReason)
 	}
@@ -162,7 +162,7 @@ func TestDecideDenyDefaultEnvelopeReasonNotWritten(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
-	row, _ := s.GetPermissionRequest("id-d-1")
+	row, _ := s.GetPermissionRequest("id-d-1", "")
 	if row.Decision != "deny" {
 		t.Errorf("Decision = %q; want deny", row.Decision)
 	}

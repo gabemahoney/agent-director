@@ -47,7 +47,7 @@ func openGetFixture(t *testing.T, instanceID, state string) *store.Store {
 func TestGetCheckPermissionWithOpenRow(t *testing.T) {
 	s := openGetFixture(t, "id-g-1", store.StateCheckPermission)
 	const rawInput = `{"file":"/tmp/x","mode":"rw"}`
-	if err := s.UpsertOpenPermissionRequest("id-g-1", "Read", rawInput); err != nil {
+	if err := s.UpsertOpenPermissionRequest("id-g-1", "", "Read", rawInput); err != nil {
 		t.Fatalf("UpsertOpenPermissionRequest: %v", err)
 	}
 
@@ -95,10 +95,10 @@ func TestGetCheckPermissionNoRow(t *testing.T) {
 // surface any returned row, this test would fail.
 func TestGetCheckPermissionWithDecidedRow(t *testing.T) {
 	s := openGetFixture(t, "id-g-3", store.StateCheckPermission)
-	if err := s.UpsertOpenPermissionRequest("id-g-3", "Bash", `{"cmd":"ls"}`); err != nil {
+	if err := s.UpsertOpenPermissionRequest("id-g-3", "", "Bash", `{"cmd":"ls"}`); err != nil {
 		t.Fatalf("UpsertOpenPermissionRequest: %v", err)
 	}
-	updated, err := s.DecidePermissionRequest("id-g-3", "allow", "trusted")
+	updated, err := s.DecidePermissionRequest("id-g-3", "", "allow", "trusted")
 	if err != nil {
 		t.Fatalf("DecidePermissionRequest: %v", err)
 	}
@@ -180,7 +180,7 @@ func (r *recordingGetStore) GetSpawn(id string) (store.Spawn, error) {
 	return store.Spawn{}, store.ErrSpawnNotFound
 }
 
-func (r *recordingGetStore) GetPermissionRequest(id string) (store.PermissionRow, error) {
+func (r *recordingGetStore) GetPermissionRequest(id, _ string) (store.PermissionRow, error) {
 	r.permCalls++
 	if r.permErr != nil {
 		return store.PermissionRow{}, r.permErr

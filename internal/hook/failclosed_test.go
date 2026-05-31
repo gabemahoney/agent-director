@@ -39,9 +39,10 @@ type flakyRelayStore struct {
 }
 
 type decideCall struct {
-	InstanceID string
-	Decision   string
-	Reason     string
+	InstanceID   string
+	RequestToken string
+	Decision     string
+	Reason       string
 }
 
 type transitionCall struct {
@@ -57,17 +58,17 @@ func (f *flakyRelayStore) ApplyHookTransition(instanceID, newState string, softR
 func (f *flakyRelayStore) SetSessionID(string, string) error {
 	return f.sessionErr
 }
-func (f *flakyRelayStore) UpsertOpenPermissionRequest(string, string, string) error {
+func (f *flakyRelayStore) UpsertOpenPermissionRequest(_, _, _, _ string) error {
 	return f.upsertErr
 }
-func (f *flakyRelayStore) DecidePermissionRequest(instanceID, decision, reason string) (bool, error) {
-	f.decideArgs = append(f.decideArgs, decideCall{instanceID, decision, reason})
+func (f *flakyRelayStore) DecidePermissionRequest(instanceID, requestToken, decision, reason string) (bool, error) {
+	f.decideArgs = append(f.decideArgs, decideCall{instanceID, requestToken, decision, reason})
 	if f.decideErr != nil {
 		return false, f.decideErr
 	}
 	return true, nil
 }
-func (f *flakyRelayStore) GetPermissionRequest(string) (store.PermissionRow, error) {
+func (f *flakyRelayStore) GetPermissionRequest(_, _ string) (store.PermissionRow, error) {
 	n := f.idx.Add(1) - 1
 	if int(n) >= len(f.getRows) {
 		// Sticky last entry.

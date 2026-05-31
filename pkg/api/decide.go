@@ -21,8 +21,8 @@ var ErrInvalidDecision = errors.New("ErrInvalidDecision")
 // DecideStore is the narrow store surface Decide needs.
 type DecideStore interface {
 	GetSpawn(instanceID string) (Spawn, error)
-	DecidePermissionRequest(instanceID, decision, reason string) (bool, error)
-	GetPermissionRequest(instanceID string) (PermissionRow, error)
+	DecidePermissionRequest(instanceID, requestToken, decision, reason string) (bool, error)
+	GetPermissionRequest(instanceID, requestToken string) (PermissionRow, error)
 }
 
 // DecideParams is the typed parameter shape for the decide verb.
@@ -72,7 +72,8 @@ func Decide(s DecideStore, params DecideParams) (DecideResult, error) {
 			ErrRelayModeOff, params.ClaudeInstanceID, row.RelayMode)
 	}
 
-	updated, err := s.DecidePermissionRequest(params.ClaudeInstanceID, params.Decision, params.Reason)
+	// TODO(Task-E): pass requestToken from params instead of ""; Task E adds the CLI flag.
+	updated, err := s.DecidePermissionRequest(params.ClaudeInstanceID, "", params.Decision, params.Reason)
 	if err != nil {
 		return DecideResult{}, err
 	}
@@ -86,7 +87,8 @@ func Decide(s DecideStore, params DecideParams) (DecideResult, error) {
 	// decision since our UPDATE, we'll report ErrAlreadyDecided; if
 	// the row was preempted by a fresh DELETE-INSERT we'll see
 	// "no row" again and report ErrNoOpenPermissionRequest.
-	pr, err := s.GetPermissionRequest(params.ClaudeInstanceID)
+	// TODO(Task-E): pass requestToken from params instead of ""; Task E adds the CLI flag.
+	pr, err := s.GetPermissionRequest(params.ClaudeInstanceID, "")
 	if errors.Is(err, sql.ErrNoRows) {
 		return DecideResult{}, fmt.Errorf("%w: %s", store.ErrNoOpenPermissionRequest, params.ClaudeInstanceID)
 	}

@@ -31,14 +31,14 @@ type permissionPayload struct {
 	ToolInput json.RawMessage `json:"tool_input"`
 }
 
-// RelayStore is the narrow surface the relay flow needs: the UPSERT
-// to write a fresh open request, the polling-loop read, and the two
-// writes needed on timeout so CSCB's poller can observe the abandoned
-// relay and expire the Slack message. *store.Store satisfies it.
+// RelayStore is the narrow surface the relay flow needs: the INSERT to write a
+// fresh open request, the polling-loop read, and the two writes needed on
+// timeout so CSCB's poller can observe the abandoned relay and expire the
+// Slack message. *store.Store satisfies it.
 type RelayStore interface {
 	PollStore
-	UpsertOpenPermissionRequest(instanceID, toolName, toolInputJSON string) error
-	DecidePermissionRequest(instanceID, decision, reason string) (bool, error)
+	UpsertOpenPermissionRequest(instanceID, requestToken, toolName, toolInputJSON string) error
+	DecidePermissionRequest(instanceID, requestToken, decision, reason string) (bool, error)
 	ApplyHookTransition(instanceID, newState string, softRefresh bool) error
 }
 
@@ -69,14 +69,16 @@ func runRelay(
 		toolInput = "null"
 	}
 
-	if err := st.UpsertOpenPermissionRequest(instanceID, pp.ToolName, toolInput); err != nil {
+	// TODO(Task-C): mint a UUIDv4 requestToken here instead of passing "".
+	if err := st.UpsertOpenPermissionRequest(instanceID, "", pp.ToolName, toolInput); err != nil {
 		logf(logger, "relay: upsert: %v", err)
 		_, _ = fmt.Fprintln(stdout, EncodeDecision("deny", ""))
 		return
 	}
 
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	res := Poll(ctx, st, clock, cfg, instanceID, rng)
+	// TODO(Task-C): pass real minted requestToken instead of "".
+	res := Poll(ctx, st, clock, cfg, instanceID, "", rng)
 	switch res.Decision {
 	case "allow":
 		logf(logger, "relay: allow for %s (%s)", instanceID, res.Reason)
@@ -93,7 +95,8 @@ func runRelay(
 		// is never observed without the matching state update. Both writes
 		// are best-effort — fail-open per SRD §3.2 for state tracking; the
 		// stdout envelope still lands regardless (SRD §6.4 fail-closed).
-		if _, err := st.DecidePermissionRequest(instanceID, "deny", "timeout"); err != nil {
+		// TODO(Task-C): pass real minted requestToken instead of "".
+		if _, err := st.DecidePermissionRequest(instanceID, "", "deny", store.DecisionReasonTimeout); err != nil {
 			logf(logger, "relay: timeout decision write failed (instance=%s): %v", instanceID, err)
 		}
 		if err := st.ApplyHookTransition(instanceID, store.StateWorking, false); err != nil {
