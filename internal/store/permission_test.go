@@ -344,6 +344,151 @@ func TestAmbiguousDecide(t *testing.T) {
 	})
 }
 
+// TestGetPermissionRequestByTokenOpenRow pins the open-row projection: a row
+// with NULL decision / decision_reason / decided_at surfaces as empty strings
+// (via COALESCE) and a zero-value DecidedAt. The rest of the projection
+// (RequestID, ClaudeInstanceID, RequestToken, ToolName, ToolInput, CreatedAt)
+// must be populated end-to-end.
+func TestGetPermissionRequestByTokenOpenRow(t *testing.T) {
+	s := openTestStore(t)
+	const id = "spawn-by-token-open"
+	seedSpawnForPerm(t, s, id, "on")
+
+	before := time.Now().UTC().Add(-1 * time.Second)
+	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Read", `{"file":"/tmp/x"}`); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	after := time.Now().UTC().Add(1 * time.Second)
+
+	got, err := s.GetPermissionRequestByToken(tokenA)
+	if err != nil {
+		t.Fatalf("GetPermissionRequestByToken: %v", err)
+	}
+	if got.RequestID == 0 {
+		t.Errorf("RequestID = 0; want non-zero autoincrement id")
+	}
+	if got.ClaudeInstanceID != id {
+		t.Errorf("ClaudeInstanceID = %q; want %q", got.ClaudeInstanceID, id)
+	}
+	if got.RequestToken != tokenA {
+		t.Errorf("RequestToken = %q; want %q", got.RequestToken, tokenA)
+	}
+	if got.ToolName != "Read" || got.ToolInput != `{"file":"/tmp/x"}` {
+		t.Errorf("ToolName/ToolInput drifted: name=%q input=%q", got.ToolName, got.ToolInput)
+	}
+	if got.CreatedAt.IsZero() {
+		t.Errorf("CreatedAt is zero; want populated TIMESTAMP")
+	}
+	if got.CreatedAt.Before(before) || got.CreatedAt.After(after) {
+		t.Errorf("CreatedAt = %v; want in [%v, %v]", got.CreatedAt, before, after)
+	}
+	if got.Decision != "" {
+		t.Errorf("Decision = %q; want \"\" (open row, COALESCE(NULL,'') )", got.Decision)
+	}
+	if got.DecisionReason != "" {
+		t.Errorf("DecisionReason = %q; want \"\" (open row, COALESCE(NULL,'') )", got.DecisionReason)
+	}
+	if !got.DecidedAt.IsZero() {
+		t.Errorf("DecidedAt = %v; want zero time (open row, decided_at IS NULL)", got.DecidedAt)
+	}
+}
+
+// TestGetPermissionRequestByTokenClosedAllow pins the closed-allow projection:
+// a decided row surfaces Decision="allow", an empty DecisionReason (we pass
+// reason=""), and a non-zero DecidedAt sourced from the CURRENT_TIMESTAMP write.
+func TestGetPermissionRequestByTokenClosedAllow(t *testing.T) {
+	s := openTestStore(t)
+	const id = "spawn-by-token-allow"
+	seedSpawnForPerm(t, s, id, "on")
+
+	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Read", `{}`); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	updated, err := s.DecidePermissionRequest(id, tokenA, "allow", "")
+	if err != nil {
+		t.Fatalf("decide allow: %v", err)
+	}
+	if !updated {
+		t.Fatalf("decide allow returned updated=false; want true")
+	}
+
+	got, err := s.GetPermissionRequestByToken(tokenA)
+	if err != nil {
+		t.Fatalf("GetPermissionRequestByToken: %v", err)
+	}
+	if got.Decision != "allow" {
+		t.Errorf("Decision = %q; want allow", got.Decision)
+	}
+	if got.DecisionReason != "" {
+		t.Errorf("DecisionReason = %q; want \"\" (empty reason stored as NULL via COALESCE)", got.DecisionReason)
+	}
+	if got.DecidedAt.IsZero() {
+		t.Errorf("DecidedAt is zero; want non-zero after a successful decide")
+	}
+}
+
+// TestGetPermissionRequestByTokenClosedDenyReasons pins the deny projection
+// across all three canonical decision_reason values. Table-driven per SR-1.3.
+func TestGetPermissionRequestByTokenClosedDenyReasons(t *testing.T) {
+	cases := []struct {
+		name   string
+		reason string
+	}{
+		{"operator", DecisionReasonOperator},
+		{"timeout", DecisionReasonTimeout},
+		{"find_missing", DecisionReasonFindMissing},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := openTestStore(t)
+			id := "spawn-by-token-deny-" + tc.name
+			seedSpawnForPerm(t, s, id, "on")
+			if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{}`); err != nil {
+				t.Fatalf("upsert: %v", err)
+			}
+			updated, err := s.DecidePermissionRequest(id, tokenA, "deny", tc.reason)
+			if err != nil {
+				t.Fatalf("decide deny: %v", err)
+			}
+			if !updated {
+				t.Fatalf("decide deny returned updated=false; want true")
+			}
+
+			got, err := s.GetPermissionRequestByToken(tokenA)
+			if err != nil {
+				t.Fatalf("GetPermissionRequestByToken: %v", err)
+			}
+			if got.Decision != "deny" {
+				t.Errorf("Decision = %q; want deny", got.Decision)
+			}
+			if got.DecisionReason != tc.reason {
+				t.Errorf("DecisionReason = %q; want %q", got.DecisionReason, tc.reason)
+			}
+			if got.DecidedAt.IsZero() {
+				t.Errorf("DecidedAt is zero; want non-zero after a successful decide")
+			}
+		})
+	}
+}
+
+// TestGetPermissionRequestByTokenMissReturnsSentinel pins SR-7.4: a token never
+// written returns ErrPermissionRequestNotFound and the underlying sql.ErrNoRows
+// MUST NOT leak across the store boundary. The "miss" and "no-sql-leak" cases
+// share the same call site so the regression pin is meaningful.
+func TestGetPermissionRequestByTokenMissReturnsSentinel(t *testing.T) {
+	s := openTestStore(t)
+	// Random UUIDv4 (RFC 4122 layout, 4xxx variant) never UPSERTed.
+	const missingToken = "deadbeef-dead-4dea-adea-deadbeefdead"
+
+	_, err := s.GetPermissionRequestByToken(missingToken)
+	if !errors.Is(err, ErrPermissionRequestNotFound) {
+		t.Fatalf("err = %v; want ErrPermissionRequestNotFound", err)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("err = %v; sql.ErrNoRows MUST NOT leak across the store boundary (SR-7.4)", err)
+	}
+}
+
 // TestDecisionReasonCanonicalConstants pins the exact string values of the
 // three DecisionReason* constants per SR-1.3.
 func TestDecisionReasonCanonicalConstants(t *testing.T) {
