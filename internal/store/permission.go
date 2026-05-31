@@ -94,8 +94,9 @@ func (s *Store) UpsertOpenPermissionRequest(instanceID, requestToken, toolName, 
 // GetPermissionRequest reads the current state of a specific permission request
 // identified by the (instanceID, requestToken) pair. Returns:
 //
-//   - (row, nil) when a row exists. Decision/DecisionReason may be empty
-//     strings when the column is NULL (not yet decided).
+//   - (row, nil) when a row exists. Decision/DecisionReason are empty strings
+//     when the underlying columns are NULL (open row), and DecidedAt is the
+//     zero time.Time value when decided_at is NULL.
 //   - (zero, sql.ErrNoRows) when no row exists for the pair.
 //
 // The function is read-only — the polling loop calls it once per iteration

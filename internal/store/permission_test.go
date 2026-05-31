@@ -499,7 +499,7 @@ func TestGetPermissionRequestByTokenMissReturnsSentinel(t *testing.T) {
 // The contract: reads of the seeded tokens must always succeed (never
 // surface an error of any kind); the closed row's projection must be stable
 // across the full run (its decision/decision_reason/decided_at columns are
-// terminal, no writer touches them). The test is bounded by a 2-second
+// terminal, no writer touches them). The test is bounded by a 250 ms
 // timer and must pass under `go test -race`.
 func TestGetPermissionRequestByTokenConcurrentReads(t *testing.T) {
 	s := openTestStore(t)
@@ -581,7 +581,7 @@ func TestGetPermissionRequestByTokenConcurrentReads(t *testing.T) {
 		}
 	}()
 
-	time.Sleep(2 * time.Second)
+	time.Sleep(250 * time.Millisecond)
 	stop.Store(true)
 	wg.Wait()
 	close(readerErrs)

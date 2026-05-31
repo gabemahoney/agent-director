@@ -4,12 +4,12 @@ import (
 	"errors"
 	"strings"
 
-	api "github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
+	api "github.com/gabemahoney/agent-director/pkg/api"
 )
 
 // Entry pairs an err_name string with the sentinel error it names.
