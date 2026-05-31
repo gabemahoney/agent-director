@@ -11,6 +11,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/google/uuid"
 )
 
 // AGENT_DIRECTOR_RELAY_MODE env-var values per SRD §6.5. The hook
@@ -31,6 +32,23 @@ type permissionPayload struct {
 	ToolInput json.RawMessage `json:"tool_input"`
 }
 
+// mintRequestToken generates a cryptographically-random UUIDv4 string in
+// standard 8-4-4-4-12 hex form (RFC 4122 §4.4) using crypto/rand. The token
+// is minted once per runRelay invocation and closed over for the full relay
+// lifecycle: Upsert → Poll → timeout-path Decide. Distinct concurrent
+// invocations of runRelay each receive their own unique token, ensuring that
+// per-request isolation is enforced at the DB row level.
+//
+// On failure (crypto/rand unavailable) the caller must write a fail-closed
+// deny envelope and return without touching the store.
+func mintRequestToken() (string, error) {
+	id, err := uuid.NewRandom()
+	if err != nil {
+		return "", err
+	}
+	return id.String(), nil
+}
+
 // RelayStore is the narrow surface the relay flow needs: the INSERT to write a
 // fresh open request, the polling-loop read, and the two writes needed on
 // timeout so CSCB's poller can observe the abandoned relay and expire the
@@ -47,6 +65,14 @@ type RelayStore interface {
 // owns the full happy + failure flow per SRD §6.2 + §6.4 and ALWAYS
 // writes an envelope to stdout before returning — every failure path
 // becomes a deny envelope so Claude Code never hangs.
+//
+// A UUIDv4 request_token is minted via crypto/rand immediately after the
+// payload is parsed. The token is closed over for the full runRelay body:
+// it flows into UpsertOpenPermissionRequest (which keys the DB row), into
+// Poll (which reads only that specific row), and into the timeout-path
+// DecidePermissionRequest call (which writes to only that row). Concurrent
+// runRelay invocations each mint their own distinct token so per-request
+// isolation is enforced at the DB level.
 func runRelay(
 	ctx context.Context,
 	stdout io.Writer,
@@ -69,35 +95,42 @@ func runRelay(
 		toolInput = "null"
 	}
 
-	// TODO(Task-C): mint a UUIDv4 requestToken here instead of passing "".
-	if err := st.UpsertOpenPermissionRequest(instanceID, "", pp.ToolName, toolInput); err != nil {
-		logf(logger, "relay: upsert: %v", err)
+	// Mint a per-request UUIDv4 token via crypto/rand. Fail closed on any
+	// error — a missing token means we can't key the DB row correctly, so
+	// we deny immediately without touching the store.
+	requestToken, err := mintRequestToken()
+	if err != nil {
+		logf(logger, "relay: mint token (instance=%s): %v", instanceID, err)
+		_, _ = fmt.Fprintln(stdout, EncodeDecision("deny", ""))
+		return
+	}
+
+	if err := st.UpsertOpenPermissionRequest(instanceID, requestToken, pp.ToolName, toolInput); err != nil {
+		logf(logger, "relay: upsert (instance=%s, token=%s): %v", instanceID, requestToken, err)
 		_, _ = fmt.Fprintln(stdout, EncodeDecision("deny", ""))
 		return
 	}
 
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	// TODO(Task-C): pass real minted requestToken instead of "".
-	res := Poll(ctx, st, clock, cfg, instanceID, "", rng)
+	res := Poll(ctx, st, clock, cfg, instanceID, requestToken, rng)
 	switch res.Decision {
 	case "allow":
-		logf(logger, "relay: allow for %s (%s)", instanceID, res.Reason)
+		logf(logger, "relay: allow for %s token=%s (%s)", instanceID, requestToken, res.Reason)
 		_, _ = fmt.Fprintln(stdout, EncodeDecision("allow", res.Reason))
 	case "deny":
-		logf(logger, "relay: deny for %s (%s)", instanceID, res.Reason)
+		logf(logger, "relay: deny for %s token=%s (%s)", instanceID, requestToken, res.Reason)
 		_, _ = fmt.Fprintln(stdout, EncodeDecision("deny", res.Reason))
 	default:
 		// Timeout, ctx cancel, preemption, or read-retry exhaustion —
 		// SRD §6.4 fail-closed.
-		logf(logger, "relay: fail-closed for %s (%s)", instanceID, res.Why)
+		logf(logger, "relay: fail-closed for %s token=%s (%s)", instanceID, requestToken, res.Why)
 
 		// Write to DB BEFORE writing to stdout so a successful envelope
 		// is never observed without the matching state update. Both writes
 		// are best-effort — fail-open per SRD §3.2 for state tracking; the
 		// stdout envelope still lands regardless (SRD §6.4 fail-closed).
-		// TODO(Task-C): pass real minted requestToken instead of "".
-		if _, err := st.DecidePermissionRequest(instanceID, "", "deny", store.DecisionReasonTimeout); err != nil {
-			logf(logger, "relay: timeout decision write failed (instance=%s): %v", instanceID, err)
+		if _, err := st.DecidePermissionRequest(instanceID, requestToken, "deny", store.DecisionReasonTimeout); err != nil {
+			logf(logger, "relay: timeout decision write failed (instance=%s, token=%s): %v", instanceID, requestToken, err)
 		}
 		if err := st.ApplyHookTransition(instanceID, store.StateWorking, false); err != nil {
 			logf(logger, "relay: timeout state transition failed (instance=%s): %v", instanceID, err)

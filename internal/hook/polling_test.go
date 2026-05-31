@@ -87,6 +87,10 @@ func setupVirtualClock(t *testing.T) (*time.Time, func()) {
 	return &now, restore
 }
 
+// testRequestToken is a canonical UUIDv4 constant for Poll call sites in this
+// file. Using a named constant satisfies SR-9.4: no inline magic UUID strings.
+const testRequestToken = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"
+
 func newRNG() *rand.Rand { return rand.New(rand.NewSource(1)) }
 
 func TestPollReturnsDecisionWhenAvailable(t *testing.T) {
@@ -96,7 +100,7 @@ func TestPollReturnsDecisionWhenAvailable(t *testing.T) {
 		},
 	}
 	res := hook.Poll(context.Background(), st, fastClock{},
-		config.Relay{TimeoutSeconds: 5}, "id-1", "", newRNG())
+		config.Relay{TimeoutSeconds: 5}, "id-1", testRequestToken, newRNG())
 	if res.Decision != "allow" || res.Reason != "ok" {
 		t.Errorf("res = %+v; want allow/ok", res)
 	}
@@ -112,7 +116,7 @@ func TestPollWaitsForDecision(t *testing.T) {
 		},
 	}
 	res := hook.Poll(context.Background(), st, fastClock{},
-		config.Relay{TimeoutSeconds: 5}, "id-1", "", newRNG())
+		config.Relay{TimeoutSeconds: 5}, "id-1", testRequestToken, newRNG())
 	if res.Decision != "deny" || res.Reason != "no" {
 		t.Errorf("res = %+v; want deny/no", res)
 	}
@@ -126,7 +130,7 @@ func TestPollRowAbsentFailsClosed(t *testing.T) {
 		rows: []scriptedRow{{err: sql.ErrNoRows}},
 	}
 	res := hook.Poll(context.Background(), st, fastClock{},
-		config.Relay{TimeoutSeconds: 5}, "id-1", "", newRNG())
+		config.Relay{TimeoutSeconds: 5}, "id-1", testRequestToken, newRNG())
 	if res.Decision != "" {
 		t.Errorf("expected fail-closed (empty Decision); got %+v", res)
 	}
@@ -143,7 +147,7 @@ func TestPollReadRetryBudget(t *testing.T) {
 	}
 	st := &scriptedPollStore{rows: rows}
 	res := hook.Poll(context.Background(), st, fastClock{},
-		config.Relay{TimeoutSeconds: 30}, "id-1", "", newRNG())
+		config.Relay{TimeoutSeconds: 30}, "id-1", testRequestToken, newRNG())
 	if res.Decision != "" {
 		t.Errorf("expected fail-closed after exhausting retries; got %+v", res)
 	}
@@ -162,7 +166,7 @@ func TestPollTimeoutFailsClosed(t *testing.T) {
 
 	res := hook.Poll(context.Background(), st, clock,
 		config.Relay{TimeoutSeconds: 1, PollBaseMs: 0, PollJitterMs: 0},
-		"id-1", "", newRNG())
+		"id-1", testRequestToken, newRNG())
 
 	if res.Decision != "" {
 		t.Errorf("expected timeout fail-closed; got %+v", res)
@@ -195,7 +199,7 @@ func TestPollCtxCancelFailsClosed(t *testing.T) {
 
 	res := hook.Poll(ctx, st, clock,
 		config.Relay{TimeoutSeconds: 60, PollBaseMs: 5, PollJitterMs: 5},
-		"id-1", "", newRNG())
+		"id-1", testRequestToken, newRNG())
 	if res.Decision != "" {
 		t.Errorf("expected ctx-cancel fail-closed; got %+v", res)
 	}
@@ -222,7 +226,7 @@ func TestPollFloorEnforced(t *testing.T) {
 
 	res := hook.Poll(context.Background(), st, clock,
 		config.Relay{TimeoutSeconds: 30, PollBaseMs: 0, PollJitterMs: 0},
-		"id-1", "", newRNG())
+		"id-1", testRequestToken, newRNG())
 	if res.Decision != "allow" {
 		t.Fatalf("expected allow after 4 polls; got %+v", res)
 	}
