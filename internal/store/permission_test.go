@@ -3,7 +3,10 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -486,6 +489,113 @@ func TestGetPermissionRequestByTokenMissReturnsSentinel(t *testing.T) {
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("err = %v; sql.ErrNoRows MUST NOT leak across the store boundary (SR-7.4)", err)
+	}
+}
+
+// TestGetPermissionRequestByTokenConcurrentReads exercises the read path
+// under concurrent reader + writer pressure. Readers tight-loop on a seeded
+// open row and a seeded closed row; a single writer interleaves transient
+// UPSERTs (with unique fresh tokens) and decides against the seeded open row.
+// The contract: reads of the seeded tokens must always succeed (never
+// surface an error of any kind); the closed row's projection must be stable
+// across the full run (its decision/decision_reason/decided_at columns are
+// terminal, no writer touches them). The test is bounded by a 2-second
+// timer and must pass under `go test -race`.
+func TestGetPermissionRequestByTokenConcurrentReads(t *testing.T) {
+	s := openTestStore(t)
+	const id = "spawn-concurrent-reads"
+	seedSpawnForPerm(t, s, id, "on")
+
+	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Read", `{"file":"/a"}`); err != nil {
+		t.Fatalf("upsert seeded open: %v", err)
+	}
+	if err := s.UpsertOpenPermissionRequest(id, tokenB, "Bash", `{"cmd":"ls"}`); err != nil {
+		t.Fatalf("upsert seeded closed (pre-decide): %v", err)
+	}
+	updated, err := s.DecidePermissionRequest(id, tokenB, "deny", DecisionReasonOperator)
+	if err != nil {
+		t.Fatalf("decide seeded closed: %v", err)
+	}
+	if !updated {
+		t.Fatalf("decide seeded closed updated=false; want true")
+	}
+	closedSnapshot, err := s.GetPermissionRequestByToken(tokenB)
+	if err != nil {
+		t.Fatalf("read closed snapshot: %v", err)
+	}
+
+	const readers = 8
+	var stop atomic.Bool
+	var wg sync.WaitGroup
+	readerErrs := make(chan error, readers)
+	closedDrift := make(chan string, readers)
+
+	for i := 0; i < readers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for !stop.Load() {
+				if _, err := s.GetPermissionRequestByToken(tokenA); err != nil {
+					readerErrs <- fmt.Errorf("seeded open token: %w", err)
+					return
+				}
+				cr, err := s.GetPermissionRequestByToken(tokenB)
+				if err != nil {
+					readerErrs <- fmt.Errorf("seeded closed token: %w", err)
+					return
+				}
+				if cr.Decision != closedSnapshot.Decision ||
+					cr.DecisionReason != closedSnapshot.DecisionReason ||
+					!cr.DecidedAt.Equal(closedSnapshot.DecidedAt) {
+					closedDrift <- fmt.Sprintf("decision=%q reason=%q decided_at=%v (want %q/%q/%v)",
+						cr.Decision, cr.DecisionReason, cr.DecidedAt,
+						closedSnapshot.Decision, closedSnapshot.DecisionReason, closedSnapshot.DecidedAt)
+					return
+				}
+			}
+		}()
+	}
+
+	writerErrs := make(chan error, 1)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var seq uint64
+		for !stop.Load() {
+			seq++
+			// Unique transient token, UUIDv4-shape (8-4-4-4-12 hex, RFC 4122 4xxx
+			// version marker) so it doesn't collide with the seeded tokens.
+			transient := fmt.Sprintf("%08x-%04x-4%03x-a%03x-%012x",
+				seq, seq&0xffff, seq&0xfff, seq&0xfff, seq)
+			if err := s.UpsertOpenPermissionRequest(id, transient, "Bash", `{"cmd":"echo"}`); err != nil {
+				writerErrs <- fmt.Errorf("transient upsert (seq=%d): %w", seq, err)
+				return
+			}
+			// First call may flip the seeded open row; subsequent calls no-op
+			// (first-call-wins). Either outcome is fine — DecidePermissionRequest
+			// returns (false, nil) on the no-op path, never an error.
+			if _, err := s.DecidePermissionRequest(id, tokenA, "allow", ""); err != nil {
+				writerErrs <- fmt.Errorf("decide seeded open (seq=%d): %w", seq, err)
+				return
+			}
+		}
+	}()
+
+	time.Sleep(2 * time.Second)
+	stop.Store(true)
+	wg.Wait()
+	close(readerErrs)
+	close(closedDrift)
+	close(writerErrs)
+
+	for err := range readerErrs {
+		t.Errorf("reader of seeded token returned error: %v", err)
+	}
+	for delta := range closedDrift {
+		t.Errorf("closed row reader observed drift: %s", delta)
+	}
+	for err := range writerErrs {
+		t.Errorf("writer error: %v", err)
 	}
 }
 
