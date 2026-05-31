@@ -8,7 +8,7 @@ import (
 )
 
 // ErrNoOpenPermissionRequest is returned by decide() when no row
-// exists in permission_requests for the supplied claude_instance_id.
+// exists in permission_requests for the given claude_instance_id.
 // SRD §6.2: typically means the Spawn isn't currently sitting on a
 // PermissionRequest hook (or one was already preempted by another).
 var ErrNoOpenPermissionRequest = errors.New("ErrNoOpenPermissionRequest")
