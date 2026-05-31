@@ -26,10 +26,10 @@ type GetPermissionParams struct {
 
 // GetPermissionResult is the SR-7.4 wire projection of a permission_requests
 // row. Nullable columns (decision, decision_reason, decided_at) surface as
-// pointer fields — a nil pointer marshals to JSON null, distinguishing a
-// not-yet-decided row from an allow row (which carries a non-nil Decision
-// pointer to "allow" but a nil DecisionReason and nil DecidedAt is impossible
-// for a decided row).
+// pointer fields — a nil pointer marshals to JSON null. Open (not-yet-decided)
+// rows carry nil for all three. Allow rows carry a non-nil Decision pointing
+// to "allow" and a non-nil DecidedAt, with DecisionReason still nil (SR-1.3:
+// allow does not carry a reason). Deny rows carry all three non-nil.
 //
 // ToolInput is the raw JSON string from the DB column — callers parse it
 // themselves. The verb MUST NOT re-encode, validate, or normalize whitespace

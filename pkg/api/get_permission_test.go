@@ -166,12 +166,12 @@ func TestGetPermissionClosedDeny(t *testing.T) {
 	}
 }
 
-// TestGetPermissionMiss pins SR-9.2 case 6: an unknown request_token surfaces
-// ErrPermissionRequestNotFound (via the store sentinel re-exported through
-// pkg/api). errors.Is must match against the api.* name. An unrelated open
-// row in the same store must be unaffected — the lookup is token-scoped, no
-// other rows should be touched.
-func TestGetPermissionMiss(t *testing.T) {
+// TestGetPermissionMissingRow pins SR-9.2 case 6: an unknown request_token
+// surfaces ErrPermissionRequestNotFound (via the store sentinel re-exported
+// through pkg/api). errors.Is must match against the api.* name. An unrelated
+// open row in the same store must be unaffected — the lookup is token-scoped,
+// no other rows should be touched.
+func TestGetPermissionMissingRow(t *testing.T) {
 	s, _ := apitest.SeedDecideFixture(t, "on")
 	// Unrelated open row — separate token, must survive untouched.
 	apitest.SeedPermissionRow(t, s, "id-d-1") // uses TestRequestTokenA
