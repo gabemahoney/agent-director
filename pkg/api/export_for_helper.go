@@ -112,7 +112,7 @@ func HelperSeedPermissionRequest(dbPath, spawnID, toolName string) (int64, error
 	defer s.Close() //nolint:errcheck
 
 	requestToken := uuid.NewString()
-	if err := s.UpsertOpenPermissionRequest(spawnID, requestToken, toolName, "{}"); err != nil {
+	if err := s.UpsertOpenPermissionRequest(spawnID, requestToken, toolName, "{}", 0); err != nil {
 		return 0, fmt.Errorf("HelperSeedPermissionRequest: upsert: %w", err)
 	}
 

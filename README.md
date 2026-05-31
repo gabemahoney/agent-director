@@ -230,6 +230,7 @@ disable_askuserquestion = false
 poll_base_ms = 100
 poll_jitter_ms = 100
 timeout_seconds = 86400
+permission_request_cap = 1000   # 0 = unbounded; negative = use default (1000)
 
 [pause]
 timeout_seconds = 30

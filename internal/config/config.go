@@ -43,9 +43,10 @@ type Defaults struct {
 
 // Relay holds polling and timeout knobs for the relay loop.
 type Relay struct {
-	PollBaseMs     int `toml:"poll_base_ms"`
-	PollJitterMs   int `toml:"poll_jitter_ms"`
-	TimeoutSeconds int `toml:"timeout_seconds"`
+	PollBaseMs           int `toml:"poll_base_ms"`
+	PollJitterMs         int `toml:"poll_jitter_ms"`
+	TimeoutSeconds       int `toml:"timeout_seconds"`
+	PermissionRequestCap int `toml:"permission_request_cap"`
 }
 
 // Pause holds the pause-verb timeout.
@@ -73,9 +74,10 @@ func Default() Config {
 			InjectHelpHook:         false,
 		},
 		Relay: Relay{
-			PollBaseMs:     100,
-			PollJitterMs:   100,
-			TimeoutSeconds: 86400,
+			PollBaseMs:           100,
+			PollJitterMs:         100,
+			TimeoutSeconds:       86400,
+			PermissionRequestCap: 1000,
 		},
 		Pause: Pause{
 			TimeoutSeconds: 30,

@@ -16,7 +16,7 @@ import (
 type HookStore interface {
 	ApplyHookTransition(instanceID, newState string, softRefresh bool) error
 	SetSessionID(instanceID, sessionID string) error
-	UpsertOpenPermissionRequest(instanceID, requestToken, toolName, toolInputJSON string) error
+	UpsertOpenPermissionRequest(instanceID, requestToken, toolName, toolInputJSON string, cap int) error
 	GetPermissionRequest(instanceID, requestToken string) (store.PermissionRow, error)
 	DecidePermissionRequest(instanceID, requestToken, decision, reason string) (bool, error)
 }
