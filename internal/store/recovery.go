@@ -64,6 +64,28 @@ func (s *Store) MarkSpawnMissing(instanceID string) error {
 	return nil
 }
 
+// CloseOrphanedPermissionRequests denies all open permission_requests rows for
+// a Spawn that has been marked missing. Each open row receives its own
+// per-row UPDATE via DecidePermissionRequest with DecisionReasonFindMissing so
+// the relay polling loop observes a fail-closed deny rather than spinning to
+// its own internal timeout. No-op if the Spawn has no open rows.
+//
+// Call this immediately after MarkSpawnMissing for each missing ID. Per-row
+// errors are surfaced to the caller; the caller decides whether to log-and-
+// continue or abort the sweep.
+func (s *Store) CloseOrphanedPermissionRequests(instanceID string) error {
+	rows, err := s.OpenPermissionRequestsForSpawn(instanceID)
+	if err != nil {
+		return fmt.Errorf("store: close orphaned permission requests: %w", err)
+	}
+	for _, row := range rows {
+		if _, err := s.DecidePermissionRequest(instanceID, row.RequestToken, "deny", DecisionReasonFindMissing); err != nil {
+			return fmt.Errorf("store: close orphaned permission request (token=%s): %w", row.RequestToken, err)
+		}
+	}
+	return nil
+}
+
 // DeleteTerminalOlderThan removes rows in terminal states (ended /
 // missing) whose ended_at is older than `now - older`. Returns the
 // count of removed rows + their IDs. Per SRD §12 the expire verb
