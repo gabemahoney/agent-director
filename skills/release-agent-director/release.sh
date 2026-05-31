@@ -520,7 +520,7 @@ verify_phase() {
     # shellcheck disable=SC2064  # we want the variables resolved now
     trap "rm -rf '$stage_dir' '$tmp_home' '$tmp_workdir'" RETURN
 
-    log verify "step 1/2: bun pack umbrella + host platform sub-package"
+    log verify "step 1/3: bun pack umbrella + host platform sub-package"
 
     # Stage the umbrella + platforms + skill source into a writable
     # working tree, then stamp them to the release tag.
@@ -568,7 +568,7 @@ verify_phase() {
         exit 5
     fi
 
-    log verify "step 2/2: install tarball + run client.version() smoke"
+    log verify "step 2/3: install tarball + run client.version() smoke"
 
     # Consumer fixture: trust the package so the postinstall actually
     # fires (bun's untrusted-package default blocks it). We pin the
@@ -619,6 +619,15 @@ CONSUMER_PKG
             > >(while IFS= read -r l; do printf '[verify] %s\n' "$l"; done); then
         log verify "FAIL client.version() smoke against installed tarball" >&2
         phase_fail verify "version() smoke"
+        exit 5
+    fi
+
+    log verify "step 3/3: bun test pkg/ts-bun-client (in-tree)"
+
+    if ! (cd "$REPO_ROOT/pkg/ts-bun-client" && bun install --frozen-lockfile && bun test) \
+            > >(while IFS= read -r l; do printf '[verify] %s\n' "$l"; done); then
+        log verify "FAIL bun test (in-tree pkg/ts-bun-client)" >&2
+        phase_fail verify "bun test"
         exit 5
     fi
 
