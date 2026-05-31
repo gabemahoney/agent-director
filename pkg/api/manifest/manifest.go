@@ -465,7 +465,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "reason",
 				Type:          "string",
-				Description:   "Free-text message surfaced to Claude. On `deny` with empty reason the envelope defaults to \"Denied by orchestrator\".",
+				Description:   "Currently discarded on deny; the canonical DecisionReasonOperator is persisted regardless. Reserved for future schema additions.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -474,6 +474,7 @@ var Verbs = []VerbDef{
 		},
 		ResultFields: []FieldDef{},
 		ErrorNames: []string{
+			"ErrMissingRequestToken",
 			"ErrSpawnNotFound",
 			"ErrRelayModeOff",
 			"ErrNoOpenPermissionRequest",

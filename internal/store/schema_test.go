@@ -251,6 +251,34 @@ func TestSchemaV2Migration(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 	openV1DB(t, path)
 
+	// Seed a spawn row + one permission_requests row into the v1 schema so the
+	// "0 rows after migration" assertion is non-vacuous: it verifies that DROP
+	// TABLE actually fired and the v1 row didn't survive into v2.
+	{
+		rawV1, err := sql.Open("sqlite", path)
+		if err != nil {
+			t.Fatalf("open raw v1 for seeding: %v", err)
+		}
+		if _, err := rawV1.Exec(
+			`INSERT INTO spawns (claude_instance_id, state, cwd, tmux_session_name, relay_mode)
+			 VALUES ('v1-seed-id', 'working', '/tmp', 'v1-sess', 'on')`,
+		); err != nil {
+			_ = rawV1.Close()
+			t.Fatalf("insert v1 spawn row: %v", err)
+		}
+		// v1 permission_requests has no request_token column.
+		if _, err := rawV1.Exec(
+			`INSERT INTO permission_requests (claude_instance_id, tool_name, tool_input)
+			 VALUES ('v1-seed-id', 'Bash', '{"cmd":"ls"}')`,
+		); err != nil {
+			_ = rawV1.Close()
+			t.Fatalf("insert v1 permission_requests row: %v", err)
+		}
+		if err := rawV1.Close(); err != nil {
+			t.Fatalf("close raw v1: %v", err)
+		}
+	}
+
 	s, err := Open(path)
 	if err != nil {
 		t.Fatalf("Open v1 DB: %v", err)

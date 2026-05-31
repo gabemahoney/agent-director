@@ -98,6 +98,7 @@ var packageOf = map[string]string{
 	"ErrJsonlMissing":         "api",
 	"ErrRelayModeOff":         "api",
 	"ErrInvalidDecision":      "api",
+	"ErrMissingRequestToken":  "api",
 
 	// ErrUnknownTool is intentionally absent: it was moved from pkg/api/errnames
 	// to internal/mcp in Task 7 (dispatch-level error, not a verb-surface error).

@@ -23,7 +23,7 @@ import (
 const (
 	TestRequestTokenA = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"
 	TestRequestTokenB = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb"
-	TestRequestTokenC = "cccccccc-cccc-4ccc-cccc-cccccccccccc"
+	TestRequestTokenC = "cccccccc-cccc-4ccc-accc-cccccccccccc"
 )
 
 // OpenTempStore opens a *store.Store under t.TempDir() and registers a

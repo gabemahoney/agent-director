@@ -168,10 +168,10 @@ func (s *Store) DecidePermissionRequest(instanceID, requestToken, decision, reas
 			return false, fmt.Errorf("store: decide permission ambiguity check: %w", err)
 		}
 		if len(rows) > 1 {
-			return false, ErrAmbiguousRequest
+			return false, fmt.Errorf("%w: %s has %d open rows", ErrAmbiguousRequest, instanceID, len(rows))
 		}
-		// 0 rows → UPDATE with request_token="" matches nothing → (false, nil)
-		// 1 row  → fall through; Task C/E will replace "" with the real token
+		// 0 or 1 open rows → fall through to UPDATE; UPDATE matches zero rows when token is
+		// empty, returning (false, nil) which callers translate to ErrNoOpenPermissionRequest.
 	}
 
 	const q = `
