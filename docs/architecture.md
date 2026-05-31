@@ -2414,7 +2414,9 @@ Allow-list for (c): `version`, `expire`, `delete`, `find-missing` — verbs whos
 manifests declare no verb-level ErrorNames (errors surface in result maps or are
 untriggerable on Linux).
 
-**CI.** The `.github/workflows/go-smoke.yml` workflow runs `go test -race -count=1 -v ./test/smoke/go/...` on `ubuntu-latest` (linux/amd64) on every pull request and push to `main`. Cross-platform extension to macOS and Windows is Epic 6.
+**CI — TS client.** The `.github/workflows/ts-client-test.yml` workflow runs `bun test` against the full `pkg/ts-bun-client/test/` suite on `ubuntu-latest` on every pull request and push to `main`. It builds the `agent-director` binary first (`go build ./cmd/agent-director`) so subprocess-based smoke tests can spawn it.
+
+**CI — Go smoke.** The `.github/workflows/go-smoke.yml` workflow runs `go test -race -count=1 -v ./test/smoke/go/...` on `ubuntu-latest` (linux/amd64) on every pull request and push to `main`. Cross-platform extension to macOS and Windows is Epic 6.
 
 ### TS envelope-diff regression
 

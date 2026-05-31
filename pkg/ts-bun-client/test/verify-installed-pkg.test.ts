@@ -228,6 +228,8 @@ const GAUNTLET_STEPS = [
   "makeTemplate-collision",
   "makeTemplate-overwrite",
   "makeTemplate-reread",
+  "getPermission-not-found",
+  "decide-missing-request-token",
 ] as const;
 
 describe("verify-installed-pkg --full gauntlet FAIL-line shape", () => {

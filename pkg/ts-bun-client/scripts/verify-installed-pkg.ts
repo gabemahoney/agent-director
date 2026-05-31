@@ -65,25 +65,45 @@ if (!smokeFlag && !fullFlag) {
 type ClientInstance = {
   version(p: Record<never, never>): Promise<unknown>;
   makeTemplate(p: { name: string; overwrite?: boolean; cwd?: string }): Promise<{ path: string }>;
+  getPermission(p: { request_token: string }): Promise<unknown>;
+  decide(p: { claude_instance_id: string; decision: string; request_token?: string }): Promise<unknown>;
   close(): void;
 };
 
 type ClientCtor = new(opts: Record<string, unknown>) => ClientInstance;
 
 type ErrTemplateExistsCtor = new(...args: unknown[]) => Error;
+type ErrPermissionRequestNotFoundCtor = new(...args: unknown[]) => Error;
+type ErrInvalidFlagsCtor = new(...args: unknown[]) => Error;
 
 let Client: ClientCtor;
 let ErrTemplateExists: ErrTemplateExistsCtor;
+let ErrPermissionRequestNotFound: ErrPermissionRequestNotFoundCtor;
+let ErrInvalidFlags: ErrInvalidFlagsCtor;
 
 const devPath = process.env.AD_VERIFY_AGAINST;
 if (devPath) {
-  const mod = await import(devPath) as { Client: ClientCtor; ErrTemplateExists: ErrTemplateExistsCtor };
+  const mod = await import(devPath) as {
+    Client: ClientCtor;
+    ErrTemplateExists: ErrTemplateExistsCtor;
+    ErrPermissionRequestNotFound: ErrPermissionRequestNotFoundCtor;
+    ErrInvalidFlags: ErrInvalidFlagsCtor;
+  };
   Client = mod.Client;
   ErrTemplateExists = mod.ErrTemplateExists;
+  ErrPermissionRequestNotFound = mod.ErrPermissionRequestNotFound;
+  ErrInvalidFlags = mod.ErrInvalidFlags;
 } else {
-  const mod = await import("agent-director") as { Client: ClientCtor; ErrTemplateExists: ErrTemplateExistsCtor };
+  const mod = await import("agent-director") as {
+    Client: ClientCtor;
+    ErrTemplateExists: ErrTemplateExistsCtor;
+    ErrPermissionRequestNotFound: ErrPermissionRequestNotFoundCtor;
+    ErrInvalidFlags: ErrInvalidFlagsCtor;
+  };
   Client = mod.Client;
   ErrTemplateExists = mod.ErrTemplateExists;
+  ErrPermissionRequestNotFound = mod.ErrPermissionRequestNotFound;
+  ErrInvalidFlags = mod.ErrInvalidFlags;
 }
 
 // ---------------------------------------------------------------------------
@@ -210,6 +230,36 @@ async function runFull(): Promise<void> {
     } catch {
       throw new StepFailure("makeTemplate-reread");
     }
+
+    // getPermission-not-found: a well-formed UUID that cannot exist in a
+    // freshly-created store must return ErrPermissionRequestNotFound.
+    let gpErr: unknown;
+    try {
+      await client.getPermission({ request_token: "00000000-0000-0000-0000-000000000000" });
+    } catch (e) {
+      gpErr = e;
+    }
+    if (!(gpErr instanceof ErrPermissionRequestNotFound)) {
+      throw new StepFailure("getPermission-not-found");
+    }
+
+    // decide-missing-request-token: calling decide without request_token must
+    // return ErrInvalidFlags (the CLI flag-level validator fires before the
+    // store lookup and rejects the call since m61 E1).
+    let dtErr: unknown;
+    try {
+      await client.decide({ claude_instance_id: "00000000-0000-0000-0000-000000000001", decision: "allow" });
+    } catch (e) {
+      dtErr = e;
+    }
+    if (!(dtErr instanceof ErrInvalidFlags)) {
+      throw new StepFailure("decide-missing-request-token");
+    }
+
+    // decide-with-request-token is out of scope for b.bwn: `seed-permission-request`
+    // lives in the `helper`-tagged ts-helper binary, not the production CLI;
+    // testing this path requires either a fixture binary on PATH or expanding
+    // verify-installed-pkg-full's Makefile scope, both out of scope for b.bwn.
 
     client.close();
   } finally {
