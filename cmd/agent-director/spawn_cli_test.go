@@ -477,9 +477,10 @@ func TestSpawnCLICwdMissing(t *testing.T) {
 
 // TestGetCLICheckPermissionOpenRow pins SR-8.3 case 1: spawn at
 // check_permission with an open permission_requests row → `get`
-// response carries a populated permission_request sub-object with all
-// four documented fields. tool_input must round-trip as the raw JSON
-// string byte-for-byte (no parse/re-emit per req-review m2).
+// response carries a populated permission_requests array with one
+// element containing all documented fields. tool_input must round-trip
+// as the raw JSON string byte-for-byte (no parse/re-emit per req-review
+// m2). The request_token field must echo back the seeded token.
 func TestGetCLICheckPermissionOpenRow(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
@@ -501,9 +502,19 @@ func TestGetCLICheckPermissionOpenRow(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &m); err != nil {
 		t.Fatalf("parse stdout %q: %v", stdout, err)
 	}
-	pr, ok := m["permission_request"].(map[string]any)
+	prs, ok := m["permission_requests"].([]any)
 	if !ok {
-		t.Fatalf("permission_request missing or not an object: %v (raw=%s)", m["permission_request"], stdout)
+		t.Fatalf("permission_requests missing or not an array: %v (raw=%s)", m["permission_requests"], stdout)
+	}
+	if len(prs) != 1 {
+		t.Fatalf("len(permission_requests) = %d; want 1 (raw=%s)", len(prs), stdout)
+	}
+	pr, ok := prs[0].(map[string]any)
+	if !ok {
+		t.Fatalf("permission_requests[0] is not an object: %v", prs[0])
+	}
+	if got, _ := pr["request_token"].(string); got != testRequestToken {
+		t.Errorf("request_token = %v; want %q", pr["request_token"], testRequestToken)
 	}
 	if got, _ := pr["tool_name"].(string); got != toolName {
 		t.Errorf("tool_name = %v; want %q", pr["tool_name"], toolName)
@@ -520,14 +531,10 @@ func TestGetCLICheckPermissionOpenRow(t *testing.T) {
 	}
 }
 
-// TestGetCLICheckPermissionNoRow pins SR-8.3 case 2: spawn at
+// TestGetCLICheckPermissionNoRowOmitsField pins SR-8.3 case 2: spawn at
 // check_permission with NO permission_requests row → `get` response
-// omits the permission_request key entirely. Also pins SR-8.5 +
-// req-review nit n1: key absence is asserted via map unmarshal, not
-// substring match. A future regression that emits
-// `"permission_request": null` would FAIL this test (null unmarshals
-// to a present key with a nil value, so `_, ok := m["..."]; ok` is
-// true).
+// carries permission_requests as an empty array []. The field is always
+// present (never omitted); it must not be null and must not be absent.
 func TestGetCLICheckPermissionNoRowOmitsField(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
@@ -546,17 +553,22 @@ func TestGetCLICheckPermissionNoRowOmitsField(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &m); err != nil {
 		t.Fatalf("parse stdout %q: %v", stdout, err)
 	}
-	if _, present := m["permission_request"]; present {
-		t.Errorf("permission_request key present in JSON; want absent (omitempty must drop a nil pointer, not emit null). raw=%s", stdout)
+	prs, ok := m["permission_requests"].([]any)
+	if !ok {
+		t.Errorf("permission_requests missing or not an array: %v (raw=%s)", m["permission_requests"], stdout)
+		return
+	}
+	if len(prs) != 0 {
+		t.Errorf("len(permission_requests) = %d; want 0 (no open rows). raw=%s", len(prs), stdout)
 	}
 }
 
 // TestGetCLICheckPermissionDecidedRowOmitsField pins SR-8.3 case 3 +
 // req-review MAJOR M1: even though the spawn is at check_permission
 // and a permission_requests row exists, a non-empty decision means
-// the row was decided in a prior cycle and the verb MUST treat it as
-// absent. If api.Get is regressed to gate only on sql.ErrNoRows, this
-// test fails.
+// the row was decided in a prior cycle. OpenPermissionRequestsForSpawn
+// filters on decision IS NULL, so the decided row is absent from
+// permission_requests. The array must be empty, not absent.
 func TestGetCLICheckPermissionDecidedRowOmitsField(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
@@ -577,14 +589,19 @@ func TestGetCLICheckPermissionDecidedRowOmitsField(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &m); err != nil {
 		t.Fatalf("parse stdout %q: %v", stdout, err)
 	}
-	if _, present := m["permission_request"]; present {
-		t.Errorf("permission_request key present despite decided row; want absent (M1: gate on pr.Decision == \"\"). raw=%s", stdout)
+	prs, ok := m["permission_requests"].([]any)
+	if !ok {
+		t.Errorf("permission_requests missing or not an array: %v (raw=%s)", m["permission_requests"], stdout)
+		return
+	}
+	if len(prs) != 0 {
+		t.Errorf("len(permission_requests) = %d; want 0 — decided rows absent (M1). raw=%s", len(prs), stdout)
 	}
 }
 
 // TestGetCLINonCheckPermissionStateOmitsField pins SR-8.3 case 4: when
-// state != check_permission and no permission row exists, the existing
-// SpawnRow assertions still hold and permission_request is absent.
+// state != check_permission, the existing SpawnRow assertions still
+// hold and permission_requests is an empty array (always present).
 func TestGetCLINonCheckPermissionStateOmitsField(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
@@ -603,8 +620,11 @@ func TestGetCLINonCheckPermissionStateOmitsField(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &m); err != nil {
 		t.Fatalf("parse stdout %q: %v", stdout, err)
 	}
-	if _, present := m["permission_request"]; present {
-		t.Errorf("permission_request key present for state=waiting; want absent. raw=%s", stdout)
+	prs, ok := m["permission_requests"].([]any)
+	if !ok {
+		t.Errorf("permission_requests missing or not an array for state=waiting: %v (raw=%s)", m["permission_requests"], stdout)
+	} else if len(prs) != 0 {
+		t.Errorf("len(permission_requests) = %d; want 0 for state=waiting. raw=%s", len(prs), stdout)
 	}
 	// Existing SpawnRow assertions still pass.
 	if m["state"] != "waiting" {
@@ -618,9 +638,8 @@ func TestGetCLINonCheckPermissionStateOmitsField(t *testing.T) {
 // TestGetCLINonCheckPermissionStateWithStaleRowOmitsField pins SR-8.3
 // case 5: even when an open permission_requests row coincidentally
 // exists (e.g. residue from a prior cycle), the verb MUST gate on
-// STATE, not on row presence. If api.Get regresses to call
-// GetPermissionRequest unconditionally, this test fails because the
-// stale row would surface.
+// STATE, not on row presence. permission_requests is an empty array
+// for non-check_permission states regardless of row existence.
 func TestGetCLINonCheckPermissionStateWithStaleRowOmitsField(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
@@ -640,8 +659,11 @@ func TestGetCLINonCheckPermissionStateWithStaleRowOmitsField(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &m); err != nil {
 		t.Fatalf("parse stdout %q: %v", stdout, err)
 	}
-	if _, present := m["permission_request"]; present {
-		t.Errorf("permission_request key present for state=waiting with stale open row; want absent (verb gates on state, not row presence). raw=%s", stdout)
+	prs, ok := m["permission_requests"].([]any)
+	if !ok {
+		t.Errorf("permission_requests missing or not an array for state=waiting with stale row: %v (raw=%s)", m["permission_requests"], stdout)
+	} else if len(prs) != 0 {
+		t.Errorf("len(permission_requests) = %d; want 0 — verb gates on state, not row presence. raw=%s", len(prs), stdout)
 	}
 }
 
