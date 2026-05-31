@@ -233,7 +233,7 @@ export class ErrUnknownErrorName extends AgentDirectorError {
 // ---------------------------------------------------------------------------
 // Catalog-derived error subclasses
 //
-// One subclass per entry in pkg/api/errnames/catalog.json (33 entries).
+// One subclass per entry in pkg/api/errnames/catalog.json (37 entries).
 // Bodies are empty: subclass identity is the sole value-add over the base class.
 // The factory (errorFromEnvelope) at the bottom of this file maps err_name
 // strings to these constructors.
@@ -305,6 +305,14 @@ export class ErrInvalidDecision extends AgentDirectorError {}
 export class ErrNoOpenPermissionRequest extends AgentDirectorError {}
 /** Mirrors ErrAlreadyDecided (package: store) */
 export class ErrAlreadyDecided extends AgentDirectorError {}
+/** Mirrors ErrPermissionRequestNotFound (package: store) */
+export class ErrPermissionRequestNotFound extends AgentDirectorError {}
+/** Mirrors ErrAmbiguousRequest (package: store) */
+export class ErrAmbiguousRequest extends AgentDirectorError {}
+/** Mirrors ErrMissingRequestToken (package: api) */
+export class ErrMissingRequestToken extends AgentDirectorError {}
+/** Mirrors ErrInvalidFlags (package: api) */
+export class ErrInvalidFlags extends AgentDirectorError {}
 
 // ---------------------------------------------------------------------------
 // errorFromEnvelope — catalog-aware factory
@@ -318,7 +326,7 @@ type ErrConstructor = new (
 
 /**
  * Lookup table from err_name strings (from the agent-director error envelope)
- * to their typed constructor. Derived from pkg/api/errnames/catalog.json — 33
+ * to their typed constructor. Derived from pkg/api/errnames/catalog.json — 37
  * entries.
  *
  * This is the most-grepped table in the project; keep it readable and in
@@ -341,6 +349,8 @@ const ERROR_TABLE = {
   ErrSpawnNotFound,
   ErrNoOpenPermissionRequest,
   ErrAlreadyDecided,
+  ErrPermissionRequestNotFound,
+  ErrAmbiguousRequest,
   // tmux package
   ErrTmuxNotAvailable,
   ErrTmuxSessionCreate,
@@ -357,6 +367,8 @@ const ERROR_TABLE = {
   ErrJsonlMissing,
   ErrRelayModeOff,
   ErrInvalidDecision,
+  ErrMissingRequestToken,
+  ErrInvalidFlags,
   // config package
   ErrTemplateNameUnsafe,
   ErrTemplateNotFound,

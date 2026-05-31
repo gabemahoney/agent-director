@@ -218,6 +218,18 @@ export declare class ErrNoOpenPermissionRequest extends AgentDirectorError {
 /** Mirrors ErrAlreadyDecided (package: store) */
 export declare class ErrAlreadyDecided extends AgentDirectorError {
 }
+/** Mirrors ErrPermissionRequestNotFound (package: store) */
+export declare class ErrPermissionRequestNotFound extends AgentDirectorError {
+}
+/** Mirrors ErrAmbiguousRequest (package: store) */
+export declare class ErrAmbiguousRequest extends AgentDirectorError {
+}
+/** Mirrors ErrMissingRequestToken (package: api) */
+export declare class ErrMissingRequestToken extends AgentDirectorError {
+}
+/** Mirrors ErrInvalidFlags (package: api) */
+export declare class ErrInvalidFlags extends AgentDirectorError {
+}
 /**
  * errorFromEnvelope creates a typed AgentDirectorError subclass from the
  * subprocess error envelope fields.

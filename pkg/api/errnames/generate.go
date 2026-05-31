@@ -99,6 +99,7 @@ var packageOf = map[string]string{
 	"ErrJsonlMissing":         "api",
 	"ErrRelayModeOff":         "api",
 	"ErrInvalidDecision":      "api",
+	"ErrInvalidFlags":         "api",
 	"ErrMissingRequestToken":  "api",
 
 	// ErrUnknownTool is intentionally absent: it was moved from pkg/api/errnames

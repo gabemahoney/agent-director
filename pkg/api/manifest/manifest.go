@@ -24,7 +24,7 @@ type VerbDef struct {
 	// Callable is true when the verb is exposed as a synchronous method on
 	// pkg/api.Client. help (informational/CLI-side), serve (long-running MCP
 	// server), and hook (SRD §3.2 fail-open) are Callable: false.
-	// 15 verbs are Callable: true.
+	// 16 verbs are Callable: true.
 	Callable bool
 
 	// HandleFree is true when the verb can be invoked without a Client handle

@@ -80,13 +80,19 @@ func computeCoherenceDiff(
 		}
 	}
 
-	// ── Check 3: (b) ⊆ (c) (ErrInternal excepted) ───────────────────────────
+	// ── Check 3: (b) ⊆ (c) (ErrInternal and ErrInvalidFlags excepted) ─────────
 	// Every Catalog entry must appear in at least one callable verb's ErrorNames.
 	// Exceptions:
-	//   • "ErrInternal" — the Classify fallback; intentionally absent from manifest.
-	const errInternalException = "ErrInternal"
+	//   • "ErrInternal"    — the Classify fallback; intentionally absent from manifest.
+	//   • "ErrInvalidFlags" — a CLI-flag-parse error emitted as a string literal by
+	//                         cmd/agent-director verb handlers (not via a pkg/api verb
+	//                         handler); not verb-specific so excluded from check 3.
+	check3Exceptions := map[string]struct{}{
+		"ErrInternal":    {},
+		"ErrInvalidFlags": {},
+	}
 	for _, name := range catalogNames {
-		if name == errInternalException {
+		if _, excepted := check3Exceptions[name]; excepted {
 			continue
 		}
 		if _, ok := manifestSet[name]; !ok {
@@ -223,6 +229,21 @@ func TestDiffExclusions(t *testing.T) {
 	if len(findings) != 0 {
 		t.Errorf("want 0 findings for ErrInternal exclusion, got %d: %v",
 			len(findings), findings)
+	}
+}
+
+// TestDiffExclusionErrInvalidFlags — parallel to TestDiffExclusions: ErrInvalidFlags
+// is a CLI-flag-parse sentinel declared in pkg/api and present in the Catalog, but
+// no verb lists it in ErrorNames (it is not verb-specific). Check 3 must skip it.
+func TestDiffExclusionErrInvalidFlags(t *testing.T) {
+	findings := computeCoherenceDiff(
+		nil,                          // handlerEmitted — pkg/api never emits it
+		[]string{"ErrInvalidFlags"},  // catalogNames — lives in Catalog
+		nil,                          // manifestErrorNames — no verb lists it (CLI-flag-parse error, not verb-specific)
+		[]string{"ErrInvalidFlags"},  // exportedSentinels — declared in pkg/api
+	)
+	if len(findings) != 0 {
+		t.Errorf("want 0 findings for ErrInvalidFlags exclusion, got %d: %v", len(findings), findings)
 	}
 }
 

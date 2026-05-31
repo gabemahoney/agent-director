@@ -197,14 +197,15 @@ func cmdSeedPermissionRequest(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	requestID, err := api.HelperSeedPermissionRequest(*storePath, *spawnID, *toolName)
+	seed, err := api.HelperSeedPermissionRequest(*storePath, *spawnID, *toolName)
 	if err != nil {
 		printError(stderr, err)
 		return 1
 	}
 
 	if err := printResult(stdout, map[string]any{
-		"request_id": requestID,
+		"request_id":    seed.RequestID,
+		"request_token": seed.RequestToken,
 	}); err != nil {
 		printError(stderr, err)
 		return 1
@@ -296,14 +297,14 @@ func cmdSeedEmptyStore(args []string, stdout, stderr io.Writer) int {
 var resultSchemas = map[string]map[string]string{
 	"seed-spawn": {
 		"claude_instance_id": "string",
-		// New flags available: --relay-mode (on|off), --session-id
 	},
 	"seed-parent-child": {
 		"parent_id": "string",
 		"child_id":  "string",
 	},
 	"seed-permission-request": {
-		"request_id": "number",
+		"request_id":    "number",
+		"request_token": "string",
 	},
 	"seed-template": {
 		"path": "string",

@@ -594,6 +594,8 @@ describe("decide", () => {
   test(
     "success path",
     async () => {
+      // Capture the seeded request_token so we can pass it to both CLI and TS Client.
+      let requestToken = "";
       const { homeA, storeB, cleanup } = prepareStores((store) => {
         // Spawn in check_permission with relay_mode=on
         runHelper("seed-spawn", {
@@ -603,16 +605,22 @@ describe("decide", () => {
           "relay-mode": "on",
           "create-store": true,
         });
-        // Add open permission request
-        runHelper("seed-permission-request", {
+        // Add open permission request; capture the request_token for --request-token flag.
+        const seed = runHelper("seed-permission-request", {
           store,
           "spawn-id": "id-d-1",
           tool: "Bash",
         });
+        requestToken = seed["request_token"] as string;
       });
       try {
         const cli = runCli(
-          ["decide", "--claude-instance-id", "id-d-1", "--decision", "allow"],
+          [
+            "decide",
+            "--claude-instance-id", "id-d-1",
+            "--request-token", requestToken,
+            "--decision", "allow",
+          ],
           cliEnv(homeA)
         );
         expect(cli.exitCode).toBe(0);
@@ -620,6 +628,7 @@ describe("decide", () => {
         using client = new Client({ storePath: storeB });
         const ts = await client.decide({
           claude_instance_id: "id-d-1",
+          request_token: requestToken,
           decision: "allow",
         });
 
@@ -636,8 +645,10 @@ describe("decide", () => {
   test(
     "error path: ErrRelayModeOff",
     async () => {
+      // Seed a permission request so --request-token is non-empty; relay_mode=off
+      // is checked after the token validation, yielding ErrRelayModeOff.
+      const placeholderToken = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
       const { homeA, storeB, cleanup } = prepareStores((store) => {
-        // relay_mode=off → ErrRelayModeOff
         runHelper("seed-spawn", {
           store,
           id: "id-err-rmo-1",
@@ -652,6 +663,8 @@ describe("decide", () => {
             "decide",
             "--claude-instance-id",
             "id-err-rmo-1",
+            "--request-token",
+            placeholderToken,
             "--decision",
             "allow",
           ],
@@ -664,8 +677,82 @@ describe("decide", () => {
         try {
           await client.decide({
             claude_instance_id: "id-err-rmo-1",
+            request_token: placeholderToken,
             decision: "allow",
           });
+        } catch (e) {
+          tsErr = e;
+        }
+
+        assertErrorEnvelopes(cli.stderr, tsErr);
+      } finally {
+        cleanup();
+      }
+    },
+    TIMEOUT
+  );
+});
+
+// ── get-permission ────────────────────────────────────────────────────────────
+
+describe("get-permission", () => {
+  test(
+    "success path",
+    async () => {
+      let requestToken = "";
+      const { homeA, storeB, cleanup } = prepareStores((store) => {
+        runHelper("seed-spawn", {
+          store,
+          id: "id-gp-1",
+          state: "check_permission",
+          "relay-mode": "on",
+          "create-store": true,
+        });
+        const seed = runHelper("seed-permission-request", {
+          store,
+          "spawn-id": "id-gp-1",
+          tool: "Bash",
+        });
+        requestToken = seed["request_token"] as string;
+      });
+      try {
+        const cli = runCli(
+          ["get-permission", "--request-token", requestToken],
+          cliEnv(homeA)
+        );
+        expect(cli.exitCode).toBe(0);
+
+        using client = new Client({ storePath: storeB });
+        const ts = await client.getPermission({ request_token: requestToken });
+
+        assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
+          ignorePaths: loadIgnorePathsForVerb("get-permission"),
+        });
+      } finally {
+        cleanup();
+      }
+    },
+    TIMEOUT
+  );
+
+  test(
+    "error path: ErrPermissionRequestNotFound",
+    async () => {
+      const { homeA, storeB, cleanup } = prepareStores((store) => {
+        runHelper("seed-empty-store", { store });
+      });
+      try {
+        const missingToken = "00000000-0000-0000-0000-000000000000";
+        const cli = runCli(
+          ["get-permission", "--request-token", missingToken],
+          cliEnv(homeA)
+        );
+        expect(cli.exitCode).not.toBe(0);
+
+        using client = new Client({ storePath: storeB });
+        let tsErr: unknown;
+        try {
+          await client.getPermission({ request_token: missingToken });
         } catch (e) {
           tsErr = e;
         }

@@ -33,6 +33,10 @@ import {
   ErrCallTimeout,
   ErrUnknownErrorName,
   TS_ONLY_ERROR_NAMES,
+  // b.h1r: new catalog-derived classes for get-permission / decide --request-token.
+  ErrPermissionRequestNotFound,
+  ErrAmbiguousRequest,
+  ErrMissingRequestToken,
 } from "../src/errors.js";
 
 // ---------------------------------------------------------------------------
@@ -319,6 +323,138 @@ describe("ErrUnknownErrorName (TS-only, SR-4.3)", () => {
     expect(err.envelope).toBeDefined();
     expect((err.envelope as typeof syntheticEnvelope).err_name).toBe("ErrTotallyBogus");
     expect((err.envelope as typeof syntheticEnvelope).extra_field).toBe("preserved");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// b.h1r — ErrPermissionRequestNotFound (catalog-derived, package: store)
+// ---------------------------------------------------------------------------
+describe("ErrPermissionRequestNotFound (catalog-derived, store)", () => {
+  test("extends AgentDirectorError and Error", () => {
+    const err = new ErrPermissionRequestNotFound(
+      "get-permission",
+      "ErrPermissionRequestNotFound",
+      "request not found"
+    );
+    expect(err).toBeInstanceOf(ErrPermissionRequestNotFound);
+    expect(err).toBeInstanceOf(AgentDirectorError);
+    expect(err).toBeInstanceOf(Error);
+  });
+
+  test(".name is 'ErrPermissionRequestNotFound'", () => {
+    const err = new ErrPermissionRequestNotFound(
+      "get-permission",
+      "ErrPermissionRequestNotFound",
+      "request not found"
+    );
+    expect(err.name).toBe("ErrPermissionRequestNotFound");
+  });
+
+  test(".errName matches canonical err_name", () => {
+    const err = new ErrPermissionRequestNotFound(
+      "get-permission",
+      "ErrPermissionRequestNotFound",
+      "request not found"
+    );
+    expect(err.errName).toBe("ErrPermissionRequestNotFound");
+  });
+
+  test(".verb and .errDescription round-trip from constructor args", () => {
+    const err = new ErrPermissionRequestNotFound(
+      "get-permission",
+      "ErrPermissionRequestNotFound",
+      "no such request"
+    );
+    expect(err.verb).toBe("get-permission");
+    expect(err.errDescription).toBe("no such request");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// b.h1r — ErrAmbiguousRequest (catalog-derived, package: store)
+// ---------------------------------------------------------------------------
+describe("ErrAmbiguousRequest (catalog-derived, store)", () => {
+  test("extends AgentDirectorError and Error", () => {
+    const err = new ErrAmbiguousRequest(
+      "get-permission",
+      "ErrAmbiguousRequest",
+      "multiple open requests"
+    );
+    expect(err).toBeInstanceOf(ErrAmbiguousRequest);
+    expect(err).toBeInstanceOf(AgentDirectorError);
+    expect(err).toBeInstanceOf(Error);
+  });
+
+  test(".name is 'ErrAmbiguousRequest'", () => {
+    const err = new ErrAmbiguousRequest(
+      "get-permission",
+      "ErrAmbiguousRequest",
+      "multiple open requests"
+    );
+    expect(err.name).toBe("ErrAmbiguousRequest");
+  });
+
+  test(".errName matches canonical err_name", () => {
+    const err = new ErrAmbiguousRequest(
+      "get-permission",
+      "ErrAmbiguousRequest",
+      "multiple open requests"
+    );
+    expect(err.errName).toBe("ErrAmbiguousRequest");
+  });
+
+  test(".verb and .errDescription round-trip from constructor args", () => {
+    const err = new ErrAmbiguousRequest(
+      "get-permission",
+      "ErrAmbiguousRequest",
+      "ambiguous: 3 open requests"
+    );
+    expect(err.verb).toBe("get-permission");
+    expect(err.errDescription).toBe("ambiguous: 3 open requests");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// b.h1r — ErrMissingRequestToken (catalog-derived, package: api)
+// ---------------------------------------------------------------------------
+describe("ErrMissingRequestToken (catalog-derived, api)", () => {
+  test("extends AgentDirectorError and Error", () => {
+    const err = new ErrMissingRequestToken(
+      "decide",
+      "ErrMissingRequestToken",
+      "request_token is required"
+    );
+    expect(err).toBeInstanceOf(ErrMissingRequestToken);
+    expect(err).toBeInstanceOf(AgentDirectorError);
+    expect(err).toBeInstanceOf(Error);
+  });
+
+  test(".name is 'ErrMissingRequestToken'", () => {
+    const err = new ErrMissingRequestToken(
+      "decide",
+      "ErrMissingRequestToken",
+      "request_token is required"
+    );
+    expect(err.name).toBe("ErrMissingRequestToken");
+  });
+
+  test(".errName matches canonical err_name", () => {
+    const err = new ErrMissingRequestToken(
+      "decide",
+      "ErrMissingRequestToken",
+      "request_token is required"
+    );
+    expect(err.errName).toBe("ErrMissingRequestToken");
+  });
+
+  test(".verb and .errDescription round-trip from constructor args", () => {
+    const err = new ErrMissingRequestToken(
+      "decide",
+      "ErrMissingRequestToken",
+      "must supply --request-token"
+    );
+    expect(err.verb).toBe("decide");
+    expect(err.errDescription).toBe("must supply --request-token");
   });
 });
 

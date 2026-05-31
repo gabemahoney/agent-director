@@ -91,6 +91,8 @@ export interface VerbSummary {
 export interface PermissionRequestInfo {
   /** Autoincrement primary key of the permission_requests row. */
   request_id: number;
+  /** UUIDv4 token minted by runRelay for this request. Pass to the decide verb to target a specific row. */
+  request_token: string;
   /** Claude Code tool that triggered the permission request (e.g. "Bash"). */
   tool_name: string;
   /** Raw JSON string of the tool input as stored in the DB. NOT a nested object. */
@@ -261,6 +263,8 @@ export interface KillResult {}
 export interface DecideParams {
   /** Id of the Spawn whose open permission request is being decided. */
   claude_instance_id: string;
+  /** UUIDv4 token identifying the specific permission request to decide. Required by the Go backend (ErrMissingRequestToken returned when absent); optional here for backward-compatible call shape. */
+  request_token?: string;
   /** Orchestrator verdict. */
   decision: "allow" | "deny";
   /** Optional free-text message surfaced to Claude on deny. */
@@ -270,6 +274,32 @@ export interface DecideParams {
 /** Mirrors pkg/api/decide.go::DecideResult (empty; reserved for future fields). */
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface DecideResult {}
+
+/** Mirrors pkg/api.GetPermissionParams (json tags). */
+export interface GetPermissionParams {
+  /** UUIDv4 token identifying the permission_requests row to fetch. Required; empty string rejected by the backend. */
+  request_token: string;
+}
+
+/** Mirrors pkg/api/get_permission.go::GetPermissionResult */
+export interface GetPermissionResult {
+  /** UUIDv4 token the row is keyed under (echoed back). */
+  request_token: string;
+  /** Autoincrement primary key of the permission_requests row. */
+  request_id: number;
+  /** Claude Code tool that triggered the permission request (e.g. "Bash", "Write"). */
+  tool_name: string;
+  /** Raw JSON string of the tool's input as stored in the DB. NOT a nested object — callers parse it themselves. */
+  tool_input: string;
+  /** RFC3339 timestamp when the permission request row was created. */
+  requested_at: string;
+  /** "allow" or "deny" once decided; null while the row is open (decision IS NULL in the DB). */
+  decision?: "allow" | "deny" | null;
+  /** Canonical decision-reason string ("operator" | "timeout" | "find_missing") for deny rows; null for open rows and for allow rows. */
+  decision_reason?: "operator" | "timeout" | "find_missing" | null;
+  /** RFC3339 timestamp when the verdict was written; null while the row is open. */
+  decided_at?: string | null;
+}
 
 /** Mirrors pkg/api.ResumeParams (json tags). */
 export interface ResumeParams {

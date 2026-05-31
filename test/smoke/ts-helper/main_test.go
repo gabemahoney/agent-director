@@ -143,6 +143,13 @@ func TestDispatch(t *testing.T) {
 		if _, ok := result["request_id"]; !ok {
 			t.Fatalf("expected request_id in result, got %v", result)
 		}
+		token, ok := result["request_token"]
+		if !ok {
+			t.Fatalf("expected request_token in result, got %v", result)
+		}
+		if s, _ := token.(string); s == "" {
+			t.Fatalf("expected non-empty request_token, got %v", result)
+		}
 	})
 
 	t.Run("a_success_seed_template", func(t *testing.T) {

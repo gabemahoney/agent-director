@@ -101,26 +101,33 @@ func HelperSeedParentChild(dbPath, parentID, childID string) error {
 	return nil
 }
 
+// PermissionRequestSeed is the result of HelperSeedPermissionRequest.
+type PermissionRequestSeed struct {
+	RequestID    int64
+	RequestToken string
+}
+
 // HelperSeedPermissionRequest inserts an open permission request for spawnID
-// using toolName. The spawn row must already exist. Returns the request_id
-// auto-assigned by SQLite (AUTOINCREMENT).
-func HelperSeedPermissionRequest(dbPath, spawnID, toolName string) (int64, error) {
+// using toolName. The spawn row must already exist. Returns both the request_id
+// (AUTOINCREMENT) and the request_token (UUIDv4) so callers can reference the
+// row by either key.
+func HelperSeedPermissionRequest(dbPath, spawnID, toolName string) (PermissionRequestSeed, error) {
 	s, err := store.Open(dbPath)
 	if err != nil {
-		return 0, fmt.Errorf("HelperSeedPermissionRequest: open store: %w", err)
+		return PermissionRequestSeed{}, fmt.Errorf("HelperSeedPermissionRequest: open store: %w", err)
 	}
 	defer s.Close() //nolint:errcheck
 
 	requestToken := uuid.NewString()
 	if err := s.UpsertOpenPermissionRequest(spawnID, requestToken, toolName, "{}", 0); err != nil {
-		return 0, fmt.Errorf("HelperSeedPermissionRequest: upsert: %w", err)
+		return PermissionRequestSeed{}, fmt.Errorf("HelperSeedPermissionRequest: upsert: %w", err)
 	}
 
 	row, err := s.GetPermissionRequest(spawnID, requestToken)
 	if err != nil {
-		return 0, fmt.Errorf("HelperSeedPermissionRequest: get: %w", err)
+		return PermissionRequestSeed{}, fmt.Errorf("HelperSeedPermissionRequest: get: %w", err)
 	}
-	return row.RequestID, nil
+	return PermissionRequestSeed{RequestID: row.RequestID, RequestToken: requestToken}, nil
 }
 
 // HelperSeedTemplate writes body to templatesDir/<name>.toml (creating the

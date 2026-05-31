@@ -32,6 +32,7 @@ import type {
   ReadPaneParams,
   KillParams,
   DecideParams,
+  GetPermissionParams,
   ResumeParams,
   ExpireParams,
   DeleteParams,
@@ -127,6 +128,8 @@ function buildVerbFlags(verb: VerbName, params: unknown): string[] {
       return buildKill(params as KillParams);
     case "decide":
       return buildDecide(params as DecideParams);
+    case "get-permission":
+      return buildGetPermission(params as GetPermissionParams);
     case "resume":
       return buildResume(params as ResumeParams);
     case "find-missing":
@@ -243,8 +246,13 @@ function buildDecide(p: DecideParams): string[] {
     "--decision",
     p.decision,
   ];
+  if (p.request_token !== undefined) f.push("--request-token", p.request_token);
   if (p.reason !== undefined) f.push("--reason", p.reason);
   return f;
+}
+
+function buildGetPermission(p: GetPermissionParams): string[] {
+  return ["get-permission", "--request-token", p.request_token];
 }
 
 function buildResume(p: ResumeParams): string[] {

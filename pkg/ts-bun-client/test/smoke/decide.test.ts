@@ -28,16 +28,18 @@ test("decide: happy path — allows an open permission request", async () => {
       "create-store": true,
     });
 
-    // Seed an open permission request for the spawn.
-    runHelper("seed-permission-request", {
+    // Seed an open permission request; capture the request_token (required by decide since m61 E1).
+    const seed = runHelper("seed-permission-request", {
       store: storePath,
       "spawn-id": spawnId,
       tool: "Bash",
     });
+    const requestToken = seed["request_token"] as string;
 
     using client = new Client({ storePath, createIfMissing: true });
     const result = await client.decide({
       claude_instance_id: spawnId,
+      request_token: requestToken,
       decision: "allow",
     });
     // DecideResult is an empty object.
@@ -52,10 +54,13 @@ test("decide: error — invalid decision string → ErrInvalidDecision", async (
 
     let caught: unknown;
     try {
-      // "maybe" is not "allow" or "deny" → triggers ErrInvalidDecision
-      // before any store lookup, so no seeded row is needed.
+      // "maybe" is not "allow" or "deny" → triggers ErrInvalidDecision.
+      // request_token must be provided (CLI validates it before --decision)
+      // so we pass a placeholder token; ErrInvalidDecision fires at the API
+      // layer before any store lookup for the token.
       await client.decide({
         claude_instance_id: "any-id",
+        request_token: "00000000-0000-0000-0000-000000000000",
         decision: "maybe" as "allow",
       });
     } catch (e) {

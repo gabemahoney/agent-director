@@ -2,7 +2,7 @@
  * errorMap.ts — catalog-driven static error map for the subprocess Client.
  *
  * Builds a `Map<string, ErrConstructor>` at module load time by iterating
- * `pkg/api/errnames/catalog.json` (33 entries as of 2026-05-25). The map
+ * `pkg/api/errnames/catalog.json` (37 entries as of 2026-05-31). The map
  * keys are the canonical `err_name` strings (e.g. "ErrSpawnNotFound");
  * values are the typed constructors already exported from `src/errors.ts`.
  *
