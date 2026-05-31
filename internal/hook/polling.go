@@ -69,8 +69,9 @@ func (realPollClock) Sleep(ctx context.Context, d time.Duration) {
 func DefaultPollClock() PollClock { return realPollClock{} }
 
 // Poll runs the SRD §6.2 relay polling loop. requestToken narrows the read to
-// the specific permission_requests row minted for this relay invocation. Pass
-// "" only as a temporary placeholder — Task C will plumb the real minted token.
+// the specific permission_requests row minted for this relay invocation (the
+// UUIDv4 token minted by mintRequestToken in runRelay). The pair
+// (instanceID, requestToken) uniquely identifies the row per SRD §6.2.
 //
 // Behavior per iteration:
 //
@@ -117,9 +118,10 @@ func Poll(ctx context.Context, s PollStore, clock PollClock, cfg config.Relay, i
 		row, err := s.GetPermissionRequest(instanceID, requestToken)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
-			// Preempted — typically another PermissionRequest event
-			// for the same Spawn DELETE-INSERTed a fresh row and the
-			// older row's poll loop is still spinning. Fail closed.
+			// Row is gone — the (instanceID, requestToken) pair no
+			// longer exists. This should be rare in v2 (rows are
+			// INSERT-only and only removed by ON DELETE CASCADE), but
+			// a cascade from a spawn delete is possible. Fail closed.
 			return PollResult{Why: "row preempted (deleted) during poll"}
 		case err != nil:
 			readFails++
