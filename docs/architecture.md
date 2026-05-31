@@ -1429,17 +1429,29 @@ decide allow/deny out-of-band. Conceptually:
   Every pre-relay failure path emits a deny envelope when relay is
   active (SRD §6.4).
 
-- **`internal/store/permission.go`** — three core primitives:
+- **`internal/store/permission.go`** — store primitives:
   - `UpsertOpenPermissionRequest`: INSERT-only per `(instanceID, requestToken)`.
     A second call with the same pair returns `ErrRequestTokenCollision`; the
     first row is unmodified.
   - `GetPermissionRequest`: pair-keyed read on `(claude_instance_id, request_token)`.
+  - `GetPermissionRequestByToken`: token-only read (no `claude_instance_id`
+    filter; SR-3.5 — the UUIDv4 is globally selective). Returns
+    `ErrPermissionRequestNotFound` when no row matches; `sql.ErrNoRows` is
+    translated here and MUST NOT leak across the store boundary (SR-7.4).
   - `DecidePermissionRequest`: the race-free first-call-wins UPDATE.
 
 - **`pkg/api/decide.go`** — verb wrapper. State guards
   (`ErrRelayModeOff`, `ErrSpawnNotFound`, `ErrInvalidDecision`)
   before the UPDATE, plus the RowsAffected==0 disambiguation
   (`ErrAlreadyDecided` vs `ErrNoOpenPermissionRequest`).
+
+- **`pkg/api/get_permission.go`** — verb wrapper. Read-only: delegates to
+  `GetPermissionRequestByToken` and projects the row onto the SR-7.4 wire
+  shape (`GetPermissionResult`). Nullable DB columns (`decision`,
+  `decision_reason`, `decided_at`) surface as pointer fields so the JSON
+  encoding renders `null` for NULL. The store-layer
+  `ErrPermissionRequestNotFound` sentinel is re-exported via `aliases.go` and
+  Catalog-registered; callers detect it with `errors.Is` across both names.
 
 ### Polling cadence + the 50ms floor
 
@@ -1516,6 +1528,61 @@ leave state=`check_permission` with decision=NULL if the
 surrounding Claude Code instance is still alive (so `find-missing`
 doesn't catch it). If this becomes observable in production, file a
 follow-up.
+
+### Get-permission verb (closed-row audit)
+
+`get-permission` is the closed-row audit counterpart to `agent-director get`.
+Both verbs read `permission_requests` rows; they partition the surface by
+liveness, not by overlap:
+
+- `get` projects only the **open** rows for a live Spawn as
+  `SpawnRow.PermissionRequests` (the plural projection added in E1). It is
+  Spawn-scoped and never surfaces closed rows.
+- `get-permission` returns **one row in any state** — open, closed-allow, or
+  closed-deny — selected by `request_token` alone. The token UUIDv4 is
+  globally selective per SR-3.5, so no `claude_instance_id` is supplied; a
+  caller who holds the token (typically captured at decide time from `get`'s
+  plural projection) can resolve the row without prior knowledge of the
+  owning Spawn.
+
+The live-row contract that the "Invariant — relay-listener pairing"
+subsection pins is untouched: `get-permission` is a read on rows the
+relay-listener pair has already minted or closed, never a write or a state
+transition.
+
+**Layer delegation.** The CLI verb dispatches into
+`pkg/api/get_permission.go::GetPermission`, which in turn calls
+`internal/store/permission.go::GetPermissionRequestByToken`. Pure read path
+— no INSERT, no UPDATE, no DELETE at any layer.
+
+**`ErrPermissionRequestNotFound` semantics.** A single sentinel covers two
+operationally indistinguishable cases:
+
+- The token never named a row (typo, fabricated UUID, wrong session).
+- The row existed but was reaped by the cap-based GC introduced in E3.
+
+E2 leaves the `permission_requests` table unbounded, so in E2-only
+deployments the sentinel always means "never existed". The dual meaning is
+load-bearing for E3 — by design there is no separate eviction signal, and
+callers MUST handle the sentinel uniformly across both cases. The store
+boundary translates `sql.ErrNoRows` into `ErrPermissionRequestNotFound`
+(SR-7.4); `sql.ErrNoRows` must not leak to verb-layer callers.
+
+**`decision_reason` cross-reference.** The verdict annotation surfaces in
+`GetPermissionResult.DecisionReason` as the closed enum defined by the
+[`decision_reason` canonical enum](#decision_reason-canonical-enum)
+subsection below — `operator`, `timeout`, or `find_missing`. The field is
+`null` in exactly two cases (SR-1.3): on open rows and on closed-allow rows.
+All closed-deny rows carry a non-null `decision_reason`.
+
+**Concurrency contract.** Read-only and lock-free at the application layer:
+`get-permission` is safe under arbitrary concurrent `runRelay` polling,
+`decide` UPDATEs, and other `get-permission` calls against the same or
+different rows. It relies on SQLite's read concurrency under the WAL journal
+mode used by the store; no extra mutex, no transaction, no busy-retry loop
+is required. The contract is pinned by
+`TestGetPermissionRequestByTokenConcurrentReads` in
+`internal/store/permission_test.go`.
 
 ### `decision_reason` canonical enum
 
