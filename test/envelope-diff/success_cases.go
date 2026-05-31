@@ -31,6 +31,7 @@ import (
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
@@ -212,12 +213,14 @@ var successCases = []successCase{
 		params: func(ctx map[string]any) map[string]any {
 			return map[string]any{
 				"claude_instance_id": ctx["id"],
+				"request_token":      storefix.TestRequestTokenA,
 				"decision":           "allow",
 			}
 		},
 		cliArgv: func(ctx map[string]any) []string {
 			return []string{"decide",
 				"--claude-instance-id", ctx["id"].(string),
+				"--request-token", storefix.TestRequestTokenA,
 				"--decision", "allow",
 			}
 		},

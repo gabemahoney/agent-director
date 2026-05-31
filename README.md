@@ -175,7 +175,11 @@ id=$(agent-director spawn --cwd "$PWD" --relay-mode=on \
        | jq -r '.claude_instance_id')
 
 # When Claude hits a PermissionRequest, state goes to check_permission.
+# Extract the request_token from the open permission request, then decide.
+token=$(agent-director get --claude-instance-id "$id" \
+          | jq -r '.permission_requests[0].request_token')
 agent-director decide --claude-instance-id "$id" \
+    --request-token "$token" \
     --decision allow --reason "tool is on the allow-list"
 ```
 

@@ -285,6 +285,7 @@ func TestDecideDelegation(t *testing.T) {
 	})
 	_, err := c.Decide(api.DecideParams{
 		ClaudeInstanceID: "id-dec-1",
+		RequestToken:     "00000000-0000-0000-0000-000000000001",
 		Decision:         "allow",
 	})
 	if !errors.Is(err, api.ErrRelayModeOff) {

@@ -16,9 +16,9 @@ import (
 type HookStore interface {
 	ApplyHookTransition(instanceID, newState string, softRefresh bool) error
 	SetSessionID(instanceID, sessionID string) error
-	UpsertOpenPermissionRequest(instanceID, toolName, toolInputJSON string) error
-	GetPermissionRequest(instanceID string) (store.PermissionRow, error)
-	DecidePermissionRequest(instanceID, decision, reason string) (bool, error)
+	UpsertOpenPermissionRequest(instanceID, requestToken, toolName, toolInputJSON string) error
+	GetPermissionRequest(instanceID, requestToken string) (store.PermissionRow, error)
+	DecidePermissionRequest(instanceID, requestToken, decision, reason string) (bool, error)
 }
 
 // HandleConfig bundles the inputs Handle takes beyond the store and
@@ -33,8 +33,8 @@ type HandleConfig struct {
 // Handle is the entry point cmd/ dispatches into. It reads the payload
 // from stdin, classifies the event, applies the row UPSERT, and — when
 // the event is PermissionRequest AND AGENT_DIRECTOR_RELAY_MODE=on —
-// runs the relay flow (DELETE-INSERT + polling loop + envelope on
-// stdout per SRD §6.2/§6.3).
+// runs the relay flow (INSERT per-request-token + polling loop + envelope
+// on stdout per SRD §6.2/§6.3).
 //
 // State-tracking is fail-open per SRD §3.2: any internal failure logs
 // and returns nil. The relay flow has stronger fail-closed semantics

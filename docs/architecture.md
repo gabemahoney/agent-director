@@ -56,7 +56,7 @@ still holds: nothing in `internal/` imports `pkg/api`.
 | --- | --- | --- | --- |
 | `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`; every non-hook verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. | stdlib; `pkg/api`; `pkg/api/errnames`; `internal/hook`; `internal/config` and `internal/store` (error sentinels only) in `setupClient`; `internal/config` in `runHook` and `newHookLogger`. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook`, `newHookLogger`, and `setupClient`'s logger bootstrap. |
 | `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, `KillTmux`, `KillLogger`, etc.), params/result types, and error sentinels. Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director` and `internal/mcp`. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`. | Direct `database/sql`; raw SQL strings; MCP framing. |
-| `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v1 per SRD §4.2), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
+| `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v2 per SRD §4.2), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
 | `pkg/api/apitest` | Test seed helpers extracted from `pkg/api/*_test.go` for cross-package importing. Provides `Seed*` functions (`SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`) that set up fixture DB rows and filesystem state for `test/envelope-diff` and future Epic 4/5 smoke tests. Non-test package (regular `.go` files) so it can be imported by harnesses outside `pkg/api`. | stdlib; `internal/store`; `internal/spawn`. | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
 | `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. The `Catalog` is consumed by `cmd/agent-director`'s envelope writer and `internal/mcp`'s `classifyDispatchError`. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
@@ -141,27 +141,47 @@ verbatim so future code review can grep for it:
 
 > No SQL outside `internal/store`; callers use typed query primitives only.
 
-**Schema v1** lives in `internal/store/schema.go` and matches SRD §4.2 byte
-for byte. Two tables:
+**Schema v2** lives in `internal/store/schema.go`. Two tables:
 
 - `spawns` — one row per Claude Code instance under direction, with
   parent/child link (`parent_id`), lifecycle (`state`, `started_at`,
   `last_seen_at`, `ended_at`), tmux + relay metadata, and a JSON-encoded
   `labels` blob. Indexed on `state`, `last_seen_at`, and `parent_id`.
-- `permission_requests` — one open permission request per spawn (UNIQUE on
-  `claude_instance_id`, FK-cascaded on spawn delete), with `tool_name`,
-  `tool_input`, and an optional `decision` / `decision_reason`.
+- `permission_requests` — one row per `(claude_instance_id, request_token)`
+  pair, FK-cascaded on spawn delete; `request_token TEXT NOT NULL`, composite
+  `UNIQUE(claude_instance_id, request_token)`, with `tool_name`, `tool_input`,
+  `decision`, `decision_reason`, and `decided_at`. Indexed on
+  `(claude_instance_id, decision)` and `(decision, decided_at)`.
 
 **Schema versioning convention.** SQLite's `PRAGMA user_version` is the
 source of truth for which schema this binary expects. On `Open`:
 
-- `user_version == 0` → fresh DB: create the v1 tables and indexes inside a
-  single transaction, then stamp `PRAGMA user_version = 1`.
-- `user_version == 1` → no-op; the schema already matches.
+- `user_version == 0` → fresh DB: create the v2 tables and indexes inside a
+  single transaction, then stamp `PRAGMA user_version = 2`.
+- `user_version == 1` → v1→v2 migration: DROP+CREATE `permission_requests`
+  in one transaction, stamp `PRAGMA user_version = 2`. V1 rows are
+  discarded (see "Schema v1 → v2 Migration" below).
+- `user_version == 2` → nothing to do; the schema already matches.
 - Any other value → return the sentinel `store.ErrSchemaMismatch` (an
   exported `errors.New` value, so callers use `errors.Is`). No DDL runs in
-  this case. Bumping schema versions in the future will mean adding a
-  migration step into `ensureSchema`, not editing v1 DDL.
+  this case.
+
+**Schema v1 → v2 Migration.** The first real migration ships with schema v2:
+
+1. **Migration shape**: `DROP TABLE permission_requests` followed immediately
+   by `CREATE TABLE permission_requests` at the v2 DDL, plus two new indexes,
+   all inside a single transaction.
+2. **No v1 row preservation**: v1 `permission_requests` rows are deliberately
+   discarded. Any open row from v1 was abandoned during the downtime that
+   triggered the upgrade.
+3. **Single-version DB invariant** (SR-2.6): a binary always expects exactly
+   one schema version; mixed-version operation against a single store file is
+   not supported. `ErrSchemaMismatch` is the signal to stop rather than
+   silently corrupt rows.
+4. **`user_version` stamp**: `PRAGMA user_version = 2` is the final
+   in-transaction step before `COMMIT`. A crash mid-migration leaves
+   `user_version = 1`, so the next `Open` retries the migration cleanly.
+   `user_version > 2` surfaces `ErrSchemaMismatch`.
 
 **Concurrency.** `Open` calls `db.SetMaxOpenConns(1)`. `journal_mode=WAL`
 and `foreign_keys=ON` are applied via DSN PRAGMAs and verified after open;
@@ -265,7 +285,7 @@ See `docs/cli-reference.md` and `docs/mcp-reference.md` — auto-generated; do n
                 +-------------------------+
                 |   internal/store        |
                 |   (sole SQL owner;      |
-                |    schema v1 / SRD §4.2)|
+                |    schema v2 / SRD §4.2)|
                 +-------------------------+
 
    internal/config -----> consumed by pkg/api and cmd/
@@ -1111,12 +1131,16 @@ edits to `config.toml` are lost.
 
 ### ErrSchemaMismatch recovery
 
-v1 has no migration story (SRD §19 Q11). If `agent-director help`
-reports `ErrSchemaMismatch` after an upgrade, the recovery is
-`rm ~/.agent-director/state.db*` followed by a re-run. Spawn
-history in the DB is lost; JSONL transcripts under
-`~/.claude/projects/` survive independently and can be re-resumed
-by id (the operator's notes) via `agent-director resume`.
+`ErrSchemaMismatch` fires when the store's `user_version` is not recognized by
+this binary — typically meaning the store was written by a newer binary
+(`user_version > 2`). Note: upgrading from v1 to v2 does **not** trigger
+`ErrSchemaMismatch` — the v1→v2 migration runs automatically on `Open` and
+preserves `spawns` rows.
+
+If `agent-director help` reports `ErrSchemaMismatch` after an upgrade, the
+recovery is `rm ~/.agent-director/state.db*` followed by a re-run. Spawn
+history in the DB is lost; JSONL transcripts under `~/.claude/projects/`
+survive independently and can be re-resumed by id via `agent-director resume`.
 
 ## Stdio MCP server
 
@@ -1405,10 +1429,12 @@ decide allow/deny out-of-band. Conceptually:
   Every pre-relay failure path emits a deny envelope when relay is
   active (SRD §6.4).
 
-- **`internal/store/permission.go`** — three primitives:
-  - `UpsertOpenPermissionRequest`: DELETE-INSERT in one tx.
-  - `GetPermissionRequest`: the polling-loop read.
-  - `DecidePermissionRequest`: the race-free decide UPDATE.
+- **`internal/store/permission.go`** — three core primitives:
+  - `UpsertOpenPermissionRequest`: INSERT-only per `(instanceID, requestToken)`.
+    A second call with the same pair returns `ErrRequestTokenCollision`; the
+    first row is unmodified.
+  - `GetPermissionRequest`: pair-keyed read on `(claude_instance_id, request_token)`.
+  - `DecidePermissionRequest`: the race-free first-call-wins UPDATE.
 
 - **`pkg/api/decide.go`** — verb wrapper. State guards
   (`ErrRelayModeOff`, `ErrSpawnNotFound`, `ErrInvalidDecision`)
@@ -1452,24 +1478,37 @@ Epic 10 activates it end-to-end.
 
 ### Invariant — relay-listener pairing
 
-If `spawns.state = check_permission`, then either a `runRelay`
-polling loop is alive consuming `decide()` writes, OR
-`permission_requests.decision` is non-NULL. A bot must never be
-sitting in "waiting for permission" with no listener AND no
-decision; if both are false, the spawn is stranded and any external
-surface (e.g. a Slack approval message from CSCB) would be a lying
-ghost — buttons that go nowhere.
+**Aggregate invariant (per Spawn).** If `spawns.state = check_permission`,
+then either a `runRelay` polling loop is alive consuming `decide()` writes,
+OR `permission_requests.decision` is non-NULL for the corresponding row. A
+bot must never be sitting in "waiting for permission" with no listener AND no
+decision; if both are false, the spawn is stranded and any external surface
+(e.g. a Slack approval message from CSCB) would be a lying ghost — buttons
+that go nowhere.
+
+**Per-row refinement (SRD §6.2, v2).** The v2 schema allows multiple
+concurrent `permission_requests` rows for the same Spawn, one per
+`(claude_instance_id, request_token)` pair. The composite
+`UNIQUE(claude_instance_id, request_token)` constraint enforces: at most one
+outstanding row per `(Spawn, request_token)`. Each `runRelay` invocation mints
+its own UUIDv4 `request_token` via `mintRequestToken()` so distinct concurrent
+PermissionRequest events cannot overwrite each other's rows. The original
+"at most one outstanding request per Spawn" is still a valid aggregate-level
+safety property, qualified now by the per-row identity.
 
 The AD code paths that satisfy this invariant:
 
-- **Normal flow**: hook fires → state=`check_permission` →
-  `runRelay` polling loop runs → either `decide()` is called
-  (decision set) or the loop times out and writes
-  `decision='deny'`, `decision_reason='timeout'`, then transitions
-  state back to `working`.
-- **Process death**: the `find-missing` reconciler catches dead
-  processes and transitions state to `missing`, which is no longer
-  `check_permission`.
+- **Normal flow**: hook fires → `runRelay` mints a `request_token` →
+  `UpsertOpenPermissionRequest(instanceID, requestToken, …)` →
+  state=`check_permission` → `Poll(…, instanceID, requestToken, …)` runs →
+  either `decide()` is called targeting the same `(instanceID, requestToken)`
+  pair (decision set) or the loop times out and writes
+  `decision='deny'`, `decision_reason='timeout'` to that specific row, then
+  transitions state back to `working`.
+- **Process death**: the `find-missing` reconciler iterates all open rows
+  (`decision IS NULL`) for the dead Spawn via `OpenPermissionRequestsForSpawn`,
+  writes `decision='deny'`, `decision_reason='find_missing'` to each row, then
+  transitions state to `missing`.
 
 Edge case: a panic inside `runRelay` AFTER
 `UpsertOpenPermissionRequest` but BEFORE the loop iterates can
@@ -1477,6 +1516,34 @@ leave state=`check_permission` with decision=NULL if the
 surrounding Claude Code instance is still alive (so `find-missing`
 doesn't catch it). If this becomes observable in production, file a
 follow-up.
+
+### `decision_reason` canonical enum
+
+`decision_reason` is a nullable column; its valid non-null values form a
+closed set. The three `DecisionReason*` constants in
+`internal/store/permission.go` are the canonical definitions — all write sites
+must use them, never free-form strings:
+
+| Value | Written by |
+| --- | --- |
+| `operator` | `Decide` verb (orchestrator allow or deny) |
+| `timeout` | relay polling-loop timeout path in `runRelay` |
+| `find_missing` | `find-missing` reconciler per-row deny path |
+
+**Null semantics.** `decision_reason` is `NULL` in exactly two cases:
+
+- Open rows (`decision IS NULL`) — no verdict has been written yet.
+- Closed-allow rows (`decision = 'allow'`) — a successful allow carries no
+  reason annotation.
+
+All closed-deny rows carry a non-null `decision_reason`.
+
+**Stability policy.** New values are release-note-only changes; there is no
+`protocol_version` field on the wire. CSCB (and any other consumer of
+`decision_reason` values) must fail closed on unknown values — treat any
+unrecognized `decision_reason` as a deny with an opaque reason. This gives
+agent-director room to add new deny sources without a coordinated
+breaking-change rollout across consumers.
 
 ## Resume
 
@@ -1875,14 +1942,20 @@ detects this case via `[[ -f pkg/api/go.mod ]]`.
 
 ### ErrSchemaMismatch on upgrade
 
-v1 has no migration story (SRD §19 Q11). Bumping `schemaVersion`
-in `internal/store/store.go` requires:
+Starting with v2, schema upgrades run automatically on `Open`: a v1 database
+upgrades to v2 silently (DROP+CREATE `permission_requests`, no row
+preservation). `ErrSchemaMismatch` only fires when `user_version > 2` —
+meaning the store was written by a binary newer than the current one.
 
-1. Document the schema change in the release notes.
-2. Tell operators to `rm ~/.agent-director/state.db*` post-upgrade.
-3. Active Spawns whose JSONL transcripts under
-   `~/.claude/projects/` are still on disk can be re-resumed by id
-   via `agent-director resume`.
+Bumping `schemaVersion` beyond 2 requires:
+
+1. Add a `migrateVNtoVN1` path in `internal/store/schema.go` and wire it into
+   `ensureSchema` (following the `migrateV1toV2` pattern).
+2. Document the schema change in the release notes.
+3. Operators upgrading from a version older than the migration path's base must
+   `rm ~/.agent-director/state.db*` post-upgrade.
+4. Active Spawns whose JSONL transcripts under `~/.claude/projects/` are still
+   on disk can be re-resumed by id via `agent-director resume`.
 
 ## Test Harness
 

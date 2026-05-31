@@ -155,12 +155,22 @@
     "description": ""
   },
   {
+    "name": "ErrMissingRequestToken",
+    "package": "api",
+    "description": ""
+  },
+  {
     "name": "ErrNoOpenPermissionRequest",
     "package": "store",
     "description": ""
   },
   {
     "name": "ErrAlreadyDecided",
+    "package": "store",
+    "description": ""
+  },
+  {
+    "name": "ErrAmbiguousRequest",
     "package": "store",
     "description": ""
   }
