@@ -454,7 +454,10 @@ build_phase() {
         return 0
     fi
     log build "building release binaries (3 CLI platforms)"
-    if ! (cd "$REPO_ROOT" && make release-binaries) > >(while IFS= read -r l; do printf '[build] %s\n' "$l"; done); then
+    local _BUILD_COMMIT
+    _BUILD_COMMIT=$(git -C "$REPO_ROOT" rev-parse HEAD)
+    local _BUILD_LDFLAGS="-X github.com/gabemahoney/agent-director/internal/version.Version=$VERSION -X github.com/gabemahoney/agent-director/internal/version.Commit=$_BUILD_COMMIT"
+    if ! (cd "$REPO_ROOT" && make release-binaries VERSION_LDFLAGS="$_BUILD_LDFLAGS") > >(while IFS= read -r l; do printf '[build] %s\n' "$l"; done); then
         log build "release-binaries build failed" >&2
         phase_fail build "release-binaries failed"
         exit 3
@@ -513,6 +516,47 @@ verify_phase() {
         exit 5
     fi
 
+    # ----------------------------------------------------------------
+    # Step 0/4: regression-anchor for b.b3h — assert the host binary
+    # baked into dist/ is stamped with the exact release VERSION, not
+    # a `git describe` decoration like "v0.6.0-1-g74ce955".
+    #
+    # Mapping: verify_phase uses npm tuple (linux-x64); the dist/
+    # binary uses the cross-compile tuple (linux-amd64 / darwin-arm64).
+    # ----------------------------------------------------------------
+    log verify "step 0/4: assert dist/ binary is stamped with VERSION=$VERSION (b.b3h anchor)"
+    local host_bin_arch
+    case "$(uname -m)" in
+        x86_64|amd64) host_bin_arch=amd64 ;;
+        arm64|aarch64) host_bin_arch=arm64 ;;
+        *) log verify "unsupported host arch for binary check: $(uname -m)" >&2
+           phase_fail verify "unsupported host arch"; exit 5 ;;
+    esac
+    local host_bin_os
+    case "$(uname -s)" in
+        Linux)  host_bin_os=linux ;;
+        Darwin) host_bin_os=darwin ;;
+        *) log verify "unsupported host OS for binary check: $(uname -s)" >&2
+           phase_fail verify "unsupported host OS"; exit 5 ;;
+    esac
+    local host_bin="$REPO_ROOT/dist/agent-director-${host_bin_os}-${host_bin_arch}"
+    if [[ ! -x "$host_bin" ]]; then
+        log verify "FAIL b.b3h anchor: host binary not found or not executable: $host_bin" >&2
+        phase_fail verify "b.b3h: host binary missing"; exit 5
+    fi
+    local bin_version_json bin_stamped_version
+    bin_version_json="$("$host_bin" version 2>/dev/null)" || {
+        log verify "FAIL b.b3h anchor: \`$host_bin version\` exited non-zero" >&2
+        phase_fail verify "b.b3h: binary version failed"; exit 5
+    }
+    bin_stamped_version="$(printf '%s' "$bin_version_json" | jq -r '.version // empty')"
+    if [[ "$bin_stamped_version" != "$VERSION" ]]; then
+        log verify "FAIL b.b3h anchor: binary .version=\"$bin_stamped_version\"; expected \"$VERSION\"" >&2
+        log verify "  This means VERSION_LDFLAGS was not passed to make — the build_phase ldflags override is missing." >&2
+        phase_fail verify "b.b3h: version stamp mismatch"; exit 5
+    fi
+    log verify "  binary version stamp OK: .version=$bin_stamped_version"
+
     local stage_dir tmp_home tmp_workdir
     stage_dir="$(mktemp -d "${TMPDIR:-/tmp}/verify.XXXXXX")"
     tmp_home="$(mktemp -d "${TMPDIR:-/tmp}/verify-home.XXXXXX")"
@@ -520,7 +564,7 @@ verify_phase() {
     # shellcheck disable=SC2064  # we want the variables resolved now
     trap "rm -rf '$stage_dir' '$tmp_home' '$tmp_workdir'" RETURN
 
-    log verify "step 1/3: bun pack umbrella + host platform sub-package"
+    log verify "step 1/4: bun pack umbrella + host platform sub-package"
 
     # Stage the umbrella + platforms + skill source into a writable
     # working tree, then stamp them to the release tag.
@@ -568,7 +612,7 @@ verify_phase() {
         exit 5
     fi
 
-    log verify "step 2/3: install tarball + run client.version() smoke"
+    log verify "step 2/4: install tarball + run client.version() smoke"
 
     # Consumer fixture: trust the package so the postinstall actually
     # fires (bun's untrusted-package default blocks it). We pin the
@@ -622,7 +666,7 @@ CONSUMER_PKG
         exit 5
     fi
 
-    log verify "step 3/3: bun test pkg/ts-bun-client (in-tree)"
+    log verify "step 3/4: bun test pkg/ts-bun-client (in-tree)"
 
     if ! (cd "$REPO_ROOT/pkg/ts-bun-client" && bun install --frozen-lockfile && bun test) \
             > >(while IFS= read -r l; do printf '[verify] %s\n' "$l"; done); then

@@ -167,9 +167,12 @@ publish on any of four invariant violations (SRD §SR-3.1 + §SR-3.3 +
 
 ## What this skill does NOT do
 
-- It does NOT bump version numbers in source files. The version
-  is derived from the `git tag` at runtime via `-ldflags -X` (see
-  `Makefile` `VERSION_LDFLAGS`).
+- It does NOT bump version numbers in source files. The released
+  binary is stamped with the `$VERSION` argument via `VERSION_LDFLAGS`
+  (passed as a `make` override to `make release-binaries`), so the
+  binary reports the exact release tag regardless of when the build
+  phase runs relative to `tag_phase`. Dev builds fall back to
+  `git describe` output (see `Makefile` `VERSION_LDFLAGS`).
 - It does NOT push to non-GitHub hosts. v1 is GitHub-only.
 - It does NOT build Windows binaries. Windows is unsupported.
 - It does NOT publish to a private npm registry. The `.npmrc`

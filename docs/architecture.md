@@ -1972,10 +1972,14 @@ first failing phase:
 2. **notes** — template `dist/release-notes.md` from
    `git log <prev-tag>..HEAD`, grouped by Epic ID where commit
    messages reference one.
-3. **build** — `make release-binaries` cross-compiles the three CLI
-   targets into `dist/agent-director-{linux-amd64,linux-arm64,darwin-arm64}`
-   (`CGO_ENABLED=0`, pure-Go SQLite). Each binary is staged into the
-   matching `pkg/ts-bun-client/platforms/<dir>/bin/agent-director` so
+3. **build** — `make release-binaries VERSION_LDFLAGS="..."` cross-compiles
+   the three CLI targets into
+   `dist/agent-director-{linux-amd64,linux-arm64,darwin-arm64}`
+   (`CGO_ENABLED=0`, pure-Go SQLite). The `VERSION_LDFLAGS` override
+   injects the release version and commit SHA at link time, so each
+   binary reports the exact release tag even though the build runs
+   before `tag_phase`. Each binary is staged into the matching
+   `pkg/ts-bun-client/platforms/<dir>/bin/agent-director` so
    `npm publish` later picks it up via the sub-package `files` glob.
 4. **verify** — Stage a release-stamped copy of the umbrella, `bun pm
    pack` it, install the tarball into a temp `HOME` alongside the host's
