@@ -163,5 +163,10 @@
     "name": "ErrAlreadyDecided",
     "package": "store",
     "description": ""
+  },
+  {
+    "name": "ErrAmbiguousRequest",
+    "package": "store",
+    "description": ""
   }
 ]

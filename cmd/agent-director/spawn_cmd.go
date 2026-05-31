@@ -286,6 +286,7 @@ func decideHandlerWith(client *pkgapi.Client, args []string) error {
 	fs := flag.NewFlagSet("decide", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the Spawn awaiting a decision")
+	fs.StringVar(&p.RequestToken, "request-token", "", "UUIDv4 token identifying the specific permission request to decide")
 	fs.StringVar(&p.Decision, "decision", "", "allow or deny")
 	fs.StringVar(&p.Reason, "reason", "", "optional message surfaced to Claude")
 	if err := fs.Parse(args); err != nil {
@@ -293,6 +294,9 @@ func decideHandlerWith(client *pkgapi.Client, args []string) error {
 	}
 	if p.ClaudeInstanceID == "" {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--claude-instance-id is required")
+	}
+	if p.RequestToken == "" {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", "--request-token is required")
 	}
 	if p.Decision == "" {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--decision is required (allow|deny)")

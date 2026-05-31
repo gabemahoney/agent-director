@@ -445,6 +445,15 @@ var Verbs = []VerbDef{
 				AllowedValues: nil,
 			},
 			{
+				Name:          "request_token",
+				Type:          "string",
+				Description:   "UUIDv4 token identifying the specific permission request to decide. Minted by runRelay per-request; required to enforce per-row isolation when multiple concurrent requests exist for the same Spawn.",
+				Required:      true,
+				Nullable:      false,
+				AllowEmpty:    false,
+				AllowedValues: nil,
+			},
+			{
 				Name:          "decision",
 				Type:          "string",
 				Description:   "Either `allow` or `deny`.",
@@ -469,6 +478,7 @@ var Verbs = []VerbDef{
 			"ErrRelayModeOff",
 			"ErrNoOpenPermissionRequest",
 			"ErrAlreadyDecided",
+			"ErrAmbiguousRequest",
 			"ErrInvalidDecision",
 		},
 	},
