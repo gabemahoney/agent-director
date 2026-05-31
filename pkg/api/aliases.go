@@ -49,6 +49,12 @@ var ErrNoOpenPermissionRequest = store.ErrNoOpenPermissionRequest
 // request has already been answered (by a parallel caller or a prior call).
 var ErrAlreadyDecided = store.ErrAlreadyDecided
 
+// ErrPermissionRequestNotFound is returned by get-permission when no
+// permission_requests row exists for the supplied request_token. Re-exported
+// from internal/store so external consumers can do errors.Is(err, api.X)
+// without importing internal/store directly.
+var ErrPermissionRequestNotFound = store.ErrPermissionRequestNotFound
+
 // ErrSchemaMismatch is returned by api.New when the SQLite database was
 // created by a different schema version. Callers should treat this as a
 // fatal configuration error; the store cannot be used.

@@ -170,6 +170,11 @@
     "description": ""
   },
   {
+    "name": "ErrPermissionRequestNotFound",
+    "package": "store",
+    "description": ""
+  },
+  {
     "name": "ErrAmbiguousRequest",
     "package": "store",
     "description": ""

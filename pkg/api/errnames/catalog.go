@@ -4,12 +4,12 @@ import (
 	"errors"
 	"strings"
 
-	api "github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
+	api "github.com/gabemahoney/agent-director/pkg/api"
 )
 
 // Entry pairs an err_name string with the sentinel error it names.
@@ -83,6 +83,7 @@ var Catalog = []Entry{
 	{Name: "ErrMissingRequestToken", Err: api.ErrMissingRequestToken},
 	{Name: "ErrNoOpenPermissionRequest", Err: store.ErrNoOpenPermissionRequest},
 	{Name: "ErrAlreadyDecided", Err: store.ErrAlreadyDecided},
+	{Name: "ErrPermissionRequestNotFound", Err: store.ErrPermissionRequestNotFound},
 	{Name: "ErrAmbiguousRequest", Err: store.ErrAmbiguousRequest},
 	// ErrUnknownTool is intentionally absent from this Catalog: it is a
 	// dispatch-level MCP error (not a verb-surface error) declared and handled

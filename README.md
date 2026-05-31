@@ -183,6 +183,27 @@ agent-director decide --claude-instance-id "$id" \
     --decision allow --reason "tool is on the allow-list"
 ```
 
+After the row is closed, retrieve the verdict by `request_token`:
+
+```sh
+agent-director get-permission --request-token "$token"
+```
+
+The response is a single permission row:
+
+```json
+{
+  "request_token": "9b1d8a8e-3a3d-4f4f-8a8e-3a3d4f4f8a8e",
+  "request_id": 42,
+  "tool_name": "Bash",
+  "tool_input": "{\"command\":\"npm test\"}",
+  "requested_at": "2026-05-31T12:00:00Z",
+  "decision": "allow",
+  "decision_reason": null,
+  "decided_at": "2026-05-31T12:00:01Z"
+}
+```
+
 ### Templates
 
 ```sh

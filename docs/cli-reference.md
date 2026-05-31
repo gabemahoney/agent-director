@@ -189,6 +189,29 @@ _None._
 - `ErrAmbiguousRequest`
 - `ErrInvalidDecision`
 
+## get-permission
+
+Fetch a single permission_requests row by request_token. Token-only lookup (SR-3.5: UUIDv4 is globally selective); no claude_instance_id required. Nullable columns (decision, decision_reason, decided_at) surface as JSON null while the row is open.
+
+### Parameters
+
+- `request_token` (string, required): UUIDv4 token identifying the permission_requests row to fetch.
+
+### Result
+
+- `request_token` (string): UUIDv4 token the row is keyed under (echoed back).
+- `request_id` (int): Autoincrement primary key of the permission_requests row.
+- `tool_name` (string): Claude Code tool that triggered the permission request (e.g. "Bash", "Write").
+- `tool_input` (string): Raw JSON string of the tool's input as stored in the DB; NOT a nested JSON object. Passes through byte-identical from the DB column — consumers parse it themselves.
+- `requested_at` (timestamp): RFC3339 timestamp when the row was created (maps from the created_at DB column).
+- `decision` (string?): "allow" or "deny" once decided; null while the row is open (decision IS NULL in the DB).
+- `decision_reason` (string?): Canonical decision-reason string for deny rows (operator / timeout / find_missing per SR-1.3); null for open rows AND for allow rows (closed-allow carries no reason).
+- `decided_at` (timestamp?): RFC3339 timestamp when the verdict was written; null while the row is open.
+
+### Errors
+
+- `ErrPermissionRequestNotFound`
+
 ## resume
 
 Bring a terminated (ended/missing) Spawn back to life via `claude --resume`. Same claude_instance_id, fresh tmux session, same JSONL transcript. parent_id is re-derived from the caller's AGENT_DIRECTOR_INSTANCE_ID env var on every resume.

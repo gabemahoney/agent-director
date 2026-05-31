@@ -264,6 +264,28 @@ func init() {
 		},
 	}
 
+	// ── get-permission ────────────────────────────────────────────────────
+	seeders["get-permission"] = seederSpec{
+		Manifest: mustVerb("get-permission"),
+		// Reuse the check_permission fixture: it seeds an open row keyed
+		// under storefix.TestRequestTokenA, which is exactly what the
+		// happy-path GetPermission call resolves.
+		SeedKind: seedCheckPermission,
+		SeedID:   "smoke-get-permission-id",
+		Happy: func(c *api.Client, _ string, _ context.Context) (any, error) {
+			return c.GetPermission(api.GetPermissionParams{
+				RequestToken: storefix.TestRequestTokenA,
+			})
+		},
+		Error: func(c *api.Client, _ context.Context) error {
+			// Token never written → ErrPermissionRequestNotFound.
+			_, err := c.GetPermission(api.GetPermissionParams{
+				RequestToken: "deadbeef-dead-4dea-adea-deadbeefdead",
+			})
+			return err
+		},
+	}
+
 	// ── resume ────────────────────────────────────────────────────────────
 	seeders["resume"] = seederSpec{
 		Manifest: mustVerb("resume"),
