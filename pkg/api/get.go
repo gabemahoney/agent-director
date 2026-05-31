@@ -75,7 +75,7 @@ type SpawnRow struct {
 // permission-fetch branch is testable without raw SQL fixtures.
 type GetStore interface {
 	GetSpawn(instanceID string) (Spawn, error)
-	GetPermissionRequest(instanceID string) (PermissionRow, error)
+	GetPermissionRequest(instanceID, requestToken string) (PermissionRow, error)
 }
 
 // Get returns the full Spawn row for the given claude_instance_id. Missing
@@ -120,7 +120,9 @@ func Get(s GetStore, instanceID string) (SpawnRow, error) {
 	}
 
 	if out.State == "check_permission" {
-		pr, err := s.GetPermissionRequest(instanceID)
+		// TODO(Task-F): pass requestToken once wire shape carries it; "" is the
+		// legacy single-row lookup (matches rows inserted before Task C lands).
+		pr, err := s.GetPermissionRequest(instanceID, "")
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			// No open row — field stays nil.

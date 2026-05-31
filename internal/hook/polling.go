@@ -42,7 +42,7 @@ type PollResult struct {
 // PollStore is the narrow surface the loop reads. *store.Store
 // satisfies it via GetPermissionRequest.
 type PollStore interface {
-	GetPermissionRequest(instanceID string) (store.PermissionRow, error)
+	GetPermissionRequest(instanceID, requestToken string) (store.PermissionRow, error)
 }
 
 // PollClock is the sleeper seam. Production uses time.NewTimer to
@@ -68,9 +68,13 @@ func (realPollClock) Sleep(ctx context.Context, d time.Duration) {
 // own.
 func DefaultPollClock() PollClock { return realPollClock{} }
 
-// Poll runs the SRD §6.2 relay polling loop. Behavior per iteration:
+// Poll runs the SRD §6.2 relay polling loop. requestToken narrows the read to
+// the specific permission_requests row minted for this relay invocation. Pass
+// "" only as a temporary placeholder — Task C will plumb the real minted token.
 //
-//  1. Read the permission_requests row by instance id.
+// Behavior per iteration:
+//
+//  1. Read the permission_requests row by (instanceID, requestToken).
 //     - sql.ErrNoRows → another hook event preempted; fail-closed deny.
 //     - any other error → bounded retry (pollMaxReadRetries); if the
 //       retry budget is exhausted, fail-closed deny.
@@ -85,7 +89,7 @@ func DefaultPollClock() PollClock { return realPollClock{} }
 //
 // The polling loop NEVER writes to permission_requests — SRD §6.2
 // invariant. Only decide() owns the decision columns.
-func Poll(ctx context.Context, s PollStore, clock PollClock, cfg config.Relay, instanceID string, rng *rand.Rand) PollResult {
+func Poll(ctx context.Context, s PollStore, clock PollClock, cfg config.Relay, instanceID, requestToken string, rng *rand.Rand) PollResult {
 	timeout := time.Duration(cfg.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		// Match config.Default().Relay.TimeoutSeconds (86400s / 1 day);
@@ -110,7 +114,7 @@ func Poll(ctx context.Context, s PollStore, clock PollClock, cfg config.Relay, i
 			return PollResult{Why: "polling timeout exceeded"}
 		}
 
-		row, err := s.GetPermissionRequest(instanceID)
+		row, err := s.GetPermissionRequest(instanceID, requestToken)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			// Preempted — typically another PermissionRequest event

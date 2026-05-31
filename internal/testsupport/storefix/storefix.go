@@ -17,6 +17,15 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
+// Canonical UUIDv4 test request_token values per SR-9.1 / SR-9.4. Tests should
+// reference these named constants rather than inline magic strings so the
+// vocabulary is consistent across packages.
+const (
+	TestRequestTokenA = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"
+	TestRequestTokenB = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb"
+	TestRequestTokenC = "cccccccc-cccc-4ccc-cccc-cccccccccccc"
+)
+
 // OpenTempStore opens a *store.Store under t.TempDir() and registers a
 // Cleanup that closes it. It returns both the store and the resolved DB
 // path so callers that need a raw sql.DB can re-open the file directly
@@ -121,7 +130,7 @@ func SeedCheckPermission(t *testing.T, s *store.Store, id string) store.Spawn {
 	if err := s.ApplyHookTransition(id, store.StateCheckPermission, false); err != nil {
 		t.Fatalf("storefix.SeedCheckPermission: ApplyHookTransition(%q, check_permission): %v", id, err)
 	}
-	if err := s.UpsertOpenPermissionRequest(id, "Bash", `{"cmd":"echo hello"}`); err != nil {
+	if err := s.UpsertOpenPermissionRequest(id, TestRequestTokenA, "Bash", `{"cmd":"echo hello"}`); err != nil {
 		t.Fatalf("storefix.SeedCheckPermission: UpsertOpenPermissionRequest(%q): %v", id, err)
 	}
 	row, err := s.GetSpawn(id)
@@ -204,6 +213,19 @@ func SeedExpiredCandidate(t *testing.T, s *store.Store, dbPath, id string, age t
 		t.Fatalf("storefix.SeedExpiredCandidate: GetSpawn(%q): %v", id, err)
 	}
 	return row
+}
+
+// SeedOpenPermissionRequests seeds N open permission_requests rows for instanceID,
+// one per token in tokens, by calling UpsertOpenPermissionRequest. Intended for
+// parallel-hook ordering, state-machine retention, find-missing multi-row, and
+// get-verb plural shape tests.
+func SeedOpenPermissionRequests(t *testing.T, s *store.Store, instanceID string, tokens []string) {
+	t.Helper()
+	for _, tok := range tokens {
+		if err := s.UpsertOpenPermissionRequest(instanceID, tok, "Bash", `{"cmd":"echo"}`); err != nil {
+			t.Fatalf("storefix.SeedOpenPermissionRequests: UpsertOpenPermissionRequest(%q, %q): %v", instanceID, tok, err)
+		}
+	}
 }
 
 // SeedAgentDirectorDir creates the ~/.agent-director/templates/ directory
