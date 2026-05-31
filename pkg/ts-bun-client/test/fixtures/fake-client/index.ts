@@ -6,10 +6,12 @@
  * Point AD_VERIFY_AGAINST at this file and set FAKE_CLIENT_FAIL_STEP to inject
  * a failure at the named gauntlet sub-step:
  *
- *   makeTemplate-create     → first makeTemplate call throws
- *   makeTemplate-collision  → second call does NOT throw ErrTemplateExists
- *   makeTemplate-overwrite  → third (overwrite:true) call throws
- *   makeTemplate-reread     → third call writes file without cwd marker
+ *   makeTemplate-create          → first makeTemplate call throws
+ *   makeTemplate-collision       → second call does NOT throw ErrTemplateExists
+ *   makeTemplate-overwrite       → third (overwrite:true) call throws
+ *   makeTemplate-reread          → third call writes file without cwd marker
+ *   getPermission-not-found      → getPermission does NOT throw ErrPermissionRequestNotFound
+ *   decide-missing-request-token → decide does NOT throw ErrInvalidFlags
  *
  * When FAKE_CLIENT_FAIL_STEP is unset the client behaves as a happy-path fake.
  */
@@ -22,6 +24,20 @@ export class ErrTemplateExists extends Error {
   constructor() {
     super("template already exists");
     this.name = "ErrTemplateExists";
+  }
+}
+
+export class ErrPermissionRequestNotFound extends Error {
+  constructor() {
+    super("permission request not found");
+    this.name = "ErrPermissionRequestNotFound";
+  }
+}
+
+export class ErrInvalidFlags extends Error {
+  constructor() {
+    super("invalid flags");
+    this.name = "ErrInvalidFlags";
   }
 }
 
@@ -70,6 +86,30 @@ export class Client {
     }
 
     throw new Error(`unexpected makeTemplate call #${call}`);
+  }
+
+  async getPermission(_params: { request_token: string }): Promise<unknown> {
+    const failStep = process.env.FAKE_CLIENT_FAIL_STEP;
+    if (failStep === "getPermission-not-found") {
+      // Succeed instead of throwing — driver expects ErrPermissionRequestNotFound
+      // and will emit FAIL getPermission-not-found when it doesn't arrive.
+      return {};
+    }
+    throw new ErrPermissionRequestNotFound();
+  }
+
+  async decide(_params: {
+    claude_instance_id: string;
+    decision: string;
+    request_token?: string;
+  }): Promise<unknown> {
+    const failStep = process.env.FAKE_CLIENT_FAIL_STEP;
+    if (failStep === "decide-missing-request-token") {
+      // Succeed instead of throwing — driver expects ErrInvalidFlags
+      // and will emit FAIL decide-missing-request-token when it doesn't arrive.
+      return {};
+    }
+    throw new ErrInvalidFlags();
   }
 
   close(): void {}
