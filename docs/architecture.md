@@ -1584,6 +1584,46 @@ is required. The contract is pinned by
 `TestGetPermissionRequestByTokenConcurrentReads` in
 `internal/store/permission_test.go`.
 
+### Cap-based GC
+
+To bound `permission_requests` table growth, `UpsertOpenPermissionRequest`
+runs an optional DELETE step **inside the same transaction as the INSERT**.
+After inserting the new open row, if the total row count exceeds the effective
+cap, the oldest closed rows are deleted (by `decided_at ASC`) until the count
+equals the cap. Open rows (`decision IS NULL`) are never eviction candidates,
+regardless of cap value.
+
+**Trigger.** Eviction runs at every call to `UpsertOpenPermissionRequest` that
+pushes the total row count past the cap. The check is synchronous and
+transactional — there is no background sweep.
+
+**Selector.** Only closed rows (`decision IS NOT NULL`) are eligible, ordered
+`decided_at ASC`. The oldest decided rows are removed first.
+
+**Cap = 0.** Eviction is disabled entirely; the DELETE step is skipped.
+This is an operator opt-in to unbounded growth — useful for audit-heavy
+deployments where no history may be discarded.
+
+**Cap < 0.** Silently falls back to the default (1000), mirroring the
+`TimeoutSeconds <= 0` guard (see
+[Polling cadence + the 50ms floor](#polling-cadence--the-50ms-floor)).
+The fallback prevents silent unbounded growth without surfacing a runtime
+error.
+
+**No time-floor guarantee.** Under a hot upsert burst a closed row can be
+evicted within milliseconds of its `decided_at` timestamp. Agent-director
+does not promise any minimum readability window for closed rows.
+
+**Wire indistinguishability.** `get-permission` returns
+`ErrPermissionRequestNotFound` for both a token that never existed and a
+token whose row was evicted by cap-based GC (see
+[Get-permission verb (closed-row audit)](#get-permission-verb-closed-row-audit)).
+Callers must handle both cases identically — there is no eviction signal on
+the wire.
+
+**Config source.** `config.Relay.PermissionRequestCap` (TOML key
+`permission_request_cap`), default 1000.
+
 ### `decision_reason` canonical enum
 
 `decision_reason` is a nullable column; its valid non-null values form a
