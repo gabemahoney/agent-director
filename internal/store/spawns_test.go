@@ -303,6 +303,102 @@ func TestParentFKEnforced(t *testing.T) {
 // original spawn path's "no caller env var" semantics), and a missing
 // target row returns ErrSpawnNotFound (distinguishing "asked to update a
 // nonexistent row" from "the update silently no-op'd").
+// TestStateMachineMultiRowRetention pins SR-5.1 / SR-5.2: a Spawn with multiple
+// open permission_requests rows must remain in check_permission until the LAST
+// row is decided. Each ApplyHookTransition(working) call is held at
+// check_permission while any open rows remain; only the call after the final
+// decide actually advances the state to working.
+func TestStateMachineMultiRowRetention(t *testing.T) {
+	t.Run("two_rows_held_until_last_decided", func(t *testing.T) {
+		s, _ := openTempStore(t)
+		const id = "sm-multi-row-1"
+
+		// Seed a Spawn in check_permission with two open rows.
+		if err := s.InsertPending(Spawn{
+			ClaudeInstanceID: id,
+			CWD:              "/tmp",
+			TmuxSessionName:  "cd-sm-1",
+			RelayMode:        "on",
+		}); err != nil {
+			t.Fatalf("InsertPending: %v", err)
+		}
+		if err := s.ApplyHookTransition(id, StateCheckPermission, false); err != nil {
+			t.Fatalf("transition to check_permission: %v", err)
+		}
+		if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{"cmd":"ls"}`); err != nil {
+			t.Fatalf("upsert tokenA: %v", err)
+		}
+		if err := s.UpsertOpenPermissionRequest(id, tokenB, "Read", `{"file":"/etc"}`); err != nil {
+			t.Fatalf("upsert tokenB: %v", err)
+		}
+
+		// Decide row A; try to advance to working — tokenB still open, must be held.
+		if _, err := s.DecidePermissionRequest(id, tokenA, "allow", ""); err != nil {
+			t.Fatalf("decide tokenA: %v", err)
+		}
+		if err := s.ApplyHookTransition(id, StateWorking, false); err != nil {
+			t.Fatalf("ApplyHookTransition(working) after deciding tokenA: %v", err)
+		}
+		state, err := s.GetSpawnState(id)
+		if err != nil {
+			t.Fatalf("GetSpawnState: %v", err)
+		}
+		if state != StateCheckPermission {
+			t.Errorf("state = %q after deciding 1 of 2 rows; want check_permission (held)", state)
+		}
+
+		// Decide row B; advance to working — no open rows remain.
+		if _, err := s.DecidePermissionRequest(id, tokenB, "deny", "no"); err != nil {
+			t.Fatalf("decide tokenB: %v", err)
+		}
+		if err := s.ApplyHookTransition(id, StateWorking, false); err != nil {
+			t.Fatalf("ApplyHookTransition(working) after deciding tokenB: %v", err)
+		}
+		state, err = s.GetSpawnState(id)
+		if err != nil {
+			t.Fatalf("GetSpawnState after last decide: %v", err)
+		}
+		if state != StateWorking {
+			t.Errorf("state = %q after all rows decided; want working", state)
+		}
+	})
+
+	t.Run("single_row_transitions_directly", func(t *testing.T) {
+		s, _ := openTempStore(t)
+		const id = "sm-single-row-1"
+
+		if err := s.InsertPending(Spawn{
+			ClaudeInstanceID: id,
+			CWD:              "/tmp",
+			TmuxSessionName:  "cd-sm-2",
+			RelayMode:        "on",
+		}); err != nil {
+			t.Fatalf("InsertPending: %v", err)
+		}
+		if err := s.ApplyHookTransition(id, StateCheckPermission, false); err != nil {
+			t.Fatalf("transition to check_permission: %v", err)
+		}
+		if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{"cmd":"pwd"}`); err != nil {
+			t.Fatalf("upsert tokenA: %v", err)
+		}
+
+		// Decide the single row; advance must succeed immediately.
+		if _, err := s.DecidePermissionRequest(id, tokenA, "allow", ""); err != nil {
+			t.Fatalf("decide tokenA: %v", err)
+		}
+		if err := s.ApplyHookTransition(id, StateWorking, false); err != nil {
+			t.Fatalf("ApplyHookTransition(working): %v", err)
+		}
+		state, err := s.GetSpawnState(id)
+		if err != nil {
+			t.Fatalf("GetSpawnState: %v", err)
+		}
+		if state != StateWorking {
+			t.Errorf("state = %q after single row decided; want working", state)
+		}
+	})
+}
+
 func TestSetParentID(t *testing.T) {
 	s, _ := openTempStore(t)
 
