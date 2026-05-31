@@ -374,6 +374,29 @@ func getHandlerWith(client *pkgapi.Client, args []string) error {
 	return writeJSON(os.Stdout, res)
 }
 
+// getPermissionHandlerWith implements `agent-director get-permission`. The
+// lookup is token-only per SR-3.5 (UUIDv4 is globally selective). Missing
+// rows surface store.ErrPermissionRequestNotFound, which the Catalog maps to
+// the canonical err_name string on the stderr envelope.
+func getPermissionHandlerWith(client *pkgapi.Client, args []string) error {
+	var p pkgapi.GetPermissionParams
+	fs := flag.NewFlagSet("get-permission", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&p.RequestToken, "request-token", "", "UUIDv4 token identifying the permission_requests row to fetch")
+	if err := fs.Parse(args); err != nil {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
+	}
+	if p.RequestToken == "" {
+		return writeApiErrorAndDispatch("ErrInvalidFlags", "--request-token is required")
+	}
+	result, err := client.GetPermission(p)
+	if err != nil {
+		name, desc := errnames.Classify(err)
+		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
+	}
+	return writeJSON(os.Stdout, result)
+}
+
 // writeJSON marshals v and writes it to w as a single line with a trailing
 // newline. Used by every verb handler that succeeds.
 func writeJSON(w io.Writer, v any) error {

@@ -50,14 +50,14 @@ type entryOutput struct {
 // carries no package attribution that reflection can recover.
 var packageOf = map[string]string{
 	// internal/spawn
-	"ErrCwdMissing":            "spawn",
-	"ErrCwdNotAPath":           "spawn",
-	"ErrCwdNotFound":           "spawn",
-	"ErrCwdNotADirectory":      "spawn",
-	"ErrRelayModeInvalid":      "spawn",
-	"ErrSpawnDeniedFlag":       "spawn",
-	"ErrReservedEnvKey":        "spawn",
-	"ErrInstanceIdCollision":   "spawn",
+	"ErrCwdMissing":             "spawn",
+	"ErrCwdNotAPath":            "spawn",
+	"ErrCwdNotFound":            "spawn",
+	"ErrCwdNotADirectory":       "spawn",
+	"ErrRelayModeInvalid":       "spawn",
+	"ErrSpawnDeniedFlag":        "spawn",
+	"ErrReservedEnvKey":         "spawn",
+	"ErrInstanceIdCollision":    "spawn",
 	"ErrTmuxSessionNameEmpty":   "spawn",
 	"ErrTmuxSessionNameInvalid": "spawn",
 	"ErrTmuxSessionNameTooLong": "spawn",
@@ -65,10 +65,11 @@ var packageOf = map[string]string{
 	// internal/store
 	// ErrSchemaMismatch is intentionally absent: it is a store-initialization
 	// error (not a verb error) removed from Catalog in Task 7.
-	"ErrSpawnNotFound":           "store",
-	"ErrNoOpenPermissionRequest": "store",
-	"ErrAlreadyDecided":          "store",
-	"ErrAmbiguousRequest":        "store",
+	"ErrSpawnNotFound":             "store",
+	"ErrNoOpenPermissionRequest":   "store",
+	"ErrAlreadyDecided":            "store",
+	"ErrPermissionRequestNotFound": "store",
+	"ErrAmbiguousRequest":          "store",
 
 	// internal/tmux
 	// ErrTmuxKillFailed and ErrTmuxListPanesFailed are intentionally absent:
@@ -88,7 +89,7 @@ var packageOf = map[string]string{
 	"ErrProbeUnsupported": "probe",
 
 	// pkg/api
-	"ErrSpawnNotInteractive": "api",
+	"ErrSpawnNotInteractive":  "api",
 	"ErrSendKeysWhileRelayed": "api",
 	"ErrSpawnNotPausable":     "api",
 	"ErrPauseTimeout":         "api",

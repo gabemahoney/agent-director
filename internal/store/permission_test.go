@@ -3,7 +3,10 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -342,6 +345,258 @@ func TestAmbiguousDecide(t *testing.T) {
 			t.Fatalf("ErrAmbiguousRequest returned for single open row; must not trigger")
 		}
 	})
+}
+
+// TestGetPermissionRequestByTokenOpenRow pins the open-row projection: a row
+// with NULL decision / decision_reason / decided_at surfaces as empty strings
+// (via COALESCE) and a zero-value DecidedAt. The rest of the projection
+// (RequestID, ClaudeInstanceID, RequestToken, ToolName, ToolInput, CreatedAt)
+// must be populated end-to-end.
+func TestGetPermissionRequestByTokenOpenRow(t *testing.T) {
+	s := openTestStore(t)
+	const id = "spawn-by-token-open"
+	seedSpawnForPerm(t, s, id, "on")
+
+	before := time.Now().UTC().Add(-1 * time.Second)
+	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Read", `{"file":"/tmp/x"}`); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	after := time.Now().UTC().Add(1 * time.Second)
+
+	got, err := s.GetPermissionRequestByToken(tokenA)
+	if err != nil {
+		t.Fatalf("GetPermissionRequestByToken: %v", err)
+	}
+	if got.RequestID == 0 {
+		t.Errorf("RequestID = 0; want non-zero autoincrement id")
+	}
+	if got.ClaudeInstanceID != id {
+		t.Errorf("ClaudeInstanceID = %q; want %q", got.ClaudeInstanceID, id)
+	}
+	if got.RequestToken != tokenA {
+		t.Errorf("RequestToken = %q; want %q", got.RequestToken, tokenA)
+	}
+	if got.ToolName != "Read" || got.ToolInput != `{"file":"/tmp/x"}` {
+		t.Errorf("ToolName/ToolInput drifted: name=%q input=%q", got.ToolName, got.ToolInput)
+	}
+	if got.CreatedAt.IsZero() {
+		t.Errorf("CreatedAt is zero; want populated TIMESTAMP")
+	}
+	if got.CreatedAt.Before(before) || got.CreatedAt.After(after) {
+		t.Errorf("CreatedAt = %v; want in [%v, %v]", got.CreatedAt, before, after)
+	}
+	if got.Decision != "" {
+		t.Errorf("Decision = %q; want \"\" (open row, COALESCE(NULL,'') )", got.Decision)
+	}
+	if got.DecisionReason != "" {
+		t.Errorf("DecisionReason = %q; want \"\" (open row, COALESCE(NULL,'') )", got.DecisionReason)
+	}
+	if !got.DecidedAt.IsZero() {
+		t.Errorf("DecidedAt = %v; want zero time (open row, decided_at IS NULL)", got.DecidedAt)
+	}
+}
+
+// TestGetPermissionRequestByTokenClosedAllow pins the closed-allow projection:
+// a decided row surfaces Decision="allow", an empty DecisionReason (we pass
+// reason=""), and a non-zero DecidedAt sourced from the CURRENT_TIMESTAMP write.
+func TestGetPermissionRequestByTokenClosedAllow(t *testing.T) {
+	s := openTestStore(t)
+	const id = "spawn-by-token-allow"
+	seedSpawnForPerm(t, s, id, "on")
+
+	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Read", `{}`); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	updated, err := s.DecidePermissionRequest(id, tokenA, "allow", "")
+	if err != nil {
+		t.Fatalf("decide allow: %v", err)
+	}
+	if !updated {
+		t.Fatalf("decide allow returned updated=false; want true")
+	}
+
+	got, err := s.GetPermissionRequestByToken(tokenA)
+	if err != nil {
+		t.Fatalf("GetPermissionRequestByToken: %v", err)
+	}
+	if got.Decision != "allow" {
+		t.Errorf("Decision = %q; want allow", got.Decision)
+	}
+	if got.DecisionReason != "" {
+		t.Errorf("DecisionReason = %q; want \"\" (empty reason stored as NULL via COALESCE)", got.DecisionReason)
+	}
+	if got.DecidedAt.IsZero() {
+		t.Errorf("DecidedAt is zero; want non-zero after a successful decide")
+	}
+}
+
+// TestGetPermissionRequestByTokenClosedDenyReasons pins the deny projection
+// across all three canonical decision_reason values. Table-driven per SR-1.3.
+func TestGetPermissionRequestByTokenClosedDenyReasons(t *testing.T) {
+	cases := []struct {
+		name   string
+		reason string
+	}{
+		{"operator", DecisionReasonOperator},
+		{"timeout", DecisionReasonTimeout},
+		{"find_missing", DecisionReasonFindMissing},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := openTestStore(t)
+			id := "spawn-by-token-deny-" + tc.name
+			seedSpawnForPerm(t, s, id, "on")
+			if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{}`); err != nil {
+				t.Fatalf("upsert: %v", err)
+			}
+			updated, err := s.DecidePermissionRequest(id, tokenA, "deny", tc.reason)
+			if err != nil {
+				t.Fatalf("decide deny: %v", err)
+			}
+			if !updated {
+				t.Fatalf("decide deny returned updated=false; want true")
+			}
+
+			got, err := s.GetPermissionRequestByToken(tokenA)
+			if err != nil {
+				t.Fatalf("GetPermissionRequestByToken: %v", err)
+			}
+			if got.Decision != "deny" {
+				t.Errorf("Decision = %q; want deny", got.Decision)
+			}
+			if got.DecisionReason != tc.reason {
+				t.Errorf("DecisionReason = %q; want %q", got.DecisionReason, tc.reason)
+			}
+			if got.DecidedAt.IsZero() {
+				t.Errorf("DecidedAt is zero; want non-zero after a successful decide")
+			}
+		})
+	}
+}
+
+// TestGetPermissionRequestByTokenMissReturnsSentinel pins SR-7.4: a token never
+// written returns ErrPermissionRequestNotFound and the underlying sql.ErrNoRows
+// MUST NOT leak across the store boundary. The "miss" and "no-sql-leak" cases
+// share the same call site so the regression pin is meaningful.
+func TestGetPermissionRequestByTokenMissReturnsSentinel(t *testing.T) {
+	s := openTestStore(t)
+	// Random UUIDv4 (RFC 4122 layout, 4xxx variant) never UPSERTed.
+	const missingToken = "deadbeef-dead-4dea-adea-deadbeefdead"
+
+	_, err := s.GetPermissionRequestByToken(missingToken)
+	if !errors.Is(err, ErrPermissionRequestNotFound) {
+		t.Fatalf("err = %v; want ErrPermissionRequestNotFound", err)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("err = %v; sql.ErrNoRows MUST NOT leak across the store boundary (SR-7.4)", err)
+	}
+}
+
+// TestGetPermissionRequestByTokenConcurrentReads exercises the read path
+// under concurrent reader + writer pressure. Readers tight-loop on a seeded
+// open row and a seeded closed row; a single writer interleaves transient
+// UPSERTs (with unique fresh tokens) and decides against the seeded open row.
+// The contract: reads of the seeded tokens must always succeed (never
+// surface an error of any kind); the closed row's projection must be stable
+// across the full run (its decision/decision_reason/decided_at columns are
+// terminal, no writer touches them). The test is bounded by a 250 ms
+// timer and must pass under `go test -race`.
+func TestGetPermissionRequestByTokenConcurrentReads(t *testing.T) {
+	s := openTestStore(t)
+	const id = "spawn-concurrent-reads"
+	seedSpawnForPerm(t, s, id, "on")
+
+	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Read", `{"file":"/a"}`); err != nil {
+		t.Fatalf("upsert seeded open: %v", err)
+	}
+	if err := s.UpsertOpenPermissionRequest(id, tokenB, "Bash", `{"cmd":"ls"}`); err != nil {
+		t.Fatalf("upsert seeded closed (pre-decide): %v", err)
+	}
+	updated, err := s.DecidePermissionRequest(id, tokenB, "deny", DecisionReasonOperator)
+	if err != nil {
+		t.Fatalf("decide seeded closed: %v", err)
+	}
+	if !updated {
+		t.Fatalf("decide seeded closed updated=false; want true")
+	}
+	closedSnapshot, err := s.GetPermissionRequestByToken(tokenB)
+	if err != nil {
+		t.Fatalf("read closed snapshot: %v", err)
+	}
+
+	const readers = 8
+	var stop atomic.Bool
+	var wg sync.WaitGroup
+	readerErrs := make(chan error, readers)
+	closedDrift := make(chan string, readers)
+
+	for i := 0; i < readers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for !stop.Load() {
+				if _, err := s.GetPermissionRequestByToken(tokenA); err != nil {
+					readerErrs <- fmt.Errorf("seeded open token: %w", err)
+					return
+				}
+				cr, err := s.GetPermissionRequestByToken(tokenB)
+				if err != nil {
+					readerErrs <- fmt.Errorf("seeded closed token: %w", err)
+					return
+				}
+				if cr.Decision != closedSnapshot.Decision ||
+					cr.DecisionReason != closedSnapshot.DecisionReason ||
+					!cr.DecidedAt.Equal(closedSnapshot.DecidedAt) {
+					closedDrift <- fmt.Sprintf("decision=%q reason=%q decided_at=%v (want %q/%q/%v)",
+						cr.Decision, cr.DecisionReason, cr.DecidedAt,
+						closedSnapshot.Decision, closedSnapshot.DecisionReason, closedSnapshot.DecidedAt)
+					return
+				}
+			}
+		}()
+	}
+
+	writerErrs := make(chan error, 1)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var seq uint64
+		for !stop.Load() {
+			seq++
+			// Unique transient token, UUIDv4-shape (8-4-4-4-12 hex, RFC 4122 4xxx
+			// version marker) so it doesn't collide with the seeded tokens.
+			transient := fmt.Sprintf("%08x-%04x-4%03x-a%03x-%012x",
+				seq, seq&0xffff, seq&0xfff, seq&0xfff, seq)
+			if err := s.UpsertOpenPermissionRequest(id, transient, "Bash", `{"cmd":"echo"}`); err != nil {
+				writerErrs <- fmt.Errorf("transient upsert (seq=%d): %w", seq, err)
+				return
+			}
+			// First call may flip the seeded open row; subsequent calls no-op
+			// (first-call-wins). Either outcome is fine — DecidePermissionRequest
+			// returns (false, nil) on the no-op path, never an error.
+			if _, err := s.DecidePermissionRequest(id, tokenA, "allow", ""); err != nil {
+				writerErrs <- fmt.Errorf("decide seeded open (seq=%d): %w", seq, err)
+				return
+			}
+		}
+	}()
+
+	time.Sleep(250 * time.Millisecond)
+	stop.Store(true)
+	wg.Wait()
+	close(readerErrs)
+	close(closedDrift)
+	close(writerErrs)
+
+	for err := range readerErrs {
+		t.Errorf("reader of seeded token returned error: %v", err)
+	}
+	for delta := range closedDrift {
+		t.Errorf("closed row reader observed drift: %s", delta)
+	}
+	for err := range writerErrs {
+		t.Errorf("writer error: %v", err)
+	}
 }
 
 // TestDecisionReasonCanonicalConstants pins the exact string values of the

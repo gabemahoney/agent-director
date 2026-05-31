@@ -37,16 +37,24 @@ var ErrAlreadyDecided = errors.New("ErrAlreadyDecided")
 // unmodified.
 var ErrRequestTokenCollision = errors.New("ErrRequestTokenCollision")
 
+// ErrPermissionRequestNotFound is returned by GetPermissionRequestByToken when
+// no permission_requests row exists for the supplied request_token. Per SR-3.5
+// the lookup is token-only (no instance_id filter); per SR-7.4 callers detect
+// this sentinel with errors.Is and translate it into the verb-layer
+// "not found" response. sql.ErrNoRows must not leak across this boundary.
+var ErrPermissionRequestNotFound = errors.New("ErrPermissionRequestNotFound")
+
 // ErrAmbiguousRequest is returned by DecidePermissionRequest when requestToken
 // is empty and more than one open row exists for the Spawn. Defense-in-depth
 // per SR-6.6; the primary fail-closed boundary is the verb-layer check in
 // Task E.
 var ErrAmbiguousRequest = errors.New("ErrAmbiguousRequest")
 
-// PermissionRow is the materialized shape returned by GetPermissionRequest and
-// OpenPermissionRequestsForSpawn. Empty Decision / DecisionReason mean "not
-// yet decided" (the column is NULL); the polling loop treats that as "keep
-// waiting".
+// PermissionRow is the materialized shape returned by GetPermissionRequest,
+// GetPermissionRequestByToken, and OpenPermissionRequestsForSpawn. Empty
+// Decision / DecisionReason mean "not yet decided" (the column is NULL); the
+// polling loop treats that as "keep waiting". A zero-value DecidedAt likewise
+// means the underlying decided_at column is NULL (open row).
 type PermissionRow struct {
 	RequestID        int64
 	ClaudeInstanceID string
@@ -55,6 +63,7 @@ type PermissionRow struct {
 	ToolInput        string
 	Decision         string
 	DecisionReason   string
+	DecidedAt        time.Time
 	CreatedAt        time.Time
 }
 
@@ -85,8 +94,9 @@ func (s *Store) UpsertOpenPermissionRequest(instanceID, requestToken, toolName, 
 // GetPermissionRequest reads the current state of a specific permission request
 // identified by the (instanceID, requestToken) pair. Returns:
 //
-//   - (row, nil) when a row exists. Decision/DecisionReason may be empty
-//     strings when the column is NULL (not yet decided).
+//   - (row, nil) when a row exists. Decision/DecisionReason are empty strings
+//     when the underlying columns are NULL (open row), and DecidedAt is the
+//     zero time.Time value when decided_at is NULL.
 //   - (zero, sql.ErrNoRows) when no row exists for the pair.
 //
 // The function is read-only — the polling loop calls it once per iteration
@@ -95,19 +105,62 @@ func (s *Store) GetPermissionRequest(instanceID, requestToken string) (Permissio
 	const q = `
 		SELECT request_id, claude_instance_id, tool_name, tool_input,
 		       COALESCE(decision, ''), COALESCE(decision_reason, ''),
-		       created_at, request_token
+		       created_at, request_token, decided_at
 		  FROM permission_requests
 		 WHERE claude_instance_id = ? AND request_token = ?
 	`
 	row := s.db.QueryRow(q, instanceID, requestToken)
 	var r PermissionRow
+	var decidedAt sql.NullTime
 	err := row.Scan(&r.RequestID, &r.ClaudeInstanceID, &r.ToolName, &r.ToolInput,
-		&r.Decision, &r.DecisionReason, &r.CreatedAt, &r.RequestToken)
+		&r.Decision, &r.DecisionReason, &r.CreatedAt, &r.RequestToken, &decidedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PermissionRow{}, sql.ErrNoRows
 	}
 	if err != nil {
 		return PermissionRow{}, fmt.Errorf("store: get permission: %w", err)
+	}
+	if decidedAt.Valid {
+		r.DecidedAt = decidedAt.Time
+	}
+	return r, nil
+}
+
+// GetPermissionRequestByToken reads the current state of a permission request
+// identified by request_token alone (no claude_instance_id filter). Per SR-3.5
+// the request_token UUIDv4 is globally selective, so callers — notably the
+// `get-permission` verb wrapper added in Task B — can resolve a row without
+// prior knowledge of the owning Spawn. Returns:
+//
+//   - (row, nil) when a row exists. Decision/DecisionReason may be empty
+//     strings when the column is NULL (not yet decided); DecidedAt is the
+//     zero value when decided_at is NULL.
+//   - (zero, ErrPermissionRequestNotFound) when no row exists for the token.
+//     sql.ErrNoRows is translated here and MUST NOT leak to callers (SR-7.4).
+//
+// Read-only: no INSERT/UPDATE/DELETE. Parameterized ? placeholder; never
+// string-concatenated.
+func (s *Store) GetPermissionRequestByToken(requestToken string) (PermissionRow, error) {
+	const q = `
+		SELECT request_id, claude_instance_id, tool_name, tool_input,
+		       COALESCE(decision, ''), COALESCE(decision_reason, ''),
+		       created_at, request_token, decided_at
+		  FROM permission_requests
+		 WHERE request_token = ?
+	`
+	row := s.db.QueryRow(q, requestToken)
+	var r PermissionRow
+	var decidedAt sql.NullTime
+	err := row.Scan(&r.RequestID, &r.ClaudeInstanceID, &r.ToolName, &r.ToolInput,
+		&r.Decision, &r.DecisionReason, &r.CreatedAt, &r.RequestToken, &decidedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PermissionRow{}, ErrPermissionRequestNotFound
+	}
+	if err != nil {
+		return PermissionRow{}, fmt.Errorf("store: get permission by token: %w", err)
+	}
+	if decidedAt.Valid {
+		r.DecidedAt = decidedAt.Time
 	}
 	return r, nil
 }
@@ -122,7 +175,7 @@ func (s *Store) OpenPermissionRequestsForSpawn(instanceID string) ([]PermissionR
 	const q = `
 		SELECT request_id, claude_instance_id, tool_name, tool_input,
 		       COALESCE(decision, ''), COALESCE(decision_reason, ''),
-		       created_at, request_token
+		       created_at, request_token, decided_at
 		  FROM permission_requests
 		 WHERE claude_instance_id = ? AND decision IS NULL
 		 ORDER BY created_at ASC
@@ -135,9 +188,13 @@ func (s *Store) OpenPermissionRequestsForSpawn(instanceID string) ([]PermissionR
 	out := []PermissionRow{}
 	for rows.Next() {
 		var r PermissionRow
+		var decidedAt sql.NullTime
 		if err := rows.Scan(&r.RequestID, &r.ClaudeInstanceID, &r.ToolName, &r.ToolInput,
-			&r.Decision, &r.DecisionReason, &r.CreatedAt, &r.RequestToken); err != nil {
+			&r.Decision, &r.DecisionReason, &r.CreatedAt, &r.RequestToken, &decidedAt); err != nil {
 			return nil, fmt.Errorf("store: open permission requests scan: %w", err)
+		}
+		if decidedAt.Valid {
+			r.DecidedAt = decidedAt.Time
 		}
 		out = append(out, r)
 	}

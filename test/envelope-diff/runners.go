@@ -65,21 +65,22 @@ type clientDispatchFn func(c *api.Client, params map[string]any) ([]byte, bool)
 // The init() guard below ensures this table is complete with respect to
 // manifest.CallableVerbs() at startup; missing entries cause a panic.
 var dispatch = map[string]clientDispatchFn{
-	"spawn":        dispatchSpawn,
-	"status":       dispatchStatus,
-	"get":          dispatchGet,
-	"send-keys":    dispatchSendKeys,
-	"read-pane":    dispatchReadPane,
-	"kill":         dispatchKill,
-	"decide":       dispatchDecide,
-	"resume":       dispatchResume,
-	"find-missing": dispatchFindMissing,
-	"expire":       dispatchExpire,
-	"delete":       dispatchDelete,
-	"make-template": dispatchMakeTemplate,
-	"list":         dispatchList,
-	"pause":        dispatchPause,
-	"version":      dispatchVersion,
+	"spawn":          dispatchSpawn,
+	"status":         dispatchStatus,
+	"get":            dispatchGet,
+	"send-keys":      dispatchSendKeys,
+	"read-pane":      dispatchReadPane,
+	"kill":           dispatchKill,
+	"decide":         dispatchDecide,
+	"get-permission": dispatchGetPermission,
+	"resume":         dispatchResume,
+	"find-missing":   dispatchFindMissing,
+	"expire":         dispatchExpire,
+	"delete":         dispatchDelete,
+	"make-template":  dispatchMakeTemplate,
+	"list":           dispatchList,
+	"pause":          dispatchPause,
+	"version":        dispatchVersion,
 }
 
 func init() {
@@ -389,6 +390,18 @@ func dispatchDecide(c *api.Client, params map[string]any) ([]byte, bool) {
 		return marshalErrEnvelope(err), true
 	}
 	res, err := c.Decide(p)
+	if err != nil {
+		return marshalErrEnvelope(err), true
+	}
+	return successEnvelope(res)
+}
+
+func dispatchGetPermission(c *api.Client, params map[string]any) ([]byte, bool) {
+	var p api.GetPermissionParams
+	if err := remarshal(params, &p); err != nil {
+		return marshalErrEnvelope(err), true
+	}
+	res, err := c.GetPermission(p)
 	if err != nil {
 		return marshalErrEnvelope(err), true
 	}

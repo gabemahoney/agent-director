@@ -484,6 +484,36 @@ var Verbs = []VerbDef{
 		},
 	},
 	{
+		Name:        "get-permission",
+		Description: "Fetch a single permission_requests row by request_token. Token-only lookup (SR-3.5: UUIDv4 is globally selective); no claude_instance_id required. Nullable columns (decision, decision_reason, decided_at) surface as JSON null while the row is open.",
+		Callable:    true,
+		HandleFree:  false,
+		Params: []ParamDef{
+			{
+				Name:          "request_token",
+				Type:          "string",
+				Description:   "UUIDv4 token identifying the permission_requests row to fetch.",
+				Required:      true,
+				Nullable:      false,
+				AllowEmpty:    false,
+				AllowedValues: nil,
+			},
+		},
+		ResultFields: []FieldDef{
+			{Name: "request_token", Type: "string", Description: "UUIDv4 token the row is keyed under (echoed back).", Nullable: false, AllowEmpty: false, AllowedValues: nil},
+			{Name: "request_id", Type: "int", Description: "Autoincrement primary key of the permission_requests row.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
+			{Name: "tool_name", Type: "string", Description: "Claude Code tool that triggered the permission request (e.g. \"Bash\", \"Write\").", Nullable: false, AllowEmpty: false, AllowedValues: nil},
+			{Name: "tool_input", Type: "string", Description: "Raw JSON string of the tool's input as stored in the DB; NOT a nested JSON object. Passes through byte-identical from the DB column — consumers parse it themselves.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "requested_at", Type: "timestamp", Description: "RFC3339 timestamp when the row was created (maps from the created_at DB column).", Nullable: false, AllowEmpty: false, AllowedValues: nil},
+			{Name: "decision", Type: "string?", Description: "\"allow\" or \"deny\" once decided; null while the row is open (decision IS NULL in the DB).", Nullable: true, AllowEmpty: false, AllowedValues: []string{"allow", "deny"}},
+			{Name: "decision_reason", Type: "string?", Description: "Canonical decision-reason string for deny rows (operator / timeout / find_missing per SR-1.3); null for open rows AND for allow rows (closed-allow carries no reason).", Nullable: true, AllowEmpty: false, AllowedValues: []string{"operator", "timeout", "find_missing"}},
+			{Name: "decided_at", Type: "timestamp?", Description: "RFC3339 timestamp when the verdict was written; null while the row is open.", Nullable: true, AllowEmpty: false, AllowedValues: nil},
+		},
+		ErrorNames: []string{
+			"ErrPermissionRequestNotFound",
+		},
+	},
+	{
 		Name:        "resume",
 		Description: "Bring a terminated (ended/missing) Spawn back to life via `claude --resume`. Same claude_instance_id, fresh tmux session, same JSONL transcript. parent_id is re-derived from the caller's AGENT_DIRECTOR_INSTANCE_ID env var on every resume.",
 		Callable:    true,

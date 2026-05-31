@@ -67,6 +67,15 @@ func matrixCases() map[string]matrixCase {
 		// ErrRelayModeOff check after the id lookup succeeds.
 		"decide": {args: `{"claude_instance_id":"` + matrixID + `","decision":"allow","reason":"ok"}`, setup: seedEnded("on")},
 
+		// get-permission: token-only lookup. A random UUIDv4 against an
+		// empty store returns ErrPermissionRequestNotFound — that's the
+		// dispatch-decode regression signal (a dropped json:"request_token"
+		// tag would surface as the same not-found error after a missing-
+		// token rejection at the CLI, but at the dispatch layer the empty
+		// string is passed through to the store, which still returns
+		// not-found and proves the JSON shape decoded cleanly).
+		"get-permission": {args: `{"request_token":"aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"}`},
+
 		"list":         {args: `{"limit":10}`},
 		"find-missing": {args: `{}`},
 		"expire":       {args: `{"older_than":"7d"}`},
