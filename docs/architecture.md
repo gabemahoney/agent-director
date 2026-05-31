@@ -653,7 +653,7 @@ shared Go-runtime state to preserve across calls.
 
 Every agent-director error envelope carries two string fields: `err_name` (the canonical error name, e.g. `"ErrSpawnNotFound"`) and `err_description` (a human-readable detail string). The TS client translates these into a typed class hierarchy so callers can catch specific errors with `instanceof`.
 
-**Catalog source.** `pkg/api/errnames/catalog.json` is the single source of truth for every named error the Go binary can emit. It contains 33 entries at time of writing. Each entry has a `name` field (the `err_name` string) and a `package` field naming the origin Go package.
+**Catalog source.** `pkg/api/errnames/catalog.json` is the single source of truth for every named error the Go binary can emit. It contains 37 entries at time of writing. Each entry has a `name` field (the `err_name` string) and a `package` field naming the origin Go package.
 
 **Base class.** `src/errors.ts::AgentDirectorError extends Error`. Constructor: `(verb: string, err_name: string, err_description: string)`. Sets `this.name = this.constructor.name` so subclass names propagate correctly through the prototype chain. Readonly fields: `verb`, `errName`, `errDescription`. Message format: `"${err_name}: ${err_description}"`.
 
@@ -663,10 +663,12 @@ Every agent-director error envelope carries two string fields: `err_name` (the c
 export class ErrSpawnNotFound extends AgentDirectorError {}
 ```
 
-**TS-only errors.** Four subclasses have no counterpart in the Go catalog:
-`ErrClientClosed`, `ErrUnsupportedPlatform`, `ErrPlatformPackageMissing`, and
-`ErrBunVersionTooOld`. Their names are centralised in a single `as const` array
-exported from `pkg/ts-bun-client/src/internal/tsOnlyErrors.ts::TS_ONLY_ERROR_NAMES`.
+**TS-only errors.** Eight subclasses have no counterpart in the Go catalog:
+`ErrClientClosed`, `ErrUnsupportedPlatform`, `ErrPlatformPackageMissing`,
+`ErrBunVersionTooOld`, `ErrCliNotExecutable`, `ErrConsumerSignal`,
+`ErrCallTimeout`, and `ErrUnknownErrorName`. Their names are centralised in a
+single `as const` array exported from
+`pkg/ts-bun-client/src/internal/tsOnlyErrors.ts::TS_ONLY_ERROR_NAMES`.
 The catalog-drift test imports this constant and removes those names from both
 sides before comparing, so CI never flags them as unexpected classes. Each
 subclass in `src/errors.ts` carries a comment cross-referencing this module.
@@ -1349,6 +1351,10 @@ or catalog Go source requires regenerating the corresponding JSON file.
 
 - `ErrInternal` is the `Classify` fallback for unrecognized errors. It is not in the Catalog
   and is not enforced by the coherence check.
+- `ErrInvalidFlags` is a CLI-layer sentinel emitted as a string literal by `cmd/` flag
+  handlers (not by any `pkg/api` verb handler). It is in the Catalog but is not verb-specific,
+  so it is excluded from check 3 (b⊆c) alongside `ErrInternal`. The exclusion is declared in
+  `check3Exceptions` in `pkg/api/errnames/coherence_diff_test.go`.
 - Catalog entries whose sentinels are declared in `internal/*` packages (e.g.
   `tmux.ErrTmuxNotAvailable`, `store.ErrSpawnNotFound`) do not appear in `exportedSentinels`
   and are therefore excluded from check 2. Their coherence with the Catalog is enforced at
@@ -2209,7 +2215,7 @@ For each verb in `manifest.CallableVerbs()`, the harness copies a fixture store 
 
 `test/smoke/go/` is the canonical home for the Go-side smoke test. Its purpose is to exercise every callable verb through `pkg/api.Client` exactly as an external consumer would — no subprocess invocations, no access to `internal/` implementation details.
 
-**Verb coverage.** `manifest.CallableVerbs()` drives the verb list (15 verbs). `serve` and `hook` have `Callable=false` and are excluded.
+**Verb coverage.** `manifest.CallableVerbs()` drives the verb list (16 verbs). `serve` and `hook` have `Callable=false` and are excluded.
 
 **Import constraint.** The smoke target imports only `pkg/api`, `pkg/api/manifest`, and `internal/testsupport/*`. Imports of `internal/api`, `internal/store`, or any other `internal/` package are prohibited and enforced at test time by `test/smoke/go/import_graph_test.go` (Task c8). This keeps the smoke test honest as a consumer: if `pkg/api` does not expose something, the smoke test cannot reach around it.
 
@@ -2314,6 +2320,7 @@ test/
     spawn.test.ts            # One file per verb (happy + error path)
     status.test.ts
     get.test.ts
+    get-permission.test.ts
     send-keys.test.ts
     read-pane.test.ts
     kill.test.ts
@@ -2412,7 +2419,7 @@ untriggerable on Linux).
 ### TS envelope-diff regression
 
 `pkg/ts-bun-client/test/envelope-diff.test.ts` is the TypeScript counterpart to
-Epic 3's Go-side envelope-diff harness. Both suites run the same 15 callable
+Epic 3's Go-side envelope-diff harness. Both suites run the same 16 callable
 verbs against identical SQLite fixtures and assert that the CLI subprocess
 output and the Bun Client wrapper output are structurally identical —
 catching any divergence introduced by argv construction, JSON parameter

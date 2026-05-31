@@ -72,3 +72,14 @@ var ErrJsonlMissing = errors.New("ErrJsonlMissing")
 // check_permission row with relay_mode=on gets a clean typed error
 // instead of a silent collision later.
 var ErrSendKeysWhileRelayed = errors.New("ErrSendKeysWhileRelayed")
+
+// ErrInvalidFlags is returned by CLI command handlers when a required flag
+// is absent or a flag value fails basic validation (empty string, unrecognised
+// enum member, etc.). It is a CLI-layer sentinel: verb handlers in
+// cmd/agent-director/*.go write it as the err_name string literal in the JSON
+// error envelope via writeApiErrorAndDispatch("ErrInvalidFlags", …).
+// It is NOT emitted by pkg/api verb handlers; handler scanning (five-way
+// coherence check 1) will therefore never include it. Not verb-specific, so
+// it is excluded from manifest ErrorNames (check 3) via the same mechanism
+// used for ErrInternal.
+var ErrInvalidFlags = errors.New("ErrInvalidFlags")

@@ -306,6 +306,41 @@ describe("argv builder — decide", () => {
     });
     expect(hasFlag(argv, "--reason")).toBe(false);
   });
+
+  test("request_token supplied → --request-token <token> in argv", () => {
+    const argv = buildArgv(CLI, "decide", {
+      claude_instance_id: "id-dec3",
+      decision: "allow",
+      request_token: "tok-abc123",
+    });
+    expect(hasFlag(argv, "--request-token")).toBe(true);
+    expect(flagValue(argv, "--request-token")).toBe("tok-abc123");
+  });
+
+  test("request_token omitted → --request-token absent from argv", () => {
+    const argv = buildArgv(CLI, "decide", {
+      claude_instance_id: "id-dec4",
+      decision: "deny",
+    });
+    expect(hasFlag(argv, "--request-token")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// get-permission
+// ---------------------------------------------------------------------------
+describe("argv builder — get-permission", () => {
+  test("request_token → --request-token flag with the right value", () => {
+    const argv = buildArgv(CLI, "get-permission", { request_token: "tok-xyz789" });
+    assertBase(argv, "get-permission");
+    expect(hasFlag(argv, "--request-token")).toBe(true);
+    expect(flagValue(argv, "--request-token")).toBe("tok-xyz789");
+  });
+
+  test("argv shape is exactly [CLI, 'get-permission', '--request-token', '<value>']", () => {
+    const argv = buildArgv(CLI, "get-permission", { request_token: "tok-exact" });
+    expect(argv).toEqual([CLI, "get-permission", "--request-token", "tok-exact"]);
+  });
 });
 
 // ---------------------------------------------------------------------------

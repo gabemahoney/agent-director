@@ -52,6 +52,7 @@ import type {
   ReadPaneParams, ReadPaneResult,
   KillParams, KillResult,
   DecideParams, DecideResult,
+  GetPermissionParams, GetPermissionResult,
   ResumeParams, ResumeResult,
   FindMissingParams, FindMissingResult,
   ExpireParams, ExpireResult,
@@ -407,6 +408,12 @@ export class SubprocessClient {
   async decide(params: DecideParams): Promise<DecideResult> {
     this.#assertOpen();
     return this.#enqueue<DecideResult>("decide", params);
+  }
+
+  /** getPermission — fetch a permission_requests row by request_token. */
+  async getPermission(params: GetPermissionParams): Promise<GetPermissionResult> {
+    this.#assertOpen();
+    return this.#enqueue<GetPermissionResult>("get-permission", params);
   }
 
   /** resume — restart a terminated Spawn. */

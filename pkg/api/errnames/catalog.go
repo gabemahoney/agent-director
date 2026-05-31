@@ -80,6 +80,7 @@ var Catalog = []Entry{
 	{Name: "ErrJsonlMissing", Err: api.ErrJsonlMissing},
 	{Name: "ErrRelayModeOff", Err: api.ErrRelayModeOff},
 	{Name: "ErrInvalidDecision", Err: api.ErrInvalidDecision},
+	{Name: "ErrInvalidFlags", Err: api.ErrInvalidFlags},
 	{Name: "ErrMissingRequestToken", Err: api.ErrMissingRequestToken},
 	{Name: "ErrNoOpenPermissionRequest", Err: store.ErrNoOpenPermissionRequest},
 	{Name: "ErrAlreadyDecided", Err: store.ErrAlreadyDecided},

@@ -16,7 +16,7 @@ export {
   ErrCallTimeout,
   ErrUnknownErrorName,
   errorFromEnvelope,
-  // Catalog-derived subclasses (33 entries from pkg/api/errnames/catalog.json).
+  // Catalog-derived subclasses (37 entries from pkg/api/errnames/catalog.json).
   ErrCwdMissing,
   ErrCwdNotAPath,
   ErrCwdNotFound,
@@ -50,6 +50,10 @@ export {
   ErrInvalidDecision,
   ErrNoOpenPermissionRequest,
   ErrAlreadyDecided,
+  ErrPermissionRequestNotFound,
+  ErrAmbiguousRequest,
+  ErrMissingRequestToken,
+  ErrInvalidFlags,
 } from "./errors.js";
 
 // Shared types and options.
@@ -67,6 +71,7 @@ export type {
   ReadPaneParams, ReadPaneResult,
   KillParams, KillResult,
   DecideParams, DecideResult,
+  GetPermissionParams, GetPermissionResult,
   ResumeParams, ResumeResult,
   FindMissingParams, FindMissingResult,
   ExpireParams, ExpireResult,

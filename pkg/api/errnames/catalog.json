@@ -155,6 +155,11 @@
     "description": ""
   },
   {
+    "name": "ErrInvalidFlags",
+    "package": "api",
+    "description": ""
+  },
+  {
     "name": "ErrMissingRequestToken",
     "package": "api",
     "description": ""
