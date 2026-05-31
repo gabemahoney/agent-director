@@ -74,9 +74,11 @@ func countPermRows(t *testing.T, s *Store, instanceID string) int {
 	return n
 }
 
-// TestUpsertOpenPermissionRequestAppendsRow pins the v2 multi-row semantics:
-// distinct (instance_id, request_token) pairs produce distinct rows; a
-// repeated pair surfaces ErrRequestTokenCollision; the original row is intact.
+// TestUpsertOpenPermissionRequestAppendsRow pins the v2 multi-row semantics
+// per SRD §6.2: at most one outstanding row per (claude_instance_id,
+// request_token). Distinct pairs produce distinct rows (parallel permission
+// requests for the same Spawn coexist); a repeated pair surfaces
+// ErrRequestTokenCollision; the original row is intact.
 func TestUpsertOpenPermissionRequestAppendsRow(t *testing.T) {
 	s := openTestStore(t)
 	const id = "spawn-append"

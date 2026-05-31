@@ -51,17 +51,19 @@ type DecideParams struct {
 type DecideResult struct{}
 
 // Decide writes the orchestrator's allow/deny verdict to the open
-// permission_requests row (SRD §6.2). Behavior:
+// permission_requests row identified by the (claude_instance_id, request_token)
+// pair (SRD §6.2). request_token is required — it uniquely identifies the
+// specific row minted by runRelay for this request. Behavior:
 //
 //   - Unknown id → ErrSpawnNotFound from the store.
 //   - Spawn's relay_mode != "on" → ErrRelayModeOff. decide is a
 //     no-op outside relay mode; the verb refuses rather than write
 //     a row Claude will never look at.
 //   - Invalid decision string → ErrInvalidDecision.
-//   - Single-statement UPDATE writes (decision, reason, updated_at)
-//     guarded by `decision IS NULL`. RowsAffected==0 disambiguates
-//     "no row" (ErrNoOpenPermissionRequest) from "already decided"
-//     (ErrAlreadyDecided) via a follow-up SELECT.
+//   - Single-statement UPDATE writes (decision, reason, decided_at)
+//     guarded by `decision IS NULL AND request_token = ?`.
+//     RowsAffected==0 disambiguates "no row" (ErrNoOpenPermissionRequest)
+//     from "already decided" (ErrAlreadyDecided) via a follow-up SELECT.
 func Decide(s DecideStore, params DecideParams) (DecideResult, error) {
 	if params.Decision != "allow" && params.Decision != "deny" {
 		return DecideResult{}, fmt.Errorf("%w: %q", ErrInvalidDecision, params.Decision)
