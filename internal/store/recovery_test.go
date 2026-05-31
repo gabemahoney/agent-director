@@ -11,11 +11,6 @@ import (
 	"testing"
 )
 
-// tokenD is a fourth canonical UUIDv4 test token for the three-row test case.
-// tokenA, tokenB, tokenC are declared in permission_test.go and shared across
-// all package store white-box test files.
-const tokenD = "dddddddd-dddd-4ddd-dddd-dddddddddddd"
-
 // seedCheckPermissionSpawn inserts a Spawn in check_permission state with
 // relay_mode=on, ready to receive permission_requests rows.
 func seedCheckPermissionSpawn(t *testing.T, s *Store, id string) {

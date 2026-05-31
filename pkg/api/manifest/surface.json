@@ -512,7 +512,7 @@
         {
           "name": "reason",
           "type": "string",
-          "description": "Free-text message surfaced to Claude. On `deny` with empty reason the envelope defaults to \"Denied by orchestrator\".",
+          "description": "Currently discarded on deny; the canonical DecisionReasonOperator is persisted regardless. Reserved for future schema additions.",
           "required": false,
           "nullable": false,
           "allow_empty": true,
@@ -521,6 +521,7 @@
       ],
       "result_fields": [],
       "error_names": [
+        "ErrMissingRequestToken",
         "ErrSpawnNotFound",
         "ErrRelayModeOff",
         "ErrNoOpenPermissionRequest",

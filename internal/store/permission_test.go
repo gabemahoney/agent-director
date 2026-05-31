@@ -14,7 +14,7 @@ import (
 const (
 	tokenA = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"
 	tokenB = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb"
-	tokenC = "cccccccc-cccc-4ccc-cccc-cccccccccccc"
+	tokenC = "cccccccc-cccc-4ccc-accc-cccccccccccc"
 )
 
 // openTestStore opens a fresh on-disk SQLite store under t.TempDir().

@@ -3,10 +3,12 @@ package api_test
 import (
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -17,6 +19,23 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
+
+func TestDecideEmptyRequestToken(t *testing.T) {
+	// api.Decide must reject an empty RequestToken at the API layer,
+	// independent of CLI gating. One open row exists so the store's
+	// ErrAmbiguousRequest guard would not fire — the rejection must come
+	// from Decide itself.
+	s, _ := apitest.SeedDecideFixture(t, "on")
+	apitest.SeedPermissionRow(t, s, "id-d-1")
+	_, err := api.Decide(s, api.DecideParams{
+		ClaudeInstanceID: "id-d-1",
+		RequestToken:     "", // empty — should be rejected before the store is called
+		Decision:         "allow",
+	})
+	if !errors.Is(err, api.ErrMissingRequestToken) {
+		t.Fatalf("err = %v; want ErrMissingRequestToken", err)
+	}
+}
 
 func TestDecideRelayOffRejected(t *testing.T) {
 	s, _ := apitest.SeedDecideFixture(t, "off")
@@ -204,10 +223,10 @@ func TestDecideDenyDefaultEnvelopeReasonNotWritten(t *testing.T) {
 }
 
 // TestAmbiguousDecide verifies that when empty RequestToken is passed to
-// api.Decide and N>1 open permission_requests rows exist, the store layer's
-// ErrAmbiguousRequest defense-in-depth guard fires. The primary fail-closed
-// boundary is the CLI --request-token required flag; this covers the verb-layer
-// path when that guard is bypassed by a direct api.Decide call.
+// api.Decide, ErrMissingRequestToken is returned at the API layer before the
+// store's ErrAmbiguousRequest defense-in-depth guard is reached. The store's
+// guard remains as defense-in-depth for direct DecidePermissionRequest callers;
+// api.Decide's early check supersedes it.
 func TestAmbiguousDecide(t *testing.T) {
 	s, _ := apitest.SeedDecideFixture(t, "on")
 	apitest.SeedPermissionRow(t, s, "id-d-1")
@@ -217,11 +236,11 @@ func TestAmbiguousDecide(t *testing.T) {
 	}
 	_, err := api.Decide(s, api.DecideParams{
 		ClaudeInstanceID: "id-d-1",
-		RequestToken:     "", // empty — ambiguous with two open rows
+		RequestToken:     "", // empty — rejected at API layer before store
 		Decision:         "allow",
 	})
-	if !errors.Is(err, store.ErrAmbiguousRequest) {
-		t.Fatalf("err = %v; want ErrAmbiguousRequest", err)
+	if !errors.Is(err, api.ErrMissingRequestToken) {
+		t.Fatalf("err = %v; want ErrMissingRequestToken", err)
 	}
 }
 
@@ -239,58 +258,91 @@ func TestDecisionReasonOnlyCanonicalValues(t *testing.T) {
 	t.Run("source_walk", func(t *testing.T) {
 		root := findModuleRoot(t)
 
-		// Regex: detect a DecidePermissionRequest call where the last argument
-		// before ) is a non-empty string literal. Such calls use a free-form
-		// reason; they should use a store.DecisionReason* constant instead.
-		//
-		// Matches:  ..., "some-reason")
-		// No match: ..., DecisionReasonOperator)   [unquoted identifier]
-		//           ..., dbReason)                  [variable]
-		//           ..., "")                        ["[^"]+" requires ≥1 char]
-		violationRE := regexp.MustCompile(`,\s*"[^"]+"\s*\)`)
+		// Canonical reason string literals — any BasicLit STRING value that is not
+		// in this set as the 4th argument to DecidePermissionRequest is a violation.
+		// AST BasicLit.Value includes surrounding quotes, so the entries are quoted.
+		// Identifier/constant references (e.g. store.DecisionReasonOperator) are
+		// never BasicLit and are always presumed canonical.
+		canonicalReasons := map[string]bool{
+			`""`:             true,
+			`"operator"`:     true,
+			`"timeout"`:      true,
+			`"find_missing"`: true,
+		}
+
+		skipDirs := map[string]bool{
+			"apitest": true, "testsupport": true, "testdata": true,
+			"test": true, "vendor": true,
+		}
+
+		scanDirs := []string{
+			filepath.Join(root, "internal"),
+			filepath.Join(root, "pkg"),
+			filepath.Join(root, "cmd"),
+		}
 
 		var violations []string
-		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
+		for _, dir := range scanDirs {
+			if _, err := os.Stat(dir); os.IsNotExist(err) {
+				continue
 			}
-			if d.IsDir() {
-				base := filepath.Base(path)
-				// Skip test-support and test-fixture directories; they may use
-				// raw string literals as seeds in test helpers.
-				if base == "apitest" || base == "testsupport" || base == "testdata" ||
-					base == "test" || base == "vendor" || strings.HasPrefix(base, ".") {
-					return filepath.SkipDir
+			err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+				if err != nil {
+					return err
 				}
+				if d.IsDir() {
+					base := filepath.Base(path)
+					if skipDirs[base] || strings.HasPrefix(base, ".") {
+						return filepath.SkipDir
+					}
+					return nil
+				}
+				if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+					return nil
+				}
+
+				fset := token.NewFileSet()
+				f, parseErr := parser.ParseFile(fset, path, nil, 0)
+				if parseErr != nil {
+					return fmt.Errorf("parse %s: %w", path, parseErr)
+				}
+
+				ast.Inspect(f, func(n ast.Node) bool {
+					call, ok := n.(*ast.CallExpr)
+					if !ok {
+						return true
+					}
+					sel, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok {
+						return true
+					}
+					if sel.Sel.Name != "DecidePermissionRequest" {
+						return true
+					}
+					if len(call.Args) < 4 {
+						return true
+					}
+					lit, ok := call.Args[3].(*ast.BasicLit)
+					if !ok {
+						// Identifier or expression — presumed canonical constant.
+						return true
+					}
+					if lit.Kind != token.STRING {
+						return true
+					}
+					if !canonicalReasons[lit.Value] {
+						pos := fset.Position(call.Pos())
+						relPath, _ := filepath.Rel(root, path)
+						violations = append(violations, fmt.Sprintf("%s:%d: reason literal %s",
+							relPath, pos.Line, lit.Value))
+					}
+					return true
+				})
 				return nil
-			}
-			// Skip test files; production logic only.
-			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-				return nil
-			}
-			content, err := os.ReadFile(path)
+			})
 			if err != nil {
-				return err
+				t.Fatalf("source walk: %v", err)
 			}
-			lines := strings.Split(string(content), "\n")
-			for i, line := range lines {
-				// Skip comment lines.
-				if strings.HasPrefix(strings.TrimSpace(line), "//") {
-					continue
-				}
-				if !strings.Contains(line, "DecidePermissionRequest(") {
-					continue
-				}
-				if violationRE.MatchString(line) {
-					relPath, _ := filepath.Rel(root, path)
-					violations = append(violations, fmt.Sprintf("%s:%d: %s",
-						relPath, i+1, strings.TrimSpace(line)))
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			t.Fatalf("source walk: %v", err)
 		}
 		if len(violations) > 0 {
 			t.Errorf("DecidePermissionRequest calls with raw string literal reason (use a DecisionReason* constant instead):\n%s",

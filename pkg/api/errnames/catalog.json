@@ -155,6 +155,11 @@
     "description": ""
   },
   {
+    "name": "ErrMissingRequestToken",
+    "package": "api",
+    "description": ""
+  },
+  {
     "name": "ErrNoOpenPermissionRequest",
     "package": "store",
     "description": ""

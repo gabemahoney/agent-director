@@ -105,10 +105,20 @@ func TestParallelHookOrdering(t *testing.T) {
 	// Wait for both open rows to appear.
 	rows := waitForOpenRows(t, st, instanceID, 2)
 
-	tokenA := rows[0].RequestToken
-	tokenB := rows[1].RequestToken
+	// Map tokens by tool_name to avoid depending on SQLite's insertion order.
+	// SQLite TIMESTAMP is second-precision; concurrent inserts tie and the
+	// ORDER BY created_at ASC ordering is undefined when timestamps collide.
+	var tokenA, tokenB string
+	for _, r := range rows {
+		switch r.ToolName {
+		case "Bash":
+			tokenA = r.RequestToken
+		case "Read":
+			tokenB = r.RequestToken
+		}
+	}
 	if tokenA == "" || tokenB == "" {
-		t.Fatalf("empty token(s): A=%q B=%q", tokenA, tokenB)
+		t.Fatalf("could not identify tokens by tool_name: Bash=%q Read=%q", tokenA, tokenB)
 	}
 	if tokenA == tokenB {
 		t.Fatalf("tokens not distinct: both = %q", tokenA)

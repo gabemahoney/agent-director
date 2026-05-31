@@ -288,7 +288,7 @@ func decideHandlerWith(client *pkgapi.Client, args []string) error {
 	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the Spawn awaiting a decision")
 	fs.StringVar(&p.RequestToken, "request-token", "", "UUIDv4 token identifying the specific permission request to decide")
 	fs.StringVar(&p.Decision, "decision", "", "allow or deny")
-	fs.StringVar(&p.Reason, "reason", "", "optional message surfaced to Claude")
+	fs.StringVar(&p.Reason, "reason", "", "deprecated; currently ignored — the canonical operator reason is persisted")
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
