@@ -58,6 +58,7 @@ interface StagingTree {
   linuxBinPath: string;
   darwinBinPath: string;   // path computed even when omitDarwin=true
   skillMdPath: string;
+  distIndexJsPath: string;
   cleanup(): void;
 }
 
@@ -74,6 +75,8 @@ interface StagingTreeOpts {
   site5Version?: string;
   /** When true, skip creating the darwin-arm64 platform directory. */
   omitDarwin?: boolean;
+  /** Content to write into dist/index.js (site-dist-no-inline). Default: clean stub. */
+  distIndexJsContent?: string;
 }
 
 function makeStagingTree(opts: StagingTreeOpts = {}): StagingTree {
@@ -84,6 +87,7 @@ function makeStagingTree(opts: StagingTreeOpts = {}): StagingTree {
     site4Mode = "file",
     site5Version = EXPECTED,
     omitDarwin = false,
+    distIndexJsContent = "// bundled output\nexport {};\n",
   } = opts;
 
   const root = mkdtempSync(join(import.meta.dir, ".tmp-cvc-"));
@@ -92,8 +96,9 @@ function makeStagingTree(opts: StagingTreeOpts = {}): StagingTree {
   const linuxDir = join(pkgDir, "platforms", "linux-x64");
   const darwinDir = join(pkgDir, "platforms", "darwin-arm64");
   const skillDir = join(root, "skills", "install-agent-director");
+  const distDir = join(pkgDir, "dist");
 
-  const dirs = [scriptsDir, join(linuxDir, "bin"), skillDir];
+  const dirs = [scriptsDir, join(linuxDir, "bin"), skillDir, distDir];
   if (!omitDarwin) dirs.push(join(darwinDir, "bin"));
   for (const d of dirs) mkdirSync(d, { recursive: true });
 
@@ -155,6 +160,10 @@ function makeStagingTree(opts: StagingTreeOpts = {}): StagingTree {
   const skillMdPath = join(skillDir, "SKILL.md");
   writeFileSync(skillMdPath, makeSkillMd(site5Version), "utf8");
 
+  // dist/index.js (site-dist-no-inline) — clean by default.
+  const distIndexJsPath = join(distDir, "index.js");
+  writeFileSync(distIndexJsPath, distIndexJsContent, "utf8");
+
   return {
     root,
     scriptPath,
@@ -164,6 +173,7 @@ function makeStagingTree(opts: StagingTreeOpts = {}): StagingTree {
     linuxBinPath,
     darwinBinPath,
     skillMdPath,
+    distIndexJsPath,
     cleanup() {
       try {
         rmSync(root, { recursive: true, force: true });
@@ -395,6 +405,76 @@ describe("check-version-coherence bad flags", () => {
       const r = runCheck(tree.scriptPath, ["--scope", "publish"]);
       expect(r.exitCode).not.toBe(0);
       expect(r.stderr).toContain("--expected-version");
+    } finally {
+      tree.cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6. site-dist-no-inline negative cases (SR-2.3)
+// ---------------------------------------------------------------------------
+
+describe("check-version-coherence site-dist-no-inline (SR-2.3)", () => {
+  test("dist/index.js contains NPM_PACKAGE_VERSION → exit 1, stderr names the identifier", () => {
+    const tree = makeStagingTree({
+      distIndexJsContent: 'const NPM_PACKAGE_VERSION = "1.2.3";',
+    });
+    try {
+      const r = runCheck(tree.scriptPath, [
+        "--scope", "verify",
+        "--expected-version", EXPECTED,
+      ]);
+      expect(r.exitCode).not.toBe(0);
+      expect(r.stderr).toContain("NPM_PACKAGE_VERSION");
+    } finally {
+      tree.cleanup();
+    }
+  });
+
+  test('dist/index.js contains "0.0.0" → exit 1, stderr names the literal', () => {
+    const tree = makeStagingTree({
+      distIndexJsContent: 'const version = "0.0.0";',
+    });
+    try {
+      const r = runCheck(tree.scriptPath, [
+        "--scope", "verify",
+        "--expected-version", EXPECTED,
+      ]);
+      expect(r.exitCode).not.toBe(0);
+      expect(r.stderr).toContain('"0.0.0"');
+    } finally {
+      tree.cleanup();
+    }
+  });
+
+  test("dist/index.js absent → exit 1, stderr contains the missing path", () => {
+    const tree = makeStagingTree();
+    // Remove the dist file after staging to simulate a missing bun build output.
+    rmSync(tree.distIndexJsPath);
+    try {
+      const r = runCheck(tree.scriptPath, [
+        "--scope", "verify",
+        "--expected-version", EXPECTED,
+      ]);
+      expect(r.exitCode).not.toBe(0);
+      expect(r.stderr).toContain(tree.distIndexJsPath);
+    } finally {
+      tree.cleanup();
+    }
+  });
+
+  test("--scope publish: dist/index.js with NPM_PACKAGE_VERSION → exit 0 (gate skipped)", () => {
+    const tree = makeStagingTree({
+      distIndexJsContent: 'const NPM_PACKAGE_VERSION = "1.2.3";',
+      site4Mode: "pin",
+    });
+    try {
+      const r = runCheck(tree.scriptPath, [
+        "--scope", "publish",
+        "--expected-version", EXPECTED,
+      ]);
+      expect(r.exitCode).toBe(0);
     } finally {
       tree.cleanup();
     }
