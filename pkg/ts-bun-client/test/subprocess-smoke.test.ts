@@ -149,9 +149,10 @@ describe("subprocess-smoke / happy paths (SR-10.3)", () => {
         store: storePath, id, state: "check_permission",
         "relay-mode": "on", "create-store": true,
       });
-      runHelper("seed-permission-request", { store: storePath, "spawn-id": id, tool: "Bash" });
+      const seed = runHelper("seed-permission-request", { store: storePath, "spawn-id": id, tool: "Bash" });
+      const requestToken = seed["request_token"] as string;
       using client = new Client({ storePath, createIfMissing: true });
-      const r: DecideResult = await client.decide({ claude_instance_id: id, decision: "allow" });
+      const r: DecideResult = await client.decide({ claude_instance_id: id, request_token: requestToken, decision: "allow" });
       expect(typeof r).toBe("object");
     });
   }, 10_000);
@@ -327,7 +328,7 @@ describe("subprocess-smoke / error paths (SR-10.3)", () => {
       using client = new Client({ storePath, createIfMissing: true });
       let caught: unknown;
       try {
-        await client.decide({ claude_instance_id: "any", decision: "maybe" as "allow" });
+        await client.decide({ claude_instance_id: "any", request_token: "00000000-0000-0000-0000-000000000000", decision: "maybe" as "allow" });
       } catch (e) { caught = e; }
       expect(caught).toBeInstanceOf(ErrInvalidDecision);
     });
