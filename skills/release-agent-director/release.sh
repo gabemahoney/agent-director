@@ -804,13 +804,25 @@ CONSUMER_PKG
         phase_fail verify "smoke script missing"
         exit 5
     fi
+    # b.6zq: copy the smoke script INTO $tmp_workdir before running it. The
+    # runtime version loader in subprocessClient.ts (b.xsh Epic 3) uses
+    # import.meta.resolve("agent-director/package.json"), which Bun resolves
+    # relative to the *calling script's* location. If we run the script from
+    # $REPO_ROOT/pkg/ts-bun-client/scripts/, Bun walks up and finds the
+    # repo's own pkg/ts-bun-client/package.json (name="agent-director",
+    # version="0.0.0") *before* $tmp_workdir/node_modules/agent-director,
+    # and the smoke reports "0.0.0" against any EXPECTED_VERSION. Running
+    # the script from inside $tmp_workdir makes the consumer's installed
+    # (release-stamped) package.json win resolution.
+    local smoke_script_in_workdir="$tmp_workdir/verify-installed-pkg.ts"
+    cp "$smoke_script" "$smoke_script_in_workdir"
     # EXPECTED_VERSION tells verify-installed-pkg.ts --smoke to assert the
     # value returned by client.version() matches the release tag, catching
     # b.b3h ldflags regressions and b.uys re-stage failures before publish.
     # Use $plain_v (no leading "v") because subprocessClient.ts overrides the
     # CLI's git-describe stamp with the npm package.json version (b.6o1),
     # which version-bump.ts stamped from $plain_v above. (b.6oj anchor)
-    if ! (cd "$tmp_workdir" && HOME="$tmp_home" EXPECTED_VERSION="$plain_v" bun "$smoke_script" --smoke) \
+    if ! (cd "$tmp_workdir" && HOME="$tmp_home" EXPECTED_VERSION="$plain_v" bun "$smoke_script_in_workdir" --smoke) \
             > >(while IFS= read -r l; do printf '[verify] %s\n' "$l"; done); then
         log verify "FAIL client.version() smoke against installed tarball" >&2
         phase_fail verify "version() smoke"
