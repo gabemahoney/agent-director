@@ -677,6 +677,54 @@ CONSUMER_PKG
         exit 5
     fi
 
+    # ----------------------------------------------------------------
+    # Step 3.5/4: re-stage dist→platforms (undo bun test setup.ts overwrite)
+    #
+    # pkg/ts-bun-client/test/setup.ts invokes `make build` (dev build,
+    # no -ldflags) and copies the dev binary into platforms/<host>/bin/
+    # and node_modules/@agent-director/<host>/bin/ — silently clobbering
+    # the release-stamped binary that build_phase staged. Re-running
+    # stage_cli_into_platforms restores the correct binary before
+    # publish_phase cp -a's the live tree. (b.uys anchor)
+    # ----------------------------------------------------------------
+    log verify "step 3.5/4: re-stage dist→platforms (undo bun test setup.ts overwrite) [b.uys anchor]"
+    if ! stage_cli_into_platforms; then
+        phase_fail verify "re-stage failed"
+        exit 5
+    fi
+    # Re-assert: for each CLI_PLATFORMS entry that matches the host arch,
+    # exec the staged binary and confirm its embedded version equals $VERSION.
+    # host_bin_arch / host_bin_os are still set from step 0/4 above.
+    local entry cross npm_subdir staged_bin staged_version_json staged_version matched
+    matched=0
+    for entry in "${CLI_PLATFORMS[@]}"; do
+        cross="${entry%=*}"
+        npm_subdir="${entry#*=}"
+        if [[ "$cross" == "${host_bin_os}-${host_bin_arch}" ]]; then
+            matched=1
+            staged_bin="$REPO_ROOT/pkg/ts-bun-client/platforms/$npm_subdir/bin/agent-director"
+            if [[ ! -x "$staged_bin" ]]; then
+                log verify "FAIL b.uys anchor: staged binary not found or not executable: $staged_bin" >&2
+                phase_fail verify "staged binary missing"; exit 5
+            fi
+            staged_version_json="$("$staged_bin" version 2>/dev/null)" || {
+                log verify "FAIL b.uys anchor: \`$staged_bin version\` exited non-zero" >&2
+                phase_fail verify "staged binary version failed"; exit 5
+            }
+            staged_version="$(printf '%s' "$staged_version_json" | jq -r '.version // empty')"
+            if [[ "$staged_version" != "$VERSION" ]]; then
+                log verify "FAIL b.uys anchor: staged binary .version=\"$staged_version\"; expected \"$VERSION\"" >&2
+                phase_fail verify "staged binary version mismatch"; exit 5
+            fi
+            log verify "  staged binary version stamp OK: platforms/$npm_subdir .version=$staged_version"
+        fi
+    done
+    if [[ "$matched" == "1" ]]; then
+        log verify "  staged platforms binaries re-anchored OK"
+    else
+        log verify "  no CLI_PLATFORMS entry matched host ${host_bin_os}-${host_bin_arch} — re-stage assertion skipped"
+    fi
+
     log verify "  postinstall verify OK: SKILL.md frontmatter version=$plain_v under $tmp_home/.claude/skills/install-agent-director/"
     log verify "OK"
     phase_ok verify
