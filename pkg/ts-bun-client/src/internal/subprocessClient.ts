@@ -479,6 +479,9 @@ export class SubprocessClient {
     // b.6o1: override CLI git-describe stamp with the npm package version
     // so semver gating against agent-director@X.Y.Z works for consumers.
     // Lazy-load and cache per instance; loadNpmPackageVersion() reads disk once.
+    // Note: concurrent callers before the first await resolves will each
+    // call loadNpmPackageVersion() independently (SR-3.3 SHOULD, not MUST).
+    // Sequential calls (the common case via #enqueue) always hit the cache.
     // Spread cliResp so any extra envelope fields (used by stub-binary tests)
     // survive the wrapper.
     if (this.#npmPkgVersion === undefined) {
