@@ -55,6 +55,12 @@ if (tmuxProc.exitCode !== 0) {
   process.exit(1);
 }
 
+// Enforce executable bit on the fake-tmux stub. The Makefile recipe now does
+// this too (belt-and-suspenders), but if the binary lands at 644 by any means
+// (manual chmod, copy without x-bit, etc.) exec.LookPath will skip it and
+// fall through to the real /usr/bin/tmux, leaking real tmux sessions.
+chmodSync(resolve(fakeTmuxDir, "tmux"), 0o755);
+
 // ── agent-director CLI binary ─────────────────────────────────────────────
 // `make agent-director` is an alias for `make build`; it is incremental and
 // fast when sources are unchanged.  Required by the envelope-diff tests that

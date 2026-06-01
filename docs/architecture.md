@@ -2394,7 +2394,10 @@ constraint without altering the subprocess's inherited environment.
 and exits 0 — allowing smoke tests to call verbs that would otherwise need a live
 tmux session.  For `capture-pane` it writes a fixed stub string to stdout so
 `read-pane` tests can assert the return value is non-empty.  The binary is built
-by `make fake-tmux` (which `test/setup.ts` calls before any test runs).
+by `make fake-tmux` (which `test/setup.ts` calls before any test runs).  Both
+the Makefile recipe and `setup.ts` explicitly `chmod 755` the output: without the
+execute bit, `exec.LookPath` silently skips the stub and falls through to the
+real `/usr/bin/tmux`, leaking actual tmux sessions into the test environment.
 
 **`runHelper` wrapper.**
 

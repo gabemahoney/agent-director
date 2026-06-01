@@ -527,17 +527,18 @@ describe("kill", () => {
   test(
     "success path",
     async () => {
+      const killId = `id-kill-${crypto.randomUUID().slice(0, 8)}`;
       const { homeA, storeB, cleanup } = prepareStores((store) => {
         runHelper("seed-spawn", {
           store,
-          id: "id-kill-1",
+          id: killId,
           state: "waiting",
           "create-store": true,
         });
       });
       try {
         const cli = runCli(
-          ["kill", "--claude-instance-id", "id-kill-1"],
+          ["kill", "--claude-instance-id", killId],
           cliEnv(homeA)
         );
         expect(cli.exitCode).toBe(0);
@@ -546,7 +547,7 @@ describe("kill", () => {
           storePath: storeB,
           tmuxCommand: FAKE_TMUX_BIN,
         });
-        const ts = await client.kill({ claude_instance_id: "id-kill-1" });
+        const ts = await client.kill({ claude_instance_id: killId });
 
         assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
           ignorePaths: loadIgnorePathsForVerb("kill"),
@@ -772,7 +773,7 @@ describe("resume", () => {
   test(
     "success path",
     async () => {
-      const resumeId = "id-resume-1";
+      const resumeId = `id-resume-${crypto.randomUUID().slice(0, 8)}`;
       const sessId = "sess-envdiff-resume-1";
       const cwd = "/tmp";
       const slug = slugifyCwd(cwd);
