@@ -22,6 +22,7 @@ import {
   chmodSync,
   cpSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -59,6 +60,8 @@ interface StagingTree {
   darwinBinPath: string;   // path computed even when omitDarwin=true
   skillMdPath: string;
   distIndexJsPath: string;
+  /** Path to the tarball-shasums.txt manifest for --scope publish tests (Epic 4 / SR-1.3). */
+  shasumsPath: string;
   cleanup(): void;
 }
 
@@ -164,6 +167,23 @@ function makeStagingTree(opts: StagingTreeOpts = {}): StagingTree {
   const distIndexJsPath = join(distDir, "index.js");
   writeFileSync(distIndexJsPath, distIndexJsContent, "utf8");
 
+  // Dummy tarball files + SHA-256 manifest for --scope publish tests (Epic 4 / SR-1.3).
+  // Files are placed in root (not platform dirs) so the manifest is independent of
+  // the staging tree layout options (e.g. omitDarwin).
+  const dummyTarballs = [
+    { path: join(root, "dummy-umbrella.tgz"),     content: "umbrella tarball stub\n" },
+    { path: join(root, "dummy-linux-x64.tgz"),    content: "linux-x64 tarball stub\n" },
+    { path: join(root, "dummy-darwin-arm64.tgz"), content: "darwin-arm64 tarball stub\n" },
+  ];
+  const shasumsPath = join(root, "tarball-shasums.txt");
+  const shasumsLines: string[] = [];
+  for (const { path: tgzPath, content } of dummyTarballs) {
+    writeFileSync(tgzPath, content, "utf8");
+    const hash = createHash("sha256").update(content).digest("hex");
+    shasumsLines.push(`${hash}  ${tgzPath}`);
+  }
+  writeFileSync(shasumsPath, shasumsLines.join("\n") + "\n", "utf8");
+
   return {
     root,
     scriptPath,
@@ -174,6 +194,7 @@ function makeStagingTree(opts: StagingTreeOpts = {}): StagingTree {
     darwinBinPath,
     skillMdPath,
     distIndexJsPath,
+    shasumsPath,
     cleanup() {
       try {
         rmSync(root, { recursive: true, force: true });
@@ -194,10 +215,15 @@ interface RunResult {
   stderr: string;
 }
 
-function runCheck(scriptPath: string, args: string[]): RunResult {
+function runCheck(
+  scriptPath: string,
+  args: string[],
+  extraEnv?: Record<string, string>
+): RunResult {
   const r = Bun.spawnSync(["bun", "run", scriptPath, ...args], {
     stdout: "pipe",
     stderr: "pipe",
+    env: extraEnv ? { ...process.env, ...extraEnv } : undefined,
   });
   return {
     exitCode: r.exitCode,
@@ -214,10 +240,11 @@ describe("check-version-coherence happy path", () => {
   test("--scope publish: all 5 sites stamped → exit 0, empty stderr", () => {
     const tree = makeStagingTree({ site4Mode: "pin" });
     try {
-      const r = runCheck(tree.scriptPath, [
-        "--scope", "publish",
-        "--expected-version", EXPECTED,
-      ]);
+      const r = runCheck(
+        tree.scriptPath,
+        ["--scope", "publish", "--expected-version", EXPECTED],
+        { AGENT_DIRECTOR_RELEASE_SHASUMS: tree.shasumsPath }
+      );
       expect(r.exitCode).toBe(0);
       expect(r.stderr).toBe("");
     } finally {
@@ -352,10 +379,17 @@ describe("check-version-coherence missing-platform tolerance", () => {
         site4Mode: scope === "publish" ? "pin" : "file",
       });
       try {
-        const r = runCheck(tree.scriptPath, [
-          "--scope", scope,
-          "--expected-version", EXPECTED,
-        ]);
+        // --scope publish needs AGENT_DIRECTOR_RELEASE_SHASUMS for the SHA-256 round-trip
+        // check (Epic 4 / SR-1.3).  The dummy manifest uses files in root (independent of
+        // the omitDarwin layout) so the check passes.
+        const extraEnv = scope === "publish"
+          ? { AGENT_DIRECTOR_RELEASE_SHASUMS: tree.shasumsPath }
+          : undefined;
+        const r = runCheck(
+          tree.scriptPath,
+          ["--scope", scope, "--expected-version", EXPECTED],
+          extraEnv
+        );
         expect(r.exitCode).toBe(0);
         expect(r.stdout).toContain("darwin-arm64");
         expect(r.stdout).toContain("skipped");
@@ -470,10 +504,11 @@ describe("check-version-coherence site-dist-no-inline (SR-2.3)", () => {
       site4Mode: "pin",
     });
     try {
-      const r = runCheck(tree.scriptPath, [
-        "--scope", "publish",
-        "--expected-version", EXPECTED,
-      ]);
+      const r = runCheck(
+        tree.scriptPath,
+        ["--scope", "publish", "--expected-version", EXPECTED],
+        { AGENT_DIRECTOR_RELEASE_SHASUMS: tree.shasumsPath }
+      );
       expect(r.exitCode).toBe(0);
     } finally {
       tree.cleanup();

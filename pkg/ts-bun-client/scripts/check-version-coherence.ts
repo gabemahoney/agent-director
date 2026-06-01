@@ -11,9 +11,16 @@
  *
  * Path resolution mirrors version-bump.ts: anchored at import.meta.url so the
  * script works in both the source tree and a cp -a'd stage dir.
+ *
+ * --scope publish additionally performs a SHA-256 round-trip check (SR-1.3 /
+ * SR-1.5): reads AGENT_DIRECTOR_RELEASE_SHASUMS (the manifest written by
+ * verify_phase) and re-hashes every listed tarball via node:crypto streaming
+ * reads.  A hash mismatch means the tarball was mutated after verify_phase
+ * packed it — abort before npm publish fires.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, createReadStream } from "node:fs";
+import { createHash } from "node:crypto";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -296,6 +303,72 @@ function checkSiteDistNoInline(): void {
 }
 
 // ---------------------------------------------------------------------------
+// SHA-256 streaming helper (publish scope round-trip, SR-1.3 / SR-1.5)
+// ---------------------------------------------------------------------------
+
+function sha256Stream(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(filePath);
+    stream.on("data", (chunk: Buffer | string) => hash.update(chunk));
+    stream.on("end", () => resolve(hash.digest("hex")));
+    stream.on("error", (err: Error) => reject(err));
+  });
+}
+
+// checkPublishShasums re-hashes every tarball listed in the verify_phase
+// manifest and compares to the recorded SHA-256.  Failures accumulate in the
+// shared `failures` array; caller exits after this returns.
+async function checkPublishShasums(): Promise<void> {
+  const shasumPath = process.env["AGENT_DIRECTOR_RELEASE_SHASUMS"];
+  if (!shasumPath) {
+    failures.push("publish-scope check requires AGENT_DIRECTOR_RELEASE_SHASUMS");
+    return;
+  }
+  if (!existsSync(shasumPath)) {
+    failures.push(`check-version-coherence: manifest not found: ${shasumPath}`);
+    return;
+  }
+
+  const manifest = readFileSync(shasumPath, "utf8")
+    .split("\n")
+    .filter((l) => l.trim().length > 0);
+
+  for (const line of manifest) {
+    // Format: <sha256>  <abs-path>  (two spaces, coreutils convention)
+    const twoSpaceIdx = line.indexOf("  ");
+    if (twoSpaceIdx === -1) {
+      failures.push(`check-version-coherence: malformed manifest line: ${line}`);
+      continue;
+    }
+    const expectedHash = line.slice(0, twoSpaceIdx).trim();
+    const filePath = line.slice(twoSpaceIdx + 2).trim();
+
+    if (!existsSync(filePath)) {
+      failures.push(
+        `check-version-coherence: tarball not found (from manifest): ${filePath}`
+      );
+      continue;
+    }
+
+    let actualHash: string;
+    try {
+      actualHash = await sha256Stream(filePath);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      failures.push(`check-version-coherence: error hashing ${filePath}: ${msg}`);
+      continue;
+    }
+
+    if (actualHash !== expectedHash) {
+      failures.push(
+        `check-version-coherence: tarball SHA-256 drift: ${filePath}\n  actual  : ${actualHash}\n  expected: ${expectedHash}`
+      );
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // ADD NEW VERSION SITES HERE — omitting a site here means it is never checked at release time
 const SITES = [
   { id: "site-1",  label: "CLI binary version output (linux-x64, darwin-arm64)", check: (v: string) => checkSite1(v) },
@@ -309,7 +382,7 @@ const SITES = [
 // Scope → sites map
 // Both verify and publish run the standard SITES checks.
 // verify additionally runs the dist negative-grep (site-dist-no-inline).
-// Epic 4 extends publish without reorganizing dispatch by adding entries here.
+// publish additionally runs the SHA-256 round-trip check (SR-1.3 / SR-1.5).
 // ---------------------------------------------------------------------------
 
 const SCOPE_SITES: Record<string, typeof SITES> = {
@@ -331,6 +404,13 @@ for (const site of sitesToRun) {
 // path checked at publish time; the gate already ran during verify_phase.
 if (scope === "verify") {
   checkSiteDistNoInline();
+}
+
+// SR-1.3 / SR-1.5: tarball SHA-256 round-trip — publish scope only.
+// Re-hash every tarball from the verify_phase manifest; mismatch means bytes
+// were mutated after verify_phase packed them.  Must run before npm publish.
+if (scope === "publish") {
+  await checkPublishShasums();
 }
 
 if (failures.length > 0) {
