@@ -475,7 +475,8 @@ build_phase() {
 # Phase: verify
 # --------------------------------------------------------------------
 
-# verify_phase packs the umbrella with `bun pm pack --ignore-scripts` against a staged
+# verify_phase packs the umbrella with `bun pm pack --ignore-scripts` (lifecycle
+# scripts disabled; skill files are staged explicitly via stage-skill.ts) against a staged
 # copy whose `package.json` `version` and `SKILL.md` frontmatter
 # `version:` have been stamped to the release tag — i.e. the shape
 # consumers will see on npm. Installs the tarball into a temp HOME
@@ -594,10 +595,14 @@ verify_phase() {
         exit 5
     fi
 
-    # Install dev deps + bun-build so the files glob has dist/* to pack.
+    # Install dev deps, build dist/*, stage skill files, then pack.
+    # stage-skill.ts is invoked explicitly here because bun pm pack runs with
+    # --ignore-scripts (skipping the prepack lifecycle hook that would normally
+    # call it); release.sh owns staging rather than relying on prepack.
     if ! (cd "$stage_dir/pkg/ts-bun-client" \
             && bun install --no-progress >/dev/null 2>&1 \
             && bun run build >/dev/null 2>&1 \
+            && bun run scripts/stage-skill.ts >/dev/null 2>&1 \
             && bun pm pack --ignore-scripts >/dev/null 2>&1); then
         log verify "FAIL bun-pack" >&2
         phase_fail verify "bun-pack"
