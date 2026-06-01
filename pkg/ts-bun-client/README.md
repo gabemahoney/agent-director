@@ -226,6 +226,20 @@ agent-director make-template --name dev --cwd /repos/widget --overwrite
 await client.makeTemplate({ name: "dev", cwd: "/repos/widget", overwrite: true });
 ```
 
+## Consumption
+
+The supported consumption mode is Bun-runtime ESM:
+
+```sh
+bun add agent-director
+```
+
+```ts
+import { Client } from "agent-director";
+```
+
+The package uses `import.meta.resolve` and `import.meta.url` at runtime to locate the installed `package.json`. Bundling it through webpack or other bundlers that do not support these features is not supported.
+
 ## Versioning
 
 The library version equals the agent-director release tag — released in lockstep:

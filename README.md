@@ -15,7 +15,8 @@ SQLite file; everything else is tmux.
   [`pkg/api/README.md`](pkg/api/README.md).
 - A **TypeScript/Bun client** (`agent-director` on npm) — same API
   surface as the Go library. The Client spawns the bundled CLI binary
-  as a subprocess per verb call (no FFI, no network hop). See
+  as a subprocess per verb call (no FFI, no network hop). Consumed at
+  Bun runtime via ESM; not designed to be webpacked. See
   [`pkg/ts-bun-client/README.md`](pkg/ts-bun-client/README.md).
 - A **permission relay** (`relay_mode=on` + `decide`) so an orchestrator
   can intercept `PreToolUse` permission prompts and answer
