@@ -668,7 +668,9 @@ CONSUMER_PKG
 
     log verify "step 3/4: bun test pkg/ts-bun-client (in-tree)"
 
-    if ! (cd "$REPO_ROOT/pkg/ts-bun-client" && bun install --frozen-lockfile && bun test) \
+    # --parallel=1 because the suite deadlocks in default parallel mode (b.w7e);
+    # bunfig.toml's `parallel = 1` is forward-looking and not honored by bun 1.3.13.
+    if ! (cd "$REPO_ROOT/pkg/ts-bun-client" && bun install --frozen-lockfile && bun test --parallel=1) \
             > >(while IFS= read -r l; do printf '[verify] %s\n' "$l"; done); then
         log verify "FAIL bun test (in-tree pkg/ts-bun-client)" >&2
         phase_fail verify "bun test"
