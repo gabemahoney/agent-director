@@ -475,7 +475,7 @@ build_phase() {
 # Phase: verify
 # --------------------------------------------------------------------
 
-# verify_phase packs the umbrella with `bun pm pack` against a staged
+# verify_phase packs the umbrella with `bun pm pack --ignore-scripts` against a staged
 # copy whose `package.json` `version` and `SKILL.md` frontmatter
 # `version:` have been stamped to the release tag — i.e. the shape
 # consumers will see on npm. Installs the tarball into a temp HOME
@@ -598,7 +598,7 @@ verify_phase() {
     if ! (cd "$stage_dir/pkg/ts-bun-client" \
             && bun install --no-progress >/dev/null 2>&1 \
             && bun run build >/dev/null 2>&1 \
-            && bun pm pack >/dev/null 2>&1); then
+            && bun pm pack --ignore-scripts >/dev/null 2>&1); then
         log verify "FAIL bun-pack" >&2
         phase_fail verify "bun-pack"
         exit 5
