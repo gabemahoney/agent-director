@@ -8,14 +8,18 @@
  * the smoke-invariants allow-list for missing error-case tests.
  */
 
-import { test, expect } from "bun:test";
+import { test, expect, beforeAll } from "bun:test";
 import * as path from "path";
 import { withTempHome } from "../internal/tempHome.js";
 import { Client } from "../../src/index.js";
 import type { VersionResult } from "../../src/index.js";
 // b.6o1: version() returns the npm package version (not the CLI's git-describe
-// stamp). Import package.json so we can assert the exact string.
-import pkgJson from "../../package.json" with { type: "json" };
+// stamp). Read package.json at runtime (SR-3.2: no build-time JSON import).
+let pkgVersion: string;
+beforeAll(async () => {
+  const json = await Bun.file(new URL("../../package.json", import.meta.url)).text();
+  pkgVersion = (JSON.parse(json) as { version: string }).version;
+});
 
 test("version: happy path — returns version and commit strings", async () => {
   await withTempHome(async (homeDir) => {
@@ -25,7 +29,7 @@ test("version: happy path — returns version and commit strings", async () => {
     expect(typeof result.version).toBe("string");
     expect(result.version.length).toBeGreaterThan(0);
     // b.6o1: .version must equal the npm package version.
-    expect(result.version).toBe(pkgJson.version);
+    expect(result.version).toBe(pkgVersion);
     expect(typeof result.commit).toBe("string");
     expect(result.commit.length).toBeGreaterThan(0);
   });

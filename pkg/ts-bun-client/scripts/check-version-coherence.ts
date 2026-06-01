@@ -73,6 +73,7 @@ interface RepoPaths {
   platformJsons: [string, string];
   platformBins: [string, string];
   skillMd: string;
+  distIndexJs: string;
 }
 
 function resolveRepoPaths(dir: string): RepoPaths {
@@ -87,6 +88,7 @@ function resolveRepoPaths(dir: string): RepoPaths {
       resolve(dir, "../platforms/darwin-arm64/bin/agent-director"),
     ],
     skillMd: resolve(dir, "../../../skills/install-agent-director/SKILL.md"),
+    distIndexJs: resolve(dir, "../dist/index.js"),
   };
 }
 
@@ -269,6 +271,30 @@ function checkSite5(ver: string): void {
   }
 }
 
+// Site dist-no-inline: dist/index.js must not contain the literal identifier
+// NPM_PACKAGE_VERSION or the placeholder string "0.0.0" — both indicate the
+// build-time JSON import was not fully replaced by the runtime loader (SR-2.3).
+// dist/index.js must exist; if missing, bun build was not run before the gate.
+function checkSiteDistNoInline(): void {
+  const distPath = paths.distIndexJs;
+  if (!existsSync(distPath)) {
+    failures.push(
+      `[site-dist-no-inline] ${distPath}: file not found — run bun build before the version-coherence gate`
+    );
+    return;
+  }
+  const src = readFileSync(distPath, "utf8");
+  const FORBIDDEN: Array<[string, string]> = [
+    ["NPM_PACKAGE_VERSION", 'identifier "NPM_PACKAGE_VERSION" must be absent after bun build'],
+    ['"0.0.0"', 'placeholder "0.0.0" must be absent after bun build'],
+  ];
+  for (const [substr, reason] of FORBIDDEN) {
+    if (src.includes(substr)) {
+      failures.push(`[site-dist-no-inline] ${distPath}: found ${substr} — ${reason}`);
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // ADD NEW VERSION SITES HERE — omitting a site here means it is never checked at release time
 const SITES = [
@@ -281,7 +307,8 @@ const SITES = [
 
 // ---------------------------------------------------------------------------
 // Scope → sites map
-// Both verify and publish run the same set of per-site checks in this Epic.
+// Both verify and publish run the standard SITES checks.
+// verify additionally runs the dist negative-grep (site-dist-no-inline).
 // Epic 4 extends publish without reorganizing dispatch by adding entries here.
 // ---------------------------------------------------------------------------
 
@@ -297,6 +324,13 @@ const SCOPE_SITES: Record<string, typeof SITES> = {
 const sitesToRun = SCOPE_SITES[scope];
 for (const site of sitesToRun) {
   site.check(expectedVersion);
+}
+
+// SR-2.3: negative-grep on dist/index.js — verify scope only.
+// publish scope skips this because dist/ is not part of the published artifact
+// path checked at publish time; the gate already ran during verify_phase.
+if (scope === "verify") {
+  checkSiteDistNoInline();
 }
 
 if (failures.length > 0) {
