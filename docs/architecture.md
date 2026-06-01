@@ -1987,8 +1987,10 @@ first failing phase:
    against the installed package. The smoke asserts the postinstall
    placed `~/.claude/skills/install-agent-director/` with the right
    frontmatter version AND that `client.version()` returns a well-formed
-   `{ version, commit }` envelope. Any sub-step failure halts with exit
-   code 5.
+   `{ version, commit }` envelope. `release.sh` additionally exports
+   `EXPECTED_VERSION=<semver>` so the smoke compares the reported version
+   against the release version — catching any ldflags or re-stage regression
+   before publish (b.6oj). Any sub-step failure halts with exit code 5.
 5. **tag** — `git tag -a $VERSION -m "Release $VERSION" && git push
    origin $VERSION`. **Point of no return.** The Go module
    resolution relies on the single root tag because `pkg/api/`

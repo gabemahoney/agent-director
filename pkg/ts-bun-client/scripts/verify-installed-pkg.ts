@@ -21,6 +21,12 @@
  *                              bypass platform-package CLI resolution. Use with
  *                              the in-repo dist/agent-director-linux-amd64
  *                              binary during local development.
+ *   EXPECTED_VERSION=<semver>  When set, assert client.version().version equals
+ *                              this value (e.g. "0.6.3" — the npm package
+ *                              version returned by client.version() per b.6o1,
+ *                              not the binary's git-describe stamp). Set by
+ *                              release.sh verify_phase to catch version-stamp
+ *                              regressions (b.6oj). Unset or empty → skipped.
  *
  * Production codepath: bare `import { Client } from "agent-director"` with no
  * env var overrides. The packed tarball must resolve correctly.
@@ -143,6 +149,19 @@ async function runSmoke(): Promise<void> {
       throw new Error(
         `verify-installed-pkg --smoke: version() returned unexpected shape: ${JSON.stringify(result)}`
       );
+    }
+
+    // Value-assertion: when EXPECTED_VERSION is set (e.g. by release.sh
+    // verify_phase), confirm the binary reports the correct release tag.
+    // Skipped when unset or empty to preserve the local-run path. (b.6oj)
+    const expected = process.env.EXPECTED_VERSION;
+    if (expected !== undefined && expected !== "") {
+      const got = (result as Record<string, unknown>).version as string;
+      if (got !== expected) {
+        throw new Error(
+          `verify-installed-pkg --smoke: version mismatch — got "${got}", expected "${expected}"`
+        );
+      }
     }
 
     client.close();
