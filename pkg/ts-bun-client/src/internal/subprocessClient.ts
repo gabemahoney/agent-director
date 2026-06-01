@@ -29,14 +29,12 @@
  * Internal — NOT re-exported from src/index.ts until Epic B.
  */
 
+import { readFile } from "node:fs/promises";
 import { resolveCliPath } from "./platformResolve.js";
 import { expandTilde } from "./tilde.js";
 import { buildArgv, type GlobalArgvOptions } from "./argv.js";
 import { ErrSubprocessCrash } from "./spawner.js";
 import { isErrorEnvelope, throwFromEnvelope } from "./errorMap.js";
-// b.6o1: inline npm package version so version() returns the published semver
-// (stamped by release.sh) instead of the CLI's git-describe build stamp.
-import pkgJson from "../../package.json" with { type: "json" };
 import {
   ErrClientClosed,
   ErrConsumerSignal,
@@ -67,8 +65,23 @@ import type {
 const DEFAULT_CALL_TIMEOUT_MS = 30_000;
 // Graceful window between SIGTERM and SIGKILL. SRD SR-6.2.
 const SIGKILL_GRACE_MS = 2_000;
-// b.6o1: npm package version, inlined at bundle time from package.json.
-const NPM_PACKAGE_VERSION: string = pkgJson.version;
+
+// b.6o1: runtime npm package version loader — reads package.json at call time
+// instead of inlining at bundle time so version() returns the published semver
+// (stamped by release.sh) rather than any bundler-frozen value.
+// try: production path via import.meta.resolve (installed package).
+// catch: dev-tree path when running bun test against source (no npm install).
+async function loadNpmPackageVersion(): Promise<string> {
+  try {
+    const url = import.meta.resolve("agent-director/package.json");
+    const json = await readFile(new URL(url), "utf8");
+    return (JSON.parse(json) as { version: string }).version;
+  } catch {
+    const url = new URL("../../package.json", import.meta.url);
+    const json = await readFile(url, "utf8");
+    return (JSON.parse(json) as { version: string }).version;
+  }
+}
 
 /**
  * SubprocessClient drives the bundled agent-director CLI binary as one
@@ -118,6 +131,8 @@ export class SubprocessClient {
    * after a failed call (SR-3.3).
    */
   #tail: Promise<unknown>;
+  /** Per-instance lazy cache for the npm package version (b.6o1). */
+  #npmPkgVersion: string | undefined;
 
   constructor(opts: ClientOptions) {
     // Validate callTimeoutMs before doing any I/O.
@@ -461,11 +476,18 @@ export class SubprocessClient {
   /** version — return the npm package version (b.6o1) plus the CLI's commit SHA. */
   async version(params: VersionParams): Promise<VersionResult> {
     this.#assertOpen();
-    const cliResp = await this.#enqueue<VersionResult>("version", params);
     // b.6o1: override CLI git-describe stamp with the npm package version
     // so semver gating against agent-director@X.Y.Z works for consumers.
+    // Lazy-load and cache per instance; loadNpmPackageVersion() reads disk once.
+    // Note: concurrent callers before the first await resolves will each
+    // call loadNpmPackageVersion() independently (SR-3.3 SHOULD, not MUST).
+    // Sequential calls (the common case via #enqueue) always hit the cache.
     // Spread cliResp so any extra envelope fields (used by stub-binary tests)
     // survive the wrapper.
-    return { ...cliResp, version: NPM_PACKAGE_VERSION };
+    if (this.#npmPkgVersion === undefined) {
+      this.#npmPkgVersion = await loadNpmPackageVersion();
+    }
+    const cliResp = await this.#enqueue<VersionResult>("version", params);
+    return { ...cliResp, version: this.#npmPkgVersion };
   }
 }

@@ -492,10 +492,10 @@ immediately (see Construction step 2 below):
 | `ErrCliNotExecutable` | binary exists but lacks execute permission | binary path |
 
 **version-bump script.** `scripts/version-bump.ts` is the canonical tool for
-all version-stamp mutations at publish time. Both `publish_phase` and
-`verify_phase` call it against their respective stage directories (never the
-live working tree). A bare invocation with no `--target` stamps all five
-version-bearing sites in one pass:
+all version-stamp mutations at release time. Only `verify_phase` calls it,
+in a two-pass sequence, against the stage directory (never the live working
+tree). A bare invocation with no `--target` stamps all five version-bearing
+sites in one pass:
 
 ```sh
 bun run version-bump-publish --version X.Y.Z
@@ -525,6 +525,34 @@ extends to the next `---`. Exactly one `version:` line must appear inside that
 block — zero or multiple `version:` lines → non-zero exit with a descriptive
 error. Lines after the closing `---` (the document body) are never scanned or
 modified, even if they contain the word `version:`.
+
+**check-version-coherence script.** `scripts/check-version-coherence.ts`
+is the version-coherence gate run by `verify_phase` and `publish_phase` to
+assert that all version-stamp sites agree with the release version before any
+irreversible step. The gate accepts `--scope verify` or `--scope publish` and
+checks five sites:
+
+| Site ID | File | Field |
+| --- | --- | --- |
+| `site-1` | `platforms/linux-x64/bin/agent-director`, `platforms/darwin-arm64/bin/agent-director` | `version --json` output (`"v${ver}"`) |
+| `site-3a` | `package.json` | `version` |
+| `site-3b` | `platforms/linux-x64/package.json`, `platforms/darwin-arm64/package.json` | `version` |
+| `site-4` | `package.json` | `optionalDependencies` (`^X.Y.Z` pins) |
+| `site-5` | `skills/install-agent-director/SKILL.md` | frontmatter `version:` |
+
+**Site-4 verify-scope skip.** Under `--scope verify`, site-4 is skipped when
+all `optionalDependencies` entries still carry `file:` paths — this is normal
+because `verify_phase` stamps opt-deps only after `bun install`, running the
+first gate before the opt-deps pass. After the opt-deps pass, a second
+`--scope verify` gate runs and site-4 must pass (opt-deps are now `^X.Y.Z`).
+
+**Publish-scope additions.** `--scope publish` additionally performs a
+SHA-256 round-trip check (SR-1.3 / SR-1.5): it reads
+`AGENT_DIRECTOR_RELEASE_SHASUMS` (the manifest written by `verify_phase`) and
+re-hashes every listed tarball. A hash mismatch means bytes were mutated after
+`verify_phase` packed them; the gate aborts before `npm publish` fires.
+`--scope publish` also runs the `dist/index.js` negative-grep
+(SR-2.3), making publish ⊇ verify per SR-2.2.
 
 ### Release blockers
 
@@ -577,6 +605,7 @@ each verb call is a one-shot subprocess.
 1. Applies tilde expansion (TS-side, via `src/internal/tilde.ts`) to `storePath`, `home`, and `tmuxCommand` so the CLI subprocess always receives absolute paths.
 2. Calls `resolveCliPath()` eagerly to surface platform/install errors at construction time (ErrUnsupportedPlatform, ErrPlatformPackageMissing, ErrCliNotExecutable, ErrBunVersionTooOld), but does **not** cache the result. Each verb call re-resolves the binary path fresh so that a binary replacement between construction and spawn (e.g. a background `bun install` upgrading the global package) does not cause ENOENT failures on long-lived clients.
 3. Stores the caller-supplied options for forwarding on each verb call. No subprocess is spawned at construction time; `client.version({})` is the canonical "is the binary functional" smoke.
+4. Initializes `#npmPkgVersion` to `undefined`. The npm package version is loaded lazily on the first `version()` call and cached for the lifetime of the instance (see `loadNpmPackageVersion()` below).
 
 **`close()`.**
 
@@ -598,6 +627,12 @@ each verb call is a one-shot subprocess.
 **Tilde expansion** is handled entirely on the TS side, in
 `src/internal/tilde.ts`, before any path value is forwarded to the CLI
 subprocess. The subprocess never receives a leading `~`.
+
+**`loadNpmPackageVersion()`** — runtime npm package version resolver (b.6o1). `version()` calls this on its first invocation and caches the result in `#npmPkgVersion` — one disk read per `Client` instance. Not called at construction time. Internal to `subprocessClient.ts`; not re-exported. Code that needs the npm package version must go through `client.version()`.
+
+Resolution order:
+1. **Production path.** `import.meta.resolve("agent-director/package.json")` resolves the installed package's `package.json` via Bun's synchronous module resolver. Reads the file and returns `version`.
+2. **Dev-tree fallback.** On failure (e.g. `bun test` against source without an npm-installed copy), falls back to `new URL("../../package.json", import.meta.url)` to locate the package root relative to `subprocessClient.ts`. Used in development and CI; not expected in a production install.
 
 ### Subprocess call recipe
 
@@ -1968,7 +2003,10 @@ first failing phase:
 1. **pre-flight** — validate semver, verify `gh` is on PATH (live
    runs only), confirm the working tree is clean, confirm the tag
    does not already exist, confirm the current branch matches
-   `--branch` (default `main`).
+   `--branch` (default `main`). Confirm all three
+   `pkg/ts-bun-client/package.json::version` fields are `"0.0.0"` —
+   a sentinel guard against leftover stamps from a prior failed run;
+   exits 2 with the violating path on mismatch.
 2. **notes** — template `dist/release-notes.md` from
    `git log <prev-tag>..HEAD`, grouped by Epic ID where commit
    messages reference one.
@@ -1981,32 +2019,44 @@ first failing phase:
    before `tag_phase`. Each binary is staged into the matching
    `pkg/ts-bun-client/platforms/<dir>/bin/agent-director` so
    `npm publish` later picks it up via the sub-package `files` glob.
-4. **verify** — Stage a release-stamped copy of the umbrella, `bun pm
-   pack` it, install the tarball into a temp `HOME` alongside the host's
-   platform sub-package, and run `scripts/verify-installed-pkg.ts --smoke`
-   against the installed package. The smoke asserts the postinstall
-   placed `~/.claude/skills/install-agent-director/` with the right
-   frontmatter version AND that `client.version()` returns a well-formed
-   `{ version, commit }` envelope. `release.sh` additionally exports
-   `EXPECTED_VERSION=<semver>` so the smoke compares the reported version
-   against the release version — catching any ldflags or re-stage regression
-   before publish (b.6oj). Any sub-step failure halts with exit code 5.
+4. **verify** — Stages the umbrella + both platform sub-packages +
+   skill files into a `mktemp -d` stage directory, stamps all version
+   sites using a two-pass sequence (umbrella/platform/skill-frontmatter
+   first; `bun install`; opt-deps second), runs
+   `check-version-coherence.ts --scope verify` after each stamp pass,
+   then packs all three packages (`bun pm pack --ignore-scripts`) —
+   umbrella + `linux-x64` + `darwin-arm64`. A SHA-256 manifest
+   (`$stage_dir/tarball-shasums.txt`, two-space coreutils format) is
+   written for all three tarballs and exported via
+   `AGENT_DIRECTOR_RELEASE_SHASUMS`; the stage directory path is
+   exported via `AGENT_DIRECTOR_RELEASE_STAGE_DIR`. Both env vars
+   survive verify_phase return — the stage directory is NOT cleaned up
+   on return, only on script EXIT — so `publish_phase` can consume the
+   exact same tarballs without re-staging or re-stamping (SR-1.1 –
+   SR-1.6). The phase also installs the umbrella tarball into a temp
+   `HOME` and runs `scripts/verify-installed-pkg.ts --smoke`, asserting
+   that postinstall landed the correct SKILL.md frontmatter version and
+   that `client.version()` returns a well-formed `{ version, commit }`
+   envelope. Any sub-step failure halts with exit code 5.
 5. **tag** — `git tag -a $VERSION -m "Release $VERSION" && git push
    origin $VERSION`. **Point of no return.** The Go module
    resolution relies on the single root tag because `pkg/api/`
    shares the root `go.mod`; if `pkg/api/go.mod` is ever added the
    script also pushes the `pkg/api/$VERSION` sub-path tag that Go's
    module protocol requires.
-6. **publish** — Creates a `mktemp -d` stage directory, populates it
-   via `cp -a` from `pkg/ts-bun-client/` and
-   `skills/install-agent-director/`, then runs `version-bump.ts
-   --version X.Y.Z` against the stage tree to stamp all five sites
-   (umbrella version, both platform versions, SKILL.md frontmatter
-   `version:`, and `optionalDependencies` `file:` pins). `npm publish`
-   runs from the stage; the live working tree is never written during
-   publish. Halts with a clear "H3 unresolved" error if the npm name
-   ever regresses to the `@CHANGEME-H3/agent-director` placeholder
-   (forward-going tripwire; H3 itself was resolved 2026-05-24).
+6. **publish** — Consumes the artifacts produced by `verify_phase`
+   with no re-stage, no re-stamp, and no re-pack (SR-1.6). Reads
+   `AGENT_DIRECTOR_RELEASE_SHASUMS` (manifest path) and
+   `AGENT_DIRECTOR_RELEASE_STAGE_DIR` (stage directory path) exported
+   by `verify_phase`. Runs `scripts/prepublish-guards.ts` (placeholder
+   name check, version-skew, os/cpu drift, optionalDependencies range)
+   and then `check-version-coherence.ts --scope publish` (SHA-256
+   round-trip gate — re-hashes every tarball against the manifest to
+   confirm no bytes changed after `verify_phase` packed them). If both
+   gates pass, publishes each tarball verbatim via
+   `npm publish <tarball>` — platform sub-packages first so the
+   umbrella's `^version` pins resolve on npm, umbrella last. The live
+   working tree is never written.
 7. **gh-release** — `gh release create $VERSION` with exactly **3
    attached assets** — the three CLI binaries:
    `agent-director-linux-amd64`, `agent-director-linux-arm64`,
@@ -2034,7 +2084,7 @@ operator in the release notes manually.
 #### Stage directory and EXIT trap
 
 `cleanup_stage_dir_if_any` removes the `$STAGE_DIR` temp directory
-created by `publish_phase`; it is a no-op when `STAGE_DIR` is unset
+created by `verify_phase`; it is a no-op when `STAGE_DIR` is unset
 or the directory no longer exists. Any future helper that introduces
 a new stage-dir-style temp resource should follow the same pattern:
 set a script-level variable, write a dedicated cleanup function, and
@@ -2042,12 +2092,12 @@ register it in `report_phase`'s cleanup sequence.
 
 `report_phase` is the sole EXIT trap. Its cleanup order is fixed:
 
-1. `cleanup_stage_dir_if_any` — remove the publish stage temp dir
+1. `cleanup_stage_dir_if_any` — remove the verify/publish stage temp dir
 2. `cleanup_npmrc_if_any` — remove the transient `.npmrc` token file
 3. print release summary
 
 Both helpers are no-ops if the corresponding paths were never set
-(e.g. the script failed before `publish_phase` ran).
+(e.g. the script failed before `verify_phase` ran).
 
 #### Go module tagging convention
 

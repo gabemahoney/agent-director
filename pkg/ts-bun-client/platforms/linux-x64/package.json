@@ -1,6 +1,6 @@
 {
   "name": "@agent-director/linux-x64",
-  "version": "0.4.0",
+  "version": "0.0.0",
   "type": "module",
   "os": ["linux"],
   "cpu": ["x64"],

@@ -32,7 +32,7 @@
  * Tests in this file depend on this behaviour for LOG_FILE / CALL_MARKER_FILE.
  */
 
-import { test, expect, describe, afterAll, mock } from "bun:test";
+import { test, expect, describe, beforeAll, afterAll, mock } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -40,8 +40,12 @@ import * as path from "node:path";
 import { SubprocessClient } from "../src/internal/subprocessClient.js";
 import { ErrCallTimeout, ErrConsumerSignal } from "../src/errors.js";
 // b.6o1: version() now overrides the CLI's version field with the npm
-// package version. Import it here so we can assert the post-fix shape.
-import pkgJson from "../package.json" with { type: "json" };
+// package version. Read at runtime (SR-3.2: no build-time JSON import).
+let pkgVersion: string;
+beforeAll(async () => {
+  const json = await Bun.file(new URL("../package.json", import.meta.url)).text();
+  pkgVersion = (JSON.parse(json) as { version: string }).version;
+});
 
 // b.i5y: intercept resolveCliPath for the per-call re-resolution describe block.
 // Falls through to the real implementation when resolveCliPathImpl is null,
@@ -236,7 +240,7 @@ describe("SubprocessClient — rejection does not wedge queue", () => {
         // b.6o1: the wrapper overrides .version with the npm package version,
         // but .commit still passes through unchanged.
         const r = result as Record<string, unknown>;
-        expect(r["version"]).toBe(pkgJson.version);
+        expect(r["version"]).toBe(pkgVersion);
         expect(r["commit"]).toBe("abc123");
       } finally {
         if (prevMarker === undefined) {
@@ -351,7 +355,7 @@ describe("SubprocessClient — version() returns npm package version (b.6o1)", (
 
         // The wrapper substitutes its own pkg.json version regardless of what
         // the CLI emitted ("fixture-1.0.0" here).
-        expect(result.version).toBe(pkgJson.version);
+        expect(result.version).toBe(pkgVersion);
         expect(result.version).not.toBe("fixture-1.0.0");
         // commit is passed through unchanged from the CLI envelope.
         expect(result.commit).toBe("aabbccddeeff");
