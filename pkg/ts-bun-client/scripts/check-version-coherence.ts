@@ -399,12 +399,10 @@ for (const site of sitesToRun) {
   site.check(expectedVersion);
 }
 
-// SR-2.3: negative-grep on dist/index.js — verify scope only.
-// publish scope skips this because dist/ is not part of the published artifact
-// path checked at publish time; the gate already ran during verify_phase.
-if (scope === "verify") {
-  checkSiteDistNoInline();
-}
+// SR-2.3: negative-grep on dist/index.js — verify and publish scopes.
+// SR-2.2: publish ⊇ verify; dist/index.js is present in the stage dir at
+// publish time, so the check is runnable and required under both scopes.
+checkSiteDistNoInline();
 
 // SR-1.3 / SR-1.5: tarball SHA-256 round-trip — publish scope only.
 // Re-hash every tarball from the verify_phase manifest; mismatch means bytes

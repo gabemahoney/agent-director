@@ -498,7 +498,9 @@ describe("check-version-coherence site-dist-no-inline (SR-2.3)", () => {
     }
   });
 
-  test("--scope publish: dist/index.js with NPM_PACKAGE_VERSION → exit 0 (gate skipped)", () => {
+  // SR-2.2: publish ⊇ verify — dist-no-inline must also fire under --scope publish.
+
+  test("--scope publish: dist/index.js contains NPM_PACKAGE_VERSION → exit 1, stderr names the identifier", () => {
     const tree = makeStagingTree({
       distIndexJsContent: 'const NPM_PACKAGE_VERSION = "1.2.3";',
       site4Mode: "pin",
@@ -509,7 +511,26 @@ describe("check-version-coherence site-dist-no-inline (SR-2.3)", () => {
         ["--scope", "publish", "--expected-version", EXPECTED],
         { AGENT_DIRECTOR_RELEASE_SHASUMS: tree.shasumsPath }
       );
-      expect(r.exitCode).toBe(0);
+      expect(r.exitCode).not.toBe(0);
+      expect(r.stderr).toContain("NPM_PACKAGE_VERSION");
+    } finally {
+      tree.cleanup();
+    }
+  });
+
+  test('--scope publish: dist/index.js contains "0.0.0" → exit 1, stderr names the literal', () => {
+    const tree = makeStagingTree({
+      distIndexJsContent: 'const version = "0.0.0";',
+      site4Mode: "pin",
+    });
+    try {
+      const r = runCheck(
+        tree.scriptPath,
+        ["--scope", "publish", "--expected-version", EXPECTED],
+        { AGENT_DIRECTOR_RELEASE_SHASUMS: tree.shasumsPath }
+      );
+      expect(r.exitCode).not.toBe(0);
+      expect(r.stderr).toContain('"0.0.0"');
     } finally {
       tree.cleanup();
     }

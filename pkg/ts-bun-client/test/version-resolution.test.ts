@@ -59,6 +59,12 @@ afterAll(() => {
   }
 });
 
+// Release the mock.module spy so it doesn't leak into other test files loaded
+// in the same bun process after this suite finishes.
+afterAll(() => {
+  mock.restore();
+});
+
 function makeClient(fixturePath: string): SubprocessClient {
   const dir = makeTmpDir();
   return new SubprocessClient({

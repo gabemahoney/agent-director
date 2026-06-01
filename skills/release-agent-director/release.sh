@@ -683,6 +683,19 @@ verify_phase() {
         exit 5
     fi
 
+    # SR-2.6: second coherence gate — opt-deps are now stamped to ^X.Y.Z so
+    # site-4 (optionalDependencies) is no longer file: and must pass the check.
+    # This is the authoritative gate before pack; the first gate (above) caught
+    # mid-flow drift on sites 1, 3a, 3b, 5 while opt-deps were still file:.
+    if ! (cd "$stage_dir/pkg/ts-bun-client" && bun run scripts/check-version-coherence.ts \
+            --scope verify \
+            --expected-version "$plain_v") \
+            > >(while IFS= read -r l; do printf '[verify] %s\n' "$l"; done); then
+        log verify "check-version-coherence (post-opt-deps) failed" >&2
+        phase_fail verify "check-version-coherence"
+        exit 5
+    fi
+
     # Pack umbrella with --ignore-scripts (SR-1.1).
     if ! (cd "$stage_dir/pkg/ts-bun-client" \
             && bun pm pack --ignore-scripts >/dev/null 2>&1); then
@@ -931,11 +944,12 @@ tag_phase() {
 #
 # Phase order:
 #   1. preconditions: NPM_TOKEN (live runs), manifest env vars present
-#   2. gate: check-version-coherence.ts --scope publish (SHA-256 round-trip)
-#   3. .npmrc write into verify stage dir
-#   4. per-platform npm publish <tarball>
-#   5. umbrella npm publish <tarball>
-#   6. cleanup_npmrc_if_any
+#   2. preflight: prepublish-guards.ts (placeholder name, version skew, os/cpu, opt-deps range)
+#   3. gate: check-version-coherence.ts --scope publish (SHA-256 round-trip)
+#   4. .npmrc write into verify stage dir
+#   5. per-platform npm publish <tarball>
+#   6. umbrella npm publish <tarball>
+#   7. cleanup_npmrc_if_any
 publish_phase() {
     phase_begin publish
     local plain_version="${VERSION#v}"
@@ -979,6 +993,17 @@ publish_phase() {
     log publish "  umbrella   : $tgz"
     log publish "  linux-x64  : $tgz_linux_x64"
     log publish "  darwin-arm64: $tgz_darwin_arm64"
+
+    # Preflight: run prepublish-guards.ts against the staged umbrella package.
+    # npm publish <tarball> skips the prepublishOnly lifecycle hook, so we
+    # invoke the guards explicitly before the SHA-256 gate.  Runs in default
+    # (umbrella) mode — checks placeholder name, version skew (SR-4.1),
+    # os/cpu drift (SR-3.1), and optionalDependencies range (SR-3.3).
+    if ! (cd "$verify_stage_dir/pkg/ts-bun-client" && bun run scripts/prepublish-guards.ts) \
+            > >(while IFS= read -r l; do printf '[publish] %s\n' "$l"; done); then
+        log publish "prepublish-guards.ts failed" >&2
+        exit 6
+    fi
 
     # Gate: verify all version-stamp sites agree AND SHA-256 values match
     # the verify_phase manifest (SR-1.3 / SR-1.5 round-trip check).
