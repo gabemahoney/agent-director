@@ -172,10 +172,13 @@ prompts that Claude Code renders before the session becomes interactive — for
 example the `--dangerously-load-development-channels` safety warning. `ended`
 and `missing` Spawns are still rejected regardless of the flag.
 
+Send an empty string with `allow_pending: true` to press Enter and dismiss the
+pre-`SessionStart` prompt:
+
 ```ts
 await client.sendKeys({
   claude_instance_id: "<id>",
-  text: "",        // press Enter to dismiss the pre-SessionStart prompt
+  text: "",
   allow_pending: true,
 });
 ```
