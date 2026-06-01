@@ -595,6 +595,16 @@ verify_phase() {
         exit 5
     fi
 
+    # Gate: verify all version-stamp sites agree before packing.
+    if ! (cd "$stage_dir/pkg/ts-bun-client" && bun run scripts/check-version-coherence.ts \
+            --scope verify \
+            --expected-version "$plain_v") \
+            > >(while IFS= read -r l; do printf '[verify] %s\n' "$l"; done); then
+        log verify "check-version-coherence.ts --scope verify failed" >&2
+        phase_fail verify "check-version-coherence.ts"
+        exit 5
+    fi
+
     # Install dev deps, build dist/*, stage skill files, then pack.
     # stage-skill.ts is invoked explicitly here because bun pm pack runs with
     # --ignore-scripts (skipping the prepack lifecycle hook that would normally
@@ -880,6 +890,15 @@ publish_phase() {
     if ! (cd "$stage_dir/pkg/ts-bun-client" && bun run scripts/version-bump.ts --version "$plain_version") \
             > >(while IFS= read -r l; do printf '[publish] %s\n' "$l"; done); then
         log publish "version-bump.ts failed" >&2
+        exit 6
+    fi
+
+    # Gate: verify all version-stamp sites agree before publishing.
+    if ! (cd "$stage_dir/pkg/ts-bun-client" && bun run scripts/check-version-coherence.ts \
+            --scope publish \
+            --expected-version "$plain_version") \
+            > >(while IFS= read -r l; do printf '[publish] %s\n' "$l"; done); then
+        log publish "check-version-coherence.ts --scope publish failed" >&2
         exit 6
     fi
 
