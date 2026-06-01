@@ -34,10 +34,11 @@ import {
   ErrListInvalidLabel,
   ErrTemplateNameUnsafe,
   ErrSpawnNotPausable,
+  ErrPermissionRequestNotFound,
 } from "../src/index.js";
 import type {
   SpawnResult, StatusResult, GetResult, SendKeysResult, ReadPaneResult,
-  KillResult, DecideResult, ResumeResult, FindMissingResult, ExpireResult,
+  KillResult, DecideResult, GetPermissionResult, ResumeResult, FindMissingResult, ExpireResult,
   DeleteResult, MakeTemplateResult, ListResult, PauseResult, VersionResult,
 } from "../src/index.js";
 
@@ -154,6 +155,23 @@ describe("subprocess-smoke / happy paths (SR-10.3)", () => {
       using client = new Client({ storePath, createIfMissing: true });
       const r: DecideResult = await client.decide({ claude_instance_id: id, request_token: requestToken, decision: "allow" });
       expect(typeof r).toBe("object");
+    });
+  }, 10_000);
+
+  test("get-permission — returns open permission request row", async () => {
+    await withTempHome(async (homeDir) => {
+      const storePath = path.join(homeDir, ".agent-director", "state.db");
+      const id = "subsmoke-getperm";
+      runHelper("seed-spawn", {
+        store: storePath, id, state: "check_permission",
+        "relay-mode": "on", "create-store": true,
+      });
+      const seed = runHelper("seed-permission-request", { store: storePath, "spawn-id": id, tool: "Bash" });
+      const requestToken = seed["request_token"] as string;
+      using client = new Client({ storePath, createIfMissing: true });
+      const r: GetPermissionResult = await client.getPermission({ request_token: requestToken });
+      expect(r.request_token).toBe(requestToken);
+      expect(r.tool_name).toBe("Bash");
     });
   }, 10_000);
 
@@ -331,6 +349,16 @@ describe("subprocess-smoke / error paths (SR-10.3)", () => {
         await client.decide({ claude_instance_id: "any", request_token: "00000000-0000-0000-0000-000000000000", decision: "maybe" as "allow" });
       } catch (e) { caught = e; }
       expect(caught).toBeInstanceOf(ErrInvalidDecision);
+    });
+  }, 10_000);
+
+  test("get-permission: unknown token → ErrPermissionRequestNotFound", async () => {
+    await withTempHome(async (homeDir) => {
+      const storePath = path.join(homeDir, ".agent-director", "state.db");
+      using client = new Client({ storePath, createIfMissing: true });
+      let caught: unknown;
+      try { await client.getPermission({ request_token: "00000000-0000-0000-0000-000000000000" }); } catch (e) { caught = e; }
+      expect(caught).toBeInstanceOf(ErrPermissionRequestNotFound);
     });
   }, 10_000);
 
