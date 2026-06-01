@@ -233,7 +233,7 @@ ts-helper: bin/ts-helper
 # can be exercised end-to-end without a real tmux. Compiled with CGO_ENABLED=0
 # (pure Go, no libc dependency).
 test/fake-tmux/tmux: test/fake-tmux/main.go
-	CGO_ENABLED=0 go build -o test/fake-tmux/tmux ./test/fake-tmux/
+	CGO_ENABLED=0 go build -o test/fake-tmux/tmux ./test/fake-tmux/ && chmod 755 test/fake-tmux/tmux
 
 fake-tmux: test/fake-tmux/tmux
 

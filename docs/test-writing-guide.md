@@ -135,6 +135,12 @@ def test_create_record_uses_utf8(mock_open):
 - Repeated assertion logic → helper assertion function.
 - If you copy-paste in tests, extract it.
 
+### Test isolation: tmux session names
+
+Any test that exercises a verb which creates a tmux session (e.g. `resume`) must
+use a UUID-suffixed instance id — e.g. `` `id-resume-${crypto.randomUUID().slice(0, 8)}` `` — rather than a fixed string like `id-resume-1`.
+Fixed names collide across runs when the fake-tmux stub is bypassed (e.g. mode-644 binary) and a real tmux session leaks: the `HasSession` pre-flight check then blocks every subsequent run.
+
 ### Documentation belongs in docs
 
 Fixture docstrings stay 1-2 lines. Test docstrings stay 1-2 lines. Long-form explanations of test architecture, fixture selection, or mocking strategy go in a dedicated testing doc — not buried inside the code.
