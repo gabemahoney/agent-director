@@ -659,7 +659,13 @@ CONSUMER_PKG
         phase_fail verify "smoke script missing"
         exit 5
     fi
-    if ! (cd "$tmp_workdir" && HOME="$tmp_home" bun "$smoke_script" --smoke) \
+    # EXPECTED_VERSION tells verify-installed-pkg.ts --smoke to assert the
+    # value returned by client.version() matches the release tag, catching
+    # b.b3h ldflags regressions and b.uys re-stage failures before publish.
+    # Use $plain_v (no leading "v") because subprocessClient.ts overrides the
+    # CLI's git-describe stamp with the npm package.json version (b.6o1),
+    # which version-bump.ts stamped from $plain_v above. (b.6oj anchor)
+    if ! (cd "$tmp_workdir" && HOME="$tmp_home" EXPECTED_VERSION="$plain_v" bun "$smoke_script" --smoke) \
             > >(while IFS= read -r l; do printf '[verify] %s\n' "$l"; done); then
         log verify "FAIL client.version() smoke against installed tarball" >&2
         phase_fail verify "version() smoke"
