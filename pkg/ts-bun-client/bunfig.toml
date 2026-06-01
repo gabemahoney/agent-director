@@ -1,2 +1,9 @@
 [test]
 preload = ["./test/setup.ts"]
+# Parallel mode deadlocks on shared subprocess/store state (b.w7e: parallel
+# build of bin/agent-director races into ETXTBSY at scale). Until that root
+# cause is fixed, the release-time gate in skills/release-agent-director/
+# release.sh invokes `bun test --parallel=1` explicitly. The line below is
+# forward-looking: bun 1.3.13 does NOT yet honor `parallel` as a bunfig key
+# under [test]; once it does, both invocations will pick this up.
+parallel = 1

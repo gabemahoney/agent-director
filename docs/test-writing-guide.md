@@ -141,6 +141,10 @@ Any test that exercises a verb which creates a tmux session (e.g. `resume`) must
 use a UUID-suffixed instance id — e.g. `` `id-resume-${crypto.randomUUID().slice(0, 8)}` `` — rather than a fixed string like `id-resume-1`.
 Fixed names collide across runs when the fake-tmux stub is bypassed (e.g. mode-644 binary) and a real tmux session leaks: the `HasSession` pre-flight check then blocks every subsequent run.
 
+### Parallel mode is pinned off
+
+The release-time gate in `skills/release-agent-director/release.sh` invokes `bun test --parallel=1` because the suite deadlocks when bun runs files concurrently (tracked in b.w7e — parallel `make build` invocations from `test/setup.ts` preload race into `ETXTBSY` on the shared `bin/agent-director`). Until that root cause is fixed, **assume your tests run sequentially across files**. If you write a test that *requires* parallelism for correctness — don't. Order across files is deterministic but unspecified; couple state to per-test fixtures, not run order. The bunfig key `parallel = 1` is forward-looking and ignored by bun 1.3.13; when bun honors it, both invocations (release-time and ad-hoc `bun test`) will pick it up.
+
 ### Documentation belongs in docs
 
 Fixture docstrings stay 1-2 lines. Test docstrings stay 1-2 lines. Long-form explanations of test architecture, fixture selection, or mocking strategy go in a dedicated testing doc — not buried inside the code.
