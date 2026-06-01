@@ -298,6 +298,27 @@ preflight_phase() {
         exit 2
     fi
 
+    # Sentinel assertion: all three package.json::version fields must be
+    # "0.0.0" in the live tree before any staging happens.  Catches
+    # hand-edits and leftover version bumps from a prior failed run.
+    local sentinel_ok=1
+    local _sentinel_paths=(
+        "pkg/ts-bun-client/package.json"
+        "pkg/ts-bun-client/platforms/linux-x64/package.json"
+        "pkg/ts-bun-client/platforms/darwin-arm64/package.json"
+    )
+    for _sp in "${_sentinel_paths[@]}"; do
+        local _actual
+        _actual="$(jq -r '.version' "$_sp")"
+        if [[ "$_actual" != "0.0.0" ]]; then
+            log preflight "preflight: ${_sp}::version is \"${_actual}\"; expected \"0.0.0\" (sentinel)" >&2
+            sentinel_ok=0
+        fi
+    done
+    if [[ "$sentinel_ok" -eq 0 ]]; then
+        exit 2
+    fi
+
     # Tag must not exist locally OR on remote (the latter only checked
     # if gh and a configured origin exist — otherwise rely on the
     # tag-phase remote push to surface conflicts).
