@@ -84,7 +84,7 @@ See Idea Bee `b.fg3` for cross-platform expansion status.
 `using` block (preferred):
 
 ```ts
-using client = new Client({});
+using client = await Client.create({});
 const v = await client.version({});
 console.log(v.version);
 ```
@@ -92,7 +92,7 @@ console.log(v.version);
 Explicit `try/finally` (portable fallback):
 
 ```ts
-const client = new Client({});
+const client = await Client.create({});
 try {
   const v = await client.version({});
   console.log(v.version);

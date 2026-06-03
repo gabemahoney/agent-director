@@ -29,8 +29,6 @@ import {
   Client,
   AgentDirectorError,
   ErrClientClosed,
-  ErrUnsupportedPlatform,
-  ErrPlatformPackageMissing,
   ErrBunVersionTooOld,
   errorFromEnvelope,
   ErrCwdMissing,

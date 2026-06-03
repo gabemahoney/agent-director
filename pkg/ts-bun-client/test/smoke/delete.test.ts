@@ -33,7 +33,7 @@ test("delete: happy path — removes a seeded spawn row", async () => {
       "create-store": true,
     });
 
-    using client = new Client({ storePath, createIfMissing: true });
+    using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
     const result: DeleteResult = await client.delete({
       claude_instance_id: [spawnId],
     });
@@ -45,7 +45,7 @@ test("delete: happy path — removes a seeded spawn row", async () => {
 test("delete: documented error behavior — unknown id records ErrSpawnNotFound in results map", async () => {
   await withTempHome(async (homeDir) => {
     const storePath = path.join(homeDir, ".agent-director", "state.db");
-    using client = new Client({ storePath, createIfMissing: true });
+    using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
 
     // delete never throws at the verb level; per-row errors are in the map.
     const result: DeleteResult = await client.delete({

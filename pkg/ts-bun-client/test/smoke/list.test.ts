@@ -26,7 +26,7 @@ test("list: happy path — returns seeded spawns array", async () => {
       "create-store": true,
     });
 
-    using client = new Client({ storePath, createIfMissing: true });
+    using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
     const result: ListResult = await client.list({});
     expect(Array.isArray(result.spawns)).toBe(true);
     expect(result.spawns.length).toBeGreaterThanOrEqual(1);
@@ -40,7 +40,7 @@ test("list: happy path — returns seeded spawns array", async () => {
 test("list: error — invalid label format → ErrListInvalidLabel", async () => {
   await withTempHome(async (homeDir) => {
     const storePath = path.join(homeDir, ".agent-director", "state.db");
-    using client = new Client({ storePath, createIfMissing: true });
+    using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
 
     let caught: unknown;
     try {

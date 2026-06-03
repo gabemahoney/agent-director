@@ -85,10 +85,10 @@ import type { ClientOptions } from "../src/client.js";
 
 describe("Client lifecycle", () => {
   // (a) Construct against a fresh temp store — should not throw.
-  test("(a) constructor succeeds for a fresh store path", () => {
+  test("(a) constructor succeeds for a fresh store path", async () => {
     const dir = makeTmpDir();
     try {
-      const client = new Client(makeOpts(dir));
+      const client = await Client.create(makeOpts(dir));
       client.close();
     } finally {
       removeTmpDir(dir);
@@ -96,10 +96,10 @@ describe("Client lifecycle", () => {
   });
 
   // (b) Double-close() is a no-op (must not throw on second call).
-  test("(b) double close() is a no-op", () => {
+  test("(b) double close() is a no-op", async () => {
     const dir = makeTmpDir();
     try {
-      const client = new Client(makeOpts(dir));
+      const client = await Client.create(makeOpts(dir));
       client.close();
       // Second close: must not throw.
       expect(() => client.close()).not.toThrow();
@@ -109,12 +109,12 @@ describe("Client lifecycle", () => {
   });
 
   // (c) `using` block calls close() at scope exit.
-  test("(c) using block closes the client at scope exit", () => {
+  test("(c) using block closes the client at scope exit", async () => {
     const dir = makeTmpDir();
     let capturedClient: Client | undefined;
     try {
       {
-        using c = new Client(makeOpts(dir));
+        using c = await Client.create(makeOpts(dir));
         capturedClient = c;
         // Inside the block the client is open — _assertOpenForTests must not throw.
         expect(() => c._assertOpenForTests()).not.toThrow();
@@ -127,10 +127,10 @@ describe("Client lifecycle", () => {
   });
 
   // (d) Post-close _assertOpenForTests throws ErrClientClosed.
-  test("(d) _assertOpenForTests throws ErrClientClosed after close()", () => {
+  test("(d) _assertOpenForTests throws ErrClientClosed after close()", async () => {
     const dir = makeTmpDir();
     try {
-      const client = new Client(makeOpts(dir));
+      const client = await Client.create(makeOpts(dir));
       client.close();
       expect(() => client._assertOpenForTests()).toThrow(ErrClientClosed);
     } finally {
@@ -139,10 +139,10 @@ describe("Client lifecycle", () => {
   });
 
   // (e) ErrClientClosed instanceof chain.
-  test("(e) ErrClientClosed is instanceof ErrClientClosed, AgentDirectorError, and Error", () => {
+  test("(e) ErrClientClosed is instanceof ErrClientClosed, AgentDirectorError, and Error", async () => {
     const dir = makeTmpDir();
     try {
-      const client = new Client(makeOpts(dir));
+      const client = await Client.create(makeOpts(dir));
       client.close();
       let caught: unknown;
       try {
@@ -165,7 +165,7 @@ describe("Client lifecycle", () => {
   test("post-close verb call throws ErrClientClosed", async () => {
     const dir = makeTmpDir();
     try {
-      const client = new Client(makeOpts(dir));
+      const client = await Client.create(makeOpts(dir));
       client.close();
       // version() checks _assertOpen() first; must throw ErrClientClosed.
       await expect(client.version({})).rejects.toThrow(ErrClientClosed);

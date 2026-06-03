@@ -5,9 +5,11 @@
  * exported by src/errors.ts exactly equals the shared err_name catalog at
  * pkg/api/errnames/catalog.json (produced by Epic 1's `go generate` mechanism).
  *
- * TS-only subclasses (ErrClientClosed, ErrUnsupportedPlatform,
- * ErrPlatformPackageMissing, ErrBunVersionTooOld) are excluded via the
- * centralized allow-list at src/internal/tsOnlyErrors.ts.
+ * TS-only subclasses (ErrClientClosed, ErrBunVersionTooOld,
+ * ErrConsumerSignal, ErrCallTimeout, ErrUnknownErrorName, plus the three
+ * b.ue3 system-install errors ErrSystemInstallNotFound /
+ * ErrSystemInstallTooOld / ErrSystemInstallUnreachable) are excluded via
+ * the centralized allow-list at src/internal/tsOnlyErrors.ts.
  *
  * Must run in < 100 ms (pure in-process, no subprocess).
  */

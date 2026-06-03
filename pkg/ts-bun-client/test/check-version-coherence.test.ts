@@ -84,6 +84,16 @@ interface StagingTreeOpts {
   distIndexJsContent?: string;
 }
 
+// Default dist/index.js content — exports a MIN_BINARY_VERSION constant that
+// matches the staged version-floor.json so the floor-lockstep gate (b.ue3 /
+// SR-5.4) passes. Tests that exercise the lockstep gate's drift paths
+// override this via distIndexJsContent.
+const DEFAULT_FLOOR_VALUE = "0.7.0";
+const DEFAULT_DIST_INDEX_JS =
+  `// bundled output\nexport const MIN_BINARY_VERSION = "${DEFAULT_FLOOR_VALUE}";\nexport const DEV_SENTINEL_VERSION = "0.0.0-dev";\n`;
+const DEFAULT_VERSION_FLOOR_JSON =
+  `{\n  "min_binary_version": "${DEFAULT_FLOOR_VALUE}"\n}\n`;
+
 function makeStagingTree(opts: StagingTreeOpts = {}): StagingTree {
   const {
     site1Version = EXPECTED,
@@ -92,7 +102,7 @@ function makeStagingTree(opts: StagingTreeOpts = {}): StagingTree {
     site4Mode = "file",
     site5Version = EXPECTED,
     omitDarwin = false,
-    distIndexJsContent = "// bundled output\nexport {};\n",
+    distIndexJsContent = DEFAULT_DIST_INDEX_JS,
   } = opts;
 
   const root = mkdtempSync(join(import.meta.dir, ".tmp-cvc-"));
@@ -165,9 +175,16 @@ function makeStagingTree(opts: StagingTreeOpts = {}): StagingTree {
   const skillMdPath = join(skillDir, "SKILL.md");
   writeFileSync(skillMdPath, makeSkillMd(site5Version), "utf8");
 
-  // dist/index.js (site-dist-no-inline) — clean by default.
+  // dist/index.js (site-dist-no-inline) — exports MIN_BINARY_VERSION by default
+  // so the floor-lockstep gate passes (b.ue3 / SR-5.4).
   const distIndexJsPath = join(distDir, "index.js");
   writeFileSync(distIndexJsPath, distIndexJsContent, "utf8");
+
+  // version-floor.json (source of truth + dist copy) — required by the
+  // floor-lockstep gate. Staged with DEFAULT_FLOOR_VALUE so dist's
+  // MIN_BINARY_VERSION export agrees.
+  writeFileSync(join(pkgDir, "version-floor.json"), DEFAULT_VERSION_FLOOR_JSON, "utf8");
+  writeFileSync(join(distDir, "version-floor.json"), DEFAULT_VERSION_FLOOR_JSON, "utf8");
 
   // Dummy tarball files + SHA-256 manifest for --scope publish tests (Epic 4 / SR-1.3).
   // Files are placed in root (not platform dirs) so the manifest is independent of

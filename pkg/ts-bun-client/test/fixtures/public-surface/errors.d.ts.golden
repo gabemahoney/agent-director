@@ -29,27 +29,6 @@ export declare class ErrClientClosed extends AgentDirectorError {
     constructor();
 }
 /**
- * ErrUnsupportedPlatform — thrown when `process.platform` + `process.arch`
- * produce a tuple that has no corresponding native sub-package.
- *
- * TS-ONLY ERROR — no counterpart in pkg/api/errnames/catalog.json.
- * Listed in `src/internal/tsOnlyErrors.ts::TS_ONLY_ERROR_NAMES`.
- */
-export declare class ErrUnsupportedPlatform extends AgentDirectorError {
-    constructor(tuple: string);
-}
-/**
- * ErrPlatformPackageMissing — thrown when the optional npm sub-package for
- * the current platform is not installed, or when its native binary file is
- * absent from the installed package directory.
- *
- * TS-ONLY ERROR — no counterpart in pkg/api/errnames/catalog.json.
- * Listed in `src/internal/tsOnlyErrors.ts::TS_ONLY_ERROR_NAMES`.
- */
-export declare class ErrPlatformPackageMissing extends AgentDirectorError {
-    constructor(pkgName: string, detail?: string);
-}
-/**
  * ErrBunVersionTooOld — thrown when Bun.version is below the declared minimum.
  *
  * TS-ONLY ERROR — no counterpart in pkg/api/errnames/catalog.json.
@@ -57,17 +36,6 @@ export declare class ErrPlatformPackageMissing extends AgentDirectorError {
  */
 export declare class ErrBunVersionTooOld extends AgentDirectorError {
     constructor(actual: string, minimum: string);
-}
-/**
- * ErrCliNotExecutable — thrown when the resolved CLI binary exists on disk but
- * does not have execute permission for the current process's effective uid/gid.
- *
- * TS-ONLY ERROR — no counterpart in pkg/api/errnames/catalog.json.
- * Listed in `src/internal/tsOnlyErrors.ts::TS_ONLY_ERROR_NAMES`.
- * Implements SRD SR-2.3.
- */
-export declare class ErrCliNotExecutable extends AgentDirectorError {
-    constructor(path: string);
 }
 /**
  * ErrConsumerSignal — thrown when an in-flight subprocess call is killed by an
@@ -118,6 +86,71 @@ export declare class ErrUnknownErrorName extends AgentDirectorError {
     /** The full envelope payload for diagnostic use. */
     readonly envelope: unknown;
     constructor(unknownName: string, envelope: unknown);
+}
+/**
+ * CheckedLocation — one entry in ErrSystemInstallNotFound.checkedLocations.
+ * Names a discovery step and what it consulted.  Per SR-3.1.
+ */
+export interface CheckedLocation {
+    /** Which discovery step consulted this location. */
+    kind: "standard-install-path" | "path-lookup";
+    /**
+     * For "standard-install-path": absolute resolved candidate path that was
+     * stat'd, or null when the path could not be computed (HOME unset/empty/
+     * non-absolute per SR-1.1).
+     * For "path-lookup": value of PATH at lookup time, or null when PATH was
+     * unset or empty.
+     */
+    detail: string | null;
+}
+/**
+ * UnreachableReason — closed-with-escape-hatch enum of failure modes that
+ * surface as ErrSystemInstallUnreachable.  Per SR-3.3.
+ */
+export type UnreachableReason = "not-executable" | "not-a-regular-file" | "probe-timeout" | "probe-nonzero-exit" | "probe-killed-by-signal" | "unparseable-version" | "spawn-failed" | "other";
+/**
+ * ErrSystemInstallNotFound — thrown by Client.create() / resolveSystemBinary()
+ * when the discovery pipeline (SR-1.1) consults every documented location
+ * without finding a candidate file that exists on disk.  Per SR-3.1.
+ *
+ * TS-ONLY ERROR.  Listed in TS_ONLY_ERROR_NAMES.
+ */
+export declare class ErrSystemInstallNotFound extends AgentDirectorError {
+    readonly checkedLocations: ReadonlyArray<CheckedLocation>;
+    constructor(checkedLocations: ReadonlyArray<CheckedLocation>);
+}
+/**
+ * ErrSystemInstallTooOld — thrown by Client.create() / resolveSystemBinary()
+ * when the probed binary's version is below MIN_BINARY_VERSION.  Per SR-3.2.
+ * Data-only: no upgrade URL or command; presentation belongs to the consumer.
+ *
+ * TS-ONLY ERROR.  Listed in TS_ONLY_ERROR_NAMES.
+ */
+export declare class ErrSystemInstallTooOld extends AgentDirectorError {
+    readonly actualVersion: string;
+    readonly requiredVersion: string;
+    readonly binaryPath: string;
+    constructor(actualVersion: string, requiredVersion: string, binaryPath: string);
+}
+/**
+ * ErrSystemInstallUnreachable — thrown by Client.create() /
+ * resolveSystemBinary() when discovery produced a candidate but the binary
+ * failed validation or the version probe.  Reason carries the specific
+ * failure mode.  Per SR-3.3.
+ *
+ * TS-ONLY ERROR.  Listed in TS_ONLY_ERROR_NAMES.
+ */
+export declare class ErrSystemInstallUnreachable extends AgentDirectorError {
+    readonly binaryPath: string;
+    readonly reason: UnreachableReason;
+    readonly diagnostic: string | null;
+    readonly exitCode: number | null;
+    readonly signal: string | null;
+    constructor(binaryPath: string, reason: UnreachableReason, opts?: {
+        diagnostic?: string | null;
+        exitCode?: number | null;
+        signal?: string | null;
+    });
 }
 /** Mirrors ErrCwdMissing (package: spawn) */
 export declare class ErrCwdMissing extends AgentDirectorError {

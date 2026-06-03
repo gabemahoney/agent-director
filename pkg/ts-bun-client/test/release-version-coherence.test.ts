@@ -333,12 +333,21 @@ test(
       // Step 9: One-shot consumer.ts — invoke client.version(), emit JSON.
       // -----------------------------------------------------------------------
 
+      // Stage the dev CLI binary at $sandboxedHome/.agent-director/bin/agent-director
+      // so the consumer's Client.create() discovery (SR-1.1 step 1) finds it.
+      // After b.ue3 the consumer is a system-install consumer; no vendored binary.
+      const sandboxedAdBinDir = join(sandboxedHome, ".agent-director", "bin");
+      mkdirSync(sandboxedAdBinDir, { recursive: true });
+      const sandboxedAdBin = join(sandboxedAdBinDir, "agent-director");
+      cpSync(cliPath, sandboxedAdBin);
+      chmodSync(sandboxedAdBin, 0o755);
+
       const consumerStorePath = join(consumerDir, "state.db");
       writeFileSync(
         join(consumerDir, "consumer.ts"),
         [
           `import { Client } from "agent-director";`,
-          `const c = new Client({ storePath: ${JSON.stringify(consumerStorePath)}, createIfMissing: true });`,
+          `const c = await Client.create({ storePath: ${JSON.stringify(consumerStorePath)}, createIfMissing: true });`,
           `const result = await c.version({});`,
           `console.log(JSON.stringify(result));`,
           `c.close();`,
@@ -348,7 +357,7 @@ test(
 
       const consumerResult = await spawn(
         ["bun", "run", "consumer.ts"],
-        { cwd: consumerDir }
+        { cwd: consumerDir, env: { HOME: sandboxedHome } }
       );
       expect(consumerResult.exitCode).toBe(0);
 

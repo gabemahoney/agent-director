@@ -27,7 +27,7 @@ test("kill: happy path — terminates a working spawn", async () => {
       "create-store": true,
     });
 
-    using client = new Client({ storePath, createIfMissing: true });
+    using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
     const result = await client.kill({ claude_instance_id: spawnId });
     // KillResult is an empty object.
     expect(typeof result).toBe("object");
@@ -37,7 +37,7 @@ test("kill: happy path — terminates a working spawn", async () => {
 test("kill: error — unknown id → ErrSpawnNotFound", async () => {
   await withTempHome(async (homeDir) => {
     const storePath = path.join(homeDir, ".agent-director", "state.db");
-    using client = new Client({ storePath, createIfMissing: true });
+    using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
 
     let caught: unknown;
     try {

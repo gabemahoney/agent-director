@@ -57,11 +57,11 @@ describe("Per-Client serialization (SR-10.4 / SR-3)", () => {
         const storePath = path.join(homeDir, ".agent-director", "state.db");
         maybeSeedOuterParent(storePath);
 
-        using client = new Client({
+        using client = await Client.create({
           storePath,
           createIfMissing: true,
-          tmuxCommand: FAKE_TMUX_BIN,
-        });
+          tmuxCommand: FAKE_TMUX_BIN, _cliPath: process.env.CLI_PATH
+        } as any);
 
         // Submit 5 spawn calls in deterministic order. Attach a .then() to
         // each that captures performance.now() at call-resolution time —
@@ -144,16 +144,16 @@ describe("Per-Client serialization (SR-10.4 / SR-3)", () => {
         maybeSeedOuterParent(storePath);
 
         // Two clients, same store. Each has its own private queue.
-        using clientA = new Client({
+        using clientA = await Client.create({
           storePath,
           createIfMissing: true,
-          tmuxCommand: FAKE_TMUX_BIN,
-        });
-        using clientB = new Client({
+          tmuxCommand: FAKE_TMUX_BIN, _cliPath: process.env.CLI_PATH
+        } as any);
+        using clientB = await Client.create({
           storePath,
           createIfMissing: true,
-          tmuxCommand: FAKE_TMUX_BIN,
-        });
+          tmuxCommand: FAKE_TMUX_BIN, _cliPath: process.env.CLI_PATH
+        } as any);
 
         // Fire one verb call on each client simultaneously. Independent
         // queues mean both subprocess invocations may overlap; the test

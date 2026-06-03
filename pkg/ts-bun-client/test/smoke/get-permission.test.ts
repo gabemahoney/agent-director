@@ -39,7 +39,7 @@ test("get-permission: happy path — returns open permission request row", async
     });
     const requestToken = seed["request_token"] as string;
 
-    using client = new Client({ storePath, createIfMissing: true });
+    using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
     const result = await client.getPermission({ request_token: requestToken });
 
     // Token echoed back.
@@ -59,7 +59,7 @@ test("get-permission: happy path — returns open permission request row", async
 test("get-permission: error — unknown token → ErrPermissionRequestNotFound", async () => {
   await withTempHome(async (homeDir) => {
     const storePath = path.join(homeDir, ".agent-director", "state.db");
-    using client = new Client({ storePath, createIfMissing: true });
+    using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
 
     let caught: unknown;
     try {

@@ -36,7 +36,7 @@ test("read-pane: happy path — returns pane text from fake-tmux stub", async ()
       "create-store": true,
     });
 
-    using client = new Client({ storePath, createIfMissing: true, tmuxCommand: fakeTmuxBin });
+    using client = await Client.create({ storePath, createIfMissing: true, tmuxCommand: fakeTmuxBin , _cliPath: process.env.CLI_PATH } as any);
     const result: ReadPaneResult = await client.readPane({
       claude_instance_id: spawnId,
       n_lines: 5,
@@ -50,7 +50,7 @@ test("read-pane: happy path — returns pane text from fake-tmux stub", async ()
 test("read-pane: error — unknown id → ErrSpawnNotFound", async () => {
   await withTempHome(async (homeDir) => {
     const storePath = path.join(homeDir, ".agent-director", "state.db");
-    using client = new Client({ storePath, createIfMissing: true });
+    using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
 
     let caught: unknown;
     try {

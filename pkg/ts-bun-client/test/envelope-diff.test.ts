@@ -196,10 +196,10 @@ describe("spawn", () => {
         const cli = runCli(["spawn", "--cwd", "/tmp"], cliEnv(homeA));
         expect(cli.exitCode).toBe(0);
 
-        using client = new Client({
+        using client = await Client.create({
           storePath: storeB,
-          tmuxCommand: FAKE_TMUX_BIN,
-        });
+          tmuxCommand: FAKE_TMUX_BIN, _cliPath: process.env.CLI_PATH
+        } as any);
         const ts = await client.spawn({ cwd: "/tmp" });
 
         assertEnvelopesEqual(
@@ -224,7 +224,7 @@ describe("spawn", () => {
         const cli = runCli(["spawn"], cliEnv(homeA));
         expect(cli.exitCode).not.toBe(0);
 
-        using client = new Client({ storePath: storeB });
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
         let tsErr: unknown;
         try {
           await client.spawn({ cwd: "" });
@@ -262,7 +262,7 @@ describe("status", () => {
         );
         expect(cli.exitCode).toBe(0);
 
-        using client = new Client({ storePath: storeB });
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
         const ts = await client.status({ claude_instance_id: "id-status-1" });
 
         assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
@@ -288,7 +288,7 @@ describe("status", () => {
         );
         expect(cli.exitCode).not.toBe(0);
 
-        using client = new Client({ storePath: storeB });
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
         let tsErr: unknown;
         try {
           await client.status({ claude_instance_id: "nonexistent-id" });
@@ -326,7 +326,7 @@ describe("get", () => {
         );
         expect(cli.exitCode).toBe(0);
 
-        using client = new Client({ storePath: storeB });
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
         const ts = await client.get({ claude_instance_id: "id-get-1" });
 
         assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
@@ -352,7 +352,7 @@ describe("get", () => {
         );
         expect(cli.exitCode).not.toBe(0);
 
-        using client = new Client({ storePath: storeB });
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
         let tsErr: unknown;
         try {
           await client.get({ claude_instance_id: "nonexistent-id" });
@@ -390,10 +390,10 @@ describe("send-keys", () => {
         );
         expect(cli.exitCode).toBe(0);
 
-        using client = new Client({
+        using client = await Client.create({
           storePath: storeB,
-          tmuxCommand: FAKE_TMUX_BIN,
-        });
+          tmuxCommand: FAKE_TMUX_BIN, _cliPath: process.env.CLI_PATH
+        } as any);
         const ts = await client.sendKeys({
           claude_instance_id: "id-sk-1",
           text: "hello",
@@ -434,7 +434,7 @@ describe("send-keys", () => {
         );
         expect(cli.exitCode).not.toBe(0);
 
-        using client = new Client({ storePath: storeB });
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
         let tsErr: unknown;
         try {
           await client.sendKeys({
@@ -475,10 +475,10 @@ describe("read-pane", () => {
         );
         expect(cli.exitCode).toBe(0);
 
-        using client = new Client({
+        using client = await Client.create({
           storePath: storeB,
-          tmuxCommand: FAKE_TMUX_BIN,
-        });
+          tmuxCommand: FAKE_TMUX_BIN, _cliPath: process.env.CLI_PATH
+        } as any);
         const ts = await client.readPane({ claude_instance_id: "id-rp-1" });
 
         assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
@@ -504,7 +504,7 @@ describe("read-pane", () => {
         );
         expect(cli.exitCode).not.toBe(0);
 
-        using client = new Client({ storePath: storeB });
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
         let tsErr: unknown;
         try {
           await client.readPane({ claude_instance_id: "nonexistent-id" });
@@ -543,10 +543,10 @@ describe("kill", () => {
         );
         expect(cli.exitCode).toBe(0);
 
-        using client = new Client({
+        using client = await Client.create({
           storePath: storeB,
-          tmuxCommand: FAKE_TMUX_BIN,
-        });
+          tmuxCommand: FAKE_TMUX_BIN, _cliPath: process.env.CLI_PATH
+        } as any);
         const ts = await client.kill({ claude_instance_id: killId });
 
         assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
@@ -572,7 +572,7 @@ describe("kill", () => {
         );
         expect(cli.exitCode).not.toBe(0);
 
-        using client = new Client({ storePath: storeB });
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
         let tsErr: unknown;
         try {
           await client.kill({ claude_instance_id: "nonexistent-id" });
@@ -626,7 +626,7 @@ describe("decide", () => {
         );
         expect(cli.exitCode).toBe(0);
 
-        using client = new Client({ storePath: storeB });
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
         const ts = await client.decide({
           claude_instance_id: "id-d-1",
           request_token: requestToken,
@@ -673,7 +673,7 @@ describe("decide", () => {
         );
         expect(cli.exitCode).not.toBe(0);
 
-        using client = new Client({ storePath: storeB });
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
         let tsErr: unknown;
         try {
           await client.decide({
@@ -723,7 +723,7 @@ describe("get-permission", () => {
         );
         expect(cli.exitCode).toBe(0);
 
-        using client = new Client({ storePath: storeB });
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
         const ts = await client.getPermission({ request_token: requestToken });
 
         assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
@@ -750,7 +750,7 @@ describe("get-permission", () => {
         );
         expect(cli.exitCode).not.toBe(0);
 
-        using client = new Client({ storePath: storeB });
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
         let tsErr: unknown;
         try {
           await client.getPermission({ request_token: missingToken });
@@ -814,11 +814,11 @@ describe("resume", () => {
         );
         expect(cli.exitCode).toBe(0);
 
-        using client = new Client({
+        using client = await Client.create({
           storePath: storeB,
           home: homeB,
-          tmuxCommand: FAKE_TMUX_BIN,
-        });
+          tmuxCommand: FAKE_TMUX_BIN, _cliPath: process.env.CLI_PATH
+        } as any);
         const ts = await client.resume({ claude_instance_id: resumeId });
 
         assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
@@ -850,7 +850,7 @@ describe("resume", () => {
         );
         expect(cli.exitCode).not.toBe(0);
 
-        using client = new Client({ storePath: storeB });
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
         let tsErr: unknown;
         try {
           await client.resume({ claude_instance_id: "id-err-nr-1" });
@@ -880,7 +880,7 @@ describe("find-missing", () => {
         const cli = runCli(["find-missing"], cliEnv(homeA));
         expect(cli.exitCode).toBe(0);
 
-        using client = new Client({ storePath: storeB });
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
         const ts = await client.findMissing({});
 
         assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
@@ -924,7 +924,7 @@ describe("expire", () => {
         const cli = runCli(["expire", "--older-than", "1h"], cliEnv(homeA));
         expect(cli.exitCode).toBe(0);
 
-        using client = new Client({ storePath: storeB });
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
         const ts = await client.expire({ older_than: "1h" });
 
         assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
@@ -963,7 +963,7 @@ describe("delete", () => {
         );
         expect(cli.exitCode).toBe(0);
 
-        using client = new Client({ storePath: storeB });
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
         const ts = await client.delete({ claude_instance_id: ["row-ended"] });
 
         assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
@@ -1009,7 +1009,7 @@ describe("make-template", () => {
         );
         expect(cli.exitCode).toBe(0);
 
-        using client = new Client({ storePath: storeB });
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
         const ts = await client.makeTemplate({ name: templateName });
 
         // .path is in ignorePaths (embeds the ephemeral homeDir / REAL_HOME).
@@ -1042,7 +1042,7 @@ describe("make-template", () => {
         );
         expect(cli.exitCode).not.toBe(0);
 
-        using client = new Client({ storePath: storeB });
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
         let tsErr: unknown;
         try {
           await client.makeTemplate({ name: "../evil" });
@@ -1083,7 +1083,7 @@ describe("list", () => {
         const cli = runCli(["list"], cliEnv(homeA));
         expect(cli.exitCode).toBe(0);
 
-        using client = new Client({ storePath: storeB });
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
         const ts = await client.list({});
 
         assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
@@ -1107,7 +1107,7 @@ describe("list", () => {
         const cli = runCli(["list", "--label", "badlabel"], cliEnv(homeA));
         expect(cli.exitCode).not.toBe(0);
 
-        using client = new Client({ storePath: storeB });
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
         let tsErr: unknown;
         try {
           await client.list({ label: ["badlabel"] });
@@ -1146,7 +1146,7 @@ describe("pause", () => {
         );
         expect(cli.exitCode).toBe(0);
 
-        using client = new Client({ storePath: storeB });
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
         const ts = await client.pause({ claude_instance_id: "id-pause-1" });
 
         assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
@@ -1178,7 +1178,7 @@ describe("pause", () => {
         );
         expect(cli.exitCode).not.toBe(0);
 
-        using client = new Client({ storePath: storeB });
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
         let tsErr: unknown;
         try {
           await client.pause({ claude_instance_id: "id-err-np-1" });
@@ -1209,7 +1209,7 @@ describe("version", () => {
         const cli = runCli(["version"], cliEnv(homeA));
         expect(cli.exitCode).toBe(0);
 
-        using client = new Client({ storePath: storeB });
+        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
         const ts = await client.version({});
 
         // .version and .commit are nondeterministic (CLI stamped with -ldflags;

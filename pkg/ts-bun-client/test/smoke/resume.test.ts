@@ -84,7 +84,7 @@ test("resume: happy path — relaunches an ended spawn", async () => {
     fs.mkdirSync(jsonlDir, { recursive: true });
     fs.writeFileSync(jsonlFile, "{}\n");
 
-    using client = new Client({ storePath, createIfMissing: true });
+    using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
     const result: ResumeResult = await client.resume({ claude_instance_id: spawnId });
     expect(result.claude_instance_id).toBe(spawnId);
   });
@@ -93,7 +93,7 @@ test("resume: happy path — relaunches an ended spawn", async () => {
 test("resume: error — unknown id → ErrSpawnNotFound", async () => {
   await withTempHome(async (homeDir) => {
     const storePath = path.join(homeDir, ".agent-director", "state.db");
-    using client = new Client({ storePath, createIfMissing: true });
+    using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
 
     let caught: unknown;
     try {
