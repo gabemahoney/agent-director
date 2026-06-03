@@ -1505,10 +1505,15 @@ decide allow/deny out-of-band. Conceptually:
 
 ### Components
 
-- **`internal/hook/envelope.go`** — `EncodeDecision(behavior, reason)`
-  serializes the SRD §6.3 `hookSpecificOutput` envelope. The deny-
-  default-message ("Denied by orchestrator") and the allow-message-
-  omission rule both live here.
+- **`internal/hook/envelope.go`** — `EncodeDecision(eventName, behavior, reason)`
+  serializes the SRD §6.3 `hookSpecificOutput` envelope. The caller's
+  `eventName` is written verbatim into `hookEventName`; production
+  callers pass `EventNamePermissionRequest` (b.45p — the hardcoded
+  literal was removed because Claude Code routes hook output by file
+  descriptor rather than by envelope contents, so a mislabeled deny
+  emitted from a non-PermissionRequest process was applied to the
+  in-flight tool). The deny-default-message ("Denied by orchestrator")
+  and the allow-message-omission rule both live here.
 
 - **`internal/hook/polling.go`** — `Poll` is the loop. Pure function
   taking `(ctx, store, clock, cfg.Relay, id, *rand.Rand)`. The
@@ -1521,8 +1526,12 @@ decide allow/deny out-of-band. Conceptually:
 
 - **`internal/hook/handler.go`** — branches into `runRelay` when the
   event is `PermissionRequest` AND `AGENT_DIRECTOR_RELAY_MODE=on`.
-  Every pre-relay failure path emits a deny envelope when relay is
-  active (SRD §6.4).
+  Pre-relay failure paths emit a deny envelope ONLY when the event is
+  `PermissionRequest` AND relay is active (SRD §6.4 + b.45p). The
+  handler peeks the event name from the raw payload via
+  `PeekEventName` before resolving the instance id so the gate has
+  honest information from the first failure point. Non-permission
+  events (PreToolUse, etc.) stay fail-open even on internal failures.
 
 - **`internal/store/permission.go`** — store primitives:
   - `UpsertOpenPermissionRequest`: INSERT-only per `(instanceID, requestToken)`.

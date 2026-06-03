@@ -101,7 +101,7 @@ func runRelay(
 	requestToken, err := mintRequestToken()
 	if err != nil {
 		logf(logger, "relay: mint token (instance=%s): %v", instanceID, err)
-		_, _ = fmt.Fprintln(stdout, EncodeDecision("deny", ""))
+		_, _ = fmt.Fprintln(stdout, EncodeDecision(EventNamePermissionRequest, "deny", ""))
 		return
 	}
 
@@ -117,7 +117,7 @@ func runRelay(
 
 	if err := st.UpsertOpenPermissionRequest(instanceID, requestToken, pp.ToolName, toolInput, cap); err != nil {
 		logf(logger, "relay: upsert (instance=%s, token=%s): %v", instanceID, requestToken, err)
-		_, _ = fmt.Fprintln(stdout, EncodeDecision("deny", ""))
+		_, _ = fmt.Fprintln(stdout, EncodeDecision(EventNamePermissionRequest, "deny", ""))
 		return
 	}
 
@@ -126,10 +126,10 @@ func runRelay(
 	switch res.Decision {
 	case "allow":
 		logf(logger, "relay: allow for %s token=%s (%s)", instanceID, requestToken, res.Reason)
-		_, _ = fmt.Fprintln(stdout, EncodeDecision("allow", res.Reason))
+		_, _ = fmt.Fprintln(stdout, EncodeDecision(EventNamePermissionRequest, "allow", res.Reason))
 	case "deny":
 		logf(logger, "relay: deny for %s token=%s (%s)", instanceID, requestToken, res.Reason)
-		_, _ = fmt.Fprintln(stdout, EncodeDecision("deny", res.Reason))
+		_, _ = fmt.Fprintln(stdout, EncodeDecision(EventNamePermissionRequest, "deny", res.Reason))
 	default:
 		// Timeout, ctx cancel, preemption, or read-retry exhaustion —
 		// SRD §6.4 fail-closed.
@@ -146,7 +146,7 @@ func runRelay(
 			logf(logger, "relay: timeout state transition failed (instance=%s): %v", instanceID, err)
 		}
 
-		_, _ = fmt.Fprintln(stdout, EncodeDecision("deny", ""))
+		_, _ = fmt.Fprintln(stdout, EncodeDecision(EventNamePermissionRequest, "deny", ""))
 	}
 }
 

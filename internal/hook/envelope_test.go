@@ -14,7 +14,7 @@ import (
 // names silently turns the relay into a fallback-to-native-dialog
 // path.
 func TestEncodeDecisionShape(t *testing.T) {
-	got := hook.EncodeDecision("allow", "looks good")
+	got := hook.EncodeDecision(hook.EventNamePermissionRequest, "allow", "looks good")
 
 	var env struct {
 		HookSpecificOutput struct {
@@ -41,7 +41,7 @@ func TestEncodeDecisionShape(t *testing.T) {
 
 func TestEncodeDecisionDenyEmptyReasonDefaults(t *testing.T) {
 	// SRD §6.3: empty reason on deny → "Denied by orchestrator".
-	got := hook.EncodeDecision("deny", "")
+	got := hook.EncodeDecision(hook.EventNamePermissionRequest, "deny", "")
 	if !strings.Contains(got, `"behavior":"deny"`) {
 		t.Errorf("missing behavior=deny in %q", got)
 	}
@@ -54,7 +54,7 @@ func TestEncodeDecisionAllowEmptyReasonOmitsMessage(t *testing.T) {
 	// SRD §6.3: empty reason on allow → message field absent (Claude
 	// Code drops empty messages silently; we mirror that to avoid
 	// emitting noise the TUI might display).
-	got := hook.EncodeDecision("allow", "")
+	got := hook.EncodeDecision(hook.EventNamePermissionRequest, "allow", "")
 	// Decode and inspect; "absent" means the message key doesn't
 	// appear in decision.
 	var env struct {
@@ -71,8 +71,30 @@ func TestEncodeDecisionAllowEmptyReasonOmitsMessage(t *testing.T) {
 }
 
 func TestEncodeDecisionDenyWithReasonPreserves(t *testing.T) {
-	got := hook.EncodeDecision("deny", "policy block")
+	got := hook.EncodeDecision(hook.EventNamePermissionRequest, "deny", "policy block")
 	if !strings.Contains(got, `"message":"policy block"`) {
 		t.Errorf("explicit deny reason lost: %q", got)
+	}
+}
+
+// TestEncodeDecisionHonorsEventName confirms b.45p fix: the event name
+// is no longer hardcoded — callers pass it through and it lands in
+// hookSpecificOutput.hookEventName verbatim.
+func TestEncodeDecisionHonorsEventName(t *testing.T) {
+	cases := []string{"PermissionRequest", "PreToolUse", "SessionStart", ""}
+	for _, want := range cases {
+		got := hook.EncodeDecision(want, "deny", "")
+		var env struct {
+			HookSpecificOutput struct {
+				HookEventName string `json:"hookEventName"`
+			} `json:"hookSpecificOutput"`
+		}
+		if err := json.Unmarshal([]byte(got), &env); err != nil {
+			t.Fatalf("envelope parse for %q: %v", want, err)
+		}
+		if env.HookSpecificOutput.HookEventName != want {
+			t.Errorf("EncodeDecision(%q,...).hookEventName = %q; want %q",
+				want, env.HookSpecificOutput.HookEventName, want)
+		}
 	}
 }

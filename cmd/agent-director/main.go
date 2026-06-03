@@ -7,6 +7,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -109,13 +110,30 @@ func runHook() int {
 	stdout := os.Stdout
 	relayActive := os.Getenv(hook.EnvRelayMode) == hook.RelayModeOn
 
-	// Pre-Handle fail-closed: if relay is active and we can't get far
-	// enough to even invoke hook.Handle, emit deny here. Handle itself
-	// owns fail-closed past this point.
+	// Peek the hook event name before any other I/O so the early
+	// fail-closed path can gate its envelope write on event type
+	// (b.45p). Stdin is consumed here and passed to Handle via a
+	// bytes.Reader so Handle's own ReadPayload still works.
+	//
+	// A stdin-read failure leaves stdinRaw empty and eventName "",
+	// which forces earlyFailClosed into silent mode — fail-open is
+	// the correct b.45p-safe default when we don't know what the
+	// event was. Handle's own ReadPayload will then also fail and
+	// log, exiting silently.
+	stdinRaw, _ := io.ReadAll(io.LimitReader(os.Stdin, hook.MaxPayloadBytes+1))
+	eventName := hook.PeekEventName(stdinRaw)
+
+	// Pre-Handle fail-closed: if relay is active AND we know this is
+	// a PermissionRequest event AND we can't get far enough to even
+	// invoke hook.Handle, emit deny here. Handle itself owns
+	// fail-closed past this point. The eventName gate is critical
+	// for b.45p — emitting a deny envelope from a non-PermissionRequest
+	// process causes Claude Code to apply the deny to the in-flight
+	// tool, racing the legitimate PermissionRequest sibling process.
 	earlyFailClosed := func(why string) {
 		hookLog(logger, "hook: %s", why)
-		if relayActive {
-			fmt.Fprintln(stdout, hook.EncodeDecision("deny", ""))
+		if relayActive && eventName == hook.EventNamePermissionRequest {
+			fmt.Fprintln(stdout, hook.EncodeDecision(eventName, "deny", ""))
 		}
 	}
 
@@ -136,7 +154,7 @@ func runHook() int {
 		Cfg:   cfg.Relay,
 		Clock: hook.DefaultPollClock(),
 	}
-	if err := hook.Handle(context.Background(), os.Stdin, stdout, st, hc, logger); err != nil {
+	if err := hook.Handle(context.Background(), bytes.NewReader(stdinRaw), stdout, st, hc, logger); err != nil {
 		hookLog(logger, "hook: handle: %v", err)
 	}
 	return hookExitCode

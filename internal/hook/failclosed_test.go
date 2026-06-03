@@ -165,7 +165,12 @@ func TestFailClosedInvalidInstanceID(t *testing.T) {
 	assertDenyEnvelope(t, stdout)
 }
 
-// 3. Malformed payload → deny envelope.
+// 3. Malformed payload → silent exit. We cannot determine the event
+// name from an unparseable payload, so the b.45p gate forces fail-open
+// (silent) rather than risk emitting a permission-shaped deny envelope
+// from a non-PermissionRequest process. The legitimate PermissionRequest
+// sibling process gets a parseable payload and exercises its own
+// fail-closed branch separately.
 func TestFailClosedMalformedPayload(t *testing.T) {
 	stdout := &bytes.Buffer{}
 	if err := hook.Handle(context.Background(),
@@ -175,7 +180,9 @@ func TestFailClosedMalformedPayload(t *testing.T) {
 		newSilentLogger()); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	assertDenyEnvelope(t, stdout)
+	if stdout.Len() != 0 {
+		t.Errorf("stdout non-empty on malformed payload (unknown event): %q", stdout.String())
+	}
 }
 
 // 4. UPSERT failure (DB unreachable) → deny.
@@ -323,6 +330,76 @@ func TestRelayActiveNonPermissionRequestDoesNotEmitEnvelope(t *testing.T) {
 	}
 	if stdout.Len() != 0 {
 		t.Errorf("stdout non-empty on non-relay event: %q", stdout.String())
+	}
+}
+
+// b.45p regression: a PreToolUse process with RELAY_MODE=on that hits
+// an ApplyHookTransition failure MUST NOT emit a deny envelope. Claude
+// Code routes hook stdout by fd → tool_use_id, so an envelope leaked
+// from PreToolUse would be applied to the in-flight tool and race the
+// legitimate PermissionRequest sibling process.
+func TestPreToolUseWithRelayOn_OnApplyHookTransitionFailure_EmitsNothing(t *testing.T) {
+	stdout := &bytes.Buffer{}
+	st := &flakyRelayStore{transitionErr: errors.New("BUSY")}
+	if err := hook.Handle(context.Background(),
+		strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Bash"}`),
+		stdout, st,
+		hook.HandleConfig{Env: envWith("id-1"), Cfg: config.Relay{TimeoutSeconds: 1}},
+		newSilentLogger()); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("PreToolUse process leaked envelope on transition failure: %q", stdout.String())
+	}
+}
+
+// errReader is a stdin double whose Read always errors, simulating a
+// pipe closing or kernel I/O failure on the hook's stdin.
+type errReader struct{}
+
+func (errReader) Read([]byte) (int, error) { return 0, errors.New("simulated stdin failure") }
+
+// b.45p regression: a stdin-read failure happens BEFORE we can peek the
+// event name. With the read-payload-first restructure, we genuinely
+// don't know the event type, so the b.45p-safe default is silent exit.
+func TestPreToolUseWithRelayOn_OnPayloadReadFailure_EmitsNothing(t *testing.T) {
+	stdout := &bytes.Buffer{}
+	st := &flakyRelayStore{}
+	if err := hook.Handle(context.Background(),
+		errReader{},
+		stdout, st,
+		hook.HandleConfig{Env: envWith("id-1"), Cfg: config.Relay{TimeoutSeconds: 1}},
+		newSilentLogger()); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("payload-read failure leaked envelope: %q", stdout.String())
+	}
+}
+
+// b.45p regression: a PreToolUse process whose AGENT_DIRECTOR_INSTANCE_ID
+// is missing must not emit a deny envelope. The pre-fix code would have
+// emitted one based solely on RELAY_MODE=on, leaking into the
+// PermissionRequest sibling's fd.
+func TestPreToolUseWithRelayOn_OnResolveInstanceIDFailure_EmitsNothing(t *testing.T) {
+	stdout := &bytes.Buffer{}
+	// Env returns RELAY_MODE=on but no instance id.
+	env := func(k string) string {
+		if k == hook.EnvRelayMode {
+			return hook.RelayModeOn
+		}
+		return ""
+	}
+	st := &flakyRelayStore{}
+	if err := hook.Handle(context.Background(),
+		strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Bash"}`),
+		stdout, st,
+		hook.HandleConfig{Env: env, Cfg: config.Relay{TimeoutSeconds: 1}},
+		newSilentLogger()); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("missing instance id on PreToolUse leaked envelope: %q", stdout.String())
 	}
 }
 

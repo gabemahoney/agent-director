@@ -74,6 +74,24 @@ type ClassifyResult struct {
 	UnknownEvent bool
 }
 
+// PeekEventName extracts the event name from a raw hook payload without
+// performing full classification. It is called BEFORE ResolveInstanceID
+// so that failClosed can gate its envelope write on event type from the
+// very first failure point. On any parse failure it returns "" — the
+// caller must treat that as "unknown event" and fall back to silent
+// exit (fail-open) because emitting a permission envelope without
+// knowing the event would re-introduce b.45p.
+func PeekEventName(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var p payload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return ""
+	}
+	return p.eventName()
+}
+
 // ClassifyEvent applies the SRD §5.2 hook-event → state table. The
 // function never returns a typed error for unknown / malformed payloads —
 // state-tracking is fail-open, so the result's SoftRefresh / UnknownEvent
