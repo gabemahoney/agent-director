@@ -51,12 +51,11 @@
 #                      .gitignore:dist/). The two "chmod +x" strings in that
 #                      file are markdown prose inside the <<NOTES HEREDOC, not
 #                      executed commands.
-#   - build_phase /
-#     stage_cli_into_platforms:
-#                      chmod 0755 targets pkg/ts-bun-client/platforms/*/bin/
-#                      agent-director — gitignored by pkg/ts-bun-client/
-#                      .gitignore rule "platforms/*/bin/". No tracked file
-#                      is touched.
+#   - build_phase:     `make release-binaries` writes cross-compiled CLI
+#                      binaries into dist/ (gitignored). No tracked file
+#                      is touched. (Post-b.w3q: the per-platform
+#                      pkg/ts-bun-client/platforms/ tree is gone, so no
+#                      in-tree staging happens here either.)
 #   - verify_phase:    all cp -a operations land in mktemp stage dirs
 #                      (verify.XXXXXX, verify-home.XXXXXX, verify-proj.XXXXXX)
 #                      cleaned up via a RETURN trap. No live-tree writes.
@@ -308,24 +307,16 @@ preflight_phase() {
         exit 2
     fi
 
-    # Sentinel assertion: all three package.json::version fields must be
+    # Sentinel assertion: the umbrella package.json::version field must be
     # "0.0.0" in the live tree before any staging happens.  Catches
     # hand-edits and leftover version bumps from a prior failed run.
-    local sentinel_ok=1
-    local _sentinel_paths=(
-        "pkg/ts-bun-client/package.json"
-        "pkg/ts-bun-client/platforms/linux-x64/package.json"
-        "pkg/ts-bun-client/platforms/darwin-arm64/package.json"
-    )
-    for _sp in "${_sentinel_paths[@]}"; do
-        local _actual
-        _actual="$(jq -r '.version' "$_sp")"
-        if [[ "$_actual" != "0.0.0" ]]; then
-            log preflight "preflight: ${_sp}::version is \"${_actual}\"; expected \"0.0.0\" (sentinel)" >&2
-            sentinel_ok=0
-        fi
-    done
-    if [[ "$sentinel_ok" -eq 0 ]]; then
+    # b.w3q dropped the per-platform sub-packages, so the umbrella is now
+    # the only version-stamp site on disk.
+    local _sentinel_path="pkg/ts-bun-client/package.json"
+    local _actual
+    _actual="$(jq -r '.version' "$_sentinel_path")"
+    if [[ "$_actual" != "0.0.0" ]]; then
+        log preflight "preflight: ${_sentinel_path}::version is \"${_actual}\"; expected \"0.0.0\" (sentinel)" >&2
         exit 2
     fi
 
@@ -435,8 +426,16 @@ $(git log "$LOG_RANGE" --pretty=format:'%s' \
 
 ## Install
 
-Download the binary for your platform and place it on PATH. See
-[README.md](README.md) for the post-download install script.
+The CLI binary and the TS client library ship separately:
+
+- **CLI binary**: download from this GitHub release and run the
+  bundled \`install.sh\` to land it at
+  \`~/.agent-director/bin/agent-director\` (the standard install path
+  the TS client's discovery pipeline looks at first). See
+  [README.md](README.md) for the post-download workflow.
+- **TS client library**: \`bun add agent-director\` (or
+  \`npm i agent-director\`). The library spawns the installed CLI as
+  a subprocess; it does not ship the binary itself.
 
 \`\`\`sh
 # macOS arm64 (Apple Silicon):
@@ -453,10 +452,9 @@ chmod +x agent-director
 - **CLI binaries** (three platforms): linux/amd64, linux/arm64
   (statically linked, no glibc dependency), darwin/arm64
   (Mach-O 64). darwin/amd64 was dropped from v1 on 2026-05-24.
-- **TS Client** (\`agent-director\` npm umbrella + per-platform
-  optional sub-packages \`@agent-director/linux-x64\` and
-  \`@agent-director/darwin-arm64\`) spawns the bundled CLI as a
-  subprocess; no FFI / native library.
+- **TS Client** (\`agent-director\` npm umbrella, single package —
+  per-platform sub-packages were removed in b.w3q) spawns the
+  separately-installed CLI as a subprocess; no FFI / native library.
 
 Windows is not supported (SRD §16.1).
 NOTES
@@ -469,17 +467,15 @@ NOTES
 # Phase: build
 # --------------------------------------------------------------------
 
-# shellcheck source=lib/stage-cli.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib/stage-cli.sh"
+# b.w3q dropped the per-platform npm sub-packages and the
+# pkg/ts-bun-client/platforms/ tree they lived in. The CLI binaries now
+# ship only via the GitHub release tarball — no staging into the npm
+# package surface is required.
 
 build_phase() {
     phase_begin build
     if [[ "$NO_BUILD" -eq 1 ]]; then
         log build "--no-build set — assuming ./dist/ is already populated"
-        if ! stage_cli_into_platforms; then
-            phase_fail build "stage_cli_into_platforms failed"
-            exit 3
-        fi
         log build "OK"
         phase_ok build
         return 0
@@ -498,11 +494,6 @@ build_phase() {
         phase_fail build "release-binaries failed"
         exit 3
     fi
-    log build "staging CLI binaries into per-platform npm sub-packages"
-    if ! stage_cli_into_platforms; then
-        phase_fail build "stage_cli_into_platforms failed"
-        exit 3
-    fi
     log build "OK"
     phase_ok build
 }
@@ -511,70 +502,42 @@ build_phase() {
 # Phase: verify
 # --------------------------------------------------------------------
 
-# verify_phase stages the umbrella + both platform sub-packages into a
-# temp dir, stamps all version sites (including opt-deps, see below), and
-# packs all three with `bun pm pack --ignore-scripts` (lifecycle scripts
-# disabled; skill files staged explicitly via stage-skill.ts).  SHA-256 of
-# each tarball is recorded to $stage_dir/tarball-shasums.txt (two-space
-# coreutils format) and the paths are exported via
-# AGENT_DIRECTOR_RELEASE_SHASUMS and AGENT_DIRECTOR_RELEASE_STAGE_DIR for
-# publish_phase to consume.
+# verify_phase stages the umbrella package into a temp dir, stamps its
+# version sites (umbrella package.json + install-skill frontmatter), and
+# packs it with `bun pm pack --ignore-scripts`.  SHA-256 of the tarball
+# is recorded to $stage_dir/tarball-shasums.txt (two-space coreutils
+# format) and the paths are exported via AGENT_DIRECTOR_RELEASE_SHASUMS
+# and AGENT_DIRECTOR_RELEASE_STAGE_DIR for publish_phase to consume.
 #
-# Stamping order:
-#   1. umbrella-version + platform-version + skill-frontmatter (before bun install)
-#   2. coherence gate (--scope verify; opt-deps still file:, site-4 skipped)
-#   3. bun install (uses file: opt-deps for local resolution)
-#   4. bun build + stage-skill
-#   5. opt-deps stamped to ^X.Y.Z (after install, before pack)
-#   6. bun pm pack (tarball carries ^X.Y.Z opt-deps — correct for production)
+# b.w3q dropped the per-platform npm sub-packages, so the release ships
+# one umbrella tarball — period.  The CLI binary travels separately via
+# the GitHub release tarball + install.sh, landing at
+# $HOME/.agent-director/bin/agent-director (the SR-1.1 standard install
+# path the TS client's discovery pipeline looks at first).
 #
 # The stage dir survives verify_phase return (cleanup moves to the EXIT
 # trap via STAGE_DIR global) so publish_phase can publish the exact same
-# tarballs without re-staging or re-stamping (SR-1.1 – SR-1.4 / SR-1.6).
+# tarball without re-staging or re-stamping (SR-1.6).
 #
 # The umbrella tarball is additionally installed into a temp HOME and
-# verified via verify-installed-pkg.ts --smoke: constructs a Client and
-# asserts client.version() returns a well-formed { version, commit }
-# envelope.  Catches files-glob omissions, postinstall-path-resolution
-# issues, optional-deps wiring, and CLI-binary resolution failures.
+# verified via verify-installed-pkg.ts --smoke: stages a CLI binary at
+# $HOME/.agent-director/bin/agent-director (the standard install path),
+# constructs a Client via Client.create() which walks the discovery
+# pipeline (HOME/.agent-director/bin → PATH), and asserts
+# client.version() returns a well-formed { version, commit } envelope.
+# Catches files-glob omissions and CLI-binary discovery failures.
 # Anything mid-flight halts the release at exit 5 before the tag is pushed.
 verify_phase() {
     phase_begin verify
     local plain_v="${VERSION#v}"
 
-    # Map host → npm sub-package name (must match SUPPORTED_TUPLES in
-    # pkg/ts-bun-client/src/internal/platformResolve.ts).
-    local host_os host_arch host_subpkg_dir
-    case "$(uname -s)" in
-        Linux)  host_os=linux ;;
-        Darwin) host_os=darwin ;;
-        *) log verify "unsupported host OS: $(uname -s)" >&2
-           phase_fail verify "unsupported host OS"; exit 5 ;;
-    esac
-    case "$(uname -m)" in
-        x86_64|amd64) host_arch=x64 ;;
-        arm64|aarch64) host_arch=arm64 ;;
-        *) log verify "unsupported host arch: $(uname -m)" >&2
-           phase_fail verify "unsupported host arch"; exit 5 ;;
-    esac
-    host_subpkg_dir="${host_os}-${host_arch}"
-    if [[ ! -d "$REPO_ROOT/pkg/ts-bun-client/platforms/$host_subpkg_dir" ]]; then
-        log verify "host has no matching platform sub-package: $host_subpkg_dir" >&2
-        log verify "(supported: linux-x64, darwin-arm64)" >&2
-        phase_fail verify "no host platform sub-package"
-        exit 5
-    fi
-
     # ----------------------------------------------------------------
-    # Step 0/4: regression-anchor for b.b3h — assert the host binary
+    # Step 0/3: regression-anchor for b.b3h — assert the host binary
     # baked into dist/ is stamped with the exact release version
     # (SR-2.6: plain X.Y.Z, no leading "v"), not a `git describe`
     # decoration like "v0.6.0-1-g74ce955" and not the dev sentinel.
-    #
-    # Mapping: verify_phase uses npm tuple (linux-x64); the dist/
-    # binary uses the cross-compile tuple (linux-amd64 / darwin-arm64).
     # ----------------------------------------------------------------
-    log verify "step 0/4: assert dist/ binary is stamped with version=$plain_v (b.b3h anchor)"
+    log verify "step 0/3: assert dist/ binary is stamped with version=$plain_v (b.b3h anchor)"
     local host_bin_arch
     case "$(uname -m)" in
         x86_64|amd64) host_bin_arch=amd64 ;;
@@ -611,7 +574,7 @@ verify_phase() {
     stage_dir="$(mktemp -d "${TMPDIR:-/tmp}/verify.XXXXXX")"
     # Assign to STAGE_DIR global immediately so the EXIT trap's
     # cleanup_stage_dir_if_any deletes it on script exit.  stage_dir must
-    # survive verify_phase return so publish_phase can consume the tarballs.
+    # survive verify_phase return so publish_phase can consume the tarball.
     STAGE_DIR="$stage_dir"
     tmp_home="$(mktemp -d "${TMPDIR:-/tmp}/verify-home.XXXXXX")"
     tmp_workdir="$(mktemp -d "${TMPDIR:-/tmp}/verify-proj.XXXXXX")"
@@ -620,31 +583,32 @@ verify_phase() {
     # shellcheck disable=SC2064  # we want the variables resolved now
     trap "rm -rf '$tmp_home' '$tmp_workdir'" RETURN
 
-    log verify "step 1/4: bun pack umbrella + all platform sub-packages + SHA-256 manifest"
+    log verify "step 1/3: bun pack umbrella + SHA-256 manifest"
 
-    # Stage the umbrella + platforms + skill source into a writable
-    # working tree, then stamp them to the release tag.
+    # Stage the umbrella into a writable working tree, then stamp it to
+    # the release tag.
     mkdir -p "$stage_dir/pkg/ts-bun-client"
-    mkdir -p "$stage_dir/skills"
     cp -a "$REPO_ROOT/pkg/ts-bun-client/." "$stage_dir/pkg/ts-bun-client/"
-    cp -a "$REPO_ROOT/skills/install-agent-director" "$stage_dir/skills/"
     # src/internal/errorMap.ts imports catalog.json via a cross-pkg relative path.
     mkdir -p "$stage_dir/pkg/api/errnames"
     cp "$REPO_ROOT/pkg/api/errnames/catalog.json" "$stage_dir/pkg/api/errnames/catalog.json"
+    # version-bump.ts (--target skill-frontmatter) resolves the SKILL.md
+    # via "../../../skills/install-agent-director/SKILL.md" relative to
+    # pkg/ts-bun-client/scripts/, so the install skill source must be
+    # staged alongside the umbrella for stamping (read+write, not shipped
+    # in the tarball — the install skill has its own delivery channel).
+    mkdir -p "$stage_dir/skills"
+    cp -a "$REPO_ROOT/skills/install-agent-director" "$stage_dir/skills/"
 
     # Wipe any stray dev artifacts the cp -a dragged in.
     rm -rf "$stage_dir/pkg/ts-bun-client/node_modules"
-    rm -rf "$stage_dir/pkg/ts-bun-client/skills"
 
-    # First pass: stamp umbrella/platform versions + skill frontmatter.
-    # Opt-deps are deferred until after `bun install` (see two-pass stamp
-    # below) because bun install needs file: paths intact for local
-    # sub-package resolution; after install, the opt-deps pass rewrites
-    # them to ^X.Y.Z so the packed tarball carries production pins.
+    # Stamp umbrella version + install-skill frontmatter. After b.w3q
+    # these are the only version-stamp sites (per-platform sub-packages
+    # and optionalDependencies are gone).
     if ! (cd "$stage_dir/pkg/ts-bun-client" && bun run scripts/version-bump.ts \
             --version "$plain_v" \
             --target umbrella-version \
-            --target platform-version \
             --target skill-frontmatter) \
             > >(while IFS= read -r l; do printf '[verify] %s\n' "$l"; done); then
         log verify "version-bump.ts failed" >&2
@@ -662,43 +626,13 @@ verify_phase() {
         exit 5
     fi
 
-    # Install dev deps, build dist/*, and stage skill files.
-    # stage-skill.ts is invoked explicitly because bun pm pack runs with
-    # --ignore-scripts (skipping the prepack lifecycle hook that would normally
-    # call it); release.sh owns staging rather than relying on prepack.
-    # bun install runs BEFORE opt-deps are stamped (file: paths required for
-    # local resolution; registry lookup would fail at this point).
+    # Install dev deps + build dist/* so bun pm pack ships the compiled
+    # JS surface listed in the umbrella's files glob.
     if ! (cd "$stage_dir/pkg/ts-bun-client" \
             && bun install --no-progress >/dev/null 2>&1 \
-            && bun run build >/dev/null 2>&1 \
-            && bun run scripts/stage-skill.ts >/dev/null 2>&1); then
-        log verify "FAIL bun-install/build/stage-skill" >&2
+            && bun run build >/dev/null 2>&1); then
+        log verify "FAIL bun-install/build" >&2
         phase_fail verify "bun-pack prep"
-        exit 5
-    fi
-
-    # Stamp opt-deps AFTER bun install (which needs file: paths) but BEFORE
-    # bun pm pack so the published tarball carries correct npm registry pins
-    # (^X.Y.Z) rather than file: paths that don't resolve for production consumers.
-    if ! (cd "$stage_dir/pkg/ts-bun-client" && bun run scripts/version-bump.ts \
-            --version "$plain_v" \
-            --target opt-deps) \
-            > >(while IFS= read -r l; do printf '[verify] %s\n' "$l"; done); then
-        log verify "version-bump.ts --target opt-deps failed" >&2
-        phase_fail verify "version-bump.ts: opt-deps"
-        exit 5
-    fi
-
-    # SR-2.6: second coherence gate — opt-deps are now stamped to ^X.Y.Z so
-    # site-4 (optionalDependencies) is no longer file: and must pass the check.
-    # This is the authoritative gate before pack; the first gate (above) caught
-    # mid-flow drift on sites 1, 3a, 3b, 5 while opt-deps were still file:.
-    if ! (cd "$stage_dir/pkg/ts-bun-client" && bun run scripts/check-version-coherence.ts \
-            --scope verify \
-            --expected-version "$plain_v") \
-            > >(while IFS= read -r l; do printf '[verify] %s\n' "$l"; done); then
-        log verify "check-version-coherence (post-opt-deps) failed" >&2
-        phase_fail verify "check-version-coherence"
         exit 5
     fi
 
@@ -718,89 +652,43 @@ verify_phase() {
         exit 5
     fi
 
-    # Pack linux-x64 platform sub-package (SR-1.4: single pack, reused by publish).
-    if ! (cd "$stage_dir/pkg/ts-bun-client/platforms/linux-x64" \
-            && bun pm pack --ignore-scripts >/dev/null 2>&1); then
-        log verify "FAIL bun-pack: linux-x64 platform sub-package" >&2
-        phase_fail verify "bun-pack: linux-x64"
-        exit 5
-    fi
-    local tgz_linux_x64
-    tgz_linux_x64="$(ls "$stage_dir/pkg/ts-bun-client/platforms/linux-x64/"*.tgz 2>/dev/null | head -n 1)"
-    if [[ -z "$tgz_linux_x64" || ! -f "$tgz_linux_x64" ]]; then
-        log verify "FAIL bun-pack: linux-x64 no tarball produced" >&2
-        phase_fail verify "bun-pack: linux-x64 no tarball"
-        exit 5
-    fi
-
-    # Pack darwin-arm64 platform sub-package (SR-1.4: single pack, reused by publish).
-    if ! (cd "$stage_dir/pkg/ts-bun-client/platforms/darwin-arm64" \
-            && bun pm pack --ignore-scripts >/dev/null 2>&1); then
-        log verify "FAIL bun-pack: darwin-arm64 platform sub-package" >&2
-        phase_fail verify "bun-pack: darwin-arm64"
-        exit 5
-    fi
-    local tgz_darwin_arm64
-    tgz_darwin_arm64="$(ls "$stage_dir/pkg/ts-bun-client/platforms/darwin-arm64/"*.tgz 2>/dev/null | head -n 1)"
-    if [[ -z "$tgz_darwin_arm64" || ! -f "$tgz_darwin_arm64" ]]; then
-        log verify "FAIL bun-pack: darwin-arm64 no tarball produced" >&2
-        phase_fail verify "bun-pack: darwin-arm64 no tarball"
-        exit 5
-    fi
-
     # Write SHA-256 manifest (two-space coreutils format: <sha256>  <abs-path>).
     # Export env vars for publish_phase and check-version-coherence.ts --scope publish.
     local shasums_file="$stage_dir/tarball-shasums.txt"
-    {
-        printf '%s  %s\n' "$(_sha256 "$tgz")" "$tgz"
-        printf '%s  %s\n' "$(_sha256 "$tgz_linux_x64")" "$tgz_linux_x64"
-        printf '%s  %s\n' "$(_sha256 "$tgz_darwin_arm64")" "$tgz_darwin_arm64"
-    } > "$shasums_file"
+    printf '%s  %s\n' "$(_sha256 "$tgz")" "$tgz" > "$shasums_file"
     export AGENT_DIRECTOR_RELEASE_SHASUMS="$shasums_file"
     export AGENT_DIRECTOR_RELEASE_STAGE_DIR="$stage_dir"
-    log verify "SHA-256 manifest written: $shasums_file (3 entries)"
-    log verify "  umbrella  : $tgz"
-    log verify "  linux-x64 : $tgz_linux_x64"
-    log verify "  darwin-arm64: $tgz_darwin_arm64"
+    log verify "SHA-256 manifest written: $shasums_file (1 entry)"
+    log verify "  umbrella: $tgz"
 
-    log verify "step 2/4: install tarball + run client.version() smoke"
+    log verify "step 2/3: install tarball + run client.version() smoke"
 
-    # Consumer fixture: trust the package so the postinstall actually
-    # fires (bun's untrusted-package default blocks it). We pin the
-    # umbrella to the local tarball and the host's platform sub-package
-    # to the staged copy so require.resolve('@agent-director/<host>/package.json')
-    # finds a real CLI binary at bin/agent-director.
+    # Consumer fixture: install the umbrella tarball only. The CLI binary
+    # is staged separately at $tmp_home/.agent-director/bin/agent-director
+    # (the standard install path the discovery pipeline checks first per
+    # SR-1.1); Client.create() walks that path before falling through to
+    # PATH lookup.
     cat > "$tmp_workdir/package.json" <<CONSUMER_PKG
 {
   "name": "release-verify-consumer",
-  "version": "0.0.0",
-  "trustedDependencies": ["agent-director", "@agent-director/${host_subpkg_dir}"]
+  "version": "0.0.0"
 }
 CONSUMER_PKG
 
     if ! (cd "$tmp_workdir" && HOME="$tmp_home" \
-            bun add "file:$tgz" "@agent-director/${host_subpkg_dir}@file:$stage_dir/pkg/ts-bun-client/platforms/$host_subpkg_dir" \
+            bun add "file:$tgz" \
             >/dev/null 2>&1); then
-        log verify "FAIL bun-add (tarball + platform sub-package)" >&2
+        log verify "FAIL bun-add (umbrella tarball)" >&2
         phase_fail verify "bun-add"
         exit 5
     fi
 
-    # Sanity: the postinstall should have landed the install skill
-    # under the temp HOME with the release-stamped frontmatter.
-    local landed="$tmp_home/.claude/skills/install-agent-director/SKILL.md"
-    if [[ ! -f "$landed" ]]; then
-        log verify "FAIL postinstall: SKILL.md not landed at $landed" >&2
-        phase_fail verify "postinstall: SKILL.md not landed"
-        exit 5
-    fi
-    local landed_v
-    landed_v="$(awk '/^version:/ {print $2; exit}' "$landed" | tr -d '\r' | sed 's/^"//;s/"$//;s/^'\''//;s/'\''$//')"
-    if [[ "$landed_v" != "$plain_v" ]]; then
-        log verify "FAIL postinstall: SKILL.md frontmatter version=$landed_v; expected $plain_v" >&2
-        phase_fail verify "postinstall: SKILL.md version mismatch"
-        exit 5
-    fi
+    # Stage the release-stamped CLI binary at the SR-1.1 standard install
+    # path so Client.create() discovery finds it without consulting PATH.
+    local staged_cli_dir="$tmp_home/.agent-director/bin"
+    mkdir -p "$staged_cli_dir"
+    cp "$host_bin" "$staged_cli_dir/agent-director"
+    chmod 0755 "$staged_cli_dir/agent-director"
 
     # Smoke: construct a Client against the installed package and
     # assert client.version() returns a well-formed envelope.
@@ -824,10 +712,10 @@ CONSUMER_PKG
     cp "$smoke_script" "$smoke_script_in_workdir"
     # EXPECTED_VERSION tells verify-installed-pkg.ts --smoke to assert the
     # value returned by client.version() matches the release tag, catching
-    # b.b3h ldflags regressions and b.uys re-stage failures before publish.
-    # Use $plain_v (no leading "v") because subprocessClient.ts overrides the
-    # CLI's git-describe stamp with the npm package.json version (b.6o1),
-    # which version-bump.ts stamped from $plain_v above. (b.6oj anchor)
+    # b.b3h ldflags regressions before publish.  Use $plain_v (no leading
+    # "v") because subprocessClient.ts overrides the CLI's git-describe
+    # stamp with the npm package.json version (b.6o1), which version-bump.ts
+    # stamped from $plain_v above. (b.6oj anchor)
     if ! (cd "$tmp_workdir" && HOME="$tmp_home" EXPECTED_VERSION="$plain_v" bun "$smoke_script_in_workdir" --smoke) \
             > >(while IFS= read -r l; do printf '[verify] %s\n' "$l"; done); then
         log verify "FAIL client.version() smoke against installed tarball" >&2
@@ -835,7 +723,7 @@ CONSUMER_PKG
         exit 5
     fi
 
-    log verify "step 3/4: bun test pkg/ts-bun-client (in-tree)"
+    log verify "step 3/3: bun test pkg/ts-bun-client (in-tree)"
 
     # --parallel=1 because the suite deadlocks in default parallel mode (b.w7e);
     # bunfig.toml's `parallel = 1` is forward-looking and not honored by bun 1.3.13.
@@ -846,55 +734,6 @@ CONSUMER_PKG
         exit 5
     fi
 
-    # ----------------------------------------------------------------
-    # Step 3.5/4: re-stage dist→platforms (undo bun test setup.ts overwrite)
-    #
-    # pkg/ts-bun-client/test/setup.ts invokes `make build` (dev build,
-    # no -ldflags) and copies the dev binary into platforms/<host>/bin/
-    # and node_modules/@agent-director/<host>/bin/ — silently clobbering
-    # the release-stamped binary that build_phase staged. Re-running
-    # stage_cli_into_platforms restores the correct binary before
-    # publish_phase cp -a's the live tree. (b.uys anchor)
-    # ----------------------------------------------------------------
-    log verify "step 3.5/4: re-stage dist→platforms (undo bun test setup.ts overwrite) [b.uys anchor]"
-    if ! stage_cli_into_platforms; then
-        phase_fail verify "re-stage failed"
-        exit 5
-    fi
-    # Re-assert: for each CLI_PLATFORMS entry that matches the host arch,
-    # exec the staged binary and confirm its embedded version equals $VERSION.
-    # host_bin_arch / host_bin_os are still set from step 0/4 above.
-    local entry cross npm_subdir staged_bin staged_version_json staged_version matched
-    matched=0
-    for entry in "${CLI_PLATFORMS[@]}"; do
-        cross="${entry%=*}"
-        npm_subdir="${entry#*=}"
-        if [[ "$cross" == "${host_bin_os}-${host_bin_arch}" ]]; then
-            matched=1
-            staged_bin="$REPO_ROOT/pkg/ts-bun-client/platforms/$npm_subdir/bin/agent-director"
-            if [[ ! -x "$staged_bin" ]]; then
-                log verify "FAIL b.uys anchor: staged binary not found or not executable: $staged_bin" >&2
-                phase_fail verify "staged binary missing"; exit 5
-            fi
-            staged_version_json="$("$staged_bin" version 2>/dev/null)" || {
-                log verify "FAIL b.uys anchor: \`$staged_bin version\` exited non-zero" >&2
-                phase_fail verify "staged binary version failed"; exit 5
-            }
-            staged_version="$(printf '%s' "$staged_version_json" | jq -r '.version // empty')"
-            if [[ "$staged_version" != "$VERSION" ]]; then
-                log verify "FAIL b.uys anchor: staged binary .version=\"$staged_version\"; expected \"$VERSION\"" >&2
-                phase_fail verify "staged binary version mismatch"; exit 5
-            fi
-            log verify "  staged binary version stamp OK: platforms/$npm_subdir .version=$staged_version"
-        fi
-    done
-    if [[ "$matched" == "1" ]]; then
-        log verify "  staged platforms binaries re-anchored OK"
-    else
-        log verify "  no CLI_PLATFORMS entry matched host ${host_bin_os}-${host_bin_arch} — re-stage assertion skipped"
-    fi
-
-    log verify "  postinstall verify OK: SKILL.md frontmatter version=$plain_v under $tmp_home/.claude/skills/install-agent-director/"
     log verify "OK"
     phase_ok verify
 }
@@ -954,19 +793,22 @@ tag_phase() {
 # Phase: publish (npm)
 # --------------------------------------------------------------------
 
-# publish_phase consumes the tarballs and SHA-256 manifest produced by
-# verify_phase — no re-stage, no re-stamp, no re-pack (SR-1.6).  The
-# tarball files exported via AGENT_DIRECTOR_RELEASE_SHASUMS and
-# AGENT_DIRECTOR_RELEASE_STAGE_DIR are passed verbatim to `npm publish`,
+# publish_phase consumes the umbrella tarball and SHA-256 manifest
+# produced by verify_phase — no re-stage, no re-stamp, no re-pack
+# (SR-1.6).  The tarball exported via AGENT_DIRECTOR_RELEASE_SHASUMS and
+# AGENT_DIRECTOR_RELEASE_STAGE_DIR is passed verbatim to `npm publish`,
 # preserving byte-for-byte identity with what verify validated.
+#
+# b.w3q dropped the per-platform npm sub-packages, so the release ships
+# one umbrella tarball — period.  The CLI binary is published separately
+# as a GitHub release asset by ghrelease_phase.
 #
 # Phase order:
 #   1. preconditions: NPM_TOKEN (live runs), manifest env vars present
 #   2. gate: check-version-coherence.ts --scope publish (SHA-256 round-trip)
 #   3. .npmrc write into verify stage dir
-#   4. per-platform npm publish <tarball>
-#   5. umbrella npm publish <tarball>
-#   6. cleanup_npmrc_if_any
+#   4. umbrella npm publish <tarball>
+#   5. cleanup_npmrc_if_any
 publish_phase() {
     phase_begin publish
     local plain_version="${VERSION#v}"
@@ -995,25 +837,18 @@ publish_phase() {
         exit 6
     fi
 
-    # Parse tarball paths from the manifest (order: umbrella, linux-x64, darwin-arm64).
-    local tgz tgz_linux_x64 tgz_darwin_arm64
+    # Parse umbrella tarball path from the manifest (single entry post-b.w3q).
+    local tgz
     tgz="$(awk 'NR==1{print $NF}' "$shasums_file")"
-    tgz_linux_x64="$(awk 'NR==2{print $NF}' "$shasums_file")"
-    tgz_darwin_arm64="$(awk 'NR==3{print $NF}' "$shasums_file")"
-    for _tgz_check in "$tgz" "$tgz_linux_x64" "$tgz_darwin_arm64"; do
-        if [[ -z "$_tgz_check" || ! -f "$_tgz_check" ]]; then
-            log publish "tarball missing or unresolvable from manifest: $_tgz_check" >&2
-            exit 6
-        fi
-    done
-    log publish "consuming verify_phase tarballs:"
-    log publish "  umbrella   : $tgz"
-    log publish "  linux-x64  : $tgz_linux_x64"
-    log publish "  darwin-arm64: $tgz_darwin_arm64"
+    if [[ -z "$tgz" || ! -f "$tgz" ]]; then
+        log publish "tarball missing or unresolvable from manifest: $tgz" >&2
+        exit 6
+    fi
+    log publish "consuming verify_phase tarball:"
+    log publish "  umbrella: $tgz"
 
     # Gate: verify all version-stamp sites agree AND SHA-256 values match
     # the verify_phase manifest (SR-1.3 / SR-1.5 round-trip check).
-    # Inserted by Task #5 (t3.xsh.s7.3f.6w).
     if ! (cd "$verify_stage_dir/pkg/ts-bun-client" && bun run scripts/check-version-coherence.ts \
             --scope publish \
             --expected-version "$plain_version") \
@@ -1034,51 +869,10 @@ publish_phase() {
         : > "$NPMRC_PATH"
     fi
 
-    # Publish order: platform sub-packages first so the umbrella's
-    # ^version pins resolve on npm.  Each step uses npm view to detect a
-    # prior publish at the same version — that path errors out so the
+    # Publish the umbrella tarball verbatim (no re-pack).  npm view detects
+    # a prior publish at the same version — that path errors out so the
     # operator must increment the version for the retry.
-    # npm publish <tarball> publishes the file verbatim (no re-pack).
     local pkg_dir pkg_full_name view_out
-    local plat_subdir plat_tgz
-    for plat_subdir in linux-x64 darwin-arm64; do
-        pkg_dir="$verify_stage_dir/pkg/ts-bun-client/platforms/$plat_subdir"
-        if [[ "$plat_subdir" == "linux-x64" ]]; then
-            plat_tgz="$tgz_linux_x64"
-        else
-            plat_tgz="$tgz_darwin_arm64"
-        fi
-        pkg_full_name=$(grep -E '^[[:space:]]*"name":' "$pkg_dir/package.json" | head -n 1 | sed -E 's/.*"name":[[:space:]]*"([^"]+)".*/\1/')
-        log publish "publishing $pkg_full_name@$plain_version from $plat_tgz"
-        if [[ "$DRY_RUN" -eq 0 ]] && command -v npm >/dev/null 2>&1; then
-            view_out=$(cd "$pkg_dir" && npm view "${pkg_full_name}@${plain_version}" version 2>/dev/null || true)
-            if [[ -n "$view_out" ]]; then
-                log publish "$pkg_full_name@$plain_version is already published" >&2
-                log publish "version already published, increment version for retry" >&2
-                exit 6
-            fi
-        fi
-        if [[ "$DRY_RUN" -eq 1 ]]; then
-            if command -v npm >/dev/null 2>&1; then
-                if ! (cd "$pkg_dir" && npm publish --dry-run --ignore-scripts "$plat_tgz") \
-                        > >(while IFS= read -r l; do printf '[publish] %s\n' "$l"; done); then
-                    log publish "FAIL $pkg_full_name (dry-run validation)" >&2
-                    exit 6
-                fi
-            else
-                log publish "(dry-run) npm not on PATH — skipping packaging validation for $pkg_full_name"
-            fi
-        else
-            if ! (cd "$pkg_dir" && npm publish "$plat_tgz") \
-                    > >(while IFS= read -r l; do printf '[publish] %s\n' "$l"; done); then
-                log publish "FAIL $pkg_full_name (npm publish)" >&2
-                log publish "corrective action: increment VERSION and re-run; same-version retries are forbidden" >&2
-                exit 6
-            fi
-        fi
-    done
-
-    # Umbrella package last.
     pkg_dir="$verify_stage_dir/pkg/ts-bun-client"
     pkg_full_name=$(grep -E '^[[:space:]]*"name":' "$pkg_dir/package.json" | head -n 1 | sed -E 's/.*"name":[[:space:]]*"([^"]+)".*/\1/')
     log publish "publishing umbrella $pkg_full_name@$plain_version from $tgz"

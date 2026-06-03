@@ -1,6 +1,6 @@
 ---
 name: release-agent-director
-description: Cut a coordinated agent-director release. Cross-compiles three CLI binaries (linux/amd64, linux/arm64, darwin/arm64 — darwin/amd64 dropped 2026-05-24), stages them into the per-platform npm sub-packages, tags the commit, publishes the umbrella npm package plus two per-platform optional dependencies, and creates a GitHub release with the CLI binaries attached. Runs as a phased pipeline (preflight → notes → build → verify → tag → publish → gh-release → report) ordered most-reversible to least-reversible, with halt-on-failure semantics. Defaults to --dry-run; pass --release to execute irreversible steps. Use this skill when the user says "release agent-director", "cut a release", or "publish v<X.Y.Z>".
+description: Cut a coordinated agent-director release. Cross-compiles three CLI binaries (linux/amd64, linux/arm64, darwin/arm64 — darwin/amd64 dropped 2026-05-24), tags the commit, publishes the single umbrella npm package (agent-director), and creates a GitHub release with the CLI binaries attached. The TS client and the CLI ship via separate channels post-b.w3q: npm carries the library only; the CLI binary is downloaded from the GitHub release and installed via the bundled install.sh. Runs as a phased pipeline (preflight → notes → build → verify → tag → publish → gh-release → report) ordered most-reversible to least-reversible, with halt-on-failure semantics. Defaults to --dry-run; pass --release to execute irreversible steps. Use this skill when the user says "release agent-director", "cut a release", or "publish v<X.Y.Z>".
 ---
 
 ## When to invoke
@@ -20,10 +20,10 @@ first failing phase. Every phase prefixes its stdout/stderr with
 |---|---|---|
 | `preflight` | none — read-only | semver normalization; gh on PATH (for `--release`); working tree clean; tag does not exist locally; current branch matches `--branch` |
 | `notes` | local file write | template `dist/release-notes.md` from `git log <prev-tag>..HEAD` grouped by Epic ID |
-| `build` | local file write | `make release-binaries` (3 CLI cross-compiles into `dist/`) + stage each into the matching `pkg/ts-bun-client/platforms/<dir>/bin/agent-director` |
-| `verify` | local file write | stage a release-stamped copy of the umbrella + host platform sub-package, `bun pm pack`, install into a temp `HOME`, then run `verify-installed-pkg.ts --smoke` (constructs a `Client` and asserts `client.version()` returns a well-formed `{ version, commit }` envelope). Also asserts the postinstall placed `~/.claude/skills/install-agent-director/` with the right frontmatter version. Runs the full in-tree `bun test` suite against `pkg/ts-bun-client/` (`bun install --frozen-lockfile && bun test`). Then re-stages `dist/` binaries into `platforms/` (undoing any overwrite by `test/setup.ts`) and re-asserts the staged binary version matches `$VERSION` (b.uys anchor). |
+| `build` | local file write | `make release-binaries` (3 CLI cross-compiles into `dist/`). No in-tree staging — the CLI ships via the GitHub release tarball, not the npm package. |
+| `verify` | local file write | stage a release-stamped copy of the umbrella, `bun pm pack`, install the tarball into a temp `HOME`, stage the release-stamped CLI binary at `$HOME/.agent-director/bin/agent-director` (the SR-1.1 standard install path), then run `verify-installed-pkg.ts --smoke` (constructs a `Client` via `Client.create()` — discovery walks the standard install path before PATH — and asserts `client.version()` returns a well-formed `{ version, commit }` envelope). Runs the full in-tree `bun test` suite against `pkg/ts-bun-client/` (`bun install --frozen-lockfile && bun test`). |
 | `tag` | **POINT OF NO RETURN** | `git tag -a $VERSION` and `git push origin $VERSION` |
-| `publish` | **irreversible** | in-place stamp version onto umbrella + 2 sub-package `package.json` files + `skills/install-agent-director/SKILL.md` frontmatter `version:` (SR-4.1 lockstep); caret-pin `optionalDependencies` (umbrella); `npm publish` 2 per-platform optional packages, then the umbrella; same-version retries forbidden |
+| `publish` | **irreversible** | in-place stamp version onto the umbrella `package.json` + `skills/install-agent-director/SKILL.md` frontmatter `version:` (SR-4.1 lockstep); `npm publish` the umbrella tarball; same-version retries forbidden |
 | `gh-release` | irreversible | `gh release create $VERSION` with 3 CLI binaries attached |
 | `report` | read-only | final summary; on failure, names the failed phase + the phase-specific corrective action |
 
@@ -31,11 +31,12 @@ first failing phase. Every phase prefixes its stdout/stderr with
 
 Before invoking `./release.sh v<X.Y.Z> --release`, verify all five:
 
-1. **No placeholder names.** None of the three `package.json` files
-   (`pkg/ts-bun-client/package.json` + the two under
-   `platforms/*/`) contain the `@CHANGEME-H3/...` or `@TBD/...`
-   placeholder. H3 itself was resolved on 2026-05-24 (see
-   `docs/release-blockers.md`).
+1. **No placeholder names.** The umbrella `pkg/ts-bun-client/package.json`
+   does not contain the `@CHANGEME-H3/...` or `@TBD/...` placeholder.
+   H3 itself was resolved on 2026-05-24 (see
+   `docs/release-blockers.md`). (Post-b.w3q the per-platform
+   sub-packages under `platforms/*/` are gone, so this is the only
+   `package.json` to check.)
 2. **Functional gates green.** Both the Go suite (`go test ./...`)
    and the TS suite (`bun test` under `pkg/ts-bun-client/`) succeed
    locally. `make release-binaries-smoke` succeeds. The Docker
@@ -49,21 +50,18 @@ Before invoking `./release.sh v<X.Y.Z> --release`, verify all five:
 4. **`gh auth status` authenticated** against the repo's GitHub
    remote (read+push). Required by `gh release create`
    (gh-release phase).
-5. **v0.4.1+ artifacts in lockstep.** The umbrella's
-   `pkg/ts-bun-client/scripts/postinstall.ts` is shipped via the
-   umbrella's `files` glob (alongside `skills/install-agent-director/**`,
-   staged at pack time by the `prepack` hook
-   `scripts/stage-skill.ts`), and the SKILL.md frontmatter `version:`
-   field is the source of truth the postinstall + release pipeline
-   read. The `publish` phase keeps the umbrella `package.json`
-   `version` and the SKILL.md frontmatter `version:` in lockstep at
-   bump time; `check-version-coherence.ts --scope publish` refuses
-   to publish if they drift. The `verify` phase packs the umbrella
-   into a tarball,
-   installs it under a temp `HOME`, runs the version smoke, and
-   asserts the postinstall placed the skill body with the right
-   frontmatter version — so a regression in the published-shape
-   tarball is caught before the tag is pushed.
+5. **Umbrella + install-skill artifacts in lockstep.** The
+   `skills/install-agent-director/SKILL.md` frontmatter `version:`
+   field and the umbrella `pkg/ts-bun-client/package.json` `version`
+   field are bumped in lockstep by `scripts/version-bump.ts` at the
+   start of the verify phase; `check-version-coherence.ts --scope
+   publish` refuses to publish if they drift. The `verify` phase
+   packs the umbrella into a tarball, installs it under a temp
+   `HOME`, stages the release-stamped CLI binary at the SR-1.1
+   standard install path (`$HOME/.agent-director/bin/agent-director`),
+   and runs the version smoke against `client.version()` — so a
+   regression in the published umbrella surface or the CLI binary
+   stamp is caught before the tag is pushed.
 
 The existing semver / clean-tree / branch / tag-not-exists gates
 remain enforced by the preflight phase and are restated here so the
@@ -84,10 +82,10 @@ locally to verify a release before passing `--release`.
    the dry run). Make sure Epic-grouped entries make sense.
 5. **Confirm the report is all-green** (`[report] ✓ preflight`,
    `notes`, `build`, `verify`, `tag`, `publish`, `gh-release`,
-   `[report] ==== dry-run OK ====`). The dry-run rolls back its
-   in-place mutations to `package.json` version stamps and
-   `optionalDependencies` pins on EXIT, so `git status --porcelain`
-   should be empty afterward.
+   `[report] ==== dry-run OK ====`). All version-stamp mutations
+   happen inside a temp stage dir owned by verify_phase (cleaned up
+   by the EXIT trap), so `git status --porcelain` should be empty
+   afterward.
 
 ## Live release
 
@@ -113,18 +111,18 @@ human-readable index for forward planning.
 |---|---|---|
 | `preflight` | nothing | Fix the reported error and re-run. No state has been changed. |
 | `notes` | `dist/release-notes.md` written | Inspect `git log` range; re-run. |
-| `build` | `dist/` populated, CLI binaries staged | Fix the cross-compile failure (`make release-binaries`), then re-run. |
-| `verify` | local builds, no remote state | Fix the regression. **Never ship a red verify** — that is the entire point of this gate. The verify phase exercises the published shape (tarball + install + version smoke), so the regression is in the umbrella's `files` glob, the `prepack` skill-staging hook (`scripts/stage-skill.ts`), `scripts/postinstall.ts`, the subprocess Client's resolveCliPath path, or the staged CLI binary itself. Iterate until verify is green. |
+| `build` | `dist/` populated with cross-compiled CLI binaries | Fix the cross-compile failure (`make release-binaries`), then re-run. |
+| `verify` | local builds, no remote state | Fix the regression. **Never ship a red verify** — that is the entire point of this gate. The verify phase exercises the published shape (umbrella tarball + install + version smoke against a CLI binary staged at `$HOME/.agent-director/bin/agent-director`), so the regression is in the umbrella's `files` glob, the subprocess Client's discovery pipeline, or the staged CLI binary's version stamp. Iterate until verify is green. |
 | `tag` | **tag pushed to remote** | Delete the remote tag and try again: `git push --delete origin v<X.Y.Z> && git tag -d v<X.Y.Z>`. Re-run from the top once the underlying cause is fixed. |
-| `publish` | **npm packages published** | The published version is gone — **same-version retries are forbidden**. Increment VERSION (PATCH bump), re-run from the top. The npm registry will accept the new version; the partially-published old version stays as a record. **Never silent re-publish.** |
+| `publish` | **umbrella npm package published** | The published version is gone — **same-version retries are forbidden**. Increment VERSION (PATCH bump), re-run from the top. The npm registry will accept the new version; the published old version stays as a record. **Never silent re-publish.** |
 | `gh-release` | tag pushed + npm published; GH release not created | Do **NOT** increment VERSION — the tag and npm publish already succeeded for that version. Re-run `gh release create` manually with the assets in `./dist/`. The report phase prints the exact command. |
 
 ### Never silent re-publish
 
-If `publish_phase` fails for any package after one or more
-sub-packages already succeeded, the script halts and refuses to
-retry the same version. npm registries reject re-publishing the
-same `<name>@<version>`; even if they did not, a silent re-publish
+If `publish_phase` fails after the umbrella has already been
+published to npm, the script halts and refuses to retry the same
+version. npm registries reject re-publishing the same
+`<name>@<version>`; even if they did not, a silent re-publish
 would break consumers' install reproducibility. The only valid
 retry path is to bump the version (PATCH for a re-publish, MINOR
 or MAJOR if the recovery patch is meaningful) and re-run from the
