@@ -616,23 +616,27 @@ verify_phase() {
         exit 5
     fi
 
-    # Gate: verify all version-stamp sites agree before packing.
+    # Install dev deps + build dist/* so the coherence gate can inspect
+    # dist/index.js (site-dist-no-inline) and dist/version-floor.json
+    # (site-floor-lockstep), and bun pm pack ships the compiled JS
+    # surface listed in the umbrella's files glob.
+    if ! (cd "$stage_dir/pkg/ts-bun-client" \
+            && bun install --no-progress >/dev/null 2>&1 \
+            && bun run build >/dev/null 2>&1); then
+        log verify "FAIL bun-install/build" >&2
+        phase_fail verify "bun-pack prep"
+        exit 5
+    fi
+
+    # Gate: verify all version-stamp sites agree before packing.  Runs
+    # after bun build because some sites (site-dist-no-inline,
+    # site-floor-lockstep) inspect compiled dist/ artifacts.
     if ! (cd "$stage_dir/pkg/ts-bun-client" && bun run scripts/check-version-coherence.ts \
             --scope verify \
             --expected-version "$plain_v") \
             > >(while IFS= read -r l; do printf '[verify] %s\n' "$l"; done); then
         log verify "check-version-coherence.ts --scope verify failed" >&2
         phase_fail verify "check-version-coherence.ts"
-        exit 5
-    fi
-
-    # Install dev deps + build dist/* so bun pm pack ships the compiled
-    # JS surface listed in the umbrella's files glob.
-    if ! (cd "$stage_dir/pkg/ts-bun-client" \
-            && bun install --no-progress >/dev/null 2>&1 \
-            && bun run build >/dev/null 2>&1); then
-        log verify "FAIL bun-install/build" >&2
-        phase_fail verify "bun-pack prep"
         exit 5
     fi
 
