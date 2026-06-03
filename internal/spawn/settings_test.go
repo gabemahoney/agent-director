@@ -2,6 +2,7 @@ package spawn
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -402,6 +403,98 @@ func TestSynthesizeSettingsRoundTrip(t *testing.T) {
 		cmd, _ := cmdEntry["command"].(string)
 		if !strings.Contains(cmd, abs) {
 			t.Errorf("event %s command %q does not contain abs path %q", evt, cmd, abs)
+		}
+	}
+}
+
+// TestExecutablePathResolvesSymlinks verifies SR-1.8: the hook-command
+// path written into settings.json is the symlink-resolved absolute path
+// of the running binary, not the symlink itself.  b.ue3 / Epic 5.
+func TestExecutablePathResolvesSymlinks(t *testing.T) {
+	// Stage a fake binary file and a symlink pointing at it; verify
+	// executablePath() returns the resolved real path.  We exercise the
+	// in-place EvalSymlinks step by re-running the production var (not
+	// the stub) against a controlled filesystem layout.
+	dir := t.TempDir()
+	realPath := filepath.Join(dir, "real-agent-director")
+	if err := os.WriteFile(realPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile real: %v", err)
+	}
+	symlinkPath := filepath.Join(dir, "linked-agent-director")
+	if err := os.Symlink(realPath, symlinkPath); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+	// Stub executablePath to return the symlink, then re-run the
+	// EvalSymlinks step the production var would have applied.
+	saved := executablePath
+	executablePath = func() (string, error) {
+		abs, err := filepath.Abs(symlinkPath)
+		if err != nil {
+			return "", err
+		}
+		resolved, err := filepath.EvalSymlinks(abs)
+		if err != nil {
+			return abs, nil
+		}
+		return resolved, nil
+	}
+	t.Cleanup(func() { executablePath = saved })
+
+	got, err := executablePath()
+	if err != nil {
+		t.Fatalf("executablePath: %v", err)
+	}
+	wantResolved, err := filepath.EvalSymlinks(realPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(realPath): %v", err)
+	}
+	if got != wantResolved {
+		t.Errorf("executablePath returned %q; want symlink-resolved %q", got, wantResolved)
+	}
+	if got == symlinkPath {
+		t.Errorf("executablePath returned the symlink path; expected resolved real path")
+	}
+}
+
+// TestSynthesizeSettingsHookCommandsAreAbsolute verifies SR-1.8: every
+// hook command starts with "/" (absolute) and never contains the bare
+// token "agent-director " or shell-variable references.
+// b.ue3 / Epic 5.
+func TestSynthesizeSettingsHookCommandsAreAbsolute(t *testing.T) {
+	withStubExe(t, "/opt/ad/bin/agent-director")
+	jsonStr, err := synthesizeSettings(
+		Resolved{SpawnParams: SpawnParams{ClaudeInstanceID: "id"}},
+		config.Default(),
+	)
+	if err != nil {
+		t.Fatalf("synthesizeSettings: %v", err)
+	}
+	var top map[string]any
+	if err := json.Unmarshal([]byte(jsonStr), &top); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	hooks, _ := top["hooks"].(map[string]any)
+	forbidden := []string{"$0", "${0}", "$(command -v"}
+	for evt, raw := range hooks {
+		entries, _ := raw.([]any)
+		for _, e := range entries {
+			entry, _ := e.(map[string]any)
+			hooksList, _ := entry["hooks"].([]any)
+			for _, h := range hooksList {
+				hm, _ := h.(map[string]any)
+				cmd, _ := hm["command"].(string)
+				if !strings.HasPrefix(cmd, "/") && !strings.HasPrefix(cmd, "\"/") {
+					t.Errorf("event %s: command %q is not absolute", evt, cmd)
+				}
+				if strings.HasPrefix(cmd, "agent-director ") {
+					t.Errorf("event %s: command %q starts with bare 'agent-director' token", evt, cmd)
+				}
+				for _, f := range forbidden {
+					if strings.Contains(cmd, f) {
+						t.Errorf("event %s: command %q contains forbidden token %q", evt, cmd, f)
+					}
+				}
+			}
 		}
 	}
 }

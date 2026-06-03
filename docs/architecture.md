@@ -423,6 +423,64 @@ There is no FFI, no shared library, no worker thread. The replaced
 worker; the b.eiv refactor (b.19d) replaced it with the per-call
 subprocess model.
 
+### System-install discovery pipeline (b.w3q)
+
+After the b.ue3 cutover, the TS library no longer ships a bundled CLI
+binary. `Client.create()` and `resolveSystemBinary()` discover the
+host's system-installed agent-director CLI at construction time via
+the SR-1 pipeline:
+
+1. **Standard install path:** `$HOME/.agent-director/bin/agent-director`,
+   after `~` expansion. Skipped silently when HOME is unset, empty, or
+   non-absolute.
+2. **PATH lookup:** first match of `agent-director` against the colon-
+   separated PATH.
+
+The candidate is validated (regular file, exec bit honoring owner/group/
+other precedence) and probed with `<bin> version --json` under a bounded
+invocation policy (5000 ms timeout, SIGTERM → 2000 ms grace → SIGKILL,
+allowlist-only env scrub, stdin closed, cwd=/, stdout/stderr capped at
+64 KiB each). The probed version is compared against `MIN_BINARY_VERSION`
+(sourced from `dist/version-floor.json` at build time). Each failure
+mode surfaces as one of:
+
+- `ErrSystemInstallNotFound` (no candidate found anywhere)
+- `ErrSystemInstallTooOld` (candidate is below floor)
+- `ErrSystemInstallUnreachable` with `reason: UnreachableReason` (one of
+  eight enumerated string-literal values; see SR-3.3)
+
+All three new error classes extend `AgentDirectorError` directly. No
+shared parent class is introduced. The discovery is one-shot per
+`Client.create()` / `resolveSystemBinary()` call; subsequent verb calls
+on a successfully-constructed Client reuse the resolved absolute path.
+
+The library returns the binary's reported version verbatim — no leading
+`v` stripping, no normalization. Discovery preserves the byte-exact
+sentinel `0.0.0-dev` end-to-end.
+
+#### Spawn-side hook stability (b.ue3 / SR-1.8)
+
+When the CLI's `spawn` verb writes hook commands into the spawned Claude
+session's `settings.json`, every command's first argv token is an
+absolute, symlink-resolved path computed via `os.Executable()` followed
+by `filepath.EvalSymlinks()`. The CLI never writes the bare token
+`agent-director`, never writes a PATH-relative path, and never writes
+`$0` / `${0}` / `$(command -v agent-director)`.
+
+Stability assumption: `install.sh` writes the AD binary to
+`~/.agent-director/bin/agent-director` and re-runs of `install.sh`
+overwrite the file at the same absolute path. The directory entry's
+identity is stable across re-installs even though the file's inode may
+change. Hook commands captured into a spawned Claude session therefore
+continue to invoke the same path after the operator runs `install.sh`
+again to upgrade.
+
+The library-side absolute-path invariant (SR-1.5) and the spawn-side
+hook-writing invariant (SR-1.8) together form a single contract: any
+hook command pointing at AD's CLI binary is an absolute path to a
+binary that remains callable for the lifetime of the configuration
+that referenced it.
+
 ### Per-platform optional-dependency packaging
 
 **Distribution model.** `pkg/ts-bun-client/` follows the [esbuild distribution
