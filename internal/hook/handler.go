@@ -51,27 +51,43 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 
 	relayActive := env(EnvRelayMode) == RelayModeOn
 
-	// Any failure path before runRelay must still emit a deny envelope
-	// when relay is active. We don't yet know whether this invocation
-	// is a PermissionRequest, but defaulting to deny on relay-on is the
-	// SRD §6.4 safe choice. Claude Code drops envelopes on
-	// non-PermissionRequest events.
+	// Read the payload BEFORE resolving instance id so we can peek the
+	// event name from the raw bytes (b.45p). A payload-read failure is
+	// the one pre-classify error that genuinely cannot know the event
+	// type, so it falls back to silent exit (fail-open) — Claude Code
+	// routes hook stdout by file descriptor back to the in-flight tool,
+	// so a permission-shaped deny envelope emitted from a PreToolUse
+	// process would race and beat the legitimate PermissionRequest
+	// process's allow.
+	raw, err := ReadPayload(stdin)
+	if err != nil {
+		logf(logger, "hook: read payload: %v", err)
+		return nil
+	}
+
+	// Peek the event name from the raw payload so failClosed can gate
+	// its envelope write on event type from the first post-read failure
+	// point. An empty event name (parse failure or missing field) is
+	// treated as non-PermissionRequest, which silences the envelope.
+	eventName := PeekEventName(raw)
+
+	// failClosed emits a deny envelope ONLY when this invocation is a
+	// PermissionRequest AND relay mode is on (SRD §6.4). Non-permission
+	// events (state-tracking) stay fail-open per SRD §3.2: log and
+	// exit 0 with empty stdout. This gate is the b.45p fix — Claude
+	// Code routes hook output by fd, not by envelope contents, so an
+	// envelope from a PreToolUse process would be applied to the
+	// in-flight tool regardless of its hookEventName field.
 	failClosed := func(why string) {
 		logf(logger, "hook: %s", why)
-		if relayActive {
-			_, _ = fmt.Fprintln(stdout, EncodeDecision("deny", ""))
+		if relayActive && eventName == EventNamePermissionRequest {
+			_, _ = fmt.Fprintln(stdout, EncodeDecision(eventName, "deny", ""))
 		}
 	}
 
 	instanceID, err := ResolveInstanceID(env)
 	if err != nil {
 		failClosed(fmt.Sprintf("resolve instance id: %v", err))
-		return nil
-	}
-
-	raw, err := ReadPayload(stdin)
-	if err != nil {
-		failClosed(fmt.Sprintf("read payload (instance=%s): %v", instanceID, err))
 		return nil
 	}
 
@@ -99,7 +115,7 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 	// Relay branch. Only PermissionRequest events with explicit
 	// relay-on env take the polling path; everything else falls
 	// through to the standard state-tracking exit (no stdout).
-	if relayActive && res.EventName == "PermissionRequest" {
+	if relayActive && res.EventName == EventNamePermissionRequest {
 		clock := hc.Clock
 		if clock == nil {
 			clock = DefaultPollClock()
