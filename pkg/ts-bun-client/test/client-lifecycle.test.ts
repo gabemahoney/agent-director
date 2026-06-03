@@ -24,21 +24,19 @@ import { Client } from "../src/client.js";
 import { AgentDirectorError, ErrClientClosed } from "../src/errors.js";
 
 // ---------------------------------------------------------------------------
-// Pre-flight: verify the CLI binary is present in dist/.
-// Post-cutover the client uses the subprocess model; the shared library is
-// not needed. The CLI binary (agent-director-linux-amd64 or darwin-arm64)
-// must be present for the tests to run.
+// Pre-flight: locate the CLI binary built by test/setup.ts (`make agent-director`).
+// Post-Epic-4 the binary lives at <repoRoot>/bin/agent-director (single artifact
+// per host, no platform suffix). setup.ts also exposes the absolute path via
+// process.env.CLI_PATH — prefer that, fall back to the canonical path.
 // ---------------------------------------------------------------------------
 const repoRoot = path.resolve(import.meta.dir, "../../..");
-const binaryName =
-  process.platform === "darwin" ? "agent-director-darwin-arm64" : "agent-director-linux-amd64";
-const cliPath = path.join(repoRoot, "dist", binaryName);
+const cliPath = process.env.CLI_PATH ?? path.join(repoRoot, "bin", "agent-director");
+const cliMissing = !fs.existsSync(cliPath);
 
-if (!fs.existsSync(cliPath)) {
-  console.error(
-    `client-lifecycle.test.ts: CLI binary not found at ${cliPath}. SKIPPING.`
+if (cliMissing) {
+  console.warn(
+    `client-lifecycle.test.ts: CLI binary not found at ${cliPath}; lifecycle tests will be skipped.`
   );
-  process.exit(0);
 }
 
 // ---------------------------------------------------------------------------
@@ -83,9 +81,14 @@ import type { ClientOptions } from "../src/client.js";
 // Tests
 // ---------------------------------------------------------------------------
 
+// Skip the lifecycle suite when the CLI binary is missing rather than calling
+// process.exit (which would terminate the entire `bun test` runner, not just
+// this file).
+const testIfBinary = test.skipIf(cliMissing);
+
 describe("Client lifecycle", () => {
   // (a) Construct against a fresh temp store — should not throw.
-  test("(a) constructor succeeds for a fresh store path", async () => {
+  testIfBinary("(a) constructor succeeds for a fresh store path", async () => {
     const dir = makeTmpDir();
     try {
       const client = await Client.create(makeOpts(dir));
@@ -96,7 +99,7 @@ describe("Client lifecycle", () => {
   });
 
   // (b) Double-close() is a no-op (must not throw on second call).
-  test("(b) double close() is a no-op", async () => {
+  testIfBinary("(b) double close() is a no-op", async () => {
     const dir = makeTmpDir();
     try {
       const client = await Client.create(makeOpts(dir));
@@ -109,7 +112,7 @@ describe("Client lifecycle", () => {
   });
 
   // (c) `using` block calls close() at scope exit.
-  test("(c) using block closes the client at scope exit", async () => {
+  testIfBinary("(c) using block closes the client at scope exit", async () => {
     const dir = makeTmpDir();
     let capturedClient: Client | undefined;
     try {
@@ -127,7 +130,7 @@ describe("Client lifecycle", () => {
   });
 
   // (d) Post-close _assertOpenForTests throws ErrClientClosed.
-  test("(d) _assertOpenForTests throws ErrClientClosed after close()", async () => {
+  testIfBinary("(d) _assertOpenForTests throws ErrClientClosed after close()", async () => {
     const dir = makeTmpDir();
     try {
       const client = await Client.create(makeOpts(dir));
@@ -139,7 +142,7 @@ describe("Client lifecycle", () => {
   });
 
   // (e) ErrClientClosed instanceof chain.
-  test("(e) ErrClientClosed is instanceof ErrClientClosed, AgentDirectorError, and Error", async () => {
+  testIfBinary("(e) ErrClientClosed is instanceof ErrClientClosed, AgentDirectorError, and Error", async () => {
     const dir = makeTmpDir();
     try {
       const client = await Client.create(makeOpts(dir));
@@ -162,7 +165,7 @@ describe("Client lifecycle", () => {
   // Subprocess-model lifecycle: after close(), verb calls throw ErrClientClosed.
   // The FFI Client expressed this as "_handle is null after close"; for the
   // subprocess model the meaningful invariant is that the open-guard fires.
-  test("post-close verb call throws ErrClientClosed", async () => {
+  testIfBinary("post-close verb call throws ErrClientClosed", async () => {
     const dir = makeTmpDir();
     try {
       const client = await Client.create(makeOpts(dir));
