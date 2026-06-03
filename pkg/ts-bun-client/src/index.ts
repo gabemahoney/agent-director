@@ -3,6 +3,18 @@
  */
 export { Client } from "./client.js";
 
+// Version-floor constants (SR-4.5 / SR-5).  MIN_BINARY_VERSION is the
+// strict-SemVer-2.0 floor every system AD install must meet; the value
+// is sourced at build time from version-floor.json (the bash-readable
+// single source of truth).  DEV_SENTINEL_VERSION is the dev-build
+// universally-satisfies marker — consumers compare a probed AD's
+// version against this literal to short-circuit the floor check for
+// dev-stamped binaries.
+export {
+  MIN_BINARY_VERSION,
+  DEV_SENTINEL_VERSION,
+} from "./internal/constants.js";
+
 // Error classes and factory.
 export {
   AgentDirectorError,

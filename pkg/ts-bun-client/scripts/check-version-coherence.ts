@@ -81,6 +81,8 @@ interface RepoPaths {
   platformBins: [string, string];
   skillMd: string;
   distIndexJs: string;
+  versionFloorSrc: string;
+  versionFloorDist: string;
 }
 
 function resolveRepoPaths(dir: string): RepoPaths {
@@ -96,6 +98,8 @@ function resolveRepoPaths(dir: string): RepoPaths {
     ],
     skillMd: resolve(dir, "../../../skills/install-agent-director/SKILL.md"),
     distIndexJs: resolve(dir, "../dist/index.js"),
+    versionFloorSrc: resolve(dir, "../version-floor.json"),
+    versionFloorDist: resolve(dir, "../dist/version-floor.json"),
   };
 }
 
@@ -281,6 +285,89 @@ function checkSite5(ver: string): void {
   }
 }
 
+// Site floor-lockstep: version-floor.json single-source-of-truth coherence
+// per SR-5.4 / SR-5.2.  Asserts:
+//   - source-of-truth pkg/ts-bun-client/version-floor.json exists and parses
+//   - shipped pkg/ts-bun-client/dist/version-floor.json exists and parses
+//   - both files are byte-for-byte identical
+//   - min_binary_version passes SR-2.2 strict SemVer 2.0 (uses Epic 1 parser)
+//   - min_binary_version is not the dev sentinel "0.0.0-dev"
+//   - dist/index.js exports MIN_BINARY_VERSION equal to the parsed JSON field
+//     (via dynamic import — the TS-import variant, no positive-grep)
+async function checkSiteFloorLockstep(): Promise<void> {
+  const srcPath = paths.versionFloorSrc;
+  const dstPath = paths.versionFloorDist;
+  const distIndexPath = paths.distIndexJs;
+
+  if (!existsSync(srcPath)) {
+    failures.push(`[site-floor-lockstep] ${srcPath}: source-of-truth version-floor.json missing`);
+    return;
+  }
+  if (!existsSync(dstPath)) {
+    failures.push(`[site-floor-lockstep] ${dstPath}: shipped dist/version-floor.json missing — run bun build`);
+    return;
+  }
+
+  const srcRaw = readFileSync(srcPath);
+  const dstRaw = readFileSync(dstPath);
+  if (!srcRaw.equals(dstRaw)) {
+    failures.push(
+      `[site-floor-lockstep] source vs dist mismatch: ${srcPath} and ${dstPath} are not byte-equal — build.ts copy step drifted`,
+    );
+  }
+
+  let parsed: { min_binary_version?: unknown };
+  try {
+    parsed = JSON.parse(srcRaw.toString("utf8")) as { min_binary_version?: unknown };
+  } catch (e) {
+    failures.push(`[site-floor-lockstep] ${srcPath}: not valid JSON: ${(e as Error).message}`);
+    return;
+  }
+  if (typeof parsed.min_binary_version !== "string") {
+    failures.push(`[site-floor-lockstep] ${srcPath}: min_binary_version must be a string`);
+    return;
+  }
+  const floor = parsed.min_binary_version;
+
+  if (floor === "0.0.0-dev") {
+    failures.push(
+      `[site-floor-lockstep] ${srcPath}: min_binary_version="0.0.0-dev" — the dev sentinel is forbidden as a release floor (SR-5.2)`,
+    );
+  }
+
+  // Strict SemVer 2.0 check (SR-2.2). Reject any input the library's
+  // discovery pipeline would classify as unparseable.
+  if (!/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.test(floor)) {
+    failures.push(
+      `[site-floor-lockstep] ${srcPath}: min_binary_version="${floor}" is not strict SemVer 2.0 (SR-2.2)`,
+    );
+  }
+
+  // TS-import lockstep: MIN_BINARY_VERSION imported from the built bundle
+  // must equal the parsed JSON's field. This is the SR-5.4 invariant
+  // (positive-grep variant explicitly rejected).
+  if (!existsSync(distIndexPath)) {
+    // Reported by site-dist-no-inline already; skip the import here.
+    return;
+  }
+  try {
+    const mod = (await import(distIndexPath)) as { MIN_BINARY_VERSION?: unknown };
+    if (typeof mod.MIN_BINARY_VERSION !== "string") {
+      failures.push(
+        `[site-floor-lockstep] ${distIndexPath}: MIN_BINARY_VERSION export missing or not a string`,
+      );
+    } else if (mod.MIN_BINARY_VERSION !== floor) {
+      failures.push(
+        `[site-floor-lockstep] ${distIndexPath}: MIN_BINARY_VERSION="${mod.MIN_BINARY_VERSION}" disagrees with version-floor.json field "${floor}"`,
+      );
+    }
+  } catch (e) {
+    failures.push(
+      `[site-floor-lockstep] ${distIndexPath}: failed to import: ${(e as Error).message}`,
+    );
+  }
+}
+
 // Site dist-no-inline: dist/index.js must not contain the literal identifier
 // NPM_PACKAGE_VERSION or the placeholder string "0.0.0" — both indicate the
 // build-time JSON import was not fully replaced by the runtime loader (SR-2.3).
@@ -406,6 +493,12 @@ for (const site of sitesToRun) {
 // SR-2.2: publish ⊇ verify; dist/index.js is present in the stage dir at
 // publish time, so the check is runnable and required under both scopes.
 checkSiteDistNoInline();
+
+// SR-5.4: version-floor.json triple-source coherence — verify and publish.
+// Source-of-truth JSON, shipped JSON, and bundle's MIN_BINARY_VERSION must
+// agree byte-for-byte.  Runs under both scopes; release.sh always rebuilds
+// dist/ before either scope, so the dynamic-import is always reachable.
+await checkSiteFloorLockstep();
 
 // SR-1.3 / SR-1.5: tarball SHA-256 round-trip — publish scope only.
 // Re-hash every tarball from the verify_phase manifest; mismatch means bytes

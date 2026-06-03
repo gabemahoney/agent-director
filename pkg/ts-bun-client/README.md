@@ -248,6 +248,45 @@ The library version equals the agent-director release tag — released in lockst
 |---|---|
 | `agent-director@v0.5.0` | `agent-director CLI v0.5.0` |
 
+## Minimum required CLI binary version
+
+The library declares the minimum CLI-binary version it requires on two
+surfaces, both backed by the same single source of truth shipped in the
+published npm package at `dist/version-floor.json`.
+
+**TS export (preferred for JS/TS consumers):**
+
+```ts
+import { MIN_BINARY_VERSION, DEV_SENTINEL_VERSION } from "agent-director";
+
+console.log(`requires agent-director >= ${MIN_BINARY_VERSION}`);
+
+if (binaryVersion === DEV_SENTINEL_VERSION) {
+  // dev-built binary stamps the sentinel; accept it as satisfying the floor.
+}
+```
+
+`MIN_BINARY_VERSION` is a strict-SemVer-2.0 string (e.g. `0.7.0` or
+`0.7.0-rc1`). The value is inlined into the bundle at build time; no
+runtime file read. `DEV_SENTINEL_VERSION` is the literal `"0.0.0-dev"`
+— a dev-built CLI binary stamps this value and satisfies any floor by
+short-circuit. The library returns the binary's reported version
+verbatim — no leading-`v` stripping, no normalization. Consumers
+comparing two real versions should use a standard semver library;
+agent-director does not export a comparator.
+
+**Bash read pattern (for install scripts and non-JS consumers):**
+
+```sh
+jq -r .min_binary_version < node_modules/agent-director/dist/version-floor.json
+```
+
+This pattern is part of the public contract. It does not require the
+agent-director CLI to be installed, does not spawn a JS runtime, and
+does not require any agent-director-specific environment setup — read
+the field from the file at the stable documented path. The `-r` flag
+returns a bare string suitable for shell comparison.
+
 ## Supported Bun versions
 
 Minimum: `>=1.0.21` (set in `engines.bun`). Tested on Bun 1.3.x as of this release. The `using` block syntax (Explicit Resource Management) requires Bun 1.0.21+.

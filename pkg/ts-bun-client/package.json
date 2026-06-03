@@ -10,6 +10,7 @@
   "files": [
     "dist/**/*.js",
     "dist/**/*.d.ts",
+    "dist/version-floor.json",
     "!dist/**/*.test.*",
     "README.md",
     "scripts/postinstall.ts",
@@ -19,7 +20,8 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
-    }
+    },
+    "./dist/version-floor.json": "./dist/version-floor.json"
   },
   "scripts": {
     "build": "bun run build.ts",

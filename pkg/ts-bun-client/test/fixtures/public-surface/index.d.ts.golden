@@ -2,6 +2,7 @@
  * Public entry point for agent-director.
  */
 export { Client } from "./client.js";
+export { MIN_BINARY_VERSION, DEV_SENTINEL_VERSION, } from "./internal/constants.js";
 export { AgentDirectorError, ErrClientClosed, ErrUnsupportedPlatform, ErrPlatformPackageMissing, ErrBunVersionTooOld, ErrCliNotExecutable, ErrConsumerSignal, ErrCallTimeout, ErrUnknownErrorName, errorFromEnvelope, ErrCwdMissing, ErrCwdNotAPath, ErrCwdNotFound, ErrCwdNotADirectory, ErrRelayModeInvalid, ErrSpawnDeniedFlag, ErrReservedEnvKey, ErrInstanceIdCollision, ErrTmuxSessionNameEmpty, ErrTmuxSessionNameInvalid, ErrTmuxSessionNameTooLong, ErrSpawnNotFound, ErrTmuxNotAvailable, ErrTmuxSessionCreate, ErrTmuxSendKeys, ErrTmuxCaptureFailed, ErrSpawnNotInteractive, ErrSendKeysWhileRelayed, ErrSpawnNotPausable, ErrPauseTimeout, ErrListInvalidLabel, ErrTemplateNameUnsafe, ErrTemplateNotFound, ErrTemplateMalformed, ErrTemplateExists, ErrProbeUnsupported, ErrSpawnNotResumable, ErrNoSessionId, ErrJsonlMissing, ErrRelayModeOff, ErrInvalidDecision, ErrNoOpenPermissionRequest, ErrAlreadyDecided, ErrPermissionRequestNotFound, ErrAmbiguousRequest, ErrMissingRequestToken, ErrInvalidFlags, } from "./errors.js";
 export type { ClientOptions, Logger } from "./types.js";
 export type { VerbSummary, PermissionRequestInfo, ListRow } from "./types.js";
