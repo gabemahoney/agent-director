@@ -616,13 +616,9 @@ re-hashes every listed tarball. A hash mismatch means bytes were mutated after
 
 The npm-name blocker (H3) was resolved on 2026-05-24: the umbrella package
 publishes as `agent-director` (unscoped) and the three per-platform sub-packages
-publish under the `@agent-director` scope. The `prepublishOnly` hook in each sub-package `package.json` invokes
-`scripts/prepublish-guards.ts` with `PREPUBLISH_GUARD_MODE=subpackage` as the
-consolidated tripwire against re-introducing the `CHANGEME-H3` sentinel. The
-canonical placeholder regex (`PLACEHOLDER_RE`) is defined once at the top of
-that script — the single source of truth for the full sentinel set. The H3
-entry in [docs/release-blockers.md](release-blockers.md) records the
-resolution and is kept as the template for any future release blockers.
+publish under the `@agent-director` scope. The H3 entry in
+[docs/release-blockers.md](release-blockers.md) records the resolution and is
+kept as the template for any future release blockers.
 
 ### Package layout
 
@@ -2106,12 +2102,10 @@ first failing phase:
    with no re-stage, no re-stamp, and no re-pack (SR-1.6). Reads
    `AGENT_DIRECTOR_RELEASE_SHASUMS` (manifest path) and
    `AGENT_DIRECTOR_RELEASE_STAGE_DIR` (stage directory path) exported
-   by `verify_phase`. Runs `scripts/prepublish-guards.ts` (placeholder
-   name check, version-skew, os/cpu drift, optionalDependencies range)
-   and then `check-version-coherence.ts --scope publish` (SHA-256
-   round-trip gate — re-hashes every tarball against the manifest to
-   confirm no bytes changed after `verify_phase` packed them). If both
-   gates pass, publishes each tarball verbatim via
+   by `verify_phase`. Runs `check-version-coherence.ts --scope publish`
+   (SHA-256 round-trip gate — re-hashes every tarball against the
+   manifest to confirm no bytes changed after `verify_phase` packed
+   them). If the gate passes, publishes each tarball verbatim via
    `npm publish <tarball>` — platform sub-packages first so the
    umbrella's `^version` pins resolve on npm, umbrella last. The live
    working tree is never written.
