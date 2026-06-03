@@ -2,10 +2,49 @@ package store
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
+
+// envFreshInitHelper is the env var that flips this test binary into
+// helper-process mode for TestConcurrentFreshInit_NoSqliteBusyRace. The
+// helper does a single OpenOrInit against the path the parent passes via
+// the same env var (value = DB path), then exits 0 on success / 1 with the
+// error printed to stderr on failure. See go-style subprocess test pattern
+// (Go stdlib uses the same trick in os/exec, syscall, etc.).
+const envFreshInitHelper = "AD_STORE_TEST_FRESH_INIT_HELPER"
+
+// TestMain dispatches to the helper-process code path before the testing
+// framework starts when the helper env var is set. This keeps the helper
+// invisible to `go test -list`/normal test runs while letting the
+// concurrent-fresh-init test fork the same binary as N subprocesses.
+func TestMain(m *testing.M) {
+	if dbPath := os.Getenv(envFreshInitHelper); dbPath != "" {
+		freshInitHelperMain(dbPath)
+		return
+	}
+	os.Exit(m.Run())
+}
+
+// freshInitHelperMain runs a single OpenOrInit against dbPath and exits
+// 0 on success / 1 with the error on stderr. The parent test interprets a
+// non-zero exit (especially one mentioning SQLITE_BUSY) as a repro of b.ng9.
+func freshInitHelperMain(dbPath string) {
+	s, err := OpenOrInit(dbPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(1)
+	}
+	if err := s.Close(); err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(1)
+	}
+	os.Exit(0)
+}
 
 // TestConcurrentOpenOrInitWithWrites is the regression gate for b.x2m
 // (burst-spawned hooks fail with SQLITE_BUSY because every new connection
@@ -85,5 +124,82 @@ func TestConcurrentOpenOrInitWithWrites(t *testing.T) {
 		if state != StateWaiting {
 			t.Errorf("%s: state = %q, want %q", id, state, StateWaiting)
 		}
+	}
+}
+
+// TestConcurrentFreshInit_NoSqliteBusyRace is the regression gate for b.ng9
+// (cross-process SQLITE_BUSY race on PRAGMA journal_mode=WAL during fresh-DB
+// init). N subprocesses simultaneously OpenOrInit the same nonexistent path;
+// without the flock serialization in ensureJournalModeWAL one or more losers
+// crash with "store: set journal_mode=wal: ... SQLITE_BUSY" because SQLite's
+// busy_timeout does not retry the EXCLUSIVE-lock acquisition that the
+// WAL-mode transition performs.
+//
+// In-process goroutine concurrency (see TestConcurrentOpenOrInitWithWrites)
+// is insufficient: every goroutine shares the same *sql.DB pool and lock,
+// so the journal-mode write only happens once. The race only manifests when
+// each caller has its own pool — i.e. across processes.
+func TestConcurrentFreshInit_NoSqliteBusyRace(t *testing.T) {
+	if testing.Short() {
+		t.Skip("subprocess fan-out is slow under -short")
+	}
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	const procs = 8
+
+	var start sync.WaitGroup
+	var done sync.WaitGroup
+	start.Add(1)
+	done.Add(procs)
+
+	type result struct {
+		i      int
+		err    error
+		stderr string
+	}
+	results := make(chan result, procs)
+
+	for i := 0; i < procs; i++ {
+		i := i
+		go func() {
+			defer done.Done()
+			start.Wait()
+
+			cmd := exec.Command(os.Args[0], "-test.run=^$") //nolint:gosec // path is the test binary itself
+			cmd.Env = append(os.Environ(), envFreshInitHelper+"="+dbPath)
+			out, err := cmd.CombinedOutput()
+			results <- result{i: i, err: err, stderr: string(out)}
+		}()
+	}
+
+	start.Done()
+	done.Wait()
+	close(results)
+
+	var failed int
+	for r := range results {
+		if r.err != nil {
+			failed++
+			t.Errorf("helper proc %d: %v\noutput:\n%s", r.i, r.err, r.stderr)
+			if strings.Contains(r.stderr, "SQLITE_BUSY") {
+				t.Logf("helper proc %d hit SQLITE_BUSY (b.ng9 repro)", r.i)
+			}
+		}
+	}
+	if failed > 0 {
+		t.Fatalf("%d/%d concurrent fresh-init subprocesses failed", failed, procs)
+	}
+
+	// Final state: DB file exists and reports journal_mode=wal.
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("post-race Open: %v", err)
+	}
+	defer s.Close()
+	var mode string
+	if err := s.db.QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil {
+		t.Fatalf("read journal_mode: %v", err)
+	}
+	if mode != "wal" {
+		t.Fatalf("post-race journal_mode = %q, want wal", mode)
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"golang.org/x/sys/unix"
 	_ "modernc.org/sqlite" // pure-Go SQLite driver registered as "sqlite"
 )
 
@@ -123,7 +124,7 @@ func openDB(resolved string) (*Store, error) {
 	// "database is locked" retry loop is bypassed.
 	db.SetMaxOpenConns(1)
 
-	if err := ensureJournalModeWAL(db); err != nil {
+	if err := ensureJournalModeWAL(db, resolved); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -174,9 +175,23 @@ func expandTilde(path string) (string, error) {
 // journal_mode is a lock-free header read; the write-form PRAGMA only
 // runs on a genuinely fresh DB (or one whose header was reset by hand),
 // which avoids the per-connection write-lock contention that caused
-// b.x2m. busy_timeout (set in the DSN) covers the rare case where two
-// processes race to initialize the same fresh DB.
-func ensureJournalModeWAL(db *sql.DB) error {
+// b.x2m.
+//
+// The cross-process fresh-init race (b.ng9) is serialized via flock on a
+// sibling lock file. SQLite's busy_timeout does NOT cover the EXCLUSIVE
+// lock acquisition that PRAGMA journal_mode=WAL performs on a brand-new
+// DB file: empirically the WAL transition fails immediately with
+// SQLITE_BUSY when two processes race rather than retrying-with-wait. A
+// process-level flock around the WAL-set step makes the operation
+// genuinely serial across processes; once the first process commits the
+// WAL header, every subsequent process reads journal_mode=wal and early-
+// returns at the first check below without ever taking the flock.
+//
+// dbPath identifies the SQLite file; the lock file lives next to it at
+// dbPath + ".initlock". Lock contention waits indefinitely (Flock with
+// no LOCK_NB), which is the desired behavior — the lock is held only for
+// the duration of one PRAGMA write (sub-millisecond).
+func ensureJournalModeWAL(db *sql.DB, dbPath string) error {
 	var mode string
 	if err := db.QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil {
 		return fmt.Errorf("store: read journal_mode: %w", err)
@@ -184,10 +199,55 @@ func ensureJournalModeWAL(db *sql.DB) error {
 	if mode == "wal" {
 		return nil
 	}
+
+	release, err := acquireInitLock(dbPath)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	// Re-check under the lock: another process may have set WAL between
+	// our first read and our flock acquisition. Avoids re-running the
+	// EXCLUSIVE-lock PRAGMA when it isn't needed.
+	if err := db.QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil {
+		return fmt.Errorf("store: read journal_mode (post-lock): %w", err)
+	}
+	if mode == "wal" {
+		return nil
+	}
+
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		return fmt.Errorf("store: set journal_mode=wal: %w", err)
 	}
 	return nil
+}
+
+// acquireInitLock acquires an exclusive POSIX file lock on the sibling
+// "<dbPath>.initlock" file and returns a release callback the caller is
+// responsible for invoking (typically via defer). It serializes the
+// first-init PRAGMA journal_mode=WAL write across processes — see
+// ensureJournalModeWAL for the full rationale (b.ng9).
+//
+// The lock file is created with mode 0600 to match the DB file's
+// posture; it's left in place after release (idempotent, harmless to
+// reuse on subsequent runs).
+func acquireInitLock(dbPath string) (func(), error) {
+	lockPath := dbPath + ".initlock"
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, dbFileMode)
+	if err != nil {
+		return nil, fmt.Errorf("store: open init lock: %w", err)
+	}
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("store: acquire init lock: %w", err)
+	}
+	return func() {
+		// LOCK_UN before Close is belt-and-suspenders; Close also drops
+		// any flock held on the fd. Errors here can't be propagated and
+		// are non-fatal (lock files survive without harm).
+		_ = unix.Flock(int(f.Fd()), unix.LOCK_UN)
+		_ = f.Close()
+	}, nil
 }
 
 // verifyPragmas confirms the required PRAGMAs are in effect. journal_mode
