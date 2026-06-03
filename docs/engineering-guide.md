@@ -62,3 +62,30 @@ Tests prove the code works. Missing tests mean you're guessing.
 - **Test error paths.** Don't just test the happy path — verify expected exceptions are raised.
 - **Keep tests accurate.** When code changes, update the tests. Stale tests are worse than no tests.
 - **Test the right thing.** Each test should verify one behavior. If a test name needs "and" in it, split it.
+
+## 7. Build pipeline: version stamping
+
+The CLI binary's `version` field in `version --json` output is stamped at
+build time via `-ldflags -X`. The contract (SR-2.6) is:
+
+- **Tagged release builds** stamp clean strict SemVer 2.0 as `X.Y.Z` — no
+  leading `v`, no build metadata, no git-describe suffix, no decoration of
+  any kind. Only `skills/release-agent-director/release.sh` produces this
+  stamp; it overrides the Makefile's `VERSION_LDFLAGS` with the
+  tag-derived plain-semver value during `build_phase`.
+- **Every other build** (dev trees, CI on branches, contributor `make
+  build`, plain `go build`) stamps the dev-sentinel literal `0.0.0-dev`.
+  The library's discovery pipeline short-circuits on this value so a
+  dev-stamped binary is never classified as too old.
+
+**Contributor override.** Set `AGENT_DIRECTOR_BUILD_VERSION=X.Y.Z` to
+test strict-semver behavior against a local build. Any non-empty value
+is stamped verbatim; the caller is responsible for passing a value the
+library's strict-SemVer-2.0 parser can accept (otherwise the discovery
+pipeline will classify the binary as `unparseable-version`).
+
+The library's strict parser deliberately rejects every shape that isn't
+clean `X.Y.Z` (optionally with a `-prerelease` segment): leading `v`,
+build metadata (`+abc123`), git-describe output (`v0.6.2-13-gcd6817c`),
+whitespace, non-ASCII bytes. The build pipeline owns "clean string at
+the source" — the library does not paper over violations.

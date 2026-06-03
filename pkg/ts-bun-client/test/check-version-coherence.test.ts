@@ -37,9 +37,11 @@ const STUB_COMMIT = "abc1234";
 // Content helpers
 // ---------------------------------------------------------------------------
 
-/** Shell stub that emits a fixed version --json envelope regardless of args. */
+/** Shell stub that emits a fixed version --json envelope regardless of args.
+ *  Site-1 contract (SR-2.6, b.ue3 / Epic 1): the binary stamps plain X.Y.Z,
+ *  no leading "v". */
 function makeStub(version: string): string {
-  return `#!/bin/sh\necho '{"version":"v${version}","commit":"${STUB_COMMIT}"}'\n`;
+  return `#!/bin/sh\necho '{"version":"${version}","commit":"${STUB_COMMIT}"}'\n`;
 }
 
 function makeSkillMd(version: string): string {
@@ -287,8 +289,8 @@ const PER_SITE_CASES: Array<{
     opts: { site1Version: WRONG, site4Mode: "pin" },
     scope: "publish",
     filePath: (t) => t.linuxBinPath,
-    actual: `v${WRONG}`,
-    expected: `v${EXPECTED}`,
+    actual: WRONG,
+    expected: EXPECTED,
   },
   {
     label: "site-3a: umbrella package.json has wrong version",

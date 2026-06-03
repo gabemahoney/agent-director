@@ -122,7 +122,10 @@ function fail(
 // Site check functions
 // ---------------------------------------------------------------------------
 
-// Site 1: CLI binary `version --json` output — `version == "v${ver}"`.
+// Site 1: CLI binary `version --json` output — `version == "${ver}"`
+// (plain X.Y.Z, no leading "v"). SR-2.6 (b.ue3 / Epic 1) shifted the
+// release-stamp format from git-describe `v${ver}` to clean strict
+// SemVer 2.0; this gate enforces that shift at release time.
 // A platform whose bin/agent-director is absent is silently skipped; the
 // binary is only guaranteed present on the host platform during verify_phase.
 function checkSite1(ver: string): void {
@@ -130,7 +133,7 @@ function checkSite1(ver: string): void {
     ["site-1/linux-x64", paths.platformBins[0]],
     ["site-1/darwin-arm64", paths.platformBins[1]],
   ];
-  const expected = `v${ver}`;
+  const expected = ver;
   for (const [siteId, binPath] of platformEntries) {
     if (!existsSync(binPath)) {
       console.log(`check-version-coherence [${siteId}]: skipped — binary not present at ${binPath}`);
