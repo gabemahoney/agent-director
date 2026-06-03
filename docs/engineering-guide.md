@@ -62,3 +62,72 @@ Tests prove the code works. Missing tests mean you're guessing.
 - **Test error paths.** Don't just test the happy path — verify expected exceptions are raised.
 - **Keep tests accurate.** When code changes, update the tests. Stale tests are worse than no tests.
 - **Test the right thing.** Each test should verify one behavior. If a test name needs "and" in it, split it.
+
+## 7. Build pipeline: version stamping
+
+The CLI binary's `version` field in `version --json` output is stamped at
+build time via `-ldflags -X`. The contract (SR-2.6) is:
+
+- **Tagged release builds** stamp clean strict SemVer 2.0 as `X.Y.Z` — no
+  leading `v`, no build metadata, no git-describe suffix, no decoration of
+  any kind. Only `skills/release-agent-director/release.sh` produces this
+  stamp; it overrides the Makefile's `VERSION_LDFLAGS` with the
+  tag-derived plain-semver value during `build_phase`.
+- **Every other build** (dev trees, CI on branches, contributor `make
+  build`, plain `go build`) stamps the dev-sentinel literal `0.0.0-dev`.
+  The library's discovery pipeline short-circuits on this value so a
+  dev-stamped binary is never classified as too old.
+
+**Contributor override.** Set `AGENT_DIRECTOR_BUILD_VERSION=X.Y.Z` to
+test strict-semver behavior against a local build. Any non-empty value
+is stamped verbatim; the caller is responsible for passing a value the
+library's strict-SemVer-2.0 parser can accept (otherwise the discovery
+pipeline will classify the binary as `unparseable-version`).
+
+The library's strict parser deliberately rejects every shape that isn't
+clean `X.Y.Z` (optionally with a `-prerelease` segment): leading `v`,
+build metadata (`+abc123`), git-describe output (`v0.6.2-13-gcd6817c`),
+whitespace, non-ASCII bytes. The build pipeline owns "clean string at
+the source" — the library does not paper over violations.
+
+## 8. Library publishing posture
+
+The npm package is pure JavaScript with no lifecycle scripts. None of
+the following hook names appear in the published `package.json::scripts`:
+`preinstall`, `install`, `postinstall`, `prepare`, `prepack`, `postpack`,
+`prepublish`, `prepublishOnly`, `postpublish`, `preprepare`, `postprepare`.
+Consumers installing with `--ignore-scripts` see identical functionality.
+
+There are no `optionalDependencies`, no per-platform sub-packages, and
+no bundled CLI binary. The library discovers the system-installed CLI at
+`Client.create()` time via the SR-1 pipeline (HOME/standard-install-path
+then PATH lookup). Build orchestration lives entirely in `release.sh` and
+the `Makefile` — there is no install-time work to do on the consumer
+side beyond writing files to disk.
+
+## 9. Release-blocking gates
+
+Every release-candidate build must pass these gates before `npm publish`
+fires (SR-8.11):
+
+1. `bun test` all green (PR-merge-blocking — but also re-verified at
+   release time).
+2. `bun run typecheck` clean.
+3. `bun run lint` clean.
+4. `scripts/check-version-coherence.ts --scope verify` — all sites
+   agree on the expected version; floor-lockstep gate confirms
+   `version-floor.json` / `dist/version-floor.json` / bundled
+   `MIN_BINARY_VERSION` are in lockstep; `dist/index.js` carries no
+   `NPM_PACKAGE_VERSION` identifier or `"0.0.0"` placeholder.
+5. `scripts/check-version-coherence.ts --scope publish` — re-runs the
+   verify checks and additionally SHA-256-rounds-trips every staged
+   tarball.
+6. Docker testplans under `tickets/testplans/b.ue3/` — all nine pass on
+   `linux/x64` (`darwin/arm64` coverage is implicit via developer-host
+   integration tests).
+7. `npm publish --dry-run` produces a tarball whose composition matches
+   the SR-6.1 positive list and the SR-6.2 negative-space exclusions
+   (asserted by `pkg/ts-bun-client/test/packaging.test.ts`).
+
+Tarball size is **not** a release gate — the SRD explicitly rejects a
+numeric ceiling (SR-6.9). Size is recorded in the release notes only.

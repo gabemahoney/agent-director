@@ -26,7 +26,7 @@ test("status: happy path — returns state field for seeded spawn", async () => 
       "create-store": true,
     });
 
-    using client = new Client({ storePath, createIfMissing: true });
+    using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
     const result: StatusResult = await client.status({ claude_instance_id: spawnId });
     expect(typeof result.state).toBe("string");
     expect(result.state.length).toBeGreaterThan(0);
@@ -36,7 +36,7 @@ test("status: happy path — returns state field for seeded spawn", async () => 
 test("status: error — unknown id → ErrSpawnNotFound", async () => {
   await withTempHome(async (homeDir) => {
     const storePath = path.join(homeDir, ".agent-director", "state.db");
-    using client = new Client({ storePath, createIfMissing: true });
+    using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
 
     let caught: unknown;
     try {

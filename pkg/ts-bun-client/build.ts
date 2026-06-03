@@ -1,4 +1,4 @@
-import { rmSync } from "fs";
+import { rmSync, copyFileSync } from "fs";
 import { join } from "path";
 
 const distDir = join(import.meta.dir, "dist");
@@ -39,5 +39,12 @@ if (exitCode !== 0) {
   console.error(`tsc --emitDeclarationOnly exited with code ${exitCode}`);
   process.exit(exitCode);
 }
+
+// Step 3: copy version-floor.json into dist/ byte-for-byte (SR-5.3).
+// The JSON is a static asset shipped in the tarball; bash consumers read it
+// via `jq -r .min_binary_version < node_modules/agent-director/dist/version-floor.json`.
+const floorSrc = join(import.meta.dir, "version-floor.json");
+const floorDst = join(distDir, "version-floor.json");
+copyFileSync(floorSrc, floorDst);
 
 console.log("Build complete: dist/");

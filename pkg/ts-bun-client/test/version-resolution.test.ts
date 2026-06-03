@@ -18,7 +18,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { SubprocessClient } from "../src/internal/subprocessClient.js";
+import { Client } from "../src/client.js";
 
 const FIXTURES = path.resolve(import.meta.dir, "fixtures/epic-a");
 
@@ -65,14 +65,14 @@ afterAll(() => {
   mock.restore();
 });
 
-function makeClient(fixturePath: string): SubprocessClient {
+function makeClient(fixturePath: string): Promise<Client> {
   const dir = makeTmpDir();
-  return new SubprocessClient({
+  return Client.create({
     storePath: path.join(dir, "state.db"),
     createIfMissing: true,
     callTimeoutMs: 5000,
     _cliPath: fixturePath,
-  } as unknown as ConstructorParameters<typeof SubprocessClient>[0]);
+  } as unknown as Parameters<typeof Client.create>[0]);
 }
 
 // ---------------------------------------------------------------------------
@@ -87,7 +87,7 @@ describe("loadNpmPackageVersion cache (SR-3.3)", () => {
     "version() reads package.json exactly once across two calls (second is cache hit)",
     async () => {
       const fixturePath = path.join(FIXTURES, "sleep-and-respond.js");
-      const client = makeClient(fixturePath);
+      const client = await makeClient(fixturePath);
 
       const prevSleepMs = process.env.SLEEP_MS;
       process.env.SLEEP_MS = "0";
@@ -130,8 +130,8 @@ describe("loadNpmPackageVersion cache (SR-3.3)", () => {
     "two independent SubprocessClient instances each read package.json once",
     async () => {
       const fixturePath = path.join(FIXTURES, "sleep-and-respond.js");
-      const c1 = makeClient(fixturePath) as unknown as { version(p: object): Promise<{ version: string }> };
-      const c2 = makeClient(fixturePath) as unknown as { version(p: object): Promise<{ version: string }> };
+      const c1 = (await makeClient(fixturePath)) as unknown as { version(p: object): Promise<{ version: string }> };
+      const c2 = (await makeClient(fixturePath)) as unknown as { version(p: object): Promise<{ version: string }> };
 
       const prevSleepMs = process.env.SLEEP_MS;
       process.env.SLEEP_MS = "0";

@@ -74,7 +74,7 @@ describe("subprocess-smoke / happy paths (SR-10.3)", () => {
     await withTempHome(async (homeDir) => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
       maybeSeedOuterParent(storePath);
-      using client = new Client({ storePath, createIfMissing: true, tmuxCommand: FAKE_TMUX_BIN });
+      using client = await Client.create({ storePath, createIfMissing: true, tmuxCommand: FAKE_TMUX_BIN , _cliPath: process.env.CLI_PATH } as any);
       const r: SpawnResult = await client.spawn({ cwd: homeDir });
       expect(typeof r.claude_instance_id).toBe("string");
       expect(r.claude_instance_id.length).toBeGreaterThan(0);
@@ -86,7 +86,7 @@ describe("subprocess-smoke / happy paths (SR-10.3)", () => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
       const id = "subsmoke-status";
       runHelper("seed-spawn", { store: storePath, id, state: "working", "create-store": true });
-      using client = new Client({ storePath, createIfMissing: true });
+      using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
       const r: StatusResult = await client.status({ claude_instance_id: id });
       expect(typeof r.state).toBe("string");
     });
@@ -97,7 +97,7 @@ describe("subprocess-smoke / happy paths (SR-10.3)", () => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
       const id = "subsmoke-get";
       runHelper("seed-spawn", { store: storePath, id, state: "working", "create-store": true });
-      using client = new Client({ storePath, createIfMissing: true });
+      using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
       const r: GetResult = await client.get({ claude_instance_id: id });
       expect(r.claude_instance_id).toBe(id);
     });
@@ -110,7 +110,7 @@ describe("subprocess-smoke / happy paths (SR-10.3)", () => {
       runHelper("seed-spawn", {
         store: storePath, id, state: "working", "create-store": true,
       });
-      using client = new Client({ storePath, createIfMissing: true, tmuxCommand: FAKE_TMUX_BIN });
+      using client = await Client.create({ storePath, createIfMissing: true, tmuxCommand: FAKE_TMUX_BIN , _cliPath: process.env.CLI_PATH } as any);
       const r: SendKeysResult = await client.sendKeys({ claude_instance_id: id, text: "hi" });
       expect(typeof r).toBe("object");
     });
@@ -123,7 +123,7 @@ describe("subprocess-smoke / happy paths (SR-10.3)", () => {
       runHelper("seed-spawn", {
         store: storePath, id, state: "working", "create-store": true,
       });
-      using client = new Client({ storePath, createIfMissing: true, tmuxCommand: FAKE_TMUX_BIN });
+      using client = await Client.create({ storePath, createIfMissing: true, tmuxCommand: FAKE_TMUX_BIN , _cliPath: process.env.CLI_PATH } as any);
       const r: ReadPaneResult = await client.readPane({ claude_instance_id: id });
       expect(typeof r.pane).toBe("string");
     });
@@ -136,7 +136,7 @@ describe("subprocess-smoke / happy paths (SR-10.3)", () => {
       runHelper("seed-spawn", {
         store: storePath, id, state: "working", "create-store": true,
       });
-      using client = new Client({ storePath, createIfMissing: true, tmuxCommand: FAKE_TMUX_BIN });
+      using client = await Client.create({ storePath, createIfMissing: true, tmuxCommand: FAKE_TMUX_BIN , _cliPath: process.env.CLI_PATH } as any);
       const r: KillResult = await client.kill({ claude_instance_id: id });
       expect(typeof r).toBe("object");
     });
@@ -152,7 +152,7 @@ describe("subprocess-smoke / happy paths (SR-10.3)", () => {
       });
       const seed = runHelper("seed-permission-request", { store: storePath, "spawn-id": id, tool: "Bash" });
       const requestToken = seed["request_token"] as string;
-      using client = new Client({ storePath, createIfMissing: true });
+      using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
       const r: DecideResult = await client.decide({ claude_instance_id: id, request_token: requestToken, decision: "allow" });
       expect(typeof r).toBe("object");
     });
@@ -168,7 +168,7 @@ describe("subprocess-smoke / happy paths (SR-10.3)", () => {
       });
       const seed = runHelper("seed-permission-request", { store: storePath, "spawn-id": id, tool: "Bash" });
       const requestToken = seed["request_token"] as string;
-      using client = new Client({ storePath, createIfMissing: true });
+      using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
       const r: GetPermissionResult = await client.getPermission({ request_token: requestToken });
       expect(r.request_token).toBe(requestToken);
       expect(r.tool_name).toBe("Bash");
@@ -189,7 +189,7 @@ describe("subprocess-smoke / happy paths (SR-10.3)", () => {
       const jsonlDir = path.join(homeDir, ".claude", "projects", slugifyCwd(cwd));
       fs.mkdirSync(jsonlDir, { recursive: true });
       fs.writeFileSync(path.join(jsonlDir, `${sessionId}.jsonl`), "{}\n");
-      using client = new Client({ storePath, createIfMissing: true });
+      using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
       const r: ResumeResult = await client.resume({ claude_instance_id: id });
       expect(r.claude_instance_id).toBe(id);
     });
@@ -198,7 +198,7 @@ describe("subprocess-smoke / happy paths (SR-10.3)", () => {
   test("find-missing — returns count and ids (linux); darwin emits ErrProbeUnsupported", async () => {
     await withTempHome(async (homeDir) => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
-      using client = new Client({ storePath, createIfMissing: true });
+      using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
       if (process.platform === "linux") {
         const r: FindMissingResult = await client.findMissing({});
         expect(typeof r.count).toBe("number");
@@ -214,7 +214,7 @@ describe("subprocess-smoke / happy paths (SR-10.3)", () => {
   test("expire — returns expired count", async () => {
     await withTempHome(async (homeDir) => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
-      using client = new Client({ storePath, createIfMissing: true });
+      using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
       const r: ExpireResult = await client.expire({ older_than: "0d" });
       expect(typeof r).toBe("object");
     });
@@ -223,7 +223,7 @@ describe("subprocess-smoke / happy paths (SR-10.3)", () => {
   test("delete — returns results map", async () => {
     await withTempHome(async (homeDir) => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
-      using client = new Client({ storePath, createIfMissing: true });
+      using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
       const r: DeleteResult = await client.delete({ claude_instance_id: ["nonexistent"] });
       expect(typeof r.results).toBe("object");
     });
@@ -232,7 +232,7 @@ describe("subprocess-smoke / happy paths (SR-10.3)", () => {
   test("make-template — creates and reports name", async () => {
     await withTempHome(async (homeDir) => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
-      using client = new Client({ storePath, createIfMissing: true });
+      using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
       const r: MakeTemplateResult = await client.makeTemplate({ name: "subsmoke-tmpl" });
       expect(typeof r).toBe("object");
     });
@@ -241,7 +241,7 @@ describe("subprocess-smoke / happy paths (SR-10.3)", () => {
   test("list — returns spawns array", async () => {
     await withTempHome(async (homeDir) => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
-      using client = new Client({ storePath, createIfMissing: true });
+      using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
       const r: ListResult = await client.list({});
       expect(Array.isArray(r.spawns)).toBe(true);
     });
@@ -254,7 +254,7 @@ describe("subprocess-smoke / happy paths (SR-10.3)", () => {
       runHelper("seed-spawn", {
         store: storePath, id, state: "ended", "create-store": true,
       });
-      using client = new Client({ storePath, createIfMissing: true });
+      using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
       const r: PauseResult = await client.pause({ claude_instance_id: id });
       expect(typeof r).toBe("object");
     });
@@ -263,7 +263,7 @@ describe("subprocess-smoke / happy paths (SR-10.3)", () => {
   test("version — returns version + commit strings", async () => {
     await withTempHome(async (homeDir) => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
-      using client = new Client({ storePath, createIfMissing: true });
+      using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
       const r: VersionResult = await client.version({});
       expect(typeof r.version).toBe("string");
       expect(r.version.length).toBeGreaterThan(0);
@@ -282,7 +282,7 @@ describe("subprocess-smoke / error paths (SR-10.3)", () => {
   test("spawn: empty cwd → ErrCwdMissing", async () => {
     await withTempHome(async (homeDir) => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
-      using client = new Client({ storePath, createIfMissing: true });
+      using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
       let caught: unknown;
       try { await client.spawn({ cwd: "" }); } catch (e) { caught = e; }
       expect(caught).toBeInstanceOf(ErrCwdMissing);
@@ -293,7 +293,7 @@ describe("subprocess-smoke / error paths (SR-10.3)", () => {
   test("status: unknown id → ErrSpawnNotFound", async () => {
     await withTempHome(async (homeDir) => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
-      using client = new Client({ storePath, createIfMissing: true });
+      using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
       let caught: unknown;
       try { await client.status({ claude_instance_id: BOGUS_ID }); } catch (e) { caught = e; }
       expect(caught).toBeInstanceOf(ErrSpawnNotFound);
@@ -303,7 +303,7 @@ describe("subprocess-smoke / error paths (SR-10.3)", () => {
   test("get: unknown id → ErrSpawnNotFound", async () => {
     await withTempHome(async (homeDir) => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
-      using client = new Client({ storePath, createIfMissing: true });
+      using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
       let caught: unknown;
       try { await client.get({ claude_instance_id: BOGUS_ID }); } catch (e) { caught = e; }
       expect(caught).toBeInstanceOf(ErrSpawnNotFound);
@@ -313,7 +313,7 @@ describe("subprocess-smoke / error paths (SR-10.3)", () => {
   test("send-keys: unknown id → ErrSpawnNotFound", async () => {
     await withTempHome(async (homeDir) => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
-      using client = new Client({ storePath, createIfMissing: true });
+      using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
       let caught: unknown;
       try { await client.sendKeys({ claude_instance_id: BOGUS_ID, text: "x" }); } catch (e) { caught = e; }
       expect(caught).toBeInstanceOf(ErrSpawnNotFound);
@@ -323,7 +323,7 @@ describe("subprocess-smoke / error paths (SR-10.3)", () => {
   test("read-pane: unknown id → ErrSpawnNotFound", async () => {
     await withTempHome(async (homeDir) => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
-      using client = new Client({ storePath, createIfMissing: true });
+      using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
       let caught: unknown;
       try { await client.readPane({ claude_instance_id: BOGUS_ID }); } catch (e) { caught = e; }
       expect(caught).toBeInstanceOf(ErrSpawnNotFound);
@@ -333,7 +333,7 @@ describe("subprocess-smoke / error paths (SR-10.3)", () => {
   test("kill: unknown id → ErrSpawnNotFound", async () => {
     await withTempHome(async (homeDir) => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
-      using client = new Client({ storePath, createIfMissing: true });
+      using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
       let caught: unknown;
       try { await client.kill({ claude_instance_id: BOGUS_ID }); } catch (e) { caught = e; }
       expect(caught).toBeInstanceOf(ErrSpawnNotFound);
@@ -343,7 +343,7 @@ describe("subprocess-smoke / error paths (SR-10.3)", () => {
   test("decide: invalid decision string → ErrInvalidDecision", async () => {
     await withTempHome(async (homeDir) => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
-      using client = new Client({ storePath, createIfMissing: true });
+      using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
       let caught: unknown;
       try {
         await client.decide({ claude_instance_id: "any", request_token: "00000000-0000-0000-0000-000000000000", decision: "maybe" as "allow" });
@@ -355,7 +355,7 @@ describe("subprocess-smoke / error paths (SR-10.3)", () => {
   test("get-permission: unknown token → ErrPermissionRequestNotFound", async () => {
     await withTempHome(async (homeDir) => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
-      using client = new Client({ storePath, createIfMissing: true });
+      using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
       let caught: unknown;
       try { await client.getPermission({ request_token: "00000000-0000-0000-0000-000000000000" }); } catch (e) { caught = e; }
       expect(caught).toBeInstanceOf(ErrPermissionRequestNotFound);
@@ -365,7 +365,7 @@ describe("subprocess-smoke / error paths (SR-10.3)", () => {
   test("resume: unknown id → ErrSpawnNotFound", async () => {
     await withTempHome(async (homeDir) => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
-      using client = new Client({ storePath, createIfMissing: true });
+      using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
       let caught: unknown;
       try { await client.resume({ claude_instance_id: BOGUS_ID }); } catch (e) { caught = e; }
       expect(caught).toBeInstanceOf(ErrSpawnNotFound);
@@ -375,7 +375,7 @@ describe("subprocess-smoke / error paths (SR-10.3)", () => {
   test("make-template: unsafe name → ErrTemplateNameUnsafe", async () => {
     await withTempHome(async (homeDir) => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
-      using client = new Client({ storePath, createIfMissing: true });
+      using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
       let caught: unknown;
       try { await client.makeTemplate({ name: "a/b" }); } catch (e) { caught = e; }
       expect(caught).toBeInstanceOf(ErrTemplateNameUnsafe);
@@ -385,7 +385,7 @@ describe("subprocess-smoke / error paths (SR-10.3)", () => {
   test("list: malformed label → ErrListInvalidLabel", async () => {
     await withTempHome(async (homeDir) => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
-      using client = new Client({ storePath, createIfMissing: true });
+      using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
       let caught: unknown;
       try { await client.list({ label: ["no-equals-sign"] }); } catch (e) { caught = e; }
       expect(caught).toBeInstanceOf(ErrListInvalidLabel);
@@ -399,7 +399,7 @@ describe("subprocess-smoke / error paths (SR-10.3)", () => {
       runHelper("seed-spawn", {
         store: storePath, id, state: "working", "create-store": true,
       });
-      using client = new Client({ storePath, createIfMissing: true });
+      using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
       let caught: unknown;
       try { await client.pause({ claude_instance_id: id }); } catch (e) { caught = e; }
       expect(caught).toBeInstanceOf(ErrSpawnNotPausable);

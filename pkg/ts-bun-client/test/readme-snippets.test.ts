@@ -29,8 +29,6 @@ import {
   Client,
   AgentDirectorError,
   ErrClientClosed,
-  ErrUnsupportedPlatform,
-  ErrPlatformPackageMissing,
   ErrBunVersionTooOld,
   errorFromEnvelope,
   ErrCwdMissing,
@@ -66,7 +64,15 @@ import {
   ErrInvalidDecision,
   ErrNoOpenPermissionRequest,
   ErrAlreadyDecided,
+  MIN_BINARY_VERSION,
+  DEV_SENTINEL_VERSION,
 } from "../src/index.js";
+
+// Placeholder for README snippets that reference an unbound symbol
+// (e.g. the version-floor example that compares against a captured
+// 'binaryVersion' value before the discovery surface lands in Epic 3).
+declare const binaryVersion: string;
+void binaryVersion;
 `;
 
 // ---------------------------------------------------------------------------

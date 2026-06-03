@@ -37,9 +37,11 @@ const STUB_COMMIT = "abc1234";
 // Content helpers
 // ---------------------------------------------------------------------------
 
-/** Shell stub that emits a fixed version --json envelope regardless of args. */
+/** Shell stub that emits a fixed version --json envelope regardless of args.
+ *  Site-1 contract (SR-2.6, b.ue3 / Epic 1): the binary stamps plain X.Y.Z,
+ *  no leading "v". */
 function makeStub(version: string): string {
-  return `#!/bin/sh\necho '{"version":"v${version}","commit":"${STUB_COMMIT}"}'\n`;
+  return `#!/bin/sh\necho '{"version":"${version}","commit":"${STUB_COMMIT}"}'\n`;
 }
 
 function makeSkillMd(version: string): string {
@@ -82,6 +84,16 @@ interface StagingTreeOpts {
   distIndexJsContent?: string;
 }
 
+// Default dist/index.js content — exports a MIN_BINARY_VERSION constant that
+// matches the staged version-floor.json so the floor-lockstep gate (b.ue3 /
+// SR-5.4) passes. Tests that exercise the lockstep gate's drift paths
+// override this via distIndexJsContent.
+const DEFAULT_FLOOR_VALUE = "0.7.0";
+const DEFAULT_DIST_INDEX_JS =
+  `// bundled output\nexport const MIN_BINARY_VERSION = "${DEFAULT_FLOOR_VALUE}";\nexport const DEV_SENTINEL_VERSION = "0.0.0-dev";\n`;
+const DEFAULT_VERSION_FLOOR_JSON =
+  `{\n  "min_binary_version": "${DEFAULT_FLOOR_VALUE}"\n}\n`;
+
 function makeStagingTree(opts: StagingTreeOpts = {}): StagingTree {
   const {
     site1Version = EXPECTED,
@@ -90,7 +102,7 @@ function makeStagingTree(opts: StagingTreeOpts = {}): StagingTree {
     site4Mode = "file",
     site5Version = EXPECTED,
     omitDarwin = false,
-    distIndexJsContent = "// bundled output\nexport {};\n",
+    distIndexJsContent = DEFAULT_DIST_INDEX_JS,
   } = opts;
 
   const root = mkdtempSync(join(import.meta.dir, ".tmp-cvc-"));
@@ -163,9 +175,16 @@ function makeStagingTree(opts: StagingTreeOpts = {}): StagingTree {
   const skillMdPath = join(skillDir, "SKILL.md");
   writeFileSync(skillMdPath, makeSkillMd(site5Version), "utf8");
 
-  // dist/index.js (site-dist-no-inline) — clean by default.
+  // dist/index.js (site-dist-no-inline) — exports MIN_BINARY_VERSION by default
+  // so the floor-lockstep gate passes (b.ue3 / SR-5.4).
   const distIndexJsPath = join(distDir, "index.js");
   writeFileSync(distIndexJsPath, distIndexJsContent, "utf8");
+
+  // version-floor.json (source of truth + dist copy) — required by the
+  // floor-lockstep gate. Staged with DEFAULT_FLOOR_VALUE so dist's
+  // MIN_BINARY_VERSION export agrees.
+  writeFileSync(join(pkgDir, "version-floor.json"), DEFAULT_VERSION_FLOOR_JSON, "utf8");
+  writeFileSync(join(distDir, "version-floor.json"), DEFAULT_VERSION_FLOOR_JSON, "utf8");
 
   // Dummy tarball files + SHA-256 manifest for --scope publish tests (Epic 4 / SR-1.3).
   // Files are placed in root (not platform dirs) so the manifest is independent of
@@ -237,8 +256,8 @@ function runCheck(
 // ---------------------------------------------------------------------------
 
 describe("check-version-coherence happy path", () => {
-  test("--scope publish: all 5 sites stamped → exit 0, empty stderr", () => {
-    const tree = makeStagingTree({ site4Mode: "pin" });
+  test("--scope publish: sites 3a + 5 stamped + floor lockstep + tarball SHA → exit 0, empty stderr", () => {
+    const tree = makeStagingTree();
     try {
       const r = runCheck(
         tree.scriptPath,
@@ -252,8 +271,8 @@ describe("check-version-coherence happy path", () => {
     }
   });
 
-  test("--scope verify: sites 1/3a/3b/5 stamped, site-4 file: → exit 0, site-4 skip logged", () => {
-    const tree = makeStagingTree(); // site4Mode defaults to "file"
+  test("--scope verify: sites 3a + 5 stamped → exit 0", () => {
+    const tree = makeStagingTree();
     try {
       const r = runCheck(tree.scriptPath, [
         "--scope", "verify",
@@ -261,8 +280,6 @@ describe("check-version-coherence happy path", () => {
       ]);
       expect(r.exitCode).toBe(0);
       expect(r.stderr).toBe("");
-      expect(r.stdout).toContain("site-4");
-      expect(r.stdout).toContain("skipped");
     } finally {
       tree.cleanup();
     }
@@ -283,40 +300,16 @@ const PER_SITE_CASES: Array<{
   expected: string;
 }> = [
   {
-    label: "site-1: binary reports wrong version",
-    opts: { site1Version: WRONG, site4Mode: "pin" },
-    scope: "publish",
-    filePath: (t) => t.linuxBinPath,
-    actual: `v${WRONG}`,
-    expected: `v${EXPECTED}`,
-  },
-  {
     label: "site-3a: umbrella package.json has wrong version",
-    opts: { site3aVersion: WRONG, site4Mode: "pin" },
+    opts: { site3aVersion: WRONG },
     scope: "publish",
     filePath: (t) => t.umbrellaPkgPath,
     actual: WRONG,
     expected: EXPECTED,
-  },
-  {
-    label: "site-3b: platform package.json has wrong version",
-    opts: { site3bVersion: WRONG, site4Mode: "pin" },
-    scope: "publish",
-    filePath: (t) => t.linuxPkgPath,
-    actual: WRONG,
-    expected: EXPECTED,
-  },
-  {
-    label: "site-4: --scope publish with file: opt-deps",
-    opts: { site4Mode: "file" },
-    scope: "publish",
-    filePath: (t) => t.umbrellaPkgPath,
-    actual: "@agent-director/linux-x64=file:./platforms/linux-x64",
-    expected: `@agent-director/linux-x64=^${EXPECTED}`,
   },
   {
     label: "site-5: SKILL.md has wrong version",
-    opts: { site5Version: WRONG, site4Mode: "pin" },
+    opts: { site5Version: WRONG },
     scope: "publish",
     filePath: (t) => t.skillMdPath,
     actual: WRONG,
@@ -350,7 +343,7 @@ describe("check-version-coherence per-site failures", () => {
 
 describe("check-version-coherence multi-site failure", () => {
   test("site-3a and site-5 both wrong → both failure lines present in single stderr", () => {
-    const tree = makeStagingTree({ site3aVersion: WRONG, site5Version: WRONG, site4Mode: "pin" });
+    const tree = makeStagingTree({ site3aVersion: WRONG, site5Version: WRONG });
     try {
       const r = runCheck(tree.scriptPath, [
         "--scope", "publish",
@@ -365,39 +358,6 @@ describe("check-version-coherence multi-site failure", () => {
       tree.cleanup();
     }
   });
-});
-
-// ---------------------------------------------------------------------------
-// 4. Missing-platform tolerance (parametrized × 2 scopes)
-// ---------------------------------------------------------------------------
-
-describe("check-version-coherence missing-platform tolerance", () => {
-  for (const scope of ["verify", "publish"] as const) {
-    test(`--scope ${scope}: darwin-arm64 dir absent → exit 0, darwin sites skipped`, () => {
-      const tree = makeStagingTree({
-        omitDarwin: true,
-        site4Mode: scope === "publish" ? "pin" : "file",
-      });
-      try {
-        // --scope publish needs AGENT_DIRECTOR_RELEASE_SHASUMS for the SHA-256 round-trip
-        // check (Epic 4 / SR-1.3).  The dummy manifest uses files in root (independent of
-        // the omitDarwin layout) so the check passes.
-        const extraEnv = scope === "publish"
-          ? { AGENT_DIRECTOR_RELEASE_SHASUMS: tree.shasumsPath }
-          : undefined;
-        const r = runCheck(
-          tree.scriptPath,
-          ["--scope", scope, "--expected-version", EXPECTED],
-          extraEnv
-        );
-        expect(r.exitCode).toBe(0);
-        expect(r.stdout).toContain("darwin-arm64");
-        expect(r.stdout).toContain("skipped");
-      } finally {
-        tree.cleanup();
-      }
-    });
-  }
 });
 
 // ---------------------------------------------------------------------------

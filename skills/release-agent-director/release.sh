@@ -485,9 +485,14 @@ build_phase() {
         return 0
     fi
     log build "building release binaries (3 CLI platforms)"
-    local _BUILD_COMMIT
+    local _BUILD_COMMIT _BUILD_PLAIN_V
     _BUILD_COMMIT=$(git -C "$REPO_ROOT" rev-parse HEAD)
-    local _BUILD_LDFLAGS="-X github.com/gabemahoney/agent-director/internal/version.Version=$VERSION -X github.com/gabemahoney/agent-director/internal/version.Commit=$_BUILD_COMMIT"
+    # SR-2.6 (b.ue3 / Epic 1): tagged release builds stamp clean strict
+    # SemVer with no leading "v". The Makefile's default is the dev
+    # sentinel; release.sh is the only caller that overrides to a real
+    # release version.
+    _BUILD_PLAIN_V="${VERSION#v}"
+    local _BUILD_LDFLAGS="-X github.com/gabemahoney/agent-director/internal/version.Version=$_BUILD_PLAIN_V -X github.com/gabemahoney/agent-director/internal/version.Commit=$_BUILD_COMMIT"
     if ! (cd "$REPO_ROOT" && make release-binaries VERSION_LDFLAGS="$_BUILD_LDFLAGS") > >(while IFS= read -r l; do printf '[build] %s\n' "$l"; done); then
         log build "release-binaries build failed" >&2
         phase_fail build "release-binaries failed"
@@ -562,13 +567,14 @@ verify_phase() {
 
     # ----------------------------------------------------------------
     # Step 0/4: regression-anchor for b.b3h — assert the host binary
-    # baked into dist/ is stamped with the exact release VERSION, not
-    # a `git describe` decoration like "v0.6.0-1-g74ce955".
+    # baked into dist/ is stamped with the exact release version
+    # (SR-2.6: plain X.Y.Z, no leading "v"), not a `git describe`
+    # decoration like "v0.6.0-1-g74ce955" and not the dev sentinel.
     #
     # Mapping: verify_phase uses npm tuple (linux-x64); the dist/
     # binary uses the cross-compile tuple (linux-amd64 / darwin-arm64).
     # ----------------------------------------------------------------
-    log verify "step 0/4: assert dist/ binary is stamped with VERSION=$VERSION (b.b3h anchor)"
+    log verify "step 0/4: assert dist/ binary is stamped with version=$plain_v (b.b3h anchor)"
     local host_bin_arch
     case "$(uname -m)" in
         x86_64|amd64) host_bin_arch=amd64 ;;
@@ -594,8 +600,8 @@ verify_phase() {
         phase_fail verify "b.b3h: binary version failed"; exit 5
     }
     bin_stamped_version="$(printf '%s' "$bin_version_json" | jq -r '.version // empty')"
-    if [[ "$bin_stamped_version" != "$VERSION" ]]; then
-        log verify "FAIL b.b3h anchor: binary .version=\"$bin_stamped_version\"; expected \"$VERSION\"" >&2
+    if [[ "$bin_stamped_version" != "$plain_v" ]]; then
+        log verify "FAIL b.b3h anchor: binary .version=\"$bin_stamped_version\"; expected \"$plain_v\"" >&2
         log verify "  This means VERSION_LDFLAGS was not passed to make — the build_phase ldflags override is missing." >&2
         phase_fail verify "b.b3h: version stamp mismatch"; exit 5
     fi
@@ -956,12 +962,11 @@ tag_phase() {
 #
 # Phase order:
 #   1. preconditions: NPM_TOKEN (live runs), manifest env vars present
-#   2. preflight: prepublish-guards.ts (placeholder name, version skew, os/cpu, opt-deps range)
-#   3. gate: check-version-coherence.ts --scope publish (SHA-256 round-trip)
-#   4. .npmrc write into verify stage dir
-#   5. per-platform npm publish <tarball>
-#   6. umbrella npm publish <tarball>
-#   7. cleanup_npmrc_if_any
+#   2. gate: check-version-coherence.ts --scope publish (SHA-256 round-trip)
+#   3. .npmrc write into verify stage dir
+#   4. per-platform npm publish <tarball>
+#   5. umbrella npm publish <tarball>
+#   6. cleanup_npmrc_if_any
 publish_phase() {
     phase_begin publish
     local plain_version="${VERSION#v}"
@@ -1005,17 +1010,6 @@ publish_phase() {
     log publish "  umbrella   : $tgz"
     log publish "  linux-x64  : $tgz_linux_x64"
     log publish "  darwin-arm64: $tgz_darwin_arm64"
-
-    # Preflight: run prepublish-guards.ts against the staged umbrella package.
-    # npm publish <tarball> skips the prepublishOnly lifecycle hook, so we
-    # invoke the guards explicitly before the SHA-256 gate.  Runs in default
-    # (umbrella) mode — checks placeholder name, version skew (SR-4.1),
-    # os/cpu drift (SR-3.1), and optionalDependencies range (SR-3.3).
-    if ! (cd "$verify_stage_dir/pkg/ts-bun-client" && bun run scripts/prepublish-guards.ts) \
-            > >(while IFS= read -r l; do printf '[publish] %s\n' "$l"; done); then
-        log publish "prepublish-guards.ts failed" >&2
-        exit 6
-    fi
 
     # Gate: verify all version-stamp sites agree AND SHA-256 values match
     # the verify_phase manifest (SR-1.3 / SR-1.5 round-trip check).

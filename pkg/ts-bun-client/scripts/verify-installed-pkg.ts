@@ -135,7 +135,7 @@ async function runSmoke(): Promise<void> {
       ctorOpts._cliPath = devCliPath;
     }
 
-    const client = new Client(ctorOpts);
+    const client = await Client.create(ctorOpts);
 
     // version() should return { version: string, commit: string } (SRD SR-7).
     const result = await client.version({});
@@ -201,7 +201,7 @@ async function runFull(): Promise<void> {
     ctorOpts._cliPath = devCliPath;
   }
 
-  const client = new Client(ctorOpts);
+  const client = await Client.create(ctorOpts);
 
   // Use a run-unique name so a leftover from a crashed prior run never causes
   // makeTemplate-create to spuriously fail with ErrTemplateExists.

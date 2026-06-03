@@ -24,7 +24,7 @@ beforeAll(async () => {
 test("version: happy path — returns version and commit strings", async () => {
   await withTempHome(async (homeDir) => {
     const storePath = path.join(homeDir, ".agent-director", "state.db");
-    using client = new Client({ storePath, createIfMissing: true });
+    using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
     const result: VersionResult = await client.version({});
     expect(typeof result.version).toBe("string");
     expect(result.version.length).toBeGreaterThan(0);

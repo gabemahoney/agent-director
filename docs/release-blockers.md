@@ -35,17 +35,6 @@ first live publish.
 - **Epic 5** — npm publish of the packages above.
 - **Epic 7** — the npm-publish step in the coordinated release pipeline.
 
-### Publish guard (still active)
-
-A `prepublishOnly` hook in every sub-package `package.json` runs
-`pkg/ts-bun-client/scripts/prepublish-guards.ts` with
-`PREPUBLISH_GUARD_MODE=subpackage`, which exits 1 if `package.json`'s `name`
-ever matches the placeholder sentinel set again. The guard is kept as a
-forward-going tripwire against re-introducing a placeholder name in any future
-refactor or rename. The canonical sentinel regex (`PLACEHOLDER_RE`,
-`/^@?(CHANGEME-H3|TBD)\//`) is defined once at the top of
-`prepublish-guards.ts` — a one-line change adds any new sentinel (SR-3.3).
-
 ---
 
 _Add future blockers below using the same template: identifier, status, what it

@@ -20,7 +20,7 @@ import type { FindMissingResult } from "../../src/index.js";
 test("find-missing: happy path — empty store returns count=0", async () => {
   await withTempHome(async (homeDir) => {
     const storePath = path.join(homeDir, ".agent-director", "state.db");
-    using client = new Client({ storePath, createIfMissing: true });
+    using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
     const result: FindMissingResult = await client.findMissing({});
     expect(typeof result.count).toBe("number");
     expect(result.count).toBe(0);

@@ -34,7 +34,7 @@ test("send-keys: happy path — delivers text to waiting spawn", async () => {
       "create-store": true,
     });
 
-    using client = new Client({ storePath, createIfMissing: true, tmuxCommand: fakeTmuxBin });
+    using client = await Client.create({ storePath, createIfMissing: true, tmuxCommand: fakeTmuxBin , _cliPath: process.env.CLI_PATH } as any);
     // SendKeysResult is an empty object; just assert no throw.
     const result = await client.sendKeys({
       claude_instance_id: spawnId,
@@ -48,7 +48,7 @@ test("send-keys: happy path — delivers text to waiting spawn", async () => {
 test("send-keys: error — unknown id → ErrSpawnNotFound", async () => {
   await withTempHome(async (homeDir) => {
     const storePath = path.join(homeDir, ".agent-director", "state.db");
-    using client = new Client({ storePath, createIfMissing: true });
+    using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
 
     let caught: unknown;
     try {

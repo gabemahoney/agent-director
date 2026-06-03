@@ -147,10 +147,28 @@ func mergePermissions(p *Permissions, disableAUQ bool) (allow, deny, ask []strin
 	return allow, deny, ask
 }
 
-// executablePath returns the absolute path to the currently-running
-// binary. Linux's /proc/self/exe and macOS's _NSGetExecutablePath are
-// both wrapped by os.Executable; we follow up with filepath.Abs in case
-// os.Executable returned a symlink-y path.
+// executablePath returns the absolute, symlink-resolved path to the
+// currently-running binary. The result is written verbatim into every
+// hook command this spawn-side pipeline produces (SR-1.8, b.ue3).
+//
+// Mechanism (SR-1.8):
+//
+//	os.Executable()  → kernel-reported path (Linux's /proc/self/exe,
+//	                   macOS's _NSGetExecutablePath); already absolute on
+//	                   both supported platforms.
+//	filepath.EvalSymlinks(...) → chases any symlinks in the path so the
+//	                   hook command points at the real on-disk file.
+//
+// Stability assumption (load-bearing per SR-1.8): install.sh writes the
+// AD CLI binary to ~/.agent-director/bin/agent-director and re-runs of
+// install.sh overwrite the file at the same absolute path — the
+// directory entry's identity is stable across re-installs even though
+// the file's inode may change.  Hook commands captured into a spawned
+// Claude session therefore continue to invoke the same path after an
+// in-place upgrade.  If install.sh is ever changed to write to a
+// per-version path (e.g. ~/.agent-director/bin/agent-director-0.7.0),
+// the spawn-side hook contract breaks and this site plus the
+// architecture doc need synchronized updates.
 //
 // Held as a var so tests can stub it without touching the actual filesystem.
 var executablePath = func() (string, error) {
@@ -158,7 +176,17 @@ var executablePath = func() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Abs(exe)
+	abs, err := filepath.Abs(exe)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		// If the binary is gone between exec and resolve, fall back to
+		// the absolute non-resolved path — better than failing the spawn.
+		return abs, nil
+	}
+	return resolved, nil
 }
 
 // helpHookBinPath returns the canonical install-tree path of the
