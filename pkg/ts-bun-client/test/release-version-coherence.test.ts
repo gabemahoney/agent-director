@@ -151,15 +151,11 @@ test(
     // -----------------------------------------------------------------------
 
     const liveUmbrellaPkg  = join(PKG_DIR, "package.json");
-    const liveLinuxPkg     = join(PKG_DIR, "platforms", "linux-x64", "package.json");
-    const liveDarwinPkg    = join(PKG_DIR, "platforms", "darwin-arm64", "package.json");
     const liveSkillMd      = join(REPO_ROOT, "skills", "install-agent-director", "SKILL.md");
     const liveDistIndexJs  = join(PKG_DIR, "dist", "index.js");
 
     const sentinels = {
       umbrellaRaw:  readFileSync(liveUmbrellaPkg, "utf8"),
-      linuxPkgRaw:  readFileSync(liveLinuxPkg, "utf8"),
-      darwinPkgRaw: readFileSync(liveDarwinPkg, "utf8"),
       skillMdRaw:   readFileSync(liveSkillMd, "utf8"),
       distHash:     existsSync(liveDistIndexJs) ? sha256OfFile(liveDistIndexJs) : null,
     };
@@ -199,20 +195,8 @@ test(
       rmSync(join(stagePkgDir, "node_modules"), { recursive: true, force: true });
       rmSync(join(stagePkgDir, "skills"), { recursive: true, force: true });
 
-      // Wipe staged platform binaries — setup.ts stages the dev binary into
-      // platforms/*/bin/; check-version-coherence.ts site-1 would fail against
-      // a dev-versioned binary. With binaries absent, site-1 is skipped as
-      // "binary not present", which is the verify_phase semantic.
-      // (release.sh builds the binary with -X ...Version=vX.Y.Z ldflags in
-      // build_phase BEFORE verify_phase runs the gate; we can't replicate that.)
-      // The dev binary is re-injected below after the coherence gate for the
-      // consumer install step.
-      rmSync(join(stagePkgDir, "platforms", "linux-x64", "bin"), { recursive: true, force: true });
-      rmSync(join(stagePkgDir, "platforms", "darwin-arm64", "bin"), { recursive: true, force: true });
-
       // -----------------------------------------------------------------------
-      // Step 5: Stamp version sites (no opt-deps — file: paths must survive for
-      // the consumer install to resolve platforms/ locally).
+      // Step 5: Stamp version sites (b.ue3 / Epic 4 — umbrella + skill only).
       //
       // Run the STAGED copy via a relative path so import.meta.url resolves
       // within the stage dir — mirrors release.sh `cd $stage_dir && bun run
@@ -224,7 +208,6 @@ test(
           "bun", "run", "scripts/version-bump.ts",
           "--version", TARGET_VERSION,
           "--target", "umbrella-version",
-          "--target", "platform-version",
           "--target", "skill-frontmatter",
         ],
         { cwd: stagePkgDir }
@@ -246,18 +229,11 @@ test(
       );
       expect(coherenceResult.exitCode).toBe(0);
 
-      // Re-inject the dev binary into the staged platform dir so the consumer
-      // install step can wire the CLI into node_modules. The binary version
-      // stamp is irrelevant here: client.version() reads the npm package
-      // version from package.json (9.9.9), not the CLI binary version.
-      const stageBinDir = join(stagePkgDir, "platforms", platformTuple, "bin");
-      mkdirSync(stageBinDir, { recursive: true });
-      const stageBinPath = join(stageBinDir, "agent-director");
-      cpSync(cliPath, stageBinPath);
-      chmodSync(stageBinPath, 0o755); // cpSync does not preserve mode
-
       // -----------------------------------------------------------------------
       // Step 7: bun install → bun run build → bun pm pack --ignore-scripts
+      // (b.ue3 / Epic 4: no platform binary staging, no stage-skill.ts —
+      // skills/install-agent-director ships in release tarballs separately
+      // from the npm package; the npm tarball is library-only.)
       // -----------------------------------------------------------------------
 
       const installResult = await spawn(
@@ -271,15 +247,6 @@ test(
         { cwd: stagePkgDir }
       );
       expect(buildResult.exitCode).toBe(0);
-
-      // stage-skill.ts copies skills/ into pkg/ts-bun-client/skills/ so the
-      // postinstall script finds the skill body inside the tarball. release.sh
-      // calls this explicitly because bun pm pack --ignore-scripts skips prepack.
-      const stageSkillResult = await spawn(
-        ["bun", "run", "scripts/stage-skill.ts"],
-        { cwd: stagePkgDir }
-      );
-      expect(stageSkillResult.exitCode).toBe(0);
 
       const packResult = await spawn(
         ["bun", "pm", "pack", "--ignore-scripts"],
@@ -296,10 +263,10 @@ test(
       const tgzPath = join(stagePkgDir, tgzFiles[0] as string);
 
       // -----------------------------------------------------------------------
-      // Step 8: Consumer fixture — sandboxed HOME, bun add via file: URLs only.
+      // Step 8: Consumer fixture — sandboxed HOME, bun add via file: URL.
+      // b.ue3 / Epic 4: no @agent-director/<platform> sub-package; the
+      // umbrella tarball is the entire library install surface.
       // -----------------------------------------------------------------------
-
-      const stagePlatformDir = join(stagePkgDir, "platforms", platformTuple);
 
       writeFileSync(
         join(consumerDir, "package.json"),
@@ -308,7 +275,6 @@ test(
             name: "ad-rvc-consumer",
             version: "0.0.1",
             type: "module",
-            trustedDependencies: ["agent-director", `@agent-director/${platformTuple}`],
           },
           null,
           2
@@ -317,11 +283,7 @@ test(
       );
 
       const addResult = await spawn(
-        [
-          "bun", "add",
-          `file:${tgzPath}`,
-          `@agent-director/${platformTuple}@file:${stagePlatformDir}`,
-        ],
+        ["bun", "add", `file:${tgzPath}`],
         {
           cwd: consumerDir,
           env: { HOME: sandboxedHome },
@@ -411,8 +373,6 @@ test(
     // -----------------------------------------------------------------------
 
     expect(readFileSync(liveUmbrellaPkg, "utf8")).toBe(sentinels.umbrellaRaw);
-    expect(readFileSync(liveLinuxPkg, "utf8")).toBe(sentinels.linuxPkgRaw);
-    expect(readFileSync(liveDarwinPkg, "utf8")).toBe(sentinels.darwinPkgRaw);
     expect(readFileSync(liveSkillMd, "utf8")).toBe(sentinels.skillMdRaw);
 
     if (sentinels.distHash !== null) {

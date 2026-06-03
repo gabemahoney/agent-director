@@ -256,8 +256,8 @@ function runCheck(
 // ---------------------------------------------------------------------------
 
 describe("check-version-coherence happy path", () => {
-  test("--scope publish: all 5 sites stamped → exit 0, empty stderr", () => {
-    const tree = makeStagingTree({ site4Mode: "pin" });
+  test("--scope publish: sites 3a + 5 stamped + floor lockstep + tarball SHA → exit 0, empty stderr", () => {
+    const tree = makeStagingTree();
     try {
       const r = runCheck(
         tree.scriptPath,
@@ -271,8 +271,8 @@ describe("check-version-coherence happy path", () => {
     }
   });
 
-  test("--scope verify: sites 1/3a/3b/5 stamped, site-4 file: → exit 0, site-4 skip logged", () => {
-    const tree = makeStagingTree(); // site4Mode defaults to "file"
+  test("--scope verify: sites 3a + 5 stamped → exit 0", () => {
+    const tree = makeStagingTree();
     try {
       const r = runCheck(tree.scriptPath, [
         "--scope", "verify",
@@ -280,8 +280,6 @@ describe("check-version-coherence happy path", () => {
       ]);
       expect(r.exitCode).toBe(0);
       expect(r.stderr).toBe("");
-      expect(r.stdout).toContain("site-4");
-      expect(r.stdout).toContain("skipped");
     } finally {
       tree.cleanup();
     }
@@ -302,40 +300,16 @@ const PER_SITE_CASES: Array<{
   expected: string;
 }> = [
   {
-    label: "site-1: binary reports wrong version",
-    opts: { site1Version: WRONG, site4Mode: "pin" },
-    scope: "publish",
-    filePath: (t) => t.linuxBinPath,
-    actual: WRONG,
-    expected: EXPECTED,
-  },
-  {
     label: "site-3a: umbrella package.json has wrong version",
-    opts: { site3aVersion: WRONG, site4Mode: "pin" },
+    opts: { site3aVersion: WRONG },
     scope: "publish",
     filePath: (t) => t.umbrellaPkgPath,
     actual: WRONG,
     expected: EXPECTED,
-  },
-  {
-    label: "site-3b: platform package.json has wrong version",
-    opts: { site3bVersion: WRONG, site4Mode: "pin" },
-    scope: "publish",
-    filePath: (t) => t.linuxPkgPath,
-    actual: WRONG,
-    expected: EXPECTED,
-  },
-  {
-    label: "site-4: --scope publish with file: opt-deps",
-    opts: { site4Mode: "file" },
-    scope: "publish",
-    filePath: (t) => t.umbrellaPkgPath,
-    actual: "@agent-director/linux-x64=file:./platforms/linux-x64",
-    expected: `@agent-director/linux-x64=^${EXPECTED}`,
   },
   {
     label: "site-5: SKILL.md has wrong version",
-    opts: { site5Version: WRONG, site4Mode: "pin" },
+    opts: { site5Version: WRONG },
     scope: "publish",
     filePath: (t) => t.skillMdPath,
     actual: WRONG,
@@ -369,7 +343,7 @@ describe("check-version-coherence per-site failures", () => {
 
 describe("check-version-coherence multi-site failure", () => {
   test("site-3a and site-5 both wrong → both failure lines present in single stderr", () => {
-    const tree = makeStagingTree({ site3aVersion: WRONG, site5Version: WRONG, site4Mode: "pin" });
+    const tree = makeStagingTree({ site3aVersion: WRONG, site5Version: WRONG });
     try {
       const r = runCheck(tree.scriptPath, [
         "--scope", "publish",
@@ -384,39 +358,6 @@ describe("check-version-coherence multi-site failure", () => {
       tree.cleanup();
     }
   });
-});
-
-// ---------------------------------------------------------------------------
-// 4. Missing-platform tolerance (parametrized × 2 scopes)
-// ---------------------------------------------------------------------------
-
-describe("check-version-coherence missing-platform tolerance", () => {
-  for (const scope of ["verify", "publish"] as const) {
-    test(`--scope ${scope}: darwin-arm64 dir absent → exit 0, darwin sites skipped`, () => {
-      const tree = makeStagingTree({
-        omitDarwin: true,
-        site4Mode: scope === "publish" ? "pin" : "file",
-      });
-      try {
-        // --scope publish needs AGENT_DIRECTOR_RELEASE_SHASUMS for the SHA-256 round-trip
-        // check (Epic 4 / SR-1.3).  The dummy manifest uses files in root (independent of
-        // the omitDarwin layout) so the check passes.
-        const extraEnv = scope === "publish"
-          ? { AGENT_DIRECTOR_RELEASE_SHASUMS: tree.shasumsPath }
-          : undefined;
-        const r = runCheck(
-          tree.scriptPath,
-          ["--scope", scope, "--expected-version", EXPECTED],
-          extraEnv
-        );
-        expect(r.exitCode).toBe(0);
-        expect(r.stdout).toContain("darwin-arm64");
-        expect(r.stdout).toContain("skipped");
-      } finally {
-        tree.cleanup();
-      }
-    });
-  }
 });
 
 // ---------------------------------------------------------------------------

@@ -89,3 +89,18 @@ clean `X.Y.Z` (optionally with a `-prerelease` segment): leading `v`,
 build metadata (`+abc123`), git-describe output (`v0.6.2-13-gcd6817c`),
 whitespace, non-ASCII bytes. The build pipeline owns "clean string at
 the source" — the library does not paper over violations.
+
+## 8. Library publishing posture
+
+The npm package is pure JavaScript with no lifecycle scripts. None of
+the following hook names appear in the published `package.json::scripts`:
+`preinstall`, `install`, `postinstall`, `prepare`, `prepack`, `postpack`,
+`prepublish`, `prepublishOnly`, `postpublish`, `preprepare`, `postprepare`.
+Consumers installing with `--ignore-scripts` see identical functionality.
+
+There are no `optionalDependencies`, no per-platform sub-packages, and
+no bundled CLI binary. The library discovers the system-installed CLI at
+`Client.create()` time via the SR-1 pipeline (HOME/standard-install-path
+then PATH lookup). Build orchestration lives entirely in `release.sh` and
+the `Makefile` — there is no install-time work to do on the consumer
+side beyond writing files to disk.

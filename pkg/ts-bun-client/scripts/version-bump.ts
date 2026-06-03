@@ -70,9 +70,7 @@ if (!/^\d+\.\d+\.\d+$/.test(version)) {
 
 const VALID_SELECTORS = [
   "umbrella-version",
-  "platform-version",
   "skill-frontmatter",
-  "opt-deps",
 ] as const;
 type Selector = (typeof VALID_SELECTORS)[number];
 
@@ -95,13 +93,12 @@ for (let i = 0; i < args.length; i++) {
   }
 }
 
-// Canonical run-all order: platform-version first so platform package.json
-// versions are consistent before the umbrella is stamped; skill-frontmatter
-// last because it is the most structurally sensitive operation.
+// Canonical run-all order: umbrella first, then skill-frontmatter (the
+// most structurally sensitive operation). After b.ue3 / Epic 4 the
+// vendored-binary platforms/ tree is gone so platform-version and
+// opt-deps are no longer needed.
 const ALL_SELECTORS: Selector[] = [
-  "platform-version",
   "umbrella-version",
-  "opt-deps",
   "skill-frontmatter",
 ];
 
@@ -118,8 +115,6 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 interface RepoPaths {
   /** pkg/ts-bun-client/package.json */
   umbrellaJson: string;
-  /** [linux-x64/package.json, darwin-arm64/package.json] */
-  platformJsons: [string, string];
   /** [skills/install-agent-director/SKILL.md] */
   skillMds: [string];
 }
@@ -127,10 +122,6 @@ interface RepoPaths {
 function resolveRepoPaths(dir: string): RepoPaths {
   return {
     umbrellaJson: resolve(dir, "../package.json"),
-    platformJsons: [
-      resolve(dir, "../platforms/linux-x64/package.json"),
-      resolve(dir, "../platforms/darwin-arm64/package.json"),
-    ],
     skillMds: [
       resolve(dir, "../../../skills/install-agent-director/SKILL.md"),
     ],
@@ -155,28 +146,6 @@ function bumpUmbrellaVersion(pkgPath: string, ver: string): void {
   console.log(
     `version-bump [umbrella-version]: set version=${ver} in ${pkgPath}`
   );
-}
-
-// ---------------------------------------------------------------------------
-// Target: platform-version
-// ---------------------------------------------------------------------------
-
-function bumpPlatformVersions(pkgPaths: [string, string], ver: string): void {
-  for (const pkgPath of pkgPaths) {
-    const raw = readFileSync(pkgPath, "utf8");
-    const pkg = JSON.parse(raw) as { version?: string; [k: string]: unknown };
-    if (pkg.version === ver) {
-      console.log(
-        `version-bump [platform-version]: already at ${ver} — skipped (${pkgPath})`
-      );
-      continue;
-    }
-    pkg.version = ver;
-    writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n", "utf8");
-    console.log(
-      `version-bump [platform-version]: set version=${ver} in ${pkgPath}`
-    );
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -258,50 +227,13 @@ function bumpSkillFrontmatter(skillPaths: [string], ver: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Target: opt-deps
-// ---------------------------------------------------------------------------
-
-function bumpOptDeps(pkgPath: string, ver: string): void {
-  const pin = `^${ver}`;
-  const raw = readFileSync(pkgPath, "utf8");
-  const pkg = JSON.parse(raw) as {
-    optionalDependencies?: Record<string, string>;
-    [k: string]: unknown;
-  };
-
-  const optDeps = pkg.optionalDependencies ?? {};
-  const OPTIONAL_NAMES = [
-    "@agent-director/linux-x64",
-    "@agent-director/darwin-arm64",
-  ];
-
-  const alreadyPinned = OPTIONAL_NAMES.every((name) => optDeps[name] === pin);
-  if (alreadyPinned) {
-    console.log(`version-bump [opt-deps]: already at ${pin} — skipped`);
-    return;
-  }
-
-  for (const name of OPTIONAL_NAMES) {
-    if (name in optDeps) {
-      optDeps[name] = pin;
-    }
-  }
-  writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n", "utf8");
-  console.log(
-    `version-bump [opt-deps]: rewrote optionalDependencies to ${pin} in ${pkgPath}`
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Path validation — all target paths must exist before any mutation runs
 // ---------------------------------------------------------------------------
 
 function requiredPaths(sel: Selector): string[] {
   switch (sel) {
     case "umbrella-version": return [paths.umbrellaJson];
-    case "platform-version": return [...paths.platformJsons];
     case "skill-frontmatter": return [...paths.skillMds];
-    case "opt-deps":         return [paths.umbrellaJson];
   }
 }
 
@@ -329,14 +261,8 @@ for (const target of selectedTargets) {
     case "umbrella-version":
       bumpUmbrellaVersion(paths.umbrellaJson, version);
       break;
-    case "platform-version":
-      bumpPlatformVersions(paths.platformJsons, version);
-      break;
     case "skill-frontmatter":
       bumpSkillFrontmatter(paths.skillMds, version);
-      break;
-    case "opt-deps":
-      bumpOptDeps(paths.umbrellaJson, version);
       break;
   }
 }

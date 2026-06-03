@@ -12,9 +12,7 @@
     "dist/**/*.d.ts",
     "dist/version-floor.json",
     "!dist/**/*.test.*",
-    "README.md",
-    "scripts/postinstall.ts",
-    "skills/install-agent-director/**"
+    "README.md"
   ],
   "exports": {
     ".": {
@@ -30,17 +28,8 @@
     "test": "bun test",
     "smoke": "bun test test/smoke/ test/smoke-invariants.test.ts",
     "envelope-diff": "bun test test/envelope-diff.test.ts test/envelope-diff-invariants.test.ts",
-    "prepare-platforms": "bun run scripts/prepare-platforms.ts",
-    "stage-skill": "bun run scripts/stage-skill.ts",
-    "prepack": "bun run build && bun run scripts/stage-skill.ts",
-    "postinstall": "bun run scripts/postinstall.ts",
     "version-bump-publish": "bun run scripts/version-bump.ts",
-    "prepublishOnly": "bun run scripts/prepublish-guards.ts",
     "verify-installed-pkg": "bun run scripts/verify-installed-pkg.ts"
-  },
-  "optionalDependencies": {
-    "@agent-director/linux-x64": "file:./platforms/linux-x64",
-    "@agent-director/darwin-arm64": "file:./platforms/darwin-arm64"
   },
   "devDependencies": {
     "typescript": ">=5.2.0",
