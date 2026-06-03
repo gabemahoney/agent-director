@@ -18,14 +18,24 @@ CLAUDE_CODE_VERSION ?= 2.1.120
 # under a different name without editing the file.
 TEST_IMAGE ?= agent-director-test
 
-# Version stamp embedded via -ldflags -X. Resolved at make time so a
-# bare `go build` (no make) still works — it just falls back to the
-# defaults in internal/version. The shell fallbacks let `make build`
-# survive when run outside a git checkout (e.g. from a release tarball):
-# git describe / rev-parse return empty and we substitute the package
-# defaults.
+# Version stamp embedded via -ldflags -X. Per SR-2.6 (b.ue3 / Epic 1):
+# every non-tagged-release build stamps the dev sentinel literal
+# `0.0.0-dev`; only tagged-release builds stamp clean strict SemVer
+# (X.Y.Z, no leading "v", no git-describe suffix, no build metadata).
+# release.sh overrides VERSION_LDFLAGS with the tag-derived plain-semver
+# value at release time; everything else (dev trees, CI on branches,
+# contributor `make build`) falls into the dev-sentinel branch.
+#
+# Contributor override: set AGENT_DIRECTOR_BUILD_VERSION=X.Y.Z (or
+# equivalent) to test strict-semver behavior against a local build.
+# Any non-empty value is stamped verbatim; the caller is responsible
+# for passing a value the discovery pipeline can parse.
 VERSION_PKG     := github.com/gabemahoney/agent-director/internal/version
-VERSION_STR     := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+ifneq ($(strip $(AGENT_DIRECTOR_BUILD_VERSION)),)
+VERSION_STR     := $(AGENT_DIRECTOR_BUILD_VERSION)
+else
+VERSION_STR     := 0.0.0-dev
+endif
 COMMIT_SHA      := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 VERSION_LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION_STR) -X $(VERSION_PKG).Commit=$(COMMIT_SHA)
 

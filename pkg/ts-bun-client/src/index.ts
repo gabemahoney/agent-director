@@ -3,15 +3,31 @@
  */
 export { Client } from "./client.js";
 
+// Standalone discovery surface (SR-4.3).  Same SR-1 → SR-2.3 pipeline as
+// Client.create(); resolves with { path, version } or rejects with the same
+// four typed errors.
+export { resolveSystemBinary } from "./client.js";
+export type {
+  ResolveSystemBinaryResult,
+  ResolveSystemBinaryOptions,
+} from "./client.js";
+
+// Version-floor constants (SR-4.5 / SR-5).
+export {
+  MIN_BINARY_VERSION,
+  DEV_SENTINEL_VERSION,
+} from "./internal/constants.js";
+
 // Error classes and factory.
 export {
   AgentDirectorError,
   ErrClientClosed,
-  ErrUnsupportedPlatform,
-  ErrPlatformPackageMissing,
   ErrBunVersionTooOld,
-  // Subprocess-pipeline TS-only errors (additive; SRD Epic A SR-2.3/SR-4.3/SR-5.4/SR-6.5).
-  ErrCliNotExecutable,
+  // System-install discovery errors (b.ue3 / SR-3 / SR-4.4).
+  ErrSystemInstallNotFound,
+  ErrSystemInstallTooOld,
+  ErrSystemInstallUnreachable,
+  // Subprocess-pipeline TS-only errors (SRD Epic A SR-2.3/SR-4.3/SR-5.4/SR-6.5).
   ErrConsumerSignal,
   ErrCallTimeout,
   ErrUnknownErrorName,
@@ -55,6 +71,9 @@ export {
   ErrMissingRequestToken,
   ErrInvalidFlags,
 } from "./errors.js";
+
+// Companion types for the new discovery errors (SR-4.4).
+export type { CheckedLocation, UnreachableReason } from "./errors.js";
 
 // Shared types and options.
 export type { ClientOptions, Logger } from "./types.js";

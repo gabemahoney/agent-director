@@ -95,3 +95,13 @@ test("public-surface: golden tracks all three TRACKED files", () => {
     expect(fs.existsSync(goldenPath)).toBe(true);
   }
 });
+
+test("public-surface: dist/index.d.ts does not leak _cliPath (SR-4.9)", () => {
+  // The SR-4.1 fence: `_cliPath` is a covert DI hatch on the runtime
+  // ClientOptions object but is NOT typed on the public interface.  This
+  // assertion guards against a future refactor that accidentally widens
+  // ClientOptions (or any other exported interface) to expose the field.
+  const distIndexDts = path.join(distDir, "index.d.ts");
+  const src = fs.readFileSync(distIndexDts, "utf-8");
+  expect(src).not.toContain("_cliPath");
+});

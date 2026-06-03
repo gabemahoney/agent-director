@@ -46,6 +46,15 @@ export class Client {
 
   constructor(_opts: Record<string, unknown>) {}
 
+  /**
+   * Async factory mirroring the real Client.create() shape (b.ue3 / SR-4.1).
+   * The fake Client.create just allocates the test double; no discovery
+   * pipeline is needed.
+   */
+  static async create(opts: Record<string, unknown>): Promise<Client> {
+    return new Client(opts);
+  }
+
   async version(_: Record<never, never>): Promise<{ version: string; commit: string }> {
     return { version: "0.0.0-fake", commit: "0000000" };
   }

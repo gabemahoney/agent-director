@@ -10,7 +10,6 @@
  *   6. .message format is "${err_name}: ${err_description}".
  *
  * Epic A additions (T-A1):
- *   7. ErrCliNotExecutable — fields, name, instanceof chain.
  *   8. ErrConsumerSignal — fields, name, instanceof chain.
  *   9. ErrCallTimeout — fields, name, instanceof chain.
  *  10. ErrUnknownErrorName — fields, name, instanceof chain, envelope field.
@@ -28,7 +27,6 @@ import {
   // until the engineer adds the classes to src/errors.ts and re-exports them
   // from src/index.ts. Run `bun test errors.test.ts` after the engineer
   // completes Task A1 to verify green.
-  ErrCliNotExecutable,
   ErrConsumerSignal,
   ErrCallTimeout,
   ErrUnknownErrorName,
@@ -178,34 +176,6 @@ describe("AgentDirectorError .message format", () => {
   test("factory-produced error has correct message", () => {
     const err = errorFromEnvelope("resume", "ErrSpawnNotResumable", "state is working");
     expect(err.message).toBe("ErrSpawnNotResumable: state is working");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Epic A — Case 7: ErrCliNotExecutable (Task A1, SR-2.3)
-// ---------------------------------------------------------------------------
-describe("ErrCliNotExecutable (TS-only, SR-2.3)", () => {
-  test("extends AgentDirectorError and Error", () => {
-    const err = new ErrCliNotExecutable("/opt/bin/agent-director");
-    expect(err).toBeInstanceOf(ErrCliNotExecutable);
-    expect(err).toBeInstanceOf(AgentDirectorError);
-    expect(err).toBeInstanceOf(Error);
-  });
-
-  test(".name is 'ErrCliNotExecutable'", () => {
-    const err = new ErrCliNotExecutable("/path/to/binary");
-    expect(err.name).toBe("ErrCliNotExecutable");
-  });
-
-  test(".errName is 'ErrCliNotExecutable'", () => {
-    const err = new ErrCliNotExecutable("/path/to/binary");
-    expect(err.errName).toBe("ErrCliNotExecutable");
-  });
-
-  test("message includes the binary path", () => {
-    const path = "/some/specific/path/agent-director";
-    const err = new ErrCliNotExecutable(path);
-    expect(err.message).toContain(path);
   });
 });
 
@@ -465,7 +435,6 @@ describe("TS_ONLY_ERROR_NAMES allow-list includes all four new Epic-A classes", 
   const allowSet = new Set<string>(TS_ONLY_ERROR_NAMES as readonly string[]);
 
   test.each([
-    "ErrCliNotExecutable",
     "ErrConsumerSignal",
     "ErrCallTimeout",
     "ErrUnknownErrorName",

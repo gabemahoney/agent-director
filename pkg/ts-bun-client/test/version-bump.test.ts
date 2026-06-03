@@ -4,19 +4,21 @@
  * Uses a staging-tree mirror pattern: makeStagingTree() builds a temp dir
  * that mirrors the relative layout the script expects (script lives at
  * <root>/pkg/ts-bun-client/scripts/version-bump.ts; SKILL.md at
- * <root>/skills/install-agent-director/SKILL.md; three package.json files
+ * <root>/skills/install-agent-director/SKILL.md; the umbrella package.json
  * under <root>/pkg/ts-bun-client/). The script is copied from the real
  * source tree so import.meta.url resolves within the staging root — the same
  * path-resolution model used in production (release.sh cp-a mirrors the
  * layout before invoking the script).
+ *
+ * Live targets exercised here:
+ *   - umbrella-version  → umbrella package.json::version
+ *   - skill-frontmatter → skills/install-agent-director/SKILL.md frontmatter version:
  *
  * Staging layout:
  *   <root>/
  *     pkg/ts-bun-client/
  *       scripts/version-bump.ts    ← copied from real source
  *       package.json               ← umbrella, seeded
- *       platforms/linux-x64/package.json
- *       platforms/darwin-arm64/package.json
  *     skills/install-agent-director/SKILL.md
  */
 
@@ -41,7 +43,6 @@ const REAL_SCRIPT = join(PKG_DIR, "scripts", "version-bump.ts");
 
 const SEED_VERSION = "0.1.0";
 const TARGET_VERSION = "9.9.9";
-const TARGET_PIN = `^${TARGET_VERSION}`;
 
 // ---------------------------------------------------------------------------
 // SKILL.md content factory
@@ -71,10 +72,6 @@ interface StagingTree {
   scriptPath: string;
   /** Absolute path to the umbrella package.json. */
   umbrellaPkgPath: string;
-  /** Absolute path to platforms/linux-x64/package.json. */
-  linuxPkgPath: string;
-  /** Absolute path to platforms/darwin-arm64/package.json. */
-  darwinPkgPath: string;
   /** Absolute path to skills/install-agent-director/SKILL.md. */
   skillMdPath: string;
   /** Remove the temp directory. Best-effort; never throws. */
@@ -91,11 +88,9 @@ function makeStagingTree(opts: { skillMdContent?: string } = {}): StagingTree {
 
   const scriptsDir = join(root, "pkg", "ts-bun-client", "scripts");
   const pkgDir = join(root, "pkg", "ts-bun-client");
-  const linuxDir = join(root, "pkg", "ts-bun-client", "platforms", "linux-x64");
-  const darwinDir = join(root, "pkg", "ts-bun-client", "platforms", "darwin-arm64");
   const skillDir = join(root, "skills", "install-agent-director");
 
-  for (const d of [scriptsDir, linuxDir, darwinDir, skillDir]) {
+  for (const d of [scriptsDir, skillDir]) {
     mkdirSync(d, { recursive: true });
   }
 
@@ -110,28 +105,10 @@ function makeStagingTree(opts: { skillMdContent?: string } = {}): StagingTree {
       {
         name: "agent-director",
         version: SEED_VERSION,
-        optionalDependencies: {
-          "@agent-director/linux-x64": "file:./platforms/linux-x64",
-          "@agent-director/darwin-arm64": "file:./platforms/darwin-arm64",
-        },
       },
       null,
       2
     ) + "\n",
-    "utf8"
-  );
-
-  const linuxPkgPath = join(linuxDir, "package.json");
-  writeFileSync(
-    linuxPkgPath,
-    JSON.stringify({ name: "@agent-director/linux-x64", version: SEED_VERSION }, null, 2) + "\n",
-    "utf8"
-  );
-
-  const darwinPkgPath = join(darwinDir, "package.json");
-  writeFileSync(
-    darwinPkgPath,
-    JSON.stringify({ name: "@agent-director/darwin-arm64", version: SEED_VERSION }, null, 2) + "\n",
     "utf8"
   );
 
@@ -146,8 +123,6 @@ function makeStagingTree(opts: { skillMdContent?: string } = {}): StagingTree {
     root,
     scriptPath,
     umbrellaPkgPath,
-    linuxPkgPath,
-    darwinPkgPath,
     skillMdPath,
     cleanup() {
       try {
@@ -190,14 +165,6 @@ function readPkgVersion(pkgPath: string): string {
   return (JSON.parse(readFileSync(pkgPath, "utf8")) as { version: string }).version;
 }
 
-function readOptDeps(pkgPath: string): Record<string, string> {
-  return (
-    JSON.parse(readFileSync(pkgPath, "utf8")) as {
-      optionalDependencies: Record<string, string>;
-    }
-  ).optionalDependencies;
-}
-
 /**
  * Extract the version: value from the SKILL.md frontmatter block only.
  * Errors if no frontmatter version is found.
@@ -225,7 +192,7 @@ function readSkillFrontmatterVersion(skillMdPath: string): string {
 // Isolation-assertion helper
 // ---------------------------------------------------------------------------
 
-type Selector = "umbrella-version" | "platform-version" | "skill-frontmatter" | "opt-deps";
+type Selector = "umbrella-version" | "skill-frontmatter";
 
 /**
  * Assert that every site NOT covered by `activeSelector` is still at the
@@ -235,29 +202,18 @@ function assertOtherSitesUntouched(tree: StagingTree, activeSelector: Selector):
   if (activeSelector !== "umbrella-version") {
     expect(readPkgVersion(tree.umbrellaPkgPath)).toBe(SEED_VERSION);
   }
-  if (activeSelector !== "platform-version") {
-    expect(readPkgVersion(tree.linuxPkgPath)).toBe(SEED_VERSION);
-    expect(readPkgVersion(tree.darwinPkgPath)).toBe(SEED_VERSION);
-  }
-  if (activeSelector !== "opt-deps") {
-    const deps = readOptDeps(tree.umbrellaPkgPath);
-    expect(deps["@agent-director/linux-x64"]).toContain("file:");
-    expect(deps["@agent-director/darwin-arm64"]).toContain("file:");
-  }
   if (activeSelector !== "skill-frontmatter") {
     expect(readSkillFrontmatterVersion(tree.skillMdPath)).toBe(SEED_VERSION);
   }
 }
 
 // ---------------------------------------------------------------------------
-// 1. Per-selector isolation (parametrized × 4)
+// 1. Per-selector isolation (parametrized × 2)
 // ---------------------------------------------------------------------------
 
 const ALL_SELECTORS: Selector[] = [
   "umbrella-version",
-  "platform-version",
   "skill-frontmatter",
-  "opt-deps",
 ];
 
 describe("version-bump --target isolation", () => {
@@ -274,13 +230,6 @@ describe("version-bump --target isolation", () => {
         // Assert the targeted site(s) were updated.
         if (selector === "umbrella-version") {
           expect(readPkgVersion(tree.umbrellaPkgPath)).toBe(TARGET_VERSION);
-        } else if (selector === "platform-version") {
-          expect(readPkgVersion(tree.linuxPkgPath)).toBe(TARGET_VERSION);
-          expect(readPkgVersion(tree.darwinPkgPath)).toBe(TARGET_VERSION);
-        } else if (selector === "opt-deps") {
-          const deps = readOptDeps(tree.umbrellaPkgPath);
-          expect(deps["@agent-director/linux-x64"]).toBe(TARGET_PIN);
-          expect(deps["@agent-director/darwin-arm64"]).toBe(TARGET_PIN);
         } else if (selector === "skill-frontmatter") {
           expect(readSkillFrontmatterVersion(tree.skillMdPath)).toBe(TARGET_VERSION);
         }
@@ -295,10 +244,10 @@ describe("version-bump --target isolation", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 2. Omitted --target runs all five mutation sites
+// 2. Omitted --target runs all live mutation sites
 // ---------------------------------------------------------------------------
 
-describe("version-bump (no --target): updates all five sites", () => {
+describe("version-bump (no --target): updates all live sites", () => {
   test("all sites reach the target version in a single invocation", () => {
     const tree = makeStagingTree();
     try {
@@ -306,13 +255,6 @@ describe("version-bump (no --target): updates all five sites", () => {
       expect(r.exitCode).toBe(0);
 
       expect(readPkgVersion(tree.umbrellaPkgPath)).toBe(TARGET_VERSION);
-      expect(readPkgVersion(tree.linuxPkgPath)).toBe(TARGET_VERSION);
-      expect(readPkgVersion(tree.darwinPkgPath)).toBe(TARGET_VERSION);
-
-      const deps = readOptDeps(tree.umbrellaPkgPath);
-      expect(deps["@agent-director/linux-x64"]).toBe(TARGET_PIN);
-      expect(deps["@agent-director/darwin-arm64"]).toBe(TARGET_PIN);
-
       expect(readSkillFrontmatterVersion(tree.skillMdPath)).toBe(TARGET_VERSION);
     } finally {
       tree.cleanup();
@@ -321,15 +263,13 @@ describe("version-bump (no --target): updates all five sites", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 3. Idempotence (parametrized × 5: default + 4 selectors)
+// 3. Idempotence (parametrized × 3: default + 2 selectors)
 // ---------------------------------------------------------------------------
 
 const IDEMPOTENCE_CASES: Array<{ label: string; extraArgs: string[] }> = [
   { label: "default (all sites)", extraArgs: [] },
   { label: "--target=umbrella-version", extraArgs: ["--target", "umbrella-version"] },
-  { label: "--target=platform-version", extraArgs: ["--target", "platform-version"] },
   { label: "--target=skill-frontmatter", extraArgs: ["--target", "skill-frontmatter"] },
-  { label: "--target=opt-deps", extraArgs: ["--target", "opt-deps"] },
 ];
 
 describe("version-bump idempotence", () => {
@@ -346,8 +286,6 @@ describe("version-bump idempotence", () => {
         // Snapshot file contents after first run.
         const snap = {
           umbrella: readFileSync(tree.umbrellaPkgPath, "utf8"),
-          linux: readFileSync(tree.linuxPkgPath, "utf8"),
-          darwin: readFileSync(tree.darwinPkgPath, "utf8"),
           skill: readFileSync(tree.skillMdPath, "utf8"),
         };
 
@@ -357,8 +295,6 @@ describe("version-bump idempotence", () => {
 
         // All files must be byte-identical to the post-first-run snapshot.
         expect(readFileSync(tree.umbrellaPkgPath, "utf8")).toBe(snap.umbrella);
-        expect(readFileSync(tree.linuxPkgPath, "utf8")).toBe(snap.linux);
-        expect(readFileSync(tree.darwinPkgPath, "utf8")).toBe(snap.darwin);
         expect(readFileSync(tree.skillMdPath, "utf8")).toBe(snap.skill);
 
         // Second-run output must acknowledge the no-op with a "skipped" message.
@@ -468,7 +404,7 @@ describe("version-bump unknown --target selector", () => {
       // Must mention the bad value.
       expect(output).toContain("totally-invalid-xyz");
       // Must name at least one valid selector (usage message).
-      expect(output).toMatch(/umbrella-version|platform-version|skill-frontmatter|opt-deps/);
+      expect(output).toMatch(/umbrella-version|skill-frontmatter/);
     } finally {
       tree.cleanup();
     }

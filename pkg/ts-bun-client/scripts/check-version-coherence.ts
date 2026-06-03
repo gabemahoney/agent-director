@@ -77,25 +77,19 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 
 interface RepoPaths {
   umbrellaJson: string;
-  platformJsons: [string, string];
-  platformBins: [string, string];
   skillMd: string;
   distIndexJs: string;
+  versionFloorSrc: string;
+  versionFloorDist: string;
 }
 
 function resolveRepoPaths(dir: string): RepoPaths {
   return {
     umbrellaJson: resolve(dir, "../package.json"),
-    platformJsons: [
-      resolve(dir, "../platforms/linux-x64/package.json"),
-      resolve(dir, "../platforms/darwin-arm64/package.json"),
-    ],
-    platformBins: [
-      resolve(dir, "../platforms/linux-x64/bin/agent-director"),
-      resolve(dir, "../platforms/darwin-arm64/bin/agent-director"),
-    ],
     skillMd: resolve(dir, "../../../skills/install-agent-director/SKILL.md"),
     distIndexJs: resolve(dir, "../dist/index.js"),
+    versionFloorSrc: resolve(dir, "../version-floor.json"),
+    versionFloorDist: resolve(dir, "../dist/version-floor.json"),
   };
 }
 
@@ -122,54 +116,6 @@ function fail(
 // Site check functions
 // ---------------------------------------------------------------------------
 
-// Site 1: CLI binary `version --json` output — `version == "v${ver}"`.
-// A platform whose bin/agent-director is absent is silently skipped; the
-// binary is only guaranteed present on the host platform during verify_phase.
-function checkSite1(ver: string): void {
-  const platformEntries: Array<[string, string]> = [
-    ["site-1/linux-x64", paths.platformBins[0]],
-    ["site-1/darwin-arm64", paths.platformBins[1]],
-  ];
-  const expected = `v${ver}`;
-  for (const [siteId, binPath] of platformEntries) {
-    if (!existsSync(binPath)) {
-      console.log(`check-version-coherence [${siteId}]: skipped — binary not present at ${binPath}`);
-      continue;
-    }
-    let proc: ReturnType<typeof Bun.spawnSync>;
-    try {
-      proc = Bun.spawnSync([binPath, "version", "--json"]);
-    } catch (e) {
-      // ENOEXEC: binary is for a different architecture — skip rather than fail.
-      // This is normal in verify_phase where only the host platform is executable.
-      const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes("ENOEXEC") || (e as NodeJS.ErrnoException).code === "ENOEXEC") {
-        console.log(`check-version-coherence [${siteId}]: skipped — cannot execute binary on this platform (${binPath})`);
-        continue;
-      }
-      fail(siteId, binPath, `spawn error: ${msg}`, expected);
-      continue;
-    }
-    if (proc.exitCode !== 0) {
-      const stderr = proc.stderr ? new TextDecoder().decode(proc.stderr) : "";
-      fail(siteId, binPath, `binary exited ${proc.exitCode}: ${stderr.trim()}`, expected);
-      continue;
-    }
-    const stdout = new TextDecoder().decode(proc.stdout).trim();
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(stdout) as Record<string, unknown>;
-    } catch {
-      fail(siteId, binPath, `non-JSON output: ${stdout}`, expected);
-      continue;
-    }
-    const got = typeof parsed.version === "string" ? parsed.version : JSON.stringify(parsed.version);
-    if (got !== expected) {
-      fail(siteId, binPath, got, expected);
-    }
-  }
-}
-
 // Site 3a: umbrella package.json::version == ver.
 function checkSite3a(ver: string): void {
   const pkgPath = paths.umbrellaJson;
@@ -177,71 +123,6 @@ function checkSite3a(ver: string): void {
   const got = typeof pkg.version === "string" ? pkg.version : String(pkg.version);
   if (got !== ver) {
     fail("site-3a", pkgPath, got, ver);
-  }
-}
-
-// Site 3b: platform package.json::version == ver for each present platform dir.
-function checkSite3b(ver: string): void {
-  const platformEntries: Array<[string, string]> = [
-    ["site-3b/linux-x64", paths.platformJsons[0]],
-    ["site-3b/darwin-arm64", paths.platformJsons[1]],
-  ];
-  for (const [siteId, pkgPath] of platformEntries) {
-    if (!existsSync(pkgPath)) {
-      console.log(`check-version-coherence [${siteId}]: skipped — package.json not present at ${pkgPath}`);
-      continue;
-    }
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { version?: string; [k: string]: unknown };
-    const got = typeof pkg.version === "string" ? pkg.version : String(pkg.version);
-    if (got !== ver) {
-      fail(siteId, pkgPath, got, ver);
-    }
-  }
-}
-
-// Site 4: umbrella optionalDependencies pins.
-// --scope verify: skip when all entries are still file: paths (verify_phase
-//   deliberately does not stamp opt-deps). Fail on any other non-pin value.
-// --scope publish: all entries must be ^${ver}.
-function checkSite4(ver: string, currentScope: string): void {
-  const pkgPath = paths.umbrellaJson;
-  const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as {
-    optionalDependencies?: Record<string, string>;
-    [k: string]: unknown;
-  };
-  const optDeps = pkg.optionalDependencies ?? {};
-  const OPTIONAL_NAMES = [
-    "@agent-director/linux-x64",
-    "@agent-director/darwin-arm64",
-  ];
-  const expected = `^${ver}`;
-
-  if (currentScope === "verify") {
-    const allFile = OPTIONAL_NAMES.every((n) =>
-      (optDeps[n] ?? "").startsWith("file:")
-    );
-    if (allFile) {
-      console.log(
-        `check-version-coherence [site-4]: skipped — verify scope leaves opt-deps as file: paths`
-      );
-      return;
-    }
-    // Any non-file: value in verify scope that is not the expected pin is a failure.
-    for (const name of OPTIONAL_NAMES) {
-      const got = optDeps[name] ?? "(missing)";
-      if (!got.startsWith("file:") && got !== expected) {
-        fail("site-4", pkgPath, `${name}=${got}`, `${name}=${expected}`);
-      }
-    }
-    return;
-  }
-
-  // publish scope: every entry must be ^${ver}.
-  for (const name of OPTIONAL_NAMES) {
-    const got = optDeps[name] ?? "(missing)";
-    if (got !== expected) {
-      fail("site-4", pkgPath, `${name}=${got}`, `${name}=${expected}`);
-    }
   }
 }
 
@@ -275,6 +156,89 @@ function checkSite5(ver: string): void {
 
   if (got !== ver) {
     fail("site-5", skillMdPath, got, ver);
+  }
+}
+
+// Site floor-lockstep: version-floor.json single-source-of-truth coherence
+// per SR-5.4 / SR-5.2.  Asserts:
+//   - source-of-truth pkg/ts-bun-client/version-floor.json exists and parses
+//   - shipped pkg/ts-bun-client/dist/version-floor.json exists and parses
+//   - both files are byte-for-byte identical
+//   - min_binary_version passes SR-2.2 strict SemVer 2.0 (uses Epic 1 parser)
+//   - min_binary_version is not the dev sentinel "0.0.0-dev"
+//   - dist/index.js exports MIN_BINARY_VERSION equal to the parsed JSON field
+//     (via dynamic import — the TS-import variant, no positive-grep)
+async function checkSiteFloorLockstep(): Promise<void> {
+  const srcPath = paths.versionFloorSrc;
+  const dstPath = paths.versionFloorDist;
+  const distIndexPath = paths.distIndexJs;
+
+  if (!existsSync(srcPath)) {
+    failures.push(`[site-floor-lockstep] ${srcPath}: source-of-truth version-floor.json missing`);
+    return;
+  }
+  if (!existsSync(dstPath)) {
+    failures.push(`[site-floor-lockstep] ${dstPath}: shipped dist/version-floor.json missing — run bun build`);
+    return;
+  }
+
+  const srcRaw = readFileSync(srcPath);
+  const dstRaw = readFileSync(dstPath);
+  if (!srcRaw.equals(dstRaw)) {
+    failures.push(
+      `[site-floor-lockstep] source vs dist mismatch: ${srcPath} and ${dstPath} are not byte-equal — build.ts copy step drifted`,
+    );
+  }
+
+  let parsed: { min_binary_version?: unknown };
+  try {
+    parsed = JSON.parse(srcRaw.toString("utf8")) as { min_binary_version?: unknown };
+  } catch (e) {
+    failures.push(`[site-floor-lockstep] ${srcPath}: not valid JSON: ${(e as Error).message}`);
+    return;
+  }
+  if (typeof parsed.min_binary_version !== "string") {
+    failures.push(`[site-floor-lockstep] ${srcPath}: min_binary_version must be a string`);
+    return;
+  }
+  const floor = parsed.min_binary_version;
+
+  if (floor === "0.0.0-dev") {
+    failures.push(
+      `[site-floor-lockstep] ${srcPath}: min_binary_version="0.0.0-dev" — the dev sentinel is forbidden as a release floor (SR-5.2)`,
+    );
+  }
+
+  // Strict SemVer 2.0 check (SR-2.2). Reject any input the library's
+  // discovery pipeline would classify as unparseable.
+  if (!/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.test(floor)) {
+    failures.push(
+      `[site-floor-lockstep] ${srcPath}: min_binary_version="${floor}" is not strict SemVer 2.0 (SR-2.2)`,
+    );
+  }
+
+  // TS-import lockstep: MIN_BINARY_VERSION imported from the built bundle
+  // must equal the parsed JSON's field. This is the SR-5.4 invariant
+  // (positive-grep variant explicitly rejected).
+  if (!existsSync(distIndexPath)) {
+    // Reported by site-dist-no-inline already; skip the import here.
+    return;
+  }
+  try {
+    const mod = (await import(distIndexPath)) as { MIN_BINARY_VERSION?: unknown };
+    if (typeof mod.MIN_BINARY_VERSION !== "string") {
+      failures.push(
+        `[site-floor-lockstep] ${distIndexPath}: MIN_BINARY_VERSION export missing or not a string`,
+      );
+    } else if (mod.MIN_BINARY_VERSION !== floor) {
+      failures.push(
+        `[site-floor-lockstep] ${distIndexPath}: MIN_BINARY_VERSION="${mod.MIN_BINARY_VERSION}" disagrees with version-floor.json field "${floor}"`,
+      );
+    }
+  } catch (e) {
+    failures.push(
+      `[site-floor-lockstep] ${distIndexPath}: failed to import: ${(e as Error).message}`,
+    );
   }
 }
 
@@ -369,12 +333,14 @@ async function checkPublishShasums(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// ADD NEW VERSION SITES HERE — omitting a site here means it is never checked at release time
+// ADD NEW VERSION SITES HERE — omitting a site here means it is never checked at release time.
+// b.ue3 / Epic 4: site-1 / site-3b / site-4 dropped along with the vendored-
+// binary surface.  site-1's release-time enforcement moves to release.sh's
+// b.b3h anchor (which spawns the host's dist/ binary directly).  site-5 stays
+// live because skills/install-agent-director/SKILL.md continues to ship in
+// AD's release tarballs for install.sh.
 const SITES = [
-  { id: "site-1",  label: "CLI binary version output (linux-x64, darwin-arm64)", check: (v: string) => checkSite1(v) },
   { id: "site-3a", label: "umbrella package.json::version",                       check: (v: string) => checkSite3a(v) },
-  { id: "site-3b", label: "platform package.json::version (linux-x64, darwin-arm64)", check: (v: string) => checkSite3b(v) },
-  { id: "site-4",  label: "umbrella optionalDependencies pin (^X.Y.Z)",            check: (v: string) => checkSite4(v, scope) },
   { id: "site-5",  label: "SKILL.md frontmatter version:",                         check: (v: string) => checkSite5(v) },
 ] as const;
 
@@ -403,6 +369,12 @@ for (const site of sitesToRun) {
 // SR-2.2: publish ⊇ verify; dist/index.js is present in the stage dir at
 // publish time, so the check is runnable and required under both scopes.
 checkSiteDistNoInline();
+
+// SR-5.4: version-floor.json triple-source coherence — verify and publish.
+// Source-of-truth JSON, shipped JSON, and bundle's MIN_BINARY_VERSION must
+// agree byte-for-byte.  Runs under both scopes; release.sh always rebuilds
+// dist/ before either scope, so the dynamic-import is always reachable.
+await checkSiteFloorLockstep();
 
 // SR-1.3 / SR-1.5: tarball SHA-256 round-trip — publish scope only.
 // Re-hash every tarball from the verify_phase manifest; mismatch means bytes

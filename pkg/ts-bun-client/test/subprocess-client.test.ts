@@ -32,12 +32,12 @@
  * Tests in this file depend on this behaviour for LOG_FILE / CALL_MARKER_FILE.
  */
 
-import { test, expect, describe, beforeAll, afterAll, mock } from "bun:test";
+import { test, expect, describe, beforeAll, afterAll } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { SubprocessClient } from "../src/internal/subprocessClient.js";
+import { Client } from "../src/client.js";
 import { ErrCallTimeout, ErrConsumerSignal } from "../src/errors.js";
 // b.6o1: version() now overrides the CLI's version field with the npm
 // package version. Read at runtime (SR-3.2: no build-time JSON import).
@@ -46,19 +46,6 @@ beforeAll(async () => {
   const json = await Bun.file(new URL("../package.json", import.meta.url)).text();
   pkgVersion = (JSON.parse(json) as { version: string }).version;
 });
-
-// b.i5y: intercept resolveCliPath for the per-call re-resolution describe block.
-// Falls through to the real implementation when resolveCliPathImpl is null,
-// so tests that use _cliPath (and never call resolveCliPath) are unaffected.
-import { resolveCliPath as _realResolveCliPath } from "../src/internal/platformResolve.js";
-let resolveCliPathImpl: (() => string) | null = null;
-
-mock.module("../src/internal/platformResolve.js", () => ({
-  resolveCliPath: (...args: Parameters<typeof _realResolveCliPath>) => {
-    if (resolveCliPathImpl !== null) return resolveCliPathImpl();
-    return _realResolveCliPath(...args);
-  },
-}));
 
 // Case 6 reads src/index.ts as source text to avoid triggering the module-level
 // FFI bootstrap (bootstrapFfi.ts → resolveNativePath() throws when the native
@@ -102,16 +89,16 @@ function makeOpts(
   };
 }
 
-/** Constructs a SubprocessClient pointed at a fixture binary for testing. */
-function makeClient(fixturePath: string, overrides: Record<string, unknown> = {}): SubprocessClient {
-  return new SubprocessClient(
+/** Constructs a Client pointed at a fixture binary for testing. */
+function makeClient(fixturePath: string, overrides: Record<string, unknown> = {}): Promise<Client> {
+  return Client.create(
     makeOpts({
       // Test hook: inject a custom binary path so the client uses our fixture
       // instead of the real platformResolve path.
       // Engineer: if you named this differently (e.g. _testCliPath), update here.
       _cliPath: fixturePath,
       ...overrides,
-    }) as unknown as ConstructorParameters<typeof SubprocessClient>[0]
+    }) as unknown as Parameters<typeof Client.create>[0]
   );
 }
 
@@ -119,26 +106,26 @@ function makeClient(fixturePath: string, overrides: Record<string, unknown> = {}
 // Case 1: callTimeoutMs <= 0 → throws at construction
 // ---------------------------------------------------------------------------
 describe("SubprocessClient — callTimeoutMs validation", () => {
-  test("callTimeoutMs: 0 → throws config error at construction", () => {
+  test("callTimeoutMs: 0 → throws config error at construction", async () => {
     const fixturePath = path.join(FIXTURES, "success.sh");
-    expect(() => makeClient(fixturePath, { callTimeoutMs: 0 })).toThrow();
+    await expect(makeClient(fixturePath, { callTimeoutMs: 0 })).rejects.toThrow();
   });
 
-  test("callTimeoutMs: -1 → throws config error at construction", () => {
+  test("callTimeoutMs: -1 → throws config error at construction", async () => {
     const fixturePath = path.join(FIXTURES, "success.sh");
-    expect(() => makeClient(fixturePath, { callTimeoutMs: -1 })).toThrow();
+    await expect(makeClient(fixturePath, { callTimeoutMs: -1 })).rejects.toThrow();
   });
 
-  test("callTimeoutMs: 1 (positive) → does NOT throw at construction", () => {
+  test("callTimeoutMs: 1 (positive) → does NOT throw at construction", async () => {
     const fixturePath = path.join(FIXTURES, "success.sh");
-    expect(() => makeClient(fixturePath, { callTimeoutMs: 1 })).not.toThrow();
+    await expect(makeClient(fixturePath, { callTimeoutMs: 1 })).resolves.toBeDefined();
   });
 
-  test("callTimeoutMs omitted → uses default (30000), does NOT throw", () => {
+  test("callTimeoutMs omitted → uses default (30000), does NOT throw", async () => {
     const fixturePath = path.join(FIXTURES, "success.sh");
     const opts = makeOpts({ _cliPath: fixturePath });
     delete (opts as Record<string, unknown>)["callTimeoutMs"];
-    expect(() => new SubprocessClient(opts as unknown as ConstructorParameters<typeof SubprocessClient>[0])).not.toThrow();
+    await expect(Client.create(opts as unknown as Parameters<typeof Client.create>[0])).resolves.toBeDefined();
   });
 });
 
@@ -157,7 +144,7 @@ describe("SubprocessClient — per-Client call serialization (SR-3)", () => {
         const fixturePath = path.join(FIXTURES, "serialization-recorder.js");
         // The fixture has #!/usr/bin/env bun + chmod +x, so passing the path
         // directly is correct; Bun.spawn() will use the shebang interpreter.
-        const client = makeClient(fixturePath, { callTimeoutMs: 15000 });
+        const client = await makeClient(fixturePath, { callTimeoutMs: 15000 });
         // Fire 5 calls simultaneously.
         await Promise.all([
           (client as unknown as { version(p: object): Promise<unknown> }).version({}),
@@ -218,7 +205,7 @@ describe("SubprocessClient — rejection does not wedge queue", () => {
       try {
         // Use "bun <script>" as the binary so the fixture JS runs.
         const fixturePath = path.join(FIXTURES, "first-call-fails.js");
-        const client = makeClient(fixturePath, { callTimeoutMs: 5000 });
+        const client = await makeClient(fixturePath, { callTimeoutMs: 5000 });
 
         type ClientWithVersion = { version(p: object): Promise<unknown> };
         const c = client as unknown as ClientWithVersion;
@@ -269,7 +256,7 @@ describe("SubprocessClient — timeout", () => {
 
       try {
         const fixturePath = path.join(FIXTURES, "sleep-and-respond.js");
-        const client = makeClient(fixturePath, { callTimeoutMs: 300 });
+        const client = await makeClient(fixturePath, { callTimeoutMs: 300 });
         type ClientV = { version(p: object): Promise<unknown> };
         await (client as unknown as ClientV).version({});
       } catch (e) {
@@ -309,7 +296,7 @@ describe("SubprocessClient — signal handling", () => {
       let caught: unknown;
       try {
         const fixturePath = path.join(FIXTURES, "self-sigint.sh");
-        const client = makeClient(fixturePath, { callTimeoutMs: 5000 });
+        const client = await makeClient(fixturePath, { callTimeoutMs: 5000 });
         type ClientV = { version(p: object): Promise<unknown> };
         await (client as unknown as ClientV).version({});
       } catch (e) {
@@ -349,7 +336,7 @@ describe("SubprocessClient — version() returns npm package version (b.6o1)", (
 
       try {
         const fixturePath = path.join(FIXTURES, "sleep-and-respond.js");
-        const client = makeClient(fixturePath, { callTimeoutMs: 5000 });
+        const client = await makeClient(fixturePath, { callTimeoutMs: 5000 });
         type ClientV = { version(p: object): Promise<{ version: string; commit: string }> };
         const result = await (client as unknown as ClientV).version({});
 
@@ -372,16 +359,14 @@ describe("SubprocessClient — version() returns npm package version (b.6o1)", (
 });
 
 // ---------------------------------------------------------------------------
-// Case 6: Public surface smoke — index.ts exports unchanged
+// Case 6: Public surface smoke — index.ts exports
 // ---------------------------------------------------------------------------
-describe("SubprocessClient — public index.ts surface unchanged", () => {
-  // These are the exports that existed before Epic A. All must still be present.
+describe("Client — public index.ts surface", () => {
+  // Exports preserved across the b.ue3 / Stream A cutover.
   const expectedExports = [
     "Client",
     "AgentDirectorError",
     "ErrClientClosed",
-    "ErrUnsupportedPlatform",
-    "ErrPlatformPackageMissing",
     "ErrBunVersionTooOld",
     "errorFromEnvelope",
     // Catalog-derived (33 entries).
@@ -424,75 +409,25 @@ describe("SubprocessClient — public index.ts surface unchanged", () => {
     expect(INDEX_SRC).toContain(name);
   });
 
-  test("Epic-A additions are ALSO exported (additive only)", () => {
-    // These should be present after Task A1.
-    expect(INDEX_SRC).toContain("ErrCliNotExecutable");
+  test("Epic-A pipeline TS-only errors still exported", () => {
     expect(INDEX_SRC).toContain("ErrConsumerSignal");
     expect(INDEX_SRC).toContain("ErrCallTimeout");
     expect(INDEX_SRC).toContain("ErrUnknownErrorName");
   });
+
+  test("b.ue3 / Stream A new exports present", () => {
+    expect(INDEX_SRC).toContain("ErrSystemInstallNotFound");
+    expect(INDEX_SRC).toContain("ErrSystemInstallTooOld");
+    expect(INDEX_SRC).toContain("ErrSystemInstallUnreachable");
+    expect(INDEX_SRC).toContain("resolveSystemBinary");
+    expect(INDEX_SRC).toContain("MIN_BINARY_VERSION");
+    expect(INDEX_SRC).toContain("DEV_SENTINEL_VERSION");
+  });
+
+  test("b.ue3 / Stream A: vendored-binary error classes removed", () => {
+    expect(INDEX_SRC).not.toContain("ErrUnsupportedPlatform");
+    expect(INDEX_SRC).not.toContain("ErrPlatformPackageMissing");
+    expect(INDEX_SRC).not.toContain("ErrCliNotExecutable");
+  });
 });
 
-// ---------------------------------------------------------------------------
-// b.i5y regression: per-call re-resolution — spawn-2 uses the binary that
-// resolveCliPath() returns at spawn-2 time, not the one resolved at construction.
-//
-// Shape: construct SubprocessClient WITHOUT _cliPath so the production
-// resolution path runs. A controlled mock of resolveCliPath() returns the v1
-// binary path for the constructor's eager check and for spawn-1, then returns
-// the v2 binary path for spawn-2. Post-fix (per-call re-resolution): spawn-2
-// invokes the v2 binary and returns "v2commit". Pre-fix (cached at
-// construction): spawn-2 would re-use the v1 path and return "v1commit",
-// failing the assertion.
-// ---------------------------------------------------------------------------
-describe("SubprocessClient — b.i5y: resolveCliPath() called per spawn, not cached at construction", () => {
-  const FIXTURES_BI5Y = path.resolve(import.meta.dir, "fixtures/b-i5y");
-
-  test(
-    "spawn-2 uses binary returned by resolveCliPath() at spawn-2 time (not construction-time cache)",
-    async () => {
-      const v1Bin = path.join(FIXTURES_BI5Y, "version-v1.sh");
-      const v2Bin = path.join(FIXTURES_BI5Y, "version-v2.sh");
-
-      // resolveCliPathImpl is called:
-      //   call 1: construction eager-check (post-fix: result discarded)
-      //   call 2: spawn-1 (#doCall re-resolves per-call in post-fix)
-      //   call 3: spawn-2 (#doCall re-resolves per-call in post-fix)
-      // Pre-fix cached call-1 result and never called resolveCliPath() again
-      // from #doCall, so calls 2 and 3 would not happen pre-fix.
-      let callIdx = 0;
-      resolveCliPathImpl = () => {
-        callIdx++;
-        if (callIdx <= 2) return v1Bin; // ctor eager-check + spawn-1
-        return v2Bin;                   // spawn-2 and beyond
-      };
-
-      try {
-        const opts = makeOpts(); // storePath, createIfMissing, callTimeoutMs
-        // Construct WITHOUT _cliPath — triggers production resolveCliPath() path.
-        const client = new SubprocessClient(
-          opts as unknown as ConstructorParameters<typeof SubprocessClient>[0]
-        );
-
-        type ClientV = { version(p: object): Promise<{ version: string; commit: string }> };
-        const c = client as unknown as ClientV;
-
-        // spawn-1: resolveCliPath() call #2 → v1 binary → "v1commit"
-        const r1 = await c.version({});
-        expect(r1.commit).toBe("v1commit");
-
-        // spawn-2: resolveCliPath() call #3 → v2 binary (post-fix) → "v2commit"
-        // Pre-fix: would have used cached v1 path → "v1commit" → assertion fails.
-        const r2 = await c.version({});
-        expect(r2.commit).toBe("v2commit");
-
-        // 3 calls total: 1 ctor eager-check + 2 spawns. Pins the call count so
-        // a cached implementation cannot pass vacuously.
-        expect(callIdx).toBe(3);
-      } finally {
-        resolveCliPathImpl = null;
-      }
-    },
-    { timeout: 15000 }
-  );
-});

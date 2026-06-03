@@ -28,7 +28,7 @@ test("expire: happy path — reaps ended rows with older_than=0d", async () => {
       "create-store": true,
     });
 
-    using client = new Client({ storePath, createIfMissing: true });
+    using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
     // older_than="0d" → zero duration → reap ALL terminal rows.
     const result: ExpireResult = await client.expire({ older_than: "0d" });
     expect(typeof result.count).toBe("number");

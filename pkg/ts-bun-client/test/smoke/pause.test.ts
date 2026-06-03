@@ -28,7 +28,7 @@ test("pause: happy path — no-op for already-terminal spawn", async () => {
       "create-store": true,
     });
 
-    using client = new Client({ storePath, createIfMissing: true });
+    using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
     // PauseResult is an empty object; just assert no throw.
     const result = await client.pause({ claude_instance_id: spawnId });
     expect(typeof result).toBe("object");
@@ -48,7 +48,7 @@ test("pause: error — working spawn is not pausable → ErrSpawnNotPausable", a
       "create-store": true,
     });
 
-    using client = new Client({ storePath, createIfMissing: true });
+    using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
     let caught: unknown;
     try {
       await client.pause({ claude_instance_id: spawnId });

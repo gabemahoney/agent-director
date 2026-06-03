@@ -1,8 +1,9 @@
 # agent-director
 
 TypeScript/Bun client for the agent-director CLI. Shares the Go API
-surface 1:1. The `Client` spawns the bundled `agent-director` CLI
-binary as a subprocess per verb call — no FFI, no network hop.
+surface 1:1. The `Client` discovers the system-installed
+`agent-director` CLI binary at construction time and drives it as a
+subprocess per verb call — no FFI, no network hop, no bundled binary.
 
 ## Install
 
@@ -10,81 +11,33 @@ binary as a subprocess per verb call — no FFI, no network hop.
 bun add agent-director
 ```
 
-Requires Bun >=1.0.21. The package ships the prebuilt CLI binary for
-each supported platform via optional dependencies — they install
-automatically on `bun add`. The `Client` verifies the binary is present at construction time so install
-errors surface immediately, then re-resolves its path on every verb call so
-a binary replacement (e.g. a background `bun install`) is handled
-transparently.
+Requires Bun >=1.0.21. The package ships pure JavaScript — there are
+**no lifecycle scripts** (`postinstall`, `prepare`, etc.) and no
+optional platform dependencies. `bun add --ignore-scripts agent-director`
+is a no-op and installs the library with identical functionality.
 
-On install, a postinstall script copies the `install-agent-director` skill body into `~/.claude/skills/install-agent-director/` so `claude /install-agent-director` is immediately discoverable in Claude Code. The postinstall only writes under `~/.claude/skills/`; it does not touch PATH, `~/.agent-director/`, or your Claude Code settings.
-
-Bun blocks dependency postinstalls by default. Trust this package so the skill copy can run:
-
-```sh
-bun pm trust agent-director
-```
-
-Or pre-declare it in your `package.json` before `bun add`:
-
-```json
-{
-  "trustedDependencies": ["agent-director"]
-}
-```
-
-### Verbose install logs
-
-Set `AD_POSTINSTALL_VERBOSE=1` (also accepts `true` / `yes`, case-insensitive) before `bun add` to see what the postinstall resolved and decided. The default is quiet — five lines maximum.
-
-### Skipping the postinstall
-
-`bun add --ignore-scripts agent-director` installs the library without running the postinstall. The skill is not copied. To get skill discoverability after the fact, either:
-
-```sh
-cp -r node_modules/agent-director/skills/install-agent-director ~/.claude/skills/
-```
-
-or, once the library is on disk, invoke `claude /install-agent-director` from any Claude Code session — the install skill copies itself into `~/.claude/skills/` as a side effect of running.
-
-### How the postinstall decides whether to overwrite
-
-The skill body carries a `version:` field in its YAML frontmatter. On every install the postinstall reads the bundled version and the version already on disk:
-
-- **Same version** — no filesystem changes, no output.
-- **Older or missing on disk** — overwrite, leaving a timestamped `install-agent-director.bak.<unix-ts>` sibling under `~/.claude/skills/`.
-- **Newer on disk** — leave it alone, single-line warning to stderr.
-
-The authoritative behavior contract lives in Idea Bee `b.fg3`.
+**You must separately install the CLI binary on the host.** Use
+`install.sh` from the agent-director release tarball or any other
+mechanism that drops an executable at `~/.agent-director/bin/agent-director`
+or somewhere on `$PATH`. `Client.create()` discovers the binary at
+construction time and rejects if it cannot find one.
 
 ## Supported platforms
-
-**Supported** — install + library + skill all work:
 
 - `linux/x64` (Linux on x86_64)
 - `darwin/arm64` (Apple Silicon Mac)
 
-**Refused at install time by npm/bun** — the umbrella's `os`/`cpu` fields fail resolution and no postinstall runs:
-
-- Windows (any architecture)
-- FreeBSD, OpenBSD, and other non-Linux/non-Darwin OSes
-- any architecture not in `[x64, arm64]` (e.g. `ia32`, `mips`, `arm`)
-
-**Refused by the postinstall after npm/bun admits the install** — the umbrella runs but the postinstall exits non-zero with an `agent-director: unsupported host` message before any filesystem write:
-
-- `darwin/x64` (Intel Mac)
-- `linux/arm64`
-
-The refusal is two-layered because npm/bun's `os` and `cpu` fields are a cross-product, not a per-pair set: the coarse gate cannot distinguish "supported pair" from "supported OS plus supported arch in any combination." The postinstall's host-pair check catches the two cross-product members that should not actually install.
-
-See Idea Bee `b.fg3` for cross-platform expansion status.
+The library's published npm package admits installs on any host (no
+`os`/`cpu` restrictions on the library itself); the platform gate is
+the CLI binary's own platform coverage. The CLI must be installed
+separately per the platform list above.
 
 ## Quick start
 
 `using` block (preferred):
 
 ```ts
-using client = new Client({});
+using client = await Client.create({});
 const v = await client.version({});
 console.log(v.version);
 ```
@@ -92,7 +45,7 @@ console.log(v.version);
 Explicit `try/finally` (portable fallback):
 
 ```ts
-const client = new Client({});
+const client = await Client.create({});
 try {
   const v = await client.version({});
   console.log(v.version);
@@ -247,6 +200,45 @@ The library version equals the agent-director release tag — released in lockst
 | npm package | CLI binary |
 |---|---|
 | `agent-director@v0.5.0` | `agent-director CLI v0.5.0` |
+
+## Minimum required CLI binary version
+
+The library declares the minimum CLI-binary version it requires on two
+surfaces, both backed by the same single source of truth shipped in the
+published npm package at `dist/version-floor.json`.
+
+**TS export (preferred for JS/TS consumers):**
+
+```ts
+import { MIN_BINARY_VERSION, DEV_SENTINEL_VERSION } from "agent-director";
+
+console.log(`requires agent-director >= ${MIN_BINARY_VERSION}`);
+
+if (binaryVersion === DEV_SENTINEL_VERSION) {
+  // dev-built binary stamps the sentinel; accept it as satisfying the floor.
+}
+```
+
+`MIN_BINARY_VERSION` is a strict-SemVer-2.0 string (e.g. `0.7.0` or
+`0.7.0-rc1`). The value is inlined into the bundle at build time; no
+runtime file read. `DEV_SENTINEL_VERSION` is the literal `"0.0.0-dev"`
+— a dev-built CLI binary stamps this value and satisfies any floor by
+short-circuit. The library returns the binary's reported version
+verbatim — no leading-`v` stripping, no normalization. Consumers
+comparing two real versions should use a standard semver library;
+agent-director does not export a comparator.
+
+**Bash read pattern (for install scripts and non-JS consumers):**
+
+```sh
+jq -r .min_binary_version < node_modules/agent-director/dist/version-floor.json
+```
+
+This pattern is part of the public contract. It does not require the
+agent-director CLI to be installed, does not spawn a JS runtime, and
+does not require any agent-director-specific environment setup — read
+the field from the file at the stable documented path. The `-r` flag
+returns a bare string suitable for shell comparison.
 
 ## Supported Bun versions
 

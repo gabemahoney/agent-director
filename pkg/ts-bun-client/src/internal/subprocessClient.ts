@@ -1,36 +1,30 @@
 /**
  * subprocessClient.ts — subprocess-based Client implementation.
  *
- * Wires the platform resolver (A2), argv builder (A3), spawner (A4), and
- * typed-error map (A5) into a full Client class that drives the bundled CLI
- * binary one subprocess per verb call.
+ * Construction is async (see Client.create() in client.ts).  The runtime
+ * constructor is private — production code instantiates via the factory,
+ * which runs the SR-1 discovery + SR-1.3 probe pipeline first and passes
+ * the resolved binaryPath + binaryVersion in via an internal-only options
+ * object (private symbol).
  *
- * Per-Client serialization: each `SubprocessClient` instance owns a private
- * `#tail: Promise<unknown>` queue. Every call chains its spawn body onto the
- * tail so that at most one subprocess per Client is running at any time (SRD
- * SR-3.1/SR-3.2/SR-3.4). Rejection does not wedge the queue (SR-3.3).
+ * Per-Client serialization: each instance owns a private `#tail: Promise<unknown>`
+ * queue. Every call chains its spawn body onto the tail so that at most one
+ * subprocess per Client is running at any time (SR-3.1/3.2/3.4). Rejection
+ * does not wedge the queue (SR-3.3).
  *
- * Timeout handling (SRD SR-6.2):
+ * Timeout handling (SR-6.2):
  *   1. setTimeout fires after callTimeoutMs.
  *   2. SIGTERM is sent to the subprocess.
  *   3. A 2-second graceful window waits for the subprocess to exit.
  *   4. SIGKILL is sent if still running after the window.
  *   5. After subprocess.exited resolves, ErrCallTimeout is thrown.
  *
- * Signal handling (SRD SR-5.2):
+ * Signal handling (SR-5.2):
  *   After subprocess.exited resolves, signalCode is inspected. If non-null
  *   and the timeout was not the cause, ErrConsumerSignal is thrown.
- *
- * IMPORTANT: This class does NOT modify src/index.ts's `Client` export.
- * The public surface continues to point at the existing FFI Client until
- * Epic B's cutover. Only the four new typed-error classes are added to
- * index.ts (done in Task A1).
- *
- * Internal — NOT re-exported from src/index.ts until Epic B.
  */
 
 import { readFile } from "node:fs/promises";
-import { resolveCliPath } from "./platformResolve.js";
 import { expandTilde } from "./tilde.js";
 import { buildArgv, type GlobalArgvOptions } from "./argv.js";
 import { ErrSubprocessCrash } from "./spawner.js";
@@ -61,16 +55,16 @@ import type {
   VersionParams, VersionResult,
 } from "../types.js";
 
-// Default per-call timeout (30 seconds). SRD SR-6.1.
+// Default per-call timeout (30 seconds). SR-6.1.
 const DEFAULT_CALL_TIMEOUT_MS = 30_000;
-// Graceful window between SIGTERM and SIGKILL. SRD SR-6.2.
+// Graceful window between SIGTERM and SIGKILL. SR-6.2.
 const SIGKILL_GRACE_MS = 2_000;
 
 // b.6o1: runtime npm package version loader — reads package.json at call time
-// instead of inlining at bundle time so version() returns the published semver
-// (stamped by release.sh) rather than any bundler-frozen value.
-// try: production path via import.meta.resolve (installed package).
-// catch: dev-tree path when running bun test against source (no npm install).
+// so client.version() returns the published semver (stamped by release.sh)
+// rather than the CLI binary's stamped version.  Kept separate from
+// binaryVersion (SR-4.1): the latter is the CLI's stamped value; this is the
+// library's npm-package version.
 async function loadNpmPackageVersion(): Promise<string> {
   try {
     const url = import.meta.resolve("agent-director/package.json");
@@ -84,92 +78,72 @@ async function loadNpmPackageVersion(): Promise<string> {
 }
 
 /**
- * SubprocessClient drives the bundled agent-director CLI binary as one
- * subprocess per verb call. Intended as the replacement for the FFI Client
- * but NOT yet wired to the public `Client` export (that is Epic B).
+ * Internal construction parameters.  Carries pre-resolved binaryPath +
+ * binaryVersion so the runtime constructor doesn't run discovery itself.
+ * The factory (Client.create) supplies these by running discoverSystemBinary
+ * and runProbe upstream.
  *
- * Construction resolves the CLI binary path (throws on any resolution error)
- * and validates callTimeoutMs.
+ * @internal
+ */
+export interface InternalClientInit {
+  /** Canonicalized absolute path produced by SR-1.1 discovery or SR-4.1 _cliPath canonicalization. */
+  binaryPath: string;
+  /** Byte-exact version string captured from the probe envelope (SR-2.5). */
+  binaryVersion: string;
+}
+
+/**
+ * SubprocessClient drives the agent-director CLI binary as one subprocess
+ * per verb call against a binary located by the SR-1 discovery pipeline.
+ *
+ * Constructed via Client.create() — the public surface.  The runtime
+ * constructor is private; tests reach instances only through the factory.
  */
 export class SubprocessClient {
-  /**
-   * DI override path for tests. When set, this path is used verbatim on every
-   * spawn instead of calling resolveCliPath(). Undefined in production, where
-   * resolveCliPath() is called fresh on each spawn (b.i5y: per-call resolution
-   * so filesystem churn between construction and spawn is not fatal).
-   */
-  readonly #cliPathOverride: string | undefined;
+  /** Canonicalized absolute path to the CLI binary (SR-1.5). */
+  readonly #binaryPath: string;
+  /** Byte-exact version string captured at construction (SR-2.5). */
+  readonly #binaryVersion: string;
   /** Per-call timeout in milliseconds. */
   readonly #callTimeoutMs: number;
   /** Optional logger for non-fatal warnings. */
   readonly #logger: ClientOptions["logger"];
   /** Whether this client is still open. */
   #open: boolean;
-  /**
-   * Global-flag overrides forwarded to every subprocess invocation as
-   * `--store-path` / `--home` / `--tmux-command` before the verb token.
-   *
-   * Values are tilde-expanded at construction time and stored verbatim;
-   * fields are undefined when the caller did not supply that ClientOption,
-   * in which case the CLI's own default-resolution applies (b.32k removed
-   * the prior TS-side heuristics that mirrored CLI internals).
-   */
+  /** Global flags forwarded to every spawn (--store-path / --home / --tmux-command). */
   readonly #globalOpts: GlobalArgvOptions;
   /**
-   * FFI-shape parity stub. The FFI Client stores a handle string here; the
-   * subprocess model has no handle concept (each call opens and closes the
-   * store independently), so this is always null. Exposed for tests that
-   * cast to the FFI Client shape to inspect lifecycle state.
-   *
-   * @internal Tests only.
+   * FFI-shape parity stub.  Always null in the subprocess model.
+   * @internal
    */
   readonly _handle: null = null;
-  /**
-   * Chained-Promise queue. Every call chains its spawn body onto #tail so
-   * that at most one subprocess per Client is running at any time (SR-3.4).
-   * The tail always resolves (never rejects) so subsequent calls proceed even
-   * after a failed call (SR-3.3).
-   */
+  /** Serialization queue (SR-3.4). */
   #tail: Promise<unknown>;
-  /** Per-instance lazy cache for the npm package version (b.6o1). */
+  /** Per-instance npm package version cache (b.6o1). */
   #npmPkgVersion: string | undefined;
 
-  constructor(opts: ClientOptions) {
-    // Validate callTimeoutMs before doing any I/O.
+  /**
+   * Protected constructor — production code uses Client.create() instead.
+   * Protected so that the public Client class (which extends this) can call
+   * super() via SubprocessClient._construct().  External code cannot reach
+   * the constructor: `new SubprocessClient(...)` and `new Client(...)` are
+   * both compile-time TS errors.
+   *
+   * @internal
+   */
+  protected constructor(opts: ClientOptions, init: InternalClientInit) {
     const rawTimeout = opts.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
     if (rawTimeout <= 0) {
       throw new Error(
         `ClientOptions.callTimeoutMs must be positive (got ${rawTimeout}); ` +
-          `omit the field to use the default (${DEFAULT_CALL_TIMEOUT_MS} ms)`
+          `omit the field to use the default (${DEFAULT_CALL_TIMEOUT_MS} ms)`,
       );
     }
     this.#callTimeoutMs = rawTimeout;
-
     this.#logger = opts.logger;
+    this.#binaryPath = init.binaryPath;
+    this.#binaryVersion = init.binaryVersion;
 
-    // DI hook for testing: _cliPath bypasses platformResolve so tests can
-    // inject a fixture binary path without needing the real platform package.
-    const opts2 = opts as unknown as ClientOptions & { _cliPath?: string };
-
-    // Eager resolution at construction (SR-2.4): surface ErrBunVersionTooOld,
-    // ErrUnsupportedPlatform, ErrPlatformPackageMissing, ErrCliNotExecutable
-    // immediately on construction so callers don't wait for the first verb call.
-    // The resolved path is NOT cached — #doCall calls resolveCliPath() again per
-    // spawn so the binary can be replaced/upgraded without ENOENT (b.i5y fix).
-    // When _cliPath is provided (tests), skip resolution entirely and store the
-    // override; it is used verbatim on every spawn.
-    if (opts2._cliPath !== undefined) {
-      this.#cliPathOverride = opts2._cliPath;
-    } else {
-      resolveCliPath(); // eager throw on platform/install errors; result discarded
-      this.#cliPathOverride = undefined;
-    }
-
-    // b.32k: forward user-supplied storePath / tmuxCommand / home verbatim to
-    // the CLI via the global flags it now exposes. Tilde-expand TS-side so
-    // the subprocess never sees a leading `~`. When a field is undefined the
-    // CLI's own three-tier default-resolution applies (single source of
-    // truth — no TS-side fallback).
     const g: GlobalArgvOptions = {};
     if (opts.storePath !== undefined) g.storePath = expandTilde(opts.storePath);
     if (opts.tmuxCommand !== undefined) g.tmuxCommand = expandTilde(opts.tmuxCommand);
@@ -180,16 +154,39 @@ export class SubprocessClient {
     this.#tail = Promise.resolve();
   }
 
+  /**
+   * Internal-only factory entry point.  Callers in the same module use
+   * `(SubprocessClient as any)._construct(...)`; we publish this as a
+   * non-typed method so the TS `private constructor` fence holds for
+   * external consumers while client.ts can still build an instance.
+   *
+   * @internal
+   */
+  static _construct(opts: ClientOptions, init: InternalClientInit): SubprocessClient {
+    return new SubprocessClient(opts, init);
+  }
+
+  // -------------------------------------------------------------------------
+  // Public getters (SR-4.1)
+  // -------------------------------------------------------------------------
+
+  /** Canonicalized absolute path to the CLI binary (SR-1.5 / SR-4.1). */
+  get binaryPath(): string {
+    return this.#binaryPath;
+  }
+
+  /** Byte-exact version string the CLI binary reported (SR-2.5 / SR-4.1). */
+  get binaryVersion(): string {
+    return this.#binaryVersion;
+  }
+
   // -------------------------------------------------------------------------
   // Lifecycle
   // -------------------------------------------------------------------------
 
   /**
-   * close marks this client as closed. Subsequent verb calls throw
-   * ErrClientClosed. Idempotent.
-   *
-   * Unlike the FFI Client there is no handle to release: the subprocess
-   * model requires no teardown — each call's subprocess is already reaped.
+   * close marks this client as closed.  Idempotent.  Subsequent verb calls
+   * throw ErrClientClosed.
    */
   close(): void {
     this.#open = false;
@@ -206,11 +203,7 @@ export class SubprocessClient {
   }
 
   /**
-   * _assertOpenForTests exposes #assertOpen to test code without forcing
-   * public visibility. Mirrors the same helper on the FFI Client so that
-   * client-lifecycle tests compile against either implementation.
-   *
-   * @internal Tests only — do not call from application code.
+   * @internal Tests only.
    */
   _assertOpenForTests(): void {
     this.#assertOpen();
@@ -220,18 +213,6 @@ export class SubprocessClient {
   // Core dispatch
   // -------------------------------------------------------------------------
 
-  /**
-   * #enqueue chains a verb call onto the serialization queue.
-   *
-   * The pattern:
-   *   1. Create a [resolve, reject] pair for the caller's promise.
-   *   2. Chain the spawn body onto #tail via .then().
-   *   3. The .then() handler always resolves (catch + resolve(undefined)) so
-   *      the tail never rejects and subsequent calls can chain (SR-3.3).
-   *   4. Replace #tail with the new tail synchronously before returning so
-   *      a second call issued before the first settles is guaranteed to chain
-   *      off the first (SR-3.1 synchronous-replacement requirement).
-   */
   #enqueue<R>(verb: VerbName, params: unknown): Promise<R> {
     let callResolve!: (value: R) => void;
     let callReject!: (reason: unknown) => void;
@@ -247,30 +228,16 @@ export class SubprocessClient {
       } catch (err) {
         callReject(err);
       }
-      // Always resolve the tail so subsequent calls proceed (SR-3.3).
     });
 
     return callPromise;
   }
 
-  /**
-   * #doCall performs the actual spawn + drain + parse for a single verb call.
-   * Called from within the serialization queue.
-   */
   async #doCall<R>(verb: VerbName, params: unknown): Promise<R> {
-    // Resolve the CLI binary path fresh on every spawn (b.i5y: avoids ENOENT
-    // when the binary is replaced between construction and this call). Tests
-    // inject a fixed path via #cliPathOverride; production always re-resolves.
-    const cliPath = this.#cliPathOverride ?? resolveCliPath();
+    const cliPath = this.#binaryPath;
     const argv = buildArgv(cliPath, verb, params, this.#globalOpts);
     const startMs = Date.now();
 
-    // Snapshot process.env at call time per SRD SR-1.4 so the subprocess
-    // inherits the consumer's env (HOME, PATH, etc.) as it stood when the
-    // call was made. b.32k removed the TS-side HOME-from-storePath heuristic
-    // and the PATH-prefix-from-tmuxCommand hack; those concerns are now
-    // expressed through the CLI's --home / --tmux-command global flags
-    // (set in this.#globalOpts) instead of env mutation.
     const spawnEnv: Record<string, string> = { ...process.env } as Record<string, string>;
 
     const proc = Bun.spawn({
@@ -282,26 +249,21 @@ export class SubprocessClient {
       env: spawnEnv,
     });
 
-    // Close stdin immediately — no verb needs stdin input (SRD SR-1.3).
     proc.stdin.end();
 
-    // Per-call timeout setup (SRD SR-6.2).
     let timedOut = false;
     const timeoutHandle = setTimeout(() => {
       timedOut = true;
       proc.kill("SIGTERM");
-      // Graceful window: wait 2 s then SIGKILL if not yet exited.
       const gracefulHandle = setTimeout(() => {
         proc.kill("SIGKILL");
       }, SIGKILL_GRACE_MS);
-      // Cancel the SIGKILL if the process exits during the graceful window.
       proc.exited.then(
         () => clearTimeout(gracefulHandle),
-        () => clearTimeout(gracefulHandle)
+        () => clearTimeout(gracefulHandle),
       );
     }, this.#callTimeoutMs);
 
-    // Drain stdout and stderr concurrently with the subprocess (SRD SR-7.1).
     let stdoutText: string;
     let stderrText: string;
     try {
@@ -311,7 +273,6 @@ export class SubprocessClient {
         proc.exited,
       ]).then(([out, err]) => [out, err]);
     } finally {
-      // Clear the call-level timeout regardless of outcome (SR-6.3).
       clearTimeout(timeoutHandle);
     }
 
@@ -319,26 +280,15 @@ export class SubprocessClient {
     const exitCode = proc.exitCode;
     const elapsedMs = Date.now() - startMs;
 
-    // Timeout path: the subprocess was killed by our timeout handler.
     if (timedOut) {
-      // Ensure the process is fully reaped before surfacing the error.
       await proc.exited.catch(() => {/* already exited */});
       throw new ErrCallTimeout(verb, elapsedMs, this.#callTimeoutMs);
     }
 
-    // Signal path: the subprocess was killed by an OS signal (not our timeout).
     if (signalCode !== null) {
       throw new ErrConsumerSignal(verb, signalCode);
     }
 
-    // Non-zero exit: either a domain error or a crash.
-    //
-    // The CLI binary writes API-level error envelopes to STDERR (as JSON) and
-    // exits non-zero (SRD §CLI-wire: writeApiErrorAndDispatch). Diagnostic
-    // lines (e.g. "pre-trust skipped…") may precede the JSON envelope on
-    // stderr. We scan from the last line backwards to find the first JSON
-    // object that is an error envelope and re-throw it as a typed error.
-    // If no envelope is found, fall through to ErrSubprocessCrash (crash path).
     if (exitCode !== 0) {
       const stderrLines = stderrText.trimEnd().split("\n");
       for (let i = stderrLines.length - 1; i >= 0; i--) {
@@ -357,22 +307,18 @@ export class SubprocessClient {
       throw new ErrSubprocessCrash(exitCode, null, stderrText);
     }
 
-    // Parse stdout as JSON (SRD SR-1.5 exit-code-0 success path).
     let envelope: unknown;
     try {
       envelope = JSON.parse(stdoutText);
     } catch {
-      // Exit code 0 but non-JSON stdout: treat as subprocess crash.
       throw new ErrSubprocessCrash(0, null, stderrText);
     }
 
-    // Typed error from the CLI's JSON envelope (SRD SR-4.1/SR-4.2/SR-4.3).
     if (isErrorEnvelope(envelope)) {
       throwFromEnvelope(verb, envelope);
     }
 
     if (this.#logger?.debug) {
-      // Optional debug logging for non-error results; no-op when logger absent.
       this.#logger.debug(`SubprocessClient: ${verb} ok`, { elapsedMs });
     }
 
@@ -476,14 +422,6 @@ export class SubprocessClient {
   /** version — return the npm package version (b.6o1) plus the CLI's commit SHA. */
   async version(params: VersionParams): Promise<VersionResult> {
     this.#assertOpen();
-    // b.6o1: override CLI git-describe stamp with the npm package version
-    // so semver gating against agent-director@X.Y.Z works for consumers.
-    // Lazy-load and cache per instance; loadNpmPackageVersion() reads disk once.
-    // Note: concurrent callers before the first await resolves will each
-    // call loadNpmPackageVersion() independently (SR-3.3 SHOULD, not MUST).
-    // Sequential calls (the common case via #enqueue) always hit the cache.
-    // Spread cliResp so any extra envelope fields (used by stub-binary tests)
-    // survive the wrapper.
     if (this.#npmPkgVersion === undefined) {
       this.#npmPkgVersion = await loadNpmPackageVersion();
     }

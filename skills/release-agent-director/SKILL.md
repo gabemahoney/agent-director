@@ -23,7 +23,7 @@ first failing phase. Every phase prefixes its stdout/stderr with
 | `build` | local file write | `make release-binaries` (3 CLI cross-compiles into `dist/`) + stage each into the matching `pkg/ts-bun-client/platforms/<dir>/bin/agent-director` |
 | `verify` | local file write | stage a release-stamped copy of the umbrella + host platform sub-package, `bun pm pack`, install into a temp `HOME`, then run `verify-installed-pkg.ts --smoke` (constructs a `Client` and asserts `client.version()` returns a well-formed `{ version, commit }` envelope). Also asserts the postinstall placed `~/.claude/skills/install-agent-director/` with the right frontmatter version. Runs the full in-tree `bun test` suite against `pkg/ts-bun-client/` (`bun install --frozen-lockfile && bun test`). Then re-stages `dist/` binaries into `platforms/` (undoing any overwrite by `test/setup.ts`) and re-asserts the staged binary version matches `$VERSION` (b.uys anchor). |
 | `tag` | **POINT OF NO RETURN** | `git tag -a $VERSION` and `git push origin $VERSION` |
-| `publish` | **irreversible** | in-place stamp version onto umbrella + 2 sub-package `package.json` files + `skills/install-agent-director/SKILL.md` frontmatter `version:` (SR-4.1 lockstep); caret-pin `optionalDependencies` (umbrella); `prepublishOnly` re-checks; `npm publish` 2 per-platform optional packages, then the umbrella; same-version retries forbidden |
+| `publish` | **irreversible** | in-place stamp version onto umbrella + 2 sub-package `package.json` files + `skills/install-agent-director/SKILL.md` frontmatter `version:` (SR-4.1 lockstep); caret-pin `optionalDependencies` (umbrella); `npm publish` 2 per-platform optional packages, then the umbrella; same-version retries forbidden |
 | `gh-release` | irreversible | `gh release create $VERSION` with 3 CLI binaries attached |
 | `report` | read-only | final summary; on failure, names the failed phase + the phase-specific corrective action |
 
@@ -35,10 +35,7 @@ Before invoking `./release.sh v<X.Y.Z> --release`, verify all five:
    (`pkg/ts-bun-client/package.json` + the two under
    `platforms/*/`) contain the `@CHANGEME-H3/...` or `@TBD/...`
    placeholder. H3 itself was resolved on 2026-05-24 (see
-   `docs/release-blockers.md`); the publish-phase sentinel remains
-   in place as a forward-going tripwire (now Guard 0 of
-   `pkg/ts-bun-client/scripts/prepublish-guards.ts`) and halts before
-   any `npm publish` if a placeholder is ever re-introduced.
+   `docs/release-blockers.md`).
 2. **Functional gates green.** Both the Go suite (`go test ./...`)
    and the TS suite (`bun test` under `pkg/ts-bun-client/`) succeed
    locally. `make release-binaries-smoke` succeeds. The Docker
@@ -60,8 +57,9 @@ Before invoking `./release.sh v<X.Y.Z> --release`, verify all five:
    field is the source of truth the postinstall + release pipeline
    read. The `publish` phase keeps the umbrella `package.json`
    `version` and the SKILL.md frontmatter `version:` in lockstep at
-   bump time; `prepublishOnly` (Guard 1) refuses to publish if they
-   drift. The `verify` phase packs the umbrella into a tarball,
+   bump time; `check-version-coherence.ts --scope publish` refuses
+   to publish if they drift. The `verify` phase packs the umbrella
+   into a tarball,
    installs it under a temp `HOME`, runs the version smoke, and
    asserts the postinstall placed the skill body with the right
    frontmatter version — so a regression in the published-shape
@@ -131,20 +129,6 @@ would break consumers' install reproducibility. The only valid
 retry path is to bump the version (PATCH for a re-publish, MINOR
 or MAJOR if the recovery patch is meaningful) and re-run from the
 top.
-
-### `prepublishOnly` guards (v0.4.1+)
-
-`pkg/ts-bun-client/scripts/prepublish-guards.ts` runs synchronously
-inside `npm publish` / `bun publish` for the umbrella and blocks the
-publish on any of four invariant violations (SRD §SR-3.1 + §SR-3.3 +
-§SR-4.1). Each is a hard release-blocker; fix and re-run.
-
-| Guard | Invariant | Recovery |
-|---|---|---|
-| Placeholder name | umbrella `name` does not contain `CHANGEME-H3` | Edit `pkg/ts-bun-client/package.json` `name`; see `docs/release-blockers.md`. |
-| Version skew | `package.json` `version` == `SKILL.md` frontmatter `version:` | Re-run `publish_phase`'s lockstep stamp — both fields move together. If you edited one by hand, re-run the release. |
-| `os`/`cpu` drift | umbrella `os` == `["linux","darwin"]` AND `cpu` == `["x64","arm64"]`, exact match including element order | Restore the SR-3.1 pin in `pkg/ts-bun-client/package.json`. If a future Epic legitimately reorders or expands the supported set, update the SR-3.1 pin in the SRD and in `prepublish-guards.ts` together. |
-| Opt-deps range | umbrella `optionalDependencies[@agent-director/linux-x64]` and `[@agent-director/darwin-arm64]` both equal `^<umbrella.version>` | Re-run `bun run scripts/version-bump.ts --version <X.Y.Z>` from `pkg/ts-bun-client/` (the canonical pin-rewriter, invoked by `publish_phase`). |
 
 ## Flags
 

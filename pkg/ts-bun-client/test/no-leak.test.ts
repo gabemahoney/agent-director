@@ -51,7 +51,7 @@ test.skipIf(!isLinux)(
       // this baseline exactly — net delta zero.
       const baseline = countAgentDirectorProcesses();
 
-      using client = new Client({ storePath, createIfMissing: true });
+      using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
 
       // Issue 1000 sequential list calls. The list verb is handle-free, fast,
       // and exercises the full subprocess spawn → reap cycle each call.

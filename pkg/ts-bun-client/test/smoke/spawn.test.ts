@@ -43,7 +43,7 @@ test("spawn: happy path — creates instance with valid cwd", async () => {
       });
     }
 
-    using client = new Client({ storePath, createIfMissing: true, tmuxCommand: fakeTmuxBin });
+    using client = await Client.create({ storePath, createIfMissing: true, tmuxCommand: fakeTmuxBin , _cliPath: process.env.CLI_PATH } as any);
     const result: SpawnResult = await client.spawn({ cwd: homeDir });
     expect(typeof result.claude_instance_id).toBe("string");
     expect(result.claude_instance_id.length).toBeGreaterThan(0);
@@ -53,7 +53,7 @@ test("spawn: happy path — creates instance with valid cwd", async () => {
 test("spawn: error — empty cwd → ErrCwdMissing", async () => {
   await withTempHome(async (homeDir) => {
     const storePath = path.join(homeDir, ".agent-director", "state.db");
-    using client = new Client({ storePath, createIfMissing: true });
+    using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
     await expect(
       client.spawn({ cwd: "" })
     ).rejects.toBeInstanceOf(ErrCwdMissing);

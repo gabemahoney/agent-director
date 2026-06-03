@@ -1,158 +1,140 @@
 /**
- * Packaging content assertions — verify tarball file lists via
- * `npm pack --dry-run --json`.
+ * packaging.test.ts — verify the published tarball composition matches
+ * the SR-6 surface (b.ue3 / Epic 4).
  *
- * Assertions:
- *   - Top-level tarball: zero .so/.dylib files (no native libraries shipped).
- *   - linux-x64 sub-package: contains bin/agent-director, package.json,
- *     README-binary-source.md (binary may be absent on darwin CI — asserted
- *     per files array only when the file exists on disk).
- *   - darwin-arm64: contains package.json + README-binary-source.md;
- *     binary asserted present only when it actually exists on this host.
- *
- * v1 platform set is {linux-x64, darwin-arm64}; darwin-x64 was dropped
- * 2026-05-24.
- *
- * Each directory's pack output is fetched once and shared across sub-tests to
- * keep total subprocess overhead low.
+ * After the b.ue3 cutover:
+ *   - No `optionalDependencies` block.
+ *   - No `bin` field.
+ *   - No lifecycle scripts (11 forbidden hook names).
+ *   - No platforms/** in the tarball.
+ *   - No skills/install-agent-director/** in the tarball.
+ *   - No bin/** in the tarball.
+ *   - No *.test.* in the tarball.
+ *   - exports."." unchanged: import → ./dist/index.js, types → ./dist/index.d.ts.
+ *   - exports["./dist/version-floor.json"] is the SR-6.6 amendment site.
  */
 
 import { test, expect, describe } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 const pkgDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** Memoized map: dir → file list. Pack is run once per dir. */
-const _packCache = new Map<string, string[]>();
+interface PackEntry {
+  files?: Array<{ path: string }>;
+}
 
-/**
- * Run `npm pack --dry-run --json` in `dir` and return the parsed file list
- * (cached per directory to avoid repeated subprocess spawns).
- */
 function getPackFiles(dir: string): string[] {
-  if (_packCache.has(dir)) return _packCache.get(dir)!;
-
   const result = spawnSync(
     "npm",
     ["pack", "--dry-run", "--json"],
-    { cwd: dir, encoding: "utf8" }
+    { cwd: dir, encoding: "utf8" },
   );
-
   if (result.status !== 0) {
-    console.error(
-      `packaging.test.ts: npm pack --dry-run failed in ${dir}:\n${result.stderr}`
+    throw new Error(
+      `packaging.test.ts: npm pack --dry-run failed in ${dir}:\n${result.stderr}`,
     );
-    _packCache.set(dir, []);
-    return [];
   }
-
-  // npm pack --dry-run --json may prefix warnings before the JSON array.
-  const raw = result.stdout;
-  const jsonStart = raw.indexOf("[");
-  if (jsonStart === -1) {
-    console.error(`packaging.test.ts: no JSON array in npm pack output:\n${raw}`);
-    _packCache.set(dir, []);
-    return [];
+  const parsed = JSON.parse(result.stdout) as PackEntry[];
+  if (parsed.length === 0 || !parsed[0]?.files) {
+    throw new Error(`packaging.test.ts: empty pack output for ${dir}`);
   }
-
-  let files: string[] = [];
-  try {
-    const parsed = JSON.parse(raw.slice(jsonStart)) as Array<{
-      files: Array<{ path: string }>;
-    }>;
-    files = parsed[0]?.files?.map((f) => f.path) ?? [];
-  } catch (e) {
-    console.error(`packaging.test.ts: failed to parse npm pack output: ${e}`);
-  }
-  _packCache.set(dir, files);
-  return files;
+  return parsed[0].files!.map((f) => f.path);
 }
 
-// Pre-warm all three pack calls before tests run (avoids per-test subprocess
-// overhead and lets bun run tests faster after the initial fetch).
-const allDirs = [
-  pkgDir,
-  resolve(pkgDir, "platforms", "linux-x64"),
-  resolve(pkgDir, "platforms", "darwin-arm64"),
+const FORBIDDEN_LIFECYCLE_HOOKS = [
+  "preinstall",
+  "install",
+  "postinstall",
+  "prepare",
+  "prepack",
+  "postpack",
+  "prepublish",
+  "prepublishOnly",
+  "postpublish",
+  "preprepare",
+  "postprepare",
 ];
-for (const d of allDirs) getPackFiles(d);
 
-// ---------------------------------------------------------------------------
-// Top-level package
-// ---------------------------------------------------------------------------
+describe("packaging — umbrella tarball composition (SR-6.1 / SR-6.3 / SR-6.4 / SR-6.7)", () => {
+  // Read the live package.json — these assertions are about the source-of-truth,
+  // which is what `npm pack` ships verbatim.
+  const pkg = JSON.parse(
+    require("node:fs").readFileSync(resolve(pkgDir, "package.json"), "utf8"),
+  ) as Record<string, unknown>;
 
-describe("packaging — top-level tarball", () => {
-  test("top-level pack contains no .so or .dylib files", () => {
-    const files = getPackFiles(pkgDir);
-    expect(files.length).toBeGreaterThan(0);
-    const nativeFiles = files.filter(
-      (f) => f.endsWith(".so") || f.endsWith(".dylib")
-    );
-    expect(nativeFiles).toEqual([]);
+  test("no optionalDependencies field (SR-6.4)", () => {
+    expect(pkg.optionalDependencies).toBeUndefined();
+  });
+
+  test("no bin field (SR-6.7)", () => {
+    expect(pkg.bin).toBeUndefined();
+  });
+
+  for (const hook of FORBIDDEN_LIFECYCLE_HOOKS) {
+    test(`no lifecycle hook "${hook}" in scripts (SR-6.3)`, () => {
+      const scripts = (pkg.scripts ?? {}) as Record<string, string>;
+      expect(scripts[hook]).toBeUndefined();
+    });
+  }
+
+  test('exports["."] points at the bundle (SR-4.0)', () => {
+    const exp = (pkg.exports as Record<string, unknown>)["."] as Record<string, string>;
+    expect(exp.import).toBe("./dist/index.js");
+    expect(exp.types).toBe("./dist/index.d.ts");
+  });
+
+  test('exports["./dist/version-floor.json"] is published (SR-6.6)', () => {
+    const exp = pkg.exports as Record<string, unknown>;
+    expect(exp["./dist/version-floor.json"]).toBe("./dist/version-floor.json");
   });
 });
 
-// ---------------------------------------------------------------------------
-// Sub-package definitions
-// ---------------------------------------------------------------------------
+describe("packaging — tarball file list (SR-6.1 / SR-6.2)", () => {
+  const files = getPackFiles(pkgDir);
 
-interface SubPkgSpec {
-  name: string;
-  dir: string;
-  binaryRelPath: string;
-}
+  test("no platforms/** in tarball (SR-6.5)", () => {
+    expect(files.some((f) => f.startsWith("platforms/"))).toBe(false);
+  });
 
-const subPkgs: SubPkgSpec[] = [
-  {
-    name: "linux-x64",
-    dir: resolve(pkgDir, "platforms", "linux-x64"),
-    binaryRelPath: "bin/agent-director",
-  },
-  {
-    name: "darwin-arm64",
-    dir: resolve(pkgDir, "platforms", "darwin-arm64"),
-    binaryRelPath: "bin/agent-director",
-  },
-];
+  test("no skills/install-agent-director/** in tarball (SR-6.2)", () => {
+    expect(files.some((f) => f.startsWith("skills/"))).toBe(false);
+  });
 
-// ---------------------------------------------------------------------------
-// Sub-package tests
-// ---------------------------------------------------------------------------
+  test("no scripts/postinstall.ts in tarball (SR-6.3)", () => {
+    expect(files.some((f) => f === "scripts/postinstall.ts")).toBe(false);
+  });
 
-describe("packaging — sub-package tarballs", () => {
-  for (const spec of subPkgs) {
-    test(`${spec.name}: pack includes package.json and README-binary-source.md`, () => {
-      const files = getPackFiles(spec.dir);
-      expect(files.length).toBeGreaterThan(0);
-      expect(files.some((f) => f === "package.json")).toBe(true);
-      expect(files.some((f) => f === "README-binary-source.md")).toBe(true);
-    });
+  test("no bin/** in tarball (SR-6.7)", () => {
+    expect(files.some((f) => f.startsWith("bin/"))).toBe(false);
+  });
 
-    test(`${spec.name}: pack includes CLI binary when present on this host`, () => {
-      const binaryPath = resolve(spec.dir, spec.binaryRelPath);
-      if (!existsSync(binaryPath)) {
-        console.log(
-          `packaging.test.ts: ${spec.name} CLI binary absent on this host (${process.platform}) — skipping binary-in-tarball assertion`
-        );
-        return;
-      }
-      const files = getPackFiles(spec.dir);
-      expect(files.some((f) => f === spec.binaryRelPath)).toBe(true);
-    });
+  test("no .test. files in tarball", () => {
+    expect(files.some((f) => f.includes(".test."))).toBe(false);
+  });
 
-    test(`${spec.name}: pack contains no .so/.dylib files`, () => {
-      const files = getPackFiles(spec.dir);
-      const nativeFiles = files.filter(
-        (f) => f.endsWith(".so") || f.endsWith(".dylib")
-      );
-      expect(nativeFiles).toEqual([]);
-    });
-  }
+  test("no native shared libraries (.so / .dylib) in tarball", () => {
+    expect(files.some((f) => f.endsWith(".so") || f.endsWith(".dylib"))).toBe(false);
+  });
+
+  test("includes dist/index.js (SR-6.1)", () => {
+    expect(files).toContain("dist/index.js");
+  });
+
+  test("includes dist/index.d.ts (SR-6.1)", () => {
+    expect(files).toContain("dist/index.d.ts");
+  });
+
+  test("includes dist/version-floor.json (SR-6.1)", () => {
+    expect(files).toContain("dist/version-floor.json");
+  });
+
+  test("includes README.md (SR-6.1)", () => {
+    expect(files).toContain("README.md");
+  });
+
+  test("includes package.json (npm-automatic)", () => {
+    expect(files).toContain("package.json");
+  });
 });
