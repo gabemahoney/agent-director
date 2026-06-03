@@ -104,3 +104,30 @@ no bundled CLI binary. The library discovers the system-installed CLI at
 then PATH lookup). Build orchestration lives entirely in `release.sh` and
 the `Makefile` — there is no install-time work to do on the consumer
 side beyond writing files to disk.
+
+## 9. Release-blocking gates
+
+Every release-candidate build must pass these gates before `npm publish`
+fires (SR-8.11):
+
+1. `bun test` all green (PR-merge-blocking — but also re-verified at
+   release time).
+2. `bun run typecheck` clean.
+3. `bun run lint` clean.
+4. `scripts/check-version-coherence.ts --scope verify` — all sites
+   agree on the expected version; floor-lockstep gate confirms
+   `version-floor.json` / `dist/version-floor.json` / bundled
+   `MIN_BINARY_VERSION` are in lockstep; `dist/index.js` carries no
+   `NPM_PACKAGE_VERSION` identifier or `"0.0.0"` placeholder.
+5. `scripts/check-version-coherence.ts --scope publish` — re-runs the
+   verify checks and additionally SHA-256-rounds-trips every staged
+   tarball.
+6. Docker testplans under `tickets/testplans/b.ue3/` — all nine pass on
+   `linux/x64` (`darwin/arm64` coverage is implicit via developer-host
+   integration tests).
+7. `npm publish --dry-run` produces a tarball whose composition matches
+   the SR-6.1 positive list and the SR-6.2 negative-space exclusions
+   (asserted by `pkg/ts-bun-client/test/packaging.test.ts`).
+
+Tarball size is **not** a release gate — the SRD explicitly rejects a
+numeric ceiling (SR-6.9). Size is recorded in the release notes only.
