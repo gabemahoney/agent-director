@@ -103,7 +103,9 @@ func HelperSeedParentChild(dbPath, parentID, childID string) error {
 
 // PermissionRequestSeed is the result of HelperSeedPermissionRequest.
 type PermissionRequestSeed struct {
-	RequestID    int64
+	// RequestID is the AUTOINCREMENT row id assigned by the store on insert.
+	RequestID int64
+	// RequestToken is the UUIDv4 token used to address the request from clients.
 	RequestToken string
 }
 

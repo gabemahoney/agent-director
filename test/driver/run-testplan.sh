@@ -154,10 +154,31 @@ run_case_shell() {
     if [[ "$rc" -eq 0 ]]; then
         emit "$(emit_case "$case_id" pass "${out:0:200}")"
         return 0
-    else
-        emit "$(emit_case "$case_id" fail "exit=${rc}: ${out:0:400}")"
-        return 1
     fi
+
+    # Failure surfacing: with `set -euo pipefail` in t2 bodies, an early
+    # assertion (`test ...`) that exits non-zero produces *no* stdout/stderr,
+    # which means CI logs see only `exit=1: ` and the diagnosis from the
+    # JSONL stream alone is impossible. Re-run under `bash -x` so the last
+    # command attempted appears in stderr; the xtrace tail is then the
+    # detail block.
+    local xout xrc
+    xout="$(bash -x -c "$script" 2>&1)" && xrc=0 || xrc=$?
+    local last_trace=""
+    if [[ -n "$xout" ]]; then
+        # Keep the last ~6 xtrace lines so the failing assertion is visible
+        # without flooding the JSON details field. Drop empty lines.
+        last_trace="$(printf '%s\n' "$xout" | grep -v '^$' | tail -n 6 | tr '\n' '|')"
+    fi
+    local combined="exit=${rc}"
+    if [[ -n "$out" ]]; then
+        combined+=": ${out:0:300}"
+    fi
+    if [[ -n "$last_trace" ]]; then
+        combined+=" | xtrace_tail: ${last_trace:0:400}"
+    fi
+    emit "$(emit_case "$case_id" fail "${combined:0:800}")"
+    return 1
 }
 
 run_case_claude() {
