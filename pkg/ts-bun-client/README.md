@@ -16,11 +16,22 @@ Requires Bun >=1.0.21. The package ships pure JavaScript — there are
 optional platform dependencies. `bun add --ignore-scripts agent-director`
 is a no-op and installs the library with identical functionality.
 
-**You must separately install the CLI binary on the host.** Use
-`install.sh` from the agent-director release tarball or any other
-mechanism that drops an executable at `~/.agent-director/bin/agent-director`
-or somewhere on `$PATH`. `Client.create()` discovers the binary at
-construction time and rejects if it cannot find one.
+**You must separately install the CLI binary on the host.** The
+fastest path on a fresh machine is the one-liner published with the
+agent-director GitHub repo — it downloads the binary for your OS/arch
+from the [latest release](https://github.com/gabemahoney/agent-director/releases/latest)
+and sets up `~/.agent-director/`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/skills/install-agent-director/install.sh | bash -s -- --from-release
+```
+
+`Client.create()` discovers the installed binary at construction time
+(either at `~/.agent-director/bin/agent-director` or anywhere on
+`$PATH`) and rejects if it cannot find one. Other supported install
+mechanisms — `install.sh --binary <path>` with a locally-staged
+artifact, or any drop-in copy onto `$PATH` — are documented in the
+[repo README](https://github.com/gabemahoney/agent-director#install-the-cli).
 
 ## Supported platforms
 
