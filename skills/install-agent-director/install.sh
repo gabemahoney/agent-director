@@ -232,9 +232,115 @@ if [[ "$FROM_RELEASE" -eq 1 ]]; then
     # script copies the contents into place, so the tempfile being
     # cleaned up at script exit is fine.
     trap 'rm -f "$tmp_bin"' EXIT
-    if ! curl -fsSL --retry 2 -o "$tmp_bin" "$asset_url"; then
-        echo "install.sh: --from-release: failed to download $asset_url" >&2
-        echo "  check that the asset exists for $FROM_RELEASE_TAG on $RELEASE_REPO_SLUG." >&2
+
+    # ----------------------------------------------------------------
+    # CDN-propagation retry (b.kym).
+    #
+    # For ~30 minutes after `release.sh` finishes, GitHub's release-
+    # asset CDN can return 404 (or 403 while the asset is mid-publish)
+    # to unauthenticated curl, even though the asset is on the release
+    # page in the web UI and `gh release download` (auth path) works
+    # fine. Treating the first 404 as fatal aborts every install that
+    # lands inside that window.
+    #
+    # Strategy:
+    #   - 5 attempts at 2s/4s/8s/16s/32s backoff
+    #   - retry ONLY on HTTP 404/403; every other curl failure (DNS,
+    #     network unreachable, TLS, …) fails fast as before
+    #   - log each retry visibly — propagation lag is the most likely
+    #     cause and an operator should see it happening
+    #   - after retries exhaust, fall back to `gh release download` if
+    #     `gh` is on PATH (auth path uses different URL surface that
+    #     typically propagates faster); if `gh` is unavailable or
+    #     fails, emit the improved failure message and exit 3.
+    #
+    # INSTALL_SH_TEST_CURL_OVERRIDE: test-only escape hatch. When set,
+    # the named executable replaces real `curl` for this download
+    # wrapper. Exists because exercising the retry path against the
+    # live CDN is non-deterministic; the override lets the shell test
+    # suite inject a fake curl that returns 404 N times then 200. Not
+    # a public flag — undocumented in --help on purpose.
+    # ----------------------------------------------------------------
+
+    _ad_curl_cmd="curl"
+    if [[ -n "${INSTALL_SH_TEST_CURL_OVERRIDE:-}" ]]; then
+        _ad_curl_cmd="$INSTALL_SH_TEST_CURL_OVERRIDE"
+    fi
+
+    download_ok=0
+    attempt=1
+    max_attempts=5
+    backoff_delays=(2 4 8 16 32)
+    last_http_code=""
+    last_curl_exit=0
+    while [[ "$attempt" -le "$max_attempts" ]]; do
+        # -w '%{http_code}' surfaces the HTTP status even on -f's
+        # 22-exit; -o writes the body (or nothing, on 4xx with -f).
+        http_code=$("$_ad_curl_cmd" -sSL --retry 0 \
+            -w '%{http_code}' -o "$tmp_bin" \
+            "$asset_url" 2>/dev/null || true)
+        last_curl_exit=$?
+        last_http_code="$http_code"
+
+        if [[ "$http_code" == "200" ]]; then
+            download_ok=1
+            break
+        fi
+
+        if [[ "$http_code" != "404" && "$http_code" != "403" ]]; then
+            # DNS/network/TLS/etc. — fail fast, do not retry.
+            break
+        fi
+
+        if [[ "$attempt" -lt "$max_attempts" ]]; then
+            delay=${backoff_delays[$((attempt-1))]}
+            echo "install.sh: --from-release: asset not yet available (HTTP $http_code), retrying in ${delay}s (attempt $attempt/$max_attempts)" >&2
+            sleep "$delay"
+        fi
+        attempt=$((attempt+1))
+    done
+
+    if [[ "$download_ok" -ne 1 ]]; then
+        # gh-fallback: the API path uses different URL surface that
+        # propagates faster after a fresh release. Only attempt if
+        # `gh` is on PATH; failure here falls through to the original
+        # error message so the operator sees what actually broke.
+        if command -v gh >/dev/null 2>&1; then
+            echo "install.sh: --from-release: curl path exhausted retries; trying \`gh release download\` fallback" >&2
+            if gh release download "$FROM_RELEASE_TAG" \
+                    -R "$RELEASE_REPO_SLUG" \
+                    -p "$asset" \
+                    -O "$tmp_bin" \
+                    --clobber 2>/dev/null; then
+                download_ok=1
+            else
+                echo "install.sh: --from-release: gh release download fallback also failed (gh may not be authenticated for $RELEASE_REPO_SLUG)" >&2
+            fi
+        fi
+    fi
+
+    if [[ "$download_ok" -ne 1 ]]; then
+        echo "install.sh: --from-release: failed to download asset after ${max_attempts} attempts" >&2
+        echo "  asset   : $asset" >&2
+        echo "  url     : $asset_url" >&2
+        echo "  tag     : $FROM_RELEASE_TAG" >&2
+        echo "  repo    : $RELEASE_REPO_SLUG" >&2
+        if [[ -n "$last_http_code" && "$last_http_code" != "000" ]]; then
+            echo "  last HTTP status: $last_http_code" >&2
+        fi
+        if [[ "$last_http_code" == "404" || "$last_http_code" == "403" ]]; then
+            echo "" >&2
+            echo "  GitHub's release-asset CDN can return 404/403 for ~30 minutes" >&2
+            echo "  after a fresh release while the asset propagates. Options:" >&2
+            echo "    - wait a few minutes and re-run this command" >&2
+            echo "    - install \`gh\` and re-run (gh's auth path propagates faster)" >&2
+            echo "    - download the binary manually from $RELEASE_REPO_SLUG's releases page" >&2
+            echo "      and run: bash $0 --binary <path-to-downloaded-binary>" >&2
+        else
+            echo "" >&2
+            echo "  Suggested fallback: download the asset manually and re-run with" >&2
+            echo "    bash $0 --binary <path-to-downloaded-binary>" >&2
+        fi
         exit 3
     fi
 

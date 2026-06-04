@@ -35,40 +35,21 @@ SQLite file; everything else is tmux.
 - `tmux` 3.0+ on PATH.
 - `jq` on PATH.
 
-### Install
+### Install the CLI
 
-#### From inside Claude Code (recommended)
-
-If you already have Claude Code running, just say:
-
-> **install agent-director**
-
-That triggers the `install-agent-director` skill, which walks you
-through four choices interactively (binary source, PATH symlink,
-MCP registration, persistent help hooks) and then runs `install.sh`
-with the resolved flags. Each question explains itself — assume no
-prior knowledge — so a new user can answer without reading anything
-else first.
-
-The skill ships in this repo at
-[`skills/install-agent-director/`](skills/install-agent-director/SKILL.md)
-and is auto-discoverable by Claude Code if you've cloned the repo
-under a directory it indexes. If not, point Claude Code at the
-SKILL.md once and from then on the trigger phrase works.
-
-#### From a shell (no Claude Code)
-
-`install.sh --from-release` auto-detects your OS/arch and downloads
-the matching binary from GitHub Releases:
+agent-director is a single Go binary. Install it on a fresh machine
+with one copy-pasteable command:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/skills/install-agent-director/install.sh \
-  -o /tmp/install-agent-director.sh
-bash /tmp/install-agent-director.sh --from-release
+curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/skills/install-agent-director/install.sh | bash -s -- --from-release
 ```
 
-The script sets up `~/.agent-director/`, drops a PATH symlink, warms
-up `state.db`, and installs the SessionStart/SessionEnd help hooks.
+That fetches `install.sh` from `main`, then runs it with
+`--from-release` so it auto-detects your OS/arch, downloads the
+matching binary from the [latest GitHub release](https://github.com/gabemahoney/agent-director/releases/latest),
+sets up `~/.agent-director/`, drops a PATH symlink, warms up
+`state.db`, and installs the SessionStart/SessionEnd help hooks.
+
 Optionally pass `--register-mcp` to also register the stdio MCP
 server, or `--no-hooks` to leave `~/.claude/settings.json` untouched.
 
@@ -96,6 +77,37 @@ Optional flags:
 - `--from-release [tag]` — download a pre-built binary for this host's
   OS/arch from GitHub Releases (latest, or a specific tag) and install
   it. Pair with `--sha256 <hex>` to verify the download.
+
+#### From inside Claude Code
+
+If you already have Claude Code running, just say:
+
+> **install agent-director**
+
+That triggers the `install-agent-director` skill, which walks you
+through four choices interactively (binary source, PATH symlink,
+MCP registration, persistent help hooks) and then runs `install.sh`
+with the resolved flags.
+
+The skill ships in this repo at
+[`skills/install-agent-director/`](skills/install-agent-director/SKILL.md)
+and is auto-discoverable by Claude Code if you've cloned the repo
+under a directory it indexes.
+
+### Install the TS client
+
+The `agent-director` npm package is the **TypeScript/Bun client only**
+— it shells out to a separately-installed CLI binary on the host.
+Installing the npm package does NOT install the CLI; you must run the
+one-liner above (or otherwise drop the CLI on the host) first.
+
+```sh
+bun add agent-director
+```
+
+See [`pkg/ts-bun-client/README.md`](pkg/ts-bun-client/README.md) for
+client API details. The TS package ships zero lifecycle scripts and no
+native or optional platform dependencies.
 
 #### From source (contributors)
 

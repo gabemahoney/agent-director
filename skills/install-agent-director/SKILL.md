@@ -4,6 +4,21 @@ description: Install (or upgrade) agent-director on this machine. Runs the bundl
 version: 0.4.1
 ---
 
+## First-time install on a brand-new machine
+
+If this skill isn't yet on the machine (no checked-out repo, no
+cached `install.sh`), bootstrap the CLI directly from `main` with the
+one-liner advertised in the customer-facing README:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/skills/install-agent-director/install.sh | bash -s -- --from-release
+```
+
+The rest of this skill assumes `install.sh` is already on disk (in a
+checkout or alongside SKILL.md). Use the one-liner above to bridge the
+gap on a fresh host, then run the interactive flow below on subsequent
+upgrades.
+
 ## When to invoke
 
 Trigger phrases: "install agent-director", "set up agent-director",
