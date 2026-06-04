@@ -377,7 +377,7 @@ Print the binary's build-time version stamp as JSON ({version, commit}). Used by
 
 ### Output schema
 
-- `version`: type=string — Human-readable version stamp injected at build time via `-ldflags -X`. Release binaries report the exact release tag (e.g. `v0.6.1`); dev builds fall back to `git describe` output or "dev" if untagged.
+- `version`: type=string — Human-readable version stamp from `git describe --tags --always --dirty` at build time. "dev" for unstamped builds.
 - `commit`: type=string — Full git SHA the binary was built from. "unknown" for unstamped builds.
 
 ### Errors
