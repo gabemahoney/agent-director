@@ -1,5 +1,5 @@
 .PHONY: all build test generate lint err-coherence nondet-coverage \
-        check-doccomments \
+        check-doccomments test-install-sh \
         test-image test-image-smoke test-docker test-docker-install-mode \
         release-binaries release-binaries-smoke \
         release-shellcheck release-bats release-smoke \
@@ -44,8 +44,15 @@ all: generate build
 build:
 	CGO_ENABLED=0 go build -ldflags="$(VERSION_LDFLAGS)" -o ./bin/agent-director ./cmd/agent-director
 
-test: envelope-diff-ts
+test: envelope-diff-ts test-install-sh
 	go test ./...
+
+# test-install-sh exercises install.sh's --from-release CDN-propagation
+# retry path against a fake curl (b.kym). Pure shell; no docker, no
+# network. Fast — total wall time is bounded by the in-script sleeps,
+# and the scenarios pick small fail-first counts.
+test-install-sh:
+	bash test/install-sh/retry.sh
 
 generate:
 	go generate ./...
