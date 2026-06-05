@@ -15,7 +15,7 @@ import (
 // callers pass *store.Store; tests can pass a stub to drive failure
 // branches (DB-unreachable, etc.) without scripting SQLite errors.
 type HookStore interface {
-	ApplyHookTransition(instanceID, newState string, softRefresh bool) error
+	ApplyHookTransition(instanceID, newState string, softRefresh bool, triggeringEventName string) error
 	SetSessionID(instanceID, sessionID string) error
 	UpsertOpenPermissionRequest(instanceID, requestToken, toolName, toolInputJSON string, cap int, writerProcess string) error
 	GetPermissionRequest(instanceID, requestToken string) (store.PermissionRow, error)
@@ -26,7 +26,7 @@ type HookStore interface {
 // satisfies it; test doubles that don't implement it receive
 // store.UpsertNoChange as a conservative fallback for the trail field.
 type outcomeTransitioner interface {
-	ApplyHookTransitionResult(instanceID, newState string, softRefresh bool) (store.UpsertOutcome, error)
+	ApplyHookTransitionResult(instanceID, newState string, softRefresh bool, triggeringEventName string) (store.UpsertOutcome, error)
 }
 
 // HandleConfig bundles the inputs Handle takes beyond the store and
@@ -149,9 +149,9 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 	// store.UpsertNoChange as a conservative sentinel.
 	var upsertOutcome store.UpsertOutcome
 	if ot, ok := st.(outcomeTransitioner); ok {
-		upsertOutcome, err = ot.ApplyHookTransitionResult(instanceID, res.NewState, res.SoftRefresh)
+		upsertOutcome, err = ot.ApplyHookTransitionResult(instanceID, res.NewState, res.SoftRefresh, res.EventName)
 	} else {
-		err = st.ApplyHookTransition(instanceID, res.NewState, res.SoftRefresh)
+		err = st.ApplyHookTransition(instanceID, res.NewState, res.SoftRefresh, res.EventName)
 		if err != nil {
 			upsertOutcome = store.UpsertError
 		} else {

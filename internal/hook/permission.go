@@ -57,7 +57,7 @@ type RelayStore interface {
 	PollStore
 	UpsertOpenPermissionRequest(instanceID, requestToken, toolName, toolInputJSON string, cap int, writerProcess string) error
 	DecidePermissionRequest(instanceID, requestToken, decision, reason string, writerProcess string) (bool, error)
-	ApplyHookTransition(instanceID, newState string, softRefresh bool) error
+	ApplyHookTransition(instanceID, newState string, softRefresh bool, triggeringEventName string) error
 }
 
 // outcomeUpserter is an optional extension of RelayStore. *store.Store
@@ -174,7 +174,11 @@ func runRelay(
 		if _, err := st.DecidePermissionRequest(instanceID, requestToken, "deny", store.DecisionReasonTimeout, store.WriterProcessHook); err != nil {
 			logf(logger, "relay: timeout decision write failed (instance=%s, token=%s): %v", instanceID, requestToken, err)
 		}
-		if err := st.ApplyHookTransition(instanceID, store.StateWorking, false); err != nil {
+		// "PermissionRequestTimeout" is a synthetic event name documenting that
+		// this state transition was triggered by the relay polling loop timing out
+		// (not by a Claude Code lifecycle event). Trail readers can distinguish
+		// this from hook-driven transitions by this value.
+		if err := st.ApplyHookTransition(instanceID, store.StateWorking, false, "PermissionRequestTimeout"); err != nil {
 			logf(logger, "relay: timeout state transition failed (instance=%s): %v", instanceID, err)
 		}
 

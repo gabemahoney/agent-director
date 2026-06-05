@@ -32,7 +32,7 @@ func openGetFixture(t *testing.T, instanceID, state string) *store.Store {
 		t.Fatalf("InsertPending: %v", err)
 	}
 	if state != store.StatePending {
-		if err := s.ApplyHookTransition(instanceID, state, false); err != nil {
+		if err := s.ApplyHookTransition(instanceID, state, false, "test_seed"); err != nil {
 			t.Fatalf("ApplyHookTransition(%s): %v", state, err)
 		}
 	}

@@ -76,7 +76,7 @@ type flakyStore struct {
 	sessionN      int
 }
 
-func (f *flakyStore) ApplyHookTransition(string, string, bool) error {
+func (f *flakyStore) ApplyHookTransition(string, string, bool, string) error {
 	f.transitionN++
 	return f.transitionErr
 }

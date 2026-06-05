@@ -51,7 +51,7 @@ type transitionCall struct {
 	SoftRefresh bool
 }
 
-func (f *flakyRelayStore) ApplyHookTransition(instanceID, newState string, softRefresh bool) error {
+func (f *flakyRelayStore) ApplyHookTransition(instanceID, newState string, softRefresh bool, _ string) error {
 	f.transitionArgs = append(f.transitionArgs, transitionCall{instanceID, newState, softRefresh})
 	return f.transitionErr
 }

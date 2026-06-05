@@ -204,7 +204,7 @@ func seedMatrixSpawn(t *testing.T, s *store.Store, id, state, relayMode string) 
 		t.Fatalf("InsertPending: %v", err)
 	}
 	if state != store.StatePending {
-		if err := s.ApplyHookTransition(id, state, false); err != nil {
+		if err := s.ApplyHookTransition(id, state, false, "test_seed"); err != nil {
 			t.Fatalf("ApplyHookTransition(%s): %v", state, err)
 		}
 	}

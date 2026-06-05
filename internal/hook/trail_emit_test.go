@@ -299,6 +299,109 @@ func TestTrailEmitHookFired(t *testing.T) {
 	}
 }
 
+// TestSpawnStateTransitionSequence drives a full worker lifecycle through
+// five consecutive Handle calls on a single shared store and asserts that the
+// ad.spawn.state_transition lines emitted to the trail are:
+//
+//  1. Present for every step that transitions state (>= 6: seed + 5 handles).
+//  2. Time-ordered (ts values non-decreasing in insertion order).
+//  3. Internally consistent: each line's new_state equals the next line's
+//     prior_state (allowing for no-op lines where prior == new).
+//
+// A unique claude_instance_id is used so the test can filter the shared trail
+// file by ID and isolate its own lines from the rest of the test binary.
+//
+// Lifecycle: SessionStart → PreToolUse → PermissionRequest (no-relay) →
+// PostToolUse → SessionEnd(user_quit).
+// Expected state chain (including seed): pending→working→waiting→working→
+// check_permission→working→ended.
+func TestSpawnStateTransitionSequence(t *testing.T) {
+	const testID = "seq-sst-b4uk-unique"
+
+	// Snapshot the trail before we start so we can slice out our own lines.
+	before := len(readTrailLines(t, trailFile()))
+
+	// One store shared across all five Handle calls so state persists.
+	st, _ := storefix.OpenTempStore(t)
+
+	// Seed pending → working (also emits one ad.spawn.state_transition).
+	storefix.SeedSpawn(t, st, testID)
+
+	// callHandle drives one Handle invocation without relay; any error is fatal.
+	cfg := config.Relay{TimeoutSeconds: 1, PollBaseMs: 0, PollJitterMs: 0}
+	callHandle := func(payload string) {
+		t.Helper()
+		if err := hook.Handle(
+			context.Background(),
+			strings.NewReader(payload),
+			io.Discard,
+			st,
+			hook.HandleConfig{Env: envHook(testID, ""), Cfg: cfg},
+			nil,
+		); err != nil {
+			t.Fatalf("Handle(%q): %v", payload, err)
+		}
+	}
+
+	// 1. SessionStart: working → waiting
+	callHandle(`{"hook_event_name":"SessionStart","transcript_path":"/x/seqtest-sess.jsonl"}`)
+	// 2. PreToolUse(Bash): waiting → working
+	callHandle(`{"hook_event_name":"PreToolUse","tool_name":"Bash"}`)
+	// 3. PermissionRequest (no-relay): working → check_permission
+	callHandle(`{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`)
+	// 4. PostToolUse: check_permission → working (open permission_requests=0, guard passes)
+	callHandle(`{"hook_event_name":"PostToolUse","tool_name":"Bash"}`)
+	// 5. SessionEnd(user_quit): working → ended
+	callHandle(`{"hook_event_name":"SessionEnd","reason":"user_quit"}`)
+
+	// Collect ad.spawn.state_transition lines for our instance ID only.
+	all := readTrailLines(t, trailFile())
+	var transitions []map[string]any
+	for _, row := range all[before:] {
+		if row["event"] == "ad.spawn.state_transition" &&
+			row["claude_instance_id"] == testID {
+			transitions = append(transitions, row)
+		}
+	}
+
+	// At least 6 lines: 1 from the seed + 5 from Handle calls.
+	if len(transitions) < 6 {
+		t.Fatalf("want >= 6 ad.spawn.state_transition lines for %q; got %d",
+			testID, len(transitions))
+	}
+
+	// Assert time order: ts values must be non-decreasing (ISO-8601 UTC strings
+	// sort lexicographically in time order).
+	for i := 1; i < len(transitions); i++ {
+		tsA, _ := transitions[i-1]["ts"].(string)
+		tsB, _ := transitions[i]["ts"].(string)
+		if tsA == "" || tsB == "" {
+			t.Errorf("transition[%d] or [%d] has missing/non-string ts", i-1, i)
+			continue
+		}
+		if tsB < tsA {
+			t.Errorf("trail not time-ordered: transitions[%d].ts=%q > transitions[%d].ts=%q",
+				i-1, tsA, i, tsB)
+		}
+	}
+
+	// Assert chain consistency: new_state[i] == prior_state[i+1].
+	// No-op lines (prior == new) satisfy this automatically because the
+	// invariant holds across them: ...→X, X→X, X→Y... all pair correctly.
+	for i := 1; i < len(transitions); i++ {
+		prevNew, _ := transitions[i-1]["new_state"].(string)
+		curPrior, _ := transitions[i]["prior_state"].(string)
+		if prevNew == "" || curPrior == "" {
+			t.Errorf("transition[%d] or [%d] has missing/non-string state field", i-1, i)
+			continue
+		}
+		if prevNew != curPrior {
+			t.Errorf("chain break at index %d: transitions[%d].new_state=%q != transitions[%d].prior_state=%q",
+				i, i-1, prevNew, i, curPrior)
+		}
+	}
+}
+
 // TestTrailEmitNoToolInput confirms tool_input is stripped even when
 // present in the raw PermissionRequest payload.
 func TestTrailEmitNoToolInput(t *testing.T) {

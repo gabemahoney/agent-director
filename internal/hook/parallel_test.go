@@ -37,7 +37,7 @@ func seedWorkingSpawn(t *testing.T, st *store.Store, instanceID string) {
 	if err := st.InsertPending(sp); err != nil {
 		t.Fatalf("seedWorkingSpawn: InsertPending(%q): %v", instanceID, err)
 	}
-	if err := st.ApplyHookTransition(instanceID, store.StateWorking, false); err != nil {
+	if err := st.ApplyHookTransition(instanceID, store.StateWorking, false, "test_seed"); err != nil {
 		t.Fatalf("seedWorkingSpawn: transition to working (%q): %v", instanceID, err)
 	}
 }

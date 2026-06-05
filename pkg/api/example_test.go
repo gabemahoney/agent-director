@@ -100,7 +100,7 @@ func seedRow(s *store.Store, id, state string, labels map[string]string) {
 		panic("seedRow: InsertPending " + id + ": " + err.Error())
 	}
 	if state != store.StatePending {
-		if err := s.ApplyHookTransition(id, state, false); err != nil {
+		if err := s.ApplyHookTransition(id, state, false, "test_seed"); err != nil {
 			panic("seedRow: ApplyHookTransition " + id + "→" + state + ": " + err.Error())
 		}
 	}

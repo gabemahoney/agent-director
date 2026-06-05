@@ -102,7 +102,7 @@ func TestConcurrentOpenOrInitWithWrites(t *testing.T) {
 				errs <- fmt.Errorf("worker %d: InsertPending: %w", i, err)
 				return
 			}
-			if err := s.ApplyHookTransition(sp.ClaudeInstanceID, StateWaiting, false); err != nil {
+			if err := s.ApplyHookTransition(sp.ClaudeInstanceID, StateWaiting, false, "test_seed"); err != nil {
 				errs <- fmt.Errorf("worker %d: ApplyHookTransition: %w", i, err)
 				return
 			}

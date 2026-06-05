@@ -47,7 +47,7 @@ func insertErrRow(t *testing.T, s *store.Store, id, state, relayMode string) {
 		t.Fatalf("insertErrRow: InsertPending %s: %v", id, err)
 	}
 	if state != store.StatePending {
-		if err := s.ApplyHookTransition(id, state, false); err != nil {
+		if err := s.ApplyHookTransition(id, state, false, "test_seed"); err != nil {
 			t.Fatalf("insertErrRow: ApplyHookTransition %s→%s: %v", id, state, err)
 		}
 	}

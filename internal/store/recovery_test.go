@@ -23,7 +23,7 @@ func seedCheckPermissionSpawn(t *testing.T, s *Store, id string) {
 	}); err != nil {
 		t.Fatalf("seedCheckPermissionSpawn: InsertPending(%q): %v", id, err)
 	}
-	if err := s.ApplyHookTransition(id, StateCheckPermission, false); err != nil {
+	if err := s.ApplyHookTransition(id, StateCheckPermission, false, "test_seed"); err != nil {
 		t.Fatalf("seedCheckPermissionSpawn: ApplyHookTransition(%q, check_permission): %v", id, err)
 	}
 }
@@ -131,7 +131,7 @@ func TestFindMissingNoOpenRows(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
-	if err := s.ApplyHookTransition(id, StateWorking, false); err != nil {
+	if err := s.ApplyHookTransition(id, StateWorking, false, "test_seed"); err != nil {
 		t.Fatalf("transition to working: %v", err)
 	}
 
