@@ -58,10 +58,10 @@ func (f *flakyRelayStore) ApplyHookTransition(instanceID, newState string, softR
 func (f *flakyRelayStore) SetSessionID(string, string) error {
 	return f.sessionErr
 }
-func (f *flakyRelayStore) UpsertOpenPermissionRequest(_, _, _, _ string, _ int) error {
+func (f *flakyRelayStore) UpsertOpenPermissionRequest(_, _, _, _ string, _ int, _ string) error {
 	return f.upsertErr
 }
-func (f *flakyRelayStore) DecidePermissionRequest(instanceID, requestToken, decision, reason string) (bool, error) {
+func (f *flakyRelayStore) DecidePermissionRequest(instanceID, requestToken, decision, reason string, _ string) (bool, error) {
 	f.decideArgs = append(f.decideArgs, decideCall{instanceID, requestToken, decision, reason})
 	if f.decideErr != nil {
 		return false, f.decideErr

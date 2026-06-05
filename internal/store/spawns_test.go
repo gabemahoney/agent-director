@@ -325,15 +325,15 @@ func TestStateMachineMultiRowRetention(t *testing.T) {
 		if err := s.ApplyHookTransition(id, StateCheckPermission, false); err != nil {
 			t.Fatalf("transition to check_permission: %v", err)
 		}
-		if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{"cmd":"ls"}`, 0); err != nil {
+		if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{"cmd":"ls"}`, 0, ""); err != nil {
 			t.Fatalf("upsert tokenA: %v", err)
 		}
-		if err := s.UpsertOpenPermissionRequest(id, tokenB, "Read", `{"file":"/etc"}`, 0); err != nil {
+		if err := s.UpsertOpenPermissionRequest(id, tokenB, "Read", `{"file":"/etc"}`, 0, ""); err != nil {
 			t.Fatalf("upsert tokenB: %v", err)
 		}
 
 		// Decide row A; try to advance to working — tokenB still open, must be held.
-		if _, err := s.DecidePermissionRequest(id, tokenA, "allow", ""); err != nil {
+		if _, err := s.DecidePermissionRequest(id, tokenA, "allow", "", ""); err != nil {
 			t.Fatalf("decide tokenA: %v", err)
 		}
 		if err := s.ApplyHookTransition(id, StateWorking, false); err != nil {
@@ -348,7 +348,7 @@ func TestStateMachineMultiRowRetention(t *testing.T) {
 		}
 
 		// Decide row B; advance to working — no open rows remain.
-		if _, err := s.DecidePermissionRequest(id, tokenB, "deny", "no"); err != nil {
+		if _, err := s.DecidePermissionRequest(id, tokenB, "deny", "no", ""); err != nil {
 			t.Fatalf("decide tokenB: %v", err)
 		}
 		if err := s.ApplyHookTransition(id, StateWorking, false); err != nil {
@@ -378,12 +378,12 @@ func TestStateMachineMultiRowRetention(t *testing.T) {
 		if err := s.ApplyHookTransition(id, StateCheckPermission, false); err != nil {
 			t.Fatalf("transition to check_permission: %v", err)
 		}
-		if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{"cmd":"pwd"}`, 0); err != nil {
+		if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{"cmd":"pwd"}`, 0, ""); err != nil {
 			t.Fatalf("upsert tokenA: %v", err)
 		}
 
 		// Decide the single row; advance must succeed immediately.
-		if _, err := s.DecidePermissionRequest(id, tokenA, "allow", ""); err != nil {
+		if _, err := s.DecidePermissionRequest(id, tokenA, "allow", "", ""); err != nil {
 			t.Fatalf("decide tokenA: %v", err)
 		}
 		if err := s.ApplyHookTransition(id, StateWorking, false); err != nil {

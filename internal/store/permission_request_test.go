@@ -28,7 +28,7 @@ func TestGetPermissionRequestReturnsErrNoRows(t *testing.T) {
 			setup: func(t *testing.T, s *Store) {
 				t.Helper()
 				seedSpawnForPerm(t, s, "real-instance", "on")
-				if err := s.UpsertOpenPermissionRequest("real-instance", tokenA, "Bash", `{}`, 0); err != nil {
+				if err := s.UpsertOpenPermissionRequest("real-instance", tokenA, "Bash", `{}`, 0, ""); err != nil {
 					t.Fatalf("setup upsert: %v", err)
 				}
 			},
@@ -40,7 +40,7 @@ func TestGetPermissionRequestReturnsErrNoRows(t *testing.T) {
 			setup: func(t *testing.T, s *Store) {
 				t.Helper()
 				seedSpawnForPerm(t, s, "real-instance2", "on")
-				if err := s.UpsertOpenPermissionRequest("real-instance2", tokenA, "Bash", `{}`, 0); err != nil {
+				if err := s.UpsertOpenPermissionRequest("real-instance2", tokenA, "Bash", `{}`, 0, ""); err != nil {
 					t.Fatalf("setup upsert: %v", err)
 				}
 			},
@@ -82,7 +82,7 @@ func TestOpenPermissionRequestsForSpawn(t *testing.T) {
 		s := openTestStore(t)
 		const id = "spawn-one"
 		seedSpawnForPerm(t, s, id, "on")
-		if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{}`, 0); err != nil {
+		if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{}`, 0, ""); err != nil {
 			t.Fatalf("upsert: %v", err)
 		}
 
@@ -102,10 +102,10 @@ func TestOpenPermissionRequestsForSpawn(t *testing.T) {
 		s := openTestStore(t)
 		const id = "spawn-two"
 		seedSpawnForPerm(t, s, id, "on")
-		if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{}`, 0); err != nil {
+		if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{}`, 0, ""); err != nil {
 			t.Fatalf("upsert tokenA: %v", err)
 		}
-		if err := s.UpsertOpenPermissionRequest(id, tokenB, "Read", `{}`, 0); err != nil {
+		if err := s.UpsertOpenPermissionRequest(id, tokenB, "Read", `{}`, 0, ""); err != nil {
 			t.Fatalf("upsert tokenB: %v", err)
 		}
 
@@ -122,13 +122,13 @@ func TestOpenPermissionRequestsForSpawn(t *testing.T) {
 		s := openTestStore(t)
 		const id = "spawn-decided"
 		seedSpawnForPerm(t, s, id, "on")
-		if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{}`, 0); err != nil {
+		if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{}`, 0, ""); err != nil {
 			t.Fatalf("upsert tokenA: %v", err)
 		}
-		if err := s.UpsertOpenPermissionRequest(id, tokenB, "Read", `{}`, 0); err != nil {
+		if err := s.UpsertOpenPermissionRequest(id, tokenB, "Read", `{}`, 0, ""); err != nil {
 			t.Fatalf("upsert tokenB: %v", err)
 		}
-		if _, err := s.DecidePermissionRequest(id, tokenA, "allow", ""); err != nil {
+		if _, err := s.DecidePermissionRequest(id, tokenA, "allow", "", ""); err != nil {
 			t.Fatalf("decide tokenA: %v", err)
 		}
 

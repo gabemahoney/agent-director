@@ -55,8 +55,8 @@ func mintRequestToken() (string, error) {
 // Slack message. *store.Store satisfies it.
 type RelayStore interface {
 	PollStore
-	UpsertOpenPermissionRequest(instanceID, requestToken, toolName, toolInputJSON string, cap int) error
-	DecidePermissionRequest(instanceID, requestToken, decision, reason string) (bool, error)
+	UpsertOpenPermissionRequest(instanceID, requestToken, toolName, toolInputJSON string, cap int, writerProcess string) error
+	DecidePermissionRequest(instanceID, requestToken, decision, reason string, writerProcess string) (bool, error)
 	ApplyHookTransition(instanceID, newState string, softRefresh bool) error
 }
 
@@ -64,7 +64,7 @@ type RelayStore interface {
 // satisfies it; test doubles that don't implement it receive
 // store.UpsertNoChange as a conservative fallback for the trail field.
 type outcomeUpserter interface {
-	UpsertOpenPermissionRequestResult(instanceID, requestToken, toolName, toolInputJSON string, cap int) (store.UpsertOutcome, error)
+	UpsertOpenPermissionRequestResult(instanceID, requestToken, toolName, toolInputJSON string, cap int, writerProcess string) (store.UpsertOutcome, error)
 }
 
 // runRelay is the relay-mode branch invoked from Handle when the
@@ -136,9 +136,9 @@ func runRelay(
 	// don't implement outcomeUpserter fall back to store.UpsertNoChange.
 	var upsertOutcome store.UpsertOutcome
 	if ou, ok := st.(outcomeUpserter); ok {
-		upsertOutcome, err = ou.UpsertOpenPermissionRequestResult(instanceID, requestToken, pp.ToolName, toolInput, cap)
+		upsertOutcome, err = ou.UpsertOpenPermissionRequestResult(instanceID, requestToken, pp.ToolName, toolInput, cap, store.WriterProcessHook)
 	} else {
-		err = st.UpsertOpenPermissionRequest(instanceID, requestToken, pp.ToolName, toolInput, cap)
+		err = st.UpsertOpenPermissionRequest(instanceID, requestToken, pp.ToolName, toolInput, cap, store.WriterProcessHook)
 		if err != nil {
 			upsertOutcome = store.UpsertError
 		} else {
@@ -171,7 +171,7 @@ func runRelay(
 		// is never observed without the matching state update. Both writes
 		// are best-effort — fail-open per SRD §3.2 for state tracking; the
 		// stdout envelope still lands regardless (SRD §6.4 fail-closed).
-		if _, err := st.DecidePermissionRequest(instanceID, requestToken, "deny", store.DecisionReasonTimeout); err != nil {
+		if _, err := st.DecidePermissionRequest(instanceID, requestToken, "deny", store.DecisionReasonTimeout, store.WriterProcessHook); err != nil {
 			logf(logger, "relay: timeout decision write failed (instance=%s, token=%s): %v", instanceID, requestToken, err)
 		}
 		if err := st.ApplyHookTransition(instanceID, store.StateWorking, false); err != nil {

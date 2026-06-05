@@ -79,7 +79,7 @@ func (s *Store) CloseOrphanedPermissionRequests(instanceID string) error {
 		return fmt.Errorf("store: close orphaned permission requests: %w", err)
 	}
 	for _, row := range rows {
-		if _, err := s.DecidePermissionRequest(instanceID, row.RequestToken, "deny", DecisionReasonFindMissing); err != nil {
+		if _, err := s.DecidePermissionRequest(instanceID, row.RequestToken, "deny", DecisionReasonFindMissing, WriterProcessFindMissing); err != nil {
 			return fmt.Errorf("store: close orphaned permission request (token=%s): %w", row.RequestToken, err)
 		}
 	}

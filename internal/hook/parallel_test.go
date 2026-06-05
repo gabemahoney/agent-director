@@ -134,7 +134,7 @@ func TestParallelHookOrdering(t *testing.T) {
 	}
 
 	// Decide row A (allow). Row B must remain undecided — no cross-row leakage.
-	if _, err := st.DecidePermissionRequest(instanceID, tokenA, "allow", ""); err != nil {
+	if _, err := st.DecidePermissionRequest(instanceID, tokenA, "allow", "", ""); err != nil {
 		t.Fatalf("DecidePermissionRequest(A): %v", err)
 	}
 
@@ -150,7 +150,7 @@ func TestParallelHookOrdering(t *testing.T) {
 	}
 
 	// Decide row B (deny) — last row, unblocks goroutine B.
-	if _, err := st.DecidePermissionRequest(instanceID, tokenB, "deny", "not allowed"); err != nil {
+	if _, err := st.DecidePermissionRequest(instanceID, tokenB, "deny", "not allowed", ""); err != nil {
 		t.Fatalf("DecidePermissionRequest(B): %v", err)
 	}
 
@@ -264,7 +264,7 @@ func TestPerRowTimeoutIsolation(t *testing.T) {
 	}
 
 	// Operator decides row B (allow, no reason).
-	if _, err := st.DecidePermissionRequest(instanceID, tokenB, "allow", ""); err != nil {
+	if _, err := st.DecidePermissionRequest(instanceID, tokenB, "allow", "", ""); err != nil {
 		t.Fatalf("DecidePermissionRequest(B): %v", err)
 	}
 

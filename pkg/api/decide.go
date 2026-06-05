@@ -26,7 +26,7 @@ var ErrMissingRequestToken = errors.New("ErrMissingRequestToken")
 // DecideStore is the narrow store surface Decide needs.
 type DecideStore interface {
 	GetSpawn(instanceID string) (Spawn, error)
-	DecidePermissionRequest(instanceID, requestToken, decision, reason string) (bool, error)
+	DecidePermissionRequest(instanceID, requestToken, decision, reason string, writerProcess string) (bool, error)
 	GetPermissionRequest(instanceID, requestToken string) (PermissionRow, error)
 }
 
@@ -96,7 +96,7 @@ func Decide(s DecideStore, params DecideParams) (DecideResult, error) {
 	if params.Decision == "deny" {
 		dbReason = store.DecisionReasonOperator
 	}
-	updated, err := s.DecidePermissionRequest(params.ClaudeInstanceID, params.RequestToken, params.Decision, dbReason)
+	updated, err := s.DecidePermissionRequest(params.ClaudeInstanceID, params.RequestToken, params.Decision, dbReason, store.WriterProcessDecide)
 	if err != nil {
 		return DecideResult{}, err
 	}
