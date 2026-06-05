@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -430,4 +431,174 @@ func TestTrailEmitNoToolInput(t *testing.T) {
 
 	row := hookFiredAt(t, before)
 	assertNoToolInput(t, row)
+}
+
+// TestTrailEmitRelayAttemptCompleted verifies that a relay-mode
+// PermissionRequest Handle call emits exactly one ad.relay_attempt.completed
+// line carrying the CASE B degenerate fields (target_endpoint="db_poll",
+// outcome="db_relay_active", bytes_sent/received=0, source="relay_hook") and
+// that its request_token matches the one recorded in ad.hook.fired.
+//
+// This test documents the CASE B determination: the relay is DB-poll-based
+// (no outbound HTTP shim), so in-process trail.Emit is used rather than
+// exec'ing the trail-emit sub-verb (which is for external processes).
+func TestTrailEmitRelayAttemptCompleted(t *testing.T) {
+	const id = "te-relay-attempt-b4uk"
+	before := len(readTrailLines(t, trailFile()))
+
+	st, _ := storefix.OpenTempStore(t)
+	storefix.SeedSpawn(t, st, id)
+
+	now, restore := setupVirtualClock(t)
+	defer restore()
+
+	var stdout bytes.Buffer
+	if err := hook.Handle(
+		context.Background(),
+		strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"Write"}`),
+		&stdout,
+		st,
+		hook.HandleConfig{
+			Env:   envHook(id, hook.RelayModeOn),
+			Cfg:   config.Relay{TimeoutSeconds: 1, PollBaseMs: 0, PollJitterMs: 0},
+			Clock: &advancingClock{now: now},
+		},
+		nil,
+	); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	all := readTrailLines(t, trailFile())
+	var relayLines []map[string]any
+	for _, row := range all[before:] {
+		if row["event"] == "ad.relay_attempt.completed" {
+			relayLines = append(relayLines, row)
+		}
+	}
+	if len(relayLines) != 1 {
+		t.Fatalf("want 1 ad.relay_attempt.completed after offset %d; got %d",
+			before, len(relayLines))
+	}
+	r := relayLines[0]
+
+	assertStr(t, r, "event", "ad.relay_attempt.completed")
+	assertStr(t, r, "source", "relay_hook")
+	assertStr(t, r, "claude_instance_id", id)
+	assertStr(t, r, "target_endpoint", "db_poll")
+	assertStr(t, r, "outcome", "db_relay_active")
+
+	// bytes_sent / bytes_received arrive as JSON numbers; json.Unmarshal into
+	// map[string]any decodes them as float64.
+	for _, field := range []string{"bytes_sent", "bytes_received"} {
+		v, ok := r[field]
+		if !ok {
+			t.Errorf("field %q missing", field)
+			continue
+		}
+		n, ok := v.(float64)
+		if !ok || n != 0 {
+			t.Errorf("[%q] = %v (%T); want float64(0)", field, v, v)
+		}
+	}
+
+	// request_token in ad.relay_attempt.completed must match ad.hook.fired.
+	hookRow := hookFiredAt(t, before)
+	hookTok, _ := hookRow["request_token"].(string)
+	relayTok, _ := r["request_token"].(string)
+	if hookTok == "" {
+		t.Error("ad.hook.fired: request_token missing or empty")
+	}
+	if relayTok == "" {
+		t.Error("ad.relay_attempt.completed: request_token missing or empty")
+	}
+	if hookTok != relayTok {
+		t.Errorf("request_token mismatch: hook.fired=%q relay.completed=%q", hookTok, relayTok)
+	}
+
+	if ts, ok := r["ts"].(string); !ok || ts == "" {
+		t.Error("ts missing or empty")
+	}
+}
+
+// TestRelayAttemptCompletedNotEmittedWhenRelayModeOff verifies the CASE B
+// relay-mode gate: when AGENT_DIRECTOR_RELAY_MODE is unset ("") or
+// explicitly "off", runRelay is never entered and zero
+// ad.relay_attempt.completed lines are emitted even though the event is
+// PermissionRequest. No stdout envelope is written either (relay must be
+// active for the fail-closed path to apply).
+func TestRelayAttemptCompletedNotEmittedWhenRelayModeOff(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		relayMode string
+	}{
+		{name: "unset", relayMode: ""},
+		{name: "off", relayMode: hook.RelayModeOff},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			before := len(readTrailLines(t, trailFile()))
+
+			st := &flakyRelayStore{}
+			var stdout bytes.Buffer
+			if err := hook.Handle(
+				context.Background(),
+				strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`),
+				&stdout,
+				st,
+				hook.HandleConfig{
+					Env: envHook("te-relay-off-"+tc.name, tc.relayMode),
+					Cfg: config.Relay{TimeoutSeconds: 1},
+				},
+				nil,
+			); err != nil {
+				t.Fatalf("Handle: %v", err)
+			}
+
+			all := readTrailLines(t, trailFile())
+			for _, row := range all[before:] {
+				if row["event"] == "ad.relay_attempt.completed" {
+					t.Errorf("relay_mode=%q: unexpected ad.relay_attempt.completed line emitted", tc.relayMode)
+				}
+			}
+			if stdout.Len() != 0 {
+				t.Errorf("relay_mode=%q: stdout non-empty (no relay → no envelope): %s",
+					tc.relayMode, stdout.String())
+			}
+		})
+	}
+}
+
+// TestRelayAttemptCompletedNotEmittedOnUpsertFailure verifies that when
+// UpsertOpenPermissionRequest returns an error, the deny envelope is still
+// written to stdout (fail-closed per SRD §6.4) but zero
+// ad.relay_attempt.completed lines appear in the trail.  The trail-emit
+// fires only on the post-upsert success path in runRelay; any early return
+// due to upsert failure must not emit it.
+func TestRelayAttemptCompletedNotEmittedOnUpsertFailure(t *testing.T) {
+	before := len(readTrailLines(t, trailFile()))
+
+	st := &flakyRelayStore{upsertErr: errors.New("db unavailable")}
+	var stdout bytes.Buffer
+	if err := hook.Handle(
+		context.Background(),
+		strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`),
+		&stdout,
+		st,
+		hook.HandleConfig{
+			Env: envWith("te-upsert-fail-trail"),
+			Cfg: config.Relay{TimeoutSeconds: 1},
+		},
+		nil,
+	); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	assertDenyEnvelope(t, &stdout)
+
+	all := readTrailLines(t, trailFile())
+	for _, row := range all[before:] {
+		if row["event"] == "ad.relay_attempt.completed" {
+			t.Error("ad.relay_attempt.completed must not be emitted when upsert fails")
+		}
+	}
 }

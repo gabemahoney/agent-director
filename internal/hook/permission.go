@@ -11,6 +11,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/trail"
 	"github.com/google/uuid"
 )
 
@@ -152,6 +153,25 @@ func runRelay(
 		_, _ = fmt.Fprintln(stdout, EncodeDecision(EventNamePermissionRequest, "deny", ""))
 		return
 	}
+
+	// CASE B: relay is DB-poll-based — no outbound HTTP shim exists today.
+	// Emit ad.relay_attempt.completed with degenerate fields so the SR-A-2.3
+	// trail shape is established and the §11 replay harness has a real event
+	// to assert against. Future outbound-network work (a real CSCB shim)
+	// should replace target_endpoint / outcome with real values via the
+	// `agent-director trail-emit relay-attempt` sub-verb (for external
+	// processes); in-process trail.Emit is used here because the hook IS an
+	// AD process and the sub-verb wrapper is unnecessary overhead.
+	// Fail-open per SRD §3.2: emit error must not block the relay attempt.
+	_ = trail.Emit(ctx, "ad.relay_attempt.completed", map[string]any{
+		"claude_instance_id": instanceID,
+		"request_token":      requestToken,
+		"target_endpoint":    "db_poll",
+		"outcome":            "db_relay_active",
+		"bytes_sent":         0,
+		"bytes_received":     0,
+		"source":             "relay_hook",
+	})
 
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	res := Poll(ctx, st, clock, cfg, instanceID, requestToken, rng)

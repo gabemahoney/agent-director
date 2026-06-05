@@ -456,6 +456,49 @@ func TestExecutablePathResolvesSymlinks(t *testing.T) {
 	}
 }
 
+// TestSynthesizeSettingsPermissionRequestCaseBNoRelayShim verifies the
+// CASE B determination: the synthesized PermissionRequest hook command is
+// exactly "<bin> hook" — no external relay-shim invocation, no trail-emit
+// sub-verb wrapper, no "relay" token in the command string.  CASE B means
+// relay is DB-poll-based and the in-process trail.Emit call in runRelay
+// handles the ad.relay_attempt.completed event directly.
+func TestSynthesizeSettingsPermissionRequestCaseBNoRelayShim(t *testing.T) {
+	withStubExe(t, "/usr/local/bin/agent-director")
+	jsonStr, err := synthesizeSettings(
+		Resolved{SpawnParams: SpawnParams{ClaudeInstanceID: "id"}},
+		config.Default(),
+	)
+	if err != nil {
+		t.Fatalf("synthesizeSettings: %v", err)
+	}
+	var top map[string]any
+	if err := json.Unmarshal([]byte(jsonStr), &top); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	hooks, _ := top["hooks"].(map[string]any)
+	entries, _ := hooks["PermissionRequest"].([]any)
+	if len(entries) != 1 {
+		t.Fatalf("PermissionRequest: want 1 hook entry, got %d", len(entries))
+	}
+	entry, _ := entries[0].(map[string]any)
+	hooksList, _ := entry["hooks"].([]any)
+	if len(hooksList) != 1 {
+		t.Fatalf("PermissionRequest hooks list: want 1 command, got %d", len(hooksList))
+	}
+	cmdEntry, _ := hooksList[0].(map[string]any)
+	cmd, _ := cmdEntry["command"].(string)
+	want := "/usr/local/bin/agent-director hook"
+	if cmd != want {
+		t.Fatalf("PermissionRequest command = %q; want %q (CASE B: no relay-shim)", cmd, want)
+	}
+	// CASE B guard: no relay-shim or external-process trail-emit tokens.
+	for _, forbidden := range []string{"shim", "trail-emit", "relay-attempt"} {
+		if strings.Contains(cmd, forbidden) {
+			t.Errorf("CASE B violation: command %q contains relay-shim token %q", cmd, forbidden)
+		}
+	}
+}
+
 // TestSynthesizeSettingsHookCommandsAreAbsolute verifies SR-1.8: every
 // hook command starts with "/" (absolute) and never contains the bare
 // token "agent-director " or shell-variable references.
