@@ -1,15 +1,36 @@
 package store
 
-// SR-9.2 + SR-5.4: find-missing reconciler tests.
+// SR-9.2 + SR-5.4 + SR-A-2.5: find-missing reconciler tests.
 //
 // TestFindMissingMultiRow carries the runtime portion of
 // TestDecisionReasonOnlyCanonicalValues for the find_missing path:
 // each row's raw decision_reason column is verified to equal
 // DecisionReasonFindMissing (not an uncontrolled string literal).
+//
+// Trail emission tests pin the ad.find_missing.tick events emitted by
+// CloseOrphanedPermissionRequests (permission_orphan_closeout) and verify that
+// zero trail lines are emitted when no orphaned rows exist. The proc_absent and
+// degraded_mode_skip paths are tested in pkg/api/find_missing_trail_test.go
+// (those events are emitted by findMissingImpl, not by the store layer).
 
 import (
 	"testing"
 )
+
+// findMissingTicksAt returns ad.find_missing.tick lines added to the store
+// trail after prevCount total lines. Uses readStoreTrailLines (trail_emit_test.go)
+// so the process-level singleton path set by TestMain is shared.
+func findMissingTicksAt(t *testing.T, prevCount int) []map[string]any {
+	t.Helper()
+	all := readStoreTrailLines(t)
+	var out []map[string]any
+	for _, row := range all[prevCount:] {
+		if row["event"] == "ad.find_missing.tick" {
+			out = append(out, row)
+		}
+	}
+	return out
+}
 
 // seedCheckPermissionSpawn inserts a Spawn in check_permission state with
 // relay_mode=on, ready to receive permission_requests rows.
@@ -28,10 +49,13 @@ func seedCheckPermissionSpawn(t *testing.T, s *Store, id string) {
 	}
 }
 
-// TestFindMissingMultiRow verifies SR-5.4: when a Spawn has N>1 open
-// permission_requests rows and CloseOrphanedPermissionRequests is called, every
-// open row receives decision='deny' and decision_reason='find_missing'
+// TestFindMissingMultiRow verifies SR-5.4 + SR-A-2.5: when a Spawn has N>1
+// open permission_requests rows and CloseOrphanedPermissionRequests is called,
+// every open row receives decision='deny' and decision_reason='find_missing'
 // (verified against store.DecisionReasonFindMissing via raw DB column read).
+// One ad.find_missing.tick(permission_orphan_closeout) trail event must be
+// emitted per closed row.
+//
 // This carries the runtime portion of TestDecisionReasonOnlyCanonicalValues for
 // the find_missing path.
 func TestFindMissingMultiRow(t *testing.T) {
@@ -49,9 +73,10 @@ func TestFindMissingMultiRow(t *testing.T) {
 	}
 
 	// Mark spawn missing, then close all orphaned rows.
-	if err := s.MarkSpawnMissing(id); err != nil {
+	if _, err := s.MarkSpawnMissing(id); err != nil {
 		t.Fatalf("MarkSpawnMissing: %v", err)
 	}
+	before := len(readStoreTrailLines(t))
 	if err := s.CloseOrphanedPermissionRequests(id); err != nil {
 		t.Fatalf("CloseOrphanedPermissionRequests: %v", err)
 	}
@@ -78,10 +103,30 @@ func TestFindMissingMultiRow(t *testing.T) {
 				tok, reason.Valid, reason.String, DecisionReasonFindMissing)
 		}
 	}
+
+	// SR-A-2.5: one ad.find_missing.tick(permission_orphan_closeout) per closed row.
+	ticks := findMissingTicksAt(t, before)
+	if len(ticks) != len(tokens) {
+		t.Fatalf("want %d ad.find_missing.tick (permission_orphan_closeout); got %d", len(tokens), len(ticks))
+	}
+	for _, tick := range ticks {
+		assertTrailStr(t, tick, "event", "ad.find_missing.tick")
+		assertTrailStr(t, tick, "reconciliation_reason", "permission_orphan_closeout")
+		assertTrailStr(t, tick, "source", "ad_find_missing")
+		assertTrailStr(t, tick, "claude_instance_id", id)
+		if _, ok := tick["request_token"].(string); !ok {
+			t.Errorf("[request_token] = %v; want non-empty string", tick["request_token"])
+		}
+		ts, ok := tick["ts"].(string)
+		if !ok || !storeTSRe.MatchString(ts) {
+			t.Errorf("[ts] = %v; want RFC3339Nano timestamp", tick["ts"])
+		}
+	}
 }
 
-// TestFindMissingSingleRow verifies the same reconciler on a Spawn with one
-// open row: the single row is denied with decision_reason='find_missing'.
+// TestFindMissingSingleRow verifies SR-5.4 + SR-A-2.5: a Spawn with one open
+// row receives decision='deny' and one ad.find_missing.tick(permission_orphan_closeout)
+// trail event.
 func TestFindMissingSingleRow(t *testing.T) {
 	s, _ := openTempStore(t)
 	const id = "fm-single-row-1"
@@ -91,9 +136,10 @@ func TestFindMissingSingleRow(t *testing.T) {
 		t.Fatalf("UpsertOpenPermissionRequest: %v", err)
 	}
 
-	if err := s.MarkSpawnMissing(id); err != nil {
+	if _, err := s.MarkSpawnMissing(id); err != nil {
 		t.Fatalf("MarkSpawnMissing: %v", err)
 	}
+	before := len(readStoreTrailLines(t))
 	if err := s.CloseOrphanedPermissionRequests(id); err != nil {
 		t.Fatalf("CloseOrphanedPermissionRequests: %v", err)
 	}
@@ -113,11 +159,30 @@ func TestFindMissingSingleRow(t *testing.T) {
 	if !reason.Valid || reason.String != DecisionReasonFindMissing {
 		t.Errorf("decision_reason = (%v, %q); want (true, %q)", reason.Valid, reason.String, DecisionReasonFindMissing)
 	}
+
+	// SR-A-2.5: exactly one ad.find_missing.tick(permission_orphan_closeout).
+	ticks := findMissingTicksAt(t, before)
+	if len(ticks) != 1 {
+		t.Fatalf("want 1 ad.find_missing.tick (permission_orphan_closeout); got %d", len(ticks))
+	}
+	tick := ticks[0]
+	assertTrailStr(t, tick, "event", "ad.find_missing.tick")
+	assertTrailStr(t, tick, "reconciliation_reason", "permission_orphan_closeout")
+	assertTrailStr(t, tick, "source", "ad_find_missing")
+	assertTrailStr(t, tick, "claude_instance_id", id)
+	if _, ok := tick["request_token"].(string); !ok {
+		t.Errorf("[request_token] = %v; want non-empty string", tick["request_token"])
+	}
+	ts, ok := tick["ts"].(string)
+	if !ok || !storeTSRe.MatchString(ts) {
+		t.Errorf("[ts] = %v; want RFC3339Nano timestamp", tick["ts"])
+	}
 }
 
-// TestFindMissingNoOpenRows verifies the reconciler completes without error when
-// a Spawn has no open permission_requests rows. MarkSpawnMissing must still
-// transition the Spawn to missing; CloseOrphanedPermissionRequests is a no-op.
+// TestFindMissingNoOpenRows verifies SR-5.4 + SR-A-2.5: when a Spawn has no
+// open permission_requests rows, MarkSpawnMissing still transitions the Spawn
+// to missing and CloseOrphanedPermissionRequests is a no-op that emits zero
+// ad.find_missing.tick lines.
 func TestFindMissingNoOpenRows(t *testing.T) {
 	s, _ := openTempStore(t)
 	const id = "fm-no-open-rows-1"
@@ -135,9 +200,10 @@ func TestFindMissingNoOpenRows(t *testing.T) {
 		t.Fatalf("transition to working: %v", err)
 	}
 
-	if err := s.MarkSpawnMissing(id); err != nil {
+	if _, err := s.MarkSpawnMissing(id); err != nil {
 		t.Fatalf("MarkSpawnMissing: %v", err)
 	}
+	before := len(readStoreTrailLines(t))
 	if err := s.CloseOrphanedPermissionRequests(id); err != nil {
 		t.Fatalf("CloseOrphanedPermissionRequests (no open rows): %v", err)
 	}
@@ -157,5 +223,10 @@ func TestFindMissingNoOpenRows(t *testing.T) {
 	}
 	if len(openRows) != 0 {
 		t.Errorf("open rows after CloseOrphanedPermissionRequests = %d; want 0", len(openRows))
+	}
+
+	// SR-A-2.5: no-op closeout must emit zero ad.find_missing.tick lines.
+	if ticks := findMissingTicksAt(t, before); len(ticks) != 0 {
+		t.Errorf("no-open-rows path emitted %d ad.find_missing.tick; want 0", len(ticks))
 	}
 }
