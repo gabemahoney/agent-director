@@ -311,11 +311,11 @@ func buildToolList() []map[string]any {
 // ExposedVerb reports whether a manifest verb should be exposed as
 // an MCP tool. The `hook` verb is internal (only Claude Code's hook
 // machinery calls it); `serve` would be self-referential; `trail-emit`
-// is a CLI-only recovery verb that runs without state.db and has no
-// dispatch handler.
+// and `trail-path` are CLI-only recovery verbs that run without state.db
+// and have no dispatch handlers.
 func ExposedVerb(name string) bool {
 	switch name {
-	case "hook", "serve", "trail-emit":
+	case "hook", "serve", "trail-emit", "trail-path":
 		return false
 	}
 	return true

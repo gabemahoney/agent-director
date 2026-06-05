@@ -916,6 +916,24 @@ var Verbs = []VerbDef{
 		ErrorNames:   []string{"ErrInvalidFlags", "ErrTrailWrite"},
 	},
 	{
+		Name:        "trail-path",
+		Description: "Print the resolved trail file path (one line, no JSON envelope) and exit 0. Path is taken from $AGENT_DIRECTOR_STATE_DIR when set, otherwise ~/.agent-director/ad-trail.jsonl. Does not open state.db — works in corrupted-state recovery scenarios (SR-A-6). Output is a raw path + newline, not a JSON envelope, so shell callers can use `cd $(agent-director trail-path | xargs dirname)` directly.",
+		Callable:    false,
+		HandleFree:  false,
+		Params:      []ParamDef{},
+		ResultFields: []FieldDef{
+			{
+				Name:          "path",
+				Type:          "string",
+				Description:   "Absolute path of the trail file (printed to stdout as a raw string, not a JSON field).",
+				Nullable:      false,
+				AllowEmpty:    false,
+				AllowedValues: nil,
+			},
+		},
+		ErrorNames: []string{},
+	},
+	{
 		Name:        "hook",
 		Description: "Internal: invoked by Claude Code on lifecycle events via the per-Spawn --settings hooks. Reads payload JSON from stdin, writes a row UPSERT, exits 0 (state-tracking fail-open).",
 		Callable:    false,
