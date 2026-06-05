@@ -5,13 +5,18 @@ import (
 	"sort"
 
 	"github.com/gabemahoney/agent-director/internal/probe"
+	"github.com/gabemahoney/agent-director/internal/trail"
 )
 
 // FindMissingStore is the narrow store surface FindMissing needs.
 // *store.Store satisfies it via the recovery primitives.
 type FindMissingStore interface {
 	ListLiveSpawnIDs() ([]string, error)
-	MarkSpawnMissing(instanceID string) error
+	// MarkSpawnMissing transitions a row from any live state to `missing`.
+	// Returns the prior state captured before the write, or ("", nil) when
+	// no write occurred (row absent or already terminal). A non-empty prior
+	// state signals "write happened" and the caller should emit a trail event.
+	MarkSpawnMissing(instanceID string) (string, error)
 	// CloseOrphanedPermissionRequests denies all open permission_requests rows
 	// for a Spawn that has just been marked missing, so any relay polling loop
 	// for that Spawn receives a fail-closed deny rather than spinning to its own
@@ -79,6 +84,16 @@ func findMissingImpl(ctx context.Context, s FindMissingStore, p probe.Prober, lg
 		if lg != nil {
 			lg.Printf("find-missing: refusing to sweep — probe returned 0 ids but %d live row(s) exist (cron user mismatch?)", len(liveIDs))
 		}
+		// Emit one degraded-mode refusal event per SR-A-2.5. Fail-open per
+		// SR-A-3.2: a trail-emit failure does not change the verb's nil-error return.
+		_ = trail.Emit(context.Background(), "ad.find_missing.tick", map[string]any{
+			"claude_instance_id":    nil,
+			"prior_state":           nil,
+			"new_state":             nil,
+			"reconciliation_reason": "degraded_mode_skip",
+			"live_row_count":        len(liveIDs),
+			"source":                "ad_find_missing",
+		})
 		return FindMissingResult{Count: 0, IDs: nil}, nil
 	}
 
@@ -87,16 +102,32 @@ func findMissingImpl(ctx context.Context, s FindMissingStore, p probe.Prober, lg
 		if _, ok := probeSet[id]; ok {
 			continue
 		}
-		if err := s.MarkSpawnMissing(id); err != nil {
+		priorState, err := s.MarkSpawnMissing(id)
+		if err != nil {
 			if lg != nil {
 				lg.Printf("find-missing: MarkSpawnMissing(%s): %v (continuing)", id, err)
 			}
 			continue
 		}
+		// Emit one ad.find_missing.tick per successfully written row (SR-A-2.5).
+		// priorState is non-empty only when the UPDATE actually fired (n>0);
+		// empty means the row was absent or already terminal — no emit in that case.
+		// Fail-open: trail-emit failure does not abort the sweep (SR-A-3.2).
+		if priorState != "" {
+			_ = trail.Emit(context.Background(), "ad.find_missing.tick", map[string]any{
+				"claude_instance_id":    id,
+				"prior_state":           priorState,
+				"new_state":             "missing",
+				"reconciliation_reason": "proc_absent",
+				"source":                "ad_find_missing",
+			})
+		}
 		// Close any open permission_requests rows so relay polling loops
 		// observe a fail-closed deny rather than spinning to their own timeout
-		// (SR-5.4). Errors are logged and skipped — MarkSpawnMissing already
-		// succeeded, so the Spawn is reconciled even if the row-close fails.
+		// (SR-5.4). CloseOrphanedPermissionRequests emits one
+		// ad.find_missing.tick(permission_orphan_closeout) per row it closes.
+		// Errors are logged and skipped — MarkSpawnMissing already succeeded,
+		// so the Spawn is reconciled even if the row-close fails.
 		if err := s.CloseOrphanedPermissionRequests(id); err != nil {
 			if lg != nil {
 				lg.Printf("find-missing: CloseOrphanedPermissionRequests(%s): %v (continuing)", id, err)

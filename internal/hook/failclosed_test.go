@@ -51,17 +51,17 @@ type transitionCall struct {
 	SoftRefresh bool
 }
 
-func (f *flakyRelayStore) ApplyHookTransition(instanceID, newState string, softRefresh bool) error {
+func (f *flakyRelayStore) ApplyHookTransition(instanceID, newState string, softRefresh bool, _ string) error {
 	f.transitionArgs = append(f.transitionArgs, transitionCall{instanceID, newState, softRefresh})
 	return f.transitionErr
 }
 func (f *flakyRelayStore) SetSessionID(string, string) error {
 	return f.sessionErr
 }
-func (f *flakyRelayStore) UpsertOpenPermissionRequest(_, _, _, _ string, _ int) error {
+func (f *flakyRelayStore) UpsertOpenPermissionRequest(_, _, _, _ string, _ int, _ string) error {
 	return f.upsertErr
 }
-func (f *flakyRelayStore) DecidePermissionRequest(instanceID, requestToken, decision, reason string) (bool, error) {
+func (f *flakyRelayStore) DecidePermissionRequest(instanceID, requestToken, decision, reason string, _ string) (bool, error) {
 	f.decideArgs = append(f.decideArgs, decideCall{instanceID, requestToken, decision, reason})
 	if f.decideErr != nil {
 		return false, f.decideErr
@@ -201,6 +201,7 @@ func TestFailClosedUpsertFailure(t *testing.T) {
 
 // 5. ApplyHookTransition failure → deny envelope.
 func TestFailClosedApplyHookTransitionFailure(t *testing.T) {
+	before := len(readTrailLines(t, trailFile()))
 	stdout := &bytes.Buffer{}
 	st := &flakyRelayStore{transitionErr: errors.New("db gone")}
 	if err := hook.Handle(context.Background(),
@@ -211,6 +212,12 @@ func TestFailClosedApplyHookTransitionFailure(t *testing.T) {
 		t.Fatalf("Handle: %v", err)
 	}
 	assertDenyEnvelope(t, stdout)
+	// Trail: one ad.hook.fired line emitted before the fail-closed return.
+	// upsert_outcome="error" (flakyRelayStore lacks outcomeTransitioner; transition
+	// error path sets UpsertError). runRelay is never reached so request_token=null.
+	row := hookFiredAt(t, before)
+	assertStr(t, row, "upsert_outcome", "error")
+	assertNoToolInput(t, row)
 }
 
 // 6. Polling timeout → deny envelope (relay's own failure mode).

@@ -72,6 +72,11 @@ type ClassifyResult struct {
 	// any documented value. Production callers log this at info level so
 	// upstream Claude Code additions surface in operator logs.
 	UnknownEvent bool
+
+	// ToolName is the tool_name field from the payload verbatim. Empty when
+	// the payload carried no tool_name. Used by trail emission (SR-A-2.1)
+	// to populate the top-level tool_name field.
+	ToolName string
 }
 
 // PeekEventName extracts the event name from a raw hook payload without
@@ -108,7 +113,7 @@ func ClassifyEvent(raw json.RawMessage) (ClassifyResult, error) {
 		return ClassifyResult{}, err
 	}
 
-	res := ClassifyResult{EventName: p.eventName()}
+	res := ClassifyResult{EventName: p.eventName(), ToolName: p.ToolName}
 
 	switch res.EventName {
 	case "SessionStart":

@@ -26,12 +26,13 @@ func (f *fakeFindMissingStore) ListLiveSpawnIDs() ([]string, error) {
 	return append([]string(nil), f.liveIDs...), nil
 }
 
-func (f *fakeFindMissingStore) MarkSpawnMissing(id string) error {
+func (f *fakeFindMissingStore) MarkSpawnMissing(id string) (string, error) {
 	if f.markErr != nil {
-		return f.markErr
+		return "", f.markErr
 	}
 	f.marked = append(f.marked, id)
-	return nil
+	// Return a representative live state as prior so callers see "write happened".
+	return "working", nil
 }
 
 func (f *fakeFindMissingStore) CloseOrphanedPermissionRequests(_ string) error {

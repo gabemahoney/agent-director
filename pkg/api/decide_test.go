@@ -231,7 +231,7 @@ func TestAmbiguousDecide(t *testing.T) {
 	s, _ := apitest.SeedDecideFixture(t, "on")
 	apitest.SeedPermissionRow(t, s, "id-d-1")
 	// Seed a second open row with a distinct token.
-	if err := s.UpsertOpenPermissionRequest("id-d-1", storefix.TestRequestTokenB, "Read", `{"file":"/etc/hosts"}`, 0); err != nil {
+	if err := s.UpsertOpenPermissionRequest("id-d-1", storefix.TestRequestTokenB, "Read", `{"file":"/etc/hosts"}`, 0, ""); err != nil {
 		t.Fatalf("UpsertOpenPermissionRequest (second row): %v", err)
 	}
 	_, err := api.Decide(s, api.DecideParams{

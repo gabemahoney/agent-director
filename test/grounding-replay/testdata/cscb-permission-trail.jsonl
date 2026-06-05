@@ -1,0 +1,3 @@
+{"ts":"2026-06-04T19:10:43.501Z","event":"cscb.relay.received","claude_instance_id":"gr-replay-example-id","request_token":"EXAMPLE_TOKEN_REPLACE_IN_TEST","channel":"C0B1ZJJLJ9M","source":"cscb_relay"}
+{"ts":"2026-06-04T19:10:44.023Z","event":"cscb.slack.posted","claude_instance_id":"gr-replay-example-id","request_token":"EXAMPLE_TOKEN_REPLACE_IN_TEST","channel":"C0B1ZJJLJ9M","message_ts":"1717531843.501000","source":"cscb_slack"}
+{"ts":"2026-06-04T20:40:02.198Z","event":"cscb.operator.click","claude_instance_id":"gr-replay-example-id","request_token":"EXAMPLE_TOKEN_REPLACE_IN_TEST","channel":"C0B1ZJJLJ9M","message_ts":"1717531843.501000","verdict":"allow","source":"cscb_click"}

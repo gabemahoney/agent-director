@@ -78,7 +78,7 @@ func HelperSeedSpawn(dbPath, id, state, cwd, relayMode, sessionID string, create
 	}
 
 	if state != store.StatePending {
-		if err := s.ApplyHookTransition(id, state, false); err != nil {
+		if err := s.ApplyHookTransition(id, state, false, "test_seed"); err != nil {
 			return "", fmt.Errorf("HelperSeedSpawn: ApplyHookTransition %q: %w", state, err)
 		}
 	}

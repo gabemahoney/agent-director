@@ -20,6 +20,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/trail"
 	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
 )
 
@@ -78,6 +79,8 @@ func handlers(client *pkgapi.Client, cfg config.Config) map[string]func([]string
 		"expire":         func(args []string) error { return expireHandlerWith(client, args) },
 		"delete":         func(args []string) error { return deleteHandlerWith(client, args) },
 		"serve":          func(args []string) error { return serveHandlerWith(cfg, args) },
+		"trail-emit":     func(args []string) error { return trailEmitHandlerWith(args) },
+		"trail-path":     func(args []string) error { return trailPathHandler(args) },
 	}
 }
 
@@ -107,6 +110,11 @@ const hookExitCode = 0
 // The function never returns an error; it logs and returns.
 func runHook() int {
 	logger := newHookLogger()
+	// Wire the hook logger into the trail writer so emit failures and
+	// ts-substitution warnings reach cfg.Log.ErrorLogPath rather than
+	// being silently discarded. SetLogger is safe to call before the
+	// first Emit (SR-A-7.6).
+	trail.SetLogger(logger)
 	stdout := os.Stdout
 	relayActive := os.Getenv(hook.EnvRelayMode) == hook.RelayModeOn
 
@@ -408,6 +416,29 @@ func run() int {
 			}
 			return 1
 		}
+	}
+
+	// trail-emit: DB-free verb — special-cased before setupClient so it works
+	// even when state.db is missing or corrupted (SR-A-2.3, t3.4uk.nz.j9.2k).
+	if len(strippedArgv) > 0 && strippedArgv[0] == "trail-emit" {
+		if err := trailEmitHandlerWith(strippedArgv[1:]); err != nil {
+			if errors.Is(err, errDispatch) {
+				return 1
+			}
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return 0
+	}
+
+	// trail-path: DB-free verb — special-cased before setupClient so it works
+	// even when state.db is missing or corrupted (SR-A-6, t3.4uk.ou.zv.9y).
+	if len(strippedArgv) > 0 && strippedArgv[0] == "trail-path" {
+		if err := trailPathHandler(strippedArgv[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return 0
 	}
 
 	client, cfg, err := setupClient(gOpts)

@@ -13,7 +13,7 @@ import (
 // it on the reference-doc side). Order matters: the generator walks Verbs
 // in slice order, so a reorder produces a diff in docs/cli-reference.md.
 func TestVerbsContainsExpectedSurface(t *testing.T) {
-	want := []string{"help", "spawn", "status", "get", "send-keys", "read-pane", "kill", "decide", "get-permission", "resume", "find-missing", "expire", "delete", "make-template", "list", "pause", "serve", "version", "hook"}
+	want := []string{"help", "spawn", "status", "get", "send-keys", "read-pane", "kill", "decide", "get-permission", "resume", "find-missing", "expire", "delete", "make-template", "list", "pause", "serve", "version", "trail-emit", "trail-path", "hook"}
 	if got := len(manifest.Verbs); got != len(want) {
 		t.Fatalf("len(manifest.Verbs) = %d, want %d (names %v)", got, len(want), want)
 	}
@@ -293,7 +293,7 @@ func TestCallableVerbsIsNewSlice(t *testing.T) {
 // TestAllVerbsHaveExplicitCallable asserts every entry in Verbs has an
 // explicit Callable value aligned with the locked assignment.
 func TestAllVerbsHaveExplicitCallable(t *testing.T) {
-	nonCallable := map[string]bool{"help": true, "serve": true, "hook": true}
+	nonCallable := map[string]bool{"help": true, "serve": true, "hook": true, "trail-emit": true, "trail-path": true}
 	for _, v := range manifest.Verbs {
 		if nonCallable[v.Name] {
 			if v.Callable {

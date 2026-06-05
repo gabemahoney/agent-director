@@ -7,10 +7,12 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"strings"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/trail"
 	"github.com/google/uuid"
 )
 
@@ -55,9 +57,39 @@ func mintRequestToken() (string, error) {
 // Slack message. *store.Store satisfies it.
 type RelayStore interface {
 	PollStore
-	UpsertOpenPermissionRequest(instanceID, requestToken, toolName, toolInputJSON string, cap int) error
-	DecidePermissionRequest(instanceID, requestToken, decision, reason string) (bool, error)
-	ApplyHookTransition(instanceID, newState string, softRefresh bool) error
+	UpsertOpenPermissionRequest(instanceID, requestToken, toolName, toolInputJSON string, cap int, writerProcess string) error
+	DecidePermissionRequest(instanceID, requestToken, decision, reason string, writerProcess string) (bool, error)
+	ApplyHookTransition(instanceID, newState string, softRefresh bool, triggeringEventName string) error
+}
+
+// outcomeUpserter is an optional extension of RelayStore. *store.Store
+// satisfies it; test doubles that don't implement it receive
+// store.UpsertNoChange as a conservative fallback for the trail field.
+type outcomeUpserter interface {
+	UpsertOpenPermissionRequestResult(instanceID, requestToken, toolName, toolInputJSON string, cap int, writerProcess string) (store.UpsertOutcome, error)
+}
+
+// emitResume emits one ad.resume.observed event immediately after the
+// decision envelope has been flushed to stdout. It is called once per
+// runRelay invocation that reaches a stdout write (SR-A-2.7).
+//
+// elapsed_ms_from_row_open is computed from createdAt to now. On
+// timeout/error paths the caller passes the row's created_at recovered
+// via an additional GetPermissionRequest; if that SELECT fails, the
+// zero time.Time is passed and elapsed_ms will be large (seconds since
+// the Go epoch), which is acceptable — the emit must not block the
+// relay return (SR-A-3.2 fail-open).
+//
+// verdict must be one of the canonical lowercase values: "allow",
+// "deny", "timeout", "error".
+func emitResume(ctx context.Context, instanceID, requestToken, verdict string, createdAt time.Time) {
+	_ = trail.Emit(ctx, "ad.resume.observed", map[string]any{
+		"claude_instance_id":       instanceID,
+		"request_token":            requestToken,
+		"verdict":                  verdict,
+		"elapsed_ms_from_row_open": time.Since(createdAt).Milliseconds(),
+		"source":                   "ad_polling",
+	})
 }
 
 // runRelay is the relay-mode branch invoked from Handle when the
@@ -65,6 +97,11 @@ type RelayStore interface {
 // owns the full happy + failure flow per SRD §6.2 + §6.4 and ALWAYS
 // writes an envelope to stdout before returning — every failure path
 // becomes a deny envelope so Claude Code never hangs.
+//
+// fields is the ad.hook.fired trail map owned by Handle. runRelay
+// populates request_token and (for the relay upsert path) upsert_outcome
+// into it. The single emit happens via Handle's defer; runRelay must not
+// emit directly (SR-A-2.1: one emit per verb invocation).
 //
 // A UUIDv4 request_token is minted via crypto/rand immediately after the
 // payload is parsed. The token is closed over for the full runRelay body:
@@ -82,6 +119,7 @@ func runRelay(
 	logger *log.Logger,
 	instanceID string,
 	raw json.RawMessage,
+	fields map[string]any,
 ) {
 	var pp permissionPayload
 	if err := json.Unmarshal(raw, &pp); err != nil {
@@ -104,6 +142,9 @@ func runRelay(
 		_, _ = fmt.Fprintln(stdout, EncodeDecision(EventNamePermissionRequest, "deny", ""))
 		return
 	}
+	// Populate request_token into the trail fields immediately after minting
+	// so early-exit paths (upsert failure) still carry it.
+	fields["request_token"] = requestToken
 
 	cap := cfg.PermissionRequestCap
 	if cap < 0 {
@@ -115,11 +156,46 @@ func runRelay(
 		cap = 1000
 	}
 
-	if err := st.UpsertOpenPermissionRequest(instanceID, requestToken, pp.ToolName, toolInput, cap); err != nil {
+	// Upsert the open permission request. Use the outcome-aware variant when
+	// available so the trail captures the exact result; test doubles that
+	// don't implement outcomeUpserter fall back to store.UpsertNoChange.
+	var upsertOutcome store.UpsertOutcome
+	if ou, ok := st.(outcomeUpserter); ok {
+		upsertOutcome, err = ou.UpsertOpenPermissionRequestResult(instanceID, requestToken, pp.ToolName, toolInput, cap, store.WriterProcessHook)
+	} else {
+		err = st.UpsertOpenPermissionRequest(instanceID, requestToken, pp.ToolName, toolInput, cap, store.WriterProcessHook)
+		if err != nil {
+			upsertOutcome = store.UpsertError
+		} else {
+			upsertOutcome = store.UpsertNoChange
+		}
+	}
+	// Overwrite upsert_outcome in fields with the relay-specific result.
+	fields["upsert_outcome"] = string(upsertOutcome)
+	if err != nil {
 		logf(logger, "relay: upsert (instance=%s, token=%s): %v", instanceID, requestToken, err)
 		_, _ = fmt.Fprintln(stdout, EncodeDecision(EventNamePermissionRequest, "deny", ""))
 		return
 	}
+
+	// CASE B: relay is DB-poll-based — no outbound HTTP shim exists today.
+	// Emit ad.relay_attempt.completed with degenerate fields so the SR-A-2.3
+	// trail shape is established and the §11 replay harness has a real event
+	// to assert against. Future outbound-network work (a real CSCB shim)
+	// should replace target_endpoint / outcome with real values via the
+	// `agent-director trail-emit relay-attempt` sub-verb (for external
+	// processes); in-process trail.Emit is used here because the hook IS an
+	// AD process and the sub-verb wrapper is unnecessary overhead.
+	// Fail-open per SRD §3.2: emit error must not block the relay attempt.
+	_ = trail.Emit(ctx, "ad.relay_attempt.completed", map[string]any{
+		"claude_instance_id": instanceID,
+		"request_token":      requestToken,
+		"target_endpoint":    "db_poll",
+		"outcome":            "db_relay_active",
+		"bytes_sent":         0,
+		"bytes_received":     0,
+		"source":             "relay_hook",
+	})
 
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	res := Poll(ctx, st, clock, cfg, instanceID, requestToken, rng)
@@ -127,9 +203,11 @@ func runRelay(
 	case "allow":
 		logf(logger, "relay: allow for %s token=%s (%s)", instanceID, requestToken, res.Reason)
 		_, _ = fmt.Fprintln(stdout, EncodeDecision(EventNamePermissionRequest, "allow", res.Reason))
+		emitResume(ctx, instanceID, requestToken, "allow", res.CreatedAt)
 	case "deny":
 		logf(logger, "relay: deny for %s token=%s (%s)", instanceID, requestToken, res.Reason)
 		_, _ = fmt.Fprintln(stdout, EncodeDecision(EventNamePermissionRequest, "deny", res.Reason))
+		emitResume(ctx, instanceID, requestToken, "deny", res.CreatedAt)
 	default:
 		// Timeout, ctx cancel, preemption, or read-retry exhaustion —
 		// SRD §6.4 fail-closed.
@@ -139,18 +217,40 @@ func runRelay(
 		// is never observed without the matching state update. Both writes
 		// are best-effort — fail-open per SRD §3.2 for state tracking; the
 		// stdout envelope still lands regardless (SRD §6.4 fail-closed).
-		if _, err := st.DecidePermissionRequest(instanceID, requestToken, "deny", store.DecisionReasonTimeout); err != nil {
+		if _, err := st.DecidePermissionRequest(instanceID, requestToken, "deny", store.DecisionReasonTimeout, store.WriterProcessHook); err != nil {
 			logf(logger, "relay: timeout decision write failed (instance=%s, token=%s): %v", instanceID, requestToken, err)
 		}
-		if err := st.ApplyHookTransition(instanceID, store.StateWorking, false); err != nil {
+		// "PermissionRequestTimeout" is a synthetic event name documenting that
+		// this state transition was triggered by the relay polling loop timing out
+		// (not by a Claude Code lifecycle event). Trail readers can distinguish
+		// this from hook-driven transitions by this value.
+		if err := st.ApplyHookTransition(instanceID, store.StateWorking, false, "PermissionRequestTimeout"); err != nil {
 			logf(logger, "relay: timeout state transition failed (instance=%s): %v", instanceID, err)
 		}
 
 		_, _ = fmt.Fprintln(stdout, EncodeDecision(EventNamePermissionRequest, "deny", ""))
+
+		// Recover the row's created_at for elapsed_ms. The happy-path carries
+		// it through PollResult.CreatedAt, but timeout/error paths return a
+		// zero CreatedAt — one additional SELECT suffices (SR-A-2.7). On
+		// ErrNoRows (preempted row) or other errors, zero time is used and
+		// elapsed_ms will reflect time since the Go epoch, which is acceptable
+		// for a degenerate case (emitResume is fail-open per SR-A-3.2).
+		var rowCreatedAt time.Time
+		if r, err := st.GetPermissionRequest(instanceID, requestToken); err == nil {
+			rowCreatedAt = r.CreatedAt
+		}
+
+		verdict := "error"
+		if strings.Contains(res.Why, "polling timeout") {
+			verdict = "timeout"
+		}
+		emitResume(ctx, instanceID, requestToken, verdict, rowCreatedAt)
 	}
 }
 
-// Compile-time assertion that *store.Store satisfies RelayStore. Mirrors
-// the HookStore assertion in handler.go so interface drift is caught at
-// compile time on either surface.
+// Compile-time assertions that *store.Store satisfies RelayStore and the
+// optional outcomeUpserter interface. Keeps the production wiring honest
+// if the store or interfaces grow.
 var _ RelayStore = (*store.Store)(nil)
+var _ outcomeUpserter = (*store.Store)(nil)

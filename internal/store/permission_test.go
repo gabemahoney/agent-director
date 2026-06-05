@@ -88,10 +88,10 @@ func TestUpsertOpenPermissionRequestAppendsRow(t *testing.T) {
 	seedSpawnForPerm(t, s, id, "on")
 
 	// Two distinct tokens → two rows.
-	if err := s.UpsertOpenPermissionRequest(id, tokenA, "tool_A", `{"a":1}`, 0); err != nil {
+	if err := s.UpsertOpenPermissionRequest(id, tokenA, "tool_A", `{"a":1}`, 0, ""); err != nil {
 		t.Fatalf("upsert tokenA: %v", err)
 	}
-	if err := s.UpsertOpenPermissionRequest(id, tokenB, "tool_B", `{"b":2}`, 0); err != nil {
+	if err := s.UpsertOpenPermissionRequest(id, tokenB, "tool_B", `{"b":2}`, 0, ""); err != nil {
 		t.Fatalf("upsert tokenB: %v", err)
 	}
 	if got := countPermRows(t, s, id); got != 2 {
@@ -116,7 +116,7 @@ func TestUpsertOpenPermissionRequestAppendsRow(t *testing.T) {
 	}
 
 	// Repeated (instance_id, request_token) → ErrRequestTokenCollision.
-	err := s.UpsertOpenPermissionRequest(id, tokenA, "tool_A2", `{"a":99}`, 0)
+	err := s.UpsertOpenPermissionRequest(id, tokenA, "tool_A2", `{"a":99}`, 0, "")
 	if !errors.Is(err, ErrRequestTokenCollision) {
 		t.Fatalf("third upsert (same token): err = %v; want ErrRequestTokenCollision", err)
 	}
@@ -143,10 +143,10 @@ func TestUpsertOpenPermissionRequestCollisionLeavesRowIntact(t *testing.T) {
 	const id = "spawn-collision"
 	seedSpawnForPerm(t, s, id, "on")
 
-	if err := s.UpsertOpenPermissionRequest(id, tokenA, "original", `{"x":1}`, 0); err != nil {
+	if err := s.UpsertOpenPermissionRequest(id, tokenA, "original", `{"x":1}`, 0, ""); err != nil {
 		t.Fatalf("initial upsert: %v", err)
 	}
-	if err := s.UpsertOpenPermissionRequest(id, tokenA, "collision", `{"x":2}`, 0); !errors.Is(err, ErrRequestTokenCollision) {
+	if err := s.UpsertOpenPermissionRequest(id, tokenA, "collision", `{"x":2}`, 0, ""); !errors.Is(err, ErrRequestTokenCollision) {
 		t.Fatalf("collision upsert: err = %v; want ErrRequestTokenCollision", err)
 	}
 	_, toolName, toolInput, decision, _ := readPermRow(t, s, id, tokenA)
@@ -163,11 +163,11 @@ func TestDecidePermissionRequestOnlyAffectsOpenRow(t *testing.T) {
 	s := openTestStore(t)
 	const id = "spawn-decide"
 	seedSpawnForPerm(t, s, id, "on")
-	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Read", `{"file":"/etc/hosts"}`, 0); err != nil {
+	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Read", `{"file":"/etc/hosts"}`, 0, ""); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
-	updated, err := s.DecidePermissionRequest(id, tokenA, "allow", "trusted")
+	updated, err := s.DecidePermissionRequest(id, tokenA, "allow", "trusted", "")
 	if err != nil {
 		t.Fatalf("first decide: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestDecidePermissionRequestOnlyAffectsOpenRow(t *testing.T) {
 		t.Fatalf("first decide returned updated=false; want true (open row should be flipped)")
 	}
 
-	updated, err = s.DecidePermissionRequest(id, tokenA, "deny", "second attempt")
+	updated, err = s.DecidePermissionRequest(id, tokenA, "deny", "second attempt", "")
 	if err != nil {
 		t.Fatalf("second decide: %v", err)
 	}
@@ -198,11 +198,11 @@ func TestDecidePermissionRequestEmptyReasonStored(t *testing.T) {
 	s := openTestStore(t)
 	const id = "spawn-empty-reason"
 	seedSpawnForPerm(t, s, id, "on")
-	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Read", `{}`, 0); err != nil {
+	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Read", `{}`, 0, ""); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
-	updated, err := s.DecidePermissionRequest(id, tokenA, "deny", "")
+	updated, err := s.DecidePermissionRequest(id, tokenA, "deny", "", "")
 	if err != nil {
 		t.Fatalf("decide: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestGetPermissionRequestExposesRequestIDAndCreatedAt(t *testing.T) {
 	seedSpawnForPerm(t, s, id, "on")
 
 	before := time.Now().UTC().Add(-1 * time.Second)
-	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Read", `{"file":"/tmp/x"}`, 0); err != nil {
+	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Read", `{"file":"/tmp/x"}`, 0, ""); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 	after := time.Now().UTC().Add(1 * time.Second)
@@ -271,11 +271,11 @@ func TestDecidePermissionRequestTimeoutThenAllowIsRejected(t *testing.T) {
 	const id = "spawn-timeout-seq"
 	seedSpawnForPerm(t, s, id, "on")
 
-	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{"command":"ls"}`, 0); err != nil {
+	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{"command":"ls"}`, 0, ""); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
-	updated, err := s.DecidePermissionRequest(id, tokenA, "deny", DecisionReasonTimeout)
+	updated, err := s.DecidePermissionRequest(id, tokenA, "deny", DecisionReasonTimeout, "")
 	if err != nil {
 		t.Fatalf("timeout decide: %v", err)
 	}
@@ -283,7 +283,7 @@ func TestDecidePermissionRequestTimeoutThenAllowIsRejected(t *testing.T) {
 		t.Fatalf("timeout decide returned updated=false; want true")
 	}
 
-	updated, err = s.DecidePermissionRequest(id, tokenA, "allow", "user-approved")
+	updated, err = s.DecidePermissionRequest(id, tokenA, "allow", "user-approved", "")
 	if err != nil {
 		t.Fatalf("subsequent allow decide: %v", err)
 	}
@@ -307,14 +307,14 @@ func TestAmbiguousDecide(t *testing.T) {
 		s := openTestStore(t)
 		const id = "spawn-ambiguous"
 		seedSpawnForPerm(t, s, id, "on")
-		if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{}`, 0); err != nil {
+		if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{}`, 0, ""); err != nil {
 			t.Fatalf("upsert tokenA: %v", err)
 		}
-		if err := s.UpsertOpenPermissionRequest(id, tokenB, "Read", `{}`, 0); err != nil {
+		if err := s.UpsertOpenPermissionRequest(id, tokenB, "Read", `{}`, 0, ""); err != nil {
 			t.Fatalf("upsert tokenB: %v", err)
 		}
 
-		updated, err := s.DecidePermissionRequest(id, "", "allow", "")
+		updated, err := s.DecidePermissionRequest(id, "", "allow", "", "")
 		if !errors.Is(err, ErrAmbiguousRequest) {
 			t.Fatalf("err = %v; want ErrAmbiguousRequest", err)
 		}
@@ -336,11 +336,11 @@ func TestAmbiguousDecide(t *testing.T) {
 		s := openTestStore(t)
 		const id = "spawn-single"
 		seedSpawnForPerm(t, s, id, "on")
-		if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{}`, 0); err != nil {
+		if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{}`, 0, ""); err != nil {
 			t.Fatalf("upsert tokenA: %v", err)
 		}
 
-		_, err := s.DecidePermissionRequest(id, "", "allow", "")
+		_, err := s.DecidePermissionRequest(id, "", "allow", "", "")
 		if errors.Is(err, ErrAmbiguousRequest) {
 			t.Fatalf("ErrAmbiguousRequest returned for single open row; must not trigger")
 		}
@@ -358,7 +358,7 @@ func TestGetPermissionRequestByTokenOpenRow(t *testing.T) {
 	seedSpawnForPerm(t, s, id, "on")
 
 	before := time.Now().UTC().Add(-1 * time.Second)
-	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Read", `{"file":"/tmp/x"}`, 0); err != nil {
+	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Read", `{"file":"/tmp/x"}`, 0, ""); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 	after := time.Now().UTC().Add(1 * time.Second)
@@ -404,10 +404,10 @@ func TestGetPermissionRequestByTokenClosedAllow(t *testing.T) {
 	const id = "spawn-by-token-allow"
 	seedSpawnForPerm(t, s, id, "on")
 
-	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Read", `{}`, 0); err != nil {
+	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Read", `{}`, 0, ""); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
-	updated, err := s.DecidePermissionRequest(id, tokenA, "allow", "")
+	updated, err := s.DecidePermissionRequest(id, tokenA, "allow", "", "")
 	if err != nil {
 		t.Fatalf("decide allow: %v", err)
 	}
@@ -446,10 +446,10 @@ func TestGetPermissionRequestByTokenClosedDenyReasons(t *testing.T) {
 			s := openTestStore(t)
 			id := "spawn-by-token-deny-" + tc.name
 			seedSpawnForPerm(t, s, id, "on")
-			if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{}`, 0); err != nil {
+			if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{}`, 0, ""); err != nil {
 				t.Fatalf("upsert: %v", err)
 			}
-			updated, err := s.DecidePermissionRequest(id, tokenA, "deny", tc.reason)
+			updated, err := s.DecidePermissionRequest(id, tokenA, "deny", tc.reason, "")
 			if err != nil {
 				t.Fatalf("decide deny: %v", err)
 			}
@@ -506,13 +506,13 @@ func TestGetPermissionRequestByTokenConcurrentReads(t *testing.T) {
 	const id = "spawn-concurrent-reads"
 	seedSpawnForPerm(t, s, id, "on")
 
-	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Read", `{"file":"/a"}`, 0); err != nil {
+	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Read", `{"file":"/a"}`, 0, ""); err != nil {
 		t.Fatalf("upsert seeded open: %v", err)
 	}
-	if err := s.UpsertOpenPermissionRequest(id, tokenB, "Bash", `{"cmd":"ls"}`, 0); err != nil {
+	if err := s.UpsertOpenPermissionRequest(id, tokenB, "Bash", `{"cmd":"ls"}`, 0, ""); err != nil {
 		t.Fatalf("upsert seeded closed (pre-decide): %v", err)
 	}
-	updated, err := s.DecidePermissionRequest(id, tokenB, "deny", DecisionReasonOperator)
+	updated, err := s.DecidePermissionRequest(id, tokenB, "deny", DecisionReasonOperator, "")
 	if err != nil {
 		t.Fatalf("decide seeded closed: %v", err)
 	}
@@ -567,14 +567,14 @@ func TestGetPermissionRequestByTokenConcurrentReads(t *testing.T) {
 			// version marker) so it doesn't collide with the seeded tokens.
 			transient := fmt.Sprintf("%08x-%04x-4%03x-a%03x-%012x",
 				seq, seq&0xffff, seq&0xfff, seq&0xfff, seq)
-			if err := s.UpsertOpenPermissionRequest(id, transient, "Bash", `{"cmd":"echo"}`, 0); err != nil {
+			if err := s.UpsertOpenPermissionRequest(id, transient, "Bash", `{"cmd":"echo"}`, 0, ""); err != nil {
 				writerErrs <- fmt.Errorf("transient upsert (seq=%d): %w", seq, err)
 				return
 			}
 			// First call may flip the seeded open row; subsequent calls no-op
 			// (first-call-wins). Either outcome is fine — DecidePermissionRequest
 			// returns (false, nil) on the no-op path, never an error.
-			if _, err := s.DecidePermissionRequest(id, tokenA, "allow", ""); err != nil {
+			if _, err := s.DecidePermissionRequest(id, tokenA, "allow", "", ""); err != nil {
 				writerErrs <- fmt.Errorf("decide seeded open (seq=%d): %w", seq, err)
 				return
 			}
@@ -652,10 +652,10 @@ func seedClosedPermRequests(t *testing.T, s *Store, dbPath, instanceID string, n
 	tokens := make([]string, 0, n)
 	for i := 0; i < n; i++ {
 		tok := fmt.Sprintf("%08x-0000-4000-a000-%012x", i, i)
-		if err := s.UpsertOpenPermissionRequest(instanceID, tok, "Bash", `{"cmd":"echo"}`, 0); err != nil {
+		if err := s.UpsertOpenPermissionRequest(instanceID, tok, "Bash", `{"cmd":"echo"}`, 0, ""); err != nil {
 			t.Fatalf("seedClosedPermRequests: UpsertOpenPermissionRequest(%q, %q): %v", instanceID, tok, err)
 		}
-		updated, err := s.DecidePermissionRequest(instanceID, tok, "deny", DecisionReasonOperator)
+		updated, err := s.DecidePermissionRequest(instanceID, tok, "deny", DecisionReasonOperator, "")
 		if err != nil {
 			t.Fatalf("seedClosedPermRequests: DecidePermissionRequest(%q, %q): %v", instanceID, tok, err)
 		}
@@ -709,7 +709,7 @@ func TestUpsertEvictsOldestClosedRowsOverCap(t *testing.T) {
 				tokens := seedClosedPermRequests(t, s, dbPath, "evict-at", N, base, time.Minute)
 
 				const newTok = "ffffffff-ffff-4fff-afff-ffffffffffff"
-				if err := s.UpsertOpenPermissionRequest("evict-at", newTok, "Bash", `{}`, N); err != nil {
+				if err := s.UpsertOpenPermissionRequest("evict-at", newTok, "Bash", `{}`, N, ""); err != nil {
 					t.Fatalf("upsert: %v", err)
 				}
 
@@ -747,7 +747,7 @@ func TestUpsertEvictsOldestClosedRowsOverCap(t *testing.T) {
 				tokens := seedClosedPermRequests(t, s, dbPath, "evict-over", N+5, base, time.Minute)
 
 				const newTok = "eeeeeeee-eeee-4eee-aeee-eeeeeeeeeeee"
-				if err := s.UpsertOpenPermissionRequest("evict-over", newTok, "Bash", `{}`, N); err != nil {
+				if err := s.UpsertOpenPermissionRequest("evict-over", newTok, "Bash", `{}`, N, ""); err != nil {
 					t.Fatalf("upsert: %v", err)
 				}
 
@@ -792,14 +792,14 @@ func TestUpsertNeverEvictsOpenRows(t *testing.T) {
 		// Seed cap open rows.
 		for i := 0; i < cap; i++ {
 			tok := fmt.Sprintf("%08x-0000-4000-a000-%012x", i, i)
-			if err := s.UpsertOpenPermissionRequest(id, tok, "Bash", `{}`, cap); err != nil {
+			if err := s.UpsertOpenPermissionRequest(id, tok, "Bash", `{}`, cap, ""); err != nil {
 				t.Fatalf("seed open row %d: %v", i, err)
 			}
 		}
 
 		// One more upsert: cap+1 rows, all open — no closed rows to evict.
 		const extraTok = "ffffffff-ffff-4fff-afff-ffffffffffff"
-		if err := s.UpsertOpenPermissionRequest(id, extraTok, "Bash", `{}`, cap); err != nil {
+		if err := s.UpsertOpenPermissionRequest(id, extraTok, "Bash", `{}`, cap, ""); err != nil {
 			t.Errorf("upsert with all-open: err = %v; want nil (SR-3.1: never errors when no closed rows)", err)
 		}
 
@@ -829,7 +829,7 @@ func TestUpsertNeverEvictsOpenRows(t *testing.T) {
 		// Seed cap-1 open rows (spawn already exists).
 		for i := 0; i < cap-1; i++ {
 			tok := fmt.Sprintf("%08x-1111-4111-a111-%012x", i, i)
-			if err := s.UpsertOpenPermissionRequest(id, tok, "Bash", `{}`, 0); err != nil {
+			if err := s.UpsertOpenPermissionRequest(id, tok, "Bash", `{}`, 0, ""); err != nil {
 				t.Fatalf("seed open row %d: %v", i, err)
 			}
 		}
@@ -837,7 +837,7 @@ func TestUpsertNeverEvictsOpenRows(t *testing.T) {
 
 		// Upsert one more open row with cap=cap → total = cap+1 → evict 1 closed.
 		const newTok = "dddddddd-dddd-4ddd-addd-dddddddddddd"
-		if err := s.UpsertOpenPermissionRequest(id, newTok, "Bash", `{}`, cap); err != nil {
+		if err := s.UpsertOpenPermissionRequest(id, newTok, "Bash", `{}`, cap, ""); err != nil {
 			t.Fatalf("upsert: %v", err)
 		}
 
@@ -875,7 +875,7 @@ func TestRelayConfigCapZeroDisablesEviction(t *testing.T) {
 
 	// Upsert with cap=0 (from config.Relay{PermissionRequestCap: 0}).
 	const newTok = "00000000-0000-4000-a000-000000000001"
-	if err := s.UpsertOpenPermissionRequest("zero-cap", newTok, "Bash", `{}`, 0); err != nil {
+	if err := s.UpsertOpenPermissionRequest("zero-cap", newTok, "Bash", `{}`, 0, ""); err != nil {
 		t.Fatalf("upsert with cap=0: %v", err)
 	}
 

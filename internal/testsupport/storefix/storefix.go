@@ -69,7 +69,7 @@ func seed(t *testing.T, s *store.Store, id, targetState string) store.Spawn {
 		t.Fatalf("storefix.seed: InsertPending(%q): %v", id, err)
 	}
 	if targetState != store.StatePending {
-		if err := s.ApplyHookTransition(id, targetState, false); err != nil {
+		if err := s.ApplyHookTransition(id, targetState, false, "test_seed"); err != nil {
 			t.Fatalf("storefix.seed: ApplyHookTransition(%q, %q): %v", id, targetState, err)
 		}
 	}
@@ -128,10 +128,10 @@ func SeedCheckPermission(t *testing.T, s *store.Store, id string) store.Spawn {
 	if err := s.InsertPending(sp); err != nil {
 		t.Fatalf("storefix.SeedCheckPermission: InsertPending(%q): %v", id, err)
 	}
-	if err := s.ApplyHookTransition(id, store.StateCheckPermission, false); err != nil {
+	if err := s.ApplyHookTransition(id, store.StateCheckPermission, false, "test_seed"); err != nil {
 		t.Fatalf("storefix.SeedCheckPermission: ApplyHookTransition(%q, check_permission): %v", id, err)
 	}
-	if err := s.UpsertOpenPermissionRequest(id, TestRequestTokenA, "Bash", `{"cmd":"echo hello"}`, 0); err != nil {
+	if err := s.UpsertOpenPermissionRequest(id, TestRequestTokenA, "Bash", `{"cmd":"echo hello"}`, 0, store.WriterProcessHook); err != nil {
 		t.Fatalf("storefix.SeedCheckPermission: UpsertOpenPermissionRequest(%q): %v", id, err)
 	}
 	row, err := s.GetSpawn(id)
@@ -158,7 +158,7 @@ func SeedResumable(t *testing.T, s *store.Store, id string) store.Spawn {
 	if err := s.SetSessionID(id, sessionID); err != nil {
 		t.Fatalf("storefix.SeedResumable: SetSessionID(%q, %q): %v", id, sessionID, err)
 	}
-	if err := s.ApplyHookTransition(id, store.StateEnded, false); err != nil {
+	if err := s.ApplyHookTransition(id, store.StateEnded, false, "test_seed"); err != nil {
 		t.Fatalf("storefix.SeedResumable: ApplyHookTransition(%q, ended): %v", id, err)
 	}
 	// Write a placeholder JSONL file so resume's os.Stat pre-flight passes.
@@ -242,10 +242,10 @@ func SeedClosedPermissionRequests(t *testing.T, s *store.Store, dbPath, instance
 		// UUIDv4-shaped token: version nibble=4, variant nibble=a (10xx binary).
 		tok := fmt.Sprintf("%08x-0000-4000-a000-%012x", i, i)
 
-		if err := s.UpsertOpenPermissionRequest(instanceID, tok, "Bash", `{"cmd":"echo"}`, 0); err != nil {
+		if err := s.UpsertOpenPermissionRequest(instanceID, tok, "Bash", `{"cmd":"echo"}`, 0, store.WriterProcessHook); err != nil {
 			t.Fatalf("storefix.SeedClosedPermissionRequests: UpsertOpenPermissionRequest(%q, %q): %v", instanceID, tok, err)
 		}
-		updated, err := s.DecidePermissionRequest(instanceID, tok, "deny", store.DecisionReasonOperator)
+		updated, err := s.DecidePermissionRequest(instanceID, tok, "deny", store.DecisionReasonOperator, store.WriterProcessDecide)
 		if err != nil {
 			t.Fatalf("storefix.SeedClosedPermissionRequests: DecidePermissionRequest(%q, %q): %v", instanceID, tok, err)
 		}
@@ -283,7 +283,7 @@ func SeedClosedPermissionRequests(t *testing.T, s *store.Store, dbPath, instance
 func SeedOpenPermissionRequests(t *testing.T, s *store.Store, instanceID string, tokens []string) {
 	t.Helper()
 	for _, tok := range tokens {
-		if err := s.UpsertOpenPermissionRequest(instanceID, tok, "Bash", `{"cmd":"echo"}`, 0); err != nil {
+		if err := s.UpsertOpenPermissionRequest(instanceID, tok, "Bash", `{"cmd":"echo"}`, 0, store.WriterProcessHook); err != nil {
 			t.Fatalf("storefix.SeedOpenPermissionRequests: UpsertOpenPermissionRequest(%q, %q): %v", instanceID, tok, err)
 		}
 	}

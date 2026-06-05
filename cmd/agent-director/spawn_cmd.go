@@ -7,10 +7,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/user"
+	"path/filepath"
 	"strings"
 
 	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/errnames"
+
+	"github.com/gabemahoney/agent-director/internal/trail"
 )
 
 // spawnHandlerWith implements `agent-director spawn`. Called via a closure
@@ -281,8 +285,46 @@ func pauseHandlerWith(client *pkgapi.Client, args []string) error {
 // rejects empty flags up front; the API layer guards the
 // allow|deny enum (ErrInvalidDecision) as defense in depth for MCP
 // callers that bypass the CLI flag parser.
+//
+// SR-A-2.4: flag-validation rejections that short-circuit before
+// client.Decide is called emit their own ad.decide.called with
+// outcome="ErrInvalidFlags". client.Decide handles emission for all
+// outcomes that reach the API layer.
 func decideHandlerWith(client *pkgapi.Client, args []string) error {
+	// Collect caller identity at entry — must come from inside AD, not from
+	// caller-asserted params (SR-A-2.4).
+	cliCallerProcess := filepath.Base(os.Args[0])
+	cliCallerPID := os.Getpid()
+	cliCallerHostname, _ := os.Hostname()
+	cliCallerUser := ""
+	if u, uerr := user.Current(); uerr == nil {
+		cliCallerUser = u.Username
+	}
+
 	var p pkgapi.DecideParams
+	// cliOutcome is set to "ErrInvalidFlags" on any CLI-layer rejection that
+	// fires before client.Decide is reached. An empty string means either the
+	// flag-parse phase succeeded (client.Decide will emit) or the defer fires
+	// before flag parsing completes.
+	var cliOutcome string
+	defer func() {
+		if cliOutcome == "" {
+			return // client.Decide owns the emit for all API-layer outcomes.
+		}
+		_ = trail.Emit(context.Background(), "ad.decide.called", map[string]any{
+			"claude_instance_id":        p.ClaudeInstanceID,
+			"request_token":             p.RequestToken,
+			"submitted_decision":        p.Decision,
+			"submitted_decision_reason": p.Reason,
+			"outcome":                   cliOutcome,
+			"caller_process":            cliCallerProcess,
+			"caller_pid":                cliCallerPID,
+			"caller_hostname":           cliCallerHostname,
+			"caller_user":               cliCallerUser,
+			"source":                    "ad_decide",
+		})
+	}()
+
 	fs := flag.NewFlagSet("decide", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the Spawn awaiting a decision")
@@ -290,15 +332,19 @@ func decideHandlerWith(client *pkgapi.Client, args []string) error {
 	fs.StringVar(&p.Decision, "decision", "", "allow or deny")
 	fs.StringVar(&p.Reason, "reason", "", "deprecated; currently ignored — the canonical operator reason is persisted")
 	if err := fs.Parse(args); err != nil {
+		cliOutcome = "ErrInvalidFlags"
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
 	if p.ClaudeInstanceID == "" {
+		cliOutcome = "ErrInvalidFlags"
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--claude-instance-id is required")
 	}
 	if p.RequestToken == "" {
+		cliOutcome = "ErrInvalidFlags"
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--request-token is required")
 	}
 	if p.Decision == "" {
+		cliOutcome = "ErrInvalidFlags"
 		return writeApiErrorAndDispatch("ErrInvalidFlags", "--decision is required (allow|deny)")
 	}
 	result, err := client.Decide(p)

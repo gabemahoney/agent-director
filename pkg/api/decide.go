@@ -1,11 +1,16 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
+	"os/user"
+	"path/filepath"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/trail"
 )
 
 // ErrRelayModeOff is returned by decide() when the target Spawn's
@@ -26,7 +31,7 @@ var ErrMissingRequestToken = errors.New("ErrMissingRequestToken")
 // DecideStore is the narrow store surface Decide needs.
 type DecideStore interface {
 	GetSpawn(instanceID string) (Spawn, error)
-	DecidePermissionRequest(instanceID, requestToken, decision, reason string) (bool, error)
+	DecidePermissionRequest(instanceID, requestToken, decision, reason string, writerProcess string) (bool, error)
 	GetPermissionRequest(instanceID, requestToken string) (PermissionRow, error)
 }
 
@@ -96,7 +101,7 @@ func Decide(s DecideStore, params DecideParams) (DecideResult, error) {
 	if params.Decision == "deny" {
 		dbReason = store.DecisionReasonOperator
 	}
-	updated, err := s.DecidePermissionRequest(params.ClaudeInstanceID, params.RequestToken, params.Decision, dbReason)
+	updated, err := s.DecidePermissionRequest(params.ClaudeInstanceID, params.RequestToken, params.Decision, dbReason, store.WriterProcessDecide)
 	if err != nil {
 		return DecideResult{}, err
 	}
@@ -128,6 +133,39 @@ func Decide(s DecideStore, params DecideParams) (DecideResult, error) {
 		store.ErrNoOpenPermissionRequest, params.ClaudeInstanceID)
 }
 
+// decideOutcome maps a Decide error to its canonical outcome string for
+// ad.decide.called. nil → "ok"; known sentinels → their err_name;
+// unrecognized errors → "ErrInternal". The function uses errors.Is so
+// %w-wrapped errors are matched correctly.
+//
+// errnames.Classify cannot be used here: pkg/api/errnames imports pkg/api for
+// its sentinel variables, so importing errnames from pkg/api would create an
+// unresolvable import cycle. This local switch is the canonical pattern for
+// decide-path outcome strings.
+func decideOutcome(err error) string {
+	if err == nil {
+		return "ok"
+	}
+	switch {
+	case errors.Is(err, ErrMissingRequestToken):
+		return "ErrMissingRequestToken"
+	case errors.Is(err, ErrInvalidDecision):
+		return "ErrInvalidDecision"
+	case errors.Is(err, ErrRelayModeOff):
+		return "ErrRelayModeOff"
+	case errors.Is(err, store.ErrSpawnNotFound):
+		return "ErrSpawnNotFound"
+	case errors.Is(err, store.ErrAlreadyDecided):
+		return "ErrAlreadyDecided"
+	case errors.Is(err, store.ErrNoOpenPermissionRequest):
+		return "ErrNoOpenPermissionRequest"
+	case errors.Is(err, store.ErrAmbiguousRequest):
+		return "ErrAmbiguousRequest"
+	default:
+		return "ErrInternal"
+	}
+}
+
 // Decide writes the orchestrator's allow or deny verdict on the open
 // PermissionRequest for the identified Spawn. Only callable on Spawns with
 // relay_mode=on. The underlying UPDATE is race-free (first-call-wins guarded
@@ -149,5 +187,37 @@ func (c *Client) Decide(params DecideParams) (DecideResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return DecideResult{}, err
 	}
-	return Decide(c.st, params)
+
+	// Collect caller identity once at entry — must come from inside AD, not
+	// from caller-asserted params (SR-A-2.4).
+	callerProcess := filepath.Base(os.Args[0])
+	callerPID := os.Getpid()
+	callerHostname, _ := os.Hostname()
+	callerUser := ""
+	if u, uerr := user.Current(); uerr == nil {
+		callerUser = u.Username
+	}
+
+	var callErr error
+	defer func() {
+		// Emit exactly one ad.decide.called per invocation, on every return
+		// path including ErrAlreadyDecided no-ops (SR-A-2.4). Fail-open per
+		// SR-A-3.2: a trail-emit failure is silently discarded.
+		_ = trail.Emit(context.Background(), "ad.decide.called", map[string]any{
+			"claude_instance_id":        params.ClaudeInstanceID,
+			"request_token":             params.RequestToken,
+			"submitted_decision":        params.Decision,
+			"submitted_decision_reason": params.Reason,
+			"outcome":                   decideOutcome(callErr),
+			"caller_process":            callerProcess,
+			"caller_pid":                callerPID,
+			"caller_hostname":           callerHostname,
+			"caller_user":               callerUser,
+			"source":                    "ad_decide",
+		})
+	}()
+
+	var result DecideResult
+	result, callErr = Decide(c.st, params)
+	return result, callErr
 }

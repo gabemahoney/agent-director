@@ -22,10 +22,24 @@ const envFreshInitHelper = "AD_STORE_TEST_FRESH_INIT_HELPER"
 // framework starts when the helper env var is set. This keeps the helper
 // invisible to `go test -list`/normal test runs while letting the
 // concurrent-fresh-init test fork the same binary as N subprocesses.
+//
+// For non-helper runs, TestMain also fixes AGENT_DIRECTOR_STATE_DIR to a
+// temp dir so the trail singleton writes to a known location rather than
+// ~/.agent-director/. Trail tests (trail_emit_test.go) read storeTrailDir
+// to locate the file.
 func TestMain(m *testing.M) {
 	if dbPath := os.Getenv(envFreshInitHelper); dbPath != "" {
 		freshInitHelperMain(dbPath)
 		return
+	}
+	d, err := os.MkdirTemp("", "ad-store-trail-*")
+	if err != nil {
+		panic("TestMain: MkdirTemp: " + err.Error())
+	}
+	defer os.RemoveAll(d)
+	storeTrailDir = d
+	if err := os.Setenv("AGENT_DIRECTOR_STATE_DIR", d); err != nil {
+		panic("TestMain: Setenv: " + err.Error())
 	}
 	os.Exit(m.Run())
 }
@@ -88,7 +102,7 @@ func TestConcurrentOpenOrInitWithWrites(t *testing.T) {
 				errs <- fmt.Errorf("worker %d: InsertPending: %w", i, err)
 				return
 			}
-			if err := s.ApplyHookTransition(sp.ClaudeInstanceID, StateWaiting, false); err != nil {
+			if err := s.ApplyHookTransition(sp.ClaudeInstanceID, StateWaiting, false, "test_seed"); err != nil {
 				errs <- fmt.Errorf("worker %d: ApplyHookTransition: %w", i, err)
 				return
 			}
