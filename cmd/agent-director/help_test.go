@@ -84,6 +84,40 @@ func TestHelpStdoutNoProsePreamble(t *testing.T) {
 	}
 }
 
+// TestHelpVerbSurfaceTrailReadRemoved is a regression guard for b.ruo: the
+// trail-path (read) verb must not appear in help output, and trail-emit (write)
+// must still be present.
+func TestHelpVerbSurfaceTrailReadRemoved(t *testing.T) {
+	stdout, _, code := runCLI(t, "help")
+	if code != 0 {
+		t.Fatalf("exit=%d want 0", code)
+	}
+	var parsed helpStdout
+	if err := json.Unmarshal([]byte(stdout), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	var foundPath, foundEmit bool
+	for _, v := range parsed.Verbs {
+		if v.Name == "trail-path" {
+			foundPath = true
+		}
+		if v.Name == "trail-emit" {
+			foundEmit = true
+		}
+	}
+	if foundPath {
+		t.Errorf("help output contains trail-path; read verb must be removed (b.ruo regression)")
+	}
+	if !foundEmit {
+		t.Errorf("help output missing trail-emit; write verb must stay present (b.ruo regression)")
+	}
+	// Belt-and-suspenders: also check the raw JSON string so a future change
+	// that renames the JSON key (e.g. "verb_name") is also caught.
+	if strings.Contains(stdout, "trail-path") {
+		t.Errorf("raw help JSON contains the string \"trail-path\"; it must be absent")
+	}
+}
+
 // firstByte returns the first byte of s as a string, or "<empty>" if s is
 // empty. Used for diagnostics in assertions that care about the leading byte.
 func firstByte(s string) string {
