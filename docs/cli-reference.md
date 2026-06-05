@@ -384,6 +384,29 @@ _None._
 
 _None._
 
+## trail-emit
+
+Emit an ad.* audit-trail event directly. Sub-verb: relay-attempt. Does not open state.db — works in corrupted-state recovery scenarios (SR-A-2.3).
+
+### Parameters
+
+- `sub_verb` (string, required): Sub-verb to invoke. Currently: relay-attempt.
+- `token` (string, required): request_token. Required.
+- `endpoint` (string, required): target_endpoint (URL or socket path). Required.
+- `outcome` (string|int, required): 3-digit HTTP status code (100-599, emitted as integer) or named error class: connection_refused, timeout, dns_failure (emitted as string). Required.
+- `bytes_sent` (int, optional): Bytes sent. Default 0.
+- `bytes_received` (int, optional): Bytes received. Default 0.
+- `instance_id` (string, required): claude_instance_id. Required.
+
+### Result
+
+_None._
+
+### Errors
+
+- `ErrInvalidFlags`
+- `ErrTrailWrite`
+
 ## hook
 
 Internal: invoked by Claude Code on lifecycle events via the per-Spawn --settings hooks. Reads payload JSON from stdin, writes a row UPSERT, exits 0 (state-tracking fail-open).

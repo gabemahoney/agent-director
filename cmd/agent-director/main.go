@@ -79,6 +79,7 @@ func handlers(client *pkgapi.Client, cfg config.Config) map[string]func([]string
 		"expire":         func(args []string) error { return expireHandlerWith(client, args) },
 		"delete":         func(args []string) error { return deleteHandlerWith(client, args) },
 		"serve":          func(args []string) error { return serveHandlerWith(cfg, args) },
+		"trail-emit":     func(args []string) error { return trailEmitHandlerWith(args) },
 	}
 }
 
@@ -414,6 +415,19 @@ func run() int {
 			}
 			return 1
 		}
+	}
+
+	// trail-emit: DB-free verb — special-cased before setupClient so it works
+	// even when state.db is missing or corrupted (SR-A-2.3, t3.4uk.nz.j9.2k).
+	if len(strippedArgv) > 0 && strippedArgv[0] == "trail-emit" {
+		if err := trailEmitHandlerWith(strippedArgv[1:]); err != nil {
+			if errors.Is(err, errDispatch) {
+				return 1
+			}
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return 0
 	}
 
 	client, cfg, err := setupClient(gOpts)

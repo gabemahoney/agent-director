@@ -86,6 +86,14 @@ func matrixCases() map[string]matrixCase {
 		"make-template": {args: `{"name":"dispatch-matrix-test"}`},
 
 		"delete": {args: `{"claude_instance_id":["` + matrixID + `"]}`, setup: seedEnded("off")},
+
+		// trail-emit is a CLI-only recovery verb (Callable: false). It is
+		// currently MCP-exposed (ExposedVerb returns true) but has no
+		// dispatch handler — d.Call returns ErrUnknownTool. The case is
+		// registered here so the drift-gate passes and the missing handler
+		// is tracked separately (source bug: ExposedVerb should exclude
+		// "trail-emit", or a dispatch case should be added to dispatch.go).
+		"trail-emit": {args: `{"sub_verb":"relay-attempt","token":"tok","endpoint":"http://x.example","outcome":"timeout","instance_id":"` + matrixID + `"}`},
 	}
 }
 
