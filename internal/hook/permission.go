@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"strings"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/config"
@@ -66,6 +67,29 @@ type RelayStore interface {
 // store.UpsertNoChange as a conservative fallback for the trail field.
 type outcomeUpserter interface {
 	UpsertOpenPermissionRequestResult(instanceID, requestToken, toolName, toolInputJSON string, cap int, writerProcess string) (store.UpsertOutcome, error)
+}
+
+// emitResume emits one ad.resume.observed event immediately after the
+// decision envelope has been flushed to stdout. It is called once per
+// runRelay invocation that reaches a stdout write (SR-A-2.7).
+//
+// elapsed_ms_from_row_open is computed from createdAt to now. On
+// timeout/error paths the caller passes the row's created_at recovered
+// via an additional GetPermissionRequest; if that SELECT fails, the
+// zero time.Time is passed and elapsed_ms will be large (seconds since
+// the Go epoch), which is acceptable — the emit must not block the
+// relay return (SR-A-3.2 fail-open).
+//
+// verdict must be one of the canonical lowercase values: "allow",
+// "deny", "timeout", "error".
+func emitResume(ctx context.Context, instanceID, requestToken, verdict string, createdAt time.Time) {
+	_ = trail.Emit(ctx, "ad.resume.observed", map[string]any{
+		"claude_instance_id":       instanceID,
+		"request_token":            requestToken,
+		"verdict":                  verdict,
+		"elapsed_ms_from_row_open": time.Since(createdAt).Milliseconds(),
+		"source":                   "ad_polling",
+	})
 }
 
 // runRelay is the relay-mode branch invoked from Handle when the
@@ -179,9 +203,11 @@ func runRelay(
 	case "allow":
 		logf(logger, "relay: allow for %s token=%s (%s)", instanceID, requestToken, res.Reason)
 		_, _ = fmt.Fprintln(stdout, EncodeDecision(EventNamePermissionRequest, "allow", res.Reason))
+		emitResume(ctx, instanceID, requestToken, "allow", res.CreatedAt)
 	case "deny":
 		logf(logger, "relay: deny for %s token=%s (%s)", instanceID, requestToken, res.Reason)
 		_, _ = fmt.Fprintln(stdout, EncodeDecision(EventNamePermissionRequest, "deny", res.Reason))
+		emitResume(ctx, instanceID, requestToken, "deny", res.CreatedAt)
 	default:
 		// Timeout, ctx cancel, preemption, or read-retry exhaustion —
 		// SRD §6.4 fail-closed.
@@ -203,6 +229,23 @@ func runRelay(
 		}
 
 		_, _ = fmt.Fprintln(stdout, EncodeDecision(EventNamePermissionRequest, "deny", ""))
+
+		// Recover the row's created_at for elapsed_ms. The happy-path carries
+		// it through PollResult.CreatedAt, but timeout/error paths return a
+		// zero CreatedAt — one additional SELECT suffices (SR-A-2.7). On
+		// ErrNoRows (preempted row) or other errors, zero time is used and
+		// elapsed_ms will reflect time since the Go epoch, which is acceptable
+		// for a degenerate case (emitResume is fail-open per SR-A-3.2).
+		var rowCreatedAt time.Time
+		if r, err := st.GetPermissionRequest(instanceID, requestToken); err == nil {
+			rowCreatedAt = r.CreatedAt
+		}
+
+		verdict := "error"
+		if strings.Contains(res.Why, "polling timeout") {
+			verdict = "timeout"
+		}
+		emitResume(ctx, instanceID, requestToken, verdict, rowCreatedAt)
 	}
 }
 

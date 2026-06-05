@@ -33,10 +33,16 @@ const pollMaxReadRetries = 5
 // is the empty string when the loop exited without a definitive
 // answer (timeout / ctx / preemption / exhaustion); the handler
 // translates that into a deny envelope at the boundary.
+//
+// CreatedAt is populated from the decided row's created_at column in
+// the happy-path (Decision != ""). It is the zero time.Time on all
+// timeout/error paths — runRelay does one additional GetPermissionRequest
+// to recover it when needed.
 type PollResult struct {
-	Decision string
-	Reason   string
-	Why      string // human-readable reason for diagnostics; not echoed to Claude.
+	Decision  string
+	Reason    string
+	Why       string    // human-readable reason for diagnostics; not echoed to Claude.
+	CreatedAt time.Time // zero on timeout/error paths; non-zero on decided path.
 }
 
 // PollStore is the narrow surface the loop reads. *store.Store
@@ -134,9 +140,10 @@ func Poll(ctx context.Context, s PollStore, clock PollClock, cfg config.Relay, i
 
 		if row.Decision != "" {
 			return PollResult{
-				Decision: row.Decision,
-				Reason:   row.DecisionReason,
-				Why:      "decided",
+				Decision:  row.Decision,
+				Reason:    row.DecisionReason,
+				Why:       "decided",
+				CreatedAt: row.CreatedAt,
 			}
 		}
 

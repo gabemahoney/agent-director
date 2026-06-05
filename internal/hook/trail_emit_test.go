@@ -24,6 +24,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/hook"
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 )
 
@@ -600,5 +601,272 @@ func TestRelayAttemptCompletedNotEmittedOnUpsertFailure(t *testing.T) {
 		if row["event"] == "ad.relay_attempt.completed" {
 			t.Error("ad.relay_attempt.completed must not be emitted when upsert fails")
 		}
+	}
+}
+
+// resumeObservedAfter returns all ad.resume.observed lines written after
+// prevCount lines existed in the trail file.
+func resumeObservedAfter(t *testing.T, prevCount int) []map[string]any {
+	t.Helper()
+	all := readTrailLines(t, trailFile())
+	var out []map[string]any
+	for _, row := range all[prevCount:] {
+		if row["event"] == "ad.resume.observed" {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+// TestTrailEmitResumeObserved is a table-driven test covering the four
+// verdict values (allow / deny / timeout / error) for ad.resume.observed
+// per SR-A-2.7. Each sub-test verifies: exactly one line, correct verdict,
+// required fields (claude_instance_id, request_token, source, ts,
+// elapsed_ms_from_row_open as a numeric JSON value), and that
+// request_token matches ad.hook.fired.
+func TestTrailEmitResumeObserved(t *testing.T) {
+	// Pre-build the read-retry error sequence (function literals cannot
+	// appear inside composite literals in Go).
+	readRetryRows := make([]store.PermissionRow, 10)
+	readRetryErrs := make([]error, 10)
+	for i := range readRetryErrs {
+		readRetryErrs[i] = errors.New("db error")
+	}
+
+	type tc struct {
+		name        string
+		getRows     []store.PermissionRow
+		getErrs     []error
+		useClock    bool // advance virtual clock to force timeout
+		wantVerdict string
+	}
+	cases := []tc{
+		{
+			name:        "allow",
+			getRows:     []store.PermissionRow{{Decision: "allow", DecisionReason: "ok"}},
+			getErrs:     []error{nil},
+			wantVerdict: "allow",
+		},
+		{
+			name:        "deny",
+			getRows:     []store.PermissionRow{{Decision: "deny", DecisionReason: "nope"}},
+			getErrs:     []error{nil},
+			wantVerdict: "deny",
+		},
+		{
+			name:        "timeout",
+			getRows:     []store.PermissionRow{{Decision: ""}},
+			getErrs:     []error{nil},
+			useClock:    true,
+			wantVerdict: "timeout",
+		},
+		{
+			name:        "error_read_retry",
+			getRows:     readRetryRows,
+			getErrs:     readRetryErrs,
+			wantVerdict: "error",
+		},
+	}
+
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			before := len(readTrailLines(t, trailFile()))
+			id := "te-resume-obs-" + c.name
+
+			st := &flakyRelayStore{getRows: c.getRows, getErrs: c.getErrs}
+
+			var clock hook.PollClock
+			if c.useClock {
+				now, restore := setupVirtualClock(t)
+				defer restore()
+				clock = &advancingClock{now: now}
+			}
+
+			var stdout bytes.Buffer
+			if err := hook.Handle(
+				context.Background(),
+				strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`),
+				&stdout,
+				st,
+				hook.HandleConfig{
+					Env:   envWith(id),
+					Cfg:   config.Relay{TimeoutSeconds: 1, PollBaseMs: 0, PollJitterMs: 0},
+					Clock: clock,
+				},
+				nil,
+			); err != nil {
+				t.Fatalf("Handle: %v", err)
+			}
+
+			lines := resumeObservedAfter(t, before)
+			if len(lines) != 1 {
+				t.Fatalf("want 1 ad.resume.observed; got %d", len(lines))
+			}
+			r := lines[0]
+
+			assertStr(t, r, "event", "ad.resume.observed")
+			assertStr(t, r, "source", "ad_polling")
+			assertStr(t, r, "claude_instance_id", id)
+			assertStr(t, r, "verdict", c.wantVerdict)
+
+			if ts, ok := r["ts"].(string); !ok || ts == "" {
+				t.Error("ts missing or empty")
+			}
+
+			// elapsed_ms_from_row_open must be present as a JSON number.
+			v, ok := r["elapsed_ms_from_row_open"]
+			if !ok {
+				t.Error("field elapsed_ms_from_row_open missing")
+			} else if _, ok := v.(float64); !ok {
+				t.Errorf("elapsed_ms_from_row_open type = %T; want float64 (JSON number)", v)
+			}
+
+			// request_token must match ad.hook.fired for the same invocation.
+			hookRow := hookFiredAt(t, before)
+			hookTok, _ := hookRow["request_token"].(string)
+			resumeTok, _ := r["request_token"].(string)
+			if hookTok == "" {
+				t.Error("ad.hook.fired: request_token missing or empty")
+			}
+			if resumeTok == "" {
+				t.Error("ad.resume.observed: request_token missing or empty")
+			}
+			if hookTok != resumeTok {
+				t.Errorf("request_token mismatch: hook.fired=%q resume.observed=%q",
+					hookTok, resumeTok)
+			}
+		})
+	}
+}
+
+// TestTrailEmitResumeObservedElapsedMsRealStore verifies elapsed_ms_from_row_open
+// is non-negative on the allow path using a real store (where created_at is an
+// actual timestamp, not the zero time). The elapsed value should be small
+// (sub-second) for a local SQLite write.
+func TestTrailEmitResumeObservedElapsedMsRealStore(t *testing.T) {
+	const id = "te-resume-elapsed-real"
+	before := len(readTrailLines(t, trailFile()))
+
+	st, _ := storefix.OpenTempStore(t)
+	storefix.SeedSpawn(t, st, id)
+
+	// Pre-decide the row so Poll returns immediately on the first read.
+	// We INSERT the open row via UpsertOpenPermissionRequest, then decide it.
+	const fakeToken = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb"
+	if err := st.UpsertOpenPermissionRequest(id, fakeToken, "Bash", "null", 0, "hook"); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if _, err := st.DecidePermissionRequest(id, fakeToken, "allow", "ok", "decide"); err != nil {
+		t.Fatalf("decide: %v", err)
+	}
+
+	// Use a flakyRelayStore that delegates GetPermissionRequest to the
+	// real store so created_at is populated. We inject the decided row
+	// directly into getRows so Poll returns immediately.
+	row, err := st.GetPermissionRequest(id, fakeToken)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	fakeSt := &flakyRelayStore{
+		getRows: []store.PermissionRow{row},
+		getErrs: []error{nil},
+	}
+
+	var stdout bytes.Buffer
+	if err := hook.Handle(
+		context.Background(),
+		strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`),
+		&stdout,
+		fakeSt,
+		hook.HandleConfig{
+			Env: envWith(id),
+			Cfg: config.Relay{TimeoutSeconds: 5, PollBaseMs: 0, PollJitterMs: 0},
+		},
+		nil,
+	); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	lines := resumeObservedAfter(t, before)
+	if len(lines) != 1 {
+		t.Fatalf("want 1 ad.resume.observed; got %d", len(lines))
+	}
+	r := lines[0]
+	assertStr(t, r, "verdict", "allow")
+
+	// elapsed_ms must be non-negative and less than 60 000 ms (1 minute).
+	// The row was just inserted so actual elapsed is single-digit milliseconds.
+	v, ok := r["elapsed_ms_from_row_open"].(float64)
+	if !ok {
+		t.Fatalf("elapsed_ms_from_row_open type = %T; want float64", r["elapsed_ms_from_row_open"])
+	}
+	if v < 0 {
+		t.Errorf("elapsed_ms_from_row_open = %v; want >= 0", v)
+	}
+	if v >= 60_000 {
+		t.Errorf("elapsed_ms_from_row_open = %v; unexpectedly large (want < 60000)", v)
+	}
+}
+
+// TestTrailEmitResumeObservedNotEmittedForNonRelay verifies that
+// ad.resume.observed is never emitted for state-tracking events
+// (where runRelay is never entered). The relay path is scoped to
+// PermissionRequest + RELAY_MODE=on.
+func TestTrailEmitResumeObservedNotEmittedForNonRelay(t *testing.T) {
+	payloads := []string{
+		`{"hook_event_name":"PreToolUse","tool_name":"Bash"}`,
+		`{"hook_event_name":"PostToolUse","tool_name":"Bash"}`,
+		`{"hook_event_name":"SessionEnd","reason":"user_quit"}`,
+	}
+	for _, payload := range payloads {
+		payload := payload
+		t.Run(payload, func(t *testing.T) {
+			before := len(readTrailLines(t, trailFile()))
+			st := &flakyRelayStore{}
+			if err := hook.Handle(
+				context.Background(),
+				strings.NewReader(payload),
+				io.Discard,
+				st,
+				hook.HandleConfig{
+					Env: envWith("te-norelay-resume"),
+					Cfg: config.Relay{TimeoutSeconds: 1},
+				},
+				nil,
+			); err != nil {
+				t.Fatalf("Handle: %v", err)
+			}
+			if lines := resumeObservedAfter(t, before); len(lines) != 0 {
+				t.Errorf("non-relay event %q: unexpected %d ad.resume.observed line(s)",
+					payload, len(lines))
+			}
+		})
+	}
+}
+
+// TestTrailEmitResumeObservedNotEmittedOnUpsertFailure verifies that
+// ad.resume.observed is NOT emitted when the upsert fails (runRelay
+// returns before Poll is called, so no envelope and no resume event).
+func TestTrailEmitResumeObservedNotEmittedOnUpsertFailure(t *testing.T) {
+	before := len(readTrailLines(t, trailFile()))
+	st := &flakyRelayStore{upsertErr: errors.New("db unavailable")}
+	var stdout bytes.Buffer
+	if err := hook.Handle(
+		context.Background(),
+		strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`),
+		&stdout,
+		st,
+		hook.HandleConfig{
+			Env: envWith("te-upsert-fail-resume"),
+			Cfg: config.Relay{TimeoutSeconds: 1},
+		},
+		nil,
+	); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	assertDenyEnvelope(t, &stdout)
+	if lines := resumeObservedAfter(t, before); len(lines) != 0 {
+		t.Errorf("upsert failure: unexpected %d ad.resume.observed line(s)", len(lines))
 	}
 }
