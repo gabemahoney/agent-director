@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -8,6 +9,8 @@ import (
 
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
+
+	"github.com/gabemahoney/agent-director/internal/trail"
 )
 
 // Canonical decision_reason values per SR-1.3. A single source of truth so
@@ -17,6 +20,23 @@ const (
 	DecisionReasonOperator    = "operator"
 	DecisionReasonTimeout     = "timeout"
 	DecisionReasonFindMissing = "find_missing"
+)
+
+// WriterProcess constants identify which process path wrote a
+// permission_requests row. Passed to UpsertOpenPermissionRequest and
+// DecidePermissionRequest so ad.row_mutation.committed events carry a
+// first-class discriminator. The closed set is:
+//
+//   - WriterProcessHook        — the hook verb's relay path
+//   - WriterProcessDecide      — the decide verb
+//   - WriterProcessFindMissing — the find-missing reconciler
+//
+// New writers must extend this set deliberately rather than inventing
+// ad-hoc strings.
+const (
+	WriterProcessHook        = "hook"
+	WriterProcessDecide      = "decide"
+	WriterProcessFindMissing = "find_missing"
 )
 
 // ErrNoOpenPermissionRequest is returned by decide() when no row
@@ -86,13 +106,25 @@ type PermissionRow struct {
 // The INSERT and optional DELETE run inside a single transaction; a collision
 // on the UNIQUE constraint causes an immediate rollback and surfaces
 // ErrRequestTokenCollision.
-func (s *Store) UpsertOpenPermissionRequest(instanceID, requestToken, toolName, toolInputJSON string, cap int) error {
+func (s *Store) UpsertOpenPermissionRequest(instanceID, requestToken, toolName, toolInputJSON string, cap int, writerProcess string) error {
+	_, err := s.UpsertOpenPermissionRequestResult(instanceID, requestToken, toolName, toolInputJSON, cap, writerProcess)
+	return err
+}
+
+// UpsertOpenPermissionRequestResult is the outcome-aware variant of
+// UpsertOpenPermissionRequest. It returns a UpsertOutcome alongside the
+// error so callers that emit trail events can record the exact result
+// without inferring it from error presence alone (SR-A-2.1).
+//
+//   - UpsertInserted — the INSERT committed successfully.
+//   - UpsertError    — any error (begin, insert, evict, commit, or collision).
+func (s *Store) UpsertOpenPermissionRequestResult(instanceID, requestToken, toolName, toolInputJSON string, cap int, writerProcess string) (UpsertOutcome, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
-		return fmt.Errorf("store: upsert permission begin tx: %w", err)
+		return UpsertError, fmt.Errorf("store: upsert permission begin tx: %w", err)
 	}
 
-	_, err = tx.Exec(`
+	insRes, err := tx.Exec(`
 		INSERT INTO permission_requests
 		  (claude_instance_id, request_token, tool_name, tool_input)
 		VALUES (?, ?, ?, ?)
@@ -101,16 +133,16 @@ func (s *Store) UpsertOpenPermissionRequest(instanceID, requestToken, toolName, 
 		_ = tx.Rollback()
 		var serr *sqlite.Error
 		if errors.As(err, &serr) && serr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE {
-			return fmt.Errorf("%w: (%s, %s)", ErrRequestTokenCollision, instanceID, requestToken)
+			return UpsertError, fmt.Errorf("%w: (%s, %s)", ErrRequestTokenCollision, instanceID, requestToken)
 		}
-		return fmt.Errorf("store: upsert permission insert: %w", err)
+		return UpsertError, fmt.Errorf("store: upsert permission insert: %w", err)
 	}
 
 	if cap > 0 {
 		var currentCount int
 		if err := tx.QueryRow(`SELECT COUNT(*) FROM permission_requests`).Scan(&currentCount); err != nil {
 			_ = tx.Rollback()
-			return fmt.Errorf("store: upsert permission count: %w", err)
+			return UpsertError, fmt.Errorf("store: upsert permission count: %w", err)
 		}
 		if currentCount > cap {
 			excess := currentCount - cap
@@ -125,15 +157,32 @@ func (s *Store) UpsertOpenPermissionRequest(instanceID, requestToken, toolName, 
 			`, excess)
 			if err != nil {
 				_ = tx.Rollback()
-				return fmt.Errorf("store: upsert permission evict: %w", err)
+				return UpsertError, fmt.Errorf("store: upsert permission evict: %w", err)
 			}
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("store: upsert permission commit: %w", err)
+		return UpsertError, fmt.Errorf("store: upsert permission commit: %w", err)
 	}
-	return nil
+
+	// Emit row-mutation event for the successful insert. LastInsertId is
+	// captured before returning so the event carries the DB-assigned PK.
+	// A trail-emit failure must not fail the store call (SR-A-3.2).
+	requestID, _ := insRes.LastInsertId()
+	_ = trail.Emit(context.Background(), "ad.row_mutation.committed", map[string]any{
+		"claude_instance_id": instanceID,
+		"request_token":      requestToken,
+		"request_id":         requestID,
+		"tool_name":          toolName,
+		"decision":           nil,
+		"decision_reason":    nil,
+		"writer_process":     writerProcess,
+		"mutation_kind":      "insert",
+		"source":             "ad_store",
+	})
+
+	return UpsertInserted, nil
 }
 
 // GetPermissionRequest reads the current state of a specific permission request
@@ -263,7 +312,7 @@ func (s *Store) OpenPermissionRequestsForSpawn(instanceID string) ([]PermissionR
 //
 // Returns (true, nil) on a successful write; (false, nil) when no row was
 // updated; (_, err) on a hard SQL failure.
-func (s *Store) DecidePermissionRequest(instanceID, requestToken, decision, reason string) (bool, error) {
+func (s *Store) DecidePermissionRequest(instanceID, requestToken, decision, reason string, writerProcess string) (bool, error) {
 	if requestToken == "" {
 		rows, err := s.OpenPermissionRequestsForSpawn(instanceID)
 		if err != nil {
@@ -276,10 +325,13 @@ func (s *Store) DecidePermissionRequest(instanceID, requestToken, decision, reas
 		// empty, returning (false, nil) which callers translate to ErrNoOpenPermissionRequest.
 	}
 
+	// RETURNING lets us capture request_id and tool_name in the same round-trip
+	// so the trail event carries them without a separate SELECT.
 	const q = `
 		UPDATE permission_requests
 		   SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP
 		 WHERE claude_instance_id = ? AND request_token = ? AND decision IS NULL
+		 RETURNING request_id, tool_name
 	`
 	var reasonArg any
 	if reason != "" {
@@ -287,13 +339,37 @@ func (s *Store) DecidePermissionRequest(instanceID, requestToken, decision, reas
 	} else {
 		reasonArg = nil
 	}
-	res, err := s.db.Exec(q, decision, reasonArg, instanceID, requestToken)
+
+	var requestID int64
+	var toolName string
+	err := s.db.QueryRow(q, decision, reasonArg, instanceID, requestToken).Scan(&requestID, &toolName)
+	if errors.Is(err, sql.ErrNoRows) {
+		// RowsAffected == 0: either the row was already decided or no row exists.
+		// ErrAlreadyDecided / ErrNoOpenPermissionRequest are distinguished by the
+		// caller via a follow-up GetPermissionRequest. Must NOT emit.
+		return false, nil
+	}
 	if err != nil {
 		return false, fmt.Errorf("store: decide permission: %w", err)
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("store: decide permission rows affected: %w", err)
+
+	// Emit row-mutation event for the successful first-call-wins update.
+	// A trail-emit failure must not fail the store call (SR-A-3.2).
+	var decisionReasonField any
+	if reason != "" {
+		decisionReasonField = reason
 	}
-	return n > 0, nil
+	_ = trail.Emit(context.Background(), "ad.row_mutation.committed", map[string]any{
+		"claude_instance_id": instanceID,
+		"request_token":      requestToken,
+		"request_id":         requestID,
+		"tool_name":          toolName,
+		"decision":           decision,
+		"decision_reason":    decisionReasonField,
+		"writer_process":     writerProcess,
+		"mutation_kind":      "update",
+		"source":             "ad_store",
+	})
+
+	return true, nil
 }

@@ -22,7 +22,7 @@ import (
 func TestGetPermissionOpenRow(t *testing.T) {
 	s, _ := apitest.SeedDecideFixture(t, "on")
 	const rawInput = `{"file":"/tmp/x","mode":"rw"}`
-	if err := s.UpsertOpenPermissionRequest("id-d-1", storefix.TestRequestTokenA, "Read", rawInput, 0); err != nil {
+	if err := s.UpsertOpenPermissionRequest("id-d-1", storefix.TestRequestTokenA, "Read", rawInput, 0, ""); err != nil {
 		t.Fatalf("UpsertOpenPermissionRequest: %v", err)
 	}
 
@@ -80,7 +80,7 @@ func TestGetPermissionOpenRow(t *testing.T) {
 func TestGetPermissionClosedAllow(t *testing.T) {
 	s, _ := apitest.SeedDecideFixture(t, "on")
 	apitest.SeedPermissionRow(t, s, "id-d-1")
-	updated, err := s.DecidePermissionRequest("id-d-1", storefix.TestRequestTokenA, "allow", "")
+	updated, err := s.DecidePermissionRequest("id-d-1", storefix.TestRequestTokenA, "allow", "", "")
 	if err != nil {
 		t.Fatalf("DecidePermissionRequest: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestGetPermissionClosedDeny(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _ := apitest.SeedDecideFixture(t, "on")
 			apitest.SeedPermissionRow(t, s, "id-d-1")
-			updated, err := s.DecidePermissionRequest("id-d-1", storefix.TestRequestTokenA, "deny", tc.reason)
+			updated, err := s.DecidePermissionRequest("id-d-1", storefix.TestRequestTokenA, "deny", tc.reason, "")
 			if err != nil {
 				t.Fatalf("DecidePermissionRequest: %v", err)
 			}
@@ -206,7 +206,7 @@ func TestGetPermissionToolInputBytePassthrough(t *testing.T) {
 	// Non-canonical whitespace + key order. Any JSON round-trip would
 	// produce {"command":"ls","extra":"x"} with no spaces.
 	const noncanonical = `{ "command" : "ls" , "extra":"x" }`
-	if err := s.UpsertOpenPermissionRequest("id-d-1", storefix.TestRequestTokenA, "Bash", noncanonical, 0); err != nil {
+	if err := s.UpsertOpenPermissionRequest("id-d-1", storefix.TestRequestTokenA, "Bash", noncanonical, 0, ""); err != nil {
 		t.Fatalf("UpsertOpenPermissionRequest: %v", err)
 	}
 
@@ -248,7 +248,7 @@ func TestGetPermissionEvictedRow(t *testing.T) {
 	// Insert one open row with cap=5. This is the 6th row in the store,
 	// triggering in-transaction eviction of the oldest closed row (evictedToken).
 	// TestRequestTokenB is the survivor we cross-check below.
-	if err := s.UpsertOpenPermissionRequest(instanceID, storefix.TestRequestTokenB, "Bash", `{"cmd":"ls"}`, relayConf.PermissionRequestCap); err != nil {
+	if err := s.UpsertOpenPermissionRequest(instanceID, storefix.TestRequestTokenB, "Bash", `{"cmd":"ls"}`, relayConf.PermissionRequestCap, ""); err != nil {
 		t.Fatalf("UpsertOpenPermissionRequest (survivor): %v", err)
 	}
 

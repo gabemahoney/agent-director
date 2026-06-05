@@ -47,7 +47,7 @@ func insertErrRow(t *testing.T, s *store.Store, id, state, relayMode string) {
 		t.Fatalf("insertErrRow: InsertPending %s: %v", id, err)
 	}
 	if state != store.StatePending {
-		if err := s.ApplyHookTransition(id, state, false); err != nil {
+		if err := s.ApplyHookTransition(id, state, false, "test_seed"); err != nil {
 			t.Fatalf("insertErrRow: ApplyHookTransition %s→%s: %v", id, state, err)
 		}
 	}
@@ -117,12 +117,12 @@ func SeedErrAlreadyDecided(t *testing.T) (*store.Store, string) {
 	s, dbPath := openErrStore(t)
 	const id = "id-err-ad-1"
 	insertErrRow(t, s, id, store.StateCheckPermission, "on")
-	if err := s.UpsertOpenPermissionRequest(id, storefix.TestRequestTokenA, "Bash", `{"cmd":"echo"}`, 0); err != nil {
+	if err := s.UpsertOpenPermissionRequest(id, storefix.TestRequestTokenA, "Bash", `{"cmd":"echo"}`, 0, store.WriterProcessHook); err != nil {
 		t.Fatalf("SeedErrAlreadyDecided: UpsertOpenPermissionRequest: %v", err)
 	}
 	// Pre-decide the row so the next decide() sees RowsAffected==0 and
 	// follows the ErrAlreadyDecided branch.
-	if _, err := s.DecidePermissionRequest(id, storefix.TestRequestTokenA, "allow", "pre-decided"); err != nil {
+	if _, err := s.DecidePermissionRequest(id, storefix.TestRequestTokenA, "allow", "pre-decided", store.WriterProcessDecide); err != nil {
 		t.Fatalf("SeedErrAlreadyDecided: DecidePermissionRequest: %v", err)
 	}
 	return s, dbPath

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,8 @@ import (
 
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
+
+	"github.com/gabemahoney/agent-director/internal/trail"
 )
 
 // ErrSpawnNotFound is returned by lookup-by-id methods when no row matches
@@ -213,37 +216,149 @@ func (s *Store) LiveSpawnExists(instanceID string) (bool, error) {
 // The function is a no-op (returns nil) when no row matches the id —
 // state-tracking hooks fail-open per SRD §3.2, so a hook racing against
 // `delete` should not produce a visible error.
-func (s *Store) ApplyHookTransition(instanceID, newState string, softRefresh bool) error {
+//
+// triggeringEventName is a free-form string identifying what caused this
+// transition. For hook-driven transitions it is the canonical Claude Code
+// lifecycle event name (e.g. "SessionStart", "PermissionRequest"). For
+// transitions originating outside the hook handler, callers use documented
+// synthetic names (e.g. "PermissionRequestTimeout", "find_missing_orphan_closeout",
+// "kill_verb") so the trail reader can identify the source without needing
+// to inspect the call stack.
+func (s *Store) ApplyHookTransition(instanceID, newState string, softRefresh bool, triggeringEventName string) error {
+	_, err := s.ApplyHookTransitionResult(instanceID, newState, softRefresh, triggeringEventName)
+	return err
+}
+
+// ApplyHookTransitionResult is the outcome-aware variant of
+// ApplyHookTransition. It returns a UpsertOutcome alongside the error so
+// callers that emit trail events can record the exact result without
+// inferring it from error presence alone (SR-A-2.1).
+//
+//   - UpsertUpdated   — the UPDATE affected ≥1 row.
+//   - UpsertNoChange  — the UPDATE affected 0 rows (no matching id), or
+//     the multi-row retention guard skipped the UPDATE.
+//   - UpsertError     — any SQL error.
+//
+// An ad.spawn.state_transition event is emitted after every successful SQL
+// write (including no-op same-state transitions per SR-A-2.2). No event is
+// emitted when no row matches instanceID (fail-open against deleted spawns).
+// A trail-emit failure does not fail the store call (SR-A-3.2).
+// selectPriorState reads the current state column for instanceID without
+// a transaction. Returns ("", false, nil) when no row exists (caller should
+// fail-open and not emit). Returns ("", false, err) on a driver error.
+// Returns (state, true, nil) when a row was found.
+func (s *Store) selectPriorState(instanceID string) (string, bool, error) {
+	var state string
+	err := s.db.QueryRow(`SELECT state FROM spawns WHERE claude_instance_id = ?`, instanceID).Scan(&state)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("store: select prior state: %w", err)
+	}
+	return state, true, nil
+}
+
+func (s *Store) ApplyHookTransitionResult(instanceID, newState string, softRefresh bool, triggeringEventName string) (UpsertOutcome, error) {
 	if softRefresh {
-		const q = `UPDATE spawns SET last_seen_at = CURRENT_TIMESTAMP WHERE claude_instance_id = ?`
-		_, err := s.db.Exec(q, instanceID)
-		if err != nil {
-			return fmt.Errorf("store: soft refresh: %w", err)
+		// Capture priorState before the UPDATE. If no row exists, fail-open with
+		// no emit (SR-A-2.2). Note: SELECT and UPDATE are separate non-transactional
+		// statements. If the row is deleted in the narrow window between them, the
+		// UPDATE will match 0 rows (n==0) and we skip the emit — no-row invariant
+		// is enforced by the n==0 guard below, not by a transaction lock.
+		priorState, found, serr := s.selectPriorState(instanceID)
+		if serr != nil {
+			return UpsertError, serr
 		}
-		return nil
+		if !found {
+			return UpsertNoChange, nil
+		}
+		res, err := s.db.Exec(`UPDATE spawns SET last_seen_at = CURRENT_TIMESTAMP WHERE claude_instance_id = ?`, instanceID)
+		if err != nil {
+			return UpsertError, fmt.Errorf("store: soft refresh: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return UpsertError, fmt.Errorf("store: soft refresh rows affected: %w", err)
+		}
+		if n == 0 {
+			return UpsertNoChange, nil
+		}
+		// Emit after successful write. soft_refresh=true; state column unchanged.
+		_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
+			"claude_instance_id":    instanceID,
+			"prior_state":           priorState,
+			"new_state":             priorState,
+			"triggering_event_name": triggeringEventName,
+			"soft_refresh":          true,
+			"source":                "ad_spawn_store",
+		})
+		return UpsertUpdated, nil
 	}
 	if newState == StateEnded {
-		const q = `UPDATE spawns
+		priorState, found, serr := s.selectPriorState(instanceID)
+		if serr != nil {
+			return UpsertError, serr
+		}
+		if !found {
+			return UpsertNoChange, nil
+		}
+		res, err := s.db.Exec(`UPDATE spawns
                       SET state = ?, last_seen_at = CURRENT_TIMESTAMP,
                           ended_at = CURRENT_TIMESTAMP
-                    WHERE claude_instance_id = ?`
-		_, err := s.db.Exec(q, newState, instanceID)
+                    WHERE claude_instance_id = ?`, newState, instanceID)
 		if err != nil {
-			return fmt.Errorf("store: ended transition: %w", err)
+			return UpsertError, fmt.Errorf("store: ended transition: %w", err)
 		}
-		return nil
+		n, err := res.RowsAffected()
+		if err != nil {
+			return UpsertError, fmt.Errorf("store: ended transition rows affected: %w", err)
+		}
+		if n == 0 {
+			return UpsertNoChange, nil
+		}
+		_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
+			"claude_instance_id":    instanceID,
+			"prior_state":           priorState,
+			"new_state":             newState,
+			"triggering_event_name": triggeringEventName,
+			"soft_refresh":          false,
+			"source":                "ad_spawn_store",
+		})
+		return UpsertUpdated, nil
 	}
 	// Multi-row retention guard: only advance to `working` when all open
 	// permission_requests rows for this Spawn have been decided. If any
 	// remain open, skip the transition (stay at check_permission) without
 	// error — this is a deliberate hold, not a failure.
+	//
+	// When skipping, emit a no-op ad.spawn.state_transition with prior==new
+	// (per SR-A-2.2) so the trail records the hold as a diagnostic surface.
+	// If no row exists, fail-open with no emit.
 	if newState == StateWorking {
 		openRows, err := s.OpenPermissionRequestsForSpawn(instanceID)
 		if err != nil {
-			return fmt.Errorf("store: working transition open-row check: %w", err)
+			return UpsertError, fmt.Errorf("store: working transition open-row check: %w", err)
 		}
 		if len(openRows) > 0 {
-			return nil
+			priorState, found, serr := s.selectPriorState(instanceID)
+			if serr != nil {
+				return UpsertError, serr
+			}
+			if !found {
+				// No spawn row — fail-open per SRD §3.2, no emit.
+				return UpsertNoChange, nil
+			}
+			// Emit the no-op: Spawn stays at check_permission.
+			_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
+				"claude_instance_id":    instanceID,
+				"prior_state":           priorState,
+				"new_state":             priorState,
+				"triggering_event_name": triggeringEventName,
+				"soft_refresh":          false,
+				"source":                "ad_spawn_store",
+			})
+			return UpsertNoChange, nil
 		}
 	}
 	// Non-terminal transitions clear ended_at. This handles the resume
@@ -252,15 +367,36 @@ func (s *Store) ApplyHookTransition(instanceID, newState string, softRefresh boo
 	// so the row's metadata reflects the active life. For fresh-spawn
 	// pending→waiting transitions the column was already NULL, so the
 	// `ended_at = NULL` is a no-op there.
-	const q = `UPDATE spawns
+	priorState, found, serr := s.selectPriorState(instanceID)
+	if serr != nil {
+		return UpsertError, serr
+	}
+	if !found {
+		return UpsertNoChange, nil
+	}
+	res, err := s.db.Exec(`UPDATE spawns
                   SET state = ?, last_seen_at = CURRENT_TIMESTAMP,
                       ended_at = NULL
-                WHERE claude_instance_id = ?`
-	_, err := s.db.Exec(q, newState, instanceID)
+                WHERE claude_instance_id = ?`, newState, instanceID)
 	if err != nil {
-		return fmt.Errorf("store: state transition: %w", err)
+		return UpsertError, fmt.Errorf("store: state transition: %w", err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return UpsertError, fmt.Errorf("store: state transition rows affected: %w", err)
+	}
+	if n == 0 {
+		return UpsertNoChange, nil
+	}
+	_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
+		"claude_instance_id":    instanceID,
+		"prior_state":           priorState,
+		"new_state":             newState,
+		"triggering_event_name": triggeringEventName,
+		"soft_refresh":          false,
+		"source":                "ad_spawn_store",
+	})
+	return UpsertUpdated, nil
 }
 
 // SetSessionID writes the claude_session_id column. Used by the

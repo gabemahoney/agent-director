@@ -94,7 +94,7 @@ func insertRow(t *testing.T, dbPath, id, sessionName, state string) {
 		t.Fatalf("insertRow InsertPending(%s): %v", id, err)
 	}
 	if state != store.StatePending {
-		if err := s.ApplyHookTransition(id, state, false); err != nil {
+		if err := s.ApplyHookTransition(id, state, false, "test_seed"); err != nil {
 			_ = s.Close()
 			t.Fatalf("insertRow ApplyHookTransition(%s→%s): %v", id, state, err)
 		}

@@ -32,7 +32,7 @@ func openGetFixture(t *testing.T, instanceID, state string) *store.Store {
 		t.Fatalf("InsertPending: %v", err)
 	}
 	if state != store.StatePending {
-		if err := s.ApplyHookTransition(instanceID, state, false); err != nil {
+		if err := s.ApplyHookTransition(instanceID, state, false, "test_seed"); err != nil {
 			t.Fatalf("ApplyHookTransition(%s): %v", state, err)
 		}
 	}
@@ -50,7 +50,7 @@ func TestGetCheckPermissionWithOpenRow(t *testing.T) {
 	s := openGetFixture(t, "id-g-1", store.StateCheckPermission)
 	const rawInput = `{"file":"/tmp/x","mode":"rw"}`
 	const tok = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"
-	if err := s.UpsertOpenPermissionRequest("id-g-1", tok, "Read", rawInput, 0); err != nil {
+	if err := s.UpsertOpenPermissionRequest("id-g-1", tok, "Read", rawInput, 0, ""); err != nil {
 		t.Fatalf("UpsertOpenPermissionRequest: %v", err)
 	}
 
@@ -106,10 +106,10 @@ func TestGetCheckPermissionNoRow(t *testing.T) {
 func TestGetCheckPermissionWithDecidedRow(t *testing.T) {
 	s := openGetFixture(t, "id-g-3", store.StateCheckPermission)
 	const tok = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb"
-	if err := s.UpsertOpenPermissionRequest("id-g-3", tok, "Bash", `{"cmd":"ls"}`, 0); err != nil {
+	if err := s.UpsertOpenPermissionRequest("id-g-3", tok, "Bash", `{"cmd":"ls"}`, 0, ""); err != nil {
 		t.Fatalf("UpsertOpenPermissionRequest: %v", err)
 	}
-	updated, err := s.DecidePermissionRequest("id-g-3", tok, "allow", "trusted")
+	updated, err := s.DecidePermissionRequest("id-g-3", tok, "allow", "trusted", "")
 	if err != nil {
 		t.Fatalf("DecidePermissionRequest: %v", err)
 	}
@@ -211,10 +211,10 @@ func TestGetVerbPluralShape(t *testing.T) {
 
 	t.Run("two_open_rows", func(t *testing.T) {
 		s := openGetFixture(t, "id-plural-1", store.StateCheckPermission)
-		if err := s.UpsertOpenPermissionRequest("id-plural-1", tokA, "Read", `{"file":"/a"}`, 0); err != nil {
+		if err := s.UpsertOpenPermissionRequest("id-plural-1", tokA, "Read", `{"file":"/a"}`, 0, ""); err != nil {
 			t.Fatalf("UpsertOpenPermissionRequest A: %v", err)
 		}
-		if err := s.UpsertOpenPermissionRequest("id-plural-1", tokB, "Bash", `{"cmd":"ls"}`, 0); err != nil {
+		if err := s.UpsertOpenPermissionRequest("id-plural-1", tokB, "Bash", `{"cmd":"ls"}`, 0, ""); err != nil {
 			t.Fatalf("UpsertOpenPermissionRequest B: %v", err)
 		}
 
@@ -277,10 +277,10 @@ func TestGetVerbPluralShape(t *testing.T) {
 
 	t.Run("one_closed_row", func(t *testing.T) {
 		s := openGetFixture(t, "id-plural-3", store.StateCheckPermission)
-		if err := s.UpsertOpenPermissionRequest("id-plural-3", tokA, "Write", `{"path":"/x"}`, 0); err != nil {
+		if err := s.UpsertOpenPermissionRequest("id-plural-3", tokA, "Write", `{"path":"/x"}`, 0, ""); err != nil {
 			t.Fatalf("UpsertOpenPermissionRequest: %v", err)
 		}
-		updated, err := s.DecidePermissionRequest("id-plural-3", tokA, "allow", "")
+		updated, err := s.DecidePermissionRequest("id-plural-3", tokA, "allow", "", "")
 		if err != nil {
 			t.Fatalf("DecidePermissionRequest: %v", err)
 		}

@@ -8,17 +8,25 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/trail"
 )
 
 // HookStore is the narrow store surface the handler needs. Production
 // callers pass *store.Store; tests can pass a stub to drive failure
 // branches (DB-unreachable, etc.) without scripting SQLite errors.
 type HookStore interface {
-	ApplyHookTransition(instanceID, newState string, softRefresh bool) error
+	ApplyHookTransition(instanceID, newState string, softRefresh bool, triggeringEventName string) error
 	SetSessionID(instanceID, sessionID string) error
-	UpsertOpenPermissionRequest(instanceID, requestToken, toolName, toolInputJSON string, cap int) error
+	UpsertOpenPermissionRequest(instanceID, requestToken, toolName, toolInputJSON string, cap int, writerProcess string) error
 	GetPermissionRequest(instanceID, requestToken string) (store.PermissionRow, error)
-	DecidePermissionRequest(instanceID, requestToken, decision, reason string) (bool, error)
+	DecidePermissionRequest(instanceID, requestToken, decision, reason string, writerProcess string) (bool, error)
+}
+
+// outcomeTransitioner is an optional extension of HookStore. *store.Store
+// satisfies it; test doubles that don't implement it receive
+// store.UpsertNoChange as a conservative fallback for the trail field.
+type outcomeTransitioner interface {
+	ApplyHookTransitionResult(instanceID, newState string, softRefresh bool, triggeringEventName string) (store.UpsertOutcome, error)
 }
 
 // HandleConfig bundles the inputs Handle takes beyond the store and
@@ -41,6 +49,11 @@ type HandleConfig struct {
 // per SRD §6.4 — every failure path emits a deny envelope before
 // returning, so Claude Code never hangs.
 //
+// Exactly one ad.hook.fired trail event is emitted per invocation
+// regardless of exit path (SR-A-2.1). Fields are populated incrementally
+// as the function progresses; fields not reached before an early exit are
+// emitted as null.
+//
 // Stdout is reserved for the decision envelope; state-tracking events
 // (everything except an on-relay PermissionRequest) leave it empty.
 func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore, hc HandleConfig, logger *log.Logger) error {
@@ -50,6 +63,25 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 	}
 
 	relayActive := env(EnvRelayMode) == RelayModeOn
+
+	// Trail fields for ad.hook.fired — populated incrementally as the
+	// function progresses. The defer fires exactly once at function exit
+	// regardless of exit path (SR-A-2.1). Fields not reached before an
+	// early exit are emitted as their zero value (nil → JSON null).
+	fields := map[string]any{
+		"source":             "ad_hook",
+		"relay_mode":         env(EnvRelayMode),
+		"matcher":            []string{"*"},
+		"claude_instance_id": nil,
+		"event_name":         nil,
+		"tool_name":          nil,
+		"session_id":         "",
+		"upsert_outcome":     nil,
+		"request_token":      nil,
+	}
+	defer func() {
+		_ = trail.Emit(ctx, "ad.hook.fired", fields)
+	}()
 
 	// Read the payload BEFORE resolving instance id so we can peek the
 	// event name from the raw bytes (b.45p). A payload-read failure is
@@ -90,21 +122,48 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		failClosed(fmt.Sprintf("resolve instance id: %v", err))
 		return nil
 	}
+	fields["claude_instance_id"] = instanceID
 
 	res, err := ClassifyEvent(raw)
 	if err != nil {
 		failClosed(fmt.Sprintf("classify (instance=%s): %v", instanceID, err))
 		return nil
 	}
+	if res.EventName != "" {
+		fields["event_name"] = res.EventName
+	}
+	if res.ToolName != "" {
+		fields["tool_name"] = res.ToolName
+	}
+	if res.SessionID != "" {
+		fields["session_id"] = res.SessionID
+	}
 
 	if res.UnknownEvent {
 		logf(logger, "hook: unknown event %q (instance=%s) — treating as soft refresh", res.EventName, instanceID)
 	}
 
-	if err := st.ApplyHookTransition(instanceID, res.NewState, res.SoftRefresh); err != nil {
+	// Apply the hook transition. Use the outcome-aware variant when
+	// available so the trail captures the exact result. Test doubles
+	// that don't implement outcomeTransitioner fall back to
+	// store.UpsertNoChange as a conservative sentinel.
+	var upsertOutcome store.UpsertOutcome
+	if ot, ok := st.(outcomeTransitioner); ok {
+		upsertOutcome, err = ot.ApplyHookTransitionResult(instanceID, res.NewState, res.SoftRefresh, res.EventName)
+	} else {
+		err = st.ApplyHookTransition(instanceID, res.NewState, res.SoftRefresh, res.EventName)
+		if err != nil {
+			upsertOutcome = store.UpsertError
+		} else {
+			upsertOutcome = store.UpsertNoChange
+		}
+	}
+	fields["upsert_outcome"] = string(upsertOutcome)
+	if err != nil {
 		failClosed(fmt.Sprintf("apply transition (instance=%s, event=%s): %v", instanceID, res.EventName, err))
 		return nil
 	}
+
 	if res.SessionID != "" {
 		if err := st.SetSessionID(instanceID, res.SessionID); err != nil {
 			failClosed(fmt.Sprintf("set session id (instance=%s): %v", instanceID, err))
@@ -120,7 +179,7 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		if clock == nil {
 			clock = DefaultPollClock()
 		}
-		runRelay(ctx, stdout, st, hc.Cfg, clock, logger, instanceID, raw)
+		runRelay(ctx, stdout, st, hc.Cfg, clock, logger, instanceID, raw, fields)
 	}
 
 	return nil
@@ -136,6 +195,8 @@ func logf(logger *log.Logger, format string, args ...any) {
 	logger.Printf(format, args...)
 }
 
-// Compile-time assertion that *store.Store satisfies HookStore. Keeps the
-// production wiring honest if the interface or the store grows.
+// Compile-time assertions that *store.Store satisfies HookStore and the
+// optional outcomeTransitioner interface. Keeps the production wiring
+// honest if the store or interfaces grow.
 var _ HookStore = (*store.Store)(nil)
+var _ outcomeTransitioner = (*store.Store)(nil)

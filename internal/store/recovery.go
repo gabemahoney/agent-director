@@ -1,9 +1,12 @@
 package store
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/gabemahoney/agent-director/internal/trail"
 )
 
 // ListLiveSpawnIDs returns the claude_instance_id of every row in a
@@ -47,21 +50,45 @@ func (s *Store) ListLiveSpawnIDs() ([]string, error) {
 // and records ended_at. find-missing calls this per row in its
 // set-difference output (SRD §5.2).
 //
-// The function is a no-op (returns nil) when no row matches the id
-// or when the row is already terminal — the cron path must be
-// idempotent: an aborted previous run that already marked some rows
-// missing should not error out on the next sweep.
-func (s *Store) MarkSpawnMissing(instanceID string) error {
+// Returns the prior state captured immediately before the UPDATE, and nil
+// error on success. Returns ("", nil) when no row matches the id or the row
+// is already terminal — the cron path must be idempotent: an aborted
+// previous run that already marked some rows missing should not error out on
+// the next sweep. Callers can distinguish "write happened" from "no-op" by
+// checking whether the returned prior state is non-empty.
+//
+// Prior state is captured via a separate SELECT before the UPDATE (the same
+// non-transactional pattern as ApplyHookTransitionResult — transactions cause
+// SQLITE_BUSY under concurrent workloads with modernc.org/sqlite).
+func (s *Store) MarkSpawnMissing(instanceID string) (string, error) {
+	// Capture prior state before the write. If no row exists (deleted
+	// concurrently), return ("", nil) — fail-open, no emit.
+	priorState, found, err := s.selectPriorState(instanceID)
+	if err != nil {
+		return "", fmt.Errorf("store: mark spawn missing prior state: %w", err)
+	}
+	if !found {
+		return "", nil
+	}
+
 	const q = `UPDATE spawns
 	              SET state = ?, last_seen_at = CURRENT_TIMESTAMP,
 	                  ended_at = CURRENT_TIMESTAMP
 	            WHERE claude_instance_id = ?
 	              AND state NOT IN (?, ?)`
-	_, err := s.db.Exec(q, StateMissing, instanceID, StateEnded, StateMissing)
+	res, err := s.db.Exec(q, StateMissing, instanceID, StateEnded, StateMissing)
 	if err != nil {
-		return fmt.Errorf("store: mark spawn missing: %w", err)
+		return "", fmt.Errorf("store: mark spawn missing: %w", err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return "", fmt.Errorf("store: mark spawn missing rows affected: %w", err)
+	}
+	if n == 0 {
+		// Row was already terminal — no-op. Return ("", nil) to signal no write.
+		return "", nil
+	}
+	return priorState, nil
 }
 
 // CloseOrphanedPermissionRequests denies all open permission_requests rows for
@@ -79,8 +106,23 @@ func (s *Store) CloseOrphanedPermissionRequests(instanceID string) error {
 		return fmt.Errorf("store: close orphaned permission requests: %w", err)
 	}
 	for _, row := range rows {
-		if _, err := s.DecidePermissionRequest(instanceID, row.RequestToken, "deny", DecisionReasonFindMissing); err != nil {
+		ok, err := s.DecidePermissionRequest(instanceID, row.RequestToken, "deny", DecisionReasonFindMissing, WriterProcessFindMissing)
+		if err != nil {
 			return fmt.Errorf("store: close orphaned permission request (token=%s): %w", row.RequestToken, err)
+		}
+		// Emit one ad.find_missing.tick per successfully closed row (SR-A-2.5).
+		// The Epic 3 ad.row_mutation.committed event fires in DecidePermissionRequest
+		// for the same write; this event adds the reconciliation_reason layer.
+		// A trail-emit failure must not fail the store call (SR-A-3.2).
+		if ok {
+			_ = trail.Emit(context.Background(), "ad.find_missing.tick", map[string]any{
+				"claude_instance_id":    instanceID,
+				"request_token":         row.RequestToken,
+				"prior_state":           nil,
+				"new_state":             nil,
+				"reconciliation_reason": "permission_orphan_closeout",
+				"source":                "ad_find_missing",
+			})
 		}
 	}
 	return nil

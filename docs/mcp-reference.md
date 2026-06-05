@@ -384,6 +384,45 @@ Print the binary's build-time version stamp as JSON ({version, commit}). Used by
 
 - (none)
 
+## Tool: trail-emit
+
+Emit an ad.* audit-trail event directly. Sub-verb: relay-attempt. Does not open state.db — works in corrupted-state recovery scenarios (SR-A-2.3).
+
+### Input schema
+
+- `sub_verb`: type=string, required=true — Sub-verb to invoke. Currently: relay-attempt.
+- `token`: type=string, required=true — request_token. Required.
+- `endpoint`: type=string, required=true — target_endpoint (URL or socket path). Required.
+- `outcome`: type=string|int, required=true — 3-digit HTTP status code (100-599, emitted as integer) or named error class: connection_refused, timeout, dns_failure (emitted as string). Required.
+- `bytes_sent`: type=int, required=false — Bytes sent. Default 0.
+- `bytes_received`: type=int, required=false — Bytes received. Default 0.
+- `instance_id`: type=string, required=true — claude_instance_id. Required.
+
+### Output schema
+
+- (no output fields)
+
+### Errors
+
+- `ErrInvalidFlags`
+- `ErrTrailWrite`
+
+## Tool: trail-path
+
+Print the resolved trail file path (one line, no JSON envelope) and exit 0. Path is taken from $AGENT_DIRECTOR_STATE_DIR when set, otherwise ~/.agent-director/ad-trail.jsonl. Does not open state.db — works in corrupted-state recovery scenarios (SR-A-6). Output is a raw path + newline, not a JSON envelope, so shell callers can use `cd $(agent-director trail-path | xargs dirname)` directly.
+
+### Input schema
+
+- (no input fields)
+
+### Output schema
+
+- `path`: type=string — Absolute path of the trail file (printed to stdout as a raw string, not a JSON field).
+
+### Errors
+
+- (none)
+
 ## Tool: hook
 
 Internal: invoked by Claude Code on lifecycle events via the per-Spawn --settings hooks. Reads payload JSON from stdin, writes a row UPSERT, exits 0 (state-tracking fail-open).
