@@ -87,9 +87,21 @@ type PermissionRow struct {
 // on the UNIQUE constraint causes an immediate rollback and surfaces
 // ErrRequestTokenCollision.
 func (s *Store) UpsertOpenPermissionRequest(instanceID, requestToken, toolName, toolInputJSON string, cap int) error {
+	_, err := s.UpsertOpenPermissionRequestResult(instanceID, requestToken, toolName, toolInputJSON, cap)
+	return err
+}
+
+// UpsertOpenPermissionRequestResult is the outcome-aware variant of
+// UpsertOpenPermissionRequest. It returns a UpsertOutcome alongside the
+// error so callers that emit trail events can record the exact result
+// without inferring it from error presence alone (SR-A-2.1).
+//
+//   - UpsertInserted — the INSERT committed successfully.
+//   - UpsertError    — any error (begin, insert, evict, commit, or collision).
+func (s *Store) UpsertOpenPermissionRequestResult(instanceID, requestToken, toolName, toolInputJSON string, cap int) (UpsertOutcome, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
-		return fmt.Errorf("store: upsert permission begin tx: %w", err)
+		return UpsertError, fmt.Errorf("store: upsert permission begin tx: %w", err)
 	}
 
 	_, err = tx.Exec(`
@@ -101,16 +113,16 @@ func (s *Store) UpsertOpenPermissionRequest(instanceID, requestToken, toolName, 
 		_ = tx.Rollback()
 		var serr *sqlite.Error
 		if errors.As(err, &serr) && serr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE {
-			return fmt.Errorf("%w: (%s, %s)", ErrRequestTokenCollision, instanceID, requestToken)
+			return UpsertError, fmt.Errorf("%w: (%s, %s)", ErrRequestTokenCollision, instanceID, requestToken)
 		}
-		return fmt.Errorf("store: upsert permission insert: %w", err)
+		return UpsertError, fmt.Errorf("store: upsert permission insert: %w", err)
 	}
 
 	if cap > 0 {
 		var currentCount int
 		if err := tx.QueryRow(`SELECT COUNT(*) FROM permission_requests`).Scan(&currentCount); err != nil {
 			_ = tx.Rollback()
-			return fmt.Errorf("store: upsert permission count: %w", err)
+			return UpsertError, fmt.Errorf("store: upsert permission count: %w", err)
 		}
 		if currentCount > cap {
 			excess := currentCount - cap
@@ -125,15 +137,15 @@ func (s *Store) UpsertOpenPermissionRequest(instanceID, requestToken, toolName, 
 			`, excess)
 			if err != nil {
 				_ = tx.Rollback()
-				return fmt.Errorf("store: upsert permission evict: %w", err)
+				return UpsertError, fmt.Errorf("store: upsert permission evict: %w", err)
 			}
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("store: upsert permission commit: %w", err)
+		return UpsertError, fmt.Errorf("store: upsert permission commit: %w", err)
 	}
-	return nil
+	return UpsertInserted, nil
 }
 
 // GetPermissionRequest reads the current state of a specific permission request

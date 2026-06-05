@@ -20,6 +20,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/trail"
 	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
 )
 
@@ -107,6 +108,11 @@ const hookExitCode = 0
 // The function never returns an error; it logs and returns.
 func runHook() int {
 	logger := newHookLogger()
+	// Wire the hook logger into the trail writer so emit failures and
+	// ts-substitution warnings reach cfg.Log.ErrorLogPath rather than
+	// being silently discarded. SetLogger is safe to call before the
+	// first Emit (SR-A-7.6).
+	trail.SetLogger(logger)
 	stdout := os.Stdout
 	relayActive := os.Getenv(hook.EnvRelayMode) == hook.RelayModeOn
 

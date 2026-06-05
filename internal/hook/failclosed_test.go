@@ -201,6 +201,7 @@ func TestFailClosedUpsertFailure(t *testing.T) {
 
 // 5. ApplyHookTransition failure → deny envelope.
 func TestFailClosedApplyHookTransitionFailure(t *testing.T) {
+	before := len(readTrailLines(t, trailFile()))
 	stdout := &bytes.Buffer{}
 	st := &flakyRelayStore{transitionErr: errors.New("db gone")}
 	if err := hook.Handle(context.Background(),
@@ -211,6 +212,12 @@ func TestFailClosedApplyHookTransitionFailure(t *testing.T) {
 		t.Fatalf("Handle: %v", err)
 	}
 	assertDenyEnvelope(t, stdout)
+	// Trail: one ad.hook.fired line emitted before the fail-closed return.
+	// upsert_outcome="error" (flakyRelayStore lacks outcomeTransitioner; transition
+	// error path sets UpsertError). runRelay is never reached so request_token=null.
+	row := hookFiredAt(t, before)
+	assertStr(t, row, "upsert_outcome", "error")
+	assertNoToolInput(t, row)
 }
 
 // 6. Polling timeout → deny envelope (relay's own failure mode).

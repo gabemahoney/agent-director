@@ -214,24 +214,52 @@ func (s *Store) LiveSpawnExists(instanceID string) (bool, error) {
 // state-tracking hooks fail-open per SRD §3.2, so a hook racing against
 // `delete` should not produce a visible error.
 func (s *Store) ApplyHookTransition(instanceID, newState string, softRefresh bool) error {
+	_, err := s.ApplyHookTransitionResult(instanceID, newState, softRefresh)
+	return err
+}
+
+// ApplyHookTransitionResult is the outcome-aware variant of
+// ApplyHookTransition. It returns a UpsertOutcome alongside the error so
+// callers that emit trail events can record the exact result without
+// inferring it from error presence alone (SR-A-2.1).
+//
+//   - UpsertUpdated   — the UPDATE affected ≥1 row.
+//   - UpsertNoChange  — the UPDATE affected 0 rows (no matching id), or
+//     the multi-row retention guard skipped the UPDATE.
+//   - UpsertError     — any SQL error.
+func (s *Store) ApplyHookTransitionResult(instanceID, newState string, softRefresh bool) (UpsertOutcome, error) {
 	if softRefresh {
 		const q = `UPDATE spawns SET last_seen_at = CURRENT_TIMESTAMP WHERE claude_instance_id = ?`
-		_, err := s.db.Exec(q, instanceID)
+		res, err := s.db.Exec(q, instanceID)
 		if err != nil {
-			return fmt.Errorf("store: soft refresh: %w", err)
+			return UpsertError, fmt.Errorf("store: soft refresh: %w", err)
 		}
-		return nil
+		n, err := res.RowsAffected()
+		if err != nil {
+			return UpsertError, fmt.Errorf("store: soft refresh rows affected: %w", err)
+		}
+		if n == 0 {
+			return UpsertNoChange, nil
+		}
+		return UpsertUpdated, nil
 	}
 	if newState == StateEnded {
 		const q = `UPDATE spawns
                       SET state = ?, last_seen_at = CURRENT_TIMESTAMP,
                           ended_at = CURRENT_TIMESTAMP
                     WHERE claude_instance_id = ?`
-		_, err := s.db.Exec(q, newState, instanceID)
+		res, err := s.db.Exec(q, newState, instanceID)
 		if err != nil {
-			return fmt.Errorf("store: ended transition: %w", err)
+			return UpsertError, fmt.Errorf("store: ended transition: %w", err)
 		}
-		return nil
+		n, err := res.RowsAffected()
+		if err != nil {
+			return UpsertError, fmt.Errorf("store: ended transition rows affected: %w", err)
+		}
+		if n == 0 {
+			return UpsertNoChange, nil
+		}
+		return UpsertUpdated, nil
 	}
 	// Multi-row retention guard: only advance to `working` when all open
 	// permission_requests rows for this Spawn have been decided. If any
@@ -240,10 +268,10 @@ func (s *Store) ApplyHookTransition(instanceID, newState string, softRefresh boo
 	if newState == StateWorking {
 		openRows, err := s.OpenPermissionRequestsForSpawn(instanceID)
 		if err != nil {
-			return fmt.Errorf("store: working transition open-row check: %w", err)
+			return UpsertError, fmt.Errorf("store: working transition open-row check: %w", err)
 		}
 		if len(openRows) > 0 {
-			return nil
+			return UpsertNoChange, nil
 		}
 	}
 	// Non-terminal transitions clear ended_at. This handles the resume
@@ -256,11 +284,18 @@ func (s *Store) ApplyHookTransition(instanceID, newState string, softRefresh boo
                   SET state = ?, last_seen_at = CURRENT_TIMESTAMP,
                       ended_at = NULL
                 WHERE claude_instance_id = ?`
-	_, err := s.db.Exec(q, newState, instanceID)
+	res, err := s.db.Exec(q, newState, instanceID)
 	if err != nil {
-		return fmt.Errorf("store: state transition: %w", err)
+		return UpsertError, fmt.Errorf("store: state transition: %w", err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return UpsertError, fmt.Errorf("store: state transition rows affected: %w", err)
+	}
+	if n == 0 {
+		return UpsertNoChange, nil
+	}
+	return UpsertUpdated, nil
 }
 
 // SetSessionID writes the claude_session_id column. Used by the

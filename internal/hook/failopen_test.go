@@ -1,17 +1,69 @@
 package hook
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 )
+
+// trailLineCount returns the number of lines currently in the trail file.
+// Returns 0 when the file does not yet exist.
+func trailLineCount(t *testing.T) int {
+	t.Helper()
+	path := filepath.Join(os.Getenv("AGENT_DIRECTOR_STATE_DIR"), "ad-trail.jsonl")
+	f, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return 0
+	}
+	if err != nil {
+		t.Fatalf("trailLineCount: open: %v", err)
+	}
+	defer f.Close()
+	var n int
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		n++
+	}
+	return n
+}
+
+// trailHookFiredAfter returns the first ad.hook.fired line written after
+// prevCount total lines existed in the trail file. Returns nil if none found.
+func trailHookFiredAfter(t *testing.T, prevCount int) map[string]any {
+	t.Helper()
+	path := filepath.Join(os.Getenv("AGENT_DIRECTOR_STATE_DIR"), "ad-trail.jsonl")
+	f, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatalf("trailHookFiredAfter: open: %v", err)
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	var i int
+	for sc.Scan() {
+		var m map[string]any
+		if json.Unmarshal(sc.Bytes(), &m) == nil && i >= prevCount {
+			if m["event"] == "ad.hook.fired" {
+				return m
+			}
+		}
+		i++
+	}
+	return nil
+}
 
 // flakyStore is a HookStore double whose state-tracking calls return
 // programmable errors. The relay-side methods (UpsertOpenPermissionRequest,
@@ -110,6 +162,7 @@ func TestHandlePayloadTooLargeExitsZero(t *testing.T) {
 }
 
 func TestHandleStoreTransitionErrorExitsZero(t *testing.T) {
+	before := trailLineCount(t)
 	logger, buf := captureLog(t)
 	stdin := strings.NewReader(`{"hook_event_name":"SessionStart"}`)
 	st := &flakyStore{transitionErr: errors.New("db unreachable")}
@@ -122,6 +175,18 @@ func TestHandleStoreTransitionErrorExitsZero(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "apply transition") {
 		t.Errorf("log missing transition-error entry; got %q", buf.String())
+	}
+	// Trail: exactly one ad.hook.fired line with upsert_outcome="error"
+	// (flakyStore doesn't implement outcomeTransitioner; error path sets UpsertError).
+	row := trailHookFiredAfter(t, before)
+	if row == nil {
+		t.Fatal("no ad.hook.fired in trail after fail-open transition error")
+	}
+	if row["upsert_outcome"] != "error" {
+		t.Errorf("upsert_outcome = %v; want \"error\"", row["upsert_outcome"])
+	}
+	if _, ok := row["tool_input"]; ok {
+		t.Error("tool_input present in trail line (must be dropped)")
 	}
 }
 

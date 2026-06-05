@@ -60,11 +60,23 @@ type RelayStore interface {
 	ApplyHookTransition(instanceID, newState string, softRefresh bool) error
 }
 
+// outcomeUpserter is an optional extension of RelayStore. *store.Store
+// satisfies it; test doubles that don't implement it receive
+// store.UpsertNoChange as a conservative fallback for the trail field.
+type outcomeUpserter interface {
+	UpsertOpenPermissionRequestResult(instanceID, requestToken, toolName, toolInputJSON string, cap int) (store.UpsertOutcome, error)
+}
+
 // runRelay is the relay-mode branch invoked from Handle when the
 // event is PermissionRequest AND AGENT_DIRECTOR_RELAY_MODE=on. It
 // owns the full happy + failure flow per SRD §6.2 + §6.4 and ALWAYS
 // writes an envelope to stdout before returning — every failure path
 // becomes a deny envelope so Claude Code never hangs.
+//
+// fields is the ad.hook.fired trail map owned by Handle. runRelay
+// populates request_token and (for the relay upsert path) upsert_outcome
+// into it. The single emit happens via Handle's defer; runRelay must not
+// emit directly (SR-A-2.1: one emit per verb invocation).
 //
 // A UUIDv4 request_token is minted via crypto/rand immediately after the
 // payload is parsed. The token is closed over for the full runRelay body:
@@ -82,6 +94,7 @@ func runRelay(
 	logger *log.Logger,
 	instanceID string,
 	raw json.RawMessage,
+	fields map[string]any,
 ) {
 	var pp permissionPayload
 	if err := json.Unmarshal(raw, &pp); err != nil {
@@ -104,6 +117,9 @@ func runRelay(
 		_, _ = fmt.Fprintln(stdout, EncodeDecision(EventNamePermissionRequest, "deny", ""))
 		return
 	}
+	// Populate request_token into the trail fields immediately after minting
+	// so early-exit paths (upsert failure) still carry it.
+	fields["request_token"] = requestToken
 
 	cap := cfg.PermissionRequestCap
 	if cap < 0 {
@@ -115,7 +131,23 @@ func runRelay(
 		cap = 1000
 	}
 
-	if err := st.UpsertOpenPermissionRequest(instanceID, requestToken, pp.ToolName, toolInput, cap); err != nil {
+	// Upsert the open permission request. Use the outcome-aware variant when
+	// available so the trail captures the exact result; test doubles that
+	// don't implement outcomeUpserter fall back to store.UpsertNoChange.
+	var upsertOutcome store.UpsertOutcome
+	if ou, ok := st.(outcomeUpserter); ok {
+		upsertOutcome, err = ou.UpsertOpenPermissionRequestResult(instanceID, requestToken, pp.ToolName, toolInput, cap)
+	} else {
+		err = st.UpsertOpenPermissionRequest(instanceID, requestToken, pp.ToolName, toolInput, cap)
+		if err != nil {
+			upsertOutcome = store.UpsertError
+		} else {
+			upsertOutcome = store.UpsertNoChange
+		}
+	}
+	// Overwrite upsert_outcome in fields with the relay-specific result.
+	fields["upsert_outcome"] = string(upsertOutcome)
+	if err != nil {
 		logf(logger, "relay: upsert (instance=%s, token=%s): %v", instanceID, requestToken, err)
 		_, _ = fmt.Fprintln(stdout, EncodeDecision(EventNamePermissionRequest, "deny", ""))
 		return
@@ -150,7 +182,8 @@ func runRelay(
 	}
 }
 
-// Compile-time assertion that *store.Store satisfies RelayStore. Mirrors
-// the HookStore assertion in handler.go so interface drift is caught at
-// compile time on either surface.
+// Compile-time assertions that *store.Store satisfies RelayStore and the
+// optional outcomeUpserter interface. Keeps the production wiring honest
+// if the store or interfaces grow.
 var _ RelayStore = (*store.Store)(nil)
+var _ outcomeUpserter = (*store.Store)(nil)
