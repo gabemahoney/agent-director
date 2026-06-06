@@ -29,6 +29,30 @@ done
 
 cd "$WORKTREE_ROOT"
 
+# ─── version derivation ───────────────────────────────────────────────────────
+# Honor caller override; otherwise derive from the canonical version source.
+if [[ -z "${AGENT_DIRECTOR_BUILD_VERSION:-}" ]]; then
+  PKG_JSON="pkg/ts-bun-client/package.json"
+  if [[ ! -f "$PKG_JSON" ]]; then
+    emit_diagnostic \
+      "compile.version-derivation" \
+      "$PKG_JSON" \
+      "Canonical version file not found: ${PKG_JSON}" \
+      "Ensure the worktree is complete and pkg/ts-bun-client/package.json exists."
+    exit 1
+  fi
+  AGENT_DIRECTOR_BUILD_VERSION="$(jq -r .version "$PKG_JSON")"
+  if [[ $? -ne 0 || -z "$AGENT_DIRECTOR_BUILD_VERSION" || "$AGENT_DIRECTOR_BUILD_VERSION" == "null" ]]; then
+    emit_diagnostic \
+      "compile.version-derivation" \
+      "$PKG_JSON" \
+      "Failed to parse .version from ${PKG_JSON}." \
+      "Verify jq is installed and ${PKG_JSON} contains a valid .version field."
+    exit 1
+  fi
+fi
+export AGENT_DIRECTOR_BUILD_VERSION
+
 # ─── targets ──────────────────────────────────────────────────────────────────
 TARGETS=("linux/amd64" "linux/arm64" "darwin/arm64")
 BINARIES=("dist/agent-director-linux-amd64" "dist/agent-director-linux-arm64" "dist/agent-director-darwin-arm64")
