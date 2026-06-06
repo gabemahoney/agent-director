@@ -111,7 +111,7 @@ Consumers installing with `--ignore-scripts` see identical functionality.
 There are no `optionalDependencies`, no per-platform sub-packages, and
 no bundled CLI binary. The library discovers the system-installed CLI at
 `Client.create()` time via the SR-1 pipeline (HOME/standard-install-path
-then PATH lookup). Build orchestration lives entirely in `release.sh` and
+then PATH lookup). Build orchestration lives entirely in the `/release` skill and
 the `Makefile` — there is no install-time work to do on the consumer
 side beyond writing files to disk.
 
@@ -147,6 +147,20 @@ fires (SR-8.11):
 8. `npm publish --dry-run` produces a tarball whose composition matches
    the SR-6.1 positive list and the SR-6.2 negative-space exclusions
    (asserted by `pkg/ts-bun-client/test/packaging.test.ts`).
+
+9. **Preflight** — semver is valid strict `X.Y.Z`, `gh` is on PATH
+   (live runs only), working tree in the release worktree is clean,
+   target tag does not already exist, current branch matches the
+   expected release branch, and all `pkg/ts-bun-client/package.json`
+   version fields are `"0.0.0"` (sentinel guard against leftover stamps
+   from a prior failed run).
+10. **Install verification** — the umbrella tarball is installed into a
+    temp `HOME` and `scripts/verify-installed-pkg.ts --smoke` asserts
+    that the SKILL.md frontmatter version and `client.version()` envelope
+    are correct. Failure here blocks publish.
+11. **Notes** — `dist/release-notes.md` is generated from
+    `git log <prev-tag>..HEAD`. Failure (e.g. no previous tag found)
+    halts the run before any irreversible step.
 
 Tarball size is **not** a release gate — the SRD explicitly rejects a
 numeric ceiling (SR-6.9). Size is recorded in the release notes only.

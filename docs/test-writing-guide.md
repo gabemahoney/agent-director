@@ -143,7 +143,7 @@ Fixed names collide across runs when the fake-tmux stub is bypassed (e.g. mode-6
 
 ### Parallel mode is pinned off
 
-The release-time gate in `skills/release-agent-director/release.sh` invokes `bun test --parallel=1` because the suite deadlocks when bun runs files concurrently (tracked in b.w7e — parallel `make build` invocations from `test/setup.ts` preload race into `ETXTBSY` on the shared `bin/agent-director`). Until that root cause is fixed, **assume your tests run sequentially across files**. If you write a test that *requires* parallelism for correctness — don't. Order across files is deterministic but unspecified; couple state to per-test fixtures, not run order. The bunfig key `parallel = 1` is forward-looking and ignored by bun 1.3.13; when bun honors it, both invocations (release-time and ad-hoc `bun test`) will pick it up.
+The `/release` skill invokes `bun test --parallel=1` as the coverage gate because the suite deadlocks when bun runs files concurrently (tracked in b.w7e — parallel `make build` invocations from `test/setup.ts` preload race into `ETXTBSY` on the shared `bin/agent-director`). Until that root cause is fixed, **assume your tests run sequentially across files**. If you write a test that *requires* parallelism for correctness — don't. Order across files is deterministic but unspecified; couple state to per-test fixtures, not run order. The bunfig key `parallel = 1` is forward-looking and ignored by bun 1.3.13; when bun honors it, both invocations (release-time and ad-hoc `bun test`) will pick it up.
 
 ### Documentation belongs in docs
 
@@ -180,6 +180,41 @@ Why this matters (SR-19.2): re-implementing seeding inline tends to drift
 from the store schema and fixture conventions, masking regressions. The
 shared factories are exercised by their own tests AND by every consumer,
 so any schema break is caught early.
+
+## Synthetic-regression test convention
+
+Synthetic-regression tests re-anchor known failure-classes so they can
+never silently regress. Each test class lives in its own directory under
+`skills/release-agent-director/tests/synthetic-regressions/`:
+
+```
+skills/release-agent-director/tests/synthetic-regressions/
+  <class-name>/
+    <class>_test.go
+```
+
+Each directory is its own Go package. A separate `go.mod` is **not**
+required — sibling `_test.go` files under one directory share the
+same package declaration.
+
+**Mandatory cleanup.** Every test that mutates a file on disk must use
+`t.Cleanup()` to restore the original content, even if the test fails.
+Never leave mutated files behind; a leaking mutation corrupts subsequent
+test runs.
+
+**Skip slow tests.** Guard any test that takes more than a second with
+`testing.Short()`:
+
+```go
+if testing.Short() {
+    t.Skip("skipping slow regression test in short mode")
+}
+```
+
+**Anchored to a known failure-class.** The test body comment and name
+must reference the bee ticket (e.g. `b.n4v`, `b.b3h`, `b.6oj`,
+`b.uys`) that the regression re-anchors, so a reader can trace back
+to the original bug report.
 
 ## Writing Testplans
 
