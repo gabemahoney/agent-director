@@ -71,14 +71,47 @@ func TestClassifyEventSRDTable(t *testing.T) {
 			wantSoft: true,
 		},
 		{
-			name:      "SessionEnd_user_quit_ended",
-			payload:   map[string]any{"hook_event_name": "SessionEnd", "reason": "user_quit"},
+			name:      "SessionEnd_logout_ended",
+			payload:   map[string]any{"hook_event_name": "SessionEnd", "reason": "logout"},
 			wantState: store.StateEnded,
 		},
 		{
-			name:      "SessionEnd_unknown_reason_ended",
-			payload:   map[string]any{"hook_event_name": "SessionEnd", "reason": "future_value"},
+			name:      "SessionEnd_prompt_input_exit_ended",
+			payload:   map[string]any{"hook_event_name": "SessionEnd", "reason": "prompt_input_exit"},
 			wantState: store.StateEnded,
+		},
+		{
+			name:      "SessionEnd_exit_ended",
+			payload:   map[string]any{"hook_event_name": "SessionEnd", "reason": "exit"},
+			wantState: store.StateEnded,
+		},
+		{
+			// b.pmn: unknown / unfamiliar SessionEnd causes — including
+			// Claude Code's auto-compaction payload shape — soft-refresh
+			// rather than falsely transition to `ended`. find-missing
+			// reaps any row whose tmux session truly disappeared.
+			name:     "SessionEnd_unknown_reason_soft",
+			payload:  map[string]any{"hook_event_name": "SessionEnd", "reason": "future_value"},
+			wantSoft: true,
+		},
+		{
+			// b.pmn: Claude Code's exit cause may arrive under `matcher`
+			// instead of `reason`. Recognized terminal values via either
+			// field still mark `ended`.
+			name:      "SessionEnd_matcher_logout_ended",
+			payload:   map[string]any{"hook_event_name": "SessionEnd", "matcher": "logout"},
+			wantState: store.StateEnded,
+		},
+		{
+			// b.pmn: same shape under the `endReason` field name.
+			name:      "SessionEnd_endReason_logout_ended",
+			payload:   map[string]any{"hook_event_name": "SessionEnd", "endReason": "logout"},
+			wantState: store.StateEnded,
+		},
+		{
+			name:     "SessionEnd_matcher_compact_soft",
+			payload:  map[string]any{"hook_event_name": "SessionEnd", "matcher": "compact"},
+			wantSoft: true,
 		},
 		{
 			name:        "unknown_event_soft_and_flagged",
@@ -170,15 +203,23 @@ func TestClassifyEventMalformedJSONReturnsError(t *testing.T) {
 	}
 }
 
-func TestClassifyEventSessionEndMissingReasonIsEnded(t *testing.T) {
-	// SessionEnd with no reason field — conservative: any reason not in
-	// the closed soft set transitions to ended.
+// TestClassifyEventSessionEndMissingReasonIsSoft pins the b.pmn behavior:
+// a SessionEnd with no exit-cause field at all soft-refreshes instead of
+// transitioning to `ended`. Auto-compaction in Claude Code fires
+// SessionEnd without a `reason`/`matcher`/`endReason` field, and the
+// previous "default to ended" policy caused mid-flight workers to flip to
+// `ended` for the brief window before the next hook re-stamped state.
+// find-missing reaps a row whose tmux session is actually dead.
+func TestClassifyEventSessionEndMissingReasonIsSoft(t *testing.T) {
 	raw := json.RawMessage(`{"hook_event_name":"SessionEnd"}`)
 	res, err := ClassifyEvent(raw)
 	if err != nil {
 		t.Fatalf("ClassifyEvent: %v", err)
 	}
-	if res.NewState != store.StateEnded {
-		t.Errorf("NewState = %q; want ended", res.NewState)
+	if !res.SoftRefresh {
+		t.Errorf("SoftRefresh = %v; want true (missing cause should soft-refresh per b.pmn)", res.SoftRefresh)
+	}
+	if res.NewState != "" {
+		t.Errorf("NewState = %q; want empty (soft-refresh leaves state alone)", res.NewState)
 	}
 }

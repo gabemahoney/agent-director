@@ -24,8 +24,8 @@ Code feeds it the payload JSON on stdin.
 | `Stop` | — | `waiting` |
 | `Notification` | — | soft refresh — bumps `last_seen_at`, state unchanged |
 | `PermissionRequest` | `*` (all tools) | `check_permission` |
-| `SessionEnd` | reason ∈ {`clear`, `compact`} | soft refresh: bumps `last_seen_at`, state unchanged |
-| `SessionEnd` | any other reason | `ended` (also sets `ended_at`) |
+| `SessionEnd` | cause ∈ {`logout`, `prompt_input_exit`, `exit`} | `ended` (also sets `ended_at`) |
+| `SessionEnd` | any other cause (including empty / `clear` / `compact` / auto-compaction) | soft refresh: bumps `last_seen_at`, state unchanged |
 
 Unknown event names are treated as soft refreshes — the row's
 `last_seen_at` updates and an info-level log line records the unknown
