@@ -77,7 +77,6 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 
 interface RepoPaths {
   umbrellaJson: string;
-  skillMd: string;
   distIndexJs: string;
   versionFloorSrc: string;
   versionFloorDist: string;
@@ -86,7 +85,6 @@ interface RepoPaths {
 function resolveRepoPaths(dir: string): RepoPaths {
   return {
     umbrellaJson: resolve(dir, "../package.json"),
-    skillMd: resolve(dir, "../../../skills/install-agent-director/SKILL.md"),
     distIndexJs: resolve(dir, "../dist/index.js"),
     versionFloorSrc: resolve(dir, "../version-floor.json"),
     versionFloorDist: resolve(dir, "../dist/version-floor.json"),
@@ -123,39 +121,6 @@ function checkSite3a(ver: string): void {
   const got = typeof pkg.version === "string" ? pkg.version : String(pkg.version);
   if (got !== ver) {
     fail("site-3a", pkgPath, got, ver);
-  }
-}
-
-// Site 5: SKILL.md frontmatter version: == ver.
-// Parses frontmatter the same way version-bump.ts does.
-function checkSite5(ver: string): void {
-  const skillMdPath = paths.skillMd;
-  const raw = readFileSync(skillMdPath, "utf8");
-  const lines = raw.split("\n");
-
-  if (lines[0] !== "---") {
-    fail("site-5", skillMdPath, "(no frontmatter opening ---)", ver);
-    return;
-  }
-  const closeIdx = lines.indexOf("---", 1);
-  if (closeIdx === -1) {
-    fail("site-5", skillMdPath, "(no closing --- in frontmatter)", ver);
-    return;
-  }
-
-  const frontmatter = lines.slice(1, closeIdx);
-  const versionLine = frontmatter.find((l) => /^version:\s*/.test(l));
-  if (!versionLine) {
-    fail("site-5", skillMdPath, "(no version: line in frontmatter)", ver);
-    return;
-  }
-
-  const match = versionLine.match(/^version:\s*(.+)$/);
-  const rawVal = match ? match[1].trim() : "";
-  const got = rawVal.replace(/^["']|["']$/g, "");
-
-  if (got !== ver) {
-    fail("site-5", skillMdPath, got, ver);
   }
 }
 
@@ -336,12 +301,10 @@ async function checkPublishShasums(): Promise<void> {
 // ADD NEW VERSION SITES HERE — omitting a site here means it is never checked at release time.
 // b.ue3 / Epic 4: site-1 / site-3b / site-4 dropped along with the vendored-
 // binary surface.  site-1's release-time enforcement moves to release.sh's
-// b.b3h anchor (which spawns the host's dist/ binary directly).  site-5 stays
-// live because skills/install-agent-director/SKILL.md continues to ship in
-// AD's release tarballs for install.sh.
+// b.b3h anchor (which spawns the host's dist/ binary directly).  b.5ro:
+// site-5 dropped because SKILL.md no longer carries a version field.
 const SITES = [
-  { id: "site-3a", label: "umbrella package.json::version",                       check: (v: string) => checkSite3a(v) },
-  { id: "site-5",  label: "SKILL.md frontmatter version:",                         check: (v: string) => checkSite5(v) },
+  { id: "site-3a", label: "umbrella package.json::version", check: (v: string) => checkSite3a(v) },
 ] as const;
 
 // ---------------------------------------------------------------------------

@@ -67,22 +67,6 @@ function sha256OfFile(filePath: string): string {
   return h.digest("hex");
 }
 
-function readSkillFrontmatterVersion(skillMdPath: string): string {
-  const lines = readFileSync(skillMdPath, "utf8").split("\n");
-  let inFrontmatter = false;
-  for (const line of lines) {
-    if (line.trim() === "---") {
-      if (!inFrontmatter) { inFrontmatter = true; continue; }
-      break;
-    }
-    if (inFrontmatter) {
-      const m = line.match(/^version:\s*(.+)$/);
-      if (m) return m[1].trim();
-    }
-  }
-  throw new Error(`No frontmatter version found in ${skillMdPath}`);
-}
-
 // ---------------------------------------------------------------------------
 // Subprocess helper — async so tests can use Bun.spawn (not spawnSync)
 // ---------------------------------------------------------------------------
@@ -151,12 +135,10 @@ test(
     // -----------------------------------------------------------------------
 
     const liveUmbrellaPkg  = join(PKG_DIR, "package.json");
-    const liveSkillMd      = join(REPO_ROOT, "skills", "install-agent-director", "SKILL.md");
     const liveDistIndexJs  = join(PKG_DIR, "dist", "index.js");
 
     const sentinels = {
       umbrellaRaw:  readFileSync(liveUmbrellaPkg, "utf8"),
-      skillMdRaw:   readFileSync(liveSkillMd, "utf8"),
       distHash:     existsSync(liveDistIndexJs) ? sha256OfFile(liveDistIndexJs) : null,
     };
 
@@ -177,13 +159,6 @@ test(
       const stagePkgDir = join(stageDir, "pkg", "ts-bun-client");
       mkdirSync(stagePkgDir, { recursive: true });
       cpSync(join(PKG_DIR, "."), stagePkgDir, { recursive: true });
-
-      mkdirSync(join(stageDir, "skills"), { recursive: true });
-      cpSync(
-        join(REPO_ROOT, "skills", "install-agent-director"),
-        join(stageDir, "skills", "install-agent-director"),
-        { recursive: true }
-      );
 
       mkdirSync(join(stageDir, "pkg", "api", "errnames"), { recursive: true });
       cpSync(
@@ -208,7 +183,6 @@ test(
           "bun", "run", "scripts/version-bump.ts",
           "--version", TARGET_VERSION,
           "--target", "umbrella-version",
-          "--target", "skill-frontmatter",
         ],
         { cwd: stagePkgDir }
       );
@@ -373,7 +347,6 @@ test(
     // -----------------------------------------------------------------------
 
     expect(readFileSync(liveUmbrellaPkg, "utf8")).toBe(sentinels.umbrellaRaw);
-    expect(readFileSync(liveSkillMd, "utf8")).toBe(sentinels.skillMdRaw);
 
     if (sentinels.distHash !== null) {
       expect(sha256OfFile(liveDistIndexJs)).toBe(sentinels.distHash);
