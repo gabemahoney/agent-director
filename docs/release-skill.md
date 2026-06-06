@@ -155,9 +155,27 @@ in later Epics — this section will be extended as each one lands.
 bumps the version in `pkg/ts-bun-client/package.json`, and commits the bump.
 This is the first mutation in the pipeline.
 
-**`coverage`** *(E5)* — Discovers and runs every test surface: Go full-tree
-tests, `bun test`, and any docker-harness integration tests enumerated in the
-Epic list. A single test failure aborts the release.
+- Creates an isolated git worktree at `.release-work/release-v<target>/` rooted at the `origin/main` HEAD that preflight just verified.
+- A single commit edits only `pkg/ts-bun-client/package.json`'s `version` field (the rest of the file's whitespace is preserved by surgical sed).
+- Branch name: `release/v<target>`. Commit message: `chore: release v<target>`.
+- On any later failure the worktree + branch stay on disk per SR-13.2 — operators can inspect or re-run.
+- Gate names: `branch.worktree-create`, `branch.bump-commit`.
+- Subprocess: `skills/release-agent-director/gates/branch/create-release-worktree.sh <target-version>`.
+
+**`coverage`** *(E5)* — Discovers and runs every test surface in the repo.
+Sibling sub-checks run in parallel (SR-1.4); a failing sub-check does NOT
+cancel siblings (SR-6.5). All outcomes land in the run report's
+`coverage.sub_checks` array; the phase outcome is `failed` if any sub-check
+failed, `passed` otherwise.
+
+- Gate names:
+  - `coverage.go-root` — `go test ./... -race -count=1` at the worktree root.
+  - `coverage.go-consumer-dryrun` — `go test ./... -race -count=1` inside `tools/consumer-dryrun/`.
+  - `coverage.bun-test` — `bun install --frozen-lockfile && bun run build && bun test` under `pkg/ts-bun-client/`.
+  - `coverage.bun-extra-scripts` — auto-discovers package.json scripts matching `^(smoke|envelope-diff|test:.*)$` and runs each as `coverage.bun-script-<name>`. Adding a new script with that naming triggers it on the next run; no skill code change required.
+  - `coverage.docker-epic-<slug>` — one per slug enumerated by `make list-test-docker-epics`. Empty set is a release blocker (SR-19.3).
+- Subprocess directory: `skills/release-agent-director/gates/coverage/`.
+- Parallel runner: `skills/release-agent-director/gates/lib/run-parallel.sh` consumes a gates-config.json and emits the consolidated outcome JSON.
 
 ## Docker harness EPIC enumeration
 
