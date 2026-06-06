@@ -261,3 +261,11 @@ error_log_path = "~/.agent-director/errors.log"
 skills/install-agent-director/uninstall.sh           # preserve state.db + templates
 skills/install-agent-director/uninstall.sh --purge   # remove everything
 ```
+
+## Cutting a release
+
+Releases are cut via the `/release` skill — see [docs/release-skill.md](docs/release-skill.md)
+for the operator runbook. The skill discovers and runs every test surface,
+cross-compiles the three CLI binaries, packs and install-verifies the npm
+tarball, generates release notes, and only after all gates pass executes the
+irreversible publish sequence. Defaults to dry-run.
