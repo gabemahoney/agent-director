@@ -19,17 +19,16 @@ CLAUDE_CODE_VERSION ?= 2.1.120
 TEST_IMAGE ?= agent-director-test
 
 # Version stamp embedded via -ldflags -X. Per SR-2.6 (b.ue3 / Epic 1):
-# every non-tagged-release build stamps the dev sentinel literal
-# `0.0.0-dev`; only tagged-release builds stamp clean strict SemVer
-# (X.Y.Z, no leading "v", no git-describe suffix, no build metadata).
-# release.sh overrides VERSION_LDFLAGS with the tag-derived plain-semver
-# value at release time; everything else (dev trees, CI on branches,
-# contributor `make build`) falls into the dev-sentinel branch.
+# every non-release build stamps the dev sentinel literal `0.0.0-dev`.
 #
-# Contributor override: set AGENT_DIRECTOR_BUILD_VERSION=X.Y.Z (or
-# equivalent) to test strict-semver behavior against a local build.
-# Any non-empty value is stamped verbatim; the caller is responsible
-# for passing a value the discovery pipeline can parse.
+# Release path: `make release-binaries` reads .version from
+#               pkg/ts-bun-client/package.json via jq.
+# Dev path:     `make build` (and all other targets) stamps 0.0.0-dev.
+# Env override: set AGENT_DIRECTOR_BUILD_VERSION=X.Y.Z to stamp a custom
+#               value on any target; takes precedence over both paths.
+#               Any non-empty value is stamped verbatim; the caller is
+#               responsible for passing a value the discovery pipeline
+#               can parse.
 VERSION_PKG     := github.com/gabemahoney/agent-director/internal/version
 ifneq ($(strip $(AGENT_DIRECTOR_BUILD_VERSION)),)
 VERSION_STR     := $(AGENT_DIRECTOR_BUILD_VERSION)
@@ -38,6 +37,15 @@ VERSION_STR     := 0.0.0-dev
 endif
 COMMIT_SHA      := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 VERSION_LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION_STR) -X $(VERSION_PKG).Commit=$(COMMIT_SHA)
+
+# RELEASE_VERSION is lazily evaluated: only computed when a recipe expands it
+# (so `make build` never invokes jq).
+RELEASE_VERSION = $(shell jq -r .version pkg/ts-bun-client/package.json)
+
+# Target-scoped override: make release-binaries stamps from package.json.
+# AGENT_DIRECTOR_BUILD_VERSION env still wins (env override is evaluated above).
+release-binaries: VERSION_STR := $(if $(strip $(AGENT_DIRECTOR_BUILD_VERSION)),$(AGENT_DIRECTOR_BUILD_VERSION),$(RELEASE_VERSION))
+release-binaries: VERSION_LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION_STR) -X $(VERSION_PKG).Commit=$(COMMIT_SHA)
 
 all: generate build
 
