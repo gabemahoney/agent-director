@@ -507,7 +507,7 @@ host, leaving the others absent.
 Each sub-package lives under `pkg/ts-bun-client/platforms/<tuple>/` and
 contains only `package.json`, `README-binary-source.md`, and
 (release-injected) the CLI binary under `bin/agent-director`. The
-binary is gitignored; `release.sh` stages it after `make
+binary is gitignored; the `/release` skill stages it after `make
 release-binaries` cross-compiles.
 
 For local development, `bun run prepare-platforms` copies the matching
@@ -2215,108 +2215,55 @@ toward a release happens on a branch; the tag lands once.
 
 ### The release skill
 
-`skills/release-agent-director/release.sh` automates the workflow
-documented in `skills/release-agent-director/SKILL.md`. The script
-is organized as a phased pipeline; phases are ordered
-most-reversible to least-reversible and the script halts on the
-first failing phase:
+The `/release` skill (`skills/release-agent-director/SKILL.md`) is the
+operator runbook and sole release orchestrator. It is LLM-driven — there
+is no shell-script orchestrator; every phase decision, gate evaluation, and
+publish action is performed by the skill-running Claude instance.
 
-1. **pre-flight** — validate semver, verify `gh` is on PATH (live
-   runs only), confirm the working tree is clean, confirm the tag
-   does not already exist, confirm the current branch matches
-   `--branch` (default `main`). Confirm all three
-   `pkg/ts-bun-client/package.json::version` fields are `"0.0.0"` —
-   a sentinel guard against leftover stamps from a prior failed run;
-   exits 2 with the violating path on mismatch.
-2. **notes** — template `dist/release-notes.md` from
-   `git log <prev-tag>..HEAD`, grouped by Epic ID where commit
-   messages reference one.
-3. **build** — `make release-binaries VERSION_LDFLAGS="..."` cross-compiles
-   the three CLI targets into
-   `dist/agent-director-{linux-amd64,linux-arm64,darwin-arm64}`
-   (`CGO_ENABLED=0`, pure-Go SQLite). The `VERSION_LDFLAGS` override
-   injects the release version and commit SHA at link time, so each
-   binary reports the exact release tag even though the build runs
-   before `tag_phase`. Each binary is staged into the matching
-   `pkg/ts-bun-client/platforms/<dir>/bin/agent-director` so
-   `npm publish` later picks it up via the sub-package `files` glob.
-4. **verify** — Stages the umbrella + both platform sub-packages +
-   skill files into a `mktemp -d` stage directory, stamps all version
-   sites using a two-pass sequence (umbrella/platform/skill-frontmatter
-   first; `bun install`; opt-deps second), runs
-   `check-version-coherence.ts --scope verify` after each stamp pass,
-   then packs all three packages (`bun pm pack --ignore-scripts`) —
-   umbrella + `linux-x64` + `darwin-arm64`. A SHA-256 manifest
-   (`$stage_dir/tarball-shasums.txt`, two-space coreutils format) is
-   written for all three tarballs and exported via
-   `AGENT_DIRECTOR_RELEASE_SHASUMS`; the stage directory path is
-   exported via `AGENT_DIRECTOR_RELEASE_STAGE_DIR`. Both env vars
-   survive verify_phase return — the stage directory is NOT cleaned up
-   on return, only on script EXIT — so `publish_phase` can consume the
-   exact same tarballs without re-staging or re-stamping (SR-1.1 –
-   SR-1.6). The phase also installs the umbrella tarball into a temp
-   `HOME` and runs `scripts/verify-installed-pkg.ts --smoke`, asserting
-   that postinstall landed the correct SKILL.md frontmatter version and
-   that `client.version()` returns a well-formed `{ version, commit }`
-   envelope. Any sub-step failure halts with exit code 5.
-5. **tag** — `git tag -a $VERSION -m "Release $VERSION" && git push
-   origin $VERSION`. **Point of no return.** The Go module
-   resolution relies on the single root tag because `pkg/api/`
-   shares the root `go.mod`; if `pkg/api/go.mod` is ever added the
-   script also pushes the `pkg/api/$VERSION` sub-path tag that Go's
-   module protocol requires.
-6. **publish** — Consumes the artifacts produced by `verify_phase`
-   with no re-stage, no re-stamp, and no re-pack (SR-1.6). Reads
-   `AGENT_DIRECTOR_RELEASE_SHASUMS` (manifest path) and
-   `AGENT_DIRECTOR_RELEASE_STAGE_DIR` (stage directory path) exported
-   by `verify_phase`. Runs `check-version-coherence.ts --scope publish`
-   (SHA-256 round-trip gate — re-hashes every tarball against the
-   manifest to confirm no bytes changed after `verify_phase` packed
-   them). If the gate passes, publishes each tarball verbatim via
-   `npm publish <tarball>` — platform sub-packages first so the
-   umbrella's `^version` pins resolve on npm, umbrella last. The live
-   working tree is never written.
-7. **gh-release** — `gh release create $VERSION` with exactly **3
-   attached assets** — the three CLI binaries:
-   `agent-director-linux-amd64`, `agent-director-linux-arm64`,
-   `agent-director-darwin-arm64`. `darwin/amd64` was dropped from v1
-   on 2026-05-24. Release notes are embedded via `--notes-file` (not
-   an attached asset).
+**Worktree-isolation contract.** The skill creates a separate git worktree
+at `.release-work/release-v<target>/`. The operator's primary checkout is
+never written during a release run; the only mutation to the primary
+worktree is the final fast-forward-main substep (the last action of a
+successful live run).
 
-The script DEFAULTS to `--dry-run`. Live runs require `--release`.
-In dry-run mode the script executes phases 1-4 fully, runs the
-tag-phase in "would-push" preview mode, and exits before any
-irreversible step.
+**Source-of-truth invariant.** `pkg/ts-bun-client/package.json` is the
+sole authoritative version string in the repo (SR-16). Every other site —
+binary ldflags, npm sub-packages, release notes — derives from it. The
+SR-16 gate (`pkg/ts-bun-client/scripts/check-source-of-truth.ts`) enforces
+this invariant and fires on any independent version site detected outside
+the derivation chain.
 
-**Clean-tree invariant.** `git status --porcelain` must be empty in
-the working tree after any dry-run or live release. All publish
-mutations are confined to the stage directory; no phase writes to
-tracked files. `make release-smoke` asserts this invariant (and three
-other postconditions) via
-`skills/release-agent-director/test-release-postconditions.sh`.
+**Phase model.** Phases run in strict order, most-reversible to
+least-reversible:
 
-The darwin/arm64 leg's Xcode pin lives on the self-hosted runner
-itself (operator-maintained out-of-band on the operator's Mac)
-and is NOT diffed by this helper; bumps to it are surfaced by the
-operator in the release notes manually.
+```
+preflight → branch-and-bump → coverage → compile → smoke
+→ coherence(binary) → pack → install → coherence(tarball+bump)
+→ notes → publish → finalize
+```
 
-#### Stage directory and EXIT trap
+Each phase is a self-contained gate; any failure halts the run immediately.
+The publish and finalize phases are gated behind explicit operator
+confirmation after all earlier phases pass. Defaults to dry-run; live runs
+require explicit opt-in.
 
-`cleanup_stage_dir_if_any` removes the `$STAGE_DIR` temp directory
-created by `verify_phase`; it is a no-op when `STAGE_DIR` is unset
-or the directory no longer exists. Any future helper that introduces
-a new stage-dir-style temp resource should follow the same pattern:
-set a script-level variable, write a dedicated cleanup function, and
-register it in `report_phase`'s cleanup sequence.
+**Subprocess directory layout.** Each gate phase delegates to a shell
+helper in `skills/release-agent-director/gates/<phase>/`:
 
-`report_phase` is the sole EXIT trap. Its cleanup order is fixed:
+```
+gates/preflight/    gates/branch/       gates/coverage/
+gates/compile/      gates/smoke/        gates/coherence/
+gates/pack/         gates/notes/        gates/publish/
+gates/finalize/
+```
 
-1. `cleanup_stage_dir_if_any` — remove the verify/publish stage temp dir
-2. `cleanup_npmrc_if_any` — remove the transient `.npmrc` token file
-3. print release summary
+**Run report.** `dist/release-report.json` is written on every run (dry
+and live). It captures every phase, every sub-check, every publish substep,
+every diagnostic message, and elapsed time per phase.
 
-Both helpers are no-ops if the corresponding paths were never set
-(e.g. the script failed before `verify_phase` ran).
+**SR-13 outcome dispositions.** On a successful live run the release
+worktree is removed. On failure or dry-run the worktree and all staged
+artifacts are preserved for operator inspection.
 
 #### Go module tagging convention
 
@@ -2324,9 +2271,9 @@ The `pkg/api` Go module is in-repo and shares the root `go.mod` —
 no separate `pkg/api/go.mod` exists. Consumers resolve
 `github.com/gabemahoney/agent-director/pkg/api@$VERSION` via the
 single root tag. If the package is ever split into its own module
-the release script must additionally push `pkg/api/$VERSION` (the
-sub-path tag Go's module protocol requires); `tag_phase` already
-detects this case via `[[ -f pkg/api/go.mod ]]`.
+the release skill must additionally push `pkg/api/$VERSION` (the
+sub-path tag Go's module protocol requires); the publish phase already
+detects this case via the presence of `pkg/api/go.mod`.
 
 ### ErrSchemaMismatch on upgrade
 
@@ -2692,7 +2639,7 @@ Allow-list for (c): `version`, `expire`, `delete`, `find-missing` — verbs whos
 manifests declare no verb-level ErrorNames (errors surface in result maps or are
 untriggerable on Linux).
 
-**Gate — TS client.** The `bun test` suite for `pkg/ts-bun-client/` is gated at release time, not on every PR. It runs locally as part of the `verify` phase in `skills/release-agent-director/release.sh` (step 3/4), against the in-tree source (`cd "$REPO_ROOT/pkg/ts-bun-client" && bun install --frozen-lockfile && bun test`) — distinct from the packed-tarball smoke that precedes it. GitHub Actions are reserved for narrower checks (go-smoke, integration, mac pre-release verify); release-blocking gates run locally so they execute against exactly the tree being tagged.
+**Gate — TS client.** The `bun test` suite for `pkg/ts-bun-client/` is gated at release time, not on every PR. It runs locally as part of the `coverage` phase in the `/release` skill, against the in-tree source (`cd "$REPO_ROOT/pkg/ts-bun-client" && bun install --frozen-lockfile && bun test`) — distinct from the packed-tarball smoke that precedes it. GitHub Actions are reserved for narrower checks (go-smoke, integration, mac pre-release verify); release-blocking gates run locally so they execute against exactly the tree being tagged.
 
 **Gate — Go smoke.** The `.github/workflows/go-smoke.yml` workflow runs `go test -race -count=1 -v ./test/smoke/go/...` on `ubuntu-latest` (linux/amd64) on every pull request and push to `main`. Cross-platform extension to macOS and Windows is Epic 6.
 
