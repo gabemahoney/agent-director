@@ -66,15 +66,17 @@ const SIGKILL_GRACE_MS = 2_000;
 // binaryVersion (SR-4.1): the latter is the CLI's stamped value; this is the
 // library's npm-package version.
 async function loadNpmPackageVersion(): Promise<string> {
+  // b.vod: only swallow the "not resolvable as installed npm package" case.
+  // Anything else (readFile errors, JSON.parse errors) must propagate so real
+  // failures surface instead of silently falling back.
+  let url: URL;
   try {
-    const url = import.meta.resolve("agent-director/package.json");
-    const json = await readFile(new URL(url), "utf8");
-    return (JSON.parse(json) as { version: string }).version;
+    url = new URL(import.meta.resolve("agent-director/package.json"));
   } catch {
-    const url = new URL("../../package.json", import.meta.url);
-    const json = await readFile(url, "utf8");
-    return (JSON.parse(json) as { version: string }).version;
+    url = new URL("../../package.json", import.meta.url);
   }
+  const json = await readFile(url, "utf8");
+  return (JSON.parse(json) as { version: string }).version;
 }
 
 /**
