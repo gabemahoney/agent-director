@@ -1,7 +1,6 @@
 ---
 name: install-agent-director
 description: Install (or upgrade) agent-director on this machine. Runs the bundled install.sh against the user's ~/ — creates ~/.agent-director/ with the binary, warms up state.db, and injects two persistent `agent-director help` hooks into ~/.claude/settings.json (SessionStart + SessionEnd reason=compact). Use this skill when the user says "install agent-director", "set up agent-director", or "upgrade agent-director on this machine".
-version: 0.4.1
 ---
 
 ## First-time install on a brand-new machine
