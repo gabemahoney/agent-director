@@ -157,6 +157,30 @@ Fixture docstrings stay 1-2 lines. Test docstrings stay 1-2 lines. Long-form exp
 - **File over 500 lines?** Parameterize or split by feature.
 - **Mocking more than 3 things?** Test at integration level instead.
 
+## pkg/api/apitest Seed* factory contract
+
+Post-E1 (b.wvr), seed helpers for pkg/api tests live in `pkg/api/apitest/`
+under the standard build tag — no `//go:build helper` gate. New tests that
+need to populate a SQLite store with realistic spawn/permission/template
+state MUST use these factories rather than re-implementing seeding inline.
+
+Exported factories (in pkg/api/apitest/seeds.go):
+- `SeedSpawn(dbPath, id, state, cwd, relayMode, sessionID string, createStore bool) (string, error)`
+- `SeedParentChild(dbPath, parentID, childID string) error`
+- `SeedPermissionRequest(dbPath, spawnID, toolName string) (PermissionRequestSeed, error)`
+- `SeedTemplate(templatesDir, name, body string) (string, error)`
+- `InitStore(dbPath string) (string, error)`
+
+Default behavior on empty arguments (e.g. empty id → generated UUID, empty
+state → "waiting", empty cwd → "/tmp") is documented in seeds.go and
+exercised by pkg/api/apitest/seeds_test.go. Refer to those tests for
+canonical usage patterns.
+
+Why this matters (SR-19.2): re-implementing seeding inline tends to drift
+from the store schema and fixture conventions, masking regressions. The
+shared factories are exercised by their own tests AND by every consumer,
+so any schema break is caught early.
+
 ## Writing Testplans
 
 Above this section is the in-repo Go unit-test guide. *Testplans* are a
