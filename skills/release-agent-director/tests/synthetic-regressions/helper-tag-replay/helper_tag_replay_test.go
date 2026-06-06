@@ -42,6 +42,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -66,12 +67,61 @@ func repoRoot(t *testing.T) string {
 	panic("unreachable")
 }
 
+// seedsMutationLockPath returns the path to the cross-process advisory lock
+// file used to serialize seeds.go mutations across parallel test packages.
+func seedsMutationLockPath(root string) string {
+	return filepath.Join(root, "pkg", "api", "apitest", ".seeds-mutation.lock")
+}
+
+// acquireSeedsLock grabs an exclusive flock on a shared lock file before any
+// test mutates seeds.go.  Two test packages (helper-tag-replay and
+// coverage-go-root-fires) both mutate that file; running them in parallel
+// without serialization causes a marker-not-found race.  The lock is released
+// after t.Cleanup restores the file (t.Cleanup is LIFO: register lock-release
+// first, then file-restore, so restore runs before unlock).
+//
+// NOTE: never call this inside a subprocess invoked by coverage-go-root-fires;
+// that test holds the same lock while running its gate, causing a deadlock.
+// coverage-go-root-fires sets COVERAGE_GO_ROOT_NESTED=1 in its subprocess env;
+// callers should call t.Skip when that variable is set (see TestHelperTagReplay).
+func acquireSeedsLock(t *testing.T, root string) {
+	t.Helper()
+	lockPath := seedsMutationLockPath(root)
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatalf("acquireSeedsLock: open %s: %v", lockPath, err)
+	}
+	// LOCK_EX blocks until no other process holds the lock.
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		t.Fatalf("acquireSeedsLock: flock: %v", err)
+	}
+	// Register lock-release FIRST so it runs AFTER the file-restore cleanup
+	// that the caller registers next (LIFO order).
+	t.Cleanup(func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	})
+}
+
 // TestHelperTagReplay demonstrates AC-1: a wrong-arity call to an apitest
 // symbol is caught by `go build ./...` now that build-tagged helper files have
 // been retired (b.n4v incident, Epic E1).
 func TestHelperTagReplay(t *testing.T) {
+	// ── 0a. Skip when running inside coverage-go-root-fires' inner test run ─
+	// coverage-go-root-fires sets COVERAGE_GO_ROOT_NESTED=1 in the subprocess
+	// env before invoking the gate (which runs go test ./... internally).
+	// Without this skip, the inner TestHelperTagReplay would block on the flock
+	// held by the outer coverage-go-root-fires test, causing a deadlock.
+	if os.Getenv("COVERAGE_GO_ROOT_NESTED") == "1" {
+		t.Skip("skipping seeds.go mutation: running inside coverage.go-root gate inner test suite")
+	}
+
 	root := repoRoot(t)
 	targetFile := filepath.Join(root, "pkg", "api", "apitest", "seeds.go")
+
+	// ── 0b. Serialize access to seeds.go across parallel test packages ──────
+	acquireSeedsLock(t, root)
 
 	// ── 1. Read original bytes ──────────────────────────────────────────────
 	orig, err := os.ReadFile(targetFile)

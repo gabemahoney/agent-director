@@ -22,6 +22,9 @@ tickets/*
 # macOS Finder cruft
 .DS_Store
 
+# Advisory lock file used by seeds.go mutation tests to prevent parallel races.
+pkg/api/apitest/.seeds-mutation.lock
+
 # Test stub binaries — built by `make fake-tmux` / `make ts-helper`.
 test/fake-tmux/tmux
 

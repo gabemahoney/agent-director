@@ -36,6 +36,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -59,6 +60,43 @@ func repoRoot(t *testing.T) string {
 	panic("unreachable")
 }
 
+// seedsMutationLockPath returns the path to the cross-process advisory lock
+// file used to serialize seeds.go mutations across parallel test packages.
+func seedsMutationLockPath(root string) string {
+	return filepath.Join(root, "pkg", "api", "apitest", ".seeds-mutation.lock")
+}
+
+// acquireSeedsLock grabs an exclusive flock on a shared lock file before any
+// test mutates seeds.go.  Two test packages (helper-tag-replay and
+// coverage-go-root-fires) both mutate that file; running them in parallel
+// without serialization causes a marker-not-found race.  The lock is released
+// after t.Cleanup restores the file (t.Cleanup is LIFO: register lock-release
+// first, then file-restore, so restore runs before unlock).
+//
+// NOTE: never call this inside the inner go test ./... that this test triggers
+// via the gate subprocess.  The gate subprocess receives COVERAGE_GO_ROOT_NESTED=1
+// in its environment; callers must call t.Skip when that variable is set (see
+// TestCoverageGoRootFires) so the inner instances never reach this function.
+func acquireSeedsLock(t *testing.T, root string) {
+	t.Helper()
+	lockPath := seedsMutationLockPath(root)
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatalf("acquireSeedsLock: open %s: %v", lockPath, err)
+	}
+	// LOCK_EX blocks until no other process holds the lock.
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		t.Fatalf("acquireSeedsLock: flock: %v", err)
+	}
+	// Register lock-release FIRST so it runs AFTER the file-restore cleanup
+	// that the caller registers next (LIFO order).
+	t.Cleanup(func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	})
+}
+
 // TestCoverageGoRootFires verifies that coverage.go-root fires (exit != 0,
 // stderr contains "gate":"coverage.go-root") when the repo contains a
 // wrong-arity call that fails compilation.
@@ -66,9 +104,19 @@ func TestCoverageGoRootFires(t *testing.T) {
 	if testing.Short() {
 		t.Skip("slow: runs full coverage suite (go test ./... -race -count=1)")
 	}
+	// Skip when running inside the inner go test ./... that this test invokes
+	// via the gate subprocess.  The outer instance passes COVERAGE_GO_ROOT_NESTED=1
+	// through cmd.Env so that the inner instances of this test and
+	// TestHelperTagReplay both skip, preventing flock deadlock.
+	if os.Getenv("COVERAGE_GO_ROOT_NESTED") == "1" {
+		t.Skip("skipping recursive invocation from coverage.go-root gate inner test suite")
+	}
 
 	root := repoRoot(t)
 	targetFile := filepath.Join(root, "pkg", "api", "apitest", "seeds.go")
+
+	// ── 0. Serialize access to seeds.go across parallel test packages ───────
+	acquireSeedsLock(t, root)
 
 	// ── 1. Read original bytes ──────────────────────────────────────────────
 	orig, err := os.ReadFile(targetFile)
@@ -105,9 +153,14 @@ func TestCoverageGoRootFires(t *testing.T) {
 	}
 
 	// ── 4. Run coverage.go-root gate ───────────────────────────────────────
+	// Pass COVERAGE_GO_ROOT_NESTED=1 through the subprocess environment so that
+	// any inner go test ./... invocations (triggered by the gate) skip the seeds.go
+	// mutation tests (TestHelperTagReplay and TestCoverageGoRootFires), preventing
+	// flock deadlock and infinite recursion.
 	gateScript := filepath.Join(root, "skills", "release-agent-director", "gates", "coverage", "go-root.sh")
 	cmd := exec.Command("bash", gateScript)
 	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "COVERAGE_GO_ROOT_NESTED=1")
 	var stderrBuf strings.Builder
 	cmd.Stderr = &stderrBuf
 	// stdout flows to the test log for progress visibility
