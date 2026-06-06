@@ -67,7 +67,7 @@ NO_HOOKS=0
 KEEP_PRIOR=0
 
 # GitHub repo slug used by --from-release. Matches go.mod's module path
-# and the release.sh asset naming.
+# and the /release skill's asset naming.
 readonly RELEASE_REPO_SLUG="gabemahoney/agent-director"
 
 # Pick a sensible default symlink dir: ~/.local/bin if on PATH.
@@ -190,7 +190,7 @@ if [[ "$FROM_RELEASE" -eq 1 ]]; then
         Darwin) rel_os="darwin" ;;
         *)
             echo "install.sh: --from-release: unsupported OS $(uname -s)" >&2
-            echo "  release.sh only publishes linux and darwin builds." >&2
+            echo "  the /release skill only publishes linux and darwin builds." >&2
             exit 3 ;;
     esac
     case "$(uname -m)" in
@@ -236,7 +236,7 @@ if [[ "$FROM_RELEASE" -eq 1 ]]; then
     # ----------------------------------------------------------------
     # CDN-propagation retry (b.kym).
     #
-    # For ~30 minutes after `release.sh` finishes, GitHub's release-
+    # For ~30 minutes after the /release skill finishes, GitHub's release-
     # asset CDN can return 404 (or 403 while the asset is mid-publish)
     # to unauthenticated curl, even though the asset is on the release
     # page in the web UI and `gh release download` (auth path) works

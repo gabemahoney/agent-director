@@ -2,8 +2,8 @@
 
 This directory contains the gate-subprocess infrastructure for the
 `release-agent-director` skill. Each gate is an independent executable that
-enforces one release invariant. The LLM orchestrator (`release.sh`) runs
-gates as subprocesses, collects their outcomes, and ultimately writes a
+enforces one release invariant. The LLM orchestrator (the `/release` skill)
+runs gates as subprocesses, collects their outcomes, and ultimately writes a
 structured report via the finalize helper.
 
 ## Gate Contract

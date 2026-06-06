@@ -174,8 +174,8 @@ test(
       // Step 5: Stamp version sites (b.ue3 / Epic 4 — umbrella + skill only).
       //
       // Run the STAGED copy via a relative path so import.meta.url resolves
-      // within the stage dir — mirrors release.sh `cd $stage_dir && bun run
-      // scripts/version-bump.ts`.
+      // within the stage dir — mirrors the /release skill's branch-and-bump
+      // gate: `cd $stage_dir && bun run scripts/version-bump.ts`.
       // -----------------------------------------------------------------------
 
       const bumpResult = await spawn(
