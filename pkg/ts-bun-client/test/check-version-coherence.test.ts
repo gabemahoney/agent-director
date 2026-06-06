@@ -10,7 +10,6 @@
  *       platforms/
  *         linux-x64/   bin/agent-director (shell stub), package.json
  *         darwin-arm64/ bin/agent-director (shell stub), package.json
- *     skills/install-agent-director/SKILL.md
  */
 
 import { test, expect, describe } from "bun:test";
@@ -44,10 +43,6 @@ function makeStub(version: string): string {
   return `#!/bin/sh\necho '{"version":"${version}","commit":"${STUB_COMMIT}"}'\n`;
 }
 
-function makeSkillMd(version: string): string {
-  return `---\nname: install-agent-director\nversion: ${version}\ndescription: Install agent-director\n---\nBody content.\n`;
-}
-
 // ---------------------------------------------------------------------------
 // Staging tree factory
 // ---------------------------------------------------------------------------
@@ -60,7 +55,6 @@ interface StagingTree {
   darwinPkgPath: string;   // path computed even when omitDarwin=true
   linuxBinPath: string;
   darwinBinPath: string;   // path computed even when omitDarwin=true
-  skillMdPath: string;
   distIndexJsPath: string;
   /** Path to the tarball-shasums.txt manifest for --scope publish tests (Epic 4 / SR-1.3). */
   shasumsPath: string;
@@ -76,8 +70,6 @@ interface StagingTreeOpts {
   site3bVersion?: string;
   /** "file" = file: opt-dep paths; "pin" = ^X.Y.Z pins (site 4). Default: "file". */
   site4Mode?: "file" | "pin";
-  /** SKILL.md frontmatter version (site 5). Default: EXPECTED. */
-  site5Version?: string;
   /** When true, skip creating the darwin-arm64 platform directory. */
   omitDarwin?: boolean;
   /** Content to write into dist/index.js (site-dist-no-inline). Default: clean stub. */
@@ -100,7 +92,6 @@ function makeStagingTree(opts: StagingTreeOpts = {}): StagingTree {
     site3aVersion = EXPECTED,
     site3bVersion = EXPECTED,
     site4Mode = "file",
-    site5Version = EXPECTED,
     omitDarwin = false,
     distIndexJsContent = DEFAULT_DIST_INDEX_JS,
   } = opts;
@@ -110,10 +101,9 @@ function makeStagingTree(opts: StagingTreeOpts = {}): StagingTree {
   const scriptsDir = join(pkgDir, "scripts");
   const linuxDir = join(pkgDir, "platforms", "linux-x64");
   const darwinDir = join(pkgDir, "platforms", "darwin-arm64");
-  const skillDir = join(root, "skills", "install-agent-director");
   const distDir = join(pkgDir, "dist");
 
-  const dirs = [scriptsDir, join(linuxDir, "bin"), skillDir, distDir];
+  const dirs = [scriptsDir, join(linuxDir, "bin"), distDir];
   if (!omitDarwin) dirs.push(join(darwinDir, "bin"));
   for (const d of dirs) mkdirSync(d, { recursive: true });
 
@@ -171,10 +161,6 @@ function makeStagingTree(opts: StagingTreeOpts = {}): StagingTree {
     chmodSync(darwinBinPath, 0o755);
   }
 
-  // SKILL.md (site 5)
-  const skillMdPath = join(skillDir, "SKILL.md");
-  writeFileSync(skillMdPath, makeSkillMd(site5Version), "utf8");
-
   // dist/index.js (site-dist-no-inline) — exports MIN_BINARY_VERSION by default
   // so the floor-lockstep gate passes (b.ue3 / SR-5.4).
   const distIndexJsPath = join(distDir, "index.js");
@@ -211,7 +197,6 @@ function makeStagingTree(opts: StagingTreeOpts = {}): StagingTree {
     darwinPkgPath,
     linuxBinPath,
     darwinBinPath,
-    skillMdPath,
     distIndexJsPath,
     shasumsPath,
     cleanup() {
@@ -256,7 +241,7 @@ function runCheck(
 // ---------------------------------------------------------------------------
 
 describe("check-version-coherence happy path", () => {
-  test("--scope publish: sites 3a + 5 stamped + floor lockstep + tarball SHA → exit 0, empty stderr", () => {
+  test("--scope publish: site 3a stamped + floor lockstep + tarball SHA → exit 0, empty stderr", () => {
     const tree = makeStagingTree();
     try {
       const r = runCheck(
@@ -271,7 +256,7 @@ describe("check-version-coherence happy path", () => {
     }
   });
 
-  test("--scope verify: sites 3a + 5 stamped → exit 0", () => {
+  test("--scope verify: site 3a stamped → exit 0", () => {
     const tree = makeStagingTree();
     try {
       const r = runCheck(tree.scriptPath, [
@@ -307,14 +292,6 @@ const PER_SITE_CASES: Array<{
     actual: WRONG,
     expected: EXPECTED,
   },
-  {
-    label: "site-5: SKILL.md has wrong version",
-    opts: { site5Version: WRONG },
-    scope: "publish",
-    filePath: (t) => t.skillMdPath,
-    actual: WRONG,
-    expected: EXPECTED,
-  },
 ];
 
 describe("check-version-coherence per-site failures", () => {
@@ -335,29 +312,6 @@ describe("check-version-coherence per-site failures", () => {
       }
     });
   }
-});
-
-// ---------------------------------------------------------------------------
-// 3. Multi-site failure — all sites checked before exit (no short-circuit)
-// ---------------------------------------------------------------------------
-
-describe("check-version-coherence multi-site failure", () => {
-  test("site-3a and site-5 both wrong → both failure lines present in single stderr", () => {
-    const tree = makeStagingTree({ site3aVersion: WRONG, site5Version: WRONG });
-    try {
-      const r = runCheck(tree.scriptPath, [
-        "--scope", "publish",
-        "--expected-version", EXPECTED,
-      ]);
-      expect(r.exitCode).not.toBe(0);
-      expect(r.stderr).toContain("[site-3a]");
-      expect(r.stderr).toContain(tree.umbrellaPkgPath);
-      expect(r.stderr).toContain("[site-5]");
-      expect(r.stderr).toContain(tree.skillMdPath);
-    } finally {
-      tree.cleanup();
-    }
-  });
 });
 
 // ---------------------------------------------------------------------------
