@@ -9,7 +9,8 @@ epic-06-discover
 epic-07-templates
 epic-08-recovery
 epic-09-resume
-epic-10-relay
+# DROPPED 2026-06-06 — see b.2us: 8 t2 cases call `decide` without `--request-token` (required since b.m61 fb4a3ac); positive cases wedge the driver via orphaned hook subshell holding captured pipe
+# epic-10-relay
 epic-11-mcp
 epic-12-install
 # DROPPED 2026-06-06 — see b.z2w: release.sh deleted by b.wvr; release-postconditions Go tests cover invariants
