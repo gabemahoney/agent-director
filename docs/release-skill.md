@@ -159,6 +159,23 @@ This is the first mutation in the pipeline.
 tests, `bun test`, and any docker-harness integration tests enumerated in the
 Epic list. A single test failure aborts the release.
 
+## Docker harness EPIC enumeration
+
+The coverage phase discovers the Docker harness EPIC set programmatically via:
+
+```bash
+make list-test-docker-epics
+```
+
+This prints one EPIC slug per line on stdout and exits zero on success. If the
+source file (`test/docker-epics.txt`) is missing or unreadable, the target exits
+non-zero. The caller (the /release skill's coverage gate) treats an empty
+output set as a release-blocker — a release that doesn't exercise any Docker
+EPICs is not a complete pre-publish run.
+
+Each slug can be invoked individually via `make test-docker EPIC=<slug>` to
+run that EPIC's testplan in the harness container.
+
 **`compile`** *(E6)* — Cross-compiles the three CLI binaries
 (`linux/amd64`, `linux/arm64`, `darwin/arm64`), runs a per-binary smoke check,
 and verifies that the binary version string matches the target semver.

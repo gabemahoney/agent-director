@@ -1,6 +1,6 @@
 .PHONY: all build test generate lint err-coherence nondet-coverage \
         check-doccomments test-install-sh \
-        test-image test-image-smoke test-docker test-docker-install-mode \
+        test-image test-image-smoke test-docker test-docker-install-mode list-test-docker-epics \
         release-binaries release-binaries-smoke \
         release-shellcheck release-bats release-smoke \
         consumer-dryrun \
@@ -153,6 +153,19 @@ test-docker: test-image
 		-v "$(CURDIR)/tickets/testplans:/work/tickets/testplans:ro" \
 		-v "$(CURDIR):/work/source:ro" \
 		$(TEST_IMAGE)
+
+# list-test-docker-epics emits one Docker harness EPIC slug per line on
+# stdout, reading from test/docker-epics.txt (blank lines and comments
+# stripped). Consumed by the /release skill's coverage gate (E5) to
+# discover the test-docker EPIC set programmatically. Exits zero on
+# success; non-zero only if the source file is missing.
+.PHONY: list-test-docker-epics
+list-test-docker-epics:
+	@if [ ! -f test/docker-epics.txt ]; then \
+		echo "ERROR: test/docker-epics.txt not found" >&2; \
+		exit 1; \
+	fi
+	@grep -vE '^[[:space:]]*(#|$$)' test/docker-epics.txt
 
 # test-docker-install-mode runs the b.r3j install-mode regression suite
 # inside the harness container. Each scenario invokes install.sh under a
