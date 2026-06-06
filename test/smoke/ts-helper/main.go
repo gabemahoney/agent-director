@@ -31,7 +31,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 func main() {
@@ -107,7 +107,7 @@ func cmdSeedSpawn(args []string, stdout, stderr io.Writer) int {
 		*id = uuid.NewString()
 	}
 
-	instanceID, err := api.HelperSeedSpawn(*storePath, *id, *state, *cwd, *relayMode, *sessionID, *createStore)
+	instanceID, err := apitest.SeedSpawn(*storePath, *id, *state, *cwd, *relayMode, *sessionID, *createStore)
 	if err != nil {
 		printError(stderr, err)
 		return 1
@@ -152,7 +152,7 @@ func cmdSeedParentChild(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	if err := api.HelperSeedParentChild(*storePath, *parentID, *childID); err != nil {
+	if err := apitest.SeedParentChild(*storePath, *parentID, *childID); err != nil {
 		printError(stderr, err)
 		return 1
 	}
@@ -197,7 +197,7 @@ func cmdSeedPermissionRequest(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	seed, err := api.HelperSeedPermissionRequest(*storePath, *spawnID, *toolName)
+	seed, err := apitest.SeedPermissionRequest(*storePath, *spawnID, *toolName)
 	if err != nil {
 		printError(stderr, err)
 		return 1
@@ -243,7 +243,7 @@ func cmdSeedTemplate(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	outPath, err := api.HelperSeedTemplate(*templatesDir, *name, *body)
+	outPath, err := apitest.SeedTemplate(*templatesDir, *name, *body)
 	if err != nil {
 		printError(stderr, err)
 		return 1
@@ -274,7 +274,7 @@ func cmdSeedEmptyStore(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	path, err := api.HelperInitStore(*storePath)
+	path, err := apitest.InitStore(*storePath)
 	if err != nil {
 		printError(stderr, err)
 		return 1
