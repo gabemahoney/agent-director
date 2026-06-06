@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/user"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -169,14 +168,13 @@ func TestStorePathOptionsWins(t *testing.T) {
 // --- Case 6: tilde expansion --------------------------------------------------
 
 // TestTildeExpansion verifies that "~/..." in StorePath and ConfigPath are
-// expanded correctly. api.expandTilde uses user.Current() (CGO path) which
-// ignores $HOME, so we use the real home dir with PID-scoped filenames.
+// expanded correctly. api.expandTilde uses os.UserHomeDir() which honours
+// $HOME — consistent with shell convention and internal/config.
 func TestTildeExpansion(t *testing.T) {
-	u, err := user.Current()
+	home, err := os.UserHomeDir()
 	if err != nil {
-		t.Skipf("cannot resolve current user home: %v", err)
+		t.Skipf("cannot resolve home dir: %v", err)
 	}
-	home := u.HomeDir
 
 	storeBase := fmt.Sprintf(".ad-test-store-%d.db", os.Getpid())
 	cfgBase := fmt.Sprintf(".ad-test-cfg-%d.toml", os.Getpid())
@@ -202,6 +200,24 @@ func TestTildeExpansion(t *testing.T) {
 	}
 	if cerr := client.Close(); cerr != nil {
 		t.Fatalf("Close: %v", cerr)
+	}
+}
+
+// --- Case 6b: expandTilde honours $HOME (regression b.6k1) -------------------
+
+// TestExpandTildeHonorsHOMEEnv asserts that expandTilde resolves "~/" using
+// $HOME, not the passwd-database entry — catching the os/user.Current() regression.
+func TestExpandTildeHonorsHOMEEnv(t *testing.T) {
+	tmpdir := t.TempDir()
+	t.Setenv("HOME", tmpdir)
+
+	got, err := api.ExpandTildeForTest("~/foo")
+	if err != nil {
+		t.Fatalf("expandTilde: %v", err)
+	}
+	want := filepath.Join(tmpdir, "foo")
+	if got != want {
+		t.Errorf("expandTilde honoured wrong home: got %q, want %q (HOME=%q)", got, want, tmpdir)
 	}
 }
 

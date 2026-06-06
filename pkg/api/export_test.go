@@ -17,3 +17,6 @@ var FindMissing = findMissingImpl
 // Resume exposes the unexported resumeImpl for white-box unit tests in
 // package api_test. External callers use (c *Client).Resume instead.
 var Resume = resumeImpl
+
+// ExpandTildeForTest exposes expandTilde for the b.6k1 regression test.
+var ExpandTildeForTest = expandTilde

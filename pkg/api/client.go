@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"os/user"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -208,15 +208,15 @@ func resolveStorePath(optsStorePath string, cfg config.Config) (string, error) {
 	return expandTilde(defaultStorePath)
 }
 
-// expandTilde resolves a leading "~/" in path against the current user's
-// home directory. Paths without a leading "~/" are returned unchanged.
+// expandTilde resolves a leading "~/" using os.UserHomeDir (honours $HOME,
+// consistent with internal/config and shell convention).
 func expandTilde(path string) (string, error) {
 	if !strings.HasPrefix(path, "~/") {
 		return path, nil
 	}
-	u, err := user.Current()
+	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("expand tilde: %w", err)
 	}
-	return filepath.Join(u.HomeDir, strings.TrimPrefix(path, "~/")), nil
+	return filepath.Join(home, path[2:]), nil
 }
