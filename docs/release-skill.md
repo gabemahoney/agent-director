@@ -269,6 +269,75 @@ Subprocesses: `pkg/ts-bun-client/scripts/generate-release-notes.ts`, `skills/rel
 tag, `gh release create`, fast-forward `main` to the release branch tip, delete
 the remote release branch. Skipped entirely in dry-run mode.
 
+### Publish phase
+
+The publish phase executes six substeps strictly in order. Halt-on-first-
+failure; no automatic rollback (see Recovery cheatsheet below).
+
+| # | Gate | Real command | Dry-run behavior |
+|---|------|--------------|------------------|
+| 1 | `publish.push-branch` | `git push origin release/v<target>` | "would do" log line; skipped |
+| 2 | `publish.create-tag` | `git tag -a v<target>` + `git push origin v<target>` | "would do"; skipped |
+| 3 | `publish.gh-release` | `gh release create v<target> --notes-file <notes> <binaries>` | "would do"; skipped |
+| 4 | `publish.npm-publish` | `npm publish <tarball>` (umbrella package) | "would do"; skipped |
+| 5 | `publish.fast-forward-main` | `git checkout main && git merge --ff-only release/v<target> && git push origin main` | "would do"; skipped |
+| 6 | `publish.delete-remote-branch` | `git push origin --delete release/v<target>` | "would do"; skipped |
+
+The "would do" log lines are emitted to stderr in dry-run mode and look like:
+```
+[publish.push-branch] would do: git push origin release/v0.7.5
+```
+
+AC-7 guarantee: dry-run mode has zero observable side effects on GitHub or
+npm. Every substep is recorded in `dist/release-report.json` under
+`publish_substeps` with `outcome: skipped` and the would-be command captured
+verbatim.
+
+Subprocess: `skills/release-agent-director/gates/publish/publish-orchestrator.sh`.
+
+### Recovery cheatsheet
+
+If a publish substep fails, the diagnostic in `dist/release-report.json`
+identifies the failed substep + the list of prior substeps that succeeded.
+Use this table to find the recovery procedure:
+
+| Failed at | Prior succeeded | Recovery commands |
+|-----------|-----------------|-------------------|
+| `push-branch` | (none) | No state to undo. Fix the cause, re-run. |
+| `create-tag` | push-branch | `git push origin --delete v<target>` (if tag was pushed); `git tag -d v<target>` (locally); `git push origin --delete release/v<target>` |
+| `gh-release` | push-branch, create-tag | `gh release delete v<target> --yes` (if release was created); `git push origin --delete v<target>`; `git tag -d v<target>`; `git push origin --delete release/v<target>` |
+| `npm-publish` | push-branch, create-tag, gh-release | NPM publish is **permanent** — no rollback. Either complete the release manually (ff main + delete branch) or accept the published version and create the next bump. `gh release delete` is optional. |
+| `fast-forward-main` | (through npm-publish) | `git fetch && git checkout main && git merge --ff-only release/v<target> && git push origin main` |
+| `delete-remote-branch` | (through fast-forward-main) | `git push origin --delete release/v<target>` |
+
+**No automatic rollback.** The skill does not attempt to undo prior
+substeps when a later substep fails. Manual recovery preserves operator
+visibility into exactly what state the world is in.
+
+**Auth failures are surfaced verbatim.** A 401/403 from `git push`, `gh
+release create`, or `npm publish` appears in the diagnostic's
+`upstream_response_verbatim` field. The skill does NOT pre-verify
+publisher identity (the preflight gates check token presence + whoami
+but cannot guarantee the token has the right scopes).
+
+### Finalize semantics
+
+After the pipeline completes (success, failure, or dry-run), the skill
+writes the final `dist/release-report.json` and decides what to do with
+the worktree:
+
+| Outcome | Worktree | Branch | dist/ artifacts |
+|---------|----------|--------|------------------|
+| `--release` success | removed via `git worktree remove --force` | local branch deleted | preserved in original worktree, but worktree itself is gone |
+| `--release` failure (any prior phase) | preserved | preserved | preserved |
+| `--dry-run` (any outcome) | preserved | preserved | preserved |
+
+In failure or dry-run cases the operator can inspect the worktree's `dist/`
+directory directly: notes preview, sha256sums manifest, packed tarball,
+cross-compiled binaries.
+
+Subprocess: `skills/release-agent-director/gates/finalize/cleanup.sh`.
+
 **`finalize`** *(E4+)* — Writes `dist/release-report.json` via
 `write-report.sh` and prints a condensed terminal summary. Runs unconditionally
 at end-of-run.
