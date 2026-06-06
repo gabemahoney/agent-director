@@ -234,14 +234,14 @@ consumer-dryrun:
 	cd tools/consumer-dryrun && go build ./...
 
 # ts-helper builds the fixture-seeding CLI used by TypeScript smoke tests.
-# Compiled exclusively with -tags helper so production binaries are unaffected.
-# modernc.org/sqlite is pure Go; CGO_ENABLED=0 suffices.
-# The target is incremental: it depends on every source file that feeds the
-# binary, so make skips the build when nothing has changed.
-TS_HELPER_SRCS := $(wildcard test/smoke/ts-helper/*.go) pkg/api/export_for_helper.go
+# Built like any other binary (no special build tags); source lives entirely
+# under test/smoke/ts-helper/. modernc.org/sqlite is pure Go; CGO_ENABLED=0
+# suffices. The target is incremental: it depends on every source file that
+# feeds the binary, so make skips the build when nothing has changed.
+TS_HELPER_SRCS := $(wildcard test/smoke/ts-helper/*.go)
 
 bin/ts-helper: $(TS_HELPER_SRCS)
-	CGO_ENABLED=0 go build -tags helper -o bin/ts-helper ./test/smoke/ts-helper/
+	CGO_ENABLED=0 go build -o bin/ts-helper ./test/smoke/ts-helper/
 
 ts-helper: bin/ts-helper
 

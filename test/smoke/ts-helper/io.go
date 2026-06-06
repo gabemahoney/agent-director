@@ -1,5 +1,3 @@
-//go:build helper
-
 package main
 
 import (
