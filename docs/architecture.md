@@ -190,7 +190,7 @@ a silent downgrade fails `Open` rather than yielding a half-broken Store.
 **File-system contract.** The parent directory (`~/.agent-director/` by
 default) is created with mode 0700, and the database file is chmodded to
 0600 on every `Open`. Repeated opens never widen permissions. A leading
-`~/` in the path is expanded against `os/user.Current().HomeDir`.
+`~/` in the path is expanded via `os.UserHomeDir()`, which honours the `$HOME` environment variable.
 
 Cross-reference: SRD §4.2 (canonical DDL), §4.5 (layer boundaries), §13.3
 (single-writer + WAL rationale).
