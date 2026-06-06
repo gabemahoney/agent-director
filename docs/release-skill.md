@@ -196,7 +196,7 @@ run that EPIC's testplan in the harness container.
 
 ### Cross-compile phase (`compile.<plat>`)
 - The Makefile's `release-binaries` recipe loops over linux/amd64, linux/arm64, darwin/arm64 (the SR-7.1 supported platform set; verified by the preflight invariant gate).
-- Each binary is stamped with the target version via `-X $(VERSION_PKG).Version=<target>` ldflags. Target is read from `pkg/ts-bun-client/package.json` via the Makefile change introduced in E3.
+- Each binary is stamped with the target version via `-X $(VERSION_PKG).Version=<target>` ldflags. `cross-compile.sh` reads the target version from `pkg/ts-bun-client/package.json` via `jq` and exports it as `AGENT_DIRECTOR_BUILD_VERSION` before invoking `make release-binaries`; a caller-supplied `AGENT_DIRECTOR_BUILD_VERSION` is honored without overwrite.
 - The gate `compile.<plat>` produces one sub-check per platform (compile.linux-amd64, compile.linux-arm64, compile.darwin-arm64).
 - SR-7.2: No Go source file may carry a literal release-version constant. The `compile.no-literal-version-constant` gate enforces this — `internal/version/version.go`'s `var Version = "dev"` is the only allowed default; anything matching a SemVer literal fires the gate.
 - Subprocess: `skills/release-agent-director/gates/compile/cross-compile.sh`.
