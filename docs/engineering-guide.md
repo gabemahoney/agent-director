@@ -65,24 +65,34 @@ Tests prove the code works. Missing tests mean you're guessing.
 
 ## 7. Build pipeline: version stamping
 
-The CLI binary's `version` field in `version --json` output is stamped at
-build time via `-ldflags -X`. The contract (SR-2.6) is:
+`pkg/ts-bun-client/package.json`'s `version` field is the **sole
+authoritative version source** for the entire repo (SR-16). Everything
+else — binary ldflags, npm package, release notes — derives from it.
 
-- **Tagged release builds** stamp clean strict SemVer 2.0 as `X.Y.Z` — no
-  leading `v`, no build metadata, no git-describe suffix, no decoration of
-  any kind. Only `skills/release-agent-director/release.sh` produces this
-  stamp; it overrides the Makefile's `VERSION_LDFLAGS` with the
-  tag-derived plain-semver value during `build_phase`.
-- **Every other build** (dev trees, CI on branches, contributor `make
-  build`, plain `go build`) stamps the dev-sentinel literal `0.0.0-dev`.
-  The library's discovery pipeline short-circuits on this value so a
-  dev-stamped binary is never classified as too old.
+- **Release builds** (`make release-binaries`): reads the version from
+  `pkg/ts-bun-client/package.json` via `jq -r '.version'` and passes the
+  resolved value as `-X $(VERSION_PKG).Version=<value>` ldflags to each
+  cross-compiled binary target. The binary's `version` verb reports this
+  exact string.
+- **Dev builds** (`make build` and every other non-release target): stamps
+  the dev-sentinel literal `0.0.0-dev`. The library's discovery pipeline
+  short-circuits on this value so a dev-stamped binary is never classified
+  as too old.
 
 **Contributor override.** Set `AGENT_DIRECTOR_BUILD_VERSION=X.Y.Z` to
-test strict-semver behavior against a local build. Any non-empty value
-is stamped verbatim; the caller is responsible for passing a value the
-library's strict-SemVer-2.0 parser can accept (otherwise the discovery
-pipeline will classify the binary as `unparseable-version`).
+override the stamped version for **any** target, including
+`release-binaries`. Any non-empty value is stamped verbatim; the caller is
+responsible for passing a value the library's strict-SemVer-2.0 parser can
+accept (otherwise the discovery pipeline will classify the binary as
+`unparseable-version`).
+
+**SR-16 invariant gate.** `pkg/ts-bun-client/scripts/check-source-of-truth.ts`
+enforces that no other authoritative version sites exist outside the
+derivation chain — it flags any `package.json` (other than the canonical
+one), `SKILL.md` frontmatter, Makefile literal `VERSION` assignment,
+`internal/version` literal constant, or dist artifact that carries an
+independent version string. This gate runs as part of the `/release`
+skill's pre-publish check surface (introduced by Epic E4).
 
 The library's strict parser deliberately rejects every shape that isn't
 clean `X.Y.Z` (optionally with a `-prerelease` segment): leading `v`,
@@ -114,18 +124,27 @@ fires (SR-8.11):
    release time).
 2. `bun run typecheck` clean.
 3. `bun run lint` clean.
-4. `scripts/check-version-coherence.ts --scope verify` — all sites
-   agree on the expected version; floor-lockstep gate confirms
+4. `scripts/check-version-coherence.ts --scope verify` — all version
+   sites agree on the expected version; floor-lockstep gate confirms
    `version-floor.json` / `dist/version-floor.json` / bundled
    `MIN_BINARY_VERSION` are in lockstep; `dist/index.js` carries no
-   `NPM_PACKAGE_VERSION` identifier or `"0.0.0"` placeholder.
+   `NPM_PACKAGE_VERSION` identifier or `"0.0.0"` placeholder. (The
+   `SKILL.md` frontmatter site is no longer checked — it has been
+   removed from the version-site inventory.)
 5. `scripts/check-version-coherence.ts --scope publish` — re-runs the
    verify checks and additionally SHA-256-rounds-trips every staged
-   tarball.
-6. Docker testplans under `tickets/testplans/b.ue3/` — all nine pass on
+   tarball. (Same scope caveat as gate 4: `SKILL.md` frontmatter is no
+   longer a tracked site.)
+6. **Source-of-truth invariant** (`pkg/ts-bun-client/scripts/check-source-of-truth.ts`,
+   SR-16) — confirms that `pkg/ts-bun-client/package.json` is the only
+   authoritative version string in the repo; fails if any other
+   `package.json`, `SKILL.md` frontmatter, Makefile literal `VERSION`
+   assignment, `internal/version` literal constant, or dist artifact
+   carries an independent version string outside the derivation chain.
+7. Docker testplans under `tickets/testplans/b.ue3/` — all nine pass on
    `linux/x64` (`darwin/arm64` coverage is implicit via developer-host
    integration tests).
-7. `npm publish --dry-run` produces a tarball whose composition matches
+8. `npm publish --dry-run` produces a tarball whose composition matches
    the SR-6.1 positive list and the SR-6.2 negative-space exclusions
    (asserted by `pkg/ts-bun-client/test/packaging.test.ts`).
 
