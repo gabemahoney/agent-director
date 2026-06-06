@@ -16,4 +16,13 @@
 //   - SeedJsonl         ← pkg/api/resume_test.go   :: seedJsonl
 //   - SeedStore         ← pkg/api/client_test.go   :: seedStore
 //   - OpenStoreWithRow  ← pkg/api/sendkeys_test.go :: openStoreWithRow
+//
+// # Migrated from pkg/api/export_for_helper.go (helper-tag retirement, b.wvr E1)
+//
+//   - SeedSpawn              ← HelperSeedSpawn
+//   - SeedParentChild        ← HelperSeedParentChild
+//   - SeedPermissionRequest  ← HelperSeedPermissionRequest
+//   - PermissionRequestSeed  ← PermissionRequestSeed (result type for SeedPermissionRequest)
+//   - SeedTemplate           ← HelperSeedTemplate
+//   - InitStore              ← HelperInitStore
 package apitest
