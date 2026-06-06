@@ -1,6 +1,6 @@
 {
   "name": "agent-director",
-  "version": "0.7.5",
+  "version": "0.7.6",
   "type": "module",
   "os": ["linux", "darwin"],
   "cpu": ["x64", "arm64"],
