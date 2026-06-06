@@ -25,8 +25,13 @@ const FIXTURES = path.resolve(import.meta.dir, "fixtures/epic-a");
 // ---------------------------------------------------------------------------
 // readFile spy — counts calls made by loadNpmPackageVersion() inside
 // subprocessClient.ts. Reset in beforeEach so each test starts at zero.
+//
+// `throwOnNextReadFile`, when set, makes the next readFile call throw the
+// supplied error and resets the latch. Used by the b.vod regression to
+// inject a non-fallback error and assert it propagates.
 // ---------------------------------------------------------------------------
 let readFileCallCount = 0;
+let throwOnNextReadFile: Error | null = null;
 
 mock.module("node:fs/promises", () => ({
   readFile: async (
@@ -34,6 +39,11 @@ mock.module("node:fs/promises", () => ({
     options?: string | { encoding?: string }
   ) => {
     readFileCallCount++;
+    if (throwOnNextReadFile) {
+      const e = throwOnNextReadFile;
+      throwOnNextReadFile = null;
+      throw e;
+    }
     // Use Bun.file (not node:fs/promises) to avoid circular recursion.
     const text = await Bun.file(url).text();
     const enc =
@@ -116,6 +126,40 @@ describe("loadNpmPackageVersion cache (SR-3.3)", () => {
         // The second call skips loadNpmPackageVersion() entirely.
         expect(readFileCallCount).toBe(1);
       } finally {
+        if (prevSleepMs === undefined) {
+          delete process.env.SLEEP_MS;
+        } else {
+          process.env.SLEEP_MS = prevSleepMs;
+        }
+      }
+    },
+    { timeout: 15000 }
+  );
+
+  test(
+    "b.vod: non-fallback readFile error propagates instead of being silently swallowed",
+    async () => {
+      const fixturePath = path.join(FIXTURES, "sleep-and-respond.js");
+      const client = await makeClient(fixturePath);
+
+      const prevSleepMs = process.env.SLEEP_MS;
+      process.env.SLEEP_MS = "0";
+
+      try {
+        // Inject a real (non-MODULE_NOT_FOUND / non-ENOENT) error. Pre-fix the
+        // catch in loadNpmPackageVersion would swallow this and fall back; post-
+        // fix the catch is narrowed to import.meta.resolve() only and any
+        // readFile error must propagate.
+        const eacces = new Error("EACCES: permission denied");
+        (eacces as unknown as { code: string }).code = "EACCES";
+        throwOnNextReadFile = eacces;
+
+        type ClientV = { version(p: object): Promise<unknown> };
+        const c = client as unknown as ClientV;
+
+        await expect(c.version({})).rejects.toThrow(/EACCES/);
+      } finally {
+        throwOnNextReadFile = null;
         if (prevSleepMs === undefined) {
           delete process.env.SLEEP_MS;
         } else {
