@@ -1,0 +1,23 @@
+# Canonical list of Docker harness EPIC slugs supported by `make test-docker EPIC=<slug>`.
+# Each line is one slug. Blank lines and lines starting with # are ignored.
+# Consumers: `make list-test-docker-epics` (auto-enumerates this file) and
+# the /release skill's coverage gate (E5).
+epic-03-spawn
+epic-04-interact
+epic-05-stop
+epic-06-discover
+epic-07-templates
+epic-08-recovery
+epic-09-resume
+epic-10-relay
+epic-11-mcp
+epic-12-install
+epic-13-release
+harness-smoke
+installsh-preflight-gates
+postinstall-platform-refusal
+postinstall-skill-copy
+release-postinstall-verify
+subprocess-client
+subprocess-coverage
+template-overwrite
