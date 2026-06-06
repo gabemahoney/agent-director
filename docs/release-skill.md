@@ -218,9 +218,52 @@ run that EPIC's testplan in the harness container.
 install-verifies the tarball into a temp `HOME`, and checks the tarball for
 coherence (no inline version constants, expected files present, etc.).
 
+### Pack + install + coherence phase
+
+Three sub-phase blocks fire sequentially:
+
+**Pack**
+- `pack.first` — invokes `bun pm pack` in a fresh staging dir; produces `dist/agent-director-<target>.tgz`. Asserts the embedded `package.json` version equals `<target>`.
+- `pack.second` — packs again into a separate staging dir.
+- `pack.byte-identical-normalized` — extracts both tarballs and runs `diff -rq` on the contents. Catches nondeterministic packaging.
+- `pack.sha256-manifest` — writes `dist/sha256sums` covering the tarball + the three SR-7 binaries.
+
+Subprocesses: `skills/release-agent-director/gates/pack/pack-first.sh`,
+`skills/release-agent-director/gates/pack/repack-and-verify.sh`.
+
+**Install**
+- `install.clean-env` — creates a clean temp dir (outside the worktree), runs `npm install <tarball> --no-package-lock --no-save`.
+- `install.verify-pkg` — `bun --eval` imports the installed package and asserts the `Client` export exists. Narrower than verify-installed-pkg.ts --smoke (which spawns the CLI); the structural import check is what SR-10 needs.
+
+Subprocess: `skills/release-agent-director/gates/pack/install-verify.sh`.
+
+**Coherence (SR-11.2)**
+- `coherence.tarball-version` — extracts `package/package.json` from the packed tarball; asserts `version` equals `<target>`.
+- `coherence.bump-commit-integrity` — reads `pkg/ts-bun-client/package.json` from the worktree; asserts `version` equals `<target>`. Catches a corrupted/amended/reverted bump commit.
+
+Subprocess: `skills/release-agent-director/gates/coherence/tarball-and-bump.sh`.
+
+#### SR-11.2 role demarcation
+
+Three distinct coherence sites cover three distinct failure modes:
+
+| Site | Phase | Catches |
+|---|---|---|
+| `preflight.invariant-source-of-truth` (SR-16) | preflight | "is `pkg/ts-bun-client/package.json` the only authoritative version source in the repo?" — pattern scan, before any release work begins. |
+| `coherence.bump-commit-integrity` (SR-11.2) | post-pack | "did the bump commit get amended/reverted between pack and now?" — in-flight worktree check. |
+| `coherence.tarball-version` (SR-11.2) | post-pack | "does the packed tarball carry the bumped version?" — tarball content check. |
+
 **`notes`** *(E8)* — Generates `dist/release-notes.md` from
 `git log <prev-tag>..HEAD`, grouped by Epic ID, for inclusion in the GitHub
 Release body.
+
+### Release notes phase
+
+- `notes.generate` — walks `git log <prev-tag>..HEAD` on the release branch, groups commits by Epic shortcode (regex `/^\w+\((b\.\w+)\)/` against subject), renders markdown. Heredoc-safe: commit message bytes pass through verbatim (no shell expansion, no string interpolation).
+- `notes.write-preview` (dry-run only) — pipes `notes.generate` output into `dist/release-notes-preview.md` for operator inspection. The file is never committed, staged, or pushed.
+- `--release` mode — notes are computed and passed directly to `gh release create --notes-file -` in the publish phase (E9). They do NOT touch the repo at any point.
+
+Subprocesses: `pkg/ts-bun-client/scripts/generate-release-notes.ts`, `skills/release-agent-director/gates/notes/write-preview.sh`.
 
 **`publish`** *(E9)* — The irreversible phase: `npm publish`, push annotated git
 tag, `gh release create`, fast-forward `main` to the release branch tip, delete
