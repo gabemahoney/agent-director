@@ -12,12 +12,18 @@ epic-09-resume
 epic-10-relay
 epic-11-mcp
 epic-12-install
-epic-13-release
+# DROPPED 2026-06-06 — see b.z2w: release.sh deleted by b.wvr; release-postconditions Go tests cover invariants
+# epic-13-release
 harness-smoke
 installsh-preflight-gates
-postinstall-platform-refusal
-postinstall-skill-copy
-release-postinstall-verify
-subprocess-client
-subprocess-coverage
+# DROPPED 2026-06-06 — see b.efn: postinstall.ts deleted by b.ue3; umbrella tarball is library-only
+# postinstall-platform-refusal
+# DROPPED 2026-06-06 — see b.est: postinstall lifecycle removed by b.ue3; skill staging now via install.sh
+# postinstall-skill-copy
+# DROPPED 2026-06-06 — see b.c47: prepublish-guards.ts deleted by b.ue3; release-time guards no longer exist
+# release-postinstall-verify
+# DROPPED 2026-06-06 — see b.jpw: @agent-director/linux-x64 sub-package deleted by b.ue3
+# subprocess-client
+# DROPPED 2026-06-06 — see b.pwc: @agent-director/linux-x64 sub-package deleted by b.ue3
+# subprocess-coverage
 template-overwrite
