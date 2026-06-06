@@ -194,9 +194,25 @@ EPICs is not a complete pre-publish run.
 Each slug can be invoked individually via `make test-docker EPIC=<slug>` to
 run that EPIC's testplan in the harness container.
 
-**`compile`** *(E6)* — Cross-compiles the three CLI binaries
-(`linux/amd64`, `linux/arm64`, `darwin/arm64`), runs a per-binary smoke check,
-and verifies that the binary version string matches the target semver.
+### Cross-compile phase (`compile.<plat>`)
+- The Makefile's `release-binaries` recipe loops over linux/amd64, linux/arm64, darwin/arm64 (the SR-7.1 supported platform set; verified by the preflight invariant gate).
+- Each binary is stamped with the target version via `-X $(VERSION_PKG).Version=<target>` ldflags. Target is read from `pkg/ts-bun-client/package.json` via the Makefile change introduced in E3.
+- The gate `compile.<plat>` produces one sub-check per platform (compile.linux-amd64, compile.linux-arm64, compile.darwin-arm64).
+- SR-7.2: No Go source file may carry a literal release-version constant. The `compile.no-literal-version-constant` gate enforces this — `internal/version/version.go`'s `var Version = "dev"` is the only allowed default; anything matching a SemVer literal fires the gate.
+- Subprocess: `skills/release-agent-director/gates/compile/cross-compile.sh`.
+
+### Smoke phase (`smoke.<plat>.<check>`)
+- Three sub-checks per binary:
+  - `smoke.<plat>.magic-bytes` — first 4 bytes match ELF (linux: 7f454c46) or Mach-O 64-bit LE (darwin: cffaedfe) signature.
+  - `smoke.<plat>.static-linkage` — `ldd` on linux binaries reports "not a dynamic executable"; darwin binaries skip on a linux host (`host-cannot-introspect`).
+  - `smoke.<plat>.host-exec` — runs ONLY the binary matching the host triple (`<binary> help`); other platforms skip with reason `host-cannot-exec`.
+- Skipped is distinct from failed — only failed contributes to phase outcome.
+- Subprocess: `skills/release-agent-director/gates/smoke/per-binary-smoke.sh`.
+
+### Coherence phase (`coherence.binary-version.<plat>`)
+- For the host-executable binary (matching the host triple), runs `<binary> version` and asserts the JSON envelope's `version` field equals the target (string compare). Non-host platforms skip with reason `host-cannot-exec`.
+- This is the b.b3h failure-class anchor: a binary stamped with the wrong version (or a literal default that overrode the ldflags) is caught here.
+- Subprocess: `skills/release-agent-director/gates/coherence/binary-version.sh`.
 
 **`pack`** *(E7)* — Runs `bun pm pack` on the umbrella npm package,
 install-verifies the tarball into a temp `HOME`, and checks the tarball for
