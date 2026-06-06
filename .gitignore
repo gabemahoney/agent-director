@@ -25,6 +25,9 @@ tickets/*
 # Advisory lock file used by seeds.go mutation tests to prevent parallel races.
 pkg/api/apitest/.seeds-mutation.lock
 
+# Advisory lock used by source-of-truth gate tests that mutate the repo tree.
+pkg/ts-bun-client/scripts/.source-of-truth-mutation.lock
+
 # Test stub binaries — built by `make fake-tmux` / `make ts-helper`.
 test/fake-tmux/tmux
 

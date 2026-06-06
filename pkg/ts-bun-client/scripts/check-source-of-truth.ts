@@ -177,6 +177,11 @@ function walkFiles(
 }
 
 // Standard prune set (shared across P1 and P5)
+//
+// `reference/` is excluded because that subtree holds read-only vendored
+// clones of OTHER projects (see memory/project_repo.md). Their package.json /
+// SKILL.md files are pinned to those projects' own versions and are not
+// authoritative for agent-director — scanning them produces false positives.
 function isStandardPruneDir(dirPath: string): boolean {
   const rel = relative(repoRoot, dirPath);
   const parts = rel.split(path.sep);
@@ -185,7 +190,8 @@ function isStandardPruneDir(dirPath: string): boolean {
     p === ".git" ||
     p === "dist" ||
     p === "testdata" ||
-    p === "fixtures"
+    p === "fixtures" ||
+    p === "reference"
   );
 }
 
@@ -240,7 +246,11 @@ function checkP2(): void {
     (f) => path.basename(f) === "SKILL.md",
     (d) => {
       const rel = relative(repoRoot, d);
-      return rel.startsWith(".git");
+      if (rel.startsWith(".git")) return true;
+      // Skip vendored read-only clones — their SKILL.md frontmatter is pinned
+      // to their own project's versions and is not authoritative here.
+      const parts = rel.split(path.sep);
+      return parts.some((p) => p === "reference");
     },
   );
 

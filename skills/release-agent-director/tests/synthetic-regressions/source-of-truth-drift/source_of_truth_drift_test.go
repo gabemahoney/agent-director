@@ -52,8 +52,31 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
+
+// acquireSourceOfTruthLock serializes tests that mutate the repo tree and
+// then run the source-of-truth gate. The companion test in
+// source-of-truth-reference-prune/ also writes fixture files at the repo
+// root; without serialization the two tests observe each other's fixtures
+// and produce flaky results. The lock file is gitignored.
+func acquireSourceOfTruthLock(t *testing.T, root string) {
+	t.Helper()
+	lockPath := filepath.Join(root, "pkg", "ts-bun-client", "scripts", ".source-of-truth-mutation.lock")
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatalf("acquireSourceOfTruthLock: open %s: %v", lockPath, err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		t.Fatalf("acquireSourceOfTruthLock: flock: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	})
+}
 
 // repoRoot walks up from the package's working directory (set by `go test` to
 // the package directory) until it finds a go.mod file.
@@ -100,6 +123,10 @@ func TestSourceOfTruthDrift(t *testing.T) {
 	}
 
 	root := repoRoot(t)
+
+	// Serialize against the companion source-of-truth-reference-prune test,
+	// which also mutates the repo tree.
+	acquireSourceOfTruthLock(t, root)
 
 	// ── Sub-case A: drift detection ───────────────────────────────────────────
 	t.Run("A_drift_detected", func(t *testing.T) {
