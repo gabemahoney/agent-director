@@ -343,6 +343,9 @@ func TestHookCLISessionEndCompactIsSoftRefresh(t *testing.T) {
 }
 
 func TestHookCLISessionEndUserQuitIsEnded(t *testing.T) {
+	// b.pmn: a `logout` SessionEnd (one of the closed set of terminal causes)
+	// transitions to `ended`. Renamed from the older user_quit case — that
+	// label no longer matches the post-b.pmn terminal-cause set.
 	home := t.TempDir()
 	stateDir := t.TempDir()
 	t.Setenv("AGENT_DIRECTOR_STATE_DIR", stateDir)
@@ -356,7 +359,7 @@ func TestHookCLISessionEndUserQuitIsEnded(t *testing.T) {
 			"AGENT_DIRECTOR_INSTANCE_ID": "id-hook-4",
 			"AGENT_DIRECTOR_STATE_DIR":   stateDir,
 		},
-		`{"hook_event_name":"SessionEnd","reason":"user_quit"}`, "hook")
+		`{"hook_event_name":"SessionEnd","reason":"logout"}`, "hook")
 	if code != 0 {
 		t.Fatalf("hook exit = %d; want 0", code)
 	}

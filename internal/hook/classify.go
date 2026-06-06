@@ -15,18 +15,32 @@ import (
 // `working` per SRD §5.2.
 const ToolAskUserQuestion = "AskUserQuestion"
 
-// softRefreshReasons enumerates the SessionEnd reason values that
-// translate to a soft-refresh (last_seen_at update only). The set is
-// closed per SRD §5.2 footnote; new reasons fall through to `ended`.
-var softRefreshReasons = map[string]bool{
-	"clear":   true,
-	"compact": true,
+// terminalSessionEndReasons enumerates the SessionEnd reason / matcher
+// values that indicate the Claude Code session truly exited. Everything
+// else — including missing-reason, "clear", "compact", auto-compaction —
+// is treated as a soft-refresh.
+//
+// b.pmn: the original policy ("treat SessionEnd as ended unless reason
+// matches a known soft set") caused false-positives because Claude Code's
+// actual payload for auto-compaction doesn't include `reason: "compact"`
+// in the form the classifier expected. Inverting the policy is safer:
+// false-negatives on a real exit are caught by `find-missing` reaping
+// the row when the tmux session disappears; false-positives on a soft
+// event break monitors and orchestrators that act on `ended`.
+var terminalSessionEndReasons = map[string]bool{
+	"logout":            true,
+	"prompt_input_exit": true,
+	"exit":              true,
 }
 
 // payload is the leniently-typed shape ClassifyEvent reads. Fields are
 // pointers / strings so missing values surface as zero values rather than
 // JSON errors — the soft-refresh-on-unknown-event behavior depends on us
 // being able to read what's there without throwing on what isn't.
+//
+// SessionEnd carries the exit cause in one of several field names across
+// Claude Code versions (`reason`, `matcher`, `endReason`). We accept all
+// three so the classifier remains stable across upstream payload renames.
 type payload struct {
 	// Claude Code's standard field name. The SRD's test examples use
 	// `event_name`; we accept both so the surface is forgiving.
@@ -34,7 +48,23 @@ type payload struct {
 	EventName      string `json:"event_name"`
 	ToolName       string `json:"tool_name"`
 	Reason         string `json:"reason"`
+	Matcher        string `json:"matcher"`
+	EndReason      string `json:"endReason"`
 	TranscriptPath string `json:"transcript_path"`
+}
+
+// sessionEndCause picks the best-available exit-cause field from a
+// SessionEnd payload — `reason` first, then `matcher`, then `endReason`.
+// Returns the empty string when none are present (in which case the
+// classifier defaults to soft-refresh; see terminalSessionEndReasons).
+func (p payload) sessionEndCause() string {
+	if p.Reason != "" {
+		return p.Reason
+	}
+	if p.Matcher != "" {
+		return p.Matcher
+	}
+	return p.EndReason
 }
 
 // eventName picks the best-available event name from the payload — Claude
@@ -136,10 +166,15 @@ func ClassifyEvent(raw json.RawMessage) (ClassifyResult, error) {
 	case "PermissionRequest":
 		res.NewState = store.StateCheckPermission
 	case "SessionEnd":
-		if softRefreshReasons[p.Reason] {
-			res.SoftRefresh = true
-		} else {
+		// b.pmn: soft-refresh by default. Only mark `ended` on known-
+		// terminal causes. Empty/unknown causes (which Claude Code emits
+		// during auto-compaction and other non-terminal SessionEnd fires)
+		// stay at the current state; find-missing reaps the row if the
+		// tmux session genuinely disappeared.
+		if terminalSessionEndReasons[p.sessionEndCause()] {
 			res.NewState = store.StateEnded
+		} else {
+			res.SoftRefresh = true
 		}
 	default:
 		// Unknown event name. Soft-refresh so we still bump last_seen_at
