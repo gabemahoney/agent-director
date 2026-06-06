@@ -29,6 +29,7 @@
 package packfirstversionmismatch_test
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -101,8 +102,27 @@ func TestPackFirstVersionMismatch(t *testing.T) {
 		t.Fatalf("gate stderr does not contain %q;\nstderr:\n%s", gateKey, stderr)
 	}
 
-	if !strings.Contains(stderr, "0.0.0") {
-		t.Errorf("gate stderr should mention observed version 0.0.0;\nstderr:\n%s", stderr)
+	// The observed version is whatever pkg/ts-bun-client/package.json holds
+	// at test time. On main it is the dev sentinel "0.0.0"; in a bumped
+	// release worktree it is the post-bump version (e.g. "0.7.5"). Read it
+	// dynamically so this test works in both contexts. Mirrors b.9ba's
+	// runtime version read in cross-compile.sh.
+	pkgJSON, err := os.ReadFile(filepath.Join(root, "pkg", "ts-bun-client", "package.json"))
+	if err != nil {
+		t.Fatalf("read pkg/ts-bun-client/package.json: %v", err)
+	}
+	var pkg struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(pkgJSON, &pkg); err != nil {
+		t.Fatalf("unmarshal pkg/ts-bun-client/package.json: %v", err)
+	}
+	if pkg.Version == "" {
+		t.Fatalf("pkg/ts-bun-client/package.json has empty .version")
+	}
+
+	if !strings.Contains(stderr, pkg.Version) {
+		t.Errorf("gate stderr should mention observed version %q;\nstderr:\n%s", pkg.Version, stderr)
 	}
 	if !strings.Contains(stderr, "9.9.9") {
 		t.Errorf("gate stderr should mention expected version 9.9.9;\nstderr:\n%s", stderr)
