@@ -1,9 +1,6 @@
-//go:build helper
-
 // Command ts-helper is the Go-side fixture-seeding CLI that TypeScript smoke
-// tests shell out to for store/template setup.  It is compiled exclusively
-// with the `helper` build tag so the production agent-director binary never
-// includes any of this code.
+// tests shell out to for store/template setup.  It is a normal Go program
+// under test/smoke/ts-helper/ and requires no special build tags.
 //
 // Contract
 //
