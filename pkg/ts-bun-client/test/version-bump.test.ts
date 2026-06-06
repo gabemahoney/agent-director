@@ -6,7 +6,7 @@
  * <root>/pkg/ts-bun-client/scripts/version-bump.ts; the umbrella package.json
  * under <root>/pkg/ts-bun-client/). The script is copied from the real
  * source tree so import.meta.url resolves within the staging root — the same
- * path-resolution model used in production (release.sh cp-a mirrors the
+ * path-resolution model used in production (the /release skill mirrors the
  * layout before invoking the script).
  *
  * Live targets exercised here:

@@ -1,6 +1,6 @@
 // Package version exposes the version stamp embedded at build time via
 // -ldflags. Defaults below are used when the binary is built without
-// the stamp (plain `go build`); the Makefile and release.sh override
+// the stamp (plain `go build`); the Makefile and the /release skill override
 // both via `-X github.com/gabemahoney/agent-director/internal/version.Version=...`.
 package version
 

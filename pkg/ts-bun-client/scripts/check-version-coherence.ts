@@ -300,8 +300,8 @@ async function checkPublishShasums(): Promise<void> {
 // ---------------------------------------------------------------------------
 // ADD NEW VERSION SITES HERE — omitting a site here means it is never checked at release time.
 // b.ue3 / Epic 4: site-1 / site-3b / site-4 dropped along with the vendored-
-// binary surface.  site-1's release-time enforcement moves to release.sh's
-// b.b3h anchor (which spawns the host's dist/ binary directly).  b.5ro:
+// binary surface.  site-1's release-time enforcement moves to the /release
+// skill's compile gate (b.b3h anchor, spawns host dist/ binary).  b.5ro:
 // site-5 dropped because SKILL.md no longer carries a version field.
 const SITES = [
   { id: "site-3a", label: "umbrella package.json::version", check: (v: string) => checkSite3a(v) },
@@ -335,8 +335,8 @@ checkSiteDistNoInline();
 
 // SR-5.4: version-floor.json triple-source coherence — verify and publish.
 // Source-of-truth JSON, shipped JSON, and bundle's MIN_BINARY_VERSION must
-// agree byte-for-byte.  Runs under both scopes; release.sh always rebuilds
-// dist/ before either scope, so the dynamic-import is always reachable.
+// agree byte-for-byte.  Runs under both scopes; the /release skill always
+// rebuilds dist/ before either scope, so the dynamic-import is always reachable.
 await checkSiteFloorLockstep();
 
 // SR-1.3 / SR-1.5: tarball SHA-256 round-trip — publish scope only.

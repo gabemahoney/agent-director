@@ -294,29 +294,24 @@ agent-director: build
 envelope-diff-ts: agent-director ts-helper fake-tmux
 	cd pkg/ts-bun-client && bun test test/envelope-diff.test.ts test/envelope-diff-invariants.test.ts
 
-# release-shellcheck runs shellcheck against release.sh and the
-# test-release-postconditions.sh harness. The target is a no-op when
+# release-shellcheck runs shellcheck against gate scripts under
+# skills/release-agent-director/gates/. The target is a no-op when
 # shellcheck is not installed locally so that bare `make` runs do not
 # require it. Add `SC2086` etc. to the disable list inline in the
 # respective script rather than globally here.
 release-shellcheck:
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		echo "[release-shellcheck] shellcheck skills/release-agent-director/release.sh skills/release-agent-director/lib/stage-cli.sh skills/release-agent-director/test-release-postconditions.sh skills/release-agent-director/test-notes-phase-heredoc.sh"; \
-		shellcheck -s bash skills/release-agent-director/release.sh skills/release-agent-director/lib/stage-cli.sh skills/release-agent-director/test-release-postconditions.sh skills/release-agent-director/test-notes-phase-heredoc.sh; \
+		echo "[release-shellcheck] shellcheck skills/release-agent-director/gates/**/*.sh"; \
+		find skills/release-agent-director/gates -name '*.sh' | sort | xargs shellcheck -s bash; \
 	else \
 		echo "[release-shellcheck] shellcheck not installed — skipping"; \
 	fi
 
-# release-smoke runs the post-dry-run assertion harness end-to-end from a
-# temp git worktree. Verifies that a dry-run leaves the tree clean, causes
-# no mode-bit flips, produces dist/release-notes.md, and leaves no .tgz
-# under pkg/ts-bun-client/. Requires Go + bun on PATH (same as a normal
-# release run).
-# Also runs the heredoc backtick regression test (b.85s) which exercises
-# notes_phase directly without a full dry-run.
+# release-smoke runs the synthetic-regression test suite that replaced the
+# legacy test-*.sh harnesses (E10 retirement). Each test covers one gate or
+# phase invariant from the /release skill.
 release-smoke:
-	bash skills/release-agent-director/test-notes-phase-heredoc.sh
-	bash skills/release-agent-director/test-release-postconditions.sh
+	go test ./skills/release-agent-director/tests/synthetic-regressions/... -count=1
 
 # release-bats was retired alongside the cabi-matrix removal — the only
 # bats tests under skills/release-agent-director/tests/ exercised the
@@ -344,9 +339,13 @@ verify-installed-pkg-full: release-binaries
 		*) echo "unsupported host: $${_OS}-$${_ARCH}" >&2; exit 1 ;; \
 	esac; \
 	echo "[verify-installed-pkg-full] staging CLI into platform packages"; \
-	. "$$REPO_ROOT/skills/release-agent-director/lib/stage-cli.sh"; \
-	CLI_PLATFORMS=("$${_HOST_CROSS}=$${_HOST_PKG}"); \
-	stage_cli_into_platforms; \
+	_STAGE_SRC="$$REPO_ROOT/dist/agent-director-$${_HOST_CROSS}"; \
+	_STAGE_DEST="$$REPO_ROOT/pkg/ts-bun-client/platforms/$${_HOST_PKG}/bin"; \
+	if [[ ! -f "$$_STAGE_SRC" ]]; then echo "missing $$_STAGE_SRC — was make release-binaries run?" >&2; exit 1; fi; \
+	mkdir -p "$$_STAGE_DEST"; \
+	cp "$$_STAGE_SRC" "$$_STAGE_DEST/agent-director"; \
+	chmod 0755 "$$_STAGE_DEST/agent-director"; \
+	log verify-installed-pkg-full "staged $$_STAGE_SRC → $$_STAGE_DEST/agent-director"; \
 	TMP_STAGING=$$(mktemp -d); \
 	TMP_HOME=$$(mktemp -d); \
 	TMP_CONSUMER=$$(mktemp -d); \
@@ -380,9 +379,12 @@ verify-prerelease-linux: release-binaries
 	TMP_STAGING=$$(mktemp -d); \
 	trap 'rm -rf "$$TMP_STAGING"' EXIT; \
 	log verify-prerelease-linux "staging linux-x64 CLI binary"; \
-	. "$$REPO_ROOT/skills/release-agent-director/lib/stage-cli.sh"; \
-	CLI_PLATFORMS=("linux-amd64=linux-x64"); \
-	stage_cli_into_platforms \
+	_STAGE_SRC="$$REPO_ROOT/dist/agent-director-linux-amd64"; \
+	_STAGE_DEST="$$REPO_ROOT/pkg/ts-bun-client/platforms/linux-x64/bin"; \
+	if [[ ! -f "$$_STAGE_SRC" ]]; then printf 'FAIL stage-cli: missing %s\n' "$$_STAGE_SRC" >&2; exit 1; fi; \
+	mkdir -p "$$_STAGE_DEST"; \
+	cp "$$_STAGE_SRC" "$$_STAGE_DEST/agent-director"; \
+	chmod 0755 "$$_STAGE_DEST/agent-director" \
 		|| { printf 'FAIL stage-cli\n' >&2; exit 1; }; \
 	log verify-prerelease-linux "packing umbrella tarball → $$TMP_STAGING"; \
 	( cd "$$REPO_ROOT/pkg/ts-bun-client" && bun run build && bun pm pack --destination "$$TMP_STAGING" ) \

@@ -116,9 +116,13 @@ containing:
 
 A condensed terminal summary also prints at end-of-run.
 
-## Legacy artifacts being retired
+## Test coverage
 
-`release.sh` and the eight `test-*.sh` files remain on disk through Epics
-E4–E9 while their LLM-driven replacements are built. Per SR-18.3
-(build-new → demonstrate → delete), they are removed in Epic E10 after every
-replacement gate is proven against the legacy invariants.
+The synthetic-regression suite (`skills/release-agent-director/tests/synthetic-regressions/`)
+covers every gate and phase invariant. Run with:
+
+```
+go test ./skills/release-agent-director/tests/synthetic-regressions/... -count=1
+```
+
+Or via `make release-smoke`.

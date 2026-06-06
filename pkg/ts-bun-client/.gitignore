@@ -2,7 +2,7 @@ dist/
 node_modules/
 *.tsbuildinfo
 
-# CLI binary staged by release.sh / prepare-platforms / test/setup.ts —
+# CLI binary staged by the /release skill / prepare-platforms / test/setup.ts —
 # never committed.
 platforms/*/bin/
 

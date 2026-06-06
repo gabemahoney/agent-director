@@ -61,7 +61,7 @@ const DEFAULT_CALL_TIMEOUT_MS = 30_000;
 const SIGKILL_GRACE_MS = 2_000;
 
 // b.6o1: runtime npm package version loader — reads package.json at call time
-// so client.version() returns the published semver (stamped by release.sh)
+// so client.version() returns the published semver (stamped by the /release skill)
 // rather than the CLI binary's stamped version.  Kept separate from
 // binaryVersion (SR-4.1): the latter is the CLI's stamped value; this is the
 // library's npm-package version.
