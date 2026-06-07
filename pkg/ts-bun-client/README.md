@@ -281,6 +281,17 @@ Errors thrown at construction time by `Client.create()` and `resolveSystemBinary
 | `ErrSystemInstallUnreachable` | Binary exists but failed validation or the version probe. |
 | `ErrCallerCwdUnreachable` | `process.cwd()` does not resolve to a real directory. Restart your service from a valid directory. |
 
+### Errors a long-lived client must handle
+
+Long-lived clients (services that hold a `Client` instance across many verb calls) can encounter these errors at verb-dispatch time, after construction succeeded:
+
+| Error | When | Remediation |
+|---|---|---|
+| `ErrSystemInstallDisappeared` | The binary path resolved at construction no longer exists — e.g. the binary was uninstalled or replaced mid-flight. Carries `binaryPath` and `verb`. | Re-install the agent-director binary, then create a new `Client`. |
+| `ErrCallerCwdUnreachable` | The process working directory has disappeared since the client was constructed. Same class as the construction-time variant (see b.cot); here it is detected at the first verb call that follows the cwd disappearing. Carries `cwd` and `cause`. | Restart your service from a valid working directory. |
+
+Both errors extend `AgentDirectorError` and are catchable with `instanceof`.
+
 The full `err_name` catalog is in [`../../pkg/api/errnames/catalog.json`](../../pkg/api/errnames/catalog.json).
 
 ## Architecture

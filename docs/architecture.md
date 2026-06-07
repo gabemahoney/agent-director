@@ -755,11 +755,12 @@ Every agent-director error envelope carries two string fields: `err_name` (the c
 export class ErrSpawnNotFound extends AgentDirectorError {}
 ```
 
-**TS-only errors.** Nine subclasses have no counterpart in the Go catalog:
+**TS-only errors.** Ten subclasses have no counterpart in the Go catalog:
 `ErrClientClosed`, `ErrBunVersionTooOld`, `ErrConsumerSignal`,
 `ErrCallTimeout`, `ErrUnknownErrorName`, `ErrSystemInstallNotFound`,
-`ErrSystemInstallTooOld`, `ErrSystemInstallUnreachable`, and
-`ErrCallerCwdUnreachable` (b.cot — construction-time cwd validity check). Their
+`ErrSystemInstallTooOld`, `ErrSystemInstallUnreachable`,
+`ErrCallerCwdUnreachable` (construction-time cwd validity guard), and
+`ErrSystemInstallDisappeared` (binary disappeared since construction). Their
 names are centralised in a single `as const` array exported from
 `pkg/ts-bun-client/src/internal/tsOnlyErrors.ts::TS_ONLY_ERROR_NAMES`.
 The catalog-drift test imports this constant and removes those names from both
@@ -779,6 +780,8 @@ removing the TS-only allow-list from `src/internal/tsOnlyErrors.ts`) appears in
 the catalog. On mismatch the test reports a two-sided diff: names present in the
 catalog but absent from TS, and names present in TS but absent from the catalog.
 This keeps the TS error surface from silently drifting from the Go one.
+
+**Runtime ENOENT detection.** At verb dispatch in the subprocess transport, an `ENOENT` from spawning is classified into three outcome classes: `ErrSystemInstallDisappeared` if the binary is gone, `ErrCallerCwdUnreachable` if the caller's working directory is unreachable, or fall-through to the existing `ErrSubprocessCrash` path if neither condition applies.
 
 ## State Machine
 

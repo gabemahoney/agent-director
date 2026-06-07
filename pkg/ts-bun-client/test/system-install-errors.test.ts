@@ -12,6 +12,7 @@ import {
   ErrSystemInstallTooOld,
   ErrSystemInstallUnreachable,
   ErrCallerCwdUnreachable,
+  ErrSystemInstallDisappeared,
   type CheckedLocation,
   type UnreachableReason,
 } from "../src/index.js";
@@ -177,5 +178,47 @@ describe("ErrCallerCwdUnreachable", () => {
   test("message names the cwd", () => {
     expect(e.message).toContain("ErrCallerCwdUnreachable");
     expect(e.message).toContain("/tmp/deleted-dir-abc123");
+  });
+});
+
+describe("ErrSystemInstallDisappeared", () => {
+  const e = new ErrSystemInstallDisappeared("list", "/home/u/.agent-director/bin/agent-director");
+
+  test("required fields populated (b.xht)", () => {
+    expect(e.errName).toBe("ErrSystemInstallDisappeared");
+    expect(e.verb).toBe("list");
+    expect(e.binaryPath).toBe("/home/u/.agent-director/bin/agent-director");
+  });
+
+  test("instanceof reliability", () => {
+    expect(e).toBeInstanceOf(ErrSystemInstallDisappeared);
+    expect(e).toBeInstanceOf(AgentDirectorError);
+    expect(e).toBeInstanceOf(Error);
+    expect(e).not.toBeInstanceOf(ErrSystemInstallNotFound);
+    expect(e).not.toBeInstanceOf(ErrSystemInstallTooOld);
+    expect(e).not.toBeInstanceOf(ErrSystemInstallUnreachable);
+    expect(e).not.toBeInstanceOf(ErrCallerCwdUnreachable);
+  });
+
+  test("class name == errName", () => {
+    expect(e.constructor.name).toBe("ErrSystemInstallDisappeared");
+    expect(e.errName).toBe(e.constructor.name);
+  });
+
+  test("no shared parent class", () => {
+    expect(Object.getPrototypeOf(ErrSystemInstallDisappeared.prototype)).toBe(
+      AgentDirectorError.prototype,
+    );
+  });
+
+  test("message names the binary path", () => {
+    expect(e.message).toContain("ErrSystemInstallDisappeared");
+    expect(e.message).toContain("/home/u/.agent-director/bin/agent-director");
+  });
+
+  test("verb is carried as a field, not embedded in message", () => {
+    // verb is surfaced via the .verb field (base class); the human-readable
+    // message omits it to keep the text stable for downstream parsers.
+    expect(e.verb).toBe("list");
   });
 });

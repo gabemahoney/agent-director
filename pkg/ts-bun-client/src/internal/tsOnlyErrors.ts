@@ -22,6 +22,7 @@
  *  - ErrSystemInstallTooOld       — discovered binary is below floor (b.ue3 / SR-3.2).
  *  - ErrSystemInstallUnreachable  — discovered binary failed probe (b.ue3 / SR-3.3).
  *  - ErrCallerCwdUnreachable      — caller's process.cwd() is gone at construction (b.cot).
+ *  - ErrSystemInstallDisappeared  — binary gone at verb-dispatch time, after valid construction (b.xht).
  *
  * Removed in b.ue3 (vendored-binary surface dropped):
  *  - ErrUnsupportedPlatform
@@ -41,6 +42,8 @@ export const TS_ONLY_ERROR_NAMES = [
   "ErrSystemInstallTooOld",
   "ErrSystemInstallUnreachable",
   "ErrCallerCwdUnreachable",
+  /** b.xht — binary gone at verb-dispatch time, after valid construction. */
+  "ErrSystemInstallDisappeared",
 ] as const;
 
 /** Type alias for the individual allow-listed names. */

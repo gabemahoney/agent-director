@@ -170,6 +170,25 @@ export declare class ErrCallerCwdUnreachable extends AgentDirectorError {
     readonly cause: unknown;
     constructor(cwd: string, cause?: unknown);
 }
+/**
+ * ErrSystemInstallDisappeared — thrown by SubprocessClient#doCall when
+ * Bun.spawn fails with ENOENT and a subsequent statSync confirms the
+ * resolved AD binary path no longer exists on disk.  Distinct from
+ * ErrSystemInstallNotFound (which fires at Client.create() when the binary
+ * was never found) by lifecycle: this error fires mid-life, after a
+ * previously-valid binary has disappeared.
+ *
+ * TS-ONLY ERROR — no counterpart in pkg/api/errnames/catalog.json.
+ * Listed in `src/internal/tsOnlyErrors.ts::TS_ONLY_ERROR_NAMES` so the
+ * catalog-drift test never flags it as an unexpected class.  Cross-ref: b.xht.
+ */
+export declare class ErrSystemInstallDisappeared extends AgentDirectorError {
+    /** The binary path that was confirmed missing. */
+    readonly binaryPath: string;
+    /** The underlying error caught when spawning (preserved for debugging). */
+    readonly cause: unknown;
+    constructor(verb: string, binaryPath: string, cause?: unknown);
+}
 /** Mirrors ErrCwdMissing (package: spawn) */
 export declare class ErrCwdMissing extends AgentDirectorError {
 }

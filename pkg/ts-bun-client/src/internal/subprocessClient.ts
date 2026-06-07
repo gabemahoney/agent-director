@@ -25,6 +25,7 @@
  */
 
 import { readFile } from "node:fs/promises";
+import { statSync } from "node:fs";
 import { expandTilde } from "./tilde.js";
 import { buildArgv, type GlobalArgvOptions } from "./argv.js";
 import { ErrSubprocessCrash } from "./spawner.js";
@@ -33,6 +34,8 @@ import {
   ErrClientClosed,
   ErrConsumerSignal,
   ErrCallTimeout,
+  ErrCallerCwdUnreachable,
+  ErrSystemInstallDisappeared,
 } from "../errors.js";
 import type { ClientOptions } from "../types.js";
 import type { VerbName } from "./verbs.js";
@@ -100,6 +103,14 @@ export interface InternalClientInit {
  *
  * Constructed via Client.create() — the public surface.  The runtime
  * constructor is private; tests reach instances only through the factory.
+ *
+ * Spawn-time failure buckets (b.xht):
+ *   1. Binary gone     — Bun.spawn throws ENOENT and statSync(binaryPath) fails
+ *                        → ErrSystemInstallDisappeared
+ *   2. CWD gone        — Bun.spawn throws ENOENT and statSync(process.cwd()) fails
+ *                        (or process.cwd() itself throws) → ErrCallerCwdUnreachable
+ *   3. Neither / other — re-thrown as-is so it surfaces via the ErrSubprocessCrash
+ *                        path or as the original error.
  */
 export class SubprocessClient {
   /** Canonicalized absolute path to the CLI binary (SR-1.5). */
@@ -235,6 +246,14 @@ export class SubprocessClient {
     return callPromise;
   }
 
+  /**
+   * #doCall — dispatch a single verb to the CLI subprocess.
+   *
+   * Spawn-time ENOENT failure buckets (b.xht):
+   *   1. Binary gone  → ErrSystemInstallDisappeared
+   *   2. CWD gone     → ErrCallerCwdUnreachable
+   *   3. Neither/other → original error re-thrown
+   */
   async #doCall<R>(verb: VerbName, params: unknown): Promise<R> {
     const cliPath = this.#binaryPath;
     const argv = buildArgv(cliPath, verb, params, this.#globalOpts);
@@ -242,14 +261,57 @@ export class SubprocessClient {
 
     const spawnEnv: Record<string, string> = { ...process.env } as Record<string, string>;
 
-    const proc = Bun.spawn({
-      cmd: argv,
-      stdin: "pipe",
-      stdout: "pipe",
-      stderr: "pipe",
-      detached: false,
-      env: spawnEnv,
-    });
+    let proc!: Bun.Subprocess<"pipe", "pipe", "pipe">;
+    try {
+      proc = Bun.spawn({
+        cmd: argv,
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+        detached: false,
+        env: spawnEnv,
+      });
+    } catch (err) {
+      // b.xht: diagnose ENOENT from posix_spawn — binary-gone vs. cwd-gone vs. other.
+      if (err instanceof Error && (err as NodeJS.ErrnoException).code === "ENOENT") {
+        // Bucket 1: check whether the binary has disappeared.
+        // Only treat as "binary gone" when stat fails with ENOENT, or when stat
+        // succeeds but the path is not a regular file.  Other stat errors
+        // (EACCES, EIO, etc.) mean the binary likely exists but is transiently
+        // unreachable — fall through to the cwd check.
+        let bucket1Fired = false;
+        try {
+          const st = statSync(this.#binaryPath);
+          if (!st.isFile()) {
+            bucket1Fired = true;
+          }
+        } catch (statErr) {
+          if (
+            statErr instanceof Error &&
+            (statErr as NodeJS.ErrnoException).code === "ENOENT"
+          ) {
+            bucket1Fired = true;
+          }
+          // Other stat errors: fall through to bucket 2.
+        }
+        if (bucket1Fired) {
+          throw new ErrSystemInstallDisappeared(verb, this.#binaryPath, err);
+        }
+        // Bucket 2: check whether the caller's cwd has disappeared.
+        let cwd: string | undefined;
+        try {
+          cwd = process.cwd();
+          const st = statSync(cwd);
+          if (!st.isDirectory()) throw new Error("not a directory");
+        } catch (cwdErr) {
+          throw new ErrCallerCwdUnreachable(cwd ?? "<process.cwd() unavailable>", cwdErr);
+        }
+        // Bucket 3: neither binary nor cwd is verifiably gone — re-throw original.
+        throw err;
+      }
+      // Non-ENOENT spawn failure — re-throw unchanged.
+      throw err;
+    }
 
     proc.stdin.end();
 
