@@ -48,6 +48,7 @@ export class AgentDirectorError extends Error {
 //   "ErrSystemInstallTooOld"       — discovered binary is below floor (b.ue3 / SR-3.2)
 //   "ErrSystemInstallUnreachable"  — discovered binary failed probe (b.ue3 / SR-3.3)
 //   "ErrCallerCwdUnreachable"      — caller's process.cwd() is gone at construction (b.cot)
+//   "ErrSystemInstallDisappeared"  — binary was valid at construction but is gone at verb-dispatch (b.xht)
 //
 // Removed in b.ue3 (vendored-binary surface dropped):
 //   ErrUnsupportedPlatform, ErrPlatformPackageMissing, ErrCliNotExecutable
@@ -349,6 +350,37 @@ export class ErrCallerCwdUnreachable extends AgentDirectorError {
     this.cwd = cwd;
     this.cause = cause ?? null;
     this.name = "ErrCallerCwdUnreachable";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/**
+ * ErrSystemInstallDisappeared — thrown by SubprocessClient#doCall when
+ * Bun.spawn fails with ENOENT and a subsequent statSync confirms the
+ * resolved AD binary path no longer exists on disk.  Distinct from
+ * ErrSystemInstallNotFound (which fires at Client.create() when the binary
+ * was never found) by lifecycle: this error fires mid-life, after a
+ * previously-valid binary has disappeared.
+ *
+ * TS-ONLY ERROR — no counterpart in pkg/api/errnames/catalog.json.
+ * Listed in `src/internal/tsOnlyErrors.ts::TS_ONLY_ERROR_NAMES` so the
+ * catalog-drift test never flags it as an unexpected class.  Cross-ref: b.xht.
+ */
+export class ErrSystemInstallDisappeared extends AgentDirectorError {
+  /** The binary path that was confirmed missing. */
+  readonly binaryPath: string;
+  /** The underlying error caught when spawning (preserved for debugging). */
+  readonly cause: unknown;
+
+  constructor(verb: string, binaryPath: string, cause?: unknown) {
+    super(
+      verb,
+      "ErrSystemInstallDisappeared",
+      `agent-director binary at ${binaryPath} has disappeared since Client construction; the file no longer exists`,
+    );
+    this.binaryPath = binaryPath;
+    this.cause = cause ?? null;
+    this.name = "ErrSystemInstallDisappeared";
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }

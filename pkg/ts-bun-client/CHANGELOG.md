@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `ErrSystemInstallDisappeared` + runtime cwd detection (b.xht): `SubprocessClient#doCall` now catches `ENOENT` from `posix_spawn` at verb-dispatch time and diagnoses the true cause before rethrowing. Binary missing → new `ErrSystemInstallDisappeared` (carrying `binaryPath` and `verb`). Cwd missing → `ErrCallerCwdUnreachable` (same class introduced by b.cot, now also thrown at runtime when the working directory disappears after construction). All other ENOENT failures fall through to the existing `ErrSubprocessCrash` path unchanged.
 - `ErrCallerCwdUnreachable` (b.cot): `Client.create()` and `resolveSystemBinary()` now stat `process.cwd()` after the binary probe. If the working directory is missing or is not a directory they throw `ErrCallerCwdUnreachable` (carrying the offending path and the underlying cause) instead of letting the first verb call fail with a misleading `ENOENT` on the binary. Restart your service from a valid directory to resolve.
 - `allow_pending` parameter on `sendKeys` (b.dnn): opt-in to send text into a
   `pending` Spawn before `SessionStart` fires. Primary use case is dismissing
