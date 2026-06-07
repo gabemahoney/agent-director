@@ -47,6 +47,7 @@ export class AgentDirectorError extends Error {
 //   "ErrSystemInstallNotFound"     — discovery found no AD binary (b.ue3 / SR-3.1)
 //   "ErrSystemInstallTooOld"       — discovered binary is below floor (b.ue3 / SR-3.2)
 //   "ErrSystemInstallUnreachable"  — discovered binary failed probe (b.ue3 / SR-3.3)
+//   "ErrCallerCwdUnreachable"      — caller's process.cwd() is gone at construction (b.cot)
 //
 // Removed in b.ue3 (vendored-binary surface dropped):
 //   ErrUnsupportedPlatform, ErrPlatformPackageMissing, ErrCliNotExecutable
@@ -312,6 +313,42 @@ export class ErrSystemInstallUnreachable extends AgentDirectorError {
     this.exitCode = opts?.exitCode ?? null;
     this.signal = opts?.signal ?? null;
     this.name = "ErrSystemInstallUnreachable";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/**
+ * ErrCallerCwdUnreachable — thrown by Client.create() / resolveSystemBinary()
+ * when the caller's process.cwd() does not resolve to a real directory at
+ * construction time.  AD subprocess calls inherit cwd from the caller; if the
+ * cwd is gone every spawn fails with a misleading ENOENT on the binary path.
+ * Fail-fast here so the error is surfaced at the construction boundary.
+ *
+ * TS-ONLY ERROR — no counterpart in pkg/api/errnames/catalog.json.
+ * Listed in `src/internal/tsOnlyErrors.ts::TS_ONLY_ERROR_NAMES` so the
+ * catalog-drift test never flags it as an unexpected class.  Cross-ref: b.cot.
+ */
+export class ErrCallerCwdUnreachable extends AgentDirectorError {
+  /** The offending cwd path the constructor was told about. */
+  readonly cwd: string;
+  /** The underlying error caught when statting (preserved for debugging). */
+  readonly cause: unknown;
+
+  constructor(cwd: string, cause?: unknown) {
+    const causeMsg =
+      cause instanceof Error
+        ? cause.message
+        : typeof cause === "string"
+          ? cause
+          : String(cause ?? "unknown");
+    super(
+      "",
+      "ErrCallerCwdUnreachable",
+      `process working directory ${cwd} is unreachable: ${causeMsg}. AD subprocess calls inherit cwd from the caller and will fail. Restart your service from a valid directory.`,
+    );
+    this.cwd = cwd;
+    this.cause = cause ?? null;
+    this.name = "ErrCallerCwdUnreachable";
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }

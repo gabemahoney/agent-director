@@ -21,6 +21,7 @@
  *  - ErrSystemInstallNotFound     — discovery found no AD binary (b.ue3 / SR-3.1).
  *  - ErrSystemInstallTooOld       — discovered binary is below floor (b.ue3 / SR-3.2).
  *  - ErrSystemInstallUnreachable  — discovered binary failed probe (b.ue3 / SR-3.3).
+ *  - ErrCallerCwdUnreachable      — caller's process.cwd() is gone at construction (b.cot).
  *
  * Removed in b.ue3 (vendored-binary surface dropped):
  *  - ErrUnsupportedPlatform
@@ -39,6 +40,7 @@ export const TS_ONLY_ERROR_NAMES = [
   "ErrSystemInstallNotFound",
   "ErrSystemInstallTooOld",
   "ErrSystemInstallUnreachable",
+  "ErrCallerCwdUnreachable",
 ] as const;
 
 /** Type alias for the individual allow-listed names. */

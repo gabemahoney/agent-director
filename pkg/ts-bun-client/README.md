@@ -272,6 +272,15 @@ try {
 }
 ```
 
+Errors thrown at construction time by `Client.create()` and `resolveSystemBinary()`:
+
+| Error | When |
+|---|---|
+| `ErrSystemInstallNotFound` | No agent-director binary found on disk. |
+| `ErrSystemInstallTooOld` | Binary exists but is below the minimum required version. |
+| `ErrSystemInstallUnreachable` | Binary exists but failed validation or the version probe. |
+| `ErrCallerCwdUnreachable` | `process.cwd()` does not resolve to a real directory. Restart your service from a valid directory. |
+
 The full `err_name` catalog is in [`../../pkg/api/errnames/catalog.json`](../../pkg/api/errnames/catalog.json).
 
 ## Architecture

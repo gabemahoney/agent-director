@@ -27,6 +27,7 @@ export {
   ErrSystemInstallNotFound,
   ErrSystemInstallTooOld,
   ErrSystemInstallUnreachable,
+  ErrCallerCwdUnreachable, // b.cot — fail-fast when caller's cwd is unreachable
   // Subprocess-pipeline TS-only errors (SRD Epic A SR-2.3/SR-4.3/SR-5.4/SR-6.5).
   ErrConsumerSignal,
   ErrCallTimeout,
