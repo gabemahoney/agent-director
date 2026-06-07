@@ -152,6 +152,24 @@ export declare class ErrSystemInstallUnreachable extends AgentDirectorError {
         signal?: string | null;
     });
 }
+/**
+ * ErrCallerCwdUnreachable — thrown by Client.create() / resolveSystemBinary()
+ * when the caller's process.cwd() does not resolve to a real directory at
+ * construction time.  AD subprocess calls inherit cwd from the caller; if the
+ * cwd is gone every spawn fails with a misleading ENOENT on the binary path.
+ * Fail-fast here so the error is surfaced at the construction boundary.
+ *
+ * TS-ONLY ERROR — no counterpart in pkg/api/errnames/catalog.json.
+ * Listed in `src/internal/tsOnlyErrors.ts::TS_ONLY_ERROR_NAMES` so the
+ * catalog-drift test never flags it as an unexpected class.  Cross-ref: b.cot.
+ */
+export declare class ErrCallerCwdUnreachable extends AgentDirectorError {
+    /** The offending cwd path the constructor was told about. */
+    readonly cwd: string;
+    /** The underlying error caught when statting (preserved for debugging). */
+    readonly cause: unknown;
+    constructor(cwd: string, cause?: unknown);
+}
 /** Mirrors ErrCwdMissing (package: spawn) */
 export declare class ErrCwdMissing extends AgentDirectorError {
 }

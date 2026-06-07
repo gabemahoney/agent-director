@@ -448,8 +448,11 @@ mode surfaces as one of:
 - `ErrSystemInstallTooOld` (candidate is below floor)
 - `ErrSystemInstallUnreachable` with `reason: UnreachableReason` (one of
   eight enumerated string-literal values; see SR-3.3)
+- `ErrCallerCwdUnreachable` (b.cot — `process.cwd()` is gone or not a
+  directory after the binary probe and floor comparison, before Client
+  allocation)
 
-All three new error classes extend `AgentDirectorError` directly. No
+All four error classes extend `AgentDirectorError` directly. No
 shared parent class is introduced. The discovery is one-shot per
 `Client.create()` / `resolveSystemBinary()` call; subsequent verb calls
 on a successfully-constructed Client reuse the resolved absolute path.
@@ -752,11 +755,12 @@ Every agent-director error envelope carries two string fields: `err_name` (the c
 export class ErrSpawnNotFound extends AgentDirectorError {}
 ```
 
-**TS-only errors.** Eight subclasses have no counterpart in the Go catalog:
-`ErrClientClosed`, `ErrUnsupportedPlatform`, `ErrPlatformPackageMissing`,
-`ErrBunVersionTooOld`, `ErrCliNotExecutable`, `ErrConsumerSignal`,
-`ErrCallTimeout`, and `ErrUnknownErrorName`. Their names are centralised in a
-single `as const` array exported from
+**TS-only errors.** Nine subclasses have no counterpart in the Go catalog:
+`ErrClientClosed`, `ErrBunVersionTooOld`, `ErrConsumerSignal`,
+`ErrCallTimeout`, `ErrUnknownErrorName`, `ErrSystemInstallNotFound`,
+`ErrSystemInstallTooOld`, `ErrSystemInstallUnreachable`, and
+`ErrCallerCwdUnreachable` (b.cot — construction-time cwd validity check). Their
+names are centralised in a single `as const` array exported from
 `pkg/ts-bun-client/src/internal/tsOnlyErrors.ts::TS_ONLY_ERROR_NAMES`.
 The catalog-drift test imports this constant and removes those names from both
 sides before comparing, so CI never flags them as unexpected classes. Each

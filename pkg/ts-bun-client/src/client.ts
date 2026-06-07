@@ -9,10 +9,11 @@
  * PATH lookup), validates the candidate, probes its version, compares
  * against MIN_BINARY_VERSION, and only then allocates the underlying
  * SubprocessClient. Each failure mode surfaces as one of:
- *   - ErrBunVersionTooOld         (Bun runtime below MIN_BUN_VERSION)
- *   - ErrSystemInstallNotFound    (no candidate exists)
- *   - ErrSystemInstallTooOld      (candidate is below floor)
- *   - ErrSystemInstallUnreachable (candidate failed validation or probe)
+ *   - ErrBunVersionTooOld          (Bun runtime below MIN_BUN_VERSION)
+ *   - ErrSystemInstallNotFound     (no candidate exists)
+ *   - ErrSystemInstallTooOld       (candidate is below floor)
+ *   - ErrSystemInstallUnreachable  (candidate failed validation or probe)
+ *   - ErrCallerCwdUnreachable      (caller's process.cwd() is gone — b.cot)
  *
  * The DI hatch `_cliPath` (SR-4.1) skips discovery, canonicalizes the
  * injected path, and runs the probe so that `binaryPath` and `binaryVersion`
@@ -20,6 +21,7 @@
  * `ClientOptions` interface — it lives on the runtime object only.
  */
 
+import { statSync } from "node:fs";
 import {
   discoverSystemBinary,
   canonicalizePath,
@@ -34,8 +36,24 @@ import {
   ErrClientClosed,
   ErrSystemInstallTooOld,
   ErrSystemInstallUnreachable,
+  ErrCallerCwdUnreachable,
 } from "./errors.js";
 import type { ClientOptions } from "./types.js";
+
+function assertCallerCwdReachable(): void {
+  let cwd: string | undefined;
+  try {
+    cwd = process.cwd();
+    const st = statSync(cwd);
+    if (!st.isDirectory()) throw new Error("not a directory");
+  } catch (err) {
+    if (err instanceof ErrCallerCwdUnreachable) throw err;
+    throw new ErrCallerCwdUnreachable(
+      typeof cwd === "string" ? cwd : "<process.cwd() unavailable>",
+      err,
+    );
+  }
+}
 
 // Re-export so existing imports `import { ... } from "./client.js"` keep working.
 export { AgentDirectorError, ErrClientClosed };
@@ -56,6 +74,7 @@ export class Client extends SubprocessClient {
    *   - ErrSystemInstallNotFound
    *   - ErrSystemInstallTooOld
    *   - ErrSystemInstallUnreachable
+   *   - ErrCallerCwdUnreachable  (b.cot — caller's process.cwd() is gone)
    */
   static async create(opts: ClientOptions = {}): Promise<Client> {
     checkBunVersion();
@@ -97,6 +116,11 @@ export class Client extends SubprocessClient {
       throw new ErrSystemInstallTooOld(probe.version, MIN_BINARY_VERSION, binaryPath);
     }
 
+    // b.cot: fail-fast if caller's cwd is unreachable — AD subprocess calls
+    // inherit cwd from the caller; a deleted cwd causes ENOENT on posix_spawn
+    // that misleadingly blames the binary path rather than the cwd.
+    assertCallerCwdReachable();
+
     return new Client(opts, {
       binaryPath,
       binaryVersion: probe.version,
@@ -127,11 +151,12 @@ export interface ResolveSystemBinaryOptions {
  * Runs the same SR-1.1 → SR-2.3 pipeline as Client.create() and resolves
  * with `{ path, version }`. No Client is allocated, no cache is warmed.
  *
- * Rejects with the same four error classes as Client.create():
+ * Rejects with the same error classes as Client.create():
  *   - ErrBunVersionTooOld
  *   - ErrSystemInstallNotFound
  *   - ErrSystemInstallTooOld
  *   - ErrSystemInstallUnreachable
+ *   - ErrCallerCwdUnreachable  (b.cot — caller's process.cwd() is gone)
  */
 export async function resolveSystemBinary(
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -169,6 +194,9 @@ export async function resolveSystemBinary(
   if (compareParsed(probed.value, floor.value) < 0) {
     throw new ErrSystemInstallTooOld(probe.version, MIN_BINARY_VERSION, binaryPath);
   }
+
+  // b.cot: fail-fast if caller's cwd is unreachable — same hazard as Client.create().
+  assertCallerCwdReachable();
 
   return { path: binaryPath, version: probe.version };
 }

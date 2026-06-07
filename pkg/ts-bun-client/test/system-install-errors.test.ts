@@ -11,6 +11,7 @@ import {
   ErrSystemInstallNotFound,
   ErrSystemInstallTooOld,
   ErrSystemInstallUnreachable,
+  ErrCallerCwdUnreachable,
   type CheckedLocation,
   type UnreachableReason,
 } from "../src/index.js";
@@ -133,5 +134,48 @@ describe("ErrSystemInstallUnreachable", () => {
     expect(Object.getPrototypeOf(ErrSystemInstallUnreachable.prototype)).toBe(
       AgentDirectorError.prototype,
     );
+  });
+});
+
+describe("ErrCallerCwdUnreachable", () => {
+  const cause = new Error("ENOENT: no such file or directory");
+  const e = new ErrCallerCwdUnreachable("/tmp/deleted-dir-abc123", cause);
+
+  test("required fields populated (b.cot)", () => {
+    expect(e.errName).toBe("ErrCallerCwdUnreachable");
+    expect(e.verb).toBe("");
+    expect(e.cwd).toBe("/tmp/deleted-dir-abc123");
+    expect(e.cause).toBe(cause);
+  });
+
+  test("optional cause defaults to null", () => {
+    const e2 = new ErrCallerCwdUnreachable("/some/dir");
+    expect(e2.cause).toBeNull();
+    expect(e2.cwd).toBe("/some/dir");
+  });
+
+  test("instanceof reliability", () => {
+    expect(e).toBeInstanceOf(ErrCallerCwdUnreachable);
+    expect(e).toBeInstanceOf(AgentDirectorError);
+    expect(e).toBeInstanceOf(Error);
+    expect(e).not.toBeInstanceOf(ErrSystemInstallNotFound);
+    expect(e).not.toBeInstanceOf(ErrSystemInstallTooOld);
+    expect(e).not.toBeInstanceOf(ErrSystemInstallUnreachable);
+  });
+
+  test("class name == errName", () => {
+    expect(e.constructor.name).toBe("ErrCallerCwdUnreachable");
+    expect(e.errName).toBe(e.constructor.name);
+  });
+
+  test("no shared parent class", () => {
+    expect(Object.getPrototypeOf(ErrCallerCwdUnreachable.prototype)).toBe(
+      AgentDirectorError.prototype,
+    );
+  });
+
+  test("message names the cwd", () => {
+    expect(e.message).toContain("ErrCallerCwdUnreachable");
+    expect(e.message).toContain("/tmp/deleted-dir-abc123");
   });
 });
