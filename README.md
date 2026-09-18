@@ -255,6 +255,23 @@ db_path = "~/.agent-director/state.db"
 error_log_path = "~/.agent-director/errors.log"
 ```
 
+## Maintenance
+
+Two verbs keep `state.db` honest. Run both on a recurring schedule, as
+the same user that spawns the sessions:
+
+```sh
+# Mark spawns whose process has died as `missing` — run often (e.g. every 2 min):
+agent-director find-missing
+
+# Delete terminal rows older than expire_retention_days — run daily:
+agent-director expire
+```
+
+Wire these into your platform's scheduler (launchd, systemd timer, cron,
+Task Scheduler). Without `find-missing`, dead sessions linger in `list` as
+stale `waiting`/`working` rows.
+
 ## Uninstall
 
 ```sh
