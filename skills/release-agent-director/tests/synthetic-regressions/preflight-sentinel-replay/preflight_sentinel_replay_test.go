@@ -45,8 +45,34 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
+
+// acquireSourceOfTruthLock serializes tests that mutate the repo tree and then
+// run the source-of-truth gate. This test plants a versioned package.json under
+// tools/ and runs the gate (via the preflight wrapper); the companion
+// source-of-truth-{drift,reference-prune,release-work-prune} tests also write
+// fixtures at the repo root and scan the whole tree. Without a shared lock they
+// observe each other's fixtures and flake (b.aur: a leaked tools/_sentinel-test
+// package.json made source-of-truth-reference-prune sub-case A fail). The lock
+// file is gitignored and shared by every source-of-truth gate test.
+func acquireSourceOfTruthLock(t *testing.T, root string) {
+	t.Helper()
+	lockPath := filepath.Join(root, "pkg", "ts-bun-client", "scripts", ".source-of-truth-mutation.lock")
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatalf("acquireSourceOfTruthLock: open %s: %v", lockPath, err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		t.Fatalf("acquireSourceOfTruthLock: flock: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	})
+}
 
 // repoRoot walks up from the package's working directory (set by `go test` to
 // the package directory) until it finds a go.mod file.
@@ -81,6 +107,10 @@ func TestPreflightSentinelReplay(t *testing.T) {
 	}
 
 	root := repoRoot(t)
+
+	// Serialize against the other source-of-truth gate tests, which also mutate
+	// the repo tree and scan it (b.aur).
+	acquireSourceOfTruthLock(t, root)
 
 	// 1. Create the sentinel directory and package.json.
 	//    The suffix makes the path unique per run and avoids collisions when

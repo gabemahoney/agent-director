@@ -13,13 +13,17 @@
 // DESIGN
 // ======
 // 1. Pre-req     : requires linux/amd64 host (gate skips non-host binaries).
-// 2. Mutation    : rebuild dist/agent-director-linux-amd64 with
+// 2. Mutation    : build agent-director-linux-amd64 into a per-test
+//                  t.TempDir() (RELEASE_DIST_DIR) with
 //                  AGENT_DIRECTOR_BUILD_VERSION=9.9.9; the binary now reports
 //                  version "9.9.9" while the target "0.0.0" is passed to the gate.
 // 3. Gate        : bash skills/release-agent-director/gates/coherence/binary-version.sh
-//                  is run from repo root with target arg "0.0.0".
-// 4. Cleanup     : original binary bytes are captured before mutation and
-//                  restored unconditionally via t.Cleanup.
+//                  is run from repo root with target arg "0.0.0", pointed at the
+//                  isolated dir via COHERENCE_DIST_DIR.
+// 4. Cleanup     : none needed — the binary lives in the isolated t.TempDir(),
+//                  which the Go runner cleans up (b.aur). The prior
+//                  save/restore of the shared repo-root binary raced concurrent
+//                  tests.
 //
 // SLOW TEST
 // =========
@@ -68,37 +72,31 @@ func TestCoherenceBinaryVersionFires(t *testing.T) {
 	}
 
 	root := repoRoot(t)
-	binaryPath := filepath.Join(root, "dist", "agent-director-linux-amd64")
 
-	// ── 1. Save original binary (if present) ───────────────────────────────
-	var origBytes []byte
-	if data, err := os.ReadFile(binaryPath); err == nil {
-		origBytes = data
-	}
-	origStat, statErr := os.Stat(binaryPath)
+	// Isolate the release output dir per-test (b.aur): we build a
+	// wrong-version binary into it, so it must not be the shared repo-root
+	// dist/. An absolute t.TempDir() also lets the Go runner auto-clean it,
+	// which replaces the old save/restore-original-binary-bytes cleanup.
+	distDir := t.TempDir()
 
-	// ── 2. Register cleanup BEFORE mutating ────────────────────────────────
-	t.Cleanup(func() {
-		if origBytes != nil && statErr == nil {
-			if err := os.WriteFile(binaryPath, origBytes, origStat.Mode()); err != nil {
-				t.Errorf("t.Cleanup: restore linux-amd64 binary: %v", err)
-			}
-		}
-	})
-
-	// ── 3. Rebuild binary stamped with wrong version ────────────────────────
+	// ── 1. Build binary stamped with wrong version into the isolated dir ────
 	makeCmd := exec.Command("make", "release-binaries")
 	makeCmd.Dir = root
-	makeCmd.Env = append(os.Environ(), "AGENT_DIRECTOR_BUILD_VERSION=9.9.9")
+	makeCmd.Env = append(os.Environ(),
+		"AGENT_DIRECTOR_BUILD_VERSION=9.9.9",
+		"RELEASE_DIST_DIR="+distDir,
+	)
 	makeOut, err := makeCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("make release-binaries (AGENT_DIRECTOR_BUILD_VERSION=9.9.9) failed: %v\n%s", err, makeOut)
 	}
 
-	// ── 4. Run the coherence gate with target 0.0.0 ─────────────────────────
+	// ── 2. Run the coherence gate with target 0.0.0 ─────────────────────────
 	gateScript := filepath.Join(root, "skills", "release-agent-director", "gates", "coherence", "binary-version.sh")
 	gateCmd := exec.Command("bash", gateScript, "0.0.0")
 	gateCmd.Dir = root
+	// Point the coherence gate at the isolated dist dir the binary was built into.
+	gateCmd.Env = append(os.Environ(), "COHERENCE_DIST_DIR="+distDir)
 	var stderrBuf strings.Builder
 	gateCmd.Stderr = &stderrBuf
 	gateCmd.Stdout = os.Stdout

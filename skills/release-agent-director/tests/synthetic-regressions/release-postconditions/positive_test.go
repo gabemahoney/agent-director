@@ -6,7 +6,8 @@
 // publish-orchestrator.sh is the E9 publish phase end-to-end executor.  In
 // --dry-run mode it emits "[publish.<name>] would do: <cmd>" lines for each of
 // its 6 substeps, records all 6 with outcome=skipped, and writes the final
-// report to skills/release-agent-director/dist/release-report.json.
+// report to <RELEASE_REPORT_DIR>/release-report.json (defaulting to
+// skills/release-agent-director/dist/, isolated per-test here — b.aur).
 //
 // This test verifies the POSITIVE postconditions:
 //
@@ -39,7 +40,7 @@ func TestReleasePostconditionsPositive(t *testing.T) {
 	}
 
 	root := repoRoot(t)
-	registerReportCleanup(t, root)
+	reportDir, reportPath := isolatedReportDir(t)
 
 	// ── 1. Write the all-passed prior-phases JSON to a temp file ──────────
 	phasesFile := filepath.Join(t.TempDir(), "prior-phases.json")
@@ -67,6 +68,7 @@ func TestReleasePostconditionsPositive(t *testing.T) {
 		"--prior-phases", phasesFile,
 	)
 	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "RELEASE_REPORT_DIR="+reportDir)
 	out, runErr := cmd.CombinedOutput()
 	if runErr != nil {
 		t.Fatalf("publish-orchestrator.sh --dry-run failed (exit %d):\n%s",
@@ -75,7 +77,7 @@ func TestReleasePostconditionsPositive(t *testing.T) {
 	t.Logf("publish-orchestrator.sh stdout+stderr:\n%s", out)
 
 	// ── 4. Parse the report ────────────────────────────────────────────────
-	report := parseReport(t, root)
+	report := parseReport(t, reportPath)
 
 	// ── 5. Assert mode ─────────────────────────────────────────────────────
 	if report.Mode != "dry-run" {

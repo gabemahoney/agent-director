@@ -34,8 +34,35 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
+
+// acquireDistPackLock serializes tests that read or write the real
+// pkg/ts-bun-client/dist/. This test's gate runs `bun run build`, which
+// regenerates dist/ in place; the pack-first synthetic-regression tests
+// (tarball-round-trip, tarball-coherence-drift, pack-first-version-mismatch,
+// verify-restage) `bun pm pack` the same dir. Without serialization a rebuild
+// races a concurrent pack and the two packs diverge (b.aur:
+// TestTarballRoundTripByteIdentical saw "Only in package/dist: client.d.ts").
+// The lock lives under the OS temp dir — shared across these packages within a
+// single `go test` run, and never touches the repo tree.
+func acquireDistPackLock(t *testing.T) {
+	t.Helper()
+	lockPath := filepath.Join(os.TempDir(), "agent-director-ts-bun-dist-pack.lock")
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatalf("acquireDistPackLock: open %s: %v", lockPath, err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		t.Fatalf("acquireDistPackLock: flock: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	})
+}
 
 // repoRoot walks up from the package working directory until it finds go.mod.
 func repoRoot(t *testing.T) string {
@@ -70,6 +97,11 @@ func TestCoverageBunTestFires(t *testing.T) {
 	}
 
 	root := repoRoot(t)
+
+	// This gate runs `bun run build`, rewriting pkg/ts-bun-client/dist/ in place;
+	// serialize against the pack-first tests that read it (b.aur).
+	acquireDistPackLock(t)
+
 	targetFile := filepath.Join(root, "pkg", "ts-bun-client", "test", "setup.test.ts")
 
 	// ── 1. Read original bytes ──────────────────────────────────────────────

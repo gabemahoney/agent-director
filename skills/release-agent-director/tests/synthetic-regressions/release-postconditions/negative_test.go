@@ -47,7 +47,7 @@ func TestReleasePostconditionsNegativePriorFailure(t *testing.T) {
 	}
 
 	root := repoRoot(t)
-	registerReportCleanup(t, root)
+	reportDir, reportPath := isolatedReportDir(t)
 
 	// ── 1. Write the failed-coverage prior-phases JSON ────────────────────
 	phasesFile := filepath.Join(t.TempDir(), "prior-phases-failed.json")
@@ -75,6 +75,7 @@ func TestReleasePostconditionsNegativePriorFailure(t *testing.T) {
 		"--prior-phases", phasesFile,
 	)
 	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "RELEASE_REPORT_DIR="+reportDir)
 	out, runErr := cmd.CombinedOutput()
 	if runErr != nil {
 		t.Fatalf("publish-orchestrator.sh --dry-run failed (exit %d):\n%s",
@@ -83,7 +84,7 @@ func TestReleasePostconditionsNegativePriorFailure(t *testing.T) {
 	t.Logf("publish-orchestrator.sh stdout+stderr:\n%s", out)
 
 	// ── 4. Parse the report ────────────────────────────────────────────────
-	report := parseReport(t, root)
+	report := parseReport(t, reportPath)
 
 	// ── 5. Assert coverage phase preserved as "failed" (non-vacuity) ──────
 	if len(report.Phases) < 2 {
@@ -140,7 +141,7 @@ func TestReleasePostconditionsNegativeSimulateFailure(t *testing.T) {
 	}
 
 	root := repoRoot(t)
-	registerReportCleanup(t, root)
+	reportDir, reportPath := isolatedReportDir(t)
 
 	// ── 1. Resolve HEAD SHA ────────────────────────────────────────────────
 	shaOut, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
@@ -164,6 +165,7 @@ func TestReleasePostconditionsNegativeSimulateFailure(t *testing.T) {
 		"--simulate-failure-at", "push-branch",
 	)
 	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "RELEASE_REPORT_DIR="+reportDir)
 	var outBuf strings.Builder
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &outBuf
@@ -179,7 +181,7 @@ func TestReleasePostconditionsNegativeSimulateFailure(t *testing.T) {
 	}
 
 	// ── 4. Parse the report ────────────────────────────────────────────────
-	report := parseReport(t, root)
+	report := parseReport(t, reportPath)
 
 	// ── 5. Assert exactly 1 substep recorded (halt-on-failure) ────────────
 	if len(report.PublishSubsteps) != 1 {
