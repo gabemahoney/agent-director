@@ -372,3 +372,27 @@ generator parses it. Follow the convention.
   script that `notes.generate` runs. docs/release-skill.md documents that
   behavior. If `EPIC_RE` in the script ever changes, update this section (and
   release-skill.md) to match — the three must stay in sync.
+
+## 12. Review triage order
+
+The dimensions above (§1–§6) tell you *what* to look for; this section tells
+you *what order to spend attention in* and *what blocks merge*. Without it,
+a formatting nit and a logic error carry equal weight, and review output can
+lead with cosmetics while a real defect sits at item seven.
+
+When reviewing or writing code, triage findings in this order:
+
+1. **Security vulnerabilities** — fix immediately, never ship. (§3 already
+   calls Security & Correctness "non-negotiable"; this ranking makes its
+   place at the top explicit.)
+2. **Logic errors** — fix immediately.
+3. **Missing tests** — add before merging.
+4. **Architecture problems** — address in the current change if feasible,
+   otherwise file a bee.
+5. **Code quality** — fix if you're already touching the code, don't go
+   hunting.
+6. **Style nits** — let gofmt/linters handle it, don't spend review
+   bandwidth.
+
+Review output should be ordered by this ranking, and only tiers 1–3 are
+merge-blocking by default.
