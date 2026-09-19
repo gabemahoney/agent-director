@@ -197,6 +197,60 @@ func TestToolsCallDispatchMatrix(t *testing.T) {
 	}
 }
 
+// TestNoMigrationTriggerTool is the SR-1.6 public-surface guard for the MCP
+// dispatch surface: no MCP-exposed tool may be an agent-reachable schema-
+// migration trigger. Migration runs only under an out-of-band administrator
+// sentinel (internal/store/migrate_auth.go); there is deliberately NO migrate
+// tool and NO dispatch case for one.
+//
+// The assertion is computed live from manifest.Verbs filtered by
+// mcp.ExposedVerb + mcp.ToolName — the same path buildToolList uses to emit the
+// tools/list response — so it reflects the true MCP surface, not a golden. A
+// migrate verb added to the manifest and exposed would surface a "migrate" (or
+// "migrate_schema") tool name here and trip the check. It also drives a live
+// dispatcher Call for any such tool name to prove no hidden handler answers it.
+func TestNoMigrationTriggerTool(t *testing.T) {
+	for _, v := range manifest.Verbs {
+		if !mcp.ExposedVerb(v.Name) {
+			continue
+		}
+		tool := mcp.ToolName(v.Name)
+		if strings.Contains(strings.ToLower(tool), "migrate") {
+			t.Errorf("MCP exposes tool %q (from verb %q) whose name implies a migration trigger; "+
+				"SR-1.6 forbids any agent-reachable migration tool", tool, v.Name)
+		}
+	}
+
+	// Belt-and-suspenders: a hidden dispatch handler keyed on a migrate tool
+	// name (bypassing the manifest) must not answer. A well-behaved dispatcher
+	// returns ErrUnknownTool for an unregistered name; anything else means a
+	// migration entry point leaked into dispatch.go.
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "state.db")
+	cfgPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(cfgPath, []byte(""), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	client, err := api.New(api.Options{
+		StorePath:       storePath,
+		ConfigPath:      cfgPath,
+		CreateIfMissing: true,
+	})
+	if err != nil {
+		t.Fatalf("api.New: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	d := mcp.NewLiveDispatcher(client)
+	for _, name := range []string{"migrate", "migrate_schema", "schema_migrate"} {
+		_, err := d.Call(context.Background(), mcp.ToolName(name), json.RawMessage(`{}`))
+		if !errors.Is(err, mcp.ErrUnknownTool) {
+			t.Errorf("dispatcher answered migrate-shaped tool %q with err=%v; want ErrUnknownTool "+
+				"(no migration handler may exist on the MCP surface)", name, err)
+		}
+	}
+}
+
 // seedMatrixSpawn inserts one Spawn row at the requested state and
 // relay_mode. Mirrors the openStoreWithRow helper in
 // internal/api/sendkeys_test.go but lives here to avoid an

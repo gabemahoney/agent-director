@@ -248,8 +248,16 @@ func uniqueIndexCols(t *testing.T, db *sql.DB, table string) map[string][]string
 }
 
 func TestSchemaV2Migration(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.db")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.db")
 	openV1DB(t, path)
+
+	// Under the gated model an older-than-binary open refuses unless an
+	// administrator authorization sentinel exact-matches BOTH ends. Authorize
+	// the v1→v2 transition so this test still proves the migration CONTENT
+	// (column/index/no-backfill assertions below) rather than silent
+	// auto-migration on open.
+	writeSentinel(t, dir, 1, 2)
 
 	// Seed a spawn row + one permission_requests row into the v1 schema so the
 	// "0 rows after migration" assertion is non-vacuous: it verifies that DROP

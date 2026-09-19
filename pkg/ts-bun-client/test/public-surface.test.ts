@@ -28,6 +28,7 @@
 import { test, expect, beforeAll } from "bun:test";
 import * as path from "path";
 import * as fs from "fs";
+import { Client } from "../src/client.js";
 
 const pkgRoot = path.resolve(import.meta.dir, "..");
 const fixtureDir = path.join(pkgRoot, "test", "fixtures", "public-surface");
@@ -93,6 +94,54 @@ test("public-surface: golden tracks all three TRACKED files", () => {
   for (const f of TRACKED) {
     const goldenPath = path.join(fixtureDir, `${f}.golden`);
     expect(fs.existsSync(goldenPath)).toBe(true);
+  }
+});
+
+test("public-surface: Client exposes no migrate method (SR-1)", () => {
+  // SR-1 negative invariant: the schema-migration gate is a Go-side,
+  // refuse-and-instruct mechanism. It has NO catalog entry, NO TS error
+  // class, and crucially NO npm-client trigger. The published Client must
+  // therefore expose nothing a caller could invoke to request a migration.
+  //
+  // This assertion walks the *runtime* prototype chain of the exported
+  // Client class rather than the .d.ts goldens, so it holds independently
+  // of golden regeneration: even if someone regenerates the surface goldens
+  // after accidentally adding a migrate verb, this test still fails.
+  const forbidden = ["migrate", "migrateSchema", "runMigration", "schemaMigrate"];
+
+  const seen = new Set<string>();
+  for (
+    let proto: object | null = Client.prototype;
+    proto && proto !== Object.prototype;
+    proto = Object.getPrototypeOf(proto)
+  ) {
+    for (const key of Object.getOwnPropertyNames(proto)) {
+      seen.add(key);
+    }
+  }
+
+  for (const name of forbidden) {
+    expect(
+      seen.has(name),
+      `Client (or a base class) unexpectedly exposes a "${name}" method; ` +
+        `SR-1 forbids any npm-client migration trigger.`
+    ).toBe(false);
+  }
+
+  // Defence in depth: no enumerable method on the runtime surface may even
+  // contain the substring "migrat" (catches migrateFoo / fooMigrate drift).
+  const migratLike = [...seen].filter((k) => /migrat/i.test(k));
+  expect(
+    migratLike.length === 0,
+    `Client runtime surface contains migration-shaped method(s): ${migratLike.join(", ")}`
+  ).toBe(true);
+
+  // The tracked .d.ts goldens must also stay migration-free. This part is
+  // golden-derived (informational), but the runtime checks above are the
+  // load-bearing, regeneration-proof guarantee.
+  for (const f of TRACKED) {
+    const golden = fs.readFileSync(path.join(fixtureDir, `${f}.golden`), "utf-8");
+    expect(golden).not.toMatch(/migrat/i);
   }
 });
 
