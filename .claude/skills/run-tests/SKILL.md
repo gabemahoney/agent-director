@@ -80,9 +80,9 @@ agent runs inside the container. Interpreting a run:
   - `test/smoke/go` canary fires on the pre-existing trail-leak (a verb writes
     to `$HOME/.agent-director/ad-trail.jsonl`); contained harmlessly in the
     throwaway container HOME.
-  - Four `skills/release-agent-director/tests/synthetic-regressions/…` tests
-    race on the shared `/work/dist` under full parallelism; they pass under
-    `go test -p 1`.
+  - `skills/release-agent-director/tests/synthetic-regressions/…` tests
+    race on the shared `/work/dist` under full parallelism; which subset
+    fails varies run to run. They all pass under `go test -p 1`.
   - Two bun `resolveSystemBinary()` tests assume an installed binary that the
     clean sandbox HOME deliberately lacks.
   - One bun serialization test is timing-sensitive and occasionally flakes on

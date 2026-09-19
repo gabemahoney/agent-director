@@ -217,8 +217,8 @@ replace — the `test/smoke/go` snapshot canary, which stays as-is.
 **Guard criterion — which packages carry the guard:** every package whose
 tests write agent-director state (open the store, emit trail events) or exec a
 built binary. Currently: `internal/trail`, `internal/store`, `internal/hook`,
-`pkg/api`, `internal/mcp`, `cmd/agent-director`, `test/smoke/go`,
-`test/envelope-diff`, `test/grounding-replay`. Pure-logic packages with no
+`internal/spawn`, `pkg/api`, `internal/mcp`, `cmd/agent-director`,
+`test/smoke/go`, `test/envelope-diff`, `test/grounding-replay`. Pure-logic packages with no
 state or exec surface (e.g. `pkg/api/manifest`, `pkg/api/errnames`) may skip
 it. When you add a package that opens the store or execs a binary, add
 `sandboxguard.Require()` to its `TestMain`.
@@ -301,11 +301,13 @@ regressions introduced by a change under test:
   container HOME, but the smoke canary correctly reports it and fails the
   package. This is the sandbox doing its job; it disappears once the trail
   fallback is fixed.
-- **Release-gate regression tests race under full parallelism.** Four
+- **Release-gate regression tests race under full parallelism.** The
   `skills/release-agent-director/tests/synthetic-regressions/…` tests each
   run `make release-binaries` / `bun pm pack` into the shared `/work/dist`
   and clobber each other when `go test ./...` runs them concurrently (same
-  family as the b.w7e ETXTBSY note in `bunfig.toml`). They pass when run
+  family as the b.w7e ETXTBSY note in `bunfig.toml`). Which subset fails
+  varies run to run — do not treat a different or larger set of failing
+  packages under this directory as a regression. They all pass when run
   serially (`go test -p 1 …`). This is a pre-existing test-hermeticity gap,
   not a sandbox bug.
 - **Two bun `resolveSystemBinary()` tests assume an installed binary.** They
