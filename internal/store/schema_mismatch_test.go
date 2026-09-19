@@ -15,8 +15,16 @@ import (
 // intact. We inject a failure by pre-creating a conflicting index name on
 // spawns before the migration runs; migrateV1toV2 rolls back the entire tx.
 func TestMigrationFailurePreservesV1State(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.db")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.db")
 	openV1DB(t, path)
+
+	// Authorize the v1→v2 transition so the migration actually RUNS and then
+	// fails at the injected conflict below. Without this, the gate would refuse
+	// the open before any migration DDL executes, making the rollback assertion
+	// vacuous. With authorization, we exercise the real mid-migration rollback
+	// that SR-2.4 requires.
+	writeSentinel(t, dir, 1, 2)
 
 	// Pre-create a conflicting index name so the v2 CREATE INDEX fails
 	// mid-transaction, triggering rollback.
@@ -66,28 +74,11 @@ func TestMigrationFailurePreservesV1State(t *testing.T) {
 	}
 }
 
-// setUserVersion opens the DB raw and stamps PRAGMA user_version to v.
-// PRAGMA values cannot be parameterized, so v is interpolated directly —
-// safe because callers only pass test-controlled integers.
-func setUserVersion(t *testing.T, path string, v int) {
-	t.Helper()
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatalf("raw open for version stamp: %v", err)
-	}
-	defer func() {
-		if cerr := db.Close(); cerr != nil {
-			t.Errorf("close raw db: %v", cerr)
-		}
-	}()
-	if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", v)); err != nil {
-		t.Fatalf("set user_version=%d: %v", v, err)
-	}
-}
-
-// TestOpenReturnsErrSchemaMismatch covers the three "wrong version" cases
-// at once: any user_version that's non-zero and not the current schema must
-// surface ErrSchemaMismatch through errors.Is.
+// TestOpenReturnsErrSchemaMismatch covers the three newer-than-binary cases at
+// once: any user_version greater than the current schema must surface
+// ErrSchemaMismatch through errors.Is. (Older-than-binary versions take the
+// migration gate and surface ErrSchemaMigrationRequired instead, so they are
+// covered elsewhere; every badVersion below is > schemaVersion.)
 func TestOpenReturnsErrSchemaMismatch(t *testing.T) {
 	for _, badVersion := range []int{3, 99, 1000} {
 		badVersion := badVersion
@@ -103,7 +94,7 @@ func TestOpenReturnsErrSchemaMismatch(t *testing.T) {
 				t.Fatalf("Close: %v", err)
 			}
 
-			setUserVersion(t, path, badVersion)
+			stampUserVersion(t, path, badVersion)
 
 			_, err = Open(path)
 			if !errors.Is(err, ErrSchemaMismatch) {

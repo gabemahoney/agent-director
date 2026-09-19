@@ -1,11 +1,62 @@
 package manifest_test
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
+
+// TestNoMigrationTriggerVerb is the SR-1.6 public-surface guard for the
+// CLI/manifest surface: no verb may expose an agent-reachable schema-migration
+// trigger. The store migrates only under an out-of-band administrator sentinel
+// (see internal/store/migrate_auth.go); there is deliberately NO migrate verb.
+//
+// The assertion runs against manifest.Verbs — the Go source of truth from which
+// surface.json is generated — so it is NOT satisfiable by regenerating the
+// golden: adding a migrate verb to manifest.go would flip this test red before
+// any `make surface-json` could paper over it. TestNoMigrationTriggerInSurfaceJSON
+// covers the committed golden independently.
+func TestNoMigrationTriggerVerb(t *testing.T) {
+	for _, v := range manifest.Verbs {
+		if strings.Contains(strings.ToLower(v.Name), "migrate") {
+			t.Errorf("manifest.Verbs contains verb %q whose name implies a migration trigger; "+
+				"SR-1.6 forbids any agent-reachable migration verb (migration is admin-sentinel-gated only)", v.Name)
+		}
+	}
+}
+
+// TestNoMigrationTriggerInSurfaceJSON is the golden-side twin of
+// TestNoMigrationTriggerVerb: it scans the COMMITTED surface.json bytes for any
+// "migrate" verb name. Regenerating the golden from a (hypothetical) migrate
+// verb would write "migrate" into these bytes and trip this check, so the
+// SR-1.6 invariant survives golden regeneration on the manifest surface.
+func TestNoMigrationTriggerInSurfaceJSON(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller(0) failed")
+	}
+	surfacePath := filepath.Join(filepath.Dir(thisFile), "surface.json")
+	raw, err := os.ReadFile(surfacePath)
+	if err != nil {
+		t.Fatalf("read surface.json: %v", err)
+	}
+	// A verb named "migrate"/"migrate-schema"/etc. serializes as a
+	// `"name": "...migrate..."` field. Match the verb-name JSON shape rather
+	// than the whole file so the word appearing in a description does not
+	// false-positive.
+	needles := []string{`"name": "migrate`, `"name":"migrate`}
+	body := string(raw)
+	for _, n := range needles {
+		if strings.Contains(body, n) {
+			t.Errorf("surface.json declares a verb name containing %q; SR-1.6 forbids exposing a migration trigger verb", "migrate")
+		}
+	}
+}
 
 // TestVerbsContainsExpectedSurface pins the canonical verb order. Each
 // Epic that adds a verb appends to this slice; the test catches a missing

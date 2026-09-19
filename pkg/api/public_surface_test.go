@@ -57,6 +57,52 @@ func TestPublicSurface(t *testing.T) {
 	}
 }
 
+// TestNoMigrationTriggerMethod is the SR-1.6 public-surface guard for pkg/api:
+// no exported function or method may expose an agent-reachable schema-migration
+// trigger. The store upgrades only under an out-of-band administrator sentinel
+// (internal/store/migrate_auth.go); pkg/api deliberately exposes NO Migrate*
+// method — ErrSchemaMigrationRequired is a fatal open-time error, not a verb.
+//
+// This walks the pkg/api AST directly (stdlib go/parser), so it is not a golden
+// check and cannot be silenced by regenerating any manifest artifact: adding a
+// (c *Client) Migrate(...) method would trip it at the source level.
+func TestNoMigrationTriggerMethod(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller(0) failed")
+	}
+	pkgDir := filepath.Dir(thisFile)
+
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, pkgDir, func(fi os.FileInfo) bool {
+		return !strings.HasSuffix(fi.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		t.Fatalf("parser.ParseDir(%s): %v", pkgDir, err)
+	}
+	apiPkg, ok := pkgs["api"]
+	if !ok {
+		t.Fatalf("package 'api' not found under %s", pkgDir)
+	}
+
+	for _, f := range apiPkg.Files {
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || !ast.IsExported(fn.Name.Name) {
+				continue
+			}
+			if strings.Contains(strings.ToLower(fn.Name.Name), "migrate") {
+				label := fn.Name.Name
+				if fn.Recv != nil && len(fn.Recv.List) > 0 {
+					label = fmt.Sprintf("(%s).%s", surfaceExprStr(fn.Recv.List[0].Type), fn.Name.Name)
+				}
+				t.Errorf("pkg/api exposes exported func/method %s whose name implies a migration trigger; "+
+					"SR-1.6 forbids any agent-reachable migration entry point (migration is admin-sentinel-gated only)", label)
+			}
+		}
+	}
+}
+
 // buildSurfaceImportMap returns a map from import alias to full import path
 // for every import in f. Blank (_) and dot (.) imports are skipped.
 func buildSurfaceImportMap(f *ast.File) map[string]string {
