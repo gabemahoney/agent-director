@@ -33,3 +33,12 @@ test/fake-tmux/tmux
 
 # Team coordination scratch dir dropped by multi-agent workflows.
 .claude/
+# ...except the checked-in policy files: the sandbox deny rules and the
+# run-tests skill (b.nh2). settings.local.json and everything else under
+# .claude/ stays ignored. The dir + subdir must be re-included before a
+# nested negation can match (git won't descend into an excluded directory).
+!.claude/
+.claude/*
+!.claude/settings.json
+!.claude/skills/
+!.claude/skills/**

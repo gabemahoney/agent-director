@@ -25,6 +25,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 )
 
@@ -36,6 +37,7 @@ var trailTestDir string
 // The trail singleton initialises on the first trail.Emit call and stays
 // pointed at this directory for the process lifetime.
 func TestMain(m *testing.M) {
+	sandboxguard.Require()
 	d, err := os.MkdirTemp("", "ad-hook-trail-*")
 	if err != nil {
 		panic("TestMain: MkdirTemp: " + err.Error())

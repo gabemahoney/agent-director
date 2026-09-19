@@ -164,3 +164,175 @@ fires (SR-8.11):
 
 Tarball size is **not** a release gate — the SRD explicitly rejects a
 numeric ceiling (SR-6.9). Size is recorded in the release notes only.
+
+## 10. Sandboxed execution (`make test-sandbox`)
+
+### Why this exists
+
+The b.8dr incident: running `bun test` on the b.aaj branch (schema v3
+migration code) auto-migrated the production `~/.agent-director/state.db`
+from v2 to v3, breaking all consumers of the installed v0.7.8 binary.
+Host-side `$HOME` redirection is not a reliable boundary because
+`internal/store.expandTilde` resolves the DB path via `user.Current()`
+(reading `/etc/passwd`), which bypasses the `$HOME` environment variable
+entirely. The store also chmods the DB 0600 on every open, preventing
+file-permission workarounds. A container whose HOME has no `.agent-director`
+is the only isolation boundary that holds.
+
+### The rule: edit on the host, execute in the sandbox
+
+Editing source on the host is always fine — nothing runs. The danger is
+*execution*. Never run a built artifact on the host: not `go test`, not a
+one-off `./bin/agent-director …`, not `go generate`, not a bun script.
+Every executed artifact can open the store. Run all of it through
+`make test-sandbox` / `make sandbox-shell` / `make sandbox CMD="…"`, which
+put the process inside a container whose HOME has no `.agent-director`.
+
+### When sandbox execution is mandatory
+
+Use `make test-sandbox` instead of bare `go test ./...` or `bun test` on
+any branch that touches:
+
+- `internal/store/` schema definitions or migration code
+- Any path that composes the DB file path (spawn/env composition, config
+  path resolution, `expandTilde`)
+
+Running host-side tests on those branches risks silently migrating the
+production database to an incompatible schema version.
+
+### Fail-fast marker guard
+
+The `make sandbox*` targets export `AGENT_DIRECTOR_TEST_SANDBOX=1` into the
+container. `TestMain` in the state/exec-touching Go packages and the bun
+preload (`pkg/ts-bun-client/test/setup.ts`) check that marker and **refuse to
+run without it** — a stray host-side `go test`/`bun test` fails immediately
+with a one-line message pointing here, before it can touch the real
+`~/.agent-director`. The Go check is `sandboxguard.Require()` from
+`internal/testsupport/sandboxguard`, called at the top of `TestMain`.
+
+This is an accident-prevention gate for humans and agents alike, **not a
+security boundary** (the marker is a plain env var). It complements — does not
+replace — the `test/smoke/go` snapshot canary, which stays as-is.
+
+**Guard criterion — which packages carry the guard:** every package whose
+tests write agent-director state (open the store, emit trail events) or exec a
+built binary. Currently: `internal/trail`, `internal/store`, `internal/hook`,
+`pkg/api`, `internal/mcp`, `cmd/agent-director`, `test/smoke/go`,
+`test/envelope-diff`, `test/grounding-replay`. Pure-logic packages with no
+state or exec surface (e.g. `pkg/api/manifest`, `pkg/api/errnames`) may skip
+it. When you add a package that opens the store or execs a binary, add
+`sandboxguard.Require()` to its `TestMain`.
+
+**CI:** run the suite via `make test-sandbox` (which sets the marker), or set
+`AGENT_DIRECTOR_TEST_SANDBOX=1` explicitly in the workflow step that runs
+`go test` / `bun test` directly.
+
+### Targets
+
+```
+make test-sandbox        # full suite: go test ./... AND bun test
+make sandbox-shell       # interactive bash inside the container + mounts
+make sandbox CMD="…"     # run an arbitrary command in the container + mounts
+```
+
+The suite exit code propagates to the caller; output streams live. The
+image is built on first use and cached by the engine's layer cache
+thereafter — subsequent invocations with an unchanged Dockerfile are fast
+no-ops.
+
+### Engine and host detection (Makefile-owned)
+
+The `make sandbox*` targets are engine- and host-generic: the image
+(`test/sandbox/Dockerfile`), the run-tests skill, and the CLAUDE.md note
+mention no engine or flags. **All environment detection lives in the
+Makefile.** Every run prints a `[sandbox] engine=… net=… pid=… uidmap=…`
+line so it is self-documenting. What the Makefile decides:
+
+- **Container engine** — prefers `podman`, else `docker`. Override with
+  `make test-sandbox CONTAINER_ENGINE=docker`.
+- **Uid mapping** — podman uses `--userns=keep-id` (maps the container's
+  non-root `sandbox` user to the invoking host user); docker uses
+  `--user $(id -u):$(id -g) --group-add 0`. Running non-root is deliberate:
+  some tests assert a filesystem permission is *denied* (e.g.
+  `internal/trail`'s read-only-dir case), and a root container would bypass
+  DAC checks and break them. `keep-id` is podman-only (it errors on docker),
+  hence the split. The docker `--user` uid is an arbitrary host uid that does
+  not own the image's uid-1000 HOME, so `--group-add 0` joins group 0 and the
+  image makes HOME gid-0-writable — that is what lets the docker process
+  populate GOPATH/GOCACHE/bun cache. (The podman leg maps to uid 1000 and owns
+  HOME outright, so it needs neither `--user` nor `--group-add`.)
+- **Network namespace** — default (isolated) on a normal host; falls back to
+  `--network=host` only when `/dev/net/tun` is absent (as on the DGXC/k8s
+  pod, where the default rootless network backend fails). Cheap static
+  check.
+- **PID namespace** — default (isolated) on a normal host; falls back to
+  `--pid=host` only when a fresh `/proc` mount at container start is blocked
+  (the k8s pod masks `/proc`, so the new-PID-namespace proc mount gets
+  `EPERM`). This is the one signal that needs a real container probe, so it
+  is probed once right after the image builds and **cached** in a per-engine
+  tmp marker; repeat runs read the marker and add no latency (delete it to
+  re-probe).
+- **`SANDBOX_FLAGS`** — appended to `run` last, so it overrides detection for
+  any host the heuristics miss, e.g.
+  `make test-sandbox SANDBOX_FLAGS="--pid=host"`.
+- **`DOCKER_CONFIG`** — neutralized (`DOCKER_CONFIG=`) only for podman,
+  because a stale host value pointing at a nonexistent `~/.docker` aborts the
+  run; docker keeps it (it needs it for auth).
+- **`BUILDAH_ISOLATION=chroot`** is set on the *build* so podman's RUN steps
+  work where `/proc` remounting is blocked; it is a podman/buildah variable
+  that docker ignores.
+
+On the DGXC/k8s pod this repo is developed on, detection lands on
+`net='--network=host' pid='--pid=host' uidmap='--userns=keep-id'`. On a
+laptop with docker it lands on isolated namespaces and
+`--user $(id -u):$(id -g)`.
+
+### Known caveats
+
+The sandbox removes the ambient system install (a clean HOME with no
+`~/.agent-director`) and shares one `/work` mount across the parallel test
+run. A few suite failures are expected consequences of that isolation, not
+regressions introduced by a change under test:
+
+- **`test/smoke/go` canary fires on the trail leak.** Some verbs still emit
+  trail events to `$HOME/.agent-director/ad-trail.jsonl` when
+  `AGENT_DIRECTOR_STATE_DIR` is unset (a b.8dr defect fixed under a separate
+  ticket). In the sandbox that write lands harmlessly in the throwaway
+  container HOME, but the smoke canary correctly reports it and fails the
+  package. This is the sandbox doing its job; it disappears once the trail
+  fallback is fixed.
+- **Release-gate regression tests race under full parallelism.** Four
+  `skills/release-agent-director/tests/synthetic-regressions/…` tests each
+  run `make release-binaries` / `bun pm pack` into the shared `/work/dist`
+  and clobber each other when `go test ./...` runs them concurrently (same
+  family as the b.w7e ETXTBSY note in `bunfig.toml`). They pass when run
+  serially (`go test -p 1 …`). This is a pre-existing test-hermeticity gap,
+  not a sandbox bug.
+- **Two bun `resolveSystemBinary()` tests assume an installed binary.** They
+  discover `~/.agent-director/bin/agent-director` or an `agent-director` on
+  `PATH`; the clean sandbox HOME has neither, so they fail with
+  `ErrSystemInstallNotFound`.
+- **One bun serialization test is timing-sensitive** (asserts a >5 ms gap
+  between serialized spawns); on this fast host it occasionally measures
+  ~4 ms and flakes.
+- **`TestFindMissingTrailEmitsDegradedModeSkipTick` (cmd/agent-director)**
+  can fail host-side when live `agent-director` processes are `/proc`-visible.
+  With `--pid=host` they are visible inside the sandbox too, but the test
+  was observed to **pass** in-sandbox; watch it if the degraded-mode logic
+  changes.
+
+### CI parity and docker-leg verification
+
+The sandbox image (`test/sandbox/Dockerfile`) uses `debian:bookworm-slim`
+with no host paths baked in. It can be used in GitHub Actions without
+modification: mount the checkout at `/work` and the Go module cache at
+`/go/pkg/mod`.
+
+The **podman leg** of the harness is exercised on the DGXC/k8s pod this repo
+is developed on (`make test-sandbox` there detects host-network + host-pid +
+keep-id and runs the full suite). The **docker leg** cannot be exercised on
+that pod (no docker daemon), so it is implemented to docker's documented
+semantics (`--user $(id -u):$(id -g)`, `DOCKER_CONFIG` left intact, isolated
+namespaces on a normal host). **GitHub Actions is the free verification path
+for the docker leg** — its runners have docker natively, so a CI job that
+runs `make test-sandbox` (engine auto-detected as docker) validates it.

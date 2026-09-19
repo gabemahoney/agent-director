@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard"
 	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
 )
 
@@ -20,6 +21,7 @@ var binaryPath string
 // this package. Building once per package run avoids per-test compile cost
 // and keeps the race-detector run cheap.
 func TestMain(m *testing.M) {
+	sandboxguard.Require()
 	tmp, err := os.MkdirTemp("", "agent-director-test-")
 	if err != nil {
 		panic(err)

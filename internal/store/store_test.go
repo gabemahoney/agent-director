@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard"
 )
 
 // envFreshInitHelper is the env var that flips this test binary into
@@ -28,6 +30,10 @@ const envFreshInitHelper = "AD_STORE_TEST_FRESH_INIT_HELPER"
 // ~/.agent-director/. Trail tests (trail_emit_test.go) read storeTrailDir
 // to locate the file.
 func TestMain(m *testing.M) {
+	// Guard first: the fresh-init helper dispatch below reaches OpenOrInit, so
+	// the marker must be checked before any code path can open a store. The
+	// spawned helper child inherits the marker from this process's env.
+	sandboxguard.Require()
 	if dbPath := os.Getenv(envFreshInitHelper); dbPath != "" {
 		freshInitHelperMain(dbPath)
 		return

@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(go test:*)",
+      "Bash(bun test:*)",
+      "Bash(go run:*)",
+      "Bash(./bin/agent-director:*)",
+      "Bash(bin/agent-director:*)",
+      "Bash(./bin/ts-helper:*)",
+      "Bash(bin/ts-helper:*)"
+    ]
+  }
+}

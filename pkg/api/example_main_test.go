@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"testing"
+
+	"github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard"
 )
 
 // apiTrailDir is the AGENT_DIRECTOR_STATE_DIR for this test binary. Set by
@@ -26,6 +28,7 @@ var apiTrailDir string
 //
 // Per-test isolation is the primary guarantee; this is defense-in-depth.
 func TestMain(m *testing.M) {
+	sandboxguard.Require()
 	// ── Redirect $HOME (defense-in-depth) ────────────────────────────────────
 	// Catches paths that use os.Getenv("HOME") / os.UserHomeDir().
 	tmpHome, err := os.MkdirTemp("", "pkg-api-home-*")
