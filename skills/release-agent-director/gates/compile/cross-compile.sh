@@ -2,6 +2,13 @@
 # gate:        compile (cross-platform)
 # checks:      make release-binaries produces 3 cross-compiled binaries
 # usage:       bash cross-compile.sh [--worktree-root <path>]
+# env:         RELEASE_PKG_DIR — dir holding the canonical package.json used for
+#                   version derivation (default: pkg/ts-bun-client).
+#              RELEASE_DIST_DIR — output dir for the release binaries this gate
+#                   asks `make release-binaries` to produce and then inspects
+#                   (default: dist). Both are relative to the worktree root and
+#                   are passed through to `make` verbatim; point them at isolated
+#                   paths for concurrent test runs (b.aur).
 # pass:        consolidated JSON to stdout, exit 0
 # fail:        SR-14 diagnostics to stderr, consolidated JSON to stdout, exit 1
 
@@ -31,8 +38,9 @@ cd "$WORKTREE_ROOT"
 
 # ─── version derivation ───────────────────────────────────────────────────────
 # Honor caller override; otherwise derive from the canonical version source.
+PKG_DIR="${RELEASE_PKG_DIR:-pkg/ts-bun-client}"
 if [[ -z "${AGENT_DIRECTOR_BUILD_VERSION:-}" ]]; then
-  PKG_JSON="pkg/ts-bun-client/package.json"
+  PKG_JSON="${PKG_DIR}/package.json"
   if [[ ! -f "$PKG_JSON" ]]; then
     emit_diagnostic \
       "compile.version-derivation" \
@@ -54,8 +62,10 @@ fi
 export AGENT_DIRECTOR_BUILD_VERSION
 
 # ─── targets ──────────────────────────────────────────────────────────────────
+# DIST_DIR must match the RELEASE_DIST_DIR passed through to `make` below.
+DIST_DIR="${RELEASE_DIST_DIR:-dist}"
 TARGETS=("linux/amd64" "linux/arm64" "darwin/arm64")
-BINARIES=("dist/agent-director-linux-amd64" "dist/agent-director-linux-arm64" "dist/agent-director-darwin-arm64")
+BINARIES=("${DIST_DIR}/agent-director-linux-amd64" "${DIST_DIR}/agent-director-linux-arm64" "${DIST_DIR}/agent-director-darwin-arm64")
 GATE_NAMES=("compile.linux-amd64" "compile.linux-arm64" "compile.darwin-arm64")
 
 # ─── run make release-binaries ────────────────────────────────────────────────

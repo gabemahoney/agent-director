@@ -240,6 +240,38 @@ only; `repack-and-verify.sh` still hardcodes `dist/` (writes
 `install-verify.sh` is unaffected — it takes an explicit `--tarball <path>`
 and never reads `dist/`.
 
+#### Release-gate isolation env vars
+
+Real release runs read/write the repo-root `dist/`, the canonical
+`pkg/ts-bun-client/package.json`, and `skills/release-agent-director/dist/`.
+Those are shared paths, so synthetic-regression tests that run the gates
+concurrently would race each other (b.ovv fixed the `pack-first.sh` output
+slice; b.aur closed the remaining input/output races). Every path is now
+overridable via an env var so a test can point each gate at a per-test copy or
+`t.TempDir()`. All default to today's hardcoded values, so unset behavior — a
+real release — is unchanged. Directory values resolve relative to the worktree
+root (except `RELEASE_REPORT_DIR` — see the table note); **pass absolute paths
+for isolation**.
+
+| Env var | Default | Effect | Honored by |
+|---|---|---|---|
+| `PACK_OUTPUT_DIR` | `dist` | output dir for the packed tarball | `pack-first.sh` |
+| `RELEASE_DIST_DIR` | `dist` | output dir for `make release-binaries` (cross-compiled binaries) | Makefile `release-binaries` / `release-binaries-smoke`, `cross-compile.sh` |
+| `SMOKE_DIST_DIR` | `dist` | dir the smoke gate reads release binaries from | `per-binary-smoke.sh` |
+| `COHERENCE_DIST_DIR` | `dist` | dir the coherence gate reads binaries from | `binary-version.sh` |
+| `RELEASE_PKG_DIR` | `pkg/ts-bun-client` | dir holding the canonical `package.json` / packable package (drives `RELEASE_VERSION`) | Makefile, `pack-first.sh`, `binary-version.sh`, `cross-compile.sh` |
+| `RELEASE_REPORT_DIR` | `${SKILL_ROOT}/dist` (i.e. `skills/release-agent-director/dist`) † | dir the publish orchestrator writes `release-report.json` into | `publish-orchestrator.sh` |
+
+† Unlike the other rows, `RELEASE_REPORT_DIR` is **not** resolved relative to
+the worktree root: `publish-orchestrator.sh` never `cd`s there. Its default is
+skill-root-anchored (`${SKILL_ROOT}/dist`, where `SKILL_ROOT` is the script's
+location), and a relative override resolves against the caller's cwd. An
+absolute override is used verbatim — pass an absolute path for isolation.
+
+`pack-first.sh`'s staging `--destination` is made absolute internally, so an
+arbitrarily deep `RELEASE_PKG_DIR` works. `repack-and-verify.sh` and
+`install-verify.sh` are unchanged (see the `PACK_OUTPUT_DIR` note above).
+
 **Install**
 - `install.clean-env` — creates a clean temp dir (outside the worktree), runs `npm install <tarball> --no-package-lock --no-save`.
 - `install.verify-pkg` — `bun --eval` imports the installed package and asserts the `Client` export exists. Narrower than verify-installed-pkg.ts --smoke (which spawns the CLI); the structural import check is what SR-10 needs.

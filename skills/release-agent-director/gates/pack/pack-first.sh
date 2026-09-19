@@ -6,6 +6,12 @@
 # env:      PACK_OUTPUT_DIR — output dir for the tarball, relative to the
 #           worktree root (default: dist). Set to an isolated path so
 #           concurrent invocations never share an output directory.
+#           RELEASE_PKG_DIR — dir holding the ts-bun-client package to pack and
+#           to derive the target version from (default: pkg/ts-bun-client),
+#           relative to the worktree root. It is an isolation hook: point it at
+#           an isolated copy of pkg/ts-bun-client so a concurrent rewrite of the
+#           real package.json cannot race this pack and produce an empty
+#           embedded version (b.aur).
 # pass:     <PACK_OUTPUT_DIR>/<tarball> created, exit 0
 # fail:     SR-14 diagnostic to stderr, exit 1
 
@@ -19,6 +25,7 @@ source "${GATE_LIB}/emit-diagnostic.sh"
 WORKTREE_ROOT="."
 TARGET_VERSION=""
 OUTPUT_DIR="${PACK_OUTPUT_DIR:-dist}"
+PKG_DIR="${RELEASE_PKG_DIR:-pkg/ts-bun-client}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -41,15 +48,18 @@ cd "$WORKTREE_ROOT"
 
 # ─── derive target version from package.json if not supplied ──────────────────
 if [[ -z "$TARGET_VERSION" ]]; then
-  TARGET_VERSION="$(jq -r .version pkg/ts-bun-client/package.json)"
+  TARGET_VERSION="$(jq -r .version "${PKG_DIR}/package.json")"
 fi
 
 # ─── staging directory (inside repo so bun can resolve paths) ─────────────────
 STAGING="$(mktemp -d -p . pack-staging.XXXXXX)"
+# Absolute path so `bun pm pack --destination` resolves correctly regardless of
+# where PKG_DIR sits relative to the worktree root.
+STAGING_ABS="$(cd "$STAGING" && pwd)"
 trap 'rm -rf "$STAGING"' EXIT
 
 # ─── pack ─────────────────────────────────────────────────────────────────────
-(cd pkg/ts-bun-client && bun pm pack --destination "../../$STAGING") >/dev/null 2>&1
+(cd "$PKG_DIR" && bun pm pack --destination "$STAGING_ABS") >/dev/null 2>&1
 
 # ─── detect produced tarball ──────────────────────────────────────────────────
 TARBALL="$(ls "$STAGING"/*.tgz 2>/dev/null | head -1)"

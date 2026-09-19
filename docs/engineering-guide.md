@@ -315,20 +315,6 @@ regressions introduced by a change under test:
   container HOME, but the smoke canary correctly reports it and fails the
   package. This is the sandbox doing its job; it disappears once the trail
   fallback is fixed.
-- **Release-gate regression tests still race under full parallelism (b.aur).**
-  b.ovv gave `pack-first.sh` a `PACK_OUTPUT_DIR` and moved the pack-first tests
-  onto per-test `t.TempDir()` output dirs, fixing the shared *output* `dist/`
-  race. But a second, distinct race remains: tests that run
-  `make release-binaries` (`smoke-magic-bytes-fires`,
-  `coherence-binary-version-fires`) still write/delete the shared repo-root
-  `dist/` and read the real `pkg/ts-bun-client/package.json`, and
-  `release-postconditions` reads `skills/release-agent-director/dist/release-report.json`
-  (same family as the b.w7e ETXTBSY note in `bunfig.toml`). Which subset fails
-  varies run to run — do not treat a different or larger set of failing
-  packages under this directory as a regression. They all pass when run
-  serially (`go test -p 1 …`); that stays the reliable full-suite invocation
-  until b.aur lands. This is a pre-existing test-hermeticity gap, not a sandbox
-  bug.
 - **One bun serialization test is timing-sensitive** (asserts a >5 ms gap
   between serialized spawns); on this fast host it occasionally measures
   ~4 ms and flakes.

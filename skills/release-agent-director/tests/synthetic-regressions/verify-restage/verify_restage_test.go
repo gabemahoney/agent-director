@@ -38,8 +38,32 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
+
+// acquireDistPackLock serializes tests that read or write the real
+// pkg/ts-bun-client/dist/. This test `bun pm pack`s that dir via pack-first.sh;
+// coverage-bun-test-fires rewrites it via `bun run build`. Without
+// serialization a concurrent rebuild races the pack (b.aur). The lock lives
+// under the OS temp dir — shared across these packages within a single
+// `go test` run, and never touches the repo tree.
+func acquireDistPackLock(t *testing.T) {
+	t.Helper()
+	lockPath := filepath.Join(os.TempDir(), "agent-director-ts-bun-dist-pack.lock")
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatalf("acquireDistPackLock: open %s: %v", lockPath, err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		t.Fatalf("acquireDistPackLock: flock: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	})
+}
 
 // repoRoot walks up from the package working directory until it finds go.mod.
 func repoRoot(t *testing.T) string {
@@ -76,6 +100,10 @@ func TestVerifyRestageFires(t *testing.T) {
 	}
 
 	root := repoRoot(t)
+
+	// pack-first.sh packs the real pkg/ts-bun-client/dist/; serialize against
+	// coverage-bun-test-fires which rebuilds it (b.aur).
+	acquireDistPackLock(t)
 
 	// ── 1. Pack a clean tarball via pack-first.sh into an isolated output
 	//      dir. An absolute t.TempDir() path is used because a relative
