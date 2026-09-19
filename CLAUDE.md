@@ -6,6 +6,7 @@
 - **Internal architecture docs**: docs/architecture.md
 - **Customer-facing docs**: README.md
 - **Test writing guide**: docs/test-writing-guide.md
+- **Schema migration guide**: docs/migration-guide.md
 - **Doc writing guide**: docs/readme-guide.md, docs/architecture-docs-guide.md
 
 ## Running tests / built artifacts

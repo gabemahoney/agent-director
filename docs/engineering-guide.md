@@ -198,7 +198,10 @@ any branch that touches:
   path resolution, `expandTilde`)
 
 Running host-side tests on those branches risks silently migrating the
-production database to an incompatible schema version.
+production database to an incompatible schema version. When you are *writing*
+that schema change, follow docs/migration-guide.md — it covers the
+one-tx-per-hop rule, the two-places rule, the run-the-upgrade-twice test
+recipe, and this sandbox-only execution rule with b.8dr as the case study.
 
 ### Fail-fast marker guard
 
