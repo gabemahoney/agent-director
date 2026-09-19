@@ -77,26 +77,25 @@ func TestVerifyRestageFires(t *testing.T) {
 
 	root := repoRoot(t)
 
-	// ── 1. Remove dist/ when the test finishes ────────────────────────────
-	t.Cleanup(func() {
-		if err := os.RemoveAll(filepath.Join(root, "dist")); err != nil {
-			t.Errorf("t.Cleanup: remove dist/: %v", err)
-		}
-	})
-
-	// ── 2. Pack a clean tarball via pack-first.sh ─────────────────────────
+	// ── 1. Pack a clean tarball via pack-first.sh into an isolated output
+	//      dir. An absolute t.TempDir() path is used because a relative
+	//      PACK_OUTPUT_DIR would land inside the shared worktree root and not
+	//      isolate concurrent tests; t.TempDir() also auto-cleans, so no dist/
+	//      cleanup is needed. ─────────────────────────────────────────────────
+	outDir := t.TempDir()
 	packScript := filepath.Join(root, "skills", "release-agent-director", "gates", "pack", "pack-first.sh")
 	packCmd := exec.Command("bash", packScript)
 	packCmd.Dir = root
+	packCmd.Env = append(os.Environ(), "PACK_OUTPUT_DIR="+outDir)
 	packOut, err := packCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("pack-first.sh failed: %v\n%s", err, packOut)
 	}
 
-	tgzGlob := filepath.Join(root, "dist", "*.tgz")
+	tgzGlob := filepath.Join(outDir, "*.tgz")
 	matches, err := filepath.Glob(tgzGlob)
 	if err != nil || len(matches) == 0 {
-		t.Fatalf("no .tgz found in dist/ after pack-first.sh; glob=%q err=%v", tgzGlob, err)
+		t.Fatalf("no .tgz found in %s after pack-first.sh; glob=%q err=%v", outDir, tgzGlob, err)
 	}
 	cleanTarball := matches[0]
 

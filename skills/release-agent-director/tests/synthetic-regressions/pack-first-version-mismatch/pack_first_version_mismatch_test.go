@@ -20,7 +20,10 @@
 // 4. Assertions: (a) gate exits non-zero; (b) stderr contains an SR-14 JSON
 //                object with gate=="pack.first"; (c) stderr mentions both
 //                observed version "0.0.0" and expected version "9.9.9".
-// 5. Cleanup  : rm -rf dist/ — the tarball is an ephemeral artifact.
+// 5. Cleanup  : pack-first.sh writes into a per-test t.TempDir() (via
+//               PACK_OUTPUT_DIR) rather than the shared repo-root dist/, so
+//               the ephemeral tarball is auto-cleaned by the Go test runner
+//               and concurrent tests never collide — no dist/ removal needed.
 //
 // SLOW TEST
 // =========
@@ -72,17 +75,16 @@ func TestPackFirstVersionMismatch(t *testing.T) {
 
 	root := repoRoot(t)
 
-	// ── 1. Register cleanup: remove dist/ unconditionally ─────────────────
-	t.Cleanup(func() {
-		if err := os.RemoveAll(filepath.Join(root, "dist")); err != nil {
-			t.Errorf("t.Cleanup: remove dist/: %v", err)
-		}
-	})
-
-	// ── 2. Run the gate with a mismatched target version ──────────────────
+	// ── 1. Run the gate with a mismatched target version, writing into an
+	//      isolated output dir. An absolute t.TempDir() path is used because a
+	//      relative PACK_OUTPUT_DIR would land inside the shared worktree root
+	//      and not isolate concurrent tests; t.TempDir() also auto-cleans, so no
+	//      dist/ cleanup is needed. ────────────────────────────────────────────
+	outDir := t.TempDir()
 	gateScript := filepath.Join(root, "skills", "release-agent-director", "gates", "pack", "pack-first.sh")
 	gateCmd := exec.Command("bash", gateScript, "--target-version", "9.9.9")
 	gateCmd.Dir = root
+	gateCmd.Env = append(os.Environ(), "PACK_OUTPUT_DIR="+outDir)
 
 	var stderrBuf strings.Builder
 	gateCmd.Stdout = os.Stdout
@@ -129,4 +131,54 @@ func TestPackFirstVersionMismatch(t *testing.T) {
 	}
 
 	t.Logf("pack.first fired correctly (exit %d).\nGate stderr: %s", gateCmd.ProcessState.ExitCode(), stderr)
+}
+
+// TestPackFirstHonorsOutputDir is the b.ovv regression guard. It asserts that
+// pack-first.sh writes the produced tarball into the directory named by
+// PACK_OUTPUT_DIR (an absolute t.TempDir()) instead of the shared repo-root
+// dist/. This is what lets the synthetic-regression tests use per-test output
+// dirs and run under full `go test ./...` parallelism without racing on dist/.
+//
+// Pre-fix behaviour: the old pack-first.sh ignored PACK_OUTPUT_DIR and always
+// wrote to repo-root dist/, so PACK_OUTPUT_DIR stayed empty — this test's
+// "exactly one .tgz in the output dir" assertion failed. Post-fix it passes.
+//
+// The gate is run without --target-version, so pack-first.sh derives the
+// target from the on-disk package.json, the embedded-version assert passes,
+// and it exits 0 after landing the tarball in the output dir. (This mirrors
+// the three sibling tests, which also invoke the gate with no --target-version.)
+func TestPackFirstHonorsOutputDir(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow: runs bun pm pack")
+	}
+	if _, err := exec.LookPath("bun"); err != nil {
+		t.Skip("bun not found on PATH; skipping pack.first output-dir test")
+	}
+
+	root := repoRoot(t)
+
+	// Isolated, absolute output dir. Auto-cleaned by the Go test runner.
+	outDir := t.TempDir()
+
+	gateScript := filepath.Join(root, "skills", "release-agent-director", "gates", "pack", "pack-first.sh")
+	gateCmd := exec.Command("bash", gateScript)
+	gateCmd.Dir = root
+	gateCmd.Env = append(os.Environ(), "PACK_OUTPUT_DIR="+outDir)
+	out, err := gateCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("pack-first.sh should exit 0 when target version matches; err=%v\n%s", err, out)
+	}
+
+	// The tarball must land in the honored output dir — this is the assertion
+	// that fails against the pre-fix script (which wrote to repo-root dist/).
+	matches, err := filepath.Glob(filepath.Join(outDir, "*.tgz"))
+	if err != nil {
+		t.Fatalf("glob %s: %v", outDir, err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("pack-first.sh did not honor PACK_OUTPUT_DIR=%s: want exactly 1 .tgz there, found %d (%v).\nThe pre-fix script ignored the var and wrote to repo-root dist/.",
+			outDir, len(matches), matches)
+	}
+
+	t.Logf("pack-first.sh honored PACK_OUTPUT_DIR: %s", matches[0])
 }

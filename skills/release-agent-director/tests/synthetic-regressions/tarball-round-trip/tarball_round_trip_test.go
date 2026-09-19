@@ -23,9 +23,10 @@
 // repack-and-verify.sh packs internally when called, so the gate sees the
 // real second-pack contents versus our mutated first-pack contents.
 //
-// Cleanup: dist/ is removed unconditionally via t.Cleanup (both tests).
-// Temporary tarballs/dirs created outside the repo live in t.TempDir() and
-// are cleaned up by the Go test runner automatically.
+// Cleanup: pack-first.sh writes into a per-test t.TempDir() (via
+// PACK_OUTPUT_DIR) rather than the shared repo-root dist/, so concurrent
+// tests never collide and all temporary tarballs/dirs are cleaned up by the
+// Go test runner automatically — no dist/ removal needed.
 //
 // SLOW TEST
 // =========
@@ -75,27 +76,25 @@ func TestTarballRoundTripByteIdentical(t *testing.T) {
 
 	root := repoRoot(t)
 
-	// ── 1. Remove dist/ when the test finishes ────────────────────────────
-	t.Cleanup(func() {
-		if err := os.RemoveAll(filepath.Join(root, "dist")); err != nil {
-			t.Errorf("t.Cleanup: remove dist/: %v", err)
-		}
-	})
-
-	// ── 2. Pack the first tarball ─────────────────────────────────────────
+	// ── 1. Pack the first tarball into an isolated output dir ─────────────
+	// An absolute t.TempDir() path is used because a relative PACK_OUTPUT_DIR
+	// would land inside the shared worktree root and not isolate concurrent
+	// tests. t.TempDir() also auto-cleans, so no dist/ cleanup is needed.
+	outDir := t.TempDir()
 	packScript := filepath.Join(root, "skills", "release-agent-director", "gates", "pack", "pack-first.sh")
 	packCmd := exec.Command("bash", packScript)
 	packCmd.Dir = root
+	packCmd.Env = append(os.Environ(), "PACK_OUTPUT_DIR="+outDir)
 	packOut, err := packCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("pack-first.sh failed: %v\n%s", err, packOut)
 	}
 
 	// Locate the produced tarball.
-	tgzGlob := filepath.Join(root, "dist", "*.tgz")
+	tgzGlob := filepath.Join(outDir, "*.tgz")
 	matches, err := filepath.Glob(tgzGlob)
 	if err != nil || len(matches) == 0 {
-		t.Fatalf("no .tgz found in dist/ after pack-first.sh; glob=%q err=%v", tgzGlob, err)
+		t.Fatalf("no .tgz found in %s after pack-first.sh; glob=%q err=%v", outDir, tgzGlob, err)
 	}
 	firstTarball := matches[0]
 
@@ -133,14 +132,11 @@ func TestTarballRoundTripMismatchDetected(t *testing.T) {
 
 	root := repoRoot(t)
 
-	// ── 1. Remove dist/ when the test finishes ────────────────────────────
-	t.Cleanup(func() {
-		if err := os.RemoveAll(filepath.Join(root, "dist")); err != nil {
-			t.Errorf("t.Cleanup: remove dist/: %v", err)
-		}
-	})
+	// This test never invokes pack-first.sh — it builds a synthetic "first"
+	// tarball in t.TempDir() and passes it to repack-and-verify.sh — so it
+	// touches no repo-root dist/ and needs no cleanup.
 
-	// ── 2. Build a synthetic "first" tarball with a mutated dist/index.js ─
+	// ── 1. Build a synthetic "first" tarball with a mutated dist/index.js ─
 	// The tarball is placed outside the repo (in t.TempDir()) so it cannot
 	// interfere with the repo tree.  The file structure mirrors what bun pm
 	// pack produces (package/ prefix), but the dist/index.js content
