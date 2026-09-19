@@ -47,8 +47,11 @@ curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/ski
 That fetches `install.sh` from `main`, then runs it with
 `--from-release` so it auto-detects your OS/arch, downloads the
 matching binary from the [latest GitHub release](https://github.com/gabemahoney/agent-director/releases/latest),
-sets up `~/.agent-director/`, drops a PATH symlink, warms up
-`state.db`, and installs the SessionStart/SessionEnd help hooks.
+sets up `~/.agent-director/`, drops a PATH symlink, brings
+`state.db` to the current schema (creating it on a fresh host,
+or upgrading it in place; a schema problem fails the install
+loudly rather than half-installing), and installs the
+SessionStart/SessionEnd help hooks.
 
 Optionally pass `--register-mcp` to also register the stdio MCP
 server, or `--no-hooks` to leave `~/.claude/settings.json` untouched.
@@ -93,6 +96,11 @@ The skill ships in this repo at
 [`skills/install-agent-director/`](skills/install-agent-director/SKILL.md)
 and is auto-discoverable by Claude Code if you've cloned the repo
 under a directory it indexes.
+
+Upgrading is the same skill: re-running the install brings an
+existing `state.db` up to the current schema automatically. If a
+session ever reports a schema-version error, re-run the install to
+resolve it.
 
 ### Install the TS client
 
