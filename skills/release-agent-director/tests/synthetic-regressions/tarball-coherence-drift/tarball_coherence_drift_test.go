@@ -30,8 +30,10 @@
 //    Overall: failed; exit 1.
 // 6. Assert exit 1 and stderr contains "gate":"coherence.tarball-version".
 //
-// Cleanup: dist/ removed unconditionally via t.Cleanup; mutated tarballs
-// live in t.TempDir() and are cleaned up by the Go test runner.
+// Cleanup: pack-first.sh writes into a per-test t.TempDir() (via
+// PACK_OUTPUT_DIR) rather than the shared repo-root dist/; mutated tarballs
+// also live in t.TempDir(). All are cleaned up by the Go test runner, so
+// no dist/ removal is needed and concurrent tests never collide.
 //
 // SLOW TEST
 // =========
@@ -82,26 +84,25 @@ func TestTarballCoherenceDriftFires(t *testing.T) {
 
 	root := repoRoot(t)
 
-	// ── 1. Remove dist/ when the test finishes ────────────────────────────
-	t.Cleanup(func() {
-		if err := os.RemoveAll(filepath.Join(root, "dist")); err != nil {
-			t.Errorf("t.Cleanup: remove dist/: %v", err)
-		}
-	})
-
-	// ── 2. Pack a clean tarball (embedded version "0.0.0") ────────────────
+	// ── 1. Pack a clean tarball (embedded version "0.0.0") into an isolated
+	//      output dir. An absolute t.TempDir() path is used because a relative
+	//      PACK_OUTPUT_DIR would land inside the shared worktree root and not
+	//      isolate concurrent tests; t.TempDir() also auto-cleans, so no dist/
+	//      cleanup is needed. ─────────────────────────────────────────────────
+	outDir := t.TempDir()
 	packScript := filepath.Join(root, "skills", "release-agent-director", "gates", "pack", "pack-first.sh")
 	packCmd := exec.Command("bash", packScript)
 	packCmd.Dir = root
+	packCmd.Env = append(os.Environ(), "PACK_OUTPUT_DIR="+outDir)
 	packOut, err := packCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("pack-first.sh failed: %v\n%s", err, packOut)
 	}
 
-	tgzGlob := filepath.Join(root, "dist", "*.tgz")
+	tgzGlob := filepath.Join(outDir, "*.tgz")
 	matches, err := filepath.Glob(tgzGlob)
 	if err != nil || len(matches) == 0 {
-		t.Fatalf("no .tgz found in dist/ after pack-first.sh; glob=%q err=%v", tgzGlob, err)
+		t.Fatalf("no .tgz found in %s after pack-first.sh; glob=%q err=%v", outDir, tgzGlob, err)
 	}
 	cleanTarball := matches[0]
 

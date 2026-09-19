@@ -231,6 +231,15 @@ Three sub-phase blocks fire sequentially:
 Subprocesses: `skills/release-agent-director/gates/pack/pack-first.sh`,
 `skills/release-agent-director/gates/pack/repack-and-verify.sh`.
 
+`pack-first.sh` writes the tarball to `dist/` by default but honors
+`$PACK_OUTPUT_DIR` (resolved relative to the worktree root; pass an absolute
+path for isolation) — tests point it at a per-test `t.TempDir()` so concurrent
+runs never share an output directory. `PACK_OUTPUT_DIR` affects `pack-first.sh`
+only; `repack-and-verify.sh` still hardcodes `dist/` (writes
+`dist/sha256sums`, reads the `dist/agent-director-*` binaries).
+`install-verify.sh` is unaffected — it takes an explicit `--tarball <path>`
+and never reads `dist/`.
+
 **Install**
 - `install.clean-env` — creates a clean temp dir (outside the worktree), runs `npm install <tarball> --no-package-lock --no-save`.
 - `install.verify-pkg` — `bun --eval` imports the installed package and asserts the `Client` export exists. Narrower than verify-installed-pkg.ts --smoke (which spawns the CLI); the structural import check is what SR-10 needs.
