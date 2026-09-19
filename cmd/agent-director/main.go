@@ -355,6 +355,8 @@ func setupClient(gOpts globalOptions) (*pkgapi.Client, config.Config, error) {
 		switch {
 		case errors.Is(err, store.ErrSchemaMismatch):
 			name = "ErrSchemaMismatch"
+		case errors.Is(err, store.ErrSchemaMigrationRequired):
+			name = "ErrSchemaMigrationRequired"
 		case errors.Is(err, store.ErrStoreNotInitialized):
 			name = errStoreOpen
 		}

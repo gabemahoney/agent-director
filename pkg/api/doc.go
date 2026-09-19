@@ -45,6 +45,10 @@
 //	if errors.Is(err, api.ErrSchemaMismatch) {
 //	    // DB schema version mismatch; operator must re-initialize the store
 //	}
+//	if errors.Is(err, api.ErrSchemaMigrationRequired) {
+//	    // DB is older than this binary; migration must be performed by an
+//	    // administrator via the agent-director install process
+//	}
 //
 // # Verb reference
 //

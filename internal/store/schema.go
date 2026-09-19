@@ -48,33 +48,123 @@ CREATE INDEX IF NOT EXISTS idx_permission_requests_instance_decision   ON permis
 CREATE INDEX IF NOT EXISTS idx_permission_requests_decision_decided_at ON permission_requests(decision, decided_at);
 `
 
+// migrationStep upgrades a database from `from` to `from+1` inside a single
+// transaction. Each step is individually transactional (per the migrateV1toV2
+// pattern): a rollback on any error leaves user_version at `from` intact, so a
+// crash mid-chain never strands the DB at an intermediate, un-stamped version.
+type migrationStep struct {
+	// from is the user_version this step upgrades away from (it produces
+	// from+1).
+	from int
+	// apply runs the DDL and stamps user_version = from+1 in one tx.
+	apply func(db *sql.DB) error
+}
+
+// migrationSteps is the ordered registry of single-version upgrades. Steps are
+// keyed by their `from` version and applied in ascending order until the DB
+// reaches schemaVersion. Adding a new schema version means bumping
+// schemaVersion (store.go), evolving schemaDDL for fresh-create, and appending
+// one migrationStep{from: N, apply: migrateVNtoVN+1} here — the chain engine
+// then upgrades any authorized older DB to current in a single open.
+var migrationSteps = []migrationStep{
+	{from: 1, apply: migrateV1toV2},
+}
+
 // ensureSchema enforces the schema-version contract on an opened *sql.DB.
 //
-//	user_version == 0           -> fresh DB; create tables/indexes in one tx,
-//	                               stamp user_version = schemaVersion.
-//	user_version == 1           -> migrate v1→v2 in one tx.
+//	user_version == 0             -> fresh DB; create tables/indexes in one tx,
+//	                                 stamp user_version = schemaVersion.
+//	0 < user_version < schemaVersion (older-than-binary)
+//	                              -> gated: migrate ONLY when an administrator
+//	                                 authorization sentinel exact-matches;
+//	                                 otherwise ErrSchemaMigrationRequired and
+//	                                 no DB write. When authorized, apply the
+//	                                 chained single-version steps in one open.
 //	user_version == schemaVersion -> nothing to do.
-//	anything else                 -> ErrSchemaMismatch, no DDL executed.
+//	user_version > schemaVersion  -> ErrSchemaMismatch, no DDL executed.
 //
 // Splitting the fresh-DB write into a transaction means a crash mid-creation
-// leaves user_version at 0, so the next Open will retry cleanly.
-func ensureSchema(db *sql.DB) error {
+// leaves user_version at 0, so the next Open will retry cleanly. dbPath is the
+// resolved path of the DB file; it is used only to locate the sibling
+// authorization sentinel (see authorizeMigration) — the DB itself is never
+// touched on a refused open, preserving byte-identity.
+func ensureSchema(db *sql.DB, dbPath string) error {
 	var version int
 	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		return fmt.Errorf("store: read user_version: %w", err)
 	}
 
-	switch version {
-	case schemaVersion:
+	switch {
+	case version == schemaVersion:
 		return nil
-	case 0:
+	case version == 0:
 		return createSchema(db)
-	case 1:
-		return migrateV1toV2(db)
-	default:
+	case version > schemaVersion:
 		return fmt.Errorf("%w: found user_version=%d, want %d",
 			ErrSchemaMismatch, version, schemaVersion)
+	default:
+		// Older-than-binary: never auto-migrate. Require an administrator
+		// authorization sentinel that exact-matches this DB's actual version
+		// and this binary's schemaVersion; a refused open executes zero DB
+		// writes. authorizeMigration returns the refusal error verbatim on
+		// any miss.
+		if err := authorizeMigration(dbPath, version); err != nil {
+			return err
+		}
+		if err := runMigrationChain(db, version); err != nil {
+			return err
+		}
+		// Migration committed. Consume the authorization as part of the same
+		// logical operation and record the audit line. consumeAuthorization
+		// is fail-open: a delete failure emits a loud trail event but never
+		// fails the (already-committed) open.
+		consumeAuthorization(dbPath, version, schemaVersion)
+		return nil
 	}
+}
+
+// runMigrationChain applies single-version migration steps in ascending order
+// until the DB reaches schemaVersion. It is only reached after authorization
+// has been granted. Each step is individually transactional; if a step fails
+// the chain aborts with the DB stamped at the last successfully-committed
+// version, and the open fails.
+func runMigrationChain(db *sql.DB, from int) error {
+	version := from
+	for version < schemaVersion {
+		step, ok := migrationStepFrom(version)
+		if !ok {
+			// No registered step for this version but we are still below
+			// schemaVersion — a gap in the registry. Fail loudly rather than
+			// silently leave the DB behind.
+			return fmt.Errorf("%w: no migration step from user_version=%d toward %d",
+				ErrSchemaMismatch, version, schemaVersion)
+		}
+		if err := step.apply(db); err != nil {
+			return err
+		}
+		version++
+	}
+	return nil
+}
+
+// migrationStepFrom returns the registered step that upgrades away from the
+// given version, if one exists.
+func migrationStepFrom(from int) (migrationStep, bool) {
+	for _, s := range migrationSteps {
+		if s.from == from {
+			return s, true
+		}
+	}
+	return migrationStep{}, false
+}
+
+// buildMigrationRefusal constructs the SR-1.4 dead-end ErrSchemaMigrationRequired
+// error. The message names no command, flag, file path, or environment
+// variable — it routes the operator to their administrator and nowhere else.
+func buildMigrationRefusal(current int) error {
+	return fmt.Errorf("%w: state.db is schema v%d; this binary requires v%d. "+
+		"Migration must be performed by an administrator via the agent-director install process.",
+		ErrSchemaMigrationRequired, current, schemaVersion)
 }
 
 // createSchema runs the v2 DDL and stamps user_version in a single tx.
