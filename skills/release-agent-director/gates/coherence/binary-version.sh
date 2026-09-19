@@ -3,7 +3,13 @@
 # checks:      each host-executable binary reports a version field matching target
 # usage:       bash binary-version.sh [<target-version>]
 #              $1 — expected version string; if omitted, derived from
-#                   pkg/ts-bun-client/package.json
+#                   <RELEASE_PKG_DIR>/package.json
+# env:         RELEASE_PKG_DIR — dir holding the canonical package.json used for
+#                   version derivation (default: pkg/ts-bun-client), relative to
+#                   the worktree root.
+#              COHERENCE_DIST_DIR — dir holding the release binaries to inspect
+#                   (default: dist), relative to the worktree root. Point both at
+#                   isolated paths for concurrent test runs (b.aur).
 # pass:        consolidated JSON to stdout, exit 0
 # fail:        SR-14 diagnostics to stderr, consolidated JSON to stdout, exit 1
 
@@ -37,8 +43,9 @@ done
 cd "$WORKTREE_ROOT"
 
 # ─── derive target from package.json if not supplied ─────────────────────────
+PKG_DIR="${RELEASE_PKG_DIR:-pkg/ts-bun-client}"
 if [[ -z "$TARGET_VERSION" ]]; then
-  TARGET_VERSION="$(jq -r .version pkg/ts-bun-client/package.json)"
+  TARGET_VERSION="$(jq -r .version "${PKG_DIR}/package.json")"
 fi
 
 # ─── host platform detection ─────────────────────────────────────────────────
@@ -58,12 +65,17 @@ esac
 
 HOST_PLAT="${HOST_OS}-${HOST_ARCH}"
 
+# ─── binary directory ─────────────────────────────────────────────────────────
+# Resolved relative to the worktree root (already cd'd). Defaults to dist/ for
+# real release usage; tests set COHERENCE_DIST_DIR to an isolated path (b.aur).
+DIST_DIR="${COHERENCE_DIST_DIR:-dist}"
+
 # ─── platform table ───────────────────────────────────────────────────────────
 PLATFORMS=("linux-amd64" "linux-arm64" "darwin-arm64")
 BINARIES=(
-  "dist/agent-director-linux-amd64"
-  "dist/agent-director-linux-arm64"
-  "dist/agent-director-darwin-arm64"
+  "${DIST_DIR}/agent-director-linux-amd64"
+  "${DIST_DIR}/agent-director-linux-arm64"
+  "${DIST_DIR}/agent-director-darwin-arm64"
 )
 GATE_NAMES=(
   "coherence.binary-version.linux-amd64"

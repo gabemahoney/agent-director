@@ -24,7 +24,10 @@
 #
 # "would do" lines (dry-run) go to stdout.
 # SR-14 diagnostics and progress annotations go to stderr.
-# dist/release-report.json is always written (even on failure, for triage).
+# <report-dir>/release-report.json is always written (even on failure, for
+# triage). The report dir defaults to the skill's own dist/ but is overridable
+# via RELEASE_REPORT_DIR (env) so concurrent test invocations do not share the
+# report path (b.aur).
 #
 # --simulate-failure-at accepts substep short names (without the "publish." prefix):
 #   push-branch | create-tag | gh-release | npm-publish | fast-forward-main | delete-remote-branch
@@ -103,7 +106,10 @@ SUCCEEDED_SUBSTEPS=()   # names of substeps that completed successfully (for dia
 
 # Skill root: gates/publish -> gates -> release-agent-director
 SKILL_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-DIST_DIR="${SKILL_ROOT}/dist"
+# Report output dir: defaults to the skill's own dist/; tests point
+# RELEASE_REPORT_DIR at an isolated per-test dir so concurrent runs never share
+# the release-report.json path (b.aur). An absolute override is used verbatim.
+DIST_DIR="${RELEASE_REPORT_DIR:-${SKILL_ROOT}/dist}"
 mkdir -p "${DIST_DIR}"
 
 # Split comma-separated binaries into an array

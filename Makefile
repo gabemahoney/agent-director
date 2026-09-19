@@ -39,9 +39,23 @@ endif
 COMMIT_SHA      := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 VERSION_LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION_STR) -X $(VERSION_PKG).Commit=$(COMMIT_SHA)
 
+# RELEASE_PKG_DIR is the directory holding the canonical ts-bun-client package
+# (package.json + packable sources). It defaults to the real in-repo package.
+# It is an isolation hook: a caller (or test) can substitute an isolated copy
+# of pkg/ts-bun-client so a version rewrite cannot race the `release-binaries`
+# / `bun pm pack` step of a concurrent run (b.aur). A trailing slash is not
+# required.
+RELEASE_PKG_DIR ?= pkg/ts-bun-client
+
+# RELEASE_DIST_DIR is the output directory for the cross-compiled release
+# binaries. It defaults to the repo-root dist/; tests point it at a per-test
+# t.TempDir() so concurrent `make release-binaries` runs (and the cleanups that
+# delete the dir) never collide on the shared repo-root dist/ (b.aur).
+RELEASE_DIST_DIR ?= dist
+
 # RELEASE_VERSION is lazily evaluated: only computed when a recipe expands it
 # (so `make build` never invokes jq).
-RELEASE_VERSION = $(shell jq -r .version pkg/ts-bun-client/package.json)
+RELEASE_VERSION = $(shell jq -r .version $(RELEASE_PKG_DIR)/package.json)
 
 # Target-scoped override: make release-binaries stamps from package.json.
 # AGENT_DIRECTOR_BUILD_VERSION env still wins (env override is evaluated above).
@@ -385,7 +399,8 @@ sandbox: _sandbox-build
 	fi
 	$(_SANDBOX_RUN) bash -c '$(CMD)'
 
-# release-binaries cross-compiles the three supported targets into ./dist/.
+# release-binaries cross-compiles the three supported targets into
+# $(RELEASE_DIST_DIR) (default ./dist/; override for test isolation — b.aur).
 # CGO_ENABLED=0 + modernc.org/sqlite (pure Go SQLite) yields fully static
 # binaries on linux/* and standalone Mach-O on darwin/*. The -s -w
 # ldflags strip the symbol + debug tables to halve the artifact size.
@@ -393,18 +408,18 @@ sandbox: _sandbox-build
 # Per SRD §16.1: mac + linux only. Windows is not supported.
 # darwin/amd64 was dropped from v1 on 2026-05-24.
 release-binaries:
-	@mkdir -p dist
-	@echo "[release] building 3 binaries into ./dist/"
+	@mkdir -p "$(RELEASE_DIST_DIR)"
+	@echo "[release] building 3 binaries into $(RELEASE_DIST_DIR)/"
 	@for target in linux/amd64 linux/arm64 darwin/arm64; do \
 		os=$${target%/*}; arch=$${target#*/}; \
-		out="dist/agent-director-$${os}-$${arch}"; \
+		out="$(RELEASE_DIST_DIR)/agent-director-$${os}-$${arch}"; \
 		echo "  -> $${out}"; \
 		CGO_ENABLED=0 GOOS=$${os} GOARCH=$${arch} \
 			go build -trimpath -ldflags="-s -w $(VERSION_LDFLAGS)" \
 			-o "$${out}" ./cmd/agent-director || exit 1; \
 	done
 	@echo "[release] sizes:"
-	@du -h dist/agent-director-* | sed 's/^/  /'
+	@du -h "$(RELEASE_DIST_DIR)"/agent-director-* | sed 's/^/  /'
 
 # release-binaries-smoke runs static-linkage + magic-byte + host-arch
 # runnability checks. We avoid `file(1)` because it's not in the
@@ -421,7 +436,7 @@ release-binaries-smoke: release-binaries
 	echo "[smoke] magic-byte check on each artifact"; \
 	for target in linux/amd64 linux/arm64 darwin/arm64; do \
 		os=$${target%/*}; arch=$${target#*/}; \
-		out="dist/agent-director-$${os}-$${arch}"; \
+		out="$(RELEASE_DIST_DIR)/agent-director-$${os}-$${arch}"; \
 		magic=$$(od -A n -t x1 -N 4 "$${out}" | tr -d ' '); \
 		case "$${os}_$${magic}" in \
 			linux_7f454c46)  echo "  $${out}: ELF (OK)" ;; \
@@ -432,7 +447,7 @@ release-binaries-smoke: release-binaries
 	done; \
 	echo "[smoke] static-link check on linux binaries (ldd → 'not a dynamic executable')"; \
 	for arch in amd64 arm64; do \
-		out="dist/agent-director-linux-$${arch}"; \
+		out="$(RELEASE_DIST_DIR)/agent-director-linux-$${arch}"; \
 		if ldd "$${out}" 2>&1 | grep -q "not a dynamic executable"; then \
 			echo "  $${out}: statically linked"; \
 		else \
@@ -442,7 +457,7 @@ release-binaries-smoke: release-binaries
 		fi; \
 	done; \
 	echo "[smoke] host-arch exec (linux-amd64 help)"; \
-	./dist/agent-director-linux-amd64 help | jq -e '.verbs | length > 0' >/dev/null \
+	"$(RELEASE_DIST_DIR)/agent-director-linux-amd64" help | jq -e '.verbs | length > 0' >/dev/null \
 		|| { echo "FAIL: linux-amd64 help did not return a non-empty verb list"; exit 1; }; \
 	echo "[smoke] OK — all 3 binaries built, linked, and the host-arch one runs"
 
