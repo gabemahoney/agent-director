@@ -1,6 +1,6 @@
 ---
 name: install-agent-director
-description: Install (or upgrade) agent-director on this machine. Runs the bundled install.sh against the user's ~/ — creates ~/.agent-director/ with the binary, warms up state.db, and injects two persistent `agent-director help` hooks into ~/.claude/settings.json (SessionStart + SessionEnd reason=compact). Use this skill when the user says "install agent-director", "set up agent-director", or "upgrade agent-director on this machine".
+description: Install (or upgrade) agent-director on this machine. Runs the bundled install.sh against the user's ~/ — creates ~/.agent-director/ with the binary, migrates and opens state.db (authorizing any older-schema upgrade via a one-shot sentinel), and injects two persistent `agent-director help` hooks into ~/.claude/settings.json (SessionStart + SessionEnd reason=compact). Use this skill when the user says "install agent-director", "set up agent-director", or "upgrade agent-director on this machine".
 ---
 
 ## First-time install on a brand-new machine
@@ -259,12 +259,19 @@ This skill runs `install.sh` from the same directory. The script:
       `Darwin/x86_64`, etc.) is hard-refused with a message naming
       the supported set and referencing Idea Bee `b.fg3` for
       cross-platform expansion status.
-   3. **Required tools on PATH.** `claude`, `tmux`, `jq`, and
-      `file` must all resolve via `command -v`. The `file(1)` tool
-      is mandatory because step 6 below relies on it to probe
+   3. **Required tools on PATH.** `claude`, `tmux`, `jq`, `file`,
+      and `sqlite3` must all resolve via `command -v`. The `file(1)`
+      tool is mandatory because step 6 below relies on it to probe
       `--binary` artifacts (never silent-skip per SR-2.2);
       install via `apt install file` / `brew install file-formula`
-      / `dnf install file`. `curl` is also required when
+      / `dnf install file`. `sqlite3` is mandatory for the
+      schema-migration flow (below): the script reads state.db's
+      ACTUAL `user_version` through the WAL with
+      `sqlite3 "PRAGMA user_version"` — raw header bytes are subtly
+      wrong for a WAL-mode DB — both to decide whether a migration
+      sentinel is needed and to verify the post-open version;
+      install via `apt install sqlite3` / `brew install sqlite` /
+      `dnf install sqlite`. `curl` is also required when
       `--from-release` is supplied.
    4. **`--from-release` resolution** (if applicable) — downloads
       the matching asset for `$(uname -s)`/`$(uname -m)` from GitHub
@@ -322,9 +329,45 @@ This skill runs `install.sh` from the same directory. The script:
    path; the script aborts up front rather than failing mysteriously
    later.
 
-5. **Warms up the database.** Runs `agent-director help` once so
-   `internal/store.ensureSchema` creates `state.db` (mode 0600) and
-   stamps the schema version.
+5. **Migrates and opens the database — the six-step schema flow
+   (SR-1.7).** An older-than-binary `state.db` opens ONLY when an
+   administrator has authorized exactly that schema transition; the
+   install runs on the end-user's machine as an admin action, so it
+   is the legitimate authorizer. See the **"Schema migration: the
+   six-step sentinel flow"** section below for the full detail. In
+   brief, in order:
+
+   1. **Install the new binary** — already done by step 3/the atomic
+      `mv` above.
+   2. **Read the DB's ACTUAL `user_version`** via
+      `sqlite3 ~/.agent-director/state.db "PRAGMA user_version"`
+      (through the WAL — never assume the version, and never read raw
+      header bytes). No DB yet (fresh install) → nothing to authorize;
+      step 4 fresh-creates it.
+   3. **Write the authorization sentinel** — a file
+      `~/.agent-director/migrate-authorized` (a sibling of state.db)
+      containing `{"from": <actual>, "to": <target>}`, where
+      `<target>` is the schema version this binary requires. **Skipped
+      when `from == target`** (the DB is already current) and on a
+      fresh install (no DB).
+   4. **Trigger exactly one store-opening open** — runs
+      `agent-director list` once. `list` opens the store, so the
+      authorized migration runs and the sentinel is consumed on
+      success; on a fresh install this creates `state.db` (mode 0600)
+      at the current schema version. **NOT `help`/`version`** — those
+      verbs become DB-free (SR-4), so a help-based warmup would never
+      open the store and step 5 would fail on every upgrade.
+   5. **Verify and fail loudly** — re-reads `user_version` and
+      confirms it equals the target. On any mismatch (or if state.db
+      wasn't created) the install **aborts non-zero (exit 5)** with a
+      clear message; the sentinel, if written, is left unconsumed so a
+      re-run retries the migration.
+   6. **Brief hook-failure window (accepted).** Between the binary
+      swap (step 1/3) and the successful step-4 open there is a short
+      (seconds, install-controlled) window in which a concurrently
+      firing hook that runs a store-opening verb against the not-yet-
+      migrated DB gets the admin migration error. This is expected and
+      accepted; it clears the moment step 4 completes.
 
 6. **Injects persistent hooks** into `~/.claude/settings.json`
    (unless `--no-hooks` was passed):
@@ -465,11 +508,85 @@ destructive *additions*.
   `--force` is supplied.
 - With `--mcp-also`: runs `claude mcp remove agent-director`.
 
+## Schema migration: the six-step sentinel flow
+
+This is the ONE admin-facing place the migration sentinel is
+documented. It appears nowhere in any agent-facing surface (help
+text, MCP tool descriptions, npm README, or the migration error
+message) — those route the operator here, to the install process,
+and nowhere else.
+
+### Why a sentinel exists
+
+`state.db` carries a schema `user_version`. When the installed binary
+is NEWER than the DB (an upgrade), the store refuses to touch the DB
+on its own — it will not silently migrate under an agent. Instead it
+requires an administrator to authorize exactly that one transition by
+placing a sentinel file next to state.db. `install.sh` is that
+administrator action, so the install writes the sentinel for you.
+
+### The sentinel
+
+- **Path:** `~/.agent-director/migrate-authorized` — always a *sibling
+  of state.db*, so a custom `--store-path` install authorizes the
+  right DB.
+- **Shape:** a single JSON object, exactly
+  `{"from": <current user_version>, "to": <target schema version>}`.
+  It authorizes precisely that one `from → to` transition and nothing
+  wider. Unknown fields or trailing data are rejected.
+- **One-shot consumption:** the store honors the sentinel only when
+  **both** ends match (the DB is really at `from` and the binary
+  really wants `to`), runs the migration, and then **deletes the
+  sentinel** once the migration commits. A refused open (missing,
+  malformed, or mismatched sentinel) executes zero DDL and leaves both
+  state.db and the sentinel byte-identical, as admin evidence.
+
+### The six steps `install.sh` performs
+
+1. **Install the new binary** (atomic `mv` into
+   `~/.agent-director/bin/`).
+2. **Read the ACTUAL `user_version`** via
+   `sqlite3 ~/.agent-director/state.db "PRAGMA user_version"` (through
+   the WAL). No DB → fresh install, skip to step 4.
+3. **Write the sentinel** `{"from":<actual>,"to":<target>}` beside
+   state.db — **skipped when `from == to`** (already current) and on a
+   fresh install. `<target>` is the schema version the new binary
+   requires; the install learns it from the binary's own migration
+   refusal message.
+4. **Open the store once** with `agent-director list` (a store-opening
+   verb — *not* `help`/`version`, which are DB-free per SR-4). The
+   authorized migration runs and the sentinel is consumed; a fresh
+   install creates state.db at the current version.
+5. **Verify** the post-open `user_version` equals the target;
+   otherwise **fail the install loudly** (exit 5), leaving any written
+   sentinel unconsumed for a retry.
+6. **A brief hook-failure window is accepted.** For the few seconds
+   between the binary swap and the successful step-4 open, a hook that
+   opens the store sees the migration error; it clears once step 4
+   finishes.
+
+### Recovering an older-than-binary DB (the migration path)
+
+If a Claude session reports `ErrSchemaMigrationRequired` — i.e.
+state.db is OLDER than the installed binary — the recovery is simply
+**re-run this install skill** (or `bash install.sh` with your usual
+flags). The install reads the current version, writes the one-shot
+sentinel, opens the store to migrate, and verifies the result. There
+is no `rm state.db` step and no data loss: the migration preserves
+your Spawn history. If the install's step 5 fails verification, do NOT
+delete state.db — capture the error and the leftover
+`migrate-authorized` sentinel and contact the maintainers.
+
+An operator can also author the sentinel by hand (write the JSON
+above, then run any store-opening verb once), but re-running the
+install is the supported path and does the version reads and
+verification for you.
+
 ## Upgrade rollback
 
 If you used `install.sh --keep-prior` on the previous install, the
 previous binary is at `~/.agent-director/bin/agent-director.prior`.
-To roll back:
+To roll back the *binary*:
 
     mv ~/.agent-director/bin/agent-director.prior \
        ~/.agent-director/bin/agent-director
@@ -477,19 +594,33 @@ To roll back:
 If you didn't pass `--keep-prior`, re-install the previous version via
 `install.sh --from-release v<old-tag>`.
 
-There's no automatic rollback because v1 has no migration story (per
-SRD §19 Q11); a schema-incompat upgrade means `rm state.db` and re-warm.
+Note a caveat that did not exist before schema migrations: once an
+upgrade has migrated state.db forward (newer `user_version`), rolling
+the *binary* back to an older version makes that older binary NEWER-
+than-DB in reverse — it will report `ErrSchemaMismatch` (see below),
+because migrations are forward-only. Roll the binary back only if you
+have not yet let the new binary migrate the DB, or be prepared to
+restore an older state.db from your own backup.
 
-## ErrSchemaMismatch recovery
+## ErrSchemaMismatch recovery (DB NEWER than the binary)
 
-If `agent-director help` reports `ErrSchemaMismatch` after an
-upgrade:
+`ErrSchemaMismatch` means the opposite of the migration case:
+state.db is NEWER than the installed binary (its `user_version` is
+higher than the binary supports). This is not something the sentinel
+can fix — migrations only run forward, and the install will not
+downgrade a DB.
 
-1. Inspect: `sqlite3 ~/.agent-director/state.db "PRAGMA user_version"`.
-2. v1 has no migrations: `rm ~/.agent-director/state.db*`.
-3. Re-run `agent-director help` to recreate at the current version.
-
-Spawn history is lost, but live Spawns whose `claude_instance_id`
-is in the operator's notes can be re-resumed via `agent-director
-resume` — the JSONL transcripts persist in `~/.claude/projects/`
-independently of our DB.
+1. Inspect: `sqlite3 ~/.agent-director/state.db "PRAGMA user_version"`
+   and compare against the version the binary expects (shown in the
+   error).
+2. **Install a newer agent-director** that understands this schema —
+   the correct fix in almost every case (you likely rolled the binary
+   back below the DB). Re-run this install skill with `--from-release`
+   (latest) or point it at a newer binary.
+3. Only if you deliberately want to discard the newer DB and start
+   fresh at this binary's version: `rm ~/.agent-director/state.db*`,
+   then re-run the install so step 4 fresh-creates it. **This loses
+   Spawn history.** Live Spawns whose `claude_instance_id` you have
+   noted can still be re-resumed via `agent-director resume` — the
+   JSONL transcripts persist under `~/.claude/projects/`
+   independently of our DB.

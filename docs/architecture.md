@@ -1151,14 +1151,86 @@ runs the skill body Pattern A copied), or directly via
 ```
 claude /install-agent-director (or `bash install.sh`)
   → install.sh preflight gates (OS/CPU, --binary arch probe,
-    required tools on PATH, whitespace-free install path)
-  → write CLI binary to ~/.agent-director/bin/agent-director
-  → warm up ~/.agent-director/state.db
+    required tools on PATH incl. sqlite3, whitespace-free install path)
+  → write CLI binary to ~/.agent-director/bin/agent-director  (atomic mv)
+  → six-step schema-migration flow (see below): open/migrate state.db
+    under a one-shot migrate-authorized sentinel
   → merge SessionStart + SessionEnd hooks into ~/.claude/settings.json
   → optional ~/.local/bin/agent-director PATH symlink
 ```
 
 Pattern B is where the CLI / state / hooks side effects happen.
+
+#### The six-step schema-migration flow
+
+The old install just "warmed up" `state.db` by running a store-opening
+verb once. That had no account of what happens when the newly-installed
+binary is *newer* than an existing `state.db` — the store now refuses
+to auto-migrate under an agent (see the schema-versioning section
+above), so a bare warm-up would fail every upgrade. `install.sh` runs on
+the end-user's machine as an *administrator* action, which makes it the
+one legitimate place to authorize that migration. It does so with a
+one-shot `migrate-authorized` sentinel, in six ordered steps:
+
+1. **Install the new binary.** The atomic `mv` above — already done by
+   the time this flow starts.
+2. **Read the DB's ACTUAL `user_version`.** Via
+   `sqlite3 ~/.agent-director/state.db "PRAGMA user_version"`, which
+   reads *through* the WAL — the version is never assumed, and never
+   read from raw header bytes (those are subtly wrong for a WAL-mode
+   DB; hence `sqlite3` is a preflight requirement). No DB on disk means
+   a fresh install: there is nothing to authorize, and step 4 creates
+   the DB.
+3. **Write the sentinel — or skip it.** When the DB is older than the
+   binary, write `migrate-authorized` (a *sibling of `state.db`*, under
+   the same state-dir resolution the store uses, so a custom store path
+   authorizes the right DB) containing exactly
+   `{"from": <actual>, "to": <target>}`, `chmod 0600`, via tmpfile +
+   `mv`. `<target>` — the schema version this binary requires — is
+   *learned from the binary itself*: there is no "print my schema
+   version" verb, so the install parses it out of the binary's own
+   `ErrSchemaMigrationRequired` refusal (the message carries
+   `requires v<N>`). **Skipped entirely when `from == target`** (the DB
+   is already current) and on a fresh install (no DB).
+4. **Open the store exactly once** with `agent-director list` — a verb
+   that still *opens the store*. It is deliberately **not** `help` or
+   `version`: those become DB-free (SR-4, Part D), and since Parts A/D
+   land in either order a help-based warm-up could silently never open
+   the store, leaving step 5 to fail on every upgrade. This open runs
+   the authorized migration and consumes the sentinel; on a fresh
+   install it creates `state.db` (mode 0600) at the binary's current
+   schema version.
+5. **Verify, or fail loudly.** Re-read `user_version` and confirm it
+   equals the target. On any mismatch — or if `state.db` was not
+   created — the install **aborts non-zero (exit 5)** with the
+   expected-vs-actual versions and the note that the sentinel was left
+   unconsumed so a re-run retries. The install never declares success
+   on an unverified migration.
+6. **A brief hook-failure window is accepted.** Between the binary swap
+   (step 1) and the successful open (step 4) there is a short
+   (seconds, install-controlled) window in which a concurrently-firing
+   hook that opens the store hits the not-yet-migrated DB and gets the
+   admin migration dead-end error. This is expected and accepted; it
+   clears the instant step 4 completes. It is documented, not
+   worked around in code.
+
+**Sentinel semantics.** The sentinel co-locates with `state.db` (same
+state-dir resolution), names exactly one `from → to` transition, and is
+honored only when *both* ends match — the DB is really at `from` and the
+binary really wants `to`. It is **consumed on the successful open** and
+only then; a refused open (missing, malformed, or mismatched sentinel)
+runs zero DDL and leaves both `state.db` and the sentinel
+byte-identical. It is **never partially honored** — there is no state in
+which some but not all of the transition applied and the sentinel
+lingers half-consumed.
+
+**Who writes it.** The sentinel is written *only* by a human operator or
+by this install skill — never by any agent. It is deliberately **absent
+from every agent-facing surface**: it appears in no help text, no MCP
+tool description, no npm/customer README, and no migration error
+message. Those surfaces route the operator to *this install flow* and
+nowhere else. `architecture.md` and `install-agent-director/SKILL.md`
+are internal/admin-facing, which is why they may describe it.
 
 ### Pattern B fallback (postinstall skipped)
 
@@ -1189,6 +1261,9 @@ agent-director with one script.
 ├── state.db                       (mode 0600)
 ├── state.db-wal                   (when WAL is active)
 ├── state.db-shm
+├── migrate-authorized             (mode 0600; transient — present only
+│                                    between an install's sentinel write
+│                                    and the store open that consumes it)
 ├── templates/                     (mode 0700; created lazily)
 │   └── <name>.toml                (mode 0600)
 ├── config.toml                    (operator-owned; not created here)
@@ -1204,8 +1279,11 @@ agent-director with one script.
 
 ### Upgrade-safety pattern
 
-The install script uses the standard single-binary CLI install
-pattern (gh, kubectl, terraform): write to a sibling temp path,
+Two concerns compose here: swapping the binary safely, and migrating
+`state.db` safely across that swap.
+
+**Binary swap.** The install script uses the standard single-binary CLI
+install pattern (gh, kubectl, terraform): write to a sibling temp path,
 then `mv` over the target. `mv` within one filesystem is atomic at
 the inode level — concurrent readers see either the old binary or
 the new, never half. A running process holds the old inode, so an
@@ -1223,6 +1301,22 @@ previous tag via `install.sh --from-release v<old>`. The
 version-manager pattern (canonical symlink → versioned files) was
 considered and rejected for b.43y: it only earns its complexity when
 multiple concurrent versions are actually being managed.
+
+**Schema migration across the swap.** Once the newer binary is in
+place, an older `state.db` cannot be opened until the migration is
+*authorized* — the store refuses to migrate under an agent (see the
+schema-versioning section). The install performs the six-step
+`migrate-authorized` sentinel flow described under **Pattern B** above:
+read the ACTUAL `user_version`, write a one-shot
+`{"from":<actual>,"to":<target>}` sentinel beside `state.db` (skipped
+when already current or on a fresh install), open the store once with a
+store-opening verb to run the migration and consume the sentinel, then
+verify the post-open `user_version` and abort loudly (exit 5) on any
+mismatch. Because migrations are forward-only, rolling the *binary* back
+after the DB has migrated forward makes the older binary newer-than-DB
+in reverse and surfaces `ErrSchemaMismatch`; roll back only before
+letting the new binary migrate, or restore an older `state.db` from your
+own backup.
 
 ### Uninstall semantics
 

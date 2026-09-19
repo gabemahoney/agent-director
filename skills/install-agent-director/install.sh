@@ -40,7 +40,8 @@
 #   2  pre-flight failure (claude/tmux missing, whitespace in path)
 #   3  binary source not found / not executable
 #   4  hook merge failure (~/.claude/settings.json malformed)
-#   5  store warmup failure
+#   5  store open / schema-migration failure (open failed, state.db not
+#      created, or post-open user_version != target)
 #
 # Idempotent: re-running the script with no flags after a clean
 # install is a no-op (returns 0, prints "already installed at vX").
@@ -158,17 +159,24 @@ esac
 
 # claude + tmux must be on PATH. `file` is required for the --binary
 # architecture probe (SR-2.2) — hard requirement; never silent-skip.
-required_tools=(claude tmux jq file)
+# `sqlite3` is required for the schema-migration flow: it reads the DB's
+# ACTUAL user_version through the WAL (raw header bytes are subtly wrong
+# for a WAL-mode DB) both to decide whether a migration sentinel is
+# needed and to verify the post-open version. Hard requirement — never
+# silent-skip; a bad read would either skip a needed migration or pass a
+# broken install.
+required_tools=(claude tmux jq file sqlite3)
 [[ "$FROM_RELEASE" -eq 1 ]] && required_tools+=(curl)
 for tool in "${required_tools[@]}"; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "install.sh: required tool not found on PATH: $tool" >&2
         case "$tool" in
-            claude) echo "  Install Claude Code first: https://claude.com/claude-code" >&2 ;;
-            tmux)   echo "  Install tmux via your package manager (apt/brew/dnf/etc.)." >&2 ;;
-            jq)     echo "  Install jq via your package manager (we use it to safely edit settings.json)." >&2 ;;
-            file)   echo "  Install file via your package manager (apt install file / brew install file-formula / dnf install file). Required for the --binary architecture probe." >&2 ;;
-            curl)   echo "  --from-release downloads via curl; install it via your package manager." >&2 ;;
+            claude)  echo "  Install Claude Code first: https://claude.com/claude-code" >&2 ;;
+            tmux)    echo "  Install tmux via your package manager (apt/brew/dnf/etc.)." >&2 ;;
+            jq)      echo "  Install jq via your package manager (we use it to safely edit settings.json)." >&2 ;;
+            file)    echo "  Install file via your package manager (apt install file / brew install file-formula / dnf install file). Required for the --binary architecture probe." >&2 ;;
+            sqlite3) echo "  Install sqlite3 via your package manager (apt install sqlite3 / brew install sqlite / dnf install sqlite). Required to read state.db's schema version for the migration flow." >&2 ;;
+            curl)    echo "  --from-release downloads via curl; install it via your package manager." >&2 ;;
         esac
         exit 2
     fi
@@ -563,18 +571,134 @@ if [[ "$NO_SYMLINK" -eq 0 && -n "$SYMLINK_DIR" ]]; then
 fi
 
 # --------------------------------------------------------------------
-# Warm up state.db via `agent-director help`
+# Schema migration flow (SR-1.7) — six steps.
+#
+# The new binary is already in place (step 1, the atomic mv above). An
+# older-than-binary state.db opens ONLY when a valid `migrate-authorized`
+# sentinel (a sibling of state.db, JSON {"from":<actual>,"to":<target>})
+# authorizes exactly that transition; the store consumes it on the
+# successful migration. install.sh runs on the end-user's machine as an
+# admin action, so it is the legitimate writer of that sentinel.
+#
+#   Step 2 — read the DB's ACTUAL user_version via
+#            `sqlite3 PRAGMA user_version` (reads through the WAL; raw
+#            header bytes are wrong for a WAL-mode DB). Fresh install →
+#            no DB yet → nothing to authorize; step 4 fresh-creates it.
+#   Step 3 — write the sentinel {"from":<actual>,"to":<target>} beside
+#            state.db, SKIPPING when from==target (already current).
+#   Step 4 — trigger exactly one store-opening open (`$CANONICAL list`)
+#            so the store runs the migration and consumes the sentinel.
+#            NOT `help`/`version`: SR-4 (Part D) makes those DB-free, and
+#            Parts A/D land in either order, so a help-warmup would never
+#            open the store and step 5 would fail on every upgrade.
+#   Step 5 — verify user_version == target; FAIL the install loudly
+#            (non-zero exit) on any mismatch.
+#   Step 6 — between the binary swap and the successful step-4 open there
+#            is a brief (seconds, install-controlled) window where a
+#            concurrent hook firing `$CANONICAL list` against the not-yet-
+#            migrated DB gets the admin migration error. This is accepted;
+#            it is documented in SKILL.md, not worked around in code.
 # --------------------------------------------------------------------
 
-if "$CANONICAL" help >/dev/null 2>&1; then
-    state_db="${DEFAULT_INSTALL_ROOT}/state.db"
-    if [[ -f "$state_db" ]]; then
-        chmod 0600 "$state_db" 2>/dev/null || true
-        echo "  state.db: $(stat -c '%a' "$state_db" 2>/dev/null || stat -f '%Lp' "$state_db") at $state_db"
-    fi
+state_db="${DEFAULT_INSTALL_ROOT}/state.db"
+
+# ad_user_version <db> — echo the DB's user_version through the WAL, or
+# empty if the file does not exist / cannot be read.
+ad_user_version() {
+    local db="$1"
+    [[ -f "$db" ]] || return 0
+    sqlite3 "$db" "PRAGMA user_version;" 2>/dev/null || true
+}
+
+# ad_target_version — the schema version THIS binary requires. There is
+# no public "print my schema version" verb (and SR-4 forbids leaning on
+# help/version for DB facts), so we read it from the binary's own
+# authoritative refusal: opening an older DB with no valid sentinel emits
+# "... this binary requires v<N>." on the stderr envelope. We parse <N>
+# from that message. If the running open does NOT refuse (DB already
+# current, or fresh create), the target equals the DB's post-open
+# user_version, which step 5 reads directly — so this helper is only
+# consulted when a migration is actually pending.
+ad_target_version() {
+    local msg
+    # A store-opening verb against the current (older) DB. With no valid
+    # sentinel yet this refuses with ErrSchemaMigrationRequired, carrying
+    # the required version in its message.
+    msg="$("$CANONICAL" list 2>&1 >/dev/null || true)"
+    printf '%s' "$msg" | grep -oE 'requires v[0-9]+' | head -n1 | grep -oE '[0-9]+' || true
+}
+
+# ---- Step 2: read the DB's ACTUAL current schema version ----
+db_version_before="$(ad_user_version "$state_db")"
+
+if [[ -z "$db_version_before" ]]; then
+    # Fresh install: no DB on disk. No sentinel is needed — the step-4
+    # open fresh-creates state.db at the binary's current schemaVersion.
+    echo "  schema  : no existing state.db — fresh create on first open"
 else
-    echo "install.sh: store warmup (agent-director help) failed" >&2
+    # ---- Step 3: write the migration sentinel (skip when already current) ----
+    target_version="$(ad_target_version)"
+
+    if [[ -z "$target_version" ]]; then
+        # The store-opening probe did not refuse: the DB is already at (or
+        # newer than) the binary's version, so there is nothing to
+        # authorize. If it were NEWER, step 4/5 surface ErrSchemaMismatch.
+        echo "  schema  : state.db at v${db_version_before}; no migration authorization needed"
+    elif [[ "$db_version_before" == "$target_version" ]]; then
+        # Defensive: probe reported a target equal to current. Nothing to do.
+        echo "  schema  : state.db already at target v${target_version}; no sentinel written"
+    else
+        sentinel="${DEFAULT_INSTALL_ROOT}/migrate-authorized"
+        tmp_sentinel="${sentinel}.tmp.$$"
+        printf '{"from": %d, "to": %d}\n' "$db_version_before" "$target_version" > "$tmp_sentinel"
+        chmod 0600 "$tmp_sentinel" 2>/dev/null || true
+        mv -f "$tmp_sentinel" "$sentinel"
+        echo "  schema  : authorized migration v${db_version_before}→v${target_version} (sentinel $sentinel)"
+    fi
+fi
+
+# ---- Step 4: trigger exactly one store-opening open ----
+# `list` remains store-opening after SR-4 (unlike help/version). This is
+# the open that runs any authorized migration and consumes the sentinel;
+# on a fresh install it creates state.db at the current schemaVersion.
+if "$CANONICAL" list >/dev/null 2>&1; then
+    :
+else
+    open_err="$("$CANONICAL" list 2>&1 >/dev/null || true)"
+    echo "install.sh: store open (agent-director list) failed after install" >&2
+    if [[ -n "$open_err" ]]; then
+        printf '  %s\n' "$open_err" >&2
+    fi
+    echo "  The new binary could not open state.db. If a migration was" >&2
+    echo "  authorized above it was NOT consumed; re-running this install" >&2
+    echo "  will retry it. If state.db is NEWER than this binary" >&2
+    echo "  (ErrSchemaMismatch), install a newer agent-director instead." >&2
     exit 5
+fi
+
+# ---- Step 5: verify the post-open schema version, fail loudly on mismatch ----
+db_version_after="$(ad_user_version "$state_db")"
+
+if [[ -f "$state_db" ]]; then
+    chmod 0600 "$state_db" 2>/dev/null || true
+    echo "  state.db: $(stat -c '%a' "$state_db" 2>/dev/null || stat -f '%Lp' "$state_db") at $state_db (schema v${db_version_after})"
+else
+    echo "install.sh: state.db was not created by the store open" >&2
+    exit 5
+fi
+
+if [[ -n "$db_version_before" && -n "${target_version:-}" ]]; then
+    # A migration was expected. Verify it actually landed.
+    if [[ "$db_version_after" != "$target_version" ]]; then
+        echo "install.sh: schema migration verification FAILED" >&2
+        echo "  expected user_version: $target_version" >&2
+        echo "  actual   user_version: ${db_version_after:-<unreadable>}" >&2
+        echo "  The store open did not migrate state.db to the target version." >&2
+        echo "  The migration sentinel (if written) has NOT been consumed;" >&2
+        echo "  re-run this install to retry, or contact the maintainers." >&2
+        exit 5
+    fi
+    echo "  schema  : migration verified — state.db now at v${db_version_after}"
 fi
 
 # --------------------------------------------------------------------
