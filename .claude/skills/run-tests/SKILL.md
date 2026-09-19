@@ -83,8 +83,6 @@ agent runs inside the container. Interpreting a run:
   - `skills/release-agent-director/tests/synthetic-regressions/…` tests
     race on the shared `/work/dist` under full parallelism; which subset
     fails varies run to run. They all pass under `go test -p 1`.
-  - Two bun `resolveSystemBinary()` tests assume an installed binary that the
-    clean sandbox HOME deliberately lacks.
   - One bun serialization test is timing-sensitive and occasionally flakes on
     fast hosts.
 

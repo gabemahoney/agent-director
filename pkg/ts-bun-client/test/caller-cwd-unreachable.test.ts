@@ -33,6 +33,52 @@ if (cliMissing) {
 }
 
 // ---------------------------------------------------------------------------
+// System-discovery gate (b.12w).
+//
+// resolveSystemBinary() discovers the SYSTEM install via process.env HOME/PATH
+// (discoverSystemBinary), NOT via the _cliPath DI hook — ResolveSystemBinaryOptions
+// deliberately exposes no _cliPath analogue (SR-4.3 intentional asymmetry). The
+// sandbox HOME (/home/sandbox) has no ~/.agent-director install, so bare
+// discovery throws ErrSystemInstallNotFound before the b.cot cwd behavior is
+// reached. The repo `bin/agent-director` cannot satisfy discovery via HOME, but
+// it CAN via the SR-1.1 step-2 PATH lookup as long as it is named
+// "agent-director". We therefore make discovery find the repo binary by
+// prepending its directory to PATH for the duration of each call.
+//
+// discoverSystemBinary's PATH lookup keys on the basename "agent-director", so
+// only a binary with that exact name is discoverable this way. A custom
+// CLI_PATH pointing at a differently-named file would not be found via PATH; gate
+// those out so we never un-skip a test whose dependency discovery can't meet.
+// ---------------------------------------------------------------------------
+const cliDir = path.dirname(cliPath);
+const cliDiscoverableViaPath =
+  !cliMissing && path.basename(cliPath) === "agent-director";
+const systemUndiscoverable = !cliDiscoverableViaPath;
+
+if (!cliMissing && systemUndiscoverable) {
+  console.warn(
+    `caller-cwd-unreachable.test.ts: CLI at ${cliPath} is not named "agent-director"; ` +
+      `resolveSystemBinary() PATH-discovery tests will be skipped.`
+  );
+}
+
+/**
+ * Run `fn` with the repo binary's directory injected on PATH so
+ * discoverSystemBinary()'s step-2 PATH lookup finds it. Restores PATH after.
+ */
+async function withRepoBinaryOnPath<T>(fn: () => Promise<T>): Promise<T> {
+  const origPath = process.env.PATH;
+  process.env.PATH =
+    origPath && origPath !== "" ? `${cliDir}${path.delimiter}${origPath}` : cliDir;
+  try {
+    return await fn();
+  } finally {
+    if (origPath === undefined) delete process.env.PATH;
+    else process.env.PATH = origPath;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -74,7 +120,7 @@ test.skipIf(cliMissing)(
 // ---------------------------------------------------------------------------
 // 2. resolveSystemBinary() — deleted cwd
 // ---------------------------------------------------------------------------
-test.skipIf(cliMissing)(
+test.skipIf(cliMissing || systemUndiscoverable)(
   "resolveSystemBinary() throws ErrCallerCwdUnreachable when cwd is deleted (b.cot)",
   async () => {
     const orig = process.cwd();
@@ -84,8 +130,10 @@ test.skipIf(cliMissing)(
     fs.rmSync(tmpDir, { recursive: true, force: true });
 
     try {
-      await expect(resolveSystemBinary()).rejects.toBeInstanceOf(
-        ErrCallerCwdUnreachable
+      await withRepoBinaryOnPath(() =>
+        expect(resolveSystemBinary()).rejects.toBeInstanceOf(
+          ErrCallerCwdUnreachable
+        )
       );
     } finally {
       process.chdir(orig);
@@ -109,11 +157,14 @@ test.skipIf(cliMissing)(
   }
 );
 
-test.skipIf(cliMissing)(
+test.skipIf(cliMissing || systemUndiscoverable)(
   "resolveSystemBinary() succeeds in a valid cwd (no false positive)",
   async () => {
-    const result = await resolveSystemBinary();
+    const result = await withRepoBinaryOnPath(() => resolveSystemBinary());
     expect(result.path).toBeTruthy();
+    // Prove discovery found the PATH-injected repo binary specifically, not some
+    // ambient agent-director on PATH/HOME. Discovery canonicalizes via realpath.
+    expect(result.path).toBe(fs.realpathSync(cliPath));
     expect(result.version).toBeTruthy();
   }
 );
