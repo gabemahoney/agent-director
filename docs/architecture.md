@@ -1882,13 +1882,22 @@ line shape, and access patterns.
 
 ### Location
 
-Default path: `~/.agent-director/ad-trail.jsonl`
+Fixed path: `~/.agent-director/ad-trail.jsonl`
 
-The directory is controlled by the `AGENT_DIRECTOR_STATE_DIR` environment
-variable (default: `~/.agent-director`). The filename `ad-trail.jsonl` is
-hardcoded and never changes. Setting `AGENT_DIRECTOR_STATE_DIR` also
-redirects any future per-installation state files that land in the same
-directory.
+agent-director state lives at `~/.agent-director`, resolved from the
+invocation's effective home. The trail file is always
+`~/.agent-director/ad-trail.jsonl` — both the `~/.agent-director` directory
+name and the `ad-trail.jsonl` filename are fixed. The **persistent
+environment-variable relocation switch is gone**: no env var and no config
+key relocates agent-director state. The store and trail always resolve from
+the invocation's effective home (via `$HOME` / `os.UserHomeDir`) or an
+explicit `--store-path`. The documented per-invocation global flags `--home`
+and `--store-path` (see the argv recipe above) are request-scoped
+*targeting* — they point one invocation at a different home or store DB, not
+a persistent relocation mechanism — and the trail follows the effective
+home. Isolation — for tests or otherwise — is therefore achieved by running
+inside the sandbox, where the resolved `~/.agent-director` does not exist,
+never by relying on redirection.
 
 **This is a plain on-disk JSONL file.** It is NOT a SQLite table, NOT a
 column on `state.db`, and NOT any other database. Every line is one
@@ -1900,24 +1909,22 @@ lazy-opened on the first `Emit` call (SR-A-7.6).
 
 ### Discoverability
 
-The trail file's fixed path and env-var override are documented here — this
-section is the operator entrypoint (SR-A-6.1). There is no CLI read verb; the
-file is accessed directly with standard shell tools (`tail`, `grep`, `jq`).
+The trail file's fixed path is documented here — this section is the operator
+entrypoint (SR-A-6.1). There is no CLI read verb; the file is accessed directly
+with standard shell tools (`tail`, `grep`, `jq`).
 
-Default path (no env override):
+Relative to the invocation's effective home, the path is always:
 
 ```
 ~/.agent-director/ad-trail.jsonl
 ```
 
-To use a non-default directory, set `AGENT_DIRECTOR_STATE_DIR` before starting
-any AD process. The filename `ad-trail.jsonl` is fixed regardless of the
-directory override:
-
-```sh
-export AGENT_DIRECTOR_STATE_DIR=/var/lib/ad
-# trail file resolves to: /var/lib/ad/ad-trail.jsonl
-```
+`~/.agent-director` is resolved from the effective home (via `$HOME` /
+`os.UserHomeDir`); there is no env var or config key that persistently
+relocates it. The per-invocation `--home` / `--store-path` flags only
+retarget a single invocation, and the trail follows the effective home.
+Operators find the trail at this one path, under whatever home the
+invocation resolves, on every installation.
 
 ### Per-line envelope
 
