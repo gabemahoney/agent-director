@@ -11,6 +11,8 @@ import (
 	"os/user"
 	"path/filepath"
 	"testing"
+
+	"github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard"
 )
 
 // TestMain is the package-level entry point for the smoke test suite.
@@ -32,6 +34,7 @@ import (
 //  3. Clears AGENT_DIRECTOR_INSTANCE_ID so no inherited parent ID causes FK
 //     violations against the fresh smoke-test stores.
 func TestMain(m *testing.M) {
+	sandboxguard.Require()
 	// ── Step 1: locate real ~/.agent-director via user.Current() ──────────────
 	// user.Current().HomeDir reads /etc/passwd (or equivalent) on Linux and
 	// is NOT affected by the $HOME env var, so this gives the real home even

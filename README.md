@@ -123,6 +123,15 @@ bash skills/install-agent-director/install.sh --binary ./bin/agent-director
 and refuses option `--binary` if the artifact is stale — re-run
 `make build` to refresh it.
 
+To run the test suite without touching your `~/.agent-director`:
+
+```sh
+make test-sandbox
+```
+
+See `docs/engineering-guide.md` "Sandboxed execution" for when this is
+required and the pod-quirk flags it uses.
+
 ### First spawn
 
 ```sh

@@ -42,6 +42,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api"
 )
@@ -55,6 +56,7 @@ var replayTrailDir string
 // initialised on the first trail.Emit call — TestMain ensures that happens
 // AFTER the env var is set.
 func TestMain(m *testing.M) {
+	sandboxguard.Require()
 	d, err := os.MkdirTemp("", "grounding-replay-trail-*")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "TestMain: MkdirTemp: %v\n", err)

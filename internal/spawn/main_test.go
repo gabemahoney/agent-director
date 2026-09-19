@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard"
 )
 
 // TestMain stubs claudeJSONPath to a per-process temp file so existing
@@ -13,6 +15,7 @@ import (
 // per-test temp file; that override nests cleanly because the helper
 // saves and restores the var via t.Cleanup.
 func TestMain(m *testing.M) {
+	sandboxguard.Require()
 	dir, err := os.MkdirTemp("", "agent-director-spawn-tests-*")
 	if err != nil {
 		panic("setup: mkdtemp: " + err.Error())

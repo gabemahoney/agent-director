@@ -1,6 +1,7 @@
 .PHONY: all build test generate lint err-coherence nondet-coverage \
         check-doccomments test-install-sh \
         test-image test-image-smoke test-docker test-docker-install-mode list-test-docker-epics \
+        test-sandbox sandbox-shell sandbox \
         release-binaries release-binaries-smoke \
         release-shellcheck release-bats release-smoke \
         consumer-dryrun \
@@ -184,6 +185,191 @@ test-docker-install-mode: test-image
 		-v "$(CURDIR)/test/install-mode:/opt/install-mode:ro" \
 		--entrypoint /opt/install-mode/run.sh \
 		$(TEST_IMAGE)
+
+# ─────────────────────────────────────────────────────────────────────────
+# Sandboxed execution (b.nh2 — isolation for the b.8dr incident)
+#
+# Every executed artifact — the full test suite, one-off builds, `go generate`,
+# bun scripts, ad-hoc binary runs — runs inside a container whose HOME has NO
+# .agent-director. This is the ONLY boundary that holds:
+# internal/store.expandTilde resolves the home via user.Current() (/etc/passwd),
+# so a host-side $HOME redirect does not stop the store from opening (and, on a
+# schema-bumping branch, silently auto-migrating) the real
+# ~/.agent-director/state.db. b.8dr: a `bun test` run did exactly that,
+# breaking every consumer of the installed binary.
+#
+# The worker-facing rule: EDIT on the host freely; NEVER execute built
+# artifacts on the host — run via `make test-sandbox` / `make sandbox-shell` /
+# `make sandbox CMD="…"`. See docs/engineering-guide.md "Sandboxed execution".
+#
+# This block owns ALL environment detection so the image, the run-tests skill,
+# and the CLAUDE.md note stay engine- and host-generic. It picks the container
+# engine, the uid-mapping flag, and the network/pid namespace flags to match
+# the host it runs on (a laptop with docker, a rootless-podman box, or this
+# k8s pod), and honors a manual $(SANDBOX_FLAGS) override. See
+# docs/engineering-guide.md "Sandboxed execution" for the per-host rationale.
+#
+# Targets:
+#   test-sandbox        full suite (go test ./... AND bun test)
+#   sandbox-shell       interactive bash in the container+mounts
+#   sandbox CMD="…"     run an arbitrary command in the container+mounts
+# ─────────────────────────────────────────────────────────────────────────
+
+# SANDBOX_IMAGE is the image tag for the sandbox. Override-friendly so CI can
+# publish under a different name without editing the file.
+SANDBOX_IMAGE ?= agent-director-sandbox
+
+# CONTAINER_ENGINE — prefer podman, else docker. Override to force one:
+#   make test-sandbox CONTAINER_ENGINE=docker
+CONTAINER_ENGINE ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
+
+# _SANDBOX_UIDMAP — uid-mapping flag(s), engine-specific:
+#   podman: --userns=keep-id maps the container's non-root user to the invoking
+#           host user, so host-owned mounts are writable AND the process stays
+#           unprivileged (filesystem-permission tests behave; container-root
+#           would bypass DAC checks). keep-id is podman-only.
+#   docker: --user $(id -u):$(id -g) runs the container as the host uid/gid
+#           directly, so files written stay host-owned. `--group-add 0` also
+#           joins group 0: the image's HOME is gid-0-writable, and the host gid
+#           is almost never 0, so without this the container process could not
+#           populate GOPATH/GOCACHE/bun cache under HOME. keep-id (podman)
+#           already lands on the image's uid-1000 owner, so it needs neither.
+_SANDBOX_UIDMAP := $(if $(filter podman,$(CONTAINER_ENGINE)),--userns=keep-id,--user $(shell id -u):$(shell id -g) --group-add 0)
+
+# _SANDBOX_NET — network namespace flag. Default (isolated) is correct on a
+# normal host. On a host with no /dev/net/tun (e.g. this k8s pod), the default
+# rootless network backend fails, so fall back to --network=host. Cheap static
+# check, no container probe needed.
+_SANDBOX_NET := $(shell test -e /dev/net/tun || echo --network=host)
+
+# _SANDBOX_ENV — engine-specific leading env. For podman the host's stale
+# DOCKER_CONFIG (which may point at a nonexistent ~/.docker and abort the run)
+# is neutralized; docker needs it intact for auth, so leave it alone there.
+# Defined before _SANDBOX_PID because the pid probe uses it.
+_SANDBOX_ENV := $(if $(filter podman,$(CONTAINER_ENGINE)),DOCKER_CONFIG=,)
+
+# _SANDBOX_PID — pid namespace flag. Default (isolated) is correct on a normal
+# host. Where /proc is masked (this k8s pod), the container's fresh /proc mount
+# in a new PID namespace gets EPERM at start, so fall back to --pid=host (which
+# reuses the host /proc). This is the only detection that needs a real container
+# probe, so it is CACHED in a per-engine tmp marker written by _sandbox-build
+# (probe once, right after the image exists). Every sandbox target depends on
+# _sandbox-build, and _SANDBOX_PID is expanded LAZILY (recursive `=`) inside the
+# recipe, so by the time it is read the marker is present. Repeat `make` runs
+# read the marker with no container start and no latency; delete it to re-probe.
+_SANDBOX_PID_CACHE := $(shell printf '%s/agent-director-sandbox-pidflag-%s' "$${TMPDIR:-/tmp}" "$(CONTAINER_ENGINE)")
+_SANDBOX_PID = $(shell cat '$(_SANDBOX_PID_CACHE)' 2>/dev/null)
+
+# GIT_COMMON_DIR resolves the real .git directory even when CURDIR is a git
+# worktree (where .git is a file, not a directory). Tests that inspect git
+# history need the common dir present inside the container at the SAME absolute
+# path the worktree's .git pointer references.
+GIT_COMMON_DIR := $(shell git rev-parse --git-common-dir 2>/dev/null)
+
+# _SANDBOX_GIT_MOUNT adds a -v for the common git dir when it lives outside the
+# worktree (i.e. when working in a git worktree). Empty for a plain clone
+# (common dir == the .git subdir of CURDIR, already covered by the /work mount).
+_SANDBOX_GIT_MOUNT := $(if $(filter-out $(CURDIR)/.git,$(GIT_COMMON_DIR)),-v "$(GIT_COMMON_DIR):$(GIT_COMMON_DIR)",)
+
+# _SANDBOX_RUN is the common container-run invocation shared by every sandbox
+# target. Detected flags (uid map, network, pid) come first; the caller-
+# supplied $(SANDBOX_FLAGS) is appended LAST so it wins over detection. The
+# recipe supplies the command (and any extra flags such as -it) as the trailing
+# arguments.
+#
+# Mounts (all read-write so `go test`'s setup.ts builds and the module/build
+# caches can be populated; the container user's HOME holds the caches):
+#   <worktree>       → /work                repo source (edit on host; build here)
+#   <git common dir> → <same absolute path> worktree .git pointer target
+#   ~/go/pkg/mod     → /go/pkg/mod          host Go module cache (speed)
+#   ~/.cache/go-build→ …/.cache/go-build    host Go build cache (speed)
+#   ~/.bun           → …/.bun               host bun cache (speed)
+# The cache mount targets resolve to the container user's HOME, which the image
+# sets to a directory containing no .agent-director.
+_SANDBOX_HOME := /home/sandbox
+# AGENT_DIRECTOR_TEST_SANDBOX=1 marks the container environment. The test
+# suites' TestMain guards and the bun preload refuse to run without it, so a
+# host-side `go test`/`bun test` fails fast instead of touching the real
+# ~/.agent-director (b.nh2 / absorbed b.4v7). It is an accident-prevention gate,
+# not a security boundary. Shared here so every sandbox target sets it.
+_SANDBOX_RUN = $(_SANDBOX_ENV) $(CONTAINER_ENGINE) run --rm \
+		$(_SANDBOX_NET) \
+		$(_SANDBOX_PID) \
+		$(_SANDBOX_UIDMAP) \
+		-e AGENT_DIRECTOR_TEST_SANDBOX=1 \
+		-v "$(CURDIR)":/work \
+		$(_SANDBOX_GIT_MOUNT) \
+		-v "$(HOME)/go/pkg/mod":/go/pkg/mod \
+		-v "$(HOME)/.cache/go-build":$(_SANDBOX_HOME)/.cache/go-build \
+		-v "$(HOME)/.bun":$(_SANDBOX_HOME)/.bun \
+		$(SANDBOX_FLAGS) \
+		-w /work \
+		$(SANDBOX_IMAGE)
+
+# _sandbox-preflight aborts early with a clear message if no engine is present.
+# _sandbox-build (re)builds the image; the engine's layer cache makes it a fast
+# no-op once built. On podman under a masked-/proc host the build's RUN steps
+# need BUILDAH_ISOLATION=chroot; it is harmless (ignored) elsewhere and on
+# docker. After the image exists it seeds the pid-namespace probe marker (once,
+# then cached) and prints the detected configuration so a run is self-
+# documenting — done here, not in preflight, because the pid flag can only be
+# probed after the image is built.
+.PHONY: _sandbox-preflight _sandbox-build
+_sandbox-preflight:
+	@if ! command -v $(CONTAINER_ENGINE) >/dev/null 2>&1; then \
+		echo "ERROR: container engine '$(CONTAINER_ENGINE)' not found on PATH." >&2; \
+		echo "       Install podman or docker, or set CONTAINER_ENGINE=<engine>." >&2; \
+		exit 1; \
+	fi
+
+_sandbox-build: _sandbox-preflight
+	BUILDAH_ISOLATION=chroot $(CONTAINER_ENGINE) build \
+		$(_SANDBOX_NET) \
+		-t $(SANDBOX_IMAGE) \
+		-f test/sandbox/Dockerfile \
+		test/sandbox
+	@f='$(_SANDBOX_PID_CACHE)'; \
+	if [ ! -f "$$f" ]; then \
+		if $(_SANDBOX_ENV) $(CONTAINER_ENGINE) run --rm $(_SANDBOX_NET) $(SANDBOX_IMAGE) true >/dev/null 2>&1; then \
+			flag=""; \
+		else \
+			flag="--pid=host"; \
+		fi; \
+		printf '%s' "$$flag" > "$$f" || { \
+			echo "ERROR: cannot write pid-probe cache marker '$$f' (unwritable TMPDIR?)." >&2; \
+			echo "       Set TMPDIR to a writable dir, or pass the flag explicitly, e.g. SANDBOX_FLAGS=\"$$flag\"." >&2; \
+			exit 1; \
+		}; \
+	fi; \
+	pid="$$(cat "$$f" 2>/dev/null)"; \
+	echo "[sandbox] engine=$(CONTAINER_ENGINE) net='$(_SANDBOX_NET)' pid='$$pid' uidmap='$(_SANDBOX_UIDMAP)'$(if $(strip $(SANDBOX_FLAGS)), extra='$(SANDBOX_FLAGS)',)"
+
+# test-sandbox runs the FULL suite (go test ./... then bun test) in the
+# container. The suite's exit code propagates and output streams live.
+# Both suites always run (the go result does NOT short-circuit bun, so one
+# invocation reports both), and the combined exit is non-zero if EITHER fails.
+test-sandbox: _sandbox-build
+	$(_SANDBOX_RUN) \
+		bash -c 'rc=0; (cd /work && go test ./...) || rc=1; (cd /work/pkg/ts-bun-client && bun test) || rc=1; exit $$rc'
+
+# sandbox-shell drops you into an interactive bash inside the container with the
+# same mounts as the test targets — the place to run builds, `go generate`,
+# one-off binary runs, and bun scripts during development.
+.PHONY: sandbox-shell sandbox
+sandbox-shell: _sandbox-build
+	$(subst $(CONTAINER_ENGINE) run,$(CONTAINER_ENGINE) run -it,$(_SANDBOX_RUN)) bash
+
+# sandbox runs an arbitrary command in the container+mounts, e.g.
+#   make sandbox CMD="go build ./..."
+#   make sandbox CMD="go generate ./..."
+# CMD is passed to `bash -c`, so shell syntax (cd, &&, pipes) works. The
+# command's exit code propagates.
+sandbox: _sandbox-build
+	@if [ -z '$(CMD)' ]; then \
+		echo 'ERROR: CMD is required. Example: make sandbox CMD="go build ./..."' >&2; \
+		exit 2; \
+	fi
+	$(_SANDBOX_RUN) bash -c '$(CMD)'
 
 # release-binaries cross-compiles the three supported targets into ./dist/.
 # CGO_ENABLED=0 + modernc.org/sqlite (pure Go SQLite) yields fully static
