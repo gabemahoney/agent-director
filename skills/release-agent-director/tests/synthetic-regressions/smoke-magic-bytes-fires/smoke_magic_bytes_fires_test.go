@@ -19,8 +19,10 @@
 // 4. Assertions  : (a) gate exits non-zero; (b) consolidated JSON stdout
 //                  contains a sub-check named smoke.<host>.magic-bytes with
 //                  outcome "failed".
-// 5. Cleanup     : rm -rf dist/ — binaries are ephemeral build artifacts and
-//                  dist/ is .gitignore-d.
+// 5. Cleanup     : make writes into a per-test t.TempDir() (via
+//                  RELEASE_DIST_DIR) rather than the shared repo-root dist/;
+//                  the Go runner auto-cleans it (b.aur). No dist/ removal —
+//                  a shared os.RemoveAll(dist) raced concurrent tests.
 //
 // SLOW TEST
 // =========
@@ -85,22 +87,22 @@ func TestSmokeMagicBytesFires(t *testing.T) {
 	// runtime.GOOS / runtime.GOARCH already use Go naming (linux/amd64/arm64),
 	// which matches the release binary naming convention.
 	hostTriple := fmt.Sprintf("%s-%s", runtime.GOOS, runtime.GOARCH)
-	binaryPath := filepath.Join(root, "dist", "agent-director-"+hostTriple)
 
-	// ── 2. Build release binaries ───────────────────────────────────────────
+	// Isolate the release output dir per-test (b.aur): make release-binaries
+	// writes here, and we mutate/delete the binary in it. Using an absolute
+	// t.TempDir() keeps concurrent tests from racing on the shared repo-root
+	// dist/, and lets the Go runner auto-clean it — no os.RemoveAll(dist) needed.
+	distDir := t.TempDir()
+	binaryPath := filepath.Join(distDir, "agent-director-"+hostTriple)
+
+	// ── 2. Build release binaries into the isolated dist dir ─────────────────
 	makeCmd := exec.Command("make", "release-binaries")
 	makeCmd.Dir = root
+	makeCmd.Env = append(os.Environ(), "RELEASE_DIST_DIR="+distDir)
 	makeOut, err := makeCmd.CombinedOutput()
 	if err != nil {
 		t.Skipf("make release-binaries failed (skipping test): %v\n%s", err, makeOut)
 	}
-
-	// ── 3. Register cleanup: remove dist/ unconditionally ──────────────────
-	t.Cleanup(func() {
-		if err := os.RemoveAll(filepath.Join(root, "dist")); err != nil {
-			t.Errorf("t.Cleanup: remove dist/: %v", err)
-		}
-	})
 
 	// ── 4. Save original magic bytes and mutate ─────────────────────────────
 	f, err := os.OpenFile(binaryPath, os.O_RDWR, 0)
@@ -128,6 +130,8 @@ func TestSmokeMagicBytesFires(t *testing.T) {
 	gateScript := filepath.Join(root, "skills", "release-agent-director", "gates", "smoke", "per-binary-smoke.sh")
 	gateCmd := exec.Command("bash", gateScript)
 	gateCmd.Dir = root
+	// Point the smoke gate at the isolated dist dir the binaries were built into.
+	gateCmd.Env = append(os.Environ(), "SMOKE_DIST_DIR="+distDir)
 
 	var stdoutBuf bytes.Buffer
 	gateCmd.Stdout = &stdoutBuf

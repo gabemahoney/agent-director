@@ -78,9 +78,8 @@ type reportDiagnostic struct {
 	UpstreamResponseVerbatim string          `json:"upstream_response_verbatim"`
 }
 
-// releaseReport mirrors the top-level structure of
-// skills/release-agent-director/dist/release-report.json as written by
-// publish-orchestrator.sh.
+// releaseReport mirrors the top-level structure of release-report.json as
+// written by publish-orchestrator.sh (into RELEASE_REPORT_DIR).
 type releaseReport struct {
 	InvocationTimestamp string             `json:"invocation_timestamp"`
 	Mode                string             `json:"mode"`
@@ -115,30 +114,21 @@ func repoRoot(t *testing.T) string {
 	panic("unreachable")
 }
 
-// orchReportPath returns the absolute path to the release-report.json written
-// by publish-orchestrator.sh.  The report lives inside the skill's own dist/
-// directory (skills/release-agent-director/dist/), NOT the repo-root dist/.
-func orchReportPath(root string) string {
-	return filepath.Join(root, "skills", "release-agent-director", "dist", "release-report.json")
-}
-
-// registerReportCleanup schedules deletion of dist/release-report.json when t
-// completes.  Call this before every publish-orchestrator.sh invocation so the
-// generated report does not linger between test runs.
-func registerReportCleanup(t *testing.T, root string) {
+// isolatedReportDir returns a per-test t.TempDir() and its release-report.json
+// path. Passing RELEASE_REPORT_DIR=<dir> to publish-orchestrator.sh (b.aur)
+// keeps the report out of the shared skills/release-agent-director/dist/, so
+// concurrent tests never read each other's report. The Go runner auto-cleans
+// t.TempDir(), so no explicit report deletion is needed.
+func isolatedReportDir(t *testing.T) (dir, reportPath string) {
 	t.Helper()
-	t.Cleanup(func() {
-		if err := os.Remove(orchReportPath(root)); err != nil && !os.IsNotExist(err) {
-			t.Errorf("registerReportCleanup: remove release-report.json: %v", err)
-		}
-	})
+	dir = t.TempDir()
+	return dir, filepath.Join(dir, "release-report.json")
 }
 
 // parseReport reads and JSON-decodes the release-report.json produced by the
-// most recent publish-orchestrator.sh invocation.
-func parseReport(t *testing.T, root string) releaseReport {
+// most recent publish-orchestrator.sh invocation from the given path.
+func parseReport(t *testing.T, path string) releaseReport {
 	t.Helper()
-	path := orchReportPath(root)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("parseReport: read %s: %v", path, err)

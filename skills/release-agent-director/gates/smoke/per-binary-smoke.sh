@@ -2,6 +2,10 @@
 # gate:     smoke (per-binary)
 # checks:   magic-bytes, static-linkage, host-exec — for each release binary
 # usage:    bash per-binary-smoke.sh [<worktree-root>]
+# env:      SMOKE_DIST_DIR — directory holding the release binaries, relative to
+#           the worktree root (default: dist). Point it at an isolated path
+#           (matching the RELEASE_DIST_DIR passed to `make release-binaries`)
+#           so concurrent invocations never share a binary directory (b.aur).
 # pass:     consolidated JSON to stdout, exit 0
 # fail:     SR-14 diagnostics to stderr, consolidated JSON to stdout, exit 1
 # skipped:  sub-checks that cannot run on this host are marked "skipped" (not "failed")
@@ -35,10 +39,15 @@ esac
 
 HOST_TRIPLE="${HOST_OS_NORM}-${HOST_ARCH_NORM}"
 
+# ─── binary directory ─────────────────────────────────────────────────────────
+# Resolved relative to the worktree root (we have already cd'd there). Defaults
+# to dist/ for real release usage; tests set SMOKE_DIST_DIR to an isolated path.
+DIST_DIR="${SMOKE_DIST_DIR:-dist}"
+
 # ─── binary table ─────────────────────────────────────────────────────────────
 # Parallel arrays: PLATS[i], FILES[i], EXPECTED_MAGIC[i], IS_LINUX[i]
 PLATS=("linux-amd64"  "linux-arm64"  "darwin-arm64")
-FILES=("dist/agent-director-linux-amd64" "dist/agent-director-linux-arm64" "dist/agent-director-darwin-arm64")
+FILES=("${DIST_DIR}/agent-director-linux-amd64" "${DIST_DIR}/agent-director-linux-arm64" "${DIST_DIR}/agent-director-darwin-arm64")
 MAGICS=("7f454c46"    "7f454c46"     "cffaedfe")
 OS_FOR=("linux"       "linux"        "darwin")
 
