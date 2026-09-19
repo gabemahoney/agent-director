@@ -236,11 +236,20 @@ CONTAINER_ENGINE ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || 
 #           already lands on the image's uid-1000 owner, so it needs neither.
 _SANDBOX_UIDMAP := $(if $(filter podman,$(CONTAINER_ENGINE)),--userns=keep-id,--user $(shell id -u):$(shell id -g) --group-add 0)
 
-# _SANDBOX_NET — network namespace flag. Default (isolated) is correct on a
-# normal host. On a host with no /dev/net/tun (e.g. this k8s pod), the default
-# rootless network backend fails, so fall back to --network=host. Cheap static
-# check, no container probe needed.
-_SANDBOX_NET := $(shell test -e /dev/net/tun || echo --network=host)
+# _SANDBOX_NET — network namespace flag. Always --network=host (b.rx8), for both
+# the image build and every run target. Host networking sidesteps the bridge-vs-
+# uplink MTU blackhole seen 2026-09-19 on this GKE pod: docker's default bridge
+# (docker0 MTU 1500) sits above the pod uplink (eth0 MTU 1460), so large inbound
+# TLS segments from Fastly (release-assets.githubusercontent.com, serving the
+# bun release asset) exceed the uplink MTU and the PMTUD ICMP is dropped, so the
+# handshake stalls forever and the bun download in _sandbox-build hangs. The
+# host netns has no such MTU step, and also covers the original b.nh2 case (no
+# /dev/net/tun → rootless network backend fails), so the old tun detection
+# is superseded — host networking is unconditionally correct on every supported
+# host. Safe: the sandbox boundary is the filesystem/HOME, "not a security
+# boundary" (test/sandbox/Dockerfile header), and no sandbox target publishes
+# ports.
+_SANDBOX_NET := --network=host
 
 # _SANDBOX_ENV — engine-specific leading env. For podman the host's stale
 # DOCKER_CONFIG (which may point at a nonexistent ~/.docker and abort the run)
