@@ -45,8 +45,22 @@ agent-director spawn \
 The reserved-key validation (SRD §7.2 step 4) rejects `AGENT_DIRECTOR_*`
 keys but *does not reserve* the auth env vars — they pass through to
 the tmux session and into Claude verbatim. agent-director never logs
-the value (only the key name on validation paths) and never persists it
-to disk.
+the value, and it does **not** persist a per-spawn `--extra-env` map to
+the store: the spawn row written to `~/.agent-director/state.db` has no
+`extra_env` column (see `internal/spawn/launch.go`), so the token lives
+only in the live tmux session's environment (and inside the Claude
+process), never in the database. Consequently a terminated Spawn cannot
+reconstruct these values on `resume` (see `internal/spawn/relaunch.go`:
+"ExtraEnv are NOT stored"); auth on resume relies on the resume caller's
+own shell env propagating through tmux.
+
+**Caveat — templates persist `extra_env` to disk.** The never-persisted
+guarantee above covers only the per-spawn `--extra-env` pass-through.
+Auth vars baked into a template's `extra_env` *are* written verbatim to
+the template's plaintext TOML under `~/.agent-director/templates/` (see
+`pkg/api/make_template.go`), and spawn merges them back in at resolve
+time (`internal/spawn/params.go`). Do not bake auth tokens into a
+template unless you accept them sitting on disk.
 
 ## Use `claude setup-token` for long-lived OAuth tokens
 
