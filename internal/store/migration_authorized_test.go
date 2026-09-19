@@ -10,8 +10,8 @@ package store
 //
 // Audit assertions use the checkpoint/delta pattern established in
 // trail_emit_test.go: capture len(readStoreTrailLines) before the open under
-// test and assert only on lines added since. TestMain (store_test.go) pins
-// AGENT_DIRECTOR_STATE_DIR so the trail singleton writes to storeTrailDir.
+// test and assert only on lines added since. TestMain (store_test.go) redirects
+// HOME so the trail singleton writes to storeTrailDir (<home>/.agent-director).
 //
 // Shared fixtures (makeV1DB / makeVersionedDB / stampUserVersion /
 // readUserVersion / writeSentinel / assertSentinelPresent / assertSentinelAbsent

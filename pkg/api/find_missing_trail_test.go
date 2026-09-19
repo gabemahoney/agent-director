@@ -9,10 +9,11 @@ package api_test
 //
 // Zero-emit paths are also pinned to guard against spurious trail writes.
 //
-// Trail infrastructure: TestMain (example_main_test.go) fixes
-// AGENT_DIRECTOR_STATE_DIR to a temp dir before any test runs. The trail
-// singleton (sync.Once) captures that path on first Emit. All trail reads in
-// this file go through readAPITrailLines, which opens apiTrailDir/ad-trail.jsonl.
+// Trail infrastructure: TestMain (example_main_test.go) redirects HOME to a
+// temp dir (apiTrailDir) before any test runs. The trail singleton (sync.Once)
+// resolves ~/.agent-director/ad-trail.jsonl from that HOME and captures it on
+// first Emit. All trail reads in this file go through readAPITrailLines, which
+// opens apiTrailDir/.agent-director/ad-trail.jsonl.
 //
 // Coordination: another test writer owns cmd/agent-director/find_missing_cli_test.go
 // (or recovery_cmd_test.go) for the CLI surface. No overlap.
@@ -32,7 +33,9 @@ import (
 var apiTSRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3,}Z$`)
 
 // apiTrailFilePath returns the trail file path used by the singleton in api tests.
-func apiTrailFilePath() string { return filepath.Join(apiTrailDir, "ad-trail.jsonl") }
+func apiTrailFilePath() string {
+	return filepath.Join(apiTrailDir, ".agent-director", "ad-trail.jsonl")
+}
 
 // readAPITrailLines parses every JSONL line from the api trail file.
 // Returns nil when the file does not exist yet.

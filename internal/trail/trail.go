@@ -45,8 +45,8 @@ var (
 )
 
 // Default returns the process-singleton Writer. The singleton is constructed
-// on the first call (with the path resolved from the environment at that
-// moment) and reused for the process lifetime.
+// on the first call (with the path resolved from the user's home directory at
+// that moment) and reused for the process lifetime.
 func Default() *Writer {
 	once.Do(func() {
 		defaultWriter = &Writer{path: resolvePath()}
@@ -55,9 +55,9 @@ func Default() *Writer {
 }
 
 // Path returns the resolved trail file path without opening the file. The
-// directory component is taken from $AGENT_DIRECTOR_STATE_DIR; when that
-// variable is absent the default ~/.agent-director/ is used. The filename is
-// always "ad-trail.jsonl". Path is safe to call from multiple goroutines.
+// directory component is always ~/.agent-director/ (the user's home directory).
+// The filename is always "ad-trail.jsonl". Path is safe to call from multiple
+// goroutines.
 func Path() string {
 	return resolvePath()
 }
@@ -78,14 +78,11 @@ func Emit(ctx context.Context, event string, fields map[string]any) error {
 	return Default().Emit(ctx, event, fields)
 }
 
-// resolvePath computes the full trail file path. $AGENT_DIRECTOR_STATE_DIR
-// overrides the directory; when absent the default ~/.agent-director/ is used.
+// resolvePath computes the full trail file path. The directory is always
+// ~/.agent-director/, resolved from the user's home directory.
 func resolvePath() string {
-	dir := os.Getenv("AGENT_DIRECTOR_STATE_DIR")
-	if dir == "" {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, ".agent-director")
-	}
+	home, _ := os.UserHomeDir()
+	dir := filepath.Join(home, ".agent-director")
 	return filepath.Join(dir, trailFilename)
 }
 

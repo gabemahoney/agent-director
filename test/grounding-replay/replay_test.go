@@ -18,11 +18,12 @@
 //     resume? (verdict="allow", elapsed_ms_from_row_open > 0)
 //
 // Hermetic: no network, no tmux, no shared state between runs. Each test
-// invocation writes to its own isolated AGENT_DIRECTOR_STATE_DIR temp dir.
+// invocation writes to its own isolated HOME temp dir; the trail lands in
+// <home>/.agent-director/.
 //
 // Trail singleton note: trail.Emit uses a process-level sync.Once whose path
-// is locked in on the first call. TestMain fixes AGENT_DIRECTOR_STATE_DIR
-// before m.Run() so every trail write lands in the designated temp dir.
+// is locked in on the first call. TestMain fixes HOME before m.Run() so every
+// trail write lands under the designated temp home directory.
 package grounding_replay_test
 
 import (
@@ -47,31 +48,28 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api"
 )
 
-// replayTrailDir is the AGENT_DIRECTOR_STATE_DIR for the whole test binary.
-// Set by TestMain before any test runs so the trail singleton captures it.
-var replayTrailDir string
+// replayHomeDir is the isolated HOME for the whole test binary. Set by
+// TestMain before any test runs so the trail singleton (rooted at
+// $HOME/.agent-director) captures it.
+var replayHomeDir string
 
-// TestMain fixes AGENT_DIRECTOR_STATE_DIR (and HOME) to isolated temp dirs
-// before any test function runs. The trail singleton (sync.Once) is
-// initialised on the first trail.Emit call — TestMain ensures that happens
-// AFTER the env var is set.
+// TestMain fixes HOME to an isolated temp dir before any test function runs.
+// The trail singleton (sync.Once) is initialised on the first trail.Emit call
+// — TestMain ensures HOME is set (via os.Setenv, process-wide) AFTER which the
+// singleton resolves $HOME/.agent-director/ad-trail.jsonl. Per-test t.Setenv
+// would be too late: the once.Do latches the path on first Emit.
 func TestMain(m *testing.M) {
 	sandboxguard.Require()
-	d, err := os.MkdirTemp("", "grounding-replay-trail-*")
+	d, err := os.MkdirTemp("", "grounding-replay-home-*")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "TestMain: MkdirTemp: %v\n", err)
 		os.Exit(2)
 	}
 	defer os.RemoveAll(d)
-	replayTrailDir = d
+	replayHomeDir = d
 
-	// Pin the trail singleton to our temp dir.
-	if err := os.Setenv("AGENT_DIRECTOR_STATE_DIR", d); err != nil {
-		fmt.Fprintf(os.Stderr, "TestMain: Setenv AGENT_DIRECTOR_STATE_DIR: %v\n", err)
-		os.Exit(2)
-	}
-
-	// Redirect HOME so UserHomeDir()-based paths don't pollute the real home.
+	// Redirect HOME so the trail singleton (and any other UserHomeDir()-based
+	// paths) land in our temp home instead of polluting the real home.
 	if err := os.Setenv("HOME", d); err != nil {
 		fmt.Fprintf(os.Stderr, "TestMain: Setenv HOME: %v\n", err)
 		os.Exit(2)
@@ -85,8 +83,9 @@ func TestMain(m *testing.M) {
 
 // ── trail helpers ─────────────────────────────────────────────────────────────
 
-// trailPath returns the JSONL file path used by the singleton.
-func trailPath() string { return filepath.Join(replayTrailDir, "ad-trail.jsonl") }
+// trailPath returns the JSONL file path used by the singleton, derived from the
+// HOME redirect: <home>/.agent-director/ad-trail.jsonl.
+func trailPath() string { return filepath.Join(replayHomeDir, ".agent-director", "ad-trail.jsonl") }
 
 // readTrailLines reads every JSONL line from path into []map[string]any.
 // Returns nil when the file does not exist.

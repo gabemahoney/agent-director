@@ -35,7 +35,6 @@ func findMissingTickLines(lines []map[string]any) []map[string]any {
 // the probe does NOT find it and the sweep correctly marks it missing.
 func TestFindMissingTrailEmitsRowMutation(t *testing.T) {
 	home := t.TempDir()
-	stateDir := t.TempDir()
 	bootstrapDB(t, home)
 	dbPath := filepath.Join(home, ".agent-director", "state.db")
 
@@ -50,7 +49,6 @@ func TestFindMissingTrailEmitsRowMutation(t *testing.T) {
 	_, stderr, code := runCLIWithEnv(t, home,
 		map[string]string{
 			"AGENT_DIRECTOR_INSTANCE_ID": "id-fm-probe-anchor",
-			"AGENT_DIRECTOR_STATE_DIR":   stateDir,
 		},
 		"",
 		"find-missing")
@@ -61,7 +59,7 @@ func TestFindMissingTrailEmitsRowMutation(t *testing.T) {
 	// CloseOrphanedPermissionRequests calls DecidePermissionRequest("deny",
 	// DecisionReasonFindMissing, WriterProcessFindMissing) once per open row.
 	// With one open row, exactly one ad.row_mutation.committed line must appear.
-	lines := readTrailLines(t, stateDir)
+	lines := readTrailLines(t, home)
 	rm := rowMutationCommittedLines(lines)
 	if len(rm) != 1 {
 		t.Fatalf("ad.row_mutation.committed line count = %d; want 1", len(rm))
@@ -82,7 +80,6 @@ func TestFindMissingTrailEmitsRowMutation(t *testing.T) {
 // anchor so the sweep correctly marks it missing.
 func TestFindMissingTrailEmitsProcAbsentTick(t *testing.T) {
 	home := t.TempDir()
-	stateDir := t.TempDir()
 	bootstrapDB(t, home)
 	dbPath := filepath.Join(home, ".agent-director", "state.db")
 
@@ -94,7 +91,6 @@ func TestFindMissingTrailEmitsProcAbsentTick(t *testing.T) {
 	_, stderr, code := runCLIWithEnv(t, home,
 		map[string]string{
 			"AGENT_DIRECTOR_INSTANCE_ID": "id-fm-tick-pa-anchor",
-			"AGENT_DIRECTOR_STATE_DIR":   stateDir,
 		},
 		"",
 		"find-missing")
@@ -102,7 +98,7 @@ func TestFindMissingTrailEmitsProcAbsentTick(t *testing.T) {
 		t.Fatalf("find-missing exit = %d; want 0\nstderr=%s", code, stderr)
 	}
 
-	lines := readTrailLines(t, stateDir)
+	lines := readTrailLines(t, home)
 	ticks := findMissingTickLines(lines)
 	// One spawn, no open permission requests → exactly one proc_absent tick.
 	if len(ticks) != 1 {
@@ -131,7 +127,6 @@ func TestFindMissingTrailEmitsProcAbsentTick(t *testing.T) {
 // appear for the spawn transition itself.
 func TestFindMissingTrailEmitsPermissionOrphanCloseoutTick(t *testing.T) {
 	home := t.TempDir()
-	stateDir := t.TempDir()
 	bootstrapDB(t, home)
 	dbPath := filepath.Join(home, ".agent-director", "state.db")
 
@@ -142,7 +137,6 @@ func TestFindMissingTrailEmitsPermissionOrphanCloseoutTick(t *testing.T) {
 	_, stderr, code := runCLIWithEnv(t, home,
 		map[string]string{
 			"AGENT_DIRECTOR_INSTANCE_ID": "id-fm-tick-poc-anchor",
-			"AGENT_DIRECTOR_STATE_DIR":   stateDir,
 		},
 		"",
 		"find-missing")
@@ -150,7 +144,7 @@ func TestFindMissingTrailEmitsPermissionOrphanCloseoutTick(t *testing.T) {
 		t.Fatalf("find-missing exit = %d; want 0\nstderr=%s", code, stderr)
 	}
 
-	lines := readTrailLines(t, stateDir)
+	lines := readTrailLines(t, home)
 	ticks := findMissingTickLines(lines)
 
 	// Expect two ticks: proc_absent (spawn sweep) + permission_orphan_closeout
@@ -212,7 +206,6 @@ func TestFindMissingTrailEmitsDegradedModeSkipTick(t *testing.T) {
 	}
 
 	home := t.TempDir()
-	stateDir := t.TempDir()
 	bootstrapDB(t, home)
 	dbPath := filepath.Join(home, ".agent-director", "state.db")
 
@@ -224,9 +217,7 @@ func TestFindMissingTrailEmitsDegradedModeSkipTick(t *testing.T) {
 	// in a clean test environment no other process holds this env var, so
 	// probeSet is empty and the degraded-mode guard trips.
 	stdout, stderr, code := runCLIWithEnv(t, home,
-		map[string]string{
-			"AGENT_DIRECTOR_STATE_DIR": stateDir,
-		},
+		map[string]string{},
 		"",
 		"find-missing")
 	if code != 0 {
@@ -238,7 +229,7 @@ func TestFindMissingTrailEmitsDegradedModeSkipTick(t *testing.T) {
 		t.Errorf("stdout = %q; want count=0 (degraded mode must refuse to sweep)", stdout)
 	}
 
-	lines := readTrailLines(t, stateDir)
+	lines := readTrailLines(t, home)
 	ticks := findMissingTickLines(lines)
 	if len(ticks) != 1 {
 		t.Fatalf("ad.find_missing.tick line count = %d; want 1 (degraded_mode_skip)", len(ticks))
