@@ -273,7 +273,12 @@ _SANDBOX_PID = $(shell cat '$(_SANDBOX_PID_CACHE)' 2>/dev/null)
 # worktree (where .git is a file, not a directory). Tests that inspect git
 # history need the common dir present inside the container at the SAME absolute
 # path the worktree's .git pointer references.
-GIT_COMMON_DIR := $(shell git rev-parse --git-common-dir 2>/dev/null)
+# git rev-parse --git-common-dir prints a path RELATIVE to cwd when the common
+# dir is under cwd (git <=2.34), so absolutize it. Guard the empty/non-repo
+# case: $(abspath) of an empty string must stay empty (a bare $(abspath .)
+# would collapse to CURDIR and inject a bogus -v mount).
+_GIT_COMMON_DIR_RAW := $(shell git rev-parse --git-common-dir 2>/dev/null)
+GIT_COMMON_DIR := $(if $(_GIT_COMMON_DIR_RAW),$(abspath $(_GIT_COMMON_DIR_RAW)),)
 
 # _SANDBOX_GIT_MOUNT adds a -v for the common git dir when it lives outside the
 # worktree (i.e. when working in a git worktree). Empty for a plain clone
