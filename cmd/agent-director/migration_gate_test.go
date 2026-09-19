@@ -111,14 +111,11 @@ func assertNoBreadcrumbs(t *testing.T, desc string) {
 // empty stdout — the agent session is unaffected (SRD §3.2).
 func TestHookFailsOpenAgainstUnmigratedDB(t *testing.T) {
 	home := t.TempDir()
-	stateDir := t.TempDir()
-	t.Setenv("AGENT_DIRECTOR_STATE_DIR", stateDir)
 	setupUnmigratedDB(t, home, 1)
 
 	stdout, stderr, code := runCLIWithEnv(t, home,
 		map[string]string{
 			"AGENT_DIRECTOR_INSTANCE_ID": "id-migrate-gate",
-			"AGENT_DIRECTOR_STATE_DIR":   stateDir,
 		},
 		`{"hook_event_name":"SessionStart","transcript_path":"/x/abc.jsonl"}`, "hook")
 	if code != 0 {

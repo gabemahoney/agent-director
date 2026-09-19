@@ -18,11 +18,13 @@ import (
 // tsRe is the SR-A-7.9 timestamp regex validated on every ad.hook.fired line.
 var tsRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3,}Z$`)
 
-// readTrailLines opens $stateDir/ad-trail.jsonl and returns each line as a
-// parsed map. It fails the test immediately on any I/O or parse error.
-func readTrailLines(t *testing.T, stateDir string) []map[string]any {
+// readTrailLines opens <home>/.agent-director/ad-trail.jsonl and returns each
+// line as a parsed map. The trail always lands under the process HOME, so tests
+// isolate their trail by giving each subprocess its own HOME. It fails the test
+// immediately on any I/O or parse error.
+func readTrailLines(t *testing.T, home string) []map[string]any {
 	t.Helper()
-	path := filepath.Join(stateDir, "ad-trail.jsonl")
+	path := filepath.Join(home, ".agent-director", "ad-trail.jsonl")
 	f, err := os.Open(path)
 	if err != nil {
 		t.Fatalf("readTrailLines: open %s: %v", path, err)
@@ -43,17 +45,26 @@ func readTrailLines(t *testing.T, stateDir string) []map[string]any {
 	return rows
 }
 
-// assertHookFiredLine finds the single ad.hook.fired line in lines, validates
-// the SR-A-2.1 required fields (ts, source, relay_mode, session_id, matcher
-// shape, upsert_outcome, no tool_input), and returns it for further assertions.
-func assertHookFiredLine(t *testing.T, lines []map[string]any) map[string]any {
-	t.Helper()
+// hookFiredLines returns every ad.hook.fired line in lines, preserving order.
+// Used both by assertHookFiredLine (exactly-one case) and by tests that share a
+// single HOME trail across invocations and measure their contribution as a
+// checkpoint/delta line count (SR-12.1).
+func hookFiredLines(lines []map[string]any) []map[string]any {
 	var fired []map[string]any
 	for _, l := range lines {
 		if l["event"] == "ad.hook.fired" {
 			fired = append(fired, l)
 		}
 	}
+	return fired
+}
+
+// assertHookFiredLine finds the single ad.hook.fired line in lines, validates
+// the SR-A-2.1 required fields (ts, source, relay_mode, session_id, matcher
+// shape, upsert_outcome, no tool_input), and returns it for further assertions.
+func assertHookFiredLine(t *testing.T, lines []map[string]any) map[string]any {
+	t.Helper()
+	fired := hookFiredLines(lines)
 	if len(fired) != 1 {
 		t.Fatalf("ad.hook.fired line count = %d; want exactly 1", len(fired))
 	}
@@ -190,8 +201,6 @@ func readSpawnRow(t *testing.T, dbPath, instanceID string) (string, string) {
 
 func TestHookCLISessionStartTransitionsToWaiting(t *testing.T) {
 	home := t.TempDir()
-	stateDir := t.TempDir()
-	t.Setenv("AGENT_DIRECTOR_STATE_DIR", stateDir)
 	// First call: a store-opening verb (`list`) triggers schema bootstrap.
 	if _, _, code := runCLIWithStdin(t, home, "", "list"); code != 0 {
 		t.Fatalf("list bootstrap exit = %d", code)
@@ -203,7 +212,6 @@ func TestHookCLISessionStartTransitionsToWaiting(t *testing.T) {
 	stdout, stderr, code := runCLIWithEnv(t, home,
 		map[string]string{
 			"AGENT_DIRECTOR_INSTANCE_ID": "id-hook-1",
-			"AGENT_DIRECTOR_STATE_DIR":   stateDir,
 		},
 		payload, "hook")
 	if code != 0 {
@@ -220,7 +228,7 @@ func TestHookCLISessionStartTransitionsToWaiting(t *testing.T) {
 		t.Errorf("claude_session_id = %q; want abc-uuid", sessionID)
 	}
 
-	row := assertHookFiredLine(t, readTrailLines(t, stateDir))
+	row := assertHookFiredLine(t, readTrailLines(t, home))
 	if row["claude_instance_id"] != "id-hook-1" {
 		t.Errorf("claude_instance_id = %v; want id-hook-1", row["claude_instance_id"])
 	}
@@ -234,14 +242,12 @@ func TestHookCLISessionStartTransitionsToWaiting(t *testing.T) {
 
 func TestHookCLIMissingEnvExitsZero(t *testing.T) {
 	home := t.TempDir()
-	stateDir := t.TempDir()
-	t.Setenv("AGENT_DIRECTOR_STATE_DIR", stateDir)
 	if _, _, code := runCLIWithStdin(t, home, "", "list"); code != 0 {
 		t.Fatalf("list bootstrap exit = %d", code)
 	}
 	// No AGENT_DIRECTOR_INSTANCE_ID set — fail-open, exit 0 with no stdout.
 	stdout, _, code := runCLIWithEnv(t, home,
-		map[string]string{"AGENT_DIRECTOR_STATE_DIR": stateDir},
+		map[string]string{},
 		`{"hook_event_name":"SessionStart"}`, "hook")
 	if code != 0 {
 		t.Fatalf("hook exit = %d; want 0 (fail-open)", code)
@@ -251,7 +257,7 @@ func TestHookCLIMissingEnvExitsZero(t *testing.T) {
 	}
 
 	// Trail line must still be emitted (defer fires on all exit paths).
-	row := assertHookFiredLine(t, readTrailLines(t, stateDir))
+	row := assertHookFiredLine(t, readTrailLines(t, home))
 	// claude_instance_id is nil because ResolveInstanceID failed before it was set.
 	if row["claude_instance_id"] != nil {
 		t.Errorf("claude_instance_id = %v; want nil (missing env)", row["claude_instance_id"])
@@ -260,8 +266,6 @@ func TestHookCLIMissingEnvExitsZero(t *testing.T) {
 
 func TestHookCLIPreToolUseAskUserSetsAskUser(t *testing.T) {
 	home := t.TempDir()
-	stateDir := t.TempDir()
-	t.Setenv("AGENT_DIRECTOR_STATE_DIR", stateDir)
 	if _, _, code := runCLIWithStdin(t, home, "", "list"); code != 0 {
 		t.Fatalf("list bootstrap exit = %d", code)
 	}
@@ -271,7 +275,6 @@ func TestHookCLIPreToolUseAskUserSetsAskUser(t *testing.T) {
 	_, stderr, code := runCLIWithEnv(t, home,
 		map[string]string{
 			"AGENT_DIRECTOR_INSTANCE_ID": "id-hook-2",
-			"AGENT_DIRECTOR_STATE_DIR":   stateDir,
 		},
 		payload, "hook")
 	if code != 0 {
@@ -282,7 +285,7 @@ func TestHookCLIPreToolUseAskUserSetsAskUser(t *testing.T) {
 		t.Errorf("state = %q; want ask_user", state)
 	}
 
-	row := assertHookFiredLine(t, readTrailLines(t, stateDir))
+	row := assertHookFiredLine(t, readTrailLines(t, home))
 	if row["claude_instance_id"] != "id-hook-2" {
 		t.Errorf("claude_instance_id = %v; want id-hook-2", row["claude_instance_id"])
 	}
@@ -302,27 +305,28 @@ func TestHookCLISessionEndCompactIsSoftRefresh(t *testing.T) {
 	dbPath := filepath.Join(home, ".agent-director", "state.db")
 	insertPendingRow(t, dbPath, "id-hook-3")
 
-	// Bump to waiting first so soft-refresh has a non-pending baseline.
-	// Use a separate stateDir so its trail line doesn't pollute the assertion.
-	stateDir1 := t.TempDir()
+	// Bump to waiting first so soft-refresh has a non-pending baseline. Both
+	// invocations share this HOME (and its state.db + trail), so the bump's
+	// ad.hook.fired line is isolated from the compact assertion via a
+	// checkpoint/delta line-count against the shared trail (SR-12.1) rather
+	// than a separate trail file.
 	_, _, _ = runCLIWithEnv(t, home,
 		map[string]string{
 			"AGENT_DIRECTOR_INSTANCE_ID": "id-hook-3",
-			"AGENT_DIRECTOR_STATE_DIR":   stateDir1,
 		},
 		`{"hook_event_name":"SessionStart","transcript_path":"/x/abc.jsonl"}`, "hook")
 	state, _ := readSpawnRow(t, dbPath, "id-hook-3")
 	if state != "waiting" {
 		t.Fatalf("baseline state = %q; want waiting", state)
 	}
+	// Checkpoint: the bump has already emitted one ad.hook.fired line; the
+	// compact's contribution is measured as the delta past this point.
+	checkpoint := len(hookFiredLines(readTrailLines(t, home)))
 
 	// Now compact — must NOT change state.
-	stateDir2 := t.TempDir()
-	t.Setenv("AGENT_DIRECTOR_STATE_DIR", stateDir2)
 	_, _, code := runCLIWithEnv(t, home,
 		map[string]string{
 			"AGENT_DIRECTOR_INSTANCE_ID": "id-hook-3",
-			"AGENT_DIRECTOR_STATE_DIR":   stateDir2,
 		},
 		`{"hook_event_name":"SessionEnd","reason":"compact"}`, "hook")
 	if code != 0 {
@@ -333,7 +337,11 @@ func TestHookCLISessionEndCompactIsSoftRefresh(t *testing.T) {
 		t.Errorf("state after compact = %q; want waiting (soft refresh)", state)
 	}
 
-	row := assertHookFiredLine(t, readTrailLines(t, stateDir2))
+	fired := hookFiredLines(readTrailLines(t, home))
+	if got := len(fired) - checkpoint; got != 1 {
+		t.Fatalf("ad.hook.fired delta = %d; want 1 (total %d, checkpoint %d)", got, len(fired), checkpoint)
+	}
+	row := fired[len(fired)-1]
 	if row["claude_instance_id"] != "id-hook-3" {
 		t.Errorf("claude_instance_id = %v; want id-hook-3", row["claude_instance_id"])
 	}
@@ -347,8 +355,6 @@ func TestHookCLISessionEndUserQuitIsEnded(t *testing.T) {
 	// transitions to `ended`. Renamed from the older user_quit case — that
 	// label no longer matches the post-b.pmn terminal-cause set.
 	home := t.TempDir()
-	stateDir := t.TempDir()
-	t.Setenv("AGENT_DIRECTOR_STATE_DIR", stateDir)
 	if _, _, code := runCLIWithStdin(t, home, "", "list"); code != 0 {
 		t.Fatalf("list bootstrap exit = %d", code)
 	}
@@ -357,7 +363,6 @@ func TestHookCLISessionEndUserQuitIsEnded(t *testing.T) {
 	_, _, code := runCLIWithEnv(t, home,
 		map[string]string{
 			"AGENT_DIRECTOR_INSTANCE_ID": "id-hook-4",
-			"AGENT_DIRECTOR_STATE_DIR":   stateDir,
 		},
 		`{"hook_event_name":"SessionEnd","reason":"logout"}`, "hook")
 	if code != 0 {
@@ -368,7 +373,7 @@ func TestHookCLISessionEndUserQuitIsEnded(t *testing.T) {
 		t.Errorf("state = %q; want ended", state)
 	}
 
-	row := assertHookFiredLine(t, readTrailLines(t, stateDir))
+	row := assertHookFiredLine(t, readTrailLines(t, home))
 	if row["claude_instance_id"] != "id-hook-4" {
 		t.Errorf("claude_instance_id = %v; want id-hook-4", row["claude_instance_id"])
 	}
@@ -460,8 +465,6 @@ func TestHookCLITrailLifecycles(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
-			stateDir := t.TempDir()
-			t.Setenv("AGENT_DIRECTOR_STATE_DIR", stateDir)
 
 			if _, _, code := runCLIWithStdin(t, home, "", "list"); code != 0 {
 				t.Fatalf("bootstrap exit = %d", code)
@@ -474,14 +477,13 @@ func TestHookCLITrailLifecycles(t *testing.T) {
 			_, stderr, code := runCLIWithEnv(t, home,
 				map[string]string{
 					"AGENT_DIRECTOR_INSTANCE_ID": tc.instanceID,
-					"AGENT_DIRECTOR_STATE_DIR":   stateDir,
 				},
 				tc.payload, "hook")
 			if code != 0 {
 				t.Fatalf("hook exit = %d; want 0\nstderr=%s", code, stderr)
 			}
 
-			row := assertHookFiredLine(t, readTrailLines(t, stateDir))
+			row := assertHookFiredLine(t, readTrailLines(t, home))
 
 			if row["claude_instance_id"] != tc.instanceID {
 				t.Errorf("claude_instance_id = %v; want %q", row["claude_instance_id"], tc.instanceID)
@@ -508,40 +510,43 @@ func TestHookCLITrailLifecycles(t *testing.T) {
 // an instance that has no pre-seeded row. Both emissions land in separate
 // trail files; the second upsert_outcome must be "no_change".
 func TestHookCLINoOpUpsert(t *testing.T) {
-	home := t.TempDir()
-	if _, _, code := runCLIWithStdin(t, home, "", "list"); code != 0 {
-		t.Fatalf("bootstrap exit = %d", code)
-	}
 	// No insertPendingRow — both UPDATEs will find zero rows → no_change.
+	// Neither invocation depends on the other's DB state, so each gets its own
+	// HOME; that keeps their trail lines in separate files (one ad.hook.fired
+	// line apiece) without a shared-trail checkpoint/delta.
 	payload := `{"hook_event_name":"UserPromptSubmit"}`
 	instanceID := "id-noop-1"
 
-	stateDir1 := t.TempDir()
-	_, _, code := runCLIWithEnv(t, home,
+	home1 := t.TempDir()
+	if _, _, code := runCLIWithStdin(t, home1, "", "list"); code != 0 {
+		t.Fatalf("first bootstrap exit = %d", code)
+	}
+	_, _, code := runCLIWithEnv(t, home1,
 		map[string]string{
 			"AGENT_DIRECTOR_INSTANCE_ID": instanceID,
-			"AGENT_DIRECTOR_STATE_DIR":   stateDir1,
 		},
 		payload, "hook")
 	if code != 0 {
 		t.Fatalf("first hook exit = %d; want 0", code)
 	}
-	row1 := assertHookFiredLine(t, readTrailLines(t, stateDir1))
+	row1 := assertHookFiredLine(t, readTrailLines(t, home1))
 	if row1["upsert_outcome"] != "no_change" {
 		t.Errorf("first upsert_outcome = %v; want no_change (no matching row)", row1["upsert_outcome"])
 	}
 
-	stateDir2 := t.TempDir()
-	_, _, code = runCLIWithEnv(t, home,
+	home2 := t.TempDir()
+	if _, _, code := runCLIWithStdin(t, home2, "", "list"); code != 0 {
+		t.Fatalf("second bootstrap exit = %d", code)
+	}
+	_, _, code = runCLIWithEnv(t, home2,
 		map[string]string{
 			"AGENT_DIRECTOR_INSTANCE_ID": instanceID,
-			"AGENT_DIRECTOR_STATE_DIR":   stateDir2,
 		},
 		payload, "hook")
 	if code != 0 {
 		t.Fatalf("second hook exit = %d; want 0", code)
 	}
-	row2 := assertHookFiredLine(t, readTrailLines(t, stateDir2))
+	row2 := assertHookFiredLine(t, readTrailLines(t, home2))
 	if row2["upsert_outcome"] != "no_change" {
 		t.Errorf("second upsert_outcome = %v; want no_change", row2["upsert_outcome"])
 	}
@@ -552,53 +557,56 @@ func TestHookCLINoOpUpsert(t *testing.T) {
 // The trail event is the observable proof that the defer fired.
 func TestHookCLIFailOpenEmitsLine(t *testing.T) {
 	home := t.TempDir()
-	stateDir := t.TempDir()
-	t.Setenv("AGENT_DIRECTOR_STATE_DIR", stateDir)
 	if _, _, code := runCLIWithStdin(t, home, "", "list"); code != 0 {
 		t.Fatalf("bootstrap exit = %d", code)
 	}
 
 	// No AGENT_DIRECTOR_INSTANCE_ID → ResolveInstanceID fails → early exit.
 	_, _, code := runCLIWithEnv(t, home,
-		map[string]string{"AGENT_DIRECTOR_STATE_DIR": stateDir},
+		map[string]string{},
 		`{"hook_event_name":"PreToolUse","tool_name":"Bash"}`, "hook")
 	if code != 0 {
 		t.Fatalf("hook exit = %d; want 0 (fail-open)", code)
 	}
 
 	// Line must exist; upsert_outcome may be nil (store call was never reached).
-	row := assertHookFiredLine(t, readTrailLines(t, stateDir))
+	row := assertHookFiredLine(t, readTrailLines(t, home))
 	// claude_instance_id stays nil because resolve failed before it was set.
 	if row["claude_instance_id"] != nil {
 		t.Errorf("claude_instance_id = %v; want nil on early-exit path", row["claude_instance_id"])
 	}
 }
 
-// TestHookCLITrailWriteFailureExitsZero points AGENT_DIRECTOR_STATE_DIR at a
-// directory the process cannot create (0o500 parent). The hook must still exit
-// 0 — trail write failures are fail-soft (SR-A-7). Asserting the meta-event
-// in the operational log is not straightforward from CLI-level tests, so only
-// exit-0 is verified here.
+// TestHookCLITrailWriteFailureExitsZero makes the isolated HOME's
+// ~/.agent-director directory read-only (0o500) after the store is fully
+// warmed, so the trail writer's O_CREATE of a fresh ad-trail.jsonl in that
+// directory genuinely fails with EACCES. The hook must still exit 0 — trail
+// write failures are fail-soft (SR-A-7). The trail resolves to
+// <home>/.agent-director/ad-trail.jsonl (os.UserHomeDir), so making that
+// directory unwritable is the HOME-based equivalent of the former
+// read-only-state-dir provocation.
 func TestHookCLITrailWriteFailureExitsZero(t *testing.T) {
 	home := t.TempDir()
 	if _, _, code := runCLIWithStdin(t, home, "", "list"); code != 0 {
 		t.Fatalf("bootstrap exit = %d", code)
 	}
 	dbPath := filepath.Join(home, ".agent-director", "state.db")
+	// Seed while the directory is still writable — this opens state.db RW and
+	// materializes the WAL/-shm sidecars, so the hook's own store open below
+	// needs no new files in the soon-to-be-read-only directory.
 	insertPendingRow(t, dbPath, "id-twf-1")
 
-	// Create a read-only parent so MkdirAll inside the trail writer fails.
-	parent := t.TempDir()
-	if err := os.Chmod(parent, 0o500); err != nil {
+	// Freeze ~/.agent-director read-only so the trail append (a fresh-file
+	// O_CREATE) fails, while the pre-existing state.db + sidecars stay openable.
+	adDir := filepath.Join(home, ".agent-director")
+	if err := os.Chmod(adDir, 0o500); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
-	readOnlyStateDir := filepath.Join(parent, "state")
+	t.Cleanup(func() { _ = os.Chmod(adDir, 0o700) })
 
 	_, _, code := runCLIWithEnv(t, home,
 		map[string]string{
 			"AGENT_DIRECTOR_INSTANCE_ID": "id-twf-1",
-			"AGENT_DIRECTOR_STATE_DIR":   readOnlyStateDir,
 		},
 		`{"hook_event_name":"SessionStart","transcript_path":"/x/abc.jsonl"}`, "hook")
 	if code != 0 {

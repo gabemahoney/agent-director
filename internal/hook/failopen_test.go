@@ -17,11 +17,18 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
+// trailPath returns the trail file the singleton writes to, derived from
+// HOME (which TestMain pins to an isolated temp home before m.Run()). The
+// trail directory is always <$HOME>/.agent-director/.
+func trailPath() string {
+	return filepath.Join(os.Getenv("HOME"), ".agent-director", "ad-trail.jsonl")
+}
+
 // trailLineCount returns the number of lines currently in the trail file.
 // Returns 0 when the file does not yet exist.
 func trailLineCount(t *testing.T) int {
 	t.Helper()
-	path := filepath.Join(os.Getenv("AGENT_DIRECTOR_STATE_DIR"), "ad-trail.jsonl")
+	path := trailPath()
 	f, err := os.Open(path)
 	if os.IsNotExist(err) {
 		return 0
@@ -42,7 +49,7 @@ func trailLineCount(t *testing.T) int {
 // prevCount total lines existed in the trail file. Returns nil if none found.
 func trailHookFiredAfter(t *testing.T, prevCount int) map[string]any {
 	t.Helper()
-	path := filepath.Join(os.Getenv("AGENT_DIRECTOR_STATE_DIR"), "ad-trail.jsonl")
+	path := trailPath()
 	f, err := os.Open(path)
 	if os.IsNotExist(err) {
 		return nil
