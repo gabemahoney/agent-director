@@ -265,10 +265,17 @@ line so it is self-documenting. What the Makefile decides:
   image makes HOME gid-0-writable — that is what lets the docker process
   populate GOPATH/GOCACHE/bun cache. (The podman leg maps to uid 1000 and owns
   HOME outright, so it needs neither `--user` nor `--group-add`.)
-- **Network namespace** — default (isolated) on a normal host; falls back to
-  `--network=host` only when `/dev/net/tun` is absent (as on the DGXC/k8s
-  pod, where the default rootless network backend fails). Cheap static
-  check.
+- **Network namespace** — always `--network=host`, for both the image build
+  and every run target. Host networking sidesteps the bridge-vs-uplink MTU
+  blackhole seen 2026-09-19 on the DGXC/k8s pod: docker's default bridge
+  (`docker0` MTU 1500) sits above the pod uplink (`eth0` MTU 1460), so large
+  inbound TLS segments from Fastly (`release-assets.githubusercontent.com`,
+  serving the bun release asset) exceed the uplink MTU, the PMTUD ICMP is
+  dropped, and the handshake stalls forever — hanging the bun download during
+  the image build. Host netns has no such MTU step, and also covers the
+  original no-`/dev/net/tun` case (rootless network backend fails), so the old
+  tun detection is superseded (b.rx8). Safe: the sandbox boundary is the
+  filesystem/HOME, not networking, and no sandbox target publishes ports.
 - **PID namespace** — default (isolated) on a normal host; falls back to
   `--pid=host` only when a fresh `/proc` mount at container start is blocked
   (the k8s pod masks `/proc`, so the new-PID-namespace proc mount gets
@@ -286,10 +293,13 @@ line so it is self-documenting. What the Makefile decides:
   work where `/proc` remounting is blocked; it is a podman/buildah variable
   that docker ignores.
 
-On the DGXC/k8s pod this repo is developed on, detection lands on
-`net='--network=host' pid='--pid=host' uidmap='--userns=keep-id'`. On a
-laptop with docker it lands on isolated namespaces and
-`--user $(id -u):$(id -g)`.
+On the DGXC/k8s pod this repo is developed on (docker engine), detection lands
+on `net='--network=host' pid='' uidmap='--user 1000:1000 --group-add 0'` (the
+`[sandbox]` line prints `engine=docker`; the docker probe yields an empty pid
+flag — an isolated PID namespace — on this pod). On a laptop with docker it
+lands on `net='--network=host'`, an isolated PID namespace, and
+`--user $(id -u):$(id -g)` (only the network flag is now unconditional; PID and
+uid mapping still vary by host).
 
 ### Known caveats
 
@@ -334,14 +344,18 @@ with no host paths baked in. It can be used in GitHub Actions without
 modification: mount the checkout at `/work` and the Go module cache at
 `/go/pkg/mod`.
 
-The **podman leg** of the harness is exercised on the DGXC/k8s pod this repo
-is developed on (`make test-sandbox` there detects host-network + host-pid +
-keep-id and runs the full suite). The **docker leg** cannot be exercised on
-that pod (no docker daemon), so it is implemented to docker's documented
-semantics (`--user $(id -u):$(id -g)`, `DOCKER_CONFIG` left intact, isolated
-namespaces on a normal host). **GitHub Actions is the free verification path
-for the docker leg** — its runners have docker natively, so a CI job that
-runs `make test-sandbox` (engine auto-detected as docker) validates it.
+The **docker leg** of the harness is exercised on the DGXC/k8s pod this repo
+is developed on (docker 29.7.2, no podman on PATH, so `CONTAINER_ENGINE`
+resolves to docker). There `make test-sandbox` detects host-network +
+`--user $(id -u):$(id -g) --group-add 0` + an isolated PID namespace and runs
+the full suite. The **podman leg** cannot be exercised on that pod (no podman
+installed), so it is implemented to podman's documented semantics
+(`--userns=keep-id`, `DOCKER_CONFIG=` neutralized, `BUILDAH_ISOLATION=chroot`
+on the build, `--network=host`). **GitHub Actions is the free verification
+path for the docker leg** — its runners have docker natively, so a CI job that
+runs `make test-sandbox` (engine auto-detected as docker) validates it; the
+podman leg still relies on its documented semantics until exercised on a
+podman host.
 
 ## 11. Commit subjects
 
