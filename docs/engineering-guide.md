@@ -341,3 +341,34 @@ semantics (`--user $(id -u):$(id -g)`, `DOCKER_CONFIG` left intact, isolated
 namespaces on a normal host). **GitHub Actions is the free verification path
 for the docker leg** — its runners have docker natively, so a CI job that
 runs `make test-sandbox` (engine auto-detected as docker) validates it.
+
+## 11. Commit subjects
+
+The commit **subject line** is load-bearing, not cosmetic — the release-notes
+generator parses it. Follow the convention.
+
+- **Format:** `type(scope): imperative description` — conventional-commits
+  style. Example: `fix(b.zr5): document the commit-subject convention`.
+- **Types in use** (verified against `git log`): `feat`, `fix`, `docs`,
+  `chore`, `test`, `refactor`, `build`. Use these; don't invent new ones without reason.
+- **Scope rule (the load-bearing part):** a commit that implements
+  bee-tracked work **MUST** use the bee ID as the scope —
+  `feat(b.nh2): …`, `fix(b.xht): …`. This is not stylistic. The release-notes
+  generator (`notes.generate` in docs/release-skill.md) groups commits into
+  their Epic via the regex `/^\w+\((b\.\w+)\)/` against the subject. A
+  malformed scope — missing parentheses, a dropped `b.` prefix, or the bee ID
+  buried in the commit body instead of the subject — silently drops the
+  commit from its Epic's group in the generated release notes. The work still
+  ships; it just vanishes from the notes.
+- **Non-bee commits** (release chores, standalone doc touch-ups) use a plain
+  scope or none: `chore: release v0.7.8`, `docs(readme): add Maintenance
+  section`.
+- **Keep the subject parseable:** no leading whitespace, no emoji prefix, and
+  the `type` must be a single `\w+` token (letters/digits/underscore). Anything
+  the `/^\w+\(…\)/` regex can't lead-match is invisible to the grouping.
+- **Cross-reference:** the source of truth for this format is the regex
+  `EPIC_RE = /^\w+\((b\.\w+)\)/` in
+  `pkg/ts-bun-client/scripts/generate-release-notes.ts` (~line 194), the
+  script that `notes.generate` runs. docs/release-skill.md documents that
+  behavior. If `EPIC_RE` in the script ever changes, update this section (and
+  release-skill.md) to match — the three must stay in sync.
