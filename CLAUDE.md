@@ -10,6 +10,10 @@
 - **Doc writing guide**: docs/readme-guide.md, docs/architecture-docs-guide.md
 - **Bug writing guide**: docs/bug-writing-guide.md
 
+**Commit subjects** follow `type(scope): description`; bee-tracked work MUST
+scope by bee ID (`fix(b.zr5): …`) or it drops out of release-notes grouping.
+See docs/engineering-guide.md "11. Commit subjects".
+
 ## Running tests / built artifacts
 
 Edit on the host freely, but **never execute this repo's tests or built

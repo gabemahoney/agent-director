@@ -259,7 +259,7 @@ Release body.
 
 ### Release notes phase
 
-- `notes.generate` — walks `git log <prev-tag>..HEAD` on the release branch, groups commits by Epic shortcode (regex `/^\w+\((b\.\w+)\)/` against subject), renders markdown. Heredoc-safe: commit message bytes pass through verbatim (no shell expansion, no string interpolation).
+- `notes.generate` — walks `git log <prev-tag>..HEAD` on the release branch, groups commits by Epic shortcode (regex `EPIC_RE = /^\w+\((b\.\w+)\)/` in `pkg/ts-bun-client/scripts/generate-release-notes.ts`, matched against subject), renders markdown. Heredoc-safe: commit message bytes pass through verbatim (no shell expansion, no string interpolation). That regex is why the commit-subject convention (`type(b.xyz): …`) is load-bearing — see docs/engineering-guide.md "11. Commit subjects". If you change `EPIC_RE` in the script, update that section to match.
 - `notes.write-preview` (dry-run only) — pipes `notes.generate` output into `dist/release-notes-preview.md` for operator inspection. The file is never committed, staged, or pushed.
 - `--release` mode — notes are computed and passed directly to `gh release create --notes-file -` in the publish phase (E9). They do NOT touch the repo at any point.
 
