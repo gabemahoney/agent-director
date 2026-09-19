@@ -65,6 +65,10 @@ var Catalog = []Entry{
 	// ErrSchemaMismatch is intentionally absent: it surfaces from store
 	// initialization (pkg/api.NewClient), not from individual verb handlers.
 	// cmd/agent-director handles it via direct errors.Is before any verb call.
+	// ErrSchemaMigrationRequired is intentionally absent for the same reason:
+	// it too surfaces only from store initialization (older-than-binary DB with
+	// no valid authorization sentinel), never from a verb handler, and
+	// cmd/agent-director maps it via direct errors.Is before any verb call.
 	{Name: "ErrSpawnNotInteractive", Err: api.ErrSpawnNotInteractive},
 	{Name: "ErrSendKeysWhileRelayed", Err: api.ErrSendKeysWhileRelayed},
 	{Name: "ErrSpawnNotPausable", Err: api.ErrSpawnNotPausable},

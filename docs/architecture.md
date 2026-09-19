@@ -158,13 +158,24 @@ source of truth for which schema this binary expects. On `Open`:
 
 - `user_version == 0` → fresh DB: create the v2 tables and indexes inside a
   single transaction, then stamp `PRAGMA user_version = 2`.
-- `user_version == 1` → v1→v2 migration: DROP+CREATE `permission_requests`
-  in one transaction, stamp `PRAGMA user_version = 2`. V1 rows are
-  discarded (see "Schema v1 → v2 Migration" below).
+- `0 < user_version < 2` (older-than-binary, i.e. v1) → **gated**: the store
+  does **not** auto-migrate on `Open`. The open is refused with
+  `store.ErrSchemaMigrationRequired` (an exported `errors.New` value; callers
+  use `errors.Is`) and zero DDL runs, *unless* an administrator has placed a
+  valid authorization sentinel next to the DB file. The sentinel (`migrate-authorized`,
+  sibling to the resolved DB path) is a strict JSON object naming exactly one
+  transition (`{"from": 1, "to": 2}`) and authorizes the migration only when
+  its `from` exact-matches the DB's actual `user_version` and its `to`
+  exact-matches this binary's `schemaVersion`. When authorized, the upgrade
+  runs as a chain of `migrationSteps` (the ordered step registry in
+  `schema.go`), each step individually transactional; today the chain holds one
+  step, `{from: 1, apply: migrateV1toV2}` (DROP+CREATE `permission_requests`,
+  V1 rows discarded — see "Schema v1 → v2 Migration" below). The sentinel is
+  consumed after the chain commits.
 - `user_version == 2` → nothing to do; the schema already matches.
-- Any other value → return the sentinel `store.ErrSchemaMismatch` (an
-  exported `errors.New` value, so callers use `errors.Is`). No DDL runs in
-  this case.
+- `user_version > 2` (newer-than-binary) → return the sentinel
+  `store.ErrSchemaMismatch` (an exported `errors.New` value, so callers use
+  `errors.Is`). No DDL runs in this case.
 
 **Schema v1 → v2 Migration.** The first real migration ships with schema v2:
 
@@ -180,7 +191,9 @@ source of truth for which schema this binary expects. On `Open`:
    silently corrupt rows.
 4. **`user_version` stamp**: `PRAGMA user_version = 2` is the final
    in-transaction step before `COMMIT`. A crash mid-migration leaves
-   `user_version = 1`, so the next `Open` retries the migration cleanly.
+   `user_version = 1` and — because the sentinel is only consumed *after* the
+   chain commits — the `migrate-authorized` sentinel still in place, so the
+   next authorized `Open` retries the migration cleanly.
    `user_version > 2` surfaces `ErrSchemaMismatch`.
 
 **Concurrency.** `Open` calls `db.SetMaxOpenConns(1)`. `journal_mode=WAL`
@@ -1231,9 +1244,13 @@ edits to `config.toml` are lost.
 
 `ErrSchemaMismatch` fires when the store's `user_version` is not recognized by
 this binary — typically meaning the store was written by a newer binary
-(`user_version > 2`). Note: upgrading from v1 to v2 does **not** trigger
-`ErrSchemaMismatch` — the v1→v2 migration runs automatically on `Open` and
-preserves `spawns` rows.
+(`user_version > 2`). Note: an older-than-binary store (v1) does **not** trigger
+`ErrSchemaMismatch` — it surfaces the distinct `ErrSchemaMigrationRequired`
+instead. The store does not silently upgrade a v1 DB on `Open`: the open is
+refused with `ErrSchemaMigrationRequired` unless an administrator has placed a
+valid `migrate-authorized` sentinel next to the DB file, in which case the
+gated v1→v2 migration runs (`spawns` rows preserved, v1 `permission_requests`
+rows discarded).
 
 If `agent-director help` reports `ErrSchemaMismatch` after an upgrade, the
 recovery is `rm ~/.agent-director/state.db*` followed by a re-run. Spawn
@@ -2284,15 +2301,19 @@ detects this case via the presence of `pkg/api/go.mod`.
 
 ### ErrSchemaMismatch on upgrade
 
-Starting with v2, schema upgrades run automatically on `Open`: a v1 database
-upgrades to v2 silently (DROP+CREATE `permission_requests`, no row
-preservation). `ErrSchemaMismatch` only fires when `user_version > 2` —
+Schema upgrades are **gated**, not automatic: an older-than-binary database
+(v1) is refused on `Open` with `ErrSchemaMigrationRequired` unless an
+administrator has placed a valid `migrate-authorized` sentinel next to the DB
+file. Only then does the v1→v2 migration run (DROP+CREATE `permission_requests`,
+no row preservation). `ErrSchemaMismatch` only fires when `user_version > 2` —
 meaning the store was written by a binary newer than the current one.
 
 Bumping `schemaVersion` beyond 2 requires:
 
-1. Add a `migrateVNtoVN1` path in `internal/store/schema.go` and wire it into
-   `ensureSchema` (following the `migrateV1toV2` pattern).
+1. Add a `migrateVNtoVN1` hop in `internal/store/schema.go` and append a
+   `migrationStep{from: N, apply: migrateVNtoVN1}` entry to the `migrationSteps`
+   registry (following the `migrateV1toV2` pattern). The chain engine walks the
+   registry automatically — do not add per-version switch arms.
 2. Document the schema change in the release notes.
 3. Operators upgrading from a version older than the migration path's base must
    `rm ~/.agent-director/state.db*` post-upgrade.
