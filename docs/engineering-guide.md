@@ -324,10 +324,6 @@ regressions introduced by a change under test:
   packages under this directory as a regression. They all pass when run
   serially (`go test -p 1 …`). This is a pre-existing test-hermeticity gap,
   not a sandbox bug.
-- **Two bun `resolveSystemBinary()` tests assume an installed binary.** They
-  discover `~/.agent-director/bin/agent-director` or an `agent-director` on
-  `PATH`; the clean sandbox HOME has neither, so they fail with
-  `ErrSystemInstallNotFound`.
 - **One bun serialization test is timing-sensitive** (asserts a >5 ms gap
   between serialized spawns); on this fast host it occasionally measures
   ~4 ms and flakes.
