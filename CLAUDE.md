@@ -8,6 +8,7 @@
 - **Test writing guide**: docs/test-writing-guide.md
 - **Schema migration guide**: docs/migration-guide.md
 - **Doc writing guide**: docs/readme-guide.md, docs/architecture-docs-guide.md
+- **Bug writing guide**: docs/bug-writing-guide.md
 
 ## Running tests / built artifacts
 
