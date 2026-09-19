@@ -192,9 +192,9 @@ func TestHookCLISessionStartTransitionsToWaiting(t *testing.T) {
 	home := t.TempDir()
 	stateDir := t.TempDir()
 	t.Setenv("AGENT_DIRECTOR_STATE_DIR", stateDir)
-	// First call: any verb other than `hook` triggers schema bootstrap.
-	if _, _, code := runCLIWithStdin(t, home, "", "help"); code != 0 {
-		t.Fatalf("help bootstrap exit = %d", code)
+	// First call: a store-opening verb (`list`) triggers schema bootstrap.
+	if _, _, code := runCLIWithStdin(t, home, "", "list"); code != 0 {
+		t.Fatalf("list bootstrap exit = %d", code)
 	}
 	dbPath := filepath.Join(home, ".agent-director", "state.db")
 	insertPendingRow(t, dbPath, "id-hook-1")
@@ -236,8 +236,8 @@ func TestHookCLIMissingEnvExitsZero(t *testing.T) {
 	home := t.TempDir()
 	stateDir := t.TempDir()
 	t.Setenv("AGENT_DIRECTOR_STATE_DIR", stateDir)
-	if _, _, code := runCLIWithStdin(t, home, "", "help"); code != 0 {
-		t.Fatalf("help bootstrap exit = %d", code)
+	if _, _, code := runCLIWithStdin(t, home, "", "list"); code != 0 {
+		t.Fatalf("list bootstrap exit = %d", code)
 	}
 	// No AGENT_DIRECTOR_INSTANCE_ID set — fail-open, exit 0 with no stdout.
 	stdout, _, code := runCLIWithEnv(t, home,
@@ -262,8 +262,8 @@ func TestHookCLIPreToolUseAskUserSetsAskUser(t *testing.T) {
 	home := t.TempDir()
 	stateDir := t.TempDir()
 	t.Setenv("AGENT_DIRECTOR_STATE_DIR", stateDir)
-	if _, _, code := runCLIWithStdin(t, home, "", "help"); code != 0 {
-		t.Fatalf("help bootstrap exit = %d", code)
+	if _, _, code := runCLIWithStdin(t, home, "", "list"); code != 0 {
+		t.Fatalf("list bootstrap exit = %d", code)
 	}
 	dbPath := filepath.Join(home, ".agent-director", "state.db")
 	insertPendingRow(t, dbPath, "id-hook-2")
@@ -296,8 +296,8 @@ func TestHookCLIPreToolUseAskUserSetsAskUser(t *testing.T) {
 
 func TestHookCLISessionEndCompactIsSoftRefresh(t *testing.T) {
 	home := t.TempDir()
-	if _, _, code := runCLIWithStdin(t, home, "", "help"); code != 0 {
-		t.Fatalf("help bootstrap exit = %d", code)
+	if _, _, code := runCLIWithStdin(t, home, "", "list"); code != 0 {
+		t.Fatalf("list bootstrap exit = %d", code)
 	}
 	dbPath := filepath.Join(home, ".agent-director", "state.db")
 	insertPendingRow(t, dbPath, "id-hook-3")
@@ -349,8 +349,8 @@ func TestHookCLISessionEndUserQuitIsEnded(t *testing.T) {
 	home := t.TempDir()
 	stateDir := t.TempDir()
 	t.Setenv("AGENT_DIRECTOR_STATE_DIR", stateDir)
-	if _, _, code := runCLIWithStdin(t, home, "", "help"); code != 0 {
-		t.Fatalf("help bootstrap exit = %d", code)
+	if _, _, code := runCLIWithStdin(t, home, "", "list"); code != 0 {
+		t.Fatalf("list bootstrap exit = %d", code)
 	}
 	dbPath := filepath.Join(home, ".agent-director", "state.db")
 	insertPendingRow(t, dbPath, "id-hook-4")
@@ -463,7 +463,7 @@ func TestHookCLITrailLifecycles(t *testing.T) {
 			stateDir := t.TempDir()
 			t.Setenv("AGENT_DIRECTOR_STATE_DIR", stateDir)
 
-			if _, _, code := runCLIWithStdin(t, home, "", "help"); code != 0 {
+			if _, _, code := runCLIWithStdin(t, home, "", "list"); code != 0 {
 				t.Fatalf("bootstrap exit = %d", code)
 			}
 			if tc.seedRow {
@@ -509,7 +509,7 @@ func TestHookCLITrailLifecycles(t *testing.T) {
 // trail files; the second upsert_outcome must be "no_change".
 func TestHookCLINoOpUpsert(t *testing.T) {
 	home := t.TempDir()
-	if _, _, code := runCLIWithStdin(t, home, "", "help"); code != 0 {
+	if _, _, code := runCLIWithStdin(t, home, "", "list"); code != 0 {
 		t.Fatalf("bootstrap exit = %d", code)
 	}
 	// No insertPendingRow — both UPDATEs will find zero rows → no_change.
@@ -554,7 +554,7 @@ func TestHookCLIFailOpenEmitsLine(t *testing.T) {
 	home := t.TempDir()
 	stateDir := t.TempDir()
 	t.Setenv("AGENT_DIRECTOR_STATE_DIR", stateDir)
-	if _, _, code := runCLIWithStdin(t, home, "", "help"); code != 0 {
+	if _, _, code := runCLIWithStdin(t, home, "", "list"); code != 0 {
 		t.Fatalf("bootstrap exit = %d", code)
 	}
 
@@ -581,7 +581,7 @@ func TestHookCLIFailOpenEmitsLine(t *testing.T) {
 // exit-0 is verified here.
 func TestHookCLITrailWriteFailureExitsZero(t *testing.T) {
 	home := t.TempDir()
-	if _, _, code := runCLIWithStdin(t, home, "", "help"); code != 0 {
+	if _, _, code := runCLIWithStdin(t, home, "", "list"); code != 0 {
 		t.Fatalf("bootstrap exit = %d", code)
 	}
 	dbPath := filepath.Join(home, ".agent-director", "state.db")
