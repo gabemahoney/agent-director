@@ -80,9 +80,11 @@ agent runs inside the container. Interpreting a run:
   - `test/smoke/go` canary fires on the pre-existing trail-leak (a verb writes
     to `$HOME/.agent-director/ad-trail.jsonl`); contained harmlessly in the
     throwaway container HOME.
-  - `skills/release-agent-director/tests/synthetic-regressions/…` tests
-    race on the shared `/work/dist` under full parallelism; which subset
-    fails varies run to run. They all pass under `go test -p 1`.
+  - Release synthetic-regression tests still flake under full parallelism:
+    b.ovv isolated the `pack-first.sh` output `dist/`, but tests running
+    `make release-binaries` still race the shared repo-root `dist/` and the
+    real `pkg/ts-bun-client/package.json` (tracked in b.aur). Use `go test
+    -p 1` for a reliable full-suite run until b.aur lands.
   - One bun serialization test is timing-sensitive and occasionally flakes on
     fast hosts.
 
