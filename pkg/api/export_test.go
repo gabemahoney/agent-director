@@ -20,3 +20,19 @@ var Resume = resumeImpl
 
 // ExpandTildeForTest exposes expandTilde for the b.6k1 regression test.
 var ExpandTildeForTest = expandTilde
+
+// GuardErrorEval re-exports the guardError sentinel string so package api_test
+// can assert the exact guard_evaluation value recorded when the relay guard's
+// store read fails, without hardcoding the literal in the test.
+const GuardErrorEval = guardError
+
+// EvaluateRelayGuardForTest exposes the unexported evaluateRelayGuard so
+// package api_test can assert the guard-evaluation outcome string (in
+// particular guardError) that Client.SendKeys records on ad.send_keys.called —
+// a value the pure exported SendKeys discards. It flattens the unexported
+// sendKeysGuard result into (eval, refuse, err) so the test needs no access to
+// the struct's unexported fields.
+func EvaluateRelayGuardForTest(s SendKeysStore, effectiveWindow time.Duration, now time.Time, row Spawn, instanceID string) (eval string, refuse bool, err error) {
+	g, err := evaluateRelayGuard(s, effectiveWindow, now, row, instanceID)
+	return g.eval, g.refuse, err
+}
