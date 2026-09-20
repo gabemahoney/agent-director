@@ -29,7 +29,14 @@ if [ "$TEST_EXIT" -eq 0 ]; then
 fi
 
 # Parse first failing package from go test output.
-FIRST_FAIL="$(grep -m1 '^FAIL' "$TMPOUT" | awk '{print $2}')"
+#
+# Go emits package-level failures as tab-separated "FAIL\t<import/path>\t<time>"
+# lines (the import path always contains a "/"). A naive `grep '^FAIL' | awk
+# '{print $2}'` also matches free-text "FAIL"-prefixed content — e.g. the
+# trail-leak canary's failure dump — and would report a stray word like "a" as
+# the failing package (b.93m). Anchor on the real shape: FAIL, then a tab, then
+# a package import path, and take that path field.
+FIRST_FAIL="$(grep -m1 -E '^FAIL[[:space:]]+[^[:space:]]+/' "$TMPOUT" | awk -F'\t' '{print $2}')"
 if [ -z "$FIRST_FAIL" ]; then
   FIRST_FAIL="(unknown package — tools/consumer-dryrun)"
 fi
