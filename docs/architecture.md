@@ -1338,8 +1338,9 @@ survive independently and can be re-resumed by id via `agent-director resume`.
 ## Stdio MCP server
 
 The MCP server is the JSON-RPC-over-stdio surface
-(`internal/mcp`). It exposes every CLI verb as an MCP tool so an
-MCP-capable LLM client can drive Spawns without going through the
+(`internal/mcp`). It exposes every CLI verb as an MCP tool — except
+the three filtered by `ExposedVerb` (see [Filtered verbs](#filtered-verbs))
+— so an MCP-capable LLM client can drive Spawns without going through the
 shell. The server is **long-lived** per SRD §3.3: config is loaded
 once at startup; in-flight edits to `~/.agent-director/config.toml`
 don't take effect until the next `serve --stdio` invocation.
@@ -1395,12 +1396,19 @@ shares the other's `log.Logger`.
 
 ### Filtered verbs
 
-`tools/list` omits two verbs:
+`tools/list` omits three verbs:
 
 - `hook` — internal entrypoint invoked by Claude Code's hook machinery.
 - `serve` — the MCP server itself.
+- `trail-emit` — a CLI-only write verb that runs without opening
+  `state.db` and has no MCP dispatch handler.
 
-The filter lives in `internal/mcp/server.go::ExposedVerb`.
+The filter lives in `internal/mcp/server.go::ExposedVerb`. The same
+filter now also gates `docs/mcp-reference.md`: `tools/gen-docs`'s
+`renderMCP` calls `internal/mcp.ExposedVerb` so the generated MCP
+reference documents exactly the tools the live server registers —
+these three verbs appear in `docs/cli-reference.md` but not
+`docs/mcp-reference.md`.
 
 ### Name mapping
 
