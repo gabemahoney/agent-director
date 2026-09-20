@@ -96,6 +96,32 @@ func TestJsonlPathEmptySessionRejected(t *testing.T) {
 	}
 }
 
+// TestJsonlPathInComposesUnderConfigDir pins the config-dir-aware sibling
+// (bug b.1ba): the transcript path is <configDir>/projects/<slug>/<sid>.jsonl,
+// using the same byte-for-byte slug rule as JsonlPath — only the prefix
+// differs from ~/.claude.
+func TestJsonlPathInComposesUnderConfigDir(t *testing.T) {
+	got, err := spawn.JsonlPathIn("/home/bot/.claude-infhub", "/home/foo/my_repo", "sid-1")
+	if err != nil {
+		t.Fatalf("JsonlPathIn: %v", err)
+	}
+	want := filepath.Join("/home/bot/.claude-infhub", "projects", "-home-foo-my-repo", "sid-1.jsonl")
+	if got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
+// TestJsonlPathInRejectsEmptyArgs covers the two guard errors on
+// JsonlPathIn: empty sessionID and empty configDir.
+func TestJsonlPathInRejectsEmptyArgs(t *testing.T) {
+	if _, err := spawn.JsonlPathIn("/cfg", "/tmp", ""); err == nil {
+		t.Errorf("expected error for empty sessionID; got nil")
+	}
+	if _, err := spawn.JsonlPathIn("", "/tmp", "sid"); err == nil {
+		t.Errorf("expected error for empty configDir; got nil")
+	}
+}
+
 func TestJsonlPathDoesNotTouchFilesystem(t *testing.T) {
 	// The resolver is a pure path computation. JsonlPath on a path
 	// that doesn't exist must still return the composed path, not an

@@ -200,61 +200,211 @@ func TestResumePrefersPersistedJsonlPath(t *testing.T) {
 	}
 }
 
-// TestResumeLegacyFallbackToComputedPath proves that an empty jsonl_path row
-// (a pre-hook legacy row) falls back to the computed slug-rule path, and
-// resume proceeds when a transcript exists there.
-func TestResumeLegacyFallbackToComputedPath(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "")
+// TestResumeFallbackSuccess is the b.1ba table-driven proof that resume
+// resolves a transcript through the CONFIG_DIR-aware fallback and proceeds
+// (NewSession fires exactly once) across every shape the fallback must handle.
+// It folds together the five same-shape fallback-success tests (legacy NULL
+// row healing via CONFIG_DIR, path-rot healing via CONFIG_DIR, persisted-rot
+// healing via ~/.claude, legacy NULL → computed ~/.claude, no-CONFIG_DIR-key →
+// ~/.claude) plus the AC7 value-semantics cases (empty / whitespace-only /
+// relative / ~-prefixed CLAUDE_CONFIG_DIR all falling through to ~/.claude).
+//
+// Each case declares where the transcript is seeded (under ~/.claude via
+// SeedJsonl, or under a per-case custom config dir via SeedJsonlUnder), the
+// ExtraEnv it puts on the row, an optional rotted persisted jsonl_path, and
+// whether the fallback is expected to resolve under $HOME/.claude (guarded by
+// homeFallback so a pass cannot silently come from the wrong branch).
+func TestResumeFallbackSuccess(t *testing.T) {
+	type seedMode int
+	const (
+		seedNone      seedMode = iota // no transcript seeded (unused here)
+		seedHome                      // transcript under $HOME/.claude
+		seedConfigDir                 // transcript under the case's customCfgDir
+	)
 
-	row := baseRow() // JSONLPath == "" → legacy fallback
-	// Seed the transcript ONLY at the computed location.
-	apitest.SeedJsonl(t, row.CWD, row.ClaudeSessionID)
-	st := &recordingResumeStore{row: row}
-	tm := &recordingResumeTmux{}
-
-	if _, err := api.Resume(st, tm, config.Default(), api.ResumeParams{ClaudeInstanceID: "id-r-1"}); err != nil {
-		t.Fatalf("Resume: %v; want proceed via computed fallback", err)
+	cases := []struct {
+		name string
+		// extraEnv builder is given the per-case custom config dir (a fresh
+		// t.TempDir()) so a case can wire CLAUDE_CONFIG_DIR to it, to a bogus
+		// value, or omit the key entirely.
+		extraEnv func(customCfgDir string) map[string]string
+		// seed decides where the on-disk transcript is planted.
+		seed seedMode
+		// persistedRot, when true, sets a stat-failing persisted jsonl_path so
+		// the fallback must fire on a rotted (not merely NULL) path.
+		persistedRot bool
+		// homeFallback asserts the resolved fallback lives under $HOME/.claude;
+		// the per-case guard checks the ~/.claude slug path is what gets hit.
+		homeFallback bool
+	}{
+		{
+			name:         "legacy NULL row heals via CONFIG_DIR",
+			extraEnv:     func(cfg string) map[string]string { return map[string]string{"CLAUDE_CONFIG_DIR": cfg} },
+			seed:         seedConfigDir,
+			homeFallback: false,
+		},
+		{
+			name:         "path rot heals via CONFIG_DIR",
+			extraEnv:     func(cfg string) map[string]string { return map[string]string{"CLAUDE_CONFIG_DIR": cfg} },
+			seed:         seedConfigDir,
+			persistedRot: true,
+			homeFallback: false,
+		},
+		{
+			name:         "persisted rot heals via default HOME (no CONFIG_DIR key)",
+			extraEnv:     func(string) map[string]string { return nil },
+			seed:         seedHome,
+			persistedRot: true,
+			homeFallback: true,
+		},
+		{
+			name:         "legacy NULL row falls back to computed HOME path",
+			extraEnv:     func(string) map[string]string { return nil },
+			seed:         seedHome,
+			homeFallback: true,
+		},
+		{
+			name:         "ExtraEnv present but no CONFIG_DIR key falls back to HOME",
+			extraEnv:     func(string) map[string]string { return map[string]string{"SOME_OTHER_KEY": "value"} },
+			seed:         seedHome,
+			homeFallback: true,
+		},
+		// ── AC7 value-semantics: non-absolute/empty CONFIG_DIR ≡ absent → HOME ──
+		{
+			name:         "empty-string CONFIG_DIR treated as absent → HOME",
+			extraEnv:     func(string) map[string]string { return map[string]string{"CLAUDE_CONFIG_DIR": ""} },
+			seed:         seedHome,
+			homeFallback: true,
+		},
+		{
+			name:         "whitespace-only CONFIG_DIR treated as absent → HOME",
+			extraEnv:     func(string) map[string]string { return map[string]string{"CLAUDE_CONFIG_DIR": "   "} },
+			seed:         seedHome,
+			homeFallback: true,
+		},
+		{
+			name:         "relative CONFIG_DIR treated as absent → HOME",
+			extraEnv:     func(string) map[string]string { return map[string]string{"CLAUDE_CONFIG_DIR": "rel/dir"} },
+			seed:         seedHome,
+			homeFallback: true,
+		},
+		{
+			name:         "tilde-prefixed CONFIG_DIR treated as absent → HOME",
+			extraEnv:     func(string) map[string]string { return map[string]string{"CLAUDE_CONFIG_DIR": "~/cfg"} },
+			seed:         seedHome,
+			homeFallback: true,
+		},
 	}
-	if tm.newSessionCalls != 1 {
-		t.Errorf("NewSession called %d times; want 1", tm.newSessionCalls)
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "")
+
+			customCfgDir := t.TempDir()
+			row := baseRow() // JSONLPath == "" (legacy NULL) unless persistedRot
+			row.ExtraEnv = c.extraEnv(customCfgDir)
+			if c.persistedRot {
+				row.JSONLPath = filepath.Join(t.TempDir(), "rotted", "gone.jsonl")
+			}
+
+			switch c.seed {
+			case seedHome:
+				apitest.SeedJsonl(t, row.CWD, row.ClaudeSessionID)
+			case seedConfigDir:
+				apitest.SeedJsonlUnder(t, customCfgDir, row.CWD, row.ClaudeSessionID)
+			}
+
+			// Premise guard on homeFallback cases: for a CONFIG_DIR fallback the
+			// default ~/.claude path must NOT also exist (so a pass cannot come
+			// from the wrong branch); for a HOME fallback the ~/.claude path is
+			// exactly where the transcript was seeded and MUST exist.
+			def, err := spawn.JsonlPath(row.CWD, row.ClaudeSessionID)
+			if err != nil {
+				t.Fatalf("compute default path: %v", err)
+			}
+			if c.homeFallback {
+				if _, serr := os.Stat(def); serr != nil {
+					t.Fatalf("HOME-fallback premise: default ~/.claude path %q must exist (stat err=%v)", def, serr)
+				}
+			} else {
+				if _, serr := os.Stat(def); !os.IsNotExist(serr) {
+					t.Fatalf("CONFIG_DIR-fallback premise: default ~/.claude path %q must be absent (stat err=%v)", def, serr)
+				}
+			}
+
+			st := &recordingResumeStore{row: row}
+			tm := &recordingResumeTmux{}
+			if _, err := api.Resume(st, tm, config.Default(), api.ResumeParams{ClaudeInstanceID: "id-r-1"}); err != nil {
+				t.Fatalf("Resume: %v; want proceed via fallback", err)
+			}
+			if tm.newSessionCalls != 1 {
+				t.Errorf("NewSession called %d times; want 1 (resume proceeded past pre-flight)", tm.newSessionCalls)
+			}
+		})
 	}
 }
 
-// TestResumePersistedJsonlMissingReturnsErrJsonlMissing is the persisted-mode
-// ErrJsonlMissing case: jsonl_path is set but that file is absent. A file DOES
-// exist at the computed location — proving the pre-flight prefers (and reports)
-// the persisted path even when the legacy fallback would have succeeded.
-func TestResumePersistedJsonlMissingReturnsErrJsonlMissing(t *testing.T) {
+// TestResumeBothCandidatesAbsentReturnsErrJsonlMissing covers AC 3 and AC 4:
+// when neither the persisted path nor the CONFIG_DIR fallback exists, resume
+// raises ErrJsonlMissing and the message names every tried path with its
+// source label (persisted / fallback).
+func TestResumeBothCandidatesAbsentReturnsErrJsonlMissing(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
+	configDir := t.TempDir() // exists, but no transcript seeded under it
 	row := baseRow()
-	// Fallback path DOES exist — so a wrong preference order would pass.
-	apitest.SeedJsonl(t, row.CWD, row.ClaudeSessionID)
-	// Persisted path points at a file that does not exist.
-	persisted := filepath.Join(t.TempDir(), "custom-config", "gone.jsonl")
+	row.ExtraEnv = map[string]string{"CLAUDE_CONFIG_DIR": configDir}
+	persisted := filepath.Join(t.TempDir(), "custom", "gone.jsonl")
 	row.JSONLPath = persisted
 
 	st := &recordingResumeStore{row: row}
 	tm := &recordingResumeTmux{}
-
 	_, err := api.Resume(st, tm, config.Default(), api.ResumeParams{ClaudeInstanceID: "id-r-1"})
 	if !errors.Is(err, api.ErrJsonlMissing) {
-		t.Fatalf("err = %v; want ErrJsonlMissing (persisted path absent)", err)
+		t.Fatalf("err = %v; want ErrJsonlMissing", err)
 	}
-	// The error names the persisted path, not the (present) computed one.
-	if !containsStr(err.Error(), persisted) {
-		t.Errorf("err %q does not name the persisted path %q", err.Error(), persisted)
+
+	// AC 4: both candidate paths named, each with its source label.
+	fallback, ferr := spawn.JsonlPathIn(configDir, row.CWD, row.ClaudeSessionID)
+	if ferr != nil {
+		t.Fatalf("compute fallback path: %v", ferr)
 	}
-	computed, perr := spawn.JsonlPath(row.CWD, row.ClaudeSessionID)
-	if perr != nil {
-		t.Fatalf("compute path: %v", perr)
+	msg := err.Error()
+	if !containsStr(msg, "persisted "+persisted) {
+		t.Errorf("err %q missing persisted source label for %q", msg, persisted)
 	}
-	if containsStr(err.Error(), computed) {
-		t.Errorf("err %q wrongly names the computed path %q (should name persisted)", err.Error(), computed)
+	if !containsStr(msg, "fallback "+fallback) {
+		t.Errorf("err %q missing fallback source label for %q", msg, fallback)
 	}
 	if tm.newSessionCalls != 0 || st.setParentCalls != 0 {
 		t.Errorf("side effects on guard error")
+	}
+}
+
+// TestResumeNullPathBothAbsentReportsSingleFallback covers the AC 4 variant
+// where jsonl_path is NULL: the error must carry exactly one attempt, the
+// fallback, with no spurious persisted entry.
+func TestResumeNullPathBothAbsentReportsSingleFallback(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	configDir := t.TempDir()
+	row := baseRow() // JSONLPath == "" (NULL)
+	row.ExtraEnv = map[string]string{"CLAUDE_CONFIG_DIR": configDir}
+
+	st := &recordingResumeStore{row: row}
+	tm := &recordingResumeTmux{}
+	_, err := api.Resume(st, tm, config.Default(), api.ResumeParams{ClaudeInstanceID: "id-r-1"})
+	if !errors.Is(err, api.ErrJsonlMissing) {
+		t.Fatalf("err = %v; want ErrJsonlMissing", err)
+	}
+	fallback, _ := spawn.JsonlPathIn(configDir, row.CWD, row.ClaudeSessionID)
+	msg := err.Error()
+	if !containsStr(msg, "fallback "+fallback) {
+		t.Errorf("err %q missing fallback entry for %q", msg, fallback)
+	}
+	if containsStr(msg, "persisted ") {
+		t.Errorf("err %q has spurious persisted entry for a NULL jsonl_path", msg)
 	}
 }
 
