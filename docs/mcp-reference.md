@@ -186,6 +186,7 @@ Orchestrator's allow/deny verdict on an open PermissionRequest. Race-free first-
 - `ErrMissingRequestToken`
 - `ErrSpawnNotFound`
 - `ErrRelayModeOff`
+- `ErrRelayFallenBack`
 - `ErrNoOpenPermissionRequest`
 - `ErrAlreadyDecided`
 - `ErrAmbiguousRequest`

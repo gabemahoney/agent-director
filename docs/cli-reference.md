@@ -186,6 +186,7 @@ _None._
 - `ErrMissingRequestToken`
 - `ErrSpawnNotFound`
 - `ErrRelayModeOff`
+- `ErrRelayFallenBack`
 - `ErrNoOpenPermissionRequest`
 - `ErrAlreadyDecided`
 - `ErrAmbiguousRequest`

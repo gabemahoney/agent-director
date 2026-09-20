@@ -479,6 +479,7 @@ var Verbs = []VerbDef{
 			"ErrMissingRequestToken",
 			"ErrSpawnNotFound",
 			"ErrRelayModeOff",
+			"ErrRelayFallenBack",
 			"ErrNoOpenPermissionRequest",
 			"ErrAlreadyDecided",
 			"ErrAmbiguousRequest",
