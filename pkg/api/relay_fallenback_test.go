@@ -160,6 +160,107 @@ func TestSendKeysGuardHoldsForDecidedInWindowRow(t *testing.T) {
 	}
 }
 
+// TestSendKeysGuardDeadBandAsymmetry pins the deliberate Decide/SendKeys
+// asymmetry at the delivery-window boundary (SR-4.2, SR-4.4). A single open row
+// aged into the DEAD BAND — elapsed strictly between (window - margin) and
+// (window + margin) — must have Decide REFUSE (past the early
+// deliverability cutoff at window - margin) while the send_keys guard still
+// HOLDS (short of the late guard-release cutoff at window + margin). Aging the
+// same row to >= window + margin then RELEASES the guard.
+//
+// Deterministic via the injected clock/window relative to the row's read-back
+// (second-truncated) created_at — no sleeps, no backdating.
+func TestSendKeysGuardDeadBandAsymmetry(t *testing.T) {
+	s, _ := storefix.OpenTempStore(t)
+	storefix.SeedCheckPermission(t, s, "id-deadband")
+	row, err := s.GetPermissionRequest("id-deadband", storefix.TestRequestTokenA)
+	if err != nil {
+		t.Fatalf("GetPermissionRequest: %v", err)
+	}
+	createdAt := row.CreatedAt
+
+	// Dead-band instant: now = createdAt + window exactly. Elapsed == window,
+	// which is > (window - margin) [Decide refuses] and < (window + margin)
+	// [guard still holds].
+	deadBandNow := createdAt.Add(relayGuardWindow)
+
+	// Decide refuses in the dead band (past the early deliverability cutoff).
+	_, err = api.Decide(s, relayGuardWindow, deadBandNow, api.DecideParams{
+		ClaudeInstanceID: "id-deadband",
+		RequestToken:     storefix.TestRequestTokenA,
+		Decision:         "allow",
+	})
+	if !errors.Is(err, api.ErrRelayFallenBack) {
+		t.Fatalf("Decide err = %v; want ErrRelayFallenBack in dead band", err)
+	}
+	// The refusal must not have recorded a decision.
+	row, _ = s.GetPermissionRequest("id-deadband", storefix.TestRequestTokenA)
+	if row.Decision != "" {
+		t.Errorf("decision = %q after dead-band Decide refusal; want NULL/empty", row.Decision)
+	}
+
+	// SendKeys still HOLDS in the dead band (short of the late guard-release
+	// cutoff): zero tmux calls, typed guard error.
+	tmux := newTmux()
+	_, err = api.SendKeys(s, tmux, relayGuardWindow, deadBandNow, api.SendKeysParams{
+		ClaudeInstanceID: "id-deadband",
+		Text:             "1",
+	})
+	if !errors.Is(err, api.ErrSendKeysWhileRelayed) {
+		t.Fatalf("SendKeys err = %v; want ErrSendKeysWhileRelayed (guard holds in dead band)", err)
+	}
+	if len(tmux.calls) != 0 {
+		t.Fatalf("tmux was called while guard held in dead band: %v", tmux.calls)
+	}
+
+	// Aged >= window + margin (+1s past the cutoff): the guard RELEASES and the
+	// keystroke is delivered.
+	releasedNow := createdAt.Add(relayGuardWindow + api.RelayKillSafetyMargin + time.Second)
+	tmux = newTmux()
+	if _, err := api.SendKeys(s, tmux, relayGuardWindow, releasedNow, api.SendKeysParams{
+		ClaudeInstanceID: "id-deadband",
+		Text:             "1",
+	}); err != nil {
+		t.Fatalf("SendKeys err = %v; want release past window + margin", err)
+	}
+	if len(tmux.calls) != 1 || tmux.calls[0].text != "1" {
+		t.Fatalf("tmux.calls = %v; want exactly one delivered keystroke %q (guard released)", tmux.calls, "1")
+	}
+}
+
+// TestSendKeysGuardReleasesForDecidedAgedRow pins SR-4.2's "whether or not a
+// decision was recorded": a spawn whose SOLE permission row is DECIDED but aged
+// past window + margin releases the guard — the delivering poller is provably
+// dead, so no pane-side keystroke can race a decision write regardless of the
+// recorded decision. Complements TestSendKeysGuardHoldsForDecidedInWindowRow
+// (decided-in-window HOLDS).
+func TestSendKeysGuardReleasesForDecidedAgedRow(t *testing.T) {
+	s, _ := storefix.OpenTempStore(t)
+	storefix.SeedCheckPermission(t, s, "id-decided-aged")
+	// Decide the sole row in-window (created_at stays at ~now); DecidePermissionRequest
+	// is the store method, so it applies no deliverability window check.
+	if updated, err := s.DecidePermissionRequest("id-decided-aged", storefix.TestRequestTokenA, "allow", "", store.WriterProcessDecide); err != nil || !updated {
+		t.Fatalf("DecidePermissionRequest: updated=%v err=%v", updated, err)
+	}
+	row, err := s.GetPermissionRequest("id-decided-aged", storefix.TestRequestTokenA)
+	if err != nil {
+		t.Fatalf("GetPermissionRequest: %v", err)
+	}
+
+	// Inject a clock past window + margin so the decided row is guard-releasable.
+	agedNow := row.CreatedAt.Add(relayGuardWindow + api.RelayKillSafetyMargin + time.Second)
+	tmux := newTmux()
+	if _, err := api.SendKeys(s, tmux, relayGuardWindow, agedNow, api.SendKeysParams{
+		ClaudeInstanceID: "id-decided-aged",
+		Text:             "1",
+	}); err != nil {
+		t.Fatalf("SendKeys err = %v; want release for decided row aged past window + margin", err)
+	}
+	if len(tmux.calls) != 1 || tmux.calls[0].text != "1" {
+		t.Fatalf("tmux.calls = %v; want exactly one delivered keystroke %q (guard released for decided-aged row)", tmux.calls, "1")
+	}
+}
+
 // TestSendKeysGuardRefusesZeroRows pins the PM-mandated zero-rows behavior: a
 // relay-on check_permission spawn with NO permission_requests rows still
 // refuses. Rationale: with no row there is no deliverability signal and no

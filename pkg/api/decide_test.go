@@ -475,6 +475,35 @@ func TestDecideDeliverabilityBoundary(t *testing.T) {
 		}
 	})
 
+	t.Run("exact_equality_refused", func(t *testing.T) {
+		// The exact-equality boundary: now = created_at + window - margin, so
+		// cutoff = now - (window - margin) == created_at exactly. A row is
+		// deliverable iff created_at is STRICTLY after the cutoff, so a row whose
+		// created_at equals the cutoff is undeliverable — Decide must REFUSE.
+		// Deterministic because created_at is second-truncated in the column, so
+		// the equality holds exactly against the read-back value.
+		s, _ := apitest.SeedDecideFixture(t, "on")
+		apitest.SeedPermissionRow(t, s, "id-d-1")
+		row, err := s.GetPermissionRequest("id-d-1", storefix.TestRequestTokenA)
+		if err != nil {
+			t.Fatalf("GetPermissionRequest: %v", err)
+		}
+		// cutoff == created_at exactly.
+		now := row.CreatedAt.Add(window - api.RelayKillSafetyMargin)
+		_, err = api.Decide(s, window, now, api.DecideParams{
+			ClaudeInstanceID: "id-d-1",
+			RequestToken:     storefix.TestRequestTokenA,
+			Decision:         "allow",
+		})
+		if !errors.Is(err, api.ErrRelayFallenBack) {
+			t.Fatalf("err = %v; want ErrRelayFallenBack at exact-equality boundary (cutoff == created_at)", err)
+		}
+		row, _ = s.GetPermissionRequest("id-d-1", storefix.TestRequestTokenA)
+		if row.Decision != "" {
+			t.Errorf("decision = %q at exact-equality boundary; want NULL/empty", row.Decision)
+		}
+	})
+
 	t.Run("comfortably_in_window_accepted", func(t *testing.T) {
 		s, _ := apitest.SeedDecideFixture(t, "on")
 		apitest.SeedPermissionRow(t, s, "id-d-1")

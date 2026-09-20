@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/internal/trail"
 )
 
@@ -67,10 +68,16 @@ type SendKeysResult struct{}
 //   - guardReleased — relay_mode=on + check_permission and every row's
 //     window has elapsed; the guard released and keys were delivered. This is
 //     the audited recovery of a fallen-back relay.
+//   - guardError — relay_mode=on + check_permission but the store read that
+//     the guard needs (PermissionRequestsForSpawn) failed, so deliverability
+//     could not be evaluated. Distinct from guardNotApplicable so a store
+//     failure on a relayed Spawn is not misrecorded as an ordinary send. The
+//     send fails with the underlying store error.
 const (
 	guardNotApplicable = "not-applicable"
 	guardHeld          = "held"
 	guardReleased      = "released"
+	guardError         = "error"
 )
 
 // sendKeysGuard is the internal result of evaluating the relay guard: the
@@ -108,13 +115,16 @@ type sendKeysGuard struct {
 // from racing the relay's decide() write. The refusal is NOT unconditional:
 // Claude Code kills the relay hook at its per-hook timeout, after which the
 // poller can no longer deliver a decision and the guard is pure denial of
-// service. The guard therefore consults the shared deliverability signal
-// (RelayRequestUndeliverable, SR-4.4) across ALL of the Spawn's
+// service. The guard therefore consults the shared guard-release signal
+// (RelayRequestGuardReleasable, SR-4.4) across ALL of the Spawn's
 // permission_requests rows — each row's window measured from its own
 // created_at, regardless of decision status (SR-4.2: a row decided in-window
-// still has a live poller about to deliver it). It refuses while ANY row is
-// still within its window and RELEASES only once every row's window has
-// elapsed. A relay-on check_permission Spawn with zero rows keeps refusing:
+// still has a live poller about to deliver it). It refuses while ANY row might
+// still be delivered and RELEASES only once every row's window plus the safety
+// margin has elapsed (window + margin — the deliberate fail-late mirror of
+// Decide's fail-early refusal at window - margin; same authority, asymmetric
+// margin, both in deliverability.go). A relay-on check_permission Spawn with
+// zero rows keeps refusing:
 // with no row there is no signal and no authority to release, and the state
 // is a real mid-insert transient.
 //
@@ -144,7 +154,7 @@ func sendKeys(s SendKeysStore, tmux SendKeysTmux, effectiveWindow time.Duration,
 
 	guard, err := evaluateRelayGuard(s, effectiveWindow, now, row, params.ClaudeInstanceID)
 	if err != nil {
-		return guardNotApplicable, SendKeysResult{}, err
+		return guard.eval, SendKeysResult{}, err
 	}
 	if guard.refuse {
 		return guard.eval, SendKeysResult{}, fmt.Errorf(
@@ -166,13 +176,18 @@ func sendKeys(s SendKeysStore, tmux SendKeysTmux, effectiveWindow time.Duration,
 // evaluateRelayGuard decides whether the time-bounded relay guard refuses the
 // send. It returns guardNotApplicable when the guard does not apply
 // (relay_mode != on or state != check_permission — the ordinary send path).
-// Otherwise it consults the shared deliverability signal across every one of
-// the Spawn's permission_requests rows and returns guardHeld (refuse) while any
-// row is still within its window (including the zero-rows state), or
-// guardReleased (deliver) once every row's window has elapsed.
+// Otherwise it consults the guard-release signal across every one of the
+// Spawn's permission_requests rows and returns guardHeld (refuse) while any row
+// might still be delivered (including the zero-rows state), or guardReleased
+// (deliver) once every row's window has provably elapsed. If the store read
+// fails it returns guardError with the underlying error (the send fails).
 //
-// All time arithmetic lives in RelayRequestUndeliverable (SR-4.4); this
-// function performs no independent elapsed-vs-timeout computation.
+// The guard releases LATE — at elapsed >= window + margin — so it never frees
+// while a live poller could still emit a decision. That is the deliberate
+// mirror of Decide's fail-early refusal; both boundaries and the shared margin
+// live in deliverability.go (SR-4.4). All time arithmetic lives in
+// RelayRequestGuardReleasable; this function performs no independent
+// elapsed-vs-timeout computation.
 func evaluateRelayGuard(s SendKeysStore, effectiveWindow time.Duration, now time.Time, row Spawn, instanceID string) (sendKeysGuard, error) {
 	if !(row.RelayMode == "on" && row.State == store.StateCheckPermission) {
 		return sendKeysGuard{eval: guardNotApplicable, refuse: false}, nil
@@ -180,7 +195,9 @@ func evaluateRelayGuard(s SendKeysStore, effectiveWindow time.Duration, now time
 
 	rows, err := s.PermissionRequestsForSpawn(instanceID)
 	if err != nil {
-		return sendKeysGuard{}, err
+		// Store failure on a relayed Spawn: record guardError (distinct from the
+		// ordinary-send guardNotApplicable) and fail the send with the error.
+		return sendKeysGuard{eval: guardError, refuse: false}, err
 	}
 
 	// Zero rows: no signal, no authority to release — keep refusing (PM-pinned).
@@ -188,12 +205,13 @@ func evaluateRelayGuard(s SendKeysStore, effectiveWindow time.Duration, now time
 		return sendKeysGuard{eval: guardHeld, refuse: true}, nil
 	}
 
-	// Refuse while ANY row is still within its delivery window; release only
-	// when every row's window has elapsed. Each row's window is measured from
-	// its own created_at by the shared single-authority signal, regardless of
-	// decision status (a row decided in-window still has a live poller).
+	// Refuse while ANY row might still be delivered; release only when every
+	// row's window plus the safety margin has elapsed. Each row's window is
+	// measured from its own created_at by the shared guard-release authority,
+	// regardless of decision status (a row decided in-window still has a live
+	// poller until ~window + margin).
 	for _, pr := range rows {
-		if !RelayRequestUndeliverable(pr.CreatedAt, effectiveWindow, now) {
+		if !RelayRequestGuardReleasable(pr.CreatedAt, effectiveWindow, now) {
 			return sendKeysGuard{eval: guardHeld, refuse: true}, nil
 		}
 	}
@@ -233,6 +251,10 @@ func sendKeysOutcome(err error) string {
 		return "ErrSendKeysWhileRelayed"
 	case errors.Is(err, store.ErrSpawnNotFound):
 		return "ErrSpawnNotFound"
+	case errors.Is(err, tmux.ErrTmuxNotAvailable):
+		return "ErrTmuxNotAvailable"
+	case errors.Is(err, tmux.ErrTmuxSendKeys):
+		return "ErrTmuxSendKeys"
 	default:
 		return "ErrInternal"
 	}

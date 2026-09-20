@@ -170,21 +170,41 @@ func TestSendKeysCLIErrSpawnNotFound(t *testing.T) {
 // evaluateRelayGuard: len(rows)==0 → held/refuse). The deliverable-row refusal
 // path and the released-guard recovery path are exercised by the sibling tests
 // below.
+//
+// This asserts BOTH observable contracts of the zero-rows refusal from one
+// seed+invocation: the stderr error envelope (err_name) AND the audit trail
+// event (guard_evaluation="held", outcome=ErrSendKeysWhileRelayed). The two
+// were previously split across a separate ...ZeroRowsTrail test that ran the
+// identical seed+command; merged here to avoid the duplicate run.
 func TestSendKeysCLIErrSendKeysWhileRelayed(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
 	bootstrapDB(t, home)
 	dbPath := filepath.Join(home, ".agent-director", "state.db")
 	seedSpawnRow(t, dbPath, "id-sk-4", "cd-sk-4", "check_permission", "on")
+	// No permission_requests rows seeded → held/refuse (zero-rows pin).
 
 	_, stderr, code := runSpawnCLI(t, home, fakeDir,
 		"send-keys", "--claude-instance-id", "id-sk-4", "--text", "1")
 	if code == 0 {
 		t.Fatalf("expected non-zero exit; got 0 (stderr=%s)", stderr)
 	}
+	// (a) stderr error envelope.
 	env := parseEnvelope(t, stderr)
 	if env.ErrName != "ErrSendKeysWhileRelayed" {
 		t.Errorf("err_name = %q; want ErrSendKeysWhileRelayed", env.ErrName)
+	}
+	// (b) audit trail event for the same refusal.
+	sk := sendKeysCalledLines(readTrailLines(t, home))
+	if len(sk) != 1 {
+		t.Fatalf("ad.send_keys.called count = %d; want 1", len(sk))
+	}
+	row := sk[0]
+	if row["outcome"] != "ErrSendKeysWhileRelayed" {
+		t.Errorf("outcome = %v; want ErrSendKeysWhileRelayed", row["outcome"])
+	}
+	if row["guard_evaluation"] != "held" {
+		t.Errorf("guard_evaluation = %v; want held", row["guard_evaluation"])
 	}
 }
 
@@ -241,38 +261,6 @@ func TestSendKeysCLIErrSendKeysWhileRelayedDeliverableRow(t *testing.T) {
 	}
 	if row["claude_instance_id"] != id {
 		t.Errorf("claude_instance_id = %v; want %q", row["claude_instance_id"], id)
-	}
-}
-
-// TestSendKeysCLIErrSendKeysWhileRelayedZeroRowsTrail asserts the trail event
-// for the zero-rows refusal path: guard_evaluation="held",
-// outcome=ErrSendKeysWhileRelayed (companion to the zero-rows pin above, which
-// asserts only the stderr envelope).
-func TestSendKeysCLIErrSendKeysWhileRelayedZeroRowsTrail(t *testing.T) {
-	fakeDir := buildFakeTmux(t)
-	home := t.TempDir()
-	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".agent-director", "state.db")
-	const id = "id-sk-relay-zero-1"
-	seedSpawnRow(t, dbPath, id, "cd-sk-relay-zero-1", "check_permission", "on")
-	// No permission_requests rows seeded → held/refuse.
-
-	_, stderr, code := runSpawnCLI(t, home, fakeDir,
-		"send-keys", "--claude-instance-id", id, "--text", "1")
-	if code == 0 {
-		t.Fatalf("expected non-zero exit; got 0 (stderr=%s)", stderr)
-	}
-
-	sk := sendKeysCalledLines(readTrailLines(t, home))
-	if len(sk) != 1 {
-		t.Fatalf("ad.send_keys.called count = %d; want 1", len(sk))
-	}
-	row := sk[0]
-	if row["outcome"] != "ErrSendKeysWhileRelayed" {
-		t.Errorf("outcome = %v; want ErrSendKeysWhileRelayed", row["outcome"])
-	}
-	if row["guard_evaluation"] != "held" {
-		t.Errorf("guard_evaluation = %v; want held", row["guard_evaluation"])
 	}
 }
 
