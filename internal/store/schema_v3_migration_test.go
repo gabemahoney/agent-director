@@ -145,6 +145,81 @@ func TestV3Migration_AuthorizedFromV2(t *testing.T) {
 	assertSentinelAbsent(t, dir)
 }
 
+// TestV3Migration_IdempotentReentry covers the b.93m idempotency fix: the v2→v3
+// step guards each ALTER TABLE ... ADD COLUMN with a pragma_table_info probe so
+// re-running the hop against a DB whose spawns columns are ALREADY present
+// succeeds instead of failing with SQLite's "duplicate column name" error.
+//
+// This white-box test (package store) drives migrateV2toV3 DIRECTLY, twice, on
+// its own connection:
+//
+//   - First call: a true v2 fixture (no v3 columns) → all five columns added,
+//     user_version stamped to 3.
+//   - Second call: the SAME DB, now already carrying every v3 column → must
+//     return nil (each guarded ALTER is skipped), leave the columns intact, and
+//     re-stamp user_version=3.
+//
+// Without the pragma_table_info guard the second call's unguarded
+// `ALTER TABLE spawns ADD COLUMN pid ...` would error, so a green run proves the
+// guard, not merely that the columns exist. A partial-completion variant (only
+// the first column present) exercises the mixed present/absent branch.
+func TestV3Migration_IdempotentReentry(t *testing.T) {
+	t.Run("full re-entry after complete migration", func(t *testing.T) {
+		dir := t.TempDir()
+		dbPath := makeV2DB(t, dir)
+		db := openRaw(t, dbPath)
+
+		// First migration: true v2 → v3.
+		if err := migrateV2toV3(db); err != nil {
+			t.Fatalf("first migrateV2toV3: %v", err)
+		}
+		assertV3Columns(t, db)
+		if v := readUserVersionDB(t, db); v != 3 {
+			t.Fatalf("after first migration user_version = %d; want 3", v)
+		}
+
+		// Second migration on the SAME DB — every column already present. The
+		// guarded ALTERs must all be skipped; an unguarded ADD COLUMN would fail
+		// here with "duplicate column name".
+		if err := migrateV2toV3(db); err != nil {
+			t.Fatalf("second (idempotent) migrateV2toV3: %v", err)
+		}
+		assertV3Columns(t, db)
+		if v := readUserVersionDB(t, db); v != 3 {
+			t.Errorf("after idempotent re-run user_version = %d; want 3", v)
+		}
+	})
+
+	t.Run("re-entry after partial migration adds only the missing columns", func(t *testing.T) {
+		dir := t.TempDir()
+		dbPath := makeV2DB(t, dir)
+		db := openRaw(t, dbPath)
+
+		// Simulate a migration that crashed after adding only the first column:
+		// add spawns.pid out of band, leaving the other four absent.
+		if _, err := db.Exec("ALTER TABLE spawns ADD COLUMN pid INTEGER"); err != nil {
+			t.Fatalf("seed partial migration (add pid): %v", err)
+		}
+		before := readTableInfo(t, db, "spawns")
+		if _, ok := before["pid"]; !ok {
+			t.Fatalf("precondition: spawns.pid not present after seeding")
+		}
+		if _, ok := before["extra_env"]; ok {
+			t.Fatalf("precondition: spawns.extra_env unexpectedly present before migration")
+		}
+
+		// Re-entry must add the four missing columns without tripping over the
+		// pre-existing pid column.
+		if err := migrateV2toV3(db); err != nil {
+			t.Fatalf("migrateV2toV3 over partial DB: %v", err)
+		}
+		assertV3Columns(t, db)
+		if v := readUserVersionDB(t, db); v != 3 {
+			t.Errorf("after partial re-entry user_version = %d; want 3", v)
+		}
+	})
+}
+
 // TestV3Migration_RefusedWithoutSentinel covers disposition (b): a v2 fixture
 // with NO sentinel refuses with ErrSchemaMigrationRequired and leaves the DB
 // byte-identical (main + WAL/SHM sidecars) after the refused open.

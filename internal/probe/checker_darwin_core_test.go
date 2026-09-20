@@ -85,178 +85,156 @@ func okFetch(b []byte) func(int) ([]byte, error) {
 
 const darwinTestID = "inst-darwin-abc"
 
-// TestDarwinCheckerMatchEnvHasIDAlive: kinfo starttime matches the stored value
-// AND the readable env carries the instance id → verified-alive.
-func TestDarwinCheckerMatchEnvHasIDAlive(t *testing.T) {
-	c := darwinChecker{
-		fetchKinfo: okFetch(oneKinfoEntry(t, darwinStartSec, darwinStartUsec)),
-		fetchEnv:   okFetch(envBlobWithID(darwinTestID)),
-	}
-	if got := c.CheckLiveness(4242, procstarttimefix.DarwinProcStarttime, darwinTestID); got != VerdictVerifiedAlive {
-		t.Errorf("verdict = %v; want verified-alive", got)
-	}
-}
-
-// TestDarwinCheckerMatchEnvLacksIDDead: starttime matches but the readable env
-// LACKS the id → provably-dead (SR-7.3 tiebreaker: pid reused, starttime
-// collided).
-func TestDarwinCheckerMatchEnvLacksIDDead(t *testing.T) {
-	c := darwinChecker{
-		fetchKinfo: okFetch(oneKinfoEntry(t, darwinStartSec, darwinStartUsec)),
-		fetchEnv:   okFetch(envBlobWithoutID()),
-	}
-	if got := c.CheckLiveness(4242, procstarttimefix.DarwinProcStarttime, darwinTestID); got != VerdictProvablyDead {
-		t.Errorf("verdict = %v; want provably-dead (env lacks id tiebreaker)", got)
+// panicFetchEnv is a fetchEnv seam that fails the test if consulted. It pins the
+// impl's ordering contract: a starttime MATCH is a strict prerequisite for the
+// env fetch, so a mismatched (or absent) starttime must return its verdict
+// BEFORE fetchEnv is ever called. reason is the message reported if the seam is
+// wrongly reached.
+func panicFetchEnv(t *testing.T, reason string) func(int) ([]byte, error) {
+	return func(int) ([]byte, error) {
+		t.Fatalf("fetchEnv must not be called: %s", reason)
+		return nil, nil
 	}
 }
 
-// TestDarwinCheckerStarttimeMismatchDead: the live entry parses to a DIFFERENT
-// starttime than stored → pid reuse → provably-dead. fetchEnv must never be
-// consulted once the starttime mismatch is proven, so it panics if called.
-func TestDarwinCheckerStarttimeMismatchDead(t *testing.T) {
-	c := darwinChecker{
-		fetchKinfo: okFetch(oneKinfoEntry(t, darwinStartSec+999, darwinStartUsec)),
-		fetchEnv: func(int) ([]byte, error) {
-			t.Fatalf("fetchEnv must not be called after a starttime mismatch")
-			return nil, nil
-		},
-	}
-	if got := c.CheckLiveness(4242, procstarttimefix.DarwinProcStarttime, darwinTestID); got != VerdictProvablyDead {
-		t.Errorf("verdict = %v; want provably-dead (starttime mismatch)", got)
-	}
-}
-
-// TestDarwinCheckerKinfoESRCHDead: fetchKinfo returns ESRCH → dispGone →
-// provably-dead.
-func TestDarwinCheckerKinfoESRCHDead(t *testing.T) {
-	c := darwinChecker{
-		fetchKinfo: errFetch(syscall.ESRCH),
-		fetchEnv:   errFetch(syscall.ESRCH),
-	}
-	if got := c.CheckLiveness(4242, procstarttimefix.DarwinProcStarttime, darwinTestID); got != VerdictProvablyDead {
-		t.Errorf("verdict = %v; want provably-dead (kinfo ESRCH)", got)
-	}
-}
-
-// TestDarwinCheckerKinfoEmptyDead: fetchKinfo returns an empty (but no-error)
-// buffer → the pid is not live → provably-dead.
-func TestDarwinCheckerKinfoEmptyDead(t *testing.T) {
-	c := darwinChecker{
-		fetchKinfo: okFetch([]byte{}),
-		fetchEnv:   errFetch(syscall.ESRCH),
-	}
-	if got := c.CheckLiveness(4242, procstarttimefix.DarwinProcStarttime, darwinTestID); got != VerdictProvablyDead {
-		t.Errorf("verdict = %v; want provably-dead (empty kinfo)", got)
-	}
-}
-
-// TestDarwinCheckerEnvEPERMAfterMatchAlive: starttime matches, then fetchEnv hits
-// an EPERM permission wall → verified-alive (pid+starttime already proved the
-// process live; we simply can't read its env). This pins the "permission is
-// verified-alive ONLY as a follow-on to a matched starttime" branch.
-func TestDarwinCheckerEnvEPERMAfterMatchAlive(t *testing.T) {
-	c := darwinChecker{
-		fetchKinfo: okFetch(oneKinfoEntry(t, darwinStartSec, darwinStartUsec)),
-		fetchEnv:   errFetch(syscall.EPERM),
-	}
-	if got := c.CheckLiveness(4242, procstarttimefix.DarwinProcStarttime, darwinTestID); got != VerdictVerifiedAlive {
-		t.Errorf("verdict = %v; want verified-alive (env EPERM after starttime match)", got)
-	}
-}
-
-// TestDarwinCheckerEnvEACCESAfterMatchAlive: same as above with EACCES, pinning
-// both permission errnos through the post-match branch.
-func TestDarwinCheckerEnvEACCESAfterMatchAlive(t *testing.T) {
-	c := darwinChecker{
-		fetchKinfo: okFetch(oneKinfoEntry(t, darwinStartSec, darwinStartUsec)),
-		fetchEnv:   errFetch(syscall.EACCES),
-	}
-	if got := c.CheckLiveness(4242, procstarttimefix.DarwinProcStarttime, darwinTestID); got != VerdictVerifiedAlive {
-		t.Errorf("verdict = %v; want verified-alive (env EACCES after starttime match)", got)
-	}
-}
-
-// TestDarwinCheckerEnvEPERMWithoutMatchImpossible pins the impl's ordering
-// contract: a starttime MATCH is a strict prerequisite for the env fetch, so
-// there is no "EPERM without match" code path — a mismatched starttime returns
-// provably-dead BEFORE fetchEnv is ever called (proven here by a panicking
-// fetchEnv). This documents that "fetchEnv EPERM" can only ever be reached in the
-// verified-alive (post-match) branch above.
-func TestDarwinCheckerEnvEPERMWithoutMatchImpossible(t *testing.T) {
-	c := darwinChecker{
-		fetchKinfo: okFetch(oneKinfoEntry(t, darwinStartSec+1, darwinStartUsec)),
-		fetchEnv: func(int) ([]byte, error) {
-			t.Fatalf("env fetch reached despite starttime mismatch — match is a prerequisite")
-			return nil, syscall.EPERM
-		},
-	}
-	if got := c.CheckLiveness(4242, procstarttimefix.DarwinProcStarttime, darwinTestID); got != VerdictProvablyDead {
-		t.Errorf("verdict = %v; want provably-dead (mismatch short-circuits before env)", got)
-	}
-}
-
-// TestDarwinCheckerKinfoDriftUnknown: fetchKinfo returns a non-empty buffer that
-// trips parseKinfoStartTime's drift guard (tv_sec=0 is an implausible start
-// second). Layout drift is NOT evidence of death → VerdictUnknown, never dead.
-func TestDarwinCheckerKinfoDriftUnknown(t *testing.T) {
-	// A full-size entry with a drift-tripping starttime (tv_sec=0).
+// driftKinfoEntry builds a full-size kinfo_proc entry whose starttime trips
+// parseKinfoStartTime's drift guard (tv_sec=0 is an implausible start second),
+// standing in for a layout-drifted buffer that must resolve to VerdictUnknown
+// rather than dead.
+func driftKinfoEntry() []byte {
 	buf := make([]byte, kinfoProcSize)
 	plantEntry(buf, 0, 4242, 0, darwinStartUsec)
-	c := darwinChecker{
-		fetchKinfo: okFetch(buf),
-		fetchEnv:   errFetch(syscall.ESRCH),
-	}
-	if got := c.CheckLiveness(4242, procstarttimefix.DarwinProcStarttime, darwinTestID); got != VerdictUnknown {
-		t.Errorf("verdict = %v; want unknown (kinfo drift sentinel, never dead)", got)
-	}
+	return buf
 }
 
-// TestDarwinCheckerKinfoUnexpectedErrnoUnknown: fetchKinfo returns an unpinned
-// errno (EINVAL) → dispUnexpected → VerdictUnknown, never dead.
-func TestDarwinCheckerKinfoUnexpectedErrnoUnknown(t *testing.T) {
-	c := darwinChecker{
-		fetchKinfo: errFetch(syscall.EINVAL),
-		fetchEnv:   errFetch(syscall.EINVAL),
+// TestDarwinChecker is the table-driven verdict matrix for darwinChecker: each
+// case constructs a darwinChecker from a (fetchKinfo, fetchEnv) seam pair, calls
+// CheckLiveness(4242, DarwinProcStarttime, darwinTestID), and asserts one
+// verdict. The cases exhaustively pin the checker's decision tree — starttime
+// match/mismatch, the env-id tiebreaker, the permission→verified-alive branch,
+// the drift/unexpected-errno→unknown branches, and the gone→dead branches —
+// with each seam pair anchored to the shared fixture builders above.
+func TestDarwinChecker(t *testing.T) {
+	// fetchEnvFn is built per-case because the "must not be called" seams close
+	// over t; a func field lets the mismatch/absent cases plant a panicking seam
+	// inline alongside the ordinary okFetch/errFetch seams.
+	cases := []struct {
+		name       string
+		fetchKinfo func(int) ([]byte, error)
+		fetchEnv   func(int) ([]byte, error)
+		want       LivenessVerdict
+	}{
+		{
+			// kinfo starttime matches the stored value AND the readable env carries
+			// the instance id → verified-alive.
+			name:       "match_env_has_id_alive",
+			fetchKinfo: okFetch(oneKinfoEntry(t, darwinStartSec, darwinStartUsec)),
+			fetchEnv:   okFetch(envBlobWithID(darwinTestID)),
+			want:       VerdictVerifiedAlive,
+		},
+		{
+			// starttime matches but the readable env LACKS the id → provably-dead
+			// (SR-7.3 tiebreaker: pid reused, starttime collided).
+			name:       "match_env_lacks_id_dead",
+			fetchKinfo: okFetch(oneKinfoEntry(t, darwinStartSec, darwinStartUsec)),
+			fetchEnv:   okFetch(envBlobWithoutID()),
+			want:       VerdictProvablyDead,
+		},
+		{
+			// the live entry parses to a DIFFERENT starttime than stored → pid
+			// reuse → provably-dead. fetchEnv must never be consulted once the
+			// starttime mismatch is proven, so it panics if called — this is also
+			// the "EPERM without match is impossible" ordering pin: a mismatch
+			// returns dead BEFORE fetchEnv is ever reached.
+			name:       "starttime_mismatch_dead",
+			fetchKinfo: okFetch(oneKinfoEntry(t, darwinStartSec+999, darwinStartUsec)),
+			fetchEnv:   panicFetchEnv(t, "starttime mismatch must short-circuit before env fetch"),
+			want:       VerdictProvablyDead,
+		},
+		{
+			// fetchKinfo returns ESRCH → dispGone → provably-dead.
+			name:       "kinfo_esrch_dead",
+			fetchKinfo: errFetch(syscall.ESRCH),
+			fetchEnv:   errFetch(syscall.ESRCH),
+			want:       VerdictProvablyDead,
+		},
+		{
+			// fetchKinfo returns an empty (but no-error) buffer → the pid is not
+			// live → provably-dead.
+			name:       "kinfo_empty_dead",
+			fetchKinfo: okFetch([]byte{}),
+			fetchEnv:   errFetch(syscall.ESRCH),
+			want:       VerdictProvablyDead,
+		},
+		{
+			// starttime matches, then fetchEnv hits an EPERM permission wall →
+			// verified-alive (pid+starttime already proved the process live; we
+			// simply can't read its env). Pins the "permission is verified-alive
+			// ONLY as a follow-on to a matched starttime" branch.
+			name:       "env_eperm_after_match_alive",
+			fetchKinfo: okFetch(oneKinfoEntry(t, darwinStartSec, darwinStartUsec)),
+			fetchEnv:   errFetch(syscall.EPERM),
+			want:       VerdictVerifiedAlive,
+		},
+		{
+			// same as above with EACCES, pinning both permission errnos through the
+			// post-match branch.
+			name:       "env_eacces_after_match_alive",
+			fetchKinfo: okFetch(oneKinfoEntry(t, darwinStartSec, darwinStartUsec)),
+			fetchEnv:   errFetch(syscall.EACCES),
+			want:       VerdictVerifiedAlive,
+		},
+		{
+			// fetchKinfo returns a non-empty buffer that trips
+			// parseKinfoStartTime's drift guard (tv_sec=0). Layout drift is NOT
+			// evidence of death → VerdictUnknown, never dead.
+			name:       "kinfo_drift_unknown",
+			fetchKinfo: okFetch(driftKinfoEntry()),
+			fetchEnv:   errFetch(syscall.ESRCH),
+			want:       VerdictUnknown,
+		},
+		{
+			// fetchKinfo returns an unpinned errno (EINVAL) → dispUnexpected →
+			// VerdictUnknown, never dead.
+			name:       "kinfo_unexpected_errno_unknown",
+			fetchKinfo: errFetch(syscall.EINVAL),
+			fetchEnv:   errFetch(syscall.EINVAL),
+			want:       VerdictUnknown,
+		},
+		{
+			// starttime matches, then fetchEnv returns an unpinned errno (EIO).
+			// Unexpected env errno → VerdictUnknown, never dead (it is NOT the
+			// permission→verified-alive branch and NOT gone).
+			name:       "env_unexpected_errno_unknown",
+			fetchKinfo: okFetch(oneKinfoEntry(t, darwinStartSec, darwinStartUsec)),
+			fetchEnv:   errFetch(syscall.EIO),
+			want:       VerdictUnknown,
+		},
+		{
+			// starttime matches, then the process exits between fetches so fetchEnv
+			// returns ESRCH → dispGone → provably-dead.
+			name:       "env_gone_after_match_dead",
+			fetchKinfo: okFetch(oneKinfoEntry(t, darwinStartSec, darwinStartUsec)),
+			fetchEnv:   errFetch(syscall.ESRCH),
+			want:       VerdictProvablyDead,
+		},
+		{
+			// starttime matches, fetchEnv returns a too-short PROCARGS2 blob that
+			// envFromProcArgs2 rejects (< 4 bytes → (nil,false)). An unparseable env
+			// blob is NOT evidence of death → VerdictUnknown.
+			name:       "env_unparseable_unknown",
+			fetchKinfo: okFetch(oneKinfoEntry(t, darwinStartSec, darwinStartUsec)),
+			fetchEnv:   okFetch([]byte{0x01, 0x02}),
+			want:       VerdictUnknown,
+		},
 	}
-	if got := c.CheckLiveness(4242, procstarttimefix.DarwinProcStarttime, darwinTestID); got != VerdictUnknown {
-		t.Errorf("verdict = %v; want unknown (unexpected kinfo errno)", got)
-	}
-}
 
-// TestDarwinCheckerEnvUnexpectedErrnoUnknown: starttime matches, then fetchEnv
-// returns an unpinned errno (EIO). Unexpected env errno → VerdictUnknown, never
-// dead (it is NOT the permission→verified-alive branch and NOT gone).
-func TestDarwinCheckerEnvUnexpectedErrnoUnknown(t *testing.T) {
-	c := darwinChecker{
-		fetchKinfo: okFetch(oneKinfoEntry(t, darwinStartSec, darwinStartUsec)),
-		fetchEnv:   errFetch(syscall.EIO),
-	}
-	if got := c.CheckLiveness(4242, procstarttimefix.DarwinProcStarttime, darwinTestID); got != VerdictUnknown {
-		t.Errorf("verdict = %v; want unknown (unexpected env errno)", got)
-	}
-}
-
-// TestDarwinCheckerEnvGoneAfterMatchDead: starttime matches, then the process
-// exits between fetches so fetchEnv returns ESRCH → dispGone → provably-dead.
-func TestDarwinCheckerEnvGoneAfterMatchDead(t *testing.T) {
-	c := darwinChecker{
-		fetchKinfo: okFetch(oneKinfoEntry(t, darwinStartSec, darwinStartUsec)),
-		fetchEnv:   errFetch(syscall.ESRCH),
-	}
-	if got := c.CheckLiveness(4242, procstarttimefix.DarwinProcStarttime, darwinTestID); got != VerdictProvablyDead {
-		t.Errorf("verdict = %v; want provably-dead (process exited between fetches)", got)
-	}
-}
-
-// TestDarwinCheckerEnvUnparseableUnknown: starttime matches, fetchEnv returns a
-// too-short PROCARGS2 blob that envFromProcArgs2 rejects. An unparseable env blob
-// is NOT evidence of death → VerdictUnknown.
-func TestDarwinCheckerEnvUnparseableUnknown(t *testing.T) {
-	c := darwinChecker{
-		fetchKinfo: okFetch(oneKinfoEntry(t, darwinStartSec, darwinStartUsec)),
-		fetchEnv:   okFetch([]byte{0x01, 0x02}), // < 4 bytes → envFromProcArgs2 returns (nil,false)
-	}
-	if got := c.CheckLiveness(4242, procstarttimefix.DarwinProcStarttime, darwinTestID); got != VerdictUnknown {
-		t.Errorf("verdict = %v; want unknown (unparseable env blob, never dead)", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := darwinChecker{fetchKinfo: tc.fetchKinfo, fetchEnv: tc.fetchEnv}
+			if got := c.CheckLiveness(4242, procstarttimefix.DarwinProcStarttime, darwinTestID); got != tc.want {
+				t.Errorf("verdict = %v; want %v", got, tc.want)
+			}
+		})
 	}
 }
