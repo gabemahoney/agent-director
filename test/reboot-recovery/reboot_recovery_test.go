@@ -160,13 +160,28 @@ func TestRebootRecoveryEndToEnd(t *testing.T) {
 	}
 
 	// ── Step 5: resume the extra-env row; assert restored CLAUDE_CONFIG_DIR ───
-	// A stale tmux session name would block resume; the server was killed so the
-	// canonical name is free. Poll for readiness in case the server socket is
-	// still tearing down.
-	waitFor(t, "resume succeeds", func() bool {
-		_, _, code := runCLI(t, binaryAbs, env, "resume", "--claude-instance-id", targetID)
-		return code == 0
+	// resume is a MUTATING verb: a partial success (it creates the tmux session,
+	// then fails later) leaves the session name taken, so every retry would fail
+	// on session-exists and mask the ORIGINAL failure behind an opaque timeout.
+	// So DON'T retry resume. Instead poll a READINESS condition first — the killed
+	// server left the canonical session name in use until the socket finishes
+	// tearing down — then make exactly ONE resume attempt, surfacing its captured
+	// stdout/stderr verbatim on failure.
+	sessionName, _ := row["tmux_session_name"].(string)
+	if sessionName == "" {
+		t.Fatalf("target row has empty tmux_session_name; cannot gate resume readiness (row=%v)", row)
+	}
+	waitFor(t, "canonical tmux session name free after kill-server (has-session != 0)", func() bool {
+		// has-session exits 0 iff the session exists; a non-zero exit (no server,
+		// or session absent) means the name is free for resume to recreate.
+		cmd := exec.Command("tmux", "has-session", "-t", sessionName)
+		cmd.Env = env
+		return cmd.Run() != nil
 	})
+	stdout, stderr, code = runCLI(t, binaryAbs, env, "resume", "--claude-instance-id", targetID)
+	if code != 0 {
+		t.Fatalf("resume exit=%d; stdout=%s stderr=%s", code, stdout, stderr)
+	}
 
 	// The resurrected stub is a NEW process; wait for it to appear, then read
 	// its environ and assert the custom config dir was restored verbatim.

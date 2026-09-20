@@ -292,6 +292,48 @@ func TestGetLivenessFieldsRoundTrip(t *testing.T) {
 	})
 }
 
+// TestGetLivenessUnverifiedSinceUnparseablePassesThrough pins nullableTimestamp's
+// third (fail-open) branch: when the stored liveness_unverified_since is neither
+// SQLite CURRENT_TIMESTAMP text nor RFC3339, Get MUST pass the raw string through
+// verbatim rather than dropping it or erroring the verb. never drop data.
+//
+// The row is seeded directly with a non-timestamp string via
+// WithLivenessUnverifiedSince (bypassing SetLivenessUnverified, which only ever
+// writes CURRENT_TIMESTAMP text). The surfaced pointer must be non-nil and equal
+// the raw seeded value, and the marshaled JSON must carry it byte-for-byte.
+func TestGetLivenessUnverifiedSinceUnparseablePassesThrough(t *testing.T) {
+	const raw = "not-a-time"
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	if _, err := apitest.SeedSpawn(dbPath, "id-live-raw", store.StateWaiting, "/tmp", "off", "", true,
+		apitest.WithLivenessUnverifiedSince(raw),
+	); err != nil {
+		t.Fatalf("SeedSpawn: %v", err)
+	}
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	got, err := api.Get(s, "id-live-raw")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.LivenessUnverifiedSince == nil {
+		t.Fatalf("LivenessUnverifiedSince is nil; want raw %q passed through (fail-open, never drop)", raw)
+	}
+	if *got.LivenessUnverifiedSince != raw {
+		t.Errorf("LivenessUnverifiedSince = %q; want %q verbatim (unparseable → pass-through)", *got.LivenessUnverifiedSince, raw)
+	}
+	rawJSON, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if !strings.Contains(string(rawJSON), `"liveness_unverified_since":"`+raw+`"`) {
+		t.Errorf("JSON missing verbatim liveness_unverified_since; got %s", rawJSON)
+	}
+}
+
 // TestGetSurfacesPersistedJsonlPath pins SR-9.3/SR-10.3 surfacing on get: the
 // persisted jsonl_path column is projected verbatim onto the get result and the
 // marshaled JSON, both when set and when a legacy row leaves it empty.

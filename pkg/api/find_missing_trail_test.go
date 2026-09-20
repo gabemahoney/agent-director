@@ -296,52 +296,18 @@ func TestFindMissingProbeEaccesEmitsExactlyOnceTick(t *testing.T) {
 	}
 }
 
-// ── trail-write failure isolation (SR-7.7 fail-open) ────────────────────────
-
-// TestFindMissingTrailFailureDoesNotAlterSweep pins SR-7.7: a trail-emit failure
-// must not change the sweep's return value or the row writes. find-missing emits
-// with `_ = trail.Emit(...)` (fail-open), so the marking path is fully decoupled
-// from trail writability.
-//
-// We make the trail directory unwritable for the duration of the sweep and
-// assert the row is still transitioned to missing and the returned count is
-// correct. (The trail singleton caches its fd process-wide, so this asserts the
-// invariant that the sweep's DB effects are independent of trail state,
-// regardless of whether the append physically fails.)
-func TestFindMissingTrailFailureDoesNotAlterSweep(t *testing.T) {
-	st := seedFullIdentityStore(t, "trailfail-1")
-	chk := checkerFor(map[string]probe.LivenessVerdict{
-		"trailfail-1": probe.VerdictProvablyDead,
-	})
-
-	// Make the trail directory read-only for the duration of the sweep. Restore
-	// on cleanup so later tests (and t.TempDir teardown) are unaffected.
-	trailDir := filepath.Dir(apiTrailFilePath())
-	if err := os.MkdirAll(trailDir, 0o700); err != nil {
-		t.Fatalf("MkdirAll trail dir: %v", err)
-	}
-	if err := os.Chmod(trailDir, 0o500); err != nil {
-		t.Fatalf("chmod trail dir: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(trailDir, 0o700) })
-
-	res, err := api.FindMissing(context.Background(), st, &fakeProber{}, chk, &recordingLogger{})
-	if err != nil {
-		t.Fatalf("FindMissing under unwritable trail: %v", err)
-	}
-	if res.Count != 1 || len(res.IDs) != 1 || res.IDs[0] != "trailfail-1" {
-		t.Fatalf("res = %+v; want count=1 ids=[trailfail-1] despite trail failure", res)
-	}
-
-	// Restore write access before reading DB state (the store file lives under a
-	// separate t.TempDir, so it is unaffected, but restore keeps teardown clean).
-	_ = os.Chmod(trailDir, 0o700)
-
-	// The row write is committed regardless of trail writability.
-	if got, err := st.GetSpawnState("trailfail-1"); err != nil || got != store.StateMissing {
-		t.Errorf("trailfail-1 state = %q (err %v); want missing", got, err)
-	}
-}
+// NOTE: a "trail-write failure does not alter the sweep" test was intentionally
+// REMOVED here. The trail singleton (sync.Once) opens and caches its file
+// descriptor process-wide on the first Emit — which an earlier test in this
+// binary already triggered — so chmodding the trail directory afterward provokes
+// no emit failure at all (the append writes through the still-open fd). The test
+// therefore only re-proved that a VerdictProvablyDead row is marked missing with
+// count=1, which is already pinned by TestFindMissingProcAbsentEmitsTrail (same
+// file: marking + count + proc_absent emission) and TestFindMissingCheckerDeadMarks
+// (find_missing_test.go). Provoking a GENUINE first-Emit failure would require a
+// subprocess with an unwritable HOME before the singleton initializes — out of
+// scope for this in-process unit file — so the honest resolution is deletion
+// rather than a renamed but redundant marking assertion.
 
 // ── zero-touch (no emit) ────────────────────────────────────────────────────
 

@@ -661,10 +661,14 @@ fi
 # `list` remains store-opening after SR-4 (unlike help/version). This is
 # the open that runs any authorized migration and consumes the sentinel;
 # on a fresh install it creates state.db at the current schemaVersion.
-if "$CANONICAL" list >/dev/null 2>&1; then
+# Capture stderr from a SINGLE invocation while preserving its exit status.
+# Two separate `list` calls (one for the status check, one for the diagnostic)
+# could observe different DB state — a concurrent hook migrating in between
+# would yield exit 5 with an empty/misleading diagnostic. Route stdout to
+# /dev/null and capture stderr to a var in one run.
+if open_err="$("$CANONICAL" list 2>&1 >/dev/null)"; then
     :
 else
-    open_err="$("$CANONICAL" list 2>&1 >/dev/null || true)"
     echo "install.sh: store open (agent-director list) failed after install" >&2
     if [[ -n "$open_err" ]]; then
         printf '  %s\n' "$open_err" >&2
