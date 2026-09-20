@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/mcp"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
@@ -83,6 +84,53 @@ func TestGenerate_OutputContent(t *testing.T) {
 				mustContain(t, tc.path, got, want)
 			}
 		})
+	}
+}
+
+// TestGenerate_MCPRespectsExposedVerb guards b.gk8: renderMCP must emit a
+// tool section only for verbs mcp.ExposedVerb admits. Pre-fix, renderMCP
+// walked every manifest verb, so mcp-reference.md documented hook, serve,
+// and trail-emit as callable MCP tools even though the live server never
+// registers them — this test's excluded-verb assertion would have failed.
+func TestGenerate_MCPRespectsExposedVerb(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmp, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+	if err := generate(tmp); err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(tmp, "docs", "mcp-reference.md"))
+	if err != nil {
+		t.Fatalf("read mcp-reference.md: %v", err)
+	}
+	got := string(raw)
+
+	// Every manifest verb: exposed → its Tool section must be present;
+	// excluded (hook/serve/trail-emit) → it must be absent. Driving this
+	// off manifest.Verbs + mcp.ExposedVerb keeps the assertion honest if
+	// the exclusion set ever changes.
+	sawExposed := false
+	sawExcluded := false
+	for _, v := range manifest.Verbs {
+		section := "## Tool: " + v.Name + "\n"
+		if mcp.ExposedVerb(v.Name) {
+			sawExposed = true
+			if !strings.Contains(got, section) {
+				t.Errorf("mcp-reference.md missing tool section for exposed verb %q", v.Name)
+			}
+		} else {
+			sawExcluded = true
+			if strings.Contains(got, section) {
+				t.Errorf("mcp-reference.md documents excluded verb %q as an MCP tool (ExposedVerb is false); renderMCP must skip it", v.Name)
+			}
+		}
+	}
+	if !sawExposed {
+		t.Fatal("no exposed verbs in manifest (precondition)")
+	}
+	if !sawExcluded {
+		t.Fatal("no excluded verbs in manifest — nothing for this regression to guard (precondition)")
 	}
 }
 

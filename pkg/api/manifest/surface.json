@@ -1001,7 +1001,7 @@
     },
     {
       "name": "serve",
-      "description": "Start the stdio MCP server. Long-lived process that exposes every other verb as an MCP tool over JSON-RPC on stdin/stdout. Typically registered with `claude mcp add agent-director \u003cbinary-path\u003e serve --stdio`.",
+      "description": "Start the stdio MCP server. Long-lived process that exposes the CLI verbs (except `hook`, `serve`, and `trail-emit`) as MCP tools over JSON-RPC on stdin/stdout. Typically registered with `claude mcp add agent-director \u003cbinary-path\u003e serve --stdio`.",
       "callable": false,
       "handle_free": false,
       "params": [

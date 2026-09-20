@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/gabemahoney/agent-director/internal/mcp"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
@@ -167,6 +168,14 @@ func renderMCP(verbs []manifest.VerbDef) []byte {
 	fmt.Fprintln(&b)
 	fmt.Fprintln(&b, "# MCP reference")
 	for _, v := range verbs {
+		// Mirror the live MCP server's registration check: only verbs
+		// that mcp.ExposedVerb admits are registered as tools, so only
+		// those belong in this reference. Verbs the server excludes
+		// (hook, serve, trail-emit) are never callable over MCP and must
+		// not appear here.
+		if !mcp.ExposedVerb(v.Name) {
+			continue
+		}
 		fmt.Fprintln(&b)
 		fmt.Fprintf(&b, "## Tool: %s\n", v.Name)
 		fmt.Fprintln(&b)
