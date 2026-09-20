@@ -1,41 +1,38 @@
 package main_test
 
 import (
-	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 )
 
 // backdatePermissionRequest rewrites the created_at of an open
-// permission_requests row (decision NULL) to now-age using a raw connection,
-// mirroring the store-external backdating pattern used elsewhere in the CLI
-// tests (the store API exposes no created_at mutation). Used to push an open
-// request past the effective relay window so Decide surfaces ErrRelayFallenBack.
-// The CLI binary runs on the real clock with the default 86400s window, so
-// callers pass an age well past that plus RelayKillSafetyMargin (e.g. 48h).
+// permission_requests row (decision NULL) to now-age, pushing the request past
+// the effective relay window so the relay-guard reads it as undeliverable
+// (Decide → ErrRelayFallenBack; send-keys → guard released). The CLI binary
+// runs on the real clock with the default 86400s window, so callers pass an age
+// well past that plus RelayKillSafetyMargin (e.g. 48h).
+//
+// The backdating SQL itself lives in exactly one place —
+// storefix.SeedUndeliverablePermissionRequest. This CLI-side wrapper only opens
+// the already-seeded store (the CLI subprocess has exited, so no live writer
+// holds the DB) and delegates, so the raw created_at UPDATE is not duplicated
+// here. storefix.SeedUndeliverablePermissionRequest additionally verifies the
+// target row exists and is still open before backdating.
 func backdatePermissionRequest(t *testing.T, dbPath, instanceID, requestToken string, age time.Duration) {
 	t.Helper()
-	db, err := sql.Open("sqlite", dbPath)
+	s, err := store.Open(dbPath)
 	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
+		t.Fatalf("backdatePermissionRequest: store.Open(%q): %v", dbPath, err)
 	}
-	defer db.Close()
-	backdate := time.Now().UTC().Add(-age).Format("2006-01-02 15:04:05")
-	res, err := db.Exec(
-		`UPDATE permission_requests SET created_at = ? WHERE claude_instance_id = ? AND request_token = ? AND decision IS NULL`,
-		backdate, instanceID, requestToken,
-	)
-	if err != nil {
-		t.Fatalf("backdate created_at: %v", err)
-	}
-	n, _ := res.RowsAffected()
-	if n != 1 {
-		t.Fatalf("backdate affected %d rows; want 1 (row missing or already decided?)", n)
-	}
+	defer func() { _ = s.Close() }()
+	storefix.SeedUndeliverablePermissionRequest(t, s, dbPath, instanceID, requestToken, age)
 }
 
 // decideCalledLines filters trail lines for ad.decide.called events.

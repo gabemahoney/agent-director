@@ -325,6 +325,84 @@ func TestSendKeysAllowPendingPermitsOnlyPending(t *testing.T) {
 	}
 }
 
+// erroringSendKeysStore is a SendKeysStore whose GetSpawn returns a valid
+// relay-on check_permission Spawn but whose PermissionRequestsForSpawn fails.
+// It drives the guard's store-read error path (guardError, SR-5.2) without a
+// real DB: the pure SendKeys must surface the underlying error and never touch
+// tmux, and evaluateRelayGuard must record guard_evaluation="error".
+type erroringSendKeysStore struct {
+	spawn     api.Spawn
+	queryErr  error
+	getCalls  int
+	permCalls int
+}
+
+func (e *erroringSendKeysStore) GetSpawn(string) (api.Spawn, error) {
+	e.getCalls++
+	return e.spawn, nil
+}
+
+func (e *erroringSendKeysStore) PermissionRequestsForSpawn(string) ([]api.PermissionRow, error) {
+	e.permCalls++
+	return nil, e.queryErr
+}
+
+// TestSendKeysGuardStoreReadErrorPropagates pins the guard_evaluation="error"
+// path: for a relay-on check_permission Spawn, when the guard's store read
+// (PermissionRequestsForSpawn) fails, the send must fail with that exact error
+// (errors.Is) and make zero tmux calls. The observable API-layer behavior
+// (error propagation + no tmux) is asserted through the public SendKeys entry
+// point; the guardError trail string itself — which Client.SendKeys records but
+// the pure SendKeys discards — is pinned directly via the test-only
+// EvaluateRelayGuardForTest seam.
+func TestSendKeysGuardStoreReadErrorPropagates(t *testing.T) {
+	const id = "id-guard-err-1"
+	storeErr := errors.New("permission_requests read exploded")
+	fake := &erroringSendKeysStore{
+		spawn: api.Spawn{
+			ClaudeInstanceID: id,
+			State:            store.StateCheckPermission,
+			RelayMode:        "on",
+			TmuxSessionName:  "cd-guard-err-1",
+		},
+		queryErr: storeErr,
+	}
+	tmux := newTmux()
+
+	// API-layer observable behavior: the store error propagates (wrapped ok —
+	// errors.Is) and tmux is never invoked.
+	_, err := api.SendKeys(fake, tmux, sendKeysTestWindow, sendKeysTestNow, api.SendKeysParams{
+		ClaudeInstanceID: id,
+		Text:             "1",
+	})
+	if !errors.Is(err, storeErr) {
+		t.Fatalf("err = %v; want chain containing storeErr", err)
+	}
+	if len(tmux.calls) != 0 {
+		t.Fatalf("tmux was called despite guard store-read failure: %v", tmux.calls)
+	}
+	if fake.permCalls != 1 {
+		t.Fatalf("PermissionRequestsForSpawn calls = %d; want exactly 1", fake.permCalls)
+	}
+
+	// Guard-evaluation outcome string: the failing read records guardError
+	// ("error") — the value Client.SendKeys writes to guard_evaluation on the
+	// ad.send_keys.called trail event. Assert it directly through the
+	// test-only seam since the pure SendKeys discards it. The guard does not
+	// refuse (refuse=false); the send fails on the returned error instead.
+	eval, refuse, gerr := api.EvaluateRelayGuardForTest(
+		fake, sendKeysTestWindow, sendKeysTestNow, fake.spawn, id)
+	if !errors.Is(gerr, storeErr) {
+		t.Fatalf("guard err = %v; want chain containing storeErr", gerr)
+	}
+	if eval != api.GuardErrorEval {
+		t.Fatalf("guard_evaluation = %q; want %q", eval, api.GuardErrorEval)
+	}
+	if refuse {
+		t.Fatalf("guard refuse = true; want false (send fails on the error, not a refusal)")
+	}
+}
+
 // errSentinel stands in for tmux.ErrTmuxSendKeys without importing the
 // tmux package directly into this test (the verb only sees
 // SendKeysTmux.SendKeys's error return, so any sentinel proves the chain
