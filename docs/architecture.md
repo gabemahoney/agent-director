@@ -1966,7 +1966,7 @@ event families; the eighth is a self-reporting meta event.
 | `ad.spawn.state_transition` | `ad_spawn_store` | One per write to `spawns.state`, including no-ops and soft-refresh ticks (SR-A-2.2, Epic 2) |
 | `ad.row_mutation.committed` | `ad_store` | One per successful write to `permission_requests` (SR-A-2.6, Epic 3) |
 | `ad.decide.called` | `ad_decide` | One per `agent-director decide` invocation, including `ErrAlreadyDecided` no-ops (SR-A-2.4, Epic 4) |
-| `ad.find_missing.tick` | `ad_find_missing` | One per row touched by find-missing AND per degraded-mode refusal (SR-A-2.5, Epic 5) |
+| `ad.find_missing.tick` | `ad_find_missing` | One per row find-missing reconciles or flags: `reconciliation_reason=proc_absent` per row marked missing, `permission_orphan_closeout` per orphaned permission_requests row closed on that mark, and `probe_eacces` per live row that first transitions into the unverified (permission-walled) state — one tick per NULL→set transition only, never on a repeat sweep. There is no global-refusal tick (the old degraded-mode refusal is gone; unreadable rows are skipped and surfaced per-row). (SR-A-2.5, Epic 5; SR-7/SR-8) |
 | `ad.relay_attempt.completed` | `relay_hook` | One per worker permission-relay attempt (SR-A-2.3, Epic 6) |
 | `ad.resume.observed` | `ad_polling` | One per hook-resume back to Claude Code (SR-A-2.7, Epic 7) |
 | `ad.trail_meta.emit_failed` | `ad_trail_meta` | Self-reporting envelope written when a primary emit fails — carries `original_event` and `error_class` (SR-A-3.2) |
@@ -2149,8 +2149,16 @@ Per-OS implementations are selected by build tags:
   numeric PID entry. The `environ` pseudo-file is the NUL-separated
   `KEY=VAL` block the kernel exposes. Default permissions make it
   owner-readable only — that's load-bearing: a `find-missing` run as
-  the wrong user simply can't see the env vars and falls into the
-  degraded-mode guard rather than corrupting state.
+  the wrong user simply can't read those env vars. Rows carrying a
+  concrete pid + starttime no longer depend on this probe set at all —
+  they get an individual, evidence-based verdict through the
+  `LivenessChecker` seam (see
+  [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)),
+  whose Linux impl resolves an `environ` permission wall to an UNKNOWN
+  verdict and skips just that row rather than misreporting it. Only the
+  partial-identity rows (NULL pid or NULL starttime) still fall back to
+  this probe set, and an unreadable `environ` there means the row is
+  left in place, never marked dead.
 
 - **macOS (`probe_darwin.go`)** — `sysctl("kern.proc.all")` returns
   the kinfo_proc array; per PID, `sysctl("kern.procargs2", pid)`
@@ -2196,7 +2204,14 @@ Per-OS implementations are selected by build tags:
   `<bsd/sys/sysctl.h>`, refresh the constant comments in `parse_kinfo.go`,
   and re-run `GOOS=darwin GOARCH=arm64 go build ./...` plus the prober's
   integration test under that macOS version. The plausibility guards are
-  a safety net, not a substitute for the bump.
+  a safety net, not a substitute for the bump. The same
+  `kinfoProcStartSecOffset`/`kinfoProcStartUsecOffset` pair now also feeds
+  the per-row liveness checker's starttime comparison (`checker_darwin_core.go`
+  parses the LIVE pid's `p_starttime` via `parseKinfoStartTime` and compares
+  it to the stored `proc_starttime`), so a bump that drifts those offsets
+  affects the checker as well as the probe. That path is fail-open by the
+  same rule: a `parseKinfoStartTime` layout-drift (`ErrKinfoLayoutDrift`)
+  or any unpinned sysctl errno classifies to UNKNOWN, never provably-dead.
 
 - **Other** — the fallback returns `ErrProbeUnsupported` so
   `find-missing` fails closed rather than silently treating "no
@@ -2205,27 +2220,118 @@ Per-OS implementations are selected by build tags:
 Permission-denied / process-gone errors mid-walk are skipped silently;
 a single foreign-owned process can't poison the whole probe.
 
-### Degraded-mode guard (SRD §14.6)
+### Degraded-mode reconciliation + cron user
 
-When the probe returns zero IDs AND the DB has ≥1 live-state row,
-`find-missing` writes nothing and logs a warning to
-`cfg.log.error_log_path`. The legitimate 0-live-rows + 0-probe-IDs
-case is distinguished and treated as a fast no-op success.
+**There is no global degraded-mode refusal.** The old guard — "probe
+returned zero IDs while the DB holds ≥1 live row → write nothing, log a
+warning" — has been removed (SR-7/SR-8). It over-refused: after a full
+reboot the probe set is legitimately empty even though every recorded row
+is genuinely dead, and a single unreadable process used to block the whole
+sweep. `find-missing` now reconciles **per row on evidence**, and an
+unreadable row is skipped and surfaced as unverified rather than blocking
+anything.
+
+**Per-row evidence model.** `find-missing` lists every live-state identity
+(`ListLiveSpawnIdentities` — each row's `claude_instance_id` plus its
+recorded `pid` + `proc_starttime`) and partitions on identity completeness:
+
+- **Full identity (pid AND starttime recorded)** — the row gets an
+  evidence-based verdict from the `LivenessChecker` seam
+  (`internal/probe`, `NewChecker()`), which returns one of three verdicts:
+  - *provably-dead* → mark missing (see the pinned marking order below).
+  - *verified-alive* → skip and clear any stale liveness fields.
+  - *unknown* → skip THIS ROW ONLY, set the liveness metadata, and record
+    the id as unverified.
+- **Partial/absent identity (NULL pid OR NULL starttime)** — the row falls
+  back to the environ **probe-set diff**: a live id absent from
+  `probe.Probe()`'s set is marked missing. This is the sole remaining
+  consumer of the environ prober. An unreadable environ here means the id
+  simply isn't in the set observable by the invoking user, so such a row is
+  left in place (the fallback never manufactures a death from an empty set).
+
+**Pinned per-OS errno mapping (SR-7.4) — the cardinal rule is
+UNKNOWN-never-dead.** Only positive, pinned evidence yields provably-dead;
+ANY unexpected errno or parse/layout-drift failure resolves to UNKNOWN.
+The tables live inside the per-OS checker impls
+(`checker_linux_core.go`, `checker_darwin_core.go`), expressed as pure
+`classify{Linux,Darwin}Errno` functions so the tables are unit-testable
+off any OS:
+
+| Evidence | Linux (`/proc`) | macOS (sysctl) | Verdict |
+| --- | --- | --- | --- |
+| Process-table entry absent | `stat` ENOENT/ESRCH | KERN_PROC_PID ESRCH / empty | provably-dead |
+| Recorded starttime ≠ live starttime (pid reuse) | stat field 22 mismatch | `p_starttime` mismatch | provably-dead |
+| Can't read the process-table entry | `stat` EACCES/EPERM | KERN_PROC_PID EACCES/EPERM | unknown |
+| starttime matches, env readable but LACKING the instance id | environ scan | PROCARGS2 env scan | provably-dead (tiebreaker) |
+| starttime matches, env unreadable (permission wall) | environ EACCES/EPERM | PROCARGS2 EACCES/EPERM | **verified-alive** |
+| starttime matches, env readable and HAS the instance id | environ scan | PROCARGS2 env scan | verified-alive |
+| Any other errno, malformed stat, or `ErrKinfoLayoutDrift` | — | — | **unknown (never dead)** |
+
+The env-permission-wall row is the load-bearing case: pid + starttime
+already proved the tracked process is running, so an unreadable env is
+*verified-alive*, not unknown — we simply couldn't run the id tiebreaker.
+The checker never returns an error; every failure mode folds into UNKNOWN
+per the fail-open contract.
+
+**Liveness metadata fields + unverified surfacing.** Unknown liveness is
+row metadata, never a lifecycle state — the `state` enum is untouched. Two
+nullable columns carry it: `liveness_unverified_since` (set on the FIRST
+EACCES sweep, preserved verbatim on repeats) and `liveness_note` (e.g.
+`probe_eacces`). `SetLivenessUnverified` writes both in one guarded UPDATE
+that fires only when `liveness_unverified_since` is currently NULL; its
+returned bool is the sole NULL→set signal. The fields are cleared when the
+row is later verified-alive, immediately after it is marked missing, and on
+every hook row-UPDATE path. `FindMissingResult` carries `unverified`
+(count) and `unverified_ids` (sorted, `[]` never null) alongside
+`count`/`ids`, and the `list`/`get` verbs expose the two liveness fields as
+additive nullable fields, so an operator sees exactly which rows were
+skipped for lack of evidence.
+
+**Marking order.** A provably-dead (or fallback-absent) row is reconciled
+in a pinned sequence: `MarkSpawnMissing` (the unchanged primitive; returns
+the prior state so a no-op on an absent/terminal row writes nothing
+downstream) → `ClearLivenessUnverified` → one `ad.find_missing.tick`
+(`reconciliation_reason=proc_absent`) → `CloseOrphanedPermissionRequests`
+(which fail-closes any relay polling loop and emits its own
+`permission_orphan_closeout` tick per closed row). The unverified path
+emits exactly one `ad.find_missing.tick` (`reconciliation_reason=probe_eacces`)
+per NULL→set transition and nothing on repeats. Per-row store/checker
+errors are logged and skipped; the sweep never aborts on one bad row, and a
+trail-emit failure never changes the sweep's return.
+
+**Cron user story.** `find-missing` still assumes it runs as the user that
+owns the Spawns (or as root), but a user mismatch no longer corrupts or
+refuses. Full-identity rows the invoking user can't read hit the env
+permission wall and are surfaced as **unverified** (verified-alive if pid +
+starttime matched, unknown otherwise) — never silently marked missing.
+Partial-identity rows the user can't observe are left in place. The
+recommended operator setup is therefore unchanged: a **systemd user-timer
+or a personal crontab** — not a system-level cron — so the userland
+identity matches the Spawn-launching identity automatically and rows get
+real verdicts instead of a wall of unverified metadata.
 
 ### `find-missing`
 
 `pkg/api/find_missing.go`:
 
-1. `ListLiveSpawnIDs` returns every row where `state NOT IN (ended,
-   missing)`. This includes `pending` — SRD §5.2 explicitly scans
-   pending rows so a Spawn whose tmux died before SessionStart fired
-   still reconciles correctly.
-2. `probe.Probe()` collects live IDs.
-3. Degraded-mode guard fires when warranted (see above).
-4. Per row in the set-difference: `MarkSpawnMissing` sets
-   `state='missing'` and `ended_at = now`. Per-row failures (e.g.
-   transient SQLite I/O error) are logged and the sweep continues —
-   one bad row does not abort the others.
+1. `ListLiveSpawnIdentities` returns every row where `state NOT IN (ended,
+   missing)`, each carrying its recorded `pid` + `proc_starttime`. This
+   includes `pending` — SRD §5.2 explicitly scans pending rows so a Spawn
+   whose tmux died before SessionStart fired still reconciles correctly.
+2. Rows are partitioned by identity completeness (see
+   [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)).
+3. Full-identity rows get a per-row `LivenessChecker` verdict:
+   provably-dead → mark missing; verified-alive → clear stale liveness
+   fields; unknown → skip that row only, set `liveness_unverified_since` +
+   `liveness_note`, and record the id in `unverified_ids`. There is no
+   global refusal — an unreadable row is surfaced, not a blocker.
+4. Partial-identity rows fall back to `probe.Probe()`'s set: a live id
+   absent from the set is marked missing.
+5. Each marked row runs the pinned marking order (`MarkSpawnMissing` →
+   `ClearLivenessUnverified` → `proc_absent` tick →
+   `CloseOrphanedPermissionRequests`). Per-row failures (e.g. transient
+   SQLite I/O error) are logged and the sweep continues — one bad row does
+   not abort the others.
 
 The verb does NOT touch tmux. A row marked `missing` may still have
 an orphaned tmux session if (somehow) the env-var check misfired
@@ -2265,15 +2371,19 @@ by the schema's `ON DELETE CASCADE`.
 ### Cron user invariant
 
 All three verbs assume they run as the same user that owns the
-Spawns (or as root). `find-missing` exposes mismatches via the
-degraded-mode guard. `expire` and `delete` are pure DB operations
-and don't depend on probe permissions; running them as the wrong
-user is harmless (they just operate on whatever rows the DB happens
-to hold).
+Spawns (or as root). `find-missing` no longer refuses on a user
+mismatch: rows it can't read are surfaced per-row as **unverified**
+(or verified-alive when pid + starttime already matched) rather than
+corrupted or globally skipped — see
+[Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)
+for the full story. `expire` and `delete` are pure DB operations and
+don't depend on probe permissions; running them as the wrong user is
+harmless (they just operate on whatever rows the DB happens to hold).
 
 The recommended operator setup is a systemd user-timer or a personal
 crontab — not a system-level cron — so the userland identity matches
-the Spawn-launching identity automatically.
+the Spawn-launching identity automatically and rows get real liveness
+verdicts instead of a wall of unverified metadata.
 
 ## Stop semantics
 

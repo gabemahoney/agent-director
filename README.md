@@ -24,7 +24,8 @@ SQLite file; everything else is tmux.
 - A **persistent session model** — pause / resume preserves the
   JSONL transcript across Claude sessions.
 - A **crash-recovery cron** — `find-missing` + `expire` reconcile the
-  DB against actually-live processes.
+  DB against actually-live processes, marking each row it can prove dead
+  and skipping any it can't read.
 
 ## 5-minute install
 
@@ -274,8 +275,9 @@ error_log_path = "~/.agent-director/errors.log"
 
 ## Maintenance
 
-Two verbs keep `state.db` honest. Run both on a recurring schedule, as
-the same user that spawns the sessions:
+Two verbs keep `state.db` honest. Run both on a recurring schedule, and
+run them as the same user that spawns the sessions so every row is
+readable:
 
 ```sh
 # Mark spawns whose process has died as `missing` — run often (e.g. every 2 min):
@@ -288,6 +290,13 @@ agent-director expire
 Wire these into your platform's scheduler (launchd, systemd timer, cron,
 Task Scheduler). Without `find-missing`, dead sessions linger in `list` as
 stale `waiting`/`working` rows.
+
+`find-missing` works per row: it marks the rows it can prove dead, leaves
+the ones it verifies alive, and skips any it can't read (for example a run
+by the wrong user, or right after a reboot) rather than refusing the whole
+pass. Skipped rows are reported in its `unverified` count and
+`unverified_ids`, and each carries `liveness_unverified_since` and a
+`liveness_note` in `list` and `get` so you can re-run as the owning user.
 
 ## Uninstall
 
