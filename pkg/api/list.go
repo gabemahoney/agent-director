@@ -67,6 +67,14 @@ type ListRow struct {
 	LastSeenAt time.Time `json:"last_seen_at"`
 	// EndedAt is set when state moves to ended. Omitted from JSON while live.
 	EndedAt *time.Time `json:"ended_at,omitempty"`
+	// LivenessUnverifiedSince is the RFC3339 timestamp of the first sweep that
+	// could not verify this live row's liveness. Nil (omitted from JSON) when
+	// NULL in the store. The store carries it as a COALESCE-scanned string
+	// ("" == NULL); List maps "" to nil per the ended_at nullable precedent.
+	LivenessUnverifiedSince *string `json:"liveness_unverified_since,omitempty"`
+	// LivenessNote is the human-readable reason liveness could not be verified.
+	// Nil (omitted) when NULL in the store. Same "" == NULL mapping.
+	LivenessNote *string `json:"liveness_note,omitempty"`
 }
 
 // ListResult is the typed return shape. Spawns is always a non-nil
@@ -117,16 +125,18 @@ func List(s ListStore, params ListParams) (ListResult, error) {
 	out := make([]ListRow, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, ListRow{
-			ClaudeInstanceID: r.ClaudeInstanceID,
-			ParentID:         r.ParentID,
-			State:            r.State,
-			CWD:              r.CWD,
-			TmuxSessionName:  r.TmuxSessionName,
-			RelayMode:        r.RelayMode,
-			Labels:           r.Labels,
-			StartedAt:        r.StartedAt,
-			LastSeenAt:       r.LastSeenAt,
-			EndedAt:          r.EndedAt,
+			ClaudeInstanceID:        r.ClaudeInstanceID,
+			ParentID:                r.ParentID,
+			State:                   r.State,
+			CWD:                     r.CWD,
+			TmuxSessionName:         r.TmuxSessionName,
+			RelayMode:               r.RelayMode,
+			Labels:                  r.Labels,
+			StartedAt:               r.StartedAt,
+			LastSeenAt:              r.LastSeenAt,
+			EndedAt:                 r.EndedAt,
+			LivenessUnverifiedSince: nullableTimestamp(r.LivenessUnverifiedSince),
+			LivenessNote:            nullableString(r.LivenessNote),
 		})
 	}
 	return ListResult{Spawns: out}, nil
