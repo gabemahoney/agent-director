@@ -6,11 +6,13 @@
 #   1. Remove ~/.agent-director/state.db and its WAL/SHM siblings if present.
 #   2. Kill any tmux sessions whose names start with `cd-` (the harness's
 #      reserved prefix for spawn sessions — see SRD §6).
-#   3. Re-create the DB by calling `agent-director help`, which exercises
-#      setupStore() in cmd/agent-director/main.go and rebuilds schema v1.
+#   3. Re-create the DB by calling `agent-director list`, which exercises
+#      setupStore() in cmd/agent-director/main.go and rebuilds the schema.
+#      (`help`/`version`/no-args are DB-free verbs as of b.93m Part D and no
+#      longer bootstrap the store — `list` is the established replacement.)
 #
 # Idempotent. Safe to call twice in a row. Exit 0 on success; non-zero only
-# if agent-director help itself fails (which would mean the binary or
+# if agent-director list itself fails (which would mean the binary or
 # config is broken).
 
 set -euo pipefail
@@ -33,11 +35,12 @@ if command -v tmux >/dev/null 2>&1; then
     rm -f /tmp/.cd-sessions
 fi
 
-# Rebuild the DB. `agent-director help` runs setupStore() which creates the
-# dir at 0700 and the DB at 0600 with schema v1 stamped — Epic 1 AC #4.
-# Stdout is silenced because the fixture's stderr is the only channel we
-# expose to the driver.
-if ! agent-director help >/dev/null; then
-    echo "db-reset: agent-director help failed; binary or config is broken" >&2
+# Rebuild the DB. `agent-director list` runs setupStore() which creates the
+# dir at 0700 and the DB at 0600 with the current schema stamped — Epic 1
+# AC #4. (`help` was DB-free'd in b.93m Part D, so it no longer creates the
+# store; `list` is the store-opening replacement.) Stdout is silenced
+# because the fixture's stderr is the only channel we expose to the driver.
+if ! agent-director list >/dev/null; then
+    echo "db-reset: agent-director list failed; binary or config is broken" >&2
     exit 1
 fi
