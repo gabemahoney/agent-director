@@ -257,7 +257,7 @@ Minimum: `>=1.0.21` (set in `engines.bun`). Tested on Bun 1.3.x as of this relea
 
 ## Errors
 
-Every error thrown by this package extends `AgentDirectorError`. A typed subclass is generated for each `err_name` in the shared catalog so you can catch by subclass:
+Every error thrown by this package extends `AgentDirectorError`, so you can catch by subclass with `instanceof`:
 
 ```ts
 import { Client, ErrSpawnNotFound } from "agent-director";
@@ -272,27 +272,132 @@ try {
 }
 ```
 
-Errors thrown at construction time by `Client.create()` and `resolveSystemBinary()`:
+The public typed-error surface falls into four groups. Every class named below is exported from the package entry point. The tables are self-sufficient for choosing what to catch; the raw generated catalog for the group-4 classes lives in [`../../pkg/api/errnames/catalog.json`](../../pkg/api/errnames/catalog.json).
 
-| Error | When |
+### Realistic catch-site shortlist
+
+Most services only need to route on the "agent-director is sick" set. Alert on these six and let everything else propagate:
+
+- `ErrSystemInstallNotFound`
+- `ErrSystemInstallTooOld`
+- `ErrSystemInstallUnreachable`
+- `ErrCallerCwdUnreachable`
+- `ErrSystemInstallDisappeared`
+- `ErrCallTimeout`
+
+Everything else is either **programmer error** (bad arguments — fix the call site, do not retry) or a **normal operational signal** (an expected verb outcome you branch on, like "no such spawn" or "already decided"). `ErrConsumerSignal` sits in between: it is a runtime infrastructure failure, but a routine one during shutdown, so treat it as an operational signal rather than a page.
+
+### 1. Library lifecycle
+
+Raised by the client wrapper itself, independent of any agent-director binary.
+
+| Error | When it fires |
 |---|---|
-| `ErrSystemInstallNotFound` | No agent-director binary found on disk. |
-| `ErrSystemInstallTooOld` | Binary exists but is below the minimum required version. |
-| `ErrSystemInstallUnreachable` | Binary exists but failed validation or the version probe. |
-| `ErrCallerCwdUnreachable` | `process.cwd()` does not resolve to a real directory. Restart your service from a valid directory. |
+| `ErrClientClosed` | A verb was called on a `Client` after `close()`/disposal. Obtain a fresh handle with `Client.create()`. Programmer error. |
+| `ErrBunVersionTooOld` | The running Bun runtime is below the package's minimum. Upgrade Bun. Fires at construction. |
 
-### Errors a long-lived client must handle
+### 2. System install (agent-director binary)
 
-Long-lived clients (services that hold a `Client` instance across many verb calls) can encounter these errors at verb-dispatch time, after construction succeeded:
+The "AD is sick" group. **Construction-time** errors are thrown by `Client.create()` / `resolveSystemBinary()` before any verb runs; **runtime** errors are thrown at verb-dispatch time on a client that constructed successfully.
 
-| Error | When | Remediation |
+| Error | Phase | When it fires |
 |---|---|---|
-| `ErrSystemInstallDisappeared` | The binary path resolved at construction no longer exists — e.g. the binary was uninstalled or replaced mid-flight. Carries `binaryPath` and `verb`. | Re-install the agent-director binary, then create a new `Client`. |
-| `ErrCallerCwdUnreachable` | The process working directory has disappeared since the client was constructed. Same class as the construction-time variant (see b.cot); here it is detected at the first verb call that follows the cwd disappearing. Carries `cwd` and `cause`. | Restart your service from a valid working directory. |
+| `ErrSystemInstallNotFound` | Construction | No agent-director binary was found in any checked location. Carries `checkedLocations`. |
+| `ErrSystemInstallTooOld` | Construction | A binary was found but its version is below the required floor. Carries `actualVersion`, `requiredVersion`, `binaryPath`. |
+| `ErrSystemInstallUnreachable` | Construction | A binary was found but failed the version probe (not executable, wrong arch, non-zero exit, killed). Carries `binaryPath`, `reason`, `diagnostic`, `exitCode`, `signal`. |
+| `ErrCallerCwdUnreachable` | Construction **and** runtime | `process.cwd()` does not resolve to a real directory. Thrown at construction if the cwd is already gone, or at the first verb call after the cwd disappears mid-flight. Carries `cwd`, `cause`. Restart your service from a valid directory. |
+| `ErrSystemInstallDisappeared` | Runtime | The binary path resolved at construction no longer exists at verb-dispatch (uninstalled or replaced mid-flight). Carries `verb`, `binaryPath`, `cause`. Re-install the binary, then create a new `Client`. |
 
-Both errors extend `AgentDirectorError` and are catchable with `instanceof`.
+### 3. Per-call infrastructure
 
-The full `err_name` catalog is in [`../../pkg/api/errnames/catalog.json`](../../pkg/api/errnames/catalog.json).
+Thrown per verb call by the subprocess transport, not by the CLI's own validation.
+
+| Error | When it fires | Category |
+|---|---|---|
+| `ErrCallTimeout` | The subprocess did not complete within the configured per-call timeout. Carries `verb`, `elapsedMs`, `timeoutMs`. | Operational — include in your "AD is sick" alert set. |
+| `ErrConsumerSignal` | The subprocess was killed by an OS signal (e.g. `SIGTERM`, `SIGINT`) before producing a result. Carries `verb`, `signal`. | Operational — routine during shutdown. |
+| `ErrUnknownErrorName` | The CLI returned an error envelope whose `err_name` this client version does not recognize (client older than the binary). Carries `unknownName`, `envelope`. | Programmer/version error — upgrade the client. |
+
+### 4. Catalog-derived (CLI-side validation)
+
+These 37 classes are generated one-to-one from the shared `err_name` catalog ([`../../pkg/api/errnames/catalog.json`](../../pkg/api/errnames/catalog.json), the canonical source). They surface bad input or a verb's own state preconditions — almost all are either **programmer error** or a **normal operational signal**, so few catch sites need to name them individually. They are grouped by domain below.
+
+**cwd validation** (bad `cwd` argument to `spawn` — programmer error):
+
+| Error | When it fires |
+|---|---|
+| `ErrCwdMissing` | No `cwd` was supplied; spawn requires it to derive the JSONL/resume path. |
+| `ErrCwdNotAPath` | `cwd` is neither absolute nor a `~/` form (URLs, bare relative paths, non-path values). |
+| `ErrCwdNotFound` | `cwd` resolved to a path that does not exist on disk. |
+| `ErrCwdNotADirectory` | `cwd` resolved to a file (or other non-directory inode). |
+
+**spawn config validation** (bad `spawn` arguments — programmer error):
+
+| Error | When it fires |
+|---|---|
+| `ErrRelayModeInvalid` | `relay_mode` was something other than `on` / `off` / empty. |
+| `ErrSpawnDeniedFlag` | `claude_args` contains a flag the supervisor must own (`--settings`, `--resume`, `--continue`, `--print`, `--output-format`). |
+| `ErrReservedEnvKey` | `extra_env` contains an `AGENT_DIRECTOR_*` key (reserved prefix). |
+| `ErrInstanceIdCollision` | The supplied `claude_instance_id` is already in use by a live spawn. |
+
+**tmux session naming** (bad `--tmux-session-name` — programmer error):
+
+| Error | When it fires |
+|---|---|
+| `ErrTmuxSessionNameEmpty` | `--tmux-session-name` was explicitly supplied but empty. |
+| `ErrTmuxSessionNameInvalid` | The name contains `#`, `:`, `.`, an ASCII control character, or is invalid UTF-8. |
+| `ErrTmuxSessionNameTooLong` | The name exceeds the app-layer byte cap. |
+
+**spawn state / lookup** (verb preconditions — mostly normal operational signals):
+
+| Error | When it fires |
+|---|---|
+| `ErrSpawnNotFound` | No spawn row matches the supplied `claude_instance_id`. |
+| `ErrSpawnNotInteractive` | The target spawn is not in a live interactive state (`waiting`/`working`/`ask_user`/`check_permission`); `pending`, `ended`, and `missing` are rejected (`AllowPending=true` relaxes the `pending` rejection). |
+| `ErrSpawnNotPausable` | The target spawn is not in a pausable (`waiting`) state. |
+| `ErrPauseTimeout` | The spawn did not reach `ended` within `pause.timeout_seconds` after `/exit`. Retry or `kill`. |
+| `ErrSpawnNotResumable` | The target spawn is not terminal (`ended`/`missing`), so it cannot be resumed. |
+| `ErrNoSessionId` | The spawn has no `claude_session_id` (killed before its first SessionStart), so there is nothing to resume — `delete` and spawn fresh. |
+| `ErrJsonlMissing` | The resume JSONL could not be located at any candidate path — `delete` and spawn fresh. |
+| `ErrListInvalidLabel` | A `list` label filter could not be parsed as `key=value`. |
+| `ErrProbeUnsupported` | The liveness probe has no implementation for the current platform (`find-missing`). |
+
+**tmux transport** (infrastructure failures at the tmux layer — runtime):
+
+| Error | When it fires |
+|---|---|
+| `ErrTmuxNotAvailable` | The `tmux` binary is not on PATH or refuses to execute. |
+| `ErrTmuxSessionCreate` | `tmux new-session` exited non-zero (name collision, invalid cwd, missing default-shell). |
+| `ErrTmuxSendKeys` | `tmux send-keys` exited non-zero (typically no live pane). |
+| `ErrTmuxCaptureFailed` | `tmux capture-pane` exited non-zero (session/pane vanished mid-call). |
+
+**relay / permissions** (relay-mode and permission-decision preconditions — normal operational signals):
+
+| Error | When it fires |
+|---|---|
+| `ErrSendKeysWhileRelayed` | `send-keys` was attempted against a spawn sitting on a `check_permission` row with `relay_mode=on`. |
+| `ErrRelayModeOff` | `decide` was called on a spawn whose `relay_mode` is not `on`. |
+| `ErrInvalidDecision` | `--decision` was neither `allow` nor `deny`. |
+| `ErrMissingRequestToken` | `decide` was called with an empty `request_token`. |
+| `ErrNoOpenPermissionRequest` | No open permission-request row matches the `(instance_id, request_token)` pair (or it was already decided). |
+| `ErrAlreadyDecided` | A permission-request row exists but has already been decided; first decide wins. |
+| `ErrPermissionRequestNotFound` | No permission-request row exists for the supplied `request_token`. |
+| `ErrAmbiguousRequest` | `request_token` was empty and more than one open request exists for the spawn. |
+
+**config templates** (template-management verbs — mixed programmer error / operational signal):
+
+| Error | When it fires |
+|---|---|
+| `ErrTemplateNameUnsafe` | A template name fails the safety check (path traversal, absolute path, hidden name, or trivial garbage). |
+| `ErrTemplateNotFound` | The named template `.toml` does not exist on disk. |
+| `ErrTemplateMalformed` | A template file exists but fails schema validation (unknown keys, wrong types, bad enums). |
+| `ErrTemplateExists` | `make-template` target already exists; the verb never overwrites. |
+
+**misc**:
+
+| Error | When it fires |
+|---|---|
+| `ErrInvalidFlags` | CLI flag parsing rejected the invocation; not tied to any single verb handler. |
 
 ## Architecture
 
