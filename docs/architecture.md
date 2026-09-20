@@ -2056,7 +2056,11 @@ mutation, no half-created tmux session):
    Spawn killed before its first SessionStart hook fired has no
    rotated session id to point `--resume` at.
 4. JSONL transcript file exists on disk → otherwise
-   `ErrJsonlMissing`. Pure `os.Stat` pre-flight; no read.
+   `ErrJsonlMissing`. Pure `os.Stat` pre-flight; no read. The path
+   checked is the persisted `jsonl_path` when present (the true path
+   even when the Spawn ran under a custom `CLAUDE_CONFIG_DIR`); legacy
+   rows with an empty `jsonl_path` fall back to the computed slug-rule
+   path (see [JSONL path resolver](#jsonl-path-resolver-internalspawnjsonlgo)).
 5. Canonical tmux session name is free → otherwise the wrapped
    `tmux.ErrTmuxSessionCreate` sentinel. Resume does NOT auto-kill
    a stale session; the operator cleans up manually.
@@ -2105,6 +2109,16 @@ the new id, pointing at the new JSONL.
 
 ### JSONL path resolver (`internal/spawn/jsonl.go`)
 
+The resume pre-flight prefers the transcript path **persisted on the
+row** (`jsonl_path`, stamped by the SessionStart hook). That path is
+authoritative — it records where Claude Code actually wrote the
+transcript, including under a custom `CLAUDE_CONFIG_DIR` where the
+computed layout below would be wrong.
+
+`spawn.JsonlPath` is the **legacy fallback**, used only when the row's
+`jsonl_path` is empty (rows written before the hook persisted it). It
+reconstructs the default layout from `cwd` + `session_id`:
+
 ```
 ~/.claude/projects/<slug(cwd)>/<session_id>.jsonl
 ```
@@ -2119,16 +2133,22 @@ by Claude Code, so the two slug rules are not symmetric. Pinned by
 
 ### What's not carried over
 
-Two pieces of state are NOT stored on the row and are not
-reconstructed on resume:
+`Permissions` is the sole piece of spawn state NOT reconstructed on
+resume:
 
 - **`Permissions`** — the synthesized `--settings` JSON carries fresh
   hook entries on resume but no `permissions` block. Resume relies
   on Claude Code's tier-stack permissions.
-- **`ExtraEnv`** — the original spawn's extra env vars (e.g.
-  `ANTHROPIC_API_KEY`) are NOT replayed. Auth on resume comes from
-  the caller's shell env, which tmux propagates to the new session
-  by default.
+
+`ExtraEnv` **is** carried over. The original spawn's extra env vars
+(e.g. `ANTHROPIC_API_KEY`, `CLAUDE_CONFIG_DIR`) are persisted on the
+row at launch and restored by `spawn.Relaunch` (`in.Row.ExtraEnv`,
+decoded by `GetSpawn`), so a resurrected Spawn re-enters the same
+auth/config context as the original — no dependence on whatever the
+resuming caller's shell env happens to hold. Persistence adds no new
+exposure tier: the values live only in the owner-only state DB
+(0600 file / 0700 dir) alongside the rest of the row, and `ExtraEnv`
+is not surfaced as an API-visible field.
 
 ## Crash recovery and DB hygiene
 
