@@ -273,6 +273,10 @@ db_path = "~/.agent-director/state.db"
 error_log_path = "~/.agent-director/errors.log"
 ```
 
+Env vars passed at spawn time (via `--extra-env`) are stored in
+`state.db` so `resume` can restore them. The file is owner-only (`0600`
+in a `0700` directory).
+
 ## Maintenance
 
 Two verbs keep `state.db` honest. Run both on a recurring schedule, and
