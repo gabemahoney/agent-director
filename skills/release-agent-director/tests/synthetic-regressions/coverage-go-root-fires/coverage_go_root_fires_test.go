@@ -56,12 +56,18 @@
 //     helper-tag-replay.  This test no longer mutates seeds.go (or any tracked
 //     file) — it mutates only fixture files under t.TempDir() — so there is no
 //     shared state to serialize.  helper-tag-replay retains its own copy.
-//   - Skip CHECK at the top of the test (SR-5.2): KEPT, disposition = KEEP.  It
-//     is NOT obsolete: coverage-consumer-dryrun-fires (Epic t1.2mt.vg, not yet
-//     landed) still spawns a nested full-tree `go test` of the real repo
-//     without -short, which would re-enter this package.  Any future removal
-//     belongs to t1.2mt.vg / t1.2mt.z4, not this Epic.  PM-PINNED — do not
-//     re-open.
+//   - Skip CHECK at the top of the test (SR-5.2/5.3): REMOVED as demonstrably
+//     obsolete (disposition finalized in Epic t1.2mt.z4, where the s5 pin routed
+//     it).  The check existed to bail out when a nested full-tree run re-entered
+//     this package.  With Epic t1.2mt.vg landed (commit 4c53236),
+//     coverage-consumer-dryrun-fires materializes a self-contained fixture module
+//     in t.TempDir() and no longer spawns a nested run of any real tree, and
+//     go-root's own gate likewise walks only its fixture module — so NO coverage
+//     synthetic-regression fixture re-enters this package.  COVERAGE_GO_ROOT_NESTED
+//     also has no setter anywhere in the repo (grep: only skip-CHECK reads in
+//     go-root and helper-tag-replay plus stale comment lines — nothing ever sets
+//     it), so the guard could never have fired.  helper-tag-replay keeps its own
+//     copy (SR-5.2).
 //
 // CLEANUP (SR-5.4)
 // ================
@@ -199,13 +205,6 @@ func repoRoot(t *testing.T) string {
 func TestCoverageGoRootFires(t *testing.T) {
 	if testing.Short() {
 		t.Skip("slow: runs the coverage.go-root gate over a fixture module")
-	}
-	// PM-PINNED KEEP (SR-5.2): retained because coverage-consumer-dryrun-fires
-	// (Epic t1.2mt.vg, not yet landed) still spawns a nested full-tree `go test`
-	// of the real repo without -short, which would re-enter this package. Any
-	// removal belongs to t1.2mt.vg / t1.2mt.z4, not this Epic. Do not re-open.
-	if os.Getenv("COVERAGE_GO_ROOT_NESTED") == "1" {
-		t.Skip("skipping recursive invocation from a nested coverage.go-root gate suite")
 	}
 
 	root := repoRoot(t)
