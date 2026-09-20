@@ -63,11 +63,13 @@
 //     coverage-consumer-dryrun-fires materializes a self-contained fixture module
 //     in t.TempDir() and no longer spawns a nested run of any real tree, and
 //     go-root's own gate likewise walks only its fixture module — so NO coverage
-//     synthetic-regression fixture re-enters this package.  COVERAGE_GO_ROOT_NESTED
-//     also has no setter anywhere in the repo (grep: only skip-CHECK reads in
-//     go-root and helper-tag-replay plus stale comment lines — nothing ever sets
-//     it), so the guard could never have fired.  helper-tag-replay keeps its own
-//     copy (SR-5.2).
+//     synthetic-regression fixture re-enters this package.  The only setter of
+//     COVERAGE_GO_ROOT_NESTED was this package's OWN runGate, which exported it
+//     into the gate subprocess so a nested re-entry would see it; that setter was
+//     removed with the b.mgw scope-down (runGate now points the gate at a fixture
+//     module instead of the real tree).  Post-scope-down nothing sets the variable
+//     anywhere, so the guard is demonstrably obsolete under SR-5.3.
+//     helper-tag-replay keeps its own copy (SR-5.2).
 //
 // CLEANUP (SR-5.4)
 // ================
@@ -102,6 +104,16 @@ const (
 	// fixturePkgImportPath is the import path of the failing fixture package —
 	// what the firing diagnostic must name.
 	fixturePkgImportPath = fixtureModulePath + "/broken"
+	// offendingArtifactField is the exact SR-14 offending_file_or_artifact JSON
+	// field the firing diagnostic must carry. Its value is derived from the gate's
+	// anchored FIRST_FAIL parse (go-root.sh:37): the wrong-arity mutation is a
+	// build failure, so `go test` emits "FAIL\texample.test/gorootfixture/broken
+	// [build failed]" and the awk field-2 extraction yields the package import
+	// path WITH the " [build failed]" suffix. Anchoring the assertion on this
+	// field (not on a bare Contains of the import path, which the SR-14
+	// last-50-lines excerpt would also satisfy) makes a degraded parse
+	// ("(unknown package)") fail the test.
+	offendingArtifactField = `"offending_file_or_artifact":"` + fixturePkgImportPath + ` [build failed]"`
 	// okLine is the substring of `go test` stdout proving the fixture module was
 	// actually tested (closes the cd-fallback hazard).
 	okLine = "ok  \t" + fixturePkgImportPath
@@ -234,10 +246,15 @@ func TestCoverageGoRootFires(t *testing.T) {
 	if !strings.Contains(stderr, gateKey) {
 		t.Fatalf("firing: gate stderr missing %q\nstderr:\n%s", gateKey, stderr)
 	}
-	// Import-path identity: the diagnostic must name the INJECTED failing
-	// package, proving the b.93m parse fired on our defect (not a generic one).
-	if !strings.Contains(stderr, fixturePkgImportPath) {
-		t.Fatalf("firing: diagnostic does not name injected import path %q\nstderr:\n%s", fixturePkgImportPath, stderr)
+	// Parse-derived identity: the offending_file_or_artifact field must carry the
+	// value the gate's anchored FIRST_FAIL parse produced for OUR injected build
+	// failure — not merely appear somewhere in stderr. A bare Contains of the
+	// import path would also match the last-50-lines excerpt the SR-14 diagnostic
+	// embeds, so it could not distinguish a healthy parse from one that regressed
+	// to "(unknown package)". Anchoring on the JSON field asserts the parse itself
+	// resolved the import path, so a degraded parse fails this test (b.93m).
+	if !strings.Contains(stderr, offendingArtifactField) {
+		t.Fatalf("firing: diagnostic offending_file_or_artifact is not the parse-derived %q\nstderr:\n%s", offendingArtifactField, stderr)
 	}
 
 	// ── PASSING PROOF ───────────────────────────────────────────────────────

@@ -101,8 +101,8 @@ gates in the order defined for that phase. For each gate:
 > "Sequential phases" section above. The field-mapping table below remains
 > authoritative for whenever the parallel path is enabled.
 
-The coverage phase does **not** run its gates sequentially. Its five gate
-scripts —
+Once enabled, the coverage phase will not run its gates sequentially. Its five
+gate scripts —
 
 - `coverage/go-root.sh`
 - `coverage/bun-test.sh`
