@@ -98,7 +98,7 @@ func findMissingImpl(ctx context.Context, s FindMissingStore, p probe.Prober, ch
 
 	// Partition rows: those with a full recorded identity (pid+starttime) get
 	// an evidence-based checker verdict; those with a partial/absent identity
-	// (NULL pid XOR NULL starttime) fall back to the environ probe-set diff.
+	// (NULL pid OR NULL starttime) fall back to the environ probe-set diff.
 	var fallbackIDs []string
 	missing := make([]string, 0)
 	unverified := make([]string, 0)
@@ -111,7 +111,7 @@ func findMissingImpl(ctx context.Context, s FindMissingStore, p probe.Prober, ch
 		}
 		switch chk.CheckLiveness(it.PID, it.ProcStarttime, it.ClaudeInstanceID) {
 		case probe.VerdictProvablyDead:
-			if markMissing(ctx, s, it.ClaudeInstanceID, lg) {
+			if markMissing(s, it.ClaudeInstanceID, lg) {
 				missing = append(missing, it.ClaudeInstanceID)
 			}
 		case probe.VerdictVerifiedAlive:
@@ -157,7 +157,7 @@ func findMissingImpl(ctx context.Context, s FindMissingStore, p probe.Prober, ch
 			if _, ok := probeSet[id]; ok {
 				continue
 			}
-			if markMissing(ctx, s, id, lg) {
+			if markMissing(s, id, lg) {
 				missing = append(missing, id)
 			}
 		}
@@ -180,7 +180,7 @@ func findMissingImpl(ctx context.Context, s FindMissingStore, p probe.Prober, ch
 // non-empty prior state proves the UPDATE actually wrote (absent or
 // already-terminal rows get neither). Per-row store errors are logged and
 // skipped. Returns true iff the row was written to missing.
-func markMissing(ctx context.Context, s FindMissingStore, id string, lg FindMissingLogger) bool {
+func markMissing(s FindMissingStore, id string, lg FindMissingLogger) bool {
 	priorState, err := s.MarkSpawnMissing(id)
 	if err != nil {
 		if lg != nil {

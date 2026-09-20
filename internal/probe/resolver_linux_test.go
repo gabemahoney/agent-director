@@ -15,50 +15,8 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/procstarttimefix"
 )
 
-// writeFakeProc writes a fabricated <root>/<pid>/{stat,environ} pair. stat is
-// composed so parseLinuxStat reads ppid from field 4 and starttime from field
-// 22; the comm deliberately contains a ')' and spaces to prove the parser
-// anchors on the LAST ')'. envVal, when non-empty, plants EnvKey=<envVal> in
-// environ (NUL-separated, mixed with an unrelated var).
-func writeFakeProc(t *testing.T, root string, pid, ppid int, starttime, envVal string) {
-	t.Helper()
-	dir := filepath.Join(root, strconv.Itoa(pid))
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir %s: %v", dir, err)
-	}
-
-	// Build a stat line: field1 pid, field2 comm (with a nasty ')'), field3
-	// state, field4 ppid, fields 5..21 filler, field22 starttime, plus tail.
-	fields := make([]string, 0, 24)
-	fields = append(fields, strconv.Itoa(pid))       // 1
-	fields = append(fields, "(claude (weird) proc)") // 2 comm w/ ')' and spaces
-	fields = append(fields, "S")                     // 3 state
-	fields = append(fields, strconv.Itoa(ppid))      // 4 ppid
-	for f := 5; f <= 21; f++ {                       // 5..21 filler
-		fields = append(fields, "0")
-	}
-	fields = append(fields, starttime) // 22 starttime
-	fields = append(fields, "0", "0")  // tail
-	stat := strings.Join(fields, " ") + "\n"
-	if err := os.WriteFile(filepath.Join(dir, "stat"), []byte(stat), 0o644); err != nil {
-		t.Fatalf("write stat: %v", err)
-	}
-
-	var environ []byte
-	if envVal != "" {
-		parts := []string{
-			"PATH=/usr/bin",
-			EnvKey + "=" + envVal,
-			"HOME=/home/x",
-		}
-		environ = []byte(strings.Join(parts, "\x00") + "\x00")
-	} else {
-		environ = []byte("PATH=/usr/bin\x00HOME=/home/x\x00")
-	}
-	if err := os.WriteFile(filepath.Join(dir, "environ"), environ, 0o644); err != nil {
-		t.Fatalf("write environ: %v", err)
-	}
-}
+// writeFakeProc and writeStatOnly live in the UNTAGGED fakeproc_test.go so the
+// tag-free checker verdict-table tests compile off-linux; this file uses them.
 
 // newFakeReader builds a linuxProcReader over a fabricated proc root with the
 // given starting pid.

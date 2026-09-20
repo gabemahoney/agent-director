@@ -1,50 +1,27 @@
-//go:build linux
+// checker_linux_core_test.go — UNTAGGED verdict-table tests for the build-tag-free
+// linuxChecker. The checker takes an INJECTABLE procRoot and its parsing/verdict
+// logic carries no //go:build linux tag, so these tests drive it over a
+// fabricated /proc tree (writeFakeProc / writeStatOnly, in the untagged
+// fakeproc_test.go) and compile on ANY OS — verified by
+// `GOOS=darwin go vet ./internal/probe/`.
+//
+// The two chmod-000 EACCES cases are ALSO untagged: chmod 000 produces a genuine
+// EACCES on any unix at uid!=0, the fabricated tree is OS-agnostic, and the
+// checker is tag-free — so they need no linux tag. They skip cleanly under root
+// (where 000 does not deny). The ONLY test requiring the real /proc mount lives
+// under the linux tag in resolver_linux_test.go (TestLinuxResolverRealProcHappyPath).
 
 package probe
 
 import (
 	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/testsupport/procstarttimefix"
 )
 
 const linuxTestID = "inst-linux-xyz"
-
-// writeStatOnly writes <root>/<pid>/stat only (no environ) with the given
-// starttime — used to fabricate an environ-read failure (ENOENT) after a matched
-// stat, and as the base for permission-mode fixtures.
-func writeStatOnly(t *testing.T, root string, pid, ppid int, starttime string) string {
-	t.Helper()
-	dir := filepath.Join(root, strconv.Itoa(pid))
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir %s: %v", dir, err)
-	}
-	fields := []string{
-		strconv.Itoa(pid),      // 1 pid
-		"(claude (weird) proc)", // 2 comm w/ ')' and spaces
-		"S",                     // 3 state
-		strconv.Itoa(ppid),      // 4 ppid
-	}
-	for f := 5; f <= 21; f++ {
-		fields = append(fields, "0")
-	}
-	fields = append(fields, starttime, "0", "0") // 22 starttime + tail
-	stat := ""
-	for i, f := range fields {
-		if i > 0 {
-			stat += " "
-		}
-		stat += f
-	}
-	stat += "\n"
-	if err := os.WriteFile(filepath.Join(dir, "stat"), []byte(stat), 0o644); err != nil {
-		t.Fatalf("write stat: %v", err)
-	}
-	return dir
-}
 
 // TestLinuxCheckerMatchEnvHasIDAlive: stat present with matching starttime AND
 // environ carries the id → verified-alive.

@@ -56,7 +56,7 @@ still holds: nothing in `internal/` imports `pkg/api`.
 | --- | --- | --- | --- |
 | `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`; every store-backed verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. **DB-free exceptions:** `help`, `--help`, `version`, no-args (routes to help), and `trail-emit` are dispatched BEFORE `setupClient` so they never open or create `~/.agent-director` (SR-4.1/4.2); help/version run against a zero-value `Client` and consult no store. **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. | stdlib; `pkg/api`; `pkg/api/errnames`; `internal/hook`; `internal/config` and `internal/store` (error sentinels only) in `setupClient`; `internal/config` in `runHook` and `newHookLogger`. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook`, `newHookLogger`, and `setupClient`'s logger bootstrap. |
 | `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, `KillTmux`, `KillLogger`, etc.), params/result types, and error sentinels. Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director` and `internal/mcp`. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`. | Direct `database/sql`; raw SQL strings; MCP framing. |
-| `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v2 per SRD §4.2), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
+| `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v3 per SRD §4.2), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
 | `pkg/api/apitest` | Test seed helpers extracted from `pkg/api/*_test.go` for cross-package importing. Provides `Seed*` functions (`SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`) that set up fixture DB rows and filesystem state for `test/envelope-diff` and future Epic 4/5 smoke tests. Non-test package (regular `.go` files) so it can be imported by harnesses outside `pkg/api`. | stdlib; `internal/store`; `internal/spawn`. | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
 | `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. The `Catalog` is consumed by `cmd/agent-director`'s envelope writer and `internal/mcp`'s `classifyDispatchError`. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
@@ -156,28 +156,30 @@ verbatim so future code review can grep for it:
 **Schema versioning convention.** SQLite's `PRAGMA user_version` is the
 source of truth for which schema this binary expects. On `Open`:
 
-- `user_version == 0` → fresh DB: create the v2 tables and indexes inside a
-  single transaction, then stamp `PRAGMA user_version = 2`.
-- `0 < user_version < 2` (older-than-binary, i.e. v1) → **gated**: the store
-  does **not** auto-migrate on `Open`. The open is refused with
+- `user_version == 0` → fresh DB: create the v3 tables and indexes inside a
+  single transaction, then stamp `PRAGMA user_version = 3`.
+- `0 < user_version < 3` (older-than-binary, i.e. v1 or v2) → **gated**: the
+  store does **not** auto-migrate on `Open`. The open is refused with
   `store.ErrSchemaMigrationRequired` (an exported `errors.New` value; callers
   use `errors.Is`) and zero DDL runs, *unless* an administrator has placed a
   valid authorization sentinel next to the DB file. The sentinel (`migrate-authorized`,
   sibling to the resolved DB path) is a strict JSON object naming exactly one
-  transition (`{"from": 1, "to": 2}`) and authorizes the migration only when
-  its `from` exact-matches the DB's actual `user_version` and its `to`
+  transition (e.g. `{"from": 2, "to": 3}`) and authorizes the migration only
+  when its `from` exact-matches the DB's actual `user_version` and its `to`
   exact-matches this binary's `schemaVersion`. When authorized, the upgrade
   runs as a chain of `migrationSteps` (the ordered step registry in
-  `schema.go`), each step individually transactional; today the chain holds one
-  step, `{from: 1, apply: migrateV1toV2}` (DROP+CREATE `permission_requests`,
-  V1 rows discarded — see "Schema v1 → v2 Migration" below). The sentinel is
-  consumed after the chain commits.
-- `user_version == 2` → nothing to do; the schema already matches.
-- `user_version > 2` (newer-than-binary) → return the sentinel
+  `schema.go`), each step individually transactional; today the chain holds two
+  steps, `{from: 1, apply: migrateV1toV2}` (DROP+CREATE `permission_requests`,
+  V1 rows discarded) and `{from: 2, apply: migrateV2toV3}` (five ADD COLUMN on
+  `spawns`) — see "Schema v1 → v2 Migration" and "Schema v2 → v3 Migration"
+  below. A v1 DB opened against this binary chains v1→v2→v3 in one pass. The
+  sentinel is consumed after the chain commits.
+- `user_version == 3` → nothing to do; the schema already matches.
+- `user_version > 3` (newer-than-binary) → return the sentinel
   `store.ErrSchemaMismatch` (an exported `errors.New` value, so callers use
   `errors.Is`). No DDL runs in this case.
 
-**Schema v1 → v2 Migration.** The first real migration ships with schema v2:
+**Schema v1 → v2 Migration.** The first real migration:
 
 1. **Migration shape**: `DROP TABLE permission_requests` followed immediately
    by `CREATE TABLE permission_requests` at the v2 DDL, plus two new indexes,
@@ -194,7 +196,20 @@ source of truth for which schema this binary expects. On `Open`:
    `user_version = 1` and — because the sentinel is only consumed *after* the
    chain commits — the `migrate-authorized` sentinel still in place, so the
    next authorized `Open` retries the migration cleanly.
-   `user_version > 2` surfaces `ErrSchemaMismatch`.
+
+**Schema v2 → v3 Migration.** The current migration adds process-liveness
+identity to `spawns` (`migrateV2toV3`):
+
+1. **Migration shape**: five `ALTER TABLE spawns ADD COLUMN` statements inside a
+   single transaction — `pid INTEGER`, `proc_starttime TEXT`,
+   `liveness_unverified_since TEXT`, `liveness_note TEXT` (all nullable), and
+   `extra_env TEXT NOT NULL DEFAULT '{}'`.
+2. **No backfill**: `ADD COLUMN` populates existing rows from the column
+   defaults — NULL for the four nullable columns, `'{}'` for `extra_env` — so
+   there is no phase-3 data transform.
+3. **`user_version` stamp**: `PRAGMA user_version = 3` is the final
+   in-transaction step before `COMMIT`; a rollback on any error leaves
+   `user_version = 2` intact. `user_version > 3` surfaces `ErrSchemaMismatch`.
 
 **Concurrency.** `Open` calls `db.SetMaxOpenConns(1)`. `journal_mode=WAL`
 and `foreign_keys=ON` are applied via DSN PRAGMAs and verified after open;
@@ -298,7 +313,7 @@ See `docs/cli-reference.md` and `docs/mcp-reference.md` — auto-generated; do n
                 +-------------------------+
                 |   internal/store        |
                 |   (sole SQL owner;      |
-                |    schema v2 / SRD §4.2)|
+                |    schema v3 / SRD §4.2)|
                 +-------------------------+
 
    internal/config -----> consumed by pkg/api and cmd/
@@ -1338,13 +1353,14 @@ edits to `config.toml` are lost.
 
 `ErrSchemaMismatch` fires when the store's `user_version` is not recognized by
 this binary — typically meaning the store was written by a newer binary
-(`user_version > 2`). Note: an older-than-binary store (v1) does **not** trigger
-`ErrSchemaMismatch` — it surfaces the distinct `ErrSchemaMigrationRequired`
-instead. The store does not silently upgrade a v1 DB on `Open`: the open is
-refused with `ErrSchemaMigrationRequired` unless an administrator has placed a
-valid `migrate-authorized` sentinel next to the DB file, in which case the
-gated v1→v2 migration runs (`spawns` rows preserved, v1 `permission_requests`
-rows discarded).
+(`user_version > 3`). Note: an older-than-binary store (v1 or v2) does **not**
+trigger `ErrSchemaMismatch` — it surfaces the distinct
+`ErrSchemaMigrationRequired` instead. The store does not silently upgrade an
+older DB on `Open`: the open is refused with `ErrSchemaMigrationRequired`
+unless an administrator has placed a valid `migrate-authorized` sentinel next
+to the DB file, in which case the gated migration chain runs (v1→v2, DROP+CREATE
+`permission_requests` with v1 rows discarded; v2→v3, five `spawns` ADD COLUMN
+preserving every row).
 
 If a store-opening verb (e.g. `agent-director list`) reports `ErrSchemaMismatch` after an upgrade, the
 recovery is `rm ~/.agent-director/state.db*` followed by a re-run. Spawn
@@ -2265,9 +2281,15 @@ recorded `pid` + `proc_starttime`) and partitions on identity completeness:
 - **Partial/absent identity (NULL pid OR NULL starttime)** — the row falls
   back to the environ **probe-set diff**: a live id absent from
   `probe.Probe()`'s set is marked missing. This is the sole remaining
-  consumer of the environ prober. An unreadable environ here means the id
-  simply isn't in the set observable by the invoking user, so such a row is
-  left in place (the fallback never manufactures a death from an empty set).
+  consumer of the environ prober. There is **no per-row skip here** — a
+  partial-identity row carries no pid/starttime evidence to fall back on, so
+  absence from the probe set is the *only* signal, and any such row not in the
+  set IS marked missing. That includes the case where the invoking user can't
+  read the target processes' environ (a wrong-user or empty-probe run): every
+  partial/NULL-identity live row is then absent from the set and gets marked.
+  This is the intended post-reboot behavior (the probe set is legitimately
+  empty and those rows are genuinely dead) — and precisely why same-user
+  scheduling matters (see the cron user story).
 
 **Pinned per-OS errno mapping (SR-7.4) — the cardinal rule is
 UNKNOWN-never-dead.** Only positive, pinned evidence yields provably-dead;
@@ -2320,15 +2342,24 @@ errors are logged and skipped; the sweep never aborts on one bad row, and a
 trail-emit failure never changes the sweep's return.
 
 **Cron user story.** `find-missing` still assumes it runs as the user that
-owns the Spawns (or as root), but a user mismatch no longer corrupts or
-refuses. Full-identity rows the invoking user can't read hit the env
-permission wall and are surfaced as **unverified** (verified-alive if pid +
-starttime matched, unknown otherwise) — never silently marked missing.
-Partial-identity rows the user can't observe are left in place. The
-recommended operator setup is therefore unchanged: a **systemd user-timer
-or a personal crontab** — not a system-level cron — so the userland
-identity matches the Spawn-launching identity automatically and rows get
-real verdicts instead of a wall of unverified metadata.
+owns the Spawns (or as root), and a user mismatch no longer *corrupts or
+refuses* — but the two identity classes react to a mismatch very
+differently, which is exactly why the run-as-owner rule still matters.
+Full-identity rows (pid + starttime recorded) the invoking user can't read
+hit the env permission wall and are surfaced as **unverified**
+(verified-alive if pid + starttime matched, unknown otherwise) — never
+silently marked missing; the per-row skip protects them. Partial/NULL-identity
+rows have **no per-row evidence** to skip on, so their sole signal is the
+environ probe-set diff — and a wrong-user (or otherwise empty) probe set
+leaves every one of them absent from the set, so they **are marked missing**.
+That is correct after a real reboot (the probe set is legitimately empty and
+those rows are dead), but under a mere user mismatch it would wrongly mark
+still-live partial-identity Spawns. The recommended operator setup is
+therefore load-bearing, not cosmetic: a **systemd user-timer or a personal
+crontab** — not a system-level cron — so the userland identity matches the
+Spawn-launching identity, full-identity rows get real verdicts instead of a
+wall of unverified metadata, and partial-identity rows are diffed against a
+probe set that can actually see them.
 
 ### `find-missing`
 
@@ -2552,13 +2583,16 @@ detects this case via the presence of `pkg/api/go.mod`.
 ### ErrSchemaMismatch on upgrade
 
 Schema upgrades are **gated**, not automatic: an older-than-binary database
-(v1) is refused on `Open` with `ErrSchemaMigrationRequired` unless an
+(v1 or v2) is refused on `Open` with `ErrSchemaMigrationRequired` unless an
 administrator has placed a valid `migrate-authorized` sentinel next to the DB
-file. Only then does the v1→v2 migration run (DROP+CREATE `permission_requests`,
-no row preservation). `ErrSchemaMismatch` only fires when `user_version > 2` —
-meaning the store was written by a binary newer than the current one.
+file. Only then does the migration chain run: the v1→v2 hop (DROP+CREATE
+`permission_requests`, no row preservation) and/or the v2→v3 hop (five
+`spawns` ADD COLUMN, no backfill), walking from the DB's `user_version` up to
+`schemaVersion` in one pass. `ErrSchemaMismatch` only fires when
+`user_version > 3` — meaning the store was written by a binary newer than the
+current one.
 
-Bumping `schemaVersion` beyond 2 requires:
+Bumping `schemaVersion` beyond 3 requires:
 
 1. Add a `migrateVNtoVN1` hop in `internal/store/schema.go` and append a
    `migrationStep{from: N, apply: migrateVNtoVN1}` entry to the `migrationSteps`
