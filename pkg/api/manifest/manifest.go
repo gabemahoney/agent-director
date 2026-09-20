@@ -803,7 +803,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "serve",
-		Description: "Start the stdio MCP server. Long-lived process that exposes every other verb as an MCP tool over JSON-RPC on stdin/stdout. Typically registered with `claude mcp add agent-director <binary-path> serve --stdio`.",
+		Description: "Start the stdio MCP server. Long-lived process that exposes the CLI verbs (except `hook`, `serve`, and `trail-emit`) as MCP tools over JSON-RPC on stdin/stdout. Typically registered with `claude mcp add agent-director <binary-path> serve --stdio`.",
 		Callable:    false,
 		HandleFree:  false,
 		Params: []ParamDef{

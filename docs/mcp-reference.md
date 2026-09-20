@@ -355,22 +355,6 @@ Politely shut down a waiting Spawn by sending `/exit` and waiting up to pause.ti
 - `ErrTmuxNotAvailable`
 - `ErrTmuxSendKeys`
 
-## Tool: serve
-
-Start the stdio MCP server. Long-lived process that exposes every other verb as an MCP tool over JSON-RPC on stdin/stdout. Typically registered with `claude mcp add agent-director <binary-path> serve --stdio`.
-
-### Input schema
-
-- `stdio`: type=bool, required=true — Enter the stdio MCP loop (required for v1; other transports may land in future Epics).
-
-### Output schema
-
-- (no output fields)
-
-### Errors
-
-- (none)
-
 ## Tool: version
 
 Print the binary's build-time version stamp as JSON ({version, commit}). Used by install.sh to verify a local binary matches the current source tree before installing it.
@@ -383,45 +367,6 @@ Print the binary's build-time version stamp as JSON ({version, commit}). Used by
 
 - `version`: type=string — Human-readable version stamp from `git describe --tags --always --dirty` at build time. "dev" for unstamped builds.
 - `commit`: type=string — Full git SHA the binary was built from. "unknown" for unstamped builds.
-
-### Errors
-
-- (none)
-
-## Tool: trail-emit
-
-Emit an ad.* audit-trail event directly. Sub-verb: relay-attempt. Does not open state.db — works in corrupted-state recovery scenarios (SR-A-2.3).
-
-### Input schema
-
-- `sub_verb`: type=string, required=true — Sub-verb to invoke. Currently: relay-attempt.
-- `token`: type=string, required=true — request_token. Required.
-- `endpoint`: type=string, required=true — target_endpoint (URL or socket path). Required.
-- `outcome`: type=string|int, required=true — 3-digit HTTP status code (100-599, emitted as integer) or named error class: connection_refused, timeout, dns_failure (emitted as string). Required.
-- `bytes_sent`: type=int, required=false — Bytes sent. Default 0.
-- `bytes_received`: type=int, required=false — Bytes received. Default 0.
-- `instance_id`: type=string, required=true — claude_instance_id. Required.
-
-### Output schema
-
-- (no output fields)
-
-### Errors
-
-- `ErrInvalidFlags`
-- `ErrTrailWrite`
-
-## Tool: hook
-
-Internal: invoked by Claude Code on lifecycle events via the per-Spawn --settings hooks. Reads payload JSON from stdin, writes a row UPSERT, exits 0 (state-tracking fail-open).
-
-### Input schema
-
-- `stdin`: type=json, required=true — Claude Code hook payload (hook_event_name, transcript_path, tool_name, reason, ...).
-
-### Output schema
-
-- (no output fields)
 
 ### Errors
 
