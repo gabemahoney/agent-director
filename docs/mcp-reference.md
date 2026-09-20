@@ -99,6 +99,8 @@ Return the full DB row for a tracked Spawn (id, parent, state, cwd, session name
 - `started_at`: type=timestamp — Row insert time.
 - `last_seen_at`: type=timestamp — Last hook UPSERT time.
 - `ended_at`: type=timestamp? — Set when state moves to ended (omitted while live).
+- `liveness_unverified_since`: type=timestamp? — RFC3339 timestamp of the first sweep that could not verify this live row's liveness (an unknown verdict, e.g. a permission wall). Cleared to NULL once liveness is re-established; null/omitted when never unverified.
+- `liveness_note`: type=string? — Human-readable reason the row's liveness could not be verified on the most recent unverified sweep. Cleared to NULL once liveness is re-established; null/omitted when never unverified.
 - `permission_requests`: type=[]object — All open (undecided) permission requests awaiting orchestrator decision. Always a non-null array ([] when empty). Populated only when state == check_permission; empty array for all other states. Each element: request_id (int) — autoincrement row id; request_token (string) — UUIDv4 token minted by runRelay, pass to decide verb to target this row; tool_name (string) — Claude Code tool that triggered the request; tool_input (string) — raw JSON string of the tool's input, NOT a nested object (consumers parse it themselves); requested_at (RFC3339 timestamp) — created_at of the row.
 
 ### Errors
@@ -327,7 +329,7 @@ Enumerate Spawn rows. All filters AND together. Returned order is unspecified �
 
 ### Output schema
 
-- `spawns`: type=[]Spawn — Matching rows. Empty array when none match (never null).
+- `spawns`: type=[]Spawn — Matching rows. Empty array when none match (never null). Each row carries liveness_unverified_since (timestamp?) and liveness_note (string?), both omitted while NULL (never unverified).
 
 ### Errors
 

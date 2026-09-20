@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -197,6 +198,97 @@ func (r *recordingGetStore) OpenPermissionRequestsForSpawn(_ string) ([]store.Pe
 		return nil, r.permErr
 	}
 	return r.permRows, nil
+}
+
+// TestGetLivenessFieldsRoundTrip pins SR-8.3 surfacing on get: the two
+// additive nullable liveness fields are OMITTED from the JSON envelope while
+// NULL in the store (the ended_at nullable precedent), and PRESENT with the
+// stored value once set.
+//
+//   - null_omitted:  a fresh live row has NULL liveness columns → the get
+//     result's pointers are nil AND the marshaled JSON contains neither key.
+//   - set_present:   SetLivenessUnverified writes both columns → the get
+//     result surfaces the note verbatim and a non-empty since timestamp, and
+//     the marshaled JSON carries both keys.
+func TestGetLivenessFieldsRoundTrip(t *testing.T) {
+	t.Run("null_omitted", func(t *testing.T) {
+		s := openGetFixture(t, "id-live-null", store.StateWaiting)
+
+		got, err := api.Get(s, "id-live-null")
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got.LivenessUnverifiedSince != nil {
+			t.Errorf("LivenessUnverifiedSince = %v; want nil (NULL in store)", *got.LivenessUnverifiedSince)
+		}
+		if got.LivenessNote != nil {
+			t.Errorf("LivenessNote = %v; want nil (NULL in store)", *got.LivenessNote)
+		}
+		raw, err := json.Marshal(got)
+		if err != nil {
+			t.Fatalf("json.Marshal: %v", err)
+		}
+		if strings.Contains(string(raw), "liveness_unverified_since") {
+			t.Errorf("JSON contains liveness_unverified_since key; want omitted when NULL; got %s", raw)
+		}
+		if strings.Contains(string(raw), "liveness_note") {
+			t.Errorf("JSON contains liveness_note key; want omitted when NULL; got %s", raw)
+		}
+	})
+
+	t.Run("set_present", func(t *testing.T) {
+		s := openGetFixture(t, "id-live-set", store.StateWaiting)
+		const wantNote = "environ probe hit a permission wall"
+		transitioned, err := s.SetLivenessUnverified("id-live-set", wantNote)
+		if err != nil {
+			t.Fatalf("SetLivenessUnverified: %v", err)
+		}
+		if !transitioned {
+			t.Fatalf("SetLivenessUnverified transitioned=false; want true (first NULL→set write)")
+		}
+
+		got, err := api.Get(s, "id-live-set")
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got.LivenessNote == nil {
+			t.Fatalf("LivenessNote is nil; want %q", wantNote)
+		}
+		if *got.LivenessNote != wantNote {
+			t.Errorf("LivenessNote = %q; want %q (verbatim store value)", *got.LivenessNote, wantNote)
+		}
+		if got.LivenessUnverifiedSince == nil {
+			t.Fatalf("LivenessUnverifiedSince is nil; want a non-empty CURRENT_TIMESTAMP value")
+		}
+		if *got.LivenessUnverifiedSince == "" {
+			t.Errorf("LivenessUnverifiedSince = %q; want non-empty timestamp", *got.LivenessUnverifiedSince)
+		}
+		// PIN the wire format: SetLivenessUnverified writes SQLite
+		// CURRENT_TIMESTAMP text ("2006-01-02 15:04:05", no zone), so the
+		// raw store value would NOT be RFC3339. The surfaced value MUST be
+		// normalized to RFC3339 UTC — it parses as RFC3339, ends in "Z",
+		// and carries the T date/time separator.
+		since := *got.LivenessUnverifiedSince
+		if _, err := time.Parse(time.RFC3339, since); err != nil {
+			t.Errorf("LivenessUnverifiedSince = %q; want RFC3339-parseable (normalized from SQLite text): %v", since, err)
+		}
+		if !strings.HasSuffix(since, "Z") {
+			t.Errorf("LivenessUnverifiedSince = %q; want UTC 'Z' suffix", since)
+		}
+		if !strings.Contains(since, "T") {
+			t.Errorf("LivenessUnverifiedSince = %q; want RFC3339 'T' separator", since)
+		}
+		raw, err := json.Marshal(got)
+		if err != nil {
+			t.Fatalf("json.Marshal: %v", err)
+		}
+		if !strings.Contains(string(raw), `"liveness_note":"`+wantNote+`"`) {
+			t.Errorf("JSON missing liveness_note with stored value; got %s", raw)
+		}
+		if !strings.Contains(string(raw), `"liveness_unverified_since":"`) {
+			t.Errorf("JSON missing liveness_unverified_since key when set; got %s", raw)
+		}
+	})
 }
 
 // TestGetVerbPluralShape pins the plural PermissionRequests contract

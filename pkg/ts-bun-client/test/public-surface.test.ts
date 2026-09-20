@@ -145,6 +145,88 @@ test("public-surface: Client exposes no migrate method (SR-1)", () => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// SR-8.3 named surface guards.
+//
+// The byte-equality goldens above already fail on ANY drift, but they cannot
+// distinguish "the operator regenerated the golden and dropped a field" from a
+// deliberate additive change — a regenerated golden is self-consistent. These
+// NAMED assertions read the checked-in types.d.ts.golden and pin the specific
+// SR-8.3 shapes (additive-optional liveness fields; find-missing unverified
+// fields; state stays a plain string, no union/enum), so golden regeneration
+// cannot silently drop or mutate them without also tripping a targeted test.
+// ---------------------------------------------------------------------------
+
+/** Extract the body (between the first `{` and its matching `}`) of an
+ *  `export interface <name>` block from a .d.ts source string. */
+function interfaceBody(src: string, name: string): string {
+  const re = new RegExp(`export interface ${name}\\b[^{]*\\{`);
+  const m = re.exec(src);
+  if (!m) throw new Error(`interface ${name} not found in golden`);
+  let depth = 0;
+  const start = m.index + m[0].length - 1; // at the opening brace
+  for (let i = start; i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    else if (src[i] === "}") {
+      depth--;
+      if (depth === 0) return src.slice(start + 1, i);
+    }
+  }
+  throw new Error(`unbalanced braces for interface ${name}`);
+}
+
+const typesGolden = () =>
+  fs.readFileSync(path.join(fixtureDir, "types.d.ts.golden"), "utf-8");
+
+test("public-surface: ListRow & GetResult carry additive-optional liveness fields (SR-8.3)", () => {
+  const golden = typesGolden();
+  for (const iface of ["ListRow", "GetResult"]) {
+    const body = interfaceBody(golden, iface);
+    // Additive-optional + nullable: `?: string | null`. The `?` (optional)
+    // is what makes the field omittable — matching the Go pointer+omitempty
+    // surface — and `| null` matches the nullable store column.
+    expect(
+      body,
+      `${iface} must declare liveness_unverified_since as additive-optional nullable`
+    ).toMatch(/liveness_unverified_since\?\s*:\s*string\s*\|\s*null/);
+    expect(
+      body,
+      `${iface} must declare liveness_note as additive-optional nullable`
+    ).toMatch(/liveness_note\?\s*:\s*string\s*\|\s*null/);
+  }
+});
+
+test("public-surface: FindMissingResult carries unverified count and ids (SR-8)", () => {
+  const body = interfaceBody(typesGolden(), "FindMissingResult");
+  expect(body, "FindMissingResult must declare a numeric unverified count").toMatch(
+    /\bunverified\s*:\s*number/
+  );
+  expect(body, "FindMissingResult must declare unverified_ids: string[]").toMatch(
+    /\bunverified_ids\s*:\s*string\[\]/
+  );
+});
+
+test("public-surface: state stays a plain string — no union/enum (SR-8.3 guardrail)", () => {
+  // SR-8.3 forbids widening the state field into a TS string-literal union or
+  // enum while surfacing liveness. Every `state:` declaration in the emitted
+  // types must resolve to the bare `string` type — never `state: "pending" |
+  // …` and never an enum reference. This is the TS twin of the Go
+  // TestStateEnumByteIdentity named pin.
+  const golden = typesGolden();
+  const stateDecls = golden.match(/^\s*state\s*[?]?\s*:\s*[^;]+;/gm) ?? [];
+  expect(stateDecls.length, "expected at least one `state:` declaration").toBeGreaterThan(0);
+  for (const decl of stateDecls) {
+    const rhs = decl.replace(/^\s*state\s*[?]?\s*:\s*/, "").replace(/;.*$/, "").trim();
+    // Allowed shapes: the result value `string` and the list filter `string[]`
+    // (a plain array of strings). Anything containing `|` (a union) or a quote
+    // (a string-literal enum member) is a forbidden state-enum widening.
+    expect(
+      rhs === "string" || rhs === "string[]",
+      `state must stay a plain string / string[], got \`${decl.trim()}\` — SR-8.3 forbids a union/enum`
+    ).toBe(true);
+  }
+});
+
 test("public-surface: dist/index.d.ts does not leak _cliPath (SR-4.9)", () => {
   // The SR-4.1 fence: `_cliPath` is a covert DI hatch on the runtime
   // ClientOptions object but is NOT typed on the public interface.  This

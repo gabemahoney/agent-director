@@ -115,6 +115,10 @@ export interface ListRow {
     last_seen_at: string;
     /** Set when state moves to ended (omitted while live). */
     ended_at?: string | null;
+    /** RFC3339 timestamp of the first sweep that could not verify this live row's liveness; omitted/null when never unverified. */
+    liveness_unverified_since?: string | null;
+    /** Human-readable reason liveness could not be verified; omitted/null when never unverified. */
+    liveness_note?: string | null;
 }
 /** Mirrors pkg/api.SpawnParams (json tags) — alias of internal/spawn.SpawnParams. */
 export interface SpawnParams {
@@ -181,6 +185,10 @@ export interface GetResult {
     last_seen_at: string;
     /** Set when state moves to ended; omitted while live. */
     ended_at?: string | null;
+    /** RFC3339 timestamp of the first sweep that could not verify this live row's liveness; omitted/null when never unverified. */
+    liveness_unverified_since?: string | null;
+    /** Human-readable reason liveness could not be verified; omitted/null when never unverified. */
+    liveness_note?: string | null;
     /** Open permission request; present only when state=check_permission with an undecided row. */
     permission_request?: PermissionRequestInfo | null;
 }
