@@ -352,6 +352,135 @@ func TestSynthesizeSettingsInjectHelpHookQuotesWhitespacePath(t *testing.T) {
 	}
 }
 
+// synthTop synthesizes settings with a stubbed exe path and returns the
+// parsed top-level object. Shared setup for the timeout tests below.
+func synthTop(t *testing.T, cfg config.Config) map[string]any {
+	t.Helper()
+	withStubExe(t, "/usr/local/bin/agent-director")
+	jsonStr, err := synthesizeSettings(
+		Resolved{SpawnParams: SpawnParams{ClaudeInstanceID: "id"}},
+		cfg,
+	)
+	if err != nil {
+		t.Fatalf("synthesizeSettings: %v", err)
+	}
+	var top map[string]any
+	if err := json.Unmarshal([]byte(jsonStr), &top); err != nil {
+		t.Fatalf("Unmarshal: %v\n%s", err, jsonStr)
+	}
+	return top
+}
+
+// innerCommand returns the single inner command object of event evt's first
+// hook entry (the sibling of "type"/"command" where "timeout" must land).
+func innerCommand(t *testing.T, top map[string]any, evt string) map[string]any {
+	t.Helper()
+	hooks, _ := top["hooks"].(map[string]any)
+	entries, _ := hooks[evt].([]any)
+	if len(entries) != 1 {
+		t.Fatalf("%s: expected 1 entry, got %d", evt, len(entries))
+	}
+	entry, _ := entries[0].(map[string]any)
+	hl, _ := entry["hooks"].([]any)
+	if len(hl) != 1 {
+		t.Fatalf("%s: expected 1 inner command, got %d", evt, len(hl))
+	}
+	cmd, _ := hl[0].(map[string]any)
+	return cmd
+}
+
+// TestSynthesizeSettingsRelayTimeout verifies SR-1.3: the inner command
+// object of both relay hook entries (PermissionRequest, PreToolUse) carries
+// a "timeout" equal to cfg.Relay.EffectiveTimeoutSeconds() — the same value
+// the poll loop's deadline uses. Default is 86400; a positive override flows
+// through verbatim; a non-positive config falls back to 86400 (never 0,
+// never an omitted key).
+func TestSynthesizeSettingsRelayTimeout(t *testing.T) {
+	cases := []struct {
+		name    string
+		configd int // value written to cfg.Relay.TimeoutSeconds
+		want    float64
+	}{
+		{"default", config.DefaultRelayTimeoutSeconds, 86400},
+		{"override", 3600, 3600},
+		{"zero_falls_back", 0, 86400},
+		{"negative_falls_back", -5, 86400},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.Relay.TimeoutSeconds = tc.configd
+			top := synthTop(t, cfg)
+			for _, evt := range []string{"PermissionRequest", "PreToolUse"} {
+				cmd := innerCommand(t, top, evt)
+				got, ok := cmd["timeout"]
+				if !ok {
+					t.Fatalf("%s: inner command missing 'timeout' key (must never be omitted); cmd=%v", evt, cmd)
+				}
+				// json.Unmarshal into any yields float64 for numbers.
+				if got != tc.want {
+					t.Errorf("%s: timeout = %v; want %v", evt, got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// TestSynthesizeSettingsTimeoutOnInnerNotOuter verifies the "timeout" key
+// lands on the inner command object (sibling of type/command), never on the
+// outer matcher entry.
+func TestSynthesizeSettingsTimeoutOnInnerNotOuter(t *testing.T) {
+	top := synthTop(t, config.Default())
+	hooks, _ := top["hooks"].(map[string]any)
+	for _, evt := range []string{"PermissionRequest", "PreToolUse"} {
+		entries, _ := hooks[evt].([]any)
+		entry, _ := entries[0].(map[string]any)
+		if _, leaked := entry["timeout"]; leaked {
+			t.Errorf("%s: 'timeout' leaked onto the outer matcher entry; want it only on the inner command", evt)
+		}
+		cmd := innerCommand(t, top, evt)
+		if _, ok := cmd["timeout"]; !ok {
+			t.Errorf("%s: inner command missing 'timeout'", evt)
+		}
+	}
+}
+
+// TestSynthesizeSettingsTimeoutOnlyRelayEvents verifies the timeout key is
+// emitted on exactly the two relay events and nowhere else — no other event,
+// no outer entry, and (with InjectHelpHook on) not on the help-hook entry.
+func TestSynthesizeSettingsTimeoutOnlyRelayEvents(t *testing.T) {
+	withStubHelpBin(t, "/home/operator/.agent-director/bin/agent-director")
+	cfg := config.Default()
+	cfg.Defaults.InjectHelpHook = true
+	top := synthTop(t, cfg)
+	hooks, _ := top["hooks"].(map[string]any)
+
+	relay := map[string]bool{"PermissionRequest": true, "PreToolUse": true}
+	for evt, raw := range hooks {
+		entries, _ := raw.([]any)
+		for i, e := range entries {
+			entry, _ := e.(map[string]any)
+			if _, leaked := entry["timeout"]; leaked {
+				t.Errorf("%s[%d]: 'timeout' present on outer entry; never allowed", evt, i)
+			}
+			hl, _ := entry["hooks"].([]any)
+			for _, h := range hl {
+				cmd, _ := h.(map[string]any)
+				_, hasTimeout := cmd["timeout"]
+				// The help-hook entry is the second SessionStart entry; it
+				// must never carry a timeout even though relay is enabled.
+				if relay[evt] && i == 0 {
+					if !hasTimeout {
+						t.Errorf("%s[%d]: relay event missing inner 'timeout'", evt, i)
+					}
+				} else if hasTimeout {
+					t.Errorf("%s[%d]: non-relay hook command gained a 'timeout' key: %v", evt, i, cmd)
+				}
+			}
+		}
+	}
+}
+
 // equalStringList accepts either nil/[]string or []any (json.Unmarshal's
 // default for arrays) and reports element-by-element equality. Used by
 // permissions tests to compare against tightly-typed expectations.
