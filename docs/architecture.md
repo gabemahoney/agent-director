@@ -1037,12 +1037,21 @@ blocks SessionStart, so the state never advances, and `send-keys` keeps
 rejecting with `ErrSpawnNotInteractive`. `ended`/`missing` are still rejected
 even when `allow_pending=true`.
 
-Relay-mode guard: when `relay_mode=on` AND `state=check_permission`,
-the permission relay (Epic 10) owns the modal answer. SendKeys refuses
-with `ErrSendKeysWhileRelayed` so the relay's `decide()` write isn't
-racing a pane-side keystroke. The full relay path lands in Epic 10;
-Epic 4 stubs the guard so the precondition surface is correct from
-day one.
+Relay-mode guard (time-bounded): when `relay_mode=on` AND
+`state=check_permission`, the permission relay normally owns the modal
+answer, so `SendKeys` refuses with `ErrSendKeysWhileRelayed` to keep a
+pane-side keystroke from racing the relay's `decide()` write. The refusal
+is **not unconditional**: it consults the same single undeliverability
+signal `decide` uses (`RelayRequestUndeliverable`, SR-4.4) across *every*
+one of the spawn's `permission_requests` rows, each row's window measured
+from its own `created_at` regardless of decision status. It refuses while
+any row is still within its window (a zero-row spawn also refuses — no
+signal, no authority to release) and **releases only once every row's
+window has elapsed**, at which point the delivering hook is dead and
+send-keys becomes the sanctioned recovery of a fallen-back relay (see
+"Send-keys interaction" and "Invariant — relay-listener pairing" in the
+relay chapter). There is no second independent check — no dialog-visibility
+probe, no re-derived timeout arithmetic.
 
 ### `read-pane`
 
@@ -1738,21 +1747,43 @@ relay-on Spawn still surfaces deny.
 
 ### Send-keys interaction
 
-`pkg/api/sendkeys.go`'s precondition: when `relay_mode=on` AND
-`state=check_permission`, return `ErrSendKeysWhileRelayed`. The
-relay path owns the modal answer; a pane-side keystroke would race
-the relay's decide write. The guard was added in Epic 4 (stubbed);
-Epic 10 activates it end-to-end.
+`pkg/api/sendkeys.go`'s guard: when `relay_mode=on` AND
+`state=check_permission`, `SendKeys` refuses with
+`ErrSendKeysWhileRelayed` *while the relay can still act* — the relay
+owns the modal answer, and a pane-side keystroke would race the relay's
+`decide` write. The guard is **time-bounded, not unconditional**:
+`evaluateRelayGuard` loads all of the spawn's `permission_requests` rows
+via `PermissionRequestsForSpawn` and calls the shared
+`RelayRequestUndeliverable` signal (the same single time-based authority
+`decide` uses — SR-4.4; no independent second check and no dialog probe)
+on each, measuring each row's window from its own `created_at` regardless
+of decision status. It refuses while any row is still within its window
+(and refuses on the zero-row transient — no signal, no authority to
+release), and **releases only when every row's window has elapsed**. Once
+released, the delivering hook is provably dead, so send-keys is the
+sanctioned recovery of a fallen-back relay — see the invariant below and
+the `ad.send_keys.called` audit event.
 
 ### Invariant — relay-listener pairing
 
 **Aggregate invariant (per Spawn).** If `spawns.state = check_permission`,
 then either a `runRelay` polling loop is alive consuming `decide()` writes,
 OR `permission_requests.decision` is non-NULL for the corresponding row. A
-bot must never be sitting in "waiting for permission" with no listener AND no
-decision; if both are false, the spawn is stranded and any external surface
-(e.g. a Slack approval message from CSCB) would be a lying ghost — buttons
-that go nowhere.
+bot must never be sitting in "waiting for permission" with no live listener AND
+no decision *and no sanctioned way out*: if a relay listener is gone and every
+row is undeliverable, an external surface (e.g. a Slack approval message from
+CSCB) would be a lying ghost — buttons that go nowhere.
+
+**Sanctioned handling of the all-rows-undeliverable state.** The
+listener-gone/decision-NULL state is not a stranded dead end. Once every
+`permission_requests` row's window has elapsed — the same
+`RelayRequestUndeliverable` signal that makes `decide` return
+`ErrRelayFallenBack` — the send-keys relay guard *releases* (see "Send-keys
+interaction" above). The operator answers Claude Code's still-displayed native
+permission dialog through `send-keys` (no dedicated verb, never raw tmux), and
+the recovery is audited as `ad.send_keys.called` with
+`guard_evaluation=released`. So the terminal state of a fallen-back relay is a
+sanctioned, audited in-band recovery, not a lying ghost.
 
 **What makes the invariant hold, and the window it holds within.** The
 listener half of the invariant is guaranteed only for the configured relay
@@ -2007,8 +2038,8 @@ tool_input (PRD §9, SR-A-2.1).
 
 ### `ad.*` event namespace
 
-Eight event strings are emitted today. The first seven are the primary
-event families; the eighth is a self-reporting meta event.
+Nine event strings are emitted today. The first eight are the primary
+event families; the last is a self-reporting meta event.
 
 | Event | Source | Description |
 |-------|--------|-------------|
@@ -2019,6 +2050,7 @@ event families; the eighth is a self-reporting meta event.
 | `ad.find_missing.tick` | `ad_find_missing` | One per row find-missing reconciles or flags: `reconciliation_reason=proc_absent` per row marked missing, `permission_orphan_closeout` per orphaned permission_requests row closed on that mark, and `probe_eacces` per live row that first transitions into the unverified (permission-walled) state — one tick per NULL→set transition only, never on a repeat sweep. There is no global-refusal tick (the old degraded-mode refusal is gone; unreadable rows are skipped and surfaced per-row). (SR-A-2.5, Epic 5; SR-7/SR-8) |
 | `ad.relay_attempt.completed` | `relay_hook` | One per worker permission-relay attempt (SR-A-2.3, Epic 6) |
 | `ad.resume.observed` | `ad_polling` | One per hook-resume back to Claude Code (SR-A-2.7, Epic 7) |
+| `ad.send_keys.called` | `ad_send_keys` | One per `agent-director send-keys` invocation on every return path (fail-open, mirroring `ad.decide.called`). Carries `outcome` (canonical err_name or `ok`), AD-collected `caller_*` identity, and a `guard_evaluation` field — `not-applicable` (relay guard did not apply), `held` (refused, relay could still act), or `released` (guard released, the audited recovery of a fallen-back relay) — so recovery sends are distinguishable from ordinary sends and refusals (SR-5.2) |
 | `ad.trail_meta.emit_failed` | `ad_trail_meta` | Self-reporting envelope written when a primary emit fails — carries `original_event` and `error_class` (SR-A-3.2) |
 
 ### Sources
@@ -2034,6 +2066,7 @@ The `source` field identifies which emitter wrote the line:
 | `ad_find_missing` | `pkg/api/find_missing.go` and `internal/store/recovery.go` — reconciliation |
 | `relay_hook` | `internal/hook/permission.go` and `cmd/agent-director/trail_emit_cmd.go` — relay-attempt completion |
 | `ad_polling` | `internal/hook/permission.go` — resume observed on hook return |
+| `ad_send_keys` | `pkg/api/sendkeys.go` — send-keys verb (per-invocation, carries the relay-guard evaluation) |
 | `ad_trail_meta` | `internal/trail/trail.go` — the trail writer itself (meta-events only) |
 
 ### Operator access

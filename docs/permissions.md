@@ -284,9 +284,9 @@ Guarantees when `ErrRelayFallenBack` is returned:
   no verdict is written into a void. Nothing about the request is lost.
 - **Recourse is the pane.** Because the relay hook can no longer
   deliver a decision, the operator answers Claude Code's native
-  permission dialog directly. (A sanctioned in-band recovery surface
-  for fallen-back requests is the scope of Epic `t1.kk3.up` and is not
-  yet available; answering at the pane is the current recourse.)
+  permission dialog directly — through the sanctioned, audited
+  `send-keys` recovery path (its guard has released by the same
+  time-based signal), never raw tmux. See "Send-keys interaction" below.
 
 **The undeliverability signal is time-based, never dialog-based.** A
 request is undeliverable once the elapsed time since its
@@ -308,13 +308,52 @@ clean: decided rows → `ErrAlreadyDecided`; open-but-expired rows →
 ### Send-keys interaction
 
 When a Spawn is sitting on a relayed permission prompt (`relay_mode=on`
-AND `state=check_permission`), `send-keys` refuses with
-`ErrSendKeysWhileRelayed`. A pane-side keystroke would race the
-relay's decide() write and split the modal answer across two pane
-events. Callers wanting to drive the modal must use `decide`.
+AND `state=check_permission`), `send-keys` may refuse with
+`ErrSendKeysWhileRelayed`: while the relay can still act, a pane-side
+keystroke would race the relay's `decide()` write and split the modal
+answer across two pane events, so the relay owns the answer and callers
+drive the modal through `decide`.
 
-The guard was wired in Epic 4 (with the relay path stubbed); Epic 10
-activates it end-to-end.
+**The guard is time-bounded, not unconditional.** It consults the
+*same* single time-based authority the decide contract uses (see "The
+undeliverability signal is time-based, never dialog-based" above) —
+never dialog visibility, never a second independent check. It evaluates
+every one of the spawn's `permission_requests` rows, each row's window
+measured from its own `created_at` and *regardless of the row's
+decision status* (a row decided in-window still has a live poller about
+to deliver it). Concretely:
+
+- **Refuse while any row is still within its delivery window** — the
+  relay can still deliver, so send-keys stays out of the way.
+- **Release only once every row's window has elapsed** — at that point
+  no poller can deliver any decision, the guard would be pure denial of
+  service, and send-keys is the sanctioned recovery surface (below).
+- **Zero rows keep the guard held.** With no row there is no signal and
+  no authority to release; the state is a real mid-insert transient, so
+  the guard refuses rather than open a race.
+
+#### Sanctioned recovery of a wedged relayed spawn
+
+When a relayed spawn is wedged past its window — the relay hook was
+killed at its per-hook timeout and can no longer deliver — the operator
+recovers it end-to-end through sanctioned AD surface, with no dedicated
+answer-the-dialog verb and **without ever touching raw tmux**:
+
+1. `decide` returns the typed `ErrRelayFallenBack` ("too late — answer
+   at the pane"): the verdict was not recorded, and delivery is no
+   longer possible.
+2. Because every row's window has elapsed, the send-keys guard has
+   *already released* by the same time-based authority.
+3. `send-keys` answers the still-displayed native permission dialog
+   directly (the dialog is still on screen precisely because nothing
+   answered it).
+4. The action is audited: it appears in the trail as
+   `ad.send_keys.called` with `guard_evaluation=released`, so a recovery
+   send is distinguishable from an ordinary send and from a guard
+   refusal.
+
+This is the in-band recovery surface referenced under `ErrRelayFallenBack`
+above; it is now available.
 
 ## References
 
