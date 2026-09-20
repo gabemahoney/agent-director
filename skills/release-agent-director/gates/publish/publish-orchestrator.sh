@@ -37,7 +37,8 @@
 #   2. publish.create-tag           git tag -a v<target> ... && git push origin v<target>
 #   3. publish.gh-release           gh release create v<target> --notes-file <notes> <binaries...>
 #   4. publish.npm-publish          npm publish <tarball>
-#   5. publish.fast-forward-main    git fetch + checkout main + merge --ff-only + push
+#   5. publish.fast-forward-main    git fetch + merge --ff-only + push, run in
+#                                   the parent (main) worktree (SR-13.3)
 #   6. publish.delete-remote-branch git push origin --delete <release-branch>
 #
 # Exit codes:
@@ -440,11 +441,52 @@ _do_npm_publish() {
   (cd "${WORKTREE_ROOT}/pkg/ts-bun-client" && npm publish "${TARBALL}")
 }
 
+# _do_fast_forward_main
+#
+# main is ALREADY checked out in the parent (main) worktree, so
+# `git checkout main` from inside the release worktree fails with
+# "fatal: 'main' is already checked out at '<parent>'" (b.jqj). Instead of
+# switching branches here, derive the parent worktree path and fast-forward
+# main in place there — no checkout needed.
+#
+# Parent derivation: the first `worktree` entry of `git worktree list
+# --porcelain` is always the main worktree (git lists the primary worktree
+# first, the linked ones after). WORKTREE_ROOT is a linked worktree, so this
+# yields the parent that has main checked out.
+#
+# SR-13.3: the parent-worktree layout is an invariant, not a guess. If the
+# derived parent is empty, is not a git worktree, or does not have main
+# checked out, we halt loudly rather than silently correcting or falling back
+# to the old checkout behavior.
 _do_fast_forward_main() {
-  git -C "${WORKTREE_ROOT}" fetch origin \
-    && git -C "${WORKTREE_ROOT}" checkout main \
-    && git -C "${WORKTREE_ROOT}" merge --ff-only "${RELEASE_BRANCH}" \
-    && git -C "${WORKTREE_ROOT}" push origin main
+  git -C "${WORKTREE_ROOT}" fetch origin || return $?
+
+  local parent
+  parent="$(git -C "${WORKTREE_ROOT}" worktree list --porcelain 2>/dev/null \
+    | awk '/^worktree /{sub(/^worktree /,""); print; exit}')"
+
+  if [[ -z "${parent}" ]]; then
+    printf 'SR-13.3: could not derive the parent (main) worktree from release worktree %s — `git worktree list --porcelain` yielded no worktree entry. Cannot fast-forward main.\n' \
+      "${WORKTREE_ROOT}" >&2
+    return 1
+  fi
+
+  if ! git -C "${parent}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    printf 'SR-13.3: derived parent worktree %s is not a git worktree. Cannot fast-forward main.\n' \
+      "${parent}" >&2
+    return 1
+  fi
+
+  local parent_branch
+  parent_branch="$(git -C "${parent}" symbolic-ref --short -q HEAD)"
+  if [[ "${parent_branch}" != "main" ]]; then
+    printf 'SR-13.3: derived parent worktree %s does not have main checked out (HEAD is on %s). Refusing to fast-forward — no silent correction.\n' \
+      "${parent}" "${parent_branch:-<detached>}" >&2
+    return 1
+  fi
+
+  git -C "${parent}" merge --ff-only "${RELEASE_BRANCH}" \
+    && git -C "${parent}" push origin main
 }
 
 _do_delete_remote_branch() {
@@ -474,8 +516,11 @@ run_substep "npm-publish" \
   _do_npm_publish
 
 # 5. publish.fast-forward-main
+# No `git checkout main`: main is already checked out in the parent worktree,
+# so the fast-forward runs there via `git -C <parent>` (b.jqj). <parent> is
+# derived at run time from `git worktree list`, hence the placeholder here.
 run_substep "fast-forward-main" \
-  "git fetch origin && git checkout main && git merge --ff-only ${RELEASE_BRANCH} && git push origin main" \
+  "git fetch origin && git -C <parent-worktree> merge --ff-only ${RELEASE_BRANCH} && git -C <parent-worktree> push origin main" \
   _do_fast_forward_main
 
 # 6. publish.delete-remote-branch
