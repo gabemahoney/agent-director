@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -162,6 +163,13 @@ func TestSendKeysCLIErrSpawnNotFound(t *testing.T) {
 	}
 }
 
+// TestSendKeysCLIErrSendKeysWhileRelayed is the ZERO-ROWS pin: a relay-on
+// check_permission Spawn with NO permission_requests rows must keep refusing
+// send-keys with ErrSendKeysWhileRelayed. With no row there is no
+// deliverability signal and no authority to release the guard (PM-pinned in
+// evaluateRelayGuard: len(rows)==0 → held/refuse). The deliverable-row refusal
+// path and the released-guard recovery path are exercised by the sibling tests
+// below.
 func TestSendKeysCLIErrSendKeysWhileRelayed(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
@@ -177,6 +185,151 @@ func TestSendKeysCLIErrSendKeysWhileRelayed(t *testing.T) {
 	env := parseEnvelope(t, stderr)
 	if env.ErrName != "ErrSendKeysWhileRelayed" {
 		t.Errorf("err_name = %q; want ErrSendKeysWhileRelayed", env.ErrName)
+	}
+}
+
+// sendKeysCalledLines filters trail lines for ad.send_keys.called events,
+// preserving order. Local to this file per the send-keys lane's file ownership;
+// mirrors decideCalledLines / hookFiredLines.
+func sendKeysCalledLines(lines []map[string]any) []map[string]any {
+	var out []map[string]any
+	for _, l := range lines {
+		if l["event"] == "ad.send_keys.called" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// TestSendKeysCLIErrSendKeysWhileRelayedDeliverableRow is the DELIVERABLE-ROW
+// refusal variant: a relay-on check_permission Spawn with an open
+// permission_requests row still inside its delivery window must refuse with
+// ErrSendKeysWhileRelayed (guard held). The row is left at "now", so it is
+// well within the CLI binary's default 86400s window — the poller could still
+// deliver a decision, so the guard denies the racing keystroke. The trail
+// event records outcome=ErrSendKeysWhileRelayed with guard_evaluation="held".
+func TestSendKeysCLIErrSendKeysWhileRelayedDeliverableRow(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	home := t.TempDir()
+	bootstrapDB(t, home)
+	dbPath := filepath.Join(home, ".agent-director", "state.db")
+	const id = "id-sk-relay-live-1"
+	seedSpawnRow(t, dbPath, id, "cd-sk-relay-live-1", "check_permission", "on")
+	// In-window row (created_at defaults to now) → guard held, refuse.
+	seedOpenPermissionRequest(t, dbPath, id, testRequestToken, "Bash", `{"cmd":"ls"}`)
+
+	_, stderr, code := runSpawnCLI(t, home, fakeDir,
+		"send-keys", "--claude-instance-id", id, "--text", "1")
+	if code == 0 {
+		t.Fatalf("expected non-zero exit; got 0 (stderr=%s)", stderr)
+	}
+	env := parseEnvelope(t, stderr)
+	if env.ErrName != "ErrSendKeysWhileRelayed" {
+		t.Errorf("err_name = %q; want ErrSendKeysWhileRelayed", env.ErrName)
+	}
+
+	sk := sendKeysCalledLines(readTrailLines(t, home))
+	if len(sk) != 1 {
+		t.Fatalf("ad.send_keys.called count = %d; want 1", len(sk))
+	}
+	row := sk[0]
+	if row["outcome"] != "ErrSendKeysWhileRelayed" {
+		t.Errorf("outcome = %v; want ErrSendKeysWhileRelayed", row["outcome"])
+	}
+	if row["guard_evaluation"] != "held" {
+		t.Errorf("guard_evaluation = %v; want held", row["guard_evaluation"])
+	}
+	if row["claude_instance_id"] != id {
+		t.Errorf("claude_instance_id = %v; want %q", row["claude_instance_id"], id)
+	}
+}
+
+// TestSendKeysCLIErrSendKeysWhileRelayedZeroRowsTrail asserts the trail event
+// for the zero-rows refusal path: guard_evaluation="held",
+// outcome=ErrSendKeysWhileRelayed (companion to the zero-rows pin above, which
+// asserts only the stderr envelope).
+func TestSendKeysCLIErrSendKeysWhileRelayedZeroRowsTrail(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	home := t.TempDir()
+	bootstrapDB(t, home)
+	dbPath := filepath.Join(home, ".agent-director", "state.db")
+	const id = "id-sk-relay-zero-1"
+	seedSpawnRow(t, dbPath, id, "cd-sk-relay-zero-1", "check_permission", "on")
+	// No permission_requests rows seeded → held/refuse.
+
+	_, stderr, code := runSpawnCLI(t, home, fakeDir,
+		"send-keys", "--claude-instance-id", id, "--text", "1")
+	if code == 0 {
+		t.Fatalf("expected non-zero exit; got 0 (stderr=%s)", stderr)
+	}
+
+	sk := sendKeysCalledLines(readTrailLines(t, home))
+	if len(sk) != 1 {
+		t.Fatalf("ad.send_keys.called count = %d; want 1", len(sk))
+	}
+	row := sk[0]
+	if row["outcome"] != "ErrSendKeysWhileRelayed" {
+		t.Errorf("outcome = %v; want ErrSendKeysWhileRelayed", row["outcome"])
+	}
+	if row["guard_evaluation"] != "held" {
+		t.Errorf("guard_evaluation = %v; want held", row["guard_evaluation"])
+	}
+}
+
+// TestSendKeysCLIRelayRecoveryReleasesGuard is the recovery case (SR-5.2): a
+// relay-on check_permission Spawn whose only permission_requests row is
+// backdated far past the CLI binary's default effective window (86400s) plus
+// RelayKillSafetyMargin is undeliverable — the delivering hook is dead — so the
+// guard RELEASES and send-keys succeeds. The audited recovery is visible on the
+// ad.send_keys.called event with guard_evaluation="released", outcome="ok", and
+// the recovered Spawn's id. The CLI runs on the real clock, hence a 48h
+// backdate rather than anything near the window (mirrors decide_cli_test.go's
+// ErrRelayFallenBack case).
+func TestSendKeysCLIRelayRecoveryReleasesGuard(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	home := t.TempDir()
+	bootstrapDB(t, home)
+	dbPath := filepath.Join(home, ".agent-director", "state.db")
+	const id = "id-sk-relay-recover-1"
+	seedSpawnRow(t, dbPath, id, "cd-sk-relay-recover-1", "check_permission", "on")
+	seedOpenPermissionRequest(t, dbPath, id, testRequestToken, "Bash", `{"cmd":"ls"}`)
+	// Push the only row's window far past default(86400s)+margin → undeliverable.
+	backdatePermissionRequest(t, dbPath, id, testRequestToken, 48*time.Hour)
+
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir,
+		"send-keys", "--claude-instance-id", id, "--text", "recover me")
+	if code != 0 {
+		t.Fatalf("send-keys exit = %d; want 0 (guard should have released); stderr=%s", code, stderr)
+	}
+	if strings.TrimSpace(stdout) != "{}" {
+		t.Errorf("stdout = %q; want \"{}\"", stdout)
+	}
+
+	// The keystrokes were actually delivered to the pane (text + Enter).
+	logBytes, err := os.ReadFile(filepath.Join(home, "fake-tmux.log"))
+	if err != nil {
+		t.Fatalf("read fake-tmux log: %v", err)
+	}
+	if !strings.Contains(string(logBytes), "recover me") {
+		t.Errorf("fake-tmux log missing delivered text: %s", string(logBytes))
+	}
+
+	sk := sendKeysCalledLines(readTrailLines(t, home))
+	if len(sk) != 1 {
+		t.Fatalf("ad.send_keys.called count = %d; want 1", len(sk))
+	}
+	row := sk[0]
+	if row["guard_evaluation"] != "released" {
+		t.Errorf("guard_evaluation = %v; want released", row["guard_evaluation"])
+	}
+	if row["outcome"] != "ok" {
+		t.Errorf("outcome = %v; want ok", row["outcome"])
+	}
+	if row["claude_instance_id"] != id {
+		t.Errorf("claude_instance_id = %v; want %q", row["claude_instance_id"], id)
+	}
+	if row["source"] != "ad_send_keys" {
+		t.Errorf("source = %v; want ad_send_keys", row["source"])
 	}
 }
 

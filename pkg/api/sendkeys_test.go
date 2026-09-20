@@ -5,10 +5,22 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
+)
+
+// sendKeysTestWindow / sendKeysTestNow are the effective-window + injected-clock
+// arguments the pure SendKeys entry point now takes (mechanical seam added by
+// the relay-guard-release subtask). These fixed values preserve the pre-release
+// behavior of every legacy test: no permission_requests rows are seeded, so the
+// zero-rows guard keeps refusing and the window/clock never change an outcome.
+// Behavior assertions for the release path live in the dedicated test subtasks.
+var (
+	sendKeysTestWindow = 24 * time.Hour
+	sendKeysTestNow    = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 )
 
 // recordingTmux records each (session, text, pressEnter) triple its
@@ -43,7 +55,7 @@ func TestSendKeysSingleLineWithEnter(t *testing.T) {
 	s, _ := apitest.OpenStoreWithRow(t, "id-1", "cd-tmp", store.StateWaiting, "off")
 	tmux := newTmux()
 
-	if _, err := api.SendKeys(s, tmux, api.SendKeysParams{
+	if _, err := api.SendKeys(s, tmux, sendKeysTestWindow, sendKeysTestNow, api.SendKeysParams{
 		ClaudeInstanceID: "id-1",
 		Text:             "hello",
 	}); err != nil {
@@ -66,7 +78,7 @@ func TestSendKeysMultilinePreservesLF(t *testing.T) {
 	s, _ := apitest.OpenStoreWithRow(t, "id-2", "cd-tmp", store.StateWorking, "off")
 	tmux := newTmux()
 
-	if _, err := api.SendKeys(s, tmux, api.SendKeysParams{
+	if _, err := api.SendKeys(s, tmux, sendKeysTestWindow, sendKeysTestNow, api.SendKeysParams{
 		ClaudeInstanceID: "id-2",
 		Text:             "line one\nline two",
 	}); err != nil {
@@ -89,7 +101,7 @@ func TestSendKeysStripsCR(t *testing.T) {
 	s, _ := apitest.OpenStoreWithRow(t, "id-3", "cd-tmp", store.StateWaiting, "off")
 	tmux := newTmux()
 
-	if _, err := api.SendKeys(s, tmux, api.SendKeysParams{
+	if _, err := api.SendKeys(s, tmux, sendKeysTestWindow, sendKeysTestNow, api.SendKeysParams{
 		ClaudeInstanceID: "id-3",
 		Text:             "ab\rcd\r\nef",
 	}); err != nil {
@@ -112,7 +124,7 @@ func TestSendKeysRejectsPendingState(t *testing.T) {
 	s, _ := apitest.OpenStoreWithRow(t, "id-5", "cd-tmp", store.StatePending, "off")
 	tmux := newTmux()
 
-	_, err := api.SendKeys(s, tmux, api.SendKeysParams{
+	_, err := api.SendKeys(s, tmux, sendKeysTestWindow, sendKeysTestNow, api.SendKeysParams{
 		ClaudeInstanceID: "id-5",
 		Text:             "hi",
 	})
@@ -128,7 +140,7 @@ func TestSendKeysRejectsEndedState(t *testing.T) {
 	s, _ := apitest.OpenStoreWithRow(t, "id-6", "cd-tmp", store.StateEnded, "off")
 	tmux := newTmux()
 
-	_, err := api.SendKeys(s, tmux, api.SendKeysParams{
+	_, err := api.SendKeys(s, tmux, sendKeysTestWindow, sendKeysTestNow, api.SendKeysParams{
 		ClaudeInstanceID: "id-6",
 		Text:             "hi",
 	})
@@ -141,10 +153,18 @@ func TestSendKeysCheckPermissionWithRelayOn(t *testing.T) {
 	// relay_mode=on AND state=check_permission means the relay path (Epic
 	// 10) owns the answer. Sending pane-side keystrokes would race the
 	// decide() write. Return the stub guard error.
+	//
+	// Intent (zero-rows-refuses pin, PM-pinned): this row has NO
+	// permission_requests seeded. That is the guard's zero-rows branch — no
+	// signal and no authority to release, and check_permission with no row is
+	// a real mid-insert transient — so the guard keeps refusing regardless of
+	// window/clock. The deliverable-row hold path (a fresh in-window open
+	// request seeded) is pinned separately by
+	// TestSendKeysCheckPermissionRelayOnDeliverableRowHolds.
 	s, _ := apitest.OpenStoreWithRow(t, "id-7", "cd-tmp", store.StateCheckPermission, "on")
 	tmux := newTmux()
 
-	_, err := api.SendKeys(s, tmux, api.SendKeysParams{
+	_, err := api.SendKeys(s, tmux, sendKeysTestWindow, sendKeysTestNow, api.SendKeysParams{
 		ClaudeInstanceID: "id-7",
 		Text:             "1",
 	})
@@ -156,6 +176,32 @@ func TestSendKeysCheckPermissionWithRelayOn(t *testing.T) {
 	}
 }
 
+func TestSendKeysCheckPermissionRelayOnDeliverableRowHolds(t *testing.T) {
+	// relay_mode=on + check_permission with a fresh (in-window) open
+	// permission_requests row: the row's delivery window has not elapsed, so a
+	// live poller can still deliver the decision. The guard must HOLD and refuse
+	// the send. This is the deliverable-row hold path that the zero-rows pin
+	// (TestSendKeysCheckPermissionWithRelayOn) no longer exercises.
+	//
+	// The row is seeded at real wall-clock time, so the injected clock is
+	// time.Now() (not the fixed legacy fixture) and the window is wide — the
+	// fresh row reads as in-window/deliverable and the guard holds.
+	s, _ := apitest.OpenStoreWithRow(t, "id-7d", "cd-tmp", store.StateCheckPermission, "on")
+	apitest.SeedPermissionRow(t, s, "id-7d")
+	tmux := newTmux()
+
+	_, err := api.SendKeys(s, tmux, sendKeysTestWindow, time.Now().UTC(), api.SendKeysParams{
+		ClaudeInstanceID: "id-7d",
+		Text:             "1",
+	})
+	if !errors.Is(err, api.ErrSendKeysWhileRelayed) {
+		t.Fatalf("err = %v; want ErrSendKeysWhileRelayed", err)
+	}
+	if len(tmux.calls) != 0 {
+		t.Fatalf("tmux was called while relay guard tripped on a deliverable row: %v", tmux.calls)
+	}
+}
+
 func TestSendKeysCheckPermissionWithRelayOff(t *testing.T) {
 	// relay_mode=off means no relay is consuming the modal — the
 	// orchestrator drives the answer via send-keys directly. The
@@ -163,7 +209,7 @@ func TestSendKeysCheckPermissionWithRelayOff(t *testing.T) {
 	s, _ := apitest.OpenStoreWithRow(t, "id-8", "cd-tmp", store.StateCheckPermission, "off")
 	tmux := newTmux()
 
-	if _, err := api.SendKeys(s, tmux, api.SendKeysParams{
+	if _, err := api.SendKeys(s, tmux, sendKeysTestWindow, sendKeysTestNow, api.SendKeysParams{
 		ClaudeInstanceID: "id-8",
 		Text:             "1",
 	}); err != nil {
@@ -181,7 +227,7 @@ func TestSendKeysSpawnNotFound(t *testing.T) {
 	s, _ := apitest.OpenStoreWithRow(t, "id-9", "cd-tmp", store.StateWaiting, "off")
 	tmux := newTmux()
 
-	_, err := api.SendKeys(s, tmux, api.SendKeysParams{
+	_, err := api.SendKeys(s, tmux, sendKeysTestWindow, sendKeysTestNow, api.SendKeysParams{
 		ClaudeInstanceID: "absent",
 		Text:             "hi",
 	})
@@ -200,7 +246,7 @@ func TestSendKeysPropagatesTmuxError(t *testing.T) {
 		failErr: errSentinel,
 	}
 
-	_, err := api.SendKeys(s, tmux, api.SendKeysParams{
+	_, err := api.SendKeys(s, tmux, sendKeysTestWindow, sendKeysTestNow, api.SendKeysParams{
 		ClaudeInstanceID: "id-10",
 		Text:             "hi",
 	})
@@ -255,7 +301,7 @@ func TestSendKeysAllowPendingPermitsOnlyPending(t *testing.T) {
 			id := fmt.Sprintf("id-ap-%d", i)
 			s, _ := apitest.OpenStoreWithRow(t, id, "cd-ap-"+fmt.Sprint(i), tc.state, "off")
 			tmux := newTmux()
-			_, err := api.SendKeys(s, tmux, api.SendKeysParams{
+			_, err := api.SendKeys(s, tmux, sendKeysTestWindow, sendKeysTestNow, api.SendKeysParams{
 				ClaudeInstanceID: id,
 				Text:             "hello",
 				AllowPending:     tc.allowPending,
@@ -294,7 +340,7 @@ func TestSendKeysEmptyTextSubmits(t *testing.T) {
 	s, _ := apitest.OpenStoreWithRow(t, "id-11", "cd-tmp", store.StateWaiting, "off")
 	tmux := newTmux()
 
-	if _, err := api.SendKeys(s, tmux, api.SendKeysParams{
+	if _, err := api.SendKeys(s, tmux, sendKeysTestWindow, sendKeysTestNow, api.SendKeysParams{
 		ClaudeInstanceID: "id-11",
 		Text:             "",
 	}); err != nil {

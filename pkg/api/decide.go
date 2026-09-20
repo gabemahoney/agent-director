@@ -5,9 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
-	"os/user"
-	"path/filepath"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -231,13 +228,7 @@ func (c *Client) Decide(params DecideParams) (DecideResult, error) {
 
 	// Collect caller identity once at entry — must come from inside AD, not
 	// from caller-asserted params (SR-A-2.4).
-	callerProcess := filepath.Base(os.Args[0])
-	callerPID := os.Getpid()
-	callerHostname, _ := os.Hostname()
-	callerUser := ""
-	if u, uerr := user.Current(); uerr == nil {
-		callerUser = u.Username
-	}
+	callerID := callerIdentity()
 
 	var callErr error
 	defer func() {
@@ -250,10 +241,10 @@ func (c *Client) Decide(params DecideParams) (DecideResult, error) {
 			"submitted_decision":        params.Decision,
 			"submitted_decision_reason": params.Reason,
 			"outcome":                   decideOutcome(callErr),
-			"caller_process":            callerProcess,
-			"caller_pid":                callerPID,
-			"caller_hostname":           callerHostname,
-			"caller_user":               callerUser,
+			"caller_process":            callerID.process,
+			"caller_pid":                callerID.pid,
+			"caller_hostname":           callerID.hostname,
+			"caller_user":               callerID.user,
 			"source":                    "ad_decide",
 		})
 	}()
