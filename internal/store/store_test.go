@@ -25,10 +25,13 @@ const envFreshInitHelper = "AD_STORE_TEST_FRESH_INIT_HELPER"
 // invisible to `go test -list`/normal test runs while letting the
 // concurrent-fresh-init test fork the same binary as N subprocesses.
 //
-// For non-helper runs, TestMain also fixes AGENT_DIRECTOR_STATE_DIR to a
-// temp dir so the trail singleton writes to a known location rather than
-// ~/.agent-director/. Trail tests (trail_emit_test.go) read storeTrailDir
-// to locate the file.
+// For non-helper runs, TestMain also redirects HOME to a temp dir so the
+// trail singleton writes under <home>/.agent-director/ rather than the real
+// user home. Because trail.Default() is a process-level once.Do singleton
+// whose path is locked in on first use, HOME must be set here (via os.Setenv,
+// before m.Run) — a per-test t.Setenv would apply too late to retarget it.
+// The spawned fresh-init helper subprocess inherits this HOME. Trail tests
+// (trail_emit_test.go) read storeTrailDir to locate the file.
 func TestMain(m *testing.M) {
 	// Guard first: the fresh-init helper dispatch below reaches OpenOrInit, so
 	// the marker must be checked before any code path can open a store. The
@@ -38,14 +41,20 @@ func TestMain(m *testing.M) {
 		freshInitHelperMain(dbPath)
 		return
 	}
-	d, err := os.MkdirTemp("", "ad-store-trail-*")
+	home, err := os.MkdirTemp("", "ad-store-home-*")
 	if err != nil {
 		panic("TestMain: MkdirTemp: " + err.Error())
 	}
-	defer os.RemoveAll(d)
-	storeTrailDir = d
-	if err := os.Setenv("AGENT_DIRECTOR_STATE_DIR", d); err != nil {
-		panic("TestMain: Setenv: " + err.Error())
+	defer os.RemoveAll(home)
+	if err := os.Setenv("HOME", home); err != nil {
+		panic("TestMain: Setenv HOME: " + err.Error())
+	}
+	// Trail resolves its directory as <home>/.agent-director/; create it up
+	// front so the singleton's first append succeeds and the trail helpers
+	// read from the same place.
+	storeTrailDir = filepath.Join(home, ".agent-director")
+	if err := os.MkdirAll(storeTrailDir, 0o755); err != nil {
+		panic("TestMain: MkdirAll: " + err.Error())
 	}
 	os.Exit(m.Run())
 }

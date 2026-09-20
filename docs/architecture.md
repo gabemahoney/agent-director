@@ -54,9 +54,9 @@ still holds: nothing in `internal/` imports `pkg/api`.
 
 | Path | Responsibility | Allowed imports | Prohibited imports |
 | --- | --- | --- | --- |
-| `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`; every non-hook verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. | stdlib; `pkg/api`; `pkg/api/errnames`; `internal/hook`; `internal/config` and `internal/store` (error sentinels only) in `setupClient`; `internal/config` in `runHook` and `newHookLogger`. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook`, `newHookLogger`, and `setupClient`'s logger bootstrap. |
+| `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`; every store-backed verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. **DB-free exceptions:** `help`, `--help`, `version`, no-args (routes to help), and `trail-emit` are dispatched BEFORE `setupClient` so they never open or create `~/.agent-director` (SR-4.1/4.2); help/version run against a zero-value `Client` and consult no store. **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. | stdlib; `pkg/api`; `pkg/api/errnames`; `internal/hook`; `internal/config` and `internal/store` (error sentinels only) in `setupClient`; `internal/config` in `runHook` and `newHookLogger`. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook`, `newHookLogger`, and `setupClient`'s logger bootstrap. |
 | `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, `KillTmux`, `KillLogger`, etc.), params/result types, and error sentinels. Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director` and `internal/mcp`. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`. | Direct `database/sql`; raw SQL strings; MCP framing. |
-| `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v2 per SRD §4.2), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
+| `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v3 per SRD §4.2), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
 | `pkg/api/apitest` | Test seed helpers extracted from `pkg/api/*_test.go` for cross-package importing. Provides `Seed*` functions (`SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`) that set up fixture DB rows and filesystem state for `test/envelope-diff` and future Epic 4/5 smoke tests. Non-test package (regular `.go` files) so it can be imported by harnesses outside `pkg/api`. | stdlib; `internal/store`; `internal/spawn`. | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
 | `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. The `Catalog` is consumed by `cmd/agent-director`'s envelope writer and `internal/mcp`'s `classifyDispatchError`. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
@@ -156,17 +156,30 @@ verbatim so future code review can grep for it:
 **Schema versioning convention.** SQLite's `PRAGMA user_version` is the
 source of truth for which schema this binary expects. On `Open`:
 
-- `user_version == 0` → fresh DB: create the v2 tables and indexes inside a
-  single transaction, then stamp `PRAGMA user_version = 2`.
-- `user_version == 1` → v1→v2 migration: DROP+CREATE `permission_requests`
-  in one transaction, stamp `PRAGMA user_version = 2`. V1 rows are
-  discarded (see "Schema v1 → v2 Migration" below).
-- `user_version == 2` → nothing to do; the schema already matches.
-- Any other value → return the sentinel `store.ErrSchemaMismatch` (an
-  exported `errors.New` value, so callers use `errors.Is`). No DDL runs in
-  this case.
+- `user_version == 0` → fresh DB: create the v3 tables and indexes inside a
+  single transaction, then stamp `PRAGMA user_version = 3`.
+- `0 < user_version < 3` (older-than-binary, i.e. v1 or v2) → **gated**: the
+  store does **not** auto-migrate on `Open`. The open is refused with
+  `store.ErrSchemaMigrationRequired` (an exported `errors.New` value; callers
+  use `errors.Is`) and zero DDL runs, *unless* an administrator has placed a
+  valid authorization sentinel next to the DB file. The sentinel (`migrate-authorized`,
+  sibling to the resolved DB path) is a strict JSON object naming exactly one
+  transition (e.g. `{"from": 2, "to": 3}`) and authorizes the migration only
+  when its `from` exact-matches the DB's actual `user_version` and its `to`
+  exact-matches this binary's `schemaVersion`. When authorized, the upgrade
+  runs as a chain of `migrationSteps` (the ordered step registry in
+  `schema.go`), each step individually transactional; today the chain holds two
+  steps, `{from: 1, apply: migrateV1toV2}` (DROP+CREATE `permission_requests`,
+  V1 rows discarded) and `{from: 2, apply: migrateV2toV3}` (five ADD COLUMN on
+  `spawns`) — see "Schema v1 → v2 Migration" and "Schema v2 → v3 Migration"
+  below. A v1 DB opened against this binary chains v1→v2→v3 in one pass. The
+  sentinel is consumed after the chain commits.
+- `user_version == 3` → nothing to do; the schema already matches.
+- `user_version > 3` (newer-than-binary) → return the sentinel
+  `store.ErrSchemaMismatch` (an exported `errors.New` value, so callers use
+  `errors.Is`). No DDL runs in this case.
 
-**Schema v1 → v2 Migration.** The first real migration ships with schema v2:
+**Schema v1 → v2 Migration.** The first real migration:
 
 1. **Migration shape**: `DROP TABLE permission_requests` followed immediately
    by `CREATE TABLE permission_requests` at the v2 DDL, plus two new indexes,
@@ -180,8 +193,23 @@ source of truth for which schema this binary expects. On `Open`:
    silently corrupt rows.
 4. **`user_version` stamp**: `PRAGMA user_version = 2` is the final
    in-transaction step before `COMMIT`. A crash mid-migration leaves
-   `user_version = 1`, so the next `Open` retries the migration cleanly.
-   `user_version > 2` surfaces `ErrSchemaMismatch`.
+   `user_version = 1` and — because the sentinel is only consumed *after* the
+   chain commits — the `migrate-authorized` sentinel still in place, so the
+   next authorized `Open` retries the migration cleanly.
+
+**Schema v2 → v3 Migration.** The current migration adds process-liveness
+identity to `spawns` (`migrateV2toV3`):
+
+1. **Migration shape**: five `ALTER TABLE spawns ADD COLUMN` statements inside a
+   single transaction — `pid INTEGER`, `proc_starttime TEXT`,
+   `liveness_unverified_since TEXT`, `liveness_note TEXT` (all nullable), and
+   `extra_env TEXT NOT NULL DEFAULT '{}'`.
+2. **No backfill**: `ADD COLUMN` populates existing rows from the column
+   defaults — NULL for the four nullable columns, `'{}'` for `extra_env` — so
+   there is no phase-3 data transform.
+3. **`user_version` stamp**: `PRAGMA user_version = 3` is the final
+   in-transaction step before `COMMIT`; a rollback on any error leaves
+   `user_version = 2` intact. `user_version > 3` surfaces `ErrSchemaMismatch`.
 
 **Concurrency.** `Open` calls `db.SetMaxOpenConns(1)`. `journal_mode=WAL`
 and `foreign_keys=ON` are applied via DSN PRAGMAs and verified after open;
@@ -285,7 +313,7 @@ See `docs/cli-reference.md` and `docs/mcp-reference.md` — auto-generated; do n
                 +-------------------------+
                 |   internal/store        |
                 |   (sole SQL owner;      |
-                |    schema v2 / SRD §4.2)|
+                |    schema v3 / SRD §4.2)|
                 +-------------------------+
 
    internal/config -----> consumed by pkg/api and cmd/
@@ -1138,14 +1166,58 @@ runs the skill body Pattern A copied), or directly via
 ```
 claude /install-agent-director (or `bash install.sh`)
   → install.sh preflight gates (OS/CPU, --binary arch probe,
-    required tools on PATH, whitespace-free install path)
-  → write CLI binary to ~/.agent-director/bin/agent-director
-  → warm up ~/.agent-director/state.db
+    required tools on PATH incl. sqlite3, whitespace-free install path)
+  → write CLI binary to ~/.agent-director/bin/agent-director  (atomic mv)
+  → schema migration at install-time (see below): open/migrate state.db
+    under a one-shot migrate-authorized sentinel (full six-step flow in
+    install-agent-director/SKILL.md)
   → merge SessionStart + SessionEnd hooks into ~/.claude/settings.json
   → optional ~/.local/bin/agent-director PATH symlink
 ```
 
 Pattern B is where the CLI / state / hooks side effects happen.
+
+#### Schema migration at install-time
+
+Because the store refuses to auto-migrate under an agent (see the
+schema-versioning section above), a bare warm-up would fail every
+upgrade whose binary is newer than an existing `state.db`. `install.sh`
+runs on the end-user's machine as an *administrator* action, so it is
+the one legitimate place to authorize that migration — which it does
+with a one-shot `migrate-authorized` sentinel: it reads the DB's ACTUAL
+`user_version` (via `sqlite3 … "PRAGMA user_version"`, through the WAL —
+hence `sqlite3` is a preflight requirement), writes a
+`{"from":<actual>,"to":<target>}` sentinel beside `state.db` (skipped
+when already current or on a fresh install), opens the store once with a
+store-opening verb (`agent-director list`, deliberately not the DB-free
+`help`/`version`) to run the migration and consume the sentinel, then
+verifies the post-open `user_version` and aborts loudly (exit 5) on any
+mismatch. A brief hook-failure window between the binary swap and that
+open is accepted, not worked around.
+
+The full ordered six-step flow — including how `<target>` is learned
+from the binary's own refusal message and why `list` rather than
+`help`/`version` is the warm-up verb — is documented in
+`skills/install-agent-director/SKILL.md` ("Schema migration: the
+six-step sentinel flow"), the canonical admin-facing home for the
+install flow. The store-side gate contract (sentinel path/shape, strict
+parsing, one-shot consume-on-success, audit trail) lives in
+docs/migration-guide.md §1a.
+
+**Sentinel semantics (in brief; canonical in migration-guide.md §1a).**
+The sentinel co-locates with `state.db`, names exactly one `from → to`
+transition, and is honored only when *both* ends match. It is consumed
+on the successful open and only then; a refused open runs zero DDL and
+leaves both `state.db` and the sentinel byte-identical, never partially
+honored.
+
+**Who writes it.** The sentinel is written *only* by a human operator or
+by this install skill — never by any agent. It is deliberately **absent
+from every agent-facing surface** (help text, MCP tool descriptions, the
+npm/customer README, the migration error message); those route the
+operator to *this install flow* and nowhere else. `architecture.md`,
+`install-agent-director/SKILL.md`, and docs/migration-guide.md are
+internal/admin-facing, which is why they may name it.
 
 ### Pattern B fallback (postinstall skipped)
 
@@ -1176,6 +1248,9 @@ agent-director with one script.
 ├── state.db                       (mode 0600)
 ├── state.db-wal                   (when WAL is active)
 ├── state.db-shm
+├── migrate-authorized             (mode 0600; transient — present only
+│                                    between an install's sentinel write
+│                                    and the store open that consumes it)
 ├── templates/                     (mode 0700; created lazily)
 │   └── <name>.toml                (mode 0600)
 ├── config.toml                    (operator-owned; not created here)
@@ -1191,8 +1266,11 @@ agent-director with one script.
 
 ### Upgrade-safety pattern
 
-The install script uses the standard single-binary CLI install
-pattern (gh, kubectl, terraform): write to a sibling temp path,
+Two concerns compose here: swapping the binary safely, and migrating
+`state.db` safely across that swap.
+
+**Binary swap.** The install script uses the standard single-binary CLI
+install pattern (gh, kubectl, terraform): write to a sibling temp path,
 then `mv` over the target. `mv` within one filesystem is atomic at
 the inode level — concurrent readers see either the old binary or
 the new, never half. A running process holds the old inode, so an
@@ -1210,6 +1288,18 @@ previous tag via `install.sh --from-release v<old>`. The
 version-manager pattern (canonical symlink → versioned files) was
 considered and rejected for b.43y: it only earns its complexity when
 multiple concurrent versions are actually being managed.
+
+**Schema migration across the swap.** Once the newer binary is in
+place, an older `state.db` cannot be opened until the install authorizes
+the migration with a one-shot `migrate-authorized` sentinel — the flow
+is described under **Pattern B** above ("Schema migration at
+install-time") and, in full, in
+`skills/install-agent-director/SKILL.md`. The upgrade-safety caveat: because
+migrations are forward-only, rolling the *binary* back after the DB has
+migrated forward makes the older binary newer-than-DB in reverse and
+surfaces `ErrSchemaMismatch`; roll back only before letting the new
+binary migrate the DB, or restore an older `state.db` from your own
+backup.
 
 ### Uninstall semantics
 
@@ -1231,11 +1321,16 @@ edits to `config.toml` are lost.
 
 `ErrSchemaMismatch` fires when the store's `user_version` is not recognized by
 this binary — typically meaning the store was written by a newer binary
-(`user_version > 2`). Note: upgrading from v1 to v2 does **not** trigger
-`ErrSchemaMismatch` — the v1→v2 migration runs automatically on `Open` and
-preserves `spawns` rows.
+(`user_version > 3`). Note: an older-than-binary store (v1 or v2) does **not**
+trigger `ErrSchemaMismatch` — it surfaces the distinct
+`ErrSchemaMigrationRequired` instead. The store does not silently upgrade an
+older DB on `Open`: the open is refused with `ErrSchemaMigrationRequired`
+unless an administrator has placed a valid `migrate-authorized` sentinel next
+to the DB file, in which case the gated migration chain runs (v1→v2, DROP+CREATE
+`permission_requests` with v1 rows discarded; v2→v3, five `spawns` ADD COLUMN
+preserving every row).
 
-If `agent-director help` reports `ErrSchemaMismatch` after an upgrade, the
+If a store-opening verb (e.g. `agent-director list`) reports `ErrSchemaMismatch` after an upgrade, the
 recovery is `rm ~/.agent-director/state.db*` followed by a re-run. Spawn
 history in the DB is lost; JSONL transcripts under `~/.claude/projects/`
 survive independently and can be re-resumed by id via `agent-director resume`.
@@ -1771,13 +1866,22 @@ line shape, and access patterns.
 
 ### Location
 
-Default path: `~/.agent-director/ad-trail.jsonl`
+Fixed path: `~/.agent-director/ad-trail.jsonl`
 
-The directory is controlled by the `AGENT_DIRECTOR_STATE_DIR` environment
-variable (default: `~/.agent-director`). The filename `ad-trail.jsonl` is
-hardcoded and never changes. Setting `AGENT_DIRECTOR_STATE_DIR` also
-redirects any future per-installation state files that land in the same
-directory.
+agent-director state lives at `~/.agent-director`, resolved from the
+invocation's effective home. The trail file is always
+`~/.agent-director/ad-trail.jsonl` — both the `~/.agent-director` directory
+name and the `ad-trail.jsonl` filename are fixed. The **persistent
+environment-variable relocation switch is gone**: no env var and no config
+key relocates agent-director state. The store and trail always resolve from
+the invocation's effective home (via `$HOME` / `os.UserHomeDir`) or an
+explicit `--store-path`. The documented per-invocation global flags `--home`
+and `--store-path` (see the argv recipe above) are request-scoped
+*targeting* — they point one invocation at a different home or store DB, not
+a persistent relocation mechanism — and the trail follows the effective
+home. Isolation — for tests or otherwise — is therefore achieved by running
+inside the sandbox, where the resolved `~/.agent-director` does not exist,
+never by relying on redirection.
 
 **This is a plain on-disk JSONL file.** It is NOT a SQLite table, NOT a
 column on `state.db`, and NOT any other database. Every line is one
@@ -1789,24 +1893,22 @@ lazy-opened on the first `Emit` call (SR-A-7.6).
 
 ### Discoverability
 
-The trail file's fixed path and env-var override are documented here — this
-section is the operator entrypoint (SR-A-6.1). There is no CLI read verb; the
-file is accessed directly with standard shell tools (`tail`, `grep`, `jq`).
+The trail file's fixed path is documented here — this section is the operator
+entrypoint (SR-A-6.1). There is no CLI read verb; the file is accessed directly
+with standard shell tools (`tail`, `grep`, `jq`).
 
-Default path (no env override):
+Relative to the invocation's effective home, the path is always:
 
 ```
 ~/.agent-director/ad-trail.jsonl
 ```
 
-To use a non-default directory, set `AGENT_DIRECTOR_STATE_DIR` before starting
-any AD process. The filename `ad-trail.jsonl` is fixed regardless of the
-directory override:
-
-```sh
-export AGENT_DIRECTOR_STATE_DIR=/var/lib/ad
-# trail file resolves to: /var/lib/ad/ad-trail.jsonl
-```
+`~/.agent-director` is resolved from the effective home (via `$HOME` /
+`os.UserHomeDir`); there is no env var or config key that persistently
+relocates it. The per-invocation `--home` / `--store-path` flags only
+retarget a single invocation, and the trail follows the effective home.
+Operators find the trail at this one path, under whatever home the
+invocation resolves, on every installation.
 
 ### Per-line envelope
 
@@ -1848,7 +1950,7 @@ event families; the eighth is a self-reporting meta event.
 | `ad.spawn.state_transition` | `ad_spawn_store` | One per write to `spawns.state`, including no-ops and soft-refresh ticks (SR-A-2.2, Epic 2) |
 | `ad.row_mutation.committed` | `ad_store` | One per successful write to `permission_requests` (SR-A-2.6, Epic 3) |
 | `ad.decide.called` | `ad_decide` | One per `agent-director decide` invocation, including `ErrAlreadyDecided` no-ops (SR-A-2.4, Epic 4) |
-| `ad.find_missing.tick` | `ad_find_missing` | One per row touched by find-missing AND per degraded-mode refusal (SR-A-2.5, Epic 5) |
+| `ad.find_missing.tick` | `ad_find_missing` | One per row find-missing reconciles or flags: `reconciliation_reason=proc_absent` per row marked missing, `permission_orphan_closeout` per orphaned permission_requests row closed on that mark, and `probe_eacces` per live row that first transitions into the unverified (permission-walled) state — one tick per NULL→set transition only, never on a repeat sweep. There is no global-refusal tick (the old degraded-mode refusal is gone; unreadable rows are skipped and surfaced per-row). (SR-A-2.5, Epic 5; SR-7/SR-8) |
 | `ad.relay_attempt.completed` | `relay_hook` | One per worker permission-relay attempt (SR-A-2.3, Epic 6) |
 | `ad.resume.observed` | `ad_polling` | One per hook-resume back to Claude Code (SR-A-2.7, Epic 7) |
 | `ad.trail_meta.emit_failed` | `ad_trail_meta` | Self-reporting envelope written when a primary emit fails — carries `original_event` and `error_class` (SR-A-3.2) |
@@ -1938,7 +2040,11 @@ mutation, no half-created tmux session):
    Spawn killed before its first SessionStart hook fired has no
    rotated session id to point `--resume` at.
 4. JSONL transcript file exists on disk → otherwise
-   `ErrJsonlMissing`. Pure `os.Stat` pre-flight; no read.
+   `ErrJsonlMissing`. Pure `os.Stat` pre-flight; no read. The path
+   checked is the persisted `jsonl_path` when present (the true path
+   even when the Spawn ran under a custom `CLAUDE_CONFIG_DIR`); legacy
+   rows with an empty `jsonl_path` fall back to the computed slug-rule
+   path (see [JSONL path resolver](#jsonl-path-resolver-internalspawnjsonlgo)).
 5. Canonical tmux session name is free → otherwise the wrapped
    `tmux.ErrTmuxSessionCreate` sentinel. Resume does NOT auto-kill
    a stale session; the operator cleans up manually.
@@ -1987,6 +2093,16 @@ the new id, pointing at the new JSONL.
 
 ### JSONL path resolver (`internal/spawn/jsonl.go`)
 
+The resume pre-flight prefers the transcript path **persisted on the
+row** (`jsonl_path`, stamped by the SessionStart hook). That path is
+authoritative — it records where Claude Code actually wrote the
+transcript, including under a custom `CLAUDE_CONFIG_DIR` where the
+computed layout below would be wrong.
+
+`spawn.JsonlPath` is the **legacy fallback**, used only when the row's
+`jsonl_path` is empty (rows written before the hook persisted it). It
+reconstructs the default layout from `cwd` + `session_id`:
+
 ```
 ~/.claude/projects/<slug(cwd)>/<session_id>.jsonl
 ```
@@ -2001,16 +2117,22 @@ by Claude Code, so the two slug rules are not symmetric. Pinned by
 
 ### What's not carried over
 
-Two pieces of state are NOT stored on the row and are not
-reconstructed on resume:
+`Permissions` is the sole piece of spawn state NOT reconstructed on
+resume:
 
 - **`Permissions`** — the synthesized `--settings` JSON carries fresh
   hook entries on resume but no `permissions` block. Resume relies
   on Claude Code's tier-stack permissions.
-- **`ExtraEnv`** — the original spawn's extra env vars (e.g.
-  `ANTHROPIC_API_KEY`) are NOT replayed. Auth on resume comes from
-  the caller's shell env, which tmux propagates to the new session
-  by default.
+
+`ExtraEnv` **is** carried over. The original spawn's extra env vars
+(e.g. `ANTHROPIC_API_KEY`, `CLAUDE_CONFIG_DIR`) are persisted on the
+row at launch and restored by `spawn.Relaunch` (`in.Row.ExtraEnv`,
+decoded by `GetSpawn`), so a resurrected Spawn re-enters the same
+auth/config context as the original — no dependence on whatever the
+resuming caller's shell env happens to hold. Persistence adds no new
+exposure tier: the values live only in the owner-only state DB
+(0600 file / 0700 dir) alongside the rest of the row, and `ExtraEnv`
+is not surfaced as an API-visible field.
 
 ## Crash recovery and DB hygiene
 
@@ -2031,8 +2153,16 @@ Per-OS implementations are selected by build tags:
   numeric PID entry. The `environ` pseudo-file is the NUL-separated
   `KEY=VAL` block the kernel exposes. Default permissions make it
   owner-readable only — that's load-bearing: a `find-missing` run as
-  the wrong user simply can't see the env vars and falls into the
-  degraded-mode guard rather than corrupting state.
+  the wrong user simply can't read those env vars. Rows carrying a
+  concrete pid + starttime no longer depend on this probe set at all —
+  they get an individual, evidence-based verdict through the
+  `LivenessChecker` seam (see
+  [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)),
+  whose Linux impl resolves an `environ` permission wall to an UNKNOWN
+  verdict and skips just that row rather than misreporting it. Only the
+  partial-identity rows (NULL pid or NULL starttime) still fall back to
+  this probe set, and an unreadable `environ` there means the row is
+  left in place, never marked dead.
 
 - **macOS (`probe_darwin.go`)** — `sysctl("kern.proc.all")` returns
   the kinfo_proc array; per PID, `sysctl("kern.procargs2", pid)`
@@ -2041,25 +2171,51 @@ Per-OS implementations are selected by build tags:
   `envp[0..]`. `envFromProcArgs2` skips past the argv section to
   reach the env, then scans for the prefix.
 
-  The kinfo_proc walker (`parse_kinfo.go`) carries two XNU-version-
-  sensitive constants: `kinfoProcSize` (sizeof struct kinfo_proc) and
-  `kinfoProcPIDOffset` (byte offset of extern_proc.p_pid). Both are
-  pinned to XNU 11.x (macOS 14 / 15) and are NOT a kernel ABI
-  guarantee — a future macOS major bump that resizes the struct will
-  silently drift the stride-based walker. The parser's plausibility
-  guard catches that: if more than 10% of decoded PIDs fall outside
-  `[1, 4_194_304]`, `parsePIDsFromSysctlBuf` returns
-  `ErrProbeUnsupported` and `find-missing` fails closed rather than
-  emitting a garbage probe set.
+  The kinfo_proc walker (`parse_kinfo.go`) carries a family of XNU-
+  version-sensitive constants. Two anchor the stride-based PID walk:
+  `kinfoProcSize` (sizeof struct kinfo_proc = 648) and
+  `kinfoProcPIDOffset` (byte offset of extern_proc.p_pid). Three more
+  pin the per-entry identity fields the probe extracts: `kinfoEprocPPIDOffset`
+  (byte offset of kp_eproc.e_ppid = `sizeof(extern_proc)=296` +
+  `offsetof(eproc, e_ppid)=264` = 560) and the start-time pair
+  `kinfoProcStartSecOffset`/`kinfoProcStartUsecOffset` (0 and 8 — the
+  `kp_proc.p_starttime` timeval aliases the head of extern_proc's leading
+  `p_un` union, so `tv_sec` sits at the very start of the entry and `tv_usec`
+  8 bytes in). All five are pinned to XNU 11.x (macOS 14 / 15) off the same
+  LP64 header basis and are NOT a kernel ABI guarantee — a future macOS major
+  bump that resizes the struct will silently drift both the stride-based
+  walker and the identity offsets.
+
+  Two independent guards catch that drift, and they carry *opposite*
+  fail-semantics on purpose. The whole-buffer PID walker fails **closed**:
+  if more than 10% of decoded PIDs fall outside `[1, 4_194_304]`,
+  `parsePIDsFromSysctlBuf` returns `ErrProbeUnsupported` and `find-missing`
+  refuses to emit a garbage probe set. The per-entry identity extractors
+  (`parseKinfoPPID`, `parseKinfoStartTime`) fail **open**: when an entry's
+  bytes fail their field plausibility guards they return the distinct
+  `ErrKinfoLayoutDrift` sentinel, which deliberately does NOT wrap
+  `ErrProbeUnsupported` — drift here maps to unknown identity (SessionStart
+  records NULL pid+starttime and proceeds) rather than a hard failure.
+  Keeping the sentinels separate stops `errors.Is(err, ErrProbeUnsupported)`
+  from also matching identity drift and re-importing fail-closed semantics.
 
   **macOS-major bump policy.** When supporting a new macOS major:
   compile the matching XNU sources (Apple publishes them at
   `apple-oss-distributions/xnu`), re-derive `kinfoProcSize` +
-  `kinfoProcPIDOffset` from `<bsd/sys/proc.h>` + `<bsd/sys/sysctl.h>`,
-  refresh the constant comments in `parse_kinfo.go`, and re-run
-  `GOOS=darwin GOARCH=arm64 go build ./...` plus the prober's
-  integration test under that macOS version. The plausibility guard
-  is a safety net, not a substitute for the bump.
+  `kinfoProcPIDOffset` **and** the identity offsets
+  `kinfoEprocPPIDOffset` / `kinfoProcStartSecOffset` /
+  `kinfoProcStartUsecOffset` from `<bsd/sys/proc.h>` +
+  `<bsd/sys/sysctl.h>`, refresh the constant comments in `parse_kinfo.go`,
+  and re-run `GOOS=darwin GOARCH=arm64 go build ./...` plus the prober's
+  integration test under that macOS version. The plausibility guards are
+  a safety net, not a substitute for the bump. The same
+  `kinfoProcStartSecOffset`/`kinfoProcStartUsecOffset` pair now also feeds
+  the per-row liveness checker's starttime comparison (`checker_darwin_core.go`
+  parses the LIVE pid's `p_starttime` via `parseKinfoStartTime` and compares
+  it to the stored `proc_starttime`), so a bump that drifts those offsets
+  affects the checker as well as the probe. That path is fail-open by the
+  same rule: a `parseKinfoStartTime` layout-drift (`ErrKinfoLayoutDrift`)
+  or any unpinned sysctl errno classifies to UNKNOWN, never provably-dead.
 
 - **Other** — the fallback returns `ErrProbeUnsupported` so
   `find-missing` fails closed rather than silently treating "no
@@ -2068,27 +2224,133 @@ Per-OS implementations are selected by build tags:
 Permission-denied / process-gone errors mid-walk are skipped silently;
 a single foreign-owned process can't poison the whole probe.
 
-### Degraded-mode guard (SRD §14.6)
+### Degraded-mode reconciliation + cron user
 
-When the probe returns zero IDs AND the DB has ≥1 live-state row,
-`find-missing` writes nothing and logs a warning to
-`cfg.log.error_log_path`. The legitimate 0-live-rows + 0-probe-IDs
-case is distinguished and treated as a fast no-op success.
+**There is no global degraded-mode refusal.** The old guard — "probe
+returned zero IDs while the DB holds ≥1 live row → write nothing, log a
+warning" — has been removed (SR-7/SR-8). It over-refused: after a full
+reboot the probe set is legitimately empty even though every recorded row
+is genuinely dead, and a single unreadable process used to block the whole
+sweep. `find-missing` now reconciles **per row on evidence**, and an
+unreadable row is skipped and surfaced as unverified rather than blocking
+anything.
+
+**Per-row evidence model.** `find-missing` lists every live-state identity
+(`ListLiveSpawnIdentities` — each row's `claude_instance_id` plus its
+recorded `pid` + `proc_starttime`) and partitions on identity completeness:
+
+- **Full identity (pid AND starttime recorded)** — the row gets an
+  evidence-based verdict from the `LivenessChecker` seam
+  (`internal/probe`, `NewChecker()`), which returns one of three verdicts:
+  - *provably-dead* → mark missing (see the pinned marking order below).
+  - *verified-alive* → skip and clear any stale liveness fields.
+  - *unknown* → skip THIS ROW ONLY, set the liveness metadata, and record
+    the id as unverified.
+- **Partial/absent identity (NULL pid OR NULL starttime)** — the row falls
+  back to the environ **probe-set diff**: a live id absent from
+  `probe.Probe()`'s set is marked missing. This is the sole remaining
+  consumer of the environ prober. There is **no per-row skip here** — a
+  partial-identity row carries no pid/starttime evidence to fall back on, so
+  absence from the probe set is the *only* signal, and any such row not in the
+  set IS marked missing. That includes the case where the invoking user can't
+  read the target processes' environ (a wrong-user or empty-probe run): every
+  partial/NULL-identity live row is then absent from the set and gets marked.
+  This is the intended post-reboot behavior (the probe set is legitimately
+  empty and those rows are genuinely dead) — and precisely why same-user
+  scheduling matters (see the cron user story).
+
+**Pinned per-OS errno mapping (SR-7.4) — the cardinal rule is
+UNKNOWN-never-dead.** Only positive, pinned evidence yields provably-dead;
+ANY unexpected errno or parse/layout-drift failure resolves to UNKNOWN.
+The tables live inside the per-OS checker impls
+(`checker_linux_core.go`, `checker_darwin_core.go`), expressed as pure
+`classify{Linux,Darwin}Errno` functions so the tables are unit-testable
+off any OS:
+
+| Evidence | Linux (`/proc`) | macOS (sysctl) | Verdict |
+| --- | --- | --- | --- |
+| Process-table entry absent | `stat` ENOENT/ESRCH | KERN_PROC_PID ESRCH / empty | provably-dead |
+| Recorded starttime ≠ live starttime (pid reuse) | stat field 22 mismatch | `p_starttime` mismatch | provably-dead |
+| Can't read the process-table entry | `stat` EACCES/EPERM | KERN_PROC_PID EACCES/EPERM | unknown |
+| starttime matches, env readable but LACKING the instance id | environ scan | PROCARGS2 env scan | provably-dead (tiebreaker) |
+| starttime matches, env unreadable (permission wall) | environ EACCES/EPERM | PROCARGS2 EACCES/EPERM | **verified-alive** |
+| starttime matches, env readable and HAS the instance id | environ scan | PROCARGS2 env scan | verified-alive |
+| Any other errno, malformed stat, or `ErrKinfoLayoutDrift` | — | — | **unknown (never dead)** |
+
+The env-permission-wall row is the load-bearing case: pid + starttime
+already proved the tracked process is running, so an unreadable env is
+*verified-alive*, not unknown — we simply couldn't run the id tiebreaker.
+The checker never returns an error; every failure mode folds into UNKNOWN
+per the fail-open contract.
+
+**Liveness metadata fields + unverified surfacing.** Unknown liveness is
+row metadata, never a lifecycle state — the `state` enum is untouched. Two
+nullable columns carry it: `liveness_unverified_since` (set on the FIRST
+EACCES sweep, preserved verbatim on repeats) and `liveness_note` (e.g.
+`probe_eacces`). `SetLivenessUnverified` writes both in one guarded UPDATE
+that fires only when `liveness_unverified_since` is currently NULL; its
+returned bool is the sole NULL→set signal. The fields are cleared when the
+row is later verified-alive, immediately after it is marked missing, and on
+every hook row-UPDATE path. `FindMissingResult` carries `unverified`
+(count) and `unverified_ids` (sorted, `[]` never null) alongside
+`count`/`ids`, and the `list`/`get` verbs expose the two liveness fields as
+additive nullable fields, so an operator sees exactly which rows were
+skipped for lack of evidence.
+
+**Marking order.** A provably-dead (or fallback-absent) row is reconciled
+in a pinned sequence: `MarkSpawnMissing` (the unchanged primitive; returns
+the prior state so a no-op on an absent/terminal row writes nothing
+downstream) → `ClearLivenessUnverified` → one `ad.find_missing.tick`
+(`reconciliation_reason=proc_absent`) → `CloseOrphanedPermissionRequests`
+(which fail-closes any relay polling loop and emits its own
+`permission_orphan_closeout` tick per closed row). The unverified path
+emits exactly one `ad.find_missing.tick` (`reconciliation_reason=probe_eacces`)
+per NULL→set transition and nothing on repeats. Per-row store/checker
+errors are logged and skipped; the sweep never aborts on one bad row, and a
+trail-emit failure never changes the sweep's return.
+
+**Cron user story.** `find-missing` still assumes it runs as the user that
+owns the Spawns (or as root), and a user mismatch no longer *corrupts or
+refuses* — but the two identity classes react to a mismatch very
+differently, which is exactly why the run-as-owner rule still matters.
+Full-identity rows (pid + starttime recorded) the invoking user can't read
+hit the env permission wall and are surfaced as **unverified**
+(verified-alive if pid + starttime matched, unknown otherwise) — never
+silently marked missing; the per-row skip protects them. Partial/NULL-identity
+rows have **no per-row evidence** to skip on, so their sole signal is the
+environ probe-set diff — and a wrong-user (or otherwise empty) probe set
+leaves every one of them absent from the set, so they **are marked missing**.
+That is correct after a real reboot (the probe set is legitimately empty and
+those rows are dead), but under a mere user mismatch it would wrongly mark
+still-live partial-identity Spawns. The recommended operator setup is
+therefore load-bearing, not cosmetic: a **systemd user-timer or a personal
+crontab** — not a system-level cron — so the userland identity matches the
+Spawn-launching identity, full-identity rows get real verdicts instead of a
+wall of unverified metadata, and partial-identity rows are diffed against a
+probe set that can actually see them.
 
 ### `find-missing`
 
 `pkg/api/find_missing.go`:
 
-1. `ListLiveSpawnIDs` returns every row where `state NOT IN (ended,
-   missing)`. This includes `pending` — SRD §5.2 explicitly scans
-   pending rows so a Spawn whose tmux died before SessionStart fired
-   still reconciles correctly.
-2. `probe.Probe()` collects live IDs.
-3. Degraded-mode guard fires when warranted (see above).
-4. Per row in the set-difference: `MarkSpawnMissing` sets
-   `state='missing'` and `ended_at = now`. Per-row failures (e.g.
-   transient SQLite I/O error) are logged and the sweep continues —
-   one bad row does not abort the others.
+1. `ListLiveSpawnIdentities` returns every row where `state NOT IN (ended,
+   missing)`, each carrying its recorded `pid` + `proc_starttime`. This
+   includes `pending` — SRD §5.2 explicitly scans pending rows so a Spawn
+   whose tmux died before SessionStart fired still reconciles correctly.
+2. Rows are partitioned by identity completeness (see
+   [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)).
+3. Full-identity rows get a per-row `LivenessChecker` verdict:
+   provably-dead → mark missing; verified-alive → clear stale liveness
+   fields; unknown → skip that row only, set `liveness_unverified_since` +
+   `liveness_note`, and record the id in `unverified_ids`. There is no
+   global refusal — an unreadable row is surfaced, not a blocker.
+4. Partial-identity rows fall back to `probe.Probe()`'s set: a live id
+   absent from the set is marked missing.
+5. Each marked row runs the pinned marking order (`MarkSpawnMissing` →
+   `ClearLivenessUnverified` → `proc_absent` tick →
+   `CloseOrphanedPermissionRequests`). Per-row failures (e.g. transient
+   SQLite I/O error) are logged and the sweep continues — one bad row does
+   not abort the others.
 
 The verb does NOT touch tmux. A row marked `missing` may still have
 an orphaned tmux session if (somehow) the env-var check misfired
@@ -2128,15 +2390,19 @@ by the schema's `ON DELETE CASCADE`.
 ### Cron user invariant
 
 All three verbs assume they run as the same user that owns the
-Spawns (or as root). `find-missing` exposes mismatches via the
-degraded-mode guard. `expire` and `delete` are pure DB operations
-and don't depend on probe permissions; running them as the wrong
-user is harmless (they just operate on whatever rows the DB happens
-to hold).
+Spawns (or as root). `find-missing` no longer refuses on a user
+mismatch: rows it can't read are surfaced per-row as **unverified**
+(or verified-alive when pid + starttime already matched) rather than
+corrupted or globally skipped — see
+[Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)
+for the full story. `expire` and `delete` are pure DB operations and
+don't depend on probe permissions; running them as the wrong user is
+harmless (they just operate on whatever rows the DB happens to hold).
 
 The recommended operator setup is a systemd user-timer or a personal
 crontab — not a system-level cron — so the userland identity matches
-the Spawn-launching identity automatically.
+the Spawn-launching identity automatically and rows get real liveness
+verdicts instead of a wall of unverified metadata.
 
 ## Stop semantics
 
@@ -2284,15 +2550,22 @@ detects this case via the presence of `pkg/api/go.mod`.
 
 ### ErrSchemaMismatch on upgrade
 
-Starting with v2, schema upgrades run automatically on `Open`: a v1 database
-upgrades to v2 silently (DROP+CREATE `permission_requests`, no row
-preservation). `ErrSchemaMismatch` only fires when `user_version > 2` —
-meaning the store was written by a binary newer than the current one.
+Schema upgrades are **gated**, not automatic: an older-than-binary database
+(v1 or v2) is refused on `Open` with `ErrSchemaMigrationRequired` unless an
+administrator has placed a valid `migrate-authorized` sentinel next to the DB
+file. Only then does the migration chain run: the v1→v2 hop (DROP+CREATE
+`permission_requests`, no row preservation) and/or the v2→v3 hop (five
+`spawns` ADD COLUMN, no backfill), walking from the DB's `user_version` up to
+`schemaVersion` in one pass. `ErrSchemaMismatch` only fires when
+`user_version > 3` — meaning the store was written by a binary newer than the
+current one.
 
-Bumping `schemaVersion` beyond 2 requires:
+Bumping `schemaVersion` beyond 3 requires:
 
-1. Add a `migrateVNtoVN1` path in `internal/store/schema.go` and wire it into
-   `ensureSchema` (following the `migrateV1toV2` pattern).
+1. Add a `migrateVNtoVN1` hop in `internal/store/schema.go` and append a
+   `migrationStep{from: N, apply: migrateVNtoVN1}` entry to the `migrationSteps`
+   registry (following the `migrateV1toV2` pattern). The chain engine walks the
+   registry automatically — do not add per-version switch arms.
 2. Document the schema change in the release notes.
 3. Operators upgrading from a version older than the migration path's base must
    `rm ~/.agent-director/state.db*` post-upgrade.

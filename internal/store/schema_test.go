@@ -40,7 +40,7 @@ func openRaw(t *testing.T, path string) *sql.DB {
 	return db
 }
 
-func TestOpenCreatesSchemaV2(t *testing.T) {
+func TestOpenCreatesCurrentSchema(t *testing.T) {
 	s, path := openTempStore(t)
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -51,8 +51,8 @@ func TestOpenCreatesSchemaV2(t *testing.T) {
 	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if version != 2 {
-		t.Fatalf("user_version = %d, want 2", version)
+	if version != schemaVersion {
+		t.Fatalf("user_version = %d, want %d", version, schemaVersion)
 	}
 }
 
@@ -73,8 +73,8 @@ func TestOpenIsIdempotent(t *testing.T) {
 	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if version != 2 {
-		t.Fatalf("user_version = %d after two opens, want 2", version)
+	if version != schemaVersion {
+		t.Fatalf("user_version = %d after two opens, want %d", version, schemaVersion)
 	}
 }
 
@@ -247,9 +247,24 @@ func uniqueIndexCols(t *testing.T, db *sql.DB, table string) map[string][]string
 	return result
 }
 
+// TestSchemaV2Migration proves the v1→v2 migration CONTENT persists through the
+// full authorized chain to current. Post-v3 a v1 open chains v1→v2→v3 in one
+// open (sentinel {1,schemaVersion}); this test keeps its focus on the v2
+// artifacts (request_token column, composite UNIQUE, v2 indexes, no v1
+// backfill) and asserts they SURVIVE at the current version — the v2 step's
+// output is not clobbered by a later step. The end-to-end chain landing + v3
+// column assertions live in TestSchemaChain_V1toV3_EndToEnd.
 func TestSchemaV2Migration(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.db")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.db")
 	openV1DB(t, path)
+
+	// Under the gated model an older-than-binary open refuses unless an
+	// administrator authorization sentinel exact-matches BOTH ends. Authorize
+	// the v1→current chain (to == schemaVersion) so this test still proves the
+	// v2 migration CONTENT (column/index/no-backfill assertions below) persists
+	// at the current version rather than silent auto-migration on open.
+	writeSentinel(t, dir, 1, schemaVersion)
 
 	// Seed a spawn row + one permission_requests row into the v1 schema so the
 	// "0 rows after migration" assertion is non-vacuous: it verifies that DROP
@@ -285,13 +300,13 @@ func TestSchemaV2Migration(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 
-	// user_version must be 2 post-migration.
+	// user_version must be current post-chain (v1→…→schemaVersion in one open).
 	var version int
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if version != 2 {
-		t.Fatalf("user_version = %d, want 2", version)
+	if version != schemaVersion {
+		t.Fatalf("user_version = %d, want %d", version, schemaVersion)
 	}
 
 	// request_token column must exist.

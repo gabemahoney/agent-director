@@ -62,6 +62,26 @@ type Spawn struct {
 	StartedAt        time.Time
 	LastSeenAt       time.Time
 	EndedAt          *time.Time
+
+	// ExtraEnv holds the spawn's captured extra environment (schema v3,
+	// extra_env column). Decoded like Labels: empty-string / '{}' / a
+	// migrated pre-v3 NULL/default all decode to an empty NON-NIL map,
+	// never nil. Store-internal only — never surfaced in any API row shape.
+	ExtraEnv map[string]string
+
+	// PID, ProcStarttime, LivenessUnverifiedSince, and LivenessNote are the
+	// schema-v3 identity/liveness columns, scanned via COALESCE per the
+	// jsonl_path/claude_session_id precedent.
+	//
+	// NULL semantics: a zero value ("" for the string fields, 0 for PID)
+	// means the underlying SQL column is NULL. Writers MUST store NULL for
+	// the cleared/unset state, never an empty string or 0 — this keeps
+	// SR-8.2's "cleared = set NULL" semantics unambiguous under COALESCE
+	// scanning (a real pid is always ≥1).
+	PID                     int
+	ProcStarttime           string
+	LivenessUnverifiedSince string
+	LivenessNote            string
 }
 
 // InsertPending writes a new row in `pending` state. Used by spawn.Launch
@@ -81,12 +101,16 @@ func (s *Store) InsertPending(sp Spawn) error {
 	if err != nil {
 		return fmt.Errorf("store: encode labels: %w", err)
 	}
+	extraEnvJSON, err := encodeExtraEnv(sp.ExtraEnv)
+	if err != nil {
+		return fmt.Errorf("store: encode extra_env: %w", err)
+	}
 
 	const stmt = `
         INSERT INTO spawns (
             claude_instance_id, parent_id, state, cwd, tmux_session_name,
-            claude_args, relay_mode, labels
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            claude_args, relay_mode, labels, extra_env
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
 	var parent any
 	if sp.ParentID != "" {
@@ -97,7 +121,7 @@ func (s *Store) InsertPending(sp Spawn) error {
 	_, err = s.db.Exec(stmt,
 		sp.ClaudeInstanceID, parent, StatePending,
 		sp.CWD, sp.TmuxSessionName,
-		argsJSON, sp.RelayMode, labelsJSON,
+		argsJSON, sp.RelayMode, labelsJSON, extraEnvJSON,
 	)
 	if err != nil {
 		var serr *sqlite.Error
@@ -119,22 +143,28 @@ func (s *Store) GetSpawn(instanceID string) (Spawn, error) {
         SELECT claude_instance_id, COALESCE(parent_id, ''), state, cwd,
                tmux_session_name, claude_args, relay_mode,
                COALESCE(jsonl_path, ''), COALESCE(claude_session_id, ''),
-               labels, started_at, last_seen_at, ended_at
+               labels, started_at, last_seen_at, ended_at,
+               COALESCE(pid, 0), COALESCE(proc_starttime, ''),
+               COALESCE(liveness_unverified_since, ''),
+               COALESCE(liveness_note, ''), extra_env
           FROM spawns
          WHERE claude_instance_id = ?
     `
 	row := s.db.QueryRow(q, instanceID)
 	var (
-		sp         Spawn
-		argsJSON   string
-		labelsJSON string
-		endedAt    sql.NullTime
+		sp           Spawn
+		argsJSON     string
+		labelsJSON   string
+		endedAt      sql.NullTime
+		extraEnvJSON string
 	)
 	err := row.Scan(
 		&sp.ClaudeInstanceID, &sp.ParentID, &sp.State, &sp.CWD,
 		&sp.TmuxSessionName, &argsJSON, &sp.RelayMode,
 		&sp.JSONLPath, &sp.ClaudeSessionID,
 		&labelsJSON, &sp.StartedAt, &sp.LastSeenAt, &endedAt,
+		&sp.PID, &sp.ProcStarttime, &sp.LivenessUnverifiedSince,
+		&sp.LivenessNote, &extraEnvJSON,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Spawn{}, fmt.Errorf("%w: %s", ErrSpawnNotFound, instanceID)
@@ -150,6 +180,9 @@ func (s *Store) GetSpawn(instanceID string) (Spawn, error) {
 	}
 	if sp.Labels, err = decodeLabels(labelsJSON); err != nil {
 		return Spawn{}, fmt.Errorf("store: decode labels: %w", err)
+	}
+	if sp.ExtraEnv, err = decodeExtraEnv(extraEnvJSON); err != nil {
+		return Spawn{}, fmt.Errorf("store: decode extra_env: %w", err)
 	}
 	return sp, nil
 }
@@ -273,7 +306,9 @@ func (s *Store) ApplyHookTransitionResult(instanceID, newState string, softRefre
 		if !found {
 			return UpsertNoChange, nil
 		}
-		res, err := s.db.Exec(`UPDATE spawns SET last_seen_at = CURRENT_TIMESTAMP WHERE claude_instance_id = ?`, instanceID)
+		res, err := s.db.Exec(`UPDATE spawns SET last_seen_at = CURRENT_TIMESTAMP,
+		                  liveness_unverified_since = NULL, liveness_note = NULL
+		                WHERE claude_instance_id = ?`, instanceID)
 		if err != nil {
 			return UpsertError, fmt.Errorf("store: soft refresh: %w", err)
 		}
@@ -305,7 +340,8 @@ func (s *Store) ApplyHookTransitionResult(instanceID, newState string, softRefre
 		}
 		res, err := s.db.Exec(`UPDATE spawns
                       SET state = ?, last_seen_at = CURRENT_TIMESTAMP,
-                          ended_at = CURRENT_TIMESTAMP
+                          ended_at = CURRENT_TIMESTAMP,
+                          liveness_unverified_since = NULL, liveness_note = NULL
                     WHERE claude_instance_id = ?`, newState, instanceID)
 		if err != nil {
 			return UpsertError, fmt.Errorf("store: ended transition: %w", err)
@@ -376,7 +412,8 @@ func (s *Store) ApplyHookTransitionResult(instanceID, newState string, softRefre
 	}
 	res, err := s.db.Exec(`UPDATE spawns
                   SET state = ?, last_seen_at = CURRENT_TIMESTAMP,
-                      ended_at = NULL
+                      ended_at = NULL,
+                      liveness_unverified_since = NULL, liveness_note = NULL
                 WHERE claude_instance_id = ?`, newState, instanceID)
 	if err != nil {
 		return UpsertError, fmt.Errorf("store: state transition: %w", err)
@@ -399,14 +436,70 @@ func (s *Store) ApplyHookTransitionResult(instanceID, newState string, softRefre
 	return UpsertUpdated, nil
 }
 
-// SetSessionID writes the claude_session_id column. Used by the
-// SessionStart hook after extracting the UUID from transcript_path.
-// A missing row is a no-op (fail-open per SRD §3.2).
-func (s *Store) SetSessionID(instanceID, sessionID string) error {
-	const q = `UPDATE spawns SET claude_session_id = ? WHERE claude_instance_id = ?`
-	_, err := s.db.Exec(q, sessionID, instanceID)
+// RecordSessionStartIdentity performs the single atomic SessionStart write
+// widening SetSessionID to cover the four columns the SessionStart hook
+// records: claude_session_id, jsonl_path, pid, proc_starttime. Invoked once
+// per SessionStart (SR-6.5/SR-9.1). A missing row is a fail-open no-op per
+// SRD §3.2, exactly like the SetSessionID it replaces.
+//
+// Column semantics (PM-mandated):
+//   - pid / proc_starttime are ALWAYS written — fresh captured values, or
+//     SQL NULL when identity capture failed. Never leave stale identity: a
+//     stale pid would let Epic hp's per-row liveness check mark a live
+//     resumed spawn provably-dead; NULL routes it to the SR-7.5 fallback.
+//     Absent lands as literal NULL (via any-typed args, the SetParentID
+//     house style), never 0 or "".
+//   - claude_session_id / jsonl_path are written only when the classified
+//     value is non-empty; an empty value preserves the existing column via
+//     COALESCE(?, col). This never clobbers a known session id / path with
+//     garbage — it preserves the extractSessionID contract. Absent is passed
+//     as literal NULL so COALESCE keeps the prior value.
+//
+// pid is passed as any: a positive value writes the int, a non-positive
+// value writes NULL (absent identity), matching the COALESCE(pid, 0) scan
+// convention where 0 means NULL. procStarttime empty → NULL likewise.
+//
+// SessionStart is proof of life (SR-8.2), so this write also clears both
+// liveness columns (liveness_unverified_since / liveness_note → NULL) in the
+// same atomic statement.
+func (s *Store) RecordSessionStartIdentity(instanceID, sessionID, jsonlPath string, pid int, procStarttime string) error {
+	const q = `UPDATE spawns
+	              SET claude_session_id = COALESCE(?, claude_session_id),
+	                  jsonl_path        = COALESCE(?, jsonl_path),
+	                  pid               = ?,
+	                  proc_starttime    = ?,
+	                  liveness_unverified_since = NULL,
+	                  liveness_note     = NULL
+	            WHERE claude_instance_id = ?`
+
+	var sessionArg any
+	if sessionID != "" {
+		sessionArg = sessionID
+	} else {
+		sessionArg = nil
+	}
+	var jsonlArg any
+	if jsonlPath != "" {
+		jsonlArg = jsonlPath
+	} else {
+		jsonlArg = nil
+	}
+	var pidArg any
+	if pid > 0 {
+		pidArg = pid
+	} else {
+		pidArg = nil
+	}
+	var starttimeArg any
+	if procStarttime != "" {
+		starttimeArg = procStarttime
+	} else {
+		starttimeArg = nil
+	}
+
+	_, err := s.db.Exec(q, sessionArg, jsonlArg, pidArg, starttimeArg, instanceID)
 	if err != nil {
-		return fmt.Errorf("store: set session id: %w", err)
+		return fmt.Errorf("store: record session start identity: %w", err)
 	}
 	return nil
 }
@@ -499,4 +592,22 @@ func decodeLabels(blob string) (map[string]string, error) {
 		out = map[string]string{}
 	}
 	return out, nil
+}
+
+// encodeExtraEnv serializes the extra_env string map to a JSON object.
+// Mirrors encodeLabels exactly: a nil map encodes to '{}', so the column
+// always carries a valid JSON object and never NULL or an empty string
+// (persist-all posture — no allowlist, no filtering; the store file is
+// already 0600 in a 0700 dir, so no new exposure tier).
+func encodeExtraEnv(extraEnv map[string]string) (string, error) {
+	return encodeLabels(extraEnv)
+}
+
+// decodeExtraEnv reads the extra_env JSON object column (schema v3) into a
+// string map. Mirrors decodeLabels exactly: an empty string, '{}', or a
+// JSON null all decode to an empty NON-NIL map, so migrated pre-v3 rows and
+// freshly inserted rows never nil-decode. Store-internal only — extra_env is
+// never surfaced in any API row shape.
+func decodeExtraEnv(blob string) (map[string]string, error) {
+	return decodeLabels(blob)
 }

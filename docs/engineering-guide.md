@@ -180,6 +180,21 @@ entirely. The store also chmods the DB 0600 on every open, preventing
 file-permission workarounds. A container whose HOME has no `.agent-director`
 is the only isolation boundary that holds.
 
+**The isolation invariant.** All agent-director state — both the store
+(`state.db`) and the trail (`ad-trail.jsonl`) — lives at `~/.agent-director`,
+resolved from the invocation's effective home. The persistent
+environment-variable relocation switch is gone: no env var and no config key
+relocates that path; state always resolves from the effective home (via
+`$HOME` / `os.UserHomeDir`) or an explicit `--store-path`. The per-invocation
+global flags `--home` and `--store-path` are request-scoped targeting — they
+point one invocation at a different home or store, not a persistent
+relocation mechanism, and the trail follows the effective home. Isolation is
+therefore not something you configure via redirection; it is achieved solely
+by the sandbox, a container whose HOME has no `.agent-director`. Inside that boundary tests
+isolate individual cases by redirecting `$HOME` to a temp directory; that
+`$HOME` redirection is never the outer boundary (it does not stop
+`user.Current()`), only per-test hygiene within the container.
+
 ### The rule: edit on the host, execute in the sandbox
 
 Editing source on the host is always fine — nothing runs. The danger is
@@ -305,24 +320,29 @@ uid mapping still vary by host).
 
 The sandbox removes the ambient system install (a clean HOME with no
 `~/.agent-director`) and shares one `/work` mount across the parallel test
-run. A few suite failures are expected consequences of that isolation, not
-regressions introduced by a change under test:
+run. A caveat to be aware of:
 
-- **`test/smoke/go` canary fires on the trail leak.** Some verbs still emit
-  trail events to `$HOME/.agent-director/ad-trail.jsonl` when
-  `AGENT_DIRECTOR_STATE_DIR` is unset (a b.8dr defect fixed under a separate
-  ticket). In the sandbox that write lands harmlessly in the throwaway
-  container HOME, but the smoke canary correctly reports it and fails the
-  package. This is the sandbox doing its job; it disappears once the trail
-  fallback is fixed.
 - **One bun serialization test is timing-sensitive** (asserts a >5 ms gap
   between serialized spawns); on this fast host it occasionally measures
   ~4 ms and flakes.
-- **`TestFindMissingTrailEmitsDegradedModeSkipTick` (cmd/agent-director)**
-  can fail host-side when live `agent-director` processes are `/proc`-visible.
-  With `--pid=host` they are visible inside the sandbox too, but the test
-  was observed to **pass** in-sandbox; watch it if the degraded-mode logic
-  changes.
+
+The `test/smoke/go` canary — which snapshots the real container HOME's
+`~/.agent-director` before and after the smoke package's `m.Run()` and fails
+if any file appears — is a true regression guard and must stay quiet on a
+clean tree. It previously fired *intermittently* under `go test ./...`, and
+that was a real defect, not expected behaviour: `trail.Default()` is a
+process-wide `sync.Once` singleton that pins its file path from `$HOME` on the
+first `Emit` and never re-resolves. Two test packages
+(`pkg/api/apitest` and `test/envelope-diff`) drove in-process store/verb calls
+that emit trail events without redirecting `$HOME` in a package `TestMain`, so
+their singleton pinned the real container HOME and appended
+`ad-trail.jsonl` there. Because `go test ./...` runs packages in parallel,
+that write sometimes landed inside the smoke canary's before/after window and
+tripped it (and was quiet when the timing missed). Both packages now redirect
+`$HOME` to a temp dir in their `TestMain` before `m.Run()` (matching
+`internal/store`, `pkg/api`, and `internal/hook`), so the singleton can only
+ever resolve under a throwaway dir. If the canary fires now, it is reporting a
+genuine leak — do not dismiss it.
 
 ### CI parity and docker-leg verification
 

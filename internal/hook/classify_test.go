@@ -161,6 +161,101 @@ func TestClassifyEventAcceptsLegacyEventNameField(t *testing.T) {
 	}
 }
 
+// TestClassifyEventTranscriptPath pins the SR-9.1 plumbing: on SessionStart
+// the full hook-reported transcript_path is carried verbatim on
+// ClassifyResult.TranscriptPath (independent of whether the basename
+// SessionID extraction succeeds), and on every other event it is empty.
+func TestClassifyEventTranscriptPath(t *testing.T) {
+	cases := []struct {
+		name       string
+		payload    map[string]any
+		wantPath   string
+		wantSessID string
+	}{
+		{
+			// Full path present: TranscriptPath carries the verbatim value
+			// and SessionID is the basename-without-extension.
+			name:       "SessionStart_with_path",
+			payload:    map[string]any{"hook_event_name": "SessionStart", "transcript_path": "~/.claude/projects/-tmp/abc.jsonl"},
+			wantPath:   "~/.claude/projects/-tmp/abc.jsonl",
+			wantSessID: "abc",
+		},
+		{
+			// Missing transcript_path: both empty (existing extractSessionID
+			// contract for empty input, and "empty means don't write" for
+			// TranscriptPath).
+			name:       "SessionStart_missing_path",
+			payload:    map[string]any{"hook_event_name": "SessionStart"},
+			wantPath:   "",
+			wantSessID: "",
+		},
+		{
+			// Explicit empty transcript_path: same as missing.
+			name:       "SessionStart_empty_path",
+			payload:    map[string]any{"hook_event_name": "SessionStart", "transcript_path": ""},
+			wantPath:   "",
+			wantSessID: "",
+		},
+		{
+			// Garbage path "...": extractSessionID rejects it (base[:2] ==
+			// ".." is obviously-bogus) so SessionID is "", but TranscriptPath
+			// still carries the raw payload value verbatim — the write site
+			// gates jsonl_path on non-empty path, not on SessionID success.
+			name:       "SessionStart_garbage_path_dots",
+			payload:    map[string]any{"hook_event_name": "SessionStart", "transcript_path": "..."},
+			wantPath:   "...",
+			wantSessID: "",
+		},
+		{
+			// Garbage path that is a bare directory sep: SessionID collapses
+			// to "" (filepath.Base("/") == "/") but TranscriptPath is verbatim.
+			name:       "SessionStart_garbage_path_slash",
+			payload:    map[string]any{"hook_event_name": "SessionStart", "transcript_path": "/"},
+			wantPath:   "/",
+			wantSessID: "",
+		},
+		{
+			// Non-SessionStart events carry neither, even when a
+			// transcript_path is present in the payload.
+			name:       "UserPromptSubmit_no_transcript_fields",
+			payload:    map[string]any{"hook_event_name": "UserPromptSubmit", "transcript_path": "~/x/abc.jsonl"},
+			wantPath:   "",
+			wantSessID: "",
+		},
+		{
+			name:       "Stop_no_transcript_fields",
+			payload:    map[string]any{"hook_event_name": "Stop", "transcript_path": "~/x/abc.jsonl"},
+			wantPath:   "",
+			wantSessID: "",
+		},
+		{
+			name:       "SessionEnd_no_transcript_fields",
+			payload:    map[string]any{"hook_event_name": "SessionEnd", "reason": "logout", "transcript_path": "~/x/abc.jsonl"},
+			wantPath:   "",
+			wantSessID: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := json.Marshal(tc.payload)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			res, err := ClassifyEvent(raw)
+			if err != nil {
+				t.Fatalf("ClassifyEvent: %v", err)
+			}
+			if res.TranscriptPath != tc.wantPath {
+				t.Errorf("TranscriptPath = %q; want %q", res.TranscriptPath, tc.wantPath)
+			}
+			if res.SessionID != tc.wantSessID {
+				t.Errorf("SessionID = %q; want %q", res.SessionID, tc.wantSessID)
+			}
+		})
+	}
+}
+
 func TestClassifyEventSessionIDExtraction(t *testing.T) {
 	cases := []struct {
 		path string

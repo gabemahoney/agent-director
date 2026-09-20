@@ -4,10 +4,11 @@ package store
 // emission across (writer_process × mutation_kind × decision) combinations.
 //
 // Singleton note: trail.Emit uses a process-level sync.Once whose file path
-// is locked in on the first call. TestMain (store_test.go) sets
-// AGENT_DIRECTOR_STATE_DIR via os.Setenv before any test runs. Individual
-// tests capture a line-count checkpoint before the operation under test and
-// assert only on lines added since that checkpoint.
+// is locked in on the first call. TestMain (store_test.go) redirects HOME via
+// os.Setenv before any test runs, so the singleton resolves its file under
+// <home>/.agent-director/. Individual tests capture a line-count checkpoint
+// before the operation under test and assert only on lines added since that
+// checkpoint.
 
 import (
 	"bufio"
@@ -19,8 +20,8 @@ import (
 	"testing"
 )
 
-// storeTrailDir is the AGENT_DIRECTOR_STATE_DIR for this test binary.
-// Set by TestMain in store_test.go before any test function runs.
+// storeTrailDir is the trail directory (<home>/.agent-director) for this test
+// binary. Set by TestMain in store_test.go before any test function runs.
 var storeTrailDir string
 
 var storeTSRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3,}Z$`)

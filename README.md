@@ -24,7 +24,8 @@ SQLite file; everything else is tmux.
 - A **persistent session model** — pause / resume preserves the
   JSONL transcript across Claude sessions.
 - A **crash-recovery cron** — `find-missing` + `expire` reconcile the
-  DB against actually-live processes.
+  DB against actually-live processes, marking each row it can prove dead
+  and skipping any it can't read.
 
 ## 5-minute install
 
@@ -47,8 +48,11 @@ curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/ski
 That fetches `install.sh` from `main`, then runs it with
 `--from-release` so it auto-detects your OS/arch, downloads the
 matching binary from the [latest GitHub release](https://github.com/gabemahoney/agent-director/releases/latest),
-sets up `~/.agent-director/`, drops a PATH symlink, warms up
-`state.db`, and installs the SessionStart/SessionEnd help hooks.
+sets up `~/.agent-director/`, drops a PATH symlink, brings
+`state.db` to the current schema (creating it on a fresh host,
+or upgrading it in place; a schema problem fails the install
+loudly rather than half-installing), and installs the
+SessionStart/SessionEnd help hooks.
 
 Optionally pass `--register-mcp` to also register the stdio MCP
 server, or `--no-hooks` to leave `~/.claude/settings.json` untouched.
@@ -93,6 +97,11 @@ The skill ships in this repo at
 [`skills/install-agent-director/`](skills/install-agent-director/SKILL.md)
 and is auto-discoverable by Claude Code if you've cloned the repo
 under a directory it indexes.
+
+Upgrading is the same skill: re-running the install brings an
+existing `state.db` up to the current schema automatically. If a
+session ever reports a schema-version error, re-run the install to
+resolve it.
 
 ### Install the TS client
 
@@ -264,10 +273,15 @@ db_path = "~/.agent-director/state.db"
 error_log_path = "~/.agent-director/errors.log"
 ```
 
+Env vars passed at spawn time (via `--extra-env`) are stored in
+`state.db` so `resume` can restore them. The file is owner-only (`0600`
+in a `0700` directory).
+
 ## Maintenance
 
-Two verbs keep `state.db` honest. Run both on a recurring schedule, as
-the same user that spawns the sessions:
+Two verbs keep `state.db` honest. Run both on a recurring schedule, and
+run them as the same user that spawns the sessions so every row is
+readable:
 
 ```sh
 # Mark spawns whose process has died as `missing` — run often (e.g. every 2 min):
@@ -280,6 +294,13 @@ agent-director expire
 Wire these into your platform's scheduler (launchd, systemd timer, cron,
 Task Scheduler). Without `find-missing`, dead sessions linger in `list` as
 stale `waiting`/`working` rows.
+
+`find-missing` works per row: it marks the rows it can prove dead, leaves
+the ones it verifies alive, and skips any it can't read (for example a run
+by the wrong user, or right after a reboot) rather than refusing the whole
+pass. Skipped rows are reported in its `unverified` count and
+`unverified_ids`, and each carries `liveness_unverified_since` and a
+`liveness_note` in `list` and `get` so you can re-run as the owning user.
 
 ## Uninstall
 

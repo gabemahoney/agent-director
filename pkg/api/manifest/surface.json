@@ -292,7 +292,7 @@
         {
           "name": "jsonl_path",
           "type": "string",
-          "description": "Last known transcript path. Empty until a future Epic persists it; resume composes the path on demand from cwd + claude_session_id.",
+          "description": "Last known transcript path, persisted by the SessionStart hook; legacy rows may be empty. When empty, resume composes the path on demand from cwd + claude_session_id.",
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null
@@ -333,6 +333,22 @@
           "name": "ended_at",
           "type": "timestamp?",
           "description": "Set when state moves to ended (omitted while live).",
+          "nullable": true,
+          "allow_empty": false,
+          "allowed_values": null
+        },
+        {
+          "name": "liveness_unverified_since",
+          "type": "timestamp?",
+          "description": "RFC3339 timestamp of the first sweep that could not verify this live row's liveness (an unknown verdict, e.g. a permission wall). Cleared to NULL once liveness is re-established; null/omitted when never unverified.",
+          "nullable": true,
+          "allow_empty": false,
+          "allowed_values": null
+        },
+        {
+          "name": "liveness_note",
+          "type": "string?",
+          "description": "Human-readable reason the row's liveness could not be verified on the most recent unverified sweep. Cleared to NULL once liveness is re-established; null/omitted when never unverified.",
           "nullable": true,
           "allow_empty": false,
           "allowed_values": null
@@ -660,7 +676,7 @@
     },
     {
       "name": "find-missing",
-      "description": "Reconcile DB state against live processes. Scans live-state rows (including pending), diffs against the OS probe (Linux /proc / macOS sysctl), transitions unprobeable rows to `missing`. Degraded-mode guard: 0 readable processes + ≥1 live rows → log warning + refuse to write.",
+      "description": "Reconcile DB state against live processes. Scans live-state rows (including pending) and reaches a per-row, evidence-based liveness verdict: rows carrying a full recorded identity (pid + proc_starttime) are checked against the OS (Linux /proc / macOS sysctl) — provably-dead rows transition to `missing`, verified-alive rows are left as-is, and rows whose liveness cannot be established (e.g. a permission wall) are left untouched and flagged unverified. Rows with a partial or absent recorded identity fall back to the environ probe-set diff. Each row is judged in isolation; a row is never marked missing on ambiguous evidence.",
       "callable": true,
       "handle_free": false,
       "params": [],
@@ -668,7 +684,7 @@
         {
           "name": "count",
           "type": "int",
-          "description": "Number of rows transitioned to missing on this sweep. Zero is a legitimate happy-path result when nothing needed reaping (or when the degraded-mode guard refused to write).",
+          "description": "Number of rows transitioned to missing on this sweep. Zero is a legitimate happy-path result when nothing needed reaping.",
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null
@@ -677,6 +693,22 @@
           "name": "ids",
           "type": "[]string",
           "description": "Sorted IDs of rows transitioned to missing.",
+          "nullable": false,
+          "allow_empty": true,
+          "allowed_values": null
+        },
+        {
+          "name": "unverified",
+          "type": "int",
+          "description": "Number of live rows left untouched this sweep because their liveness could not be established (an unknown verdict, e.g. a permission wall).",
+          "nullable": false,
+          "allow_empty": true,
+          "allowed_values": null
+        },
+        {
+          "name": "unverified_ids",
+          "type": "[]string",
+          "description": "Sorted IDs of rows left untouched as unverified.",
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null
@@ -932,7 +964,7 @@
         {
           "name": "spawns",
           "type": "[]Spawn",
-          "description": "Matching rows. Empty array when none match (never null).",
+          "description": "Matching rows. Empty array when none match (never null). Each row carries liveness_unverified_since (timestamp?) and liveness_note (string?), both omitted while NULL (never unverified).",
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null

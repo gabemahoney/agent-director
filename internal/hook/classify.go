@@ -98,6 +98,12 @@ type ClassifyResult struct {
 	// spawns.claude_session_id (SRD §8.3).
 	SessionID string
 
+	// TranscriptPath is the full hook-reported transcript_path, carried only
+	// on SessionStart events (empty on all others). Written verbatim to
+	// spawns.jsonl_path (SR-9.1) — independent of whether the basename
+	// SessionID extraction succeeded. Empty means "don't write the column".
+	TranscriptPath string
+
 	// UnknownEvent is true when the payload's event name does not match
 	// any documented value. Production callers log this at info level so
 	// upstream Claude Code additions surface in operator logs.
@@ -149,6 +155,7 @@ func ClassifyEvent(raw json.RawMessage) (ClassifyResult, error) {
 	case "SessionStart":
 		res.NewState = store.StateWaiting
 		res.SessionID = extractSessionID(p.TranscriptPath)
+		res.TranscriptPath = p.TranscriptPath
 	case "UserPromptSubmit":
 		res.NewState = store.StateWorking
 	case "PreToolUse":

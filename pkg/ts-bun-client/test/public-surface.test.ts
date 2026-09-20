@@ -28,6 +28,7 @@
 import { test, expect, beforeAll } from "bun:test";
 import * as path from "path";
 import * as fs from "fs";
+import { Client } from "../src/client.js";
 
 const pkgRoot = path.resolve(import.meta.dir, "..");
 const fixtureDir = path.join(pkgRoot, "test", "fixtures", "public-surface");
@@ -93,6 +94,169 @@ test("public-surface: golden tracks all three TRACKED files", () => {
   for (const f of TRACKED) {
     const goldenPath = path.join(fixtureDir, `${f}.golden`);
     expect(fs.existsSync(goldenPath)).toBe(true);
+  }
+});
+
+test("public-surface: Client exposes no migrate method (SR-1)", () => {
+  // SR-1 negative invariant: the schema-migration gate is a Go-side,
+  // refuse-and-instruct mechanism. It has NO catalog entry, NO TS error
+  // class, and crucially NO npm-client trigger. The published Client must
+  // therefore expose nothing a caller could invoke to request a migration.
+  //
+  // This assertion walks the *runtime* prototype chain of the exported
+  // Client class rather than the .d.ts goldens, so it holds independently
+  // of golden regeneration: even if someone regenerates the surface goldens
+  // after accidentally adding a migrate verb, this test still fails.
+  const forbidden = ["migrate", "migrateSchema", "runMigration", "schemaMigrate"];
+
+  const seen = new Set<string>();
+  for (
+    let proto: object | null = Client.prototype;
+    proto && proto !== Object.prototype;
+    proto = Object.getPrototypeOf(proto)
+  ) {
+    for (const key of Object.getOwnPropertyNames(proto)) {
+      seen.add(key);
+    }
+  }
+
+  for (const name of forbidden) {
+    expect(
+      seen.has(name),
+      `Client (or a base class) unexpectedly exposes a "${name}" method; ` +
+        `SR-1 forbids any npm-client migration trigger.`
+    ).toBe(false);
+  }
+
+  // Defence in depth: no enumerable method on the runtime surface may even
+  // contain the substring "migrat" (catches migrateFoo / fooMigrate drift).
+  const migratLike = [...seen].filter((k) => /migrat/i.test(k));
+  expect(
+    migratLike.length === 0,
+    `Client runtime surface contains migration-shaped method(s): ${migratLike.join(", ")}`
+  ).toBe(true);
+
+  // The tracked .d.ts goldens must also stay migration-free. This part is
+  // golden-derived (informational), but the runtime checks above are the
+  // load-bearing, regeneration-proof guarantee.
+  for (const f of TRACKED) {
+    const golden = fs.readFileSync(path.join(fixtureDir, `${f}.golden`), "utf-8");
+    expect(golden).not.toMatch(/migrat/i);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// SR-8.3 named surface guards.
+//
+// The byte-equality goldens above already fail on ANY drift, but they cannot
+// distinguish "the operator regenerated the golden and dropped a field" from a
+// deliberate additive change — a regenerated golden is self-consistent. These
+// NAMED assertions read the checked-in types.d.ts.golden and pin the specific
+// SR-8.3 shapes (additive-optional liveness fields; find-missing unverified
+// fields; state stays a plain string, no union/enum), so golden regeneration
+// cannot silently drop or mutate them without also tripping a targeted test.
+// ---------------------------------------------------------------------------
+
+/** Extract the body (between the first `{` and its matching `}`) of an
+ *  `export interface <name>` block from a .d.ts source string. */
+function interfaceBody(src: string, name: string): string {
+  const re = new RegExp(`export interface ${name}\\b[^{]*\\{`);
+  const m = re.exec(src);
+  if (!m) throw new Error(`interface ${name} not found in golden`);
+  let depth = 0;
+  const start = m.index + m[0].length - 1; // at the opening brace
+  for (let i = start; i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    else if (src[i] === "}") {
+      depth--;
+      if (depth === 0) return src.slice(start + 1, i);
+    }
+  }
+  throw new Error(`unbalanced braces for interface ${name}`);
+}
+
+const typesGolden = () =>
+  fs.readFileSync(path.join(fixtureDir, "types.d.ts.golden"), "utf-8");
+
+test("public-surface: ListRow & GetResult carry additive-optional liveness fields (SR-8.3)", () => {
+  const golden = typesGolden();
+  for (const iface of ["ListRow", "GetResult"]) {
+    const body = interfaceBody(golden, iface);
+    // Additive-optional + nullable: `?: string | null`. The `?` (optional)
+    // is what makes the field omittable — matching the Go pointer+omitempty
+    // surface — and `| null` matches the nullable store column.
+    expect(
+      body,
+      `${iface} must declare liveness_unverified_since as additive-optional nullable`
+    ).toMatch(/liveness_unverified_since\?\s*:\s*string\s*\|\s*null/);
+    expect(
+      body,
+      `${iface} must declare liveness_note as additive-optional nullable`
+    ).toMatch(/liveness_note\?\s*:\s*string\s*\|\s*null/);
+  }
+});
+
+test("public-surface: GetResult carries jsonl_path; ListRow does not (SR-9.3/SR-10.3)", () => {
+  const golden = typesGolden();
+  // get surfaces the persisted transcript path as a required string field.
+  expect(
+    interfaceBody(golden, "GetResult"),
+    "GetResult must declare jsonl_path: string (the persisted transcript path get surfaces)"
+  ).toMatch(/jsonl_path\s*:\s*string/);
+  // list row shape is unchanged — it must NOT gain the get-only field.
+  expect(
+    interfaceBody(golden, "ListRow"),
+    "ListRow must NOT declare jsonl_path — the list wire shape stays unchanged"
+  ).not.toMatch(/\bjsonl_path\b/);
+});
+
+test("public-surface: extra_env is INPUT-only — absent from GetResult & ListRow OUTPUT types (SR-9.3/SR-10.3)", () => {
+  const golden = typesGolden();
+  // Output-negative: extra_env must never appear on a result row type.
+  for (const iface of ["GetResult", "ListRow"]) {
+    expect(
+      interfaceBody(golden, iface),
+      `${iface} must NOT declare extra_env — it is a spawn/make-template INPUT param, not an output field`
+    ).not.toMatch(/\bextra_env\b/);
+  }
+  // Input pole: extra_env must still be present on the param types so the
+  // negative is scoped to output, not a blanket deletion of the surface.
+  for (const iface of ["SpawnParams", "MakeTemplateParams"]) {
+    expect(
+      interfaceBody(golden, iface),
+      `${iface} must retain the extra_env INPUT param (env-injection surface)`
+    ).toMatch(/extra_env\?\s*:\s*Record<string,\s*string>/);
+  }
+});
+
+test("public-surface: FindMissingResult carries unverified count and ids (SR-8)", () => {
+  const body = interfaceBody(typesGolden(), "FindMissingResult");
+  expect(body, "FindMissingResult must declare a numeric unverified count").toMatch(
+    /\bunverified\s*:\s*number/
+  );
+  expect(body, "FindMissingResult must declare unverified_ids: string[]").toMatch(
+    /\bunverified_ids\s*:\s*string\[\]/
+  );
+});
+
+test("public-surface: state stays a plain string — no union/enum (SR-8.3 guardrail)", () => {
+  // SR-8.3 forbids widening the state field into a TS string-literal union or
+  // enum while surfacing liveness. Every `state:` declaration in the emitted
+  // types must resolve to the bare `string` type — never `state: "pending" |
+  // …` and never an enum reference. This is the TS twin of the Go
+  // TestStateEnumByteIdentity named pin.
+  const golden = typesGolden();
+  const stateDecls = golden.match(/^\s*state\s*[?]?\s*:\s*[^;]+;/gm) ?? [];
+  expect(stateDecls.length, "expected at least one `state:` declaration").toBeGreaterThan(0);
+  for (const decl of stateDecls) {
+    const rhs = decl.replace(/^\s*state\s*[?]?\s*:\s*/, "").replace(/;.*$/, "").trim();
+    // Allowed shapes: the result value `string` and the list filter `string[]`
+    // (a plain array of strings). Anything containing `|` (a union) or a quote
+    // (a string-literal enum member) is a forbidden state-enum widening.
+    expect(
+      rhs === "string" || rhs === "string[]",
+      `state must stay a plain string / string[], got \`${decl.trim()}\` — SR-8.3 forbids a union/enum`
+    ).toBe(true);
   }
 });
 

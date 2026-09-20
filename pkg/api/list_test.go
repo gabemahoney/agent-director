@@ -1,10 +1,14 @@
 package api_test
 
 import (
+	"encoding/json"
 	"errors"
+	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -254,6 +258,219 @@ func TestListTmuxSessionNameEmptyIsPermissive(t *testing.T) {
 	}
 	if got := idsOf(res.Spawns); !equalStrings(got, want) {
 		t.Errorf("ids = %v; want %v", got, want)
+	}
+}
+
+// TestListLivenessFieldsRoundTrip pins SR-8.3 surfacing on list: the two
+// additive nullable liveness fields ride the ListRow struct and are OMITTED
+// from the JSON envelope while NULL in the store, PRESENT with the stored
+// value once seeded. Uses Epic fn's SeedSpawn options
+// (WithLivenessUnverifiedSince / WithLivenessNote) rather than raw SQL.
+//
+//   - row-clean carries NULL liveness columns → its marshaled ListRow omits
+//     both keys.
+//   - row-flagged is seeded with both columns → its marshaled ListRow carries
+//     the stored values verbatim.
+func TestListLivenessFieldsRoundTrip(t *testing.T) {
+	// rfc3339_passthrough: a value already in RFC3339 form is surfaced
+	// normalized (still RFC3339 UTC) — pins pass-through normalization.
+	t.Run("rfc3339_passthrough", func(t *testing.T) {
+		const wantSince = "2026-09-19T12:34:56Z"
+		const wantNote = "environ probe hit a permission wall"
+
+		dbPath := filepath.Join(t.TempDir(), "state.db")
+		if _, err := apitest.SeedSpawn(dbPath, "row-clean", store.StateWaiting, "/tmp", "off", "", true); err != nil {
+			t.Fatalf("SeedSpawn(row-clean): %v", err)
+		}
+		if _, err := apitest.SeedSpawn(dbPath, "row-flagged", store.StateWaiting, "/tmp", "off", "", false,
+			apitest.WithLivenessUnverifiedSince(wantSince),
+			apitest.WithLivenessNote(wantNote),
+		); err != nil {
+			t.Fatalf("SeedSpawn(row-flagged): %v", err)
+		}
+
+		s, err := store.Open(dbPath)
+		if err != nil {
+			t.Fatalf("store.Open: %v", err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+
+		res, err := api.List(s, api.ListParams{})
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+
+		byID := map[string]api.ListRow{}
+		for _, r := range res.Spawns {
+			byID[r.ClaudeInstanceID] = r
+		}
+
+		clean, ok := byID["row-clean"]
+		if !ok {
+			t.Fatalf("row-clean missing from list result")
+		}
+		if clean.LivenessUnverifiedSince != nil || clean.LivenessNote != nil {
+			t.Errorf("row-clean liveness pointers = (%v, %v); want (nil, nil)", clean.LivenessUnverifiedSince, clean.LivenessNote)
+		}
+		rawClean, err := json.Marshal(clean)
+		if err != nil {
+			t.Fatalf("json.Marshal(clean): %v", err)
+		}
+		if strings.Contains(string(rawClean), "liveness_unverified_since") ||
+			strings.Contains(string(rawClean), "liveness_note") {
+			t.Errorf("row-clean JSON contains a liveness key; want both omitted when NULL; got %s", rawClean)
+		}
+
+		flagged, ok := byID["row-flagged"]
+		if !ok {
+			t.Fatalf("row-flagged missing from list result")
+		}
+		if flagged.LivenessUnverifiedSince == nil || *flagged.LivenessUnverifiedSince != wantSince {
+			t.Errorf("row-flagged LivenessUnverifiedSince = %v; want %q", flagged.LivenessUnverifiedSince, wantSince)
+		}
+		if flagged.LivenessNote == nil || *flagged.LivenessNote != wantNote {
+			t.Errorf("row-flagged LivenessNote = %v; want %q", flagged.LivenessNote, wantNote)
+		}
+		rawFlagged, err := json.Marshal(flagged)
+		if err != nil {
+			t.Fatalf("json.Marshal(flagged): %v", err)
+		}
+		if !strings.Contains(string(rawFlagged), `"liveness_unverified_since":"`+wantSince+`"`) {
+			t.Errorf("row-flagged JSON missing liveness_unverified_since with stored value; got %s", rawFlagged)
+		}
+		if !strings.Contains(string(rawFlagged), `"liveness_note":"`+wantNote+`"`) {
+			t.Errorf("row-flagged JSON missing liveness_note with stored value; got %s", rawFlagged)
+		}
+	})
+
+	// sqlite_text_normalized: seed the RAW SQLite CURRENT_TIMESTAMP text
+	// form ("2006-01-02 15:04:05", no zone). The marshaled ListRow MUST
+	// carry the RFC3339 UTC normalization exactly — pins that list applies
+	// the same nullableTimestamp normalization as get.
+	t.Run("sqlite_text_normalized", func(t *testing.T) {
+		const rawSince = "2026-01-02 15:04:05"
+		const wantSince = "2026-01-02T15:04:05Z"
+
+		dbPath := filepath.Join(t.TempDir(), "state.db")
+		if _, err := apitest.SeedSpawn(dbPath, "row-raw", store.StateWaiting, "/tmp", "off", "", true,
+			apitest.WithLivenessUnverifiedSince(rawSince),
+		); err != nil {
+			t.Fatalf("SeedSpawn(row-raw): %v", err)
+		}
+
+		s, err := store.Open(dbPath)
+		if err != nil {
+			t.Fatalf("store.Open: %v", err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+
+		res, err := api.List(s, api.ListParams{})
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+
+		var row api.ListRow
+		var ok bool
+		for _, r := range res.Spawns {
+			if r.ClaudeInstanceID == "row-raw" {
+				row, ok = r, true
+			}
+		}
+		if !ok {
+			t.Fatalf("row-raw missing from list result")
+		}
+		if row.LivenessUnverifiedSince == nil || *row.LivenessUnverifiedSince != wantSince {
+			t.Errorf("row-raw LivenessUnverifiedSince = %v; want %q (RFC3339 UTC normalization of raw SQLite text)", row.LivenessUnverifiedSince, wantSince)
+		}
+		raw, err := json.Marshal(row)
+		if err != nil {
+			t.Fatalf("json.Marshal(row-raw): %v", err)
+		}
+		if !strings.Contains(string(raw), `"liveness_unverified_since":"`+wantSince+`"`) {
+			t.Errorf("row-raw JSON missing exact normalized liveness_unverified_since %q; got %s", wantSince, raw)
+		}
+	})
+}
+
+// TestListRowKeySetUnchanged is the strong-form pin that the list row wire shape
+// is UNCHANGED by the jsonl_path work: a marshaled ListRow (with every optional
+// field forced present) carries EXACTLY the known key set — no jsonl_path, no
+// extra_env, and no other new field. A sorted-key-set comparison is stricter
+// than a pair of Contains negatives: adding OR dropping any key trips it.
+//
+// The row is seeded so every omitempty field is populated (parent_id via
+// SeedParentChild, ended_at via the ended state, liveness via WithLiveness*),
+// giving the maximal key set. jsonl_path and extra_env are deliberately seeded
+// on the store row too, proving the list projection drops them rather than that
+// they merely happened to be absent.
+func TestListRowKeySetUnchanged(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	if _, err := apitest.SeedSpawn(dbPath, "row-parent", store.StateWaiting, "/tmp", "off", "", true); err != nil {
+		t.Fatalf("SeedSpawn(row-parent): %v", err)
+	}
+	if _, err := apitest.SeedSpawn(dbPath, "row-max", store.StateEnded, "/tmp", "on", "", false,
+		apitest.WithJsonlPath("/home/user/.claude/projects/-tmp/s.jsonl"),
+		apitest.WithExtraEnv(map[string]string{"SECRET": "x"}),
+		apitest.WithLivenessUnverifiedSince("2026-09-19T12:34:56Z"),
+		apitest.WithLivenessNote("probe wall"),
+	); err != nil {
+		t.Fatalf("SeedSpawn(row-max): %v", err)
+	}
+	if err := apitest.SeedParentChild(dbPath, "row-parent", "row-max"); err != nil {
+		t.Fatalf("SeedParentChild: %v", err)
+	}
+
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	res, err := api.List(s, api.ListParams{TmuxSessionName: "ts-row-max"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(res.Spawns) != 1 {
+		t.Fatalf("len(spawns) = %d; want 1 (row-max)", len(res.Spawns))
+	}
+
+	raw, err := json.Marshal(res.Spawns[0])
+	if err != nil {
+		t.Fatalf("json.Marshal(ListRow): %v", err)
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		t.Fatalf("json.Unmarshal(ListRow): %v", err)
+	}
+	got := make([]string, 0, len(obj))
+	for k := range obj {
+		got = append(got, k)
+	}
+	sort.Strings(got)
+
+	want := []string{
+		"claude_instance_id",
+		"cwd",
+		"ended_at",
+		"labels",
+		"last_seen_at",
+		"liveness_note",
+		"liveness_unverified_since",
+		"parent_id",
+		"relay_mode",
+		"started_at",
+		"state",
+		"tmux_session_name",
+	}
+	if !equalStrings(got, want) {
+		t.Errorf("ListRow key set = %v; want %v — the list wire shape must stay unchanged (no jsonl_path, no extra_env, no new fields)", got, want)
+	}
+	// Named guards so a failure reads as the specific leak, not just a set diff.
+	if _, bad := obj["jsonl_path"]; bad {
+		t.Errorf("ListRow carries jsonl_path; the list shape must NOT gain the get-only transcript-path field")
+	}
+	if _, bad := obj["extra_env"]; bad {
+		t.Errorf("ListRow carries extra_env; it is a spawn INPUT param and must never surface on the list OUTPUT row")
 	}
 }
 

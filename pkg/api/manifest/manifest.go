@@ -294,12 +294,14 @@ var Verbs = []VerbDef{
 			{Name: "tmux_session_name", Type: "string", Description: "tmux session under which the Spawn is running.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			{Name: "claude_args", Type: "[]string", Description: "Verbatim argv passed through to claude after --settings.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "relay_mode", Type: "string", Description: "on / off.", Nullable: false, AllowEmpty: false, AllowedValues: []string{"on", "off"}},
-			{Name: "jsonl_path", Type: "string", Description: "Last known transcript path. Empty until a future Epic persists it; resume composes the path on demand from cwd + claude_session_id.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "jsonl_path", Type: "string", Description: "Last known transcript path, persisted by the SessionStart hook; legacy rows may be empty. When empty, resume composes the path on demand from cwd + claude_session_id.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "claude_session_id", Type: "string", Description: "Claude Code session UUID, extracted from SessionStart hook's transcript_path.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "labels", Type: "map[string]string", Description: "Caller-supplied labels.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "started_at", Type: "timestamp", Description: "Row insert time.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			{Name: "last_seen_at", Type: "timestamp", Description: "Last hook UPSERT time.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			{Name: "ended_at", Type: "timestamp?", Description: "Set when state moves to ended (omitted while live).", Nullable: true, AllowEmpty: false, AllowedValues: nil},
+			{Name: "liveness_unverified_since", Type: "timestamp?", Description: "RFC3339 timestamp of the first sweep that could not verify this live row's liveness (an unknown verdict, e.g. a permission wall). Cleared to NULL once liveness is re-established; null/omitted when never unverified.", Nullable: true, AllowEmpty: false, AllowedValues: nil},
+			{Name: "liveness_note", Type: "string?", Description: "Human-readable reason the row's liveness could not be verified on the most recent unverified sweep. Cleared to NULL once liveness is re-established; null/omitted when never unverified.", Nullable: true, AllowEmpty: false, AllowedValues: nil},
 			{Name: "permission_requests", Type: "[]object", Description: "All open (undecided) permission requests awaiting orchestrator decision. Always a non-null array ([] when empty). Populated only when state == check_permission; empty array for all other states. Each element: request_id (int) — autoincrement row id; request_token (string) — UUIDv4 token minted by runRelay, pass to decide verb to target this row; tool_name (string) — Claude Code tool that triggered the request; tool_input (string) — raw JSON string of the tool's input, NOT a nested object (consumers parse it themselves); requested_at (RFC3339 timestamp) — created_at of the row.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 		},
 		ErrorNames: []string{
@@ -543,13 +545,15 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "find-missing",
-		Description: "Reconcile DB state against live processes. Scans live-state rows (including pending), diffs against the OS probe (Linux /proc / macOS sysctl), transitions unprobeable rows to `missing`. Degraded-mode guard: 0 readable processes + ≥1 live rows → log warning + refuse to write.",
+		Description: "Reconcile DB state against live processes. Scans live-state rows (including pending) and reaches a per-row, evidence-based liveness verdict: rows carrying a full recorded identity (pid + proc_starttime) are checked against the OS (Linux /proc / macOS sysctl) — provably-dead rows transition to `missing`, verified-alive rows are left as-is, and rows whose liveness cannot be established (e.g. a permission wall) are left untouched and flagged unverified. Rows with a partial or absent recorded identity fall back to the environ probe-set diff. Each row is judged in isolation; a row is never marked missing on ambiguous evidence.",
 		Callable:    true,
 		HandleFree:  false,
 		Params:      []ParamDef{},
 		ResultFields: []FieldDef{
-			{Name: "count", Type: "int", Description: "Number of rows transitioned to missing on this sweep. Zero is a legitimate happy-path result when nothing needed reaping (or when the degraded-mode guard refused to write).", Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "count", Type: "int", Description: "Number of rows transitioned to missing on this sweep. Zero is a legitimate happy-path result when nothing needed reaping.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "ids", Type: "[]string", Description: "Sorted IDs of rows transitioned to missing.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "unverified", Type: "int", Description: "Number of live rows left untouched this sweep because their liveness could not be established (an unknown verdict, e.g. a permission wall).", Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "unverified_ids", Type: "[]string", Description: "Sorted IDs of rows left untouched as unverified.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 		},
 		ErrorNames: []string{
 			"ErrProbeUnsupported",
@@ -766,7 +770,7 @@ var Verbs = []VerbDef{
 			},
 		},
 		ResultFields: []FieldDef{
-			{Name: "spawns", Type: "[]Spawn", Description: "Matching rows. Empty array when none match (never null).", Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "spawns", Type: "[]Spawn", Description: "Matching rows. Empty array when none match (never null). Each row carries liveness_unverified_since (timestamp?) and liveness_note (string?), both omitted while NULL (never unverified).", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 		},
 		ErrorNames: []string{
 			"ErrListInvalidLabel",

@@ -56,7 +56,10 @@ type ResumeResult struct {
 //     ErrNoSessionId. A Spawn killed before its first SessionStart
 //     hook fired has no rotated session id to point --resume at.
 //  4. JSONL transcript file must exist on disk → otherwise
-//     ErrJsonlMissing. Pure os.Stat pre-flight; no read.
+//     ErrJsonlMissing. Pure os.Stat pre-flight; no read. The path checked
+//     is the persisted jsonl_path when present (true even under a custom
+//     CLAUDE_CONFIG_DIR); legacy rows with an empty jsonl_path fall back to
+//     the slug-rule path computed from cwd + session id.
 //  5. Canonical tmux session name must NOT already exist → otherwise
 //     the tmux.NewSession at step 7 would surface ErrTmuxSessionCreate
 //     anyway, and we'd rather error out cleanly here than after a
@@ -90,9 +93,17 @@ func resumeImpl(s ResumeStore, t ResumeTmux, cfg config.Config, params ResumePar
 			ErrNoSessionId, params.ClaudeInstanceID)
 	}
 
-	jsonl, err := spawn.JsonlPath(row.CWD, row.ClaudeSessionID)
-	if err != nil {
-		return ResumeResult{}, fmt.Errorf("resume: resolve jsonl: %w", err)
+	// Prefer the transcript path persisted by the SessionStart hook — it is
+	// the true path even when the Spawn ran under a custom CLAUDE_CONFIG_DIR.
+	// Legacy rows written before the hook persisted jsonl_path fall back to
+	// the slug-rule path computed from cwd + session id (spawn.JsonlPath).
+	jsonl := row.JSONLPath
+	if jsonl == "" {
+		var err error
+		jsonl, err = spawn.JsonlPath(row.CWD, row.ClaudeSessionID)
+		if err != nil {
+			return ResumeResult{}, fmt.Errorf("resume: resolve jsonl: %w", err)
+		}
 	}
 	if _, err := os.Stat(jsonl); err != nil {
 		if os.IsNotExist(err) {

@@ -15,9 +15,12 @@
 // Cron user invariant (SRD §14.6): the prober only sees processes the
 // invoking user has permission to read. Running find-missing as a
 // different user from the one that launched the Spawns produces an
-// empty (or partial) probe set; the degraded-mode guard in
-// internal/api.FindMissing catches the worst case (0 readable IDs +
-// ≥1 live row).
+// empty (or partial) probe set. Rows carrying a concrete pid + starttime
+// no longer rely on the probe set at all: find-missing evidences each one
+// individually through the LivenessChecker seam (below), whose per-OS
+// impls resolve a permission wall to an UNKNOWN verdict and skip just that
+// row (fail-open) rather than misreport it — so an unreadable process
+// never masquerades as dead.
 package probe
 
 import (

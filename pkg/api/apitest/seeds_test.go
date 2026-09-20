@@ -3,6 +3,7 @@ package apitest
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
@@ -142,6 +143,149 @@ func TestSeedSpawn_Defaults(t *testing.T) {
 				t.Errorf("relay_mode = %q; want %q", sp.RelayMode, tc.wantRelay)
 			}
 		})
+	}
+}
+
+// TestSeedSpawn_NewColumnOptions_RoundTrip drives the schema-v3 columns through
+// the extended SeedSpawn options (WithPID / WithProcStarttime / WithJsonlPath /
+// WithExtraEnv / WithLivenessUnverifiedSince / WithLivenessNote) — NOT hand-rolled
+// SQL in the test (SR-12.1/12.2) — and reads them back through store.GetSpawn.
+// It exercises the re-exported per-OS proc_starttime constant so the seeder's
+// blessed fixture value is used rather than an inline literal.
+func TestSeedSpawn_NewColumnOptions_RoundTrip(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	const id = "seed-new-cols"
+
+	wantEnv := map[string]string{"FOO": "bar", "TOKEN": "xyz"}
+	const (
+		wantPID       = 7777
+		wantJsonlPath = "/var/log/claude/seed.jsonl"
+		wantSince     = "2026-09-20T12:00:00Z"
+		wantNote      = "seeded liveness note"
+	)
+
+	got, err := SeedSpawn(dbPath, id, "working", "/srv", "on", "", true,
+		WithPID(wantPID),
+		WithProcStarttime(LinuxProcStarttime),
+		WithJsonlPath(wantJsonlPath),
+		WithExtraEnv(wantEnv),
+		WithLivenessUnverifiedSince(wantSince),
+		WithLivenessNote(wantNote),
+	)
+	if err != nil {
+		t.Fatalf("SeedSpawn: %v", err)
+	}
+	if got != id {
+		t.Errorf("returned id = %q; want %q", got, id)
+	}
+
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer s.Close() //nolint:errcheck
+
+	sp, err := s.GetSpawn(id)
+	if err != nil {
+		t.Fatalf("GetSpawn: %v", err)
+	}
+	if sp.PID != wantPID {
+		t.Errorf("PID = %d; want %d", sp.PID, wantPID)
+	}
+	if sp.ProcStarttime != LinuxProcStarttime {
+		t.Errorf("ProcStarttime = %q; want %q", sp.ProcStarttime, LinuxProcStarttime)
+	}
+	if sp.JSONLPath != wantJsonlPath {
+		t.Errorf("JSONLPath = %q; want %q", sp.JSONLPath, wantJsonlPath)
+	}
+	if !reflect.DeepEqual(sp.ExtraEnv, wantEnv) {
+		t.Errorf("ExtraEnv = %v; want %v (seeded as a map)", sp.ExtraEnv, wantEnv)
+	}
+	if sp.LivenessUnverifiedSince != wantSince {
+		t.Errorf("LivenessUnverifiedSince = %q; want %q", sp.LivenessUnverifiedSince, wantSince)
+	}
+	if sp.LivenessNote != wantNote {
+		t.Errorf("LivenessNote = %q; want %q", sp.LivenessNote, wantNote)
+	}
+}
+
+// TestSeedSpawn_NoOptions_DefaultsNewColumns proves that omitting the SpawnOption
+// arguments leaves the schema-v3 columns at their defaults: an empty NON-NIL
+// ExtraEnv map and zero-value identity/liveness fields (NULL columns under
+// COALESCE). This is the seeder-layer counterpart to the store's migrated-row
+// decode test — the row is never touched by the option UPDATE.
+func TestSeedSpawn_NoOptions_DefaultsNewColumns(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	const id = "seed-no-opts"
+
+	if _, err := SeedSpawn(dbPath, id, "waiting", "/tmp", "off", "", true); err != nil {
+		t.Fatalf("SeedSpawn: %v", err)
+	}
+
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer s.Close() //nolint:errcheck
+
+	sp, err := s.GetSpawn(id)
+	if err != nil {
+		t.Fatalf("GetSpawn: %v", err)
+	}
+	if sp.ExtraEnv == nil {
+		t.Errorf("ExtraEnv = nil; want empty non-nil map when no option seeded")
+	}
+	if len(sp.ExtraEnv) != 0 {
+		t.Errorf("ExtraEnv = %v; want empty map", sp.ExtraEnv)
+	}
+	if sp.PID != 0 {
+		t.Errorf("PID = %d; want 0 (unset NULL column)", sp.PID)
+	}
+	if sp.ProcStarttime != "" {
+		t.Errorf("ProcStarttime = %q; want empty (unset NULL column)", sp.ProcStarttime)
+	}
+	if sp.JSONLPath != "" {
+		t.Errorf("JSONLPath = %q; want empty (unset NULL column)", sp.JSONLPath)
+	}
+	if sp.LivenessUnverifiedSince != "" {
+		t.Errorf("LivenessUnverifiedSince = %q; want empty (unset NULL column)", sp.LivenessUnverifiedSince)
+	}
+	if sp.LivenessNote != "" {
+		t.Errorf("LivenessNote = %q; want empty (unset NULL column)", sp.LivenessNote)
+	}
+}
+
+// TestSeedSpawn_WithExtraEnv_NilMapIsEmptyObject proves WithExtraEnv(nil) seeds
+// the canonical empty object rather than a NULL/absent column, reading back as an
+// empty non-nil map through store.GetSpawn.
+func TestSeedSpawn_WithExtraEnv_NilMapIsEmptyObject(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	const id = "seed-nil-env"
+
+	if _, err := SeedSpawn(dbPath, id, "waiting", "/tmp", "off", "", true,
+		WithExtraEnv(nil),
+	); err != nil {
+		t.Fatalf("SeedSpawn: %v", err)
+	}
+
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer s.Close() //nolint:errcheck
+
+	sp, err := s.GetSpawn(id)
+	if err != nil {
+		t.Fatalf("GetSpawn: %v", err)
+	}
+	if sp.ExtraEnv == nil {
+		t.Errorf("ExtraEnv = nil; want empty non-nil map for WithExtraEnv(nil)")
+	}
+	if len(sp.ExtraEnv) != 0 {
+		t.Errorf("ExtraEnv = %v; want empty map for WithExtraEnv(nil)", sp.ExtraEnv)
 	}
 }
 

@@ -17,15 +17,16 @@ func relayAttemptLines(lines []map[string]any) []map[string]any {
 }
 
 // runTrailEmitRelayAttempt is a thin helper that runs
-// `agent-director trail-emit relay-attempt <extraArgs>` with a dedicated
-// stateDir and a throwaway HOME (no state.db bootstrapping needed).
-func runTrailEmitRelayAttempt(t *testing.T, stateDir string, extraArgs ...string) (string, string, int) {
+// `agent-director trail-emit relay-attempt <extraArgs>` under a throwaway,
+// per-invocation HOME (no state.db bootstrapping needed). It returns the CLI
+// stdout/stderr/exit plus that HOME; callers read the trail written to
+// <home>/.agent-director/ad-trail.jsonl.
+func runTrailEmitRelayAttempt(t *testing.T, extraArgs ...string) (string, string, int, string) {
 	t.Helper()
 	home := t.TempDir()
 	args := append([]string{"trail-emit", "relay-attempt"}, extraArgs...)
-	return runCLIWithEnv(t, home,
-		map[string]string{"AGENT_DIRECTOR_STATE_DIR": stateDir},
-		"", args...)
+	stdout, stderr, code := runCLIWithEnv(t, home, nil, "", args...)
+	return stdout, stderr, code, home
 }
 
 // trailEmitOutcomeCase parameterizes TestTrailEmitRelayAttemptOutcomes.
@@ -55,9 +56,7 @@ func TestTrailEmitRelayAttemptOutcomes(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run("outcome_"+tc.outcome, func(t *testing.T) {
-			stateDir := t.TempDir()
-
-			stdout, stderr, code := runTrailEmitRelayAttempt(t, stateDir,
+			stdout, stderr, code, home := runTrailEmitRelayAttempt(t,
 				"--token", "tok-abc",
 				"--endpoint", "http://localhost:9999/relay",
 				"--outcome", tc.outcome,
@@ -75,7 +74,7 @@ func TestTrailEmitRelayAttemptOutcomes(t *testing.T) {
 			}
 
 			// Exactly one relay-attempt trail line.
-			lines := readTrailLines(t, stateDir)
+			lines := readTrailLines(t, home)
 			ra := relayAttemptLines(lines)
 			if len(ra) != 1 {
 				t.Fatalf("ad.relay_attempt.completed line count = %d; want exactly 1", len(ra))
@@ -122,9 +121,7 @@ func TestTrailEmitRelayAttemptOutcomes(t *testing.T) {
 // criterion: bytes_sent and bytes_received default to 0 when the flags are
 // omitted on a connection-failure outcome.
 func TestTrailEmitRelayAttemptConnectionFailureZeroBytes(t *testing.T) {
-	stateDir := t.TempDir()
-
-	stdout, stderr, code := runTrailEmitRelayAttempt(t, stateDir,
+	stdout, stderr, code, home := runTrailEmitRelayAttempt(t,
 		"--token", "tok-conn",
 		"--endpoint", "http://host/gone",
 		"--outcome", "connection_refused",
@@ -138,7 +135,7 @@ func TestTrailEmitRelayAttemptConnectionFailureZeroBytes(t *testing.T) {
 		t.Errorf("stdout = %q; want \"{}\"", stdout)
 	}
 
-	lines := readTrailLines(t, stateDir)
+	lines := readTrailLines(t, home)
 	ra := relayAttemptLines(lines)
 	if len(ra) != 1 {
 		t.Fatalf("ad.relay_attempt.completed count = %d; want 1", len(ra))
@@ -160,12 +157,10 @@ func TestTrailEmitRelayAttemptConnectionFailureZeroBytes(t *testing.T) {
 // when state.db does not exist. trail-emit is special-cased in main.go before
 // setupClient (SR-A-2.3, t3.4uk.nz.j9.2k).
 func TestTrailEmitRelayAttemptNoDBRequired(t *testing.T) {
-	stateDir := t.TempDir()
 	// home with no .agent-director directory — no DB exists.
 	home := t.TempDir()
 
-	stdout, stderr, code := runCLIWithEnv(t, home,
-		map[string]string{"AGENT_DIRECTOR_STATE_DIR": stateDir},
+	stdout, stderr, code := runCLIWithEnv(t, home, nil,
 		"",
 		"trail-emit", "relay-attempt",
 		"--token", "tok-nodb",
@@ -180,7 +175,7 @@ func TestTrailEmitRelayAttemptNoDBRequired(t *testing.T) {
 		t.Errorf("stdout = %q; want \"{}\"", stdout)
 	}
 
-	lines := readTrailLines(t, stateDir)
+	lines := readTrailLines(t, home)
 	ra := relayAttemptLines(lines)
 	if len(ra) != 1 {
 		t.Fatalf("ad.relay_attempt.completed count = %d; want 1", len(ra))
@@ -235,13 +230,10 @@ func TestTrailEmitRelayAttemptFlagErrors(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			stateDir := t.TempDir()
 			home := t.TempDir()
 
 			args := append([]string{"trail-emit", "relay-attempt"}, tc.args...)
-			_, stderr, code := runCLIWithEnv(t, home,
-				map[string]string{"AGENT_DIRECTOR_STATE_DIR": stateDir},
-				"", args...)
+			_, stderr, code := runCLIWithEnv(t, home, nil, "", args...)
 
 			// Must exit non-zero.
 			if code == 0 {
@@ -255,7 +247,7 @@ func TestTrailEmitRelayAttemptFlagErrors(t *testing.T) {
 			}
 
 			// Trail: zero ad.relay_attempt.completed lines — no partial emit.
-			ra := relayAttemptLines(trailLinesOrNil(t, stateDir))
+			ra := relayAttemptLines(trailLinesOrNil(t, trailDir(home)))
 			if len(ra) != 0 {
 				t.Errorf("expected 0 trail lines; got %d: %v", len(ra), ra)
 			}

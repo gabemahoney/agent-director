@@ -4,9 +4,11 @@ package hook_test
 // across (lifecycle × upsert_outcome) combinations.
 //
 // Singleton note: trail.Emit uses a process-level sync.Once singleton
-// whose file path is locked in on the first call. TestMain fixes
-// AGENT_DIRECTOR_STATE_DIR via os.Setenv (not t.Setenv) before any test
-// runs so all Handle invocations write to a single known file.
+// whose file path is locked in on the first call. The trail directory is
+// always <$HOME>/.agent-director/. TestMain fixes HOME via os.Setenv
+// (not t.Setenv) before any test runs so all Handle invocations write to
+// a single known file inside an isolated temp home. Per-test t.Setenv is
+// too late — the singleton has already resolved by the time a test runs.
 // Individual tests capture a line-count checkpoint before calling Handle
 // and assert only on lines added by their own invocation.
 
@@ -29,13 +31,16 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 )
 
-// trailTestDir is the persistent AGENT_DIRECTOR_STATE_DIR for the test
-// binary. Set by TestMain before any test function runs.
-var trailTestDir string
+// trailTestHome is the isolated HOME for the test binary. Set by TestMain
+// before any test function runs; the trail singleton resolves its file to
+// <trailTestHome>/.agent-director/ad-trail.jsonl.
+var trailTestHome string
 
-// TestMain fixes AGENT_DIRECTOR_STATE_DIR for the whole test binary.
-// The trail singleton initialises on the first trail.Emit call and stays
-// pointed at this directory for the process lifetime.
+// TestMain fixes HOME for the whole test binary so the trail singleton
+// writes into an isolated temp home. The trail singleton initialises on
+// the first trail.Emit call and stays pointed at <HOME>/.agent-director/
+// for the process lifetime — HOME must be set here (os.Setenv, not
+// t.Setenv) before m.Run() so it is in place before the singleton resolves.
 func TestMain(m *testing.M) {
 	sandboxguard.Require()
 	d, err := os.MkdirTemp("", "ad-hook-trail-*")
@@ -43,15 +48,17 @@ func TestMain(m *testing.M) {
 		panic("TestMain: MkdirTemp: " + err.Error())
 	}
 	defer os.RemoveAll(d)
-	trailTestDir = d
-	if err := os.Setenv("AGENT_DIRECTOR_STATE_DIR", d); err != nil {
+	trailTestHome = d
+	if err := os.Setenv("HOME", d); err != nil {
 		panic("TestMain: Setenv: " + err.Error())
 	}
 	os.Exit(m.Run())
 }
 
 // trailFile returns the trail file path used by the singleton.
-func trailFile() string { return filepath.Join(trailTestDir, "ad-trail.jsonl") }
+func trailFile() string {
+	return filepath.Join(trailTestHome, ".agent-director", "ad-trail.jsonl")
+}
 
 // readTrailLines parses every JSONL line from path into []map[string]any.
 // Returns nil when the file does not exist yet.

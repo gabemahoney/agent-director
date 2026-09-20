@@ -93,12 +93,14 @@ Return the full DB row for a tracked Spawn (id, parent, state, cwd, session name
 - `tmux_session_name`: type=string — tmux session under which the Spawn is running.
 - `claude_args`: type=[]string — Verbatim argv passed through to claude after --settings.
 - `relay_mode`: type=string — on / off.
-- `jsonl_path`: type=string — Last known transcript path. Empty until a future Epic persists it; resume composes the path on demand from cwd + claude_session_id.
+- `jsonl_path`: type=string — Last known transcript path, persisted by the SessionStart hook; legacy rows may be empty. When empty, resume composes the path on demand from cwd + claude_session_id.
 - `claude_session_id`: type=string — Claude Code session UUID, extracted from SessionStart hook's transcript_path.
 - `labels`: type=map[string]string — Caller-supplied labels.
 - `started_at`: type=timestamp — Row insert time.
 - `last_seen_at`: type=timestamp — Last hook UPSERT time.
 - `ended_at`: type=timestamp? — Set when state moves to ended (omitted while live).
+- `liveness_unverified_since`: type=timestamp? — RFC3339 timestamp of the first sweep that could not verify this live row's liveness (an unknown verdict, e.g. a permission wall). Cleared to NULL once liveness is re-established; null/omitted when never unverified.
+- `liveness_note`: type=string? — Human-readable reason the row's liveness could not be verified on the most recent unverified sweep. Cleared to NULL once liveness is re-established; null/omitted when never unverified.
 - `permission_requests`: type=[]object — All open (undecided) permission requests awaiting orchestrator decision. Always a non-null array ([] when empty). Populated only when state == check_permission; empty array for all other states. Each element: request_id (int) — autoincrement row id; request_token (string) — UUIDv4 token minted by runRelay, pass to decide verb to target this row; tool_name (string) — Claude Code tool that triggered the request; tool_input (string) — raw JSON string of the tool's input, NOT a nested object (consumers parse it themselves); requested_at (RFC3339 timestamp) — created_at of the row.
 
 ### Errors
@@ -235,7 +237,7 @@ Bring a terminated (ended/missing) Spawn back to life via `claude --resume`. Sam
 
 ## Tool: find-missing
 
-Reconcile DB state against live processes. Scans live-state rows (including pending), diffs against the OS probe (Linux /proc / macOS sysctl), transitions unprobeable rows to `missing`. Degraded-mode guard: 0 readable processes + ≥1 live rows → log warning + refuse to write.
+Reconcile DB state against live processes. Scans live-state rows (including pending) and reaches a per-row, evidence-based liveness verdict: rows carrying a full recorded identity (pid + proc_starttime) are checked against the OS (Linux /proc / macOS sysctl) — provably-dead rows transition to `missing`, verified-alive rows are left as-is, and rows whose liveness cannot be established (e.g. a permission wall) are left untouched and flagged unverified. Rows with a partial or absent recorded identity fall back to the environ probe-set diff. Each row is judged in isolation; a row is never marked missing on ambiguous evidence.
 
 ### Input schema
 
@@ -243,8 +245,10 @@ Reconcile DB state against live processes. Scans live-state rows (including pend
 
 ### Output schema
 
-- `count`: type=int — Number of rows transitioned to missing on this sweep. Zero is a legitimate happy-path result when nothing needed reaping (or when the degraded-mode guard refused to write).
+- `count`: type=int — Number of rows transitioned to missing on this sweep. Zero is a legitimate happy-path result when nothing needed reaping.
 - `ids`: type=[]string — Sorted IDs of rows transitioned to missing.
+- `unverified`: type=int — Number of live rows left untouched this sweep because their liveness could not be established (an unknown verdict, e.g. a permission wall).
+- `unverified_ids`: type=[]string — Sorted IDs of rows left untouched as unverified.
 
 ### Errors
 
@@ -325,7 +329,7 @@ Enumerate Spawn rows. All filters AND together. Returned order is unspecified �
 
 ### Output schema
 
-- `spawns`: type=[]Spawn — Matching rows. Empty array when none match (never null).
+- `spawns`: type=[]Spawn — Matching rows. Empty array when none match (never null). Each row carries liveness_unverified_since (timestamp?) and liveness_note (string?), both omitted while NULL (never unverified).
 
 ### Errors
 

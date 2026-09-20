@@ -45,22 +45,24 @@ agent-director spawn \
 The reserved-key validation (SRD §7.2 step 4) rejects `AGENT_DIRECTOR_*`
 keys but *does not reserve* the auth env vars — they pass through to
 the tmux session and into Claude verbatim. agent-director never logs
-the value, and it does **not** persist a per-spawn `--extra-env` map to
-the store: the spawn row written to `~/.agent-director/state.db` has no
-`extra_env` column (see `internal/spawn/launch.go`), so the token lives
-only in the live tmux session's environment (and inside the Claude
-process), never in the database. Consequently a terminated Spawn cannot
-reconstruct these values on `resume` (see `internal/spawn/relaunch.go`:
-"ExtraEnv are NOT stored"); auth on resume relies on the resume caller's
-own shell env propagating through tmux.
+the value. It *does* persist the per-spawn `--extra-env` map to the
+store — with no opt-out — so a terminated Spawn can restore its original
+env on `resume` (see `internal/spawn/relaunch.go`: "ExtraEnv is restored
+from the persisted row … including CLAUDE_CONFIG_DIR and any auth vars").
+That means the auth token sits at rest in `~/.agent-director/state.db`;
+the store file is forced `0600` in a `0700` directory on every open, so
+it is readable only by the owner. (See also the secrets-at-rest caveat
+in the README's Configuration section.)
 
-**Caveat — templates persist `extra_env` to disk.** The never-persisted
-guarantee above covers only the per-spawn `--extra-env` pass-through.
-Auth vars baked into a template's `extra_env` *are* written verbatim to
-the template's plaintext TOML under `~/.agent-director/templates/` (see
-`pkg/api/make_template.go`), and spawn merges them back in at resolve
-time (`internal/spawn/params.go`). Do not bake auth tokens into a
-template unless you accept them sitting on disk.
+**Caveat — templates persist `extra_env` as plaintext TOML.** Both
+paths now put auth vars on disk; the difference is *where*. Per-spawn
+`--extra-env` values land in the owner-only (`0600`) state DB described
+above. Auth vars baked into a template's `extra_env`, by contrast, are
+written verbatim to the template's plaintext TOML under
+`~/.agent-director/templates/` (see `pkg/api/make_template.go`), and
+spawn merges them back in at resolve time (`internal/spawn/params.go`).
+Prefer per-spawn `--extra-env` for auth, and do not bake auth tokens
+into a template unless you accept them sitting on disk in plaintext.
 
 ## Use `claude setup-token` for long-lived OAuth tokens
 
