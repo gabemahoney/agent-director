@@ -89,6 +89,18 @@ gates in the order defined for that phase. For each gate:
 
 ### Coverage phase (parallel)
 
+> **NOT YET RELEASE-READY.** The parallel coverage phase described below is
+> implemented and tested — the runner, executor semantics, and report
+> translation all work. But live measurement (Bee b.2mt, Epic t1.2mt.z4,
+> 2026-09-20) showed the five coverage gates are **not filesystem-isolated**:
+> they share `HOME`, the store, and `tmp`, and no `max_parallel` >= 2 currently
+> produces an all-green phase. At >= 2, `coverage.bun-test` fails from sibling
+> file leakage; at >= 3, `coverage.go-root`'s leaked-file detector also fires.
+> Until the gate-isolation fix lands (Bugs bee b.3jn), the LLM orchestrator
+> **MUST keep running the coverage gates sequentially**, following the
+> "Sequential phases" section above. The field-mapping table below remains
+> authoritative for whenever the parallel path is enabled.
+
 The coverage phase does **not** run its gates sequentially. Its five gate
 scripts —
 
