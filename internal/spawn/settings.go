@@ -49,10 +49,21 @@ var matcherFields = map[hookEventName]bool{
 //	{
 //	  "hooks": {
 //	    "<EventName>": [{"hooks":[{"type":"command","command":"<bin> hook"}]}],
-//	    ... (and "PreToolUse"/"PermissionRequest" carry matcher "*")
+//	    ... (and "PreToolUse"/"PermissionRequest" carry matcher "*" on the
+//	        outer entry AND an inner "timeout": <effective relay timeout>
+//	        on the command object, sibling of "type"/"command")
 //	  },
 //	  "permissions": { "allow": [...], "deny": [...], "ask": [...] }
 //	}
+//
+// The inner `timeout` (seconds) is emitted ONLY on the two relay hook
+// entries (PermissionRequest, PreToolUse). It carries the effective relay
+// window via cfg.Relay.EffectiveTimeoutSeconds() — the same single source
+// of truth the poll loop's deadline uses — so Claude Code's per-hook kill
+// boundary and the poll loop's fail-closed deny move in lockstep (SR-1.2 /
+// SR-1.3). A non-positive `relay.timeout_seconds` still emits 86400 (never
+// 0 or an omitted key). The other six events and the inject_help_hook
+// SessionStart entry carry no timeout and are unchanged.
 //
 // `<bin>` is the absolute path to the currently-running agent-director
 // binary (os.Executable, then filepath.Abs as belt-and-braces). The path
@@ -72,12 +83,20 @@ func synthesizeSettings(r Resolved, cfg config.Config) (string, error) {
 	exe = quoteIfWhitespace(exe)
 	cmd := exe + " hook"
 
+	// The two relay hook entries (PermissionRequest, PreToolUse) carry the
+	// effective relay timeout on their inner command object so Claude Code's
+	// per-hook kill boundary matches the poll loop's deadline (SR-1.2/1.3).
+	// matcherFields names exactly those two events.
+	relayTimeout := cfg.Relay.EffectiveTimeoutSeconds()
+
 	hooks := map[string]any{}
 	for _, evt := range hookEvents {
+		command := map[string]any{"type": "command", "command": cmd}
+		if matcherFields[evt] {
+			command["timeout"] = relayTimeout
+		}
 		entry := map[string]any{
-			"hooks": []any{
-				map[string]any{"type": "command", "command": cmd},
-			},
+			"hooks": []any{command},
 		}
 		if matcherFields[evt] {
 			entry["matcher"] = "*"
