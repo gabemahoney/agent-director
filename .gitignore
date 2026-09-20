@@ -18,6 +18,10 @@ tools/consumer-dryrun/agent-director-consumer-dryrun
 tickets/*
 !tickets/testplans/
 !tickets/testplans/**
+# ...except the bees-generated ticket index, which is regenerated on every
+# hive mutation. The other hives' indexes live outside the repo, so this is
+# the only one the negation above would otherwise sweep in.
+tickets/testplans/index.md
 
 # macOS Finder cruft
 .DS_Store
