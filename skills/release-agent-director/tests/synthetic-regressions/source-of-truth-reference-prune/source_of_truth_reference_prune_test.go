@@ -15,16 +15,16 @@
 // DESIGN
 // ======
 // Sub-case A (reference/ pruned, no false positive):
-//   1. Create reference/test-clone-{rand}/package.json with a "version" field
-//      (would have triggered P1 pre-fix).
-//   2. Create reference/test-clone-{rand}/SKILL.md with `version:` in YAML
-//      frontmatter (would have triggered P2 pre-fix).
-//   3. Run the gate from repo root; assert exit 0 and silent stderr.
+//  1. Create reference/test-clone-{rand}/package.json with a "version" field
+//     (would have triggered P1 pre-fix).
+//  2. Create reference/test-clone-{rand}/SKILL.md with `version:` in YAML
+//     frontmatter (would have triggered P2 pre-fix).
+//  3. Run the gate from repo root; assert exit 0 and silent stderr.
 //
 // Sub-case B (real in-tree SKILL.md still fires):
-//   1. Create skills/test-skill-{rand}/SKILL.md with `version:` frontmatter
-//      (this is OUTSIDE reference/, so the gate MUST still fire).
-//   2. Run the gate; assert non-zero exit and that stderr names the file.
+//  1. Create skills/test-skill-{rand}/SKILL.md with `version:` frontmatter
+//     (this is OUTSIDE reference/, so the gate MUST still fire).
+//  2. Run the gate; assert non-zero exit and that stderr names the file.
 //
 // CLEANUP-ON-FAILURE PATTERN
 // ==========================
@@ -70,6 +70,37 @@ func acquireSourceOfTruthLock(t *testing.T, root string) {
 	})
 }
 
+// acquireSeedsMutationLock grabs the SAME advisory flock that helper-tag-replay
+// holds across its repo-root `go build ./...` (pkg/api/apitest/.seeds-mutation.lock).
+// This test creates and RemoveAll's paths directly under the repo root
+// (reference/, skills/) while helper-tag-replay walks the whole tree; if the two
+// overlap, the Go package walker hits reference/ mid-teardown and fails with
+// "pattern ./...: open <root>/reference: no such file or directory". The two
+// packages share no lock of their own — previously they were serialized only by
+// timing (coverage-go-root-fires held the seeds lock for its ≈57s nested
+// full-tree run, so helper-tag-replay blocked behind it). The b.mgw scope-down
+// of that nested run removed the incidental delay and unmasked this race, so we
+// serialize explicitly against the walker's lock. helper-tag-replay is
+// unchanged; its own copy of this acquire (and its SR-5 skip guard) is
+// untouched. Lock is released after this test's tree-mutation cleanups run
+// (t.Cleanup is LIFO: acquire this first so it unlocks last).
+func acquireSeedsMutationLock(t *testing.T, root string) {
+	t.Helper()
+	lockPath := filepath.Join(root, "pkg", "api", "apitest", ".seeds-mutation.lock")
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatalf("acquireSeedsMutationLock: open %s: %v", lockPath, err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		t.Fatalf("acquireSeedsMutationLock: flock: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	})
+}
+
 func repoRoot(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
@@ -107,6 +138,12 @@ func TestSourceOfTruthReferencePrune(t *testing.T) {
 	}
 
 	root := repoRoot(t)
+
+	// Serialize against repo-root package walkers (helper-tag-replay's
+	// `go build ./...`) that fail if reference/ or skills/ is created/removed
+	// mid-walk (b.mgw). Acquired first so its cleanup unlocks LAST — after the
+	// sub-case tree mutations below are restored.
+	acquireSeedsMutationLock(t, root)
 
 	// Serialize against the other source-of-truth gate test, which also
 	// mutates the repo tree.
