@@ -8,8 +8,11 @@ SQLite file; everything else is tmux.
 
 - A **CLI** with one verb per supervision action — deterministic JSON
   on stdout, typed errors on stderr.
-- An **MCP server** (`serve --stdio`) that exposes the same verbs to
-  an LLM client.
+- An **MCP server** (`serve --stdio`) that exposes the supervision
+  verbs to an LLM client — process-internal verbs (`hook`, `serve`,
+  `trail-emit`) stay CLI-only. See
+  [`docs/mcp-reference.md`](docs/mcp-reference.md) for the authoritative
+  tool list.
 - A **Go library** (`github.com/gabemahoney/agent-director/pkg/api`) —
   typed client for all verbs, no subprocess or network hop. See
   [`pkg/api/README.md`](pkg/api/README.md).
