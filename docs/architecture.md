@@ -2568,9 +2568,15 @@ toward a release happens on a branch; the tag lands once.
 ### The release skill
 
 The `/release` skill (`skills/release-agent-director/SKILL.md`) is the
-operator runbook and sole release orchestrator. It is LLM-driven — there
-is no shell-script orchestrator; every phase decision, gate evaluation, and
-publish action is performed by the skill-running Claude instance.
+operator runbook and top-level release driver. Orchestration is split: the
+skill-running Claude instance drives phase sequencing and gate evaluation —
+every phase decision and the decision to proceed is LLM-driven — while the
+publish phase is executed by a shell-script orchestrator,
+`skills/release-agent-director/gates/publish/publish-orchestrator.sh`. That
+script owns the six publish substeps (push-branch, create-tag, gh-release,
+npm-publish, fast-forward-main, delete-remote-branch), including their
+dry-run gating, halt-on-first-failure sequencing, substep recording, and
+SR-numbered diagnostics.
 
 **Worktree-isolation contract.** The skill creates a separate git worktree
 at `.release-work/release-v<target>/`. The operator's primary checkout is
