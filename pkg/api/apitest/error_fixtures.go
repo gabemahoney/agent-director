@@ -81,8 +81,8 @@ func SeedErrJsonlMissing(t *testing.T) (*store.Store, string) {
 	s, dbPath := openErrStore(t)
 	const id = "id-err-jm-1"
 	insertErrRow(t, s, id, store.StateEnded, "off")
-	if err := s.SetSessionID(id, "sess-err-jm-1"); err != nil {
-		t.Fatalf("SeedErrJsonlMissing: SetSessionID: %v", err)
+	if err := s.RecordSessionStartIdentity(id, "sess-err-jm-1", "", 0, ""); err != nil {
+		t.Fatalf("SeedErrJsonlMissing: RecordSessionStartIdentity: %v", err)
 	}
 	return s, dbPath
 }

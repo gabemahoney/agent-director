@@ -329,7 +329,17 @@ func TestApplyHookTransitionSoftRefreshLeavesState(t *testing.T) {
 	}
 }
 
-func TestSetSessionID(t *testing.T) {
+// TestRecordSessionStartIdentity pins the store-level column semantics of the
+// widened SessionStart write (the method that replaced SetSessionID). The
+// PM-mandated contract (spawns.go doc):
+//   - claude_session_id / jsonl_path: written only when the passed value is
+//     non-empty; an empty value preserves the existing column (COALESCE(?, col)).
+//   - pid / proc_starttime: ALWAYS written — the fresh value, or NULL (0 / "")
+//     when identity capture failed. Never stale identity.
+//
+// These are direct method calls read back via GetSpawn; the hook-layer gating
+// (SessionStart-only invocation) is pinned by sibling handler tests.
+func TestRecordSessionStartIdentity(t *testing.T) {
 	s, _ := openTempStore(t)
 	id := "77777777-aaaa-4bbb-8ccc-000000000007"
 	if err := s.InsertPending(Spawn{
@@ -337,12 +347,56 @@ func TestSetSessionID(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
-	if err := s.SetSessionID(id, "session-abc"); err != nil {
-		t.Fatalf("SetSessionID: %v", err)
+
+	// 1. First SessionStart: all four columns land. Fresh identity is written.
+	if err := s.RecordSessionStartIdentity(id, "session-abc", "/x/abc.jsonl", 4242, "9988"); err != nil {
+		t.Fatalf("RecordSessionStartIdentity (fresh): %v", err)
 	}
 	got, _ := s.GetSpawn(id)
 	if got.ClaudeSessionID != "session-abc" {
 		t.Fatalf("ClaudeSessionID = %q; want session-abc", got.ClaudeSessionID)
+	}
+	if got.JSONLPath != "/x/abc.jsonl" {
+		t.Fatalf("JSONLPath = %q; want /x/abc.jsonl", got.JSONLPath)
+	}
+	if got.PID != 4242 {
+		t.Fatalf("PID = %d; want 4242", got.PID)
+	}
+	if got.ProcStarttime != "9988" {
+		t.Fatalf("ProcStarttime = %q; want 9988", got.ProcStarttime)
+	}
+
+	// 2. Re-record with empty session id / jsonl path but fresh (well, absent)
+	//    identity: session id and jsonl_path are PRESERVED (COALESCE keeps the
+	//    prior non-empty value), while pid / proc_starttime are ALWAYS written
+	//    — here to NULL (0 / "") because capture "failed". A stale pid must
+	//    never survive: Epic hp's liveness check would else mark a live resumed
+	//    spawn provably-dead.
+	if err := s.RecordSessionStartIdentity(id, "", "", 0, ""); err != nil {
+		t.Fatalf("RecordSessionStartIdentity (identity cleared): %v", err)
+	}
+	got, _ = s.GetSpawn(id)
+	if got.ClaudeSessionID != "session-abc" {
+		t.Fatalf("empty session id clobbered value: ClaudeSessionID = %q; want session-abc", got.ClaudeSessionID)
+	}
+	if got.JSONLPath != "/x/abc.jsonl" {
+		t.Fatalf("empty jsonl path clobbered value: JSONLPath = %q; want /x/abc.jsonl", got.JSONLPath)
+	}
+	if got.PID != 0 {
+		t.Fatalf("stale PID survived capture failure: PID = %d; want 0 (NULL)", got.PID)
+	}
+	if got.ProcStarttime != "" {
+		t.Fatalf("stale ProcStarttime survived capture failure: %q; want \"\" (NULL)", got.ProcStarttime)
+	}
+
+	// 3. A later successful capture re-writes fresh identity (proving step 2's
+	//    clear was a genuine NULL write, not an accidental preserve).
+	if err := s.RecordSessionStartIdentity(id, "", "", 5150, "7001"); err != nil {
+		t.Fatalf("RecordSessionStartIdentity (re-capture): %v", err)
+	}
+	got, _ = s.GetSpawn(id)
+	if got.PID != 5150 || got.ProcStarttime != "7001" {
+		t.Fatalf("re-capture identity = (%d, %q); want (5150, 7001)", got.PID, got.ProcStarttime)
 	}
 }
 
@@ -358,8 +412,8 @@ func TestApplyHookTransitionMissingRowIsNoop(t *testing.T) {
 	if got := spawnStateTransitionLines(t, beforeTrail); len(got) != 0 {
 		t.Errorf("missing-row transition emitted %d ad.spawn.state_transition; want 0 (fail-open per SRD §3.2)", len(got))
 	}
-	if err := s.SetSessionID("ghost", "session-x"); err != nil {
-		t.Fatalf("session-id on missing row should be no-op: %v", err)
+	if err := s.RecordSessionStartIdentity("ghost", "session-x", "/x/ghost.jsonl", 999, "111"); err != nil {
+		t.Fatalf("record-identity on missing row should be no-op: %v", err)
 	}
 }
 

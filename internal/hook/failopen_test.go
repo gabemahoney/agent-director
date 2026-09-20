@@ -78,18 +78,18 @@ func trailHookFiredAfter(t *testing.T, prevCount int) map[string]any {
 // exercises the state-tracking path.
 type flakyStore struct {
 	transitionErr error
-	sessionErr    error
+	identityErr   error
 	transitionN   int
-	sessionN      int
+	identityN     int
 }
 
 func (f *flakyStore) ApplyHookTransition(string, string, bool, string) error {
 	f.transitionN++
 	return f.transitionErr
 }
-func (f *flakyStore) SetSessionID(string, string) error {
-	f.sessionN++
-	return f.sessionErr
+func (f *flakyStore) RecordSessionStartIdentity(_, _, _ string, _ int, _ string) error {
+	f.identityN++
+	return f.identityErr
 }
 func (f *flakyStore) UpsertOpenPermissionRequest(_, _, _, _ string, _ int, _ string) error {
 	return nil
@@ -200,13 +200,13 @@ func TestHandleStoreTransitionErrorExitsZero(t *testing.T) {
 func TestHandleSessionIDErrorExitsZero(t *testing.T) {
 	logger, _ := captureLog(t)
 	stdin := strings.NewReader(`{"hook_event_name":"SessionStart","transcript_path":"/x/abc.jsonl"}`)
-	st := &flakyStore{sessionErr: errors.New("db unreachable")}
+	st := &flakyStore{identityErr: errors.New("db unreachable")}
 	env := func(string) string { return "id-123" }
 	if err := callHandle(stdin, env, st, logger); err != nil {
 		t.Fatalf("Handle returned err = %v; want nil (fail-open)", err)
 	}
-	if st.sessionN != 1 {
-		t.Errorf("session-id called %d times; want 1", st.sessionN)
+	if st.identityN != 1 {
+		t.Errorf("record-identity called %d times; want 1", st.identityN)
 	}
 }
 
@@ -221,8 +221,8 @@ func TestHandleHappyPathWritesBothColumns(t *testing.T) {
 	if st.transitionN != 1 {
 		t.Errorf("transition called %d times; want 1", st.transitionN)
 	}
-	if st.sessionN != 1 {
-		t.Errorf("session-id called %d times; want 1", st.sessionN)
+	if st.identityN != 1 {
+		t.Errorf("record-identity called %d times; want 1", st.identityN)
 	}
 }
 

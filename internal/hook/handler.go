@@ -16,10 +16,24 @@ import (
 // branches (DB-unreachable, etc.) without scripting SQLite errors.
 type HookStore interface {
 	ApplyHookTransition(instanceID, newState string, softRefresh bool, triggeringEventName string) error
-	SetSessionID(instanceID, sessionID string) error
+	RecordSessionStartIdentity(instanceID, sessionID, jsonlPath string, pid int, procStarttime string) error
 	UpsertOpenPermissionRequest(instanceID, requestToken, toolName, toolInputJSON string, cap int, writerProcess string) error
 	GetPermissionRequest(instanceID, requestToken string) (store.PermissionRow, error)
 	DecidePermissionRequest(instanceID, requestToken, decision, reason string, writerProcess string) (bool, error)
+}
+
+// IdentityResolver resolves the process identity (pid + canonical per-OS
+// proc_starttime) of the tracked Claude process from the running hook's
+// perspective, keyed by the resolved instance id. It mirrors
+// probe.Resolver.Resolve exactly; declaring it locally keeps hook free of a
+// probe import (the dependency edge would otherwise invert the natural
+// direction) and makes the test double trivial. cmd/agent-director wires the
+// per-OS production implementation from probe.NewResolver().
+//
+// Fail-open: any non-nil error maps to absent identity (NULL pid +
+// proc_starttime) — the SessionStart path logs one line and proceeds.
+type IdentityResolver interface {
+	Resolve(id string) (pid int, procStartTime string, err error)
 }
 
 // outcomeTransitioner is an optional extension of HookStore. *store.Store
@@ -36,6 +50,12 @@ type HandleConfig struct {
 	Env   func(string) string
 	Cfg   config.Relay
 	Clock PollClock
+	// Resolver captures the tracked Claude process identity on SessionStart.
+	// Nil-safe: a nil Resolver (or any Resolve error) fails open — the
+	// SessionStart write records absent identity (NULL pid + proc_starttime)
+	// while still persisting session id + jsonl_path. cmd/agent-director wires
+	// probe.NewResolver(); tests inject a double.
+	Resolver IdentityResolver
 }
 
 // Handle is the entry point cmd/ dispatches into. It reads the payload
@@ -164,9 +184,34 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		return nil
 	}
 
-	if res.SessionID != "" {
-		if err := st.SetSessionID(instanceID, res.SessionID); err != nil {
-			failClosed(fmt.Sprintf("set session id (instance=%s): %v", instanceID, err))
+	// SessionStart is the sole write site for the spawn-row identity /
+	// transcript columns (SR-6.5/SR-9.1). The widened store call is gated on
+	// the SessionStart event, not on a non-empty session id: jsonl_path must
+	// persist whenever the payload carried a transcript path, independent of
+	// whether the basename SessionID extraction succeeded.
+	//
+	// Identity capture (SR-6.1/6.5): the injected resolver walks the parent
+	// chain to the tracked Claude process and yields its pid + canonical
+	// per-OS proc_starttime. It is invoked ONLY on SessionStart, with the
+	// resolved instance id. Fail-open per SRD §3.2: a nil resolver or ANY
+	// Resolve error logs one line and passes absent identity (pid=0 → NULL,
+	// proc_starttime="" → NULL) — pid/proc_starttime are ALWAYS written on
+	// SessionStart (fresh values or NULL, never stale). Empty session id /
+	// transcript path preserve the existing columns via the store's COALESCE
+	// semantics. Non-SessionStart events never reach the resolver.
+	if res.EventName == "SessionStart" {
+		pid, procStarttime := 0, ""
+		if hc.Resolver != nil {
+			if p, s, err := hc.Resolver.Resolve(instanceID); err != nil {
+				logf(logger, "hook: resolve identity (instance=%s): %v — recording NULL identity", instanceID, err)
+			} else {
+				pid, procStarttime = p, s
+			}
+		} else {
+			logf(logger, "hook: no identity resolver (instance=%s) — recording NULL identity", instanceID)
+		}
+		if err := st.RecordSessionStartIdentity(instanceID, res.SessionID, res.TranscriptPath, pid, procStarttime); err != nil {
+			failClosed(fmt.Sprintf("record session start identity (instance=%s): %v", instanceID, err))
 			return nil
 		}
 	}
