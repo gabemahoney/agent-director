@@ -543,13 +543,15 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "find-missing",
-		Description: "Reconcile DB state against live processes. Scans live-state rows (including pending), diffs against the OS probe (Linux /proc / macOS sysctl), transitions unprobeable rows to `missing`. Degraded-mode guard: 0 readable processes + ≥1 live rows → log warning + refuse to write.",
+		Description: "Reconcile DB state against live processes. Scans live-state rows (including pending) and reaches a per-row, evidence-based liveness verdict: rows carrying a full recorded identity (pid + proc_starttime) are checked against the OS (Linux /proc / macOS sysctl) — provably-dead rows transition to `missing`, verified-alive rows are left as-is, and rows whose liveness cannot be established (e.g. a permission wall) are left untouched and flagged unverified. Rows with a partial or absent recorded identity fall back to the environ probe-set diff. Each row is judged in isolation; a row is never marked missing on ambiguous evidence.",
 		Callable:    true,
 		HandleFree:  false,
 		Params:      []ParamDef{},
 		ResultFields: []FieldDef{
-			{Name: "count", Type: "int", Description: "Number of rows transitioned to missing on this sweep. Zero is a legitimate happy-path result when nothing needed reaping (or when the degraded-mode guard refused to write).", Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "count", Type: "int", Description: "Number of rows transitioned to missing on this sweep. Zero is a legitimate happy-path result when nothing needed reaping.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "ids", Type: "[]string", Description: "Sorted IDs of rows transitioned to missing.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "unverified", Type: "int", Description: "Number of live rows left untouched this sweep because their liveness could not be established (an unknown verdict, e.g. a permission wall).", Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "unverified_ids", Type: "[]string", Description: "Sorted IDs of rows left untouched as unverified.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 		},
 		ErrorNames: []string{
 			"ErrProbeUnsupported",

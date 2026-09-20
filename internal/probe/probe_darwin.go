@@ -5,7 +5,6 @@ package probe
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"fmt"
 
 	"golang.org/x/sys/unix"
@@ -86,45 +85,3 @@ func procArgs(pid int) ([]byte, error) {
 	return unix.SysctlRaw("kern.procargs2", pid)
 }
 
-// envFromProcArgs2 parses the KERN_PROCARGS2 blob and returns just the
-// env section (NUL-separated KEY=VAL entries). Returns (nil, false)
-// on a too-short blob.
-func envFromProcArgs2(blob []byte) ([]byte, bool) {
-	if len(blob) < 4 {
-		return nil, false
-	}
-	argc := int(binary.LittleEndian.Uint32(blob[:4]))
-	if argc < 0 {
-		return nil, false
-	}
-
-	// Skip past the 4-byte argc, the exec_path (null-terminated), any
-	// padding (the exec_path is followed by enough NULs to align to
-	// argv start, but in practice the parser just hops to the next
-	// non-NUL byte), and argc argv entries.
-	i := 4
-
-	// Walk the exec_path until the first NUL. Then skip any additional
-	// NULs (alignment padding before argv[0]).
-	for i < len(blob) && blob[i] != 0 {
-		i++
-	}
-	for i < len(blob) && blob[i] == 0 {
-		i++
-	}
-
-	// Skip argc argv strings.
-	for j := 0; j < argc && i < len(blob); j++ {
-		for i < len(blob) && blob[i] != 0 {
-			i++
-		}
-		// consume the NUL
-		if i < len(blob) {
-			i++
-		}
-	}
-	if i >= len(blob) {
-		return nil, false
-	}
-	return blob[i:], true
-}

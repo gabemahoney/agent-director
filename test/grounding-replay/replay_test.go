@@ -472,7 +472,7 @@ func TestGroundingReplayScenario(t *testing.T) {
 			"event":             "ad.find_missing.tick",
 			"claude_instance_id": testInstanceID,
 		})
-		// Q5b: by request_token (degraded-mode events carry null instance_id)
+		// Q5b: by request_token (permission_orphan_closeout ticks carry the token)
 		byTok := filterLines(myLines, map[string]string{
 			"event":         "ad.find_missing.tick",
 			"request_token": requestToken,

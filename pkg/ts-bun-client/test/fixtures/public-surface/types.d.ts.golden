@@ -286,6 +286,13 @@ export interface FindMissingResult {
     count: number;
     /** Sorted ids of rows transitioned to missing. */
     ids: string[];
+    /**
+     * Number of live rows left untouched this sweep because their liveness
+     * could not be established (an unknown verdict, e.g. a permission wall).
+     */
+    unverified: number;
+    /** Sorted ids of rows left untouched as unverified. Non-nil; [] when none. */
+    unverified_ids: string[];
 }
 /** Mirrors the `expire` CLI verb's --older-than flag (pkg/api.Client.Expire arg). */
 export interface ExpireParams {

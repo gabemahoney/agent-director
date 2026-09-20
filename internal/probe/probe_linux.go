@@ -13,9 +13,12 @@ import (
 // linuxProber walks /proc/<pid>/environ for every numeric PID dir.
 // `environ` is the NUL-separated KEY=VAL block, kernel-default
 // readable only by the file's owner. Unreadable (foreign-uid)
-// processes are skipped silently — the degraded-mode guard upstream
-// catches the worst case of "I can't read anything but the DB has
-// live rows".
+// processes are skipped silently: the probe set is the fallback ground
+// truth for NULL-pid rows only. Rows that DO carry a pid + starttime are
+// evidenced per-row through the LivenessChecker seam, whose Linux impl
+// resolves an unreadable process to an UNKNOWN verdict (skip that row)
+// rather than a false "dead" — so a foreign-uid or permission-walled
+// process is never misreported.
 type linuxProber struct{}
 
 func newProber() Prober { return linuxProber{} }
