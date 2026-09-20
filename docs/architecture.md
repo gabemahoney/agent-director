@@ -2040,11 +2040,24 @@ mutation, no half-created tmux session):
    Spawn killed before its first SessionStart hook fired has no
    rotated session id to point `--resume` at.
 4. JSONL transcript file exists on disk → otherwise
-   `ErrJsonlMissing`. Pure `os.Stat` pre-flight; no read. The path
-   checked is the persisted `jsonl_path` when present (the true path
-   even when the Spawn ran under a custom `CLAUDE_CONFIG_DIR`); legacy
-   rows with an empty `jsonl_path` fall back to the computed slug-rule
-   path (see [JSONL path resolver](#jsonl-path-resolver-internalspawnjsonlgo)).
+   `ErrJsonlMissing`. Pure `os.Stat` pre-flight; no read. Candidate
+   resolution follows a strict precedence (decision of record, bug
+   b.1ba):
+   1. The persisted `jsonl_path` is tried first, if non-empty. If its
+      `os.Stat` succeeds it **wins outright** — no fallback is computed.
+   2. If `jsonl_path` is NULL/empty **or** its `os.Stat` fails for ANY
+      reason (not just ENOENT — a permission-broken persisted path must
+      not block an otherwise-resumable row), a fallback path is
+      recomputed from the row's `ExtraEnv["CLAUDE_CONFIG_DIR"]` (or
+      `~/.claude` when that key is absent/empty) `+ slug(cwd) + session
+      id`, and that is `os.Stat`'d.
+
+   This heals legacy rows written before the SessionStart hook persisted
+   `jsonl_path`, and rows whose recorded path has rotted — a successful
+   fallback resume re-fires SessionStart, which re-persists the correct
+   path. When **every** candidate fails, `ErrJsonlMissing` reports each
+   path tried with its source (`persisted` vs `fallback`) and its stat
+   error (see [JSONL path resolver](#jsonl-path-resolver-internalspawnjsonlgo)).
 5. Canonical tmux session name is free → otherwise the wrapped
    `tmux.ErrTmuxSessionCreate` sentinel. Resume does NOT auto-kill
    a stale session; the operator cleans up manually.
@@ -2096,12 +2109,28 @@ the new id, pointing at the new JSONL.
 The resume pre-flight prefers the transcript path **persisted on the
 row** (`jsonl_path`, stamped by the SessionStart hook). That path is
 authoritative — it records where Claude Code actually wrote the
-transcript, including under a custom `CLAUDE_CONFIG_DIR` where the
-computed layout below would be wrong.
+transcript, including under a custom `CLAUDE_CONFIG_DIR`. It wins as
+long as its `os.Stat` succeeds.
 
-`spawn.JsonlPath` is the **legacy fallback**, used only when the row's
-`jsonl_path` is empty (rows written before the hook persisted it). It
-reconstructs the default layout from `cwd` + `session_id`:
+When `jsonl_path` is empty (rows written before the hook persisted it)
+**or** its `os.Stat` fails for any reason (path rot, permission
+break), the pre-flight recomputes a **`CLAUDE_CONFIG_DIR`-aware
+fallback** and stats that (bug b.1ba). Two resolvers back this:
+
+- **`spawn.JsonlPathIn(configDir, cwd, sessionID)`** — composes
+  `<configDir>/projects/<slug(cwd)>/<session_id>.jsonl`. This is the
+  config-dir-aware resolver the fallback uses when the row's
+  `ExtraEnv["CLAUDE_CONFIG_DIR"]` is set, so a Spawn that ran under a
+  custom config dir finds its transcript under
+  `<CLAUDE_CONFIG_DIR>/projects/...` rather than `~/.claude/projects/...`.
+  Reuse it whenever you need a transcript path under an explicit config
+  dir — do not re-derive the layout by hand. This follows the
+  established `internal/spawn/pretrust.go` pattern of reading
+  `ExtraEnv["CLAUDE_CONFIG_DIR"]` to locate a per-spawn config dir.
+- **`spawn.JsonlPath(cwd, sessionID)`** — a thin wrapper over
+  `JsonlPathIn` that resolves the config dir to `$HOME/.claude`. Used
+  for the default-config fallback (no `CLAUDE_CONFIG_DIR` key on the
+  row). It reconstructs the default layout:
 
 ```
 ~/.claude/projects/<slug(cwd)>/<session_id>.jsonl
@@ -2403,6 +2432,48 @@ The recommended operator setup is a systemd user-timer or a personal
 crontab — not a system-level cron — so the userland identity matches
 the Spawn-launching identity automatically and rows get real liveness
 verdicts instead of a wall of unverified metadata.
+
+### Reboot-recovery runbook
+
+After a machine reboot, every Spawn's process and tmux server are gone,
+but the rows persist in `state.db` frozen at their pre-reboot
+live state (`waiting`/`working`). Recovering a Spawn's conversation is a
+**two-verb contract, in order**:
+
+1. **`find-missing`** — reconciles the frozen rows against reality. On a
+   reboot the probe set is legitimately empty and the rows are genuinely
+   dead, so this marks them `missing` (a terminal state). This step is
+   **required first**: `resume` refuses any non-terminal row with
+   `ErrSpawnNotResumable`, so a row still frozen at `waiting`/`working`
+   cannot be resumed until `find-missing` moves it to `missing`.
+2. **`resume`** — relaunches each missing row via `claude --resume` in a
+   fresh tmux session under the same `claude_instance_id`, restoring the
+   persisted `ExtraEnv` (auth/config, incl. `CLAUDE_CONFIG_DIR`) and
+   replaying the JSONL transcript. The transcript is located by the
+   [pre-flight precedence](#verb-pkgapiresumego) (persisted `jsonl_path`,
+   then the `CLAUDE_CONFIG_DIR`-aware fallback), which is what lets a
+   Spawn that ran under a custom config dir recover across a reboot.
+
+```
+agent-director find-missing        # reconcile frozen rows → missing
+agent-director resume --claude-instance-id <id>   # relaunch each
+```
+
+**`delete` is NOT a recovery step.** It is destructive: it removes the
+row along with its `claude_session_id`, labels, and `extra_env`, making
+any later recovery impossible. Reaching for `delete` + fresh `spawn`
+after a failed resume throws away the conversation. The only legitimate
+recovery path is `find-missing` → `resume`; `delete` is an admin
+force-removal verb, not part of the recovery contract. (A resume that
+fails with `ErrJsonlMissing` names every transcript path it tried and
+its source, so the operator can diagnose *why* before deciding anything.)
+
+**Autostart is the CALLER's responsibility.** agent-director does not
+watch for reboots and does not schedule anything itself. Its recovery
+contract **starts at** "the caller invokes `find-missing` then
+`resume`". Whatever triggers that sequence after a boot — a systemd
+unit, a startup script, a `find-missing` cron loop — is owned and
+operated by the caller, not by agent-director.
 
 ## Stop semantics
 

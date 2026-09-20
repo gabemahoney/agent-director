@@ -43,26 +43,56 @@ const (
 	stubMarkerVal = "1"
 )
 
+// stubSessionIDPrefix is the token the stub prepends to the injected
+// AGENT_DIRECTOR_INSTANCE_ID to mint the session id on a FRESH spawn. Because
+// the hook derives claude_session_id from the transcript-path basename
+// (classify: basename-without-.jsonl), choosing the basename here IS choosing
+// the persisted claude_session_id — which resume then hands back verbatim via
+// `--resume <sid>`. The test derives the expected transcript path independently
+// from this same rule (see stubSessionID / spawn.JsonlPathIn), so the assertion
+// is non-circular: the stub composes the path from env+argv, the test composes
+// it from the store-observable inputs.
+const stubSessionIDPrefix = "sess-"
+
+// stubSessionID mints the session id the stub would use on a fresh spawn for a
+// given AD instance id — mirroring the shell's `SID="sess-$INSTANCE"`. Used by
+// the test to derive the expected transcript path independently of the stub.
+func stubSessionID(instanceID string) string { return stubSessionIDPrefix + instanceID }
+
 // writeStubClaude generates the PM-pinned stub `claude` shell script into
 // stubDir (named exactly "claude" so a PATH-prepend wins over any system
 // claude) and returns stubDir. binaryAbs is baked in so the stub invokes the
-// real hook verb. jsonlPath is the fixed transcript path the stub writes to and
-// reports to the hook.
+// real hook verb. The stub takes NO baked transcript path (b.1ba AC6): it
+// DERIVES the path at runtime from $CLAUDE_CONFIG_DIR (default ~/.claude) +
+// slug($PWD) + a session id — so the E2E exercises resume's real CONFIG_DIR
+// resolution rather than asserting against the stub's own hardcoded literal.
+//
+// Transcript-path derivation (the auditable non-circular contract):
+//
+//	cfg  = ${CLAUDE_CONFIG_DIR:-$HOME/.claude}
+//	slug = $PWD with every non-[A-Za-z0-9-] rune replaced by '-'  (sed)
+//	sid  = the `--resume <sid>` argv value on resume, else "sess-$AGENT_DIRECTOR_INSTANCE_ID"
+//	JSONL = $cfg/projects/$slug/$sid.jsonl
+//
+// This matches Go's spawn.JsonlPathIn(cfg, cwd, sid) byte-for-byte. On a fresh
+// spawn the basename is $sid, so the SessionStart hook persists
+// claude_session_id = $sid; resume hands that same $sid back via `--resume`, so
+// the continuation lands in the SAME derived file — without any literal path
+// crossing the stub/test boundary.
 //
 // PM-PINNED stub mechanism:
 //   - On start the stub invokes `<binaryAbs> hook` with stdin JSON
-//     {"hook_event_name":"SessionStart","transcript_path":"<jsonlPath>"},
+//     {"hook_event_name":"SessionStart","transcript_path":"<derived JSONL>"},
 //     relying on the AGENT_DIRECTOR_INSTANCE_ID that tmux injected via -e — the
 //     exact two fields the real Claude Code sends and the only two the handler
 //     consumes for this flow. That SessionStart is what makes find-missing's
 //     checker record the STUB's own pid + proc_starttime as the row identity
 //     (the stub is the topmost env-carrying ancestor of the hook subprocess),
-//     and what re-persists jsonl_path on resurrection.
-//   - The stub appends a line to jsonlPath on every start (a pre-kill marker on
-//     the fresh spawn, a continuation marker on --resume), then stays alive
-//     (exec-ing a long sleep carrying stubMarker) so the probe can read its
-//     /proc/<pid>/environ.
-//   - On `claude --resume <sid> ...` it appends to the SAME jsonlPath.
+//     and what persists jsonl_path + claude_session_id.
+//   - The stub appends a line to the derived JSONL on every start (a pre-kill
+//     marker on the fresh spawn, a continuation marker on --resume), then stays
+//     alive (exec-ing a long sleep carrying stubMarker) so the probe can read
+//     its /proc/<pid>/environ.
 //
 // PM-REQUIRED FIDELITY NOTE: appending to the SAME jsonl on --resume
 // deliberately diverges from real Claude Code, which rotates the session UUID
@@ -71,29 +101,52 @@ const (
 // "continues the pre-kill session", so a single same-file transcript is an
 // accepted simplification here; jsonl_path re-persistence on resurrection is
 // covered by Epic is's SessionStart unit tests, not this E2E.
-func writeStubClaude(t *testing.T, stubDir, binaryAbs, jsonlPath string) string {
+func writeStubClaude(t *testing.T, stubDir, binaryAbs string) string {
 	t.Helper()
 	if err := os.MkdirAll(stubDir, 0o755); err != nil {
 		t.Fatalf("mkdir stubDir: %v", err)
 	}
 	// The stub detects a --resume argument to decide which transcript marker to
-	// append. It fires the SessionStart hook, appends its line, then execs a
-	// long-lived sleep tagged with stubMarker so the pane process persists with
-	// a readable environ. `exec` replaces the shell so the surviving pid IS the
-	// process whose environ carries AGENT_DIRECTOR_INSTANCE_ID.
+	// append AND to read the session id back from argv. It derives the
+	// transcript path from $CLAUDE_CONFIG_DIR + slug($PWD) + sid, fires the
+	// SessionStart hook, appends its line, then execs a long-lived sleep tagged
+	// with stubMarker so the pane process persists with a readable environ.
+	// `exec` replaces the shell so the surviving pid IS the process whose
+	// environ carries AGENT_DIRECTOR_INSTANCE_ID.
 	script := `#!/bin/sh
-# Stub 'claude' for the reboot-recovery E2E. See writeStubClaude in harness.go.
+# Stub 'claude' for the reboot-recovery E2E. See writeStubClaude in harness_test.go.
+# It DERIVES its transcript path from $CLAUDE_CONFIG_DIR + slug($PWD) + sid so
+# the b.1ba assertion is non-circular (no baked literal path).
 BINARY='` + binaryAbs + `'
-JSONL='` + jsonlPath + `'
 
 resume=no
+sid=''
+prev=''
 for a in "$@"; do
+  if [ "$prev" = "--resume" ]; then sid="$a"; fi
   if [ "$a" = "--resume" ]; then resume=yes; fi
+  prev="$a"
 done
+
+# Fresh spawn: mint the session id from the injected instance id. The hook
+# derives claude_session_id from this path's basename, so this IS the sid resume
+# will hand back via --resume.
+if [ -z "$sid" ]; then
+  sid='` + stubSessionIDPrefix + `'"$AGENT_DIRECTOR_INSTANCE_ID"
+fi
+
+# cfg = $CLAUDE_CONFIG_DIR or ~/.claude (mirrors spawn.JsonlPath's fallback).
+cfg="$CLAUDE_CONFIG_DIR"
+if [ -z "$cfg" ]; then cfg="$HOME/.claude"; fi
+
+# slug($PWD): every non-[A-Za-z0-9-] rune → '-' (mirrors Go slugifyCwd).
+slug=$(printf '%s' "$PWD" | sed 's/[^A-Za-z0-9-]/-/g')
+JSONL="$cfg/projects/$slug/$sid.jsonl"
 
 mkdir -p "$(dirname "$JSONL")"
 
-# Fire SessionStart so the hook persists identity (pid+starttime) + jsonl_path.
+# Fire SessionStart so the hook persists identity (pid+starttime) + jsonl_path
+# + claude_session_id (basename of this path).
 printf '%s' '{"hook_event_name":"SessionStart","transcript_path":"'"$JSONL"'"}' \
   | "$BINARY" hook >/dev/null 2>&1 || true
 

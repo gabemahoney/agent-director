@@ -302,6 +302,31 @@ pass. Skipped rows are reported in its `unverified` count and
 `unverified_ids`, and each carries `liveness_unverified_since` and a
 `liveness_note` in `list` and `get` so you can re-run as the owning user.
 
+## Recovering after a reboot
+
+A reboot kills every session's process and tmux server, but the rows
+survive in `state.db`. Bring a session's conversation back in two steps,
+in this order:
+
+```sh
+# 1. Reconcile the frozen rows so dead sessions become `missing`:
+agent-director find-missing
+
+# 2. Relaunch a session with its full history replayed:
+agent-director resume --claude-instance-id <id>
+```
+
+`find-missing` must run first — `resume` only acts on a session that
+`find-missing` has already marked `missing`. `resume` relaunches under
+the same id and restores the session's env and conversation transcript.
+
+Do **not** use `delete` to recover — it permanently removes the row and
+its conversation history, so there is nothing left to resume.
+
+agent-director does not restart sessions for you. Deciding when to run
+`find-missing` then `resume` after a boot — from a startup script,
+service, or scheduler — is up to you.
+
 ## Uninstall
 
 ```sh
