@@ -55,6 +55,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -186,4 +187,53 @@ func subCheckByName(t *testing.T, out consolidatedOutput, name string) subCheck 
 	}
 	t.Fatalf("subCheckByName: gate %q not present in consolidated output; sub_checks=%+v", name, out.SubChecks)
 	panic("unreachable")
+}
+
+// subCheckJSONKeys returns the SR-2.1 sub_check JSON key names, derived once from
+// the subCheck struct's own json tags so the key spellings never diverge from the
+// declare-once home in this file (SR-7.3). A typed decode proves a key's TYPE but
+// silently zero-values a MISSING key; presence assertions need the raw key names.
+// The returned slice is ordered by struct-field order, so keys[0] is the name key.
+func subCheckJSONKeys(t *testing.T) []string {
+	t.Helper()
+	typ := reflect.TypeOf(subCheck{})
+	keys := make([]string, 0, typ.NumField())
+	for i := 0; i < typ.NumField(); i++ {
+		tag := typ.Field(i).Tag.Get("json")
+		if tag == "" || tag == "-" {
+			t.Fatalf("subCheckJSONKeys: field %q has no usable json tag", typ.Field(i).Name)
+		}
+		keys = append(keys, strings.Split(tag, ",")[0])
+	}
+	return keys
+}
+
+// rawSubChecksByName decodes the executor stdout a second time, keeping each
+// sub_check as a raw JSON object keyed by its gate name. This preserves the exact
+// key set the executor emitted (a typed decode discards it), so callers can assert
+// SR-2.1 key PRESENCE, not just type. The name-key spelling is derived from the
+// subCheck struct tags (subCheckJSONKeys), never re-spelled. Fails the test on any
+// decode error.
+func rawSubChecksByName(t *testing.T, stdout string) map[string]map[string]json.RawMessage {
+	t.Helper()
+	nameKey := subCheckJSONKeys(t)[0] // subCheck.Name is the first field (SR-7.3 tag home)
+	var top struct {
+		SubChecks []map[string]json.RawMessage `json:"sub_checks"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &top); err != nil {
+		t.Fatalf("rawSubChecksByName: unmarshal: %v\nstdout:\n%s", err, stdout)
+	}
+	byName := make(map[string]map[string]json.RawMessage, len(top.SubChecks))
+	for _, raw := range top.SubChecks {
+		nameRaw, ok := raw[nameKey]
+		if !ok {
+			t.Fatalf("rawSubChecksByName: sub_check missing %q key: %v", nameKey, raw)
+		}
+		var name string
+		if err := json.Unmarshal(nameRaw, &name); err != nil {
+			t.Fatalf("rawSubChecksByName: sub_check %q key not a string: %v", nameKey, err)
+		}
+		byName[name] = raw
+	}
+	return byName
 }
