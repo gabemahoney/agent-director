@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 )
 
@@ -255,16 +256,36 @@ func migrateV2toV3(db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("store: begin v2→v3 migration tx: %w", err)
 	}
-	const v3SpawnsColumns = `
-ALTER TABLE spawns ADD COLUMN pid INTEGER;
-ALTER TABLE spawns ADD COLUMN proc_starttime TEXT;
-ALTER TABLE spawns ADD COLUMN liveness_unverified_since TEXT;
-ALTER TABLE spawns ADD COLUMN liveness_note TEXT;
-ALTER TABLE spawns ADD COLUMN extra_env TEXT NOT NULL DEFAULT '{}';
-`
-	if _, err := tx.Exec(v3SpawnsColumns); err != nil {
-		_ = tx.Rollback()
-		return fmt.Errorf("store: v2→v3 add spawns columns: %w", err)
+	// SQLite has no ADD COLUMN IF NOT EXISTS (migration-guide §2). Guard each
+	// ALTER by probing pragma_table_info('spawns') first and only adding the
+	// column when it is absent, so the hop is idempotent on re-entry.
+	v3SpawnsColumns := []struct{ name, ddl string }{
+		{"pid", "ALTER TABLE spawns ADD COLUMN pid INTEGER"},
+		{"proc_starttime", "ALTER TABLE spawns ADD COLUMN proc_starttime TEXT"},
+		{"liveness_unverified_since", "ALTER TABLE spawns ADD COLUMN liveness_unverified_since TEXT"},
+		{"liveness_note", "ALTER TABLE spawns ADD COLUMN liveness_note TEXT"},
+		{"extra_env", "ALTER TABLE spawns ADD COLUMN extra_env TEXT NOT NULL DEFAULT '{}'"},
+	}
+	for _, col := range v3SpawnsColumns {
+		var exists int
+		err := tx.QueryRow(
+			"SELECT 1 FROM pragma_table_info('spawns') WHERE name = ?",
+			col.name,
+		).Scan(&exists)
+		switch {
+		case err == nil:
+			// Column already present — skip to stay idempotent.
+			continue
+		case errors.Is(err, sql.ErrNoRows):
+			// Column absent — add it below.
+		default:
+			_ = tx.Rollback()
+			return fmt.Errorf("store: v2→v3 probe spawns.%s: %w", col.name, err)
+		}
+		if _, err := tx.Exec(col.ddl); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("store: v2→v3 add spawns.%s: %w", col.name, err)
+		}
 	}
 	if _, err := tx.Exec("PRAGMA user_version = 3"); err != nil {
 		_ = tx.Rollback()

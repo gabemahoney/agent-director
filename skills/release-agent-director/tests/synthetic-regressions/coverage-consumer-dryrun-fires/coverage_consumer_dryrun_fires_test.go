@@ -99,9 +99,17 @@ func TestCoverageConsumerDryrunFires(t *testing.T) {
 	})
 
 	// ── 3. Run coverage.go-consumer-dryrun gate ────────────────────────────
+	// Redirect HOME to a throwaway dir for the gate subprocess. The gate runs
+	// `go test ./...` in tools/consumer-dryrun/, whose inner test binaries
+	// resolve ~/.agent-director from HOME (the trail singleton pins to it on
+	// first Emit). Without an isolated HOME these grandchildren inherit the real
+	// container HOME and can race an ad-trail.jsonl write into the trail-leak
+	// canary's snapshot window under `go test ./...` parallelism (b.93m). The
+	// gate itself has no home-relative behaviour, so redirecting is safe.
 	gateScript := filepath.Join(root, "skills", "release-agent-director", "gates", "coverage", "go-consumer-dryrun.sh")
 	cmd := exec.Command("bash", gateScript)
 	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "HOME="+t.TempDir())
 	var stderrBuf strings.Builder
 	cmd.Stderr = &stderrBuf
 	// stdout flows to the test log for progress visibility

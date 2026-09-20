@@ -7,12 +7,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/testsupport/procstarttimefix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/procstat"
 )
 
 // writeFakeProc and writeStatOnly live in the UNTAGGED fakeproc_test.go so the
@@ -271,29 +270,8 @@ func TestLinuxResolverRealProcHappyPath(t *testing.T) {
 
 	// Assert the returned starttime equals the child's /proc/<pid>/stat field
 	// 22 read directly here — the authoritative verbatim value.
-	wantStart := readStatField22(t, childPID)
+	wantStart := procstat.ReadStarttime(t, childPID)
 	if start != wantStart {
 		t.Errorf("starttime = %q; want %q (from /proc/%d/stat field 22)", start, wantStart, childPID)
 	}
-}
-
-// readStatField22 reads /proc/<pid>/stat and returns field 22 (starttime)
-// verbatim, anchoring on the last ')' exactly like the production parser.
-func readStatField22(t *testing.T, pid int) string {
-	t.Helper()
-	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
-	if err != nil {
-		t.Fatalf("read /proc/%d/stat: %v", pid, err)
-	}
-	line := string(data)
-	rparen := strings.LastIndexByte(line, ')')
-	if rparen < 0 {
-		t.Fatalf("no ')' in stat line: %q", line)
-	}
-	rest := strings.Fields(line[rparen+1:])
-	const starttimeIdx = 22 - 3
-	if len(rest) <= starttimeIdx {
-		t.Fatalf("stat too short: %q", line)
-	}
-	return rest[starttimeIdx]
 }

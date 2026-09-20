@@ -320,23 +320,29 @@ uid mapping still vary by host).
 
 The sandbox removes the ambient system install (a clean HOME with no
 `~/.agent-director`) and shares one `/work` mount across the parallel test
-run. A few suite failures are expected consequences of that isolation, not
-regressions introduced by a change under test:
+run. A caveat to be aware of:
 
-- **`test/smoke/go` canary fires on the trail leak.** The trail always
-  writes to `$HOME/.agent-director/ad-trail.jsonl` — that HOME-resolved path
-  is the designed location, with no persistent env-var relocation switch.
-  Some verbs
-  still emit a trail event as a side effect of running, so exercising them
-  creates that file. In the sandbox the write lands harmlessly in the
-  throwaway container HOME (which starts with no `.agent-director`), but the
-  smoke canary correctly reports the new file and fails the package. This is
-  the sandbox doing its job; the failure persists until the leak-producing
-  verbs stop emitting stray trail events, which is tracked under its own
-  ticket.
 - **One bun serialization test is timing-sensitive** (asserts a >5 ms gap
   between serialized spawns); on this fast host it occasionally measures
   ~4 ms and flakes.
+
+The `test/smoke/go` canary — which snapshots the real container HOME's
+`~/.agent-director` before and after the smoke package's `m.Run()` and fails
+if any file appears — is a true regression guard and must stay quiet on a
+clean tree. It previously fired *intermittently* under `go test ./...`, and
+that was a real defect, not expected behaviour: `trail.Default()` is a
+process-wide `sync.Once` singleton that pins its file path from `$HOME` on the
+first `Emit` and never re-resolves. Two test packages
+(`pkg/api/apitest` and `test/envelope-diff`) drove in-process store/verb calls
+that emit trail events without redirecting `$HOME` in a package `TestMain`, so
+their singleton pinned the real container HOME and appended
+`ad-trail.jsonl` there. Because `go test ./...` runs packages in parallel,
+that write sometimes landed inside the smoke canary's before/after window and
+tripped it (and was quiet when the timing missed). Both packages now redirect
+`$HOME` to a temp dir in their `TestMain` before `m.Run()` (matching
+`internal/store`, `pkg/api`, and `internal/hook`), so the singleton can only
+ever resolve under a throwaway dir. If the canary fires now, it is reporting a
+genuine leak — do not dismiss it.
 
 ### CI parity and docker-leg verification
 

@@ -74,6 +74,14 @@ If the loop finds itself below `schemaVersion` with no registered step for the
 current version, that is a gap in the registry — it fails loudly with
 `ErrSchemaMismatch` rather than silently leaving the DB behind.
 
+This section is the canonical home for the sentinel/gate **semantics**
+(the store-side contract). The install-time procedure that *writes* the
+sentinel — the six-step flow install.sh runs to authorize an upgrade on
+an end-user machine — is documented in
+`skills/install-agent-director/SKILL.md` ("Schema migration: the
+six-step sentinel flow"); consult it for how an operator triggers a
+migration.
+
 **The authorization sentinel.** `authorizeMigration(dbPath, current)`
 (`migrate_auth.go`) gates the chain. It looks for a sentinel file named
 `migrate-authorized` sibling to the *resolved* DB path — i.e. in the same

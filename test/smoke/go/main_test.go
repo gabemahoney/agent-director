@@ -74,14 +74,56 @@ func TestMain(m *testing.M) {
 	// ── Step 6: canary — assert real ~/.agent-director is unchanged ───────────
 	after := snapshotAgentDir(realAgentDir)
 	if msgs := agentDirViolations(before, after); len(msgs) > 0 {
-		fmt.Fprintln(os.Stderr, "FAIL: smoke tests wrote to the real ~/.agent-director:")
+		fmt.Fprintln(os.Stderr, "FAIL: a test wrote to the real ~/.agent-director:")
 		for _, msg := range msgs {
 			fmt.Fprintln(os.Stderr, "  "+msg)
 		}
+		// Self-diagnosing dump: the leak is almost always caused by another
+		// package racing a trail write into this window under `go test ./...`
+		// parallelism (this package's own HOME redirect is correct). The trail
+		// file's JSONL content carries `source`, `claude_instance_id`, event
+		// names and timestamps that identify the writer, so dump every created
+		// or modified file to make future fires forensically self-explanatory.
+		dumpViolatingFiles(before, after)
 		os.Exit(1)
 	}
 
 	os.Exit(code)
+}
+
+// dumpViolatingFiles prints the full content of every file that was created or
+// modified between the before and after snapshots. This turns an intermittent
+// canary fire into a self-diagnosing report: the leaked trail JSONL lines carry
+// `source`, `claude_instance_id`, event names and timestamps that pin the write
+// back to the offending test/package. Output is bounded per file so a large
+// pre-existing store that merely got appended to does not flood the log.
+func dumpViolatingFiles(before, after agentDirSnap) {
+	const maxBytes = 64 * 1024
+	for path, afterSnap := range after {
+		beforeSnap, existed := before[path]
+		if existed && afterSnap == beforeSnap {
+			continue // unchanged
+		}
+		label := "modified"
+		if !existed {
+			label = "created"
+		}
+		fmt.Fprintf(os.Stderr, "\n─── leaked file (%s): %s ───\n", label, path)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  <read error: %v>\n", err)
+			continue
+		}
+		// For a modification, only the tail past the prior size is new, but we
+		// don't have the prior bytes; dump the tail up to maxBytes so the newest
+		// (identifying) lines are always shown.
+		if len(data) > maxBytes {
+			data = data[len(data)-maxBytes:]
+			fmt.Fprintf(os.Stderr, "  <showing last %d bytes>\n", maxBytes)
+		}
+		fmt.Fprintln(os.Stderr, string(data))
+		fmt.Fprintln(os.Stderr, "─── end leaked file ───")
+	}
 }
 
 // ── snapshot helpers ───────────────────────────────────────────────────────────

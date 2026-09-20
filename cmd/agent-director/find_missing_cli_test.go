@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/testsupport/procstat"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -60,31 +61,7 @@ func spawnRealChild(t *testing.T, instanceID string) *realChild {
 		_ = cmd.Process.Kill()
 		_, _ = cmd.Process.Wait()
 	})
-	return &realChild{cmd: cmd, pid: pid, starttime: readProcStarttime(t, pid)}
-}
-
-// readProcStarttime reads field 22 (starttime, clock-ticks-since-boot) from
-// /proc/<pid>/stat verbatim — the exact form the store records and the checker
-// compares against. It uses the canonical last-')' anchor so a comm containing
-// spaces or parens cannot shift the field count.
-func readProcStarttime(t *testing.T, pid int) string {
-	t.Helper()
-	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
-	if err != nil {
-		t.Fatalf("read /proc/%d/stat: %v", pid, err)
-	}
-	line := string(data)
-	rparen := strings.LastIndexByte(line, ')')
-	if rparen < 0 || rparen+1 >= len(line) {
-		t.Fatalf("malformed /proc/%d/stat: %q", pid, line)
-	}
-	// Fields from field 3 (state) onward; field 22 is index 22-3 = 19.
-	fields := strings.Fields(line[rparen+1:])
-	const starttimeIdx = 22 - 3
-	if len(fields) <= starttimeIdx {
-		t.Fatalf("/proc/%d/stat has too few fields: %q", pid, line)
-	}
-	return fields[starttimeIdx]
+	return &realChild{cmd: cmd, pid: pid, starttime: procstat.ReadStarttime(t, pid)}
 }
 
 // reapChild kills a spawned child and Waits so its /proc entry vanishes before

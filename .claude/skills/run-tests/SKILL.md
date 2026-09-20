@@ -73,18 +73,21 @@ agent runs inside the container. Interpreting a run:
   suite failed. A green run exits 0.
 - The Go section prints one `ok`/`FAIL` line per package; the bun section ends
   with a `N pass / M fail` summary and `Ran … tests`.
-- **Known non-regression failures** (documented in
+- **Known non-regression flakes** (documented in
   `docs/engineering-guide.md` "Sandboxed execution" → "Known caveats") — do NOT
   treat these as caused by a change under review unless the change is in that
   area:
-  - `test/smoke/go` canary fires on the pre-existing trail-leak (a verb writes
-    to `$HOME/.agent-director/ad-trail.jsonl`); contained harmlessly in the
-    throwaway container HOME.
   - One bun serialization test is timing-sensitive and occasionally flakes on
     fast hosts.
 
   Judge the run by whether the failures match this known set. Anything outside
   it is a real signal from the change under review.
+- **The `test/smoke/go` canary is NOT a known failure.** It guards against any
+  test writing to the real `~/.agent-director` and must stay quiet on a clean
+  tree. It used to fire intermittently (a trail-emitting test package that did
+  not redirect `$HOME` racing into the canary window under `go test ./...`);
+  that was fixed. If it fires now, treat it as a genuine leak regression, not
+  an expected failure.
 
 ## Verifying isolation held (optional, high-assurance)
 
