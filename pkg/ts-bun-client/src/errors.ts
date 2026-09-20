@@ -67,7 +67,7 @@ export class ErrClientClosed extends AgentDirectorError {
     super(
       "",
       "ErrClientClosed",
-      "client is closed: call new Client() to obtain a fresh handle"
+      "client is closed: call Client.create() to obtain a fresh handle"
     );
     this.name = "ErrClientClosed";
     Object.setPrototypeOf(this, new.target.prototype);
