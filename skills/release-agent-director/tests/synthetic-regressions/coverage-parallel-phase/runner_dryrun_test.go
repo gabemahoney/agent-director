@@ -171,4 +171,10 @@ func TestRunnerUnknownArgumentExits2(t *testing.T) {
 	if strings.TrimSpace(res.stderr) == "" {
 		t.Errorf("expected a usage message on stderr, got none\nstdout:\n%s", res.stdout)
 	}
+	// Contract: nothing is written to stdout on the exit-2 usage-error path (no
+	// config JSON). A partial or stray stdout write would let a consumer parse a
+	// bogus config, so assert stdout is empty.
+	if strings.TrimSpace(res.stdout) != "" {
+		t.Errorf("expected empty stdout on the exit-2 usage-error path, got:\n%s", res.stdout)
+	}
 }

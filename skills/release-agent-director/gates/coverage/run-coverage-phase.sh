@@ -72,6 +72,13 @@ CONFIG_JSON=$(jq -n \
     "max_parallel": $max_parallel
   }')
 
+# Without -e, jq failure is silent; an empty config would let --dry-run print a
+# blank line and exit 0 (false success). Fail as a configuration error instead.
+if [ -z "$CONFIG_JSON" ]; then
+  echo "run-coverage-phase.sh: failed to build gates-config JSON (jq missing or failed)" >&2
+  exit 2
+fi
+
 # ─── dry-run: emit config and exit ────────────────────────────────────────────
 if [[ "$DRY_RUN" -eq 1 ]]; then
   printf '%s\n' "$CONFIG_JSON"

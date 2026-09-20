@@ -140,7 +140,13 @@ func diagCmd(t *testing.T, exitCode int, diags ...sr14Diag) string {
 // spills to the report's top-level diagnostics[]), among two passing siblings.
 func singleFailureConfig(t *testing.T) toyConfig {
 	t.Helper()
-	failCmd := diagCmd(t, 1,
+	// Prepend a short sleep so the failing gate has a guaranteed-measurable
+	// duration_ms: the executor sums per-sub-check duration_ms into elapsed_ms,
+	// and the downstream wantElapsed>0 guard would hard-fail if every gate ran in
+	// under a millisecond (the two passing `true` siblings can). 50ms keeps the
+	// total comfortably above the millisecond floor without materially slowing the
+	// test.
+	failCmd := "sleep 0.05; " + diagCmd(t, 1,
 		sr14Diag{gateFail, failDiagArtifact, failDiagDesc, failDiagAction},
 		sr14Diag{gateFail, spillDiagArtifact, spillDiagDesc, spillDiagAction},
 	)
@@ -255,6 +261,11 @@ func TestReportShapeTranslationEndToEnd(t *testing.T) {
 
 	cmd := exec.Command("bash", runParallel, cfgPath)
 	cmd.Dir = root
+	// HOME redirect (b.93m, SR-5.1) — matches every other executor invocation in
+	// the bee: the gate subprocesses resolve ~/.agent-director from HOME, so an
+	// isolated per-test HOME keeps any nested emitter from writing ad-trail.jsonl
+	// into the real home and racing the trail-leak canary.
+	cmd.Env = append(os.Environ(), "HOME="+t.TempDir())
 	stdout, runErr := cmd.Output()
 	// The toy fail gate makes the executor exit 1 — expected, not a test error.
 	if runErr != nil {
