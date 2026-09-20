@@ -17,16 +17,27 @@ func decideCalledLines(lines []map[string]any) []map[string]any {
 	return out
 }
 
-// trailLinesOrNil opens the trail file in stateDir and returns parsed lines,
-// or nil when the file does not exist. Used by decide and find-missing CLI
-// tests to assert row-mutation emission without failing on a missing file.
-func trailLinesOrNil(t *testing.T, stateDir string) []map[string]any {
+// trailLinesOrNil opens the trail file in trailDir and returns parsed lines,
+// or nil when the file does not exist. Used by decide, find-missing and
+// trail-emit CLI tests to assert row-mutation emission without failing on a
+// missing file. trailDir is the directory that holds ad-trail.jsonl — for
+// HOME-isolated CLI tests this is <home>/.agent-director (i.e. trailDir(home)).
+func trailLinesOrNil(t *testing.T, adDir string) []map[string]any {
 	t.Helper()
-	path := filepath.Join(stateDir, "ad-trail.jsonl")
+	path := filepath.Join(adDir, "ad-trail.jsonl")
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil
 	}
-	return readTrailLines(t, stateDir)
+	// readTrailLines takes the isolated HOME and appends .agent-director itself,
+	// so hand it the parent of adDir (trailDir(home) -> home).
+	return readTrailLines(t, filepath.Dir(adDir))
+}
+
+// trailDir returns the directory holding ad-trail.jsonl for a given isolated
+// HOME. The trail always writes to $HOME/.agent-director/ad-trail.jsonl, so
+// every subprocess CLI invocation with HOME=home lands here.
+func trailDir(home string) string {
+	return filepath.Join(home, ".agent-director")
 }
 
 // rowMutationCommittedLines filters lines for ad.row_mutation.committed events.
@@ -95,11 +106,14 @@ func TestDecideRaceLoserSeesErrAlreadyDecided(t *testing.T) {
 			seedSpawnRow(t, dbPath, id, "cd-race-1", "check_permission", "on")
 			seedOpenPermissionRequest(t, dbPath, id, testRequestToken, "Bash", `{"cmd":"echo"}`)
 
+			// Both decides must run against the same DB (same token) to exercise
+			// first-call-wins, so both share this test's isolated HOME — and thus
+			// the same append-only trail at <home>/.agent-director/ad-trail.jsonl.
+			// Per-call isolation is achieved with a checkpoint/delta line-count
+			// pattern rather than distinct trail files.
+
 			// First decide: must succeed (exit 0).
-			// Use a dedicated stateDir so the trail file is isolated per decide call.
-			stateDir1 := t.TempDir()
-			_, stderr1, code1 := runSpawnCLIEnv(t, home, fakeDir,
-				map[string]string{"AGENT_DIRECTOR_STATE_DIR": stateDir1},
+			_, stderr1, code1 := runSpawnCLI(t, home, fakeDir,
 				"decide",
 				"--claude-instance-id", id,
 				"--request-token", testRequestToken,
@@ -108,8 +122,10 @@ func TestDecideRaceLoserSeesErrAlreadyDecided(t *testing.T) {
 				t.Fatalf("first decide (%s) exit = %d; want 0 (stderr=%s)", tc.first, code1, stderr1)
 			}
 
-			// Trail: exactly one ad.row_mutation.committed with writer_process="decide".
-			rm1 := rowMutationCommittedLines(readTrailLines(t, stateDir1))
+			// Trail after first decide: exactly one ad.row_mutation.committed
+			// with writer_process="decide".
+			linesAfterFirst := readTrailLines(t, home)
+			rm1 := rowMutationCommittedLines(linesAfterFirst)
 			if len(rm1) != 1 {
 				t.Fatalf("first decide: ad.row_mutation.committed count = %d; want 1", len(rm1))
 			}
@@ -123,10 +139,12 @@ func TestDecideRaceLoserSeesErrAlreadyDecided(t *testing.T) {
 				t.Errorf("first decide: mutation_kind = %v; want update", rm1[0]["mutation_kind"])
 			}
 
+			// Checkpoint the row_mutation line count so the second decide's
+			// contribution can be measured as a delta against the shared trail.
+			rmCheckpoint := len(rm1)
+
 			// Second decide on the same token: must return ErrAlreadyDecided.
-			stateDir2 := t.TempDir()
-			_, stderr2, code2 := runSpawnCLIEnv(t, home, fakeDir,
-				map[string]string{"AGENT_DIRECTOR_STATE_DIR": stateDir2},
+			_, stderr2, code2 := runSpawnCLI(t, home, fakeDir,
 				"decide",
 				"--claude-instance-id", id,
 				"--request-token", testRequestToken,
@@ -139,10 +157,11 @@ func TestDecideRaceLoserSeesErrAlreadyDecided(t *testing.T) {
 				t.Errorf("err_name = %q; want ErrAlreadyDecided", env.ErrName)
 			}
 
-			// Trail: zero ad.row_mutation.committed lines — the no-op UPDATE must not emit.
-			rm2 := rowMutationCommittedLines(trailLinesOrNil(t, stateDir2))
-			if len(rm2) != 0 {
-				t.Errorf("ErrAlreadyDecided path: expected 0 ad.row_mutation.committed lines; got %d: %v", len(rm2), rm2)
+			// Trail delta: the second (no-op UPDATE) decide must add zero new
+			// ad.row_mutation.committed lines to the shared trail.
+			rm2 := rowMutationCommittedLines(readTrailLines(t, home))
+			if got := len(rm2) - rmCheckpoint; got != 0 {
+				t.Errorf("ErrAlreadyDecided path: expected 0 new ad.row_mutation.committed lines; got %d (total %d, checkpoint %d): %v", got, len(rm2), rmCheckpoint, rm2)
 			}
 		})
 	}
@@ -178,20 +197,26 @@ func TestDecideCalledEmitsTrailLine(t *testing.T) {
 					"No CLI path can supply an empty token (flag validator enforces --request-token).")
 			}
 
-			stateDir := t.TempDir()
-			t.Setenv("AGENT_DIRECTOR_STATE_DIR", stateDir)
 			fakeDir := buildFakeTmux(t)
 			home := t.TempDir()
 			bootstrapDB(t, home)
 			dbPath := filepath.Join(home, ".agent-director", "state.db")
+			// The subprocess writes its trail to <home>/.agent-director/ad-trail.jsonl;
+			// this test's isolated HOME keeps it off the real store.
+
+			// checkpoint/rmCheckpoint track how many ad.decide.called and
+			// ad.row_mutation.committed lines already exist in the shared trail
+			// before the asserted decide runs. For ErrAlreadyDecided a warm-up
+			// decide is emitted first, so the assertions target only the delta.
+			checkpoint := 0
+			rmCheckpoint := 0
 
 			switch tc.name {
 			case "ok":
 				const id = "id-dc-trail-ok-1"
 				seedSpawnRow(t, dbPath, id, "cd-dc-trail-ok-1", "check_permission", "on")
 				seedOpenPermissionRequest(t, dbPath, id, testRequestToken, "Bash", `{"cmd":"ls"}`)
-				_, _, code := runSpawnCLIEnv(t, home, fakeDir,
-					map[string]string{"AGENT_DIRECTOR_STATE_DIR": stateDir},
+				_, _, code := runSpawnCLI(t, home, fakeDir,
 					"decide",
 					"--claude-instance-id", id,
 					"--request-token", testRequestToken,
@@ -206,11 +231,10 @@ func TestDecideCalledEmitsTrailLine(t *testing.T) {
 				seedSpawnRow(t, dbPath, id, "cd-dc-trail-ad-1", "check_permission", "on")
 				seedOpenPermissionRequest(t, dbPath, id, testRequestToken, "Bash", `{"cmd":"ls"}`)
 
-				// First decide: route trail to a throwaway dir so stateDir contains
-				// only the second decide's events (used for all trail assertions below).
-				firstStateDir := t.TempDir()
-				_, _, code1 := runSpawnCLIEnv(t, home, fakeDir,
-					map[string]string{"AGENT_DIRECTOR_STATE_DIR": firstStateDir},
+				// First decide: succeeds and writes a ad.decide.called line to the
+				// shared trail. Checkpoint that line count so the assertions below
+				// target only the second decide's emission (the delta).
+				_, _, code1 := runSpawnCLI(t, home, fakeDir,
 					"decide",
 					"--claude-instance-id", id,
 					"--request-token", testRequestToken,
@@ -219,10 +243,12 @@ func TestDecideCalledEmitsTrailLine(t *testing.T) {
 				if code1 != 0 {
 					t.Fatalf("first decide exit = %d; want 0", code1)
 				}
+				afterFirst := readTrailLines(t, home)
+				checkpoint = len(decideCalledLines(afterFirst))
+				rmCheckpoint = len(rowMutationCommittedLines(afterFirst))
 
 				// Second decide on the already-decided token: must return ErrAlreadyDecided.
-				_, _, code2 := runSpawnCLIEnv(t, home, fakeDir,
-					map[string]string{"AGENT_DIRECTOR_STATE_DIR": stateDir},
+				_, _, code2 := runSpawnCLI(t, home, fakeDir,
 					"decide",
 					"--claude-instance-id", id,
 					"--request-token", testRequestToken,
@@ -237,8 +263,7 @@ func TestDecideCalledEmitsTrailLine(t *testing.T) {
 				seedSpawnRow(t, dbPath, id, "cd-dc-trail-inv-1", "check_permission", "on")
 				// Omit --request-token: CLI validates it as required before calling the API,
 				// so the emission comes from decideHandlerWith (outcome="ErrInvalidFlags").
-				runSpawnCLIEnv(t, home, fakeDir,
-					map[string]string{"AGENT_DIRECTOR_STATE_DIR": stateDir},
+				runSpawnCLI(t, home, fakeDir,
 					"decide",
 					"--claude-instance-id", id,
 					"--decision", "allow",
@@ -248,13 +273,16 @@ func TestDecideCalledEmitsTrailLine(t *testing.T) {
 			}
 
 			// ---- Trail assertions (common to all non-skipped cases) ----
+			// The asserted decide.called line is the one emitted after the
+			// checkpoint (the delta), so ErrAlreadyDecided's warm-up decide is
+			// excluded even though it shares the trail file.
 
-			lines := readTrailLines(t, stateDir)
+			lines := readTrailLines(t, home)
 			dc := decideCalledLines(lines)
-			if len(dc) != 1 {
-				t.Fatalf("ad.decide.called line count = %d; want 1 (all trail lines: %v)", len(dc), lines)
+			if len(dc)-checkpoint != 1 {
+				t.Fatalf("ad.decide.called delta = %d; want 1 (total %d, checkpoint %d, all trail lines: %v)", len(dc)-checkpoint, len(dc), checkpoint, lines)
 			}
-			row := dc[0]
+			row := dc[len(dc)-1]
 
 			// outcome must match the expected value for this case.
 			if row["outcome"] != tc.wantOutcome {
@@ -291,10 +319,12 @@ func TestDecideCalledEmitsTrailLine(t *testing.T) {
 			}
 
 			// ErrAlreadyDecided: the no-op UPDATE must not emit ad.row_mutation.committed.
+			// Measured as a delta against the shared trail's checkpoint so the
+			// warm-up decide's own row_mutation line is excluded.
 			if tc.name == "ErrAlreadyDecided" {
 				rm := rowMutationCommittedLines(lines)
-				if len(rm) != 0 {
-					t.Errorf("ErrAlreadyDecided: expected 0 ad.row_mutation.committed lines; got %d: %v", len(rm), rm)
+				if got := len(rm) - rmCheckpoint; got != 0 {
+					t.Errorf("ErrAlreadyDecided: expected 0 new ad.row_mutation.committed lines; got %d (total %d, checkpoint %d): %v", got, len(rm), rmCheckpoint, rm)
 				}
 			}
 		})

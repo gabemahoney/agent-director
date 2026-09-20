@@ -2,11 +2,14 @@ package api_test
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
@@ -130,14 +133,125 @@ func TestResumeMissingSessionIdReturnsNoSessionId(t *testing.T) {
 }
 
 func TestResumeJsonlMissingReturnsErrJsonlMissing(t *testing.T) {
-	// Do NOT seed the JSONL — the row says it should exist but the
-	// disk says otherwise. Pre-flight Stat fails.
+	// Legacy-fallback ErrJsonlMissing: baseRow leaves JSONLPath empty, so
+	// the pre-flight computes the slug-rule path from cwd + session id.
+	// We do NOT seed the JSONL at the computed location, so Stat fails and
+	// the error names the computed path (not a persisted one).
 	t.Setenv("HOME", t.TempDir())
-	st := &recordingResumeStore{row: baseRow()}
+	row := baseRow() // JSONLPath == "" → fall back to computed path
+	st := &recordingResumeStore{row: row}
 	tm := &recordingResumeTmux{}
 	_, err := api.Resume(st, tm, config.Default(), api.ResumeParams{ClaudeInstanceID: "id"})
 	if !errors.Is(err, api.ErrJsonlMissing) {
 		t.Fatalf("err = %v; want ErrJsonlMissing", err)
+	}
+	// The message names the mode-appropriate (computed) path.
+	computed, perr := spawn.JsonlPath(row.CWD, row.ClaudeSessionID)
+	if perr != nil {
+		t.Fatalf("compute expected path: %v", perr)
+	}
+	if !containsStr(err.Error(), computed) {
+		t.Errorf("err %q does not name the computed path %q", err.Error(), computed)
+	}
+	if tm.newSessionCalls != 0 || st.setParentCalls != 0 {
+		t.Errorf("side effects on guard error")
+	}
+}
+
+// TestResumePrefersPersistedJsonlPath proves the pre-flight consults the
+// persisted jsonl_path and NOT the computed slug-rule location. The row's
+// JSONLPath points at a real temp file that is deliberately elsewhere; the
+// computed location is left absent (SeedJsonl is never called). Resume
+// proceeding past the JSONL pre-flight (NewSession fires) can only happen if
+// the persisted path was the one Stat'd.
+func TestResumePrefersPersistedJsonlPath(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "")
+
+	// A real transcript at a path unrelated to the slug rule.
+	persisted := filepath.Join(t.TempDir(), "custom-config", "transcript.jsonl")
+	if err := os.MkdirAll(filepath.Dir(persisted), 0o700); err != nil {
+		t.Fatalf("mkdir persisted parent: %v", err)
+	}
+	if err := os.WriteFile(persisted, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write persisted jsonl: %v", err)
+	}
+
+	// Guard the premise: the computed location must NOT exist, so a pass
+	// cannot come from the fallback path.
+	row := baseRow()
+	computed, err := spawn.JsonlPath(row.CWD, row.ClaudeSessionID)
+	if err != nil {
+		t.Fatalf("compute path: %v", err)
+	}
+	if _, serr := os.Stat(computed); !os.IsNotExist(serr) {
+		t.Fatalf("computed location %q unexpectedly exists (stat err=%v)", computed, serr)
+	}
+
+	row.JSONLPath = persisted
+	st := &recordingResumeStore{row: row}
+	tm := &recordingResumeTmux{}
+
+	if _, err := api.Resume(st, tm, config.Default(), api.ResumeParams{ClaudeInstanceID: "id-r-1"}); err != nil {
+		t.Fatalf("Resume: %v; want proceed via persisted jsonl_path", err)
+	}
+	if tm.newSessionCalls != 1 {
+		t.Errorf("NewSession called %d times; want 1 (resume proceeded past pre-flight)", tm.newSessionCalls)
+	}
+}
+
+// TestResumeLegacyFallbackToComputedPath proves that an empty jsonl_path row
+// (a pre-hook legacy row) falls back to the computed slug-rule path, and
+// resume proceeds when a transcript exists there.
+func TestResumeLegacyFallbackToComputedPath(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "")
+
+	row := baseRow() // JSONLPath == "" → legacy fallback
+	// Seed the transcript ONLY at the computed location.
+	apitest.SeedJsonl(t, row.CWD, row.ClaudeSessionID)
+	st := &recordingResumeStore{row: row}
+	tm := &recordingResumeTmux{}
+
+	if _, err := api.Resume(st, tm, config.Default(), api.ResumeParams{ClaudeInstanceID: "id-r-1"}); err != nil {
+		t.Fatalf("Resume: %v; want proceed via computed fallback", err)
+	}
+	if tm.newSessionCalls != 1 {
+		t.Errorf("NewSession called %d times; want 1", tm.newSessionCalls)
+	}
+}
+
+// TestResumePersistedJsonlMissingReturnsErrJsonlMissing is the persisted-mode
+// ErrJsonlMissing case: jsonl_path is set but that file is absent. A file DOES
+// exist at the computed location — proving the pre-flight prefers (and reports)
+// the persisted path even when the legacy fallback would have succeeded.
+func TestResumePersistedJsonlMissingReturnsErrJsonlMissing(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	row := baseRow()
+	// Fallback path DOES exist — so a wrong preference order would pass.
+	apitest.SeedJsonl(t, row.CWD, row.ClaudeSessionID)
+	// Persisted path points at a file that does not exist.
+	persisted := filepath.Join(t.TempDir(), "custom-config", "gone.jsonl")
+	row.JSONLPath = persisted
+
+	st := &recordingResumeStore{row: row}
+	tm := &recordingResumeTmux{}
+
+	_, err := api.Resume(st, tm, config.Default(), api.ResumeParams{ClaudeInstanceID: "id-r-1"})
+	if !errors.Is(err, api.ErrJsonlMissing) {
+		t.Fatalf("err = %v; want ErrJsonlMissing (persisted path absent)", err)
+	}
+	// The error names the persisted path, not the (present) computed one.
+	if !containsStr(err.Error(), persisted) {
+		t.Errorf("err %q does not name the persisted path %q", err.Error(), persisted)
+	}
+	computed, perr := spawn.JsonlPath(row.CWD, row.ClaudeSessionID)
+	if perr != nil {
+		t.Fatalf("compute path: %v", perr)
+	}
+	if containsStr(err.Error(), computed) {
+		t.Errorf("err %q wrongly names the computed path %q (should name persisted)", err.Error(), computed)
 	}
 	if tm.newSessionCalls != 0 || st.setParentCalls != 0 {
 		t.Errorf("side effects on guard error")

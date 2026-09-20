@@ -48,8 +48,9 @@ type SpawnRow struct {
 	// RelayMode is "on" or "off" — whether this Spawn participates in the
 	// permission-relay flow.
 	RelayMode string `json:"relay_mode"`
-	// JSONLPath is the last known JSONL transcript path. Empty until a future
-	// Epic persists it; resume composes the path on demand from cwd + claude_session_id.
+	// JSONLPath is the last known JSONL transcript path, persisted by the
+	// SessionStart hook; legacy rows may be empty. When empty, resume composes
+	// the path on demand from cwd + claude_session_id.
 	JSONLPath string `json:"jsonl_path"`
 	// ClaudeSessionID is the Claude Code session UUID extracted from the
 	// SessionStart hook's transcript_path basename. Empty until the first
@@ -65,12 +66,65 @@ type SpawnRow struct {
 	// EndedAt is set when state moves to ended. Omitted from JSON (omitempty)
 	// while the Spawn is live.
 	EndedAt *time.Time `json:"ended_at,omitempty"`
+	// LivenessUnverifiedSince is the RFC3339 timestamp of the first sweep that
+	// could not verify this live row's liveness (an unknown verdict). Nil (and
+	// omitted from JSON) when NULL in the store — i.e. never unverified or
+	// re-verified since. The store carries it as a COALESCE-scanned string
+	// ("" == NULL); Get maps "" to nil per the ended_at nullable precedent.
+	LivenessUnverifiedSince *string `json:"liveness_unverified_since,omitempty"`
+	// LivenessNote is the human-readable reason liveness could not be verified.
+	// Nil (omitted) when NULL in the store. Same "" == NULL mapping.
+	LivenessNote *string `json:"liveness_note,omitempty"`
 	// PermissionRequests is the slice of open permission requests awaiting
 	// orchestrator decisions. Populated only when state is check_permission;
 	// always a non-nil slice (encodes as [] when empty, never null, never
 	// omitted). Callers use the request_token of each element to target a
 	// specific row with the decide verb.
 	PermissionRequests []PermissionRequestInfo `json:"permission_requests"`
+}
+
+// nullableString maps a COALESCE-scanned store string ("" == NULL) to the
+// pointer-with-omitempty JSON shape used for nullable, omit-when-NULL fields.
+// Returns nil for "" (encodes as omitted), a pointer to the value otherwise.
+// Mirrors the ended_at *time.Time nullable precedent for the liveness columns,
+// which the store carries as plain strings rather than sql.Null types.
+func nullableString(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// sqliteTimestampLayout is the text layout SQLite's CURRENT_TIMESTAMP writes
+// ("2026-09-20 01:38:41"). It carries no timezone; SQLite emits UTC, matching
+// how ended_at/started_at (scanned into time.Time via modernc.org/sqlite) land
+// in UTC. liveness_unverified_since is COALESCE-scanned as raw text rather than
+// time.Time, so it never gets that free RFC3339 normalization — nullableTimestamp
+// supplies it.
+const sqliteTimestampLayout = "2006-01-02 15:04:05"
+
+// nullableTimestamp maps a COALESCE-scanned store timestamp string ("" == NULL)
+// to the pointer-with-omitempty JSON shape, normalizing the value to RFC3339 so
+// the wire contract ("RFC3339 timestamp") holds for liveness_unverified_since.
+//
+// The store column carries SQLite CURRENT_TIMESTAMP text ("2026-09-20 01:38:41",
+// UTC). This parses that layout in UTC and formats RFC3339. If that fails it
+// tries RFC3339 directly (test seeders may write RFC3339 via apitest options) and
+// re-formats it normalized. If both fail it passes the raw string through
+// verbatim — fail-open, never dropping data nor erroring the verb.
+func nullableTimestamp(s string) *string {
+	if s == "" {
+		return nil
+	}
+	if t, err := time.Parse(sqliteTimestampLayout, s); err == nil {
+		out := t.UTC().Format(time.RFC3339)
+		return &out
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		out := t.UTC().Format(time.RFC3339)
+		return &out
+	}
+	return &s
 }
 
 // GetStore is the narrow store surface Get needs. Matches the existing
@@ -98,20 +152,22 @@ func Get(s GetStore, instanceID string) (SpawnRow, error) {
 		return SpawnRow{}, err
 	}
 	out := SpawnRow{
-		ClaudeInstanceID:   row.ClaudeInstanceID,
-		ParentID:           row.ParentID,
-		State:              row.State,
-		CWD:                row.CWD,
-		TmuxSessionName:    row.TmuxSessionName,
-		ClaudeArgs:         row.ClaudeArgs,
-		RelayMode:          row.RelayMode,
-		JSONLPath:          row.JSONLPath,
-		ClaudeSessionID:    row.ClaudeSessionID,
-		Labels:             row.Labels,
-		StartedAt:          row.StartedAt,
-		LastSeenAt:         row.LastSeenAt,
-		EndedAt:            row.EndedAt,
-		PermissionRequests: []PermissionRequestInfo{},
+		ClaudeInstanceID:        row.ClaudeInstanceID,
+		ParentID:                row.ParentID,
+		State:                   row.State,
+		CWD:                     row.CWD,
+		TmuxSessionName:         row.TmuxSessionName,
+		ClaudeArgs:              row.ClaudeArgs,
+		RelayMode:               row.RelayMode,
+		JSONLPath:               row.JSONLPath,
+		ClaudeSessionID:         row.ClaudeSessionID,
+		Labels:                  row.Labels,
+		StartedAt:               row.StartedAt,
+		LastSeenAt:              row.LastSeenAt,
+		EndedAt:                 row.EndedAt,
+		LivenessUnverifiedSince: nullableTimestamp(row.LivenessUnverifiedSince),
+		LivenessNote:            nullableString(row.LivenessNote),
+		PermissionRequests:      []PermissionRequestInfo{},
 	}
 	// Normalize: callers reading `claude_args:null` cannot distinguish
 	// from `[]`; always emit a non-nil slice for the JSON output.

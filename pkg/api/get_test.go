@@ -6,9 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // openGetFixture seeds a Spawn at the given state with an explicit
@@ -197,6 +199,245 @@ func (r *recordingGetStore) OpenPermissionRequestsForSpawn(_ string) ([]store.Pe
 		return nil, r.permErr
 	}
 	return r.permRows, nil
+}
+
+// TestGetLivenessFieldsRoundTrip pins SR-8.3 surfacing on get: the two
+// additive nullable liveness fields are OMITTED from the JSON envelope while
+// NULL in the store (the ended_at nullable precedent), and PRESENT with the
+// stored value once set.
+//
+//   - null_omitted:  a fresh live row has NULL liveness columns → the get
+//     result's pointers are nil AND the marshaled JSON contains neither key.
+//   - set_present:   SetLivenessUnverified writes both columns → the get
+//     result surfaces the note verbatim and a non-empty since timestamp, and
+//     the marshaled JSON carries both keys.
+func TestGetLivenessFieldsRoundTrip(t *testing.T) {
+	t.Run("null_omitted", func(t *testing.T) {
+		s := openGetFixture(t, "id-live-null", store.StateWaiting)
+
+		got, err := api.Get(s, "id-live-null")
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got.LivenessUnverifiedSince != nil {
+			t.Errorf("LivenessUnverifiedSince = %v; want nil (NULL in store)", *got.LivenessUnverifiedSince)
+		}
+		if got.LivenessNote != nil {
+			t.Errorf("LivenessNote = %v; want nil (NULL in store)", *got.LivenessNote)
+		}
+		raw, err := json.Marshal(got)
+		if err != nil {
+			t.Fatalf("json.Marshal: %v", err)
+		}
+		if strings.Contains(string(raw), "liveness_unverified_since") {
+			t.Errorf("JSON contains liveness_unverified_since key; want omitted when NULL; got %s", raw)
+		}
+		if strings.Contains(string(raw), "liveness_note") {
+			t.Errorf("JSON contains liveness_note key; want omitted when NULL; got %s", raw)
+		}
+	})
+
+	t.Run("set_present", func(t *testing.T) {
+		s := openGetFixture(t, "id-live-set", store.StateWaiting)
+		const wantNote = "environ probe hit a permission wall"
+		transitioned, err := s.SetLivenessUnverified("id-live-set", wantNote)
+		if err != nil {
+			t.Fatalf("SetLivenessUnverified: %v", err)
+		}
+		if !transitioned {
+			t.Fatalf("SetLivenessUnverified transitioned=false; want true (first NULL→set write)")
+		}
+
+		got, err := api.Get(s, "id-live-set")
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got.LivenessNote == nil {
+			t.Fatalf("LivenessNote is nil; want %q", wantNote)
+		}
+		if *got.LivenessNote != wantNote {
+			t.Errorf("LivenessNote = %q; want %q (verbatim store value)", *got.LivenessNote, wantNote)
+		}
+		if got.LivenessUnverifiedSince == nil {
+			t.Fatalf("LivenessUnverifiedSince is nil; want a non-empty CURRENT_TIMESTAMP value")
+		}
+		if *got.LivenessUnverifiedSince == "" {
+			t.Errorf("LivenessUnverifiedSince = %q; want non-empty timestamp", *got.LivenessUnverifiedSince)
+		}
+		// PIN the wire format: SetLivenessUnverified writes SQLite
+		// CURRENT_TIMESTAMP text ("2006-01-02 15:04:05", no zone), so the
+		// raw store value would NOT be RFC3339. The surfaced value MUST be
+		// normalized to RFC3339 UTC — it parses as RFC3339, ends in "Z",
+		// and carries the T date/time separator.
+		since := *got.LivenessUnverifiedSince
+		if _, err := time.Parse(time.RFC3339, since); err != nil {
+			t.Errorf("LivenessUnverifiedSince = %q; want RFC3339-parseable (normalized from SQLite text): %v", since, err)
+		}
+		if !strings.HasSuffix(since, "Z") {
+			t.Errorf("LivenessUnverifiedSince = %q; want UTC 'Z' suffix", since)
+		}
+		if !strings.Contains(since, "T") {
+			t.Errorf("LivenessUnverifiedSince = %q; want RFC3339 'T' separator", since)
+		}
+		raw, err := json.Marshal(got)
+		if err != nil {
+			t.Fatalf("json.Marshal: %v", err)
+		}
+		if !strings.Contains(string(raw), `"liveness_note":"`+wantNote+`"`) {
+			t.Errorf("JSON missing liveness_note with stored value; got %s", raw)
+		}
+		if !strings.Contains(string(raw), `"liveness_unverified_since":"`) {
+			t.Errorf("JSON missing liveness_unverified_since key when set; got %s", raw)
+		}
+	})
+}
+
+// TestGetLivenessUnverifiedSinceUnparseablePassesThrough pins nullableTimestamp's
+// third (fail-open) branch: when the stored liveness_unverified_since is neither
+// SQLite CURRENT_TIMESTAMP text nor RFC3339, Get MUST pass the raw string through
+// verbatim rather than dropping it or erroring the verb. never drop data.
+//
+// The row is seeded directly with a non-timestamp string via
+// WithLivenessUnverifiedSince (bypassing SetLivenessUnverified, which only ever
+// writes CURRENT_TIMESTAMP text). The surfaced pointer must be non-nil and equal
+// the raw seeded value, and the marshaled JSON must carry it byte-for-byte.
+func TestGetLivenessUnverifiedSinceUnparseablePassesThrough(t *testing.T) {
+	const raw = "not-a-time"
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	if _, err := apitest.SeedSpawn(dbPath, "id-live-raw", store.StateWaiting, "/tmp", "off", "", true,
+		apitest.WithLivenessUnverifiedSince(raw),
+	); err != nil {
+		t.Fatalf("SeedSpawn: %v", err)
+	}
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	got, err := api.Get(s, "id-live-raw")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.LivenessUnverifiedSince == nil {
+		t.Fatalf("LivenessUnverifiedSince is nil; want raw %q passed through (fail-open, never drop)", raw)
+	}
+	if *got.LivenessUnverifiedSince != raw {
+		t.Errorf("LivenessUnverifiedSince = %q; want %q verbatim (unparseable → pass-through)", *got.LivenessUnverifiedSince, raw)
+	}
+	rawJSON, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if !strings.Contains(string(rawJSON), `"liveness_unverified_since":"`+raw+`"`) {
+		t.Errorf("JSON missing verbatim liveness_unverified_since; got %s", rawJSON)
+	}
+}
+
+// TestGetSurfacesPersistedJsonlPath pins SR-9.3/SR-10.3 surfacing on get: the
+// persisted jsonl_path column is projected verbatim onto the get result and the
+// marshaled JSON, both when set and when a legacy row leaves it empty.
+//
+//   - persisted:   a row seeded with WithJsonlPath surfaces that exact path on
+//     the result struct AND in the JSON envelope. This is the SessionStart-hook
+//     path that resume now prefers (true even under a custom CLAUDE_CONFIG_DIR).
+//   - legacy_empty: a row with no jsonl_path surfaces the empty string; the key
+//     is still present (jsonl_path has no omitempty — AllowEmpty=true, not
+//     nullable), so callers can distinguish "empty legacy row" from a missing
+//     field. resume falls back to the slug-rule path for such rows.
+func TestGetSurfacesPersistedJsonlPath(t *testing.T) {
+	t.Run("persisted", func(t *testing.T) {
+		const wantPath = "/home/user/.claude-custom/projects/-tmp/sess.jsonl"
+		dbPath := filepath.Join(t.TempDir(), "state.db")
+		if _, err := apitest.SeedSpawn(dbPath, "id-jsonl-set", store.StateWaiting, "/tmp", "off", "", true,
+			apitest.WithJsonlPath(wantPath),
+		); err != nil {
+			t.Fatalf("SeedSpawn: %v", err)
+		}
+		s, err := store.Open(dbPath)
+		if err != nil {
+			t.Fatalf("store.Open: %v", err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+
+		got, err := api.Get(s, "id-jsonl-set")
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got.JSONLPath != wantPath {
+			t.Errorf("JSONLPath = %q; want %q (persisted path surfaced verbatim)", got.JSONLPath, wantPath)
+		}
+		raw, err := json.Marshal(got)
+		if err != nil {
+			t.Fatalf("json.Marshal: %v", err)
+		}
+		if !strings.Contains(string(raw), `"jsonl_path":"`+wantPath+`"`) {
+			t.Errorf("JSON missing jsonl_path with persisted value; got %s", raw)
+		}
+	})
+
+	t.Run("legacy_empty", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "state.db")
+		if _, err := apitest.SeedSpawn(dbPath, "id-jsonl-legacy", store.StateWaiting, "/tmp", "off", "", true); err != nil {
+			t.Fatalf("SeedSpawn: %v", err)
+		}
+		s, err := store.Open(dbPath)
+		if err != nil {
+			t.Fatalf("store.Open: %v", err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+
+		got, err := api.Get(s, "id-jsonl-legacy")
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got.JSONLPath != "" {
+			t.Errorf("JSONLPath = %q; want empty (legacy row, no persisted path)", got.JSONLPath)
+		}
+		// AllowEmpty=true, not nullable → the key is always present, even empty.
+		raw, err := json.Marshal(got)
+		if err != nil {
+			t.Fatalf("json.Marshal: %v", err)
+		}
+		if !strings.Contains(string(raw), `"jsonl_path":""`) {
+			t.Errorf("JSON missing jsonl_path:\"\" key for legacy row; want key present but empty; got %s", raw)
+		}
+	})
+}
+
+// TestGetOutputHasNoExtraEnv is the named OUTPUT negative for SR-9.3/SR-10.3:
+// extra_env legitimately exists as the spawn/make-template INPUT param, but it
+// MUST NOT leak onto the get OUTPUT surface. A row seeded with a non-empty
+// extra_env map (WithExtraEnv) must NOT surface an extra_env key anywhere in the
+// marshaled get result — neither as a struct field nor a stray JSON key.
+func TestGetOutputHasNoExtraEnv(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	if _, err := apitest.SeedSpawn(dbPath, "id-extraenv", store.StateWaiting, "/tmp", "off", "", true,
+		apitest.WithExtraEnv(map[string]string{"SECRET_TOKEN": "leak-me-not", "FOO": "bar"}),
+	); err != nil {
+		t.Fatalf("SeedSpawn: %v", err)
+	}
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	got, err := api.Get(s, "id-extraenv")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if strings.Contains(string(raw), "extra_env") {
+		t.Errorf("get output JSON contains extra_env key; it is an INPUT-only param and must not surface on the OUTPUT row; got %s", raw)
+	}
+	// Belt-and-suspenders: the seeded values themselves must not appear either.
+	if strings.Contains(string(raw), "leak-me-not") {
+		t.Errorf("get output JSON leaked a seeded extra_env value; got %s", raw)
+	}
 }
 
 // TestGetVerbPluralShape pins the plural PermissionRequests contract

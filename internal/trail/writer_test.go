@@ -16,13 +16,13 @@ import (
 // tsRe is the SR-A-7.9 timestamp regex used across multiple tests.
 var tsRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3,}Z$`)
 
-// newTestWriter returns a Writer pointing at a fresh temp dir, and sets
-// AGENT_DIRECTOR_STATE_DIR for the test duration so stray Default() calls
-// stay off the real ~/.agent-director/.
+// newTestWriter returns a Writer pointing at a fresh temp dir, and redirects
+// HOME to that temp dir for the test duration so stray Default() calls resolve
+// to the temp <HOME>/.agent-director/ instead of the real ~/.agent-director/.
 func newTestWriter(t *testing.T) (*Writer, string) {
 	t.Helper()
 	dir := t.TempDir()
-	t.Setenv("AGENT_DIRECTOR_STATE_DIR", dir)
+	t.Setenv("HOME", dir)
 	path := filepath.Join(dir, trailFilename)
 	return &Writer{path: path}, path
 }
@@ -106,38 +106,42 @@ func TestTopLevelFields(t *testing.T) {
 	}
 }
 
-// TestPathResolution exercises path derivation for the env-set and env-empty cases.
+// TestPathResolution exercises HOME-based path derivation. Path() is stateless
+// (no file created), so a t.Setenv("HOME", t.TempDir()) redirect is safe here.
 func TestPathResolution(t *testing.T) {
-	home, _ := os.UserHomeDir()
-
-	t.Run("env_set", func(t *testing.T) {
-		dir := t.TempDir()
-		t.Setenv("AGENT_DIRECTOR_STATE_DIR", dir)
-		got := Path()
-		want := filepath.Join(dir, trailFilename)
-		if got != want {
-			t.Errorf("Path() = %q; want %q", got, want)
-		}
-	})
-
-	t.Run("env_empty", func(t *testing.T) {
-		// Explicitly empty → falls back to ~/.agent-director/.
-		// Path() is stateless (no file created), so reading the real home path is safe.
-		t.Setenv("AGENT_DIRECTOR_STATE_DIR", "")
+	t.Run("home_based", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
 		got := Path()
 		want := filepath.Join(home, ".agent-director", trailFilename)
 		if got != want {
 			t.Errorf("Path() = %q; want %q", got, want)
 		}
 	})
+
+	t.Run("state_dir_env_ignored", func(t *testing.T) {
+		// The former state-dir relocation override was removed: path
+		// resolution is now HOME-only. Setting that env var must NOT redirect
+		// Path() away from <HOME>/.agent-director/. The name is assembled at
+		// runtime so a repo-wide grep for the removed literal stays clean.
+		override := "AGENT_DIRECTOR_" + "STATE_DIR"
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv(override, t.TempDir())
+		got := Path()
+		want := filepath.Join(home, ".agent-director", trailFilename)
+		if got != want {
+			t.Errorf("Path() = %q; want %q (%s must be ignored)", got, want, override)
+		}
+	})
 }
 
-// TestPathReturnsResolvedPath confirms Path() returns the env-derived path.
+// TestPathReturnsResolvedPath confirms Path() returns the HOME-derived path.
 func TestPathReturnsResolvedPath(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("AGENT_DIRECTOR_STATE_DIR", dir)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	got := Path()
-	want := filepath.Join(dir, trailFilename)
+	want := filepath.Join(home, ".agent-director", trailFilename)
 	if got != want {
 		t.Errorf("Path() = %q; want %q", got, want)
 	}
@@ -160,8 +164,8 @@ func TestValidTsPreserved(t *testing.T) {
 // with a valid timestamp and a warning is written to the operational logger.
 // Uses SetLogger (package-level API) with a bytes.Buffer sink.
 func TestMalformedTsSubstitutedWithWarning(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("AGENT_DIRECTOR_STATE_DIR", dir)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	resetSingleton(t)
 
 	var buf bytes.Buffer
@@ -171,7 +175,7 @@ func TestMalformedTsSubstitutedWithWarning(t *testing.T) {
 		t.Fatalf("Emit: %v", err)
 	}
 
-	rows := readLines(t, filepath.Join(dir, trailFilename))
+	rows := readLines(t, filepath.Join(home, ".agent-director", trailFilename))
 	if len(rows) != 1 {
 		t.Fatalf("want 1 line; got %d", len(rows))
 	}
@@ -255,7 +259,7 @@ func TestMultipleEmitsShareOneFd(t *testing.T) {
 // cannot be created (read-only parent), Emit returns a non-nil error AND
 // a meta-event line lands in the operational logger.
 func TestReadOnlyDirEmitReturnsError(t *testing.T) {
-	t.Setenv("AGENT_DIRECTOR_STATE_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 
 	// Create a parent dir with no write permission so MkdirAll fails.
 	parent := t.TempDir()

@@ -27,6 +27,10 @@ type PermissionRow = store.PermissionRow
 // It appears in the ListStore interface method signature.
 type ListFilters = store.ListFilters
 
+// LiveSpawnIdentity is re-exported from internal/store for the same reason.
+// It appears in the FindMissingStore interface method signature.
+type LiveSpawnIdentity = store.LiveSpawnIdentity
+
 // ── Error sentinel re-exports ─────────────────────────────────────────────────
 //
 // These var declarations re-export internal error sentinels under the pkg/api
@@ -59,6 +63,14 @@ var ErrPermissionRequestNotFound = store.ErrPermissionRequestNotFound
 // created by a different schema version. Callers should treat this as a
 // fatal configuration error; the store cannot be used.
 var ErrSchemaMismatch = store.ErrSchemaMismatch
+
+// ErrSchemaMigrationRequired is returned by api.New when the SQLite database
+// is older than the schema version this binary understands and no valid
+// administrator authorization was presented. The store never auto-migrates on
+// open; the upgrade must be performed by an administrator via the
+// agent-director install process. Callers should treat this as a fatal
+// configuration error; the store cannot be used until migrated.
+var ErrSchemaMigrationRequired = store.ErrSchemaMigrationRequired
 
 // ErrStoreNotInitialized is returned by api.New when CreateIfMissing is false
 // and the database file does not exist. Initialize the store first or set

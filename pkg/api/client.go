@@ -81,11 +81,18 @@ type Client struct {
 //     created by a different schema version. The store cannot be used; the
 //     operator must remove the database file and start fresh.
 //
-// Both are detectable via errors.Is:
+//   - [ErrSchemaMigrationRequired]: returned when the database is older than
+//     the schema version this binary understands and no valid administrator
+//     authorization was presented. The store never auto-migrates on open; the
+//     upgrade must be performed by an administrator via the agent-director
+//     install process.
+//
+// All are detectable via errors.Is:
 //
 //	client, err := api.New(api.Options{})
-//	if errors.Is(err, api.ErrStoreNotInitialized) { /* ... */ }
-//	if errors.Is(err, api.ErrSchemaMismatch)       { /* ... */ }
+//	if errors.Is(err, api.ErrStoreNotInitialized)     { /* ... */ }
+//	if errors.Is(err, api.ErrSchemaMismatch)          { /* ... */ }
+//	if errors.Is(err, api.ErrSchemaMigrationRequired) { /* ... */ }
 //
 // # Lifecycle guarantee
 //

@@ -19,6 +19,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/hook"
+	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/trail"
 	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
@@ -58,6 +59,13 @@ const configPath = "~/.agent-director/config.toml"
 // `hook` is intentionally NOT in this table — runHook() short-circuits
 // the dispatch loop before setupClient() so hook fires can't be blocked
 // by config/store failures (SRD §3.2 fail-open invariant).
+//
+// The DB-free static-data verbs `help`, `--help`, and `version` remain in this
+// table for the unknown-verb-free lookup shape, but run() dispatches them (and
+// the no-args → help case) BEFORE setupClient with a zero-value Client, so on
+// the normal path these entries are never reached (SR-4.1/4.2, b.93m). Their
+// closures here are the store-backed fallback only and behave identically —
+// helpHandler ignores its client and versionHandler consults no store.
 func handlers(client *pkgapi.Client, cfg config.Config) map[string]func([]string) error {
 	return map[string]func([]string) error{
 		"help":           func(args []string) error { return helpHandler(client, args) },
@@ -157,9 +165,10 @@ func runHook() int {
 	defer st.Close()
 
 	hc := hook.HandleConfig{
-		Env:   hook.OSGetenv,
-		Cfg:   cfg.Relay,
-		Clock: hook.DefaultPollClock(),
+		Env:      hook.OSGetenv,
+		Cfg:      cfg.Relay,
+		Clock:    hook.DefaultPollClock(),
+		Resolver: probe.NewResolver(),
 	}
 	if err := hook.Handle(context.Background(), bytes.NewReader(stdinRaw), stdout, st, hc, logger); err != nil {
 		hookLog(logger, "hook: handle: %v", err)
@@ -355,6 +364,8 @@ func setupClient(gOpts globalOptions) (*pkgapi.Client, config.Config, error) {
 		switch {
 		case errors.Is(err, store.ErrSchemaMismatch):
 			name = "ErrSchemaMismatch"
+		case errors.Is(err, store.ErrSchemaMigrationRequired):
+			name = "ErrSchemaMigrationRequired"
 		case errors.Is(err, store.ErrStoreNotInitialized):
 			name = errStoreOpen
 		}
@@ -369,9 +380,13 @@ func setupClient(gOpts globalOptions) (*pkgapi.Client, config.Config, error) {
 // run is the testable body of main. Returning an int lets main use
 // os.Exit(run()) so deferred cleanup in run() still executes.
 //
-// Startup wiring (config + store) runs on every invocation — including
-// `help` — to satisfy Epic 1 AC #4 (idempotent dir/file creation) and
-// AC #5 (ErrSchemaMismatch surfaces).
+// Startup wiring (config + store) runs on every STORE-BACKED invocation to
+// satisfy Epic 1 AC #4 (idempotent dir/file creation) and AC #5
+// (ErrSchemaMismatch surfaces). The DB-free verbs below never reach it: help,
+// --help, version, no-args (routes to help), and trail-emit are dispatched
+// before setupClient so they neither open nor create ~/.agent-director
+// (SR-4.1/4.2). ErrSchemaMismatch now surfaces on a store-opening verb (e.g.
+// `list`), not on `help`.
 //
 // The hook verb is special-cased: it bypasses the normal store-setup-and-
 // dispatch path so every failure mode is fail-open per SRD §3.2. The
@@ -425,6 +440,38 @@ func run() int {
 				return 1
 			}
 			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return 0
+	}
+
+	// help / --help / version / no-args (routes to help): DB-free static-data
+	// verbs — special-cased before setupClient so they never open or create
+	// ~/.agent-director (SR-4.1/4.2, t3.93m.nr.om.wq). This closes the path by
+	// which the npm client's version probe rewrote the prod DB (b.8dr) and lets
+	// every SessionStart hook (`agent-director help`) fire without touching the
+	// store. Keyed off stripped argv so global flags still apply
+	// (`--home /x help` works and creates nothing under /x). helpHandler ignores
+	// its client; versionHandler only calls checkClosed + pure data, so a
+	// non-nil zero-value &Client{} (closed=false) passes and stdout is
+	// byte-identical to the setupClient path. Error mapping mirrors trail-emit.
+	if len(strippedArgv) == 0 ||
+		strippedArgv[0] == "help" || strippedArgv[0] == "--help" ||
+		strippedArgv[0] == "version" {
+		var derr error
+		switch {
+		case len(strippedArgv) == 0:
+			derr = helpHandler(&pkgapi.Client{}, nil)
+		case strippedArgv[0] == "version":
+			derr = versionHandler(&pkgapi.Client{}, strippedArgv[1:])
+		default:
+			derr = helpHandler(&pkgapi.Client{}, strippedArgv[1:])
+		}
+		if derr != nil {
+			if errors.Is(derr, errDispatch) {
+				return 1
+			}
+			fmt.Fprintln(os.Stderr, derr)
 			return 1
 		}
 		return 0

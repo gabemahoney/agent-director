@@ -81,12 +81,13 @@ func markPermissionRequestDecided(t *testing.T, dbPath, instanceID, decision str
 	}
 }
 
-// bootstrapDB runs `agent-director help` once so the schema is created
-// before the test seeds a row directly via raw SQL.
+// bootstrapDB runs `agent-director list` once so the schema is created
+// before the test seeds a row directly via raw SQL. `list` opens the store
+// (CreateIfMissing), whereas help/version are DB-free and create nothing.
 func bootstrapDB(t *testing.T, home string) {
 	t.Helper()
-	if _, _, code := runCLIWithHome(t, home, "help"); code != 0 {
-		t.Fatalf("help bootstrap exit = %d", code)
+	if _, _, code := runCLIWithHome(t, home, "list"); code != 0 {
+		t.Fatalf("list bootstrap exit = %d", code)
 	}
 }
 

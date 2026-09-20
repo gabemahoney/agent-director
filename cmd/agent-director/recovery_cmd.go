@@ -14,11 +14,11 @@ import (
 )
 
 // findMissingHandlerWith implements `agent-director find-missing`.
-// The verb takes no flags. The prober is selected by build tags
-// (probe.New). Warnings (e.g. degraded-mode guard) route through the
-// configured error log — the Client was constructed with a recovery
-// logger (setupClient Pin 3) so cron operators see them in their usual
-// monitoring stream.
+// The verb takes no flags. The prober and liveness checker are selected by
+// build tags (probe.New / probe.NewChecker). Per-row store/checker warnings
+// route through the configured error log — the Client was constructed with a
+// recovery logger (setupClient Pin 3) so cron operators see them in their
+// usual monitoring stream.
 func findMissingHandlerWith(client *pkgapi.Client, args []string) error {
 	fs := flag.NewFlagSet("find-missing", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)

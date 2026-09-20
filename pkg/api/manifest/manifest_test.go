@@ -1,11 +1,99 @@
 package manifest_test
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
+
+// surfaceDoc is the shared decode target for the committed surface.json golden.
+// It is the UNION of every field the golden-side tests assert on — verb name,
+// param names, and the result-field markers (type, nullable, description,
+// allowed_values) — so the five golden tests decode through one struct instead
+// of each repeating a bespoke anonymous-struct unmarshal. Fields a given test
+// does not touch simply stay zero.
+type surfaceDoc struct {
+	Verbs []struct {
+		Name   string `json:"name"`
+		Params []struct {
+			Name string `json:"name"`
+		} `json:"params"`
+		ResultFields []struct {
+			Name          string   `json:"name"`
+			Type          string   `json:"type"`
+			Nullable      bool     `json:"nullable"`
+			Description   string   `json:"description"`
+			AllowedValues []string `json:"allowed_values"`
+		} `json:"result_fields"`
+	} `json:"verbs"`
+}
+
+// readSurfaceJSON loads the committed surface.json sitting beside this test
+// file (located via runtime.Caller so the read is CWD-independent) and returns
+// both the raw bytes — for tests that byte-scan for a forbidden verb name — and
+// the parsed surfaceDoc for tests that assert on structured fields. It
+// t.Fatal's on any locate/read/unmarshal failure.
+func readSurfaceJSON(t *testing.T) ([]byte, surfaceDoc) {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller(0) failed")
+	}
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(thisFile), "surface.json"))
+	if err != nil {
+		t.Fatalf("read surface.json: %v", err)
+	}
+	var doc surfaceDoc
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("unmarshal surface.json: %v", err)
+	}
+	return raw, doc
+}
+
+// TestNoMigrationTriggerVerb is the SR-1.6 public-surface guard for the
+// CLI/manifest surface: no verb may expose an agent-reachable schema-migration
+// trigger. The store migrates only under an out-of-band administrator sentinel
+// (see internal/store/migrate_auth.go); there is deliberately NO migrate verb.
+//
+// The assertion runs against manifest.Verbs — the Go source of truth from which
+// surface.json is generated — so it is NOT satisfiable by regenerating the
+// golden: adding a migrate verb to manifest.go would flip this test red before
+// any `make surface-json` could paper over it. TestNoMigrationTriggerInSurfaceJSON
+// covers the committed golden independently.
+func TestNoMigrationTriggerVerb(t *testing.T) {
+	for _, v := range manifest.Verbs {
+		if strings.Contains(strings.ToLower(v.Name), "migrate") {
+			t.Errorf("manifest.Verbs contains verb %q whose name implies a migration trigger; "+
+				"SR-1.6 forbids any agent-reachable migration verb (migration is admin-sentinel-gated only)", v.Name)
+		}
+	}
+}
+
+// TestNoMigrationTriggerInSurfaceJSON is the golden-side twin of
+// TestNoMigrationTriggerVerb: it scans the COMMITTED surface.json bytes for any
+// "migrate" verb name. Regenerating the golden from a (hypothetical) migrate
+// verb would write "migrate" into these bytes and trip this check, so the
+// SR-1.6 invariant survives golden regeneration on the manifest surface.
+func TestNoMigrationTriggerInSurfaceJSON(t *testing.T) {
+	raw, _ := readSurfaceJSON(t)
+	// A verb named "migrate"/"migrate-schema"/etc. serializes as a
+	// `"name": "...migrate..."` field. Match the verb-name JSON shape rather
+	// than the whole file so the word appearing in a description does not
+	// false-positive.
+	needles := []string{`"name": "migrate`, `"name":"migrate`}
+	body := string(raw)
+	for _, n := range needles {
+		if strings.Contains(body, n) {
+			t.Errorf("surface.json declares a verb name containing %q; SR-1.6 forbids exposing a migration trigger verb", "migrate")
+		}
+	}
+}
 
 // TestVerbsContainsExpectedSurface pins the canonical verb order. Each
 // Epic that adds a verb appends to this slice; the test catches a missing
@@ -478,5 +566,288 @@ func TestNullableAndAllowEmptyAreExplicit(t *testing.T) {
 	spawnsField := lv.ResultFields[0]
 	if !spawnsField.AllowEmpty {
 		t.Errorf("list.spawns.AllowEmpty = false; want true (empty array is valid)")
+	}
+}
+
+// pinnedStateEnum is the byte-identical, order-sensitive spawn state enum
+// (SRD §6). SR-8.3's guardrail forbids ANY change to the state enum while
+// surfacing the liveness fields — including reorderings and additions.
+// TestStateEnumByteIdentity below pins these seven values across all three
+// surfaces (manifest source of truth, committed surface.json, and — on the
+// TS side, in public-surface.test.ts — that state stays a plain string).
+var pinnedStateEnum = []string{
+	"pending", "waiting", "working", "ask_user", "check_permission", "ended", "missing",
+}
+
+// TestStateEnumByteIdentity is the NAMED negative guard SR-8.3 requires: the
+// spawn state enum must be byte-identical (same values, same order) to the
+// pinned list on BOTH the manifest source of truth (status + get result
+// fields) and the committed surface.json bytes. This is asserted explicitly
+// rather than left implied by a golden diff, so a reorder or an added state
+// (e.g. slipping the liveness work into a new enum value) trips a red test at
+// the source level, not just a golden churn.
+func TestStateEnumByteIdentity(t *testing.T) {
+	// Manifest source of truth: every result field named "state" that carries
+	// an enum must equal the pinned list exactly. status and get both do.
+	for _, verbName := range []string{"status", "get"} {
+		v, ok := manifest.Lookup(verbName)
+		if !ok {
+			t.Fatalf("%s not in manifest", verbName)
+		}
+		var found bool
+		for _, f := range v.ResultFields {
+			if f.Name != "state" {
+				continue
+			}
+			found = true
+			if !reflect.DeepEqual(f.AllowedValues, pinnedStateEnum) {
+				t.Errorf("%s.state.AllowedValues = %v; want byte-identical pin %v (SR-8.3: state enum UNTOUCHED)",
+					verbName, f.AllowedValues, pinnedStateEnum)
+			}
+		}
+		if !found {
+			t.Errorf("%s has no result field named \"state\"; the state enum pin cannot be verified", verbName)
+		}
+	}
+
+	// Committed surface.json: parse the generated bytes and assert every
+	// "state" result field's allowed_values equals the pin. Guards against a
+	// regenerated golden silently carrying a mutated enum.
+	_, surface := readSurfaceJSON(t)
+	stateFieldsSeen := 0
+	for _, v := range surface.Verbs {
+		for _, f := range v.ResultFields {
+			if f.Name != "state" || f.AllowedValues == nil {
+				continue
+			}
+			stateFieldsSeen++
+			if !reflect.DeepEqual(f.AllowedValues, pinnedStateEnum) {
+				t.Errorf("surface.json verb %q state.allowed_values = %v; want byte-identical pin %v",
+					v.Name, f.AllowedValues, pinnedStateEnum)
+			}
+		}
+	}
+	if stateFieldsSeen == 0 {
+		t.Error("surface.json has no enum-bearing \"state\" result field; the state enum pin cannot be verified")
+	}
+}
+
+// TestGetLivenessFieldDefsAdditive asserts SR-8.3's literal get surfacing: the
+// get verb gains exactly the two additive nullable liveness FieldDefs, with
+// the nullable "?" types and Nullable=true, and NEITHER carries an enum
+// (AllowedValues must stay nil). This is the source-of-truth twin of the
+// surface.json content assertion below.
+func TestGetLivenessFieldDefsAdditive(t *testing.T) {
+	v, ok := manifest.Lookup("get")
+	if !ok {
+		t.Fatal("get not in manifest")
+	}
+	byName := map[string]manifest.FieldDef{}
+	for _, f := range v.ResultFields {
+		byName[f.Name] = f
+	}
+
+	cases := []struct {
+		name    string
+		wantTyp string
+	}{
+		{"liveness_unverified_since", "timestamp?"},
+		{"liveness_note", "string?"},
+	}
+	for _, c := range cases {
+		f, ok := byName[c.name]
+		if !ok {
+			t.Errorf("get result field %q missing; SR-8.3 requires the additive get FieldDef", c.name)
+			continue
+		}
+		if f.Type != c.wantTyp {
+			t.Errorf("get.%s.Type = %q; want %q (nullable marker)", c.name, f.Type, c.wantTyp)
+		}
+		if !f.Nullable {
+			t.Errorf("get.%s.Nullable = false; want true", c.name)
+		}
+		if f.AllowedValues != nil {
+			t.Errorf("get.%s.AllowedValues = %v; want nil (not an enum)", c.name, f.AllowedValues)
+		}
+	}
+}
+
+// TestGetLivenessFieldsInSurfaceJSON is the committed-golden twin of
+// TestGetLivenessFieldDefsAdditive: the two additive get FieldDefs must be
+// present in surface.json (as timestamp?/string? nullable fields), so a
+// regenerated golden that dropped them trips this named check rather than
+// only showing up as a silent diff.
+func TestGetLivenessFieldsInSurfaceJSON(t *testing.T) {
+	_, surface := readSurfaceJSON(t)
+
+	var getFields map[string]struct {
+		typ      string
+		nullable bool
+	}
+	for _, v := range surface.Verbs {
+		if v.Name != "get" {
+			continue
+		}
+		getFields = map[string]struct {
+			typ      string
+			nullable bool
+		}{}
+		for _, f := range v.ResultFields {
+			getFields[f.Name] = struct {
+				typ      string
+				nullable bool
+			}{f.Type, f.Nullable}
+		}
+	}
+	if getFields == nil {
+		t.Fatal("surface.json has no get verb")
+	}
+	for name, wantTyp := range map[string]string{
+		"liveness_unverified_since": "timestamp?",
+		"liveness_note":             "string?",
+	} {
+		f, ok := getFields[name]
+		if !ok {
+			t.Errorf("surface.json get verb missing result field %q (additive FieldDef must be generated)", name)
+			continue
+		}
+		if f.typ != wantTyp {
+			t.Errorf("surface.json get.%s.type = %q; want %q", name, f.typ, wantTyp)
+		}
+		if !f.nullable {
+			t.Errorf("surface.json get.%s.nullable = false; want true", name)
+		}
+	}
+}
+
+// TestExtraEnvIsInputOnlyNotOutput is the SR-9.3/SR-10.3 named negative on the
+// manifest source of truth: extra_env legitimately exists as an INPUT param
+// (spawn + make-template), but MUST NOT appear as a ResultField on ANY verb's
+// OUTPUT. The test asserts BOTH poles so it can't be satisfied by simply
+// deleting the input param:
+//
+//   - PRESENT as an input param on spawn and make-template (guards against a
+//     regression that would delete the legitimate env-injection surface).
+//   - ABSENT from every verb's ResultFields (the output-negative) — walked over
+//     all verbs, with get and list called out by name since they carry the row
+//     projections most at risk of accidentally gaining the column.
+func TestExtraEnvIsInputOnlyNotOutput(t *testing.T) {
+	// Input-param pole: the env-injection param must exist where it legitimately
+	// belongs. The verb-param spelling differs (spawn's CLI flag is "extra-env",
+	// make-template's json key is "extra_env"); accept either kebab/snake form so
+	// the guard tracks the param regardless of the surface's flag convention.
+	hasEnvParam := func(verb string) bool {
+		v, ok := manifest.Lookup(verb)
+		if !ok {
+			t.Fatalf("%s not in manifest", verb)
+		}
+		for _, p := range v.Params {
+			if p.Name == "extra_env" || p.Name == "extra-env" {
+				return true
+			}
+		}
+		return false
+	}
+	for _, verb := range []string{"spawn", "make-template"} {
+		if !hasEnvParam(verb) {
+			t.Errorf("%s is missing the extra-env/extra_env INPUT param; env-injection surface regressed", verb)
+		}
+	}
+
+	// Output-negative pole: no verb's ResultFields may carry extra_env (either
+	// spelling).
+	for _, v := range manifest.Verbs {
+		for _, f := range v.ResultFields {
+			if f.Name == "extra_env" || f.Name == "extra-env" {
+				t.Errorf("verb %q has an %s OUTPUT ResultField; extra_env is INPUT-only and must never surface on a result row", v.Name, f.Name)
+			}
+		}
+	}
+
+	// Explicit named checks on the two row-projection verbs most at risk.
+	for _, verb := range []string{"get", "list"} {
+		v, ok := manifest.Lookup(verb)
+		if !ok {
+			t.Fatalf("%s not in manifest", verb)
+		}
+		for _, f := range v.ResultFields {
+			if f.Name == "extra_env" || f.Name == "extra-env" {
+				t.Errorf("%s.ResultFields carries %s; the OUTPUT row must not expose the input-only env map", verb, f.Name)
+			}
+		}
+	}
+}
+
+// TestExtraEnvAbsentFromOutputSurfaceJSON is the committed-golden twin: extra_env
+// must NOT appear in any verb's result_fields in surface.json (the OUTPUT shape),
+// while it MUST remain present as a spawn/make-template param (the INPUT shape).
+// A regenerated golden that leaked extra_env onto an output row trips this named
+// check rather than passing silently as a self-consistent regeneration.
+func TestExtraEnvAbsentFromOutputSurfaceJSON(t *testing.T) {
+	_, surface := readSurfaceJSON(t)
+
+	inputParamVerbs := map[string]bool{}
+	for _, v := range surface.Verbs {
+		for _, p := range v.Params {
+			if p.Name == "extra_env" || p.Name == "extra-env" {
+				inputParamVerbs[v.Name] = true
+			}
+		}
+		for _, f := range v.ResultFields {
+			if f.Name == "extra_env" || f.Name == "extra-env" {
+				t.Errorf("surface.json verb %q has an %s result_field; OUTPUT shapes must never carry the input-only env map", v.Name, f.Name)
+			}
+		}
+	}
+	// The INPUT param must still be present on spawn + make-template (either
+	// kebab/snake spelling).
+	for _, verb := range []string{"spawn", "make-template"} {
+		if !inputParamVerbs[verb] {
+			t.Errorf("surface.json %s is missing the extra-env/extra_env INPUT param; env-injection surface regressed in the golden", verb)
+		}
+	}
+}
+
+// TestListSpawnsDescriptionNamesLivenessFields pins the list surfacing path:
+// per the PM-ratified interpretation, list gains the liveness fields via an
+// extended composite `spawns` Description (the list manifest declares one
+// composite []Spawn field, never per-column FieldDefs). The Description must
+// name both fields on the source of truth AND in the committed surface.json.
+func TestListSpawnsDescriptionNamesLivenessFields(t *testing.T) {
+	v, ok := manifest.Lookup("list")
+	if !ok {
+		t.Fatal("list not in manifest")
+	}
+	if len(v.ResultFields) == 0 || v.ResultFields[0].Name != "spawns" {
+		t.Fatalf("list.ResultFields[0] is not the composite \"spawns\" field; got %+v", v.ResultFields)
+	}
+	desc := v.ResultFields[0].Description
+	for _, needle := range []string{"liveness_unverified_since", "liveness_note"} {
+		if !strings.Contains(desc, needle) {
+			t.Errorf("list.spawns Description does not name %q; SR-8.3 surfaces list liveness via the composite description; got %q",
+				needle, desc)
+		}
+	}
+
+	// Committed surface.json twin.
+	_, surface := readSurfaceJSON(t)
+	var sjDesc string
+	for _, vv := range surface.Verbs {
+		if vv.Name != "list" {
+			continue
+		}
+		for _, f := range vv.ResultFields {
+			if f.Name == "spawns" {
+				sjDesc = f.Description
+			}
+		}
+	}
+	if sjDesc == "" {
+		t.Fatal("surface.json list verb has no spawns result field description")
+	}
+	for _, needle := range []string{"liveness_unverified_since", "liveness_note"} {
+		if !strings.Contains(sjDesc, needle) {
+			t.Errorf("surface.json list.spawns description does not name %q; got %q", needle, sjDesc)
+		}
 	}
 }

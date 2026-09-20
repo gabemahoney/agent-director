@@ -23,6 +23,18 @@ import (
 // understands. Callers should use errors.Is to detect it.
 var ErrSchemaMismatch = errors.New("store: schema version mismatch")
 
+// ErrSchemaMigrationRequired is returned by Open/OpenOrInit when the SQLite
+// user_version is older than the version this binary understands and no valid
+// administrator authorization was presented to permit the migration. The store
+// never auto-migrates on open; the upgrade must be performed out-of-band by an
+// administrator via the agent-director install process. Callers should use
+// errors.Is to detect it.
+//
+// The user-visible message deliberately names no command, flag, file path, or
+// environment variable — it is a dead end that routes the operator to their
+// administrator (SR-1.4).
+var ErrSchemaMigrationRequired = errors.New("store: schema migration required")
+
 // ErrStoreNotInitialized is returned by Open when the database file does not
 // exist. It signals that the caller should either run OpenOrInit (which
 // creates the file and applies the schema) or report a useful error to the
@@ -31,7 +43,7 @@ var ErrStoreNotInitialized = errors.New("store: database not initialized")
 
 // schemaVersion is the current schema version this package writes and reads.
 // Bump (and add a migration) whenever the DDL in schema.go changes.
-const schemaVersion = 2
+const schemaVersion = 3
 
 // dbFileMode is the mode the SQLite file itself is forced to on every Open.
 // 0600 = owner read/write only.
@@ -141,7 +153,7 @@ func openDB(resolved string) (*Store, error) {
 		return nil, fmt.Errorf("store: chmod db file: %w", err)
 	}
 
-	if err := ensureSchema(db); err != nil {
+	if err := ensureSchema(db, resolved); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

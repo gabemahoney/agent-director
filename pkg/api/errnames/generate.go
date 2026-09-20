@@ -65,6 +65,9 @@ var packageOf = map[string]string{
 	// internal/store
 	// ErrSchemaMismatch is intentionally absent: it is a store-initialization
 	// error (not a verb error) removed from Catalog in Task 7.
+	// ErrSchemaMigrationRequired is intentionally absent for the same reason:
+	// a store-initialization error (older-than-binary DB, no valid authorization
+	// sentinel), not a verb-surface error, so it carries no catalog entry.
 	"ErrSpawnNotFound":             "store",
 	"ErrNoOpenPermissionRequest":   "store",
 	"ErrAlreadyDecided":            "store",

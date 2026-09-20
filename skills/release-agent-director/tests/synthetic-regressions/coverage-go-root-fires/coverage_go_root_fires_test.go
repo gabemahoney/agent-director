@@ -160,7 +160,16 @@ func TestCoverageGoRootFires(t *testing.T) {
 	gateScript := filepath.Join(root, "skills", "release-agent-director", "gates", "coverage", "go-root.sh")
 	cmd := exec.Command("bash", gateScript)
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "COVERAGE_GO_ROOT_NESTED=1")
+	// Redirect HOME to a throwaway dir for the gate subprocess. The gate runs
+	// the full `go test ./... -race -count=1` at the repo root, so its inner
+	// test binaries resolve ~/.agent-director from HOME (the trail singleton
+	// pins to it on first Emit). Without an isolated HOME these grandchildren
+	// inherit the real container HOME; any inner package that emits to the trail
+	// before/without its own HOME redirect then writes ad-trail.jsonl into the
+	// REAL home and races the trail-leak canary's snapshot window under
+	// `go test ./...` parallelism (b.93m — this was the residual leaker). The
+	// gate has no home-relative behaviour, so redirecting is safe.
+	cmd.Env = append(os.Environ(), "COVERAGE_GO_ROOT_NESTED=1", "HOME="+t.TempDir())
 	var stderrBuf strings.Builder
 	cmd.Stderr = &stderrBuf
 	// stdout flows to the test log for progress visibility

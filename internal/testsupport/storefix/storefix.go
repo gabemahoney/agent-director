@@ -155,8 +155,8 @@ func SeedResumable(t *testing.T, s *store.Store, id string) store.Spawn {
 		t.Fatalf("storefix.SeedResumable: InsertPending(%q): %v", id, err)
 	}
 	sessionID := "sess-" + id
-	if err := s.SetSessionID(id, sessionID); err != nil {
-		t.Fatalf("storefix.SeedResumable: SetSessionID(%q, %q): %v", id, sessionID, err)
+	if err := s.RecordSessionStartIdentity(id, sessionID, "", 0, ""); err != nil {
+		t.Fatalf("storefix.SeedResumable: RecordSessionStartIdentity(%q, %q): %v", id, sessionID, err)
 	}
 	if err := s.ApplyHookTransition(id, store.StateEnded, false, "test_seed"); err != nil {
 		t.Fatalf("storefix.SeedResumable: ApplyHookTransition(%q, ended): %v", id, err)
