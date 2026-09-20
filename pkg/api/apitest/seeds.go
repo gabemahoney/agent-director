@@ -1,11 +1,16 @@
 package apitest
 
 import (
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/google/uuid"
+
+	_ "modernc.org/sqlite"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 )
@@ -23,8 +28,15 @@ import (
 //   - createStore: if true the store is created when missing (OpenOrInit);
 //     if false the store must already exist (Open).
 //
+//   - opts: optional trailing SpawnOption values seeding the schema-v3 columns
+//     (pid, proc_starttime, jsonl_path, extra_env, liveness_unverified_since,
+//     liveness_note). Options are applied by an apitest-internal SQL UPDATE on
+//     the seeded row after the InsertPending/SetSessionID/ApplyHookTransition
+//     sequence; only explicitly provided columns are written. Supplying no
+//     options preserves the store's defaults (NULL columns; extra_env = '{}').
+//
 // Returns the claude_instance_id that was written.
-func SeedSpawn(dbPath, id, state, cwd, relayMode, sessionID string, createStore bool) (string, error) {
+func SeedSpawn(dbPath, id, state, cwd, relayMode, sessionID string, createStore bool, opts ...SpawnOption) (string, error) {
 	var (
 		s   *store.Store
 		err error
@@ -73,7 +85,73 @@ func SeedSpawn(dbPath, id, state, cwd, relayMode, sessionID string, createStore 
 		}
 	}
 
+	if len(opts) > 0 {
+		if err := applySpawnOpts(dbPath, id, opts); err != nil {
+			return "", err
+		}
+	}
+
 	return id, nil
+}
+
+// applySpawnOpts writes the requested schema-v3 column overrides onto the
+// already-seeded row via a raw parameterized SQL UPDATE. apitest is the single
+// blessed location for these column literals (SR-12.2 binds the no-hardcoded-SQL
+// rule to tests, not this mandated helper). Only fields with a non-nil pointer
+// are written, so unset options leave the store's defaults untouched; extra_env
+// is marshaled to a JSON object (nil map already normalized to {} by WithExtraEnv).
+func applySpawnOpts(dbPath, id string, opts []SpawnOption) error {
+	o := &spawnOpts{}
+	for _, opt := range opts {
+		opt(o)
+	}
+
+	setClauses := make([]string, 0, 6)
+	args := make([]any, 0, 7)
+	if o.pid != nil {
+		setClauses = append(setClauses, "pid = ?")
+		args = append(args, *o.pid)
+	}
+	if o.procStarttime != nil {
+		setClauses = append(setClauses, "proc_starttime = ?")
+		args = append(args, *o.procStarttime)
+	}
+	if o.jsonlPath != nil {
+		setClauses = append(setClauses, "jsonl_path = ?")
+		args = append(args, *o.jsonlPath)
+	}
+	if o.extraEnv != nil {
+		encoded, err := json.Marshal(o.extraEnv)
+		if err != nil {
+			return fmt.Errorf("SeedSpawn: marshal extra_env: %w", err)
+		}
+		setClauses = append(setClauses, "extra_env = ?")
+		args = append(args, string(encoded))
+	}
+	if o.livenessUnverifiedSince != nil {
+		setClauses = append(setClauses, "liveness_unverified_since = ?")
+		args = append(args, *o.livenessUnverifiedSince)
+	}
+	if o.livenessNote != nil {
+		setClauses = append(setClauses, "liveness_note = ?")
+		args = append(args, *o.livenessNote)
+	}
+	if len(setClauses) == 0 {
+		return nil
+	}
+
+	raw, err := sql.Open("sqlite", "file:"+dbPath)
+	if err != nil {
+		return fmt.Errorf("SeedSpawn: raw open: %w", err)
+	}
+	defer raw.Close() //nolint:errcheck
+
+	q := "UPDATE spawns SET " + strings.Join(setClauses, ", ") + " WHERE claude_instance_id = ?"
+	args = append(args, id)
+	if _, err := raw.Exec(q, args...); err != nil {
+		return fmt.Errorf("SeedSpawn: apply options UPDATE: %w", err)
+	}
+	return nil
 }
 
 // SeedParentChild sets the parent_id on childID to parentID.

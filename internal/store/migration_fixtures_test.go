@@ -25,54 +25,140 @@ import (
 // as _test.go helpers and are consumed by the refusal-path and authorized-path
 // sibling test files.
 //
-// Fixtures are built THROUGH the store (create a current-version DB, then stamp
-// user_version DOWN) rather than replayed from a raw SQL script. This matters
-// for byte-identity assertions (PM Q4): ensureJournalModeWAL runs before
-// ensureSchema and would write a WAL header on a non-WAL fixture even on an
-// open that is ultimately refused. Because these fixtures are already genuine
-// store-created WAL DBs, a refused open touches no bytes, so byte-identity is
+// Fixture-shape contract (b.93m fix): a vN fixture must have vN's ACTUAL
+// physical schema — the columns/indexes that version really had on disk — not
+// merely the current DDL with user_version stamped down. The older "build
+// current, stamp down" strategy broke once schemaVersion advanced past the
+// lowest gated version: a "v2" fixture physically carried v3's five spawns
+// columns, so re-migrating it (ALTER TABLE ADD COLUMN pid …) failed with
+// "duplicate column name: pid". Each fixture is therefore built at its true
+// physical shape:
+//
+//   - v1: load the canonical testdata/schema_v1.sql script (the pre-migration
+//     v1 DDL), which stamps user_version=1 itself. This is the authoritative
+//     v1 shape and never changes as schemaVersion advances.
+//   - vN (1 < N ≤ schemaVersion): start from the v1 fixture, then run the REAL
+//     registered migration steps 1→2→…→N through the engine (migrationStepFrom
+//     + step.apply). Every intermediate schema is thus produced by the same
+//     production code path the gate exercises, so a vN fixture is physically
+//     identical to a genuinely-migrated vN DB — no manual ALTER/DROP guesswork.
+//
+// All fixtures stay WAL-format (loadV1Fixture sets journal_mode=WAL before any
+// write). This matters for byte-identity assertions (PM Q4): ensureJournalModeWAL
+// runs before ensureSchema and would append a WAL header on a non-WAL fixture
+// even on an open that is ultimately refused. Because these fixtures are already
+// genuine WAL DBs, a refused open touches no bytes, so byte-identity is
 // well-defined. See makeVersionedDB.
 
-// makeVersionedDB creates a state.db under dir at the given target user_version
-// and returns its resolved path. The DB is constructed THROUGH the store
-// (OpenOrInit creates a current, WAL-format schemaVersion DB) and then stamped
-// DOWN to targetVersion with a raw PRAGMA. The result is a genuine WAL-format
-// SQLite file whose only difference from a freshly-created current DB is the
-// user_version stamp — exactly the shape an older-than-binary DB has on disk.
+// makeVersionedDB creates a state.db under dir at the given targetVersion and
+// returns its resolved path, built at that version's TRUE physical schema (see
+// the file-level fixture-shape contract). It loads the v1 fixture, then drives
+// the real registered migration steps forward until user_version == targetVersion.
 //
-// targetVersion may be any value; passing schemaVersion leaves the DB current,
-// and passing 0 re-arms the fresh-DB branch. Callers that want the canonical
-// v1/v2 fixtures should use makeV1DB / makeV2DB.
+// targetVersion must be in [1, schemaVersion]: 1 yields the raw v1 fixture, and
+// any higher value replays the production 1→…→targetVersion chain. Callers that
+// need user_version==0 (fresh-DB re-arm) or a NEWER-than-binary stamp should
+// build the base fixture here and stamp separately with stampUserVersion — a
+// stamp is a pure header write and does not change physical shape, which is
+// exactly what those synthetic/newer-than-binary tests want.
 func makeVersionedDB(t *testing.T, dir string, targetVersion int) string {
 	t.Helper()
+	if targetVersion < 1 || targetVersion > schemaVersion {
+		t.Fatalf("makeVersionedDB: targetVersion=%d out of range [1,%d]; stamp separately for synthetic/newer versions",
+			targetVersion, schemaVersion)
+	}
 	path := filepath.Join(dir, "state.db")
-	s, err := OpenOrInit(path)
-	if err != nil {
-		t.Fatalf("makeVersionedDB: OpenOrInit(%q): %v", path, err)
+	loadV1Fixture(t, path)
+	if targetVersion == 1 {
+		return path
 	}
-	if err := s.Close(); err != nil {
-		t.Fatalf("makeVersionedDB: Close: %v", err)
-	}
-	if targetVersion != schemaVersion {
-		stampUserVersion(t, path, targetVersion)
-	}
+	migrateFixtureTo(t, path, targetVersion)
 	return path
 }
 
+// loadV1Fixture loads the canonical testdata/schema_v1.sql script into a fresh
+// WAL-format SQLite file at path (the script stamps user_version=1). It is the
+// physical-shape source of truth for v1 and the base every higher fixture is
+// migrated up from.
+func loadV1Fixture(t *testing.T, path string) {
+	t.Helper()
+	v1SQL, err := os.ReadFile("testdata/schema_v1.sql")
+	if err != nil {
+		t.Fatalf("loadV1Fixture: read v1 fixture: %v", err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("loadV1Fixture: raw open %q: %v", path, err)
+	}
+	defer func() {
+		if cerr := db.Close(); cerr != nil {
+			t.Errorf("loadV1Fixture: close raw db: %v", cerr)
+		}
+	}()
+	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		t.Fatalf("loadV1Fixture: set WAL: %v", err)
+	}
+	if _, err := db.Exec(string(v1SQL)); err != nil {
+		t.Fatalf("loadV1Fixture: apply v1 DDL: %v", err)
+	}
+}
+
+// migrateFixtureTo drives the REAL registered migration steps against the DB at
+// path until user_version == target, producing that version's genuine physical
+// schema through the production code path (migrationStepFrom + step.apply). It
+// deliberately bypasses the authorization gate — a fixture builder is not an
+// operator open — so no sentinel is required.
+func migrateFixtureTo(t *testing.T, path string, target int) {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("migrateFixtureTo: raw open %q: %v", path, err)
+	}
+	defer func() {
+		if cerr := db.Close(); cerr != nil {
+			t.Errorf("migrateFixtureTo: close raw db: %v", cerr)
+		}
+	}()
+	for v := readUserVersionDB(t, db); v < target; v = readUserVersionDB(t, db) {
+		step, ok := migrationStepFrom(v)
+		if !ok {
+			t.Fatalf("migrateFixtureTo: no registered migration step from user_version=%d toward %d", v, target)
+		}
+		if err := step.apply(db); err != nil {
+			t.Fatalf("migrateFixtureTo: step %d→%d: %v", v, v+1, err)
+		}
+	}
+}
+
+// readUserVersionDB reads PRAGMA user_version off an already-open *sql.DB.
+// Companion to readUserVersion (which opens by path); used inside the fixture
+// migration loop to avoid reopening the file between steps.
+func readUserVersionDB(t *testing.T, db *sql.DB) int {
+	t.Helper()
+	var v int
+	if err := db.QueryRow("PRAGMA user_version").Scan(&v); err != nil {
+		t.Fatalf("readUserVersionDB: scan: %v", err)
+	}
+	return v
+}
+
 // makeV1DB creates a WAL-format v1 (user_version=1) fixture DB under dir and
-// returns its path. Built through the store so it is a real WAL DB (see the
-// file-level note on byte-identity).
+// returns its path. This is the raw canonical v1 fixture — the true v1 physical
+// shape, unchanged as schemaVersion advances.
 func makeV1DB(t *testing.T, dir string) string {
 	t.Helper()
 	return makeVersionedDB(t, dir, 1)
 }
 
-// makeV2DB creates a WAL-format v2 (current) fixture DB under dir and returns
-// its path. Equivalent to a plain OpenOrInit; provided for symmetry with
-// makeV1DB so gate tests read uniformly.
+// makeV2DB creates a WAL-format v2 (user_version=2) fixture DB under dir and
+// returns its path, built by migrating a v1 fixture through the real v1→v2 step
+// so it carries v2's ACTUAL physical schema (request_token column, composite
+// UNIQUE, v2 indexes — and crucially NOT v3's five spawns columns). A prior
+// version pinned this to schemaVersion; the b.93m fix makes it a true v2 so the
+// v2→v3 gate tests have a re-migratable fixture.
 func makeV2DB(t *testing.T, dir string) string {
 	t.Helper()
-	return makeVersionedDB(t, dir, schemaVersion)
+	return makeVersionedDB(t, dir, 2)
 }
 
 // stampUserVersion opens the DB raw and stamps PRAGMA user_version to v.

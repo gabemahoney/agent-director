@@ -5,27 +5,37 @@ import (
 	"fmt"
 )
 
-// schemaDDL is the canonical schema v2 DDL. IF NOT EXISTS is defensive —
-// ensureSchema only runs this inside a fresh-DB branch, but belt-and-suspenders
-// avoids races on a re-open against a torn-down test.
+// schemaDDL is the canonical schema v3 DDL (v-current: fresh DBs are stamped
+// directly at schemaVersion and never run a migration step). IF NOT EXISTS is
+// defensive — ensureSchema only runs this inside a fresh-DB branch, but
+// belt-and-suspenders avoids races on a re-open against a torn-down test.
 //
 // v2 changes vs v1: request_token column, composite UNIQUE(claude_instance_id,
 // request_token), decided_at replaces updated_at, and two new indexes.
+//
+// v3 changes vs v2: five new spawns columns — pid, proc_starttime,
+// liveness_unverified_since, liveness_note (all nullable) and extra_env
+// (TEXT NOT NULL DEFAULT '{}'). See migrateV2toV3.
 const schemaDDL = `
 CREATE TABLE IF NOT EXISTS spawns (
-    claude_instance_id   TEXT PRIMARY KEY,
-    parent_id            TEXT REFERENCES spawns(claude_instance_id) ON DELETE SET NULL,
-    state                TEXT NOT NULL,
-    cwd                  TEXT NOT NULL,
-    tmux_session_name    TEXT NOT NULL,
-    claude_args          TEXT NOT NULL DEFAULT '[]',
-    relay_mode           TEXT NOT NULL,
-    jsonl_path           TEXT,
-    claude_session_id    TEXT,
-    labels               TEXT NOT NULL DEFAULT '{}',
-    started_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    last_seen_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    ended_at             TIMESTAMP
+    claude_instance_id         TEXT PRIMARY KEY,
+    parent_id                  TEXT REFERENCES spawns(claude_instance_id) ON DELETE SET NULL,
+    state                      TEXT NOT NULL,
+    cwd                        TEXT NOT NULL,
+    tmux_session_name          TEXT NOT NULL,
+    claude_args                TEXT NOT NULL DEFAULT '[]',
+    relay_mode                 TEXT NOT NULL,
+    jsonl_path                 TEXT,
+    claude_session_id          TEXT,
+    labels                     TEXT NOT NULL DEFAULT '{}',
+    started_at                 TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at               TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ended_at                   TIMESTAMP,
+    pid                        INTEGER,
+    proc_starttime             TEXT,
+    liveness_unverified_since  TEXT,
+    liveness_note              TEXT,
+    extra_env                  TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_spawns_state     ON spawns(state);
 CREATE INDEX IF NOT EXISTS idx_spawns_last_seen ON spawns(last_seen_at);
@@ -68,6 +78,7 @@ type migrationStep struct {
 // then upgrades any authorized older DB to current in a single open.
 var migrationSteps = []migrationStep{
 	{from: 1, apply: migrateV1toV2},
+	{from: 2, apply: migrateV2toV3},
 }
 
 // ensureSchema enforces the schema-version contract on an opened *sql.DB.
@@ -167,7 +178,7 @@ func buildMigrationRefusal(current int) error {
 		ErrSchemaMigrationRequired, current, schemaVersion)
 }
 
-// createSchema runs the v2 DDL and stamps user_version in a single tx.
+// createSchema runs the v-current (v3) DDL and stamps user_version in a single tx.
 // PRAGMA user_version cannot take a bound parameter, so the version is
 // interpolated from a trusted package constant — never user input.
 func createSchema(db *sql.DB) error {
@@ -229,6 +240,38 @@ CREATE INDEX idx_permission_requests_decision_decided_at ON permission_requests(
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("store: commit v1→v2 migration tx: %w", err)
+	}
+	return nil
+}
+
+// migrateV2toV3 upgrades a v2 database to v3 inside a single transaction. It
+// adds five new spawns columns — pid, proc_starttime, liveness_unverified_since,
+// liveness_note (all nullable) and extra_env (TEXT NOT NULL DEFAULT '{}') — and
+// stamps user_version = 3. ALTER TABLE ADD COLUMN backfills existing rows with
+// NULL for the nullable columns and '{}' for extra_env (SR-5). A rollback on
+// any error leaves user_version=2 intact.
+func migrateV2toV3(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: begin v2→v3 migration tx: %w", err)
+	}
+	const v3SpawnsColumns = `
+ALTER TABLE spawns ADD COLUMN pid INTEGER;
+ALTER TABLE spawns ADD COLUMN proc_starttime TEXT;
+ALTER TABLE spawns ADD COLUMN liveness_unverified_since TEXT;
+ALTER TABLE spawns ADD COLUMN liveness_note TEXT;
+ALTER TABLE spawns ADD COLUMN extra_env TEXT NOT NULL DEFAULT '{}';
+`
+	if _, err := tx.Exec(v3SpawnsColumns); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("store: v2→v3 add spawns columns: %w", err)
+	}
+	if _, err := tx.Exec("PRAGMA user_version = 3"); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("store: v2→v3 stamp user_version: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit v2→v3 migration tx: %w", err)
 	}
 	return nil
 }

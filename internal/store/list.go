@@ -80,7 +80,10 @@ func (s *Store) ListSpawns(f ListFilters) ([]Spawn, error) {
 	q := `SELECT claude_instance_id, COALESCE(parent_id, ''), state, cwd,
 	             tmux_session_name, claude_args, relay_mode,
 	             COALESCE(jsonl_path, ''), COALESCE(claude_session_id, ''),
-	             labels, started_at, last_seen_at, ended_at
+	             labels, started_at, last_seen_at, ended_at,
+	             COALESCE(pid, 0), COALESCE(proc_starttime, ''),
+	             COALESCE(liveness_unverified_since, ''),
+	             COALESCE(liveness_note, ''), extra_env
 	        FROM spawns`
 	if len(where) > 0 {
 		q += " WHERE " + strings.Join(where, " AND ")
@@ -99,16 +102,19 @@ func (s *Store) ListSpawns(f ListFilters) ([]Spawn, error) {
 	var out []Spawn
 	for rows.Next() {
 		var (
-			sp         Spawn
-			argsJSON   string
-			labelsJSON string
-			endedAt    sql.NullTime
+			sp           Spawn
+			argsJSON     string
+			labelsJSON   string
+			endedAt      sql.NullTime
+			extraEnvJSON string
 		)
 		if err := rows.Scan(
 			&sp.ClaudeInstanceID, &sp.ParentID, &sp.State, &sp.CWD,
 			&sp.TmuxSessionName, &argsJSON, &sp.RelayMode,
 			&sp.JSONLPath, &sp.ClaudeSessionID,
 			&labelsJSON, &sp.StartedAt, &sp.LastSeenAt, &endedAt,
+			&sp.PID, &sp.ProcStarttime, &sp.LivenessUnverifiedSince,
+			&sp.LivenessNote, &extraEnvJSON,
 		); err != nil {
 			return nil, fmt.Errorf("store: list spawns scan: %w", err)
 		}
@@ -121,6 +127,9 @@ func (s *Store) ListSpawns(f ListFilters) ([]Spawn, error) {
 		}
 		if sp.Labels, err = decodeLabels(labelsJSON); err != nil {
 			return nil, fmt.Errorf("store: list spawns decode labels: %w", err)
+		}
+		if sp.ExtraEnv, err = decodeExtraEnv(extraEnvJSON); err != nil {
+			return nil, fmt.Errorf("store: list spawns decode extra_env: %w", err)
 		}
 		out = append(out, sp)
 	}

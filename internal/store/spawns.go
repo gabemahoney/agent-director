@@ -62,6 +62,26 @@ type Spawn struct {
 	StartedAt        time.Time
 	LastSeenAt       time.Time
 	EndedAt          *time.Time
+
+	// ExtraEnv holds the spawn's captured extra environment (schema v3,
+	// extra_env column). Decoded like Labels: empty-string / '{}' / a
+	// migrated pre-v3 NULL/default all decode to an empty NON-NIL map,
+	// never nil. Store-internal only — never surfaced in any API row shape.
+	ExtraEnv map[string]string
+
+	// PID, ProcStarttime, LivenessUnverifiedSince, and LivenessNote are the
+	// schema-v3 identity/liveness columns, scanned via COALESCE per the
+	// jsonl_path/claude_session_id precedent.
+	//
+	// NULL semantics: a zero value ("" for the string fields, 0 for PID)
+	// means the underlying SQL column is NULL. Writers MUST store NULL for
+	// the cleared/unset state, never an empty string or 0 — this keeps
+	// SR-8.2's "cleared = set NULL" semantics unambiguous under COALESCE
+	// scanning (a real pid is always ≥1).
+	PID                     int
+	ProcStarttime           string
+	LivenessUnverifiedSince string
+	LivenessNote            string
 }
 
 // InsertPending writes a new row in `pending` state. Used by spawn.Launch
@@ -119,22 +139,28 @@ func (s *Store) GetSpawn(instanceID string) (Spawn, error) {
         SELECT claude_instance_id, COALESCE(parent_id, ''), state, cwd,
                tmux_session_name, claude_args, relay_mode,
                COALESCE(jsonl_path, ''), COALESCE(claude_session_id, ''),
-               labels, started_at, last_seen_at, ended_at
+               labels, started_at, last_seen_at, ended_at,
+               COALESCE(pid, 0), COALESCE(proc_starttime, ''),
+               COALESCE(liveness_unverified_since, ''),
+               COALESCE(liveness_note, ''), extra_env
           FROM spawns
          WHERE claude_instance_id = ?
     `
 	row := s.db.QueryRow(q, instanceID)
 	var (
-		sp         Spawn
-		argsJSON   string
-		labelsJSON string
-		endedAt    sql.NullTime
+		sp           Spawn
+		argsJSON     string
+		labelsJSON   string
+		endedAt      sql.NullTime
+		extraEnvJSON string
 	)
 	err := row.Scan(
 		&sp.ClaudeInstanceID, &sp.ParentID, &sp.State, &sp.CWD,
 		&sp.TmuxSessionName, &argsJSON, &sp.RelayMode,
 		&sp.JSONLPath, &sp.ClaudeSessionID,
 		&labelsJSON, &sp.StartedAt, &sp.LastSeenAt, &endedAt,
+		&sp.PID, &sp.ProcStarttime, &sp.LivenessUnverifiedSince,
+		&sp.LivenessNote, &extraEnvJSON,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Spawn{}, fmt.Errorf("%w: %s", ErrSpawnNotFound, instanceID)
@@ -150,6 +176,9 @@ func (s *Store) GetSpawn(instanceID string) (Spawn, error) {
 	}
 	if sp.Labels, err = decodeLabels(labelsJSON); err != nil {
 		return Spawn{}, fmt.Errorf("store: decode labels: %w", err)
+	}
+	if sp.ExtraEnv, err = decodeExtraEnv(extraEnvJSON); err != nil {
+		return Spawn{}, fmt.Errorf("store: decode extra_env: %w", err)
 	}
 	return sp, nil
 }
@@ -499,4 +528,13 @@ func decodeLabels(blob string) (map[string]string, error) {
 		out = map[string]string{}
 	}
 	return out, nil
+}
+
+// decodeExtraEnv reads the extra_env JSON object column (schema v3) into a
+// string map. Mirrors decodeLabels exactly: an empty string, '{}', or a
+// JSON null all decode to an empty NON-NIL map, so migrated pre-v3 rows and
+// freshly inserted rows never nil-decode. Store-internal only — extra_env is
+// never surfaced in any API row shape.
+func decodeExtraEnv(blob string) (map[string]string, error) {
+	return decodeLabels(blob)
 }

@@ -470,11 +470,14 @@ consumer-dryrun:
 	cd tools/consumer-dryrun && go build ./...
 
 # ts-helper builds the fixture-seeding CLI used by TypeScript smoke tests.
-# Built like any other binary (no special build tags); source lives entirely
-# under test/smoke/ts-helper/. modernc.org/sqlite is pure Go; CGO_ENABLED=0
-# suffices. The target is incremental: it depends on every source file that
-# feeds the binary, so make skips the build when nothing has changed.
-TS_HELPER_SRCS := $(wildcard test/smoke/ts-helper/*.go)
+# Built like any other binary (no special build tags); source lives under
+# test/smoke/ts-helper/, but the CLI also imports pkg/api/apitest (SeedSpawn)
+# to seed stores. modernc.org/sqlite is pure Go; CGO_ENABLED=0 suffices. The
+# target is incremental: it depends on every source file that feeds the
+# binary — including the apitest seeder sources — so make rebuilds when a
+# seeder changes and skips the build when nothing has changed. Without the
+# apitest prereqs, a stale binary can seed pre-migration stores (b.93m).
+TS_HELPER_SRCS := $(wildcard test/smoke/ts-helper/*.go) $(wildcard pkg/api/apitest/*.go)
 
 bin/ts-helper: $(TS_HELPER_SRCS)
 	CGO_ENABLED=0 go build -o bin/ts-helper ./test/smoke/ts-helper/

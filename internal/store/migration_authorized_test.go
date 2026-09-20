@@ -142,13 +142,15 @@ func TestChainMechanics_CurrentVersionThroughLoop(t *testing.T) {
 // hop, so it is what would catch the SR-1.2 return-after-one-hop hazard.
 //
 // Mechanics: runMigrationChain loops `while version < schemaVersion` (a const =
-// 2). We therefore start the DB at user_version=0 and register synthetic
-// stamp-only steps from:0 (0→1) and from:1 (1→2); a single runMigrationChain(db,
-// 0) must loop TWICE through the real engine to reach schemaVersion=2. Using
-// from:0 in the chain is safe: the fresh-create (version==0) branch lives in
-// ensureSchema, not in runMigrationChain, so we never touch fresh-create DDL.
-// The synthetic steps only stamp user_version — no DDL, no schema shape — and
-// the production step table is saved/restored around the window.
+// 3). We therefore start the DB at user_version=0 and register synthetic
+// stamp-only steps from:0 (0→1), from:1 (1→2), and from:2 (2→3); a single
+// runMigrationChain(db, 0) must loop THREE times through the real engine to
+// reach schemaVersion=3 — still proving the ≥2-iteration loop property that
+// guards the SR-1.2 return-after-one-hop hazard. Using from:0 in the chain is
+// safe: the fresh-create (version==0) branch lives in ensureSchema, not in
+// runMigrationChain, so we never touch fresh-create DDL. The synthetic steps
+// only stamp user_version — no DDL, no schema shape — and the production step
+// table is saved/restored around the window.
 //
 // NOT parallel and NOT run under t.Parallel siblings: it mutates the package-
 // level migrationSteps slice; a save/restore via t.Cleanup keeps the production
@@ -158,9 +160,10 @@ func TestChainMechanics_SyntheticMultiStep(t *testing.T) {
 	savedSteps := migrationSteps
 	t.Cleanup(func() { migrationSteps = savedSteps })
 
-	// A DB stamped to user_version=0 that must climb to schemaVersion (2) via two
-	// synthetic steps (0→1, 1→2). Each step only stamps user_version so we avoid
-	// any DDL and keep the test about loop mechanics, not schema shape.
+	// A DB stamped to user_version=0 that must climb to schemaVersion (3) via
+	// three synthetic steps (0→1, 1→2, 2→3). Each step only stamps user_version
+	// so we avoid any DDL and keep the test about loop mechanics, not schema
+	// shape.
 	dir := t.TempDir()
 	dbPath := makeVersionedDB(t, dir, schemaVersion)
 	stampUserVersion(t, dbPath, 0)
@@ -178,7 +181,7 @@ func TestChainMechanics_SyntheticMultiStep(t *testing.T) {
 			},
 		}
 	}
-	migrationSteps = []migrationStep{mkStep(0), mkStep(1)}
+	migrationSteps = []migrationStep{mkStep(0), mkStep(1), mkStep(2)}
 
 	// Write a matching sentinel and drive the same authorized-open sequence
 	// ensureSchema runs: runMigrationChain(from) then consumeAuthorization.
@@ -192,19 +195,19 @@ func TestChainMechanics_SyntheticMultiStep(t *testing.T) {
 
 	before := len(readStoreTrailLines(t))
 
-	// Drive the REAL engine loop: runMigrationChain must iterate twice (0→1→2),
-	// invoking each registered step in ascending order via migrationStepFrom. A
-	// return-after-one-hop regression would leave the DB at 1 and stepCalls at
-	// [0], failing the assertions below.
+	// Drive the REAL engine loop: runMigrationChain must iterate three times
+	// (0→1→2→3), invoking each registered step in ascending order via
+	// migrationStepFrom. A return-after-one-hop regression would leave the DB at
+	// 1 and stepCalls at [0], failing the assertions below.
 	if err := runMigrationChain(db, 0); err != nil {
 		t.Fatalf("runMigrationChain(db, 0): %v", err)
 	}
 	// Consume exactly once, as ensureSchema does after the chain commits.
 	consumeAuthorization(dbPath, 0, schemaVersion)
 
-	// Two chained steps ran, in order — proving the loop iterated twice.
-	if len(stepCalls) != 2 || stepCalls[0] != 0 || stepCalls[1] != 1 {
-		t.Fatalf("synthetic chain step order = %v; want [0 1]", stepCalls)
+	// Three chained steps ran, in order — proving the loop iterated ≥2 times.
+	if len(stepCalls) != 3 || stepCalls[0] != 0 || stepCalls[1] != 1 || stepCalls[2] != 2 {
+		t.Fatalf("synthetic chain step order = %v; want [0 1 2]", stepCalls)
 	}
 	// DB climbed the full two versions in the one call.
 	if got := readUserVersion(t, dbPath); got != schemaVersion {
@@ -354,7 +357,7 @@ func TestConsumeDeleteFailure_LoudButOpenSucceeds(t *testing.T) {
 // makes the fail-open consume acceptable.
 func TestStaleSentinelInert_MatchingVersionReopen(t *testing.T) {
 	dir := t.TempDir()
-	dbPath := makeV2DB(t, dir) // already at schemaVersion
+	dbPath := makeVersionedDB(t, dir, schemaVersion) // already at schemaVersion
 	// Leftover consumed-shape sentinel from a prior migration.
 	writeSentinel(t, dir, 1, schemaVersion)
 

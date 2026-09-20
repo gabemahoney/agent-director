@@ -25,6 +25,7 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -197,8 +198,10 @@ func TestGateRefusalErrorText(t *testing.T) {
 	msg := err.Error()
 
 	// Exact dead-end phrasing with N=1 (on-disk) and M=schemaVersion (binary).
-	wantSubstr := "state.db is schema v1; this binary requires v2. " +
-		"Migration must be performed by an administrator via the agent-director install process."
+	wantSubstr := fmt.Sprintf(
+		"state.db is schema v1; this binary requires v%d. "+
+			"Migration must be performed by an administrator via the agent-director install process.",
+		schemaVersion)
 	if !strings.Contains(msg, wantSubstr) {
 		t.Errorf("error text missing dead-end pattern.\n  got:  %q\n  want substr: %q", msg, wantSubstr)
 	}
@@ -250,7 +253,11 @@ func TestGateFreshCreateStillInitializes(t *testing.T) {
 // new ErrSchemaMigrationRequired — the two dispositions must not cross-wire.
 func TestGateNewerThanBinaryStillMismatch(t *testing.T) {
 	dir := t.TempDir()
-	path := makeVersionedDB(t, dir, schemaVersion+1)
+	// Build a genuine current-version fixture, then stamp its header one past
+	// the binary. A stamp is a pure header write and leaves physical shape
+	// untouched — exactly what the newer-than-binary disposition needs.
+	path := makeVersionedDB(t, dir, schemaVersion)
+	stampUserVersion(t, path, schemaVersion+1)
 
 	_, err := Open(path)
 	if !errors.Is(err, ErrSchemaMismatch) {
