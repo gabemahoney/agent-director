@@ -196,6 +196,39 @@ test("public-surface: ListRow & GetResult carry additive-optional liveness field
   }
 });
 
+test("public-surface: GetResult carries jsonl_path; ListRow does not (SR-9.3/SR-10.3)", () => {
+  const golden = typesGolden();
+  // get surfaces the persisted transcript path as a required string field.
+  expect(
+    interfaceBody(golden, "GetResult"),
+    "GetResult must declare jsonl_path: string (the persisted transcript path get surfaces)"
+  ).toMatch(/jsonl_path\s*:\s*string/);
+  // list row shape is unchanged — it must NOT gain the get-only field.
+  expect(
+    interfaceBody(golden, "ListRow"),
+    "ListRow must NOT declare jsonl_path — the list wire shape stays unchanged"
+  ).not.toMatch(/\bjsonl_path\b/);
+});
+
+test("public-surface: extra_env is INPUT-only — absent from GetResult & ListRow OUTPUT types (SR-9.3/SR-10.3)", () => {
+  const golden = typesGolden();
+  // Output-negative: extra_env must never appear on a result row type.
+  for (const iface of ["GetResult", "ListRow"]) {
+    expect(
+      interfaceBody(golden, iface),
+      `${iface} must NOT declare extra_env — it is a spawn/make-template INPUT param, not an output field`
+    ).not.toMatch(/\bextra_env\b/);
+  }
+  // Input pole: extra_env must still be present on the param types so the
+  // negative is scoped to output, not a blanket deletion of the surface.
+  for (const iface of ["SpawnParams", "MakeTemplateParams"]) {
+    expect(
+      interfaceBody(golden, iface),
+      `${iface} must retain the extra_env INPUT param (env-injection surface)`
+    ).toMatch(/extra_env\?\s*:\s*Record<string,\s*string>/);
+  }
+});
+
 test("public-surface: FindMissingResult carries unverified count and ids (SR-8)", () => {
   const body = interfaceBody(typesGolden(), "FindMissingResult");
   expect(body, "FindMissingResult must declare a numeric unverified count").toMatch(

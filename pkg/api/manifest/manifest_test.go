@@ -723,6 +723,115 @@ func TestGetLivenessFieldsInSurfaceJSON(t *testing.T) {
 	}
 }
 
+// TestExtraEnvIsInputOnlyNotOutput is the SR-9.3/SR-10.3 named negative on the
+// manifest source of truth: extra_env legitimately exists as an INPUT param
+// (spawn + make-template), but MUST NOT appear as a ResultField on ANY verb's
+// OUTPUT. The test asserts BOTH poles so it can't be satisfied by simply
+// deleting the input param:
+//
+//   - PRESENT as an input param on spawn and make-template (guards against a
+//     regression that would delete the legitimate env-injection surface).
+//   - ABSENT from every verb's ResultFields (the output-negative) — walked over
+//     all verbs, with get and list called out by name since they carry the row
+//     projections most at risk of accidentally gaining the column.
+func TestExtraEnvIsInputOnlyNotOutput(t *testing.T) {
+	// Input-param pole: the env-injection param must exist where it legitimately
+	// belongs. The verb-param spelling differs (spawn's CLI flag is "extra-env",
+	// make-template's json key is "extra_env"); accept either kebab/snake form so
+	// the guard tracks the param regardless of the surface's flag convention.
+	hasEnvParam := func(verb string) bool {
+		v, ok := manifest.Lookup(verb)
+		if !ok {
+			t.Fatalf("%s not in manifest", verb)
+		}
+		for _, p := range v.Params {
+			if p.Name == "extra_env" || p.Name == "extra-env" {
+				return true
+			}
+		}
+		return false
+	}
+	for _, verb := range []string{"spawn", "make-template"} {
+		if !hasEnvParam(verb) {
+			t.Errorf("%s is missing the extra-env/extra_env INPUT param; env-injection surface regressed", verb)
+		}
+	}
+
+	// Output-negative pole: no verb's ResultFields may carry extra_env (either
+	// spelling).
+	for _, v := range manifest.Verbs {
+		for _, f := range v.ResultFields {
+			if f.Name == "extra_env" || f.Name == "extra-env" {
+				t.Errorf("verb %q has an %s OUTPUT ResultField; extra_env is INPUT-only and must never surface on a result row", v.Name, f.Name)
+			}
+		}
+	}
+
+	// Explicit named checks on the two row-projection verbs most at risk.
+	for _, verb := range []string{"get", "list"} {
+		v, ok := manifest.Lookup(verb)
+		if !ok {
+			t.Fatalf("%s not in manifest", verb)
+		}
+		for _, f := range v.ResultFields {
+			if f.Name == "extra_env" || f.Name == "extra-env" {
+				t.Errorf("%s.ResultFields carries %s; the OUTPUT row must not expose the input-only env map", verb, f.Name)
+			}
+		}
+	}
+}
+
+// TestExtraEnvAbsentFromOutputSurfaceJSON is the committed-golden twin: extra_env
+// must NOT appear in any verb's result_fields in surface.json (the OUTPUT shape),
+// while it MUST remain present as a spawn/make-template param (the INPUT shape).
+// A regenerated golden that leaked extra_env onto an output row trips this named
+// check rather than passing silently as a self-consistent regeneration.
+func TestExtraEnvAbsentFromOutputSurfaceJSON(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller(0) failed")
+	}
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(thisFile), "surface.json"))
+	if err != nil {
+		t.Fatalf("read surface.json: %v", err)
+	}
+	var surface struct {
+		Verbs []struct {
+			Name   string `json:"name"`
+			Params []struct {
+				Name string `json:"name"`
+			} `json:"params"`
+			ResultFields []struct {
+				Name string `json:"name"`
+			} `json:"result_fields"`
+		} `json:"verbs"`
+	}
+	if err := json.Unmarshal(raw, &surface); err != nil {
+		t.Fatalf("unmarshal surface.json: %v", err)
+	}
+
+	inputParamVerbs := map[string]bool{}
+	for _, v := range surface.Verbs {
+		for _, p := range v.Params {
+			if p.Name == "extra_env" || p.Name == "extra-env" {
+				inputParamVerbs[v.Name] = true
+			}
+		}
+		for _, f := range v.ResultFields {
+			if f.Name == "extra_env" || f.Name == "extra-env" {
+				t.Errorf("surface.json verb %q has an %s result_field; OUTPUT shapes must never carry the input-only env map", v.Name, f.Name)
+			}
+		}
+	}
+	// The INPUT param must still be present on spawn + make-template (either
+	// kebab/snake spelling).
+	for _, verb := range []string{"spawn", "make-template"} {
+		if !inputParamVerbs[verb] {
+			t.Errorf("surface.json %s is missing the extra-env/extra_env INPUT param; env-injection surface regressed in the golden", verb)
+		}
+	}
+}
+
 // TestListSpawnsDescriptionNamesLivenessFields pins the list surfacing path:
 // per the PM-ratified interpretation, list gains the liveness fields via an
 // extended composite `spawns` Description (the list manifest declares one

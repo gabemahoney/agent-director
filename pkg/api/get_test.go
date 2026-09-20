@@ -10,6 +10,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // openGetFixture seeds a Spawn at the given state with an explicit
@@ -289,6 +290,112 @@ func TestGetLivenessFieldsRoundTrip(t *testing.T) {
 			t.Errorf("JSON missing liveness_unverified_since key when set; got %s", raw)
 		}
 	})
+}
+
+// TestGetSurfacesPersistedJsonlPath pins SR-9.3/SR-10.3 surfacing on get: the
+// persisted jsonl_path column is projected verbatim onto the get result and the
+// marshaled JSON, both when set and when a legacy row leaves it empty.
+//
+//   - persisted:   a row seeded with WithJsonlPath surfaces that exact path on
+//     the result struct AND in the JSON envelope. This is the SessionStart-hook
+//     path that resume now prefers (true even under a custom CLAUDE_CONFIG_DIR).
+//   - legacy_empty: a row with no jsonl_path surfaces the empty string; the key
+//     is still present (jsonl_path has no omitempty — AllowEmpty=true, not
+//     nullable), so callers can distinguish "empty legacy row" from a missing
+//     field. resume falls back to the slug-rule path for such rows.
+func TestGetSurfacesPersistedJsonlPath(t *testing.T) {
+	t.Run("persisted", func(t *testing.T) {
+		const wantPath = "/home/user/.claude-custom/projects/-tmp/sess.jsonl"
+		dbPath := filepath.Join(t.TempDir(), "state.db")
+		if _, err := apitest.SeedSpawn(dbPath, "id-jsonl-set", store.StateWaiting, "/tmp", "off", "", true,
+			apitest.WithJsonlPath(wantPath),
+		); err != nil {
+			t.Fatalf("SeedSpawn: %v", err)
+		}
+		s, err := store.Open(dbPath)
+		if err != nil {
+			t.Fatalf("store.Open: %v", err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+
+		got, err := api.Get(s, "id-jsonl-set")
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got.JSONLPath != wantPath {
+			t.Errorf("JSONLPath = %q; want %q (persisted path surfaced verbatim)", got.JSONLPath, wantPath)
+		}
+		raw, err := json.Marshal(got)
+		if err != nil {
+			t.Fatalf("json.Marshal: %v", err)
+		}
+		if !strings.Contains(string(raw), `"jsonl_path":"`+wantPath+`"`) {
+			t.Errorf("JSON missing jsonl_path with persisted value; got %s", raw)
+		}
+	})
+
+	t.Run("legacy_empty", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "state.db")
+		if _, err := apitest.SeedSpawn(dbPath, "id-jsonl-legacy", store.StateWaiting, "/tmp", "off", "", true); err != nil {
+			t.Fatalf("SeedSpawn: %v", err)
+		}
+		s, err := store.Open(dbPath)
+		if err != nil {
+			t.Fatalf("store.Open: %v", err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+
+		got, err := api.Get(s, "id-jsonl-legacy")
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got.JSONLPath != "" {
+			t.Errorf("JSONLPath = %q; want empty (legacy row, no persisted path)", got.JSONLPath)
+		}
+		// AllowEmpty=true, not nullable → the key is always present, even empty.
+		raw, err := json.Marshal(got)
+		if err != nil {
+			t.Fatalf("json.Marshal: %v", err)
+		}
+		if !strings.Contains(string(raw), `"jsonl_path":""`) {
+			t.Errorf("JSON missing jsonl_path:\"\" key for legacy row; want key present but empty; got %s", raw)
+		}
+	})
+}
+
+// TestGetOutputHasNoExtraEnv is the named OUTPUT negative for SR-9.3/SR-10.3:
+// extra_env legitimately exists as the spawn/make-template INPUT param, but it
+// MUST NOT leak onto the get OUTPUT surface. A row seeded with a non-empty
+// extra_env map (WithExtraEnv) must NOT surface an extra_env key anywhere in the
+// marshaled get result — neither as a struct field nor a stray JSON key.
+func TestGetOutputHasNoExtraEnv(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	if _, err := apitest.SeedSpawn(dbPath, "id-extraenv", store.StateWaiting, "/tmp", "off", "", true,
+		apitest.WithExtraEnv(map[string]string{"SECRET_TOKEN": "leak-me-not", "FOO": "bar"}),
+	); err != nil {
+		t.Fatalf("SeedSpawn: %v", err)
+	}
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	got, err := api.Get(s, "id-extraenv")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if strings.Contains(string(raw), "extra_env") {
+		t.Errorf("get output JSON contains extra_env key; it is an INPUT-only param and must not surface on the OUTPUT row; got %s", raw)
+	}
+	// Belt-and-suspenders: the seeded values themselves must not appear either.
+	if strings.Contains(string(raw), "leak-me-not") {
+		t.Errorf("get output JSON leaked a seeded extra_env value; got %s", raw)
+	}
 }
 
 // TestGetVerbPluralShape pins the plural PermissionRequests contract
