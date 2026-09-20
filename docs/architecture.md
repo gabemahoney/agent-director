@@ -949,6 +949,24 @@ synthesized in stage 4. The handler's binary path is resolved via
 macOS) so it is always the same binary version that ran the `spawn`
 call.
 
+**Emitted per-hook relay timeout.** `synthesizeSettings` emits an explicit
+per-hook `timeout` field on exactly the `PermissionRequest` and `PreToolUse`
+hook entries — placed on the inner command object (sibling of
+`type`/`command`), not on the outer entry that carries `matcher`. Its value is
+`config.Relay.EffectiveTimeoutSeconds()` (the configured `relay.timeout_seconds`
+when positive, else the `DefaultRelayTimeoutSeconds` fallback of 86400). This is
+the same accessor the relay poll loop's deadline derives from
+(`internal/hook/polling.go`), so Claude Code's per-hook kill boundary and the
+poll deadline are always the identical value. Without the field Claude Code
+would kill the polling hook at its own 600-second default per-hook timeout —
+discarding the hook's output with no envelope, so a late decision falls open
+into the native permission flow. The other six hook events and the
+`inject_help_hook` `SessionStart` entry carry no `timeout` and are unchanged.
+Any future author touching either the emitted timeout or the poll deadline must
+route through `EffectiveTimeoutSeconds()` — it is the single source of truth for
+the "non-positive falls back to 86400" rule, and splitting it would let the two
+boundaries drift.
+
 ### Opt-in dynamic help-hook injection
 
 When `defaults.inject_help_hook = true` is set in `config.toml`,
@@ -1703,6 +1721,22 @@ bot must never be sitting in "waiting for permission" with no listener AND no
 decision; if both are false, the spawn is stranded and any external surface
 (e.g. a Slack approval message from CSCB) would be a lying ghost — buttons
 that go nowhere.
+
+**What makes the invariant hold, and the window it holds within.** The
+listener half of the invariant is guaranteed only for the configured relay
+window, and only because `synthesizeSettings` emits the per-hook `timeout`
+(equal to `relay.timeout_seconds`) on the `PermissionRequest`/`PreToolUse`
+entries — see "Emitted per-hook relay timeout" in the spawn pipeline section.
+Without that field Claude Code would kill the polling hook at its 600-second
+default with no envelope — silently violating the invariant by removing the
+listener while the row stays open. With the field, the poll deadline and Claude
+Code's kill boundary are the same value, so the hook is never killed out from
+under the loop; instead the timeout path (`decision='deny'`,
+`decision_reason='timeout'`) closes the invariant in-band by writing a decision.
+The native permission dialog Claude Code shows during a relayed request is
+concurrent racing UI alongside the live `PermissionRequest` hook — not a
+fallback state and not a hook-death signal; a decision envelope arriving within
+the window dismisses it.
 
 **Per-row refinement (SRD §6.2, v2).** The v2 schema allows multiple
 concurrent `permission_requests` rows for the same Spawn, one per
