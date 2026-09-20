@@ -22,6 +22,14 @@ import (
 	"testing"
 )
 
+// gates/finalize/write-report.sh, relative to repoRoot. The staging helper
+// copies this script at runtime so its own two-level ../.. DIST_DIR walk
+// resolves inside an isolated tree (b.mgw / SR-2.3 / SR-8 — the script is
+// copied byte-for-byte, never modified).
+var writeReportScriptRel = filepath.Join(
+	"skills", "release-agent-director", "gates", "finalize", "write-report.sh",
+)
+
 // testTarget is the synthetic version tag used for all postcondition test
 // invocations.  It is deliberately unusual so artifacts are easy to identify
 // if cleanup ever fails.
@@ -51,11 +59,27 @@ const priorPhasesWithFailureJSON = `[
 
 // ─── report JSON types ────────────────────────────────────────────────────────
 
-// reportPhase mirrors one entry in the "phases" array of release-report.json.
+// reportPhase mirrors one entry in the "phases" array of release-report.json
+// (SR-15 / SR-2.2 report phase shape: name, outcome, started_at, elapsed_ms,
+// and a typed sub_checks[]).
 type reportPhase struct {
-	Name      string            `json:"name"`
-	Outcome   string            `json:"outcome"`
-	SubChecks []json.RawMessage `json:"sub_checks"`
+	Name      string           `json:"name"`
+	Outcome   string           `json:"outcome"`
+	StartedAt string           `json:"started_at"`
+	ElapsedMS int64            `json:"elapsed_ms"`
+	SubChecks []reportSubCheck `json:"sub_checks"`
+}
+
+// reportSubCheck mirrors one entry in a phase's "sub_checks" array. Per the
+// SR-2.2 report shape a sub-check carries name, outcome, and a scalar
+// diagnostic that is the FIRST executor diagnostic object or null. Diagnostic
+// is json.RawMessage so it tolerates an SR-14 object, an explicit null, or the
+// key being absent (existing {"name","outcome"}-only fixture entries still
+// unmarshal — Diagnostic stays nil).
+type reportSubCheck struct {
+	Name       string          `json:"name"`
+	Outcome    string          `json:"outcome"`
+	Diagnostic json.RawMessage `json:"diagnostic"`
 }
 
 // reportSubstep mirrors one entry in the "publish_substeps" array.
@@ -123,6 +147,35 @@ func isolatedReportDir(t *testing.T) (dir, reportPath string) {
 	t.Helper()
 	dir = t.TempDir()
 	return dir, filepath.Join(dir, "release-report.json")
+}
+
+// stageWriteReport stages a RUNTIME copy of gates/finalize/write-report.sh into
+// an isolated tree and returns (stagedScript, reportPath). write-report.sh
+// hardcodes DIST_DIR from its own location (two-level ../.. walk) and does not
+// honor RELEASE_REPORT_DIR, and publish-orchestrator.sh never invokes it — so
+// isolation is achieved by copying the script (unmodified — SR-8) to
+// <isolated>/gates/finalize/write-report.sh, from which its ../.. walk resolves
+// DIST_DIR to <isolated>/dist. The shared skills/release-agent-director/dist/
+// is therefore never read or written. This is the single sanctioned place the
+// report path is constructed (SR-7.2 — no path construction outside helpers).
+func stageWriteReport(t *testing.T, root string) (stagedScript, reportPath string) {
+	t.Helper()
+	isolated := t.TempDir()
+	finalizeDir := filepath.Join(isolated, "gates", "finalize")
+	if err := os.MkdirAll(finalizeDir, 0o755); err != nil {
+		t.Fatalf("stageWriteReport: mkdir %s: %v", finalizeDir, err)
+	}
+	src := filepath.Join(root, writeReportScriptRel)
+	data, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("stageWriteReport: read %s: %v", src, err)
+	}
+	stagedScript = filepath.Join(finalizeDir, "write-report.sh")
+	if err := os.WriteFile(stagedScript, data, 0o755); err != nil {
+		t.Fatalf("stageWriteReport: write %s: %v", stagedScript, err)
+	}
+	reportPath = filepath.Join(isolated, "dist", "release-report.json")
+	return stagedScript, reportPath
 }
 
 // parseReport reads and JSON-decodes the release-report.json produced by the

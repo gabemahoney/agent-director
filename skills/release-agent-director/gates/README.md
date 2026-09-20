@@ -134,7 +134,7 @@ translate the executor output into the report phase shape before invoking
 | Executor output field | Report phase field | Rule |
 | --- | --- | --- |
 | `phase_name` | `name` | direct copy |
-| `duration_ms` | `elapsed_ms` | direct copy |
+| `duration_ms` | `elapsed_ms` | the report phase's `elapsed_ms` is the SUM of all sub-check `duration_ms` values (the executor emits `duration_ms` per sub-check only); the sum preserves the pre-parallelization semantics, where a phase's elapsed time was the sum of its sequentially-run gates |
 | (per sub-check) `diagnostics` array | (per sub-check) scalar `diagnostic` | each sub-check's `diagnostics` array maps to the report's scalar `diagnostic` as the FIRST diagnostic object in the array, or `null` when the array is empty; any remaining diagnostics beyond the first are appended to the report's top-level `diagnostics[]` array |
 | — (not emitted by executor) | `started_at` | an ISO-8601 UTC timestamp captured by the orchestrator immediately before invoking the phase runner, via the exact command `date -u +%Y-%m-%dT%H:%M:%SZ` |
 
