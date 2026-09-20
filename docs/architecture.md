@@ -2159,25 +2159,44 @@ Per-OS implementations are selected by build tags:
   `envp[0..]`. `envFromProcArgs2` skips past the argv section to
   reach the env, then scans for the prefix.
 
-  The kinfo_proc walker (`parse_kinfo.go`) carries two XNU-version-
-  sensitive constants: `kinfoProcSize` (sizeof struct kinfo_proc) and
-  `kinfoProcPIDOffset` (byte offset of extern_proc.p_pid). Both are
-  pinned to XNU 11.x (macOS 14 / 15) and are NOT a kernel ABI
-  guarantee — a future macOS major bump that resizes the struct will
-  silently drift the stride-based walker. The parser's plausibility
-  guard catches that: if more than 10% of decoded PIDs fall outside
-  `[1, 4_194_304]`, `parsePIDsFromSysctlBuf` returns
-  `ErrProbeUnsupported` and `find-missing` fails closed rather than
-  emitting a garbage probe set.
+  The kinfo_proc walker (`parse_kinfo.go`) carries a family of XNU-
+  version-sensitive constants. Two anchor the stride-based PID walk:
+  `kinfoProcSize` (sizeof struct kinfo_proc = 648) and
+  `kinfoProcPIDOffset` (byte offset of extern_proc.p_pid). Three more
+  pin the per-entry identity fields the probe extracts: `kinfoEprocPPIDOffset`
+  (byte offset of kp_eproc.e_ppid = `sizeof(extern_proc)=296` +
+  `offsetof(eproc, e_ppid)=264` = 560) and the start-time pair
+  `kinfoProcStartSecOffset`/`kinfoProcStartUsecOffset` (0 and 8 — the
+  `kp_proc.p_starttime` timeval aliases the head of extern_proc's leading
+  `p_un` union, so `tv_sec` sits at the very start of the entry and `tv_usec`
+  8 bytes in). All five are pinned to XNU 11.x (macOS 14 / 15) off the same
+  LP64 header basis and are NOT a kernel ABI guarantee — a future macOS major
+  bump that resizes the struct will silently drift both the stride-based
+  walker and the identity offsets.
+
+  Two independent guards catch that drift, and they carry *opposite*
+  fail-semantics on purpose. The whole-buffer PID walker fails **closed**:
+  if more than 10% of decoded PIDs fall outside `[1, 4_194_304]`,
+  `parsePIDsFromSysctlBuf` returns `ErrProbeUnsupported` and `find-missing`
+  refuses to emit a garbage probe set. The per-entry identity extractors
+  (`parseKinfoPPID`, `parseKinfoStartTime`) fail **open**: when an entry's
+  bytes fail their field plausibility guards they return the distinct
+  `ErrKinfoLayoutDrift` sentinel, which deliberately does NOT wrap
+  `ErrProbeUnsupported` — drift here maps to unknown identity (SessionStart
+  records NULL pid+starttime and proceeds) rather than a hard failure.
+  Keeping the sentinels separate stops `errors.Is(err, ErrProbeUnsupported)`
+  from also matching identity drift and re-importing fail-closed semantics.
 
   **macOS-major bump policy.** When supporting a new macOS major:
   compile the matching XNU sources (Apple publishes them at
   `apple-oss-distributions/xnu`), re-derive `kinfoProcSize` +
-  `kinfoProcPIDOffset` from `<bsd/sys/proc.h>` + `<bsd/sys/sysctl.h>`,
-  refresh the constant comments in `parse_kinfo.go`, and re-run
-  `GOOS=darwin GOARCH=arm64 go build ./...` plus the prober's
-  integration test under that macOS version. The plausibility guard
-  is a safety net, not a substitute for the bump.
+  `kinfoProcPIDOffset` **and** the identity offsets
+  `kinfoEprocPPIDOffset` / `kinfoProcStartSecOffset` /
+  `kinfoProcStartUsecOffset` from `<bsd/sys/proc.h>` +
+  `<bsd/sys/sysctl.h>`, refresh the constant comments in `parse_kinfo.go`,
+  and re-run `GOOS=darwin GOARCH=arm64 go build ./...` plus the prober's
+  integration test under that macOS version. The plausibility guards are
+  a safety net, not a substitute for the bump.
 
 - **Other** — the fallback returns `ErrProbeUnsupported` so
   `find-missing` fails closed rather than silently treating "no
