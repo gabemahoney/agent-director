@@ -944,3 +944,116 @@ func TestListSpawnsNewColumnsParityWithGetSpawn(t *testing.T) {
 	}
 }
 
+// TestApplyHookTransitionSoftRefreshClearsLiveness pins SR-8.2: the soft-refresh
+// (same-state) UPDATE path is proof of life and clears both liveness columns.
+// The row is seeded with both columns set, driven through a soft-refresh event,
+// and asserted NULL after.
+func TestApplyHookTransitionSoftRefreshClearsLiveness(t *testing.T) {
+	s, _ := openTempStore(t)
+	const id = "liveness-clear-softrefresh-1"
+	seedLivenessSet(t, s, id, StateWorking)
+
+	if err := s.ApplyHookTransition(id, "", true, "PreToolUse"); err != nil {
+		t.Fatalf("ApplyHookTransition (soft refresh): %v", err)
+	}
+	assertLivenessCleared(t, s, id)
+}
+
+// TestApplyHookTransitionEndedClearsLiveness pins SR-8.2: the ended-transition
+// UPDATE path clears both liveness columns (in the same statement that sets
+// ended_at).
+func TestApplyHookTransitionEndedClearsLiveness(t *testing.T) {
+	s, _ := openTempStore(t)
+	const id = "liveness-clear-ended-1"
+	seedLivenessSet(t, s, id, StateWorking)
+
+	if err := s.ApplyHookTransition(id, StateEnded, false, "SessionEnd"); err != nil {
+		t.Fatalf("ApplyHookTransition (ended): %v", err)
+	}
+	assertLivenessCleared(t, s, id)
+}
+
+// TestApplyHookTransitionGeneralClearsLiveness pins SR-8.2: the general
+// state-transition UPDATE path (non-terminal, non-softrefresh) clears both
+// liveness columns.
+func TestApplyHookTransitionGeneralClearsLiveness(t *testing.T) {
+	s, _ := openTempStore(t)
+	const id = "liveness-clear-general-1"
+	seedLivenessSet(t, s, id, StateWorking)
+
+	if err := s.ApplyHookTransition(id, StateWaiting, false, "Stop"); err != nil {
+		t.Fatalf("ApplyHookTransition (general): %v", err)
+	}
+	assertLivenessCleared(t, s, id)
+}
+
+// TestApplyHookTransitionHeldWorkingPreservesLiveness pins the adversarial
+// write-free invariant: when the multi-row retention guard HOLDS the working
+// transition (open permission_requests rows remain), no UPDATE fires and the
+// pre-set liveness columns are preserved verbatim.
+func TestApplyHookTransitionHeldWorkingPreservesLiveness(t *testing.T) {
+	s, _ := openTempStore(t)
+	const id = "liveness-held-working-1"
+	if err := s.InsertPending(Spawn{
+		ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-hw", RelayMode: "on",
+	}); err != nil {
+		t.Fatalf("InsertPending: %v", err)
+	}
+	if err := s.ApplyHookTransition(id, StateCheckPermission, false, "test_seed"); err != nil {
+		t.Fatalf("transition to check_permission: %v", err)
+	}
+	// One still-open permission row keeps the working transition held.
+	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{"cmd":"ls"}`, 0, ""); err != nil {
+		t.Fatalf("UpsertOpenPermissionRequest: %v", err)
+	}
+	// Pin liveness AFTER reaching check_permission (still a live state).
+	transitioned, err := s.SetLivenessUnverified(id, "held note")
+	if err != nil {
+		t.Fatalf("SetLivenessUnverified: %v", err)
+	}
+	if !transitioned {
+		t.Fatalf("SetLivenessUnverified transitioned=false; want true")
+	}
+	wantSince, _ := readLivenessRaw(t, s, id)
+
+	// Attempt working: the open row holds it — no UPDATE, liveness preserved.
+	if err := s.ApplyHookTransition(id, StateWorking, false, "PreToolUse"); err != nil {
+		t.Fatalf("ApplyHookTransition (held working): %v", err)
+	}
+	if state, _ := s.GetSpawnState(id); state != StateCheckPermission {
+		t.Fatalf("state = %q after held working; want check_permission", state)
+	}
+	assertLivenessPreserved(t, s, id, wantSince.String)
+}
+
+// TestApplyHookTransitionMissingRowPreservesNothing pins the n==0 (no matching
+// row) write-free path: a transition against an absent row performs no write.
+// To prove the write-free property adversarially we seed a DIFFERENT live row
+// with liveness set, drive a transition against a ghost id, and assert the
+// seeded row's liveness columns are untouched (the n==0 UPDATE matched nothing).
+func TestApplyHookTransitionMissingRowPreservesNothing(t *testing.T) {
+	s, _ := openTempStore(t)
+	const seededID = "liveness-n0-bystander-1"
+	wantSince := seedLivenessSet(t, s, seededID, StateWorking)
+
+	// Transition against a non-existent id: UPDATE matches 0 rows.
+	if err := s.ApplyHookTransition("ghost-n0", StateWaiting, false, "PreToolUse"); err != nil {
+		t.Fatalf("ApplyHookTransition (ghost): %v", err)
+	}
+	// The bystander row's liveness is untouched.
+	assertLivenessPreserved(t, s, seededID, wantSince)
+}
+
+// TestRecordSessionStartIdentityClearsLiveness pins SR-8.2: the widened
+// SessionStart write is proof of life and clears both liveness columns.
+func TestRecordSessionStartIdentityClearsLiveness(t *testing.T) {
+	s, _ := openTempStore(t)
+	const id = "liveness-clear-sessionstart-1"
+	seedLivenessSet(t, s, id, StateWaiting)
+
+	if err := s.RecordSessionStartIdentity(id, "session-xyz", "/x/xyz.jsonl", 7777, "3030"); err != nil {
+		t.Fatalf("RecordSessionStartIdentity: %v", err)
+	}
+	assertLivenessCleared(t, s, id)
+}
+

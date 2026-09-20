@@ -302,7 +302,9 @@ func (s *Store) ApplyHookTransitionResult(instanceID, newState string, softRefre
 		if !found {
 			return UpsertNoChange, nil
 		}
-		res, err := s.db.Exec(`UPDATE spawns SET last_seen_at = CURRENT_TIMESTAMP WHERE claude_instance_id = ?`, instanceID)
+		res, err := s.db.Exec(`UPDATE spawns SET last_seen_at = CURRENT_TIMESTAMP,
+		                  liveness_unverified_since = NULL, liveness_note = NULL
+		                WHERE claude_instance_id = ?`, instanceID)
 		if err != nil {
 			return UpsertError, fmt.Errorf("store: soft refresh: %w", err)
 		}
@@ -334,7 +336,8 @@ func (s *Store) ApplyHookTransitionResult(instanceID, newState string, softRefre
 		}
 		res, err := s.db.Exec(`UPDATE spawns
                       SET state = ?, last_seen_at = CURRENT_TIMESTAMP,
-                          ended_at = CURRENT_TIMESTAMP
+                          ended_at = CURRENT_TIMESTAMP,
+                          liveness_unverified_since = NULL, liveness_note = NULL
                     WHERE claude_instance_id = ?`, newState, instanceID)
 		if err != nil {
 			return UpsertError, fmt.Errorf("store: ended transition: %w", err)
@@ -405,7 +408,8 @@ func (s *Store) ApplyHookTransitionResult(instanceID, newState string, softRefre
 	}
 	res, err := s.db.Exec(`UPDATE spawns
                   SET state = ?, last_seen_at = CURRENT_TIMESTAMP,
-                      ended_at = NULL
+                      ended_at = NULL,
+                      liveness_unverified_since = NULL, liveness_note = NULL
                 WHERE claude_instance_id = ?`, newState, instanceID)
 	if err != nil {
 		return UpsertError, fmt.Errorf("store: state transition: %w", err)
@@ -451,15 +455,17 @@ func (s *Store) ApplyHookTransitionResult(instanceID, newState string, softRefre
 // value writes NULL (absent identity), matching the COALESCE(pid, 0) scan
 // convention where 0 means NULL. procStarttime empty → NULL likewise.
 //
-// Epic hp will extend this write site with the SR-8.2 liveness-fields clear
-// (liveness_unverified_since / liveness_note → NULL); it is intentionally
-// not implemented here.
+// SessionStart is proof of life (SR-8.2), so this write also clears both
+// liveness columns (liveness_unverified_since / liveness_note → NULL) in the
+// same atomic statement.
 func (s *Store) RecordSessionStartIdentity(instanceID, sessionID, jsonlPath string, pid int, procStarttime string) error {
 	const q = `UPDATE spawns
 	              SET claude_session_id = COALESCE(?, claude_session_id),
 	                  jsonl_path        = COALESCE(?, jsonl_path),
 	                  pid               = ?,
-	                  proc_starttime    = ?
+	                  proc_starttime    = ?,
+	                  liveness_unverified_since = NULL,
+	                  liveness_note     = NULL
 	            WHERE claude_instance_id = ?`
 
 	var sessionArg any

@@ -5,13 +5,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api"
 )
 
 // fakeFindMissingStore is the narrow store the verb sees. liveIDs is
-// the ListLiveSpawnIDs result; marked records every successful
-// MarkSpawnMissing call so the test can assert which rows were
-// transitioned.
+// the id set ListLiveSpawnIdentities returns (each wrapped as a
+// LiveSpawnIdentity with zero pid/proc_starttime — the verdict-engine
+// rework is a later Task, so these tests still exercise the id-only
+// sweep behavior); marked records every successful MarkSpawnMissing
+// call so the test can assert which rows were transitioned.
 type fakeFindMissingStore struct {
 	liveIDs []string
 	marked  []string
@@ -19,11 +22,15 @@ type fakeFindMissingStore struct {
 	markErr error
 }
 
-func (f *fakeFindMissingStore) ListLiveSpawnIDs() ([]string, error) {
+func (f *fakeFindMissingStore) ListLiveSpawnIdentities() ([]store.LiveSpawnIdentity, error) {
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
-	return append([]string(nil), f.liveIDs...), nil
+	out := make([]store.LiveSpawnIdentity, len(f.liveIDs))
+	for i, id := range f.liveIDs {
+		out[i] = store.LiveSpawnIdentity{ClaudeInstanceID: id}
+	}
+	return out, nil
 }
 
 func (f *fakeFindMissingStore) MarkSpawnMissing(id string) (string, error) {
@@ -200,7 +207,7 @@ func TestFindMissingZeroLiveRowsZeroProbeIsNoopSuccess(t *testing.T) {
 func TestFindMissingPendingRowIsScanned(t *testing.T) {
 	// Per SRD §5.2: a `pending` row whose tmux session vanished
 	// before SessionStart fired must reconcile to `missing` on the
-	// next sweep. ListLiveSpawnIDs in the store-side primitive
+	// next sweep. ListLiveSpawnIdentities in the store-side primitive
 	// includes `pending` in its IN-list; this test pins the
 	// downstream effect.
 	store := &fakeFindMissingStore{liveIDs: []string{"p-1"}}

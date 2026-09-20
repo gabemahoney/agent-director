@@ -9,41 +9,116 @@ import (
 	"github.com/gabemahoney/agent-director/internal/trail"
 )
 
-// ListLiveSpawnIDs returns the claude_instance_id of every row in a
-// live (non-terminal) state. The result is the input set find-missing
-// diffs against the prober's view (SRD §4.4). Including `pending` is
-// intentional per SRD §5.2: a Spawn whose tmux session vanished
+// LiveSpawnIdentity is the per-row identity the find-missing verdict
+// engine needs to decide liveness: the instance id plus the recorded
+// process identity (pid + proc_starttime) captured at SessionStart.
+//
+// Zero values follow the COALESCE scan convention (spawns.go): PID==0
+// and ProcStarttime=="" mean the underlying columns are NULL (no
+// recorded identity — a NULL-pid row that falls back to the environ
+// probe-set diff). The read deliberately carries NO liveness fields;
+// the guarded SetLivenessUnverified setter's transitioned return is
+// the sole NULL→set signal (PM decision, SR-8.1).
+type LiveSpawnIdentity struct {
+	ClaudeInstanceID string
+	PID              int
+	ProcStarttime    string
+}
+
+// ListLiveSpawnIdentities returns a LiveSpawnIdentity for every row in a
+// live (non-terminal) state. The result is the input set find-missing's
+// per-row verdict engine works against (SRD §4.4). Including `pending`
+// is intentional per SRD §5.2: a Spawn whose tmux session vanished
 // before SessionStart fired is still "live" from the DB's view and
 // should be reconciled to `missing`.
 //
+// pid / proc_starttime are scanned via COALESCE(pid, 0) /
+// COALESCE(proc_starttime, '') so a row with no recorded identity
+// yields the zero values rather than a scan error.
+//
 // Order is unspecified. Callers that need stable ordering sort the
 // result themselves.
-func (s *Store) ListLiveSpawnIDs() ([]string, error) {
+func (s *Store) ListLiveSpawnIdentities() ([]LiveSpawnIdentity, error) {
 	placeholders := make([]string, len(liveStates))
 	args := make([]any, len(liveStates))
 	for i, st := range liveStates {
 		placeholders[i] = "?"
 		args[i] = st
 	}
-	q := "SELECT claude_instance_id FROM spawns WHERE state IN (" +
-		strings.Join(placeholders, ",") + ")"
+	q := "SELECT claude_instance_id, COALESCE(pid, 0), COALESCE(proc_starttime, '') " +
+		"FROM spawns WHERE state IN (" + strings.Join(placeholders, ",") + ")"
 	rows, err := s.db.Query(q, args...)
 	if err != nil {
-		return nil, fmt.Errorf("store: list live ids: %w", err)
+		return nil, fmt.Errorf("store: list live identities: %w", err)
 	}
 	defer rows.Close()
-	var ids []string
+	var ids []LiveSpawnIdentity
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("store: list live ids scan: %w", err)
+		var it LiveSpawnIdentity
+		if err := rows.Scan(&it.ClaudeInstanceID, &it.PID, &it.ProcStarttime); err != nil {
+			return nil, fmt.Errorf("store: list live identities scan: %w", err)
 		}
-		ids = append(ids, id)
+		ids = append(ids, it)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: list live ids iterate: %w", err)
+		return nil, fmt.Errorf("store: list live identities iterate: %w", err)
 	}
 	return ids, nil
+}
+
+// SetLivenessUnverified records that a live row's process could not be
+// verified (e.g. an EACCES/EPERM environ probe): it writes both
+// liveness_unverified_since (= now, via CURRENT_TIMESTAMP — the store's
+// existing timestamp convention) and liveness_note in a single guarded
+// UPDATE, but ONLY when liveness_unverified_since is currently NULL.
+//
+// The write is guarded on the state set (live states only, matching
+// MarkSpawnMissing's WHERE discipline) so absent or terminal-state rows
+// are fail-open no-ops. Repeat calls on an already-set row preserve the
+// original timestamp and return transitioned=false; the first NULL→set
+// write returns transitioned=true. That transitioned bool is the sole
+// NULL→set signal find-missing uses to emit exactly one probe_eacces
+// tick (SR-8.1/8.4). Emits no trail events — emission stays in the
+// caller.
+func (s *Store) SetLivenessUnverified(instanceID, note string) (bool, error) {
+	placeholders := make([]string, len(liveStates))
+	args := make([]any, 0, 2+len(liveStates))
+	args = append(args, note, instanceID)
+	for i, st := range liveStates {
+		placeholders[i] = "?"
+		args = append(args, st)
+	}
+	q := `UPDATE spawns
+	         SET liveness_unverified_since = CURRENT_TIMESTAMP,
+	             liveness_note = ?
+	       WHERE claude_instance_id = ?
+	         AND liveness_unverified_since IS NULL
+	         AND state IN (` + strings.Join(placeholders, ",") + `)`
+	res, err := s.db.Exec(q, args...)
+	if err != nil {
+		return false, fmt.Errorf("store: set liveness unverified: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("store: set liveness unverified rows affected: %w", err)
+	}
+	return n > 0, nil
+}
+
+// ClearLivenessUnverified NULLs both liveness columns for a row. It is
+// idempotent: a row already clear (or absent) is a no-op. find-missing
+// calls it for the verified-alive case and immediately after
+// MarkSpawnMissing in the marking path (MarkSpawnMissing itself is NOT
+// widened — SR-11/SR-8.2). Emits no trail events.
+func (s *Store) ClearLivenessUnverified(instanceID string) error {
+	const q = `UPDATE spawns
+	              SET liveness_unverified_since = NULL,
+	                  liveness_note = NULL
+	            WHERE claude_instance_id = ?`
+	if _, err := s.db.Exec(q, instanceID); err != nil {
+		return fmt.Errorf("store: clear liveness unverified: %w", err)
+	}
+	return nil
 }
 
 // MarkSpawnMissing transitions a row from any live state to `missing`
