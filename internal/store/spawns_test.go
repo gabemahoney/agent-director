@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -81,6 +82,19 @@ func TestInsertPendingThenGet(t *testing.T) {
 	}
 	if got.EndedAt != nil {
 		t.Errorf("EndedAt = %v; want nil for pending row", got.EndedAt)
+	}
+	// InsertPending does not write the schema-v3 columns, so a freshly inserted
+	// row decodes them at their defaults: an empty NON-NIL ExtraEnv map and
+	// zero-value identity/liveness fields (NULL columns under COALESCE).
+	if got.ExtraEnv == nil {
+		t.Error("ExtraEnv = nil; want empty non-nil map for freshly inserted row")
+	}
+	if len(got.ExtraEnv) != 0 {
+		t.Errorf("ExtraEnv = %v; want empty map for freshly inserted row", got.ExtraEnv)
+	}
+	if got.PID != 0 || got.ProcStarttime != "" || got.LivenessUnverifiedSince != "" || got.LivenessNote != "" {
+		t.Errorf("new nullable columns non-zero on fresh insert: PID=%d ProcStarttime=%q LivenessUnverifiedSince=%q LivenessNote=%q",
+			got.PID, got.ProcStarttime, got.LivenessUnverifiedSince, got.LivenessNote)
 	}
 }
 
@@ -665,5 +679,214 @@ func TestSpawnStateTransitionEndedNewState(t *testing.T) {
 		t.Fatalf("want 1 ad.spawn.state_transition after ended transition; got %d", len(lines))
 	}
 	assertSpawnStateTransitionFields(t, lines[0], id, StatePending, StateEnded, "SessionEnd", false)
+}
+
+// insertV2SpawnRaw inserts a spawn row into a v2-shaped DB at dbPath using ONLY
+// the columns that exist at v2 (the five schema-v3 columns are deliberately
+// absent). This is the white-box seed for the pre-v3-migrated decode test: the
+// row is written BEFORE the v2→v3 migration, so it never sets pid /
+// proc_starttime / liveness_unverified_since / liveness_note / extra_env — the
+// migration's ALTER TABLE ADD COLUMN defaults (NULL for the nullables, '{}' for
+// extra_env) are what GetSpawn must then read back safely. Raw v2 SQL is used
+// (not hand-written v3 SQL) so the pre-v3 shape is genuine.
+func insertV2SpawnRaw(t *testing.T, dbPath, id string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("insertV2SpawnRaw: raw open %q: %v", dbPath, err)
+	}
+	defer func() { _ = db.Close() }()
+	const stmt = `
+        INSERT INTO spawns (
+            claude_instance_id, state, cwd, tmux_session_name,
+            claude_args, relay_mode, labels
+        ) VALUES (?, ?, ?, ?, '[]', ?, '{}')
+    `
+	if _, err := db.Exec(stmt, id, StatePending, "/tmp/pre-v3", "cd-pre-v3", "off"); err != nil {
+		t.Fatalf("insertV2SpawnRaw: insert %q: %v", id, err)
+	}
+}
+
+// TestGetSpawnPreV3MigratedDecodesSafely proves SR-5.2 decode safety for rows
+// that predate schema v3: a row inserted into a genuine v2 DB (built via the
+// real migration path, NOT hand-written v3 SQL), then migrated v2→v3 under an
+// authorized open, must read back through GetSpawn with an empty NON-NIL
+// ExtraEnv map and all four nullable columns at their zero values ("" / 0),
+// because the ALTER TABLE ADD COLUMN defaults leave the nullables NULL and
+// extra_env at '{}'.
+func TestGetSpawnPreV3MigratedDecodesSafely(t *testing.T) {
+	dir := t.TempDir()
+	// Build a TRUE v2 fixture through the production migration steps, then insert
+	// a spawn row with v2-shaped SQL BEFORE the v2→v3 migration runs.
+	dbPath := makeVersionedDB(t, dir, 2)
+	const id = "pre-v3-migrated-row-001"
+	insertV2SpawnRaw(t, dbPath, id)
+
+	// Authorize and open: the gated v2→v3 migration runs during Open, adding the
+	// five columns with their DDL defaults to the already-present row.
+	writeSentinel(t, dir, 2, schemaVersion)
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open(authorized v2→v3): %v", err)
+	}
+	defer s.Close()
+
+	got, err := s.GetSpawn(id)
+	if err != nil {
+		t.Fatalf("GetSpawn: %v", err)
+	}
+
+	// ExtraEnv: empty NON-NIL map (explicit nil check, then length).
+	if got.ExtraEnv == nil {
+		t.Errorf("ExtraEnv = nil; want empty non-nil map for migrated pre-v3 row")
+	}
+	if len(got.ExtraEnv) != 0 {
+		t.Errorf("ExtraEnv = %v; want empty map", got.ExtraEnv)
+	}
+
+	// The four nullable columns decode to their zero values under COALESCE.
+	if got.PID != 0 {
+		t.Errorf("PID = %d; want 0 (NULL column) for migrated pre-v3 row", got.PID)
+	}
+	if got.ProcStarttime != "" {
+		t.Errorf("ProcStarttime = %q; want empty (NULL column)", got.ProcStarttime)
+	}
+	if got.LivenessUnverifiedSince != "" {
+		t.Errorf("LivenessUnverifiedSince = %q; want empty (NULL column)", got.LivenessUnverifiedSince)
+	}
+	if got.LivenessNote != "" {
+		t.Errorf("LivenessNote = %q; want empty (NULL column)", got.LivenessNote)
+	}
+}
+
+// updateNewColumnsRaw populates the five schema-v3 columns on an existing row via
+// raw SQL inside this white-box package. No store write path exists for these
+// columns in this Epic, so raw SQL is the acceptable populate mechanism per the
+// PM note; the read-back under test still goes through GetSpawn/ListSpawns.
+func updateNewColumnsRaw(t *testing.T, s *Store, id string, pid int, procStarttime, livenessSince, livenessNote, extraEnvJSON string) {
+	t.Helper()
+	const q = `UPDATE spawns
+	              SET pid = ?, proc_starttime = ?,
+	                  liveness_unverified_since = ?, liveness_note = ?,
+	                  extra_env = ?
+	            WHERE claude_instance_id = ?`
+	if _, err := s.db.Exec(q, pid, procStarttime, livenessSince, livenessNote, extraEnvJSON, id); err != nil {
+		t.Fatalf("updateNewColumnsRaw: %v", err)
+	}
+}
+
+// TestGetSpawnPopulatedNewColumnsRoundTrip proves a populated ExtraEnv map plus
+// the four identity/liveness columns round-trip value-identical through
+// GetSpawn. Since no store write path exists for these columns in this Epic, the
+// row is populated via raw SQL inside this white-box package (acceptable here);
+// the assertion exercises the decode path GetSpawn wires up.
+func TestGetSpawnPopulatedNewColumnsRoundTrip(t *testing.T) {
+	s, _ := openTempStore(t)
+	const id = "populated-new-cols-001"
+	if err := s.InsertPending(Spawn{
+		ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-pop", RelayMode: "off",
+	}); err != nil {
+		t.Fatalf("InsertPending: %v", err)
+	}
+
+	wantEnv := map[string]string{"FOO": "bar", "PATH": "/usr/bin", "EMPTY": ""}
+	const (
+		wantPID           = 4242
+		wantProcStarttime = "1234567890"
+		wantSince         = "2026-09-20T00:00:00Z"
+		wantNote          = "proc_starttime mismatch"
+	)
+	updateNewColumnsRaw(t, s, id, wantPID, wantProcStarttime, wantSince, wantNote, `{"FOO":"bar","PATH":"/usr/bin","EMPTY":""}`)
+
+	got, err := s.GetSpawn(id)
+	if err != nil {
+		t.Fatalf("GetSpawn: %v", err)
+	}
+	if !reflect.DeepEqual(got.ExtraEnv, wantEnv) {
+		t.Errorf("ExtraEnv = %v; want %v (value-identical round-trip)", got.ExtraEnv, wantEnv)
+	}
+	if got.PID != wantPID {
+		t.Errorf("PID = %d; want %d", got.PID, wantPID)
+	}
+	if got.ProcStarttime != wantProcStarttime {
+		t.Errorf("ProcStarttime = %q; want %q", got.ProcStarttime, wantProcStarttime)
+	}
+	if got.LivenessUnverifiedSince != wantSince {
+		t.Errorf("LivenessUnverifiedSince = %q; want %q", got.LivenessUnverifiedSince, wantSince)
+	}
+	if got.LivenessNote != wantNote {
+		t.Errorf("LivenessNote = %q; want %q", got.LivenessNote, wantNote)
+	}
+}
+
+// TestListSpawnsNewColumnsParityWithGetSpawn proves ListSpawns scans rows with a
+// mix of NULL and populated schema-v3 columns without error and decodes each row
+// identically to GetSpawn — the two read paths share the same COALESCE/decode
+// contract, so a populated row and an untouched (all-NULL nullables, '{}'
+// extra_env) row must both agree field-for-field across the two APIs.
+func TestListSpawnsNewColumnsParityWithGetSpawn(t *testing.T) {
+	s, _ := openTempStore(t)
+
+	// Row 1: populated new columns.
+	const populatedID = "list-parity-populated"
+	if err := s.InsertPending(Spawn{
+		ClaudeInstanceID: populatedID, CWD: "/tmp", TmuxSessionName: "cd-lp1", RelayMode: "off",
+	}); err != nil {
+		t.Fatalf("InsertPending populated: %v", err)
+	}
+	updateNewColumnsRaw(t, s, populatedID, 999, "111", "2026-09-20T01:02:03Z", "note-x", `{"A":"1","B":"2"}`)
+
+	// Row 2: untouched — nullables stay NULL, extra_env at its '{}' default.
+	const defaultID = "list-parity-default"
+	if err := s.InsertPending(Spawn{
+		ClaudeInstanceID: defaultID, CWD: "/tmp", TmuxSessionName: "cd-lp2", RelayMode: "off",
+	}); err != nil {
+		t.Fatalf("InsertPending default: %v", err)
+	}
+
+	listed, err := s.ListSpawns(ListFilters{})
+	if err != nil {
+		t.Fatalf("ListSpawns: %v", err)
+	}
+	byID := make(map[string]Spawn, len(listed))
+	for _, sp := range listed {
+		byID[sp.ClaudeInstanceID] = sp
+	}
+
+	for _, id := range []string{populatedID, defaultID} {
+		listRow, ok := byID[id]
+		if !ok {
+			t.Fatalf("ListSpawns missing row %q", id)
+		}
+		getRow, err := s.GetSpawn(id)
+		if err != nil {
+			t.Fatalf("GetSpawn(%q): %v", id, err)
+		}
+		// The five new-column fields must match across the two read paths.
+		if listRow.PID != getRow.PID {
+			t.Errorf("[%s] PID: List=%d Get=%d", id, listRow.PID, getRow.PID)
+		}
+		if listRow.ProcStarttime != getRow.ProcStarttime {
+			t.Errorf("[%s] ProcStarttime: List=%q Get=%q", id, listRow.ProcStarttime, getRow.ProcStarttime)
+		}
+		if listRow.LivenessUnverifiedSince != getRow.LivenessUnverifiedSince {
+			t.Errorf("[%s] LivenessUnverifiedSince: List=%q Get=%q", id, listRow.LivenessUnverifiedSince, getRow.LivenessUnverifiedSince)
+		}
+		if listRow.LivenessNote != getRow.LivenessNote {
+			t.Errorf("[%s] LivenessNote: List=%q Get=%q", id, listRow.LivenessNote, getRow.LivenessNote)
+		}
+		if !reflect.DeepEqual(listRow.ExtraEnv, getRow.ExtraEnv) {
+			t.Errorf("[%s] ExtraEnv: List=%v Get=%v", id, listRow.ExtraEnv, getRow.ExtraEnv)
+		}
+		// The default row's ExtraEnv is specifically an empty non-nil map.
+		if id == defaultID {
+			if listRow.ExtraEnv == nil {
+				t.Errorf("[%s] List ExtraEnv = nil; want empty non-nil map", id)
+			}
+			if len(listRow.ExtraEnv) != 0 {
+				t.Errorf("[%s] List ExtraEnv = %v; want empty map", id, listRow.ExtraEnv)
+			}
+		}
+	}
 }
 

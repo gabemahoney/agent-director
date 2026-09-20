@@ -19,12 +19,14 @@ func TestMigrationFailurePreservesV1State(t *testing.T) {
 	path := filepath.Join(dir, "state.db")
 	openV1DB(t, path)
 
-	// Authorize the v1→v2 transition so the migration actually RUNS and then
-	// fails at the injected conflict below. Without this, the gate would refuse
-	// the open before any migration DDL executes, making the rollback assertion
-	// vacuous. With authorization, we exercise the real mid-migration rollback
-	// that SR-2.4 requires.
-	writeSentinel(t, dir, 1, 2)
+	// Authorize the v1→current chain so the migration actually RUNS and then
+	// fails at the injected conflict in the FIRST (v1→v2) step below. Without
+	// this, the gate would refuse the open before any migration DDL executes,
+	// making the rollback assertion vacuous. The sentinel's `to` end must be
+	// schemaVersion (the true chain target), not a hard-coded 2. With
+	// authorization, we exercise the real mid-migration rollback SR-2.4 requires:
+	// the v1→v2 step's per-tx rollback leaves user_version=1 intact.
+	writeSentinel(t, dir, 1, schemaVersion)
 
 	// Pre-create a conflicting index name so the v2 CREATE INDEX fails
 	// mid-transaction, triggering rollback.
@@ -80,7 +82,7 @@ func TestMigrationFailurePreservesV1State(t *testing.T) {
 // migration gate and surface ErrSchemaMigrationRequired instead, so they are
 // covered elsewhere; every badVersion below is > schemaVersion.)
 func TestOpenReturnsErrSchemaMismatch(t *testing.T) {
-	for _, badVersion := range []int{3, 99, 1000} {
+	for _, badVersion := range []int{schemaVersion + 1, 99, 1000} {
 		badVersion := badVersion
 		t.Run(fmt.Sprintf("version=%d", badVersion), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "state.db")
