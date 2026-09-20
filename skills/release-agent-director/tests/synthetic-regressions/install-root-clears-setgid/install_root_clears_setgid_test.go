@@ -5,7 +5,7 @@
 // debian:bookworm-slim ships /tmp as mode 3777 — the setgid bit is set. A
 // `mkdir` under such a setgid parent inherits the setgid bit, so
 // `~/.agent-director` was created as mode 2700 rather than 700. install.sh
-// then ran `chmod 0700` on the install root, but a THREE-digit chmod mode does
+// then ran `chmod 0700` on the install root, but a FOUR-digit chmod mode does
 // NOT clear an already-set setgid bit (coreutils 9.1) — the directory stayed
 // 2700. The docker-epics child epic-12-install asserts the install root has
 // mode exactly 700 and therefore failed on every run in the setgid-/tmp
@@ -13,7 +13,7 @@
 //
 // FIX
 // ===
-// install.sh switched to the FOUR-digit forms `chmod 00700` (install root) and
+// install.sh switched to the FIVE-digit forms `chmod 00700` (install root) and
 // `chmod 00755` (bin dir); the leading extra 0 explicitly clears any inherited
 // setuid/setgid bit, so the install root lands at 700.
 //
@@ -33,8 +33,8 @@
 // makes setgid (chmod g+s → 2777). A plain 0755 tmpdir would inherit nothing,
 // making the mode assertion vacuously pass even with the bug present. Here the
 // parent is genuinely setgid, so `mkdir` yields a 2700 install root; only the
-// four-digit chmod clears the setgid bit down to 700. Reverting install.sh to
-// the three-digit `chmod 0700` leaves the install root at 2700 and this test
+// five-digit chmod clears the setgid bit down to 700. Reverting install.sh to
+// the four-digit `chmod 0700` leaves the install root at 2700 and this test
 // fails — the required regression guarantee.
 package installrootclearssetgid_test
 
