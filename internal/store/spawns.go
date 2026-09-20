@@ -428,14 +428,68 @@ func (s *Store) ApplyHookTransitionResult(instanceID, newState string, softRefre
 	return UpsertUpdated, nil
 }
 
-// SetSessionID writes the claude_session_id column. Used by the
-// SessionStart hook after extracting the UUID from transcript_path.
-// A missing row is a no-op (fail-open per SRD §3.2).
-func (s *Store) SetSessionID(instanceID, sessionID string) error {
-	const q = `UPDATE spawns SET claude_session_id = ? WHERE claude_instance_id = ?`
-	_, err := s.db.Exec(q, sessionID, instanceID)
+// RecordSessionStartIdentity performs the single atomic SessionStart write
+// widening SetSessionID to cover the four columns the SessionStart hook
+// records: claude_session_id, jsonl_path, pid, proc_starttime. Invoked once
+// per SessionStart (SR-6.5/SR-9.1). A missing row is a fail-open no-op per
+// SRD §3.2, exactly like the SetSessionID it replaces.
+//
+// Column semantics (PM-mandated):
+//   - pid / proc_starttime are ALWAYS written — fresh captured values, or
+//     SQL NULL when identity capture failed. Never leave stale identity: a
+//     stale pid would let Epic hp's per-row liveness check mark a live
+//     resumed spawn provably-dead; NULL routes it to the SR-7.5 fallback.
+//     Absent lands as literal NULL (via any-typed args, the SetParentID
+//     house style), never 0 or "".
+//   - claude_session_id / jsonl_path are written only when the classified
+//     value is non-empty; an empty value preserves the existing column via
+//     COALESCE(?, col). This never clobbers a known session id / path with
+//     garbage — it preserves the extractSessionID contract. Absent is passed
+//     as literal NULL so COALESCE keeps the prior value.
+//
+// pid is passed as any: a positive value writes the int, a non-positive
+// value writes NULL (absent identity), matching the COALESCE(pid, 0) scan
+// convention where 0 means NULL. procStarttime empty → NULL likewise.
+//
+// Epic hp will extend this write site with the SR-8.2 liveness-fields clear
+// (liveness_unverified_since / liveness_note → NULL); it is intentionally
+// not implemented here.
+func (s *Store) RecordSessionStartIdentity(instanceID, sessionID, jsonlPath string, pid int, procStarttime string) error {
+	const q = `UPDATE spawns
+	              SET claude_session_id = COALESCE(?, claude_session_id),
+	                  jsonl_path        = COALESCE(?, jsonl_path),
+	                  pid               = ?,
+	                  proc_starttime    = ?
+	            WHERE claude_instance_id = ?`
+
+	var sessionArg any
+	if sessionID != "" {
+		sessionArg = sessionID
+	} else {
+		sessionArg = nil
+	}
+	var jsonlArg any
+	if jsonlPath != "" {
+		jsonlArg = jsonlPath
+	} else {
+		jsonlArg = nil
+	}
+	var pidArg any
+	if pid > 0 {
+		pidArg = pid
+	} else {
+		pidArg = nil
+	}
+	var starttimeArg any
+	if procStarttime != "" {
+		starttimeArg = procStarttime
+	} else {
+		starttimeArg = nil
+	}
+
+	_, err := s.db.Exec(q, sessionArg, jsonlArg, pidArg, starttimeArg, instanceID)
 	if err != nil {
-		return fmt.Errorf("store: set session id: %w", err)
+		return fmt.Errorf("store: record session start identity: %w", err)
 	}
 	return nil
 }

@@ -19,6 +19,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/hook"
+	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/trail"
 	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
@@ -164,9 +165,10 @@ func runHook() int {
 	defer st.Close()
 
 	hc := hook.HandleConfig{
-		Env:   hook.OSGetenv,
-		Cfg:   cfg.Relay,
-		Clock: hook.DefaultPollClock(),
+		Env:      hook.OSGetenv,
+		Cfg:      cfg.Relay,
+		Clock:    hook.DefaultPollClock(),
+		Resolver: probe.NewResolver(),
 	}
 	if err := hook.Handle(context.Background(), bytes.NewReader(stdinRaw), stdout, st, hc, logger); err != nil {
 		hookLog(logger, "hook: handle: %v", err)

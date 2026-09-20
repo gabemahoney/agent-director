@@ -23,16 +23,18 @@ import (
 //     "waiting" if empty.
 //   - cwd: working directory stored on the row; defaults to "/tmp" if empty.
 //   - relayMode: relay_mode value ("on"|"off"|""). Defaults to "off" if empty.
-//   - sessionID: if non-empty, calls s.SetSessionID after InsertPending so the
-//     row has a claude_session_id (required by the resume verb's pre-flight).
+//   - sessionID: if non-empty, calls s.RecordSessionStartIdentity after
+//     InsertPending so the row has a claude_session_id (required by the resume
+//     verb's pre-flight). Only the session id is seeded here; the identity
+//     columns (pid/proc_starttime/jsonl_path) are seeded via opts below.
 //   - createStore: if true the store is created when missing (OpenOrInit);
 //     if false the store must already exist (Open).
 //
 //   - opts: optional trailing SpawnOption values seeding the schema-v3 columns
 //     (pid, proc_starttime, jsonl_path, extra_env, liveness_unverified_since,
 //     liveness_note). Options are applied by an apitest-internal SQL UPDATE on
-//     the seeded row after the InsertPending/SetSessionID/ApplyHookTransition
-//     sequence; only explicitly provided columns are written. Supplying no
+//     the seeded row after the InsertPending/RecordSessionStartIdentity/
+//     ApplyHookTransition sequence; only explicitly provided columns are written. Supplying no
 //     options preserves the store's defaults (NULL columns; extra_env = '{}').
 //
 // Returns the claude_instance_id that was written.
@@ -74,8 +76,8 @@ func SeedSpawn(dbPath, id, state, cwd, relayMode, sessionID string, createStore 
 	}
 
 	if sessionID != "" {
-		if err := s.SetSessionID(id, sessionID); err != nil {
-			return "", fmt.Errorf("SeedSpawn: SetSessionID %q: %w", sessionID, err)
+		if err := s.RecordSessionStartIdentity(id, sessionID, "", 0, ""); err != nil {
+			return "", fmt.Errorf("SeedSpawn: RecordSessionStartIdentity %q: %w", sessionID, err)
 		}
 	}
 

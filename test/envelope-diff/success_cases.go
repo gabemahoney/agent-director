@@ -268,8 +268,8 @@ var successCases = []successCase{
 			)
 			s, dbPath := apitest.OpenStoreWithRow(t,
 				id, "cd-resume-1", store.StateEnded, "off")
-			if err := s.SetSessionID(id, sessID); err != nil {
-				t.Fatalf("resume seed: SetSessionID: %v", err)
+			if err := s.RecordSessionStartIdentity(id, sessID, "", 0, ""); err != nil {
+				t.Fatalf("resume seed: RecordSessionStartIdentity: %v", err)
 			}
 			return filepath.Dir(dbPath), map[string]any{
 				"id":     id,
