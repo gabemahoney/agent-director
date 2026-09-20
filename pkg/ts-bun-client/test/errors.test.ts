@@ -78,6 +78,29 @@ describe("subclass .name reflects the subclass", () => {
 });
 
 // ---------------------------------------------------------------------------
+// b.ggk — ErrClientClosed recovery hint names the public factory, not the
+// private constructor. The runtime `Client` constructor is private (SR-4.1),
+// so a message telling the consumer to call `new Client()` names a path that
+// does not compile. Pin the corrected text and forbid the old one.
+// ---------------------------------------------------------------------------
+describe("ErrClientClosed recovery message (b.ggk)", () => {
+  test("message names Client.create() and never new Client()", () => {
+    const err = new ErrClientClosed();
+    // errDescription is the human-facing recovery hint; err.message embeds it
+    // as `${errName}: ${errDescription}`. Assert both surfaces.
+    expect(err.errDescription).toBe(
+      "client is closed: call Client.create() to obtain a fresh handle"
+    );
+    expect(err.message).toBe(
+      "ErrClientClosed: client is closed: call Client.create() to obtain a fresh handle"
+    );
+    // The private constructor must never be advertised as a recovery path.
+    expect(err.errDescription).not.toContain("new Client()");
+    expect(err.message).not.toContain("new Client()");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Case 3: instanceof chain
 // ---------------------------------------------------------------------------
 describe("instanceof chain", () => {
