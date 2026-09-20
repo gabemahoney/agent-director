@@ -210,18 +210,40 @@ func SeedExpireFixture(t *testing.T) (*store.Store, string) {
 }
 
 // SeedJsonl writes a minimal placeholder JSONL file at the path
-// spawn.JsonlPath(cwd, sessionID) resolves to. Returns the resolved path.
+// spawn.JsonlPath(cwd, sessionID) resolves to (under $HOME/.claude). Returns
+// the resolved path. Delegates to SeedJsonlUnder with the default config dir.
 func SeedJsonl(t *testing.T, cwd, sessionID string) string {
 	t.Helper()
 	p, err := spawn.JsonlPath(cwd, sessionID)
 	if err != nil {
 		t.Fatalf("SeedJsonl: JsonlPath: %v", err)
 	}
+	return seedJsonlAt(t, p)
+}
+
+// SeedJsonlUnder writes a minimal placeholder JSONL file at the path
+// spawn.JsonlPathIn(configDir, cwd, sessionID) resolves to — i.e. under a
+// custom CLAUDE_CONFIG_DIR rather than $HOME/.claude. Used by the b.1ba
+// CONFIG_DIR fallback tests. Returns the resolved path (callers may ignore it,
+// matching the Seed* contract).
+func SeedJsonlUnder(t *testing.T, configDir, cwd, sessionID string) string {
+	t.Helper()
+	p, err := spawn.JsonlPathIn(configDir, cwd, sessionID)
+	if err != nil {
+		t.Fatalf("SeedJsonlUnder: JsonlPathIn: %v", err)
+	}
+	return seedJsonlAt(t, p)
+}
+
+// seedJsonlAt creates the parent dir and writes the placeholder transcript at
+// an already-resolved path. Shared by SeedJsonl and SeedJsonlUnder.
+func seedJsonlAt(t *testing.T, p string) string {
+	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
-		t.Fatalf("SeedJsonl: mkdir jsonl parent: %v", err)
+		t.Fatalf("seedJsonlAt: mkdir jsonl parent: %v", err)
 	}
 	if err := os.WriteFile(p, []byte("{}\n"), 0o600); err != nil {
-		t.Fatalf("SeedJsonl: write jsonl: %v", err)
+		t.Fatalf("seedJsonlAt: write jsonl: %v", err)
 	}
 	return p
 }

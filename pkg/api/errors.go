@@ -54,11 +54,16 @@ var ErrSpawnNotResumable = errors.New("ErrSpawnNotResumable")
 // caller's recourse is to `delete` and `spawn` fresh.
 var ErrNoSessionId = errors.New("ErrNoSessionId")
 
-// ErrJsonlMissing is returned by the resume verb when the JSONL
-// transcript file resolved from cwd + claude_session_id does not
-// exist on disk. The file may have been hand-deleted, archived by
-// the operator, or never written. Resume cannot proceed; `delete` +
-// fresh `spawn` is the recourse.
+// ErrJsonlMissing is returned by the resume verb when NO candidate
+// JSONL transcript path stats successfully on disk. Resume tries the
+// persisted jsonl_path first, then a CLAUDE_CONFIG_DIR-aware fallback
+// recomputed from the row's ExtraEnv (bug b.1ba); this sentinel fires
+// only when every candidate fails. The file may have been hand-deleted,
+// archived by the operator, or never written. The error message names
+// every path tried and its source (persisted vs fallback) with the
+// stat error for each, so callers can log which candidates failed —
+// the error NAME is stable, so name-based mapping is unaffected.
+// Resume cannot proceed; `delete` + fresh `spawn` is the recourse.
 var ErrJsonlMissing = errors.New("ErrJsonlMissing")
 
 // ErrSendKeysWhileRelayed is returned when a caller tries to send keys

@@ -7,7 +7,8 @@ import (
 )
 
 // JsonlPath returns the absolute on-disk path of the JSONL transcript
-// Claude Code maintains for a session. Per SRD §8.2 the layout is:
+// Claude Code maintains for a session under the DEFAULT config dir
+// (~/.claude). Per SRD §8.2 the layout is:
 //
 //	~/.claude/projects/<slug(cwd)>/<session_id>.jsonl
 //
@@ -22,7 +23,16 @@ import (
 //
 // JsonlPath does NOT touch the filesystem; it only composes the path.
 // Resume's caller-side Stat is the I/O that verifies the file exists.
+//
+// JsonlPath is a thin wrapper over JsonlPathIn that resolves the config
+// dir to $HOME/.claude. Spawns launched under a custom CLAUDE_CONFIG_DIR
+// keep their transcripts under <CLAUDE_CONFIG_DIR>/projects/... — those
+// callers must use JsonlPathIn with the config dir from the row's
+// ExtraEnv (see resumeImpl's fallback in pkg/api/resume.go).
 func JsonlPath(cwd, sessionID string) (string, error) {
+	// Validate before the os.UserHomeDir() syscall so an empty sessionID
+	// reports against JsonlPath (not JsonlPathIn) and pays no needless
+	// syscall.
 	if sessionID == "" {
 		return "", fmt.Errorf("JsonlPath: sessionID is empty")
 	}
@@ -30,7 +40,30 @@ func JsonlPath(cwd, sessionID string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("JsonlPath: home dir: %w", err)
 	}
-	return filepath.Join(home, ".claude", "projects",
+	return JsonlPathIn(filepath.Join(home, ".claude"), cwd, sessionID)
+}
+
+// JsonlPathIn composes the JSONL transcript path under an explicit
+// Claude Code config dir, i.e.:
+//
+//	<configDir>/projects/<slug(cwd)>/<session_id>.jsonl
+//
+// It is the config-dir-aware sibling of JsonlPath: when a Spawn ran
+// under a custom CLAUDE_CONFIG_DIR (persisted in the row's ExtraEnv),
+// its transcript lives under <CLAUDE_CONFIG_DIR>/projects/... rather
+// than ~/.claude/projects/..., so resume's fallback must compose the
+// path from that config dir. The same byte-for-byte slug rule applies
+// (see JsonlPath docs) — configDir only replaces the ~/.claude prefix.
+//
+// JsonlPathIn does NOT touch the filesystem; it only composes the path.
+func JsonlPathIn(configDir, cwd, sessionID string) (string, error) {
+	if sessionID == "" {
+		return "", fmt.Errorf("JsonlPathIn: sessionID is empty")
+	}
+	if configDir == "" {
+		return "", fmt.Errorf("JsonlPathIn: configDir is empty")
+	}
+	return filepath.Join(configDir, "projects",
 		slugifyCwd(cwd), sessionID+".jsonl"), nil
 }
 

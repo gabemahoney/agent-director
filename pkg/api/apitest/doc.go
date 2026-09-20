@@ -14,6 +14,7 @@
 //   - SeedPermissionRow ← pkg/api/decide_test.go   :: seedPermissionRow
 //   - SeedExpireFixture ← pkg/api/expire_test.go   :: seedExpireFixture
 //   - SeedJsonl         ← pkg/api/resume_test.go   :: seedJsonl
+//   - SeedJsonlUnder    ← pkg/api/resume_test.go   :: seedJsonlUnder (b.1ba)
 //   - SeedStore         ← pkg/api/client_test.go   :: seedStore
 //   - OpenStoreWithRow  ← pkg/api/sendkeys_test.go :: openStoreWithRow
 //
