@@ -298,6 +298,49 @@ func (s *Store) OpenPermissionRequestsForSpawn(instanceID string) ([]PermissionR
 	return out, nil
 }
 
+// PermissionRequestsForSpawn returns ALL permission_requests rows for the given
+// Spawn — decided and undecided alike — ordered by created_at ASC. Returns an
+// empty slice (not nil) when no rows exist; nil error on the empty-result case.
+//
+// It differs from OpenPermissionRequestsForSpawn, which filters to
+// `decision IS NULL`. The send_keys relay-guard release (Epic t1.kk3.up)
+// evaluates deliverability across every row REGARDLESS of decision status
+// (SR-4.2 "whether or not a decision was recorded"): a row decided in-window
+// still has a live poller about to deliver it, so decided-in-window rows must
+// keep the guard shut. This all-rows variant supplies that evaluation set.
+func (s *Store) PermissionRequestsForSpawn(instanceID string) ([]PermissionRow, error) {
+	const q = `
+		SELECT request_id, claude_instance_id, tool_name, tool_input,
+		       COALESCE(decision, ''), COALESCE(decision_reason, ''),
+		       created_at, request_token, decided_at
+		  FROM permission_requests
+		 WHERE claude_instance_id = ?
+		 ORDER BY created_at ASC
+	`
+	rows, err := s.db.Query(q, instanceID)
+	if err != nil {
+		return nil, fmt.Errorf("store: permission requests: %w", err)
+	}
+	defer rows.Close()
+	out := []PermissionRow{}
+	for rows.Next() {
+		var r PermissionRow
+		var decidedAt sql.NullTime
+		if err := rows.Scan(&r.RequestID, &r.ClaudeInstanceID, &r.ToolName, &r.ToolInput,
+			&r.Decision, &r.DecisionReason, &r.CreatedAt, &r.RequestToken, &decidedAt); err != nil {
+			return nil, fmt.Errorf("store: permission requests scan: %w", err)
+		}
+		if decidedAt.Valid {
+			r.DecidedAt = decidedAt.Time
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: permission requests iterate: %w", err)
+	}
+	return out, nil
+}
+
 // DecidePermissionRequestIfDeliverable is the deliverability-guarded variant of
 // DecidePermissionRequest (SR-3.4). It carries the same first-call-wins
 // `decision IS NULL AND request_token = ?` guard PLUS a `created_at > ?`

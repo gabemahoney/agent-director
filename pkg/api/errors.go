@@ -62,15 +62,19 @@ var ErrNoSessionId = errors.New("ErrNoSessionId")
 var ErrJsonlMissing = errors.New("ErrJsonlMissing")
 
 // ErrSendKeysWhileRelayed is returned when a caller tries to send keys
-// into a Spawn that is currently sitting on a relayed permission prompt
-// (relay_mode=on AND state=check_permission). The relay path needs to
-// own the modal answer; a parallel send-keys would race the relay's
-// decide() write and split the answer across two pane events.
+// into a Spawn that is currently sitting on a live relayed permission prompt
+// (relay_mode=on AND state=check_permission). The relay path needs to own the
+// modal answer; a parallel send-keys would race the relay's decide() write and
+// split the answer across two pane events.
 //
-// The full relay flow lands in Epic 10. This Epic stubs the guard so the
-// state-precondition surface is correct from day one: a caller hitting a
-// check_permission row with relay_mode=on gets a clean typed error
-// instead of a silent collision later.
+// The refusal is time-bounded, not unconditional: Claude Code kills the relay
+// hook at its per-hook timeout, after which the poller can no longer deliver a
+// decision. The guard consults the shared deliverability signal across every
+// one of the Spawn's permission-request rows and RELEASES once every request's
+// delivery window has elapsed — at that point send-keys is the sanctioned
+// recovery surface for a Spawn wedged in check_permission behind a dead relay.
+// The refusal stands only while at least one request row is still within its
+// window (or the Spawn has zero request rows).
 var ErrSendKeysWhileRelayed = errors.New("ErrSendKeysWhileRelayed")
 
 // ErrInvalidFlags is returned by CLI command handlers when a required flag
