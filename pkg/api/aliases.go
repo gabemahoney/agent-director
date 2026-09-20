@@ -27,6 +27,10 @@ type PermissionRow = store.PermissionRow
 // It appears in the ListStore interface method signature.
 type ListFilters = store.ListFilters
 
+// LiveSpawnIdentity is re-exported from internal/store for the same reason.
+// It appears in the FindMissingStore interface method signature.
+type LiveSpawnIdentity = store.LiveSpawnIdentity
+
 // ── Error sentinel re-exports ─────────────────────────────────────────────────
 //
 // These var declarations re-export internal error sentinels under the pkg/api

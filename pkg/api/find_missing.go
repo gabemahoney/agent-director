@@ -11,7 +11,7 @@ import (
 // FindMissingStore is the narrow store surface FindMissing needs.
 // *store.Store satisfies it via the recovery primitives.
 type FindMissingStore interface {
-	ListLiveSpawnIDs() ([]string, error)
+	ListLiveSpawnIdentities() ([]LiveSpawnIdentity, error)
 	// MarkSpawnMissing transitions a row from any live state to `missing`.
 	// Returns the prior state captured before the write, or ("", nil) when
 	// no write occurred (row absent or already terminal). A non-empty prior
@@ -68,9 +68,17 @@ type FindMissingLogger interface {
 // succeeded; a hard prober error (e.g. /proc unreachable) bubbles up
 // because there's nothing useful the verb can do without it.
 func findMissingImpl(ctx context.Context, s FindMissingStore, p probe.Prober, lg FindMissingLogger) (FindMissingResult, error) {
-	liveIDs, err := s.ListLiveSpawnIDs()
+	identities, err := s.ListLiveSpawnIdentities()
 	if err != nil {
 		return FindMissingResult{}, err
+	}
+	// The verdict-engine rework (next Task) will consume the recorded
+	// pid/proc_starttime per row. For now, extract the ids to keep this
+	// sweep's behavior byte-for-byte identical to the retired
+	// ListLiveSpawnIDs path.
+	liveIDs := make([]string, len(identities))
+	for i, it := range identities {
+		liveIDs[i] = it.ClaudeInstanceID
 	}
 
 	probeSet, err := p.Probe(ctx)
