@@ -133,6 +133,43 @@ func TestLaunchInsertsPendingAndCallsTmux(t *testing.T) {
 	}
 }
 
+// TestLaunchPersistsExtraEnv pins SR-10 write-side: a resolved ExtraEnv
+// flows into the row Launch INSERTs, so GetSpawn reads it back verbatim.
+// Before this Epic the value was used only to compose the tmux env and
+// then dropped; now it round-trips through the store so a later Resume
+// can restore it.
+func TestLaunchPersistsExtraEnv(t *testing.T) {
+	withStubExe(t, "/bin/agent-director")
+	t.Setenv(envInstanceID, "")
+	s, r, cfg := newStoreAndLaunchInputs(t)
+	r.ClaudeInstanceID = "id-extraenv"
+	r.TmuxSessionName = "cd-extraenv"
+	r.ExtraEnv = map[string]string{
+		"CLAUDE_CONFIG_DIR": "/home/bee/.claude-alt",
+		"ANTHROPIC_API_KEY": "sk-ant-test",
+	}
+	tmux := &captureTmux{}
+
+	if _, err := Launch(s, tmux, r, cfg); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	// The composed tmux env carries the ExtraEnv keys (sanity that the
+	// values reached the session), but the load-bearing assertion is the
+	// persisted row.
+	if tmux.got.envs["CLAUDE_CONFIG_DIR"] != "/home/bee/.claude-alt" {
+		t.Errorf("tmux env CLAUDE_CONFIG_DIR = %q; want /home/bee/.claude-alt", tmux.got.envs["CLAUDE_CONFIG_DIR"])
+	}
+
+	row, err := s.GetSpawn("id-extraenv")
+	if err != nil {
+		t.Fatalf("GetSpawn: %v", err)
+	}
+	if !reflect.DeepEqual(row.ExtraEnv, r.ExtraEnv) {
+		t.Errorf("row.ExtraEnv = %v; want %v (persisted verbatim)", row.ExtraEnv, r.ExtraEnv)
+	}
+}
+
 func TestLaunchTmuxFailureLeavesRowPending(t *testing.T) {
 	withStubExe(t, "/bin/agent-director")
 	t.Setenv(envInstanceID, "") // ensure no parent leakage from the host shell

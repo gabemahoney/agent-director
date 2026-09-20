@@ -98,6 +98,103 @@ func TestInsertPendingThenGet(t *testing.T) {
 	}
 }
 
+// TestInsertPendingPersistsExtraEnv proves the write side of the extra_env
+// round-trip (SR-10, this Epic): InsertPending must persist Spawn.ExtraEnv via
+// encodeExtraEnv so a non-empty multi-key map reads back value-identical through
+// GetSpawn (and ListSpawns, checked for cheap parity). Epic fn's decode tests
+// populate the column via raw SQL; this test exercises the InsertPending write
+// path those tests deliberately did not cover.
+func TestInsertPendingPersistsExtraEnv(t *testing.T) {
+	s, _ := openTempStore(t)
+	const id = "aaaaaaaa-bbbb-4ccc-8ddd-00000000eeee"
+	wantEnv := map[string]string{
+		"CLAUDE_CONFIG_DIR": "/home/u/.claude-alt",
+		"PATH":              "/usr/local/bin:/usr/bin",
+		"EMPTY":             "",
+	}
+	if err := s.InsertPending(Spawn{
+		ClaudeInstanceID: id,
+		CWD:              "/tmp",
+		TmuxSessionName:  "cd-extraenv",
+		RelayMode:        "off",
+		ExtraEnv:         wantEnv,
+	}); err != nil {
+		t.Fatalf("InsertPending: %v", err)
+	}
+
+	got, err := s.GetSpawn(id)
+	if err != nil {
+		t.Fatalf("GetSpawn: %v", err)
+	}
+	if !reflect.DeepEqual(got.ExtraEnv, wantEnv) {
+		t.Errorf("GetSpawn ExtraEnv = %v; want %v (value-identical round-trip)", got.ExtraEnv, wantEnv)
+	}
+
+	// ListSpawns parity — the same write must decode identically on the list path.
+	listed, err := s.ListSpawns(ListFilters{})
+	if err != nil {
+		t.Fatalf("ListSpawns: %v", err)
+	}
+	var found bool
+	for _, sp := range listed {
+		if sp.ClaudeInstanceID == id {
+			found = true
+			if !reflect.DeepEqual(sp.ExtraEnv, wantEnv) {
+				t.Errorf("ListSpawns ExtraEnv = %v; want %v", sp.ExtraEnv, wantEnv)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("ListSpawns missing inserted row %q", id)
+	}
+}
+
+// TestInsertPendingNilExtraEnvStoresEmptyObject proves the nil-map write case:
+// InsertPending with a nil ExtraEnv must persist the column as the JSON '{}'
+// (encodeExtraEnv's nil→'{}' rule, mirroring labels) — never NULL or an empty
+// string — and GetSpawn must then read it back as an empty NON-NIL map. The raw
+// column value is asserted directly so the '{}' storage contract is pinned, not
+// just the decoded shape.
+func TestInsertPendingNilExtraEnvStoresEmptyObject(t *testing.T) {
+	s, _ := openTempStore(t)
+	const id = "ffffffff-1111-4222-8333-000000004444"
+	if err := s.InsertPending(Spawn{
+		ClaudeInstanceID: id,
+		CWD:              "/tmp",
+		TmuxSessionName:  "cd-nilenv",
+		RelayMode:        "off",
+		// ExtraEnv left nil.
+	}); err != nil {
+		t.Fatalf("InsertPending: %v", err)
+	}
+
+	// Raw column: must be the literal JSON object '{}', never NULL/empty string.
+	var raw sql.NullString
+	if err := s.db.QueryRow(
+		"SELECT extra_env FROM spawns WHERE claude_instance_id = ?", id,
+	).Scan(&raw); err != nil {
+		t.Fatalf("raw select extra_env: %v", err)
+	}
+	if !raw.Valid {
+		t.Errorf("extra_env column = NULL; want '{}'")
+	}
+	if raw.String != "{}" {
+		t.Errorf("extra_env column = %q; want '{}'", raw.String)
+	}
+
+	// Decoded: empty NON-NIL map.
+	got, err := s.GetSpawn(id)
+	if err != nil {
+		t.Fatalf("GetSpawn: %v", err)
+	}
+	if got.ExtraEnv == nil {
+		t.Errorf("ExtraEnv = nil; want empty non-nil map for nil-inserted row")
+	}
+	if len(got.ExtraEnv) != 0 {
+		t.Errorf("ExtraEnv = %v; want empty map", got.ExtraEnv)
+	}
+}
+
 func TestGetSpawnNotFound(t *testing.T) {
 	s, _ := openTempStore(t)
 	_, err := s.GetSpawn("absent")

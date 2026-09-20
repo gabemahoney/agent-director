@@ -101,12 +101,16 @@ func (s *Store) InsertPending(sp Spawn) error {
 	if err != nil {
 		return fmt.Errorf("store: encode labels: %w", err)
 	}
+	extraEnvJSON, err := encodeExtraEnv(sp.ExtraEnv)
+	if err != nil {
+		return fmt.Errorf("store: encode extra_env: %w", err)
+	}
 
 	const stmt = `
         INSERT INTO spawns (
             claude_instance_id, parent_id, state, cwd, tmux_session_name,
-            claude_args, relay_mode, labels
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            claude_args, relay_mode, labels, extra_env
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
 	var parent any
 	if sp.ParentID != "" {
@@ -117,7 +121,7 @@ func (s *Store) InsertPending(sp Spawn) error {
 	_, err = s.db.Exec(stmt,
 		sp.ClaudeInstanceID, parent, StatePending,
 		sp.CWD, sp.TmuxSessionName,
-		argsJSON, sp.RelayMode, labelsJSON,
+		argsJSON, sp.RelayMode, labelsJSON, extraEnvJSON,
 	)
 	if err != nil {
 		var serr *sqlite.Error
@@ -588,6 +592,15 @@ func decodeLabels(blob string) (map[string]string, error) {
 		out = map[string]string{}
 	}
 	return out, nil
+}
+
+// encodeExtraEnv serializes the extra_env string map to a JSON object.
+// Mirrors encodeLabels exactly: a nil map encodes to '{}', so the column
+// always carries a valid JSON object and never NULL or an empty string
+// (persist-all posture — no allowlist, no filtering; the store file is
+// already 0600 in a 0700 dir, so no new exposure tier).
+func encodeExtraEnv(extraEnv map[string]string) (string, error) {
+	return encodeLabels(extraEnv)
 }
 
 // decodeExtraEnv reads the extra_env JSON object column (schema v3) into a
