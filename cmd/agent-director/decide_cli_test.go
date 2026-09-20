@@ -1,10 +1,42 @@
 package main_test
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	_ "modernc.org/sqlite"
 )
+
+// backdatePermissionRequest rewrites the created_at of an open
+// permission_requests row (decision NULL) to now-age using a raw connection,
+// mirroring the store-external backdating pattern used elsewhere in the CLI
+// tests (the store API exposes no created_at mutation). Used to push an open
+// request past the effective relay window so Decide surfaces ErrRelayFallenBack.
+// The CLI binary runs on the real clock with the default 86400s window, so
+// callers pass an age well past that plus RelayKillSafetyMargin (e.g. 48h).
+func backdatePermissionRequest(t *testing.T, dbPath, instanceID, requestToken string, age time.Duration) {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer db.Close()
+	backdate := time.Now().UTC().Add(-age).Format("2006-01-02 15:04:05")
+	res, err := db.Exec(
+		`UPDATE permission_requests SET created_at = ? WHERE claude_instance_id = ? AND request_token = ? AND decision IS NULL`,
+		backdate, instanceID, requestToken,
+	)
+	if err != nil {
+		t.Fatalf("backdate created_at: %v", err)
+	}
+	n, _ := res.RowsAffected()
+	if n != 1 {
+		t.Fatalf("backdate affected %d rows; want 1 (row missing or already decided?)", n)
+	}
+}
 
 // decideCalledLines filters trail lines for ad.decide.called events.
 func decideCalledLines(lines []map[string]any) []map[string]any {
@@ -167,11 +199,13 @@ func TestDecideRaceLoserSeesErrAlreadyDecided(t *testing.T) {
 	}
 }
 
-// TestDecideCalledEmitsTrailLine is a table-driven test that covers four
+// TestDecideCalledEmitsTrailLine is a table-driven test that covers the
 // decide-verb outcomes and asserts the ad.decide.called trail line emitted
 // on each path. Required top-level fields (source, ts, caller_*, outcome) are
 // validated for every row. The ErrAlreadyDecided row additionally asserts zero
-// ad.row_mutation.committed lines (Epic 3 no-op contract).
+// ad.row_mutation.committed lines (Epic 3 no-op contract). The
+// ErrRelayFallenBack row additionally asserts the typed err_name in the JSON
+// error envelope on stderr (open-but-undeliverable path, SR-4.4).
 //
 // ErrAmbiguousRequest is skipped: the store guard only fires when requestToken
 // is empty, but the API layer (pkg/api/decide.go) rejects an empty token with
@@ -185,6 +219,7 @@ func TestDecideCalledEmitsTrailLine(t *testing.T) {
 		{name: "ok", wantOutcome: "ok"},
 		{name: "ErrAlreadyDecided", wantOutcome: "ErrAlreadyDecided"},
 		{name: "ErrInvalidFlags", wantOutcome: "ErrInvalidFlags"},
+		{name: "ErrRelayFallenBack", wantOutcome: "ErrRelayFallenBack"},
 		{name: "ErrAmbiguousRequest", wantOutcome: "ErrAmbiguousRequest"},
 	}
 
@@ -256,6 +291,33 @@ func TestDecideCalledEmitsTrailLine(t *testing.T) {
 				)
 				if code2 == 0 {
 					t.Fatalf("second decide exit = 0; want non-zero (ErrAlreadyDecided)")
+				}
+
+			case "ErrRelayFallenBack":
+				// Relay-on spawn with an open request whose created_at is
+				// backdated far past the CLI binary's default effective window
+				// (86400s) plus RelayKillSafetyMargin: the request is
+				// open-but-undeliverable, so Decide refuses with
+				// ErrRelayFallenBack (SR-4.4). The CLI runs on the real clock,
+				// hence a 48h backdate rather than anything near the window.
+				const id = "id-dc-trail-rfb-1"
+				seedSpawnRow(t, dbPath, id, "cd-dc-trail-rfb-1", "check_permission", "on")
+				seedOpenPermissionRequest(t, dbPath, id, testRequestToken, "Bash", `{"cmd":"ls"}`)
+				backdatePermissionRequest(t, dbPath, id, testRequestToken, 48*time.Hour)
+
+				_, stderr, code := runSpawnCLI(t, home, fakeDir,
+					"decide",
+					"--claude-instance-id", id,
+					"--request-token", testRequestToken,
+					"--decision", "allow",
+				)
+				if code == 0 {
+					t.Fatalf("decide exit = 0; want non-zero (ErrRelayFallenBack)")
+				}
+				// (b) typed err_name must surface in the JSON error envelope.
+				env := parseEnvelope(t, stderr)
+				if env.ErrName != "ErrRelayFallenBack" {
+					t.Errorf("err_name = %q; want ErrRelayFallenBack", env.ErrName)
 				}
 
 			case "ErrInvalidFlags":

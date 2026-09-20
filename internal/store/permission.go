@@ -298,6 +298,84 @@ func (s *Store) OpenPermissionRequestsForSpawn(instanceID string) ([]PermissionR
 	return out, nil
 }
 
+// DecidePermissionRequestIfDeliverable is the deliverability-guarded variant of
+// DecidePermissionRequest (SR-3.4). It carries the same first-call-wins
+// `decision IS NULL AND request_token = ?` guard PLUS a `created_at > ?`
+// deliverability predicate, so the deliverability check and the decision write
+// are one atomic statement: there is no interval in which a success is returned
+// but the relay window has already closed.
+//
+// The cutoff instant is the created_at boundary computed by the pkg/api
+// single-authority function (api.RelayDeliverabilityCutoff) and passed in — the
+// boundary + safety-margin logic is NEVER restated here (SR-4.4). A row is
+// written iff it is open, matches the token, AND its created_at is strictly
+// after cutoff.
+//
+// RowsAffected()==0 is now three-way ambiguous and the caller disambiguates via
+// a follow-up GetPermissionRequest:
+//
+//   - row decided            → ErrAlreadyDecided
+//   - row open + undeliverable → ErrRelayFallenBack (per the shared signal)
+//   - no row                 → ErrNoOpenPermissionRequest
+//
+// Unlike DecidePermissionRequest, the empty-token ErrAmbiguousRequest guard is
+// not replicated here: the decide verb always supplies a token (empty token is
+// rejected at the pkg/api layer with ErrMissingRequestToken before this call).
+//
+// Returns (true, nil) on a successful write; (false, nil) when no row was
+// updated; (_, err) on a hard SQL failure. The successful-write trail event is
+// identical to DecidePermissionRequest's.
+func (s *Store) DecidePermissionRequestIfDeliverable(instanceID, requestToken, decision, reason string, writerProcess string, cutoff time.Time) (bool, error) {
+	const q = `
+		UPDATE permission_requests
+		   SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP
+		 WHERE claude_instance_id = ? AND request_token = ? AND decision IS NULL
+		   AND created_at > ?
+		 RETURNING request_id, tool_name
+	`
+	var reasonArg any
+	if reason != "" {
+		reasonArg = reason
+	} else {
+		reasonArg = nil
+	}
+
+	// SQLite's CURRENT_TIMESTAMP / created_at columns are stored as UTC text in
+	// "2006-01-02 15:04:05" form; compare against the cutoff in the same UTC
+	// text form so the string comparison agrees with the stored representation.
+	cutoffArg := cutoff.UTC().Format("2006-01-02 15:04:05")
+
+	var requestID int64
+	var toolName string
+	err := s.db.QueryRow(q, decision, reasonArg, instanceID, requestToken, cutoffArg).Scan(&requestID, &toolName)
+	if errors.Is(err, sql.ErrNoRows) {
+		// RowsAffected == 0: already decided, undeliverable, or no row. The
+		// caller disambiguates via a follow-up GetPermissionRequest. Must NOT emit.
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("store: decide permission (deliverable): %w", err)
+	}
+
+	var decisionReasonField any
+	if reason != "" {
+		decisionReasonField = reason
+	}
+	_ = trail.Emit(context.Background(), "ad.row_mutation.committed", map[string]any{
+		"claude_instance_id": instanceID,
+		"request_token":      requestToken,
+		"request_id":         requestID,
+		"tool_name":          toolName,
+		"decision":           decision,
+		"decision_reason":    decisionReasonField,
+		"writer_process":     writerProcess,
+		"mutation_kind":      "update",
+		"source":             "ad_store",
+	})
+
+	return true, nil
+}
+
 // DecidePermissionRequest is the race-free first-call-wins UPDATE per SRD §6.2.
 // The WHERE clause carries `decision IS NULL AND request_token = ?` so a second
 // decide on the same request returns RowsAffected()==0 and the caller

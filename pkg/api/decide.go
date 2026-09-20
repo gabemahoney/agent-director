@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/trail"
@@ -28,10 +29,21 @@ var ErrInvalidDecision = errors.New("ErrInvalidDecision")
 // it the call is rejected at the API layer regardless of CLI gating.
 var ErrMissingRequestToken = errors.New("ErrMissingRequestToken")
 
+// ErrRelayFallenBack is returned by Decide when the target permission request
+// is still open but its relay window has elapsed per the shared deliverability
+// signal (RelayRequestUndeliverable): the hook that would deliver the decision
+// has been — or is about to be — killed at Claude Code's per-hook timeout, so
+// recording a verdict would write success into a void. The message conveys
+// "too late — answer at the pane": the operator's recourse is to answer the
+// native permission dialog directly. The row's decision stays NULL; recovery
+// of decided-but-undelivered rows is Epic 3's guard release (no information is
+// lost). Callers detect it with errors.Is.
+var ErrRelayFallenBack = errors.New("ErrRelayFallenBack")
+
 // DecideStore is the narrow store surface Decide needs.
 type DecideStore interface {
 	GetSpawn(instanceID string) (Spawn, error)
-	DecidePermissionRequest(instanceID, requestToken, decision, reason string, writerProcess string) (bool, error)
+	DecidePermissionRequestIfDeliverable(instanceID, requestToken, decision, reason string, writerProcess string, cutoff time.Time) (bool, error)
 	GetPermissionRequest(instanceID, requestToken string) (PermissionRow, error)
 }
 
@@ -72,12 +84,24 @@ type DecideResult struct{}
 //     a row Claude will never look at.
 //   - Invalid decision string → ErrInvalidDecision.
 //   - Single-statement UPDATE writes (decision, decision_reason, decided_at)
-//     guarded by `decision IS NULL AND request_token = ?`.
-//     RowsAffected==0 disambiguates "no row" (ErrNoOpenPermissionRequest)
-//     from "already decided" (ErrAlreadyDecided) via a follow-up SELECT.
+//     guarded by `decision IS NULL AND request_token = ? AND created_at > cutoff`.
+//     The cutoff is the deliverability boundary from the shared single-authority
+//     signal (RelayDeliverabilityCutoff / RelayRequestUndeliverable), so the
+//     deliverability check and the write are one atomic statement (SR-3.4):
+//     there is no interval in which success is returned but the relay window has
+//     already closed.
+//   - RowsAffected==0 is three-way ambiguous and disambiguated via a follow-up
+//     SELECT: already-decided (ErrAlreadyDecided) wins for decided rows;
+//     open-but-undeliverable (ErrRelayFallenBack) applies ONLY to open rows; no
+//     row → ErrNoOpenPermissionRequest.
 //   - params.Reason is currently discarded; DecisionReasonOperator is always
 //     written for deny decisions regardless of its value.
-func Decide(s DecideStore, params DecideParams) (DecideResult, error) {
+//
+// effectiveWindow is the resolved relay window (obtained by the caller via
+// Epic 1's accessor and consumed only through the shared deliverability
+// function); now is the injected clock so the deliverability verdict is
+// deterministic and testable.
+func Decide(s DecideStore, effectiveWindow time.Duration, now time.Time, params DecideParams) (DecideResult, error) {
 	if params.RequestToken == "" {
 		return DecideResult{}, fmt.Errorf("%w: request_token is required", ErrMissingRequestToken)
 	}
@@ -101,7 +125,12 @@ func Decide(s DecideStore, params DecideParams) (DecideResult, error) {
 	if params.Decision == "deny" {
 		dbReason = store.DecisionReasonOperator
 	}
-	updated, err := s.DecidePermissionRequest(params.ClaudeInstanceID, params.RequestToken, params.Decision, dbReason, store.WriterProcessDecide)
+
+	// Deliverability boundary from the single authority (SR-4.4). The cutoff is
+	// computed here and passed into the guarded UPDATE so the boundary +
+	// safety-margin logic is never restated in SQL.
+	cutoff := RelayDeliverabilityCutoff(now, effectiveWindow)
+	updated, err := s.DecidePermissionRequestIfDeliverable(params.ClaudeInstanceID, params.RequestToken, params.Decision, dbReason, store.WriterProcessDecide, cutoff)
 	if err != nil {
 		return DecideResult{}, err
 	}
@@ -109,11 +138,12 @@ func Decide(s DecideStore, params DecideParams) (DecideResult, error) {
 		return DecideResult{}, nil
 	}
 
-	// RowsAffected==0 — either the row is absent or the decision was
-	// already written. Disambiguate via a follow-up SELECT. The race
-	// window here is benign: if a concurrent caller has written a
-	// decision since our UPDATE, we'll report ErrAlreadyDecided; if
-	// the row no longer exists we'll report ErrNoOpenPermissionRequest.
+	// RowsAffected==0 — the row is absent, already decided, or open but
+	// undeliverable. Disambiguate via a follow-up SELECT. Precedence (PM-pinned):
+	// ErrAlreadyDecided wins for decided rows; ErrRelayFallenBack applies ONLY to
+	// open rows. The race window is benign: a concurrent decide that landed since
+	// our UPDATE surfaces as ErrAlreadyDecided; a row that fell out of the window
+	// surfaces as ErrRelayFallenBack.
 	pr, err := s.GetPermissionRequest(params.ClaudeInstanceID, params.RequestToken)
 	if errors.Is(err, sql.ErrNoRows) {
 		return DecideResult{}, fmt.Errorf("%w: %s", store.ErrNoOpenPermissionRequest, params.ClaudeInstanceID)
@@ -125,11 +155,18 @@ func Decide(s DecideStore, params DecideParams) (DecideResult, error) {
 		return DecideResult{}, fmt.Errorf("%w: %s already decided as %q",
 			store.ErrAlreadyDecided, params.ClaudeInstanceID, pr.Decision)
 	}
-	// Unreachable in practice — the row exists, decision is NULL, yet
-	// UPDATE didn't affect it. The only way to land here is a SQL
-	// driver oddity; surface as the more conservative
-	// ErrNoOpenPermissionRequest.
-	return DecideResult{}, fmt.Errorf("%w: %s (UPDATE no-op against open row)",
+	// Open row that the guarded UPDATE refused: the only reason a
+	// token-matched, decision-NULL row is skipped is the deliverability
+	// predicate. Re-confirm via the shared single-authority signal (no second
+	// inline time comparison) and surface the typed fallen-back error.
+	if RelayRequestUndeliverable(pr.CreatedAt, effectiveWindow, now) {
+		return DecideResult{}, fmt.Errorf("%w: %s request %s fell back — too late, answer at the pane",
+			ErrRelayFallenBack, params.ClaudeInstanceID, params.RequestToken)
+	}
+	// Unreachable in practice — the row exists, decision is NULL, is within the
+	// window, yet UPDATE didn't affect it. The only way to land here is a SQL
+	// driver oddity; surface as the more conservative ErrNoOpenPermissionRequest.
+	return DecideResult{}, fmt.Errorf("%w: %s (UPDATE no-op against open, deliverable row)",
 		store.ErrNoOpenPermissionRequest, params.ClaudeInstanceID)
 }
 
@@ -153,6 +190,8 @@ func decideOutcome(err error) string {
 		return "ErrInvalidDecision"
 	case errors.Is(err, ErrRelayModeOff):
 		return "ErrRelayModeOff"
+	case errors.Is(err, ErrRelayFallenBack):
+		return "ErrRelayFallenBack"
 	case errors.Is(err, store.ErrSpawnNotFound):
 		return "ErrSpawnNotFound"
 	case errors.Is(err, store.ErrAlreadyDecided):
@@ -180,6 +219,8 @@ func decideOutcome(err error) string {
 //   - [ErrRelayModeOff]: the Spawn's relay_mode is not "on".
 //   - [ErrNoOpenPermissionRequest]: no undecided permission request exists.
 //   - [ErrAlreadyDecided]: a concurrent caller already wrote a verdict.
+//   - [ErrRelayFallenBack]: the request is still open but its relay window has
+//     elapsed (the delivering hook is dead); answer at the pane instead.
 //   - [ErrInvalidDecision]: Decision is not "allow" or "deny".
 //
 // Nondeterminism: none.
@@ -218,6 +259,11 @@ func (c *Client) Decide(params DecideParams) (DecideResult, error) {
 	}()
 
 	var result DecideResult
-	result, callErr = Decide(c.st, params)
+	// Effective relay window is resolved here via Epic 1's accessor (the single
+	// source for the non-positive→default fallback); the clock is injected as
+	// time.Now() so the deliverability verdict is deterministic at the API
+	// boundary.
+	effectiveWindow := time.Duration(c.cfg.Relay.EffectiveTimeoutSeconds()) * time.Second
+	result, callErr = Decide(c.st, effectiveWindow, time.Now(), params)
 	return result, callErr
 }

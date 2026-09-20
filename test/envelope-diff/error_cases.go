@@ -271,6 +271,35 @@ var errorCases = []errorCase{
 		},
 	},
 
+	// ── decide / ErrRelayFallenBack ──────────────────────────────────────
+	// relay_mode=on, row open but its relay window has elapsed: the guarded
+	// UPDATE refuses the undeliverable row, the follow-up SELECT finds it open
+	// (decision NULL) and outside the deliverability window. SeedErrRelayFallenBack
+	// backdates created_at 48h past the default 86400s window (real clock).
+	{
+		verb:    "decide",
+		errName: "ErrRelayFallenBack",
+		seed: func(t *testing.T) (string, map[string]any) {
+			t.Helper()
+			_, dbPath := apitest.SeedErrRelayFallenBack(t)
+			return filepath.Dir(dbPath), nil
+		},
+		params: func(_ map[string]any) map[string]any {
+			return map[string]any{
+				"claude_instance_id": "id-err-rfb-1",
+				"request_token":      storefix.TestRequestTokenA,
+				"decision":           "allow",
+			}
+		},
+		cliArgv: func(_ map[string]any) []string {
+			return []string{"decide",
+				"--claude-instance-id", "id-err-rfb-1",
+				"--request-token", storefix.TestRequestTokenA,
+				"--decision", "allow",
+			}
+		},
+	},
+
 	// ── get-permission / ErrPermissionRequestNotFound ────────────────────
 	// Token-only lookup against an empty store: GetPermissionRequestByToken
 	// returns ErrPermissionRequestNotFound for any token that was never

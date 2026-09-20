@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
@@ -125,6 +126,29 @@ func SeedErrAlreadyDecided(t *testing.T) (*store.Store, string) {
 	if _, err := s.DecidePermissionRequest(id, storefix.TestRequestTokenA, "allow", "pre-decided", store.WriterProcessDecide); err != nil {
 		t.Fatalf("SeedErrAlreadyDecided: DecidePermissionRequest: %v", err)
 	}
+	return s, dbPath
+}
+
+// SeedErrRelayFallenBack returns a store with one relay_mode=on spawn in
+// check_permission state (id="id-err-rfb-1") with a still-open
+// permission_requests row (token=TestRequestTokenA) whose created_at is
+// backdated 48h — far past the default 86400s effective window minus the
+// RelayKillSafetyMargin. decide on this spawn triggers ErrRelayFallenBack:
+// the guarded UPDATE refuses the undeliverable row, and the follow-up SELECT
+// finds it open (decision NULL) but outside the deliverability window. The
+// CLI runs on the real clock, so the backdate must exceed the window in
+// wall-clock terms.
+func SeedErrRelayFallenBack(t *testing.T) (*store.Store, string) {
+	t.Helper()
+	s, dbPath := openErrStore(t)
+	const id = "id-err-rfb-1"
+	insertErrRow(t, s, id, store.StateCheckPermission, "on")
+	if err := s.UpsertOpenPermissionRequest(id, storefix.TestRequestTokenA, "Bash", `{"cmd":"echo"}`, 0, store.WriterProcessHook); err != nil {
+		t.Fatalf("SeedErrRelayFallenBack: UpsertOpenPermissionRequest: %v", err)
+	}
+	// Backdate created_at well past the default window so the shared
+	// deliverability signal reads the open row as undeliverable.
+	storefix.SeedUndeliverablePermissionRequest(t, s, dbPath, id, storefix.TestRequestTokenA, 48*time.Hour)
 	return s, dbPath
 }
 
