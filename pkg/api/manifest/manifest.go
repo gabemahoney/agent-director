@@ -433,7 +433,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "decide",
-		Description: "Orchestrator's allow/deny verdict on an open PermissionRequest. Race-free first-call-wins via a single-statement UPDATE guarded by `decision IS NULL`. Only callable on Spawns with relay_mode=on.",
+		Description: "Orchestrator's allow/deny verdict on an open PermissionRequest. Deliver-or-refuse: a single-statement UPDATE atomically writes the verdict only when the row is still open and deliverable (`decision IS NULL AND request_token = ? AND created_at > cutoff`), making the write race-free first-call-wins; an open request whose relay window has already elapsed is refused with ErrRelayFallenBack (answer at the pane) rather than recording a verdict into a void. Only callable on Spawns with relay_mode=on.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{

@@ -773,7 +773,7 @@ shared Go-runtime state to preserve across calls.
 
 Every agent-director error envelope carries two string fields: `err_name` (the canonical error name, e.g. `"ErrSpawnNotFound"`) and `err_description` (a human-readable detail string). The TS client translates these into a typed class hierarchy so callers can catch specific errors with `instanceof`.
 
-**Catalog source.** `pkg/api/errnames/catalog.json` is the single source of truth for every named error the Go binary can emit. It contains 37 entries at time of writing. Each entry has a `name` field (the `err_name` string) and a `package` field naming the origin Go package.
+**Catalog source.** `pkg/api/errnames/catalog.json` is the single source of truth for every named error the Go binary can emit. It contains 38 entries at time of writing. Each entry has a `name` field (the `err_name` string) and a `package` field naming the origin Go package.
 
 **Base class.** `src/errors.ts::AgentDirectorError extends Error`. Constructor: `(verb: string, err_name: string, err_description: string)`. Sets `this.name = this.constructor.name` so subclass names propagate correctly through the prototype chain. Readonly fields: `verb`, `errName`, `errDescription`. Message format: `"${err_name}: ${err_description}"`.
 
@@ -1663,11 +1663,43 @@ decide allow/deny out-of-band. Conceptually:
     `ErrPermissionRequestNotFound` when no row matches; `sql.ErrNoRows` is
     translated here and MUST NOT leak across the store boundary (SR-7.4).
   - `DecidePermissionRequest`: the race-free first-call-wins UPDATE.
+  - `DecidePermissionRequestIfDeliverable`: the deliverability-guarded
+    variant of the above. Same `decision IS NULL AND request_token = ?`
+    first-call-wins guard PLUS a `created_at > ?` predicate, so the
+    deliverability check and the decision write are one atomic statement
+    — there is no interval in which a success is returned but the relay
+    window has already closed. The cutoff instant is computed by the
+    `pkg/api` single authority (see `pkg/api/deliverability.go` below)
+    and passed in; the boundary + safety-margin logic is never restated
+    in SQL (SR-4.4).
+
+- **`pkg/api/deliverability.go`** — the single authority (SR-4.4) for
+  whether a permission request's relay window has elapsed.
+  `RelayDeliverabilityCutoff(now, effectiveWindow)` returns the
+  `created_at` cutoff instant (`now` less the effective window plus the
+  named `RelayKillSafetyMargin`, a 1s epsilon at the kill boundary);
+  `RelayRequestUndeliverable(createdAt, effectiveWindow, now)` answers
+  the boolean. Both are pure, time-only functions of stored row state,
+  the resolved window, and an injected clock — never dialog- or
+  state-derived. Any code needing the deliverability boundary (this
+  Epic's `decide`, and the guard-release recovery tracked for Epic
+  `t1.kk3.up`) MUST consult this function rather than re-derive the
+  boundary.
 
 - **`pkg/api/decide.go`** — verb wrapper. State guards
   (`ErrRelayModeOff`, `ErrSpawnNotFound`, `ErrInvalidDecision`)
-  before the UPDATE, plus the RowsAffected==0 disambiguation
-  (`ErrAlreadyDecided` vs `ErrNoOpenPermissionRequest`).
+  before the UPDATE, then the atomic deliverability-guarded write via
+  `DecidePermissionRequestIfDeliverable` (cutoff obtained from the
+  shared single-authority function; the effective window is resolved
+  once at `Client.Decide` via `config.Relay.EffectiveTimeoutSeconds()`
+  and the clock is injected as `time.Now()`). A successful write means
+  the decision is deliverable — never a recorded success against a dead
+  relay hook. The RowsAffected==0 case is three-way disambiguated via a
+  follow-up SELECT with pinned precedence: `ErrAlreadyDecided` wins for
+  decided rows; `ErrRelayFallenBack` (the "too late — answer at the
+  pane" sentinel) applies ONLY to open rows whose window has elapsed;
+  otherwise `ErrNoOpenPermissionRequest`. A fallen-back refusal leaves
+  `decision` NULL.
 
 - **`pkg/api/get_permission.go`** — verb wrapper. Read-only: delegates to
   `GetPermissionRequestByToken` and projects the row onto the SR-7.4 wire
@@ -1983,7 +2015,7 @@ event families; the eighth is a self-reporting meta event.
 | `ad.hook.fired` | `ad_hook` | One per `agent-director hook` invocation — records the hook payload and caller identity (SR-A-2.1, Epic 1) |
 | `ad.spawn.state_transition` | `ad_spawn_store` | One per write to `spawns.state`, including no-ops and soft-refresh ticks (SR-A-2.2, Epic 2) |
 | `ad.row_mutation.committed` | `ad_store` | One per successful write to `permission_requests` (SR-A-2.6, Epic 3) |
-| `ad.decide.called` | `ad_decide` | One per `agent-director decide` invocation, including `ErrAlreadyDecided` no-ops (SR-A-2.4, Epic 4) |
+| `ad.decide.called` | `ad_decide` | One per `agent-director decide` invocation on every return path, carrying an `outcome` field set to the canonical err_name (or `ok`). Recognized failure outcomes include the no-op refusals `ErrAlreadyDecided` and `ErrRelayFallenBack` (a fallen-back refusal is a recognized outcome, not `ErrInternal`) (SR-A-2.4, Epic 4) |
 | `ad.find_missing.tick` | `ad_find_missing` | One per row find-missing reconciles or flags: `reconciliation_reason=proc_absent` per row marked missing, `permission_orphan_closeout` per orphaned permission_requests row closed on that mark, and `probe_eacces` per live row that first transitions into the unverified (permission-walled) state — one tick per NULL→set transition only, never on a repeat sweep. There is no global-refusal tick (the old degraded-mode refusal is gone; unreadable rows are skipped and surfaced per-row). (SR-A-2.5, Epic 5; SR-7/SR-8) |
 | `ad.relay_attempt.completed` | `relay_hook` | One per worker permission-relay attempt (SR-A-2.3, Epic 6) |
 | `ad.resume.observed` | `ad_polling` | One per hook-resume back to Claude Code (SR-A-2.7, Epic 7) |
@@ -2764,6 +2796,29 @@ go test ./test/smoke/go/... -race -count=2
 ```
 
 `-race` shakes out goroutine-level data races in `pkg/api` and its dependencies. `-count=2` runs each subtest twice in the same process, exposing inter-test state leakage (e.g., package-level singletons or temp files not cleaned up between runs).
+
+### storefix seeders (reusable test fixtures)
+
+`internal/testsupport/storefix/` is the canonical home for store-layer
+test fixtures. Future test authors MUST reuse these `Seed*` helpers
+rather than reinvent raw-connection row setup or backdating; each helper
+uses `t.TempDir()` and never touches `~/.agent-director`.
+
+**`SeedUndeliverablePermissionRequest(t, s, dbPath, instanceID, requestToken, age)`**
+is the reusable helper for undeliverability tests: it backdates the
+`created_at` of a single open `permission_requests` row (identified by
+token) to `now-age` so the shared time-based signal
+(`api.RelayRequestUndeliverable`) reads it as undeliverable, while
+leaving other open rows for the same spawn deliverable. Because the
+store API deliberately exposes no `created_at` mutation, the helper uses
+a second raw `sql.Open` connection with a UTC-formatted UPDATE (mirroring
+`SeedExpiredCandidate` and `SeedClosedPermissionRequests`) — do NOT
+hand-roll raw-connection backdating in new tests; call this instead. It
+deliberately does not hardcode the 86400s default or restate the
+non-positive→default fallback (that lives solely in
+`config.Relay.EffectiveTimeoutSeconds`); callers choose `age` relative to
+the effective window. Seed the open row first (e.g. via
+`SeedCheckPermission`, which uses `TestRequestTokenA`).
 
 ### ts-helper wrapper CLI
 

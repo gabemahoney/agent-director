@@ -238,22 +238,72 @@ mode.
 ### Race-freeness of `decide`
 
 The decide verb writes the decision via a single-statement UPDATE
-with `decision IS NULL` in the WHERE clause:
+guarded by both the first-call-wins `decision IS NULL` predicate and a
+`created_at > ?` deliverability predicate (the deliverability check and
+the write are one atomic statement):
 
 ```sql
 UPDATE permission_requests
-   SET decision = ?, decision_reason = ?, updated_at = CURRENT_TIMESTAMP
- WHERE claude_instance_id = ? AND decision IS NULL
+   SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP
+ WHERE claude_instance_id = ? AND request_token = ? AND decision IS NULL
+   AND created_at > ?
 ```
 
 First call wins; concurrent second calls see RowsAffected==0. The
-verb then does one follow-up SELECT to disambiguate:
+verb then does one follow-up SELECT to disambiguate the outcome. The
+follow-up disambiguation resolves to exactly one of these three
+outcomes:
 
 - No row at all → `ErrNoOpenPermissionRequest`.
 - Row exists with non-NULL decision → `ErrAlreadyDecided`.
+- Row is still open but its relay window has elapsed →
+  `ErrRelayFallenBack` (see "Deliver-or-refuse contract" below).
 
 Two orchestrators racing to decide the same prompt see distinct
 error messages and can act on them programmatically.
+
+### Deliver-or-refuse contract
+
+A successful `decide` **means the decision will be delivered**: the
+spawn's relay hook received — or is still polling and will receive —
+the decision envelope. There is no silent-absorption path where
+`decide` reports success but the verdict goes to a dead hook that can
+never emit it. Success and delivery are the same event.
+
+When the request's relay window has already elapsed, `decide` refuses
+rather than record a doomed verdict. The typed error is
+**`ErrRelayFallenBack`** ("too late — answer at the pane"). It fires
+when the target row is still open (undecided) but its relay window has
+run out, including the small safety margin applied at the per-hook kill
+boundary so a verdict is never recorded for a request Claude Code is
+about to — or has just — killed.
+
+Guarantees when `ErrRelayFallenBack` is returned:
+
+- **The decision was NOT recorded.** The row's `decision` stays NULL;
+  no verdict is written into a void. Nothing about the request is lost.
+- **Recourse is the pane.** Because the relay hook can no longer
+  deliver a decision, the operator answers Claude Code's native
+  permission dialog directly. (A sanctioned in-band recovery surface
+  for fallen-back requests is the scope of Epic `t1.kk3.up` and is not
+  yet available; answering at the pane is the current recourse.)
+
+**The undeliverability signal is time-based, never dialog-based.** A
+request is undeliverable once the elapsed time since its
+`created_at` exceeds the configured per-hook timeout
+(`relay.timeout_seconds`) — a pure function of stored row state, the
+configured window, and the clock. It never consults whether the native
+permission dialog is on screen: dialog visibility carries no
+information about relay-hook liveness (see "The native dialog is not a
+hook-death signal" above). The same time-only signal that the guarded
+write applies is the one that classifies the refusal.
+
+**Precedence.** `ErrRelayFallenBack` applies **only to open rows**. A
+row that already carries a decision returns `ErrAlreadyDecided`
+regardless of its age — an old but already-decided request is never
+reclassified as fallen-back. So the decided/undecided taxonomy stays
+clean: decided rows → `ErrAlreadyDecided`; open-but-expired rows →
+`ErrRelayFallenBack`; absent rows → `ErrNoOpenPermissionRequest`.
 
 ### Send-keys interaction
 
