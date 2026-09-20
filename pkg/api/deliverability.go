@@ -60,8 +60,67 @@ func RelayDeliverabilityCutoff(now time.Time, effectiveWindow time.Duration) tim
 // guarded write applies.
 //
 // This function performs no I/O and no DB writes; it only reads its arguments.
-// Both this Epic's Decide contract and Epic t1.kk3.up's send_keys guard
-// release MUST consult this same function rather than re-deriving the boundary.
+// The Decide contract consults this to refuse recording a success for a
+// request whose delivery is already unsafe (fail-early). The send_keys guard
+// does NOT use this function; it uses the guard-release sibling below.
 func RelayRequestUndeliverable(createdAt time.Time, effectiveWindow time.Duration, now time.Time) bool {
 	return !createdAt.After(RelayDeliverabilityCutoff(now, effectiveWindow))
+}
+
+// Deliberate asymmetry at the delivery-window boundary (SR-4.2, SR-4.4).
+//
+// Decide and the send_keys guard sit on opposite sides of the same race — a
+// keystroke inserted into the pane while the relay poller might still emit a
+// decision — and each must fail toward safety, which points in OPPOSITE
+// directions:
+//
+//   - Decide must not record a success for a request whose delivery is about
+//     to fail, so it refuses EARLY: at elapsed >= window - margin
+//     (RelayDeliverabilityCutoff / RelayRequestUndeliverable). Refusing a
+//     hair too early is safe — the caller simply learns the relay is unsafe.
+//
+//   - The send_keys guard must not release while the poller could still be
+//     alive and emit, so it releases LATE: at elapsed >= window + margin
+//     (RelayGuardReleaseCutoff / RelayRequestGuardReleasable). The relay
+//     poller provably lives until ~window (its poll deadline is the same
+//     window; the measured kill undershoot is only ~0.4s), so releasing at
+//     window - margin would free the guard ~1s+ while a live poller can still
+//     emit — the exact keystroke/envelope race the guard exists to prevent.
+//     Holding a hair too long is safe — the operator waits marginally longer
+//     to recover a genuinely-dead relay.
+//
+// Both boundaries live in THIS file and share the SAME RelayKillSafetyMargin
+// constant, so SR-4.4's "single time-based authority" holds: one file, one
+// margin, one place to change the boundary — just applied with the sign that
+// makes each caller fail safe.
+
+// RelayGuardReleaseCutoff returns the created_at cutoff instant separating rows
+// whose delivery window has provably elapsed (guard may release) from rows that
+// might still be delivered (guard must hold) at time now. A row is
+// guard-releasable iff its created_at is at or before this cutoff. The cutoff
+// is now less the effective relay window PLUS RelayKillSafetyMargin — i.e. the
+// created_at whose deadline plus the safety margin lands exactly at now. This
+// is the deliberate mirror of RelayDeliverabilityCutoff (which subtracts the
+// margin); see the asymmetry note above.
+//
+// It shares the single-authority contract of RelayDeliverabilityCutoff: any
+// caller applying this boundary MUST obtain the cutoff here rather than
+// restating the window +/- margin arithmetic elsewhere.
+func RelayGuardReleaseCutoff(now time.Time, effectiveWindow time.Duration) time.Time {
+	return now.Add(-(effectiveWindow + RelayKillSafetyMargin))
+}
+
+// RelayRequestGuardReleasable is the single authority (SR-4.4) answering, for a
+// permission-request row, whether the send_keys relay guard may RELEASE on that
+// row's account — i.e. whether the delivering poller is provably dead so a
+// pane-side keystroke can no longer race a decision write. It is the fail-late
+// mirror of RelayRequestUndeliverable: a row is guard-releasable once its
+// created_at is at or before the guard-release cutoff (now - (window + margin)).
+//
+// Like its sibling this is a pure function of the row's created_at, the
+// resolved effective relay window, and the injected now; it performs no I/O.
+// The send_keys guard MUST consult this (not RelayRequestUndeliverable) so it
+// holds through the full window plus the safety margin.
+func RelayRequestGuardReleasable(createdAt time.Time, effectiveWindow time.Duration, now time.Time) bool {
+	return !createdAt.After(RelayGuardReleaseCutoff(now, effectiveWindow))
 }

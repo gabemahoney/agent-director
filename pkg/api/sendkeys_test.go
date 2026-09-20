@@ -154,13 +154,13 @@ func TestSendKeysCheckPermissionWithRelayOn(t *testing.T) {
 	// 10) owns the answer. Sending pane-side keystrokes would race the
 	// decide() write. Return the stub guard error.
 	//
-	// Intent (zero-rows-refuses pin, PM-pinned): this row has NO
-	// permission_requests seeded. That is the guard's zero-rows branch — no
-	// signal and no authority to release, and check_permission with no row is
-	// a real mid-insert transient — so the guard keeps refusing regardless of
-	// window/clock. The deliverable-row hold path (a fresh in-window open
-	// request seeded) is pinned separately by
-	// TestSendKeysCheckPermissionRelayOnDeliverableRowHolds.
+	// This is the plain guard-refusal envelope check via OpenStoreWithRow
+	// (relay=on + check_permission with no permission_requests row). The
+	// zero-rows RATIONALE (no deliverability signal, no authority to release,
+	// mid-insert transient) is pinned — with its full explanation — by
+	// TestSendKeysGuardRefusesZeroRows in relay_fallenback_test.go; this test
+	// deliberately does not restate it. The deliverable-row hold path is pinned
+	// by TestSendKeysCheckPermissionRelayOnDeliverableRowHolds.
 	s, _ := apitest.OpenStoreWithRow(t, "id-7", "cd-tmp", store.StateCheckPermission, "on")
 	tmux := newTmux()
 

@@ -389,6 +389,18 @@ func TestDecideCalledEmitsTrailLine(t *testing.T) {
 					t.Errorf("ErrAlreadyDecided: expected 0 new ad.row_mutation.committed lines; got %d (total %d, checkpoint %d): %v", got, len(rm), rmCheckpoint, rm)
 				}
 			}
+
+			// ErrRelayFallenBack: the refused guarded UPDATE emits no mutation
+			// event either — the row's decision stays NULL, so no
+			// ad.row_mutation.committed line is written. Mirrors the
+			// ErrAlreadyDecided no-op assertion above. This case has no warm-up
+			// decide, so rmCheckpoint is 0 and the delta is the total count.
+			if tc.name == "ErrRelayFallenBack" {
+				rm := rowMutationCommittedLines(lines)
+				if got := len(rm) - rmCheckpoint; got != 0 {
+					t.Errorf("ErrRelayFallenBack: expected 0 new ad.row_mutation.committed lines (refused guarded UPDATE emits no mutation); got %d (total %d, checkpoint %d): %v", got, len(rm), rmCheckpoint, rm)
+				}
+			}
 		})
 	}
 }

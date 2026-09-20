@@ -315,19 +315,28 @@ answer across two pane events, so the relay owns the answer and callers
 drive the modal through `decide`.
 
 **The guard is time-bounded, not unconditional.** It consults the
-*same* single time-based authority the decide contract uses (see "The
+*same* single time-based authority the decide contract uses (same file,
+same margin constant in `pkg/api/deliverability.go`; see "The
 undeliverability signal is time-based, never dialog-based" above) —
-never dialog visibility, never a second independent check. It evaluates
-every one of the spawn's `permission_requests` rows, each row's window
-measured from its own `created_at` and *regardless of the row's
-decision status* (a row decided in-window still has a live poller about
-to deliver it). Concretely:
+never dialog visibility, never a second independent check. The one
+deliberate difference is the *sign* of the safety margin at the
+boundary: `decide` fails **early** (refuses at `elapsed ≥ window −
+margin`, so it never records a success a dying hook might not deliver),
+while the guard fails **late** (releases only at `elapsed ≥ window +
+margin`, so it never frees while a live poller could still emit a
+decision). Both fail toward safety; it is one authority applied with the
+sign that makes each caller safe. It evaluates every one of the spawn's
+`permission_requests` rows, each row's window measured from its own
+`created_at` and *regardless of the row's decision status* (a row
+decided in-window still has a live poller about to deliver it).
+Concretely:
 
-- **Refuse while any row is still within its delivery window** — the
-  relay can still deliver, so send-keys stays out of the way.
-- **Release only once every row's window has elapsed** — at that point
-  no poller can deliver any decision, the guard would be pure denial of
-  service, and send-keys is the sanctioned recovery surface (below).
+- **Refuse while any row might still be delivered** — the relay can
+  still deliver, so send-keys stays out of the way.
+- **Release only once every row's window plus the safety margin has
+  elapsed** — at that point no poller can deliver any decision, the
+  guard would be pure denial of service, and send-keys is the
+  sanctioned recovery surface (below).
 - **Zero rows keep the guard held.** With no row there is no signal and
   no authority to release; the state is a real mid-insert transient, so
   the guard refuses rather than open a race.
@@ -342,8 +351,10 @@ answer-the-dialog verb and **without ever touching raw tmux**:
 1. `decide` returns the typed `ErrRelayFallenBack` ("too late — answer
    at the pane"): the verdict was not recorded, and delivery is no
    longer possible.
-2. Because every row's window has elapsed, the send-keys guard has
-   *already released* by the same time-based authority.
+2. Because every row's window plus the safety margin has elapsed, the
+   send-keys guard has *already released* by the same time-based
+   authority (which holds a margin longer than `decide` refuses — see
+   the asymmetric-margin note above).
 3. `send-keys` answers the still-displayed native permission dialog
    directly (the dialog is still on screen precisely because nothing
    answered it).

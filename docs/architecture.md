@@ -1041,17 +1041,24 @@ Relay-mode guard (time-bounded): when `relay_mode=on` AND
 `state=check_permission`, the permission relay normally owns the modal
 answer, so `SendKeys` refuses with `ErrSendKeysWhileRelayed` to keep a
 pane-side keystroke from racing the relay's `decide()` write. The refusal
-is **not unconditional**: it consults the same single undeliverability
-signal `decide` uses (`RelayRequestUndeliverable`, SR-4.4) across *every*
-one of the spawn's `permission_requests` rows, each row's window measured
-from its own `created_at` regardless of decision status. It refuses while
-any row is still within its window (a zero-row spawn also refuses — no
-signal, no authority to release) and **releases only once every row's
-window has elapsed**, at which point the delivering hook is dead and
-send-keys becomes the sanctioned recovery of a fallen-back relay (see
-"Send-keys interaction" and "Invariant — relay-listener pairing" in the
-relay chapter). There is no second independent check — no dialog-visibility
-probe, no re-derived timeout arithmetic.
+is **not unconditional**: it consults the guard-release sibling of the
+same single time-based authority `decide` uses
+(`RelayRequestGuardReleasable`, SR-4.4 — same file, same margin constant
+in `pkg/api/deliverability.go` as `RelayRequestUndeliverable`) across
+*every* one of the spawn's `permission_requests` rows, each row's window
+measured from its own `created_at` regardless of decision status. The one
+deliberate difference is the **sign of the safety margin**: `decide` fails
+early (refuses at `elapsed ≥ window − margin`), the guard fails late
+(releases at `elapsed ≥ window + margin`), so the guard never frees while
+a live poller — provably alive until ~`window` — could still emit a
+decision. It refuses while any row might still be delivered (a zero-row
+spawn also refuses — no signal, no authority to release) and **releases
+only once every row's window plus the safety margin has elapsed**, at
+which point the delivering hook is dead and send-keys becomes the
+sanctioned recovery of a fallen-back relay (see "Send-keys interaction"
+and "Invariant — relay-listener pairing" in the relay chapter). There is
+no second independent check — no dialog-visibility probe, no re-derived
+timeout arithmetic.
 
 ### `read-pane`
 
@@ -1683,17 +1690,26 @@ decide allow/deny out-of-band. Conceptually:
     in SQL (SR-4.4).
 
 - **`pkg/api/deliverability.go`** — the single authority (SR-4.4) for
-  whether a permission request's relay window has elapsed.
-  `RelayDeliverabilityCutoff(now, effectiveWindow)` returns the
-  `created_at` cutoff instant (`now` less the effective window plus the
-  named `RelayKillSafetyMargin`, a 1s epsilon at the kill boundary);
-  `RelayRequestUndeliverable(createdAt, effectiveWindow, now)` answers
-  the boolean. Both are pure, time-only functions of stored row state,
-  the resolved window, and an injected clock — never dialog- or
-  state-derived. Any code needing the deliverability boundary (this
-  Epic's `decide`, and the guard-release recovery tracked for Epic
-  `t1.kk3.up`) MUST consult this function rather than re-derive the
-  boundary.
+  the relay delivery-window boundary, holding **both** sides of a
+  deliberate asymmetry so each caller fails toward safety.
+  `RelayDeliverabilityCutoff(now, effectiveWindow)` /
+  `RelayRequestUndeliverable(createdAt, effectiveWindow, now)` are the
+  fail-early pair used by `decide`: the cutoff is `now` less the
+  effective window **plus** the named `RelayKillSafetyMargin` (a 1s
+  epsilon at the kill boundary), so `decide` refuses at `elapsed ≥
+  window − margin` and never records a success a dying hook might not
+  deliver. `RelayGuardReleaseCutoff(now, effectiveWindow)` /
+  `RelayRequestGuardReleasable(createdAt, effectiveWindow, now)` are the
+  fail-late mirror used by the send-keys guard: the cutoff subtracts
+  `window + margin`, so the guard releases only at `elapsed ≥ window +
+  margin` and never frees while a live poller (provably alive until
+  ~`window`) could still emit. Both pairs live in this one file and
+  share the one `RelayKillSafetyMargin` constant — the "single time-based
+  authority" is one file, one margin, applied with the sign that makes
+  each caller safe. All four are pure, time-only functions of stored row
+  state, the resolved window, and an injected clock — never dialog- or
+  state-derived. Any code needing either boundary MUST consult these
+  functions rather than re-derive it.
 
 - **`pkg/api/decide.go`** — verb wrapper. State guards
   (`ErrRelayModeOff`, `ErrSpawnNotFound`, `ErrInvalidDecision`)
@@ -1754,15 +1770,22 @@ owns the modal answer, and a pane-side keystroke would race the relay's
 `decide` write. The guard is **time-bounded, not unconditional**:
 `evaluateRelayGuard` loads all of the spawn's `permission_requests` rows
 via `PermissionRequestsForSpawn` and calls the shared
-`RelayRequestUndeliverable` signal (the same single time-based authority
-`decide` uses — SR-4.4; no independent second check and no dialog probe)
-on each, measuring each row's window from its own `created_at` regardless
-of decision status. It refuses while any row is still within its window
+`RelayRequestGuardReleasable` signal — the guard-release mirror of the
+same single time-based authority `decide` uses (SR-4.4, same file and
+margin constant in `pkg/api/deliverability.go`; no independent second
+check and no dialog probe) — on each, measuring each row's window from its
+own `created_at` regardless of decision status. The margin sign is the one
+deliberate difference: `decide` fails early (`window − margin`), the guard
+fails late (`window + margin`), so the guard never frees while a live
+poller could still emit. It refuses while any row might still be delivered
 (and refuses on the zero-row transient — no signal, no authority to
-release), and **releases only when every row's window has elapsed**. Once
-released, the delivering hook is provably dead, so send-keys is the
-sanctioned recovery of a fallen-back relay — see the invariant below and
-the `ad.send_keys.called` audit event.
+release), and **releases only when every row's window plus the safety
+margin has elapsed**. Once released, the delivering hook is provably dead,
+so send-keys is the sanctioned recovery of a fallen-back relay — see the
+invariant below and the `ad.send_keys.called` audit event. (If the store
+read fails, the guard records `guard_evaluation="error"` — distinct from
+the ordinary-send `"not-applicable"` — and the send fails with the store
+error.)
 
 ### Invariant — relay-listener pairing
 
@@ -1776,10 +1799,13 @@ CSCB) would be a lying ghost — buttons that go nowhere.
 
 **Sanctioned handling of the all-rows-undeliverable state.** The
 listener-gone/decision-NULL state is not a stranded dead end. Once every
-`permission_requests` row's window has elapsed — the same
-`RelayRequestUndeliverable` signal that makes `decide` return
-`ErrRelayFallenBack` — the send-keys relay guard *releases* (see "Send-keys
-interaction" above). The operator answers Claude Code's still-displayed native
+`permission_requests` row's window plus the safety margin has elapsed — the
+guard-release mirror (`RelayRequestGuardReleasable`) of the same time-based
+authority whose fail-early form (`RelayRequestUndeliverable`) makes `decide`
+return `ErrRelayFallenBack` — the send-keys relay guard *releases* (see
+"Send-keys interaction" above). The guard holds a margin longer than
+`decide` refuses (`window + margin` vs `window − margin`), so by the time it
+releases `decide` has long since returned `ErrRelayFallenBack`. The operator answers Claude Code's still-displayed native
 permission dialog through `send-keys` (no dedicated verb, never raw tmux), and
 the recovery is audited as `ad.send_keys.called` with
 `guard_evaluation=released`. So the terminal state of a fallen-back relay is a
