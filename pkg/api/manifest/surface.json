@@ -292,7 +292,7 @@
         {
           "name": "jsonl_path",
           "type": "string",
-          "description": "Last known transcript path. Empty until a future Epic persists it; resume composes the path on demand from cwd + claude_session_id.",
+          "description": "Last known transcript path, persisted by the SessionStart hook; legacy rows may be empty. When empty, resume composes the path on demand from cwd + claude_session_id.",
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null

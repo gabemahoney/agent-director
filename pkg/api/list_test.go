@@ -392,6 +392,88 @@ func TestListLivenessFieldsRoundTrip(t *testing.T) {
 	})
 }
 
+// TestListRowKeySetUnchanged is the strong-form pin that the list row wire shape
+// is UNCHANGED by the jsonl_path work: a marshaled ListRow (with every optional
+// field forced present) carries EXACTLY the known key set — no jsonl_path, no
+// extra_env, and no other new field. A sorted-key-set comparison is stricter
+// than a pair of Contains negatives: adding OR dropping any key trips it.
+//
+// The row is seeded so every omitempty field is populated (parent_id via
+// SeedParentChild, ended_at via the ended state, liveness via WithLiveness*),
+// giving the maximal key set. jsonl_path and extra_env are deliberately seeded
+// on the store row too, proving the list projection drops them rather than that
+// they merely happened to be absent.
+func TestListRowKeySetUnchanged(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	if _, err := apitest.SeedSpawn(dbPath, "row-parent", store.StateWaiting, "/tmp", "off", "", true); err != nil {
+		t.Fatalf("SeedSpawn(row-parent): %v", err)
+	}
+	if _, err := apitest.SeedSpawn(dbPath, "row-max", store.StateEnded, "/tmp", "on", "", false,
+		apitest.WithJsonlPath("/home/user/.claude/projects/-tmp/s.jsonl"),
+		apitest.WithExtraEnv(map[string]string{"SECRET": "x"}),
+		apitest.WithLivenessUnverifiedSince("2026-09-19T12:34:56Z"),
+		apitest.WithLivenessNote("probe wall"),
+	); err != nil {
+		t.Fatalf("SeedSpawn(row-max): %v", err)
+	}
+	if err := apitest.SeedParentChild(dbPath, "row-parent", "row-max"); err != nil {
+		t.Fatalf("SeedParentChild: %v", err)
+	}
+
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	res, err := api.List(s, api.ListParams{TmuxSessionName: "ts-row-max"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(res.Spawns) != 1 {
+		t.Fatalf("len(spawns) = %d; want 1 (row-max)", len(res.Spawns))
+	}
+
+	raw, err := json.Marshal(res.Spawns[0])
+	if err != nil {
+		t.Fatalf("json.Marshal(ListRow): %v", err)
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		t.Fatalf("json.Unmarshal(ListRow): %v", err)
+	}
+	got := make([]string, 0, len(obj))
+	for k := range obj {
+		got = append(got, k)
+	}
+	sort.Strings(got)
+
+	want := []string{
+		"claude_instance_id",
+		"cwd",
+		"ended_at",
+		"labels",
+		"last_seen_at",
+		"liveness_note",
+		"liveness_unverified_since",
+		"parent_id",
+		"relay_mode",
+		"started_at",
+		"state",
+		"tmux_session_name",
+	}
+	if !equalStrings(got, want) {
+		t.Errorf("ListRow key set = %v; want %v — the list wire shape must stay unchanged (no jsonl_path, no extra_env, no new fields)", got, want)
+	}
+	// Named guards so a failure reads as the specific leak, not just a set diff.
+	if _, bad := obj["jsonl_path"]; bad {
+		t.Errorf("ListRow carries jsonl_path; the list shape must NOT gain the get-only transcript-path field")
+	}
+	if _, bad := obj["extra_env"]; bad {
+		t.Errorf("ListRow carries extra_env; it is a spawn INPUT param and must never surface on the list OUTPUT row")
+	}
+}
+
 // equalStrings is a small helper so the test diffs are direct instead
 // of reflect.DeepEqual's multi-line dump.
 func equalStrings(a, b []string) bool {

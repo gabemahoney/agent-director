@@ -48,8 +48,9 @@ type SpawnRow struct {
 	// RelayMode is "on" or "off" — whether this Spawn participates in the
 	// permission-relay flow.
 	RelayMode string `json:"relay_mode"`
-	// JSONLPath is the last known JSONL transcript path. Empty until a future
-	// Epic persists it; resume composes the path on demand from cwd + claude_session_id.
+	// JSONLPath is the last known JSONL transcript path, persisted by the
+	// SessionStart hook; legacy rows may be empty. When empty, resume composes
+	// the path on demand from cwd + claude_session_id.
 	JSONLPath string `json:"jsonl_path"`
 	// ClaudeSessionID is the Claude Code session UUID extracted from the
 	// SessionStart hook's transcript_path basename. Empty until the first
