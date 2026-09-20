@@ -167,16 +167,33 @@ failure mode as a deny. SRD §6.4 enumerates these:
 
 #### Relay timeout default and override
 
-The polling timeout (`relay.timeout_seconds`) defaults to **86400 seconds (1 day)**.
-The previous default of 600 s (10 min) was too short for human-paced approval
-flows — a Slack approval that arrives after a meeting or overnight would silently
-produce a deny. Operators who want a tighter bound can override it in
-`~/.agent-director/config.toml`:
+The relay window (`relay.timeout_seconds`) defaults to **86400 seconds (1 day)**,
+long enough for human-paced approval flows — a Slack approval that arrives after
+a meeting or overnight still lands inside the window. Operators who want a
+tighter bound can override it in `~/.agent-director/config.toml`:
 
 ```toml
 [relay]
 timeout_seconds = 3600   # example: 1-hour window
 ```
+
+**How the window is enforced.** The window is real because agent-director
+emits it into the per-Spawn synthesized settings. Each PermissionRequest and
+PreToolUse hook entry carries an explicit per-hook `timeout` field — placed on
+the inner command object, sibling to `type`/`command` — set to
+`relay.timeout_seconds`. Without that field Claude Code kills any hook at its
+own 600-second default and discards its output, so a late decision would be
+silently voided; emitting the value makes Claude Code's per-hook kill boundary
+equal to the window agent-director polls against.
+
+**Override moves both boundaries in lockstep.** `relay.timeout_seconds` is a
+single value read through one accessor, so overriding it changes the poll
+loop's deadline and Claude Code's per-hook kill boundary together — they can
+never disagree. Because the two boundaries are identical, the poll loop's
+fail-closed timeout deny (the `Polling timeout` row above) is the intended
+in-band terminator: when the
+window elapses the hook writes a deny envelope and exits on its own, rather
+than being killed mid-flight by Claude Code.
 
 The fail-closed boundary is scoped to PermissionRequest events. A
 non-PermissionRequest event with `RELAY_MODE=on` (e.g. SessionStart)
@@ -186,11 +203,20 @@ one there is harmless noise.
 
 **Structural caveat.** Fail-closed requires the `agent-director`
 binary to actually run. If Claude Code can't invoke it at all —
-binary missing, PATH not set, settings JSON unparseable — Claude
-Code falls back to its native permission dialog. From the
-orchestrator's view this looks like the user is asked, not the
-relay; from the policy view it's a hole the operator must close at
-install time (Epic 12's job).
+binary missing, PATH not set, settings JSON unparseable — no hook
+runs and Claude Code decides the request through its native
+permission dialog alone. From the policy view that is a hole the
+operator must close at install time.
+
+**The native dialog is not a hook-death signal.** When the relay
+hook *is* running, Claude Code shows its native permission dialog
+concurrently, as racing UI displayed alongside the live hook — not
+as a fallback and not as evidence the hook has stopped. A decision
+envelope arriving any time within the window dismisses that dialog.
+Whether a decision is still deliverable is purely a function of
+elapsed time since the request opened versus the configured
+per-hook timeout; the dialog's presence or absence in the TUI
+carries no information about hook liveness.
 
 ### Why env-var, not DB
 
