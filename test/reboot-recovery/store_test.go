@@ -104,6 +104,43 @@ func containsID(ids []string, want string) bool {
 // itoa renders an int64 pid as a decimal string for /proc path composition.
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 
+// nullOutJsonlPath sets jsonl_path = NULL on a row, so resume's pre-flight can
+// no longer take the persisted-path branch and MUST exercise the b.1ba
+// CONFIG_DIR-aware fallback (AC6: the persisted-path branch must NOT be what's
+// exercised). Opens read-write (a distinct connection from openDB's mode=ro).
+func nullOutJsonlPath(t *testing.T, dbPath, instanceID string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatalf("open db rw: %v", err)
+	}
+	defer db.Close()
+	res, err := db.Exec(`UPDATE spawns SET jsonl_path = NULL WHERE claude_instance_id = ?`, instanceID)
+	if err != nil {
+		t.Fatalf("null out jsonl_path: %v", err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		t.Fatalf("null out jsonl_path: rows affected = %d; want 1", n)
+	}
+}
+
+// jsonlPathColumn returns the persisted jsonl_path (or "" when NULL). Used to
+// prove the fallback re-persists the correct path on a successful resume.
+func jsonlPathColumn(t *testing.T, dbPath, instanceID string) string {
+	t.Helper()
+	db := openDB(t, dbPath)
+	defer db.Close()
+	var jp sql.NullString
+	if err := db.QueryRow(
+		`SELECT jsonl_path FROM spawns WHERE claude_instance_id = ?`, instanceID).Scan(&jp); err != nil {
+		t.Fatalf("jsonlPathColumn query: %v", err)
+	}
+	if !jp.Valid {
+		return ""
+	}
+	return jp.String
+}
+
 // recordedPID returns the pid persisted on the row (the identity SessionStart
 // captured). Fails the test if NULL/zero.
 func recordedPID(t *testing.T, dbPath, instanceID string) int64 {
