@@ -337,11 +337,6 @@ regressions introduced by a change under test:
 - **One bun serialization test is timing-sensitive** (asserts a >5 ms gap
   between serialized spawns); on this fast host it occasionally measures
   ~4 ms and flakes.
-- **`TestFindMissingTrailEmitsDegradedModeSkipTick` (cmd/agent-director)**
-  can fail host-side when live `agent-director` processes are `/proc`-visible.
-  With `--pid=host` they are visible inside the sandbox too, but the test
-  was observed to **pass** in-sandbox; watch it if the degraded-mode logic
-  changes.
 
 ### CI parity and docker-leg verification
 
