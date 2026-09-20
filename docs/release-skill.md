@@ -321,7 +321,7 @@ failure; no automatic rollback (see Recovery cheatsheet below).
 | 2 | `publish.create-tag` | `git tag -a v<target>` + `git push origin v<target>` | "would do"; skipped |
 | 3 | `publish.gh-release` | `gh release create v<target> --notes-file <notes> <binaries>` | "would do"; skipped |
 | 4 | `publish.npm-publish` | `npm publish <tarball>` (umbrella package) | "would do"; skipped |
-| 5 | `publish.fast-forward-main` | `git checkout main && git merge --ff-only release/v<target> && git push origin main` | "would do"; skipped |
+| 5 | `publish.fast-forward-main` | `git fetch origin && git -C <parent-worktree> merge --ff-only release/v<target> && git -C <parent-worktree> push origin main` | "would do"; skipped |
 | 6 | `publish.delete-remote-branch` | `git push origin --delete release/v<target>` | "would do"; skipped |
 
 The "would do" log lines are emitted to stderr in dry-run mode and look like:
@@ -348,7 +348,7 @@ Use this table to find the recovery procedure:
 | `create-tag` | push-branch | `git push origin --delete v<target>` (if tag was pushed); `git tag -d v<target>` (locally); `git push origin --delete release/v<target>` |
 | `gh-release` | push-branch, create-tag | `gh release delete v<target> --yes` (if release was created); `git push origin --delete v<target>`; `git tag -d v<target>`; `git push origin --delete release/v<target>` |
 | `npm-publish` | push-branch, create-tag, gh-release | NPM publish is **permanent** — no rollback. Either complete the release manually (ff main + delete branch) or accept the published version and create the next bump. `gh release delete` is optional. |
-| `fast-forward-main` | (through npm-publish) | `git fetch && git checkout main && git merge --ff-only release/v<target> && git push origin main` |
+| `fast-forward-main` | (through npm-publish) | From the **primary (main) worktree**: `git fetch && git merge --ff-only release/v<target> && git push origin main`. (The orchestrator fast-forwards main *in place* in the primary worktree via `git -C <parent>` — it never checks out main inside the release worktree, per SR-13.3, b.jqj. Manual recovery just runs the same merge + push from the checkout that already has main.) |
 | `delete-remote-branch` | (through fast-forward-main) | `git push origin --delete release/v<target>` |
 
 **No automatic rollback.** The skill does not attempt to undo prior
