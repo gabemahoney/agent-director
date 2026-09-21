@@ -176,6 +176,27 @@ func TestGetPropagatesPermissionFetchError(t *testing.T) {
 	}
 }
 
+// TestGetPropagatesSessionHistoryError pins that a non-nil error from
+// ListSessionHistory (b.v2c AC6/AC8) propagates to the caller rather than being
+// silently swallowed.
+func TestGetPropagatesSessionHistoryError(t *testing.T) {
+	wantErr := errors.New("history read boom")
+	fake := &recordingGetStore{
+		spawn: store.Spawn{
+			ClaudeInstanceID: "id-g-6",
+			State:            store.StateEnded,
+			CWD:              "/tmp",
+			TmuxSessionName:  "cd-id-g-6",
+			RelayMode:        "off",
+		},
+		historyErr: wantErr,
+	}
+	_, err := api.Get(fake, "id-g-6")
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("err = %v; want propagation of %v", err, wantErr)
+	}
+}
+
 // recordingGetStore is a minimal GetStore double used by the two
 // branches that benefit from a behavioral assertion (call-count;
 // arbitrary error propagation) rather than a real DB fixture.
@@ -184,6 +205,10 @@ type recordingGetStore struct {
 	permRows  []store.PermissionRow
 	permErr   error
 	permCalls int
+	// history is returned by ListSessionHistory (b.v2c AC6/AC8). Nil = no
+	// archived sessions, the default existing tests rely on.
+	history    []store.SessionHistoryEntry
+	historyErr error
 }
 
 func (r *recordingGetStore) GetSpawn(id string) (store.Spawn, error) {
@@ -199,6 +224,72 @@ func (r *recordingGetStore) OpenPermissionRequestsForSpawn(_ string) ([]store.Pe
 		return nil, r.permErr
 	}
 	return r.permRows, nil
+}
+
+// ListSessionHistory satisfies the widened GetStore interface (b.v2c AC6/AC8),
+// returning the programmable history/historyErr.
+func (r *recordingGetStore) ListSessionHistory(_ string) ([]store.SessionHistoryEntry, error) {
+	return r.history, r.historyErr
+}
+
+// TestGetTranscriptStatusAndPriorSessions is the b.v2c AC8 REGRESSION test: get
+// derives an operator-facing transcript_status and surfaces prior_sessions so
+// "pointer dead, no history ever existed" (never_written) is distinguishable
+// from "pointer dead, history exists under a different session id" (rotated)
+// without reading source or running find.
+//
+// PRE-FIX get had neither field; the derivation + prior_sessions surfacing is
+// what this pins.
+func TestGetTranscriptStatusAndPriorSessions(t *testing.T) {
+	cases := []struct {
+		name       string
+		sessionID  string
+		jsonlPath  string
+		history    []store.SessionHistoryEntry
+		wantStatus string
+		wantPrior  int
+	}{
+		{name: "no_session", sessionID: "", jsonlPath: "", wantStatus: "no_session"},
+		{name: "present", sessionID: "s1", jsonlPath: "/x/s1.jsonl", wantStatus: "present"},
+		{name: "never_written", sessionID: "s1", jsonlPath: "", wantStatus: "never_written"},
+		{
+			name: "rotated", sessionID: "s2", jsonlPath: "",
+			history:    []store.SessionHistoryEntry{{ClaudeSessionID: "s1", JSONLPath: "/x/s1.jsonl", RecordedAt: "2026-09-20T00:00:00Z"}},
+			wantStatus: "rotated", wantPrior: 1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &recordingGetStore{
+				spawn: store.Spawn{
+					ClaudeInstanceID: "id-ts", State: store.StateEnded, CWD: "/tmp",
+					RelayMode: "off", ClaudeSessionID: tc.sessionID, JSONLPath: tc.jsonlPath,
+				},
+				history: tc.history,
+			}
+			got, err := api.Get(s, "id-ts")
+			if err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+			if got.TranscriptStatus != tc.wantStatus {
+				t.Errorf("TranscriptStatus = %q; want %q", got.TranscriptStatus, tc.wantStatus)
+			}
+			if len(got.PriorSessions) != tc.wantPrior {
+				t.Fatalf("len(PriorSessions) = %d; want %d", len(got.PriorSessions), tc.wantPrior)
+			}
+			// prior_sessions is always a non-nil slice (encodes as []).
+			raw, err := json.Marshal(got)
+			if err != nil {
+				t.Fatalf("json.Marshal: %v", err)
+			}
+			if !strings.Contains(string(raw), `"prior_sessions":[`) {
+				t.Errorf("JSON missing non-null prior_sessions array; got %s", raw)
+			}
+			if tc.wantPrior > 0 && got.PriorSessions[0].ClaudeSessionID != "s1" {
+				t.Errorf("PriorSessions[0].ClaudeSessionID = %q; want s1", got.PriorSessions[0].ClaudeSessionID)
+			}
+		})
+	}
 }
 
 // TestGetLivenessFieldsRoundTrip pins SR-8.3 surfacing on get: the two

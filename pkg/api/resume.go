@@ -21,7 +21,17 @@ const resumeEnvInstanceID = "AGENT_DIRECTOR_INSTANCE_ID"
 type ResumeStore interface {
 	GetSpawn(instanceID string) (Spawn, error)
 	SetParentID(instanceID, parentID string) error
+	// ListSessionHistory returns the instance's archived prior sessions
+	// (newest first). Used both to try earlier transcripts as resume
+	// candidates (b.v2c AC6 — a rotation must not strand history) and to
+	// distinguish ErrJsonlNeverWritten from ErrJsonlMissing (AC2).
+	ListSessionHistory(instanceID string) ([]SessionHistoryEntry, error)
 }
+
+// SessionHistoryEntry is re-exported from internal/store so external consumers
+// can name the type in the ResumeStore interface without importing
+// internal/store directly (b.v2c).
+type SessionHistoryEntry = store.SessionHistoryEntry
 
 // ResumeTmux is the narrow tmux surface Resume needs.
 type ResumeTmux interface {
@@ -79,8 +89,13 @@ type ResumeResult struct {
 //     persisted jsonl_path, and rows whose recorded path has rotted.
 //     A successful fallback resume re-fires SessionStart, which
 //     re-persists the correct path.
-//     When every candidate fails, ErrJsonlMissing reports each path
-//     tried with its source (persisted vs fallback) and its stat error.
+//     When every candidate (including archived session-history
+//     transcripts, b.v2c AC6) fails, the verb distinguishes two cases:
+//     ErrJsonlNeverWritten when the persisted jsonl_path was NULL and the
+//     instance has no session history (nothing was ever written — AC2);
+//     ErrJsonlMissing otherwise (a path was once recorded/composed and has
+//     rotted). Both messages report each path tried with its source
+//     (persisted / fallback / history) and its stat error.
 //  5. Canonical tmux session name must NOT already exist → otherwise
 //     the tmux.NewSession at step 7 would surface ErrTmuxSessionCreate
 //     anyway, and we'd rather error out cleanly here than after a
@@ -166,6 +181,65 @@ func resumeImpl(s ResumeStore, t ResumeTmux, cfg config.Config, params ResumePar
 		})
 	}
 
+	// b.v2c AC6: a session rotation (CSCB fleet restart) archives the prior
+	// session's (session id, jsonl_path) into session_history. If the current
+	// session has no live transcript, fall back to the most recent archived
+	// session whose transcript still exists on disk — this recovers history
+	// orphaned by a rotation rather than abandoning it. Resume rotates
+	// claude_session_id to the archived id so `claude --resume` points at the
+	// recovered transcript.
+	history, herr := s.ListSessionHistory(params.ClaudeInstanceID)
+	if herr != nil {
+		return ResumeResult{}, fmt.Errorf("resume: list session history: %w", herr)
+	}
+	for _, h := range history {
+		cand := h.JSONLPath
+		if cand == "" {
+			// The archived session had no recorded path; recompute it the same
+			// way the current-session fallback does.
+			var cerr error
+			if dir := row.ExtraEnv["CLAUDE_CONFIG_DIR"]; dir != "" && filepath.IsAbs(dir) {
+				cand, cerr = spawn.JsonlPathIn(dir, row.CWD, h.ClaudeSessionID)
+			} else {
+				cand, cerr = spawn.JsonlPath(row.CWD, h.ClaudeSessionID)
+			}
+			if cerr != nil {
+				// Record the recomposition failure as an attempt so the
+				// ErrJsonlMissing message still names this history candidate
+				// rather than silently omitting it.
+				attempts = append(attempts, jsonlAttempt{
+					source: "history", path: cand, statErr: cerr,
+				})
+				continue
+			}
+		}
+		if _, err := os.Stat(cand); err == nil {
+			// Recovered archived transcript. Point the resume at it by rotating
+			// the row's session id to the archived one; resumeAfterJsonl relaunch
+			// uses row.ClaudeSessionID.
+			row.ClaudeSessionID = h.ClaudeSessionID
+			row.JSONLPath = cand
+			return resumeAfterJsonl(s, t, cfg, row, params)
+		} else {
+			attempts = append(attempts, jsonlAttempt{
+				source: "history", path: cand, statErr: err,
+			})
+		}
+	}
+
+	// AC2: distinguish "no transcript has EVER been written for this session"
+	// from "candidates were tried and none matched". The never-written case is
+	// narrow and specific: the persisted jsonl_path was NULL/empty (the
+	// SessionStart hook found no file), AND the instance has no archived session
+	// history to have lost. A persisted-but-rotted path, or a row that HAS
+	// history, is the classic ErrJsonlMissing.
+	if row.JSONLPath == "" && len(history) == 0 {
+		return ResumeResult{}, fmt.Errorf(
+			"%w: spawn %s session %s has produced no transcript on disk (tried %s)",
+			ErrJsonlNeverWritten, params.ClaudeInstanceID, row.ClaudeSessionID,
+			formatJsonlAttempts(attempts))
+	}
+
 	return ResumeResult{}, fmt.Errorf("%w: %s", ErrJsonlMissing, formatJsonlAttempts(attempts))
 }
 
@@ -174,7 +248,7 @@ func resumeImpl(s ResumeStore, t ResumeTmux, cfg config.Config, params ResumePar
 // fallback), and the stat error that ruled it out. Collected so the
 // ErrJsonlMissing message can name every path tried (bug b.1ba scope 2).
 type jsonlAttempt struct {
-	source  string // "persisted" | "fallback"
+	source  string // "persisted" | "fallback" | "history"
 	path    string
 	statErr error
 }
@@ -235,9 +309,14 @@ func resumeAfterJsonl(s ResumeStore, t ResumeTmux, cfg config.Config, row Spawn,
 //   - [ErrNoSessionId]: claude_session_id is empty — the Spawn was killed
 //     before its first SessionStart hook; delete and re-spawn instead.
 //   - [ErrJsonlMissing]: no candidate JSONL transcript exists on disk —
-//     neither the persisted jsonl_path nor the CLAUDE_CONFIG_DIR-aware
-//     fallback recomputed from the row's ExtraEnv (the message names
-//     every path tried and its source).
+//     neither the persisted jsonl_path, the CLAUDE_CONFIG_DIR-aware
+//     fallback, nor any archived session-history transcript (the message
+//     names every path tried and its source). Meaning: history existed but
+//     the file is gone.
+//   - [ErrJsonlNeverWritten]: the row has a session id but no transcript was
+//     ever written (persisted jsonl_path NULL and no session history) — the
+//     b.v2c freshly-restarted, un-messaged case. Recourse: message it, or
+//     delete + re-spawn.
 //   - ErrTmuxNotAvailable: tmux binary is not on PATH.
 //   - [ErrTmuxSessionCreate]: a tmux session with the same name already exists.
 //

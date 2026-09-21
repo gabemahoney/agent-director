@@ -323,6 +323,26 @@ agent-director resume --claude-instance-id <id>
 `find-missing` has already marked `missing`. `resume` relaunches under
 the same id and restores the session's env and conversation transcript.
 
+`resume` also recovers history from a session that rotated (for example when a
+bot fleet was restarted and Claude handed the session a new id) — it falls back
+to the session's earlier transcripts automatically. If `resume` reports that no
+transcript was ever written, the session simply hasn't been messaged yet; send
+it a message and its transcript appears. Run `agent-director get
+--claude-instance-id <id>` to see a session's `transcript_status` and its prior
+sessions before deciding anything.
+
+If a conversation transcript was stranded on disk under an old session id that
+the store no longer tracks, re-attach it in one step:
+
+```sh
+agent-director repair-transcript \
+  --claude-instance-id <id> \
+  --claude-session-id <session-id-of-the-transcript> \
+  --jsonl-path <absolute path to the .jsonl file>
+```
+
+Then `resume` as usual.
+
 Do **not** use `delete` to recover — it permanently removes the row and
 its conversation history, so there is nothing left to resume.
 
