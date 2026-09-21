@@ -519,9 +519,15 @@ fi
 # --------------------------------------------------------------------
 
 mkdir -p "$DEFAULT_INSTALL_ROOT"
-chmod 0700 "$DEFAULT_INSTALL_ROOT"
+# Five-digit mode required to clear inherited setuid/setgid on a directory:
+# GNU coreutils clears a dir's setuid/setgid bits only when the numeric mode
+# has five or more octal digits; a shorter mode (e.g. four-digit `0700`)
+# PRESERVES a setgid bit already on the dir. Under a setgid parent (e.g.
+# debian:bookworm-slim ships /tmp as 3777), mkdir -p yields a 2700 dir, and
+# `chmod 0700` leaves it 2700 — only `chmod 00700` clears it. See bee b.29h.
+chmod 00700 "$DEFAULT_INSTALL_ROOT"
 mkdir -p "$DEFAULT_BIN_DIR"
-chmod 0755 "$DEFAULT_BIN_DIR"
+chmod 00755 "$DEFAULT_BIN_DIR"
 
 # --------------------------------------------------------------------
 # Atomic install: write to a sibling temp path, then mv over the target.
