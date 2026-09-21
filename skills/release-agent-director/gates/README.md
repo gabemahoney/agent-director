@@ -89,20 +89,44 @@ gates in the order defined for that phase. For each gate:
 
 ### Coverage phase (parallel)
 
-> **NOT YET RELEASE-READY.** The parallel coverage phase described below is
-> implemented and tested — the runner, executor semantics, and report
-> translation all work. But live measurement (Bee b.2mt, Epic t1.2mt.z4,
-> 2026-09-20) showed the five coverage gates are **not filesystem-isolated**:
-> they share `HOME`, the store, and `tmp`, and no `max_parallel` >= 2 currently
-> produces an all-green phase. At >= 2, `coverage.bun-test` fails from sibling
-> file leakage; at >= 3, `coverage.go-root`'s leaked-file detector also fires.
-> Until the gate-isolation fix lands (Bugs bee b.3jn), the LLM orchestrator
-> **MUST keep running the coverage gates sequentially**, following the
-> "Sequential phases" section above. The field-mapping table below remains
-> authoritative for whenever the parallel path is enabled.
+> **RELEASE-READY.** Live measurement (Bee b.2mt, Epic t1.2mt.z4, 2026-09-20)
+> originally showed the five coverage gates were not isolated from each other:
+> they shared `HOME`, the store, and `tmp`, and no `max_parallel` >= 2 produced
+> an all-green phase (`coverage.bun-test` failed from sibling file leakage at
+> >= 2; `coverage.go-root`'s leaked-file detector also fired at >= 3). The
+> gate-isolation fix (Bugs bee b.3jn) has since landed, so the parallel path is
+> viable and the orchestrator no longer needs to serialize the coverage gates.
+> The fix has four parts:
+>
+> - Each bun gate (`coverage.bun-test`, `coverage.bun-extra-scripts`) runs
+>   under its own scratch `HOME` (`mktemp -d`), with `GOCACHE`, `GOMODCACHE`,
+>   `GOPATH`, and `BUN_INSTALL_CACHE_DIR` pinned to their real locations first
+>   so the caches are still shared. This keeps each gate's `$HOME`-resolved
+>   writes (e.g. `~/.agent-director/ad-trail.jsonl`, templates) out of the real
+>   home that `coverage.go-root`'s smoke canary watches via `user.Current()`.
+> - The `pkg/ts-bun-client` test preload holds the b.2y5 seeds flock
+>   (`pkg/api/apitest/.seeds-mutation.lock`) around its `make` invocations, so
+>   it cannot read the tree while `coverage.go-root`'s helper-tag-replay mutates
+>   `pkg/api/apitest/seeds.go`.
+> - `no-leak.test.ts` scopes its process count to children of its own process
+>   (`pgrep -c -P $pid agent-director`) rather than the host-global
+>   `pgrep -c agent-director`, so sibling gates' binary spawns no longer break
+>   its strict-equality assertion.
+> - `docker-epics.sh`'s children run under a **shared** flock (`flock -s`) on
+>   `pkg/api/apitest/.seeds-mutation.lock` around each
+>   `make test-docker EPIC=<slug>`. Those children are tree *readers* — the
+>   docker build-context tar plus a read-only bind mount of the live worktree —
+>   so they take the lock shared and run concurrently with one another, while
+>   still excluding `coverage.go-root`'s exclusive-lock tree *mutators* (e.g.
+>   `source-of-truth-reference-prune` creating/removing `reference/` at the repo
+>   root mid-context-tar). The invariant is: reader takes shared, mutator takes
+>   exclusive.
+>
+> The tuned `max_parallel` value for this phase is persisted separately (see
+> Bee b.2mt); this note does not fix a value.
 
-Once enabled, the coverage phase will not run its gates sequentially. Its five
-gate scripts —
+The coverage phase does not run its gates sequentially. Its five gate
+scripts —
 
 - `coverage/go-root.sh`
 - `coverage/bun-test.sh`

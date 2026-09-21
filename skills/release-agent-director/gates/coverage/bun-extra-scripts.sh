@@ -27,6 +27,24 @@ fi
 
 cd "$PKG_DIR"
 
+# ── Per-gate scratch HOME (b.3jn) ──────────────────────────────────────────
+# The five coverage gates run concurrently inside one sandbox container, all
+# sharing HOME=/home/sandbox. The bun tests here (envelope-diff's REAL_HOME
+# design: the FFI worker resolves os.UserHomeDir() from $HOME at spawn) write
+# $HOME-resolved paths such as ~/.agent-director/ad-trail.jsonl. Sibling gate
+# coverage.go-root runs test/smoke/go, whose TestMain canary snapshots the real
+# ~/.agent-director via user.Current() (immune to $HOME) and fails the suite on
+# ANY modification. So give this bun gate its own scratch HOME. Pin the go/bun
+# caches to their real (HOME-derived) locations FIRST, before HOME is moved, so
+# isolation does not cost warm-cache time.
+export GOCACHE="${GOCACHE:-$(go env GOCACHE)}"
+export GOMODCACHE="${GOMODCACHE:-$(go env GOMODCACHE)}"
+export GOPATH="${GOPATH:-$(go env GOPATH)}"
+export BUN_INSTALL_CACHE_DIR="${BUN_INSTALL_CACHE_DIR:-$HOME/.bun/install/cache}"
+GATE_HOME="$(mktemp -d)"
+export HOME="$GATE_HOME"
+trap 'rm -rf "$GATE_HOME"' EXIT
+
 # Discover extra scripts matching the gate pattern
 mapfile -t SCRIPTS < <(
   jq -r '.scripts | keys[]' package.json 2>/dev/null \

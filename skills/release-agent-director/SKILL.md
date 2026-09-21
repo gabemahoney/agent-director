@@ -54,13 +54,17 @@ list below names each phase and its Epic owner.
    `pkg/ts-bun-client/package.json`, commit. Built in E5.
 
 3. **`coverage`** — Discover and run every test surface (Go full tree, bun
-   test, docker-harness epic enumeration). A concurrent path for its five
-   gates is built (the parallel executor plus the coverage-phase runner
-   `gates/coverage/run-coverage-phase.sh`), but it is currently **gated to
-   sequential execution** pending gate isolation (Bugs bee b.3jn): run the
-   five gates one at a time until that lands. See `gates/README.md`
-   "Coverage phase (parallel)" for the gating rationale and the
-   executor-to-report field mapping. Built in E5.
+   test, docker-harness epic enumeration). Its five gates run through the
+   parallel executor, driven by the coverage-phase runner
+   `gates/coverage/run-coverage-phase.sh`. The gate-isolation fix (Bugs bee
+   b.3jn) has landed, so the parallel path is release-ready: each bun gate
+   runs under its own scratch `HOME`, the no-leak process count is scoped to
+   the children of the bun test process, and `docker-epics.sh`'s children run
+   under a shared (`flock -s`) seeds-mutation lock so they read the tree
+   without racing go-root's exclusive-lock mutators. See `gates/README.md`
+   "Coverage phase (parallel)"
+   for the isolation model and the executor-to-report field mapping. Built
+   in E5.
 
 4. **`compile`** — Cross-compile three CLI binaries; per-binary smoke;
    binary-version coherence. Built in E6.
