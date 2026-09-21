@@ -2942,8 +2942,12 @@ it standalone: confirms `claude --version` reports the pinned version,
    DB-isolation pair) — `children:` preserves authoring order.
 3. Before each t2 case, the driver invokes `test/driver/db-reset.sh`: it
    removes `~/.agent-director/state.db` + WAL/SHM, kills tmux sessions
-   matching the `cd-` prefix, then calls `agent-director help` to
-   rebuild schema v1.
+   matching the `cd-` prefix, then calls `agent-director list` to
+   rebuild the store at the binary's current schema version (a fresh DB
+   is created directly at that version — v4 today — not migrated up from
+   v1). Cases must therefore derive the expected `user_version` from the
+   shipped binary rather than hard-code a literal; hard-coding a stale
+   version is what turned this lane red in b.m9q.
 4. For each case, the driver runs in one of two modes:
    - `DRIVER_MODE=shell` (default) — extracts the t2 body's fenced
      ```bash``` block and executes it directly. No API calls. Used by
