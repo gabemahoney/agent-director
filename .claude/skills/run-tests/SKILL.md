@@ -24,9 +24,10 @@ block — use the sandbox.
 As a second line of defense, the state-touching test packages and the bun
 preload refuse to run unless the environment marker `AGENT_DIRECTOR_TEST_SANDBOX`
 is set — which the `make sandbox*` targets set inside the container. If you see
-"refusing to run: … must run via `make test-sandbox`", you tried to run tests on
-the host; run them through `make test-sandbox` instead. (Do not set that marker
-by hand to bypass the guard — it exists to stop exactly that mistake.)
+"refusing to run: the AGENT_DIRECTOR_TEST_SANDBOX marker is absent, so this
+process is running OUTSIDE the sandbox container (on the host) …", you ran tests
+on the host; run them through `make test-sandbox` instead. (Do not set that
+marker by hand to bypass the guard — it exists to stop exactly that mistake.)
 
 ## How to run the tests
 
@@ -57,12 +58,41 @@ quick binary run, a bun script — use:
 ```sh
 make sandbox CMD="go build ./..."
 make sandbox CMD="go generate ./..."
-make sandbox CMD="cd pkg/ts-bun-client && bun run build"
+make sandbox CMD='cd pkg/ts-bun-client && bun run build'
 ```
 
-`CMD` is passed to `bash -c`, so `cd`, `&&`, and pipes work. Its exit code
-propagates. An interactive shell in the same container + mounts is available via
-`make sandbox-shell`.
+`CMD` is passed to `bash -c` **inside the container**, so `cd`, `&&`, pipes, and
+inner quotes all work. Its exit code propagates. An interactive shell in the same
+container + mounts is available via `make sandbox-shell`.
+
+### Quoting `CMD`
+
+`CMD` reaches the container **verbatim** (b.ay3): the bytes you pass are the
+bytes the container shell sees. It is threaded through the environment, never
+interpolated into a host shell line and never re-expanded by Make, so nothing
+in it executes on the host — not shell metacharacters (`&&`, `;`, `|`, quotes,
+backslashes) and not Make `$(…)` syntax. All of it is inert data on the way in
+and only runs once, inside the container. Three conventions follow:
+
+- **Prefer outer single quotes** — `CMD='…'`. Inner single quotes are safe; they
+  no longer terminate anything on the host, so
+  `make sandbox CMD='sqlite3 /tmp/adchk.db "PRAGMA user_version;"'` and similar
+  run entirely in the container.
+- **Write a single `$` to expand in the container shell.** Because the value is
+  no longer collapsed through Make's `$$`→`$` step, a single `$` reaches bash as
+  a single `$`: `CMD='echo "$HOME"'` prints the container HOME (`/home/sandbox`).
+  A literal `$$` now reaches bash as `$$` — the shell PID, not an escape — so
+  `CMD='echo "$$HOME"'` prints something like `1HOME`. (This is the opposite of
+  the pre-b.ay3 `$$` convention; that convention is dead.)
+- **Command substitution is written plain `$(…)` and runs in the container.**
+  Make `$(…)` syntax is not expanded on the host (the recipe uses `$(value CMD)`
+  on CMD's raw text, and `unexport CMD` + `MAKEOVERRIDES =` close the MAKEFLAGS
+  re-expansion channel), so `CMD='echo $(id -un)'` prints `sandbox`.
+
+The safety here is unconditional: a missing `-e` forward fails loudly (the
+in-container `:?` guard aborts rather than running an empty command), and a
+command-line `SANDBOX_FLAGS=…` no longer drops the forward (the recipe uses
+`override`).
 
 ## How to read the results (for the outer Claude)
 
@@ -97,7 +127,7 @@ check that the real store's schema version is unchanged (it must stay `2` on
 
 ```sh
 cp ~/.agent-director/state.db /tmp/adchk.db && chmod 644 /tmp/adchk.db
-make sandbox CMD="sqlite3 /tmp/adchk.db 'PRAGMA user_version;'"
+make sandbox CMD='sqlite3 /tmp/adchk.db "PRAGMA user_version;"'
 ```
 
 (The state.db byte-content may change from unrelated live host processes, but
