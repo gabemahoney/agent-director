@@ -3,7 +3,7 @@
 # checks:   repacks the ts-bun-client tarball a second time and verifies the
 #           two packs contain byte-identical file contents; then writes
 #           dist/sha256sums covering the tarball + available platform binaries
-# usage:    bash repack-and-verify.sh --first <path-to-first-tarball> [--worktree-root <path>] [--target-version <ver>]
+# usage:    bash repack-and-verify.sh --first <path-to-first-tarball> [--worktree-root <path>]
 # pass:     dist/sha256sums written, exit 0
 # fail:     SR-14 diagnostic to stderr, exit 1
 
@@ -16,7 +16,6 @@ source "${GATE_LIB}/emit-diagnostic.sh"
 # ─── argument parsing ─────────────────────────────────────────────────────────
 FIRST_TARBALL=""
 WORKTREE_ROOT="."
-TARGET_VERSION=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -26,10 +25,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --worktree-root)
       WORKTREE_ROOT="$2"
-      shift 2
-      ;;
-    --target-version)
-      TARGET_VERSION="$2"
       shift 2
       ;;
     *)
@@ -44,7 +39,7 @@ if [[ -z "$FIRST_TARBALL" ]]; then
   exit 2
 fi
 
-cd "$WORKTREE_ROOT"
+cd "$WORKTREE_ROOT" || { printf 'repack-and-verify.sh: cannot cd into worktree root: %s\n' "$WORKTREE_ROOT" >&2; exit 2; }
 
 # Resolve first tarball to absolute path (was possibly relative before cd)
 if [[ "$FIRST_TARBALL" != /* ]]; then
@@ -73,6 +68,7 @@ trap 'rm -rf "$STAGING2" "${EXTRACT_DIR1:-}" "${EXTRACT_DIR2:-}"' EXIT
 
 (cd pkg/ts-bun-client && bun pm pack --destination "$STAGING2") >/dev/null 2>&1
 
+# shellcheck disable=SC2012 # STAGING2 is a private mktemp dir; the glob handles filenames, ls just picks the single .tgz and yields empty (checked below) when none exists
 SECOND_TARBALL="$(ls "$STAGING2"/*.tgz 2>/dev/null | head -1)"
 if [[ -z "$SECOND_TARBALL" ]]; then
   emit_diagnostic \

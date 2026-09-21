@@ -34,7 +34,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-cd "$WORKTREE_ROOT"
+cd "$WORKTREE_ROOT" || { printf 'cross-compile.sh: cannot cd into worktree root: %s\n' "$WORKTREE_ROOT" >&2; exit 2; }
 
 # ─── version derivation ───────────────────────────────────────────────────────
 # Honor caller override; otherwise derive from the canonical version source.

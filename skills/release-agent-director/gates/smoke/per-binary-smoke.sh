@@ -18,7 +18,7 @@ source "${GATE_LIB}/emit-diagnostic.sh"
 
 # ─── argument parsing ─────────────────────────────────────────────────────────
 WORKTREE_ROOT="${1:-.}"
-cd "$WORKTREE_ROOT"
+cd "$WORKTREE_ROOT" || { printf 'per-binary-smoke.sh: cannot cd into worktree root: %s\n' "$WORKTREE_ROOT" >&2; exit 2; }
 
 # ─── host triple detection ─────────────────────────────────────────────────────
 HOST_OS="$(uname -s)"   # Linux | Darwin

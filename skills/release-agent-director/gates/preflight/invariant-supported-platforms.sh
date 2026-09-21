@@ -35,7 +35,9 @@ fi
 EXTRACTED="$(printf '%s' "$TARGET_LINE" | sed 's/.*for target in //; s/;.*//')"
 
 # Sort both sides for comparison.
+# shellcheck disable=SC2086 # intentional word-splitting: split the space-separated target list into one platform per line
 ACTUAL_SORTED="$(printf '%s\n' $EXTRACTED | sort | tr '\n' ' ' | sed 's/ $//')"
+# shellcheck disable=SC2086 # intentional word-splitting: split the space-separated expected list into one platform per line
 EXPECTED_SORTED_CMP="$(printf '%s\n' $EXPECTED_SORTED | sort | tr '\n' ' ' | sed 's/ $//')"
 
 if [ "$ACTUAL_SORTED" = "$EXPECTED_SORTED_CMP" ]; then
