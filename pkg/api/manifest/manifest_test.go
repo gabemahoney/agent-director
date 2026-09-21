@@ -101,7 +101,7 @@ func TestNoMigrationTriggerInSurfaceJSON(t *testing.T) {
 // it on the reference-doc side). Order matters: the generator walks Verbs
 // in slice order, so a reorder produces a diff in docs/cli-reference.md.
 func TestVerbsContainsExpectedSurface(t *testing.T) {
-	want := []string{"help", "spawn", "status", "get", "send-keys", "read-pane", "kill", "decide", "get-permission", "resume", "find-missing", "repair-transcript", "expire", "delete", "make-template", "list", "pause", "serve", "version", "trail-emit", "hook"}
+	want := []string{"help", "spawn", "status", "get", "send-keys", "read-pane", "kill", "decide", "get-permission", "resume", "find-missing", "expire", "delete", "make-template", "list", "pause", "serve", "version", "trail-emit", "hook"}
 	if got := len(manifest.Verbs); got != len(want) {
 		t.Fatalf("len(manifest.Verbs) = %d, want %d (names %v)", got, len(want), want)
 	}
@@ -318,17 +318,16 @@ func TestHelpErrorNamesEmptyNonNil(t *testing.T) {
 
 // ── Phase 2: Callable ────────────────────────────────────────────────────────
 
-// TestCallableVerbsCount asserts CallableVerbs() returns exactly 17 entries —
-// the full set of synchronous verb methods on *pkg/api.Client (b.v2c added
-// repair-transcript).
+// TestCallableVerbsCount asserts CallableVerbs() returns exactly 16 entries —
+// the full set of synchronous verb methods on *pkg/api.Client.
 func TestCallableVerbsCount(t *testing.T) {
 	got := manifest.CallableVerbs()
-	if len(got) != 17 {
+	if len(got) != 16 {
 		names := make([]string, len(got))
 		for i, v := range got {
 			names[i] = v.Name
 		}
-		t.Fatalf("len(CallableVerbs()) = %d, want 17 (got %v)", len(got), names)
+		t.Fatalf("len(CallableVerbs()) = %d, want 16 (got %v)", len(got), names)
 	}
 }
 
@@ -346,11 +345,11 @@ func TestCallableVerbsExcludesNonCallable(t *testing.T) {
 }
 
 // TestCallableVerbsOrder asserts the callable subset preserves Verbs-defined
-// order (the 17 callable verbs in the order they appear in Verbs).
+// order (the 16 callable verbs in the order they appear in Verbs).
 func TestCallableVerbsOrder(t *testing.T) {
 	want := []string{
 		"spawn", "status", "get", "send-keys", "read-pane", "kill",
-		"decide", "get-permission", "resume", "find-missing", "repair-transcript", "expire", "delete",
+		"decide", "get-permission", "resume", "find-missing", "expire", "delete",
 		"make-template", "list", "pause", "version",
 	}
 	got := manifest.CallableVerbs()

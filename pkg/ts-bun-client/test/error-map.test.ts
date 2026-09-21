@@ -6,7 +6,7 @@
  * names), SR-4.4 (envelope key name is err_name).
  *
  * Cases:
- *   1. Map size equals catalog entry count (40).
+ *   1. Map size equals catalog entry count (39).
  *   2. For each catalog entry: synthetic envelope → throwFromEnvelope throws
  *      the correct typed class (instanceof check).
  *   3. Synthetic envelope with err_name="ErrTotallyBogus" → throws
@@ -26,16 +26,16 @@ import { AgentDirectorError, ErrUnknownErrorName } from "../src/errors.js";
 import { errorMap, throwFromEnvelope } from "../src/internal/errorMap.js";
 
 // Load the canonical catalog (same source the drift test uses).
-const catalogNames = loadErrNameCatalog(); // sorted unique array of 40 names
+const catalogNames = loadErrNameCatalog(); // sorted unique array of 39 names
 
 // ---------------------------------------------------------------------------
-// Case 1: map.size === 40
+// Case 1: map.size === 39
 // ---------------------------------------------------------------------------
 describe("error map — catalog coverage", () => {
-  test("errorMap.size equals catalog entry count (40)", () => {
+  test("errorMap.size equals catalog entry count (39)", () => {
     expect(errorMap).toBeInstanceOf(Map);
     expect(errorMap.size).toBe(catalogNames.length);
-    expect(errorMap.size).toBe(40);
+    expect(errorMap.size).toBe(39);
   });
 
   test("every catalog name appears as a key in errorMap", () => {

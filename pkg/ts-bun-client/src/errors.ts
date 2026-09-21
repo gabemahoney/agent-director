@@ -454,8 +454,6 @@ export class ErrNoSessionId extends AgentDirectorError {}
 export class ErrJsonlMissing extends AgentDirectorError {}
 /** Mirrors ErrJsonlNeverWritten (package: api) */
 export class ErrJsonlNeverWritten extends AgentDirectorError {}
-/** Mirrors ErrRepairTranscriptMissing (package: api) */
-export class ErrRepairTranscriptMissing extends AgentDirectorError {}
 /** Mirrors ErrRelayModeOff (package: api) */
 export class ErrRelayModeOff extends AgentDirectorError {}
 /** Mirrors ErrRelayFallenBack (package: api) */
@@ -527,7 +525,6 @@ const ERROR_TABLE = {
   ErrNoSessionId,
   ErrJsonlMissing,
   ErrJsonlNeverWritten,
-  ErrRepairTranscriptMissing,
   ErrRelayModeOff,
   ErrRelayFallenBack,
   ErrInvalidDecision,

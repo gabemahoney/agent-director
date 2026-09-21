@@ -63,12 +63,6 @@ func matrixCases() map[string]matrixCase {
 		"pause":     {args: `{"claude_instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
 		"resume":    {args: `{"claude_instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
 
-		// repair-transcript (b.v2c AC7): jsonl_path must exist on disk or the
-		// verb rejects with ErrRepairTranscriptMissing before the store lookup;
-		// "/tmp" always stats, so the call reaches the seeded row and a dropped
-		// claude_instance_id tag surfaces as ErrSpawnNotFound (the matrix signal).
-		"repair-transcript": {args: `{"claude_instance_id":"` + matrixID + `","claude_session_id":"sess-repair","jsonl_path":"/tmp"}`, setup: seedEnded("off")},
-
 		// decide: relay_mode must be "on" so the row passes the
 		// ErrRelayModeOff check after the id lookup succeeds.
 		"decide": {args: `{"claude_instance_id":"` + matrixID + `","decision":"allow","reason":"ok"}`, setup: seedEnded("on")},

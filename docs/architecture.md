@@ -2211,9 +2211,15 @@ mutation, no half-created tmux session):
       id`, and that is `os.Stat`'d.
    3. If neither the current session's persisted path nor its fallback
       exists, `resume` walks the instance's archived `session_history`
-      (newest first, b.v2c AC6). For each prior session it stats the
-      archived `jsonl_path` (recomputing the `CLAUDE_CONFIG_DIR`-aware
-      fallback when the archived path is NULL). The first archived
+      (newest first, b.v2c AC6). Each archived entry gets the **same
+      persisted→fallback two-step the current session gets** (bug b.5jm):
+      the recorded `jsonl_path` is stat'd first, and on ANY stat failure of
+      a non-empty path — the b.1ba rot mode — the `CLAUDE_CONFIG_DIR`-aware
+      path is recomputed and stat'd for that same session id before
+      advancing to the next, older entry. (A NULL/empty recorded path skips
+      straight to the recomputed path.) Without this two-step, a newer entry
+      whose recorded path had rotted would be skipped and an older entry
+      could silently win. The first archived
       transcript that exists **wins**: `resume` relaunches `claude
       --resume` against the archived id so it points at the recovered
       transcript (the mutation is in-memory only — the DB row itself is
@@ -2303,9 +2309,7 @@ payload carries a **different** `claude_session_id` than the row currently holds
 store archives the prior `(claude_session_id, jsonl_path)` pair into
 `session_history` **before** overwriting the `spawns` row with the new session.
 The earlier session's transcript is therefore never orphaned: it is reachable
-through `get`'s `prior_sessions` and is a resume fallback candidate. The same
-archival happens on the `repair-transcript` verb when it replaces a differing
-session id.
+through `get`'s `prior_sessions` and is a resume fallback candidate.
 
 **Lazy transcript healing in `find-missing` (b.v2c AC3).** `find-missing`
 already sweeps every live row; on each sweep it also lists rows with a NULL
@@ -2689,25 +2693,19 @@ ways, and the errors mean different things:
 is attempted: `never_written`, `rotated` (history exists under a different
 session id — see `prior_sessions`), `present`, or `no_session`.
 
-**Recovering an orphaned transcript with `repair-transcript` (b.v2c AC7).**
-When a session rotated and intact history was stranded under an earlier session
-id that the store does not currently point at (and was never archived — e.g. a
-pre-v4 rotation, or a transcript the operator located by hand), the one-shot
-`repair-transcript` verb re-associates it with the row:
-
-```
-agent-director repair-transcript \
-  --claude-instance-id <id> \
-  --claude-session-id <orphaned-session-id> \
-  --jsonl-path <absolute path to the orphaned .jsonl>
-```
-
-The verb verifies the file exists (else `ErrRepairTranscriptMissing`), archives
-the row's current session pair into `session_history` when it differs (so the
-repair never silently discards the pointer it overwrites), and records the
-recovered `(session id, jsonl_path)` so a subsequent `resume` points
-`claude --resume` at the recovered transcript. This is the supported recovery
-for silent data loss — it is available on both CLI and MCP.
+**Recovering a pre-v4 orphaned transcript (manual).** When a session rotated and
+intact history was stranded under an earlier session id that the store does not
+currently point at **and was never archived** — only possible for a pre-v4
+rotation, since `session_history` archives every rotation from schema v4 onward —
+recovery is a manual operator task, not a product verb. The repair tooling was
+deliberately not shipped (a permanent CLI/MCP surface to fix a class of incident
+that can no longer occur is a bad trade). Instead, the
+`repair-orphaned-transcript` skill
+(`.claude/skills/repair-orphaned-transcript/`) walks an operator (or an LLM)
+through locating the orphaned transcript across both config dirs and issuing the
+single-transaction SQL that archives the row's current
+`(claude_session_id, jsonl_path)` pair into `session_history` and re-points the
+row. Post-v4 rotations self-archive and need no repair.
 
 **`delete` is NOT a recovery step.** It is destructive: it removes the
 row along with its `claude_session_id`, labels, and `extra_env`, making
@@ -2725,9 +2723,9 @@ contract **starts at** "the caller invokes `find-missing` then
 unit, a startup script, a `find-missing` cron loop — is owned and
 operated by the caller, not by agent-director. Before reaching for `delete`
 after a failed resume, check `get`'s `transcript_status` and `prior_sessions`:
-`rotated` means history is recoverable (try `repair-transcript` or a plain
-`resume`, which now walks archived sessions), and `never_written` means the bot
-simply hasn't been messaged yet — neither warrants a destructive delete.
+`rotated` means history is recoverable — a plain `resume` now walks archived
+sessions and reattaches automatically — and `never_written` means the bot simply
+hasn't been messaged yet; neither warrants a destructive delete.
 
 ## Stop semantics
 

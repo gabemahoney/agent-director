@@ -27,7 +27,6 @@ package envelope_diff
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -315,58 +314,6 @@ var successCases = []successCase{
 		},
 		cliArgv: func(_ map[string]any) []string {
 			return []string{"find-missing"}
-		},
-	},
-
-	// ── repair-transcript ──────────────────────────────────────────────────
-	// repair-transcript re-associates an orphaned transcript with a row. It
-	// needs:
-	//   1. A spawn row for the target instance id.
-	//   2. A transcript file that EXISTS on disk at jsonl_path (the verb's
-	//      os.Stat pre-flight).
-	//
-	// The transcript is written in seed() under t.TempDir() — a host path that
-	// is NOT under HOME — so its absolute path is identical for both the CLI
-	// subprocess and the in-process Client (seed runs once; both runners read
-	// the same ctx). That keeps the echoed result.jsonl_path byte-identical
-	// across the two envelopes, so no nondeterministic.json exclusion is needed.
-	// The row carries no prior session id, so nothing is archived; the result
-	// {claude_instance_id, claude_session_id, jsonl_path} is fully deterministic.
-	{
-		verb: "repair-transcript",
-		seed: func(t *testing.T) (string, map[string]any) {
-			t.Helper()
-			const (
-				id     = "id-repair-1"
-				sessID = "session-uuid-repair-1"
-			)
-			_, dbPath := apitest.OpenStoreWithRow(t,
-				id, "cd-repair-1", store.StateEnded, "off")
-			// Write the orphaned transcript at a fixed host path (not under
-			// HOME) so both runners resolve the same absolute jsonl_path.
-			jsonlPath := filepath.Join(t.TempDir(), sessID+".jsonl")
-			if err := os.WriteFile(jsonlPath, []byte("{}\n"), 0o600); err != nil {
-				t.Fatalf("repair-transcript seed: write transcript: %v", err)
-			}
-			return filepath.Dir(dbPath), map[string]any{
-				"id":        id,
-				"sessID":    sessID,
-				"jsonlPath": jsonlPath,
-			}
-		},
-		params: func(ctx map[string]any) map[string]any {
-			return map[string]any{
-				"claude_instance_id": ctx["id"],
-				"claude_session_id":  ctx["sessID"],
-				"jsonl_path":         ctx["jsonlPath"],
-			}
-		},
-		cliArgv: func(ctx map[string]any) []string {
-			return []string{"repair-transcript",
-				"--claude-instance-id", ctx["id"].(string),
-				"--claude-session-id", ctx["sessID"].(string),
-				"--jsonl-path", ctx["jsonlPath"].(string),
-			}
 		},
 	},
 

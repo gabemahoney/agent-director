@@ -562,8 +562,12 @@ func positiveIntArg(n int) any {
 // or when the current id already equals newSessionID (same-session re-fire).
 // Best-effort and fail-open: any error is emitted to the trail and swallowed so
 // the identity write proceeds. The UNIQUE(claude_instance_id, claude_session_id)
-// constraint makes re-archiving the same prior session idempotent (INSERT OR
-// IGNORE).
+// constraint makes re-archiving the same prior session id a conflict; rather
+// than ignore it, the write upserts: a re-archive fills in a now-known path
+// over a previously NULL one (COALESCE keeps an already-recorded path) and
+// always refreshes recorded_at, so the newest-first ordering resume depends on
+// (b.5jm/1) tracks the latest re-archive rather than pinning a stale NULL-path
+// entry (b.5jm/4).
 func (s *Store) archivePriorSessionOnRotate(instanceID, newSessionID string) {
 	var (
 		curSession string
@@ -594,9 +598,12 @@ func (s *Store) archivePriorSessionOnRotate(instanceID, newSessionID string) {
 		priorJsonl = nil
 	}
 	if _, err := s.db.Exec(
-		`INSERT OR IGNORE INTO session_history
+		`INSERT INTO session_history
 		     (claude_instance_id, claude_session_id, jsonl_path)
-		 VALUES (?, ?, ?)`, instanceID, curSession, priorJsonl,
+		 VALUES (?, ?, ?)
+		 ON CONFLICT(claude_instance_id, claude_session_id) DO UPDATE SET
+		     jsonl_path  = COALESCE(excluded.jsonl_path, jsonl_path),
+		     recorded_at = CURRENT_TIMESTAMP`, instanceID, curSession, priorJsonl,
 	); err != nil {
 		_ = trail.Emit(context.Background(), "ad.session.archive_failed", map[string]any{
 			"claude_instance_id": instanceID,

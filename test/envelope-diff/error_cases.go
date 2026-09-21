@@ -406,62 +406,6 @@ var errorCases = []errorCase{
 		},
 	},
 
-	// ── repair-transcript / ErrRepairTranscriptMissing ───────────────────
-	// The verb os.Stats the supplied jsonl_path before touching the store; a
-	// fixed absolute path that exists on neither homeDir copy triggers
-	// ErrRepairTranscriptMissing identically in both. The err_description
-	// embeds the path and the OS stat wording, but both are homeDir-independent
-	// here (the path is a constant, not derived from HOME), so the prefix policy
-	// matches on "ErrRepairTranscriptMissing:". Empty store: the file check
-	// fires before any spawn lookup.
-	{
-		verb:    "repair-transcript",
-		errName: "ErrRepairTranscriptMissing",
-		seed: func(t *testing.T) (string, map[string]any) {
-			t.Helper()
-			dbPath := apitest.SeedEmptyStore(t)
-			return filepath.Dir(dbPath), nil
-		},
-		params: func(_ map[string]any) map[string]any {
-			return map[string]any{
-				"claude_instance_id": "id-repair-missing",
-				"claude_session_id":  "sess-repair-missing",
-				"jsonl_path":         "/nonexistent/agent-director-repair-missing.jsonl",
-			}
-		},
-		cliArgv: func(_ map[string]any) []string {
-			return []string{"repair-transcript",
-				"--claude-instance-id", "id-repair-missing",
-				"--claude-session-id", "sess-repair-missing",
-				"--jsonl-path", "/nonexistent/agent-director-repair-missing.jsonl",
-			}
-		},
-	},
-
-	// ── repair-transcript / ErrInvalidFlags and ErrSpawnNotFound ──────────
-	// NOTE: both are intentionally absent from this table for repair-transcript.
-	//
-	// ErrInvalidFlags: its err_description differs by design between the two
-	// runners. The CLI validates flags itself and emits the flag-form message
-	// ("--claude-instance-id is required"); the in-process Client runner reaches
-	// repairTranscriptImpl, which emits the param-form message
-	// ("claude_instance_id is required"). Neither contains a ':', so the
-	// prefix-match policy falls through to full-string equality and the two
-	// forms cannot match. (This mirrors why the CLI's own flag validation is
-	// never envelope-diffed against the Client.)
-	//
-	// ErrSpawnNotFound: reaching the store lookup requires jsonl_path to name a
-	// file that EXISTS (the os.Stat pre-flight must pass) yet have no matching
-	// spawn row. The only file guaranteed present in both the CLI and Client
-	// fixture copies is one propagated by copyFixtureStore into
-	// homeDir/.agent-director/, whose absolute path differs between the two
-	// independent homeDirs — and errorCase has no per-homeDir extraSetup hook
-	// (unlike successCase) to write a fixed-absolute-path file.
-	//
-	// The ErrRepairTranscriptMissing row above covers repair-transcript for the
-	// TestErrorTableCoverage gate; full per-err_name parity for the other two is
-	// enforced by the pkg/api/errnames catalog test.
-
 	// ── find-missing / ErrProbeUnsupported ───────────────────────────────
 	// ErrProbeUnsupported is emitted by probe_unsupported.go (build tag
 	// !linux && !darwin). Both linux and darwin compile a native prober

@@ -180,53 +180,6 @@ func SeedResumable(t *testing.T, s *store.Store, id string) store.Spawn {
 	return row
 }
 
-// RepairJsonlPath returns the deterministic on-disk transcript path that
-// SeedRepairable writes and that the repair-transcript happy path re-associates
-// with the seeded row. It lives under HOME so it is isolated per test (callers
-// must redirect HOME to a temp dir first, as the smoke TestMain does) and is
-// derivable from id alone using only stdlib, so consumers restricted from
-// importing internal/spawn (the smoke package's import-graph guard) can
-// reconstruct it. The basename doubles as the recovered claude_session_id the
-// verb records.
-func RepairJsonlPath(id string) string {
-	return filepath.Join(os.Getenv("HOME"), "repair-"+id+".jsonl")
-}
-
-// SeedRepairable inserts a Spawn in StateEnded carrying an original session id
-// with a live transcript, and writes a SEPARATE orphaned transcript on disk at
-// RepairJsonlPath(id). It models the b.v2c operator-recovery precondition: a row
-// whose current (session id, jsonl_path) will be archived into session_history
-// when repair-transcript re-associates it with the recovered transcript. Returns
-// the orphaned transcript path so callers can pass it as jsonl_path.
-//
-// HOME must point at a temp dir before calling (the smoke TestMain does this) so
-// the written file lands under the per-test home and not ~/.
-func SeedRepairable(t *testing.T, s *store.Store, id string) string {
-	t.Helper()
-	sp := defaultSpawn(id)
-	if err := s.InsertPending(sp); err != nil {
-		t.Fatalf("storefix.SeedRepairable: InsertPending(%q): %v", id, err)
-	}
-	// Give the row a current session pair so the repair archives it on rotate.
-	origSession := "sess-orig-" + id
-	if err := s.RecordSessionStartIdentity(id, origSession, "", false, 0, ""); err != nil {
-		t.Fatalf("storefix.SeedRepairable: RecordSessionStartIdentity(%q, %q): %v", id, origSession, err)
-	}
-	if err := s.ApplyHookTransition(id, store.StateEnded, false, "test_seed"); err != nil {
-		t.Fatalf("storefix.SeedRepairable: ApplyHookTransition(%q, ended): %v", id, err)
-	}
-	// Write the orphaned transcript the operator is recovering. The verb's
-	// os.Stat pre-flight requires it to exist on disk.
-	jsonlPath := RepairJsonlPath(id)
-	if err := os.MkdirAll(filepath.Dir(jsonlPath), 0o700); err != nil {
-		t.Fatalf("storefix.SeedRepairable: mkdir %q: %v", filepath.Dir(jsonlPath), err)
-	}
-	if err := os.WriteFile(jsonlPath, []byte("{}\n"), 0o600); err != nil {
-		t.Fatalf("storefix.SeedRepairable: write JSONL %q: %v", jsonlPath, err)
-	}
-	return jsonlPath
-}
-
 // SeedExpiredCandidate inserts a Spawn in StateEnded and then backdates its
 // ended_at column by age so the row qualifies for expiry under the default
 // retention window. dbPath must be the SQLite file path returned by

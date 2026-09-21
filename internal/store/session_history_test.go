@@ -1,15 +1,79 @@
 package store
 
 // session_history_test.go — b.v2c store-level coverage for the session-rotation
-// archive, lazy transcript heal, provisional-transcript listing, and the
-// one-shot repair path. All tests drive the real *Store against a temp SQLite
-// DB (openTempStore) and read back through the store API, never internals.
+// archive, lazy transcript heal, and provisional-transcript listing. Tests drive
+// the real *Store against a temp SQLite DB (openTempStore) and read back through
+// the store API. The exceptions are the b.5jm/4 upsert helpers (countHistoryRows,
+// historyRecordedAt, and the backdate helper) which query s.db directly: row
+// count and recorded_at are not exposed by the store API but are exactly what the
+// upsert semantics must be pinned on.
 
 import (
-	"errors"
-	"path/filepath"
+	"fmt"
 	"testing"
 )
+
+// countHistoryRows returns how many session_history rows exist for the given
+// (instance, session) pair — used to prove the upsert never duplicates.
+func countHistoryRows(t *testing.T, s *Store, instanceID, sessionID string) int {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM session_history
+		  WHERE claude_instance_id = ? AND claude_session_id = ?`,
+		instanceID, sessionID,
+	).Scan(&n); err != nil {
+		t.Fatalf("count history rows: %v", err)
+	}
+	return n
+}
+
+// historyJsonl reads back the archived jsonl_path for one (instance, session)
+// pair through the store API (empty string when the column is NULL).
+func historyJsonl(t *testing.T, s *Store, instanceID, sessionID string) string {
+	t.Helper()
+	hist, err := s.ListSessionHistory(instanceID)
+	if err != nil {
+		t.Fatalf("ListSessionHistory: %v", err)
+	}
+	for _, h := range hist {
+		if h.ClaudeSessionID == sessionID {
+			return h.JSONLPath
+		}
+	}
+	t.Fatalf("no history entry for session %q", sessionID)
+	return ""
+}
+
+// backdateHistoryRecordedAt rewinds one (instance, session) entry's recorded_at
+// by the given whole seconds, so a same-run re-archive (SQLite CURRENT_TIMESTAMP
+// is second-granular) produces a strictly newer timestamp the refresh assertion
+// can observe.
+func backdateHistoryRecordedAt(t *testing.T, s *Store, instanceID, sessionID string, seconds int) {
+	t.Helper()
+	if _, err := s.db.Exec(
+		`UPDATE session_history
+		    SET recorded_at = datetime(recorded_at, ?)
+		  WHERE claude_instance_id = ? AND claude_session_id = ?`,
+		fmt.Sprintf("-%d seconds", seconds), instanceID, sessionID,
+	); err != nil {
+		t.Fatalf("backdate recorded_at: %v", err)
+	}
+}
+
+// historyRecordedAt reads the recorded_at for one (instance, session) pair.
+func historyRecordedAt(t *testing.T, s *Store, instanceID, sessionID string) string {
+	t.Helper()
+	var at string
+	if err := s.db.QueryRow(
+		`SELECT recorded_at FROM session_history
+		  WHERE claude_instance_id = ? AND claude_session_id = ?`,
+		instanceID, sessionID,
+	).Scan(&at); err != nil {
+		t.Fatalf("read recorded_at: %v", err)
+	}
+	return at
+}
 
 // seedWaitingRow inserts one pending row and transitions it to waiting (a live
 // state ListProvisionalTranscripts scans), returning nothing extra.
@@ -192,43 +256,95 @@ func TestListProvisionalTranscripts(t *testing.T) {
 	}
 }
 
-// TestRepairTranscriptReassociatesAndArchives is the b.v2c AC7 store-layer
-// REGRESSION test: the one-shot operator repair path re-associates an orphaned
-// transcript with a row and archives the pointer it overwrites (so a repair
-// never silently discards history). It also proves an absent instance yields
-// ErrSpawnNotFound.
-func TestRepairTranscriptReassociatesAndArchives(t *testing.T) {
+// TestReArchiveFillsNullPathAndRefreshesRecordedAt is the b.5jm/4 (AC7)
+// REGRESSION test: when a session id that already has a NULL-path history entry
+// re-enters the row and rotates out again with a now-known transcript path, the
+// archive must UPDATE the existing entry — filling in the path and refreshing
+// recorded_at — rather than ignoring the write (the old INSERT OR IGNORE).
+//
+// PRE-FIX (INSERT OR IGNORE) the second archive of session-A is discarded: its
+// jsonl_path stays NULL and recorded_at stale, so this test's path assertion
+// fails. POST-FIX the upsert fills the path and there is still exactly one A row.
+func TestReArchiveFillsNullPathAndRefreshesRecordedAt(t *testing.T) {
 	s, _ := openTempStore(t)
-	const id = "repair-1"
+	const id = "rearchive-fill-1"
 	seedWaitingRow(t, s, id)
 
-	// Current (dead) pointer.
-	if err := s.RecordSessionStartIdentity(id, "session-dead", "/x/session-dead.jsonl", true, 1, "1"); err != nil {
-		t.Fatalf("record current: %v", err)
+	// Session A starts with a reported-but-absent path → row=A, jsonl_path NULL.
+	if err := s.RecordSessionStartIdentity(id, "session-A", "/x/A.jsonl", false, 1, "1"); err != nil {
+		t.Fatalf("record A (absent): %v", err)
+	}
+	// Rotate A→B: archives (A, NULL) — the row's current path was NULL.
+	if err := s.RecordSessionStartIdentity(id, "session-B", "/x/B.jsonl", true, 2, "2"); err != nil {
+		t.Fatalf("record B: %v", err)
+	}
+	if got := historyJsonl(t, s, id, "session-A"); got != "" {
+		t.Fatalf("precondition: archived A path = %q; want empty (NULL)", got)
+	}
+	// Backdate the archived A entry so the re-archive's CURRENT_TIMESTAMP is
+	// strictly newer (SQLite timestamps are second-granular; without this the
+	// same-run re-archive lands on an equal second and the refresh is unobservable).
+	backdateHistoryRecordedAt(t, s, id, "session-A", 10)
+	firstRecordedAt := historyRecordedAt(t, s, id, "session-A")
+
+	// Session A re-enters the row, this time with a present transcript path.
+	// Rotate B→A archives (B, …); the row now holds A with a known path.
+	if err := s.RecordSessionStartIdentity(id, "session-A", "/x/A-found.jsonl", true, 3, "3"); err != nil {
+		t.Fatalf("record A (found): %v", err)
+	}
+	// Rotate A→B again: re-archives (A, /x/A-found.jsonl) — must UPSERT the
+	// existing NULL-path A entry, filling the path.
+	if err := s.RecordSessionStartIdentity(id, "session-B", "/x/B.jsonl", true, 4, "4"); err != nil {
+		t.Fatalf("re-archive A via A→B: %v", err)
 	}
 
-	// Repair to the recovered orphaned transcript.
-	recovered := filepath.Join(t.TempDir(), "session-recovered.jsonl")
-	if err := s.RepairTranscript(id, "session-recovered", recovered); err != nil {
-		t.Fatalf("RepairTranscript: %v", err)
+	if got := historyJsonl(t, s, id, "session-A"); got != "/x/A-found.jsonl" {
+		t.Errorf("archived A path = %q; want /x/A-found.jsonl (upsert filled the NULL)", got)
+	}
+	if n := countHistoryRows(t, s, id, "session-A"); n != 1 {
+		t.Errorf("session-A history rows = %d; want 1 (upsert must not duplicate)", n)
+	}
+	// The upsert's recorded_at = CURRENT_TIMESTAMP must strictly advance past the
+	// backdated original. PRE-FIX (OR IGNORE) the re-archive is discarded, so
+	// recorded_at stays the backdated value and this assertion goes red.
+	if at := historyRecordedAt(t, s, id, "session-A"); at <= firstRecordedAt {
+		t.Errorf("recorded_at = %q; want strictly newer than backdated %q (upsert must refresh)", at, firstRecordedAt)
+	}
+}
+
+// TestReArchiveWithNullDoesNotClobberKnownPath is the b.5jm/4 (AC7) COALESCE
+// guard: re-archiving a session id that already has a NON-NULL path entry, this
+// time with a NULL path, must KEEP the recorded path (COALESCE(excluded, existing)).
+func TestReArchiveWithNullDoesNotClobberKnownPath(t *testing.T) {
+	s, _ := openTempStore(t)
+	const id = "rearchive-keep-1"
+	seedWaitingRow(t, s, id)
+
+	// Session A starts with a present path → row=A with /x/A.jsonl.
+	if err := s.RecordSessionStartIdentity(id, "session-A", "/x/A.jsonl", true, 1, "1"); err != nil {
+		t.Fatalf("record A (present): %v", err)
+	}
+	// Rotate A→B archives (A, /x/A.jsonl).
+	if err := s.RecordSessionStartIdentity(id, "session-B", "/x/B.jsonl", true, 2, "2"); err != nil {
+		t.Fatalf("record B: %v", err)
+	}
+	if got := historyJsonl(t, s, id, "session-A"); got != "/x/A.jsonl" {
+		t.Fatalf("precondition: archived A path = %q; want /x/A.jsonl", got)
 	}
 
-	row, _ := s.GetSpawn(id)
-	if row.ClaudeSessionID != "session-recovered" || row.JSONLPath != recovered {
-		t.Errorf("row = (%q, %q); want (session-recovered, %q)", row.ClaudeSessionID, row.JSONLPath, recovered)
+	// Session A re-enters reported-but-absent → row=A with NULL path.
+	if err := s.RecordSessionStartIdentity(id, "session-A", "/x/A.jsonl", false, 3, "3"); err != nil {
+		t.Fatalf("record A (absent re-entry): %v", err)
+	}
+	// Rotate A→B re-archives (A, NULL) — COALESCE must keep the known path.
+	if err := s.RecordSessionStartIdentity(id, "session-B", "/x/B.jsonl", true, 4, "4"); err != nil {
+		t.Fatalf("re-archive A (NULL) via A→B: %v", err)
 	}
 
-	// The overwritten pair is archived, not discarded.
-	hist, err := s.ListSessionHistory(id)
-	if err != nil {
-		t.Fatalf("ListSessionHistory: %v", err)
+	if got := historyJsonl(t, s, id, "session-A"); got != "/x/A.jsonl" {
+		t.Errorf("archived A path = %q; want /x/A.jsonl kept (COALESCE must not clobber)", got)
 	}
-	if len(hist) != 1 || hist[0].ClaudeSessionID != "session-dead" {
-		t.Fatalf("history = %+v; want the archived session-dead pair", hist)
-	}
-
-	// Absent instance → ErrSpawnNotFound.
-	if err := s.RepairTranscript("ghost", "s", "/x/p.jsonl"); !errors.Is(err, ErrSpawnNotFound) {
-		t.Errorf("RepairTranscript(ghost) err = %v; want ErrSpawnNotFound", err)
+	if n := countHistoryRows(t, s, id, "session-A"); n != 1 {
+		t.Errorf("session-A history rows = %d; want 1", n)
 	}
 }

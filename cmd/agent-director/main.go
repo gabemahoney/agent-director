@@ -84,7 +84,6 @@ func handlers(client *pkgapi.Client, cfg config.Config) map[string]func([]string
 		"get-permission":    func(args []string) error { return getPermissionHandlerWith(client, args) },
 		"resume":            func(args []string) error { return resumeHandlerWith(client, args) },
 		"find-missing":      func(args []string) error { return findMissingHandlerWith(client, args) },
-		"repair-transcript": func(args []string) error { return repairTranscriptHandlerWith(client, args) },
 		"expire":            func(args []string) error { return expireHandlerWith(client, args) },
 		"delete":            func(args []string) error { return deleteHandlerWith(client, args) },
 		"serve":             func(args []string) error { return serveHandlerWith(cfg, args) },

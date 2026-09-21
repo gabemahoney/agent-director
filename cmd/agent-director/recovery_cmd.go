@@ -91,40 +91,6 @@ func deleteHandlerWith(client *pkgapi.Client, args []string) error {
 	return writeJSON(os.Stdout, result)
 }
 
-// repairTranscriptHandlerWith implements `agent-director repair-transcript`
-// (b.v2c AC7). All three flags are required; the verb re-associates an orphaned
-// transcript with a row.
-func repairTranscriptHandlerWith(client *pkgapi.Client, args []string) error {
-	var instanceID, sessionID, jsonlPath string
-	fs := flag.NewFlagSet("repair-transcript", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	fs.StringVar(&instanceID, "claude-instance-id", "", "row to re-associate the transcript with (required)")
-	fs.StringVar(&sessionID, "claude-session-id", "", "session id of the orphaned transcript (required)")
-	fs.StringVar(&jsonlPath, "jsonl-path", "", "absolute path of the orphaned transcript (required)")
-	if err := fs.Parse(args); err != nil {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
-	}
-	if instanceID == "" {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", "--claude-instance-id is required")
-	}
-	if sessionID == "" {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", "--claude-session-id is required")
-	}
-	if jsonlPath == "" {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", "--jsonl-path is required")
-	}
-	result, err := client.RepairTranscript(pkgapi.RepairTranscriptParams{
-		ClaudeInstanceID: instanceID,
-		ClaudeSessionID:  sessionID,
-		JSONLPath:        jsonlPath,
-	})
-	if err != nil {
-		name, desc := errnames.Classify(err)
-		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
-	}
-	return writeJSON(os.Stdout, result)
-}
-
 // parseDaysOrDuration accepts either Go's standard time.ParseDuration
 // format or a trailing `d` for days. SRD §11 uses days for retention
 // because the user-facing config is days; this keeps `--older-than`
