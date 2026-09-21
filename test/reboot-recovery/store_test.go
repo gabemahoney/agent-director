@@ -11,6 +11,12 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// readinessQuery selects the four columns a store-readiness poll cares about
+// (state, identity pid+starttime, jsonl_path) for one instance. Shared by
+// rowReady (the poll CONDITION) and observeRow (the timeout DIAGNOSTIC) so the
+// dump can never silently diverge from the condition it explains (b.129).
+const readinessQuery = `SELECT state, pid, proc_starttime, jsonl_path FROM spawns WHERE claude_instance_id = ?`
+
 // rowReady reports whether the SessionStart hook has run for instanceID: state
 // has left `pending` (→ waiting) AND pid, proc_starttime, and jsonl_path are all
 // non-NULL. That is exactly the identity find-missing's checker needs and the
@@ -22,9 +28,7 @@ func rowReady(t *testing.T, dbPath, instanceID string) bool {
 	var state string
 	var pid sql.NullInt64
 	var starttime, jsonlPath sql.NullString
-	err := db.QueryRow(
-		`SELECT state, pid, proc_starttime, jsonl_path FROM spawns WHERE claude_instance_id = ?`,
-		instanceID).Scan(&state, &pid, &starttime, &jsonlPath)
+	err := db.QueryRow(readinessQuery, instanceID).Scan(&state, &pid, &starttime, &jsonlPath)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return false
@@ -32,6 +36,53 @@ func rowReady(t *testing.T, dbPath, instanceID string) bool {
 		t.Fatalf("rowReady query: %v", err)
 	}
 	return state != "pending" && pid.Valid && starttime.Valid && jsonlPath.Valid
+}
+
+// observeRow renders the row fields a store poll cares about (state, identity
+// pid+starttime, jsonl_path) as a single diagnostic line, for inclusion in a
+// waitFor timeout message (b.129). It never fails the test: a poll that is
+// already timing out must not be masked by a second failure, so query/row
+// errors are folded into the returned string. NULL columns render as "NULL",
+// which is itself the signal (SessionStart hasn't populated them yet).
+func observeRow(dbPath, instanceID string) func() string {
+	return func() string {
+		db, err := sql.Open("sqlite", dbPath+"?mode=ro&_pragma=busy_timeout(5000)")
+		if err != nil {
+			return "row " + instanceID + ": open db failed: " + err.Error()
+		}
+		defer db.Close()
+		var state string
+		var pid sql.NullInt64
+		var starttime, jsonlPath sql.NullString
+		err = db.QueryRow(readinessQuery, instanceID).Scan(&state, &pid, &starttime, &jsonlPath)
+		if err == sql.ErrNoRows {
+			return "row " + instanceID + ": no row (SessionStart not yet recorded)"
+		}
+		if err != nil {
+			return "row " + instanceID + ": query failed: " + err.Error()
+		}
+		return "row " + instanceID +
+			": state=" + state +
+			" pid=" + nullInt(pid) +
+			" proc_starttime=" + nullStr(starttime) +
+			" jsonl_path=" + nullStr(jsonlPath)
+	}
+}
+
+// nullStr renders a nullable text column: "NULL" or the quoted value.
+func nullStr(s sql.NullString) string {
+	if !s.Valid {
+		return "NULL"
+	}
+	return strconv.Quote(s.String)
+}
+
+// nullInt renders a nullable integer column: "NULL" or the decimal value.
+func nullInt(n sql.NullInt64) string {
+	if !n.Valid {
+		return "NULL"
+	}
+	return strconv.FormatInt(n.Int64, 10)
 }
 
 // getState returns the current state string for a row.

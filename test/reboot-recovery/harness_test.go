@@ -262,25 +262,45 @@ func lastJSONLine(s string) string {
 
 // ── poll-with-deadline helpers (no fixed sleeps) ────────────────────────────
 
-// pollDeadline is the max wall-clock any poll waits before failing.
-const pollDeadline = 20 * time.Second
+// pollDeadline is the max wall-clock any poll waits before failing. A poll
+// returns the instant its condition holds (0.6s unloaded for the slowest one),
+// so a generous budget costs nothing when the machine is idle; it only matters
+// when the full `go test ./...` suite loads the CPU and the SQLite file, where
+// 20s proved too tight (b.129). One shared constant is correct here: every
+// waitFor call site is an early-returning poll, so raising the ceiling never
+// slows a passing run — it only widens the margin for the loaded ones.
+const pollDeadline = 60 * time.Second
 
 // pollInterval is the gap between poll attempts.
 const pollInterval = 50 * time.Millisecond
 
-// waitFor polls cond until it returns true or the deadline elapses, failing the
+// waitFor polls cond until it returns true or pollDeadline elapses, failing the
 // test with msg on timeout. No fixed sleeps: the loop returns as soon as cond
 // holds.
 func waitFor(t *testing.T, msg string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(pollDeadline)
+	waitForObserved(t, pollDeadline, msg, cond, nil)
+}
+
+// waitForObserved is waitFor with a self-diagnosing timeout: on expiry it
+// appends observe()'s output — the state ACTUALLY seen at the deadline — to the
+// failure, so a loaded-machine timeout reports what it got, not only what it
+// wanted (b.129). observe may be nil (falls back to the plain message). The
+// deadline is a parameter so the regression test can inject a short one without
+// slowing real waits.
+func waitForObserved(t testing.TB, budget time.Duration, msg string, cond func() bool, observe func() string) {
+	t.Helper()
+	deadline := time.Now().Add(budget)
 	for time.Now().Before(deadline) {
 		if cond() {
 			return
 		}
 		time.Sleep(pollInterval)
 	}
-	t.Fatalf("timed out after %s waiting for: %s", pollDeadline, msg)
+	if observe != nil {
+		t.Fatalf("timed out after %s waiting for: %s\n  observed at expiry: %s", budget, msg, observe())
+	}
+	t.Fatalf("timed out after %s waiting for: %s", budget, msg)
 }
 
 // stubPIDs returns the pids of live stub `claude` processes — those whose
