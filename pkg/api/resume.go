@@ -185,44 +185,66 @@ func resumeImpl(s ResumeStore, t ResumeTmux, cfg config.Config, params ResumePar
 	// session's (session id, jsonl_path) into session_history. If the current
 	// session has no live transcript, fall back to the most recent archived
 	// session whose transcript still exists on disk — this recovers history
-	// orphaned by a rotation rather than abandoning it. Resume rotates
-	// claude_session_id to the archived id so `claude --resume` points at the
-	// recovered transcript.
+	// orphaned by a rotation rather than abandoning it. Resume does not persist
+	// a session-id change: it points the relaunch at the recovered archived
+	// session id (via row.ClaudeSessionID, which spawn.Relaunch reads), so
+	// `claude --resume` reattaches to the recovered transcript. The row's
+	// claude_session_id is not rewritten here; it updates later, when the
+	// resumed process's SessionStart hook fires.
+	//
+	// Each archived candidate gets the same persisted→fallback two-step the
+	// current session gets (finding b.5jm/1): the recorded jsonl_path is tried
+	// first, and on ANY stat failure of a non-empty path — the b.1ba rot mode —
+	// the config-dir-aware path is recomputed and stat'd for that same session
+	// id before advancing to the next, older entry. Without this, a newer entry
+	// whose recorded path has rotted would be skipped outright and an older
+	// entry could win, silently reattaching resume to older history.
 	history, herr := s.ListSessionHistory(params.ClaudeInstanceID)
 	if herr != nil {
 		return ResumeResult{}, fmt.Errorf("resume: list session history: %w", herr)
 	}
 	for _, h := range history {
-		cand := h.JSONLPath
-		if cand == "" {
-			// The archived session had no recorded path; recompute it the same
-			// way the current-session fallback does.
-			var cerr error
-			if dir := row.ExtraEnv["CLAUDE_CONFIG_DIR"]; dir != "" && filepath.IsAbs(dir) {
-				cand, cerr = spawn.JsonlPathIn(dir, row.CWD, h.ClaudeSessionID)
+		// Step 1: try the archived recorded path, if any. It wins outright when
+		// it stats; on any stat failure fall through to the recomputed path.
+		if h.JSONLPath != "" {
+			if _, err := os.Stat(h.JSONLPath); err == nil {
+				return resumeAfterArchivedJsonl(s, t, cfg, row, h.ClaudeSessionID, h.JSONLPath, params)
 			} else {
-				cand, cerr = spawn.JsonlPath(row.CWD, h.ClaudeSessionID)
-			}
-			if cerr != nil {
-				// Record the recomposition failure as an attempt so the
-				// ErrJsonlMissing message still names this history candidate
-				// rather than silently omitting it.
 				attempts = append(attempts, jsonlAttempt{
-					source: "history", path: cand, statErr: cerr,
+					source: "history", path: h.JSONLPath, statErr: err,
 				})
-				continue
 			}
 		}
-		if _, err := os.Stat(cand); err == nil {
-			// Recovered archived transcript. Point the resume at it by rotating
-			// the row's session id to the archived one; resumeAfterJsonl relaunch
-			// uses row.ClaudeSessionID.
-			row.ClaudeSessionID = h.ClaudeSessionID
-			row.JSONLPath = cand
-			return resumeAfterJsonl(s, t, cfg, row, params)
+
+		// Step 2: recompute the config-dir-aware path for this session id and
+		// stat it — the same fallback the current session gets. This heals both
+		// a NULL/empty recorded path and a non-empty-but-rotted one.
+		var recomputed string
+		var cerr error
+		if dir := row.ExtraEnv["CLAUDE_CONFIG_DIR"]; dir != "" && filepath.IsAbs(dir) {
+			recomputed, cerr = spawn.JsonlPathIn(dir, row.CWD, h.ClaudeSessionID)
+		} else {
+			recomputed, cerr = spawn.JsonlPath(row.CWD, h.ClaudeSessionID)
+		}
+		if cerr != nil {
+			// Record the recomposition failure as an attempt so the
+			// ErrJsonlMissing message still names this history candidate
+			// rather than silently omitting it.
+			attempts = append(attempts, jsonlAttempt{
+				source: "history", path: recomputed, statErr: cerr,
+			})
+			continue
+		}
+		// Avoid a duplicate stat + attempt entry when the recomputed path is
+		// identical to a recorded path we already tried and recorded above.
+		if recomputed == h.JSONLPath {
+			continue
+		}
+		if _, err := os.Stat(recomputed); err == nil {
+			return resumeAfterArchivedJsonl(s, t, cfg, row, h.ClaudeSessionID, recomputed, params)
 		} else {
 			attempts = append(attempts, jsonlAttempt{
-				source: "history", path: cand, statErr: err,
+				source: "history", path: recomputed, statErr: err,
 			})
 		}
 	}
@@ -263,6 +285,18 @@ func formatJsonlAttempts(attempts []jsonlAttempt) string {
 		parts = append(parts, fmt.Sprintf("%s %s (%v)", a.source, a.path, a.statErr))
 	}
 	return strings.Join(parts, "; ")
+}
+
+// resumeAfterArchivedJsonl points the relaunch at a recovered archived session.
+// It sets the in-memory row's ClaudeSessionID + JSONLPath to the archived
+// candidate (spawn.Relaunch reads row.ClaudeSessionID) and hands off to
+// resumeAfterJsonl. This is an in-memory mutation only — no DB write rotates the
+// row's session id here; that happens later when the resumed process's
+// SessionStart hook fires.
+func resumeAfterArchivedJsonl(s ResumeStore, t ResumeTmux, cfg config.Config, row Spawn, sessionID, jsonlPath string, params ResumeParams) (ResumeResult, error) {
+	row.ClaudeSessionID = sessionID
+	row.JSONLPath = jsonlPath
+	return resumeAfterJsonl(s, t, cfg, row, params)
 }
 
 // resumeAfterJsonl runs the remaining resume guards (tmux collision,

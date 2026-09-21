@@ -258,28 +258,6 @@ _None._
 
 - `ErrProbeUnsupported`
 
-## repair-transcript
-
-Re-associate an orphaned Claude transcript with a tracked Spawn row. One-shot operator recovery for transcript history stranded by a session rotation (e.g. a CSCB fleet restart): supply the instance id, the recovered session id, and the transcript's on-disk path. The verb verifies the file exists, archives the row's current (session id, jsonl_path) into session_history when it differs, then records the recovered pair so a subsequent resume points `claude --resume` at it. Does NOT move or mutate the transcript file.
-
-### Parameters
-
-- `claude_instance_id` (string, required): The Spawn row to re-associate the transcript with.
-- `claude_session_id` (string, required): Session id of the orphaned transcript (its .jsonl basename without extension).
-- `jsonl_path` (string, required): Absolute on-disk path of the orphaned transcript. Must exist.
-
-### Result
-
-- `claude_instance_id` (string): The repaired row's id.
-- `claude_session_id` (string): The session id now recorded on the row.
-- `jsonl_path` (string): The transcript path now recorded on the row.
-
-### Errors
-
-- `ErrSpawnNotFound`
-- `ErrRepairTranscriptMissing`
-- `ErrInvalidFlags`
-
 ## expire
 
 Remove terminal-state rows (ended/missing) whose ended_at is older than the retention window. Default window is config defaults.expire_retention_days; --older-than overrides. Does NOT touch tmux or JSONL transcripts.

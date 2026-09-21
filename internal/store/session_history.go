@@ -78,46 +78,6 @@ func (s *Store) HealJsonlPath(instanceID, sessionID, jsonlPath string) (bool, er
 	return true, nil
 }
 
-// RepairTranscript re-associates an arbitrary orphaned transcript with a spawn
-// row (b.v2c AC7, the one-shot operator repair path). It archives the row's
-// current (claude_session_id, jsonl_path) into session_history when that pair is
-// being replaced by a different session id, then sets the row's
-// claude_session_id + jsonl_path to the supplied values. The caller is expected
-// to have already verified the transcript exists on disk. Returns
-// ErrSpawnNotFound when the instance has no row.
-//
-// This is the supported mechanism for recovering apiary's orphaned 1.5 MB
-// transcript: an operator runs `agent-director repair-transcript` naming the
-// instance, the recovered session id, and the transcript path.
-func (s *Store) RepairTranscript(instanceID, sessionID, jsonlPath string) error {
-	// Archive the current pair if it is a genuine rotation away from a
-	// different, non-empty session id (reuses the SessionStart archive rule).
-	s.archivePriorSessionOnRotate(instanceID, sessionID)
-
-	const q = `UPDATE spawns
-	              SET claude_session_id = ?,
-	                  jsonl_path        = ?
-	            WHERE claude_instance_id = ?`
-	res, err := s.db.Exec(q, sessionID, jsonlPath, instanceID)
-	if err != nil {
-		return fmt.Errorf("store: repair transcript: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("store: repair transcript rows affected: %w", err)
-	}
-	if n == 0 {
-		return fmt.Errorf("%w: %s", ErrSpawnNotFound, instanceID)
-	}
-	_ = trail.Emit(context.Background(), "ad.session.repaired", map[string]any{
-		"claude_instance_id": instanceID,
-		"claude_session_id":  sessionID,
-		"jsonl_path":         jsonlPath,
-		"source":             "ad_spawn_store",
-	})
-	return nil
-}
-
 // ListProvisionalTranscripts returns the (instance, session id, cwd,
 // config-dir) tuples for every live-state row that has a claude_session_id but
 // a NULL jsonl_path — i.e. a session that started but whose transcript had not

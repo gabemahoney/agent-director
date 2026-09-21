@@ -75,7 +75,6 @@ var dispatch = map[string]clientDispatchFn{
 	"get-permission":    dispatchGetPermission,
 	"resume":            dispatchResume,
 	"find-missing":      dispatchFindMissing,
-	"repair-transcript": dispatchRepairTranscript,
 	"expire":            dispatchExpire,
 	"delete":            dispatchDelete,
 	"make-template":     dispatchMakeTemplate,
@@ -423,18 +422,6 @@ func dispatchResume(c *api.Client, params map[string]any) ([]byte, bool) {
 
 func dispatchFindMissing(c *api.Client, _ map[string]any) ([]byte, bool) {
 	res, err := c.FindMissing(context.Background())
-	if err != nil {
-		return marshalErrEnvelope(err), true
-	}
-	return successEnvelope(res)
-}
-
-func dispatchRepairTranscript(c *api.Client, params map[string]any) ([]byte, bool) {
-	var p api.RepairTranscriptParams
-	if err := remarshal(params, &p); err != nil {
-		return marshalErrEnvelope(err), true
-	}
-	res, err := c.RepairTranscript(p)
 	if err != nil {
 		return marshalErrEnvelope(err), true
 	}

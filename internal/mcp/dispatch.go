@@ -220,13 +220,6 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 	case "find-missing":
 		return d.client.FindMissing(ctx)
 
-	case "repair-transcript":
-		var p api.RepairTranscriptParams
-		if err := unmarshalSnake(args, &p); err != nil {
-			return nil, err
-		}
-		return d.client.RepairTranscript(p)
-
 	case "expire":
 		var raw struct {
 			OlderThan string `json:"older_than"`

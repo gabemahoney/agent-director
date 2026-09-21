@@ -309,6 +309,78 @@ func TestResumeRecoversHistoryEntryWithEmptyPathViaConfigDir(t *testing.T) {
 	}
 }
 
+// TestResumeHistoryWalkFallsBackToRecomputedPathForNewerRottedEntry is the
+// b.5jm/1 (AC2) REGRESSION test. It seeds two archived history entries, newest
+// first:
+//   - NEWER: a non-empty recorded jsonl_path that has ROTTED (does not exist),
+//     but whose recomputed CLAUDE_CONFIG_DIR-aware path DOES exist on disk.
+//   - OLDER: an intact recorded path that exists.
+//
+// Resume must select the NEWER session — mirroring the persisted→fallback
+// two-step the current session already gets. PRE-FIX the walk only recomputed a
+// fallback for an EMPTY recorded path, so a non-empty-but-rotted newer entry was
+// skipped outright and the OLDER entry won, silently reattaching resume to older
+// history. POST-FIX the newer entry's recomputed path is stat'd and wins.
+func TestResumeHistoryWalkFallsBackToRecomputedPathForNewerRottedEntry(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "")
+
+	cfgDir := filepath.Join(t.TempDir(), "custom-claude-config")
+
+	row := baseRow()
+	row.ExtraEnv = map[string]string{"CLAUDE_CONFIG_DIR": cfgDir}
+
+	// Guard the premise: the CURRENT session's own fallback must NOT exist, so a
+	// pass can only come from a history entry.
+	currentFallback, err := spawn.JsonlPathIn(cfgDir, row.CWD, row.ClaudeSessionID)
+	if err != nil {
+		t.Fatalf("compute current fallback: %v", err)
+	}
+	if _, serr := os.Stat(currentFallback); !os.IsNotExist(serr) {
+		t.Fatalf("current fallback %q unexpectedly exists", currentFallback)
+	}
+
+	// NEWER entry: recorded path is rotted, but its recomputed slug path exists.
+	const newerSession = "newer-rotted-session"
+	newerRecomputed := apitest.SeedJsonlUnder(t, cfgDir, row.CWD, newerSession)
+	newerRotted := filepath.Join(t.TempDir(), "rotted", newerSession+".jsonl")
+	if _, serr := os.Stat(newerRotted); !os.IsNotExist(serr) {
+		t.Fatalf("newer rotted path %q unexpectedly exists", newerRotted)
+	}
+	if newerRotted == newerRecomputed {
+		t.Fatalf("test setup: rotted and recomputed paths collide (%q)", newerRotted)
+	}
+
+	// OLDER entry: an intact recorded path that also exists on disk.
+	const olderSession = "older-intact-session"
+	olderPath := filepath.Join(t.TempDir(), olderSession+".jsonl")
+	if err := os.WriteFile(olderPath, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write older transcript: %v", err)
+	}
+
+	st := &recordingResumeStore{
+		row: row,
+		// ListSessionHistory returns newest-first: newer entry precedes older.
+		history: []store.SessionHistoryEntry{
+			{ClaudeSessionID: newerSession, JSONLPath: newerRotted},
+			{ClaudeSessionID: olderSession, JSONLPath: olderPath},
+		},
+	}
+	tm := &recordingResumeTmux{}
+
+	if _, err := api.Resume(st, tm, config.Default(), api.ResumeParams{ClaudeInstanceID: "id-r-1"}); err != nil {
+		t.Fatalf("Resume: %v; want recovery via newer entry's recomputed path", err)
+	}
+	if tm.newSessionCalls != 1 {
+		t.Fatalf("NewSession called %d times; want 1", tm.newSessionCalls)
+	}
+	// The NEWER session must win — not the older intact entry.
+	if len(tm.gotCommand) < 3 || tm.gotCommand[1] != "--resume" || tm.gotCommand[2] != newerSession {
+		t.Errorf("command = %v; want `claude --resume %s ...` (newer entry, not older %s)",
+			tm.gotCommand, newerSession, olderSession)
+	}
+}
+
 // TestResumeListSessionHistoryErrorPropagates covers resume's error-injection
 // path: when ListSessionHistory fails (after both persisted and fallback
 // candidates are absent), resume surfaces the error rather than silently

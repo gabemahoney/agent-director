@@ -331,17 +331,8 @@ it a message and its transcript appears. Run `agent-director get
 --claude-instance-id <id>` to see a session's `transcript_status` and its prior
 sessions before deciding anything.
 
-If a conversation transcript was stranded on disk under an old session id that
-the store no longer tracks, re-attach it in one step:
-
-```sh
-agent-director repair-transcript \
-  --claude-instance-id <id> \
-  --claude-session-id <session-id-of-the-transcript> \
-  --jsonl-path <absolute path to the .jsonl file>
-```
-
-Then `resume` as usual.
+Session rotations are archived automatically, so `resume` recovers them on
+its own — no manual step is needed.
 
 Do **not** use `delete` to recover — it permanently removes the row and
 its conversation history, so there is nothing left to resume.

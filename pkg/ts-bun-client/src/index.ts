@@ -65,7 +65,6 @@ export {
   ErrNoSessionId,
   ErrJsonlMissing,
   ErrJsonlNeverWritten,
-  ErrRepairTranscriptMissing,
   ErrRelayModeOff,
   ErrRelayFallenBack,
   ErrInvalidDecision,

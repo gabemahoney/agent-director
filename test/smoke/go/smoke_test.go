@@ -103,8 +103,6 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 		storefix.SeedCheckPermission(t, st, spec.SeedID)
 	case seedResumable:
 		storefix.SeedResumable(t, st, spec.SeedID)
-	case seedRepairable:
-		storefix.SeedRepairable(t, st, spec.SeedID)
 	case seedExpired:
 		// 8 days back-dated — comfortably older than typical 7-day
 		// retention so Expire(d=0) reaps it regardless.

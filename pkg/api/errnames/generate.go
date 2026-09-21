@@ -101,7 +101,6 @@ var packageOf = map[string]string{
 	"ErrNoSessionId":             "api",
 	"ErrJsonlMissing":            "api",
 	"ErrJsonlNeverWritten":       "api",
-	"ErrRepairTranscriptMissing": "api",
 	"ErrRelayModeOff":            "api",
 	"ErrRelayFallenBack":         "api",
 	"ErrInvalidDecision":         "api",
