@@ -292,8 +292,21 @@ set -euo pipefail
 
 Before each t2 case, the driver runs `test/driver/db-reset.sh` which
 clears `~/.agent-director/state.db`, kills tmux sessions matching the
-`cd-` prefix, and re-creates the DB at schema v1. Cases should rely on
-that clean state; never reach into a sibling case's leftovers. If you
+`cd-` prefix, and re-creates the DB by calling `agent-director list` —
+which stamps the DB at the shipped binary's **current** schema version
+(a fresh DB is created directly at that version, not migrated up from
+v1). Cases should rely on that clean state; never reach into a sibling
+case's leftovers.
+
+**Never hard-code the schema version a case expects.** The reset produces
+whatever `internal/store/store.go`'s `schemaVersion` is today (v4), and it
+bumps on intentional schema additions. A case that asserts a literal
+`user_version = 3` re-breaks on the next bump — that is exactly what turned
+the harness-smoke lane red in b.m9q. Instead, derive the expected version
+from the binary itself: create a throwaway reference DB
+(`ref_db=$(mktemp -u)` then `agent-director list --store-path
+"$ref_db"`), read its version (`sqlite3 "$ref_db" 'PRAGMA
+user_version'`), and compare the case's DB against that. If you
 *want* to test isolation (as the harness-smoke `smoke-2` + `smoke-3` pair
 does), structure it as two paired cases under the same t1: A creates
 state, B asserts the state is gone.
