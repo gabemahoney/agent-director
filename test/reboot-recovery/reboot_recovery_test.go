@@ -91,12 +91,12 @@ func TestRebootRecoveryEndToEnd(t *testing.T) {
 	// Wait for BOTH stubs' SessionStart hooks to persist identity + flip state
 	// to waiting. The find-missing checker needs a recorded pid+starttime; the
 	// jsonl pre-flight on resume needs a persisted jsonl_path.
-	waitFor(t, "target SessionStart persists identity+jsonl and flips to waiting", func() bool {
+	waitForObserved(t, pollDeadline, "target SessionStart persists identity+jsonl and flips to waiting", func() bool {
 		return rowReady(t, dbPath, targetID)
-	})
-	waitFor(t, "other SessionStart persists identity and flips to waiting", func() bool {
+	}, observeRow(dbPath, targetID))
+	waitForObserved(t, pollDeadline, "other SessionStart persists identity and flips to waiting", func() bool {
 		return rowReady(t, dbPath, otherID)
-	})
+	}, observeRow(dbPath, otherID))
 
 	// Confirm get surfaces the persisted jsonl_path for the target (resume
 	// pre-flight reads exactly this).
@@ -289,9 +289,9 @@ func TestRebootRecoveryNulledJsonlPathHealsViaConfigDir(t *testing.T) {
 
 	dbPath := filepath.Join(home, ".agent-director", "state.db")
 
-	waitFor(t, "target SessionStart persists identity+jsonl and flips to waiting", func() bool {
+	waitForObserved(t, pollDeadline, "target SessionStart persists identity+jsonl and flips to waiting", func() bool {
 		return rowReady(t, dbPath, targetID)
-	})
+	}, observeRow(dbPath, targetID))
 
 	// Sanity: SessionStart persisted the derived path (proves stub↔test path
 	// agreement before we NULL it).
@@ -374,9 +374,9 @@ func TestRebootRecoveryNulledJsonlPathHealsViaConfigDir(t *testing.T) {
 
 	// Self-healing: a successful fallback resume re-fires SessionStart, which
 	// re-persists the correct jsonl_path (handler.go:213 / b.1ba scope 1).
-	waitFor(t, "jsonl_path re-persisted after fallback resume (self-heal)", func() bool {
+	waitForObserved(t, pollDeadline, "jsonl_path re-persisted after fallback resume (self-heal)", func() bool {
 		return jsonlPathColumn(t, dbPath, targetID) == jsonlPath
-	})
+	}, observeRow(dbPath, targetID))
 
 	_ = exec.Command("tmux", "kill-server").Run()
 	killStubs(t)
