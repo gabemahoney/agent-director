@@ -96,7 +96,7 @@ gates in the order defined for that phase. For each gate:
 > >= 2; `coverage.go-root`'s leaked-file detector also fired at >= 3). The
 > gate-isolation fix (Bugs bee b.3jn) has since landed, so the parallel path is
 > viable and the orchestrator no longer needs to serialize the coverage gates.
-> The fix has five parts:
+> The fix has six parts:
 >
 > - Each bun gate (`coverage.bun-test`, `coverage.bun-extra-scripts`) runs
 >   under its own scratch `HOME` (`mktemp -d`), with `GOCACHE`, `GOMODCACHE`,
@@ -135,6 +135,27 @@ gates in the order defined for that phase. For each gate:
 >   re-acquiring the lock. The invariant is: any process running the bun-test
 >   gate while **already** holding the dist-pack lock must set
 >   `COVERAGE_BUN_TEST_NESTED=1`.
+> - The pack gate scripts (`gates/pack/pack-first.sh`,
+>   `gates/pack/repack-and-verify.sh`) create their `pack-staging.XXXXXX` /
+>   `pack-staging2.XXXXXX` staging dirs under `${TMPDIR:-/tmp}` instead of at the
+>   repo root. go-root's four `pack-first` synthetic-regression tests run those
+>   scripts concurrently with `coverage.docker-epics`, whose `docker build` tars
+>   the repo root as its build context; a staging dir appearing then vanishing
+>   mid-tar killed the context (`Can't add file .../pack-staging.g8vcIQ to tar`).
+>   Moving the staging dirs out of the tree removes the race class outright
+>   rather than adding another lock — the transient dir is no longer inside the
+>   tarred context at all, so no reader/writer coordination is needed. (The repo
+>   has no `.dockerignore`; `pack-staging*/` is also gitignored as
+>   belt-and-suspenders.)
+>
+> A diagnosability companion fix (SR-14) rides alongside these six isolation
+> mechanisms but is not itself an isolation mechanism. `coverage/docker-epics.sh`
+> previously failed **silently** at the phase level: its child failures lived
+> only in the consolidated stdout JSON that the phase executor discards, so the
+> phase saw `exit=1` with empty stderr and `diagnostics:[]`. The gate now
+> re-emits each failed child's diagnostic to **stderr** in SR-14 shape while
+> leaving its stdout and exit code unchanged, so failures surface in the report
+> instead of vanishing.
 >
 > The tuned `max_parallel` value for this phase is persisted separately (see
 > Bee b.2mt); this note does not fix a value.

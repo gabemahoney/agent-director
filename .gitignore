@@ -26,6 +26,12 @@ tickets/testplans/index.md
 # macOS Finder cruft
 .DS_Store
 
+# Pack-gate staging dirs. These now live under $TMPDIR (b.3jn), but old
+# checkouts and interrupted runs can leave pack-staging.* / pack-staging2.*
+# at the repo root; ignoring them keeps them out of the docker build context
+# and out of git. Belt-and-suspenders for the mid-tar vanish race.
+pack-staging*/
+
 # Advisory lock file used by seeds.go mutation tests to prevent parallel races.
 pkg/api/apitest/.seeds-mutation.lock
 

@@ -51,11 +51,16 @@ if [[ -z "$TARGET_VERSION" ]]; then
   TARGET_VERSION="$(jq -r .version "${PKG_DIR}/package.json")"
 fi
 
-# ─── staging directory (inside repo so bun can resolve paths) ─────────────────
-STAGING="$(mktemp -d -p . pack-staging.XXXXXX)"
-# Absolute path so `bun pm pack --destination` resolves correctly regardless of
-# where PKG_DIR sits relative to the worktree root.
-STAGING_ABS="$(cd "$STAGING" && pwd)"
+# ─── staging directory (OUTSIDE the repo tree) ────────────────────────────────
+# Staging MUST live outside the worktree: sibling gates (coverage.docker-epic-*)
+# tar the repo root as the docker build context, and a pack-staging dir created
+# here and removed in the EXIT trap would vanish mid-tar, failing the docker
+# build with "file not found or excluded by .dockerignore" (b.3jn). Placing it
+# under $TMPDIR removes that whole race class. `bun pm pack --destination` takes
+# the absolute path fine (we already pass STAGING_ABS below), so nothing depends
+# on repo-relative placement.
+STAGING="$(mktemp -d "${TMPDIR:-/tmp}/pack-staging.XXXXXX")"
+STAGING_ABS="$STAGING"
 trap 'rm -rf "$STAGING"' EXIT
 
 # ─── pack ─────────────────────────────────────────────────────────────────────
