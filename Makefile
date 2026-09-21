@@ -585,7 +585,7 @@ envelope-diff-ts: agent-director ts-helper fake-tmux
 release-shellcheck:
 	@if command -v shellcheck >/dev/null 2>&1; then \
 		echo "[release-shellcheck] shellcheck skills/release-agent-director/gates/**/*.sh"; \
-		find skills/release-agent-director/gates -name '*.sh' | sort | xargs shellcheck -s bash; \
+		find skills/release-agent-director/gates -name '*.sh' | sort | xargs shellcheck -x -P SCRIPTDIR -s bash; \
 	else \
 		echo "[release-shellcheck] shellcheck not installed — skipping"; \
 	fi
