@@ -225,3 +225,28 @@ func TestDefault_RelayTimeoutAtLeastOneDay(t *testing.T) {
 		t.Errorf("Relay.TimeoutSeconds = %d; want >= 86400 (1 day) — human-paced approval flows (Slack approval, overnight operator review) require a multi-hour default (b.p48)", d.Relay.TimeoutSeconds)
 	}
 }
+
+// TestRelayEffectiveTimeoutSeconds verifies the single source of truth the
+// poll loop and synthesized hook timeout both consume: a positive configured
+// value passes through; a non-positive value (0 or negative) falls back to
+// DefaultRelayTimeoutSeconds (86400), never 0.
+func TestRelayEffectiveTimeoutSeconds(t *testing.T) {
+	cases := []struct {
+		name       string
+		configured int
+		want       int
+	}{
+		{"positive_passthrough", 3600, 3600},
+		{"default_passthrough", config.DefaultRelayTimeoutSeconds, 86400},
+		{"zero_falls_back", 0, config.DefaultRelayTimeoutSeconds},
+		{"negative_falls_back", -1, config.DefaultRelayTimeoutSeconds},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := config.Relay{TimeoutSeconds: tc.configured}.EffectiveTimeoutSeconds()
+			if got != tc.want {
+				t.Errorf("EffectiveTimeoutSeconds() = %d; want %d", got, tc.want)
+			}
+		})
+	}
+}

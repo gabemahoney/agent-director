@@ -97,12 +97,11 @@ func DefaultPollClock() PollClock { return realPollClock{} }
 // The polling loop NEVER writes to permission_requests — SRD §6.2
 // invariant. Only decide() owns the decision columns.
 func Poll(ctx context.Context, s PollStore, clock PollClock, cfg config.Relay, instanceID, requestToken string, rng *rand.Rand) PollResult {
-	timeout := time.Duration(cfg.TimeoutSeconds) * time.Second
-	if timeout <= 0 {
-		// Match config.Default().Relay.TimeoutSeconds (86400s / 1 day);
-		// guard against a config that pinned 0 or negative. See b.p48.
-		timeout = 86400 * time.Second
-	}
+	// EffectiveTimeoutSeconds is the single source of truth for the relay
+	// window: it applies the "non-positive falls back to the 86400 default"
+	// rule (see b.p48) so the poll deadline and the per-hook `timeout`
+	// emitted into synthesized settings can never disagree (SR-1.3).
+	timeout := time.Duration(cfg.EffectiveTimeoutSeconds()) * time.Second
 	deadline := nowFunc().Add(timeout)
 
 	readFails := 0

@@ -26,16 +26,16 @@ import { AgentDirectorError, ErrUnknownErrorName } from "../src/errors.js";
 import { errorMap, throwFromEnvelope } from "../src/internal/errorMap.js";
 
 // Load the canonical catalog (same source the drift test uses).
-const catalogNames = loadErrNameCatalog(); // sorted unique array of 37 names
+const catalogNames = loadErrNameCatalog(); // sorted unique array of 38 names
 
 // ---------------------------------------------------------------------------
-// Case 1: map.size === 37
+// Case 1: map.size === 38
 // ---------------------------------------------------------------------------
 describe("error map — catalog coverage", () => {
-  test("errorMap.size equals catalog entry count (37)", () => {
+  test("errorMap.size equals catalog entry count (38)", () => {
     expect(errorMap).toBeInstanceOf(Map);
     expect(errorMap.size).toBe(catalogNames.length);
-    expect(errorMap.size).toBe(37);
+    expect(errorMap.size).toBe(38);
   });
 
   test("every catalog name appears as a key in errorMap", () => {

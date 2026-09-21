@@ -150,6 +150,11 @@
     "description": ""
   },
   {
+    "name": "ErrRelayFallenBack",
+    "package": "api",
+    "description": ""
+  },
+  {
     "name": "ErrInvalidDecision",
     "package": "api",
     "description": ""

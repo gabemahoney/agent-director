@@ -167,16 +167,33 @@ failure mode as a deny. SRD §6.4 enumerates these:
 
 #### Relay timeout default and override
 
-The polling timeout (`relay.timeout_seconds`) defaults to **86400 seconds (1 day)**.
-The previous default of 600 s (10 min) was too short for human-paced approval
-flows — a Slack approval that arrives after a meeting or overnight would silently
-produce a deny. Operators who want a tighter bound can override it in
-`~/.agent-director/config.toml`:
+The relay window (`relay.timeout_seconds`) defaults to **86400 seconds (1 day)**,
+long enough for human-paced approval flows — a Slack approval that arrives after
+a meeting or overnight still lands inside the window. Operators who want a
+tighter bound can override it in `~/.agent-director/config.toml`:
 
 ```toml
 [relay]
 timeout_seconds = 3600   # example: 1-hour window
 ```
+
+**How the window is enforced.** The window is real because agent-director
+emits it into the per-Spawn synthesized settings. Each PermissionRequest and
+PreToolUse hook entry carries an explicit per-hook `timeout` field — placed on
+the inner command object, sibling to `type`/`command` — set to
+`relay.timeout_seconds`. Without that field Claude Code kills any hook at its
+own 600-second default and discards its output, so a late decision would be
+silently voided; emitting the value makes Claude Code's per-hook kill boundary
+equal to the window agent-director polls against.
+
+**Override moves both boundaries in lockstep.** `relay.timeout_seconds` is a
+single value read through one accessor, so overriding it changes the poll
+loop's deadline and Claude Code's per-hook kill boundary together — they can
+never disagree. Because the two boundaries are identical, the poll loop's
+fail-closed timeout deny (the `Polling timeout` row above) is the intended
+in-band terminator: when the
+window elapses the hook writes a deny envelope and exits on its own, rather
+than being killed mid-flight by Claude Code.
 
 The fail-closed boundary is scoped to PermissionRequest events. A
 non-PermissionRequest event with `RELAY_MODE=on` (e.g. SessionStart)
@@ -186,11 +203,20 @@ one there is harmless noise.
 
 **Structural caveat.** Fail-closed requires the `agent-director`
 binary to actually run. If Claude Code can't invoke it at all —
-binary missing, PATH not set, settings JSON unparseable — Claude
-Code falls back to its native permission dialog. From the
-orchestrator's view this looks like the user is asked, not the
-relay; from the policy view it's a hole the operator must close at
-install time (Epic 12's job).
+binary missing, PATH not set, settings JSON unparseable — no hook
+runs and Claude Code decides the request through its native
+permission dialog alone. From the policy view that is a hole the
+operator must close at install time.
+
+**The native dialog is not a hook-death signal.** When the relay
+hook *is* running, Claude Code shows its native permission dialog
+concurrently, as racing UI displayed alongside the live hook — not
+as a fallback and not as evidence the hook has stopped. A decision
+envelope arriving any time within the window dismisses that dialog.
+Whether a decision is still deliverable is purely a function of
+elapsed time since the request opened versus the configured
+per-hook timeout; the dialog's presence or absence in the TUI
+carries no information about hook liveness.
 
 ### Why env-var, not DB
 
@@ -212,33 +238,133 @@ mode.
 ### Race-freeness of `decide`
 
 The decide verb writes the decision via a single-statement UPDATE
-with `decision IS NULL` in the WHERE clause:
+guarded by both the first-call-wins `decision IS NULL` predicate and a
+`created_at > ?` deliverability predicate (the deliverability check and
+the write are one atomic statement):
 
 ```sql
 UPDATE permission_requests
-   SET decision = ?, decision_reason = ?, updated_at = CURRENT_TIMESTAMP
- WHERE claude_instance_id = ? AND decision IS NULL
+   SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP
+ WHERE claude_instance_id = ? AND request_token = ? AND decision IS NULL
+   AND created_at > ?
 ```
 
 First call wins; concurrent second calls see RowsAffected==0. The
-verb then does one follow-up SELECT to disambiguate:
+verb then does one follow-up SELECT to disambiguate the outcome. The
+follow-up disambiguation resolves to exactly one of these three
+outcomes:
 
 - No row at all → `ErrNoOpenPermissionRequest`.
 - Row exists with non-NULL decision → `ErrAlreadyDecided`.
+- Row is still open but its relay window has elapsed →
+  `ErrRelayFallenBack` (see "Deliver-or-refuse contract" below).
 
 Two orchestrators racing to decide the same prompt see distinct
 error messages and can act on them programmatically.
 
+### Deliver-or-refuse contract
+
+A successful `decide` **means the decision will be delivered**: the
+spawn's relay hook received — or is still polling and will receive —
+the decision envelope. There is no silent-absorption path where
+`decide` reports success but the verdict goes to a dead hook that can
+never emit it. Success and delivery are the same event.
+
+When the request's relay window has already elapsed, `decide` refuses
+rather than record a doomed verdict. The typed error is
+**`ErrRelayFallenBack`** ("too late — answer at the pane"). It fires
+when the target row is still open (undecided) but its relay window has
+run out, including the small safety margin applied at the per-hook kill
+boundary so a verdict is never recorded for a request Claude Code is
+about to — or has just — killed.
+
+Guarantees when `ErrRelayFallenBack` is returned:
+
+- **The decision was NOT recorded.** The row's `decision` stays NULL;
+  no verdict is written into a void. Nothing about the request is lost.
+- **Recourse is the pane.** Because the relay hook can no longer
+  deliver a decision, the operator answers Claude Code's native
+  permission dialog directly — through the sanctioned, audited
+  `send-keys` recovery path (its guard has released by the same
+  time-based signal), never raw tmux. See "Send-keys interaction" below.
+
+**The undeliverability signal is time-based, never dialog-based.** A
+request is undeliverable once the elapsed time since its
+`created_at` exceeds the configured per-hook timeout
+(`relay.timeout_seconds`) — a pure function of stored row state, the
+configured window, and the clock. It never consults whether the native
+permission dialog is on screen: dialog visibility carries no
+information about relay-hook liveness (see "The native dialog is not a
+hook-death signal" above). The same time-only signal that the guarded
+write applies is the one that classifies the refusal.
+
+**Precedence.** `ErrRelayFallenBack` applies **only to open rows**. A
+row that already carries a decision returns `ErrAlreadyDecided`
+regardless of its age — an old but already-decided request is never
+reclassified as fallen-back. So the decided/undecided taxonomy stays
+clean: decided rows → `ErrAlreadyDecided`; open-but-expired rows →
+`ErrRelayFallenBack`; absent rows → `ErrNoOpenPermissionRequest`.
+
 ### Send-keys interaction
 
 When a Spawn is sitting on a relayed permission prompt (`relay_mode=on`
-AND `state=check_permission`), `send-keys` refuses with
-`ErrSendKeysWhileRelayed`. A pane-side keystroke would race the
-relay's decide() write and split the modal answer across two pane
-events. Callers wanting to drive the modal must use `decide`.
+AND `state=check_permission`), `send-keys` may refuse with
+`ErrSendKeysWhileRelayed`: while the relay can still act, a pane-side
+keystroke would race the relay's `decide()` write and split the modal
+answer across two pane events, so the relay owns the answer and callers
+drive the modal through `decide`.
 
-The guard was wired in Epic 4 (with the relay path stubbed); Epic 10
-activates it end-to-end.
+**The guard is time-bounded, not unconditional.** It consults the
+*same* single time-based authority the decide contract uses (same file,
+same margin constant in `pkg/api/deliverability.go`; see "The
+undeliverability signal is time-based, never dialog-based" above) —
+never dialog visibility, never a second independent check. The one
+deliberate difference is the *sign* of the safety margin at the
+boundary: `decide` fails **early** (refuses at `elapsed ≥ window −
+margin`, so it never records a success a dying hook might not deliver),
+while the guard fails **late** (releases only at `elapsed ≥ window +
+margin`, so it never frees while a live poller could still emit a
+decision). Both fail toward safety; it is one authority applied with the
+sign that makes each caller safe. It evaluates every one of the spawn's
+`permission_requests` rows, each row's window measured from its own
+`created_at` and *regardless of the row's decision status* (a row
+decided in-window still has a live poller about to deliver it).
+Concretely:
+
+- **Refuse while any row might still be delivered** — the relay can
+  still deliver, so send-keys stays out of the way.
+- **Release only once every row's window plus the safety margin has
+  elapsed** — at that point no poller can deliver any decision, the
+  guard would be pure denial of service, and send-keys is the
+  sanctioned recovery surface (below).
+- **Zero rows keep the guard held.** With no row there is no signal and
+  no authority to release; the state is a real mid-insert transient, so
+  the guard refuses rather than open a race.
+
+#### Sanctioned recovery of a wedged relayed spawn
+
+When a relayed spawn is wedged past its window — the relay hook was
+killed at its per-hook timeout and can no longer deliver — the operator
+recovers it end-to-end through sanctioned AD surface, with no dedicated
+answer-the-dialog verb and **without ever touching raw tmux**:
+
+1. `decide` returns the typed `ErrRelayFallenBack` ("too late — answer
+   at the pane"): the verdict was not recorded, and delivery is no
+   longer possible.
+2. Because every row's window plus the safety margin has elapsed, the
+   send-keys guard has *already released* by the same time-based
+   authority (which holds a margin longer than `decide` refuses — see
+   the asymmetric-margin note above).
+3. `send-keys` answers the still-displayed native permission dialog
+   directly (the dialog is still on screen precisely because nothing
+   answered it).
+4. The action is audited: it appears in the trail as
+   `ad.send_keys.called` with `guard_evaluation=released`, so a recovery
+   send is distinguishable from an ordinary send and from a guard
+   refusal.
+
+This is the in-band recovery surface referenced under `ErrRelayFallenBack`
+above; it is now available.
 
 ## References
 

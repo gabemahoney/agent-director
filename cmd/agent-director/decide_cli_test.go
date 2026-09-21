@@ -4,7 +4,36 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	_ "modernc.org/sqlite"
+
+	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 )
+
+// backdatePermissionRequest rewrites the created_at of an open
+// permission_requests row (decision NULL) to now-age, pushing the request past
+// the effective relay window so the relay-guard reads it as undeliverable
+// (Decide → ErrRelayFallenBack; send-keys → guard released). The CLI binary
+// runs on the real clock with the default 86400s window, so callers pass an age
+// well past that plus RelayKillSafetyMargin (e.g. 48h).
+//
+// The backdating SQL itself lives in exactly one place —
+// storefix.SeedUndeliverablePermissionRequest. This CLI-side wrapper only opens
+// the already-seeded store (the CLI subprocess has exited, so no live writer
+// holds the DB) and delegates, so the raw created_at UPDATE is not duplicated
+// here. storefix.SeedUndeliverablePermissionRequest additionally verifies the
+// target row exists and is still open before backdating.
+func backdatePermissionRequest(t *testing.T, dbPath, instanceID, requestToken string, age time.Duration) {
+	t.Helper()
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("backdatePermissionRequest: store.Open(%q): %v", dbPath, err)
+	}
+	defer func() { _ = s.Close() }()
+	storefix.SeedUndeliverablePermissionRequest(t, s, dbPath, instanceID, requestToken, age)
+}
 
 // decideCalledLines filters trail lines for ad.decide.called events.
 func decideCalledLines(lines []map[string]any) []map[string]any {
@@ -167,11 +196,13 @@ func TestDecideRaceLoserSeesErrAlreadyDecided(t *testing.T) {
 	}
 }
 
-// TestDecideCalledEmitsTrailLine is a table-driven test that covers four
+// TestDecideCalledEmitsTrailLine is a table-driven test that covers the
 // decide-verb outcomes and asserts the ad.decide.called trail line emitted
 // on each path. Required top-level fields (source, ts, caller_*, outcome) are
 // validated for every row. The ErrAlreadyDecided row additionally asserts zero
-// ad.row_mutation.committed lines (Epic 3 no-op contract).
+// ad.row_mutation.committed lines (Epic 3 no-op contract). The
+// ErrRelayFallenBack row additionally asserts the typed err_name in the JSON
+// error envelope on stderr (open-but-undeliverable path, SR-4.4).
 //
 // ErrAmbiguousRequest is skipped: the store guard only fires when requestToken
 // is empty, but the API layer (pkg/api/decide.go) rejects an empty token with
@@ -185,6 +216,7 @@ func TestDecideCalledEmitsTrailLine(t *testing.T) {
 		{name: "ok", wantOutcome: "ok"},
 		{name: "ErrAlreadyDecided", wantOutcome: "ErrAlreadyDecided"},
 		{name: "ErrInvalidFlags", wantOutcome: "ErrInvalidFlags"},
+		{name: "ErrRelayFallenBack", wantOutcome: "ErrRelayFallenBack"},
 		{name: "ErrAmbiguousRequest", wantOutcome: "ErrAmbiguousRequest"},
 	}
 
@@ -258,6 +290,33 @@ func TestDecideCalledEmitsTrailLine(t *testing.T) {
 					t.Fatalf("second decide exit = 0; want non-zero (ErrAlreadyDecided)")
 				}
 
+			case "ErrRelayFallenBack":
+				// Relay-on spawn with an open request whose created_at is
+				// backdated far past the CLI binary's default effective window
+				// (86400s) plus RelayKillSafetyMargin: the request is
+				// open-but-undeliverable, so Decide refuses with
+				// ErrRelayFallenBack (SR-4.4). The CLI runs on the real clock,
+				// hence a 48h backdate rather than anything near the window.
+				const id = "id-dc-trail-rfb-1"
+				seedSpawnRow(t, dbPath, id, "cd-dc-trail-rfb-1", "check_permission", "on")
+				seedOpenPermissionRequest(t, dbPath, id, testRequestToken, "Bash", `{"cmd":"ls"}`)
+				backdatePermissionRequest(t, dbPath, id, testRequestToken, 48*time.Hour)
+
+				_, stderr, code := runSpawnCLI(t, home, fakeDir,
+					"decide",
+					"--claude-instance-id", id,
+					"--request-token", testRequestToken,
+					"--decision", "allow",
+				)
+				if code == 0 {
+					t.Fatalf("decide exit = 0; want non-zero (ErrRelayFallenBack)")
+				}
+				// (b) typed err_name must surface in the JSON error envelope.
+				env := parseEnvelope(t, stderr)
+				if env.ErrName != "ErrRelayFallenBack" {
+					t.Errorf("err_name = %q; want ErrRelayFallenBack", env.ErrName)
+				}
+
 			case "ErrInvalidFlags":
 				const id = "id-dc-trail-inv-1"
 				seedSpawnRow(t, dbPath, id, "cd-dc-trail-inv-1", "check_permission", "on")
@@ -325,6 +384,18 @@ func TestDecideCalledEmitsTrailLine(t *testing.T) {
 				rm := rowMutationCommittedLines(lines)
 				if got := len(rm) - rmCheckpoint; got != 0 {
 					t.Errorf("ErrAlreadyDecided: expected 0 new ad.row_mutation.committed lines; got %d (total %d, checkpoint %d): %v", got, len(rm), rmCheckpoint, rm)
+				}
+			}
+
+			// ErrRelayFallenBack: the refused guarded UPDATE emits no mutation
+			// event either — the row's decision stays NULL, so no
+			// ad.row_mutation.committed line is written. Mirrors the
+			// ErrAlreadyDecided no-op assertion above. This case has no warm-up
+			// decide, so rmCheckpoint is 0 and the delta is the total count.
+			if tc.name == "ErrRelayFallenBack" {
+				rm := rowMutationCommittedLines(lines)
+				if got := len(rm) - rmCheckpoint; got != 0 {
+					t.Errorf("ErrRelayFallenBack: expected 0 new ad.row_mutation.committed lines (refused guarded UPDATE emits no mutation); got %d (total %d, checkpoint %d): %v", got, len(rm), rmCheckpoint, rm)
 				}
 			}
 		})

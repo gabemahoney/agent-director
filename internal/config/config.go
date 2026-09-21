@@ -41,12 +41,33 @@ type Defaults struct {
 	InjectHelpHook bool `toml:"inject_help_hook,omitempty"`
 }
 
+// DefaultRelayTimeoutSeconds is the canonical relay window (24h). It is
+// the value Default() seeds into Relay.TimeoutSeconds AND the fallback
+// EffectiveTimeoutSeconds returns for a non-positive configured value, so
+// the two never drift.
+const DefaultRelayTimeoutSeconds = 86400
+
 // Relay holds polling and timeout knobs for the relay loop.
 type Relay struct {
 	PollBaseMs           int `toml:"poll_base_ms"`
 	PollJitterMs         int `toml:"poll_jitter_ms"`
 	TimeoutSeconds       int `toml:"timeout_seconds"`
 	PermissionRequestCap int `toml:"permission_request_cap"`
+}
+
+// EffectiveTimeoutSeconds returns the relay window that both the hook poll
+// loop's deadline and the synthesized per-hook `timeout` must use: the
+// configured TimeoutSeconds when positive, and DefaultRelayTimeoutSeconds
+// (86400) otherwise. It is the single source of truth for the "non-positive
+// falls back to the default" rule so the poll deadline and Claude Code's
+// per-hook kill boundary can never disagree (SR-1.3). A misconfigured
+// `timeout_seconds` of 0 or negative therefore yields 86400 everywhere,
+// never a zero/omitted window. See b.p48 for the original guard.
+func (r Relay) EffectiveTimeoutSeconds() int {
+	if r.TimeoutSeconds > 0 {
+		return r.TimeoutSeconds
+	}
+	return DefaultRelayTimeoutSeconds
 }
 
 // Pause holds the pause-verb timeout.
@@ -76,7 +97,7 @@ func Default() Config {
 		Relay: Relay{
 			PollBaseMs:           100,
 			PollJitterMs:         100,
-			TimeoutSeconds:       86400,
+			TimeoutSeconds:       DefaultRelayTimeoutSeconds,
 			PermissionRequestCap: 1000,
 		},
 		Pause: Pause{
