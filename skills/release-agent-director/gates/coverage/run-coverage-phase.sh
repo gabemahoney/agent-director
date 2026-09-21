@@ -17,22 +17,24 @@
 #   1   — one or more gates failed
 #   2   — usage / configuration error
 #
-# max_parallel = 5 (RATIONALE):
-#   The sandbox (`make sandbox` / `make test-sandbox`) runs `docker run` with no
-#   --cpus / --memory limits, so the container inherits the full host: 16 CPUs
-#   and ~700 GiB RAM. Memory is a non-constraint; the only real concern is CPU
-#   oversubscription. Setting max_parallel to the gate count (5) lets all five
-#   coverage gates start at once, so the phase's wall-time is bound by its single
-#   longest gate — the point of parallelizing. The dominant compounding risk is
-#   coverage.docker-epics, which internally fans out its OWN run-parallel.sh with
-#   max_parallel:4; combined with the four sibling coverage gates the theoretical
-#   peak concurrent CPU demand (docker-epics' up-to-4 children + go-root's
-#   `-race` run + the two bun gates + consumer-dryrun) still time-slices
-#   gracefully on 16 cores — gates slow under contention but do not error, so no
-#   gate passes or fails from resource starvation without a diagnosable error. A
-#   lower cap would needlessly queue one coverage gate behind another for no
-#   memory benefit. Downstream Epic t1.2mt.z4 owns the binding wall-time
-#   measurement and may revise this value.
+# max_parallel = 5 (RATIONALE — MEASURED):
+#   Measured under the t1.2mt.z4 protocol, re-run under b.3jn on 2026-09-20 after
+#   the b.3jn gate-isolation fixes. Live sandbox sweep, 2 reps per candidate at
+#   max_parallel = 5, 3, and 2: ALL SIX runs were all-green. Phase wall time was
+#   61.2–66.0s at every candidate; the longest gate is coverage.go-root
+#   (61.0–65.8s) in every run, giving a wall/longest ratio of ~1.004 everywhere —
+#   SR-9 (wall <= longest * 1.10) is met at every candidate on an all-green
+#   baseline. Because go-root dominates the phase, max_parallel buys essentially
+#   nothing on wall time between 2 and 5; the value 5 (the gate count) is kept for
+#   STABILITY and simplicity — no queueing of one gate behind another, at no
+#   measured cost — not for speed.
+#   coverage.docker-epics internally fans out its OWN run-parallel.sh with
+#   max_parallel:4; that oversubscription was measured harmless on the 16-CPU host
+#   (all-green at phase mp=5).
+#   This value is only valid with the cross-gate isolation preconditions in place
+#   (b.3jn): scratch HOME for the bun gates, the seeds/dist-pack flock protocol,
+#   out-of-tree pack staging, and the child-scoped no-leak count — all documented
+#   in gates/README.md "Coverage phase (parallel)".
 
 set -uo pipefail
 

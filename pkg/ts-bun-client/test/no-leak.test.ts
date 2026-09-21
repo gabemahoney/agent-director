@@ -9,35 +9,19 @@
  *
  * Skipped on darwin via `process.platform === "linux"` per SR-10.5.
  *
- * The process-count signal uses `pgrep -c agent-director` because pgrep
- * filters by command name and ignores unrelated host processes, so the
- * assertion can be strict equality (not a tolerance).
- *
- * Runtime budget: ~50ms/call × 1000 calls = ~50s, comfortably under the
- * SRD's ~3-minute ceiling.
+ * The counter is parent-scoped to direct children of this bun test process so
+ * sibling coverage gates' agent-director spawns don't perturb the delta — see
+ * gates/README.md "Coverage phase (parallel)" and bee b.3jn (full rationale
+ * lives with the shared counter in ./internal/processCount.ts).
  */
 
 import { test, expect } from "bun:test";
 import * as path from "path";
 import { withTempHome } from "./internal/tempHome.js";
+import { countChildAgentDirectorProcesses } from "./internal/processCount.js";
 import { Client } from "../src/index.js";
 
 const isLinux = process.platform === "linux";
-
-/** Counts running agent-director processes via pgrep. Returns 0 when none. */
-function countAgentDirectorProcesses(): number {
-  // pgrep -c <name> prints the count of matching processes and exits 0 even
-  // when count is 0 (on modern util-linux >= 2.36; earlier versions exit 1
-  // on zero matches). Bun.spawnSync handles either case.
-  const proc = Bun.spawnSync({
-    cmd: ["pgrep", "-c", "agent-director"],
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const out = new TextDecoder().decode(proc.stdout).trim();
-  const n = parseInt(out, 10);
-  return Number.isFinite(n) ? n : 0;
-}
 
 test.skipIf(!isLinux)(
   "no-leak: 1000 sequential list({state: 'check_permission'}) calls leak zero processes",
@@ -45,11 +29,11 @@ test.skipIf(!isLinux)(
     await withTempHome(async (homeDir) => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
 
-      // Baseline count BEFORE the client is constructed. This includes any
-      // pre-existing agent-director processes (e.g. an outer parent in CI
-      // running these tests under itself). The post-loop count must equal
-      // this baseline exactly — net delta zero.
-      const baseline = countAgentDirectorProcesses();
+      // Baseline count BEFORE the client is constructed. Scoped to direct
+      // children of this process, so an outer parent running these tests under
+      // itself is NOT a child of process.pid and is excluded from the baseline.
+      // The post-loop count must equal this baseline exactly — net delta zero.
+      const baseline = countChildAgentDirectorProcesses();
 
       using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
 
@@ -67,7 +51,7 @@ test.skipIf(!isLinux)(
       // belt-and-suspenders; the assertion is unaffected by removing it.
       await new Promise((r) => setTimeout(r, 50));
 
-      const after = countAgentDirectorProcesses();
+      const after = countChildAgentDirectorProcesses();
       expect(after).toBe(baseline);
     });
   },

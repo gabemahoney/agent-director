@@ -47,6 +47,23 @@ import (
 // TestTarballRoundTripByteIdentical saw "Only in package/dist: client.d.ts").
 // The lock lives under the OS temp dir — shared across these packages within a
 // single `go test` run, and never touches the repo tree.
+//
+// b.3jn — the lock's role widened. It no longer only serializes go test
+// PACKAGES against each other (b.aur). Under the b.2mt parallel coverage phase
+// the sibling coverage.bun-test GATE runs concurrently with this test, and it
+// was reading THIS test's planted `expect(1).toBe(2)` mutation of setup.test.ts
+// (verified 6/6 live sweep runs). So the gate itself (gates/coverage/bun-test.sh)
+// now takes this SAME lock EXCLUSIVE for its whole run — making this test's
+// setup.test.ts mutation window and dist/ rebuild invisible to the sibling gate.
+//
+// INVARIANT: any process that runs the bun-test gate while ALREADY holding this
+// dist-pack lock MUST set COVERAGE_BUN_TEST_NESTED=1 so the gate skips lock
+// acquisition; everything else MUST let the gate take the lock. This test is the
+// one nested caller — it holds the lock (acquireDistPackLock) before invoking the
+// gate, so without the guard the nested gate would deadlock on its ancestor's
+// lock. The COVERAGE_BUN_TEST_NESTED=1 guard (following b.2y5's
+// COVERAGE_GO_ROOT_NESTED precedent) is what lets the nested gate proceed while
+// this process holds the lock. TestCoverageBunTestFires sets it below.
 func acquireDistPackLock(t *testing.T) {
 	t.Helper()
 	lockPath := filepath.Join(os.TempDir(), "agent-director-ts-bun-dist-pack.lock")
@@ -141,6 +158,11 @@ func TestCoverageBunTestFires(t *testing.T) {
 	// ── 4. Run coverage.bun-test gate ──────────────────────────────────────
 	gateScript := filepath.Join(root, "skills", "release-agent-director", "gates", "coverage", "bun-test.sh")
 	cmd := exec.Command("bash", gateScript)
+	// This test already holds the dist-pack lock (acquireDistPackLock, above),
+	// and the gate now takes the SAME lock EXCLUSIVE for its whole run (b.3jn).
+	// Re-acquiring it in the nested gate would self-deadlock. Set the guard so
+	// the nested gate skips lock acquisition and proceeds under our lock.
+	cmd.Env = append(os.Environ(), "COVERAGE_BUN_TEST_NESTED=1")
 	cmd.Dir = root
 	var stderrBuf strings.Builder
 	cmd.Stderr = &stderrBuf
