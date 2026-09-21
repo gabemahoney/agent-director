@@ -45,6 +45,48 @@ GATE_HOME="$(mktemp -d)"
 export HOME="$GATE_HOME"
 trap 'rm -rf "$GATE_HOME"' EXIT
 
+# ── dist-pack lock: serialize against go-root's dist/-sensitive tests (b.3jn) ──
+# Under go-root's parallel phase, several synthetic-regression tests contend with
+# this gate over pkg/ts-bun-client's test sources AND dist/ artifacts:
+#
+#   • coverage-bun-test-fires appends `expect(1).toBe(2)` to
+#     pkg/ts-bun-client/test/setup.test.ts, reruns THIS gate nested to prove the
+#     SR-14 diagnostic fires, then restores the file via t.Cleanup. During that
+#     mutation window this gate must not observe the planted failure.
+#   • the pack-first tests (tarball-round-trip, tarball-coherence-drift,
+#     pack-first-version-mismatch, verify-restage) read/pack pkg/ts-bun-client/
+#     dist/. This gate's `bun run build` REWRITES dist/, which can race their
+#     packs (the b.aur failure mode).
+#
+# All of those tests guard with an EXCLUSIVE flock on this path
+# (acquireDistPackLock). The gate historically took no lock, so it read the
+# planted failure and raced the packs. Acquire the SAME lock here, EXCLUSIVE,
+# for the gate's whole lifetime via a dedicated fd — EXCLUSIVE (not shared)
+# because this gate is a dist/ WRITER, not merely a reader, so shared mode would
+# still let its build race the pack tests' reads.
+#
+# The lock deliberately lives under ${TMPDIR:-/tmp}, NOT the scratch HOME above,
+# to match Go's os.TempDir() resolution so both sides open the same file.
+#
+# COVERAGE_BUN_TEST_NESTED guard: the nested invocation from
+# coverage-bun-test-fires already holds this lock (it took it before mutating
+# setup.test.ts). Re-acquiring here would self-deadlock — the nested gate would
+# block on its own ancestor's lock while the ancestor waits on the nested gate.
+# So the nested run skips the lock. (Mirrors b.2y5's COVERAGE_GO_ROOT_NESTED
+# precedent; coverage-bun-test-fires sets this env on its nested run.)
+#
+# Hold-time tradeoff: this gate holds the lock ~20-35s (install+build+test). The
+# five lock-holding go-root tests may wait on it, stretching go-root's wall
+# time. Acceptable: the SR-9 bound is relative to the longest gate, and dist/
+# correctness beats a few seconds of go-root parallelism.
+#
+# fd 9 is released automatically at script exit.
+if [ "${COVERAGE_BUN_TEST_NESTED:-0}" != "1" ]; then
+  DIST_PACK_LOCK="${TMPDIR:-/tmp}/agent-director-ts-bun-dist-pack.lock"
+  exec 9>"$DIST_PACK_LOCK"
+  flock 9
+fi
+
 if ! bun install --frozen-lockfile 2>&1; then
   emit_diagnostic \
     "coverage.bun-test" \

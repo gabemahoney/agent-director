@@ -96,7 +96,7 @@ gates in the order defined for that phase. For each gate:
 > >= 2; `coverage.go-root`'s leaked-file detector also fired at >= 3). The
 > gate-isolation fix (Bugs bee b.3jn) has since landed, so the parallel path is
 > viable and the orchestrator no longer needs to serialize the coverage gates.
-> The fix has four parts:
+> The fix has five parts:
 >
 > - Each bun gate (`coverage.bun-test`, `coverage.bun-extra-scripts`) runs
 >   under its own scratch `HOME` (`mktemp -d`), with `GOCACHE`, `GOMODCACHE`,
@@ -121,6 +121,20 @@ gates in the order defined for that phase. For each gate:
 >   `source-of-truth-reference-prune` creating/removing `reference/` at the repo
 >   root mid-context-tar). The invariant is: reader takes shared, mutator takes
 >   exclusive.
+> - `coverage.bun-test` holds an **exclusive** `flock` on
+>   `${TMPDIR:-/tmp}/agent-director-ts-bun-dist-pack.lock` for its entire run.
+>   go-root's synthetic-regression test `coverage-bun-test-fires` plants a forced
+>   failure in `pkg/ts-bun-client/test/setup.test.ts` and reruns the gate nested
+>   under that same lock, and four pack-first tests read
+>   `pkg/ts-bun-client/dist/` under it — while the gate both reads those test
+>   sources and rewrites `dist/` via `bun run build`. The lock is exclusive
+>   because the gate is a `dist/` **writer**, not merely a reader. To avoid
+>   self-deadlock on the nested rerun, `coverage-bun-test-fires` sets the
+>   `COVERAGE_BUN_TEST_NESTED=1` env guard (following b.2y5's
+>   `COVERAGE_GO_ROOT_NESTED` precedent), which tells the gate to skip
+>   re-acquiring the lock. The invariant is: any process running the bun-test
+>   gate while **already** holding the dist-pack lock must set
+>   `COVERAGE_BUN_TEST_NESTED=1`.
 >
 > The tuned `max_parallel` value for this phase is persisted separately (see
 > Bee b.2mt); this note does not fix a value.
