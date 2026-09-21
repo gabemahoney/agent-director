@@ -1,44 +1,196 @@
 // Package coveragegorootfires_test is a synthetic-regression test for the
-// coverage.go-root gate (b.wvr coverage phase).
+// coverage.go-root gate (b.wvr coverage phase; scoped down under b.mgw).
 //
 // BACKGROUND
 // ==========
-// The coverage.go-root gate runs `go test ./... -race -count=1` at the repo
-// root.  A compile-time bug (e.g. a wrong-arity call to an apitest helper)
-// must cause the gate to exit non-zero and emit a structured SR-14 JSON
-// diagnostic to stderr with "gate":"coverage.go-root".  This test injects
-// exactly that class of defect and verifies the gate fires.
+// The coverage.go-root gate runs `go test ./... -race -count=1` at a worktree
+// root.  A compile-time bug (e.g. a wrong-arity function call) must cause the
+// gate to exit non-zero and emit a structured SR-14 JSON diagnostic to stderr
+// with "gate":"coverage.go-root", naming the failing package by import path.
+// This test injects exactly that class of defect and verifies the gate fires,
+// then removes it and verifies the gate passes.
 //
-// DESIGN
-// ======
-// 1. Target file : pkg/api/apitest/seeds.go — same file used in the
-//    helper-tag-replay regression, but here we exercise the coverage gate
-//    path rather than `go build ./...` directly.
-// 2. Mutation    : insert `_ = SeedSpawn("only-one-arg")` at the top of the
-//    InitStore function body.  SeedSpawn requires 7 string args plus a bool;
-//    a single-string call is a compile error that `go test ./...` must catch.
-// 3. Gate        : bash skills/release-agent-director/gates/coverage/go-root.sh
-//    is run from repo root.  The gate's stderr must contain the JSON
-//    "gate":"coverage.go-root" diagnostic on failure.
-// 4. Cleanup     : original bytes are captured before mutation; t.Cleanup
-//    restores them unconditionally even when t.Fatalf fires mid-test.
-// 5. Post-cleanup: after the test, `git status seeds.go` must be clean.
+// DESIGN (b.mgw t1.2mt.s5, SR-4.1/4.3/4.4)
+// ========================================
+//  1. Scoped fixture tree.  Instead of running the gate bare at the REAL repo
+//     root (which spawned a nested full-tree `go test ./... -race -count=1` of
+//     the whole repository, ≈45s), the test materializes a tiny fixture Go
+//     module into t.TempDir() and points the UNMODIFIED gate at it via the
+//     gate's existing optional worktree-root argument (go-root.sh:14-16).  The
+//     gate script itself is unchanged — only what it is pointed at differs.
+//  2. Single-tree toggle.  ONE fixture tree is materialized.  The test injects
+//     a wrong-arity call (compile error) into a fixture source file, runs the
+//     real gate (FIRING proof), then removes the failure from the SAME tree and
+//     runs the gate again (PASSING proof).  Two separately committed trees would
+//     not prove the gate's failure-parsing fired on the injected defect.
+//  3. Module path contains a "/" (example.test/gorootfixture).  The gate's
+//     b.93m anchored FIRST_FAIL regex (`grep -E '^FAIL[[:space:]]+[^[:space:]]+/'`,
+//     go-root.sh:37) resolves the import path only when it contains a "/";
+//     a single-segment module would degrade the diagnostic to "(unknown
+//     package)" and defeat the import-path identity assertion.
+//  4. cd-fallback hazard closed.  go-root.sh runs `set -uo pipefail` WITHOUT
+//     `-e` (go-root.sh:8): if the `cd "$1"` into the fixture were to fail, the
+//     gate would silently fall through to `go test ./...` in the ORIGINAL cwd —
+//     re-introducing the very full-tree run this bee removes — and a bare
+//     exit-0 check would pass vacuously.  The passing path therefore asserts on
+//     CAPTURED gate stdout that an `ok example.test/gorootfixture` line is
+//     present, proving the FIXTURE module was the thing actually tested.
+//
+// b.93m TRAIL-LEAK ISOLATION DISPOSITIONS (SR-5)
+// ==============================================
+//   - HOME redirect (SR-5.1): KEPT, unconditionally.  The gate subprocess still
+//     runs `go test`, whose child binaries resolve ~/.agent-director from HOME;
+//     the trail singleton pins to it on first Emit.  Redirecting HOME to a
+//     per-test temp dir keeps any nested emitter from writing ad-trail.jsonl
+//     into the real home and racing the trail-leak canary.  Retained verbatim.
+//   - COVERAGE_GO_ROOT_NESTED guard-SET (SR-5.2/5.3): REMOVED as demonstrably
+//     obsolete.  The guard existed so that the nested full-tree run (which
+//     re-entered THIS package and helper-tag-replay) would skip their seeds.go
+//     mutation.  With the gate scoped to a self-contained fixture module, the
+//     nested `go test ./...` walks only the fixture tree in t.TempDir() and can
+//     never re-enter this package or the real repo — there is no recursion to
+//     guard.  helper-tag-replay's own skip check is untouched (SR-5.2).
+//   - Seeds flock (acquireSeedsLock / .seeds-mutation.lock, SR-5.3): REMOVED as
+//     demonstrably obsolete.  It serialized concurrent mutations of the shared
+//     real file pkg/api/apitest/seeds.go across this package and
+//     helper-tag-replay.  This test no longer mutates seeds.go (or any tracked
+//     file) — it mutates only fixture files under t.TempDir() — so there is no
+//     shared state to serialize.  helper-tag-replay retains its own copy.
+//   - Skip CHECK at the top of the test (SR-5.2/5.3): REMOVED as demonstrably
+//     obsolete (disposition finalized in Epic t1.2mt.z4, where the s5 pin routed
+//     it).  The check existed to bail out when a nested full-tree run re-entered
+//     this package.  With Epic t1.2mt.vg landed (commit 4c53236),
+//     coverage-consumer-dryrun-fires materializes a self-contained fixture module
+//     in t.TempDir() and no longer spawns a nested run of any real tree, and
+//     go-root's own gate likewise walks only its fixture module — so NO coverage
+//     synthetic-regression fixture re-enters this package.  The only setter of
+//     COVERAGE_GO_ROOT_NESTED was this package's OWN runGate, which exported it
+//     into the gate subprocess so a nested re-entry would see it; that setter was
+//     removed with the b.mgw scope-down (runGate now points the gate at a fixture
+//     module instead of the real tree).  Post-scope-down nothing sets the variable
+//     anywhere, so the guard is demonstrably obsolete under SR-5.3.
+//     helper-tag-replay keeps its own copy (SR-5.2).
+//
+// CLEANUP (SR-5.4)
+// ================
+// The executed fixture lives entirely in t.TempDir(), which the testing
+// framework removes automatically; no tracked file is mutated, so `git status`
+// stays clean.  Every fixture-file mutation still registers its restore via
+// t.Cleanup before the mutation, per the synthetic-regression convention.
 //
 // SLOW TEST
 // =========
-// This test runs the full `go test ./... -race -count=1` suite (≈45s).
-// It is skipped in -short mode to keep default `go test ./...` fast.
+// Scoped down to seconds-scale: the nested run now compiles and tests a single
+// trivial fixture module rather than the whole repo with -race.  Still skipped
+// in -short mode and exercised via `make release-smoke`.
 package coveragegorootfires_test
 
 import (
-	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 )
+
+// Gate identifiers and assertion literals, declared once per package (SR-7.3).
+const (
+	// gateKey is the SR-14 diagnostic field proving the coverage.go-root gate
+	// emitted the failure.
+	gateKey = `"gate":"coverage.go-root"`
+	// fixtureModulePath is the fixture module's import root.  It contains a "/"
+	// so the gate's anchored FIRST_FAIL regex resolves the import path.
+	fixtureModulePath = "example.test/gorootfixture"
+	// fixturePkgImportPath is the import path of the failing fixture package —
+	// what the firing diagnostic must name.
+	fixturePkgImportPath = fixtureModulePath + "/broken"
+	// offendingArtifactField is the exact SR-14 offending_file_or_artifact JSON
+	// field the firing diagnostic must carry. Its value is derived from the gate's
+	// anchored FIRST_FAIL parse (go-root.sh:37): the wrong-arity mutation is a
+	// build failure, so `go test` emits "FAIL\texample.test/gorootfixture/broken
+	// [build failed]" and the awk field-2 extraction yields the package import
+	// path WITH the " [build failed]" suffix. Anchoring the assertion on this
+	// field (not on a bare Contains of the import path, which the SR-14
+	// last-50-lines excerpt would also satisfy) makes a degraded parse
+	// ("(unknown package)") fail the test.
+	offendingArtifactField = `"offending_file_or_artifact":"` + fixturePkgImportPath + ` [build failed]"`
+	// okLine is the substring of `go test` stdout proving the fixture module was
+	// actually tested (closes the cd-fallback hazard).
+	okLine = "ok  \t" + fixturePkgImportPath
+)
+
+// fixtureGoMod is the fixture module manifest.  Module path contains a "/" so
+// the gate's FIRST_FAIL parse resolves an import path (go-root.sh:37).
+const fixtureGoMod = "module " + fixtureModulePath + "\n\ngo 1.21\n"
+
+// fixtureSourceGood is the compiling fixture source: a package with a function
+// and a passing test, so the gate's `go test ./...` produces an `ok` line.
+const fixtureSourceGood = `package broken
+
+// Add is a trivial function the fixture test exercises.
+func Add(a, b int) int { return a + b }
+`
+
+// fixtureSourceBroken injects a wrong-arity call to Add — a compile error that
+// `go test ./...` must catch, causing the gate to fire.
+const fixtureSourceBroken = `package broken
+
+// Add is a trivial function the fixture test exercises.
+func Add(a, b int) int { return a + b }
+
+// wrongArity is a deliberate compile error: Add takes 2 args, called with 1.
+var _ = Add(1) // coverage.go-root synthetic regression (b.mgw)
+`
+
+const fixtureTestSource = `package broken
+
+import "testing"
+
+func TestAdd(t *testing.T) {
+	if Add(1, 2) != 3 {
+		t.Fatal("Add(1, 2) != 3")
+	}
+}
+`
+
+// materializeFixture writes the compiling fixture module into dir/broken and
+// returns the path of the source file whose contents the failure toggle swaps.
+func materializeFixture(t *testing.T, dir string) (brokenSrc string) {
+	t.Helper()
+	pkgDir := filepath.Join(dir, "broken")
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatalf("mkdir fixture pkg: %v", err)
+	}
+	writes := map[string]string{
+		filepath.Join(dir, "go.mod"):         fixtureGoMod,
+		filepath.Join(pkgDir, "add.go"):      fixtureSourceGood,
+		filepath.Join(pkgDir, "add_test.go"): fixtureTestSource,
+	}
+	for path, content := range writes {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write fixture %s: %v", path, err)
+		}
+	}
+	return filepath.Join(pkgDir, "add.go")
+}
+
+// runGate invokes the real, unmodified coverage.go-root gate against the
+// fixture worktree root (worktreeRoot passed as the gate's optional argument)
+// and returns its exit code and captured stdout/stderr.
+func runGate(t *testing.T, root, worktreeRoot string) (exitCode int, stdout, stderr string) {
+	t.Helper()
+	gateScript := filepath.Join(root, "skills", "release-agent-director", "gates", "coverage", "go-root.sh")
+	cmd := exec.Command("bash", gateScript, worktreeRoot)
+	// HOME redirect (SR-5.1) — kept unconditionally: the gate's inner `go test`
+	// binaries resolve ~/.agent-director from HOME; an isolated HOME prevents a
+	// nested emitter from racing the trail-leak canary (b.93m).
+	cmd.Env = append(os.Environ(), "HOME="+t.TempDir())
+	var stdoutBuf, stderrBuf strings.Builder
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+	_ = cmd.Run() // non-zero exit is expected on the firing path — ignore err
+	return cmd.ProcessState.ExitCode(), stdoutBuf.String(), stderrBuf.String()
+}
 
 // repoRoot walks up from the package working directory until it finds go.mod.
 func repoRoot(t *testing.T) string {
@@ -57,136 +209,68 @@ func repoRoot(t *testing.T) string {
 		}
 		dir = parent
 	}
-	panic("unreachable")
 }
 
-// seedsMutationLockPath returns the path to the cross-process advisory lock
-// file used to serialize seeds.go mutations across parallel test packages.
-func seedsMutationLockPath(root string) string {
-	return filepath.Join(root, "pkg", "api", "apitest", ".seeds-mutation.lock")
-}
-
-// acquireSeedsLock grabs an exclusive flock on a shared lock file before any
-// test mutates seeds.go.  Two test packages (helper-tag-replay and
-// coverage-go-root-fires) both mutate that file; running them in parallel
-// without serialization causes a marker-not-found race.  The lock is released
-// after t.Cleanup restores the file (t.Cleanup is LIFO: register lock-release
-// first, then file-restore, so restore runs before unlock).
-//
-// NOTE: never call this inside the inner go test ./... that this test triggers
-// via the gate subprocess.  The gate subprocess receives COVERAGE_GO_ROOT_NESTED=1
-// in its environment; callers must call t.Skip when that variable is set (see
-// TestCoverageGoRootFires) so the inner instances never reach this function.
-func acquireSeedsLock(t *testing.T, root string) {
-	t.Helper()
-	lockPath := seedsMutationLockPath(root)
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		t.Fatalf("acquireSeedsLock: open %s: %v", lockPath, err)
-	}
-	// LOCK_EX blocks until no other process holds the lock.
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		f.Close()
-		t.Fatalf("acquireSeedsLock: flock: %v", err)
-	}
-	// Register lock-release FIRST so it runs AFTER the file-restore cleanup
-	// that the caller registers next (LIFO order).
-	t.Cleanup(func() {
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		f.Close()
-	})
-}
-
-// TestCoverageGoRootFires verifies that coverage.go-root fires (exit != 0,
-// stderr contains "gate":"coverage.go-root") when the repo contains a
-// wrong-arity call that fails compilation.
+// TestCoverageGoRootFires proves the unmodified coverage.go-root gate fires on
+// an injected compile error (naming the failing package by import path) and
+// passes once the error is removed (with the fixture module actually tested).
 func TestCoverageGoRootFires(t *testing.T) {
 	if testing.Short() {
-		t.Skip("slow: runs full coverage suite (go test ./... -race -count=1)")
-	}
-	// Skip when running inside the inner go test ./... that this test invokes
-	// via the gate subprocess.  The outer instance passes COVERAGE_GO_ROOT_NESTED=1
-	// through cmd.Env so that the inner instances of this test and
-	// TestHelperTagReplay both skip, preventing flock deadlock.
-	if os.Getenv("COVERAGE_GO_ROOT_NESTED") == "1" {
-		t.Skip("skipping recursive invocation from coverage.go-root gate inner test suite")
+		t.Skip("slow: runs the coverage.go-root gate over a fixture module")
 	}
 
 	root := repoRoot(t)
-	targetFile := filepath.Join(root, "pkg", "api", "apitest", "seeds.go")
+	fixtureRoot := t.TempDir()
+	brokenSrc := materializeFixture(t, fixtureRoot)
 
-	// ── 0. Serialize access to seeds.go across parallel test packages ───────
-	acquireSeedsLock(t, root)
-
-	// ── 1. Read original bytes ──────────────────────────────────────────────
-	orig, err := os.ReadFile(targetFile)
+	// ── FIRING PROOF ────────────────────────────────────────────────────────
+	// Inject the wrong-arity call into the SAME tree; restore is registered
+	// before the mutation (SR-5.4) even though t.TempDir() is auto-removed.
+	good, err := os.ReadFile(brokenSrc)
 	if err != nil {
-		t.Fatalf("read seeds.go: %v", err)
+		t.Fatalf("read fixture source: %v", err)
 	}
-	origStat, err := os.Stat(targetFile)
-	if err != nil {
-		t.Fatalf("stat seeds.go: %v", err)
-	}
-
-	// ── 2. Register cleanup BEFORE mutating ────────────────────────────────
 	t.Cleanup(func() {
-		if err := os.WriteFile(targetFile, orig, origStat.Mode()); err != nil {
-			t.Errorf("t.Cleanup: restore seeds.go: %v", err)
+		if err := os.WriteFile(brokenSrc, good, 0o644); err != nil {
+			t.Errorf("t.Cleanup: restore fixture source: %v", err)
 		}
 	})
-
-	// ── 3. Inject mutation ─────────────────────────────────────────────────
-	// Insert a wrong-arity call to SeedSpawn at the top of InitStore's body.
-	// Real signature: SeedSpawn(dbPath, id, state, cwd, relayMode, sessionID string, createStore bool)
-	const marker = "func InitStore(dbPath string) (string, error) {\n\ts, err := store.OpenOrInit(dbPath)"
-	const mutated = "func InitStore(dbPath string) (string, error) {\n" +
-		"\t_ = SeedSpawn(\"only-one-arg\") // wrong-arity: SeedSpawn needs 7 args + bool (coverage.go-root regression)\n" +
-		"\ts, err := store.OpenOrInit(dbPath)"
-
-	if !bytes.Contains(orig, []byte(marker)) {
-		t.Fatalf("mutation marker not found in seeds.go — update the marker if InitStore was refactored")
+	if err := os.WriteFile(brokenSrc, []byte(fixtureSourceBroken), 0o644); err != nil {
+		t.Fatalf("inject failure into fixture: %v", err)
 	}
 
-	mutated2 := bytes.Replace(orig, []byte(marker), []byte(mutated), 1)
-	if err := os.WriteFile(targetFile, mutated2, origStat.Mode()); err != nil {
-		t.Fatalf("write mutated seeds.go: %v", err)
+	exit, _, stderr := runGate(t, root, fixtureRoot)
+	if exit == 0 {
+		t.Fatalf("firing: expected coverage.go-root to exit non-zero on wrong-arity mutation, got 0\nstderr:\n%s", stderr)
 	}
-
-	// ── 4. Run coverage.go-root gate ───────────────────────────────────────
-	// Pass COVERAGE_GO_ROOT_NESTED=1 through the subprocess environment so that
-	// any inner go test ./... invocations (triggered by the gate) skip the seeds.go
-	// mutation tests (TestHelperTagReplay and TestCoverageGoRootFires), preventing
-	// flock deadlock and infinite recursion.
-	gateScript := filepath.Join(root, "skills", "release-agent-director", "gates", "coverage", "go-root.sh")
-	cmd := exec.Command("bash", gateScript)
-	cmd.Dir = root
-	// Redirect HOME to a throwaway dir for the gate subprocess. The gate runs
-	// the full `go test ./... -race -count=1` at the repo root, so its inner
-	// test binaries resolve ~/.agent-director from HOME (the trail singleton
-	// pins to it on first Emit). Without an isolated HOME these grandchildren
-	// inherit the real container HOME; any inner package that emits to the trail
-	// before/without its own HOME redirect then writes ad-trail.jsonl into the
-	// REAL home and races the trail-leak canary's snapshot window under
-	// `go test ./...` parallelism (b.93m — this was the residual leaker). The
-	// gate has no home-relative behaviour, so redirecting is safe.
-	cmd.Env = append(os.Environ(), "COVERAGE_GO_ROOT_NESTED=1", "HOME="+t.TempDir())
-	var stderrBuf strings.Builder
-	cmd.Stderr = &stderrBuf
-	// stdout flows to the test log for progress visibility
-	cmd.Stdout = os.Stdout
-	_ = cmd.Run() // non-zero exit is expected — ignore the returned error
-
-	stderr := stderrBuf.String()
-
-	// ── 5. Assertions ──────────────────────────────────────────────────────
-	if cmd.ProcessState.ExitCode() == 0 {
-		t.Fatalf("expected coverage.go-root gate to exit non-zero after wrong-arity mutation, but it exited 0")
-	}
-
-	const gateKey = `"gate":"coverage.go-root"`
 	if !strings.Contains(stderr, gateKey) {
-		t.Fatalf("gate stderr does not contain %q;\nstderr:\n%s", gateKey, stderr)
+		t.Fatalf("firing: gate stderr missing %q\nstderr:\n%s", gateKey, stderr)
+	}
+	// Parse-derived identity: the offending_file_or_artifact field must carry the
+	// value the gate's anchored FIRST_FAIL parse produced for OUR injected build
+	// failure — not merely appear somewhere in stderr. A bare Contains of the
+	// import path would also match the last-50-lines excerpt the SR-14 diagnostic
+	// embeds, so it could not distinguish a healthy parse from one that regressed
+	// to "(unknown package)". Anchoring on the JSON field asserts the parse itself
+	// resolved the import path, so a degraded parse fails this test (b.93m).
+	if !strings.Contains(stderr, offendingArtifactField) {
+		t.Fatalf("firing: diagnostic offending_file_or_artifact is not the parse-derived %q\nstderr:\n%s", offendingArtifactField, stderr)
 	}
 
-	t.Logf("coverage.go-root fired correctly (exit %d).\nGate stderr: %s", cmd.ProcessState.ExitCode(), stderr)
+	// ── PASSING PROOF ───────────────────────────────────────────────────────
+	// Remove the failure from the SAME tree and re-run the gate.
+	if err := os.WriteFile(brokenSrc, good, 0o644); err != nil {
+		t.Fatalf("remove failure from fixture: %v", err)
+	}
+
+	exit, stdout, stderr := runGate(t, root, fixtureRoot)
+	if exit != 0 {
+		t.Fatalf("passing: expected coverage.go-root to exit 0 after removing failure, got %d\nstderr:\n%s", exit, stderr)
+	}
+	// cd-fallback hazard closure: assert the FIXTURE module was actually tested.
+	// A failed `cd` would have run `go test ./...` in the original cwd and this
+	// ok-line would be absent (go-root.sh:8 uses `set -uo pipefail` without -e).
+	if !strings.Contains(stdout, okLine) {
+		t.Fatalf("passing: gate stdout missing %q — fixture module was not tested (cd-fallback?)\nstdout:\n%s", okLine, stdout)
+	}
 }
