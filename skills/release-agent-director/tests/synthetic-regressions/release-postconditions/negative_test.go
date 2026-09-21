@@ -49,6 +49,11 @@ func TestReleasePostconditionsNegativePriorFailure(t *testing.T) {
 	root := repoRoot(t)
 	reportDir, reportPath := isolatedReportDir(t)
 
+	// Real publish artifacts so the b.mjd preflight passes and the run reaches
+	// its substeps (the point of this test is prior-failure preservation, not a
+	// preflight abort).
+	tarball, notes, binaries := artifactSet(t, t.TempDir())
+
 	// ── 1. Write the failed-coverage prior-phases JSON ────────────────────
 	phasesFile := filepath.Join(t.TempDir(), "prior-phases-failed.json")
 	if err := os.WriteFile(phasesFile, []byte(priorPhasesWithFailureJSON), 0o644); err != nil {
@@ -68,9 +73,9 @@ func TestReleasePostconditionsNegativePriorFailure(t *testing.T) {
 	cmd := exec.Command("bash", orchScript,
 		"--target", testTarget,
 		"--bump-sha", sha,
-		"--tarball", "/tmp/fake.tgz",
-		"--notes", "/tmp/fake-notes.md",
-		"--binaries", "/tmp/bin1,/tmp/bin2,/tmp/bin3",
+		"--tarball", tarball,
+		"--notes", notes,
+		"--binaries", strings.Join(binaries, ","),
 		"--dry-run",
 		"--prior-phases", phasesFile,
 	)
@@ -143,6 +148,11 @@ func TestReleasePostconditionsNegativeSimulateFailure(t *testing.T) {
 	root := repoRoot(t)
 	reportDir, reportPath := isolatedReportDir(t)
 
+	// Real publish artifacts so the b.mjd preflight (runs before push-branch in
+	// --release mode) passes and the run reaches the push-branch substep where
+	// --simulate-failure-at fires.
+	tarball, notes, binaries := artifactSet(t, t.TempDir())
+
 	// ── 1. Resolve HEAD SHA ────────────────────────────────────────────────
 	shaOut, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
 	if err != nil {
@@ -158,9 +168,9 @@ func TestReleasePostconditionsNegativeSimulateFailure(t *testing.T) {
 	cmd := exec.Command("bash", orchScript,
 		"--target", testTarget,
 		"--bump-sha", sha,
-		"--tarball", "/tmp/fake.tgz",
-		"--notes", "/tmp/fake-notes.md",
-		"--binaries", "/tmp/bin1,/tmp/bin2,/tmp/bin3",
+		"--tarball", tarball,
+		"--notes", notes,
+		"--binaries", strings.Join(binaries, ","),
 		"--release",
 		"--simulate-failure-at", "push-branch",
 	)

@@ -2820,7 +2820,13 @@ publish phase is executed by a shell-script orchestrator,
 script owns the six publish substeps (push-branch, create-tag, gh-release,
 npm-publish, fast-forward-main, delete-remote-branch), including their
 dry-run gating, halt-on-first-failure sequencing, substep recording, and
-SR-numbered diagnostics.
+SR-numbered diagnostics. Before the first (irreversible) substep it resolves
+every file-input argument (`--tarball`, `--notes`, `--binaries`) to an
+absolute path at parse time and runs an artifact preflight
+(`publish.preflight-publish-artifacts`) that halts the run — in both live and
+dry-run mode — if any of those paths is not a readable file, so no public tag
+or Release is created for a run that would fail at `npm-publish` on a bad
+input (b.mjd).
 
 **Worktree-isolation contract.** The skill creates a separate git worktree
 at `.release-work/release-v<target>/`. The operator's primary checkout is

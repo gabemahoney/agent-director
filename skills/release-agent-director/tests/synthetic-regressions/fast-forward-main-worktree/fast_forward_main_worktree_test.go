@@ -76,6 +76,29 @@ func orchestratorPath(root string) string {
 		"gates", "publish", "publish-orchestrator.sh")
 }
 
+// artifactSet creates a real tarball, notes file, and two binary files under
+// dir, returning their absolute paths. All are readable regular files so the
+// b.mjd validate_publish_artifacts preflight (runs in --dry-run before any
+// substep) passes. The tests tree has no shared testutil package (every
+// synthetic-regression package re-declares its own helpers), so this small
+// duplication follows the established precedent.
+func artifactSet(t *testing.T, dir string) (tarball, notes string, binaries []string) {
+	t.Helper()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatalf("artifactSet: write %s: %v", p, err)
+		}
+		return p
+	}
+	tarball = write("agent-director-0.0.0.tgz", "fake tarball bytes")
+	notes = write("release-notes.md", "# notes\n")
+	for _, b := range []string{"bin-linux", "bin-darwin"} {
+		binaries = append(binaries, write(b, "fake binary"))
+	}
+	return tarball, notes, binaries
+}
+
 // extractFastForwardFn slices the exact `_do_fast_forward_main` function
 // definition out of the live orchestrator script so the test sources the real
 // production code. If the markers are gone the function was refactored — fail
@@ -320,12 +343,16 @@ func TestFastForwardMainDryRunDisplay(t *testing.T) {
 
 	sha := git(t, root, "rev-parse", "HEAD")
 
+	// Real publish artifacts so the b.mjd preflight passes in --dry-run and the
+	// run reaches the fast-forward-main substep whose display line we assert.
+	tarball, notes, binaries := artifactSet(t, t.TempDir())
+
 	cmd := exec.Command("bash", orchestratorPath(root),
 		"--target", "0.0.0-jqj-dry",
 		"--bump-sha", sha,
-		"--tarball", "/tmp/fake.tgz",
-		"--notes", "/tmp/fake-notes.md",
-		"--binaries", "/tmp/b1,/tmp/b2",
+		"--tarball", tarball,
+		"--notes", notes,
+		"--binaries", strings.Join(binaries, ","),
 		"--dry-run",
 		"--worktree-root", lay.release,
 		"--release-branch", lay.releaseName,

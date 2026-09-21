@@ -178,6 +178,31 @@ func stageWriteReport(t *testing.T, root string) (stagedScript, reportPath strin
 	return stagedScript, reportPath
 }
 
+// artifactSet creates a real tarball, notes file, and three binary files under
+// dir, returning their absolute paths. All are readable regular files so the
+// b.mjd validate_publish_artifacts preflight (which runs in --dry-run and
+// --release before any substep) passes. Mirrors the same-named helper in the
+// publish-artifact-path-resolution package; the tests tree has no shared
+// testutil package (every synthetic-regression package is a self-contained
+// _test package that re-declares its helpers), so this small duplication
+// follows the established precedent.
+func artifactSet(t *testing.T, dir string) (tarball, notes string, binaries []string) {
+	t.Helper()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatalf("artifactSet: write %s: %v", p, err)
+		}
+		return p
+	}
+	tarball = write("agent-director-0.0.0.tgz", "fake tarball bytes")
+	notes = write("release-notes.md", "# notes\n")
+	for _, b := range []string{"bin-linux", "bin-darwin", "bin-windows"} {
+		binaries = append(binaries, write(b, "fake binary"))
+	}
+	return tarball, notes, binaries
+}
+
 // parseReport reads and JSON-decodes the release-report.json produced by the
 // most recent publish-orchestrator.sh invocation from the given path.
 func parseReport(t *testing.T, path string) releaseReport {

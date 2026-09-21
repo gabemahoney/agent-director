@@ -312,7 +312,25 @@ the remote release branch. Skipped entirely in dry-run mode.
 
 ### Publish phase
 
-The publish phase executes six substeps strictly in order. Halt-on-first-
+Before any substep runs, the orchestrator resolves every file-input argument
+(`--tarball`, `--notes`, and each `--binaries` element) to an absolute path
+against the caller's working directory, then runs an artifact preflight,
+`publish.preflight-publish-artifacts`. That preflight asserts every one of
+those paths is a readable regular file and halts the run before the first
+irreversible substep if any is not. It runs in **both** `--release` and
+`--dry-run` mode, so a bad artifact path is caught the same way regardless of
+mode. On failure it emits the SR-14 diagnostic, records the failed substep
+`publish.preflight-publish-artifacts` (no substep having run, so the report's
+prior-succeeded list is empty), writes `dist/release-report.json`, prints the
+terminal summary, and exits 1. This guards against a relative `--tarball` (the
+form the `pack` phase emits, e.g. `dist/agent-director-<target>.tgz`) being
+resolved against the wrong directory inside the `pkg/ts-bun-client` subshell
+and failing at `npm-publish` — substep 4 — only after the tag and GitHub
+Release are already public (b.mjd). Because the paths are made absolute at
+parse time, `npm publish` receives an absolute tarball path no matter how
+`--tarball` was expressed.
+
+The publish phase then executes six substeps strictly in order. Halt-on-first-
 failure; no automatic rollback (see Recovery cheatsheet below).
 
 | # | Gate | Real command | Dry-run behavior |
@@ -344,6 +362,7 @@ Use this table to find the recovery procedure:
 
 | Failed at | Prior succeeded | Recovery commands |
 |-----------|-----------------|-------------------|
+| `preflight-publish-artifacts` | (none) | No state to undo — this runs before any irreversible substep. Fix the offending `--tarball` / `--notes` / `--binaries` path (see the diagnostic's `offending_file_or_artifact`) and re-run. |
 | `push-branch` | (none) | No state to undo. Fix the cause, re-run. |
 | `create-tag` | push-branch | `git push origin --delete v<target>` (if tag was pushed); `git tag -d v<target>` (locally); `git push origin --delete release/v<target>` |
 | `gh-release` | push-branch, create-tag | `gh release delete v<target> --yes` (if release was created); `git push origin --delete v<target>`; `git tag -d v<target>`; `git push origin --delete release/v<target>` |

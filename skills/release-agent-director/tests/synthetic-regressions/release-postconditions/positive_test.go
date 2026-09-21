@@ -42,6 +42,11 @@ func TestReleasePostconditionsPositive(t *testing.T) {
 	root := repoRoot(t)
 	reportDir, reportPath := isolatedReportDir(t)
 
+	// Real publish artifacts so the b.mjd validate_publish_artifacts preflight
+	// (runs in --dry-run before any substep) passes; absolute paths so CWD is
+	// irrelevant.
+	tarball, notes, binaries := artifactSet(t, t.TempDir())
+
 	// ── 1. Write the all-passed prior-phases JSON to a temp file ──────────
 	phasesFile := filepath.Join(t.TempDir(), "prior-phases.json")
 	if err := os.WriteFile(phasesFile, []byte(priorPhasesAllPassedJSON), 0o644); err != nil {
@@ -61,9 +66,9 @@ func TestReleasePostconditionsPositive(t *testing.T) {
 	cmd := exec.Command("bash", orchScript,
 		"--target", testTarget,
 		"--bump-sha", sha,
-		"--tarball", "/tmp/fake.tgz",
-		"--notes", "/tmp/fake-notes.md",
-		"--binaries", "/tmp/bin1,/tmp/bin2,/tmp/bin3",
+		"--tarball", tarball,
+		"--notes", notes,
+		"--binaries", strings.Join(binaries, ","),
 		"--dry-run",
 		"--prior-phases", phasesFile,
 	)
