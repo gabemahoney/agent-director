@@ -446,7 +446,7 @@ func TestRecordSessionStartIdentity(t *testing.T) {
 	}
 
 	// 1. First SessionStart: all four columns land. Fresh identity is written.
-	if err := s.RecordSessionStartIdentity(id, "session-abc", "/x/abc.jsonl", 4242, "9988"); err != nil {
+	if err := s.RecordSessionStartIdentity(id, "session-abc", "/x/abc.jsonl", true, 4242, "9988"); err != nil {
 		t.Fatalf("RecordSessionStartIdentity (fresh): %v", err)
 	}
 	got, _ := s.GetSpawn(id)
@@ -469,7 +469,7 @@ func TestRecordSessionStartIdentity(t *testing.T) {
 	//    — here to NULL (0 / "") because capture "failed". A stale pid must
 	//    never survive: Epic hp's liveness check would else mark a live resumed
 	//    spawn provably-dead.
-	if err := s.RecordSessionStartIdentity(id, "", "", 0, ""); err != nil {
+	if err := s.RecordSessionStartIdentity(id, "", "", false, 0, ""); err != nil {
 		t.Fatalf("RecordSessionStartIdentity (identity cleared): %v", err)
 	}
 	got, _ = s.GetSpawn(id)
@@ -488,7 +488,7 @@ func TestRecordSessionStartIdentity(t *testing.T) {
 
 	// 3. A later successful capture re-writes fresh identity (proving step 2's
 	//    clear was a genuine NULL write, not an accidental preserve).
-	if err := s.RecordSessionStartIdentity(id, "", "", 5150, "7001"); err != nil {
+	if err := s.RecordSessionStartIdentity(id, "", "", false, 5150, "7001"); err != nil {
 		t.Fatalf("RecordSessionStartIdentity (re-capture): %v", err)
 	}
 	got, _ = s.GetSpawn(id)
@@ -509,7 +509,7 @@ func TestApplyHookTransitionMissingRowIsNoop(t *testing.T) {
 	if got := spawnStateTransitionLines(t, beforeTrail); len(got) != 0 {
 		t.Errorf("missing-row transition emitted %d ad.spawn.state_transition; want 0 (fail-open per SRD §3.2)", len(got))
 	}
-	if err := s.RecordSessionStartIdentity("ghost", "session-x", "/x/ghost.jsonl", 999, "111"); err != nil {
+	if err := s.RecordSessionStartIdentity("ghost", "session-x", "/x/ghost.jsonl", true, 999, "111"); err != nil {
 		t.Fatalf("record-identity on missing row should be no-op: %v", err)
 	}
 }
@@ -1148,7 +1148,7 @@ func TestRecordSessionStartIdentityClearsLiveness(t *testing.T) {
 	const id = "liveness-clear-sessionstart-1"
 	seedLivenessSet(t, s, id, StateWaiting)
 
-	if err := s.RecordSessionStartIdentity(id, "session-xyz", "/x/xyz.jsonl", 7777, "3030"); err != nil {
+	if err := s.RecordSessionStartIdentity(id, "session-xyz", "/x/xyz.jsonl", true, 7777, "3030"); err != nil {
 		t.Fatalf("RecordSessionStartIdentity: %v", err)
 	}
 	assertLivenessCleared(t, s, id)

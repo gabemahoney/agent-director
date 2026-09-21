@@ -34,6 +34,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"reflect"
 	"testing"
 )
 
@@ -181,7 +182,16 @@ func TestChainMechanics_SyntheticMultiStep(t *testing.T) {
 			},
 		}
 	}
-	migrationSteps = []migrationStep{mkStep(0), mkStep(1), mkStep(2)}
+	// Register schemaVersion synthetic steps (0→1, 1→2, …, (schemaVersion-1)→
+	// schemaVersion) so a single runMigrationChain(db, 0) loops schemaVersion
+	// times through the real engine. Derived from the const so this test never
+	// needs a hand-edit when schemaVersion is bumped (b.v2c: it is 4 now).
+	migrationSteps = nil
+	wantCalls := make([]int, 0, schemaVersion)
+	for from := 0; from < schemaVersion; from++ {
+		migrationSteps = append(migrationSteps, mkStep(from))
+		wantCalls = append(wantCalls, from)
+	}
 
 	// Write a matching sentinel and drive the same authorized-open sequence
 	// ensureSchema runs: runMigrationChain(from) then consumeAuthorization.
@@ -205,11 +215,12 @@ func TestChainMechanics_SyntheticMultiStep(t *testing.T) {
 	// Consume exactly once, as ensureSchema does after the chain commits.
 	consumeAuthorization(dbPath, 0, schemaVersion)
 
-	// Three chained steps ran, in order — proving the loop iterated ≥2 times.
-	if len(stepCalls) != 3 || stepCalls[0] != 0 || stepCalls[1] != 1 || stepCalls[2] != 2 {
-		t.Fatalf("synthetic chain step order = %v; want [0 1 2]", stepCalls)
+	// All schemaVersion chained steps ran, in order — proving the loop iterated
+	// ≥2 times (the SR-1.2 return-after-one-hop guard).
+	if !reflect.DeepEqual(stepCalls, wantCalls) {
+		t.Fatalf("synthetic chain step order = %v; want %v", stepCalls, wantCalls)
 	}
-	// DB climbed the full two versions in the one call.
+	// DB climbed the full chain in the one call.
 	if got := readUserVersion(t, dbPath); got != schemaVersion {
 		t.Errorf("synthetic chain user_version = %d; want %d", got, schemaVersion)
 	}

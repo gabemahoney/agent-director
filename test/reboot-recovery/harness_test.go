@@ -90,9 +90,13 @@ func stubSessionID(instanceID string) string { return stubSessionIDPrefix + inst
 //     (the stub is the topmost env-carrying ancestor of the hook subprocess),
 //     and what persists jsonl_path + claude_session_id.
 //   - The stub appends a line to the derived JSONL on every start (a pre-kill
-//     marker on the fresh spawn, a continuation marker on --resume), then stays
-//     alive (exec-ing a long sleep carrying stubMarker) so the probe can read
-//     its /proc/<pid>/environ.
+//     marker on the fresh spawn, a continuation marker on --resume) BEFORE it
+//     fires SessionStart — matching real Claude, which writes the transcript on
+//     the first turn/resume so the file is on disk when the hook runs. This
+//     matters for the b.v2c AC1 stat-gate: the handler records jsonl_path only
+//     if the transcript exists on disk, else NULL. Then it stays alive (exec-ing
+//     a long sleep carrying stubMarker) so the probe can read its
+//     /proc/<pid>/environ.
 //
 // PM-REQUIRED FIDELITY NOTE: appending to the SAME jsonl on --resume
 // deliberately diverges from real Claude Code, which rotates the session UUID
@@ -108,9 +112,11 @@ func writeStubClaude(t *testing.T, stubDir, binaryAbs string) string {
 	}
 	// The stub detects a --resume argument to decide which transcript marker to
 	// append AND to read the session id back from argv. It derives the
-	// transcript path from $CLAUDE_CONFIG_DIR + slug($PWD) + sid, fires the
-	// SessionStart hook, appends its line, then execs a long-lived sleep tagged
-	// with stubMarker so the pane process persists with a readable environ.
+	// transcript path from $CLAUDE_CONFIG_DIR + slug($PWD) + sid, appends its
+	// line to the transcript, fires the SessionStart hook (with the file already
+	// on disk so the AC1 stat-gate persists jsonl_path), then execs a long-lived
+	// sleep tagged with stubMarker so the pane process persists with a readable
+	// environ.
 	// `exec` replaces the shell so the surviving pid IS the process whose
 	// environ carries AGENT_DIRECTOR_INSTANCE_ID.
 	script := `#!/bin/sh
@@ -145,16 +151,23 @@ JSONL="$cfg/projects/$slug/$sid.jsonl"
 
 mkdir -p "$(dirname "$JSONL")"
 
-# Fire SessionStart so the hook persists identity (pid+starttime) + jsonl_path
-# + claude_session_id (basename of this path).
-printf '%s' '{"hook_event_name":"SessionStart","transcript_path":"'"$JSONL"'"}' \
-  | "$BINARY" hook >/dev/null 2>&1 || true
-
+# Write the transcript line BEFORE firing SessionStart. Real Claude Code writes
+# (or resumes into) the transcript file on the first turn, so the file exists on
+# disk by the time it fires the SessionStart hook. The b.v2c AC1 stat-gate in
+# the handler records jsonl_path only when the transcript exists on disk (else
+# NULL); firing the hook before the file existed left jsonl_path=NULL and hung
+# the readiness poll. Appending the marker first makes the stub faithful to real
+# Claude's ordering so the hook stats a present file and persists jsonl_path.
 if [ "$resume" = yes ]; then
   printf '{"type":"assistant","marker":"post-resume-continuation"}\n' >> "$JSONL"
 else
   printf '{"type":"assistant","marker":"pre-kill"}\n' >> "$JSONL"
 fi
+
+# Fire SessionStart so the hook persists identity (pid+starttime) + jsonl_path
+# + claude_session_id (basename of this path).
+printf '%s' '{"hook_event_name":"SessionStart","transcript_path":"'"$JSONL"'"}' \
+  | "$BINARY" hook >/dev/null 2>&1 || true
 
 # Stay alive with a readable environ. exec so this pid inherits the tmux -e env
 # (AGENT_DIRECTOR_INSTANCE_ID) that find-missing's probe reads, and export the

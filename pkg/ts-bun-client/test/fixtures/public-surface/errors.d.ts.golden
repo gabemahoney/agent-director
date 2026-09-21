@@ -276,6 +276,12 @@ export declare class ErrNoSessionId extends AgentDirectorError {
 /** Mirrors ErrJsonlMissing (package: api) */
 export declare class ErrJsonlMissing extends AgentDirectorError {
 }
+/** Mirrors ErrJsonlNeverWritten (package: api) */
+export declare class ErrJsonlNeverWritten extends AgentDirectorError {
+}
+/** Mirrors ErrRepairTranscriptMissing (package: api) */
+export declare class ErrRepairTranscriptMissing extends AgentDirectorError {
+}
 /** Mirrors ErrRelayModeOff (package: api) */
 export declare class ErrRelayModeOff extends AgentDirectorError {
 }

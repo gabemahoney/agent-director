@@ -2,9 +2,13 @@ package api
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"sort"
 
 	"github.com/gabemahoney/agent-director/internal/probe"
+	"github.com/gabemahoney/agent-director/internal/spawn"
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/trail"
 )
 
@@ -35,7 +39,20 @@ type FindMissingStore interface {
 	// for that Spawn receives a fail-closed deny rather than spinning to its own
 	// internal timeout (SR-5.4).
 	CloseOrphanedPermissionRequests(instanceID string) error
+	// ListProvisionalTranscripts returns live rows with a session id but a NULL
+	// jsonl_path — sessions that started before their transcript was written
+	// (b.v2c AC3). find-missing recomposes and stats each, healing rows whose
+	// transcript has since appeared.
+	ListProvisionalTranscripts() ([]ProvisionalTranscript, error)
+	// HealJsonlPath records a now-present transcript path onto a provisional
+	// row (jsonl_path NULL) for the given session id. Returns true when written.
+	HealJsonlPath(instanceID, sessionID, jsonlPath string) (bool, error)
 }
+
+// ProvisionalTranscript is re-exported from internal/store so external
+// consumers can name the type in the FindMissingStore interface without
+// importing internal/store directly (b.v2c AC3).
+type ProvisionalTranscript = store.ProvisionalTranscript
 
 // FindMissingResult is the typed return shape. Count is the number of
 // rows transitioned to `missing` on this sweep; IDs is the sorted
@@ -163,6 +180,14 @@ func findMissingImpl(ctx context.Context, s FindMissingStore, p probe.Prober, ch
 		}
 	}
 
+	// b.v2c AC3: lazy transcript healing. A session that started before its
+	// first user turn had no .jsonl on disk when SessionStart fired, so its row
+	// carries a NULL jsonl_path. Once the operator messages the bot the file
+	// appears; this sweep recomposes each provisional row's path, stats it, and
+	// records it when present — no operator intervention required. Per-row
+	// errors are logged and skipped; healing never aborts the sweep.
+	healProvisionalTranscripts(s, lg)
+
 	// Stable order in the result envelope.
 	sort.Strings(missing)
 	sort.Strings(unverified)
@@ -218,6 +243,44 @@ func markMissing(s FindMissingStore, id string, lg FindMissingLogger) bool {
 		lg.Printf("find-missing: CloseOrphanedPermissionRequests(%s): %v (continuing)", id, err)
 	}
 	return true
+}
+
+// healProvisionalTranscripts sweeps live rows whose jsonl_path is NULL (a
+// session that started before its transcript was written) and records the path
+// for any whose transcript has since appeared on disk (b.v2c AC3). The path is
+// recomposed the same way resume's fallback does: under the row's
+// CLAUDE_CONFIG_DIR when set and absolute, else ~/.claude. Per-row store errors
+// are logged and skipped; a compose or stat miss is a silent no-op (the row
+// stays provisional until the transcript actually appears).
+func healProvisionalTranscripts(s FindMissingStore, lg FindMissingLogger) {
+	provisional, err := s.ListProvisionalTranscripts()
+	if err != nil {
+		if lg != nil {
+			lg.Printf("find-missing: ListProvisionalTranscripts: %v (continuing)", err)
+		}
+		return
+	}
+	for _, pt := range provisional {
+		var (
+			path string
+			cerr error
+		)
+		if pt.ConfigDir != "" && filepath.IsAbs(pt.ConfigDir) {
+			path, cerr = spawn.JsonlPathIn(pt.ConfigDir, pt.CWD, pt.ClaudeSessionID)
+		} else {
+			path, cerr = spawn.JsonlPath(pt.CWD, pt.ClaudeSessionID)
+		}
+		if cerr != nil {
+			continue
+		}
+		if _, statErr := os.Stat(path); statErr != nil {
+			// Still not written — leave the row provisional.
+			continue
+		}
+		if _, herr := s.HealJsonlPath(pt.ClaudeInstanceID, pt.ClaudeSessionID, path); herr != nil && lg != nil {
+			lg.Printf("find-missing: HealJsonlPath(%s): %v (continuing)", pt.ClaudeInstanceID, herr)
+		}
+	}
 }
 
 // FindMissing reconciles DB state against live OS processes. It scans all

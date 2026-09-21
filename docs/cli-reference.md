@@ -102,6 +102,8 @@ Return the full DB row for a tracked Spawn (id, parent, state, cwd, session name
 - `liveness_unverified_since` (timestamp?): RFC3339 timestamp of the first sweep that could not verify this live row's liveness (an unknown verdict, e.g. a permission wall). Cleared to NULL once liveness is re-established; null/omitted when never unverified.
 - `liveness_note` (string?): Human-readable reason the row's liveness could not be verified on the most recent unverified sweep. Cleared to NULL once liveness is re-established; null/omitted when never unverified.
 - `permission_requests` ([]object): All open (undecided) permission requests awaiting orchestrator decision. Always a non-null array ([] when empty). Populated only when state == check_permission; empty array for all other states. Each element: request_id (int) — autoincrement row id; request_token (string) — UUIDv4 token minted by runRelay, pass to decide verb to target this row; tool_name (string) — Claude Code tool that triggered the request; tool_input (string) — raw JSON string of the tool's input, NOT a nested object (consumers parse it themselves); requested_at (RFC3339 timestamp) — created_at of the row.
+- `transcript_status` (string): Derived operator-facing summary of the current session's transcript state (b.v2c): 'present' (jsonl_path recorded), 'never_written' (session id but NULL jsonl_path and no archived history — nothing was ever written), 'rotated' (NULL jsonl_path but prior_sessions is non-empty — history exists under a different session id), or 'no_session' (no claude_session_id yet).
+- `prior_sessions` ([]object): Archived prior sessions for this instance, newest first — the queryable link back to sessions orphaned by a rotation (b.v2c). Always a non-null array ([] when empty). Each element: claude_session_id (string) — archived session id; jsonl_path (string) — archived transcript path (may be empty); recorded_at (timestamp) — when the archive was written (the rotation moment).
 
 ### Errors
 
@@ -233,6 +235,7 @@ Bring a terminated (ended/missing) Spawn back to life via `claude --resume`. Sam
 - `ErrSpawnNotResumable`
 - `ErrNoSessionId`
 - `ErrJsonlMissing`
+- `ErrJsonlNeverWritten`
 - `ErrTmuxNotAvailable`
 - `ErrTmuxSessionCreate`
 
@@ -254,6 +257,28 @@ _None._
 ### Errors
 
 - `ErrProbeUnsupported`
+
+## repair-transcript
+
+Re-associate an orphaned Claude transcript with a tracked Spawn row. One-shot operator recovery for transcript history stranded by a session rotation (e.g. a CSCB fleet restart): supply the instance id, the recovered session id, and the transcript's on-disk path. The verb verifies the file exists, archives the row's current (session id, jsonl_path) into session_history when it differs, then records the recovered pair so a subsequent resume points `claude --resume` at it. Does NOT move or mutate the transcript file.
+
+### Parameters
+
+- `claude_instance_id` (string, required): The Spawn row to re-associate the transcript with.
+- `claude_session_id` (string, required): Session id of the orphaned transcript (its .jsonl basename without extension).
+- `jsonl_path` (string, required): Absolute on-disk path of the orphaned transcript. Must exist.
+
+### Result
+
+- `claude_instance_id` (string): The repaired row's id.
+- `claude_session_id` (string): The session id now recorded on the row.
+- `jsonl_path` (string): The transcript path now recorded on the row.
+
+### Errors
+
+- `ErrSpawnNotFound`
+- `ErrRepairTranscriptMissing`
+- `ErrInvalidFlags`
 
 ## expire
 

@@ -76,7 +76,7 @@ func SeedSpawn(dbPath, id, state, cwd, relayMode, sessionID string, createStore 
 	}
 
 	if sessionID != "" {
-		if err := s.RecordSessionStartIdentity(id, sessionID, "", 0, ""); err != nil {
+		if err := s.RecordSessionStartIdentity(id, sessionID, "", false, 0, ""); err != nil {
 			return "", fmt.Errorf("SeedSpawn: RecordSessionStartIdentity %q: %w", sessionID, err)
 		}
 	}

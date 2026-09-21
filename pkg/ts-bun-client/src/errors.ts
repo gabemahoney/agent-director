@@ -388,7 +388,7 @@ export class ErrSystemInstallDisappeared extends AgentDirectorError {
 // ---------------------------------------------------------------------------
 // Catalog-derived error subclasses
 //
-// One subclass per entry in pkg/api/errnames/catalog.json (37 entries).
+// One subclass per entry in pkg/api/errnames/catalog.json (39 entries).
 // Bodies are empty: subclass identity is the sole value-add over the base class.
 // The factory (errorFromEnvelope) at the bottom of this file maps err_name
 // strings to these constructors.
@@ -452,6 +452,10 @@ export class ErrSpawnNotResumable extends AgentDirectorError {}
 export class ErrNoSessionId extends AgentDirectorError {}
 /** Mirrors ErrJsonlMissing (package: api) */
 export class ErrJsonlMissing extends AgentDirectorError {}
+/** Mirrors ErrJsonlNeverWritten (package: api) */
+export class ErrJsonlNeverWritten extends AgentDirectorError {}
+/** Mirrors ErrRepairTranscriptMissing (package: api) */
+export class ErrRepairTranscriptMissing extends AgentDirectorError {}
 /** Mirrors ErrRelayModeOff (package: api) */
 export class ErrRelayModeOff extends AgentDirectorError {}
 /** Mirrors ErrRelayFallenBack (package: api) */
@@ -483,7 +487,7 @@ type ErrConstructor = new (
 
 /**
  * Lookup table from err_name strings (from the agent-director error envelope)
- * to their typed constructor. Derived from pkg/api/errnames/catalog.json — 37
+ * to their typed constructor. Derived from pkg/api/errnames/catalog.json — 39
  * entries.
  *
  * This is the most-grepped table in the project; keep it readable and in
@@ -522,6 +526,8 @@ const ERROR_TABLE = {
   ErrSpawnNotResumable,
   ErrNoSessionId,
   ErrJsonlMissing,
+  ErrJsonlNeverWritten,
+  ErrRepairTranscriptMissing,
   ErrRelayModeOff,
   ErrRelayFallenBack,
   ErrInvalidDecision,

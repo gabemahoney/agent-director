@@ -28,13 +28,13 @@ var ErrPrimaryKeyCollision = errors.New("store: primary key collision")
 // that owns the column's text values) so the rest of the codebase has
 // exactly one source of truth for valid state strings.
 const (
-	StatePending          = "pending"
-	StateWaiting          = "waiting"
-	StateWorking          = "working"
-	StateAskUser          = "ask_user"
-	StateCheckPermission  = "check_permission"
-	StateEnded            = "ended"
-	StateMissing          = "missing"
+	StatePending         = "pending"
+	StateWaiting         = "waiting"
+	StateWorking         = "working"
+	StateAskUser         = "ask_user"
+	StateCheckPermission = "check_permission"
+	StateEnded           = "ended"
+	StateMissing         = "missing"
 )
 
 // liveStates is the set of state values find-missing considers "alive"
@@ -437,10 +437,18 @@ func (s *Store) ApplyHookTransitionResult(instanceID, newState string, softRefre
 }
 
 // RecordSessionStartIdentity performs the single atomic SessionStart write
-// widening SetSessionID to cover the four columns the SessionStart hook
-// records: claude_session_id, jsonl_path, pid, proc_starttime. Invoked once
-// per SessionStart (SR-6.5/SR-9.1). A missing row is a fail-open no-op per
-// SRD §3.2, exactly like the SetSessionID it replaces.
+// covering the identity columns the SessionStart hook records:
+// claude_session_id, jsonl_path, pid, proc_starttime. Invoked once per
+// SessionStart (SR-6.5/SR-9.1). A missing row is a fail-open no-op per SRD §3.2.
+//
+// Before the row is overwritten, the CURRENT (claude_session_id, jsonl_path)
+// pair is archived into session_history whenever the incoming sessionID differs
+// from the row's current claude_session_id (b.v2c AC6): a session rotation on
+// CSCB fleet restart therefore records a queryable link from the row back to the
+// previous session's transcript instead of orphaning it. Archiving happens only
+// when the row already holds a non-empty session id that is being replaced by a
+// different non-empty one — a fresh spawn's first SessionStart (empty prior id)
+// and a soft re-fire with the same id both archive nothing.
 //
 // Column semantics (PM-mandated):
 //   - pid / proc_starttime are ALWAYS written — fresh captured values, or
@@ -449,11 +457,19 @@ func (s *Store) ApplyHookTransitionResult(instanceID, newState string, softRefre
 //     resumed spawn provably-dead; NULL routes it to the SR-7.5 fallback.
 //     Absent lands as literal NULL (via any-typed args, the SetParentID
 //     house style), never 0 or "".
-//   - claude_session_id / jsonl_path are written only when the classified
-//     value is non-empty; an empty value preserves the existing column via
-//     COALESCE(?, col). This never clobbers a known session id / path with
-//     garbage — it preserves the extractSessionID contract. Absent is passed
-//     as literal NULL so COALESCE keeps the prior value.
+//   - claude_session_id is written only when the classified value is non-empty;
+//     an empty value preserves the existing column via COALESCE(?, col). This
+//     never clobbers a known session id with garbage — it preserves the
+//     extractSessionID contract.
+//   - jsonl_path (b.v2c AC1): the hook stats the transcript path before this
+//     call and passes jsonlPresent. A row must never assert a jsonl_path that
+//     does not exist on disk, so the column is only SET when jsonlPath is
+//     non-empty AND jsonlPresent is true. When the transcript has not yet been
+//     written (jsonlPresent=false — a freshly-restarted, un-messaged session),
+//     jsonl_path is set to NULL so the row does not point at a dead path;
+//     find-missing heals it lazily once the file appears (AC3). When jsonlPath
+//     is empty (no path in the payload at all) the existing column is preserved
+//     via COALESCE.
 //
 // pid is passed as any: a positive value writes the int, a non-positive
 // value writes NULL (absent identity), matching the COALESCE(pid, 0) scan
@@ -462,7 +478,50 @@ func (s *Store) ApplyHookTransitionResult(instanceID, newState string, softRefre
 // SessionStart is proof of life (SR-8.2), so this write also clears both
 // liveness columns (liveness_unverified_since / liveness_note → NULL) in the
 // same atomic statement.
-func (s *Store) RecordSessionStartIdentity(instanceID, sessionID, jsonlPath string, pid int, procStarttime string) error {
+func (s *Store) RecordSessionStartIdentity(instanceID, sessionID, jsonlPath string, jsonlPresent bool, pid int, procStarttime string) error {
+	// Archive the prior session pair before overwriting, if the session id is
+	// rotating. Best-effort: a failure to archive must not block the identity
+	// write (fail-open per SRD §3.2), but it is surfaced via the trail.
+	if sessionID != "" {
+		s.archivePriorSessionOnRotate(instanceID, sessionID)
+	}
+
+	// jsonl_path write semantics (b.v2c AC1). The column is bound via a single
+	// COALESCE(?, jsonl_path) placeholder in every case; only the bound value
+	// changes:
+	//   - present, non-empty path            → bind the path      (SET it)
+	//   - path reported but not yet on disk  → bind the empty ""  (see below)
+	//   - no path reported at all            → bind NULL          (preserve)
+	// For the "reported but absent" case we must force the column to NULL rather
+	// than preserve it, so that branch uses the explicit "= NULL" query. All
+	// other cases share the COALESCE query with a nil-or-value bind.
+	sessionArg := nullableStringArg(sessionID)
+	pidArg := positiveIntArg(pid)
+	starttimeArg := nullableStringArg(procStarttime)
+
+	if jsonlPath != "" && !jsonlPresent {
+		// Reported but not on disk: never assert a dead pointer. Force NULL.
+		const qNull = `UPDATE spawns
+		                  SET claude_session_id = COALESCE(?, claude_session_id),
+		                      jsonl_path        = NULL,
+		                      pid               = ?,
+		                      proc_starttime    = ?,
+		                      liveness_unverified_since = NULL,
+		                      liveness_note     = NULL
+		                WHERE claude_instance_id = ?`
+		if _, err := s.db.Exec(qNull, sessionArg, pidArg, starttimeArg, instanceID); err != nil {
+			return fmt.Errorf("store: record session start identity: %w", err)
+		}
+		return nil
+	}
+
+	// SET the verified path when present; otherwise preserve via COALESCE.
+	var jsonlArg any
+	if jsonlPath != "" && jsonlPresent {
+		jsonlArg = jsonlPath
+	} else {
+		jsonlArg = nil
+	}
 	const q = `UPDATE spawns
 	              SET claude_session_id = COALESCE(?, claude_session_id),
 	                  jsonl_path        = COALESCE(?, jsonl_path),
@@ -471,37 +530,88 @@ func (s *Store) RecordSessionStartIdentity(instanceID, sessionID, jsonlPath stri
 	                  liveness_unverified_since = NULL,
 	                  liveness_note     = NULL
 	            WHERE claude_instance_id = ?`
-
-	var sessionArg any
-	if sessionID != "" {
-		sessionArg = sessionID
-	} else {
-		sessionArg = nil
-	}
-	var jsonlArg any
-	if jsonlPath != "" {
-		jsonlArg = jsonlPath
-	} else {
-		jsonlArg = nil
-	}
-	var pidArg any
-	if pid > 0 {
-		pidArg = pid
-	} else {
-		pidArg = nil
-	}
-	var starttimeArg any
-	if procStarttime != "" {
-		starttimeArg = procStarttime
-	} else {
-		starttimeArg = nil
-	}
-
-	_, err := s.db.Exec(q, sessionArg, jsonlArg, pidArg, starttimeArg, instanceID)
-	if err != nil {
+	if _, err := s.db.Exec(q, sessionArg, jsonlArg, pidArg, starttimeArg, instanceID); err != nil {
 		return fmt.Errorf("store: record session start identity: %w", err)
 	}
 	return nil
+}
+
+// nullableStringArg returns the string as a bound arg, or nil (SQL NULL) when
+// empty — the SetParentID house style for "" == NULL columns.
+func nullableStringArg(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+// positiveIntArg returns the int as a bound arg when positive, or nil (SQL
+// NULL) otherwise — matching the COALESCE(pid, 0) scan convention where 0 means
+// NULL (a real pid is always ≥1).
+func positiveIntArg(n int) any {
+	if n > 0 {
+		return n
+	}
+	return nil
+}
+
+// archivePriorSessionOnRotate archives the row's CURRENT (claude_session_id,
+// jsonl_path) into session_history when newSessionID differs from the recorded
+// current session id — i.e. the session is rotating (b.v2c AC6). It is a no-op
+// when the row is absent, when the current session id is empty (fresh spawn),
+// or when the current id already equals newSessionID (same-session re-fire).
+// Best-effort and fail-open: any error is emitted to the trail and swallowed so
+// the identity write proceeds. The UNIQUE(claude_instance_id, claude_session_id)
+// constraint makes re-archiving the same prior session idempotent (INSERT OR
+// IGNORE).
+func (s *Store) archivePriorSessionOnRotate(instanceID, newSessionID string) {
+	var (
+		curSession string
+		curJsonl   sql.NullString
+	)
+	err := s.db.QueryRow(
+		`SELECT COALESCE(claude_session_id, ''), jsonl_path
+		   FROM spawns WHERE claude_instance_id = ?`, instanceID,
+	).Scan(&curSession, &curJsonl)
+	if errors.Is(err, sql.ErrNoRows) {
+		return
+	}
+	if err != nil {
+		_ = trail.Emit(context.Background(), "ad.session.archive_failed", map[string]any{
+			"claude_instance_id": instanceID,
+			"error":              err.Error(),
+			"source":             "ad_spawn_store",
+		})
+		return
+	}
+	if curSession == "" || curSession == newSessionID {
+		return
+	}
+	var priorJsonl any
+	if curJsonl.Valid && curJsonl.String != "" {
+		priorJsonl = curJsonl.String
+	} else {
+		priorJsonl = nil
+	}
+	if _, err := s.db.Exec(
+		`INSERT OR IGNORE INTO session_history
+		     (claude_instance_id, claude_session_id, jsonl_path)
+		 VALUES (?, ?, ?)`, instanceID, curSession, priorJsonl,
+	); err != nil {
+		_ = trail.Emit(context.Background(), "ad.session.archive_failed", map[string]any{
+			"claude_instance_id": instanceID,
+			"claude_session_id":  curSession,
+			"error":              err.Error(),
+			"source":             "ad_spawn_store",
+		})
+		return
+	}
+	_ = trail.Emit(context.Background(), "ad.session.archived", map[string]any{
+		"claude_instance_id": instanceID,
+		"prior_session_id":   curSession,
+		"new_session_id":     newSessionID,
+		"source":             "ad_spawn_store",
+	})
 }
 
 // SetParentID writes the parent_id column. Used by resume to re-derive

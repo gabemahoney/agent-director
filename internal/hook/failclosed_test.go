@@ -55,7 +55,7 @@ func (f *flakyRelayStore) ApplyHookTransition(instanceID, newState string, softR
 	f.transitionArgs = append(f.transitionArgs, transitionCall{instanceID, newState, softRefresh})
 	return f.transitionErr
 }
-func (f *flakyRelayStore) RecordSessionStartIdentity(_, _, _ string, _ int, _ string) error {
+func (f *flakyRelayStore) RecordSessionStartIdentity(_, _, _ string, _ bool, _ int, _ string) error {
 	return f.identityErr
 }
 func (f *flakyRelayStore) UpsertOpenPermissionRequest(_, _, _, _ string, _ int, _ string) error {

@@ -66,6 +66,22 @@ var ErrNoSessionId = errors.New("ErrNoSessionId")
 // Resume cannot proceed; `delete` + fresh `spawn` is the recourse.
 var ErrJsonlMissing = errors.New("ErrJsonlMissing")
 
+// ErrJsonlNeverWritten is returned by the resume verb when the row carries a
+// claude_session_id but no transcript has EVER been written for it — the
+// persisted jsonl_path is NULL (the SessionStart hook found no file on disk),
+// the CLAUDE_CONFIG_DIR-aware fallback path also does not exist, and the
+// instance has no archived session history to fall back on. This is the b.v2c
+// "freshly-restarted, un-messaged bot" case: a fresh Claude session writes no
+// .jsonl until its first user turn, so there is genuinely nothing to resume.
+//
+// It is deliberately distinct from ErrJsonlMissing, whose meaning is
+// "candidates were tried and none matched" — a path was once recorded (or
+// composed) and has since rotted or been removed. The recourse differs:
+// ErrJsonlNeverWritten means the session never produced history (send it a
+// message, or delete + re-spawn), whereas ErrJsonlMissing means history existed
+// but the file is gone. Callers map by error NAME; both remain stable.
+var ErrJsonlNeverWritten = errors.New("ErrJsonlNeverWritten")
+
 // ErrSendKeysWhileRelayed is returned when a caller tries to send keys
 // into a Spawn that is currently sitting on a live relayed permission prompt
 // (relay_mode=on AND state=check_permission). The relay path needs to own the
