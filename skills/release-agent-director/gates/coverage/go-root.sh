@@ -12,7 +12,7 @@ GATE_LIB="$(cd "$(dirname "$0")/../lib" && pwd)"
 source "${GATE_LIB}/emit-diagnostic.sh"
 
 if [ -n "${1:-}" ]; then
-  cd "$1"
+  cd "$1" || { printf 'go-root.sh: cannot cd into worktree root: %s\n' "$1" >&2; exit 1; }
 fi
 
 TMPOUT="$(mktemp)"

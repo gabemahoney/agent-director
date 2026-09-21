@@ -44,7 +44,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-cd "$WORKTREE_ROOT"
+cd "$WORKTREE_ROOT" || { printf 'pack-first.sh: cannot cd into worktree root: %s\n' "$WORKTREE_ROOT" >&2; exit 2; }
 
 # ─── derive target version from package.json if not supplied ──────────────────
 if [[ -z "$TARGET_VERSION" ]]; then
@@ -67,6 +67,7 @@ trap 'rm -rf "$STAGING"' EXIT
 (cd "$PKG_DIR" && bun pm pack --destination "$STAGING_ABS") >/dev/null 2>&1
 
 # ─── detect produced tarball ──────────────────────────────────────────────────
+# shellcheck disable=SC2012 # STAGING is a private mktemp dir; the glob handles filenames, ls just picks the single .tgz and yields empty (checked below) when none exists
 TARBALL="$(ls "$STAGING"/*.tgz 2>/dev/null | head -1)"
 if [[ -z "$TARBALL" ]]; then
   emit_diagnostic \
