@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # publish-orchestrator.sh — publish phase end-to-end for agent-director releases.
 #
-# Executes 6 substeps in order (--release mode) or emits "would do" lines and
-# exits 0 (--dry-run mode, the default). Halts on the first substep failure with
-# a structured SR-14 extended diagnostic and a partial run report. On success,
+# Executes 6 substeps in order (--release mode) or emits "would do" lines
+# (--dry-run mode, the default). In BOTH modes an artifact preflight
+# (validate_publish_artifacts) runs first and exits 1 on a bad --tarball/--notes/
+# --binaries path, so dry-run no longer unconditionally exits 0 — a bad artifact
+# path fails fast in either mode. Halts on the first substep failure with a
+# structured SR-14 extended diagnostic and a partial run report. On success,
 # writes dist/release-report.json and a human-readable terminal summary.
 #
 # Usage:
@@ -13,6 +16,12 @@
 #     --tarball <path-to-npm-tgz>   # tarball produced by the pack phase
 #     --notes <path-to-notes.md>    # release notes file for gh release
 #     --binaries <comma-sep-paths>  # CLI binaries to attach as gh release assets
+#
+#   Path inputs (--tarball, --notes, --binaries): relative paths are resolved to
+#   absolute AT PARSE TIME against the caller's current working directory (NOT
+#   the worktree root), before any substep cd's. All resolved paths must exist as
+#   readable files — the artifact preflight (see below) checks this before any
+#   substep runs.
 #     [--release | --dry-run]       # default: dry-run
 #     [--worktree-root <path>]      # defaults to "."
 #     [--release-branch <name>]     # defaults to "release/v<target>"
@@ -33,6 +42,10 @@
 #   push-branch | create-tag | gh-release | npm-publish | fast-forward-main | delete-remote-branch
 #
 # Substeps (in order):
+#   0. artifact preflight           validate_publish_artifacts — verifies every
+#                                   --tarball/--notes/--binaries path resolves to
+#                                   a readable file; runs in both modes and halts
+#                                   (exit 1) before substep 1 on any bad path.
 #   1. publish.push-branch          git push origin <release-branch>
 #   2. publish.create-tag           git tag -a v<target> ... && git push origin v<target>
 #   3. publish.gh-release           gh release create v<target> --notes-file <notes> <binaries...>
@@ -42,8 +55,11 @@
 #   6. publish.delete-remote-branch git push origin --delete <release-branch>
 #
 # Exit codes:
-#   0  success (all substeps passed, or dry-run)
-#   1  substep failure (halt-on-failure; SR-14 diagnostic emitted to stderr)
+#   0  success (all substeps passed, or dry-run with all artifact paths valid)
+#   1  artifact preflight failure (publish.preflight-publish-artifacts; a
+#      --tarball/--notes/--binaries path is not a readable file — checked in both
+#      --release and --dry-run before any substep) OR substep failure
+#      (halt-on-failure). SR-14 diagnostic emitted to stderr in both cases.
 #   2  argument error
 
 set -uo pipefail
@@ -119,6 +135,47 @@ IFS=',' read -ra BINARY_PATHS <<< "${BINARIES}"
 # ─── helpers ──────────────────────────────────────────────────────────────────
 _now_iso() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
 
+# ─── _resolve_abs_path ────────────────────────────────────────────────────────
+# Resolve a path to an absolute path against the CURRENT working directory.
+#
+# This MUST be called at argument-parse time, before any substep `cd`s into a
+# subdirectory (e.g. _do_npm_publish enters pkg/ts-bun-client). A relative
+# --tarball such as `dist/agent-director-0.9.0.tgz` (the form the pack phase
+# emits) would otherwise resolve against the wrong directory inside the subshell
+# and npm publish would fail after the tag and GitHub Release are already public
+# (b.mjd).
+#
+# An empty input is echoed back unchanged (required-arg guards handle emptiness).
+# An already-absolute path is echoed back unchanged. A relative path is prefixed
+# with $PWD. The path need not exist yet — existence is enforced separately by
+# preflight validation (validate_publish_artifacts).
+_resolve_abs_path() {
+  local path="$1"
+  [[ -z "$path" ]] && { printf '%s' "$path"; return 0; }
+  case "$path" in
+    /*) printf '%s' "$path" ;;
+    *)  printf '%s/%s' "$PWD" "$path" ;;
+  esac
+}
+
+# Resolve every file-input argument to an absolute path NOW, at the top level,
+# while $PWD is still the caller's CWD (no substep has cd'd anywhere yet). This
+# makes the values independent of the pkg/ts-bun-client subshell cd in
+# _do_npm_publish and of any future cd (b.mjd). Existence is validated later by
+# validate_publish_artifacts; here we only make the paths absolute.
+#
+# CALLER_CWD is the directory relative inputs were resolved against — captured
+# here, while $PWD is still the caller's CWD. validate_publish_artifacts surfaces
+# it in its failure diagnostic so an operator who passed a worktree-relative path
+# from outside the worktree sees exactly which base was used (b.mjd).
+CALLER_CWD="${PWD}"
+TARBALL="$(_resolve_abs_path "${TARBALL}")"
+NOTES="$(_resolve_abs_path "${NOTES}")"
+for _i in "${!BINARY_PATHS[@]}"; do
+  BINARY_PATHS[$_i]="$(_resolve_abs_path "${BINARY_PATHS[$_i]}")"
+done
+unset _i
+
 # JSON-escape: backslash → \\, double-quote → \", newline → \n
 _jesc() {
   printf '%s' "$1" \
@@ -132,17 +189,30 @@ _jesc() {
 # appends the JSON string to the DIAGNOSTICS array.
 #
 # Usage: emit_publish_diagnostic <substep-short-name> <description> \
-#                                <corrective_action> <upstream_verbatim>
+#                                <corrective_action> <upstream_verbatim> \
+#                                [offending_file_or_artifact]
+# The 5th argument is optional; when omitted (or empty) the
+# offending_file_or_artifact field is emitted as JSON null, preserving the
+# behaviour of every call site that does not pass it. Callers that know the
+# bad path (e.g. validate_publish_artifacts) pass the resolved absolute path so
+# operators can consult the recovery-cheatsheet field directly (b.mjd).
 emit_publish_diagnostic() {
   local substep="$1"
   local description="$2"
   local corrective="$3"
   local upstream_verbatim="$4"
+  local offending="${5:-}"
 
   # Build prior_substeps_succeeded JSON array
   local prior_json="[]"
   if [[ ${#SUCCEEDED_SUBSTEPS[@]} -gt 0 ]]; then
     prior_json="$(printf '%s\n' "${SUCCEEDED_SUBSTEPS[@]}" | jq -R . | jq -sc '.')"
+  fi
+
+  # Empty → JSON null; non-empty → JSON string (jq --arg handles escaping).
+  local offending_json="null"
+  if [[ -n "${offending}" ]]; then
+    offending_json="$(jq -n --arg v "${offending}" '$v')"
   fi
 
   local diag
@@ -153,9 +223,10 @@ emit_publish_diagnostic() {
     --arg which_substep_failed    "publish.${substep}" \
     --argjson prior_substeps_succeeded "$prior_json" \
     --arg upstream_response_verbatim   "$upstream_verbatim" \
+    --argjson offending_file_or_artifact "$offending_json" \
     '{
       gate:                       $gate,
-      offending_file_or_artifact: null,
+      offending_file_or_artifact: $offending_file_or_artifact,
       description:                $description,
       corrective_action:          $corrective_action,
       which_substep_failed:       $which_substep_failed,
@@ -417,6 +488,56 @@ run_substep() {
   SUCCEEDED_SUBSTEPS+=("publish.${substep}")
 }
 
+# ─── validate_publish_artifacts ───────────────────────────────────────────────
+# Preflight validation: every file the publish phase will consume as input must
+# exist and be readable BEFORE any irreversible substep runs (b.mjd, AC2/AC4).
+#
+# The three preceding substeps (push-branch, create-tag, gh-release) are all
+# irreversible and externally visible, so discovering a missing tarball at
+# substep 4 strands a half-shipped release. This check runs first — before
+# push-branch — and halts loudly on the first bad path, in both --release and
+# --dry-run mode, so a bad artifact path is caught regardless of mode.
+#
+# Artifacts consumed by the publish phase:
+#   - TARBALL       → npm publish            (_do_npm_publish, substep 4)
+#   - NOTES         → gh release --notes-file (_do_gh_release, substep 3)
+#   - BINARY_PATHS  → gh release assets       (_do_gh_release, substep 3)
+#
+# All three are absolute by this point (resolved at parse time). On failure it
+# emits an SR-14 diagnostic, writes the report, prints the terminal summary, and
+# exits 1 — matching the substep-failure exit path, but with no substep having
+# run (SUCCEEDED_SUBSTEPS is empty, so prior_substeps_succeeded is []).
+validate_publish_artifacts() {
+  local bad_path="" bad_kind=""
+
+  if [[ ! -f "${TARBALL}" || ! -r "${TARBALL}" ]]; then
+    bad_path="${TARBALL}"; bad_kind="--tarball (npm publish)"
+  elif [[ ! -f "${NOTES}" || ! -r "${NOTES}" ]]; then
+    bad_path="${NOTES}"; bad_kind="--notes (gh release --notes-file)"
+  else
+    local b
+    for b in "${BINARY_PATHS[@]}"; do
+      if [[ ! -f "${b}" || ! -r "${b}" ]]; then
+        bad_path="${b}"; bad_kind="--binaries (gh release asset)"
+        break
+      fi
+    done
+  fi
+
+  [[ -z "${bad_path}" ]] && return 0
+
+  local description corrective
+  description="preflight.publish-artifacts: ${bad_kind} path is not a readable file: ${bad_path}. Relative --tarball/--notes/--binaries inputs are resolved against the caller's working directory (${CALLER_CWD}), so this is the absolute path that was checked. Halting before any irreversible substep (push-branch/create-tag/gh-release) runs."
+  corrective="Ensure the ${bad_kind} artifact exists and is readable at ${bad_path}. Relative inputs resolve against the caller's CWD (${CALLER_CWD}), NOT the worktree root — if you passed a worktree-relative path from outside the worktree, either cd into the worktree first or pass an absolute path, then re-run the publish phase. No release actions have been taken."
+  printf '[preflight.publish-artifacts] FAILED: %s (resolved against caller CWD %s)\n' "${bad_path}" "${CALLER_CWD}" >&2
+  emit_publish_diagnostic "preflight-publish-artifacts" "${description}" "${corrective}" "artifact path does not resolve to a readable file: ${bad_path}" "${bad_path}"
+  record_substep "publish.preflight-publish-artifacts" "failed" "validate publish artifact paths" "$(_now_iso)" "artifact path does not resolve to a readable file: ${bad_path}"
+  local elapsed=$(( $(date +%s) - START_EPOCH ))
+  write_report "${elapsed}"
+  emit_terminal_summary "${elapsed}"
+  exit 1
+}
+
 # ─── substep functions ────────────────────────────────────────────────────────
 # Each _do_* function runs the actual side-effecting command(s) for one substep.
 # They must redirect only stderr externally (run_substep handles that); stdout
@@ -493,6 +614,12 @@ _do_delete_remote_branch() {
   git -C "${WORKTREE_ROOT}" push origin --delete "${RELEASE_BRANCH}"
 }
 
+# ─── preflight: validate publish-phase artifact paths ─────────────────────────
+# Runs BEFORE the first irreversible substep. Halts fast on any tarball / notes
+# / binary path that is not a readable file, so no public tag or Release can be
+# created for a run that would fail at npm-publish on a bad input (b.mjd).
+validate_publish_artifacts
+
 # ─── 6-substep pipeline ───────────────────────────────────────────────────────
 
 # 1. publish.push-branch
@@ -507,7 +634,7 @@ run_substep "create-tag" \
 
 # 3. publish.gh-release
 run_substep "gh-release" \
-  "gh release create v${TARGET} --notes-file ${NOTES} ${BINARIES}" \
+  "gh release create v${TARGET} --notes-file ${NOTES} ${BINARY_PATHS[*]}" \
   _do_gh_release
 
 # 4. publish.npm-publish
