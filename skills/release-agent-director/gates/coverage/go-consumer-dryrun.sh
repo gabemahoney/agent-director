@@ -12,9 +12,9 @@ GATE_LIB="$(cd "$(dirname "$0")/../lib" && pwd)"
 source "${GATE_LIB}/emit-diagnostic.sh"
 
 if [ -n "${1:-}" ]; then
-  cd "$1/tools/consumer-dryrun"
+  cd "$1/tools/consumer-dryrun" || { printf 'go-consumer-dryrun.sh: cannot cd into %s\n' "$1/tools/consumer-dryrun" >&2; exit 1; }
 else
-  cd tools/consumer-dryrun
+  cd tools/consumer-dryrun || { printf 'go-consumer-dryrun.sh: cannot cd into tools/consumer-dryrun\n' >&2; exit 1; }
 fi
 
 TMPOUT="$(mktemp)"

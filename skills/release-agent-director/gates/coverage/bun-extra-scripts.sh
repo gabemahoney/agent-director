@@ -25,7 +25,7 @@ if [ ! -d "$PKG_DIR" ]; then
   exit 1
 fi
 
-cd "$PKG_DIR"
+cd "$PKG_DIR" || { printf 'bun-extra-scripts.sh: cannot cd into package dir: %s\n' "$PKG_DIR" >&2; exit 1; }
 
 # ── Per-gate scratch HOME (b.3jn) ──────────────────────────────────────────
 # The five coverage gates run concurrently inside one sandbox container, all

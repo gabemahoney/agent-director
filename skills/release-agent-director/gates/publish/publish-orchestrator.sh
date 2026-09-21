@@ -587,6 +587,7 @@ _do_fast_forward_main() {
     | awk '/^worktree /{sub(/^worktree /,""); print; exit}')"
 
   if [[ -z "${parent}" ]]; then
+    # shellcheck disable=SC2016 # backticks are literal prose in the message, not a command substitution
     printf 'SR-13.3: could not derive the parent (main) worktree from release worktree %s — `git worktree list --porcelain` yielded no worktree entry. Cannot fast-forward main.\n' \
       "${WORKTREE_ROOT}" >&2
     return 1

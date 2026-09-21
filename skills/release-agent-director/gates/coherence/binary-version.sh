@@ -40,7 +40,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-cd "$WORKTREE_ROOT"
+cd "$WORKTREE_ROOT" || { printf 'binary-version.sh: cannot cd into worktree root: %s\n' "$WORKTREE_ROOT" >&2; exit 2; }
 
 # ─── derive target from package.json if not supplied ─────────────────────────
 PKG_DIR="${RELEASE_PKG_DIR:-pkg/ts-bun-client}"
