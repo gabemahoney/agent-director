@@ -773,7 +773,7 @@ shared Go-runtime state to preserve across calls.
 
 Every agent-director error envelope carries two string fields: `err_name` (the canonical error name, e.g. `"ErrSpawnNotFound"`) and `err_description` (a human-readable detail string). The TS client translates these into a typed class hierarchy so callers can catch specific errors with `instanceof`.
 
-**Catalog source.** `pkg/api/errnames/catalog.json` is the single source of truth for every named error the Go binary can emit. It contains 37 entries at time of writing. Each entry has a `name` field (the `err_name` string) and a `package` field naming the origin Go package.
+**Catalog source.** `pkg/api/errnames/catalog.json` is the single source of truth for every named error the Go binary can emit. It contains 38 entries at time of writing. Each entry has a `name` field (the `err_name` string) and a `package` field naming the origin Go package.
 
 **Base class.** `src/errors.ts::AgentDirectorError extends Error`. Constructor: `(verb: string, err_name: string, err_description: string)`. Sets `this.name = this.constructor.name` so subclass names propagate correctly through the prototype chain. Readonly fields: `verb`, `errName`, `errDescription`. Message format: `"${err_name}: ${err_description}"`.
 
@@ -949,6 +949,24 @@ synthesized in stage 4. The handler's binary path is resolved via
 macOS) so it is always the same binary version that ran the `spawn`
 call.
 
+**Emitted per-hook relay timeout.** `synthesizeSettings` emits an explicit
+per-hook `timeout` field on exactly the `PermissionRequest` and `PreToolUse`
+hook entries — placed on the inner command object (sibling of
+`type`/`command`), not on the outer entry that carries `matcher`. Its value is
+`config.Relay.EffectiveTimeoutSeconds()` (the configured `relay.timeout_seconds`
+when positive, else the `DefaultRelayTimeoutSeconds` fallback of 86400). This is
+the same accessor the relay poll loop's deadline derives from
+(`internal/hook/polling.go`), so Claude Code's per-hook kill boundary and the
+poll deadline are always the identical value. Without the field Claude Code
+would kill the polling hook at its own 600-second default per-hook timeout —
+discarding the hook's output with no envelope, so a late decision falls open
+into the native permission flow. The other six hook events and the
+`inject_help_hook` `SessionStart` entry carry no `timeout` and are unchanged.
+Any future author touching either the emitted timeout or the poll deadline must
+route through `EffectiveTimeoutSeconds()` — it is the single source of truth for
+the "non-positive falls back to 86400" rule, and splitting it would let the two
+boundaries drift.
+
 ### Opt-in dynamic help-hook injection
 
 When `defaults.inject_help_hook = true` is set in `config.toml`,
@@ -1019,12 +1037,28 @@ blocks SessionStart, so the state never advances, and `send-keys` keeps
 rejecting with `ErrSpawnNotInteractive`. `ended`/`missing` are still rejected
 even when `allow_pending=true`.
 
-Relay-mode guard: when `relay_mode=on` AND `state=check_permission`,
-the permission relay (Epic 10) owns the modal answer. SendKeys refuses
-with `ErrSendKeysWhileRelayed` so the relay's `decide()` write isn't
-racing a pane-side keystroke. The full relay path lands in Epic 10;
-Epic 4 stubs the guard so the precondition surface is correct from
-day one.
+Relay-mode guard (time-bounded): when `relay_mode=on` AND
+`state=check_permission`, the permission relay normally owns the modal
+answer, so `SendKeys` refuses with `ErrSendKeysWhileRelayed` to keep a
+pane-side keystroke from racing the relay's `decide()` write. The refusal
+is **not unconditional**: it consults the guard-release sibling of the
+same single time-based authority `decide` uses
+(`RelayRequestGuardReleasable`, SR-4.4 — same file, same margin constant
+in `pkg/api/deliverability.go` as `RelayRequestUndeliverable`) across
+*every* one of the spawn's `permission_requests` rows, each row's window
+measured from its own `created_at` regardless of decision status. The one
+deliberate difference is the **sign of the safety margin**: `decide` fails
+early (refuses at `elapsed ≥ window − margin`), the guard fails late
+(releases at `elapsed ≥ window + margin`), so the guard never frees while
+a live poller — provably alive until ~`window` — could still emit a
+decision. It refuses while any row might still be delivered (a zero-row
+spawn also refuses — no signal, no authority to release) and **releases
+only once every row's window plus the safety margin has elapsed**, at
+which point the delivering hook is dead and send-keys becomes the
+sanctioned recovery of a fallen-back relay (see "Send-keys interaction"
+and "Invariant — relay-listener pairing" in the relay chapter). There is
+no second independent check — no dialog-visibility probe, no re-derived
+timeout arithmetic.
 
 ### `read-pane`
 
@@ -1653,11 +1687,52 @@ decide allow/deny out-of-band. Conceptually:
     `ErrPermissionRequestNotFound` when no row matches; `sql.ErrNoRows` is
     translated here and MUST NOT leak across the store boundary (SR-7.4).
   - `DecidePermissionRequest`: the race-free first-call-wins UPDATE.
+  - `DecidePermissionRequestIfDeliverable`: the deliverability-guarded
+    variant of the above. Same `decision IS NULL AND request_token = ?`
+    first-call-wins guard PLUS a `created_at > ?` predicate, so the
+    deliverability check and the decision write are one atomic statement
+    — there is no interval in which a success is returned but the relay
+    window has already closed. The cutoff instant is computed by the
+    `pkg/api` single authority (see `pkg/api/deliverability.go` below)
+    and passed in; the boundary + safety-margin logic is never restated
+    in SQL (SR-4.4).
+
+- **`pkg/api/deliverability.go`** — the single authority (SR-4.4) for
+  the relay delivery-window boundary, holding **both** sides of a
+  deliberate asymmetry so each caller fails toward safety.
+  `RelayDeliverabilityCutoff(now, effectiveWindow)` /
+  `RelayRequestUndeliverable(createdAt, effectiveWindow, now)` are the
+  fail-early pair used by `decide`: the cutoff is `now` less the
+  effective window **plus** the named `RelayKillSafetyMargin` (a 1s
+  epsilon at the kill boundary), so `decide` refuses at `elapsed ≥
+  window − margin` and never records a success a dying hook might not
+  deliver. `RelayGuardReleaseCutoff(now, effectiveWindow)` /
+  `RelayRequestGuardReleasable(createdAt, effectiveWindow, now)` are the
+  fail-late mirror used by the send-keys guard: the cutoff subtracts
+  `window + margin`, so the guard releases only at `elapsed ≥ window +
+  margin` and never frees while a live poller (provably alive until
+  ~`window`) could still emit. Both pairs live in this one file and
+  share the one `RelayKillSafetyMargin` constant — the "single time-based
+  authority" is one file, one margin, applied with the sign that makes
+  each caller safe. All four are pure, time-only functions of stored row
+  state, the resolved window, and an injected clock — never dialog- or
+  state-derived. Any code needing either boundary MUST consult these
+  functions rather than re-derive it.
 
 - **`pkg/api/decide.go`** — verb wrapper. State guards
   (`ErrRelayModeOff`, `ErrSpawnNotFound`, `ErrInvalidDecision`)
-  before the UPDATE, plus the RowsAffected==0 disambiguation
-  (`ErrAlreadyDecided` vs `ErrNoOpenPermissionRequest`).
+  before the UPDATE, then the atomic deliverability-guarded write via
+  `DecidePermissionRequestIfDeliverable` (cutoff obtained from the
+  shared single-authority function; the effective window is resolved
+  once at `Client.Decide` via `config.Relay.EffectiveTimeoutSeconds()`
+  and the clock is injected as `time.Now()`). A successful write means
+  the decision is deliverable — never a recorded success against a dead
+  relay hook. The RowsAffected==0 case is three-way disambiguated via a
+  follow-up SELECT with pinned precedence: `ErrAlreadyDecided` wins for
+  decided rows; `ErrRelayFallenBack` (the "too late — answer at the
+  pane" sentinel) applies ONLY to open rows whose window has elapsed;
+  otherwise `ErrNoOpenPermissionRequest`. A fallen-back refusal leaves
+  `decision` NULL.
 
 - **`pkg/api/get_permission.go`** — verb wrapper. Read-only: delegates to
   `GetPermissionRequestByToken` and projects the row onto the SR-7.4 wire
@@ -1696,21 +1771,69 @@ relay-on Spawn still surfaces deny.
 
 ### Send-keys interaction
 
-`pkg/api/sendkeys.go`'s precondition: when `relay_mode=on` AND
-`state=check_permission`, return `ErrSendKeysWhileRelayed`. The
-relay path owns the modal answer; a pane-side keystroke would race
-the relay's decide write. The guard was added in Epic 4 (stubbed);
-Epic 10 activates it end-to-end.
+`pkg/api/sendkeys.go`'s guard: when `relay_mode=on` AND
+`state=check_permission`, `SendKeys` refuses with
+`ErrSendKeysWhileRelayed` *while the relay can still act* — the relay
+owns the modal answer, and a pane-side keystroke would race the relay's
+`decide` write. The guard is **time-bounded, not unconditional**:
+`evaluateRelayGuard` loads all of the spawn's `permission_requests` rows
+via `PermissionRequestsForSpawn` and calls the shared
+`RelayRequestGuardReleasable` signal — the guard-release mirror of the
+same single time-based authority `decide` uses (SR-4.4, same file and
+margin constant in `pkg/api/deliverability.go`; no independent second
+check and no dialog probe) — on each, measuring each row's window from its
+own `created_at` regardless of decision status. The margin sign is the one
+deliberate difference: `decide` fails early (`window − margin`), the guard
+fails late (`window + margin`), so the guard never frees while a live
+poller could still emit. It refuses while any row might still be delivered
+(and refuses on the zero-row transient — no signal, no authority to
+release), and **releases only when every row's window plus the safety
+margin has elapsed**. Once released, the delivering hook is provably dead,
+so send-keys is the sanctioned recovery of a fallen-back relay — see the
+invariant below and the `ad.send_keys.called` audit event. (If the store
+read fails, the guard records `guard_evaluation="error"` — distinct from
+the ordinary-send `"not-applicable"` — and the send fails with the store
+error.)
 
 ### Invariant — relay-listener pairing
 
 **Aggregate invariant (per Spawn).** If `spawns.state = check_permission`,
 then either a `runRelay` polling loop is alive consuming `decide()` writes,
 OR `permission_requests.decision` is non-NULL for the corresponding row. A
-bot must never be sitting in "waiting for permission" with no listener AND no
-decision; if both are false, the spawn is stranded and any external surface
-(e.g. a Slack approval message from CSCB) would be a lying ghost — buttons
-that go nowhere.
+bot must never be sitting in "waiting for permission" with no live listener AND
+no decision *and no sanctioned way out*: if a relay listener is gone and every
+row is undeliverable, an external surface (e.g. a Slack approval message from
+CSCB) would be a lying ghost — buttons that go nowhere.
+
+**Sanctioned handling of the all-rows-undeliverable state.** The
+listener-gone/decision-NULL state is not a stranded dead end. Once every
+`permission_requests` row's window plus the safety margin has elapsed — the
+guard-release mirror (`RelayRequestGuardReleasable`) of the same time-based
+authority whose fail-early form (`RelayRequestUndeliverable`) makes `decide`
+return `ErrRelayFallenBack` — the send-keys relay guard *releases* (see
+"Send-keys interaction" above). The guard holds a margin longer than
+`decide` refuses (`window + margin` vs `window − margin`), so by the time it
+releases `decide` has long since returned `ErrRelayFallenBack`. The operator answers Claude Code's still-displayed native
+permission dialog through `send-keys` (no dedicated verb, never raw tmux), and
+the recovery is audited as `ad.send_keys.called` with
+`guard_evaluation=released`. So the terminal state of a fallen-back relay is a
+sanctioned, audited in-band recovery, not a lying ghost.
+
+**What makes the invariant hold, and the window it holds within.** The
+listener half of the invariant is guaranteed only for the configured relay
+window, and only because `synthesizeSettings` emits the per-hook `timeout`
+(equal to `relay.timeout_seconds`) on the `PermissionRequest`/`PreToolUse`
+entries — see "Emitted per-hook relay timeout" in the spawn pipeline section.
+Without that field Claude Code would kill the polling hook at its 600-second
+default with no envelope — silently violating the invariant by removing the
+listener while the row stays open. With the field, the poll deadline and Claude
+Code's kill boundary are the same value, so the hook is never killed out from
+under the loop; instead the timeout path (`decision='deny'`,
+`decision_reason='timeout'`) closes the invariant in-band by writing a decision.
+The native permission dialog Claude Code shows during a relayed request is
+concurrent racing UI alongside the live `PermissionRequest` hook — not a
+fallback state and not a hook-death signal; a decision envelope arriving within
+the window dismisses it.
 
 **Per-row refinement (SRD §6.2, v2).** The v2 schema allows multiple
 concurrent `permission_requests` rows for the same Spawn, one per
@@ -1949,18 +2072,19 @@ tool_input (PRD §9, SR-A-2.1).
 
 ### `ad.*` event namespace
 
-Eight event strings are emitted today. The first seven are the primary
-event families; the eighth is a self-reporting meta event.
+Nine event strings are emitted today. The first eight are the primary
+event families; the last is a self-reporting meta event.
 
 | Event | Source | Description |
 |-------|--------|-------------|
 | `ad.hook.fired` | `ad_hook` | One per `agent-director hook` invocation — records the hook payload and caller identity (SR-A-2.1, Epic 1) |
 | `ad.spawn.state_transition` | `ad_spawn_store` | One per write to `spawns.state`, including no-ops and soft-refresh ticks (SR-A-2.2, Epic 2) |
 | `ad.row_mutation.committed` | `ad_store` | One per successful write to `permission_requests` (SR-A-2.6, Epic 3) |
-| `ad.decide.called` | `ad_decide` | One per `agent-director decide` invocation, including `ErrAlreadyDecided` no-ops (SR-A-2.4, Epic 4) |
+| `ad.decide.called` | `ad_decide` | One per `agent-director decide` invocation on every return path, carrying an `outcome` field set to the canonical err_name (or `ok`). Recognized failure outcomes include the no-op refusals `ErrAlreadyDecided` and `ErrRelayFallenBack` (a fallen-back refusal is a recognized outcome, not `ErrInternal`) (SR-A-2.4, Epic 4) |
 | `ad.find_missing.tick` | `ad_find_missing` | One per row find-missing reconciles or flags: `reconciliation_reason=proc_absent` per row marked missing, `permission_orphan_closeout` per orphaned permission_requests row closed on that mark, and `probe_eacces` per live row that first transitions into the unverified (permission-walled) state — one tick per NULL→set transition only, never on a repeat sweep. There is no global-refusal tick (the old degraded-mode refusal is gone; unreadable rows are skipped and surfaced per-row). (SR-A-2.5, Epic 5; SR-7/SR-8) |
 | `ad.relay_attempt.completed` | `relay_hook` | One per worker permission-relay attempt (SR-A-2.3, Epic 6) |
 | `ad.resume.observed` | `ad_polling` | One per hook-resume back to Claude Code (SR-A-2.7, Epic 7) |
+| `ad.send_keys.called` | `ad_send_keys` | One per `agent-director send-keys` invocation on every return path (fail-open, mirroring `ad.decide.called`). Carries `outcome` (canonical err_name or `ok`), AD-collected `caller_*` identity, and a `guard_evaluation` field — `not-applicable` (relay guard did not apply), `held` (refused, relay could still act), or `released` (guard released, the audited recovery of a fallen-back relay) — so recovery sends are distinguishable from ordinary sends and refusals (SR-5.2) |
 | `ad.trail_meta.emit_failed` | `ad_trail_meta` | Self-reporting envelope written when a primary emit fails — carries `original_event` and `error_class` (SR-A-3.2) |
 
 ### Sources
@@ -1976,6 +2100,7 @@ The `source` field identifies which emitter wrote the line:
 | `ad_find_missing` | `pkg/api/find_missing.go` and `internal/store/recovery.go` — reconciliation |
 | `relay_hook` | `internal/hook/permission.go` and `cmd/agent-director/trail_emit_cmd.go` — relay-attempt completion |
 | `ad_polling` | `internal/hook/permission.go` — resume observed on hook return |
+| `ad_send_keys` | `pkg/api/sendkeys.go` — send-keys verb (per-invocation, carries the relay-guard evaluation) |
 | `ad_trail_meta` | `internal/trail/trail.go` — the trail writer itself (meta-events only) |
 
 ### Operator access
@@ -2815,6 +2940,29 @@ go test ./test/smoke/go/... -race -count=2
 ```
 
 `-race` shakes out goroutine-level data races in `pkg/api` and its dependencies. `-count=2` runs each subtest twice in the same process, exposing inter-test state leakage (e.g., package-level singletons or temp files not cleaned up between runs).
+
+### storefix seeders (reusable test fixtures)
+
+`internal/testsupport/storefix/` is the canonical home for store-layer
+test fixtures. Future test authors MUST reuse these `Seed*` helpers
+rather than reinvent raw-connection row setup or backdating; each helper
+uses `t.TempDir()` and never touches `~/.agent-director`.
+
+**`SeedUndeliverablePermissionRequest(t, s, dbPath, instanceID, requestToken, age)`**
+is the reusable helper for undeliverability tests: it backdates the
+`created_at` of a single open `permission_requests` row (identified by
+token) to `now-age` so the shared time-based signal
+(`api.RelayRequestUndeliverable`) reads it as undeliverable, while
+leaving other open rows for the same spawn deliverable. Because the
+store API deliberately exposes no `created_at` mutation, the helper uses
+a second raw `sql.Open` connection with a UTC-formatted UPDATE (mirroring
+`SeedExpiredCandidate` and `SeedClosedPermissionRequests`) — do NOT
+hand-roll raw-connection backdating in new tests; call this instead. It
+deliberately does not hardcode the 86400s default or restate the
+non-positive→default fallback (that lives solely in
+`config.Relay.EffectiveTimeoutSeconds`); callers choose `age` relative to
+the effective window. Seed the open row first (e.g. via
+`SeedCheckPermission`, which uses `TestRequestTokenA`).
 
 ### ts-helper wrapper CLI
 

@@ -200,8 +200,12 @@ Returns `SendKeysResult` (empty struct, reserved for future fields).
 Most-likely sentinel errors: `ErrSpawnNotFound`,
 `ErrSpawnNotInteractive` (state is not `waiting/working/ask_user/
 check_permission`), `ErrSendKeysWhileRelayed` (relay_mode=on and state
-is `check_permission` — the relay path owns the answer). See
-`(*Client).SendKeys` godoc.
+is `check_permission` **and** at least one of the Spawn's permission
+requests is still within its relay window — or the Spawn has zero request
+rows; the relay still owns the answer). This guard is **time-bounded**:
+once every request row's window has elapsed the delivering hook is dead
+and the guard releases, letting the operator recover the wedged Spawn
+through this sanctioned, audited surface. See `(*Client).SendKeys` godoc.
 
 #### `AllowPending` — pre-SessionStart opt-in
 
@@ -219,6 +223,23 @@ a caller detect and dismiss such prompts without deadlocking.
 
 `ended` and `missing` Spawns are still rejected regardless of
 `AllowPending` — there is no pane to write to.
+
+#### Pure `SendKeys` function
+
+`(*Client).SendKeys` is a thin wrapper over a pure package-level function
+that takes the relay window and the clock as explicit inputs so the
+guard-release verdict is deterministic and testable:
+
+```go
+func SendKeys(s SendKeysStore, tmux SendKeysTmux, effectiveWindow time.Duration, now time.Time, params SendKeysParams) (SendKeysResult, error)
+```
+
+The `Client` method resolves `effectiveWindow` via
+`cfg.Relay.EffectiveTimeoutSeconds()` (the single source for the
+non-positive → default fallback) and injects `time.Now()`, then records the
+guard evaluation on the `ad.send_keys.called` trail event. Most callers use
+the `Client` method; the pure function is for tests and callers that need to
+control the window and clock.
 
 ```go
 _, err := c.SendKeys(api.SendKeysParams{
@@ -333,7 +354,7 @@ Common sentinels across verbs:
 | `ErrStoreNotInitialized` | Store file absent and `CreateIfMissing` is false |
 | `ErrSchemaMismatch` | DB schema version mismatch — remove and reinitialize |
 | `ErrSpawnNotInteractive` | State is not a live conversational state |
-| `ErrSendKeysWhileRelayed` | Relay path owns the `check_permission` answer |
+| `ErrSendKeysWhileRelayed` | Relay path still owns the `check_permission` answer — refused while any request window is live; releases once every window has elapsed |
 | `ErrListInvalidLabel` | Label filter not in `key=value` form |
 
 ---

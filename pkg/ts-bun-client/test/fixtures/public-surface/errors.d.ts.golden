@@ -279,6 +279,9 @@ export declare class ErrJsonlMissing extends AgentDirectorError {
 /** Mirrors ErrRelayModeOff (package: api) */
 export declare class ErrRelayModeOff extends AgentDirectorError {
 }
+/** Mirrors ErrRelayFallenBack (package: api) */
+export declare class ErrRelayFallenBack extends AgentDirectorError {
+}
 /** Mirrors ErrInvalidDecision (package: api) */
 export declare class ErrInvalidDecision extends AgentDirectorError {
 }

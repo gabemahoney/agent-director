@@ -276,6 +276,67 @@ func SeedClosedPermissionRequests(t *testing.T, s *store.Store, dbPath, instance
 	return tokens
 }
 
+// SeedUndeliverablePermissionRequest backdates the created_at of the open
+// permission_requests row identified by (instanceID, requestToken) to
+// now-age, so the shared time-based deliverability signal
+// (api.RelayRequestUndeliverable) reads the row as undeliverable. The row
+// must already exist and be open — seed it first via SeedCheckPermission
+// (which uses TestRequestTokenA) or SeedOpenPermissionRequests. Because the
+// backdate targets a single row by token, callers can make one row among
+// several open rows for the same spawn undeliverable while leaving the others
+// deliverable (Epic 3 mixed-deliverability, SR-7.3).
+//
+// age is chosen by the caller relative to the configured effective relay
+// timeout: pass an age greater than the window (minus the safety margin) to
+// cross the deliverability boundary. The helper deliberately does NOT hardcode
+// 86400 or restate the non-positive→default fallback rule — that lives solely
+// in config.Relay.EffectiveTimeoutSeconds.
+//
+// dbPath must be the SQLite file path returned by OpenTempStore. Backdating
+// uses a second raw sql.Open connection with a UTC-formatted UPDATE, mirroring
+// SeedExpiredCandidate / SeedClosedPermissionRequests: the store API
+// deliberately exposes no created_at mutation, so a raw connection is the only
+// way to simulate elapsed time without altering production store methods.
+//
+// After it returns, a fresh read of the row shows the backdated created_at and
+// decision still NULL.
+func SeedUndeliverablePermissionRequest(t *testing.T, s *store.Store, dbPath, instanceID, requestToken string, age time.Duration) {
+	t.Helper()
+
+	// Confirm the target row exists and is still open before backdating, so a
+	// mis-wired test fails with a clear message rather than silently updating
+	// zero rows.
+	pr, err := s.GetPermissionRequest(instanceID, requestToken)
+	if err != nil {
+		t.Fatalf("storefix.SeedUndeliverablePermissionRequest: GetPermissionRequest(%q, %q): %v (seed the open row first via SeedCheckPermission/SeedOpenPermissionRequests)", instanceID, requestToken, err)
+	}
+	if pr.Decision != "" {
+		t.Fatalf("storefix.SeedUndeliverablePermissionRequest: (%q, %q) is already decided (%q); cannot make a closed row undeliverable", instanceID, requestToken, pr.Decision)
+	}
+
+	raw, err := sql.Open("sqlite", "file:"+dbPath)
+	if err != nil {
+		t.Fatalf("storefix.SeedUndeliverablePermissionRequest: open raw db %q: %v", dbPath, err)
+	}
+	defer func() { _ = raw.Close() }()
+
+	backdate := time.Now().UTC().Add(-age).Format("2006-01-02 15:04:05")
+	res, err := raw.Exec(
+		`UPDATE permission_requests SET created_at = ? WHERE claude_instance_id = ? AND request_token = ? AND decision IS NULL`,
+		backdate, instanceID, requestToken,
+	)
+	if err != nil {
+		t.Fatalf("storefix.SeedUndeliverablePermissionRequest: backdate created_at for (%q, %q): %v", instanceID, requestToken, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		t.Fatalf("storefix.SeedUndeliverablePermissionRequest: RowsAffected for (%q, %q): %v", instanceID, requestToken, err)
+	}
+	if affected != 1 {
+		t.Fatalf("storefix.SeedUndeliverablePermissionRequest: backdate for (%q, %q) affected %d rows, want 1", instanceID, requestToken, affected)
+	}
+}
+
 // SeedOpenPermissionRequests seeds N open permission_requests rows for instanceID,
 // one per token in tokens, by calling UpsertOpenPermissionRequest. Intended for
 // parallel-hook ordering, state-machine retention, find-missing multi-row, and
