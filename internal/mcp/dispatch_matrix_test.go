@@ -9,11 +9,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 	"github.com/gabemahoney/agent-director/internal/mcp"
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	api "github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
 // matrixID is the sentinel claude_instance_id used across every verb
@@ -62,6 +62,12 @@ func matrixCases() map[string]matrixCase {
 		"kill":      {args: `{"claude_instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
 		"pause":     {args: `{"claude_instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
 		"resume":    {args: `{"claude_instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
+
+		// repair-transcript (b.v2c AC7): jsonl_path must exist on disk or the
+		// verb rejects with ErrRepairTranscriptMissing before the store lookup;
+		// "/tmp" always stats, so the call reaches the seeded row and a dropped
+		// claude_instance_id tag surfaces as ErrSpawnNotFound (the matrix signal).
+		"repair-transcript": {args: `{"claude_instance_id":"` + matrixID + `","claude_session_id":"sess-repair","jsonl_path":"/tmp"}`, setup: seedEnded("off")},
 
 		// decide: relay_mode must be "on" so the row passes the
 		// ErrRelayModeOff check after the id lookup succeeds.

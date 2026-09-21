@@ -72,18 +72,44 @@ func SeedErrSpawnNotInteractive(t *testing.T) (*store.Store, string) {
 	return s, dbPath
 }
 
-// SeedErrJsonlMissing returns a store with one ended spawn whose
-// claude_session_id is set (id="id-err-jm-1", sessionID="sess-err-jm-1") but
-// whose JSONL transcript file does not exist on disk. resume on this spawn
-// triggers ErrJsonlMissing because spawn.JsonlPath stat-fails on the
-// absent file. The calling test must NOT create the JSONL under HOME.
+// SeedErrJsonlMissing returns a store with one ended spawn whose current session
+// has a NULL jsonl_path AND at least one ARCHIVED prior session (also with no
+// live transcript). resume on this spawn triggers ErrJsonlMissing — the b.v2c
+// AC2 meaning "a path was recorded/composed and has rotted" — because the row
+// HAS history to have lost, which is what distinguishes it from
+// ErrJsonlNeverWritten (NULL path AND no history at all). The calling test must
+// NOT create any JSONL under HOME.
+//
+// The archived session is produced through the real rotation path: a first
+// SessionStart records session "sess-err-jm-0", then a second SessionStart with
+// a different id ("sess-err-jm-1") archives the prior pair into session_history.
 func SeedErrJsonlMissing(t *testing.T) (*store.Store, string) {
 	t.Helper()
 	s, dbPath := openErrStore(t)
 	const id = "id-err-jm-1"
 	insertErrRow(t, s, id, store.StateEnded, "off")
-	if err := s.RecordSessionStartIdentity(id, "sess-err-jm-1", "", 0, ""); err != nil {
-		t.Fatalf("SeedErrJsonlMissing: RecordSessionStartIdentity: %v", err)
+	if err := s.RecordSessionStartIdentity(id, "sess-err-jm-0", "", false, 0, ""); err != nil {
+		t.Fatalf("SeedErrJsonlMissing: RecordSessionStartIdentity (prior): %v", err)
+	}
+	// Rotate: a different session id archives the prior pair into session_history.
+	if err := s.RecordSessionStartIdentity(id, "sess-err-jm-1", "", false, 0, ""); err != nil {
+		t.Fatalf("SeedErrJsonlMissing: RecordSessionStartIdentity (rotate): %v", err)
+	}
+	return s, dbPath
+}
+
+// SeedErrJsonlNeverWritten returns a store with one ended spawn whose current
+// session has a NULL jsonl_path and NO archived history — the b.v2c
+// freshly-restarted, un-messaged case. resume triggers ErrJsonlNeverWritten
+// (not ErrJsonlMissing): nothing was ever written for this instance. The calling
+// test must NOT create any JSONL under HOME.
+func SeedErrJsonlNeverWritten(t *testing.T) (*store.Store, string) {
+	t.Helper()
+	s, dbPath := openErrStore(t)
+	const id = "id-err-jnw-1"
+	insertErrRow(t, s, id, store.StateEnded, "off")
+	if err := s.RecordSessionStartIdentity(id, "sess-err-jnw-1", "", false, 0, ""); err != nil {
+		t.Fatalf("SeedErrJsonlNeverWritten: RecordSessionStartIdentity: %v", err)
 	}
 	return s, dbPath
 }

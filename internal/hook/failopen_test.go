@@ -87,7 +87,7 @@ func (f *flakyStore) ApplyHookTransition(string, string, bool, string) error {
 	f.transitionN++
 	return f.transitionErr
 }
-func (f *flakyStore) RecordSessionStartIdentity(_, _, _ string, _ int, _ string) error {
+func (f *flakyStore) RecordSessionStartIdentity(_, _, _ string, _ bool, _ int, _ string) error {
 	f.identityN++
 	return f.identityErr
 }

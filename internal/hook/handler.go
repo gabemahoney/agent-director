@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -16,7 +17,7 @@ import (
 // branches (DB-unreachable, etc.) without scripting SQLite errors.
 type HookStore interface {
 	ApplyHookTransition(instanceID, newState string, softRefresh bool, triggeringEventName string) error
-	RecordSessionStartIdentity(instanceID, sessionID, jsonlPath string, pid int, procStarttime string) error
+	RecordSessionStartIdentity(instanceID, sessionID, jsonlPath string, jsonlPresent bool, pid int, procStarttime string) error
 	UpsertOpenPermissionRequest(instanceID, requestToken, toolName, toolInputJSON string, cap int, writerProcess string) error
 	GetPermissionRequest(instanceID, requestToken string) (store.PermissionRow, error)
 	DecidePermissionRequest(instanceID, requestToken, decision, reason string, writerProcess string) (bool, error)
@@ -210,7 +211,21 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		} else {
 			logf(logger, "hook: no identity resolver (instance=%s) — recording NULL identity", instanceID)
 		}
-		if err := st.RecordSessionStartIdentity(instanceID, res.SessionID, res.TranscriptPath, pid, procStarttime); err != nil {
+		// b.v2c AC1: a fresh Claude session writes no .jsonl transcript until
+		// its first user turn, so the path the SessionStart payload reports may
+		// not exist yet. Stat it here; the store SETs jsonl_path only when the
+		// file is actually present, and NULLs it otherwise so the row never
+		// asserts a dead pointer. find-missing heals the row once the file
+		// appears (AC3). A stat error other than not-exist (e.g. a permission
+		// wall) is treated as "not present" — the same conservative posture the
+		// resume fallback takes.
+		jsonlPresent := false
+		if res.TranscriptPath != "" {
+			if _, statErr := os.Stat(res.TranscriptPath); statErr == nil {
+				jsonlPresent = true
+			}
+		}
+		if err := st.RecordSessionStartIdentity(instanceID, res.SessionID, res.TranscriptPath, jsonlPresent, pid, procStarttime); err != nil {
 			failClosed(fmt.Sprintf("record session start identity (instance=%s): %v", instanceID, err))
 			return nil
 		}

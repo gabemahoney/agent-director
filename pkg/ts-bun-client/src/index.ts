@@ -64,6 +64,8 @@ export {
   ErrSpawnNotResumable,
   ErrNoSessionId,
   ErrJsonlMissing,
+  ErrJsonlNeverWritten,
+  ErrRepairTranscriptMissing,
   ErrRelayModeOff,
   ErrRelayFallenBack,
   ErrInvalidDecision,

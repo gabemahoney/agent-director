@@ -2,10 +2,13 @@ package api_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/probe"
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api"
 )
@@ -59,6 +62,15 @@ type fakeFindMissingStore struct {
 
 	markPrior       map[string]string
 	setTransitioned map[string]bool
+
+	// b.v2c AC3 lazy-heal knobs.
+	provisional []store.ProvisionalTranscript
+	healed      []healCall
+}
+
+// healCall records one HealJsonlPath(instanceID, sessionID, jsonlPath) call.
+type healCall struct {
+	id, sessionID, jsonlPath string
 }
 
 // unverifiedCall records one SetLivenessUnverified(id, note) invocation.
@@ -126,6 +138,15 @@ func (f *fakeFindMissingStore) CloseOrphanedPermissionRequests(id string) error 
 	f.closedIDs = append(f.closedIDs, id)
 	f.callSeq = append(f.callSeq, storeCall{op: "close", id: id})
 	return nil
+}
+
+// b.v2c AC3 lazy-heal surface, programmable via the provisional/healed fields.
+func (f *fakeFindMissingStore) ListProvisionalTranscripts() ([]store.ProvisionalTranscript, error) {
+	return f.provisional, nil
+}
+func (f *fakeFindMissingStore) HealJsonlPath(id, sessionID, jsonlPath string) (bool, error) {
+	f.healed = append(f.healed, healCall{id, sessionID, jsonlPath})
+	return true, nil
 }
 
 // fakeChecker is the SR-12.3 verdict-level liveness checker. It is programmable
@@ -262,6 +283,77 @@ func row(id string, pid int, starttime string) store.LiveSpawnIdentity {
 // recorded identity NEVER reach the checker: they route straight to the
 // environ probe-set diff. The fake checker records prove no queries fire.
 // ---------------------------------------------------------------------------
+
+// TestFindMissingHealsProvisionalTranscript is the b.v2c AC3/AC4 REGRESSION
+// test for bug mode (a): a session that started before its first user turn has a
+// NULL jsonl_path (a provisional row). Once the transcript appears on disk, a
+// find-missing sweep recomposes the path, stats it, and records it — no operator
+// intervention. This exercises the lazy-heal that finishes the idle-session
+// story: the row started NOT asserting a dead pointer, and heals when messaged.
+//
+// PRE-FIX find-missing did no transcript healing, so HealJsonlPath is never
+// called; POST-FIX the sweep records the now-present recomposed path.
+func TestFindMissingHealsProvisionalTranscript(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	const (
+		id      = "prov-heal-1"
+		session = "session-heal-uuid"
+		cwd     = "/tmp/proj"
+	)
+	// The transcript has appeared at the CLAUDE_CONFIG_DIR-free (~/.claude) slug
+	// location — plant it there so the sweep's Stat succeeds.
+	appeared, err := spawn.JsonlPath(cwd, session)
+	if err != nil {
+		t.Fatalf("compute path: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(appeared), 0o700); err != nil {
+		t.Fatalf("mkdir transcript parent: %v", err)
+	}
+	if err := os.WriteFile(appeared, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	st := &fakeFindMissingStore{
+		liveIDs: []string{id}, // keep the row alive so the sweep completes cleanly
+		provisional: []store.ProvisionalTranscript{
+			{ClaudeInstanceID: id, ClaudeSessionID: session, CWD: cwd},
+		},
+	}
+	prober := &fakeProber{set: map[string]struct{}{id: {}}}
+	if _, err := api.FindMissing(context.Background(), st, prober, newFakeChecker(), &recordingLogger{}); err != nil {
+		t.Fatalf("FindMissing: %v", err)
+	}
+
+	if len(st.healed) != 1 {
+		t.Fatalf("HealJsonlPath called %d times; want 1 (transcript appeared → row healed)", len(st.healed))
+	}
+	got := st.healed[0]
+	if got.id != id || got.sessionID != session || got.jsonlPath != appeared {
+		t.Errorf("heal call = %+v; want {%s %s %s}", got, id, session, appeared)
+	}
+}
+
+// TestFindMissingSkipsProvisionalWhenTranscriptStillAbsent pins the guard: a
+// provisional row whose transcript has NOT appeared is left untouched — the row
+// stays provisional rather than being healed to a still-dead path.
+func TestFindMissingSkipsProvisionalWhenTranscriptStillAbsent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	st := &fakeFindMissingStore{
+		liveIDs: []string{"prov-absent-1"},
+		provisional: []store.ProvisionalTranscript{
+			{ClaudeInstanceID: "prov-absent-1", ClaudeSessionID: "no-file-uuid", CWD: "/tmp/proj"},
+		},
+	}
+	prober := &fakeProber{set: map[string]struct{}{"prov-absent-1": {}}}
+	if _, err := api.FindMissing(context.Background(), st, prober, newFakeChecker(), &recordingLogger{}); err != nil {
+		t.Fatalf("FindMissing: %v", err)
+	}
+	if len(st.healed) != 0 {
+		t.Errorf("HealJsonlPath called %d times; want 0 (transcript still absent)", len(st.healed))
+	}
+}
 
 func TestFindMissingNoChangesWhenAllAlive(t *testing.T) {
 	st := &fakeFindMissingStore{liveIDs: []string{"a", "b"}}

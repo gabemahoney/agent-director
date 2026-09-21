@@ -14,7 +14,7 @@ learned the hard way against the production database.
 All schema logic lives in `internal/store/schema.go`, with the version
 constant and typed errors in `internal/store/store.go`.
 
-**The version contract.** `schemaVersion` (`store.go`, currently `3`) is the
+**The version contract.** `schemaVersion` (`store.go`, currently `4`) is the
 version this binary writes and reads. Every opened DB carries its own version
 in SQLite's `PRAGMA user_version` (0 on a brand-new file). `ensureSchema(db,
 dbPath)` (`schema.go`) is called from `openDB` on every `Open`/`OpenOrInit`
@@ -42,12 +42,13 @@ rather than touching the file. Callers detect it with
 **A registry of steps, not a switch.** Version transitions are no longer
 `case` arms. Each single-version upgrade is a `migrationStep{from: N, apply:
 migrateV<N>toV<N+1>}` entry in the ordered `migrationSteps` registry
-(`schema.go`); today that registry holds two entries, `{from: 1, apply:
-migrateV1toV2}` and `{from: 2, apply: migrateV2toV3}`. `migrateV1toV2` and
-`migrateV2toV3` (`schema.go`) are the reference implementations of an `apply`
-func. To add the next version (v4) you write `migrateV3toV4` and append
-`{from: 3, apply: migrateV3toV4}` to `migrationSteps` — see §1a's "Adding a
-step" for the full checklist.
+(`schema.go`); today that registry holds three entries, `{from: 1, apply:
+migrateV1toV2}`, `{from: 2, apply: migrateV2toV3}`, and `{from: 3, apply:
+migrateV3toV4}`. `migrateV1toV2`, `migrateV2toV3`, and `migrateV3toV4`
+(`schema.go`) are the reference implementations of an `apply` func. To add the
+next version (v5) you write `migrateV4toV5` and append `{from: 4, apply:
+migrateV4toV5}` to `migrationSteps` — see §1a's "Adding a step" for the full
+checklist.
 
 **One transaction per step, stamp included.** Every `apply` func opens a single
 `db.Begin()` transaction and does *all* of its DDL/DML **and** the
@@ -135,19 +136,20 @@ never touching `state.db`) — there is no logger plumbed into the store:
   **succeeds** (the migration is already done and correct; the stale sentinel is
   inert per above).
 
-**Adding a step.** To add the next version (v4, generalizing to any vN→vN+1):
+**Adding a step.** To add the next version (v5, generalizing to any vN→vN+1);
+`migrateV3toV4` (b.v2c) is the most recent worked example:
 
-1. Bump `schemaVersion` to `4` (`store.go`).
-2. Evolve `schemaDDL` so a fresh DB is created directly at v4 (the two-places
+1. Bump `schemaVersion` to `5` (`store.go`).
+2. Evolve `schemaDDL` so a fresh DB is created directly at v5 (the two-places
    rule — §1, §4).
-3. Write `migrateV3toV4(db)` following the one-transaction/validate-first
+3. Write `migrateV4toV5(db)` following the one-transaction/validate-first
    pattern (§2).
-4. Append `{from: 3, apply: migrateV3toV4}` to `migrationSteps` (`schema.go`).
+4. Append `{from: 4, apply: migrateV4toV5}` to `migrationSteps` (`schema.go`).
 
 That is all — do **not** add any return-after-one-hop logic. The chain engine
 walks the registry from the DB's version up to `schemaVersion` automatically, so
-appending the step is what makes both a v3→v4 upgrade and a straight-through
-v1→v4 upgrade work.
+appending the step is what makes both a v4→v5 upgrade and a straight-through
+v1→v5 upgrade work.
 
 ## 1b. Refusal semantics — `ErrSchemaMigrationRequired`
 
@@ -211,7 +213,9 @@ a full rebuild is a legitimate hop when rows are not being preserved.
 `migrateV2toV3`, by contrast, does five `ALTER TABLE spawns ADD COLUMN` —
 `pid`, `proc_starttime`, `liveness_unverified_since`, `liveness_note` (all
 nullable) and `extra_env TEXT NOT NULL DEFAULT '{}'` — an additive hop that
-preserves every existing row.)
+preserves every existing row. `migrateV3toV4` (b.v2c) does a single `CREATE
+TABLE IF NOT EXISTS session_history` plus its index — a new-table hop that
+touches no existing row.)
 
 **Phase 3 — data backfill/transform.** `UPDATE`/`INSERT … SELECT` to populate
 new columns or reshape rows, if the migration keeps data. Not every hop needs
@@ -219,7 +223,10 @@ one: `migrateV1toV2` deliberately does not preserve v1 `permission_requests`
 rows (SR-2.6 single-version invariant / SR-2.3 no-backfill), and
 `migrateV2toV3` needs no phase 3 either — `ADD COLUMN` populates existing rows
 from the column defaults (NULL for the four nullable columns, `'{}'` for
-`extra_env`), so there is nothing to backfill.
+`extra_env`), so there is nothing to backfill. `migrateV3toV4` likewise skips
+phase 3: `session_history` starts empty and is populated lazily on the next
+session rotation, so pre-v4 rows carry no archived history and there is nothing
+to backfill.
 
 **Phase 4 — stamp `user_version`.** The **last** statement in the transaction,
 via the `fmt.Sprintf` form from §1. Stamping last guarantees the version only
@@ -369,7 +376,8 @@ recovery step, not something the store does automatically.
 
 - `internal/store/schema.go` — `ensureSchema`, `runMigrationChain`,
   `migrationSteps`/`migrationStep`, `migrationStepFrom`, `createSchema`,
-  `schemaDDL`, `migrateV1toV2`, `migrateV2toV3`, `buildMigrationRefusal`.
+  `schemaDDL`, `migrateV1toV2`, `migrateV2toV3`, `migrateV3toV4`,
+  `buildMigrationRefusal`.
 - `internal/store/migrate_auth.go` — the sentinel gate: `authorizeMigration`,
   `parseAuthorization`, `consumeAuthorization`, `sentinelPath`,
   `sentinelFilename` (`migrate-authorized`), the trail events.
