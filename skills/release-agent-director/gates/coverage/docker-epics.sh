@@ -63,13 +63,29 @@ if [[ "$SLUG_COUNT" -eq 0 ]]; then
 fi
 
 # ─── build gates-config.json ──────────────────────────────────────────────────
-# One entry per slug: {"name":"coverage.docker-epic-<slug>","command":"make test-docker EPIC=<slug>","cwd":"."}
+# One entry per slug:
+#   {"name":"coverage.docker-epic-<slug>","command":"flock -s pkg/api/apitest/.seeds-mutation.lock make test-docker EPIC=<slug>","cwd":"."}
+#
+# b.3jn: the `make test-docker` child (a) tars the whole repo tree as the docker
+# build CONTEXT and (b) bind-mounts the live worktree read-only at /work/source —
+# both are tree READS. Sibling gate coverage.go-root's synthetic-regression tests
+# MUTATE walk-reachable repo-root paths under an EXCLUSIVE flock on
+# pkg/api/apitest/.seeds-mutation.lock (b.2y5 protocol) — e.g.
+# source-of-truth-reference-prune create/RemoveAll's reference/ at the repo root.
+# Without the shared lock, the context enumeration can see reference/ and then
+# have it vanish mid-tar ("checking context: file '.../reference' not found or
+# excluded by .dockerignore"). We take the SAME lock file as b.2y5's
+# acquireSeedsLock, but in SHARED mode (-s) because these children are tree
+# READERS: shared holders overlap each other (preserving max_parallel:4 fan-out)
+# while go-root's LOCK_EX mutators exclude all of them. cwd is "." = repo root, so
+# the relative lock path resolves; /usr/bin/flock exists in the sandbox image.
+# (Rule: readers take -s; mutators take exclusive; same lock file as b.2y5.)
 GATES_JSON=$(
   printf '%s\n' "$SLUG_LIST" | while IFS= read -r slug; do
     [[ -z "$slug" ]] && continue
     jq -n \
       --arg name "coverage.docker-epic-${slug}" \
-      --arg cmd  "make test-docker EPIC=${slug}" \
+      --arg cmd  "flock -s pkg/api/apitest/.seeds-mutation.lock make test-docker EPIC=${slug}" \
       '{"name": $name, "command": $cmd, "cwd": "."}'
   done | jq -sc '.'
 )

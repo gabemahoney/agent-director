@@ -43,11 +43,38 @@ const helperBin = resolve(repoRoot, "bin/ts-helper");
 const fakeTmuxDir = resolve(repoRoot, "test/fake-tmux");
 const cliBin = resolve(repoRoot, "bin/agent-director");
 
+// ── Seeds flock (b.3jn / b.2y5 seeds-flock protocol) ───────────────────────
+// The coverage gates run concurrently in one container. Each `make` below is a
+// cross-package builder that reads walk-reachable tree sources (pkg/api/apitest
+// among them). Sibling gate coverage.go-root's synthetic-regression test
+// helper-tag-replay MUTATES pkg/api/apitest/seeds.go under an exclusive flock
+// on pkg/api/apitest/.seeds-mutation.lock (b.2y5's acquireSeedsLock, LOCK_EX).
+// Without the same lock, a make here can compile mid-mutation and fail (observed:
+// "seeds.go:222: assignment mismatch: 1 variable but SeedSpawn returns 2 values").
+// Invariant: any cross-package reader/builder of walk-reachable tree sources
+// must hold the seeds flock while reading. We use /usr/bin/flock (util-linux,
+// present in the sandbox image); it creates the lock file if missing and blocks
+// until free — the same file and same flock(2) semantics as acquireSeedsLock, so
+// these builds and go-root's mutators mutually exclude. One short flock per make
+// call (three holds), not one long hold.
+const seedsLockPath = resolve(repoRoot, "pkg/api/apitest/.seeds-mutation.lock");
+// flock is util-linux and does NOT exist on darwin; this file is the bun test
+// preload, so an unconditional `flock` spawn would ENOENT the whole suite before
+// any test runs (the suite explicitly supports darwin via skip patterns). The
+// cross-gate mutator we're locking against (coverage.go-root) only exists in the
+// Linux sandbox, so where flock is absent the lock is unnecessary — fall back to
+// a plain `make` invocation.
+const hasFlock = Bun.which("flock") !== null;
+const flockMake = (target: string) =>
+  Bun.spawnSync(
+    hasFlock
+      ? ["flock", seedsLockPath, "make", "-C", repoRoot, target]
+      : ["make", "-C", repoRoot, target],
+    { stdout: "inherit", stderr: "inherit" }
+  );
+
 // ── ts-helper ─────────────────────────────────────────────────────────────
-const helperProc = Bun.spawnSync(["make", "-C", repoRoot, "ts-helper"], {
-  stdout: "inherit",
-  stderr: "inherit",
-});
+const helperProc = flockMake("ts-helper");
 
 if (helperProc.exitCode !== 0) {
   console.error(
@@ -57,10 +84,7 @@ if (helperProc.exitCode !== 0) {
 }
 
 // ── fake-tmux ─────────────────────────────────────────────────────────────
-const tmuxProc = Bun.spawnSync(["make", "-C", repoRoot, "fake-tmux"], {
-  stdout: "inherit",
-  stderr: "inherit",
-});
+const tmuxProc = flockMake("fake-tmux");
 
 if (tmuxProc.exitCode !== 0) {
   console.error(
@@ -79,10 +103,7 @@ chmodSync(resolve(fakeTmuxDir, "tmux"), 0o755);
 // `make agent-director` is an alias for `make build`; it is incremental and
 // fast when sources are unchanged.  Required by the envelope-diff tests that
 // spawn the real CLI as a subprocess.
-const cliProc = Bun.spawnSync(["make", "-C", repoRoot, "agent-director"], {
-  stdout: "inherit",
-  stderr: "inherit",
-});
+const cliProc = flockMake("agent-director");
 
 if (cliProc.exitCode !== 0) {
   console.error(
