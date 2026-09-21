@@ -110,17 +110,23 @@ on policy rather than a human at the keyboard.
 2. The hook handler reads `AGENT_DIRECTOR_RELAY_MODE` from its env
    (NOT the DB — see "Fail-closed boundary" below).
 3. If the env var is `on`, the handler:
-   - UPSERTs the row into `permission_requests` (DELETE-INSERT in
-     one transaction so the per-Spawn UNIQUE constraint can't trip
-     between statements).
-   - Polls `permission_requests` at
+   - Mints a per-request UUIDv4 `request_token` and INSERTs an open
+     row into `permission_requests`, keyed by the composite
+     `(claude_instance_id, request_token)`. Concurrent requests for
+     the same Spawn each get their own row and are decided
+     independently. Oldest *closed* rows are evicted in the same
+     transaction when the table exceeds `relay.permission_request_cap`
+     (default 1000; `0` disables eviction).
+   - Polls its own row at
      `max(50ms, relay.poll_base_ms + uniform(0, relay.poll_jitter_ms))`
      intervals.
    - On a decided row → writes the decision envelope to stdout.
    - On timeout / ctx-cancel / row preempted / read-retry exhaustion
      → writes a deny envelope (fail-closed).
 4. The orchestrator calls `agent-director decide --claude-instance-id
-   <id> --decision allow|deny --reason "..."` to write the decision.
+   <id> --request-token <token> --decision allow|deny --reason "..."`
+   to write the decision. The token comes from the Spawn's open
+   `permission_requests` in `get` output, or from `get-permission`.
 5. The hook's polling loop sees the decision on its next read and
    emits the envelope.
 
@@ -150,15 +156,22 @@ SRD §6.3 / Claude Code 2.x nested shape:
 ### Fail-closed boundary (SRD §6.4)
 
 When `AGENT_DIRECTOR_RELAY_MODE=on` the hook handler treats every
-failure mode as a deny. SRD §6.4 enumerates these:
+failure mode as a deny — provided the event is known to be a
+PermissionRequest. Failures that occur before the event name can be
+read from the payload exit silently instead: Claude Code routes hook
+stdout by file descriptor, so a permission-shaped deny emitted by a
+process that might be handling a *different* event (e.g. PreToolUse)
+would be applied to the in-flight tool and race the legitimate
+PermissionRequest process (the b.45p fix). SRD §6.4 enumerates the
+failure modes:
 
 | Failure | Outcome |
 |---|---|
 | `AGENT_DIRECTOR_INSTANCE_ID` missing / invalid | deny envelope |
 | Config load failure | deny envelope |
 | Store open failure | deny envelope |
-| stdin payload read failure | deny envelope |
-| Classify failure | deny envelope |
+| stdin payload read failure | silent exit 0 (event name unknowable — b.45p) |
+| Classify failure (unparseable payload) | silent exit 0 (event name unknowable — b.45p) |
 | UPSERT failure | deny envelope |
 | Polling timeout (`relay.timeout_seconds`) | deny envelope |
 | `ctx.Done()` during poll | deny envelope |

@@ -190,12 +190,14 @@ contract; this section covers the implementation.
 ### Polling loop
 
 `internal/hook/polling.go` implements `Poll(ctx, store, clock, cfg,
-id, rng)`. Each iteration:
+instanceID, requestToken, rng)` — the token is the per-request UUIDv4
+minted by `runRelay`, so each polling loop reads only its own row.
+Each iteration:
 
-1. `GetPermissionRequest(id)`:
-   - `sql.ErrNoRows` → row was preempted (typically by a fresh
-     DELETE-INSERT on a new PermissionRequest event for the same
-     Spawn). Return fail-closed.
+1. `GetPermissionRequest(instanceID, requestToken)`:
+   - `sql.ErrNoRows` → the row is gone. Rows are INSERT-only, so this
+     is rare — normally an ON DELETE CASCADE from a spawn delete.
+     Return fail-closed.
    - other SQL error → increment a retry counter; abandon after 5
      consecutive errors (`pollMaxReadRetries`).
    - row found, decision NULL → sleep and loop.
@@ -227,22 +229,30 @@ survives any DB-side breakage.
 ### Fail-closed boundary
 
 `internal/hook/handler.go` runs a `failClosed` helper on every
-pre-relay failure path (instance-id missing, payload read, classify,
-UPSERT, session-id). When `relayActive` is true, the helper writes a
-deny envelope before returning. `runRelay` itself runs the polling
+pre-relay failure path (instance-id missing, transition, UPSERT,
+session-id). The helper writes a deny envelope only when `relayActive`
+is true AND the payload's peeked event name is `PermissionRequest`
+(the b.45p gate). Failures where the event name is unknowable —
+stdin read failure, unparseable payload — exit silently instead,
+because a permission-shaped envelope from a non-PermissionRequest
+process would be routed by fd to the in-flight tool and race the
+legitimate PermissionRequest sibling. `runRelay` itself runs the polling
 loop and writes either the decision envelope or — on
 timeout/ctx-cancel/preemption/read-retry-exhaustion — a deny
 envelope. See `permissions.md` for the enumerated failure modes.
 
-### Per-Spawn UNIQUE on `permission_requests`
+### Per-request rows in `permission_requests`
 
-The store schema's `permission_requests.claude_instance_id` has a
-UNIQUE constraint (Epic 3). A second PermissionRequest event for the
-same Spawn DELETEs the old row before INSERTing the new one (all in
-one transaction). The old row's polling loop sees `sql.ErrNoRows` on
-its next read and fails closed — preventing the original request
-from being "answered" by a decision intended for a different
-request.
+The v2 schema keys `permission_requests` by a composite
+`UNIQUE(claude_instance_id, request_token)`. Each relay invocation
+mints its own UUIDv4 `request_token` and INSERTs its own row, so
+concurrent PermissionRequest events for the same Spawn coexist and
+are decided independently — a decision targets exactly one row, and
+one poller. Rows are INSERT-only: nothing replaces an open row, and a
+polling loop that sees `sql.ErrNoRows` (possible via `ON DELETE
+CASCADE` when the spawn row is deleted) fails closed. Closed
+(decided) rows are evicted oldest-first when the table exceeds
+`relay.permission_request_cap`.
 
 ## References
 
