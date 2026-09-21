@@ -225,7 +225,7 @@ The `make sandbox*` targets export `AGENT_DIRECTOR_TEST_SANDBOX=1` into the
 container. `TestMain` in the state/exec-touching Go packages and the bun
 preload (`pkg/ts-bun-client/test/setup.ts`) check that marker and **refuse to
 run without it** — a stray host-side `go test`/`bun test` fails immediately
-with a one-line message pointing here, before it can touch the real
+with a message pointing here, before it can touch the real
 `~/.agent-director`. The Go check is `sandboxguard.Require()` from
 `internal/testsupport/sandboxguard`, called at the top of `TestMain`.
 
