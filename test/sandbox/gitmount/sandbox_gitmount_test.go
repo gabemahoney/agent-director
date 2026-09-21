@@ -65,26 +65,9 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-)
 
-// repoRoot walks up from the package dir until it finds go.mod.
-func repoRoot(t *testing.T) string {
-	t.Helper()
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("os.Getwd: %v", err)
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatalf("repoRoot: no go.mod above %s", dir)
-		}
-		dir = parent
-	}
-}
+	"github.com/gabemahoney/agent-director/test/sandbox/internal/sandboxtest"
+)
 
 // makefilePath returns the Makefile whose logic is under test. It defaults to
 // the repo Makefile but honors MAKEFILE_UNDER_TEST so a reviewer can point the
@@ -98,7 +81,7 @@ func makefilePath(t *testing.T) string {
 		}
 		return p
 	}
-	return filepath.Join(repoRoot(t), "Makefile")
+	return filepath.Join(sandboxtest.RepoRoot(t), "Makefile")
 }
 
 // captureLines returns the exact Makefile lines matching pattern, in file
@@ -144,7 +127,7 @@ func runMakeVar(t *testing.T, makefilePath, workdir, target string) string {
 	cmd.Dir = workdir
 	// Scrub inherited make state so an ancestor make's variable overrides
 	// (e.g. `make sandbox CMD=...`) can't skew the captured values.
-	cmd.Env = append(os.Environ(), "MAKEFLAGS=", "MFLAGS=", "MAKELEVEL=")
+	cmd.Env = sandboxtest.ScrubbedMakeEnv()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("make %s in %s: %v\noutput:\n%s", target, workdir, err, out)
@@ -170,11 +153,7 @@ func git(t *testing.T, workdir string, args ...string) {
 // requireTools skips if make or git is unavailable.
 func requireTools(t *testing.T) {
 	t.Helper()
-	for _, bin := range []string{"make", "git"} {
-		if _, err := exec.LookPath(bin); err != nil {
-			t.Skipf("%s not in PATH — skipping b.kbe sandbox git-mount test", bin)
-		}
-	}
+	sandboxtest.RequireTools(t, "skipping b.kbe sandbox git-mount test", "make", "git")
 }
 
 // makePlainClone creates a plain (non-worktree) git repo with one commit and
