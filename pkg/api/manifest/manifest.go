@@ -303,6 +303,8 @@ var Verbs = []VerbDef{
 			{Name: "liveness_unverified_since", Type: "timestamp?", Description: "RFC3339 timestamp of the first sweep that could not verify this live row's liveness (an unknown verdict, e.g. a permission wall). Cleared to NULL once liveness is re-established; null/omitted when never unverified.", Nullable: true, AllowEmpty: false, AllowedValues: nil},
 			{Name: "liveness_note", Type: "string?", Description: "Human-readable reason the row's liveness could not be verified on the most recent unverified sweep. Cleared to NULL once liveness is re-established; null/omitted when never unverified.", Nullable: true, AllowEmpty: false, AllowedValues: nil},
 			{Name: "permission_requests", Type: "[]object", Description: "All open (undecided) permission requests awaiting orchestrator decision. Always a non-null array ([] when empty). Populated only when state == check_permission; empty array for all other states. Each element: request_id (int) — autoincrement row id; request_token (string) — UUIDv4 token minted by runRelay, pass to decide verb to target this row; tool_name (string) — Claude Code tool that triggered the request; tool_input (string) — raw JSON string of the tool's input, NOT a nested object (consumers parse it themselves); requested_at (RFC3339 timestamp) — created_at of the row.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "transcript_status", Type: "string", Description: "Derived operator-facing summary of the current session's transcript state (b.v2c): 'present' (jsonl_path recorded), 'never_written' (session id but NULL jsonl_path and no archived history — nothing was ever written), 'rotated' (NULL jsonl_path but prior_sessions is non-empty — history exists under a different session id), or 'no_session' (no claude_session_id yet).", Nullable: false, AllowEmpty: false, AllowedValues: []string{"present", "never_written", "rotated", "no_session"}},
+			{Name: "prior_sessions", Type: "[]object", Description: "Archived prior sessions for this instance, newest first — the queryable link back to sessions orphaned by a rotation (b.v2c). Always a non-null array ([] when empty). Each element: claude_session_id (string) — archived session id; jsonl_path (string) — archived transcript path (may be empty); recorded_at (timestamp) — when the archive was written (the rotation moment).", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 		},
 		ErrorNames: []string{
 			"ErrSpawnNotFound",
@@ -540,6 +542,7 @@ var Verbs = []VerbDef{
 			"ErrSpawnNotResumable",
 			"ErrNoSessionId",
 			"ErrJsonlMissing",
+			"ErrJsonlNeverWritten",
 			"ErrTmuxNotAvailable",
 			"ErrTmuxSessionCreate",
 		},
@@ -558,6 +561,51 @@ var Verbs = []VerbDef{
 		},
 		ErrorNames: []string{
 			"ErrProbeUnsupported",
+		},
+	},
+	{
+		Name:        "repair-transcript",
+		Description: "Re-associate an orphaned Claude transcript with a tracked Spawn row. One-shot operator recovery for transcript history stranded by a session rotation (e.g. a CSCB fleet restart): supply the instance id, the recovered session id, and the transcript's on-disk path. The verb verifies the file exists, archives the row's current (session id, jsonl_path) into session_history when it differs, then records the recovered pair so a subsequent resume points `claude --resume` at it. Does NOT move or mutate the transcript file.",
+		Callable:    true,
+		HandleFree:  false,
+		Params: []ParamDef{
+			{
+				Name:          "claude_instance_id",
+				Type:          "string",
+				Description:   "The Spawn row to re-associate the transcript with.",
+				Required:      true,
+				Nullable:      false,
+				AllowEmpty:    false,
+				AllowedValues: nil,
+			},
+			{
+				Name:          "claude_session_id",
+				Type:          "string",
+				Description:   "Session id of the orphaned transcript (its .jsonl basename without extension).",
+				Required:      true,
+				Nullable:      false,
+				AllowEmpty:    false,
+				AllowedValues: nil,
+			},
+			{
+				Name:          "jsonl_path",
+				Type:          "string",
+				Description:   "Absolute on-disk path of the orphaned transcript. Must exist.",
+				Required:      true,
+				Nullable:      false,
+				AllowEmpty:    false,
+				AllowedValues: nil,
+			},
+		},
+		ResultFields: []FieldDef{
+			{Name: "claude_instance_id", Type: "string", Description: "The repaired row's id.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
+			{Name: "claude_session_id", Type: "string", Description: "The session id now recorded on the row.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
+			{Name: "jsonl_path", Type: "string", Description: "The transcript path now recorded on the row.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
+		},
+		ErrorNames: []string{
+			"ErrSpawnNotFound",
+			"ErrRepairTranscriptMissing",
+			"ErrInvalidFlags",
 		},
 	},
 	{

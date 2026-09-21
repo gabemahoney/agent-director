@@ -6,22 +6,26 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gabemahoney/agent-director/pkg/api"
-	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // recordingResumeStore captures every store call resume makes so the
 // tests can pin both the precondition guards (which short-circuit
 // before any DB write) and the parent_id mutation on the happy path.
 type recordingResumeStore struct {
-	row              store.Spawn
-	getErr           error
-	setParentErr     error
-	setParentArgs    [2]string
-	setParentCalls   int
+	row            store.Spawn
+	getErr         error
+	setParentErr   error
+	setParentArgs  [2]string
+	setParentCalls int
+	// history is returned by ListSessionHistory (b.v2c AC6). Nil = no archived
+	// sessions, which is the default existing tests rely on.
+	history    []store.SessionHistoryEntry
+	historyErr error
 }
 
 func (r *recordingResumeStore) GetSpawn(_ string) (store.Spawn, error) {
@@ -29,6 +33,10 @@ func (r *recordingResumeStore) GetSpawn(_ string) (store.Spawn, error) {
 		return store.Spawn{}, r.getErr
 	}
 	return r.row, nil
+}
+
+func (r *recordingResumeStore) ListSessionHistory(_ string) ([]store.SessionHistoryEntry, error) {
+	return r.history, r.historyErr
 }
 
 func (r *recordingResumeStore) SetParentID(id, parent string) error {
@@ -133,13 +141,20 @@ func TestResumeMissingSessionIdReturnsNoSessionId(t *testing.T) {
 }
 
 func TestResumeJsonlMissingReturnsErrJsonlMissing(t *testing.T) {
-	// Legacy-fallback ErrJsonlMissing: baseRow leaves JSONLPath empty, so
-	// the pre-flight computes the slug-rule path from cwd + session id.
-	// We do NOT seed the JSONL at the computed location, so Stat fails and
-	// the error names the computed path (not a persisted one).
+	// b.v2c AC2: ErrJsonlMissing now means "a path was recorded/composed and has
+	// since rotted" — distinct from ErrJsonlNeverWritten. To land on
+	// ErrJsonlMissing (not the never-written sentinel) the row must have HISTORY
+	// to have lost: seed one archived session whose transcript is also gone. The
+	// current session's fallback path and the archived path both stat-miss, so
+	// the verb reports ErrJsonlMissing naming the computed current-session path.
 	t.Setenv("HOME", t.TempDir())
 	row := baseRow() // JSONLPath == "" → fall back to computed path
-	st := &recordingResumeStore{row: row}
+	st := &recordingResumeStore{
+		row: row,
+		history: []store.SessionHistoryEntry{
+			{ClaudeSessionID: "prior-rotted", JSONLPath: "/nonexistent/prior-rotted.jsonl"},
+		},
+	}
 	tm := &recordingResumeTmux{}
 	_, err := api.Resume(st, tm, config.Default(), api.ResumeParams{ClaudeInstanceID: "id"})
 	if !errors.Is(err, api.ErrJsonlMissing) {
@@ -155,6 +170,175 @@ func TestResumeJsonlMissingReturnsErrJsonlMissing(t *testing.T) {
 	}
 	if tm.newSessionCalls != 0 || st.setParentCalls != 0 {
 		t.Errorf("side effects on guard error")
+	}
+}
+
+// TestResumeNeverWrittenReturnsErrJsonlNeverWritten pins the b.v2c AC2 sentinel
+// split from the resume side: a row with a session id but a NULL jsonl_path and
+// NO archived session history has genuinely never produced a transcript (the
+// freshly-restarted, un-messaged bot). Resume must return ErrJsonlNeverWritten,
+// NOT ErrJsonlMissing, so an operator can tell "nothing was ever written" apart
+// from "history existed but the file is gone".
+//
+// PRE-FIX (single sentinel) this shape returned ErrJsonlMissing; the errors.Is
+// assertion below fails against the old code, making this a regression anchor.
+func TestResumeNeverWrittenReturnsErrJsonlNeverWritten(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	row := baseRow() // JSONLPath == "" (NULL), no history seeded
+	st := &recordingResumeStore{row: row}
+	tm := &recordingResumeTmux{}
+	_, err := api.Resume(st, tm, config.Default(), api.ResumeParams{ClaudeInstanceID: "id"})
+	if !errors.Is(err, api.ErrJsonlNeverWritten) {
+		t.Fatalf("err = %v; want ErrJsonlNeverWritten", err)
+	}
+	// It is NOT the rotted-path sentinel — the two must stay distinct.
+	if errors.Is(err, api.ErrJsonlMissing) {
+		t.Errorf("err also matches ErrJsonlMissing; the two sentinels must be distinct")
+	}
+	if tm.newSessionCalls != 0 || st.setParentCalls != 0 {
+		t.Errorf("side effects on guard error")
+	}
+}
+
+// TestResumeRecoversRotatedSessionFromHistory is the b.v2c AC6 REGRESSION test
+// for bug mode (b) — the rotation case. When a session rotates (CSCB fleet
+// restart), the prior session's transcript is archived into session_history. If
+// the current session has no live transcript, resume must fall back to the most
+// recent archived session whose transcript still exists on disk — recovering the
+// orphaned history rather than abandoning it — and relaunch `claude --resume`
+// against the RECOVERED session id.
+//
+// PRE-FIX there is no session_history and resume cannot see the prior
+// transcript, so it errors out; POST-FIX resume finds the archived transcript,
+// rotates the row's session id to it, and NewSession fires with --resume naming
+// the archived id.
+func TestResumeRecoversRotatedSessionFromHistory(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "")
+
+	// The archived (rotated-away) session's transcript still exists on disk.
+	const priorSession = "prior-session-uuid"
+	priorPath := filepath.Join(t.TempDir(), priorSession+".jsonl")
+	if err := os.WriteFile(priorPath, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write prior transcript: %v", err)
+	}
+
+	// Current session has a NULL jsonl_path (the freshly-rotated, un-messaged
+	// session) — guard that its computed fallback location does not exist so the
+	// pass can only come from the history recovery.
+	row := baseRow()
+	computed, err := spawn.JsonlPath(row.CWD, row.ClaudeSessionID)
+	if err != nil {
+		t.Fatalf("compute current path: %v", err)
+	}
+	if _, serr := os.Stat(computed); !os.IsNotExist(serr) {
+		t.Fatalf("current computed path %q unexpectedly exists", computed)
+	}
+
+	st := &recordingResumeStore{
+		row: row,
+		history: []store.SessionHistoryEntry{
+			{ClaudeSessionID: priorSession, JSONLPath: priorPath},
+		},
+	}
+	tm := &recordingResumeTmux{}
+
+	if _, err := api.Resume(st, tm, config.Default(), api.ResumeParams{ClaudeInstanceID: "id-r-1"}); err != nil {
+		t.Fatalf("Resume: %v; want recovery via session history", err)
+	}
+	if tm.newSessionCalls != 1 {
+		t.Fatalf("NewSession called %d times; want 1 (resume recovered archived transcript)", tm.newSessionCalls)
+	}
+	// The relaunch must --resume the RECOVERED (archived) session id, not the
+	// dead current one.
+	if len(tm.gotCommand) < 3 || tm.gotCommand[1] != "--resume" || tm.gotCommand[2] != priorSession {
+		t.Errorf("command = %v; want `claude --resume %s ...`", tm.gotCommand, priorSession)
+	}
+}
+
+// TestResumeRecoversHistoryEntryWithEmptyPathViaConfigDir covers the resume
+// recovery branch where an archived history entry has an EMPTY JSONLPath (a
+// legacy/NULL-path rotation record): resume recomputes the transcript location
+// via the CLAUDE_CONFIG_DIR / default slug rule and recovers it when a file
+// exists there. The transcript is planted at the recomputed slug location under
+// a custom CLAUDE_CONFIG_DIR; the current session's own fallback location is
+// guarded absent so a pass can only come from the history-recompute branch.
+func TestResumeRecoversHistoryEntryWithEmptyPathViaConfigDir(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "")
+
+	// A custom CLAUDE_CONFIG_DIR the row carries; the recomputed history path
+	// must resolve under it.
+	cfgDir := filepath.Join(t.TempDir(), "custom-claude-config")
+
+	row := baseRow()
+	row.ExtraEnv = map[string]string{"CLAUDE_CONFIG_DIR": cfgDir}
+
+	// Guard the premise: the CURRENT session's fallback location (under cfgDir)
+	// must NOT exist, so a pass cannot come from the current-session fallback.
+	currentFallback, err := spawn.JsonlPathIn(cfgDir, row.CWD, row.ClaudeSessionID)
+	if err != nil {
+		t.Fatalf("compute current fallback: %v", err)
+	}
+	if _, serr := os.Stat(currentFallback); !os.IsNotExist(serr) {
+		t.Fatalf("current fallback %q unexpectedly exists (stat err=%v)", currentFallback, serr)
+	}
+
+	// The archived session has an EMPTY recorded path; plant its transcript at
+	// the recomputed slug location under cfgDir so resume must recompose it.
+	const priorSession = "prior-session-emptypath"
+	planted := apitest.SeedJsonlUnder(t, cfgDir, row.CWD, priorSession)
+
+	st := &recordingResumeStore{
+		row: row,
+		history: []store.SessionHistoryEntry{
+			{ClaudeSessionID: priorSession, JSONLPath: ""},
+		},
+	}
+	tm := &recordingResumeTmux{}
+
+	if _, err := api.Resume(st, tm, config.Default(), api.ResumeParams{ClaudeInstanceID: "id-r-1"}); err != nil {
+		t.Fatalf("Resume: %v; want recovery via recomputed history path %q", err, planted)
+	}
+	if tm.newSessionCalls != 1 {
+		t.Fatalf("NewSession called %d times; want 1 (resume recovered recomputed archived transcript)", tm.newSessionCalls)
+	}
+	// The relaunch must --resume the recovered archived session id.
+	if len(tm.gotCommand) < 3 || tm.gotCommand[1] != "--resume" || tm.gotCommand[2] != priorSession {
+		t.Errorf("command = %v; want `claude --resume %s ...`", tm.gotCommand, priorSession)
+	}
+}
+
+// TestResumeListSessionHistoryErrorPropagates covers resume's error-injection
+// path: when ListSessionHistory fails (after both persisted and fallback
+// candidates are absent), resume surfaces the error rather than silently
+// swallowing it.
+func TestResumeListSessionHistoryErrorPropagates(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "")
+
+	// baseRow has JSONLPath == "" and no CLAUDE_CONFIG_DIR, so both the persisted
+	// and computed-fallback candidates are absent, driving resume to consult
+	// ListSessionHistory — which is rigged to fail.
+	row := baseRow()
+	computed, err := spawn.JsonlPath(row.CWD, row.ClaudeSessionID)
+	if err != nil {
+		t.Fatalf("compute path: %v", err)
+	}
+	if _, serr := os.Stat(computed); !os.IsNotExist(serr) {
+		t.Fatalf("computed fallback %q unexpectedly exists", computed)
+	}
+
+	histErr := errors.New("history read boom")
+	st := &recordingResumeStore{row: row, historyErr: histErr}
+	tm := &recordingResumeTmux{}
+
+	_, err = api.Resume(st, tm, config.Default(), api.ResumeParams{ClaudeInstanceID: "id-r-1"})
+	if !errors.Is(err, histErr) {
+		t.Fatalf("err = %v; want wrapped %v", err, histErr)
+	}
+	if tm.newSessionCalls != 0 {
+		t.Errorf("NewSession fired despite history read failure")
 	}
 }
 
@@ -383,8 +567,10 @@ func TestResumeBothCandidatesAbsentReturnsErrJsonlMissing(t *testing.T) {
 }
 
 // TestResumeNullPathBothAbsentReportsSingleFallback covers the AC 4 variant
-// where jsonl_path is NULL: the error must carry exactly one attempt, the
-// fallback, with no spurious persisted entry.
+// where jsonl_path is NULL and no history exists: the row never produced a
+// transcript, so the sentinel is ErrJsonlNeverWritten (b.v2c AC2). The message
+// must still carry exactly one attempt — the fallback — with no spurious
+// persisted entry.
 func TestResumeNullPathBothAbsentReportsSingleFallback(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -395,8 +581,8 @@ func TestResumeNullPathBothAbsentReportsSingleFallback(t *testing.T) {
 	st := &recordingResumeStore{row: row}
 	tm := &recordingResumeTmux{}
 	_, err := api.Resume(st, tm, config.Default(), api.ResumeParams{ClaudeInstanceID: "id-r-1"})
-	if !errors.Is(err, api.ErrJsonlMissing) {
-		t.Fatalf("err = %v; want ErrJsonlMissing", err)
+	if !errors.Is(err, api.ErrJsonlNeverWritten) {
+		t.Fatalf("err = %v; want ErrJsonlNeverWritten", err)
 	}
 	fallback, _ := spawn.JsonlPathIn(configDir, row.CWD, row.ClaudeSessionID)
 	msg := err.Error()

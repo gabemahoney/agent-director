@@ -145,6 +145,16 @@
     "description": ""
   },
   {
+    "name": "ErrJsonlNeverWritten",
+    "package": "api",
+    "description": ""
+  },
+  {
+    "name": "ErrRepairTranscriptMissing",
+    "package": "api",
+    "description": ""
+  },
+  {
     "name": "ErrRelayModeOff",
     "package": "api",
     "description": ""

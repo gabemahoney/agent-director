@@ -18,6 +18,11 @@ var FindMissing = findMissingImpl
 // package api_test. External callers use (c *Client).Resume instead.
 var Resume = resumeImpl
 
+// RepairTranscript exposes the unexported repairTranscriptImpl for white-box
+// unit tests in package api_test (b.v2c AC7). External callers use
+// (c *Client).RepairTranscript instead.
+var RepairTranscript = repairTranscriptImpl
+
 // ExpandTildeForTest exposes expandTilde for the b.6k1 regression test.
 var ExpandTildeForTest = expandTilde
 

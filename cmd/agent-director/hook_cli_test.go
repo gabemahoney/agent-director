@@ -356,7 +356,18 @@ func TestHookCLISessionStartRecordsIdentityAndTranscript(t *testing.T) {
 	dbPath := filepath.Join(home, ".agent-director", "state.db")
 	insertPendingRow(t, dbPath, "id-e2e-1")
 
-	transcript := "/home/agent/.claude/projects/e2e/session-e2e-uuid.jsonl"
+	// b.v2c AC1: the SessionStart hook now stats transcript_path and records
+	// jsonl_path only when the file exists on disk, so the E2E transcript must be
+	// a real file (a fresh session that has not yet been messaged writes none,
+	// and the row would carry NULL — that is the idle-session case covered in the
+	// hook handler tests). Plant it under the test's HOME temp tree.
+	transcript := filepath.Join(home, ".claude", "projects", "e2e", "session-e2e-uuid.jsonl")
+	if err := os.MkdirAll(filepath.Dir(transcript), 0o700); err != nil {
+		t.Fatalf("mkdir transcript parent: %v", err)
+	}
+	if err := os.WriteFile(transcript, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
 	payload := `{"hook_event_name":"SessionStart","transcript_path":"` + transcript + `"}`
 	_, stderr, code, pid := runCLIWithEnvPID(t, home,
 		map[string]string{

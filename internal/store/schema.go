@@ -17,6 +17,13 @@ import (
 // v3 changes vs v2: five new spawns columns — pid, proc_starttime,
 // liveness_unverified_since, liveness_note (all nullable) and extra_env
 // (TEXT NOT NULL DEFAULT '{}'). See migrateV2toV3.
+//
+// v4 changes vs v3 (b.v2c): a new session_history table records every
+// (claude_session_id, jsonl_path) pair a spawn has ever pointed at, so a
+// session rotation on CSCB fleet restart no longer orphans the previous
+// session's transcript — the prior pair is archived before the spawns row is
+// overwritten with the new session id. session_history is the queryable link
+// from a live row back to its earlier sessions (AC6/AC8). See migrateV3toV4.
 const schemaDDL = `
 CREATE TABLE IF NOT EXISTS spawns (
     claude_instance_id         TEXT PRIMARY KEY,
@@ -57,6 +64,17 @@ CREATE TABLE IF NOT EXISTS permission_requests (
 );
 CREATE INDEX IF NOT EXISTS idx_permission_requests_instance_decision   ON permission_requests(claude_instance_id, decision);
 CREATE INDEX IF NOT EXISTS idx_permission_requests_decision_decided_at ON permission_requests(decision, decided_at);
+
+CREATE TABLE IF NOT EXISTS session_history (
+    history_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    claude_instance_id  TEXT NOT NULL
+                        REFERENCES spawns(claude_instance_id) ON DELETE CASCADE,
+    claude_session_id   TEXT NOT NULL,
+    jsonl_path          TEXT,
+    recorded_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(claude_instance_id, claude_session_id)
+);
+CREATE INDEX IF NOT EXISTS idx_session_history_instance ON session_history(claude_instance_id);
 `
 
 // migrationStep upgrades a database from `from` to `from+1` inside a single
@@ -80,6 +98,7 @@ type migrationStep struct {
 var migrationSteps = []migrationStep{
 	{from: 1, apply: migrateV1toV2},
 	{from: 2, apply: migrateV2toV3},
+	{from: 3, apply: migrateV3toV4},
 }
 
 // ensureSchema enforces the schema-version contract on an opened *sql.DB.
@@ -293,6 +312,43 @@ func migrateV2toV3(db *sql.DB) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("store: commit v2→v3 migration tx: %w", err)
+	}
+	return nil
+}
+
+// migrateV3toV4 upgrades a v3 database to v4 inside a single transaction
+// (b.v2c). It creates the session_history table and its index and stamps
+// user_version = 4. There is no phase-3 backfill: pre-v4 rows have no recorded
+// session history, and the current session pair is archived lazily on the next
+// rotation. The CREATE statements use IF NOT EXISTS so the hop is idempotent on
+// re-entry. A rollback on any error leaves user_version=3 intact.
+func migrateV3toV4(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: begin v3→v4 migration tx: %w", err)
+	}
+	const v4SessionHistory = `
+CREATE TABLE IF NOT EXISTS session_history (
+    history_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    claude_instance_id  TEXT NOT NULL
+                        REFERENCES spawns(claude_instance_id) ON DELETE CASCADE,
+    claude_session_id   TEXT NOT NULL,
+    jsonl_path          TEXT,
+    recorded_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(claude_instance_id, claude_session_id)
+);
+CREATE INDEX IF NOT EXISTS idx_session_history_instance ON session_history(claude_instance_id);
+`
+	if _, err := tx.Exec(v4SessionHistory); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("store: v3→v4 create session_history: %w", err)
+	}
+	if _, err := tx.Exec("PRAGMA user_version = 4"); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("store: v3→v4 stamp user_version: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit v3→v4 migration tx: %w", err)
 	}
 	return nil
 }

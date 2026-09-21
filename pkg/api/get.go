@@ -81,6 +81,35 @@ type SpawnRow struct {
 	// omitted). Callers use the request_token of each element to target a
 	// specific row with the decide verb.
 	PermissionRequests []PermissionRequestInfo `json:"permission_requests"`
+	// TranscriptStatus is a derived, operator-facing summary of the current
+	// session's transcript state (b.v2c AC8). One of:
+	//   - "present":      jsonl_path is recorded (a verified transcript).
+	//   - "never_written": a session id exists but jsonl_path is NULL and the
+	//                      instance has NO archived session history — nothing was
+	//                      ever written for this instance (the freshly-restarted,
+	//                      un-messaged case).
+	//   - "rotated":       jsonl_path is NULL but the instance HAS archived prior
+	//                      sessions — history exists under a different session id
+	//                      (see prior_sessions). This is the case a bare
+	//                      jsonl_path could not distinguish from "never_written".
+	//   - "no_session":    no claude_session_id yet (pre-first-SessionStart).
+	TranscriptStatus string `json:"transcript_status"`
+	// PriorSessions is the instance's archived session history, newest first —
+	// the queryable link from this row back to earlier sessions orphaned by a
+	// rotation (b.v2c AC6/AC8). Always a non-nil slice (encodes as []).
+	PriorSessions []PriorSession `json:"prior_sessions"`
+}
+
+// PriorSession is one archived (claude_session_id, jsonl_path) pair the Spawn
+// pointed at before a session rotation (b.v2c). JSONLPath is empty when the
+// archived session had no recorded transcript path.
+type PriorSession struct {
+	// ClaudeSessionID is the archived session's id.
+	ClaudeSessionID string `json:"claude_session_id"`
+	// JSONLPath is the archived session's recorded transcript path (may be empty).
+	JSONLPath string `json:"jsonl_path"`
+	// RecordedAt is when the archive row was written (the rotation moment).
+	RecordedAt string `json:"recorded_at"`
 }
 
 // nullableString maps a COALESCE-scanned store string ("" == NULL) to the
@@ -133,6 +162,25 @@ func nullableTimestamp(s string) *string {
 type GetStore interface {
 	GetSpawn(instanceID string) (Spawn, error)
 	OpenPermissionRequestsForSpawn(instanceID string) ([]PermissionRow, error)
+	// ListSessionHistory returns the instance's archived prior sessions
+	// (newest first) so Get can populate PriorSessions and derive
+	// TranscriptStatus (b.v2c AC6/AC8).
+	ListSessionHistory(instanceID string) ([]SessionHistoryEntry, error)
+}
+
+// deriveTranscriptStatus computes the operator-facing transcript-status summary
+// (b.v2c AC8) from the row's session id, jsonl_path, and archived history.
+func deriveTranscriptStatus(sessionID, jsonlPath string, historyLen int) string {
+	switch {
+	case sessionID == "":
+		return "no_session"
+	case jsonlPath != "":
+		return "present"
+	case historyLen > 0:
+		return "rotated"
+	default:
+		return "never_written"
+	}
 }
 
 // Get returns the full Spawn row for the given claude_instance_id. Missing
@@ -168,7 +216,24 @@ func Get(s GetStore, instanceID string) (SpawnRow, error) {
 		LivenessUnverifiedSince: nullableTimestamp(row.LivenessUnverifiedSince),
 		LivenessNote:            nullableString(row.LivenessNote),
 		PermissionRequests:      []PermissionRequestInfo{},
+		PriorSessions:           []PriorSession{},
 	}
+
+	// b.v2c AC6/AC8: surface archived prior sessions and derive the
+	// operator-facing transcript status so "no history ever existed" is
+	// distinguishable from "history exists under a different session id".
+	history, err := s.ListSessionHistory(instanceID)
+	if err != nil {
+		return SpawnRow{}, err
+	}
+	for _, h := range history {
+		out.PriorSessions = append(out.PriorSessions, PriorSession{
+			ClaudeSessionID: h.ClaudeSessionID,
+			JSONLPath:       h.JSONLPath,
+			RecordedAt:      h.RecordedAt,
+		})
+	}
+	out.TranscriptStatus = deriveTranscriptStatus(row.ClaudeSessionID, row.JSONLPath, len(history))
 	// Normalize: callers reading `claude_args:null` cannot distinguish
 	// from `[]`; always emit a non-nil slice for the JSON output.
 	if out.ClaudeArgs == nil {

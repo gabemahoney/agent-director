@@ -72,6 +72,13 @@ const (
 	// days, so it qualifies for expiry under the default retention
 	// window. Used by expire's happy path.
 	seedExpired
+
+	// seedRepairable seeds an ended row with a current session pair AND
+	// writes a separate orphaned transcript on disk at
+	// storefix.RepairJsonlPath(SeedID). Used by repair-transcript's happy
+	// path, which re-associates that transcript with the row. HOME must be
+	// redirected first (the smoke TestMain does this).
+	seedRepairable
 )
 
 // seederSpec carries everything the driver needs to exercise one verb.
@@ -314,6 +321,32 @@ func init() {
 		// induce on linux). Skipping the error assertion is handled
 		// by the driver when Error is nil.
 		Error: nil,
+	}
+
+	// ── repair-transcript ─────────────────────────────────────────────────
+	seeders["repair-transcript"] = seederSpec{
+		Manifest: mustVerb("repair-transcript"),
+		SeedKind: seedRepairable,
+		SeedID:   "smoke-repair-transcript-id",
+		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
+			// The seed wrote the orphaned transcript at this deterministic
+			// path; its basename is the recovered session id we record.
+			jsonlPath := storefix.RepairJsonlPath(id)
+			return c.RepairTranscript(api.RepairTranscriptParams{
+				ClaudeInstanceID: id,
+				ClaudeSessionID:  "sess-recovered-" + id,
+				JSONLPath:        jsonlPath,
+			})
+		},
+		Error: func(c *api.Client, _ context.Context) error {
+			// Nonexistent transcript path → ErrRepairTranscriptMissing.
+			_, err := c.RepairTranscript(api.RepairTranscriptParams{
+				ClaudeInstanceID: bogusID,
+				ClaudeSessionID:  "sess-nope",
+				JSONLPath:        "/nonexistent/does-not-exist.jsonl",
+			})
+			return err
+		},
 	}
 
 	// ── expire ────────────────────────────────────────────────────────────

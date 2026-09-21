@@ -232,7 +232,7 @@ func TestListLiveSpawnIdentitiesReadShape(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("InsertPending(live-pending): %v", err)
 	}
-	if err := s.RecordSessionStartIdentity("live-pending", "", "", 4242, "9988"); err != nil {
+	if err := s.RecordSessionStartIdentity("live-pending", "", "", false, 4242, "9988"); err != nil {
 		t.Fatalf("RecordSessionStartIdentity(live-pending): %v", err)
 	}
 	if _, err := s.SetLivenessUnverified("live-pending", "probe eacces"); err != nil {

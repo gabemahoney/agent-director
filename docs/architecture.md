@@ -141,7 +141,7 @@ verbatim so future code review can grep for it:
 
 > No SQL outside `internal/store`; callers use typed query primitives only.
 
-**Schema v2** lives in `internal/store/schema.go`. Two tables:
+**Schema v4** lives in `internal/store/schema.go`. Three tables:
 
 - `spawns` — one row per Claude Code instance under direction, with
   parent/child link (`parent_id`), lifecycle (`state`, `started_at`,
@@ -152,30 +152,41 @@ verbatim so future code review can grep for it:
   `UNIQUE(claude_instance_id, request_token)`, with `tool_name`, `tool_input`,
   `decision`, `decision_reason`, and `decided_at`. Indexed on
   `(claude_instance_id, decision)` and `(decision, decided_at)`.
+- `session_history` (v4, b.v2c) — one row per `(claude_instance_id,
+  claude_session_id)` pair the spawn has ever pointed at, FK-cascaded on spawn
+  delete; `claude_session_id TEXT NOT NULL`, nullable `jsonl_path`,
+  `recorded_at`, composite `UNIQUE(claude_instance_id, claude_session_id)`,
+  indexed on `claude_instance_id`. When a session rotates (a CSCB fleet
+  restart hands the bot a new session id), the prior `(session id, jsonl_path)`
+  is archived here before the `spawns` row is overwritten, so the earlier
+  session's transcript is never orphaned. It is the queryable link from a live
+  row back to its earlier sessions — surfaced through `get`'s `prior_sessions`
+  and consulted by `resume` as a fallback candidate source.
 
 **Schema versioning convention.** SQLite's `PRAGMA user_version` is the
 source of truth for which schema this binary expects. On `Open`:
 
-- `user_version == 0` → fresh DB: create the v3 tables and indexes inside a
-  single transaction, then stamp `PRAGMA user_version = 3`.
-- `0 < user_version < 3` (older-than-binary, i.e. v1 or v2) → **gated**: the
+- `user_version == 0` → fresh DB: create the v4 tables and indexes inside a
+  single transaction, then stamp `PRAGMA user_version = 4`.
+- `0 < user_version < 4` (older-than-binary, i.e. v1, v2, or v3) → **gated**: the
   store does **not** auto-migrate on `Open`. The open is refused with
   `store.ErrSchemaMigrationRequired` (an exported `errors.New` value; callers
   use `errors.Is`) and zero DDL runs, *unless* an administrator has placed a
   valid authorization sentinel next to the DB file. The sentinel (`migrate-authorized`,
   sibling to the resolved DB path) is a strict JSON object naming exactly one
-  transition (e.g. `{"from": 2, "to": 3}`) and authorizes the migration only
+  transition (e.g. `{"from": 3, "to": 4}`) and authorizes the migration only
   when its `from` exact-matches the DB's actual `user_version` and its `to`
   exact-matches this binary's `schemaVersion`. When authorized, the upgrade
   runs as a chain of `migrationSteps` (the ordered step registry in
-  `schema.go`), each step individually transactional; today the chain holds two
+  `schema.go`), each step individually transactional; today the chain holds three
   steps, `{from: 1, apply: migrateV1toV2}` (DROP+CREATE `permission_requests`,
-  V1 rows discarded) and `{from: 2, apply: migrateV2toV3}` (five ADD COLUMN on
-  `spawns`) — see "Schema v1 → v2 Migration" and "Schema v2 → v3 Migration"
-  below. A v1 DB opened against this binary chains v1→v2→v3 in one pass. The
-  sentinel is consumed after the chain commits.
-- `user_version == 3` → nothing to do; the schema already matches.
-- `user_version > 3` (newer-than-binary) → return the sentinel
+  V1 rows discarded), `{from: 2, apply: migrateV2toV3}` (five ADD COLUMN on
+  `spawns`), and `{from: 3, apply: migrateV3toV4}` (CREATE `session_history`) —
+  see "Schema v1 → v2 Migration", "Schema v2 → v3 Migration", and "Schema v3 →
+  v4 Migration" below. A v1 DB opened against this binary chains v1→v2→v3→v4 in
+  one pass. The sentinel is consumed after the chain commits.
+- `user_version == 4` → nothing to do; the schema already matches.
+- `user_version > 4` (newer-than-binary) → return the sentinel
   `store.ErrSchemaMismatch` (an exported `errors.New` value, so callers use
   `errors.Is`). No DDL runs in this case.
 
@@ -209,7 +220,21 @@ identity to `spawns` (`migrateV2toV3`):
    there is no phase-3 data transform.
 3. **`user_version` stamp**: `PRAGMA user_version = 3` is the final
    in-transaction step before `COMMIT`; a rollback on any error leaves
-   `user_version = 2` intact. `user_version > 3` surfaces `ErrSchemaMismatch`.
+   `user_version = 2` intact.
+
+**Schema v3 → v4 Migration.** The current migration adds the `session_history`
+table so session rotations no longer orphan transcript history (`migrateV3toV4`,
+b.v2c):
+
+1. **Migration shape**: a single `CREATE TABLE IF NOT EXISTS session_history`
+   plus `CREATE INDEX IF NOT EXISTS idx_session_history_instance`, inside a
+   single transaction. A new-table hop — no existing row is touched.
+2. **No backfill**: `session_history` starts empty. Pre-v4 rows have no recorded
+   session history; the current session pair is archived lazily on the next
+   rotation, so there is no phase-3 data transform.
+3. **`user_version` stamp**: `PRAGMA user_version = 4` is the final
+   in-transaction step before `COMMIT`; a rollback on any error leaves
+   `user_version = 3` intact. `user_version > 4` surfaces `ErrSchemaMismatch`.
 
 **Concurrency.** `Open` calls `db.SetMaxOpenConns(1)`. `journal_mode=WAL`
 and `foreign_keys=ON` are applied via DSN PRAGMAs and verified after open;
@@ -313,7 +338,7 @@ See `docs/cli-reference.md` and `docs/mcp-reference.md` — auto-generated; do n
                 +-------------------------+
                 |   internal/store        |
                 |   (sole SQL owner;      |
-                |    schema v3 / SRD §4.2)|
+                |    schema v4 / SRD §4.2)|
                 +-------------------------+
 
    internal/config -----> consumed by pkg/api and cmd/
@@ -773,7 +798,7 @@ shared Go-runtime state to preserve across calls.
 
 Every agent-director error envelope carries two string fields: `err_name` (the canonical error name, e.g. `"ErrSpawnNotFound"`) and `err_description` (a human-readable detail string). The TS client translates these into a typed class hierarchy so callers can catch specific errors with `instanceof`.
 
-**Catalog source.** `pkg/api/errnames/catalog.json` is the single source of truth for every named error the Go binary can emit. It contains 38 entries at time of writing. Each entry has a `name` field (the `err_name` string) and a `package` field naming the origin Go package.
+**Catalog source.** `pkg/api/errnames/catalog.json` is the single source of truth for every named error the Go binary can emit. It contains 40 entries at time of writing. Each entry has a `name` field (the `err_name` string) and a `package` field naming the origin Go package.
 
 **Base class.** `src/errors.ts::AgentDirectorError extends Error`. Constructor: `(verb: string, err_name: string, err_description: string)`. Sets `this.name = this.constructor.name` so subclass names propagate correctly through the prototype chain. Readonly fields: `verb`, `errName`, `errDescription`. Message format: `"${err_name}: ${err_description}"`.
 
@@ -854,7 +879,7 @@ waiting (after SessionStart fires)
 
 | Event | Tool / reason carve-out | Resulting state |
 | --- | --- | --- |
-| `SessionStart` | — | `waiting` (also writes `claude_session_id` from `transcript_path`) |
+| `SessionStart` | — | `waiting` (also writes `claude_session_id` from `transcript_path`; `jsonl_path` only when the file exists on disk, else NULL/provisional — b.v2c; a differing session id archives the prior pair to `session_history`) |
 | `UserPromptSubmit` | — | `working` |
 | `PreToolUse` | `tool_name = AskUserQuestion` | `ask_user` |
 | `PreToolUse` | any other tool | `working` |
@@ -1355,14 +1380,14 @@ edits to `config.toml` are lost.
 
 `ErrSchemaMismatch` fires when the store's `user_version` is not recognized by
 this binary — typically meaning the store was written by a newer binary
-(`user_version > 3`). Note: an older-than-binary store (v1 or v2) does **not**
-trigger `ErrSchemaMismatch` — it surfaces the distinct
+(`user_version > 4`). Note: an older-than-binary store (v1, v2, or v3) does
+**not** trigger `ErrSchemaMismatch` — it surfaces the distinct
 `ErrSchemaMigrationRequired` instead. The store does not silently upgrade an
 older DB on `Open`: the open is refused with `ErrSchemaMigrationRequired`
 unless an administrator has placed a valid `migrate-authorized` sentinel next
 to the DB file, in which case the gated migration chain runs (v1→v2, DROP+CREATE
 `permission_requests` with v1 rows discarded; v2→v3, five `spawns` ADD COLUMN
-preserving every row).
+preserving every row; v3→v4, CREATE `session_history` preserving every row).
 
 If a store-opening verb (e.g. `agent-director list`) reports `ErrSchemaMismatch` after an upgrade, the
 recovery is `rm ~/.agent-director/state.db*` followed by a re-run. Spawn
@@ -2172,10 +2197,10 @@ mutation, no half-created tmux session):
 3. `claude_session_id` populated → otherwise `ErrNoSessionId`. A
    Spawn killed before its first SessionStart hook fired has no
    rotated session id to point `--resume` at.
-4. JSONL transcript file exists on disk → otherwise
-   `ErrJsonlMissing`. Pure `os.Stat` pre-flight; no read. Candidate
-   resolution follows a strict precedence (decision of record, bug
-   b.1ba):
+4. JSONL transcript file exists on disk → otherwise `ErrJsonlMissing` or
+   `ErrJsonlNeverWritten` (see below). Pure `os.Stat` pre-flight; no read.
+   Candidate resolution follows a strict precedence (decision of record, bug
+   b.1ba, extended by b.v2c):
    1. The persisted `jsonl_path` is tried first, if non-empty. If its
       `os.Stat` succeeds it **wins outright** — no fallback is computed.
    2. If `jsonl_path` is NULL/empty **or** its `os.Stat` fails for ANY
@@ -2184,13 +2209,36 @@ mutation, no half-created tmux session):
       recomputed from the row's `ExtraEnv["CLAUDE_CONFIG_DIR"]` (or
       `~/.claude` when that key is absent/empty) `+ slug(cwd) + session
       id`, and that is `os.Stat`'d.
+   3. If neither the current session's persisted path nor its fallback
+      exists, `resume` walks the instance's archived `session_history`
+      (newest first, b.v2c AC6). For each prior session it stats the
+      archived `jsonl_path` (recomputing the `CLAUDE_CONFIG_DIR`-aware
+      fallback when the archived path is NULL). The first archived
+      transcript that exists **wins**: `resume` relaunches `claude
+      --resume` against the archived id so it points at the recovered
+      transcript (the mutation is in-memory only — the DB row itself is
+      re-stamped by the relaunched Claude's subsequent SessionStart). This
+      is what stops a CSCB fleet-restart
+      rotation from stranding intact history.
 
    This heals legacy rows written before the SessionStart hook persisted
-   `jsonl_path`, and rows whose recorded path has rotted — a successful
-   fallback resume re-fires SessionStart, which re-persists the correct
-   path. When **every** candidate fails, `ErrJsonlMissing` reports each
-   path tried with its source (`persisted` vs `fallback`) and its stat
-   error (see [JSONL path resolver](#jsonl-path-resolver-internalspawnjsonlgo)).
+   `jsonl_path`, rows whose recorded path has rotted, and rows whose history
+   moved to an earlier session id on rotation — a successful fallback resume
+   re-fires SessionStart, which re-persists the correct path. When **every**
+   candidate (persisted, fallback, and every archived session-history
+   transcript) fails, the verb distinguishes two cases (b.v2c AC2):
+   - `ErrJsonlNeverWritten` when the persisted `jsonl_path` was NULL/empty
+     **and** the instance has no archived session history — nothing was ever
+     written for this instance (the freshly-restarted, un-messaged bot; a
+     fresh Claude session writes no `.jsonl` until its first user turn).
+     Recourse: message it, or delete + re-spawn.
+   - `ErrJsonlMissing` otherwise — a path was once recorded/composed (or
+     history exists) and has since rotted. Recourse: `delete` + fresh
+     `spawn`.
+
+   Both messages report each path tried with its source (`persisted`,
+   `fallback`, or `history`) and its stat error (see
+   [JSONL path resolver](#jsonl-path-resolver-internalspawnjsonlgo)).
 5. Canonical tmux session name is free → otherwise the wrapped
    `tmux.ErrTmuxSessionCreate` sentinel. Resume does NOT auto-kill
    a stale session; the operator cleans up manually.
@@ -2237,11 +2285,42 @@ as a chance to clear `ended_at`:
 the hook fires — the next resume from THIS resurrected lifetime uses
 the new id, pointing at the new JSONL.
 
+**Conditional `jsonl_path` write (b.v2c AC1).** A fresh Claude session writes
+no `.jsonl` transcript until its first user turn, so the `transcript_path` the
+SessionStart payload reports may not exist yet. The hook `os.Stat`s that path and
+tells the store whether the file is present; the store records `jsonl_path`
+**only when the file actually exists on disk**, and leaves it NULL (provisional)
+otherwise. This is what stops a row from asserting a dead pointer: an
+un-messaged, freshly-restarted bot has a NULL `jsonl_path`, not a path to a file
+that was never written. A stat error other than not-exist (e.g. a permission
+wall) is treated conservatively as "not present". The provisional NULL is not
+lossy — the resume fallback recomputes the path, and `find-missing` heals the
+row once the transcript appears (below).
+
+**Session-history archival on rotation (b.v2c AC6).** When the SessionStart
+payload carries a **different** `claude_session_id` than the row currently holds
+(a rotation — typically a CSCB fleet restart handing the bot a new session), the
+store archives the prior `(claude_session_id, jsonl_path)` pair into
+`session_history` **before** overwriting the `spawns` row with the new session.
+The earlier session's transcript is therefore never orphaned: it is reachable
+through `get`'s `prior_sessions` and is a resume fallback candidate. The same
+archival happens on the `repair-transcript` verb when it replaces a differing
+session id.
+
+**Lazy transcript healing in `find-missing` (b.v2c AC3).** `find-missing`
+already sweeps every live row; on each sweep it also lists rows with a NULL
+`jsonl_path` (provisional — a session that started before its transcript was
+written), recomposes each path the same way the resume fallback does, `os.Stat`s
+it, and records it when present. So the normal case — bot starts, operator
+messages it an hour later — heals with no operator intervention. Per-row errors
+are logged and skipped; healing never aborts the sweep.
+
 ### JSONL path resolver (`internal/spawn/jsonl.go`)
 
 The resume pre-flight prefers the transcript path **persisted on the
-row** (`jsonl_path`, stamped by the SessionStart hook). That path is
-authoritative — it records where Claude Code actually wrote the
+row** (`jsonl_path`, stamped by the SessionStart hook once the file exists on
+disk — b.v2c; a provisional NULL means the transcript was not yet written). That
+path is authoritative — it records where Claude Code actually wrote the
 transcript, including under a custom `CLAUDE_CONFIG_DIR`. It wins as
 long as its `os.Stat` succeeds.
 
@@ -2584,13 +2663,51 @@ live state (`waiting`/`working`). Recovering a Spawn's conversation is a
    persisted `ExtraEnv` (auth/config, incl. `CLAUDE_CONFIG_DIR`) and
    replaying the JSONL transcript. The transcript is located by the
    [pre-flight precedence](#verb-pkgapiresumego) (persisted `jsonl_path`,
-   then the `CLAUDE_CONFIG_DIR`-aware fallback), which is what lets a
-   Spawn that ran under a custom config dir recover across a reboot.
+   then the `CLAUDE_CONFIG_DIR`-aware fallback, then any archived
+   `session_history` transcript), which is what lets a Spawn that ran under
+   a custom config dir — or whose session rotated on a fleet restart —
+   recover across a reboot.
 
 ```
 agent-director find-missing        # reconcile frozen rows → missing
 agent-director resume --claude-instance-id <id>   # relaunch each
 ```
+
+**`ErrJsonlNeverWritten` vs `ErrJsonlMissing` (b.v2c).** A resume can fail two
+ways, and the errors mean different things:
+
+- `ErrJsonlNeverWritten` — the row has a session id but no transcript was ever
+  written (persisted `jsonl_path` NULL and no archived session history). This is
+  the freshly-restarted, un-messaged bot: a fresh Claude session writes no
+  `.jsonl` until its first user turn. There is genuinely nothing to resume;
+  message the bot (its transcript then appears and `find-missing` heals the row)
+  or `delete` + re-spawn.
+- `ErrJsonlMissing` — a path was once recorded or composed (or history exists)
+  and has since rotted. Recovery is `delete` + fresh `spawn`.
+
+`get`'s `transcript_status` field surfaces this distinction **before** a resume
+is attempted: `never_written`, `rotated` (history exists under a different
+session id — see `prior_sessions`), `present`, or `no_session`.
+
+**Recovering an orphaned transcript with `repair-transcript` (b.v2c AC7).**
+When a session rotated and intact history was stranded under an earlier session
+id that the store does not currently point at (and was never archived — e.g. a
+pre-v4 rotation, or a transcript the operator located by hand), the one-shot
+`repair-transcript` verb re-associates it with the row:
+
+```
+agent-director repair-transcript \
+  --claude-instance-id <id> \
+  --claude-session-id <orphaned-session-id> \
+  --jsonl-path <absolute path to the orphaned .jsonl>
+```
+
+The verb verifies the file exists (else `ErrRepairTranscriptMissing`), archives
+the row's current session pair into `session_history` when it differs (so the
+repair never silently discards the pointer it overwrites), and records the
+recovered `(session id, jsonl_path)` so a subsequent `resume` points
+`claude --resume` at the recovered transcript. This is the supported recovery
+for silent data loss — it is available on both CLI and MCP.
 
 **`delete` is NOT a recovery step.** It is destructive: it removes the
 row along with its `claude_session_id`, labels, and `extra_env`, making
@@ -2606,7 +2723,11 @@ watch for reboots and does not schedule anything itself. Its recovery
 contract **starts at** "the caller invokes `find-missing` then
 `resume`". Whatever triggers that sequence after a boot — a systemd
 unit, a startup script, a `find-missing` cron loop — is owned and
-operated by the caller, not by agent-director.
+operated by the caller, not by agent-director. Before reaching for `delete`
+after a failed resume, check `get`'s `transcript_status` and `prior_sessions`:
+`rotated` means history is recoverable (try `repair-transcript` or a plain
+`resume`, which now walks archived sessions), and `never_written` means the bot
+simply hasn't been messaged yet — neither warrants a destructive delete.
 
 ## Stop semantics
 
@@ -2761,16 +2882,17 @@ detects this case via the presence of `pkg/api/go.mod`.
 ### ErrSchemaMismatch on upgrade
 
 Schema upgrades are **gated**, not automatic: an older-than-binary database
-(v1 or v2) is refused on `Open` with `ErrSchemaMigrationRequired` unless an
+(v1, v2, or v3) is refused on `Open` with `ErrSchemaMigrationRequired` unless an
 administrator has placed a valid `migrate-authorized` sentinel next to the DB
 file. Only then does the migration chain run: the v1→v2 hop (DROP+CREATE
-`permission_requests`, no row preservation) and/or the v2→v3 hop (five
-`spawns` ADD COLUMN, no backfill), walking from the DB's `user_version` up to
+`permission_requests`, no row preservation), the v2→v3 hop (five
+`spawns` ADD COLUMN, no backfill), and/or the v3→v4 hop (CREATE
+`session_history`, no backfill), walking from the DB's `user_version` up to
 `schemaVersion` in one pass. `ErrSchemaMismatch` only fires when
-`user_version > 3` — meaning the store was written by a binary newer than the
+`user_version > 4` — meaning the store was written by a binary newer than the
 current one.
 
-Bumping `schemaVersion` beyond 3 requires:
+Bumping `schemaVersion` beyond 4 requires:
 
 1. Add a `migrateVNtoVN1` hop in `internal/store/schema.go` and append a
    `migrationStep{from: N, apply: migrateVNtoVN1}` entry to the `migrationSteps`

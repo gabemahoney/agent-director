@@ -65,22 +65,23 @@ type clientDispatchFn func(c *api.Client, params map[string]any) ([]byte, bool)
 // The init() guard below ensures this table is complete with respect to
 // manifest.CallableVerbs() at startup; missing entries cause a panic.
 var dispatch = map[string]clientDispatchFn{
-	"spawn":          dispatchSpawn,
-	"status":         dispatchStatus,
-	"get":            dispatchGet,
-	"send-keys":      dispatchSendKeys,
-	"read-pane":      dispatchReadPane,
-	"kill":           dispatchKill,
-	"decide":         dispatchDecide,
-	"get-permission": dispatchGetPermission,
-	"resume":         dispatchResume,
-	"find-missing":   dispatchFindMissing,
-	"expire":         dispatchExpire,
-	"delete":         dispatchDelete,
-	"make-template":  dispatchMakeTemplate,
-	"list":           dispatchList,
-	"pause":          dispatchPause,
-	"version":        dispatchVersion,
+	"spawn":             dispatchSpawn,
+	"status":            dispatchStatus,
+	"get":               dispatchGet,
+	"send-keys":         dispatchSendKeys,
+	"read-pane":         dispatchReadPane,
+	"kill":              dispatchKill,
+	"decide":            dispatchDecide,
+	"get-permission":    dispatchGetPermission,
+	"resume":            dispatchResume,
+	"find-missing":      dispatchFindMissing,
+	"repair-transcript": dispatchRepairTranscript,
+	"expire":            dispatchExpire,
+	"delete":            dispatchDelete,
+	"make-template":     dispatchMakeTemplate,
+	"list":              dispatchList,
+	"pause":             dispatchPause,
+	"version":           dispatchVersion,
 }
 
 func init() {
@@ -310,14 +311,14 @@ func strMapParam(params map[string]any, key string) map[string]string {
 
 func dispatchSpawn(c *api.Client, params map[string]any) ([]byte, bool) {
 	p := api.SpawnParams{
-		CWD:              strParam(params, "cwd"),
-		Template:         strParam(params, "template"),
-		ClaudeInstanceID: strParam(params, "claude_instance_id"),
-		RelayMode:        strParam(params, "relay_mode"),
-		ClaudeArgs:       strSliceParam(params, "claude_args"),
-		ExtraEnv:         strMapParam(params, "extra_env"),
+		CWD:                 strParam(params, "cwd"),
+		Template:            strParam(params, "template"),
+		ClaudeInstanceID:    strParam(params, "claude_instance_id"),
+		RelayMode:           strParam(params, "relay_mode"),
+		ClaudeArgs:          strSliceParam(params, "claude_args"),
+		ExtraEnv:            strMapParam(params, "extra_env"),
 		AgentDirectorLabels: strMapParam(params, "labels"),
-		NoPreTrust:       boolParam(params, "no_pre_trust"),
+		NoPreTrust:          boolParam(params, "no_pre_trust"),
 	}
 	if tmuxName, ok := params["tmux_session_name"].(string); ok {
 		p.TmuxSessionName = tmuxName
@@ -422,6 +423,18 @@ func dispatchResume(c *api.Client, params map[string]any) ([]byte, bool) {
 
 func dispatchFindMissing(c *api.Client, _ map[string]any) ([]byte, bool) {
 	res, err := c.FindMissing(context.Background())
+	if err != nil {
+		return marshalErrEnvelope(err), true
+	}
+	return successEnvelope(res)
+}
+
+func dispatchRepairTranscript(c *api.Client, params map[string]any) ([]byte, bool) {
+	var p api.RepairTranscriptParams
+	if err := remarshal(params, &p); err != nil {
+		return marshalErrEnvelope(err), true
+	}
+	res, err := c.RepairTranscript(p)
 	if err != nil {
 		return marshalErrEnvelope(err), true
 	}

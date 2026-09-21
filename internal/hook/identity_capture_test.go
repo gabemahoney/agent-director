@@ -27,6 +27,8 @@ import (
 	"errors"
 	"io"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -36,6 +38,22 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/procstarttimefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 )
+
+// writeTranscript creates a real .jsonl transcript file named <sessionID>.jsonl
+// under a fresh temp dir and returns its absolute path (b.v2c AC1). The
+// SessionStart hook now stats the payload's transcript_path and only records
+// jsonl_path when the file is actually present on disk, so handler tests that
+// assert a recorded jsonl_path must point at a file that exists. The basename is
+// the session id because the payload classifier derives ClaudeSessionID from the
+// transcript basename.
+func writeTranscript(t *testing.T, sessionID string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), sessionID+".jsonl")
+	if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("writeTranscript(%q): %v", sessionID, err)
+	}
+	return path
+}
 
 // fakeResolver is an injectable hook.IdentityResolver double. It returns a
 // fixed (pid, procStartTime, err) tuple and counts Resolve calls so tests can
@@ -92,7 +110,8 @@ func handleWith(t *testing.T, st hook.HookStore, id, payload string, r hook.Iden
 // GetSpawn (store read), never internals.
 func TestSessionStartRecordsResolvedIdentity(t *testing.T) {
 	const id = "ic-record-identity"
-	const transcript = "/x/sess-abc123.jsonl"
+	// b.v2c AC1: jsonl_path is recorded only when the transcript exists on disk.
+	transcript := writeTranscript(t, "sess-abc123")
 
 	st, _ := storefix.OpenTempStore(t)
 	storefix.SeedSpawn(t, st, id)
@@ -175,7 +194,8 @@ func TestSessionStartRefreshesIdentity(t *testing.T) {
 // count must remain zero across those events.
 func TestNonSessionStartLeavesIdentityUntouched(t *testing.T) {
 	const id = "ic-noclobber"
-	const transcript = "/x/sess-noclobber.jsonl"
+	// b.v2c AC1: real transcript so the seeding SessionStart records jsonl_path.
+	transcript := writeTranscript(t, "sess-noclobber")
 
 	st, _ := storefix.OpenTempStore(t)
 	storefix.SeedSpawn(t, st, id)
@@ -232,7 +252,8 @@ func TestNonSessionStartLeavesIdentityUntouched(t *testing.T) {
 // mentioning the identity/resolve failure is produced on the injected logger.
 func TestSessionStartResolverFailureFailsOpen(t *testing.T) {
 	const id = "ic-resolver-failure"
-	const transcript = "/x/sess-failopen.jsonl"
+	// b.v2c AC1: real transcript so jsonl_path is still written on fail-open.
+	transcript := writeTranscript(t, "sess-failopen")
 
 	st, _ := storefix.OpenTempStore(t)
 	storefix.SeedSpawn(t, st, id)
@@ -286,8 +307,9 @@ func TestSessionStartResolverFailureFailsOpen(t *testing.T) {
 // identity is still re-recorded from the new resolver.
 func TestSessionStartEmptyTranscriptPreservesButRerecords(t *testing.T) {
 	const id = "ic-empty-transcript"
-	const transcript = "/x/sess-preserve.jsonl"
 	const sessionID = "sess-preserve"
+	// b.v2c AC1: real transcript so the first SessionStart populates jsonl_path.
+	transcript := writeTranscript(t, sessionID)
 
 	st, _ := storefix.OpenTempStore(t)
 	storefix.SeedSpawn(t, st, id)
@@ -299,7 +321,7 @@ func TestSessionStartEmptyTranscriptPreservesButRerecords(t *testing.T) {
 	// path whose basename is the session id we assert on.
 	r1 := &fakeResolver{pid: 3333, procStartTime: "3003"}
 	handleWith(t, st, id,
-		`{"hook_event_name":"SessionStart","transcript_path":"/x/`+sessionID+`.jsonl"}`,
+		`{"hook_event_name":"SessionStart","transcript_path":"`+transcript+`"}`,
 		r1, logger)
 
 	first, err := st.GetSpawn(id)
@@ -338,6 +360,93 @@ func TestSessionStartEmptyTranscriptPreservesButRerecords(t *testing.T) {
 	// Guard against the assertion silently passing on preserved value equality.
 	if after.PID == first.PID {
 		t.Errorf("PID not refreshed: still %d (equal to first identity)", after.PID)
+	}
+}
+
+// TestSessionStartIdleSessionDoesNotRecordDeadPointer is the b.v2c AC1 / AC4
+// REGRESSION test for bug mode (a) — the idle-session case. A fresh Claude
+// session writes no .jsonl transcript until its first user turn, so when
+// SessionStart fires the payload's transcript_path may not exist yet. The row
+// must NOT be left asserting a jsonl_path that is dead on arrival: the handler
+// stats the path and records NULL when the file is absent.
+//
+// PRE-FIX this test fails — the old handler wrote the payload's transcript_path
+// verbatim, so JSONLPath would equal the nonexistent path. POST-FIX JSONLPath is
+// empty (NULL). Identity (pid/proc) is still recorded regardless.
+func TestSessionStartIdleSessionDoesNotRecordDeadPointer(t *testing.T) {
+	const id = "ic-idle-no-transcript"
+	// A path that is deliberately NOT created on disk — the un-messaged session.
+	absent := filepath.Join(t.TempDir(), "sess-idle.jsonl")
+
+	st, _ := storefix.OpenTempStore(t)
+	storefix.SeedSpawn(t, st, id)
+
+	r := &fakeResolver{pid: 5555, procStartTime: "5005"}
+	logger, _ := identityLogger()
+
+	handleWith(t, st, id,
+		`{"hook_event_name":"SessionStart","transcript_path":"`+absent+`"}`,
+		r, logger)
+
+	row, err := st.GetSpawn(id)
+	if err != nil {
+		t.Fatalf("GetSpawn: %v", err)
+	}
+	if row.JSONLPath != "" {
+		t.Errorf("JSONLPath = %q; want \"\" (NULL — never assert a dead pointer for an un-messaged session)", row.JSONLPath)
+	}
+	// Identity is still captured — the session did start, it just has no turn yet.
+	if row.PID != 5555 {
+		t.Errorf("PID = %d; want 5555 (identity recorded even without a transcript)", row.PID)
+	}
+	// The session id (derived from the transcript basename) is still recorded so
+	// find-missing can later recompose the path and heal the row.
+	if row.ClaudeSessionID != "sess-idle" {
+		t.Errorf("ClaudeSessionID = %q; want \"sess-idle\"", row.ClaudeSessionID)
+	}
+}
+
+// TestSessionStartHealsWhenTranscriptAppears is the b.v2c AC4 companion to the
+// idle-session regression: once the operator messages the bot the transcript
+// appears, and a subsequent SessionStart (same session id) with the now-present
+// file records the path — the row heals with no operator intervention. Together
+// with the idle test above this pins the full "provisional → healed" arc at the
+// handler layer.
+func TestSessionStartHealsWhenTranscriptAppears(t *testing.T) {
+	const id = "ic-heal-on-turn"
+	transcriptPath := filepath.Join(t.TempDir(), "sess-heal.jsonl")
+
+	st, _ := storefix.OpenTempStore(t)
+	storefix.SeedSpawn(t, st, id)
+
+	logger, _ := identityLogger()
+
+	// First SessionStart: transcript not yet on disk → jsonl_path NULL.
+	r1 := &fakeResolver{pid: 6666, procStartTime: "6006"}
+	handleWith(t, st, id,
+		`{"hook_event_name":"SessionStart","transcript_path":"`+transcriptPath+`"}`,
+		r1, logger)
+
+	if row, _ := st.GetSpawn(id); row.JSONLPath != "" {
+		t.Fatalf("precondition: JSONLPath = %q; want \"\" before the transcript exists", row.JSONLPath)
+	}
+
+	// The first user turn writes the transcript; a re-fired SessionStart now sees
+	// it on disk and records the verified path.
+	if err := os.WriteFile(transcriptPath, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	r2 := &fakeResolver{pid: 6666, procStartTime: "6006"}
+	handleWith(t, st, id,
+		`{"hook_event_name":"SessionStart","transcript_path":"`+transcriptPath+`"}`,
+		r2, logger)
+
+	row, err := st.GetSpawn(id)
+	if err != nil {
+		t.Fatalf("GetSpawn: %v", err)
+	}
+	if row.JSONLPath != transcriptPath {
+		t.Errorf("JSONLPath = %q; want %q (healed once the transcript appeared)", row.JSONLPath, transcriptPath)
 	}
 }
 

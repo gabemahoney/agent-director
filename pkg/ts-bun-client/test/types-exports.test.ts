@@ -10,6 +10,7 @@
 
 import { test, expect, describe } from "bun:test";
 import type { SpawnParams } from "../src/types.js";
+import { loadErrNameCatalog } from "./internal/loadCatalog.js";
 
 // ---------------------------------------------------------------------------
 // (a) Runtime assertions — interfaces are type-erased; we check runtime values.
@@ -26,49 +27,14 @@ describe("types-exports: runtime namespace", () => {
     expect(typeof mod.Client).toBe("function");
   });
 
-  test("all 37 catalog error subclasses are exported", async () => {
+  test("all catalog error subclasses are exported", async () => {
     const mod = await import("../src/index.js") as Record<string, unknown>;
-    const catalogNames = [
-      "ErrCwdMissing",
-      "ErrCwdNotAPath",
-      "ErrCwdNotFound",
-      "ErrCwdNotADirectory",
-      "ErrRelayModeInvalid",
-      "ErrSpawnDeniedFlag",
-      "ErrReservedEnvKey",
-      "ErrInstanceIdCollision",
-      "ErrTmuxSessionNameEmpty",
-      "ErrTmuxSessionNameInvalid",
-      "ErrTmuxSessionNameTooLong",
-      "ErrSpawnNotFound",
-      "ErrTmuxNotAvailable",
-      "ErrTmuxSessionCreate",
-      "ErrTmuxSendKeys",
-      "ErrTmuxCaptureFailed",
-      "ErrSpawnNotInteractive",
-      "ErrSendKeysWhileRelayed",
-      "ErrSpawnNotPausable",
-      "ErrPauseTimeout",
-      "ErrListInvalidLabel",
-      "ErrTemplateNameUnsafe",
-      "ErrTemplateNotFound",
-      "ErrTemplateMalformed",
-      "ErrTemplateExists",
-      "ErrProbeUnsupported",
-      "ErrSpawnNotResumable",
-      "ErrNoSessionId",
-      "ErrJsonlMissing",
-      "ErrRelayModeOff",
-      "ErrInvalidDecision",
-      "ErrNoOpenPermissionRequest",
-      "ErrAlreadyDecided",
-      // b.h1r: four new catalog-derived entries (store + api packages)
-      "ErrPermissionRequestNotFound",
-      "ErrAmbiguousRequest",
-      "ErrMissingRequestToken",
-      "ErrInvalidFlags",
-    ];
-    expect(catalogNames).toHaveLength(37);
+    // Derive the expected list from the canonical catalog (same source
+    // error-map.test.ts uses) so it can't drift when catalog entries are
+    // added/removed. Every catalog err_name must be re-exported at the
+    // package root as a constructor function.
+    const catalogNames = loadErrNameCatalog(); // sorted unique array of names
+    expect(catalogNames.length).toBeGreaterThan(0);
     for (const name of catalogNames) {
       expect(typeof mod[name], `${name} should be a function`).toBe("function");
     }
