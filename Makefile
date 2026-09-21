@@ -387,17 +387,82 @@ test-sandbox: _sandbox-build
 sandbox-shell: _sandbox-build
 	$(subst $(CONTAINER_ENGINE) run,$(CONTAINER_ENGINE) run -it,$(_SANDBOX_RUN)) bash
 
+# --- sandbox CMD transport: hardening (b.ay3) -------------------------------
+# These two file-scope directives are what make the CMD value reach the
+# container as INERT DATA rather than as text a HOST shell or Make re-executes.
+# They must be file-scope, not target-specific (a target-specific
+# `override MAKEOVERRIDES =` does NOT work — MAKEFLAGS/MAKEOVERRIDES is computed
+# with global scope):
+#
+#   * `unexport CMD` stops Make from auto-exporting the command-line variable
+#     CMD into recipe environments (where its `$(…)` would be re-expanded).
+#   * `MAKEOVERRIDES =` empties the variable Make folds into MAKEFLAGS to carry
+#     command-line definitions to sub-makes. That fold is the residual host-side
+#     expansion channel: Make expands the raw `CMD=$(shell …)` definition text
+#     while building EVERY recipe's environment (even recipes that never mention
+#     CMD), so `$(shell …)` in CMD would run on the host before any container
+#     exists. Emptying MAKEOVERRIDES closes that channel.
+#
+# Verified safe for this Makefile: the only sub-make is `$(MAKE) test-image`
+# (verify-prerelease-linux), and command-line overrides of its `?=` vars
+# (TEST_IMAGE, CLAUDE_CODE_VERSION) still reach it — Make also passes
+# command-line definitions as real environment variables, independent of
+# MAKEOVERRIDES. If you add a sub-make that must inherit an arbitrary
+# command-line variable via MAKEFLAGS specifically, revisit this.
+unexport CMD
+MAKEOVERRIDES =
+
 # sandbox runs an arbitrary command in the container+mounts, e.g.
 #   make sandbox CMD="go build ./..."
 #   make sandbox CMD="go generate ./..."
-# CMD is passed to `bash -c`, so shell syntax (cd, &&, pipes) works. The
-# command's exit code propagates.
+# CMD is passed to `bash -c` INSIDE the container, so shell syntax (cd, &&,
+# pipes, inner quotes) works and the command's exit code propagates.
+#
+# CMD reaches the container VERBATIM (see `$(value CMD)` below): the bytes you
+# pass are the bytes the container shell sees. So a shell variable that must
+# expand in the container is written with a SINGLE `$` — `CMD='echo "$HOME"'`
+# prints the container HOME. (This is the opposite of the historical `$$`
+# convention: because the value is no longer run through Make's `$$`→`$`
+# collapse, a literal `$$` now reaches bash as `$$` = the shell PID. b.ay3.)
+#
+# CMD is threaded to the container through the ENVIRONMENT, never interpolated
+# into the recipe's shell line. The `export` line places CMD's value into the
+# recipe process's environment; the extra `-e AGENT_DIRECTOR_SANDBOX_CMD`
+# (name-only form, threaded via SANDBOX_FLAGS so it lands before the image name)
+# forwards it into the container untouched, where
+# `bash -c "$AGENT_DIRECTOR_SANDBOX_CMD"` runs it.
+#
+# SAFETY: nothing in CMD executes on the host.
+#   * SHELL METACHARACTERS are safe: the value reaches the container shell as
+#     one environment string, never re-tokenized by a HOST shell, so quotes,
+#     `&&`, `;`, `|`, backslashes etc. stay data. This is the original b.ay3
+#     fix — the old `bash -c '$(CMD)'` interpolated CMD into a single-quoted
+#     HOST wrapper, so an inner single quote closed the wrapper early and a
+#     trailing `&& …`/`; …` ran on the HOST (the near-miss behind b.8dr's guard).
+#   * MAKE `$(…)` SYNTAX is safe too: `$(value CMD)` takes CMD's RAW UNEXPANDED
+#     text (so `$(shell …)` is never expanded when the recipe env is built), and
+#     the `unexport CMD` + `MAKEOVERRIDES =` directives above close the MAKEFLAGS
+#     re-expansion channel. `CMD='$(shell touch /tmp/x)true'` passes the literal
+#     `$(shell …)` text to the container shell, which has no `shell` command, so
+#     it is inert; shell command substitution is written `$(…)` and runs in the
+#     container.
+#
+# `override` on the SANDBOX_FLAGS addition is required: a command-line
+# `make sandbox SANDBOX_FLAGS=… CMD=…` would otherwise win over a plain
+# target-specific `+=` (GNU Make ignores non-override makefile assignments to
+# command-line variables), dropping the `-e` forward so the container silently
+# runs `bash -c ""` and reports success without running anything (b.ay3 round-2).
+# `override` is target-specific here, so it does not leak the `-e` into other
+# targets. As a belt-and-braces fail-closed, the in-container `:?` aborts with a
+# clear message if the forward is ever missing, rather than exiting 0.
+sandbox: export AGENT_DIRECTOR_SANDBOX_CMD = $(value CMD)
+sandbox: override SANDBOX_FLAGS += -e AGENT_DIRECTOR_SANDBOX_CMD
 sandbox: _sandbox-build
-	@if [ -z '$(CMD)' ]; then \
+	@if [ -z "$$AGENT_DIRECTOR_SANDBOX_CMD" ]; then \
 		echo 'ERROR: CMD is required. Example: make sandbox CMD="go build ./..."' >&2; \
 		exit 2; \
 	fi
-	$(_SANDBOX_RUN) bash -c '$(CMD)'
+	$(_SANDBOX_RUN) bash -c 'exec bash -c "$${AGENT_DIRECTOR_SANDBOX_CMD:?not forwarded into the container (the -e AGENT_DIRECTOR_SANDBOX_CMD flag was dropped) — refusing to run an empty command}"'
 
 # release-binaries cross-compiles the three supported targets into
 # $(RELEASE_DIST_DIR) (default ./dist/; override for test isolation — b.aur).
