@@ -61,10 +61,17 @@ if [[ ! -f "$FIRST_TARBALL" ]]; then
 fi
 
 # ─── pack second time ─────────────────────────────────────────────────────────
-STAGING2="$(mktemp -d -p . pack-staging2.XXXXXX)"
+# Staging2 MUST live outside the worktree: sibling gates (coverage.docker-epic-*)
+# tar the repo root as the docker build context, and a pack-staging dir created
+# here and removed in the EXIT trap would vanish mid-tar, failing the docker
+# build with "file not found or excluded by .dockerignore" (b.3jn). mktemp
+# without -p . returns an absolute path, which `bun pm pack --destination` and
+# the rest of this script (SECOND_TARBALL via `ls "$STAGING2"/*.tgz`) use in a
+# location-independent way.
+STAGING2="$(mktemp -d "${TMPDIR:-/tmp}/pack-staging2.XXXXXX")"
 trap 'rm -rf "$STAGING2" "${EXTRACT_DIR1:-}" "${EXTRACT_DIR2:-}"' EXIT
 
-(cd pkg/ts-bun-client && bun pm pack --destination "../../$STAGING2") >/dev/null 2>&1
+(cd pkg/ts-bun-client && bun pm pack --destination "$STAGING2") >/dev/null 2>&1
 
 SECOND_TARBALL="$(ls "$STAGING2"/*.tgz 2>/dev/null | head -1)"
 if [[ -z "$SECOND_TARBALL" ]]; then
