@@ -97,4 +97,19 @@ jobs:
         env:
           AGENT_DIRECTOR_TEST_BINARY: ${{ github.workspace }}/tmpbin/agent-director
           AGENT_DIRECTOR_FAKE_TMUX_DIR: ${{ github.workspace }}/tmpbin/faketmux
+          # sandboxguard.Require() (internal/testsupport/sandboxguard) refuses
+          # to run these tests outside the sandbox container because on a dev
+          # host they can rewrite the real ~/.agent-director (b.8dr). This
+          # runner is a GitHub-HOSTED, ephemeral ubuntu-latest VM: there is no
+          # real ~/.agent-director on it and nothing to protect, so we bypass
+          # the container requirement instead of paying for it.
+          #
+          # Per b.175 this variable must be set ONLY at this job/step level in
+          # the GitHub-hosted workflows (go-smoke.yml, integration.yml). It must
+          # NEVER be set as a repository- or organization-level Actions
+          # variable/secret, and NEVER in
+          # .github/workflows/pre-release-verify-mac.yml — that job runs on
+          # [self-hosted, macOS, ARM64], a persistent machine that plausibly
+          # holds a real store. `make check-sandbox-bypass` enforces the latter.
+          BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS: "1"
         run: go test ./test/envelope-diff/...

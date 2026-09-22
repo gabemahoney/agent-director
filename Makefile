@@ -1,5 +1,5 @@
 .PHONY: all build test generate lint err-coherence nondet-coverage \
-        check-doccomments test-install-sh \
+        check-doccomments check-sandbox-bypass test-install-sh \
         test-image test-image-smoke test-docker test-docker-install-mode list-test-docker-epics \
         test-sandbox sandbox-shell sandbox \
         release-binaries release-binaries-smoke \
@@ -114,6 +114,28 @@ check-doccomments:
 # versa. Exits non-zero with a descriptive message on any mismatch.
 nondet-coverage:
 	go run ./tools/check-nondet test/envelope-diff/nondeterministic.json
+
+# check-sandbox-bypass asserts that the sandbox-guard bypass
+# (BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS) never appears in
+# .github/workflows/pre-release-verify-mac.yml. That job runs on
+# [self-hosted, macOS, ARM64] — a persistent machine that plausibly holds a
+# real ~/.agent-director — so the bypass would disable the guard exactly where
+# it is still needed (b.175). Without a store-presence probe, workflow-authoring
+# discipline is the only thing protecting that runner; this target makes the
+# discipline enforceable. Wired into the doc-drift CI gate.
+check-sandbox-bypass:
+	@f=.github/workflows/pre-release-verify-mac.yml; \
+	if [ ! -f "$$f" ]; then \
+		echo "ERROR: $$f not found — check-sandbox-bypass cannot verify the self-hosted workflow" >&2; \
+		exit 1; \
+	fi; \
+	if grep -n 'BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS' "$$f"; then \
+		echo "ERROR: BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS must never appear in $$f." >&2; \
+		echo "       That job runs on a self-hosted macOS runner which may hold a real" >&2; \
+		echo "       ~/.agent-director; bypassing the sandbox guard there risks wiping it (b.175)." >&2; \
+		exit 1; \
+	fi; \
+	echo "[check-sandbox-bypass] OK — bypass absent from $$f"
 
 # Build the Docker test harness image. Always rebuilds the binary first so
 # the image picks up the latest source.

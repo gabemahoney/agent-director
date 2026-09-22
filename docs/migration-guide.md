@@ -350,7 +350,11 @@ make sandbox CMD="…"      # any one-off (build, go run, a binary, a bun script
 Host `go test`, `bun test`, `go run`, and direct `bin/` executions are denied
 by `.claude/settings.json`, and `sandboxguard.Require()` in the store's
 `TestMain` fails fast if the sandbox marker is absent — but those are
-accident-prevention gates, not a licence to reach around them. See
+accident-prevention gates, not a licence to reach around them. In particular,
+`BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS` (the guard's CI escape hatch) is for
+ephemeral GitHub-hosted runners with no real store; setting it on a machine that
+has one — and a schema-bumping branch is exactly when that matters — recreates
+b.8dr. See
 docs/engineering-guide.md §10 "Sandboxed execution" for the full rationale and
 the b.nh2 sandbox harness, and the **run-tests** skill for usage.
 

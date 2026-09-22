@@ -1,6 +1,6 @@
 # doc-drift: generated-file and doc-comment drift gate.
 #
-# This workflow enforces two invariants:
+# This workflow enforces three invariants:
 #
 #  1. Generated files (docs/, manifest/surface.json, errnames/catalog.json)
 #     stay in sync with their generators. Any PR that touches a generator
@@ -18,6 +18,11 @@
 #
 #     The checker is tested by tools/check-doccomments/main_test.go (baseline
 #     fixtures) and extended by the test-writer in subtask 6a.5f.
+#
+#  3. The sandbox-guard bypass (BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS) has
+#     not leaked into .github/workflows/pre-release-verify-mac.yml, whose
+#     self-hosted macOS runner may hold a real ~/.agent-director (b.175).
+#     Enforced by `make check-sandbox-bypass`.
 
 name: doc-drift
 
@@ -77,3 +82,10 @@ jobs:
           fi
       - name: Check nondeterministic.json coverage
         run: make nondet-coverage
+      # b.175: the sandbox-guard bypass is safe only on ephemeral
+      # GitHub-hosted runners. pre-release-verify-mac.yml runs on
+      # [self-hosted, macOS, ARM64], which may hold a real ~/.agent-director,
+      # so the bypass string must never appear there. This gate fails the PR
+      # if it leaks in.
+      - name: Check sandbox bypass absent from the self-hosted workflow
+        run: make check-sandbox-bypass
