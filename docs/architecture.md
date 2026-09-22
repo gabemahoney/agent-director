@@ -1633,6 +1633,12 @@ or catalog Go source requires regenerating the corresponding JSON file.
    **missing verb** (callable verb present in the manifest but absent as a JSON key) or an
    **extraneous key** (JSON key that names a non-callable verb) both fail the step. See
    [envelope-diff harness](#envelope-diff-harness) for the full non-determinism model.
+4. `make check-sandbox-bypass` asserts the sandbox-guard bypass
+   (`BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS`) does not appear in
+   `.github/workflows/pre-release-verify-mac.yml`, whose `[self-hosted, macOS, ARM64]`
+   runner may hold a real `~/.agent-director`. See the sandbox-guard notes below and
+   docs/engineering-guide.md §10 and
+   [Sandbox guard and the CI bypass](#sandbox-guard-and-the-ci-bypass).
 
 **Adding a new sentinel**
 
@@ -3051,7 +3057,7 @@ For each verb in `manifest.CallableVerbs()`, the harness copies a fixture store 
 
 **Error-coverage contract.** Every callable verb with non-empty `ErrorNames` has at least one error-path subtest in `test/envelope-diff/error_cases.go` asserting that CLI and Client envelopes carry an identical `err_name` and a matching `err_description` (prefix-match policy documented in `test/envelope-diff/nondeterministic.md`). `TestErrorTableCoverage` is the CI gate enforcing this: it iterates `manifest.CallableVerbs()` and fails if any verb with non-empty `ErrorNames` lacks a corresponding `error_cases.go` row, so new error sentinels cannot land without coverage — analogous to the `nondeterministic.json` completeness gate that enforces every callable verb is represented in the non-determinism manifest. Two entries are explicitly exempted: `ErrTemplateExists` for `make-template` (its `err_description` embeds an absolute temp-dir path that the prefix-match policy cannot normalize across the two fixture copies on Linux; `ErrTemplateNameUnsafe` provides alternative make-template coverage) and `ErrProbeUnsupported` for `find-missing` (only compiled on non-linux/non-darwin targets via build tags; the empty-store success path covers find-missing on CI).
 
-**CI integration.** The harness runs in CI via the `envelope-diff` job in `.github/workflows/integration.yml` on every PR and push to main. The job builds the CLI binary (`tmpbin/agent-director`) and the fake-tmux helper (`tmpbin/faketmux/tmux`) from the commit under test, then runs `go test ./test/envelope-diff/...` with `AGENT_DIRECTOR_TEST_BINARY` and `AGENT_DIRECTOR_FAKE_TMUX_DIR` set to absolute workspace paths so the test process does not pay the build cost a second time.
+**CI integration.** The harness runs in CI via the `envelope-diff` job in `.github/workflows/integration.yml` on every PR and push to main. The job builds the CLI binary (`tmpbin/agent-director`) and the fake-tmux helper (`tmpbin/faketmux/tmux`) from the commit under test, then runs `go test ./test/envelope-diff/...` with `AGENT_DIRECTOR_TEST_BINARY` and `AGENT_DIRECTOR_FAKE_TMUX_DIR` set to absolute workspace paths so the test process does not pay the build cost a second time. The same step sets `BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS` — the package carries `sandboxguard.Require()`, and the hosted runner is ephemeral with no real store to protect; see [Sandbox guard and the CI bypass](#sandbox-guard-and-the-ci-bypass) for the placement rule.
 
 ### Go smoke test
 
@@ -3285,6 +3291,39 @@ untriggerable on Linux).
 **Gate — TS client.** The `bun test` suite for `pkg/ts-bun-client/` is gated at release time, not on every PR. It runs locally as part of the `coverage` phase in the `/release` skill, against the in-tree source (`cd "$REPO_ROOT/pkg/ts-bun-client" && bun install --frozen-lockfile && bun test`) — distinct from the packed-tarball smoke that precedes it. GitHub Actions are reserved for narrower checks (go-smoke, integration, mac pre-release verify); release-blocking gates run locally so they execute against exactly the tree being tagged.
 
 **Gate — Go smoke.** The `.github/workflows/go-smoke.yml` workflow runs `go test -race -count=1 -v ./test/smoke/go/...` on `ubuntu-latest` (linux/amd64) on every pull request and push to `main`. Cross-platform extension to macOS and Windows is Epic 6.
+
+### Sandbox guard and the CI bypass
+
+`internal/testsupport/sandboxguard` is the **reusable** fail-fast gate every
+state- or exec-touching Go test package calls from its `TestMain`. Do not
+hand-roll an equivalent check: call `sandboxguard.Require()`. It is test-only and
+absent from the production code graph.
+
+`Require()` proceeds when **either** of two env vars is set, and refuses
+otherwise (fail-closed, exit 1 with a message naming both):
+
+| Const | Variable | Meaning |
+| --- | --- | --- |
+| `sandboxguard.EnvVar` | `AGENT_DIRECTOR_TEST_SANDBOX` | The process is inside the sandbox container. Exported by the `make sandbox*` targets; also checked by the bun preload `pkg/ts-bun-client/test/setup.ts`. |
+| `sandboxguard.BypassEnvVar` | `BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS` | The caller asserts there is **no real `~/.agent-director` to damage** — true only on an ephemeral GitHub-hosted runner. Go-only. |
+
+The guard defends against b.8dr: the store resolves `~` via `user.Current()`
+(`internal/store.expandTilde`), not `$HOME`, so a host-side `go test` can rewrite
+the real store no matter how `HOME` is set. The container is the only isolation
+boundary; the bypass is not isolation, it is an assertion that there is nothing
+to isolate from.
+
+The bypass is set **only at the `job:`/`step:` level** of the two
+GitHub-hosted-runner workflows (`go-smoke.yml`, `integration.yml`), each with an
+in-file comment recording why it is safe there. It must never be a
+repository/organization-level Actions variable or secret, and never appear in
+`.github/workflows/pre-release-verify-mac.yml` — that job runs on
+`[self-hosted, macOS, ARM64]`, a persistent machine that plausibly holds a real
+store. `make check-sandbox-bypass` (run by the doc-drift workflow) enforces the
+latter by grep; it also fails if the mac workflow file is missing, so the check
+cannot pass vacuously. Deliberately **not** implemented: a store-presence probe
+or any `CI` / `GITHUB_ACTIONS` / `$HOME`-derived discriminator — ambient signals
+would also disable the guard on the self-hosted runner (b.175).
 
 ### TS envelope-diff regression
 

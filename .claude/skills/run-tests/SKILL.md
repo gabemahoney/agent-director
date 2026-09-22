@@ -24,10 +24,16 @@ block — use the sandbox.
 As a second line of defense, the state-touching test packages and the bun
 preload refuse to run unless the environment marker `AGENT_DIRECTOR_TEST_SANDBOX`
 is set — which the `make sandbox*` targets set inside the container. If you see
-"refusing to run: the AGENT_DIRECTOR_TEST_SANDBOX marker is absent, so this
-process is running OUTSIDE the sandbox container (on the host) …", you ran tests
-on the host; run them through `make test-sandbox` instead. (Do not set that
-marker by hand to bypass the guard — it exists to stop exactly that mistake.)
+"refusing to run: neither AGENT_DIRECTOR_TEST_SANDBOX nor
+BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS is set, so this process is running
+OUTSIDE the sandbox container (on the host) …", you ran tests on the host; run
+them through `make test-sandbox` instead.
+
+Do **not** set either variable by hand on this machine. The marker exists to
+stop exactly that mistake, and `BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS` is
+reserved for ephemeral GitHub-hosted CI runners that have no real
+`~/.agent-director` to damage — this VM has one. See
+docs/engineering-guide.md §10 for the placement rule.
 
 ## How to run the tests
 

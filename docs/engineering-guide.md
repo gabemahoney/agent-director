@@ -219,7 +219,7 @@ that schema change, follow docs/migration-guide.md — it covers the
 one-tx-per-hop rule, the two-places rule, the run-the-upgrade-twice test
 recipe, and this sandbox-only execution rule with b.8dr as the case study.
 
-### Fail-fast marker guard
+### Fail-fast sandbox guard
 
 The `make sandbox*` targets export `AGENT_DIRECTOR_TEST_SANDBOX=1` into the
 container. `TestMain` in the state/exec-touching Go packages and the bun
@@ -233,6 +233,22 @@ This is an accident-prevention gate for humans and agents alike, **not a
 security boundary** (the marker is a plain env var). It complements — does not
 replace — the `test/smoke/go` snapshot canary, which stays as-is.
 
+**The CI bypass (`BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS`).** The Go guard
+has a second, explicit way through: `sandboxguard.Require()` also proceeds when
+`BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS` is set (`sandboxguard.BypassEnvVar`).
+Absence of *both* variables still refuses — the gate is fail-closed, and the
+refusal message names both escape hatches. The bypass exists for one situation
+only: a runner that has **no real `~/.agent-director` to damage**, where
+containerizing the run protects nothing. An ephemeral GitHub-hosted runner is
+that situation; a development host never is. On a host with a store, use
+`make test-sandbox` — setting the bypass there reintroduces b.8dr. The bypass is
+Go-only; the bun preload still checks the sandbox marker alone.
+
+Prefer the bypass over exporting `AGENT_DIRECTOR_TEST_SANDBOX=1` in a workflow.
+Setting the marker outside the container makes the process *lie about where it
+is* and defeats the guard for anything that later reads the marker; the bypass
+states the actual intent ("there is nothing here to protect").
+
 **Guard criterion — which packages carry the guard:** every package whose
 tests write agent-director state (open the store, emit trail events) or exec a
 built binary. Currently: `internal/trail`, `internal/store`, `internal/hook`,
@@ -242,9 +258,27 @@ state or exec surface (e.g. `pkg/api/manifest`, `pkg/api/errnames`) may skip
 it. When you add a package that opens the store or execs a binary, add
 `sandboxguard.Require()` to its `TestMain`.
 
-**CI:** run the suite via `make test-sandbox` (which sets the marker), or set
-`AGENT_DIRECTOR_TEST_SANDBOX=1` explicitly in the workflow step that runs
-`go test` / `bun test` directly.
+**CI:** run the suite via `make test-sandbox` (which sets the marker), or — on a
+GitHub-**hosted**, ephemeral runner only — set
+`BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS: "1"` in the workflow step that runs
+`go test` directly. Never export `AGENT_DIRECTOR_TEST_SANDBOX` in a workflow.
+
+The bypass carries a hard placement rule (b.175). It may be set **only at the
+`job:`/`step:` level of the GitHub-hosted workflows** — today `go-smoke.yml` and
+`integration.yml`, each with a comment at the set-site explaining why it is safe
+there. It must **never** be set:
+
+- as a repository- or organization-level Actions variable or secret — those
+  apply to every workflow, including the self-hosted one; or
+- anywhere in `.github/workflows/pre-release-verify-mac.yml`, which runs on
+  `[self-hosted, macOS, ARM64]` — a persistent machine that plausibly holds a
+  real `~/.agent-director`.
+
+Because there is no store-presence probe, workflow-authoring discipline is the
+only thing protecting that self-hosted runner, so it is enforced mechanically:
+`make check-sandbox-bypass` greps `pre-release-verify-mac.yml` for the bypass
+string and fails if it appears (or if the file is missing). The doc-drift
+workflow runs it on every PR and push to `main`.
 
 ### Targets
 
@@ -349,7 +383,11 @@ genuine leak — do not dismiss it.
 The sandbox image (`test/sandbox/Dockerfile`) uses `debian:bookworm-slim`
 with no host paths baked in. It can be used in GitHub Actions without
 modification: mount the checkout at `/work` and the Go module cache at
-`/go/pkg/mod`.
+`/go/pkg/mod`. The hosted-runner test workflows (`go-smoke.yml`,
+`integration.yml`) do not do this today — they run `go test` directly on the
+ephemeral runner and set `BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS` instead,
+because a runner with no `~/.agent-director` has nothing for the container to
+protect (see §10).
 
 The **docker leg** of the harness is exercised on the DGXC/k8s pod this repo
 is developed on (docker 29.7.2, no podman on PATH, so `CONTAINER_ENGINE`
