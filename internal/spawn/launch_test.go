@@ -32,7 +32,7 @@ type captureTmux struct {
 	failOnSessionName string
 }
 
-func (c *captureTmux) NewSession(name, cwd string, envs map[string]string, command []string) error {
+func (c *captureTmux) NewSessionByName(name, cwd string, envs map[string]string, command []string) error {
 	c.got.called = true
 	c.got.name = name
 	c.got.cwd = cwd

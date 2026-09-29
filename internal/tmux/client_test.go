@@ -3,69 +3,87 @@ package tmux
 import (
 	"errors"
 	"fmt"
+	"go/parser"
+	"go/token"
+	"os"
 	"os/exec"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
 
-// captured holds the argv a fake runner observed plus a programmable
-// response. Each test point-instantiates one so cases can assert what the
-// client would have handed to tmux without ever running tmux.
+// Tests for the pre-Phase-1 name-based methods (run seam: combined output,
+// *exec.ExitError), the New(binary, Timeouts) constructor and package-level
+// structural guards. The socket-taking call set is covered by its own files.
+
+// captured records every argv the fake name-based runner observed and
+// returns a programmable response for each call.
 type captured struct {
-	args   []string
+	calls  [][]string
 	stdout []byte
 	err    error
 }
 
 func (c *captured) runner() runner {
 	return func(name string, args ...string) ([]byte, error) {
-		c.args = append([]string{name}, args...)
+		c.calls = append(c.calls, append([]string{name}, args...))
 		return c.stdout, c.err
 	}
 }
 
-// multiCaptured is the captured equivalent that retains EVERY runner
-// invocation rather than overwriting on each call. Used to assert the
-// SendKeys orchestration emits both the literal-text call AND the
-// trailing real-Enter call in the right order.
-type multiCaptured struct {
-	calls  [][]string
-	stdout []byte
-	err    error
+// nameBasedOp drives one name-based method; exitErr is the sentinel a
+// non-zero tmux exit maps to (nil for HasSession, whose "no" is not an error).
+type nameBasedOp struct {
+	name    string
+	fn      func(*Client) error
+	stderr  string
+	exitErr error
 }
 
-func (c *multiCaptured) runner() runner {
-	return func(name string, args ...string) ([]byte, error) {
-		argv := append([]string{name}, args...)
-		c.calls = append(c.calls, argv)
-		return c.stdout, c.err
-	}
+// nameBasedOps is one call of every name-based method, shared by the error
+// mapping and constructor tables.
+var nameBasedOps = []nameBasedOp{
+	{"NewSessionByName", func(c *Client) error {
+		return c.NewSessionByName("x", "/tmp", nil, []string{"claude"})
+	}, "duplicate session: x\n", ErrTmuxSessionCreate},
+	{"HasSession", func(c *Client) error { _, err := c.HasSession("x"); return err }, "", nil},
+	{"KillSession", func(c *Client) error { return c.KillSession("x") }, "can't find session: x", ErrTmuxKillFailed},
+	{"SendKeys", func(c *Client) error { return c.SendKeys("x", "hi", true) }, "can't find pane: x:0.0", ErrTmuxSendKeys},
+	{"CapturePane", func(c *Client) error { _, err := c.CapturePane("x", 25, false); return err }, "can't find session: x", ErrTmuxCaptureFailed},
 }
 
-func TestNewSessionArgvComposition(t *testing.T) {
+// TestNameBasedArgv pins the exact argv each name-based method hands tmux,
+// including literal-text-then-Enter for SendKeys.
+func TestNameBasedArgv(t *testing.T) {
 	cases := []struct {
-		name    string
-		fn      func(*Client) error
-		wantCmd []string
+		name string
+		fn   func(*Client) error
+		want [][]string
 	}{
 		{
 			name: "new-session with env vars (sorted) and command",
 			fn: func(c *Client) error {
-				return c.NewSession("foo", "/cwd",
-					map[string]string{"B": "2", "A": "1"},
-					[]string{"bash", "-l"})
+				return c.NewSessionByName("foo", "/cwd",
+					map[string]string{"B": "2", "A": "1"}, []string{"bash", "-l"})
 			},
-			wantCmd: []string{"tmux", "new-session", "-d", "-s", "foo",
-				"-c", "/cwd", "-e", "A=1", "-e", "B=2", "--", "bash", "-l"},
+			want: [][]string{{"tmux", "new-session", "-d", "-s", "foo",
+				"-c", "/cwd", "-e", "A=1", "-e", "B=2", "--", "bash", "-l"}},
 		},
 		{
 			name: "new-session with no env and a single-arg command",
 			fn: func(c *Client) error {
-				return c.NewSession("bare", "/x", nil, []string{"claude"})
+				return c.NewSessionByName("bare", "/x", nil, []string{"claude"})
 			},
-			wantCmd: []string{"tmux", "new-session", "-d", "-s", "bare",
-				"-c", "/x", "--", "claude"},
+			want: [][]string{{"tmux", "new-session", "-d", "-s", "bare",
+				"-c", "/x", "--", "claude"}},
+		},
+		{
+			name: "new-session without a command stops at the options (no --)",
+			fn: func(c *Client) error {
+				return c.NewSessionByName("plain", "/tmp", nil, nil)
+			},
+			want: [][]string{{"tmux", "new-session", "-d", "-s", "plain", "-c", "/tmp"}},
 		},
 		{
 			name: "has-session",
@@ -73,226 +91,136 @@ func TestNewSessionArgvComposition(t *testing.T) {
 				_, err := c.HasSession("foo")
 				return err
 			},
-			wantCmd: []string{"tmux", "has-session", "-t", "foo"},
+			want: [][]string{{"tmux", "has-session", "-t", "foo"}},
 		},
 		{
 			name: "kill-session",
-			fn: func(c *Client) error {
-				return c.KillSession("foo")
-			},
-			wantCmd: []string{"tmux", "kill-session", "-t", "foo"},
+			fn:   func(c *Client) error { return c.KillSession("foo") },
+			want: [][]string{{"tmux", "kill-session", "-t", "foo"}},
 		},
 		{
-			name: "list-panes",
-			fn: func(c *Client) error {
-				_, err := c.ListPanes("foo")
-				return err
-			},
-			wantCmd: []string{"tmux", "list-panes", "-t", "foo", "-F", "#{pane_pid}"},
+			name: "send-keys text-only is one literal (-l) call",
+			fn:   func(c *Client) error { return c.SendKeys("foo", "hello world", false) },
+			want: [][]string{{"tmux", "send-keys", "-t", "foo:0.0", "-l", "hello world"}},
 		},
 		{
-			name: "send-keys text-only uses -l (literal) so a keysym-like word doesn't fire as a keystroke",
-			fn: func(c *Client) error {
-				return c.SendKeys("foo", "hello world", false)
-			},
-			wantCmd: []string{"tmux", "send-keys", "-t", "foo:0.0", "-l", "hello world"},
+			name: "send-keys keeps an embedded newline in one argv element",
+			fn:   func(c *Client) error { return c.SendKeys("foo", "multi\nline\ntext", false) },
+			want: [][]string{{"tmux", "send-keys", "-t", "foo:0.0", "-l", "multi\nline\ntext"}},
 		},
 		{
-			name: "send-keys text-only preserves an embedded literal newline in one argv element",
-			fn: func(c *Client) error {
-				return c.SendKeys("foo", "multi\nline\ntext", false)
-			},
-			wantCmd: []string{"tmux", "send-keys", "-t", "foo:0.0", "-l", "multi\nline\ntext"},
+			name: "send-keys keysym-shaped text is forced literal by -l",
+			fn:   func(c *Client) error { return c.SendKeys("foo", "Enter", false) },
+			want: [][]string{{"tmux", "send-keys", "-t", "foo:0.0", "-l", "Enter"}},
 		},
 		{
-			name: "send-keys text that looks like a keysym is forced literal by -l",
-			fn: func(c *Client) error {
-				// Pre-fix this fired a real Enter keystroke and would
-				// have submitted whatever else was in the input buffer.
-				// `-l` keeps it text.
-				return c.SendKeys("foo", "Enter", false)
+			name: "send-keys with pressEnter sends literal text then a real Enter",
+			fn:   func(c *Client) error { return c.SendKeys("foo", "Enter the password", true) },
+			want: [][]string{
+				{"tmux", "send-keys", "-t", "foo:0.0", "-l", "Enter the password"},
+				{"tmux", "send-keys", "-t", "foo:0.0", "Enter"},
 			},
-			wantCmd: []string{"tmux", "send-keys", "-t", "foo:0.0", "-l", "Enter"},
 		},
 		{
-			name: "capture-pane with ansi=false omits -e (tmux strips escapes by default)",
+			name: "capture-pane with ansi=false omits -e",
 			fn: func(c *Client) error {
 				_, err := c.CapturePane("foo", 25, false)
 				return err
 			},
-			wantCmd: []string{"tmux", "capture-pane", "-p", "-t", "foo:0.0", "-S", "-25"},
+			want: [][]string{{"tmux", "capture-pane", "-p", "-t", "foo:0.0", "-S", "-25"}},
 		},
 		{
-			name: "capture-pane with ansi=true passes -e so tmux preserves escape sequences",
+			name: "capture-pane with ansi=true passes -e",
 			fn: func(c *Client) error {
 				_, err := c.CapturePane("foo", 25, true)
 				return err
 			},
-			wantCmd: []string{"tmux", "capture-pane", "-p", "-e", "-t", "foo:0.0", "-S", "-25"},
+			want: [][]string{{"tmux", "capture-pane", "-p", "-e", "-t", "foo:0.0", "-S", "-25"}},
 		},
 		{
-			name: "capture-pane with a large n widens the scrollback verbatim",
+			name: "capture-pane passes a large n verbatim",
 			fn: func(c *Client) error {
 				_, err := c.CapturePane("foo", 1000, false)
 				return err
 			},
-			wantCmd: []string{"tmux", "capture-pane", "-p", "-t", "foo:0.0", "-S", "-1000"},
+			want: [][]string{{"tmux", "capture-pane", "-p", "-t", "foo:0.0", "-S", "-1000"}},
 		},
 	}
-
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cap := &captured{}
-			c := &Client{run: cap.runner()}
-			if err := tc.fn(c); err != nil {
+			if err := tc.fn(&Client{run: cap.runner()}); err != nil {
 				t.Fatalf("op failed: %v", err)
 			}
-			if !reflect.DeepEqual(cap.args, tc.wantCmd) {
-				t.Fatalf("argv mismatch\n got=%v\nwant=%v", cap.args, tc.wantCmd)
+			if !reflect.DeepEqual(cap.calls, tc.want) {
+				t.Fatalf("argv mismatch\n got=%q\nwant=%q", cap.calls, tc.want)
 			}
 		})
 	}
 }
 
-// TestSendKeysEmitsLiteralTextThenRealEnter pins the bug-fixed wire
-// shape: the literal text call uses `-l` (so a keysym-shaped token
-// like "Enter the password" is text, not a real Enter event), and the
-// trailing submit call is a separate send-keys invocation WITHOUT `-l`
-// so tmux interprets `Enter` as the keysym.
-//
-// Pre-fix, a single un-l'd call would have made tmux fire a real Enter
-// on the first matching token and submit a partial buffer.
-func TestSendKeysEmitsLiteralTextThenRealEnter(t *testing.T) {
-	cap := &multiCaptured{}
-	c := &Client{run: cap.runner()}
-	if err := c.SendKeys("foo", "Enter the password", true); err != nil {
-		t.Fatalf("SendKeys: %v", err)
-	}
-
-	want := [][]string{
-		{"tmux", "send-keys", "-t", "foo:0.0", "-l", "Enter the password"},
-		{"tmux", "send-keys", "-t", "foo:0.0", "Enter"},
-	}
-	if !reflect.DeepEqual(cap.calls, want) {
-		t.Fatalf("argv mismatch\n got=%v\nwant=%v", cap.calls, want)
+// TestNameBasedMissingBinaryMapsToNotAvailable pins that a runner-reported
+// missing binary surfaces as ErrTmuxNotAvailable from every name-based method.
+func TestNameBasedMissingBinaryMapsToNotAvailable(t *testing.T) {
+	for _, op := range nameBasedOps {
+		t.Run(op.name, func(t *testing.T) {
+			cap := &captured{err: fmt.Errorf("%w: %v",
+				ErrTmuxNotAvailable, &exec.Error{Name: "tmux", Err: exec.ErrNotFound})}
+			err := op.fn(&Client{run: cap.runner()})
+			if !errors.Is(err, ErrTmuxNotAvailable) {
+				t.Fatalf("err = %v; want ErrTmuxNotAvailable", err)
+			}
+		})
 	}
 }
 
-// TestSendKeysOmitsEnterCallWhenPressEnterFalse pins that pressEnter=false
-// suppresses the second tmux send-keys invocation — useful for callers
-// that want to compose text into the input buffer without submitting.
-func TestSendKeysOmitsEnterCallWhenPressEnterFalse(t *testing.T) {
-	cap := &multiCaptured{}
-	c := &Client{run: cap.runner()}
-	if err := c.SendKeys("foo", "draft text", false); err != nil {
-		t.Fatalf("SendKeys: %v", err)
-	}
-
-	want := [][]string{
-		{"tmux", "send-keys", "-t", "foo:0.0", "-l", "draft text"},
-	}
-	if !reflect.DeepEqual(cap.calls, want) {
-		t.Fatalf("argv mismatch\n got=%v\nwant=%v", cap.calls, want)
+// TestNameBasedTmuxExitMapsToSentinel pins the sentinel and the tmux stderr
+// blob each method returns when tmux exits non-zero.
+func TestNameBasedTmuxExitMapsToSentinel(t *testing.T) {
+	for _, op := range nameBasedOps {
+		if op.exitErr == nil {
+			continue
+		}
+		t.Run(op.name, func(t *testing.T) {
+			cap := &captured{stdout: []byte(op.stderr), err: &exec.ExitError{}}
+			err := op.fn(&Client{run: cap.runner()})
+			if !errors.Is(err, op.exitErr) {
+				t.Fatalf("err = %v; want %v", err, op.exitErr)
+			}
+			if blob := strings.TrimSpace(op.stderr); !strings.Contains(err.Error(), blob) {
+				t.Fatalf("err %q does not include tmux stderr %q", err.Error(), blob)
+			}
+		})
 	}
 }
 
-// TestSendKeysFirstCallFailureSkipsEnter pins that if the literal-text
-// call returns an error, the trailing Enter call is NOT issued — the
-// caller should never see a stray submit after a typing failure.
+// TestSendKeysFirstCallFailureSkipsEnter pins that a failed literal-text call
+// never issues the trailing Enter.
 func TestSendKeysFirstCallFailureSkipsEnter(t *testing.T) {
-	cap := &multiCaptured{err: &exec.ExitError{}, stdout: []byte("can't find pane")}
-	c := &Client{run: cap.runner()}
-	if err := c.SendKeys("foo", "hi", true); err == nil {
+	cap := &captured{err: &exec.ExitError{}, stdout: []byte("can't find pane")}
+	if err := (&Client{run: cap.runner()}).SendKeys("foo", "hi", true); err == nil {
 		t.Fatalf("SendKeys returned nil; want a tmux error")
 	}
 	if len(cap.calls) != 1 {
-		t.Fatalf("expected exactly 1 tmux call after first-call failure; got %d (%v)", len(cap.calls), cap.calls)
+		t.Fatalf("got %d tmux calls after first-call failure; want 1 (%q)", len(cap.calls), cap.calls)
 	}
 }
 
-// TestNewSessionWithoutCommand confirms that when a caller passes an empty
-// command slice the tmux argv stops at the cwd/-e options — tmux without a
-// trailing command is a valid invocation (it spawns the user's default
-// shell, which the launch path never relies on but the client must support
-// for symmetry with future Epics).
-func TestNewSessionWithoutCommand(t *testing.T) {
-	cap := &captured{}
-	c := &Client{run: cap.runner()}
-	if err := c.NewSession("plain", "/tmp", nil, nil); err != nil {
-		t.Fatalf("NewSession: %v", err)
-	}
-	want := []string{"tmux", "new-session", "-d", "-s", "plain", "-c", "/tmp"}
-	if !reflect.DeepEqual(cap.args, want) {
-		t.Fatalf("argv mismatch\n got=%v\nwant=%v", cap.args, want)
-	}
-}
-
+// TestHasSessionFalseOnNonzeroExit pins that a non-zero tmux exit is the
+// boolean "no" answer, not an error.
 func TestHasSessionFalseOnNonzeroExit(t *testing.T) {
-	// A non-zero *exec.ExitError is tmux's "session not found" signal —
-	// the client maps it to (false, nil) so callers can treat the probe as
-	// boolean without unpacking the exit code.
 	cap := &captured{err: &exec.ExitError{}}
-	c := &Client{run: cap.runner()}
-	ok, err := c.HasSession("absent")
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	if ok {
-		t.Fatalf("HasSession returned true for ExitError; want false")
+	ok, err := (&Client{run: cap.runner()}).HasSession("absent")
+	if err != nil || ok {
+		t.Fatalf("HasSession = (%v, %v); want (false, nil)", ok, err)
 	}
 }
 
-func TestNewSessionMapsExecMissingToTmuxNotAvailable(t *testing.T) {
-	// Wrap an *exec.Error like defaultRunner would when PATH lookup fails,
-	// then drive NewSession through the seam and confirm the canonical
-	// ErrTmuxNotAvailable sentinel surfaces — the install gate depends on
-	// this exact unwrap chain.
-	cap := &captured{err: fmt.Errorf("%w: %v",
-		ErrTmuxNotAvailable, &exec.Error{Name: "tmux", Err: exec.ErrNotFound})}
-	c := &Client{run: cap.runner()}
-	err := c.NewSession("x", "/tmp", nil, []string{"claude"})
-	if !errors.Is(err, ErrTmuxNotAvailable) {
-		t.Fatalf("err = %v; want ErrTmuxNotAvailable", err)
-	}
-}
-
-func TestNewSessionMapsTmuxExitToSessionCreate(t *testing.T) {
-	// Simulate tmux running and reporting failure: caller should see
-	// ErrTmuxSessionCreate with the tmux stderr blob in the error message.
-	cap := &captured{
-		stdout: []byte("duplicate session: foo\n"),
-		err:    &exec.ExitError{},
-	}
-	c := &Client{run: cap.runner()}
-	err := c.NewSession("foo", "/tmp", nil, []string{"claude"})
-	if !errors.Is(err, ErrTmuxSessionCreate) {
-		t.Fatalf("err = %v; want ErrTmuxSessionCreate", err)
-	}
-	if !strings.Contains(err.Error(), "duplicate session") {
-		t.Fatalf("err message %q does not include tmux stderr blob", err.Error())
-	}
-}
-
-func TestListPanesParsesPids(t *testing.T) {
-	cap := &captured{stdout: []byte("123\n456\n\nbroken\n789\n")}
-	c := &Client{run: cap.runner()}
-	pids, err := c.ListPanes("foo")
-	if err != nil {
-		t.Fatalf("ListPanes: %v", err)
-	}
-	want := []int{123, 456, 789}
-	if !reflect.DeepEqual(pids, want) {
-		t.Fatalf("pids = %v; want %v", pids, want)
-	}
-}
-
+// TestCapturePaneReturnsStdout pins that capture returns tmux's stdout bytes
+// exactly, trailing newline included.
 func TestCapturePaneReturnsStdout(t *testing.T) {
-	// Capture's job is to surface the raw pane text — pin that the bytes
-	// returned are exactly what tmux wrote on stdout, including a trailing
-	// newline. ANSI handling happens at a higher layer.
 	cap := &captured{stdout: []byte("first line\nsecond line\n")}
-	c := &Client{run: cap.runner()}
-	got, err := c.CapturePane("foo", 25, false)
+	got, err := (&Client{run: cap.runner()}).CapturePane("foo", 25, false)
 	if err != nil {
 		t.Fatalf("CapturePane: %v", err)
 	}
@@ -301,87 +229,63 @@ func TestCapturePaneReturnsStdout(t *testing.T) {
 	}
 }
 
-func TestSendKeysWrapsTmuxFailure(t *testing.T) {
-	// A non-zero tmux exit should surface as ErrTmuxSendKeys with the
-	// stderr blob in the chain — the verb layer's state-precondition
-	// errors are distinct, so callers must be able to errors.Is the
-	// transport failure cleanly.
-	cap := &captured{
-		stdout: []byte("can't find pane: foo:0.0"),
-		err:    &exec.ExitError{},
-	}
-	c := &Client{run: cap.runner()}
-	err := c.SendKeys("foo", "hi", false)
-	if !errors.Is(err, ErrTmuxSendKeys) {
-		t.Fatalf("err = %v; want ErrTmuxSendKeys", err)
-	}
-	if !strings.Contains(err.Error(), "can't find pane") {
-		t.Fatalf("err message %q does not include tmux stderr blob", err.Error())
-	}
-}
-
-func TestCapturePaneWrapsTmuxFailure(t *testing.T) {
-	cap := &captured{
-		stdout: []byte("can't find session: ghost"),
-		err:    &exec.ExitError{},
-	}
-	c := &Client{run: cap.runner()}
-	_, err := c.CapturePane("ghost", 25, false)
-	if !errors.Is(err, ErrTmuxCaptureFailed) {
-		t.Fatalf("err = %v; want ErrTmuxCaptureFailed", err)
+// TestNewBinaryIsProgramRun pins SR-2.6 for the name-based methods: New("")
+// runs tmux, New(bin) runs bin. PATH is an empty dir, so nothing runs.
+func TestNewBinaryIsProgramRun(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	for _, bc := range []struct{ binary, wantProgram string }{
+		{"", "tmux"},
+		{"custom-tmux", "custom-tmux"},
+	} {
+		for _, op := range nameBasedOps {
+			t.Run(fmt.Sprintf("%s/binary=%q", op.name, bc.binary), func(t *testing.T) {
+				err := op.fn(New(bc.binary, Timeouts{}))
+				if !errors.Is(err, ErrTmuxNotAvailable) {
+					t.Fatalf("err = %v; want ErrTmuxNotAvailable", err)
+				}
+				if want := "exec: " + strconv.Quote(bc.wantProgram) + ":"; !strings.Contains(err.Error(), want) {
+					t.Fatalf("err %q does not name program %q", err.Error(), bc.wantProgram)
+				}
+			})
+		}
 	}
 }
 
-func TestSendKeysMapsExecMissingToTmuxNotAvailable(t *testing.T) {
-	cap := &captured{err: fmt.Errorf("%w: %v",
-		ErrTmuxNotAvailable, &exec.Error{Name: "tmux", Err: exec.ErrNotFound})}
-	c := &Client{run: cap.runner()}
-	err := c.SendKeys("foo", "hi", false)
-	if !errors.Is(err, ErrTmuxNotAvailable) {
-		t.Fatalf("err = %v; want ErrTmuxNotAvailable", err)
-	}
-}
-
-func TestCapturePaneMapsExecMissingToTmuxNotAvailable(t *testing.T) {
-	cap := &captured{err: fmt.Errorf("%w: %v",
-		ErrTmuxNotAvailable, &exec.Error{Name: "tmux", Err: exec.ErrNotFound})}
-	c := &Client{run: cap.runner()}
-	_, err := c.CapturePane("foo", 25, false)
-	if !errors.Is(err, ErrTmuxNotAvailable) {
-		t.Fatalf("err = %v; want ErrTmuxNotAvailable", err)
-	}
-}
-
-func TestKillSessionWrapsTmuxFailure(t *testing.T) {
-	cap := &captured{
-		stdout: []byte("can't find session: ghost"),
-		err:    &exec.ExitError{},
-	}
-	c := &Client{run: cap.runner()}
-	err := c.KillSession("ghost")
-	if !errors.Is(err, ErrTmuxKillFailed) {
-		t.Fatalf("err = %v; want ErrTmuxKillFailed", err)
-	}
-}
-
-// TestClientPackageHasNoShellReferences is a structural guard against the
-// SRD §4.3 invariant: no /bin/sh anywhere in this package's own code path.
-// Reading the source for the substring is intentional — a code-review grep
-// would catch the same thing but the test pins the invariant at CI time.
+// TestClientPackageHasNoShellReferences guards the SRD §4.3 invariant: no
+// /bin/sh in client.go's code path.
 func TestClientPackageHasNoShellReferences(t *testing.T) {
-	// The runner uses exec.Command which exec.LookPaths the binary; if a
-	// future maintainer introduces a sh fallback we want the test to fail.
-	// Read this very file's sibling client.go and assert no /bin/sh literal.
-	// Using a test-internal helper keeps the assertion self-contained.
 	const banned = "/bin/sh"
-	src := mustReadSibling(t, "client.go")
-	if strings.Contains(src, banned) {
+	if strings.Contains(mustReadSibling(t, "client.go"), banned) {
 		t.Fatalf("client.go contains banned substring %q (SRD §4.3 invariant)", banned)
 	}
 }
 
-// mustReadSibling reads a file in the same package directory. Tests that
-// assert on source content use this to keep the path resolution explicit.
+// TestPackageDoesNotImportConfig guards SR-2.4: no production file of
+// internal/tmux imports internal/config (timeouts arrive through New).
+func TestPackageDoesNotImportConfig(t *testing.T) {
+	const banned = "github.com/gabemahoney/agent-director/internal/config"
+	pkgs, err := parser.ParseDir(token.NewFileSet(), ".", func(fi os.FileInfo) bool {
+		return !strings.HasSuffix(fi.Name(), "_test.go")
+	}, parser.ImportsOnly)
+	if err != nil {
+		t.Fatalf("parser.ParseDir: %v", err)
+	}
+	if len(pkgs) == 0 {
+		t.Fatalf("no production files parsed in internal/tmux")
+	}
+	for _, pkg := range pkgs {
+		for file, f := range pkg.Files {
+			for _, imp := range f.Imports {
+				path, _ := strconv.Unquote(imp.Path.Value)
+				if path == banned || strings.HasPrefix(path, banned+"/") {
+					t.Errorf("%s imports %s (SR-2.4: internal/tmux never imports internal/config)", file, path)
+				}
+			}
+		}
+	}
+}
+
+// mustReadSibling reads a file in this package directory or fails the test.
 func mustReadSibling(t *testing.T, name string) string {
 	t.Helper()
 	b, err := readFileAtTestData(name)

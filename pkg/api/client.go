@@ -28,8 +28,10 @@ const defaultStorePath = "~/.agent-director/state.db"
 // *tmuxfix.Recorder via Options.TmuxClient to capture calls without launching
 // a real tmux process.
 type TmuxClient interface {
-	// NewSession creates a new detached tmux session.
-	NewSession(name, cwd string, envs map[string]string, command []string) error
+	// NewSessionByName creates a new detached tmux session by name: the
+	// pre-Phase-1 name-based create, kept only until its last user moves to
+	// the socket-taking call set.
+	NewSessionByName(name, cwd string, envs map[string]string, command []string) error
 	// HasSession reports whether the named session currently exists.
 	HasSession(name string) (bool, error)
 	// KillSession terminates the named session.
@@ -151,11 +153,7 @@ func New(opts Options) (*Client, error) {
 	if opts.TmuxClient != nil {
 		tc = opts.TmuxClient
 	} else {
-		if opts.TmuxCommand != "" {
-			tc = tmux.NewWithBinary(opts.TmuxCommand)
-		} else {
-			tc = tmux.New()
-		}
+		tc = tmux.New(opts.TmuxCommand, tmux.Timeouts{})
 	}
 
 	return &Client{

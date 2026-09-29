@@ -67,5 +67,5 @@ func Relaunch(in RelaunchInput, tmuxClient TmuxClient, cfg config.Config) error 
 	command := []string{claudeBinary, "--resume", in.SessionID, "--settings", settings}
 	command = append(command, r.ClaudeArgs...)
 
-	return tmuxClient.NewSession(r.TmuxSessionName, r.CWD, envs, command)
+	return tmuxClient.NewSessionByName(r.TmuxSessionName, r.CWD, envs, command)
 }

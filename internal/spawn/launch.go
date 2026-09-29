@@ -20,7 +20,7 @@ var preTrustWarn io.Writer = os.Stderr
 // satisfies it; tests pass a fake that records argv without launching
 // real tmux.
 type TmuxClient interface {
-	NewSession(name, cwd string, envs map[string]string, command []string) error
+	NewSessionByName(name, cwd string, envs map[string]string, command []string) error
 }
 
 // claudeBinary is the program tmux launches inside the new session. Held
@@ -39,7 +39,7 @@ const envInstanceID = "AGENT_DIRECTOR_INSTANCE_ID"
 //  2. Synthesizes --settings inline JSON.
 //  3. Builds the claude argv (claude, --settings, <json>, ...user args).
 //  4. INSERTs the pending row.
-//  5. Calls TmuxClient.NewSession.
+//  5. Calls TmuxClient.NewSessionByName.
 //
 // On tmux failure the row remains `pending` (find-missing sweeps it in
 // Epic 8). On INSERT failure ErrInstanceIdCollision surfaces if the
@@ -100,7 +100,7 @@ func Launch(s *store.Store, tmuxClient TmuxClient, r Resolved, cfg config.Config
 		return "", err
 	}
 
-	if err := tmuxClient.NewSession(r.TmuxSessionName, r.CWD, envs, command); err != nil {
+	if err := tmuxClient.NewSessionByName(r.TmuxSessionName, r.CWD, envs, command); err != nil {
 		// On tmux failure the row stays pending — find-missing (Epic 8)
 		// will reconcile. Surface the tmux error to the caller so the
 		// CLI exits non-zero with a typed error envelope.

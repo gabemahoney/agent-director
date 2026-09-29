@@ -40,28 +40,50 @@ func defaultRunner(name string, args ...string) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-// Client is the entry point callers hold to drive tmux. It carries the
-// runner seam so a test can inject argv-capturing or scripted-failure
-// behavior without touching the production exec path.
+// Client is the entry point callers hold to drive tmux. It carries two
+// seams: run, used by the pre-Phase-1 name-based methods (combined output, no
+// timeout), and runCall, used by the socket-taking call set (separate
+// streams, per-class timeout, pipe-close wait). Tests inject either without
+// touching the production exec path.
 type Client struct {
-	run runner
+	run      runner
+	binary   string
+	timeouts Timeouts
+	runCall  Runner
 }
 
-// New constructs a Client backed by the real tmux binary on PATH.
-func New() *Client { return &Client{run: defaultRunner} }
-
-// NewWithBinary constructs a Client that invokes binary instead of the
-// default "tmux" on PATH. Useful when the operator has tmux installed at a
-// non-standard location or when Options.TmuxCommand overrides the path.
-func NewWithBinary(binary string) *Client {
-	return &Client{run: func(_ string, args ...string) ([]byte, error) {
-		return defaultRunner(binary, args...)
-	}}
+// New builds the client (Appendix F.1). binary "" means tmux on PATH;
+// otherwise it is the program to run (Options.TmuxCommand). t holds the
+// effective per-class timeouts and the pipe-close wait of the socket-taking
+// calls; pkg/api fills it and internal/tmux defines no defaults (SR-2.4). The
+// name-based methods keep their behaviour: same binary, no timeout.
+func New(binary string, t Timeouts) *Client {
+	c := &Client{binary: binary, timeouts: t, runCall: execRunner}
+	if binary == "" {
+		c.run = defaultRunner
+	} else {
+		c.run = func(_ string, args ...string) ([]byte, error) {
+			return defaultRunner(binary, args...)
+		}
+	}
+	return c
 }
 
-// NewSession creates a detached tmux session named name with starting
+// binaryPath is the program the socket-taking calls run.
+func (c *Client) binaryPath() string {
+	if c.binary != "" {
+		return c.binary
+	}
+	return binaryName
+}
+
+// NewSessionByName creates a detached tmux session named name with starting
 // directory cwd, the given env vars injected via repeated -e KEY=VAL, and
 // command as the in-session program (delivered as direct argv — no shell).
+//
+// It is the pre-Phase-1 name-based create: it passes no -u or -S, sets no
+// label and has no timeout. It stays only until its last user moves to the
+// socket-taking call set (NewSession), and then goes.
 //
 // The command slice's first element is the binary to invoke (e.g. "claude")
 // and the remainder are its arguments. tmux's -- separator is used to make
@@ -70,7 +92,7 @@ func NewWithBinary(binary string) *Client {
 //
 // On exec failure ErrTmuxNotAvailable is returned. On a non-zero tmux exit
 // the error chain contains ErrTmuxSessionCreate plus the tmux stderr.
-func (c *Client) NewSession(name, cwd string, envs map[string]string, command []string) error {
+func (c *Client) NewSessionByName(name, cwd string, envs map[string]string, command []string) error {
 	args := []string{"new-session", "-d", "-s", name, "-c", cwd}
 	for _, kv := range sortedEnvFlags(envs) {
 		args = append(args, "-e", kv)
@@ -93,9 +115,13 @@ func (c *Client) NewSession(name, cwd string, envs map[string]string, command []
 
 // HasSession returns true when `tmux has-session -t name` exits 0. Any other
 // exit (including the documented "can't find session" code) returns false
-// with a nil error — call sites use HasSession as a precondition probe and
-// distinguishing "missing" from "tmux refused" only matters when tmux itself
-// is broken, which the higher-level launch error path surfaces.
+// with a nil error.
+//
+// It matches name by prefix, as tmux's `has-session -t <name>` does: a
+// session whose name merely begins with name answers true. So no verb may
+// use it, and it must never be used for a lookup: the socket-taking Lookup
+// finds a session by its label (SRD SR-2.1, SR-3.4). Its signature, meaning
+// and error contract are unchanged.
 func (c *Client) HasSession(name string) (bool, error) {
 	_, err := c.run(binaryName, "has-session", "-t", name)
 	if err == nil {
@@ -216,33 +242,6 @@ func (c *Client) CapturePane(name string, nLines int, ansi bool) (string, error)
 		return "", fmt.Errorf("%w: %s: %v", ErrTmuxCaptureFailed, trimOutput(out), err)
 	}
 	return string(out), nil
-}
-
-// ListPanes returns the PIDs of every pane inside session name. tmux's
-// list-panes is asked for `#{pane_pid}` only; lines that fail to parse as
-// integers are skipped (a future tmux version that decorates the format
-// won't crash a running director). Empty session → empty slice.
-func (c *Client) ListPanes(name string) ([]int, error) {
-	out, err := c.run(binaryName, "list-panes", "-t", name, "-F", "#{pane_pid}")
-	if err != nil {
-		if errors.Is(err, ErrTmuxNotAvailable) {
-			return nil, err
-		}
-		return nil, fmt.Errorf("%w: %s: %v", ErrTmuxListPanesFailed, trimOutput(out), err)
-	}
-	var pids []int
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		n, perr := strconv.Atoi(line)
-		if perr != nil {
-			continue
-		}
-		pids = append(pids, n)
-	}
-	return pids, nil
 }
 
 // sortedEnvFlags returns env entries as KEY=VAL strings in a deterministic

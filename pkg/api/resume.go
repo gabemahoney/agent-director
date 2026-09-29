@@ -36,7 +36,7 @@ type SessionHistoryEntry = store.SessionHistoryEntry
 // ResumeTmux is the narrow tmux surface Resume needs.
 type ResumeTmux interface {
 	HasSession(name string) (bool, error)
-	NewSession(name, cwd string, envs map[string]string, command []string) error
+	NewSessionByName(name, cwd string, envs map[string]string, command []string) error
 }
 
 // ResumeParams is the typed parameter shape for the resume verb.
@@ -97,7 +97,7 @@ type ResumeResult struct {
 //     rotted). Both messages report each path tried with its source
 //     (persisted / fallback / history) and its stat error.
 //  5. Canonical tmux session name must NOT already exist → otherwise
-//     the tmux.NewSession at step 7 would surface ErrTmuxSessionCreate
+//     the tmux.NewSessionByName at step 7 would surface ErrTmuxSessionCreate
 //     anyway, and we'd rather error out cleanly here than after a
 //     parent_id mutation. Resume does NOT auto-kill a stale session;
 //     the operator cleans up manually.
@@ -106,7 +106,7 @@ type ResumeResult struct {
 //     the launch fails, the parent_id update is a harmless stale
 //     value that'll be overwritten on the next resume.
 //  7. spawn.Relaunch composes env + synthesized settings + tmux argv,
-//     fires tmux.NewSession. Fire-and-forget — the first SessionStart
+//     fires tmux.NewSessionByName. Fire-and-forget — the first SessionStart
 //     hook is what flips state back to `waiting` and rotates
 //     `claude_session_id`.
 //

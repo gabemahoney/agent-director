@@ -1,7 +1,14 @@
-// Package tmux is a thin client over the tmux binary, used by internal/spawn
-// to launch Spawn sessions and by future Epics to read panes / kill sessions.
-// All operations are direct exec.Command invocations — no shell, no
-// interpolation, no &&/|/$VAR (SRD §4.3, §14.3).
+// Package tmux is the client over the tmux binary, used by internal/spawn and
+// pkg/api. It carries the Phase 1 call set (SRD SR-2.1, Appendix F.1): the
+// one-call Lookup, the pane listing, the pane and session kills by id, text,
+// Enter and capture by pane id, the create with its chained @ad_owner label,
+// and the label by id. Every such call takes the socket, passes -u first and
+// -S <socket> next, is bounded by its class's timeout and the pipe-close wait
+// handed in through New, runs with every AGENT_DIRECTOR_* variable removed
+// from the client's environment, and reports failures as *CallError. The
+// pre-Phase-1 name-based methods remain until their last user moves.
+// All operations are direct exec invocations — no shell, no interpolation,
+// no &&/|/$VAR (SRD §4.3, §14.3). The package never imports internal/config.
 package tmux
 
 import "errors"

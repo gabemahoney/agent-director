@@ -21,16 +21,16 @@ type Call struct {
 	// Kind is the name of the method that was called.
 	Kind CallKind
 
-	// --- NewSession fields ---
+	// --- NewSessionByName fields ---
 
-	// Name is the session name passed to NewSession, HasSession, KillSession,
+	// Name is the session name passed to NewSessionByName, HasSession, KillSession,
 	// SendKeys, or CapturePane.
 	Name string
-	// Cwd is the working directory passed to NewSession.
+	// Cwd is the working directory passed to NewSessionByName.
 	Cwd string
-	// Envs are the environment variables passed to NewSession.
+	// Envs are the environment variables passed to NewSessionByName.
 	Envs map[string]string
-	// Command is the argv passed to NewSession.
+	// Command is the argv passed to NewSessionByName.
 	Command []string
 
 	// --- SendKeys fields ---
@@ -121,8 +121,9 @@ func (r *Recorder) Reset() {
 	r.hasSessionResult = false
 }
 
-// NewSession records a NewSession call and returns nil.
-func (r *Recorder) NewSession(name, cwd string, envs map[string]string, command []string) error {
+// NewSessionByName records a name-based create call (Kind CallNewSession)
+// and returns nil.
+func (r *Recorder) NewSessionByName(name, cwd string, envs map[string]string, command []string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, Call{

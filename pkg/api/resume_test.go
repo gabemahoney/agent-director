@@ -64,7 +64,7 @@ func (r *recordingResumeTmux) HasSession(name string) (bool, error) {
 	return r.hasSessionResult, r.hasSessionErr
 }
 
-func (r *recordingResumeTmux) NewSession(name, cwd string, envs map[string]string, command []string) error {
+func (r *recordingResumeTmux) NewSessionByName(name, cwd string, envs map[string]string, command []string) error {
 	r.newSessionCalls++
 	r.gotName = name
 	r.gotCwd = cwd
