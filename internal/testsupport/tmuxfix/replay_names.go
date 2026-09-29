@@ -27,8 +27,9 @@ func (n StoredName) Entry() Entry {
 }
 
 // StoredNames returns every recorded name form: the $ and \ cases of N1 and
-// N5, F3's $7 and x$, N4's control characters, N6's '.', ':' and invalid
-// UTF-8, and U1's UTF-8 name as a -u listing shows it.
+// N5, F3's $7 and x$, T2a's %9 (a name spelled as a pane id), N4's control
+// characters, N6's '.', ':' and invalid UTF-8, and U1's UTF-8 name as a -u
+// listing shows it.
 func StoredNames() []StoredName {
 	n := func(source, raw, stored string, byID bool) StoredName {
 		return StoredName{Source: source, Raw: raw, Stored: stored, LabelByID: byID}
@@ -55,6 +56,7 @@ func StoredNames() []StoredName {
 		n("E.6 N5", `x$(y)`, `x$(y)`, true),
 		n("provenance-fresh F3", `$7`, `$7`, true),
 		n("provenance-fresh F3", `x$`, `x$`, true),
+		n("E.9 T2a", `%9`, `%9`, false),
 		n("E.6 N4", "tab\tx", `tab\tx`, false),
 		n("E.6 N4", "nl\nx", `nl\nx`, false),
 		n("E.6 N4", "esc\033x", `esc\033x`, false),

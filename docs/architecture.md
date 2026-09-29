@@ -55,15 +55,15 @@ still holds: nothing in `internal/` imports `pkg/api`.
 | Path | Responsibility | Allowed imports | Prohibited imports |
 | --- | --- | --- | --- |
 | `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`; every store-backed verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. **DB-free exceptions:** `help`, `--help`, `version`, no-args (routes to help), and `trail-emit` are dispatched BEFORE `setupClient` so they never open or create `~/.agent-director` (SR-4.1/4.2); help/version run against a zero-value `Client` and consult no store. **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. | stdlib; `pkg/api`; `pkg/api/errnames`; `internal/hook`; `internal/config` and `internal/store` (error sentinels only) in `setupClient`; `internal/config` in `runHook` and `newHookLogger`. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook`, `newHookLogger`, and `setupClient`'s logger bootstrap. |
-| `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, `KillTmux`, `KillLogger`, etc.), params/result types, and error sentinels. Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director` and `internal/mcp`. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`. | Direct `database/sql`; raw SQL strings; MCP framing. |
+| `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, `KillTmux`, `KillLogger`, etc.), params/result types, and error sentinels. Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director` and `internal/mcp`. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the eight socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the five name-based ones (`NewSessionByName`, `HasSession`, `KillSession`, `SendKeys`, `CapturePane`); `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`. `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`. | Direct `database/sql`; raw SQL strings; MCP framing. |
 | `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v5; see "Schema v5" below), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default; a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
-| `pkg/api/apitest` | Test seed helpers extracted from `pkg/api/*_test.go` for cross-package importing. Provides `Seed*` functions (`SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`) that set up fixture DB rows and filesystem state for `test/envelope-diff` and future Epic 4/5 smoke tests. Also provides the config writer `WriteTmuxConfig` (settings built with `TmuxInt`, or `TmuxFloat` / `TmuxString` / `TmuxBool` for malformed values, keyed by `config.TmuxKey`): `pkg/api`, CLI and MCP tests write `[tmux]` settings only through it, so no test outside `internal/config` spells a `[tmux]` key (rules: Test Harness, "apitest `[tmux]` config writer"). Provides `SeedSpawn`'s trailing `SpawnOption`s for the v5 columns, timestamps and raw text (`WithTmuxSessionName`, `WithStartedAt` / `WithEndedAt`, `WithLaunchStartedAt`, `WithRawLaunchStartedAt`, `WithNoLaunchStartedAt`, `WithLifeNumber`, `WithNoPreTrust`, `WithRawNoPreTrust`, `WithLaunchIdentity`, `WithNoLaunchToken`, `WithRawLabels`, `WithRawClaudeArgs`, `WithRawExtraEnv`), the default socket `TestSocket`, the store-read helper `ReadSpawnColumns` and the every-life history-read helper `ReadSessionHistoryAllLives`: new tests seed rows and read columns no verb shows only through these (rules: Test Harness, "apitest Seed* factory contract"). Non-test package (regular `.go` files) so it can be imported by harnesses outside `pkg/api`. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
+| `pkg/api/apitest` | Test seed helpers extracted from `pkg/api/*_test.go` for cross-package importing. Provides `Seed*` functions (`SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`) that set up fixture DB rows and filesystem state for `test/envelope-diff` and future Epic 4/5 smoke tests. Also provides the config writer `WriteTmuxConfig` (settings built with `TmuxInt`, or `TmuxFloat` / `TmuxString` / `TmuxBool` for malformed values, keyed by `config.TmuxKey`): `pkg/api`, CLI and MCP tests write `[tmux]` settings only through it, so no test outside `internal/config` spells a `[tmux]` key (rules: Test Harness, "apitest `[tmux]` config writer"). Provides `SeedSpawn`'s trailing `SpawnOption`s for the v5 columns, timestamps and raw text (`WithTmuxSessionName`, `WithStartedAt` / `WithEndedAt`, `WithLaunchStartedAt`, `WithRawLaunchStartedAt`, `WithNoLaunchStartedAt`, `WithLifeNumber`, `WithNoPreTrust`, `WithRawNoPreTrust`, `WithLaunchIdentity`, `WithNoLaunchToken`, `WithRawLabels`, `WithRawClaudeArgs`, `WithRawExtraEnv`), the default socket `TestSocket`, the default pane `TestPaneID` / `TestPanePID` that `SeedSpawn` gives a live row (both re-exported from `internal/testsupport/launchfix`; a terminal row gets no pane), the store-read helper `ReadSpawnColumns` and the every-life history-read helper `ReadSessionHistoryAllLives`: new tests seed rows and read columns no verb shows only through these (rules: Test Harness, "apitest Seed* factory contract"). To place a seeded row's own labelled session in the Recorder, tests use `tmuxfix.Recorder.SeedRowSession` (in `internal/testsupport/tmuxfix`, not this package). Non-test package (regular `.go` files) so it can be imported by harnesses outside `pkg/api`. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
 | `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. The `Catalog` is consumed by `cmd/agent-director`'s envelope writer and `internal/mcp`'s `classifyDispatchError`. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
 | `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. `classifyDispatchError` delegates to `errnames.Classify`. | stdlib; `pkg/api`; `pkg/api/manifest`; `pkg/api/errnames`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
 | `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
 | `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). Builds env maps, synthesizes `--settings` JSON, and asks `internal/tmux` to start the session. Inserts the `pending` row via `internal/store`. | stdlib; `internal/config`; `internal/store`; `internal/tmux`; `github.com/google/uuid` for UUID4 minting. | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
-| `internal/tmux` | Thin client over the tmux binary. Each operation is one `exec.Command` invocation. Provides `NewSession`, `HasSession`, `KillSession`, `ListPanes`. | stdlib (`bytes`, `os/exec`, `strings`, `strconv`, `sort`). | Shell processes (`/bin/sh`), template / config / store packages, anything other than direct `exec.Command`. |
+| `internal/tmux` | Thin client over the tmux binary, built only by `New(binary, Timeouts)` (`""` = tmux on `PATH`). **Phase 1 call set (SR-2.1, Appendix F.1)**, every call taking the socket: `Lookup` (the one-invocation lookup: session listing with labels plus the three `@ad_owner` scope reads), `ListPanes` (`list-panes -a`), `KillPane` (by pane id), `KillSessionID` (by session id), `SendKeysPane` (text, then Enter, by pane id), `CapturePaneID` (by pane id), `SetLabel` (label by session id) and `NewSession` (the create with its chained `@ad_owner` label `ad1 <token> <$N> <id>`). Typed results and failures: `Call`, `Failure`, `CallError`, `LookupAnswer`, `Session`, `Label` / `LabelKind`, `CreateReply`, `Pane`, `Timeouts`. Mechanics: every call runs `-u -S <socket>` first; targets are ids only (never a name or pattern); each call class (query, action, create) has its own timeout, plus the pipe-close wait (`Timeouts.WaitDelay`); data is parsed only from standard output of an exit-0 call; replies are recognised only from the first line of standard error; the client's environment has every `AGENT_DIRECTOR_*` variable removed. Socket-taking calls fail only with `*CallError`. Labels reach callers only classified (the raw value never leaves the client) and recognised replies only as a `Failure`; the one exception is an unrecognised reply, whose first line (trimmed, at most 200 bytes) is carried in `CallError.FirstLine`. **Socket resolution (RN-5):** `ResolveSocket(create)` resolves the socket as tmux does (`TMUX`, then `TMUX_TMPDIR`, then `/tmp`, with tmux's per-user directory checks) and `EnsureSocketDir(socket)` creates only a missing per-user directory; refusals are `*SocketDirError` (with `SocketDirReason`), matching `ErrTmuxNotAvailable`. **Must use** `tmux.NeedsLabelByID(name)` to decide whether a session name (one containing `$` or `\`) must be labelled by id rather than by the chain; never re-implement that test. The client receives its timeouts and pipe-close wait from `pkg/api` at construction, never from `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); the package defines no defaults. The runner seam types (`Invocation`, `RunStatus`, `RunResult`, `Runner`) are exported for replay tests; tests install a runner only through the test-only `NewWithRunner` in `export_test.go`. The name-based methods (`NewSessionByName`, `HasSession`, `KillSession`, `SendKeys`, `CapturePane`) keep their contracts until their last verb moves to the socket-taking calls. `HasSession` matches by prefix: `resume` still calls it until it moves to the lookup, and no verb may newly adopt it. `StripANSI` post-processes captures. | stdlib (`bytes`, `context`, `errors`, `fmt`, `io/fs`, `os`, `os/exec`, `path/filepath`, `regexp`, `sort`, `strconv`, `strings`, `syscall`, `time`, `unicode`, `unicode/utf8`). | `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); template and store packages; shell processes (`/bin/sh`); anything other than direct `exec.Command`. |
 | `internal/hook` | Reads payload JSON from stdin, classifies per SRD §5.2, writes the row UPSERT, exits 0 (state-tracking fail-open). | stdlib; `internal/store`. | `internal/tmux`; `internal/spawn`; `internal/config` (the cmd-side wrapper loads config; the package itself stays narrow). |
 
 ### `[tmux]` timing settings
@@ -1128,7 +1128,7 @@ Layer boundaries (load-bearing):
 
 - `internal/spawn` calls `internal/store` (one `InsertPending` UPSERT
   and one `LiveSpawnExists` collision read) and `internal/tmux` (one
-  `NewSession` argv). Nothing else.
+  `NewSessionByName` argv). Nothing else.
 - `internal/hook` calls `internal/store` (state UPSERT + session-id
   write). Never `internal/tmux`, never `internal/spawn`.
 - `pkg/api` is the verb-handler surface: it composes `internal/spawn`
@@ -3319,6 +3319,353 @@ counterpart. Never write trigger SQL or any other failure SQL in a test.
 Writes behind a store interface fail through a failing wrapper of that
 interface.
 
+### Which tmux test double to use
+
+- In-process verb tests: `tmuxfix.Recorder`
+  ([tmux test doubles](#tmux-test-doubles-replay-catalogue-recorder-and-clock-reusable-test-fixtures)),
+  paired with `apitest.SeedSpawn` rows ([Seed* contract](#apitest-seed-factory-contract-reusable-test-fixtures)).
+- Subprocess tests (CLI, MCP, envelope-diff, TypeScript): `test/fake-tmux`, which Go tests get and drive through `faketmuxfix` ([fake-tmux](#testfake-tmux-the-subprocess-tmux-double-reusable-test-fixture)).
+- Real-tmux proof, sandbox only: `test/realtmux` ([realtmux](#testrealtmux-real-tmux-proof-of-the-client-reusable-test-fixtures)).
+- Reply wording always comes from the replay catalogue, and timing tests use `tmuxfix.Clock`.
+
+**Must use (server isolation, SR-20.3):** a test that reaches a tmux
+server, real or fake, uses a per-test `TMUX_TMPDIR` with `TMUX` unset, or
+puts the fake first on `PATH`, so no two tests share a server.
+
+### tmux test doubles: replay catalogue, Recorder and Clock (reusable test fixtures)
+
+`internal/testsupport/tmuxfix` holds the in-process tmux doubles (SRD
+SR-20.3, SR-20.4, Appendix F.5). The package doc comment and each
+exported name's doc comment carry the detail; this subsection says what
+exists and when to use it. The subprocess double is `test/fake-tmux` (next
+subsection).
+
+**Replay catalogue** (`replay.go`, `replay_answers.go`, `replay_names.go`).
+The tmux evidence of SRD Appendix E as data, recorded on tmux 3.2a;
+identical on 3.3a (composed entries say so in their `Source`). An `Entry`
+holds the exact standard-output and standard-error bytes, the exit status
+and, per call kind, the typed `tmux.Failure` the production client must
+return (`Want`; 0 is success), with the expected `Socket`, `FirstLine` and
+parsed answer. It contains:
+
+- `Replies(socket)`: every reply wording with the socket path as a
+  parameter (`NoServer`, `NoSocket`, `SocketDenied`, `Duplicate(stored)`,
+  `Silent()` and the rest), each on its recorded stream and exit status.
+- `LookupAnswers()`: the F1, F2 and F9 lookup answers plus malformed ones;
+  `PaneListings()`; `CreateReplies()`; `Captures()`.
+- `StoredNames()`: the stored forms of `$` and `\` names, of a name spelled
+  as a pane id (`%9`, from SRD Appendix E.9 T2a) and of names with `.`, `:`
+  and invalid UTF-8; `StoredName.Entry()` is a one-session lookup listing
+  that stored form (the non-UTF-8 listings). `LocaleForms()`: names
+  and ids as a `-u` client lists them and as a client without `-u` does
+  (`ü-x` / `_-x`). `LabelShapes()`: the AC-LKP-05 label shapes, each with
+  the label class it reads as.
+- Builders for composed data: `SessionLine`, `LabelValue`,
+  `ChainLabelValue`, `PaneLine`, `CreateReplyLine`, `Valid`, `Answer`; the
+  tokens `Token` and `OtherToken`.
+
+Consumers: the `internal/tmux` replay tests, which feed `Entry.Result()`
+to the client through the test-only runner seam `tmux.NewWithRunner`
+(`internal/tmux/export_test.go`; the fixture is
+`internal/tmux/replay_helpers_test.go`, in package `tmux_test` because
+`tmuxfix` imports `internal/tmux`); the fake's `Reply` injections; and the
+`test/realtmux` assertions. The Recorder's typed failures map one-to-one to
+the catalogue's `Want` kinds.
+
+**Must use:** tests never spell a tmux reply wording, stored name or lookup
+line inline (SR-20.2). They take it from the catalogue or build it with its
+builders. The catalogue and the Recorder hold the only tmux reply wording
+in tests.
+
+**Recorder** (`recorder*.go`). `tmuxfix.Recorder` implements
+`api.TmuxClient` and is injected through `Options.TmuxClient`. It models
+tmux at the level of the typed API (Appendix F.1): it never produces or
+parses reply text.
+
+- **Per-socket tables.** Each socket has at most one bound server
+  (`Server`: pid, `#{start_time}`, process start time) holding sessions
+  (`SeedSession`: id, stored name, creation time, typed `tmux.Label`,
+  `LabelSet`, panes) and scope values (`SetScope` / `ClearScope` with
+  `ScopeLevel` and a typed `ScopeValue`). A listed label follows tmux's
+  precedence: server value, else global-window value, else the session's
+  own, else global. Servers: `StartServer`, `RestartServer` (the old server
+  stops; ids restart), `RebindServer` (the old server keeps running
+  unbound), `StopServer`, `Servers` / `Server` for a process-checker fake.
+  Seeding: `SeedSessions`, `SetCapture`; `Sessions` reads the table back.
+- **Default answers from the table.** Lookup, pane listing, both kills,
+  sends, capture and label by id act on the table. The create starts a
+  server if none is bound, adds `$N` with one pane, labels it
+  `Valid(token, id)` only when `!tmux.NeedsLabelByID(name)` (the chained
+  label rule), and gives `FailDuplicate` for a stored name already held.
+  An unknown pane or session id gives `FailUnrecognized`. A server stays
+  bound after its last session; `StopServer` models its exit. A call on a
+  socket with no server fails with `FailNoSocket`, or the failure set by
+  `SetNoServerFailure`.
+- **Scripted typed results.** `Script(socket, Script{...}, calls...)`
+  replaces the table's answer per call kind and per socket (`AnySocket`
+  for any): once or N times (`Times`), or always (`Times` 0). Any failure
+  kind, `FailSocketDenied` included, can be scripted on every call kind.
+  `Applied` applies the table effect before the failure.
+- **Hooks.** Session hooks `ReplaceSessionAfter` (same stored name, new id
+  and panes, a given label) and `RemoveSessionAfter` fire once after the
+  next matching call. `AfterCall` hooks run on every matching call.
+- **Call order.** Each socket-taking call runs its table effect or scripted
+  result, then the virtual-time charge, then the session hooks, then the
+  after-call hooks (outside the Recorder's lock, so they may call back into
+  the Recorder or the store), then returns.
+- **Recorded calls.** `SocketCalls` / `SocketCallsOf(call)` return
+  `SocketCall` records.
+- **Name-based methods.** `NewSessionByName`, `HasSession`, `KillSession`,
+  `SendKeys` and `CapturePane` keep their old behaviour (`Calls`,
+  `CallsOfKind`, `WithPaneOutput`, `WithHasSession`) until their last user
+  moves. They are never charged and run no hooks. `Reset` clears recorded
+  calls and scripts; tables, hooks and virtual time stay.
+
+**Must use:** in-process verb tests use the Recorder, never a hand-written
+`TmuxClient` fake.
+
+**Clock and virtual time** (`clock.go`, `WithVirtualTime`).
+`tmuxfix.Clock` (`NewClock(start)`, `Now`, `Advance`) is the shared test
+clock that verbs under test read. It is safe for concurrent use, and
+`Advance` with a negative duration steps it back.
+`Recorder.WithVirtualTime(c, t)` binds the Recorder to `c`: every
+socket-taking call, whatever its result, advances `c` by its class's
+timeout from `t` (query: lookup and pane listing; action: kills, text and
+Enter sends, capture, label by id; create: the create). A zero field of `t`
+takes the `internal/config` default through the `config.Tmux` accessors;
+`tmuxfix` spells no duration. A scripted `FailTimeout` carries the same
+value. `t.WaitDelay` is never charged. Outside virtual time the Recorder
+never touches a clock. Seeded sessions and creates take their default
+creation time from the bound clock's current second, else the wall clock.
+
+**Must use:** timing tests (ceilings, sweep budgets, grace periods) use
+this clock with virtual time. They never sleep and never define their own
+clock.
+
+**Seeding bridge.** `SeedSpawn` gives a live row the default pane, and
+`Recorder.SeedRowSession` places a seeded row's own labelled session in
+the Recorder. See [apitest Seed* factory
+contract](#apitest-seed-factory-contract-reusable-test-fixtures).
+
+`tmuxfix` imports `internal/tmux`, `internal/config` and `internal/store`.
+
+### test/fake-tmux: the subprocess tmux double (reusable test fixture)
+
+`test/fake-tmux` is the subprocess path that exercises the production
+`internal/tmux` client end to end (SRD SR-20.3). CLI, MCP, envelope-diff
+and TypeScript smoke tests put it first on `PATH` or pass it as the tmux
+command (`Options.TmuxCommand`, `tmuxCommand`). Its package doc comment
+(`test/fake-tmux/main.go`) is the full reference. Its shared, non-test
+half is `internal/testsupport/faketmuxfix`.
+
+**Socket form** (argv starting `-u -S <socket>`, commands split on `;`
+elements). It answers the Phase 1 call set: the lookup (`list-sessions -F`
+with `#{@ad_owner}` resolved by tmux's scope precedence, plus the three
+`show-options` scope reads), `list-panes -a`, `kill-pane` and
+`kill-session` by id, both `send-keys` forms, `capture-pane`, `new-session`
+with its `-P -F` reply and chained `set-option`, and `set-option` by id.
+Commands run in order; the first failure ends the invocation, as in tmux.
+A name already held gets the catalogue's `duplicate session: <stored name>`
+reply. An unknown target gets the catalogue's reply for it. Argv the fake
+does not understand exits 2, and a table it cannot read or write exits 3,
+both with no output.
+
+**Per-socket tables.** Each socket has one table (`faketmuxfix.Table`:
+`Server`, `Scope`, `Sessions` with their `Panes` and capture text, id
+counters, `NewPanePID`, `Injections`). By default it is the file
+`<socket>.fake-tmux.json` beside the socket path, so in-process tests on
+different sockets need no process-wide variable. With `FAKE_TMUX_TABLES`
+set to a directory, every socket's table is a file there, so a subprocess
+test keeps its own tables even on the shared test socket. A socket with no
+table answers as a server with no sessions. Every write takes a lock and
+replaces the file atomically.
+
+**Must use:** tests read and write tables only through
+`faketmuxfix.Tables{Dir}` (`Path`, `Env`, `Write`, `Read`, `Update`,
+`Inject`). They never write a table file by hand.
+
+**Injections** (per socket, per call kind, stored in the table):
+
+- `Reply(call, entry)`: a catalogue entry's exact bytes on its recorded
+  streams, with its recorded exit status. An entry name that does not
+  resolve fails the test at write time.
+- `ExitCode(call, n)`: a bare exit status with no output.
+- `Hang(call)`: no answer until the client's timeout kills it. On its own
+  the fake exits after a bound (`DefaultHangBound`, 30 s; `Bound(d)` sets
+  it).
+- `HoldPipes(call, d)`: a normal answer (or `.WithReply(entry)`) and exit,
+  while a child keeps the output pipes open for `d`. The pipe-close-wait
+  tests use it.
+- `ChainFails()`: the create succeeds and prints its reply, then the
+  chained label step fails with the catalogue's line.
+- Modifiers: `.WithEffect()` applies the call's normal table effect first;
+  `.FirstN(n)` limits the injection to the next `n` calls (default: every
+  call). Every hang and hold is capped at `MaxBound` (2 min).
+
+**Control variables.** Tests use the names through the `faketmuxfix`
+constants and never spell them: `EnvLog` (`FAKE_TMUX_LOG`), `EnvPaneOutput`
+(`FAKE_TMUX_PANE_OUTPUT`), `EnvFailNewSessionName`
+(`FAKE_TMUX_FAIL_NEWSESSION_NAME`) and `EnvTables` (`FAKE_TMUX_TABLES`). None
+starts with `AGENT_DIRECTOR_`, which the production client strips.
+`FAKE_TMUX_FAIL_NEWSESSION_NAME` now prints the catalogue's
+`duplicate session: <stored name>` wording.
+
+**No wording of its own.** Every reply the fake prints comes from the
+replay catalogue. Its only literal output is the capture stub, which is
+pane content, not a reply.
+
+**Legacy form.** Argv without a leading `-u` is what the name-based client
+methods send, and behaves as before: `new-session`, `send-keys`,
+`kill-session` and `capture-pane` log their argv to `FAKE_TMUX_LOG` in the
+same format (one element per line, then `---`) and exit 0; `capture-pane`
+prints `FAKE_TMUX_PANE_OUTPUT` or the stub; `has-session` exits 1; anything
+else exits 0. The socket form logs every invocation.
+
+**Build helper.** `faketmuxfix.Binary(t)` builds the fake once per test
+binary and returns the path of a file named `tmux`; `faketmuxfix.Dir(t)`
+returns its directory for a `PATH` prepend. **Must use:** new Go tests get
+the fake only through `faketmuxfix.Binary` / `Dir`. The existing builders
+(`buildFakeTmux` in `test/envelope-diff/harness.go` and in
+`cmd/agent-director/spawn_cli_test.go`) stay as they are. The Makefile's
+`test/fake-tmux/tmux` rule (`make fake-tmux`) lists as prerequisites every
+non-test source of the packages the fake links (`FAKE_TMUX_SRCS`,
+including `faketmuxfix`, `tmuxfix` and `internal/tmux`), so a change to the
+shared packages rebuilds it.
+
+### test/realtmux: real-tmux proof of the client (reusable test fixtures)
+
+`test/realtmux` is the real-tmux half of the production `internal/tmux`
+client's contract (SRD SR-20.4, SR-20.7). The replay tests prove the client
+against recorded replies; this package proves those replies against a real
+tmux 3.3a and runs the client against it. Every observed reply is asserted
+against the same [replay catalogue](#tmux-test-doubles-replay-catalogue-recorder-and-clock-reusable-test-fixtures)
+entry the replay tests use. The package is `realtmux_test`, all `_test.go`
+files. The package doc comment is in `main_test.go`. The shared helpers are in
+`harness_test.go` (isolation, raw runner, cleanup), `harness_client_test.go`
+(production client, recording, creates, starters, generators, assertions)
+and `harness_proc_test.go` (polling, `/proc` readers). tmux 3.2a is covered
+only by the replay catalogue; the real-tmux tests run on the sandbox image's
+3.3a (SR-20.8, AC-TEST-03).
+
+**Running it.** Only in the sandbox:
+`make sandbox CMD="go test ./test/realtmux/... -count=1 -v"`, never on the
+host. `make test-sandbox` also runs it as part of `go test ./...`. No GitHub
+workflow runs it. In the sandbox one case skips because it needs root (see
+Skips below).
+
+**Isolation.**
+
+- `TestMain` calls `sandboxguard.Require()` (the
+  [sandbox guard](#sandbox-guard-and-the-ci-bypass), same pattern as
+  `test/reboot-recovery/main_test.go`). It records tmux's absolute path, and
+  when tmux is not on `PATH` every test skips.
+- `newRealTmux(t)` gives each test (or subtest) a fresh private world. It
+  makes a short directory under the temp base (`rt.Dir`, a real path, short
+  because Unix socket paths are limited). It sets `TMUX_TMPDIR` to that
+  directory and unsets `TMUX` and `TMUX_PANE`, restoring them afterwards.
+  It makes `rt.UserDir` (`tmux-<uid>`, 0700) and sets `rt.Socket`
+  (`UserDir/default`). It uses `t.Setenv`, so these tests never call
+  `t.Parallel`.
+- Every helper passes `-S` with a socket under `rt.Dir`. No test starts,
+  kills or depends on a server at the default socket path, because
+  `test/reboot-recovery` owns the default server and may run at the same
+  time. `TestSocketFallbackToTmpMatchesTmux` runs only a read-only
+  `list-sessions` with no `-S` at the default path. That call may make tmux
+  create `/tmp/tmux-<uid>`.
+- Cleanup is automatic through `t.Cleanup` and also runs when a test fails.
+  It restores owner modes under `rt.Dir` without following symlinks. It
+  sends `kill-server` to every tracked socket and every socket file found
+  under `rt.Dir`. It waits for the tracked server and pane processes, which
+  are identified by pid and start time so a reused pid is never signalled.
+  It SIGKILLs any survivors and reports any still alive. Last, it removes
+  `rt.Dir`. It never touches anything outside `rt.Dir`.
+
+**Skips.** Two cases skip on purpose. `TestPermissionDeniedEveryCall` skips
+as root, because root's access ignores the socket's mode 000. The sandbox
+runs as a non-root user, so it runs there. The foreign-owned per-user
+directory case of `TestSocketUnsafeUserDirRefused` needs root to `chown`,
+so it skips in the sandbox. That is the run's one skip.
+
+**Case groups** (one file each):
+
+- `replies_test.go`: the lookup's and pane listing's typed failure and reply
+  for no server, no socket, a regular file at the socket path, an ended or
+  SIGKILLed server and a missing directory; `duplicate session`; the create
+  reply's five fields; the streams of successful calls; the capture answer.
+- `permission_test.go`: a socket at mode 000 gives `FailSocketDenied` with
+  the socket path on every call kind.
+- `labels_test.go`: a created session carries `ad1 <token> <its own $N>
+  <id>` for every valid id shape (`#` included), both detached and from
+  inside another labelled session's pane, whose label stays unchanged; a
+  `$`-bearing name gets no chain and is labelled only by id.
+- `socket_resolution_test.go`: RN-5. `tmux.ResolveSocket` equals tmux's own
+  `#{socket_path}`; a `TMUX_TMPDIR` that is unset or names a missing path
+  (a value containing `:` included) falls back to `/tmp` as tmux does
+  (RN-5 R1 and R3b), checked with read-only calls only; unsafe per-user
+  directories are refused; and a `-S` server in a directory agent-director
+  made is reached later without `-S`.
+- `clean_client_test.go`: a server started by the production create holds
+  no `AGENT_DIRECTOR_*` variable in its global environment.
+- `locale_test.go`: `ü-x` and `agent-ü1` compare exactly under `LC_ALL=C`
+  and with no locale variables, and the client adds no locale variable to
+  the server.
+- `id_targets_test.go` (Appendix E.9 T2a, I1): a `$N` or `%N` target reaches
+  only its own session or pane. It never reaches a session named like the id
+  (the catalogue's `$7` and `%9` stored names), nor a replacement of an ended
+  session. Ids only grow within one server and restart at `$0` and `%0` on a
+  new server.
+
+**Helpers** (package-level identifiers in the `_test.go` files; each doc
+comment has the detail):
+
+- World: `newRealTmux`, `rt.Dir` / `rt.UserDir` / `rt.Socket`,
+  `rt.at(t, path)` (the same world bound to another socket under `rt.Dir`),
+  `rt.fresh(t)` (a new unused socket), `unsetEnv(t, keys...)`,
+  `rt.trackServer(pid)` / `rt.trackPane(pid)` (for processes not started
+  through a helper).
+- Raw tmux runner: `rt.run(t, args...)` returns a `rawResult` (`Stdout`,
+  `Stderr`, `Exit`). `rt.must(t, args...)` returns stdout and fails unless
+  the exit is 0 with empty stderr. Both run `tmux -u -S <socket>` with the
+  process environment minus every `AGENT_DIRECTOR_*` variable, bounded to
+  30 s. To change that, start from the builder `rt.raw()` and chain
+  `.withoutS()`, `.withoutU()`, `.withEnv("K=V", ...)`, `.withoutEnv(keys...)`,
+  `.bareEnv()` (`env -i`) or `.inDir(dir)`, then call `.run`, `.must` or
+  `.startSession`. With `.withoutS()`, a command that starts or kills a
+  server is refused unless tmux would resolve its socket under `rt.Dir`.
+  Read helpers: `rt.format(t, target, "#{...}")`, `rt.formatInt` and
+  `rt.label(t, sessionID)` (the raw `@ad_owner` value, which is never
+  printed). On tmux 3.3a, a bare session-name target `=<name>` gives empty
+  pane fields; use `=<name>:` to get the active pane.
+- Production client: `newClient()` (tmux on `PATH`, `clientTimeouts`),
+  `newClientWith(binary, timeouts)`, and `newRecordingClient(t)`, which
+  returns the client and a `callLog` (`calls`, `last`) of every call's
+  argv, streams and exit status. The recorder wraps tmux in a `/bin/sh`
+  script, so environment-sensitive tests (clean client, locale) use the
+  plain `newClient()`.
+- Creates and starters: `rt.create(t, createSpec{...})` and `rt.mustCreate`
+  run the production `NewSession` on the bound socket, returning `created`.
+  Zero fields default to a unique name, `rt.Dir`, `stubCommand()`, a fresh
+  token, a UUID-suffixed id and `newClient()`. `rt.startSession(t, name)`
+  starts a raw session with no label and no `-e`.
+  `rt.startSessionWithID(t, name, id)` adds
+  `-e AGENT_DIRECTOR_INSTANCE_ID=<id>`. Both return `rawSession` (`ID`,
+  `PaneID`, `PanePID`, `ServerPID`) and track what they start.
+  Generators: `stubCommand`, `newToken`, `newInstanceID`, `uniqueName`.
+- Assertions: `assertTriple(t, got, entry)` checks stdout, stderr and exit
+  against a catalogue entry. `assertCallError(t, err, call, entry)` checks
+  the entry's typed `Want` outcome for that call. `describe(err)` and
+  `redact(s)` hide every label value in failure messages.
+- Polling and processes: `waitFor(t, msg, cond, observe)` (`pollBudget`
+  10 s), `waitForObserved` (own budget), `pidGone`, `waitPidGone`,
+  `procState`, `procEnviron`, `procCmdline` and `envValue`. Waits poll
+  every `pollInterval` and never sleep a fixed time.
+
+**Must use:** later real-tmux tests (Epic 5 Task 4, then the verb Epics
+per SR-20.7) add their cases to `test/realtmux`. They reuse these helpers
+and never shell out to tmux themselves, never pass a socket outside
+`rt.Dir`, and never spell a reply wording: it comes from the catalogue.
+New helpers go in a `harness_*_test.go` file other than `harness_test.go`.
+
 ### apitest `[tmux]` config writer (reusable test fixture)
 
 `pkg/api/apitest.WriteTmuxConfig(t, path, settings...)` is the ONLY way
@@ -3373,11 +3720,12 @@ unchanged. When two options set the same column, the later one wins.
   - `WithRawNoPreTrust(raw any)`: stored as bound.
 - Launch identity:
   - `WithLaunchIdentity(id store.LaunchIdentity)`: sets all eight
-    columns. A zero field is stored as NULL, so `LaunchIdentity{}` gives no
-    token, socket or identity. The token is stored as given, so a malformed
-    token is expressible.
+    columns, replacing the live-row pane default. A zero field is stored as
+    NULL, so `LaunchIdentity{}` gives no token, socket, pane or identity.
+    The token is stored as given, so a malformed token is expressible.
   - `WithNoLaunchToken()`: seeds a row from before the release. The launch
-    token, the socket and the whole launch identity are NULL, the same as
+    token, the socket and the whole launch identity, the pane default
+    included, are NULL, the same as
     `WithLaunchIdentity(store.LaunchIdentity{})`. For a row with no token but
     a socket, use `WithLaunchIdentity(store.LaunchIdentity{Socket: TestSocket})`.
 - Raw JSON columns: `WithRawLabels(text)`, `WithRawClaudeArgs(text)` and
@@ -3399,7 +3747,17 @@ unchanged. When two options set the same column, the later one wins.
   (defined once in the leaf `internal/testsupport/launchfix`, never derived
   from the environment).
 - Pre-trust is allowed (`no_pre_trust` 0) and the life is 0.
-- The tmux server and pane identity columns are NULL.
+- The tmux server identity columns are NULL.
+- A live row (a state for which `store.IsLiveState` holds: `pending`,
+  `waiting`, `working`, `ask_user`, `check_permission`) gets the default
+  pane `apitest.TestPaneID` (`%42`) with pid `apitest.TestPanePID`
+  (4194305, above Linux's `PID_MAX_LIMIT`, so no start-time reader finds
+  it) and no pane start time. Both constants are defined once in the leaf
+  `internal/testsupport/launchfix`. The default is the pane only; the
+  server identity stays NULL. A terminal-state row has no pane (NULL).
+  `WithLaunchIdentity` and `WithNoLaunchToken` override it. Every live row
+  gets the same pane, so two live rows on one socket that both need a
+  Recorder session must set distinct panes with `WithLaunchIdentity`.
 
 The options and defaults are applied by raw UPDATEs in one transaction,
 after the store's `InsertPending` / `RecordSessionStartIdentity` /
@@ -3432,6 +3790,28 @@ values, except for a row the test inserted itself.
     inserted. No entries gives an empty non-nil slice.
   - It reads the table directly, never through the store's history read.
 
+**Row-to-Recorder session helper:**
+
+- `(*tmuxfix.Recorder).SeedRowSession(t, dbPath, instanceID, opts...) SeedSession`
+  (package `internal/testsupport/tmuxfix`) makes the Recorder hold the
+  seeded row's own session, read from the store:
+  - on the row's socket, starting a server with the row's recorded server
+    identity when the socket has none;
+  - with the row's pane (a new pane when the row records none);
+  - named by the stored form of the row's session name;
+  - labelled valid for the row's id and stored launch token;
+  - created at the bound clock's current second (`WithVirtualTime`), else
+    the wall clock's.
+- Options (`RowSessionOption`): `WithRowSessionCreated(epoch)` for another
+  creation time; `WithRowSessionName(stored)` for another stored name;
+  `WithRowSessionLabel(label, set)` for another label: no label
+  (`LabelNone`, `set` false), an old one (`Valid(OtherToken, id)`), a
+  foreign one (`Valid(token, other id)`), or a borrowed or malformed value
+  (`LabelNone`, `set` true, or a `LabelShape`'s `Want`).
+- The test fails when the row cannot be read, records no socket, records no
+  well-formed token and no label option is given, or its pane is already on
+  that server.
+
 **Rules (must use):**
 
 - New tests contain no inline SQL. They seed rows through `SeedSpawn` and
@@ -3441,6 +3821,9 @@ values, except for a row the test inserted itself.
   `ReadSpawnColumns`, and history through `ReadSessionHistoryAllLives`.
 - They seed history only through the hook path (a session rotation), never
   by writing `session_history`.
+- A test that needs a seeded row's own session in the Recorder uses
+  `tmuxfix.Recorder.SeedRowSession`. It never reads a row's launch token or
+  spells one by hand (SR-20.2).
 - Concrete-store write failures come only from `storefix.InjectWriteFailure`
   or its white-box counterpart in `internal/store/migration_fixtures_test.go`
   (see "storefix seeders" above). Writes behind a store interface fail
@@ -3603,9 +3986,11 @@ constraint without altering the subprocess's inherited environment.
 
 **fake-tmux stub.**
 
-`test/fake-tmux/main.go` is a minimal Go binary that accepts any tmux subcommand
-and exits 0 — allowing smoke tests to call verbs that would otherwise need a live
-tmux session.  For `capture-pane` it writes a fixed stub string to stdout so
+`test/fake-tmux` is the subprocess tmux double (see [test/fake-tmux: the
+subprocess tmux double](#testfake-tmux-the-subprocess-tmux-double-reusable-test-fixture)).
+The smoke tests' verbs still send the legacy name-based argv, which the fake
+accepts and answers with exit 0 (`has-session` exits 1), with no live tmux
+session needed.  For `capture-pane` it writes a fixed stub string to stdout so
 `read-pane` tests can assert the return value is non-empty.  The binary is built
 by `make fake-tmux` (which `test/setup.ts` calls before any test runs).  Both
 the Makefile recipe and `setup.ts` explicitly `chmod 755` the output: without the
