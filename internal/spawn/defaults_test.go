@@ -2,6 +2,7 @@ package spawn
 
 import (
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -22,11 +23,17 @@ func (f *fakeChecker) LiveSpawnExists(id string) (bool, error) {
 	return f.exists, f.err
 }
 
+// TestApplyDefaultsMintsUuid4 also pins that an empty id never consults the
+// checker: a failing checker is ignored and a fresh id is minted.
 func TestApplyDefaultsMintsUuid4(t *testing.T) {
 	r := Resolved{SpawnParams: SpawnParams{CWD: "/tmp"}}
 	cfg := config.Default()
-	if err := ApplyDefaults(&r, cfg, &fakeChecker{}); err != nil {
+	checker := &fakeChecker{err: errors.New("store: live spawn lookup: disk I/O error")}
+	if err := ApplyDefaults(&r, cfg, checker); err != nil {
 		t.Fatalf("ApplyDefaults: %v", err)
+	}
+	if len(checker.lookups) != 0 {
+		t.Fatalf("checker consulted for an empty id: lookups=%v", checker.lookups)
 	}
 	// UUID4 string form per RFC 4122: 8-4-4-4-12 hex, version nibble = 4,
 	// variant nibble in {8,9,a,b}. Use a fail-fast regex assertion.
@@ -63,6 +70,54 @@ func TestApplyDefaultsCollisionError(t *testing.T) {
 	err := ApplyDefaults(&r, cfg, &fakeChecker{exists: true})
 	if !errors.Is(err, ErrInstanceIdCollision) {
 		t.Fatalf("err = %v; want ErrInstanceIdCollision", err)
+	}
+}
+
+// TestApplyDefaultsPreCheckReadError pins SR-9.3/SR-1.8: a failed collision
+// pre-check read maps through PreCheckReadError, never to a sentinel, even
+// when the store error's own chain carries one.
+func TestApplyDefaultsPreCheckReadError(t *testing.T) {
+	sentinels := []error{
+		ErrCwdMissing, ErrCwdNotAPath, ErrCwdNotFound, ErrCwdNotADirectory,
+		ErrRelayModeInvalid, ErrSpawnDeniedFlag, ErrReservedEnvKey,
+		ErrInstanceIdCollision, ErrTmuxSessionNameEmpty,
+		ErrTmuxSessionNameInvalid, ErrTmuxSessionNameTooLong, ErrClaudeJSONMissing,
+	}
+	cases := []struct {
+		name     string
+		storeErr error
+	}{
+		{"plain store error", errors.New("store: live spawn lookup: disk I/O error")},
+		{"chain carries ErrInstanceIdCollision", fmt.Errorf("store: live spawn lookup: %w", ErrInstanceIdCollision)},
+		{"chain carries ErrCwdNotFound", fmt.Errorf("store: live spawn lookup: %w", ErrCwdNotFound)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			const id = "22222222-2222-4222-8222-222222222222"
+			r := Resolved{SpawnParams: SpawnParams{CWD: "/tmp", ClaudeInstanceID: id}}
+			checker := &fakeChecker{exists: true, err: tc.storeErr}
+			err := ApplyDefaults(&r, config.Default(), checker)
+			if err == nil {
+				t.Fatal("ApplyDefaults returned nil; want the pre-check read error")
+			}
+			if len(checker.lookups) != 1 || checker.lookups[0] != id {
+				t.Fatalf("lookups = %v; want exactly [%s]", checker.lookups, id)
+			}
+			if got, want := err.Error(), PreCheckReadError(tc.storeErr).Error(); got != want {
+				t.Fatalf("err = %q; want PreCheckReadError's %q", got, want)
+			}
+			if !strings.Contains(err.Error(), "the collision pre-check could not read the store") {
+				t.Fatalf("err = %q; missing the pre-check phrase", err)
+			}
+			if errors.Is(err, tc.storeErr) {
+				t.Fatalf("err = %v; wraps the store error (want text only)", err)
+			}
+			for _, s := range sentinels {
+				if errors.Is(err, s) {
+					t.Fatalf("err = %v; matches %v (want no catalogued sentinel)", err, s)
+				}
+			}
+		})
 	}
 }
 

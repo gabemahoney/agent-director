@@ -11,10 +11,31 @@ import (
 
 // CollisionChecker is the narrow store surface ApplyDefaults needs. It
 // returns true when a row with the given claude_instance_id exists in a
-// live state (anything except `ended` / `missing`). Production callers
-// pass *store.Store; tests pass a fake to drive ErrInstanceIdCollision.
+// live state (anything except `ended` / `missing`), and an error when the
+// store cannot be read. A true result becomes ErrInstanceIdCollision; an
+// error becomes PreCheckReadError's uncatalogued error (ErrInternal on
+// every surface), never a collision. Production callers pass
+// *store.Store; tests pass a fake or a failing wrapper to drive either
+// outcome.
 type CollisionChecker interface {
 	LiveSpawnExists(instanceID string) (bool, error)
+}
+
+// PreCheckReadError is the single mapping (SR-1.8) of a failed collision
+// pre-check store read. The result wraps no sentinel, so it matches no
+// catalogued error and every surface classifies it as ErrInternal
+// (SR-9.3). A caller must never read a store fault as "the id is taken,
+// resume instead".
+//
+// The store error follows as plain text for diagnosis. It is formatted
+// with %v, not wrapped with %w, so no sentinel in its chain can leak
+// through errors.Is.
+//
+// Every collision pre-check read, the plain spawn's here and any later
+// one, maps its failure through this function rather than building its
+// own error.
+func PreCheckReadError(err error) error {
+	return fmt.Errorf("the collision pre-check could not read the store: %v", err)
 }
 
 // ApplyDefaults fills SRD §7.3 defaults and runs the SRD §7.2 step 6
@@ -24,20 +45,26 @@ type CollisionChecker interface {
 //
 // Behavior:
 //   - ClaudeInstanceID ← UUID4 if absent. UUID4 from github.com/google/uuid
-//     reads crypto/rand under the hood (not math/rand).
+//     reads crypto/rand under the hood (not math/rand). An empty id never
+//     consults the store.
 //   - TmuxSessionName ← <sanitize(basename(cwd))>-<id[:8]>. The sanitizer
 //     replaces every char outside [A-Za-z0-9_-] with `-`; an empty or
 //     all-dashes result collapses to the literal `root`.
 //   - RelayMode ← cfg.Defaults.RelayMode if the caller left it empty.
 //   - Caller-supplied ClaudeInstanceID triggers a collision query against
-//     the store. SQLite's PRIMARY KEY catches any TOCTOU race at INSERT.
+//     the store. A live row (`pending` included) returns
+//     ErrInstanceIdCollision. A failed read returns PreCheckReadError's
+//     error, which surfaces as ErrInternal, not as a collision. Either way
+//     nothing is created: the pre-check runs before Launch, so no row, no
+//     pre-trust write and no tmux call follow. SQLite's PRIMARY KEY catches
+//     any TOCTOU race at INSERT.
 func ApplyDefaults(r *Resolved, cfg config.Config, store CollisionChecker) error {
 	if r.ClaudeInstanceID == "" {
 		r.ClaudeInstanceID = uuid.NewString()
 	} else if store != nil {
 		exists, err := store.LiveSpawnExists(r.ClaudeInstanceID)
 		if err != nil {
-			return fmt.Errorf("%w: lookup: %v", ErrInstanceIdCollision, err)
+			return PreCheckReadError(err)
 		}
 		if exists {
 			return fmt.Errorf("%w: %s already live", ErrInstanceIdCollision, r.ClaudeInstanceID)

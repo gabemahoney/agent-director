@@ -15,13 +15,16 @@ import (
 // surfaceDoc is the shared decode target for the committed surface.json golden.
 // It is the UNION of every field the golden-side tests assert on — verb name,
 // param names and descriptions, and the result-field markers (type, nullable,
-// description, allowed_values) — so the golden tests decode through one struct instead
+// description, allowed_values) plus the verb-level description and error
+// names — so the golden tests decode through one struct instead
 // of each repeating a bespoke anonymous-struct unmarshal. Fields a given test
 // does not touch simply stay zero.
 type surfaceDoc struct {
 	Verbs []struct {
-		Name   string `json:"name"`
-		Params []struct {
+		Name        string   `json:"name"`
+		Description string   `json:"description"`
+		ErrorNames  []string `json:"error_names"`
+		Params      []struct {
 			Name        string `json:"name"`
 			Description string `json:"description"`
 		} `json:"params"`
@@ -906,5 +909,56 @@ func TestSpawnParamDescriptionsPinValidationRules(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestNoVerbListsErrInternal pins SR-1.7 / AC-CAT-03 for every verb, callable
+// or not: ErrInternal is never a listed error name, on the manifest source of
+// truth or in the committed surface.json.
+func TestNoVerbListsErrInternal(t *testing.T) {
+	_, surface := readSurfaceJSON(t)
+	if len(surface.Verbs) == 0 {
+		t.Fatal("surface.json declares no verbs")
+	}
+	for _, v := range manifest.Verbs {
+		for _, n := range v.ErrorNames {
+			if n == "ErrInternal" {
+				t.Errorf("manifest: %s.ErrorNames lists ErrInternal; SR-1.7 keeps it off every verb's error list", v.Name)
+			}
+		}
+	}
+	for _, v := range surface.Verbs {
+		for _, n := range v.ErrorNames {
+			if n == "ErrInternal" {
+				t.Errorf("surface.json: %s error_names lists ErrInternal; SR-1.7 keeps it off every verb's error list", v.Name)
+			}
+		}
+	}
+}
+
+// TestSpawnDescriptionStatesPreCheckErrInternal pins AC-CAT-03's second half:
+// spawn's Description names the ErrInternal trigger (the collision pre-check's
+// failed store read). Tokens only, on the manifest and in surface.json.
+func TestSpawnDescriptionStatesPreCheckErrInternal(t *testing.T) {
+	v, ok := manifest.Lookup("spawn")
+	if !ok {
+		t.Fatal("spawn not in manifest")
+	}
+	descs := map[string]string{"manifest": v.Description}
+	_, surface := readSurfaceJSON(t)
+	for _, vv := range surface.Verbs {
+		if vv.Name == "spawn" {
+			descs["surface.json"] = vv.Description
+		}
+	}
+	if _, ok := descs["surface.json"]; !ok {
+		t.Fatal("surface.json has no spawn verb")
+	}
+	for source, desc := range descs {
+		for _, tok := range []string{"ErrInternal", "collision pre-check", "read the store"} {
+			if !strings.Contains(desc, tok) {
+				t.Errorf("%s: spawn description does not contain %q; got %q", source, tok, desc)
+			}
+		}
 	}
 }

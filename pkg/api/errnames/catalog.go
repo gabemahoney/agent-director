@@ -103,8 +103,12 @@ var Catalog = []Entry{
 // Classify returns the canonical err_name and err_description for an error
 // returned by a verb handler. It walks Catalog using errors.Is, returning
 // the first matching entry's Name along with err.Error() as the description.
-// Unrecognized errors collapse to "ErrInternal" — production paths should
-// never reach this; tests pin the canonical names directly.
+// Unrecognized errors collapse to "ErrInternal". Production paths do reach
+// this fallback on purpose: an error that wraps no catalogued sentinel,
+// such as spawn's failed collision pre-check store read
+// (spawn.PreCheckReadError), is reported as ErrInternal. ErrInternal is
+// listed in no verb's error list; its triggers are stated in the verb's
+// description text instead.
 func Classify(err error) (name, description string) {
 	if err == nil {
 		return "", ""

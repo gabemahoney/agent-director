@@ -98,7 +98,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "spawn",
-		Description: "Launch a tracked Claude Code instance inside a new tmux session. Fire-and-forget: returns the claude_instance_id; state moves from pending to waiting on the first SessionStart hook.",
+		Description: "Launch a tracked Claude Code instance inside a new tmux session. Fire-and-forget: returns the claude_instance_id; state moves from pending to waiting on the first SessionStart hook. When an explicit claude_instance_id is supplied and the collision pre-check cannot read the store, spawn returns ErrInternal and creates nothing; this is a store fault and says nothing about whether the id is in use.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{

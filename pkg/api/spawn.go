@@ -29,7 +29,14 @@ type SpawnResult struct {
 // ErrInvalidFlags is declared in pkg/api and internal/spawn cannot import
 // it. CLI, MCP, the Go client and the TypeScript client all reach spawn
 // through this handler, so every surface returns the same error (SR-9.1).
-func runSpawn(s *store.Store, tmuxClient spawn.TmuxClient, cfg config.Config, params spawn.SpawnParams) (SpawnResult, error) {
+//
+// collisions is the reader for the collision pre-check in ApplyDefaults; s
+// is the store Launch inserts the row into. Client.Spawn passes its own
+// store for both. They are separate so a white-box test can substitute a
+// failing reader for the pre-check alone (SR-20.2). The pre-check still
+// runs before pre-trust, the insert and every tmux call, all of which
+// happen in Launch.
+func runSpawn(s *store.Store, collisions spawn.CollisionChecker, tmuxClient spawn.TmuxClient, cfg config.Config, params spawn.SpawnParams) (SpawnResult, error) {
 	if err := validateExplicitInstanceID(params.ClaudeInstanceID); err != nil {
 		return SpawnResult{}, err
 	}
@@ -40,7 +47,7 @@ func runSpawn(s *store.Store, tmuxClient spawn.TmuxClient, cfg config.Config, pa
 	if err := spawn.Validate(&r); err != nil {
 		return SpawnResult{}, err
 	}
-	if err := spawn.ApplyDefaults(&r, cfg, s); err != nil {
+	if err := spawn.ApplyDefaults(&r, cfg, collisions); err != nil {
 		return SpawnResult{}, err
 	}
 	id, err := spawn.Launch(s, tmuxClient, r, cfg)
@@ -98,5 +105,5 @@ func (c *Client) Spawn(params SpawnParams) (SpawnResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return SpawnResult{}, err
 	}
-	return runSpawn(c.st, c.tmuxClient, c.cfg, params)
+	return runSpawn(c.st, c.st, c.tmuxClient, c.cfg, params)
 }

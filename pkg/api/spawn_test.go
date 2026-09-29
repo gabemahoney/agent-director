@@ -3,21 +3,27 @@ package api_test
 // spawn_test.go covers Client.Spawn's handling of explicit instance ids
 // (SR-9.1, AC-SPN-02): control-character ids are rejected first with
 // ErrInvalidFlags and leave no row and no tmux session; empty and printable
-// ids still spawn; existing control-character rows stay listable.
+// ids still spawn; existing control-character rows stay listable. It also
+// covers the collision pre-check (SR-9.3, AC-SPN-03): a failed store read is
+// ErrInternal, while a live row is still ErrInstanceIdCollision.
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
+	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 )
 
 // controlIDPhrase is the description every rejected control-character id carries.
@@ -218,5 +224,96 @@ func TestSpawnControlCharacterRowStillListed(t *testing.T) {
 	}
 	if ids := listIDs(t, env.c); len(ids) != 1 || ids[0] != id {
 		t.Errorf("List ids = %q; want [%q]", ids, id)
+	}
+}
+
+// preCheckPhrase is the description every failed pre-check store read carries.
+const preCheckPhrase = "the collision pre-check could not read the store"
+
+// failingCollisionReader is a spawn.CollisionChecker whose store read fails.
+type failingCollisionReader struct{ err error }
+
+func (f failingCollisionReader) LiveSpawnExists(string) (bool, error) { return false, f.err }
+
+// TestSpawnPreCheckReadFailureIsErrInternal: a failed pre-check read is
+// ErrInternal (even when the store error wraps a sentinel) and creates nothing.
+func TestSpawnPreCheckReadFailureIsErrInternal(t *testing.T) {
+	cases := []struct {
+		name    string
+		readErr error
+	}{
+		{"plain store error", errors.New("store: live spawn lookup: disk I/O error")},
+		{"wraps ErrInstanceIdCollision", fmt.Errorf("store: live spawn lookup: %w", spawn.ErrInstanceIdCollision)},
+		{"wraps ErrSpawnNotFound", fmt.Errorf("store: live spawn lookup: %w", store.ErrSpawnNotFound)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newSpawnEnv(t)
+			claudeJSON := filepath.Join(env.home, ".claude.json")
+			if err := os.WriteFile(claudeJSON, []byte("{}"), 0o600); err != nil {
+				t.Fatalf("write .claude.json: %v", err)
+			}
+			id := "precheck-" + uuid.NewString()[:8]
+			_, err := api.SpawnWithCollisionReader(env.c, failingCollisionReader{err: tc.readErr},
+				api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: id})
+			if err == nil {
+				t.Fatal("SpawnWithCollisionReader err = nil; want ErrInternal")
+			}
+			if errors.Is(err, spawn.ErrInstanceIdCollision) {
+				t.Errorf("err %v matches ErrInstanceIdCollision", err)
+			}
+			for _, e := range errnames.Catalog {
+				if errors.Is(err, e.Err) {
+					t.Errorf("err %v matches catalogued %s", err, e.Name)
+				}
+			}
+			name, desc := errnames.Classify(err)
+			if name != "ErrInternal" {
+				t.Errorf("Classify name = %q; want ErrInternal", name)
+			}
+			if !strings.Contains(desc, preCheckPhrase) {
+				t.Errorf("description %q lacks %q", desc, preCheckPhrase)
+			}
+			assertNoTmuxCalls(t, env.rec)
+			if ids := listIDs(t, env.c); len(ids) != 0 {
+				t.Errorf("List ids = %q; want none", ids)
+			}
+			if b, err := os.ReadFile(claudeJSON); err != nil || string(b) != "{}" {
+				t.Errorf(".claude.json = %q (err %v); want untouched {}", b, err)
+			}
+		})
+	}
+}
+
+// TestSpawnLiveRowStillCollides: a pending or live row with the same id is
+// still ErrInstanceIdCollision on the ordinary path, with no tmux call.
+func TestSpawnLiveRowStillCollides(t *testing.T) {
+	for _, state := range []string{store.StatePending, store.StateWorking} {
+		t.Run(state, func(t *testing.T) {
+			env := newSpawnEnv(t)
+			id := "collide-" + uuid.NewString()[:8]
+			if _, err := apitest.SeedSpawn(env.dbPath, id, state, "", "", "", false); err != nil {
+				t.Fatalf("SeedSpawn: %v", err)
+			}
+			before, err := env.c.List(api.ListParams{})
+			if err != nil {
+				t.Fatalf("List before: %v", err)
+			}
+			_, err = env.c.Spawn(api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: id})
+			if !errors.Is(err, spawn.ErrInstanceIdCollision) {
+				t.Fatalf("Spawn err = %v; want ErrInstanceIdCollision", err)
+			}
+			if name, _ := errnames.Classify(err); name != "ErrInstanceIdCollision" {
+				t.Errorf("Classify name = %q; want ErrInstanceIdCollision", name)
+			}
+			assertNoTmuxCalls(t, env.rec)
+			after, err := env.c.List(api.ListParams{})
+			if err != nil {
+				t.Fatalf("List after: %v", err)
+			}
+			if !reflect.DeepEqual(before.Spawns, after.Spawns) {
+				t.Errorf("rows changed:\nbefore %+v\nafter  %+v", before.Spawns, after.Spawns)
+			}
+		})
 	}
 }

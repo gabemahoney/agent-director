@@ -1,6 +1,24 @@
 package api
 
-import "time"
+import (
+	"time"
+
+	"github.com/gabemahoney/agent-director/internal/spawn"
+)
+
+// SpawnWithCollisionReader runs the spawn verb path on c (its store for the
+// insert, its tmux client and its config) with collisions in place of c's
+// store for the collision pre-check. It exists for the pre-check
+// store-failure tests: a test passes a failing wrapper of
+// spawn.CollisionChecker to show that a failed read returns ErrInternal, not
+// ErrInstanceIdCollision, with no inline SQL and no store tricks (SR-9.3,
+// SR-20.2). External callers use (c *Client).Spawn instead.
+func SpawnWithCollisionReader(c *Client, collisions spawn.CollisionChecker, params SpawnParams) (SpawnResult, error) {
+	if err := c.checkClosed(); err != nil {
+		return SpawnResult{}, err
+	}
+	return runSpawn(c.st, collisions, c.tmuxClient, c.cfg, params)
+}
 
 // SetPauseTestKnobs lets pause_test override the polling cadence and
 // sleeper without exporting them broadly. Tests pair this with

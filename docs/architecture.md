@@ -1091,7 +1091,9 @@ be tested in isolation against synthesized input.
         ▼
    ┌────────────┐   SRD §7.3: UUID4 if no claude_instance_id;
    │ ApplyDefaults│  <basename(cwd)>-<id[:8]> session name;
-   └────┬───────┘   relay_mode from config. Collision check via store.
+   └────┬───────┘   relay_mode from config. Explicit id: collision
+        │           pre-check via store (live row → ErrInstanceIdCollision;
+        │           read failure → ErrInternal). Nothing created on error.
         ▼
    ┌────────┐   SRD §7.4: pending row insert; env compose;
    │ Launch │   --settings JSON synthesis; pre-trust cwd in .claude.json;
@@ -1122,6 +1124,39 @@ The check lives in `pkg/api` rather than `internal/spawn` because
 import it. Any future code path that accepts a caller-supplied instance
 id for `spawn` must go through `runSpawn`, or call
 `validateExplicitInstanceID` itself. Do not write a second byte loop.
+
+### Collision pre-check
+
+For an explicit `claude_instance_id`, `spawn.ApplyDefaults`
+(`internal/spawn/defaults.go`) asks its `CollisionChecker` whether a live
+row already holds the id (`LiveSpawnExists`). There are two error
+outcomes:
+
+- A live row, `pending` included, returns `ErrInstanceIdCollision`.
+- A failed store read returns `ErrInternal`, with the description "the
+  collision pre-check could not read the store: <store error>". A store
+  fault says nothing about whether the id is in use, so it must never
+  reach a caller as a collision, which callers read as "resume instead".
+
+Either way nothing is created. The pre-check runs before `Launch`, so no
+row, pre-trust write or tmux session follows. An empty id is never
+checked; `ApplyDefaults` mints a fresh UUID4 for it. SQLite's PRIMARY KEY
+still catches a race at INSERT, and `Launch` reports that as
+`ErrInstanceIdCollision`.
+
+The read-failure mapping lives in one place:
+`spawn.PreCheckReadError(err)`. It formats the store error with `%v`,
+not `%w`, so the result wraps no sentinel and `errnames.Classify`
+returns `ErrInternal` on every surface. Every collision pre-check read
+must map its failure through `spawn.PreCheckReadError`. That includes
+the finished-id reuse path. Do not build a second pre-check error,
+and do not wrap the store error with `%w`.
+
+`runSpawn` in `pkg/api/spawn.go` takes the pre-check reader
+(`spawn.CollisionChecker`) separately from the insert store.
+`Client.Spawn` passes the same `*store.Store` for both. Tests inject a
+failing reader through `api.SpawnWithCollisionReader` in
+`pkg/api/export_test.go`.
 
 ### Explicit session-name validation
 
@@ -1766,9 +1801,13 @@ strings; callers read them through this package only.
 
 **`Classify(err error) (name, description string)`** — walks `Catalog`
 via `errors.Is` and returns the first matching entry's `Name` plus
-`err.Error()` as the description. Errors not present in the catalog
-collapse to `"ErrInternal"` — production paths should never reach
-this; tests pin canonical names directly.
+`err.Error()` as the description. Errors that match no catalogued
+sentinel return `"ErrInternal"`. This is the deliberate name for such
+failures, and production paths do reach it: for example, the `spawn`
+collision pre-check's store read failure (see
+[Collision pre-check](#collision-pre-check)). `ErrInternal` is listed in
+no verb's `ErrorNames`; a verb states its `ErrInternal` triggers in its
+manifest description text instead.
 
 **`TrimNamePrefix(name, description string) string`** — strips the
 redundant `"ErrName: "` prefix from a description string when present.
@@ -1833,8 +1872,9 @@ or catalog Go source requires regenerating the corresponding JSON file.
 
 **Documented exclusions**
 
-- `ErrInternal` is the `Classify` fallback for unrecognized errors. It is not in the Catalog
-  and is not enforced by the coherence check.
+- `ErrInternal` is the `Classify` fallback for errors that match no catalogued sentinel,
+  such as `spawn.PreCheckReadError`'s result. It is not in the Catalog, is listed in no
+  verb's `ErrorNames`, and is not enforced by the coherence check.
 - `ErrInvalidFlags` has two sources. First, CLI flag parsing emits it for every verb: the
   `cmd/agent-director` flag handlers write it as a string literal in the error envelope.
   Second, the shared verb layer returns it for `spawn` only, from the explicit-id check in
