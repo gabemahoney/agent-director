@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -49,6 +50,12 @@ import (
 // even on an open that is ultimately refused. Because these fixtures are already
 // genuine WAL DBs, a refused open touches no bytes, so byte-identity is
 // well-defined. See makeVersionedDB.
+//
+// The v4 history fixture (makeV4HistoryFixture) follows the same contract: it
+// is makeVersionedDB(t, dir, 4) — built on the real chain, never a current DB
+// stamped down — with rows and session history seeded on top through a raw
+// connection. Per SR-20.3 the inline SQL for that fixture, and for the v4→v5
+// failure/pre-add arrangements, lives only in this file.
 
 // makeVersionedDB creates a state.db under dir at the given targetVersion and
 // returns its resolved path, built at that version's TRUE physical schema (see
@@ -369,6 +376,343 @@ func assertDBBytesUnchanged(t *testing.T, dbPath string, before map[string]strin
 			t.Errorf("assertDBBytesUnchanged: %q appeared after open (unexpected write)", n)
 		case b != a:
 			t.Errorf("assertDBBytesUnchanged: %q changed after open\n  before %s\n  after  %s", n, b, a)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Schema v5 (v4→v5 hop) fixtures and read helpers (b.fmk, SR-5.1/SR-5.4,
+// SR-20.3). The only inline SQL for these fixtures lives here.
+// ---------------------------------------------------------------------------
+
+// v5ColumnSpec is the SR-5.1 expectation for one column the v4→v5 hop adds.
+// dflt is the PRAGMA table_info dflt_value text; "" means no default (NULL).
+type v5ColumnSpec struct {
+	table, name, typ string
+	notNull          bool
+	dflt             string
+}
+
+// v5ColumnSpecs lists the thirteen v5 columns in SR-5.1 order.
+var v5ColumnSpecs = []v5ColumnSpec{
+	{"spawns", "row_version", "INTEGER", true, "0"},
+	{"spawns", "launch_started_at", "INTEGER", false, ""},
+	{"spawns", "life_number", "INTEGER", true, "0"},
+	{"spawns", "no_pre_trust", "INTEGER", true, "0"},
+	{"spawns", "launch_token", "TEXT", false, ""},
+	{"spawns", "tmux_socket", "TEXT", false, ""},
+	{"spawns", "tmux_server_pid", "INTEGER", false, ""},
+	{"spawns", "tmux_server_started", "INTEGER", false, ""},
+	{"spawns", "tmux_server_starttime", "TEXT", false, ""},
+	{"spawns", "pane_id", "TEXT", false, ""},
+	{"spawns", "pane_pid", "INTEGER", false, ""},
+	{"spawns", "pane_starttime", "TEXT", false, ""},
+	{"session_history", "life_number", "INTEGER", true, "0"},
+}
+
+// key returns "table.column", the name tests use to pick a v5 column.
+func (c v5ColumnSpec) key() string { return c.table + "." + c.name }
+
+// migratedValue is the quote() literal an existing row gets for this column
+// from ADD COLUMN: the default, or NULL when the column has none.
+func (c v5ColumnSpec) migratedValue() string {
+	if c.dflt == "" {
+		return "NULL"
+	}
+	return c.dflt
+}
+
+// tableColumn is one full PRAGMA table_info row (column order is slice order).
+type tableColumn struct {
+	name, typ string
+	notNull   int
+	dflt      sql.NullString
+	pk        int
+}
+
+// readTableShape returns a table's full PRAGMA table_info shape in column order.
+func readTableShape(t *testing.T, db *sql.DB, table string) []tableColumn {
+	t.Helper()
+	rows, err := db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		t.Fatalf("readTableShape: PRAGMA table_info(%s): %v", table, err)
+	}
+	defer rows.Close()
+	var out []tableColumn
+	for rows.Next() {
+		var cid int
+		var c tableColumn
+		if err := rows.Scan(&cid, &c.name, &c.typ, &c.notNull, &c.dflt, &c.pk); err != nil {
+			t.Fatalf("readTableShape: scan table_info(%s): %v", table, err)
+		}
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("readTableShape: iterate table_info(%s): %v", table, err)
+	}
+	return out
+}
+
+// v4HistoryFixture describes what makeV4HistoryFixture seeded. rows and
+// history hold SQLite quote() literals ("NULL", "0", "'text'") read back
+// before migration, so NULL, 0 and the empty string stay distinct and
+// comparison is exact.
+type v4HistoryFixture struct {
+	dir, path string
+
+	rotated      string // archived prior session + a different current session
+	neverWritten string // ended row whose current session has no jsonl_path
+	holdsCurrent string // history already holds the row's current session id
+	interleavedA string // history interleaves in time with interleavedB
+	interleavedB string
+	pending      string // pending row, no session yet
+
+	ids         []string                       // every seeded instance id
+	spawnsCols  []string                       // the v4 spawns column names
+	historyCols []string                       // the v4 session_history column names
+	rows        map[string]map[string]string   // id → v4 spawns column → literal
+	history     map[string][]map[string]string // id → entries (read order) → column → literal
+}
+
+// makeV4HistoryFixture builds a genuine v4 WAL store under dir holding the
+// SR-20.3 scenario set, closes it, and returns what it seeded.
+func makeV4HistoryFixture(t *testing.T, dir string) v4HistoryFixture {
+	t.Helper()
+	f := v4HistoryFixture{
+		dir:          dir,
+		path:         makeVersionedDB(t, dir, 4),
+		rotated:      "v4-rotated",
+		neverWritten: "v4-never-written",
+		holdsCurrent: "v4-holds-current",
+		interleavedA: "v4-interleaved-a",
+		interleavedB: "v4-interleaved-b",
+		pending:      "v4-pending",
+	}
+	f.ids = []string{f.rotated, f.neverWritten, f.holdsCurrent, f.interleavedA, f.interleavedB, f.pending}
+
+	// Columns: id, parent, state, cwd, tmux name, args, relay, jsonl, session,
+	// labels, started, last seen, ended, pid, proc start, liveness since/note, extra env.
+	spawnRows := [][]any{
+		{f.rotated, nil, "waiting", "/work/rotated", "ad-rotated", `["--model","opus"]`, "off",
+			"/t/rot-current.jsonl", "sess-rot-current", `{"team":"red"}`,
+			"2026-01-01 10:00:00", "2026-01-01 10:05:00", nil,
+			4242, "98765", nil, nil, `{"K":"V"}`},
+		{f.neverWritten, nil, "ended", "/work/never", "ad-never", "[]", "off",
+			nil, "sess-nw-current", "{}",
+			"2026-01-02 10:00:00", "2026-01-02 11:00:00", "2026-01-02 11:00:00",
+			nil, nil, nil, nil, "{}"},
+		{f.holdsCurrent, nil, "working", "/work/holds", "ad-holds", "[]", "off",
+			"/t/hc-current.jsonl", "sess-hc-current", "{}",
+			"2026-01-03 10:00:00", "2026-01-03 10:01:00", nil,
+			5151, "11111", nil, nil, "{}"},
+		{f.interleavedA, nil, "waiting", "/work/a", "ad-a", "[]", "off",
+			"/t/a-current.jsonl", "sess-a-current", "{}",
+			"2026-01-04 09:00:00", "2026-01-04 09:30:00", nil,
+			nil, nil, nil, nil, "{}"},
+		{f.interleavedB, f.interleavedA, "ask_user", "/work/b", "ad-b", "[]", "off",
+			"/t/b-current.jsonl", "sess-b-current", `{"role":"child"}`,
+			"2026-01-04 09:00:30", "2026-01-04 09:31:00", nil,
+			6262, "22222", "2026-01-04 09:31:00", "pid gone", "{}"},
+		{f.pending, nil, "pending", "/work/pending", "ad-pending", "[]", "off",
+			nil, nil, "{}",
+			"2026-01-05 12:00:00", "2026-01-05 12:00:00", nil,
+			nil, nil, nil, nil, "{}"},
+	}
+	// Columns: instance id, session id, jsonl path, recorded_at.
+	historyRows := [][]any{
+		{f.rotated, "sess-rot-prior", "/t/rot-prior.jsonl", "2026-01-01 10:02:00"},
+		{f.neverWritten, "sess-nw-prior", "/t/nw-prior.jsonl", "2026-01-02 10:30:00"},
+		{f.holdsCurrent, "sess-hc-current", "/t/hc-current.jsonl", "2026-01-03 10:00:30"},
+		{f.interleavedA, "sess-a-1", "/t/a-1.jsonl", "2026-01-04 09:10:00"},
+		{f.interleavedB, "sess-b-1", "/t/b-1.jsonl", "2026-01-04 09:11:00"},
+		{f.interleavedA, "sess-a-2", nil, "2026-01-04 09:12:00"},
+		{f.interleavedB, "sess-b-2", "/t/b-2.jsonl", "2026-01-04 09:13:00"},
+	}
+
+	db, err := sql.Open("sqlite", f.path)
+	if err != nil {
+		t.Fatalf("makeV4HistoryFixture: raw open: %v", err)
+	}
+	for _, r := range spawnRows {
+		if _, err := db.Exec(`INSERT INTO spawns (claude_instance_id, parent_id, state, cwd,
+			tmux_session_name, claude_args, relay_mode, jsonl_path, claude_session_id, labels,
+			started_at, last_seen_at, ended_at, pid, proc_starttime,
+			liveness_unverified_since, liveness_note, extra_env)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r...); err != nil {
+			t.Fatalf("makeV4HistoryFixture: insert spawn %v: %v", r[0], err)
+		}
+	}
+	for _, h := range historyRows {
+		if _, err := db.Exec(`INSERT INTO session_history
+			(claude_instance_id, claude_session_id, jsonl_path, recorded_at) VALUES (?,?,?,?)`, h...); err != nil {
+			t.Fatalf("makeV4HistoryFixture: insert history %v: %v", h, err)
+		}
+	}
+	f.spawnsCols = tableColumnNames(t, db, "spawns")
+	f.historyCols = tableColumnNames(t, db, "session_history")
+	if err := db.Close(); err != nil {
+		t.Fatalf("makeV4HistoryFixture: close raw db: %v", err)
+	}
+
+	f.rows = make(map[string]map[string]string, len(f.ids))
+	f.history = make(map[string][]map[string]string, len(f.ids))
+	for _, id := range f.ids {
+		f.rows[id] = readRawSpawn(t, f.path, id, f.spawnsCols)
+		f.history[id] = readRawHistory(t, f.path, id, f.historyCols)
+	}
+	return f
+}
+
+// tableColumnNames returns a table's column names in order.
+func tableColumnNames(t *testing.T, db *sql.DB, table string) []string {
+	t.Helper()
+	var names []string
+	for _, c := range readTableShape(t, db, table) {
+		names = append(names, c.name)
+	}
+	return names
+}
+
+// readQuotedRows returns quote() literals of cols for every row of table
+// belonging to instance id, in orderBy order. cols come from table_info, never
+// from input.
+func readQuotedRows(t *testing.T, path, table, id, orderBy string, cols []string) []map[string]string {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("readQuotedRows: raw open %q: %v", path, err)
+	}
+	defer func() { _ = db.Close() }()
+	sel := make([]string, len(cols))
+	for i, c := range cols {
+		sel[i] = "quote(" + c + ")"
+	}
+	q := "SELECT " + strings.Join(sel, ", ") + " FROM " + table + " WHERE claude_instance_id = ?"
+	if orderBy != "" {
+		q += " ORDER BY " + orderBy
+	}
+	rows, err := db.Query(q, id)
+	if err != nil {
+		t.Fatalf("readQuotedRows: query %s for %q: %v", table, id, err)
+	}
+	defer rows.Close()
+	var out []map[string]string
+	for rows.Next() {
+		vals := make([]string, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			t.Fatalf("readQuotedRows: scan %s for %q: %v", table, id, err)
+		}
+		row := make(map[string]string, len(cols))
+		for i, c := range cols {
+			row[c] = vals[i]
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("readQuotedRows: iterate %s for %q: %v", table, id, err)
+	}
+	return out
+}
+
+// readRawSpawn returns quote() literals of cols for one spawns row; it fails
+// the test if the row is absent.
+func readRawSpawn(t *testing.T, path, id string, cols []string) map[string]string {
+	t.Helper()
+	rows := readQuotedRows(t, path, "spawns", id, "", cols)
+	if len(rows) != 1 {
+		t.Fatalf("readRawSpawn: %d spawns rows for %q; want 1", len(rows), id)
+	}
+	return rows[0]
+}
+
+// readRawHistory returns quote() literals of cols for every session_history
+// entry of id, in ListSessionHistory's order (newest recorded first).
+func readRawHistory(t *testing.T, path, id string, cols []string) []map[string]string {
+	t.Helper()
+	return readQuotedRows(t, path, "session_history", id, "recorded_at DESC, history_id DESC", cols)
+}
+
+// v5ColumnValues holds one id's v5 values as quote() literals: the twelve
+// spawns columns by name, and the life_number of each history entry in
+// readRawHistory order.
+type v5ColumnValues struct {
+	spawns      map[string]string
+	historyLife []string
+}
+
+// readV5Columns reads the thirteen v5 column values for instance id.
+func readV5Columns(t *testing.T, path, id string) v5ColumnValues {
+	t.Helper()
+	var cols []string
+	for _, c := range v5ColumnSpecs {
+		if c.table == "spawns" {
+			cols = append(cols, c.name)
+		}
+	}
+	out := v5ColumnValues{spawns: readRawSpawn(t, path, id, cols)}
+	for _, h := range readRawHistory(t, path, id, []string{"life_number"}) {
+		out.historyLife = append(out.historyLife, h["life_number"])
+	}
+	return out
+}
+
+// preAddV5Columns adds the named v5 columns ("table.column") to the DB at path
+// with their SR-5.1 definitions, simulating a v4→v5 hop that stopped part-way.
+func preAddV5Columns(t *testing.T, path string, keys ...string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("preAddV5Columns: raw open %q: %v", path, err)
+	}
+	defer func() { _ = db.Close() }()
+	for _, k := range keys {
+		spec, ok := v5ColumnSpecByKey(k)
+		if !ok {
+			t.Fatalf("preAddV5Columns: unknown v5 column %q", k)
+		}
+		ddl := "ALTER TABLE " + spec.table + " ADD COLUMN " + spec.name + " " + spec.typ
+		if spec.notNull {
+			ddl += " NOT NULL"
+		}
+		if spec.dflt != "" {
+			ddl += " DEFAULT " + spec.dflt
+		}
+		if _, err := db.Exec(ddl); err != nil {
+			t.Fatalf("preAddV5Columns: add %s: %v", k, err)
+		}
+	}
+}
+
+// v5ColumnSpecByKey looks up a v5 column spec by "table.column".
+func v5ColumnSpecByKey(key string) (v5ColumnSpec, bool) {
+	for _, c := range v5ColumnSpecs {
+		if c.key() == key {
+			return c, true
+		}
+	}
+	return v5ColumnSpec{}, false
+}
+
+// breakV5SessionHistoryHop makes session_history a view over the renamed v4
+// table, so the hop fails adding session_history.life_number after it has
+// added every spawns column. History entries stay readable through the view.
+func breakV5SessionHistoryHop(t *testing.T, path string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("breakV5SessionHistoryHop: raw open %q: %v", path, err)
+	}
+	defer func() { _ = db.Close() }()
+	for _, stmt := range []string{
+		"ALTER TABLE session_history RENAME TO session_history_v4",
+		"CREATE VIEW session_history AS SELECT * FROM session_history_v4",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("breakV5SessionHistoryHop: %s: %v", stmt, err)
 		}
 	}
 }

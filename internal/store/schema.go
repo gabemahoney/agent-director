@@ -6,7 +6,7 @@ import (
 	"fmt"
 )
 
-// schemaDDL is the canonical schema v3 DDL (v-current: fresh DBs are stamped
+// schemaDDL is the canonical schema v5 DDL (v-current: fresh DBs are stamped
 // directly at schemaVersion and never run a migration step). IF NOT EXISTS is
 // defensive — ensureSchema only runs this inside a fresh-DB branch, but
 // belt-and-suspenders avoids races on a re-open against a torn-down test.
@@ -24,6 +24,17 @@ import (
 // session's transcript — the prior pair is archived before the spawns row is
 // overwritten with the new session id. session_history is the queryable link
 // from a live row back to its earlier sessions (AC6/AC8). See migrateV3toV4.
+//
+// v5 changes vs v4 (b.fmk, SR-5.1/SR-5.4): twelve new spawns columns, appended
+// after the v4 columns in this order — row_version (INTEGER NOT NULL DEFAULT
+// 0), launch_started_at (INTEGER), life_number (INTEGER NOT NULL DEFAULT 0),
+// no_pre_trust (INTEGER NOT NULL DEFAULT 0), and the launch identity
+// launch_token (TEXT), tmux_socket (TEXT), tmux_server_pid (INTEGER),
+// tmux_server_started (INTEGER), tmux_server_starttime (TEXT), pane_id (TEXT),
+// pane_pid (INTEGER), pane_starttime (TEXT) — and one new session_history
+// column, life_number (INTEGER NOT NULL DEFAULT 0), appended last. The column
+// order and constraint text match migrateV4toV5 exactly, so a fresh store and
+// a migrated store have identical column lists on both tables.
 const schemaDDL = `
 CREATE TABLE IF NOT EXISTS spawns (
     claude_instance_id         TEXT PRIMARY KEY,
@@ -43,7 +54,19 @@ CREATE TABLE IF NOT EXISTS spawns (
     proc_starttime             TEXT,
     liveness_unverified_since  TEXT,
     liveness_note              TEXT,
-    extra_env                  TEXT NOT NULL DEFAULT '{}'
+    extra_env                  TEXT NOT NULL DEFAULT '{}',
+    row_version                INTEGER NOT NULL DEFAULT 0,
+    launch_started_at          INTEGER,
+    life_number                INTEGER NOT NULL DEFAULT 0,
+    no_pre_trust               INTEGER NOT NULL DEFAULT 0,
+    launch_token               TEXT,
+    tmux_socket                TEXT,
+    tmux_server_pid            INTEGER,
+    tmux_server_started        INTEGER,
+    tmux_server_starttime      TEXT,
+    pane_id                    TEXT,
+    pane_pid                   INTEGER,
+    pane_starttime             TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_spawns_state     ON spawns(state);
 CREATE INDEX IF NOT EXISTS idx_spawns_last_seen ON spawns(last_seen_at);
@@ -72,6 +95,7 @@ CREATE TABLE IF NOT EXISTS session_history (
     claude_session_id   TEXT NOT NULL,
     jsonl_path          TEXT,
     recorded_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    life_number         INTEGER NOT NULL DEFAULT 0,
     UNIQUE(claude_instance_id, claude_session_id)
 );
 CREATE INDEX IF NOT EXISTS idx_session_history_instance ON session_history(claude_instance_id);
@@ -99,6 +123,7 @@ var migrationSteps = []migrationStep{
 	{from: 1, apply: migrateV1toV2},
 	{from: 2, apply: migrateV2toV3},
 	{from: 3, apply: migrateV3toV4},
+	{from: 4, apply: migrateV4toV5},
 }
 
 // ensureSchema enforces the schema-version contract on an opened *sql.DB.
@@ -198,7 +223,8 @@ func buildMigrationRefusal(current int) error {
 		ErrSchemaMigrationRequired, current, schemaVersion)
 }
 
-// createSchema runs the v-current (v3) DDL and stamps user_version in a single tx.
+// createSchema runs the v-current (schemaVersion) DDL and stamps user_version
+// in a single tx.
 // PRAGMA user_version cannot take a bound parameter, so the version is
 // interpolated from a trusted package constant — never user input.
 func createSchema(db *sql.DB) error {
@@ -349,6 +375,76 @@ CREATE INDEX IF NOT EXISTS idx_session_history_instance ON session_history(claud
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("store: commit v3→v4 migration tx: %w", err)
+	}
+	return nil
+}
+
+// migrateV4toV5 upgrades a v4 database to v5 inside a single transaction
+// (b.fmk, SR-5.1/SR-5.4). It adds the twelve spawns columns first, then
+// session_history.life_number, in SR-5.1's final-list order — the same order
+// and constraint text schemaDDL uses, so fresh and migrated stores converge —
+// and stamps user_version = 5 as the last statement.
+//
+// There is no phase 3 and no backfill (PO 2026-09-26 UPG): ADD COLUMN gives
+// every existing row and history entry the column's ordinary default — row
+// version 0, life 0, no_pre_trust 0 (pre-trust allowed), and NULL for the
+// launch start, launch token, socket and server/pane identity. No existing
+// value is rewritten.
+//
+// SQLite has no ADD COLUMN IF NOT EXISTS (migration-guide §2), so each ALTER
+// is guarded by a pragma_table_info probe of its own table and skipped when
+// the column is already present, making the hop idempotent on re-entry. Any
+// probe or ALTER failure rolls the whole hop back, leaving user_version=4 and
+// neither table with any of the new columns.
+func migrateV4toV5(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: begin v4→v5 migration tx: %w", err)
+	}
+	v5Columns := []struct{ table, name, ddl string }{
+		{"spawns", "row_version", "ALTER TABLE spawns ADD COLUMN row_version INTEGER NOT NULL DEFAULT 0"},
+		{"spawns", "launch_started_at", "ALTER TABLE spawns ADD COLUMN launch_started_at INTEGER"},
+		{"spawns", "life_number", "ALTER TABLE spawns ADD COLUMN life_number INTEGER NOT NULL DEFAULT 0"},
+		{"spawns", "no_pre_trust", "ALTER TABLE spawns ADD COLUMN no_pre_trust INTEGER NOT NULL DEFAULT 0"},
+		{"spawns", "launch_token", "ALTER TABLE spawns ADD COLUMN launch_token TEXT"},
+		{"spawns", "tmux_socket", "ALTER TABLE spawns ADD COLUMN tmux_socket TEXT"},
+		{"spawns", "tmux_server_pid", "ALTER TABLE spawns ADD COLUMN tmux_server_pid INTEGER"},
+		{"spawns", "tmux_server_started", "ALTER TABLE spawns ADD COLUMN tmux_server_started INTEGER"},
+		{"spawns", "tmux_server_starttime", "ALTER TABLE spawns ADD COLUMN tmux_server_starttime TEXT"},
+		{"spawns", "pane_id", "ALTER TABLE spawns ADD COLUMN pane_id TEXT"},
+		{"spawns", "pane_pid", "ALTER TABLE spawns ADD COLUMN pane_pid INTEGER"},
+		{"spawns", "pane_starttime", "ALTER TABLE spawns ADD COLUMN pane_starttime TEXT"},
+		{"session_history", "life_number", "ALTER TABLE session_history ADD COLUMN life_number INTEGER NOT NULL DEFAULT 0"},
+	}
+	for _, col := range v5Columns {
+		// The table name comes from the trusted literal list above, never
+		// from input; pragma_table_info takes it as a bound argument.
+		var exists int
+		err := tx.QueryRow(
+			"SELECT 1 FROM pragma_table_info(?) WHERE name = ?",
+			col.table, col.name,
+		).Scan(&exists)
+		switch {
+		case err == nil:
+			// Column already present — skip to stay idempotent.
+			continue
+		case errors.Is(err, sql.ErrNoRows):
+			// Column absent — add it below.
+		default:
+			_ = tx.Rollback()
+			return fmt.Errorf("store: v4→v5 probe %s.%s: %w", col.table, col.name, err)
+		}
+		if _, err := tx.Exec(col.ddl); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("store: v4→v5 add %s.%s: %w", col.table, col.name, err)
+		}
+	}
+	if _, err := tx.Exec("PRAGMA user_version = 5"); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("store: v4→v5 stamp user_version: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit v4→v5 migration tx: %w", err)
 	}
 	return nil
 }

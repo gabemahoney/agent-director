@@ -185,7 +185,7 @@ func TestChainMechanics_SyntheticMultiStep(t *testing.T) {
 	// Register schemaVersion synthetic steps (0→1, 1→2, …, (schemaVersion-1)→
 	// schemaVersion) so a single runMigrationChain(db, 0) loops schemaVersion
 	// times through the real engine. Derived from the const so this test never
-	// needs a hand-edit when schemaVersion is bumped (b.v2c: it is 4 now).
+	// needs a hand-edit when schemaVersion is bumped.
 	migrationSteps = nil
 	wantCalls := make([]int, 0, schemaVersion)
 	for from := 0; from < schemaVersion; from++ {

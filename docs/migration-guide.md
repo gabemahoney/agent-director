@@ -14,7 +14,7 @@ learned the hard way against the production database.
 All schema logic lives in `internal/store/schema.go`, with the version
 constant and typed errors in `internal/store/store.go`.
 
-**The version contract.** `schemaVersion` (`store.go`, currently `4`) is the
+**The version contract.** `schemaVersion` (`store.go`, currently `5`) is the
 version this binary writes and reads. Every opened DB carries its own version
 in SQLite's `PRAGMA user_version` (0 on a brand-new file). `ensureSchema(db,
 dbPath)` (`schema.go`) is called from `openDB` on every `Open`/`OpenOrInit`
@@ -35,20 +35,21 @@ sentinel next to the DB file; otherwise the open is refused with the typed
 (zero DB writes). See §1a for the sentinel gate and §1b for the refusal.
 
 The newer-than-binary arm is the guard rail: a DB from a *newer* binary (say
-`user_version=3` opened by a v2 binary) returns `ErrSchemaMismatch` (`store.go`)
+`user_version=6` opened by a v5 binary) returns `ErrSchemaMismatch` (`store.go`)
 rather than touching the file. Callers detect it with
 `errors.Is(err, ErrSchemaMismatch)`.
 
 **A registry of steps, not a switch.** Version transitions are no longer
 `case` arms. Each single-version upgrade is a `migrationStep{from: N, apply:
 migrateV<N>toV<N+1>}` entry in the ordered `migrationSteps` registry
-(`schema.go`); today that registry holds three entries, `{from: 1, apply:
-migrateV1toV2}`, `{from: 2, apply: migrateV2toV3}`, and `{from: 3, apply:
-migrateV3toV4}`. `migrateV1toV2`, `migrateV2toV3`, and `migrateV3toV4`
-(`schema.go`) are the reference implementations of an `apply` func. To add the
-next version (v5) you write `migrateV4toV5` and append `{from: 4, apply:
-migrateV4toV5}` to `migrationSteps` — see §1a's "Adding a step" for the full
-checklist.
+(`schema.go`); today that registry holds four entries, `{from: 1, apply:
+migrateV1toV2}`, `{from: 2, apply: migrateV2toV3}`, `{from: 3, apply:
+migrateV3toV4}`, and `{from: 4, apply: migrateV4toV5}`. `migrateV1toV2`,
+`migrateV2toV3`, `migrateV3toV4`, and `migrateV4toV5` (`schema.go`) are the
+reference implementations of an `apply` func; `migrateV4toV5` is the most
+recent. To add the next version (v6) you write `migrateV5toV6` and append
+`{from: 5, apply: migrateV5toV6}` to `migrationSteps` — see §1a's "Adding a
+step" for the full checklist.
 
 **One transaction per step, stamp included.** Every `apply` func opens a single
 `db.Begin()` transaction and does *all* of its DDL/DML **and** the
@@ -68,8 +69,8 @@ at 0 and the next open retries.
 `runMigrationChain(db, from)` (`schema.go`) loops while `version <
 schemaVersion`, looking up the registered step for the current version
 (`migrationStepFrom`), applying it, and incrementing. It upgrades a DB across
-*multiple* versions in a single open — a v1 DB opened by a future v4 binary runs
-v1→v2→v3→v4 in one pass, each step its own transaction. There is no
+*multiple* versions in a single open — a v1 DB opened by the current v5 binary
+runs v1→v2→v3→v4→v5 in one pass, each step its own transaction. There is no
 return-after-one-hop: the loop keeps going until the DB reaches `schemaVersion`.
 If the loop finds itself below `schemaVersion` with no registered step for the
 current version, that is a gap in the registry — it fails loudly with
@@ -136,20 +137,20 @@ never touching `state.db`) — there is no logger plumbed into the store:
   **succeeds** (the migration is already done and correct; the stale sentinel is
   inert per above).
 
-**Adding a step.** To add the next version (v5, generalizing to any vN→vN+1);
-`migrateV3toV4` (b.v2c) is the most recent worked example:
+**Adding a step.** To add the next version (v6, generalizing to any vN→vN+1);
+`migrateV4toV5` (b.fmk) is the most recent worked example:
 
-1. Bump `schemaVersion` to `5` (`store.go`).
-2. Evolve `schemaDDL` so a fresh DB is created directly at v5 (the two-places
+1. Bump `schemaVersion` to `6` (`store.go`).
+2. Evolve `schemaDDL` so a fresh DB is created directly at v6 (the two-places
    rule — §1, §4).
-3. Write `migrateV4toV5(db)` following the one-transaction/validate-first
+3. Write `migrateV5toV6(db)` following the one-transaction/validate-first
    pattern (§2).
-4. Append `{from: 4, apply: migrateV4toV5}` to `migrationSteps` (`schema.go`).
+4. Append `{from: 5, apply: migrateV5toV6}` to `migrationSteps` (`schema.go`).
 
 That is all — do **not** add any return-after-one-hop logic. The chain engine
 walks the registry from the DB's version up to `schemaVersion` automatically, so
-appending the step is what makes both a v4→v5 upgrade and a straight-through
-v1→v5 upgrade work.
+appending the step is what makes both a v5→v6 upgrade and a straight-through
+v1→v6 upgrade work.
 
 ## 1b. Refusal semantics — `ErrSchemaMigrationRequired`
 
@@ -179,15 +180,15 @@ tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", schemaVersion))
 See `createSchema` in `schema.go`. This is safe *only* because the value comes
 from the trusted package constant `schemaVersion`, never from user input. Never
 `fmt.Sprintf` anything caller-supplied into SQL. (The test helper
-`setUserVersion` in `schema_mismatch_test.go` interpolates the same way, for
-the same reason.)
+`stampUserVersion` in `migration_fixtures_test.go` interpolates the same way,
+for the same reason.)
 
 **The two-places rule.** A fresh database **never replays the migration
 hops** — `createSchema` runs the canonical `schemaDDL` constant (`schema.go`),
 which must *always* describe the latest schema directly. So every schema change
 lands in **two** places:
 
-1. The new migration hop (e.g. `migrateV3toV4`) — upgrades an existing older DB.
+1. The new migration hop (e.g. `migrateV4toV5`) — upgrades an existing older DB.
 2. The fresh-DB DDL (`schemaDDL` + `schemaVersion`) — produces the latest
    schema for a new DB in one shot.
 
@@ -215,7 +216,14 @@ a full rebuild is a legitimate hop when rows are not being preserved.
 nullable) and `extra_env TEXT NOT NULL DEFAULT '{}'` — an additive hop that
 preserves every existing row. `migrateV3toV4` (b.v2c) does a single `CREATE
 TABLE IF NOT EXISTS session_history` plus its index — a new-table hop that
-touches no existing row.)
+touches no existing row. `migrateV4toV5` (b.fmk) is an additive `ADD COLUMN`
+hop across two tables: twelve `ALTER TABLE spawns ADD COLUMN` (`row_version`,
+`launch_started_at`, `life_number`, `no_pre_trust`, `launch_token`,
+`tmux_socket`, `tmux_server_pid`, `tmux_server_started`,
+`tmux_server_starttime`, `pane_id`, `pane_pid`, `pane_starttime`) and one
+`ALTER TABLE session_history ADD COLUMN life_number`. Each `ADD COLUMN` is
+guarded by its own table's `pragma_table_info` probe and skipped when the
+column is already there, so the hop is safe to re-enter.)
 
 **Phase 3 — data backfill/transform.** `UPDATE`/`INSERT … SELECT` to populate
 new columns or reshape rows, if the migration keeps data. Not every hop needs
@@ -226,7 +234,14 @@ from the column defaults (NULL for the four nullable columns, `'{}'` for
 `extra_env`), so there is nothing to backfill. `migrateV3toV4` likewise skips
 phase 3: `session_history` starts empty and is populated lazily on the next
 session rotation, so pre-v4 rows carry no archived history and there is nothing
-to backfill.
+to backfill. `migrateV4toV5` has no phase 3 either: its `ADD COLUMN`s give every
+existing row and history entry the column's ordinary default, the value a new
+row or entry gets — row version 0, life 0 (on `spawns` and on every
+`session_history` entry), `no_pre_trust` 0 (pre-trust allowed), no launch start
+(`launch_started_at` NULL, a `pending` row included), and NULL launch token,
+socket and server/pane identity. There are no special cases: no row or entry is
+treated differently for its state, its history or its origin, and no existing
+value is rewritten.
 
 **Phase 4 — stamp `user_version`.** The **last** statement in the transaction,
 via the `fmt.Sprintf` form from §1. Stamping last guarantees the version only
@@ -257,6 +272,49 @@ double-run test in §3 pass. The SQLite-specific idioms:
 
 A migration is not done until a test proves the upgrade is correct **and
 idempotent**. The recipe (see `schema_test.go` for the working v1→v2 version):
+
+**Current template: `internal/store/schema_v5_migration_test.go`.** For a new
+hop, start from the v4→v5 test rather than the v1→v2 one. What it covers, step
+by step against the recipe below:
+
+- **Step 1:** `makeV4HistoryFixture` (see below) builds the v4 fixture.
+- **Step 2:** `TestV5Migration_AuthorizedFromV4` opens the fixture with a
+  `{4→5}` sentinel (`migrateV4Fixture`) and asserts the version, the thirteen
+  new columns (`assertV5Columns`) and the consumed sentinel.
+  `TestV5Migration_RefusedWithoutSentinel` covers the **missing**-sentinel
+  refusal only (`ErrSchemaMigrationRequired`, DB byte-identical via
+  `snapshotDBBytes`/`assertDBBytesUnchanged`, still at v4). Your hop's test
+  should add the malformed and mismatched cases (`writeSentinelMalformed`,
+  `writeSentinelWrongFrom`, `writeSentinelWrongTo`) with `assertSentinelPresent`.
+- **Step 3:** `TestV5Migration_IdempotentReentry` calls `migrateV4toV5`
+  directly on an empty v4 DB — twice in a row, and over DBs where some or all
+  of the new columns were already added (`preAddV5Columns`). It does **not**
+  re-open a migrated store through `OpenOrInit`; add that double-open for your
+  hop.
+- **Step 4:** `TestV5FreshCreate_And_MigratedConverge` compares a fresh
+  `OpenOrInit` store against a v1 store taken through the whole chain
+  (`makeV1DB` plus a `{1→5}` sentinel). It compares `PRAGMA table_info`
+  (`readTableShape`) for `spawns` and `session_history` only — not indexes and
+  not other tables. Your hop's test should also compare `sqlite_master` for
+  the tables and indexes your hop touches.
+- **Rollback:** `TestV5Migration_RollbackOnInjectedFailure` breaks the hop
+  after the `spawns` columns land (`breakV5SessionHistoryHop`) and asserts v4,
+  no new columns, unchanged rows and a kept sentinel.
+- **Data:** `TestV5Migration_HistoryFixtureAtLifeZero` and
+  `TestV5Migration_PendingRowHasNoLaunchStart` assert the migrated values
+  (`readV5Columns`, `readRawSpawn`, `readRawHistory`, `assertV5Defaults`).
+
+The v4 fixture is `makeV4HistoryFixture` in
+`internal/store/migration_fixtures_test.go`. It builds a genuine v4 store on
+the real migration chain (`makeVersionedDB`) and seeds it with session history
+— a rotation entry, an `ended` row whose current session was never written, a
+row whose history already holds its current session id, and two ids whose
+history entries interleave in time — plus a `pending` row. It returns a
+`v4HistoryFixture` holding the seeded ids and the pre-migration row and
+history values. With that data in place, "every row and entry comes out at
+life 0" and "the `pending` row has no launch start" are real assertions, not
+vacuous ones. Seed your own fixture the same way: the inline SQL that builds
+it lives in `migration_fixtures_test.go`, never in the test file itself.
 
 1. **Build a fixture DB at version N.** Commit a small `testdata/schema_v<N>.sql`
    (v1's lives at `internal/store/testdata/schema_v1.sql`; it ends with
@@ -301,10 +359,10 @@ see §5.
 ## 4. `createSchema` must always be the latest schema
 
 Restating the two-places rule because it is the most common way a migration
-goes wrong: **fresh databases never replay hops.** When you add v4, update
-`schemaDDL` and `schemaVersion` so a brand-new DB is created directly at v4 by
-`createSchema`, *and* write `migrateV3toV4` so an existing v3 DB is upgraded to
-the identical shape. The §3.4 normalized-`sqlite_master` comparison is the
+goes wrong: **fresh databases never replay hops.** When you add v6, update
+`schemaDDL` and `schemaVersion` so a brand-new DB is created directly at v6 by
+`createSchema`, *and* write `migrateV5toV6` so an existing v5 DB is upgraded to
+the identical shape (as v5 did with `schemaDDL` and `migrateV4toV5`). The §3.4 normalized-`sqlite_master` comparison is the
 guard that both paths land in the same place. If you only touch the hop, fresh
 installs are stuck on the old schema; if you only touch `schemaDDL`, upgrades
 never happen.
@@ -376,12 +434,100 @@ recreated, not just re-versioned). Confirm with `PRAGMA user_version;` and a
 schema inspection before letting the old binary open the file. This is a manual
 recovery step, not something the store does automatically.
 
+#### v5 → v4 (reverses `migrateV4toV5`)
+
+Use this to roll a migrated store back so a v4 binary (the release before
+schema v5) can open it. Order of operations:
+
+1. Stop every agent and every long-running agent-director process on the host
+   (each agent's `agent-director serve` runs inside its Claude session, so the
+   session must stop too). No process may hold the store open.
+2. Copy `state.db` together with its `-wal` and `-shm` files before you change
+   anything, so you can start over if a step fails.
+3. Run `sqlite3 --version`. The recipe needs SQLite 3.35.5 or later: 3.35.0
+   added `ALTER TABLE … DROP COLUMN`, and 3.35.5 fixed `DROP COLUMN` defects
+   that could corrupt the database file. If the version is older, stop here
+   and install a newer `sqlite3` first.
+4. Run the recipe below against the store, in bail mode:
+   `sqlite3 -bail ~/.agent-director/state.db < recipe.sql`. The recipe also
+   starts with `.bail on`, so it stops at the first error however it is run.
+5. Confirm the result (see below).
+6. Put the previous binary back. Do this only after the store is v4: the old
+   release's `install.sh` opens the store, and on a v5 store it fails with
+   `ErrSchemaMismatch`.
+7. Start the agents again on the old binary.
+
+```sql
+.bail on
+-- against the v5 state.db, e.g. ~/.agent-director/state.db
+BEGIN;
+ALTER TABLE spawns DROP COLUMN row_version;
+ALTER TABLE spawns DROP COLUMN launch_started_at;
+ALTER TABLE spawns DROP COLUMN life_number;
+ALTER TABLE spawns DROP COLUMN no_pre_trust;
+ALTER TABLE spawns DROP COLUMN launch_token;
+ALTER TABLE spawns DROP COLUMN tmux_socket;
+ALTER TABLE spawns DROP COLUMN tmux_server_pid;
+ALTER TABLE spawns DROP COLUMN tmux_server_started;
+ALTER TABLE spawns DROP COLUMN tmux_server_starttime;
+ALTER TABLE spawns DROP COLUMN pane_id;
+ALTER TABLE spawns DROP COLUMN pane_pid;
+ALTER TABLE spawns DROP COLUMN pane_starttime;
+ALTER TABLE session_history DROP COLUMN life_number;
+PRAGMA user_version = 4;
+COMMIT;
+```
+
+That is exactly the thirteen columns `migrateV4toV5` adds: twelve on `spawns`
+and `session_history.life_number`. Drop all thirteen, so that a later
+migration back to v5 never keeps a stale token, socket or identity (SR-21.4),
+and drop no other column. `PRAGMA user_version
+= 4` is the last statement before `COMMIT`. `PRAGMA user_version;` should then print `4`, and
+`.schema spawns` and `.schema session_history` should show none of the
+thirteen columns. A v4 binary then opens the store.
+
+SQLite refuses `DROP COLUMN` on a column that is a PRIMARY KEY, has a UNIQUE
+constraint, is indexed, appears in a CHECK or foreign-key constraint, or is
+used by a generated column, trigger or view. None of the thirteen columns is
+any of these in the v5 DDL: each is a plain column with at most `NOT NULL
+DEFAULT 0`. `session_history`'s table-level
+`UNIQUE(claude_instance_id, claude_session_id)` and its
+`idx_session_history_instance` index do not include `life_number`, and the
+three `spawns` indexes cover only `state`, `last_seen_at` and `parent_id`. So
+every statement in the recipe succeeds on a v5 store. If one fails, bail mode
+stops the CLI at that statement. `COMMIT` never runs, the open transaction is
+rolled back when the CLI exits, and the store is still v5; check the schema
+for a hand-added index or constraint before you retry. Without bail mode the
+CLI reports the error, runs the remaining statements and commits them, leaving
+a partial downgrade stamped v4. If that happens, restore the copy from step 2.
+
+The recipe deletes no row and no history entry. What is lost is the values
+in the dropped columns: row versions, launch starts and tokens, sockets,
+server and pane identities, lives and recorded pre-trust choices. A v4 binary
+reads every history entry of an id, so after the rollback it shows every
+life's conversations again, as it did before schema v5.
+
+**If the store is later migrated to v5 again**, the hop gives every row and
+entry the ordinary defaults again (no phase 3, §2):
+
+- Every history entry goes into its row's current life (life 0). A row that
+  was reused before the rollback keeps its earlier lives' history visible until
+  its next reuse.
+- Every row gets `no_pre_trust` 0, so a recorded pre-trust opt-out is lost and
+  a later `resume` of that row pre-trusts its folder. To keep an opt-out, start
+  the agent again with a spawn or reuse that turns pre-trust off.
+
+**Alternative: restore a backup.** Restoring a copy of `state.db` taken before
+the v5 install avoids both consequences, but loses every write made since the
+install, for every caller on the host. `install.sh` does not make that copy;
+the operator must take it before installing.
+
 ## References
 
 - `internal/store/schema.go` — `ensureSchema`, `runMigrationChain`,
   `migrationSteps`/`migrationStep`, `migrationStepFrom`, `createSchema`,
   `schemaDDL`, `migrateV1toV2`, `migrateV2toV3`, `migrateV3toV4`,
-  `buildMigrationRefusal`.
+  `migrateV4toV5`, `buildMigrationRefusal`.
 - `internal/store/migrate_auth.go` — the sentinel gate: `authorizeMigration`,
   `parseAuthorization`, `consumeAuthorization`, `sentinelPath`,
   `sentinelFilename` (`migrate-authorized`), the trail events.
@@ -393,5 +539,14 @@ recovery step, not something the store does automatically.
   migration tests; `openV1DB` fixture loader.
 - `internal/store/schema_mismatch_test.go` — `ErrSchemaMismatch` coverage and
   the rollback-preserves-old-state test.
+- `internal/store/schema_v5_migration_test.go` — the v4→v5 migration tests,
+  the current template for a new hop's tests (§3).
+- `internal/store/migration_fixtures_test.go` — the migration-gate fixtures
+  (`makeVersionedDB`, `makeV1DB`, `writeSentinel` and its malformed/wrong
+  variants, `assertSentinelPresent`/`assertSentinelAbsent`, `snapshotDBBytes`,
+  `assertDBBytesUnchanged`) and the v5 helpers: `makeV4HistoryFixture` (the v4
+  store seeded with session history and a `pending` row), `v5ColumnSpecs`,
+  `readTableShape`, `readRawSpawn`, `readRawHistory`, `readV5Columns`,
+  `preAddV5Columns`, `breakV5SessionHistoryHop`.
 - `internal/store/testdata/schema_v1.sql` — the version-N fixture pattern.
 - docs/engineering-guide.md §10 — sandboxed execution, the b.8dr incident.
