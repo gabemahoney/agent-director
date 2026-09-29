@@ -52,9 +52,13 @@ func (s *Store) ListSessionHistory(instanceID string) ([]SessionHistoryEntry, er
 // the given claude_session_id (guarding against a race where the session rotated
 // between the find-missing read and this write). Returns true when a row was
 // updated. Emits an ad.session.jsonl_healed trail event on a successful write.
+//
+// A write advances row_version by one and leaves launch_started_at
+// unchanged; a guard miss advances nothing (SR-5.2).
 func (s *Store) HealJsonlPath(instanceID, sessionID, jsonlPath string) (bool, error) {
 	const q = `UPDATE spawns
-	              SET jsonl_path = ?
+	              SET jsonl_path = ?,
+	                  ` + rowVersionAdvance + `
 	            WHERE claude_instance_id = ?
 	              AND claude_session_id = ?
 	              AND jsonl_path IS NULL`

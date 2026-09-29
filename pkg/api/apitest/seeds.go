@@ -51,6 +51,15 @@ import (
 // matching the Recorder's seeded session waits for the Recorder's session
 // table (Epic t1.h98.a2 Task 3).
 //
+// Seeding and row_version: InsertPending starts the row at 0, and
+// RecordSessionStartIdentity (when sessionID is non-empty) and
+// ApplyHookTransition (when state is not "pending") each add one. The
+// option/default UPDATEs above and the apitest and storefix backdating
+// fixtures add nothing. So a pending row seeded with no session id is at 0,
+// like a fresh insert, and every other seed starts above 0. Tests assert
+// version deltas (after minus before, both read through ReadSpawnColumns),
+// never absolute values, except for a row the test inserted itself.
+//
 // Returns the claude_instance_id that was written.
 func SeedSpawn(dbPath, id, state, cwd, relayMode, sessionID string, createStore bool, opts ...SpawnOption) (string, error) {
 	var (

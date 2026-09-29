@@ -115,6 +115,9 @@ type Spawn struct {
 // On PRIMARY KEY collision (claude_instance_id already exists) the error
 // chain contains the bare driver error; spawn.Launch maps this back to
 // ErrInstanceIdCollision for surface parity with the TOCTOU pre-check.
+//
+// The new row starts at row_version 0 with launch_started_at NULL (both
+// column defaults; SR-5.2).
 func (s *Store) InsertPending(sp Spawn) error {
 	argsJSON, err := encodeArgs(sp.ClaudeArgs)
 	if err != nil {
@@ -321,12 +324,23 @@ func (s *Store) LiveSpawnExists(instanceID string) (bool, error) {
 	return true, nil
 }
 
+// rowVersionAdvance is the SET fragment every statement that updates a
+// spawns row carries, so the row's version advances by exactly one in the
+// same statement as the rest of the write (SR-5.2).
+const rowVersionAdvance = `row_version = row_version + 1`
+
+// launchStartClear is the SET fragment every write that sets a row's state
+// to anything other than pending carries, in the same statement (SR-5.2).
+const launchStartClear = `launch_started_at = NULL`
+
 // ApplyHookTransition writes the lifecycle UPSERT for a state-tracking
 // hook. The transition follows SRD §5.2:
 //   - When newState is non-empty, the row's state moves to newState and
 //     last_seen_at is bumped.
 //   - When newState is `ended`, ended_at is also set to CURRENT_TIMESTAMP.
-//   - When softRefresh=true, only last_seen_at is bumped (state stays).
+//   - When softRefresh=true, state stays; last_seen_at is bumped, the
+//     liveness_unverified_since/liveness_note markers are cleared,
+//     row_version advances and launch_started_at is left unchanged.
 //
 // Multi-row retention (SR-5.1/SR-5.2): when newState is `working`, the
 // transition is guarded by OpenPermissionRequestsForSpawn. If one or more
@@ -348,25 +362,16 @@ func (s *Store) LiveSpawnExists(instanceID string) (bool, error) {
 // synthetic names (e.g. "PermissionRequestTimeout", "find_missing_orphan_closeout",
 // "kill_verb") so the trail reader can identify the source without needing
 // to inspect the call stack.
+//
+// Every branch that updates the row advances row_version by one; the ended
+// transition and every transition to a state other than pending also set
+// launch_started_at to NULL, a soft refresh leaves it unchanged, and the
+// working hold path writes nothing (SR-5.2).
 func (s *Store) ApplyHookTransition(instanceID, newState string, softRefresh bool, triggeringEventName string) error {
 	_, err := s.ApplyHookTransitionResult(instanceID, newState, softRefresh, triggeringEventName)
 	return err
 }
 
-// ApplyHookTransitionResult is the outcome-aware variant of
-// ApplyHookTransition. It returns a UpsertOutcome alongside the error so
-// callers that emit trail events can record the exact result without
-// inferring it from error presence alone (SR-A-2.1).
-//
-//   - UpsertUpdated   — the UPDATE affected ≥1 row.
-//   - UpsertNoChange  — the UPDATE affected 0 rows (no matching id), or
-//     the multi-row retention guard skipped the UPDATE.
-//   - UpsertError     — any SQL error.
-//
-// An ad.spawn.state_transition event is emitted after every successful SQL
-// write (including no-op same-state transitions per SR-A-2.2). No event is
-// emitted when no row matches instanceID (fail-open against deleted spawns).
-// A trail-emit failure does not fail the store call (SR-A-3.2).
 // selectPriorState reads the current state column for instanceID without
 // a transaction. Returns ("", false, nil) when no row exists (caller should
 // fail-open and not emit). Returns ("", false, err) on a driver error.
@@ -383,6 +388,22 @@ func (s *Store) selectPriorState(instanceID string) (string, bool, error) {
 	return state, true, nil
 }
 
+// ApplyHookTransitionResult is the outcome-aware variant of
+// ApplyHookTransition. It returns a UpsertOutcome alongside the error so
+// callers that emit trail events can record the exact result without
+// inferring it from error presence alone (SR-A-2.1).
+//
+//   - UpsertUpdated   — the UPDATE affected ≥1 row.
+//   - UpsertNoChange  — the UPDATE affected 0 rows (no matching id), or
+//     the multi-row retention guard skipped the UPDATE.
+//   - UpsertError     — any SQL error.
+//
+// An ad.spawn.state_transition event is emitted after every successful SQL
+// write (including no-op same-state transitions per SR-A-2.2). No event is
+// emitted when no row matches instanceID (fail-open against deleted spawns).
+// A trail-emit failure does not fail the store call (SR-A-3.2).
+//
+// row_version and launch_started_at follow ApplyHookTransition (SR-5.2).
 func (s *Store) ApplyHookTransitionResult(instanceID, newState string, softRefresh bool, triggeringEventName string) (UpsertOutcome, error) {
 	if softRefresh {
 		// Capture priorState before the UPDATE. If no row exists, fail-open with
@@ -398,7 +419,8 @@ func (s *Store) ApplyHookTransitionResult(instanceID, newState string, softRefre
 			return UpsertNoChange, nil
 		}
 		res, err := s.db.Exec(`UPDATE spawns SET last_seen_at = CURRENT_TIMESTAMP,
-		                  liveness_unverified_since = NULL, liveness_note = NULL
+		                  liveness_unverified_since = NULL, liveness_note = NULL,
+		                  `+rowVersionAdvance+`
 		                WHERE claude_instance_id = ?`, instanceID)
 		if err != nil {
 			return UpsertError, fmt.Errorf("store: soft refresh: %w", err)
@@ -432,7 +454,8 @@ func (s *Store) ApplyHookTransitionResult(instanceID, newState string, softRefre
 		res, err := s.db.Exec(`UPDATE spawns
                       SET state = ?, last_seen_at = CURRENT_TIMESTAMP,
                           ended_at = CURRENT_TIMESTAMP,
-                          liveness_unverified_since = NULL, liveness_note = NULL
+                          liveness_unverified_since = NULL, liveness_note = NULL,
+                          `+rowVersionAdvance+`, `+launchStartClear+`
                     WHERE claude_instance_id = ?`, newState, instanceID)
 		if err != nil {
 			return UpsertError, fmt.Errorf("store: ended transition: %w", err)
@@ -501,10 +524,17 @@ func (s *Store) ApplyHookTransitionResult(instanceID, newState string, softRefre
 	if !found {
 		return UpsertNoChange, nil
 	}
+	// A target other than pending clears the launch start in the same
+	// statement; a pending target (no hook passes one today) leaves it (SR-5.2).
+	launchStart := ""
+	if newState != StatePending {
+		launchStart = ", " + launchStartClear
+	}
 	res, err := s.db.Exec(`UPDATE spawns
                   SET state = ?, last_seen_at = CURRENT_TIMESTAMP,
                       ended_at = NULL,
-                      liveness_unverified_since = NULL, liveness_note = NULL
+                      liveness_unverified_since = NULL, liveness_note = NULL,
+                      `+rowVersionAdvance+launchStart+`
                 WHERE claude_instance_id = ?`, newState, instanceID)
 	if err != nil {
 		return UpsertError, fmt.Errorf("store: state transition: %w", err)
@@ -569,6 +599,10 @@ func (s *Store) ApplyHookTransitionResult(instanceID, newState string, softRefre
 // SessionStart is proof of life (SR-8.2), so this write also clears both
 // liveness columns (liveness_unverified_since / liveness_note → NULL) in the
 // same atomic statement.
+//
+// Both UPDATE variants advance row_version by one and leave
+// launch_started_at unchanged; the rotation archive writes session_history
+// only and advances nothing by itself (SR-5.2).
 func (s *Store) RecordSessionStartIdentity(instanceID, sessionID, jsonlPath string, jsonlPresent bool, pid int, procStarttime string) error {
 	// Archive the prior session pair before overwriting, if the session id is
 	// rotating. Best-effort: a failure to archive must not block the identity
@@ -598,7 +632,8 @@ func (s *Store) RecordSessionStartIdentity(instanceID, sessionID, jsonlPath stri
 		                      pid               = ?,
 		                      proc_starttime    = ?,
 		                      liveness_unverified_since = NULL,
-		                      liveness_note     = NULL
+		                      liveness_note     = NULL,
+		                      ` + rowVersionAdvance + `
 		                WHERE claude_instance_id = ?`
 		if _, err := s.db.Exec(qNull, sessionArg, pidArg, starttimeArg, instanceID); err != nil {
 			return fmt.Errorf("store: record session start identity: %w", err)
@@ -619,7 +654,8 @@ func (s *Store) RecordSessionStartIdentity(instanceID, sessionID, jsonlPath stri
 	                  pid               = ?,
 	                  proc_starttime    = ?,
 	                  liveness_unverified_since = NULL,
-	                  liveness_note     = NULL
+	                  liveness_note     = NULL,
+	                  ` + rowVersionAdvance + `
 	            WHERE claude_instance_id = ?`
 	if _, err := s.db.Exec(q, sessionArg, jsonlArg, pidArg, starttimeArg, instanceID); err != nil {
 		return fmt.Errorf("store: record session start identity: %w", err)
@@ -725,8 +761,11 @@ func (s *Store) archivePriorSessionOnRotate(instanceID, newSessionID string) {
 // distinguish "I asked to update a nonexistent row" from "the update
 // silently no-op'd" (which would be the case if we just emitted an
 // UPDATE without a row-count check).
+//
+// The write advances row_version by one and leaves launch_started_at
+// unchanged (SR-5.2).
 func (s *Store) SetParentID(instanceID, parentID string) error {
-	const q = `UPDATE spawns SET parent_id = ? WHERE claude_instance_id = ?`
+	const q = `UPDATE spawns SET parent_id = ?, ` + rowVersionAdvance + ` WHERE claude_instance_id = ?`
 	var parent any
 	if parentID != "" {
 		parent = parentID

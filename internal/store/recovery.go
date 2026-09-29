@@ -80,6 +80,9 @@ func (s *Store) ListLiveSpawnIdentities() ([]LiveSpawnIdentity, error) {
 // NULL→set signal find-missing uses to emit exactly one probe_eacces
 // tick (SR-8.1/8.4). Emits no trail events — emission stays in the
 // caller.
+//
+// A write advances row_version by one and leaves launch_started_at
+// unchanged; a call that matches no row advances nothing (SR-5.2).
 func (s *Store) SetLivenessUnverified(instanceID, note string) (bool, error) {
 	placeholders := make([]string, len(liveStates))
 	args := make([]any, 0, 2+len(liveStates))
@@ -90,7 +93,8 @@ func (s *Store) SetLivenessUnverified(instanceID, note string) (bool, error) {
 	}
 	q := `UPDATE spawns
 	         SET liveness_unverified_since = CURRENT_TIMESTAMP,
-	             liveness_note = ?
+	             liveness_note = ?,
+	             ` + rowVersionAdvance + `
 	       WHERE claude_instance_id = ?
 	         AND liveness_unverified_since IS NULL
 	         AND state IN (` + strings.Join(placeholders, ",") + `)`
@@ -110,10 +114,14 @@ func (s *Store) SetLivenessUnverified(instanceID, note string) (bool, error) {
 // calls it for the verified-alive case and immediately after
 // MarkSpawnMissing in the marking path (MarkSpawnMissing itself is NOT
 // widened — SR-11/SR-8.2). Emits no trail events.
+//
+// Every matched row advances row_version by one, whether or not a note was
+// set; launch_started_at is left unchanged (SR-5.2).
 func (s *Store) ClearLivenessUnverified(instanceID string) error {
 	const q = `UPDATE spawns
 	              SET liveness_unverified_since = NULL,
-	                  liveness_note = NULL
+	                  liveness_note = NULL,
+	                  ` + rowVersionAdvance + `
 	            WHERE claude_instance_id = ?`
 	if _, err := s.db.Exec(q, instanceID); err != nil {
 		return fmt.Errorf("store: clear liveness unverified: %w", err)
@@ -135,6 +143,9 @@ func (s *Store) ClearLivenessUnverified(instanceID string) error {
 // Prior state is captured via a separate SELECT before the UPDATE (the same
 // non-transactional pattern as ApplyHookTransitionResult — transactions cause
 // SQLITE_BUSY under concurrent workloads with modernc.org/sqlite).
+//
+// The mark advances row_version by one and sets launch_started_at to NULL in
+// the same statement; a no-op call advances nothing (SR-5.2).
 func (s *Store) MarkSpawnMissing(instanceID string) (string, error) {
 	// Capture prior state before the write. If no row exists (deleted
 	// concurrently), return ("", nil) — fail-open, no emit.
@@ -148,7 +159,8 @@ func (s *Store) MarkSpawnMissing(instanceID string) (string, error) {
 
 	const q = `UPDATE spawns
 	              SET state = ?, last_seen_at = CURRENT_TIMESTAMP,
-	                  ended_at = CURRENT_TIMESTAMP
+	                  ended_at = CURRENT_TIMESTAMP,
+	                  ` + rowVersionAdvance + `, ` + launchStartClear + `
 	            WHERE claude_instance_id = ?
 	              AND state NOT IN (?, ?)`
 	res, err := s.db.Exec(q, StateMissing, instanceID, StateEnded, StateMissing)

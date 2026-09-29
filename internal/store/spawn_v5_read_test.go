@@ -332,7 +332,7 @@ func TestV5RowSnapshotComparison(t *testing.T) {
 		}
 	})
 	t.Run("row_version differs", func(t *testing.T) {
-		// No write advances row_version yet (versioned writes are Task 3).
+		// Compares against a copy with only RowVersion bumped, independent of any store write.
 		changed := base
 		changed.RowVersion++
 		if changed == base {

@@ -44,6 +44,11 @@
 //     history through ReadSessionHistoryAllLives.
 //   - They seed session history only through the hook path (a session
 //     rotation), never by writing session_history.
+//   - They assert row_version deltas (after minus before, both read through
+//     ReadSpawnColumns), never absolute values, except for a row the test
+//     inserted itself. A seeded row's starting version depends on the seed:
+//     a pending row seeded with no session id is at 0 and every other seed
+//     starts above 0 (SeedSpawn's doc comment, "Seeding and row_version").
 //   - Concrete-store write failures come only from
 //     storefix.InjectWriteFailure or its white-box counterpart in
 //     internal/store. Writes behind a store interface fail through a failing

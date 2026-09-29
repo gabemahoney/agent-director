@@ -196,9 +196,10 @@ verbatim so future code review can grep for it:
 
 **v5 columns (b.fmk).** Schema v5 adds twelve `spawns` columns, after the
 v4 columns, and one `session_history` column. They are the storage later work
-builds on. At this point the store gives each column its default on insert
-and on migration and nothing else writes it, so no verb reads or reports any
-of them yet.
+builds on. The store gives each column its default on insert and on
+migration. Beyond that, the only v5 writes are the ones under "Versioned
+writes" below: every `spawns` update advances `row_version`, and some clear
+`launch_started_at`. No verb reports any of the columns yet.
 
 - **Row version** — `spawns.row_version INTEGER NOT NULL DEFAULT 0`. A
   per-row change counter, so a conditional write can tell that the row changed
@@ -260,6 +261,45 @@ them from a `Spawn`, and no verb reports them.
   an `any` and never fails). A new read returning a `Spawn` selects
   `spawnColumns` and scans with `scanSpawn`. Never re-derive the rules in a
   new read.
+
+**Versioned writes (b.fmk, SR-5.2).** The row version exists so that a later
+compare-and-set write can guard on it: the write checks that the version is
+still the one it read, so it knows the row has not changed since. As built:
+
+- Every statement that updates a `spawns` row advances `row_version` by
+  exactly one in that same statement, with no transaction added. The shared
+  SET fragment is `rowVersionAdvance` in `internal/store/spawns.go`. This
+  covers every branch of `ApplyHookTransition` / `ApplyHookTransitionResult`
+  (state transitions, the `ended` transition, soft refreshes), both variants
+  of `RecordSessionStartIdentity`, `SetParentID`, `MarkSpawnMissing`,
+  `SetLivenessUnverified`, `ClearLivenessUnverified` (on every matched row,
+  whether or not a note was set) and `HealJsonlPath`.
+- `InsertPending` starts a row at 0 (the column default). A path that writes
+  nothing advances nothing. Examples are the `working`-transition hold path
+  (open permission requests), a write whose `WHERE` matches no row, and
+  `SetLivenessUnverified` / `HealJsonlPath` / `MarkSpawnMissing` when their
+  guard misses. `DeleteSpawn` and `DeleteTerminalOlderThan` remove the row.
+- Archiving the prior session into `session_history` on a rotation does not
+  advance the version by itself. The `RecordSessionStartIdentity` update it
+  belongs to advances it once.
+- The foreign-key action that clears a child's `parent_id` when its parent
+  is deleted (`ON DELETE SET NULL`) does not advance the child's version.
+  `parent_id` is not in `RowSnapshot`.
+- Launch-start rule: every write that sets `state` to a value other than
+  `pending` also sets `launch_started_at` to NULL in the same statement
+  (shared fragment `launchStartClear`). These writes are the `ended`
+  transition, every other hook transition whose target is not `pending`, and
+  `MarkSpawnMissing`. Every other write leaves `launch_started_at` unchanged.
+  Nothing sets a launch start yet, so this changes no behaviour today.
+- No store update touches `life_number`, `no_pre_trust`, `launch_token`,
+  `tmux_socket` or the six tmux server and pane identity columns.
+- **Must use:** any new or changed store statement that updates a `spawns`
+  row must advance `row_version` in that same statement (concatenate
+  `rowVersionAdvance`), and must follow the launch-start rule (concatenate
+  `launchStartClear` when it sets a non-`pending` state). It must also get a
+  case in the SR-5.2 versioning test, `internal/store/row_version_test.go`,
+  which every later exported `spawns` write extends. A write that skips the
+  advance silently defeats every version guard.
 
 **Schema versioning convention.** SQLite's `PRAGMA user_version` is the
 source of truth for which schema this binary expects. On `Open`:
@@ -1012,9 +1052,9 @@ waiting (after SessionStart fires)
 | `PreToolUse` | any other tool | `working` |
 | `PostToolUse` | — | `working` |
 | `Stop` | — | `waiting` |
-| `Notification` | — | soft refresh — `last_seen_at` only (display-only signal; `Stop` owns the idle→`waiting` transition) |
+| `Notification` | — | soft refresh — no state change; bumps `last_seen_at` (display-only signal; `Stop` owns the idle→`waiting` transition) |
 | `PermissionRequest` | — | `check_permission` (relay-mode envelope is Epic 10) |
-| `SessionEnd` | `reason ∈ {clear, compact}` | soft refresh — `last_seen_at` only |
+| `SessionEnd` | `reason ∈ {clear, compact}` | soft refresh — no state change; bumps `last_seen_at` |
 | `SessionEnd` | any other reason | `ended` (also sets `ended_at`) |
 | unknown event | — | soft refresh + info-level log entry |
 
@@ -3364,6 +3404,16 @@ unchanged. When two options set the same column, the later one wins.
 The options and defaults are applied by raw UPDATEs in one transaction,
 after the store's `InsertPending` / `RecordSessionStartIdentity` /
 `ApplyHookTransition` sequence. Those UPDATEs do not advance `row_version`.
+
+**Seeding and `row_version`.** The store calls in that sequence are versioned
+writes (see `internal/store`, "Versioned writes"): `InsertPending` starts at
+0, and `RecordSessionStartIdentity` (when given a session id) and
+`ApplyHookTransition` (for a state other than `pending`) each add one. The
+option/default UPDATEs and the apitest and storefix backdating fixtures add
+nothing. So a `pending` row seeded with no session id is at 0, like a fresh
+insert, and every other seed starts above 0. Tests assert version deltas
+(after minus before, both read through `ReadSpawnColumns`), never absolute
+values, except for a row the test inserted itself.
 
 **Read helpers:**
 
