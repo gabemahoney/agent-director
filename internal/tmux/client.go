@@ -119,9 +119,10 @@ func (c *Client) NewSessionByName(name, cwd string, envs map[string]string, comm
 //
 // It matches name by prefix, as tmux's `has-session -t <name>` does: a
 // session whose name merely begins with name answers true. So no verb may
-// use it, and it must never be used for a lookup: the socket-taking Lookup
-// finds a session by its label (SRD SR-2.1, SR-3.4). Its signature, meaning
-// and error contract are unchanged.
+// newly adopt it (resume still calls it until it moves to the lookup), and
+// it must never be used for a new lookup: the socket-taking Lookup finds a
+// session by its label (SRD SR-2.1, SR-3.4). Its signature, meaning and
+// error contract are unchanged.
 func (c *Client) HasSession(name string) (bool, error) {
 	_, err := c.run(binaryName, "has-session", "-t", name)
 	if err == nil {

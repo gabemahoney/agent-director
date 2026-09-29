@@ -44,12 +44,15 @@ import (
 //
 // SR-20.3 defaults, for every column no option names: a well-formed launch
 // token (16 lowercase hex, distinct per row), tmux_socket TestSocket,
-// no_pre_trust 0, life_number 0, and no server or pane identity (NULL); a
-// pending row's launch start is its final started_at (after WithStartedAt) in
-// whole seconds as milliseconds (none when started_at does not parse as a
-// time), and a row in any other state has none. The live-row pane default
-// matching the Recorder's seeded session waits for the Recorder's session
-// table (Epic t1.h98.a2 Task 3).
+// no_pre_trust 0, life_number 0, and no server identity (NULL); a live row
+// (store.IsLiveState) gets the pane TestPaneID with pid TestPanePID and no
+// pane start time, and a row in a terminal state no pane (NULL), so the
+// Recorder session tmuxfix.Recorder.SeedRowSession seeds for the row holds
+// the row's pane; a pending row's launch start is its final started_at
+// (after WithStartedAt) in whole seconds as milliseconds (none when
+// started_at does not parse as a time), and a row in any other state has
+// none. WithLaunchIdentity and WithNoLaunchToken override the pane default
+// with the other launch-identity columns.
 //
 // Seeding and row_version: InsertPending starts the row at 0, and
 // RecordSessionStartIdentity (when sessionID is non-empty) and
@@ -144,6 +147,9 @@ func applySpawnColumns(dbPath, id, state string, opts []SpawnOption) error {
 		"pane_id":               nil,
 		"pane_pid":              nil,
 		"pane_starttime":        nil,
+	}
+	if store.IsLiveState(state) {
+		defaults["pane_id"], defaults["pane_pid"] = TestPaneID, int64(TestPanePID)
 	}
 	for col, v := range defaults {
 		if !o.has(col) {

@@ -22,8 +22,12 @@ type Options struct {
 	// A leading "~/" is tilde-expanded by New before the file is loaded.
 	ConfigPath string
 
-	// TmuxCommand overrides the tmux binary used for session management.
-	// When empty the tmux binary on PATH is used (standard behavior).
+	// TmuxCommand overrides the tmux binary used for session management,
+	// by both the socket-taking calls and the name-based methods. When empty
+	// the tmux binary on PATH is used (standard behavior). The production
+	// client New builds from it takes its query, action and create timeouts
+	// and its pipe-close wait from the config's [tmux] table, read once at
+	// construction (SR-2.4, SR-4.1).
 	TmuxCommand string
 
 	// Logger receives operational log output. When nil, New substitutes
@@ -45,7 +49,8 @@ type Options struct {
 	CreateIfMissing bool
 
 	// TmuxClient is an optional injection seam for tests. When non-nil it
-	// is used as-is instead of constructing a production *tmux.Client from
+	// is used exactly as given (not wrapped, and no [tmux] timeouts are
+	// applied to it) instead of constructing a production *tmux.Client from
 	// TmuxCommand or the PATH default. Pass a *tmuxfix.Recorder here to
 	// capture tmux calls without launching real tmux. Setting this field
 	// does not change the behavior of any production code path — it is

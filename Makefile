@@ -571,11 +571,21 @@ bin/ts-helper: $(TS_HELPER_SRCS)
 
 ts-helper: bin/ts-helper
 
-# fake-tmux builds the test-only tmux stub used by TypeScript smoke tests.
-# The stub records argv calls and exits 0 so spawn/send-keys/read-pane/kill
-# can be exercised end-to-end without a real tmux. Compiled with CGO_ENABLED=0
-# (pure Go, no libc dependency).
-test/fake-tmux/tmux: test/fake-tmux/main.go
+# fake-tmux builds the test-only tmux stand-in (test/fake-tmux; its package
+# comment documents the call set, the per-socket tables and the control
+# variables) used by the TypeScript smoke tests. Compiled with CGO_ENABLED=0
+# (pure Go, no libc dependency). The prerequisites are every non-test source
+# the fake links from this module (`go list -deps ./test/fake-tmux`): its own
+# files, the shared table/injection package (faketmuxfix), the replay
+# catalogue and Recorder package (tmuxfix) and what they import
+# (internal/tmux, internal/config, internal/store, internal/trail). Extend the
+# list when one of them gains a module import, or the binary can go stale.
+FAKE_TMUX_SRC_DIRS := test/fake-tmux internal/testsupport/faketmuxfix \
+	internal/testsupport/tmuxfix internal/tmux internal/config \
+	internal/store internal/trail
+FAKE_TMUX_SRCS := $(filter-out %_test.go,$(foreach d,$(FAKE_TMUX_SRC_DIRS),$(wildcard $(d)/*.go))) go.mod go.sum
+
+test/fake-tmux/tmux: $(FAKE_TMUX_SRCS)
 	CGO_ENABLED=0 go build -o test/fake-tmux/tmux ./test/fake-tmux/ && chmod 755 test/fake-tmux/tmux
 
 fake-tmux: test/fake-tmux/tmux

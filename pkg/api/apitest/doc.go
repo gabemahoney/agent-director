@@ -5,8 +5,8 @@
 // from any package, not just from within pkg/api. The package depends only on
 // stdlib, internal/store, internal/spawn, internal/config (for the [tmux] key
 // definitions), internal/testsupport/storefix, the leaf fixture-value
-// packages internal/testsupport/launchfix (the test socket) and
-// internal/testsupport/procstarttimefix, github.com/google/uuid,
+// packages internal/testsupport/launchfix (the test socket and the default
+// pane) and internal/testsupport/procstarttimefix, github.com/google/uuid,
 // github.com/BurntSushi/toml (to encode the config file) and the
 // modernc.org/sqlite driver — it does NOT import pkg/api, which avoids any
 // import cycle.
@@ -29,7 +29,11 @@
 //     (a row from before the release: no token, socket or identity, the same
 //     as WithLaunchIdentity(store.LaunchIdentity{})), WithRawLabels,
 //     WithRawClaudeArgs, WithRawExtraEnv. SeedSpawn's doc comment states the
-//     SR-20.3 defaults; TestSocket is the default socket.
+//     SR-20.3 defaults; TestSocket is the default socket, and TestPaneID /
+//     TestPanePID the default pane of a live row. To make the Recorder hold
+//     a seeded row's own session (the row's socket and pane, labelled valid
+//     with the row's id and token), use tmuxfix.Recorder.SeedRowSession
+//     (internal/testsupport/tmuxfix), so no test copies a token by hand.
 //   - ReadSpawnColumns returns one row's columns raw (NULL distinguishable,
 //     storage class kept), for columns no verb shows.
 //   - ReadSessionHistoryAllLives returns an id's history entries from every

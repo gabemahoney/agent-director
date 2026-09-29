@@ -1,9 +1,23 @@
-// Package tmuxfix provides a recording fake for the pkg/api tmux client
-// interface. Tests inject a *Recorder via Options.TmuxClient to capture every
-// tmux call without launching a real tmux process.
+// Package tmuxfix holds the in-process tmux fixtures (SRD SR-20.3, SR-20.4):
+// the Recorder, a fake of the pkg/api tmux client interface that tests inject
+// via Options.TmuxClient; the shared test Clock; and the replay catalogue of
+// recorded tmux replies (replay*.go).
+//
+// The Recorder models tmux at the level of internal/tmux's typed API
+// (Appendix F.1): per-socket session tables answer the socket-taking calls
+// (recorder_table.go, recorder_calls.go), tests script a typed result per
+// call kind (recorder_script.go), and session hooks, after-call hooks and
+// virtual time sit around each call (recorder_hooks.go). It never produces
+// or parses tmux reply text. The name-based methods (NewSessionByName,
+// HasSession, KillSession, SendKeys, CapturePane) only record their calls
+// and return their two scripted answers, as before.
 package tmuxfix
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/gabemahoney/agent-director/internal/tmux"
+)
 
 // CallKind identifies which tmux method was invoked.
 type CallKind string
@@ -48,14 +62,29 @@ type Call struct {
 	ANSI bool
 }
 
-// Recorder is a recording fake that satisfies the pkg/api TmuxClient
-// interface. All methods are no-ops that record every invocation.
-// Use Calls() to inspect recorded calls in tests.
+// Recorder is a fake that satisfies the pkg/api TmuxClient interface. The
+// name-based methods are no-ops that record every invocation (Calls,
+// CallsOfKind). The socket-taking methods, with exactly *tmux.Client's
+// signatures, are answered from per-socket session tables or from scripted
+// typed results, and are recorded separately (SocketCalls, SocketCallsOf).
 //
 // Recorder is safe for concurrent use.
 type Recorder struct {
 	mu    sync.Mutex
 	calls []Call
+
+	// Socket-taking side (SR-20.3): tables, scripts, recorded calls, hooks
+	// and virtual time. See recorder_table.go and its siblings.
+	sockets     map[string]*socketState
+	servers     []*serverState // every server ever bound, in binding order
+	scripts     []*scriptState
+	socketCalls []SocketCall
+	changes     []*sessionChange
+	afterHooks  []afterHook
+	captures    map[paneKey]string
+	clock       *Clock
+	timeouts    tmux.Timeouts
+	nextPID     int // last auto-assigned server or pane pid
 
 	// paneOutput is the scripted response returned by CapturePane.
 	// Defaults to empty string (no pane output) when not set.
@@ -112,13 +141,17 @@ func (r *Recorder) CallsOfKind(kind CallKind) []Call {
 	return out
 }
 
-// Reset discards all recorded calls and resets scripted responses to defaults.
+// Reset discards all recorded calls (name-based and socket-taking), resets
+// the name-based scripted responses to defaults and discards every scripted
+// typed result. Session tables, capture texts, hooks and virtual time stay.
 func (r *Recorder) Reset() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = r.calls[:0]
 	r.paneOutput = ""
 	r.hasSessionResult = false
+	r.socketCalls = nil
+	r.scripts = nil
 }
 
 // NewSessionByName records a name-based create call (Kind CallNewSession)

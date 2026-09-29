@@ -22,25 +22,50 @@ const defaultConfigPath = "~/.agent-director/config.toml"
 // (tier 3 of the three-tier StorePath precedence).
 const defaultStorePath = "~/.agent-director/state.db"
 
-// TmuxClient is the interface the Client uses to drive tmux sessions. The
-// production *tmux.Client satisfies it automatically (no production-code
-// changes were required to align the method signatures). Tests can inject a
-// *tmuxfix.Recorder via Options.TmuxClient to capture calls without launching
-// a real tmux process.
+// TmuxClient is the client-level tmux injection point (Options.TmuxClient;
+// SRD Appendix F.3). Every socket-taking method takes the socket (SR-3.3)
+// and reports a failure as *TmuxCallError; an error of any other type from
+// an injected implementation counts as TmuxFailUnrecognized for that call.
+// The name-based methods (NewSessionByName, KillSession, SendKeys,
+// CapturePane) are transitional: they stay until their last verb moves to
+// the socket-taking calls. HasSession stays (SR-2.1) and matches by prefix:
+// resume still calls it until resume moves to the lookup, and no verb may
+// newly adopt it. *tmux.Client and tmuxfix.Recorder implement it.
 type TmuxClient interface {
-	// NewSessionByName creates a new detached tmux session by name: the
-	// pre-Phase-1 name-based create, kept only until its last user moves to
-	// the socket-taking call set.
+	// Lookup makes the one-call lookup on socket: sessions with labels and
+	// the scope reads.
+	Lookup(socket string) (TmuxLookupAnswer, error)
+	// ListPanes lists every pane of the server at socket.
+	ListPanes(socket string) ([]TmuxPane, error)
+	// KillPane kills the pane paneID on socket.
+	KillPane(socket, paneID string) error
+	// KillSessionID kills the session sessionID on socket.
+	KillSessionID(socket, sessionID string) error
+	// SendKeysPane types text into the pane paneID on socket, then Enter when pressEnter is set.
+	SendKeysPane(socket, paneID, text string, pressEnter bool) error
+	// CapturePaneID returns the last nLines lines of the pane paneID on socket.
+	CapturePaneID(socket, paneID string, nLines int, ansi bool) (string, error)
+	// NewSession creates the session name on socket with its chained label and returns the create reply.
+	NewSession(socket, name, cwd string, envs map[string]string, command []string, token, instanceID string) (TmuxCreateReply, error)
+	// SetLabel labels the session sessionID on socket by its id.
+	SetLabel(socket, sessionID, token, instanceID string) error
+	// NewSessionByName creates a detached session by name (transitional).
 	NewSessionByName(name, cwd string, envs map[string]string, command []string) error
-	// HasSession reports whether the named session currently exists.
+	// HasSession reports whether a session whose name begins with name
+	// exists (prefix match; stays per SR-2.1). Resume still calls it until
+	// it moves to the lookup; no verb may newly adopt it.
 	HasSession(name string) (bool, error)
-	// KillSession terminates the named session.
+	// KillSession terminates the named session (transitional).
 	KillSession(name string) error
-	// SendKeys delivers text to the named session's first pane.
+	// SendKeys delivers text to the named session's first pane (transitional).
 	SendKeys(name, text string, pressEnter bool) error
-	// CapturePane returns the last nLines of the named session's first pane.
+	// CapturePane returns the last nLines of the named session's first pane (transitional).
 	CapturePane(name string, nLines int, ansi bool) (string, error)
 }
+
+// The production client satisfies TmuxClient (tmuxfix.Recorder's assertion
+// is in a test file: pkg/api must not import tmuxfix).
+var _ TmuxClient = (*tmux.Client)(nil)
 
 // Client is the opaque handle through which callers interact with
 // agent-director. Obtain one via New; release resources with Close.
@@ -64,7 +89,11 @@ type Client struct {
 //  2. Load config from the resolved ConfigPath.
 //  3. Resolve StorePath via three-tier precedence.
 //  4. Open (or init) the store according to opts.CreateIfMissing.
-//  5. Construct the tmux client.
+//  5. Construct the tmux client: an injected Options.TmuxClient as given,
+//     otherwise the production client for Options.TmuxCommand with the
+//     query, action and create timeouts and the pipe-close wait taken from
+//     the loaded config's [tmux] table at construction (SR-2.4, SR-4.1), so
+//     a changed value applies to the next Client built.
 //
 // On any error a nil *Client is returned together with a descriptive,
 // errors.Is-matchable error. The constructor never leaves partially-
@@ -147,13 +176,14 @@ func New(opts Options) (*Client, error) {
 
 	// Step 5 — resolve tmux client.
 	// opts.TmuxClient is an opt-in injection seam for tests (e.g. a
-	// *tmuxfix.Recorder). When nil (the production default), a real
-	// *tmux.Client is constructed from TmuxCommand or the PATH default.
+	// *tmuxfix.Recorder), used exactly as given. When nil (the production
+	// default), a real *tmux.Client is constructed from TmuxCommand or the
+	// PATH default, with the [tmux] timeouts and pipe-close wait from cfg.
 	var tc TmuxClient
 	if opts.TmuxClient != nil {
 		tc = opts.TmuxClient
 	} else {
-		tc = tmux.New(opts.TmuxCommand, tmux.Timeouts{})
+		tc = tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))
 	}
 
 	return &Client{
@@ -162,6 +192,20 @@ func New(opts Options) (*Client, error) {
 		cfg:        cfg,
 		logger:     logger,
 	}, nil
+}
+
+// tmuxTimeouts returns the production tmux client's per-class timeouts and
+// pipe-close wait from the [tmux] table, through config.Tmux's accessors only
+// (missing or 0 gives the default there; SR-2.4, SR-4.1). internal/tmux
+// defines no default and never imports internal/config, so this is the one
+// place the values are handed over.
+func tmuxTimeouts(t config.Tmux) tmux.Timeouts {
+	return tmux.Timeouts{
+		Query:     t.EffectiveQueryTimeout(),
+		Action:    t.EffectiveActionTimeout(),
+		Create:    t.EffectiveCreateTimeout(),
+		WaitDelay: t.EffectivePipeCloseWait(),
+	}
 }
 
 // Close releases the resources held by the Client. It is idempotent: a

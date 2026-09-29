@@ -24,7 +24,10 @@ import (
 // ~/.agent-director/config.toml do not take effect until the next
 // `serve` invocation. SRD §3.3 makes this explicit so operators
 // don't have to wonder why a tweak to relay.timeout_seconds didn't
-// stick.
+// stick. The same holds for the [tmux] table: the MCP dispatcher's Client
+// is built through pkgapi.New at startup, which hands the query, action
+// and create timeouts and the pipe-close wait to its tmux client then, so
+// a changed value applies after a restart (SR-4.1).
 //
 // Pin H4: the MCP dispatcher uses a SEPARATE *pkgapi.Client constructed
 // with Options.Logger: nil. This preserves the pre-refactor behavior where

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
 // wellFormedToken matches a launch token: 16 lowercase hex characters (SR-3.5).
@@ -153,6 +155,13 @@ func TestSeedSpawn_V5Options_RoundTrip(t *testing.T) {
 			viaStore: func(sp store.Spawn) any { return sp.Identity }, wantStore: store.LaunchIdentity{},
 		},
 		{
+			// A live row's default pane is nulled with the token and socket.
+			name: "WithNoLaunchToken/live pending row", state: "pending",
+			opts: []SpawnOption{WithNoLaunchToken()},
+			raw:  func(c SpawnColumns) any { return identityCols(c) }, want: []any{nil, nil, nil, nil, nil, nil, nil, nil},
+			viaStore: func(sp store.Spawn) any { return sp.Identity }, wantStore: store.LaunchIdentity{},
+		},
+		{
 			// A later option wins, so a pre-release row nulls every identity column set before it.
 			name: "WithNoLaunchToken/after full identity", state: "waiting",
 			opts: []SpawnOption{WithLaunchIdentity(fullIdentity), WithNoLaunchToken()},
@@ -232,25 +241,25 @@ func TestSeedSpawn_V5Defaults(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "state.db")
 	oldStart := time.Date(2001, 2, 3, 4, 5, 6, 0, time.UTC)
 
-	// noPane is tmux_socket, the three server-identity columns and the three
-	// pane columns of a row with the test socket and no server or pane identity.
+	// noPane and livePane are tmux_socket, the three server-identity columns and
+	// the three pane columns: a terminal row has no pane, a live row the default one.
 	noPane := []any{TestSocket, nil, nil, nil, nil, nil, nil}
+	livePane := []any{TestSocket, nil, nil, nil, TestPaneID, int64(TestPanePID), nil}
 
 	cases := []struct {
 		name        string
 		state       string
 		startedAt   time.Time // zero: SeedSpawn's own started_at
 		launchStart bool      // want launch_started_at == started_at in ms; else NULL
-		// identity is the expected tmux_socket plus server and pane columns;
-		// live rows gain a default pane in Epic t1.h98.a2 Task 3.
+		// identity is the expected tmux_socket plus server and pane columns.
 		identity []any
 	}{
-		{name: "pending", state: "pending", launchStart: true, identity: noPane},
-		{name: "pending/old started_at", state: "pending", startedAt: oldStart, launchStart: true, identity: noPane},
-		{name: "waiting", state: "waiting", identity: noPane},
-		{name: "working", state: "working", identity: noPane},
-		{name: "ask_user", state: "ask_user", identity: noPane},
-		{name: "check_permission", state: "check_permission", identity: noPane},
+		{name: "pending", state: "pending", launchStart: true, identity: livePane},
+		{name: "pending/old started_at", state: "pending", startedAt: oldStart, launchStart: true, identity: livePane},
+		{name: "waiting", state: "waiting", identity: livePane},
+		{name: "working", state: "working", identity: livePane},
+		{name: "ask_user", state: "ask_user", identity: livePane},
+		{name: "check_permission", state: "check_permission", identity: livePane},
 		{name: "ended", state: "ended", identity: noPane},
 		{name: "missing", state: "missing", identity: noPane},
 	}
@@ -298,14 +307,101 @@ func TestSeedSpawn_V5Defaults(t *testing.T) {
 			}
 
 			sp := getSpawnV5(t, dbPath, id)
-			if sp.Identity.Token != token || sp.Identity.Socket != TestSocket {
-				t.Errorf("GetSpawn token, socket = %q, %q; want %q, %q", sp.Identity.Token, sp.Identity.Socket, token, TestSocket)
+			wantID := store.LaunchIdentity{Token: token, Socket: TestSocket}
+			if pid, live := tc.identity[5].(int64); live {
+				wantID.PaneID, wantID.PanePID = tc.identity[4].(string), int(pid)
+			}
+			if !reflect.DeepEqual(sp.Identity, wantID) {
+				t.Errorf("GetSpawn Identity = %#v; want %#v", sp.Identity, wantID)
 			}
 			if sp.NoPreTrust || sp.LifeNumber != 0 {
 				t.Errorf("GetSpawn NoPreTrust, LifeNumber = %v, %d; want false, 0", sp.NoPreTrust, sp.LifeNumber)
 			}
 			if want, _ := wantStart.(int64); sp.LaunchStartedAtMillis != want {
 				t.Errorf("GetSpawn LaunchStartedAtMillis = %d; want %d", sp.LaunchStartedAtMillis, want)
+			}
+		})
+	}
+}
+
+// TestSeedRowSession_MatchesSeedSpawnPane seeds rows and their Recorder sessions, then asserts the
+// lookup and pane listing on the test socket name each row's pane under a label valid for its id and token.
+func TestSeedRowSession_MatchesSeedSpawnPane(t *testing.T) {
+	t.Parallel()
+	type row struct {
+		id, state string
+		opts      []SpawnOption
+		paneID    string
+		panePID   int
+	}
+	live := func(state string) []row {
+		return []row{{id: "v5-match-" + state, state: state, paneID: TestPaneID, panePID: TestPanePID}}
+	}
+	// A second row on the same socket needs its own pane (SeedRowSession refuses a shared one).
+	other := store.LaunchIdentity{Token: "0123456789abcdef", Socket: TestSocket, PaneID: "%7", PanePID: 4343}
+
+	cases := []struct {
+		name string
+		rows []row
+	}{
+		{name: "pending", rows: live("pending")},
+		{name: "waiting", rows: live("waiting")},
+		{name: "working", rows: live("working")},
+		{name: "ask_user", rows: live("ask_user")},
+		{name: "check_permission", rows: live("check_permission")},
+		{name: "two rows on one socket", rows: append(live("waiting"), row{id: "v5-match-other", state: "working",
+			opts: []SpawnOption{WithLaunchIdentity(other)}, paneID: other.PaneID, panePID: other.PanePID})},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dbPath := filepath.Join(t.TempDir(), "state.db")
+			rec := tmuxfix.NewRecorder()
+			tokens := make([]string, len(tc.rows))
+			seeded := make([]tmuxfix.SeedSession, len(tc.rows))
+			for i, r := range tc.rows {
+				tokens[i], _ = seedV5Row(t, dbPath, r.id, r.state, r.opts...).LaunchToken.(string)
+				seeded[i] = rec.SeedRowSession(t, dbPath, r.id)
+			}
+
+			ans, err := rec.Lookup(TestSocket)
+			if err != nil {
+				t.Fatalf("Lookup(%q): %v", TestSocket, err)
+			}
+			panes, err := rec.ListPanes(TestSocket)
+			if err != nil {
+				t.Fatalf("ListPanes(%q): %v", TestSocket, err)
+			}
+			if len(ans.Sessions) != len(tc.rows) || len(panes) != len(tc.rows) {
+				t.Fatalf("lookup lists %d sessions, listing %d panes; want %d each", len(ans.Sessions), len(panes), len(tc.rows))
+			}
+
+			for i, r := range tc.rows {
+				sid := seeded[i].ID
+				wantLabel := tmux.Label{Kind: tmux.LabelValid, Token: tokens[i], InstanceID: r.id}
+				var found bool
+				for _, s := range ans.Sessions {
+					if s.ID == sid {
+						found = true
+						if s.Label != wantLabel {
+							t.Errorf("row %s: session %s label = %+v; want %+v", r.id, sid, s.Label, wantLabel)
+						}
+					}
+				}
+				if !found {
+					t.Errorf("row %s: lookup has no session %s", r.id, sid)
+				}
+				var got []tmux.Pane
+				for _, p := range panes {
+					if p.SessionID == sid {
+						got = append(got, p)
+					}
+				}
+				if len(got) != 1 || got[0].ID != r.paneID || got[0].PID != r.panePID {
+					t.Errorf("row %s: session %s panes = %+v; want one pane %s pid %d", r.id, sid, got, r.paneID, r.panePID)
+				}
 			}
 		})
 	}

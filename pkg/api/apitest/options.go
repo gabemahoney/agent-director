@@ -24,6 +24,16 @@ const (
 // package, where the value is defined once (SR-20.3).
 const TestSocket = launchfix.TestSocket
 
+// TestPaneID and TestPanePID are the pane identity SeedSpawn records on a
+// live row unless WithLaunchIdentity or WithNoLaunchToken overrides it;
+// re-exported from the leaf launchfix package, where the values are defined
+// once (SR-20.3). The pid is above Linux's PID_MAX_LIMIT, so every
+// start-time reader reads the pane process as gone.
+const (
+	TestPaneID  = launchfix.TestPaneID
+	TestPanePID = launchfix.TestPanePID
+)
+
 // storeTimestampLayout is the store's CURRENT_TIMESTAMP layout (UTC, whole
 // seconds), in which WithStartedAt and WithEndedAt write a time.Time.
 const storeTimestampLayout = "2006-01-02 15:04:05"

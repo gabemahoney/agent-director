@@ -45,6 +45,18 @@ var liveStates = []string{
 	StatePending, StateWaiting, StateWorking, StateAskUser, StateCheckPermission,
 }
 
+// IsLiveState reports whether state is one of the live (non-terminal)
+// states in liveStates. It is a read-only view of that set for callers
+// outside the package, such as test fixtures seeding a live row's defaults.
+func IsLiveState(state string) bool {
+	for _, st := range liveStates {
+		if st == state {
+			return true
+		}
+	}
+	return false
+}
+
 // Spawn mirrors a row of the `spawns` table for callers outside this
 // package. ClaudeArgs and Labels are presented as their materialized Go
 // shapes; the JSON encoding stays inside the package.

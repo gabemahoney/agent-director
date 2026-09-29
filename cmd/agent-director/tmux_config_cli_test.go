@@ -23,6 +23,10 @@ import (
 // held open, the relayed PermissionRequest hook); a run still alive is killed.
 const surfaceDeadline = 10 * time.Second
 
+// mcpInitialize is the MCP initialize request line sent to `serve --stdio`.
+const mcpInitialize = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05",` +
+	`"capabilities":{},"clientInfo":{"name":"tmux-config-test","version":"0"}}}` + "\n"
+
 // tmuxRefusal is one refused [tmux] config: the settings written, the phrases
 // its err_description must contain (nil: malformed type, only err_name and
 // path are asserted) and the settings that fix the file.
@@ -235,9 +239,7 @@ func TestTmuxConfigRefusalStopsEverySurface(t *testing.T) {
 			assertConfigRefused(t, rc, h, stdout, stderr, code)
 		}},
 		{"serve_stdio", func(t *testing.T, rc tmuxRefusal, h refusedHome) {
-			initialize := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05",` +
-				`"capabilities":{},"clientInfo":{"name":"tmux-config-test","version":"0"}}}` + "\n"
-			stdout, stderr, code, timedOut := runBounded(t, h.home, nil, initialize, true, surfaceDeadline, "serve", "--stdio")
+			stdout, stderr, code, timedOut := runBounded(t, h.home, nil, mcpInitialize, true, surfaceDeadline, "serve", "--stdio")
 			if timedOut {
 				t.Fatalf("serve --stdio still running after %v with stdin open; stdout=%q", surfaceDeadline, stdout)
 			}
