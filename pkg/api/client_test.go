@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
 	_ "modernc.org/sqlite"
 
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
@@ -288,5 +290,126 @@ func TestSchemaMismatch(t *testing.T) {
 	_, err := api.New(api.Options{ConfigPath: cfgPath})
 	if !errors.Is(err, store.ErrSchemaMismatch) {
 		t.Fatalf("errors.Is(err, ErrSchemaMismatch) = false; err = %v", err)
+	}
+}
+
+// --- Case 11: refused [tmux] value (SR-4.1) -----------------------------------
+
+// TestNewRefusedTmuxConfig pins SR-4.1's "api.New returns the error wrapped"
+// at the Go library surface: a config file that parses but holds a refused
+// [tmux] value makes api.New return no Client and an error from which
+// errors.As recovers the *config.ConfigError for that file. Config is loaded
+// before the store is opened, so nothing runs with the refused value: even
+// with CreateIfMissing no store file (nor its directory) is created. The
+// control step then rewrites the same file with the setting fixed (0 or
+// removed) and api.New succeeds, so the refusal is the value's, not the
+// file's.
+func TestNewRefusedTmuxConfig(t *testing.T) {
+	cases := []struct {
+		name string
+		// refused is the [tmux] setting api.New must refuse.
+		refused apitest.TmuxSetting
+		// key names the refused key; namesKey says the description must name
+		// it (the two integer cases; a raw non-integer value fails the TOML
+		// parse, whose wording belongs to the decoder).
+		key      config.TmuxKey
+		namesKey bool
+		// fixed is the same file with the setting fixed, for the control step.
+		fixed []apitest.TmuxSetting
+	}{
+		{
+			name:     "below minimum",
+			refused:  apitest.TmuxInt(config.TmuxStoppingWindowSeconds, config.MinStoppingWindowSeconds-1),
+			key:      config.TmuxStoppingWindowSeconds,
+			namesKey: true,
+			fixed:    []apitest.TmuxSetting{apitest.TmuxInt(config.TmuxStoppingWindowSeconds, 0)},
+		},
+		{
+			name:     "negative",
+			refused:  apitest.TmuxInt(config.TmuxQueryTimeoutMs, -1),
+			key:      config.TmuxQueryTimeoutMs,
+			namesKey: true,
+			fixed:    nil, // setting removed
+		},
+		{
+			name:    "non-integer",
+			refused: apitest.TmuxString(config.TmuxStartingSessionSeconds, "soon"),
+			key:     config.TmuxStartingSessionSeconds,
+			fixed:   []apitest.TmuxSetting{apitest.TmuxInt(config.TmuxStartingSessionSeconds, 0)},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			// Throwaway HOME: api.New must never touch the real
+			// ~/.agent-director, even on a path this test does not expect.
+			t.Setenv("HOME", filepath.Join(dir, "home"))
+			cfgPath := filepath.Join(dir, "config.toml")
+			storeDir := filepath.Join(dir, "store")
+			storePath := filepath.Join(storeDir, "state.db")
+
+			apitest.WriteTmuxConfig(t, cfgPath, tc.refused)
+
+			client, err := api.New(api.Options{
+				ConfigPath:      cfgPath,
+				StorePath:       storePath,
+				CreateIfMissing: true,
+			})
+			if client != nil {
+				_ = client.Close()
+				t.Error("api.New returned a non-nil *Client for a refused [tmux] value")
+			}
+			if err == nil {
+				t.Fatal("api.New returned nil error for a refused [tmux] value")
+			}
+			var ce *config.ConfigError
+			if !errors.As(err, &ce) {
+				t.Fatalf("errors.As(err, *config.ConfigError) = false; err = %v", err)
+			}
+			if ce.Path != cfgPath {
+				t.Errorf("ConfigError.Path = %q, want %q", ce.Path, cfgPath)
+			}
+			if ce.Err == nil {
+				t.Fatal("ConfigError.Err is nil; want the refusal description")
+			}
+			// Assert on the description (ce.Err), not Error(): Error()
+			// carries the path, which embeds the subtest name.
+			if tc.namesKey && !strings.Contains(ce.Err.Error(), tc.key.Name()) {
+				t.Errorf("ConfigError description does not name refused key %q: %q", tc.key.Name(), ce.Err.Error())
+			}
+
+			// Nothing ran with the refused config: no store was opened or
+			// created, not even its directory.
+			if _, statErr := os.Stat(storePath); !os.IsNotExist(statErr) {
+				t.Errorf("store file %q must not exist after a refused config; stat: %v", storePath, statErr)
+			}
+			if _, statErr := os.Stat(storeDir); !os.IsNotExist(statErr) {
+				t.Errorf("store directory %q must not exist after a refused config; stat: %v", storeDir, statErr)
+			}
+
+			// Control: the same file with the setting fixed constructs a
+			// Client.
+			apitest.WriteTmuxConfig(t, cfgPath, tc.fixed...)
+			fixedClient, err := api.New(api.Options{
+				ConfigPath:      cfgPath,
+				StorePath:       storePath,
+				CreateIfMissing: true,
+			})
+			if err != nil {
+				t.Fatalf("api.New after fixing the [tmux] setting: %v", err)
+			}
+			if fixedClient == nil {
+				t.Fatal("api.New after fixing the [tmux] setting returned a nil *Client")
+			}
+			t.Cleanup(func() {
+				if cerr := fixedClient.Close(); cerr != nil {
+					t.Errorf("Close: %v", cerr)
+				}
+			})
+			if _, statErr := os.Stat(storePath); statErr != nil {
+				t.Errorf("store file %q must exist after the fixed config constructs a Client; stat: %v", storePath, statErr)
+			}
+		})
 	}
 }
