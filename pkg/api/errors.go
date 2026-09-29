@@ -98,13 +98,21 @@ var ErrJsonlNeverWritten = errors.New("ErrJsonlNeverWritten")
 // window (or the Spawn has zero request rows).
 var ErrSendKeysWhileRelayed = errors.New("ErrSendKeysWhileRelayed")
 
-// ErrInvalidFlags is returned by CLI command handlers when a required flag
-// is absent or a flag value fails basic validation (empty string, unrecognised
-// enum member, etc.). It is a CLI-layer sentinel: verb handlers in
-// cmd/agent-director/*.go write it as the err_name string literal in the JSON
-// error envelope via writeApiErrorAndDispatch("ErrInvalidFlags", …).
-// It is NOT emitted by pkg/api verb handlers; handler scanning (five-way
-// coherence check 1) will therefore never include it. Not verb-specific, so
-// it is excluded from manifest ErrorNames (check 3) via the same mechanism
-// used for ErrInternal.
+// ErrInvalidFlags is returned when a flag or parameter value fails basic
+// validation. It has two sources:
+//   - CLI flag parsing, for every verb: when a required flag is absent or a
+//     flag value fails basic validation (empty string, unrecognised enum
+//     member, etc.), the handlers in cmd/agent-director/*.go write it as the
+//     err_name string literal in the JSON error envelope via
+//     writeApiErrorAndDispatch("ErrInvalidFlags", …).
+//   - The shared verb layer, for spawn only: runSpawn returns it (wrapped)
+//     when an explicit instance id contains an ASCII control character
+//     (0x00-0x1f or 0x7f), so the CLI, MCP, the Go client and the TypeScript
+//     client all return it (SR-9.1).
+//
+// So spawn's manifest ErrorNames lists it; no other callable verb lists it,
+// because the CLI flag-parse emission is not verb-specific. (The internal,
+// non-callable trail-emit verb also lists it.) It stays in five-way coherence
+// check 3's exceptions per SR-1.7; while spawn lists it, spawn's listing
+// already satisfies check 3, so the exception changes nothing.
 var ErrInvalidFlags = errors.New("ErrInvalidFlags")

@@ -1066,21 +1066,28 @@ exits 0 (SRD §3.2). A missed UPSERT never blocks Claude.
 
 ## Spawn Parameter Resolution
 
-`spawn` is implemented as a four-stage pipeline. The boundaries exist
-so each stage can be tested in isolation against synthesized input.
+`spawn` is implemented as a four-stage pipeline, preceded by one id
+check in the shared verb layer. The boundaries exist so each stage can
+be tested in isolation against synthesized input.
 
 ```
-  caller params         (CLI flags / MCP tool input)
+  caller params         (CLI flags / MCP tool input / Go / TS client)
        │
        ▼
+   ┌──────────────┐   pkg/api runSpawn, SRD SR-9.1: explicit
+   │ Explicit-id  │   claude_instance_id with a byte 0x00-0x1f or
+   │ check        │   0x7f → ErrInvalidFlags. Runs before any stage.
+   └────┬─────────┘   Empty id passes (ApplyDefaults mints one).
+        ▼
    ┌─────────┐   template merge: caller fields overlay template
    │ Resolve │   defaults; nil caller field → template value kept.
    └────┬────┘   ClaudeArgs: nil means caller supplied nothing
         │        (template wins); non-nil replaces wholesale.
         ▼
    ┌──────────┐   SRD §7.2: cwd shape/existence/type;
-   │ Validate │   relay_mode; denied flags; reserved env keys.
-   └────┬─────┘   No side effects on failure.
+   │ Validate │   relay_mode; denied flags; reserved env keys;
+   └────┬─────┘   explicit tmux session name (see below).
+        │         No side effects on failure.
         ▼
    ┌────────────┐   SRD §7.3: UUID4 if no claude_instance_id;
    │ ApplyDefaults│  <basename(cwd)>-<id[:8]> session name;
@@ -1092,6 +1099,51 @@ so each stage can be tested in isolation against synthesized input.
         ▼
    claude_instance_id (state stays `pending` until SessionStart fires)
 ```
+
+### Explicit-id check
+
+`runSpawn` in `pkg/api/spawn.go` calls `validateExplicitInstanceID`
+before `spawn.Resolve`. An explicit `claude_instance_id` that contains
+any byte 0x00-0x1f or 0x7f returns `ErrInvalidFlags` with the
+description "the instance id contains a control character". The id is
+never included in the text. Such an id could never carry a valid
+`@ad_owner` label: the label parser rejects control characters, and
+lookup lines are split on tabs and newlines. The check runs before
+template resolution, validation, the collision check and launch. A
+rejected id therefore loads no template, reads and writes no store row,
+and creates no tmux session, pre-trust write or trail entry. The CLI,
+MCP, the Go client and the TypeScript client all reach `spawn` through
+`runSpawn`, so every surface returns the same error. An empty or absent
+id passes the check, and `ApplyDefaults` mints a fresh UUID4 for it.
+Existing rows are not re-checked.
+
+The check lives in `pkg/api` rather than `internal/spawn` because
+`ErrInvalidFlags` is declared in `pkg/api`, and `internal/spawn` cannot
+import it. Any future code path that accepts a caller-supplied instance
+id for `spawn` must go through `runSpawn`, or call
+`validateExplicitInstanceID` itself. Do not write a second byte loop.
+
+### Explicit session-name validation
+
+When the caller supplies `tmux-session-name`
+(`SpawnParams.TmuxSessionNameSupplied`), `spawn.Validate` runs
+`validateTmuxSessionName` (`internal/spawn/validate.go`). It checks in
+this order:
+
+- An empty value returns `ErrTmuxSessionNameEmpty`.
+- A value longer than 64 bytes (`MaxTmuxSessionNameBytes`) returns
+  `ErrTmuxSessionNameTooLong`.
+- A value that is not valid UTF-8 returns `ErrTmuxSessionNameInvalid`.
+- A value containing `#`, `:`, `.`, `$`, `\` or an ASCII control byte
+  (0x00-0x1f, 0x7f) returns `ErrTmuxSessionNameInvalid` ("contains
+  reserved character ..." or "contains ASCII control byte 0x..").
+
+`$` and `\` are rejected because tmux cannot match such a name exactly.
+A target such as `=$7:` reads as the session id `$7`, and a backslash is
+processed by tmux's escaping (SR-9.2). All other characters are allowed.
+The name is never rewritten: a caller-supplied name is used byte for
+byte or rejected. Defaulted names go through `SanitizeSessionName`
+instead.
 
 ### Workspace-trust pre-write
 
@@ -1783,10 +1835,16 @@ or catalog Go source requires regenerating the corresponding JSON file.
 
 - `ErrInternal` is the `Classify` fallback for unrecognized errors. It is not in the Catalog
   and is not enforced by the coherence check.
-- `ErrInvalidFlags` is a CLI-layer sentinel emitted as a string literal by `cmd/` flag
-  handlers (not by any `pkg/api` verb handler). It is in the Catalog but is not verb-specific,
-  so it is excluded from check 3 (b⊆c) alongside `ErrInternal`. The exclusion is declared in
-  `check3Exceptions` in `pkg/api/errnames/coherence_diff_test.go`.
+- `ErrInvalidFlags` has two sources. First, CLI flag parsing emits it for every verb: the
+  `cmd/agent-director` flag handlers write it as a string literal in the error envelope.
+  Second, the shared verb layer returns it for `spawn` only, from the explicit-id check in
+  `runSpawn` (see [Explicit-id check](#explicit-id-check)). It is in the Catalog. It is
+  listed in `spawn`'s manifest `ErrorNames` and its Go "Errors:" list, because spawn is the
+  only verb whose shared verb layer emits it. No other callable verb lists it, because the
+  CLI flag-parse emission is not specific to any verb. It stays in `check3Exceptions` in
+  `pkg/api/errnames/coherence_diff_test.go`, next to `ErrInternal`; that list feeds the
+  (b) ⊆ (c) check ("Check 3" in that file). Because `spawn` lists it, that check passes
+  without the exception; the exception stays (SR-1.7). `TestDiffExclusionErrInvalidFlags` proves that the exception alone keeps that check quiet.
 - Catalog entries whose sentinels are declared in `internal/*` packages (e.g.
   `tmux.ErrTmuxNotAvailable`, `store.ErrSpawnNotFound`) do not appear in `exportedSentinels`
   and are therefore excluded from check 2. Their coherence with the Catalog is enforced at

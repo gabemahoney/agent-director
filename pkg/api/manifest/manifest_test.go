@@ -14,15 +14,16 @@ import (
 
 // surfaceDoc is the shared decode target for the committed surface.json golden.
 // It is the UNION of every field the golden-side tests assert on — verb name,
-// param names, and the result-field markers (type, nullable, description,
-// allowed_values) — so the five golden tests decode through one struct instead
+// param names and descriptions, and the result-field markers (type, nullable,
+// description, allowed_values) — so the golden tests decode through one struct instead
 // of each repeating a bespoke anonymous-struct unmarshal. Fields a given test
 // does not touch simply stay zero.
 type surfaceDoc struct {
 	Verbs []struct {
 		Name   string `json:"name"`
 		Params []struct {
-			Name string `json:"name"`
+			Name        string `json:"name"`
+			Description string `json:"description"`
 		} `json:"params"`
 		ResultFields []struct {
 			Name          string   `json:"name"`
@@ -113,7 +114,9 @@ func TestVerbsContainsExpectedSurface(t *testing.T) {
 }
 
 // TestSpawnHasAllSRDErrorNames asserts the spawn entry advertises every
-// validation / launch error name from SRD §13.1. Doc drift CI catches the
+// validation / launch error name from SRD §13.1, including ErrInvalidFlags
+// (control-character instance id, SR-1.7, SR-9.1) and ErrTmuxSessionNameInvalid
+// (reserved session-name characters, SR-9.2). Doc drift CI catches the
 // reference-doc side; this test pins the source-of-truth side.
 func TestSpawnHasAllSRDErrorNames(t *testing.T) {
 	v, ok := manifest.Lookup("spawn")
@@ -123,7 +126,8 @@ func TestSpawnHasAllSRDErrorNames(t *testing.T) {
 	want := []string{
 		"ErrCwdMissing", "ErrCwdNotAPath", "ErrCwdNotFound", "ErrCwdNotADirectory",
 		"ErrRelayModeInvalid", "ErrSpawnDeniedFlag", "ErrReservedEnvKey",
-		"ErrInstanceIdCollision", "ErrTmuxNotAvailable", "ErrTmuxSessionCreate",
+		"ErrInvalidFlags", "ErrInstanceIdCollision", "ErrTmuxSessionNameInvalid",
+		"ErrTmuxNotAvailable", "ErrTmuxSessionCreate",
 	}
 	have := map[string]bool{}
 	for _, n := range v.ErrorNames {
@@ -849,5 +853,58 @@ func TestListSpawnsDescriptionNamesLivenessFields(t *testing.T) {
 		if !strings.Contains(sjDesc, needle) {
 			t.Errorf("surface.json list.spawns description does not name %q; got %q", needle, sjDesc)
 		}
+	}
+}
+
+// TestSpawnParamDescriptionsPinValidationRules pins the load-bearing tokens of
+// two spawn param descriptions, on the manifest source of truth AND in the
+// committed surface.json: the tmux-session-name text must name '$' and '\'
+// among the rejected characters (SR-9.2), and the claude_instance_id text must
+// state that an id with a control character is rejected with ErrInvalidFlags
+// (SR-18.9). Only tokens are asserted, never full sentences, so wording edits
+// do not break the test. The claude_instance_id collision sentence is
+// deliberately not pinned.
+func TestSpawnParamDescriptionsPinValidationRules(t *testing.T) {
+	_, surface := readSurfaceJSON(t)
+	surfaceDesc := map[string]string{}
+	for _, vv := range surface.Verbs {
+		if vv.Name != "spawn" {
+			continue
+		}
+		for _, p := range vv.Params {
+			surfaceDesc[p.Name] = p.Description
+		}
+	}
+	v, ok := manifest.Lookup("spawn")
+	if !ok {
+		t.Fatal("spawn not in manifest")
+	}
+	manifestDesc := map[string]string{}
+	for _, p := range v.Params {
+		manifestDesc[p.Name] = p.Description
+	}
+
+	cases := []struct {
+		name   string
+		param  string
+		tokens []string
+	}{
+		{"session name rejects dollar and backslash", "tmux-session-name", []string{`'$'`, `'\'`}},
+		{"instance id rejects control characters", "claude_instance_id", []string{"control character", "ErrInvalidFlags"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for source, descs := range map[string]map[string]string{"manifest": manifestDesc, "surface.json": surfaceDesc} {
+				desc, ok := descs[tc.param]
+				if !ok {
+					t.Fatalf("%s: spawn has no %q param", source, tc.param)
+				}
+				for _, tok := range tc.tokens {
+					if !strings.Contains(desc, tok) {
+						t.Errorf("%s: spawn %s description does not contain %q; got %q", source, tc.param, tok, desc)
+					}
+				}
+			}
+		})
 	}
 }

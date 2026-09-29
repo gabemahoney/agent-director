@@ -26,7 +26,7 @@ Launch a tracked Claude Code instance inside a new tmux session. Fire-and-forget
 
 - `cwd` (string, required): Absolute (or ~/-prefixed) path the Spawn's Claude starts in. Required.
 - `template` (string, optional): Optional named template under ~/.agent-director/templates/. Per-call params layer on top per SRD §7.1 (scalars replace; maps merge; permissions arrays concat; claude_args replaces wholesale).
-- `claude_instance_id` (string, optional): Optional explicit id (UUID4 minted when absent). Collision against a live row returns ErrInstanceIdCollision.
+- `claude_instance_id` (string, optional): Optional explicit id; an empty or absent id mints a fresh UUID4. An explicit id containing an ASCII control character (0x00-0x1f or 0x7f) is rejected with ErrInvalidFlags. Collision against a live row returns ErrInstanceIdCollision.
 - `label` ([]string (k=v), optional): Repeated KEY=VALUE pairs. Each becomes AGENT_DIRECTOR_LABEL_<UPPER_KEY> on the session env and persists in labels.
 - `allow` ([]string, optional): Repeated permissions.allow entries concatenated with the user / project tiers.
 - `deny` ([]string, optional): Repeated permissions.deny entries concatenated with the user / project tiers.
@@ -35,7 +35,7 @@ Launch a tracked Claude Code instance inside a new tmux session. Fire-and-forget
 - `extra-env` ([]string (K=V), optional): Repeated KEY=VALUE pairs injected on the tmux session env. Reserved keys (AGENT_DIRECTOR_*) rejected; auth env vars (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN) allowed.
 - `claude_args` ([]string (after --), optional): Pass-through argv to `claude` after the supervisor's own flags. Denied: --settings, --resume, --continue, --print, --output-format.
 - `no-pre-trust` (bool, optional): Skip pre-writing projects.<cwd>.hasTrustDialogAccepted=true into the spawn's .claude.json (resolves to <CLAUDE_CONFIG_DIR>/.claude.json if CLAUDE_CONFIG_DIR is set in extra-env, otherwise ~/.claude.json). Default off (pre-trust IS performed so Claude Code skips its workspace-trust dialog and the Spawn becomes interactive immediately).
-- `tmux-session-name` (string, optional): Optional explicit tmux session name. Empty/omitted falls back to <basename(cwd)>-<id[:8]>. Validated app-side: rejects empty (when supplied), '#' ':' '.', ASCII control chars, non-UTF-8, and >64 bytes. NO DB uniqueness check; live-collision surfaces as the wrapped tmux new-session error. Name reuse across ended spawns is supported.
+- `tmux-session-name` (string, optional): Optional explicit tmux session name. Empty/omitted falls back to <basename(cwd)>-<id[:8]>. Validated app-side: rejects empty (when supplied), '#' ':' '.' '$' '\' (backslash), ASCII control chars, non-UTF-8, and >64 bytes. NO DB uniqueness check; live-collision surfaces as the wrapped tmux new-session error. Name reuse across ended spawns is supported.
 
 ### Result
 
@@ -50,6 +50,7 @@ Launch a tracked Claude Code instance inside a new tmux session. Fire-and-forget
 - `ErrRelayModeInvalid`
 - `ErrSpawnDeniedFlag`
 - `ErrReservedEnvKey`
+- `ErrInvalidFlags`
 - `ErrInstanceIdCollision`
 - `ErrTmuxSessionNameEmpty`
 - `ErrTmuxSessionNameInvalid`

@@ -103,6 +103,10 @@ func TestSanitizeSessionNameCases(t *testing.T) {
 		{"--", "root"},
 		{"123abc", "123abc"},
 		{"héllo", "h-llo"},
+		// SR-9.2: default names never contain `$` or `\`.
+		{"a$b", "a-b"},
+		{`a\b`, "a-b"},
+		{`$a\b$`, "-a-b-"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {
@@ -110,23 +114,44 @@ func TestSanitizeSessionNameCases(t *testing.T) {
 			if got != tc.want {
 				t.Fatalf("SanitizeSessionName(%q) = %q; want %q", tc.in, got, tc.want)
 			}
+			if strings.ContainsAny(got, `$\`) {
+				t.Fatalf("SanitizeSessionName(%q) = %q; contains $ or \\ (SR-9.2)", tc.in, got)
+			}
 		})
 	}
 }
 
+// TestComposeSessionName pins "<sanitized-basename>-<sanitized-id[:8]>".
+// The `$` / `\` rows pin SR-9.2: a default (composed) name never contains
+// either character, whether it came from the cwd basename or the id prefix.
 func TestComposeSessionName(t *testing.T) {
-	// composeSessionName must produce "<sanitized-basename>-<id[:8]>".
-	r := Resolved{SpawnParams: SpawnParams{
-		CWD:              "/home/horde/projects/foo",
-		ClaudeInstanceID: "abcdef1234567890",
-	}}
-	cfg := config.Default()
-	if err := ApplyDefaults(&r, cfg, &fakeChecker{}); err != nil {
-		t.Fatalf("ApplyDefaults: %v", err)
+	cases := []struct {
+		name string
+		cwd  string
+		id   string
+		want string
+	}{
+		{"plain", "/home/horde/projects/foo", "abcdef1234567890", "foo-abcdef12"},
+		{"dollar in basename", "/tmp/a$b", "abcdef1234567890", "a-b-abcdef12"},
+		{"backslash in basename", `/tmp/a\b`, "abcdef1234567890", "a-b-abcdef12"},
+		{"dollar and backslash in basename", `/tmp/$x\y`, "abcdef1234567890", "-x-y-abcdef12"},
+		{"dollar in id prefix", "/home/horde/projects/foo", "ab$def1234567890", "foo-ab-def12"},
+		{"backslash in id prefix", "/home/horde/projects/foo", `ab\def1234567890`, "foo-ab-def12"},
+		{"dollar and backslash in id prefix", "/home/horde/projects/foo", `a$b\cdef1234567890`, "foo-a-b-cdef"},
 	}
-	want := "foo-abcdef12"
-	if r.TmuxSessionName != want {
-		t.Fatalf("TmuxSessionName = %q; want %q", r.TmuxSessionName, want)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := Resolved{SpawnParams: SpawnParams{CWD: tc.cwd, ClaudeInstanceID: tc.id}}
+			if err := ApplyDefaults(&r, config.Default(), &fakeChecker{}); err != nil {
+				t.Fatalf("ApplyDefaults: %v", err)
+			}
+			if r.TmuxSessionName != tc.want {
+				t.Fatalf("TmuxSessionName = %q; want %q", r.TmuxSessionName, tc.want)
+			}
+			if strings.ContainsAny(r.TmuxSessionName, `$\`) {
+				t.Fatalf("TmuxSessionName = %q; contains $ or \\ (SR-9.2)", r.TmuxSessionName)
+			}
+		})
 	}
 }
 

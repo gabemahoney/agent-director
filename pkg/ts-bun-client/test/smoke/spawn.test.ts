@@ -4,14 +4,16 @@
  * Happy path: cwd = the temp HOME dir (already exists). Asserts result has
  * claude_instance_id field.
  *
- * Error path: empty cwd → ErrCwdMissing.
+ * Error paths: empty cwd → ErrCwdMissing; an id with a control character →
+ * ErrInvalidFlags with no row and no tmux session created.
  */
 
 import { test, expect } from "bun:test";
 import * as path from "path";
+import * as fs from "fs";
 import { withTempHome } from "../internal/tempHome.js";
 import { runHelper } from "../internal/helper.js";
-import { Client, ErrCwdMissing, AgentDirectorError } from "../../src/index.js";
+import { Client, ErrCwdMissing, ErrInvalidFlags, AgentDirectorError } from "../../src/index.js";
 import type { SpawnResult } from "../../src/index.js";
 
 // The FFI worker inherits a snapshot of process.env at spawn time and does NOT
@@ -28,20 +30,45 @@ const fakeTmuxBin = path.join(
 // that ID or the FOREIGN KEY constraint will fail. We seed it conditionally here.
 const OUTER_INSTANCE_ID = process.env.AGENT_DIRECTOR_INSTANCE_ID;
 
+/** Seeds the outer parent row (when set) so a successful spawn's FK holds. */
+function seedOuterParent(storePath: string): void {
+  if (!OUTER_INSTANCE_ID) return;
+  runHelper("seed-spawn", {
+    store: storePath,
+    id: OUTER_INSTANCE_ID,
+    state: "working",
+    "create-store": true,
+  });
+}
+
+/** Runs fn with FAKE_TMUX_LOG set to logPath (the client's CLI inherits process.env per call). */
+async function withFakeTmuxLog(logPath: string, fn: () => Promise<void>): Promise<void> {
+  const prior = process.env.FAKE_TMUX_LOG;
+  process.env.FAKE_TMUX_LOG = logPath;
+  try {
+    await fn();
+  } finally {
+    if (prior !== undefined) process.env.FAKE_TMUX_LOG = prior;
+    else delete process.env.FAKE_TMUX_LOG;
+  }
+}
+
+/** Counts fake-tmux invocations whose argv includes new-session. */
+function newSessionCount(logPath: string): number {
+  if (!fs.existsSync(logPath)) return 0;
+  return fs
+    .readFileSync(logPath, "utf8")
+    .split("---\n")
+    .filter((rec) => rec.split("\n").includes("new-session")).length;
+}
+
 test("spawn: happy path — creates instance with valid cwd", async () => {
   await withTempHome(async (homeDir) => {
     const storePath = path.join(homeDir, ".agent-director", "state.db");
 
     // Pre-seed the parent row so the FK constraint is satisfied when the worker
     // sets parent_id = OUTER_INSTANCE_ID on the new spawn row.
-    if (OUTER_INSTANCE_ID) {
-      runHelper("seed-spawn", {
-        store: storePath,
-        id: OUTER_INSTANCE_ID,
-        state: "working",
-        "create-store": true,
-      });
-    }
+    seedOuterParent(storePath);
 
     using client = await Client.create({ storePath, createIfMissing: true, tmuxCommand: fakeTmuxBin , _cliPath: process.env.CLI_PATH } as any);
     const result: SpawnResult = await client.spawn({ cwd: homeDir });
@@ -70,3 +97,53 @@ test("spawn: error — empty cwd → ErrCwdMissing", async () => {
     expect(caught).toBeInstanceOf(Error);
   });
 }, 10_000);
+
+// SR-9.1 / AC-SPN-02: the printable prefix is UUID-suffixed so a leaked session
+// cannot collide across runs, and so the message can be checked for any echo of the id.
+test.each([
+  ["newline", "\n"],
+  ["tab", "\t"],
+  ["DEL (0x7f)", "\x7f"],
+])(
+  "spawn: error — id containing %s → ErrInvalidFlags, no row, no session",
+  async (_label, ctl) => {
+    await withTempHome(async (homeDir) => {
+      const storePath = path.join(homeDir, ".agent-director", "state.db");
+      const logPath = path.join(homeDir, "fake-tmux.log");
+      const prefix = `ctl-id-${crypto.randomUUID().slice(0, 8)}`;
+      const badId = `${prefix}${ctl}x`;
+      const goodId = `${prefix}-ok`;
+      seedOuterParent(storePath);
+
+      using client = await Client.create({ storePath, createIfMissing: true, tmuxCommand: fakeTmuxBin, _cliPath: process.env.CLI_PATH } as any);
+      await withFakeTmuxLog(logPath, async () => {
+        const before = (await client.list({})).spawns.length;
+
+        let caught: unknown;
+        try {
+          await client.spawn({ cwd: homeDir, claude_instance_id: badId });
+        } catch (e) {
+          caught = e;
+        }
+        expect(caught).toBeInstanceOf(ErrInvalidFlags);
+        expect(caught).toBeInstanceOf(AgentDirectorError);
+        const err = caught as AgentDirectorError;
+        expect(err.errName).toBe("ErrInvalidFlags");
+        expect(err.message).toContain("the instance id contains a control character");
+        expect(err.message).not.toContain(prefix);
+
+        const after = (await client.list({})).spawns;
+        expect(after.length).toBe(before);
+        expect(after.some((r) => r.claude_instance_id.startsWith(prefix))).toBe(false);
+        expect(newSessionCount(logPath)).toBe(0);
+
+        // Control: a clean id in the same wiring does record new-session, so the
+        // zero above is not an artefact of an unrouted FAKE_TMUX_LOG.
+        const ok = await client.spawn({ cwd: homeDir, claude_instance_id: goodId });
+        expect(ok.claude_instance_id).toBe(goodId);
+        expect(newSessionCount(logPath)).toBe(1);
+      });
+    });
+  },
+  20_000,
+);

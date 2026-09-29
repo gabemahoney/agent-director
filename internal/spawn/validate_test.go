@@ -252,11 +252,13 @@ func TestSettingSourcesIsNotDenied(t *testing.T) {
 	}
 }
 
-// TestValidateTmuxSessionName covers SR-2.1, SR-2.2, SR-2.3, SR-2.5 for
-// the new --tmux-session-name validator. The gate is
+// TestValidateTmuxSessionName covers SR-2.1, SR-2.2, SR-2.3, SR-2.5 and
+// SR-9.2 for the --tmux-session-name validator. The gate is
 // SpawnParams.TmuxSessionNameSupplied: when false, Validate must not
-// fire on a zero-value field (regression against the flag-omitted
-// default-synthesis path).
+// fire on a zero-value field or a stale value (regression against the
+// flag-omitted default-synthesis path). wantText, when set, is a
+// substring the error text must contain: for reserved characters it
+// names the offending character (Go %q form, so a backslash reads '\\').
 func TestValidateTmuxSessionName(t *testing.T) {
 	cwd := t.TempDir()
 	cases := []struct {
@@ -264,24 +266,37 @@ func TestValidateTmuxSessionName(t *testing.T) {
 		supplied bool
 		value    string
 		want     error
+		wantText string
 	}{
-		{"omitted flag bypasses check", false, "", nil},
-		{"omitted flag with stale value also bypasses", false, "anything", nil},
-		{"explicit empty trips Empty", true, "", ErrTmuxSessionNameEmpty},
-		{"reserved char colon", true, "bad:name", ErrTmuxSessionNameInvalid},
-		{"reserved char hash", true, "bad#name", ErrTmuxSessionNameInvalid},
-		{"reserved char dot", true, "bad.name", ErrTmuxSessionNameInvalid},
-		{"control char NUL", true, "bad\x00name", ErrTmuxSessionNameInvalid},
-		{"control char SOH", true, "bad\x01name", ErrTmuxSessionNameInvalid},
-		{"control char tab", true, "bad\tname", ErrTmuxSessionNameInvalid},
-		{"control char newline", true, "bad\nname", ErrTmuxSessionNameInvalid},
-		{"control char DEL", true, "bad\x7fname", ErrTmuxSessionNameInvalid},
-		{"non-UTF-8 bytes", true, string([]byte{0xff, 0xfe, 0x80}), ErrTmuxSessionNameInvalid},
-		{"exactly max-byte allowed", true, strings.Repeat("a", 64), nil},
-		{"one byte over max trips TooLong", true, strings.Repeat("a", 65), ErrTmuxSessionNameTooLong},
-		{"happy path simple", true, "bot-claude-status", nil},
-		{"happy path with slash", true, "team/bot-1", nil},
-		{"happy path with space", true, "bot one", nil},
+		{"omitted flag bypasses check", false, "", nil, ""},
+		{"omitted flag with stale value also bypasses", false, "anything", nil, ""},
+		{"omitted flag with stale dollar value bypasses", false, "bad$name", nil, ""},
+		{"omitted flag with stale backslash value bypasses", false, `bad\name`, nil, ""},
+		{"explicit empty trips Empty", true, "", ErrTmuxSessionNameEmpty, ""},
+		{"reserved char colon", true, "bad:name", ErrTmuxSessionNameInvalid, "reserved character ':'"},
+		{"reserved char hash", true, "bad#name", ErrTmuxSessionNameInvalid, "reserved character '#'"},
+		{"reserved char dot", true, "bad.name", ErrTmuxSessionNameInvalid, "reserved character '.'"},
+		{"reserved char dollar at start", true, "$7", ErrTmuxSessionNameInvalid, "reserved character '$'"},
+		{"reserved char dollar in middle", true, "bad$name", ErrTmuxSessionNameInvalid, "reserved character '$'"},
+		{"reserved char dollar at end", true, "badname$", ErrTmuxSessionNameInvalid, "reserved character '$'"},
+		{"reserved char backslash at start", true, `\badname`, ErrTmuxSessionNameInvalid, `reserved character '\\'`},
+		{"reserved char backslash in middle", true, `bad\name`, ErrTmuxSessionNameInvalid, `reserved character '\\'`},
+		{"reserved char backslash at end", true, `badname\`, ErrTmuxSessionNameInvalid, `reserved character '\\'`},
+		{"control char NUL", true, "bad\x00name", ErrTmuxSessionNameInvalid, ""},
+		{"control char SOH", true, "bad\x01name", ErrTmuxSessionNameInvalid, ""},
+		{"control char tab", true, "bad\tname", ErrTmuxSessionNameInvalid, ""},
+		{"control char newline", true, "bad\nname", ErrTmuxSessionNameInvalid, ""},
+		{"control char DEL", true, "bad\x7fname", ErrTmuxSessionNameInvalid, ""},
+		{"non-UTF-8 bytes", true, string([]byte{0xff, 0xfe, 0x80}), ErrTmuxSessionNameInvalid, ""},
+		{"exactly max-byte allowed", true, strings.Repeat("a", 64), nil, ""},
+		{"one byte over max trips TooLong", true, strings.Repeat("a", 65), ErrTmuxSessionNameTooLong, ""},
+		{"happy path simple", true, "bot-claude-status", nil, ""},
+		{"happy path with slash", true, "team/bot-1", nil, ""},
+		{"happy path with space", true, "bot one", nil, ""},
+		{"happy path with bang", true, "agent!one", nil, ""},
+		{"happy path with percent", true, "agent%one", nil, ""},
+		{"happy path with at", true, "agent@one", nil, ""},
+		{"happy path with non-ASCII UTF-8", true, "agent-café-日本", nil, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -299,6 +314,9 @@ func TestValidateTmuxSessionName(t *testing.T) {
 			}
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("Validate err = %v; want %v", err, tc.want)
+			}
+			if tc.wantText != "" && !strings.Contains(err.Error(), tc.wantText) {
+				t.Fatalf("Validate err text = %q; want it to contain %q", err.Error(), tc.wantText)
 			}
 		})
 	}

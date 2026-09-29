@@ -54,8 +54,8 @@ var ErrInstanceIdCollision = errors.New("ErrInstanceIdCollision")
 var ErrTmuxSessionNameEmpty = errors.New("ErrTmuxSessionNameEmpty")
 
 // ErrTmuxSessionNameInvalid is returned when the caller-supplied
-// --tmux-session-name contains any of '#', ':', '.', an ASCII control
-// character (\x00-\x1f / \x7f), or is not valid UTF-8. The validator
+// --tmux-session-name contains any of '#', ':', '.', '$', '\', an ASCII
+// control character (\x00-\x1f / \x7f), or is not valid UTF-8. The validator
 // does NOT silently rewrite — callers must pick a name they want
 // byte-for-byte.
 var ErrTmuxSessionNameInvalid = errors.New("ErrTmuxSessionNameInvalid")

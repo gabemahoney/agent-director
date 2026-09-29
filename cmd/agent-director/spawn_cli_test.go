@@ -374,9 +374,37 @@ func TestSpawnCLITmuxSessionNameOmittedDefaults(t *testing.T) {
 	}
 }
 
+// assertNoRowNoSession fails t if `list` under home shows any row or the
+// fake-tmux log records a new-session (a missing log means no tmux call).
+func assertNoRowNoSession(t *testing.T, home, fakeDir string) {
+	t.Helper()
+	logBytes, err := os.ReadFile(filepath.Join(home, "fake-tmux.log"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("read fake-tmux log: %v", err)
+	}
+	for _, line := range strings.Split(string(logBytes), "\n") {
+		if line == "new-session" {
+			t.Errorf("fake-tmux log records a new-session: %s", logBytes)
+			break
+		}
+	}
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "list")
+	if code != 0 {
+		t.Fatalf("list exit = %d; stderr=%q", code, stderr)
+	}
+	var listed struct {
+		Spawns []json.RawMessage `json:"spawns"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &listed); err != nil {
+		t.Fatalf("parse list %q: %v", stdout, err)
+	}
+	if len(listed.Spawns) != 0 {
+		t.Errorf("list shows %d rows; want 0: %s", len(listed.Spawns), stdout)
+	}
+}
+
 // TestSpawnCLITmuxSessionNameValidationFailures covers each new sentinel
-// driven by parseEnvelope's err_name. Reserved char, control char,
-// >64 bytes, explicit empty, non-UTF-8.
+// driven by parseEnvelope's err_name, and that no row or session results.
 func TestSpawnCLITmuxSessionNameValidationFailures(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	cwd := t.TempDir()
@@ -389,6 +417,8 @@ func TestSpawnCLITmuxSessionNameValidationFailures(t *testing.T) {
 		{"reserved colon", "bad:name", false, "ErrTmuxSessionNameInvalid"},
 		{"reserved dot", "bad.name", false, "ErrTmuxSessionNameInvalid"},
 		{"reserved hash", "bad#name", false, "ErrTmuxSessionNameInvalid"},
+		{"reserved dollar", "bad$name", false, "ErrTmuxSessionNameInvalid"},
+		{"reserved backslash", `bad\name`, false, "ErrTmuxSessionNameInvalid"},
 		{"control SOH", "bad\x01name", false, "ErrTmuxSessionNameInvalid"},
 		// NUL (\x00) cannot be passed through exec on linux; unit test
 		// covers that branch (TestValidateTmuxSessionName).
@@ -414,6 +444,41 @@ func TestSpawnCLITmuxSessionNameValidationFailures(t *testing.T) {
 			if env.ErrName != tc.wantErr {
 				t.Errorf("err_name = %q; want %q (stderr=%q)", env.ErrName, tc.wantErr, stderr)
 			}
+			assertNoRowNoSession(t, home, fakeDir)
+		})
+	}
+}
+
+// TestSpawnCLIInstanceIDControlCharRejected pins SR-9.1 on the CLI: a
+// control character in an explicit id gives ErrInvalidFlags, never echoes
+// the id, and creates no row or session. NUL cannot pass through exec.
+func TestSpawnCLIInstanceIDControlCharRejected(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	cwd := t.TempDir()
+	for _, tc := range []struct{ name, ctl string }{
+		{"newline", "\n"},
+		{"tab", "\t"},
+		{"DEL", "\x7f"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			id := "leakmarker" + tc.ctl + "tail"
+			_, stderr, code := runSpawnCLI(t, home, fakeDir,
+				"spawn", "--cwd", cwd, "--claude-instance-id", id)
+			if code == 0 {
+				t.Fatalf("expected non-zero exit; stderr=%q", stderr)
+			}
+			env := parseEnvelope(t, stderr)
+			if env.ErrName != "ErrInvalidFlags" {
+				t.Errorf("err_name = %q; want ErrInvalidFlags (stderr=%q)", env.ErrName, stderr)
+			}
+			if !strings.Contains(env.ErrDescription, "the instance id contains a control character") {
+				t.Errorf("err_description = %q; want the control-character phrase", env.ErrDescription)
+			}
+			if strings.Contains(env.ErrDescription, "leakmarker") {
+				t.Errorf("err_description quotes the id: %q", env.ErrDescription)
+			}
+			assertNoRowNoSession(t, home, fakeDir)
 		})
 	}
 }

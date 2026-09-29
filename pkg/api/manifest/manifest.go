@@ -123,7 +123,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "claude_instance_id",
 				Type:          "string",
-				Description:   "Optional explicit id (UUID4 minted when absent). Collision against a live row returns ErrInstanceIdCollision.",
+				Description:   "Optional explicit id; an empty or absent id mints a fresh UUID4. An explicit id containing an ASCII control character (0x00-0x1f or 0x7f) is rejected with ErrInvalidFlags. Collision against a live row returns ErrInstanceIdCollision.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
@@ -204,7 +204,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "tmux-session-name",
 				Type:          "string",
-				Description:   "Optional explicit tmux session name. Empty/omitted falls back to <basename(cwd)>-<id[:8]>. Validated app-side: rejects empty (when supplied), '#' ':' '.', ASCII control chars, non-UTF-8, and >64 bytes. NO DB uniqueness check; live-collision surfaces as the wrapped tmux new-session error. Name reuse across ended spawns is supported.",
+				Description:   "Optional explicit tmux session name. Empty/omitted falls back to <basename(cwd)>-<id[:8]>. Validated app-side: rejects empty (when supplied), '#' ':' '.' '$' '\\' (backslash), ASCII control chars, non-UTF-8, and >64 bytes. NO DB uniqueness check; live-collision surfaces as the wrapped tmux new-session error. Name reuse across ended spawns is supported.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
@@ -229,6 +229,7 @@ var Verbs = []VerbDef{
 			"ErrRelayModeInvalid",
 			"ErrSpawnDeniedFlag",
 			"ErrReservedEnvKey",
+			"ErrInvalidFlags",
 			"ErrInstanceIdCollision",
 			"ErrTmuxSessionNameEmpty",
 			"ErrTmuxSessionNameInvalid",

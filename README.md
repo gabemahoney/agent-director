@@ -170,8 +170,8 @@ agent-director spawn --cwd "$PWD" --tmux-session-name bot-claude-status
 
 Rules (validated app-side, no silent rewrite): the name must be
 non-empty, ≤ 64 bytes, valid UTF-8, and contain none of `#`, `:`,
-`.`, or ASCII control bytes (`\x00`–`\x1f`, `\x7f`). There is no DB
-uniqueness check — name reuse across **ended** spawns is supported.
+`.`, `$`, `\`, or ASCII control bytes (`\x00`–`\x1f`, `\x7f`). There
+is no DB uniqueness check — name reuse across **ended** spawns is supported.
 A collision against a currently-live tmux session surfaces as
 tmux's own `new-session` error (no app-layer sentinel). Omitting
 the flag preserves today's `composeSessionName` default.

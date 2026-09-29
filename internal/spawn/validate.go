@@ -78,10 +78,13 @@ func Validate(r *Resolved) error {
 // is only invoked when the caller explicitly supplied a value
 // (gated upstream via SpawnParams.TmuxSessionNameSupplied). The
 // validator rejects empty, byte length > MaxTmuxSessionNameBytes,
-// non-UTF-8, '#', ':', '.', and ASCII control characters
-// (\x00-\x1f / \x7f). It does NOT silently rewrite — callers must
-// pick a name they want byte-for-byte (contrast with
-// SanitizeSessionName, which is a defaulting concern).
+// non-UTF-8, '#', ':', '.', '$', '\', and ASCII control characters
+// (\x00-\x1f / \x7f). '$' and '\' are rejected because tmux cannot
+// match such a name exactly: a target such as "=$7:" reads as the
+// session id $7, and a backslash goes through tmux's escaping (SR-9.2).
+// It does NOT silently rewrite — callers must pick a name they want
+// byte-for-byte (contrast with SanitizeSessionName, which is a
+// defaulting concern).
 func validateTmuxSessionName(name string) error {
 	if name == "" {
 		return fmt.Errorf("%w: --tmux-session-name was supplied with an empty value", ErrTmuxSessionNameEmpty)
@@ -95,7 +98,7 @@ func validateTmuxSessionName(name string) error {
 	for i := 0; i < len(name); i++ {
 		b := name[i]
 		switch {
-		case b == '#', b == ':', b == '.':
+		case b == '#', b == ':', b == '.', b == '$', b == '\\':
 			return fmt.Errorf("%w: contains reserved character %q", ErrTmuxSessionNameInvalid, b)
 		case b <= 0x1f, b == 0x7f:
 			return fmt.Errorf("%w: contains ASCII control byte 0x%02x", ErrTmuxSessionNameInvalid, b)

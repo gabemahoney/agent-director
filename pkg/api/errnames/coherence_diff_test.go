@@ -84,11 +84,13 @@ func computeCoherenceDiff(
 	// Every Catalog entry must appear in at least one callable verb's ErrorNames.
 	// Exceptions:
 	//   • "ErrInternal"    — the Classify fallback; intentionally absent from manifest.
-	//   • "ErrInvalidFlags" — a CLI-flag-parse error emitted as a string literal by
-	//                         cmd/agent-director verb handlers (not via a pkg/api verb
-	//                         handler); not verb-specific so excluded from check 3.
+	//   • "ErrInvalidFlags" — CLI flag parsing emits it for every verb, so it is
+	//                         listed only where the shared verb layer emits it
+	//                         (spawn), per SR-1.7. Check 3 requires a name in at
+	//                         least one callable verb's list, so spawn's listing
+	//                         already satisfies it; the exception stays per SR-1.7.
 	check3Exceptions := map[string]struct{}{
-		"ErrInternal":    {},
+		"ErrInternal":     {},
 		"ErrInvalidFlags": {},
 	}
 	for _, name := range catalogNames {
@@ -119,10 +121,10 @@ func computeCoherenceDiff(
 // ErrX and pointing to manifest.go as the fix location.
 func TestDiffCatalogVsManifest(t *testing.T) {
 	findings := computeCoherenceDiff(
-		nil,               // handlerEmitted — no handler pressure
-		[]string{"ErrX"},  // catalogNames — ErrX registered in Catalog
-		nil,               // manifestErrorNames — no verb lists it
-		[]string{"ErrX"},  // exportedSentinels — declared in pkg/api
+		nil,              // handlerEmitted — no handler pressure
+		[]string{"ErrX"}, // catalogNames — ErrX registered in Catalog
+		nil,              // manifestErrorNames — no verb lists it
+		[]string{"ErrX"}, // exportedSentinels — declared in pkg/api
 	)
 
 	if len(findings) != 1 {
@@ -149,10 +151,10 @@ func TestDiffCatalogVsManifest(t *testing.T) {
 // with a message naming ErrX and pointing to catalog.go as the fix location.
 func TestDiffManifestVsCatalog(t *testing.T) {
 	findings := computeCoherenceDiff(
-		nil,               // handlerEmitted — no handler pressure
-		nil,               // catalogNames — no Catalog entry for ErrX
-		[]string{"ErrX"},  // manifestErrorNames — a callable verb lists ErrX
-		nil,               // exportedSentinels — empty
+		nil,              // handlerEmitted — no handler pressure
+		nil,              // catalogNames — no Catalog entry for ErrX
+		[]string{"ErrX"}, // manifestErrorNames — a callable verb lists ErrX
+		nil,              // exportedSentinels — empty
 	)
 
 	if len(findings) != 1 {
@@ -176,10 +178,10 @@ func TestDiffManifestVsCatalog(t *testing.T) {
 // must fire with a message naming ErrX and pointing to catalog.go.
 func TestDiffHandlerVsCatalog(t *testing.T) {
 	findings := computeCoherenceDiff(
-		[]string{"ErrX"},  // handlerEmitted — handler wraps ErrX
-		nil,               // catalogNames — no Catalog entry
-		nil,               // manifestErrorNames — empty
-		[]string{"ErrX"},  // exportedSentinels — declared in pkg/api
+		[]string{"ErrX"}, // handlerEmitted — handler wraps ErrX
+		nil,              // catalogNames — no Catalog entry
+		nil,              // manifestErrorNames — empty
+		[]string{"ErrX"}, // exportedSentinels — declared in pkg/api
 	)
 
 	if len(findings) != 1 {
@@ -233,14 +235,18 @@ func TestDiffExclusions(t *testing.T) {
 }
 
 // TestDiffExclusionErrInvalidFlags — parallel to TestDiffExclusions: ErrInvalidFlags
-// is a CLI-flag-parse sentinel declared in pkg/api and present in the Catalog, but
-// no verb lists it in ErrorNames (it is not verb-specific). Check 3 must skip it.
+// is declared in pkg/api and present in the Catalog. CLI flag parsing emits it for
+// every verb, so it is listed only where the shared verb layer emits it (spawn),
+// per SR-1.7. Check 3 requires a name in at least one callable verb's list, so
+// spawn's listing already satisfies it; the exception stays per SR-1.7. This
+// synthetic input leaves it out of every verb's ErrorNames to prove the exception
+// alone holds: check 3 must skip it.
 func TestDiffExclusionErrInvalidFlags(t *testing.T) {
 	findings := computeCoherenceDiff(
-		nil,                          // handlerEmitted — pkg/api never emits it
-		[]string{"ErrInvalidFlags"},  // catalogNames — lives in Catalog
-		nil,                          // manifestErrorNames — no verb lists it (CLI-flag-parse error, not verb-specific)
-		[]string{"ErrInvalidFlags"},  // exportedSentinels — declared in pkg/api
+		nil,                         // handlerEmitted — left empty; the exception does not depend on handler use
+		[]string{"ErrInvalidFlags"}, // catalogNames — lives in Catalog
+		nil,                         // manifestErrorNames — left empty so only the exception keeps check 3 quiet
+		[]string{"ErrInvalidFlags"}, // exportedSentinels — declared in pkg/api
 	)
 	if len(findings) != 0 {
 		t.Errorf("want 0 findings for ErrInvalidFlags exclusion, got %d: %v", len(findings), findings)
@@ -254,10 +260,10 @@ func TestDiffMultipleDriftDirections(t *testing.T) {
 	// ErrA: in handler but not catalog (check 1 fires).
 	// ErrB: in catalog but not manifest (check 3 fires).
 	findings := computeCoherenceDiff(
-		[]string{"ErrA"},          // handlerEmitted
-		[]string{"ErrB"},          // catalogNames
-		nil,                       // manifestErrorNames
-		[]string{"ErrA", "ErrB"},  // exportedSentinels
+		[]string{"ErrA"},         // handlerEmitted
+		[]string{"ErrB"},         // catalogNames
+		nil,                      // manifestErrorNames
+		[]string{"ErrA", "ErrB"}, // exportedSentinels
 	)
 
 	if len(findings) != 2 {

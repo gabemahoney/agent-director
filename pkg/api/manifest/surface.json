@@ -46,7 +46,7 @@
         {
           "name": "claude_instance_id",
           "type": "string",
-          "description": "Optional explicit id (UUID4 minted when absent). Collision against a live row returns ErrInstanceIdCollision.",
+          "description": "Optional explicit id; an empty or absent id mints a fresh UUID4. An explicit id containing an ASCII control character (0x00-0x1f or 0x7f) is rejected with ErrInvalidFlags. Collision against a live row returns ErrInstanceIdCollision.",
           "required": false,
           "nullable": false,
           "allow_empty": false,
@@ -131,7 +131,7 @@
         {
           "name": "tmux-session-name",
           "type": "string",
-          "description": "Optional explicit tmux session name. Empty/omitted falls back to \u003cbasename(cwd)\u003e-\u003cid[:8]\u003e. Validated app-side: rejects empty (when supplied), '#' ':' '.', ASCII control chars, non-UTF-8, and \u003e64 bytes. NO DB uniqueness check; live-collision surfaces as the wrapped tmux new-session error. Name reuse across ended spawns is supported.",
+          "description": "Optional explicit tmux session name. Empty/omitted falls back to \u003cbasename(cwd)\u003e-\u003cid[:8]\u003e. Validated app-side: rejects empty (when supplied), '#' ':' '.' '$' '\\' (backslash), ASCII control chars, non-UTF-8, and \u003e64 bytes. NO DB uniqueness check; live-collision surfaces as the wrapped tmux new-session error. Name reuse across ended spawns is supported.",
           "required": false,
           "nullable": false,
           "allow_empty": false,
@@ -156,6 +156,7 @@
         "ErrRelayModeInvalid",
         "ErrSpawnDeniedFlag",
         "ErrReservedEnvKey",
+        "ErrInvalidFlags",
         "ErrInstanceIdCollision",
         "ErrTmuxSessionNameEmpty",
         "ErrTmuxSessionNameInvalid",

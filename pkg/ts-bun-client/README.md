@@ -345,7 +345,7 @@ These 37 classes are generated one-to-one from the shared `err_name` catalog ([`
 | Error | When it fires |
 |---|---|
 | `ErrTmuxSessionNameEmpty` | `--tmux-session-name` was explicitly supplied but empty. |
-| `ErrTmuxSessionNameInvalid` | The name contains `#`, `:`, `.`, an ASCII control character, or is invalid UTF-8. |
+| `ErrTmuxSessionNameInvalid` | The name contains `#`, `:`, `.`, `$`, `\`, an ASCII control character, or is invalid UTF-8. |
 | `ErrTmuxSessionNameTooLong` | The name exceeds the app-layer byte cap. |
 
 **spawn state / lookup** (verb preconditions — mostly normal operational signals):
@@ -397,7 +397,7 @@ These 37 classes are generated one-to-one from the shared `err_name` catalog ([`
 
 | Error | When it fires |
 |---|---|
-| `ErrInvalidFlags` | CLI flag parsing rejected the invocation; not tied to any single verb handler. |
+| `ErrInvalidFlags` | CLI flag parsing rejected the invocation, or `spawn` was given an explicit `claude_instance_id` containing an ASCII control character (0x00–0x1f or 0x7f). |
 
 ## Architecture
 
