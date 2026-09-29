@@ -15,6 +15,8 @@ import (
 	"testing"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/gabemahoney/agent-director/internal/testsupport/writefailfix"
 )
 
 // This file hosts the shared migration-gate test fixtures for package store.
@@ -56,6 +58,9 @@ import (
 // stamped down — with rows and session history seeded on top through a raw
 // connection. Per SR-20.3 the inline SQL for that fixture, and for the v4→v5
 // failure/pre-add arrangements, lives only in this file.
+//
+// injectWriteFailure is the white-box twin of storefix.InjectWriteFailure
+// (SR-20.3); its trigger SQL comes only from internal/testsupport/writefailfix.
 
 // makeVersionedDB creates a state.db under dir at the given targetVersion and
 // returns its resolved path, built at that version's TRUE physical schema (see
@@ -715,4 +720,20 @@ func breakV5SessionHistoryHop(t *testing.T, path string) {
 			t.Fatalf("breakV5SessionHistoryHop: %s: %v", stmt, err)
 		}
 	}
+}
+
+// injectWriteFailure makes kind's writes to instanceID's rows fail on s, via
+// writefailfix (the single trigger source); the test's cleanup removes it.
+// Seed the row first: several kinds also match seeding writes.
+func injectWriteFailure(t *testing.T, s *Store, kind writefailfix.Kind, instanceID string) {
+	t.Helper()
+	h, err := writefailfix.Install(s.db, kind, instanceID)
+	if err != nil {
+		t.Fatalf("injectWriteFailure(%v, %q): %v", kind, instanceID, err)
+	}
+	t.Cleanup(func() {
+		if err := h.Remove(s.db); err != nil {
+			t.Errorf("injectWriteFailure cleanup (%v, %q): %v", kind, instanceID, err)
+		}
+	})
 }

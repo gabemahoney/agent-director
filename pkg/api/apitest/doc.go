@@ -3,9 +3,12 @@
 //
 // All helpers live in regular (non-_test.go) Go files so they can be imported
 // from any package, not just from within pkg/api. The package depends only on
-// internal/store, internal/spawn, internal/config (for the [tmux] key
-// definitions), stdlib, the sqlite driver and github.com/BurntSushi/toml (to
-// encode the config file) — it does NOT import pkg/api, which avoids any
+// stdlib, internal/store, internal/spawn, internal/config (for the [tmux] key
+// definitions), internal/testsupport/storefix, the leaf fixture-value
+// packages internal/testsupport/launchfix (the test socket) and
+// internal/testsupport/procstarttimefix, github.com/google/uuid,
+// github.com/BurntSushi/toml (to encode the config file) and the
+// modernc.org/sqlite driver — it does NOT import pkg/api, which avoids any
 // import cycle.
 //
 // # Config writer
@@ -16,6 +19,35 @@
 //     [tmux] key name (SR-20.3). config.TmuxKeys() lists the nine keys in
 //     table order. It is the only way pkg/api, CLI and MCP tests write
 //     [tmux] settings; see its doc comment for the usage rules.
+//
+// # Schema-v5 seeding and store reads (SR-20.2, SR-20.3)
+//
+//   - SeedSpawn options for the v5 columns and raw values: WithTmuxSessionName,
+//     WithStartedAt / WithEndedAt (a time.Time or raw text), WithLaunchStartedAt,
+//     WithRawLaunchStartedAt, WithNoLaunchStartedAt, WithLifeNumber,
+//     WithNoPreTrust, WithRawNoPreTrust, WithLaunchIdentity, WithNoLaunchToken
+//     (a row from before the release: no token, socket or identity, the same
+//     as WithLaunchIdentity(store.LaunchIdentity{})), WithRawLabels,
+//     WithRawClaudeArgs, WithRawExtraEnv. SeedSpawn's doc comment states the
+//     SR-20.3 defaults; TestSocket is the default socket.
+//   - ReadSpawnColumns returns one row's columns raw (NULL distinguishable,
+//     storage class kept), for columns no verb shows.
+//   - ReadSessionHistoryAllLives returns an id's history entries from every
+//     life, with each entry's life number and recorded_at, newest first.
+//
+// Rules for tests (the same as docs/architecture.md, "apitest Seed* factory
+// contract (reusable test fixtures)"):
+//
+//   - New tests contain no inline SQL. They seed rows through SeedSpawn and
+//     its options, OpenStoreWithRow, SeedExpireFixture or the storefix
+//     seeders, and read columns no verb shows through ReadSpawnColumns and
+//     history through ReadSessionHistoryAllLives.
+//   - They seed session history only through the hook path (a session
+//     rotation), never by writing session_history.
+//   - Concrete-store write failures come only from
+//     storefix.InjectWriteFailure or its white-box counterpart in
+//     internal/store. Writes behind a store interface fail through a failing
+//     wrapper of that interface.
 //
 // # Migrated helpers and their prior locations
 //

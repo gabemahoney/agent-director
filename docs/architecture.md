@@ -58,7 +58,7 @@ still holds: nothing in `internal/` imports `pkg/api`.
 | `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, `KillTmux`, `KillLogger`, etc.), params/result types, and error sentinels. Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director` and `internal/mcp`. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`. | Direct `database/sql`; raw SQL strings; MCP framing. |
 | `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v5; see "Schema v5" below), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default; a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
-| `pkg/api/apitest` | Test seed helpers extracted from `pkg/api/*_test.go` for cross-package importing. Provides `Seed*` functions (`SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`) that set up fixture DB rows and filesystem state for `test/envelope-diff` and future Epic 4/5 smoke tests. Also provides the config writer `WriteTmuxConfig` (settings built with `TmuxInt`, or `TmuxFloat` / `TmuxString` / `TmuxBool` for malformed values, keyed by `config.TmuxKey`): `pkg/api`, CLI and MCP tests write `[tmux]` settings only through it, so no test outside `internal/config` spells a `[tmux]` key (rules: Test Harness, "apitest `[tmux]` config writer"). Non-test package (regular `.go` files) so it can be imported by harnesses outside `pkg/api`. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `github.com/BurntSushi/toml` (to encode the config file). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
+| `pkg/api/apitest` | Test seed helpers extracted from `pkg/api/*_test.go` for cross-package importing. Provides `Seed*` functions (`SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`) that set up fixture DB rows and filesystem state for `test/envelope-diff` and future Epic 4/5 smoke tests. Also provides the config writer `WriteTmuxConfig` (settings built with `TmuxInt`, or `TmuxFloat` / `TmuxString` / `TmuxBool` for malformed values, keyed by `config.TmuxKey`): `pkg/api`, CLI and MCP tests write `[tmux]` settings only through it, so no test outside `internal/config` spells a `[tmux]` key (rules: Test Harness, "apitest `[tmux]` config writer"). Provides `SeedSpawn`'s trailing `SpawnOption`s for the v5 columns, timestamps and raw text (`WithTmuxSessionName`, `WithStartedAt` / `WithEndedAt`, `WithLaunchStartedAt`, `WithRawLaunchStartedAt`, `WithNoLaunchStartedAt`, `WithLifeNumber`, `WithNoPreTrust`, `WithRawNoPreTrust`, `WithLaunchIdentity`, `WithNoLaunchToken`, `WithRawLabels`, `WithRawClaudeArgs`, `WithRawExtraEnv`), the default socket `TestSocket`, the store-read helper `ReadSpawnColumns` and the every-life history-read helper `ReadSessionHistoryAllLives`: new tests seed rows and read columns no verb shows only through these (rules: Test Harness, "apitest Seed* factory contract"). Non-test package (regular `.go` files) so it can be imported by harnesses outside `pkg/api`. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
 | `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. The `Catalog` is consumed by `cmd/agent-director`'s envelope writer and `internal/mcp`'s `classifyDispatchError`. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
 | `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. `classifyDispatchError` delegates to `errnames.Classify`. | stdlib; `pkg/api`; `pkg/api/manifest`; `pkg/api/errnames`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
 | `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
@@ -224,6 +224,42 @@ of them yet.
 None of the thirteen has a CHECK constraint or an index. `schemaDDL` and
 `migrateV4toV5` declare them with the same text, in the same order, so a
 fresh store and a migrated store have identical column lists on both tables.
+
+**v5 row types and narrow reads (b.fmk).** `store.Spawn` (and its alias
+`api.Spawn`) carries the v5 columns on every read that returns a row
+(`GetSpawn` and `ListSpawns` share one column list, `spawnColumns`, and one
+scanner, `scanSpawn`, so both fill them identically): `RowVersion`,
+`LaunchStartedAtMillis` (0 = absent), `LifeNumber`, `NoPreTrust` (the
+recorded pre-trust choice), `EndedAtText` (`ended_at` exactly as stored, ""
+for NULL), `Snapshot` and `Identity`. The fields are read-only. No write takes
+them from a `Spawn`, and no verb reports them.
+
+- **`store.RowSnapshot`** (alias `api.RowSnapshot`) is the SR-5.3
+  change-detection key: `row_version`, `started_at`, `claude_session_id`,
+  `pid`, `proc_starttime` and `tmux_session_name`, held as the stored values
+  (the timestamps as stored text, selected with `CAST(col AS TEXT)`). They are
+  never parsed and re-formatted. Two snapshots compare with `==`.
+- **`store.LaunchIdentity`** (alias `api.LaunchIdentity`) holds the eight
+  launch-identity columns: token, socket, tmux server pid/start/starttime,
+  pane id/pid/starttime. A zero field means NULL. It holds handles and
+  liveness evidence only. The session label, not this value, proves ownership
+  of a launch.
+- **SR-5.5 narrow reads.** A `launch_started_at` that is not an integer reads
+  as absent (0). A `launch_token` that is not exactly 16 lowercase hex
+  characters reads as absent (""). Any `no_pre_trust` other than the integer
+  0 reads as the opt-out. None of these fails a read. Every other column keeps
+  its existing failure behaviour; for example, malformed `labels` or a text
+  `pid` still fail the read with the same error text. A wrong storage class in
+  any other v5 column (for example, a text `tmux_server_pid`) also fails the
+  read, as a text `pid` does. These are new columns, so there is no earlier
+  error text to keep.
+- **Must use:** every read of `launch_started_at`, `launch_token` or
+  `no_pre_trust` goes through the shared decoders in
+  `internal/store/rowsnapshot.go` (`decodeLaunchStartedAt`,
+  `decodeLaunchToken`, `decodeNoPreTrust`; each takes the column scanned into
+  an `any` and never fails). A new read returning a `Spawn` selects
+  `spawnColumns` and scans with `scanSpawn`. Never re-derive the rules in a
+  new read.
 
 **Schema versioning convention.** SQLite's `PRAGMA user_version` is the
 source of truth for which schema this binary expects. On `Open`:
@@ -3200,6 +3236,49 @@ non-positive→default fallback (that lives solely in
 the effective window. Seed the open row first (e.g. via
 `SeedCheckPermission`, which uses `TestRequestTokenA`).
 
+**`InjectWriteFailure(t, dbPath, kind, instanceID)`** makes one kind of
+write to one id's rows fail on the concrete `*store.Store` (SR-20.3). The
+four kinds (`WriteFailureKind`, an alias of `writefailfix.Kind`) are:
+
+- `WriteFailReuseArchive`: an insert or update of the id's
+  `session_history` entry.
+- `WriteFailReuseReset`: an update moving the id's finished row (`ended` or
+  `missing`) to `pending`.
+- `WriteFailReusePermissionDelete`: a delete of one of the id's
+  `permission_requests`, including one done by the cascade when its `spawns`
+  row is deleted.
+- `WriteFailReuseRestore`: an update moving the id's `pending` row to
+  `ended` or `missing`.
+
+How it works:
+
+- It installs BEFORE triggers through a second raw connection to the temp
+  store file. Each trigger runs `RAISE(ABORT, 'injected write failure: <kind>')`,
+  so the store method returns an error; the write never silently does
+  nothing.
+- The trigger SQL is fixed text. The id is recorded, with bound parameters,
+  in a bookkeeping table (`ad_test_write_failure`) that each trigger's WHEN
+  clause checks. Other ids and other rows are unaffected.
+- The test's cleanup removes the triggers and the bookkeeping table.
+- Several kinds also match other existing writes, including seeding writes
+  (for example, `SeedSpawn` of a finished row matches `WriteFailReuseRestore`).
+  So install after seeding. Each `writefailfix.Kind` constant's doc comment
+  lists what it also matches.
+
+Single trigger source: the trigger SQL lives only in the leaf package
+`internal/testsupport/writefailfix` (`Kind`, `Kinds()`, `Install`,
+`Handle.Remove`; imports only `database/sql` and `fmt`). Its white-box
+counterpart for tests inside `internal/store`, which cannot import
+`storefix`, is `injectWriteFailure(t, s, kind, instanceID)` in
+`internal/store/migration_fixtures_test.go`. It calls the same
+`writefailfix.Install` on the store's own connection.
+
+**Must use:** tests make a concrete-store write fail only through
+`storefix.InjectWriteFailure` or, inside `internal/store`, its white-box
+counterpart. Never write trigger SQL or any other failure SQL in a test.
+Writes behind a store interface fail through a failing wrapper of that
+interface.
+
 ### apitest `[tmux]` config writer (reusable test fixture)
 
 `pkg/api/apitest.WriteTmuxConfig(t, path, settings...)` is the ONLY way
@@ -3220,6 +3299,102 @@ Why: key names and defaults are defined once in `internal/config`, so a
 rename or default change breaks the build (or fails the test loudly)
 instead of letting a test silently write a key the loader no longer
 reads.
+
+### apitest Seed* factory contract (reusable test fixtures)
+
+`pkg/api/apitest` is how tests seed spawn rows and read the v5 columns no
+verb shows (SR-20.2, SR-20.3). The package doc comment (`doc.go`, "#
+Schema-v5 seeding and store reads") and each option's doc comment say the
+same. For writing `[tmux]` settings, see the config writer subsection above.
+
+**Signature.**
+
+```go
+func SeedSpawn(dbPath, id, state, cwd, relayMode, sessionID string, createStore bool, opts ...SpawnOption) (string, error)
+```
+
+The options are variadic and trailing, so positional call sites compile
+unchanged. When two options set the same column, the later one wins.
+
+**Options, by group:**
+
+- Identity/name: `WithTmuxSessionName(name)`: stored exactly as given.
+- Timestamps: `WithStartedAt(at)` and `WithEndedAt(at)`. Each takes either
+  a `time.Time`, written as UTC `2006-01-02 15:04:05`, or a `string`, stored
+  byte for byte (for unparseable text).
+- Launch start:
+  - `WithLaunchStartedAt(ms int64)`: epoch milliseconds.
+  - `WithRawLaunchStartedAt(raw any)`: stored as bound. INTEGER affinity
+    still turns integer-looking text into an integer.
+  - `WithNoLaunchStartedAt()`: NULL.
+- Life and pre-trust:
+  - `WithLifeNumber(life int64)`.
+  - `WithNoPreTrust()`: stores 1.
+  - `WithRawNoPreTrust(raw any)`: stored as bound.
+- Launch identity:
+  - `WithLaunchIdentity(id store.LaunchIdentity)`: sets all eight
+    columns. A zero field is stored as NULL, so `LaunchIdentity{}` gives no
+    token, socket or identity. The token is stored as given, so a malformed
+    token is expressible.
+  - `WithNoLaunchToken()`: seeds a row from before the release. The launch
+    token, the socket and the whole launch identity are NULL, the same as
+    `WithLaunchIdentity(store.LaunchIdentity{})`. For a row with no token but
+    a socket, use `WithLaunchIdentity(store.LaunchIdentity{Socket: TestSocket})`.
+- Raw JSON columns: `WithRawLabels(text)`, `WithRawClaudeArgs(text)` and
+  `WithRawExtraEnv(text)`, each stored byte for byte. `WithRawExtraEnv` and
+  `WithExtraEnv` write the same column.
+- Existing v3 options: `WithPID`, `WithProcStarttime` (use
+  `LinuxProcStarttime` / `DarwinProcStarttime`), `WithJsonlPath`,
+  `WithExtraEnv`, `WithLivenessUnverifiedSince`, `WithLivenessNote`.
+
+**SR-20.3 defaults**, for every column no option names:
+
+- A `pending` row's launch start equals its final `started_at` (after
+  `WithStartedAt`) in milliseconds, at whole-second precision. So a `pending`
+  row seeded with an old `WithStartedAt` is already past the grace period. If
+  `started_at` does not parse as a time, there is no launch start. A row in
+  any other state has none.
+- Every row gets a well-formed launch token (16 lowercase hex, from
+  `crypto/rand`, distinct per row) and the test socket `apitest.TestSocket`
+  (defined once in the leaf `internal/testsupport/launchfix`, never derived
+  from the environment).
+- Pre-trust is allowed (`no_pre_trust` 0) and the life is 0.
+- The tmux server and pane identity columns are NULL.
+
+The options and defaults are applied by raw UPDATEs in one transaction,
+after the store's `InsertPending` / `RecordSessionStartIdentity` /
+`ApplyHookTransition` sequence. Those UPDATEs do not advance `row_version`.
+
+**Read helpers:**
+
+- `ReadSpawnColumns(dbPath, instanceID) (SpawnColumns, error)`
+  - Returns every `spawns` column of one row raw, as `any`: nil for NULL,
+    otherwise the stored storage class (`int64`, `float64`, `string` or
+    `[]byte`). TIMESTAMP columns come back as stored text.
+  - Decodes nothing, so it works on rows `GetSpawn` cannot decode.
+  - A missing row returns an error wrapping `store.ErrSpawnNotFound`. It
+    never creates a store file.
+- `ReadSessionHistoryAllLives(dbPath, instanceID) ([]HistoryEntry, error)`
+  - Returns the id's `session_history` entries from every life:
+    `ClaudeSessionID`, `JSONLPath` (`sql.NullString`), `LifeNumber` and
+    `RecordedAt` (stored text).
+  - Order is newest `recorded_at` first, ties broken by the most recently
+    inserted. No entries gives an empty non-nil slice.
+  - It reads the table directly, never through the store's history read.
+
+**Rules (must use):**
+
+- New tests contain no inline SQL. They seed rows through `SeedSpawn` and
+  its options, `OpenStoreWithRow`, `SeedExpireFixture` or the storefix
+  seeders.
+- They read columns that `status`/`get`/`list` do not expose through
+  `ReadSpawnColumns`, and history through `ReadSessionHistoryAllLives`.
+- They seed history only through the hook path (a session rotation), never
+  by writing `session_history`.
+- Concrete-store write failures come only from `storefix.InjectWriteFailure`
+  or its white-box counterpart in `internal/store/migration_fixtures_test.go`
+  (see "storefix seeders" above). Writes behind a store interface fail
+  through a failing wrapper of that interface.
 
 ### ts-helper wrapper CLI
 

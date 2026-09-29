@@ -31,6 +31,16 @@ type ListFilters = store.ListFilters
 // It appears in the FindMissingStore interface method signature.
 type LiveSpawnIdentity = store.LiveSpawnIdentity
 
+// RowSnapshot is re-exported from internal/store for the same reason.
+// It is the type of api.Spawn's Snapshot field: the row's change-detection
+// key, values exactly as stored (SR-5.3).
+type RowSnapshot = store.RowSnapshot
+
+// LaunchIdentity is re-exported from internal/store for the same reason.
+// It is the type of api.Spawn's Identity field: the launch token, socket,
+// server identity and pane (SR-3.3 to SR-3.6); zero values mean NULL.
+type LaunchIdentity = store.LaunchIdentity
+
 // ── Error sentinel re-exports ─────────────────────────────────────────────────
 //
 // These var declarations re-export internal error sentinels under the pkg/api

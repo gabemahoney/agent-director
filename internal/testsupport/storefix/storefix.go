@@ -16,6 +16,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/writefailfix"
 )
 
 // Canonical UUIDv4 test request_token values per SR-9.1 / SR-9.4. Tests should
@@ -366,4 +367,55 @@ func SeedAgentDirectorDir(t *testing.T, homeDir string) string {
 		t.Fatalf("storefix.SeedAgentDirectorDir: MkdirAll(%q): %v", tmplDir, err)
 	}
 	return tmplDir
+}
+
+// WriteFailureKind names one kind of store write InjectWriteFailure makes
+// fail. It is writefailfix.Kind, whose constants document which other
+// existing writes each kind also matches.
+type WriteFailureKind = writefailfix.Kind
+
+// The four kinds of SR-20.3, re-exported from writefailfix.
+const (
+	WriteFailReuseArchive          = writefailfix.ReuseArchive
+	WriteFailReuseReset            = writefailfix.ReuseReset
+	WriteFailReusePermissionDelete = writefailfix.ReusePermissionDelete
+	WriteFailReuseRestore          = writefailfix.ReuseRestore
+)
+
+// InjectWriteFailure makes one kind of write to instanceID's rows fail with a
+// store error (SR-20.3, SRD-RR2 T4): the only way tests outside internal/store
+// make the concrete *store.Store's writes fail. Through a second raw
+// connection to dbPath (the temp store file the test already holds) it
+// installs writefailfix's trigger for kind, scoped to instanceID, so other
+// rows, other ids and cleanup are unaffected; the test's cleanup removes it.
+// Seed the row first: several kinds also match seeding writes.
+func InjectWriteFailure(t *testing.T, dbPath string, kind WriteFailureKind, instanceID string) {
+	t.Helper()
+	raw := openRawStore(t, dbPath, "InjectWriteFailure")
+	h, err := writefailfix.Install(raw, kind, instanceID)
+	_ = raw.Close()
+	if err != nil {
+		t.Fatalf("storefix.InjectWriteFailure(%v, %q): %v", kind, instanceID, err)
+	}
+	t.Cleanup(func() {
+		raw := openRawStore(t, dbPath, "InjectWriteFailure cleanup")
+		defer func() { _ = raw.Close() }()
+		if err := h.Remove(raw); err != nil {
+			t.Errorf("storefix.InjectWriteFailure cleanup (%v, %q): %v", kind, instanceID, err)
+		}
+	})
+}
+
+// openRawStore opens a second raw connection to an existing store file,
+// never creating one, with the store's busy timeout.
+func openRawStore(t *testing.T, dbPath, caller string) *sql.DB {
+	t.Helper()
+	if _, err := os.Stat(dbPath); err != nil {
+		t.Fatalf("storefix.%s: store file %q: %v", caller, dbPath, err)
+	}
+	raw, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(10000)")
+	if err != nil {
+		t.Fatalf("storefix.%s: open raw db %q: %v", caller, dbPath, err)
+	}
+	return raw
 }

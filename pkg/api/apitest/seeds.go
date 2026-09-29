@@ -1,11 +1,13 @@
 package apitest
 
 import (
+	"crypto/rand"
 	"database/sql"
-	"encoding/json"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/google/uuid"
@@ -30,12 +32,24 @@ import (
 //   - createStore: if true the store is created when missing (OpenOrInit);
 //     if false the store must already exist (Open).
 //
-//   - opts: optional trailing SpawnOption values seeding the schema-v3 columns
-//     (pid, proc_starttime, jsonl_path, extra_env, liveness_unverified_since,
-//     liveness_note). Options are applied by an apitest-internal SQL UPDATE on
-//     the seeded row after the InsertPending/RecordSessionStartIdentity/
-//     ApplyHookTransition sequence; only explicitly provided columns are written. Supplying no
-//     options preserves the store's defaults (NULL columns; extra_env = '{}').
+//   - opts: optional trailing SpawnOption values seeding columns the store
+//     writes above cannot (the v3 identity/liveness columns, the v5 columns,
+//     timestamps and raw structured text). Options and the SR-20.3 defaults
+//     are applied by apitest-internal SQL UPDATEs in one transaction after
+//     the InsertPending/RecordSessionStartIdentity/ApplyHookTransition
+//     sequence: one UPDATE writes the options and defaults, and for a
+//     pending row with no launch-start option a second UPDATE sets the
+//     default launch start from the final started_at. Neither UPDATE
+//     advances row_version.
+//
+// SR-20.3 defaults, for every column no option names: a well-formed launch
+// token (16 lowercase hex, distinct per row), tmux_socket TestSocket,
+// no_pre_trust 0, life_number 0, and no server or pane identity (NULL); a
+// pending row's launch start is its final started_at (after WithStartedAt) in
+// whole seconds as milliseconds (none when started_at does not parse as a
+// time), and a row in any other state has none. The live-row pane default
+// matching the Recorder's seeded session waits for the Recorder's session
+// table (Epic t1.h98.a2 Task 3).
 //
 // Returns the claude_instance_id that was written.
 func SeedSpawn(dbPath, id, state, cwd, relayMode, sessionID string, createStore bool, opts ...SpawnOption) (string, error) {
@@ -87,73 +101,113 @@ func SeedSpawn(dbPath, id, state, cwd, relayMode, sessionID string, createStore 
 		}
 	}
 
-	if len(opts) > 0 {
-		if err := applySpawnOpts(dbPath, id, opts); err != nil {
-			return "", err
-		}
+	if err := applySpawnColumns(dbPath, id, state, opts); err != nil {
+		return "", err
 	}
 
 	return id, nil
 }
 
-// applySpawnOpts writes the requested schema-v3 column overrides onto the
-// already-seeded row via a raw parameterized SQL UPDATE. apitest is the single
-// blessed location for these column literals (SR-12.2 binds the no-hardcoded-SQL
-// rule to tests, not this mandated helper). Only fields with a non-nil pointer
-// are written, so unset options leave the store's defaults untouched; extra_env
-// is marshaled to a JSON object (nil map already normalized to {} by WithExtraEnv).
-func applySpawnOpts(dbPath, id string, opts []SpawnOption) error {
+// applySpawnColumns writes the option overrides and the SR-20.3 defaults onto
+// the already-seeded row through a raw parameterised UPDATE, in one
+// transaction. apitest is the single blessed location for these column
+// literals (SR-20.2 binds the no-inline-SQL rule to tests, not this helper).
+// The column names come from the options' literals, never from input. The
+// pending default launch start is a second statement because it reads the
+// final started_at, which the first may have written.
+func applySpawnColumns(dbPath, id, state string, opts []SpawnOption) error {
 	o := &spawnOpts{}
 	for _, opt := range opts {
 		opt(o)
 	}
-
-	setClauses := make([]string, 0, 6)
-	args := make([]any, 0, 7)
-	if o.pid != nil {
-		setClauses = append(setClauses, "pid = ?")
-		args = append(args, *o.pid)
-	}
-	if o.procStarttime != nil {
-		setClauses = append(setClauses, "proc_starttime = ?")
-		args = append(args, *o.procStarttime)
-	}
-	if o.jsonlPath != nil {
-		setClauses = append(setClauses, "jsonl_path = ?")
-		args = append(args, *o.jsonlPath)
-	}
-	if o.extraEnv != nil {
-		encoded, err := json.Marshal(o.extraEnv)
-		if err != nil {
-			return fmt.Errorf("SeedSpawn: marshal extra_env: %w", err)
-		}
-		setClauses = append(setClauses, "extra_env = ?")
-		args = append(args, string(encoded))
-	}
-	if o.livenessUnverifiedSince != nil {
-		setClauses = append(setClauses, "liveness_unverified_since = ?")
-		args = append(args, *o.livenessUnverifiedSince)
-	}
-	if o.livenessNote != nil {
-		setClauses = append(setClauses, "liveness_note = ?")
-		args = append(args, *o.livenessNote)
-	}
-	if len(setClauses) == 0 {
-		return nil
-	}
-
-	raw, err := sql.Open("sqlite", "file:"+dbPath)
+	token, err := newLaunchToken()
 	if err != nil {
-		return fmt.Errorf("SeedSpawn: raw open: %w", err)
+		return fmt.Errorf("SeedSpawn: launch token: %w", err)
+	}
+	defaults := map[string]any{
+		"launch_token":          token,
+		"tmux_socket":           TestSocket,
+		"no_pre_trust":          int64(0),
+		"life_number":           int64(0),
+		"tmux_server_pid":       nil,
+		"tmux_server_started":   nil,
+		"tmux_server_starttime": nil,
+		"pane_id":               nil,
+		"pane_pid":              nil,
+		"pane_starttime":        nil,
+	}
+	for col, v := range defaults {
+		if !o.has(col) {
+			o.set(col, v)
+		}
+	}
+	pendingDefaultStart := !o.has("launch_started_at") && state == store.StatePending
+	if !o.has("launch_started_at") && !pendingDefaultStart {
+		o.set("launch_started_at", nil)
+	}
+
+	cols := make([]string, 0, len(o.cols))
+	for col := range o.cols {
+		cols = append(cols, col)
+	}
+	sort.Strings(cols)
+	setClauses := make([]string, 0, len(cols))
+	args := make([]any, 0, len(cols)+1)
+	for _, col := range cols {
+		setClauses = append(setClauses, col+" = ?")
+		args = append(args, o.cols[col])
+	}
+	args = append(args, id)
+
+	raw, err := openRawStore(dbPath)
+	if err != nil {
+		return fmt.Errorf("SeedSpawn: %w", err)
 	}
 	defer raw.Close() //nolint:errcheck
 
+	tx, err := raw.Begin()
+	if err != nil {
+		return fmt.Errorf("SeedSpawn: begin options tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after Commit
 	q := "UPDATE spawns SET " + strings.Join(setClauses, ", ") + " WHERE claude_instance_id = ?"
-	args = append(args, id)
-	if _, err := raw.Exec(q, args...); err != nil {
+	if _, err := tx.Exec(q, args...); err != nil {
 		return fmt.Errorf("SeedSpawn: apply options UPDATE: %w", err)
 	}
+	if pendingDefaultStart {
+		if _, err := tx.Exec(`UPDATE spawns
+		    SET launch_started_at = CAST(strftime('%s', started_at) AS INTEGER) * 1000
+		  WHERE claude_instance_id = ?`, id); err != nil {
+			return fmt.Errorf("SeedSpawn: default launch start UPDATE: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("SeedSpawn: commit options tx: %w", err)
+	}
 	return nil
+}
+
+// newLaunchToken returns a fresh well-formed launch token: 64 random bits as
+// 16 lowercase hexadecimal characters (SR-3.5).
+func newLaunchToken() (string, error) {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b[:]), nil
+}
+
+// openRawStore opens a raw connection to an existing store file, never
+// creating one, with the store's busy timeout.
+func openRawStore(dbPath string) (*sql.DB, error) {
+	if _, err := os.Stat(dbPath); err != nil {
+		return nil, fmt.Errorf("store file: %w", err)
+	}
+	raw, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(10000)")
+	if err != nil {
+		return nil, fmt.Errorf("raw open: %w", err)
+	}
+	return raw, nil
 }
 
 // SeedParentChild sets the parent_id on childID to parentID.

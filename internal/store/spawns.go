@@ -82,6 +82,29 @@ type Spawn struct {
 	ProcStarttime           string
 	LivenessUnverifiedSince string
 	LivenessNote            string
+
+	// The schema-v5 fields (SR-5.1, Appendix F.4), filled by every read that
+	// returns a Spawn. They are read-only in this release step: no write
+	// takes them from a Spawn yet. The SR-5.5 columns never fail a read.
+
+	// RowVersion is row_version: advanced by one by every write (SR-5.2).
+	RowVersion int64
+	// LaunchStartedAtMillis is launch_started_at in milliseconds since the
+	// epoch; 0 = absent (NULL, or a stored value that is not an integer, SR-5.5).
+	LaunchStartedAtMillis int64
+	// LifeNumber is life_number, the row's current life (SR-5.9).
+	LifeNumber int64
+	// NoPreTrust is no_pre_trust (SR-5.1): true for any stored value other
+	// than the integer 0 (SR-5.5).
+	NoPreTrust bool
+	// EndedAtText is ended_at exactly as stored, never parsed and re-formatted;
+	// "" = NULL. resume's restore writes it back byte for byte (SR-5.3).
+	EndedAtText string
+	// Snapshot is the row's change-detection key (SR-5.3).
+	Snapshot RowSnapshot
+	// Identity is the eight launch-identity columns (SR-3.3 to SR-3.6, SR-5.1);
+	// Identity.Token is "" unless the stored token is well formed (SR-5.5).
+	Identity LaunchIdentity
 }
 
 // InsertPending writes a new row in `pending` state. Used by spawn.Launch
@@ -139,50 +162,118 @@ func (s *Store) InsertPending(sp Spawn) error {
 // GetSpawn returns the full row for the given claude_instance_id. Missing
 // rows yield ErrSpawnNotFound; other failures wrap the driver error.
 func (s *Store) GetSpawn(instanceID string) (Spawn, error) {
-	const q = `
-        SELECT claude_instance_id, COALESCE(parent_id, ''), state, cwd,
-               tmux_session_name, claude_args, relay_mode,
-               COALESCE(jsonl_path, ''), COALESCE(claude_session_id, ''),
-               labels, started_at, last_seen_at, ended_at,
-               COALESCE(pid, 0), COALESCE(proc_starttime, ''),
-               COALESCE(liveness_unverified_since, ''),
-               COALESCE(liveness_note, ''), extra_env
-          FROM spawns
-         WHERE claude_instance_id = ?
-    `
-	row := s.db.QueryRow(q, instanceID)
+	q := `SELECT ` + spawnColumns + ` FROM spawns WHERE claude_instance_id = ?`
+	sp, err := scanSpawn(s.db.QueryRow(q, instanceID), getSpawnErrs)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Spawn{}, fmt.Errorf("%w: %s", ErrSpawnNotFound, instanceID)
+	}
+	if err != nil {
+		return Spawn{}, err
+	}
+	return sp, nil
+}
+
+// spawnColumns is the one column list every read returning a Spawn selects,
+// in scanSpawn's order. The v5 columns come last so the pre-v5 columns keep
+// their indices (and their scan-error texts). started_at and ended_at are
+// selected a second time through CAST so the driver hands back the stored
+// text instead of parsing the TIMESTAMP column (SR-5.3). The three SR-5.5
+// columns are selected bare and decoded in Go; the other v5 columns follow
+// the v3 identity columns' rule (NULL is the zero value; any other stored
+// value scans normally).
+const spawnColumns = `
+        claude_instance_id, COALESCE(parent_id, ''), state, cwd,
+        tmux_session_name, claude_args, relay_mode,
+        COALESCE(jsonl_path, ''), COALESCE(claude_session_id, ''),
+        labels, started_at, last_seen_at, ended_at,
+        COALESCE(pid, 0), COALESCE(proc_starttime, ''),
+        COALESCE(liveness_unverified_since, ''),
+        COALESCE(liveness_note, ''), extra_env,
+        CAST(started_at AS TEXT), CAST(ended_at AS TEXT),
+        COALESCE(row_version, 0), launch_started_at,
+        COALESCE(life_number, 0), no_pre_trust, launch_token,
+        COALESCE(tmux_socket, ''), COALESCE(tmux_server_pid, 0),
+        COALESCE(tmux_server_started, 0), COALESCE(tmux_server_starttime, ''),
+        COALESCE(pane_id, ''), COALESCE(pane_pid, 0),
+        COALESCE(pane_starttime, '')`
+
+// rowScanner is the Scan method shared by *sql.Row and *sql.Rows.
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+// spawnReadErrs holds a read's error prefixes, so GetSpawn and ListSpawns
+// keep their own error texts while sharing scanSpawn.
+type spawnReadErrs struct {
+	scan   string // wraps a Scan failure
+	decode string // followed by the column name for a JSON decode failure
+}
+
+var (
+	getSpawnErrs   = spawnReadErrs{scan: "store: get spawn", decode: "store: decode"}
+	listSpawnsErrs = spawnReadErrs{scan: "store: list spawns scan", decode: "store: list spawns decode"}
+)
+
+// scanSpawn scans one row selected with spawnColumns into a Spawn. The
+// pre-v5 fields and failures are exactly as before (an unparseable
+// started_at/ended_at or malformed labels, claude_args or extra_env fails the
+// read); the SR-5.5 columns never fail it. The Scan error is wrapped with %w,
+// so callers can still detect sql.ErrNoRows.
+func scanSpawn(sc rowScanner, errs spawnReadErrs) (Spawn, error) {
 	var (
-		sp           Spawn
-		argsJSON     string
-		labelsJSON   string
-		endedAt      sql.NullTime
-		extraEnvJSON string
+		sp              Spawn
+		argsJSON        string
+		labelsJSON      string
+		endedAt         sql.NullTime
+		extraEnvJSON    string
+		startedAtText   string
+		endedAtText     sql.NullString
+		launchStartedAt any
+		noPreTrust      any
+		launchToken     any
 	)
-	err := row.Scan(
+	err := sc.Scan(
 		&sp.ClaudeInstanceID, &sp.ParentID, &sp.State, &sp.CWD,
 		&sp.TmuxSessionName, &argsJSON, &sp.RelayMode,
 		&sp.JSONLPath, &sp.ClaudeSessionID,
 		&labelsJSON, &sp.StartedAt, &sp.LastSeenAt, &endedAt,
 		&sp.PID, &sp.ProcStarttime, &sp.LivenessUnverifiedSince,
 		&sp.LivenessNote, &extraEnvJSON,
+		&startedAtText, &endedAtText,
+		&sp.RowVersion, &launchStartedAt,
+		&sp.LifeNumber, &noPreTrust, &launchToken,
+		&sp.Identity.Socket, &sp.Identity.ServerPID,
+		&sp.Identity.ServerStart, &sp.Identity.ServerStarttime,
+		&sp.Identity.PaneID, &sp.Identity.PanePID,
+		&sp.Identity.PaneStarttime,
 	)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Spawn{}, fmt.Errorf("%w: %s", ErrSpawnNotFound, instanceID)
-	}
 	if err != nil {
-		return Spawn{}, fmt.Errorf("store: get spawn: %w", err)
+		return Spawn{}, fmt.Errorf("%s: %w", errs.scan, err)
 	}
 	if endedAt.Valid {
-		sp.EndedAt = &endedAt.Time
+		t := endedAt.Time
+		sp.EndedAt = &t
 	}
 	if sp.ClaudeArgs, err = decodeArgs(argsJSON); err != nil {
-		return Spawn{}, fmt.Errorf("store: decode claude_args: %w", err)
+		return Spawn{}, fmt.Errorf("%s claude_args: %w", errs.decode, err)
 	}
 	if sp.Labels, err = decodeLabels(labelsJSON); err != nil {
-		return Spawn{}, fmt.Errorf("store: decode labels: %w", err)
+		return Spawn{}, fmt.Errorf("%s labels: %w", errs.decode, err)
 	}
 	if sp.ExtraEnv, err = decodeExtraEnv(extraEnvJSON); err != nil {
-		return Spawn{}, fmt.Errorf("store: decode extra_env: %w", err)
+		return Spawn{}, fmt.Errorf("%s extra_env: %w", errs.decode, err)
+	}
+	sp.LaunchStartedAtMillis = decodeLaunchStartedAt(launchStartedAt)
+	sp.NoPreTrust = decodeNoPreTrust(noPreTrust)
+	sp.Identity.Token = decodeLaunchToken(launchToken)
+	sp.EndedAtText = endedAtText.String
+	sp.Snapshot = RowSnapshot{
+		RowVersion:      sp.RowVersion,
+		StartedAt:       startedAtText,
+		ClaudeSessionID: sp.ClaudeSessionID,
+		PID:             sp.PID,
+		ProcStarttime:   sp.ProcStarttime,
+		TmuxSessionName: sp.TmuxSessionName,
 	}
 	return sp, nil
 }
