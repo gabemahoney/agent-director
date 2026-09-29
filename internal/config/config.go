@@ -6,6 +6,12 @@
 // Path fields support leading "~/" expansion and relative-path resolution
 // against "~/.agent-director/". Shell variables like $HOME are preserved
 // literally.
+//
+// The [tmux] table (type Tmux, tmux.go) holds the nine timing settings of
+// agent-director's use of tmux, with their defaults, safe minimums and the
+// pending grace period's minimum rule (SR-4.1). A missing key or 0 gives the
+// default; Load refuses a negative value and a positive value below a key's
+// safe minimum exactly as it refuses a malformed file.
 package config
 
 import (
@@ -25,6 +31,7 @@ type Config struct {
 	Pause    Pause    `toml:"pause"`
 	Store    Store    `toml:"store"`
 	Log      Log      `toml:"log"`
+	Tmux     Tmux     `toml:"tmux"`
 }
 
 // Defaults holds per-invocation default behavior toggles.
@@ -109,6 +116,17 @@ func Default() Config {
 		Log: Log{
 			ErrorLogPath: "~/.agent-director/errors.log",
 		},
+		Tmux: Tmux{
+			StartingSessionSeconds: DefaultStartingSessionSeconds,
+			StoppingWindowSeconds:  DefaultStoppingWindowSeconds,
+			PendingGraceSeconds:    DefaultPendingGraceSeconds,
+			QueryTimeoutMs:         DefaultQueryTimeoutMs,
+			ActionTimeoutMs:        DefaultActionTimeoutMs,
+			CreateTimeoutMs:        DefaultCreateTimeoutMs,
+			PipeCloseWaitMs:        DefaultPipeCloseWaitMs,
+			SweepBudgetSeconds:     DefaultSweepBudgetSeconds,
+			KillExitWaitMs:         DefaultKillExitWaitMs,
+		},
 	}
 }
 
@@ -134,6 +152,17 @@ func (e *ConfigError) Unwrap() error {
 // Default() with a nil error. Any other read or parse failure returns
 // Default() wrapped in *ConfigError.
 //
+// After a successful parse, Load validates the [tmux] table (SR-4.1): a
+// negative value of any key, and a positive value below its key's safe
+// minimum (for the pending grace period, the default too when its key is
+// missing or 0 and the default is below the derived minimum), are refused,
+// never raised to the minimum or replaced by the default. A refusal behaves
+// exactly like a malformed file: Load returns a *ConfigError for the file
+// whose Err describes every refused key. A value that is not a TOML integer
+// already fails the parse. The Config returned alongside any *ConfigError
+// exists only to mirror the parse-failure contract pinned by
+// TestLoadMalformedReturnsTypedError; no caller may run with it.
+//
 // Path fields (Store.DbPath, Log.ErrorLogPath) are post-processed:
 //   - A leading "~/" is expanded to the current user's home directory.
 //   - A relative path (neither absolute nor "~/"-prefixed) is resolved
@@ -148,7 +177,11 @@ func Load(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	switch {
 	case err == nil:
-		if _, err := toml.Decode(string(data), &cfg); err != nil {
+		meta, err := toml.Decode(string(data), &cfg)
+		if err != nil {
+			return resolvePaths(Default(), home), &ConfigError{Path: path, Err: err}
+		}
+		if err := validateTmux(cfg.Tmux, meta); err != nil {
 			return resolvePaths(Default(), home), &ConfigError{Path: path, Err: err}
 		}
 	case errors.Is(err, os.ErrNotExist):

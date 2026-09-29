@@ -49,6 +49,16 @@ func TestDefaultMatchesSRD(t *testing.T) {
 		{"Pause.TimeoutSeconds", d.Pause.TimeoutSeconds, 30},
 		{"Store.DbPath", d.Store.DbPath, "~/.agent-director/state.db"},
 		{"Log.ErrorLogPath", d.Log.ErrorLogPath, "~/.agent-director/errors.log"},
+		// [tmux] defaults, pinned to the SR-4.1 table's literals.
+		{"Tmux.StartingSessionSeconds", d.Tmux.StartingSessionSeconds, int64(300)},
+		{"Tmux.StoppingWindowSeconds", d.Tmux.StoppingWindowSeconds, int64(90)},
+		{"Tmux.PendingGraceSeconds", d.Tmux.PendingGraceSeconds, int64(60)},
+		{"Tmux.QueryTimeoutMs", d.Tmux.QueryTimeoutMs, int64(1500)},
+		{"Tmux.ActionTimeoutMs", d.Tmux.ActionTimeoutMs, int64(2000)},
+		{"Tmux.CreateTimeoutMs", d.Tmux.CreateTimeoutMs, int64(5000)},
+		{"Tmux.PipeCloseWaitMs", d.Tmux.PipeCloseWaitMs, int64(100)},
+		{"Tmux.SweepBudgetSeconds", d.Tmux.SweepBudgetSeconds, int64(15)},
+		{"Tmux.KillExitWaitMs", d.Tmux.KillExitWaitMs, int64(5000)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

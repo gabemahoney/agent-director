@@ -274,11 +274,82 @@ db_path = "~/.agent-director/state.db"
 
 [log]
 error_log_path = "~/.agent-director/errors.log"
+
+[tmux]   # timing settings: omit a key (or set it to 0) to use its default
+# starting_session_seconds = 300
+# stopping_window_seconds = 90
+# pending_grace_seconds = 60
+# query_timeout_ms = 1500
+# action_timeout_ms = 2000
+# create_timeout_ms = 5000
+# pipe_close_wait_ms = 100
+# sweep_budget_seconds = 15
+# kill_exit_wait_ms = 5000
 ```
 
 Env vars passed at spawn time (via `--extra-env`) are stored in
 `state.db` so `resume` can restore them. The file is owner-only (`0600`
 in a `0700` directory).
+
+### Timing settings (`[tmux]`)
+
+> **Warning:** a refused or malformed value stops agent-director — the
+> CLI from its next call, each hook from its next fire, the MCP server
+> from its next start (a server already running keeps its old values).
+> After editing the file, check it at once with `agent-director list`.
+
+Each value is a whole integer in the unit its key names. Every default
+can be changed, but never below its safe minimum.
+
+| Key | Unit | Default | Safe minimum | What it bounds |
+|---|---|---|---|---|
+| `starting_session_seconds` | s | 300 | **60** | Starting-session bound: until a finished row's own tmux session is this old, it counts as "still starting, retry later" rather than a conflict needing a human. Claude Code reports SessionStart within seconds. |
+| `stopping_window_seconds` | s | 90 | **30** | Stopping window: how long after an agent ends it counts as "still stopping, retry later". Covers Claude Code's SessionEnd hook budget plus teardown. |
+| `pending_grace_seconds` | s | 60 | **30**, or more (see below) | `find-missing`'s grace period: how long a launch is left alone after it starts. |
+| `query_timeout_ms` | ms | 1500 | none | Each tmux lookup and pane listing. |
+| `action_timeout_ms` | ms | 2000 | none | Each tmux kill, key send and pane capture. |
+| `create_timeout_ms` | ms | 5000 | none | The tmux call that creates a session (`spawn`, `resume`). |
+| `pipe_close_wait_ms` | ms | 100 | none | How long a tmux call waits for its output pipes after its process exits. |
+| `sweep_budget_seconds` | s | 15 | none | Total tmux time per run of `find-missing` and `expire`. |
+| `kill_exit_wait_ms` | ms | 5000 (provisional) | none | How long `kill` waits for the agent process to exit after killing its pane. |
+
+- **Validation.** A missing key, or 0, gives the default. A negative
+  value, a positive value below the key's safe minimum, or a value that
+  is not an integer is refused — never raised to the minimum or replaced
+  by the default. Until the file is fixed, every store-backed verb fails
+  with `ErrConfigMalformed` naming each refused key, its value and its
+  minimum; `serve` does not start; hooks record nothing and relayed
+  permission requests are denied. `help` and `version` still run. A
+  misspelt key is ignored, so its default stays in force.
+- **Grace period.** Separate from the bound and the stopping window. It
+  must outlast the time from a launch's start until its tmux session
+  exists, which agent-director enforces through its minimum: 30 s, or
+  `create_timeout_ms` + `pipe_close_wait_ms` + 20 s (rounded up to whole
+  seconds) when that is larger. Raising either can refuse a grace period,
+  the default included: `create_timeout_ms = 40000` raises the minimum to
+  61, so the default 60 is refused until `pending_grace_seconds` is set
+  to 61 or more.
+- **When a change takes effect.** The CLI and the TypeScript client: on
+  their next call. The MCP server: only after a restart. A Go `Client`:
+  when it is built.
+- **Setting a value too low.** The six keys with no minimum fail closed:
+  healthy calls become `ErrTmuxUnresponsive` refusals or uncertain
+  results ("the keys may have been delivered", "the session may have
+  been created"), sweeps leave rows unverified or kept, and too low a
+  `kill_exit_wait_ms` returns `ErrTmuxKillFailed` for an agent still
+  exiting. Lower none of them without cause. A shorter stopping window
+  or bound brings `ErrTmuxSessionConflict` sooner for an agent still
+  stopping or starting; a longer one only delays a human's attention.
+- **Setting a value higher.** Stated worst-case call times hold only at
+  the defaults. Raising a timeout, `pipe_close_wait_ms`,
+  `sweep_budget_seconds` or `kill_exit_wait_ms` (which counts in full
+  toward `kill`'s time) can take a call past the TypeScript client's
+  default 30 s call timeout, which then returns `ErrCallTimeout` while
+  the verb may still complete — raise TypeScript callers' `callTimeoutMs`
+  to match.
+- Callers whose own waits use these values (waiting out the grace
+  period, a retry cadence for "still stopping") need the configured
+  values: tell them when you change one.
 
 ## Maintenance
 

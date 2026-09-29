@@ -3,8 +3,19 @@
 //
 // All helpers live in regular (non-_test.go) Go files so they can be imported
 // from any package, not just from within pkg/api. The package depends only on
-// internal/store, internal/spawn, stdlib, and the sqlite driver — it does NOT
-// import pkg/api, which avoids any import cycle.
+// internal/store, internal/spawn, internal/config (for the [tmux] key
+// definitions), stdlib, the sqlite driver and github.com/BurntSushi/toml (to
+// encode the config file) — it does NOT import pkg/api, which avoids any
+// import cycle.
+//
+// # Config writer
+//
+//   - WriteTmuxConfig writes a config file whose [tmux] table holds the given
+//     TmuxSetting values (TmuxInt, and TmuxFloat / TmuxString / TmuxBool for
+//     the malformed cases), keyed by config.TmuxKey so no test spells a
+//     [tmux] key name (SR-20.3). config.TmuxKeys() lists the nine keys in
+//     table order. It is the only way pkg/api, CLI and MCP tests write
+//     [tmux] settings; see its doc comment for the usage rules.
 //
 // # Migrated helpers and their prior locations
 //
