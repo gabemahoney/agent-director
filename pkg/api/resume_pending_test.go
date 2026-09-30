@@ -229,6 +229,27 @@ func pendRefuse(t *testing.T, e *resumeEnv, id, callerParent string) pendRefusal
 // TestResumeRefusesLaunchInProgress: a resume of any pending row gets the
 // launch-in-progress refusal, makes no tmux call and writes nothing.
 func TestResumeRefusesLaunchInProgress(t *testing.T) {
+	// seededNoStart seeds a pending row whose launch_started_at is raw: nil
+	// (NULL) or an int64 outside years 0 to 9999, which reads as absent (SR-5.5).
+	seededNoStart := func(raw any) func(t *testing.T, e *resumeEnv, p string) (string, *pendRefusal, int64) {
+		return func(t *testing.T, e *resumeEnv, p string) (string, *pendRefusal, int64) {
+			opt := apitest.WithNoLaunchStartedAt()
+			if ms, ok := raw.(int64); ok {
+				opt = apitest.WithLaunchStartedAt(ms)
+			}
+			id, err := apitest.SeedSpawn(e.dbPath, "", store.StatePending, t.TempDir(), "off", "sess-"+uuid.NewString()[:8], false, opt)
+			if err != nil {
+				t.Fatalf("SeedSpawn: %v", err)
+			}
+			if got := e.columns(t, id).LaunchStartedAt; got != raw {
+				t.Fatalf("seeded launch_started_at = %#v; want %#v", got, raw)
+			}
+			if err := apitest.SeedParentChild(e.dbPath, pendParent(t, e), id); err != nil {
+				t.Fatalf("SeedParentChild: %v", err)
+			}
+			return id, nil, 0
+		}
+	}
 	cases := []struct {
 		name string
 		// setup makes a pending row and returns its id, the refusal when it
@@ -257,17 +278,9 @@ func TestResumeRefusesLaunchInProgress(t *testing.T) {
 			}
 			return r.ID, nil, start
 		}},
-		{"seeded pending with no launch start", func(t *testing.T, e *resumeEnv, p string) (string, *pendRefusal, int64) {
-			id, err := apitest.SeedSpawn(e.dbPath, "", store.StatePending, t.TempDir(), "off", "sess-"+uuid.NewString()[:8], false,
-				apitest.WithNoLaunchStartedAt())
-			if err != nil {
-				t.Fatalf("SeedSpawn: %v", err)
-			}
-			if err := apitest.SeedParentChild(e.dbPath, pendParent(t, e), id); err != nil {
-				t.Fatalf("SeedParentChild: %v", err)
-			}
-			return id, nil, 0
-		}},
+		{"seeded pending with no launch start", seededNoStart(nil)},
+		{"seeded pending at year 10000", seededNoStart(time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli())},
+		{"seeded pending before year 0", seededNoStart(time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli() - 1)},
 		{"plain spawn whose launch failed", func(t *testing.T, e *resumeEnv, p string) (string, *pendRefusal, int64) {
 			e.rec.Script(e.socket, tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 1, Times: 1}, tmux.CallCreate)
 			id := uuid.NewString()

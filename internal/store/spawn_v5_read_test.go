@@ -8,6 +8,7 @@ package store_test
 import (
 	"errors"
 	"fmt"
+	"math"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -103,38 +104,80 @@ func withToken(token string) apitest.SpawnOption {
 	return apitest.WithLaunchIdentity(store.LaunchIdentity{Token: token, Socket: apitest.TestSocket})
 }
 
+// The SR-5.5 range of a launch start in Unix ms ("an integer whose time falls
+// outside the years 0 to 9999" reads as absent). Shared with spawn_status_test.go.
+const (
+	// firstInRangeLaunchMillis is 0000-01-01T00:00:00.000Z.
+	firstInRangeLaunchMillis int64 = -62167219200000
+	// lastInRangeLaunchMillis is 9999-12-31T23:59:59.999Z.
+	lastInRangeLaunchMillis int64 = 253402300799999
+)
+
+// launchStartBoundaries are the stored launch starts at and just past the
+// SR-5.5 range, with what every read of them yields.
+var launchStartBoundaries = []struct {
+	name   string
+	stored int64
+	want   int64
+}{
+	{"first ms of year 0", firstInRangeLaunchMillis, firstInRangeLaunchMillis},
+	{"last ms of year 9999", lastInRangeLaunchMillis, lastInRangeLaunchMillis},
+	{"one ms before year 0", firstInRangeLaunchMillis - 1, 0},
+	{"first ms of year 10000", lastInRangeLaunchMillis + 1, 0},
+	{"int64 min", math.MinInt64, 0},
+	{"int64 max", math.MaxInt64, 0},
+}
+
+// assertStoredLaunchStart fails unless id's raw launch_started_at is the
+// integer want, so a boundary case reads the value it names.
+func assertStoredLaunchStart(t *testing.T, f *v5Store, id string, want int64) {
+	t.Helper()
+	if raw := f.rawColumns(id).LaunchStartedAt; raw != any(want) {
+		t.Fatalf("raw launch_started_at = %#v; want the integer %d as seeded", raw, want)
+	}
+}
+
 // TestV5NarrowReadsNeverFail checks the SR-5.5 meaning of launch_started_at,
 // launch_token and no_pre_trust for every stored value, with no read error.
 func TestV5NarrowReadsNeverFail(t *testing.T) {
-	cases := []struct {
+	type narrowCase struct {
 		name           string
 		opt            apitest.SpawnOption
 		wantStart      int64
 		wantToken      string
 		wantNoPreTrust bool
-	}{
-		{"launch start integer", apitest.WithLaunchStartedAt(1767225600123), 1767225600123, goodToken, false},
-		{"launch start text", apitest.WithRawLaunchStartedAt("yesterday"), 0, goodToken, false},
-		{"launch start real", apitest.WithRawLaunchStartedAt(1767225600123.5), 0, goodToken, false},
-		{"launch start blob", apitest.WithRawLaunchStartedAt([]byte("1767225600123")), 0, goodToken, false},
-		{"launch start NULL", apitest.WithNoLaunchStartedAt(), 0, goodToken, false},
-		{"token well formed", withToken(goodToken), 0, goodToken, false},
-		{"token too short", withToken(goodToken[:15]), 0, "", false},
-		{"token too long", withToken(goodToken + "0"), 0, "", false},
-		{"token upper case", withToken("0123456789ABCDEF"), 0, "", false},
-		{"token non-hex", withToken("0123456789abcdeg"), 0, "", false},
-		{"token NULL", apitest.WithNoLaunchToken(), 0, "", false},
-		{"no_pre_trust 0", apitest.WithRawNoPreTrust(int64(0)), 0, goodToken, false},
-		{"no_pre_trust 1", apitest.WithNoPreTrust(), 0, goodToken, true},
-		{"no_pre_trust 7", apitest.WithRawNoPreTrust(int64(7)), 0, goodToken, true},
-		{"no_pre_trust -1", apitest.WithRawNoPreTrust(int64(-1)), 0, goodToken, true},
-		{"no_pre_trust text", apitest.WithRawNoPreTrust("weird"), 0, goodToken, true},
-		{"no_pre_trust real", apitest.WithRawNoPreTrust(0.5), 0, goodToken, true},
+		rawStart       *int64 // the stored launch start to confirm before reading
+	}
+	cases := []narrowCase{
+		{"launch start integer", apitest.WithLaunchStartedAt(1767225600123), 1767225600123, goodToken, false, nil},
+		{"launch start text", apitest.WithRawLaunchStartedAt("yesterday"), 0, goodToken, false, nil},
+		{"launch start real", apitest.WithRawLaunchStartedAt(1767225600123.5), 0, goodToken, false, nil},
+		{"launch start blob", apitest.WithRawLaunchStartedAt([]byte("1767225600123")), 0, goodToken, false, nil},
+		{"launch start NULL", apitest.WithNoLaunchStartedAt(), 0, goodToken, false, nil},
+		{"token well formed", withToken(goodToken), 0, goodToken, false, nil},
+		{"token too short", withToken(goodToken[:15]), 0, "", false, nil},
+		{"token too long", withToken(goodToken + "0"), 0, "", false, nil},
+		{"token upper case", withToken("0123456789ABCDEF"), 0, "", false, nil},
+		{"token non-hex", withToken("0123456789abcdeg"), 0, "", false, nil},
+		{"token NULL", apitest.WithNoLaunchToken(), 0, "", false, nil},
+		{"no_pre_trust 0", apitest.WithRawNoPreTrust(int64(0)), 0, goodToken, false, nil},
+		{"no_pre_trust 1", apitest.WithNoPreTrust(), 0, goodToken, true, nil},
+		{"no_pre_trust 7", apitest.WithRawNoPreTrust(int64(7)), 0, goodToken, true, nil},
+		{"no_pre_trust -1", apitest.WithRawNoPreTrust(int64(-1)), 0, goodToken, true, nil},
+		{"no_pre_trust text", apitest.WithRawNoPreTrust("weird"), 0, goodToken, true, nil},
+		{"no_pre_trust real", apitest.WithRawNoPreTrust(0.5), 0, goodToken, true, nil},
+	}
+	for _, b := range launchStartBoundaries {
+		cases = append(cases, narrowCase{"launch start " + b.name,
+			apitest.WithLaunchStartedAt(b.stored), b.want, goodToken, false, &b.stored})
 	}
 	f := newV5Store(t)
 	for _, tc := range cases {
 		// A waiting row has no default launch start; the case's option wins over withToken.
 		id := f.seed(store.StateWaiting, "", withToken(goodToken), tc.opt)
+		if tc.rawStart != nil {
+			assertStoredLaunchStart(t, f, id, *tc.rawStart)
+		}
 		for _, r := range spawnReads {
 			t.Run(tc.name+"/"+r.name, func(t *testing.T) {
 				sp := mustRead(t, f, r, id)

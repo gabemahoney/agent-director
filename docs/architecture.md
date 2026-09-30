@@ -599,8 +599,14 @@ callers see the launch start").
   pane id/pid/starttime. A zero field means NULL. It holds handles and
   liveness evidence only. The session label, not this value, proves ownership
   of a launch.
-- **SR-5.5 narrow reads.** A `launch_started_at` that is not an integer reads
-  as absent (0). A `launch_token` that is not exactly 16 lowercase hex
+- **SR-5.5 narrow reads.** A `launch_started_at` that is NULL, is not an
+  integer, or is an integer outside the years 0 to 9999 UTC reads as absent
+  (0). The range is inclusive, from `minLaunchStartedAtMillis` (the first
+  millisecond of year 0) to `maxLaunchStartedAtMillis` (the last millisecond
+  of year 9999), both in `internal/store/rowsnapshot.go`. A time outside it
+  has no RFC3339 form, so it would fail JSON encoding. Only a hand edit can
+  store such a value, and it never fails a read or a `status`, `get` or
+  `list` result. A `launch_token` that is not exactly 16 lowercase hex
   characters reads as absent (""). Any `no_pre_trust` other than the integer
   0 reads as the opt-out. None of these fails a read. Every other column keeps
   its existing failure behaviour; for example, malformed `labels` or a text
@@ -612,7 +618,10 @@ callers see the launch start").
   `no_pre_trust` goes through the shared decoders in
   `internal/store/rowsnapshot.go` (`decodeLaunchStartedAt`,
   `decodeLaunchToken`, `decodeNoPreTrust`; each takes the column scanned into
-  an `any` and never fails). A new read returning a `Spawn` selects
+  an `any` and never fails). The year 0 to 9999 range rule lives only in
+  `decodeLaunchStartedAt`, so every consumer inherits it: `SpawnStatus`,
+  `GetSpawn`/`ListSpawns` (through `scanSpawn`) and `resume`'s refusal, which
+  reads the row with `GetSpawn`. A new read returning a `Spawn` selects
   `spawnColumns` and scans with `scanSpawn`. Never re-derive the rules in a
   new read.
 
@@ -1988,9 +1997,10 @@ create-and-label step, never with a name-based create.
 
 **Where callers see the launch start.** `status`, `get` and `list` carry
 `launch_started_at` (RFC3339 UTC, millisecond precision) only on a
-`pending` row whose stored launch start is a non-zero integer; otherwise,
-on any other state included, the key is omitted, never `null`
-(SR-22.2). One helper, `launchStartedAt` (`pkg/api/get.go`), makes that
+`pending` row whose stored launch start is a non-zero integer inside the
+years 0 to 9999 UTC; otherwise, on any other state included, the key is
+omitted, never `null` (SR-22.2). An out-of-range stored value omits the key
+and the call still succeeds (SR-5.5). One helper, `launchStartedAt` (`pkg/api/get.go`), makes that
 projection for all three. Any verb that reports the launch start must use
 `launchStartedAt`, not its own state check or timestamp format. `status`
 reads the launch start through an optional narrow read: if its

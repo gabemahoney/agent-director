@@ -110,7 +110,9 @@ type Spawn struct {
 	// RowVersion is row_version: advanced by one by every write (SR-5.2).
 	RowVersion int64
 	// LaunchStartedAtMillis is launch_started_at in milliseconds since the
-	// epoch; 0 = absent (NULL, or a stored value that is not an integer, SR-5.5).
+	// epoch; 0 = absent (NULL, a stored value that is not an integer, or an
+	// integer outside the years 0 to 9999 UTC; see decodeLaunchStartedAt,
+	// SR-5.5).
 	LaunchStartedAtMillis int64
 	// LifeNumber is life_number, the row's current life (SR-5.9).
 	LifeNumber int64
@@ -343,7 +345,8 @@ func (s *Store) GetSpawnState(instanceID string) (string, error) {
 // SpawnStatus returns the row's state and its launch start in milliseconds
 // (0 = absent) in one read by primary key, for status (SR-22.2, SR-16.1).
 // It decodes no structured column and never fails because of a stored
-// launch start value (SR-5.5).
+// launch start value: NULL, a non-integer and an integer outside the years 0
+// to 9999 UTC all read as 0 (decodeLaunchStartedAt, SR-5.5).
 func (s *Store) SpawnStatus(instanceID string) (state string, launchStartedAtMillis int64, err error) {
 	const q = `SELECT state, launch_started_at FROM spawns WHERE claude_instance_id = ?`
 	var launchStartedAt any

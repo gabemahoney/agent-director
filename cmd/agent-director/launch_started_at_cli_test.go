@@ -20,15 +20,20 @@ type launchShape struct {
 	want            string
 }
 
-// launchShapes covers a readable pending row (with and without a ms fraction),
-// a non-pending row that has a stored launch start, and unreadable pending rows.
+// launchShapes covers readable pending rows (ms fraction, whole second, the
+// year 0 and year 9999 bounds), a non-pending row with a stored launch start,
+// and unreadable pending rows (NULL, non-integer, one ms outside either bound).
 func launchShapes() []launchShape {
 	return []launchShape{
 		{"pending ms fraction", "ls-pending-frac", "pending", apitest.WithLaunchStartedAt(1790000000123), "2026-09-21T14:13:20.123Z"},
 		{"pending whole second", "ls-pending-whole", "pending", apitest.WithLaunchStartedAt(1790000000000), "2026-09-21T14:13:20Z"},
+		{"pending year 0 first ms", "ls-pending-min", "pending", apitest.WithLaunchStartedAt(-62167219200000), "0000-01-01T00:00:00Z"},
+		{"pending year 9999 last ms", "ls-pending-max", "pending", apitest.WithLaunchStartedAt(253402300799999), "9999-12-31T23:59:59.999Z"},
 		{"waiting with launch start", "ls-waiting", "waiting", apitest.WithLaunchStartedAt(1790000000123), ""},
 		{"pending NULL", "ls-pending-null", "pending", apitest.WithNoLaunchStartedAt(), ""},
 		{"pending non-integer", "ls-pending-raw", "pending", apitest.WithRawLaunchStartedAt("not-a-number"), ""},
+		{"pending before year 0", "ls-pending-below", "pending", apitest.WithLaunchStartedAt(-62167219200001), ""},
+		{"pending year 10000", "ls-pending-above", "pending", apitest.WithLaunchStartedAt(253402300800000), ""},
 	}
 }
 
@@ -122,7 +127,7 @@ func assertLaunchField(t *testing.T, obj map[string]json.RawMessage, want string
 }
 
 // TestLaunchStartedAtCLISeeded pins SR-22.2/SR-5.5 on the CLI: status, get and
-// list print launch_started_at only for a readable pending row, exit 0 always.
+// list print launch_started_at only for a readable, in-range pending row, exit 0 always.
 func TestLaunchStartedAtCLISeeded(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()

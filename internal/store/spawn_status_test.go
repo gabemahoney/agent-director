@@ -35,29 +35,36 @@ func mustSpawnStatus(t *testing.T, s *store.Store, id string) (string, int64) {
 }
 
 // TestSpawnStatusReturnsStateAndStoredLaunchStart checks each row shape reads
-// back its state and its stored launch start (0 when NULL or non-integer).
+// back its state and its stored launch start (0 when NULL, non-integer or
+// outside the years 0 to 9999; SR-5.5).
 func TestSpawnStatusReturnsStateAndStoredLaunchStart(t *testing.T) {
-	cases := []struct {
-		name  string
-		state string
-		opt   apitest.SpawnOption
-		want  int64
-	}{
-		{"pending, integer ms with fraction", store.StatePending, apitest.WithLaunchStartedAt(launchMillis), launchMillis},
-		{"pending, SR-20.3 default", store.StatePending, nil, statusStartedAt.UnixMilli()},
-		{"pending, NULL", store.StatePending, apitest.WithNoLaunchStartedAt(), 0},
-		{"pending, text", store.StatePending, apitest.WithRawLaunchStartedAt("yesterday"), 0},
-		{"pending, real", store.StatePending, apitest.WithRawLaunchStartedAt(1767225600123.5), 0},
-		{"pending, blob", store.StatePending, apitest.WithRawLaunchStartedAt([]byte("1767225600123")), 0},
-		{"waiting", store.StateWaiting, nil, 0},
-		{"working", store.StateWorking, nil, 0},
-		{"ask_user", store.StateAskUser, nil, 0},
-		{"check_permission", store.StateCheckPermission, nil, 0},
-		{"ended", store.StateEnded, nil, 0},
-		{"missing", store.StateMissing, nil, 0},
+	type statusCase struct {
+		name     string
+		state    string
+		opt      apitest.SpawnOption
+		want     int64
+		rawStart *int64 // the stored launch start to confirm before reading
+	}
+	cases := []statusCase{
+		{"pending, integer ms with fraction", store.StatePending, apitest.WithLaunchStartedAt(launchMillis), launchMillis, nil},
+		{"pending, SR-20.3 default", store.StatePending, nil, statusStartedAt.UnixMilli(), nil},
+		{"pending, NULL", store.StatePending, apitest.WithNoLaunchStartedAt(), 0, nil},
+		{"pending, text", store.StatePending, apitest.WithRawLaunchStartedAt("yesterday"), 0, nil},
+		{"pending, real", store.StatePending, apitest.WithRawLaunchStartedAt(1767225600123.5), 0, nil},
+		{"pending, blob", store.StatePending, apitest.WithRawLaunchStartedAt([]byte("1767225600123")), 0, nil},
+		{"waiting", store.StateWaiting, nil, 0, nil},
+		{"working", store.StateWorking, nil, 0, nil},
+		{"ask_user", store.StateAskUser, nil, 0, nil},
+		{"check_permission", store.StateCheckPermission, nil, 0, nil},
+		{"ended", store.StateEnded, nil, 0, nil},
+		{"missing", store.StateMissing, nil, 0, nil},
 		// The read returns what is stored; the pending-only gate lives in pkg/api.
-		{"waiting, stored launch start", store.StateWaiting, apitest.WithLaunchStartedAt(launchMillis), launchMillis},
-		{"ended, stored launch start", store.StateEnded, apitest.WithLaunchStartedAt(launchMillis), launchMillis},
+		{"waiting, stored launch start", store.StateWaiting, apitest.WithLaunchStartedAt(launchMillis), launchMillis, nil},
+		{"ended, stored launch start", store.StateEnded, apitest.WithLaunchStartedAt(launchMillis), launchMillis, nil},
+	}
+	for _, b := range launchStartBoundaries {
+		cases = append(cases, statusCase{"pending, " + b.name, store.StatePending,
+			apitest.WithLaunchStartedAt(b.stored), b.want, &b.stored})
 	}
 	f := newV5Store(t)
 	for _, tc := range cases {
@@ -66,6 +73,9 @@ func TestSpawnStatusReturnsStateAndStoredLaunchStart(t *testing.T) {
 			opts = append(opts, tc.opt)
 		}
 		id := f.seed(tc.state, "", opts...)
+		if tc.rawStart != nil {
+			assertStoredLaunchStart(t, f, id, *tc.rawStart)
+		}
 		t.Run(tc.name, func(t *testing.T) {
 			state, millis := mustSpawnStatus(t, f.s, id)
 			if state != tc.state {

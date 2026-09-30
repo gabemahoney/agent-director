@@ -76,14 +76,31 @@ const launchTokenLen = 16
 // or []byte by storage class) and never fails, whatever a hand edit stored.
 // Every read of these columns uses them rather than re-deriving the rules.
 
+// The inclusive range of a launch start, in milliseconds since the Unix
+// epoch (SR-5.5): the first millisecond of year 0 and the last millisecond of
+// year 9999, UTC. A time outside it has no RFC3339 form, so encoding it as
+// JSON would fail.
+const (
+	// minLaunchStartedAtMillis is 0000-01-01T00:00:00.000Z.
+	minLaunchStartedAtMillis int64 = -62167219200000
+	// maxLaunchStartedAtMillis is 9999-12-31T23:59:59.999Z.
+	maxLaunchStartedAtMillis int64 = 253402300799999
+)
+
 // decodeLaunchStartedAt maps launch_started_at to milliseconds since the
-// epoch. Only an integer is a launch start; NULL and any other stored value
-// (text, real, blob) yield 0, meaning absent (SR-5.5, SR-11.2).
+// epoch. Only an integer from minLaunchStartedAtMillis to
+// maxLaunchStartedAtMillis inclusive (years 0 to 9999, UTC) is a launch
+// start. NULL, any other stored value (text, real, blob) and an integer
+// outside that range yield 0, meaning absent (SR-5.5, SR-11.2), so a
+// hand-edited value never fails a read or the JSON encoding of the row. A
+// stored 0 (1970-01-01T00:00:00Z) is in range but also reads as absent,
+// because 0 is the absent value; it gets no special case.
 func decodeLaunchStartedAt(v any) int64 {
-	if ms, ok := v.(int64); ok {
-		return ms
+	ms, ok := v.(int64)
+	if !ok || ms < minLaunchStartedAtMillis || ms > maxLaunchStartedAtMillis {
+		return 0
 	}
-	return 0
+	return ms
 }
 
 // decodeLaunchToken maps launch_token to the token. Only text of exactly 16

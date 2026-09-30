@@ -4,7 +4,7 @@ package api_test
 // (SR-22.2, SR-16.1, SR-5.5): present, as an RFC3339 UTC instant at
 // millisecond precision, only on a pending row with a readable launch start;
 // absent (never null) on every other row, and no verb fails on an unreadable
-// value. It also covers Status's optional narrow read and a real spawn.
+// value, including an integer outside the years 0 to 9999. It also covers Status's optional narrow read and a real spawn.
 
 import (
 	"encoding/json"
@@ -42,12 +42,27 @@ type launchShape struct {
 // id is the shape's instance id in the shared store.
 func (s launchShape) id() string { return "launch-" + strings.ReplaceAll(s.name, " ", "-") }
 
-// launchShapes returns the readable pending rows, the unreadable pending rows,
-// and one row in every other state seeded with a readable launch start.
+// launchShapes returns the readable pending rows (including the first and
+// last millisecond of the range, years 0 to 9999 UTC), the unreadable pending
+// rows (including an integer just outside the range on each side), and one
+// row in every other state seeded with a readable launch start.
 func launchShapes() []launchShape {
+	// The range's inclusive ends in Unix milliseconds, and one past each end.
+	firstMillis := time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	lastMillis := time.Date(9999, 12, 31, 23, 59, 59, 999_000_000, time.UTC).UnixMilli()
+	const (
+		firstJSON = "0000-01-01T00:00:00Z"
+		lastJSON  = "9999-12-31T23:59:59.999Z"
+	)
+	year10000Millis := lastMillis + 1
+	beforeYear0Millis := firstMillis - 1
 	shapes := []launchShape{
 		{"pending ms fraction", store.StatePending, []apitest.SpawnOption{apitest.WithLaunchStartedAt(launchFracMillis)}, launchFracMillis, launchFracJSON},
 		{"pending whole second", store.StatePending, []apitest.SpawnOption{apitest.WithLaunchStartedAt(launchWholeMillis)}, launchWholeMillis, launchWholeJSON},
+		{"pending first in range", store.StatePending, []apitest.SpawnOption{apitest.WithLaunchStartedAt(firstMillis)}, firstMillis, firstJSON},
+		{"pending last in range", store.StatePending, []apitest.SpawnOption{apitest.WithLaunchStartedAt(lastMillis)}, lastMillis, lastJSON},
+		{"pending year 10000", store.StatePending, []apitest.SpawnOption{apitest.WithLaunchStartedAt(year10000Millis)}, 0, ""},
+		{"pending before year 0", store.StatePending, []apitest.SpawnOption{apitest.WithLaunchStartedAt(beforeYear0Millis)}, 0, ""},
 		{"pending NULL", store.StatePending, []apitest.SpawnOption{apitest.WithNoLaunchStartedAt()}, 0, ""},
 		{"pending text", store.StatePending, []apitest.SpawnOption{apitest.WithRawLaunchStartedAt("soon")}, 0, ""},
 		{"pending real", store.StatePending, []apitest.SpawnOption{apitest.WithRawLaunchStartedAt(float64(launchFracMillis) + 0.5)}, 0, ""},
@@ -174,7 +189,8 @@ func TestLaunchStartedAtByVerbAndRow(t *testing.T) {
 	}
 }
 
-// TestLaunchStartedAtListMixedRows: List returns every row, and only the
+// TestLaunchStartedAtListMixedRows: List returns every row and the whole
+// result encodes as JSON, even with out-of-range rows among them, and only the
 // readable pending rows carry the field, each with its own value.
 func TestLaunchStartedAtListMixedRows(t *testing.T) {
 	shapes := launchShapes()
@@ -182,6 +198,9 @@ func TestLaunchStartedAtListMixedRows(t *testing.T) {
 	res, err := c.List(api.ListParams{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
+	}
+	if _, err := json.Marshal(res); err != nil {
+		t.Fatalf("json.Marshal(List result): %v", err)
 	}
 	rows := map[string]api.ListRow{}
 	for _, r := range res.Spawns {
