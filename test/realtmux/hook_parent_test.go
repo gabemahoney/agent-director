@@ -218,7 +218,7 @@ func TestHookAppliesOnlyFromThePaneProcess(t *testing.T) {
 				t.Fatalf("the hook ran under pid %d, pane process %d; the case needs parent == pane %v", parent, panePID, tc.applied)
 			}
 
-			row := f.readRow(t, s.ID)
+			row := readRow(t, f.DBPath, s.ID)
 			ignored := hookIgnoredRecords(t, home, s.ID)
 			if tc.applied {
 				// SR-22.9: an applied SessionStart sets waiting and records the

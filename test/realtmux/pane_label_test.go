@@ -196,7 +196,7 @@ func TestPaneLabelCreate(t *testing.T) {
 func TestPaneLabelSplitPaneReadsEmpty(t *testing.T) {
 	rt := newRealTmux(t)
 	c := rt.mustCreate(t, createSpec{})
-	split, _ := idtSplit(t, rt, c.Reply.SessionID)
+	split, _ := idtSplit(t, rt, c.Reply.SessionID, stubCommand())
 
 	want := map[string]string{c.Reply.PaneID: tmuxfix.PaneLabelValue(c.Token, c.Reply.PaneID), split: ""}
 	assertPaneLabels(t, "own", rt.ownPaneLabels(t), want)
@@ -213,7 +213,7 @@ func TestPaneLabelByID(t *testing.T) {
 	holder := rt.mustCreate(t, createSpec{})
 	c := rt.unlabelledCreate(t)
 	id, pane := c.Reply.SessionID, c.Reply.PaneID
-	split, _ := idtSplit(t, rt, id)
+	split, _ := idtSplit(t, rt, id, stubCommand())
 	rt.must(t, "select-pane", "-t", split)
 	if rt.format(t, split, "#{pane_active}") != "1" {
 		t.Fatalf("split pane %s is not the active pane of %s", split, id)
@@ -316,7 +316,7 @@ func TestPaneLabelScopeValuesNeverCount(t *testing.T) {
 		t.Run(sc.name, func(t *testing.T) {
 			rt := newRealTmux(t)
 			c := rt.mustCreate(t, createSpec{})
-			split, _ := idtSplit(t, rt, c.Reply.SessionID)
+			split, _ := idtSplit(t, rt, c.Reply.SessionID, stubCommand())
 			other := rt.startSession(t, "")
 			v := tmuxfix.PaneLabelValue(c.Token, c.Reply.PaneID)
 			rt.must(t, append(append([]string{"set-option"}, sc.flags(c)...), paneLabelOption, v)...)
@@ -348,7 +348,7 @@ func TestPaneLabelServerValueHidesOwnValues(t *testing.T) {
 			// Names sort a before b, so the listing order is the catalogue's.
 			a := rt.mustCreate(t, createSpec{Name: "a-" + uniqueName()})
 			b := rt.mustCreate(t, createSpec{Name: "b-" + uniqueName()})
-			split, _ := idtSplit(t, rt, a.Reply.SessionID)
+			split, _ := idtSplit(t, rt, a.Reply.SessionID, stubCommand())
 			own := map[string]string{
 				a.Reply.PaneID: tmuxfix.PaneLabelValue(a.Token, a.Reply.PaneID),
 				b.Reply.PaneID: tmuxfix.PaneLabelValue(b.Token, b.Reply.PaneID),

@@ -193,11 +193,11 @@ func idtSendAndSee(t testing.TB, rt *realTmux, cl *tmux.Client, paneID string) s
 	return marker
 }
 
-// idtSplit adds a second pane running stubCommand to sessionID with the raw
-// runner and tracks it; it returns the new pane's id and pid.
-func idtSplit(t testing.TB, rt *realTmux, sessionID string) (string, int) {
+// idtSplit adds a second pane (a teammate) running cmd to sessionID with the
+// raw runner and tracks it; it returns the new pane's id and pid.
+func idtSplit(t testing.TB, rt *realTmux, sessionID string, cmd []string) (string, int) {
 	t.Helper()
-	args := append([]string{"split-window", "-d", "-t", sessionID, "-P", "-F", "#{pane_id}\t#{pane_pid}", "--"}, stubCommand()...)
+	args := append([]string{"split-window", "-d", "-t", sessionID, "-P", "-F", "#{pane_id}\t#{pane_pid}", "--"}, cmd...)
 	out := rt.must(t, args...)
 	f := strings.Split(strings.TrimSuffix(out, "\n"), "\t")
 	if len(f) != 2 {
@@ -217,7 +217,7 @@ func TestIdTargetReachesOnlyItsTarget(t *testing.T) {
 	rt := newRealTmux(t)
 	a := rt.mustCreate(t, createSpec{})
 	b := rt.mustCreate(t, createSpec{})
-	aSecond, aSecondPID := idtSplit(t, rt, a.Reply.SessionID)
+	aSecond, aSecondPID := idtSplit(t, rt, a.Reply.SessionID, stubCommand())
 	cl := newClient()
 
 	bCapture, err := cl.CapturePaneID(rt.Socket, b.Reply.PaneID, idtCapLines, false)

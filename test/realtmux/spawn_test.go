@@ -73,10 +73,11 @@ func (f *spawnFix) spawn(id string) (string, error) {
 	return res.ClaudeInstanceID, err
 }
 
-// readRow reads id's spawns row through the store-read helper.
-func (f *spawnFix) readRow(t testing.TB, id string) apitest.SpawnColumns {
+// readRow reads id's spawns row from the store file dbPath through the
+// store-read helper.
+func readRow(t testing.TB, dbPath, id string) apitest.SpawnColumns {
 	t.Helper()
-	row, err := apitest.ReadSpawnColumns(f.DBPath, id)
+	row, err := apitest.ReadSpawnColumns(dbPath, id)
 	if err != nil {
 		t.Fatalf("read row %s: %v", id, err)
 	}
@@ -107,7 +108,7 @@ func (f *spawnFix) mustSpawn(t *testing.T, id string) spawned {
 	if id != "" && got != id {
 		t.Fatalf("spawn returned id %q, want %q", got, id)
 	}
-	row := f.readRow(t, got)
+	row := readRow(t, f.DBPath, got)
 	socket, ok1 := row.TmuxSocket.(string)
 	paneID, ok2 := row.PaneID.(string)
 	if !ok1 || !ok2 {
@@ -282,7 +283,7 @@ func TestSpawnSocketDeniedIsTmuxNotAvailable(t *testing.T) {
 			}
 			switch {
 			case tc.wantRow && len(rows.Spawns) == 1:
-				row := f.readRow(t, rows.Spawns[0].ClaudeInstanceID)
+				row := readRow(t, f.DBPath, rows.Spawns[0].ClaudeInstanceID)
 				if row.State != "pending" || row.TmuxSocket != f.Socket || row.TmuxServerPID != nil || row.PaneID != nil {
 					t.Errorf("row: state %v, tmux_socket %v, server pid %v, pane %v; want pending on %s with no identity",
 						row.State, row.TmuxSocket, row.TmuxServerPID, row.PaneID, f.Socket)
