@@ -18,8 +18,9 @@ import (
 //     SessionStart to persist identity (pid+starttime) + jsonl_path. Spawn one
 //     OTHER row too (a second dead row for the "ALL dead rows" assertion).
 //  3. tmux kill-server + SIGKILL every stub process; poll until their /proc
-//     entries vanish (provably dead to the checker's ENOENT path).
-//  4. ONE find-missing run: every dead row → missing, count>0, no refusal.
+//     entries vanish (the recorded agent processes are gone).
+//  4. ONE find-missing run: every dead row → missing (tick reason
+//     proc_absent), count>0, none unverified.
 //  5. Resume the extra-env spawn: succeeds; the resurrected stub's
 //     /proc/<pid>/environ carries CLAUDE_CONFIG_DIR == the custom dir.
 //  6. The jsonl transcript holds BOTH pre-kill content and a post-resume
@@ -91,14 +92,16 @@ func TestRebootRecoveryEndToEnd(t *testing.T) {
 	dbPath := filepath.Join(home, ".agent-director", "state.db")
 
 	// Wait for BOTH stubs' SessionStart hooks to persist identity + flip state
-	// to waiting. The find-missing checker needs a recorded pid+starttime; the
-	// jsonl pre-flight on resume needs a persisted jsonl_path.
+	// to waiting. find-missing judges the recorded pid+starttime; the jsonl
+	// pre-flight on resume needs a persisted jsonl_path.
 	waitForObserved(t, pollDeadline, "target SessionStart persists identity+jsonl and flips to waiting", func() bool {
 		return rowReady(t, dbPath, targetID)
 	}, observeRow(dbPath, targetID))
 	waitForObserved(t, pollDeadline, "other SessionStart persists identity and flips to waiting", func() bool {
 		return rowReady(t, dbPath, otherID)
 	}, observeRow(dbPath, otherID))
+	assertHookApplied(t, home, targetID)
+	assertHookApplied(t, home, otherID)
 
 	// Confirm get surfaces the persisted jsonl_path for the target (resume
 	// pre-flight reads exactly this).
@@ -114,28 +117,24 @@ func TestRebootRecoveryEndToEnd(t *testing.T) {
 	})
 
 	// ── Step 3: reboot simulation — kill tmux server + all stub processes ─────
-	if len(stubPIDs(t)) == 0 {
-		t.Fatalf("expected at least one live stub before kill; found none")
-	}
 	// Capture the recorded identity pids BEFORE the kill so we can wait for those
 	// exact /proc entries to be fully gone — not merely for the marker-carrying
 	// live set to empty. A SIGKILLed pane process lingers as a <defunct> zombie
-	// (empty environ, but /proc/<pid> still present with a matching starttime)
-	// until its parent is reaped; find-missing's checker treats a live pid whose
-	// starttime still matches as evidence to weigh, so we must let the reboot
-	// simulation fully retire the pid before the single sweep runs.
+	// (/proc/<pid> still present) until its parent is reaped; the reboot
+	// simulation fully retires every recorded pid before the single sweep runs,
+	// as a real reboot would.
 	recordedPIDs := []int64{recordedPID(t, dbPath, targetID), recordedPID(t, dbPath, otherID)}
+	waitStubsSettled(t, recordedPIDs)
 
 	if out, err := exec.Command("tmux", "kill-server").CombinedOutput(); err != nil {
 		t.Logf("tmux kill-server: %v (%s) — proceeding to SIGKILL stubs", err, out)
 	}
 	killStubs(t)
-	// Poll until every recorded pid's /proc entry is entirely gone (ENOENT) —
-	// the checker's provably-dead path the acceptance describes. reapZombies
-	// clears any <defunct> pane the SIGKILL left behind (this process is a
-	// child-subreaper, so the reparented panes are waitable here); without
-	// reaping, a zombie's /proc entry lingers with a matching starttime and the
-	// checker would not see the process as gone.
+	// Poll until every recorded pid's /proc entry is entirely gone (ENOENT).
+	// reapZombies clears any <defunct> pane the SIGKILL left behind (this
+	// process is a child-subreaper, so the reparented panes are waitable here);
+	// without reaping, a zombie's /proc entry would linger and this poll would
+	// never end.
 	waitFor(t, "recorded identity pids fully retired (/proc ENOENT)", func() bool {
 		killStubs(t)
 		reapZombies()
@@ -156,8 +155,8 @@ func TestRebootRecoveryEndToEnd(t *testing.T) {
 	if fm.Count <= 0 {
 		t.Fatalf("find-missing count=%d; want > 0 (raw=%s)", fm.Count, stdout)
 	}
-	// No refusal / no degraded behavior: every dead row must be verified-missing,
-	// none left unverified (a permission-wall refusal would land here).
+	// Every dead row is judged by its recorded agent process and marked; none
+	// is left unverified (an unreadable or unrecorded process would land here).
 	if fm.Unverified != 0 || len(fm.UnverifiedIDs) != 0 {
 		t.Fatalf("find-missing left rows unverified (refusal/degraded): unverified=%d ids=%v raw=%s",
 			fm.Unverified, fm.UnverifiedIDs, stdout)
@@ -167,12 +166,12 @@ func TestRebootRecoveryEndToEnd(t *testing.T) {
 			t.Fatalf("find-missing did not mark %s missing; ids=%v raw=%s", want, fm.IDs, stdout)
 		}
 	}
-	// Both rows now read state=missing.
-	if st := getState(t, dbPath, targetID); st != "missing" {
-		t.Fatalf("target state=%q; want missing", st)
-	}
-	if st := getState(t, dbPath, otherID); st != "missing" {
-		t.Fatalf("other state=%q; want missing", st)
+	// Both rows now read state=missing, each marked once as proc_absent.
+	for _, id := range []string{targetID, otherID} {
+		if st := getState(t, dbPath, id); st != "missing" {
+			t.Fatalf("row %s state=%q; want missing", id, st)
+		}
+		assertMarkedProcAbsent(t, home, id)
 	}
 
 	// ── Step 5: resume the extra-env row; assert restored CLAUDE_CONFIG_DIR ───
@@ -296,6 +295,7 @@ func TestRebootRecoveryNulledJsonlPathHealsViaConfigDir(t *testing.T) {
 	waitForObserved(t, pollDeadline, "target SessionStart persists identity+jsonl and flips to waiting", func() bool {
 		return rowReady(t, dbPath, targetID)
 	}, observeRow(dbPath, targetID))
+	assertHookApplied(t, home, targetID)
 
 	// Sanity: SessionStart persisted the derived path (proves stub↔test path
 	// agreement before we NULL it).
@@ -309,10 +309,8 @@ func TestRebootRecoveryNulledJsonlPathHealsViaConfigDir(t *testing.T) {
 	})
 
 	// ── Reboot simulation ─────────────────────────────────────────────────────
-	if len(stubPIDs(t)) == 0 {
-		t.Fatalf("expected at least one live stub before kill; found none")
-	}
 	recordedPIDs := []int64{recordedPID(t, dbPath, targetID)}
+	waitStubsSettled(t, recordedPIDs)
 	if out, err := exec.Command("tmux", "kill-server").CombinedOutput(); err != nil {
 		t.Logf("tmux kill-server: %v (%s) — proceeding to SIGKILL stubs", err, out)
 	}
@@ -337,9 +335,13 @@ func TestRebootRecoveryNulledJsonlPathHealsViaConfigDir(t *testing.T) {
 	if !containsID(fm.IDs, targetID) {
 		t.Fatalf("find-missing did not mark %s missing; ids=%v raw=%s", targetID, fm.IDs, stdout)
 	}
+	if fm.Unverified != 0 {
+		t.Fatalf("find-missing unverified=%d; want 0 (raw=%s)", fm.Unverified, stdout)
+	}
 	if st := getState(t, dbPath, targetID); st != "missing" {
 		t.Fatalf("target state=%q; want missing", st)
 	}
+	assertMarkedProcAbsent(t, home, targetID)
 
 	// ── ESSENTIAL: NULL the persisted jsonl_path so resume CANNOT use it ───────
 	// This forces the CONFIG_DIR-aware fallback. The transcript still lives at

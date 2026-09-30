@@ -49,11 +49,10 @@ jobs:
         run: make test-docker EPIC=harness-smoke
 
   macos-probe:
-    # Exercises the sysctl-based liveness prober on actual macOS so the
-    # build-tagged probe_darwin.go path is verified against the real
-    # KERN_PROCARGS2 surface. The unit test launches a child with
-    # AGENT_DIRECTOR_INSTANCE_ID set and polls until the prober sees
-    # it. See SRD §19 Q7.
+    # Exercises internal/probe's sysctl-based readers (the start-time
+    # reader and the command-name reader) on actual macOS so the
+    # build-tagged darwin path is verified against the real KERN_PROC_PID
+    # surface. See SRD §19 Q7.
     name: macOS lane — probe sysctl path
     runs-on: macos-latest
     # Same 30m cap as the linux job; the unit test should finish in

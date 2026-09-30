@@ -129,7 +129,7 @@ func TestHookGateRelayTimeoutWriteAfterGateStopsHolding(t *testing.T) {
 	var moved store.Spawn
 	var moveErr error
 	clock := &gateMoveClock{now: now, move: func() {
-		if _, err := st.MarkSpawnMissing(id); err != nil {
+		if _, err := markMissingSameLife(st, id); err != nil {
 			moveErr = err
 			return
 		}

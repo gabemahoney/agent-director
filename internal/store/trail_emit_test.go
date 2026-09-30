@@ -296,7 +296,7 @@ const trailMoveStart int64 = 1767225600000
 
 // trailSeedFinished inserts a pending row and finishes it as state, then
 // returns the row as resume examines it. A missing row is marked by
-// MarkSpawnMissing, a non-hook write; an ended row can only be reached by a
+// MarkMissingIfSameLife, a non-hook write; an ended row can only be reached by a
 // hook transition today, so its seed is the agent's own hook, after the
 // create's identity write records its pane (SR-22.9: no hook applies to a row
 // with no pane).
@@ -313,9 +313,13 @@ func trailSeedFinished(t *testing.T, s *Store, id, state string) Spawn {
 			t.Fatalf("seed ended: ApplyHookTransition(%s): %v", id, err)
 		}
 	case StateMissing:
-		prior, err := s.MarkSpawnMissing(id)
-		if err != nil || prior != StatePending {
-			t.Fatalf("seed missing: MarkSpawnMissing(%s) = %q, %v; want %q, nil", id, prior, err, StatePending)
+		examined, err := s.GetSpawn(id)
+		if err != nil {
+			t.Fatalf("seed missing: GetSpawn(%s): %v", id, err)
+		}
+		prior, res, err := s.MarkMissingIfSameLife(id, examined.Snapshot)
+		if err != nil || res != CondApplied || prior != StatePending {
+			t.Fatalf("seed missing: MarkMissingIfSameLife(%s) = %q, %v, %v; want %q, CondApplied, nil", id, prior, res, err, StatePending)
 		}
 	default:
 		t.Fatalf("trailSeedFinished: state %q is not ended or missing", state)

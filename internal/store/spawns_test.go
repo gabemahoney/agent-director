@@ -1095,15 +1095,19 @@ func TestApplyHookTransitionHeldWorkingPreservesLiveness(t *testing.T) {
 	if err := agentPermissionRequest(s, id, tokenA, "Bash", `{"cmd":"ls"}`, 0, ""); err != nil {
 		t.Fatalf("UpsertOpenPermissionRequest: %v", err)
 	}
-	// Pin liveness AFTER reaching check_permission (still a live state).
-	transitioned, err := s.SetLivenessUnverified(id, "held note")
+	// Pin liveness AFTER reaching check_permission (still a live state),
+	// through the guarded note write against the row's current snapshot.
+	sp, err := s.GetSpawn(id)
 	if err != nil {
-		t.Fatalf("SetLivenessUnverified: %v", err)
+		t.Fatalf("GetSpawn: %v", err)
 	}
-	if !transitioned {
-		t.Fatalf("SetLivenessUnverified transitioned=false; want true")
+	if res, err := s.SetLivenessNoteIfSameLife(id, sp.Snapshot, "held note"); err != nil || res != CondApplied {
+		t.Fatalf("SetLivenessNoteIfSameLife = %v, %v; want CondApplied, nil", res, err)
 	}
-	wantSince, _ := readLivenessRaw(t, s, id)
+	wantSince, wantNote := readLivenessRaw(t, s, id)
+	if !wantSince.Valid || !wantNote.Valid || wantNote.String != "held note" {
+		t.Fatalf("seeded liveness = %+v, %+v; want both set, note %q", wantSince, wantNote, "held note")
+	}
 
 	// Attempt working: the open row holds it — no UPDATE, liveness preserved.
 	if err := agentHook(s, id, StateWorking, false, "PreToolUse"); err != nil {

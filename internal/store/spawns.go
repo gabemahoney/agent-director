@@ -223,12 +223,14 @@ func (s *Store) GetSpawn(instanceID string) (Spawn, error) {
 
 // spawnColumns is the one column list every read returning a Spawn selects,
 // in scanSpawn's order. The v5 columns come last so the pre-v5 columns keep
-// their indices (and their scan-error texts). started_at and ended_at are
-// selected a second time through CAST so the driver hands back the stored
-// text instead of parsing the TIMESTAMP column (SR-5.3). The three SR-5.5
-// columns are selected bare and decoded in Go; the other v5 columns follow
-// the v3 identity columns' rule (NULL is the zero value; any other stored
-// value scans normally).
+// their indices (and their scan-error texts). ended_at is selected a second
+// time through CAST so the driver hands back the stored text instead of
+// parsing the TIMESTAMP column (SR-5.3). The list ends with lifeColumns, the
+// snapshot and launch-identity fragment the live-row read shares; its
+// started_at, claude_session_id, pid, proc_starttime and tmux_session_name
+// are the same row's values the Spawn's own fields read. The SR-5.5 columns are selected bare and decoded in
+// Go; the other v5 columns follow the v3 identity columns' rule (NULL is the
+// zero value; any other stored value scans normally).
 const spawnColumns = `
         claude_instance_id, COALESCE(parent_id, ''), state, cwd,
         tmux_session_name, claude_args, relay_mode,
@@ -237,13 +239,8 @@ const spawnColumns = `
         COALESCE(pid, 0), COALESCE(proc_starttime, ''),
         COALESCE(liveness_unverified_since, ''),
         COALESCE(liveness_note, ''), extra_env,
-        CAST(started_at AS TEXT), CAST(ended_at AS TEXT),
-        COALESCE(row_version, 0), launch_started_at,
-        COALESCE(life_number, 0), no_pre_trust, launch_token,
-        COALESCE(tmux_socket, ''), COALESCE(tmux_server_pid, 0),
-        COALESCE(tmux_server_started, 0), COALESCE(tmux_server_starttime, ''),
-        COALESCE(pane_id, ''), COALESCE(pane_pid, 0),
-        COALESCE(pane_starttime, '')`
+        CAST(ended_at AS TEXT), launch_started_at,
+        COALESCE(life_number, 0), no_pre_trust,` + lifeColumns
 
 // rowScanner is the Scan method shared by *sql.Row and *sql.Rows.
 type rowScanner interface {
@@ -274,27 +271,22 @@ func scanSpawn(sc rowScanner, errs spawnReadErrs) (Spawn, error) {
 		labelsJSON      string
 		endedAt         sql.NullTime
 		extraEnvJSON    string
-		startedAtText   string
 		endedAtText     sql.NullString
 		launchStartedAt any
 		noPreTrust      any
-		launchToken     any
+		life            lifeScan
 	)
-	err := sc.Scan(
+	dest := append([]any{
 		&sp.ClaudeInstanceID, &sp.ParentID, &sp.State, &sp.CWD,
 		&sp.TmuxSessionName, &argsJSON, &sp.RelayMode,
 		&sp.JSONLPath, &sp.ClaudeSessionID,
 		&labelsJSON, &sp.StartedAt, &sp.LastSeenAt, &endedAt,
 		&sp.PID, &sp.ProcStarttime, &sp.LivenessUnverifiedSince,
 		&sp.LivenessNote, &extraEnvJSON,
-		&startedAtText, &endedAtText,
-		&sp.RowVersion, &launchStartedAt,
-		&sp.LifeNumber, &noPreTrust, &launchToken,
-		&sp.Identity.Socket, &sp.Identity.ServerPID,
-		&sp.Identity.ServerStart, &sp.Identity.ServerStarttime,
-		&sp.Identity.PaneID, &sp.Identity.PanePID,
-		&sp.Identity.PaneStarttime,
-	)
+		&endedAtText, &launchStartedAt,
+		&sp.LifeNumber, &noPreTrust,
+	}, life.dest()...)
+	err := sc.Scan(dest...)
 	if err != nil {
 		return Spawn{}, fmt.Errorf("%s: %w", errs.scan, err)
 	}
@@ -313,16 +305,9 @@ func scanSpawn(sc rowScanner, errs spawnReadErrs) (Spawn, error) {
 	}
 	sp.LaunchStartedAtMillis = decodeLaunchStartedAt(launchStartedAt)
 	sp.NoPreTrust = decodeNoPreTrust(noPreTrust)
-	sp.Identity.Token = decodeLaunchToken(launchToken)
 	sp.EndedAtText = endedAtText.String
-	sp.Snapshot = RowSnapshot{
-		RowVersion:      sp.RowVersion,
-		StartedAt:       startedAtText,
-		ClaudeSessionID: sp.ClaudeSessionID,
-		PID:             sp.PID,
-		ProcStarttime:   sp.ProcStarttime,
-		TmuxSessionName: sp.TmuxSessionName,
-	}
+	sp.Snapshot, sp.Identity = life.result()
+	sp.RowVersion = sp.Snapshot.RowVersion
 	return sp, nil
 }
 

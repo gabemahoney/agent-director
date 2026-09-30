@@ -2,13 +2,12 @@
  * Smoke test — find-missing verb
  *
  * Happy path: call on an empty store. No spawns exist, so count=0 and ids=[].
- * The verb sweeps live spawns for missing tmux sessions; on an empty store
- * there is nothing to probe.
+ * The verb judges each live row by its agent process; on an empty store
+ * there is nothing to judge.
  *
- * Error path: find-missing's only documented error is ErrProbeUnsupported
- * (platform mismatch). On linux this cannot be triggered from a test
- * (the probe is always supported). This verb is in the smoke-invariants
- * allow-list for missing error-case tests.
+ * Error path: none. The manifest still lists ErrProbeUnsupported for
+ * find-missing (SR-1.7), but find-missing no longer returns it. This verb is
+ * in the smoke-invariants allow-list for missing error-case tests.
  */
 
 import { test, expect } from "bun:test";
@@ -29,5 +28,5 @@ test("find-missing: happy path — empty store returns count=0", async () => {
   });
 }, 10_000);
 
-// Error path: ErrProbeUnsupported cannot be triggered on linux (the OS probe
-// is always available). See smoke-invariants.test.ts for the allow-list entry.
+// Error path: none; find-missing no longer returns ErrProbeUnsupported (kept by
+// SR-1.7). See smoke-invariants.test.ts for the allow-list entry.

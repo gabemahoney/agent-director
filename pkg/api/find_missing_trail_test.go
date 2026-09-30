@@ -1,53 +1,24 @@
 package api_test
 
-// find_missing_trail_test.go — SR-A-2.5 / SR-8.4 / SR-7.7: ad.find_missing.tick
-// emission tests for the per-row evidence-based verdict engine.
-//
-// The sweep (findMissingImpl) has two tick emit sites this file covers:
-//   - proc_absent: one event per row transitioned to missing, emitted AFTER the
-//     mark in the PM-pinned order (MarkSpawnMissing → ClearLivenessUnverified →
-//     proc_absent tick → CloseOrphanedPermissionRequests).
-//   - probe_eacces: exactly one event per NULL→set liveness transition (the
-//     store's guarded SetLivenessUnverified.transitioned bool is the sole
-//     signal). A repeat sweep over an already-unverified row emits ZERO.
-//
-// These use REAL *store.Store instances (seeded via apitest) so the widened
-// FindMissingStore interface is exercised end-to-end, and a small local fake
-// LivenessChecker drives the per-row verdict. The environ Prober is a no-op
-// fake — full-identity rows never consult it.
-//
-// Assertions follow the checkpoint/delta pattern from
-// internal/store/trail_emit_test.go: capture a line-count checkpoint before the
-// operation under test and assert only on ad.find_missing.tick lines added
-// since that checkpoint.
-//
-// Trail infrastructure: TestMain (example_main_test.go) redirects HOME to a
-// temp dir (apiTrailDir) before any test runs. The trail singleton (sync.Once)
-// resolves ~/.agent-director/ad-trail.jsonl from that HOME and captures it on
-// first Emit. All trail reads in this file go through readAPITrailLines, which
-// opens apiTrailDir/.agent-director/ad-trail.jsonl.
-//
-// The pending grace period's trail obligation (SR-11.2: no tick for a pending
-// row inside grace) is pinned in find_missing_grace_trail_test.go.
-//
-// Coordination: another test writer owns cmd/agent-director/find_missing_cli_test.go
-// (or recovery_cmd_test.go) for the CLI surface, and a sibling owns
-// find_missing_test.go (the shared fakeFindMissingStore). This file owns no
-// shared fixtures — it uses real stores plus file-local fakes.
+// find_missing_trail_test.go: the trail records find-missing writes on the
+// process path (SR-11.1, SR-11.3, SR-11.4, SR-3.8, SR-14). Each test sweeps a
+// real store seeded through apitest.SeedSpawn, judged by procfix, and asserts
+// on the trail lines added since a checkpoint. TestMain (example_main_test.go)
+// points the trail at apiTrailDir. The pending grace period's trail side is in
+// find_missing_grace_trail_test.go.
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"testing"
 	"time"
 
-	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/store"
-	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -89,14 +60,7 @@ func readAPITrailLines(t *testing.T) []map[string]any {
 // total lines in the api trail file.
 func apiFindMissingTicksAt(t *testing.T, prevCount int) []map[string]any {
 	t.Helper()
-	all := readAPITrailLines(t)
-	var out []map[string]any
-	for _, row := range all[prevCount:] {
-		if row["event"] == "ad.find_missing.tick" {
-			out = append(out, row)
-		}
-	}
-	return out
+	return trailSince(t, prevCount, "ad.find_missing.tick")
 }
 
 // apiTicksWithReason filters ticks (from apiFindMissingTicksAt) by
@@ -124,247 +88,48 @@ func assertAPITrailStr(t *testing.T, row map[string]any, key, want string) {
 	}
 }
 
-// ── file-local helpers ──────────────────────────────────────────────────────
-//
-// The verdict-level fakeChecker (+ newFakeChecker), fakeProber, and
-// recordingLogger are defined by the sibling find_missing_test.go and shared
-// across the api_test package; this file reuses them. checkerFor is a tiny
-// convenience wrapping newFakeChecker with a per-id verdict map.
-
-// checkerFor returns a programmable fakeChecker seeded with the given per-id
-// verdicts. Ids absent from the map default to VerdictUnknown (fail-open).
-func checkerFor(verdicts map[string]probe.LivenessVerdict) *fakeChecker {
-	c := newFakeChecker()
-	for id, v := range verdicts {
-		c.verdicts[id] = v
-	}
-	return c
-}
-
-// trailNow is the sweep clock of the working-row tests; grace never applies to
-// a working row, so any fixed time serves.
-var trailNow = time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
-
 // trailClock returns a sweep clock that always reads at.
 func trailClock(at time.Time) func() time.Time { return func() time.Time { return at } }
 
-// seedFullIdentityStore opens a fresh temp store and seeds each id as a
-// working-state row WITH a recorded pid+proc_starttime (a full identity, so the
-// sweep routes it through the checker rather than the environ fallback).
-// Returns the open store handle (registered for cleanup) and its dbPath.
-func seedFullIdentityStore(t *testing.T, ids ...string) *store.Store {
+// trailToken is the launch token every trail row carries; the process path never reads it.
+const trailToken = "5eed0000000000c3"
+
+// trailRow is one working row to seed: its SessionStart and pane pids (0 = none recorded), both with start
+// time fmStart unless pidOnly, plus extra options.
+type trailRow struct {
+	id             string
+	ssPID, panePID int
+	pidOnly        bool
+	opts           []apitest.SpawnOption
+}
+
+// pid is the row's agent process pid when only one is recorded or both agree (0 = none recorded).
+func (r trailRow) pid() int { return max(r.ssPID, r.panePID) }
+
+// options returns the SeedSpawn options recording r's identities, then r.opts.
+func (r trailRow) options() []apitest.SpawnOption {
+	start := fmStart
+	if r.pidOnly {
+		start = ""
+	}
+	li := store.LaunchIdentity{Token: trailToken, Socket: apitest.TestSocket}
+	if r.panePID > 0 {
+		li.PaneID, li.PanePID, li.PaneStarttime = apitest.TestPaneID, r.panePID, start
+	}
+	opts := []apitest.SpawnOption{apitest.WithLaunchIdentity(li)}
+	if r.ssPID > 0 {
+		opts = append(opts, apitest.WithPID(r.ssPID), apitest.WithProcStarttime(start))
+	}
+	return append(opts, r.opts...)
+}
+
+// seedTrailStore seeds rows as working rows in a fresh store and returns it open with its path.
+func seedTrailStore(t *testing.T, rows ...trailRow) (*store.Store, string) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	for i, id := range ids {
-		// Distinct positive pids so rows are independent; the fake checker
-		// ignores pid/starttime and keys off the instance id.
-		if _, err := apitest.SeedSpawn(dbPath, id, store.StateWorking, "/tmp", "off", "", i == 0,
-			apitest.WithPID(1000+i), apitest.WithProcStarttime(apitest.LinuxProcStarttime)); err != nil {
-			t.Fatalf("seedFullIdentityStore: SeedSpawn %q: %v", id, err)
-		}
-	}
-	s, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("seedFullIdentityStore: store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	return s
-}
-
-// ── proc_absent (marking path) ──────────────────────────────────────────────
-
-// TestFindMissingProcAbsentEmitsTrail verifies that the per-row engine emits one
-// ad.find_missing.tick(proc_absent) per row transitioned to missing, with:
-//   - reconciliation_reason="proc_absent"
-//   - claude_instance_id equal to the transitioned row's instance ID
-//   - prior_state="working" (the seeded live state, captured by MarkSpawnMissing)
-//   - new_state="missing"
-//   - source="ad_find_missing"
-//
-// Three full-identity rows: tick-a and tick-c get a provably-dead verdict; tick-b
-// is verified-alive. Exactly two proc_absent ticks (one per marked row) result.
-func TestFindMissingProcAbsentEmitsTrail(t *testing.T) {
-	st := seedFullIdentityStore(t, "tick-a", "tick-b", "tick-c")
-	chk := checkerFor(map[string]probe.LivenessVerdict{
-		"tick-a": probe.VerdictProvablyDead,
-		"tick-b": probe.VerdictVerifiedAlive,
-		"tick-c": probe.VerdictProvablyDead,
-	})
-	before := len(readAPITrailLines(t))
-
-	res, err := api.FindMissing(context.Background(), st, &fakeProber{}, chk, fmGrace, trailClock(trailNow), &recordingLogger{})
-	if err != nil {
-		t.Fatalf("FindMissing: %v", err)
-	}
-	if res.Count != 2 {
-		t.Fatalf("count = %d; want 2", res.Count)
-	}
-
-	ticks := apiTicksWithReason(apiFindMissingTicksAt(t, before), "proc_absent")
-	if len(ticks) != 2 {
-		t.Fatalf("want 2 ad.find_missing.tick(proc_absent); got %d", len(ticks))
-	}
-
-	tickIDs := make(map[string]bool)
-	for _, tick := range ticks {
-		id, ok := tick["claude_instance_id"].(string)
-		if !ok || id == "" {
-			t.Errorf("[claude_instance_id] = %v; want non-empty string", tick["claude_instance_id"])
-		}
-		tickIDs[id] = true
-
-		assertAPITrailStr(t, tick, "event", "ad.find_missing.tick")
-		assertAPITrailStr(t, tick, "reconciliation_reason", "proc_absent")
-		assertAPITrailStr(t, tick, "source", "ad_find_missing")
-		assertAPITrailStr(t, tick, "new_state", "missing")
-		// MarkSpawnMissing captures the prior live state; these rows were seeded
-		// in StateWorking.
-		assertAPITrailStr(t, tick, "prior_state", store.StateWorking)
-
-		ts, ok := tick["ts"].(string)
-		if !ok || !apiTSRe.MatchString(ts) {
-			t.Errorf("[ts] = %v; want RFC3339Nano timestamp", tick["ts"])
-		}
-	}
-	if !tickIDs["tick-a"] || !tickIDs["tick-c"] {
-		t.Errorf("tick instance IDs = %v; want tick-a and tick-c", tickIDs)
-	}
-
-	// The verified-alive row (tick-b) is untouched — still working.
-	if got, err := st.GetSpawnState("tick-b"); err != nil || got != store.StateWorking {
-		t.Errorf("tick-b state = %q (err %v); want working", got, err)
-	}
-}
-
-// ── probe_eacces (exactly-once via checkpoint/delta) ────────────────────────
-
-// TestFindMissingProbeEaccesEmitsExactlyOnceTick pins SR-8.4's exactly-once
-// discipline via checkpoint/delta:
-//
-//   - First sweep over an unknown-verdict full-identity row: the guarded
-//     SetLivenessUnverified NULL→set transition fires, so exactly ONE
-//     ad.find_missing.tick(probe_eacces) is emitted for that row.
-//   - Second sweep over the SAME still-unverified row: SetLivenessUnverified
-//     reports transitioned=false (the liveness_unverified_since is already set),
-//     so ZERO new probe_eacces ticks are emitted.
-//
-// The row is never marked missing (unknown = fail-open, skip THIS ROW ONLY) and
-// is reported in UnverifiedIDs on both sweeps.
-func TestFindMissingProbeEaccesEmitsExactlyOnceTick(t *testing.T) {
-	st := seedFullIdentityStore(t, "eacces-1")
-	chk := checkerFor(map[string]probe.LivenessVerdict{
-		"eacces-1": probe.VerdictUnknown,
-	})
-
-	// ── First sweep: NULL→set transition → exactly one probe_eacces tick. ──
-	before := len(readAPITrailLines(t))
-	res, err := api.FindMissing(context.Background(), st, &fakeProber{}, chk, fmGrace, trailClock(trailNow), &recordingLogger{})
-	if err != nil {
-		t.Fatalf("first sweep: %v", err)
-	}
-	if res.Count != 0 {
-		t.Errorf("first sweep count = %d; want 0 (unknown never marks)", res.Count)
-	}
-	if res.Unverified != 1 || len(res.UnverifiedIDs) != 1 || res.UnverifiedIDs[0] != "eacces-1" {
-		t.Errorf("first sweep unverified = %d %v; want 1 [eacces-1]", res.Unverified, res.UnverifiedIDs)
-	}
-
-	firstTicks := apiTicksWithReason(apiFindMissingTicksAt(t, before), "probe_eacces")
-	if len(firstTicks) != 1 {
-		t.Fatalf("first sweep: want 1 ad.find_missing.tick(probe_eacces); got %d", len(firstTicks))
-	}
-	tick := firstTicks[0]
-	assertAPITrailStr(t, tick, "event", "ad.find_missing.tick")
-	assertAPITrailStr(t, tick, "claude_instance_id", "eacces-1")
-	assertAPITrailStr(t, tick, "reconciliation_reason", "probe_eacces")
-	assertAPITrailStr(t, tick, "source", "ad_find_missing")
-	// prior_state and new_state are JSON null on the probe_eacces (no-transition) path.
-	if v, exists := tick["prior_state"]; !exists || v != nil {
-		t.Errorf("[prior_state] = %v; want null", tick["prior_state"])
-	}
-	if v, exists := tick["new_state"]; !exists || v != nil {
-		t.Errorf("[new_state] = %v; want null", tick["new_state"])
-	}
-	ts, ok := tick["ts"].(string)
-	if !ok || !apiTSRe.MatchString(ts) {
-		t.Errorf("[ts] = %v; want RFC3339Nano timestamp", tick["ts"])
-	}
-
-	// ── Second sweep: row still unverified → transitioned=false → ZERO ticks. ──
-	before2 := len(readAPITrailLines(t))
-	res2, err := api.FindMissing(context.Background(), st, &fakeProber{}, chk, fmGrace, trailClock(trailNow), &recordingLogger{})
-	if err != nil {
-		t.Fatalf("second sweep: %v", err)
-	}
-	if res2.Unverified != 1 || len(res2.UnverifiedIDs) != 1 || res2.UnverifiedIDs[0] != "eacces-1" {
-		t.Errorf("second sweep unverified = %d %v; want 1 [eacces-1] (still unverified)",
-			res2.Unverified, res2.UnverifiedIDs)
-	}
-	secondTicks := apiTicksWithReason(apiFindMissingTicksAt(t, before2), "probe_eacces")
-	if len(secondTicks) != 0 {
-		t.Errorf("second sweep: want 0 new probe_eacces ticks (no NULL→set transition); got %d",
-			len(secondTicks))
-	}
-}
-
-// NOTE: a "trail-write failure does not alter the sweep" test was intentionally
-// REMOVED here. The trail singleton (sync.Once) opens and caches its file
-// descriptor process-wide on the first Emit — which an earlier test in this
-// binary already triggered — so chmodding the trail directory afterward provokes
-// no emit failure at all (the append writes through the still-open fd). The test
-// therefore only re-proved that a VerdictProvablyDead row is marked missing with
-// count=1, which is already pinned by TestFindMissingProcAbsentEmitsTrail (same
-// file: marking + count + proc_absent emission) and TestFindMissingCheckerDeadMarks
-// (find_missing_test.go). Provoking a GENUINE first-Emit failure would require a
-// subprocess with an unwritable HOME before the singleton initializes — out of
-// scope for this in-process unit file — so the honest resolution is deletion
-// rather than a renamed but redundant marking assertion.
-
-// ── zero-touch (no emit) ────────────────────────────────────────────────────
-
-// TestFindMissingZeroTouchEmitsNoTrail pins the zero-touch path: when every
-// full-identity row is verified-alive, the sweep transitions nothing and emits
-// zero ad.find_missing.tick lines.
-func TestFindMissingZeroTouchEmitsNoTrail(t *testing.T) {
-	st := seedFullIdentityStore(t, "alive-p", "alive-q")
-	chk := checkerFor(map[string]probe.LivenessVerdict{
-		"alive-p": probe.VerdictVerifiedAlive,
-		"alive-q": probe.VerdictVerifiedAlive,
-	})
-	before := len(readAPITrailLines(t))
-
-	res, err := api.FindMissing(context.Background(), st, &fakeProber{}, chk, fmGrace, trailClock(trailNow), &recordingLogger{})
-	if err != nil {
-		t.Fatalf("FindMissing: %v", err)
-	}
-	if res.Count != 0 || res.Unverified != 0 {
-		t.Errorf("res = %+v; want count=0 unverified=0", res)
-	}
-	if ticks := apiFindMissingTicksAt(t, before); len(ticks) != 0 {
-		t.Errorf("zero-touch path emitted %d ad.find_missing.tick; want 0", len(ticks))
-	}
-}
-
-// ── named negative: no degraded-mode skip event (removed guard) ─────────────
-
-// TestFindMissingEmptyProbeSetNoDegradedModeSkip is the named negative
-// replacing the deleted TestFindMissingDegradedModeEmitsTrail. Under the old
-// global guard, an empty environ probe set with ≥1 live rows tripped a refusal
-// that emitted an ad.find_missing.tick carrying the removed degraded-mode skip
-// reason (name assembled at runtime — see below). The per-row engine removes
-// that guard entirely.
-//
-// This sweep reproduces the exact condition that WOULD have tripped the guard:
-// live rows with a NULL recorded identity (pid/proc_starttime NULL) route to the
-// SR-7.5 environ fallback, and the prober returns an EMPTY set. Every such row
-// is reconciled to missing (absent from the probe set), and NO event carrying
-// the removed degraded-mode skip reason is emitted.
-func TestFindMissingEmptyProbeSetNoDegradedModeSkip(t *testing.T) {
-	// NULL-identity rows (no WithPID/WithProcStarttime) → environ fallback path.
-	dbPath := filepath.Join(t.TempDir(), "state.db")
-	for i, id := range []string{"dg-1", "dg-2"} {
-		if _, err := apitest.SeedSpawn(dbPath, id, store.StateWorking, "/tmp", "off", "", i == 0); err != nil {
-			t.Fatalf("SeedSpawn %q: %v", id, err)
+	for i, r := range rows {
+		if _, err := apitest.SeedSpawn(dbPath, r.id, store.StateWorking, "/tmp", "off", "", i == 0, r.options()...); err != nil {
+			t.Fatalf("SeedSpawn %q: %v", r.id, err)
 		}
 	}
 	st, err := store.Open(dbPath)
@@ -372,30 +137,258 @@ func TestFindMissingEmptyProbeSetNoDegradedModeSkip(t *testing.T) {
 		t.Fatalf("store.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
+	return st, dbPath
+}
 
-	before := len(readAPITrailLines(t))
-	// Empty probe set: the condition that formerly tripped the degraded-mode guard.
-	res, err := api.FindMissing(context.Background(), st, &fakeProber{}, newFakeChecker(), fmGrace, trailClock(trailNow), &recordingLogger{})
+// trailOf keeps the lines of recs naming instance id.
+func trailOf(recs []map[string]any, id string) []map[string]any {
+	var out []map[string]any
+	for _, r := range recs {
+		if r["claude_instance_id"] == id {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// assertProcAbsentTick fails unless ticks is one proc_absent tick from prior to missing for id.
+func assertProcAbsentTick(t *testing.T, ticks []map[string]any, id, prior string) {
+	t.Helper()
+	if len(ticks) != 1 {
+		t.Fatalf("%s ticks = %v; want exactly one proc_absent", id, ticks)
+	}
+	tick := ticks[0]
+	assertAPITrailStr(t, tick, "reconciliation_reason", "proc_absent")
+	assertAPITrailStr(t, tick, "source", "ad_find_missing")
+	assertAPITrailStr(t, tick, "prior_state", prior)
+	assertAPITrailStr(t, tick, "new_state", store.StateMissing)
+	if ts, ok := tick["ts"].(string); !ok || !apiTSRe.MatchString(ts) {
+		t.Errorf("[ts] = %v; want RFC3339Nano timestamp", tick["ts"])
+	}
+}
+
+// TestFindMissingProcAbsentEmitsTrail: a dead SessionStart or pane process gives its row one proc_absent tick;
+// rows whose process is alive get no record of any kind, and no environment is read.
+func TestFindMissingProcAbsentEmitsTrail(t *testing.T) {
+	cases := []struct {
+		row  trailRow
+		proc procfix.Process // the answer for the row's recorded pid
+		dead bool
+	}{
+		{trailRow{id: "pa-ss-gone", ssPID: 1101}, procfix.Gone(), true},
+		{trailRow{id: "pa-ss-reused", ssPID: 1102}, procfix.Alive(fmOtherStart), true},
+		{trailRow{id: "pa-pane-gone", panePID: 1103}, procfix.Gone(), true},
+		{trailRow{id: "pa-ss-alive", ssPID: 1104}, procfix.Alive(fmStart), false},
+		{trailRow{id: "pa-pane-alive", panePID: 1105}, procfix.Alive(fmStart), false},
+		{trailRow{id: "pa-both-alive", ssPID: 1106, panePID: 1106}, procfix.Alive(fmStart), false},
+	}
+	pc := procfix.New()
+	var rows []trailRow
+	var wantIDs []string
+	for _, c := range cases {
+		pc.Set(c.row.pid(), c.proc)
+		rows = append(rows, c.row)
+		if c.dead {
+			wantIDs = append(wantIDs, c.row.id)
+		}
+	}
+	st, _ := seedTrailStore(t, rows...)
+	before := trailLen(t)
+
+	res, err := runFindMissing(st, pc, fmSweep{})
 	if err != nil {
 		t.Fatalf("FindMissing: %v", err)
 	}
-
-	// The rows are reconciled (not refused): both marked missing via the fallback.
-	if res.Count != 2 {
-		t.Errorf("count = %d; want 2 (rows reconciled, not refused)", res.Count)
-	}
-	for _, id := range []string{"dg-1", "dg-2"} {
-		if got, err := st.GetSpawnState(id); err != nil || got != store.StateMissing {
-			t.Errorf("%s state = %q (err %v); want missing", id, got, err)
+	slices.Sort(wantIDs)
+	assertLists(t, res, wantIDs, nil)
+	added := readAPITrailLines(t)[before:]
+	for _, c := range cases {
+		recs := trailOf(added, c.row.id)
+		if c.dead {
+			assertProcAbsentTick(t, recs, c.row.id, store.StateWorking)
+			continue
+		}
+		if len(recs) != 0 {
+			t.Errorf("%s: trail records = %v; want none for an alive row", c.row.id, recs)
+		}
+		if got, err := st.GetSpawnState(c.row.id); err != nil || got != store.StateWorking {
+			t.Errorf("%s state = %q (err %v); want working", c.row.id, got, err)
 		}
 	}
+	if n := pc.EnvReads(); n != 0 {
+		t.Errorf("environment reads = %d; want 0", n)
+	}
+}
 
-	// The removed guard: NO tick may carry the removed degraded-mode skip reason.
-	// The reason name is assembled at runtime so a repo-wide grep for the removed
-	// literal stays clean (same precedent as internal/trail/writer_test.go).
-	degradedModeSkipReason := "degraded_mode" + "_skip"
-	ticks := apiFindMissingTicksAt(t, before)
-	if got := apiTicksWithReason(ticks, degradedModeSkipReason); len(got) != 0 {
-		t.Errorf("emitted %d %s tick(s); want 0 (guard removed)", len(got), degradedModeSkipReason)
+// TestFindMissingIdentitiesDisagreePaneDecides: when the SessionStart and pane identities disagree the pane
+// process decides (dead: proc_absent mark; alive: untouched) and no sweep writes ad.provenance.disagree.
+func TestFindMissingIdentitiesDisagreePaneDecides(t *testing.T) {
+	pc := procfix.New()
+	pc.Set(1201, procfix.Alive(fmStart)) // dm-pane-dead's SessionStart process
+	pc.Set(1203, procfix.Alive(fmStart)) // dm-pane-alive's pane process; its SessionStart 1204 is gone
+	st, _ := seedTrailStore(t,
+		trailRow{id: "dm-pane-dead", ssPID: 1201, panePID: 1202},
+		trailRow{id: "dm-pane-alive", ssPID: 1204, panePID: 1203},
+	)
+
+	for sweep := 1; sweep <= 2; sweep++ {
+		before := trailLen(t)
+		res, err := runFindMissing(st, pc, fmSweep{})
+		if err != nil {
+			t.Fatalf("sweep %d: %v", sweep, err)
+		}
+		ticks := apiFindMissingTicksAt(t, before)
+		if sweep == 1 {
+			assertLists(t, res, []string{"dm-pane-dead"}, nil)
+			assertProcAbsentTick(t, trailOf(ticks, "dm-pane-dead"), "dm-pane-dead", store.StateWorking)
+		} else {
+			assertLists(t, res, nil, nil)
+			if got := trailOf(ticks, "dm-pane-dead"); len(got) != 0 {
+				t.Errorf("sweep 2: dm-pane-dead ticks = %v; want none (already missing)", got)
+			}
+		}
+		if got := trailOf(ticks, "dm-pane-alive"); len(got) != 0 {
+			t.Errorf("sweep %d: dm-pane-alive ticks = %v; want none", sweep, got)
+		}
+		if got := trailSince(t, before, "ad.provenance.disagree"); len(got) != 0 {
+			t.Errorf("sweep %d: ad.provenance.disagree = %v; want none", sweep, got)
+		}
+	}
+	if got, err := st.GetSpawnState("dm-pane-alive"); err != nil || got != store.StateWorking {
+		t.Errorf("dm-pane-alive state = %q (err %v); want working", got, err)
+	}
+}
+
+// TestFindMissingUnverifiedNoteTicksOnce: a row whose process cannot decide gets one tick naming its note on
+// entry and none on a repeat sweep; it stays live and unverified on both (SR-11.4).
+func TestFindMissingUnverifiedNoteTicksOnce(t *testing.T) {
+	cases := []struct {
+		name string
+		row  trailRow
+		proc procfix.Process
+		note string
+	}{
+		{"unreadable process", trailRow{id: "un-unreadable", ssPID: 1301}, procfix.Unreadable(), "probe_eacces"},
+		{"pid-only pane alive", trailRow{id: "un-pid-only", panePID: 1302, pidOnly: true}, procfix.Alive(fmStart), "probe_eacces"},
+		{"no identity recorded", trailRow{id: "un-none"}, procfix.Gone(), "process_not_seen_tmux_unchecked"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			pc := procfix.New()
+			if pid := c.row.pid(); pid > 0 {
+				pc.Set(pid, c.proc)
+			}
+			st, _ := seedTrailStore(t, c.row)
+
+			for sweep, wantTicks := range []int{1, 0} {
+				before := trailLen(t)
+				res, err := runFindMissing(st, pc, fmSweep{})
+				if err != nil {
+					t.Fatalf("sweep %d: %v", sweep+1, err)
+				}
+				assertLists(t, res, nil, []string{c.row.id})
+				ticks := trailOf(apiFindMissingTicksAt(t, before), c.row.id)
+				if len(ticks) != wantTicks {
+					t.Fatalf("sweep %d ticks = %v; want %d", sweep+1, ticks, wantTicks)
+				}
+				if wantTicks == 0 {
+					continue
+				}
+				assertAPITrailStr(t, ticks[0], "reconciliation_reason", c.note)
+				assertAPITrailStr(t, ticks[0], "source", "ad_find_missing")
+				for _, k := range []string{"prior_state", "new_state"} {
+					if v, ok := ticks[0][k]; !ok || v != nil {
+						t.Errorf("[%s] = %v (present %v); want null", k, v, ok)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestFindMissingAllDeadNoDegradedModeSkip: when every recorded process is gone (after a reboot) every row is
+// marked with only proc_absent ticks; no refusal is recorded.
+func TestFindMissingAllDeadNoDegradedModeSkip(t *testing.T) {
+	st, _ := seedTrailStore(t,
+		trailRow{id: "dg-1", ssPID: 1401},
+		trailRow{id: "dg-2", panePID: 1402},
+	)
+	before := trailLen(t)
+
+	res, err := runFindMissing(st, procfix.New(), fmSweep{})
+	if err != nil {
+		t.Fatalf("FindMissing: %v", err)
+	}
+	assertLists(t, res, []string{"dg-1", "dg-2"}, nil)
+	for _, tick := range apiFindMissingTicksAt(t, before) {
+		if id := tick["claude_instance_id"]; (id == "dg-1" || id == "dg-2") && tick["reconciliation_reason"] != "proc_absent" {
+			t.Errorf("tick %v; want only proc_absent", tick)
+		}
+	}
+	// The removed guard's reason is assembled at runtime so a repo grep for the literal stays clean.
+	if got := apiTicksWithReason(apiFindMissingTicksAt(t, before), "degraded_mode"+"_skip"); len(got) != 0 {
+		t.Errorf("degraded-mode skip ticks = %v; want none", got)
+	}
+}
+
+// orderStore is a real store that notes the trail's line count when the mark returns and when the
+// permission-request close starts.
+type orderStore struct {
+	*store.Store
+	t                     *testing.T
+	afterMark, atClose    int
+	markCalls, closeCalls int
+}
+
+func (o *orderStore) MarkMissingIfSameLife(id string, examined store.RowSnapshot) (string, store.CondResult, error) {
+	prior, res, err := o.Store.MarkMissingIfSameLife(id, examined)
+	o.markCalls++
+	o.afterMark = trailLen(o.t)
+	return prior, res, err
+}
+
+func (o *orderStore) CloseOrphanedPermissionRequests(id string) error {
+	o.closeCalls++
+	o.atClose = trailLen(o.t)
+	return o.Store.CloseOrphanedPermissionRequests(id)
+}
+
+// TestFindMissingMarkOrderTrail: a dead row's proc_absent tick is written after the mark and before the
+// permission-request close, whose permission_orphan_closeout tick follows; the open request is denied.
+func TestFindMissingMarkOrderTrail(t *testing.T) {
+	const id = "ord-trail"
+	st, dbPath := seedTrailStore(t, trailRow{id: id, ssPID: 1501})
+	if _, err := apitest.SeedPermissionRequest(dbPath, id, "Bash"); err != nil {
+		t.Fatalf("SeedPermissionRequest: %v", err)
+	}
+	ord := &orderStore{Store: st, t: t}
+	before := trailLen(t)
+
+	res, err := runFindMissing(ord, procfix.New(), fmSweep{})
+	if err != nil {
+		t.Fatalf("FindMissing: %v", err)
+	}
+	assertLists(t, res, []string{id}, nil)
+	if ord.markCalls != 1 || ord.closeCalls != 1 {
+		t.Fatalf("mark calls = %d, close calls = %d; want 1, 1", ord.markCalls, ord.closeCalls)
+	}
+
+	var reasons []string
+	var at []int // trail line index of each of id's ticks
+	for i, rec := range readAPITrailLines(t) {
+		if i >= before && rec["event"] == "ad.find_missing.tick" && rec["claude_instance_id"] == id {
+			reason, _ := rec["reconciliation_reason"].(string)
+			reasons, at = append(reasons, reason), append(at, i)
+		}
+	}
+	if !slices.Equal(reasons, []string{"proc_absent", "permission_orphan_closeout"}) {
+		t.Fatalf("ticks = %v; want [proc_absent permission_orphan_closeout]", reasons)
+	}
+	if at[0] < ord.afterMark || at[0] >= ord.atClose || at[1] < ord.atClose {
+		t.Errorf("proc_absent at line %d, closeout at %d; mark returned at %d, close began at %d: want mark, proc_absent, close",
+			at[0], at[1], ord.afterMark, ord.atClose)
+	}
+	if open, err := st.OpenPermissionRequestsForSpawn(id); err != nil || len(open) != 0 {
+		t.Errorf("open permission requests = %v (err %v); want none", open, err)
 	}
 }

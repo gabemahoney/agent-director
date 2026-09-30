@@ -12,8 +12,8 @@
 // real ~/.agent-director on the host (b.8dr). TestMain enforces the sandbox
 // marker via sandboxguard and additionally skips cleanly when tmux is absent
 // from PATH (defense-in-depth — the deny rules already block host runs). The
-// sandbox image installs tmux + procps, and internal/probe reads /proc, so
-// find-missing works against real processes there.
+// sandbox image installs tmux + procps, and find-missing's start-time reader
+// reads /proc/<pid>/stat, so find-missing judges real processes there.
 package rebootrecovery_test
 
 import (
@@ -42,9 +42,9 @@ func TestMain(m *testing.M) {
 	// entry disappears (ENOENT) instead of lingering as a <defunct> zombie that
 	// still carries a matching starttime. Without this, the container's init is
 	// the go-test-driving bash, which does not process SIGCHLD until the test
-	// returns, and zombies would keep find-missing's checker from seeing the
-	// provably-dead ENOENT the acceptance describes. Best-effort: a failure just
-	// falls back to parent-kill reaping.
+	// returns, and the zombies' /proc entries would outlive the kill step, so
+	// the test's wait for every recorded pid to be retired (ENOENT) would never
+	// end. Best-effort: a failure just falls back to parent-kill reaping.
 	_ = prSetChildSubreaper()
 	os.Exit(m.Run())
 }

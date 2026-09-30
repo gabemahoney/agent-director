@@ -966,21 +966,8 @@ describe("find-missing", () => {
     TIMEOUT
   );
 
-  // ErrProbeUnsupported: only triggerable on non-linux platforms.
-  // On linux/amd64 (primary CI), probe_linux.go is compiled and reads /proc —
-  // ErrProbeUnsupported cannot be triggered without injecting a fake prober.
-  // The error test below returns early on linux; find-missing is in the
-  // NO_ERROR_CASE_ALLOWLIST in envelope-diff-invariants.test.ts.
-  test(
-    "error path: ErrProbeUnsupported (skipped on linux)",
-    async () => {
-      if (process.platform === "linux") return;
-      // Non-linux: ErrProbeUnsupported can be triggered (placeholder).
-      // If a future platform needs this, implement the fixture here.
-      expect(true).toBe(true);
-    },
-    TIMEOUT
-  );
+  // No error path: find-missing no longer returns ErrProbeUnsupported (kept by
+  // SR-1.7); it is in NO_ERROR_CASE_ALLOWLIST in envelope-diff-invariants.test.ts.
 });
 
 // ── expire ────────────────────────────────────────────────────────────────────

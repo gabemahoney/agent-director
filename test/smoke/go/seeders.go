@@ -374,11 +374,10 @@ func init() {
 		Happy: func(c *api.Client, _ string, ctx context.Context) (any, error) {
 			return c.FindMissing(ctx)
 		},
-		// find-missing has no easy verb-surface error to trigger from
-		// a happy-path Client — its only declared error is
-		// ErrProbeUnsupported (platform mismatch, which we cannot
-		// induce on linux). Skipping the error assertion is handled
-		// by the driver when Error is nil.
+		// find-missing has no verb-surface error to trigger: its only
+		// declared error, ErrProbeUnsupported, stays listed by SR-1.7
+		// but find-missing no longer returns it. Skipping the error
+		// assertion is handled by the driver when Error is nil.
 		Error: nil,
 	}
 

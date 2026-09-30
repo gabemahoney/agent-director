@@ -17,16 +17,15 @@ import (
 // 59/61 s boundaries are covered in pkg/api).
 
 // graceHome bootstraps a throwaway HOME, writes its [tmux] settings through the
-// config writer and seeds one pending row with the given launch start option.
+// config writer and seeds one pending row, whose recorded pane process is
+// reaped, with the given launch start option.
 func graceHome(t *testing.T, id string, launch apitest.SpawnOption, settings ...apitest.TmuxSetting) (home, dbPath string) {
 	t.Helper()
 	home = t.TempDir()
 	bootstrapDB(t, home)
 	apitest.WriteTmuxConfig(t, filepath.Join(directorDir(home), "config.toml"), settings...)
 	dbPath = stateDB(home)
-	if _, err := apitest.SeedSpawn(dbPath, id, "pending", "/tmp", "off", "", false, launch); err != nil {
-		t.Fatalf("seed %s: %v", id, err)
-	}
+	seedRow(t, dbPath, id, "pending", "off", append(recordProcess(nil, spawnReapedChild(t)), launch)...)
 	return home, dbPath
 }
 
@@ -34,11 +33,7 @@ func graceHome(t *testing.T, id string, launch apitest.SpawnOption, settings ...
 // (marked missing and in ids) or left pending and in neither result list.
 func assertFindMissingGrace(t *testing.T, home, dbPath, id string, wantMarked bool) {
 	t.Helper()
-	stdout, stderr, code := runCLIWithEnv(t, home, map[string]string{}, "", "find-missing")
-	if code != 0 {
-		t.Fatalf("find-missing exit = %d; want 0\nstderr=%s", code, stderr)
-	}
-	res := parseFindMissingResult(t, stdout)
+	res, _ := runFindMissing(t, home)
 	if slices.Contains(res.UnverifiedIDs, id) {
 		t.Errorf("unverified_ids = %v; want %s absent", res.UnverifiedIDs, id)
 	}
@@ -54,8 +49,7 @@ func assertFindMissingGrace(t *testing.T, home, dbPath, id string, wantMarked bo
 	}
 }
 
-// graceID is a per-process-unique instance id, so no live sandbox process
-// holds it and the environ fallback judges a past-grace row dead.
+// graceID is a per-process-unique instance id for a grace case's row.
 func graceID(name string) string {
 	return fmt.Sprintf("id-fm-grace-%d-%s", os.Getpid(), name)
 }

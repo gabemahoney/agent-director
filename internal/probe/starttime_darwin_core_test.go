@@ -11,6 +11,13 @@ import (
 // darwinStartTimeReader must satisfy the start-time reader interface.
 var _ ProcChecker = darwinStartTimeReader{}
 
+// darwinStartSec / darwinStartUsec are the (sec, usec) preimage of
+// procstarttimefix.DarwinProcStarttime ("1700000000.123456").
+const (
+	darwinStartSec  = 1700000000
+	darwinStartUsec = 123456
+)
+
 // darwinStartEntry builds one kinfoProcSize entry with the given p_stat and
 // p_starttime planted at their named offsets.
 func darwinStartEntry(stat byte, sec int64, usec int32) []byte {

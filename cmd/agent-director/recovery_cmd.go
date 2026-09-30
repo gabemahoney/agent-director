@@ -14,9 +14,10 @@ import (
 )
 
 // findMissingHandlerWith implements `agent-director find-missing`.
-// The verb takes no flags. The prober and liveness checker are selected by
-// build tags (probe.New / probe.NewChecker). Per-row store/checker warnings
-// route through the configured error log — the Client was constructed with a
+// The verb takes no flags. Liveness comes only from each agent's process
+// start time, read by the Client's start-time reader (probe.NewProcChecker,
+// selected by build tags). Per-row store warnings route through the
+// configured error log — the Client was constructed with a
 // recovery logger (setupClient Pin 3) so cron operators see them in their
 // usual monitoring stream.
 func findMissingHandlerWith(client *pkgapi.Client, args []string) error {

@@ -3,13 +3,11 @@ package probe
 // darwinStartTimeReader is the darwin start-time reader core (SR-3.8, "The
 // start-time reader (LFR C1)"; Appendix F.2 ProcChecker). Its ONLY injected
 // seam is the per-pid KERN_PROC_PID kinfo fetch (fetchKinfo, wired to
-// fetchKinfoPID by newProcChecker on darwin — see checker_darwin.go), so the
-// answer logic is build-tag-free and unit-testable off-darwin against
-// synthetic kinfo_proc entries (the darwinChecker precedent).
+// fetchKinfoPID by newProcChecker on darwin — see starttime_darwin.go), so
+// the answer logic is build-tag-free and unit-testable off-darwin against
+// synthetic kinfo_proc entries.
 //
-// It is deliberately separate from darwinChecker, which keeps its
-// KERN_PROCARGS2 environment tiebreaker for find-missing until Epic 14 removes
-// it. This reader carries no environment or PROCARGS2 seam, so it structurally
+// This reader carries no environment or PROCARGS2 seam, so it structurally
 // cannot read a process environment; it never reads the clock.
 //
 // Answers (the F.2 shape; start is empty unless alive):
@@ -34,7 +32,7 @@ func (r darwinStartTimeReader) StartTime(pid int) (start string, alive bool, kno
 	}
 	buf, err := r.fetchKinfo(pid)
 	if err != nil {
-		// Reuse today's darwin errno table (checker_darwin_core.go).
+		// The darwin errno table (errno.go).
 		if classifyDarwinErrno(err) == dispGone {
 			return "", false, true
 		}

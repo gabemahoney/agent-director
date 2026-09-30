@@ -135,8 +135,9 @@ func TestEndHeldLaunchNotApplied(t *testing.T) {
 		{name: "no longer pending after find-missing's mark",
 			seed: func(t *testing.T, f *v5Store) string {
 				id := f.seed(store.StatePending, "", apitest.WithLaunchStartedAt(heldStart))
-				if prior, err := f.s.MarkSpawnMissing(id); err != nil || prior != store.StatePending {
-					t.Fatalf("MarkSpawnMissing = %q, %v; want pending", prior, err)
+				prior, res, err := f.s.MarkMissingIfSameLife(id, rvExamine(t, f, id).Snapshot)
+				if err != nil || res != store.CondApplied || prior != store.StatePending {
+					t.Fatalf("MarkMissingIfSameLife = %q, %v, %v; want pending, CondApplied, nil", prior, res, err)
 				}
 				return id
 			}},

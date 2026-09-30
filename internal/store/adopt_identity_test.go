@@ -185,7 +185,7 @@ func TestAdoptIdentityIfUnchangedNotApplied(t *testing.T) {
 		{name: "SessionStart first", state: "pending", seeded: adoptPaneNoServer(),
 			stale: between(hook("SessionStart")), want: store.CondChanged},
 		{name: "non-hook write first", state: "waiting", session: "sess-adopt", seeded: adoptNoIdentity(),
-			stale: between(markMissing("waiting")), want: store.CondChanged},
+			stale: between(rvMark.write("", nil, store.CondApplied, "waiting")), want: store.CondChanged},
 		{name: "examined version differs", state: "waiting", session: "sess-adopt", seeded: adoptNoIdentity(),
 			stale: examinedDiffers(func(s *store.RowSnapshot) { s.RowVersion++ }), want: store.CondChanged},
 		{name: "examined started_at differs", state: "waiting", session: "sess-adopt", seeded: adoptNoIdentity(),

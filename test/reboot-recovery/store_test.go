@@ -11,39 +11,40 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// readinessQuery selects the four columns a store-readiness poll cares about
-// (state, identity pid+starttime, jsonl_path) for one instance. Shared by
-// rowReady (the poll CONDITION) and observeRow (the timeout DIAGNOSTIC) so the
-// dump can never silently diverge from the condition it explains (b.129).
-const readinessQuery = `SELECT state, pid, proc_starttime, jsonl_path FROM spawns WHERE claude_instance_id = ?`
+// readinessQuery selects the five columns a store-readiness poll cares about
+// (state, identity pid+starttime, jsonl_path, claude_session_id) for one
+// instance. Shared by rowReady (the poll CONDITION) and observeRow (the timeout
+// DIAGNOSTIC) so the dump can never silently diverge from the condition it
+// explains (b.129).
+const readinessQuery = `SELECT state, pid, proc_starttime, jsonl_path, claude_session_id FROM spawns WHERE claude_instance_id = ?`
 
-// rowReady reports whether the SessionStart hook has run for instanceID: state
-// has left `pending` (→ waiting) AND pid, proc_starttime, and jsonl_path are all
-// non-NULL. That is exactly the identity find-missing's checker needs and the
-// transcript path resume's pre-flight stats.
+// rowReady reports whether the SessionStart hook has applied for instanceID:
+// state has left `pending` (→ waiting) AND pid, proc_starttime, jsonl_path and
+// claude_session_id are all non-NULL — the recorded agent process whose start
+// time find-missing judges, and the transcript resume's pre-flight stats.
 func rowReady(t *testing.T, dbPath, instanceID string) bool {
 	t.Helper()
 	db := openDB(t, dbPath)
 	defer db.Close()
 	var state string
 	var pid sql.NullInt64
-	var starttime, jsonlPath sql.NullString
-	err := db.QueryRow(readinessQuery, instanceID).Scan(&state, &pid, &starttime, &jsonlPath)
+	var starttime, jsonlPath, sessionID sql.NullString
+	err := db.QueryRow(readinessQuery, instanceID).Scan(&state, &pid, &starttime, &jsonlPath, &sessionID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return false
 		}
 		t.Fatalf("rowReady query: %v", err)
 	}
-	return state != "pending" && pid.Valid && starttime.Valid && jsonlPath.Valid
+	return state != "pending" && pid.Valid && starttime.Valid && jsonlPath.Valid && sessionID.Valid
 }
 
 // observeRow renders the row fields a store poll cares about (state, identity
-// pid+starttime, jsonl_path) as a single diagnostic line, for inclusion in a
-// waitFor timeout message (b.129). It never fails the test: a poll that is
-// already timing out must not be masked by a second failure, so query/row
-// errors are folded into the returned string. NULL columns render as "NULL",
-// which is itself the signal (SessionStart hasn't populated them yet).
+// pid+starttime, jsonl_path, claude_session_id) as a single diagnostic line,
+// for inclusion in a waitFor timeout message (b.129). It never fails the test:
+// a poll that is already timing out must not be masked by a second failure, so
+// query/row errors are folded into the returned string. NULL columns render as
+// "NULL", which is itself the signal (SessionStart hasn't populated them yet).
 func observeRow(dbPath, instanceID string) func() string {
 	return func() string {
 		db, err := sql.Open("sqlite", dbPath+"?mode=ro&_pragma=busy_timeout(5000)")
@@ -53,8 +54,8 @@ func observeRow(dbPath, instanceID string) func() string {
 		defer db.Close()
 		var state string
 		var pid sql.NullInt64
-		var starttime, jsonlPath sql.NullString
-		err = db.QueryRow(readinessQuery, instanceID).Scan(&state, &pid, &starttime, &jsonlPath)
+		var starttime, jsonlPath, sessionID sql.NullString
+		err = db.QueryRow(readinessQuery, instanceID).Scan(&state, &pid, &starttime, &jsonlPath, &sessionID)
 		if err == sql.ErrNoRows {
 			return "row " + instanceID + ": no row (SessionStart not yet recorded)"
 		}
@@ -65,7 +66,8 @@ func observeRow(dbPath, instanceID string) func() string {
 			": state=" + state +
 			" pid=" + nullInt(pid) +
 			" proc_starttime=" + nullStr(starttime) +
-			" jsonl_path=" + nullStr(jsonlPath)
+			" jsonl_path=" + nullStr(jsonlPath) +
+			" claude_session_id=" + nullStr(sessionID)
 	}
 }
 

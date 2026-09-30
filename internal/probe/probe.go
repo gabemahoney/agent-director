@@ -1,67 +1,38 @@
-// Package probe discovers live Claude processes by their
-// AGENT_DIRECTOR_INSTANCE_ID env var. The set returned by Probe is
-// the ground truth find-missing diffs against the DB's live-state
-// rows (SRD §4.4).
+// Package probe reads facts about a single process by pid. It holds two
+// readers, both selected by build tags at compile time:
 //
-// Build-tag dispatch picks a per-OS implementation:
+//   - The start-time reader (ProcChecker / NewProcChecker, starttime.go;
+//     SR-3.8, LFR C1): the one process reader every process judgement uses —
+//     the tmux server check, the identity write and adoption, the SR-22.9 hook
+//     gate, find-missing liveness, kill's wait, expire's process_alive and
+//     resume's and reuse's process check. It answers alive (with the start
+//     time), gone (no such process, or a zombie) or unreadable.
+//   - The command-name reader (CommandNameReader / NewCommandNameReader,
+//     commname.go): fills `parent_command` in the `ad.hook.ignored` trail
+//     record only, never evidence.
 //
-//   - Linux:   walk /proc/<pid>/environ entries (probe_linux.go).
-//   - macOS:   sysctl(KERN_PROC, KERN_PROC_ALL) + sysctl(KERN_PROCARGS2)
-//     per PID (probe_darwin.go).
-//   - Other:   the fallback returns an explicit ErrProbeUnsupported so
-//     find-missing fails closed rather than silently
-//     under-reporting (probe_unsupported.go).
+// Per OS: Linux reads <procRoot>/<pid>/stat and /comm (default root /proc);
+// darwin reads the pid's single KERN_PROC_PID kinfo_proc entry; any other OS
+// gets readers that answer unreadable for every pid.
 //
-// Cron user invariant (SRD §14.6): the prober only sees processes the
-// invoking user has permission to read. Running find-missing as a
-// different user from the one that launched the Spawns produces an
-// empty (or partial) probe set. Rows carrying a concrete pid + starttime
-// no longer rely on the probe set at all: find-missing evidences each one
-// individually through the LivenessChecker seam (below), whose per-OS
-// impls resolve a permission wall to an UNKNOWN verdict and skip just that
-// row (fail-open) rather than misreport it — so an unreadable process
-// never masquerades as dead.
-//
-// The start-time reader (ProcChecker / NewProcChecker, starttime.go; SR-3.8,
-// LFR C1) is the start-time-only process reader later process judgements
-// use: the tmux server check, the identity write and adoption, the SR-22.9
-// hook gate, find-missing liveness, kill's wait, expire's process_alive and
-// resume's and reuse's process check. It answers alive (with the start time),
-// gone (no such process, or a zombie) or unreadable, reads no process
-// environment and reads no clock. The environment-tiebreaking
-// LivenessChecker / NewChecker above stay, unchanged, for find-missing until
-// Epic 14 removes them; no verb uses the start-time reader yet.
+// Neither reader reads a process environment, and neither reads the clock.
+// Liveness is judged only by a process's start time (SR-11.1): this package
+// has no environment scan and no environment tiebreaker.
 package probe
 
-import (
-	"context"
-	"errors"
-)
+import "errors"
 
-// ErrProbeUnsupported is returned by the platform fallback when no
-// per-OS implementation is registered. find-missing surfaces this as
-// a hard failure rather than treating it as "no processes alive".
+// ErrProbeUnsupported is a catalogued error name (pkg/api/errnames) that no
+// verb returns. It is kept, and find-missing's manifest error list still names
+// it, so the catalogue and the client error classes stay unchanged (SR-1.7,
+// SR-11.7). find-missing no longer scans process environments, the only path
+// that returned it.
 var ErrProbeUnsupported = errors.New("ErrProbeUnsupported")
 
-// Prober is the narrow interface internal/api.FindMissing depends on.
-// Implementations return the set of AGENT_DIRECTOR_INSTANCE_ID
-// values currently observable in process env blocks.
-//
-// The set form (map[string]struct{}) is the diff-friendly shape — a
-// caller asks `_, ok := set[id]` and doesn't care about iteration
-// order or duplicates.
-type Prober interface {
-	Probe(ctx context.Context) (map[string]struct{}, error)
-}
-
-// EnvKey is the env-var name that identifies a tracked Spawn. Held
-// as a constant here (rather than re-typing the string in the linux
-// + darwin walkers) so a future rename has one point of truth.
+// EnvKey is the env-var name agent-director sets in each agent's environment
+// to carry its instance id (internal/tmux sets it at launch). It is
+// self-identification only: a caller running inside an agent reads it to name
+// itself, for example as the parent id of what it spawns. It is never liveness
+// or ownership evidence; no reader in this package reads a process
+// environment.
 const EnvKey = "AGENT_DIRECTOR_INSTANCE_ID"
-
-// New returns the per-OS Prober. The implementation is selected by
-// build tags at compile time; the factory exists so callers can swap
-// a fake in tests without touching the production path.
-func New() Prober {
-	return newProber()
-}

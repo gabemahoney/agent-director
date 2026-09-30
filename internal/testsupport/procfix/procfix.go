@@ -12,8 +12,8 @@
 //
 // A process may also carry an environment. It is readable only through Env,
 // which counts every read, so a test proves "no environment was read" with
-// EnvReads() == 0. The fake deliberately does not mimic
-// probe.LivenessChecker: it imports nothing from agent-director, so a
+// EnvReads() == 0. The fake deliberately mimics no environment-reading
+// judgement: it imports nothing from agent-director, so a
 // `go list -deps` check that the code under test does not reach
 // internal/probe stays meaningful.
 //

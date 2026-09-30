@@ -33,6 +33,8 @@ type rowVersionCase struct {
 	writesToken bool
 	// launchStart is the launch_started_at the write sets; 0 = cleared or kept per clears.
 	launchStart int64
+	// check runs further assertions on the row before and after the write; nil skips.
+	check func(t *testing.T, before, after apitest.SpawnColumns)
 }
 
 // rowVersionSeed sets every column no write may touch, and the launch start,
@@ -294,15 +296,6 @@ func wantBool(t *testing.T, name string, got bool, err error, want bool) {
 	}
 }
 
-// markMissing returns a MarkSpawnMissing write expecting prior as its result.
-func markMissing(prior string) func(*testing.T, *v5Store, string) {
-	return func(t *testing.T, f *v5Store, id string) {
-		if got, err := f.s.MarkSpawnMissing(id); err != nil || got != prior {
-			t.Fatalf("MarkSpawnMissing = %q, %v; want %q", got, err, prior)
-		}
-	}
-}
-
 // liveness is a note stamp for rows that already carry one.
 var liveness = []apitest.SpawnOption{
 	apitest.WithLivenessUnverifiedSince("2026-01-01 00:00:00"), apitest.WithLivenessNote("probe_eacces"),
@@ -484,6 +477,7 @@ func rowVersionWrites() []rowVersionCase {
 	}
 	created := createdIdentity()
 	cases = append(cases, rvResumeWrites()...)
+	cases = append(cases, rvFindMissingWrites()...)
 	return append(cases,
 		rowVersionCase{name: "RecordLaunchIdentity/applied", state: "pending", wantState: "pending",
 			identity: &created, write: recordLaunch(0, store.CondApplied)},
@@ -510,27 +504,6 @@ func rowVersionWrites() []rowVersionCase {
 					t.Fatalf("history entries %d -> %d, want one archived entry", n, got)
 				}
 			}},
-		rowVersionCase{name: "SetLivenessUnverified/first set on pending row", state: "pending",
-			write: func(t *testing.T, f *v5Store, id string) {
-				got, err := f.s.SetLivenessUnverified(id, "probe_eacces")
-				wantBool(t, "SetLivenessUnverified", got, err, true)
-			}},
-		rowVersionCase{name: "ClearLivenessUnverified/note set on pending row", state: "pending", opts: liveness,
-			write: func(t *testing.T, f *v5Store, id string) {
-				if err := f.s.ClearLivenessUnverified(id); err != nil {
-					t.Fatalf("ClearLivenessUnverified: %v", err)
-				}
-			}},
-		rowVersionCase{name: "ClearLivenessUnverified/no note", state: "waiting",
-			write: func(t *testing.T, f *v5Store, id string) {
-				if err := f.s.ClearLivenessUnverified(id); err != nil {
-					t.Fatalf("ClearLivenessUnverified: %v", err)
-				}
-			}},
-		rowVersionCase{name: "MarkSpawnMissing/live row", state: "waiting", clears: true, wantState: "missing",
-			write: markMissing("waiting")},
-		rowVersionCase{name: "MarkSpawnMissing/pending row", state: "pending", clears: true, wantState: "missing",
-			write: markMissing("pending")},
 		rowVersionCase{name: "HealJsonlPath/path NULL", state: "waiting", session: "sess-heal",
 			write: func(t *testing.T, f *v5Store, id string) {
 				got, err := f.s.HealJsonlPath(id, "sess-heal", "/tmp/rv/healed.jsonl")
@@ -572,6 +545,9 @@ func TestRowVersionEveryWriteAdvancesByOne(t *testing.T) {
 			c.write(t, f, id)
 			after := f.rawColumns(id)
 			assertVersionedWrite(t, before, after, c)
+			if c.check != nil {
+				c.check(t, before, after)
+			}
 			if c.wantState != "" && after.State != c.wantState {
 				t.Errorf("state = %#v, want %q (wrong branch?)", after.State, c.wantState)
 			}
@@ -620,17 +596,6 @@ func TestRowVersionInsertStartsAtZero(t *testing.T) {
 // and other-table writes leave the whole spawns row, version included, as it was.
 func TestRowVersionNoOpWritesChangeNothing(t *testing.T) {
 	cases := []rowVersionCase{
-		{name: "SetLivenessUnverified/already set", state: "waiting", opts: liveness,
-			write: func(t *testing.T, f *v5Store, id string) {
-				got, err := f.s.SetLivenessUnverified(id, "probe_eacces")
-				wantBool(t, "SetLivenessUnverified", got, err, false)
-			}},
-		{name: "SetLivenessUnverified/finished row", state: "ended",
-			write: func(t *testing.T, f *v5Store, id string) {
-				got, err := f.s.SetLivenessUnverified(id, "probe_eacces")
-				wantBool(t, "SetLivenessUnverified", got, err, false)
-			}},
-		{name: "MarkSpawnMissing/finished row", state: "ended", write: markMissing("")},
 		{name: "RecordLaunchIdentity/stale version, hook wrote first", state: "pending",
 			setup: rvSoftRefresh,
 			write: recordLaunch(1, store.CondChanged)},
@@ -649,10 +614,7 @@ func TestRowVersionNoOpWritesChangeNothing(t *testing.T) {
 		{name: "RecordSessionStartIdentity/another parent, ignored", state: "pending", write: foreignHook("SessionStart")},
 		// SR-9.4, F.4: the end write applies only to the row as inserted.
 		{name: "EndHeldLaunch/another versioned write first", state: "pending",
-			setup: func(t *testing.T, f *v5Store, id string) {
-				got, err := f.s.SetLivenessUnverified(id, "probe_eacces")
-				wantBool(t, "SetLivenessUnverified", got, err, true)
-			},
+			setup: rvNote.write("", nil, store.CondApplied, ""),
 			write: func(t *testing.T, f *v5Store, id string) {
 				c := f.rawColumns(id)
 				if c.RowVersion == int64(0) {
@@ -706,6 +668,7 @@ func TestRowVersionNoOpWritesChangeNothing(t *testing.T) {
 		cases = append(cases, hold)
 	}
 	cases = append(cases, rvResumeNoOps()...)
+	cases = append(cases, rvFindMissingNoOps()...)
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			f := newV5Store(t)

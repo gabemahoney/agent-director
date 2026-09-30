@@ -148,13 +148,13 @@ func TestSessionStartWait(t *testing.T) {
 		}
 	}
 	markMissing := func(st *store.Store, id string) error {
-		prior, err := st.MarkSpawnMissing(id)
+		prior, err := markMissingSameLife(st, id)
 		if err == nil && prior != store.StatePending {
-			err = errors.New("MarkSpawnMissing: prior " + prior + ", want pending")
+			err = errors.New("mark missing: prior " + prior + ", want pending")
 		}
 		return err
 	}
-	bumpVersion := func(st *store.Store, id string) error { return st.ClearLivenessUnverified(id) }
+	bumpVersion := bumpRowVersion
 	deleteRow := func(st *store.Store, id string) error { return st.DeleteSpawn(id) }
 	frozenLeft := grace - 10*time.Second // time left at the start of the frozen-clock case
 	// The 540 s cap (TestSessionStartWaitCapIs540s pins it): a grace above it, and

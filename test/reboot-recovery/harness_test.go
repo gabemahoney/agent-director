@@ -86,18 +86,19 @@ func stubSessionID(instanceID string) string { return stubSessionIDPrefix + inst
 //     {"hook_event_name":"SessionStart","transcript_path":"<derived JSONL>"},
 //     relying on the AGENT_DIRECTOR_INSTANCE_ID that tmux injected via -e — the
 //     exact two fields the real Claude Code sends and the only two the handler
-//     consumes for this flow. That SessionStart is what makes find-missing's
-//     checker record the STUB's own pid + proc_starttime as the row identity
-//     (the stub is the hook's parent and the row's recorded pane process,
-//     SR-22.9), and what persists jsonl_path + claude_session_id.
+//     consumes for this flow. That SessionStart records the STUB's own pid +
+//     proc_starttime as the row's SessionStart identity (the stub is the
+//     hook's parent and the row's recorded pane process, SR-22.9) — the agent
+//     process whose start time find-missing judges — and persists jsonl_path +
+//     claude_session_id.
 //   - The stub appends a line to the derived JSONL on every start (a pre-kill
 //     marker on the fresh spawn, a continuation marker on --resume) BEFORE it
 //     fires SessionStart — matching real Claude, which writes the transcript on
 //     the first turn/resume so the file is on disk when the hook runs. This
 //     matters for the b.v2c AC1 stat-gate: the handler records jsonl_path only
 //     if the transcript exists on disk, else NULL. Then it stays alive (exec-ing
-//     a long sleep carrying stubMarker) so the probe can read its
-//     /proc/<pid>/environ.
+//     a long sleep carrying stubMarker), keeping its recorded pid and start
+//     time until the kill step; the marker lets stubPIDs find it there.
 //
 // PM-REQUIRED FIDELITY NOTE: appending to the SAME jsonl on --resume
 // deliberately diverges from real Claude Code, which rotates the session UUID
@@ -117,9 +118,10 @@ func writeStubClaude(t *testing.T, stubDir, binaryAbs string) string {
 	// line to the transcript, fires the SessionStart hook (with the file already
 	// on disk so the AC1 stat-gate persists jsonl_path), then execs a long-lived
 	// sleep tagged with stubMarker so the pane process persists with a readable
-	// environ.
-	// `exec` replaces the shell so the surviving pid IS the process whose
-	// environ carries AGENT_DIRECTOR_INSTANCE_ID.
+	// environ for the test's own stub discovery.
+	// `exec` replaces the shell so the surviving pid IS the recorded agent
+	// process (same pid, same start time), whose environ carries
+	// AGENT_DIRECTOR_INSTANCE_ID for the resume assertion.
 	script := `#!/bin/sh
 # Stub 'claude' for the reboot-recovery E2E. See writeStubClaude in harness_test.go.
 # It DERIVES its transcript path from $CLAUDE_CONFIG_DIR + slug($PWD) + sid so
@@ -180,9 +182,10 @@ done
 printf '%s' '{"hook_event_name":"SessionStart","transcript_path":"'"$JSONL"'"}' \
   | "$BINARY" hook >/dev/null 2>&1 || true
 
-# Stay alive with a readable environ. exec so this pid inherits the tmux -e env
-# (AGENT_DIRECTOR_INSTANCE_ID) that find-missing's probe reads, and export the
-# stub marker so the test can target exactly these processes for the kill step.
+# Stay alive as the recorded agent process. exec keeps this pid and its start
+# time (what find-missing judges) and the tmux -e env (AGENT_DIRECTOR_INSTANCE_ID)
+# the test reads after resume; export the stub marker so the test can target
+# exactly these processes for the kill step.
 # 'sleep' takes a single duration arg — a marker in argv would abort it, so the
 # marker rides in the environment instead.
 export ` + stubMarkerKey + `=` + stubMarkerVal + `
@@ -382,6 +385,25 @@ func stubPIDs(t *testing.T) []int {
 		}
 	}
 	return pids
+}
+
+// waitStubsSettled waits until every recorded pid is a live stub carrying the
+// marker, i.e. the stub has exec'd its long sleep after its SessionStart
+// applied, so the kill step finds and kills exactly the recorded processes.
+func waitStubsSettled(t *testing.T, recorded []int64) {
+	t.Helper()
+	waitFor(t, "recorded agent processes exec'd into the marked stub sleep", func() bool {
+		live := map[int64]bool{}
+		for _, pid := range stubPIDs(t) {
+			live[int64(pid)] = true
+		}
+		for _, pid := range recorded {
+			if !live[pid] {
+				return false
+			}
+		}
+		return true
+	})
 }
 
 // killStubs sends SIGKILL to every current stub process. Used after

@@ -14,14 +14,10 @@
 //   - cliArgv: builds the []string argv (verb + flags) for runCLI.
 //
 // Coverage note for find-missing / ErrProbeUnsupported:
-// ErrProbeUnsupported is emitted exclusively by the platform fallback prober
-// (probe_unsupported.go) which is only compiled when the build target is
-// neither linux nor darwin. On this test host (linux/amd64) it is impossible
-// to trigger ErrProbeUnsupported through pkg/api.Client.FindMissing without
-// dependency-injecting a fake prober — which the current Client interface
-// does not expose. find-missing is therefore omitted from errorCases and
-// explicitly exempted in TestErrorTableCoverage. See the skipCoverageVerbErrs
-// map in TestErrorTableCoverage for the documented exemption.
+// find-missing no longer returns ErrProbeUnsupported; the manifest still lists
+// it for find-missing (SR-1.7). TestErrorTableCoverage needs a row while the
+// manifest lists the name, so the row stays and its skip hook skips it on
+// every platform.
 //
 // An init() guard at the bottom of this file panics at program startup if any
 // row names an err_name not present in the verb's manifest.ErrorNames or
@@ -31,7 +27,6 @@ package envelope_diff
 import (
 	"fmt"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
@@ -416,20 +411,15 @@ var errorCases = append(append([]errorCase{
 	},
 
 	// ── find-missing / ErrProbeUnsupported ───────────────────────────────
-	// ErrProbeUnsupported is emitted by probe_unsupported.go (build tag
-	// !linux && !darwin). Both linux and darwin compile a native prober
-	// (probe_linux.go reads /proc, probe_darwin.go reads kinfo) — neither
-	// can surface ErrProbeUnsupported without injecting a fake prober into
-	// Client.FindMissing. The row must exist for TestErrorTableCoverage;
-	// the subtest skips on linux+darwin via the skip hook.
+	// No verb returns ErrProbeUnsupported any more, but the manifest still
+	// lists it for find-missing (SR-1.7). The row must exist for
+	// TestErrorTableCoverage; the skip hook skips it on every platform.
 	{
 		verb:    "find-missing",
 		errName: "ErrProbeUnsupported",
 		skip: func(t *testing.T) {
 			t.Helper()
-			if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
-				t.Skipf("ErrProbeUnsupported not triggerable on %s (native prober compiled; probe_unsupported.go excluded by build tag)", runtime.GOOS)
-			}
+			t.Skip("find-missing no longer returns it; kept by SR-1.7")
 		},
 		seed: func(t *testing.T) (string, map[string]any) {
 			t.Helper()

@@ -33,10 +33,40 @@ func readLivenessRaw(t *testing.T, s *Store, id string) (since, note sql.NullStr
 	return since, note
 }
 
+// recoveryExamined reads the row's snapshot through GetSpawn: the life a
+// find-missing sweep examines before its guarded write (SR-11.6).
+func recoveryExamined(t *testing.T, s *Store, id string) RowSnapshot {
+	t.Helper()
+	sp, err := s.GetSpawn(id)
+	if err != nil {
+		t.Fatalf("GetSpawn(%q): %v", id, err)
+	}
+	return sp.Snapshot
+}
+
+// recoveryMarkMissing marks a live row missing the way find-missing does: it
+// reads the row's snapshot first, then applies the guarded mark on it
+// (SR-11.3, SR-11.6). It fails unless the mark applied and returned the row's
+// prior state wantPrior.
+func recoveryMarkMissing(t *testing.T, s *Store, id, wantPrior string) {
+	t.Helper()
+	prior, res, err := s.MarkMissingIfSameLife(id, recoveryExamined(t, s, id))
+	if err != nil {
+		t.Fatalf("MarkMissingIfSameLife(%q): %v", id, err)
+	}
+	if res != CondApplied {
+		t.Fatalf("MarkMissingIfSameLife(%q) = %v; want CondApplied (snapshot read just before)", id, res)
+	}
+	if prior != wantPrior {
+		t.Errorf("MarkMissingIfSameLife(%q) prior state = %q; want %q", id, prior, wantPrior)
+	}
+}
+
 // seedLivenessSet inserts a live-state spawn (its agent's pane recorded, so its
-// own hooks apply, SR-22.9) and pins both liveness columns via the guarded
-// setter, returning the recorded since timestamp. The row is left in the given
-// state so the caller can drive a specific clear path against it.
+// own hooks apply, SR-22.9) and pins both liveness columns through
+// find-missing's guarded note write on the row's snapshot, returning the
+// recorded since timestamp. The row is left in the given state so the caller
+// can drive a specific clear path against it.
 func seedLivenessSet(t *testing.T, s *Store, id, state string) string {
 	t.Helper()
 	if err := insertAgentRow(s, Spawn{
@@ -49,12 +79,12 @@ func seedLivenessSet(t *testing.T, s *Store, id, state string) string {
 			t.Fatalf("seedLivenessSet: ApplyHookTransition(%q, %q): %v", id, state, err)
 		}
 	}
-	transitioned, err := s.SetLivenessUnverified(id, "probe eacces")
+	res, err := s.SetLivenessNoteIfSameLife(id, recoveryExamined(t, s, id), "probe eacces")
 	if err != nil {
-		t.Fatalf("seedLivenessSet: SetLivenessUnverified(%q): %v", id, err)
+		t.Fatalf("seedLivenessSet: SetLivenessNoteIfSameLife(%q): %v", id, err)
 	}
-	if !transitioned {
-		t.Fatalf("seedLivenessSet: SetLivenessUnverified(%q) transitioned=false; want true (NULL→set)", id)
+	if res != CondApplied {
+		t.Fatalf("seedLivenessSet: SetLivenessNoteIfSameLife(%q) = %v; want CondApplied", id, res)
 	}
 	since, note := readLivenessRaw(t, s, id)
 	if !since.Valid || since.String == "" {
@@ -91,139 +121,11 @@ func assertLivenessPreserved(t *testing.T, s *Store, id, wantSince string) {
 	}
 }
 
-// TestSetLivenessUnverifiedFirstSetThenPreserve pins the guarded setter's
-// NULL→set / preserve / transitioned semantics (SR-8.1). The first call on a
-// clear live row sets both columns and returns transitioned=true; a repeat call
-// preserves the ORIGINAL since timestamp and returns transitioned=false.
-func TestSetLivenessUnverifiedFirstSetThenPreserve(t *testing.T) {
-	s, _ := openTempStore(t)
-	const id = "liveness-set-preserve-1"
-	if err := s.InsertPending(Spawn{
-		ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-lsp", RelayMode: "off",
-	}); err != nil {
-		t.Fatalf("InsertPending: %v", err)
-	}
-
-	// First set: NULL→set, transitioned=true, timestamp non-empty.
-	transitioned, err := s.SetLivenessUnverified(id, "first note")
-	if err != nil {
-		t.Fatalf("SetLivenessUnverified (first): %v", err)
-	}
-	if !transitioned {
-		t.Fatalf("first SetLivenessUnverified transitioned=false; want true (NULL→set)")
-	}
-	firstSince, firstNote := readLivenessRaw(t, s, id)
-	if !firstSince.Valid || firstSince.String == "" {
-		t.Fatalf("liveness_unverified_since after first set = %+v; want non-empty", firstSince)
-	}
-	if !firstNote.Valid || firstNote.String != "first note" {
-		t.Fatalf("liveness_note after first set = %+v; want (true, first note)", firstNote)
-	}
-
-	// Repeat: preserves original since timestamp, transitioned=false, note NOT
-	// overwritten (the guarded UPDATE matches 0 rows).
-	transitioned, err = s.SetLivenessUnverified(id, "second note")
-	if err != nil {
-		t.Fatalf("SetLivenessUnverified (repeat): %v", err)
-	}
-	if transitioned {
-		t.Fatalf("repeat SetLivenessUnverified transitioned=true; want false (already set)")
-	}
-	secondSince, secondNote := readLivenessRaw(t, s, id)
-	if secondSince.String != firstSince.String {
-		t.Errorf("since timestamp changed on repeat: %q -> %q; want preserved", firstSince.String, secondSince.String)
-	}
-	if secondNote.String != "first note" {
-		t.Errorf("liveness_note = %q on repeat; want preserved original (first note)", secondNote.String)
-	}
-}
-
-// TestSetLivenessUnverifiedNoopOnAbsentAndTerminal pins the guarded setter's
-// fail-open no-op discipline: an absent row and a terminal-state row (ended /
-// missing) both return transitioned=false and leave the columns NULL.
-func TestSetLivenessUnverifiedNoopOnAbsentAndTerminal(t *testing.T) {
-	s, _ := openTempStore(t)
-
-	// Absent row: no-op, transitioned=false, no error.
-	transitioned, err := s.SetLivenessUnverified("no-such-row", "note")
-	if err != nil {
-		t.Fatalf("SetLivenessUnverified (absent): %v", err)
-	}
-	if transitioned {
-		t.Errorf("absent-row SetLivenessUnverified transitioned=true; want false")
-	}
-
-	// Terminal (ended) row: guarded on the live-state set, so no-op.
-	const endedID = "liveness-terminal-ended-1"
-	if err := insertAgentRow(s, Spawn{
-		ClaudeInstanceID: endedID, CWD: "/tmp", TmuxSessionName: "cd-end", RelayMode: "off",
-	}); err != nil {
-		t.Fatalf("InsertPending(ended): %v", err)
-	}
-	if err := agentHook(s, endedID, StateEnded, false, "test_seed"); err != nil {
-		t.Fatalf("transition to ended: %v", err)
-	}
-	transitioned, err = s.SetLivenessUnverified(endedID, "note")
-	if err != nil {
-		t.Fatalf("SetLivenessUnverified (ended): %v", err)
-	}
-	if transitioned {
-		t.Errorf("ended-row SetLivenessUnverified transitioned=true; want false (terminal guard)")
-	}
-	assertLivenessCleared(t, s, endedID)
-
-	// Missing (terminal) row: same no-op discipline.
-	const missingID = "liveness-terminal-missing-1"
-	if err := insertAgentRow(s, Spawn{
-		ClaudeInstanceID: missingID, CWD: "/tmp", TmuxSessionName: "cd-mis", RelayMode: "off",
-	}); err != nil {
-		t.Fatalf("InsertPending(missing): %v", err)
-	}
-	if err := agentHook(s, missingID, StateWorking, false, "test_seed"); err != nil {
-		t.Fatalf("transition to working: %v", err)
-	}
-	if _, err := s.MarkSpawnMissing(missingID); err != nil {
-		t.Fatalf("MarkSpawnMissing: %v", err)
-	}
-	transitioned, err = s.SetLivenessUnverified(missingID, "note")
-	if err != nil {
-		t.Fatalf("SetLivenessUnverified (missing): %v", err)
-	}
-	if transitioned {
-		t.Errorf("missing-row SetLivenessUnverified transitioned=true; want false (terminal guard)")
-	}
-	assertLivenessCleared(t, s, missingID)
-}
-
-// TestClearLivenessUnverifiedIdempotent pins the clear primitive: it NULLs both
-// columns and a second (or absent-row) clear is a no-op that returns no error.
-func TestClearLivenessUnverifiedIdempotent(t *testing.T) {
-	s, _ := openTempStore(t)
-	const id = "liveness-clear-idem-1"
-	seedLivenessSet(t, s, id, StateWorking)
-
-	if err := s.ClearLivenessUnverified(id); err != nil {
-		t.Fatalf("ClearLivenessUnverified (first): %v", err)
-	}
-	assertLivenessCleared(t, s, id)
-
-	// Double-clear: idempotent, no error.
-	if err := s.ClearLivenessUnverified(id); err != nil {
-		t.Fatalf("ClearLivenessUnverified (double): %v", err)
-	}
-	assertLivenessCleared(t, s, id)
-
-	// Absent row: idempotent no-op.
-	if err := s.ClearLivenessUnverified("no-such-row"); err != nil {
-		t.Fatalf("ClearLivenessUnverified (absent): %v", err)
-	}
-}
-
 // TestListLiveSpawnIdentitiesReadShape pins ListLiveSpawnIdentities (SR-8.1):
 // it returns one row per live-state spawn (including pending) carrying the
 // recorded pid/proc_starttime (zero values when the identity columns are NULL),
-// excludes terminal rows, and does not blow up when a row's liveness columns are
-// set (the read deliberately carries no liveness fields).
+// excludes terminal rows, and carries the row's liveness note ("" when NULL)
+// without failing when a row's liveness columns are set.
 func TestListLiveSpawnIdentitiesReadShape(t *testing.T) {
 	s, _ := openTempStore(t)
 
@@ -238,8 +140,8 @@ func TestListLiveSpawnIdentitiesReadShape(t *testing.T) {
 	if err := agentSessionStart(s, "live-waiting", "", "", false); err != nil {
 		t.Fatalf("SessionStart(live-waiting): %v", err)
 	}
-	if _, err := s.SetLivenessUnverified("live-waiting", "probe eacces"); err != nil {
-		t.Fatalf("SetLivenessUnverified(live-waiting): %v", err)
+	if res, err := s.SetLivenessNoteIfSameLife("live-waiting", recoveryExamined(t, s, "live-waiting"), "probe eacces"); err != nil || res != CondApplied {
+		t.Fatalf("SetLivenessNoteIfSameLife(live-waiting) = %v, %v; want CondApplied", res, err)
 	}
 
 	// pending row with NO recorded identity (columns NULL → zero values).
@@ -281,6 +183,9 @@ func TestListLiveSpawnIdentitiesReadShape(t *testing.T) {
 	if pane := testPane(); w.PID != pane.PanePID || w.ProcStarttime != pane.PaneStarttime {
 		t.Errorf("live-waiting identity = (pid=%d, starttime=%q); want the pane process (%d, %q)", w.PID, w.ProcStarttime, pane.PanePID, pane.PaneStarttime)
 	}
+	if w.LivenessNote != "probe eacces" {
+		t.Errorf("live-waiting LivenessNote = %q; want %q", w.LivenessNote, "probe eacces")
+	}
 
 	p, ok := byID["live-pending"]
 	if !ok {
@@ -288,6 +193,9 @@ func TestListLiveSpawnIdentitiesReadShape(t *testing.T) {
 	}
 	if p.PID != 0 || p.ProcStarttime != "" {
 		t.Errorf("live-pending identity = (pid=%d, starttime=%q); want zero values (NULL columns)", p.PID, p.ProcStarttime)
+	}
+	if p.LivenessNote != "" {
+		t.Errorf("live-pending LivenessNote = %q; want \"\" (NULL)", p.LivenessNote)
 	}
 }
 
@@ -325,7 +233,9 @@ func seedCheckPermissionSpawn(t *testing.T, s *Store, id string) {
 }
 
 // TestFindMissingMultiRow verifies SR-5.4 + SR-A-2.5: when a Spawn has N>1
-// open permission_requests rows and CloseOrphanedPermissionRequests is called,
+// open permission_requests rows, is marked missing through the guarded mark
+// (MarkMissingIfSameLife on the snapshot read first, SR-11.6) and
+// CloseOrphanedPermissionRequests is called,
 // every open row receives decision='deny' and decision_reason='find_missing'
 // (verified against store.DecisionReasonFindMissing via raw DB column read).
 // One ad.find_missing.tick(permission_orphan_closeout) trail event must be
@@ -347,10 +257,9 @@ func TestFindMissingMultiRow(t *testing.T) {
 		}
 	}
 
-	// Mark spawn missing, then close all orphaned rows.
-	if _, err := s.MarkSpawnMissing(id); err != nil {
-		t.Fatalf("MarkSpawnMissing: %v", err)
-	}
+	// Mark spawn missing through the guarded mark on the snapshot read just
+	// before it, then close all orphaned rows.
+	recoveryMarkMissing(t, s, id, StateCheckPermission)
 	before := len(readStoreTrailLines(t))
 	if err := s.CloseOrphanedPermissionRequests(id); err != nil {
 		t.Fatalf("CloseOrphanedPermissionRequests: %v", err)
@@ -400,7 +309,7 @@ func TestFindMissingMultiRow(t *testing.T) {
 }
 
 // TestFindMissingSingleRow verifies SR-5.4 + SR-A-2.5: a Spawn with one open
-// row receives decision='deny' and one ad.find_missing.tick(permission_orphan_closeout)
+// row, marked missing through the guarded mark, receives decision='deny' and one ad.find_missing.tick(permission_orphan_closeout)
 // trail event.
 func TestFindMissingSingleRow(t *testing.T) {
 	s, _ := openTempStore(t)
@@ -411,9 +320,7 @@ func TestFindMissingSingleRow(t *testing.T) {
 		t.Fatalf("UpsertOpenPermissionRequest: %v", err)
 	}
 
-	if _, err := s.MarkSpawnMissing(id); err != nil {
-		t.Fatalf("MarkSpawnMissing: %v", err)
-	}
+	recoveryMarkMissing(t, s, id, StateCheckPermission)
 	before := len(readStoreTrailLines(t))
 	if err := s.CloseOrphanedPermissionRequests(id); err != nil {
 		t.Fatalf("CloseOrphanedPermissionRequests: %v", err)
@@ -455,7 +362,7 @@ func TestFindMissingSingleRow(t *testing.T) {
 }
 
 // TestFindMissingNoOpenRows verifies SR-5.4 + SR-A-2.5: when a Spawn has no
-// open permission_requests rows, MarkSpawnMissing still transitions the Spawn
+// open permission_requests rows, the guarded mark still transitions the Spawn
 // to missing and CloseOrphanedPermissionRequests is a no-op that emits zero
 // ad.find_missing.tick lines.
 func TestFindMissingNoOpenRows(t *testing.T) {
@@ -475,9 +382,7 @@ func TestFindMissingNoOpenRows(t *testing.T) {
 		t.Fatalf("transition to working: %v", err)
 	}
 
-	if _, err := s.MarkSpawnMissing(id); err != nil {
-		t.Fatalf("MarkSpawnMissing: %v", err)
-	}
+	recoveryMarkMissing(t, s, id, StateWorking)
 	before := len(readStoreTrailLines(t))
 	if err := s.CloseOrphanedPermissionRequests(id); err != nil {
 		t.Fatalf("CloseOrphanedPermissionRequests (no open rows): %v", err)

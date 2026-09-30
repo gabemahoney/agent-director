@@ -6,18 +6,18 @@ import (
 	"strings"
 )
 
-// ErrLinuxStatMalformed is returned by parseLinuxStat (and
-// parseLinuxStatWithState) when a /proc/<pid>/stat line cannot be parsed into
-// the fields we need (missing ')' delimiter, too few fields after it, a
-// non-numeric ppid, or, for parseLinuxStatWithState, a missing or malformed
-// state). It is a distinct sentinel
-// so callers can fail-open to NULL identity (SR-6.3) without conflating a
-// parse miss with probe.ErrProbeUnsupported's fail-closed meaning.
+// ErrLinuxStatMalformed is returned by parseLinuxStatWithState when a
+// /proc/<pid>/stat line cannot be parsed into the fields we need (missing ')'
+// delimiter, too few fields after it, a non-numeric ppid, or a missing or
+// malformed state). It is a distinct sentinel so callers can fail open
+// (the start-time reader answers unreadable) without conflating a parse miss
+// with any other error.
 var ErrLinuxStatMalformed = errors.New("ErrLinuxStatMalformed")
 
-// parseLinuxStat parses a single /proc/<pid>/stat line and returns the
-// parent pid (field 4) and the process start time (field 22). The line
-// format is (proc(5)):
+// parseLinuxStatWithState parses a single /proc/<pid>/stat line and returns
+// the process state (field 3), the parent pid (field 4) and the process start
+// time (field 22). The start-time reader needs the state to count a zombie as
+// gone (SR-3.8). The line format is (proc(5)):
 //
 //	pid (comm) state ppid pgrp session tty_nr tpgid flags ... starttime ...
 //	  1   2      3    4    ...                                  22
@@ -38,25 +38,12 @@ var ErrLinuxStatMalformed = errors.New("ErrLinuxStatMalformed")
 // procstarttimefix.LinuxProcStarttime ("12345678"): a stat line whose
 // field 22 is "12345678" yields exactly that string. Keep the two in sync —
 // see internal/testsupport/procstarttimefix/procstarttimefix.go (SR-6.3).
-func parseLinuxStat(line string) (ppid int, starttime string, err error) {
-	_, ppid, starttime, err = parseLinuxStatTail(line)
-	return ppid, starttime, err
-}
-
-// parseLinuxStatWithState parses a single /proc/<pid>/stat line like
-// parseLinuxStat and additionally returns the process state (field 3, the
-// first token after the last ')'), which the start-time reader needs to count
-// a zombie as gone (SR-3.8). It shares parseLinuxStat's last-')' anchoring, so
-// a comm containing spaces, digits or parentheses cannot shift the count.
 //
 // The state must be exactly one ASCII letter (proc(5): R, S, D, Z, T, t, W,
 // X, x, K, P, I). A missing or malformed state is ErrLinuxStatMalformed (the
 // same fail-open family), never a guessed state. A line missing the state
 // also shifts every later field left by one, so it fails the field-22 count
 // as well.
-//
-// parseLinuxStat itself deliberately does NOT validate the state: its caller
-// (today's LivenessChecker) keeps its behaviour exactly.
 func parseLinuxStatWithState(line string) (state byte, ppid int, starttime string, err error) {
 	stateTok, ppid, starttime, err := parseLinuxStatTail(line)
 	if err != nil {
@@ -68,10 +55,9 @@ func parseLinuxStatWithState(line string) (state byte, ppid int, starttime strin
 	return stateTok[0], ppid, starttime, nil
 }
 
-// parseLinuxStatTail is the shared body of parseLinuxStat and
-// parseLinuxStatWithState: it anchors on the last ')' and returns the raw
-// field-3 token (unvalidated), the parent pid (field 4) and the verbatim
-// start time (field 22).
+// parseLinuxStatTail is the body of parseLinuxStatWithState: it anchors on
+// the last ')' and returns the raw field-3 token (unvalidated), the parent pid
+// (field 4) and the verbatim start time (field 22).
 func parseLinuxStatTail(line string) (stateTok string, ppid int, starttime string, err error) {
 	// Anchor on the last ')' so a comm containing ')' can't shift the count.
 	rparen := strings.LastIndexByte(line, ')')

@@ -1,7 +1,7 @@
 // starttime_linux_core_test.go — UNTAGGED answer-table tests for the build-tag-free
 // linuxStartTimeReader, driven over a fabricated t.TempDir() proc root (never the
 // real /proc) so they compile and run on any OS. Cases that need a real EACCES skip
-// under root, like checker_linux_core_test.go.
+// under root.
 
 package probe
 
@@ -209,8 +209,7 @@ func TestLinuxStartTimeReader(t *testing.T) {
 			},
 			want: unreadable,
 		},
-		// No environment read: today's linuxChecker tiebreaker would call each of
-		// these fixtures dead (or lean on environ); the start-time reader reads alive.
+		// No environment read: whatever environ holds, a matching stat reads alive.
 		{
 			name: "environ absent still alive",
 			setup: func(t *testing.T, root string) string {

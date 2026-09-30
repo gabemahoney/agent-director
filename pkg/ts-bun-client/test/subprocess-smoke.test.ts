@@ -198,19 +198,13 @@ describe("subprocess-smoke / happy paths (SR-10.3)", () => {
     });
   }, 10_000);
 
-  test("find-missing — returns count and ids (linux); darwin emits ErrProbeUnsupported", async () => {
+  test("find-missing — returns count and ids", async () => {
     await withTempHome(async (homeDir) => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
       using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
-      if (process.platform === "linux") {
-        const r: FindMissingResult = await client.findMissing({});
-        expect(typeof r.count).toBe("number");
-        expect(Array.isArray(r.ids)).toBe(true);
-      } else {
-        let caught: unknown;
-        try { await client.findMissing({}); } catch (e) { caught = e; }
-        expect(caught).toBeInstanceOf(AgentDirectorError);
-      }
+      const r: FindMissingResult = await client.findMissing({});
+      expect(typeof r.count).toBe("number");
+      expect(Array.isArray(r.ids)).toBe(true);
     });
   }, 10_000);
 

@@ -1,11 +1,13 @@
 package store_test
 
-// Live-row read tests for find-missing's pending grace period (SR-11.2,
-// SR-5.5, SR-22.8): ListLiveSpawnIdentities carries each row's state and
-// launch start, and InsidePendingGrace judges them. Rows are seeded through
-// apitest (SR-20.2) with the v5 fixtures in spawn_v5_read_test.go.
+// Live-row read tests (SR-11.2, SR-11.7, SR-5.5, SR-22.8):
+// ListLiveSpawnIdentities carries each row's state, launch start, name,
+// liveness note, snapshot and launch identity, and InsidePendingGrace judges
+// the pending grace period. Rows are seeded through apitest (SR-20.2) with
+// the v5 fixtures in spawn_v5_read_test.go.
 
 import (
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -14,6 +16,44 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
+
+// liveRow is one seeded row the live-row read must return: the case name and
+// the LiveSpawnIdentity expected for it.
+type liveRow struct {
+	name string
+	want store.LiveSpawnIdentity
+}
+
+// assertLiveRead fails unless one ListLiveSpawnIdentities call succeeds and
+// returns every row in rows, each equal to its want, and no terminal row.
+func assertLiveRead(t *testing.T, f *v5Store, rows map[string]liveRow, terminal map[string]bool) {
+	t.Helper()
+	got, err := f.s.ListLiveSpawnIdentities()
+	if err != nil {
+		t.Fatalf("ListLiveSpawnIdentities: %v; no stored value may fail the read", err)
+	}
+	seen := make(map[string]bool, len(got))
+	for _, it := range got {
+		if terminal[it.ClaudeInstanceID] {
+			t.Errorf("terminal row %s (%s) listed", it.ClaudeInstanceID, it.State)
+			continue
+		}
+		r, ok := rows[it.ClaudeInstanceID]
+		if !ok {
+			t.Errorf("unexpected row listed: %+v", it)
+			continue
+		}
+		seen[it.ClaudeInstanceID] = true
+		if it != r.want {
+			t.Errorf("%s:\n got  %+v\n want %+v", r.name, it, r.want)
+		}
+	}
+	for id, r := range rows {
+		if !seen[id] {
+			t.Errorf("%s: row %s not listed", r.name, id)
+		}
+	}
+}
 
 // TestListLiveSpawnIdentitiesStateAndLaunchStart checks one read returns every
 // live row with its state and decoded launch start, even an unreadable one.
@@ -55,12 +95,18 @@ func TestListLiveSpawnIdentitiesStateAndLaunchStart(t *testing.T) {
 	}
 
 	f := newV5Store(t)
-	want := make(map[string]store.LiveSpawnIdentity, len(cases)+2)
-	names := make(map[string]string, len(cases)+2)
+	rows := make(map[string]liveRow, len(cases)+2)
+	// add seeds a row; its name, snapshot and launch identity are GetSpawn's,
+	// which the live-row read must equal (SR-11.7).
 	add := func(name, state string, w store.LiveSpawnIdentity, opts ...apitest.SpawnOption) {
 		id := f.seed(state, "", opts...)
+		sp, err := f.s.GetSpawn(id)
+		if err != nil {
+			t.Fatalf("GetSpawn(%s): %v", name, err)
+		}
 		w.ClaudeInstanceID, w.State = id, state
-		want[id], names[id] = w, name
+		w.TmuxSessionName, w.Snapshot, w.Identity = sp.TmuxSessionName, sp.Snapshot, sp.Identity
+		rows[id] = liveRow{name, w}
 	}
 	for _, tc := range cases {
 		add(tc.name, tc.state, store.LiveSpawnIdentity{LaunchStartedAtMillis: tc.want}, tc.opts...)
@@ -77,32 +123,91 @@ func TestListLiveSpawnIdentitiesStateAndLaunchStart(t *testing.T) {
 		f.seed(store.StateEnded, "", apitest.WithLaunchStartedAt(1767225600123)):   true,
 		f.seed(store.StateMissing, "", apitest.WithLaunchStartedAt(1767225600123)): true,
 	}
+	assertLiveRead(t, f, rows, terminal)
+}
 
-	got, err := f.s.ListLiveSpawnIdentities()
-	if err != nil {
-		t.Fatalf("ListLiveSpawnIdentities: %v; no stored value may fail the read", err)
+// lifeLaunchStart is the launch start every TestListLiveSpawnIdentitiesLifeFields row stores.
+const lifeLaunchStart int64 = 1767225600789
+
+// seededLife is the read of a row seeded with lifeBase(version, name) and
+// nothing else: no process identity, session id or liveness note (NULL).
+func seededLife(version int64, name string) store.LiveSpawnIdentity {
+	return store.LiveSpawnIdentity{
+		State:                 store.StateWaiting,
+		LaunchStartedAtMillis: lifeLaunchStart,
+		TmuxSessionName:       name,
+		Snapshot:              store.RowSnapshot{RowVersion: version, StartedAt: snapStartedAt, TmuxSessionName: name},
+		Identity:              fullIdentity(),
 	}
-	seen := make(map[string]bool, len(got))
-	for _, it := range got {
-		if terminal[it.ClaudeInstanceID] {
-			t.Errorf("terminal row %s (%s) listed", it.ClaudeInstanceID, it.State)
-			continue
-		}
-		w, ok := want[it.ClaudeInstanceID]
-		if !ok {
-			t.Errorf("unexpected row listed: %+v", it)
-			continue
-		}
-		seen[it.ClaudeInstanceID] = true
-		if it != w {
-			t.Errorf("%s: got %+v; want %+v", names[it.ClaudeInstanceID], it, w)
-		}
+}
+
+// lifeBase seeds the fields seededLife expects; a case's options follow and win.
+func lifeBase(version int64, name string) []apitest.SpawnOption {
+	return []apitest.SpawnOption{
+		apitest.WithRowVersion(version), apitest.WithStartedAt(snapStartedAt),
+		apitest.WithTmuxSessionName(name), apitest.WithLaunchIdentity(fullIdentity()),
+		apitest.WithLaunchStartedAt(lifeLaunchStart),
 	}
-	for id, name := range names {
-		if !seen[id] {
-			t.Errorf("%s: row %s not listed", name, id)
-		}
+}
+
+// TestListLiveSpawnIdentitiesLifeFields checks the read returns each row's name,
+// liveness note, snapshot and launch identity as seeded, NULL as the zero value.
+func TestListLiveSpawnIdentitiesLifeFields(t *testing.T) {
+	const note = "tmux server not answering"
+	identity := func(id store.LaunchIdentity) func(*store.LiveSpawnIdentity) {
+		return func(w *store.LiveSpawnIdentity) { w.Identity = id }
 	}
+	process := func(w *store.LiveSpawnIdentity) {
+		w.PID, w.ProcStarttime = 4242, apitest.LinuxProcStarttime
+		w.Snapshot.PID, w.Snapshot.ProcStarttime = 4242, apitest.LinuxProcStarttime
+	}
+	proc := []apitest.SpawnOption{apitest.WithPID(4242), apitest.WithProcStarttime(apitest.LinuxProcStarttime)}
+	cases := []struct {
+		name    string
+		session string
+		opts    []apitest.SpawnOption
+		edit    func(*store.LiveSpawnIdentity) // what the case changes from seededLife
+	}{
+		{"full launch identity, liveness note NULL", "", nil, nil},
+		{"no launch identity at all", "", []apitest.SpawnOption{apitest.WithNoLaunchToken()},
+			identity(store.LaunchIdentity{})},
+		{"token and socket, no server or pane identity", "",
+			[]apitest.SpawnOption{withToken(goodToken)},
+			identity(store.LaunchIdentity{Token: goodToken, Socket: apitest.TestSocket})},
+		{"pane without start time, no server identity", "",
+			[]apitest.SpawnOption{apitest.WithLaunchIdentity(store.LaunchIdentity{Token: goodToken,
+				Socket: apitest.TestSocket, PaneID: apitest.TestPaneID, PanePID: apitest.TestPanePID})},
+			identity(store.LaunchIdentity{Token: goodToken, Socket: apitest.TestSocket,
+				PaneID: apitest.TestPaneID, PanePID: apitest.TestPanePID})},
+		{"malformed token reads as none", "",
+			[]apitest.SpawnOption{withToken("NOT-A-TOKEN")},
+			identity(store.LaunchIdentity{Socket: apitest.TestSocket})},
+		{"liveness note set", "", []apitest.SpawnOption{apitest.WithLivenessNote(note)},
+			func(w *store.LiveSpawnIdentity) { w.LivenessNote = note }},
+		{"session id recorded", "sess-life", nil,
+			func(w *store.LiveSpawnIdentity) { w.Snapshot.ClaudeSessionID = "sess-life" }},
+		// Both identities come back unchanged; choosing one is the sweep's job.
+		{"SessionStart and pane identity differ", "", proc, process},
+		{"malformed labels, claude_args and extra_env", "", []apitest.SpawnOption{
+			apitest.WithRawLabels("{not json"), apitest.WithRawClaudeArgs("[unterminated"),
+			apitest.WithRawExtraEnv("not an object")}, nil},
+		{"unreadable launch start", "", []apitest.SpawnOption{apitest.WithRawLaunchStartedAt("soon")},
+			func(w *store.LiveSpawnIdentity) { w.LaunchStartedAtMillis = 0 }},
+	}
+
+	f := newV5Store(t)
+	rows := make(map[string]liveRow, len(cases))
+	for i, tc := range cases {
+		version, name := int64(100+i), fmt.Sprintf("life-%d", i)
+		id := f.seed(store.StateWaiting, tc.session, append(lifeBase(version, name), tc.opts...)...)
+		w := seededLife(version, name)
+		w.ClaudeInstanceID = id
+		if tc.edit != nil {
+			tc.edit(&w)
+		}
+		rows[id] = liveRow{tc.name, w}
+	}
+	assertLiveRead(t, f, rows, nil)
 }
 
 // TestInsidePendingGrace checks SR-11.2: only a pending row younger than the

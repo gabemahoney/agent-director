@@ -8,9 +8,8 @@ import (
 	"testing"
 )
 
-// dispositionName renders a procDisposition for test failure messages. It lives
-// alongside the tests (the production enum has no String method — it never needs
-// one) so the (errno → disposition) table assertions read clearly.
+// dispositionName renders a procDisposition for test failure messages (the
+// production enum has no String method).
 func dispositionName(d procDisposition) string {
 	switch d {
 	case dispGone:
@@ -24,12 +23,8 @@ func dispositionName(d procDisposition) string {
 	}
 }
 
-// TestClassifyLinuxErrnoTable pins EVERY entry of the SR-7.4 Linux errno table
-// (classifyLinuxErrno) as data: ENOENT/ESRCH → dispGone, EACCES/EPERM →
-// dispPermission. os.ErrNotExist / os.ErrPermission are covered too because the
-// production reader (os.ReadFile) surfaces its errors wrapped as *PathError whose
-// chain satisfies errors.Is against those sentinels — so the classifier must key
-// off the abstract sentinels, not just the raw syscall.Errno.
+// TestClassifyLinuxErrnoTable pins every pinned Linux errno, bare and wrapped in
+// the *PathError os.ReadFile returns: ENOENT/ESRCH gone, EACCES/EPERM permission.
 func TestClassifyLinuxErrnoTable(t *testing.T) {
 	cases := []struct {
 		name string
@@ -44,7 +39,7 @@ func TestClassifyLinuxErrnoTable(t *testing.T) {
 		{"EPERM", syscall.EPERM, dispPermission},
 		// Wrapped forms (the production os.ReadFile path wraps in *PathError):
 		{"wrapped_ENOENT_PathError", &os.PathError{Op: "open", Path: "/proc/1/stat", Err: syscall.ENOENT}, dispGone},
-		{"wrapped_EACCES_PathError", &os.PathError{Op: "open", Path: "/proc/1/environ", Err: syscall.EACCES}, dispPermission},
+		{"wrapped_EACCES_PathError", &os.PathError{Op: "open", Path: "/proc/1/stat", Err: syscall.EACCES}, dispPermission},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -56,11 +51,8 @@ func TestClassifyLinuxErrnoTable(t *testing.T) {
 	}
 }
 
-// TestClassifyLinuxErrnoUnexpected is the named exhaustiveness guard: any errno
-// ABSENT from the pinned table classifies as dispUnexpected → the caller folds
-// that to VerdictUnknown, NEVER VerdictProvablyDead. A drifted kernel that starts
-// returning EINVAL/EIO (or a wrapped random error) must fail OPEN, not mark rows
-// missing.
+// TestClassifyLinuxErrnoUnexpected: any unpinned Linux error is dispUnexpected,
+// which the start-time reader answers as unreadable, never gone.
 func TestClassifyLinuxErrnoUnexpected(t *testing.T) {
 	cases := []struct {
 		name string
@@ -75,17 +67,15 @@ func TestClassifyLinuxErrnoUnexpected(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := classifyLinuxErrno(tc.err); got != dispUnexpected {
-				t.Errorf("classifyLinuxErrno(%v) = %s; want dispUnexpected (unknown never dead)",
+				t.Errorf("classifyLinuxErrno(%v) = %s; want dispUnexpected (unreadable, never gone)",
 					tc.err, dispositionName(got))
 			}
 		})
 	}
 }
 
-// TestClassifyDarwinErrnoTable pins EVERY entry of the SR-7.4 macOS errno table
-// (classifyDarwinErrno): ESRCH → dispGone, EACCES/EPERM → dispPermission. Note
-// Darwin has NO ENOENT/ErrNotExist row — the sysctl seam surfaces a gone pid as
-// ESRCH or an empty buffer, not a filesystem miss.
+// TestClassifyDarwinErrnoTable pins every pinned darwin errno, bare and wrapped:
+// ESRCH gone, EACCES/EPERM permission (no ENOENT row on darwin).
 func TestClassifyDarwinErrnoTable(t *testing.T) {
 	cases := []struct {
 		name string
@@ -96,7 +86,7 @@ func TestClassifyDarwinErrnoTable(t *testing.T) {
 		{"EACCES", syscall.EACCES, dispPermission},
 		{"EPERM", syscall.EPERM, dispPermission},
 		{"wrapped_ESRCH", fmt.Errorf("sysctl kern.proc.pid: %w", syscall.ESRCH), dispGone},
-		{"wrapped_EPERM", fmt.Errorf("sysctl procargs2: %w", syscall.EPERM), dispPermission},
+		{"wrapped_EPERM", fmt.Errorf("sysctl kern.proc.pid: %w", syscall.EPERM), dispPermission},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -108,10 +98,8 @@ func TestClassifyDarwinErrnoTable(t *testing.T) {
 	}
 }
 
-// TestClassifyDarwinErrnoUnexpected is the named exhaustiveness guard for the
-// macOS table. ErrKinfoLayoutDrift (a parse-layer sentinel that can reach the
-// classifier) and every unpinned errno both classify as dispUnexpected → the
-// caller folds them to VerdictUnknown, NEVER VerdictProvablyDead.
+// TestClassifyDarwinErrnoUnexpected: ErrKinfoLayoutDrift and every unpinned darwin
+// error are dispUnexpected, which the start-time reader answers as unreadable, never gone.
 func TestClassifyDarwinErrnoUnexpected(t *testing.T) {
 	cases := []struct {
 		name string
@@ -128,7 +116,7 @@ func TestClassifyDarwinErrnoUnexpected(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := classifyDarwinErrno(tc.err); got != dispUnexpected {
-				t.Errorf("classifyDarwinErrno(%v) = %s; want dispUnexpected (unknown never dead)",
+				t.Errorf("classifyDarwinErrno(%v) = %s; want dispUnexpected (unreadable, never gone)",
 					tc.err, dispositionName(got))
 			}
 		})

@@ -276,7 +276,7 @@ func TestListLivenessFieldsRoundTrip(t *testing.T) {
 	// normalized (still RFC3339 UTC) — pins pass-through normalization.
 	t.Run("rfc3339_passthrough", func(t *testing.T) {
 		const wantSince = "2026-09-19T12:34:56Z"
-		const wantNote = "environ probe hit a permission wall"
+		const wantNote = "probe_eacces"
 
 		dbPath := filepath.Join(t.TempDir(), "state.db")
 		if _, err := apitest.SeedSpawn(dbPath, "row-clean", store.StateWaiting, "/tmp", "off", "", true); err != nil {

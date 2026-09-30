@@ -29,20 +29,17 @@ package probe
 // "<tv_sec>.<tv_usec>" (formatDarwinProcStartTime). Callers compare it
 // byte-for-byte, never by clock.
 //
-// The reader never reads a process environment and never reads the clock: the
-// environment tiebreaker of LivenessChecker is deliberately absent. Today's
-// LivenessChecker / NewChecker stay, unchanged, for find-missing until Epic 14
-// removes them. No verb, command or hook uses this reader yet.
+// The reader never reads a process environment and never reads the clock.
 type ProcChecker interface {
 	StartTime(pid int) (start string, alive bool, known bool)
 }
 
 // NewProcChecker returns the per-OS start-time reader, selected by build tags
-// at compile time (mirroring New / NewChecker):
+// at compile time:
 //
 //   - Linux:  linuxStartTimeReader over the default /proc root.
 //   - darwin: darwinStartTimeReader over the real per-pid KERN_PROC_PID fetch
-//     today's checker uses (no KERN_PROCARGS2 wiring).
+//     (no KERN_PROCARGS2 wiring).
 //   - other:  unsupportedProcChecker, which answers unreadable for every pid.
 func NewProcChecker() ProcChecker {
 	return newProcChecker()
@@ -52,7 +49,7 @@ func NewProcChecker() ProcChecker {
 // implementation. It answers unreadable (known false) for every input, never
 // gone, so no caller ever treats a process it cannot evidence as ended. It is
 // build-tag-free so its contract is unit-testable on any OS; newProcChecker
-// returns it only on unsupported builds (probe_unsupported.go).
+// returns it only on unsupported builds (starttime_unsupported.go).
 type unsupportedProcChecker struct{}
 
 // StartTime always answers unreadable.

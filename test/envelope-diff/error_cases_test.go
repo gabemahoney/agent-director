@@ -43,7 +43,8 @@ func TestEnvelopeDiff_Error(t *testing.T) {
 		ec := ec // capture loop variable
 
 		t.Run(ec.verb+"/"+ec.errName, func(t *testing.T) {
-			// Platform-specific skip (e.g. ErrProbeUnsupported on Linux).
+			// Row-level skip (e.g. find-missing/ErrProbeUnsupported, which no
+			// verb returns but the manifest still lists).
 			if ec.skip != nil {
 				ec.skip(t)
 			}
@@ -150,7 +151,7 @@ func TestEnvelopeDiff_Error(t *testing.T) {
 //
 // Rows with a skip hook (e.g. find-missing/ErrProbeUnsupported) must still
 // appear in errorCases — the row is counted for coverage even when the
-// subtest itself will be skipped on this platform.
+// subtest itself is always skipped.
 func TestErrorTableCoverage(t *testing.T) {
 	// Index error cases by verb.
 	covered := make(map[string][]string)

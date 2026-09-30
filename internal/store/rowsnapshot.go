@@ -20,7 +20,7 @@ type RowSnapshot struct {
 // delete, find-missing's marks): a WHERE fragment, joined with AND, whose
 // placeholders take snapshotMatchArgs in order. Each column is compared
 // through the same expression the read that filled the snapshot uses
-// (spawnColumns), so the comparison sees exactly the stored value the snapshot
+// (lifeColumns), so the comparison sees exactly the stored value the snapshot
 // holds and never parses or re-formats it: started_at through CAST(... AS
 // TEXT), because the TIMESTAMP column has NUMERIC affinity and its stored text
 // must not be coerced; the nullable columns through COALESCE to the snapshot's
@@ -67,6 +67,54 @@ type LaunchIdentity struct {
 	PaneID          string // pane_id, "%N"
 	PanePID         int    // pane_pid
 	PaneStarttime   string // pane_starttime, same form as proc_starttime
+}
+
+// lifeColumns is the one column fragment a read selects to fill a row's
+// RowSnapshot and LaunchIdentity, in lifeScan.dest's order: the snapshot's six
+// columns, each through the expression snapshotMatchSQL compares, then the
+// eight launch-identity columns. launch_token is selected bare and decoded by
+// decodeLaunchToken; the other nullable columns read NULL as their zero value
+// through COALESCE. The reads returning a Spawn (spawnColumns) and
+// ListLiveSpawnIdentities select it, so a snapshot and identity read by one
+// equal those read by another for the same row, and every snapshot holds the
+// stored text the snapshot-match condition compares (SR-5.3, SR-5.5).
+const lifeColumns = `
+        COALESCE(row_version, 0), CAST(started_at AS TEXT),
+        COALESCE(claude_session_id, ''), COALESCE(pid, 0),
+        COALESCE(proc_starttime, ''), tmux_session_name,
+        launch_token, COALESCE(tmux_socket, ''), COALESCE(tmux_server_pid, 0),
+        COALESCE(tmux_server_started, 0), COALESCE(tmux_server_starttime, ''),
+        COALESCE(pane_id, ''), COALESCE(pane_pid, 0),
+        COALESCE(pane_starttime, '')`
+
+// lifeScan receives one row's lifeColumns: pass dest's pointers to Scan where
+// the query selects lifeColumns, then take the values from result.
+type lifeScan struct {
+	snap        RowSnapshot
+	id          LaunchIdentity
+	launchToken any
+}
+
+// dest returns the Scan destinations for lifeColumns, in its order.
+func (l *lifeScan) dest() []any {
+	return []any{
+		&l.snap.RowVersion, &l.snap.StartedAt,
+		&l.snap.ClaudeSessionID, &l.snap.PID,
+		&l.snap.ProcStarttime, &l.snap.TmuxSessionName,
+		&l.launchToken, &l.id.Socket, &l.id.ServerPID,
+		&l.id.ServerStart, &l.id.ServerStarttime,
+		&l.id.PaneID, &l.id.PanePID,
+		&l.id.PaneStarttime,
+	}
+}
+
+// result returns the scanned snapshot and launch identity. The identity's
+// Token is "" unless the stored token is well formed (decodeLaunchToken), so
+// it never fails.
+func (l *lifeScan) result() (RowSnapshot, LaunchIdentity) {
+	id := l.id
+	id.Token = decodeLaunchToken(l.launchToken)
+	return l.snap, id
 }
 
 // launchTokenLen is the length of a well-formed launch token: 64 bits as

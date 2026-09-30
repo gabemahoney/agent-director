@@ -246,6 +246,18 @@ func WithNoLaunchToken() SpawnOption {
 	return WithLaunchIdentity(store.LaunchIdentity{})
 }
 
+// WithNoPane seeds a live row whose launch reply was lost (SR-11.3): no pane
+// identity (pane_id, pane_pid and pane_starttime NULL), keeping every other
+// launch-identity column, the default token and TestSocket included, so the
+// row's session can still read as Ours on the tmux path.
+func WithNoPane() SpawnOption {
+	return func(o *spawnOpts) {
+		o.set("pane_id", nil)
+		o.set("pane_pid", nil)
+		o.set("pane_starttime", nil)
+	}
+}
+
 // WithRawLabels stores text in the labels column byte for byte (no JSON
 // encoding), for malformed-value cases.
 func WithRawLabels(text string) SpawnOption {

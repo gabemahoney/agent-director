@@ -15,7 +15,8 @@
  *       - "version"      — no ErrorNames in manifest
  *       - "expire"       — no ErrorNames in manifest
  *       - "delete"       — no verb-level ErrorNames; errors in result map
- *       - "find-missing" — only ErrProbeUnsupported (untriggerable on linux)
+ *       - "find-missing" — lists only ErrProbeUnsupported, which it no longer
+ *                          returns (kept by SR-1.7)
  */
 
 import { test, expect } from "bun:test";
@@ -30,7 +31,7 @@ const NO_ERROR_CASE_ALLOWLIST: ReadonlySet<string> = new Set([
   "version",      // manifest ErrorNames: []
   "expire",       // manifest ErrorNames: []
   "delete",       // manifest ErrorNames: [] — errors in DeleteResult.results map
-  "find-missing", // manifest ErrorNames: ["ErrProbeUnsupported"] (linux only, untriggerable)
+  "find-missing", // manifest ErrorNames: ["ErrProbeUnsupported"], never returned (kept by SR-1.7)
 ]);
 
 const smokeDir = path.resolve(import.meta.dir, "smoke");

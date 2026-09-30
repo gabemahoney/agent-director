@@ -8,15 +8,13 @@ import (
 // linuxStartTimeReader is the Linux start-time reader core (SR-3.8, "The
 // start-time reader (LFR C1)"; Appendix F.2 ProcChecker) over an INJECTABLE
 // PROC ROOT (procRoot, default "/proc" via newProcChecker on Linux — see
-// checker_linux.go). Like linuxChecker it is build-tag-free
-// (plain os.ReadFile over the injected root, no Linux-only syscalls), so tests
-// drive it with a fabricated proc tree on any OS.
+// starttime_linux.go). It is build-tag-free (plain os.ReadFile over the
+// injected root, no Linux-only syscalls), so tests drive it with a fabricated
+// proc tree on any OS.
 //
-// It is deliberately separate from linuxChecker, which keeps its environment
-// tiebreaker for find-missing until Epic 14 removes it. This reader has NO
-// environment tiebreaker: it reads only <procRoot>/<pid>/stat, never environ
-// or any other per-process file, never consults AGENT_DIRECTOR_*, and never
-// reads the clock.
+// It reads only <procRoot>/<pid>/stat (plus the proc root and its self entry
+// for the mounted-procfs check), never environ or any other per-process file,
+// never consults AGENT_DIRECTOR_*, and never reads the clock.
 //
 // Answers (the F.2 shape; start is empty unless alive):
 //
@@ -44,7 +42,7 @@ func (r linuxStartTimeReader) StartTime(pid int) (start string, alive bool, know
 	}
 	data, err := os.ReadFile(r.procRoot + "/" + strconv.Itoa(pid) + "/stat")
 	if err != nil {
-		// Reuse today's Linux errno table (checker_linux_core.go).
+		// The Linux errno table (errno.go).
 		if classifyLinuxErrno(err) == dispGone && r.procRootReadable() {
 			return "", false, true
 		}

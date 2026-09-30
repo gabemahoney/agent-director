@@ -9,23 +9,19 @@ import (
 	"github.com/gabemahoney/agent-director/internal/trail"
 )
 
-// LiveSpawnIdentity is the per-row identity the find-missing verdict
-// engine needs to decide liveness: the instance id, the row's state and
-// launch start (for the pending grace period, SR-11.2), plus the recorded
-// process identity (pid + proc_starttime) captured at SessionStart.
-//
-// Zero values follow the COALESCE scan convention (spawns.go): PID==0
-// and ProcStarttime=="" mean the underlying columns are NULL (no
-// recorded identity — a NULL-pid row that falls back to the environ
-// probe-set diff). The read deliberately carries NO liveness fields;
-// the guarded SetLivenessUnverified setter's transitioned return is
-// the sole NULL→set signal (PM decision, SR-8.1). Its fields grow
-// additively (SR-16.1, Appendix F.4).
+// LiveSpawnIdentity is find-missing's read of one live row (SR-11.7,
+// Appendix F.4): what the sweep needs to judge the row's liveness by its
+// agent's process, to consult tmux when that process cannot be checked, and
+// to guard its write on the life it examined. Zero values mean NULL,
+// following the COALESCE scan convention (spawns.go). Its fields grow
+// additively (SR-16.1).
 type LiveSpawnIdentity struct {
 	ClaudeInstanceID string
 	// State is the row's stored state: one of the live states, pending
 	// included.
-	State         string
+	State string
+	// PID and ProcStarttime are the SessionStart identity, the agent
+	// process the sweep reads first (SR-11.1); 0 and "" = none recorded.
 	PID           int
 	ProcStarttime string
 	// LaunchStartedAtMillis is launch_started_at in milliseconds since the
@@ -33,23 +29,39 @@ type LiveSpawnIdentity struct {
 	// 0 = absent: NULL, a stored value that is not an integer, or an integer
 	// outside the years 0 to 9999 UTC (decodeLaunchStartedAt, SR-5.5).
 	LaunchStartedAtMillis int64
+	// TmuxSessionName is the recorded session name, the name the tmux path
+	// checks and reports when another session holds it (SR-11.1).
+	TmuxSessionName string
+	// LivenessNote is the row's current liveness_note; "" = NULL. The sweep
+	// writes a note only when it differs from this one and clears one only
+	// when there is one (SR-11.4).
+	LivenessNote string
+	// Snapshot is the row snapshot the sweep examined: every mark, note
+	// write and clear applies only while the row still holds it (SR-11.6).
+	// It equals GetSpawn's Snapshot for the same row.
+	Snapshot RowSnapshot
+	// Identity is the row's launch identity (SR-3.6, SR-11.1): the pane
+	// identity for agent-process selection, and the token, socket and server
+	// identity for the tmux path. Identity.Token is "" unless the stored
+	// token is well formed (SR-5.5). It equals GetSpawn's Identity for the
+	// same row.
+	Identity LaunchIdentity
 }
 
 // ListLiveSpawnIdentities returns a LiveSpawnIdentity for every row in a
-// live (non-terminal) state. The result is the input set find-missing's
-// per-row verdict engine works against (SRD §4.4). Including `pending`
-// is intentional per SRD §5.2: a Spawn whose tmux session vanished
-// before SessionStart fired is still "live" from the DB's view and
-// should be reconciled to `missing`. Each row carries its state and
-// launch start so the sweep can tell a `pending` row inside its pending
-// grace period, which it then leaves untouched (SR-11.2).
+// live (non-terminal) state: find-missing's live-row read (SR-11.7).
+// `pending` is included, since a launch that never reported in is still
+// live in the store; each row's state and launch start let the sweep leave
+// a `pending` row inside its pending grace period untouched (SR-11.2).
 //
-// pid / proc_starttime are scanned through COALESCE, defaulting to 0
-// and an empty string respectively, so a row with no recorded identity
-// yields the zero values rather than a scan error. launch_started_at is
-// decoded by decodeLaunchStartedAt, so no stored value (NULL, text, real,
-// blob, an out-of-range integer) fails the read; the structured columns
-// (labels, claude_args, extra_env) are never read (SR-5.5).
+// The snapshot and launch identity are read through lifeColumns, the
+// fragment every read returning a Spawn selects, so Snapshot.StartedAt is
+// the stored text the snapshot-match condition compares. launch_started_at
+// is decoded by decodeLaunchStartedAt and launch_token by decodeLaunchToken,
+// and the nullable columns read NULL as their zero value through COALESCE,
+// so no stored launch start, token or identity value fails the read; the
+// structured columns (labels, claude_args, extra_env) are never read
+// (SR-5.5).
 //
 // Order is unspecified. Callers that need stable ordering sort the
 // result themselves.
@@ -60,8 +72,8 @@ func (s *Store) ListLiveSpawnIdentities() ([]LiveSpawnIdentity, error) {
 		placeholders[i] = "?"
 		args[i] = st
 	}
-	q := "SELECT claude_instance_id, state, COALESCE(pid, 0), COALESCE(proc_starttime, ''), launch_started_at " +
-		"FROM spawns WHERE state IN (" + strings.Join(placeholders, ",") + ")"
+	q := "SELECT claude_instance_id, state, launch_started_at, COALESCE(liveness_note, ''), " + lifeColumns +
+		" FROM spawns WHERE state IN (" + strings.Join(placeholders, ",") + ")"
 	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: list live identities: %w", err)
@@ -69,12 +81,20 @@ func (s *Store) ListLiveSpawnIdentities() ([]LiveSpawnIdentity, error) {
 	defer rows.Close()
 	var ids []LiveSpawnIdentity
 	for rows.Next() {
-		var it LiveSpawnIdentity
-		var launchStartedAt any
-		if err := rows.Scan(&it.ClaudeInstanceID, &it.State, &it.PID, &it.ProcStarttime, &launchStartedAt); err != nil {
+		var (
+			it              LiveSpawnIdentity
+			launchStartedAt any
+			life            lifeScan
+		)
+		dest := append([]any{&it.ClaudeInstanceID, &it.State, &launchStartedAt, &it.LivenessNote}, life.dest()...)
+		if err := rows.Scan(dest...); err != nil {
 			return nil, fmt.Errorf("store: list live identities scan: %w", err)
 		}
 		it.LaunchStartedAtMillis = decodeLaunchStartedAt(launchStartedAt)
+		it.Snapshot, it.Identity = life.result()
+		it.PID = it.Snapshot.PID
+		it.ProcStarttime = it.Snapshot.ProcStarttime
+		it.TmuxSessionName = it.Snapshot.TmuxSessionName
 		ids = append(ids, it)
 	}
 	if err := rows.Err(); err != nil {
@@ -83,127 +103,15 @@ func (s *Store) ListLiveSpawnIdentities() ([]LiveSpawnIdentity, error) {
 	return ids, nil
 }
 
-// SetLivenessUnverified records that a live row's process could not be
-// verified (e.g. an EACCES/EPERM environ probe): it writes both
-// liveness_unverified_since (= now, via CURRENT_TIMESTAMP — the store's
-// existing timestamp convention) and liveness_note in a single guarded
-// UPDATE, but ONLY when liveness_unverified_since is currently NULL.
-//
-// The write is guarded on the state set (live states only, matching
-// MarkSpawnMissing's WHERE discipline) so absent or terminal-state rows
-// are fail-open no-ops. Repeat calls on an already-set row preserve the
-// original timestamp and return transitioned=false; the first NULL→set
-// write returns transitioned=true. That transitioned bool is the sole
-// NULL→set signal find-missing uses to emit exactly one probe_eacces
-// tick (SR-8.1/8.4). Emits no trail events — emission stays in the
-// caller.
-//
-// A write advances row_version by one and leaves launch_started_at
-// unchanged; a call that matches no row advances nothing (SR-5.2).
-func (s *Store) SetLivenessUnverified(instanceID, note string) (bool, error) {
-	placeholders := make([]string, len(liveStates))
-	args := make([]any, 0, 2+len(liveStates))
-	args = append(args, note, instanceID)
-	for i, st := range liveStates {
-		placeholders[i] = "?"
-		args = append(args, st)
-	}
-	q := `UPDATE spawns
-	         SET liveness_unverified_since = CURRENT_TIMESTAMP,
-	             liveness_note = ?,
-	             ` + rowVersionAdvance + `
-	       WHERE claude_instance_id = ?
-	         AND liveness_unverified_since IS NULL
-	         AND state IN (` + strings.Join(placeholders, ",") + `)`
-	res, err := s.db.Exec(q, args...)
-	if err != nil {
-		return false, fmt.Errorf("store: set liveness unverified: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("store: set liveness unverified rows affected: %w", err)
-	}
-	return n > 0, nil
-}
-
-// ClearLivenessUnverified NULLs both liveness columns for a row. It is
-// idempotent: a row already clear (or absent) is a no-op. find-missing
-// calls it for the verified-alive case and immediately after
-// MarkSpawnMissing in the marking path (MarkSpawnMissing itself is NOT
-// widened — SR-11/SR-8.2). Emits no trail events.
-//
-// Every matched row advances row_version by one, whether or not a note was
-// set; launch_started_at is left unchanged (SR-5.2).
-func (s *Store) ClearLivenessUnverified(instanceID string) error {
-	const q = `UPDATE spawns
-	              SET liveness_unverified_since = NULL,
-	                  liveness_note = NULL,
-	                  ` + rowVersionAdvance + `
-	            WHERE claude_instance_id = ?`
-	if _, err := s.db.Exec(q, instanceID); err != nil {
-		return fmt.Errorf("store: clear liveness unverified: %w", err)
-	}
-	return nil
-}
-
-// MarkSpawnMissing transitions a row from any live state to `missing`
-// and records ended_at. find-missing calls this per row in its
-// set-difference output (SRD §5.2).
-//
-// Returns the prior state captured immediately before the UPDATE, and nil
-// error on success. Returns ("", nil) when no row matches the id or the row
-// is already terminal — the cron path must be idempotent: an aborted
-// previous run that already marked some rows missing should not error out on
-// the next sweep. Callers can distinguish "write happened" from "no-op" by
-// checking whether the returned prior state is non-empty.
-//
-// Prior state is captured via a separate SELECT before the UPDATE (the same
-// non-transactional pattern as ApplyHookTransitionResult — transactions cause
-// SQLITE_BUSY under concurrent workloads with modernc.org/sqlite).
-//
-// The mark advances row_version by one and sets launch_started_at to NULL in
-// the same statement; a no-op call advances nothing (SR-5.2).
-func (s *Store) MarkSpawnMissing(instanceID string) (string, error) {
-	// Capture prior state before the write. If no row exists (deleted
-	// concurrently), return ("", nil) — fail-open, no emit.
-	priorState, found, err := s.selectPriorState(instanceID)
-	if err != nil {
-		return "", fmt.Errorf("store: mark spawn missing prior state: %w", err)
-	}
-	if !found {
-		return "", nil
-	}
-
-	const q = `UPDATE spawns
-	              SET state = ?, last_seen_at = CURRENT_TIMESTAMP,
-	                  ended_at = CURRENT_TIMESTAMP,
-	                  ` + rowVersionAdvance + `, ` + launchStartClear + `
-	            WHERE claude_instance_id = ?
-	              AND state NOT IN (?, ?)`
-	res, err := s.db.Exec(q, StateMissing, instanceID, StateEnded, StateMissing)
-	if err != nil {
-		return "", fmt.Errorf("store: mark spawn missing: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return "", fmt.Errorf("store: mark spawn missing rows affected: %w", err)
-	}
-	if n == 0 {
-		// Row was already terminal — no-op. Return ("", nil) to signal no write.
-		return "", nil
-	}
-	return priorState, nil
-}
-
 // CloseOrphanedPermissionRequests denies all open permission_requests rows for
 // a Spawn that has been marked missing. Each open row receives its own
 // per-row UPDATE via DecidePermissionRequest with DecisionReasonFindMissing so
 // the relay polling loop observes a fail-closed deny rather than spinning to
 // its own internal timeout. No-op if the Spawn has no open rows.
 //
-// Call this immediately after MarkSpawnMissing for each missing ID. Per-row
-// errors are surfaced to the caller; the caller decides whether to log-and-
-// continue or abort the sweep.
+// find-missing calls this immediately after each mark that applied
+// (MarkMissingIfSameLife). Per-row errors are surfaced to the caller; the
+// caller decides whether to log-and-continue or abort the sweep.
 func (s *Store) CloseOrphanedPermissionRequests(instanceID string) error {
 	rows, err := s.OpenPermissionRequestsForSpawn(instanceID)
 	if err != nil {

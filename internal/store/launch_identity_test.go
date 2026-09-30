@@ -138,7 +138,7 @@ func TestRecordLaunchIdentityOutcomes(t *testing.T) {
 		// SR-22.9: no hook applies before the identity write (the row has no
 		// pane), so the in-between writes are non-hook writes.
 		{name: "changed, row no longer pending", version: current, lid: createdIdentity(), want: store.CondChanged,
-			setup: func(t *testing.T, f *v5Store) { markMissing("pending")(t, f, "li-row") }},
+			setup: func(t *testing.T, f *v5Store) { rvMark.write("", nil, store.CondApplied, "pending")(t, f, "li-row") }},
 		{name: "changed, a write in between", lid: createdIdentity(), want: store.CondChanged,
 			setup: func(t *testing.T, f *v5Store) {
 				if err := f.s.SetParentID("li-row", ""); err != nil {

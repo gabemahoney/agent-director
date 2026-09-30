@@ -28,7 +28,8 @@
 //     WithNoPreTrust, WithRawNoPreTrust, WithLaunchIdentity, WithTmuxSocket
 //     (the row's recorded socket in place of TestSocket), WithNoLaunchToken
 //     (a row from before the release: no token, socket or identity, the same
-//     as WithLaunchIdentity(store.LaunchIdentity{})), WithRawLabels,
+//     as WithLaunchIdentity(store.LaunchIdentity{})), WithNoPane (a live row
+//     with no pane identity that keeps its token and socket), WithRawLabels,
 //     WithRawClaudeArgs, WithRawExtraEnv, and WithSessionHistory (one archived
 //     session_history entry per use, a SessionHistorySeed: session id,
 //     transcript path or NULL, the life it belongs to and an optional

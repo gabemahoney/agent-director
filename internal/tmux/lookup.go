@@ -46,9 +46,8 @@ type Launch struct {
 // judgement of this release: the server check, the identity write,
 // adoption, SessionStart and pane liveness, kill's wait, expire's
 // process_alive and resume's and reuse's process check. On Linux it reads
-// field 22 of /proc/<pid>/stat, on darwin the equivalent today's checker
-// uses. It never reads a process's environment; the environment tiebreaker
-// of today's probe.LivenessChecker is used by none of these. A zombie (state
+// field 22 of /proc/<pid>/stat, on darwin the KERN_PROC_PID entry's
+// p_starttime. It never reads a process's environment. A zombie (state
 // Z) counts as gone. Implemented in internal/probe (probe.NewProcChecker),
 // which satisfies this interface structurally; this package does not import
 // it (Appendix F.2).

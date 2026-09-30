@@ -324,7 +324,7 @@ func TestGetTranscriptStatusAndPriorSessions(t *testing.T) {
 //
 //   - null_omitted:  a fresh live row has NULL liveness columns → the get
 //     result's pointers are nil AND the marshaled JSON contains neither key.
-//   - set_present:   SetLivenessUnverified writes both columns → the get
+//   - set_present:   SetLivenessNoteIfSameLife writes both columns → the get
 //     result surfaces the note verbatim and a non-empty since timestamp, and
 //     the marshaled JSON carries both keys.
 func TestGetLivenessFieldsRoundTrip(t *testing.T) {
@@ -355,13 +355,19 @@ func TestGetLivenessFieldsRoundTrip(t *testing.T) {
 
 	t.Run("set_present", func(t *testing.T) {
 		s := openGetFixture(t, "id-live-set", store.StateWaiting)
-		const wantNote = "environ probe hit a permission wall"
-		transitioned, err := s.SetLivenessUnverified("id-live-set", wantNote)
+		// A real SR-11.4 note value, written through find-missing's guarded
+		// note write on the snapshot the row was read at.
+		const wantNote = "probe_eacces"
+		sp, err := s.GetSpawn("id-live-set")
 		if err != nil {
-			t.Fatalf("SetLivenessUnverified: %v", err)
+			t.Fatalf("GetSpawn: %v", err)
 		}
-		if !transitioned {
-			t.Fatalf("SetLivenessUnverified transitioned=false; want true (first NULL→set write)")
+		res, err := s.SetLivenessNoteIfSameLife("id-live-set", sp.Snapshot, wantNote)
+		if err != nil {
+			t.Fatalf("SetLivenessNoteIfSameLife: %v", err)
+		}
+		if res != store.CondApplied {
+			t.Fatalf("SetLivenessNoteIfSameLife = %v; want CondApplied (first NULL→set write on the read snapshot)", res)
 		}
 
 		got, err := api.Get(s, "id-live-set")
@@ -380,7 +386,7 @@ func TestGetLivenessFieldsRoundTrip(t *testing.T) {
 		if *got.LivenessUnverifiedSince == "" {
 			t.Errorf("LivenessUnverifiedSince = %q; want non-empty timestamp", *got.LivenessUnverifiedSince)
 		}
-		// PIN the wire format: SetLivenessUnverified writes SQLite
+		// PIN the wire format: SetLivenessNoteIfSameLife writes SQLite
 		// CURRENT_TIMESTAMP text ("2006-01-02 15:04:05", no zone), so the
 		// raw store value would NOT be RFC3339. The surfaced value MUST be
 		// normalized to RFC3339 UTC — it parses as RFC3339, ends in "Z",
@@ -414,8 +420,8 @@ func TestGetLivenessFieldsRoundTrip(t *testing.T) {
 // verbatim rather than dropping it or erroring the verb. never drop data.
 //
 // The row is seeded directly with a non-timestamp string via
-// WithLivenessUnverifiedSince (bypassing SetLivenessUnverified, which only ever
-// writes CURRENT_TIMESTAMP text). The surfaced pointer must be non-nil and equal
+// WithLivenessUnverifiedSince (bypassing SetLivenessNoteIfSameLife, which only
+// ever writes CURRENT_TIMESTAMP text). The surfaced pointer must be non-nil and equal
 // the raw seeded value, and the marshaled JSON must carry it byte-for-byte.
 func TestGetLivenessUnverifiedSinceUnparseablePassesThrough(t *testing.T) {
 	const raw = "not-a-time"

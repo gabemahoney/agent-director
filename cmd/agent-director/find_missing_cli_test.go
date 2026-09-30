@@ -1,74 +1,72 @@
 package main_test
 
 import (
+	"bufio"
 	"encoding/json"
 	"os"
 	"os/exec"
-	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/probe"
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procstat"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// findMissingTickLines filters trail lines for ad.find_missing.tick events.
-func findMissingTickLines(lines []map[string]any) []map[string]any {
-	var out []map[string]any
-	for _, l := range lines {
-		if l["event"] == "ad.find_missing.tick" {
-			out = append(out, l)
-		}
-	}
-	return out
+// findMissingTicks returns home's ad.find_missing.tick trail lines.
+func findMissingTicks(t *testing.T, home string) []map[string]any {
+	t.Helper()
+	return trailEvents(t, home, "ad.find_missing.tick")
 }
 
-// realChild is a live OS process spawned by a find-missing acceptance test,
-// carrying a known AGENT_DIRECTOR_INSTANCE_ID in its environment. The engine's
-// per-row checker reads this child's real /proc/<pid>/stat (field 22) and
-// /proc/<pid>/environ to reach an evidence-based verdict, so the seeded row
-// must carry the child's ACTUAL pid + starttime (captured via spawnRealChild).
+// realChild is a real OS process a find-missing test records on a row: its
+// pid and its start time as the start-time reader reports it.
 type realChild struct {
 	cmd       *exec.Cmd
 	pid       int
 	starttime string // /proc/<pid>/stat field 22, verbatim decimal ticks
 }
 
-// spawnRealChild starts a long-lived `sleep` process whose environment carries
-// AGENT_DIRECTOR_INSTANCE_ID=instanceID, then captures its real pid and its
-// real proc_starttime (field 22 of /proc/<pid>/stat). Those two values are what
-// the caller seeds onto the spawn row so the Linux liveness checker verifies the
-// child against the live OS. The env id is set so the checker's environ
-// tiebreaker (starttime-match → readable environ HAS id → verified-alive) can
-// discriminate byte-identical argv twins by instance id.
-//
-// The process is registered for cleanup (Kill + Wait) so no strays leak out of
-// the sandbox; callers that kill it themselves mid-test call reapChild, and the
-// cleanup Wait then becomes a harmless no-op.
-func spawnRealChild(t *testing.T, instanceID string) *realChild {
-	t.Helper()
-	// 3600s sleep: outlives any single test; killed explicitly or reaped in
-	// cleanup. Byte-identical argv across twins is intentional — the whole point
-	// of scenario (a) is that argv alone can't tell two children apart.
-	cmd := exec.Command("sleep", "3600")
-	cmd.Env = append(os.Environ(), "AGENT_DIRECTOR_INSTANCE_ID="+instanceID)
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("spawnRealChild(%s): start: %v", instanceID, err)
+// childEnv is the test's environment without any inherited instance id, plus
+// probe.EnvKey=instanceID when instanceID is non-empty.
+func childEnv(instanceID string) []string {
+	env := slices.DeleteFunc(os.Environ(), func(kv string) bool {
+		return strings.HasPrefix(kv, probe.EnvKey+"=")
+	})
+	if instanceID != "" {
+		env = append(env, probe.EnvKey+"="+instanceID)
 	}
-	pid := cmd.Process.Pid
+	return env
+}
+
+// startChild starts cmd with childEnv(instanceID), reads its real start time,
+// and kills and reaps it in cleanup.
+func startChild(t *testing.T, cmd *exec.Cmd, instanceID string) *realChild {
+	t.Helper()
+	cmd.Env = childEnv(instanceID)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start %v: %v", cmd.Args, err)
+	}
 	t.Cleanup(func() {
 		_ = cmd.Process.Kill()
 		_, _ = cmd.Process.Wait()
 	})
-	return &realChild{cmd: cmd, pid: pid, starttime: procstat.ReadStarttime(t, pid)}
+	return &realChild{cmd: cmd, pid: cmd.Process.Pid, starttime: procstat.ReadStarttime(t, cmd.Process.Pid)}
 }
 
-// reapChild kills a spawned child and Waits so its /proc entry vanishes before
-// find-missing runs. Waiting is essential: a killed-but-unreaped child lingers
-// as a zombie with a live /proc/<pid>/stat, which the checker would read as
-// alive. After the Wait the pid is gone (ENOENT) and the checker returns
-// provably-dead.
+// spawnRealChild starts a long-lived `sleep`, carrying instanceID in its
+// environment unless instanceID is empty.
+func spawnRealChild(t *testing.T, instanceID string) *realChild {
+	t.Helper()
+	return startChild(t, exec.Command("sleep", "3600"), instanceID)
+}
+
+// reapChild kills c and waits for it, so its pid is gone (not a zombie)
+// before find-missing runs.
 func reapChild(t *testing.T, c *realChild) {
 	t.Helper()
 	if err := c.cmd.Process.Kill(); err != nil {
@@ -79,8 +77,69 @@ func reapChild(t *testing.T, c *realChild) {
 	}
 }
 
-// parseFindMissingResult unmarshals the find-missing CLI stdout envelope
-// (FindMissingResult JSON: count, ids, unverified, unverified_ids).
+// spawnReapedChild returns the identity of a process that has already exited
+// and been reaped.
+func spawnReapedChild(t *testing.T) *realChild {
+	t.Helper()
+	c := spawnRealChild(t, "")
+	reapChild(t, c)
+	return c
+}
+
+// spawnDeadParentOfLiveChild starts a shell carrying instanceID that forks a
+// `sleep` inheriting it, then reaps the shell; the orphaned sleep lives on and
+// is killed in cleanup. It returns the dead shell.
+func spawnDeadParentOfLiveChild(t *testing.T, instanceID string) *realChild {
+	t.Helper()
+	cmd := exec.Command("sh", "-c", "sleep 3600 >/dev/null 2>&1 & echo $!; wait")
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	parent := startChild(t, cmd, instanceID)
+	line, err := bufio.NewReader(out).ReadString('\n')
+	if err != nil {
+		t.Fatalf("read forked child pid: %v", err)
+	}
+	childPID, err := strconv.Atoi(strings.TrimSpace(line))
+	if err != nil {
+		t.Fatalf("forked child pid %q: %v", line, err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(childPID, syscall.SIGKILL) })
+	reapChild(t, parent)
+	procstat.ReadStarttime(t, childPID) // the child outlived its parent
+	return parent
+}
+
+// recordProcess records sessionStart as the row's SessionStart identity and
+// pane as its pane identity; a nil process is not recorded.
+func recordProcess(sessionStart, pane *realChild) []apitest.SpawnOption {
+	id := store.LaunchIdentity{Socket: apitest.TestSocket}
+	if pane != nil {
+		id.PaneID, id.PanePID, id.PaneStarttime = apitest.TestPaneID, pane.pid, pane.starttime
+	}
+	opts := []apitest.SpawnOption{apitest.WithLaunchIdentity(id)}
+	if sessionStart != nil {
+		opts = append(opts, apitest.WithPID(sessionStart.pid), apitest.WithProcStarttime(sessionStart.starttime))
+	}
+	return opts
+}
+
+// seedRow seeds one row through apitest.SeedSpawn with opts.
+func seedRow(t *testing.T, dbPath, id, state, relayMode string, opts ...apitest.SpawnOption) {
+	t.Helper()
+	if _, err := apitest.SeedSpawn(dbPath, id, state, "/tmp", relayMode, "", false, opts...); err != nil {
+		t.Fatalf("seed %s: %v", id, err)
+	}
+}
+
+// seedDeadRow seeds a row whose recorded pane process is a reaped child.
+func seedDeadRow(t *testing.T, dbPath, id, state, relayMode string) {
+	t.Helper()
+	seedRow(t, dbPath, id, state, relayMode, recordProcess(nil, spawnReapedChild(t))...)
+}
+
+// findMissingResult is the find-missing CLI stdout envelope.
 type findMissingResult struct {
 	Count         int      `json:"count"`
 	IDs           []string `json:"ids"`
@@ -97,6 +156,17 @@ func parseFindMissingResult(t *testing.T, stdout string) findMissingResult {
 	return r
 }
 
+// runFindMissing runs the built find-missing under home, requires exit 0 and
+// returns the parsed envelope with the raw stdout.
+func runFindMissing(t *testing.T, home string) (findMissingResult, string) {
+	t.Helper()
+	stdout, stderr, code := runCLIWithEnv(t, home, map[string]string{}, "", "find-missing")
+	if code != 0 {
+		t.Fatalf("find-missing exit = %d; want 0\nstderr=%s", code, stderr)
+	}
+	return parseFindMissingResult(t, stdout), stdout
+}
+
 // readSpawnState reads the current state of a spawn row directly.
 func readSpawnState(t *testing.T, dbPath, instanceID string) string {
 	t.Helper()
@@ -104,46 +174,28 @@ func readSpawnState(t *testing.T, dbPath, instanceID string) string {
 	return state
 }
 
-// TestFindMissingCLIArgvTwinDiscrimination proves the per-row checker
-// discriminates two byte-identical-argv children by real pid + starttime (and,
-// for the survivor, the environ instance-id tiebreaker). Two `sleep 3600`
-// children are spawned — indistinguishable by argv — each holding its own
-// AGENT_DIRECTOR_INSTANCE_ID in env; each spawn row is seeded with that child's
-// ACTUAL pid + starttime. One child is killed AND reaped so its /proc entry
-// vanishes; the other stays live. find-missing must mark EXACTLY the killed
-// row missing and leave the survivor in its live state. Subsumes b.94s.
-func TestFindMissingCLIArgvTwinDiscrimination(t *testing.T) {
-	home := t.TempDir()
+// findMissingHome bootstraps a throwaway HOME and returns it with its state.db.
+func findMissingHome(t *testing.T) (home, dbPath string) {
+	t.Helper()
+	home = t.TempDir()
 	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".agent-director", "state.db")
+	return home, stateDB(home)
+}
 
-	const killedID = "id-twin-killed"
-	const liveID = "id-twin-live"
+// TestFindMissingCLIArgvTwinDiscrimination: of two byte-identical `sleep`
+// children, only the reaped one's row is marked; the live twin's stays live.
+func TestFindMissingCLIArgvTwinDiscrimination(t *testing.T) {
+	home, dbPath := findMissingHome(t)
+	const killedID, liveID = "id-twin-killed", "id-twin-live"
 
 	killed := spawnRealChild(t, killedID)
 	live := spawnRealChild(t, liveID)
-
-	// Seed each row with its child's REAL pid + starttime so the checker
-	// verifies liveness against the live OS, not a fixture.
-	if _, err := apitest.SeedSpawn(dbPath, killedID, "working", "/tmp", "off", "",
-		false, apitest.WithPID(killed.pid), apitest.WithProcStarttime(killed.starttime)); err != nil {
-		t.Fatalf("seed killed twin: %v", err)
-	}
-	if _, err := apitest.SeedSpawn(dbPath, liveID, "working", "/tmp", "off", "",
-		false, apitest.WithPID(live.pid), apitest.WithProcStarttime(live.starttime)); err != nil {
-		t.Fatalf("seed live twin: %v", err)
-	}
-
-	// Kill + reap ONLY the killed twin: its /proc/<pid> now returns ENOENT.
+	seedRow(t, dbPath, killedID, "working", "off", recordProcess(killed, killed)...)
+	seedRow(t, dbPath, liveID, "working", "off", recordProcess(live, live)...)
 	reapChild(t, killed)
 
-	stdout, stderr, code := runCLIWithEnv(t, home, map[string]string{}, "", "find-missing")
-	if code != 0 {
-		t.Fatalf("find-missing exit = %d; want 0\nstderr=%s", code, stderr)
-	}
-
-	res := parseFindMissingResult(t, stdout)
-	if res.Count != 1 || len(res.IDs) != 1 || res.IDs[0] != killedID {
+	res, _ := runFindMissing(t, home)
+	if !slices.Equal(res.IDs, []string{killedID}) || res.Count != 1 {
 		t.Fatalf("find-missing marked %v (count=%d); want exactly [%s]", res.IDs, res.Count, killedID)
 	}
 	if got := readSpawnState(t, dbPath, killedID); got != "missing" {
@@ -154,273 +206,192 @@ func TestFindMissingCLIArgvTwinDiscrimination(t *testing.T) {
 	}
 }
 
-// TestFindMissingCLIInheritedIDChildStillMarked proves the recorded pid +
-// starttime are authoritative: a surviving CHILD holding the inherited instance
-// id does NOT rescue a row whose recorded pid is gone. Construction: spawn a
-// parent `sleep` holding the instance id in env, then spawn a grandchild that
-// INHERITS the parent's env (same instance id). The spawn row records the
-// PARENT's pid + starttime. Kill + reap the PARENT; the child keeps running,
-// still carrying AGENT_DIRECTOR_INSTANCE_ID. Because the row's recorded pid is
-// gone (ENOENT), the checker returns provably-dead and the row is marked
-// missing — the surviving child's env is irrelevant to a pid-anchored verdict.
-func TestFindMissingCLIInheritedIDChildStillMarked(t *testing.T) {
-	home := t.TempDir()
-	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".agent-director", "state.db")
-
-	const inheritedID = "id-inherited"
-
-	// Parent holds the instance id; the row will record ITS pid + starttime.
-	parent := spawnRealChild(t, inheritedID)
-
-	// Grandchild inherits the parent's env (same AGENT_DIRECTOR_INSTANCE_ID)
-	// and survives the parent's death. `sh -c 'exec sleep 3600'` gives us a
-	// long-lived process holding the inherited id after the parent is reaped.
-	survivor := exec.Command("sh", "-c", "exec sleep 3600")
-	survivor.Env = append(os.Environ(), "AGENT_DIRECTOR_INSTANCE_ID="+inheritedID)
-	if err := survivor.Start(); err != nil {
-		t.Fatalf("start inherited-id survivor: %v", err)
+// TestFindMissingCLILiveProcessKeepsRow: a recorded process alive with its start
+// time keeps the row live, whether or not its environment carries the id.
+func TestFindMissingCLILiveProcessKeepsRow(t *testing.T) {
+	cases := []struct {
+		name   string
+		envID  bool
+		record func(c *realChild) []apitest.SpawnOption
+	}{
+		{"SessionStart identity, no id in environment", false,
+			func(c *realChild) []apitest.SpawnOption { return recordProcess(c, nil) }},
+		{"pane identity, no id in environment", false,
+			func(c *realChild) []apitest.SpawnOption { return recordProcess(nil, c) }},
+		{"both identities agree, id in environment", true,
+			func(c *realChild) []apitest.SpawnOption { return recordProcess(c, c) }},
 	}
-	t.Cleanup(func() {
-		_ = survivor.Process.Kill()
-		_, _ = survivor.Process.Wait()
-	})
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home, dbPath := findMissingHome(t)
+			id := "id-fm-live-" + strconv.Itoa(i)
+			envID := ""
+			if tc.envID {
+				envID = id
+			}
+			seedRow(t, dbPath, id, "working", "off", tc.record(spawnRealChild(t, envID))...)
 
-	if _, err := apitest.SeedSpawn(dbPath, inheritedID, "working", "/tmp", "off", "",
-		false, apitest.WithPID(parent.pid), apitest.WithProcStarttime(parent.starttime)); err != nil {
-		t.Fatalf("seed inherited-id row: %v", err)
-	}
-
-	// The recorded pid dies; the survivor keeps the id alive but at a DIFFERENT pid.
-	reapChild(t, parent)
-
-	stdout, stderr, code := runCLIWithEnv(t, home, map[string]string{}, "", "find-missing")
-	if code != 0 {
-		t.Fatalf("find-missing exit = %d; want 0\nstderr=%s", code, stderr)
-	}
-
-	res := parseFindMissingResult(t, stdout)
-	if res.Count != 1 || len(res.IDs) != 1 || res.IDs[0] != inheritedID {
-		t.Fatalf("find-missing marked %v (count=%d); want exactly [%s] "+
-			"(pid+starttime authoritative; surviving child's env must not rescue it)",
-			res.IDs, res.Count, inheritedID)
-	}
-	if got := readSpawnState(t, dbPath, inheritedID); got != "missing" {
-		t.Errorf("inherited-id row state = %q; want missing", got)
+			res, _ := runFindMissing(t, home)
+			if len(res.IDs) != 0 || len(res.UnverifiedIDs) != 0 {
+				t.Errorf("ids = %v, unverified_ids = %v; want both []", res.IDs, res.UnverifiedIDs)
+			}
+			if got := readSpawnState(t, dbPath, id); got != "working" {
+				t.Errorf("state = %q; want working", got)
+			}
+		})
 	}
 }
 
-// TestFindMissingCLIPostRebootShape proves the post-reboot shape reconciles
-// with NO refusal (the removed degraded-mode guard would have aborted here).
-// Rows carry NULL identity (no pid/starttime seeded) and no live process holds
-// their instance id, so the environ probe set is effectively empty for them.
-// Under the guard-free per-row engine these NULL-identity rows fall through to
-// the probe-set-diff fallback and are ALL marked missing: count>0, no refusal.
-// The CLI envelope must also carry the additive unverified fields:
-// unverified=0 and unverified_ids=[] (no permission-walled rows in this shape).
+// TestFindMissingCLIInheritedIDChildStillMarked: a reaped agent process marks
+// its row proc_absent even while another live process carries the row's id.
+func TestFindMissingCLIInheritedIDChildStillMarked(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, id string) []apitest.SpawnOption
+	}{
+		{"child of the dead SessionStart process survives", func(t *testing.T, id string) []apitest.SpawnOption {
+			return recordProcess(spawnDeadParentOfLiveChild(t, id), nil)
+		}},
+		{"child of the dead pane process survives", func(t *testing.T, id string) []apitest.SpawnOption {
+			return recordProcess(nil, spawnDeadParentOfLiveChild(t, id))
+		}},
+		{"leaked copy in an unrelated live process", func(t *testing.T, id string) []apitest.SpawnOption {
+			spawnRealChild(t, id)
+			return recordProcess(nil, spawnReapedChild(t))
+		}},
+		{"live SessionStart process, reaped pane process", func(t *testing.T, id string) []apitest.SpawnOption {
+			return recordProcess(spawnRealChild(t, id), spawnReapedChild(t))
+		}},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home, dbPath := findMissingHome(t)
+			id := "id-fm-carrier-" + strconv.Itoa(i)
+			seedRow(t, dbPath, id, "working", "off", tc.setup(t, id)...)
+
+			res, _ := runFindMissing(t, home)
+			if !slices.Equal(res.IDs, []string{id}) || readSpawnState(t, dbPath, id) != "missing" {
+				t.Fatalf("ids = %v, state = %q; want [%s], missing", res.IDs, readSpawnState(t, dbPath, id), id)
+			}
+			ticks := findMissingTicks(t, home)
+			if len(ticks) != 1 || ticks[0]["reconciliation_reason"] != "proc_absent" {
+				t.Errorf("ticks = %v; want one proc_absent", ticks)
+			}
+			if d := trailEvents(t, home, "ad.provenance.disagree"); len(d) != 0 {
+				t.Errorf("ad.provenance.disagree = %v; want none", d)
+			}
+		})
+	}
+}
+
+// TestFindMissingCLIPostRebootShape: every recorded process gone marks every row
+// with no refusal, and the envelope carries unverified 0 and unverified_ids [].
 func TestFindMissingCLIPostRebootShape(t *testing.T) {
-	home := t.TempDir()
-	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".agent-director", "state.db")
-
-	// NULL identity: no WithPID / WithProcStarttime — pid+starttime stay NULL,
-	// routing each row through the SR-7.5 environ probe-set fallback. The ids are
-	// randomized-unique so no unrelated live process in the sandbox holds them.
-	rebootIDs := []string{
-		"id-postreboot-" + strconv.Itoa(os.Getpid()) + "-a",
-		"id-postreboot-" + strconv.Itoa(os.Getpid()) + "-b",
-		"id-postreboot-" + strconv.Itoa(os.Getpid()) + "-c",
-	}
+	home, dbPath := findMissingHome(t)
+	rebootIDs := []string{"id-postreboot-a", "id-postreboot-b", "id-postreboot-c"}
 	for _, id := range rebootIDs {
-		if _, err := apitest.SeedSpawn(dbPath, id, "working", "/tmp", "off", "", false); err != nil {
-			t.Fatalf("seed post-reboot row %s: %v", id, err)
-		}
+		seedDeadRow(t, dbPath, id, "working", "off")
 	}
 
-	stdout, stderr, code := runCLIWithEnv(t, home, map[string]string{}, "", "find-missing")
-	if code != 0 {
-		t.Fatalf("find-missing exit = %d; want 0 (no refusal post-reboot)\nstderr=%s", code, stderr)
-	}
-
-	res := parseFindMissingResult(t, stdout)
-	if res.Count == 0 {
-		t.Fatalf("find-missing count = 0; post-reboot shape must reconcile (no refusal), count>0\nstdout=%s", stdout)
-	}
-	if res.Count != len(rebootIDs) {
-		t.Errorf("find-missing count = %d; want %d (all NULL-identity rows marked)", res.Count, len(rebootIDs))
+	res, stdout := runFindMissing(t, home)
+	if res.Count != len(rebootIDs) || !slices.Equal(res.IDs, rebootIDs) {
+		t.Errorf("count = %d, ids = %v; want %d, %v", res.Count, res.IDs, len(rebootIDs), rebootIDs)
 	}
 	for _, id := range rebootIDs {
 		if got := readSpawnState(t, dbPath, id); got != "missing" {
 			t.Errorf("post-reboot row %s state = %q; want missing", id, got)
 		}
 	}
-
-	// The additive envelope fields must be present and, in this shape, empty:
-	// no permission-walled rows → unverified=0, unverified_ids=[].
-	if res.Unverified != 0 {
-		t.Errorf("unverified = %d; want 0 (no EACCES rows in post-reboot shape)", res.Unverified)
+	if res.Unverified != 0 || res.UnverifiedIDs == nil || len(res.UnverifiedIDs) != 0 {
+		t.Errorf("unverified = %d, unverified_ids = %v; want 0, []", res.Unverified, res.UnverifiedIDs)
 	}
-	if res.UnverifiedIDs == nil {
-		t.Errorf("unverified_ids is absent/null; want [] (additive field must be present)")
-	}
-	if len(res.UnverifiedIDs) != 0 {
-		t.Errorf("unverified_ids = %v; want []", res.UnverifiedIDs)
-	}
-	// Assert the raw JSON key is present (additive-field contract), not merely
-	// that the parsed slice is empty.
-	if !strings.Contains(stdout, `"unverified_ids"`) {
-		t.Errorf("stdout missing unverified_ids key: %s", stdout)
-	}
-	if !strings.Contains(stdout, `"unverified"`) {
-		t.Errorf("stdout missing unverified key: %s", stdout)
+	for _, key := range []string{`"unverified":`, `"unverified_ids":`} {
+		if !strings.Contains(stdout, key) {
+			t.Errorf("stdout missing %s key: %s", key, stdout)
+		}
 	}
 }
 
-// TestFindMissingTrailEmitsRowMutation runs `agent-director find-missing`
-// against a DB that has one live spawn with an open permission_requests row
-// (simulating a Claude instance whose process has vanished). It asserts that
-// exactly one ad.row_mutation.committed trail line is emitted with
-// writer_process="find_missing" and mutation_kind="update" — confirming that
-// CloseOrphanedPermissionRequests drives the row-mutation event via the same
-// DecidePermissionRequest path as the decide verb.
-//
-// The orphan row carries NULL identity (no seeded pid/starttime), so it routes
-// through the SR-7.5 environ probe-set fallback. No live process holds its
-// instance id, so the probe set never contains it and the sweep marks it
-// missing — no /proc anchor needed under the guard-free per-row engine.
-func TestFindMissingTrailEmitsRowMutation(t *testing.T) {
-	home := t.TempDir()
-	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".agent-director", "state.db")
-
-	// Seed a spawn in a live state with an open permission request.
-	const orphanID = "id-fm-trail-1"
-	seedSpawnRow(t, dbPath, orphanID, "cd-fm-trail-1", "check_permission", "on")
-	seedOpenPermissionRequest(t, dbPath, orphanID, testRequestToken, "Bash", `{"cmd":"ls"}`)
-
-	_, stderr, code := runCLIWithEnv(t, home, map[string]string{}, "", "find-missing")
-	if code != 0 {
-		t.Fatalf("find-missing exit = %d; want 0\nstderr=%s", code, stderr)
+// seedOrphanWithRequest seeds a check_permission row whose recorded process is
+// reaped, with one open permission request; it returns the request token.
+func seedOrphanWithRequest(t *testing.T, dbPath, id string) string {
+	t.Helper()
+	seedDeadRow(t, dbPath, id, "check_permission", "on")
+	req, err := apitest.SeedPermissionRequest(dbPath, id, "Bash")
+	if err != nil {
+		t.Fatalf("seed permission request: %v", err)
 	}
+	return req.RequestToken
+}
 
-	// CloseOrphanedPermissionRequests calls DecidePermissionRequest("deny",
-	// DecisionReasonFindMissing, WriterProcessFindMissing) once per open row.
-	// With one open row, exactly one ad.row_mutation.committed line must appear.
-	lines := readTrailLines(t, home)
-	rm := rowMutationCommittedLines(lines)
+// TestFindMissingTrailEmitsRowMutation: denying a marked row's open permission
+// request writes exactly one find_missing update row-mutation line.
+func TestFindMissingTrailEmitsRowMutation(t *testing.T) {
+	home, dbPath := findMissingHome(t)
+	seedOrphanWithRequest(t, dbPath, "id-fm-trail-1")
+
+	runFindMissing(t, home)
+
+	rm := rowMutationCommittedLines(readTrailLines(t, home))
 	if len(rm) != 1 {
 		t.Fatalf("ad.row_mutation.committed line count = %d; want 1", len(rm))
 	}
-	if rm[0]["writer_process"] != "find_missing" {
-		t.Errorf("writer_process = %v; want find_missing", rm[0]["writer_process"])
-	}
-	if rm[0]["mutation_kind"] != "update" {
-		t.Errorf("mutation_kind = %v; want update", rm[0]["mutation_kind"])
+	if rm[0]["writer_process"] != "find_missing" || rm[0]["mutation_kind"] != "update" {
+		t.Errorf("writer_process = %v, mutation_kind = %v; want find_missing, update",
+			rm[0]["writer_process"], rm[0]["mutation_kind"])
 	}
 }
 
-// TestFindMissingTrailEmitsProcAbsentTick confirms that find-missing emits one
-// ad.find_missing.tick line with reconciliation_reason="proc_absent" when a
-// live spawn is absent and has no open permission_requests rows. The orphan row
-// carries NULL identity, so it routes through the environ probe-set fallback; no
-// live process holds its id, so the sweep marks it missing.
+// TestFindMissingTrailEmitsProcAbsentTick: a row whose recorded process is
+// reaped yields exactly one proc_absent tick.
 func TestFindMissingTrailEmitsProcAbsentTick(t *testing.T) {
-	home := t.TempDir()
-	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".agent-director", "state.db")
-
+	home, dbPath := findMissingHome(t)
 	const orphanID = "id-fm-tick-pa-1"
-	// Use working state / relay_mode=off: no open permission_requests rows,
-	// so only one tick (proc_absent) should be emitted.
-	seedSpawnRow(t, dbPath, orphanID, "cd-fm-tick-pa-1", "working", "off")
+	seedDeadRow(t, dbPath, orphanID, "working", "off")
 
-	_, stderr, code := runCLIWithEnv(t, home, map[string]string{}, "", "find-missing")
-	if code != 0 {
-		t.Fatalf("find-missing exit = %d; want 0\nstderr=%s", code, stderr)
-	}
+	runFindMissing(t, home)
 
-	lines := readTrailLines(t, home)
-	ticks := findMissingTickLines(lines)
-	// One spawn, no open permission requests → exactly one proc_absent tick.
+	ticks := findMissingTicks(t, home)
 	if len(ticks) != 1 {
 		t.Fatalf("ad.find_missing.tick line count = %d; want 1", len(ticks))
 	}
-	tick := ticks[0]
-	if tick["reconciliation_reason"] != "proc_absent" {
-		t.Errorf("reconciliation_reason = %v; want proc_absent", tick["reconciliation_reason"])
+	want := map[string]any{
+		"reconciliation_reason": "proc_absent",
+		"claude_instance_id":    orphanID,
+		"new_state":             "missing",
+		"source":                "ad_find_missing",
 	}
-	if tick["claude_instance_id"] != orphanID {
-		t.Errorf("claude_instance_id = %v; want %q", tick["claude_instance_id"], orphanID)
-	}
-	if tick["new_state"] != "missing" {
-		t.Errorf("new_state = %v; want missing", tick["new_state"])
-	}
-	if tick["source"] != "ad_find_missing" {
-		t.Errorf("source = %v; want ad_find_missing", tick["source"])
+	for k, v := range want {
+		if ticks[0][k] != v {
+			t.Errorf("%s = %v; want %v", k, ticks[0][k], v)
+		}
 	}
 }
 
-// TestFindMissingTrailEmitsPermissionOrphanCloseoutTick confirms that
-// find-missing emits one ad.find_missing.tick line with
-// reconciliation_reason="permission_orphan_closeout" — carrying the
-// request_token — when it closes an open permission_requests row for a swept
-// spawn. In addition to the orphan-closeout tick, a proc_absent tick must also
-// appear for the spawn transition itself. The orphan row carries NULL identity
-// and routes through the environ probe-set fallback.
+// TestFindMissingTrailEmitsPermissionOrphanCloseoutTick: marking a row with an
+// open request yields a proc_absent tick and a closeout tick with the token.
 func TestFindMissingTrailEmitsPermissionOrphanCloseoutTick(t *testing.T) {
-	home := t.TempDir()
-	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".agent-director", "state.db")
-
+	home, dbPath := findMissingHome(t)
 	const orphanID = "id-fm-tick-poc-1"
-	seedSpawnRow(t, dbPath, orphanID, "cd-fm-tick-poc-1", "check_permission", "on")
-	seedOpenPermissionRequest(t, dbPath, orphanID, testRequestToken, "Bash", `{"cmd":"ls"}`)
+	token := seedOrphanWithRequest(t, dbPath, orphanID)
 
-	_, stderr, code := runCLIWithEnv(t, home, map[string]string{}, "", "find-missing")
-	if code != 0 {
-		t.Fatalf("find-missing exit = %d; want 0\nstderr=%s", code, stderr)
+	runFindMissing(t, home)
+
+	byReason := map[any]map[string]any{}
+	for _, tk := range findMissingTicks(t, home) {
+		byReason[tk["reconciliation_reason"]] = tk
 	}
-
-	lines := readTrailLines(t, home)
-	ticks := findMissingTickLines(lines)
-
-	// Expect two ticks: proc_absent (spawn sweep) + permission_orphan_closeout
-	// (open permission_requests row closed by CloseOrphanedPermissionRequests).
-	var procAbsent, orphanCloseout map[string]any
-	for _, tk := range ticks {
-		switch tk["reconciliation_reason"] {
-		case "proc_absent":
-			procAbsent = tk
-		case "permission_orphan_closeout":
-			orphanCloseout = tk
+	for _, reason := range []string{"proc_absent", "permission_orphan_closeout"} {
+		tk := byReason[reason]
+		if tk == nil {
+			t.Fatalf("no %s tick in %v", reason, byReason)
+		}
+		if tk["claude_instance_id"] != orphanID || tk["source"] != "ad_find_missing" {
+			t.Errorf("%s: claude_instance_id = %v, source = %v; want %q, ad_find_missing",
+				reason, tk["claude_instance_id"], tk["source"], orphanID)
 		}
 	}
-
-	if procAbsent == nil {
-		t.Fatalf("no proc_absent tick found in %d ad.find_missing.tick line(s)", len(ticks))
-	}
-	if orphanCloseout == nil {
-		t.Fatalf("no permission_orphan_closeout tick found in %d ad.find_missing.tick line(s)", len(ticks))
-	}
-
-	// proc_absent: the orphan's instance id and source must be present.
-	if procAbsent["claude_instance_id"] != orphanID {
-		t.Errorf("proc_absent: claude_instance_id = %v; want %q", procAbsent["claude_instance_id"], orphanID)
-	}
-	if procAbsent["source"] != "ad_find_missing" {
-		t.Errorf("proc_absent: source = %v; want ad_find_missing", procAbsent["source"])
-	}
-
-	// permission_orphan_closeout: must carry the request_token and instance id.
-	if orphanCloseout["claude_instance_id"] != orphanID {
-		t.Errorf("permission_orphan_closeout: claude_instance_id = %v; want %q",
-			orphanCloseout["claude_instance_id"], orphanID)
-	}
-	if orphanCloseout["request_token"] != testRequestToken {
-		t.Errorf("permission_orphan_closeout: request_token = %v; want %q",
-			orphanCloseout["request_token"], testRequestToken)
-	}
-	if orphanCloseout["source"] != "ad_find_missing" {
-		t.Errorf("permission_orphan_closeout: source = %v; want ad_find_missing", orphanCloseout["source"])
+	if got := byReason["permission_orphan_closeout"]["request_token"]; got != token {
+		t.Errorf("permission_orphan_closeout: request_token = %v; want %q", got, token)
 	}
 }

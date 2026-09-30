@@ -3,20 +3,17 @@ package api_test
 // find_missing_grace_trail_test.go — SR-11.2 / SR-22.8: the trail side of the
 // pending grace period. A pending row inside grace yields no
 // ad.find_missing.tick and keeps its permission requests open; past grace it
-// gets today's ticks with prior_state "pending". Trail helpers and trailClock
-// live in find_missing_trail_test.go; fmGrace in find_missing_test.go.
+// gets today's ticks with prior_state "pending". Trail helpers, trailRow and
+// trailClock live in find_missing_trail_test.go; fmGrace in find_missing_test.go.
 
 import (
-	"context"
-	"errors"
 	"path/filepath"
 	"slices"
 	"testing"
 	"time"
 
-	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/store"
-	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -44,17 +41,15 @@ func seedGracePendingRow(t *testing.T, id string, launchAt time.Time, opts ...ap
 // any reason and its permission request stays open; past grace the usual ticks appear.
 func TestFindMissingPendingGraceTrail(t *testing.T) {
 	launchAt := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
-	fullIdentity := []apitest.SpawnOption{apitest.WithPID(4242), apitest.WithProcStarttime(apitest.LinuxProcStarttime)}
-
 	kinds := []struct {
 		name     string
-		identity []apitest.SpawnOption
-		verdict  probe.LivenessVerdict
-		wantPast []string // tick reasons past grace, in emit order
+		identity trailRow        // the row's recorded identities (id unset)
+		proc     procfix.Process // the answer for the row's recorded pid
+		wantPast []string        // tick reasons past grace, in emit order
 	}{
-		{"full identity provably dead", fullIdentity, probe.VerdictProvablyDead, []string{"proc_absent", "permission_orphan_closeout"}},
-		{"full identity unknown", fullIdentity, probe.VerdictUnknown, []string{"probe_eacces"}},
-		{"partial identity absent from probe set", nil, probe.VerdictUnknown, []string{"proc_absent", "permission_orphan_closeout"}},
+		{"sessionstart gone", trailRow{ssPID: 4242}, procfix.Gone(), []string{"proc_absent", "permission_orphan_closeout"}},
+		{"pane gone", trailRow{panePID: 4243}, procfix.Gone(), []string{"proc_absent", "permission_orphan_closeout"}},
+		{"sessionstart unreadable", trailRow{ssPID: 4244}, procfix.Unreadable(), []string{"probe_eacces"}},
 	}
 	ages := []struct {
 		name   string
@@ -70,16 +65,12 @@ func TestFindMissingPendingGraceTrail(t *testing.T) {
 		for ai, age := range ages {
 			t.Run(kind.name+"/"+age.name, func(t *testing.T) {
 				id := "grace-trail-" + string(rune('a'+ki)) + string(rune('0'+ai))
-				st := seedGracePendingRow(t, id, launchAt, kind.identity...)
-				chk := checkerFor(map[string]probe.LivenessVerdict{id: kind.verdict})
-				prober := &fakeProber{}
-				if age.inside {
-					// Any prober call inside grace fails the sweep.
-					prober.err = errors.New("prober called for an inside-grace row")
-				}
+				st := seedGracePendingRow(t, id, launchAt, kind.identity.options()...)
+				pc := procfix.New()
+				pc.Set(kind.identity.pid(), kind.proc)
 				before := len(readAPITrailLines(t))
 
-				res, err := api.FindMissing(context.Background(), st, prober, chk, fmGrace, trailClock(launchAt.Add(age.age)), &recordingLogger{})
+				res, err := runFindMissing(st, pc, fmSweep{now: trailClock(launchAt.Add(age.age))})
 				if err != nil {
 					t.Fatalf("FindMissing: %v", err)
 				}
@@ -110,8 +101,8 @@ func TestFindMissingPendingGraceTrail(t *testing.T) {
 					if len(reasons) != 0 {
 						t.Errorf("ticks = %v; want none inside grace", reasons)
 					}
-					if chk.queried(id) {
-						t.Errorf("checker queried for an inside-grace row")
+					if calls := pc.StartTimeCalls(); len(calls) != 0 {
+						t.Errorf("StartTime calls = %v; want none for an inside-grace row", calls)
 					}
 					if len(res.IDs) != 0 || len(res.UnverifiedIDs) != 0 {
 						t.Errorf("ids = %v, unverified_ids = %v; want both empty", res.IDs, res.UnverifiedIDs)

@@ -11,8 +11,9 @@ import (
 // 15). The struct is composed of extern_proc + a fixed-size eproc tail
 // in <bsd/sys/sysctl.h>; the size has been stable across recent macOS
 // majors but is NOT a kernel ABI guarantee. A future XNU bump that
-// resizes the struct (or repositions p_pid inside it) will make the
-// stride-based PID walker drift — see the sanity check below.
+// resizes the struct (or moves a field inside it) makes the entry-granular
+// extractors below read the wrong bytes; their plausibility guards turn that
+// into ErrKinfoLayoutDrift.
 //
 // Bump policy: when supporting a new macOS major version, compile the
 // XNU sources for that release (Apple publishes them under
@@ -32,7 +33,9 @@ const kinfoProcSize = 648
 // kinfoProcPIDOffset is the byte offset of extern_proc.p_pid inside
 // kinfo_proc on XNU 11.x. The eproc tail follows extern_proc, so p_pid
 // lives at extern_proc's offset 40 (its position inside the leading
-// substruct). Same XNU-version sensitivity as kinfoProcSize.
+// substruct). No extractor reads p_pid; the constant anchors the p_stat and
+// p_comm offset derivations below. Same XNU-version sensitivity as
+// kinfoProcSize.
 const kinfoProcPIDOffset = 40
 
 // Process-identity offsets (SR-6.4). These pin the byte positions of the
@@ -114,54 +117,12 @@ const maxPlausibleStartSec = 4_102_444_800
 // in [0, 1_000_000). Anything at/above trips the drift guard.
 const maxPlausibleStartUsec = 1_000_000
 
-// maxPlausiblePID is the upper bound used by the parse-time sanity
-// check. Linux's CONFIG_BASE_FULL caps PIDs at 4_194_304; macOS's PID
+// maxPlausiblePID is the upper bound of parseKinfoPPID's plausibility
+// guard. Linux's CONFIG_BASE_FULL caps PIDs at 4_194_304; macOS's PID
 // space is smaller in practice but we use the generous Linux cap so a
 // legitimate macOS PID can never trip the guard while obvious garbage
 // from a struct-layout drift (very-large random uint32 values) does.
 const maxPlausiblePID = 4_194_304
-
-// parsePIDsFromSysctlBuf reads PIDs from a sysctl(kern.proc.all) blob.
-// The function is build-tag-free (Linux test runs can exercise it
-// against synthetic input) and deliberately holds NO sysctl plumbing
-// — it is a pure byte parser the platform-specific glue feeds.
-//
-// Returns ErrProbeUnsupported when more than 10% of parsed PIDs fail
-// the plausibility check (must be a positive int32 ≤ maxPlausiblePID).
-// That is the signal the kinfoProcSize / kinfoProcPIDOffset constants
-// have drifted under us — a future macOS major bump that resized
-// struct kinfo_proc would land here as a flood of garbage values.
-// find-missing surfaces ErrProbeUnsupported as a hard failure
-// (fail-closed per SRD §14.6).
-//
-// Buffers shorter than one kinfoProcSize entry return (nil, nil); the
-// caller treats that as "no live processes" rather than a hard error.
-func parsePIDsFromSysctlBuf(buf []byte) ([]int, error) {
-	if len(buf) < kinfoProcSize {
-		return nil, nil
-	}
-	n := len(buf) / kinfoProcSize
-	out := make([]int, 0, n)
-	var bogus int
-	for i := 0; i < n; i++ {
-		pidOff := i*kinfoProcSize + kinfoProcPIDOffset
-		if pidOff+4 > len(buf) {
-			break
-		}
-		pid := int(binary.LittleEndian.Uint32(buf[pidOff : pidOff+4]))
-		if pid <= 0 || pid > maxPlausiblePID {
-			bogus++
-			continue
-		}
-		out = append(out, pid)
-	}
-	// 10% threshold in integer arithmetic: bogus / n > 1/10 ⇔ bogus*10 > n.
-	if n > 0 && bogus*10 > n {
-		return nil, fmt.Errorf("%w: %d of %d parsed PIDs failed plausibility (kinfoProcSize=%d may be stale for this XNU version)",
-			ErrProbeUnsupported, bogus, n, kinfoProcSize)
-	}
-	return out, nil
-}
 
 // ErrKinfoLayoutDrift is returned by the entry-granular identity extractors
 // (parseKinfoPPID, parseKinfoStartTime, parseKinfoStat, parseKinfoComm) when
@@ -170,20 +131,10 @@ func parsePIDsFromSysctlBuf(buf []byte) ([]int, error) {
 // kinfoProcStart*Offset / kinfoProcStatOffset / kinfoProcCommOffset) have
 // drifted under us, e.g. after a macOS major bump resized struct kinfo_proc.
 //
-// It is DELIBERATELY a distinct sentinel that does NOT wrap
-// ErrProbeUnsupported: the two carry opposite fail-semantics.
-// ErrProbeUnsupported has a pinned meaning of fail-CLOSED (find-missing
-// treats it as a hard error, SRD §14.6), whereas identity-offset drift must
-// map to fail-OPEN / unknown identity (SessionStart records NULL pid+
-// starttime and proceeds; Epic hp's errno table must not conflate the two).
-// Wrapping would make errors.Is(err, ErrProbeUnsupported) also match drift
-// and re-import fail-closed semantics into that table. Callers that need to
-// branch on drift test errors.Is(err, ErrKinfoLayoutDrift).
-//
-// Note this is a SEPARATE surface from parsePIDsFromSysctlBuf's existing
-// ErrProbeUnsupported drift return, which is unchanged (SR-11): the whole-
-// buffer PID walker keeps its fail-closed meaning; only the new per-entry
-// identity extractors use this fail-open sentinel.
+// Drift is fail-OPEN: the start-time reader and the command-name reader
+// answer unreadable, never gone. It is a distinct sentinel that wraps nothing,
+// so callers that need to branch on drift test
+// errors.Is(err, ErrKinfoLayoutDrift).
 var ErrKinfoLayoutDrift = errors.New("ErrKinfoLayoutDrift")
 
 // entryOffset validates that a kinfo_proc entry of kinfoProcSize bytes
@@ -207,7 +158,7 @@ func entryOffset(buf []byte, off int) error {
 //
 // Returns ErrKinfoLayoutDrift when the entry does not fit or when the
 // parsed ppid fails the plausibility guard (must be a positive int32 ≤
-// maxPlausiblePID — the same PID bound the PID walker uses). A ppid of 0 is
+// maxPlausiblePID). A ppid of 0 is
 // implausible for a real tracked process (only the swapper/pid-0 has ppid 0
 // and we never track it) and is refused as drift.
 func parseKinfoPPID(buf []byte, off int) (int, error) {

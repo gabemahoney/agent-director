@@ -185,6 +185,13 @@ func TestSeedSpawn_V5Options_RoundTrip(t *testing.T) {
 			viaStore: func(sp store.Spawn) any { return sp.Identity }, wantStore: store.LaunchIdentity{},
 		},
 		{
+			// A lost-reply live row: the pane is nulled, the token and socket kept.
+			name: "WithNoPane/live row", state: "pending",
+			opts: []SpawnOption{WithNoPane()},
+			raw:  func(c SpawnColumns) any { return append([]any{c.LaunchToken != nil}, identityCols(c)[1:]...) },
+			want: []any{true, TestSocket, nil, nil, nil, nil, nil, nil},
+		},
+		{
 			name: "WithRawLabels", state: "waiting",
 			opts: []SpawnOption{WithRawLabels(`{"a": 1,  `)},
 			raw:  func(c SpawnColumns) any { return c.Labels }, want: `{"a": 1,  `,

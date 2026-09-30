@@ -14,7 +14,8 @@
  *       - version      — no ErrorNames in manifest
  *       - expire       — no ErrorNames in manifest
  *       - delete       — errors in DeleteResult.results map, not verb-level
- *       - find-missing — only ErrProbeUnsupported (not triggerable on linux)
+ *       - find-missing — lists only ErrProbeUnsupported, which it no longer
+ *                        returns (kept by SR-1.7)
  *
  * (d) nondeterministic.json contains an entry for every verb in VERBS.
  *     Catches drift when a new verb is added to the manifest.
@@ -44,7 +45,7 @@ const NO_ERROR_CASE_ALLOWLIST: ReadonlySet<string> = new Set([
   "version", // no ErrorNames in manifest
   "expire", // no ErrorNames in manifest
   "delete", // errors in DeleteResult.results map, not verb-level
-  "find-missing", // only ErrProbeUnsupported, not triggerable on linux/amd64
+  "find-missing", // lists only ErrProbeUnsupported; no longer returns it (kept by SR-1.7)
 ]);
 
 // ── helpers ───────────────────────────────────────────────────────────────────

@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"go/parser"
 	"go/token"
 	"log"
@@ -112,10 +113,40 @@ func ssgResumed(t *testing.T, id string) (*store.Store, string) {
 func ssgMissingBeforeReport(t *testing.T, id string) (*store.Store, string) {
 	t.Helper()
 	st, dbPath := ssgSeed(t, id, store.StatePending, "", apitest.WithLaunchIdentity(ssgFreshPane))
-	if prior, err := st.MarkSpawnMissing(id); err != nil || prior != store.StatePending {
-		t.Fatalf("MarkSpawnMissing(%q) = %q, %v; want prior pending", id, prior, err)
+	if prior, err := markMissingSameLife(st, id); err != nil || prior != store.StatePending {
+		t.Fatalf("mark %q missing = %q, %v; want prior pending", id, prior, err)
 	}
 	return st, dbPath
+}
+
+// markMissingSameLife marks id missing the way find-missing does: the guarded
+// mark on the row's current snapshot. It returns the prior state; a mark that
+// does not apply is an error.
+func markMissingSameLife(st *store.Store, id string) (string, error) {
+	sp, err := st.GetSpawn(id)
+	if err != nil {
+		return "", err
+	}
+	prior, res, err := st.MarkMissingIfSameLife(id, sp.Snapshot)
+	if err == nil && res != store.CondApplied {
+		err = fmt.Errorf("MarkMissingIfSameLife(%q) = %v; want applied", id, res)
+	}
+	return prior, err
+}
+
+// bumpRowVersion advances id's row_version by one without moving its state:
+// find-missing's guarded liveness clear on the row's current snapshot, which
+// writes whether or not a note is set. A clear that does not apply is an error.
+func bumpRowVersion(st *store.Store, id string) error {
+	sp, err := st.GetSpawn(id)
+	if err != nil {
+		return err
+	}
+	res, err := st.ClearLivenessIfSameLife(id, sp.Snapshot)
+	if err == nil && res != store.CondApplied {
+		err = fmt.Errorf("ClearLivenessIfSameLife(%q) = %v; want applied", id, res)
+	}
+	return err
 }
 
 // ssgLive is a live row in state recording ssgOutgoing (life 2) and a pane.
@@ -313,7 +344,7 @@ func (s *ssgBumpingStore) GetSpawn(id string) (store.Spawn, error) {
 	sp, err := s.Store.GetSpawn(id)
 	s.reads++
 	if s.reads <= s.bumps {
-		if cerr := s.Store.ClearLivenessUnverified(id); cerr != nil {
+		if cerr := bumpRowVersion(s.Store, id); cerr != nil {
 			s.t.Fatalf("bump %q: %v", id, cerr)
 		}
 		s.bumped++

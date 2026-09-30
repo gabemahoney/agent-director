@@ -1,18 +1,7 @@
 package probe
 
-// fakeproc_test.go — UNTAGGED fabricated-/proc fixtures shared across the probe
-// test suite.
-//
-// These builders write a Linux-format <root>/<pid>/{stat,environ} tree under a
-// caller-supplied root (a t.TempDir), never the real /proc. The Linux readers
-// (the checker linuxChecker, the start-time reader and the command-name
-// reader) take an INJECTABLE procRoot, and their parsing/verdict logic is
-// build-tag-free, so the tests that drive them over a fabricated tree compile
-// and run on ANY OS. This file therefore carries NO //go:build linux tag, so
-// the tag-free verdict-table tests in checker_linux_core_test.go compile
-// off-linux (e.g. `GOOS=darwin go vet ./internal/probe/`).
-//
-// Only tests that require the REAL /proc mount stay under the linux tag.
+// fakeproc_test.go — untagged fabricated-/proc fixtures (under a t.TempDir, never
+// the real /proc) for the start-time and command-name reader tests on any OS.
 
 import (
 	"os"
@@ -79,8 +68,8 @@ func writeFakeProc(t *testing.T, root string, pid, ppid int, starttime, envVal s
 	}
 }
 
-// writeStatOnly writes <root>/<pid>/stat only (no environ, state "S") — for an
-// environ-read failure (ENOENT) after a matched stat. Returns the pid dir.
+// writeStatOnly writes <root>/<pid>/stat only (no environ, state "S"). Returns
+// the pid dir.
 func writeStatOnly(t *testing.T, root string, pid, ppid int, starttime string) string {
 	t.Helper()
 	return writeStatWithState(t, root, pid, ppid, fakeStatDefaultState, starttime)

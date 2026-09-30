@@ -7,34 +7,37 @@ import (
 	"sort"
 	"time"
 
-	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
-	"github.com/gabemahoney/agent-director/internal/trail"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
-// FindMissingStore is the narrow store surface FindMissing needs.
-// *store.Store satisfies it via the recovery primitives.
+// FindMissingStore is the narrow store surface find-missing needs (SRD
+// Appendix F.4): the live-row read, the life-guarded mark, note write and
+// clear (SR-11.6), the permission-request denial, the provisional-transcript
+// healing, and this store's id. *store.Store satisfies it.
 type FindMissingStore interface {
+	// ListLiveSpawnIdentities reads every row in a live state, pending
+	// included, with its state, launch start, recorded session name,
+	// liveness note, row snapshot and launch identity (SR-11.7).
 	ListLiveSpawnIdentities() ([]LiveSpawnIdentity, error)
-	// MarkSpawnMissing transitions a row from any live state to `missing`.
-	// Returns the prior state captured before the write, or ("", nil) when
-	// no write occurred (row absent or already terminal). A non-empty prior
-	// state signals "write happened" and the caller should emit a trail event.
-	MarkSpawnMissing(instanceID string) (string, error)
-	// SetLivenessUnverified records that a live row's process could not be
-	// verified (an EACCES/EPERM probe wall). It writes
-	// liveness_unverified_since + liveness_note in a single guarded UPDATE,
-	// but only when liveness_unverified_since is currently NULL. The returned
-	// transitioned bool is the sole NULL→set signal: true on the first write,
-	// false on a repeat (which preserves the original timestamp). find-missing
-	// keys exactly one probe_eacces tick off that bool (SR-8.1/8.4).
-	SetLivenessUnverified(instanceID, note string) (bool, error)
-	// ClearLivenessUnverified NULLs both liveness columns for a row. It is
-	// idempotent (a row already clear or absent is a no-op) and is called in
-	// the verified-alive case and immediately after MarkSpawnMissing in the
-	// marking path (SR-8.2). MarkSpawnMissing itself is NOT widened.
-	ClearLivenessUnverified(instanceID string) error
+	// MarkMissingIfSameLife marks a live row missing in one write guarded on
+	// examined, the row snapshot the sweep read or its adoption produced, with
+	// the liveness clear and the launch-start clear folded in (SR-11.3,
+	// SR-11.6; Appendix F.4). It returns the prior state and CondApplied when
+	// it applied, CondChanged or CondAbsent (prior state "") when it did not,
+	// and a store error as an error with a zero CondResult (SR-5.8).
+	MarkMissingIfSameLife(instanceID string, examined RowSnapshot) (priorState string, res CondResult, err error)
+	// SetLivenessNoteIfSameLife overwrites a live row's liveness note, keeping
+	// its first unverified time, in one write guarded on examined (SR-11.4,
+	// SR-11.6). It writes even a note equal to the stored one: skipping an
+	// equal note is the caller's rule. Results as MarkMissingIfSameLife's.
+	SetLivenessNoteIfSameLife(instanceID string, examined RowSnapshot, note string) (CondResult, error)
+	// ClearLivenessIfSameLife NULLs a live row's liveness note and unverified
+	// time in one write guarded on examined (SR-11.4, SR-11.6). It writes even
+	// a row with no note: not writing one is the caller's rule. Results as
+	// MarkMissingIfSameLife's.
+	ClearLivenessIfSameLife(instanceID string, examined RowSnapshot) (CondResult, error)
 	// CloseOrphanedPermissionRequests denies all open permission_requests rows
 	// for a Spawn that has just been marked missing, so any relay polling loop
 	// for that Spawn receives a fail-closed deny rather than spinning to its own
@@ -48,6 +51,10 @@ type FindMissingStore interface {
 	// HealJsonlPath records a now-present transcript path onto a provisional
 	// row (jsonl_path NULL) for the given session id. Returns true when written.
 	HealJsonlPath(instanceID, sessionID, jsonlPath string) (bool, error)
+	// StoreID returns this store's store_meta.store_id, the id every label
+	// the sweep's lookup accepts ends with and the store_id its
+	// ad.launch.name_held records carry (SR-3.4, SR-14; WD 2026-09-29 STORE).
+	StoreID() string
 }
 
 // ProvisionalTranscript is re-exported from internal/store so external
@@ -64,147 +71,147 @@ type FindMissingResult struct {
 	// IDs is the sorted slice of instance ids transitioned to missing.
 	// Always non-nil — encodes as [] when no rows were transitioned.
 	IDs []string `json:"ids"`
-	// Unverified is the number of live rows this sweep left untouched because
-	// the liveness checker returned an unknown verdict (a permission wall).
+	// Unverified is the number of live rows this sweep left live with a
+	// liveness note because their agent process could not be checked: the
+	// start-time reader could not tell, a pid-only identity read alive, or no
+	// process identity is recorded (SR-11.1, SR-11.3, SR-11.4). A row whose
+	// note write found it changed, or failed in the store, is not counted.
 	Unverified int `json:"unverified"`
-	// UnverifiedIDs is the sorted slice of instance ids skipped as unverified.
+	// UnverifiedIDs is the sorted slice of instance ids left unverified.
 	// Always non-nil — encodes as [] when no rows were unverified (same
 	// discipline as IDs).
 	UnverifiedIDs []string `json:"unverified_ids"`
 }
 
 // FindMissingLogger is the narrow log surface FindMissing uses to report
-// per-row store/checker errors. *log.Logger satisfies it; tests pass a fake
-// to inspect the message without scraping stderr.
+// per-row store errors. *log.Logger satisfies it; tests pass a fake to
+// inspect the message without scraping stderr.
 type FindMissingLogger interface {
 	Printf(format string, v ...any)
 }
 
+// find-missing's mark reason and liveness notes on the process path (SR-11.1,
+// SR-11.3, SR-11.4).
+const (
+	// reasonProcAbsent is the mark reason of a row whose agent process is
+	// gone: absent, a zombie, or alive with another start time.
+	reasonProcAbsent = "proc_absent"
+	// noteProbeEACCES is the note of a row whose agent process evidence is
+	// unknown: the start-time reader cannot tell, or a pid-only identity
+	// reads alive.
+	noteProbeEACCES = "probe_eacces"
+	// noteProcessNotSeenTmuxUnchecked is the note of a row with no process
+	// identity recorded whose tmux lookup was not called.
+	noteProcessNotSeenTmuxUnchecked = "process_not_seen_tmux_unchecked"
+)
+
+// The ad.provenance.disagree action values a find-missing row's records
+// carry (SR-14): what the sweep did to the row, known once its write settled.
+const (
+	findMissingActionMarked     = "marked_missing"
+	findMissingActionLeftLive   = "left_live"
+	findMissingActionUnverified = "left_unverified"
+	findMissingActionChanged    = "left_changed"
+	findMissingActionStoreError = "store_error"
+)
+
+// findMissingRow is the outcome of judging one live row.
+type findMissingRow struct {
+	// write is the row's writer outcome (markMissingSameLife,
+	// writeLivenessNote or clearLivenessNote). For a mark, write.Listed puts
+	// the row in ids; for a note, in unverified_ids.
+	write findMissingWrite
+	// marked reports that write came from the mark rather than a note write
+	// or clear.
+	marked bool
+	// action is the ad.provenance.disagree action for a write that applied
+	// or was not needed (findMissingActionMarked, findMissingActionLeftLive,
+	// findMissingActionUnverified); findMissingAction turns a refused or
+	// failed write into left_changed or store_error.
+	action string
+	// disagree is the row's distinct ad.provenance.disagree reasons,
+	// collected over the row's judgement and written once after its write
+	// settled. The process path reports none (pid_mismatch is retired,
+	// SR-3.8); the tmux path adds the lookup's.
+	disagree []string
+}
+
+// findMissingAction is the ad.provenance.disagree action of a judged row:
+// store_error when its write failed in the store, left_changed when the write
+// found the row changed or absent, and the row's own action otherwise.
+func findMissingAction(r findMissingRow) string {
+	switch {
+	case r.write.Err != nil:
+		return findMissingActionStoreError
+	case r.write.Wrote && r.write.Res != CondApplied:
+		return findMissingActionChanged
+	}
+	return r.action
+}
+
 // findMissingImpl is the unexported verb handler called by
-// (c *Client).FindMissing. It takes probe.Prober and probe.LivenessChecker
-// directly and is not part of the public API surface; external consumers use
-// the Client method instead.
+// (c *Client).FindMissing; external consumers use the Client method.
 //
-// pendingGrace is the pending grace period (SR-11.2) as a duration; the
-// handler uses it exactly as given, with no default and no minimum check of
-// its own (SR-4.1: the configuration's minimum, config.PendingGraceMinimumSeconds,
-// is 30 s, rising with the create timeout and pipe-close wait, and is
-// enforced when the configuration loads). now is the clock every age is
-// measured against; the handler never reads time.Now itself (Appendix F.5).
+// pc is the start-time reader (SR-3.8), the only source of liveness: the
+// sweep never reads a process environment. pendingGrace is the pending grace
+// period (SR-11.2) as a duration; the handler uses it exactly as given, with
+// no default and no minimum check of its own (SR-4.1: the configuration's
+// minimum, config.PendingGraceMinimumSeconds, is 30 s, rising with the create
+// timeout and pipe-close wait, and is enforced when the configuration loads).
+// now is the clock every age is measured against; the handler never reads
+// time.Now itself (Appendix F.5).
 //
-// Behavior (SR-7 + SR-8):
+// Behaviour (SR-11.1 to SR-11.7):
 //
-//  1. List live-state identities (anything not ended/missing, pending
-//     included — SRD §5.2 scans pending). Each carries the row's state,
-//     launch start and recorded pid + proc_starttime. A `pending` row inside
-//     its grace period, measured from its launch start rather than its
-//     started_at (store.InsidePendingGrace), is left untouched: no checker
-//     or prober call on its account, no mark, no liveness-note write or
-//     clear, no tick, no permission-request close, and it is in neither
-//     result list. Such a row may be a spawn's, a reuse's or a resume's
-//     launch. A `pending` row with no readable launch start is past the
-//     grace period and judged at once (SR-22.8). Every other row goes on
-//     to steps 2 and 3.
-//  2. For each row with BOTH a recorded pid and proc_starttime, ask the
-//     liveness checker for an evidence-based verdict:
-//     - provably-dead → mark missing in the pinned order (MarkSpawnMissing →
-//     ClearLivenessUnverified → proc_absent tick → CloseOrphanedPermission-
-//     Requests), the clear+tick gated on a non-empty prior state.
-//     - verified-alive → skip and clear any stale liveness fields.
-//     - unknown → skip THIS ROW ONLY, set the liveness fields (guarded
-//     setter), record the id as unverified, and emit exactly one
-//     probe_eacces tick per NULL→set transition.
-//  3. Rows with a NULL pid OR NULL proc_starttime (partial identity) fall
-//     back to the environ probe-set diff: a live id absent from the probe
-//     set is marked missing in the same pinned order.
+//  1. List the live rows (every live state, pending included). A list error
+//     fails the sweep.
+//  2. A `pending` row inside its grace period, measured from its launch
+//     start (store.InsidePendingGrace), is left untouched: no reader call, no
+//     write, no event, and it is in neither result list. Such a row may be a
+//     spawn's, a reuse's or a resume's launch. A `pending` row with no
+//     readable launch start is past the grace period and judged at once
+//     (SR-22.8).
+//  3. Every other row is judged by its agent process alone (judgeLiveRow):
+//     alive leaves it live and clears any note; dead marks it missing with
+//     reason proc_absent; unknown or no recorded identity leaves it
+//     unverified with a note. A child process or another process carrying
+//     the row's id never keeps it alive. Each write is guarded on the row
+//     snapshot the sweep read (SR-11.6): a write that finds the row changed
+//     or absent, or fails in the store, leaves the row in neither list with
+//     no tick. The start-time reader's unreadable answer and every per-row
+//     store error are row outcomes, never a sweep error (SR-11.7, SR-5.8).
+//  4. Provisional transcripts are healed (healProvisionalTranscripts).
 //
-// Per-row store/checker errors are logged and skipped; the sweep does not
-// abort on a transient SQLite failure. Returns the sweep result. nil error
-// iff the prober + list calls succeeded; a hard prober error (e.g. /proc
-// unreachable) or a list error bubbles up because there's nothing useful the
-// verb can do without them.
-func findMissingImpl(ctx context.Context, s FindMissingStore, p probe.Prober, chk probe.LivenessChecker, pendingGrace time.Duration, now func() time.Time, lg FindMissingLogger) (FindMissingResult, error) {
+// The result lists are sorted. The only error is the live-row read's.
+func findMissingImpl(ctx context.Context, s FindMissingStore, pc ProcChecker, pendingGrace time.Duration, now func() time.Time, lg FindMissingLogger) (FindMissingResult, error) {
 	identities, err := s.ListLiveSpawnIdentities()
 	if err != nil {
 		return FindMissingResult{}, err
 	}
 	sweepNow := now()
 
-	// Partition rows: those with a full recorded identity (pid+starttime) get
-	// an evidence-based checker verdict; those with a partial/absent identity
-	// (NULL pid OR NULL starttime) fall back to the environ probe-set diff.
-	var fallbackIDs []string
 	missing := make([]string, 0)
 	unverified := make([]string, 0)
-
 	for _, it := range identities {
 		if store.InsidePendingGrace(it.State, it.LaunchStartedAtMillis, pendingGrace, sweepNow) {
 			// A booting launch inside its grace period (SR-11.2): not judged.
 			continue
 		}
-		if it.PID <= 0 || it.ProcStarttime == "" {
-			// Partial identity → SR-7.5 fallback. Defer to the probe-set diff.
-			fallbackIDs = append(fallbackIDs, it.ClaudeInstanceID)
-			continue
-		}
-		switch chk.CheckLiveness(it.PID, it.ProcStarttime, it.ClaudeInstanceID) {
-		case probe.VerdictProvablyDead:
-			if markMissing(s, it.ClaudeInstanceID, lg) {
-				missing = append(missing, it.ClaudeInstanceID)
-			}
-		case probe.VerdictVerifiedAlive:
-			// Alive: skip, and clear any stale liveness fields.
-			if err := s.ClearLivenessUnverified(it.ClaudeInstanceID); err != nil && lg != nil {
-				lg.Printf("find-missing: ClearLivenessUnverified(%s): %v (continuing)", it.ClaudeInstanceID, err)
-			}
-		default: // probe.VerdictUnknown
-			// Genuinely unknown (permission wall): skip THIS ROW ONLY and record
-			// the liveness metadata. transitioned is the sole NULL→set signal;
-			// emit exactly one probe_eacces tick per transition.
-			transitioned, err := s.SetLivenessUnverified(it.ClaudeInstanceID, "probe_eacces")
-			if err != nil {
-				if lg != nil {
-					lg.Printf("find-missing: SetLivenessUnverified(%s): %v (continuing)", it.ClaudeInstanceID, err)
-				}
-				continue
-			}
-			if transitioned {
-				// Fail-open: trail-emit failure does not abort the sweep (SR-7.7).
-				_ = trail.Emit(context.Background(), "ad.find_missing.tick", map[string]any{
-					"claude_instance_id":    it.ClaudeInstanceID,
-					"prior_state":           nil,
-					"new_state":             nil,
-					"reconciliation_reason": "probe_eacces",
-					"source":                "ad_find_missing",
-				})
-			}
+		row := judgeLiveRow(s, pc, it, lg)
+		switch {
+		case !row.write.Listed:
+		case row.marked:
+			missing = append(missing, it.ClaudeInstanceID)
+		default:
 			unverified = append(unverified, it.ClaudeInstanceID)
 		}
-	}
-
-	// SR-7.5 fallback: rows with a partial/absent recorded identity are
-	// reconciled against the environ probe set. This is the sole remaining
-	// consumer of the environ probe. A hard prober error aborts the sweep —
-	// there's nothing useful to do without it.
-	if len(fallbackIDs) > 0 {
-		probeSet, err := p.Probe(ctx)
-		if err != nil {
-			return FindMissingResult{}, err
-		}
-		for _, id := range fallbackIDs {
-			if _, ok := probeSet[id]; ok {
-				continue
-			}
-			if markMissing(s, id, lg) {
-				missing = append(missing, id)
-			}
-		}
+		emitFindMissingDisagree(it, row)
 	}
 
 	// b.v2c AC3: lazy transcript healing. A session that started before its
 	// first user turn had no .jsonl on disk when SessionStart fired, so its row
-	// carries a NULL jsonl_path. Once the operator messages the bot the file
-	// appears; this sweep recomposes each provisional row's path, stats it, and
+	// carries a NULL jsonl_path. Once the agent's first turn is written the
+	// file appears; this sweep recomposes each provisional row's path, stats it, and
 	// records it when present — no operator intervention required. Per-row
 	// errors are logged and skipped; healing never aborts the sweep.
 	healProvisionalTranscripts(s, lg)
@@ -220,50 +227,86 @@ func findMissingImpl(ctx context.Context, s FindMissingStore, p probe.Prober, ch
 	}, nil
 }
 
-// markMissing runs the PM-pinned marking path for a provably-dead row:
-// MarkSpawnMissing → ClearLivenessUnverified → proc_absent tick →
-// CloseOrphanedPermissionRequests. The clear and tick fire only when a
-// non-empty prior state proves the UPDATE actually wrote (absent or
-// already-terminal rows get neither). Per-row store errors are logged and
-// skipped. Returns true iff the row was written to missing.
-func markMissing(s FindMissingStore, id string, lg FindMissingLogger) bool {
-	priorState, err := s.MarkSpawnMissing(id)
-	if err != nil {
-		if lg != nil {
-			lg.Printf("find-missing: MarkSpawnMissing(%s): %v (continuing)", id, err)
+// judgeLiveRow judges one live row past its grace period by its agent process
+// (SR-3.8, SR-11.1, SR-11.4) and applies the outcome through the guarded
+// writers, guarded on the snapshot the sweep read (SR-11.6).
+//
+// The agent process is selected from the row's SessionStart identity (PID,
+// ProcStarttime) and its recorded pane identity (Identity.PanePID,
+// Identity.PaneStarttime) by tmux.SelectAgentProcess: the one recorded, or
+// the pane identity when both are recorded and disagree. It is judged once,
+// by tmux.JudgeProcess through pc:
+//
+//   - alive with its recorded start time: the row stays live whatever tmux
+//     shows, and a note it carries is cleared (no tick; a row with no note is
+//     not written);
+//   - gone (absent, a zombie, or another start time): marked missing with
+//     reason proc_absent, with no tmux call;
+//   - unknown (unreadable, or a pid-only identity reading alive) or no
+//     identity recorded: tmuxUncheckedRow.
+func judgeLiveRow(s FindMissingStore, pc ProcChecker, it LiveSpawnIdentity, lg FindMissingLogger) findMissingRow {
+	agent := tmux.SelectAgentProcess(
+		tmux.ProcIdentity{PID: it.PID, Starttime: it.ProcStarttime},
+		tmux.ProcIdentity{PID: it.Identity.PanePID, Starttime: it.Identity.PaneStarttime},
+	)
+	switch state := tmux.JudgeProcess(pc, agent.Identity); state {
+	case tmux.ProcAlive:
+		return findMissingRow{
+			write:  clearLivenessNote(s, it.ClaudeInstanceID, it.Snapshot, it.LivenessNote, lg),
+			action: findMissingActionLeftLive,
 		}
-		return false
+	case tmux.ProcGone:
+		return findMissingRow{
+			write:  markMissingSameLife(s, it.ClaudeInstanceID, it.Snapshot, reasonProcAbsent, nil, lg),
+			marked: true,
+			action: findMissingActionMarked,
+		}
+	default: // tmux.ProcUnknown, tmux.ProcNone
+		return tmuxUncheckedRow(s, it, state, lg)
 	}
-	// priorState is non-empty only when the UPDATE actually fired (n>0);
-	// empty means the row was absent or already terminal — clear neither the
-	// liveness fields nor emit a tick in that case.
-	if priorState == "" {
-		return false
+}
+
+// tmuxUncheckedRow is the outcome of a row whose agent process cannot decide
+// its liveness: state is tmux.ProcUnknown (the evidence is unknown) or
+// tmux.ProcNone (no identity recorded). SR-11.3's tmux path decides such a
+// row; until that path is built, every such row takes SR-11.3's "Not called
+// (tmux already skipped)" outcome: it is left live and unverified with note
+// probe_eacces (evidence unknown) or process_not_seen_tmux_unchecked (no
+// evidence recorded), written by writeLivenessNote, and is never marked. No
+// tmux call is made. This is the one place the tmux lookup replaces.
+func tmuxUncheckedRow(s FindMissingStore, it LiveSpawnIdentity, state tmux.ProcState, lg FindMissingLogger) findMissingRow {
+	note := noteProcessNotSeenTmuxUnchecked
+	if state == tmux.ProcUnknown {
+		note = noteProbeEACCES
 	}
-	// Clear stale liveness fields immediately after the mark so a reconciled
-	// row never carries a lingering unverified_since (SR-8.2).
-	if err := s.ClearLivenessUnverified(id); err != nil && lg != nil {
-		lg.Printf("find-missing: ClearLivenessUnverified(%s): %v (continuing)", id, err)
+	return findMissingRow{
+		write:  writeLivenessNote(s, it.ClaudeInstanceID, it.Snapshot, it.LivenessNote, note, lg),
+		action: findMissingActionUnverified,
 	}
-	// Emit one ad.find_missing.tick per successfully written row (SR-A-2.5).
-	// Fail-open: trail-emit failure does not abort the sweep (SR-7.7).
-	_ = trail.Emit(context.Background(), "ad.find_missing.tick", map[string]any{
-		"claude_instance_id":    id,
-		"prior_state":           priorState,
-		"new_state":             "missing",
-		"reconciliation_reason": "proc_absent",
-		"source":                "ad_find_missing",
-	})
-	// Close any open permission_requests rows so relay polling loops observe a
-	// fail-closed deny rather than spinning to their own timeout (SR-5.4).
-	// CloseOrphanedPermissionRequests emits one
-	// ad.find_missing.tick(permission_orphan_closeout) per row it closes.
-	// Errors are logged and skipped — MarkSpawnMissing already succeeded, so
-	// the Spawn is reconciled even if the row-close fails.
-	if err := s.CloseOrphanedPermissionRequests(id); err != nil && lg != nil {
-		lg.Printf("find-missing: CloseOrphanedPermissionRequests(%s): %v (continuing)", id, err)
+}
+
+// emitFindMissingDisagree writes a judged row's ad.provenance.disagree
+// records once its write settled (SR-14, SR-3.16): one per distinct reason in
+// row.disagree, nothing when it holds none. For a row judged without a lookup
+// the records carry verb find-missing, source ad_find_missing, the row's
+// recorded socket (Identity.Socket) and session name, tmux_session_id and
+// current_session_name null, server unknown, verdict not_run, and the row's
+// action (findMissingAction). Fail-open: a trail-write failure is discarded
+// and never changes the sweep's result.
+func emitFindMissingDisagree(it LiveSpawnIdentity, row findMissingRow) {
+	if len(row.disagree) == 0 {
+		return
 	}
-	return true
+	emitProvenanceDisagree(provenanceDisagree{
+		Verb:        "find-missing",
+		Source:      findMissingTickSource,
+		InstanceID:  it.ClaudeInstanceID,
+		Socket:      it.Identity.Socket,
+		SessionName: it.TmuxSessionName,
+		Verdict:     tmux.TokenNotRun,
+		Action:      findMissingAction(row),
+		Caller:      callerIdentity(),
+	}, row.disagree...)
 }
 
 // healProvisionalTranscripts sweeps live rows whose jsonl_path is NULL (a
@@ -304,26 +347,33 @@ func healProvisionalTranscripts(s FindMissingStore, lg FindMissingLogger) {
 	}
 }
 
-// FindMissing reconciles DB state against live OS processes. It scans all
-// live-state rows and, per row, applies an evidence-based liveness verdict: a
-// provably-dead process transitions to missing; a permission-walled row is
-// left untouched and flagged unverified; rows with a partial recorded
-// identity fall back to an environ probe-set diff. A `pending` row (a
-// spawn's, a reuse's or a resume's launch) inside the pending grace period
-// (pending_grace_seconds from the loaded configuration, 60 s by default),
-// measured from its launch start, is not judged: it is left as it is and is
-// in neither result list (SR-11.2). Ages are read from the Client's clock.
-// Intended for periodic cron use.
+// FindMissing reconciles live rows against their agents' processes. Each
+// live row's liveness comes only from its agent process, read by the
+// start-time reader: the SessionStart identity, else the recorded pane
+// process, and the pane process when the two disagree; no process
+// environment is read. A process alive with its recorded start time leaves
+// the row live and clears any liveness note; a dead one marks the row
+// missing. A row whose process cannot be checked (unreadable, a pid-only
+// identity, or none recorded) is left live and reported unverified with a
+// liveness note. Every write applies only while the row still holds the
+// snapshot the sweep read. A `pending` row (a spawn's, a reuse's or a
+// resume's launch) inside the pending grace period (pending_grace_seconds
+// from the loaded configuration, 60 s by default), measured from its launch
+// start, is not judged: it is left as it is and is in neither result list
+// (SR-11.2). Ages are read from the Client's clock. Intended for periodic
+// cron use.
 //
 // CLI: agent-director find-missing
 //
 // Errors:
-//   - ErrProbeUnsupported: the current OS/platform has no probe implementation.
+//   - ErrProbeUnsupported: listed for find-missing, which no longer returns
+//     it: the sweep reads only process start times, and a start time it
+//     cannot read leaves that row unverified.
 //
 // Nondeterminism: none.
 func (c *Client) FindMissing(ctx context.Context) (FindMissingResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return FindMissingResult{}, err
 	}
-	return findMissingImpl(ctx, c.st, probe.New(), probe.NewChecker(), c.cfg.Tmux.EffectivePendingGrace(), c.now, c.logger)
+	return findMissingImpl(ctx, c.st, c.procChecker, c.cfg.Tmux.EffectivePendingGrace(), c.now, c.logger)
 }
