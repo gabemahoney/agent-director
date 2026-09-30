@@ -230,7 +230,7 @@
     },
     {
       "name": "get",
-      "description": "Return the full DB row for a tracked Spawn (id, parent, state, cwd, session name, args, relay mode, session_id, labels, timestamps).",
+      "description": "Return the full DB row for a tracked Spawn (id, parent, state, cwd, session name, tmux socket, args, relay mode, session_id, labels, timestamps).",
       "callable": true,
       "handle_free": false,
       "params": [
@@ -290,6 +290,14 @@
           "type": "string",
           "description": "tmux session under which the Spawn is running.",
           "nullable": false,
+          "allow_empty": false,
+          "allowed_values": null
+        },
+        {
+          "name": "tmux_socket",
+          "type": "string?",
+          "description": "The tmux socket the row's launch uses; omitted for a row from before this release.",
+          "nullable": true,
           "allow_empty": false,
           "allowed_values": null
         },

@@ -214,6 +214,8 @@ export interface GetResult {
     state: string;
     cwd: string;
     tmux_session_name: string;
+    /** The tmux socket the row's launch uses; omitted for a row from before this release. */
+    tmux_socket?: string | null;
     claude_args: string[];
     relay_mode: string;
     jsonl_path: string;

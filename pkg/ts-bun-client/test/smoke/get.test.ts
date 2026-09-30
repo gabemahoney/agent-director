@@ -4,6 +4,8 @@
  * Happy path: seed a working spawn, call get, assert required fields and no
  * launch_started_at; seed a pending spawn, assert an RFC3339 UTC
  * launch_started_at at the same instant as started_at (SR-20.3 default).
+ * tmux_socket (AC-LKP-22): a row seeded with --socket shows that exact path;
+ * a row seeded with --no-launch-identity (from before the release) has no key.
  * Error path: unknown id → ErrSpawnNotFound.
  */
 
@@ -63,6 +65,47 @@ test("get: pending row carries launch_started_at at its started_at instant (SR-2
     const launchMs = Date.parse(result.launch_started_at as string);
     expect(Number.isNaN(launchMs)).toBe(false);
     expect(launchMs).toBe(Date.parse(result.started_at));
+  });
+}, 10_000);
+
+test("get: row with a recorded socket shows that exact tmux_socket (AC-LKP-22)", async () => {
+  await withTempHome(async (homeDir) => {
+    const storePath = path.join(homeDir, ".agent-director", "state.db");
+    const spawnId = "smoke-get-socket-id";
+    const socket = path.join(homeDir, "tmux-sock", "operator");
+
+    runHelper("seed-spawn", {
+      store: storePath,
+      state: "ended",
+      id: spawnId,
+      socket,
+      "create-store": true,
+    });
+
+    using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
+    const result: GetResult = await client.get({ claude_instance_id: spawnId });
+    expect(result.tmux_socket).toBe(socket);
+  });
+}, 10_000);
+
+test("get: row from before the release has no tmux_socket key (AC-LKP-22)", async () => {
+  await withTempHome(async (homeDir) => {
+    const storePath = path.join(homeDir, ".agent-director", "state.db");
+    const spawnId = "smoke-get-no-socket-id";
+
+    runHelper("seed-spawn", {
+      store: storePath,
+      state: "ended",
+      id: spawnId,
+      "no-launch-identity": true,
+      "create-store": true,
+    });
+
+    using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
+    const result: GetResult = await client.get({ claude_instance_id: spawnId });
+    expect(result.claude_instance_id).toBe(spawnId);
+    expect(result.tmux_socket).toBeUndefined();
+    expect(Object.keys(result)).not.toContain("tmux_socket");
   });
 }, 10_000);
 

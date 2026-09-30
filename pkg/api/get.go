@@ -48,6 +48,12 @@ type SpawnRow struct {
 	CWD string `json:"cwd"`
 	// TmuxSessionName is the tmux session under which the Spawn is running.
 	TmuxSessionName string `json:"tmux_session_name"`
+	// TmuxSocket is the absolute path of the tmux socket the row's latest
+	// launch recorded, shown for a row in any state (a finished row keeps
+	// its latest launch's socket). Empty (and omitted from JSON) for a row
+	// from before this release, which records none. Display only: no verb
+	// reads it back (SR-3.3, SR-16.1).
+	TmuxSocket string `json:"tmux_socket,omitempty"`
 	// ClaudeArgs is the verbatim argv passed through to claude after --settings.
 	// Always a non-nil slice (possibly empty) for JSON-stability.
 	ClaudeArgs []string `json:"claude_args"`
@@ -243,6 +249,7 @@ func Get(s GetStore, instanceID string) (SpawnRow, error) {
 		State:                   row.State,
 		CWD:                     row.CWD,
 		TmuxSessionName:         row.TmuxSessionName,
+		TmuxSocket:              row.Identity.Socket,
 		ClaudeArgs:              row.ClaudeArgs,
 		RelayMode:               row.RelayMode,
 		JSONLPath:               row.JSONLPath,
@@ -307,7 +314,9 @@ func Get(s GetStore, instanceID string) (SpawnRow, error) {
 // Get returns the full DB row for a tracked Spawn: state, cwd, tmux session
 // name, relay mode, session id, labels, timestamps, and (when applicable) the
 // open permission-requests slice. On a pending row it also carries
-// launch_started_at, when the agent's launch began.
+// launch_started_at, when the agent's launch began. When the row records
+// one, it carries tmux_socket, the tmux socket the row's latest launch
+// uses, in any state.
 //
 // CLI: agent-director get
 //

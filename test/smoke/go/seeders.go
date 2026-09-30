@@ -24,6 +24,8 @@
 //     Happy result shows for the seeded row; the driver checks it.
 //   - PreTrust: for spawn and resume, reads the Happy result's pre_trust; the
 //     driver plants HOME/.claude.json first and checks it is "ok".
+//   - TmuxSocket: for get, reads the Happy result's tmux_socket; the driver
+//     checks it is the socket the seeded row records.
 //
 // Adding a new callable verb to the manifest requires adding a matching
 // entry here. The driver's startup check fails the build with a clear
@@ -137,6 +139,11 @@ type seederSpec struct {
 	// entry in the per-subtest HOME before Happy and asserts "ok"
 	// (SR-22.6). Set by the launch verbs, spawn and resume.
 	PreTrust func(result any) string
+
+	// TmuxSocket, when non-nil, returns the tmux_socket the Happy result
+	// shows. The driver asserts it is apitest.TestSocket, the socket
+	// seedPendingLaunch records (SR-3.3). Set by get only.
+	TmuxSocket func(result any) string
 }
 
 // seeders is the canonical registry: one entry per callable verb. The
@@ -215,6 +222,9 @@ func init() {
 		},
 		LaunchStartedAt: func(result any, _ string) *time.Time {
 			return result.(api.SpawnRow).LaunchStartedAt
+		},
+		TmuxSocket: func(result any) string {
+			return result.(api.SpawnRow).TmuxSocket
 		},
 	}
 

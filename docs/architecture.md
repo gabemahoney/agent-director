@@ -545,8 +545,12 @@ builds on. The store gives each column its default on insert and on
 migration. Beyond that, the v5 writes are the ones under "Versioned writes"
 below (every `spawns` update advances `row_version`, and some clear
 `launch_started_at`) and the rotation archive, which writes
-`session_history.life_number` through `upsertSessionHistoryEntry`. No verb
-reports any of the columns yet.
+`session_history.life_number` through `upsertSessionHistoryEntry`. Verbs
+report two of the columns, and only for display: `status`, `get` and `list`
+report the launch start as `launch_started_at`, and `get` alone reports the
+recorded socket as `tmux_socket` (see "Where callers see the launch start"
+and "Where the socket is shown" under [Launch identity](#launch-identity)).
+No verb reports any other v5 column.
 
 - **Row version** — `spawns.row_version INTEGER NOT NULL DEFAULT 0`. A
   per-row change counter, so a conditional write can tell that the row changed
@@ -584,10 +588,12 @@ for NULL), `Snapshot` and `Identity`. The one write that takes a `Spawn` is
 `Identity.Token` and `Identity.Socket` from it; no write takes the other v5
 fields from one. A caller passes `Snapshot` to `MoveToPending`, and builds the `store.ResumePrior` that
 `RestoreAfterFailedResume` takes from `EndedAtText`, `Identity` and the other
-fields the move clears. No verb reports these fields, with one exception, the launch
-start: `get` and `list` report `LaunchStartedAtMillis` as `launch_started_at`
-on a `pending` row, and `status` reports it through `SpawnStatus` (see "Where
-callers see the launch start").
+fields the move clears. No verb reports these fields, with two exceptions.
+The launch start: `get` and `list` report `LaunchStartedAtMillis` as
+`launch_started_at` on a `pending` row, and `status` reports it through
+`SpawnStatus` (see "Where callers see the launch start"). The socket: `get`
+reports `Identity.Socket` as `tmux_socket` on a row in any state (see "Where
+the socket is shown").
 
 - **`store.RowSnapshot`** (alias `api.RowSnapshot`) is the SR-5.3
   change-detection key: `row_version`, `started_at`, `claude_session_id`,
@@ -2009,6 +2015,22 @@ reads the launch start through an optional narrow read: if its
 `launch_started_at`), `Status` uses it. `*store.Store` implements it, so
 `StatusStore` and `Status` keep their signatures, and an injected store
 without it gives no launch start (SR-16.1).
+
+**Where the socket is shown.** `get` alone shows the row's recorded socket,
+as `tmux_socket` on `SpawnRow` (`SpawnRow.TmuxSocket`, filled from
+`Identity.Socket`; SR-3.3 "Shown by `get`", SR-16.1). It is the absolute
+path of the socket the row's latest launch recorded, on a row in any state:
+a finished row keeps its latest launch's socket. A row from before this
+release records none, and the key is then omitted, never `null`
+(`omitempty`; the TypeScript `GetResult` has `tmux_socket?: string | null`,
+SR-16.4). `status` and `list` do not carry it, and no error description
+names it. It is display only: no verb reads it back, and a launch onto an
+existing row takes its socket from the store through
+`ResolveRowLaunchSocket`, never from a caller. It is the `-S` socket of the
+README's "Operator actions" commands. A plain spawn refused by the label
+scan ("left over from an earlier life") inserts no row, so `get` has
+nothing to show; that socket comes from the refusal's
+`ad.launch.name_held` trail record instead.
 
 ### Workspace-trust pre-write
 
@@ -5663,6 +5685,10 @@ package doc comment (`doc.go`, "# Description helper") says the same.
     precision, shown only on a `pending` row, omitted otherwise). With
     `listRow` set, it checks `list`'s `spawns` text, which must also name
     `launch_started_at (timestamp?)`. Check with `AssertAgentTextCase`.
+  - `DescTmuxSocketField()`: the `tmux_socket` result text of `get` (the
+    tmux socket the row's launch uses, omitted for a row from before this
+    release). Check with `AssertAgentTextCase`. **Must use** it for any Go
+    check of that text; never spell its phrases in a test.
   - Resume (`descriptions_resume.go`):
     - `DescResumeLaunchInProgress(LaunchInProgress{InstanceID, LaunchStart})`:
       `ErrSpawnNotResumable` for a `pending` row. A zero `LaunchStart`
@@ -5814,12 +5840,18 @@ emptiness on success means a non-empty stderr is an unambiguous failure signal.
 
 | Subcommand | Key flags | Result shape |
 | --- | --- | --- |
-| `seed-spawn` | `--store`, `--state`, `--id`, `--cwd`, `--relay-mode`, `--session-id`, `--create-store`, `--socket` (recorded tmux socket via `apitest.WithTmuxSocket`; default `apitest.TestSocket`), `--no-pre-trust` (records the pre-trust opt-out via `apitest.WithNoPreTrust`; default pre-trust allowed) | `{"claude_instance_id": "..."}` |
+| `seed-spawn` | `--store`, `--state`, `--id`, `--cwd`, `--relay-mode`, `--session-id`, `--create-store`, `--socket` (recorded tmux socket via `apitest.WithTmuxSocket`; default `apitest.TestSocket`), `--no-pre-trust` (records the pre-trust opt-out via `apitest.WithNoPreTrust`; default pre-trust allowed), `--no-launch-identity` (a row from before the release: no launch token, socket or identity, via `apitest.WithNoLaunchToken`; not with `--socket`) | `{"claude_instance_id": "..."}` |
 | `seed-parent-child` | `--store`, `--parent-id`, `--child-id` | `{"parent_id": "...", "child_id": "..."}` |
 | `seed-permission-request` | `--store`, `--spawn-id`, `--tool` | `{"request_id": <number>}` |
 | `seed-template` | `--templates-dir`, `--name`, `--body` | `{"path": "..."}` |
 | `seed-empty-store` | `--store` | `{"path": "..."}` |
 | `json-schema` | — | machine-readable result-shape map for all subcommands |
+
+**Must use:** a TypeScript test that needs a row from before the release
+(no launch token, socket or identity) seeds it with `seed-spawn
+--no-launch-identity`, never by clearing columns itself. The flag cannot be
+combined with `--socket`: that call exits 1 with "--socket and
+--no-launch-identity cannot be combined" and creates no store.
 
 **Makefile target.**
 

@@ -29,9 +29,10 @@ import (
 //     file created by storefix.OpenTempStore.
 //  5. Calls the verb's Happy closure and feeds the result into
 //     AssertResultMatchesManifest; for status, get and list it also checks
-//     the pending row's launch_started_at (see assertLaunchStartedAt), and
-//     for spawn and resume, with a .claude.json planted in HOME first, that
-//     pre_trust is "ok" (see plantClaudeJSON).
+//     the pending row's launch_started_at (see assertLaunchStartedAt), for
+//     get that tmux_socket is the seeded apitest.TestSocket, and for spawn
+//     and resume, with a .claude.json planted in HOME first, that pre_trust
+//     is "ok" (see plantClaudeJSON).
 //  6. Calls the verb's Error closure (when defined) and feeds the
 //     returned error into AssertExpectedError.
 //
@@ -163,6 +164,12 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 	AssertResultMatchesManifest(t, vd, result)
 	if spec.LaunchStartedAt != nil {
 		assertLaunchStartedAt(t, vd.Name, spec.LaunchStartedAt(result, spec.SeedID))
+	}
+	if spec.TmuxSocket != nil {
+		if got := spec.TmuxSocket(result); got != apitest.TestSocket {
+			t.Errorf("%s: tmux_socket = %q; want %q, the socket the seeded row records",
+				vd.Name, got, apitest.TestSocket)
+		}
 	}
 	if spec.PreTrust != nil {
 		if got := spec.PreTrust(result); got != "ok" {

@@ -153,8 +153,9 @@ test("public-surface: Client exposes no migrate method (SR-1)", () => {
 // deliberate additive change — a regenerated golden is self-consistent. These
 // NAMED assertions read the checked-in types.d.ts.golden and pin the specific
 // SR-8.3 shapes (additive-optional liveness fields; find-missing unverified
-// fields; state stays a plain string, no union/enum) and the SR-22.2
-// additive-optional launch_started_at field, so golden regeneration
+// fields; state stays a plain string, no union/enum), the SR-22.2
+// additive-optional launch_started_at field, and the SR-16.4 get-only
+// additive-optional tmux_socket field, so golden regeneration
 // cannot silently drop or mutate them without also tripping a targeted test.
 // ---------------------------------------------------------------------------
 
@@ -206,6 +207,25 @@ test.each(["StatusResult", "GetResult", "ListRow"])(
       interfaceBody(typesGolden(), iface),
       `${iface} must declare launch_started_at as additive-optional nullable`
     ).toMatch(/\blaunch_started_at\?\s*:\s*string\s*\|\s*null\s*;/);
+  }
+);
+
+test("public-surface: GetResult carries additive-optional nullable tmux_socket (SR-16.4, AC-LKP-22)", () => {
+  // Optional (`?`) mirrors the Go omitempty key that is absent for a row
+  // from before this release; `| null` follows the manifest's nullable field.
+  expect(
+    interfaceBody(typesGolden(), "GetResult"),
+    "GetResult must declare tmux_socket as additive-optional nullable"
+  ).toMatch(/\btmux_socket\?\s*:\s*string\s*\|\s*null\s*;/);
+});
+
+test.each(["StatusResult", "ListRow"])(
+  "public-surface: %s does not declare tmux_socket — get-only (SR-16.4, AC-LKP-22)",
+  (iface) => {
+    expect(
+      interfaceBody(typesGolden(), iface),
+      `${iface} must NOT declare tmux_socket — only get shows the row's socket`
+    ).not.toMatch(/\btmux_socket\b/);
   }
 );
 

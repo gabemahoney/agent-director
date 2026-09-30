@@ -102,17 +102,24 @@ func TestDispatch(t *testing.T) {
 		}
 	})
 
-	// --socket replaces the recorded socket; without it the row keeps TestSocket.
-	for _, tc := range []struct{ name, socket, want string }{
-		{"a_success_seed_spawn_socket", "/tmp/ts-helper-sock/default", "/tmp/ts-helper-sock/default"},
-		{"a_success_seed_spawn_default_socket", "", apitest.TestSocket},
+	// --socket replaces the recorded socket; without it the row keeps
+	// TestSocket and a launch token. --no-launch-identity seeds a row from
+	// before the release: token, socket and every identity column NULL. A
+	// live state, whose default row also records a pane, shows the flag
+	// clears the pane columns too.
+	for _, tc := range []struct {
+		name       string
+		flags      []string
+		wantSocket any // nil = NULL
+		wantToken  bool
+	}{
+		{"a_success_seed_spawn_socket", []string{"--socket", "/tmp/ts-helper-sock/default"}, "/tmp/ts-helper-sock/default", true},
+		{"a_success_seed_spawn_default_socket", nil, apitest.TestSocket, true},
+		{"a_success_seed_spawn_no_launch_identity", []string{"--no-launch-identity"}, nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dbPath := filepath.Join(t.TempDir(), "spawn.db")
-			args := []string{"seed-spawn", "--store", dbPath, "--id", "ts-helper-sock", "--state", "ended", "--create-store"}
-			if tc.socket != "" {
-				args = append(args, "--socket", tc.socket)
-			}
+			args := append([]string{"seed-spawn", "--store", dbPath, "--id", "ts-helper-sock", "--state", "working", "--create-store"}, tc.flags...)
 			var stdout, stderr bytes.Buffer
 			if code := dispatch(args, &stdout, &stderr); code != 0 {
 				t.Fatalf("expected exit 0, got %d; stderr: %s", code, stderr.String())
@@ -121,11 +128,51 @@ func TestDispatch(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ReadSpawnColumns: %v", err)
 			}
-			if cols.TmuxSocket != tc.want {
-				t.Fatalf("tmux_socket = %v, want %q", cols.TmuxSocket, tc.want)
+			if cols.TmuxSocket != tc.wantSocket {
+				t.Fatalf("tmux_socket = %#v, want %#v", cols.TmuxSocket, tc.wantSocket)
+			}
+			if token, _ := cols.LaunchToken.(string); (token != "") != tc.wantToken {
+				t.Fatalf("launch_token = %#v, want a token: %v", cols.LaunchToken, tc.wantToken)
+			}
+			if tc.wantToken {
+				return
+			}
+			identity := map[string]any{
+				"launch_token":          cols.LaunchToken,
+				"tmux_server_pid":       cols.TmuxServerPID,
+				"tmux_server_started":   cols.TmuxServerStarted,
+				"tmux_server_starttime": cols.TmuxServerStarttime,
+				"pane_id":               cols.PaneID,
+				"pane_pid":              cols.PanePID,
+				"pane_starttime":        cols.PaneStarttime,
+			}
+			for col, v := range identity {
+				if v != nil {
+					t.Errorf("%s = %#v, want NULL", col, v)
+				}
 			}
 		})
 	}
+
+	// --socket names a socket the row from before the release cannot have.
+	t.Run("b_seed_spawn_socket_with_no_launch_identity", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "spawn.db")
+		var stdout, stderr bytes.Buffer
+		code := dispatch([]string{"seed-spawn", "--store", dbPath, "--create-store",
+			"--socket", "/tmp/ts-helper-sock/default", "--no-launch-identity"}, &stdout, &stderr)
+		if code == 0 {
+			t.Fatal("expected non-zero exit for --socket with --no-launch-identity")
+		}
+		if stdout.Len() != 0 {
+			t.Fatalf("expected empty stdout on error, got: %s", stdout.String())
+		}
+		if !strings.Contains(stderr.String(), "--no-launch-identity") {
+			t.Fatalf("stderr = %q, want it to name --no-launch-identity", stderr.String())
+		}
+		if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
+			t.Fatalf("store file exists after a rejected seed (stat err %v); want none", err)
+		}
+	})
 
 	// --no-pre-trust records the opt-out (no_pre_trust 1); without it the row
 	// records pre-trust allowed (0).

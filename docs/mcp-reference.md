@@ -83,7 +83,7 @@ Return the current state of a tracked Spawn (pending/waiting/working/ask_user/ch
 
 ## Tool: get
 
-Return the full DB row for a tracked Spawn (id, parent, state, cwd, session name, args, relay mode, session_id, labels, timestamps).
+Return the full DB row for a tracked Spawn (id, parent, state, cwd, session name, tmux socket, args, relay mode, session_id, labels, timestamps).
 
 ### Input schema
 
@@ -96,6 +96,7 @@ Return the full DB row for a tracked Spawn (id, parent, state, cwd, session name
 - `state`: type=string — Current state, one of the allowed values. pending: a launch (spawn, reuse or resume) is in progress and the agent has not reported in yet (Claude Code's SessionStart); it may be loading or waiting at a startup prompt. A resumed pending row keeps its session id and history (non-empty claude_session_id).
 - `cwd`: type=string — Canonicalized cwd.
 - `tmux_session_name`: type=string — tmux session under which the Spawn is running.
+- `tmux_socket`: type=string? — The tmux socket the row's launch uses; omitted for a row from before this release.
 - `claude_args`: type=[]string — Verbatim argv passed through to claude after --settings.
 - `relay_mode`: type=string — on / off.
 - `jsonl_path`: type=string — Last known transcript path, persisted by the SessionStart hook; legacy rows may be empty. When empty, resume composes the path on demand from cwd + claude_session_id.
