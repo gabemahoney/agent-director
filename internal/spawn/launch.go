@@ -131,8 +131,9 @@ type IdentityWriter interface {
 // pane's process start times from pc (an unreadable one is recorded as none),
 // guarded on the launch's version and token: for a plain spawn the insert's
 // version 0 and its token, for resume the version its move produced and the
-// move's token. A write that does not apply (a hook wrote first) records
-// nothing; a store error gives one WARN line on lg naming the instance id and
+// move's token. A write that does not apply (another write came first; no
+// hook can, because a row that records no pane matches no hook, SR-22.9)
+// records nothing; a store error gives one WARN line on lg naming the instance id and
 // that recording the launch identity failed, with no token, label or
 // environment value, and does not change the launch's result (SR-5.8). A nil
 // lg logs nothing.

@@ -51,6 +51,20 @@
 //     read; OtherStoreID returns a well-formed id certain to differ from a
 //     given one, for another store's labels.
 //
+// # Hooks through the gate (SR-22.9)
+//
+//   - Every hook write is gated on the hook's parent process being the row's
+//     recorded pane process. ApplyAgentHook fires one hook event at a row as
+//     its own agent (the parent is the row's pane process) and
+//     ApplyForeignHook as another process carrying the row's id; both return
+//     the store's store.HookApplied, so no test builds a store.HookGate by
+//     hand. SeedSessionID records a session id on an existing row through
+//     the gated soft refresh. The seeders make their hook writes the same
+//     way, through storefix.WithSeedPane (a seed pane, written back
+//     afterwards) and storefix.SeedAgentWrites; storefix has the equivalents
+//     of both helpers for a store handle (storefix.ApplyAgentHook,
+//     storefix.ApplyForeignHook).
+//
 // # Description helper (SR-20.2)
 //
 //   - AssertDescription checks an error description against a DescCase (a

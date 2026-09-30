@@ -88,10 +88,12 @@ type PermissionRow struct {
 }
 
 // UpsertOpenPermissionRequest INSERTs one row per (instanceID, requestToken)
-// pair. The v2 schema's composite UNIQUE(claude_instance_id, request_token)
-// allows parallel rows for the same Spawn to coexist (SR-3.1). A second call
-// with the same pair returns ErrRequestTokenCollision; the first row is
-// unmodified.
+// pair, gated like every hook write (SR-22.9): the INSERT applies only when
+// gate's parent process is the row's recorded pane process, a condition of the
+// INSERT's own statement. The v2 schema's composite
+// UNIQUE(claude_instance_id, request_token) allows parallel rows for the same
+// Spawn to coexist (SR-3.1). A second call with the same pair returns
+// ErrRequestTokenCollision; the first row is unmodified.
 //
 // The new row has decision=NULL; the polling loop sees that as "still open"
 // and keeps waiting. Only DecidePermissionRequest writes the decision columns.
@@ -105,10 +107,11 @@ type PermissionRow struct {
 //
 // The INSERT and optional DELETE run inside a single transaction; a collision
 // on the UNIQUE constraint causes an immediate rollback and surfaces
-// ErrRequestTokenCollision.
-func (s *Store) UpsertOpenPermissionRequest(instanceID, requestToken, toolName, toolInputJSON string, cap int, writerProcess string) error {
-	_, err := s.UpsertOpenPermissionRequestResult(instanceID, requestToken, toolName, toolInputJSON, cap, writerProcess)
-	return err
+// ErrRequestTokenCollision. A gate that does not hold records no request and
+// reports why (HookApplied, as ApplyHookTransitionResult).
+func (s *Store) UpsertOpenPermissionRequest(instanceID string, gate HookGate, requestToken, toolName, toolInputJSON string, cap int, writerProcess string) (HookApplied, error) {
+	_, applied, err := s.UpsertOpenPermissionRequestResult(instanceID, gate, requestToken, toolName, toolInputJSON, cap, writerProcess)
+	return applied, err
 }
 
 // UpsertOpenPermissionRequestResult is the outcome-aware variant of
@@ -116,33 +119,55 @@ func (s *Store) UpsertOpenPermissionRequest(instanceID, requestToken, toolName, 
 // error so callers that emit trail events can record the exact result
 // without inferring it from error presence alone (SR-A-2.1).
 //
-//   - UpsertInserted — the INSERT committed successfully.
+//   - UpsertInserted — the INSERT committed successfully (HookApplied.Applied).
+//   - UpsertNoChange — the gate did not hold, or no row has the id: nothing
+//     was written, no event is emitted, and HookApplied carries the reason
+//     from one read after the statement (notAppliedReason).
 //   - UpsertError    — any error (begin, insert, evict, commit, or collision).
-func (s *Store) UpsertOpenPermissionRequestResult(instanceID, requestToken, toolName, toolInputJSON string, cap int, writerProcess string) (UpsertOutcome, error) {
+//
+// The INSERT is INSERT … SELECT … WHERE EXISTS (the row with the gate), so
+// the gate is in the write's own statement (SR-22.9; decision A8).
+func (s *Store) UpsertOpenPermissionRequestResult(instanceID string, gate HookGate, requestToken, toolName, toolInputJSON string, cap int, writerProcess string) (UpsertOutcome, HookApplied, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
-		return UpsertError, fmt.Errorf("store: upsert permission begin tx: %w", err)
+		return UpsertError, HookApplied{}, fmt.Errorf("store: upsert permission begin tx: %w", err)
 	}
 
+	insArgs := append([]any{instanceID, requestToken, toolName, toolInputJSON, instanceID}, hookGateArgs(gate)...)
 	insRes, err := tx.Exec(`
 		INSERT INTO permission_requests
 		  (claude_instance_id, request_token, tool_name, tool_input)
-		VALUES (?, ?, ?, ?)
-	`, instanceID, requestToken, toolName, toolInputJSON)
+		SELECT ?, ?, ?, ?
+		 WHERE EXISTS (SELECT 1 FROM spawns
+		                WHERE claude_instance_id = ? AND `+hookGateSQL+`)
+	`, insArgs...)
 	if err != nil {
 		_ = tx.Rollback()
 		var serr *sqlite.Error
 		if errors.As(err, &serr) && serr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE {
-			return UpsertError, fmt.Errorf("%w: (%s, %s)", ErrRequestTokenCollision, instanceID, requestToken)
+			return UpsertError, HookApplied{}, fmt.Errorf("%w: (%s, %s)", ErrRequestTokenCollision, instanceID, requestToken)
 		}
-		return UpsertError, fmt.Errorf("store: upsert permission insert: %w", err)
+		return UpsertError, HookApplied{}, fmt.Errorf("store: upsert permission insert: %w", err)
+	}
+	inserted, err := insRes.RowsAffected()
+	if err != nil {
+		_ = tx.Rollback()
+		return UpsertError, HookApplied{}, fmt.Errorf("store: upsert permission insert rows affected: %w", err)
+	}
+	if inserted == 0 {
+		_ = tx.Rollback()
+		applied, err := s.hookNotApplied(instanceID, gate, "store: upsert permission")
+		if err != nil {
+			return UpsertError, HookApplied{}, err
+		}
+		return UpsertNoChange, applied, nil
 	}
 
 	if cap > 0 {
 		var currentCount int
 		if err := tx.QueryRow(`SELECT COUNT(*) FROM permission_requests`).Scan(&currentCount); err != nil {
 			_ = tx.Rollback()
-			return UpsertError, fmt.Errorf("store: upsert permission count: %w", err)
+			return UpsertError, HookApplied{}, fmt.Errorf("store: upsert permission count: %w", err)
 		}
 		if currentCount > cap {
 			excess := currentCount - cap
@@ -157,13 +182,13 @@ func (s *Store) UpsertOpenPermissionRequestResult(instanceID, requestToken, tool
 			`, excess)
 			if err != nil {
 				_ = tx.Rollback()
-				return UpsertError, fmt.Errorf("store: upsert permission evict: %w", err)
+				return UpsertError, HookApplied{}, fmt.Errorf("store: upsert permission evict: %w", err)
 			}
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return UpsertError, fmt.Errorf("store: upsert permission commit: %w", err)
+		return UpsertError, HookApplied{}, fmt.Errorf("store: upsert permission commit: %w", err)
 	}
 
 	// Emit row-mutation event for the successful insert. LastInsertId is
@@ -182,7 +207,7 @@ func (s *Store) UpsertOpenPermissionRequestResult(instanceID, requestToken, tool
 		"source":             "ad_store",
 	})
 
-	return UpsertInserted, nil
+	return UpsertInserted, HookApplied{Applied: true}, nil
 }
 
 // GetPermissionRequest reads the current state of a specific permission request
@@ -263,8 +288,8 @@ func (s *Store) GetPermissionRequestByToken(requestToken string) (PermissionRow,
 // the given Spawn, ordered by created_at ASC. Returns an empty slice (not nil)
 // when no open rows exist; nil error on the empty-result case.
 //
-// Used by ApplyHookTransition (Task D-1) and the ErrAmbiguousRequest guard in
-// DecidePermissionRequest.
+// Used by ApplyHookTransitionResult's working hold (Task D-1) and the
+// ErrAmbiguousRequest guard in DecidePermissionRequest.
 func (s *Store) OpenPermissionRequestsForSpawn(instanceID string) ([]PermissionRow, error) {
 	const q = `
 		SELECT request_id, claude_instance_id, tool_name, tool_input,

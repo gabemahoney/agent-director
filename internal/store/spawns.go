@@ -1,7 +1,6 @@
 package store
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -10,8 +9,6 @@ import (
 
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
-
-	"github.com/gabemahoney/agent-director/internal/trail"
 )
 
 // ErrSpawnNotFound is returned by lookup-by-id methods when no row matches
@@ -373,45 +370,6 @@ const rowVersionAdvance = `row_version = row_version + 1`
 // to anything other than pending carries, in the same statement (SR-5.2).
 const launchStartClear = `launch_started_at = NULL`
 
-// ApplyHookTransition writes the lifecycle UPSERT for a state-tracking
-// hook. The transition follows SRD §5.2:
-//   - When newState is non-empty, the row's state moves to newState and
-//     last_seen_at is bumped.
-//   - When newState is `ended`, ended_at is also set to CURRENT_TIMESTAMP.
-//   - When softRefresh=true, state stays; last_seen_at is bumped, the
-//     liveness_unverified_since/liveness_note markers are cleared,
-//     row_version advances and launch_started_at is left unchanged.
-//
-// Multi-row retention (SR-5.1/SR-5.2): when newState is `working`, the
-// transition is guarded by OpenPermissionRequestsForSpawn. If one or more
-// open permission_requests rows still exist for this Spawn, the UPDATE is
-// skipped and nil is returned — the Spawn stays at check_permission until
-// every row has been decided. This makes the working-transition safe under
-// parallel concurrent hooks: each runRelay timeout path calls
-// ApplyHookTransition(working) for its own row; the last row's call is the
-// one that actually advances the state.
-//
-// The function is a no-op (returns nil) when no row matches the id —
-// state-tracking hooks fail-open per SRD §3.2, so a hook racing against
-// `delete` should not produce a visible error.
-//
-// triggeringEventName is a free-form string identifying what caused this
-// transition. For hook-driven transitions it is the canonical Claude Code
-// lifecycle event name (e.g. "SessionStart", "PermissionRequest"). For
-// transitions originating outside the hook handler, callers use documented
-// synthetic names (e.g. "PermissionRequestTimeout", "find_missing_orphan_closeout",
-// "kill_verb") so the trail reader can identify the source without needing
-// to inspect the call stack.
-//
-// Every branch that updates the row advances row_version by one; the ended
-// transition and every transition to a state other than pending also set
-// launch_started_at to NULL, a soft refresh leaves it unchanged, and the
-// working hold path writes nothing (SR-5.2).
-func (s *Store) ApplyHookTransition(instanceID, newState string, softRefresh bool, triggeringEventName string) error {
-	_, err := s.ApplyHookTransitionResult(instanceID, newState, softRefresh, triggeringEventName)
-	return err
-}
-
 // selectPriorState reads the current state column for instanceID without
 // a transaction. Returns ("", false, nil) when no row exists (caller should
 // fail-open and not emit). Returns ("", false, err) on a driver error.
@@ -426,285 +384,6 @@ func (s *Store) selectPriorState(instanceID string) (string, bool, error) {
 		return "", false, fmt.Errorf("store: select prior state: %w", err)
 	}
 	return state, true, nil
-}
-
-// ApplyHookTransitionResult is the outcome-aware variant of
-// ApplyHookTransition. It returns a UpsertOutcome alongside the error so
-// callers that emit trail events can record the exact result without
-// inferring it from error presence alone (SR-A-2.1).
-//
-//   - UpsertUpdated   — the UPDATE affected ≥1 row.
-//   - UpsertNoChange  — the UPDATE affected 0 rows (no matching id), or
-//     the multi-row retention guard skipped the UPDATE.
-//   - UpsertError     — any SQL error.
-//
-// An ad.spawn.state_transition event is emitted after every successful SQL
-// write (including no-op same-state transitions per SR-A-2.2). No event is
-// emitted when no row matches instanceID (fail-open against deleted spawns).
-// A trail-emit failure does not fail the store call (SR-A-3.2).
-//
-// row_version and launch_started_at follow ApplyHookTransition (SR-5.2).
-func (s *Store) ApplyHookTransitionResult(instanceID, newState string, softRefresh bool, triggeringEventName string) (UpsertOutcome, error) {
-	if softRefresh {
-		// Capture priorState before the UPDATE. If no row exists, fail-open with
-		// no emit (SR-A-2.2). Note: SELECT and UPDATE are separate non-transactional
-		// statements. If the row is deleted in the narrow window between them, the
-		// UPDATE will match 0 rows (n==0) and we skip the emit — no-row invariant
-		// is enforced by the n==0 guard below, not by a transaction lock.
-		priorState, found, serr := s.selectPriorState(instanceID)
-		if serr != nil {
-			return UpsertError, serr
-		}
-		if !found {
-			return UpsertNoChange, nil
-		}
-		res, err := s.db.Exec(`UPDATE spawns SET last_seen_at = CURRENT_TIMESTAMP,
-		                  liveness_unverified_since = NULL, liveness_note = NULL,
-		                  `+rowVersionAdvance+`
-		                WHERE claude_instance_id = ?`, instanceID)
-		if err != nil {
-			return UpsertError, fmt.Errorf("store: soft refresh: %w", err)
-		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return UpsertError, fmt.Errorf("store: soft refresh rows affected: %w", err)
-		}
-		if n == 0 {
-			return UpsertNoChange, nil
-		}
-		// Emit after successful write. soft_refresh=true; state column unchanged.
-		_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
-			"claude_instance_id":    instanceID,
-			"prior_state":           priorState,
-			"new_state":             priorState,
-			"triggering_event_name": triggeringEventName,
-			"soft_refresh":          true,
-			"source":                "ad_spawn_store",
-		})
-		return UpsertUpdated, nil
-	}
-	if newState == StateEnded {
-		priorState, found, serr := s.selectPriorState(instanceID)
-		if serr != nil {
-			return UpsertError, serr
-		}
-		if !found {
-			return UpsertNoChange, nil
-		}
-		res, err := s.db.Exec(`UPDATE spawns
-                      SET state = ?, last_seen_at = CURRENT_TIMESTAMP,
-                          ended_at = CURRENT_TIMESTAMP,
-                          liveness_unverified_since = NULL, liveness_note = NULL,
-                          `+rowVersionAdvance+`, `+launchStartClear+`
-                    WHERE claude_instance_id = ?`, newState, instanceID)
-		if err != nil {
-			return UpsertError, fmt.Errorf("store: ended transition: %w", err)
-		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return UpsertError, fmt.Errorf("store: ended transition rows affected: %w", err)
-		}
-		if n == 0 {
-			return UpsertNoChange, nil
-		}
-		_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
-			"claude_instance_id":    instanceID,
-			"prior_state":           priorState,
-			"new_state":             newState,
-			"triggering_event_name": triggeringEventName,
-			"soft_refresh":          false,
-			"source":                "ad_spawn_store",
-		})
-		return UpsertUpdated, nil
-	}
-	// Multi-row retention guard: only advance to `working` when all open
-	// permission_requests rows for this Spawn have been decided. If any
-	// remain open, skip the transition (stay at check_permission) without
-	// error — this is a deliberate hold, not a failure.
-	//
-	// When skipping, emit a no-op ad.spawn.state_transition with prior==new
-	// (per SR-A-2.2) so the trail records the hold as a diagnostic surface.
-	// If no row exists, fail-open with no emit.
-	if newState == StateWorking {
-		openRows, err := s.OpenPermissionRequestsForSpawn(instanceID)
-		if err != nil {
-			return UpsertError, fmt.Errorf("store: working transition open-row check: %w", err)
-		}
-		if len(openRows) > 0 {
-			priorState, found, serr := s.selectPriorState(instanceID)
-			if serr != nil {
-				return UpsertError, serr
-			}
-			if !found {
-				// No spawn row — fail-open per SRD §3.2, no emit.
-				return UpsertNoChange, nil
-			}
-			// Emit the no-op: Spawn stays at check_permission.
-			_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
-				"claude_instance_id":    instanceID,
-				"prior_state":           priorState,
-				"new_state":             priorState,
-				"triggering_event_name": triggeringEventName,
-				"soft_refresh":          false,
-				"source":                "ad_spawn_store",
-			})
-			return UpsertNoChange, nil
-		}
-	}
-	// Non-terminal transitions clear ended_at. A resumed row reports in
-	// from pending like a fresh spawn's (SR-22.3): resume's move to pending
-	// already cleared ended_at, so on either row's pending→waiting
-	// report-in the column is already NULL and the `ended_at = NULL` is a
-	// no-op. The clear stays for a hook that reaches a finished row (such
-	// as one from another process carrying the id), so a row a hook moves
-	// to a live state never keeps its old ended_at.
-	priorState, found, serr := s.selectPriorState(instanceID)
-	if serr != nil {
-		return UpsertError, serr
-	}
-	if !found {
-		return UpsertNoChange, nil
-	}
-	// A target other than pending clears the launch start in the same
-	// statement; a pending target (no hook passes one today) leaves it (SR-5.2).
-	launchStart := ""
-	if newState != StatePending {
-		launchStart = ", " + launchStartClear
-	}
-	res, err := s.db.Exec(`UPDATE spawns
-                  SET state = ?, last_seen_at = CURRENT_TIMESTAMP,
-                      ended_at = NULL,
-                      liveness_unverified_since = NULL, liveness_note = NULL,
-                      `+rowVersionAdvance+launchStart+`
-                WHERE claude_instance_id = ?`, newState, instanceID)
-	if err != nil {
-		return UpsertError, fmt.Errorf("store: state transition: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return UpsertError, fmt.Errorf("store: state transition rows affected: %w", err)
-	}
-	if n == 0 {
-		return UpsertNoChange, nil
-	}
-	_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
-		"claude_instance_id":    instanceID,
-		"prior_state":           priorState,
-		"new_state":             newState,
-		"triggering_event_name": triggeringEventName,
-		"soft_refresh":          false,
-		"source":                "ad_spawn_store",
-	})
-	return UpsertUpdated, nil
-}
-
-// RecordSessionStartIdentity performs the single atomic SessionStart write
-// covering the identity columns the SessionStart hook records:
-// claude_session_id, jsonl_path, pid, proc_starttime. Invoked once per
-// SessionStart (SR-6.5/SR-9.1). A missing row is a fail-open no-op per SRD §3.2.
-//
-// Before the row is overwritten, the CURRENT (claude_session_id, jsonl_path)
-// pair is archived into session_history whenever the incoming sessionID differs
-// from the row's current claude_session_id (b.v2c AC6): a session rotation on
-// CSCB fleet restart therefore records a queryable link from the row back to the
-// previous session's transcript instead of orphaning it. Archiving happens only
-// when the row already holds a non-empty session id that is being replaced by a
-// different non-empty one — a fresh spawn's first SessionStart (empty prior id)
-// and a soft re-fire with the same id both archive nothing.
-// The archived entry carries the row's life_number, read together with the
-// outgoing session id and path (SR-5.9); re-archiving a session id recorded in
-// an earlier life moves its entry to the row's life with the row's path.
-//
-// Column semantics (PM-mandated):
-//   - pid / proc_starttime are ALWAYS written — fresh captured values, or
-//     SQL NULL when identity capture failed. Never leave stale identity: a
-//     stale pid would let Epic hp's per-row liveness check mark a live
-//     resumed spawn provably-dead; NULL routes it to the SR-7.5 fallback.
-//     Absent lands as literal NULL (via any-typed args, the SetParentID
-//     house style), never 0 or "".
-//   - claude_session_id is written only when the classified value is non-empty;
-//     an empty value preserves the existing column via COALESCE(?, col). This
-//     never clobbers a known session id with garbage — it preserves the
-//     extractSessionID contract.
-//   - jsonl_path (b.v2c AC1): the hook stats the transcript path before this
-//     call and passes jsonlPresent. A row must never assert a jsonl_path that
-//     does not exist on disk, so the column is only SET when jsonlPath is
-//     non-empty AND jsonlPresent is true. When the transcript has not yet been
-//     written (jsonlPresent=false — a freshly-restarted, un-messaged session),
-//     jsonl_path is set to NULL so the row does not point at a dead path;
-//     find-missing heals it lazily once the file appears (AC3). When jsonlPath
-//     is empty (no path in the payload at all) the existing column is preserved
-//     via COALESCE.
-//
-// pid is passed as any: a positive value writes the int, a non-positive
-// value writes NULL (absent identity), matching the COALESCE(pid, 0) scan
-// convention where 0 means NULL. procStarttime empty → NULL likewise.
-//
-// SessionStart is proof of life (SR-8.2), so this write also clears both
-// liveness columns (liveness_unverified_since / liveness_note → NULL) in the
-// same atomic statement.
-//
-// Both UPDATE variants advance row_version by one and leave
-// launch_started_at unchanged; the rotation archive writes session_history
-// only and advances nothing by itself (SR-5.2).
-func (s *Store) RecordSessionStartIdentity(instanceID, sessionID, jsonlPath string, jsonlPresent bool, pid int, procStarttime string) error {
-	// Archive the prior session pair before overwriting, if the session id is
-	// rotating. Best-effort: a failure to archive must not block the identity
-	// write (fail-open per SRD §3.2), but it is surfaced via the trail.
-	if sessionID != "" {
-		s.archivePriorSessionOnRotate(instanceID, sessionID)
-	}
-
-	// jsonl_path write semantics (b.v2c AC1). The column is bound via a single
-	// COALESCE(?, jsonl_path) placeholder in every case; only the bound value
-	// changes:
-	//   - present, non-empty path            → bind the path      (SET it)
-	//   - path reported but not yet on disk  → bind the empty ""  (see below)
-	//   - no path reported at all            → bind NULL          (preserve)
-	// For the "reported but absent" case we must force the column to NULL rather
-	// than preserve it, so that branch uses the explicit "= NULL" query. All
-	// other cases share the COALESCE query with a nil-or-value bind.
-	sessionArg := nullableStringArg(sessionID)
-	pidArg := positiveIntArg(pid)
-	starttimeArg := nullableStringArg(procStarttime)
-
-	if jsonlPath != "" && !jsonlPresent {
-		// Reported but not on disk: never assert a dead pointer. Force NULL.
-		const qNull = `UPDATE spawns
-		                  SET claude_session_id = COALESCE(?, claude_session_id),
-		                      jsonl_path        = NULL,
-		                      pid               = ?,
-		                      proc_starttime    = ?,
-		                      liveness_unverified_since = NULL,
-		                      liveness_note     = NULL,
-		                      ` + rowVersionAdvance + `
-		                WHERE claude_instance_id = ?`
-		if _, err := s.db.Exec(qNull, sessionArg, pidArg, starttimeArg, instanceID); err != nil {
-			return fmt.Errorf("store: record session start identity: %w", err)
-		}
-		return nil
-	}
-
-	// SET the verified path when present; otherwise preserve via COALESCE.
-	var jsonlArg any
-	if jsonlPath != "" && jsonlPresent {
-		jsonlArg = jsonlPath
-	} else {
-		jsonlArg = nil
-	}
-	const q = `UPDATE spawns
-	              SET claude_session_id = COALESCE(?, claude_session_id),
-	                  jsonl_path        = COALESCE(?, jsonl_path),
-	                  pid               = ?,
-	                  proc_starttime    = ?,
-	                  liveness_unverified_since = NULL,
-	                  liveness_note     = NULL,
-	                  ` + rowVersionAdvance + `
-	            WHERE claude_instance_id = ?`
-	if _, err := s.db.Exec(q, sessionArg, jsonlArg, pidArg, starttimeArg, instanceID); err != nil {
-		return fmt.Errorf("store: record session start identity: %w", err)
-	}
-	return nil
 }
 
 // nullableStringArg returns the string as a bound arg, or nil (SQL NULL) when
@@ -760,7 +439,9 @@ const recordLaunchIdentitySQL = `UPDATE spawns
 //
 // It returns CondApplied when the write applied; CondChanged, having written
 // nothing, when the row exists but is no longer pending with that version and
-// token (a hook wrote first, or another launch began); CondAbsent when no row
+// token (another write came first, such as find-missing's mark, or another
+// launch began; no hook can, because a row that records no pane matches no
+// hook, SR-22.9); CondAbsent when no row
 // has the id. The two are told apart by an existence read after the guarded
 // statement matched no row; nothing is written a second time. A driver error
 // is returned wrapped, with a zero CondResult.
@@ -800,65 +481,6 @@ func (s *Store) condNotApplied(instanceID, errPrefix string) (CondResult, error)
 		return 0, fmt.Errorf("%s: existence read: %w", errPrefix, err)
 	}
 	return CondChanged, nil
-}
-
-// archivePriorSessionOnRotate archives the row's CURRENT (claude_session_id,
-// jsonl_path) into session_history when newSessionID differs from the recorded
-// current session id — i.e. the session is rotating (b.v2c AC6). It is a no-op
-// when the row is absent, when the current session id is empty (fresh spawn),
-// or when the current id already equals newSessionID (same-session re-fire).
-// Best-effort and fail-open: any error is emitted to the trail and swallowed so
-// the identity write proceeds.
-//
-// The entry's life (SR-5.9) is the row's life_number, read in the same
-// statement as the outgoing session id and its transcript path, so the entry
-// always belongs to the life in which that session ran; there is no second
-// read of the life. The write itself is upsertSessionHistoryEntry: within one
-// life a re-archive keeps today's upsert (a now-known path fills in a NULL one,
-// an already-recorded path survives a NULL one, recorded_at is refreshed, so the
-// newest-first ordering resume depends on (b.5jm/1) tracks the latest
-// re-archive rather than pinning a stale NULL-path entry (b.5jm/4)); a
-// re-archive of a session id recorded in another life moves the entry to this
-// life with this life's path, NULL included.
-func (s *Store) archivePriorSessionOnRotate(instanceID, newSessionID string) {
-	var (
-		curSession string
-		curJsonl   sql.NullString
-		curLife    int64
-	)
-	err := s.db.QueryRow(
-		`SELECT COALESCE(claude_session_id, ''), jsonl_path, COALESCE(life_number, 0)
-		   FROM spawns WHERE claude_instance_id = ?`, instanceID,
-	).Scan(&curSession, &curJsonl, &curLife)
-	if errors.Is(err, sql.ErrNoRows) {
-		return
-	}
-	if err != nil {
-		_ = trail.Emit(context.Background(), "ad.session.archive_failed", map[string]any{
-			"claude_instance_id": instanceID,
-			"error":              err.Error(),
-			"source":             "ad_spawn_store",
-		})
-		return
-	}
-	if curSession == "" || curSession == newSessionID {
-		return
-	}
-	if err := upsertSessionHistoryEntry(s.db, instanceID, curSession, curJsonl.String, curLife); err != nil {
-		_ = trail.Emit(context.Background(), "ad.session.archive_failed", map[string]any{
-			"claude_instance_id": instanceID,
-			"claude_session_id":  curSession,
-			"error":              err.Error(),
-			"source":             "ad_spawn_store",
-		})
-		return
-	}
-	_ = trail.Emit(context.Background(), "ad.session.archived", map[string]any{
-		"claude_instance_id": instanceID,
-		"prior_session_id":   curSession,
-		"new_session_id":     newSessionID,
-		"source":             "ad_spawn_store",
-	})
 }
 
 // SetParentID writes the parent_id column. No verb calls it: resume's parent

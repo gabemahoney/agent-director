@@ -103,6 +103,13 @@ to the orchestrator instead of Claude Code's native consent dialog.
 Useful when an unattended supervisor needs to decide allow/deny based
 on policy rather than a human at the keyboard.
 
+Only the Spawn's own Claude Code is relayed. A PermissionRequest whose
+hook parent is not the row's recorded pane process (a nested `claude`, a
+teammate pane), or one on a row that records no pane yet, opens no
+request and returns no decision, so that process's Claude Code asks as
+it would with no relay; the hook writes one `ad.hook.ignored` trail
+record (see [hooks.md](hooks.md#only-the-rows-own-agent-moves-the-row)).
+
 ### Flow
 
 1. Claude Code fires the PermissionRequest hook with the tool name +

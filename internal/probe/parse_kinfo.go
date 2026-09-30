@@ -1,6 +1,7 @@
 package probe
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -70,6 +71,27 @@ const (
 // kinfoProcPIDOffset. Same XNU-version sensitivity and bump policy as
 // kinfoProcSize.
 const kinfoProcStatOffset = 36
+
+// Command-name offset (SR-14's `parent_command`, read by
+// darwinCommandNameReader). extern_proc.p_comm is char[MAXCOMLEN+1] with
+// MAXCOMLEN = 16 (bsd/sys/param.h), NUL-terminated. Derived from the SAME XNU
+// LP64 header basis as the offsets above (bsd/sys/proc.h, struct
+// extern_proc): after p_pid (40) come p_oppid (44), p_dupfd (48), user_stack
+// (56, 8-aligned), exit_thread (64), p_debugger (72), sigwait (76), p_estcpu
+// (80), p_cpticks (84), p_pctcpu (88), p_wchan (96, 8-aligned), p_wmesg
+// (104), p_swtime (112), p_slptime (116), p_realtimer (120, an itimerval of
+// two 16-byte timevals), p_rtime (152), p_uticks (168), p_sticks (176),
+// p_iticks (184), p_traceflag (192), p_tracep (200, 8-aligned), p_siglist
+// (208), p_textvp (216, 8-aligned), p_holdcnt (224), p_sigmask (228),
+// p_sigignore (232), p_sigcatch (236), p_priority (240), p_usrpri (241),
+// p_nice (242), so p_comm sits at 243..259; p_pgrp follows at 264 and the
+// struct ends at 296 = sizeof(extern_proc), matching kinfoProcSize's
+// arithmetic. golang.org/x/sys/unix's ExternProc.P_comm ([17]byte) agrees.
+// Same XNU-version sensitivity and bump policy as kinfoProcSize.
+const (
+	kinfoProcCommOffset = 243
+	kinfoProcCommLen    = 17
+)
 
 // extern_proc.p_stat values (bsd/sys/proc.h). SIDL..SZOMB is the whole known
 // range; a value outside it is the drift signal for kinfoProcStatOffset.
@@ -142,11 +164,11 @@ func parsePIDsFromSysctlBuf(buf []byte) ([]int, error) {
 }
 
 // ErrKinfoLayoutDrift is returned by the entry-granular identity extractors
-// (parseKinfoPPID, parseKinfoStartTime, parseKinfoStat) when a single
-// kinfo_proc entry's bytes fail their field plausibility guards — the signal
-// that the pinned XNU offsets (kinfoEprocPPIDOffset / kinfoProcStart*Offset /
-// kinfoProcStatOffset) have drifted
-// under us, e.g. after a macOS major bump resized struct kinfo_proc.
+// (parseKinfoPPID, parseKinfoStartTime, parseKinfoStat, parseKinfoComm) when
+// a single kinfo_proc entry's bytes fail their field plausibility guards — the
+// signal that the pinned XNU offsets (kinfoEprocPPIDOffset /
+// kinfoProcStart*Offset / kinfoProcStatOffset / kinfoProcCommOffset) have
+// drifted under us, e.g. after a macOS major bump resized struct kinfo_proc.
 //
 // It is DELIBERATELY a distinct sentinel that does NOT wrap
 // ErrProbeUnsupported: the two carry opposite fail-semantics.
@@ -249,6 +271,40 @@ func parseKinfoStat(buf []byte, off int) (int, error) {
 			ErrKinfoLayoutDrift, stat, off, kinfoProcStatOffset)
 	}
 	return stat, nil
+}
+
+// parseKinfoComm extracts extern_proc.p_comm (the process's command name)
+// from the single kinfo_proc entry beginning at byte offset off within buf.
+// Build-tag-free for off-darwin unit testing; entry-granular like
+// parseKinfoPPID and parseKinfoStat.
+//
+// Returns ErrKinfoLayoutDrift when the entry does not fit, when the
+// kinfoProcCommLen-byte field holds no NUL terminator, when the name before
+// the NUL is empty, or when it contains an ASCII control byte (0x01-0x1f or
+// 0x7f): a drifted kinfoProcCommOffset reinterpreting unrelated bytes lands
+// here. Bytes >= 0x80 are kept (a UTF-8 name, possibly truncated mid-rune by
+// the kernel).
+func parseKinfoComm(buf []byte, off int) (string, error) {
+	if err := entryOffset(buf, off); err != nil {
+		return "", err
+	}
+	field := buf[off+kinfoProcCommOffset : off+kinfoProcCommOffset+kinfoProcCommLen]
+	n := bytes.IndexByte(field, 0)
+	if n < 0 {
+		return "", fmt.Errorf("%w: p_comm has no NUL terminator at entry offset %d (kinfoProcCommOffset=%d may be stale for this XNU version)",
+			ErrKinfoLayoutDrift, off, kinfoProcCommOffset)
+	}
+	if n == 0 {
+		return "", fmt.Errorf("%w: p_comm is empty at entry offset %d (kinfoProcCommOffset=%d may be stale for this XNU version)",
+			ErrKinfoLayoutDrift, off, kinfoProcCommOffset)
+	}
+	for _, c := range field[:n] {
+		if c < 0x20 || c == 0x7f {
+			return "", fmt.Errorf("%w: p_comm holds control byte 0x%02x at entry offset %d (kinfoProcCommOffset=%d may be stale for this XNU version)",
+				ErrKinfoLayoutDrift, c, off, kinfoProcCommOffset)
+		}
+	}
+	return string(field[:n]), nil
 }
 
 // formatDarwinProcStartTime renders a kinfo_proc p_starttime timeval into

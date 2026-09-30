@@ -7,8 +7,9 @@
 // (notably NOTHING from internal/store), so it can be pulled into any test
 // without dragging in the store graph. It is Linux-only in effect (the
 // /proc/<pid>/stat layout is a Linux kernel interface); callers are the Linux
-// resolver test and the find-missing acceptance test, both of which already
-// run only where /proc exists.
+// start-time test (internal/probe/starttime_linux_test.go) and the
+// find-missing acceptance test (cmd/agent-director/find_missing_cli_test.go),
+// both of which already run only where /proc exists.
 package procstat
 
 import (

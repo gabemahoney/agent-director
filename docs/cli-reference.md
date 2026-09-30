@@ -423,7 +423,7 @@ _None._
 
 ## hook
 
-Internal: invoked by Claude Code on lifecycle events via the per-Spawn --settings hooks. Reads payload JSON from stdin, writes a row UPSERT, exits 0 (state-tracking fail-open).
+Internal: invoked by Claude Code on lifecycle events via the per-Spawn --settings hooks. Reads payload JSON from stdin and writes the row only when the hook's parent process is the row's recorded pane process, the agent itself; a hook from any other process changes nothing and is logged as ad.hook.ignored. Exits 0 (state-tracking fail-open).
 
 ### Parameters
 

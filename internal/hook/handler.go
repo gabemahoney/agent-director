@@ -2,6 +2,7 @@ package hook
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -15,33 +16,25 @@ import (
 // HookStore is the narrow store surface the handler needs. Production
 // callers pass *store.Store; tests can pass a stub to drive failure
 // branches (DB-unreachable, etc.) without scripting SQLite errors.
+//
+// Every write takes the hook's store.HookGate and reports store.HookApplied
+// (SR-22.9): the gate is a condition of each write's own statement. GetSpawn
+// gives SessionStart the snapshot it examines (SR-5.3) and ad.hook.ignored
+// its row fields (SR-14).
 type HookStore interface {
-	ApplyHookTransition(instanceID, newState string, softRefresh bool, triggeringEventName string) error
-	RecordSessionStartIdentity(instanceID, sessionID, jsonlPath string, jsonlPresent bool, pid int, procStarttime string) error
-	UpsertOpenPermissionRequest(instanceID, requestToken, toolName, toolInputJSON string, cap int, writerProcess string) error
+	GetSpawn(instanceID string) (store.Spawn, error)
+	ApplyHookTransition(instanceID string, gate store.HookGate, newState string, softRefresh bool, triggeringEventName, jsonlPath string, jsonlPresent bool) (store.HookApplied, error)
+	RecordSessionStartIdentity(instanceID string, gate store.HookGate, jsonlPath string, jsonlPresent bool) (applied store.HookApplied, snapshotChanged bool, err error)
+	UpsertOpenPermissionRequest(instanceID string, gate store.HookGate, requestToken, toolName, toolInputJSON string, cap int, writerProcess string) (store.HookApplied, error)
 	GetPermissionRequest(instanceID, requestToken string) (store.PermissionRow, error)
 	DecidePermissionRequest(instanceID, requestToken, decision, reason string, writerProcess string) (bool, error)
-}
-
-// IdentityResolver resolves the process identity (pid + canonical per-OS
-// proc_starttime) of the tracked Claude process from the running hook's
-// perspective, keyed by the resolved instance id. It mirrors
-// probe.Resolver.Resolve exactly; declaring it locally keeps hook free of a
-// probe import (the dependency edge would otherwise invert the natural
-// direction) and makes the test double trivial. cmd/agent-director wires the
-// per-OS production implementation from probe.NewResolver().
-//
-// Fail-open: any non-nil error maps to absent identity (NULL pid +
-// proc_starttime) — the SessionStart path logs one line and proceeds.
-type IdentityResolver interface {
-	Resolve(id string) (pid int, procStartTime string, err error)
 }
 
 // outcomeTransitioner is an optional extension of HookStore. *store.Store
 // satisfies it; test doubles that don't implement it receive
 // store.UpsertNoChange as a conservative fallback for the trail field.
 type outcomeTransitioner interface {
-	ApplyHookTransitionResult(instanceID, newState string, softRefresh bool, triggeringEventName string) (store.UpsertOutcome, error)
+	ApplyHookTransitionResult(instanceID string, gate store.HookGate, newState string, softRefresh bool, triggeringEventName, jsonlPath string, jsonlPresent bool) (store.UpsertOutcome, store.HookApplied, error)
 }
 
 // HandleConfig bundles the inputs Handle takes beyond the store and
@@ -51,33 +44,64 @@ type HandleConfig struct {
 	Env   func(string) string
 	Cfg   config.Relay
 	Clock PollClock
-	// Resolver captures the tracked Claude process identity on SessionStart.
-	// Nil-safe: a nil Resolver (or any Resolve error) fails open — the
-	// SessionStart write records absent identity (NULL pid + proc_starttime)
-	// while still persisting session id + jsonl_path. cmd/agent-director wires
-	// probe.NewResolver(); tests inject a double.
-	Resolver IdentityResolver
+	// ParentPID returns the hook's parent pid; with exec-form hooks it is
+	// the agent process (SR-22.9). cmd/agent-director wires os.Getppid; tests
+	// inject a fixed pid. A nil ParentPID reads as pid 0, which matches no
+	// row.
+	ParentPID func() int
+	// ParentProc reads the parent's start time (the gate) and command name
+	// (ad.hook.ignored only). cmd/agent-director wires the per-OS probe
+	// readers; tests inject a double. A nil ParentProc leaves the start time
+	// unreadable, so the hook matches no row.
+	ParentProc ParentProc
 }
 
-// Handle is the entry point cmd/ dispatches into. It reads the payload
-// from stdin, classifies the event, applies the row UPSERT, and — when
-// the event is PermissionRequest AND AGENT_DIRECTOR_RELAY_MODE=on —
-// runs the relay flow (INSERT per-request-token + polling loop + envelope
-// on stdout per SRD §6.2/§6.3).
+// Handle is the entry point cmd/ dispatches into. It captures the hook's
+// parent process, reads the payload from stdin, classifies the event, applies
+// the gated row write, and — when the event is PermissionRequest AND
+// AGENT_DIRECTOR_RELAY_MODE=on and the write applied — runs the relay flow
+// (INSERT per-request-token + polling loop + envelope on stdout per SRD
+// §6.2/§6.3).
+//
+// The gate (SR-22.9): the hook's parent pid (HandleConfig.ParentPID) and that
+// pid's start time (HandleConfig.ParentProc) are captured once, at entry,
+// before any store call, and every store write for this hook carries them as
+// its store.HookGate. A hook applies only when they are the row's recorded
+// pane process. One that does not apply changes nothing: no state, no
+// last_seen_at, no liveness-note clear, no permission request, no relay and
+// no decision on stdout; it exits 0 and writes exactly one ad.hook.ignored
+// (SR-14; emitIgnored) with the store's reason. A hook for an id with no row
+// is today's silent no-op, with no ad.hook.ignored (decision A2). The hook
+// path makes no tmux call and walks no process ancestry.
+//
+// SessionStart (SR-22.9, SR-5.3): the row is read for the snapshot the write
+// is conditioned on, and one gated RecordSessionStartIdentity records the
+// payload's session id and transcript path and the parent as pid and
+// proc_starttime, and sets waiting. When only the snapshot changed, the row is
+// re-read and the write retried once; a second change logs one line and
+// writes no ad.hook.ignored (decision A3). Every other event is one gated
+// ApplyHookTransitionResult with the payload's session id, transcript path and
+// its presence on disk; the session id is recorded, never a gate.
 //
 // State-tracking is fail-open per SRD §3.2: any internal failure logs
 // and returns nil. The relay flow has stronger fail-closed semantics
 // per SRD §6.4 — every failure path emits a deny envelope before
-// returning, so Claude Code never hangs.
+// returning, so Claude Code never hangs. A relayed PermissionRequest that
+// the gate did not apply returns no decision (empty stdout), so the
+// process's own Claude Code asks as it would with no relay.
 //
 // Exactly one ad.hook.fired trail event is emitted per invocation
-// regardless of exit path (SR-A-2.1). Fields are populated incrementally
-// as the function progresses; fields not reached before an early exit are
+// regardless of exit path (SR-A-2.1); an ignored hook's upsert_outcome is
+// no_change (decision A11). Fields are populated incrementally as the
+// function progresses; fields not reached before an early exit are
 // emitted as null.
 //
 // Stdout is reserved for the decision envelope; state-tracking events
 // (everything except an on-relay PermissionRequest) leave it empty.
 func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore, hc HandleConfig, logger *log.Logger) error {
+	// The gate's identity, captured before any store call (SR-22.9).
+	parent := captureParent(hc)
+
 	env := hc.Env
 	if env == nil {
 		env = func(string) string { return "" }
@@ -164,71 +188,59 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		logf(logger, "hook: unknown event %q (instance=%s) — treating as soft refresh", res.EventName, instanceID)
 	}
 
-	// Apply the hook transition. Use the outcome-aware variant when
-	// available so the trail captures the exact result. Test doubles
-	// that don't implement outcomeTransitioner fall back to
-	// store.UpsertNoChange as a conservative sentinel.
-	var upsertOutcome store.UpsertOutcome
-	if ot, ok := st.(outcomeTransitioner); ok {
-		upsertOutcome, err = ot.ApplyHookTransitionResult(instanceID, res.NewState, res.SoftRefresh, res.EventName)
-	} else {
-		err = st.ApplyHookTransition(instanceID, res.NewState, res.SoftRefresh, res.EventName)
-		if err != nil {
-			upsertOutcome = store.UpsertError
-		} else {
-			upsertOutcome = store.UpsertNoChange
-		}
+	gate := store.HookGate{
+		Event:       res.EventName,
+		ParentPID:   parent.pid,
+		ParentStart: parent.start,
+		SessionID:   res.SessionID,
 	}
-	fields["upsert_outcome"] = string(upsertOutcome)
-	if err != nil {
-		failClosed(fmt.Sprintf("apply transition (instance=%s, event=%s): %v", instanceID, res.EventName, err))
-		return nil
-	}
+	jsonlPresent := transcriptPresent(res.TranscriptPath)
 
-	// SessionStart is the sole write site for the spawn-row identity /
-	// transcript columns (SR-6.5/SR-9.1). The widened store call is gated on
-	// the SessionStart event, not on a non-empty session id: jsonl_path must
-	// persist whenever the payload carried a transcript path, independent of
-	// whether the basename SessionID extraction succeeded.
-	//
-	// Identity capture (SR-6.1/6.5): the injected resolver walks the parent
-	// chain to the tracked Claude process and yields its pid + canonical
-	// per-OS proc_starttime. It is invoked ONLY on SessionStart, with the
-	// resolved instance id. Fail-open per SRD §3.2: a nil resolver or ANY
-	// Resolve error logs one line and passes absent identity (pid=0 → NULL,
-	// proc_starttime="" → NULL) — pid/proc_starttime are ALWAYS written on
-	// SessionStart (fresh values or NULL, never stale). Empty session id /
-	// transcript path preserve the existing columns via the store's COALESCE
-	// semantics. Non-SessionStart events never reach the resolver.
+	var applied store.HookApplied
 	if res.EventName == "SessionStart" {
-		pid, procStarttime := 0, ""
-		if hc.Resolver != nil {
-			if p, s, err := hc.Resolver.Resolve(instanceID); err != nil {
-				logf(logger, "hook: resolve identity (instance=%s): %v — recording NULL identity", instanceID, err)
-			} else {
-				pid, procStarttime = p, s
-			}
-		} else {
-			logf(logger, "hook: no identity resolver (instance=%s) — recording NULL identity", instanceID)
-		}
-		// b.v2c AC1: a fresh Claude session writes no .jsonl transcript until
-		// its first user turn, so the path the SessionStart payload reports may
-		// not exist yet. Stat it here; the store SETs jsonl_path only when the
-		// file is actually present, and NULLs it otherwise so the row never
-		// asserts a dead pointer. find-missing heals the row once the file
-		// appears (AC3). A stat error other than not-exist (e.g. a permission
-		// wall) is treated as "not present" — the same conservative posture the
-		// resume fallback takes.
-		jsonlPresent := false
-		if res.TranscriptPath != "" {
-			if _, statErr := os.Stat(res.TranscriptPath); statErr == nil {
-				jsonlPresent = true
-			}
-		}
-		if err := st.RecordSessionStartIdentity(instanceID, res.SessionID, res.TranscriptPath, jsonlPresent, pid, procStarttime); err != nil {
+		var outcome store.UpsertOutcome
+		applied, outcome, err = recordSessionStart(st, instanceID, gate, res.TranscriptPath, jsonlPresent, logger)
+		fields["upsert_outcome"] = string(outcome)
+		if err != nil {
 			failClosed(fmt.Sprintf("record session start identity (instance=%s): %v", instanceID, err))
 			return nil
 		}
+	} else {
+		// Use the outcome-aware variant when available so the trail
+		// captures the exact result. Test doubles that don't implement
+		// outcomeTransitioner fall back to store.UpsertNoChange as a
+		// conservative sentinel.
+		var upsertOutcome store.UpsertOutcome
+		if ot, ok := st.(outcomeTransitioner); ok {
+			upsertOutcome, applied, err = ot.ApplyHookTransitionResult(instanceID, gate, res.NewState, res.SoftRefresh, res.EventName, res.TranscriptPath, jsonlPresent)
+		} else {
+			applied, err = st.ApplyHookTransition(instanceID, gate, res.NewState, res.SoftRefresh, res.EventName, res.TranscriptPath, jsonlPresent)
+			if err != nil {
+				upsertOutcome = store.UpsertError
+			} else {
+				upsertOutcome = store.UpsertNoChange
+			}
+		}
+		fields["upsert_outcome"] = string(upsertOutcome)
+		if err != nil {
+			failClosed(fmt.Sprintf("apply transition (instance=%s, event=%s): %v", instanceID, res.EventName, err))
+			return nil
+		}
+	}
+
+	if !applied.Applied {
+		// Not this row's agent (or no row): nothing written, no relay, no
+		// decision on stdout, exit 0 (SR-22.9).
+		if applied.Reason != "" {
+			emitIgnored(ctx, st, hc.ParentProc, ignoredHook{
+				instanceID: instanceID,
+				event:      res.EventName,
+				sessionID:  res.SessionID,
+				parent:     parent,
+				reason:     applied.Reason,
+			})
+		}
+		return nil
 	}
 
 	// Relay branch. Only PermissionRequest events with explicit
@@ -239,10 +251,69 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		if clock == nil {
 			clock = DefaultPollClock()
 		}
-		runRelay(ctx, stdout, st, hc.Cfg, clock, logger, instanceID, raw, fields)
+		onIgnored := func(reason string) {
+			emitIgnored(ctx, st, hc.ParentProc, ignoredHook{
+				instanceID: instanceID,
+				event:      res.EventName,
+				sessionID:  res.SessionID,
+				parent:     parent,
+				reason:     reason,
+			})
+		}
+		runRelay(ctx, stdout, st, hc.Cfg, clock, logger, instanceID, gate, raw, fields, onIgnored)
 	}
 
 	return nil
+}
+
+// recordSessionStart is Handle's SessionStart write (SR-22.9, SR-5.3): read
+// the row for the snapshot the write is conditioned on, then one gated
+// RecordSessionStartIdentity. When only the snapshot changed (the gate held),
+// it re-reads and retries once; a second change logs one line and returns not
+// applied with no reason, so no ad.hook.ignored is written (decision A3). No
+// row is a silent no-op (decision A2). The outcome is ad.hook.fired's
+// upsert_outcome: updated when applied, no_change when not, error on a store
+// error (returned).
+func recordSessionStart(st HookStore, instanceID string, gate store.HookGate, jsonlPath string, jsonlPresent bool, logger *log.Logger) (store.HookApplied, store.UpsertOutcome, error) {
+	gate.SessionStart = true
+	for attempt := 0; attempt < 2; attempt++ {
+		sp, err := st.GetSpawn(instanceID)
+		if errors.Is(err, store.ErrSpawnNotFound) {
+			return store.HookApplied{}, store.UpsertNoChange, nil
+		}
+		if err != nil {
+			return store.HookApplied{}, store.UpsertError, err
+		}
+		gate.Examined = sp.Snapshot
+		applied, changed, err := st.RecordSessionStartIdentity(instanceID, gate, jsonlPath, jsonlPresent)
+		if err != nil {
+			return store.HookApplied{}, store.UpsertError, err
+		}
+		if applied.Applied {
+			return applied, store.UpsertUpdated, nil
+		}
+		if !changed {
+			return applied, store.UpsertNoChange, nil
+		}
+	}
+	logf(logger, "hook: SessionStart not recorded (instance=%s): the row changed twice while it was written", instanceID)
+	return store.HookApplied{}, store.UpsertNoChange, nil
+}
+
+// transcriptPresent reports whether the hook-reported transcript path exists
+// on disk (b.v2c AC1): a fresh Claude session writes no .jsonl transcript
+// until its first user turn, so the path a payload reports may not exist yet.
+// The store SETs jsonl_path only when the file is present and NULLs it
+// otherwise, so the row never asserts a dead pointer; find-missing heals the
+// row once the file appears (AC3). A stat error other than not-exist (e.g. a
+// permission wall) is treated as "not present" — the same conservative
+// posture the resume fallback takes. An empty path is not present.
+func transcriptPresent(path string) bool {
+	if path == "" {
+		return false
+	}
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // logf logs to the supplied logger, falling back to a no-op when nil so

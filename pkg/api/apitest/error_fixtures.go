@@ -33,10 +33,13 @@ func openErrStore(t *testing.T) (*store.Store, string) {
 		t.Fatalf("openErrStore: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
+	storefix.RegisterStorePath(t, s, dbPath)
 	return s, dbPath
 }
 
-// insertErrRow inserts a single spawn row at the given state and relay_mode.
+// insertErrRow inserts a single spawn row at the given state and relay_mode,
+// through the gated hook transition played by the row's own agent
+// (seedAgentState); the row records no pane and no process identity.
 func insertErrRow(t *testing.T, s *store.Store, id, state, relayMode string) {
 	t.Helper()
 	if err := s.InsertPending(store.Spawn{
@@ -47,11 +50,7 @@ func insertErrRow(t *testing.T, s *store.Store, id, state, relayMode string) {
 	}); err != nil {
 		t.Fatalf("insertErrRow: InsertPending %s: %v", id, err)
 	}
-	if state != store.StatePending {
-		if err := s.ApplyHookTransition(id, state, false, "test_seed"); err != nil {
-			t.Fatalf("insertErrRow: ApplyHookTransition %s→%s: %v", id, state, err)
-		}
-	}
+	seedAgentState(t, s, id, state, "insertErrRow")
 }
 
 // SeedErrSpawnNotFound returns an empty store. Callers invoke verbs with a
@@ -83,20 +82,28 @@ func SeedErrSpawnNotInteractive(t *testing.T) (*store.Store, string) {
 // minus the entry for the row's current session id. The calling test must NOT
 // create any JSONL under HOME.
 //
-// The archived session is produced through the real rotation path: a first
-// SessionStart records session "sess-err-jm-0", then a second SessionStart with
-// a different id ("sess-err-jm-1") archives the prior pair into session_history.
+// The archived session is produced through the real rotation path, as the
+// row's own agent (SR-22.9; storefix.WithSeedPane): a gated soft refresh
+// records session "sess-err-jm-0", a SessionStart with a different id
+// ("sess-err-jm-1") archives the prior pair into session_history, and the
+// ended transition ends the row. The row then records no pane and no process
+// identity; row_version 3.
 func SeedErrJsonlMissing(t *testing.T) (*store.Store, string) {
 	t.Helper()
 	s, dbPath := openErrStore(t)
 	const id = "id-err-jm-1"
-	insertErrRow(t, s, id, store.StateEnded, "off")
-	if err := s.RecordSessionStartIdentity(id, "sess-err-jm-0", "", false, 0, ""); err != nil {
-		t.Fatalf("SeedErrJsonlMissing: RecordSessionStartIdentity (prior): %v", err)
-	}
-	// Rotate: a different session id archives the prior pair into session_history.
-	if err := s.RecordSessionStartIdentity(id, "sess-err-jm-1", "", false, 0, ""); err != nil {
-		t.Fatalf("SeedErrJsonlMissing: RecordSessionStartIdentity (rotate): %v", err)
+	insertErrRow(t, s, id, store.StatePending, "off")
+	if err := storefix.WithSeedPane(dbPath, id, func(gate store.HookGate) error {
+		if err := storefix.SeedAgentWrites(s, gate, id, "sess-err-jm-0", store.StatePending); err != nil {
+			return err
+		}
+		// Rotate: a different session id archives the prior pair into session_history.
+		if err := storefix.SeedSessionStart(s, gate, id, "sess-err-jm-1"); err != nil {
+			return err
+		}
+		return storefix.SeedAgentWrites(s, gate, id, "", store.StateEnded)
+	}); err != nil {
+		t.Fatalf("SeedErrJsonlMissing: %v", err)
 	}
 	return s, dbPath
 }
@@ -107,14 +114,18 @@ func SeedErrJsonlMissing(t *testing.T) (*store.Store, string) {
 // b.v2c case of a freshly restarted agent that has not been messaged. resume
 // triggers ErrJsonlNeverWritten (not ErrJsonlMissing): nothing was ever
 // written in the current life. The calling test must NOT create any JSONL
-// under HOME.
+// under HOME. The session id is recorded by a gated soft refresh and the row
+// ended by the gated ended transition, as the row's own agent
+// (storefix.WithSeedPane); row_version 2.
 func SeedErrJsonlNeverWritten(t *testing.T) (*store.Store, string) {
 	t.Helper()
 	s, dbPath := openErrStore(t)
 	const id = "id-err-jnw-1"
-	insertErrRow(t, s, id, store.StateEnded, "off")
-	if err := s.RecordSessionStartIdentity(id, "sess-err-jnw-1", "", false, 0, ""); err != nil {
-		t.Fatalf("SeedErrJsonlNeverWritten: RecordSessionStartIdentity: %v", err)
+	insertErrRow(t, s, id, store.StatePending, "off")
+	if err := storefix.WithSeedPane(dbPath, id, func(gate store.HookGate) error {
+		return storefix.SeedAgentWrites(s, gate, id, "sess-err-jnw-1", store.StateEnded)
+	}); err != nil {
+		t.Fatalf("SeedErrJsonlNeverWritten: %v", err)
 	}
 	return s, dbPath
 }
@@ -149,9 +160,7 @@ func SeedErrAlreadyDecided(t *testing.T) (*store.Store, string) {
 	s, dbPath := openErrStore(t)
 	const id = "id-err-ad-1"
 	insertErrRow(t, s, id, store.StateCheckPermission, "on")
-	if err := s.UpsertOpenPermissionRequest(id, storefix.TestRequestTokenA, "Bash", `{"cmd":"echo"}`, 0, store.WriterProcessHook); err != nil {
-		t.Fatalf("SeedErrAlreadyDecided: UpsertOpenPermissionRequest: %v", err)
-	}
+	seedOpenRequest(t, s, id, storefix.TestRequestTokenA, "Bash", `{"cmd":"echo"}`, "SeedErrAlreadyDecided")
 	// Pre-decide the row so the next decide() sees RowsAffected==0 and
 	// follows the ErrAlreadyDecided branch.
 	if _, err := s.DecidePermissionRequest(id, storefix.TestRequestTokenA, "allow", "pre-decided", store.WriterProcessDecide); err != nil {
@@ -174,9 +183,7 @@ func SeedErrRelayFallenBack(t *testing.T) (*store.Store, string) {
 	s, dbPath := openErrStore(t)
 	const id = "id-err-rfb-1"
 	insertErrRow(t, s, id, store.StateCheckPermission, "on")
-	if err := s.UpsertOpenPermissionRequest(id, storefix.TestRequestTokenA, "Bash", `{"cmd":"echo"}`, 0, store.WriterProcessHook); err != nil {
-		t.Fatalf("SeedErrRelayFallenBack: UpsertOpenPermissionRequest: %v", err)
-	}
+	seedOpenRequest(t, s, id, storefix.TestRequestTokenA, "Bash", `{"cmd":"echo"}`, "SeedErrRelayFallenBack")
 	// Backdate created_at well past the default window so the shared
 	// deliverability signal reads the open row as undeliverable.
 	storefix.SeedUndeliverablePermissionRequest(t, s, dbPath, id, storefix.TestRequestTokenA, 48*time.Hour)
@@ -272,7 +279,7 @@ func SeedErrCwdMissing(t *testing.T) (*store.Store, string) {
 func SeedErrSpawnNotPausable(t *testing.T) (*store.Store, string) {
 	t.Helper()
 	s, dbPath := openErrStore(t)
-	// StatePending: InsertPending with no subsequent ApplyHookTransition.
+	// StatePending: InsertPending with no subsequent hook transition.
 	insertErrRow(t, s, "id-err-np-1", store.StatePending, "off")
 	return s, dbPath
 }

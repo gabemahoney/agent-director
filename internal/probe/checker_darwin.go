@@ -7,8 +7,7 @@ import "golang.org/x/sys/unix"
 // newChecker returns the production darwin LivenessChecker. It wires the real
 // per-pid KERN_PROC_PID + KERN_PROCARGS2 sysctl fetches into the build-tag-free
 // darwinChecker, whose verdict logic + errno table are unit-testable off-darwin
-// (the resolver_darwin_core precedent: syscalls here, byte parsing + logic in
-// the tag-free core).
+// (syscalls here, byte parsing + logic in the tag-free core).
 func newChecker() LivenessChecker {
 	return darwinChecker{
 		fetchKinfo: fetchKinfoPID,

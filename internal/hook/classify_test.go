@@ -161,10 +161,10 @@ func TestClassifyEventAcceptsLegacyEventNameField(t *testing.T) {
 	}
 }
 
-// TestClassifyEventTranscriptPath pins the SR-9.1 plumbing: on SessionStart
-// the full hook-reported transcript_path is carried verbatim on
-// ClassifyResult.TranscriptPath (independent of whether the basename
-// SessionID extraction succeeds), and on every other event it is empty.
+// TestClassifyEventTranscriptPath pins the SR-9.1 plumbing: on every event
+// (SR-22.9) the full hook-reported transcript_path is carried verbatim on
+// ClassifyResult.TranscriptPath, independent of whether the basename
+// SessionID extraction succeeds.
 func TestClassifyEventTranscriptPath(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -215,22 +215,27 @@ func TestClassifyEventTranscriptPath(t *testing.T) {
 			wantSessID: "",
 		},
 		{
-			// Non-SessionStart events carry neither, even when a
-			// transcript_path is present in the payload.
-			name:       "UserPromptSubmit_no_transcript_fields",
+			// SR-22.9: every event carries both (recorded, never a gate), not just SessionStart.
+			name:       "UserPromptSubmit_transcript_fields",
 			payload:    map[string]any{"hook_event_name": "UserPromptSubmit", "transcript_path": "~/x/abc.jsonl"},
-			wantPath:   "",
-			wantSessID: "",
+			wantPath:   "~/x/abc.jsonl",
+			wantSessID: "abc",
 		},
 		{
-			name:       "Stop_no_transcript_fields",
+			name:       "Stop_transcript_fields",
 			payload:    map[string]any{"hook_event_name": "Stop", "transcript_path": "~/x/abc.jsonl"},
-			wantPath:   "",
-			wantSessID: "",
+			wantPath:   "~/x/abc.jsonl",
+			wantSessID: "abc",
 		},
 		{
-			name:       "SessionEnd_no_transcript_fields",
+			name:       "SessionEnd_transcript_fields",
 			payload:    map[string]any{"hook_event_name": "SessionEnd", "reason": "logout", "transcript_path": "~/x/abc.jsonl"},
+			wantPath:   "~/x/abc.jsonl",
+			wantSessID: "abc",
+		},
+		{
+			name:       "Stop_no_transcript_path",
+			payload:    map[string]any{"hook_event_name": "Stop"},
 			wantPath:   "",
 			wantSessID: "",
 		},

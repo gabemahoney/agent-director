@@ -1,0 +1,29 @@
+#!/bin/bash
+# Stand-in `claude` for the Docker harness (SRD SR-20.9, SR-22.9).
+#
+# A hook moves a row only when the `agent-director hook` process is a direct
+# child of the row's recorded pane process (its getppid() and that pid's
+# start time equal pane_pid and pane_starttime). A case that synthesises a
+# hook therefore needs the pane's main process to be a shell it can type
+# into. This file is that process: `exec` replaces the script with an
+# interactive bash under the same pid, so the shell IS the pane process tmux
+# reported at the create, and a hook typed into it with `tmux send-keys`
+# (see ../pane-hook.sh) has the shell as its parent.
+#
+# Use: put this directory first on the PATH of the agent-director process
+# that launches the session:
+#
+#   PATH=/opt/driver/stand-in-claude:$PATH agent-director spawn --cwd /tmp
+#   PATH=/opt/driver/stand-in-claude:$PATH agent-director resume --claude-instance-id <id>
+#
+# tmux (3.3a in the image) looks `claude` up on the PATH of the tmux client
+# that runs new-session, which is agent-director's own PATH: it replaces the
+# session's PATH with the client's, so `--extra-env PATH=...` does NOT
+# select this file (the real Claude Code starts). Every launch that should
+# run the stand-in, a resume included, needs the prefix. Every argument
+# (`--settings <json>`, `--resume <id>`, the caller's claude args) is
+# ignored.
+#
+# --noprofile --norc: nothing from the image's dotfiles runs; -i: the shell
+# reads commands from the pane's terminal.
+exec bash --noprofile --norc -i

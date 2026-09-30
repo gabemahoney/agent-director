@@ -1,7 +1,9 @@
 // Package hook implements the `agent-director hook` verb: the lifecycle
 // handler Claude Code invokes via the synthesized --settings JSON. The
 // handler reads a payload from stdin, classifies the event per SRD §5.2,
-// writes a row UPSERT, and exits 0 (state-tracking fail-open).
+// writes the row only when the hook's parent process is the row's recorded
+// pane process (the gate, SR-22.9; otherwise it changes nothing and writes
+// ad.hook.ignored, SR-14), and exits 0 (state-tracking fail-open).
 //
 // The relay-mode permission decision envelope (SRD §6.3) is Epic 10's
 // deliverable; Epic 3 ships the state-tracking subset.

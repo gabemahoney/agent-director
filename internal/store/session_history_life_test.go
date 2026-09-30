@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -42,11 +43,13 @@ func (f *v5Store) historyIDs(t *testing.T, id string, life int64) []string {
 	return ids
 }
 
-// rotate records a SessionStart with a new session id, archiving the current one.
+// rotate records the agent's SessionStart with a new session id, archiving
+// the current one; the seeded live row records the agent's pane (SR-22.9).
 func (f *v5Store) rotate(id, newSessionID string) {
 	f.t.Helper()
-	if err := f.s.RecordSessionStartIdentity(id, newSessionID, "/x/"+newSessionID+".jsonl", true, 1, "1"); err != nil {
-		f.t.Fatalf("RecordSessionStartIdentity(%s, %s): %v", id, newSessionID, err)
+	path := storefix.HookTranscript("/x/"+newSessionID+".jsonl", true)
+	if got := storefix.ApplyAgentHook(f.t, f.s, id, "SessionStart", newSessionID, path); !got.Applied {
+		f.t.Fatalf("SessionStart(%s, %s) = %+v; want applied", id, newSessionID, got)
 	}
 }
 

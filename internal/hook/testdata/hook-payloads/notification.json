@@ -1,0 +1,9 @@
+{
+  "session_id": "63099c49-9c8b-4d25-80ba-ed84af70eedd",
+  "transcript_path": "/home/agent/.claude/projects/-work-demo/63099c49-9c8b-4d25-80ba-ed84af70eedd.jsonl",
+  "cwd": "/work/demo",
+  "hook_event_name": "Notification",
+  "message": "Claude is waiting for your input",
+  "title": "Waiting for input",
+  "notification_type": "idle_prompt"
+}

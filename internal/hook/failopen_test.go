@@ -73,9 +73,10 @@ func trailHookFiredAfter(t *testing.T, prevCount int) map[string]any {
 }
 
 // flakyStore is a HookStore double whose state-tracking calls return
-// programmable errors. The relay-side methods (UpsertOpenPermissionRequest,
-// GetPermissionRequest) are no-ops here — the fail-open suite only
-// exercises the state-tracking path.
+// programmable errors. Its gated writes report applied (the hook is the row's
+// own agent, SR-22.9) unless they error; the gate itself is the store's and is
+// tested against a real store. The relay-side methods are no-ops here — the
+// fail-open suite only exercises the state-tracking path.
 type flakyStore struct {
 	transitionErr error
 	identityErr   error
@@ -83,16 +84,17 @@ type flakyStore struct {
 	identityN     int
 }
 
-func (f *flakyStore) ApplyHookTransition(string, string, bool, string) error {
+func (f *flakyStore) GetSpawn(string) (store.Spawn, error) { return store.Spawn{}, nil }
+func (f *flakyStore) ApplyHookTransition(string, store.HookGate, string, bool, string, string, bool) (store.HookApplied, error) {
 	f.transitionN++
-	return f.transitionErr
+	return store.HookApplied{Applied: f.transitionErr == nil}, f.transitionErr
 }
-func (f *flakyStore) RecordSessionStartIdentity(_, _, _ string, _ bool, _ int, _ string) error {
+func (f *flakyStore) RecordSessionStartIdentity(string, store.HookGate, string, bool) (store.HookApplied, bool, error) {
 	f.identityN++
-	return f.identityErr
+	return store.HookApplied{Applied: f.identityErr == nil}, false, f.identityErr
 }
-func (f *flakyStore) UpsertOpenPermissionRequest(_, _, _, _ string, _ int, _ string) error {
-	return nil
+func (f *flakyStore) UpsertOpenPermissionRequest(string, store.HookGate, string, string, string, int, string) (store.HookApplied, error) {
+	return store.HookApplied{Applied: true}, nil
 }
 func (f *flakyStore) GetPermissionRequest(_, _ string) (store.PermissionRow, error) {
 	return store.PermissionRow{}, nil
@@ -171,7 +173,8 @@ func TestHandlePayloadTooLargeExitsZero(t *testing.T) {
 func TestHandleStoreTransitionErrorExitsZero(t *testing.T) {
 	before := trailLineCount(t)
 	logger, buf := captureLog(t)
-	stdin := strings.NewReader(`{"hook_event_name":"SessionStart"}`)
+	// SR-22.9: SessionStart no longer calls ApplyHookTransition, so an ordinary event drives it.
+	stdin := strings.NewReader(`{"hook_event_name":"Stop"}`)
 	st := &flakyStore{transitionErr: errors.New("db unreachable")}
 	env := func(string) string { return "id-123" }
 	if err := callHandle(stdin, env, st, logger); err != nil {
@@ -210,7 +213,9 @@ func TestHandleSessionIDErrorExitsZero(t *testing.T) {
 	}
 }
 
-func TestHandleHappyPathWritesBothColumns(t *testing.T) {
+// TestHandleSessionStartIsOneWrite: SessionStart's state and identity land in
+// one gated RecordSessionStartIdentity write, with no separate transition.
+func TestHandleSessionStartIsOneWrite(t *testing.T) {
 	logger, _ := captureLog(t)
 	stdin := strings.NewReader(`{"hook_event_name":"SessionStart","transcript_path":"/x/abc.jsonl"}`)
 	st := &flakyStore{}
@@ -218,8 +223,9 @@ func TestHandleHappyPathWritesBothColumns(t *testing.T) {
 	if err := callHandle(stdin, env, st, logger); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if st.transitionN != 1 {
-		t.Errorf("transition called %d times; want 1", st.transitionN)
+	// SR-22.9: one statement sets waiting and records the identity; no separate transition.
+	if st.transitionN != 0 {
+		t.Errorf("transition called %d times; want 0", st.transitionN)
 	}
 	if st.identityN != 1 {
 		t.Errorf("record-identity called %d times; want 1", st.identityN)
@@ -277,4 +283,3 @@ func TestResolveInstanceIDMissingErr(t *testing.T) {
 		t.Fatalf("err = %v; want ErrInstanceIDMissing", err)
 	}
 }
-

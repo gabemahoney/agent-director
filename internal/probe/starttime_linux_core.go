@@ -8,7 +8,7 @@ import (
 // linuxStartTimeReader is the Linux start-time reader core (SR-3.8, "The
 // start-time reader (LFR C1)"; Appendix F.2 ProcChecker) over an INJECTABLE
 // PROC ROOT (procRoot, default "/proc" via newProcChecker on Linux — see
-// checker_linux.go). Like linuxChecker and the resolver it is build-tag-free
+// checker_linux.go). Like linuxChecker it is build-tag-free
 // (plain os.ReadFile over the injected root, no Linux-only syscalls), so tests
 // drive it with a fabricated proc tree on any OS.
 //

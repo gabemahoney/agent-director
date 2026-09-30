@@ -38,11 +38,13 @@ type histEntry struct {
 	recomputedOnDisk bool
 }
 
-// histRow describes the seeded ended row; persisted is "", "rotted" or "present".
+// histRow describes the seeded row (ended unless state says otherwise);
+// persisted is "", "rotted" or "present".
 type histRow struct {
 	life      int64
 	persisted string
 	entries   []histEntry
+	state     string // default ended
 }
 
 // histEnv is one seeded row in the shared resume fixture (resume_fixture_test.go),
@@ -95,7 +97,11 @@ func newHistEnv(t *testing.T, row histRow) *histEnv {
 		}))
 	}
 
-	id, err := apitest.SeedSpawn(e.env.dbPath, "", store.StateEnded, e.cwd, "", histCurrent, false, opts...)
+	state := row.state
+	if state == "" {
+		state = store.StateEnded
+	}
+	id, err := apitest.SeedSpawn(e.env.dbPath, "", state, e.cwd, "", histCurrent, false, opts...)
 	if err != nil {
 		t.Fatalf("SeedSpawn: %v", err)
 	}
@@ -358,13 +364,20 @@ func TestResumeHistoryRefusals(t *testing.T) {
 func TestResumeHistoryKeepsHookRotationWithinLife(t *testing.T) {
 	for _, life := range []int64{0, 1} {
 		t.Run(fmt.Sprintf("life %d", life), func(t *testing.T) {
-			e := newHistEnv(t, histRow{life: life, persisted: "present", entries: []histEntry{
+			// SR-22.9: only the row's own pane process moves the row, so the
+			// row is live (it records a pane) when its agent restarts, and
+			// that agent's SessionEnd then finishes it.
+			e := newHistEnv(t, histRow{life: life, persisted: "present", state: store.StateWaiting, entries: []histEntry{
 				{id: "sess-older", life: life, age: 1, onDisk: true},
 			}})
 			// A restarted session reports a new id whose transcript is not yet
 			// written: the hook archives histCurrent and nulls jsonl_path.
-			if err := e.env.st.RecordSessionStartIdentity(e.id, "sess-restarted", e.recorded("sess-restarted"), false, 0, ""); err != nil {
-				t.Fatalf("RecordSessionStartIdentity: %v", err)
+			if got := apitest.ApplyAgentHook(t, e.env.dbPath, e.id, "SessionStart", "sess-restarted",
+				apitest.HookTranscript(e.recorded("sess-restarted"), false)); !got.Applied {
+				t.Fatalf("SessionStart = %+v; want applied", got)
+			}
+			if got := apitest.ApplyAgentHook(t, e.env.dbPath, e.id, "SessionEnd", ""); !got.Applied {
+				t.Fatalf("SessionEnd = %+v; want applied", got)
 			}
 			if err := e.resume(); err != nil {
 				t.Fatalf("Resume: %v; want relaunch of the rotated session", err)

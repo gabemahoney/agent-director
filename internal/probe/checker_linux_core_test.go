@@ -8,8 +8,9 @@
 // The two chmod-000 EACCES cases are ALSO untagged: chmod 000 produces a genuine
 // EACCES on any unix at uid!=0, the fabricated tree is OS-agnostic, and the
 // checker is tag-free — so they need no linux tag. They skip cleanly under root
-// (where 000 does not deny). The ONLY test requiring the real /proc mount lives
-// under the linux tag in resolver_linux_test.go (TestLinuxResolverRealProcHappyPath).
+// (where 000 does not deny). Tests requiring the real /proc mount live under the
+// linux tag in probe_linux_test.go, starttime_linux_test.go and
+// commname_linux_test.go.
 
 package probe
 

@@ -39,6 +39,13 @@ type settingsShape struct {
 	Permissions map[string]any `json:"permissions"`
 }
 
+// isExecHook reports whether cmdEntry is an exec-form agent-director hook
+// for exe: "command" is exe verbatim and "args" is exactly ["hook"] (SR-22.9).
+func isExecHook(cmdEntry map[string]any, exe string) bool {
+	cmd, _ := cmdEntry["command"].(string)
+	return cmd == exe && equalStringList(cmdEntry["args"], []string{"hook"})
+}
+
 func TestSynthesizeSettingsContainsAllEightHooks(t *testing.T) {
 	withStubExe(t, "/usr/local/bin/agent-director")
 	jsonStr, err := synthesizeSettings(
@@ -87,7 +94,7 @@ func TestSynthesizeSettingsMatcherFields(t *testing.T) {
 		if hasMatcher != wantMatcher {
 			t.Errorf("%s: matcher present = %v; want %v", evt, hasMatcher, wantMatcher)
 		}
-		// Hook command structure: [{type:command, command:"<bin> hook"}]
+		// Hook command structure: [{type:command, command:"<bin>", args:["hook"]}]
 		hooksList, _ := entry["hooks"].([]any)
 		if len(hooksList) != 1 {
 			t.Fatalf("%s: expected 1 hook command, got %d", evt, len(hooksList))
@@ -96,9 +103,9 @@ func TestSynthesizeSettingsMatcherFields(t *testing.T) {
 		if cmdEntry["type"] != "command" {
 			t.Errorf("%s: type = %v; want command", evt, cmdEntry["type"])
 		}
-		cmdStr, _ := cmdEntry["command"].(string)
-		if !strings.HasSuffix(cmdStr, " hook") {
-			t.Errorf("%s: command = %q; want suffix ' hook'", evt, cmdStr)
+		// SR-22.9: exec form — "hook" is the one arg, not a " hook" command suffix.
+		if !isExecHook(cmdEntry, "/usr/local/bin/agent-director") {
+			t.Errorf("%s: command/args = %v/%v; want exec form /usr/local/bin/agent-director [hook]", evt, cmdEntry["command"], cmdEntry["args"])
 		}
 	}
 	check("PreToolUse", true)
@@ -114,20 +121,20 @@ func TestSynthesizeSettingsBinaryPathIsAbsolute(t *testing.T) {
 		Resolved{SpawnParams: SpawnParams{ClaudeInstanceID: "id"}},
 		config.Default(),
 	)
-	if !strings.Contains(jsonStr, "/opt/agent-director/bin/agent-director hook") {
+	// SR-22.9: exec form carries the absolute path as the whole "command".
+	if !strings.Contains(jsonStr, `"command":"/opt/agent-director/bin/agent-director"`) {
 		t.Fatalf("settings JSON does not embed the absolute path: %s", jsonStr)
 	}
 }
 
-func TestSynthesizeSettingsQuotesPathWithWhitespace(t *testing.T) {
+func TestSynthesizeSettingsPathWithWhitespaceIsVerbatim(t *testing.T) {
 	withStubExe(t, "/opt/with space/agent-director")
 	jsonStr, _ := synthesizeSettings(
 		Resolved{SpawnParams: SpawnParams{ClaudeInstanceID: "id"}},
 		config.Default(),
 	)
-	// Parse the JSON to see the command's *decoded* value — that's where
-	// the defensive quoting must show up. Comparing the raw JSON string
-	// would hit JSON's own backslash-escaping and produce a brittle check.
+	// Parse the JSON to see the command's *decoded* value. Comparing the raw
+	// JSON string would hit JSON's own backslash-escaping.
 	var top map[string]any
 	if err := json.Unmarshal([]byte(jsonStr), &top); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
@@ -137,10 +144,9 @@ func TestSynthesizeSettingsQuotesPathWithWhitespace(t *testing.T) {
 	entry, _ := entries[0].(map[string]any)
 	hl, _ := entry["hooks"].([]any)
 	cmdEntry, _ := hl[0].(map[string]any)
-	cmd, _ := cmdEntry["command"].(string)
-	want := `"/opt/with space/agent-director" hook`
-	if cmd != want {
-		t.Fatalf("command = %q; want %q (path with whitespace should be defensively quoted)", cmd, want)
+	// SR-22.9: an exec-form "command" is a program path, never shell-quoted.
+	if !isExecHook(cmdEntry, "/opt/with space/agent-director") {
+		t.Fatalf("command/args = %q/%v; want the unquoted path with args [hook]", cmdEntry["command"], cmdEntry["args"])
 	}
 }
 
@@ -249,25 +255,22 @@ func TestSynthesizeSettingsInjectHelpHookTrue(t *testing.T) {
 		t.Fatalf("SessionStart: got %d entries; want 2 (state-tracking + help-injection)", len(entries))
 	}
 	// Collect every command across all entries.
-	var commands []string
+	var commands []any
+	wantHelp := "/home/operator/.agent-director/bin/agent-director help"
+	var sawHook, sawHelp bool
 	for _, e := range entries {
 		entry, _ := e.(map[string]any)
 		hl, _ := entry["hooks"].([]any)
 		for _, h := range hl {
 			cmdEntry, _ := h.(map[string]any)
-			cmd, _ := cmdEntry["command"].(string)
-			commands = append(commands, cmd)
-		}
-	}
-	wantHook := "/usr/local/bin/agent-director hook"
-	wantHelp := "/home/operator/.agent-director/bin/agent-director help"
-	var sawHook, sawHelp bool
-	for _, c := range commands {
-		if c == wantHook {
-			sawHook = true
-		}
-		if c == wantHelp {
-			sawHelp = true
+			commands = append(commands, cmdEntry)
+			// SR-22.9: the state-tracking hook is exec form; help stays shell form.
+			if isExecHook(cmdEntry, "/usr/local/bin/agent-director") {
+				sawHook = true
+			}
+			if cmdEntry["command"] == wantHelp {
+				sawHelp = true
+			}
 		}
 	}
 	if !sawHook {
@@ -316,9 +319,9 @@ func TestSynthesizeSettingsInjectHelpHookFalse(t *testing.T) {
 // TestSynthesizeSettingsInjectHelpHookQuotesWhitespacePath confirms
 // that an install path containing whitespace ends up defensively
 // double-quoted in the help-hook command. The synth's pre-flight
-// blocks this in production (SRD §4.3), but the quoting matches the
-// state-tracking hook path's belt-and-suspenders behavior so a
-// hand-edited install can't trigger a split-on-space bug.
+// blocks this in production (SRD §4.3), but the help entry is shell form
+// (unlike the exec-form state-tracking hooks, SR-22.9), so a hand-edited
+// install can't trigger a split-on-space bug.
 func TestSynthesizeSettingsInjectHelpHookQuotesWhitespacePath(t *testing.T) {
 	withStubExe(t, "/usr/local/bin/agent-director")
 	withStubHelpBin(t, "/opt/with space/agent-director")
@@ -586,8 +589,8 @@ func TestExecutablePathResolvesSymlinks(t *testing.T) {
 }
 
 // TestSynthesizeSettingsPermissionRequestCaseBNoRelayShim verifies the
-// CASE B determination: the synthesized PermissionRequest hook command is
-// exactly "<bin> hook" — no external relay-shim invocation, no trail-emit
+// CASE B determination: the synthesized PermissionRequest hook is exactly
+// "<bin>" with args ["hook"] — no external relay-shim invocation, no trail-emit
 // sub-verb wrapper, no "relay" token in the command string.  CASE B means
 // relay is DB-poll-based and the in-process trail.Emit call in runRelay
 // handles the ad.relay_attempt.completed event directly.
@@ -616,9 +619,9 @@ func TestSynthesizeSettingsPermissionRequestCaseBNoRelayShim(t *testing.T) {
 	}
 	cmdEntry, _ := hooksList[0].(map[string]any)
 	cmd, _ := cmdEntry["command"].(string)
-	want := "/usr/local/bin/agent-director hook"
-	if cmd != want {
-		t.Fatalf("PermissionRequest command = %q; want %q (CASE B: no relay-shim)", cmd, want)
+	// SR-22.9: exec form — the path as command, "hook" as the one arg.
+	if !isExecHook(cmdEntry, "/usr/local/bin/agent-director") {
+		t.Fatalf("PermissionRequest command/args = %q/%v; want /usr/local/bin/agent-director [hook] (CASE B: no relay-shim)", cmd, cmdEntry["args"])
 	}
 	// CASE B guard: no relay-shim or external-process trail-emit tokens.
 	for _, forbidden := range []string{"shim", "trail-emit", "relay-attempt"} {

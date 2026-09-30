@@ -55,9 +55,8 @@ func parseLinuxStat(line string) (ppid int, starttime string, err error) {
 // also shifts every later field left by one, so it fails the field-22 count
 // as well.
 //
-// parseLinuxStat itself deliberately does NOT validate the state: its callers
-// (the resolver's ancestor walk and today's LivenessChecker) keep their
-// behaviour exactly.
+// parseLinuxStat itself deliberately does NOT validate the state: its caller
+// (today's LivenessChecker) keeps its behaviour exactly.
 func parseLinuxStatWithState(line string) (state byte, ppid int, starttime string, err error) {
 	stateTok, ppid, starttime, err := parseLinuxStatTail(line)
 	if err != nil {

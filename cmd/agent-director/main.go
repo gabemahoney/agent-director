@@ -164,11 +164,19 @@ func runHook() int {
 	}
 	defer st.Close()
 
+	// The hook gate's parent process (SR-22.9): with exec-form hooks
+	// getppid() is the agent process; its start time comes from the
+	// start-time reader and its command name (for ad.hook.ignored only,
+	// SR-14) from the command-name reader.
 	hc := hook.HandleConfig{
-		Env:      hook.OSGetenv,
-		Cfg:      cfg.Relay,
-		Clock:    hook.DefaultPollClock(),
-		Resolver: probe.NewResolver(),
+		Env:       hook.OSGetenv,
+		Cfg:       cfg.Relay,
+		Clock:     hook.DefaultPollClock(),
+		ParentPID: os.Getppid,
+		ParentProc: struct {
+			probe.ProcChecker
+			probe.CommandNameReader
+		}{probe.NewProcChecker(), probe.NewCommandNameReader()},
 	}
 	if err := hook.Handle(context.Background(), bytes.NewReader(stdinRaw), stdout, st, hc, logger); err != nil {
 		hookLog(logger, "hook: handle: %v", err)

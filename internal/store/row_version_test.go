@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -34,7 +35,8 @@ type rowVersionCase struct {
 }
 
 // rowVersionSeed sets every column no write may touch, and the launch start,
-// to a non-default value so "unchanged" and "cleared" are never vacuous.
+// to a non-default value so "unchanged" and "cleared" are never vacuous. Its
+// identity records the agent's pane, so the agent's hooks apply (SR-22.9).
 func rowVersionSeed() []apitest.SpawnOption {
 	return []apitest.SpawnOption{
 		apitest.WithLifeNumber(7),
@@ -150,21 +152,35 @@ func assertStoreIDKept(t *testing.T, f *v5Store) {
 	}
 }
 
+// rvAgentGate is the gate of a hook from id's own agent: the row's recorded
+// pane process (storefix.AgentHookParent, SR-22.9).
+func rvAgentGate(t *testing.T, f *v5Store, id string) store.HookGate {
+	t.Helper()
+	pid, start, err := storefix.AgentHookParent(f.s, id)
+	if err != nil {
+		t.Fatalf("AgentHookParent: %v", err)
+	}
+	return store.HookGate{Event: "row_version_test", ParentPID: pid, ParentStart: start}
+}
+
 // hookEntries are the two exported hook-transition entry points.
 var hookEntries = []struct {
 	name  string
-	apply func(s *store.Store, id, to string, soft bool) (store.UpsertOutcome, error)
+	apply func(s *store.Store, id string, gate store.HookGate, to string, soft bool) (store.UpsertOutcome, store.HookApplied, error)
 }{
-	{"ApplyHookTransition", func(s *store.Store, id, to string, soft bool) (store.UpsertOutcome, error) {
-		return "", s.ApplyHookTransition(id, to, soft, "row_version_test")
+	{"ApplyHookTransition", func(s *store.Store, id string, gate store.HookGate, to string, soft bool) (store.UpsertOutcome, store.HookApplied, error) {
+		applied, err := s.ApplyHookTransition(id, gate, to, soft, "row_version_test", "", false)
+		return "", applied, err
 	}},
-	{"ApplyHookTransitionResult", func(s *store.Store, id, to string, soft bool) (store.UpsertOutcome, error) {
-		return s.ApplyHookTransitionResult(id, to, soft, "row_version_test")
+	{"ApplyHookTransitionResult", func(s *store.Store, id string, gate store.HookGate, to string, soft bool) (store.UpsertOutcome, store.HookApplied, error) {
+		return s.ApplyHookTransitionResult(id, gate, to, soft, "row_version_test", "", false)
 	}},
 }
 
-// hookCases returns one case per hook entry point for a from -> to transition.
-// want is the Result entry point's outcome; the plain entry point reports none.
+// hookCases returns one case per hook entry point for a from -> to transition
+// by the row's own agent, which the gate applies (a held working transition
+// included). want is the Result entry point's outcome; the plain entry point
+// reports none.
 func hookCases(name, from, to string, soft, clears bool, want store.UpsertOutcome) []rowVersionCase {
 	wantState := to
 	if soft || want == store.UpsertNoChange {
@@ -175,9 +191,9 @@ func hookCases(name, from, to string, soft, clears bool, want store.UpsertOutcom
 		cases = append(cases, rowVersionCase{
 			name: e.name + "/" + name, state: from, clears: clears, wantState: wantState,
 			write: func(t *testing.T, f *v5Store, id string) {
-				out, err := e.apply(f.s, id, to, soft)
-				if err != nil || (out != "" && out != want) {
-					t.Fatalf("%s(%s, soft=%v) = %q, %v; want %q", e.name, to, soft, out, err, want)
+				out, applied, err := e.apply(f.s, id, rvAgentGate(t, f, id), to, soft)
+				if err != nil || !applied.Applied || (out != "" && out != want) {
+					t.Fatalf("%s(%s, soft=%v) = %q, %+v, %v; want %q, applied", e.name, to, soft, out, applied, err, want)
 				}
 			},
 		})
@@ -185,11 +201,23 @@ func hookCases(name, from, to string, soft, clears bool, want store.UpsertOutcom
 	return cases
 }
 
-// sessionStart returns a RecordSessionStartIdentity write with the given path arguments.
+// sessionStart returns the agent's SessionStart with the given session id and
+// transcript path arguments; it must apply.
 func sessionStart(session, path string, present bool) func(*testing.T, *v5Store, string) {
 	return func(t *testing.T, f *v5Store, id string) {
-		if err := f.s.RecordSessionStartIdentity(id, session, path, present, 4242, apitest.LinuxProcStarttime); err != nil {
-			t.Fatalf("RecordSessionStartIdentity: %v", err)
+		if got := storefix.ApplyAgentHook(t, f.s, id, "SessionStart", session, storefix.HookTranscript(path, present)); !got.Applied {
+			t.Fatalf("SessionStart(%s) = %+v; want applied", session, got)
+		}
+	}
+}
+
+// foreignHook returns event from another process than id's agent; SR-22.9
+// ignores it (pid_mismatch).
+func foreignHook(event string) func(*testing.T, *v5Store, string) {
+	return func(t *testing.T, f *v5Store, id string) {
+		want := store.HookApplied{Reason: store.HookReasonPIDMismatch}
+		if got := storefix.ApplyForeignHook(t, f.s, id, event, "sess-foreign"); got != want {
+			t.Fatalf("foreign %s = %+v; want %+v", event, got, want)
 		}
 	}
 }
@@ -428,13 +456,16 @@ func rowVersionWrites() []rowVersionCase {
 	return append(cases,
 		rowVersionCase{name: "RecordLaunchIdentity/applied", state: "pending", wantState: "pending",
 			identity: &created, write: recordLaunch(0, store.CondApplied)},
-		rowVersionCase{name: "RecordSessionStartIdentity/path present", state: "pending",
+		// SR-22.9: SessionStart is one write, from the row's own agent: it sets
+		// waiting and clears the launch start in the same statement.
+		rowVersionCase{name: "RecordSessionStartIdentity/path present", state: "pending", clears: true, wantState: "waiting",
 			write: sessionStart("sess-a", "/tmp/rv/a.jsonl", true)},
-		rowVersionCase{name: "RecordSessionStartIdentity/path not on disk", state: "pending",
+		rowVersionCase{name: "RecordSessionStartIdentity/path not on disk", state: "pending", clears: true, wantState: "waiting",
 			write: sessionStart("sess-a", "/tmp/rv/a.jsonl", false)},
-		rowVersionCase{name: "RecordSessionStartIdentity/no path", state: "pending",
+		rowVersionCase{name: "RecordSessionStartIdentity/no path", state: "pending", clears: true, wantState: "waiting",
 			write: sessionStart("sess-a", "", false)},
 		rowVersionCase{name: "RecordSessionStartIdentity/rotation archives once, one bump", state: "waiting",
+			clears: true, wantState: "waiting",
 			session: "sess-old", opts: []apitest.SpawnOption{apitest.WithJsonlPath("/tmp/rv/old.jsonl")},
 			write: func(t *testing.T, f *v5Store, id string) {
 				n := historyLen(t, f, id)
@@ -528,11 +559,14 @@ func TestRowVersionNoOpWritesChangeNothing(t *testing.T) {
 		{name: "MarkSpawnMissing/finished row", state: "ended", write: markMissing("")},
 		{name: "RecordLaunchIdentity/stale version, hook wrote first", state: "pending",
 			setup: func(t *testing.T, f *v5Store, id string) {
-				if err := f.s.ApplyHookTransition(id, "", true, "row_version_test"); err != nil {
-					t.Fatalf("ApplyHookTransition soft refresh: %v", err)
+				if applied, err := f.s.ApplyHookTransition(id, rvAgentGate(t, f, id), "", true, "row_version_test", "", false); err != nil || !applied.Applied {
+					t.Fatalf("ApplyHookTransition soft refresh = %+v, %v; want applied", applied, err)
 				}
 			},
 			write: recordLaunch(1, store.CondChanged)},
+		// SR-22.9: a hook from another parent is ignored and writes nothing.
+		{name: "ApplyHookTransition/another parent, ignored", state: "waiting", write: foreignHook("Stop")},
+		{name: "RecordSessionStartIdentity/another parent, ignored", state: "pending", write: foreignHook("SessionStart")},
 		{name: "HealJsonlPath/path already set", state: "waiting", session: "sess-heal",
 			opts: []apitest.SpawnOption{apitest.WithJsonlPath("/tmp/rv/have.jsonl")},
 			write: func(t *testing.T, f *v5Store, id string) {

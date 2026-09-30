@@ -2,7 +2,8 @@ package store
 
 // trail_emit_test.go — table-driven tests for ad.row_mutation.committed
 // emission across (writer_process × mutation_kind × decision) combinations,
-// and for ad.spawn.state_transition around resume's move and restore.
+// and for ad.spawn.state_transition around resume's move, restore and the
+// resumed agent's SessionStart.
 //
 // Singleton note: trail.Emit uses a process-level sync.Once whose file path
 // is locked in on the first call. TestMain (store_test.go) redirects HOME via
@@ -17,6 +18,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"testing"
 )
@@ -202,12 +204,12 @@ func TestRowMutationEmit(t *testing.T) {
 			var before int
 			if tc.mutationKind == "insert" {
 				before = len(readStoreTrailLines(t))
-				if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{}`, 0, tc.writerProcess); err != nil {
+				if err := agentPermissionRequest(s, id, tokenA, "Bash", `{}`, 0, tc.writerProcess); err != nil {
 					t.Fatalf("UpsertOpenPermissionRequest: %v", err)
 				}
 			} else {
 				// Setup: insert a row first (emits its own trail event — not under test).
-				if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{}`, 0, ""); err != nil {
+				if err := agentPermissionRequest(s, id, tokenA, "Bash", `{}`, 0, ""); err != nil {
 					t.Fatalf("setup UpsertOpenPermissionRequest: %v", err)
 				}
 				// Capture checkpoint after setup so only the update event is counted.
@@ -238,14 +240,14 @@ func TestRowMutationNoEmitOnFailedWrite(t *testing.T) {
 	seedSpawnForPerm(t, s, id, "on")
 
 	// Initial successful insert — its trail event is not under test.
-	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{}`, 0, WriterProcessHook); err != nil {
+	if err := agentPermissionRequest(s, id, tokenA, "Bash", `{}`, 0, WriterProcessHook); err != nil {
 		t.Fatalf("initial upsert: %v", err)
 	}
 
 	before := len(readStoreTrailLines(t))
 
 	// Duplicate insert → UNIQUE constraint collision → rollback, no emit.
-	err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{}`, 0, WriterProcessHook)
+	err := agentPermissionRequest(s, id, tokenA, "Bash", `{}`, 0, WriterProcessHook)
 	if !errors.Is(err, ErrRequestTokenCollision) {
 		t.Fatalf("collision upsert: err = %v; want ErrRequestTokenCollision", err)
 	}
@@ -262,7 +264,7 @@ func TestRowMutationNoEmitOnAlreadyDecided(t *testing.T) {
 	const id = "trail-no-emit-already-decided"
 	seedSpawnForPerm(t, s, id, "on")
 
-	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{}`, 0, ""); err != nil {
+	if err := agentPermissionRequest(s, id, tokenA, "Bash", `{}`, 0, ""); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 	// First decide succeeds and emits a trail event — not under test.
@@ -295,17 +297,19 @@ const trailMoveStart int64 = 1767225600000
 // trailSeedFinished inserts a pending row and finishes it as state, then
 // returns the row as resume examines it. A missing row is marked by
 // MarkSpawnMissing, a non-hook write; an ended row can only be reached by a
-// hook transition today, so its seed uses ApplyHookTransition.
+// hook transition today, so its seed is the agent's own hook, after the
+// create's identity write records its pane (SR-22.9: no hook applies to a row
+// with no pane).
 func trailSeedFinished(t *testing.T, s *Store, id, state string) Spawn {
 	t.Helper()
-	if err := s.InsertPending(Spawn{
+	if err := insertAgentRow(s, Spawn{
 		ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-trail-" + id, RelayMode: "off",
 	}); err != nil {
-		t.Fatalf("InsertPending(%s): %v", id, err)
+		t.Fatalf("insertAgentRow(%s): %v", id, err)
 	}
 	switch state {
 	case StateEnded:
-		if err := s.ApplyHookTransition(id, StateEnded, false, "test_seed"); err != nil {
+		if err := agentHook(s, id, StateEnded, false, "test_seed"); err != nil {
 			t.Fatalf("seed ended: ApplyHookTransition(%s): %v", id, err)
 		}
 	case StateMissing:
@@ -403,7 +407,9 @@ func TestTrailResumeWritesEmitNoStateTransition(t *testing.T) {
 // TestTrailSessionStartAfterResumeMovePriorPending pins SR-14's SessionStart
 // part: on a resumed row the move made the row pending, so SessionStart's
 // ad.spawn.state_transition records prior_state pending, not the finished
-// state the row had before resume.
+// state the row had before resume. The move clears the pane, so the resumed
+// agent's SessionStart applies only after the create's identity write records
+// the new pane (SR-22.9).
 func TestTrailSessionStartAfterResumeMovePriorPending(t *testing.T) {
 	for _, finished := range []string{StateEnded, StateMissing} {
 		finished := finished
@@ -411,11 +417,14 @@ func TestTrailSessionStartAfterResumeMovePriorPending(t *testing.T) {
 			s := openTestStore(t)
 			id := "trail-sessionstart-after-move-" + finished
 			examined := trailSeedFinished(t, s, id, finished)
-			trailMove(t, s, examined)
+			movedVersion := trailMove(t, s, examined)
+			if err := recordPaneAt(s, id, movedVersion, trailResumeToken); err != nil {
+				t.Fatalf("identity write after the move: %v", err)
+			}
 
 			before := len(readStoreTrailLines(t))
-			if err := s.ApplyHookTransition(id, StateWaiting, false, "SessionStart"); err != nil {
-				t.Fatalf("SessionStart ApplyHookTransition: %v", err)
+			if err := agentSessionStart(s, id, "sess-resumed", "", false); err != nil {
+				t.Fatalf("SessionStart: %v", err)
 			}
 			lines := spawnStateTransitionLines(t, before)
 			if len(lines) != 1 {
@@ -432,6 +441,44 @@ func TestTrailSessionStartAfterResumeMovePriorPending(t *testing.T) {
 			}
 			if got.LaunchStartedAtMillis != 0 {
 				t.Errorf("launch_started_at after SessionStart = %d; want cleared (0)", got.LaunchStartedAtMillis)
+			}
+		})
+	}
+}
+
+// TestTrailSessionStartAfterResumeMoveNoPaneIgnored pins SR-22.9's inverse: a
+// SessionStart after the move and before the identity write finds no pane, so
+// it is not applied (no_pane_recorded), emits no ad.spawn.state_transition and
+// leaves the row pending.
+func TestTrailSessionStartAfterResumeMoveNoPaneIgnored(t *testing.T) {
+	for _, finished := range []string{StateEnded, StateMissing} {
+		finished := finished
+		t.Run(finished, func(t *testing.T) {
+			s := openTestStore(t)
+			id := "trail-sessionstart-no-pane-" + finished
+			trailMove(t, s, trailSeedFinished(t, s, id, finished))
+			moved, err := s.GetSpawn(id)
+			if err != nil {
+				t.Fatalf("GetSpawn after the move: %v", err)
+			}
+
+			before := len(readStoreTrailLines(t))
+			applied, err := fireSessionStart(s, id, agentGate("SessionStart", "sess-resumed"), "", false)
+			if err != nil {
+				t.Fatalf("SessionStart: %v", err)
+			}
+			if want := (HookApplied{Reason: HookReasonNoPaneRecorded}); applied != want {
+				t.Errorf("SessionStart = %+v; want %+v", applied, want)
+			}
+			if got := spawnStateTransitionLines(t, before); len(got) != 0 {
+				t.Errorf("ignored SessionStart emitted %d ad.spawn.state_transition; want 0: %v", len(got), got)
+			}
+			got, err := s.GetSpawn(id)
+			if err != nil {
+				t.Fatalf("GetSpawn: %v", err)
+			}
+			if !reflect.DeepEqual(got, moved) {
+				t.Errorf("row changed by an ignored SessionStart:\n before %+v\n after  %+v", moved, got)
 			}
 		})
 	}

@@ -1,0 +1,15 @@
+{
+  "session_id": "14b92521-07d3-423a-a337-67987e2de0ab",
+  "transcript_path": "/home/agent/.claude/projects/-work-demo/14b92521-07d3-423a-a337-67987e2de0ab.jsonl",
+  "cwd": "/work/demo",
+  "prompt_id": "550e8400-e29b-41d4-a716-446655440000",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "Stop",
+  "stop_hook_active": false,
+  "last_assistant_message": "I've completed the refactoring.",
+  "background_tasks": [],
+  "session_crons": []
+}

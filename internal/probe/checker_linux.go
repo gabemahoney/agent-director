@@ -2,11 +2,16 @@
 
 package probe
 
+// defaultProcRoot is the kernel procfs mount the production Linux readers
+// (the liveness checker, the start-time reader and the command-name reader)
+// read through. Each reader takes its root as an injectable seam, so tests
+// substitute a fabricated tree.
+const defaultProcRoot = "/proc"
+
 // newChecker returns the production Linux LivenessChecker reading through the
 // kernel procfs mount. The verdict logic + errno table live in the
 // build-tag-free linuxChecker (checker_linux_core.go); this file only pins the
-// default proc root, mirroring newResolver's use of defaultProcRoot so tests
-// can substitute a fabricated tree.
+// default proc root, so tests can substitute a fabricated tree.
 func newChecker() LivenessChecker {
 	return linuxChecker{procRoot: defaultProcRoot}
 }

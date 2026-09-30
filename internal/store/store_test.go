@@ -113,11 +113,13 @@ func TestConcurrentOpenOrInitWithWrites(t *testing.T) {
 				TmuxSessionName:  fmt.Sprintf("cd-burst-%02d", i),
 				RelayMode:        "off",
 			}
-			if err := s.InsertPending(sp); err != nil {
-				errs <- fmt.Errorf("worker %d: InsertPending: %w", i, err)
+			// The create's pane identity write lands before the agent's hook
+			// (SR-22.9: a hook applies only from the recorded pane process).
+			if err := insertAgentRow(s, sp); err != nil {
+				errs <- fmt.Errorf("worker %d: insertAgentRow: %w", i, err)
 				return
 			}
-			if err := s.ApplyHookTransition(sp.ClaudeInstanceID, StateWaiting, false, "test_seed"); err != nil {
+			if err := agentHook(s, sp.ClaudeInstanceID, StateWaiting, false, "test_seed"); err != nil {
 				errs <- fmt.Errorf("worker %d: ApplyHookTransition: %w", i, err)
 				return
 			}

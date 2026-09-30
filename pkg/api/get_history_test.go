@@ -233,9 +233,11 @@ func TestGetHistoryHookRotationWithinLife(t *testing.T) {
 				apitest.WithSessionHistory(getHist("s-older", "/h/s-older.jsonl", life, 1)),
 			)
 			// New session reported but its transcript not yet on disk: the
-			// hook archives s-old and leaves jsonl_path NULL.
-			if err := s.RecordSessionStartIdentity(id, "s-new", "/h/s-new.jsonl", false, 0, ""); err != nil {
-				t.Fatalf("RecordSessionStartIdentity: %v", err)
+			// hook archives s-old and leaves jsonl_path NULL. SR-22.9: the
+			// SessionStart comes from the row's own pane process, so it applies.
+			if got := apitest.ApplyAgentHook(t, dbPath, id, "SessionStart", "s-new",
+				apitest.HookTranscript("/h/s-new.jsonl", false)); !got.Applied {
+				t.Fatalf("SessionStart = %+v; want applied", got)
 			}
 
 			got, err := api.Get(s, id)

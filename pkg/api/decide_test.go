@@ -232,9 +232,7 @@ func TestAmbiguousDecide(t *testing.T) {
 	s, _ := apitest.SeedDecideFixture(t, "on")
 	apitest.SeedPermissionRow(t, s, "id-d-1")
 	// Seed a second open row with a distinct token.
-	if err := s.UpsertOpenPermissionRequest("id-d-1", storefix.TestRequestTokenB, "Read", `{"file":"/etc/hosts"}`, 0, ""); err != nil {
-		t.Fatalf("UpsertOpenPermissionRequest (second row): %v", err)
-	}
+	openAgentRequest(t, s, "id-d-1", storefix.TestRequestTokenB, "Read", `{"file":"/etc/hosts"}`, 0)
 	_, err := api.Decide(s, 24*time.Hour, time.Now(), api.DecideParams{
 		ClaudeInstanceID: "id-d-1",
 		RequestToken:     "", // empty — rejected at API layer before store

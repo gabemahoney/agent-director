@@ -19,27 +19,15 @@ import (
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/store"
-	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 )
 
-// seedWorkingSpawn inserts a Spawn in StateWorking with relay_mode=on for the
-// given instanceID. Used as the precondition for parallel-hook tests that drive
-// PermissionRequest events via Handle.
-func seedWorkingSpawn(t *testing.T, st *store.Store, instanceID string) {
+// relayAgentConfig is the HandleConfig of a relayed hook from instanceID's own
+// agent (SR-22.9: its pane process) with the given relay timeout.
+func relayAgentConfig(t *testing.T, st *store.Store, instanceID string, timeoutSeconds int) hook.HandleConfig {
 	t.Helper()
-	sp := store.Spawn{
-		ClaudeInstanceID: instanceID,
-		State:            store.StatePending,
-		CWD:              "/tmp",
-		TmuxSessionName:  "t-" + instanceID,
-		RelayMode:        "on",
-	}
-	if err := st.InsertPending(sp); err != nil {
-		t.Fatalf("seedWorkingSpawn: InsertPending(%q): %v", instanceID, err)
-	}
-	if err := st.ApplyHookTransition(instanceID, store.StateWorking, false, "test_seed"); err != nil {
-		t.Fatalf("seedWorkingSpawn: transition to working (%q): %v", instanceID, err)
-	}
+	hc := hookConfig(envWith(instanceID), agentParent(t, st, instanceID))
+	hc.Cfg = config.Relay{TimeoutSeconds: timeoutSeconds, PollBaseMs: 0, PollJitterMs: 0}
+	return hc
 }
 
 // waitForOpenRows polls OpenPermissionRequestsForSpawn until at least n open
@@ -69,12 +57,10 @@ func waitForOpenRows(t *testing.T, st *store.Store, instanceID string, n int) []
 //     cross-row verdict leakage.
 //  4. The Spawn remains in check_permission state until the last row is decided.
 func TestParallelHookOrdering(t *testing.T) {
-	st, _ := storefix.OpenTempStore(t)
 	const instanceID = "parallel-hook-ord"
-
-	seedWorkingSpawn(t, st, instanceID)
-
-	env := envWith(instanceID)
+	// SR-22.9: a working row with a recorded pane; both hooks come from its pane process.
+	st, _ := seedAgentRow(t, instanceID, store.StateWorking)
+	hc := relayAgentConfig(t, st, instanceID, 30)
 	var bufA, bufB bytes.Buffer
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -83,23 +69,13 @@ func TestParallelHookOrdering(t *testing.T) {
 		defer wg.Done()
 		_ = hook.Handle(context.Background(),
 			strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{}}`),
-			&bufA, st,
-			hook.HandleConfig{
-				Env: env,
-				Cfg: config.Relay{TimeoutSeconds: 30, PollBaseMs: 0, PollJitterMs: 0},
-			},
-			nil)
+			&bufA, st, hc, nil)
 	}()
 	go func() {
 		defer wg.Done()
 		_ = hook.Handle(context.Background(),
 			strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"Read","tool_input":{}}`),
-			&bufB, st,
-			hook.HandleConfig{
-				Env: env,
-				Cfg: config.Relay{TimeoutSeconds: 30, PollBaseMs: 0, PollJitterMs: 0},
-			},
-			nil)
+			&bufB, st, hc, nil)
 	}()
 
 	// Wait for both open rows to appear.
@@ -181,12 +157,10 @@ func TestParallelHookOrdering(t *testing.T) {
 //
 // Goroutine A uses a 1-second real timeout so the test takes ~1s wall-clock.
 func TestPerRowTimeoutIsolation(t *testing.T) {
-	st, dbPath := storefix.OpenTempStore(t)
 	const instanceID = "per-row-timeout-iso"
-
-	seedWorkingSpawn(t, st, instanceID)
-
-	env := envWith(instanceID)
+	// SR-22.9: a working row with a recorded pane; both hooks come from its pane process.
+	st, dbPath := seedAgentRow(t, instanceID, store.StateWorking)
+	hcA, hcB := relayAgentConfig(t, st, instanceID, 1), relayAgentConfig(t, st, instanceID, 60)
 	var bufA, bufB bytes.Buffer
 
 	// Goroutine A: 1-second timeout with the real poll clock (50ms floor per
@@ -196,12 +170,7 @@ func TestPerRowTimeoutIsolation(t *testing.T) {
 		defer close(doneA)
 		_ = hook.Handle(context.Background(),
 			strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{}}`),
-			&bufA, st,
-			hook.HandleConfig{
-				Env: env,
-				Cfg: config.Relay{TimeoutSeconds: 1, PollBaseMs: 0, PollJitterMs: 0},
-			},
-			nil)
+			&bufA, st, hcA, nil)
 	}()
 
 	// Goroutine B: long timeout; will be decided externally before it expires.
@@ -210,12 +179,7 @@ func TestPerRowTimeoutIsolation(t *testing.T) {
 		defer close(doneB)
 		_ = hook.Handle(context.Background(),
 			strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"Read","tool_input":{}}`),
-			&bufB, st,
-			hook.HandleConfig{
-				Env: env,
-				Cfg: config.Relay{TimeoutSeconds: 60, PollBaseMs: 0, PollJitterMs: 0},
-			},
-			nil)
+			&bufB, st, hcB, nil)
 	}()
 
 	// Wait for both open rows to appear.

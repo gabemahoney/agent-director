@@ -3,7 +3,9 @@
 How agent-director's per-Spawn state-tracking hooks coexist with the
 operator's own Claude Code hooks. Each Spawn gets eight hook entries
 synthesized into its `--settings`; they fire on every Claude lifecycle
-event and write the row UPSERT that powers `status` / `get` / `list`.
+event and write the row update that powers `status` / `get` / `list`,
+but only for the row's own agent (see "Only the row's own agent moves
+the row" below).
 
 For Claude Code's own hooks reference, see:
 <https://docs.claude.com/en/docs/claude-code/hooks>.
@@ -11,8 +13,13 @@ For Claude Code's own hooks reference, see:
 ## The eight state-tracking hooks
 
 agent-director registers one entry per event listed below. Each entry
-runs the same command — `<abs-path>/agent-director hook` — and Claude
-Code feeds it the payload JSON on stdin.
+is in exec form — `{"type": "command", "command": "<abs-path>/agent-director",
+"args": ["hook"]}` — so Claude Code starts `agent-director hook`
+directly, with no shell in between, and feeds it the payload JSON on
+stdin. The hook's parent process is therefore the Claude process that
+fired it. A Claude Code version that ignores `args` would run the binary
+with no verb, and no hook would apply; the README states the minimum
+supported Claude Code version.
 
 | Event | Tool matcher | Resulting state (SRD §5.2) |
 | --- | --- | --- |
@@ -32,10 +39,44 @@ Unknown event names are treated as soft refreshes — the row's
 name so operators can spot new Claude Code events that need a classifier
 update.
 
+## Only the row's own agent moves the row
+
+Every hook, of every event, applies only when its parent process (its
+`getppid()`, with that pid's start time) is the row's recorded pane
+process: the process agent-director created the session with, which is
+the agent's Claude Code itself. When the row's recorded pane start time
+is unknown, the pid alone decides and the first applied hook records the
+start time. The check is part of each database write, so nothing can
+change the row between the check and the write.
+
+A hook from any other process that carries the row's
+`AGENT_DIRECTOR_INSTANCE_ID` changes nothing: a nested `claude` started
+in the agent's shell, a teammate pane split in the agent's session, a
+leftover of an earlier launch, or a shell that pipes a payload into
+`agent-director hook`. So does every hook while the row records no pane
+yet. Such a hook:
+
+- writes no state, no `last_seen_at` and no permission request;
+- exits 0 with empty stdout (a relayed PermissionRequest returns no
+  decision, so Claude Code asks as it would with no relay);
+- writes one `ad.hook.ignored` record to the trail, with reason
+  `pid_mismatch` (the parent is another process; the record names its pid
+  and command) or `no_pane_recorded` (the row records no pane yet).
+
+`/clear`, `/resume` and compaction inside the agent's own Claude Code
+come from the same process, so they apply, and SessionStart records the
+new session id. The payload's session id is recorded, never used to
+decide whether a hook applies. The hook makes no tmux call.
+
+Consequences: a nested agent's or a teammate's work is not reflected in
+the row, and an `ended` row stays `ended` against every other process's
+hooks.
+
 ## Fail-open invariant
 
 State-tracking hooks **must never block Claude Code**. The `hook` verb
-exits 0 with empty stdout on every internal failure:
+exits 0 with empty stdout on every internal failure, and on every hook
+it does not apply:
 
 - Missing `AGENT_DIRECTOR_INSTANCE_ID` env → exit 0, log entry.
 - Malformed JSON payload → exit 0, log entry.
@@ -44,6 +85,10 @@ exits 0 with empty stdout on every internal failure:
 - Store open failure → exit 0, log entry.
 - DB write failure → exit 0, log entry.
 - Unknown event name → exit 0, soft refresh, log entry.
+- Hook from a process other than the row's recorded pane process, or for
+  a row that records no pane → exit 0, nothing written, one
+  `ad.hook.ignored` trail record.
+- Hook for an id with no row → exit 0, nothing written.
 
 All log entries land in `~/.agent-director/errors.log` (configurable
 via `[log] error_log_path` in `config.toml`). A missed state update is
@@ -181,10 +226,14 @@ designed to keep this window closed.
 ## PermissionRequest relay path
 
 When a Spawn's `relay_mode=on`, the hook handler takes a second branch
-on PermissionRequest events: after the normal state-tracking UPSERT
-(state → `check_permission`), it enters a polling loop and only
-returns when the orchestrator's `decide` verb has written a row in
-`permission_requests`. See `permissions.md` for the user-facing
+on PermissionRequest events: after the normal state-tracking write
+(state → `check_permission`), it records the request and enters a
+polling loop, and only returns when the orchestrator's `decide` verb has
+written a row in `permission_requests` or the relay times out. The branch
+runs only when that write applied: a PermissionRequest from another
+process records no request and writes nothing to stdout, and so does
+one whose request insert, which carries the same check, does not
+apply. See `permissions.md` for the user-facing
 contract; this section covers the implementation.
 
 ### Polling loop

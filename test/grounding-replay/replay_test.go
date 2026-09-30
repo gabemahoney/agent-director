@@ -43,6 +43,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -137,6 +138,20 @@ func filterLines(haystack []map[string]any, filters map[string]string) []map[str
 // ── relay env helper ──────────────────────────────────────────────────────────
 
 const testInstanceID = "gr-replay-2026-06-04-incident"
+
+// The replayed agent's launch token and pane process (pid, start time).
+const (
+	replayLaunchToken = "9e9a000000000001"
+	replayPanePID     = 4242
+	replayPaneStart   = "123456"
+)
+
+// agentParentProc is the hook's parent-process reader: procfix answers the
+// start time; the command name is the agent's.
+type agentParentProc struct{ *procfix.Checker }
+
+// CommandName reports the agent's command name for every pid.
+func (agentParentProc) CommandName(int) (string, bool) { return "claude", true }
 
 // relayEnv returns the env func Hook.Handle expects for a relay-mode spawn.
 func relayEnv(k string) string {
@@ -241,13 +256,21 @@ func TestGroundingReplayScenario(t *testing.T) {
 		CWD:              "/tmp/grounding-replay",
 		TmuxSessionName:  "gr-replay-session",
 		RelayMode:        "on",
+		Identity:         store.LaunchIdentity{Token: replayLaunchToken},
 	}
 	if err := st.InsertPending(sp); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
-	// Transition pending→working (emits ad.spawn.state_transition).
-	if err := st.ApplyHookTransition(testInstanceID, store.StateWorking, false, "test_seed"); err != nil {
-		t.Fatalf("seed transition: %v", err)
+	// SR-22.9: hooks apply only from the row's recorded pane process, so the
+	// launch records the agent's pane as spawn does.
+	if res, err := st.RecordLaunchIdentity(testInstanceID, 0, replayLaunchToken, store.LaunchIdentity{
+		PaneID: "%1", PanePID: replayPanePID, PaneStarttime: replayPaneStart,
+	}); err != nil || res != store.CondApplied {
+		t.Fatalf("RecordLaunchIdentity = (%v, %v); want applied", res, err)
+	}
+	// Transition pending→working as the agent (emits ad.spawn.state_transition).
+	if applied := storefix.ApplyAgentHook(t, st, testInstanceID, "PreToolUse", ""); !applied.Applied {
+		t.Fatalf("seed transition not applied: %+v", applied)
 	}
 
 	// Snapshot trail line count BEFORE the scenario starts.
@@ -262,6 +285,11 @@ func TestGroundingReplayScenario(t *testing.T) {
 		PermissionRequestCap: 1000,
 	}
 
+	// Every hook's parent is the agent: the recorded pane process (SR-22.9).
+	paneParent := agentParentProc{procfix.New()}
+	paneParent.Set(replayPanePID, procfix.Alive(replayPaneStart))
+	paneParentPID := func() int { return replayPanePID }
+
 	callHandle := func(payload string, env func(string) string) {
 		t.Helper()
 		if err := hook.Handle(
@@ -269,7 +297,7 @@ func TestGroundingReplayScenario(t *testing.T) {
 			strings.NewReader(payload),
 			io.Discard,
 			st,
-			hook.HandleConfig{Env: env, Cfg: fastCfg},
+			hook.HandleConfig{Env: env, Cfg: fastCfg, ParentPID: paneParentPID, ParentProc: paneParent},
 			nil,
 		); err != nil {
 			t.Fatalf("Handle(%q): %v", payload, err)
@@ -295,7 +323,7 @@ func TestGroundingReplayScenario(t *testing.T) {
 			strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`),
 			&relayStdout,
 			st,
-			hook.HandleConfig{Env: relayEnv, Cfg: fastCfg},
+			hook.HandleConfig{Env: relayEnv, Cfg: fastCfg, ParentPID: paneParentPID, ParentProc: paneParent},
 			nil,
 		)
 	}()

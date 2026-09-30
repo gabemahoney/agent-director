@@ -250,13 +250,13 @@ func TestSpawnStateReadError(t *testing.T) {
 func TestApplyHookTransitionStateChange(t *testing.T) {
 	s, _ := openTempStore(t)
 	id := "44444444-aaaa-4bbb-8ccc-000000000004"
-	if err := s.InsertPending(Spawn{
+	if err := insertAgentRow(s, Spawn{
 		ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-tmp", RelayMode: "off",
 	}); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
 	beforeTrail := len(readStoreTrailLines(t))
-	if err := s.ApplyHookTransition(id, StateWaiting, false, "test_seed"); err != nil {
+	if err := agentHook(s, id, StateWaiting, false, "test_seed"); err != nil {
 		t.Fatalf("ApplyHookTransition: %v", err)
 	}
 	trailLines := spawnStateTransitionLines(t, beforeTrail)
@@ -279,13 +279,13 @@ func TestApplyHookTransitionStateChange(t *testing.T) {
 func TestApplyHookTransitionEndedSetsEndedAt(t *testing.T) {
 	s, _ := openTempStore(t)
 	id := "55555555-aaaa-4bbb-8ccc-000000000005"
-	if err := s.InsertPending(Spawn{
+	if err := insertAgentRow(s, Spawn{
 		ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-tmp", RelayMode: "off",
 	}); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
 	beforeTrail := len(readStoreTrailLines(t))
-	if err := s.ApplyHookTransition(id, StateEnded, false, "test_seed"); err != nil {
+	if err := agentHook(s, id, StateEnded, false, "test_seed"); err != nil {
 		t.Fatalf("ApplyHookTransition: %v", err)
 	}
 	trailLines := spawnStateTransitionLines(t, beforeTrail)
@@ -308,54 +308,75 @@ func TestApplyHookTransitionEndedSetsEndedAt(t *testing.T) {
 	}
 }
 
-// TestApplyHookTransitionOnFinishedRowClearsEndedAt pins that a SessionStart hook on a
-// finished row (as from another process carrying the id) sets waiting and clears ended_at.
+// TestApplyHookTransitionOnFinishedRowClearsEndedAt pins that a hook on an
+// ended row from the row's own pane process sets waiting and clears ended_at,
+// and that the same hook from another parent is ignored (SR-22.9).
 func TestApplyHookTransitionOnFinishedRowClearsEndedAt(t *testing.T) {
-	s, _ := openTempStore(t)
-	id := "55555555-aaaa-4bbb-8ccc-000000000099"
-	if err := s.InsertPending(Spawn{
-		ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-tmp", RelayMode: "off",
-	}); err != nil {
-		t.Fatalf("InsertPending: %v", err)
+	cases := []struct {
+		name       string
+		gate       HookGate
+		wantReason string // "" = applied
+	}{
+		{"row's own pane process", agentGate("Stop", ""), ""},
+		// SR-22.9: another process carrying the id no longer moves the row.
+		{"another parent", foreignGate("Stop", ""), HookReasonPIDMismatch},
 	}
-	// Move the row to ended so ended_at gets stamped.
-	beforeEnded := len(readStoreTrailLines(t))
-	if err := s.ApplyHookTransition(id, StateEnded, false, "test_seed"); err != nil {
-		t.Fatalf("transition to ended: %v", err)
-	}
-	endedLines := spawnStateTransitionLines(t, beforeEnded)
-	if len(endedLines) != 1 {
-		t.Fatalf("want 1 ad.spawn.state_transition after ended; got %d", len(endedLines))
-	}
-	assertSpawnStateTransitionFields(t, endedLines[0], id, StatePending, StateEnded, "test_seed", false)
-	got, err := s.GetSpawn(id)
-	if err != nil {
-		t.Fatalf("GetSpawn after ended: %v", err)
-	}
-	if got.EndedAt == nil {
-		t.Fatal("precondition: ended_at not set after ended transition")
-	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := openTempStore(t)
+			id := "55555555-aaaa-4bbb-8ccc-000000000099"
+			if err := insertAgentRow(s, Spawn{
+				ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-tmp", RelayMode: "off",
+			}); err != nil {
+				t.Fatalf("insertAgentRow: %v", err)
+			}
+			// Move the row to ended so ended_at gets stamped.
+			if err := agentHook(s, id, StateEnded, false, "test_seed"); err != nil {
+				t.Fatalf("transition to ended: %v", err)
+			}
+			ended, err := s.GetSpawn(id)
+			if err != nil || ended.EndedAt == nil {
+				t.Fatalf("precondition: GetSpawn after ended = %+v, %v; want ended_at set", ended.EndedAt, err)
+			}
 
-	// A SessionStart hook reaches the ended row. (resume's own agent reports
-	// in from pending instead: resume's move to pending clears ended_at first.)
-	beforeHook := len(readStoreTrailLines(t))
-	if err := s.ApplyHookTransition(id, StateWaiting, false, "test_seed"); err != nil {
-		t.Fatalf("transition to waiting from ended: %v", err)
-	}
-	hookLines := spawnStateTransitionLines(t, beforeHook)
-	if len(hookLines) != 1 {
-		t.Fatalf("want 1 ad.spawn.state_transition after the hook; got %d", len(hookLines))
-	}
-	assertSpawnStateTransitionFields(t, hookLines[0], id, StateEnded, StateWaiting, "test_seed", false)
-	got, err = s.GetSpawn(id)
-	if err != nil {
-		t.Fatalf("GetSpawn after the hook: %v", err)
-	}
-	if got.State != StateWaiting {
-		t.Errorf("state = %q; want waiting", got.State)
-	}
-	if got.EndedAt != nil {
-		t.Errorf("ended_at = %v; want nil after the hook", got.EndedAt)
+			// A hook reaches the ended row. (resume's own agent reports in from
+			// pending instead: resume's move to pending clears ended_at first.)
+			beforeHook := len(readStoreTrailLines(t))
+			applied, err := s.ApplyHookTransition(id, tc.gate, StateWaiting, false, "Stop", "", false)
+			if err != nil {
+				t.Fatalf("ApplyHookTransition: %v", err)
+			}
+			hookLines := spawnStateTransitionLines(t, beforeHook)
+			got, err := s.GetSpawn(id)
+			if err != nil {
+				t.Fatalf("GetSpawn after the hook: %v", err)
+			}
+			if tc.wantReason != "" {
+				if applied != (HookApplied{Reason: tc.wantReason}) {
+					t.Errorf("applied = %+v; want not applied, reason %q", applied, tc.wantReason)
+				}
+				if len(hookLines) != 0 {
+					t.Errorf("ignored hook emitted %d ad.spawn.state_transition; want 0", len(hookLines))
+				}
+				if got.State != StateEnded || got.EndedAtText != ended.EndedAtText {
+					t.Errorf("state, ended_at = %q, %q; want ended, %q kept", got.State, got.EndedAtText, ended.EndedAtText)
+				}
+				return
+			}
+			if !applied.Applied {
+				t.Fatalf("applied = %+v; want applied", applied)
+			}
+			if len(hookLines) != 1 {
+				t.Fatalf("want 1 ad.spawn.state_transition after the hook; got %d", len(hookLines))
+			}
+			assertSpawnStateTransitionFields(t, hookLines[0], id, StateEnded, StateWaiting, "Stop", false)
+			if got.State != StateWaiting {
+				t.Errorf("state = %q; want waiting", got.State)
+			}
+			if got.EndedAt != nil {
+				t.Errorf("ended_at = %v; want nil after the hook", got.EndedAt)
+			}
+		})
 	}
 }
 
@@ -366,13 +387,13 @@ func TestApplyHookTransitionOnFinishedRowClearsEndedAt(t *testing.T) {
 func TestApplyHookTransitionFreshSpawnLeavesEndedAtNil(t *testing.T) {
 	s, _ := openTempStore(t)
 	id := "55555555-aaaa-4bbb-8ccc-000000000098"
-	if err := s.InsertPending(Spawn{
+	if err := insertAgentRow(s, Spawn{
 		ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-tmp", RelayMode: "off",
 	}); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
 	beforeTrail := len(readStoreTrailLines(t))
-	if err := s.ApplyHookTransition(id, StateWaiting, false, "test_seed"); err != nil {
+	if err := agentHook(s, id, StateWaiting, false, "test_seed"); err != nil {
 		t.Fatalf("transition: %v", err)
 	}
 	trailLines := spawnStateTransitionLines(t, beforeTrail)
@@ -392,14 +413,14 @@ func TestApplyHookTransitionFreshSpawnLeavesEndedAtNil(t *testing.T) {
 func TestApplyHookTransitionSoftRefreshLeavesState(t *testing.T) {
 	s, _ := openTempStore(t)
 	id := "66666666-aaaa-4bbb-8ccc-000000000006"
-	if err := s.InsertPending(Spawn{
+	if err := insertAgentRow(s, Spawn{
 		ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-tmp", RelayMode: "off",
 	}); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
 	beforeRow, _ := s.GetSpawn(id)
 	beforeTrail := len(readStoreTrailLines(t))
-	if err := s.ApplyHookTransition(id, "", true, "test_seed"); err != nil {
+	if err := agentHook(s, id, "", true, "test_seed"); err != nil {
 		t.Fatalf("ApplyHookTransition: %v", err)
 	}
 	trailLines := spawnStateTransitionLines(t, beforeTrail)
@@ -414,50 +435,43 @@ func TestApplyHookTransitionSoftRefreshLeavesState(t *testing.T) {
 }
 
 // TestRecordSessionStartIdentity pins the store-level column semantics of the
-// widened SessionStart write (the method that replaced SetSessionID). The
-// PM-mandated contract (spawns.go doc):
-//   - claude_session_id / jsonl_path: written only when the passed value is
-//     non-empty; an empty value preserves the existing column (COALESCE(?, col)).
-//   - pid / proc_starttime: ALWAYS written — the fresh value, or NULL (0 / "")
-//     when identity capture failed. Never stale identity.
-//
-// These are direct method calls read back via GetSpawn; the hook-layer gating
-// (SessionStart-only invocation) is pinned by sibling handler tests.
+// SessionStart write: claude_session_id / jsonl_path are written only when
+// non-empty (an empty value keeps the column); pid / proc_starttime are always
+// the hook's parent, which under the gate is the recorded pane process
+// (SR-22.9), so they are never stale and never another process's.
 func TestRecordSessionStartIdentity(t *testing.T) {
 	s, _ := openTempStore(t)
 	id := "77777777-aaaa-4bbb-8ccc-000000000007"
-	if err := s.InsertPending(Spawn{
+	if err := insertAgentRow(s, Spawn{
 		ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-tmp", RelayMode: "off",
 	}); err != nil {
-		t.Fatalf("InsertPending: %v", err)
+		t.Fatalf("insertAgentRow: %v", err)
 	}
+	pane := testPane()
 
-	// 1. First SessionStart: all four columns land. Fresh identity is written.
-	if err := s.RecordSessionStartIdentity(id, "session-abc", "/x/abc.jsonl", true, 4242, "9988"); err != nil {
-		t.Fatalf("RecordSessionStartIdentity (fresh): %v", err)
+	// 1. First SessionStart: session id and path land; pid / proc_starttime are
+	//    the pane process (SR-22.9: an applied SessionStart records its parent).
+	if err := agentSessionStart(s, id, "session-abc", "/x/abc.jsonl", true); err != nil {
+		t.Fatalf("SessionStart (fresh): %v", err)
 	}
 	got, _ := s.GetSpawn(id)
+	if got.State != StateWaiting {
+		t.Fatalf("State = %q; want waiting", got.State)
+	}
 	if got.ClaudeSessionID != "session-abc" {
 		t.Fatalf("ClaudeSessionID = %q; want session-abc", got.ClaudeSessionID)
 	}
 	if got.JSONLPath != "/x/abc.jsonl" {
 		t.Fatalf("JSONLPath = %q; want /x/abc.jsonl", got.JSONLPath)
 	}
-	if got.PID != 4242 {
-		t.Fatalf("PID = %d; want 4242", got.PID)
-	}
-	if got.ProcStarttime != "9988" {
-		t.Fatalf("ProcStarttime = %q; want 9988", got.ProcStarttime)
+	if got.PID != pane.PanePID || got.ProcStarttime != pane.PaneStarttime {
+		t.Fatalf("identity = (%d, %q); want the pane process (%d, %q)", got.PID, got.ProcStarttime, pane.PanePID, pane.PaneStarttime)
 	}
 
-	// 2. Re-record with empty session id / jsonl path but fresh (well, absent)
-	//    identity: session id and jsonl_path are PRESERVED (COALESCE keeps the
-	//    prior non-empty value), while pid / proc_starttime are ALWAYS written
-	//    — here to NULL (0 / "") because capture "failed". A stale pid must
-	//    never survive: Epic hp's liveness check would else mark a live resumed
-	//    spawn provably-dead.
-	if err := s.RecordSessionStartIdentity(id, "", "", false, 0, ""); err != nil {
-		t.Fatalf("RecordSessionStartIdentity (identity cleared): %v", err)
+	// 2. Re-record with empty session id / jsonl path: both are PRESERVED
+	//    (COALESCE keeps the prior non-empty value); identity stays the pane's.
+	if err := agentSessionStart(s, id, "", "", false); err != nil {
+		t.Fatalf("SessionStart (empty id and path): %v", err)
 	}
 	got, _ = s.GetSpawn(id)
 	if got.ClaudeSessionID != "session-abc" {
@@ -466,21 +480,8 @@ func TestRecordSessionStartIdentity(t *testing.T) {
 	if got.JSONLPath != "/x/abc.jsonl" {
 		t.Fatalf("empty jsonl path clobbered value: JSONLPath = %q; want /x/abc.jsonl", got.JSONLPath)
 	}
-	if got.PID != 0 {
-		t.Fatalf("stale PID survived capture failure: PID = %d; want 0 (NULL)", got.PID)
-	}
-	if got.ProcStarttime != "" {
-		t.Fatalf("stale ProcStarttime survived capture failure: %q; want \"\" (NULL)", got.ProcStarttime)
-	}
-
-	// 3. A later successful capture re-writes fresh identity (proving step 2's
-	//    clear was a genuine NULL write, not an accidental preserve).
-	if err := s.RecordSessionStartIdentity(id, "", "", false, 5150, "7001"); err != nil {
-		t.Fatalf("RecordSessionStartIdentity (re-capture): %v", err)
-	}
-	got, _ = s.GetSpawn(id)
-	if got.PID != 5150 || got.ProcStarttime != "7001" {
-		t.Fatalf("re-capture identity = (%d, %q); want (5150, 7001)", got.PID, got.ProcStarttime)
+	if got.PID != pane.PanePID || got.ProcStarttime != pane.PaneStarttime {
+		t.Fatalf("identity = (%d, %q); want the pane process (%d, %q)", got.PID, got.ProcStarttime, pane.PanePID, pane.PaneStarttime)
 	}
 }
 
@@ -489,15 +490,19 @@ func TestApplyHookTransitionMissingRowIsNoop(t *testing.T) {
 	// No row inserted; the UPDATE finds nothing. UPDATE on a missing row
 	// is a no-op in SQL — neither InsertPending nor ApplyHookTransition
 	// should error. (SRD §3.2 fail-open invariant.)
+	// SR-22.9: a missing row reports no reason (nothing to log as ignored).
 	beforeTrail := len(readStoreTrailLines(t))
-	if err := s.ApplyHookTransition("ghost", StateWaiting, false, "test_seed"); err != nil {
-		t.Fatalf("transition on missing row should be no-op: %v", err)
+	if applied, err := s.ApplyHookTransition("ghost", agentGate("Stop", ""), StateWaiting, false, "test_seed", "", false); err != nil || applied != (HookApplied{}) {
+		t.Fatalf("transition on missing row = %+v, %v; want a no-op with no reason", applied, err)
+	}
+	gate := agentGate("SessionStart", "session-x")
+	gate.SessionStart = true
+	applied, changed, err := s.RecordSessionStartIdentity("ghost", gate, "/x/ghost.jsonl", true)
+	if err != nil || changed || applied != (HookApplied{}) {
+		t.Fatalf("record-identity on missing row = %+v, %v, %v; want a no-op with no reason", applied, changed, err)
 	}
 	if got := spawnStateTransitionLines(t, beforeTrail); len(got) != 0 {
-		t.Errorf("missing-row transition emitted %d ad.spawn.state_transition; want 0 (fail-open per SRD §3.2)", len(got))
-	}
-	if err := s.RecordSessionStartIdentity("ghost", "session-x", "/x/ghost.jsonl", true, 999, "111"); err != nil {
-		t.Fatalf("record-identity on missing row should be no-op: %v", err)
+		t.Errorf("missing-row writes emitted %d ad.spawn.state_transition; want 0 (fail-open per SRD §3.2)", len(got))
 	}
 }
 
@@ -540,7 +545,7 @@ func TestStateMachineMultiRowRetention(t *testing.T) {
 		const id = "sm-multi-row-1"
 
 		// Seed a Spawn in check_permission with two open rows.
-		if err := s.InsertPending(Spawn{
+		if err := insertAgentRow(s, Spawn{
 			ClaudeInstanceID: id,
 			CWD:              "/tmp",
 			TmuxSessionName:  "cd-sm-1",
@@ -548,13 +553,13 @@ func TestStateMachineMultiRowRetention(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("InsertPending: %v", err)
 		}
-		if err := s.ApplyHookTransition(id, StateCheckPermission, false, "test_seed"); err != nil {
+		if err := agentHook(s, id, StateCheckPermission, false, "test_seed"); err != nil {
 			t.Fatalf("transition to check_permission: %v", err)
 		}
-		if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{"cmd":"ls"}`, 0, ""); err != nil {
+		if err := agentPermissionRequest(s, id, tokenA, "Bash", `{"cmd":"ls"}`, 0, ""); err != nil {
 			t.Fatalf("upsert tokenA: %v", err)
 		}
-		if err := s.UpsertOpenPermissionRequest(id, tokenB, "Read", `{"file":"/etc"}`, 0, ""); err != nil {
+		if err := agentPermissionRequest(s, id, tokenB, "Read", `{"file":"/etc"}`, 0, ""); err != nil {
 			t.Fatalf("upsert tokenB: %v", err)
 		}
 
@@ -563,7 +568,7 @@ func TestStateMachineMultiRowRetention(t *testing.T) {
 			t.Fatalf("decide tokenA: %v", err)
 		}
 		beforeHeld := len(readStoreTrailLines(t))
-		if err := s.ApplyHookTransition(id, StateWorking, false, "test_seed"); err != nil {
+		if err := agentHook(s, id, StateWorking, false, "test_seed"); err != nil {
 			t.Fatalf("ApplyHookTransition(working) after deciding tokenA: %v", err)
 		}
 		// Multi-row retention hold: must emit a no-op line (prior==new==check_permission).
@@ -585,7 +590,7 @@ func TestStateMachineMultiRowRetention(t *testing.T) {
 			t.Fatalf("decide tokenB: %v", err)
 		}
 		beforeAdvance := len(readStoreTrailLines(t))
-		if err := s.ApplyHookTransition(id, StateWorking, false, "test_seed"); err != nil {
+		if err := agentHook(s, id, StateWorking, false, "test_seed"); err != nil {
 			t.Fatalf("ApplyHookTransition(working) after deciding tokenB: %v", err)
 		}
 		advanceLines := spawnStateTransitionLines(t, beforeAdvance)
@@ -606,7 +611,7 @@ func TestStateMachineMultiRowRetention(t *testing.T) {
 		s, _ := openTempStore(t)
 		const id = "sm-single-row-1"
 
-		if err := s.InsertPending(Spawn{
+		if err := insertAgentRow(s, Spawn{
 			ClaudeInstanceID: id,
 			CWD:              "/tmp",
 			TmuxSessionName:  "cd-sm-2",
@@ -614,10 +619,10 @@ func TestStateMachineMultiRowRetention(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("InsertPending: %v", err)
 		}
-		if err := s.ApplyHookTransition(id, StateCheckPermission, false, "test_seed"); err != nil {
+		if err := agentHook(s, id, StateCheckPermission, false, "test_seed"); err != nil {
 			t.Fatalf("transition to check_permission: %v", err)
 		}
-		if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{"cmd":"pwd"}`, 0, ""); err != nil {
+		if err := agentPermissionRequest(s, id, tokenA, "Bash", `{"cmd":"pwd"}`, 0, ""); err != nil {
 			t.Fatalf("upsert tokenA: %v", err)
 		}
 
@@ -626,7 +631,7 @@ func TestStateMachineMultiRowRetention(t *testing.T) {
 			t.Fatalf("decide tokenA: %v", err)
 		}
 		beforeWorking := len(readStoreTrailLines(t))
-		if err := s.ApplyHookTransition(id, StateWorking, false, "test_seed"); err != nil {
+		if err := agentHook(s, id, StateWorking, false, "test_seed"); err != nil {
 			t.Fatalf("ApplyHookTransition(working): %v", err)
 		}
 		workingLines := spawnStateTransitionLines(t, beforeWorking)
@@ -719,37 +724,39 @@ func TestSetParentID(t *testing.T) {
 func TestSpawnStateTransitionSameStateTwice(t *testing.T) {
 	s, _ := openTempStore(t)
 	const id = "trail-noop-twice-001"
-	if err := s.InsertPending(Spawn{
+	if err := insertAgentRow(s, Spawn{
 		ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-noop", RelayMode: "off",
 	}); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
-	// Seed: pending → waiting (not under test; captures setup emit).
-	if err := s.ApplyHookTransition(id, StateWaiting, false, "SessionStart"); err != nil {
+	// Seed: pending → waiting (not under test; captures setup emit). SR-22.9:
+	// SessionStart is its own write (RecordSessionStartIdentity), so the
+	// same-state transitions here are Stop hooks.
+	if err := agentHook(s, id, StateWaiting, false, "Stop"); err != nil {
 		t.Fatalf("seed transition: %v", err)
 	}
 
 	// First same-state write: waiting → waiting.
 	before1 := len(readStoreTrailLines(t))
-	if err := s.ApplyHookTransition(id, StateWaiting, false, "SessionStart"); err != nil {
+	if err := agentHook(s, id, StateWaiting, false, "Stop"); err != nil {
 		t.Fatalf("first same-state write: %v", err)
 	}
 	lines1 := spawnStateTransitionLines(t, before1)
 	if len(lines1) != 1 {
 		t.Fatalf("first same-state write: want 1 ad.spawn.state_transition; got %d", len(lines1))
 	}
-	assertSpawnStateTransitionFields(t, lines1[0], id, StateWaiting, StateWaiting, "SessionStart", false)
+	assertSpawnStateTransitionFields(t, lines1[0], id, StateWaiting, StateWaiting, "Stop", false)
 
 	// Second same-state write: still waiting → waiting.
 	before2 := len(readStoreTrailLines(t))
-	if err := s.ApplyHookTransition(id, StateWaiting, false, "SessionStart"); err != nil {
+	if err := agentHook(s, id, StateWaiting, false, "Stop"); err != nil {
 		t.Fatalf("second same-state write: %v", err)
 	}
 	lines2 := spawnStateTransitionLines(t, before2)
 	if len(lines2) != 1 {
 		t.Fatalf("second same-state write: want 1 ad.spawn.state_transition; got %d", len(lines2))
 	}
-	assertSpawnStateTransitionFields(t, lines2[0], id, StateWaiting, StateWaiting, "SessionStart", false)
+	assertSpawnStateTransitionFields(t, lines2[0], id, StateWaiting, StateWaiting, "Stop", false)
 }
 
 // TestSpawnStateTransitionSoftRefreshField pins that a soft-refresh write
@@ -758,17 +765,17 @@ func TestSpawnStateTransitionSameStateTwice(t *testing.T) {
 func TestSpawnStateTransitionSoftRefreshField(t *testing.T) {
 	s, _ := openTempStore(t)
 	const id = "trail-softrefresh-field-001"
-	if err := s.InsertPending(Spawn{
+	if err := insertAgentRow(s, Spawn{
 		ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-sr", RelayMode: "off",
 	}); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
-	if err := s.ApplyHookTransition(id, StateWorking, false, "SessionStart"); err != nil {
+	if err := agentHook(s, id, StateWorking, false, "UserPromptSubmit"); err != nil {
 		t.Fatalf("seed transition: %v", err)
 	}
 
 	before := len(readStoreTrailLines(t))
-	if err := s.ApplyHookTransition(id, "", true, "PreToolUse"); err != nil {
+	if err := agentHook(s, id, "", true, "PreToolUse"); err != nil {
 		t.Fatalf("soft refresh: %v", err)
 	}
 	lines := spawnStateTransitionLines(t, before)
@@ -787,8 +794,8 @@ func TestSpawnStateTransitionNonExistentEmitsZero(t *testing.T) {
 
 	before := len(readStoreTrailLines(t))
 	// "ghost-trail-no-row" was never inserted.
-	if err := s.ApplyHookTransition("ghost-trail-no-row", StateWaiting, false, "SessionStart"); err != nil {
-		t.Fatalf("non-existent id should be no-op: %v", err)
+	if applied, err := s.ApplyHookTransition("ghost-trail-no-row", agentGate("Stop", ""), StateWaiting, false, "Stop", "", false); err != nil || applied.Applied {
+		t.Fatalf("non-existent id = %+v, %v; want a no-op", applied, err)
 	}
 	if got := spawnStateTransitionLines(t, before); len(got) != 0 {
 		t.Errorf("non-existent instance_id emitted %d ad.spawn.state_transition; want 0", len(got))
@@ -800,14 +807,14 @@ func TestSpawnStateTransitionNonExistentEmitsZero(t *testing.T) {
 func TestSpawnStateTransitionEndedNewState(t *testing.T) {
 	s, _ := openTempStore(t)
 	const id = "trail-ended-newstate-001"
-	if err := s.InsertPending(Spawn{
+	if err := insertAgentRow(s, Spawn{
 		ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-ended", RelayMode: "off",
 	}); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
 
 	before := len(readStoreTrailLines(t))
-	if err := s.ApplyHookTransition(id, StateEnded, false, "SessionEnd"); err != nil {
+	if err := agentHook(s, id, StateEnded, false, "SessionEnd"); err != nil {
 		t.Fatalf("ended transition: %v", err)
 	}
 	lines := spawnStateTransitionLines(t, before)
@@ -1035,7 +1042,7 @@ func TestApplyHookTransitionSoftRefreshClearsLiveness(t *testing.T) {
 	const id = "liveness-clear-softrefresh-1"
 	seedLivenessSet(t, s, id, StateWorking)
 
-	if err := s.ApplyHookTransition(id, "", true, "PreToolUse"); err != nil {
+	if err := agentHook(s, id, "", true, "PreToolUse"); err != nil {
 		t.Fatalf("ApplyHookTransition (soft refresh): %v", err)
 	}
 	assertLivenessCleared(t, s, id)
@@ -1049,7 +1056,7 @@ func TestApplyHookTransitionEndedClearsLiveness(t *testing.T) {
 	const id = "liveness-clear-ended-1"
 	seedLivenessSet(t, s, id, StateWorking)
 
-	if err := s.ApplyHookTransition(id, StateEnded, false, "SessionEnd"); err != nil {
+	if err := agentHook(s, id, StateEnded, false, "SessionEnd"); err != nil {
 		t.Fatalf("ApplyHookTransition (ended): %v", err)
 	}
 	assertLivenessCleared(t, s, id)
@@ -1063,7 +1070,7 @@ func TestApplyHookTransitionGeneralClearsLiveness(t *testing.T) {
 	const id = "liveness-clear-general-1"
 	seedLivenessSet(t, s, id, StateWorking)
 
-	if err := s.ApplyHookTransition(id, StateWaiting, false, "Stop"); err != nil {
+	if err := agentHook(s, id, StateWaiting, false, "Stop"); err != nil {
 		t.Fatalf("ApplyHookTransition (general): %v", err)
 	}
 	assertLivenessCleared(t, s, id)
@@ -1076,16 +1083,16 @@ func TestApplyHookTransitionGeneralClearsLiveness(t *testing.T) {
 func TestApplyHookTransitionHeldWorkingPreservesLiveness(t *testing.T) {
 	s, _ := openTempStore(t)
 	const id = "liveness-held-working-1"
-	if err := s.InsertPending(Spawn{
+	if err := insertAgentRow(s, Spawn{
 		ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-hw", RelayMode: "on",
 	}); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
-	if err := s.ApplyHookTransition(id, StateCheckPermission, false, "test_seed"); err != nil {
+	if err := agentHook(s, id, StateCheckPermission, false, "test_seed"); err != nil {
 		t.Fatalf("transition to check_permission: %v", err)
 	}
 	// One still-open permission row keeps the working transition held.
-	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Bash", `{"cmd":"ls"}`, 0, ""); err != nil {
+	if err := agentPermissionRequest(s, id, tokenA, "Bash", `{"cmd":"ls"}`, 0, ""); err != nil {
 		t.Fatalf("UpsertOpenPermissionRequest: %v", err)
 	}
 	// Pin liveness AFTER reaching check_permission (still a live state).
@@ -1099,7 +1106,7 @@ func TestApplyHookTransitionHeldWorkingPreservesLiveness(t *testing.T) {
 	wantSince, _ := readLivenessRaw(t, s, id)
 
 	// Attempt working: the open row holds it — no UPDATE, liveness preserved.
-	if err := s.ApplyHookTransition(id, StateWorking, false, "PreToolUse"); err != nil {
+	if err := agentHook(s, id, StateWorking, false, "PreToolUse"); err != nil {
 		t.Fatalf("ApplyHookTransition (held working): %v", err)
 	}
 	if state, _ := s.GetSpawnState(id); state != StateCheckPermission {
@@ -1119,8 +1126,8 @@ func TestApplyHookTransitionMissingRowPreservesNothing(t *testing.T) {
 	wantSince := seedLivenessSet(t, s, seededID, StateWorking)
 
 	// Transition against a non-existent id: UPDATE matches 0 rows.
-	if err := s.ApplyHookTransition("ghost-n0", StateWaiting, false, "PreToolUse"); err != nil {
-		t.Fatalf("ApplyHookTransition (ghost): %v", err)
+	if applied, err := s.ApplyHookTransition("ghost-n0", agentGate("PreToolUse", ""), StateWaiting, false, "PreToolUse", "", false); err != nil || applied.Applied {
+		t.Fatalf("ApplyHookTransition (ghost) = %+v, %v; want a no-op", applied, err)
 	}
 	// The bystander row's liveness is untouched.
 	assertLivenessPreserved(t, s, seededID, wantSince)
@@ -1133,8 +1140,8 @@ func TestRecordSessionStartIdentityClearsLiveness(t *testing.T) {
 	const id = "liveness-clear-sessionstart-1"
 	seedLivenessSet(t, s, id, StateWaiting)
 
-	if err := s.RecordSessionStartIdentity(id, "session-xyz", "/x/xyz.jsonl", true, 7777, "3030"); err != nil {
-		t.Fatalf("RecordSessionStartIdentity: %v", err)
+	if err := agentSessionStart(s, id, "session-xyz", "/x/xyz.jsonl", true); err != nil {
+		t.Fatalf("SessionStart: %v", err)
 	}
 	assertLivenessCleared(t, s, id)
 }

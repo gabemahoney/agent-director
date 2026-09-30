@@ -1,0 +1,8 @@
+{
+  "session_id": "6793164b-dbb7-4e2c-9a07-93c6b5b84063",
+  "transcript_path": "/home/agent/.claude/projects/-work-demo/6793164b-dbb7-4e2c-9a07-93c6b5b84063.jsonl",
+  "cwd": "/work/demo",
+  "hook_event_name": "SessionStart",
+  "source": "compact",
+  "model": "claude-opus-5"
+}

@@ -1,0 +1,12 @@
+{
+  "session_id": "4b0bf746-54c3-4934-95c4-43c3f0a1ff00",
+  "transcript_path": "/home/agent/.claude/projects/-work-demo/4b0bf746-54c3-4934-95c4-43c3f0a1ff00.jsonl",
+  "cwd": "/work/demo",
+  "hook_event_name": "SessionStart",
+  "source": "resume",
+  "model": "claude-opus-5",
+  "seconds_since_last_response": 5400,
+  "context_tokens": 182340,
+  "prompt_cache_likely_expired": true,
+  "estimated_cache_write_usd": 1.1396
+}

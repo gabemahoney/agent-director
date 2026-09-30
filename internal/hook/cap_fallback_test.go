@@ -13,6 +13,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/hook"
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 )
 
@@ -30,11 +31,10 @@ func TestRelayConfigNegativeCapUsesDefault(t *testing.T) {
 			// Use a real SQLite store — a mock cannot verify that actual
 			// eviction happened (which requires the store to have executed
 			// the DELETE).
-			s, dbPath := storefix.OpenTempStore(t)
-
 			const instanceID = "neg-cap-relay"
+			// SR-22.9: a row with a recorded pane, so the hook from its pane process applies.
+			s, dbPath := seedAgentRow(t, instanceID, store.StateWorking)
 			// Seed 1500 closed rows — above the default cap of 1000.
-			// SeedClosedPermissionRequests creates the spawn row if absent.
 			base := time.Now().UTC().Add(-2 * time.Hour)
 			storefix.SeedClosedPermissionRequests(t, s, dbPath, instanceID, 1500, base, time.Second)
 
@@ -46,7 +46,9 @@ func TestRelayConfigNegativeCapUsesDefault(t *testing.T) {
 			clock := &advancingClock{now: now}
 
 			var stdout bytes.Buffer
-			cfg := config.Relay{
+			hc := hookConfig(envWith(instanceID), agentParent(t, s, instanceID))
+			hc.Clock = clock
+			hc.Cfg = config.Relay{
 				TimeoutSeconds: 1,
 				PollBaseMs:     0,
 				PollJitterMs:   0,
@@ -58,7 +60,7 @@ func TestRelayConfigNegativeCapUsesDefault(t *testing.T) {
 			if err := hook.Handle(context.Background(),
 				strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{}}`),
 				&stdout, s,
-				hook.HandleConfig{Env: envWith(instanceID), Cfg: cfg, Clock: clock},
+				hc,
 				newSilentLogger()); err != nil {
 				t.Fatalf("Handle (cap=%d): %v", negativeCap, err)
 			}

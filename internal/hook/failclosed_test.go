@@ -23,15 +23,17 @@ import (
 
 // flakyRelayStore is a HookStore double with programmable behavior for
 // the relay-side methods. The state-tracking calls succeed by default
-// so we can isolate the failure under test.
+// so we can isolate the failure under test. Its gated writes report applied
+// unless they error (the hook is the row's own agent, SR-22.9); the gate
+// itself is the store's and is tested against a real store.
 type flakyRelayStore struct {
-	transitionErr  error
-	identityErr    error
-	upsertErr      error
-	decideErr      error
-	getRows        []store.PermissionRow
-	getErrs        []error
-	idx            atomic.Int32
+	transitionErr error
+	identityErr   error
+	upsertErr     error
+	decideErr     error
+	getRows       []store.PermissionRow
+	getErrs       []error
+	idx           atomic.Int32
 
 	// Recorded calls — inspected by tests that assert call ordering.
 	decideArgs     []decideCall
@@ -51,15 +53,16 @@ type transitionCall struct {
 	SoftRefresh bool
 }
 
-func (f *flakyRelayStore) ApplyHookTransition(instanceID, newState string, softRefresh bool, _ string) error {
+func (f *flakyRelayStore) GetSpawn(string) (store.Spawn, error) { return store.Spawn{}, nil }
+func (f *flakyRelayStore) ApplyHookTransition(instanceID string, _ store.HookGate, newState string, softRefresh bool, _, _ string, _ bool) (store.HookApplied, error) {
 	f.transitionArgs = append(f.transitionArgs, transitionCall{instanceID, newState, softRefresh})
-	return f.transitionErr
+	return store.HookApplied{Applied: f.transitionErr == nil}, f.transitionErr
 }
-func (f *flakyRelayStore) RecordSessionStartIdentity(_, _, _ string, _ bool, _ int, _ string) error {
-	return f.identityErr
+func (f *flakyRelayStore) RecordSessionStartIdentity(string, store.HookGate, string, bool) (store.HookApplied, bool, error) {
+	return store.HookApplied{Applied: f.identityErr == nil}, false, f.identityErr
 }
-func (f *flakyRelayStore) UpsertOpenPermissionRequest(_, _, _, _ string, _ int, _ string) error {
-	return f.upsertErr
+func (f *flakyRelayStore) UpsertOpenPermissionRequest(string, store.HookGate, string, string, string, int, string) (store.HookApplied, error) {
+	return store.HookApplied{Applied: f.upsertErr == nil}, f.upsertErr
 }
 func (f *flakyRelayStore) DecidePermissionRequest(instanceID, requestToken, decision, reason string, _ string) (bool, error) {
 	f.decideArgs = append(f.decideArgs, decideCall{instanceID, requestToken, decision, reason})

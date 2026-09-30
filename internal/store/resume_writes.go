@@ -136,7 +136,8 @@ const restoreAfterFailedResumeSQL = `UPDATE spawns
 // A prior.State other than ended or missing is a caller error: an error is
 // returned and nothing is written. Otherwise it returns CondApplied when the
 // write applied; CondChanged when the row exists but is no longer pending at
-// movedVersion (a hook or another write came first); CondAbsent when no row
+// movedVersion (another write came first; no hook can while the row records
+// no pane, and the move cleared it, SR-22.9); CondAbsent when no row
 // has the id. A store failure returns a wrapped error with a zero CondResult,
 // and the row stays as the move left it (SR-5.8).
 func (s *Store) RestoreAfterFailedResume(instanceID string, movedVersion int64, prior ResumePrior) (CondResult, error) {

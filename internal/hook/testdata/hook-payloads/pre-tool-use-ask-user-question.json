@@ -1,0 +1,30 @@
+{
+  "session_id": "334f399b-fa01-4b6a-b747-70d4b9a831bf",
+  "transcript_path": "/home/agent/.claude/projects/-work-demo/334f399b-fa01-4b6a-b747-70d4b9a831bf.jsonl",
+  "cwd": "/work/demo",
+  "prompt_id": "550e8400-e29b-41d4-a716-446655440000",
+  "permission_mode": "default",
+  "effort": {
+    "level": "high"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "AskUserQuestion",
+  "tool_input": {
+    "questions": [
+      {
+        "question": "Which framework?",
+        "header": "Framework",
+        "options": [
+          {
+            "label": "React"
+          },
+          {
+            "label": "Vue"
+          }
+        ],
+        "multiSelect": false
+      }
+    ]
+  },
+  "tool_use_id": "toolu_01ABC123"
+}

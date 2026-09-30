@@ -9,8 +9,8 @@ import (
 // darwinChecker implements LivenessChecker over per-pid KERN_PROC_PID +
 // KERN_PROCARGS2 fetches, injected as function seams so the verdict logic + the
 // macOS errno table are build-tag-free and unit-testable off-darwin against
-// synthetic kinfo_proc bytes (the resolver_darwin_core precedent: byte parsing
-// + verdict logic here, real syscalls in the darwin-tagged file).
+// synthetic kinfo_proc bytes (byte parsing + verdict logic here, real
+// syscalls in the darwin-tagged file).
 //
 //   - fetchKinfo(pid) returns the raw kinfo_proc entry bytes for the LIVE pid
 //     (a single KERN_PROC_PID result). An empty result or ESRCH means the pid

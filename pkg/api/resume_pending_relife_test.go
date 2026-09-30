@@ -4,39 +4,28 @@ package api_test
 // life (SR-8.4, SR-8.5; AC-RES-13): the resumed agent reports in with a new
 // session id, its life ends, its session goes, and a second resume moves the
 // row again, blocked by nothing the first resume left. On the shared fixture in
-// resume_fixture_test.go against a real store; the hook helpers are in
-// resume_pending_test.go.
+// resume_fixture_test.go against a real store; pendSessionStart is in
+// resume_pending_hook_test.go.
 
 import (
-	"context"
-	"io"
 	"os"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
-	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // relifeSessionEnd delivers the SessionEnd a pause produces (reason
-// prompt_input_exit) for id through the hook handler on the real store.
+// prompt_input_exit) for id from its agent, the row's recorded pane process
+// (SR-22.9), failing the test unless it applies.
 func relifeSessionEnd(t *testing.T, e *resumeEnv, id string) {
 	t.Helper()
-	payload := `{"hook_event_name":"SessionEnd","reason":"prompt_input_exit"}`
-	env := func(k string) string {
-		if k == "AGENT_DIRECTOR_INSTANCE_ID" {
-			return id
-		}
-		return ""
-	}
-	if err := hook.Handle(context.Background(), strings.NewReader(payload), io.Discard, e.st,
-		hook.HandleConfig{Env: env}, nil); err != nil {
-		t.Fatalf("hook.Handle(SessionEnd): %v", err)
+	if got := apitest.ApplyAgentHook(t, e.dbPath, id, "SessionEnd", ""); !got.Applied {
+		t.Fatalf("SessionEnd from the agent = %+v; want applied", got)
 	}
 }
 
@@ -54,7 +43,7 @@ func relifeResumeAs(t *testing.T, e *resumeEnv, id, parent string) {
 // goes); a second resume succeeds with one new create resuming the reported
 // session, and its move applies again: pending, a new launch start, token and
 // parent, ended_at cleared, row_version advanced and a second move event.
-// Hook-driven: Task rc's hook gate (S17) converts the SessionStart and SessionEnd.
+// Both hooks come from the resumed agent, the pane resume recorded (SR-22.9).
 func TestResumeAgainAfterResumedAgentsLifeEnds(t *testing.T) {
 	e := newResumeEnv(t)
 	r := e.seedResumable(t, store.StateEnded)

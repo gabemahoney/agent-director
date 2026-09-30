@@ -44,17 +44,29 @@ var matcherFields = map[hookEventName]bool{
 // synthesizeSettings builds the inline JSON passed to `claude --settings`.
 // Returns the JSON string and any error from os.Executable / json encoding.
 //
-// Shape (SRD §6.1):
+// Shape (SRD §6.1; SR-22.9):
 //
 //	{
 //	  "hooks": {
-//	    "<EventName>": [{"hooks":[{"type":"command","command":"<bin> hook"}]}],
+//	    "<EventName>": [{"hooks":[{"type":"command","command":"<bin>","args":["hook"]}]}],
 //	    ... (and "PreToolUse"/"PermissionRequest" carry matcher "*" on the
 //	        outer entry AND an inner "timeout": <effective relay timeout>
-//	        on the command object, sibling of "type"/"command")
+//	        on the command object, sibling of "type"/"command"/"args")
 //	  },
 //	  "permissions": { "allow": [...], "deny": [...], "ask": [...] }
 //	}
+//
+// Every agent-director hook is registered in EXEC FORM (SR-22.9, "Exec-form
+// hooks"): `command` is the program path and `args` its argument list, so
+// Claude Code starts `<bin> hook` directly with no `sh` between them. A
+// shell-form entry ("command":"<bin> hook") would run under `sh -c`, and
+// dash does not exec its last command, so the hook's parent would be that
+// shell. In exec form the hook's getppid() is the Claude process itself —
+// the row's recorded pane process — which is what the hook gate compares
+// (SR-22.9). The README states the minimum Claude Code version (RN-9); a
+// version that ignores `args` never runs `<bin> hook` (Claude Code 2.1.120
+// runs `command` through /bin/sh with no verb), so no hook applies and the
+// row stays pending (SR-18.12).
 //
 // The inner `timeout` (seconds) is emitted ONLY on the two relay hook
 // entries (PermissionRequest, PreToolUse). It carries the effective relay
@@ -63,13 +75,16 @@ var matcherFields = map[hookEventName]bool{
 // boundary and the poll loop's fail-closed deny move in lockstep (SR-1.2 /
 // SR-1.3). A non-positive `relay.timeout_seconds` still emits 86400 (never
 // 0 or an omitted key). The other six events and the inject_help_hook
-// SessionStart entry carry no timeout and are unchanged.
+// SessionStart entry carry no timeout.
 //
 // `<bin>` is the absolute path to the currently-running agent-director
-// binary (os.Executable, then filepath.Abs as belt-and-braces). The path
-// is rendered through strconv.Quote-style escaping defensively even
-// though tmux's direct-argv delivery does not require shell-escaping —
-// SRD §4.3 calls for that belt-and-suspenders treatment.
+// binary (executablePath), written VERBATIM: in exec form `command` is a
+// program path, not shell text, so it is never quoted (a quoted path would
+// name a file that does not exist).
+//
+// The inject_help_hook SessionStart entry is unchanged and stays in shell
+// form ("command":"<install path> help", through quoteIfWhitespace): it
+// writes nothing, so its parent process does not matter.
 //
 // The `permissions` block is included whenever the caller supplied any
 // non-empty allow/deny/ask array OR when cfg.Defaults.DisableAskUserQuestion
@@ -80,8 +95,6 @@ func synthesizeSettings(r Resolved, cfg config.Config) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve agent-director path: %w", err)
 	}
-	exe = quoteIfWhitespace(exe)
-	cmd := exe + " hook"
 
 	// The two relay hook entries (PermissionRequest, PreToolUse) carry the
 	// effective relay timeout on their inner command object so Claude Code's
@@ -91,7 +104,9 @@ func synthesizeSettings(r Resolved, cfg config.Config) (string, error) {
 
 	hooks := map[string]any{}
 	for _, evt := range hookEvents {
-		command := map[string]any{"type": "command", "command": cmd}
+		// Exec form (SR-22.9): the path verbatim as the program, "hook" as
+		// its one argument.
+		command := map[string]any{"type": "command", "command": exe, "args": []string{"hook"}}
 		if matcherFields[evt] {
 			command["timeout"] = relayTimeout
 		}
@@ -225,12 +240,14 @@ var helpHookBinPath = func() (string, error) {
 }
 
 // quoteIfWhitespace defensively double-quotes a path that contains
-// whitespace. The install skill rejects whitespace install destinations
-// (SRD §4.3) so this branch is unreachable in production; the quoting
-// is here so a hand-edited install of the binary under (e.g.)
-// "/Users/some name/bin/agent-director" cannot trigger a split-on-space
-// bug if the synthesized JSON ever flows through a shell-quoting
-// downstream (which it currently doesn't — tmux delivers direct argv).
+// whitespace. It is used ONLY for the shell-form inject_help_hook entry,
+// whose `command` is shell text; the exec-form agent-director hooks carry
+// the path verbatim and are never quoted (SR-22.9). The install skill
+// rejects whitespace install destinations (SRD §4.3) so this branch is
+// unreachable in production; the quoting is here so a hand-edited install
+// of the binary under (e.g.) "/Users/some name/bin/agent-director" cannot
+// trigger a split-on-space bug in the shell Claude Code runs that entry
+// under.
 func quoteIfWhitespace(p string) string {
 	if !strings.ContainsAny(p, " \t\n") {
 		return p

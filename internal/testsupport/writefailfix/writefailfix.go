@@ -33,8 +33,9 @@ type Kind int
 const (
 	// ReuseArchive fails an insert or update of the id's session_history
 	// entry (the reuse archive). Also matched: the SessionStart rotation
-	// archive, which is fail-open, so RecordSessionStartIdentity still
-	// succeeds but archives nothing; and any seeding of history for the id.
+	// archive inside RecordSessionStartIdentity's transaction, which is
+	// fail-open, so the SessionStart write still commits but archives
+	// nothing; and any seeding of history for the id.
 	ReuseArchive Kind = 1
 	// ReuseReset fails an update that moves the id's finished row (ended or
 	// missing) to pending (the reuse reset). Also matched: resume's move to
@@ -54,11 +55,14 @@ const (
 	ReuseRestore Kind = 4
 	// LaunchIdentityWrite fails the launch identity write
 	// (store.RecordLaunchIdentity, SR-3.6): an update of the id's spawns row
-	// whose SET names the server and pane identity columns and leaves state
-	// unchanged. It fires whether or not the values differ, and never on the
-	// insert, a hook write or any other kind's write. Also matched: SeedSpawn's
-	// option and default update (install after seeding). Later adoption writes
-	// (SR-3.6) have the same shape and would also match.
+	// whose SET names the server identity columns, pane_id or pane_pid and
+	// leaves state unchanged. It fires whether or not the values differ, and
+	// never on the insert, a hook write or any other kind's write: a gated hook
+	// write names only pane_starttime of these columns (it records the pane
+	// start time when NULL, SR-22.9), which the trigger does not list. Also
+	// matched: SeedSpawn's option and default update and the seeders' seed
+	// pane writes (storefix.WithSeedPane), so install after seeding. Later
+	// adoption writes (SR-3.6) have the same shape and would also match.
 	LaunchIdentityWrite Kind = 5
 )
 
@@ -167,12 +171,15 @@ END`,
 	// UPDATE OF fires when the statement's SET names any listed column, so a
 	// write of the same values still fails. NEW.state IS OLD.state excludes
 	// the writes that begin a launch or restore one, which change the state.
+	// pane_starttime is not listed: every gated hook write sets it (to itself
+	// when already recorded, SR-22.9), and the trigger must never fire on a
+	// hook write; the launch identity write still names five listed columns.
 	LaunchIdentityWrite: {
 		{
 			name: "ad_test_fail_launch_identity_write",
 			create: `CREATE TRIGGER IF NOT EXISTS ad_test_fail_launch_identity_write
     BEFORE UPDATE OF tmux_server_pid, tmux_server_started, tmux_server_starttime,
-                     pane_id, pane_pid, pane_starttime ON spawns
+                     pane_id, pane_pid ON spawns
     WHEN NEW.state IS OLD.state
      AND EXISTS (SELECT 1 FROM ad_test_write_failure
                   WHERE kind = 5 AND claude_instance_id = OLD.claude_instance_id)

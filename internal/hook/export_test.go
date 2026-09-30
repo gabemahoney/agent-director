@@ -11,3 +11,6 @@ func SetNowFunc(f func() time.Time) func() {
 	nowFunc = f
 	return func() { nowFunc = prev }
 }
+
+// ExtractSessionID exposes extractSessionID to the external test package.
+var ExtractSessionID = extractSessionID

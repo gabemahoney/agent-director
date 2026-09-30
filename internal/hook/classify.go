@@ -78,7 +78,7 @@ func (p payload) eventName() string {
 }
 
 // ClassifyResult is the typed outcome of one classification pass. Callers
-// use NewState / SoftRefresh / SessionID to drive the row UPSERT, and
+// use NewState / SoftRefresh / SessionID to drive the gated row write, and
 // EventName for telemetry / log lines on unknown events.
 type ClassifyResult struct {
 	// EventName is the canonical event name as parsed from the payload.
@@ -93,15 +93,18 @@ type ClassifyResult struct {
 	// changing state — SessionEnd reason=clear|compact, Notification, and unknown events.
 	SoftRefresh bool
 
-	// SessionID is the basename-without-extension of transcript_path when
-	// the event is SessionStart and the path is present. Used to update
-	// spawns.claude_session_id (SRD §8.3).
+	// SessionID is the basename-without-extension of transcript_path, for
+	// every event whose payload carries the path. It is recorded, never a
+	// gate (SR-22.9): SessionStart writes it to spawns.claude_session_id
+	// (SRD §8.3), an applied ordinary hook writes it when the row records no
+	// session id yet, and ad.hook.ignored reports it as hook_session_id
+	// (SR-14).
 	SessionID string
 
-	// TranscriptPath is the full hook-reported transcript_path, carried only
-	// on SessionStart events (empty on all others). Written verbatim to
-	// spawns.jsonl_path (SR-9.1) — independent of whether the basename
-	// SessionID extraction succeeded. Empty means "don't write the column".
+	// TranscriptPath is the full hook-reported transcript_path, for every
+	// event. It is written verbatim to spawns.jsonl_path (SR-9.1) with the
+	// session id it names, independent of whether the basename SessionID
+	// extraction succeeded. Empty means "don't write the column".
 	TranscriptPath string
 
 	// UnknownEvent is true when the payload's event name does not match
@@ -149,13 +152,16 @@ func ClassifyEvent(raw json.RawMessage) (ClassifyResult, error) {
 		return ClassifyResult{}, err
 	}
 
-	res := ClassifyResult{EventName: p.eventName(), ToolName: p.ToolName}
+	res := ClassifyResult{
+		EventName:      p.eventName(),
+		ToolName:       p.ToolName,
+		SessionID:      extractSessionID(p.TranscriptPath),
+		TranscriptPath: p.TranscriptPath,
+	}
 
 	switch res.EventName {
 	case "SessionStart":
 		res.NewState = store.StateWaiting
-		res.SessionID = extractSessionID(p.TranscriptPath)
-		res.TranscriptPath = p.TranscriptPath
 	case "UserPromptSubmit":
 		res.NewState = store.StateWorking
 	case "PreToolUse":

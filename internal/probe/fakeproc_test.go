@@ -4,16 +4,15 @@ package probe
 // test suite.
 //
 // These builders write a Linux-format <root>/<pid>/{stat,environ} tree under a
-// caller-supplied root (a t.TempDir), never the real /proc. Both the resolver
-// (linuxProcReader) and the checker (linuxChecker) take an INJECTABLE procRoot,
-// and their parsing/verdict logic is build-tag-free, so the tests that drive
-// them over a fabricated tree compile and run on ANY OS. This file therefore
-// carries NO //go:build linux tag: it lives here (not in resolver_linux_test.go)
-// so the tag-free verdict-table tests in checker_linux_core_test.go compile
+// caller-supplied root (a t.TempDir), never the real /proc. The Linux readers
+// (the checker linuxChecker, the start-time reader and the command-name
+// reader) take an INJECTABLE procRoot, and their parsing/verdict logic is
+// build-tag-free, so the tests that drive them over a fabricated tree compile
+// and run on ANY OS. This file therefore carries NO //go:build linux tag, so
+// the tag-free verdict-table tests in checker_linux_core_test.go compile
 // off-linux (e.g. `GOOS=darwin go vet ./internal/probe/`).
 //
-// Only tests that require the REAL /proc mount (TestLinuxResolverRealProcHappyPath)
-// stay under the linux tag in resolver_linux_test.go.
+// Only tests that require the REAL /proc mount stay under the linux tag.
 
 import (
 	"os"

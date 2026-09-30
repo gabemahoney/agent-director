@@ -5,8 +5,7 @@ package probe
 // seam is the per-pid KERN_PROC_PID kinfo fetch (fetchKinfo, wired to
 // fetchKinfoPID by newProcChecker on darwin — see checker_darwin.go), so the
 // answer logic is build-tag-free and unit-testable off-darwin against
-// synthetic kinfo_proc entries (the darwinChecker / resolver_darwin_core
-// precedent).
+// synthetic kinfo_proc entries (the darwinChecker precedent).
 //
 // It is deliberately separate from darwinChecker, which keeps its
 // KERN_PROCARGS2 environment tiebreaker for find-missing until Epic 14 removes

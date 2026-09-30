@@ -269,11 +269,11 @@ var successCases = []successCase{
 				sessID = "session-uuid-resume-1"
 				cwd    = "/tmp"
 			)
-			s, dbPath := apitest.OpenStoreWithRow(t,
+			_, dbPath := apitest.OpenStoreWithRow(t,
 				id, "cd-resume-1", store.StateEnded, "off")
-			if err := s.RecordSessionStartIdentity(id, sessID, "", false, 0, ""); err != nil {
-				t.Fatalf("resume seed: RecordSessionStartIdentity: %v", err)
-			}
+			// The session id is recorded through the gated hook path, as
+			// the row's own agent would (SR-22.9); the row stays ended.
+			apitest.SeedSessionID(t, dbPath, id, sessID)
 			return filepath.Dir(dbPath), map[string]any{
 				"id":     id,
 				"sessID": sessID,

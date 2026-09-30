@@ -439,15 +439,11 @@ func TestReadSessionHistoryAllLives_HookRotations(t *testing.T) {
 		}
 	}
 
-	s, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	defer s.Close() //nolint:errcheck
+	// Each rotation is a SessionStart from the row's own agent (SR-22.9).
 	rotate := func(inst, sess, jsonl string) {
 		t.Helper()
-		if err := s.RecordSessionStartIdentity(inst, sess, jsonl, jsonl != "", 0, ""); err != nil {
-			t.Fatalf("RecordSessionStartIdentity(%q, %q): %v", inst, sess, err)
+		if got := ApplyAgentHook(t, dbPath, inst, "SessionStart", sess, HookTranscript(jsonl, jsonl != "")); !got.Applied {
+			t.Fatalf("SessionStart(%q, %q) not applied: %+v", inst, sess, got)
 		}
 	}
 	rotate(id, "s2", "/tmp/hist/s2.jsonl") // archives s1, which never had a transcript path

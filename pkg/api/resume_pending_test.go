@@ -2,24 +2,21 @@ package api_test
 
 // resume_pending_test.go covers resume's move to pending (SR-8.3, SR-8.4,
 // SR-8.6, SR-14, SR-20.6; AC-RES-08, AC-RES-09, AC-RES-11, AC-RES-18): the
-// move's columns, its visibility, SessionStart after it, the launch-in-progress
-// refusal and two resumes in each order, on the shared fixture in
-// resume_fixture_test.go against a real store.
+// move's columns, its visibility, the launch-in-progress refusal and two
+// resumes in each order, on the shared fixture in resume_fixture_test.go
+// against a real store; SessionStart after the move is in
+// resume_pending_hook_test.go.
 
 import (
-	"context"
 	"errors"
-	"io"
 	"os"
 	"reflect"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
@@ -61,23 +58,6 @@ func pendParent(t *testing.T, e *resumeEnv) string {
 
 // pendCalls is every tmux call rec recorded, name-based and socket-taking.
 func pendCalls(rec *tmuxfix.Recorder) int { return len(rec.Calls()) + len(rec.SocketCalls()) }
-
-// pendSessionStart delivers a SessionStart for id through the hook handler on
-// the real store, reporting transcript (whose basename is the session id).
-func pendSessionStart(t *testing.T, e *resumeEnv, id, transcript string) {
-	t.Helper()
-	payload := `{"hook_event_name":"SessionStart","transcript_path":"` + transcript + `"}`
-	env := func(k string) string {
-		if k == "AGENT_DIRECTOR_INSTANCE_ID" {
-			return id
-		}
-		return ""
-	}
-	if err := hook.Handle(context.Background(), strings.NewReader(payload), io.Discard, e.st,
-		hook.HandleConfig{Env: env}, nil); err != nil {
-		t.Fatalf("hook.Handle(SessionStart): %v", err)
-	}
-}
 
 // pendRowNullOr returns nil for "" and s otherwise (a column's raw NULL or text).
 func pendRowNullOr(s string) any {
@@ -220,30 +200,6 @@ func TestResumePendingVisibleOnEverySurface(t *testing.T) {
 	if i < 0 || l.Spawns[i].State != store.StatePending || l.Spawns[i].LaunchStartedAt == nil || !l.Spawns[i].LaunchStartedAt.Equal(want) {
 		t.Errorf("List row %d of %+v; want %s pending at %s", i, l.Spawns, r.ID, want.Format(time.RFC3339Nano))
 	}
-}
-
-// TestResumeSessionStartAfterMoveTurnsRowWaiting: SessionStart through the hook
-// path after the move makes the row waiting with no launch start, prior_state pending.
-func TestResumeSessionStartAfterMoveTurnsRowWaiting(t *testing.T) {
-	e := newResumeEnv(t)
-	r := e.seedResumable(t, store.StateMissing)
-	if _, err := e.resume(r.ID); err != nil {
-		t.Fatalf("Resume: %v", err)
-	}
-	seen := len(pendTrail(t, "ad.spawn.state_transition", r.ID))
-	pendSessionStart(t, e, r.ID, r.JSONLPath)
-
-	cols := e.columns(t, r.ID)
-	if cols.State != store.StateWaiting || cols.LaunchStartedAt != nil {
-		t.Errorf("row {state %v, launch_started_at %#v}; want waiting, NULL", cols.State, cols.LaunchStartedAt)
-	}
-	lines := pendTrail(t, "ad.spawn.state_transition", r.ID)[seen:]
-	if len(lines) != 1 {
-		t.Fatalf("ad.spawn.state_transition lines from SessionStart = %d; want 1", len(lines))
-	}
-	assertAPITrailStr(t, lines[0], "prior_state", store.StatePending)
-	assertAPITrailStr(t, lines[0], "new_state", store.StateWaiting)
-	assertAPITrailStr(t, lines[0], "triggering_event_name", "SessionStart")
 }
 
 // pendRefusal is one refused resume: the row just before and after it, its

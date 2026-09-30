@@ -22,9 +22,7 @@ import (
 func TestGetPermissionOpenRow(t *testing.T) {
 	s, _ := apitest.SeedDecideFixture(t, "on")
 	const rawInput = `{"file":"/tmp/x","mode":"rw"}`
-	if err := s.UpsertOpenPermissionRequest("id-d-1", storefix.TestRequestTokenA, "Read", rawInput, 0, ""); err != nil {
-		t.Fatalf("UpsertOpenPermissionRequest: %v", err)
-	}
+	openAgentRequest(t, s, "id-d-1", storefix.TestRequestTokenA, "Read", rawInput, 0)
 
 	got, err := api.GetPermission(s, api.GetPermissionParams{
 		RequestToken: storefix.TestRequestTokenA,
@@ -206,9 +204,7 @@ func TestGetPermissionToolInputBytePassthrough(t *testing.T) {
 	// Non-canonical whitespace + key order. Any JSON round-trip would
 	// produce {"command":"ls","extra":"x"} with no spaces.
 	const noncanonical = `{ "command" : "ls" , "extra":"x" }`
-	if err := s.UpsertOpenPermissionRequest("id-d-1", storefix.TestRequestTokenA, "Bash", noncanonical, 0, ""); err != nil {
-		t.Fatalf("UpsertOpenPermissionRequest: %v", err)
-	}
+	openAgentRequest(t, s, "id-d-1", storefix.TestRequestTokenA, "Bash", noncanonical, 0)
 
 	got, err := api.GetPermission(s, api.GetPermissionParams{
 		RequestToken: storefix.TestRequestTokenA,
@@ -248,9 +244,7 @@ func TestGetPermissionEvictedRow(t *testing.T) {
 	// Insert one open row with cap=5. This is the 6th row in the store,
 	// triggering in-transaction eviction of the oldest closed row (evictedToken).
 	// TestRequestTokenB is the survivor we cross-check below.
-	if err := s.UpsertOpenPermissionRequest(instanceID, storefix.TestRequestTokenB, "Bash", `{"cmd":"ls"}`, relayConf.PermissionRequestCap, ""); err != nil {
-		t.Fatalf("UpsertOpenPermissionRequest (survivor): %v", err)
-	}
+	openAgentRequest(t, s, instanceID, storefix.TestRequestTokenB, "Bash", `{"cmd":"ls"}`, relayConf.PermissionRequestCap)
 
 	// The evicted token must surface ErrPermissionRequestNotFound — wire-
 	// indistinguishable from a token that was never written.

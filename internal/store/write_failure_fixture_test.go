@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -8,15 +9,15 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/writefailfix"
 )
 
-// seedWriteFailureRow inserts a pending row for id and, for any other state,
-// moves it there with a hook transition.
+// seedWriteFailureRow inserts a pending row for id, its agent's pane recorded,
+// and, for any other state, moves it there with the agent's hook transition.
 func seedWriteFailureRow(t *testing.T, s *Store, id, state string) {
 	t.Helper()
 	seedSpawnForPerm(t, s, id, "off")
 	if state == StatePending {
 		return
 	}
-	if err := s.ApplyHookTransition(id, state, false, "test_seed"); err != nil {
+	if err := agentHook(s, id, state, false, "test_seed"); err != nil {
 		t.Fatalf("seed %s as %s: %v", id, state, err)
 	}
 }
@@ -31,15 +32,33 @@ func getWriteFailureRow(t *testing.T, s *Store, id string) Spawn {
 	return sp
 }
 
+// moveToPendingWrite is resume's move to pending of id's row as examined now;
+// a move that does not apply is an error.
+func moveToPendingWrite(s *Store, id string) error {
+	sp, err := s.GetSpawn(id)
+	if err != nil {
+		return err
+	}
+	res, _, err := s.MoveToPending(id, sp.Snapshot, 1767225600000, "0123456789abcdef", "/tmp/wf-sock", "")
+	if err == nil && res != CondApplied {
+		err = fmt.Errorf("MoveToPending(%s) = %v; want CondApplied", id, res)
+	}
+	return err
+}
+
 // TestInjectWriteFailure_WhiteBox proves the white-box installer fails the
 // matching store write for its id only, and that its cleanup removes it.
 func TestInjectWriteFailure_WhiteBox(t *testing.T) {
 	cases := []struct {
 		kind               writefailfix.Kind
 		fromState, toState string
+		write              func(s *Store, id string) error
 	}{
-		{writefailfix.ReuseReset, StateEnded, StatePending},
-		{writefailfix.ReuseRestore, StatePending, StateEnded},
+		// SR-22.9: no hook moves a finished row to pending; resume's move does.
+		{writefailfix.ReuseReset, StateEnded, StatePending, moveToPendingWrite},
+		{writefailfix.ReuseRestore, StatePending, StateEnded, func(s *Store, id string) error {
+			return agentHook(s, id, StateEnded, false, "SessionEnd")
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.kind.String(), func(t *testing.T) {
@@ -47,9 +66,7 @@ func TestInjectWriteFailure_WhiteBox(t *testing.T) {
 			const target, other = "wf-target", "wf-other"
 			seedWriteFailureRow(t, s, target, tc.fromState)
 			seedWriteFailureRow(t, s, other, tc.fromState)
-			write := func(id string) error {
-				return s.ApplyHookTransition(id, tc.toState, false, "test_write")
-			}
+			write := func(id string) error { return tc.write(s, id) }
 
 			t.Run("installed", func(t *testing.T) {
 				injectWriteFailure(t, s, tc.kind, target)

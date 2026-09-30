@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -134,10 +135,20 @@ func TestRecordLaunchIdentityOutcomes(t *testing.T) {
 		{name: "changed, wrong version", version: func(apitest.SpawnColumns) int64 { return 1 },
 			lid: createdIdentity(), want: store.CondChanged},
 		{name: "changed, wrong token", token: "0000000000000000", lid: createdIdentity(), want: store.CondChanged},
+		// SR-22.9: no hook applies before the identity write (the row has no
+		// pane), so the in-between writes are non-hook writes.
 		{name: "changed, row no longer pending", version: current, lid: createdIdentity(), want: store.CondChanged,
-			setup: func(t *testing.T, f *v5Store) { hookWrite(t, f, "waiting", false) }},
-		{name: "changed, hook write in between", lid: createdIdentity(), want: store.CondChanged,
-			setup: func(t *testing.T, f *v5Store) { hookWrite(t, f, "", true) }},
+			setup: func(t *testing.T, f *v5Store) { markMissing("pending")(t, f, "li-row") }},
+		{name: "changed, a write in between", lid: createdIdentity(), want: store.CondChanged,
+			setup: func(t *testing.T, f *v5Store) {
+				if err := f.s.SetParentID("li-row", ""); err != nil {
+					t.Fatalf("SetParentID: %v", err)
+				}
+			}},
+		// SR-22.9: the agent's hooks before the identity write are not applied
+		// (no_pane_recorded) and write nothing, so the write then applies.
+		{name: "applied after the agent's hooks before it were ignored", lid: createdIdentity(), want: store.CondApplied,
+			setup: earlyAgentHooks},
 		{name: "absent", id: "li-missing", lid: createdIdentity(), want: store.CondAbsent},
 	}
 	for _, c := range cases {
@@ -187,11 +198,16 @@ func TestRecordLaunchIdentityDriverError(t *testing.T) {
 	}
 }
 
-// hookWrite applies a hook transition to the li-row row.
-func hookWrite(t *testing.T, f *v5Store, to string, soft bool) {
+// earlyAgentHooks fires the agent's SessionStart and Stop at the li-row row
+// before its pane is recorded and fails unless each is ignored as
+// no_pane_recorded (SR-22.9).
+func earlyAgentHooks(t *testing.T, f *v5Store) {
 	t.Helper()
-	if err := f.s.ApplyHookTransition("li-row", to, soft, "launch_identity_test"); err != nil {
-		t.Fatalf("ApplyHookTransition(%q, soft=%v): %v", to, soft, err)
+	want := store.HookApplied{Reason: store.HookReasonNoPaneRecorded}
+	for _, event := range []string{"SessionStart", "Stop"} {
+		if got := storefix.ApplyAgentHook(t, f.s, "li-row", event, "sess-early"); got != want {
+			t.Fatalf("%s before the identity write = %+v; want %+v", event, got, want)
+		}
 	}
 }
 

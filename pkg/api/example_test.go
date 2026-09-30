@@ -47,11 +47,10 @@ func buildClient(storePath string) (*api.Client, *store.Store, *tmuxfix.Recorder
 // Uses os.MkdirTemp rather than t.TempDir. Panics on any construction failure;
 // a panic during go test surfaces as a clear example-failed result with a stack.
 //
-// Returns (client, store, recorder, cleanup). Callers must defer cleanup.
-// The store is the seeding handle for example bodies: call s.InsertPending and
-// s.ApplyHookTransition directly, panicking on error (matching this helper's
-// panic-on-failure contract).
-func exampleClient() (*api.Client, *store.Store, *tmuxfix.Recorder, func()) {
+// Returns (client, store, store path, recorder, cleanup). Callers must defer
+// cleanup. The store and its path are the seeding handles for example bodies'
+// seedRow calls.
+func exampleClient() (*api.Client, *store.Store, string, *tmuxfix.Recorder, func()) {
 	tmpDir, err := os.MkdirTemp("", "pkg-api-example-*")
 	if err != nil {
 		panic("exampleClient: MkdirTemp: " + err.Error())
@@ -62,7 +61,7 @@ func exampleClient() (*api.Client, *store.Store, *tmuxfix.Recorder, func()) {
 		_ = os.RemoveAll(tmpDir)
 		panic("exampleClient: buildClient: " + err.Error())
 	}
-	return c, s, rec, func() {
+	return c, s, path, rec, func() {
 		_ = c.Close()
 		_ = s.Close()
 		_ = os.RemoveAll(tmpDir)
@@ -86,9 +85,10 @@ func mustClient(t *testing.T) (*api.Client, *tmuxfix.Recorder) {
 	return c, rec
 }
 
-// seedRow inserts a Spawn row at the given state into s without *testing.T.
+// seedRow inserts a Spawn row at the given state into s (open on path) without
+// *testing.T, the state written by the row's own agent's gated hook (SR-22.9).
 // Panics on any store error (example-function contract). labels may be nil.
-func seedRow(s *store.Store, id, state string, labels map[string]string) {
+func seedRow(s *store.Store, path, id, state string, labels map[string]string) {
 	sp := store.Spawn{
 		ClaudeInstanceID: id,
 		CWD:              "/tmp",
@@ -99,10 +99,8 @@ func seedRow(s *store.Store, id, state string, labels map[string]string) {
 	if err := s.InsertPending(sp); err != nil {
 		panic("seedRow: InsertPending " + id + ": " + err.Error())
 	}
-	if state != store.StatePending {
-		if err := s.ApplyHookTransition(id, state, false, "test_seed"); err != nil {
-			panic("seedRow: ApplyHookTransition " + id + "→" + state + ": " + err.Error())
-		}
+	if err := seedAgentState(s, path, id, state); err != nil {
+		panic("seedRow: seed " + id + "→" + state + ": " + err.Error())
 	}
 }
 
@@ -118,7 +116,7 @@ func seedRow(s *store.Store, id, state string, labels map[string]string) {
 // SpawnParams.ClaudeInstanceID is seeded to a fixed value so the output is
 // deterministic. In production usage omit it and the library mints a UUID4.
 func ExampleClient_Spawn() {
-	c, _, _, cleanup := exampleClient()
+	c, _, _, _, cleanup := exampleClient()
 	defer cleanup()
 	// README:start ExampleClient_Spawn
 	result, err := c.Spawn(api.SpawnParams{
@@ -143,10 +141,10 @@ func ExampleClient_Spawn() {
 // tracked Spawn. The row is seeded in pending state using the instance ID from
 // the README example so the labeled region can reference the literal ID string.
 func ExampleClient_Status() {
-	c, s, _, cleanup := exampleClient()
+	c, s, path, _, cleanup := exampleClient()
 	defer cleanup()
 	// Seed the README's example instance ID in pending state.
-	seedRow(s, "claude_2026-05-22T18-23-15", store.StatePending, nil)
+	seedRow(s, path, "claude_2026-05-22T18-23-15", store.StatePending, nil)
 	// README:start ExampleClient_Status
 	res, err := c.Status("claude_2026-05-22T18-23-15")
 	if err != nil {
@@ -163,12 +161,12 @@ func ExampleClient_Status() {
 // Two rows with distinct states are seeded so the filter returns both;
 // Unordered output is used because List makes no ordering guarantee.
 func ExampleClient_List() {
-	c, s, _, cleanup := exampleClient()
+	c, s, path, _, cleanup := exampleClient()
 	defer cleanup()
 	// Seed two rows with the project=widget label in different live states.
-	seedRow(s, "list-waiting-example", store.StateWaiting,
+	seedRow(s, path, "list-waiting-example", store.StateWaiting,
 		map[string]string{"project": "widget"})
-	seedRow(s, "list-working-example", store.StateWorking,
+	seedRow(s, path, "list-working-example", store.StateWorking,
 		map[string]string{"project": "widget"})
 	// README:start ExampleClient_List
 	res, err := c.List(api.ListParams{
@@ -192,10 +190,10 @@ func ExampleClient_List() {
 // The CR-strip behavior (SRD §4.3) is always applied before delivery;
 // Enter is always appended to submit the composed buffer (press_enter=true).
 func ExampleClient_SendKeys() {
-	c, s, rec, cleanup := exampleClient()
+	c, s, path, rec, cleanup := exampleClient()
 	defer cleanup()
 	// Seed a live Spawn in waiting state (interactive — required by SendKeys).
-	seedRow(s, "claude_2026-05-22T18-23-15", store.StateWaiting, nil)
+	seedRow(s, path, "claude_2026-05-22T18-23-15", store.StateWaiting, nil)
 	// README:start ExampleClient_SendKeys
 	_, err := c.SendKeys(api.SendKeysParams{
 		ClaudeInstanceID: "claude_2026-05-22T18-23-15",
@@ -216,10 +214,10 @@ func ExampleClient_SendKeys() {
 // ExampleClient_Kill demonstrates terminating a Spawn's tmux session.
 // Kill is idempotent on terminal states (ended/missing).
 func ExampleClient_Kill() {
-	c, s, _, cleanup := exampleClient()
+	c, s, path, _, cleanup := exampleClient()
 	defer cleanup()
 	// Seed a live Spawn in working state.
-	seedRow(s, "claude_2026-05-22T18-23-15", store.StateWorking, nil)
+	seedRow(s, path, "claude_2026-05-22T18-23-15", store.StateWorking, nil)
 	// README:start ExampleClient_Kill
 	_, err := c.Kill(api.KillParams{
 		ClaudeInstanceID: "claude_2026-05-22T18-23-15",

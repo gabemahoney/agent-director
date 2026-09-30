@@ -10,9 +10,8 @@ import (
 
 // linuxChecker implements LivenessChecker over an INJECTABLE PROC ROOT
 // (procRoot, default "/proc" via newChecker on Linux — see checker_linux.go).
-// It reuses/mirrors the resolver's procRoot seam (resolver_linux.go): tests
-// construct it with a fabricated proc tree so the SR-7.4 Linux table is
-// exercisable off any OS. The struct + its verdict logic are build-tag-free
+// The procRoot seam lets tests construct it with a fabricated proc tree so the
+// SR-7.4 Linux table is exercisable off any OS. The struct + its verdict logic are build-tag-free
 // (plain os.ReadFile over the injected root, no Linux-only syscalls) so the
 // darwin-free logic and its errno table are directly unit-testable.
 type linuxChecker struct {

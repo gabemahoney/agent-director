@@ -34,7 +34,8 @@ const (
 // (e.g. schema tests that check PRAGMA values via database/sql).
 //
 // The store is always created via OpenOrInit, so the schema is applied on
-// first call. Helpers use t.TempDir() exclusively and never touch
+// first call, and registered (RegisterStorePath) for the seeders that take
+// only the handle. Helpers use t.TempDir() exclusively and never touch
 // ~/.agent-director.
 func OpenTempStore(t *testing.T) (*store.Store, string) {
 	t.Helper()
@@ -44,6 +45,7 @@ func OpenTempStore(t *testing.T) (*store.Store, string) {
 		t.Fatalf("storefix.OpenTempStore: OpenOrInit(%q): %v", path, err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
+	RegisterStorePath(t, s, path)
 	return s, path
 }
 
@@ -61,8 +63,12 @@ func defaultSpawn(id string) store.Spawn {
 }
 
 // seed inserts a spawn row and then transitions it to targetState.
-// It uses InsertPending followed by ApplyHookTransition so the row ends up
-// in any desired state without exposing raw SQL to callers.
+// It uses InsertPending followed by the gated hook transition, played by the
+// row's own agent through a seed pane (WithSeedPane, SeedAgentWrites), so
+// the row ends up in any desired state without exposing raw SQL to callers.
+// The seed pane is removed afterwards: the row records no pane and no
+// process identity, as InsertPending left it. row_version: 0 for pending,
+// else 1. s must come from OpenTempStore (or be registered).
 func seed(t *testing.T, s *store.Store, id, targetState string) store.Spawn {
 	t.Helper()
 	sp := defaultSpawn(id)
@@ -70,8 +76,11 @@ func seed(t *testing.T, s *store.Store, id, targetState string) store.Spawn {
 		t.Fatalf("storefix.seed: InsertPending(%q): %v", id, err)
 	}
 	if targetState != store.StatePending {
-		if err := s.ApplyHookTransition(id, targetState, false, "test_seed"); err != nil {
-			t.Fatalf("storefix.seed: ApplyHookTransition(%q, %q): %v", id, targetState, err)
+		dbPath := StorePath(t, s, "storefix.seed")
+		if err := WithSeedPane(dbPath, id, func(gate store.HookGate) error {
+			return SeedAgentWrites(s, gate, id, "", targetState)
+		}); err != nil {
+			t.Fatalf("storefix.seed(%q, %q): %v", id, targetState, err)
 		}
 	}
 	row, err := s.GetSpawn(id)
@@ -122,6 +131,8 @@ func SeedLiveSpawn(t *testing.T, s *store.Store, id string) store.Spawn {
 // SeedCheckPermission inserts a Spawn in StateCheckPermission with relay_mode=on
 // and writes an open permission_requests row for it. Use this as the precondition
 // for the decide verb, which requires relay_mode=on and an undecided request.
+// Both writes are gated hook writes played by the row's own agent through a
+// seed pane, removed afterwards (see seed). s must come from OpenTempStore.
 func SeedCheckPermission(t *testing.T, s *store.Store, id string) store.Spawn {
 	t.Helper()
 	sp := defaultSpawn(id)
@@ -129,11 +140,15 @@ func SeedCheckPermission(t *testing.T, s *store.Store, id string) store.Spawn {
 	if err := s.InsertPending(sp); err != nil {
 		t.Fatalf("storefix.SeedCheckPermission: InsertPending(%q): %v", id, err)
 	}
-	if err := s.ApplyHookTransition(id, store.StateCheckPermission, false, "test_seed"); err != nil {
-		t.Fatalf("storefix.SeedCheckPermission: ApplyHookTransition(%q, check_permission): %v", id, err)
-	}
-	if err := s.UpsertOpenPermissionRequest(id, TestRequestTokenA, "Bash", `{"cmd":"echo hello"}`, 0, store.WriterProcessHook); err != nil {
-		t.Fatalf("storefix.SeedCheckPermission: UpsertOpenPermissionRequest(%q): %v", id, err)
+	dbPath := StorePath(t, s, "storefix.SeedCheckPermission")
+	if err := WithSeedPane(dbPath, id, func(gate store.HookGate) error {
+		if err := SeedAgentWrites(s, gate, id, "", store.StateCheckPermission); err != nil {
+			return err
+		}
+		applied, err := s.UpsertOpenPermissionRequest(id, gate, TestRequestTokenA, "Bash", `{"cmd":"echo hello"}`, 0, store.WriterProcessHook)
+		return seedWriteErr("open permission request", applied, err)
+	}); err != nil {
+		t.Fatalf("storefix.SeedCheckPermission(%q): %v", id, err)
 	}
 	row, err := s.GetSpawn(id)
 	if err != nil {
@@ -148,6 +163,11 @@ func SeedCheckPermission(t *testing.T, s *store.Store, id string) store.Spawn {
 // callers must ensure HOME points at a temp directory before calling this
 // (smoke tests do this in TestMain).
 //
+// The session id is recorded by a gated soft refresh and the row ended by
+// the gated ended transition, both played by the row's own agent through a
+// seed pane, removed afterwards (see seed); row_version 2. s must come from
+// OpenTempStore.
+//
 // Returns the seeded Spawn (with ClaudeSessionID and EndedAt populated).
 func SeedResumable(t *testing.T, s *store.Store, id string) store.Spawn {
 	t.Helper()
@@ -156,11 +176,11 @@ func SeedResumable(t *testing.T, s *store.Store, id string) store.Spawn {
 		t.Fatalf("storefix.SeedResumable: InsertPending(%q): %v", id, err)
 	}
 	sessionID := "sess-" + id
-	if err := s.RecordSessionStartIdentity(id, sessionID, "", false, 0, ""); err != nil {
-		t.Fatalf("storefix.SeedResumable: RecordSessionStartIdentity(%q, %q): %v", id, sessionID, err)
-	}
-	if err := s.ApplyHookTransition(id, store.StateEnded, false, "test_seed"); err != nil {
-		t.Fatalf("storefix.SeedResumable: ApplyHookTransition(%q, ended): %v", id, err)
+	dbPath := StorePath(t, s, "storefix.SeedResumable")
+	if err := WithSeedPane(dbPath, id, func(gate store.HookGate) error {
+		return SeedAgentWrites(s, gate, id, sessionID, store.StateEnded)
+	}); err != nil {
+		t.Fatalf("storefix.SeedResumable(%q): %v", id, err)
 	}
 	// Write a placeholder JSONL file so resume's os.Stat pre-flight passes.
 	// spawn.JsonlPath resolves under HOME; TestMain must redirect HOME first.
@@ -219,7 +239,8 @@ func SeedExpiredCandidate(t *testing.T, s *store.Store, dbPath, id string, age t
 
 // SeedClosedPermissionRequests seeds n decided (closed) permission_requests rows for
 // instanceID with deterministic decided_at values suitable for cap-eviction tests.
-// For each row i in [0, n): an open row is inserted via UpsertOpenPermissionRequest,
+// For each row i in [0, n): an open row is inserted via the gated
+// UpsertOpenPermissionRequest, played by the row's own agent (WithSeedPane),
 // immediately closed via DecidePermissionRequest (decision="deny",
 // reason=DecisionReasonOperator), then its decided_at is backdated to
 // baseTime+i*step via a raw sql.DB connection (mirrors SeedExpiredCandidate).
@@ -243,8 +264,11 @@ func SeedClosedPermissionRequests(t *testing.T, s *store.Store, dbPath, instance
 		// UUIDv4-shaped token: version nibble=4, variant nibble=a (10xx binary).
 		tok := fmt.Sprintf("%08x-0000-4000-a000-%012x", i, i)
 
-		if err := s.UpsertOpenPermissionRequest(instanceID, tok, "Bash", `{"cmd":"echo"}`, 0, store.WriterProcessHook); err != nil {
-			t.Fatalf("storefix.SeedClosedPermissionRequests: UpsertOpenPermissionRequest(%q, %q): %v", instanceID, tok, err)
+		if err := WithSeedPane(dbPath, instanceID, func(gate store.HookGate) error {
+			applied, err := s.UpsertOpenPermissionRequest(instanceID, gate, tok, "Bash", `{"cmd":"echo"}`, 0, store.WriterProcessHook)
+			return seedWriteErr("open permission request "+tok, applied, err)
+		}); err != nil {
+			t.Fatalf("storefix.SeedClosedPermissionRequests(%q, %q): %v", instanceID, tok, err)
 		}
 		updated, err := s.DecidePermissionRequest(instanceID, tok, "deny", store.DecisionReasonOperator, store.WriterProcessDecide)
 		if err != nil {
@@ -339,15 +363,24 @@ func SeedUndeliverablePermissionRequest(t *testing.T, s *store.Store, dbPath, in
 }
 
 // SeedOpenPermissionRequests seeds N open permission_requests rows for instanceID,
-// one per token in tokens, by calling UpsertOpenPermissionRequest. Intended for
-// parallel-hook ordering, state-machine retention, find-missing multi-row, and
-// get-verb plural shape tests.
+// one per token in tokens, by calling the gated UpsertOpenPermissionRequest as
+// the row's own agent (WithSeedPane; the row's pane and process identity are
+// left as they were). Intended for parallel-hook ordering, state-machine
+// retention, find-missing multi-row, and get-verb plural shape tests. s must
+// come from OpenTempStore (or be registered).
 func SeedOpenPermissionRequests(t *testing.T, s *store.Store, instanceID string, tokens []string) {
 	t.Helper()
-	for _, tok := range tokens {
-		if err := s.UpsertOpenPermissionRequest(instanceID, tok, "Bash", `{"cmd":"echo"}`, 0, store.WriterProcessHook); err != nil {
-			t.Fatalf("storefix.SeedOpenPermissionRequests: UpsertOpenPermissionRequest(%q, %q): %v", instanceID, tok, err)
+	dbPath := StorePath(t, s, "storefix.SeedOpenPermissionRequests")
+	if err := WithSeedPane(dbPath, instanceID, func(gate store.HookGate) error {
+		for _, tok := range tokens {
+			applied, err := s.UpsertOpenPermissionRequest(instanceID, gate, tok, "Bash", `{"cmd":"echo"}`, 0, store.WriterProcessHook)
+			if err := seedWriteErr("open permission request "+tok, applied, err); err != nil {
+				return err
+			}
 		}
+		return nil
+	}); err != nil {
+		t.Fatalf("storefix.SeedOpenPermissionRequests(%q): %v", instanceID, err)
 	}
 }
 

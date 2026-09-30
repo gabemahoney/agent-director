@@ -74,6 +74,8 @@ func TestRebootRecoveryEndToEnd(t *testing.T) {
 		"--extra-env", "CLAUDE_CONFIG_DIR="+customCfgDir)
 
 	otherID := mustSpawn(t, binaryAbs, env, "--cwd", cwd)
+	releaseStubHook(t, stubDir, targetID, false)
+	releaseStubHook(t, stubDir, otherID, false)
 
 	// Derive the expected transcript path INDEPENDENTLY of the stub (b.1ba AC6):
 	// the stub mints sid = "sess-<instanceID>" on a fresh spawn and composes the
@@ -196,6 +198,7 @@ func TestRebootRecoveryEndToEnd(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("resume exit=%d; stdout=%s stderr=%s", code, stdout, stderr)
 	}
+	releaseStubHook(t, stubDir, targetID, true)
 
 	// The resurrected stub is a NEW process; wait for it to appear, then read
 	// its environ and assert the custom config dir was restored verbatim.
@@ -280,6 +283,7 @@ func TestRebootRecoveryNulledJsonlPathHealsViaConfigDir(t *testing.T) {
 	targetID := mustSpawn(t, binaryAbs, env,
 		"--cwd", cwd,
 		"--extra-env", "CLAUDE_CONFIG_DIR="+customCfgDir)
+	releaseStubHook(t, stubDir, targetID, false)
 
 	// Independently derive the CONFIG_DIR path the transcript must land at.
 	jsonlPath, err := spawn.JsonlPathIn(customCfgDir, cwd, stubSessionID(targetID))
@@ -361,6 +365,7 @@ func TestRebootRecoveryNulledJsonlPathHealsViaConfigDir(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("resume (NULLed jsonl_path) exit=%d; stdout=%s stderr=%s", code, stdout, stderr)
 	}
+	releaseStubHook(t, stubDir, targetID, true)
 
 	// ── The continuation marker lands at the CONFIG_DIR-derived path ──────────
 	waitFor(t, "post-resume continuation appended to the CONFIG_DIR-derived transcript", func() bool {

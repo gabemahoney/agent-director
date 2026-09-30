@@ -81,14 +81,15 @@ func stubSessionID(instanceID string) string { return stubSessionIDPrefix + inst
 // crossing the stub/test boundary.
 //
 // PM-PINNED stub mechanism:
-//   - On start the stub invokes `<binaryAbs> hook` with stdin JSON
+//   - On start the stub waits (bounded) for releaseStubHook's go-file, then
+//     invokes `<binaryAbs> hook` with stdin JSON
 //     {"hook_event_name":"SessionStart","transcript_path":"<derived JSONL>"},
 //     relying on the AGENT_DIRECTOR_INSTANCE_ID that tmux injected via -e — the
 //     exact two fields the real Claude Code sends and the only two the handler
 //     consumes for this flow. That SessionStart is what makes find-missing's
 //     checker record the STUB's own pid + proc_starttime as the row identity
-//     (the stub is the topmost env-carrying ancestor of the hook subprocess),
-//     and what persists jsonl_path + claude_session_id.
+//     (the stub is the hook's parent and the row's recorded pane process,
+//     SR-22.9), and what persists jsonl_path + claude_session_id.
 //   - The stub appends a line to the derived JSONL on every start (a pre-kill
 //     marker on the fresh spawn, a continuation marker on --resume) BEFORE it
 //     fires SessionStart — matching real Claude, which writes the transcript on
@@ -164,8 +165,18 @@ else
   printf '{"type":"assistant","marker":"pre-kill"}\n' >> "$JSONL"
 fi
 
+# SR-22.9: a hook applies only once spawn/resume has recorded this pane, so
+# wait (bounded, ~60s) for the go-file the test writes after the verb returns.
+GO='` + stubGoDir(stubDir) + `'/"$AGENT_DIRECTOR_INSTANCE_ID.$resume"
+i=0
+while [ ! -e "$GO" ] && [ "$i" -lt 1200 ]; do
+  sleep 0.05
+  i=$((i + 1))
+done
+
 # Fire SessionStart so the hook persists identity (pid+starttime) + jsonl_path
-# + claude_session_id (basename of this path).
+# + claude_session_id (basename of this path). A pipeline, so the hook's parent
+# is this stub, the recorded pane process.
 printf '%s' '{"hook_event_name":"SessionStart","transcript_path":"'"$JSONL"'"}' \
   | "$BINARY" hook >/dev/null 2>&1 || true
 
@@ -181,7 +192,27 @@ exec sleep 100000
 	if err := os.WriteFile(stubPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write stub claude: %v", err)
 	}
+	if err := os.MkdirAll(stubGoDir(stubDir), 0o755); err != nil {
+		t.Fatalf("mkdir stub go dir: %v", err)
+	}
 	return stubDir
+}
+
+// stubGoDir is where releaseStubHook writes the go-files the stub waits for.
+func stubGoDir(stubDir string) string { return filepath.Join(stubDir, "go") }
+
+// releaseStubHook lets id's stub fire its SessionStart hook: call it once spawn
+// (resume=false) or resume (resume=true) has returned, i.e. after the verb
+// recorded the stub's pane (SR-22.9: a hook before that is ignored).
+func releaseStubHook(t *testing.T, stubDir, id string, resume bool) {
+	t.Helper()
+	launch := "no"
+	if resume {
+		launch = "yes"
+	}
+	if err := os.WriteFile(filepath.Join(stubGoDir(stubDir), id+"."+launch), nil, 0o644); err != nil {
+		t.Fatalf("release stub hook for %s: %v", id, err)
+	}
 }
 
 // cliEnv is the child-process env used for every agent-director invocation and

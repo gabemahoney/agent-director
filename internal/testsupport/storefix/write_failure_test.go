@@ -66,6 +66,20 @@ func recordLaunchIdentity(s *store.Store, id string) error {
 	return err
 }
 
+// agentHook fires event at id's row as its own agent (storefix.FireHook from
+// the row's pane process); a hook the gate does not apply is an error.
+func agentHook(s *store.Store, id, event, sessionID string) error {
+	pid, start, err := storefix.AgentHookParent(s, id)
+	if err != nil {
+		return err
+	}
+	applied, err := storefix.FireHook(s, id, event, sessionID, pid, start)
+	if err == nil && !applied.Applied {
+		err = fmt.Errorf("%s on %q not applied (reason %q)", event, id, applied.Reason)
+	}
+	return err
+}
+
 // observeColumns returns every stored column of the spawns row, raw.
 func observeColumns(t *testing.T, _ *store.Store, dbPath, id string) any {
 	t.Helper()
@@ -105,7 +119,7 @@ var proxyWrites = []proxyWrite{
 			if err != nil {
 				return err
 			}
-			return s.RecordSessionStartIdentity(id, sp.ClaudeSessionID+"-next", "", false, 0, "")
+			return agentHook(s, id, "SessionStart", sp.ClaudeSessionID+"-next")
 		},
 		observe: func(t *testing.T, _ *store.Store, dbPath, id string) any {
 			t.Helper()
@@ -117,10 +131,20 @@ var proxyWrites = []proxyWrite{
 		},
 	},
 	{
+		// Resume's move to pending: a finished row takes no hook (it records
+		// no pane, SR-22.9), so no hook write moves it to pending.
 		kind: storefix.WriteFailReuseReset,
 		seed: seedState(store.StateEnded, ""),
 		write: func(s *store.Store, id string) error {
-			return s.ApplyHookTransition(id, store.StatePending, false, "test")
+			sp, err := s.GetSpawn(id)
+			if err != nil {
+				return err
+			}
+			res, _, err := s.MoveToPending(id, sp.Snapshot, 1700000000000, "0123456789abcdef", apitest.TestSocket, "")
+			if err == nil && res != store.CondApplied {
+				err = fmt.Errorf("MoveToPending(%q) = %v, want CondApplied", id, res)
+			}
+			return err
 		},
 		observe: observeSpawn,
 	},
@@ -143,7 +167,7 @@ var proxyWrites = []proxyWrite{
 		kind: storefix.WriteFailReuseRestore,
 		seed: seedState(store.StatePending, ""),
 		write: func(s *store.Store, id string) error {
-			return s.ApplyHookTransition(id, store.StateEnded, false, "test")
+			return agentHook(s, id, "SessionEnd", "")
 		},
 		observe: observeSpawn,
 	},

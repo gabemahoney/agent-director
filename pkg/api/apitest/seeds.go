@@ -15,6 +15,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 )
 
 // SeedSpawn inserts a single spawn row and transitions it to state.
@@ -25,10 +26,12 @@ import (
 //     "waiting" if empty.
 //   - cwd: working directory stored on the row; defaults to "/tmp" if empty.
 //   - relayMode: relay_mode value ("on"|"off"|""). Defaults to "off" if empty.
-//   - sessionID: if non-empty, calls s.RecordSessionStartIdentity after
-//     InsertPending so the row has a claude_session_id (required by the resume
-//     verb's pre-flight). Only the session id is seeded here; the identity
-//     columns (pid/proc_starttime/jsonl_path) are seeded via opts below.
+//   - sessionID: if non-empty, recorded after InsertPending through a gated
+//     soft-refresh hook (SR-22.9) so the row has a claude_session_id (required
+//     by the resume verb's pre-flight) and keeps its state: a pending row
+//     seeded with a session id stays pending. Only the session id is seeded
+//     here; the identity columns (pid/proc_starttime/jsonl_path) are seeded
+//     via opts below.
 //   - createStore: if true the store is created when missing (OpenOrInit);
 //     if false the store must already exist (Open).
 //
@@ -36,8 +39,8 @@ import (
 //     writes above cannot (the v3 identity/liveness columns, the v5 columns,
 //     timestamps and raw structured text) and session history
 //     (WithSessionHistory). Options and the SR-20.3 defaults are applied by
-//     apitest-internal SQL in one transaction after the
-//     InsertPending/RecordSessionStartIdentity/ApplyHookTransition sequence:
+//     apitest-internal SQL in one transaction after the InsertPending and
+//     gated hook sequence:
 //     one UPDATE writes the options and defaults, for a pending row with no
 //     launch-start option a second UPDATE sets the default launch start from
 //     the final started_at, and then each WithSessionHistory entry is
@@ -45,9 +48,17 @@ import (
 //     is an error; with no WithSessionHistory no history is written). None of
 //     these statements advances row_version.
 //
+// The hook writes are the row's own agent's (SR-22.9): every hook write is
+// gated on the hook's parent being the row's recorded pane process, so the
+// seed pane (TestPanePID with storefix.SeedPaneStarttime) is recorded first
+// (storefix.WithSeedPane) and the gated writes carry the matching gate
+// (storefix.SeedAgentWrites); the pane and process identity are then written
+// back, and the final UPDATE below writes the defaults and options.
+//
 // SR-20.3 defaults, for every column no option names: a well-formed launch
 // token (16 lowercase hex, distinct per row), tmux_socket TestSocket,
-// no_pre_trust 0, life_number 0, and no server identity (NULL); a live row
+// no_pre_trust 0, life_number 0, no process identity (pid and proc_starttime
+// NULL) and no server identity (NULL); a live row
 // (store.IsLiveState) gets the pane TestPaneID with pid TestPanePID and no
 // pane start time, and a row in a terminal state no pane (NULL), so the
 // Recorder session tmuxfix.Recorder.SeedRowSession seeds for the row holds
@@ -57,11 +68,11 @@ import (
 // none. WithLaunchIdentity and WithNoLaunchToken override the pane default
 // with the other launch-identity columns.
 //
-// Seeding and row_version: InsertPending starts the row at 0, and
-// RecordSessionStartIdentity (when sessionID is non-empty) and
-// ApplyHookTransition (when state is not "pending") each add one. The
-// option/default UPDATEs above and the apitest and storefix backdating
-// fixtures add nothing. So a pending row seeded with no session id is at 0,
+// Seeding and row_version: InsertPending starts the row at 0, and the gated
+// soft refresh that records the session id (when sessionID is non-empty) and
+// the gated transition (when state is not "pending") each add one. The seed
+// pane writes, the option/default UPDATEs above and the apitest and storefix
+// backdating fixtures add nothing. So a pending row seeded with no session id is at 0,
 // like a fresh insert, and every other seed starts above 0. Tests assert
 // version deltas (after minus before, both read through ReadSpawnColumns),
 // never absolute values, except for a row the test inserted itself.
@@ -104,15 +115,11 @@ func SeedSpawn(dbPath, id, state, cwd, relayMode, sessionID string, createStore 
 		return "", fmt.Errorf("SeedSpawn: InsertPending: %w", err)
 	}
 
-	if sessionID != "" {
-		if err := s.RecordSessionStartIdentity(id, sessionID, "", false, 0, ""); err != nil {
-			return "", fmt.Errorf("SeedSpawn: RecordSessionStartIdentity %q: %w", sessionID, err)
-		}
-	}
-
-	if state != store.StatePending {
-		if err := s.ApplyHookTransition(id, state, false, "test_seed"); err != nil {
-			return "", fmt.Errorf("SeedSpawn: ApplyHookTransition %q: %w", state, err)
+	if sessionID != "" || state != store.StatePending {
+		if err := storefix.WithSeedPane(dbPath, id, func(gate store.HookGate) error {
+			return storefix.SeedAgentWrites(s, gate, id, sessionID, state)
+		}); err != nil {
+			return "", fmt.Errorf("SeedSpawn: %w", err)
 		}
 	}
 
@@ -150,6 +157,8 @@ func applySpawnColumns(dbPath, id, state string, opts []SpawnOption) error {
 		"pane_id":               nil,
 		"pane_pid":              nil,
 		"pane_starttime":        nil,
+		"pid":                   nil,
+		"proc_starttime":        nil,
 	}
 	if store.IsLiveState(state) {
 		defaults["pane_id"], defaults["pane_pid"] = TestPaneID, int64(TestPanePID)
@@ -289,9 +298,11 @@ type PermissionRequestSeed struct {
 }
 
 // SeedPermissionRequest inserts an open permission request for spawnID
-// using toolName. The spawn row must already exist. Returns both the request_id
-// (AUTOINCREMENT) and the request_token (UUIDv4) so callers can reference the
-// row by either key.
+// using toolName. The spawn row must already exist. The INSERT is the gated
+// hook write (SR-22.9) played by the row's own agent (storefix.WithSeedPane;
+// the row's pane and process identity are left as they were). Returns both
+// the request_id (AUTOINCREMENT) and the request_token (UUIDv4) so callers can
+// reference the row by either key.
 func SeedPermissionRequest(dbPath, spawnID, toolName string) (PermissionRequestSeed, error) {
 	s, err := store.Open(dbPath)
 	if err != nil {
@@ -300,7 +311,13 @@ func SeedPermissionRequest(dbPath, spawnID, toolName string) (PermissionRequestS
 	defer s.Close() //nolint:errcheck
 
 	requestToken := uuid.NewString()
-	if err := s.UpsertOpenPermissionRequest(spawnID, requestToken, toolName, "{}", 0, ""); err != nil {
+	if err := storefix.WithSeedPane(dbPath, spawnID, func(gate store.HookGate) error {
+		applied, err := s.UpsertOpenPermissionRequest(spawnID, gate, requestToken, toolName, "{}", 0, "")
+		if err == nil && !applied.Applied {
+			err = fmt.Errorf("hook not applied (reason %q)", applied.Reason)
+		}
+		return err
+	}); err != nil {
 		return PermissionRequestSeed{}, fmt.Errorf("SeedPermissionRequest: upsert: %w", err)
 	}
 

@@ -12,6 +12,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/mcp"
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	api "github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
@@ -138,6 +139,7 @@ func TestToolsCallDispatchMatrix(t *testing.T) {
 				if err != nil {
 					t.Fatalf("store.OpenOrInit: %v", err)
 				}
+				storefix.RegisterStorePath(t, s, storePath)
 				tc.setup(t, s)
 				_ = s.Close()
 			}
@@ -262,9 +264,14 @@ func seedMatrixSpawn(t *testing.T, s *store.Store, id, state, relayMode string) 
 	}); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
+	// SR-22.9: a hook write applies only for the row's own agent, so the
+	// transition goes through storefix's seed pane (removed afterwards).
 	if state != store.StatePending {
-		if err := s.ApplyHookTransition(id, state, false, "test_seed"); err != nil {
-			t.Fatalf("ApplyHookTransition(%s): %v", state, err)
+		dbPath := storefix.StorePath(t, s, "seedMatrixSpawn")
+		if err := storefix.WithSeedPane(dbPath, id, func(gate store.HookGate) error {
+			return storefix.SeedAgentWrites(s, gate, id, "", state)
+		}); err != nil {
+			t.Fatalf("seed %s: %v", state, err)
 		}
 	}
 }

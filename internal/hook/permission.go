@@ -53,20 +53,21 @@ func mintRequestToken() (string, error) {
 
 // RelayStore is the narrow surface the relay flow needs: the INSERT to write a
 // fresh open request, the polling-loop read, and the two writes needed on
-// timeout so CSCB's poller can observe the abandoned relay and expire the
-// Slack message. *store.Store satisfies it.
+// timeout so a relay consumer's poller can observe the abandoned relay. The
+// INSERT and the state write take the hook's gate (SR-22.9). *store.Store
+// satisfies it.
 type RelayStore interface {
 	PollStore
-	UpsertOpenPermissionRequest(instanceID, requestToken, toolName, toolInputJSON string, cap int, writerProcess string) error
+	UpsertOpenPermissionRequest(instanceID string, gate store.HookGate, requestToken, toolName, toolInputJSON string, cap int, writerProcess string) (store.HookApplied, error)
 	DecidePermissionRequest(instanceID, requestToken, decision, reason string, writerProcess string) (bool, error)
-	ApplyHookTransition(instanceID, newState string, softRefresh bool, triggeringEventName string) error
+	ApplyHookTransition(instanceID string, gate store.HookGate, newState string, softRefresh bool, triggeringEventName, jsonlPath string, jsonlPresent bool) (store.HookApplied, error)
 }
 
 // outcomeUpserter is an optional extension of RelayStore. *store.Store
 // satisfies it; test doubles that don't implement it receive
 // store.UpsertNoChange as a conservative fallback for the trail field.
 type outcomeUpserter interface {
-	UpsertOpenPermissionRequestResult(instanceID, requestToken, toolName, toolInputJSON string, cap int, writerProcess string) (store.UpsertOutcome, error)
+	UpsertOpenPermissionRequestResult(instanceID string, gate store.HookGate, requestToken, toolName, toolInputJSON string, cap int, writerProcess string) (store.UpsertOutcome, store.HookApplied, error)
 }
 
 // emitResume emits one ad.resume.observed event immediately after the
@@ -93,10 +94,19 @@ func emitResume(ctx context.Context, instanceID, requestToken, verdict string, c
 }
 
 // runRelay is the relay-mode branch invoked from Handle when the
-// event is PermissionRequest AND AGENT_DIRECTOR_RELAY_MODE=on. It
-// owns the full happy + failure flow per SRD §6.2 + §6.4 and ALWAYS
-// writes an envelope to stdout before returning — every failure path
-// becomes a deny envelope so Claude Code never hangs.
+// event is PermissionRequest AND AGENT_DIRECTOR_RELAY_MODE=on and the
+// hook's gated transition applied. It owns the full happy + failure flow
+// per SRD §6.2 + §6.4 and writes an envelope to stdout before returning —
+// every failure path becomes a deny envelope so Claude Code never hangs —
+// with one exception: when the request INSERT's gate does not hold (the row
+// is no longer this process's, SR-22.9), no request is recorded, nothing is
+// written to stdout (no decision, so Claude Code asks as it would with no
+// relay), and onIgnored is called once with the store's reason so Handle
+// writes the hook's one ad.hook.ignored (decision A8).
+//
+// gate is the hook's store.HookGate, captured once by Handle: the INSERT
+// and the timeout path's state write reuse it. A timeout write the gate does
+// not apply is logged only; it writes no second ad.hook.ignored (A8).
 //
 // fields is the ad.hook.fired trail map owned by Handle. runRelay
 // populates request_token and (for the relay upsert path) upsert_outcome
@@ -118,8 +128,10 @@ func runRelay(
 	clock PollClock,
 	logger *log.Logger,
 	instanceID string,
+	gate store.HookGate,
 	raw json.RawMessage,
 	fields map[string]any,
+	onIgnored func(reason string),
 ) {
 	var pp permissionPayload
 	if err := json.Unmarshal(raw, &pp); err != nil {
@@ -160,11 +172,14 @@ func runRelay(
 	// Upsert the open permission request. Use the outcome-aware variant when
 	// available so the trail captures the exact result; test doubles that
 	// don't implement outcomeUpserter fall back to store.UpsertNoChange.
-	var upsertOutcome store.UpsertOutcome
+	var (
+		upsertOutcome store.UpsertOutcome
+		applied       store.HookApplied
+	)
 	if ou, ok := st.(outcomeUpserter); ok {
-		upsertOutcome, err = ou.UpsertOpenPermissionRequestResult(instanceID, requestToken, pp.ToolName, toolInput, cap, store.WriterProcessHook)
+		upsertOutcome, applied, err = ou.UpsertOpenPermissionRequestResult(instanceID, gate, requestToken, pp.ToolName, toolInput, cap, store.WriterProcessHook)
 	} else {
-		err = st.UpsertOpenPermissionRequest(instanceID, requestToken, pp.ToolName, toolInput, cap, store.WriterProcessHook)
+		applied, err = st.UpsertOpenPermissionRequest(instanceID, gate, requestToken, pp.ToolName, toolInput, cap, store.WriterProcessHook)
 		if err != nil {
 			upsertOutcome = store.UpsertError
 		} else {
@@ -176,6 +191,17 @@ func runRelay(
 	if err != nil {
 		logf(logger, "relay: upsert (instance=%s, token=%s): %v", instanceID, requestToken, err)
 		_, _ = fmt.Fprintln(stdout, EncodeDecision(EventNamePermissionRequest, "deny", ""))
+		return
+	}
+	if !applied.Applied {
+		// The gate did not hold for the INSERT (SR-22.9): no request, no
+		// decision on stdout. A row gone since the transition gives no
+		// reason and no ad.hook.ignored (decision A2).
+		fields["upsert_outcome"] = string(store.UpsertNoChange)
+		logf(logger, "relay: request not recorded (instance=%s, token=%s): hook not applied (%s)", instanceID, requestToken, applied.Reason)
+		if applied.Reason != "" && onIgnored != nil {
+			onIgnored(applied.Reason)
+		}
 		return
 	}
 
@@ -225,8 +251,12 @@ func runRelay(
 		// this state transition was triggered by the relay polling loop timing out
 		// (not by a Claude Code lifecycle event). Trail readers can distinguish
 		// this from hook-driven transitions by this value.
-		if err := st.ApplyHookTransition(instanceID, store.StateWorking, false, "PermissionRequestTimeout"); err != nil {
+		// It reuses the hook's gate; a write the gate does not apply is
+		// logged only, with no second ad.hook.ignored (decision A8).
+		if applied, err := st.ApplyHookTransition(instanceID, gate, store.StateWorking, false, "PermissionRequestTimeout", "", false); err != nil {
 			logf(logger, "relay: timeout state transition failed (instance=%s): %v", instanceID, err)
+		} else if !applied.Applied {
+			logf(logger, "relay: timeout state transition not applied (instance=%s): %s", instanceID, applied.Reason)
 		}
 
 		_, _ = fmt.Fprintln(stdout, EncodeDecision(EventNamePermissionRequest, "deny", ""))

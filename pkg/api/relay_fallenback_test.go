@@ -270,7 +270,7 @@ func TestSendKeysGuardReleasesForDecidedAgedRow(t *testing.T) {
 func TestSendKeysGuardRefusesZeroRows(t *testing.T) {
 	// A relay-on spawn transitioned into check_permission with no request row
 	// written yet — OpenStoreWithRow leaves permission_requests empty.
-	s, _ := storefix.OpenTempStore(t)
+	s, dbPath := storefix.OpenTempStore(t)
 	if err := s.InsertPending(store.Spawn{
 		ClaudeInstanceID: "id-zero",
 		CWD:              "/tmp",
@@ -279,8 +279,8 @@ func TestSendKeysGuardRefusesZeroRows(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
-	if err := s.ApplyHookTransition("id-zero", store.StateCheckPermission, false, "test_seed"); err != nil {
-		t.Fatalf("ApplyHookTransition: %v", err)
+	if err := seedAgentState(s, dbPath, "id-zero", store.StateCheckPermission); err != nil {
+		t.Fatalf("seed check_permission: %v", err)
 	}
 
 	tmux := newTmux()

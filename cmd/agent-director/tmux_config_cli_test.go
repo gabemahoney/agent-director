@@ -109,7 +109,8 @@ func tmuxRefusals() []tmuxRefusal {
 }
 
 // refusedHome is a throwaway HOME holding a pending relay-on row seeded before
-// the refused config was written.
+// the refused config was written. The row's pane process is this test process
+// (SR-22.9), so a hook the refusal failed to stop would apply and be caught.
 type refusedHome struct {
 	home, cfgPath, instanceID string
 }
@@ -117,7 +118,7 @@ type refusedHome struct {
 func newRefusedHome(t *testing.T, rc tmuxRefusal) refusedHome {
 	t.Helper()
 	home := t.TempDir()
-	id, err := apitest.SeedSpawn(stateDB(home), "", store.StatePending, "", hook.RelayModeOn, "", true)
+	id, err := apitest.SeedSpawn(stateDB(home), "", store.StatePending, "", hook.RelayModeOn, "", true, withTestProcessPane(t))
 	if err != nil {
 		t.Fatalf("SeedSpawn: %v", err)
 	}

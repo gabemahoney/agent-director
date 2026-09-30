@@ -1,0 +1,19 @@
+{
+  "session_id": "36f7a426-9a1a-4857-a13a-05d962f3c25d",
+  "transcript_path": "/home/agent/.claude/projects/-work-demo/36f7a426-9a1a-4857-a13a-05d962f3c25d.jsonl",
+  "cwd": "/work/demo",
+  "prompt_id": "550e8400-e29b-41d4-a716-446655440000",
+  "permission_mode": "default",
+  "effort": {
+    "level": "high"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "npm test",
+    "description": "Run test suite",
+    "timeout": 120000,
+    "run_in_background": false
+  },
+  "tool_use_id": "toolu_01DEF456"
+}

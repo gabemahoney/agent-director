@@ -111,16 +111,17 @@ func historyRecordedAt(t *testing.T, s *Store, instanceID, sessionID string) str
 	return at
 }
 
-// seedWaitingRow inserts one pending row and transitions it to waiting (a live
+// seedWaitingRow inserts one pending row with its agent's pane recorded, so its
+// own SessionStart applies (SR-22.9), and transitions it to waiting (a live
 // state ListProvisionalTranscripts scans), returning nothing extra.
 func seedWaitingRow(t *testing.T, s *Store, id string) {
 	t.Helper()
-	if err := s.InsertPending(Spawn{
+	if err := insertAgentRow(s, Spawn{
 		ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-" + id, RelayMode: "off",
 	}); err != nil {
-		t.Fatalf("InsertPending(%q): %v", id, err)
+		t.Fatalf("insertAgentRow(%q): %v", id, err)
 	}
-	if err := s.ApplyHookTransition(id, StateWaiting, false, "test_seed"); err != nil {
+	if err := agentHook(s, id, StateWaiting, false, "test_seed"); err != nil {
 		t.Fatalf("ApplyHookTransition(%q, waiting): %v", id, err)
 	}
 }
@@ -139,11 +140,11 @@ func TestSessionRotationArchivesPriorTranscript(t *testing.T) {
 	seedWaitingRow(t, s, id)
 
 	// First session with a real transcript path.
-	if err := s.RecordSessionStartIdentity(id, "session-A", "/x/session-A.jsonl", true, 100, "1"); err != nil {
+	if err := agentSessionStart(s, id, "session-A", "/x/session-A.jsonl", true); err != nil {
 		t.Fatalf("record session A: %v", err)
 	}
 	// Rotation: a different session id must archive the A pair before overwriting.
-	if err := s.RecordSessionStartIdentity(id, "session-B", "/x/session-B.jsonl", true, 200, "2"); err != nil {
+	if err := agentSessionStart(s, id, "session-B", "/x/session-B.jsonl", true); err != nil {
 		t.Fatalf("record session B: %v", err)
 	}
 
@@ -179,11 +180,11 @@ func TestSessionRotationNoArchiveWhenSameSession(t *testing.T) {
 	seedWaitingRow(t, s, id)
 
 	// Fresh spawn's first SessionStart: empty prior id → no archive.
-	if err := s.RecordSessionStartIdentity(id, "session-X", "/x/session-X.jsonl", true, 1, "1"); err != nil {
+	if err := agentSessionStart(s, id, "session-X", "/x/session-X.jsonl", true); err != nil {
 		t.Fatalf("record fresh: %v", err)
 	}
 	// Same-session re-fire → no archive.
-	if err := s.RecordSessionStartIdentity(id, "session-X", "/x/session-X.jsonl", true, 2, "2"); err != nil {
+	if err := agentSessionStart(s, id, "session-X", "/x/session-X.jsonl", true); err != nil {
 		t.Fatalf("record re-fire: %v", err)
 	}
 
@@ -205,7 +206,7 @@ func TestRecordSessionStartIdentityReportedButAbsentNullsPath(t *testing.T) {
 	seedWaitingRow(t, s, id)
 
 	// A real, present transcript is recorded.
-	if err := s.RecordSessionStartIdentity(id, "session-1", "/x/present.jsonl", true, 1, "1"); err != nil {
+	if err := agentSessionStart(s, id, "session-1", "/x/present.jsonl", true); err != nil {
 		t.Fatalf("record present: %v", err)
 	}
 	if row, _ := s.GetSpawn(id); row.JSONLPath != "/x/present.jsonl" {
@@ -213,7 +214,7 @@ func TestRecordSessionStartIdentityReportedButAbsentNullsPath(t *testing.T) {
 	}
 
 	// Same session, now the reported path is NOT present on disk → force NULL.
-	if err := s.RecordSessionStartIdentity(id, "session-1", "/x/gone.jsonl", false, 1, "1"); err != nil {
+	if err := agentSessionStart(s, id, "session-1", "/x/gone.jsonl", false); err != nil {
 		t.Fatalf("record reported-but-absent: %v", err)
 	}
 	if row, _ := s.GetSpawn(id); row.JSONLPath != "" {
@@ -230,7 +231,7 @@ func TestHealJsonlPathRecordsOnlyWhenNull(t *testing.T) {
 	seedWaitingRow(t, s, id)
 
 	// Provisional row: session id set, jsonl_path NULL (reported-but-absent).
-	if err := s.RecordSessionStartIdentity(id, "session-1", "/x/notyet.jsonl", false, 1, "1"); err != nil {
+	if err := agentSessionStart(s, id, "session-1", "/x/notyet.jsonl", false); err != nil {
 		t.Fatalf("record provisional: %v", err)
 	}
 
@@ -266,13 +267,13 @@ func TestListProvisionalTranscripts(t *testing.T) {
 
 	// Provisional live row (NULL path) — should be listed.
 	seedWaitingRow(t, s, "prov-1")
-	if err := s.RecordSessionStartIdentity("prov-1", "session-prov", "/x/none.jsonl", false, 1, "1"); err != nil {
+	if err := agentSessionStart(s, "prov-1", "session-prov", "/x/none.jsonl", false); err != nil {
 		t.Fatalf("record prov-1: %v", err)
 	}
 
 	// Live row WITH a present path — must NOT be listed.
 	seedWaitingRow(t, s, "present-1")
-	if err := s.RecordSessionStartIdentity("present-1", "session-present", "/x/here.jsonl", true, 1, "1"); err != nil {
+	if err := agentSessionStart(s, "present-1", "session-present", "/x/here.jsonl", true); err != nil {
 		t.Fatalf("record present-1: %v", err)
 	}
 
@@ -303,11 +304,11 @@ func TestReArchiveFillsNullPathAndRefreshesRecordedAt(t *testing.T) {
 	seedWaitingRow(t, s, id)
 
 	// Session A starts with a reported-but-absent path → row=A, jsonl_path NULL.
-	if err := s.RecordSessionStartIdentity(id, "session-A", "/x/A.jsonl", false, 1, "1"); err != nil {
+	if err := agentSessionStart(s, id, "session-A", "/x/A.jsonl", false); err != nil {
 		t.Fatalf("record A (absent): %v", err)
 	}
 	// Rotate A→B: archives (A, NULL) — the row's current path was NULL.
-	if err := s.RecordSessionStartIdentity(id, "session-B", "/x/B.jsonl", true, 2, "2"); err != nil {
+	if err := agentSessionStart(s, id, "session-B", "/x/B.jsonl", true); err != nil {
 		t.Fatalf("record B: %v", err)
 	}
 	if got := historyJsonl(t, s, id, "session-A"); got != "" {
@@ -321,12 +322,12 @@ func TestReArchiveFillsNullPathAndRefreshesRecordedAt(t *testing.T) {
 
 	// Session A re-enters the row, this time with a present transcript path.
 	// Rotate B→A archives (B, …); the row now holds A with a known path.
-	if err := s.RecordSessionStartIdentity(id, "session-A", "/x/A-found.jsonl", true, 3, "3"); err != nil {
+	if err := agentSessionStart(s, id, "session-A", "/x/A-found.jsonl", true); err != nil {
 		t.Fatalf("record A (found): %v", err)
 	}
 	// Rotate A→B again: re-archives (A, /x/A-found.jsonl) — must UPSERT the
 	// existing NULL-path A entry, filling the path.
-	if err := s.RecordSessionStartIdentity(id, "session-B", "/x/B.jsonl", true, 4, "4"); err != nil {
+	if err := agentSessionStart(s, id, "session-B", "/x/B.jsonl", true); err != nil {
 		t.Fatalf("re-archive A via A→B: %v", err)
 	}
 
@@ -355,11 +356,11 @@ func TestReArchiveWithNullDoesNotClobberKnownPath(t *testing.T) {
 	seedWaitingRow(t, s, id)
 
 	// Session A starts with a present path → row=A with /x/A.jsonl.
-	if err := s.RecordSessionStartIdentity(id, "session-A", "/x/A.jsonl", true, 1, "1"); err != nil {
+	if err := agentSessionStart(s, id, "session-A", "/x/A.jsonl", true); err != nil {
 		t.Fatalf("record A (present): %v", err)
 	}
 	// Rotate A→B archives (A, /x/A.jsonl).
-	if err := s.RecordSessionStartIdentity(id, "session-B", "/x/B.jsonl", true, 2, "2"); err != nil {
+	if err := agentSessionStart(s, id, "session-B", "/x/B.jsonl", true); err != nil {
 		t.Fatalf("record B: %v", err)
 	}
 	if got := historyJsonl(t, s, id, "session-A"); got != "/x/A.jsonl" {
@@ -367,11 +368,11 @@ func TestReArchiveWithNullDoesNotClobberKnownPath(t *testing.T) {
 	}
 
 	// Session A re-enters reported-but-absent → row=A with NULL path.
-	if err := s.RecordSessionStartIdentity(id, "session-A", "/x/A.jsonl", false, 3, "3"); err != nil {
+	if err := agentSessionStart(s, id, "session-A", "/x/A.jsonl", false); err != nil {
 		t.Fatalf("record A (absent re-entry): %v", err)
 	}
 	// Rotate A→B re-archives (A, NULL) — COALESCE must keep the known path.
-	if err := s.RecordSessionStartIdentity(id, "session-B", "/x/B.jsonl", true, 4, "4"); err != nil {
+	if err := agentSessionStart(s, id, "session-B", "/x/B.jsonl", true); err != nil {
 		t.Fatalf("re-archive A (NULL) via A→B: %v", err)
 	}
 

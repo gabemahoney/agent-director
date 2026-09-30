@@ -3,7 +3,8 @@
  *
  * Integration tests for the spawn-side hook-writing pipeline:
  *
- *  - Hook commands are absolute paths.
+ *  - Hook commands are absolute paths, registered in exec form (SR-22.9):
+ *    `command` is the binary path verbatim and `args` is ["hook"].
  *  - No PATH-relative invocation (no bare token "agent-director", no
  *    shell-variable references).
  *  - In-place re-install at the standard install path survives — captured
@@ -37,7 +38,7 @@ const cliPath = process.env.CLI_PATH;
 const fakeTmuxDir = process.env.FAKE_TMUX_DIR;
 
 interface SettingsJson {
-  hooks?: Record<string, Array<{ hooks?: Array<{ command?: string }> }>>;
+  hooks?: Record<string, Array<{ hooks?: Array<{ command?: string; args?: unknown }> }>>;
 }
 
 function runSpawn(opts: {
@@ -91,12 +92,19 @@ function extractSettingsJson(logPath: string): SettingsJson | null {
   return null;
 }
 
+/**
+ * Collect `command` from every exec-form agent-director hook: the entries
+ * whose `args` is exactly ["hook"] (SR-22.9). The shell-form help entry has
+ * no `args` and is skipped.
+ */
 function collectHookCommands(settings: SettingsJson): string[] {
   const out: string[] = [];
   for (const evt of Object.values(settings.hooks ?? {})) {
     for (const entry of evt) {
       for (const hook of entry.hooks ?? []) {
-        if (typeof hook.command === "string") out.push(hook.command);
+        const args = hook.args;
+        const isExec = Array.isArray(args) && args.length === 1 && args[0] === "hook";
+        if (isExec && typeof hook.command === "string") out.push(hook.command);
       }
     }
   }
@@ -145,15 +153,13 @@ describe("spawn-side hook stability (SR-1.8 / SR-8.8)", () => {
 
         const expectedAbs = realpathSync(stdPath);
         for (const cmd of commands) {
-          // Strip surrounding quotes if quoteIfWhitespace wrapped the path.
-          const naked = cmd.startsWith('"') ? cmd : cmd;
-          expect(naked.startsWith("/") || naked.startsWith('"/')).toBe(true);
-          expect(naked).not.toMatch(/^agent-director\b/);
-          expect(naked).not.toContain("$0");
-          expect(naked).not.toContain("${0}");
-          expect(naked).not.toContain("$(command -v");
-          // Every command should reference the resolved binary path.
-          expect(naked.includes(expectedAbs)).toBe(true);
+          expect(cmd.startsWith("/")).toBe(true);
+          expect(cmd).not.toMatch(/^agent-director\b/);
+          expect(cmd).not.toContain("$0");
+          expect(cmd).not.toContain("${0}");
+          expect(cmd).not.toContain("$(command -v");
+          // SR-22.9: exec form — the command IS the resolved binary path, unquoted.
+          expect(cmd).toBe(expectedAbs);
         }
       } finally {
         rmSync(homeDir, { recursive: true, force: true });
@@ -187,12 +193,8 @@ describe("spawn-side hook stability (SR-1.8 / SR-8.8)", () => {
         copyFileSync(cliPath!, stdPath);
         chmodSync(stdPath, 0o755);
 
-        // Pull the binary path token (first space-separated token of cmd[0]).
-        // commands[i] is "<path> hook"; binary path = trimmed up to last space.
-        const sample = commands[0]!;
-        const stripped = sample.replace(/^"|"$/g, "");
-        const sp = stripped.lastIndexOf(" ");
-        const hookBinPath = stripped.slice(0, sp).replace(/^"|"$/g, "");
+        // SR-22.9: exec form — commands[i] is the binary path itself.
+        const hookBinPath = commands[0]!;
         expect(existsSync(hookBinPath)).toBe(true);
 
         // Confirm the binary at that path is callable.
@@ -249,18 +251,14 @@ describe("spawn-side hook stability (SR-1.8 / SR-8.8)", () => {
         // by design — they are written for the spawned session's lifetime
         // and reference $HOME/.agent-director/bin/agent-director).  The
         // regular hook commands use the running-binary's resolved path.
-        // Filter to commands that reference agent-director (excluding
-        // the help-hook variant).
-        const regularHookCommands = commands.filter(
-          (c) => c.endsWith(" hook") || c.endsWith(' hook"'),
-        );
-        expect(regularHookCommands.length).toBeGreaterThan(0);
+        // collectHookCommands keeps only the exec-form hooks (SR-22.9), so
+        // the shell-form help entry is already excluded.
+        expect(commands.length).toBeGreaterThan(0);
 
-        for (const cmd of regularHookCommands) {
-          const naked = cmd.replace(/^"|"$/g, "");
-          // The command should reference the resolved real path, not the symlink.
-          expect(naked.includes(resolvedReal)).toBe(true);
-          expect(naked.includes(symPath)).toBe(false);
+        for (const cmd of commands) {
+          // The command is the resolved real path, not the symlink.
+          expect(cmd).toBe(resolvedReal);
+          expect(cmd.includes(symPath)).toBe(false);
         }
       } finally {
         rmSync(homeDir, { recursive: true, force: true });

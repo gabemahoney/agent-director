@@ -33,18 +33,19 @@ func readLivenessRaw(t *testing.T, s *Store, id string) (since, note sql.NullStr
 	return since, note
 }
 
-// seedLivenessSet inserts a live-state spawn and pins both liveness columns via
-// the guarded setter, returning the recorded since timestamp. The row is left in
-// the given state so the caller can drive a specific clear path against it.
+// seedLivenessSet inserts a live-state spawn (its agent's pane recorded, so its
+// own hooks apply, SR-22.9) and pins both liveness columns via the guarded
+// setter, returning the recorded since timestamp. The row is left in the given
+// state so the caller can drive a specific clear path against it.
 func seedLivenessSet(t *testing.T, s *Store, id, state string) string {
 	t.Helper()
-	if err := s.InsertPending(Spawn{
+	if err := insertAgentRow(s, Spawn{
 		ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-" + id, RelayMode: "off",
 	}); err != nil {
 		t.Fatalf("seedLivenessSet: InsertPending(%q): %v", id, err)
 	}
 	if state != StatePending {
-		if err := s.ApplyHookTransition(id, state, false, "test_seed"); err != nil {
+		if err := agentHook(s, id, state, false, "test_seed"); err != nil {
 			t.Fatalf("seedLivenessSet: ApplyHookTransition(%q, %q): %v", id, state, err)
 		}
 	}
@@ -154,12 +155,12 @@ func TestSetLivenessUnverifiedNoopOnAbsentAndTerminal(t *testing.T) {
 
 	// Terminal (ended) row: guarded on the live-state set, so no-op.
 	const endedID = "liveness-terminal-ended-1"
-	if err := s.InsertPending(Spawn{
+	if err := insertAgentRow(s, Spawn{
 		ClaudeInstanceID: endedID, CWD: "/tmp", TmuxSessionName: "cd-end", RelayMode: "off",
 	}); err != nil {
 		t.Fatalf("InsertPending(ended): %v", err)
 	}
-	if err := s.ApplyHookTransition(endedID, StateEnded, false, "test_seed"); err != nil {
+	if err := agentHook(s, endedID, StateEnded, false, "test_seed"); err != nil {
 		t.Fatalf("transition to ended: %v", err)
 	}
 	transitioned, err = s.SetLivenessUnverified(endedID, "note")
@@ -173,12 +174,12 @@ func TestSetLivenessUnverifiedNoopOnAbsentAndTerminal(t *testing.T) {
 
 	// Missing (terminal) row: same no-op discipline.
 	const missingID = "liveness-terminal-missing-1"
-	if err := s.InsertPending(Spawn{
+	if err := insertAgentRow(s, Spawn{
 		ClaudeInstanceID: missingID, CWD: "/tmp", TmuxSessionName: "cd-mis", RelayMode: "off",
 	}); err != nil {
 		t.Fatalf("InsertPending(missing): %v", err)
 	}
-	if err := s.ApplyHookTransition(missingID, StateWorking, false, "test_seed"); err != nil {
+	if err := agentHook(s, missingID, StateWorking, false, "test_seed"); err != nil {
 		t.Fatalf("transition to working: %v", err)
 	}
 	if _, err := s.MarkSpawnMissing(missingID); err != nil {
@@ -226,36 +227,35 @@ func TestClearLivenessUnverifiedIdempotent(t *testing.T) {
 func TestListLiveSpawnIdentitiesReadShape(t *testing.T) {
 	s, _ := openTempStore(t)
 
-	// pending row with recorded identity + liveness set.
-	if err := s.InsertPending(Spawn{
-		ClaudeInstanceID: "live-pending", CWD: "/tmp", TmuxSessionName: "cd-lp", RelayMode: "off",
+	// waiting row with recorded identity + liveness set. SR-22.9: SessionStart
+	// records the identity (its parent, the pane process) and sets waiting in
+	// one write, so the identity row is waiting and the pending row has none.
+	if err := insertAgentRow(s, Spawn{
+		ClaudeInstanceID: "live-waiting", CWD: "/tmp", TmuxSessionName: "cd-lwt", RelayMode: "off",
 	}); err != nil {
-		t.Fatalf("InsertPending(live-pending): %v", err)
+		t.Fatalf("insertAgentRow(live-waiting): %v", err)
 	}
-	if err := s.RecordSessionStartIdentity("live-pending", "", "", false, 4242, "9988"); err != nil {
-		t.Fatalf("RecordSessionStartIdentity(live-pending): %v", err)
+	if err := agentSessionStart(s, "live-waiting", "", "", false); err != nil {
+		t.Fatalf("SessionStart(live-waiting): %v", err)
 	}
-	if _, err := s.SetLivenessUnverified("live-pending", "probe eacces"); err != nil {
-		t.Fatalf("SetLivenessUnverified(live-pending): %v", err)
+	if _, err := s.SetLivenessUnverified("live-waiting", "probe eacces"); err != nil {
+		t.Fatalf("SetLivenessUnverified(live-waiting): %v", err)
 	}
 
-	// working row with NO recorded identity (columns NULL → zero values).
-	if err := s.InsertPending(Spawn{
-		ClaudeInstanceID: "live-working", CWD: "/tmp", TmuxSessionName: "cd-lw", RelayMode: "off",
+	// pending row with NO recorded identity (columns NULL → zero values).
+	if err := insertAgentRow(s, Spawn{
+		ClaudeInstanceID: "live-pending", CWD: "/tmp", TmuxSessionName: "cd-lp", RelayMode: "off",
 	}); err != nil {
-		t.Fatalf("InsertPending(live-working): %v", err)
-	}
-	if err := s.ApplyHookTransition("live-working", StateWorking, false, "test_seed"); err != nil {
-		t.Fatalf("transition live-working: %v", err)
+		t.Fatalf("insertAgentRow(live-pending): %v", err)
 	}
 
 	// terminal (ended) row — must be excluded.
-	if err := s.InsertPending(Spawn{
+	if err := insertAgentRow(s, Spawn{
 		ClaudeInstanceID: "dead-ended", CWD: "/tmp", TmuxSessionName: "cd-de", RelayMode: "off",
 	}); err != nil {
 		t.Fatalf("InsertPending(dead-ended): %v", err)
 	}
-	if err := s.ApplyHookTransition("dead-ended", StateEnded, false, "test_seed"); err != nil {
+	if err := agentHook(s, "dead-ended", StateEnded, false, "test_seed"); err != nil {
 		t.Fatalf("transition dead-ended: %v", err)
 	}
 
@@ -268,26 +268,26 @@ func TestListLiveSpawnIdentitiesReadShape(t *testing.T) {
 		byID[it.ClaudeInstanceID] = it
 	}
 	if len(byID) != 2 {
-		t.Fatalf("live identities = %d (%v); want 2 (pending + working, ended excluded)", len(byID), ids)
+		t.Fatalf("live identities = %d (%v); want 2 (waiting + pending, ended excluded)", len(byID), ids)
 	}
 	if _, ok := byID["dead-ended"]; ok {
 		t.Errorf("terminal (ended) row leaked into live identities: %v", ids)
+	}
+
+	w, ok := byID["live-waiting"]
+	if !ok {
+		t.Fatalf("waiting row missing from live identities: %v", ids)
+	}
+	if pane := testPane(); w.PID != pane.PanePID || w.ProcStarttime != pane.PaneStarttime {
+		t.Errorf("live-waiting identity = (pid=%d, starttime=%q); want the pane process (%d, %q)", w.PID, w.ProcStarttime, pane.PanePID, pane.PaneStarttime)
 	}
 
 	p, ok := byID["live-pending"]
 	if !ok {
 		t.Fatalf("pending row missing from live identities: %v", ids)
 	}
-	if p.PID != 4242 || p.ProcStarttime != "9988" {
-		t.Errorf("live-pending identity = (pid=%d, starttime=%q); want (4242, 9988)", p.PID, p.ProcStarttime)
-	}
-
-	w, ok := byID["live-working"]
-	if !ok {
-		t.Fatalf("working row missing from live identities: %v", ids)
-	}
-	if w.PID != 0 || w.ProcStarttime != "" {
-		t.Errorf("live-working identity = (pid=%d, starttime=%q); want zero values (NULL columns)", w.PID, w.ProcStarttime)
+	if p.PID != 0 || p.ProcStarttime != "" {
+		t.Errorf("live-pending identity = (pid=%d, starttime=%q); want zero values (NULL columns)", p.PID, p.ProcStarttime)
 	}
 }
 
@@ -307,10 +307,11 @@ func findMissingTicksAt(t *testing.T, prevCount int) []map[string]any {
 }
 
 // seedCheckPermissionSpawn inserts a Spawn in check_permission state with
-// relay_mode=on, ready to receive permission_requests rows.
+// relay_mode=on and its agent's pane recorded, ready to receive the agent's
+// gated permission_requests rows (SR-22.9).
 func seedCheckPermissionSpawn(t *testing.T, s *Store, id string) {
 	t.Helper()
-	if err := s.InsertPending(Spawn{
+	if err := insertAgentRow(s, Spawn{
 		ClaudeInstanceID: id,
 		CWD:              "/tmp",
 		TmuxSessionName:  "cd-" + id,
@@ -318,7 +319,7 @@ func seedCheckPermissionSpawn(t *testing.T, s *Store, id string) {
 	}); err != nil {
 		t.Fatalf("seedCheckPermissionSpawn: InsertPending(%q): %v", id, err)
 	}
-	if err := s.ApplyHookTransition(id, StateCheckPermission, false, "test_seed"); err != nil {
+	if err := agentHook(s, id, StateCheckPermission, false, "test_seed"); err != nil {
 		t.Fatalf("seedCheckPermissionSpawn: ApplyHookTransition(%q, check_permission): %v", id, err)
 	}
 }
@@ -341,7 +342,7 @@ func TestFindMissingMultiRow(t *testing.T) {
 	// Seed 3 open rows with distinct tokens.
 	tokens := []string{tokenA, tokenB, tokenC}
 	for _, tok := range tokens {
-		if err := s.UpsertOpenPermissionRequest(id, tok, "Bash", `{"cmd":"echo"}`, 0, ""); err != nil {
+		if err := agentPermissionRequest(s, id, tok, "Bash", `{"cmd":"echo"}`, 0, ""); err != nil {
 			t.Fatalf("UpsertOpenPermissionRequest(%q): %v", tok, err)
 		}
 	}
@@ -406,7 +407,7 @@ func TestFindMissingSingleRow(t *testing.T) {
 	const id = "fm-single-row-1"
 
 	seedCheckPermissionSpawn(t, s, id)
-	if err := s.UpsertOpenPermissionRequest(id, tokenA, "Read", `{"file":"/etc/hosts"}`, 0, ""); err != nil {
+	if err := agentPermissionRequest(s, id, tokenA, "Read", `{"file":"/etc/hosts"}`, 0, ""); err != nil {
 		t.Fatalf("UpsertOpenPermissionRequest: %v", err)
 	}
 
@@ -462,7 +463,7 @@ func TestFindMissingNoOpenRows(t *testing.T) {
 	const id = "fm-no-open-rows-1"
 
 	// Spawn in working state — no permission_requests rows at all.
-	if err := s.InsertPending(Spawn{
+	if err := insertAgentRow(s, Spawn{
 		ClaudeInstanceID: id,
 		CWD:              "/tmp",
 		TmuxSessionName:  "cd-" + id,
@@ -470,7 +471,7 @@ func TestFindMissingNoOpenRows(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
-	if err := s.ApplyHookTransition(id, StateWorking, false, "test_seed"); err != nil {
+	if err := agentHook(s, id, StateWorking, false, "test_seed"); err != nil {
 		t.Fatalf("transition to working: %v", err)
 	}
 

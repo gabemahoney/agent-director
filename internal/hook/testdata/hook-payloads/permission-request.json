@@ -1,0 +1,25 @@
+{
+  "session_id": "97909c44-a13f-415d-a798-4885c39f96b3",
+  "transcript_path": "/home/agent/.claude/projects/-work-demo/97909c44-a13f-415d-a798-4885c39f96b3.jsonl",
+  "cwd": "/work/demo",
+  "permission_mode": "default",
+  "hook_event_name": "PermissionRequest",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "rm -rf node_modules",
+    "description": "Remove node_modules directory"
+  },
+  "permission_suggestions": [
+    {
+      "type": "addRules",
+      "rules": [
+        {
+          "toolName": "Bash",
+          "ruleContent": "rm -rf node_modules"
+        }
+      ],
+      "behavior": "allow",
+      "destination": "localSettings"
+    }
+  ]
+}

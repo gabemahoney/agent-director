@@ -38,7 +38,7 @@ type ProcChecker interface {
 }
 
 // NewProcChecker returns the per-OS start-time reader, selected by build tags
-// at compile time (mirroring New / NewResolver / NewChecker):
+// at compile time (mirroring New / NewChecker):
 //
 //   - Linux:  linuxStartTimeReader over the default /proc root.
 //   - darwin: darwinStartTimeReader over the real per-pid KERN_PROC_PID fetch

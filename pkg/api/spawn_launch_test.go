@@ -309,28 +309,25 @@ func TestSpawnRefusesUnusableSocketDir(t *testing.T) {
 	}
 }
 
-// TestSpawnIdentityWriteYieldsToHookWrite: a hook write between the create and
-// the identity write stands; the identity write writes nothing; spawn succeeds.
-func TestSpawnIdentityWriteYieldsToHookWrite(t *testing.T) {
+// TestSpawnHookBeforeIdentityWriteIsIgnored (SR-22.9): the pending row records no
+// pane until the identity write, so a hook between the create and it is ignored
+// (no_pane_recorded); the identity write applies and spawn succeeds.
+func TestSpawnHookBeforeIdentityWriteIsIgnored(t *testing.T) {
 	env := newSpawnEnv(t)
+	var got store.HookApplied
 	env.rec.AfterCall(tmux.CallCreate, func(c tmuxfix.SocketCall, _ error) {
-		s, err := store.Open(env.dbPath)
-		if err != nil {
-			t.Errorf("store.Open: %v", err)
-			return
-		}
-		defer func() { _ = s.Close() }()
-		if err := s.ApplyHookTransition(c.InstanceID, store.StateWaiting, false, "SessionStart"); err != nil {
-			t.Errorf("ApplyHookTransition: %v", err)
-		}
+		got = apitest.ApplyAgentHook(t, env.dbPath, c.InstanceID, "SessionStart", "sess-early")
 	})
 	id := mustSpawn(t, env, api.SpawnParams{CWD: t.TempDir()})
-	row, tok, _ := spawnRow(t, env, id)
-	if row.State != store.StateWaiting || row.RowVersion != int64(1) || tok != env.rec.SocketCalls()[0].Token {
-		t.Errorf("row {state %v, row_version %v, token %q}; want the hook's {waiting, 1} and the launch token", row.State, row.RowVersion, tok)
+	if want := (store.HookApplied{Reason: store.HookReasonNoPaneRecorded}); got != want {
+		t.Errorf("SessionStart before the identity write = %+v; want %+v", got, want)
 	}
-	if got := identityCols(row); !reflect.DeepEqual(got, noIdentity) {
-		t.Errorf("identity columns = %#v; want none written", got)
+	row, _, _ := spawnRow(t, env, id)
+	pane := env.rec.Sessions(env.socket)[0].Panes[0]
+	if row.State != store.StatePending || row.RowVersion != int64(1) || row.ClaudeSessionID != nil ||
+		row.PaneID != pane.ID || row.PanePID != int64(pane.PID) {
+		t.Errorf("row {state %v, row_version %v, session %#v, pane %#v pid %#v}; want pending, 1, NULL, the create's pane %s pid %d",
+			row.State, row.RowVersion, row.ClaudeSessionID, row.PaneID, row.PanePID, pane.ID, pane.PID)
 	}
 	if env.logs.Len() != 0 {
 		t.Errorf("client log = %q; want nothing", env.logs.String())

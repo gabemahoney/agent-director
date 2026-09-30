@@ -190,8 +190,10 @@ func TestResumeRestoreAfterEachLaunchFailure(t *testing.T) {
 	}
 }
 
-// TestResumeRestoreNotAppliedAfterAnotherWrite: a write that lands between the
-// move and the restore stands; the restore writes nothing and resume still fails.
+// TestResumeRestoreNotAppliedAfterAnotherWrite: a versioned write that lands
+// between the move and the restore stands; the restore writes nothing and
+// resume still fails. SR-22.9 (decision A7): a hook cannot be that write, since
+// the moved row records no pane (TestResumeHooksBeforeRestoreIgnored, resume_pending_hook_test.go).
 func TestResumeRestoreNotAppliedAfterAnotherWrite(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -200,10 +202,9 @@ func TestResumeRestoreNotAppliedAfterAnotherWrite(t *testing.T) {
 		outcome   apitest.RestoreOutcome
 		wantState any // the row's state after resume; nil: the row is gone
 	}{
-		// Hook-driven: Task rc's hook gate (S17) converts this case.
-		{"SessionStart on the failing create", true, func(e *resumeEnv, id, _ string) error {
-			return e.st.ApplyHookTransition(id, store.StateWaiting, false, "SessionStart")
-		}, apitest.RestoreRowChanged, store.StateWaiting},
+		{"parent id written on the failing create", true, func(e *resumeEnv, id, other string) error {
+			return e.st.SetParentID(id, other)
+		}, apitest.RestoreRowChanged, store.StatePending},
 		{"parent id written after the move", false, func(e *resumeEnv, id, other string) error {
 			return e.st.SetParentID(id, other)
 		}, apitest.RestoreRowChanged, store.StatePending},

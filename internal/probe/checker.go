@@ -44,7 +44,7 @@ func (v LivenessVerdict) String() string {
 // verdict, so a per-id programmable fake (SR-12.3) substitutes cleanly from
 // pkg/api WITHOUT importing any build-tagged code or reproducing the tables.
 //
-// The interface mirrors Prober/Resolver: a New-style factory selects the per-OS
+// The interface mirrors Prober: a New-style factory selects the per-OS
 // impl at compile time, and the seam is fake-substitutable in tests.
 type LivenessChecker interface {
 	// CheckLiveness returns the liveness verdict for the tracked process
@@ -61,7 +61,7 @@ type LivenessChecker interface {
 // NewChecker returns the per-OS LivenessChecker. The implementation is selected
 // by build tags at compile time (Linux /proc read over the default /proc root;
 // darwin per-pid KERN_PROC_PID + KERN_PROCARGS2; an unsupported-OS fallback).
-// The factory mirrors New()/NewResolver() so pkg/api can inject a fake in tests
+// The factory mirrors New() so pkg/api can inject a fake in tests
 // without touching the production path.
 func NewChecker() LivenessChecker {
 	return newChecker()

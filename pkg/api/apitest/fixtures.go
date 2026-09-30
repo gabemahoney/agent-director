@@ -34,6 +34,7 @@ func SeedListFixture(t *testing.T) (*store.Store, string) {
 		t.Fatalf("SeedListFixture: store.OpenOrInit: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
+	storefix.RegisterStorePath(t, s, dbPath)
 
 	insert := func(id, parent, state, cwd string, labels map[string]string) {
 		t.Helper()
@@ -48,11 +49,7 @@ func SeedListFixture(t *testing.T) (*store.Store, string) {
 		if err := s.InsertPending(row); err != nil {
 			t.Fatalf("SeedListFixture: InsertPending %s: %v", id, err)
 		}
-		if state != store.StatePending {
-			if err := s.ApplyHookTransition(id, state, false, "test_seed"); err != nil {
-				t.Fatalf("SeedListFixture: ApplyHookTransition %s: %v", id, err)
-			}
-		}
+		seedAgentState(t, s, id, state, "SeedListFixture")
 	}
 
 	insert("row-a-wait-foo", "", store.StateWaiting, "/tmp",
@@ -79,6 +76,7 @@ func SeedDeleteFixture(t *testing.T) (*store.Store, string) {
 		t.Fatalf("SeedDeleteFixture: store.OpenOrInit: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
+	storefix.RegisterStorePath(t, s, dbPath)
 
 	for _, sp := range []struct {
 		id, state string
@@ -95,11 +93,7 @@ func SeedDeleteFixture(t *testing.T) (*store.Store, string) {
 		if err := s.InsertPending(row); err != nil {
 			t.Fatalf("SeedDeleteFixture: InsertPending %s: %v", sp.id, err)
 		}
-		if sp.state != store.StatePending {
-			if err := s.ApplyHookTransition(sp.id, sp.state, false, "test_seed"); err != nil {
-				t.Fatalf("SeedDeleteFixture: transition %s: %v", sp.id, err)
-			}
-		}
+		seedAgentState(t, s, sp.id, sp.state, "SeedDeleteFixture")
 	}
 	return s, dbPath
 }
@@ -115,6 +109,7 @@ func SeedDecideFixture(t *testing.T, relayMode string) (*store.Store, string) {
 		t.Fatalf("SeedDecideFixture: store.OpenOrInit: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
+	storefix.RegisterStorePath(t, s, dbPath)
 
 	if err := s.InsertPending(store.Spawn{
 		ClaudeInstanceID: "id-d-1",
@@ -125,19 +120,18 @@ func SeedDecideFixture(t *testing.T, relayMode string) (*store.Store, string) {
 		t.Fatalf("SeedDecideFixture: InsertPending: %v", err)
 	}
 	// Transition into check_permission so it looks realistic.
-	if err := s.ApplyHookTransition("id-d-1", store.StateCheckPermission, false, "test_seed"); err != nil {
-		t.Fatalf("SeedDecideFixture: transition: %v", err)
-	}
+	seedAgentState(t, s, "id-d-1", store.StateCheckPermission, "SeedDecideFixture")
 	return s, dbPath
 }
 
 // SeedPermissionRow inserts an open permission request for id into s using
-// TestRequestTokenA as the canonical single-row test token.
+// TestRequestTokenA as the canonical single-row test token, through the gated
+// INSERT played by the row's own agent (SR-22.9; the row's pane and process
+// identity are left as they were). s must come from an apitest fixture or
+// storefix.OpenTempStore (or be registered with storefix.RegisterStorePath).
 func SeedPermissionRow(t *testing.T, s *store.Store, id string) {
 	t.Helper()
-	if err := s.UpsertOpenPermissionRequest(id, storefix.TestRequestTokenA, "Bash", `{"cmd":"echo"}`, 0, store.WriterProcessHook); err != nil {
-		t.Fatalf("SeedPermissionRow: UpsertOpenPermissionRequest: %v", err)
-	}
+	seedOpenRequest(t, s, id, storefix.TestRequestTokenA, "Bash", `{"cmd":"echo"}`, "SeedPermissionRow")
 }
 
 // SeedExpireFixture builds a 5-row DB with mixed states and ages for use
@@ -154,6 +148,7 @@ func SeedExpireFixture(t *testing.T) (*store.Store, string) {
 		t.Fatalf("SeedExpireFixture: store.OpenOrInit: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
+	storefix.RegisterStorePath(t, s, dbPath)
 
 	insert := func(id, state, cwd string) {
 		t.Helper()
@@ -166,11 +161,7 @@ func SeedExpireFixture(t *testing.T) (*store.Store, string) {
 		if err := s.InsertPending(row); err != nil {
 			t.Fatalf("SeedExpireFixture: InsertPending %s: %v", id, err)
 		}
-		if state != store.StatePending {
-			if err := s.ApplyHookTransition(id, state, false, "test_seed"); err != nil {
-				t.Fatalf("SeedExpireFixture: transition %s: %v", id, err)
-			}
-		}
+		seedAgentState(t, s, id, state, "SeedExpireFixture")
 	}
 
 	insert("row-ended-old", store.StateEnded, "/tmp")
@@ -272,6 +263,7 @@ func OpenStoreWithRow(t *testing.T, id, sessionName, state, relayMode string) (*
 		t.Fatalf("OpenStoreWithRow: store.OpenOrInit: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
+	storefix.RegisterStorePath(t, s, dbPath)
 
 	if err := s.InsertPending(store.Spawn{
 		ClaudeInstanceID: id,
@@ -281,10 +273,6 @@ func OpenStoreWithRow(t *testing.T, id, sessionName, state, relayMode string) (*
 	}); err != nil {
 		t.Fatalf("OpenStoreWithRow: InsertPending: %v", err)
 	}
-	if state != store.StatePending {
-		if err := s.ApplyHookTransition(id, state, false, "test_seed"); err != nil {
-			t.Fatalf("OpenStoreWithRow: ApplyHookTransition(%s→%s): %v", id, state, err)
-		}
-	}
+	seedAgentState(t, s, id, state, "OpenStoreWithRow")
 	return s, dbPath
 }

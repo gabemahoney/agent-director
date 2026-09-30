@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/probe"
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	_ "modernc.org/sqlite"
 )
@@ -19,8 +21,8 @@ import (
 // linuxProcStarttimeRe is the canonical Linux proc_starttime FORM: field 22 of
 // /proc/<pid>/stat is a decimal clock-ticks-since-boot integer, stored verbatim
 // (no unit conversion). The end-to-end SessionStart test asserts the recorded
-// value matches this shape rather than a fixed value — the real starttime is the
-// live hook process's, which is not knowable in advance. The FORM is cross-checked
+// value matches this shape as well as the test process's live start time (the
+// hook's parent, SR-22.9). The FORM is cross-checked
 // against apitest.LinuxProcStarttime (the shared canonical fixture) below so the
 // two never silently diverge.
 var linuxProcStarttimeRe = regexp.MustCompile(`^[0-9]+$`)
@@ -171,23 +173,32 @@ func runCLIWithEnv(t *testing.T, home string, env map[string]string, stdin strin
 	return stdout.String(), stderr.String(), exitCode
 }
 
-// insertPendingRow uses raw SQL to seed a pending row so the hook test can
-// observe the transition. Tests intentionally bypass the api/spawn layer
-// here because Task 4's gate is the hook subsystem in isolation; Task 5's
-// integration tests will exercise the full spawn → hook round trip.
+// withTestProcessPane records this test process as the row's pane process
+// (pane pid = os.Getpid(), pane start time = its real probe start time). The
+// test process is the parent of every hook it pipes into the built CLI, so
+// those hooks pass the SR-22.9 parent gate on the row.
+func withTestProcessPane(t *testing.T) apitest.SpawnOption {
+	t.Helper()
+	pid := os.Getpid()
+	start, alive, known := probe.NewProcChecker().StartTime(pid)
+	if !known || !alive || start == "" {
+		t.Fatalf("StartTime(test pid %d) = (%q, alive=%v, known=%v); want the live start time", pid, start, alive, known)
+	}
+	return apitest.WithLaunchIdentity(store.LaunchIdentity{
+		Token:         "5eed0000000000a1",
+		Socket:        apitest.TestSocket,
+		PaneID:        apitest.TestPaneID,
+		PanePID:       pid,
+		PaneStarttime: start,
+	})
+}
+
+// insertPendingRow seeds a pending relay-off row whose pane process is this
+// test process (withTestProcessPane), so the hooks the test pipes apply.
 func insertPendingRow(t *testing.T, dbPath, instanceID string) {
 	t.Helper()
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
-	defer db.Close()
-	_, err = db.Exec(`
-        INSERT INTO spawns (claude_instance_id, state, cwd, tmux_session_name, relay_mode)
-        VALUES (?, 'pending', '/tmp', 'cd-test', 'off')
-    `, instanceID)
-	if err != nil {
-		t.Fatalf("seed row: %v", err)
+	if _, err := apitest.SeedSpawn(dbPath, instanceID, store.StatePending, "/tmp", "off", "", false, withTestProcessPane(t)); err != nil {
+		t.Fatalf("SeedSpawn: %v", err)
 	}
 }
 
@@ -239,43 +250,6 @@ func readSpawnIdentity(t *testing.T, dbPath, instanceID string) spawnIdentity {
 	return id
 }
 
-// runCLIWithEnvPID is runCLIWithEnv plus the started subprocess's OS pid. The
-// SessionStart end-to-end test needs the pid because — with
-// AGENT_DIRECTOR_INSTANCE_ID set ONLY on the hook subprocess (never on the
-// go-test parent) — the probe resolver's topmost matching ancestor is the hook
-// process itself, so the recorded spawn-row pid must equal this exact value.
-// exec.Cmd exposes it via cmd.Process.Pid once Start/Run has run.
-func runCLIWithEnvPID(t *testing.T, home string, env map[string]string, stdin string, args ...string) (string, string, int, int) {
-	t.Helper()
-	cmd := exec.Command(binaryPath, args...)
-	envArr := []string{
-		"PATH=" + os.Getenv("PATH"),
-		"HOME=" + home,
-	}
-	for k, v := range env {
-		envArr = append(envArr, k+"="+v)
-	}
-	cmd.Env = envArr
-	cmd.Stdin = strings.NewReader(stdin)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	pid := 0
-	if cmd.Process != nil {
-		pid = cmd.Process.Pid
-	}
-	exitCode := 0
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			exitCode = exitErr.ExitCode()
-		} else {
-			t.Fatalf("unexpected exec error: %v", err)
-		}
-	}
-	return stdout.String(), stderr.String(), exitCode, pid
-}
-
 func TestHookCLISessionStartTransitionsToWaiting(t *testing.T) {
 	home := t.TempDir()
 	// First call: a store-opening verb (`list`) triggers schema bootstrap.
@@ -320,25 +294,15 @@ func TestHookCLISessionStartTransitionsToWaiting(t *testing.T) {
 // TestHookCLISessionStartRecordsIdentityAndTranscript is the Epic's sprint-demo
 // acceptance, exercised end-to-end against the REAL binary subprocess (not an
 // in-process Handle): seed a spawn, fire a SessionStart hook carrying a
-// transcript_path, and assert the row shows the tracked identity — non-NULL pid
-// (exact, equal to the subprocess's own pid), a canonical-form proc_starttime,
-// and jsonl_path exactly equal to the payload transcript_path. A subsequent
-// non-SessionStart hook invocation must leave all three unchanged (no-clobber).
+// transcript_path, and assert the row shows the tracked identity — pid and
+// proc_starttime equal to the hook's parent (this test process, the row's
+// recorded pane process) and jsonl_path exactly equal to the payload
+// transcript_path. A subsequent non-SessionStart hook invocation must leave all
+// three unchanged (no-clobber).
 //
-// pid is asserted for EXACT equality — not merely > 0 — because it is feasible
-// and preferred here: AGENT_DIRECTOR_INSTANCE_ID is set ONLY on the hook
-// subprocess's env (runCLIWithEnvPID injects it via cmd.Env, never on the
-// go-test parent), the binary does no re-exec, and the probe resolver walks from
-// the hook process UP to the TOPMOST ancestor carrying the var. The go-test
-// parent does not carry it, so the walk's topmost match is the hook process
-// itself → the recorded pid equals cmd.Process.Pid deterministically. This holds
-// under sandbox --pid=host: the assertion is anchored to the subprocess's own
-// pid, never an absolute host-pid value, and the walk tolerates foreign-uid
-// ancestors above it (their environ is unreadable → non-match, walk continues).
-//
-// proc_starttime is a live value (the hook process's actual field-22 ticks), so
-// it is asserted by FORM (^[0-9]+$), cross-checked against the shared canonical
-// fixture apitest.LinuxProcStarttime rather than by value equality.
+// SR-22.9: an applied SessionStart records the hook's getppid() as the row's
+// pid; the built CLI's parent is this test process, so pid = os.Getpid() and
+// proc_starttime = its probe start time (also checked by canonical FORM).
 func TestHookCLISessionStartRecordsIdentityAndTranscript(t *testing.T) {
 	// Guard: the canonical-form regex must accept the shared fixture constant.
 	// This anchors the FORM the test asserts to apitest's re-exported canonical
@@ -369,7 +333,7 @@ func TestHookCLISessionStartRecordsIdentityAndTranscript(t *testing.T) {
 		t.Fatalf("write transcript: %v", err)
 	}
 	payload := `{"hook_event_name":"SessionStart","transcript_path":"` + transcript + `"}`
-	_, stderr, code, pid := runCLIWithEnvPID(t, home,
+	_, stderr, code := runCLIWithEnv(t, home,
 		map[string]string{
 			"AGENT_DIRECTOR_INSTANCE_ID": "id-e2e-1",
 		},
@@ -377,26 +341,25 @@ func TestHookCLISessionStartRecordsIdentityAndTranscript(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("hook exit = %d; want 0\nstderr=%s", code, stderr)
 	}
-	if pid <= 0 {
-		t.Fatalf("subprocess pid = %d; want > 0 (cmd.Process.Pid unavailable)", pid)
-	}
 
 	id := readSpawnIdentity(t, dbPath, "id-e2e-1")
 
-	// pid: non-NULL and exactly the hook subprocess's pid (topmost matching
-	// ancestor is the hook process itself, per the doc-comment above).
+	// SR-22.9: pid is the hook's parent, i.e. this test process.
+	pid := os.Getpid()
 	if !id.pid.Valid {
-		t.Errorf("pid is NULL; want non-NULL == subprocess pid %d", pid)
+		t.Errorf("pid is NULL; want non-NULL == test pid %d", pid)
 	} else if id.pid.Int64 != int64(pid) {
-		t.Errorf("pid = %d; want %d (hook subprocess is the topmost AGENT_DIRECTOR_INSTANCE_ID ancestor)",
-			id.pid.Int64, pid)
+		t.Errorf("pid = %d; want %d (the hook's parent, this test process)", id.pid.Int64, pid)
 	}
 
-	// proc_starttime: non-NULL and in the canonical Linux form (decimal ticks).
+	// proc_starttime: the parent's start time, in the canonical Linux form.
+	wantStart, _, _ := probe.NewProcChecker().StartTime(pid)
 	if !id.procStarttime.Valid {
-		t.Errorf("proc_starttime is NULL; want a canonical decimal string")
+		t.Errorf("proc_starttime is NULL; want %q", wantStart)
 	} else if !linuxProcStarttimeRe.MatchString(id.procStarttime.String) {
 		t.Errorf("proc_starttime = %q; want canonical form %s", id.procStarttime.String, linuxProcStarttimeRe)
+	} else if id.procStarttime.String != wantStart {
+		t.Errorf("proc_starttime = %q; want %q (the test process's start time)", id.procStarttime.String, wantStart)
 	}
 
 	// jsonl_path: non-NULL and EXACTLY the payload transcript_path (no basename
@@ -408,8 +371,7 @@ func TestHookCLISessionStartRecordsIdentityAndTranscript(t *testing.T) {
 	}
 
 	// No-clobber: a subsequent non-SessionStart hook (PreToolUse) must NOT touch
-	// pid / proc_starttime / jsonl_path — the write site is gated on the
-	// SessionStart event, and non-SessionStart events never reach the resolver.
+	// pid / proc_starttime / jsonl_path — only SessionStart records the identity.
 	_, stderr2, code2 := runCLIWithEnv(t, home,
 		map[string]string{
 			"AGENT_DIRECTOR_INSTANCE_ID": "id-e2e-1",

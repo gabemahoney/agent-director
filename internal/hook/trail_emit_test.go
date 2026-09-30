@@ -29,6 +29,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // trailTestHome is the isolated HOME for the test binary. Set by TestMain
@@ -193,7 +194,7 @@ func TestTrailEmitHookFired(t *testing.T) {
 		payload string
 		id      string
 		relay   string // "" or hook.RelayModeOn
-		seed    bool   // seed a live spawn row in the store before Handle
+		seed    bool   // seed a live spawn row (pane recorded) and fire as its agent
 		outcome string
 		event   string
 		tool    string // "" → expect null in trail
@@ -253,9 +254,15 @@ func TestTrailEmitHookFired(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			before := len(readTrailLines(t, trailFile()))
 
-			st, _ := storefix.OpenTempStore(t)
+			// SR-22.9: a seeded row's hook comes from its pane process; with no
+			// row the hook changes nothing (no_change) and logs no ad.hook.ignored.
+			var st *store.Store
+			parent := hookParent{PID: apitest.TestPanePID, Start: storefix.SeedPaneStarttime}
 			if c.seed {
-				storefix.SeedSpawn(t, st, c.id)
+				st, _ = seedAgentRow(t, c.id, store.StateWorking)
+				parent = agentParent(t, st, c.id)
+			} else {
+				st, _ = storefix.OpenTempStore(t)
 			}
 
 			var stdout bytes.Buffer
@@ -267,12 +274,14 @@ func TestTrailEmitHookFired(t *testing.T) {
 				clock = &advancingClock{now: now}
 			}
 
+			hc := hookConfig(envHook(c.id, c.relay), parent)
+			hc.Cfg, hc.Clock = cfg, clock
 			if err := hook.Handle(
 				context.Background(),
 				strings.NewReader(c.payload),
 				&stdout,
 				st,
-				hook.HandleConfig{Env: envHook(c.id, c.relay), Cfg: cfg, Clock: clock},
+				hc,
 				nil,
 			); err != nil {
 				t.Fatalf("Handle: %v", err)
@@ -333,13 +342,13 @@ func TestSpawnStateTransitionSequence(t *testing.T) {
 	before := len(readTrailLines(t, trailFile()))
 
 	// One store shared across all five Handle calls so state persists.
-	st, _ := storefix.OpenTempStore(t)
-
 	// Seed pending → working (also emits one ad.spawn.state_transition).
-	storefix.SeedSpawn(t, st, testID)
+	st, _ := seedAgentRow(t, testID, store.StateWorking)
 
-	// callHandle drives one Handle invocation without relay; any error is fatal.
-	cfg := config.Relay{TimeoutSeconds: 1, PollBaseMs: 0, PollJitterMs: 0}
+	// callHandle drives one Handle invocation without relay, as the row's own
+	// agent (SR-22.9: its pane process); any error is fatal.
+	hc := hookConfig(envHook(testID, ""), agentParent(t, st, testID))
+	hc.Cfg = config.Relay{TimeoutSeconds: 1, PollBaseMs: 0, PollJitterMs: 0}
 	callHandle := func(payload string) {
 		t.Helper()
 		if err := hook.Handle(
@@ -347,7 +356,7 @@ func TestSpawnStateTransitionSequence(t *testing.T) {
 			strings.NewReader(payload),
 			io.Discard,
 			st,
-			hook.HandleConfig{Env: envHook(testID, ""), Cfg: cfg},
+			hc,
 			nil,
 		); err != nil {
 			t.Fatalf("Handle(%q): %v", payload, err)
@@ -418,22 +427,21 @@ func TestSpawnStateTransitionSequence(t *testing.T) {
 func TestTrailEmitNoToolInput(t *testing.T) {
 	before := len(readTrailLines(t, trailFile()))
 
-	st, _ := storefix.OpenTempStore(t)
-	storefix.SeedSpawn(t, st, "te-ti-id")
+	st, _ := seedAgentRow(t, "te-ti-id", store.StateWorking)
 
 	now, restore := setupVirtualClock(t)
 	defer restore()
 
+	// SR-22.9: fired by the row's own agent so the relay runs.
+	hc := hookConfig(envHook("te-ti-id", hook.RelayModeOn), agentParent(t, st, "te-ti-id"))
+	hc.Cfg = config.Relay{TimeoutSeconds: 1, PollBaseMs: 0, PollJitterMs: 0}
+	hc.Clock = &advancingClock{now: now}
 	if err := hook.Handle(
 		context.Background(),
 		strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"cmd":"echo hi"}}`),
 		io.Discard,
 		st,
-		hook.HandleConfig{
-			Env:   envHook("te-ti-id", hook.RelayModeOn),
-			Cfg:   config.Relay{TimeoutSeconds: 1, PollBaseMs: 0, PollJitterMs: 0},
-			Clock: &advancingClock{now: now},
-		},
+		hc,
 		nil,
 	); err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -456,23 +464,22 @@ func TestTrailEmitRelayAttemptCompleted(t *testing.T) {
 	const id = "te-relay-attempt-b4uk"
 	before := len(readTrailLines(t, trailFile()))
 
-	st, _ := storefix.OpenTempStore(t)
-	storefix.SeedSpawn(t, st, id)
+	st, _ := seedAgentRow(t, id, store.StateWorking)
 
 	now, restore := setupVirtualClock(t)
 	defer restore()
 
+	// SR-22.9: fired by the row's own agent so the relay runs.
+	hc := hookConfig(envHook(id, hook.RelayModeOn), agentParent(t, st, id))
+	hc.Cfg = config.Relay{TimeoutSeconds: 1, PollBaseMs: 0, PollJitterMs: 0}
+	hc.Clock = &advancingClock{now: now}
 	var stdout bytes.Buffer
 	if err := hook.Handle(
 		context.Background(),
 		strings.NewReader(`{"hook_event_name":"PermissionRequest","tool_name":"Write"}`),
 		&stdout,
 		st,
-		hook.HandleConfig{
-			Env:   envHook(id, hook.RelayModeOn),
-			Cfg:   config.Relay{TimeoutSeconds: 1, PollBaseMs: 0, PollJitterMs: 0},
-			Clock: &advancingClock{now: now},
-		},
+		hc,
 		nil,
 	); err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -761,11 +768,9 @@ func TestTrailEmitResumeObservedElapsedMsRealStore(t *testing.T) {
 	storefix.SeedSpawn(t, st, id)
 
 	// Pre-decide the row so Poll returns immediately on the first read.
-	// We INSERT the open row via UpsertOpenPermissionRequest, then decide it.
-	const fakeToken = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb"
-	if err := st.UpsertOpenPermissionRequest(id, fakeToken, "Bash", "null", 0, "hook"); err != nil {
-		t.Fatalf("upsert: %v", err)
-	}
+	// SR-22.9: the open row is INSERTed by the row's own agent (gated seeder), then decided.
+	const fakeToken = storefix.TestRequestTokenB
+	storefix.SeedOpenPermissionRequests(t, st, id, []string{fakeToken})
 	if _, err := st.DecidePermissionRequest(id, fakeToken, "allow", "ok", "decide"); err != nil {
 		t.Fatalf("decide: %v", err)
 	}

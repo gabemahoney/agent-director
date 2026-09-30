@@ -187,19 +187,21 @@ func TestResumeCreateArgvChainsLabelOnRecordedSocket(t *testing.T) {
 }
 
 // TestResumeRecordsLaunchIdentity: the identity write stores the reply's server and pane with
-// their start times; a lost reply and a write that lost to another versioned write record none.
+// their start times; a lost reply and a write that lost to another versioned write record none;
+// hooks before it are ignored and it records the pane.
 func TestResumeRecordsLaunchIdentity(t *testing.T) {
+	// recorded is the identity of the reply's server and pane.
+	recorded := func(e *resumeEnv, s tmuxfix.SeedSession) []any {
+		srv, _ := e.rec.Server(e.socket)
+		return []any{int64(srv.PID), srv.Start, apitest.LinuxProcStarttime, s.Panes[0].ID,
+			int64(s.Panes[0].PID), apitest.DarwinProcStarttime}
+	}
 	cases := []struct {
 		name  string
 		setup func(t *testing.T, e *resumeEnv, r resumableRow) (parent any)
 		want  func(e *resumeEnv, s tmuxfix.SeedSession) []any
 	}{
-		{"labelled create", func(*testing.T, *resumeEnv, resumableRow) any { return nil },
-			func(e *resumeEnv, s tmuxfix.SeedSession) []any {
-				srv, _ := e.rec.Server(e.socket)
-				return []any{int64(srv.PID), srv.Start, apitest.LinuxProcStarttime, s.Panes[0].ID,
-					int64(s.Panes[0].PID), apitest.DarwinProcStarttime}
-			}},
+		{"labelled create", func(*testing.T, *resumeEnv, resumableRow) any { return nil }, recorded},
 		{"lost reply", func(_ *testing.T, e *resumeEnv, _ resumableRow) any {
 			e.rec.Script(e.socket, tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 0, Applied: true}, tmux.CallCreate)
 			return nil
@@ -213,6 +215,19 @@ func TestResumeRecordsLaunchIdentity(t *testing.T) {
 			})
 			return other.ID
 		}, func(*resumeEnv, tmuxfix.SeedSession) []any { return noIdentity }},
+		// SR-22.9 (decision A7): the moved row records no pane until the
+		// identity write, so hooks before it are ignored and it applies.
+		{"hooks before the identity write ignored", func(t *testing.T, e *resumeEnv, r resumableRow) any {
+			e.rec.AfterCall(tmux.CallCreate, func(tmuxfix.SocketCall, error) {
+				for _, ev := range []string{"Stop", "SessionStart"} {
+					got := apitest.ApplyAgentHook(t, e.dbPath, r.ID, ev, r.SessionID, apitest.HookTranscript(r.JSONLPath, true))
+					if got.Applied || got.Reason != store.HookReasonNoPaneRecorded {
+						t.Errorf("%s before the identity write = %+v; want not applied, %s", ev, got, store.HookReasonNoPaneRecorded)
+					}
+				}
+			})
+			return nil
+		}, recorded},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -34,8 +34,9 @@ SQLite file; everything else is tmux.
 
 ### Prerequisites
 
-- `claude` (Claude Code) on PATH — install per
-  <https://claude.com/claude-code>.
+- `claude` (Claude Code) 2.1.285 or later on PATH — install per
+  <https://claude.com/claude-code>. agent-director launches only
+  Claude Code; other agent CLIs are unsupported in this release.
 - `tmux` 3.2 or later on PATH. Verified: 3.2a (by a scripted one-off
   run and recorded replies) and 3.3a (by the test suites).
   - Keep `remain-on-exit` off, the tmux default.
