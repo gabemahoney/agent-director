@@ -161,6 +161,14 @@ func WithLifeNumber(life int64) SpawnOption {
 	return func(o *spawnOpts) { o.set("life_number", life) }
 }
 
+// WithRowVersion stores v as row_version after SeedSpawn's store writes, in
+// place of the version they left. It gives rows no write sequence reaches (a
+// row off pending at version 0, or a pending row at 0 that records a session
+// id), so a conditional write's guards can each be tested alone (SR-5.3).
+func WithRowVersion(v int64) SpawnOption {
+	return func(o *spawnOpts) { o.set("row_version", v) }
+}
+
 // SessionHistorySeed is one archived session_history entry WithSessionHistory
 // seeds on the row (SR-5.9, SR-8.7).
 type SessionHistorySeed struct {

@@ -517,33 +517,6 @@ func TestSpawnCLIInstanceIDControlCharRejected(t *testing.T) {
 	}
 }
 
-// TestSpawnCLITmuxSessionNameLiveCollision pins SR-2.4 + SR-4.1: when
-// tmux refuses new-session because the name is already live, the wrapped
-// tmux error surfaces — NO ErrTmuxSessionNameTaken sentinel. The
-// fake-tmux fixture is configured via FAKE_TMUX_FAIL_NEWSESSION_NAME so
-// no real tmux is needed.
-func TestSpawnCLITmuxSessionNameLiveCollision(t *testing.T) {
-	fakeDir := buildFakeTmux(t)
-	home := t.TempDir()
-	cwd := t.TempDir()
-	_, stderr, code := runSpawnCLIEnv(t, home, fakeDir,
-		map[string]string{"FAKE_TMUX_FAIL_NEWSESSION_NAME": "bot-claude-status"},
-		"spawn", "--cwd", cwd, "--tmux-session-name", "bot-claude-status")
-	if code == 0 {
-		t.Fatalf("expected non-zero exit; stderr=%q", stderr)
-	}
-	if strings.Contains(stderr, "ErrTmuxSessionNameTaken") {
-		t.Errorf("collision must not surface ErrTmuxSessionNameTaken: %q", stderr)
-	}
-	env := parseEnvelope(t, lastJSONLine(stderr))
-	// The wrapped tmux error is classified via the existing tmux
-	// sentinel catalog — pin the exact name so a future re-classification
-	// surfaces here.
-	if env.ErrName != "ErrTmuxSessionCreate" {
-		t.Errorf("err_name = %q; want ErrTmuxSessionCreate (wrapped tmux error)", env.ErrName)
-	}
-}
-
 // lastJSONLine returns the last non-empty line of s that begins with `{`.
 // Used to skip soft warning lines (e.g. "pre-trust failed for <path> …")
 // that the spawn path may emit on stderr ahead of the JSON envelope.

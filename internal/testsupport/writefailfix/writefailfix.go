@@ -50,8 +50,10 @@ const (
 	// ReuseRestore fails an update that moves the id's pending row to ended
 	// or missing (the reuse restore). Also matched: resume's restore, the
 	// ended transition or find-missing's mark of a pending row, a plain
-	// spawn's end write after "duplicate session", and SeedSpawn of a
-	// finished row (install after seeding).
+	// spawn's end write after "duplicate session" (store.EndHeldLaunch,
+	// SR-9.4; the kind SR-5.8's store-error case uses, since no other write
+	// runs on that no-pane row), and SeedSpawn of a finished row (install
+	// after seeding).
 	ReuseRestore Kind = 4
 	// LaunchIdentityWrite fails the launch identity write
 	// (store.RecordLaunchIdentity, SR-3.6): an update of the id's spawns row

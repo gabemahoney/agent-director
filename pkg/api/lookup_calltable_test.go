@@ -6,9 +6,12 @@ package api_test
 // lookup is Ours, against each single-row verb. A column builds the row and
 // its tmux and process world on the kill fixture (kill_fixture_test.go); a
 // verb is a small adapter (invoke, its action calls, its first action) with
-// one expected cell per column. Sequence details, the process wait and the
-// ceilings are kill_test.go's. Later verb Epics extend this table (an
-// adapter appended to callTableVerbs) instead of writing their own.
+// one expected cell per column. A verb that inserts its own row (plain
+// spawn) runs its own world and row check instead, and marks the columns
+// that cannot arise for it not applicable, with the reason. Sequence
+// details, the process wait and the ceilings are kill_test.go's. Later verb
+// Epics extend this table (an adapter appended to callTableVerbs) instead of
+// writing their own.
 
 import (
 	"reflect"
@@ -32,6 +35,8 @@ const (
 	ctGoneNoLabel              callTableOutcome = "gone, no session carries the label"
 	ctGoneOtherStoreRowToken   callTableOutcome = "gone, another store's label with the row's token"
 	ctGoneOtherStoreOtherToken callTableOutcome = "gone, another store's label with another token"
+	ctGoneForeignLabel         callTableOutcome = "gone, only another row's label"
+	ctGoneNameUnlabelled       callTableOutcome = "gone, an unlabelled session holds the row's name"
 	ctGoneServerRestarted      callTableOutcome = "gone, server restarted"
 	ctGoneNoServer             callTableOutcome = "gone, no server running and recorded server gone"
 	ctGoneNoSocket             callTableOutcome = "gone, socket missing and recorded server gone"
@@ -96,6 +101,14 @@ func callTableColumns() []callTableColumn {
 			world: otherStore(func(r killRow) string { return r.Token })},
 		{outcome: ctGoneOtherStoreOtherToken, spec: goneNoSession,
 			world: otherStore(func(killRow) string { return tmuxfix.OtherToken })},
+		{outcome: ctGoneForeignLabel, spec: goneNoSession, world: func(t *testing.T, e *killEnv, r *killRow) {
+			e.ensureServer(r)
+			e.seedOther(t, r.Socket, tmuxfix.SeedSession{Name: "foreign-" + r.ID, Label: r.foreign("foreign-" + r.ID)})
+		}},
+		{outcome: ctGoneNameUnlabelled, spec: goneNoSession, world: func(t *testing.T, e *killEnv, r *killRow) {
+			e.ensureServer(r)
+			e.seedOther(t, r.Socket, tmuxfix.SeedSession{Name: r.Name})
+		}},
 		{outcome: ctGoneServerRestarted, spec: gone, world: func(t *testing.T, e *killEnv, r *killRow) {
 			e.rec.RestartServer(r.Socket, tmuxfix.Server{})
 			e.syncServers()
@@ -140,34 +153,42 @@ func callTableFirstLine() string {
 // callTableCell is a verb's expected result in one column: the error name
 // ("" for success), whether an action was sent, the socket calls in order,
 // the description case of an error, and prepare, the verb's own process
-// behaviour for the column (e.g. kill's pane kill ending the agent).
+// behaviour for the column (e.g. kill's pane kill ending the agent). na,
+// when set, says why the column cannot arise for the verb; held is plain
+// spawn's world and description (lookup_calltable_spawn_test.go).
 type callTableCell struct {
 	errName string
 	sent    bool
 	calls   []tmux.Call
 	desc    func(e *killEnv, r killRow) apitest.DescCase
 	prepare func(e *killEnv, r killRow)
+	na      string
+	held    callTableHeld
 }
 
 // callTableVerb is one verb's row: invoke runs it on r and reports whether it
 // sent an action; firstAction is the call the action-failure columns fail;
 // actions are its action calls, none of which a nothing-sent cell records.
+// run, when set, replaces the seeded-row run for a verb that builds its own
+// world and row check (runCallTableSpawn).
 type callTableVerb struct {
 	name        string
 	invoke      func(t *testing.T, e *killEnv, r killRow) (sent bool, err error)
 	firstAction tmux.Call
 	actions     []tmux.Call
 	cells       map[callTableOutcome]callTableCell
+	run         func(t *testing.T, v callTableVerb, col callTableColumn, cell callTableCell)
 }
 
 // callTableVerbs is every verb's row. Epic 11 appends read-pane, send-keys
 // and pause here, each an adapter and its cells like callTableKill.
 func callTableVerbs() []callTableVerb {
-	return []callTableVerb{callTableKill()}
+	return []callTableVerb{callTableKill(), callTableSpawn()}
 }
 
 // TestCallTable runs every verb in every column: error name through the
-// one-name helper, action sent, recorded calls, description, row unchanged.
+// one-name helper, action sent, recorded calls, description, row unchanged
+// (or the verb's own row check); a not-applicable cell is skipped with its reason.
 func TestCallTable(t *testing.T) {
 	cols := callTableColumns()
 	for _, v := range callTableVerbs() {
@@ -188,8 +209,22 @@ func TestCallTable(t *testing.T) {
 	}
 }
 
-// runCallTableCell builds col's world, runs v and checks cell.
+// runCallTableCell skips a not-applicable cell, else runs it through v.run
+// or, by default, runCallTableRowCell.
 func runCallTableCell(t *testing.T, v callTableVerb, col callTableColumn, cell callTableCell) {
+	switch {
+	case cell.na != "":
+		t.Skipf("not applicable to %s: %s", v.name, cell.na)
+	case v.run != nil:
+		v.run(t, v, col, cell)
+	default:
+		runCallTableRowCell(t, v, col, cell)
+	}
+}
+
+// runCallTableRowCell seeds col's row, builds its world, runs v and checks
+// cell, with the row unchanged.
+func runCallTableRowCell(t *testing.T, v callTableVerb, col callTableColumn, cell callTableCell) {
 	e := newKillEnv(t)
 	r := e.seedRow(t, col.spec)
 	if col.world != nil {
@@ -265,6 +300,8 @@ func callTableKill() callTableVerb {
 			ctGoneNoLabel:              gone,
 			ctGoneOtherStoreRowToken:   gone,
 			ctGoneOtherStoreOtherToken: gone,
+			ctGoneForeignLabel:         gone,
+			ctGoneNameUnlabelled:       gone,
 			ctGoneServerRestarted:      gone,
 			ctGoneNoServer:             gone,
 			ctGoneNoSocket:             gone,

@@ -35,6 +35,15 @@ const (
 	leftoverSessionID = "$4"
 	leftoverName      = "err-tsc-leftover"
 	leftoverCreated   = 1790549182
+	// heldID is the instance id the held-name row spawns: no session is
+	// labelled for it, so its label scan finds nothing and the spawn
+	// reaches the create.
+	heldID = "id-err-tsc-2"
+	// heldSessionID, heldName and heldCreated describe the unlabelled
+	// session that holds the held-name row's requested name.
+	heldSessionID = "$5"
+	heldName      = "err-tsc-held"
+	heldCreated   = 1790549183
 	// ctxStoreID is the ctx key under which the leftover row's seed passes
 	// the store's id on to its desc (a value the description must not carry).
 	ctxStoreID = "store_id"
@@ -127,6 +136,41 @@ var spawnTmuxErrorCases = []errorCase{
 				[]apitest.DescSession{{Name: leftoverName, ID: leftoverSessionID}})
 			label := tmuxfix.LabelValue(tmuxfix.OtherToken, leftoverSessionID, leftoverID, storeID)
 			return c, []string{storeID, tmuxfix.OtherToken, label}
+		},
+	},
+
+	// ── spawn / ErrTmuxSessionConflict (held name) ────────────────────────
+	// An unlabelled session holds the requested name: the create answers
+	// "duplicate session", the spawn ends its new row and the re-lookup
+	// finds a holder with no valid instance id (SR-9.4, SR-3.10).
+	{
+		verb:    "spawn",
+		errName: "ErrTmuxSessionConflict",
+		seed: func(t *testing.T) (string, map[string]any) {
+			t.Helper()
+			dbPath := apitest.SeedEmptyStore(t)
+			socket, tables := usePrivateFakeTmux(t)
+			tables.Write(t, socket, faketmuxfix.Table{
+				Server: &faketmuxfix.Server{PID: os.Getpid(), Start: heldCreated},
+				Sessions: []faketmuxfix.Session{{
+					ID: heldSessionID, Created: heldCreated, Name: heldName,
+					Panes: []faketmuxfix.Pane{{ID: "%5", PID: os.Getpid()}},
+				}},
+			})
+			return filepath.Dir(dbPath), nil
+		},
+		params: func(_ map[string]any) map[string]any {
+			return map[string]any{"cwd": "/tmp", "claude_instance_id": heldID,
+				"tmux_session_name": heldName, "no_pre_trust": true}
+		},
+		cliArgv: func(_ map[string]any) []string {
+			return []string{"spawn", "--cwd", "/tmp", "--claude-instance-id", heldID,
+				"--tmux-session-name", heldName, "--no-pre-trust"}
+		},
+		desc: func(_ map[string]any) (apitest.DescCase, []string) {
+			return apitest.DescHeldNoValidID(apitest.HeldName{
+				Name: heldName, SessionID: heldSessionID, Row: apitest.HeldRowEnded,
+			}), nil
 		},
 	},
 }

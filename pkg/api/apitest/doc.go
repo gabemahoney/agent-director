@@ -80,7 +80,10 @@
 //     descriptions.go, or in a sibling file of one verb's cases
 //     (descriptions_resume.go, whose DescCase.AfterResumeRestore adds the
 //     restore's result a resume launch error ends with; descriptions_kill.go,
-//     whose DescCase.AfterKillSent states a kill was sent), of the
+//     whose DescCase.AfterKillSent states a kill was sent), of plain spawn's
+//     errors after "duplicate session" (descriptions_held.go, whose
+//     DescCase.AfterHeldName adds the requested name, the holder's tmux id
+//     and the end write's row sentence), of the
 //     lookup's shared Can't tell cases (descriptions_lookup.go), or of the
 //     live-row sequence (descriptions_live_row.go: DescLiveRowSequence, its
 //     short form, which only kill's manifest description states;

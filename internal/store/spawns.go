@@ -484,6 +484,81 @@ func (s *Store) RecordLaunchIdentity(instanceID string, launchVersion int64, tok
 	return s.condNotApplied(instanceID, "store: record launch identity")
 }
 
+// storeTimestampLayout is the text layout of SQLite's CURRENT_TIMESTAMP, the
+// form the store's TIMESTAMP columns hold (UTC, whole seconds).
+const storeTimestampLayout = "2006-01-02 15:04:05"
+
+// storeTimestamp formats t in the store's CURRENT_TIMESTAMP layout: UTC,
+// truncated to the whole second. A value a Go caller writes through it is
+// byte-compatible with one SQLite's CURRENT_TIMESTAMP writes, so text
+// comparisons against either (expire's cutoff) treat both alike.
+func storeTimestamp(t time.Time) string {
+	return t.UTC().Format(storeTimestampLayout)
+}
+
+// endHeldLaunchSQL is EndHeldLaunch's one statement: the move to ended, the
+// launch start cleared and the version advance, guarded by the insert's
+// state, version and launch start (SR-5.3, SR-5.6, SR-22.3).
+const endHeldLaunchSQL = `UPDATE spawns
+    SET state    = ?,
+        ended_at = ?,
+        ` + launchStartClear + `,
+        ` + rowVersionAdvance + `
+  WHERE claude_instance_id = ? AND state = ? AND row_version = 0 AND launch_started_at = ?`
+
+// EndHeldLaunch is a plain spawn's end write after its create answered
+// "duplicate session" (SR-9.4; PO 2026-09-27 HELD): that answer proves the
+// launch created no session, so the spawn ends its own new row at once, before
+// anything else. It is one conditional statement (SR-5.6) that applies only
+// while the row is pending with row_version 0 and launch_started_at equal to
+// insertLaunchStartedAtMillis, the launch start InsertPending wrote (SR-5.3; a
+// delete followed by a fresh insert restarts the version at 0, and the launch
+// start tells the two lives apart). It then sets state to ended (pending,
+// version 0, to ended; SR-22.3), ended_at to endedAt in the store's
+// CURRENT_TIMESTAMP layout (UTC, whole seconds, so expire's text comparison
+// selects it as it does a row the ended hook transition wrote),
+// launch_started_at to NULL, and advances row_version by one (SR-5.2). It
+// writes no other column: the launch token, socket, server and pane identity
+// (the server and pane identity columns NULL, since no session was created),
+// last_seen_at, the request columns, life_number, no_pre_trust and parent_id
+// keep the insert's values.
+//
+// It returns CondApplied when the write applied; CondChanged, having written
+// nothing, when the row exists but no longer matches: another versioned write
+// came first, or the row was deleted and inserted afresh with another launch
+// start (a hook of the row's own agent cannot come first, since no session was
+// created); CondAbsent when no row has the id. The two are told apart by an
+// existence read after the guarded statement matched no row; nothing is
+// written a second time. A driver error is returned wrapped, with a zero
+// CondResult, never as a CondResult value.
+//
+// "ended" sticks (SR-9.4): since the hook gate (SR-22.9; WD 2026-09-29 HOOK)
+// only the row's own agent's hooks move the row, and no agent of this launch
+// exists. The row it leaves is ended with pane_pid NULL, which every later
+// hook finds not applied as no_pane_recorded, so a leftover's hooks cannot
+// revive it (PO 2026-09-27 REVIEW's fix 1b is retired).
+//
+// It emits no trail event (no ad.spawn.state_transition: only hook-driven
+// writes emit one, SR-14) and makes no tmux call. It is on the concrete
+// *Store only, like InsertPending and RecordLaunchIdentity (Appendix F.4).
+func (s *Store) EndHeldLaunch(instanceID string, insertLaunchStartedAtMillis int64, endedAt time.Time) (CondResult, error) {
+	res, err := s.db.Exec(endHeldLaunchSQL,
+		StateEnded, storeTimestamp(endedAt),
+		instanceID, StatePending, insertLaunchStartedAtMillis,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("store: end held launch: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("store: end held launch rows affected: %w", err)
+	}
+	if n > 0 {
+		return CondApplied, nil
+	}
+	return s.condNotApplied(instanceID, "store: end held launch")
+}
+
 // adoptIdentitySQL is AdoptIdentityIfUnchanged's one statement: the six
 // server and pane identity columns and the version advance, guarded by the
 // row snapshot the verb examined (SR-3.6, SR-5.3).

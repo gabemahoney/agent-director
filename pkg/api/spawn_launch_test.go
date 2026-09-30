@@ -359,14 +359,15 @@ func TestSpawnIdentityWriteStoreErrorWarnsOnce(t *testing.T) {
 }
 
 // TestSpawnCreateFailureLeavesRowPending: tmux unavailable at the create is
-// ErrTmuxNotAvailable; "duplicate session" and other failures ErrTmuxSessionCreate.
+// ErrTmuxNotAvailable, other failures ErrTmuxSessionCreate ("duplicate session"
+// is spawn_held_test.go's).
 func TestSpawnCreateFailureLeavesRowPending(t *testing.T) {
 	createFailed := func(_ spawnEnv, name string) apitest.DescCase {
 		return apitest.DescSessionCreateFailed(apitest.SessionCreateFailed{Name: name})
 	}
 	cases := []struct {
 		name string
-		fail tmux.Failure // 0: the name is already held (the table's "duplicate session")
+		fail tmux.Failure
 		want error
 		desc func(env spawnEnv, name string) apitest.DescCase
 	}{
@@ -374,9 +375,6 @@ func TestSpawnCreateFailureLeavesRowPending(t *testing.T) {
 			func(spawnEnv, string) apitest.DescCase { return apitest.DescTmuxNotRun() }},
 		{"socket permission denied", tmux.FailSocketDenied, tmux.ErrTmuxNotAvailable,
 			func(env spawnEnv, _ string) apitest.DescCase { return apitest.DescSocketPermission(env.socket) }},
-		{"duplicate session", 0, tmux.ErrTmuxSessionCreate, func(_ spawnEnv, name string) apitest.DescCase {
-			return apitest.DescSessionCreateFailed(apitest.SessionCreateFailed{Name: name, Duplicate: true})
-		}},
 		{"no server", tmux.FailNoServer, tmux.ErrTmuxSessionCreate, createFailed},
 		{"no socket", tmux.FailNoSocket, tmux.ErrTmuxSessionCreate, createFailed},
 		{"non-zero exit with no reply", tmux.FailUnrecognized, tmux.ErrTmuxSessionCreate, createFailed},
@@ -385,11 +383,7 @@ func TestSpawnCreateFailureLeavesRowPending(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			env := newSpawnEnv(t)
 			name := "fail-" + uuid.NewString()[:8]
-			if tc.fail == 0 {
-				env.rec.SeedSessions(env.socket, tmuxfix.SeedSession{Name: name})
-			} else {
-				env.rec.Script(env.socket, tmuxfix.Script{Failure: tc.fail, ExitStatus: 1}, tmux.CallCreate)
-			}
+			env.rec.Script(env.socket, tmuxfix.Script{Failure: tc.fail, ExitStatus: 1}, tmux.CallCreate)
 			wantStart := env.clock.Now().UnixMilli()
 			_, err := env.c.Spawn(api.SpawnParams{CWD: t.TempDir(), TmuxSessionName: name, TmuxSessionNameSupplied: true})
 			assertLaunchSentinel(t, err, tc.want)

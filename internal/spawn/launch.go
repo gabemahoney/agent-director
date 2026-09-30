@@ -55,10 +55,16 @@ const envInstanceID = "AGENT_DIRECTOR_INSTANCE_ID"
 // written; the error is plainSpawnCreateError's: ErrTmuxUnresponsive for a
 // timed-out create or a reply that does not parse with a non-zero exit (the
 // launch-timeout rule), ErrTmuxNotAvailable for tmux unavailable,
-// ErrTmuxSessionCreate for a session that could not be labelled, "duplicate
-// session" and every other failure. A reply lost with exit 0 is a success
-// with no identity recorded. On an insert collision ErrInstanceIdCollision
-// surfaces (the TOCTOU fallback of the pre-check).
+// ErrTmuxSessionCreate for a session that could not be labelled and every
+// other failure. "duplicate session" is not mapped to a verb error: Launch
+// returns a *HeldNameError at once (no store write, file or network I/O,
+// further tmux call or log line after the create) carrying the instance id,
+// the requested name, the socket, the token and the launch start step 4
+// wrote, and the caller's held-name path ends the row, re-looks the name up
+// and classifies the holder (SR-9.4). The row is still pending at version 0
+// when Launch returns it. A reply lost with exit 0 is a success with no
+// identity recorded. On an insert collision ErrInstanceIdCollision surfaces
+// (the TOCTOU fallback of the pre-check).
 //
 // On success Launch returns the instance id and the outcome of the step 3
 // pre-trust exactly as PreTrust reported it: PreTrustSkipped when
@@ -90,7 +96,9 @@ func Launch(s *store.Store, t LaunchTmux, pc tmux.ProcChecker, r Resolved, cfg c
 	command := []string{claudeBinary, "--settings", settings}
 	command = append(command, r.ClaudeArgs...)
 
-	if err := insertPending(s, r, now().UnixMilli(), token, socket); err != nil {
+	// Read once, so a held-name outcome carries exactly what the insert wrote.
+	launchStart := now().UnixMilli()
+	if err := insertPending(s, r, launchStart, token, socket); err != nil {
 		return "", "", err
 	}
 
@@ -107,7 +115,7 @@ func Launch(s *store.Store, t LaunchTmux, pc tmux.ProcChecker, r Resolved, cfg c
 		StoreID:    s.StoreID(),
 	}
 	out := CreateAndLabel(t, req)
-	if err := plainSpawnCreateError(out, req); err != nil {
+	if err := plainSpawnCreateError(out, req, launchStart); err != nil {
 		return "", "", err
 	}
 	if out.Kind == CreateLabelled {

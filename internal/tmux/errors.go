@@ -40,7 +40,9 @@ import "errors"
 // agent's tmux server as launched. It does not always mean nothing was done:
 // a plain spawn's row stays pending, and after a kill, send or capture call
 // the call may or may not have taken effect (see below). It must never be
-// read as "the agent is dead" (SR-1.1). Every single-row verb that runs tmux
+// read as "the agent is dead" (SR-1.1); a plain spawn that met it at the
+// re-lookup after "duplicate session" has ended its new row (the description
+// says if it could not be; SR-9.4). Every single-row verb that runs tmux
 // (kill, read-pane, send-keys, pause, resume, spawn) returns it when its
 // lookup is Can't tell with the different-server variant ("this is not the
 // tmux server the agent was launched on"; SR-3.3); when the tmux binary
@@ -71,7 +73,10 @@ var ErrTmuxSessionCreate = errors.New("tmux: new-session failed")
 // returns it when the session-creating call timed out, or its reply does not
 // parse with a non-zero exit (the session may have been created and the row
 // stays pending), and when, for a caller-supplied instance id, the label
-// scan's lookup before anything is written is unreadable (SR-1.2, SR-9.3).
+// scan's lookup before anything is written is unreadable (SR-1.2, SR-9.3),
+// and when, after "duplicate session", the re-lookup of the requested name
+// is unreadable (its new row ended, or the description says it could not
+// be; SR-9.4).
 // kill returns it when its lookup is Can't tell with the unreadable variant
 // (a call timed out, a reply was not recognised, or an answer did not
 // parse), and when, after a kill was sent, the agent process cannot be
@@ -86,7 +91,11 @@ var ErrTmuxUnresponsive = errors.New("tmux: unresponsive")
 // id returns it, before anything is written, when the label scan finds a
 // session carrying a valid label of this store that names the id ("left over
 // from an earlier life"), or when the scan's lookup finds conflicting labels
-// (SR-1.2, SR-9.3). kill returns it, with no kill sent, when the lookup for a
+// (SR-1.2, SR-9.3). Plain spawn also returns it, after "duplicate session"
+// and with its new row ended (the description says if it could not be),
+// when the re-lookup finds the requested name held by a session with an old
+// label of the new row's id, a foreign label, another store's label or no
+// valid label, or finds conflicting labels (SR-1.2, SR-9.4). kill returns it, with no kill sent, when the lookup for a
 // live row is Leftover ("not this launch's session", SR-6.1) and when it is
 // Can't tell with the provenance_conflict variant ("conflicting labels":
 // two sessions carry the row's current label, or an @ad_owner value is set

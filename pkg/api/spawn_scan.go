@@ -2,7 +2,6 @@ package api
 
 import (
 	"cmp"
-	"context"
 	"fmt"
 	"math"
 	"slices"
@@ -11,7 +10,6 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/tmux"
-	"github.com/gabemahoney/agent-director/internal/trail"
 )
 
 // This file holds plain spawn's label scan (SR-9.3; WD 2026-09-29 HOOK). It
@@ -61,8 +59,9 @@ func scanForLeftover(t tmux.LookupClient, pc ProcChecker, storeID, instanceID st
 		return nil
 	case tmux.Leftover:
 		leftovers := sortedBySessionNumber(res.Leftovers)
-		emitScanNameHeld(instanceID, socket, storeID, res.Token(), leftovers)
-		return scanLeftoverError(instanceID, leftovers)
+		err := scanLeftoverError(instanceID, leftovers)
+		emitScanNameHeld(instanceID, socket, storeID, res.Token(), leftovers, err)
+		return err
 	case tmux.CantTell:
 		return cantTellError(res, cantTellRefusal{
 			InstanceID:  instanceID,
@@ -97,35 +96,28 @@ func scanLeftoverError(instanceID string, leftovers []tmux.Session) error {
 }
 
 // emitScanNameHeld writes the scan refusal's one ad.launch.name_held record
-// (SR-9.3, SR-14), fail-open: a trail-write failure never changes the
-// result. The first leftover (lowest numeric $N) gives the session fields and
-// the by-hand commands, which humans read; no error description carries
-// them. It writes no ad.provenance.disagree: a leftover is expected.
-func emitScanNameHeld(instanceID, socket, storeID, lookupOutcome string, leftovers []tmux.Session) {
+// through the shared emitter (SR-9.3, SR-14), fail-open: a trail-write
+// failure never changes the result. The first leftover (lowest numeric $N)
+// gives the session fields and the by-hand commands, which humans read; no
+// error description carries them. Its label is this store's and names the id
+// under another token, so the holder class is old; nothing was inserted, and
+// the record alone carries leftover_count; err is the refusal returned. It
+// writes no ad.provenance.disagree: a leftover is expected.
+func emitScanNameHeld(instanceID, socket, storeID, lookupOutcome string, leftovers []tmux.Session, err error) {
 	first := leftovers[0]
-	who := callerIdentity()
-	_ = trail.Emit(context.Background(), "ad.launch.name_held", map[string]any{
-		"source":             "ad_spawn",
-		"claude_instance_id": instanceID,
-		"launch":             "spawn",
-		"tmux_session_name":  first.Name,
-		"tmux_socket":        socket,
-		"tmux_session_id":    first.ID,
-		"session_created":    first.Created,
-		"store_id":           storeID,
-		"carries_this_id":    true,
-		"current_launch":     false,
-		"lookup_outcome":     lookupOutcome,
-		"outcome":            "ErrTmuxSessionConflict",
-		"row_result":         "not_inserted",
-		"leftover_count":     len(leftovers),
-		"store_error":        nil,
-		"attach_command":     "tmux -u -S " + shellQuote(socket) + " attach-session -r -t " + shellQuote(first.ID),
-		"end_command":        "tmux -u -S " + shellQuote(socket) + " kill-session -t " + shellQuote(first.ID),
-		"caller_process":     who.process,
-		"caller_pid":         who.pid,
-		"caller_hostname":    who.hostname,
-		"caller_user":        who.user,
+	emitNameHeld(nameHeld{
+		Source:        nameHeldSourceSpawn,
+		Launch:        nameHeldLaunchSpawn,
+		InstanceID:    instanceID,
+		Name:          first.Name,
+		Socket:        socket,
+		StoreID:       storeID,
+		Holder:        heldNameHolder{Identified: true, SessionID: first.ID, Created: first.Created, Class: tmux.ClassOld},
+		LookupOutcome: lookupOutcome,
+		Err:           err,
+		RowResult:     nameHeldRowNotInserted,
+		LeftoverCount: len(leftovers),
+		Caller:        callerIdentity(),
 	})
 }
 
@@ -149,10 +141,4 @@ func sessionNumber(id string) int {
 		return math.MaxInt
 	}
 	return n
-}
-
-// shellQuote quotes s for a POSIX shell in single quotes, each ' written as
-// '\”, so a by-hand command is copied exactly (SR-14).
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

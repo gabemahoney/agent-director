@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -34,8 +35,9 @@ type SpawnResult struct {
 }
 
 // spawnTmux is plain spawn's tmux surface (Appendix F.5): the create, the
-// label by id and the session kill of the create-and-label step, and the
-// label scan's one lookup. The Client's TmuxClient satisfies it.
+// label by id and the session kill of the create-and-label step, the label
+// scan's one lookup, and the one re-lookup of the requested name after
+// "duplicate session". The Client's TmuxClient satisfies it.
 type spawnTmux interface {
 	spawn.LaunchTmux
 	tmux.LookupClient
@@ -66,6 +68,15 @@ type spawnTmux interface {
 // and a finished row are not scanned. pc, now and lg are the Client's
 // start-time reader, clock and logger, which Launch uses for the identity
 // write, the launch start and the identity write's WARN line.
+//
+// When the create answers "duplicate session", Launch returns a
+// *spawn.HeldNameError with the new pending row's facts, and runSpawn hands
+// it to the held-name path (spawnHeldName, SR-9.4): the conditional end write
+// of the new row first (its time from now; on a store error the row stays
+// pending and lg gets one WARN line), then one lookup of the requested name
+// on the launch socket (with pc), then the classified error naming the
+// blocking session, which runSpawn returns, and exactly one
+// ad.launch.name_held. The HeldNameError itself never reaches the caller.
 func runSpawn(s *store.Store, collisions spawn.CollisionChecker, t spawnTmux, pc ProcChecker, cfg config.Config, now func() time.Time, lg *log.Logger, params spawn.SpawnParams) (SpawnResult, error) {
 	if err := validateExplicitInstanceID(params.ClaudeInstanceID); err != nil {
 		return SpawnResult{}, err
@@ -87,6 +98,10 @@ func runSpawn(s *store.Store, collisions spawn.CollisionChecker, t spawnTmux, pc
 		}
 	}
 	id, preTrust, err := spawn.Launch(s, t, pc, r, cfg, now, lg)
+	var held *spawn.HeldNameError
+	if errors.As(err, &held) {
+		return SpawnResult{}, spawnHeldName(s, t, pc, now, lg, held)
+	}
 	if err != nil {
 		return SpawnResult{}, err
 	}
@@ -157,20 +172,34 @@ func hasControlChar(id string) bool {
 //   - ErrTmuxNotAvailable: the tmux binary cannot be run, or the tmux socket
 //     is not accessible to this user (at session creation the row stays
 //     pending); or the per-user socket directory cannot be created or fails
-//     tmux's own check, before anything is written (nothing launched).
-//   - [ErrTmuxSessionCreate]: session creation failed ("duplicate session"
-//     included), or a created session could not be labelled; the row stays
-//     pending.
+//     tmux's own check, before anything is written (nothing launched). Also,
+//     after "duplicate session", tmux was unavailable at the re-lookup of the
+//     requested name, or the re-lookup found a different tmux server; the new
+//     row is ended (the description says if it could not be).
+//   - [ErrTmuxSessionCreate]: session creation failed other than by timing
+//     out, by tmux being unavailable or by "duplicate session", or a created
+//     session could not be labelled; the row stays pending. Also, after
+//     "duplicate session", the session holding the requested name was gone
+//     by the re-lookup; the new row is ended (the description says if it
+//     could not be).
 //   - ErrTmuxUnresponsive: the session-creating call timed out or gave a
 //     reply that does not parse with a non-zero exit: the session may have
 //     been created and the row stays pending; do not retry until get shows
 //     the row ended or missing. Also, with an explicit ClaudeInstanceID
 //     that has no row, the label scan's lookup could not be read; nothing
-//     was written.
+//     was written. Also, after "duplicate session", the re-lookup of the
+//     requested name could not be read; the new row is ended (the
+//     description says if it could not be).
 //   - ErrTmuxSessionConflict: with an explicit ClaudeInstanceID that has no
 //     row, the label scan found a session of an earlier life of that id,
 //     labelled by this store, or conflicting labels; nothing was written, and
-//     a human must look (README "Operator actions").
+//     a human must look (README "Operator actions"). Also, after "duplicate
+//     session", the requested name is held by a session left over from an
+//     earlier life of this id, by another row's session (a different
+//     instance id), by a session of another agent-director store, or by one
+//     with no valid instance id, or the re-lookup found conflicting labels;
+//     the new row is ended (the description says if it could not be). The
+//     error names the blocking session.
 //   - ErrTemplateNotFound: the named template file does not exist.
 //   - ErrTemplateMalformed: the template TOML could not be parsed.
 //   - ErrTemplateNameUnsafe: the template name contains path-unsafe characters.

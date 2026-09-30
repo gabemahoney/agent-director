@@ -9,6 +9,7 @@ package store_test
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
@@ -314,6 +315,12 @@ const (
 	rvMoveSocket       = "/tmp/rv/resume-sock"
 )
 
+// rvEndedAt is EndHeldLaunch's end time, off UTC and mid-second; the store
+// keeps it as rvEndedAtText, the CURRENT_TIMESTAMP layout (UTC, whole seconds).
+var rvEndedAt = time.Date(2026, 1, 1, 4, 4, 5, 600_000_000, time.FixedZone("rv", 3600))
+
+const rvEndedAtText = "2026-01-01 03:04:05"
+
 // rvMoveIdentity is what the move stores: its token and socket, no server or pane.
 func rvMoveIdentity() store.LaunchIdentity {
 	return store.LaunchIdentity{Token: rvMoveToken, Socket: rvMoveSocket}
@@ -529,6 +536,21 @@ func rowVersionWrites() []rowVersionCase {
 				got, err := f.s.HealJsonlPath(id, "sess-heal", "/tmp/rv/healed.jsonl")
 				wantBool(t, "HealJsonlPath", got, err, true)
 			}},
+		// SR-9.4, F.4: the held-name end write on the inserted row (pending,
+		// version 0) sets ended and ended_at and clears the launch start only.
+		rowVersionCase{name: "EndHeldLaunch/applied, pending row at version 0", state: "pending", clears: true, wantState: "ended",
+			write: func(t *testing.T, f *v5Store, id string) {
+				c := f.rawColumns(id)
+				if c.RowVersion != int64(0) || c.EndedAt != nil {
+					t.Fatalf("seeded row_version, ended_at = %#v, %#v; want 0, NULL", c.RowVersion, c.EndedAt)
+				}
+				if got, err := f.s.EndHeldLaunch(id, c.LaunchStartedAt.(int64), rvEndedAt); err != nil || got != store.CondApplied {
+					t.Fatalf("EndHeldLaunch = %v, %v; want CondApplied, nil", got, err)
+				}
+				if got := f.rawColumns(id).EndedAt; got != rvEndedAtText {
+					t.Errorf("ended_at = %#v, want %q", got, rvEndedAtText)
+				}
+			}},
 		rowVersionCase{name: "SetParentID/set", state: "waiting", write: seedParent},
 		rowVersionCase{name: "SetParentID/clear", state: "waiting", setup: seedParent,
 			write: func(t *testing.T, f *v5Store, id string) {
@@ -625,6 +647,34 @@ func TestRowVersionNoOpWritesChangeNothing(t *testing.T) {
 		// SR-22.9: a hook from another parent is ignored and writes nothing.
 		{name: "ApplyHookTransition/another parent, ignored", state: "waiting", write: foreignHook("Stop")},
 		{name: "RecordSessionStartIdentity/another parent, ignored", state: "pending", write: foreignHook("SessionStart")},
+		// SR-9.4, F.4: the end write applies only to the row as inserted.
+		{name: "EndHeldLaunch/another versioned write first", state: "pending",
+			setup: func(t *testing.T, f *v5Store, id string) {
+				got, err := f.s.SetLivenessUnverified(id, "probe_eacces")
+				wantBool(t, "SetLivenessUnverified", got, err, true)
+			},
+			write: func(t *testing.T, f *v5Store, id string) {
+				c := f.rawColumns(id)
+				if c.RowVersion == int64(0) {
+					t.Fatal("setup left row_version 0; the stale check would be vacuous")
+				}
+				if got, err := f.s.EndHeldLaunch(id, c.LaunchStartedAt.(int64), rvEndedAt); err != nil || got != store.CondChanged {
+					t.Fatalf("EndHeldLaunch = %v, %v; want CondChanged, nil", got, err)
+				}
+			}},
+		{name: "EndHeldLaunch/launch start differs, row inserted afresh", state: "pending",
+			write: func(t *testing.T, f *v5Store, id string) {
+				c := f.rawColumns(id)
+				if got, err := f.s.EndHeldLaunch(id, c.LaunchStartedAt.(int64)+1, rvEndedAt); err != nil || got != store.CondChanged {
+					t.Fatalf("EndHeldLaunch(other launch start) = %v, %v; want CondChanged, nil", got, err)
+				}
+			}},
+		{name: "EndHeldLaunch/absent row", state: "pending",
+			write: func(t *testing.T, f *v5Store, id string) {
+				if got, err := f.s.EndHeldLaunch("rv-absent", launchStart, rvEndedAt); err != nil || got != store.CondAbsent {
+					t.Fatalf("EndHeldLaunch(absent) = %v, %v; want CondAbsent, nil", got, err)
+				}
+			}},
 		{name: "HealJsonlPath/path already set", state: "waiting", session: "sess-heal",
 			opts: []apitest.SpawnOption{apitest.WithJsonlPath("/tmp/rv/have.jsonl")},
 			write: func(t *testing.T, f *v5Store, id string) {

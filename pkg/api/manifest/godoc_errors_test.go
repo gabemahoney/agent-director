@@ -107,6 +107,30 @@ func goDocErrorNames(t *testing.T, errorsBlock string) []string {
 	return names
 }
 
+// goDocErrorBulletText returns the whitespace-collapsed text of the bullet
+// headed by name in (*api.Client).<method>'s "Errors:" block; a missing
+// bullet fails the test.
+func goDocErrorBulletText(t *testing.T, method, name string) string {
+	t.Helper()
+	block, _ := splitGoDocErrors(clientMethodDoc(t, method))
+	var words []string
+	in := false
+	for _, line := range strings.Split(block, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "- ") {
+			m := goDocErrorBullet.FindStringSubmatch(trimmed)
+			in = m != nil && m[1] == name
+		}
+		if in {
+			words = append(words, strings.Fields(trimmed)...)
+		}
+	}
+	if len(words) == 0 {
+		t.Fatalf("(*Client).%s Errors: has no %s bullet", method, name)
+	}
+	return strings.Join(words, " ")
+}
+
 // assertGoDocErrorsMatchManifest fails unless the "Errors:" block of
 // (*api.Client).<method> names exactly verb's manifest ErrorNames, once each.
 func assertGoDocErrorsMatchManifest(t *testing.T, method, verb string) {

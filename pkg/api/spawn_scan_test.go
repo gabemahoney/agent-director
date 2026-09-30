@@ -227,32 +227,36 @@ func TestScanRefusesLeftover(t *testing.T) {
 }
 
 // TestScanProceeds: other stores', foreign and invalid labels, an empty
-// server, no server and no socket let the spawn reach its create.
+// server, no server and no socket let the spawn reach its create; a requested
+// name another store's session holds then ends the row (SR-9.4).
 func TestScanProceeds(t *testing.T) {
 	other := func(e scanEnv, id, name string) tmuxfix.SeedSession {
 		return tmuxfix.SeedSession{Name: name, Label: tmuxfix.Valid(tmuxfix.OtherToken, id, apitest.OtherStoreID(e.storeID))}
 	}
+	const heldName, heldSessionID = "scan-held", "$6"
 	cases := []struct {
 		name      string
 		requested string
 		setup     func(e scanEnv, id string)
-		wantErr   error
+		held      bool // the create answers "duplicate session"
 	}{
 		{"another store's label for the id", "", func(e scanEnv, id string) {
 			e.rec.SeedSessions(e.socket, other(e, id, "elsewhere"))
-		}, nil},
+		}, false},
 		{"foreign label", "", func(e scanEnv, _ string) {
 			e.rec.SeedSessions(e.socket, e.leftover("foreign", "", scanID(), 0))
-		}, nil},
+		}, false},
 		{"no valid label", "", func(e scanEnv, _ string) {
 			e.rec.SeedSessions(e.socket, tmuxfix.SeedSession{Name: "malformed", LabelSet: true})
-		}, nil},
-		{"empty server", "", func(e scanEnv, _ string) { e.rec.StartServer(e.socket, tmuxfix.Server{}) }, nil},
-		{"no server", "", func(e scanEnv, _ string) { e.rec.SetNoServerFailure(e.socket, tmux.FailNoServer) }, nil},
-		{"missing socket", "", func(scanEnv, string) {}, nil},
-		{"requested name held by another store", "scan-held", func(e scanEnv, id string) {
-			e.rec.SeedSessions(e.socket, other(e, id, "scan-held"))
-		}, api.ErrTmuxSessionCreate},
+		}, false},
+		{"empty server", "", func(e scanEnv, _ string) { e.rec.StartServer(e.socket, tmuxfix.Server{}) }, false},
+		{"no server", "", func(e scanEnv, _ string) { e.rec.SetNoServerFailure(e.socket, tmux.FailNoServer) }, false},
+		{"missing socket", "", func(scanEnv, string) {}, false},
+		{"requested name held by another store", heldName, func(e scanEnv, id string) {
+			s := other(e, id, heldName)
+			s.ID = heldSessionID
+			e.rec.SeedSessions(e.socket, s)
+		}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -267,18 +271,37 @@ func TestScanProceeds(t *testing.T) {
 
 			_, err := e.c.Spawn(p)
 
-			if tc.wantErr == nil && err != nil {
+			if !tc.held && err != nil {
 				t.Fatalf("Spawn: %v", err)
-			}
-			if tc.wantErr != nil {
-				assertOneSentinel(t, err, tc.wantErr)
 			}
 			calls := e.rec.SocketCalls()
 			if len(calls) < 2 || calls[0].Call != tmux.CallLookup || calls[1].Call != tmux.CallCreate {
 				t.Errorf("socket calls = %+v; want a lookup then the create", calls)
 			}
-			if n := len(trailSince(t, mark, "ad.launch.name_held")); n != 0 {
-				t.Errorf("ad.launch.name_held records = %d; want 0", n)
+			held := trailSince(t, mark, "ad.launch.name_held")
+			if !tc.held {
+				if len(held) != 0 {
+					t.Errorf("ad.launch.name_held records = %d; want 0", len(held))
+				}
+				return
+			}
+			assertOneSentinel(t, err, api.ErrTmuxSessionConflict)
+			token := heldEnv{scanEnv: e}.assertEndedRow(t, id, e.clock.Now())
+			if err != nil {
+				_, desc := errnames.Classify(err)
+				hp := apitest.HeldName{Name: heldName, SessionID: heldSessionID, Row: apitest.HeldRowEnded}
+				apitest.AssertDescription(t, desc, apitest.DescHeldOtherStore(hp, e.storeID),
+					append(e.forbid(id, e.rec.Sessions(e.socket)), token)...)
+			}
+			if len(held) != 1 {
+				t.Fatalf("ad.launch.name_held records = %d; want 1", len(held))
+			}
+			want := map[string]any{"outcome": "ErrTmuxSessionConflict", "row_result": "ended",
+				"tmux_session_id": heldSessionID, "carries_this_id": false}
+			for k, v := range want {
+				if got := held[0][k]; got != v {
+					t.Errorf("name_held[%q] = %v; want %v", k, got, v)
+				}
 			}
 		})
 	}

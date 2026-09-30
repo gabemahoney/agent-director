@@ -8,7 +8,8 @@ import (
 
 // RowStaysPending is the row sentence after a launch failure that leaves the
 // row as the launch's write left it: a plain spawn's after every create
-// failure (SR-9.4), and resume's after a launch timeout (SR-8.5).
+// failure other than "duplicate session" (SR-9.4), and resume's after a
+// launch timeout (SR-8.5).
 const RowStaysPending = "the row stays pending"
 
 // TmuxUnavailableError is the one mapping of a "tmux unavailable" call
@@ -61,14 +62,25 @@ func (e *SocketDeniedError) Is(target error) bool {
 
 // plainSpawnCreateError maps a failed create-and-label outcome to plain
 // spawn's verb error (SR-1.2, SR-1.4, SR-9.4): the one place this mapping
-// lives (SR-1.8). Every error wraps exactly one catalogued sentinel and ends
-// with the row sentence. It returns nil for CreateLabelled and
-// CreateLostReply, which are successes. No description carries a label
+// lives (SR-1.8). It returns nil for CreateLabelled and CreateLostReply,
+// which are successes. "duplicate session" (CreateDuplicate) is not a verb
+// error here: it becomes a *HeldNameError carrying req's instance id, name,
+// socket and token and launchStartMillis, the insert's launch start, for the
+// caller's held-name path. Every other error wraps exactly one catalogued
+// sentinel and ends with the row sentence. No description carries a label
 // value, a token, another row's id or a session-environment value.
-func plainSpawnCreateError(o CreateOutcome, req CreateRequest) error {
+func plainSpawnCreateError(o CreateOutcome, req CreateRequest, launchStartMillis int64) error {
 	switch o.Kind {
 	case CreateLabelled, CreateLostReply:
 		return nil
+	case CreateDuplicate:
+		return &HeldNameError{
+			InstanceID:            req.InstanceID,
+			Name:                  req.Name,
+			Socket:                req.Socket,
+			Token:                 req.Token,
+			LaunchStartedAtMillis: launchStartMillis,
+		}
 	case CreateUnresponsive:
 		return LaunchTimeoutError(o.Cause, "spawn", req.InstanceID, RowStaysPending)
 	case CreateUnavailable:
@@ -76,9 +88,41 @@ func plainSpawnCreateError(o CreateOutcome, req CreateRequest) error {
 	case CreateUnlabelledEnded, CreateUnlabelledRunning:
 		return UnlabelledSessionError(o, req.Name, RowStaysPending)
 	}
-	// CreateDuplicate keeps today's mapping until the classified "duplicate
-	// session"; CreateFailed is every other launch failure (SR-2.5).
+	// CreateFailed: every other launch failure (SR-2.5).
 	return CreateFailedError(o.Cause, req.Name, RowStaysPending)
+}
+
+// HeldNameError is plain spawn's "duplicate session" outcome (SR-9.4): the
+// create found the requested name already held on the launch socket and
+// created nothing. Launch returns it at once, with no store write, file or
+// network I/O, further tmux call or log line after the create, so the
+// caller's held-name path (in pkg/api: the conditional end write first, then
+// the one re-lookup, the classified error and the ad.launch.name_held
+// record) acts next. Its fields are the facts that path needs: the new row's
+// instance id, the requested name as passed to the create, the launch
+// socket, the launch token and the insert's launch start in milliseconds.
+//
+// It is not a verb error: it wraps and matches no catalogued sentinel, and
+// the caller always converts it to the classified error, so it never reaches
+// an agent. Its text carries no token.
+type HeldNameError struct {
+	// InstanceID is the new pending row's instance id.
+	InstanceID string
+	// Name is the requested session name, as passed to the create.
+	Name string
+	// Socket is the launch socket the create ran on (the row's tmux_socket).
+	Socket string
+	// Token is the launch token the insert recorded (the row's launch_token).
+	Token string
+	// LaunchStartedAtMillis is the launch start the insert recorded (the
+	// row's launch_started_at), in milliseconds.
+	LaunchStartedAtMillis int64
+}
+
+// Error says the create found the name held; it names the requested name and
+// the instance id and never the token.
+func (e *HeldNameError) Error() string {
+	return fmt.Sprintf("spawn of instance %s: tmux session %q: duplicate session (held name not yet classified)", e.InstanceID, e.Name)
 }
 
 // UnlabelledSessionError is the description of a created session that could
@@ -100,9 +144,9 @@ func UnlabelledSessionError(o CreateOutcome, name, consequence string) error {
 }
 
 // CreateFailedError is the description of a create that created no session
-// (SR-1.4, SR-2.5), shared by every launch verb (SR-1.8): "duplicate
-// session" (until its classified re-lookup) and every other launch failure
-// (the no-server and no-socket replies, a non-zero exit with no reply). It
+// (SR-1.4, SR-2.5), shared by every launch verb (SR-1.8): a launch failure
+// such as the no-server and no-socket replies or a non-zero exit with no
+// reply, and, for a verb that maps it so (resume), "duplicate session". It
 // carries the quoted name and the create call's failure, then consequence,
 // the verb's row sentence, and wraps tmux.ErrTmuxSessionCreate only.
 func CreateFailedError(ce *tmux.CallError, name, consequence string) error {

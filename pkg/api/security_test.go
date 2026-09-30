@@ -3,13 +3,17 @@ package api_test
 // security_test.go is SR-15's secret and other-row-id test: beside the row a
 // verb acts on, a no-id session and another row's session each carry
 // SECRET=xyz (in their create's environment and their pane processes'), and
-// neither xyz nor the other row's id may appear in the verb's result, error
-// description, client log or trail. It is a per-verb table (kill first,
-// Epic 10; later Epics add their verbs).
+// neither xyz, the other row's id nor another store's id may appear in the
+// verb's result, error description, client log or trail. It is a per-verb
+// table (kill first, Epic 10; plain spawn's held name, Epic 13; later Epics
+// add their verbs).
 
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -34,13 +38,16 @@ const (
 	securityHolderOther                       // the other row's session holds the row's name
 )
 
-// securityScene is one SR-15 arrangement: the target row, another row, and
-// the ids of the no-id session and the other row's session on target's socket.
+// securityScene is one SR-15 arrangement: the target row, another row, the
+// ids of the no-id session and the other row's session on target's socket,
+// and subject, the instance id the call acts on (target's, or a launch's
+// fresh id).
 type securityScene struct {
 	e                   *killEnv
 	target, other       killRow
 	noIDSess, otherSess string
 	extraSess           tmuxfix.SeedSession
+	subject             string
 }
 
 // securityCase is one arrangement of a verb: the target row's spec, who holds
@@ -55,21 +62,42 @@ type securityCase struct {
 	disagree bool // the call writes at least one ad.provenance.disagree record
 }
 
-// securityVerb is one verb under SR-15: its call through the Client, the
-// trail event it writes once per call, and its arrangements.
+// securityVerb is one verb under SR-15: its call through the Client on the
+// scene's subject, the trail event it writes once per call, extra checks of
+// that record (nil: none), and its arrangements. A launch verb acts on a
+// fresh id on target's socket, requesting target's name, and makes one create.
 type securityVerb struct {
-	verb  string
-	event string
-	call  func(c *api.Client, id string) (any, error)
-	cases []securityCase
+	verb   string
+	event  string
+	launch bool
+	call   func(t *testing.T, c *api.Client, s *securityScene) (any, error)
+	record func(t *testing.T, s *securityScene, rec map[string]any, desc, logs string)
+	cases  []securityCase
 }
 
 // securityVerbs is the per-verb table; later Epics append their verbs.
 var securityVerbs = []securityVerb{{
 	verb:  "kill",
 	event: "ad.kill.called",
-	call:  func(c *api.Client, id string) (any, error) { return c.Kill(api.KillParams{ClaudeInstanceID: id}) },
+	call: func(_ *testing.T, c *api.Client, s *securityScene) (any, error) {
+		return c.Kill(api.KillParams{ClaudeInstanceID: s.subject})
+	},
 	cases: securityKillCases,
+}, {
+	verb:   "spawn",
+	event:  "ad.launch.name_held",
+	launch: true,
+	call: func(t *testing.T, c *api.Client, s *securityScene) (any, error) {
+		home := t.TempDir() // the trail is pinned by TestMain; the launch's files go here
+		t.Setenv("HOME", home)
+		if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte("{}"), 0o600); err != nil {
+			t.Fatalf("write .claude.json: %v", err)
+		}
+		return c.Spawn(api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: s.subject,
+			TmuxSessionName: s.target.Name, TmuxSessionNameSupplied: true})
+	},
+	record: securitySpawnRecord,
+	cases:  securitySpawnCases,
 }}
 
 // securityKillCases meet the planted sessions on kill's Gone, Leftover,
@@ -128,15 +156,82 @@ var securityKillCases = []securityCase{
 	},
 }
 
+// securitySpawnCases meet plain spawn's "duplicate session" on the requested
+// name held by another row's session, a no-id session, a leftover of the new
+// id placed after the scan (SR-20.9), and another store's session (SR-9.4).
+var securitySpawnCases = []securityCase{
+	{
+		name:    "held by the other row's session",
+		target:  killRowSpec{NoSession: true},
+		holder:  securityHolderOther,
+		wantErr: api.ErrTmuxSessionConflict,
+		desc:    func(s *securityScene) apitest.DescCase { return apitest.DescHeldDifferentID(s.held(s.otherSess)) },
+	},
+	{
+		name:    "held by the no-id session",
+		target:  killRowSpec{NoSession: true},
+		holder:  securityHolderNoID,
+		wantErr: api.ErrTmuxSessionConflict,
+		desc:    func(s *securityScene) apitest.DescCase { return apitest.DescHeldNoValidID(s.held(s.noIDSess)) },
+	},
+	{
+		name:   "held by a leftover of the new id",
+		target: killRowSpec{NoSession: true},
+		arrange: func(t *testing.T, s *securityScene) {
+			pid := s.e.newPID()
+			s.e.pc.Set(pid, procfix.Alive(apitest.LinuxProcStarttime).WithEnv(securityEnv()))
+			leftover := tmuxfix.SeedSession{Name: s.target.Name, Panes: []tmuxfix.SeedPane{{PID: pid}},
+				Label: tmuxfix.Valid(tmuxfix.OtherToken, s.subject, s.e.storeID)}
+			lookups := 0
+			s.e.rec.AfterCall(tmux.CallLookup, func(tmuxfix.SocketCall, error) {
+				if lookups++; lookups == 1 { // the scan's lookup: the leftover appears before the create
+					s.extraSess = s.e.seedOther(t, s.target.Socket, leftover)
+				}
+			})
+		},
+		wantErr: api.ErrTmuxSessionConflict,
+		desc:    func(s *securityScene) apitest.DescCase { return apitest.DescHeldLeftover(s.held(s.extraSess.ID)) },
+	},
+	{
+		name:   "held by another store's session",
+		target: killRowSpec{NoSession: true},
+		arrange: func(t *testing.T, s *securityScene) {
+			id := securityCreate(t, s.e, s.target.Socket, s.target.Name, s.other.Token, s.other.ID,
+				apitest.OtherStoreID(s.e.storeID))
+			s.extraSess = tmuxfix.SeedSession{ID: id, Name: s.target.Name}
+		},
+		wantErr: api.ErrTmuxSessionConflict,
+		desc: func(s *securityScene) apitest.DescCase {
+			return apitest.DescHeldOtherStore(s.held(s.extraSess.ID), s.e.storeID)
+		},
+	},
+}
+
+// held is the held-name description parameter for target's name held by
+// sessionID, after an applied end write.
+func (s *securityScene) held(sessionID string) apitest.HeldName {
+	return apitest.HeldName{Name: s.target.Name, SessionID: sessionID, Row: apitest.HeldRowEnded}
+}
+
 // securityEnv is the environment the planted sessions are created with.
 func securityEnv() map[string]string { return map[string]string{"SECRET": securitySecret} }
 
 // newSecurityScene seeds c's target row, another row, and on target's socket
 // the no-id session and the other row's session, each carrying SECRET=xyz.
-func newSecurityScene(t *testing.T, c securityCase) *securityScene {
+// For a launch verb target records the socket a launch resolves (TMUX
+// unset) and the subject is a fresh id.
+func newSecurityScene(t *testing.T, v securityVerb, c securityCase) *securityScene {
 	t.Helper()
 	e := newKillEnv(t)
-	s := &securityScene{e: e, target: e.seedRow(t, c.target)}
+	spec := c.target
+	if v.launch {
+		spec.Opts = append(append([]apitest.SpawnOption(nil), spec.Opts...), apitest.WithTmuxSocket(e.defaultSocket))
+	}
+	s := &securityScene{e: e, target: e.seedRow(t, spec)}
+	s.subject = s.target.ID
+	if v.launch {
+		s.subject = heldID()
+	}
 	s.other = e.seedRow(t, killRowSpec{NoSession: true})
 	e.pc.Set(s.other.AgentPID, procfix.Alive(s.other.AgentStart).WithEnv(securityEnv()))
 	e.ensureServer(&s.target)
@@ -149,8 +244,8 @@ func newSecurityScene(t *testing.T, c securityCase) *securityScene {
 	}
 	// The no-id session: a create whose label step failed leaves it and its pane unlabelled.
 	e.rec.Script(s.target.Socket, tmuxfix.Script{Failure: tmux.FailLabel, Times: 1}, tmux.CallCreate)
-	s.noIDSess = securityCreate(t, e, s.target.Socket, noIDName, "", "")
-	s.otherSess = securityCreate(t, e, s.target.Socket, otherName, s.other.Token, s.other.ID)
+	s.noIDSess = securityCreate(t, e, s.target.Socket, noIDName, "", "", e.storeID)
+	s.otherSess = securityCreate(t, e, s.target.Socket, otherName, s.other.Token, s.other.ID, e.storeID)
 	e.syncServers()
 	if c.arrange != nil {
 		c.arrange(t, s)
@@ -158,11 +253,12 @@ func newSecurityScene(t *testing.T, c securityCase) *securityScene {
 	return s
 }
 
-// securityCreate creates a session through the Recorder with SECRET=xyz in
-// its environment and its pane process's, and returns its session id.
-func securityCreate(t *testing.T, e *killEnv, socket, name, token, id string) string {
+// securityCreate creates a session through the Recorder, labelled for id by
+// storeID, with SECRET=xyz in its environment and its pane process's, and
+// returns its session id.
+func securityCreate(t *testing.T, e *killEnv, socket, name, token, id, storeID string) string {
 	t.Helper()
-	reply, err := e.rec.NewSession(socket, name, t.TempDir(), securityEnv(), []string{"claude"}, token, id, e.storeID)
+	reply, err := e.rec.NewSession(socket, name, t.TempDir(), securityEnv(), []string{"claude"}, token, id, storeID)
 	if reply.SessionID == "" {
 		t.Fatalf("NewSession(%s): no session created: %v", name, err)
 	}
@@ -170,10 +266,16 @@ func securityCreate(t *testing.T, e *killEnv, socket, name, token, id string) st
 	return reply.SessionID
 }
 
-// securityAbsent fails when text carries the secret or the other row's id.
-func securityAbsent(t *testing.T, what, text, otherID string) {
+// securityForbidden are the values nothing may carry: the secret, the other
+// row's id and another store's id.
+func securityForbidden(s *securityScene) []string {
+	return []string{securitySecret, s.other.ID, apitest.OtherStoreID(s.e.storeID)}
+}
+
+// securityAbsent fails when text carries a securityForbidden value.
+func securityAbsent(t *testing.T, what, text string, s *securityScene) {
 	t.Helper()
-	for _, v := range []string{securitySecret, otherID} {
+	for _, v := range securityForbidden(s) {
 		if strings.Contains(text, v) {
 			t.Errorf("%s carries %q: %s", what, v, text)
 		}
@@ -181,74 +283,123 @@ func securityAbsent(t *testing.T, what, text, otherID string) {
 }
 
 // TestSecuritySecretAndOtherRowID checks SR-15 for every verb in the table:
-// no result, description, log line or trail record carries xyz or the other row's id.
+// no result, description, log line or trail record carries xyz, the other
+// row's id or another store's id.
 func TestSecuritySecretAndOtherRowID(t *testing.T) {
 	for _, v := range securityVerbs {
 		for _, c := range v.cases {
 			t.Run(v.verb+"/"+c.name, func(t *testing.T) {
-				s := newSecurityScene(t, c)
+				s := newSecurityScene(t, v, c)
 				client, logs := s.e.client(t)
 				s.e.rec.Reset()
 				before := len(readAPITrailLines(t))
 
-				res, err := v.call(client, s.target.ID)
+				res, err := v.call(t, client, s)
 
 				if !errors.Is(err, c.wantErr) {
 					t.Fatalf("%s: err = %v; want %v", v.verb, err, c.wantErr)
 				}
+				var desc string
 				if c.desc != nil {
-					apitest.AssertDescription(t, err.Error(), c.desc(s), securitySecret, s.other.ID)
+					desc = err.Error()
+					apitest.AssertDescription(t, desc, c.desc(s), securityForbidden(s)...)
 				}
 				out, jerr := json.Marshal(res)
 				if jerr != nil {
 					t.Fatalf("marshal result: %v", jerr)
 				}
-				securityAbsent(t, "result", string(out), s.other.ID)
-				securityAbsent(t, "client log", logs.String(), s.other.ID)
-				securityCheckTrail(t, v.event, s, readAPITrailLines(t)[before:], c.disagree)
-				securityCheckReads(t, s)
+				securityAbsent(t, "result", string(out), s)
+				securityAbsent(t, "client log", logs.String(), s)
+				rec := securityCheckTrail(t, v.event, s, readAPITrailLines(t)[before:], c.disagree)
+				if v.record != nil && rec != nil {
+					v.record(t, s, rec, desc, logs.String())
+				}
+				securityCheckReads(t, s, v.launch)
 			})
 		}
 	}
 }
 
 // securityCheckTrail fails unless lines hold exactly one event record for the
-// target (and a disagree record when wanted), none carrying xyz or the other id.
-func securityCheckTrail(t *testing.T, event string, s *securityScene, lines []map[string]any, disagree bool) {
+// subject (and a disagree record when wanted), none carrying a forbidden
+// value; it returns that record (nil when not exactly one).
+func securityCheckTrail(t *testing.T, event string, s *securityScene, lines []map[string]any, disagree bool) map[string]any {
 	t.Helper()
-	called, disagrees := 0, 0
+	var called []map[string]any
+	disagrees := 0
 	for _, l := range lines {
 		b, _ := json.Marshal(l)
-		securityAbsent(t, "trail record", string(b), s.other.ID)
-		if l["claude_instance_id"] != s.target.ID {
+		securityAbsent(t, "trail record", string(b), s)
+		if l["claude_instance_id"] != s.subject {
 			continue
 		}
 		switch l["event"] {
 		case event:
-			called++
+			called = append(called, l)
 		case "ad.provenance.disagree":
 			disagrees++
 		}
 	}
-	if called != 1 {
-		t.Errorf("%s records for %s = %d; want 1", event, s.target.ID, called)
-	}
 	if disagree && disagrees == 0 {
-		t.Errorf("no ad.provenance.disagree record for %s; want one", s.target.ID)
+		t.Errorf("no ad.provenance.disagree record for %s; want one", s.subject)
+	}
+	if len(called) != 1 {
+		t.Errorf("%s records for %s = %d; want 1", event, s.subject, len(called))
+		return nil
+	}
+	return called[0]
+}
+
+// securitySpawnRecord checks spawn's ad.launch.name_held record: this
+// store's store_id, a boolean carries_this_id, and by-hand commands for the
+// identified holder that neither the description nor the client log carries.
+func securitySpawnRecord(t *testing.T, s *securityScene, rec map[string]any, desc, logs string) {
+	t.Helper()
+	if rec["store_id"] != s.e.storeID {
+		t.Errorf("store_id = %v; want this store's %q", rec["store_id"], s.e.storeID)
+	}
+	if _, ok := rec["carries_this_id"].(bool); !ok {
+		t.Errorf("carries_this_id = %#v; want a boolean", rec["carries_this_id"])
+	}
+	leaks := []string{"attach-session", "kill-session"}
+	for _, k := range []string{"attach_command", "end_command"} {
+		cmd, _ := rec[k].(string)
+		if cmd == "" {
+			t.Errorf("%s = %#v; want the holder's by-hand command", k, rec[k])
+			continue
+		}
+		leaks = append(leaks, cmd)
+	}
+	for what, text := range map[string]string{"description": desc, "client log": logs} {
+		for _, v := range leaks {
+			if strings.Contains(text, v) {
+				t.Errorf("%s carries the by-hand command text %q: %s", what, v, text)
+			}
+		}
 	}
 }
 
 // securityCheckReads fails when the call read a process environment, made a
-// tmux call carrying one or a name-based call, or removed a planted session.
-func securityCheckReads(t *testing.T, s *securityScene) {
+// tmux call carrying one (a launch's own create excepted, which must carry
+// no forbidden value) or a name-based call, or removed a planted session.
+func securityCheckReads(t *testing.T, s *securityScene, launch bool) {
 	t.Helper()
 	if n := s.e.pc.EnvReads(); n != 0 {
 		t.Errorf("process environment reads = %d; want 0", n)
 	}
+	creates := 0
 	for _, c := range s.e.rec.SocketCalls() {
+		if c.Call == tmux.CallCreate && launch {
+			creates++
+			securityAbsent(t, "the launch's create environment", fmt.Sprint(c.Envs), s)
+			continue
+		}
 		if c.Call == tmux.CallCreate || c.Envs != nil {
 			t.Errorf("tmux call %v carries an environment (%v)", c.Call, c.Envs)
 		}
+	}
+	if launch && creates != 1 {
+		t.Errorf("creates = %d; want the launch's one", creates)
 	}
 	if calls := s.e.rec.Calls(); len(calls) != 0 {
 		t.Errorf("name-based tmux calls = %v; want none", calls)
@@ -257,8 +408,8 @@ func securityCheckReads(t *testing.T, s *securityScene) {
 	for _, sess := range s.e.rec.Sessions(s.target.Socket) {
 		held[sess.ID] = true
 	}
-	for _, id := range []string{s.noIDSess, s.otherSess} {
-		if !held[id] {
+	for _, id := range []string{s.noIDSess, s.otherSess, s.extraSess.ID} {
+		if id != "" && !held[id] {
 			t.Errorf("planted session %s is gone after the call", id)
 		}
 	}

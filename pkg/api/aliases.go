@@ -127,17 +127,21 @@ var ErrStoreNotInitialized = store.ErrStoreNotInitialized
 // unusable, or the lookup finds that this is not the tmux server the agent
 // was launched on (SR-1.2). It does not always mean nothing was done: a
 // plain spawn whose session-creating call hit it keeps its new pending row
-// (SR-9.4, SR-18.1), and when the follow-up lookup after a kill, send or
-// capture call returns it, that call may or may not have taken effect
-// (SR-2.5, SR-6.1). The caller must run as the agents' user in their tmux
-// environment. kill, read-pane, send-keys, pause, resume and spawn return it.
+// (SR-9.4, SR-18.1); a plain spawn that met it at the re-lookup of the
+// requested name after "duplicate session" has ended its new row (the
+// description says if it could not be; SR-9.4); and when the follow-up lookup
+// after a kill, send or capture call returns it, that call may or may not
+// have taken effect (SR-2.5, SR-6.1). The caller must run as the agents' user
+// in their tmux environment. kill, read-pane, send-keys, pause, resume and
+// spawn return it.
 var ErrTmuxNotAvailable = tmux.ErrTmuxNotAvailable
 
 // ErrTmuxSessionCreate (class LAUNCH FAILURE) is returned by spawn (and
-// resume) when the session-creating call fails other than by timing out or
-// by tmux being unavailable, or when a created session could not be
-// labelled (SR-1.2). Check the system tmux installation and TMUX_TMPDIR if
-// this surfaces in production.
+// resume) when the session-creating call fails other than by timing out, by
+// tmux being unavailable or by "duplicate session"; for "duplicate session"
+// only when the re-lookup finds no session holding the name; or when a
+// created session could not be labelled (SR-1.2). Check the system tmux
+// installation and TMUX_TMPDIR if this surfaces in production.
 var ErrTmuxSessionCreate = tmux.ErrTmuxSessionCreate
 
 // ErrTmuxUnresponsive (class UNAVAILABLE, transient) is returned when tmux did
@@ -145,7 +149,10 @@ var ErrTmuxSessionCreate = tmux.ErrTmuxSessionCreate
 // It never means the agent is dead (SR-1.1, SR-1.6). spawn returns it when
 // the session-creating call timed out or its reply does not parse with a
 // non-zero exit (the row stays pending), and when the label scan for a
-// caller-supplied instance id cannot read tmux's answer. kill returns it when
+// caller-supplied instance id cannot read tmux's answer, and when the
+// re-lookup after "duplicate session" cannot read it (the new row is ended;
+// the description says if it could not be).
+// kill returns it when
 // its lookup cannot read tmux's answer, and when a kill was sent but the
 // agent process cannot be checked and the follow-up lookup cannot read
 // tmux's answer.
@@ -156,9 +163,14 @@ var ErrTmuxUnresponsive = tmux.ErrTmuxUnresponsive
 // look (SR-1.1, SR-1.6). It never means the agent is dead. spawn with a
 // caller-supplied instance id returns it, before anything is written, when a
 // session of this store labelled with that id is left over from an earlier
-// life, or when tmux holds conflicting labels. kill returns it, with no kill
-// sent, when the session its lookup finds is not this launch's session, or
-// when tmux holds conflicting labels for the row.
+// life, or when tmux holds conflicting labels. Plain spawn also returns it,
+// after "duplicate session" and with its new row ended (the description says
+// if it could not be), when the requested name is held by a session left over
+// from an earlier life of the id, by another row's session, by a session of
+// another agent-director store or by one with no valid instance id, or when
+// tmux holds conflicting labels. kill returns it, with no kill sent, when the
+// session its lookup finds is not this launch's session, or when tmux holds
+// conflicting labels for the row.
 var ErrTmuxSessionConflict = tmux.ErrTmuxSessionConflict
 
 // ErrTmuxKillFailed (class UNAVAILABLE) is returned by kill only: the agent

@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
@@ -12,9 +13,10 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// proxyWrite is today's store write matching one kind: how to seed its row,
-// run it, and observe what it changes.
+// proxyWrite is one of today's store writes a kind matches: how to seed its
+// row, run it, and observe what it changes.
 type proxyWrite struct {
+	name     string
 	kind     storefix.WriteFailureKind
 	failOpen bool // the store method swallows the failure; only the effect shows it
 	seed     func(t *testing.T, s *store.Store, dbPath, id string)
@@ -46,6 +48,32 @@ func seedLaunchPending(t *testing.T, _ *store.Store, dbPath, id string) {
 			t.Fatalf("seeded %q: %s = %v, want NULL", id, name, v)
 		}
 	}
+}
+
+// heldLaunchStartMs is the launch start seedHeldLaunch gives the row, which
+// endHeldLaunch passes as the insert's (SR-5.3).
+const heldLaunchStartMs int64 = 1700000000000
+
+// seedHeldLaunch seeds id as a plain spawn's row after "duplicate session":
+// pending at row_version 0 with a token, the test socket, no pane and launch
+// start heldLaunchStartMs (SR-9.4).
+func seedHeldLaunch(t *testing.T, _ *store.Store, dbPath, id string) {
+	t.Helper()
+	launch := store.LaunchIdentity{Token: "0123456789abcdef", Socket: apitest.TestSocket}
+	if _, err := apitest.SeedSpawn(dbPath, id, store.StatePending, "", "", "", false,
+		apitest.WithLaunchIdentity(launch), apitest.WithLaunchStartedAt(heldLaunchStartMs)); err != nil {
+		t.Fatalf("SeedSpawn(%q, pending): %v", id, err)
+	}
+}
+
+// endHeldLaunch runs the plain spawn's end write (store.EndHeldLaunch)
+// against the seeded launch start; anything but CondApplied is an error.
+func endHeldLaunch(s *store.Store, id string) error {
+	res, err := s.EndHeldLaunch(id, heldLaunchStartMs, time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC))
+	if err == nil && res != store.CondApplied {
+		err = fmt.Errorf("EndHeldLaunch(%q) = %v, want CondApplied", id, res)
+	}
+	return err
 }
 
 // recordLaunchIdentity runs the identity write with the row's current version
@@ -111,6 +139,7 @@ func observeSpawn(t *testing.T, s *store.Store, _, id string) any {
 
 var proxyWrites = []proxyWrite{
 	{
+		name:     "SessionStart rotation archive",
 		kind:     storefix.WriteFailReuseArchive,
 		failOpen: true,
 		seed:     seedState(store.StateWorking, "sess-old"),
@@ -133,6 +162,7 @@ var proxyWrites = []proxyWrite{
 	{
 		// Resume's move to pending: a finished row takes no hook (it records
 		// no pane, SR-22.9), so no hook write moves it to pending.
+		name: "resume move to pending",
 		kind: storefix.WriteFailReuseReset,
 		seed: seedState(store.StateEnded, ""),
 		write: func(s *store.Store, id string) error {
@@ -149,6 +179,7 @@ var proxyWrites = []proxyWrite{
 		observe: observeSpawn,
 	},
 	{
+		name: "spawn delete cascade",
 		kind: storefix.WriteFailReusePermissionDelete,
 		seed: func(t *testing.T, s *store.Store, _, id string) { storefix.SeedCheckPermission(t, s, id) },
 		write: func(s *store.Store, id string) error {
@@ -164,6 +195,7 @@ var proxyWrites = []proxyWrite{
 		},
 	},
 	{
+		name: "SessionEnd ended transition",
 		kind: storefix.WriteFailReuseRestore,
 		seed: seedState(store.StatePending, ""),
 		write: func(s *store.Store, id string) error {
@@ -172,8 +204,18 @@ var proxyWrites = []proxyWrite{
 		observe: observeSpawn,
 	},
 	{
+		// The raw row: a blocked end write leaves it pending at version 0 with
+		// its launch start and no ended_at (SR-5.8).
+		name:    "held launch end write",
+		kind:    storefix.WriteFailReuseRestore,
+		seed:    seedHeldLaunch,
+		write:   endHeldLaunch,
+		observe: observeColumns,
+	},
+	{
 		// The raw row: a blocked write leaves the identity columns NULL and
 		// row_version where it was.
+		name:    "launch identity write",
 		kind:    storefix.WriteFailLaunchIdentity,
 		seed:    seedLaunchPending,
 		write:   recordLaunchIdentity,
@@ -190,48 +232,50 @@ func runWrite(t *testing.T, s *store.Store, dbPath string, w proxyWrite, id stri
 	changed := !reflect.DeepEqual(before, w.observe(t, s, dbPath, id))
 	if blockedBy == 0 {
 		if err != nil || !changed {
-			t.Errorf("%v write on %q: err=%v changed=%v, want success", w.kind, id, err, changed)
+			t.Errorf("%s on %q: err=%v changed=%v, want success", w.name, id, err, changed)
 		}
 		return
 	}
 	if changed {
-		t.Errorf("%v write on %q changed its row despite the injected failure", w.kind, id)
+		t.Errorf("%s on %q changed its row despite the injected failure", w.name, id)
 	}
 	if w.failOpen {
 		if err != nil {
-			t.Errorf("%v write on %q: err=%v, want nil (fail-open)", w.kind, id, err)
+			t.Errorf("%s on %q: err=%v, want nil (fail-open)", w.name, id, err)
 		}
 		return
 	}
 	if want := "injected write failure: " + blockedBy.String(); err == nil || !strings.Contains(err.Error(), want) {
-		t.Errorf("%v write on %q: err=%v, want it to contain %q", w.kind, id, err, want)
+		t.Errorf("%s on %q: err=%v, want it to contain %q", w.name, id, err, want)
 	}
 }
 
-// TestInjectWriteFailure installs each kind on one id and runs every kind's
-// proxy write: only the matching write on that id fails, and cleanup lifts it.
+// TestInjectWriteFailure installs each kind on one id and runs every proxy
+// write: only the kind's own writes on that id fail, and cleanup lifts them.
 func TestInjectWriteFailure(t *testing.T) {
 	const target, other = "wf-target", "wf-other"
-	var covered []storefix.WriteFailureKind
+	covered := map[storefix.WriteFailureKind]bool{}
 	for _, w := range proxyWrites {
-		covered = append(covered, w.kind)
+		covered[w.kind] = true
 	}
-	if !reflect.DeepEqual(covered, writefailfix.Kinds()) {
-		t.Fatalf("proxyWrites cover %v, want every kind %v", covered, writefailfix.Kinds())
+	for _, k := range writefailfix.Kinds() {
+		if !covered[k] {
+			t.Fatalf("no proxy write for kind %v", k)
+		}
 	}
-	for _, installed := range proxyWrites {
+	for _, installed := range writefailfix.Kinds() {
 		for _, w := range proxyWrites {
-			t.Run(fmt.Sprintf("%v/%v write", installed.kind, w.kind), func(t *testing.T) {
+			t.Run(fmt.Sprintf("%v/%s", installed, w.name), func(t *testing.T) {
 				s, dbPath := storefix.OpenTempStore(t)
 				w.seed(t, s, dbPath, target)
 				w.seed(t, s, dbPath, other)
-				matching := installed.kind == w.kind
+				matching := installed == w.kind
 
 				t.Run("installed", func(t *testing.T) {
-					storefix.InjectWriteFailure(t, dbPath, installed.kind, target)
+					storefix.InjectWriteFailure(t, dbPath, installed, target)
 					var blockedBy storefix.WriteFailureKind
 					if matching {
-						blockedBy = installed.kind
+						blockedBy = installed
 					}
 					runWrite(t, s, dbPath, w, target, blockedBy)
 					runWrite(t, s, dbPath, w, other, 0)

@@ -174,15 +174,15 @@ func TestLaunchPersistsExtraEnv(t *testing.T) {
 	}
 }
 
-// TestLaunchCreateFailureLeavesRowPending: a failed create maps to its tmux
-// sentinel; the row stays pending with its launch fields and no identity.
+// TestLaunchCreateFailureLeavesRowPending: a failed create other than
+// "duplicate session" maps to its tmux sentinel; the row stays pending with
+// its launch fields and no identity.
 func TestLaunchCreateFailureLeavesRowPending(t *testing.T) {
 	cases := []struct {
 		name    string
 		failure tmux.Failure
 		want    error
 	}{
-		{"duplicate session", tmux.FailDuplicate, tmux.ErrTmuxSessionCreate},
 		{"no server", tmux.FailNoServer, tmux.ErrTmuxSessionCreate},
 		{"timed out", tmux.FailTimeout, tmux.ErrTmuxUnresponsive},
 		{"binary unavailable", tmux.FailUnavailable, tmux.ErrTmuxNotAvailable},
@@ -213,6 +213,56 @@ func TestLaunchCreateFailureLeavesRowPending(t *testing.T) {
 				t.Errorf("identity = %+v; want none recorded after a failed create", row.Identity)
 			}
 		})
+	}
+}
+
+// catalogued is every exported sentinel a Launch error could wrap.
+var catalogued = []error{
+	tmux.ErrTmuxNotAvailable, tmux.ErrTmuxSessionCreate, tmux.ErrTmuxUnresponsive, tmux.ErrTmuxSessionConflict,
+	tmux.ErrTmuxKillFailed, tmux.ErrTmuxListPanesFailed, tmux.ErrTmuxSendKeys, tmux.ErrTmuxCaptureFailed,
+	ErrCwdMissing, ErrCwdNotAPath, ErrCwdNotFound, ErrCwdNotADirectory, ErrRelayModeInvalid, ErrSpawnDeniedFlag,
+	ErrReservedEnvKey, ErrInstanceIdCollision, ErrTmuxSessionNameEmpty, ErrTmuxSessionNameInvalid,
+	ErrTmuxSessionNameTooLong, ErrClaudeJSONMissing, store.ErrSpawnNotFound, store.ErrPrimaryKeyCollision,
+}
+
+// TestLaunchDuplicateSessionReturnsHeldName pins SR-9.4: "duplicate session"
+// returns a *HeldNameError with the insert's facts and nothing after the create.
+func TestLaunchDuplicateSessionReturnsHeldName(t *testing.T) {
+	e := newLaunchEnv(t)
+	e.r.TmuxSessionName, e.r.TmuxSessionNameSupplied = "bot-claude-status", true
+	e.rec.Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailDuplicate}, tmux.CallCreate)
+
+	id, outcome, err := e.launch()
+	var held *HeldNameError
+	if !errors.As(err, &held) {
+		t.Fatalf("Launch err = %v; want a *HeldNameError", err)
+	}
+	if id != "" || outcome != "" {
+		t.Errorf("Launch = (%q, %q); want no id and no outcome with the error", id, outcome)
+	}
+	for _, s := range catalogued {
+		if errors.Is(err, s) {
+			t.Errorf("err = %v matches catalogued sentinel %v; want none", err, s)
+		}
+	}
+
+	e.onlyCreate() // no tmux call after the "duplicate session" answer
+	row := e.row("id-launch-1")
+	want := HeldNameError{InstanceID: "id-launch-1", Name: "bot-claude-status", Socket: e.socket,
+		Token: row.Identity.Token, LaunchStartedAtMillis: e.clock.Now().UnixMilli()}
+	if *held != want || want.Token == "" {
+		t.Errorf("held = %+v; want %+v (with the row's token)", *held, want)
+	}
+	if row.State != store.StatePending || row.RowVersion != 0 || row.LaunchStartedAtMillis != want.LaunchStartedAtMillis ||
+		row.EndedAtText != "" || row.Identity.Socket != e.socket {
+		t.Errorf("row = {state %q, version %d, launch start %d, ended_at %q, socket %q}; want pending at version 0 as inserted",
+			row.State, row.RowVersion, row.LaunchStartedAtMillis, row.EndedAtText, row.Identity.Socket)
+	}
+	if e.logs.Len() != 0 {
+		t.Errorf("log = %q; want no line from Launch", e.logs.String())
+	}
+	if strings.Contains(err.Error(), want.Token) {
+		t.Errorf("err text %q carries the launch token", err.Error())
 	}
 }
 

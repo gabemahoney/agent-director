@@ -123,8 +123,9 @@ func TestVerbsContainsExpectedSurface(t *testing.T) {
 // validation / launch error name from SRD §13.1, including ErrInvalidFlags
 // (control-character instance id, SR-1.7, SR-9.1), ErrTmuxSessionNameInvalid
 // (reserved session-name characters, SR-9.2), ErrTmuxUnresponsive (bounded
-// create) and ErrTmuxSessionConflict (label scan, SR-9.3). Doc drift CI
-// catches the reference-doc side; this test pins the source-of-truth side.
+// create) and ErrTmuxSessionConflict (label scan, SR-9.3; held name after
+// "duplicate session", SR-9.4), never ErrInternal; Client.Spawn's Go doc
+// "Errors:" list must match, and its conflict bullet names the held-name case.
 func TestSpawnHasAllSRDErrorNames(t *testing.T) {
 	v, ok := manifest.Lookup("spawn")
 	if !ok {
@@ -144,6 +145,16 @@ func TestSpawnHasAllSRDErrorNames(t *testing.T) {
 	for _, n := range want {
 		if !have[n] {
 			t.Errorf("spawn.ErrorNames missing %q", n)
+		}
+	}
+	if have["ErrInternal"] {
+		t.Error(`spawn.ErrorNames lists "ErrInternal"`)
+	}
+	assertGoDocErrorsMatchManifest(t, "Spawn", "spawn")
+	conflict := goDocErrorBulletText(t, "Spawn", "ErrTmuxSessionConflict")
+	for _, phrase := range []string{`after "duplicate session"`, "the new row is ended"} {
+		if !strings.Contains(conflict, phrase) {
+			t.Errorf("(*Client).Spawn ErrTmuxSessionConflict bullet lacks %q: %q", phrase, conflict)
 		}
 	}
 }

@@ -111,6 +111,13 @@ func TestSeedSpawn_V5Options_RoundTrip(t *testing.T) {
 			viaStore: func(sp store.Spawn) any { return sp.LaunchStartedAtMillis }, wantStore: int64(0),
 		},
 		{
+			// The seed's gated transition advanced the version; the option replaces it.
+			name: "WithRowVersion/ended at 0", state: "ended",
+			opts: []SpawnOption{WithRowVersion(0)},
+			raw:  func(c SpawnColumns) any { return c.RowVersion }, want: int64(0),
+			viaStore: func(sp store.Spawn) any { return sp.RowVersion }, wantStore: int64(0),
+		},
+		{
 			name: "WithLifeNumber", state: "waiting",
 			opts: []SpawnOption{WithLifeNumber(3)},
 			raw:  func(c SpawnColumns) any { return c.LifeNumber }, want: int64(3),

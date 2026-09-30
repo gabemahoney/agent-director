@@ -113,7 +113,7 @@ type oneNameRow struct {
 
 // oneNameRows is every returned-error row.
 func oneNameRows() []oneNameRow {
-	return slices.Concat(oneNameSpawnRows(), oneNameResumeRows(), oneNameInternalRows(), oneNameKillRows())
+	return slices.Concat(oneNameSpawnRows(), oneNameHeldRows(), oneNameResumeRows(), oneNameInternalRows(), oneNameKillRows())
 }
 
 // TestOneNameReturnedErrors: every tmux-caused error the verbs return matches
@@ -179,14 +179,100 @@ func oneNameSpawnRows() []oneNameRow {
 		oneNameSpawn("create: non-zero exit, unparseable reply", "ErrTmuxUnresponsive", scriptSpawn(create,
 			tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 1, HadStdout: true})),
 		oneNameSpawn("create: no server", "ErrTmuxSessionCreate", scriptSpawn(create, tmuxfix.Script{Failure: tmux.FailNoServer})),
-		oneNameSpawn("create: duplicate session", "ErrTmuxSessionCreate", func(_ *testing.T, e spawnEnv, p *api.SpawnParams) {
-			e.rec.SeedSessions(e.socket, tmuxfix.SeedSession{Name: "one-held"})
-			p.TmuxSessionName, p.TmuxSessionNameSupplied = "one-held", true
-		}),
 		oneNameSpawn("create: session not labelled", "ErrTmuxSessionCreate", func(_ *testing.T, e spawnEnv, _ *api.SpawnParams) {
 			e.rec.Script(e.socket, tmuxfix.Script{Failure: tmux.FailLabel, Times: 1}, create).
 				Script(e.socket, tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 1}, tmux.CallSetLabel)
 		}),
+	}
+}
+
+// oneHeldName is the requested name the held-name rows' holder already holds.
+const oneHeldName = "one-held"
+
+// oneHeldHolders returns the sessions a held-name row seeds on e's socket.
+type oneHeldHolders func(t *testing.T, e spawnEnv, p *api.SpawnParams) []tmuxfix.SeedSession
+
+// oneNameHeld is a spawn row whose create answers "duplicate session" for
+// oneHeldName: holders (when set) are seeded before the spawn, and late
+// (when set) runs as the scan's lookup returns, before the create (SR-20.9).
+func oneNameHeld(name, want string, holders oneHeldHolders, late func(t *testing.T, e spawnEnv, p *api.SpawnParams)) oneNameRow {
+	return oneNameSpawn("held: "+name, want, func(t *testing.T, e spawnEnv, p *api.SpawnParams) {
+		p.TmuxSessionName, p.TmuxSessionNameSupplied = oneHeldName, true
+		if holders != nil {
+			e.rec.SeedSessions(e.socket, holders(t, e, p)...)
+		}
+		if late == nil {
+			return
+		}
+		scanned := false
+		e.rec.AfterCall(tmux.CallLookup, func(tmuxfix.SocketCall, error) {
+			if !scanned {
+				scanned = true
+				late(t, e, p)
+			}
+		})
+	})
+}
+
+// oneHeldLabelled is one holder "$4" of oneHeldName labelled with OtherToken
+// for instance id (this id when id is "") under this store's id, or another
+// store's when otherStore is set.
+func oneHeldLabelled(t *testing.T, e spawnEnv, p *api.SpawnParams, id string, otherStore bool) tmuxfix.SeedSession {
+	t.Helper()
+	storeID, err := apitest.ReadStoreID(e.dbPath)
+	if err != nil {
+		t.Fatalf("ReadStoreID: %v", err)
+	}
+	if otherStore {
+		storeID = apitest.OtherStoreID(storeID)
+	}
+	if id == "" {
+		id = p.ClaudeInstanceID
+	}
+	return tmuxfix.SeedSession{ID: "$4", Name: oneHeldName, Label: tmuxfix.Valid(tmuxfix.OtherToken, id, storeID)}
+}
+
+// oneNameHeldRows are plain spawn's errors after "duplicate session" (SR-9.4,
+// SR-3.10, SR-1.4), one per re-lookup outcome.
+func oneNameHeldRows() []oneNameRow {
+	unlabelled := func(*testing.T, spawnEnv, *api.SpawnParams) []tmuxfix.SeedSession {
+		return []tmuxfix.SeedSession{{ID: "$4", Name: oneHeldName}}
+	}
+	relookup := func(s tmuxfix.Script) func(*testing.T, spawnEnv, *api.SpawnParams) {
+		s.Times = 1
+		return func(_ *testing.T, e spawnEnv, _ *api.SpawnParams) { e.rec.Script(e.socket, s, tmux.CallLookup) }
+	}
+	conflict := "ErrTmuxSessionConflict"
+	return []oneNameRow{
+		oneNameHeld("left over from an earlier life", conflict, nil, func(t *testing.T, e spawnEnv, p *api.SpawnParams) {
+			e.rec.SeedSessions(e.socket, oneHeldLabelled(t, e, p, "", false))
+		}),
+		oneNameHeld("a different instance id", conflict, func(t *testing.T, e spawnEnv, p *api.SpawnParams) []tmuxfix.SeedSession {
+			return []tmuxfix.SeedSession{oneHeldLabelled(t, e, p, "other-"+uuid.NewString()[:8], false)}
+		}, nil),
+		oneNameHeld("another agent-director store", conflict, func(t *testing.T, e spawnEnv, p *api.SpawnParams) []tmuxfix.SeedSession {
+			return []tmuxfix.SeedSession{oneHeldLabelled(t, e, p, "", true)}
+		}, nil),
+		oneNameHeld("no valid instance id", conflict, unlabelled, nil),
+		oneNameHeld("conflicting labels", conflict, unlabelled, func(_ *testing.T, e spawnEnv, _ *api.SpawnParams) {
+			e.rec.SetScope(e.socket, tmuxfix.ScopeGlobal, tmuxfix.ScopeValue{})
+		}),
+		oneNameHeld("vanished before the re-lookup", "ErrTmuxSessionCreate", unlabelled,
+			func(_ *testing.T, e spawnEnv, _ *api.SpawnParams) {
+				e.rec.RemoveSessionAfter(tmux.CallCreate, e.socket, "$4")
+			}),
+		// Plain spawn names cannot hold $ or \, so two entries with one stored name stand in.
+		oneNameHeld("more than one listing entry matches", "ErrTmuxUnresponsive",
+			func(*testing.T, spawnEnv, *api.SpawnParams) []tmuxfix.SeedSession {
+				return []tmuxfix.SeedSession{{ID: "$4", Name: oneHeldName}, {ID: "$5", Name: oneHeldName}}
+			}, nil),
+		oneNameHeld("re-lookup timeout", "ErrTmuxUnresponsive", unlabelled, relookup(tmuxfix.Script{Failure: tmux.FailTimeout})),
+		oneNameHeld("re-lookup unrecognised reply", "ErrTmuxUnresponsive", unlabelled, relookup(tmuxfix.Script{
+			Failure: tmux.FailUnrecognized, FirstLine: "held: unexpected reply", ExitStatus: 1, HadStdout: true})),
+		oneNameHeld("re-lookup binary unavailable", "ErrTmuxNotAvailable", unlabelled,
+			relookup(tmuxfix.Script{Failure: tmux.FailUnavailable})),
+		oneNameHeld("re-lookup socket permission", "ErrTmuxNotAvailable", unlabelled,
+			relookup(tmuxfix.Script{Failure: tmux.FailSocketDenied})),
 	}
 }
 
