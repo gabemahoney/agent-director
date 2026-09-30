@@ -28,11 +28,11 @@ const defaultStorePath = "~/.agent-director/state.db"
 // SRD Appendix F.3). Every socket-taking method takes the socket (SR-3.3)
 // and reports a failure as *TmuxCallError; an error of any other type from
 // an injected implementation counts as TmuxFailUnrecognized for that call.
-// The name-based methods (NewSessionByName, KillSession, SendKeys,
-// CapturePane) are transitional: they stay until their last verb moves to
-// the socket-taking calls. HasSession stays (SR-2.1) and matches by prefix:
-// resume still calls it until resume moves to the lookup, and no verb may
-// newly adopt it. *tmux.Client and tmuxfix.Recorder implement it.
+// The name-based methods (KillSession, SendKeys, CapturePane) are
+// transitional: they stay until their last verb moves to the socket-taking
+// calls. HasSession stays (SR-2.1) and matches by prefix: resume still calls
+// it until resume moves to the lookup, and no verb may newly adopt it.
+// *tmux.Client and tmuxfix.Recorder implement it.
 type TmuxClient interface {
 	// Lookup makes the one-call lookup on socket: sessions with labels and
 	// the scope reads.
@@ -57,8 +57,6 @@ type TmuxClient interface {
 	// with "ad1 <token> <session id> <instance id> <store id>" and its pane
 	// paneID by its id with "<token> <pane id>".
 	SetLabel(socket, sessionID, paneID, token, instanceID, storeID string) error
-	// NewSessionByName creates a detached session by name (transitional).
-	NewSessionByName(name, cwd string, envs map[string]string, command []string) error
 	// HasSession reports whether a session whose name begins with name
 	// exists (prefix match; stays per SR-2.1). Resume still calls it until
 	// it moves to the lookup; no verb may newly adopt it.

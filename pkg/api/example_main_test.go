@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard"
+	"github.com/gabemahoney/agent-director/internal/trail"
 )
 
 // apiTrailDir is the temp HOME for this test binary. Set by TestMain before
@@ -45,6 +46,12 @@ func TestMain(m *testing.M) {
 	}
 	os.Setenv("HOME", tmpHome) // nolint:errcheck — os.Setenv never errors on non-nil key
 	apiTrailDir = tmpHome
+	// Pin the trail path now: tests that move HOME (e.g. TestResumeDelegation)
+	// would otherwise fix it to their own HOME if they emit first. The
+	// TestScanNameHeldFailOpen child needs the singleton unpinned.
+	if os.Getenv(scanTrailChildEnv) == "" {
+		trail.Default()
+	}
 
 	// ── Clear AGENT_DIRECTOR_INSTANCE_ID ─────────────────────────────────────
 	// spawn.Launch reads this env var and uses it as parent_id for the new

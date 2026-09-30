@@ -19,13 +19,6 @@ import (
 // envelope).
 var preTrustWarn io.Writer = os.Stderr
 
-// TmuxClient is the name-based tmux surface Relaunch (resume) still uses
-// until resume moves to the socket-taking create. Launch uses LaunchTmux.
-// *tmux.Client satisfies it.
-type TmuxClient interface {
-	NewSessionByName(name, cwd string, envs map[string]string, command []string) error
-}
-
 // claudeBinary is the program tmux launches inside the new session. Held
 // as a var so tests can swap it for a fake-claude helper without
 // monkey-patching the spawn flow.
@@ -117,7 +110,7 @@ func Launch(s *store.Store, t LaunchTmux, pc tmux.ProcChecker, r Resolved, cfg c
 		return "", err
 	}
 	if out.Kind == CreateLabelled {
-		recordLaunchIdentity(s, pc, lg, r.ClaudeInstanceID, token, out.Reply)
+		RecordLaunchIdentity(s, pc, lg, r.ClaudeInstanceID, insertRowVersion, token, out.Reply)
 	}
 	return r.ClaudeInstanceID, nil
 }
@@ -126,12 +119,24 @@ func Launch(s *store.Store, t LaunchTmux, pc tmux.ProcChecker, r Resolved, cfg c
 // the identity write is conditional on (SR-5.2, SR-3.6).
 const insertRowVersion = 0
 
-// recordLaunchIdentity makes the one conditional identity write after a
-// labelled create (SR-3.6): the reply's server pid and start_time and pane
-// id and pid, with the server's and the pane's process start times from pc.
-// A write that does not apply records nothing; a store error gives one WARN
-// line naming the instance id only.
-func recordLaunchIdentity(s *store.Store, pc tmux.ProcChecker, lg *log.Logger, instanceID, token string, reply tmux.CreateReply) {
+// IdentityWriter is the one store write RecordLaunchIdentity needs: the
+// conditional identity write (SR-3.6). *store.Store satisfies it.
+type IdentityWriter interface {
+	RecordLaunchIdentity(instanceID string, launchVersion int64, token string, id store.LaunchIdentity) (store.CondResult, error)
+}
+
+// RecordLaunchIdentity makes the one conditional identity write after a
+// labelled create (SR-3.6), shared by plain spawn and resume: the reply's
+// server pid and start_time and pane id and pid, with the server's and the
+// pane's process start times from pc (an unreadable one is recorded as none),
+// guarded on the launch's version and token: for a plain spawn the insert's
+// version 0 and its token, for resume the version its move produced and the
+// move's token. A write that does not apply (a hook wrote first) records
+// nothing; a store error gives one WARN line on lg naming the instance id and
+// that recording the launch identity failed, with no token, label or
+// environment value, and does not change the launch's result (SR-5.8). A nil
+// lg logs nothing.
+func RecordLaunchIdentity(w IdentityWriter, pc tmux.ProcChecker, lg *log.Logger, instanceID string, launchVersion int64, token string, reply tmux.CreateReply) {
 	id := store.LaunchIdentity{
 		ServerPID:       reply.ServerPID,
 		ServerStart:     reply.ServerStart,
@@ -140,8 +145,8 @@ func recordLaunchIdentity(s *store.Store, pc tmux.ProcChecker, lg *log.Logger, i
 		PanePID:         reply.PanePID,
 		PaneStarttime:   knownStartTime(pc, reply.PanePID),
 	}
-	if _, err := s.RecordLaunchIdentity(instanceID, insertRowVersion, token, id); err != nil {
-		lg.Printf("WARN: spawn: recording the launch identity of spawn %s failed: %v", instanceID, err)
+	if _, err := w.RecordLaunchIdentity(instanceID, launchVersion, token, id); err != nil && lg != nil {
+		lg.Printf("WARN: recording the launch identity of instance %s failed: %v", instanceID, err)
 	}
 }
 

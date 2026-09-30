@@ -10,10 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
-	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -46,33 +45,31 @@ type histRow struct {
 	entries   []histEntry
 }
 
-// histEnv is one seeded row in a temp store, with temp HOME, config dir and cwd.
+// histEnv is one seeded row in the shared resume fixture (resume_fixture_test.go),
+// with its own config dir, cwd and recorded-path dir. The row records env.socket,
+// whose per-user directory exists, so resume's create runs on it.
 type histEnv struct {
 	t      *testing.T
-	dbPath string
+	env    *resumeEnv
 	cwd    string
 	cfgDir string
 	recDir string
 	id     string
-	st     *store.Store
-	rec    *tmuxfix.Recorder
 }
 
 func newHistEnv(t *testing.T, row histRow) *histEnv {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "")
 	e := &histEnv{
 		t:      t,
-		dbPath: filepath.Join(t.TempDir(), "state.db"),
+		env:    newResumeEnv(t),
 		cwd:    t.TempDir(),
 		cfgDir: t.TempDir(),
 		recDir: t.TempDir(),
-		rec:    tmuxfix.NewRecorderForResume(),
 	}
 	t.Setenv("CLAUDE_CONFIG_DIR", e.cfgDir)
 
 	opts := []apitest.SpawnOption{
+		apitest.WithTmuxSocket(e.env.socket),
 		apitest.WithLifeNumber(row.life),
 		apitest.WithExtraEnv(map[string]string{"CLAUDE_CONFIG_DIR": e.cfgDir}),
 	}
@@ -98,17 +95,11 @@ func newHistEnv(t *testing.T, row histRow) *histEnv {
 		}))
 	}
 
-	id, err := apitest.SeedSpawn(e.dbPath, "", store.StateEnded, e.cwd, "", histCurrent, true, opts...)
+	id, err := apitest.SeedSpawn(e.env.dbPath, "", store.StateEnded, e.cwd, "", histCurrent, false, opts...)
 	if err != nil {
 		t.Fatalf("SeedSpawn: %v", err)
 	}
 	e.id = id
-	st, err := store.Open(e.dbPath)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	e.st = st
 	return e
 }
 
@@ -142,16 +133,20 @@ func (e *histEnv) recomputed(sid string) string {
 }
 
 func (e *histEnv) resume() error {
-	_, err := api.Resume(e.st, e.rec, config.Default(), api.ResumeParams{ClaudeInstanceID: e.id})
+	_, err := e.env.resume(e.id)
 	return err
 }
 
-// resumedSession returns the session id the single relaunch passed to --resume.
+// resumedSession returns the session id the single relaunch passed to
+// --resume; the create must run on the row's recorded socket.
 func (e *histEnv) resumedSession() string {
 	e.t.Helper()
-	calls := e.rec.CallsOfKind(tmuxfix.CallNewSession)
+	calls := e.env.rec.SocketCallsOf(tmux.CallCreate)
 	if len(calls) != 1 {
-		e.t.Fatalf("NewSession calls = %d; want 1", len(calls))
+		e.t.Fatalf("create calls = %d; want 1", len(calls))
+	}
+	if calls[0].Socket != e.env.socket {
+		e.t.Errorf("create on socket %q; want the row's %q", calls[0].Socket, e.env.socket)
 	}
 	cmd := calls[0].Command
 	if len(cmd) < 3 || cmd[1] != "--resume" {
@@ -162,7 +157,7 @@ func (e *histEnv) resumedSession() string {
 
 func (e *histEnv) columns() apitest.SpawnColumns {
 	e.t.Helper()
-	c, err := apitest.ReadSpawnColumns(e.dbPath, e.id)
+	c, err := apitest.ReadSpawnColumns(e.env.dbPath, e.id)
 	if err != nil {
 		e.t.Fatalf("ReadSpawnColumns: %v", err)
 	}
@@ -348,7 +343,7 @@ func TestResumeHistoryRefusals(t *testing.T) {
 				}
 			}
 
-			if n, s := len(e.rec.Calls()), len(e.rec.SocketCalls()); n != 0 || s != 0 {
+			if n, s := len(e.env.rec.Calls()), len(e.env.rec.SocketCalls()); n != 0 || s != 0 {
 				t.Errorf("tmux calls = %d name-based, %d socket; want none on refusal", n, s)
 			}
 			if after := e.columns(); !reflect.DeepEqual(before, after) {
@@ -368,7 +363,7 @@ func TestResumeHistoryKeepsHookRotationWithinLife(t *testing.T) {
 			}})
 			// A restarted session reports a new id whose transcript is not yet
 			// written: the hook archives histCurrent and nulls jsonl_path.
-			if err := e.st.RecordSessionStartIdentity(e.id, "sess-restarted", e.recorded("sess-restarted"), false, 0, ""); err != nil {
+			if err := e.env.st.RecordSessionStartIdentity(e.id, "sess-restarted", e.recorded("sess-restarted"), false, 0, ""); err != nil {
 				t.Fatalf("RecordSessionStartIdentity: %v", err)
 			}
 			if err := e.resume(); err != nil {

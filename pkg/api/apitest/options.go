@@ -20,7 +20,7 @@ const (
 )
 
 // TestSocket is the tmux socket SeedSpawn records on every row unless
-// WithLaunchIdentity overrides it; re-exported from the leaf launchfix
+// WithLaunchIdentity or WithTmuxSocket overrides it; re-exported from the leaf launchfix
 // package, where the value is defined once (SR-20.3).
 const TestSocket = launchfix.TestSocket
 
@@ -218,6 +218,13 @@ func WithLaunchIdentity(id store.LaunchIdentity) SpawnOption {
 		o.set("pane_pid", nullIfZero(id.PanePID))
 		o.set("pane_starttime", nullIfZero(id.PaneStarttime))
 	}
+}
+
+// WithTmuxSocket stores socket as the row's recorded tmux socket in place of
+// TestSocket, keeping every other launch-identity default (token, pane). A
+// launch on the row (resume) needs the socket's directory to exist.
+func WithTmuxSocket(socket string) SpawnOption {
+	return func(o *spawnOpts) { o.set("tmux_socket", nullIfZero(socket)) }
 }
 
 // WithNoLaunchToken seeds a row from before the release (SR-20.3): no launch

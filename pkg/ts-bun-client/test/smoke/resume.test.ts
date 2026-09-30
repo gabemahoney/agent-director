@@ -2,8 +2,8 @@
  * Smoke test — resume verb
  *
  * Happy path: seed a spawn in ended state with claude_session_id set, write
- * the JSONL placeholder to disk, then call resume. The fake-tmux stub handles
- * the new-session call.
+ * the JSONL placeholder to disk, then call resume. The row records a socket
+ * under the temp HOME; the fake-tmux stub creates the session on it.
  *
  * Post-b.eiv-cutover: the subprocess CLI inherits HOME=homeDir (set by
  * SubprocessClient's #homeOverride from the canonical storePath layout), so
@@ -23,7 +23,7 @@ import { test, expect } from "bun:test";
 import * as path from "path";
 import * as fs from "fs";
 import { withTempHome } from "../internal/tempHome.js";
-import { runHelper } from "../internal/helper.js";
+import { runHelper, privateTmuxSocket } from "../internal/helper.js";
 import { Client, ErrSpawnNotFound, AgentDirectorError } from "../../src/index.js";
 import type { ResumeResult } from "../../src/index.js";
 
@@ -66,7 +66,8 @@ test("resume: happy path — relaunches an ended spawn", async () => {
       });
     }
 
-    // Seed a spawn in ended state with a claude_session_id set.
+    // Seed a spawn in ended state with a claude_session_id set, recorded on
+    // a socket whose directory exists (resume launches on that socket).
     runHelper("seed-spawn", {
       store: storePath,
       state: "ended",
@@ -74,6 +75,7 @@ test("resume: happy path — relaunches an ended spawn", async () => {
       cwd,
       "session-id": sessionId,
       "create-store": true,
+      socket: privateTmuxSocket(homeDir),
     });
 
     // Write the JSONL placeholder at the path the subprocess CLI's

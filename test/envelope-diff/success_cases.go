@@ -252,8 +252,11 @@ var successCases = []successCase{
 	//   2. A JSONL transcript at HOME/.claude/projects/<slug(cwd)>/<sessID>.jsonl.
 	//
 	// extraSetup creates the JSONL inside homeDir after the test driver has
-	// pointed HOME there via t.Setenv.  fake-tmux handles new-session
-	// (has-session exits 1 = "absent"; new-session exits 0 = success).
+	// pointed HOME there via t.Setenv.  OpenStoreWithRow records no tmux
+	// socket (a row from before the release), so resume resolves one from
+	// the environment, which the driver points at each run's private fake
+	// tmux; fake-tmux answers the name check (has-session exits 1 =
+	// "absent") and creates and labels the session on that socket.
 	//
 	// The result {claude_instance_id: "id-resume-1"} is fully deterministic;
 	// nondeterministic.json lists no excluded fields for resume.

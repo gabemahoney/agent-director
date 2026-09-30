@@ -77,42 +77,6 @@ func (c *Client) binaryPath() string {
 	return binaryName
 }
 
-// NewSessionByName creates a detached tmux session named name with starting
-// directory cwd, the given env vars injected via repeated -e KEY=VAL, and
-// command as the in-session program (delivered as direct argv — no shell).
-//
-// It is the pre-Phase-1 name-based create: it passes no -u or -S, sets no
-// label and has no timeout. It stays only until its last user moves to the
-// socket-taking call set (NewSession), and then goes.
-//
-// The command slice's first element is the binary to invoke (e.g. "claude")
-// and the remainder are its arguments. tmux's -- separator is used to make
-// the argv boundary explicit and so command elements that begin with `-`
-// are not interpreted as tmux options.
-//
-// On exec failure ErrTmuxNotAvailable is returned. On a non-zero tmux exit
-// the error chain contains ErrTmuxSessionCreate plus the tmux stderr.
-func (c *Client) NewSessionByName(name, cwd string, envs map[string]string, command []string) error {
-	args := []string{"new-session", "-d", "-s", name, "-c", cwd}
-	for _, kv := range sortedEnvFlags(envs) {
-		args = append(args, "-e", kv)
-	}
-	if len(command) > 0 {
-		args = append(args, "--")
-		args = append(args, command...)
-	}
-	out, err := c.run(binaryName, args...)
-	if err != nil {
-		// ErrTmuxNotAvailable already wrapped by the runner when the
-		// binary is missing; anything else is a tmux-reported failure.
-		if errors.Is(err, ErrTmuxNotAvailable) {
-			return err
-		}
-		return fmt.Errorf("%w: %s: %v", ErrTmuxSessionCreate, trimOutput(out), err)
-	}
-	return nil
-}
-
 // HasSession returns true when `tmux has-session -t name` exits 0. Any other
 // exit (including the documented "can't find session" code) returns false
 // with a nil error.

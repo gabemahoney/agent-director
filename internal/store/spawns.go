@@ -851,9 +851,9 @@ func (s *Store) archivePriorSessionOnRotate(instanceID, newSessionID string) {
 	})
 }
 
-// SetParentID writes the parent_id column. Used by resume to re-derive
-// parent on every resurrection (SRD §7.5 — parent_id records who
-// currently owns this Spawn, not who originally created it).
+// SetParentID writes the parent_id column. No verb calls it: resume's parent
+// id is written only by its move to pending (MoveToPending, SR-8.3). It is
+// kept only for the test seeder apitest.SeedParentChild.
 //
 // An empty parent argument writes NULL (matches the original spawn
 // path's "no caller env var" semantics). A non-empty value sets that

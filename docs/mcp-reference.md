@@ -224,7 +224,7 @@ Fetch a single permission_requests row by request_token. Token-only lookup (SR-3
 
 ## Tool: resume
 
-Bring a terminated (ended/missing) Spawn back to life via `claude --resume`. Same claude_instance_id, fresh tmux session, same JSONL transcript. parent_id is re-derived from the caller's AGENT_DIRECTOR_INSTANCE_ID env var on every resume.
+Bring a terminated (ended/missing) Spawn back to life via `claude --resume`. Same claude_instance_id, fresh tmux session, same JSONL transcript. parent_id is re-derived from the caller's AGENT_DIRECTOR_INSTANCE_ID env var on every resume. A row whose instance id contains a control character is refused with ErrInternal before any tmux call or write, because its session could never be labelled. If the launch cannot be recorded in the store, resume returns ErrInternal and launches nothing.
 
 ### Input schema
 
@@ -243,6 +243,7 @@ Bring a terminated (ended/missing) Spawn back to life via `claude --resume`. Sam
 - `ErrJsonlNeverWritten`
 - `ErrTmuxNotAvailable`
 - `ErrTmuxSessionCreate`
+- `ErrTmuxUnresponsive`
 
 ## Tool: find-missing
 

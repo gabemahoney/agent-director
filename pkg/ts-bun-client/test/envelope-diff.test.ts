@@ -22,7 +22,7 @@ import * as fs from "fs";
 import * as os from "os";
 
 import { Client, AgentDirectorError } from "../src/index.js";
-import { runHelper } from "./internal/helper.js";
+import { runHelper, privateTmuxSocket } from "./internal/helper.js";
 import { runCli } from "./internal/cliRunner.js";
 import { assertEnvelopesEqual } from "./internal/structuralDiff.js";
 import { loadIgnorePathsForVerb } from "./internal/loadIgnorePaths.js";
@@ -777,6 +777,11 @@ describe("resume", () => {
       const sessId = "sess-envdiff-resume-1";
       const cwd = "/tmp";
       const slug = slugifyCwd(cwd);
+      // Both store copies record this socket; each run keeps its fake-tmux
+      // tables apart (FAKE_TMUX_TABLES), so the Client's create does not meet
+      // the session the CLI created.
+      const tmuxDir = fs.mkdtempSync(path.join(os.tmpdir(), "ed-tmux-"));
+      const socket = privateTmuxSocket(tmuxDir);
 
       const { homeA, homeB, storeB, cleanup } = prepareStores((store) => {
         runHelper("seed-spawn", {
@@ -786,6 +791,7 @@ describe("resume", () => {
           cwd,
           "session-id": sessId,
           "create-store": true,
+          socket,
         });
         if (OUTER_INSTANCE_ID) {
           runHelper("seed-spawn", {
@@ -807,13 +813,16 @@ describe("resume", () => {
       fs.mkdirSync(jsonlDirB, { recursive: true });
       fs.writeFileSync(path.join(jsonlDirB, `${sessId}.jsonl`), "{}\n");
 
+      const priorTables = process.env.FAKE_TMUX_TABLES;
       try {
         const cli = runCli(
           ["resume", "--claude-instance-id", resumeId],
-          cliEnv(homeA)
+          { ...cliEnv(homeA), FAKE_TMUX_TABLES: path.join(tmuxDir, "tables-cli") }
         );
         expect(cli.exitCode).toBe(0);
 
+        // The Client's CLI subprocess inherits process.env.
+        process.env.FAKE_TMUX_TABLES = path.join(tmuxDir, "tables-client");
         using client = await Client.create({
           storePath: storeB,
           home: homeB,
@@ -825,7 +834,10 @@ describe("resume", () => {
           ignorePaths: loadIgnorePathsForVerb("resume"),
         });
       } finally {
+        if (priorTables === undefined) delete process.env.FAKE_TMUX_TABLES;
+        else process.env.FAKE_TMUX_TABLES = priorTables;
         cleanup();
+        fs.rmSync(tmuxDir, { recursive: true, force: true });
       }
     },
     TIMEOUT

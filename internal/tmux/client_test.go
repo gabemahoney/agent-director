@@ -44,9 +44,6 @@ type nameBasedOp struct {
 // nameBasedOps is one call of every name-based method, shared by the error
 // mapping and constructor tables.
 var nameBasedOps = []nameBasedOp{
-	{"NewSessionByName", func(c *Client) error {
-		return c.NewSessionByName("x", "/tmp", nil, []string{"claude"})
-	}, "duplicate session: x\n", ErrTmuxSessionCreate},
 	{"HasSession", func(c *Client) error { _, err := c.HasSession("x"); return err }, "", nil},
 	{"KillSession", func(c *Client) error { return c.KillSession("x") }, "can't find session: x", ErrTmuxKillFailed},
 	{"SendKeys", func(c *Client) error { return c.SendKeys("x", "hi", true) }, "can't find pane: x:0.0", ErrTmuxSendKeys},
@@ -61,30 +58,6 @@ func TestNameBasedArgv(t *testing.T) {
 		fn   func(*Client) error
 		want [][]string
 	}{
-		{
-			name: "new-session with env vars (sorted) and command",
-			fn: func(c *Client) error {
-				return c.NewSessionByName("foo", "/cwd",
-					map[string]string{"B": "2", "A": "1"}, []string{"bash", "-l"})
-			},
-			want: [][]string{{"tmux", "new-session", "-d", "-s", "foo",
-				"-c", "/cwd", "-e", "A=1", "-e", "B=2", "--", "bash", "-l"}},
-		},
-		{
-			name: "new-session with no env and a single-arg command",
-			fn: func(c *Client) error {
-				return c.NewSessionByName("bare", "/x", nil, []string{"claude"})
-			},
-			want: [][]string{{"tmux", "new-session", "-d", "-s", "bare",
-				"-c", "/x", "--", "claude"}},
-		},
-		{
-			name: "new-session without a command stops at the options (no --)",
-			fn: func(c *Client) error {
-				return c.NewSessionByName("plain", "/tmp", nil, nil)
-			},
-			want: [][]string{{"tmux", "new-session", "-d", "-s", "plain", "-c", "/tmp"}},
-		},
 		{
 			name: "has-session",
 			fn: func(c *Client) error {

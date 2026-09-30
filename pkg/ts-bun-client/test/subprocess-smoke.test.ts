@@ -23,7 +23,7 @@ import { test, expect, describe } from "bun:test";
 import * as path from "path";
 import * as fs from "fs";
 import { withTempHome } from "./internal/tempHome.js";
-import { runHelper } from "./internal/helper.js";
+import { runHelper, privateTmuxSocket } from "./internal/helper.js";
 import { VERBS } from "../src/internal/verbs.js";
 import {
   Client,
@@ -185,6 +185,7 @@ describe("subprocess-smoke / happy paths (SR-10.3)", () => {
       runHelper("seed-spawn", {
         store: storePath, id, state: "ended", cwd,
         "session-id": sessionId, "create-store": true,
+        socket: privateTmuxSocket(homeDir),
       });
       const jsonlDir = path.join(homeDir, ".claude", "projects", slugifyCwd(cwd));
       fs.mkdirSync(jsonlDir, { recursive: true });

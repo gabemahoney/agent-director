@@ -8,6 +8,9 @@
  * REQUIRES: process.env.TS_HELPER_PATH must be set by the preload (setup.ts).
  */
 
+import * as fs from "fs";
+import * as path from "path";
+
 /**
  * Args value type:
  *   string  → --key value
@@ -69,4 +72,15 @@ export function runHelper(
       `ts-helper ${subcommand} returned non-JSON stdout: ${stdout}; stderr: ${stderr.trim()}`
     );
   }
+}
+
+/**
+ * privateTmuxSocket makes `<dir>/tmux` (mode 0700) and returns the socket path
+ * `<dir>/tmux/default` for `seed-spawn --socket`: a resume launches on the
+ * row's recorded socket and refuses one whose directory is missing.
+ */
+export function privateTmuxSocket(dir: string): string {
+  const sockDir = path.join(dir, "tmux");
+  fs.mkdirSync(sockDir, { recursive: true, mode: 0o700 });
+  return path.join(sockDir, "default");
 }

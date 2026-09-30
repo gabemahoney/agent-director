@@ -161,7 +161,6 @@ func TestRecorder_VirtualTimeOnlyWhenBound(t *testing.T) {
 
 	bound := tmuxfix.NewClock(start)
 	r = tmuxfix.NewRecorder().WithVirtualTime(bound, tmux.Timeouts{})
-	_ = r.NewSessionByName("n", "/w", nil, nil)
 	_, _ = r.HasSession("n")
 	_ = r.SendKeys("n", "x", true)
 	_, _ = r.CapturePane("n", 1, false)

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // TestMain isolates this package's tests before any test function runs.
@@ -100,6 +101,31 @@ func TestDispatch(t *testing.T) {
 			t.Fatalf("expected non-empty claude_instance_id, got %v", result)
 		}
 	})
+
+	// --socket replaces the recorded socket; without it the row keeps TestSocket.
+	for _, tc := range []struct{ name, socket, want string }{
+		{"a_success_seed_spawn_socket", "/tmp/ts-helper-sock/default", "/tmp/ts-helper-sock/default"},
+		{"a_success_seed_spawn_default_socket", "", apitest.TestSocket},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "spawn.db")
+			args := []string{"seed-spawn", "--store", dbPath, "--id", "ts-helper-sock", "--state", "ended", "--create-store"}
+			if tc.socket != "" {
+				args = append(args, "--socket", tc.socket)
+			}
+			var stdout, stderr bytes.Buffer
+			if code := dispatch(args, &stdout, &stderr); code != 0 {
+				t.Fatalf("expected exit 0, got %d; stderr: %s", code, stderr.String())
+			}
+			cols, err := apitest.ReadSpawnColumns(dbPath, "ts-helper-sock")
+			if err != nil {
+				t.Fatalf("ReadSpawnColumns: %v", err)
+			}
+			if cols.TmuxSocket != tc.want {
+				t.Fatalf("tmux_socket = %v, want %q", cols.TmuxSocket, tc.want)
+			}
+		})
+	}
 
 	t.Run("a_success_seed_parent_child", func(t *testing.T) {
 		dbPath := filepath.Join(t.TempDir(), "pc.db")

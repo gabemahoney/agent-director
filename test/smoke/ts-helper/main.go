@@ -90,6 +90,7 @@ func cmdSeedSpawn(args []string, stdout, stderr io.Writer) int {
 		relayMode   = fs.String("relay-mode", "off", "relay_mode value (on|off); defaults to off")
 		sessionID   = fs.String("session-id", "", "claude_session_id; non-empty enables resume pre-flight")
 		createStore = fs.Bool("create-store", false, "create the store if it does not exist")
+		socket      = fs.String("socket", "", "recorded tmux socket; defaults to apitest.TestSocket (a resume needs its directory to exist)")
 	)
 
 	if err := fs.Parse(args); err != nil {
@@ -103,8 +104,12 @@ func cmdSeedSpawn(args []string, stdout, stderr io.Writer) int {
 	if *id == "" {
 		*id = uuid.NewString()
 	}
+	var opts []apitest.SpawnOption
+	if *socket != "" {
+		opts = append(opts, apitest.WithTmuxSocket(*socket))
+	}
 
-	instanceID, err := apitest.SeedSpawn(*storePath, *id, *state, *cwd, *relayMode, *sessionID, *createStore)
+	instanceID, err := apitest.SeedSpawn(*storePath, *id, *state, *cwd, *relayMode, *sessionID, *createStore, opts...)
 	if err != nil {
 		printError(stderr, err)
 		return 1

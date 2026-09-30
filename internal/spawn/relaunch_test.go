@@ -1,6 +1,7 @@
 package spawn
 
 import (
+	"encoding/json"
 	"reflect"
 	"sort"
 	"testing"
@@ -8,145 +9,199 @@ import (
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
-// baseRelaunchRow builds a persisted-shaped store.Spawn for the Relaunch
-// path. GetSpawn is what normally materializes this from the DB; the
-// Relaunch unit tests feed the row directly so the assertion is scoped to
-// Relaunch's synthesis + composeEnv, not the store round-trip (a sibling
-// owns the store round-trip test in spawns_test.go).
-func baseRelaunchRow() store.Spawn {
-	return store.Spawn{
-		ClaudeInstanceID: "id-relaunch-1",
-		CWD:              "/tmp/relaunch-cwd",
-		TmuxSessionName:  "cd-relaunch-1",
-		RelayMode:        "off",
-		ClaudeArgs:       []string{"--model", "opus"},
-		Labels:           map[string]string{"role": "worker"},
-	}
+// Resume's launch (SR-8.1, SR-3.5, SR-10): ComposeRelaunch's environment,
+// argv and settings, and Relaunch's labelled create on the passed socket,
+// observed through the Recorder's recorded create and session table.
+
+const (
+	relaunchToken   = "0123456789abcdef"
+	relaunchStoreID = "store-relaunch-1"
+)
+
+// relaunchEnv is one resume launch under test: a per-test TMUX_TMPDIR (TMUX
+// unset), its socket, a Recorder, the config and the input's row.
+type relaunchEnv struct {
+	t      *testing.T
+	socket string
+	rec    *tmuxfix.Recorder
+	cfg    config.Config
+	row    store.Spawn
 }
 
-// TestRelaunchRestoresExtraEnvVerbatim pins the Epic AC: Relaunch's
-// synthesized Resolved carries in.Row.ExtraEnv verbatim, and composeEnv
-// receives it so the env map handed to TmuxClient.NewSession contains the
-// ExtraEnv keys/values. This is the resume-side restore of SR-10 — a
-// resumed spawn keeps CLAUDE_CONFIG_DIR and any auth vars captured at
-// launch.
-func TestRelaunchRestoresExtraEnvVerbatim(t *testing.T) {
+// newRelaunchEnv builds a relaunchEnv with a persisted-shaped row fed directly
+// (GetSpawn's round-trip is the store's tests' concern).
+func newRelaunchEnv(t *testing.T) *relaunchEnv {
+	t.Helper()
 	withStubExe(t, "/bin/agent-director")
+	return &relaunchEnv{t: t, socket: isolateTmux(t), rec: tmuxfix.NewRecorder(), cfg: config.Default(),
+		row: store.Spawn{
+			ClaudeInstanceID: "id-relaunch-1",
+			CWD:              "/tmp/relaunch-cwd",
+			TmuxSessionName:  "cd-relaunch-1",
+			RelayMode:        "off",
+			ClaudeArgs:       []string{"--model", "opus"},
+			Labels:           map[string]string{"role": "worker"},
+		}}
+}
 
-	row := baseRelaunchRow()
-	row.ExtraEnv = map[string]string{
+// relaunch composes the launch of e.row resuming sessionID and runs it on the
+// Recorder, failing the test on a composition error.
+func (e *relaunchEnv) relaunch(sessionID string) CreateOutcome {
+	e.t.Helper()
+	req, err := ComposeRelaunch(RelaunchInput{Row: e.row, SessionID: sessionID, Socket: e.socket,
+		Token: relaunchToken, StoreID: relaunchStoreID}, e.cfg)
+	if err != nil {
+		e.t.Fatalf("ComposeRelaunch: %v", err)
+	}
+	return Relaunch(e.rec, req)
+}
+
+// onlyCreate returns the one create Relaunch made.
+func (e *relaunchEnv) onlyCreate() tmuxfix.SocketCall {
+	e.t.Helper()
+	calls := e.rec.SocketCallsOf(tmux.CallCreate)
+	if len(calls) != 1 {
+		e.t.Fatalf("creates = %+v; want exactly one", calls)
+	}
+	return calls[0]
+}
+
+// TestRelaunchRestoresExtraEnvVerbatim: the row's ExtraEnv reaches the create's
+// environment verbatim and the argv starts `claude --resume <session id> --settings`.
+func TestRelaunchRestoresExtraEnvVerbatim(t *testing.T) {
+	e := newRelaunchEnv(t)
+	e.row.ExtraEnv = map[string]string{
 		"CLAUDE_CONFIG_DIR":       "/home/bee/.claude-alt",
 		"ANTHROPIC_API_KEY":       "sk-ant-test",
 		"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-test",
 	}
-	rec := tmuxfix.NewRecorder()
 
-	if err := Relaunch(RelaunchInput{Row: row, SessionID: "session-uuid-1"}, rec, config.Default()); err != nil {
-		t.Fatalf("Relaunch: %v", err)
+	if out := e.relaunch("session-uuid-1"); out.Kind != CreateLabelled {
+		t.Fatalf("Relaunch kind = %v (cause %v); want CreateLabelled", out.Kind, out.Cause)
 	}
-	got := onlyByNameCreate(t, rec)
-
-	// composeEnv received the row's ExtraEnv verbatim: every key/value
-	// lands in the env map passed to NewSession.
-	for k, want := range row.ExtraEnv {
-		if got := got.Envs[k]; got != want {
-			t.Errorf("relaunch env[%q] = %q; want %q (ExtraEnv restored verbatim)", k, got, want)
+	c := e.onlyCreate()
+	for k, want := range e.row.ExtraEnv {
+		if got := c.Envs[k]; got != want {
+			t.Errorf("create env[%q] = %q; want %q (ExtraEnv restored verbatim)", k, got, want)
 		}
 	}
-
-	// The resume argv still carries `claude --resume <session_id> --settings`.
-	if len(got.Command) < 4 ||
-		got.Command[0] != "claude" ||
-		got.Command[1] != "--resume" ||
-		got.Command[2] != "session-uuid-1" ||
-		got.Command[3] != "--settings" {
-		t.Errorf("resume argv prefix = %v", got.Command)
+	want := []string{"claude", "--resume", "session-uuid-1", "--settings"}
+	if len(c.Command) < 5 || !reflect.DeepEqual(c.Command[:4], want) {
+		t.Errorf("create argv = %v; want prefix %v then the settings", c.Command, want)
+	}
+	if got, wantArgs := c.Command[5:], e.row.ClaudeArgs; !reflect.DeepEqual(got, wantArgs) {
+		t.Errorf("create argv after the settings = %v; want the row's claude_args %v", got, wantArgs)
 	}
 }
 
-// TestRelaunchLeavesPermissionsNil pins SR-10's non-goal: Permissions is
-// NOT persisted, so Relaunch cannot reconstruct it. It stays nil on the
-// synthesized Resolved, which mergePermissions must tolerate (only the
-// config-default deny applies). We assert the synthesized settings never
-// carry a per-spawn allow/ask overlay by driving the full Relaunch: a nil
-// Permissions must not panic and must still produce a session.
+// TestRelaunchLeavesPermissionsNil: permissions are not persisted, so the
+// settings carry only the config's AskUserQuestion deny, no per-spawn overlay.
 func TestRelaunchLeavesPermissionsNil(t *testing.T) {
-	withStubExe(t, "/bin/agent-director")
+	e := newRelaunchEnv(t)
+	e.cfg.Defaults.DisableAskUserQuestion = true
 
-	row := baseRelaunchRow()
-	// A row never carries Permissions (no such column). Confirm the
-	// synthesized Resolved keeps it nil by exercising the path — the
-	// direct field check is done via the Resolved synthesized inside
-	// Relaunch, mirrored here: the store.Spawn has no Permissions field,
-	// so there is nothing to carry.
-	rec := tmuxfix.NewRecorder()
-	if err := Relaunch(RelaunchInput{Row: row, SessionID: "s1"}, rec, config.Default()); err != nil {
-		t.Fatalf("Relaunch: %v", err)
+	e.relaunch("s1")
+	c := e.onlyCreate()
+	var got settingsShape
+	if err := json.Unmarshal([]byte(c.Command[4]), &got); err != nil {
+		t.Fatalf("settings %q: %v", c.Command[4], err)
 	}
-	onlyByNameCreate(t, rec)
-	// Guard against store.Spawn ever growing a Permissions field that a
-	// future Relaunch might wire in without a persistence story: the row
-	// type must not expose one.
+	want := map[string]any{"deny": []any{"AskUserQuestion"}}
+	if !reflect.DeepEqual(got.Permissions, want) {
+		t.Errorf("settings permissions = %v; want only %v (no per-spawn allow/ask/deny)", got.Permissions, want)
+	}
 	if _, has := reflect.TypeOf(store.Spawn{}).FieldByName("Permissions"); has {
 		t.Error("store.Spawn grew a Permissions field; Relaunch must not reconstruct un-persisted Permissions")
 	}
 }
 
-// TestRelaunchLegacyEmptyExtraEnvBaseline is the PM-required legacy
-// baseline (Epic AC: "a row with '{}' extra_env resumes exactly as
-// today"). A row whose ExtraEnv is empty/nil — the shape GetSpawn
-// materializes from the '{}' default column — must produce EXACTLY the
-// pre-SR-10 env set: no ExtraEnv keys leak in. The expected set is
-// constructed from what composeEnv emits without ExtraEnv:
-// AGENT_DIRECTOR_INSTANCE_ID, AGENT_DIRECTOR_RELAY_MODE, and one
-// AGENT_DIRECTOR_LABEL_<KEY> per row label.
+// TestRelaunchLegacyEmptyExtraEnvBaseline: a nil or empty ExtraEnv (the '{}'
+// column) yields exactly the base keys plus one label variable per row label.
 func TestRelaunchLegacyEmptyExtraEnvBaseline(t *testing.T) {
-	withStubExe(t, "/bin/agent-director")
-
-	row := baseRelaunchRow()
-	// GetSpawn decodes '{}' into an empty non-nil map; nil behaves
-	// identically through composeEnv's range. Assert both shapes yield
-	// the same baseline set.
 	for _, extra := range []map[string]string{nil, {}} {
-		row.ExtraEnv = extra
-		rec := tmuxfix.NewRecorder()
-		if err := Relaunch(RelaunchInput{Row: row, SessionID: "s1"}, rec, config.Default()); err != nil {
-			t.Fatalf("Relaunch: %v", err)
-		}
-		envs := onlyByNameCreate(t, rec).Envs
+		e := newRelaunchEnv(t)
+		e.row.ExtraEnv = extra
+		e.relaunch("s1")
+		envs := e.onlyCreate().Envs
 
-		// The exact pre-change env key set: base keys + one label var per
-		// row label. Nothing else.
 		want := map[string]string{
-			"AGENT_DIRECTOR_INSTANCE_ID": row.ClaudeInstanceID,
-			"AGENT_DIRECTOR_RELAY_MODE":  row.RelayMode,
+			"AGENT_DIRECTOR_INSTANCE_ID": e.row.ClaudeInstanceID,
+			"AGENT_DIRECTOR_RELAY_MODE":  e.row.RelayMode,
 		}
-		for k, v := range row.Labels {
+		for k, v := range e.row.Labels {
 			want["AGENT_DIRECTOR_LABEL_"+normalizeLabelKey(k)] = v
 		}
-
-		if !reflect.DeepEqual(envs, want) {
-			t.Errorf("ExtraEnv=%v: relaunch env = %v; want exactly %v (no new keys vs pre-SR-10 baseline)",
-				extra, envs, want)
-		}
-		// Explicit key-set guard so a future stray key is named, not just
-		// diffed as a map.
 		if got, wantKeys := sortedKeys(envs), sortedKeys(want); !reflect.DeepEqual(got, wantKeys) {
 			t.Errorf("ExtraEnv=%v: env key set = %v; want %v", extra, got, wantKeys)
+		}
+		if !reflect.DeepEqual(envs, want) {
+			t.Errorf("ExtraEnv=%v: relaunch env = %v; want exactly %v", extra, envs, want)
 		}
 	}
 }
 
-// onlyByNameCreate returns the one name-based create Relaunch made.
-func onlyByNameCreate(t *testing.T, rec *tmuxfix.Recorder) tmuxfix.Call {
-	t.Helper()
-	calls := rec.CallsOfKind(tmuxfix.CallNewSession)
-	if len(calls) != 1 {
-		t.Fatalf("name-based creates = %d; want 1", len(calls))
+// TestRelaunchLabelledCreateOnPassedSocket: the create names the passed socket
+// and the row's name; a plain name is labelled by the chain, a $ or \ name by id.
+func TestRelaunchLabelledCreateOnPassedSocket(t *testing.T) {
+	cases := []struct {
+		name      string
+		labelByID bool
+	}{
+		{"cd-relaunch-1", false},
+		{`a$b`, true},
+		{`a\b`, true},
 	}
-	return calls[0]
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newRelaunchEnv(t)
+			e.row.TmuxSessionName = tc.name
+			var atCreate tmuxfix.SeedSession
+			e.rec.AfterCall(tmux.CallCreate, func(tmuxfix.SocketCall, error) { atCreate = e.rec.Sessions(e.socket)[0] })
+
+			out := e.relaunch("session-uuid-1")
+			if out.Kind != CreateLabelled {
+				t.Fatalf("Relaunch kind = %v (cause %v); want CreateLabelled", out.Kind, out.Cause)
+			}
+			c := e.onlyCreate()
+			if c.Socket != e.socket || c.Target != tc.name || c.Cwd != e.row.CWD {
+				t.Errorf("create {socket %q, name %q, cwd %q}; want {%q %q %q}", c.Socket, c.Target, c.Cwd, e.socket, tc.name, e.row.CWD)
+			}
+			id := e.row.ClaudeInstanceID
+			if c.Token != relaunchToken || c.InstanceID != id || c.StoreID != relaunchStoreID {
+				t.Errorf("create label args {%q %q %q}; want {%q %q %q}", c.Token, c.InstanceID, c.StoreID, relaunchToken, id, relaunchStoreID)
+			}
+			if chained := atCreate.LabelSet || atCreate.Panes[0].AdPane != ""; chained == tc.labelByID {
+				t.Errorf("session after the create = %+v; chained label = %v, want %v", atCreate, chained, !tc.labelByID)
+			}
+
+			labels := e.rec.SocketCallsOf(tmux.CallSetLabel)
+			switch {
+			case !tc.labelByID && len(labels) != 0:
+				t.Errorf("labels by id = %+v; want none for a chained name", labels)
+			case tc.labelByID && len(labels) != 1:
+				t.Fatalf("labels by id = %+v; want exactly one", labels)
+			case tc.labelByID:
+				l := labels[0]
+				if l.Socket != e.socket || l.Target != atCreate.ID || l.PaneID != atCreate.Panes[0].ID ||
+					l.Token != relaunchToken || l.InstanceID != id || l.StoreID != relaunchStoreID {
+					t.Errorf("label by id = %+v; want socket %q, session %q, pane %q, value {%q %q %q}",
+						l, e.socket, atCreate.ID, atCreate.Panes[0].ID, relaunchToken, id, relaunchStoreID)
+				}
+			}
+
+			after := e.rec.Sessions(e.socket)[0]
+			if want := tmuxfix.Valid(relaunchToken, id, relaunchStoreID); after.Label != want || after.Panes[0].AdPane != relaunchToken {
+				t.Errorf("session = %+v; want label ad1 %s %s %s %s and pane label %s",
+					after, relaunchToken, after.ID, id, relaunchStoreID, relaunchToken)
+			}
+			if out.Reply.SessionID != after.ID || out.Reply.PaneID != after.Panes[0].ID {
+				t.Errorf("outcome reply = %+v; want session %q pane %q", out.Reply, after.ID, after.Panes[0].ID)
+			}
+		})
+	}
 }
 
 func sortedKeys(m map[string]string) []string {

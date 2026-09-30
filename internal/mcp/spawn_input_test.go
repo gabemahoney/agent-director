@@ -124,8 +124,8 @@ func TestToolsCallSpawnPlainIDControl(t *testing.T) {
 	if c := calls[1]; c.Socket != socket || c.InstanceID != "mcp-plain-id" || len(c.Token) != 16 || c.StoreID == "" {
 		t.Errorf("create = %+v; want socket %q, id mcp-plain-id, a 16-hex token and the store id", c, socket)
 	}
-	if n := len(rec.CallsOfKind(tmuxfix.CallNewSession)); n != 0 {
-		t.Errorf("name-based creates = %d; want 0", n)
+	if n := len(rec.Calls()); n != 0 {
+		t.Errorf("name-based tmux calls = %d; want 0", n)
 	}
 	list, err := client.List(api.ListParams{})
 	if err != nil {

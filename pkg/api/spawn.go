@@ -89,12 +89,23 @@ func runSpawn(s *store.Store, collisions spawn.CollisionChecker, t spawnTmux, pc
 // fresh UUID4). The description never contains the id, in any form, so a
 // hostile id cannot inject text into the error envelope.
 func validateExplicitInstanceID(id string) error {
-	for i := 0; i < len(id); i++ {
-		if b := id[i]; b <= 0x1f || b == 0x7f {
-			return fmt.Errorf("%w: the instance id contains a control character", ErrInvalidFlags)
-		}
+	if hasControlChar(id) {
+		return fmt.Errorf("%w: the instance id contains a control character", ErrInvalidFlags)
 	}
 	return nil
+}
+
+// hasControlChar reports whether id contains an ASCII control character, any
+// byte 0x00-0x1f or 0x7f: the one predicate behind spawn's explicit-id check
+// (SR-9.1) and resume's refusal of such a row (SR-3.13). An id with one can
+// never carry a valid @ad_owner label.
+func hasControlChar(id string) bool {
+	for i := 0; i < len(id); i++ {
+		if b := id[i]; b <= 0x1f || b == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 // Spawn launches a tracked Claude Code instance inside a new tmux session.

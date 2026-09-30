@@ -532,11 +532,6 @@ func TestParentFKEnforced(t *testing.T) {
 	}
 }
 
-// TestSetParentID pins the three SetParentID behaviors used by Resume:
-// non-empty parent writes the value, empty parent writes NULL (matches the
-// original spawn path's "no caller env var" semantics), and a missing
-// target row returns ErrSpawnNotFound (distinguishing "asked to update a
-// nonexistent row" from "the update silently no-op'd").
 // TestStateMachineMultiRowRetention pins SR-5.1 / SR-5.2: a Spawn with multiple
 // open permission_requests rows must remain in check_permission until the LAST
 // row is decided. Each ApplyHookTransition(working) call is held at
@@ -652,6 +647,9 @@ func TestStateMachineMultiRowRetention(t *testing.T) {
 	})
 }
 
+// TestSetParentID pins SetParentID's three behaviours (parent written, empty
+// stored as NULL, missing row ErrSpawnNotFound) backing apitest.SeedParentChild.
+// No verb calls it; resume writes its parent id through the move to pending.
 func TestSetParentID(t *testing.T) {
 	s, _ := openTempStore(t)
 

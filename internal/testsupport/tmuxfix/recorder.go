@@ -8,9 +8,9 @@
 // (recorder_table.go, recorder_calls.go), tests script a typed result per
 // call kind (recorder_script.go), and session hooks, after-call hooks and
 // virtual time sit around each call (recorder_hooks.go). It never produces
-// or parses tmux reply text. The name-based methods (NewSessionByName,
-// HasSession, KillSession, SendKeys, CapturePane) only record their calls
-// and return their two scripted answers, as before.
+// or parses tmux reply text. The name-based methods (HasSession,
+// KillSession, SendKeys, CapturePane) only record their calls and return
+// their two scripted answers, as before.
 package tmuxfix
 
 import (
@@ -23,7 +23,6 @@ import (
 type CallKind string
 
 const (
-	CallNewSession  CallKind = "NewSession"
 	CallHasSession  CallKind = "HasSession"
 	CallKillSession CallKind = "KillSession"
 	CallSendKeys    CallKind = "SendKeys"
@@ -35,17 +34,9 @@ type Call struct {
 	// Kind is the name of the method that was called.
 	Kind CallKind
 
-	// --- NewSessionByName fields ---
-
-	// Name is the session name passed to NewSessionByName, HasSession, KillSession,
-	// SendKeys, or CapturePane.
+	// Name is the session name passed to HasSession, KillSession, SendKeys,
+	// or CapturePane.
 	Name string
-	// Cwd is the working directory passed to NewSessionByName.
-	Cwd string
-	// Envs are the environment variables passed to NewSessionByName.
-	Envs map[string]string
-	// Command is the argv passed to NewSessionByName.
-	Command []string
 
 	// --- SendKeys fields ---
 
@@ -152,21 +143,6 @@ func (r *Recorder) Reset() {
 	r.hasSessionResult = false
 	r.socketCalls = nil
 	r.scripts = nil
-}
-
-// NewSessionByName records a name-based create call (Kind CallNewSession)
-// and returns nil.
-func (r *Recorder) NewSessionByName(name, cwd string, envs map[string]string, command []string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.calls = append(r.calls, Call{
-		Kind:    CallNewSession,
-		Name:    name,
-		Cwd:     cwd,
-		Envs:    envs,
-		Command: command,
-	})
-	return nil
 }
 
 // HasSession records a HasSession call and returns the scripted result.

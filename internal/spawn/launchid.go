@@ -25,6 +25,11 @@ var randRead = rand.Read
 // back any *tmux.SocketDirError without root or a real per-user directory.
 var resolveTmuxSocket = tmux.ResolveSocket
 
+// ensureSocketDir is tmux.EnsureSocketDir, held as a var so tests can hand
+// back any *tmux.SocketDirError for a recorded socket without root or a real
+// per-user directory.
+var ensureSocketDir = tmux.EnsureSocketDir
+
 // NewLaunchToken mints a new launch token: 8 bytes from crypto/rand,
 // hex-encoded in lowercase (16 characters; SR-3.5). A read failure is
 // returned as an error, which the caller reports as an uncatalogued internal
@@ -66,6 +71,37 @@ func ResolveScanSocket() (string, error) {
 	return resolveSocket(false)
 }
 
+// ResolveRowLaunchSocket returns the tmux socket a launch onto an existing
+// row (resume, and later reuse) creates its session on, given the row's
+// recorded tmux_socket (SR-3.3; LFR H1):
+//
+//   - A recorded socket is returned exactly as recorded, after
+//     tmux.EnsureSocketDir: a directory that exists is left unchecked; a
+//     vanished per-user directory, tmux-<real uid> under an existing parent,
+//     is created again with mode 0700 and checked as tmux checks it (after a
+//     reboot, for example). Any other missing directory is refused.
+//   - No recorded socket (a row from before the release) resolves one from
+//     the caller's environment exactly as a plain spawn does
+//     (ResolveLaunchSocket), and the absolute path is returned for the launch
+//     to record.
+//
+// A refusal matches tmux.ErrTmuxNotAvailable and no other sentinel (SR-1.5).
+// Its description, built from the typed *tmux.SocketDirError by the same
+// builder as ResolveLaunchSocket's, names the socket, its directory and the
+// reason (tmux's own words where tmux has them, or that the missing directory
+// is not a per-user directory agent-director may create) and says that
+// nothing was launched (SR-1.4). The caller returns it before its write.
+// ResolveRowLaunchSocket makes no tmux call and writes nothing to the store.
+func ResolveRowLaunchSocket(recorded string) (string, error) {
+	if recorded == "" {
+		return ResolveLaunchSocket()
+	}
+	if err := ensureSocketDir(recorded); err != nil {
+		return "", socketRefusal(err)
+	}
+	return recorded, nil
+}
+
 // resolveSocket is the one resolution and refusal mapping behind
 // ResolveLaunchSocket and ResolveScanSocket.
 func resolveSocket(create bool) (string, error) {
@@ -76,11 +112,12 @@ func resolveSocket(create bool) (string, error) {
 	return socket, nil
 }
 
-// socketRefusal describes a socket resolution refusal from the typed
+// socketRefusal describes a socket resolution or recorded-socket refusal
+// (tmux.ResolveSocket, tmux.EnsureSocketDir) from the typed
 // *tmux.SocketDirError's fields, never by parsing its text (SR-1.4). It wraps
 // the SocketDirError, so the result matches tmux.ErrTmuxNotAvailable and no
 // other sentinel (SR-1.5), and its text ends with tmux's own words. An error
-// of any other type, which ResolveSocket never returns, is wrapped as it is.
+// of any other type, which neither returns, is wrapped as it is.
 func socketRefusal(err error) error {
 	var sde *tmux.SocketDirError
 	if !errors.As(err, &sde) {

@@ -61,7 +61,9 @@
 //     a DescCase's phrases for a rule such a text must state (for example
 //     DescSpawnLaunchTimeoutRule, DescSpawnScanRefusal). No test spells these
 //     phrases or forms itself; a new case is a new Desc* constructor in
-//     descriptions.go.
+//     descriptions.go, or in a sibling file of one verb's cases
+//     (descriptions_resume.go, whose DescCase.AfterResumeRestore adds the
+//     restore's result a resume launch error ends with).
 //
 // Rules for tests (the same as docs/architecture.md, "apitest Seed* factory
 // contract (reusable test fixtures)"):

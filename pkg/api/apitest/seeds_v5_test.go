@@ -149,6 +149,15 @@ func TestSeedSpawn_V5Options_RoundTrip(t *testing.T) {
 			viaStore: func(sp store.Spawn) any { return sp.Identity }, wantStore: store.LaunchIdentity{Socket: TestSocket},
 		},
 		{
+			// Only the socket changes: a live row keeps the default pane.
+			name: "WithTmuxSocket/live row", state: "waiting",
+			opts: []SpawnOption{WithTmuxSocket("/tmp/ad-v5-test/sock")},
+			raw: func(c SpawnColumns) any {
+				return []any{c.LaunchToken != nil, c.TmuxSocket, c.PaneID, c.PanePID}
+			},
+			want: []any{true, "/tmp/ad-v5-test/sock", TestPaneID, int64(TestPanePID)},
+		},
+		{
 			name: "WithNoLaunchToken", state: "waiting",
 			opts: []SpawnOption{WithNoLaunchToken()},
 			raw:  func(c SpawnColumns) any { return identityCols(c) }, want: []any{nil, nil, nil, nil, nil, nil, nil, nil},

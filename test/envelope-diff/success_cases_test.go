@@ -7,13 +7,14 @@
 //
 //  1. Seed   — build a fresh fixture store via successCase.seed.
 //  2. Copy   — call copyFixtureStore twice (one CLI copy, one Client copy)
-//              so mutations from each execution path stay isolated.
+//     so mutations from each execution path stay isolated.
 //  3. Setup  — if successCase.extraSetup is non-nil, call it once per copy
-//              with HOME pointing at that copy's homeDir.  For most verbs
-//              this is a no-op; for resume it creates the JSONL transcript.
-//  4. Run    — collect JSON envelopes from runCLI and runClient.
+//     with HOME pointing at that copy's homeDir.  For most verbs
+//     this is a no-op; for resume it creates the JSONL transcript.
+//  4. Run    — collect JSON envelopes from runCLI and runClient, each
+//     against a private fake tmux (its own socket and tables).
 //  5. Diff   — normalize both envelopes and compare via structuralDiff,
-//              suppressing fields listed in nondeterministic.json.
+//     suppressing fields listed in nondeterministic.json.
 //  6. Assert — t.Errorf if any diff entries remain after suppression.
 package envelope_diff
 
@@ -74,12 +75,20 @@ func TestEnvelopeDiff_Success(t *testing.T) {
 			// HOME = homeDir2 for the remainder of this subtest.
 
 			// ── 4. Run ─────────────────────────────────────────────────
+			// Each run gets a fake tmux of its own (a fresh socket and
+			// fake-tmux tables, usePrivateFakeTmux), as each gets its own
+			// store copy: a session the CLI run creates (spawn, resume)
+			// must not be on the server the Client run creates on, or the
+			// second create meets the first's session ("duplicate
+			// session"). Neither run touches the default socket.
+			usePrivateFakeTmux(t)
 			cliEnv, exitCode := runCLI(t, binPath, dbPath1, sc.cliArgv(ctx)...)
 			if exitCode != 0 {
 				t.Fatalf("CLI exited %d on success path; stderr:\n%s",
 					exitCode, cliEnv)
 			}
 
+			usePrivateFakeTmux(t)
 			clientEnv, errReturned := runClient(t, dbPath2, verb.Name, sc.params(ctx))
 			if errReturned {
 				t.Fatalf("Client returned error envelope on success path:\n%s",

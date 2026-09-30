@@ -15,6 +15,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 )
 
@@ -157,6 +158,7 @@ func plantTranscript(t *testing.T, cwd, sessionID string) {
 // the same candidate or returns the same error as before the migration.
 func TestMigratedV4HistoryResume(t *testing.T) {
 	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "")
+	t.Setenv("TMUX", "")
 	cases := []struct {
 		name       string
 		row        fixtureRow
@@ -176,6 +178,7 @@ func TestMigratedV4HistoryResume(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("TMUX_TMPDIR", t.TempDir())
 			m := newMigratedClient(t)
 			id := tc.row(m.f)
 			plant := tc.plant
@@ -192,7 +195,7 @@ func TestMigratedV4HistoryResume(t *testing.T) {
 			}
 
 			_, err := m.c.Resume(api.ResumeParams{ClaudeInstanceID: id})
-			launches := m.rec.CallsOfKind(tmuxfix.CallNewSession)
+			launches := m.rec.SocketCallsOf(tmux.CallCreate)
 			if tc.wantErr != nil {
 				if !errors.Is(err, tc.wantErr) {
 					t.Fatalf("Resume(%s) err = %v; want %v", id, err, tc.wantErr)

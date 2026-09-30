@@ -18,7 +18,8 @@ import (
 // AssertDescription, and agent-facing texts that may name kill as a
 // documented procedure (manifest descriptions) through AssertAgentText; no
 // test spells these phrases or forms itself. A new SR-1.4 case is added here
-// as a constructor.
+// as a constructor, or in a sibling file of one verb's cases
+// (descriptions_resume.go).
 
 // DescCase is one SR-1.4 description case: Name (shown in every failure),
 // the phrases the description must contain, the case's own must-not phrases
@@ -210,6 +211,13 @@ type LaunchTimeout struct {
 	RowReset     bool
 }
 
+// rowStaysPending is the row sentence of a launch failure that leaves the
+// row as the launch's write left it: a plain spawn's after any create
+// failure, and every launch verb's after a launch timeout (SR-1.4). A
+// resume's other launch failures give the restore's result instead
+// (AfterResumeRestore).
+const rowStaysPending = "the row stays pending"
+
 // The launch-timeout rule's phrases, shared by the error description
 // (DescLaunchTimeout) and the spawn manifest text (DescSpawnLaunchTimeoutRule).
 const (
@@ -223,7 +231,7 @@ const (
 func DescLaunchTimeout(p LaunchTimeout) DescCase {
 	req := []string{
 		p.InstanceID, string(tmux.CallCreate), sessionMayExist,
-		"the row stays pending", launchRetryRule,
+		rowStaysPending, launchRetryRule,
 	}
 	if p.Unrecognised {
 		req = append(req, "tmux gave a reply agent-director does not recognise")
@@ -267,13 +275,15 @@ func DescUnrecognisedReply(call tmux.Call, firstLine string) DescCase {
 }
 
 // UnlabelledSession parameterises DescUnlabelledSession: the session's name
-// and tmux id, whether it was ended by that id, and whether the launch was a
-// plain spawn (whose row stays pending).
+// and tmux id, whether it was ended by that id, and the launch's row
+// sentence: PlainSpawn for a plain spawn (the row stays pending), or Restore
+// for a resume (the restore's result, SR-8.5). Set at most one of the two.
 type UnlabelledSession struct {
 	Name       string
 	SessionID  string
 	Ended      bool
 	PlainSpawn bool
+	Restore    ResumeRestore
 }
 
 // DescUnlabelledSession is ErrTmuxSessionCreate for a created session that
@@ -286,9 +296,13 @@ func DescUnlabelledSession(p UnlabelledSession) DescCase {
 		req = append(req, "an unlabelled session may still run")
 	}
 	if p.PlainSpawn {
-		req = append(req, "the row stays pending")
+		req = append(req, rowStaysPending)
 	}
-	return DescCase{Name: "ErrTmuxSessionCreate, created but not labelled", Require: req}
+	c := DescCase{Name: "ErrTmuxSessionCreate, created but not labelled", Require: req}
+	if p.Restore.Outcome != RestoreNone {
+		c = c.AfterResumeRestore(p.Restore)
+	}
+	return c
 }
 
 // SessionCreateFailed parameterises DescSessionCreateFailed: Name is the
