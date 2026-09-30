@@ -19,7 +19,9 @@ import (
 // the existing cases with AfterHeldName: DescSessionCreateFailed with
 // Duplicate (the name vanished), DescConflictingLabels with NothingWasDone,
 // DescDifferentServer, DescCallTimeout, DescUnrecognisedReply,
-// DescSocketPermission and DescTmuxNotRun.
+// DescSocketPermission and DescTmuxNotRun. DescSpawnHeldName and
+// DescSpawnSessionNameParam are the same contract as spawn's manifest texts
+// state it.
 
 // HeldRow is the result of a plain spawn's conditional end write after
 // "duplicate session" (SR-9.4, Appendix F.4), which picks the description's
@@ -221,4 +223,38 @@ func DescHeldAmbiguous(p HeldName) DescCase {
 		Require: []string{"more than one tmux session's name matches it", "list --tmux-session-name"},
 		MustNot: unresponsiveMustNot,
 	}.afterHeldName(p, heldLabelNoClaim)
+}
+
+// DescSpawnHeldName is the held-name contract as the spawn manifest
+// description states it (SR-9.4, SR-18; WD 2026-09-29 STORE): a held name
+// ends the new row at once, ErrTmuxSessionConflict names the holder, the
+// class statement, another row's or store's session must not be ended, the
+// "Operator actions" pointer and spawning the id again with reuse-finished.
+// It never quotes a held-name error's row sentence. Check it with
+// AssertAgentTextCase.
+func DescSpawnHeldName() DescCase {
+	return DescCase{
+		Name: "spawn manifest, held name",
+		Require: []string{
+			"already held", "ends its new row at once", "ErrTmuxSessionConflict naming the holder",
+			"holder vanished", "ErrTmuxSessionConflict is CONFLICT (permanent until a human looks)",
+			"another row's", "another agent-director store", "must not be ended", "no valid instance id",
+			strconv.Quote(OperatorActionsTitle), "spawn the id again", "--reuse-finished",
+		},
+		MustNot: []string{
+			heldRowSentences[HeldRowEnded], heldRowSentences[HeldRowLeftAsIs], heldRowSentences[HeldRowStoreError],
+		},
+	}
+}
+
+// DescSpawnSessionNameParam is spawn's tmux-session-name parameter text on a
+// held name (SR-9.4): it ends the new row and names ErrTmuxSessionConflict,
+// never the old claim that a live collision surfaces as the wrapped tmux
+// new-session error. Check it with AssertAgentTextCase.
+func DescSpawnSessionNameParam() DescCase {
+	return DescCase{
+		Name:    "spawn manifest, tmux-session-name param, held name",
+		Require: []string{"already held", "ends the new row at once", "ErrTmuxSessionConflict"},
+		MustNot: []string{"live-collision", "wrapped tmux new-session error"},
+	}
 }

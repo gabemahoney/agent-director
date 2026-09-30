@@ -116,7 +116,20 @@ godoc). Most-likely sentinel errors:
 session-creating call timed out, here or in `Resume`: the row stays
 `pending`; do not retry until `Get` shows it `ended` or `missing`) and `ErrTmuxSessionConflict`
 (an explicit id with no row whose labelled session from an earlier life
-still runs, or conflicting labels; nothing is written).
+still runs, or conflicting labels; nothing is written. Also a held name:
+tmux answered "duplicate session" and the requested name is held by a
+session left over from an earlier life of this id, another row's session,
+a session of another agent-director store, or one with no valid instance
+id, or the labels conflict; the new row is ended and the error names the
+blocking session. Another row's or another store's session is another
+agent and is never ended; the other cases need a human, see "Operator
+actions" in the [top-level README](../../README.md#operator-actions)).
+After "duplicate session" the new row is ended too when the holding
+session is gone by the re-lookup (`ErrTmuxSessionCreate`), the re-lookup
+cannot be read (`ErrTmuxUnresponsive`), or tmux cannot be run or the
+re-lookup found a different tmux server (`ErrTmuxNotAvailable`); in every
+case the error says if the new row was not ended.
+The holding session is never ended, read or typed into.
 See `(*Client).Spawn` godoc for the full enumeration.
 
 ---

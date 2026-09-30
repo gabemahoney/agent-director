@@ -191,8 +191,9 @@ Rules (validated app-side, no silent rewrite): the name must be
 non-empty, ≤ 64 bytes, valid UTF-8, and contain none of `#`, `:`,
 `.`, `$`, `\`, or ASCII control bytes (`\x00`–`\x1f`, `\x7f`). There
 is no DB uniqueness check — name reuse across **ended** spawns is supported.
-A collision against a currently-live tmux session surfaces as
-tmux's own `new-session` error (no app-layer sentinel). Omitting
+A name already held by a tmux session makes `spawn` return an error
+naming the blocking session and whether its label carries this instance
+id; the new row is ended and agent-director never touches the holder. Omitting
 the flag preserves today's `composeSessionName` default.
 
 #### Finding a Spawn by its tmux session name
@@ -458,6 +459,9 @@ the class of every tmux error, is in
 - A situation that needs a human is described in
   [Operator actions](#operator-actions); callers never perform those
   actions.
+- A `spawn` whose tmux session name is already held returns an error naming
+  the holder and ends its new row; the holder is left to a human, never
+  ended by the caller.
 - Right after a `kill` ends the last session on its tmux server, the
   server takes a moment to exit. A repeated `kill` in that moment can get
   `ErrTmuxUnresponsive` or `ErrTmuxNotAvailable`; the caller waits and
@@ -512,7 +516,10 @@ A leftover is a session of an earlier launch of the agent: its label names
 the row's id with another launch token. Whether the row is `pending` or
 live, `agent-director kill` refuses it with `ErrTmuxSessionConflict` ("not
 this launch's session"), sends nothing and names the session's id (`$N`).
-A session with no valid label may be a person's own, so look before acting.
+Beside a live row, `read-pane` of the id shows the leftover's pane; the row
+is live through its own agent only, and the leftover's hooks change nothing
+on it. A session with no valid label may be a person's own, so look before
+acting.
 
 1. Find the session and note its `session_created`:
 
@@ -566,23 +573,63 @@ noted; afterwards spawn the id with `--reuse-finished`.
 
 ### A spawn refused as "left over from an earlier life"
 
-A `spawn` with a `--claude-instance-id` that has no row is refused with
-`ErrTmuxSessionConflict` ("left over from an earlier life") when a tmux
-session of this agent-director store still carries that id. Nothing was
-written. The error names each such session by name and session id. The
-spawn's trail record gives the socket, this store's id and the first
-session's id:
+`ErrTmuxSessionConflict` ("left over from an earlier life") comes in two
+cases:
+
+- A `spawn` with a `--claude-instance-id` that has no row, when a tmux
+  session of this agent-director store still carries that id. Nothing was
+  written. The error names each such session by name and session id.
+- A `spawn` whose `--tmux-session-name` is held by such a session. The
+  error names the session id and says "the new row was ended": the spawn
+  has already ended its row.
+
+The spawn's trail record gives the socket, this store's id, the session's
+id and its creation time (for the second case also `row_result`, and the
+record's `attach_command` and `end_command` are the commands of steps 3
+and 4):
 
 ```sh
-jq -c 'select(.event == "ad.launch.name_held" and .claude_instance_id == "<id>") | {tmux_socket, store_id, tmux_session_id, session_created}' ~/.agent-director/ad-trail.jsonl | tail -n 1
+jq -c 'select(.event == "ad.launch.name_held" and .claude_instance_id == "<id>") | {tmux_socket, store_id, tmux_session_id, session_created, row_result}' ~/.agent-director/ad-trail.jsonl | tail -n 1
 ```
 
 Handle each session as a leftover (steps 2 to 4 above; this store's id is
-the record's `store_id`), then spawn the id again: no row exists, so no
-reuse opt-in is needed. If the error says "and N more", find the others
-with the listing of step 1. The check before a spawn sees only this socket:
-it misses leftovers on another tmux server or socket, and sessions with no
-label.
+the record's `store_id`), then spawn the id again. In the first case no row
+exists, so no reuse opt-in is needed. In the second the row is `ended`, so
+spawn with `--reuse-finished`:
+
+```sh
+agent-director spawn --cwd <dir> --tmux-session-name <name> --claude-instance-id <id> --reuse-finished
+```
+
+If the error instead says the new row "stays pending" or "was left as it
+is", check the row with `agent-director get --claude-instance-id <id>`; if
+it is `pending`, follow the `pending` paragraph of the leftover item above
+before spawning with `--reuse-finished`.
+
+In the first case, if the error says "and N more", find the others with the
+listing of step 1. The check before a spawn sees only this socket: it misses
+leftovers on another tmux server or socket, and sessions with no label.
+
+When a held name's error says "no valid instance id", handle the session
+as in the leftover item (look first: it may be a person's own session).
+When it says "a different instance id", the session is another row's agent:
+do not end it; give this spawn a different `--tmux-session-name`. The
+spawn has already ended its own row, so spawning the same
+`--claude-instance-id` again also needs `--reuse-finished`.
+
+### A session of another agent-director store
+
+`ErrTmuxSessionConflict` ("another agent-director store"), or a label whose
+last field is not this store's id (compare it with the `store_id` of the
+`ad.launch.name_held` record): another store on the same tmux server (a
+test sandbox, a second `HOME`, a CI container using the host's socket) owns
+the session. Never end it from this store. Find which store it belongs to
+(its `HOME`) and stop or move that store's agents with that store's own
+agent-director, or give this store's agent a different session name:
+
+```sh
+agent-director spawn --cwd <dir> --tmux-session-name <other name> --claude-instance-id <id> --reuse-finished
+```
 
 ### An agent process that runs with no session or pane of its launch
 

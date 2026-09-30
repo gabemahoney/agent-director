@@ -138,14 +138,15 @@ func hasControlChar(id string) bool {
 // Spawn launches a tracked Claude Code instance inside a new tmux session.
 // The call returns the claude_instance_id and pre_trust (what the launch's
 // folder-trust pre-trust did: ok, skipped or failed; a failure never fails
-// the spawn) without waiting for the agent; the row is pending from its insert until the agent reports in (Claude Code's
-// SessionStart), then waiting. Use [Client.Status] or [Client.Get] to observe
-// progress. The session is labelled for this launch when it is created, and
-// the session-creating call is bounded by the create timeout. If it times
-// out, Spawn returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the
-// session may have been created and the new row stays pending; do not retry
-// until get shows the row ended or missing, since a retried spawn without an
-// explicit id would start a second agent.
+// the spawn) without waiting for the agent; the row is pending from its
+// insert until the agent reports in (Claude Code's SessionStart), then
+// waiting. Use [Client.Status] or [Client.Get] to observe progress. The
+// session is labelled for this launch when it is created, and the
+// session-creating call is bounded by the create timeout. If it times out,
+// Spawn returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may
+// have been created and the new row stays pending; do not retry until get
+// shows the row ended or missing, since a retried spawn without an explicit
+// id would start a second agent.
 //
 // With an explicit ClaudeInstanceID that has no row, Spawn first makes one
 // tmux lookup for a session of this agent-director store still labelled with
@@ -153,6 +154,19 @@ func hasControlChar(id string) bool {
 // ErrTmuxSessionConflict (CONFLICT: permanent until a human looks; see the
 // README's "Operator actions"), and nothing is written. A minted id is not
 // looked up.
+//
+// If the requested tmux session name is already held when the session is
+// created, Spawn ends its new row at once (get shows it ended unless the
+// error's description says it could not be) and returns
+// ErrTmuxSessionConflict naming the blocking session: its tmux id and whether
+// its label names this instance id. If that session vanished before it was
+// looked at the error is ErrTmuxSessionCreate, and if tmux could not be read
+// or run it is ErrTmuxUnresponsive or ErrTmuxNotAvailable. The blocking
+// session is never ended, read or typed into. A session of another row, or
+// of another agent-director store, is another agent and must not be ended; a
+// session left over from an earlier life of this id, or one with no valid
+// instance id, is for a human to end (README "Operator actions"), after
+// which the id is spawned again with reuse-finished (--reuse-finished).
 //
 // CLI: agent-director spawn
 //
