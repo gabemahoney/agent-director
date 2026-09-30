@@ -3,13 +3,15 @@ package main_test
 import "testing"
 
 // helpStdoutBytes is the measured byte count of `agent-director help` stdout
-// (trailing newline included) after the live-row sequence trim, the hook
-// description's subagent clause, spawn's held-name contract, find-missing's
-// process-liveness rewrite and SR-18.2's "not proof" sentences.
+// (trailing newline included) after SR-18.2's short form replaced the full
+// "not proof" sentence in five verb descriptions (decision-0930e).
 //
-// SR-20.6: this guard checks growth only. Deliberate help growth updates this
-// constant, to the newly measured count, in the same commit as the change.
-const helpStdoutBytes = 15395
+// SR-20.6: this guard checks growth only. Re-recording it downward, to the
+// newly measured count after a trim, is free. Re-recording it upward needs
+// the orchestrator's approval before the commit and a recorded reason in the
+// commit message (what grew, by how many bytes, why it cannot be shorter);
+// never to make a failing guard pass.
+const helpStdoutBytes = 15170
 
 // TestHelpSizeGuard fails when help stdout grows past the recorded
 // byte count plus 10% (SR-20.6).
@@ -23,7 +25,7 @@ func TestHelpSizeGuard(t *testing.T) {
 	t.Logf("help stdout %d bytes; recorded %d, limit %d", got, helpStdoutBytes, limit)
 	if got > limit {
 		t.Errorf("help stdout is %d bytes; recorded %d, limit %d (recorded + 10%%). "+
-			"Deliberate growth updates helpStdoutBytes in the same commit (SR-20.6).",
+			"Trim help; raising helpStdoutBytes needs the orchestrator's approval and a recorded reason (SR-20.6).",
 			got, helpStdoutBytes, limit)
 	}
 }

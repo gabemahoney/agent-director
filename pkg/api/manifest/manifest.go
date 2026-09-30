@@ -99,12 +99,21 @@ const liveRowSequence = "Live-row sequence (a pending row included): " +
 // docs/architecture.md.
 const liveRowSequencePointer = "To end a live row (pending included) and relaunch its id, follow the live-row sequence in kill's description."
 
+// missingNotProofShort is SR-18.2's short form (decision-0930e), carried by
+// the kill, resume, pause, expire and delete Descriptions in place of the
+// full sentence, since every verb Description reaches help and MCP. The full
+// sentence ("`missing` is the sweep's judgement on the evidence available to
+// it, not proof that the agent has exited") stays in find-missing's
+// Description, where missing is produced, and in the status/get state, list
+// spawns and find-missing ids result fields, which reach neither.
+const missingNotProofShort = "`missing` is not proof the agent exited (see find-missing)."
+
 // killDescription is kill's Description (SR-6.1, SR-1.7, SR-18.1, SR-18.2,
 // SR-18.7, SR-18.9; decision-0930b Q4), ending with the live-row sequence.
 const killDescription = "End the agent of a live row's current launch (pending included). " +
 	"kill finds the tmux session that carries the row's current launch label on the row's recorded tmux socket, ends the agent's pane and that session by their tmux ids, and succeeds only once the agent process is gone; otherwise it returns ErrTmuxKillFailed. kill_sent says whether a kill was sent. " +
 	"If no session of the launch is found, kill checks the agent process: gone, or none recorded, is success with kill_sent false and nothing sent; if it still runs and its pane is still shown in another session, kill ends that pane and checks the process; if no pane of it is found, ErrTmuxKillFailed with no kill sent. " +
-	"On a finished row (ended or missing) kill is a no-op success with kill_sent false and no tmux call; that is not verification that the agent exited. `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. " +
+	"On a finished row (ended or missing) kill is a no-op success with kill_sent false and no tmux call; that is not verification that the agent exited. " + missingNotProofShort + " " +
 	"kill never changes the row's state: find-missing marks the row once its agent process is gone. kill never signals a process itself; success means the agent process exited, not that every process it started did. " +
 	"On a pending row kill aborts only the current launch, and the row stays pending until find-missing marks it; a kill made before the launch created its session returns kill_sent false and does not stop the launch. kill never ends a session that an earlier launch left behind. " +
 	"Success is judged per call: kill succeeds when the agent process and every other process it found in the panes of the agent's session are gone. If ErrTmuxKillFailed named another process that outlived the kill (its pid is in the error), that process is not the agent and later calls do not track it: a retried kill checks only the agent process, so once the agent is gone it succeeds with kill_sent false whether or not that process still runs. A retry's success means only that the agent is gone; the named process needs a human (see \"Operator actions\" in the agent-director README). If the row finishes while kill waits and the agent outlives the wait, kill returns ErrTmuxKillFailed, and a retried kill is a finished-row no-op. " +
@@ -594,7 +603,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "resume",
-		Description: "Bring a finished (ended/missing) Spawn back to life via `claude --resume`. `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. Same claude_instance_id, fresh tmux session, same JSONL transcript. Before its launch, resume runs the same best-effort pre-trust as spawn for the row's working directory, unless the spawn that began the row's life turned it off with no-pre-trust; a pre-trust failure never fails the resume. Returns the claude_instance_id and pre_trust (ok, skipped or failed). Before it creates the session, resume moves the row to pending, keeping its session id and history, and writes parent_id, re-derived from the caller's AGENT_DIRECTOR_INSTANCE_ID env var on every resume. The row stays pending until the agent reports in (Claude Code's SessionStart), then becomes waiting. If the launch fails other than by timing out (ErrTmuxNotAvailable is ENVIRONMENT and ErrTmuxSessionCreate a LAUNCH FAILURE), resume restores the row to its prior ended or missing state; if the restore cannot be applied, the error says so. The session-creating call is bounded by the create timeout. If it times out, resume returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may have been created and the row stays pending; do not retry until get shows the row ended or missing, since a retried resume of the pending row is refused and changes nothing. A pending row (a launch in progress, including a resumed one) is refused with ErrSpawnNotResumable and nothing is written. A row whose instance id contains a control character is refused with ErrInternal before any tmux call or write, because its session could never be labelled. If the launch cannot be recorded in the store, resume returns ErrInternal and launches nothing.",
+		Description: "Bring a finished (ended/missing) Spawn back to life via `claude --resume`. " + missingNotProofShort + " Same claude_instance_id, fresh tmux session, same JSONL transcript. Before its launch, resume runs the same best-effort pre-trust as spawn for the row's working directory, unless the spawn that began the row's life turned it off with no-pre-trust; a pre-trust failure never fails the resume. Returns the claude_instance_id and pre_trust (ok, skipped or failed). Before it creates the session, resume moves the row to pending, keeping its session id and history, and writes parent_id, re-derived from the caller's AGENT_DIRECTOR_INSTANCE_ID env var on every resume. The row stays pending until the agent reports in (Claude Code's SessionStart), then becomes waiting. If the launch fails other than by timing out (ErrTmuxNotAvailable is ENVIRONMENT and ErrTmuxSessionCreate a LAUNCH FAILURE), resume restores the row to its prior ended or missing state; if the restore cannot be applied, the error says so. The session-creating call is bounded by the create timeout. If it times out, resume returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may have been created and the row stays pending; do not retry until get shows the row ended or missing, since a retried resume of the pending row is refused and changes nothing. A pending row (a launch in progress, including a resumed one) is refused with ErrSpawnNotResumable and nothing is written. A row whose instance id contains a control character is refused with ErrInternal before any tmux call or write, because its session could never be labelled. If the launch cannot be recorded in the store, resume returns ErrInternal and launches nothing.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -648,7 +657,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "expire",
-		Description: "Remove terminal-state rows (ended/missing) whose ended_at is older than the retention window. `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. Default window is config defaults.expire_retention_days; --older-than overrides. Does NOT touch tmux or JSONL transcripts.",
+		Description: "Remove terminal-state rows (ended/missing) whose ended_at is older than the retention window. " + missingNotProofShort + " Default window is config defaults.expire_retention_days; --older-than overrides. Does NOT touch tmux or JSONL transcripts.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -670,7 +679,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "delete",
-		Description: "Admin batch removal by claude_instance_id. Bypasses all guards. Does NOT touch tmux sessions or JSONL transcripts. Per-row result map records ok/error per id; the batch never aborts on a partial failure. `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited.",
+		Description: "Admin batch removal by claude_instance_id. Bypasses all guards. Does NOT touch tmux sessions or JSONL transcripts. Per-row result map records ok/error per id; the batch never aborts on a partial failure. " + missingNotProofShort,
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -865,7 +874,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "pause",
-		Description: "Politely shut down a waiting Spawn by sending `/exit` and waiting up to pause.timeout_seconds for the row to reach `ended`. One-shot — no caller-side polling. Terminal states (ended/missing) are no-op success. `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited.",
+		Description: "Politely shut down a waiting Spawn by sending `/exit` and waiting up to pause.timeout_seconds for the row to reach `ended`. One-shot — no caller-side polling. Terminal states (ended/missing) are no-op success. " + missingNotProofShort,
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{

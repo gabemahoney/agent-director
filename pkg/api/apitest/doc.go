@@ -104,8 +104,10 @@
 //     its liveness and same-environment rules with SR-18.7's two
 //     consequences, whose phrases DescKillManifest shares;
 //     DescFindMissingField, its ids and unverified_ids result fields;
-//     DescMissingNotProof, SR-18.2's statement for any text that describes
-//     missing; and FindMissingOwnText, which cuts find-missing's own text
+//     DescMissingNotProof, SR-18.2's full statement for a text that states
+//     it in full, and DescMissingNotProofShort, its short form for the
+//     kill, resume, pause, expire and delete descriptions (decision-0930e);
+//     and FindMissingOwnText, which cuts find-missing's own text
 //     before the pointer).
 //
 // Rules for tests (the same as docs/architecture.md, "apitest Seed* factory

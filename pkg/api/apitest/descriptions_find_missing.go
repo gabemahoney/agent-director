@@ -12,7 +12,8 @@ import (
 // (DescFindMissingGrace, Epic 12), its liveness and same-environment rules
 // (DescFindMissingManifest), its ids and unverified_ids result fields
 // (DescFindMissingField), SR-18.2's "not proof" statement for any text that
-// describes missing (DescMissingNotProof), and FindMissingOwnText, which cuts
+// describes missing, in full (DescMissingNotProof) or in its short form
+// (DescMissingNotProofShort), and FindMissingOwnText, which cuts
 // the description down to the text before SR-18.6's pointer to the live-row
 // sequence (LiveRowPointer), so a pin checks find-missing's own sentences
 // only.
@@ -122,24 +123,56 @@ func DescFindMissingField(f FindMissingField) DescCase {
 	panic("apitest: DescFindMissingField: not an id-list field of find-missing: " + string(f))
 }
 
-// DescMissingNotProof is SR-18.2's statement for any text that describes
-// missing (a manifest description or result field, a Go doc): missing is the
-// sweep's judgement on the evidence available to it, not proof that the agent
-// has exited. Its must-not phrases are claims that present ended or missing
-// as dead or safe to delete; negations ("neither ended nor missing means that
-// the agent is dead") pass. Check it with AssertAgentTextCase.
+// missingNotProofFull is SR-18.2's full statement, by its two key phrases.
+var missingNotProofFull = []string{
+	"is the sweep's judgement on the evidence available to it",
+	"not proof that the agent has exited",
+}
+
+// missingNotProofShort is SR-18.2's short form (decision-0930e), verbatim,
+// and missingNotProofShortMark the phrase that marks a text as carrying it,
+// reworded or not.
+const (
+	missingNotProofShort     = "`missing` is not proof the agent exited (see find-missing)."
+	missingNotProofShortMark = "is not proof the agent exited"
+)
+
+// missingNotProofClaims are the claims that present ended or missing as dead
+// or safe to delete, which no text describing missing may make.
+var missingNotProofClaims = []string{
+	"means the agent is dead", "means the agent has exited", "means the agent exited",
+	"is proof that", "proves that the agent", "confirms that the agent",
+	"can safely be deleted", "can safely delete", "so it is safe to delete",
+	"so the row is safe to delete",
+}
+
+// DescMissingNotProof is SR-18.2's full statement for a text that states it
+// in full (find-missing's Description, the status/get state, list spawns and
+// find-missing ids result fields, a Go doc): missing is the sweep's judgement
+// on the evidence available to it, not proof that the agent has exited. Such
+// a text must not carry the short form (DescMissingNotProofShort) instead or
+// as well. Its other must-not phrases are claims that present ended or
+// missing as dead or safe to delete; negations ("neither ended nor missing
+// means that the agent is dead") pass. Check it with AssertAgentTextCase.
 func DescMissingNotProof() DescCase {
 	return DescCase{
-		Name: "SR-18.2, missing is not proof that the agent exited",
-		Require: []string{
-			"is the sweep's judgement on the evidence available to it",
-			"not proof that the agent has exited",
-		},
-		MustNot: []string{
-			"means the agent is dead", "means the agent has exited", "means the agent exited",
-			"is proof that", "proves that the agent", "confirms that the agent",
-			"can safely be deleted", "can safely delete", "so it is safe to delete",
-			"so the row is safe to delete",
-		},
+		Name:    "SR-18.2, missing is not proof that the agent exited",
+		Require: append([]string(nil), missingNotProofFull...),
+		MustNot: append([]string{missingNotProofShortMark}, missingNotProofClaims...),
+	}
+}
+
+// DescMissingNotProofShort is SR-18.2's short form (decision-0930e) for the
+// verb Descriptions that reach help and MCP but do not produce missing (kill,
+// resume, pause, expire, delete): "`missing` is not proof the agent exited
+// (see find-missing).", verbatim. Such a text must not carry the full
+// statement (DescMissingNotProof) instead or as well, nor the claims that
+// present ended or missing as dead or safe to delete. Check it with
+// AssertAgentTextCase.
+func DescMissingNotProofShort() DescCase {
+	return DescCase{
+		Name:    "SR-18.2 short form, missing is not proof the agent exited",
+		Require: []string{missingNotProofShort},
+		MustNot: append(append([]string(nil), missingNotProofFull...), missingNotProofClaims...),
 	}
 }

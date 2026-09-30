@@ -8,24 +8,26 @@ import (
 )
 
 // notProofSite is one manifest text that describes missing (SR-18.2): a verb's
-// Description (field empty) or one of its result fields.
+// Description (field empty) or one of its result fields; short marks a site
+// that carries the short form (decision-0930e) instead of the full sentence.
 type notProofSite struct {
 	verb, field string
+	short       bool
 }
 
 // notProofSites lists SR-18.2's manifest sites, plus find-missing's ids field,
-// which carries the same sentence.
+// which carries the full sentence.
 var notProofSites = []notProofSite{
 	{verb: "status", field: "state"},
 	{verb: "get", field: "state"},
 	{verb: "list", field: "spawns"},
-	{verb: "kill"},
-	{verb: "resume"},
-	{verb: "pause"},
+	{verb: "kill", short: true},
+	{verb: "resume", short: true},
+	{verb: "pause", short: true},
 	{verb: "find-missing"},
 	{verb: "find-missing", field: "ids"},
-	{verb: "expire"},
-	{verb: "delete"},
+	{verb: "expire", short: true},
+	{verb: "delete", short: true},
 }
 
 // notProofTexts returns the site's text keyed by source ("manifest",
@@ -47,7 +49,7 @@ func notProofTexts(t *testing.T, surface surfaceDoc, s notProofSite) map[string]
 }
 
 // TestManifestMissingNotProof pins SR-18.2 (AC-DOC-02) on every manifest site in
-// both surfaces: missing is a judgement, not proof of exit, never dead or safe to delete.
+// both surfaces: the full sentence or, at the short sites, the short form only.
 func TestManifestMissingNotProof(t *testing.T) {
 	_, surface := readSurfaceJSON(t)
 	for _, s := range notProofSites {
@@ -56,9 +58,13 @@ func TestManifestMissingNotProof(t *testing.T) {
 		if s.field != "" {
 			what = "result field " + s.field
 		}
+		c := apitest.DescMissingNotProof()
+		if s.short {
+			c = apitest.DescMissingNotProofShort()
+		}
 		t.Run(name, func(t *testing.T) {
 			for source, text := range notProofTexts(t, surface, s) {
-				apitest.AssertAgentTextCase(t, source+": "+s.verb+" "+what, text, apitest.DescMissingNotProof())
+				apitest.AssertAgentTextCase(t, source+": "+s.verb+" "+what, text, c)
 			}
 		})
 	}
