@@ -54,17 +54,17 @@ still holds: nothing in `internal/` imports `pkg/api`.
 
 | Path | Responsibility | Allowed imports | Prohibited imports |
 | --- | --- | --- | --- |
-| `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`; every store-backed verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. **DB-free exceptions:** `help`, `--help`, `version`, the no-verb run (no verb after the global flags, so a run with only global flags counts), and `trail-emit` are dispatched BEFORE `setupClient` so they never open or create a store (SR-4.1/4.2, b.8dr); help/version run against a zero-value `Client` and consult no store. The no-verb run prints help, except that when stdin is not a terminal and carries a hook payload (a Claude Code that does not run exec-form hooks, SR-22.9) it prints nothing, exits 0 and writes one `ad.hook.ignored` `no_exec_form`, still with no store and no config load; the trail file is the only thing it may create (`noVerbHookIgnored` in `noverb.go`, which reads stdin with a 1 MiB cap and a 1 s deadline and hands the bytes to `hook.HandleNoExecForm`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `help`, `--help` and `version` never read stdin. **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. `runHook` builds the `hook.HandleConfig`, wiring `Now: time.Now` and `PendingGrace: cfg.Tmux.EffectivePendingGrace()` (the bound of SessionStart's wait for its launch's identity write, SR-22.9, SR-13.4) beside the parent-process readers and the production `PollClock`. | stdlib; `pkg/api`; `pkg/api/errnames`; `internal/hook`; `internal/probe` (the hook's parent-process readers, `hookParentProc`, shared by `runHook` and the no-verb run); `golang.org/x/sys/unix` (the no-verb run's terminal check, `isTerminal`, with the per-OS `ioctlReadTermios` in `noverb_linux.go` / `noverb_darwin.go`); `internal/config` and `internal/store` (error sentinels only) in `setupClient`; `internal/config` in `runHook` and `newHookLogger`. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook`, `newHookLogger`, and `setupClient`'s logger bootstrap. |
+| `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`; every store-backed verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. **DB-free exceptions:** `help`, `--help`, `version`, the no-verb run (no verb after the global flags, so a run with only global flags counts), and `trail-emit` are dispatched BEFORE `setupClient` so they never open or create a store (SR-4.1/4.2, b.8dr); help/version run against a zero-value `Client` and consult no store. The no-verb run prints help, except that when stdin is not a terminal and carries a hook payload (a Claude Code that does not run exec-form hooks, SR-22.9) it prints nothing, exits 0 and writes one `ad.hook.ignored` `no_exec_form`, still with no store and no config load; the trail file is the only thing it may create (`noVerbHookIgnored` in `noverb.go`, which reads stdin with a 1 MiB cap and a 1 s deadline and hands the bytes to `hook.HandleNoExecForm`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `help`, `--help` and `version` never read stdin. **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. `runHook` builds the `hook.HandleConfig`, wiring `Now: time.Now` and `PendingGrace: cfg.Tmux.EffectivePendingGrace()` (the grace bound of SessionStart's wait for its launch's identity write, SR-22.9, SR-13.4) beside the parent-process readers and the production `PollClock`. | stdlib; `pkg/api`; `pkg/api/errnames`; `internal/hook`; `internal/probe` (the hook's parent-process readers, `hookParentProc`, shared by `runHook` and the no-verb run); `golang.org/x/sys/unix` (the no-verb run's terminal check, `isTerminal`, with the per-OS `ioctlReadTermios` in `noverb_linux.go` / `noverb_darwin.go`); `internal/config` and `internal/store` (error sentinels only) in `setupClient`; `internal/config` in `runHook` and `newHookLogger`. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook`, `newHookLogger`, and `setupClient`'s logger bootstrap. |
 | `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, etc.), params/result types, and error sentinels (the seven tmux sentinels of SR-1.1 are all re-exported in `aliases.go`). Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director` and `internal/mcp`. **`kill` seams** (`kill.go`): `KillStore` (`GetSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`; `*store.Store` satisfies it), `KillTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `KillPane`, `KillSessionID`; `TmuxClient` satisfies it) and the start-time reader `ProcChecker`; `Kill` also takes the three `[tmux]` durations, the clock and the sleep, and has no logger. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the eight socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the three name-based ones (`HasSession`, `SendKeys`, `CapturePane`); `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`; it also re-exports the start-time reader interface as `ProcChecker` (`= tmux.ProcChecker`). The Client holds its clock (`time.Now`), its sleep (`time.Sleep`, the pause of `kill`'s process wait) and its start-time reader (`probe.NewProcChecker()`), all set in `New`; plain spawn uses the clock and reader for the launch start and the identity write, and `kill` uses all three for its lookup, adoption and process wait; `find-missing` measures the pending grace period on the same clock, with the value from `EffectivePendingGrace`. The label scan of a plain spawn lives in `spawn_scan.go` (see [Launch identity](#launch-identity)). `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`. | Direct `database/sql`; raw SQL strings; MCP framing. |
 | `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v5; see "Schema v5" below), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
-| `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). The pending grace period bounds both `find-missing`'s hands-off window for a `pending` row and a SessionStart hook's wait for its launch's identity write, each measured from the launch start (SR-13.4, SR-22.9); it has no maximum. Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default; a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
+| `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). The pending grace period bounds both `find-missing`'s hands-off window for a `pending` row and a SessionStart hook's wait for its launch's identity write, each measured from the launch start (SR-13.4, SR-22.9); it has no maximum. The hook's wait is also capped at 540 s after it began (`sessionStartWaitCap` in `internal/hook`; WD 2026-09-30c), so a grace above 540 s lengthens only `find-missing`'s window, which is unchanged. Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default; a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
 | `pkg/api/apitest` | Test seed helpers extracted from `pkg/api/*_test.go` for cross-package importing. Provides `Seed*` functions (`SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`) that set up fixture DB rows and filesystem state for `test/envelope-diff` and future Epic 4/5 smoke tests. Also provides the config writer `WriteTmuxConfig` (settings built with `TmuxInt`, or `TmuxFloat` / `TmuxString` / `TmuxBool` for malformed values, keyed by `config.TmuxKey`): `pkg/api`, CLI and MCP tests write `[tmux]` settings only through it, so no test outside `internal/config` spells a `[tmux]` key (rules: Test Harness, "apitest `[tmux]` config writer"). Provides `SeedSpawn`'s trailing `SpawnOption`s for the v5 columns, timestamps and raw text (`WithTmuxSessionName`, `WithStartedAt` / `WithEndedAt`, `WithLaunchStartedAt`, `WithRawLaunchStartedAt`, `WithNoLaunchStartedAt`, `WithLifeNumber`, `WithNoPreTrust`, `WithRawNoPreTrust`, `WithLaunchIdentity`, `WithTmuxSocket`, `WithNoLaunchToken`, `WithRawLabels`, `WithRawClaudeArgs`, `WithRawExtraEnv`) and archived session history (`WithSessionHistory`), the default socket `TestSocket`, the default pane `TestPaneID` / `TestPanePID` that `SeedSpawn` gives a live row (both re-exported from `internal/testsupport/launchfix`; a terminal row gets no pane), the store-read helper `ReadSpawnColumns`, the every-life history-read helper `ReadSessionHistoryAllLives`, and the store-id helpers `ReadStoreID`, `SeedStoreID` and `OtherStoreID` (with `ErrNoStoreID`): new tests seed rows and read columns no verb shows only through these (rules: Test Harness, "apitest Seed* factory contract"). To place a seeded row's own labelled session in the Recorder, tests use `tmuxfix.Recorder.SeedRowSession` (in `internal/testsupport/tmuxfix`, not this package). Provides the shared description helper (`descriptions.go`: `AssertDescription`, `AssertAgentText`, `AssertAgentTextCase` and the `Desc*` cases; `descriptions_resume.go`: resume's `DescResume*` cases and `DescCase.AfterResumeRestore`; `descriptions_lookup.go`: lookup's `DescConflictingLabels` and `DescDifferentServer`; `descriptions_kill.go`: kill's `DescKill*`, `DescSocketDirNothingDone` and `DescUnusableName*` cases and `DescCase.AfterKillSent`; `descriptions_live_row.go`: the live-row sequence's short form and pointer, `DescLiveRowSequence`, `DescLiveRowPointer`, `LiveRowPointer`, `LiveRowSequenceCount` and `LiveRowPointerCount`; `descriptions_find_missing.go`: `DescFindMissingGrace` and `FindMissingOwnText`): every Go test that checks an error or manifest description for required phrases or forbidden forms uses it (rules: Test Harness, "apitest description helper"). Non-test package (regular `.go` files) so it can be imported by harnesses outside `pkg/api`. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `internal/tmux` (the `tmux.Call` names the description cases use); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
 | `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. The `Catalog` is consumed by `cmd/agent-director`'s envelope writer and `internal/mcp`'s `classifyDispatchError`. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
 | `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. `classifyDispatchError` delegates to `errnames.Classify`. | stdlib; `pkg/api`; `pkg/api/manifest`; `pkg/api/errnames`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
 | `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
 | `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). `ApplyDefaults` makes the collision pre-check's one `SpawnState` read and returns an `IDCheck`. Builds env maps and synthesizes `--settings` JSON. Plain spawn's `Launch` resolves the launch socket and mints the launch token (`launchid.go`: `ResolveLaunchSocket`, `ResolveScanSocket`, `NewLaunchToken`, and `ResolveQuerySocket` for a query on a row that records no socket), inserts the `pending` row with launch start, token and socket, creates and labels the session through the shared create-and-label step (`createlabel.go`: `LaunchTmux`, `CreateRequest`, `CreateAndLabel`, `CreateOutcome` / `CreateKind`), maps its failures in one place (`launch_errors.go`: `plainSpawnCreateError`, built from the exported description builders shared by every launch verb, `TmuxUnavailableError` (also the label scan's), `LaunchTimeoutError`, `UnlabelledSessionError`, `CreateFailedError` and the row sentence `RowStaysPending`) and makes the conditional identity write (`RecordLaunchIdentity`, shared with resume). Every launch pre-trusts its folder through the one shared step `PreTrust` (`pretrust.go`), which plain spawn runs before its insert and resume before its move to `pending`; see [Workspace-trust pre-write](#workspace-trust-pre-write). Resume's launch uses the same pieces: `ResolveRowLaunchSocket` (the row's recorded socket), `ComposeRelaunch` (the `CreateRequest`, with no tmux call or write) and `Relaunch` (`CreateAndLabel` on that request). The clock and the start-time reader are passed in. See [Launch identity](#launch-identity). | stdlib; `internal/config`; `internal/store`; `internal/tmux`; `github.com/google/uuid` for UUID4 minting. | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
 | `internal/tmux` | Thin client over the tmux binary, built only by `New(binary, Timeouts)` (`""` = tmux on `PATH`). **Phase 1 call set (SR-2.1, Appendix F.1)**, every call taking the socket: `Lookup` (the one-invocation lookup: session listing with labels plus the three `@ad_owner` scope reads), `ListPanes` (`list-panes -a`), `KillPane` (by pane id), `KillSessionID` (by session id), `SendKeysPane` (by pane id: the text call `send-keys -t <pane id> -l -- <text>`, then an optional separate `send-keys -t <pane id> Enter`; the `--` makes a text starting with `-` literal, never read as a send-keys flag; a text ending in `;` is sent with that `;` escaped as `\;`, because tmux reads an argument-final `;` as a command separator even after `--` — the escape is `escapeFinalSemicolon`, used only by the text call), `CapturePaneID` (by pane id), `SetLabel` (label by id: the session label by session id and the pane label by pane id) and `NewSession` (the create with its chained `@ad_owner` and `@ad_pane` labels). **Label form (SR-3.4, SR-3.5):** `ad1 <token> <$N> <instance id> <store id>`, five fields. The store id is the writing store's `store_meta.store_id`, which callers pass from `(*store.Store).StoreID()`; it is the last field, so the instance id is everything between the third and the last space and may contain spaces. `NewSession` and `SetLabel` both take the token, the instance id and the store id; the chain doubles `#` only inside the instance id. **Pane label (SR-2.1, SR-3.5):** every created pane carries the per-pane user option `@ad_pane` = `<token> <pane id>`, so a launch whose create reply was lost can later find its own pane by token, whatever the base-index or window layout. The create sets it with a second chained step, `; set-option -p -F -t =<name>: @ad_pane '<token> #{pane_id}'`, after the `@ad_owner` step; each `;` is its own argv element, and a name for which `NeedsLabelByID` holds gets neither chained step. A failure of either chained step is the create's `FailLabel` (tmux stops the chain at the first failing step). `SetLabel(socket, sessionID, paneID, token, instanceID, storeID)` sets both labels in one invocation, `set-option -t <$N> @ad_owner '<label>' ; set-option -p -t <%N> @ad_pane '<token> <%N>'`, with the session and pane ids from the create reply; a failure may leave the session labelled and its pane not. Neither label value ends in `;`. Only the new session's one pane is labelled: a pane split from it later has no value. **Pane listing:** `ListPanes` reads `#{@ad_pane}` as the sixth and last field, the value being everything after the fifth tab, so a tab inside it cannot shift the other fields. `Pane.AdPane` is the token only when the value is exactly `<16 lowercase hex token> <pane id>` and that pane id equals the line's own `%N` (`classifyPaneLabel`); anything else gives `""`, so a window, session, global or server value borrowed through the format, which names another pane or none, never counts (the scope guard of SR-3.6). Caveat: on tmux 3.3a a server-scope `@ad_pane` (`set-option -s`) is listed on every pane in place of its own value, so while one exists only the pane that value names can report a token and every other pane reads `""`; no other pane is matched, but a pane reading `""` then does not show that its label is gone. The raw value never leaves the client, and a malformed listing's `CallError.FirstLine` is its first line cut before the pane label field (`paneListingFirstLine`). The lookup does not read `@ad_pane`. `kill`'s adoption of a lost create reply (SR-3.6) is its first reader; it also exists for the leftover-pane check (SR-3.7) and the no-pane row check (SR-11.3). A value in any other form, a four-field one included, parses as no label (`LabelNone`), except that a four-field value whose instance id ends in a space and 16 lowercase hex reads as a shorter id plus that word as its store id; and `Label.StoreID` is set only on a valid label. Typed results and failures: `Call`, `Failure`, `CallError`, `LookupAnswer`, `Session`, `Label` / `LabelKind`, `CreateReply`, `Pane`, `Timeouts`. Mechanics: every call runs `-u -S <socket>` first; targets are ids only (never a name or pattern); each call class (query, action, create) has its own timeout, plus the pipe-close wait (`Timeouts.WaitDelay`); data is parsed only from standard output of an exit-0 call; replies are recognised only from the first line of standard error; the client's environment has every `AGENT_DIRECTOR_*` variable removed. Socket-taking calls fail only with `*CallError`. Labels reach callers only classified (the raw value never leaves the client) and recognised replies only as a `Failure`; the one exception is an unrecognised reply, whose first line (trimmed, at most 200 bytes) is carried in `CallError.FirstLine`. **Socket resolution (RN-5):** `ResolveSocket(create)` resolves the socket as tmux does (`TMUX`, then `TMUX_TMPDIR`, then `/tmp`, with tmux's per-user directory checks) and `EnsureSocketDir(socket)` creates only a missing per-user directory; refusals are `*SocketDirError` (with `SocketDirReason`), matching `ErrTmuxNotAvailable`. **Must use** `tmux.NeedsLabelByID(name)` to decide whether a session name (one containing `$` or `\`) must be labelled by id rather than by the chain; never re-implement that test. The client receives its timeouts and pipe-close wait from `pkg/api` at construction, never from `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); the package defines no defaults. The runner seam types (`Invocation`, `RunStatus`, `RunResult`, `Runner`) are exported for replay tests; tests install a runner only through the test-only `NewWithRunner` in `export_test.go`. The name-based methods (`HasSession`, `SendKeys`, `CapturePane`) keep their contracts until their last verb moves to the socket-taking calls; the name-based kill is removed (`kill` targets ids only). `HasSession` matches by prefix: `resume` still calls it until it moves to the lookup, and no verb may newly adopt it. `StripANSI` post-processes captures. **Shared lookup (SR-3.3, SR-3.4, SR-3.10, Appendix F.2):** `Lookup` / `Classify` in `lookup.go`, `lookup_class.go`, `lookup_holder.go` and `lookup_server.go` turn one lookup answer and a row's `Launch` into a verdict; see [Shared tmux lookup](#shared-tmux-lookup). Beside it: `unusable.go` (the unusable-name guard `Unusable`, and `RewrittenIn`), `agent_process.go` (agent-process selection `SelectAgentProcess`, judgement `JudgeProcess` and `KnownStartTime`), `pane_token.go` (`PaneByToken`, a pane found by its `@ad_pane` token) and `sweep.go` (the multi-socket sweep `Sweep`, built by `NewSweep`, under one tmux budget). | stdlib (`bytes`, `context`, `errors`, `fmt`, `io/fs`, `os`, `os/exec`, `path/filepath`, `regexp`, `slices`, `sort`, `strconv`, `strings`, `syscall`, `time`, `unicode`, `unicode/utf8`). | `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); `internal/probe` (the lookup's `ProcChecker` is satisfied structurally); template and store packages; shell processes (`/bin/sh`); anything other than direct `exec.Command`. |
-| `internal/hook` | Reads payload JSON from stdin, classifies per SRD §5.2, and writes the row only through the gated store writes: a hook applies only when its parent process (`getppid()` and that pid's start time, captured once at entry) is the row's recorded pane process; otherwise it changes nothing and writes one `ad.hook.ignored` (SR-22.9; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). A subagent's or in-process teammate's SessionStart or SessionEnd (non-empty `agent_id`) is decided from the payload before any write and ignored as `subagent_event`. A SessionStart that arrives before its launch's identity write waits for it, bounded by the pending grace period, re-reading the row every 250 ms on the injected clock, before its final gated write (`recordSessionStart`, `waitForLaunchIdentity` in `handler.go`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `HandleNoExecForm` (`noexec.go`) is the no-verb run's side: it takes the raw stdin bytes, writes `ad.hook.ignored` `no_exec_form` when they are a hook payload, and opens no store. Exits 0 (state-tracking fail-open). | stdlib; `internal/store`; `internal/trail`; `internal/config` (the `config.Relay` settings type only; the cmd-side wrapper loads config); `github.com/google/uuid`. The parent-process readers arrive as `HandleConfig.ParentPID` / `ParentProc`, and the wait's clock and grace period as `HandleConfig.Now` and `HandleConfig.PendingGrace` (a `time.Duration`, so the package reads no `[tmux]` setting), all wired by `cmd/agent-director`; the wait sleeps on `HandleConfig.Clock` (the relay poll's `PollClock`). | `internal/tmux`; `internal/spawn`; `internal/probe` (no tmux call and no ancestry walk on the hook path). |
+| `internal/hook` | Reads payload JSON from stdin, classifies per SRD §5.2, and writes the row only through the gated store writes: a hook applies only when its parent process (`getppid()` and that pid's start time, captured once at entry) is the row's recorded pane process; otherwise it changes nothing and writes one `ad.hook.ignored` (SR-22.9; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). A subagent's or in-process teammate's SessionStart or SessionEnd (non-empty `agent_id`) is decided from the payload before any write and ignored as `subagent_event`. A SessionStart that arrives before its launch's identity write waits for it until the launch start plus the pending grace period or 540 s after it began waiting (`sessionStartWaitCap`), whichever comes first, re-reading the row every 250 ms on the injected clock, before its final gated write (`recordSessionStart`, `waitForLaunchIdentity` in `handler.go`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `HandleNoExecForm` (`noexec.go`) is the no-verb run's side: it takes the raw stdin bytes, writes `ad.hook.ignored` `no_exec_form` when they are a hook payload, and opens no store. Exits 0 (state-tracking fail-open). | stdlib; `internal/store`; `internal/trail`; `internal/config` (the `config.Relay` settings type only; the cmd-side wrapper loads config); `github.com/google/uuid`. The parent-process readers arrive as `HandleConfig.ParentPID` / `ParentProc`, and the wait's clock and grace period as `HandleConfig.Now` and `HandleConfig.PendingGrace` (a `time.Duration`, so the package reads no `[tmux]` setting), all wired by `cmd/agent-director`; the wait sleeps on `HandleConfig.Clock` (the relay poll's `PollClock`). | `internal/tmux`; `internal/spawn`; `internal/probe` (no tmux call and no ancestry walk on the hook path). |
 
 ### `[tmux]` timing settings
 
@@ -74,9 +74,12 @@ sweep tmux budget and `kill`'s exit wait) is a key of the `[tmux]` table,
 held in `config.Config.Tmux`. The pending grace period has two users
 (SR-13.4): `find-missing` leaves a `pending` row inside it unjudged, and a
 SessionStart hook that arrives before its launch's identity write waits for
-that write until the launch start plus the grace period (SR-22.9;
-`runHook` passes `EffectivePendingGrace` to the hook as
-`HandleConfig.PendingGrace`). `internal/config` is the single source of
+that write until the launch start plus the grace period or 540 s after it
+began waiting, whichever comes first (SR-22.9; WD 2026-09-30c; `runHook`
+passes `EffectivePendingGrace` to the hook as `HandleConfig.PendingGrace`).
+The 540 s cap is `sessionStartWaitCap` in `internal/hook`, not a `[tmux]`
+setting; `pending_grace_seconds` keeps no maximum, and a grace above 540 s
+lengthens only `find-missing`'s window. `internal/config` is the single source of
 truth for them, following the `Relay.EffectiveTimeoutSeconds` pattern:
 
 - **Read a value only through its `config.Tmux` accessor**
@@ -1186,8 +1189,9 @@ sentinel `0.0.0-dev` end-to-end.
 
 When the CLI's `spawn` verb writes hook entries into the spawned Claude
 session's `--settings`, every state-tracking entry is in exec form
-(SR-22.9): `{"type":"command","command":"<bin>","args":["hook"]}`.
-`command` is the program itself, an absolute, symlink-resolved path
+(SR-22.9): `{"type":"command","command":"<bin>","args":["hook"]}`, plus an
+inner `timeout` on the `SessionStart` entry and the two relay entries (see
+"Emitted per-hook relay timeout" below). `command` is the program itself, an absolute, symlink-resolved path
 computed via `os.Executable()` followed by `filepath.EvalSymlinks()`
 (`executablePath` in `internal/spawn/settings.go`), written verbatim and
 never quoted, because it is a path and not shell text. `args` is
@@ -1532,7 +1536,8 @@ pending  ──spawn() inserts the row, then launches its tmux session
   │
   ▼   SessionStart hook fires (one that arrives before the launch's
   │   identity write first waits for it, at most until the launch start
-  │   plus the pending grace period)
+  │   plus the pending grace period or 540 s after it began waiting,
+  │   whichever comes first)
 waiting  ◄─── Stop
   │           (soft refreshes only, no transition: SessionEnd reason=clear|compact, Notification)
   │
@@ -1623,8 +1628,8 @@ State-tracking hook writes are fail-open: any internal failure logs and
 exits 0 (SRD §3.2). A missed UPSERT never blocks Claude. The one
 deliberate delay is SessionStart's bounded wait for its launch's identity
 write: it can hold the hook, and so the agent's first response, until the
-launch start plus the pending grace period; the hook still exits 0 with
-empty stdout.
+launch start plus the pending grace period or 540 s after the wait began,
+whichever comes first; the hook still exits 0 with empty stdout.
 
 ### Hooks move a row only for its own agent
 
@@ -1776,20 +1781,23 @@ So `recordSessionStart` (`internal/hook/handler.go`) runs in three steps:
    `HandleConfig.PendingGrace` (`store.InsidePendingGrace`). A nil `Now` or a
    grace of zero or less never waits. While it waits it sleeps on
    `HandleConfig.Clock` (`DefaultPollClock` when nil) for at most
-   `sessionStartWaitInterval` (250 ms), never past the bound, and re-reads
-   the row with `GetSpawn` only, a read that never blocks the identity
-   write. It ends when a pane is recorded, the state or `row_version`
-   changes, the row is no longer inside its grace period (the bound), the
-   row is gone, `ctx` is cancelled, or a read fails (logged; fail-open). It
-   writes nothing.
+   `sessionStartWaitInterval` (250 ms), never past either bound, and
+   re-reads the row with `GetSpawn` only, a read that never blocks the
+   identity write. It ends when a pane is recorded, the state or
+   `row_version` changes, the row is no longer inside its grace period (the
+   grace bound), `sessionStartWaitCap` (540 s) has passed since the wait
+   began (the cap; WD 2026-09-30c), the row is gone, `ctx` is cancelled, or
+   a read fails (logged; fail-open). The wait thus ends at the earlier of
+   the grace bound and the cap, whatever the configured grace. It writes
+   nothing.
 3. After a wait, `writeSessionStart` once more with the snapshot it reads
    then. That write's result is the hook's: applied when the pane now
    recorded is the hook's parent (`waiting`, `ad.hook.fired`
    `upsert_outcome` `updated`); `pid_mismatch` for a leftover or stray that
-   waited; `no_pane_recorded` when the row still records no pane at the
+   waited; `no_pane_recorded` when the row still records no pane at either
    bound; no record when the row is gone. Because this last gated write, not
    the wait, decides, an identity written between the last re-read and the
-   bound still applies.
+   bound (grace bound or cap) still applies.
 
 So SessionStart writes `no_pane_recorded` only after its bounded wait, and
 nothing is logged while it waits. Only SessionStart waits: Claude Code sends
@@ -1799,6 +1807,20 @@ SessionStart (`subagent_event`) returns before this path and never waits. The
 wait makes no tmux call and adds no column. The grace period is the one
 `find-missing` uses, from `config.Tmux.EffectivePendingGrace` through
 `runHook`; `internal/hook` never reads `[tmux]` itself.
+
+**The cap and the hook timeout (WD 2026-09-30c).** `sessionStartWaitCap`
+(540 s, `internal/hook/handler.go`) always stays below the `"timeout": 600`
+that the synthesised settings state on the SessionStart `agent-director
+hook` entry (`sessionStartHookTimeoutSeconds`,
+`internal/spawn/settings.go`; see "Emitted per-hook relay timeout" in the
+spawn pipeline section). So the hook always ends its
+own wait, and writes its `no_pane_recorded`, before Claude Code could
+kill it, whatever the configured grace and whatever a clock step or a
+launch start in the future does. Cap < timeout is stated in the two
+constants' comments and here only: the packages do not import each
+other, and each value is pinned once in its own package's tests
+(`hook.SessionStartWaitCap` through `internal/hook/export_test.go`).
+Changing either value means checking the other.
 
 **Must use:** SessionStart's wait for its launch's identity write, and any
 new hook wait bounded by the pending grace period, sleeps on
@@ -1810,15 +1832,33 @@ it sleeps on its `PollClock` and reads its deadline through `nowFunc`
 (`time.Now`). Tests drive the SessionStart wait with a virtual clock whose
 `Sleep` advances `Now` (`hookConfig` in
 `internal/hook/hook_parent_fakes_test.go` wires one, with the default grace,
-by default). `waitForLaunchIdentity` caps its re-reads at
-⌊(bound − now at the start) / 250 ms⌋ + 1, fixed from the time left when the
-wait begins. With a clock that advances steadily the cap never binds. It
-binds in two cases: a clock whose `Now` never advances (a frozen test
-clock), and a wall-clock step back during the wait. The bound comes from
-`time.UnixMilli`, which carries no monotonic reading, so `bound.Sub(Now())`
-and `store.InsidePendingGrace` compare wall-clock times; after a step back
-during the wait they report more time left, and the cap ends the wait at
-about the time left at its start.
+by default). The wait has one budget, fixed when it begins:
+min(grace bound − `Now` at the start, `sessionStartWaitCap`).
+
+- **Elapsed time comes from `HandleConfig.Now`.** The cap is measured as
+  `Now` at each turn minus `Now` at the start (`capEnd` is the start
+  reading plus the cap). `runHook` wires `time.Now` as is, whose readings
+  carry Go's monotonic clock reading, so that difference is monotonic and
+  no wall-clock step moves it; production wiring must keep that reading
+  and never pass `Now`'s value through `.UTC`, `.Local`, `.Round(0)`, `.Truncate`
+  or `.In`, which strip it. In tests the difference of two virtual-clock
+  readings is the virtual elapsed time, whether the clock was seeded with
+  `time.Now()` (`hookConfig`) or with `time.UnixMilli` (the wait tests'
+  `runSessionStartWait`), since `Sleep` advances both readings alike.
+- **The grace bound is wall clock.** It comes from `time.UnixMilli` (the
+  launch start plus the grace), which carries no monotonic reading, so
+  `bound.Sub(Now())` and `store.InsidePendingGrace` compare wall-clock
+  times.
+- **The re-read cap** is ⌊budget / 250 ms⌋ + 1 re-reads. With a clock that
+  advances steadily it never binds; it is the guard against a `Now` that
+  never advances (a frozen test clock), which would otherwise never reach
+  either bound.
+- **Clock steps.** A launch start in the future, or a wall-clock step back
+  before the wait begins, moves the grace bound later but not the cap, so
+  the wait ends at the cap at the latest (a launch start 10 s in the future
+  with a 60 s grace ends the wait at the grace bound, after 70 s). A step back during the wait makes the grace bound
+  report more time left; the wait then ends at whichever comes first, the
+  re-read cap (about the time left at its start) or the cap.
 
 **SessionStart is one statement.** An applied SessionStart sets
 `waiting` whatever the prior state and, in the same UPDATE, records the
@@ -1879,20 +1919,20 @@ adopts its pane by `@ad_pane` (SR-3.6; today `kill`, through
 pane is adopted meanwhile, is ignored as `no_pane_recorded`, so after a
 later adoption an idle agent's row stays `pending` until the agent's
 next hook (the lost-reply residual). The SessionStart wait bounds the
-race with the identity write only by the pending grace period, so an
-identity write slower than that period leaves the row `pending` the same
-way (TLA+ `ci_H_Lrep_slow`). Claude Code cancels a command hook at its
-timeout, 600 s by default, and agent-director's SessionStart entry sets no
-`timeout`, while `pending_grace_seconds` has no maximum: with a grace
-period above 600 s, Claude Code can kill a waiting hook before its bound,
-and the killed hook writes no `ad.hook.fired` and no `ad.hook.ignored`.
-A launch start later than the hook's clock (a wall-clock step back, or
-clocks that disagree) moves the bound later in the same way and extends
-the wait up to that timeout, but only when the step happens before the
-wait begins; a step back during the wait is ended by the re-read cap, at
-about the time left when the wait began. `find-missing` likewise counts
-such a row as inside the grace period. Neither is capped in code (build-lead decision;
-documented only). While a SessionStart waits, the agent's first response
+race with the identity write by the pending grace period and by the
+540 s cap, so an identity write slower than that period, or than 540 s,
+leaves the row `pending` the same way (residual (ii); TLA+
+`ci_H_Lrep_slow`). The wait always ends itself, at the earlier of its
+grace bound and 540 s after it began, before the `"timeout": 600` its
+hook entry states, so it is never killed silently: it writes its
+`no_pane_recorded` whatever the grace or a clock step does (WD
+2026-09-30c). With a grace above 540 s, SessionStart stops waiting at
+540 s while `find-missing` still counts the row as inside its grace
+period; the row stays `pending` until adoption or the agent's next hook,
+as in residual (ii), now with its `no_pane_recorded` record. A launch
+start later than the hook's clock (a wall-clock step back, or clocks
+that disagree) likewise keeps `find-missing` counting the row as inside
+the grace period; the hook's wait still ends by the cap at the latest. While a SessionStart waits, the agent's first response
 waits too, since Claude Code waits on SessionStart hooks. A Claude Code
 version that does not run exec-form hooks (Claude Code 2.1.120, the
 Docker pin, is one) never applies a hook, so its rows stay `pending`
@@ -2176,9 +2216,12 @@ change the spawn's result. A reply lost with exit 0 (`CreateLostReply`) is
 a success with no identity written; that row takes no hook until its
 pane is adopted by `@ad_pane` (SR-3.6; today `kill` adopts, through
 `adoptIdentity`). A SessionStart that arrives before the identity write
-waits for it, bounded by the pending grace period (see [the hook
+waits for it until the launch start plus the pending grace period or
+540 s after it began waiting, whichever comes first (see [the hook
 gate](#hooks-move-a-row-only-for-its-own-agent)), so when this write
-lands inside that period, the agent's first hook still applies.
+lands before that, the agent's first hook still applies. With a grace
+above 540 s, a write landing after the cap but inside the grace period
+leaves the row `pending` until the agent's next hook.
 
 The write is `spawn.RecordLaunchIdentity(w, pc, lg, id, launchVersion,
 token, reply)` (`internal/spawn/launch.go`), over the one-method
@@ -2438,8 +2481,8 @@ The handler's binary path is resolved via
 macOS) so it is always the same binary version that ran the `spawn`
 call.
 
-**Emitted per-hook relay timeout.** `synthesizeSettings` emits an explicit
-per-hook `timeout` field on exactly the `PermissionRequest` and `PreToolUse`
+**Emitted per-hook relay timeout.** `synthesizeSettings` emits the relay
+window as an explicit per-hook `timeout` field on exactly the `PermissionRequest` and `PreToolUse`
 hook entries — placed on the inner command object (sibling of
 `type`/`command`/`args`), not on the outer entry that carries `matcher`. Its value is
 `config.Relay.EffectiveTimeoutSeconds()` (the configured `relay.timeout_seconds`
@@ -2449,8 +2492,17 @@ the same accessor the relay poll loop's deadline derives from
 poll deadline are always the identical value. Without the field Claude Code
 would kill the polling hook at its own 600-second default per-hook timeout —
 discarding the hook's output with no envelope, so a late decision falls open
-into the native permission flow. The other six hook events and the
-`inject_help_hook` `SessionStart` entry carry no `timeout` and are unchanged.
+into the native permission flow. The `SessionStart` `agent-director hook`
+entry carries a fixed inner `"timeout": 600`
+(`sessionStartHookTimeoutSeconds`, Claude Code's current default, stated so
+a change to that default cannot move it), which does not move with the relay
+settings: it keeps Claude Code's kill boundary above the SessionStart wait's
+540 s cap (`sessionStartWaitCap` in `internal/hook`; SR-22.9, WD
+2026-09-30c; see "SessionStart waits for its launch's identity write" in
+[Hooks move a row only for its own
+agent](#hooks-move-a-row-only-for-its-own-agent)). The other five hook
+events and the `inject_help_hook` `SessionStart` entry carry no `timeout`
+and are unchanged.
 Any future author touching either the emitted timeout or the poll deadline must
 route through `EffectiveTimeoutSeconds()` — it is the single source of truth for
 the "non-positive falls back to 86400" rule, and splitting it would let the two
@@ -3942,8 +3994,9 @@ agent's included, matches the row. The handler reads the row first
 when only the snapshot changed, the handler re-reads and retries once.
 When the write does not apply only because the row records no pane yet
 (the resume's identity write has not landed), the hook waits for that
-write, bounded by the pending grace period measured from the resume's
-launch start, then makes the gated write again (see [Hooks move a row
+write, until the pending grace period measured from the resume's launch
+start ends or 540 s after it began waiting, whichever comes first, then
+makes the gated write again (see [Hooks move a row
 only for its own agent](#hooks-move-a-row-only-for-its-own-agent)); a
 fresh spawn's and a reuse's SessionStart wait the same way.
 
@@ -4405,16 +4458,19 @@ probe set that can actually see them.
    [`[tmux]` timing settings](#tmux-timing-settings). The hook's
    SessionStart wait for its launch's identity write uses the same
    predicate and the same grace period (SR-13.4; see [Hooks move a row
-   only for its own agent](#hooks-move-a-row-only-for-its-own-agent)), so
+   only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). The
+   hook's wait also ends 540 s after it began (`sessionStartWaitCap`), so
    a SessionStart stops waiting at the same bound after which this step
-   judges the row. Residual: the launch start comes from the
-   launching process's wall clock and the age from the sweep's, so a
-   clock step back (or a launch start written by a host whose clock runs
-   ahead) keeps a row inside the grace period longer than configured;
-   there is no cap. The same step, when it happens before a
-   SessionStart's wait begins, lengthens that wait up to Claude Code's
-   hook timeout; a step during the wait is ended by the wait's re-read
-   cap (the hook gate's residuals).
+   judges the row only while the grace is 540 s or less; with a grace
+   above 540 s it stops at 540 s while this step still counts the row as
+   inside its grace period (the hook gate's residuals). Residual: the
+   launch start comes from the launching process's wall clock and the
+   age from the sweep's, so a clock step back (or a launch start written
+   by a host whose clock runs ahead) keeps a row inside the grace period
+   longer than configured; there is no cap on this step. The same step
+   does not lengthen a SessionStart's wait past 540 s: that wait ends at
+   its cap, on the monotonic clock, or earlier (the hook gate's
+   residuals).
 3. Rows are partitioned by identity completeness (see
    [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)).
 4. Full-identity rows get a per-row `LivenessChecker` verdict:

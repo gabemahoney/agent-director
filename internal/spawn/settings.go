@@ -41,6 +41,17 @@ var matcherFields = map[hookEventName]bool{
 	hookPermissionRequest: true,
 }
 
+// sessionStartHookTimeoutSeconds is the inner `timeout` (seconds) on the
+// SessionStart `agent-director hook` entry (SR-22.9, WD 2026-09-30c). 600 is
+// Claude Code's current default command-hook timeout, stated explicitly so a
+// change to that default cannot move Claude Code's kill boundary under
+// internal/hook's sessionStartWaitCap (540 s after the hook begins waiting).
+// The wait always ends itself first and logs ad.hook.ignored
+// no_pane_recorded, instead of being killed without a trail record. The
+// cap < timeout relation is not checked in code (internal/spawn does not
+// import internal/hook); each value is pinned in its own package's tests.
+const sessionStartHookTimeoutSeconds = 600
+
 // synthesizeSettings builds the inline JSON passed to `claude --settings`.
 // Returns the JSON string and any error from os.Executable / json encoding.
 //
@@ -51,7 +62,9 @@ var matcherFields = map[hookEventName]bool{
 //	    "<EventName>": [{"hooks":[{"type":"command","command":"<bin>","args":["hook"]}]}],
 //	    ... (and "PreToolUse"/"PermissionRequest" carry matcher "*" on the
 //	        outer entry AND an inner "timeout": <effective relay timeout>
-//	        on the command object, sibling of "type"/"command"/"args")
+//	        on the command object, sibling of "type"/"command"/"args";
+//	        "SessionStart"'s agent-director hook entry carries an inner
+//	        "timeout": 600 on its command object, never on the outer entry)
 //	  },
 //	  "permissions": { "allow": [...], "deny": [...], "ask": [...] }
 //	}
@@ -72,14 +85,17 @@ var matcherFields = map[hookEventName]bool{
 // no_exec_form (SR-22.9, SR-14; cmd/agent-director noVerbHookIgnored), so the
 // trail says why.
 //
-// The inner `timeout` (seconds) is emitted ONLY on the two relay hook
-// entries (PermissionRequest, PreToolUse). It carries the effective relay
-// window via cfg.Relay.EffectiveTimeoutSeconds() — the same single source
-// of truth the poll loop's deadline uses — so Claude Code's per-hook kill
-// boundary and the poll loop's fail-closed deny move in lockstep (SR-1.2 /
-// SR-1.3). A non-positive `relay.timeout_seconds` still emits 86400 (never
-// 0 or an omitted key). The other six events and the inject_help_hook
-// SessionStart entry carry no timeout.
+// The inner `timeout` (seconds) is emitted on three agent-director hook
+// entries only. The two relay entries (PermissionRequest, PreToolUse) carry
+// the effective relay window via cfg.Relay.EffectiveTimeoutSeconds() — the
+// same single source of truth the poll loop's deadline uses — so Claude
+// Code's per-hook kill boundary and the poll loop's fail-closed deny move in
+// lockstep (SR-1.2 / SR-1.3). A non-positive `relay.timeout_seconds` still
+// emits 86400 (never 0 or an omitted key). The SessionStart agent-director
+// hook entry carries sessionStartHookTimeoutSeconds (600), which does not
+// move with the relay settings: it keeps Claude Code's kill boundary above
+// the internal/hook SessionStart wait cap (SR-22.9). The other five events
+// and the inject_help_hook SessionStart entry carry no timeout.
 //
 // `<bin>` is the absolute path to the currently-running agent-director
 // binary (executablePath), written VERBATIM: in exec form `command` is a
@@ -113,6 +129,11 @@ func synthesizeSettings(r Resolved, cfg config.Config) (string, error) {
 		command := map[string]any{"type": "command", "command": exe, "args": []string{"hook"}}
 		if matcherFields[evt] {
 			command["timeout"] = relayTimeout
+		}
+		if evt == hookSessionStart {
+			// Inner command object only; the help entry appended below
+			// carries none (SR-22.9, WD 2026-09-30c).
+			command["timeout"] = sessionStartHookTimeoutSeconds
 		}
 		entry := map[string]any{
 			"hooks": []any{command},

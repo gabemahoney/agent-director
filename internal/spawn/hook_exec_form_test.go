@@ -15,7 +15,9 @@ import (
 // elements (SR-3.8): the hook's parent is the Claude process itself.
 
 // execFormEvents is the eight events every spawn registers; relay events
-// carry matcher "*" and the inner relay timeout.
+// carry matcher "*" and the inner relay timeout. SessionStart's
+// agent-director hook carries the inner sessionStartHookTimeoutSeconds; the
+// other five non-relay events and the help entry carry no timeout.
 var execFormEvents = map[string]bool{
 	"SessionStart": false, "UserPromptSubmit": false, "PreToolUse": true, "PostToolUse": false,
 	"Stop": false, "Notification": false, "SessionEnd": false, "PermissionRequest": true,
@@ -23,7 +25,8 @@ var execFormEvents = map[string]bool{
 
 // assertExecFormSettings checks settingsJSON: each event has exactly one
 // exec-form agent-director hook for exe; SessionStart also carries the
-// shell-form help entry wantHelp when it is non-empty.
+// shell-form help entry wantHelp (exactly {type, command}, no timeout) when
+// it is non-empty.
 func assertExecFormSettings(t *testing.T, settingsJSON, exe, wantHelp string, cfg config.Config) {
 	t.Helper()
 	if strings.Contains(settingsJSON, ` hook"`) {
@@ -79,6 +82,9 @@ func assertExecFormSettings(t *testing.T, settingsJSON, exe, wantHelp string, cf
 		want := map[string]any{"type": "command", "command": exe, "args": []any{"hook"}}
 		if relay {
 			want["timeout"] = timeout
+		}
+		if evt == "SessionStart" {
+			want["timeout"] = float64(sessionStartHookTimeoutSeconds)
 		}
 		if !reflect.DeepEqual(ours[0], want) {
 			t.Errorf("%s: hook = %v; want exec form %v", evt, ours[0], want)

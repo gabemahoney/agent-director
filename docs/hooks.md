@@ -108,11 +108,29 @@ at once. It waits while all of these hold:
 - the row records no pane;
 - the row has a launch start;
 - the time is before the launch start plus the effective
-  `pending_grace_seconds` (the same grace period `find-missing` uses).
+  `pending_grace_seconds` (the same grace period `find-missing` uses);
+- less than 540 s have passed since the hook began waiting.
+
+So the wait has two bounds, and it ends at whichever comes first: the
+grace bound (the launch start plus the grace period) or the cap (540 s
+after the hook began waiting). The cap is measured on the monotonic
+clock, so a launch start in the future or a step of the wall clock
+cannot stretch the wait past it. `pending_grace_seconds` has no maximum;
+with a grace above 540 s the cap ends the wait, while `find-missing`
+still counts the row as inside its grace period.
+
+The SessionStart `agent-director hook` entry in the synthesized
+`--settings` carries `"timeout": 600`, Claude Code's current default
+for command hooks. It is stated explicitly so that a change to Claude
+Code's default cannot move the kill below the cap. The hook therefore
+always ends its own wait about 60 s before Claude Code would kill it, and
+writes its `ad.hook.ignored` record instead of being killed with no
+trail record. No other agent-director entry for SessionStart carries a
+timeout.
 
 While it waits, it re-reads the row every 250 ms. Each re-read is a
-read only, so it never blocks the identity write. No sleep runs past the
-bound. The wait ends early when:
+read only, so it never blocks the identity write. No sleep runs past
+either bound. The wait ends early when:
 
 - a pane is recorded;
 - the row changes (it leaves `pending`, or its version moves);
@@ -124,10 +142,11 @@ the row as it is then, and that write decides the result:
 
 - applied, when the pane now recorded is the hook's parent;
 - `pid_mismatch`, when another process waited (a leftover or a stray);
-- `no_pane_recorded`, when the row still records no pane at the bound;
+- `no_pane_recorded`, when the row still records no pane at either
+  bound;
 - no record, when the row is gone.
 
-An identity written just before the bound therefore still applies.
+An identity written just before either bound therefore still applies.
 
 Only SessionStart waits. Claude Code sends no prompt to the agent until
 its SessionStart hooks finish, so every later hook fires after the
@@ -195,8 +214,9 @@ it does not apply:
 - Hook from a process other than the row's recorded pane process, or for
   a row that records no pane → exit 0, nothing written, one
   `ad.hook.ignored` trail record. A SessionStart for a `pending` row
-  that records no pane first waits, bounded by the grace period (see
-  "SessionStart before the launch's identity write").
+  that records no pane first waits, until the grace period ends or for
+  at most 540 s, whichever comes first (see "SessionStart before the
+  launch's identity write").
 - SessionStart or SessionEnd from a subagent or in-process teammate
   (non-empty `agent_id`) → exit 0, nothing written to the row, one
   `ad.hook.ignored` record with reason `subagent_event` (none when no row
@@ -212,11 +232,13 @@ via `[log] error_log_path` in `config.toml`). A missed state update is
 annoying but never breaks a Claude session.
 
 SessionStart's wait for the launch's identity write is the one case
-where the hook deliberately takes time. It can delay the hook's exit by
-up to the effective `pending_grace_seconds`, measured from the launch
-start, and Claude Code's first response waits for SessionStart hooks to
-finish. It happens only in the race described above; the hook still
-exits 0 with empty stdout whatever the wait's result.
+where the hook deliberately takes time. It can delay the hook's exit
+until the earlier of the launch start plus the effective
+`pending_grace_seconds` and 540 s after the wait began, and Claude
+Code's first response waits for SessionStart hooks to finish. The 540 s
+cap keeps the wait inside the entry's 600 s timeout. It happens only in
+the race described above; the hook still exits 0 with empty stdout
+whatever the wait's result.
 
 The relay-mode `PermissionRequest` path is fail-*closed*: any internal
 error emits a `deny` decision envelope on stdout before the hook exits.

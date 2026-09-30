@@ -171,7 +171,9 @@ func runHook() int {
 	// start-time reader and its command name (for ad.hook.ignored only,
 	// SR-14) from the command-name reader. Now and the loaded config's
 	// effective pending grace period bound SessionStart's wait for its
-	// launch's identity write (SR-22.9, SR-13.4).
+	// launch's identity write, which the hook also caps at 540 s from its
+	// start on Now's monotonic reading (SR-22.9, SR-13.4; WD 2026-09-30c):
+	// time.Now is passed as is, never stripped by .UTC or .Round(0).
 	hc := hook.HandleConfig{
 		Env:          hook.OSGetenv,
 		Cfg:          cfg.Relay,

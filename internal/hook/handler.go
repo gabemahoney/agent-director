@@ -56,15 +56,25 @@ type HandleConfig struct {
 	// unreadable, so the hook matches no row.
 	ParentProc ParentProc
 	// Now reads the injected clock that bounds SessionStart's wait for its
-	// launch's identity write (SR-22.9, SR-20.2). cmd/agent-director wires
-	// time.Now; tests inject a virtual clock that Clock.Sleep advances. A nil
-	// Now means SessionStart never waits.
+	// launch's identity write (SR-22.9, SR-20.2): the grace bound is compared
+	// with it on the wall clock, and the wait's elapsed time, which
+	// sessionStartWaitCap bounds, is the difference between two of its
+	// readings. cmd/agent-director wires time.Now, whose readings carry Go's
+	// monotonic clock reading, so that difference is monotonic and no
+	// wall-clock step moves it; production wiring must keep that reading and
+	// never pass it through .UTC, .Local, .Round(0), .Truncate or .In, which
+	// strip it.
+	// Tests inject a virtual clock that Clock.Sleep advances; the difference
+	// between two of its readings is the virtual elapsed time. A nil Now means
+	// SessionStart never waits.
 	Now func() time.Time
 	// PendingGrace is the effective pending grace period
 	// (config.Tmux.EffectivePendingGrace, SR-13.4): SessionStart waits for its
-	// launch's identity write until the row's launch start plus PendingGrace.
-	// cmd/agent-director wires the loaded config's value. Zero or negative
-	// means SessionStart never waits.
+	// launch's identity write until the row's launch start plus PendingGrace,
+	// or until sessionStartWaitCap (540 s) after it began waiting, whichever
+	// comes first (WD 2026-09-30c). cmd/agent-director wires the loaded
+	// config's value, which has no maximum. Zero or negative means
+	// SessionStart never waits.
 	PendingGrace time.Duration
 }
 
@@ -104,10 +114,11 @@ type HandleConfig struct {
 // its launch's identity write (the write does not apply because the row
 // records no pane) logs nothing yet: while the row is pending with no pane
 // and inside its pending grace period (HandleConfig.PendingGrace, measured
-// from the launch start), it re-reads the row every 250 ms on the injected
-// clock, then makes the ordinary gated write with the new snapshot; only the
-// result of that write is logged, so no_pane_recorded is written for
-// SessionStart only after its bounded wait (recordSessionStart). Only
+// from the launch start), for at most sessionStartWaitCap (540 s) after it
+// began waiting, it re-reads the row every 250 ms on the injected clock, then
+// makes the ordinary gated write with the new snapshot; only the result of
+// that write is logged, so no_pane_recorded is written for SessionStart only
+// after its bounded wait (recordSessionStart). Only
 // SessionStart waits, a subagent's never does, and the wait makes no tmux
 // call. Every other event is one gated
 // ApplyHookTransitionResult with the payload's session id, transcript path and
@@ -321,6 +332,19 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 // waits for its launch's identity write (SR-22.9).
 const sessionStartWaitInterval = 250 * time.Millisecond
 
+// sessionStartWaitCap is the longest SessionStart waits for its launch's
+// identity write, measured from when it began waiting on HandleConfig.Now
+// (monotonic in production), whatever the pending grace period and whatever a
+// launch start in the future or a clock step does (SR-22.9, SR-13.4; WD
+// 2026-09-30c). It must stay below the "timeout" that internal/spawn's
+// synthesised settings state on the SessionStart agent-director hook entry
+// (sessionStartHookTimeoutSeconds in internal/spawn, 600 s, Claude Code's
+// default), so the hook always ends its own wait and writes its
+// no_pane_recorded before Claude Code could kill it silently: cap < timeout.
+// Nothing checks that across the two packages; each value is pinned in its
+// own package's tests.
+const sessionStartWaitCap = 540 * time.Second
+
 // recordSessionStart is Handle's SessionStart write (SR-22.9, SR-5.3): the
 // gated write (writeSessionStart), and, when that did not apply only because
 // the row records no pane yet, the bounded wait for the launch's identity
@@ -331,16 +355,17 @@ const sessionStartWaitInterval = 250 * time.Millisecond
 // grace period (store.InsidePendingGrace with hc.PendingGrace and hc.Now: the
 // launch start is set and the clock reads before launch start plus the
 // grace). A row with no launch start, a row past the grace, a zero grace or a
-// nil hc.Now never waits. After the wait, the ordinary gated write runs with
-// the snapshot it reads then (with its one retry on a snapshot change), and
-// its result is the hook's: applied when the pane recorded meanwhile is the
-// hook's parent; pid_mismatch for a leftover or stray that waited;
-// no_pane_recorded when the row still records no pane at the bound (this
-// last gated write, rather than a verdict of the wait, gives the reason, so
-// an identity written between the last read and the bound still applies); no
-// reason when the row is gone. Handle writes the one ad.hook.ignored from
-// that result, so SessionStart's no_pane_recorded is written only after its
-// bounded wait.
+// nil hc.Now never waits. The wait ends at the earlier of two bounds: the
+// grace bound (launch start plus the grace) and sessionStartWaitCap after it
+// began. After the wait, the ordinary gated write runs with the snapshot it
+// reads then (with its one retry on a snapshot change), and its result is the
+// hook's: applied when the pane recorded meanwhile is the hook's parent;
+// pid_mismatch for a leftover or stray that waited; no_pane_recorded when the
+// row still records no pane at either bound (this last gated write, rather
+// than a verdict of the wait, gives the reason, so an identity written
+// between the last read and the bound still applies); no reason when the row
+// is gone. Handle writes the one ad.hook.ignored from that result, so
+// SessionStart's no_pane_recorded is written only after its bounded wait.
 //
 // The outcome is ad.hook.fired's upsert_outcome: updated when applied,
 // no_change when not, error on a store error (returned).
@@ -405,30 +430,40 @@ func waitingForIdentity(sp store.Spawn, grace time.Duration, now time.Time) bool
 // GetSpawn every sessionStartWaitInterval, a read only that never blocks the
 // identity write, and reports true once the wait has ended: when a pane is
 // recorded, the row leaves pending or changes version, the row is gone, the
-// row is no longer inside its grace period (the bound: launch start plus
-// hc.PendingGrace on hc.Now), ctx is cancelled, or a read fails (fail-open:
-// logged, and the caller's gated write decides). No sleep runs past the
-// bound. As a safety net against a clock that does not advance or steps back,
-// the number of re-reads is capped at what the time left at the start allows.
-// It writes nothing and makes no tmux call.
+// row is no longer inside its grace period (the grace bound: launch start
+// plus hc.PendingGrace on hc.Now), sessionStartWaitCap has passed since the
+// wait began (the cap: elapsed is hc.Now at each turn minus hc.Now at the
+// start, monotonic in production, virtual in tests), ctx is cancelled, or a
+// read fails (fail-open: logged, and the caller's gated write decides). The
+// grace bound and the cap form one budget, min(time left to the grace bound
+// at the start, sessionStartWaitCap), and each sleep is clipped so that none
+// runs past either bound. As the guard against a clock that does not advance
+// (or steps back during the wait), the number of re-reads is capped at what
+// that budget allows: ⌊budget / sessionStartWaitInterval⌋ + 1. It writes
+// nothing and makes no tmux call.
 func waitForLaunchIdentity(ctx context.Context, st HookStore, hc HandleConfig, instanceID string, examined store.Spawn, logger *log.Logger) bool {
 	grace := hc.PendingGrace
-	if hc.Now == nil || grace <= 0 || !waitingForIdentity(examined, grace, hc.Now()) {
+	if hc.Now == nil || grace <= 0 {
+		return false
+	}
+	start := hc.Now() // the wait begins: the cap's elapsed time is measured from here
+	if !waitingForIdentity(examined, grace, start) {
 		return false
 	}
 	clock := hc.Clock
 	if clock == nil {
 		clock = DefaultPollClock()
 	}
-	bound := time.UnixMilli(examined.LaunchStartedAtMillis).Add(grace)
-	maxReads := int(bound.Sub(hc.Now())/sessionStartWaitInterval) + 1
+	bound := time.UnixMilli(examined.LaunchStartedAtMillis).Add(grace) // wall clock
+	capEnd := start.Add(sessionStartWaitCap)                           // keeps start's monotonic reading
+	budget := min(bound.Sub(start), sessionStartWaitCap)
+	maxReads := int(budget/sessionStartWaitInterval) + 1
 	for reads := 0; reads < maxReads; reads++ {
-		sleep := bound.Sub(hc.Now())
+		now := hc.Now()
+		// Time.Sub saturates, so no clock step can overflow either difference.
+		sleep := min(bound.Sub(now), capEnd.Sub(now), sessionStartWaitInterval)
 		if sleep <= 0 {
 			break
-		}
-		if sleep > sessionStartWaitInterval {
-			sleep = sessionStartWaitInterval
 		}
 		clock.Sleep(ctx, sleep)
 		if ctx.Err() != nil {

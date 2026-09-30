@@ -29,9 +29,11 @@ type HookGate struct {
 // payload, before any write. Reason is "" when no row has the id (nothing to
 // report) or, for SessionStart, when the row changed after the caller examined
 // it. For SessionStart the handler logs no_pane_recorded only after its
-// bounded wait for the launch's identity write (SR-22.9, SR-13.4): a
-// no_pane_recorded from its first write starts the wait, and the result of
-// the gated write after the wait is the one reported.
+// bounded wait for the launch's identity write (SR-22.9, SR-13.4), which ends
+// at the launch start plus the pending grace period or 540 s after it began,
+// whichever comes first (WD 2026-09-30c): a no_pane_recorded from its first
+// write starts the wait, and the result of the gated write after the wait is
+// the one reported.
 type HookApplied struct {
 	Applied bool
 	Reason  string
@@ -117,9 +119,10 @@ func (s *Store) readHookGateRow(instanceID string, g HookGate, errPrefix string)
 // yields no reason; a row that records no pane yields
 // HookReasonNoPaneRecorded, even when the parent's start time was unreadable;
 // any other row yields HookReasonPIDMismatch. A SessionStart that gets
-// HookReasonNoPaneRecorded may wait, bounded by the pending grace period, for
-// the launch's identity write and write again; the handler logs the reason
-// only after that wait (SR-22.9).
+// HookReasonNoPaneRecorded may wait for the launch's identity write, bounded
+// by the pending grace period and by a 540 s cap from when it began waiting,
+// whichever ends first (WD 2026-09-30c), and write again; the handler logs
+// the reason only after that wait (SR-22.9).
 func notAppliedReason(r hookGateRow) HookApplied {
 	switch {
 	case !r.found:

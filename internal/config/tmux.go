@@ -31,8 +31,9 @@ const (
 	// PendingGraceMinimumSeconds (30 at the default create timeout and
 	// pipe-close wait). Bounds how long find-missing leaves a pending row
 	// untouched after its launch start, and how long a SessionStart hook
-	// waits for its launch's identity write (SR-4.1, SR-11.2, SR-13.4,
-	// SR-22.9).
+	// waits for its launch's identity write, a wait the hook also caps at
+	// 540 s from its start whatever this value (SR-4.1, SR-11.2, SR-13.4,
+	// SR-22.9; WD 2026-09-30c).
 	DefaultPendingGraceSeconds = 60
 
 	// DefaultQueryTimeoutMs is the default timeout of each tmux lookup and
@@ -113,11 +114,13 @@ type Tmux struct {
 	StoppingWindowSeconds int64 `toml:"stopping_window_seconds"`
 
 	// PendingGraceSeconds is the pending grace period, in whole seconds:
-	// find-missing's, and also the bound of a SessionStart hook's wait for its
-	// launch's identity write, both measured from the launch start. Default
-	// DefaultPendingGraceSeconds (60); safe minimum PendingGraceMinimumSeconds
-	// of the effective create timeout and pipe-close wait (30 at their
-	// defaults) (SR-4.1, SR-11.2, SR-13.4, SR-22.9).
+	// find-missing's, and also a bound of a SessionStart hook's wait for its
+	// launch's identity write, both measured from the launch start; the hook
+	// also ends that wait 540 s after it began, whichever comes first (WD
+	// 2026-09-30c). Default DefaultPendingGraceSeconds (60); safe minimum
+	// PendingGraceMinimumSeconds of the effective create timeout and
+	// pipe-close wait (30 at their defaults); no maximum (SR-4.1, SR-11.2,
+	// SR-13.4, SR-22.9).
 	PendingGraceSeconds int64 `toml:"pending_grace_seconds"`
 
 	// QueryTimeoutMs is the timeout of each tmux lookup and pane listing, in
@@ -352,9 +355,11 @@ func (t Tmux) EffectiveStoppingWindow() time.Duration {
 // (pending_grace_seconds, whole seconds): the configured value when positive,
 // otherwise DefaultPendingGraceSeconds (60 s); the largest duration when too
 // large. Safe minimum PendingGraceMinimumSeconds (30 s at the defaults),
-// enforced by Load, not here. find-missing uses it, and the hook passes it to
-// hook.HandleConfig.PendingGrace as the bound of SessionStart's wait for its
-// launch's identity write (SR-4.1, SR-11.2, SR-13.4, SR-22.9).
+// enforced by Load, not here; no maximum. find-missing uses it, and the hook
+// passes it to hook.HandleConfig.PendingGrace as one bound of SessionStart's
+// wait for its launch's identity write, which the hook also ends 540 s after
+// it began, whichever comes first (SR-4.1, SR-11.2, SR-13.4, SR-22.9; WD
+// 2026-09-30c).
 func (t Tmux) EffectivePendingGrace() time.Duration {
 	return t.Effective(TmuxPendingGraceSeconds)
 }

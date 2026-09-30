@@ -397,7 +397,8 @@ func innerCommand(t *testing.T, top map[string]any, evt string) map[string]any {
 // a "timeout" equal to cfg.Relay.EffectiveTimeoutSeconds() — the same value
 // the poll loop's deadline uses. Default is 86400; a positive override flows
 // through verbatim; a non-positive config falls back to 86400 (never 0,
-// never an omitted key).
+// never an omitted key). In every case SessionStart's timeout stays at
+// sessionStartHookTimeoutSeconds: it does not move with relay settings.
 func TestSynthesizeSettingsRelayTimeout(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -425,6 +426,10 @@ func TestSynthesizeSettingsRelayTimeout(t *testing.T) {
 					t.Errorf("%s: timeout = %v; want %v", evt, got, tc.want)
 				}
 			}
+			ss := innerCommand(t, top, "SessionStart")
+			if got := ss["timeout"]; got != float64(sessionStartHookTimeoutSeconds) {
+				t.Errorf("SessionStart: timeout = %v; want %d regardless of relay config", got, sessionStartHookTimeoutSeconds)
+			}
 		})
 	}
 }
@@ -448,16 +453,34 @@ func TestSynthesizeSettingsTimeoutOnInnerNotOuter(t *testing.T) {
 	}
 }
 
-// TestSynthesizeSettingsTimeoutOnlyRelayEvents verifies the timeout key is
-// emitted on exactly the two relay events and nowhere else — no other event,
-// no outer entry, and (with InjectHelpHook on) not on the help-hook entry.
-func TestSynthesizeSettingsTimeoutOnlyRelayEvents(t *testing.T) {
+// TestSettingsSessionStartHookTimeoutIs600 pins the SessionStart hook timeout
+// constant at the SRD-mandated 600 s (SR-22.9). It is checked once here; the
+// other tests compare against the constant. The internal/hook wait cap must
+// stay below it (checked in internal/hook's own tests, not across packages).
+func TestSettingsSessionStartHookTimeoutIs600(t *testing.T) {
+	if sessionStartHookTimeoutSeconds != 600 {
+		t.Fatalf("sessionStartHookTimeoutSeconds = %d; want 600 (SR-22.9)", sessionStartHookTimeoutSeconds)
+	}
+}
+
+// TestSynthesizeSettingsTimeoutOnlyRelayAndSessionStart verifies where the
+// inner "timeout" key appears (SR-1.3, SR-22.9), with InjectHelpHook on:
+//   - PermissionRequest[0] and PreToolUse[0]: the relay timeout (checked for
+//     value in TestSynthesizeSettingsRelayTimeout).
+//   - SessionStart[0] (the agent-director hook entry):
+//     sessionStartHookTimeoutSeconds.
+//   - SessionStart[1] (the inject_help_hook entry), the other five events and
+//     every outer entry: no timeout.
+func TestSynthesizeSettingsTimeoutOnlyRelayAndSessionStart(t *testing.T) {
 	withStubHelpBin(t, "/home/operator/.agent-director/bin/agent-director")
 	cfg := config.Default()
 	cfg.Defaults.InjectHelpHook = true
 	top := synthTop(t, cfg)
 	hooks, _ := top["hooks"].(map[string]any)
 
+	if got, _ := hooks["SessionStart"].([]any); len(got) != 2 {
+		t.Fatalf("SessionStart: expected 2 entries (hook + help), got %d", len(got))
+	}
 	relay := map[string]bool{"PermissionRequest": true, "PreToolUse": true}
 	for evt, raw := range hooks {
 		entries, _ := raw.([]any)
@@ -469,15 +492,20 @@ func TestSynthesizeSettingsTimeoutOnlyRelayEvents(t *testing.T) {
 			hl, _ := entry["hooks"].([]any)
 			for _, h := range hl {
 				cmd, _ := h.(map[string]any)
-				_, hasTimeout := cmd["timeout"]
-				// The help-hook entry is the second SessionStart entry; it
-				// must never carry a timeout even though relay is enabled.
-				if relay[evt] && i == 0 {
+				got, hasTimeout := cmd["timeout"]
+				switch {
+				case relay[evt] && i == 0:
 					if !hasTimeout {
 						t.Errorf("%s[%d]: relay event missing inner 'timeout'", evt, i)
 					}
-				} else if hasTimeout {
-					t.Errorf("%s[%d]: non-relay hook command gained a 'timeout' key: %v", evt, i, cmd)
+				case evt == "SessionStart" && i == 0:
+					// json.Unmarshal into any yields float64 for numbers.
+					if got != float64(sessionStartHookTimeoutSeconds) {
+						t.Errorf("%s[%d]: timeout = %v (present=%v); want %d", evt, i, got, hasTimeout, sessionStartHookTimeoutSeconds)
+					}
+				case hasTimeout:
+					// Includes SessionStart[1], the help-hook entry.
+					t.Errorf("%s[%d]: hook command must carry no 'timeout' key: %v", evt, i, cmd)
 				}
 			}
 		}

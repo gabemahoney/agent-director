@@ -1,9 +1,10 @@
 package hook_test
 
 // sessionstart_wait_test.go — AC-HOOK-05 (SR-22.9 "SessionStart before the
-// identity write", SR-13.4): a SessionStart on a pending row with no pane waits,
-// re-reading every 250 ms on hookConfig's virtual clock, until launch start plus
-// the pending grace. Driven through hook.Handle against a real store.
+// identity write", SR-13.4, SR-20.6): a SessionStart on a pending row with no
+// pane waits, re-reading every 250 ms on hookConfig's virtual clock, until the
+// earlier of launch start plus the pending grace and hook.SessionStartWaitCap
+// after it began waiting. Driven through hook.Handle against a real store.
 
 import (
 	"bytes"
@@ -107,7 +108,7 @@ type swCase struct {
 	name     string
 	fixture  string        // payload fixture; "" = session-start-startup.json
 	state    string        // seeded state; "" = pending
-	age      time.Duration // launch start = clock start - age
+	age      time.Duration // launch start = clock start - age (negative: in the future)
 	noLaunch bool          // launch_started_at NULL
 	grace    time.Duration // hc.PendingGrace; 0 = hookConfig's default
 	noGrace  bool          // hc.PendingGrace = 0
@@ -156,6 +157,11 @@ func TestSessionStartWait(t *testing.T) {
 	bumpVersion := func(st *store.Store, id string) error { return st.ClearLivenessUnverified(id) }
 	deleteRow := func(st *store.Store, id string) error { return st.DeleteSpawn(id) }
 	frozenLeft := grace - 10*time.Second // time left at the start of the frozen-clock case
+	// The 540 s cap (TestSessionStartWaitCapIs540s pins it): a grace above it, and
+	// the sleeps from the wait's start to it.
+	wcap := hook.SessionStartWaitCap
+	aboveCap := wcap + grace
+	capSleeps := int(wcap / swInterval)
 	nopane, mismatch := store.HookReasonNoPaneRecorded, store.HookReasonPIDMismatch
 	pending, waiting := store.StatePending, store.StateWaiting
 
@@ -174,10 +180,24 @@ func TestSessionStartWait(t *testing.T) {
 		{name: "row deleted during the wait: the wait ends, nothing ignored", during: storeWriteAt(2, deleteRow),
 			sleeps: 2, gone: true},
 		{name: "context cancelled ends the wait", cancelAt: 4, sleeps: 4, reason: nopane, after: pending},
-		// A clock whose Sleep does not advance Now: the re-read cap (time left at the
-		// start / 250 ms) ends the wait and the hook still returns.
+		// A clock whose Sleep does not advance Now: the re-read cap (from the one
+		// budget, min(time left at the start, the cap) / 250 ms) ends the wait and
+		// the hook still returns.
 		{name: "frozen Now: the re-read cap ends the wait", frozen: true, age: grace - frozenLeft,
 			sleeps: int(frozenLeft / swInterval), slack: 1, reason: nopane, after: pending},
+		{name: "frozen Now, grace above the cap: the re-read cap from the cap ends the wait", frozen: true,
+			grace: aboveCap, sleeps: capSleeps + 1, reason: nopane, after: pending},
+		// The 540 s cap (SR-20.6): the wait ends at the earlier of the grace bound
+		// and the cap after it began.
+		{name: "grace above the cap: the cap ends the wait", grace: aboveCap, sleeps: capSleeps, waited: wcap,
+			reason: nopane, after: pending},
+		{name: "launch start in the future beyond the cap: the cap ends the wait", age: -wcap,
+			sleeps: capSleeps, waited: wcap, reason: nopane, after: pending},
+		{name: "grace above the cap, less time left: the grace bound ends the wait", grace: aboveCap,
+			age: grace + 10*time.Second, sleeps: int((wcap - 10*time.Second) / swInterval),
+			waited: wcap - 10*time.Second, reason: nopane, after: pending},
+		{name: "identity lands at the cap: the last gated write applies", grace: aboveCap,
+			during: identityAt(capSleeps), sleeps: capSleeps, after: waiting},
 		// A grace other than the default moves the bound.
 		{name: "longer grace: past the default, still waits", grace: longer, age: grace + 5*time.Second,
 			sleeps: int(5 * time.Second / swInterval), reason: nopane, after: pending},
@@ -199,6 +219,15 @@ func TestSessionStartWait(t *testing.T) {
 			id := "sw-" + strconv.Itoa(k) + "-" + strconv.Itoa(i)
 			t.Run(kind.name+"/"+tc.name, func(t *testing.T) { runSessionStartWait(t, id, kind, tc) })
 		}
+	}
+}
+
+// TestSessionStartWaitCapIs540s pins SessionStart's wait cap at 540 s
+// (decision-0930c, SR-20.6): below the 600 s timeout internal/spawn states on
+// the SessionStart hook entry, which internal/spawn's tests pin.
+func TestSessionStartWaitCapIs540s(t *testing.T) {
+	if got, want := hook.SessionStartWaitCap, 540*time.Second; got != want {
+		t.Errorf("SessionStartWaitCap = %v; want %v", got, want)
 	}
 }
 
@@ -247,11 +276,12 @@ func runSessionStartWait(t *testing.T, id string, kind swKind, tc swCase) {
 	if tc.frozen {
 		hc.Now = func() time.Time { return start }
 	}
-	// Hang guard: ctx is cancelled at cancelAt, or else well past any bound, so
-	// a wait that ignores its bound and cap ends there (and fails) rather than hangs.
+	// Hang guard: ctx is cancelled at cancelAt, or else well past any bound (the
+	// grace's or the cap's, whichever is larger), so a wait that ignores its
+	// bounds and re-read cap ends there (and fails) rather than hangs.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	guard := 4 * (int(hc.PendingGrace/swInterval) + 1)
+	guard := 4 * (int(max(hc.PendingGrace, hook.SessionStartWaitCap)/swInterval) + 1)
 	clock.mu.Lock()
 	clock.cancel, clock.cancelAfter = cancel, guard
 	if tc.cancelAt != 0 {

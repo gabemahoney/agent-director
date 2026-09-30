@@ -324,7 +324,7 @@ can be changed, but never below its safe minimum.
 |---|---|---|---|---|
 | `starting_session_seconds` | s | 300 | **60** | Starting-session bound: until a finished row's own tmux session is this old, it counts as "still starting, retry later" rather than a conflict needing a human. Claude Code reports SessionStart within seconds. |
 | `stopping_window_seconds` | s | 90 | **30** | Stopping window: how long after an agent ends it counts as "still stopping, retry later". Covers Claude Code's SessionEnd hook budget plus teardown. |
-| `pending_grace_seconds` | s | 60 | **30**, or more (see below) | Grace period: how long `find-missing` leaves a launch alone after it starts, and how long the launch's SessionStart hook waits for agent-director to record the launch. |
+| `pending_grace_seconds` | s | 60 | **30**, or more (see below) | Grace period: how long `find-missing` leaves a launch alone after it starts, and how long the launch's SessionStart hook waits for agent-director to record the launch (never more than 540 s). The setting has no maximum. |
 | `query_timeout_ms` | ms | 1500 | none | Each tmux lookup and pane listing. |
 | `action_timeout_ms` | ms | 2000 | none | Each tmux kill, key send and pane capture. |
 | `create_timeout_ms` | ms | 5000 | none | The tmux call that creates a session (`spawn`, `resume`). |
@@ -348,7 +348,10 @@ can be changed, but never below its safe minimum.
   the default included: `create_timeout_ms = 40000` raises the minimum to
   61, so the default 60 is refused until `pending_grace_seconds` is set
   to 61 or more. The same grace period also bounds how long a launch's
-  SessionStart hook waits for agent-director to record the launch.
+  SessionStart hook waits for agent-director to record the launch, but
+  that hook waits at most 540 s, however large the grace period. The
+  setting itself has no maximum: `find-missing` still leaves a launch
+  alone for the full grace period.
 - **When a change takes effect.** The CLI and the TypeScript client: on
   their next call. The MCP server: only after a restart. A Go `Client`:
   when it is built.
