@@ -174,6 +174,10 @@ Terminate the Spawn's tmux session. Idempotent on terminal states (ended/missing
 ### Errors
 
 - `ErrSpawnNotFound`
+- `ErrTmuxNotAvailable`
+- `ErrTmuxKillFailed`
+- `ErrTmuxUnresponsive`
+- `ErrTmuxSessionConflict`
 
 ## Tool: decide
 

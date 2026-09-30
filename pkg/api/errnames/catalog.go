@@ -55,15 +55,14 @@ var Catalog = []Entry{
 	{Name: "ErrSpawnNotFound", Err: store.ErrSpawnNotFound},
 	{Name: "ErrTmuxNotAvailable", Err: tmux.ErrTmuxNotAvailable},
 	{Name: "ErrTmuxSessionCreate", Err: tmux.ErrTmuxSessionCreate},
-	// ErrTmuxKillFailed is intentionally absent: kill.go swallows tmux
-	// kill-session failures (the verb's post-condition is satisfied regardless),
-	// so this sentinel never surfaces to API callers and needs no catalog entry.
-	// ErrTmuxListPanesFailed is intentionally absent: tmux.ListPanes is not
-	// called by any pkg/api verb handler, so this error never reaches callers.
+	// ErrTmuxListPanesFailed is intentionally absent: the pane listing is
+	// called (SR-3.7), but its failures are always converted to a lookup
+	// outcome and never reach callers (SR-1.1).
 	{Name: "ErrTmuxSendKeys", Err: tmux.ErrTmuxSendKeys},
 	{Name: "ErrTmuxCaptureFailed", Err: tmux.ErrTmuxCaptureFailed},
 	{Name: "ErrTmuxUnresponsive", Err: tmux.ErrTmuxUnresponsive},
 	{Name: "ErrTmuxSessionConflict", Err: tmux.ErrTmuxSessionConflict},
+	{Name: "ErrTmuxKillFailed", Err: tmux.ErrTmuxKillFailed},
 	// ErrSchemaMismatch is intentionally absent: it surfaces from store
 	// initialization (pkg/api.NewClient), not from individual verb handlers.
 	// cmd/agent-director handles it via direct errors.Is before any verb call.

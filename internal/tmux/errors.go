@@ -31,24 +31,38 @@ package tmux
 
 import "errors"
 
-// Typed errors per SRD §13.1. Callers should match via errors.Is.
+// Typed errors per SRD SR-1 (SR-1.1 names and classes, SR-1.2 triggers).
+// Callers should match via errors.Is. Every error a verb returns for a tmux
+// cause matches exactly one catalogued sentinel below (SR-1.5): no sentinel
+// wraps another, and a verb error wraps one of them only.
 
-// ErrTmuxNotAvailable is returned when the tmux binary cannot be located on
-// PATH or refuses to execute (e.g. wrong arch). It is distinct from "tmux ran
-// but reported an error" — which surfaces as a verb-specific error below.
-// Plain spawn also returns it when the session-creating call gets tmux's
-// socket "Permission denied" reply (the row stays pending), and, before the
-// insert and with nothing launched, when the launch's per-user socket
-// directory cannot be created or fails tmux's own check (SR-1.2, SR-3.3; a
-// *SocketDirError).
-var ErrTmuxNotAvailable = errors.New("tmux: binary not available on PATH")
+// ErrTmuxNotAvailable is class ENVIRONMENT: this caller cannot reach the
+// agent's tmux server as launched. It does not always mean nothing was done:
+// a plain spawn's row stays pending, and after a kill, send or capture call
+// the call may or may not have taken effect (see below). It must never be
+// read as "the agent is dead" (SR-1.1). Every single-row verb that runs tmux
+// (kill, read-pane, send-keys, pause, resume, spawn) returns it when its
+// lookup is Can't tell with the different-server variant ("this is not the
+// tmux server the agent was launched on"; SR-3.3); when the tmux binary
+// cannot be run for a lookup, a pane listing or the session-creating call;
+// when such a call gets tmux's socket "Permission denied" reply (the plain
+// spawn's row stays pending); and, before the launch's write and with nothing
+// launched, when the launch's per-user socket directory cannot be created or
+// fails tmux's own check (SR-1.2, SR-3.3; a *SocketDirError). A kill, send or
+// capture call that fails either way reaches this name only through its
+// follow-up lookup (SR-2.5). find-missing and expire never return it. The
+// text names no cause, since a description built on it may be any of these.
+var ErrTmuxNotAvailable = errors.New("tmux: not available")
 
-// ErrTmuxSessionCreate is returned when `tmux new-session` exits non-zero.
-// Common causes: name collision, invalid cwd, the user-set default-shell is
-// missing. The wrapped tmux stderr (when present) appears in the unwrapped
-// chain so callers building error envelopes can include it. Plain spawn also
-// returns it for a created session that could not be labelled, which was then
-// ended or could not be (SR-1.2, SR-3.5).
+// ErrTmuxSessionCreate is class LAUNCH FAILURE, returned by spawn and resume
+// (reuse included) when the session-creating call (`tmux new-session`) fails
+// other than by timing out or by tmux being unavailable: the tmux server
+// refused the create, for example with "duplicate session" whose re-lookup
+// found no session holding the name, or with no server or socket to create
+// it on. The wrapped call failure appears in the unwrapped chain so callers
+// building error envelopes can include it. Spawn and resume also return it
+// for a created session that could not be labelled, which was then ended or
+// could not be (SR-1.2, SR-3.5).
 var ErrTmuxSessionCreate = errors.New("tmux: new-session failed")
 
 // ErrTmuxUnresponsive is class UNAVAILABLE (like 503) and transient: tmux did
@@ -58,7 +72,12 @@ var ErrTmuxSessionCreate = errors.New("tmux: new-session failed")
 // parse with a non-zero exit (the session may have been created and the row
 // stays pending), and when, for a caller-supplied instance id, the label
 // scan's lookup before anything is written is unreadable (SR-1.2, SR-9.3).
-// Later verbs add their own triggers. It wraps no other sentinel (SR-1.5).
+// kill returns it when its lookup is Can't tell with the unreadable variant
+// (a call timed out, a reply was not recognised, or an answer did not
+// parse), and when, after a kill was sent, the agent process cannot be
+// checked and the follow-up lookup is unreadable (SR-1.2, SR-6.1). The other
+// verbs that look up add their own triggers. It wraps no other sentinel
+// (SR-1.5).
 var ErrTmuxUnresponsive = errors.New("tmux: unresponsive")
 
 // ErrTmuxSessionConflict is class CONFLICT (like 409): permanent until a
@@ -67,29 +86,51 @@ var ErrTmuxUnresponsive = errors.New("tmux: unresponsive")
 // id returns it, before anything is written, when the label scan finds a
 // session carrying a valid label of this store that names the id ("left over
 // from an earlier life"), or when the scan's lookup finds conflicting labels
-// (SR-1.2, SR-9.3). Later verbs add their own triggers. It wraps no other
-// sentinel (SR-1.5).
+// (SR-1.2, SR-9.3). kill returns it, with no kill sent, when the lookup for a
+// live row is Leftover ("not this launch's session", SR-6.1) and when it is
+// Can't tell with the provenance_conflict variant ("conflicting labels":
+// two sessions carry the row's current label, or an @ad_owner value is set
+// at the global, server or global-window scope; SR-3.4), and, on a finished
+// row with the operator-only finished-row opt-in (SR-6.5), when the lookup
+// is Leftover or finds the row's own old session that never reported in to
+// this row ("never reported in", SR-6.7). Every verb that looks up returns
+// it for conflicting labels; the pane verbs also when the lookup is Ours but
+// the agent's pane was not found, or on a Leftover session; resume and
+// reuse for a session holding the name that is left over, is the row's own
+// old session, or carries another row's, another store's or no valid label
+// (SR-1.2, SR-3.10). It wraps no other sentinel (SR-1.5).
 var ErrTmuxSessionConflict = errors.New("tmux: session conflict")
 
-// ErrTmuxKillFailed is returned when `tmux kill-session` exits non-zero for
-// any reason other than the canonical "session not found" (which is mapped to
-// a quiet no-op success by callers via HasSession-before-kill).
-var ErrTmuxKillFailed = errors.New("tmux: kill-session failed")
+// ErrTmuxKillFailed is class UNAVAILABLE, returned by kill only, and means
+// "the agent process still runs after kill" (SR-1.1, SR-1.3). Its triggers
+// (SR-1.2, SR-6.1): a kill was sent to the agent's pane or to the row's
+// labelled session, and the agent process, or another process of a pane of
+// the labelled session, was still running after the kill exit wait
+// (kill_exit_wait_ms, SR-4.1); or a kill was sent, the agent process cannot
+// be checked, and the follow-up lookup still finds the labelled session; or
+// no session or pane of this launch was found while the row's recorded agent
+// process still runs, and no kill was sent. The row stays as it was. It must
+// never be read as "the agent is dead". Its text names no command, since
+// kill's descriptions wrap it (SR-1.4). It wraps no other sentinel (SR-1.5).
+var ErrTmuxKillFailed = errors.New("tmux: agent process still running")
 
-// ErrTmuxListPanesFailed is returned when `tmux list-panes` exits non-zero —
-// either the session doesn't exist or tmux refused to talk. Kept distinct
-// from ErrTmuxSessionCreate / ErrTmuxKillFailed so error envelopes are
-// specific to the operation that produced them.
+// ErrTmuxListPanesFailed marks a failed pane listing (`tmux list-panes`).
+// The pane listing is called (SR-3.7), but its failures are always converted
+// to a lookup outcome and never returned to callers, so this sentinel stays
+// out of the error catalogue (SR-1.1).
 var ErrTmuxListPanesFailed = errors.New("tmux: list-panes failed")
 
-// ErrTmuxSendKeys is returned when `tmux send-keys` exits non-zero — most
-// commonly because the named session has no live pane. Callers use this
-// to distinguish a transport-layer tmux failure from the verb-layer
-// state-precondition errors (ErrSpawnNotInteractive et al.).
+// ErrTmuxSendKeys is class GONE (like 410): the row's own session or pane is
+// not there (SR-1.1). send-keys and pause return it when the lookup is Gone
+// (nothing sent), or when a text or Enter call fails other than by timing out
+// and its follow-up lookup is Gone or Leftover (the current launch's session
+// is gone; SR-1.2, SR-7.3). It is distinct from the verb-layer state
+// refusals (ErrSpawnNotInteractive et al.).
 var ErrTmuxSendKeys = errors.New("tmux: send-keys failed")
 
-// ErrTmuxCaptureFailed is returned when `tmux capture-pane` exits non-zero —
-// the session vanished mid-call, the pane disappeared, etc. Distinct from
-// ErrSpawnNotFound (which is a store-layer concept) so the verb surface
-// can report a missing tmux session differently from a missing DB row.
+// ErrTmuxCaptureFailed is class GONE (like 410): the row's own session or
+// pane is not there (SR-1.1). read-pane returns it when the lookup is Gone
+// (nothing read), or when the capture fails other than by timing out and its
+// follow-up lookup is Gone or Leftover (SR-1.2). It is distinct from
+// ErrSpawnNotFound, which is about a missing store row.
 var ErrTmuxCaptureFailed = errors.New("tmux: capture-pane failed")

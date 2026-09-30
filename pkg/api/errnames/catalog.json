@@ -90,6 +90,11 @@
     "description": ""
   },
   {
+    "name": "ErrTmuxKillFailed",
+    "package": "tmux",
+    "description": ""
+  },
+  {
     "name": "ErrSpawnNotInteractive",
     "package": "api",
     "description": ""

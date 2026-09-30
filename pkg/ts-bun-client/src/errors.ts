@@ -388,7 +388,7 @@ export class ErrSystemInstallDisappeared extends AgentDirectorError {
 // ---------------------------------------------------------------------------
 // Catalog-derived error subclasses
 //
-// One subclass per entry in pkg/api/errnames/catalog.json (41 entries).
+// One subclass per entry in pkg/api/errnames/catalog.json (42 entries).
 // Bodies are empty: subclass identity is the sole value-add over the base class.
 // The factory (errorFromEnvelope) at the bottom of this file maps err_name
 // strings to these constructors.
@@ -430,6 +430,8 @@ export class ErrTmuxCaptureFailed extends AgentDirectorError {}
 export class ErrTmuxUnresponsive extends AgentDirectorError {}
 /** Mirrors ErrTmuxSessionConflict (package: tmux) */
 export class ErrTmuxSessionConflict extends AgentDirectorError {}
+/** Mirrors ErrTmuxKillFailed (package: tmux) */
+export class ErrTmuxKillFailed extends AgentDirectorError {}
 /** Mirrors ErrSpawnNotInteractive (package: api) */
 export class ErrSpawnNotInteractive extends AgentDirectorError {}
 /** Mirrors ErrSendKeysWhileRelayed (package: api) */
@@ -489,7 +491,7 @@ type ErrConstructor = new (
 
 /**
  * Lookup table from err_name strings (from the agent-director error envelope)
- * to their typed constructor. Derived from pkg/api/errnames/catalog.json — 41
+ * to their typed constructor. Derived from pkg/api/errnames/catalog.json — 42
  * entries.
  *
  * This is the most-grepped table in the project; keep it readable and in
@@ -521,6 +523,7 @@ const ERROR_TABLE = {
   ErrTmuxCaptureFailed,
   ErrTmuxUnresponsive,
   ErrTmuxSessionConflict,
+  ErrTmuxKillFailed,
   // api package
   ErrSpawnNotInteractive,
   ErrSendKeysWhileRelayed,

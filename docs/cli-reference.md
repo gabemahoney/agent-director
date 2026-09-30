@@ -174,6 +174,10 @@ _None._
 ### Errors
 
 - `ErrSpawnNotFound`
+- `ErrTmuxNotAvailable`
+- `ErrTmuxKillFailed`
+- `ErrTmuxUnresponsive`
+- `ErrTmuxSessionConflict`
 
 ## decide
 

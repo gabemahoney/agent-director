@@ -183,6 +183,20 @@ func seconds(d time.Duration) string {
 // unresponsiveMustNot is what no ErrTmuxUnresponsive description may say.
 var unresponsiveMustNot = []string{"dead", "gone"}
 
+// DescKillSentinelText is the text of a tmux sentinel that kill's
+// descriptions wrap (ErrTmuxNotAvailable, ErrTmuxKillFailed,
+// ErrTmuxUnresponsive, ErrTmuxSessionConflict): neither "dead" nor "gone"
+// (SR-1.4's must-nots) and, per Epic 10's error-names Task, not the bare word
+// "kill" either, since "retry kill later" belongs to ErrTmuxKillFailed's
+// description and never to a sentinel text. name is the sentinel's name.
+// AssertDescription adds the session-ending command forms.
+func DescKillSentinelText(name string) DescCase {
+	return DescCase{
+		Name:    name + " sentinel text",
+		MustNot: append(append([]string(nil), unresponsiveMustNot...), "kill"),
+	}
+}
+
 // DescInstanceIDControlChar is ErrInvalidFlags for an explicit instance id
 // with a control character; the description never carries the id.
 func DescInstanceIDControlChar(id string) DescCase {
@@ -340,7 +354,8 @@ func DescTmuxNotRun() DescCase {
 }
 
 // DescSocketPermission is ErrTmuxNotAvailable for a socket this user may not
-// use. It never reads as a missing binary (the sentinel's own text).
+// use. It never reads as a missing binary, which is how the tmux binary not
+// running is described (the sentinel's own text is "tmux: not available").
 func DescSocketPermission(socket string) DescCase {
 	return DescCase{
 		Name:    "ErrTmuxNotAvailable, socket permission",

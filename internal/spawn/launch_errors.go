@@ -34,7 +34,7 @@ func TmuxUnavailableError(ce *tmux.CallError, socket, consequence string) error 
 // it. Under errors.Is it matches tmux.ErrTmuxNotAvailable and no other
 // sentinel (SR-1.1 class ENVIRONMENT; SR-1.5). Like tmux.SocketDirError it
 // has its own text and no Unwrap, so its description never carries the
-// sentinel's "binary not available" wording (SR-1.4 row "socket
+// sentinel's "tmux: not available" wording (SR-1.4 row "socket
 // permission").
 type SocketDeniedError struct {
 	// Socket is the socket path the reply named, or the one the call used.

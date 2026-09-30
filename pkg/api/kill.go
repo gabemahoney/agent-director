@@ -85,6 +85,20 @@ func Kill(s KillStore, t KillTmux, lg KillLogger, params KillParams) (KillResult
 //
 // Errors:
 //   - [ErrSpawnNotFound]: no row exists for the instance id.
+//   - [ErrTmuxNotAvailable]: the tmux binary could not be run, the socket is
+//     not accessible to this user, or this is not the tmux server the agent
+//     was launched on. When the lookup or the pane listing hit it, no kill
+//     was sent; when the follow-up lookup after a sent kill hit it, the kill
+//     may or may not have taken effect.
+//   - [ErrTmuxKillFailed]: the agent process still runs after kill: a kill
+//     was sent and the agent process (or another process of a pane of its
+//     session) outlived the kill exit wait, or the process cannot be checked
+//     and its labelled session is still there, or no session or pane of this
+//     launch was found while the process runs and no kill was sent.
+//   - [ErrTmuxUnresponsive]: tmux did not answer usably (the lookup could not
+//     be read, or a kill was sent but its follow-up could not answer).
+//   - [ErrTmuxSessionConflict]: the session found is not this launch's
+//     session, or tmux holds conflicting labels; no kill was sent.
 //
 // Nondeterminism: none.
 func (c *Client) Kill(params KillParams) (KillResult, error) {

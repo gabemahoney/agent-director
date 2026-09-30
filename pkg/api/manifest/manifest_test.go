@@ -219,24 +219,33 @@ func TestListHasSRDErrorNames(t *testing.T) {
 	}
 }
 
-// TestKillHasSRDErrorNames pins the kill entry's error catalog against
-// SRD §13.1: kill swallows tmux failures and is idempotent on terminal
-// states, so the only surface error is the row-lookup miss.
+// TestKillHasSRDErrorNames pins kill's ErrorNames to exactly SR-1.7's five
+// names, and Client.Kill's Go doc "Errors:" list to the same set.
 func TestKillHasSRDErrorNames(t *testing.T) {
 	v, ok := manifest.Lookup("kill")
 	if !ok {
 		t.Fatal("kill not in manifest")
 	}
-	want := []string{"ErrSpawnNotFound"}
-	have := map[string]bool{}
-	for _, n := range v.ErrorNames {
-		have[n] = true
+	got := append([]string(nil), v.ErrorNames...)
+	sort.Strings(got)
+	want := []string{
+		"ErrSpawnNotFound",
+		"ErrTmuxKillFailed",
+		"ErrTmuxNotAvailable",
+		"ErrTmuxSessionConflict",
+		"ErrTmuxUnresponsive",
 	}
-	for _, n := range want {
-		if !have[n] {
-			t.Errorf("kill.ErrorNames missing %q", n)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("kill.ErrorNames = %v, want exactly %v", got, want)
+	}
+	for _, absent := range []string{"ErrSpawnNotResumable", "ErrInternal"} {
+		for _, n := range v.ErrorNames {
+			if n == absent {
+				t.Errorf("kill.ErrorNames lists %q", absent)
+			}
 		}
 	}
+	assertGoDocErrorsMatchManifest(t, "Kill", "kill")
 }
 
 // TestPauseHasSRDErrorNames pins the pause entry's error catalog against

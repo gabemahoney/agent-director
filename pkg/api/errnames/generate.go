@@ -75,14 +75,16 @@ var packageOf = map[string]string{
 	"ErrAmbiguousRequest":          "store",
 
 	// internal/tmux
-	// ErrTmuxKillFailed and ErrTmuxListPanesFailed are intentionally absent:
-	// they were removed from Catalog in Task 7 (never surfaced to API callers).
+	// ErrTmuxListPanesFailed is intentionally absent: the pane listing is
+	// called (SR-3.7), but its failures are always converted to a lookup
+	// outcome and never reach callers, so it has no Catalog entry (SR-1.1).
 	"ErrTmuxNotAvailable":    "tmux",
 	"ErrTmuxSessionCreate":   "tmux",
 	"ErrTmuxSendKeys":        "tmux",
 	"ErrTmuxCaptureFailed":   "tmux",
 	"ErrTmuxUnresponsive":    "tmux",
 	"ErrTmuxSessionConflict": "tmux",
+	"ErrTmuxKillFailed":      "tmux",
 
 	// internal/config
 	"ErrTemplateNameUnsafe": "config",

@@ -10,6 +10,8 @@ package api_test
 // and Label* constant is re-declared in pkg/api as Tmux<Name> = tmux.<Name>.
 
 import (
+	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -27,6 +29,8 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
+	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 )
 
 // The Recorder is the test double for api.TmuxClient (F.3: "*tmux.Client and
@@ -145,6 +149,45 @@ func TestTmuxAliasesAreIdentical(t *testing.T) {
 				t.Errorf("api.%s is %s.%s; want the alias of %s.%s",
 					tc.name, tc.api.PkgPath(), tc.api.Name(), tc.orig.PkgPath(), tc.orig.Name())
 			}
+		})
+	}
+}
+
+// TestTmuxSentinelAliases checks each pkg/api tmux sentinel is the internal/tmux
+// sentinel itself, so a wrapped one matches it under errors.Is and classifies to its name.
+func TestTmuxSentinelAliases(t *testing.T) {
+	cases := []struct {
+		name      string
+		api, orig error
+		// killWraps: kill's descriptions wrap this sentinel, so its text is
+		// checked against apitest.DescKillSentinelText.
+		killWraps bool
+	}{
+		{"ErrTmuxNotAvailable", api.ErrTmuxNotAvailable, tmux.ErrTmuxNotAvailable, true},
+		{"ErrTmuxSessionCreate", api.ErrTmuxSessionCreate, tmux.ErrTmuxSessionCreate, false},
+		{"ErrTmuxKillFailed", api.ErrTmuxKillFailed, tmux.ErrTmuxKillFailed, true},
+		{"ErrTmuxUnresponsive", api.ErrTmuxUnresponsive, tmux.ErrTmuxUnresponsive, true},
+		{"ErrTmuxSessionConflict", api.ErrTmuxSessionConflict, tmux.ErrTmuxSessionConflict, true},
+		{"ErrTmuxSendKeys", api.ErrTmuxSendKeys, tmux.ErrTmuxSendKeys, false},
+		{"ErrTmuxCaptureFailed", api.ErrTmuxCaptureFailed, tmux.ErrTmuxCaptureFailed, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.api == nil || tc.api != tc.orig {
+				t.Fatalf("api.%s (%v) is not the tmux.%s sentinel value; want api.%s = tmux.%s", tc.name, tc.api, tc.name, tc.name, tc.name)
+			}
+			wrapped := fmt.Errorf("verb failed: %w", tc.orig)
+			if !errors.Is(wrapped, tc.api) {
+				t.Errorf("errors.Is(wrapped tmux.%s, api.%s) = false; want true", tc.name, tc.name)
+			}
+			if got, _ := errnames.Classify(wrapped); got != tc.name {
+				t.Errorf("errnames.Classify(wrapped tmux.%s) = %q; want %q", tc.name, got, tc.name)
+			}
+			c := apitest.DescCase{Name: tc.name + " sentinel text"}
+			if tc.killWraps {
+				c = apitest.DescKillSentinelText(tc.name)
+			}
+			apitest.AssertDescription(t, tc.orig.Error(), c)
 		})
 	}
 }

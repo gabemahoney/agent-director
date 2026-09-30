@@ -243,6 +243,9 @@ export declare class ErrTmuxUnresponsive extends AgentDirectorError {
 /** Mirrors ErrTmuxSessionConflict (package: tmux) */
 export declare class ErrTmuxSessionConflict extends AgentDirectorError {
 }
+/** Mirrors ErrTmuxKillFailed (package: tmux) */
+export declare class ErrTmuxKillFailed extends AgentDirectorError {
+}
 /** Mirrors ErrSpawnNotInteractive (package: api) */
 export declare class ErrSpawnNotInteractive extends AgentDirectorError {
 }

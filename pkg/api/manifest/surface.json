@@ -546,7 +546,11 @@
       ],
       "result_fields": [],
       "error_names": [
-        "ErrSpawnNotFound"
+        "ErrSpawnNotFound",
+        "ErrTmuxNotAvailable",
+        "ErrTmuxKillFailed",
+        "ErrTmuxUnresponsive",
+        "ErrTmuxSessionConflict"
       ]
     },
     {

@@ -452,6 +452,10 @@ var Verbs = []VerbDef{
 		ResultFields: []FieldDef{},
 		ErrorNames: []string{
 			"ErrSpawnNotFound",
+			"ErrTmuxNotAvailable",
+			"ErrTmuxKillFailed",
+			"ErrTmuxUnresponsive",
+			"ErrTmuxSessionConflict",
 		},
 	},
 	{

@@ -114,20 +114,41 @@ var ErrSchemaMigrationRequired = store.ErrSchemaMigrationRequired
 // CreateIfMissing: true.
 var ErrStoreNotInitialized = store.ErrStoreNotInitialized
 
-// Tmux sentinels — surface from spawn and resume when tmux is unavailable or
-// fails to create a new session.
+// Tmux sentinels (SR-1.1, SR-1.6): the tmux-caused refusals of the verbs
+// that run tmux (kill, read-pane, send-keys, pause, resume and spawn), each
+// of one class. Match them with errors.Is; every tmux-caused error matches
+// exactly one of them (SR-1.5). Only the GONE class (ErrTmuxSendKeys,
+// ErrTmuxCaptureFailed) may be read as "the row's session is not there";
+// UNAVAILABLE, CONFLICT and ENVIRONMENT never mean the agent is dead.
 
-// ErrTmuxSessionCreate is returned by spawn (and resume) when tmux
-// new-session exits non-zero. Check the system tmux installation and
-// TMUX_TMPDIR if this surfaces in production.
+// ErrTmuxNotAvailable (class ENVIRONMENT) is returned when this caller cannot
+// reach the agent's tmux server as launched: the tmux binary cannot be run,
+// tmux refuses the socket to this user, the launch's socket directory is
+// unusable, or the lookup finds that this is not the tmux server the agent
+// was launched on (SR-1.2). It does not always mean nothing was done: a
+// plain spawn whose session-creating call hit it keeps its new pending row
+// (SR-9.4, SR-18.1), and when the follow-up lookup after a kill, send or
+// capture call returns it, that call may or may not have taken effect
+// (SR-2.5, SR-6.1). The caller must run as the agents' user in their tmux
+// environment. kill, read-pane, send-keys, pause, resume and spawn return it.
+var ErrTmuxNotAvailable = tmux.ErrTmuxNotAvailable
+
+// ErrTmuxSessionCreate (class LAUNCH FAILURE) is returned by spawn (and
+// resume) when the session-creating call fails other than by timing out or
+// by tmux being unavailable, or when a created session could not be
+// labelled (SR-1.2). Check the system tmux installation and TMUX_TMPDIR if
+// this surfaces in production.
 var ErrTmuxSessionCreate = tmux.ErrTmuxSessionCreate
 
 // ErrTmuxUnresponsive (class UNAVAILABLE, transient) is returned when tmux did
 // not answer usably, so the outcome is unknown; the caller may retry later.
 // It never means the agent is dead (SR-1.1, SR-1.6). spawn returns it when
 // the session-creating call timed out or its reply does not parse with a
-// non-zero exit (the row stays pending), and when the label scan for a caller-supplied instance id
-// cannot read tmux's answer.
+// non-zero exit (the row stays pending), and when the label scan for a
+// caller-supplied instance id cannot read tmux's answer. kill returns it when
+// its lookup cannot read tmux's answer, and when a kill was sent but the
+// agent process cannot be checked and the follow-up lookup cannot read
+// tmux's answer.
 var ErrTmuxUnresponsive = tmux.ErrTmuxUnresponsive
 
 // ErrTmuxSessionConflict (class CONFLICT) is returned when a tmux session
@@ -135,5 +156,29 @@ var ErrTmuxUnresponsive = tmux.ErrTmuxUnresponsive
 // look (SR-1.1, SR-1.6). It never means the agent is dead. spawn with a
 // caller-supplied instance id returns it, before anything is written, when a
 // session of this store labelled with that id is left over from an earlier
-// life, or when tmux holds conflicting labels.
+// life, or when tmux holds conflicting labels. kill returns it, with no kill
+// sent, when the session its lookup finds is not this launch's session, or
+// when tmux holds conflicting labels for the row.
 var ErrTmuxSessionConflict = tmux.ErrTmuxSessionConflict
+
+// ErrTmuxKillFailed (class UNAVAILABLE) is returned by kill only: the agent
+// process still runs after kill (SR-1.1, SR-1.2). A kill was sent and the
+// agent process, or another process of a pane of the agent's session, was
+// still running after the kill exit wait; or a kill was sent, the agent
+// process cannot be checked and its labelled session is still there; or no
+// session or pane of the launch was found while the agent process still
+// runs, and no kill was sent. kill never changes the row's state (SR-6.1).
+// It never means the agent is dead.
+var ErrTmuxKillFailed = tmux.ErrTmuxKillFailed
+
+// ErrTmuxSendKeys (class GONE) is returned by send-keys and pause when the
+// row's own session or pane is not there: the lookup finds no session of the
+// launch (nothing sent), or a keys call failed and the follow-up lookup
+// finds the launch's session gone (SR-1.1, SR-1.2).
+var ErrTmuxSendKeys = tmux.ErrTmuxSendKeys
+
+// ErrTmuxCaptureFailed (class GONE) is returned by read-pane when the row's
+// own session or pane is not there: the lookup finds no session of the
+// launch (nothing read), or the capture failed and the follow-up lookup
+// finds the launch's session gone (SR-1.1, SR-1.2).
+var ErrTmuxCaptureFailed = tmux.ErrTmuxCaptureFailed

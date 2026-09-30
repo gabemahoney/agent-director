@@ -18,6 +18,10 @@
  * b.fmk Epic 7 additions:
  *  12. ErrTmuxUnresponsive / ErrTmuxSessionConflict — instanceof chain when
  *      constructed and when built by errorFromEnvelope for verb "spawn".
+ *
+ * b.fmk Epic 10 additions:
+ *  13. ErrTmuxKillFailed joins the Case 12 table; errorFromEnvelope for verb
+ *      "kill" builds ErrTmuxKillFailed and ErrTmuxSessionConflict.
  */
 
 import { test, expect, describe, spyOn } from "bun:test";
@@ -42,6 +46,8 @@ import {
   // b.fmk Epic 7: tmux classes the spawn label scan and bounded launch return.
   ErrTmuxUnresponsive,
   ErrTmuxSessionConflict,
+  // b.fmk Epic 10: the tmux class kill returns when the agent process outlives it.
+  ErrTmuxKillFailed,
 } from "../src/errors.js";
 
 // ---------------------------------------------------------------------------
@@ -460,32 +466,39 @@ describe("ErrMissingRequestToken (catalog-derived, api)", () => {
 
 // ---------------------------------------------------------------------------
 // b.fmk Epic 7 — Case 12: ErrTmuxUnresponsive / ErrTmuxSessionConflict (tmux)
+// b.fmk Epic 10 — Case 13: ErrTmuxKillFailed; kill rows (SR-1.6, SR-1.7)
 // ---------------------------------------------------------------------------
-describe("spawn tmux classes (catalog-derived, tmux)", () => {
+describe("spawn and kill tmux classes (catalog-derived, tmux)", () => {
+  // verbs: the verbs whose envelopes carry this name; the first builds the
+  // constructed instance.
   const cases = [
-    { name: "ErrTmuxUnresponsive", cls: ErrTmuxUnresponsive },
-    { name: "ErrTmuxSessionConflict", cls: ErrTmuxSessionConflict },
+    { name: "ErrTmuxUnresponsive", cls: ErrTmuxUnresponsive, verbs: ["spawn"] },
+    { name: "ErrTmuxSessionConflict", cls: ErrTmuxSessionConflict, verbs: ["spawn", "kill"] },
+    { name: "ErrTmuxKillFailed", cls: ErrTmuxKillFailed, verbs: ["kill"] },
   ] as const;
 
-  for (const { name, cls } of cases) {
+  for (const { name, cls, verbs } of cases) {
     /** A constructed instance keeps the subclass → base → Error chain and its name. */
     test(`${name} constructed: instanceof chain and name`, () => {
-      const err = new cls("spawn", name, "synthetic description");
+      const err = new cls(verbs[0], name, "synthetic description");
       expect(err).toBeInstanceOf(cls);
       expect(err).toBeInstanceOf(AgentDirectorError);
       expect(err).toBeInstanceOf(Error);
       expect(err.name).toBe(name);
     });
 
-    /** errorFromEnvelope maps the spawn envelope's err_name to this class. */
-    test(`${name} via errorFromEnvelope for verb spawn`, () => {
-      const err = errorFromEnvelope("spawn", name, "synthetic description");
-      expect(err).toBeInstanceOf(cls);
-      expect(err).toBeInstanceOf(AgentDirectorError);
-      expect(err.errName).toBe(name);
-      expect(err.verb).toBe("spawn");
-      expect(err.message).toBe(`${name}: synthetic description`);
-    });
+    for (const verb of verbs) {
+      /** errorFromEnvelope maps this verb's envelope err_name to this class, never the unknown-name fallback. */
+      test(`${name} via errorFromEnvelope for verb ${verb}`, () => {
+        const err = errorFromEnvelope(verb, name, "synthetic description");
+        expect(err.constructor).toBe(cls);
+        expect(err).toBeInstanceOf(AgentDirectorError);
+        expect(err).not.toBeInstanceOf(ErrUnknownErrorName);
+        expect(err.errName).toBe(name);
+        expect(err.verb).toBe(verb);
+        expect(err.message).toBe(`${name}: synthetic description`);
+      });
+    }
   }
 });
 

@@ -5689,6 +5689,13 @@ package doc comment (`doc.go`, "# Description helper") says the same.
     tmux socket the row's launch uses, omitted for a row from before this
     release). Check with `AssertAgentTextCase`. **Must use** it for any Go
     check of that text; never spell its phrases in a test.
+  - `DescKillSentinelText(name)`: the own text of a tmux sentinel that
+    kill's descriptions wrap (`ErrTmuxNotAvailable`, `ErrTmuxKillFailed`,
+    `ErrTmuxUnresponsive`, `ErrTmuxSessionConflict`); `name` is the
+    sentinel's name. It requires no phrase. "dead", "gone" (SR-1.4) and the
+    bare word "kill" (Epic 10's error-names rule) are must-nots, matched
+    as whole words in any case: "retry kill later" belongs to
+    `ErrTmuxKillFailed`'s description, never to a sentinel text.
   - Resume (`descriptions_resume.go`):
     - `DescResumeLaunchInProgress(LaunchInProgress{InstanceID, LaunchStart})`:
       `ErrSpawnNotResumable` for a `pending` row. A zero `LaunchStart`
