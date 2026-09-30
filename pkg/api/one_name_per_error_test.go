@@ -5,7 +5,9 @@ package api_test
 // tmux-caused error (and reachable ErrInternal case) the verbs return today,
 // driven through api.Client (or the exported api.Kill) with tmuxfix.Recorder
 // failure kinds. The spawnEnv fixture is in spawn_test.go, resumeEnv in
-// resume_fixture_test.go, killEnv in kill_fixture_test.go.
+// resume_fixture_test.go, killEnv in kill_fixture_test.go. Later verb Epics
+// extend this file (a oneName<Verb>Rows added to oneNameRows, every error
+// through assertOneName) instead of writing their own one-name check.
 
 import (
 	"errors"

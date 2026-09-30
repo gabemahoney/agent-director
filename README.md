@@ -436,59 +436,244 @@ agent-director does not restart sessions for you. Deciding when to run
 `find-missing` then `resume` after a boot — from a startup script,
 service, or scheduler — is up to you.
 
+## Caller contract
+
+For programs and agents that call agent-director. The full contract, with
+the class of every tmux error, is in
+[Caller contract: tmux refusal classes](docs/architecture.md#caller-contract-tmux-refusal-classes).
+
+- Only a GONE answer means a row's session is not there. Every other tmux
+  error means "don't know", never "dead".
+- Never `delete` a row after a `kill` that did not succeed.
+- The row state, kept honest by `find-missing`, is the liveness authority;
+  there is no liveness verb.
+- Run as the same user and in the same tmux environment as the agents.
+- A situation that needs a human is described in
+  [Operator actions](#operator-actions); callers never perform those
+  actions.
+
+To end a live row (`pending` included) and relaunch its id, a caller
+follows this bounded, paced sequence:
+
+1. `agent-director kill --claude-instance-id <id>`, and check the result;
+   on any error follow its class and never delete the row.
+2. If the row is `pending`, wait until its launch start
+   (`launch_started_at`, shown by
+   `agent-director status --claude-instance-id <id>`) plus the pending
+   grace period (60 s unless the operator configured another value) has
+   passed; a pending row inside its grace period means wait and check
+   again later, never escalate.
+3. Run `agent-director find-missing`, then confirm with
+   `agent-director status --claude-instance-id <id>` (or `get`) that the
+   row is `ended` or `missing`; if not, wait about 5 s and repeat, up to
+   three `find-missing` runs in all.
+4. If still live, `kill` once more, wait about 5 s, run `find-missing` once
+   more and check.
+5. If still live, stop and escalate to a human.
+6. Once the row is `ended` or `missing`, resume it if it has a session id
+   and the caller wants the conversation back
+   (`agent-director resume --claude-instance-id <id>`); otherwise spawn with
+   `--reuse-finished`
+   (`agent-director spawn --claude-instance-id <id> --reuse-finished --cwd <dir>`).
+   A caller whose ids agent-director mints spawns fresh instead of reusing.
+   A `pending` row, a resumed one included, enters this sequence, so a
+   stuck `resume` handled this way can still get its conversation back; a
+   reuse makes that conversation unreachable for good.
+
 ## Operator actions
 
-These actions are for humans only: automated callers (scripts, agents,
-MCP clients) must not perform them.
+These actions are for humans only: automated callers (programs, scripts,
+agents, MCP clients) must not perform them.
+
+Run every command as the agents' user. Every tmux command names the row's
+socket with `-S '<socket>'`: the `tmux_socket` that
+`agent-director get --claude-instance-id <id>` shows (a row that records
+none uses the socket of your tmux environment, by default
+`/tmp/tmux-<uid>/default`). Keep the single quotes, so the shell leaves the
+`$` of a session id alone. A session's environment is never evidence of
+whose it is. Trail records are lines of `~/.agent-director/ad-trail.jsonl`.
+Never `delete` a row after a `kill` that did not succeed.
+
+### A leftover, or a session with no valid label
+
+A leftover is a session of an earlier launch of the agent: its label names
+the row's id with another launch token. Whether the row is `pending` or
+live, `agent-director kill` refuses it with `ErrTmuxSessionConflict` ("not
+this launch's session"), sends nothing and names the session's id (`$N`).
+A session with no valid label may be a person's own, so look before acting.
+
+1. Find the session and note its `session_created`:
+
+   ```sh
+   tmux -u -S '<socket>' list-sessions -F '#{session_id} #{session_created} #{session_name}'
+   ```
+
+2. Check its label:
+
+   ```sh
+   tmux -u -S '<socket>' show-options -t '<session id>' -v @ad_owner
+   ```
+
+   A valid label has five fields: `ad1`, a launch token, the session's own
+   id, the row's id and, last, the store id. Every leftover `kill` names
+   carries this store's id; a label whose last field is a different id
+   belongs to another agent-director store's agent: never end it from this
+   store. A session with no label prints nothing
+   (`invalid option: @ad_owner` on tmux 3.3a); an invalid label prints
+   something malformed. `no such session` means it has gone.
+3. Look at it read-only (detach with the tmux prefix key, then `d`):
+
+   ```sh
+   tmux -u -S '<socket>' attach-session -r -t '<session id>'
+   ```
+
+4. If it is not wanted, end it by its session id, never by its name (a name
+   target can match another session whose name begins with it):
+
+   ```sh
+   tmux -u -S '<socket>' kill-session -t '<session id>'
+   ```
+
+   If its window is shared with another session (a grouped session or a
+   linked window), ending the session leaves the program in its pane
+   running: end the pane by its id instead, taken from the listing:
+
+   ```sh
+   tmux -u -S '<socket>' list-panes -a -F '#{pane_id} #{pane_pid} #{session_id} #{session_name}'
+   tmux -u -S '<socket>' kill-pane -t '<pane id>'
+   ```
+
+5. `agent-director find-missing` marks the row once its agent process is
+   gone. Then resume the id (if the row has a session id and the
+   conversation is wanted) or spawn it again with `--reuse-finished`.
+
+On a `pending` row, first wait until `find-missing` marks the row `missing`
+(after the pending grace period), then, before step 4, list the sessions
+again and check that the session id still shows the `session_created` you
+noted; afterwards spawn the id with `--reuse-finished`.
 
 ### A spawn refused as "left over from an earlier life"
 
 A `spawn` with a `--claude-instance-id` that has no row is refused with
 `ErrTmuxSessionConflict` ("left over from an earlier life") when a tmux
 session of this agent-director store still carries that id. Nothing was
-written. The error names each such session by name and tmux session id
-(`$N`). The spawn's trail record gives the tmux socket, this store's id
-and the first session's id:
+written. The error names each such session by name and session id. The
+spawn's trail record gives the socket, this store's id and the first
+session's id:
 
 ```sh
 jq -c 'select(.event == "ad.launch.name_held" and .claude_instance_id == "<id>") | {tmux_socket, store_id, tmux_session_id, session_created}' ~/.agent-director/ad-trail.jsonl | tail -n 1
 ```
 
-The socket is the one the spawning caller's tmux environment resolves,
-by default `/tmp/tmux-<uid>/default`. Keep the single quotes in the
-commands below, so the shell leaves the `$` of a session id alone. For
-each session the error names:
+Handle each session as a leftover (steps 2 to 4 above; this store's id is
+the record's `store_id`), then spawn the id again: no row exists, so no
+reuse opt-in is needed. If the error says "and N more", find the others
+with the listing of step 1. The check before a spawn sees only this socket:
+it misses leftovers on another tmux server or socket, and sessions with no
+label.
 
-1. Check its label:
+### An agent process that runs with no session or pane of its launch
 
-   ```sh
-   tmux -u -S '<socket>' show-options -t '<session id>' -v @ad_owner
-   ```
+`agent-director kill` returns `ErrTmuxKillFailed` saying that no session or
+pane of this launch was found while the agent process still runs, and that
+no kill was sent. agent-director never signals a process itself; ending it
+is a human's decision:
 
-   A leftover of this id prints `ad1`, a launch token, the session's own
-   id, the instance id and, last, this store's id (the record's
-   `store_id`). A label whose last field is not this store's id belongs to
-   another agent-director store's agent: never end it. `no such session`
-   means it has gone. The session's environment is not evidence.
-2. Look at it read-only (detach with the tmux prefix key, then `d`):
-
-   ```sh
-   tmux -u -S '<socket>' attach-session -r -t '<session id>'
-   ```
-
-3. If it is not wanted, end it by its session id, never by its name:
+1. Take the pid from the error, or from the trail (`agent_pid`; for a
+   survivor, `survivor_pids`):
 
    ```sh
-   tmux -u -S '<socket>' kill-session -t '<session id>'
+   jq -c 'select(.event == "ad.kill.called" and .claude_instance_id == "<id>") | {agent_pid, survivor_pids, outcome}' ~/.agent-director/ad-trail.jsonl | tail -n 1
    ```
 
-4. Spawn the id again.
+2. Confirm it is the agent, a Claude Code process started when the launch
+   began:
 
-If the error says "and N more", list the sessions with
-`tmux -u -S '<socket>' list-sessions -F '#{session_id} #{session_name}'`
-and check each label as in step 1. The check before a spawn sees only
-this socket: it misses leftovers on another tmux server or socket, and
-sessions with no label.
+   ```sh
+   ps -o pid,lstart,args -p '<pid>'
+   ```
+
+3. Look for its pane (also on any other tmux server you know of), look at
+   its session read-only as above, and if it is not wanted end the pane by
+   its id:
+
+   ```sh
+   tmux -u -S '<socket>' list-panes -a -F '#{pane_id} #{pane_pid} #{session_id} #{session_name}'
+   tmux -u -S '<socket>' kill-pane -t '<pane id>'
+   ```
+
+4. If it is in no pane, run `ps` again to check that the pid still has the
+   same start time, then end it:
+
+   ```sh
+   kill '<pid>'
+   ```
+
+5. For the agent process: run
+   `agent-director kill --claude-instance-id <id>` again (it now succeeds),
+   or wait for `find-missing` to mark the row `missing`, then resume or
+   respawn the id as the [caller contract](#caller-contract) says. For a
+   survivor named by `survivor_pids`: end it as in step 4. A later `kill`
+   does not check it again, so its success says nothing about the survivor.
+
+The same procedure applies to a survivor that `kill` names after its wait:
+a process of a pane of the agent's session that outlived the pane kill and
+the session kill (for example one that ignores SIGHUP). Its pid is in the
+error's description and in `ad.kill.called`'s `survivor_pids`.
+
+### The agent's pane was not adopted after a lost create reply
+
+When the reply to the call that created a launch's session was lost,
+agent-director has not recorded the agent's pane, so the agent's hooks do
+not apply to the row, which can stay `pending` although its agent works.
+Each created pane carries the pane label `@ad_pane`, `<token> <pane id>`.
+
+1. Find the labelled session and read its label (steps 1 and 2 of the
+   leftover item); its second field is this launch's token. Then list its
+   panes with their pane labels, and look read-only as above:
+
+   ```sh
+   tmux -u -S '<socket>' list-panes -s -t '<session id>' -F '#{pane_id} #{pane_pid} #{pane_current_command} #{@ad_pane}'
+   ```
+
+   The agent's pane is the one whose value starts with this launch's token
+   and ends with its own pane id.
+2. End it with `agent-director kill --claude-instance-id <id>`, not by hand:
+   it is this launch's session. `kill` adopts the labelled pane, kills the
+   session and waits for every pane process of it. Then resume or reuse the
+   id, so that the next launch records its pane. An agent that is wanted can
+   be left running until then.
+
+### A row on a different tmux server
+
+`ErrTmuxNotAvailable` ("not the tmux server the agent was launched on";
+the trail's `lookup_outcome` is `different_server`): the server the row
+recorded still runs, but its socket now reaches another server (for
+example the old server's socket file was removed and a new server started
+there), or the server's identity cannot be checked. Find the old server's process and
+decide; `find-missing` settles the row once the old server process is gone.
+
+### A stray `@ad_owner` value or a duplicate label
+
+`ErrTmuxSessionConflict` ("conflicting labels"). agent-director never sets
+`@ad_owner` at these scopes. Look:
+
+```sh
+tmux -u -S '<socket>' show-options -g -v @ad_owner
+tmux -u -S '<socket>' show-options -s -v @ad_owner
+tmux -u -S '<socket>' show-options -gw -v @ad_owner
+```
+
+Remove a stray value with the matching form:
+
+```sh
+tmux -u -S '<socket>' set-option -g -u @ad_owner
+tmux -u -S '<socket>' set-option -s -u @ad_owner
+tmux -u -S '<socket>' set-option -gw -u @ad_owner
+```
+
+For two sessions with the same current label, look at both read-only and
+end the one that is not wanted by its session id, as for a leftover.
 
 ## Uninstall
 

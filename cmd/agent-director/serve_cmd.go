@@ -30,10 +30,12 @@ import (
 // a changed value applies after a restart (SR-4.1).
 //
 // Pin H4: the MCP dispatcher uses a SEPARATE *pkgapi.Client constructed
-// with Options.Logger: nil. This preserves the pre-refactor behavior where
-// Kill/FindMissing/Expire swallowed their tmux WARN logs on the MCP path
-// (those warnings are most useful to the interactive CLI operator, not a
-// long-lived MCP client). The two Clients have distinct logger ownership.
+// with Options.Logger: nil, so the verbs that still log WARN lines (Spawn,
+// Resume, FindMissing, Expire) stay silent on the MCP path (those warnings
+// are most useful to the interactive CLI operator, not a long-lived MCP
+// client). Kill has no logger path at all (SR-6.3): its errors reach the MCP
+// caller in the envelope and its audit is the ad.kill.called trail event.
+// The two Clients have distinct logger ownership.
 //
 // Pin H6: cfg is threaded in directly from run() via setupClient() so
 // newMCPLogger can receive it without a Client.Config() accessor, which
@@ -54,12 +56,13 @@ func serveHandlerWith(cfg config.Config, args []string) error {
 	}
 
 	// Construct a SEPARATE Client for the MCP dispatcher (Pin H4).
-	// Logger: nil so Kill/FindMissing/Expire WARN paths are silent for MCP.
+	// Logger: nil so the verbs that still log (Spawn, Resume, FindMissing,
+	// Expire) are silent for MCP; Kill has no logger path at all (SR-6.3).
 	// CreateIfMissing: true so the MCP server can create the DB on first run.
 	mcpClient, err := pkgapi.New(pkgapi.Options{
 		ConfigPath:      configPath,
 		CreateIfMissing: true,
-		Logger:          nil, // intentional: MCP path discards WARN logs (Pin H4)
+		Logger:          nil, // intentional: logging verbs are silent on MCP; kill has no logger path (Pin H4)
 	})
 	if err != nil {
 		return writeApiErrorAndDispatch("ErrStoreOpen", err.Error())
@@ -114,4 +117,3 @@ func newMCPLogger(cfg config.Config) *log.Logger {
 	}
 	return log.New(dest, "agent-director-mcp ", log.LstdFlags)
 }
-

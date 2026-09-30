@@ -106,10 +106,18 @@ const (
 // adoption writes to the row) and writes no log line. It writes exactly one
 // ad.kill.called trail event on every return path, and at most one
 // ad.provenance.disagree per reason, both fail-open. The contract is per
-// call: a later call checks only what it lists. startingSession and
-// stoppingWindow are the finished-row opt-in's and are unused until it
-// exists. Kill applies no fallback: every duration is used as given, and pc,
-// now and sleep must not be nil.
+// call: a later call checks only the processes it lists itself, so a process
+// an earlier call's ErrTmuxKillFailed named is not checked again.
+//
+// Kill applies no fallback and no minimum: every duration is used as given.
+// startingSession is the starting-session bound (safe minimum 60 s) and
+// stoppingWindow the stopping window (safe minimum 30 s), both unused by
+// today's kill; exitWait is the kill exit wait, which has no safe minimum
+// (too short a wait returns ErrTmuxKillFailed for an agent still exiting).
+// The configuration file enforces the minimums (SR-4.1); a direct caller
+// passes values at or above them. pc, now and sleep must not be nil, and
+// sleep must advance the clock now reads: the wait ends only once now shows
+// exitWait has passed, so a sleep that does not advance now loops forever.
 func Kill(s KillStore, t KillTmux, pc ProcChecker, startingSession, stoppingWindow, exitWait time.Duration,
 	now func() time.Time, sleep func(time.Duration), params KillParams) (result KillResult, err error) {
 	k := &killRun{
@@ -404,13 +412,58 @@ func sessionProcesses(pc ProcChecker, panes []tmux.Pane, sessionID string, agent
 	return out
 }
 
-// Kill ends the Spawn's current agent: the one in the tmux session that
-// carries the row's current launch label, on the row's recorded socket. It
-// kills the agent's pane and that session by their tmux ids, then succeeds
-// only once the agent process is gone; kill_sent reports whether a kill was
-// sent. A finished row (ended, missing) is a no-op success with kill_sent
-// false. Kill never changes the row's state, never signals a process itself
-// and writes no log line; every tmux refusal is a returned error.
+// Kill ends the agent of a live row's current launch (pending included): the
+// agent in the tmux session that carries the row's current launch label, on
+// the row's recorded socket. It kills the agent's pane and that session by
+// their tmux ids and succeeds only once the agent process is gone, waiting up
+// to the configured kill exit wait (kill_exit_wait_ms). [KillResult.KillSent]
+// reports whether a kill was sent. When no session of the launch is found,
+// the agent process decides: gone, or none recorded, is success with
+// KillSent false; still running, its pane is killed if another session still
+// shows it, and otherwise the call fails with no kill sent.
+//
+// A finished row (ended, missing) is a no-op success with KillSent false and
+// no tmux call. That is not verification, and not proof, that the agent
+// exited. On a pending row Kill aborts only the current launch; a call made
+// before the launch created its session returns KillSent false and does not
+// stop the launch. Kill never ends a session an earlier launch left behind.
+//
+// Kill never changes the row's state: find-missing marks the row once its
+// agent process is gone. Kill never signals a process itself, so success
+// means the agent process exited, not every process it started. Kill writes
+// no log lines: the returned error is the report, and the ad.kill.called
+// trail event is the audit.
+//
+// Success is judged per call: Kill succeeds when the agent process and every
+// other process it found in the panes of the agent's session are gone. If
+// ErrTmuxKillFailed named another process that outlived the kill (its pid is
+// in the error), that process is not the agent and later calls do not track
+// it: a retried call checks only the agent process, so once the agent is gone
+// it succeeds with KillSent false whether or not that process still runs. A
+// retry's success means only that the agent is gone; the named process needs
+// a human (see "Operator actions" in the agent-director README). If the row
+// finishes while Kill waits and the agent outlives the wait, Kill returns
+// ErrTmuxKillFailed, and a retried call is a finished-row no-op.
+//
+// Error classes: ErrTmuxKillFailed and ErrTmuxUnresponsive are UNAVAILABLE
+// (retry later), ErrTmuxSessionConflict is CONFLICT (permanent until a human
+// looks; see "Operator actions" in the agent-director README) and
+// ErrTmuxNotAvailable is ENVIRONMENT; for Kill, GONE is success. None of these
+// errors means that the agent is dead, and a caller never deletes a row after
+// a Kill that did not succeed. The live-row sequence in the agent-director
+// README's caller-contract summary says what a caller does next.
+//
+// The caller must run as the same user and in the same tmux environment as
+// the agents. Two consequences: Kill's success on a finished row is not
+// verification that the agent exited; and on the wrong tmux server, a row
+// wrongly marked missing, Kill's no-op success and a reuse together start a
+// second agent for the same id.
+//
+// A live row whose recorded tmux session name cannot be used (it is empty,
+// contains a control character, or contains a character tmux stores
+// differently) gets ErrInternal (an error matching no catalogued sentinel)
+// with no tmux call; removing the row is a human's decision (see "Operator
+// actions" in the agent-director README).
 //
 // CLI: agent-director kill
 //

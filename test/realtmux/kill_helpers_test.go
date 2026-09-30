@@ -19,7 +19,8 @@ import (
 // The shared real-tmux kill fixture (SRD SR-6.1, SR-20.4, SR-20.7): live rows
 // in a temp HOME's store matching sessions made by the production create, the
 // production pkg/api client through api.New with a configurable kill exit
-// wait, SIGHUP stand-ins, and the observations after one kill call.
+// wait, SIGHUP stand-ins, and the observations after one kill call. Later
+// verb Epics extend this fixture instead of writing their own.
 
 // killFix is the lookup fixture plus a temp HOME holding a fresh store.
 type killFix struct {

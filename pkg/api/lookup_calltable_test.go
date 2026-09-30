@@ -7,7 +7,8 @@ package api_test
 // its tmux and process world on the kill fixture (kill_fixture_test.go); a
 // verb is a small adapter (invoke, its action calls, its first action) with
 // one expected cell per column. Sequence details, the process wait and the
-// ceilings are kill_test.go's.
+// ceilings are kill_test.go's. Later verb Epics extend this table (an
+// adapter appended to callTableVerbs) instead of writing their own.
 
 import (
 	"reflect"

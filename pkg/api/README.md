@@ -297,11 +297,18 @@ without special-casing.
 
 ### Kill
 
-Terminate the Spawn's tmux session. Idempotent on terminal states
-(`ended`, `missing`) — calling Kill on an already-gone Spawn is a
-no-op success. The row's state column is NOT updated immediately; it
-transitions to `missing` on the next `find-missing` reconciliation pass.
-Tmux failures are swallowed at the verb surface and logged at WARN level.
+End the agent of a live row's current launch (`pending` included). Kill
+finds the tmux session that carries the launch's label on the row's
+recorded socket, ends the agent's pane and that session by their tmux ids,
+and succeeds only once the agent process is gone, waiting up to
+`kill_exit_wait_ms`. When no session of the launch is found, the agent
+process decides: gone, or none recorded, is success with nothing sent.
+Kill never signals a process itself and never ends a session an earlier
+launch left behind.
+
+A finished row (`ended`, `missing`) is a no-op success with no tmux call;
+that is not verification that the agent exited. Kill never changes the
+row's state: `find-missing` marks the row once its agent process is gone.
 
 ```bash
 agent-director kill \
@@ -318,8 +325,41 @@ if err != nil {
 fmt.Println(res.KillSent) // true: a kill was sent to the agent's session
 ```
 
-Returns `KillResult` (empty struct, reserved for future fields).
-Most-likely sentinel error: `ErrSpawnNotFound`. See `(*Client).Kill`
+Returns `KillResult`. `KillSent` (`kill_sent`) is true exactly when a pane
+kill or a session kill was sent, including one whose call failed; false
+when nothing was sent, for example for a finished row.
+
+Errors (check them with `errors.Is` against the exported sentinels):
+
+| Sentinel | Class | Meaning |
+|---|---|---|
+| `ErrSpawnNotFound` | — | No row has this id |
+| `ErrTmuxKillFailed` | UNAVAILABLE | The agent process, or another process of the session's panes, still ran after the kill exit wait; or it cannot be checked and its labelled session is still there; or no session or pane of this launch was found while it runs. Retry later; never delete the row |
+| `ErrTmuxUnresponsive` | UNAVAILABLE | tmux did not answer usably, before or after a kill was sent. Retry later with backoff |
+| `ErrTmuxSessionConflict` | CONFLICT | The session found is not this launch's session, or tmux holds conflicting labels; no kill was sent. A human must look: see "Operator actions" in the [top-level README](../../README.md#operator-actions) |
+| `ErrTmuxNotAvailable` | ENVIRONMENT | tmux could not be run, its socket is not accessible to this user, or this is not the tmux server the agent was launched on |
+
+A live row whose recorded tmux session name cannot be used (empty, with a
+control character, or with a character tmux stores differently) returns an
+error classified `ErrInternal`, with no tmux call. None of these errors
+means that the agent is dead.
+
+```go
+_, err := c.Kill(api.KillParams{ClaudeInstanceID: id})
+switch {
+case err == nil:
+    // the agent process is gone
+case errors.Is(err, api.ErrTmuxKillFailed), errors.Is(err, api.ErrTmuxUnresponsive):
+    // retry later with backoff; never delete the row
+case errors.Is(err, api.ErrTmuxSessionConflict):
+    // stop and surface it to a human
+}
+```
+
+The caller must run as the same user and in the same tmux environment as
+the agents. What to do next with a stuck live row is the live-row sequence
+in the top-level README's
+[Caller contract](../../README.md#caller-contract). See `(*Client).Kill`
 godoc.
 
 ---

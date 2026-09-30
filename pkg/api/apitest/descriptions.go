@@ -19,8 +19,10 @@ import (
 // documented procedure (manifest descriptions) through AssertAgentText; no
 // test spells these phrases or forms itself. A new SR-1.4 case is added here
 // as a constructor, or in a sibling file of one verb's cases
-// (descriptions_resume.go, descriptions_kill.go) or of the lookup's shared
-// Can't tell cases (descriptions_lookup.go).
+// (descriptions_resume.go, descriptions_kill.go), of the lookup's shared
+// Can't tell cases (descriptions_lookup.go) or of SR-18.6's live-row
+// sequence, which three manifest descriptions state
+// (descriptions_live_row.go).
 
 // DescCase is one SR-1.4 description case: Name (shown in every failure),
 // the phrases the description must contain, the case's own must-not phrases
@@ -44,10 +46,16 @@ type DescSession struct {
 	ID   string
 }
 
+// OperatorActionsTitle is the title of the agent-director README section the
+// "Operator actions" pointer names (SR-18.17): the one definition that
+// PointsToOperatorActions and the README section check both read.
+const OperatorActionsTitle = "Operator actions"
+
 // PointsToOperatorActions returns c also requiring the pointer to the
-// "Operator actions" section of the agent-director README (SR-1.4, SR-18.17).
+// OperatorActionsTitle section of the agent-director README (SR-1.4,
+// SR-18.17), quoted by its title.
 func (c DescCase) PointsToOperatorActions() DescCase {
-	c.Require = append(append([]string(nil), c.Require...), `"Operator actions"`, "agent-director README")
+	c.Require = append(append([]string(nil), c.Require...), strconv.Quote(OperatorActionsTitle), "agent-director README")
 	return c
 }
 
@@ -465,7 +473,7 @@ func DescSpawnScanRefusal() DescCase {
 		Name: "spawn manifest, label scan refusal",
 		Require: []string{
 			"ErrTmuxSessionConflict", "CONFLICT", scanLeftoverWord,
-			`"Operator actions"`, "nothing is written",
+			strconv.Quote(OperatorActionsTitle), "nothing is written",
 		},
 		MustNot: rowEndedStatements,
 	}

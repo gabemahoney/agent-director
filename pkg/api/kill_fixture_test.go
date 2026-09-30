@@ -7,6 +7,8 @@ package api_test
 // factory (row, its own labelled session, its agent process), process and
 // server call hooks, the trail readers and the call assertion. It holds no
 // tests. HOME is left as TestMain set it, so the trail readers see kill's.
+// Later verb Epics (read-pane, send-keys, pause, resume, reuse, kill's
+// finished-row opt-in) extend this fixture instead of writing their own.
 
 import (
 	"bytes"

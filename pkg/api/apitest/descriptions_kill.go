@@ -15,10 +15,13 @@ import (
 // only cases that allow "retry kill later"), the Leftover refusal, the
 // follow-up lookup that could not answer after a kill was sent
 // (DescCase.AfterKillSent), the socket-directory refusal that ends "nothing
-// was done", and the unusable recorded name's three ErrInternal cases. Kill
-// reuses DescConflictingLabels (with NothingWasDone), DescDifferentServer,
-// DescCallTimeout (lookup, pane listing, pane kill, session kill),
-// DescUnrecognisedReply, DescSocketPermission and DescTmuxNotRun as they are.
+// was done", the unusable recorded name's three ErrInternal cases, and
+// kill's own texts: its manifest description (DescKillManifest) and the
+// ErrInternal trigger it shares with Client.Kill's Go doc prose
+// (DescKillInternalTrigger). Kill reuses DescConflictingLabels (with
+// NothingWasDone), DescDifferentServer, DescCallTimeout (lookup, pane
+// listing, pane kill, session kill), DescUnrecognisedReply,
+// DescSocketPermission and DescTmuxNotRun as they are.
 
 // killFailedMustNot is what no kill refusal may say (SR-1.4).
 var killFailedMustNot = []string{"dead", "gone"}
@@ -248,4 +251,57 @@ func DescUnusableNameRewritten(name string, which RewrittenChars) DescCase {
 		}
 	}
 	return unusableName("tmux rewrites", req, mustNot)
+}
+
+// swallowedStatements are statements that a tmux failure of kill is
+// swallowed or only logged, which kill's texts never make (SR-18.9).
+var swallowedStatements = []string{"swallow", "swallowed", "swallows", "logged", "WARN"}
+
+// DescKillInternalTrigger is kill's unusable recorded-name ErrInternal
+// trigger as its manifest description and Client.Kill's Go doc prose state it
+// (SR-1.7, SR-3.2): the name's three kinds (empty, a control character, a
+// character tmux stores differently), ErrInternal with no tmux call, and
+// removing the row a human's decision with the "Operator actions" pointer;
+// never that tmux failures are swallowed or logged.
+func DescKillInternalTrigger() DescCase {
+	return DescCase{
+		Name: "kill, unusable recorded-name ErrInternal trigger",
+		Require: []string{
+			"recorded tmux session name cannot be used",
+			"it is empty, contains a control character, or contains a character tmux stores differently",
+			"gets ErrInternal", "with no tmux call", "removing the row is a human's decision",
+		},
+		MustNot: swallowedStatements,
+	}.PointsToOperatorActions()
+}
+
+// DescKillManifest is kill's manifest description (SR-6.1, SR-1.7, SR-18.1,
+// SR-18.7, SR-18.9; decision-0930b Q4): success only once the agent process
+// is gone, else ErrTmuxKillFailed; kill_sent; a finished row's no-op success
+// is not verification; the row's state is not changed; the per-call
+// contract; each error's class, GONE being success; never delete; the same
+// user and tmux environment and their two consequences; and
+// DescKillInternalTrigger. Check it with AssertAgentTextCase.
+func DescKillManifest() DescCase {
+	trigger := DescKillInternalTrigger()
+	return DescCase{
+		Name: "kill manifest description",
+		Require: append([]string{
+			"succeeds only once the agent process is gone; otherwise it returns ErrTmuxKillFailed",
+			"kill_sent says whether a kill was sent",
+			"On a finished row (ended or missing) kill is a no-op success with kill_sent false and no tmux call",
+			"that is not verification that the agent exited",
+			"kill never changes the row's state",
+			"Success is judged per call", "later calls do not track it",
+			"a retried kill checks only the agent process",
+			"A retry's success means only that the agent is gone",
+			"(for kill, GONE is success)", "ErrTmuxKillFailed (UNAVAILABLE)", "ErrTmuxUnresponsive (UNAVAILABLE)",
+			"ErrTmuxSessionConflict (CONFLICT", "ErrTmuxNotAvailable (ENVIRONMENT)",
+			"None of these errors means that the agent is dead",
+			"Never delete a row after a kill that did not succeed",
+			"kill must run as the same user and in the same tmux environment as the agents",
+			"on the wrong tmux server, a row wrongly marked missing, kill's no-op success and a reuse together start a second agent for the same id",
+		}, trigger.Require...),
+		MustNot: append([]string{"Terminate the Spawn's tmux session"}, trigger.MustNot...),
+	}
 }

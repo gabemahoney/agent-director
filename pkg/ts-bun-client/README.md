@@ -168,15 +168,30 @@ with `sendKeys` but has no behavioral effect.
 
 ### kill
 
-Terminate a Spawn's tmux session.
+End the agent of a live Spawn's current launch (`pending` included). `kill`
+resolves only once the agent process is gone, and returns `{ kill_sent }`:
+`true` when a kill was sent to the agent's pane or its session, `false` when
+none was. On a finished Spawn (`ended` or `missing`) `kill` is a no-op that
+resolves with `kill_sent: false`; that is not verification that the agent
+exited. `kill` never changes the row's state: `find-missing` marks the row once
+its agent process is gone.
 
 ```sh
 agent-director kill --claude-instance-id <id>
 ```
 
 ```ts
-await client.kill({ claude_instance_id: "<id>" });
+const { kill_sent } = await client.kill({ claude_instance_id: "<id>" });
+console.log(kill_sent);
 ```
+
+Errors to catch: `ErrTmuxKillFailed` and `ErrTmuxUnresponsive` (UNAVAILABLE:
+retry later), `ErrTmuxSessionConflict` (CONFLICT: a human must look),
+`ErrTmuxNotAvailable` (ENVIRONMENT: an operator must fix the environment) and
+`ErrSpawnNotFound`. None of these means the agent is dead, and a caller never
+`delete`s a row after a `kill` that did not succeed. The caller must run as the
+same user and in the same tmux environment as the agents. See the "tmux
+transport" table under [Errors](#errors).
 
 ### makeTemplate
 
@@ -320,7 +335,7 @@ Thrown per verb call by the subprocess transport, not by the CLI's own validatio
 
 ### 4. Catalog-derived (CLI-side validation)
 
-These 41 classes are generated one-to-one from the shared `err_name` catalog ([`../../pkg/api/errnames/catalog.json`](../../pkg/api/errnames/catalog.json), the canonical source). They surface bad input or a verb's own state preconditions — almost all are either **programmer error** or a **normal operational signal**, so few catch sites need to name them individually. They are grouped by domain below.
+These 42 classes are generated one-to-one from the shared `err_name` catalog ([`../../pkg/api/errnames/catalog.json`](../../pkg/api/errnames/catalog.json), the canonical source). They surface bad input or a verb's own state preconditions — almost all are either **programmer error** or a **normal operational signal**, so few catch sites need to name them individually. They are grouped by domain below.
 
 **cwd validation** (bad `cwd` argument to `spawn` — programmer error):
 
@@ -362,16 +377,19 @@ These 41 classes are generated one-to-one from the shared `err_name` catalog ([`
 | `ErrListInvalidLabel` | A `list` label filter could not be parsed as `key=value`. |
 | `ErrProbeUnsupported` | The liveness probe has no implementation for the current platform (`find-missing`). |
 
-**tmux transport** (infrastructure failures at the tmux layer — runtime):
+**tmux transport** (infrastructure failures at the tmux layer — runtime). Each name has a class: GONE (the row's session is not there), UNAVAILABLE (transient; retry later), CONFLICT (permanent until a human looks), ENVIRONMENT (an environment problem for an operator to fix) or LAUNCH FAILURE (the launch failed).
 
-| Error | When it fires |
-|---|---|
-| `ErrTmuxNotAvailable` | The `tmux` binary is not on PATH or refuses to execute, the tmux socket is not accessible to this user, or its per-user socket directory cannot be used (`spawn` then writes nothing). |
-| `ErrTmuxSessionCreate` | `tmux new-session` exited non-zero (name collision, invalid cwd, missing default-shell), or `spawn` created a session it could not label. The new row stays `pending`. |
-| `ErrTmuxUnresponsive` | tmux did not answer in time, or gave a reply agent-director does not recognise (UNAVAILABLE, transient). From `spawn`'s or `resume`'s session-creating call: the session may have been created and the row stays `pending`; do not retry until `get` shows the row `ended` or `missing`. |
-| `ErrTmuxSessionConflict` | A tmux session conflict that needs a human (CONFLICT, permanent until a human looks). From `spawn` with an explicit `claude_instance_id` that has no row: a session of this store still labelled with that id is left over from an earlier life, or labels conflict; nothing is written. See "Operator actions" in the agent-director README. |
-| `ErrTmuxSendKeys` | `tmux send-keys` exited non-zero (typically no live pane). |
-| `ErrTmuxCaptureFailed` | `tmux capture-pane` exited non-zero (session/pane vanished mid-call). |
+| Error | Class | When it fires |
+|---|---|---|
+| `ErrTmuxNotAvailable` | ENVIRONMENT | The `tmux` binary is not on PATH or refuses to execute, the tmux socket is not accessible to this user, or its per-user socket directory cannot be used (`spawn` then writes nothing). `kill` returns it too: tmux could not be run, the socket is not accessible to this user, or this is not the tmux server the agent was launched on. |
+| `ErrTmuxSessionCreate` | LAUNCH FAILURE | `tmux new-session` exited non-zero (name collision, invalid cwd, missing default-shell), or `spawn` created a session it could not label. The new row stays `pending`. |
+| `ErrTmuxUnresponsive` | UNAVAILABLE (transient) | tmux did not answer in time, or gave a reply agent-director does not recognise. From `spawn`'s or `resume`'s session-creating call: the session may have been created and the row stays `pending`; do not retry until `get` shows the row `ended` or `missing`. From `kill`: the lookup or the pane listing could not be read (nothing was done), or a kill was sent, the agent process could not be checked and the follow-up lookup could not be read (the kill may or may not have taken effect); retry later with backoff. |
+| `ErrTmuxSessionConflict` | CONFLICT (permanent until a human looks) | A tmux session conflict that needs a human. From `spawn` with an explicit `claude_instance_id` that has no row: a session of this store still labelled with that id is left over from an earlier life, or labels conflict; nothing is written. From `kill` on a live row: the session found is not this launch's session (it carries the label of an earlier launch with this row's own id), or labels conflict; no kill was sent. See "Operator actions" in the agent-director README. |
+| `ErrTmuxKillFailed` | UNAVAILABLE | `kill` only: the agent process still runs after `kill`. A kill was sent and the agent process, or another process in a pane of the agent's session, still ran after the kill exit wait (`kill_exit_wait_ms`); or the process cannot be checked and its labelled session is still there; or no session or pane of this launch was found while the agent process runs, so no kill was sent. Retry `kill` later; never `delete` the row. |
+| `ErrTmuxSendKeys` | GONE | `tmux send-keys` exited non-zero (typically no live pane). |
+| `ErrTmuxCaptureFailed` | GONE | `tmux capture-pane` exited non-zero (session/pane vanished mid-call). |
+
+Only a GONE error means the row's session is not there (for `kill`, GONE is success); no other tmux error ever means the agent is dead.
 
 **relay / permissions** (relay-mode and permission-decision preconditions — normal operational signals):
 

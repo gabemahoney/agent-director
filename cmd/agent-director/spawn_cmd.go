@@ -377,10 +377,12 @@ func resumeHandlerWith(client *pkgapi.Client, args []string) error {
 	return writeJSON(os.Stdout, result)
 }
 
-// killHandlerWith implements `agent-director kill`. The verb is
-// idempotent on terminal states and swallows tmux failures at the
-// verb surface (see api.Kill); a swallowed failure is logged at WARN
-// to the configured error log so an interactive operator can see it.
+// killHandlerWith implements the kill verb: it parses the instance id,
+// calls Client.Kill and prints the result (with kill_sent) or the named
+// error. Kill succeeds only once the agent process is gone and returns a
+// named error otherwise; it writes no log lines (the error is the report and
+// the ad.kill.called trail event the audit). The caller must run as the same
+// user and in the same tmux environment as the agents (see api.Client.Kill).
 func killHandlerWith(client *pkgapi.Client, args []string) error {
 	var p pkgapi.KillParams
 	fs := flag.NewFlagSet("kill", flag.ContinueOnError)

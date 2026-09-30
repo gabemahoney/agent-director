@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 	api "github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
 // LiveDispatcher routes MCP tool calls to pkg/api.Client methods.
@@ -135,11 +135,7 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		if err := unmarshalSnake(args, &p); err != nil {
 			return nil, err
 		}
-		// nil logger: the MCP-side caller sees errors via the API
-		// envelope; the swallowed-tmux WARN is most useful to the
-		// interactive CLI operator, not a long-lived MCP client.
-		// The MCP Client is constructed with Options.Logger: nil so
-		// c.logger is already a discard logger — no explicit nil pass needed.
+		// The MCP caller gets kill's result or named error through the envelope; kill has no logger path (SR-6.3).
 		return d.client.Kill(p)
 
 	case "pause":

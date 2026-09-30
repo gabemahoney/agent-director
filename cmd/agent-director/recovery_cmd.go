@@ -133,8 +133,10 @@ func (e *durationParseError) Error() string {
 
 // newRecoveryLogger returns the *log.Logger used by setupClient (Pin 3) to
 // construct the recovery logger injected into the pkg/api.Client at startup.
-// The Client's verb methods (Kill, FindMissing, Expire) surface WARN messages
-// via c.logger — SRD §14.6 and §5. The destination is the configured
+// The Client's verb methods that still log (Spawn, Resume, FindMissing,
+// Expire) surface WARN messages via c.logger — SRD §14.6 and §5. Kill writes
+// no log lines: its errors are returned and its audit is the ad.kill.called
+// trail event (SR-6.3). The destination is the configured
 // error log path, falling back to stderr if the file can't be opened.
 // Best-effort: file is leaked for the lifetime of the CLI process; the OS
 // reclaims on exit.
