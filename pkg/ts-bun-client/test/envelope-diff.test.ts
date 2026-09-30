@@ -550,36 +550,68 @@ describe("read-pane", () => {
 // ── kill ──────────────────────────────────────────────────────────────────────
 
 describe("kill", () => {
+  /** The argv of each fake-tmux invocation logged to logPath ([] when nothing was logged). */
+  function fakeTmuxCalls(logPath: string): string[][] {
+    if (!fs.existsSync(logPath)) return [];
+    return fs
+      .readFileSync(logPath, "utf8")
+      .split("---\n")
+      .filter((rec) => rec !== "")
+      .map((rec) => rec.split("\n"));
+  }
+
   test(
-    "success path",
+    "success path: Gone row, lookup only, kill_sent false on both sides",
     async () => {
       const killId = `id-kill-${crypto.randomUUID().slice(0, 8)}`;
+      // A private socket with no fake-tmux table answers the lookup Gone; the
+      // seeded pane pid is never a live process, so no kill is sent (SR-6.1).
+      const tmuxDir = fs.mkdtempSync(path.join(os.tmpdir(), "ed-tmux-"));
+      const socket = privateTmuxSocket(tmuxDir);
+      const logCli = path.join(tmuxDir, "log-cli");
+      const logClient = path.join(tmuxDir, "log-client");
       const { homeA, storeB, cleanup } = prepareStores((store) => {
         runHelper("seed-spawn", {
           store,
           id: killId,
           state: "waiting",
           "create-store": true,
+          socket,
         });
       });
+      const priorLog = process.env.FAKE_TMUX_LOG;
       try {
         const cli = runCli(
           ["kill", "--claude-instance-id", killId],
-          cliEnv(homeA)
+          { ...cliEnv(homeA), FAKE_TMUX_LOG: logCli }
         );
         expect(cli.exitCode).toBe(0);
 
+        // The Client's CLI subprocess inherits process.env.
+        process.env.FAKE_TMUX_LOG = logClient;
         using client = await Client.create({
           storePath: storeB,
           tmuxCommand: FAKE_TMUX_BIN, _cliPath: process.env.CLI_PATH
         } as any);
         const ts = await client.kill({ claude_instance_id: killId });
 
-        assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
+        const cliEnvelope = JSON.parse(cli.stdout) as unknown;
+        assertEnvelopesEqual(cliEnvelope, ts, {
           ignorePaths: loadIgnorePathsForVerb("kill"),
         });
+        expect(cliEnvelope).toEqual({ kill_sent: false });
+        expect(ts).toEqual({ kill_sent: false });
+
+        for (const log of [logCli, logClient]) {
+          const calls = fakeTmuxCalls(log);
+          expect(calls.some((argv) => argv.includes("list-sessions") && argv.includes(socket))).toBe(true);
+          expect(calls.filter((argv) => argv.includes("kill-pane") || argv.includes("kill-session"))).toEqual([]);
+        }
       } finally {
+        if (priorLog === undefined) delete process.env.FAKE_TMUX_LOG;
+        else process.env.FAKE_TMUX_LOG = priorLog;
         cleanup();
+        fs.rmSync(tmuxDir, { recursive: true, force: true });
       }
     },
     TIMEOUT

@@ -123,10 +123,10 @@ const (
 	ServerUnknown = "unknown"
 )
 
-// The ad.provenance.disagree reasons the lookup produces (SR-3.16, SR-14).
-// The callers' reasons, adopted (SR-3.6) and name_changed (SR-3.4), are not
-// produced here; pid_mismatch is retired as a disagree reason (SR-3.8; WD
-// 2026-09-29c).
+// The six ad.provenance.disagree reasons (SR-3.16, SR-14). The lookup
+// produces the first four; the verbs decide the last two, adopted (SR-3.6)
+// and name_changed (SR-3.4), and never write a literal for any of them.
+// pid_mismatch is retired as a disagree reason (SR-3.8; WD 2026-09-29c).
 const (
 	// ReasonServerRestarted: a listing carried another server identity and
 	// the recorded server process is gone (AC-LKP-19).
@@ -138,6 +138,13 @@ const (
 	// ReasonScopeValue: an @ad_owner value exists at the global, server or
 	// global-window scope.
 	ReasonScopeValue = "scope_value"
+	// ReasonAdopted: a verb's adoption write, recording a lost create reply's
+	// server and pane identity, applied (SR-3.6). Decided by the verb, never
+	// by the lookup.
+	ReasonAdopted = "adopted"
+	// ReasonNameChanged: the lookup found Ours under a name other than the
+	// row's recorded one (SR-3.4). Decided by the verb, never by the lookup.
+	ReasonNameChanged = "name_changed"
 )
 
 // The outcome tokens of SR-3.4 (trail fields), one per verdict or variant.
@@ -151,11 +158,14 @@ const (
 	tokenTmuxUnavailable    = "tmux_unavailable"
 )
 
-// tokenNotRun is the token of a Skipped result: no call was made for the row
-// because the sweep had stopped calling tmux, or the row's own call spent the
-// budget and its outcome was discarded (SR-3.15, SR-13.5). It is none
-// of the seven outcome tokens; callers check Skipped first.
-const tokenNotRun = "not_run"
+// TokenNotRun is the not_run token (SR-3.15, SR-6.4, SR-13.5): the token of
+// a Skipped result, where no call was made for the row because the sweep had
+// stopped calling tmux or the row's own call spent the budget and its outcome
+// was discarded; and the value a verb's trail field takes when no lookup, no
+// follow-up or no process check ran (kill's lookup_outcome,
+// followup_outcome and process_check). It is none of the seven outcome
+// tokens; callers check Skipped first.
+const TokenNotRun = "not_run"
 
 // Result is the lookup result (Appendix F.2). It stays internal: no exported
 // signature of pkg/api uses it.
@@ -174,6 +184,11 @@ type Result struct {
 	// listing order (Leftover, and Ours for messages). Another store's
 	// sessions are never listed.
 	Leftovers []Session
+	// Conflicting holds the sessions carrying the row's current label, in
+	// listing order, when two or more do (provenance_conflict with reason
+	// duplicate_label), so a description can name them (SR-1.4); nil
+	// otherwise, a scope value's provenance_conflict included.
+	Conflicting []Session
 	// Holder is the one session holding the given name (SR-3.10); nil when
 	// no name was given, no answer was read, none holds it, or more than one
 	// does.
@@ -218,7 +233,7 @@ type Result struct {
 // or variant.
 func (r Result) Token() string {
 	if r.Skipped {
-		return tokenNotRun
+		return TokenNotRun
 	}
 	switch r.Verdict {
 	case Ours:
@@ -287,8 +302,9 @@ func Classify(ans LookupAnswer, pc ProcChecker, row Launch, holderName string) R
 // classifySessions sets r's verdict from the sessions' label classes against
 // row (SR-3.4): exactly one current is Ours with Session set and Adopt for a
 // row with no recorded server identity; two or more current are
-// provenance_conflict (duplicate_label); no current with one or more old is
-// Leftover; otherwise Gone. Leftovers lists the old-labelled sessions.
+// provenance_conflict (duplicate_label) with Conflicting listing them and no
+// Leftovers; no current with one or more old is Leftover; otherwise Gone.
+// Leftovers lists the old-labelled sessions.
 func classifySessions(r *Result, sessions []Session, row Launch) {
 	var current []Session
 	for _, s := range sessions {
@@ -303,6 +319,7 @@ func classifySessions(r *Result, sessions []Session, row Launch) {
 	case len(current) > 1:
 		r.Verdict, r.CantTell = CantTell, CantTellProvenanceConflict
 		r.Disagree = appendReason(r.Disagree, ReasonDuplicateLabel)
+		r.Conflicting = current
 		r.Leftovers = nil
 	case len(current) == 1:
 		r.Verdict, r.Session = Ours, current[0]
@@ -324,9 +341,32 @@ func resultForCall(ans LookupAnswer, err error, pc ProcChecker, row Launch, hold
 	return resultForFailure(err, pc, row)
 }
 
+// ListingFailure classifies a single-row verb's failed pane listing
+// (`list-panes -a`) for row (SR-2.5, SR-3.3, SR-3.7): the lookup Result a
+// lookup call with the same failure would give, through the lookup's one
+// failure mapping and server check, never a copy of them. err is the
+// listing's error and must not be nil; an error that is not a *CallError
+// counts as FailUnrecognized (Appendix F.3):
+//
+//   - a timeout or an unrecognised or malformed reply: Can't tell,
+//     unreadable, with Cause set for a *CallError;
+//   - the binary failing to run, or the socket-permission reply: Can't tell,
+//     tmux unavailable, Cause set;
+//   - the no-server and no-socket replies: Gone or a different server by the
+//     row's server check (SR-3.3), with the same Server value and disagree
+//     reasons a lookup gets.
+//
+// It is for single-row verbs (kill, and later read-pane, send-keys and
+// pause); a sweep's listing goes through Sweep.ListPanes, which shares the
+// same mapping. It makes no tmux call and reads no clock and no environment.
+func ListingFailure(err error, pc ProcChecker, row Launch) Result {
+	return resultForFailure(err, pc, row)
+}
+
 // resultForFailure maps a failed call to a result for row: the one failure
-// mapping of the lookup call and of the sweep's pane listing (SR-2.5, SR-2.6,
-// SR-3.3, SR-3.7). err must not be nil.
+// mapping of the lookup call, of the sweep's pane listing and of a single-row
+// verb's pane listing (ListingFailure) (SR-2.5, SR-2.6, SR-3.3, SR-3.7). err
+// must not be nil.
 //
 //   - FailUnavailable, FailSocketDenied: Can't tell, tmux unavailable, Cause
 //     set.

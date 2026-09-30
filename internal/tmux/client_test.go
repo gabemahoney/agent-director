@@ -45,7 +45,6 @@ type nameBasedOp struct {
 // mapping and constructor tables.
 var nameBasedOps = []nameBasedOp{
 	{"HasSession", func(c *Client) error { _, err := c.HasSession("x"); return err }, "", nil},
-	{"KillSession", func(c *Client) error { return c.KillSession("x") }, "can't find session: x", ErrTmuxKillFailed},
 	{"SendKeys", func(c *Client) error { return c.SendKeys("x", "hi", true) }, "can't find pane: x:0.0", ErrTmuxSendKeys},
 	{"CapturePane", func(c *Client) error { _, err := c.CapturePane("x", 25, false); return err }, "can't find session: x", ErrTmuxCaptureFailed},
 }
@@ -65,11 +64,6 @@ func TestNameBasedArgv(t *testing.T) {
 				return err
 			},
 			want: [][]string{{"tmux", "has-session", "-t", "foo"}},
-		},
-		{
-			name: "kill-session",
-			fn:   func(c *Client) error { return c.KillSession("foo") },
-			want: [][]string{{"tmux", "kill-session", "-t", "foo"}},
 		},
 		{
 			name: "send-keys text-only is one literal (-l) call",

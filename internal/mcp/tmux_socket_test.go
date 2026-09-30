@@ -27,10 +27,10 @@ func preRelease(string) apitest.SpawnOption      { return apitest.WithNoLaunchTo
 var mcpSocketShapes = []mcpSocketShape{
 	{"waiting custom socket", "sock-waiting", "waiting", customSocket, withSocket},
 	{"pending custom socket", "sock-pending", "pending", customSocket, withSocket},
-	{"finished custom socket", "sock-finished", "finished", customSocket, withSocket},
+	{"ended custom socket", "sock-ended", "ended", customSocket, withSocket},
 	{"waiting default test socket", "sock-default", "waiting", testSocket, withSocket},
 	{"waiting pre-release row", "sock-prerelease", "waiting", noSocket, preRelease},
-	{"finished pre-release row", "sock-prerelease-fin", "finished", noSocket, preRelease},
+	{"ended pre-release row", "sock-prerelease-ended", "ended", noSocket, preRelease},
 }
 
 // newSocketShapesDispatcher seeds every mcpSocketShapes row into a temp store

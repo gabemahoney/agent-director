@@ -307,9 +307,11 @@ export interface KillParams {
   claude_instance_id: string;
 }
 
-/** Mirrors pkg/api/kill.go::KillResult (empty; reserved for future fields). */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface KillResult {}
+/** Mirrors pkg/api/kill.go::KillResult (json tags). */
+export interface KillResult {
+  /** True exactly when a pane kill or a session kill was sent. */
+  kill_sent: boolean;
+}
 
 /** Mirrors pkg/api.DecideParams (json tags). */
 export interface DecideParams {

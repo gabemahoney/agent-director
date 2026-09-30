@@ -15,7 +15,7 @@
 //  4. Run    — collect JSON envelopes from runCLI and runClient, each
 //     against a private fake tmux (its own socket and tables).
 //  5. Diff   — normalize both envelopes, check each carries the case's
-//     wantPreTrust (spawn, resume), and compare via structuralDiff,
+//     wantPreTrust (spawn, resume) and want fields (kill), and compare via structuralDiff,
 //     suppressing fields listed in nondeterministic.json.
 //  6. Assert — t.Errorf if any diff entries remain after suppression.
 package envelope_diff
@@ -117,6 +117,16 @@ func TestEnvelopeDiff_Success(t *testing.T) {
 					t.Errorf("%s: CLI envelope: %v\nraw: %s", verb.Name, err, cliNorm)
 				}
 				if err := preTrustMismatch(clientNorm, sc.wantPreTrust); err != nil {
+					t.Errorf("%s: Client envelope: %v\nraw: %s", verb.Name, err, clientNorm)
+				}
+			}
+
+			// ── 5. Pin the case's fields (kill_sent) ───────────────────
+			if sc.want != nil {
+				if err := fieldsMismatch(cliNorm, sc.want); err != nil {
+					t.Errorf("%s: CLI envelope: %v\nraw: %s", verb.Name, err, cliNorm)
+				}
+				if err := fieldsMismatch(clientNorm, sc.want); err != nil {
 					t.Errorf("%s: Client envelope: %v\nraw: %s", verb.Name, err, clientNorm)
 				}
 			}

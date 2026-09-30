@@ -58,7 +58,7 @@ func NewLaunchToken() (string, error) {
 // them, and says that nothing was launched (SR-1.4 row "an unusable socket
 // directory"). The caller returns it before its insert.
 func ResolveLaunchSocket() (string, error) {
-	return resolveSocket(true)
+	return resolveSocket(true, nothingLaunched)
 }
 
 // ResolveScanSocket returns the socket a plain spawn's label scan looks up
@@ -68,7 +68,21 @@ func ResolveLaunchSocket() (string, error) {
 // described and classified exactly as ResolveLaunchSocket's (SR-1.4, SR-3.3;
 // RN-5).
 func ResolveScanSocket() (string, error) {
-	return resolveSocket(false)
+	return resolveSocket(false, nothingLaunched)
+}
+
+// ResolveQuerySocket returns the socket a single-row verb's calls use for a
+// row that records no tmux_socket (a row from before the release; SR-3.3):
+// the same resolution as ResolveScanSocket, creating nothing (tmux.ResolveSocket
+// with create false; LFR H1), so a missing per-user directory is no error and
+// its would-be socket path is returned. A refusal matches
+// tmux.ErrTmuxNotAvailable and no other sentinel (SR-1.5), is described by
+// the same builder as the launch's (SR-1.4 row "an unusable socket
+// directory") and ends with consequence, the verb's own sentence (for kill,
+// "nothing was done"), in place of a launch's "nothing was launched". It
+// makes no tmux call and writes nothing.
+func ResolveQuerySocket(consequence string) (string, error) {
+	return resolveSocket(false, consequence)
 }
 
 // ResolveRowLaunchSocket returns the tmux socket a launch onto an existing
@@ -97,17 +111,23 @@ func ResolveRowLaunchSocket(recorded string) (string, error) {
 		return ResolveLaunchSocket()
 	}
 	if err := ensureSocketDir(recorded); err != nil {
-		return "", socketRefusal(err)
+		return "", socketRefusal(err, nothingLaunched)
 	}
 	return recorded, nil
 }
 
+// nothingLaunched is the consequence sentence of a launch's socket refusal
+// (SR-1.4 row "an unusable socket directory"): the refusal comes before the
+// launch's write.
+const nothingLaunched = "nothing was launched"
+
 // resolveSocket is the one resolution and refusal mapping behind
-// ResolveLaunchSocket and ResolveScanSocket.
-func resolveSocket(create bool) (string, error) {
+// ResolveLaunchSocket, ResolveScanSocket and ResolveQuerySocket; consequence
+// ends a refusal's description.
+func resolveSocket(create bool, consequence string) (string, error) {
 	socket, err := resolveTmuxSocket(create)
 	if err != nil {
-		return "", socketRefusal(err)
+		return "", socketRefusal(err, consequence)
 	}
 	return socket, nil
 }
@@ -116,13 +136,16 @@ func resolveSocket(create bool) (string, error) {
 // (tmux.ResolveSocket, tmux.EnsureSocketDir) from the typed
 // *tmux.SocketDirError's fields, never by parsing its text (SR-1.4). It wraps
 // the SocketDirError, so the result matches tmux.ErrTmuxNotAvailable and no
-// other sentinel (SR-1.5), and its text ends with tmux's own words. An error
-// of any other type, which neither returns, is wrapped as it is.
-func socketRefusal(err error) error {
+// other sentinel (SR-1.5), and its text ends with tmux's own words.
+// consequence is the caller's sentence after the reason: "nothing was
+// launched" for a launch and the label scan, "nothing was done" for a
+// single-row verb's calls. An error of any other type, which neither
+// returns, is wrapped as it is.
+func socketRefusal(err error, consequence string) error {
 	var sde *tmux.SocketDirError
 	if !errors.As(err, &sde) {
 		return fmt.Errorf("spawn: resolve tmux socket: %w", err)
 	}
-	return fmt.Errorf("tmux socket %s cannot be used because its directory %s %s, so nothing was launched: %w",
-		sde.Socket, sde.Dir, sde.Reason, sde)
+	return fmt.Errorf("tmux socket %s cannot be used because its directory %s %s, so %s: %w",
+		sde.Socket, sde.Dir, sde.Reason, consequence, sde)
 }

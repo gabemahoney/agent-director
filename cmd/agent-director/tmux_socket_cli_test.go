@@ -21,14 +21,14 @@ type socketShape struct {
 }
 
 // socketShapes covers rows recording an explicit socket (live, pending and
-// finished: get shows it in any state) and pre-release rows recording none.
+// ended: get shows it in any state) and pre-release rows recording none.
 func socketShapes() []socketShape {
 	return []socketShape{
 		{"waiting explicit socket", "sock-waiting", "waiting", apitest.WithTmuxSocket(socketCLIPath), socketCLIPath},
 		{"pending explicit socket", "sock-pending", "pending", apitest.WithTmuxSocket(socketCLIPath), socketCLIPath},
-		{"finished explicit socket", "sock-finished", "finished", apitest.WithTmuxSocket(socketCLIPath), socketCLIPath},
+		{"ended explicit socket", "sock-ended", "ended", apitest.WithTmuxSocket(socketCLIPath), socketCLIPath},
 		{"waiting pre-release", "sock-pre-waiting", "waiting", apitest.WithNoLaunchToken(), ""},
-		{"finished pre-release", "sock-pre-finished", "finished", apitest.WithNoLaunchToken(), ""},
+		{"ended pre-release", "sock-pre-ended", "ended", apitest.WithNoLaunchToken(), ""},
 	}
 }
 

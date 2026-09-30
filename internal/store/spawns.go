@@ -484,6 +484,62 @@ func (s *Store) RecordLaunchIdentity(instanceID string, launchVersion int64, tok
 	return s.condNotApplied(instanceID, "store: record launch identity")
 }
 
+// adoptIdentitySQL is AdoptIdentityIfUnchanged's one statement: the six
+// server and pane identity columns and the version advance, guarded by the
+// row snapshot the verb examined (SR-3.6, SR-5.3).
+const adoptIdentitySQL = `UPDATE spawns
+    SET tmux_server_pid       = ?,
+        tmux_server_started   = ?,
+        tmux_server_starttime = ?,
+        pane_id               = ?,
+        pane_pid              = ?,
+        pane_starttime        = ?,
+        ` + rowVersionAdvance + `
+  WHERE claude_instance_id = ? AND ` + snapshotMatchSQL
+
+// AdoptIdentityIfUnchanged is the adoption write (SR-3.6; LFR H2; Appendix
+// F.3): when a lookup found Ours for a row that records no server identity or
+// no pane (a lost create reply), the verb records what it found. It is one
+// conditional statement that applies only while the row exists and its row
+// snapshot equals examined, compared on the values exactly as stored
+// (SR-5.3); every write advances row_version (SR-5.2), so an unchanged
+// snapshot also means an unchanged state. It then writes the tmux server's
+// identity (tmux_server_pid, tmux_server_started, tmux_server_starttime) and
+// the agent's pane (pane_id, pane_pid, pane_starttime) from id, a zero value
+// as NULL (so an adoption that found no pane records only the server
+// identity), and advances row_version by exactly one. It never writes
+// id.Token, id.Socket, the state or any other column, and emits no trail
+// event: the verb records adopted on ad.provenance.disagree (SR-14).
+//
+// It returns CondApplied when the write applied; CondChanged, having written
+// nothing, when the row exists but its snapshot differs; CondAbsent when no
+// row has the id. A driver error is returned wrapped, with a zero CondResult,
+// never as a CondResult value.
+//
+// Only kill, send-keys, pause and find-missing may call it (SR-3.6; LFR H2);
+// find-missing's snapshot-returning variant is separate. read-pane, resume's
+// pre-launch check, reuse and expire never write an adoption.
+func (s *Store) AdoptIdentityIfUnchanged(instanceID string, examined RowSnapshot, id LaunchIdentity) (CondResult, error) {
+	args := []any{
+		positiveIntArg(id.ServerPID), positiveInt64Arg(id.ServerStart),
+		nullableStringArg(id.ServerStarttime), nullableStringArg(id.PaneID),
+		positiveIntArg(id.PanePID), nullableStringArg(id.PaneStarttime),
+		instanceID,
+	}
+	res, err := s.db.Exec(adoptIdentitySQL, append(args, snapshotMatchArgs(examined)...)...)
+	if err != nil {
+		return 0, fmt.Errorf("store: adopt identity: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("store: adopt identity rows affected: %w", err)
+	}
+	if n > 0 {
+		return CondApplied, nil
+	}
+	return s.condNotApplied(instanceID, "store: adopt identity")
+}
+
 // condNotApplied tells CondChanged from CondAbsent after a conditional write
 // matched no row, by reading whether a row with the id exists (SR-5.3). It
 // only reads. errPrefix names the write in a driver error.

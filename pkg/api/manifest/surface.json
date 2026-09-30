@@ -544,7 +544,16 @@
           "allowed_values": null
         }
       ],
-      "result_fields": [],
+      "result_fields": [
+        {
+          "name": "kill_sent",
+          "type": "bool",
+          "description": "True exactly when a pane kill or a session kill was sent, including one whose call failed; false when no kill was sent, for example for a finished row.",
+          "nullable": false,
+          "allow_empty": false,
+          "allowed_values": null
+        }
+      ],
       "error_names": [
         "ErrSpawnNotFound",
         "ErrTmuxNotAvailable",

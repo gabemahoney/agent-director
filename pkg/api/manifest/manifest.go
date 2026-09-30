@@ -449,7 +449,16 @@ var Verbs = []VerbDef{
 				AllowedValues: nil,
 			},
 		},
-		ResultFields: []FieldDef{},
+		ResultFields: []FieldDef{
+			{
+				Name:          "kill_sent",
+				Type:          "bool",
+				Description:   "True exactly when a pane kill or a session kill was sent, including one whose call failed; false when no kill was sent, for example for a finished row.",
+				Nullable:      false,
+				AllowEmpty:    false,
+				AllowedValues: nil,
+			},
+		},
 		ErrorNames: []string{
 			"ErrSpawnNotFound",
 			"ErrTmuxNotAvailable",

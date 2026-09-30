@@ -12,6 +12,13 @@ import (
 // most one bound server; a server holds sessions, a session holds panes.
 // Everything is typed: labels are tmux.Label values as the production
 // client would classify them, never raw @ad_owner text.
+//
+// One pane may be listed in several sessions (SeedPane.Shared), as tmux
+// shows a pane of a grouped session, a linked window or a viewing session
+// (SR-3.4, SR-6.1): the pane listing shows it once per session listing it,
+// a pane kill removes it from every one, and a session kill (or a session
+// hook) removes only that session's listing, so the pane lives while any
+// session still lists it.
 
 // Server is a tmux server's identity: the #{pid} and #{start_time} the
 // lookup and the create reply show, and the server process's start time as
@@ -54,6 +61,15 @@ type SeedPane struct {
 	// "<token> <pane id>" value, or "" for none (a split pane, a teammate) or
 	// for a malformed or borrowed value. Typed, never raw text.
 	AdPane string
+	// Shared lists a pane the server already holds in another session in
+	// this session too: a grouped session, a linked window or a viewing
+	// session (SR-3.4). ID must name that pane, and at most once per
+	// session; Window and Index are this session's own. PID and AdPane
+	// are the pane's own: zero and "" take them from the pane, other
+	// values must match it. Seeding panics otherwise. Stored listings
+	// (Sessions) report Shared false: tmux keeps no owning session, and
+	// every listing is the same pane.
+	Shared bool
 }
 
 // SeedSession is one session of a socket's table.
@@ -293,7 +309,9 @@ func (r *Recorder) Server(socket string) (Server, bool) {
 // SeedSessions adds sessions to socket's server, starting a server with a new
 // identity when none is bound. Empty ids and pane ids take the server's next
 // ones, and later ids are counted past every seeded one. It panics on a
-// session or pane id the server already holds.
+// session or pane id the server already holds, except a SeedPane.Shared
+// pane, which must be held already (seed its first session earlier, in
+// this call or before).
 func (r *Recorder) SeedSessions(socket string, sessions ...SeedSession) *Recorder {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -322,11 +340,16 @@ func (r *Recorder) addSession(srv *serverState, s SeedSession) SeedSession {
 	}
 	panes := make([]SeedPane, 0, len(s.Panes))
 	for _, p := range s.Panes {
+		if p.Shared {
+			panes = append(panes, srv.sharedPane(p, panes))
+			continue
+		}
 		if p.ID == "" {
 			p.ID = "%" + strconv.Itoa(srv.nextPane)
 		}
 		if _, owner := srv.findPane(p.ID); owner != nil {
-			panic("tmuxfix: pane " + p.ID + " already exists on " + srv.socket)
+			panic("tmuxfix: pane " + p.ID + " already exists on " + srv.socket +
+				" (SeedPane.Shared lists it in another session)")
 		}
 		srv.nextPane = nextAfter(srv.nextPane, p.ID)
 		if p.PID == 0 {
@@ -341,6 +364,28 @@ func (r *Recorder) addSession(srv *serverState, s SeedSession) SeedSession {
 	})
 	s.LabelSet = s.LabelSet || s.Label.Kind == tmux.LabelValid
 	return s
+}
+
+// sharedPane returns the listing of the held pane p.ID that a SeedPane.Shared
+// entry p seeds, with the pane's own PID and AdPane; seen are the listings
+// already seeded for the same session. It panics on an unheld pane, a
+// second listing in one session, or a PID or AdPane other than the pane's.
+func (srv *serverState) sharedPane(p SeedPane, seen []SeedPane) SeedPane {
+	i, owner := srv.findPane(p.ID)
+	if p.ID == "" || owner == nil {
+		panic("tmuxfix: shared pane " + strconv.Quote(p.ID) + " is not on " + srv.socket)
+	}
+	for _, q := range seen {
+		if q.ID == p.ID {
+			panic("tmuxfix: shared pane " + p.ID + " is listed twice in one session on " + srv.socket)
+		}
+	}
+	held := owner.panes[i]
+	if (p.PID != 0 && p.PID != held.PID) || (p.AdPane != "" && p.AdPane != held.AdPane) {
+		panic("tmuxfix: shared pane " + p.ID + " on " + srv.socket + " gives a pid or pane label other than the pane's")
+	}
+	p.PID, p.AdPane, p.Shared = held.PID, held.AdPane, false
+	return p
 }
 
 // nextAfter returns next advanced past id's number ("$N" or "%N").
@@ -427,8 +472,8 @@ func (srv *serverState) findSession(id string) *sessionState {
 	return nil
 }
 
-// findPane returns the index of the pane with id in its session, and that
-// session, or nil.
+// findPane returns the index of the pane with id in the first session
+// listing it, and that session, or nil.
 func (srv *serverState) findPane(id string) (int, *sessionState) {
 	for _, s := range srv.sessions {
 		for i, p := range s.panes {
@@ -438,6 +483,41 @@ func (srv *serverState) findPane(id string) (int, *sessionState) {
 		}
 	}
 	return 0, nil
+}
+
+// removePane removes the pane with id from every session listing it,
+// removing each session left with no pane, and reports whether any listed
+// it.
+func (srv *serverState) removePane(id string) bool {
+	found := false
+	for _, s := range append([]*sessionState(nil), srv.sessions...) {
+		for i, p := range s.panes {
+			if p.ID != id {
+				continue
+			}
+			s.panes = append(s.panes[:i:i], s.panes[i+1:]...)
+			found = true
+			if len(s.panes) == 0 {
+				srv.removeSession(s.id)
+			}
+			break
+		}
+	}
+	return found
+}
+
+// setAdPane sets the pane label of the pane with id on every session
+// listing it, and reports whether any listed it.
+func (srv *serverState) setAdPane(id, token string) bool {
+	found := false
+	for _, s := range srv.sessions {
+		for i := range s.panes {
+			if s.panes[i].ID == id {
+				s.panes[i].AdPane, found = token, true
+			}
+		}
+	}
+	return found
 }
 
 // removeSession removes the session with id.

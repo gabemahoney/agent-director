@@ -26,6 +26,12 @@ func SetClockForTest(c *Client, now func() time.Time) { c.now = now }
 // SetProcCheckerForTest replaces c's start-time reader (SR-3.8) for this Client only.
 func SetProcCheckerForTest(c *Client, pc ProcChecker) { c.procChecker = pc }
 
+// SetSleepForTest replaces c's sleep (time.Sleep in production), the pause of Client.Kill's process wait (SR-6.1), for this Client only.
+func SetSleepForTest(c *Client, sleep func(time.Duration)) { c.sleep = sleep }
+
+// KillPollInterval is kill's poll interval (killPollInterval, SR-6.1), so no test spells it.
+const KillPollInterval = killPollInterval
+
 // SetPauseTestKnobs lets pause_test override the polling cadence and
 // sleeper without exporting them broadly. Tests pair this with
 // t.Cleanup to restore production defaults.

@@ -116,5 +116,5 @@ const (
 // start-time reader (SR-3.8, SR-16.1). StartTime reports a pid's process
 // start time, with alive false for no such process or a zombie and known
 // false when it cannot be read; it never reads a process's environment. The
-// Client uses the production reader; no exported signature takes one yet.
+// Client uses the production reader; the exported Kill takes one.
 type ProcChecker = tmux.ProcChecker

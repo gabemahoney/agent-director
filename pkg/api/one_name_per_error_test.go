@@ -3,8 +3,9 @@ package api_test
 // one_name_per_error_test.go holds the SR-1.5 one-name-per-error check: the
 // shared assertOneName helper, the catalogue-wide case, and one row per
 // tmux-caused error (and reachable ErrInternal case) the verbs return today,
-// driven through api.Client with tmuxfix.Recorder failure kinds. The spawnEnv
-// fixture is in spawn_test.go, resumeEnv in resume_fixture_test.go.
+// driven through api.Client (or the exported api.Kill) with tmuxfix.Recorder
+// failure kinds. The spawnEnv fixture is in spawn_test.go, resumeEnv in
+// resume_fixture_test.go, killEnv in kill_fixture_test.go.
 
 import (
 	"errors"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -107,10 +109,9 @@ type oneNameRow struct {
 	run  func(t *testing.T) error
 }
 
-// oneNameRows is every returned-error row. Task 2 (kill's SR-6.1 table)
-// appends its kill rows here, as a oneNameKillRows() set.
+// oneNameRows is every returned-error row.
 func oneNameRows() []oneNameRow {
-	return slices.Concat(oneNameSpawnRows(), oneNameResumeRows(), oneNameInternalRows())
+	return slices.Concat(oneNameSpawnRows(), oneNameResumeRows(), oneNameInternalRows(), oneNameKillRows())
 }
 
 // TestOneNameReturnedErrors: every tmux-caused error the verbs return matches
@@ -259,5 +260,82 @@ func oneNameInternalRows() []oneNameRow {
 			_, err := e.resume(r.ID)
 			return err
 		}},
+	}
+}
+
+// oneNameKill is a row that runs api.Kill on a row seeded with spec after
+// setup (when set) prepares e and r.
+func oneNameKill(name, want string, spec killRowSpec, setup func(t *testing.T, e *killEnv, r *killRow)) oneNameRow {
+	return oneNameRow{name: "kill/" + name, want: want, run: func(t *testing.T) error {
+		e := newKillEnv(t)
+		r := e.seedRow(t, spec)
+		if setup != nil {
+			setup(t, e, &r)
+		}
+		_, err := e.kill(r.ID)
+		return err
+	}}
+}
+
+// scriptKill scripts ss in order on every call of kind call on r's socket.
+func scriptKill(call tmux.Call, ss ...tmuxfix.Script) func(*testing.T, *killEnv, *killRow) {
+	return func(_ *testing.T, e *killEnv, r *killRow) {
+		for _, s := range ss {
+			e.rec.Script(r.Socket, s, call)
+		}
+	}
+}
+
+// oneNameKillRows are kill's returned errors (SR-6.1): the three
+// ErrTmuxKillFailed variants and a survivor alone, both Leftover and
+// conflicting labels, each ErrTmuxNotAvailable and ErrTmuxUnresponsive
+// cause, and ErrInternal for each kind of unusable recorded name.
+func oneNameKillRows() []oneNameRow {
+	lookup, unreadable := tmux.CallLookup, killRowSpec{Agent: agentUnreadable}
+	noSession := func(name string) killRowSpec {
+		return killRowSpec{NoSession: true, Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(name)}}
+	}
+	timeout := tmuxfix.Script{Failure: tmux.FailTimeout}
+	return []oneNameRow{
+		oneNameKill("agent outlives the exit wait", "ErrTmuxKillFailed", killRowSpec{}, nil),
+		oneNameKill("only a survivor outlives the exit wait", "ErrTmuxKillFailed", killRowSpec{Teammates: 1},
+			func(_ *testing.T, e *killEnv, r *killRow) {
+				e.setAfterCall(tmux.CallKillPane, procfix.Gone(), r.AgentPID)
+			}),
+		oneNameKill("process unreadable, labelled session still there", "ErrTmuxKillFailed", unreadable,
+			func(t *testing.T, e *killEnv, r *killRow) {
+				scriptKill(tmux.CallKillPane, timeout)(t, e, r)
+				scriptKill(tmux.CallKillSession, timeout)(t, e, r)
+			}),
+		oneNameKill("gone, process running, no pane", "ErrTmuxKillFailed", killRowSpec{NoSession: true}, nil),
+		oneNameKill("leftover", "ErrTmuxSessionConflict", killRowSpec{NoSession: true},
+			func(t *testing.T, e *killEnv, r *killRow) {
+				e.seedSession(t, r, tmuxfix.WithRowSessionLabel(r.old(), true))
+			}),
+		oneNameKill("conflicting labels: scope value", "ErrTmuxSessionConflict", killRowSpec{},
+			func(_ *testing.T, e *killEnv, r *killRow) {
+				e.rec.SetScope(r.Socket, tmuxfix.ScopeGlobal, tmuxfix.ScopeValue{})
+			}),
+		oneNameKill("conflicting labels: duplicate label", "ErrTmuxSessionConflict", killRowSpec{},
+			func(t *testing.T, e *killEnv, r *killRow) {
+				e.seedOther(t, r.Socket, tmuxfix.SeedSession{Name: "dup-" + r.ID, Label: r.current()})
+			}),
+		oneNameKill("different server", "ErrTmuxNotAvailable", killRowSpec{}, func(t *testing.T, e *killEnv, r *killRow) {
+			e.rec.RebindServer(r.Socket, tmuxfix.Server{})
+			e.syncServers()
+			e.seedBystander(t, r.Socket)
+		}),
+		oneNameKill("binary unavailable", "ErrTmuxNotAvailable", killRowSpec{},
+			scriptKill(lookup, tmuxfix.Script{Failure: tmux.FailUnavailable})),
+		oneNameKill("socket permission", "ErrTmuxNotAvailable", killRowSpec{},
+			scriptKill(lookup, tmuxfix.Script{Failure: tmux.FailSocketDenied})),
+		oneNameKill("lookup timeout", "ErrTmuxUnresponsive", killRowSpec{}, scriptKill(lookup, timeout)),
+		oneNameKill("lookup unrecognised reply", "ErrTmuxUnresponsive", killRowSpec{}, scriptKill(lookup,
+			tmuxfix.Script{Failure: tmux.FailUnrecognized, FirstLine: callTableFirstLine(), ExitStatus: 1})),
+		oneNameKill("follow-up unanswered after a kill", "ErrTmuxUnresponsive", unreadable,
+			scriptKill(lookup, tmuxfix.Script{Times: 1}, timeout)),
+		oneNameKill("empty recorded name", "", noSession(""), nil),
+		oneNameKill("control character in the recorded name", "", noSession("ts-\x1b"), nil),
+		oneNameKill("recorded name tmux rewrites", "", noSession("a.b"), nil),
 	}
 }

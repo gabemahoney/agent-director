@@ -28,11 +28,12 @@ type serveSession struct {
 	done   bool
 }
 
-// startServe starts `serve --stdio` in home; the caller registers kill as cleanup.
-func startServe(t *testing.T, home string) *serveSession {
+// startServe starts `serve --stdio` in home, env replacing or adding entries
+// (PATH included); the caller registers kill as cleanup.
+func startServe(t *testing.T, home string, env ...string) *serveSession {
 	t.Helper()
 	s := &serveSession{cmd: exec.Command(binaryPath, "serve", "--stdio"), lines: make(chan string, 8), nextID: 1}
-	s.cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home}
+	s.cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + home}, env...)
 	s.cmd.Stderr = &s.stderr
 	var err error
 	if s.in, err = s.cmd.StdinPipe(); err != nil {

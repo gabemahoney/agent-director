@@ -105,20 +105,6 @@ func (c *Client) HasSession(name string) (bool, error) {
 	return false, err
 }
 
-// KillSession sends `tmux kill-session -t name`. A non-zero tmux exit is
-// surfaced as ErrTmuxKillFailed; callers that consider "session already
-// gone" a no-op should consult HasSession first.
-func (c *Client) KillSession(name string) error {
-	out, err := c.run(binaryName, "kill-session", "-t", name)
-	if err == nil {
-		return nil
-	}
-	if errors.Is(err, ErrTmuxNotAvailable) {
-		return err
-	}
-	return fmt.Errorf("%w: %s: %v", ErrTmuxKillFailed, trimOutput(out), err)
-}
-
 // paneTarget is the canonical tmux pane address agent-director uses for
 // every send-keys / capture-pane invocation. tmux session creation runs
 // without a window/pane suffix, so the first pane is always at index 0

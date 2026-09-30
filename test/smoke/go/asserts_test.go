@@ -202,10 +202,10 @@ func TestAssertResultMatchesManifest_MissingField(t *testing.T) {
 }
 
 func TestAssertResultMatchesManifest_EmptyResultFields(t *testing.T) {
-	// Verbs like kill, send-keys have no result fields — nothing to check.
-	vd := manifest.VerbDef{Name: "kill", ResultFields: []manifest.FieldDef{}}
+	// Verbs like send-keys and pause have no result fields — nothing to check.
+	vd := manifest.VerbDef{Name: "send-keys", ResultFields: []manifest.FieldDef{}}
 	ct := newCapturingT(t)
-	AssertResultMatchesManifest(ct, vd, api.KillResult{})
+	AssertResultMatchesManifest(ct, vd, api.SendKeysResult{})
 	assertNoErrors(t, ct, "empty result fields")
 }
 

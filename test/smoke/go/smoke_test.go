@@ -23,16 +23,17 @@ import (
 //  2. Opens a fresh storefix.OpenTempStore and a fresh tmuxfix.NewRecorder
 //     — no state crosses verbs.
 //  3. Applies the verb's SeedKind precondition via the appropriate
-//     storefix or apitest seed helper.
+//     storefix or apitest seed helper (for kill, also the row's own
+//     labelled session in the recorder).
 //  4. Constructs an api.Client wired with the temp store path and the
 //     recorder. CreateIfMissing is true so api.New reuses the store
 //     file created by storefix.OpenTempStore.
 //  5. Calls the verb's Happy closure and feeds the result into
 //     AssertResultMatchesManifest; for status, get and list it also checks
 //     the pending row's launch_started_at (see assertLaunchStartedAt), for
-//     get that tmux_socket is the seeded apitest.TestSocket, and for spawn
-//     and resume, with a .claude.json planted in HOME first, that pre_trust
-//     is "ok" (see plantClaudeJSON).
+//     get that tmux_socket is the seeded apitest.TestSocket, for kill that
+//     kill_sent is true, and for spawn and resume, with a .claude.json
+//     planted in HOME first, that pre_trust is "ok" (see plantClaudeJSON).
 //  6. Calls the verb's Error closure (when defined) and feeds the
 //     returned error into AssertExpectedError.
 //
@@ -121,6 +122,11 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 			apitest.WithLaunchStartedAt(smokeLaunchStartMillis)); err != nil {
 			t.Fatalf("runVerbSubtest: seed pending %q: %v", spec.SeedID, err)
 		}
+	case seedLiveSession:
+		if _, err := apitest.SeedSpawn(storePath, spec.SeedID, "working", "", "", "", false); err != nil {
+			t.Fatalf("runVerbSubtest: seed working %q: %v", spec.SeedID, err)
+		}
+		rec.SeedRowSession(t, storePath, spec.SeedID)
 	default:
 		t.Fatalf("runVerbSubtest: unknown SeedKind %v for verb %q",
 			spec.SeedKind, vd.Name)
@@ -170,6 +176,9 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 			t.Errorf("%s: tmux_socket = %q; want %q, the socket the seeded row records",
 				vd.Name, got, apitest.TestSocket)
 		}
+	}
+	if spec.KillSent != nil && !spec.KillSent(result) {
+		t.Errorf("%s: kill_sent = false; want true, a kill sent to the seeded row's session", vd.Name)
 	}
 	if spec.PreTrust != nil {
 		if got := spec.PreTrust(result); got != "ok" {

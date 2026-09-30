@@ -13,6 +13,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
@@ -103,6 +104,16 @@ func seedRow(s *store.Store, path, id, state string, labels map[string]string) {
 		panic("seedRow: seed " + id + "→" + state + ": " + err.Error())
 	}
 }
+
+// exampleTB is the testing.TB an Example hands to tmuxfix seeders: Helper
+// does nothing and Fatalf panics (example-function contract).
+type exampleTB struct{ testing.TB }
+
+// Helper does nothing.
+func (exampleTB) Helper() {}
+
+// Fatalf panics with the message.
+func (exampleTB) Fatalf(format string, args ...any) { panic(fmt.Sprintf(format, args...)) }
 
 // ── Runnable examples ─────────────────────────────────────────────────────────
 //
@@ -211,21 +222,28 @@ func ExampleClient_SendKeys() {
 	// true
 }
 
-// ExampleClient_Kill demonstrates terminating a Spawn's tmux session.
-// Kill is idempotent on terminal states (ended/missing).
+// ExampleClient_Kill demonstrates ending a live Spawn's agent (SR-6.1): the
+// Recorder holds the row's own labelled session, so kill ends the agent's pane
+// and that session, and the row's pane pid (apitest.TestPanePID, above
+// PID_MAX_LIMIT) reads gone to the client's start-time reader, so kill_sent is true.
 func ExampleClient_Kill() {
-	c, s, path, _, cleanup := exampleClient()
+	c, _, path, rec, cleanup := exampleClient()
 	defer cleanup()
-	// Seed a live Spawn in working state.
-	seedRow(s, path, "claude_2026-05-22T18-23-15", store.StateWorking, nil)
+	// Seed a live Spawn in working state and its own labelled session.
+	if _, err := apitest.SeedSpawn(path, "claude_2026-05-22T18-23-15", store.StateWorking, "/tmp", "off", "", false); err != nil {
+		panic("ExampleClient_Kill: SeedSpawn: " + err.Error())
+	}
+	rec.SeedRowSession(exampleTB{}, path, "claude_2026-05-22T18-23-15")
 	// README:start ExampleClient_Kill
-	_, err := c.Kill(api.KillParams{
+	res, err := c.Kill(api.KillParams{
 		ClaudeInstanceID: "claude_2026-05-22T18-23-15",
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
+	fmt.Println(res.KillSent) // true: a kill was sent to the agent's session
 	// README:end
 
 	// Output:
+	// true
 }

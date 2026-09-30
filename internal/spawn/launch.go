@@ -142,27 +142,14 @@ func RecordLaunchIdentity(w IdentityWriter, pc tmux.ProcChecker, lg *log.Logger,
 	id := store.LaunchIdentity{
 		ServerPID:       reply.ServerPID,
 		ServerStart:     reply.ServerStart,
-		ServerStarttime: knownStartTime(pc, reply.ServerPID),
+		ServerStarttime: tmux.KnownStartTime(pc, reply.ServerPID),
 		PaneID:          reply.PaneID,
 		PanePID:         reply.PanePID,
-		PaneStarttime:   knownStartTime(pc, reply.PanePID),
+		PaneStarttime:   tmux.KnownStartTime(pc, reply.PanePID),
 	}
 	if _, err := w.RecordLaunchIdentity(instanceID, launchVersion, token, id); err != nil && lg != nil {
 		lg.Printf("WARN: recording the launch identity of instance %s failed: %v", instanceID, err)
 	}
-}
-
-// knownStartTime returns pid's process start time when the reader answers
-// alive and known, and "" (none recorded) otherwise (SR-3.6, SR-3.8).
-func knownStartTime(pc tmux.ProcChecker, pid int) string {
-	if pid <= 0 {
-		return ""
-	}
-	start, alive, known := pc.StartTime(pid)
-	if !alive || !known {
-		return ""
-	}
-	return start
 }
 
 // insertPending inserts r's pending row with the launch start (milliseconds),

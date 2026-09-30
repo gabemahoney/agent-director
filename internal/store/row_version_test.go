@@ -59,8 +59,8 @@ func seedCase(t *testing.T, f *v5Store, c rowVersionCase) string {
 // stableColumns are the columns a versioned write keeps (SR-5.2), except that
 // MoveToPending and RestoreAfterFailedResume write launch_token and
 // tmux_socket (c.writesToken). The six identity columns (identityColumns) are
-// kept too, except by RecordLaunchIdentity, MoveToPending and
-// RestoreAfterFailedResume, which write them (c.identity).
+// kept too, except by RecordLaunchIdentity, AdoptIdentityIfUnchanged,
+// MoveToPending and RestoreAfterFailedResume, which write them (c.identity).
 func stableColumns(c apitest.SpawnColumns) map[string]any {
 	return map[string]any{
 		"life_number": c.LifeNumber, "no_pre_trust": c.NoPreTrust,
@@ -229,6 +229,30 @@ func recordLaunch(stale int64, want store.CondResult) func(*testing.T, *v5Store,
 		v := f.rawColumns(id).RowVersion.(int64) - stale
 		if got, err := f.s.RecordLaunchIdentity(id, v, goodToken, createdIdentity()); err != nil || got != want {
 			t.Fatalf("RecordLaunchIdentity(version %d) = %v, %v; want %v, nil", v, got, err, want)
+		}
+	}
+}
+
+// rvSoftRefresh is a soft hook refresh by id's own agent: it applies and
+// advances the version without changing the state.
+func rvSoftRefresh(t *testing.T, f *v5Store, id string) {
+	t.Helper()
+	if applied, err := f.s.ApplyHookTransition(id, rvAgentGate(t, f, id), "", true, "row_version_test", "", false); err != nil || !applied.Applied {
+		t.Fatalf("ApplyHookTransition soft refresh = %+v, %v; want applied", applied, err)
+	}
+}
+
+// adoptWrite returns an AdoptIdentityIfUnchanged write of createdIdentity
+// against id's row as examined now, after mutate edits the examined snapshot
+// (nil keeps it), expecting want.
+func adoptWrite(mutate func(*store.RowSnapshot), want store.CondResult) func(*testing.T, *v5Store, string) {
+	return func(t *testing.T, f *v5Store, id string) {
+		examined := rvExamine(t, f, id).Snapshot
+		if mutate != nil {
+			mutate(&examined)
+		}
+		if got, err := f.s.AdoptIdentityIfUnchanged(id, examined, createdIdentity()); err != nil || got != want {
+			t.Fatalf("AdoptIdentityIfUnchanged = %v, %v; want %v, nil", got, err, want)
 		}
 	}
 }
@@ -456,6 +480,11 @@ func rowVersionWrites() []rowVersionCase {
 	return append(cases,
 		rowVersionCase{name: "RecordLaunchIdentity/applied", state: "pending", wantState: "pending",
 			identity: &created, write: recordLaunch(0, store.CondApplied)},
+		// SR-3.6: the adoption writes the six identity columns only.
+		rowVersionCase{name: "AdoptIdentityIfUnchanged/applied, live row", state: "waiting", wantState: "waiting",
+			identity: &created, write: adoptWrite(nil, store.CondApplied)},
+		rowVersionCase{name: "AdoptIdentityIfUnchanged/applied, pending row", state: "pending", wantState: "pending",
+			identity: &created, write: adoptWrite(nil, store.CondApplied)},
 		// SR-22.9: SessionStart is one write, from the row's own agent: it sets
 		// waiting and clears the launch start in the same statement.
 		rowVersionCase{name: "RecordSessionStartIdentity/path present", state: "pending", clears: true, wantState: "waiting",
@@ -581,12 +610,18 @@ func TestRowVersionNoOpWritesChangeNothing(t *testing.T) {
 			}},
 		{name: "MarkSpawnMissing/finished row", state: "ended", write: markMissing("")},
 		{name: "RecordLaunchIdentity/stale version, hook wrote first", state: "pending",
-			setup: func(t *testing.T, f *v5Store, id string) {
-				if applied, err := f.s.ApplyHookTransition(id, rvAgentGate(t, f, id), "", true, "row_version_test", "", false); err != nil || !applied.Applied {
-					t.Fatalf("ApplyHookTransition soft refresh = %+v, %v; want applied", applied, err)
-				}
-			},
+			setup: rvSoftRefresh,
 			write: recordLaunch(1, store.CondChanged)},
+		{name: "AdoptIdentityIfUnchanged/stale snapshot, hook wrote first", state: "waiting",
+			setup: rvSoftRefresh,
+			write: adoptWrite(func(s *store.RowSnapshot) { s.RowVersion-- }, store.CondChanged)},
+		{name: "AdoptIdentityIfUnchanged/absent row", state: "waiting",
+			write: func(t *testing.T, f *v5Store, id string) {
+				examined := rvExamine(t, f, id).Snapshot
+				if got, err := f.s.AdoptIdentityIfUnchanged("rv-absent", examined, createdIdentity()); err != nil || got != store.CondAbsent {
+					t.Fatalf("AdoptIdentityIfUnchanged(absent) = %v, %v; want CondAbsent, nil", got, err)
+				}
+			}},
 		// SR-22.9: a hook from another parent is ignored and writes nothing.
 		{name: "ApplyHookTransition/another parent, ignored", state: "waiting", write: foreignHook("Stop")},
 		{name: "RecordSessionStartIdentity/another parent, ignored", state: "pending", write: foreignHook("SessionStart")},

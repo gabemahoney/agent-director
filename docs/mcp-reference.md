@@ -169,7 +169,7 @@ Terminate the Spawn's tmux session. Idempotent on terminal states (ended/missing
 
 ### Output schema
 
-- (no output fields)
+- `kill_sent`: type=bool — True exactly when a pane kill or a session kill was sent, including one whose call failed; false when no kill was sent, for example for a finished row.
 
 ### Errors
 

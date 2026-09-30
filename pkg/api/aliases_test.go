@@ -6,7 +6,7 @@ package api_test
 // identical field layouts without any explicit conversion.
 //
 // It also covers SRD Appendix F.3's internal/tmux re-exports: the eight Tmux*
-// type aliases, and the structural rule that every internal/tmux Call*, Fail*
+// type aliases, the start-time reader alias api.ProcChecker, and the structural rule that every internal/tmux Call*, Fail*
 // and Label* constant is re-declared in pkg/api as Tmux<Name> = tmux.<Name>.
 
 import (
@@ -25,7 +25,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -36,6 +38,13 @@ import (
 // The Recorder is the test double for api.TmuxClient (F.3: "*tmux.Client and
 // tmuxfix.Recorder implement it"); *tmux.Client's assertion is in client.go.
 var _ api.TmuxClient = (*tmuxfix.Recorder)(nil)
+
+// Kill's start-time reader (SR-3.8): the production reader and the shared
+// process-checker fake both satisfy api.ProcChecker.
+var (
+	_ api.ProcChecker = probe.NewProcChecker()
+	_ api.ProcChecker = (*procfix.Checker)(nil)
+)
 
 // TestSpawnAliasRoundTrip proves that api.Spawn and store.Spawn are the same
 // type: a value of one can be assigned directly to the other and all fields
@@ -127,8 +136,8 @@ func TestListFiltersAliasRoundTrip(t *testing.T) {
 	}
 }
 
-// TestTmuxAliasesAreIdentical checks each F.3 Tmux* alias is the internal/tmux
-// type itself, not a new defined type (so errors.As and assignment interoperate).
+// TestTmuxAliasesAreIdentical checks each F.3 Tmux* alias and api.ProcChecker is the
+// internal/tmux type itself, not a new defined type (so errors.As and assignment interoperate).
 func TestTmuxAliasesAreIdentical(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -142,6 +151,7 @@ func TestTmuxAliasesAreIdentical(t *testing.T) {
 		{"TmuxCall", reflect.TypeFor[api.TmuxCall](), reflect.TypeFor[tmux.Call]()},
 		{"TmuxFailure", reflect.TypeFor[api.TmuxFailure](), reflect.TypeFor[tmux.Failure]()},
 		{"TmuxCallError", reflect.TypeFor[api.TmuxCallError](), reflect.TypeFor[tmux.CallError]()},
+		{"ProcChecker", reflect.TypeFor[api.ProcChecker](), reflect.TypeFor[tmux.ProcChecker]()},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

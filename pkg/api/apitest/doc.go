@@ -70,7 +70,8 @@
 //   - AssertDescription checks an error description against a DescCase (a
 //     Desc* constructor holding an SR-1.4 case's required and must-not
 //     phrases) and always rejects SR-1.4's session-ending command forms (only
-//     "retry kill later" excepted), the opt-in's SR-6.8 spellings, a label
+//     "retry kill later", and only for an ErrTmuxKillFailed case, excepted),
+//     the opt-in's SR-6.8 spellings, a label
 //     value and the caller's forbid values. AssertAgentText is the
 //     forbidden-only check for manifest-like texts; AssertAgentTextCase adds
 //     a DescCase's phrases for a rule such a text must state (for example
@@ -78,7 +79,9 @@
 //     phrases or forms itself; a new case is a new Desc* constructor in
 //     descriptions.go, or in a sibling file of one verb's cases
 //     (descriptions_resume.go, whose DescCase.AfterResumeRestore adds the
-//     restore's result a resume launch error ends with).
+//     restore's result a resume launch error ends with; descriptions_kill.go,
+//     whose DescCase.AfterKillSent states a kill was sent), or of the
+//     lookup's shared Can't tell cases (descriptions_lookup.go).
 //
 // Rules for tests (the same as docs/architecture.md, "apitest Seed* factory
 // contract (reusable test fixtures)"):

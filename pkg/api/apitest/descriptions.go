@@ -19,17 +19,22 @@ import (
 // documented procedure (manifest descriptions) through AssertAgentText; no
 // test spells these phrases or forms itself. A new SR-1.4 case is added here
 // as a constructor, or in a sibling file of one verb's cases
-// (descriptions_resume.go).
+// (descriptions_resume.go, descriptions_kill.go) or of the lookup's shared
+// Can't tell cases (descriptions_lookup.go).
 
 // DescCase is one SR-1.4 description case: Name (shown in every failure),
 // the phrases the description must contain, the case's own must-not phrases
 // (case-insensitive, whole words where they are words) and values it must
-// never carry (exact substrings, such as the id itself).
+// never carry (exact substrings, such as the id itself). Only an
+// ErrTmuxKillFailed case (DescKillWaitExpired, DescKillUncheckable,
+// DescKillNoPane) allows "retry kill later".
 type DescCase struct {
 	Name    string
 	Require []string
 	MustNot []string
 	Forbid  []string
+
+	allowRetryKill bool
 }
 
 // DescSession is a tmux session a description names: its name (quoted in the
@@ -91,15 +96,18 @@ func concatForms(lists ...[]form) []form {
 
 // AssertDescription checks an error description against case c: every
 // required phrase present; none of c's must-not phrases, no session-ending
-// command form (SR-1.4; "retry kill later" alone excepted), no opt-in
-// spelling (SR-6.8), no label raw value, and none of the caller's forbid
-// values (another row's id, session-environment values, a token, a store id,
-// a label value; empty values are ignored).
+// command form (SR-1.4; "retry kill later" excepted for an ErrTmuxKillFailed
+// case only), no opt-in spelling (SR-6.8), no label raw value, and none of
+// the caller's forbid values (another row's id, session-environment values,
+// a token, a store id, a label value; empty values are ignored).
 func AssertDescription(t testing.TB, desc string, c DescCase, forbid ...string) {
 	t.Helper()
 	label := "description case " + strconv.Quote(c.Name)
 	checkPhrases(t, label, desc, c, forbid...)
-	checkForms(t, label, strings.ReplaceAll(desc, retryKillLater, ""), descriptionForms)
+	if c.allowRetryKill {
+		desc = strings.ReplaceAll(desc, retryKillLater, "")
+	}
+	checkForms(t, label, desc, descriptionForms)
 }
 
 // AssertAgentText checks a text agent-director shows agents but which may
@@ -393,48 +401,30 @@ var rowEndedStatements = []string{"row was ended", "row has ended", "rows were e
 // finding a leftover of instanceID; sessions are all those found, in the
 // order the description names them (lowest $N first).
 func DescScanLeftover(instanceID string, sessions []DescSession) DescCase {
-	req := []string{
+	named, unnamed := namedSessions(sessions)
+	req := append([]string{
 		instanceID, scanLeftoverWord, "nothing was written and no row was created",
 		"a human's decision", "list --tmux-session-name",
-	}
-	mustNot := append([]string(nil), rowEndedStatements...)
-	for i, s := range sessions {
-		if i < scanNamed {
-			req = append(req, strconv.Quote(s.Name), s.ID)
-		} else {
-			mustNot = append(mustNot, strconv.Quote(s.Name))
-		}
-	}
-	if more := len(sessions) - scanNamed; more > 0 {
-		req = append(req, fmt.Sprintf("%d more", more))
-	}
+	}, named...)
+	mustNot := append(append([]string(nil), rowEndedStatements...), unnamed...)
 	return DescCase{Name: "ErrTmuxSessionConflict, scan leftover", Require: req, MustNot: mustNot}.PointsToOperatorActions()
 }
 
-// ConflictingLabels parameterises DescConflictingLabels: Scope is an
-// @ad_owner value at a scope; Sessions are the sessions carrying this
-// launch's label (the full provenance_conflict row, Epic 10).
-type ConflictingLabels struct {
-	InstanceID string
-	Scope      bool
-	Sessions   []DescSession
-}
-
-// DescConflictingLabels is ErrTmuxSessionConflict's "conflicting labels"
-// (provenance_conflict) case.
-func DescConflictingLabels(p ConflictingLabels) DescCase {
-	req := []string{p.InstanceID, "conflicting labels", "a human must look", "list --tmux-session-name"}
-	if p.Scope {
-		req = append(req, "@ad_owner value is set at the global, server or global-window scope")
+// namedSessions splits sessions (in the order a description names them) into
+// the phrases it must contain, each named session's quoted name and tmux id
+// up to scanNamed and then the rest's count, and the quoted names it must not.
+func namedSessions(sessions []DescSession) (named, unnamed []string) {
+	for i, s := range sessions {
+		if i < scanNamed {
+			named = append(named, strconv.Quote(s.Name), s.ID)
+		} else {
+			unnamed = append(unnamed, strconv.Quote(s.Name))
+		}
 	}
-	for _, s := range p.Sessions {
-		req = append(req, strconv.Quote(s.Name), s.ID)
+	if more := len(sessions) - scanNamed; more > 0 {
+		named = append(named, fmt.Sprintf("%d more", more))
 	}
-	return DescCase{
-		Name:    "ErrTmuxSessionConflict, conflicting labels",
-		Require: req,
-		MustNot: rowEndedStatements,
-	}.PointsToOperatorActions()
+	return named, unnamed
 }
 
 // DescSpawnLaunchTimeoutRule is the launch-timeout rule as the spawn manifest

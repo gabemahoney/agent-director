@@ -16,6 +16,7 @@
 //     HOME/.claude/projects/<slug>/<session_id>.jsonl; spawn and resume
 //     need HOME/.claude.json for pre-trust).
 //   - wantPreTrust: when set, both envelopes must carry pre_trust equal to it.
+//   - want:        when set, fields both envelopes must carry (kill_sent).
 //
 // The test driver (success_cases_test.go) always calls
 // t.Setenv("HOME", homeDir) immediately before each extraSetup invocation so
@@ -70,6 +71,10 @@ type successCase struct {
 	// wantPreTrust, when non-empty, is the pre_trust both envelopes must
 	// carry (spawn and resume); see success_pretrust.go.
 	wantPreTrust string
+
+	// want, when set, holds fields both envelopes must carry with these
+	// values (success_fields.go).
+	want map[string]any
 }
 
 // successCases is the authoritative per-verb fixture table.
@@ -187,15 +192,13 @@ var successCases = []successCase{
 	},
 
 	// ── kill ──────────────────────────────────────────────────────────────
-	// kill result is empty ({}).  fake-tmux absorbs the kill-session call.
+	// A live row whose socket's fake table is empty (Gone) and whose
+	// recorded agent reads gone: no kill is sent, so both sides carry
+	// kill_sent false (SR-6.1, SR-6.6).
 	{
 		verb: "kill",
-		seed: func(t *testing.T) (string, map[string]any) {
-			t.Helper()
-			_, dbPath := apitest.OpenStoreWithRow(t,
-				"id-kill-1", "cd-kill-1", store.StateWaiting, "off")
-			return filepath.Dir(dbPath), map[string]any{"id": "id-kill-1"}
-		},
+		seed: seedKillGone,
+		want: map[string]any{"kill_sent": false},
 		params: func(ctx map[string]any) map[string]any {
 			return map[string]any{"claude_instance_id": ctx["id"]}
 		},

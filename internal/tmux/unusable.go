@@ -49,8 +49,38 @@ func Unusable(name string) UnusableKind {
 		return UnusableEmpty
 	case hasControlChar(name):
 		return UnusableControl
-	case strings.ContainsAny(name, ".:") || !utf8.ValidString(name):
+	case RewrittenIn(name).Any():
 		return UnusableRewritten
 	}
 	return UnusableNone
+}
+
+// Rewritten reports which characters of a name tmux stores differently
+// (SR-3.2; Appendix E N6), the faults behind UnusableRewritten. The zero
+// value means none.
+type Rewritten struct {
+	// Dot: the name holds `.`, which tmux stores as `_`.
+	Dot bool
+	// Colon: the name holds `:`, which tmux stores as `_`.
+	Colon bool
+	// InvalidUTF8: the name holds bytes that are not valid UTF-8, which tmux
+	// stores as backslash-octal escapes.
+	InvalidUTF8 bool
+}
+
+// Any reports whether r records at least one fault.
+func (r Rewritten) Any() bool { return r.Dot || r.Colon || r.InvalidUTF8 }
+
+// RewrittenIn classifies which rewritten characters name holds (SR-3.2,
+// SR-1.4): the one place these rules live, used by Unusable and by
+// descriptions that name which character tmux stores differently. It judges
+// only the rewritten faults, so callers take Unusable's precedence first (an
+// empty name or a control character decides before these). It reads no
+// environment and no clock and makes no tmux call.
+func RewrittenIn(name string) Rewritten {
+	return Rewritten{
+		Dot:         strings.Contains(name, "."),
+		Colon:       strings.Contains(name, ":"),
+		InvalidUTF8: !utf8.ValidString(name),
+	}
 }

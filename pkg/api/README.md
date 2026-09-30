@@ -309,12 +309,13 @@ agent-director kill \
 ```
 
 ```go
-_, err := c.Kill(api.KillParams{
+res, err := c.Kill(api.KillParams{
     ClaudeInstanceID: "claude_2026-05-22T18-23-15",
 })
 if err != nil {
     log.Fatal(err)
 }
+fmt.Println(res.KillSent) // true: a kill was sent to the agent's session
 ```
 
 Returns `KillResult` (empty struct, reserved for future fields).

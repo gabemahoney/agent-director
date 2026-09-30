@@ -135,3 +135,18 @@ func JudgeProcess(pc ProcChecker, id ProcIdentity) ProcState {
 	}
 	return ProcGone
 }
+
+// KnownStartTime returns pid's process start time when the start-time reader
+// pc answers alive and known, and "" (none recorded) otherwise: pid not
+// positive, unreadable, or gone (SR-3.6, SR-3.8). It is the start time the
+// identity write and adoption record, calling pc.StartTime at most once.
+func KnownStartTime(pc ProcChecker, pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	start, alive, known := pc.StartTime(pid)
+	if !alive || !known {
+		return ""
+	}
+	return start
+}

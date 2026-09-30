@@ -1,85 +1,416 @@
 package api
 
-import "github.com/gabemahoney/agent-director/internal/store"
+import (
+	"fmt"
+	"slices"
+	"strconv"
+	"time"
 
-// KillStore is the narrow store surface Kill needs. *store.Store
-// satisfies it; tests pass the real store or a recording fake.
+	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/tmux"
+)
+
+// KillStore is the narrow store surface Kill needs (SRD Appendix F.3):
+// the row read, the adoption write of SR-3.6 (a lost create reply's server
+// and pane identity, applied only if the row still has the snapshot Kill
+// examined) and this store's id, which every label the lookup accepts ends
+// with (SR-3.4; WD 2026-09-29 STORE). *store.Store satisfies it.
 type KillStore interface {
+	// GetSpawn reads the row; an unknown id is ErrSpawnNotFound.
 	GetSpawn(instanceID string) (Spawn, error)
+	// AdoptIdentityIfUnchanged records a found launch identity when the
+	// row is still as examined (SR-3.6).
+	AdoptIdentityIfUnchanged(instanceID string, examined RowSnapshot, id LaunchIdentity) (CondResult, error)
+	// StoreID returns this store's store_meta.store_id.
+	StoreID() string
 }
 
-// KillTmux is the narrow tmux surface Kill needs. *tmux.Client
-// satisfies it; tests pass a recording fake that captures the kill argv.
+// TmuxLookup is the lookup subset every narrow tmux interface embeds
+// (Appendix F.3): the one-call lookup on a socket (SR-3.4).
+type TmuxLookup interface {
+	// Lookup makes the one-call lookup on socket.
+	Lookup(socket string) (TmuxLookupAnswer, error)
+}
+
+// KillTmux is the narrow tmux surface Kill needs (Appendix F.3): the lookup,
+// the pane listing, and the pane and session kills by id. TmuxClient,
+// *tmux.Client and tmuxfix.Recorder satisfy it. Every method takes the
+// row's socket (SR-3.3) and reports a failure as *TmuxCallError.
 type KillTmux interface {
-	KillSession(name string) error
+	TmuxLookup
+	// ListPanes lists every pane of the server at socket.
+	ListPanes(socket string) ([]TmuxPane, error)
+	// KillPane kills the pane paneID on socket.
+	KillPane(socket, paneID string) error
+	// KillSessionID kills the session sessionID on socket.
+	KillSessionID(socket, sessionID string) error
 }
 
-// KillLogger is the narrow log surface Kill uses to surface
-// swallowed tmux failures at WARN level. *log.Logger satisfies it;
-// tests inject a recording fake to inspect the message. nil is
-// accepted (Kill stays silent) so callers that don't care still
-// compile against the previous interface.
-type KillLogger interface {
-	Printf(format string, v ...any)
-}
+// The production types satisfy Kill's interfaces.
+var (
+	_ KillStore = (*store.Store)(nil)
+	_ KillTmux  = TmuxClient(nil)
+)
 
 // KillParams is the typed parameter shape for the kill verb.
 type KillParams struct {
-	// ClaudeInstanceID identifies the Spawn whose tmux session will be killed.
+	// ClaudeInstanceID identifies the Spawn whose agent kill ends.
 	ClaudeInstanceID string `json:"claude_instance_id"`
 }
 
-// KillResult is the typed return shape — empty today, reserved so
-// future fields (e.g. session_already_gone) can be added without
-// breaking the wire shape.
-type KillResult struct{}
-
-// Kill terminates the Spawn's tmux session and returns. Behavior
-// (SRD §5, §12):
-//
-//   - Unknown id → ErrSpawnNotFound (the only surface error).
-//   - Terminal state (ended / missing) → no-op success: the session is
-//     either already gone or we never tracked it as live.
-//   - Otherwise → tmux.KillSession is invoked; any tmux failure is
-//     swallowed AT THE VERB SURFACE (post-condition "session gone" is
-//     satisfied either way, and find-missing reconciles the row), but
-//     the error is emitted at WARN level via lg so an operator running
-//     `agent-director kill` interactively can see permission /
-//     stale-TMUX_TMPDIR / etc. diagnostics without having to wait for
-//     the next reconciliation pass.
-//
-// Note: kill does NOT promise state cleanup — the row stays in its
-// pre-kill state until find-missing (Epic 8) reconciles it. SRD §5
-// pins this intentionally so a hung tmux session and a freshly killed
-// one are reconciled by the same audit path.
-func Kill(s KillStore, t KillTmux, lg KillLogger, params KillParams) (KillResult, error) {
-	row, err := s.GetSpawn(params.ClaudeInstanceID)
-	if err != nil {
-		return KillResult{}, err
-	}
-
-	if row.State == store.StateEnded || row.State == store.StateMissing {
-		return KillResult{}, nil
-	}
-
-	// Swallow tmux errors at the verb surface (the post-condition is
-	// "session gone"; find-missing will reconcile the row regardless),
-	// but log them so an operator running kill interactively can see
-	// the underlying tmux failure.
-	if err := t.KillSession(row.TmuxSessionName); err != nil {
-		if lg != nil {
-			lg.Printf("WARN: kill: tmux kill-session for spawn %s failed: %v (find-missing will reconcile)",
-				params.ClaudeInstanceID, err)
-		}
-	}
-	return KillResult{}, nil
+// KillResult is the typed return shape of the kill verb (SR-6.6).
+type KillResult struct {
+	// KillSent is true exactly when a pane kill or a session kill was sent.
+	KillSent bool `json:"kill_sent"`
 }
 
-// Kill terminates the Spawn's tmux session. Idempotent on terminal states
-// (ended/missing) — calling Kill on an already-gone Spawn is a no-op success.
-// Kill does NOT update the row's state column; the row transitions to missing
-// on the next find-missing reconciliation pass. Tmux failures are swallowed
-// at the verb surface and logged at WARN level to c.logger.
+// killPollInterval is the pause between two readings of kill's process wait
+// (SR-6.1): a named constant, not a setting.
+const killPollInterval = 100 * time.Millisecond
+
+// killSentConsequence is the consequence sentence of a follow-up lookup
+// that cannot answer after a kill was sent (SR-1.4).
+const killSentConsequence = "the kill was sent and may or may not have taken effect"
+
+// The process_check values of ad.kill.called besides not_run (SR-6.4).
+const (
+	processCheckGone        = "gone"
+	processCheckAlive       = "alive"
+	processCheckUnreadable  = "unreadable"
+	processCheckNotRecorded = "not_recorded"
+)
+
+// Kill ends the current launch's agent of a live row (SRD SR-6.1 to SR-6.4,
+// SR-3.6, SR-3.7, SR-3.8, SR-3.11):
+//
+//   - Unknown id: ErrSpawnNotFound. A finished row (ended, missing): success,
+//     kill_sent false, no tmux call. A live row (pending included) whose
+//     recorded session name is unusable (SR-3.2): an ErrInternal-class
+//     error, no tmux call.
+//   - Otherwise one lookup by the row's current label on its recorded socket.
+//     Ours: the pane listing (adopting a lost reply's identity first), the
+//     pane kill by the agent's pane id, the session kill by the labelled
+//     session's id, then the check. Leftover: ErrTmuxSessionConflict, no
+//     kill. Gone: success with kill_sent false when the agent process is gone,
+//     none is recorded or it cannot be checked; when it still runs, its pane
+//     wherever it now is is killed and the check runs, or, with no pane of it
+//     found, ErrTmuxKillFailed with no kill sent. Can't tell: its error.
+//   - The check, never both: when the agent process can be checked, it and
+//     every pane process the listing showed in the labelled session are
+//     polled every killPollInterval, through now and sleep, for up to
+//     exitWait; all gone is success with kill_sent true, anything still
+//     running ErrTmuxKillFailed naming it. When it cannot, one follow-up
+//     lookup decides.
+//
+// Kill never signals a process, never changes the row's state (only the
+// adoption writes to the row) and writes no log line. It writes exactly one
+// ad.kill.called trail event on every return path, and at most one
+// ad.provenance.disagree per reason, both fail-open. The contract is per
+// call: a later call checks only what it lists. startingSession and
+// stoppingWindow are the finished-row opt-in's and are unused until it
+// exists. Kill applies no fallback: every duration is used as given, and pc,
+// now and sleep must not be nil.
+func Kill(s KillStore, t KillTmux, pc ProcChecker, startingSession, stoppingWindow, exitWait time.Duration,
+	now func() time.Time, sleep func(time.Duration), params KillParams) (result KillResult, err error) {
+	k := &killRun{
+		s: s, t: t, pc: pc, exitWait: exitWait, now: now, sleep: sleep,
+		id:           params.ClaudeInstanceID,
+		lookup:       tmux.TokenNotRun,
+		followup:     tmux.TokenNotRun,
+		processCheck: tmux.TokenNotRun,
+	}
+	who := callerIdentity()
+	defer func() { k.emit(who, err) }()
+	if err = k.run(); err != nil {
+		return KillResult{}, err
+	}
+	return KillResult{KillSent: k.killSent}, nil
+}
+
+// killRun is one Kill call: its inputs, the row and socket it acts on, and
+// the per-call facts the trail events record (SR-6.4, SR-14).
+type killRun struct {
+	s        KillStore
+	t        KillTmux
+	pc       ProcChecker
+	exitWait time.Duration
+	now      func() time.Time
+	sleep    func(time.Duration)
+	id       string
+
+	row     Spawn
+	socket  string
+	context string // the quoted recorded name, as descriptions lead with it
+
+	// Facts for ad.kill.called.
+	lookup, followup, processCheck string
+	killSent, paneKilled           bool
+	sessionKilled                  bool
+	agentPID                       int
+	survivorPIDs                   []int
+
+	// Facts for ad.provenance.disagree.
+	reasons     []string
+	server      string
+	sessionID   string
+	currentName string
+}
+
+// run is the kill flow; the returned error is Kill's.
+func (k *killRun) run() error {
+	row, err := k.s.GetSpawn(k.id)
+	if err != nil {
+		return err
+	}
+	k.row = row
+	if row.State == store.StateEnded || row.State == store.StateMissing {
+		return nil
+	}
+	if err := unusableNameError(row.TmuxSessionName); err != nil {
+		return fmt.Errorf("instance %s: %w", k.id, err)
+	}
+	socket, err := rowSocket(row.Identity.Socket)
+	if err != nil {
+		return fmt.Errorf("instance %s: %w", k.id, err)
+	}
+	k.socket = socket
+	k.context = "tmux session " + strconv.Quote(row.TmuxSessionName)
+
+	launch := k.launchFor(row.Identity)
+	res := tmux.Lookup(k.t, k.pc, launch, row.TmuxSessionName)
+	k.lookup, k.server = res.Token(), res.Server
+	k.reasons = append(k.reasons, res.Disagree...)
+	switch res.Verdict {
+	case tmux.Ours:
+		return k.ours(res, launch)
+	case tmux.Leftover:
+		return leftoverError(k.id, res.Leftovers)
+	case tmux.Gone:
+		return k.gone(launch, true)
+	}
+	return k.cantTell(res, tmux.CallLookup, "")
+}
+
+// launchFor is the lookup's view of the row with identity id: its instance
+// id, token, recorded server identity, this store's id and the row's socket.
+func (k *killRun) launchFor(id LaunchIdentity) tmux.Launch {
+	return tmux.Launch{
+		InstanceID:      k.row.ClaudeInstanceID,
+		Token:           id.Token,
+		StoreID:         k.s.StoreID(),
+		Socket:          k.socket,
+		ServerPID:       id.ServerPID,
+		ServerStart:     id.ServerStart,
+		ServerStarttime: id.ServerStarttime,
+	}
+}
+
+// ours is the kill sequence on the labelled session (SR-6.1 steps 1 to 4).
+// A failed or timed-out kill never stops it; the check decides.
+func (k *killRun) ours(res tmux.Result, launch tmux.Launch) error {
+	k.sessionID = res.Session.ID
+	if nameChanged(res, k.row.TmuxSessionName) {
+		k.reasons = append(k.reasons, tmux.ReasonNameChanged)
+		k.currentName = res.Session.Name
+	}
+	panes, err := k.t.ListPanes(k.socket)
+	if err != nil {
+		lres := tmux.ListingFailure(err, k.pc, launch)
+		k.reasons = append(k.reasons, lres.Disagree...)
+		if lres.Verdict == tmux.Gone {
+			// No server at the socket any more: decided as for a Gone lookup,
+			// with no pane to find.
+			return k.gone(launch, false)
+		}
+		return k.cantTell(lres, tmux.CallListPanes, "")
+	}
+	a := adoptIdentity(k.s, k.row, res, panes, k.pc)
+	if a.Applied {
+		k.reasons = append(k.reasons, tmux.ReasonAdopted)
+	}
+	agent := agentProcess(k.row, a.Identity)
+	listed := sessionProcesses(k.pc, panes, res.Session.ID, agent.Identity.PID)
+	if pane, ok := agentPane(panes, a.Identity.PaneID, a.Identity.PanePID); ok {
+		k.killPane(pane.ID)
+	}
+	_ = k.t.KillSessionID(k.socket, res.Session.ID)
+	k.killSent, k.sessionKilled = true, true
+	return k.check(agent, listed, k.launchFor(a.Identity))
+}
+
+// gone applies SR-6.1's Gone rows: the agent process gone, none recorded or
+// not checkable is success with nothing sent; still running, its pane is
+// looked for in one pane listing (when listPanes is set; a listing that
+// already showed no server is not repeated) and killed, else
+// ErrTmuxKillFailed with no kill sent.
+func (k *killRun) gone(launch tmux.Launch, listPanes bool) error {
+	agent := agentProcess(k.row, k.row.Identity)
+	state := tmux.JudgeProcess(k.pc, agent.Identity)
+	k.noteCheck(agent, state)
+	if state != tmux.ProcAlive {
+		return nil
+	}
+	if !listPanes {
+		return k.noPaneError()
+	}
+	panes, err := k.t.ListPanes(k.socket)
+	if err != nil {
+		lres := tmux.ListingFailure(err, k.pc, launch)
+		k.reasons = append(k.reasons, lres.Disagree...)
+		if lres.Verdict == tmux.Gone {
+			return k.noPaneError()
+		}
+		return k.cantTell(lres, tmux.CallListPanes, "")
+	}
+	pane, ok := agentPane(panes, k.row.Identity.PaneID, k.row.Identity.PanePID)
+	if !ok {
+		return k.noPaneError()
+	}
+	k.killPane(pane.ID)
+	return k.check(agent, nil, launch)
+}
+
+// killPane sends the pane kill by id; its failure is ignored (SR-6.1).
+func (k *killRun) killPane(paneID string) {
+	_ = k.t.KillPane(k.socket, paneID)
+	k.killSent, k.paneKilled = true, true
+}
+
+// check is SR-6.1 step 4 after a kill was sent: the first reading of the
+// agent process decides whether it can be checked. Checkable (alive or gone):
+// the process wait over it and listed. Not (none recorded, or unreadable):
+// one follow-up lookup of launch, no wait.
+func (k *killRun) check(agent tmux.AgentProcess, listed []tmux.ProcIdentity, launch tmux.Launch) error {
+	first := tmux.JudgeProcess(k.pc, agent.Identity)
+	k.noteCheck(agent, first)
+	if first == tmux.ProcNone || first == tmux.ProcUnknown {
+		return k.followUp(launch)
+	}
+	return k.wait(agent.Identity, first, listed)
+}
+
+// wait polls the agent process and the listed pane processes every
+// killPollInterval for up to exitWait, reading now at each poll and pausing
+// through sleep; the last pause is cut to end exactly at exitWait. A zombie
+// counts as gone; a reading that cannot tell counts as still running. All
+// gone: success. Otherwise ErrTmuxKillFailed naming every pid still running.
+func (k *killRun) wait(agent tmux.ProcIdentity, state tmux.ProcState, listed []tmux.ProcIdentity) error {
+	start := k.now()
+	for {
+		listed = slices.DeleteFunc(listed, func(p tmux.ProcIdentity) bool {
+			return tmux.JudgeProcess(k.pc, p) == tmux.ProcGone
+		})
+		if state == tmux.ProcGone && len(listed) == 0 {
+			k.processCheck = processCheckGone
+			return nil
+		}
+		elapsed := k.now().Sub(start)
+		if elapsed >= k.exitWait {
+			break
+		}
+		k.sleep(min(killPollInterval, k.exitWait-elapsed))
+		if state != tmux.ProcGone {
+			state = tmux.JudgeProcess(k.pc, agent)
+		}
+	}
+	agentRuns := state != tmux.ProcGone
+	k.processCheck = processCheckGone
+	if agentRuns {
+		k.processCheck = processCheckAlive
+	}
+	for _, p := range listed {
+		k.survivorPIDs = append(k.survivorPIDs, p.PID)
+	}
+	return k.waitExpiredError(agentRuns)
+}
+
+// followUp is the one follow-up lookup when the agent process cannot be
+// checked after a kill (SR-6.1, SR-3.11): the current label gone (Gone or
+// Leftover) is success; still there is ErrTmuxKillFailed; Can't tell is its
+// error, saying the kill may or may not have taken effect.
+func (k *killRun) followUp(launch tmux.Launch) error {
+	res := tmux.Lookup(k.t, k.pc, launch, "")
+	k.followup = res.Token()
+	k.reasons = append(k.reasons, res.Disagree...)
+	switch res.Verdict {
+	case tmux.Gone, tmux.Leftover:
+		return nil
+	case tmux.Ours:
+		return k.uncheckableError()
+	}
+	return k.cantTell(res, tmux.CallLookup, killSentConsequence)
+}
+
+// cantTell maps a Can't tell lookup or pane-listing result through the
+// single-row verbs' shared mapping, with the recorded name as context.
+// consequence "" means nothing was done.
+func (k *killRun) cantTell(res tmux.Result, call tmux.Call, consequence string) error {
+	return cantTellError(res, cantTellRefusal{
+		InstanceID:  k.id,
+		Context:     k.context,
+		Socket:      k.socket,
+		Call:        call,
+		Consequence: consequence,
+	})
+}
+
+// noteCheck records a process check's first reading and the checked pid.
+func (k *killRun) noteCheck(agent tmux.AgentProcess, state tmux.ProcState) {
+	k.processCheck = processCheckToken(state)
+	k.agentPID = agent.Identity.PID
+}
+
+// processCheckToken is ad.kill.called's process_check value of a reading.
+func processCheckToken(state tmux.ProcState) string {
+	switch state {
+	case tmux.ProcAlive:
+		return processCheckAlive
+	case tmux.ProcGone:
+		return processCheckGone
+	case tmux.ProcUnknown:
+		return processCheckUnreadable
+	}
+	return processCheckNotRecorded
+}
+
+// agentProcess selects row's agent process (SR-3.8) from its SessionStart
+// identity and the pane identity of id: the row's recorded identity, or the
+// one adoption found for this call.
+func agentProcess(row Spawn, id LaunchIdentity) tmux.AgentProcess {
+	return tmux.SelectAgentProcess(
+		tmux.ProcIdentity{PID: row.PID, Starttime: row.ProcStarttime},
+		tmux.ProcIdentity{PID: id.PanePID, Starttime: id.PaneStarttime},
+	)
+}
+
+// sessionProcesses returns the processes of every pane the listing shows in
+// the session sessionID (linked windows included), each once by pid, with
+// its start time read now (SR-6.1 step 1; WD 2026-09-29c). The agent's pid is
+// left out, since the agent is judged by its recorded identity; a process
+// whose start time cannot be read, or that is already gone, is not waited
+// for (SR-18.12).
+func sessionProcesses(pc ProcChecker, panes []tmux.Pane, sessionID string, agentPID int) []tmux.ProcIdentity {
+	var out []tmux.ProcIdentity
+	seen := map[int]bool{agentPID: true}
+	for _, p := range panes {
+		if p.SessionID != sessionID || p.PID <= 0 || seen[p.PID] {
+			continue
+		}
+		seen[p.PID] = true
+		if start := tmux.KnownStartTime(pc, p.PID); start != "" {
+			out = append(out, tmux.ProcIdentity{PID: p.PID, Starttime: start})
+		}
+	}
+	return out
+}
+
+// Kill ends the Spawn's current agent: the one in the tmux session that
+// carries the row's current launch label, on the row's recorded socket. It
+// kills the agent's pane and that session by their tmux ids, then succeeds
+// only once the agent process is gone; kill_sent reports whether a kill was
+// sent. A finished row (ended, missing) is a no-op success with kill_sent
+// false. Kill never changes the row's state, never signals a process itself
+// and writes no log line; every tmux refusal is a returned error.
 //
 // CLI: agent-director kill
 //
@@ -105,5 +436,7 @@ func (c *Client) Kill(params KillParams) (KillResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return KillResult{}, err
 	}
-	return Kill(c.st, c.tmuxClient, c.logger, params)
+	t := c.cfg.Tmux
+	return Kill(c.st, c.tmuxClient, c.procChecker, t.EffectiveStartingSession(), t.EffectiveStoppingWindow(),
+		t.EffectiveKillExitWait(), c.now, c.sleep, params)
 }

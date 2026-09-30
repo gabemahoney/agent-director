@@ -18,7 +18,10 @@ import (
 // server does not hold is FailUnrecognized with no FirstLine and exit
 // status 1 (tmux's "can't find" replies; script a catalogue entry's
 // FirstLine to carry one). The server stays bound when its last session is
-// killed; StopServer models its exit.
+// killed; StopServer models its exit. A pane listed in several sessions
+// (SeedPane.Shared) is one pane to every call: the pane listing shows it
+// once per session, a pane kill or pane label reaches every listing, and
+// a session kill removes one listing only.
 
 // SocketCall is one recorded socket-taking call.
 type SocketCall struct {
@@ -128,7 +131,9 @@ func (r *Recorder) Lookup(socket string) (tmux.LookupAnswer, error) {
 
 // ListPanes answers the pane listing from socket's table: every pane of the
 // server, sessions in listing order, panes by window then pane index, each
-// with its SeedPane.AdPane.
+// with its SeedPane.AdPane. A pane listed in several sessions
+// (SeedPane.Shared) is shown once per session, with that session's id,
+// window and index, as list-panes -a shows it.
 func (r *Recorder) ListPanes(socket string) ([]tmux.Pane, error) {
 	ans, err := r.do(SocketCall{Call: tmux.CallListPanes, Socket: socket}, func(st *socketState, _ Script) (any, *tmux.CallError) {
 		var out []tmux.Pane
@@ -151,24 +156,22 @@ func (r *Recorder) ListPanes(socket string) ([]tmux.Pane, error) {
 	return panes, err
 }
 
-// KillPane removes the pane paneID from socket's table; killing a session's
-// last pane removes the session.
+// KillPane removes the pane paneID from socket's table, from every session
+// listing it (SeedPane.Shared); killing a session's last pane removes the
+// session.
 func (r *Recorder) KillPane(socket, paneID string) error {
 	_, err := r.do(SocketCall{Call: tmux.CallKillPane, Socket: socket, Target: paneID}, func(st *socketState, _ Script) (any, *tmux.CallError) {
-		i, s := st.server.findPane(paneID)
-		if s == nil {
+		if !st.server.removePane(paneID) {
 			return nil, notFound(tmux.CallKillPane)
-		}
-		s.panes = append(s.panes[:i:i], s.panes[i+1:]...)
-		if len(s.panes) == 0 {
-			st.server.removeSession(s.id)
 		}
 		return nil, nil
 	})
 	return err
 }
 
-// KillSessionID removes the session sessionID from socket's table.
+// KillSessionID removes the session sessionID from socket's table. A pane it
+// shares with another session (SeedPane.Shared) stays listed there: the
+// pane goes only when no session lists it.
 func (r *Recorder) KillSessionID(socket, sessionID string) error {
 	_, err := r.do(SocketCall{Call: tmux.CallKillSession, Socket: socket, Target: sessionID}, func(st *socketState, _ Script) (any, *tmux.CallError) {
 		if st.server.findSession(sessionID) == nil {
@@ -220,7 +223,8 @@ func (r *Recorder) CapturePaneID(socket, paneID string, nLines int, ansi bool) (
 // the pane paneID, anywhere on the server, to token (WD 2026-09-29c), in
 // that order, as tmux runs the two steps: a session id the server does not
 // hold changes nothing, and a pane id it does not hold leaves the session
-// labelled; either fails.
+// labelled; either fails. A pane listed in several sessions
+// (SeedPane.Shared) takes the pane label on every listing.
 func (r *Recorder) SetLabel(socket, sessionID, paneID, token, instanceID, storeID string) error {
 	c := SocketCall{Call: tmux.CallSetLabel, Socket: socket, Target: sessionID, PaneID: paneID, Token: token,
 		InstanceID: instanceID, StoreID: storeID}
@@ -230,11 +234,9 @@ func (r *Recorder) SetLabel(socket, sessionID, paneID, token, instanceID, storeI
 			return nil, notFound(tmux.CallSetLabel)
 		}
 		s.label, s.labelSet = Valid(token, instanceID, storeID), true
-		i, owner := st.server.findPane(paneID)
-		if owner == nil {
+		if !st.server.setAdPane(paneID, token) {
 			return nil, notFound(tmux.CallSetLabel)
 		}
-		owner.panes[i].AdPane = token
 		return nil, nil
 	})
 	return err

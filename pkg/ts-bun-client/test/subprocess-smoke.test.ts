@@ -129,16 +129,18 @@ describe("subprocess-smoke / happy paths (SR-10.3)", () => {
     });
   }, 10_000);
 
-  test("kill — succeeds against working spawn", async () => {
+  test("kill — Gone row (private socket, no table) returns kill_sent false", async () => {
     await withTempHome(async (homeDir) => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
       const id = "subsmoke-kill";
       runHelper("seed-spawn", {
         store: storePath, id, state: "working", "create-store": true,
+        socket: privateTmuxSocket(homeDir),
       });
       using client = await Client.create({ storePath, createIfMissing: true, tmuxCommand: FAKE_TMUX_BIN , _cliPath: process.env.CLI_PATH } as any);
       const r: KillResult = await client.kill({ claude_instance_id: id });
-      expect(typeof r).toBe("object");
+      expect(typeof r.kill_sent).toBe("boolean");
+      expect(r).toEqual({ kill_sent: false });
     });
   }, 10_000);
 

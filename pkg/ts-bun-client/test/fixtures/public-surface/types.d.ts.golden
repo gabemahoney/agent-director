@@ -276,8 +276,10 @@ export interface KillParams {
     /** Id of the Spawn to kill. */
     claude_instance_id: string;
 }
-/** Mirrors pkg/api/kill.go::KillResult (empty; reserved for future fields). */
+/** Mirrors pkg/api/kill.go::KillResult (json tags). */
 export interface KillResult {
+    /** True exactly when a pane kill or a session kill was sent. */
+    kill_sent: boolean;
 }
 /** Mirrors pkg/api.DecideParams (json tags). */
 export interface DecideParams {

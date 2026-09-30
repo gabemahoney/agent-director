@@ -164,7 +164,6 @@ func TestRecorder_VirtualTimeOnlyWhenBound(t *testing.T) {
 	_, _ = r.HasSession("n")
 	_ = r.SendKeys("n", "x", true)
 	_, _ = r.CapturePane("n", 1, false)
-	_ = r.KillSession("n")
 	if got := bound.Now(); !got.Equal(start) {
 		t.Errorf("name-based calls advanced the clock to %v", got)
 	}

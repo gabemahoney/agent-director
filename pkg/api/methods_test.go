@@ -246,16 +246,23 @@ func TestReadPaneDelegation(t *testing.T) {
 	}
 }
 
-// TestKillEndedRowHappy verifies Kill on a terminal-state row is a no-op
-// success: the post-condition ("session gone") is already met, so Kill returns
-// nil without invoking tmux. This validates the idempotency contract.
+// TestKillEndedRowHappy: Kill on a finished row (ended or missing) is a no-op
+// success with kill_sent false and no tmux call, even with its session still there (SR-6.1).
 func TestKillEndedRowHappy(t *testing.T) {
-	c, _ := newTestClientWithRows(t, func(dbPath string) {
-		insertRow(t, dbPath, "id-k-ended", "cd-k-ended", store.StateEnded)
-	})
-	_, err := c.Kill(api.KillParams{ClaudeInstanceID: "id-k-ended"})
-	if err != nil {
-		t.Fatalf("Kill(ended): %v", err)
+	for _, state := range []string{store.StateEnded, store.StateMissing} {
+		t.Run(state, func(t *testing.T) {
+			e := newKillEnv(t)
+			r := e.seedRow(t, killRowSpec{State: state})
+			c, _ := e.client(t)
+			res, err := c.Kill(api.KillParams{ClaudeInstanceID: r.ID})
+			if err != nil {
+				t.Fatalf("Kill(%s): %v", state, err)
+			}
+			if res.KillSent {
+				t.Errorf("Kill(%s).KillSent = true; want false", state)
+			}
+			e.assertKillCalls(t)
+		})
 	}
 }
 

@@ -603,29 +603,11 @@ func resumeRestore(d resumeDeps, id string, movedVersion int64, prior ResumePrio
 	_ = trail.Emit(context.Background(), "ad.resume.restored", map[string]any{
 		"claude_instance_id": id,
 		"applied":            rerr == nil && res == CondApplied,
-		"launch_error":       resumeLaunchErrorName(err),
+		"launch_error":       errorName(err),
 		"restore_error":      restoreError,
 		"source":             "ad_resume",
 	})
 	return err
-}
-
-// resumeLaunchErrorName names a resume launch error as errnames.Classify
-// would, for ad.resume.restored's launch_error (SR-14); pkg/api cannot import
-// pkg/api/errnames. It lists every name a launch followed by a restore can
-// return, and is the one place to extend when a launch gains another.
-func resumeLaunchErrorName(err error) string {
-	switch {
-	case errors.Is(err, tmux.ErrTmuxNotAvailable):
-		return "ErrTmuxNotAvailable"
-	case errors.Is(err, tmux.ErrTmuxSessionCreate):
-		return "ErrTmuxSessionCreate"
-	case errors.Is(err, tmux.ErrTmuxSessionConflict):
-		return "ErrTmuxSessionConflict"
-	case errors.Is(err, tmux.ErrTmuxUnresponsive):
-		return "ErrTmuxUnresponsive"
-	}
-	return "ErrInternal"
 }
 
 // launchInProgressError is resume's refusal of a pending row (SR-8.4,

@@ -23,6 +23,11 @@ import (
 // pre-trust and the insert, so a refusal leaves no row and no trust entry.
 const scanNothingWritten = "nothing was written and no row was created"
 
+// scanCantTellConsequence is the consequence of the scan's Can't tell
+// refusals (SR-1.4): nothing was done, and for the scan that means nothing
+// was written (SR-9.3).
+const scanCantTellConsequence = nothingWasDone + ": " + scanNothingWritten
+
 // scanLeftoversNamed is how many leftover sessions the refusal names before
 // giving the rest as a count (SR-1.4).
 const scanLeftoversNamed = 3
@@ -39,11 +44,12 @@ const scanLeftoversNamed = 3
 // A session carrying a valid label of this store that names the id, under
 // any name and with any token, refuses the spawn with ErrTmuxSessionConflict
 // ("left over from an earlier life") and writes one ad.launch.name_held
-// record; a Can't tell refuses with its usual error; nothing is written in
-// either case. Gone (no such label, only other stores', foreign or invalid
-// labels, no server, no socket) proceeds: the requested name's holder is not
-// judged here. It is the one place these verdicts map to spawn errors
-// (SR-1.8).
+// record; a Can't tell refuses with its usual error, through the single-row
+// verbs' shared cantTellError with the scan's consequence (nothing was
+// written); nothing is written in either case. Gone (no such label, only
+// other stores', foreign or invalid labels, no server, no socket) proceeds:
+// the requested name's holder is not judged here. It is the one place the
+// scan's Leftover maps to a spawn error (SR-1.8).
 func scanForLeftover(t tmux.LookupClient, pc ProcChecker, storeID, instanceID string) error {
 	socket, err := spawn.ResolveScanSocket()
 	if err != nil {
@@ -58,17 +64,15 @@ func scanForLeftover(t tmux.LookupClient, pc ProcChecker, storeID, instanceID st
 		emitScanNameHeld(instanceID, socket, storeID, res.Token(), leftovers)
 		return scanLeftoverError(instanceID, leftovers)
 	case tmux.CantTell:
-		switch res.CantTell {
-		case tmux.CantTellUnreadable:
-			return scanUnreadableError(instanceID, res.Cause)
-		case tmux.CantTellProvenanceConflict:
-			return scanConflictingLabelsError(instanceID, socket)
-		case tmux.CantTellUnavailable:
-			return spawn.TmuxUnavailableError(res.Cause, socket, scanNothingWritten)
-		}
+		return cantTellError(res, cantTellRefusal{
+			InstanceID:  instanceID,
+			Context:     "the label scan before the spawn",
+			Socket:      socket,
+			Call:        tmux.CallLookup,
+			Consequence: scanCantTellConsequence,
+		})
 	}
-	// Ours and a different server cannot arise for a launch with no token and
-	// no recorded server identity (SR-3.3, SR-3.4).
+	// Ours cannot arise for a launch with no token (SR-3.4).
 	return fmt.Errorf("spawn: label scan: unexpected lookup outcome %q; %s", res.Token(), scanNothingWritten)
 }
 
@@ -88,36 +92,8 @@ func scanLeftoverError(instanceID string, leftovers []tmux.Session) error {
 		found += fmt.Sprintf(" and %d more", more)
 	}
 	return fmt.Errorf("%w: instance %s: left over from an earlier life: %d tmux session(s) labelled by this agent-director store with this instance id still run: %s; %s; "+
-		"ending such a session is a human's decision, see \"Operator actions\" in the agent-director README; "+
-		"list --tmux-session-name <name> shows whether a row uses a session name",
-		tmux.ErrTmuxSessionConflict, instanceID, len(leftovers), found, scanNothingWritten)
-}
-
-// scanConflictingLabelsError is the scan's "conflicting labels" refusal
-// (SR-1.4). With no token, no session carries a current label, so the only
-// provenance_conflict the scan meets is an @ad_owner value at the global,
-// server or global-window scope (SR-3.4).
-func scanConflictingLabelsError(instanceID, socket string) error {
-	return fmt.Errorf("%w: instance %s: conflicting labels: an @ad_owner value is set at the global, server or global-window scope on the tmux server at %s, so no session's label can be trusted; %s; "+
-		"a human must look, see \"Operator actions\" in the agent-director README; "+
-		"list --tmux-session-name <name> shows whether a row uses a session name",
-		tmux.ErrTmuxSessionConflict, instanceID, socket, scanNothingWritten)
-}
-
-// scanUnreadableError is the scan's unreadable-lookup refusal (SR-1.4): which
-// call did not answer and its effective timeout, or that tmux gave a reply
-// agent-director does not recognise; that nothing was done; "retry later".
-// cause is nil for an error that was not a *tmux.CallError.
-func scanUnreadableError(instanceID string, cause *tmux.CallError) error {
-	what := "tmux " + string(tmux.CallLookup) + " failed: unrecognized reply"
-	if cause != nil {
-		what = cause.Error()
-	}
-	if cause == nil || cause.Failure != tmux.FailTimeout {
-		what += "; tmux gave a reply agent-director does not recognise"
-	}
-	return fmt.Errorf("%w: instance %s: the label scan before the spawn could not read tmux: %s; nothing was done: %s; retry later",
-		tmux.ErrTmuxUnresponsive, instanceID, what, scanNothingWritten)
+		"ending such a session is a human's decision, %s; %s",
+		tmux.ErrTmuxSessionConflict, instanceID, len(leftovers), found, scanNothingWritten, operatorActionsPointer, listSessionNameHint)
 }
 
 // emitScanNameHeld writes the scan refusal's one ad.launch.name_held record

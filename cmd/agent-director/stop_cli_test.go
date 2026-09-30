@@ -1,38 +1,105 @@
 package main_test
 
 import (
+	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/gabemahoney/agent-director/internal/probe"
+	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
+// seedKillRow seeds one row under a fresh HOME on the per-test socket the CLI
+// child resolves (SR-20.3); it returns the HOME, the row's id and its socket.
+func seedKillRow(t *testing.T, state string, opts ...apitest.SpawnOption) (home, id, socket string) {
+	t.Helper()
+	home = t.TempDir()
+	socket = spawnSocket(t, home)
+	opts = append([]apitest.SpawnOption{apitest.WithTmuxSocket(socket)}, opts...)
+	id, err := apitest.SeedSpawn(stateDB(home), "", state, "", "", "", true, opts...)
+	if err != nil {
+		t.Fatalf("SeedSpawn: %v", err)
+	}
+	return home, id, socket
+}
+
+// killTable is a fake table whose server is this test process holding sessions.
+func killTable(sessions ...faketmuxfix.Session) faketmuxfix.Table {
+	now := time.Now().Unix()
+	return faketmuxfix.Table{Server: &faketmuxfix.Server{PID: os.Getpid(), Start: now}, Sessions: sessions}
+}
+
+// rowColumns reads id's row straight from the store under home.
+func rowColumns(t *testing.T, home, id string) apitest.SpawnColumns {
+	t.Helper()
+	cols, err := apitest.ReadSpawnColumns(stateDB(home), id)
+	if err != nil {
+		t.Fatalf("ReadSpawnColumns: %v", err)
+	}
+	return cols
+}
+
+// assertKillSent checks stdout is exactly kill's result with kill_sent want.
+func assertKillSent(t *testing.T, stdout string, want bool) {
+	t.Helper()
+	var res map[string]any
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+		t.Fatalf("parse stdout %q: %v", stdout, err)
+	}
+	if len(res) != 1 || res["kill_sent"] != want {
+		t.Errorf("stdout = %s; want exactly {\"kill_sent\":%v}", stdout, want)
+	}
+}
+
+// TestKillCLIHappyPath: the row's own labelled session is killed by pane id and
+// session id on the row's socket, never by name; kill_sent is true (SR-6.1).
 func TestKillCLIHappyPath(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
-	home := t.TempDir()
-	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".agent-director", "state.db")
-	seedSpawnRow(t, dbPath, "id-kill-1", "cd-kill-1", "waiting", "off")
+	home, id, socket := seedKillRow(t, store.StateWaiting)
+	token, _, storeID := launchIdentity(t, home, id)
+	name, _ := rowColumns(t, home, id).TmuxSessionName.(string)
+	const sessionID = "$3"
+	faketmuxfix.Tables{}.Write(t, socket, killTable(faketmuxfix.Session{
+		ID: sessionID, Created: time.Now().Unix(), Name: name, Label: tmuxfix.LabelValue(token, sessionID, id, storeID),
+		Panes: []faketmuxfix.Pane{{ID: apitest.TestPaneID, PID: apitest.TestPanePID}},
+	}))
 
-	stdout, stderr, code := runSpawnCLI(t, home, fakeDir,
-		"kill", "--claude-instance-id", "id-kill-1")
-	if code != 0 {
-		t.Fatalf("kill exit = %d; stderr=%s", code, stderr)
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "kill", "--claude-instance-id", id)
+	if code != 0 || stderr != "" {
+		t.Fatalf("kill exit = %d, stderr = %q; want 0 and empty", code, stderr)
 	}
-	if strings.TrimSpace(stdout) != "{}" {
-		t.Errorf("stdout = %q; want \"{}\"", stdout)
-	}
+	assertKillSent(t, stdout, true)
 
-	logBytes, err := os.ReadFile(filepath.Join(home, "fake-tmux.log"))
-	if err != nil {
-		t.Fatalf("read fake-tmux log: %v", err)
+	invs := assertInvocationKinds(t, home, "list-sessions", "list-panes", "kill-pane", "kill-session")
+	wantKills := [][]string{
+		{"-u", "-S", socket, "kill-pane", "-t", apitest.TestPaneID},
+		{"-u", "-S", socket, "kill-session", "-t", sessionID},
 	}
-	log := string(logBytes)
-	if !strings.Contains(log, "kill-session") {
-		t.Errorf("fake-tmux log missing kill-session: %s", log)
+	for i, want := range wantKills {
+		if got := invs[2+i]; !slices.Equal(got, want) {
+			t.Errorf("kill invocation %d = %q; want %q", i, got, want)
+		}
 	}
-	if !strings.Contains(log, "cd-kill-1") {
-		t.Errorf("fake-tmux log missing target session: %s", log)
+	for _, argv := range invs {
+		for _, a := range argv {
+			if strings.Contains(a, name) {
+				t.Errorf("invocation %q names the session %q; want ids only", argv, name)
+			}
+		}
+	}
+	if left := (faketmuxfix.Tables{}).Read(t, socket).Sessions; len(left) != 0 {
+		t.Errorf("sessions after kill = %+v; want none", left)
+	}
+	if st := rowColumns(t, home, id).State; st != store.StateWaiting {
+		t.Errorf("row state after kill = %v; want %s unchanged", st, store.StateWaiting)
 	}
 }
 
@@ -50,23 +117,112 @@ func TestKillCLIErrSpawnNotFound(t *testing.T) {
 	if env.ErrName != "ErrSpawnNotFound" {
 		t.Errorf("err_name = %q; want ErrSpawnNotFound", env.ErrName)
 	}
+	assertInvocationKinds(t, home)
 }
 
+// TestKillCLIEndedRowIsNoop: a finished row succeeds with kill_sent false and
+// no tmux invocation at all (SR-6.1).
 func TestKillCLIEndedRowIsNoop(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
-	home := t.TempDir()
-	bootstrapDB(t, home)
-	dbPath := filepath.Join(home, ".agent-director", "state.db")
-	seedSpawnRow(t, dbPath, "id-kill-2", "cd-kill-2", "ended", "off")
+	home, id, _ := seedKillRow(t, store.StateEnded)
 
-	_, stderr, code := runSpawnCLI(t, home, fakeDir,
-		"kill", "--claude-instance-id", "id-kill-2")
-	if code != 0 {
-		t.Fatalf("kill on ended must succeed; exit=%d stderr=%s", code, stderr)
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "kill", "--claude-instance-id", id)
+	if code != 0 || stderr != "" {
+		t.Fatalf("kill exit = %d, stderr = %q; want 0 and empty", code, stderr)
 	}
-	logBytes, _ := os.ReadFile(filepath.Join(home, "fake-tmux.log"))
-	if strings.Contains(string(logBytes), "kill-session") {
-		t.Errorf("ended row should NOT trigger tmux kill-session: %s", string(logBytes))
+	assertKillSent(t, stdout, false)
+	assertInvocationKinds(t, home)
+}
+
+// liveChild starts a real child process of the test, stopped at cleanup, and
+// returns its pid and start time as the production reader reads them.
+func liveChild(t *testing.T) (int, string) {
+	t.Helper()
+	child := exec.Command("sleep", "300")
+	if err := child.Start(); err != nil {
+		t.Fatalf("start child: %v", err)
+	}
+	t.Cleanup(func() { _ = child.Process.Kill(); _ = child.Wait() })
+	pid := child.Process.Pid
+	start, alive, known := probe.NewProcChecker().StartTime(pid)
+	if !known || !alive || start == "" {
+		t.Fatalf("StartTime(child %d) = (%q, alive=%v, known=%v); want the live start time", pid, start, alive, known)
+	}
+	return pid, start
+}
+
+// TestKillCLIRefusals: a leftover beside the live row and a Gone lookup with the
+// agent alive and no pane each exit 1 with only the envelope and send no kill.
+func TestKillCLIRefusals(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	cases := []struct {
+		name string
+		// arrange seeds the row and the fake; it returns home, id, the
+		// description case and the values the description must not carry.
+		arrange   func(t *testing.T) (home, id string, desc apitest.DescCase, forbid []string)
+		wantErr   string
+		wantCalls []string
+	}{
+		{
+			name: "leftover",
+			arrange: func(t *testing.T) (string, string, apitest.DescCase, []string) {
+				home, id, socket := seedKillRow(t, store.StateWaiting)
+				token, _, storeID := launchIdentity(t, home, id)
+				leftover := apitest.DescSession{Name: "kill-leftover", ID: "$4"}
+				label := tmuxfix.LabelValue(tmuxfix.OtherToken, leftover.ID, id, storeID)
+				faketmuxfix.Tables{}.Write(t, socket, killTable(faketmuxfix.Session{
+					ID: leftover.ID, Created: time.Now().Unix(), Name: leftover.Name, Label: label,
+					Panes: []faketmuxfix.Pane{{ID: "%4", PID: apitest.TestPanePID}},
+				}))
+				desc := apitest.DescKillLeftover([]apitest.DescSession{leftover})
+				return home, id, desc, []string{token, tmuxfix.OtherToken, storeID, label}
+			},
+			wantErr:   "ErrTmuxSessionConflict",
+			wantCalls: []string{"list-sessions"},
+		},
+		{
+			name: "gone with the agent alive and no pane",
+			arrange: func(t *testing.T) (string, string, apitest.DescCase, []string) {
+				pid, start := liveChild(t)
+				home := t.TempDir()
+				socket := spawnSocket(t, home)
+				const token = "5eed0000000000c3"
+				id, err := apitest.SeedSpawn(stateDB(home), "", store.StateWaiting, "", "", "", true,
+					apitest.WithLaunchIdentity(store.LaunchIdentity{
+						Token: token, Socket: socket, PaneID: apitest.TestPaneID, PanePID: pid, PaneStarttime: start,
+					}))
+				if err != nil {
+					t.Fatalf("SeedSpawn: %v", err)
+				}
+				t.Cleanup(func() {
+					if _, alive, _ := probe.NewProcChecker().StartTime(pid); !alive {
+						t.Errorf("agent process %d is gone after kill; kill must never signal it", pid)
+					}
+				})
+				name, _ := rowColumns(t, home, id).TmuxSessionName.(string)
+				return home, id, apitest.DescKillNoPane(id, name, pid), []string{token}
+			},
+			wantErr:   "ErrTmuxKillFailed",
+			wantCalls: []string{"list-sessions", "list-panes"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home, id, desc, forbid := tc.arrange(t)
+			stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "kill", "--claude-instance-id", id)
+			if code != 1 || stdout != "" {
+				t.Fatalf("kill exit = %d, stdout = %q; want 1 and empty (stderr=%q)", code, stdout, stderr)
+			}
+			env := parseEnvelope(t, stderr)
+			if env.ErrName != tc.wantErr {
+				t.Errorf("err_name = %q; want %q", env.ErrName, tc.wantErr)
+			}
+			apitest.AssertDescription(t, env.ErrDescription, desc, forbid...)
+			assertInvocationKinds(t, home, tc.wantCalls...)
+			if st := rowColumns(t, home, id).State; st != store.StateWaiting {
+				t.Errorf("row state after kill = %v; want %s unchanged", st, store.StateWaiting)
+			}
+		})
 	}
 }
 

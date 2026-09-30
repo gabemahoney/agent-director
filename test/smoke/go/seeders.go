@@ -26,6 +26,8 @@
 //     driver plants HOME/.claude.json first and checks it is "ok".
 //   - TmuxSocket: for get, reads the Happy result's tmux_socket; the driver
 //     checks it is the socket the seeded row records.
+//   - KillSent: for kill, reads the Happy result's kill_sent; the driver
+//     checks it is true.
 //
 // Adding a new callable verb to the manifest requires adding a matching
 // entry here. The driver's startup check fails the build with a clear
@@ -84,6 +86,13 @@ const (
 	// smokeLaunchStartMillis, through apitest.SeedSpawn and
 	// WithLaunchStartedAt. Used by status, get and list (SR-22.2).
 	seedPendingLaunch
+
+	// seedLiveSession seeds a working row through apitest.SeedSpawn (its
+	// SR-20.3 defaults: apitest.TestSocket, a launch token and the pane
+	// apitest.TestPaneID, whose pid reads gone) and the row's own labelled
+	// session into the Recorder (SeedRowSession). Used by kill, so its happy
+	// path finds the session, sends the kills and sees the agent gone.
+	seedLiveSession
 )
 
 // smokeLaunchStartMillis is the launch start seedPendingLaunch records, in
@@ -144,6 +153,11 @@ type seederSpec struct {
 	// shows. The driver asserts it is apitest.TestSocket, the socket
 	// seedPendingLaunch records (SR-3.3). Set by get only.
 	TmuxSocket func(result any) string
+
+	// KillSent, when non-nil, returns the kill_sent the Happy result shows.
+	// The driver asserts it is true: the kill was sent to the session
+	// seedLiveSession seeds (SR-20.3). Set by kill only.
+	KillSent func(result any) bool
 }
 
 // seeders is the canonical registry: one entry per callable verb. The
@@ -274,7 +288,7 @@ func init() {
 	// ── kill ──────────────────────────────────────────────────────────────
 	seeders["kill"] = seederSpec{
 		Manifest: mustVerb("kill"),
-		SeedKind: seedLive,
+		SeedKind: seedLiveSession,
 		SeedID:   "smoke-kill-id",
 		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
 			return c.Kill(api.KillParams{ClaudeInstanceID: id})
@@ -282,6 +296,9 @@ func init() {
 		Error: func(c *api.Client, _ context.Context) error {
 			_, err := c.Kill(api.KillParams{ClaudeInstanceID: bogusID})
 			return err
+		},
+		KillSent: func(result any) bool {
+			return result.(api.KillResult).KillSent
 		},
 	}
 

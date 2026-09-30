@@ -8,8 +8,8 @@
 // (recorder_table.go, recorder_calls.go), tests script a typed result per
 // call kind (recorder_script.go), and session hooks, after-call hooks and
 // virtual time sit around each call (recorder_hooks.go). It never produces
-// or parses tmux reply text. The name-based methods (HasSession,
-// KillSession, SendKeys, CapturePane) only record their calls and return
+// or parses tmux reply text. The name-based methods (HasSession, SendKeys,
+// CapturePane) only record their calls and return
 // their two scripted answers, as before.
 package tmuxfix
 
@@ -24,7 +24,6 @@ type CallKind string
 
 const (
 	CallHasSession  CallKind = "HasSession"
-	CallKillSession CallKind = "KillSession"
 	CallSendKeys    CallKind = "SendKeys"
 	CallCapturePane CallKind = "CapturePane"
 )
@@ -34,8 +33,8 @@ type Call struct {
 	// Kind is the name of the method that was called.
 	Kind CallKind
 
-	// Name is the session name passed to HasSession, KillSession, SendKeys,
-	// or CapturePane.
+	// Name is the session name passed to HasSession, SendKeys or
+	// CapturePane.
 	Name string
 
 	// --- SendKeys fields ---
@@ -151,14 +150,6 @@ func (r *Recorder) HasSession(name string) (bool, error) {
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, Call{Kind: CallHasSession, Name: name})
 	return r.hasSessionResult, nil
-}
-
-// KillSession records a KillSession call and returns nil.
-func (r *Recorder) KillSession(name string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.calls = append(r.calls, Call{Kind: CallKillSession, Name: name})
-	return nil
 }
 
 // SendKeys records a SendKeys call and returns nil.

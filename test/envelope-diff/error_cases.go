@@ -74,11 +74,12 @@ type errorCase struct {
 }
 
 // errorCases is the authoritative per-verb error-path fixture table: the rows
-// below, then the spawn rows that need a private fake-tmux socket
-// (spawnTmuxErrorCases, error_cases_spawn_tmux.go). The init() guard below
+// below, then the spawn and kill rows that need a private fake-tmux socket
+// (spawnTmuxErrorCases, error_cases_spawn_tmux.go; killTmuxErrorCases,
+// error_cases_kill_tmux.go). The init() guard below
 // validates every errName and verb name at startup.
 // TestErrorTableCoverage (error_cases_test.go) enforces completeness.
-var errorCases = append([]errorCase{
+var errorCases = append(append([]errorCase{
 
 	// ── spawn / ErrCwdMissing ─────────────────────────────────────────────
 	// Most representative spawn error: pure parameter validation, no tmux
@@ -442,7 +443,7 @@ var errorCases = append([]errorCase{
 			return []string{"find-missing"}
 		},
 	},
-}, spawnTmuxErrorCases...)
+}, spawnTmuxErrorCases...), killTmuxErrorCases...)
 
 // ── lookup helper ─────────────────────────────────────────────────────────────
 

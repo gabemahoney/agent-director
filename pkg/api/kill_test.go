@@ -1,172 +1,316 @@
 package api_test
 
+// kill_test.go holds kill's SR-6.1 rows that are not lookup outcomes (unknown
+// id, finished rows, an unusable recorded name, an unusable socket
+// directory), the four SR-20.6 rewrites (their names kept for the sprint
+// demo's -run Kill), the no-log-line check and Client.Kill. The lookup
+// outcomes are lookup_calltable_test.go's; the sequence, the check, the
+// ceilings, pending rows and the trail have their own kill_*_test.go files.
+// The fixture is kill_fixture_test.go.
+
 import (
 	"errors"
-	"fmt"
-	"strings"
+	"os"
+	"path/filepath"
+	"reflect"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
-	"github.com/gabemahoney/agent-director/internal/store"
 )
 
-// recordingKillLogger captures every Printf the verb emits so the
-// "log the swallowed tmux failure" test can inspect both severity
-// and content. The struct is reused across cases that need to
-// assert on the recorded lines.
-type recordingKillLogger struct {
-	lines []string
-}
+// killOursCalls is the Ours kill sequence whose agent can be checked.
+var killOursCalls = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallKillPane, tmux.CallKillSession}
 
-func (r *recordingKillLogger) Printf(format string, v ...any) {
-	r.lines = append(r.lines, fmt.Sprintf(format, v...))
-}
-
-// recordingKillTmux records every kill-session call and optionally
-// returns a scripted error. A non-nil failErr proves the verb swallows
-// tmux failures (intent: "make sure the session is gone" is satisfied
-// regardless of who actually killed it).
-type recordingKillTmux struct {
-	calls   []string
-	failErr error
-}
-
-func (r *recordingKillTmux) KillSession(name string) error {
-	r.calls = append(r.calls, name)
-	return r.failErr
-}
-
-func TestKillLiveRowInvokesTmux(t *testing.T) {
-	s, _ := apitest.OpenStoreWithRow(t, "id-k-1", "cd-k-1", store.StateWaiting, "off")
-	tmux := &recordingKillTmux{}
-
-	if _, err := api.Kill(s, tmux, nil, api.KillParams{ClaudeInstanceID: "id-k-1"}); err != nil {
-		t.Fatalf("Kill: %v", err)
-	}
-	if got, want := len(tmux.calls), 1; got != want {
-		t.Fatalf("tmux calls = %d; want %d", got, want)
-	}
-	if tmux.calls[0] != "cd-k-1" {
-		t.Errorf("tmux.KillSession arg = %q; want %q", tmux.calls[0], "cd-k-1")
+// killAssertRowUnchanged fails when id's row no longer reads as before.
+func killAssertRowUnchanged(t *testing.T, e *killEnv, id string, before apitest.SpawnColumns) {
+	t.Helper()
+	if got := e.columns(t, id); !reflect.DeepEqual(got, before) {
+		t.Errorf("row %s = %+v; want unchanged %+v", id, got, before)
 	}
 }
 
-func TestKillSwallowsTmuxFailure(t *testing.T) {
-	// SRD §5: kill's post-condition is "session is gone". A non-zero
-	// tmux exit ("session already gone") satisfies that post-condition,
-	// so the verb returns nil rather than forcing callers to distinguish.
-	s, _ := apitest.OpenStoreWithRow(t, "id-k-2", "cd-k-2", store.StateWaiting, "off")
-	tmux := &recordingKillTmux{failErr: errors.New("can't find session: cd-k-2")}
-
-	if _, err := api.Kill(s, tmux, nil, api.KillParams{ClaudeInstanceID: "id-k-2"}); err != nil {
-		t.Fatalf("Kill must swallow tmux errors; got %v", err)
+// killAssertOutcome fails unless id's one new ad.kill.called record (after
+// the before already written) carries outcome.
+func killAssertOutcome(t *testing.T, id string, before int, outcome string) {
+	t.Helper()
+	recs := killCalled(t, id)
+	if len(recs) != before+1 {
+		t.Fatalf("ad.kill.called records for %s = %d; want %d", id, len(recs), before+1)
 	}
-	if got, want := len(tmux.calls), 1; got != want {
-		t.Fatalf("tmux calls = %d; want %d", got, want)
+	if got := recs[before]["outcome"]; got != outcome {
+		t.Errorf("ad.kill.called outcome = %v; want %s", got, outcome)
 	}
 }
 
-func TestKillTerminalStateIsNoop(t *testing.T) {
-	// Terminal states skip the tmux call entirely. The row's session
-	// may or may not still exist on disk; either way, the intent is
-	// already satisfied.
+// TestKillNonLookupRows covers SR-6.1's rows decided before any tmux call: an
+// unknown id, finished rows, and a live row whose recorded name is unusable.
+func TestKillNonLookupRows(t *testing.T) {
+	dotted := apitest.RewrittenChars{Dot: true}
 	cases := []struct {
-		state string
-		id    string
-		sess  string
+		name string
+		spec killRowSpec
+		id   string // killed id; "" is the seeded row's
+		want string // error name; "" is success
+		desc *apitest.DescCase
 	}{
-		{store.StateEnded, "id-k-3", "cd-k-3"},
-		{store.StateMissing, "id-k-4", "cd-k-4"},
+		{name: "unknown id", id: "kill-absent", want: "ErrSpawnNotFound",
+			desc: &apitest.DescCase{Name: "ErrSpawnNotFound"}},
+		{name: "ended row", spec: killRowSpec{State: store.StateEnded}},
+		{name: "missing row", spec: killRowSpec{State: store.StateMissing}},
+		{name: "ended row with an unusable name", spec: killRowSpec{State: store.StateEnded, NoSession: true,
+			Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName("")}}},
+		{name: "empty name", spec: killRowSpec{NoSession: true, Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName("")}},
+			want: "ErrInternal", desc: killDescPtr(apitest.DescUnusableNameEmpty())},
+		{name: "control character", spec: killRowSpec{NoSession: true, Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName("a\tb")}},
+			want: "ErrInternal", desc: killDescPtr(apitest.DescUnusableNameControlChar("a\tb"))},
+		{name: "dot", spec: killRowSpec{NoSession: true, Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName("a.b")}},
+			want: "ErrInternal", desc: killDescPtr(apitest.DescUnusableNameRewritten("a.b", dotted))},
+		{name: "colon on a pending row", spec: killRowSpec{State: store.StatePending, NoSession: true,
+			Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName("a:b")}},
+			want: "ErrInternal", desc: killDescPtr(apitest.DescUnusableNameRewritten("a:b", apitest.RewrittenChars{Colon: true}))},
+		{name: "invalid UTF-8", spec: killRowSpec{State: store.StateWorking, NoSession: true,
+			Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName("a\xffb")}},
+			want: "ErrInternal", desc: killDescPtr(apitest.DescUnusableNameRewritten("a\xffb", apitest.RewrittenChars{InvalidUTF8: true}))},
+		{name: "every rewritten character", spec: killRowSpec{NoSession: true, Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName("a.b:c\xff")}},
+			want: "ErrInternal", desc: killDescPtr(apitest.DescUnusableNameRewritten("a.b:c\xff",
+				apitest.RewrittenChars{Dot: true, Colon: true, InvalidUTF8: true}))},
+		{name: "control character wins over a rewritten one", spec: killRowSpec{NoSession: true,
+			Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName("a.b\x01")}},
+			want: "ErrInternal", desc: killDescPtr(killControlOnly("a.b\x01"))},
 	}
 	for _, tc := range cases {
-		t.Run(tc.state, func(t *testing.T) {
-			s, _ := apitest.OpenStoreWithRow(t, tc.id, tc.sess, tc.state, "off")
-			tmux := &recordingKillTmux{}
-			if _, err := api.Kill(s, tmux, nil, api.KillParams{ClaudeInstanceID: tc.id}); err != nil {
-				t.Fatalf("Kill: %v", err)
+		t.Run(tc.name, func(t *testing.T) {
+			e := newKillEnv(t)
+			id := tc.id
+			var before apitest.SpawnColumns
+			if id == "" {
+				r := e.seedRow(t, tc.spec)
+				id, before = r.ID, e.columns(t, r.ID)
 			}
-			if len(tmux.calls) != 0 {
-				t.Errorf("%s row triggered tmux call: %v", tc.state, tmux.calls)
+			res, err := e.kill(id)
+			if tc.want == "" && err != nil {
+				t.Fatalf("Kill: %v; want success", err)
+			}
+			if tc.want != "" {
+				assertOneName(t, err, tc.want)
+				apitest.AssertDescription(t, err.Error(), *tc.desc)
+			}
+			if res.KillSent {
+				t.Error("kill_sent = true; want false")
+			}
+			e.assertKillCalls(t)
+			if tc.id == "" {
+				killAssertRowUnchanged(t, e, id, before)
 			}
 		})
 	}
 }
 
-func TestKillUnknownIdReturnsErrSpawnNotFound(t *testing.T) {
-	s, _ := apitest.OpenStoreWithRow(t, "id-k-5", "cd-k-5", store.StateWaiting, "off")
-	tmux := &recordingKillTmux{}
+// killDescPtr returns a pointer to c, for a table's optional description case.
+func killDescPtr(c apitest.DescCase) *apitest.DescCase { return &c }
 
-	_, err := api.Kill(s, tmux, nil, api.KillParams{ClaudeInstanceID: "absent"})
-	if !errors.Is(err, store.ErrSpawnNotFound) {
-		t.Fatalf("err = %v; want ErrSpawnNotFound", err)
+// killControlOnly is the control-character case for name that also must not
+// name any rewritten character: the first fault alone is described (SR-3.2).
+func killControlOnly(name string) apitest.DescCase {
+	c := apitest.DescUnusableNameControlChar(name)
+	c.MustNot = append(c.MustNot, apitest.DescUnusableNameRewritten(name, apitest.RewrittenChars{}).MustNot...)
+	return c
+}
+
+// TestKillUnusableSocketDirectory: a row with no recorded socket whose
+// resolved socket directory is unusable gives ErrTmuxNotAvailable, no tmux call.
+func TestKillUnusableSocketDirectory(t *testing.T) {
+	e := newKillEnv(t)
+	r := e.seedRow(t, killRowSpec{NoSession: true, Opts: []apitest.SpawnOption{apitest.WithNoLaunchToken()}})
+	before := e.columns(t, r.ID)
+	dir := filepath.Dir(e.defaultSocket)
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatalf("chmod %s: %v", dir, err)
 	}
-	if len(tmux.calls) != 0 {
-		t.Errorf("absent id triggered tmux call: %v", tmux.calls)
+	want := &tmux.SocketDirError{Socket: e.defaultSocket, Dir: dir, Reason: tmux.SocketDirUnsafePermissions}
+
+	res, err := e.kill(r.ID)
+	assertOneName(t, err, "ErrTmuxNotAvailable")
+	apitest.AssertDescription(t, err.Error(), apitest.DescSocketDirNothingDone(want.Socket, want.Dir, want.Error()))
+	if res.KillSent {
+		t.Error("kill_sent = true; want false")
+	}
+	e.assertKillCalls(t)
+	killAssertRowUnchanged(t, e, r.ID, before)
+}
+
+// TestKillSwallowsTmuxFailure (SR-20.6, inverted): failed kills whose
+// follow-up lookup still finds the session give ErrTmuxKillFailed; Gone is success.
+func TestKillSwallowsTmuxFailure(t *testing.T) {
+	cases := []struct {
+		name    string
+		failure tmux.Failure
+		applied bool // the kills take effect although they report failure
+	}{
+		{"timed-out kills, session still there", tmux.FailTimeout, false},
+		{"unrecognised kill replies, session still there", tmux.FailUnrecognized, false},
+		{"timed-out kills, session gone", tmux.FailTimeout, true},
+		{"unrecognised kill replies, session gone", tmux.FailUnrecognized, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newKillEnv(t)
+			r := e.seedRow(t, killRowSpec{Agent: agentUnreadable})
+			e.seedBystander(t, r.Socket)
+			e.rec.Script(r.Socket, tmuxfix.Script{Failure: tc.failure, ExitStatus: 1, Applied: tc.applied},
+				tmux.CallKillPane, tmux.CallKillSession)
+			before := e.columns(t, r.ID)
+
+			res, err := e.kill(r.ID)
+			if tc.applied {
+				if err != nil {
+					t.Fatalf("Kill: %v; want success (follow-up finds no session)", err)
+				}
+				if !res.KillSent {
+					t.Error("kill_sent = false; want true")
+				}
+			} else {
+				assertOneName(t, err, "ErrTmuxKillFailed")
+				apitest.AssertDescription(t, err.Error(),
+					apitest.DescKillUncheckable(r.ID, r.Name, apitest.KillSent{Pane: true, Session: true}))
+			}
+			e.assertKillCalls(t, append(killOursCalls, tmux.CallLookup)...)
+			killAssertRowUnchanged(t, e, r.ID, before)
+		})
 	}
 }
 
-// TestKillSwallowedTmuxFailureLogsAtWARN pins the b.5xd fix: when
-// tmux.KillSession returns non-zero the verb still returns success
-// (the row will reconcile on the next find-missing sweep), but it
-// MUST emit a WARN log line carrying the spawn id and the underlying
-// tmux error so an interactive operator can diagnose the failure in
-// the moment.
+// TestKillSwallowedTmuxFailureLogsAtWARN (SR-20.6, inverted): Client.Kill
+// writes no log line on success, a refusal or ErrTmuxKillFailed; the trail records each.
 func TestKillSwallowedTmuxFailureLogsAtWARN(t *testing.T) {
-	s, _ := apitest.OpenStoreWithRow(t, "id-k-warn", "cd-k-warn", store.StateWaiting, "off")
-	tmuxErr := errors.New("ErrTmuxKillFailed: stale TMUX_TMPDIR")
-	tmux := &recordingKillTmux{failErr: tmuxErr}
-	lg := &recordingKillLogger{}
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, e *killEnv) (killRow, *apitest.DescCase)
+		want  string // error name; "" is success
+	}{
+		{"success", func(t *testing.T, e *killEnv) (killRow, *apitest.DescCase) {
+			r := e.seedRow(t, killRowSpec{})
+			e.setAfterCall(tmux.CallKillPane, procfix.Gone(), r.AgentPID)
+			return r, nil
+		}, ""},
+		{"Leftover refusal", func(t *testing.T, e *killEnv) (killRow, *apitest.DescCase) {
+			r := e.seedRow(t, killRowSpec{NoSession: true})
+			e.seedSession(t, &r, tmuxfix.WithRowSessionLabel(r.old(), true))
+			return r, killDescPtr(apitest.DescKillLeftover([]apitest.DescSession{{Name: r.Session.Name, ID: r.Session.ID}}))
+		}, "ErrTmuxSessionConflict"},
+		{"no pane while the agent runs", func(t *testing.T, e *killEnv) (killRow, *apitest.DescCase) {
+			r := e.seedRow(t, killRowSpec{NoSession: true})
+			e.ensureServer(&r)
+			e.seedBystander(t, r.Socket)
+			e.syncServers()
+			return r, killDescPtr(apitest.DescKillNoPane(r.ID, r.Name, r.AgentPID))
+		}, "ErrTmuxKillFailed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newKillEnv(t)
+			r, desc := tc.setup(t, e)
+			c, logs := e.client(t)
+			trailed := len(killCalled(t, r.ID))
 
-	if _, err := api.Kill(s, tmux, lg, api.KillParams{ClaudeInstanceID: "id-k-warn"}); err != nil {
-		t.Fatalf("Kill must still swallow tmux errors at the verb surface; got %v", err)
-	}
-
-	if len(lg.lines) != 1 {
-		t.Fatalf("Kill emitted %d log lines; want exactly 1", len(lg.lines))
-	}
-	line := lg.lines[0]
-	if !strings.HasPrefix(line, "WARN:") {
-		t.Errorf("log line missing WARN severity prefix: %q", line)
-	}
-	if !strings.Contains(line, "id-k-warn") {
-		t.Errorf("log line missing spawn id %q: %q", "id-k-warn", line)
-	}
-	if !strings.Contains(line, tmuxErr.Error()) {
-		t.Errorf("log line missing underlying tmux error %q: %q", tmuxErr.Error(), line)
+			_, err := c.Kill(api.KillParams{ClaudeInstanceID: r.ID})
+			if tc.want == "" && err != nil {
+				t.Fatalf("Kill: %v; want success", err)
+			}
+			outcome := "ok"
+			if tc.want != "" {
+				assertOneName(t, err, tc.want)
+				apitest.AssertDescription(t, err.Error(), desc.PointsToOperatorActions())
+				outcome = tc.want
+			}
+			if logs.Len() != 0 {
+				t.Errorf("Client.Kill logged %q; want no log line", logs.String())
+			}
+			killAssertOutcome(t, r.ID, trailed, outcome)
+		})
 	}
 }
 
-// TestKillSilentOnTmuxSuccess pins the converse: a successful
-// tmux.KillSession does NOT emit any log line. We don't want
-// operators sifting through WARN noise on the happy path.
-func TestKillSilentOnTmuxSuccess(t *testing.T) {
-	s, _ := apitest.OpenStoreWithRow(t, "id-k-quiet", "cd-k-quiet", store.StateWaiting, "off")
-	tmux := &recordingKillTmux{} // failErr nil → success
-	lg := &recordingKillLogger{}
+// TestKillIsIdempotentAcrossRepeatedCalls (SR-20.6): once the session is
+// gone, repeated kills of the live row succeed with no kill sent.
+func TestKillIsIdempotentAcrossRepeatedCalls(t *testing.T) {
+	e := newKillEnv(t)
+	r := e.seedRow(t, killRowSpec{})
+	e.seedBystander(t, r.Socket)
+	e.setAfterCall(tmux.CallKillPane, procfix.Gone(), r.AgentPID)
+	before := e.columns(t, r.ID)
 
-	if _, err := api.Kill(s, tmux, lg, api.KillParams{ClaudeInstanceID: "id-k-quiet"}); err != nil {
+	want := []bool{true, false, false}
+	for i, sent := range want {
+		res, err := e.kill(r.ID)
+		if err != nil {
+			t.Fatalf("Kill %d: %v", i+1, err)
+		}
+		if res.KillSent != sent {
+			t.Errorf("Kill %d: kill_sent = %v; want %v", i+1, res.KillSent, sent)
+		}
+		killAssertRowUnchanged(t, e, r.ID, before)
+	}
+	e.assertKillCalls(t, append(killOursCalls, tmux.CallLookup, tmux.CallLookup)...)
+}
+
+// TestKillLiveRowInvokesTmux (SR-20.6): a live Ours row's kills target the
+// agent's pane id and the labelled session's id on the row's socket.
+func TestKillLiveRowInvokesTmux(t *testing.T) {
+	e := newKillEnv(t)
+	r := e.seedRow(t, killRowSpec{})
+	e.setAfterCall(tmux.CallKillSession, procfix.Gone(), r.AgentPID)
+	before := e.columns(t, r.ID)
+
+	res, err := e.kill(r.ID)
+	if err != nil {
 		t.Fatalf("Kill: %v", err)
 	}
-	if len(lg.lines) != 0 {
-		t.Errorf("Kill emitted %d log lines on happy path; want 0: %v", len(lg.lines), lg.lines)
+	if !res.KillSent {
+		t.Error("kill_sent = false; want true")
 	}
-}
-
-func TestKillIsIdempotentAcrossRepeatedCalls(t *testing.T) {
-	// The verb does not flip the row's state — find-missing reconciles
-	// that out-of-band (Epic 8). Repeated kills must therefore behave
-	// identically: each one invokes tmux.KillSession (cheap), each one
-	// returns nil, no error sticks.
-	s, _ := apitest.OpenStoreWithRow(t, "id-k-6", "cd-k-6", store.StateWaiting, "off")
-	tmux := &recordingKillTmux{failErr: errors.New("session gone")}
-
-	for i := 0; i < 3; i++ {
-		if _, err := api.Kill(s, tmux, nil, api.KillParams{ClaudeInstanceID: "id-k-6"}); err != nil {
-			t.Fatalf("Kill iter %d: %v", i, err)
+	e.assertKillCalls(t, killOursCalls...)
+	for _, want := range []tmuxfix.SocketCall{
+		{Call: tmux.CallKillPane, Socket: r.Socket, Target: r.Spawn.Identity.PaneID},
+		{Call: tmux.CallKillSession, Socket: r.Socket, Target: r.Session.ID},
+	} {
+		got := e.rec.SocketCallsOf(want.Call)
+		if len(got) != 1 || got[0].Socket != want.Socket || got[0].Target != want.Target {
+			t.Errorf("%v calls = %+v; want one on %s targeting %s", want.Call, got, want.Socket, want.Target)
 		}
 	}
-	if got, want := len(tmux.calls), 3; got != want {
-		t.Fatalf("tmux calls = %d; want %d (one per call)", got, want)
+	killAssertRowUnchanged(t, e, r.ID, before)
+}
+
+// TestKillClient: Client.Kill with the Recorder as Options.TmuxClient kills a
+// live Ours row (kill_sent true); a closed Client returns ErrClientClosed.
+func TestKillClient(t *testing.T) {
+	e := newKillEnv(t)
+	r := e.seedRow(t, killRowSpec{})
+	e.setAfterCall(tmux.CallKillPane, procfix.Gone(), r.AgentPID)
+	c, logs := e.client(t)
+
+	res, err := c.Kill(api.KillParams{ClaudeInstanceID: r.ID})
+	if err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	if !res.KillSent {
+		t.Error("kill_sent = false; want true")
+	}
+	e.assertKillCalls(t, killOursCalls...)
+	if logs.Len() != 0 {
+		t.Errorf("Client.Kill logged %q; want no log line", logs.String())
+	}
+
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := c.Kill(api.KillParams{ClaudeInstanceID: r.ID}); !errors.Is(err, api.ErrClientClosed) {
+		t.Errorf("Kill after Close: %v; want ErrClientClosed", err)
 	}
 }

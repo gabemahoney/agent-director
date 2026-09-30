@@ -27,8 +27,8 @@ type socketShape struct {
 // id is the shape's instance id in the shared store.
 func (s socketShape) id() string { return "sock-" + strings.ReplaceAll(s.name, " ", "-") }
 
-// socketShapes covers an explicit socket (live, pending and finished rows), the
-// seed default socket, and pre-release rows (live and finished) with none.
+// socketShapes covers an explicit socket (live, pending, ended and missing
+// rows), the seed default socket, and pre-release rows (live and ended) with none.
 func socketShapes() []socketShape {
 	const work = "/tmp/tmux-1000/work sock"
 	return []socketShape{

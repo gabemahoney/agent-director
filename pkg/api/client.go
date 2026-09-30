@@ -28,9 +28,8 @@ const defaultStorePath = "~/.agent-director/state.db"
 // SRD Appendix F.3). Every socket-taking method takes the socket (SR-3.3)
 // and reports a failure as *TmuxCallError; an error of any other type from
 // an injected implementation counts as TmuxFailUnrecognized for that call.
-// The name-based methods (KillSession, SendKeys, CapturePane) are
-// transitional: they stay until their last verb moves to the socket-taking
-// calls. HasSession stays (SR-2.1) and matches by prefix: resume still calls
+// The name-based methods (SendKeys, CapturePane) are transitional: they
+// stay until their last verb moves to the socket-taking calls. HasSession stays (SR-2.1) and matches by prefix: resume still calls
 // it until resume moves to the lookup, and no verb may newly adopt it.
 // *tmux.Client and tmuxfix.Recorder implement it.
 type TmuxClient interface {
@@ -61,8 +60,6 @@ type TmuxClient interface {
 	// exists (prefix match; stays per SR-2.1). Resume still calls it until
 	// it moves to the lookup; no verb may newly adopt it.
 	HasSession(name string) (bool, error)
-	// KillSession terminates the named session (transitional).
-	KillSession(name string) error
 	// SendKeys delivers text to the named session's first pane (transitional).
 	SendKeys(name, text string, pressEnter bool) error
 	// CapturePane returns the last nLines of the named session's first pane (transitional).
@@ -85,14 +82,20 @@ type Client struct {
 	cfg        config.Config
 	logger     *log.Logger
 	// now is the Client's clock, time.Now in production (Appendix F.5); the
-	// spawn's launch start reads it. Tests replace it per Client.
+	// spawn's launch start and kill's process wait read it. Tests replace it
+	// per Client.
 	now func() time.Time
 	// procChecker is the start-time reader (SR-3.8), probe.NewProcChecker in
 	// production; the spawn's identity write reads the server's and the
-	// pane's start times through it. Tests replace it per Client.
+	// pane's start times through it, and kill judges processes with it.
+	// Tests replace it per Client.
 	procChecker ProcChecker
-	mu          sync.Mutex
-	closed      bool
+	// sleep pauses kill's process wait between two readings (SR-6.1),
+	// time.Sleep in production. Tests replace it per Client, so the shared
+	// test clock advances in virtual time (Appendix F.5).
+	sleep  func(time.Duration)
+	mu     sync.Mutex
+	closed bool
 }
 
 // New constructs a Client from opts, wiring config, store, and tmux.
@@ -107,8 +110,8 @@ type Client struct {
 //     query, action and create timeouts and the pipe-close wait taken from
 //     the loaded config's [tmux] table at construction (SR-2.4, SR-4.1), so
 //     a changed value applies to the next Client built.
-//  6. Set the Client's clock (time.Now) and the production start-time
-//     reader (probe.NewProcChecker). This store's id is read once by the
+//  6. Set the Client's clock (time.Now), its sleep (time.Sleep) and the
+//     production start-time reader (probe.NewProcChecker). This store's id is read once by the
 //     store's open (Store.StoreID) and used from there.
 //
 // On any error a nil *Client is returned together with a descriptive,
@@ -212,6 +215,7 @@ func New(opts Options) (*Client, error) {
 		logger:      logger,
 		now:         time.Now,
 		procChecker: probe.NewProcChecker(),
+		sleep:       time.Sleep,
 	}, nil
 }
 

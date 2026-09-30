@@ -25,7 +25,7 @@ import (
 func AssertResultMatchesManifest(t testing.TB, verbDef manifest.VerbDef, result any) {
 	t.Helper()
 	if len(verbDef.ResultFields) == 0 {
-		// Verb returns no fields (e.g. kill, send-keys) — nothing to assert.
+		// Verb returns no fields (e.g. send-keys, pause) — nothing to assert.
 		return
 	}
 
