@@ -43,11 +43,14 @@ const (
 	StateMissing         = "missing"
 )
 
-// liveStates is the set of state values find-missing considers "alive"
-// (anything except the terminal ones). The collision pre-check on a
-// caller-supplied claude_instance_id tests the row's state against this set
-// (IsLiveState) so an `ended` Spawn's id can be reused (the resume verb
-// handles that case).
+// liveStates is the set of live state values (anything except the terminal
+// ones): the rows find-missing reads and judges (ListLiveSpawnIdentities).
+// The collision pre-check on a caller-supplied claude_instance_id tests the
+// row's state against this set (IsLiveState) so an `ended` Spawn's id can be
+// reused (the resume verb handles that case). A terminal state is not proof
+// that the agent is dead: `missing` is the sweep's judgement on the evidence
+// available to it, not proof that the agent has exited, and neither `ended`
+// nor `missing` means that the row is safe to delete.
 var liveStates = []string{
 	StatePending, StateWaiting, StateWorking, StateAskUser, StateCheckPermission,
 }
@@ -55,6 +58,9 @@ var liveStates = []string{
 // IsLiveState reports whether state is one of the live (non-terminal)
 // states in liveStates. It is a read-only view of that set for callers
 // outside the package, such as test fixtures seeding a live row's defaults.
+// false for `ended` or `missing` says only that the row is finished, not
+// that its agent has exited: `missing` is the sweep's judgement on the
+// evidence available to it.
 func IsLiveState(state string) bool {
 	for _, st := range liveStates {
 		if st == state {

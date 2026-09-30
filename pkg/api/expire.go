@@ -66,6 +66,11 @@ func Expire(s ExpireStore, retentionDays int, olderThan *time.Duration, lg Expir
 // and rows with NULL ended_at are never touched. Does not affect tmux sessions
 // or JSONL transcripts.
 //
+// A finished row is not proof that its agent is dead: missing is the sweep's
+// judgement on the evidence available to it, not proof that the agent has
+// exited, and neither ended nor missing means that the agent is dead or that
+// its row is safe to delete.
+//
 // CLI: agent-director expire
 //
 // Errors: none (verb-level errors are reported per-row in ExpireResult.IDs).

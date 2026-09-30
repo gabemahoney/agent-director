@@ -130,9 +130,22 @@ export interface ListRow {
   ended_at?: string | null;
   /** Start of the launch in progress (RFC3339 UTC, millisecond precision); present only on a pending row, omitted otherwise. */
   launch_started_at?: string | null;
-  /** RFC3339 timestamp of the first sweep that could not verify this live row's liveness; omitted/null when never unverified. */
+  /**
+   * RFC3339 timestamp of the first sweep that left this live row unverified;
+   * kept while later sweeps change `liveness_note`. Cleared together with
+   * `liveness_note` when a sweep finds the agent process alive; omitted/null
+   * while not unverified.
+   */
   liveness_unverified_since?: string | null;
-  /** Human-readable reason liveness could not be verified; omitted/null when never unverified. */
+  /**
+   * Reason token of the latest sweep that left this live row unverified (its
+   * agent process could not be checked and tmux did not settle it), for
+   * example `process_not_seen_session_present`,
+   * `process_not_seen_tmux_unchecked`, `probe_eacces`, `tmux_server_changed`
+   * or `provenance_conflict`; overwritten when the reason changes. Cleared
+   * together with `liveness_unverified_since` when a sweep finds the agent
+   * process alive; omitted/null while not unverified.
+   */
   liveness_note?: string | null;
 }
 
@@ -254,9 +267,22 @@ export interface GetResult {
   ended_at?: string | null;
   /** Start of the launch in progress (RFC3339 UTC, millisecond precision); present only on a pending row, omitted otherwise. */
   launch_started_at?: string | null;
-  /** RFC3339 timestamp of the first sweep that could not verify this live row's liveness; omitted/null when never unverified. */
+  /**
+   * RFC3339 timestamp of the first sweep that left this live row unverified;
+   * kept while later sweeps change `liveness_note`. Cleared together with
+   * `liveness_note` when a sweep finds the agent process alive; omitted/null
+   * while not unverified.
+   */
   liveness_unverified_since?: string | null;
-  /** Human-readable reason liveness could not be verified; omitted/null when never unverified. */
+  /**
+   * Reason token of the latest sweep that left this live row unverified (its
+   * agent process could not be checked and tmux did not settle it), for
+   * example `process_not_seen_session_present`,
+   * `process_not_seen_tmux_unchecked`, `probe_eacces`, `tmux_server_changed`
+   * or `provenance_conflict`; overwritten when the reason changes. Cleared
+   * together with `liveness_unverified_since` when a sweep finds the agent
+   * process alive; omitted/null while not unverified.
+   */
   liveness_note?: string | null;
   /** Open permission request; present only when state=check_permission with an undecided row. */
   permission_request?: PermissionRequestInfo | null;
@@ -380,24 +406,46 @@ export interface ResumeResult {
   pre_trust: "ok" | "skipped" | "failed";
 }
 
-/** Mirrors the `find-missing` CLI verb's --timeout flag (pkg/api.Client.FindMissing ctx deadline). */
+/** Params for the `find-missing` verb, which takes no CLI flags. */
 export interface FindMissingParams {
-  /** Optional deadline for the OS probe sweep (milliseconds). 0/omitted = no deadline. */
+  /**
+   * Accepted but not sent: the `find-missing` CLI verb takes no flags, so
+   * this value has no effect. The call is bounded by the Client's
+   * `callTimeoutMs` like every other verb.
+   */
   timeout_ms?: number;
 }
 
 /** Mirrors pkg/api/find_missing.go::FindMissingResult */
 export interface FindMissingResult {
-  /** Number of rows transitioned to missing on this sweep. */
-  count: number;
-  /** Sorted ids of rows transitioned to missing. */
-  ids: string[];
   /**
-   * Number of live rows left untouched this sweep because their liveness
-   * could not be established (an unknown verdict, e.g. a permission wall).
+   * Number of rows this sweep marked `missing` (the length of `ids`). Zero is
+   * a normal result when nothing needed marking.
    */
+  count: number;
+  /**
+   * Sorted ids of rows this sweep marked `missing`, on process or tmux
+   * evidence: rows whose agent process (the SessionStart one or the recorded
+   * pane's) is dead, and rows whose process could not be checked and tmux
+   * found no session or pane of their current launch; a pending row only past
+   * the pending grace period. A row whose guarded write found it changed or
+   * gone, or failed, is in neither list. `missing` is the sweep's judgement
+   * on the evidence available to it, not proof that the agent has exited.
+   * Never null; [] when none.
+   */
+  ids: string[];
+  /** Number of live rows this sweep left unverified (the length of `unverified_ids`). */
   unverified: number;
-  /** Sorted ids of rows left untouched as unverified. Non-nil; [] when none. */
+  /**
+   * Sorted ids of live rows this sweep left unverified with a liveness note,
+   * whether it wrote the note or found it already current: rows whose agent
+   * process could not be checked and which tmux did not mark, for example
+   * because their own session is present, tmux could not tell or was
+   * unavailable, or tmux was not called. Never a pending row inside the
+   * pending grace period. A row whose guarded write found it changed or gone,
+   * or failed, and a row whose note was cleared, is in neither list. Never
+   * null; [] when none.
+   */
   unverified_ids: string[];
 }
 

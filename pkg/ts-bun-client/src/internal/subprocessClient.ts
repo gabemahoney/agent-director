@@ -447,7 +447,7 @@ export class SubprocessClient {
     return this.#enqueue<ResumeResult>("resume", params);
   }
 
-  /** findMissing — reconcile Spawns whose tmux sessions have disappeared. */
+  /** findMissing — sweep live Spawns, marking each `missing` or leaving it unverified on process and tmux evidence; see FindMissingResult. */
   async findMissing(params: FindMissingParams): Promise<FindMissingResult> {
     this.#assertOpen();
     return this.#enqueue<FindMissingResult>("find-missing", params);

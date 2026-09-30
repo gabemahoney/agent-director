@@ -129,9 +129,10 @@ type killCall struct {
 	Took time.Duration
 }
 
-// kill opens the production client through api.New with a config file giving
-// kill_exit_wait_ms = wait (0: killDefaultWait) and kills instanceID.
-func (f *killFix) kill(t testing.TB, instanceID string, wait time.Duration) killCall {
+// open opens the production client on the fixture's store through api.New
+// with a config file giving the client timeouts and kill_exit_wait_ms = wait
+// (0: killDefaultWait), running tmuxCommand ("" is tmux on PATH).
+func (f *killFix) open(t testing.TB, wait time.Duration, tmuxCommand string) *api.Client {
 	t.Helper()
 	if wait == 0 {
 		wait = killDefaultWait
@@ -142,10 +143,18 @@ func (f *killFix) kill(t testing.TB, instanceID string, wait time.Duration) kill
 		apitest.TmuxInt(config.TmuxActionTimeoutMs, clientTimeouts.Action.Milliseconds()),
 		apitest.TmuxInt(config.TmuxCreateTimeoutMs, clientTimeouts.Create.Milliseconds()),
 		apitest.TmuxInt(config.TmuxKillExitWaitMs, wait.Milliseconds()))
-	c, err := api.New(api.Options{StorePath: f.DBPath, ConfigPath: cfg})
+	c, err := api.New(api.Options{StorePath: f.DBPath, ConfigPath: cfg, TmuxCommand: tmuxCommand})
 	if err != nil {
 		t.Fatalf("api.New: %v", err)
 	}
+	return c
+}
+
+// kill opens the production client (open) with kill_exit_wait_ms = wait
+// (0: killDefaultWait) and kills instanceID.
+func (f *killFix) kill(t testing.TB, instanceID string, wait time.Duration) killCall {
+	t.Helper()
+	c := f.open(t, wait, "")
 	defer c.Close() //nolint:errcheck
 	start := time.Now()
 	res, err := c.Kill(api.KillParams{ClaudeInstanceID: instanceID})

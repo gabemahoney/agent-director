@@ -76,12 +76,16 @@ type ListRow struct {
 	// omitted from JSON) otherwise (SR-22.2).
 	LaunchStartedAt *time.Time `json:"launch_started_at,omitempty"`
 	// LivenessUnverifiedSince is the RFC3339 timestamp of the first sweep that
-	// could not verify this live row's liveness. Nil (omitted from JSON) when
-	// NULL in the store. The store carries it as a COALESCE-scanned string
+	// left this live row unverified; it is kept while later sweeps change
+	// LivenessNote. Nil (omitted from JSON) when NULL in the store: a sweep
+	// that finds the agent process alive clears it together with
+	// LivenessNote. The store carries it as a COALESCE-scanned string
 	// ("" == NULL); List maps "" to nil per the ended_at nullable precedent.
 	LivenessUnverifiedSince *string `json:"liveness_unverified_since,omitempty"`
-	// LivenessNote is the human-readable reason liveness could not be verified.
-	// Nil (omitted) when NULL in the store. Same "" == NULL mapping.
+	// LivenessNote is the reason token of the latest sweep that left this
+	// live row unverified, as SpawnRow.LivenessNote; a later sweep
+	// overwrites it when the reason changes. Nil (omitted) when NULL in the
+	// store. Same "" == NULL mapping.
 	LivenessNote *string `json:"liveness_note,omitempty"`
 }
 

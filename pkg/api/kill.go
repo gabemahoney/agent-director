@@ -424,7 +424,9 @@ func sessionProcesses(pc ProcChecker, panes []tmux.Pane, sessionID string, agent
 //
 // A finished row (ended, missing) is a no-op success with KillSent false and
 // no tmux call. That is not verification, and not proof, that the agent
-// exited. On a pending row Kill aborts only the current launch; a call made
+// exited: missing is the sweep's judgement on the evidence available to it,
+// not proof that the agent has exited, and neither ended nor missing means
+// that the agent is dead or that its row is safe to delete. On a pending row Kill aborts only the current launch; a call made
 // before the launch created its session returns KillSent false and does not
 // stop the launch. Kill never ends a session an earlier launch left behind.
 //

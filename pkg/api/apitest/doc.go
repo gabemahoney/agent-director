@@ -99,9 +99,14 @@
 //     find-missing and spawn descriptions in its place and restates no step;
 //     LiveRowSequenceCount and LiveRowPointerCount, which count statements
 //     of the sequence and pointer sentences in a text separately), or of
-//     find-missing's pending-grace rule (descriptions_find_missing.go:
-//     DescFindMissingGrace, and FindMissingOwnText, which cuts
-//     find-missing's own text before the pointer).
+//     find-missing's manifest texts (descriptions_find_missing.go:
+//     DescFindMissingGrace, its pending-grace rule; DescFindMissingManifest,
+//     its liveness and same-environment rules with SR-18.7's two
+//     consequences, whose phrases DescKillManifest shares;
+//     DescFindMissingField, its ids and unverified_ids result fields;
+//     DescMissingNotProof, SR-18.2's statement for any text that describes
+//     missing; and FindMissingOwnText, which cuts find-missing's own text
+//     before the pointer).
 //
 // Rules for tests (the same as docs/architecture.md, "apitest Seed* factory
 // contract (reusable test fixtures)"):

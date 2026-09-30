@@ -627,7 +627,10 @@ func launchInProgressError(row Spawn) error {
 // Resume brings a finished (ended/missing) Spawn back to life by launching
 // `claude --resume` in a fresh tmux session pointed at the same JSONL
 // transcript. The claude_instance_id is preserved; the result returns it and
-// pre_trust (what the launch's pre-trust did: ok, skipped or failed).
+// pre_trust (what the launch's pre-trust did: ok, skipped or failed). A
+// finished row is not proof that its agent is dead: missing is the sweep's
+// judgement on the evidence available to it, not proof that the agent has
+// exited.
 //
 // Before its launch, Resume pre-trusts the row's working directory (marks it
 // trusted in the .claude.json file of the row's CLAUDE_CONFIG_DIR, or

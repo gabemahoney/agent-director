@@ -245,6 +245,9 @@ type fmSweep struct {
 }
 
 // runFindMissing runs one sweep of s judged by pc: the one place the unit tests call api.FindMissing.
+// Must use: every pkg/api sweep test goes through it (or mustSweep / mustFindMissing) with a tmuxfix.Recorder
+// and procfix.Checker, never a second store, tmux or process-checker fake and never real waiting; a budget or
+// timeout is reached through the Recorder's virtual time on the shared tmuxfix.Clock (or fmBudgetSpent).
 func runFindMissing(s api.FindMissingStore, pc api.ProcChecker, o fmSweep) (api.FindMissingResult, error) {
 	if o.grace == 0 {
 		o.grace = fmGrace

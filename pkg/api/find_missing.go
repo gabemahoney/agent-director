@@ -100,13 +100,21 @@ var (
 type ProvisionalTranscript = store.ProvisionalTranscript
 
 // FindMissingResult is the typed return shape. Count is the number of
-// rows transitioned to `missing` on this sweep; IDs is the sorted
-// list (sorted so the JSON envelope is deterministic across runs).
+// rows this sweep marked `missing`; IDs is the sorted list (sorted so the
+// JSON envelope is deterministic across runs).
 type FindMissingResult struct {
-	// Count is the number of rows transitioned to missing on this sweep.
+	// Count is the number of rows this sweep marked missing: the length of
+	// IDs.
 	Count int `json:"count"`
-	// IDs is the sorted slice of instance ids transitioned to missing.
-	// Always non-nil — encodes as [] when no rows were transitioned.
+	// IDs is the sorted slice of instance ids this sweep marked missing, on
+	// process or tmux evidence: rows whose agent process (the SessionStart
+	// one or the recorded pane's) is gone, and rows whose process could not
+	// be checked and whose lookup found no session or pane of their current
+	// launch; a pending row only past the pending grace period. A row whose
+	// guarded mark found it changed or absent, or failed in the store, is not
+	// listed. missing is the sweep's judgement on the evidence available to
+	// it, not proof that the agent has exited. Always non-nil — encodes as []
+	// when no rows were marked.
 	IDs []string `json:"ids"`
 	// Unverified is the number of live rows this sweep left live with a
 	// liveness note: their agent process could not be checked (the
@@ -237,10 +245,8 @@ func findMissingAction(r findMissingRow) string {
 // F.4; LFR G5); (c *Client).FindMissing calls it with the Client's store,
 // tmux client, start-time reader, effective settings, clock and logger.
 //
-// It takes the start-time reader pc (SR-3.8; LFR C1) in place of the
-// environment prober and the tiebreaking liveness checker it took before: pc
-// is the only source of liveness, and the sweep never reads a process
-// environment. t is the lookup and the pane listing (FindMissingTmux), called
+// The start-time reader pc (SR-3.8; LFR C1) is the only source of liveness,
+// and the sweep never reads a process environment. t is the lookup and the pane listing (FindMissingTmux), called
 // only through the run's one tmux.Sweep and only for rows whose agent process
 // cannot be checked. pendingGrace is the pending grace period (SR-11.2),
 // sweepBudget the run's tmux time budget (SR-13.5) and now the clock every
@@ -294,6 +300,13 @@ func findMissingAction(r findMissingRow) string {
 //
 // The result lists are sorted. The only error returned is the live-row
 // read's.
+//
+// A row marked missing is the sweep's judgement on the evidence available to
+// it, not proof that the agent has exited; neither ended nor missing means
+// that the agent is dead or that its row is safe to delete (SR-18.2). The
+// caller must run as the agents' user, in their tmux environment: run as
+// another user, as root or against another tmux server, the sweep can mark
+// live rows missing (SR-18.7).
 //
 // Errors:
 //   - ErrProbeUnsupported: listed for find-missing, which no longer returns
@@ -527,29 +540,41 @@ func healProvisionalTranscripts(s FindMissingStore, lg FindMissingLogger) {
 
 // FindMissing reconciles live rows against their agents' processes and,
 // where a process cannot be checked, against tmux. Each live row's liveness
-// comes only from its agent process, read by the start-time reader: the
+// comes only from its agent process, checked by its recorded start time: the
 // SessionStart identity, else the recorded pane process, and the pane
-// process when the two disagree; no process environment is read. A process
-// alive with its recorded start time leaves the row live and clears any
-// liveness note; a dead one marks the row missing, whatever tmux shows.
+// process when the two disagree. No process environment is read, and no
+// child process or other process carrying the row's id keeps the row alive.
+// A process alive with its recorded start time leaves the row live and
+// clears any liveness note; a dead one marks the row missing whatever tmux
+// shows, with no tmux call.
 //
-// A row whose process cannot be checked (unreadable, a pid-only identity
-// that reads alive, or none recorded) is decided by one tmux lookup of its
-// recorded socket, shared by every row of that socket: its own labelled session leaves it live and
-// reported unverified with a liveness note (a row whose create reply was lost
-// first adopts the one pane carrying its launch token and is judged by that
-// pane's process, and is marked when no pane carries it); a session left
-// from an earlier life, or no session of it, marks it missing whatever holds
-// its name, and a session holding its recorded name is named in the trail
-// and never touched; an answer that cannot be trusted, or no answer, leaves
-// it unverified with a liveness note. After an unreadable or unavailable
-// answer on a socket, no more tmux calls are made on that socket, and the
-// run's tmux time (sweep_budget_seconds from the loaded configuration, 15 s
-// by default) caps all its calls; rows not reached are left unverified.
-// tmux problems never fail the sweep. It must run as the agents' user, in
-// their tmux environment (the caller's environment decides the socket of a
-// row that records none); run as another user, or against another server, it
-// can mark live rows (SR-18.7).
+// Only a row whose process cannot be checked (unreadable, a pid-only
+// identity that reads alive, or none recorded; a pid-only identity that
+// reads gone is marked) is looked up in tmux: one lookup of its recorded
+// socket, else the caller's, shared by every row of that socket. Its own
+// labelled session leaves it live and reported unverified with a liveness
+// note (a row whose create reply was lost first adopts the one pane carrying
+// its launch token and is judged by that pane's process, and is marked when
+// no pane carries it); a session left from an earlier life, or no session of
+// its current launch, marks it missing whatever holds its name, and a
+// session holding its recorded name is named in the trail and never touched
+// (see "Operator actions" in the agent-director README); an answer that
+// cannot be used, or no answer, leaves it unverified with a liveness note.
+// After an unreadable or unavailable answer on a socket, no more tmux calls
+// are made on that socket, and the run's tmux time (sweep_budget_seconds
+// from the loaded configuration, 15 s by default) caps all its calls; rows
+// not reached are left unverified. tmux problems never fail the sweep.
+//
+// missing is the sweep's judgement on the evidence available to it, not
+// proof that the agent has exited; neither ended nor missing means that the
+// agent is dead or that its row is safe to delete (SR-18.2). The caller must
+// run as the same user and in the same tmux environment as the agents (the
+// caller's environment decides the socket of a row that records none): a
+// run as another user, as root or against another tmux server can mark live
+// rows missing (SR-18.7). Two consequences: Kill's success on a finished row
+// is not verification that the agent exited; and on the wrong tmux server, a
+// row wrongly marked missing, Kill's no-op success and a reuse together start
+// a second agent for the same id.
 //
 // Every write applies only while the row still holds the snapshot the sweep
 // read, or the one its adoption produced. A `pending` row (a spawn's, a

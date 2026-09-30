@@ -375,7 +375,7 @@ These 42 classes are generated one-to-one from the shared `err_name` catalog ([`
 | `ErrNoSessionId` | The spawn has no `claude_session_id` (killed before its first SessionStart), so there is nothing to resume — `delete` and spawn fresh. |
 | `ErrJsonlMissing` | The resume JSONL could not be located at any candidate path — `delete` and spawn fresh. |
 | `ErrListInvalidLabel` | A `list` label filter could not be parsed as `key=value`. |
-| `ErrProbeUnsupported` | The liveness probe has no implementation for the current platform (`find-missing`). |
+| `ErrProbeUnsupported` | No verb returns it: `find-missing` no longer reads process environments, the only path that returned it. The name stays catalogued (and listed for `find-missing`) so the client still maps it. |
 
 **tmux transport** (infrastructure failures at the tmux layer — runtime). Each name has a class: GONE (the row's session is not there), UNAVAILABLE (transient; retry later), CONFLICT (permanent until a human looks), ENVIRONMENT (an environment problem for an operator to fix) or LAUNCH FAILURE (the launch failed).
 

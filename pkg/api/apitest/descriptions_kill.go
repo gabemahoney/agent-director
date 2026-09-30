@@ -293,6 +293,20 @@ func DescKillRepeatedAfterLastSession(verb string) DescCase {
 	}
 }
 
+// SR-18.7's two consequences of running kill or find-missing as the wrong user
+// or against the wrong tmux server, as the one sentence DescKillManifest and
+// DescFindMissingManifest both require: "kill's success on a finished row is
+// not verification that the agent exited" (finishedRowNotVerification); and
+// "on the wrong tmux server, a row wrongly marked missing, kill's no-op
+// success and a reuse together start a second agent for the same id"
+// (wrongServerSecondAgent).
+const (
+	notVerification            = "not verification"
+	finishedRowNotVerification = "kill's success on a finished row is " + notVerification + " that the agent exited"
+	wrongServerSecondAgent     = "on the wrong tmux server, a row wrongly marked missing, " +
+		"kill's no-op success and a reuse together start a second agent for the same id"
+)
+
 // DescKillManifest is kill's manifest description (SR-6.1, SR-1.7, SR-18.1,
 // SR-18.7, SR-18.9; decision-0930b Q4 and Q5): success only once the agent
 // process is gone, else ErrTmuxKillFailed; kill_sent; a finished row's no-op
@@ -307,7 +321,7 @@ func DescKillManifest() DescCase {
 		"succeeds only once the agent process is gone; otherwise it returns ErrTmuxKillFailed",
 		"kill_sent says whether a kill was sent",
 		"On a finished row (ended or missing) kill is a no-op success with kill_sent false and no tmux call",
-		"that is not verification that the agent exited",
+		"that is " + notVerification + " that the agent exited",
 		"kill never changes the row's state",
 		"Success is judged per call", "later calls do not track it",
 		"a retried kill checks only the agent process",
@@ -320,7 +334,7 @@ func DescKillManifest() DescCase {
 		"None of these errors means that the agent is dead",
 		"Never delete a row after a kill that did not succeed",
 		"kill must run as the same user and in the same tmux environment as the agents",
-		"on the wrong tmux server, a row wrongly marked missing, kill's no-op success and a reuse together start a second agent for the same id",
+		finishedRowNotVerification, wrongServerSecondAgent,
 	)
 	return DescCase{
 		Name:    "kill manifest description",

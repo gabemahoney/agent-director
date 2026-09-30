@@ -55,10 +55,10 @@ still holds: nothing in `internal/` imports `pkg/api`.
 | Path | Responsibility | Allowed imports | Prohibited imports |
 | --- | --- | --- | --- |
 | `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`; every store-backed verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. **DB-free exceptions:** `help`, `--help`, `version`, the no-verb run (no verb after the global flags, so a run with only global flags counts), and `trail-emit` are dispatched BEFORE `setupClient` so they never open or create a store (SR-4.1/4.2, b.8dr); help/version run against a zero-value `Client` and consult no store. The no-verb run prints help, except that when stdin is not a terminal and carries a hook payload (a Claude Code that does not run exec-form hooks, SR-22.9) it prints nothing, exits 0 and writes one `ad.hook.ignored` `no_exec_form`, still with no store and no config load; the trail file is the only thing it may create (`noVerbHookIgnored` in `noverb.go`, which reads stdin with a 1 MiB cap and a 1 s deadline and hands the bytes to `hook.HandleNoExecForm`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `help`, `--help` and `version` never read stdin. **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. `runHook` builds the `hook.HandleConfig`, wiring `Now: time.Now` and `PendingGrace: cfg.Tmux.EffectivePendingGrace()` (the grace bound of SessionStart's wait for its launch's identity write, SR-22.9, SR-13.4) beside the parent-process readers and the production `PollClock`. | stdlib; `pkg/api`; `pkg/api/errnames`; `internal/hook`; `internal/probe` (the hook's parent-process readers, `hookParentProc`, shared by `runHook` and the no-verb run); `golang.org/x/sys/unix` (the no-verb run's terminal check, `isTerminal`, with the per-OS `ioctlReadTermios` in `noverb_linux.go` / `noverb_darwin.go`); `internal/config` and `internal/store` (error sentinels only) in `setupClient`; `internal/config` in `runHook` and `newHookLogger`. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook`, `newHookLogger`, and `setupClient`'s logger bootstrap. |
-| `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, etc.), params/result types, and error sentinels (the seven tmux sentinels of SR-1.1 are all re-exported in `aliases.go`). Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director` and `internal/mcp`. **`kill` seams** (`kill.go`): `KillStore` (`GetSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`; `*store.Store` satisfies it), `KillTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `KillPane`, `KillSessionID`; `TmuxClient` satisfies it) and the start-time reader `ProcChecker`; `Kill` also takes the three `[tmux]` durations, the clock and the sleep, and has no logger. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the eight socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the three name-based ones (`HasSession`, `SendKeys`, `CapturePane`); `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`; it also re-exports the start-time reader interface as `ProcChecker` (`= tmux.ProcChecker`). The Client holds its clock (`time.Now`), its sleep (`time.Sleep`, the pause of `kill`'s process wait) and its start-time reader (`probe.NewProcChecker()`), all set in `New`; plain spawn uses the clock and reader for the launch start and the identity write, and `kill` uses all three for its lookup, adoption and process wait; `find-missing` measures the pending grace period on the same clock, with the value from `EffectivePendingGrace`. The label scan of a plain spawn lives in `spawn_scan.go`, its held-name path after "duplicate session" (the end write, one re-lookup, the classified error) in `spawn_held.go`, the shared held-name error builder in `held_name.go` and the one `ad.launch.name_held` emitter in `name_held_trail.go` (see [Launch identity](#launch-identity)). `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`. | Direct `database/sql`; raw SQL strings; MCP framing. |
+| `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, etc.), params/result types, and error sentinels (the seven tmux sentinels of SR-1.1 are all re-exported in `aliases.go`). Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director` and `internal/mcp`. **`kill` seams** (`kill.go`): `KillStore` (`GetSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`; `*store.Store` satisfies it), `KillTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `KillPane`, `KillSessionID`; `TmuxClient` satisfies it) and the start-time reader `ProcChecker`; `Kill` also takes the three `[tmux]` durations, the clock and the sleep, and has no logger. **`find-missing` seams** (`find_missing.go`): `FindMissingStore` (the live-row read, the four same-life guarded writes, `CloseOrphanedPermissionRequests`, `ListProvisionalTranscripts`, `HealJsonlPath`, `StoreID`; `*store.Store` satisfies it), `FindMissingTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`) and `ProcChecker`; the exported `FindMissing` also takes the pending grace period, the sweep budget, the clock and a `FindMissingLogger` (see [`find-missing`](#find-missing)). **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the eight socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the three name-based ones (`HasSession`, `SendKeys`, `CapturePane`); `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`; it also re-exports the start-time reader interface as `ProcChecker` (`= tmux.ProcChecker`). The Client holds its clock (`time.Now`), its sleep (`time.Sleep`, the pause of `kill`'s process wait) and its start-time reader (`probe.NewProcChecker()`), all set in `New`; plain spawn uses the clock and reader for the launch start and the identity write, and `kill` uses all three for its lookup, adoption and process wait; `find-missing` measures the pending grace period on the same clock, with the value from `EffectivePendingGrace`. The label scan of a plain spawn lives in `spawn_scan.go`, its held-name path after "duplicate session" (the end write, one re-lookup, the classified error) in `spawn_held.go`, the shared held-name error builder in `held_name.go` and the one `ad.launch.name_held` emitter in `name_held_trail.go` (see [Launch identity](#launch-identity)). `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`. | Direct `database/sql`; raw SQL strings; MCP framing. |
 | `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v5; see "Schema v5" below), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). The pending grace period bounds both `find-missing`'s hands-off window for a `pending` row and a SessionStart hook's wait for its launch's identity write, each measured from the launch start (SR-13.4, SR-22.9); it has no maximum. The hook's wait is also capped at 540 s after it began (`sessionStartWaitCap` in `internal/hook`; WD 2026-09-30c), so a grace above 540 s lengthens only `find-missing`'s window, which is unchanged. Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default; a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
-| `pkg/api/apitest` | Test seed helpers extracted from `pkg/api/*_test.go` for cross-package importing. Provides `Seed*` functions (`SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`) that set up fixture DB rows and filesystem state for `test/envelope-diff` and future Epic 4/5 smoke tests. Also provides the config writer `WriteTmuxConfig` (settings built with `TmuxInt`, or `TmuxFloat` / `TmuxString` / `TmuxBool` for malformed values, keyed by `config.TmuxKey`): `pkg/api`, CLI and MCP tests write `[tmux]` settings only through it, so no test outside `internal/config` spells a `[tmux]` key (rules: Test Harness, "apitest `[tmux]` config writer"). Provides `SeedSpawn`'s trailing `SpawnOption`s for the v5 columns, timestamps and raw text (`WithTmuxSessionName`, `WithStartedAt` / `WithEndedAt`, `WithLaunchStartedAt`, `WithRawLaunchStartedAt`, `WithNoLaunchStartedAt`, `WithLifeNumber`, `WithRowVersion`, `WithNoPreTrust`, `WithRawNoPreTrust`, `WithLaunchIdentity`, `WithTmuxSocket`, `WithNoLaunchToken`, `WithRawLabels`, `WithRawClaudeArgs`, `WithRawExtraEnv`) and archived session history (`WithSessionHistory`), the default socket `TestSocket`, the default pane `TestPaneID` / `TestPanePID` that `SeedSpawn` gives a live row (both re-exported from `internal/testsupport/launchfix`; a terminal row gets no pane), the store-read helper `ReadSpawnColumns`, the every-life history-read helper `ReadSessionHistoryAllLives`, and the store-id helpers `ReadStoreID`, `SeedStoreID` and `OtherStoreID` (with `ErrNoStoreID`): new tests seed rows and read columns no verb shows only through these (rules: Test Harness, "apitest Seed* factory contract"). To place a seeded row's own labelled session in the Recorder, tests use `tmuxfix.Recorder.SeedRowSession` (in `internal/testsupport/tmuxfix`, not this package). Provides the shared description helper (`descriptions.go`: `AssertDescription`, `AssertAgentText`, `AssertAgentTextCase` and the `Desc*` cases; `descriptions_resume.go`: resume's `DescResume*` cases and `DescCase.AfterResumeRestore`; `descriptions_lookup.go`: lookup's `DescConflictingLabels` and `DescDifferentServer`; `descriptions_kill.go`: kill's `DescKill*`, `DescSocketDirNothingDone` and `DescUnusableName*` cases and `DescCase.AfterKillSent`; `descriptions_live_row.go`: the live-row sequence's short form and pointer, `DescLiveRowSequence`, `DescLiveRowPointer`, `LiveRowPointer`, `LiveRowSequenceCount` and `LiveRowPointerCount`; `descriptions_find_missing.go`: `DescFindMissingGrace` and `FindMissingOwnText`; `descriptions_held.go`: the held-name cases `DescHeldLeftover`, `DescHeldNoValidID`, `DescHeldDifferentID`, `DescHeldOtherStore`, `DescHeldAmbiguous`, the overlay `DescCase.AfterHeldName` with `HeldName` and `HeldRow` (`HeldRowEnded` / `HeldRowLeftAsIs` / `HeldRowStoreError`), and spawn's manifest cases `DescSpawnHeldName` and `DescSpawnSessionNameParam`): every Go test that checks an error or manifest description for required phrases or forbidden forms uses it (rules: Test Harness, "apitest description helper"). Non-test package (regular `.go` files) so it can be imported by harnesses outside `pkg/api`. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `internal/tmux` (the `tmux.Call` names the description cases use); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
+| `pkg/api/apitest` | Test seed helpers extracted from `pkg/api/*_test.go` for cross-package importing. Provides `Seed*` functions (`SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`) that set up fixture DB rows and filesystem state for `test/envelope-diff` and future Epic 4/5 smoke tests. Also provides the config writer `WriteTmuxConfig` (settings built with `TmuxInt`, or `TmuxFloat` / `TmuxString` / `TmuxBool` for malformed values, keyed by `config.TmuxKey`): `pkg/api`, CLI and MCP tests write `[tmux]` settings only through it, so no test outside `internal/config` spells a `[tmux]` key (rules: Test Harness, "apitest `[tmux]` config writer"). Provides `SeedSpawn`'s trailing `SpawnOption`s for the v5 columns, timestamps and raw text (`WithTmuxSessionName`, `WithStartedAt` / `WithEndedAt`, `WithLaunchStartedAt`, `WithRawLaunchStartedAt`, `WithNoLaunchStartedAt`, `WithLifeNumber`, `WithRowVersion`, `WithNoPreTrust`, `WithRawNoPreTrust`, `WithLaunchIdentity`, `WithTmuxSocket`, `WithNoLaunchToken`, `WithNoPane`, `WithRawLabels`, `WithRawClaudeArgs`, `WithRawExtraEnv`) and archived session history (`WithSessionHistory`), the default socket `TestSocket`, the default pane `TestPaneID` / `TestPanePID` that `SeedSpawn` gives a live row (both re-exported from `internal/testsupport/launchfix`; a terminal row gets no pane), the store-read helper `ReadSpawnColumns`, the every-life history-read helper `ReadSessionHistoryAllLives`, and the store-id helpers `ReadStoreID`, `SeedStoreID` and `OtherStoreID` (with `ErrNoStoreID`): new tests seed rows and read columns no verb shows only through these (rules: Test Harness, "apitest Seed* factory contract"). To place a seeded row's own labelled session in the Recorder, tests use `tmuxfix.Recorder.SeedRowSession` (in `internal/testsupport/tmuxfix`, not this package). Provides the shared description helper (`descriptions.go`: `AssertDescription`, `AssertAgentText`, `AssertAgentTextCase` and the `Desc*` cases; `descriptions_resume.go`: resume's `DescResume*` cases and `DescCase.AfterResumeRestore`; `descriptions_lookup.go`: lookup's `DescConflictingLabels` and `DescDifferentServer`; `descriptions_kill.go`: kill's `DescKill*`, `DescSocketDirNothingDone` and `DescUnusableName*` cases and `DescCase.AfterKillSent`; `descriptions_live_row.go`: the live-row sequence's short form and pointer, `DescLiveRowSequence`, `DescLiveRowPointer`, `LiveRowPointer`, `LiveRowSequenceCount` and `LiveRowPointerCount`; `descriptions_find_missing.go`: `DescFindMissingGrace`, `DescFindMissingManifest`, `DescFindMissingField` (`FindMissingIDs` / `FindMissingUnverifiedIDs`), `DescMissingNotProof` and `FindMissingOwnText`; `descriptions_held.go`: the held-name cases `DescHeldLeftover`, `DescHeldNoValidID`, `DescHeldDifferentID`, `DescHeldOtherStore`, `DescHeldAmbiguous`, the overlay `DescCase.AfterHeldName` with `HeldName` and `HeldRow` (`HeldRowEnded` / `HeldRowLeftAsIs` / `HeldRowStoreError`), and spawn's manifest cases `DescSpawnHeldName` and `DescSpawnSessionNameParam`): every Go test that checks an error or manifest description for required phrases or forbidden forms uses it (rules: Test Harness, "apitest description helper"). Non-test package (regular `.go` files) so it can be imported by harnesses outside `pkg/api`. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `internal/tmux` (the `tmux.Call` names the description cases use); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
 | `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. The `Catalog` is consumed by `cmd/agent-director`'s envelope writer and `internal/mcp`'s `classifyDispatchError`. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
 | `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. `classifyDispatchError` delegates to `errnames.Classify`. | stdlib; `pkg/api`; `pkg/api/manifest`; `pkg/api/errnames`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
 | `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
@@ -243,8 +243,9 @@ as running), no store and no `@ad_pane`. It consumes only `LookupAnswer`,
 `tmux.Lookup` (one row, one call) or `tmux.Classify` (an answer already
 held). Never re-implement label classes, the server check, the verdict
 order or stored-name matching. Its verb users so far are plain spawn's
-label scan (see [Launch identity](#launch-identity)) and `kill` (see
-[Stop semantics](#kill)); the single-row verbs map its Can't tell
+label scan (see [Launch identity](#launch-identity)), `kill` (see
+[Stop semantics](#kill)) and, through the [Sweep](#sweep-sweepgo),
+`find-missing`; the single-row verbs map its Can't tell
 results through `pkg/api`'s shared mapping (see
 [Single-row verb helpers](#single-row-verb-helpers-pkgapi)).
 
@@ -369,8 +370,9 @@ records no pane, `PaneNone` counts as Gone and `PaneMany` is unverified,
 never Gone. It makes no tmux call.
 
 **Must use** `tmux.PaneByToken` to find a pane by its `@ad_pane` token;
-never match `AdPane` by hand. Its first user is `pkg/api`'s adoption step
-(`adoptIdentity`, used by `kill`).
+never match `AdPane` by hand. Its user is `pkg/api`'s adoption rules
+(`findAdoption`, which `kill` reaches through `adoptIdentity` and
+`find-missing` through `adoptInSweep`).
 
 #### Sweep (`sweep.go`)
 
@@ -420,7 +422,8 @@ outcome tokens. Callers check `Skipped` first.
 **Must use:** a sweep verb (`find-missing`, `expire`) judges its rows only
 through one `tmux.NewSweep` per run and its `Lookup` and `ListPanes`; never
 call `tmux.Lookup` per row in a sweep, and never re-implement the grouping,
-the stop rule or the budget. No verb uses it yet.
+the stop rule or the budget. `find-missing` uses it (see
+[`find-missing`](#find-missing)).
 
 ### Single-row verb helpers (`pkg/api`)
 
@@ -433,7 +436,7 @@ them. Their doc comments carry the detail.
 | --- | --- | --- |
 | `lookup_outcome.go` | `cantTellError(res, cantTellRefusal{InstanceID, Context, Socket, Call, Consequence, Retry})`: the one mapping from a Can't tell lookup or pane-listing `Result` to its verb error (different server and tmux unavailable → `ErrTmuxNotAvailable`, conflicting labels → `ErrTmuxSessionConflict` naming the sessions or the scope, unreadable → `ErrTmuxUnresponsive` ending with the retry sentence); nil for any other verdict. `Consequence` `""` means "nothing was done"; a verb that already acted passes its own sentence. `Retry` `""` means the default `retryLater` ("retry later"); only a caller whose retry of the same call cannot work passes its own (plain spawn's held-name path). It is verb-agnostic: kill and the label scan keep the default. `rowSocket(recorded)`: the socket every call for a row uses, the recorded one as is, else `spawn.ResolveQuerySocket("nothing was done")`. The constants `nothingWasDone`, `operatorActionsPointer` and `listSessionNameHint`. | Every single-row verb maps a Can't tell lookup or pane listing through `cantTellError` and takes a row's socket from `rowSocket`; never write another Can't tell description or socket rule. Plain spawn's label scan uses `cantTellError` too. |
 | `unusable_name.go` | `unusableNameError(name)`: nil for a usable recorded name, else the verb-agnostic `ErrInternal` refusal (empty, control character, or which rewritten character via `tmux.RewrittenIn`), pointing to "Operator actions" and saying no tmux call was made. The verb prefixes the instance id. | Every verb that passes a live row's recorded name to tmux refuses an unusable one through it, before any tmux call (`kill` today; the other verbs and the opt-in later). |
-| `agent_pane.go` | `agentPane(panes, paneID, panePID)`: the agent's pane in one listing, by recorded pane id and pid, wherever it now is (SR-3.7). `adoptIdentity(s, row, res, panes, pc) adoption`: the adoption step (SR-3.6), due when the lookup is Ours and the row records no server identity or no pane; the pane by `@ad_pane` token (`tmux.PaneByToken`), one `AdoptIdentityIfUnchanged` write, and the found identity (`adoption.Identity`) used for this call whatever the write's outcome; `Applied` only when the write applied. `identityAdopter` is the store capability it needs. | `kill`, `send-keys` and `pause` find the agent's pane with `agentPane` and adopt with `adoptIdentity`, using the verb's own one pane listing; never match panes or write an adoption by hand. |
+| `agent_pane.go` | `agentPane(panes, paneID, panePID)`: the agent's pane in one listing, by recorded pane id and pid, wherever it now is (SR-3.7). `findAdoption(recorded, res, panes, pc) adoption`: the one home of the adoption rules (SR-3.6), with no write: due when the lookup is Ours and the row records no server identity or no pane; the server identity from the answering server, the pane by `@ad_pane` token (`tmux.PaneByToken`), start times through `tmux.KnownStartTime`. `adoptIdentity(s, row, res, panes, pc) adoption`: the single-row verbs' step, `findAdoption` over the verb's own listing plus one `AdoptIdentityIfUnchanged` write; the found identity (`adoption.Identity`) is used for this call whatever the write's outcome, and `Applied` is set only when the write applied. `identityAdopter` is the store capability it needs. `adoptInSweep(s, sw, pl, it, launch, res, pc, lg) sweepAdoption`: `find-missing`'s step, `findAdoption` over the Sweep's pane listing (`sw.ListPanes`, at most one per socket per run) plus one `AdoptIdentityIfSameLife` write guarded on the snapshot the sweep read; `sweepAdoption` reports `Unlisted` (the listing did not answer: nothing adopted, no write) with the listing's `Listing` result, `Guard` (the snapshot the row's verdict write is guarded on: the adoption write's new one when it applied), `Write` and `Left` (the write found the row changed or absent, or failed: the row gets no verdict write). `sameLifeAdopter` is its store capability. | `findAdoption` holds the adoption rules; never decide or build an adopted identity elsewhere. `kill`, `send-keys` and `pause` find the agent's pane with `agentPane` and adopt with `adoptIdentity`, using the verb's own one pane listing; a sweep adopts only with `adoptInSweep`. Never match panes or write an adoption by hand. |
 | `provenance_disagree.go` | `emitProvenanceDisagree(provenanceDisagree{...}, reasons...)`: writes one `ad.provenance.disagree` per distinct reason among the six (`disagreeReasons`), in a fixed order, nothing for none, dropping unknown reasons; fail-open; never a label's content. `nameChanged(res, recordedName)`: the `name_changed` condition (Ours under a name that is not a stored form of the recorded one, `tmux.StoredForms`). | A verb collects every reason of its call (lookups, a pane-listing failure, `adopted` when the adoption applied, `name_changed`) and calls the emitter once per call; a sweep calls it once per row. Never write the event directly. |
 | `error_name.go` | `errorName(err)`: the err_name the CLI would print, for trail fields (`ad.kill.called`'s `outcome`, `ad.resume.restored`'s `launch_error`); `ErrInternal` for anything else. `pkg/api` cannot import `errnames`, so this is its one mapping. | A trail field that carries an err_name uses it, and a verb that gains a name extends it here. |
 | `kill.go` | `killPollInterval` (100 ms): the pause between two readings of `kill`'s process wait, a named constant, not a setting. `Client.sleep` (`time.Sleep` in production) is the pause, set in tests through `SetSleepForTest`. | A wait that polls a process uses the injected clock and sleep, never `time.Sleep` directly. |
@@ -704,6 +707,19 @@ the socket is shown").
   `internal/hook/handler.go`, which adds the no-pane condition; see [Hooks
   move a row only for its own
   agent](#hooks-move-a-row-only-for-its-own-agent)).
+- **The live-row read** (SR-11.7; `internal/store/recovery.go`).
+  `ListLiveSpawnIdentities` returns one `store.LiveSpawnIdentity` per row
+  in a live state, `pending` included, in no set order: the instance id,
+  `State`, the SessionStart identity (`PID`, `ProcStarttime`),
+  `LaunchStartedAtMillis` (through `decodeLaunchStartedAt`, 0 = absent),
+  `TmuxSessionName`, `LivenessNote` (`""` = NULL), `Snapshot` (the snapshot
+  every guarded write of the sweep compares against) and `Identity` (the
+  launch identity, token through `decodeLaunchToken`). Snapshot and
+  identity are selected through `lifeColumns`, as every read returning a
+  `Spawn` selects them, so both equal `GetSpawn`'s for the same row. No
+  stored launch start, token or identity value fails the read, and the
+  structured columns (`labels`, `claude_args`, `extra_env`) are never read.
+  The struct grows additively.
 
 **Versioned writes (b.fmk, SR-5.2).** The row version exists so that a later
 compare-and-set write can guard on it: the write checks that the version is
@@ -714,17 +730,19 @@ still the one it read, so it knows the row has not changed since. As built:
   SET fragment is `rowVersionAdvance` in `internal/store/spawns.go`. This
   covers every branch of `ApplyHookTransition` / `ApplyHookTransitionResult`
   (state transitions, the `ended` transition, soft refreshes),
-  `RecordSessionStartIdentity`, `SetParentID`, `MarkSpawnMissing`,
-  `SetLivenessUnverified`, `ClearLivenessUnverified` (on every matched row,
-  whether or not a note was set), `HealJsonlPath`, and
+  `RecordSessionStartIdentity`, `SetParentID`, `HealJsonlPath`, and
   `RecordLaunchIdentity`, `MoveToPending`, `RestoreAfterFailedResume`,
-  `EndHeldLaunch` and `AdoptIdentityIfUnchanged` (each when it applies).
+  `EndHeldLaunch`, `AdoptIdentityIfUnchanged` and `find-missing`'s four
+  guarded writes `MarkMissingIfSameLife`, `SetLivenessNoteIfSameLife`,
+  `ClearLivenessIfSameLife` and `AdoptIdentityIfSameLife` (each when it
+  applies; the clear advances the version whether or not a note was set).
 - `InsertPending` starts a row at 0 (the column default). A path that writes
   nothing advances nothing. Examples are the `working`-transition hold path
   (open permission requests), a write whose `WHERE` matches no row (a
-  hook the gate did not apply included), and
-  `SetLivenessUnverified` / `HealJsonlPath` / `MarkSpawnMissing` when their
-  guard misses. `DeleteSpawn` and `DeleteTerminalOlderThan` remove the row.
+  hook the gate did not apply included), and `HealJsonlPath` or any
+  guarded write (`find-missing`'s four, resume's, the end write, the
+  adoption) when its guard misses. `DeleteSpawn` and
+  `DeleteTerminalOlderThan` remove the row.
 - Archiving the prior session into `session_history` on a rotation does not
   advance the version by itself. The `RecordSessionStartIdentity` update it
   belongs to advances it once.
@@ -735,7 +753,7 @@ still the one it read, so it knows the row has not changed since. As built:
   `pending` also sets `launch_started_at` to NULL in the same statement
   (shared fragment `launchStartClear`). These writes are the `ended`
   transition, every other hook transition whose target is not `pending`,
-  `MarkSpawnMissing`, `RestoreAfterFailedResume` and `EndHeldLaunch`. Every
+  `MarkMissingIfSameLife`, `RestoreAfterFailedResume` and `EndHeldLaunch`. Every
   other write leaves
   `launch_started_at` unchanged, except the two that set a launch start:
   `InsertPending` (plain spawn) and `MoveToPending` (resume's move).
@@ -787,10 +805,54 @@ still the one it read, so it knows the row has not changed since. As built:
   emits no trail event. When nothing applied, `condNotApplied` tells
   `CondChanged` from `CondAbsent`; a driver error returns a zero
   `CondResult`. **Must use:** only `kill`, `send-keys`, `pause` and
-  `find-missing` write an adoption (SR-3.6), and the single-row verbs do it
-  through `pkg/api`'s `adoptIdentity` (see
+  `find-missing` write an adoption (SR-3.6): the single-row verbs through
+  `pkg/api`'s `adoptIdentity` and `find-missing` through `adoptInSweep`
+  (with `AdoptIdentityIfSameLife`), both on the rules of `findAdoption` (see
   [Single-row verb helpers](#single-row-verb-helpers-pkgapi)); never write
   the identity columns another way.
+- `find-missing`'s guarded writes (SR-11.3, SR-11.4, SR-11.6, SR-3.6,
+  Appendix F.4; `internal/store/find_missing_writes.go`). Each is one
+  UPDATE guarded on a live state (`liveStateGuardSQL`: `state` is one of
+  `liveStates`, `pending` included) and on the `RowSnapshot` the sweep
+  examined (`snapshotMatchSQL`), and each advances `row_version` by exactly
+  one. None emits a trail event or makes a tmux call; the ticks and the
+  permission-request denial stay with the caller.
+  - `MarkMissingIfSameLife(instanceID, examined) (priorState, CondResult,
+    error)`: sets `state` `missing`, `ended_at` and `last_seen_at` to
+    `CURRENT_TIMESTAMP`, and in the same statement NULLs both liveness
+    columns and `launch_started_at` (`launchStartClear`). It returns the
+    state it replaced, read just before the statement; that read never
+    decides whether the mark applies, the guard alone does.
+  - `SetLivenessNoteIfSameLife(instanceID, examined, note)`: overwrites
+    `liveness_note`, keeps `liveness_unverified_since` when set and sets it
+    to `CURRENT_TIMESTAMP` when NULL. It writes even when `note` equals the
+    stored note; skipping an equal note is the caller's rule.
+  - `ClearLivenessIfSameLife(instanceID, examined)`: NULLs both liveness
+    columns, whether or not a note was set; not writing a row with no note
+    is the caller's rule.
+  - `AdoptIdentityIfSameLife(instanceID, examined, identity) (CondResult,
+    now RowSnapshot, error)`: writes the six server and pane identity
+    columns through `adoptIdentitySet`, the assignment it shares with
+    `AdoptIdentityIfUnchanged`, and never the token, socket, state,
+    liveness columns or launch start. When it applies it returns `now`, the
+    row's snapshot after the write (`examined` with `RowVersion` one
+    higher, no read needed), which guards the row's verdict write.
+
+  The note write, the clear and the adoption leave `launch_started_at`
+  unchanged, and none of the four writes `life_number`, `no_pre_trust`,
+  `launch_token`, `tmux_socket` or a request column. Results: `CondApplied`;
+  `CondChanged`, having written nothing, when the row exists but is
+  terminal or its snapshot differs; `CondAbsent` when no row has the id
+  (both through `condNotApplied`; the mark answers `CondAbsent` from its
+  state read). A store failure is returned as a wrapped error with a zero
+  `CondResult`, never as a `CondResult` value (SR-5.8); the prior state
+  is `""` and `now` the zero snapshot on anything but `CondApplied`.
+  **Must use:** `find-missing` writes a live row only through these four,
+  reached through `pkg/api`'s per-row outcome writers and `adoptInSweep`
+  (see [`find-missing`](#find-missing)); `CloseOrphanedPermissionRequests`
+  runs only after a mark that applied. A new sweep write guarded on the
+  life it read is a new statement here built from `liveStateGuardSQL` and
+  `snapshotMatchSQL`, never an unguarded update.
 - **Must use:** every write guarded on a full `RowSnapshot` uses
   `snapshotMatchSQL` with `snapshotMatchArgs` (`rowsnapshot.go`), and any read
   that fills a `RowSnapshot` selects its columns with the `spawnColumns`
@@ -1038,7 +1100,8 @@ Sibling packages under internal/ consumed by pkg/api:
     internal/spawn   - lifecycle of Claude Code child processes
     internal/hook    - hook-event entrypoint logic
     internal/tmux    - tmux session orchestration
-    internal/probe   - liveness / health probes
+    internal/probe   - single-process readers: the start-time reader and
+                       the command-name reader
     internal/mcp     - stdio MCP server implementation
 
 The arrow direction is a hard rule. internal/store knows nothing about its
@@ -1585,9 +1648,11 @@ ended     (records no pane, so no later hook moves it)
 
 pending / waiting / working / ask_user / check_permission
   │
-  ▼   find-missing: DB live row, no live tmux/Claude
-  │   (a pending row only once past its pending grace period)
-missing
+  ▼   find-missing: the row's agent process is gone, or it cannot be
+  │   checked and the lookup finds no session of the row's current
+  │   launch (Gone or Leftover); a pending row only once past its
+  │   pending grace period
+missing   (the sweep's judgement, not proof that the agent exited)
 
 ended / missing
   │
@@ -1636,7 +1701,10 @@ records one keeps it. An ordinary hook whose payload carries `agent_id`
 records neither.
 
 `missing` is set by `find-missing`'s mark, and written back by a failed
-resume's restore when the row was `missing` before the move.
+resume's restore when the row was `missing` before the move. It is the
+sweep's judgement on the evidence available to it, not proof that the
+agent has exited; neither `ended` nor `missing` means the agent is dead
+or its row is safe to delete (see [`find-missing`](#find-missing)).
 
 `pending` is set only by the writes that begin a launch: a spawn's
 insert (`InsertPending`) and `resume`'s move (`MoveToPending`, see
@@ -1940,8 +2008,9 @@ pane process; its other hooks are kept but record no session id.
 **Residuals (SR-18.12).** A nested `claude`'s and a teammate pane's hooks
 are ignored, so their work is not reflected in the row. A row whose
 create reply was lost takes no hook, and stays `pending`, until a verb
-adopts its pane by `@ad_pane` (SR-3.6; today `kill`, through
-`adoptIdentity`). Its SessionStart waits to the bound and, unless the
+adopts its pane by `@ad_pane` (SR-3.6: `kill` through `adoptIdentity`,
+and `find-missing`, once the row is past its pending grace period, through
+`adoptInSweep`). Its SessionStart waits to the bound and, unless the
 pane is adopted meanwhile, is ignored as `no_pane_recorded`, so after a
 later adoption an idle agent's row stays `pending` until the agent's
 next hook (the lost-reply residual). The SessionStart wait bounds the
@@ -2243,8 +2312,9 @@ This write is what lets the agent's hooks apply: `pane_pid` and
 A store error gives one `WARN:` line on the Client's logger and does not
 change the spawn's result. A reply lost with exit 0 (`CreateLostReply`) is
 a success with no identity written; that row takes no hook until its
-pane is adopted by `@ad_pane` (SR-3.6; today `kill` adopts, through
-`adoptIdentity`). A SessionStart that arrives before the identity write
+pane is adopted by `@ad_pane` (SR-3.6: `kill` adopts through
+`adoptIdentity`, and `find-missing`, once the row is past its pending grace
+period, through `adoptInSweep`). A SessionStart that arrives before the identity write
 waits for it until the launch start plus the pending grace period or
 540 s after it began waiting, whichever comes first (see [the hook
 gate](#hooks-move-a-row-only-for-its-own-agent)), so when this write
@@ -2420,14 +2490,26 @@ these builders and never re-spells their text.
   (`nameHeldRowEnded`, `nameHeldRowLeftChanged`, `nameHeldRowStillPending`,
   `nameHeldRowNotInserted`), the by-hand attach and end commands and
   their quoting (`shellQuote`). The label scan (`emitScanNameHeld`, a thin
-  wrapper) and the held-name path both call it.
+  wrapper) and the held-name path both call it. `find-missing`'s sweep
+  calls it too (`emitRowNameHeld` in `find_missing_lookup.go`, once per
+  mark attempt with tick reason `tmux_name_held`): source
+  `nameHeldSourceFindMissing` (`ad_find_missing`), no launch or outcome
+  (null), and row result `nameHeldRowMarkedMissing`,
+  `nameHeldRowLeftChanged` or `nameHeldRowStillPending` from the mark.
+- `heldHolderFacts(res)` (`held_name.go`) is the one derivation of the
+  holder facts (`heldNameHolder`) a record carries from a lookup `Result`:
+  identified only when exactly one session holds the name, its class only
+  when the verdict is not Can't tell. `heldNameOutcome` uses it for a
+  launch, and the sweep calls it directly on the row's lookup.
 
 **Must use:** any verb that handles "duplicate session" or a held name
 builds its error with `heldNameOutcome` and its record with
 `emitNameHeld`, adding its own row sentence and source, launch and
 row-result constants beside the existing ones; it never re-spells the
 case words, the row sentences, the retry sentences, the field set or
-the commands.
+the commands. Every `ad.launch.name_held` record, the sweep's included,
+is written by `emitNameHeld` with holder facts from `heldHolderFacts`;
+a sweep never builds the record or the holder facts another way.
 
 **Accepted risks of plain spawn.** A failed label step followed by a
 failed kill leaves an unlabelled session of agent-director's that may
@@ -3159,9 +3241,11 @@ outputs is structurally prevented.
 ### Per-Client logger (Pin H4)
 
 `serveHandlerWith` constructs a **separate** `*pkg/api.Client` for the MCP
-dispatcher, with `Options.Logger: nil`, so the verbs that still write WARN
-lines (Spawn, Resume, FindMissing, Expire) stay silent on the MCP path;
-those warnings are most useful to the interactive CLI operator, not a
+dispatcher, with `Options.Logger: nil`, so the verbs that still write log
+lines (Spawn, Resume and Expire with their WARN lines; FindMissing with
+one line per per-row store error and per transcript-heal error, the sweep
+continuing after each) stay silent on the MCP path; those lines are most
+useful to the interactive CLI operator, not a
 long-lived MCP client. `kill` has no logger path at all (SR-6.3): it
 writes no log line on any surface, its errors reach the MCP caller in the
 error envelope, and its audit is the `ad.kill.called` trail event. The
@@ -3651,10 +3735,15 @@ The AD code paths that satisfy this invariant:
   pair (decision set) or the loop times out and writes
   `decision='deny'`, `decision_reason='timeout'` to that specific row, then
   transitions state back to `working`.
-- **Process death**: the `find-missing` reconciler iterates all open rows
-  (`decision IS NULL`) for the dead Spawn via `OpenPermissionRequestsForSpawn`,
-  writes `decision='deny'`, `decision_reason='find_missing'` to each row, then
-  transitions state to `missing`.
+- **Process death**: the `find-missing` reconciler first marks the Spawn
+  `missing` (the guarded `MarkMissingIfSameLife`, then its tick; see the
+  pinned marking order in
+  [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)).
+  Only when that mark applied does `CloseOrphanedPermissionRequests` read
+  the open rows (`decision IS NULL`) through
+  `OpenPermissionRequestsForSpawn` and write `decision='deny'`,
+  `decision_reason='find_missing'` to each, which fail-closes the relay's
+  polling loop.
 
 Edge case: a panic inside `runRelay` AFTER
 `UpsertOpenPermissionRequest` but BEFORE the loop iterates can
@@ -3883,15 +3972,15 @@ are also emitted but are not listed here.
 | `ad.spawn.state_transition` | `ad_spawn_store` | One per applied hook write (`ApplyHookTransition`, `RecordSessionStartIdentity`), including same-state writes, soft-refresh ticks and the gated `working` hold; a hook the gate did not apply emits none. SessionStart on a resumed row records `prior_state` `pending`. Hook-driven writes are the only ones that emit it: a spawn's insert and `find-missing`'s mark never did, and `resume`'s move and restore do not (their own `ad.resume.*` events record them) (SR-A-2.2, SR-14) |
 | `ad.row_mutation.committed` | `ad_store` | One per successful write to `permission_requests` (SR-A-2.6, Epic 3) |
 | `ad.decide.called` | `ad_decide` | One per `agent-director decide` invocation on every return path, carrying an `outcome` field set to the canonical err_name (or `ok`). Recognized failure outcomes include the no-op refusals `ErrAlreadyDecided` and `ErrRelayFallenBack` (a fallen-back refusal is a recognized outcome, not `ErrInternal`) (SR-A-2.4, Epic 4) |
-| `ad.find_missing.tick` | `ad_find_missing` | One per row find-missing reconciles or flags: `reconciliation_reason=proc_absent` per row marked missing, `permission_orphan_closeout` per orphaned permission_requests row closed on that mark, and `probe_eacces` per live row that first transitions into the unverified (permission-walled) state — one tick per NULL→set transition only, never on a repeat sweep. There is no global-refusal tick (the old degraded-mode refusal is gone; unreadable rows are skipped and surfaced per-row). (SR-A-2.5, Epic 5; SR-7/SR-8) |
+| `ad.find_missing.tick` | `ad_find_missing` | Written by find-missing only for a guarded write that applied (see [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)); fail-open. Every tick carries `claude_instance_id`, `prior_state`, `new_state`, `reconciliation_reason` and `source`. **Mark ticks** (`markMissingSameLife`, `pkg/api/find_missing_writes.go`): exactly one per applied mark, `prior_state` the row's state before the mark and `new_state` `missing`, with `reconciliation_reason` one of `proc_absent` (the agent process, from the SessionStart identity or the pane identity, recorded or adopted, is gone; no extra field), `tmux_absent` (the lookup found no session of the row's current launch and no session holds the recorded name, or an Ours row that records no pane has no pane carrying its launch token; plus `lookup_outcome`, the lookup's outcome token: `gone`, `leftover` or `ours`) or `tmux_name_held` (as `tmux_absent`, but a session holds the recorded name; plus `lookup_outcome` and `tmux_session_name`, the recorded name). **Close-out ticks** (`CloseOrphanedPermissionRequests`, `internal/store/recovery.go`): one `permission_orphan_closeout` per open permission request denied after an applied mark, carrying `request_token`, `prior_state` and `new_state` null. **Note ticks** (`writeLivenessNote`): `prior_state` and `new_state` null, `reconciliation_reason` the note (`probe_eacces`, `process_not_seen_session_present`, `process_not_seen_tmux_unchecked`, `tmux_server_changed` or `provenance_conflict`), at most one per applied note write, and only when the row goes from no note to a note or enters `provenance_conflict` from no note or another note. No tick for a clear, for a note equal to the one the sweep read, for any other change of note, or for a write that found the row changed or absent or failed in the store (SR-11.4, SR-11.6, SR-14). A mark is the sweep's judgement on the evidence available to it, not proof that the agent has exited (SR-18.2). There is no global-refusal tick. (SR-A-2.5) |
 | `ad.relay_attempt.completed` | `relay_hook` | One per worker permission-relay attempt (SR-A-2.3, Epic 6) |
 | `ad.resume.observed` | `ad_polling` | One per hook-resume back to Claude Code (SR-A-2.7, Epic 7) |
 | `ad.resume.moved_to_pending` | `ad_resume` | Once per applied move to `pending` by the `resume` verb, emitted when the create that directly follows the move returns (no I/O may run between the move and the create, SR-8.3); fail-open. Carries `claude_instance_id`, `prior_state` (`ended` or `missing`) and `claude_session_id` (the session id the row keeps). A `resume` refused before or at its move emits none. Emitted in `pkg/api/resume.go`, so every surface gets it. Unrelated to `ad.resume.observed`, a permission relay's hook resume (SR-8.3, SR-14) |
 | `ad.resume.restored` | `ad_resume` | Once per restore attempt after a failed `resume` launch (a failure other than a timeout), applied or not; fail-open. Carries `claude_instance_id`, `applied` (boolean), `launch_error` (the err_name of the launch error `resume` returns) and `restore_error` (null, or the store error's text when the restore's write failed). Emitted in `pkg/api/resume.go`, so a failed restore behind the MCP server, whose client has no logger, is still recorded. Unrelated to `ad.resume.observed` (SR-8.5, SR-14) |
 | `ad.send_keys.called` | `ad_send_keys` | One per `agent-director send-keys` invocation on every return path (fail-open, mirroring `ad.decide.called`). Carries `outcome` (canonical err_name or `ok`), AD-collected `caller_*` identity, and a `guard_evaluation` field — `not-applicable` (relay guard did not apply), `held` (refused, relay could still act), or `released` (guard released, the audited recovery of a fallen-back relay) — so recovery sends are distinguishable from ordinary sends and refusals (SR-5.2) |
-| `ad.launch.name_held` | `ad_spawn` | Written by the one emitter `emitNameHeld` (`pkg/api/name_held_trail.go`), fail-open: a trail-write failure never changes the verb's result, error or description. Exactly one per plain-spawn label-scan refusal ("left over from an earlier life"), and exactly one per plain spawn whose create answered "duplicate session" (the held-name path); see [Launch identity](#launch-identity). Carries `source`, `claude_instance_id`, `launch` (`spawn`), `tmux_session_name` (the requested name; for the scan, the first leftover's), `tmux_socket`, `tmux_session_id` and `session_created` (the blocking session; for the scan, the leftover with the lowest `$N`), `store_id` (this store's `store_meta.store_id`, never a label's, for comparison with a label's last field), `carries_this_id` and `current_launch` (from the holder's label class only, never the environment: true and false for an old label; false and null for another id's, another store's or no valid label, another store's counting as not carrying the id even when it names it; both null when no single holder was identified or its class cannot be trusted), `lookup_outcome` (the lookup's outcome token), `outcome` (the returned error's name), `row_result` (`not_inserted` for the scan; `ended`, `left_changed` or `still_pending` after "duplicate session"), `store_error` (the end write's store error text, else null), the by-hand `attach_command` (`tmux -u -S '<socket>' attach-session -r -t '<$N>'`) and `end_command` (`tmux -u -S '<socket>' kill-session -t '<$N>'`), and the `caller_*` identity; `leftover_count` only on the scan's record. `tmux_session_id`, `session_created` and both commands are present whenever one blocking session was identified, a holder with no valid label included, and null otherwise (vanished, ambiguous, unreadable, tmux unavailable). The trail carries the two commands because humans read it; no error description carries them. Later sources and launch kinds (another launch's `launch` value, the sweep's null `launch` and `outcome`) add their constants beside the existing ones without changing the field set. Never a label value, the id a label names, another row's id or session-environment content (SR-9.3, SR-9.4, SR-14, SR-15) |
+| `ad.launch.name_held` | `ad_spawn`; `ad_find_missing` | Written by the one emitter `emitNameHeld` (`pkg/api/name_held_trail.go`), fail-open: a trail-write failure never changes the verb's result, error or description. Exactly one per plain-spawn label-scan refusal ("left over from an earlier life"), and exactly one per plain spawn whose create answered "duplicate session" (the held-name path); see [Launch identity](#launch-identity). Carries `source`, `claude_instance_id`, `launch` (`spawn`), `tmux_session_name` (the requested name; for the scan, the first leftover's), `tmux_socket`, `tmux_session_id` and `session_created` (the blocking session; for the scan, the leftover with the lowest `$N`), `store_id` (this store's `store_meta.store_id`, never a label's, for comparison with a label's last field), `carries_this_id` and `current_launch` (from the holder's label class only, never the environment: true and false for an old label; false and null for another id's, another store's or no valid label, another store's counting as not carrying the id even when it names it; both null when no single holder was identified or its class cannot be trusted), `lookup_outcome` (the lookup's outcome token), `outcome` (the returned error's name), `row_result` (`not_inserted` for the scan; `ended`, `left_changed` or `still_pending` after "duplicate session"), `store_error` (the end write's store error text, else null), the by-hand `attach_command` (`tmux -u -S '<socket>' attach-session -r -t '<$N>'`) and `end_command` (`tmux -u -S '<socket>' kill-session -t '<$N>'`), and the `caller_*` identity; `leftover_count` only on the scan's record. `tmux_session_id`, `session_created` and both commands are present whenever one blocking session was identified, a holder with no valid label included, and null otherwise (vanished, ambiguous, unreadable, tmux unavailable). The trail carries the two commands because humans read it; no error description carries them. Later sources and launch kinds (another launch's `launch` value, the sweep's null `launch` and `outcome`) add their constants beside the existing ones without changing the field set. **find-missing** (source `ad_find_missing`, `emitRowNameHeld` in `pkg/api/find_missing_lookup.go`) writes exactly one per row per sweep whose mark attempt had tick reason `tmux_name_held`, whatever the mark's outcome, with the same field set: `launch` and `outcome` null; `tmux_session_name` the row's recorded name; `tmux_socket` the socket the lookup used; `store_id` this store's, as for every source; the holder fields from the row's lookup (`heldHolderFacts`), so `carries_this_id` false and `current_launch` null when the holder is another store's session, and the holder fields null when more than one listing entry matches the name; `lookup_outcome` the lookup's token (`gone` or `leftover`); `row_result` `marked_missing` (the mark applied), `left_changed` (the row was changed or absent) or `still_pending` (the mark failed in the store, with `store_error`); no `leftover_count`. The sweep never touches the holding session (see [`find-missing`](#find-missing)). Never a label value, the id a label names, another row's id or session-environment content (SR-9.3, SR-9.4, SR-14, SR-15) |
 | `ad.kill.called` | `ad_kill` | Exactly one per call of the exported `Kill` (`pkg/api/kill.go`), on every return path, so `Client.Kill` and direct callers both get it; fail-open (a trail-write failure never changes the result). A call on a closed `Client` returns `ErrClientClosed` before `Kill` runs and emits nothing. Emitted by `killRun.emit` (`pkg/api/kill_trail.go`). Carries `claude_instance_id`; `tmux_session_name` (the recorded name, empty when there is no row); `outcome` (`ok` or the err_name the CLI would print, from `errorName`); `lookup_outcome` (the lookup's outcome token, or `not_run` when no lookup ran: unknown id, finished row, unusable recorded name, unusable socket directory); `followup_outcome` (the follow-up lookup's token, `not_run` when none ran); `kill_sent` (as in the result); `pane_killed` (whether a pane kill was sent); `process_check` (`gone`, `alive`, `unreadable` or `not_recorded` whenever a process check ran, on the Gone path or after a kill; after an expired wait `alive` when the agent still counted as running, else `gone` with survivors listed; `not_run` when none ran); `agent_pid` (the pid of the agent process that was checked, null when no check read one); `survivor_pids` (the pane processes of the labelled session still running when the wait ended, `[]` otherwise); `include_finished` (whether the operator-only finished-row opt-in was set); and the AD-collected `caller_process`, `caller_pid`, `caller_hostname`, `caller_user`. A human uses `agent_pid` and `survivor_pids` in the README's "Operator actions" procedure. Never session-environment content or another row's id (SR-6.4, SR-14, SR-15) |
-| `ad.provenance.disagree` | the verb that decided (`ad_kill`; `ad_spawn` for plain spawn's re-lookup after "duplicate session", reason `scope_value`) | Written only when a verb call meets a disagreement, never in the normal case: at most once per reason per verb call, or per reason per row per sweep; fail-open. Emitted through the shared `emitProvenanceDisagree` (`pkg/api/provenance_disagree.go`), which drops duplicates and unknown reasons. `reason` is one of six: `server_restarted`, `server_mismatch`, `adopted` (a lost create reply's identity adopted and written), `duplicate_label` (two sessions with the current label), `scope_value` (an `@ad_owner` value at the global, server or global-window scope) or `name_changed` (Ours found under a name other than the recorded one); `pid_mismatch` is retired. Also carries `claude_instance_id`, `verb`, `tmux_socket`, `tmux_session_name` (the recorded name), `tmux_session_id` (the session concerned, null when none), `current_session_name` (on `name_changed` only, null otherwise), `server` (`match`, `restarted`, `differs` or `unknown`), `verdict` (the lookup's outcome token), `action` (what the verb did; `kill` writes `kill_sent` or `nothing_sent`, plain spawn its held-name row result `ended`, `left_changed` or `still_pending`) and the `caller_*` identity. Never a label's content or another row's id (SR-14, SR-15) |
+| `ad.provenance.disagree` | the verb that decided (`ad_kill`; `ad_spawn` for plain spawn's re-lookup after "duplicate session", reason `scope_value`; `ad_find_missing`) | Written only when a verb call meets a disagreement, never in the normal case: at most once per reason per verb call, or per reason per row per sweep; fail-open. Emitted through the shared `emitProvenanceDisagree` (`pkg/api/provenance_disagree.go`), which drops duplicates and unknown reasons. `reason` is one of six: `server_restarted`, `server_mismatch`, `adopted` (a lost create reply's identity adopted and written), `duplicate_label` (two sessions with the current label), `scope_value` (an `@ad_owner` value at the global, server or global-window scope) or `name_changed` (Ours found under a name other than the recorded one); `pid_mismatch` is retired. Also carries `claude_instance_id`, `verb`, `tmux_socket`, `tmux_session_name` (the recorded name), `tmux_session_id` (the session concerned, null when none), `current_session_name` (on `name_changed` only, null otherwise), `server` (`match`, `restarted`, `differs` or `unknown`), `verdict` (the lookup's outcome token), `action` (what the verb did; `kill` writes `kill_sent` or `nothing_sent`, plain spawn its held-name row result `ended`, `left_changed` or `still_pending`) and the `caller_*` identity. **find-missing** (`verb` `find-missing`, written by `emitDisagree` in `pkg/api/find_missing.go` once the row's write has settled) writes one record per distinct reason per row per sweep, in the order above, and none for a row judged without a lookup or a row whose lookup was not called. Its reasons are the lookup's own, `name_changed`, `adopted` (only when the adoption write applied) and those of an adoption pane listing that did not answer; each record carries the fields of the observation that produced its reason. A lookup reason carries the lookup's `server` and `verdict` and the lookup's session as `tmux_session_id` (the Ours session; null when none), with that session's stored name as `current_session_name` on `name_changed`. A reason only the listing reported (`server_mismatch`, on a no-server reply while the recorded server process is not gone) carries the listing's `server` (`differs`), its `verdict` (`different_server`) and `tmux_session_id` null. A reason both reported is written once, with the lookup's fields. `tmux_socket` is the socket the lookup used; `action` is the row's outcome: `marked_missing`, `left_live`, `left_unverified`, `left_changed` (a guarded write, adoption included, found the row changed or absent) or `store_error`. Never a label's content or another row's id (SR-14, SR-15) |
 | `ad.trail_meta.emit_failed` | `ad_trail_meta` | Self-reporting envelope written when a primary emit fails — carries `original_event` and `error_class` (SR-A-3.2) |
 
 ### Sources
@@ -3904,7 +3993,7 @@ The `source` field identifies which emitter wrote the line:
 | `ad_spawn_store` | `internal/store/hook_writes.go` — the gated hook writes (`ad.spawn.state_transition`, and SessionStart's `ad.session.archived` / `ad.session.archive_failed`); `internal/store/session_history.go` — `ad.session.jsonl_healed` |
 | `ad_store` | `internal/store/permission.go` — permission-request row mutations |
 | `ad_decide` | `pkg/api/decide.go` and `cmd/agent-director/spawn_cmd.go` — decide verb |
-| `ad_find_missing` | `pkg/api/find_missing.go` and `internal/store/recovery.go` — reconciliation |
+| `ad_find_missing` | The find-missing sweep: `pkg/api/find_missing_writes.go` — the mark and note ticks (`markMissingSameLife`, `writeLivenessNote`); `internal/store/recovery.go` — the `permission_orphan_closeout` ticks (`CloseOrphanedPermissionRequests`); `pkg/api/find_missing_lookup.go` — the `ad.launch.name_held` record through `emitNameHeld` (`emitRowNameHeld`); `pkg/api/find_missing.go` — the `ad.provenance.disagree` records through `pkg/api/provenance_disagree.go` (`emitDisagree`) |
 | `relay_hook` | `internal/hook/permission.go` and `cmd/agent-director/trail_emit_cmd.go` — relay-attempt completion |
 | `ad_polling` | `internal/hook/permission.go` — resume observed on hook return |
 | `ad_send_keys` | `pkg/api/sendkeys.go` — send-keys verb (per-invocation, carries the relay-guard evaluation) |
@@ -4289,107 +4378,106 @@ is not surfaced as an API-visible field.
 Three verbs cooperate to keep the DB honest in the face of crashes,
 manual kills, and accumulated history: `find-missing` (reconcile),
 `expire` (age-out terminal rows), `delete` (admin force-removal).
-All three are designed to run on cron at different cadences.
+`find-missing` judges each live row by its agent process and consults
+tmux only for a row whose process cannot be checked. A row it marks
+`missing` is the sweep's judgement on the evidence available to it, not
+proof that the agent has exited. The verbs can be run by an operator's
+own scheduler at different cadences; agent-director installs no schedule
+(see [Cron user invariant](#cron-user-invariant)).
 
 ### Probe layer (`internal/probe`)
 
-The prober answers one question: *which `AGENT_DIRECTOR_INSTANCE_ID`
-values are currently observable in live process env blocks?* It is
-the ground truth `find-missing` diffs against the DB.
+`internal/probe` reads facts about one process, by pid. It holds two
+readers, each picked by build tag at compile time:
 
-Per-OS implementations are selected by build tags:
+- the [start-time reader](#start-time-reader-procchecker-starttimego)
+  (`ProcChecker`, `NewProcChecker()`): the one reader every process
+  judgement uses, `find-missing`'s liveness included. It answers alive
+  (with the start time), gone or unreadable.
+- the [command-name reader](#command-name-reader-commandnamereader-commnamego)
+  (`CommandNameReader`, `NewCommandNameReader()`): the hook's
+  `parent_command` trail field only, never evidence.
 
-- **Linux (`probe_linux.go`)** — walks `/proc/<pid>/environ` for every
-  numeric PID entry. The `environ` pseudo-file is the NUL-separated
-  `KEY=VAL` block the kernel exposes. Default permissions make it
-  owner-readable only — that's load-bearing: a `find-missing` run as
-  the wrong user simply can't read those env vars. Rows carrying a
-  concrete pid + starttime no longer depend on this probe set at all —
-  they get an individual, evidence-based verdict through the
-  `LivenessChecker` seam (see
-  [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)),
-  whose Linux impl resolves an `environ` permission wall to an UNKNOWN
-  verdict and skips just that row rather than misreporting it. Only the
-  partial-identity rows (NULL pid or NULL starttime) still fall back to
-  this probe set, and an unreadable `environ` there means the row is
-  left in place, never marked dead.
+Neither reader reads a process environment or the clock. The environment
+scan (which listed every process's `AGENT_DIRECTOR_INSTANCE_ID`) and the
+liveness checker that used an environment read as a tiebreaker have been
+removed. No verb reads a process environment, and an agent's
+`AGENT_DIRECTOR_INSTANCE_ID` (`probe.EnvKey`) is never liveness or
+ownership evidence: it only lets a caller running inside an agent name
+itself. `find-missing` judges a row by its agent process's start time
+through the start-time reader (see [`find-missing`](#find-missing)).
 
-- **macOS (`probe_darwin.go`)** — `sysctl("kern.proc.all")` returns
-  the kinfo_proc array; per PID, `sysctl("kern.procargs2", pid)`
-  returns the argv+env blob. The KERN_PROCARGS2 layout is
-  `uint32 argc` + null-terminated `exec_path` + `argv[0..argc-1]` +
-  `envp[0..]`. `envFromProcArgs2` skips past the argv section to
-  reach the env, then scans for the prefix.
+Files:
 
-  The kinfo_proc walker (`parse_kinfo.go`) carries a family of XNU-
-  version-sensitive constants. Two anchor the stride-based PID walk:
-  `kinfoProcSize` (sizeof struct kinfo_proc = 648) and
-  `kinfoProcPIDOffset` (byte offset of extern_proc.p_pid). Three more
-  pin the per-entry identity fields the probe extracts: `kinfoEprocPPIDOffset`
-  (byte offset of kp_eproc.e_ppid = `sizeof(extern_proc)=296` +
-  `offsetof(eproc, e_ppid)=264` = 560) and the start-time pair
-  `kinfoProcStartSecOffset`/`kinfoProcStartUsecOffset` (0 and 8 — the
+| File | Holds |
+|---|---|
+| `probe.go` | Package doc; `ErrProbeUnsupported`; `EnvKey`. |
+| `starttime.go`, `starttime_{linux,darwin,unsupported}.go`, `starttime_{linux,darwin}_core.go` | The start-time reader: the interface, `NewProcChecker()`, the per-OS wiring (`defaultProcRoot`; `fetchKinfoPID`) and the build-tag-free cores (`linuxStartTimeReader`, `darwinStartTimeReader`, `unsupportedProcChecker`). |
+| `commname.go`, `commname_{linux,darwin,unsupported}.go`, `commname_{linux,darwin}_core.go` | The command-name reader, laid out the same way. |
+| `parse_linux_stat.go` | `parseLinuxStatWithState` (field 3 state, field 4 ppid, field 22 start time, anchored on the last `)`) and `ErrLinuxStatMalformed`. |
+| `parse_kinfo.go` | The kinfo_proc constants and the per-entry extractors `parseKinfoStartTime`, `parseKinfoStat`, `parseKinfoComm` and `parseKinfoPPID`; `formatDarwinProcStartTime`; `ErrKinfoLayoutDrift`. |
+| `errno.go` | The errno classifiers `classifyLinuxErrno` / `classifyDarwinErrno` and their `procDisposition` values (see the table below). |
+
+**`ErrProbeUnsupported`.** No verb returns it: the removed environment
+scan was the only path that did. It stays in the error catalogue
+(`pkg/api/errnames`) and in `find-missing`'s `ErrorNames` so the
+catalogue and the client error classes stay unchanged (SR-1.7). An OS with
+no per-OS reader does not return it either: its readers answer unreadable
+for every pid.
+
+**macOS kinfo_proc layout.** On darwin both readers read the pid's single
+KERN_PROC_PID `kinfo_proc` entry (never KERN_PROCARGS2). `parse_kinfo.go`
+carries a family of XNU-version-sensitive constants:
+
+- `kinfoProcSize` (sizeof struct kinfo_proc = 648): every extractor
+  refuses an entry that does not fit (`entryOffset`), a short entry
+  included.
+- `kinfoProcPIDOffset` (40, extern_proc.p_pid): read by no extractor; it
+  anchors the `p_stat` and `p_comm` derivations.
+- `kinfoProcStartSecOffset` / `kinfoProcStartUsecOffset` (0 and 8): the
   `kp_proc.p_starttime` timeval aliases the head of extern_proc's leading
-  `p_un` union, so `tv_sec` sits at the very start of the entry and `tv_usec`
-  8 bytes in). A sixth, `kinfoProcStatOffset` (36), pins the process state
-  `extern_proc.p_stat` (a char) that the start-time reader uses to recognise a
-  zombie: `p_un` (16) + `p_vmspace` (8) + `p_sigacts` (8) + `p_flag` (4) = 36,
-  from `<bsd/sys/proc.h>`, just before `p_pid` at 40 (3 bytes of padding align
-  the pid). Its known values are `kinfoStatSIDL` (1) through `kinfoStatSZOMB`
-  (5, a zombie); `parseKinfoStat` treats any value outside that range as
-  drift. All six are pinned to XNU 11.x (macOS 14 / 15) off the same
-  LP64 header basis and are NOT a kernel ABI guarantee — a future macOS major
-  bump that resizes the struct will silently drift both the stride-based
-  walker and the identity offsets.
+  `p_un` union, so `tv_sec` sits at the very start of the entry and
+  `tv_usec` 8 bytes in. They feed the start-time reader
+  (`parseKinfoStartTime`).
+- `kinfoProcStatOffset` (36, `extern_proc.p_stat`, a char): `p_un` (16) +
+  `p_vmspace` (8) + `p_sigacts` (8) + `p_flag` (4) = 36, from
+  `<bsd/sys/proc.h>`, just before `p_pid` at 40 (3 bytes of padding align
+  the pid). The start-time reader uses it to recognise a zombie. Its known
+  values are `kinfoStatSIDL` (1) through `kinfoStatSZOMB` (5, a zombie);
+  `parseKinfoStat` treats any value outside that range as drift.
+- `kinfoProcCommOffset` (243) and `kinfoProcCommLen` (17,
+  `extern_proc.p_comm`): feed the command-name reader (`parseKinfoComm`).
+- `kinfoEprocPPIDOffset` (kp_eproc.e_ppid = `sizeof(extern_proc)=296` +
+  `offsetof(eproc, e_ppid)=264` = 560): feeds only `parseKinfoPPID`, whose
+  plausibility bound is `maxPlausiblePID` (4 194 304). `parseKinfoPPID`
+  has had no production caller since the ancestry resolver was retired;
+  only its tests call it.
 
-  Two independent guards catch that drift, and they carry *opposite*
-  fail-semantics on purpose. The whole-buffer PID walker fails **closed**:
-  if more than 10% of decoded PIDs fall outside `[1, 4_194_304]`,
-  `parsePIDsFromSysctlBuf` returns `ErrProbeUnsupported` and `find-missing`
-  refuses to emit a garbage probe set. The per-entry identity extractors
-  (`parseKinfoPPID`, `parseKinfoStartTime`, `parseKinfoStat`,
-  `parseKinfoComm`) fail **open**: when an entry's
-  bytes fail their field plausibility guards they return the distinct
-  `ErrKinfoLayoutDrift` sentinel, which deliberately does NOT wrap
-  `ErrProbeUnsupported` — drift here maps to an unreadable answer (a hook
-  whose parent start time is unreadable is ignored, never applied; a
-  command name reads as none) rather than a hard failure. `parseKinfoPPID`
-  has had no production caller since the ancestry resolver was retired.
-  Keeping the sentinels separate stops `errors.Is(err, ErrProbeUnsupported)`
-  from also matching identity drift and re-importing fail-closed semantics.
+All are pinned to XNU 11.x (macOS 14 / 15) off the same LP64 header basis
+and are NOT a kernel ABI guarantee: a future macOS major that resizes the
+struct silently drifts them. Each extractor checks its fields against a
+plausibility guard and, when an entry fails, returns `ErrKinfoLayoutDrift`,
+a distinct sentinel that wraps nothing. Drift fails **open**: the
+start-time reader answers unreadable (never gone) and the command-name
+reader answers none, so a hook whose parent start time is unreadable is
+ignored, never applied.
 
-  **macOS-major bump policy.** When supporting a new macOS major:
-  compile the matching XNU sources (Apple publishes them at
-  `apple-oss-distributions/xnu`), re-derive `kinfoProcSize` +
-  `kinfoProcPIDOffset` **and** the identity offsets
-  `kinfoEprocPPIDOffset` / `kinfoProcStartSecOffset` /
-  `kinfoProcStartUsecOffset` / `kinfoProcStatOffset` /
-  `kinfoProcCommOffset` + `kinfoProcCommLen` (and the
-  `kinfoStatSIDL`..`kinfoStatSZOMB` values) from `<bsd/sys/proc.h>` +
-  `<bsd/sys/sysctl.h>`, refresh the constant comments in `parse_kinfo.go`,
-  and re-run `GOOS=darwin GOARCH=arm64 go build ./...` plus the prober's
-  integration test under that macOS version. The plausibility guards are
-  a safety net, not a substitute for the bump. The same
-  `kinfoProcStartSecOffset`/`kinfoProcStartUsecOffset` pair now also feeds
-  the per-row liveness checker's starttime comparison (`checker_darwin_core.go`
-  parses the LIVE pid's `p_starttime` via `parseKinfoStartTime` and compares
-  it to the stored `proc_starttime`), so a bump that drifts those offsets
-  affects the checker as well as the probe. That path is fail-open by the
-  same rule: a `parseKinfoStartTime` layout-drift (`ErrKinfoLayoutDrift`)
-  or any unpinned sysctl errno classifies to UNKNOWN, never provably-dead.
-  The start-time reader (below) depends on the same pair plus
-  `kinfoProcStatOffset`: it reads the start time and the process state from
-  the single per-pid KERN_PROC_PID entry, and drift in either
-  (`ErrKinfoLayoutDrift`, a short entry included) gives unreadable, never
-  gone. A bump that drifts any of those three offsets therefore affects the
-  start-time reader too.
-
-- **Other** — the fallback returns `ErrProbeUnsupported` so
-  `find-missing` fails closed rather than silently treating "no
-  per-OS impl" as "no live processes".
-
-Permission-denied / process-gone errors mid-walk are skipped silently;
-a single foreign-owned process can't poison the whole probe.
+**macOS-major bump policy.** When supporting a new macOS major: compile
+the matching XNU sources (Apple publishes them at
+`apple-oss-distributions/xnu`), re-derive `kinfoProcSize` +
+`kinfoProcPIDOffset` **and** the entry offsets
+`kinfoEprocPPIDOffset` / `kinfoProcStartSecOffset` /
+`kinfoProcStartUsecOffset` / `kinfoProcStatOffset` /
+`kinfoProcCommOffset` + `kinfoProcCommLen` (and the
+`kinfoStatSIDL`..`kinfoStatSZOMB` values) from `<bsd/sys/proc.h>` +
+`<bsd/sys/sysctl.h>`, refresh the constant comments in `parse_kinfo.go`,
+and re-run `GOOS=darwin GOARCH=arm64 go build ./...` plus
+`go test ./internal/probe/...` under that macOS version (the CI
+`macos-probe` job; `starttime_darwin_test.go` drives the real
+KERN_PROC_PID sysctl). A drift in the start-time or state offsets changes
+every process judgement's answers on darwin (to unreadable); a drift in
+the command-name offsets empties `parent_command`. The plausibility guards
+are a safety net, not a substitute for the bump.
 
 #### Start-time reader (`ProcChecker`, `starttime.go`)
 
@@ -4405,11 +4493,11 @@ expire's `process_alive` (SR-12.2); and resume's and reuse's check of a
 running agent process (SR-4.2). Its callers so far: the `pkg/api` Client
 builds one in `New` and passes it to `spawn.Launch` and resume's
 `spawn.RecordLaunchIdentity` for the identity write's start times, to
-the label scan's lookup, and to `Kill` (its lookup, adoption and process
-wait); and `cmd/agent-director` wires one into the hook
+the label scan's lookup, to `Kill` (its lookup, adoption and process
+wait) and to `FindMissing` (each row's process judgement, its lookups and
+adoption); and `cmd/agent-director` wires one into the hook
 handler (`hook.HandleConfig.ParentProc`, beside the command-name reader)
 to read the hook parent's start time for the gate.
-`find-missing` still uses `LivenessChecker` / `NewChecker()` unchanged.
 The [shared tmux lookup](#shared-tmux-lookup) declares its own
 `tmux.ProcChecker` with the same method, which `NewProcChecker()` satisfies
 structurally, so `internal/tmux` never imports this package. In-process
@@ -4452,10 +4540,30 @@ never reads a process environment and never reads the clock.
   hide a non-dumpable process of the same user. The agent, its pane and the
   tmux server run as the caller's own user, so they stay visible.
 - **darwin** — `darwinStartTimeReader` fetches the single KERN_PROC_PID
-  entry (the fetch today's checker uses; no KERN_PROCARGS2) and parses both
+  entry (`fetchKinfoPID`; no KERN_PROCARGS2) and parses both
   `parseKinfoStat` and `parseKinfoStartTime` before the zombie check. ESRCH
   or an empty buffer is gone; any other errno or layout drift is unreadable.
 - **Other** — `unsupportedProcChecker` answers unreadable for every pid.
+
+**Errno classification (SR-7.4): unreadable, never gone.** Only positive,
+pinned evidence yields gone; any unexpected errno, malformed entry or
+layout drift reads unreadable. A failed read is classified by the pure
+functions `classifyLinuxErrno` / `classifyDarwinErrno` (`errno.go`), so
+the tables are unit-testable off any OS (`errno_test.go`):
+
+| Evidence | Linux (`<procRoot>/<pid>/stat`) | darwin (KERN_PROC_PID) | Answer |
+| --- | --- | --- | --- |
+| Entry absent | ENOENT/ESRCH, with `<procRoot>/self` resolving | ESRCH, or an empty result | gone |
+| Entry absent, procfs not mounted or root unreadable | ENOENT/ESRCH, `<procRoot>/self` not resolving | — | unreadable |
+| Zombie | state `Z` or `X` | `p_stat == SZOMB` | gone |
+| Entry read, not a zombie | stat parses | `p_stat` and `p_starttime` pass their guards | alive, with the start time |
+| Permission wall | EACCES/EPERM | EACCES/EPERM | unreadable |
+| Anything else | any other errno; `ErrLinuxStatMalformed` | any other errno; `ErrKinfoLayoutDrift` (a short entry included) | unreadable |
+
+A different start time is not an answer of the reader: the caller compares
+the alive answer's start time with its recorded one, and a mismatch means
+the pid was reused. The reader never returns an error; every failure folds
+into unreadable.
 
 The Linux and darwin cores and `unsupportedProcChecker` are build-tag-free,
 so tests drive them on any OS through their seams: `procRoot` (a temp
@@ -4488,127 +4596,141 @@ ancestry walk to identify a hook's agent.
 
 ### Degraded-mode reconciliation + cron user
 
-**There is no global degraded-mode refusal.** The old guard — "probe
-returned zero IDs while the DB holds ≥1 live row → write nothing, log a
-warning" — has been removed (SR-7/SR-8). It over-refused: after a full
-reboot the probe set is legitimately empty even though every recorded row
-is genuinely dead, and a single unreadable process used to block the whole
-sweep. `find-missing` now reconciles **per row on evidence**, and an
-unreadable row is skipped and surfaced as unverified rather than blocking
-anything.
+**There is no global degraded-mode refusal.** The old guard ("the probe
+returned no ids while the store holds a live row: write nothing") has been
+removed (SR-7, SR-8). It over-refused, and a single unreadable process
+blocked the whole sweep. `find-missing` now reconciles **each row on its
+own evidence**: a row it cannot decide is left live and surfaced as
+unverified, and never blocks another row.
 
-**Per-row evidence model.** `find-missing` lists every live-state identity
-(`ListLiveSpawnIdentities` — each row's `claude_instance_id`, state and
-launch start plus its recorded `pid` + `proc_starttime`). It first leaves
-out every `pending` row still inside the pending grace period, measured
-from its launch start: such a row is not judged and appears in neither
-result list (see [`find-missing`](#find-missing), step 2). It partitions
-the remaining rows on identity completeness:
+**Per-row evidence model (SR-11.1, SR-11.3).** A live row's liveness comes
+only from its agent process, read by the
+[start-time reader](#start-time-reader-procchecker-starttimego). The agent
+process is picked by `tmux.SelectAgentProcess` from the row's SessionStart
+identity (`pid`, `proc_starttime`) and its recorded pane identity
+(`pane_pid`, `pane_starttime`): the one recorded, or the pane identity when
+both are recorded and disagree (see
+[Agent-process selection and judgement](#agent-process-selection-and-judgement-agent_processgo);
+a disagreement writes no record). `tmux.JudgeProcess` then gives one of four
+answers:
 
-- **Full identity (pid AND starttime recorded)** — the row gets an
-  evidence-based verdict from the `LivenessChecker` seam
-  (`internal/probe`, `NewChecker()`), which returns one of three verdicts:
-  - *provably-dead* → mark missing (see the pinned marking order below).
-  - *verified-alive* → skip and clear any stale liveness fields.
-  - *unknown* → skip THIS ROW ONLY, set the liveness metadata, and record
-    the id as unverified.
-- **Partial/absent identity (NULL pid OR NULL starttime)** — the row falls
-  back to the environ **probe-set diff**: a live id absent from
-  `probe.Probe()`'s set is marked missing. This is the sole remaining
-  consumer of the environ prober. There is **no per-row skip here** — a
-  partial-identity row carries no pid/starttime evidence to fall back on, so
-  absence from the probe set is the *only* signal, and any such row not in the
-  set IS marked missing. That includes the case where the invoking user can't
-  read the target processes' environ (a wrong-user or empty-probe run): every
-  partial/NULL-identity live row is then absent from the set and gets marked.
-  This is the intended post-reboot behavior (the probe set is legitimately
-  empty and those rows are genuinely dead) — and precisely why same-user
-  scheduling matters (see the cron user story).
+| Process evidence (`ProcState`) | Outcome |
+| --- | --- |
+| Alive with its recorded start time (`ProcAlive`) | The row stays live whatever tmux shows. A liveness note it carries is cleared; a row with no note is not written. No tmux call. |
+| Gone: absent, a zombie, or alive with another start time (`ProcGone`) | Marked `missing` with tick reason `proc_absent`, whatever tmux shows, with no tmux call. A pane kept by `remain-on-exit` or a respawned pane never keeps the row live. |
+| Unknown: unreadable, or a pid-only identity that reads alive (`ProcUnknown`) | Decided by the tmux lookup of the row's socket (see [`find-missing`](#find-missing), "The tmux path"). A pid-only identity that reads gone is marked like any gone process. |
+| Absent: no process identity recorded (`ProcNone`) | Decided by the tmux lookup, as unknown. |
 
-**Pinned per-OS errno mapping (SR-7.4) — the cardinal rule is
-UNKNOWN-never-dead.** Only positive, pinned evidence yields provably-dead;
-ANY unexpected errno or parse/layout-drift failure resolves to UNKNOWN.
-The tables live inside the per-OS checker impls
-(`checker_linux_core.go`, `checker_darwin_core.go`), expressed as pure
-`classify{Linux,Darwin}Errno` functions so the tables are unit-testable
-off any OS:
+No process environment is read. A child process of the agent, or any other
+process that carries the row's `AGENT_DIRECTOR_INSTANCE_ID`, never keeps a
+row live, and a live agent whose environment lacks the id is not marked.
 
-| Evidence | Linux (`/proc`) | macOS (sysctl) | Verdict |
-| --- | --- | --- | --- |
-| Process-table entry absent | `stat` ENOENT/ESRCH | KERN_PROC_PID ESRCH / empty | provably-dead |
-| Recorded starttime ≠ live starttime (pid reuse) | stat field 22 mismatch | `p_starttime` mismatch | provably-dead |
-| Can't read the process-table entry | `stat` EACCES/EPERM | KERN_PROC_PID EACCES/EPERM | unknown |
-| starttime matches, env readable but LACKING the instance id | environ scan | PROCARGS2 env scan | provably-dead (tiebreaker) |
-| starttime matches, env unreadable (permission wall) | environ EACCES/EPERM | PROCARGS2 EACCES/EPERM | **verified-alive** |
-| starttime matches, env readable and HAS the instance id | environ scan | PROCARGS2 env scan | verified-alive |
-| Any other errno, malformed stat, or `ErrKinfoLayoutDrift` | — | — | **unknown (never dead)** |
+**Errno mapping (SR-7.4).** A process read that fails for any reason other
+than a proven-absent entry reads unreadable, never gone; the per-OS table
+is in the [start-time reader](#start-time-reader-procchecker-starttimego)
+section.
 
-The env-permission-wall row is the load-bearing case: pid + starttime
-already proved the tracked process is running, so an unreadable env is
-*verified-alive*, not unknown — we simply couldn't run the id tiebreaker.
-The checker never returns an error; every failure mode folds into UNKNOWN
-per the fail-open contract.
+**Liveness notes and ticks (SR-11.4).** Unknown liveness is row metadata,
+never a lifecycle state: the `state` enum is untouched. Two nullable columns
+carry it and `list` and `get` show them: `liveness_note` (why the row is
+unverified) and `liveness_unverified_since` (when it first became
+unverified). The notes in use are:
 
-**Liveness metadata fields + unverified surfacing.** Unknown liveness is
-row metadata, never a lifecycle state — the `state` enum is untouched. Two
-nullable columns carry it: `liveness_unverified_since` (set on the FIRST
-EACCES sweep, preserved verbatim on repeats) and `liveness_note` (e.g.
-`probe_eacces`). `SetLivenessUnverified` writes both in one guarded UPDATE
-that fires only when `liveness_unverified_since` is currently NULL; its
-returned bool is the sole NULL→set signal. The fields are cleared when the
-row is later verified-alive, immediately after it is marked missing, and on
-every hook row-UPDATE path. `FindMissingResult` carries `unverified`
-(count) and `unverified_ids` (sorted, `[]` never null) alongside
-`count`/`ids`, and the `list`/`get` verbs expose the two liveness fields as
-additive nullable fields, so an operator sees exactly which rows were
-skipped for lack of evidence.
+| Note | Written when |
+| --- | --- |
+| `probe_eacces` | The process evidence is unknown and the lookup is Ours, unreadable, tmux unavailable or not called; also a row judged unknown by the pane its adoption found. |
+| `process_not_seen_session_present` | No process evidence is recorded and the lookup is Ours, unless the adoption listing decided otherwise (see "Adoption of a lost reply" under [`find-missing`](#find-missing)). |
+| `process_not_seen_tmux_unchecked` | No process evidence is recorded and the lookup is unreadable, tmux unavailable or not called. |
+| `tmux_server_changed` | The lookup is Can't tell, a different server. |
+| `provenance_conflict` | The lookup is Can't tell: two sessions carry the current label, or a scope value is set. |
 
-**Marking order.** A provably-dead (or fallback-absent) row is reconciled
-in a pinned sequence: `MarkSpawnMissing` (the unchanged primitive; returns
-the prior state so a no-op on an absent/terminal row writes nothing
-downstream) → `ClearLivenessUnverified` → one `ad.find_missing.tick`
-(`reconciliation_reason=proc_absent`) → `CloseOrphanedPermissionRequests`
-(which fail-closes any relay polling loop and emits its own
-`permission_orphan_closeout` tick per closed row). The unverified path
-emits exactly one `ad.find_missing.tick` (`reconciliation_reason=probe_eacces`)
-per NULL→set transition and nothing on repeats. Per-row store/checker
-errors are logged and skipped; the sweep never aborts on one bad row, and a
-trail-emit failure never changes the sweep's return.
+The rules, applied by the note writer `writeLivenessNote`
+(`pkg/api/find_missing_writes.go`):
 
-**Cron user story.** `find-missing` still assumes it runs as the user that
-owns the Spawns (or as root), and a user mismatch no longer *corrupts or
-refuses* — but the two identity classes react to a mismatch very
-differently, which is exactly why the run-as-owner rule still matters.
-Full-identity rows (pid + starttime recorded) the invoking user can't read
-hit the env permission wall and are surfaced as **unverified**
-(verified-alive if pid + starttime matched, unknown otherwise) — never
-silently marked missing; the per-row skip protects them. Partial/NULL-identity
-rows have **no per-row evidence** to skip on, so their sole signal is the
-environ probe-set diff — and a wrong-user (or otherwise empty) probe set
-leaves every one of them absent from the set, so they **are marked missing**.
-That is correct after a real reboot (the probe set is legitimately empty and
-those rows are dead), but under a mere user mismatch it would wrongly mark
-still-live partial-identity Spawns. The recommended operator setup is
-therefore load-bearing, not cosmetic: a **systemd user-timer or a personal
-crontab** — not a system-level cron — so the userland identity matches the
-Spawn-launching identity, full-identity rows get real verdicts instead of a
-wall of unverified metadata, and partial-identity rows are diffed against a
-probe set that can actually see them.
+- The latest reason overwrites the note; `liveness_unverified_since` keeps
+  its first time.
+- A note equal to the one the sweep read writes nothing (no version change,
+  no tick); the row is still reported unverified.
+- A note write that applied ticks (`ad.find_missing.tick`, `prior_state`
+  and `new_state` null) only when the row goes from no note to a note (the
+  tick's `reconciliation_reason` is that note), or enters
+  `provenance_conflict` from no note or from another note. Any other change
+  of note ticks nothing.
+- A row whose process is alive has its note cleared (`clearLivenessNote`),
+  with no tick; a row with no note is not written, so an alive row's
+  version does not advance on every sweep.
+- A mark clears both columns in the same write (below), and every hook
+  row-update path clears them too.
+
+**The same-life guard (SR-11.6).** Every write the sweep makes to a row is
+one statement guarded on a live state and the row snapshot the sweep read
+(or the one its adoption write produced): the mark
+(`MarkMissingIfSameLife`), the note write (`SetLivenessNoteIfSameLife`), the
+clear (`ClearLivenessIfSameLife`) and the adoption
+(`AdoptIdentityIfSameLife`). A write that finds the row changed (a hook, a
+relaunch, a reuse or a verb moved it after the read) or absent (deleted), or
+that fails in the store, applies nothing: no tick, no permission-request
+denial, and the row is in neither result list. A store error is logged on
+the Client's logger and the sweep goes on (SR-5.8). A row gets at most one
+guarded verdict write per sweep (mark, note or clear), plus the adoption
+write before it.
+
+**Marking order (pinned).** A row is marked in this order, by
+`markMissingSameLife`:
+
+1. The guarded mark `MarkMissingIfSameLife`: `state` `missing`, `ended_at`
+   and `last_seen_at` set, the liveness clear and the launch-start clear
+   (`launch_started_at` NULL) folded into the same statement, `row_version`
+   advanced by one.
+2. Only when it applied, exactly one `ad.find_missing.tick` with
+   `prior_state`, `new_state` `missing`, the mark's `reconciliation_reason`
+   and source `ad_find_missing` (plus `lookup_outcome`, and
+   `tmux_session_name` for `tmux_name_held`, on a mark the lookup decided).
+3. Then `CloseOrphanedPermissionRequests`, which fail-closes any relay
+   polling loop for the row and writes its own `permission_orphan_closeout`
+   tick per closed request. Its error is logged and the row still counts as
+   marked.
+
+Trail writes are fail-open: a failed one never changes the sweep's result.
+
+**`missing` is a judgement, not proof.** A row marked `missing` is the
+sweep's judgement on the evidence available to it, not proof that the agent
+has exited. Neither `ended` nor `missing` means that the agent is dead or
+that its row is safe to delete (SR-18.2).
+
+**Cron user story (SR-18.7).** `find-missing` must run as the agents' user,
+in their tmux environment (the same `TMUX` / `TMUX_TMPDIR`, so a row that
+records no socket is looked up on the agents' server). A run as another
+user, as root or against another tmux server can mark live rows `missing`:
+their processes may read unreadable, and the lookup then asks the wrong
+server, which answers that the row's session is Gone. The recommended
+operator setup is a **systemd user timer or a personal crontab** of the
+agents' user, not a system-level cron; agent-director installs no schedule
+itself.
 
 ### `find-missing`
 
-`pkg/api/find_missing.go`:
+`pkg/api/find_missing.go` (the verb), `find_missing_lookup.go` (the tmux
+path), `find_missing_writes.go` (the per-row writers), `sweep_socket.go`
+(the no-socket rule) and `agent_pane.go` (`adoptInSweep`, the adoption
+step). The evidence model, notes, guard and marking order are in
+[Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user).
 
 1. `ListLiveSpawnIdentities` returns every row where `state NOT IN (ended,
    missing)`, `pending` included, each carrying its state, its launch start
    (`launch_started_at` in milliseconds, read through
-   `decodeLaunchStartedAt`) and its recorded `pid` + `proc_starttime`. The
-   sweep reads its injected clock once, after the list.
+   `decodeLaunchStartedAt`), its recorded session name, liveness note, row
+   snapshot, recorded `pid` + `proc_starttime` and launch identity (token,
+   socket, server and pane identity). No stored value fails the read; a list
+   error is the sweep's only error. The rows are judged in instance-id
+   order, so the per-socket stop and the budget's cut-off fall on the same
+   rows on every run. The sweep reads its injected clock once, after the
+   list.
 2. A `pending` row inside the pending grace period is not judged at all
    (SR-11.2; `store.InsidePendingGrace`). Its age is the sweep's clock minus
    its launch start, and it is inside while that age is below the setting;
    a launch start in the future counts as inside. The row gets no liveness
-   check, no probe entry, no mark, no liveness-note write or clear, no
+   check, no start-time read, no mark, no liveness-note write or clear, no
    `ad.find_missing.tick`, no permission close-out and no tmux call, and it
    is in neither `ids` nor `unverified_ids`. The rule is the same for a
    fresh spawn's, a reuse's and a `resume`'s launch: `started_at` (for a
@@ -4637,26 +4759,141 @@ probe set that can actually see them.
    does not lengthen a SessionStart's wait past 540 s: that wait ends at
    its cap, on the monotonic clock, or earlier (the hook gate's
    residuals).
-3. Rows are partitioned by identity completeness (see
-   [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)).
-4. Full-identity rows get a per-row `LivenessChecker` verdict:
-   provably-dead → mark missing; verified-alive → clear stale liveness
-   fields; unknown → skip that row only, set `liveness_unverified_since` +
-   `liveness_note`, and record the id in `unverified_ids`. There is no
-   global refusal — an unreadable row is surfaced, not a blocker.
-5. Partial-identity rows fall back to `probe.Probe()`'s set: a live id
-   absent from the set is marked missing. The prober runs only when at
-   least one row reaches this step.
-6. Each marked row runs the pinned marking order (`MarkSpawnMissing` →
-   `ClearLivenessUnverified` → `proc_absent` tick →
-   `CloseOrphanedPermissionRequests`). Per-row failures (e.g. transient
-   SQLite I/O error) are logged and the sweep continues — one bad row does
-   not abort the others.
+3. Every other row is judged by its agent process (`judgeLiveRow`; the
+   evidence model in
+   [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)):
+   alive clears any note, gone marks it `proc_absent`, and neither makes a
+   tmux call.
+4. A row whose process evidence is unknown or absent is decided by its
+   socket's lookup (`lookupRow`, below).
+5. Each outcome is written through the guarded per-row writers
+   (`markMissingSameLife`, `writeLivenessNote`, `clearLivenessNote`) in the
+   pinned marking order. Once the row's write has settled, its
+   `ad.provenance.disagree` records are written (`emitDisagree`): one per
+   distinct reason per row per sweep, from the lookup's reasons,
+   `name_changed`, `adopted` (only when the adoption write applied) and a
+   failed adoption listing's reasons, each carrying the server and verdict
+   of the observation that produced it.
+6. Provisional transcripts are healed (`healProvisionalTranscripts`, b.v2c
+   AC3): each live row with a session id and no `jsonl_path` has its path
+   recomposed and recorded once the file exists. Per-row errors are logged
+   and skipped.
 
-The verb does NOT touch tmux. A row marked `missing` may still have
-an orphaned tmux session if (somehow) the env-var check misfired
-without the tmux process exiting. Ending such a session is a human's job,
-by the procedure in the README's "Operator actions" section.
+**The tmux path (SR-11.3, SR-3.15).** Only rows whose process evidence is
+unknown or absent reach tmux. The run holds one `tmux.Sweep` (see
+[Sweep](#sweep-sweepgo)): one lookup per socket per run, taken by the first
+row that needs it and shared by every later row of that socket, each row
+judged against its own launch (`findMissingLaunch`: instance id, token,
+recorded server identity, this store's `store_id`, socket) and holding its
+recorded session name as the holder name.
+
+- **Which socket.** A row's recorded `tmux_socket`, exactly as recorded; the
+  caller's environment is not consulted. A row that records none (from
+  before the release) uses the caller's socket through the shared no-socket
+  helper `sweepSockets.forRow` (`pkg/api/sweep_socket.go`), which resolves
+  it through `rowSocket` / `spawn.ResolveQuerySocket` at most once per run,
+  only when such a row reaches the lookup, and creates nothing. A missing
+  per-user directory is no refusal: the lookup at its would-be socket reads
+  tmux's no-socket reply (Gone). An unusable one means no tmux call for
+  those rows: the first gets tmux unavailable, every later one not called.
+- **Outcomes** (the verdicts and tokens are the
+  [shared tmux lookup](#shared-tmux-lookup)'s):
+
+| Lookup outcome | Row outcome |
+| --- | --- |
+| Ours (the row's own labelled session) | Adoption first (below). Then unverified: `probe_eacces` for unknown evidence, `process_not_seen_session_present` for none, except that a row that records no pane is decided by the adoption listing. |
+| Leftover (only sessions of earlier lives) or Gone (no session of this row's current launch) | Marked `missing`, whatever holds the recorded name: tick reason `tmux_name_held` with `lookup_outcome` and `tmux_session_name` when a session holds that name (one holder, or more than one listing entry matching it), else `tmux_absent` with `lookup_outcome`. |
+| Can't tell, a different server | Unverified, `tmux_server_changed`. The socket is not stopped. |
+| Can't tell, `provenance_conflict` (two sessions with the current label, or a scope value) | Unverified, `provenance_conflict`. The socket is not stopped. |
+| Can't tell, unreadable, or tmux unavailable | Unverified, `probe_eacces` (unknown evidence) or `process_not_seen_tmux_unchecked` (none); no more calls on that socket this run. |
+| Not called (`not_run`: the socket stopped, the budget is spent, or the no-socket resolution refused earlier) | The same notes as unreadable. |
+
+**The Gone rule.** A row is marked on Gone or Leftover whatever holds its
+name, and never while its own labelled session (the current label) exists.
+A session whose valid label carries another store's id (the label's last
+field is not this store's `store_id`; see the session label under
+[Launch identity](#launch-identity) and the label classes under
+[Shared tmux lookup](#shared-tmux-lookup)) counts toward Gone for the row,
+even when it names this row's id and token, and the sweep never touches it
+(WD 2026-09-29 STORE).
+
+**Adoption of a lost reply (SR-3.6, SR-11.6; LFR H2).** On an Ours lookup
+for a row that records no server identity or no pane, the adoption step
+(`adoptInSweep`, built on the shared rules in `findAdoption`) runs before
+the row is judged. A row that records no pane takes its socket's pane
+listing through the Sweep (at most one per socket per run, under the stop
+rule and the budget) and looks for the one pane whose `@ad_pane` carries
+its launch token (`tmux.PaneByToken`). When the identity found adds
+something, one `AdoptIdentityIfSameLife` write, guarded on the snapshot the
+sweep read, records it; the snapshot it returns guards the row's verdict
+write. An adoption write that finds the row changed or absent, or fails in
+the store, ends the row: no verdict write, no tick, neither list. A listing
+that did not answer (skipped, failed, or over the budget) adopts nothing,
+not even the server identity. For a row with no process evidence that
+records no pane (a lost create reply), the listing decides:
+
+- exactly one pane carries the token: that pane is adopted and the row is
+  judged by its process (alive clears, gone marks `proc_absent`, unknown
+  notes `probe_eacces`);
+- no pane carries it: the row counts as Gone and is marked `tmux_absent`,
+  with `lookup_outcome` the lookup's own token (`ours`) and no held-name
+  record, although its own session holds the name;
+- the listing did not answer, or two panes carry the token: unverified,
+  `process_not_seen_session_present`.
+
+**The held-name record (SR-11.3, SR-14).** After every mark attempt with
+`tmux_name_held`, whatever the mark's outcome, the sweep writes exactly one
+`ad.launch.name_held` naming the holding session, through the shared
+emitter `emitNameHeld`: source `ad_find_missing`, `launch` and `outcome`
+null, this store's `store_id`, and `row_result` `marked_missing`,
+`left_changed`, or `still_pending` with the store error's text. The sweep
+never kills, reads or types into the holding session; it keeps running
+until a human ends it (the README's "Operator actions").
+
+**Wedged tmux and the budget (SR-3.15, SR-13.3, SR-13.5).** After an
+unreadable or tmux-unavailable result on a socket (from its lookup or its
+pane listing), the Sweep makes no more calls there. `sweep_budget_seconds`
+(`[tmux]`, 15 s by default; a setting with no safe minimum) caps the run's
+cumulative tmux wait on the injected clock; once it is spent every
+remaining row is not called and gets the notes above, and is looked at
+again on the next run. A run spends at most the budget plus one call on
+tmux. `Client.FindMissing` passes the value from
+`config.Tmux.EffectiveSweepBudget`. tmux problems never fail the sweep.
+
+**The result.** `ids` / `count` are the rows marked `missing` this sweep,
+on process or tmux evidence. `unverified` / `unverified_ids` are the rows
+left live with a note, whether the note was written or already current;
+never a `pending` row inside the grace period. A row whose guarded write
+missed or failed in the store, and a row found alive (its note cleared or
+none to clear), is in neither list. Both lists are sorted and never null. The verb adds no
+verb-level error; `ErrProbeUnsupported` stays in its error list (SR-1.7)
+but is never returned.
+
+**Go API (Appendix F.4).**
+
+- `FindMissing(ctx, s FindMissingStore, t FindMissingTmux, pc ProcChecker,
+  pendingGrace, sweepBudget time.Duration, now func() time.Time,
+  lg FindMissingLogger) (FindMissingResult, error)` is exported. It uses
+  the values it is given, with no fallback and no minimum check; it never
+  reads `time.Now` itself.
+- `FindMissingStore`: `ListLiveSpawnIdentities`, the guarded
+  `MarkMissingIfSameLife`, `SetLivenessNoteIfSameLife`,
+  `ClearLivenessIfSameLife` and `AdoptIdentityIfSameLife`,
+  `CloseOrphanedPermissionRequests`, `ListProvisionalTranscripts`,
+  `HealJsonlPath` and `StoreID`; `*store.Store` satisfies it.
+- `FindMissingTmux`: `TmuxLookup` plus `ListPanes(socket)`; `TmuxClient`,
+  `*tmux.Client` and `tmuxfix.Recorder` satisfy it.
+- `Client.FindMissing` passes the Client's store, tmux client, start-time
+  reader, `EffectivePendingGrace`, `EffectiveSweepBudget`, clock and logger.
+
+| File | Holds | Must use |
+| --- | --- | --- |
+| `find_missing_lookup.go` | `lookupRow` (SR-11.3's table), `oursRow`, `adoptedPaneRow`, `lookupMarkRow`, `emitRowNameHeld`, `notCalledNote`, `findMissingLaunch`. | The one mapping from a sweep row's lookup to its mark or note; a sweep never decides a row from a `tmux.Result` another way. |
+| `find_missing_writes.go` | The per-row outcome writers, shared by the process path and the tmux path: `markMissingSameLife` (the pinned marking order: guarded `MarkMissingIfSameLife`, then one `ad.find_missing.tick` with any extra fields the tmux path passes, then `CloseOrphanedPermissionRequests`), `writeLivenessNote` (skips a note equal to the one read; the guarded `SetLivenessNoteIfSameLife`; the SR-11.4 tick rule in `noteTickReason`) and `clearLivenessNote` (no write for a row with no note; the guarded `ClearLivenessIfSameLife`, no tick). Each takes the snapshot to guard on (the read one, or the adoption's) and returns a `findMissingWrite`; a changed, absent or failed write ticks nothing and lists the row nowhere, and a store error is logged through `logFindMissing`. | The only way a sweep marks, notes or clears a row: every mark, note write and clear (process or tmux evidence, adopted or not) goes through these three writers; never call the guarded store writes, write a tick or deny permission requests for a sweep row another way. |
+| `sweep_socket.go` | `sweepSockets.forRow(recorded)`: the socket a sweep row's calls use, the caller's resolved at most once per run for rows that record none, creating nothing; a refused resolution gives tmux unavailable, then not called. It implements SR-3.3's socket rule for a sweep (a recorded socket exactly as recorded; none recorded: the caller's socket, resolved as tmux would through `rowSocket` / `spawn.ResolveQuerySocket`, creating nothing, LFR H1), with SR-3.15's stop after a refusal. | The shared no-socket helper: every sweep (`find-missing`, and `expire` when it looks up rows) takes a row's socket from one `sweepSockets` per run; never resolve a sweep row's socket another way. |
+
+`missing` is the sweep's judgement on the evidence available to it, not
+proof that the agent has exited.
 
 ### `expire`
 
@@ -4664,7 +4901,9 @@ by the procedure in the README's "Operator actions" section.
 `store.DeleteTerminalOlderThan(duration)`, which executes a
 `DELETE ... RETURNING claude_instance_id` against rows whose
 `state IN (ended, missing)` AND `ended_at IS NOT NULL` AND
-`ended_at < now - duration`.
+`ended_at < now - duration`. A `missing` row is `find-missing`'s
+judgement on the evidence available to it, not proof that the agent has
+exited.
 
 - Default duration: `cfg.Defaults.ExpireRetentionDays * 24h` (config
   default is 31 days).
@@ -4690,20 +4929,26 @@ by the schema's `ON DELETE CASCADE`.
 
 ### Cron user invariant
 
-All three verbs assume they run as the same user that owns the
-Spawns (or as root). `find-missing` no longer refuses on a user
-mismatch: rows it can't read are surfaced per-row as **unverified**
-(or verified-alive when pid + starttime already matched) rather than
-corrupted or globally skipped — see
-[Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)
-for the full story. `expire` and `delete` are pure DB operations and
+`find-missing` must run as the same user as the agents and in the same
+tmux environment (the same `TMUX` / `TMUX_TMPDIR`). A run as another
+user, as root or against another tmux server can mark live rows
+`missing`: their agent processes may read unreadable, and the lookup
+then asks a server that holds none of their sessions and answers Gone.
+Such a mark is the sweep's judgement on the evidence available to it,
+not proof that the agent has exited. The consequences for a caller
+(`kill`'s success on a finished row is not verification; on the wrong
+tmux server, a wrongly marked row, `kill`'s no-op success and a reuse
+together start a second agent for the same id) are in
+[Same environment](#same-environment). The full story is in
+[Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user).
+`expire` and `delete` are pure DB operations and
 don't depend on probe permissions; running them as the wrong user is
 harmless (they just operate on whatever rows the DB happens to hold).
 
-The recommended operator setup is a systemd user-timer or a personal
-crontab — not a system-level cron — so the userland identity matches
-the Spawn-launching identity automatically and rows get real liveness
-verdicts instead of a wall of unverified metadata.
+The recommended operator setup is a systemd user timer or a personal
+crontab of the agents' user, not a system-level cron, so the sweep's
+identity and tmux environment match the ones that launched the agents.
+agent-director installs no schedule itself.
 
 ### Reboot-recovery runbook
 
@@ -4712,9 +4957,14 @@ but the rows persist in `state.db` frozen at their pre-reboot
 live state (`waiting`/`working`). Recovering a Spawn's conversation is a
 **two-verb contract, in order**:
 
-1. **`find-missing`** — reconciles the frozen rows against reality. On a
-   reboot the probe set is legitimately empty and the rows are genuinely
-   dead, so this marks them `missing` (a terminal state). This step is
+1. **`find-missing`** — reconciles the frozen rows against reality. After
+   a reboot every recorded agent process is gone, so the sweep marks those
+   rows `missing` (a terminal state) on process evidence (`proc_absent`);
+   a row with no process evidence is marked when its socket's lookup finds
+   no session of its current launch (`tmux_absent`, or `tmux_name_held`
+   when another session now holds its name). `missing` is the
+   sweep's judgement on the evidence available to it, not proof that the
+   agent has exited. This step is
    **required first**: `resume` refuses any non-terminal row with
    `ErrSpawnNotResumable`, so a row still frozen at `waiting`/`working`
    cannot be resumed until `find-missing` moves it to `missing`.
@@ -4885,9 +5135,55 @@ adds it here.
   it: the row is left as it is and is in neither result list, so a caller
   waiting on a launch reads a `pending` row inside its grace period as
   "wait and check again later", never as a reason to escalate. A `pending`
-  row with no launch start counts as past the grace period.
+  row with no launch start counts as past the grace period. The sweeps'
+  per-run tmux time budget is 15 s by default and configurable
+  (`sweep_budget_seconds`): once a `find-missing` run has spent it waiting
+  on tmux, the run makes no more tmux calls, and every row still needing a
+  lookup is left unverified and looked at again by the next run. The run
+  still succeeds. A run spends at most the budget plus one tmux call on
+  tmux (16.6 s at the defaults), and the stated worst-case times hold at
+  the defaults (see [`[tmux]` timing settings](#tmux-timing-settings)).
 - A caller that finds no row for an id spawns it and lets agent-director
   classify a held name; it does not look for a holding session itself.
+- `find-missing` judges a live row only by its agent process. A dead
+  process is marked `missing` whatever tmux shows, so a session kept by
+  `remain-on-exit` or a respawned pane never keeps the row live; a session
+  existing never does. A process that reads alive with its recorded start
+  time keeps the row live whatever tmux shows. tmux is asked only when the
+  process cannot be checked (unreadable, a pid-only identity that reads
+  alive, or no process recorded), on the row's recorded socket.
+- Past the pending grace period, `find-missing` marks a `pending` row
+  `missing` when its agent process is dead or unrecorded and no session
+  carries its current label, whatever holds its name, and never while one
+  does. A session with a valid label of another agent-director store never
+  carries the row's label: it counts as no session for the row, and the
+  sweep never touches it. One exception marks a row beside its own
+  session: a launch whose create reply was lost (no pane recorded) whose
+  session has no pane carrying the launch's pane label counts as gone.
+  When a session holds the row's recorded name, the sweep writes one
+  `ad.launch.name_held` record naming it; that session keeps running until
+  a human ends it (README "Operator actions").
+- So `find-missing` heals a launch that never reports in and has no
+  session: past the grace period its row is marked `missing`.
+- `find-missing` returns none of the seven tmux errors, and no tmux answer
+  fails the sweep; its only error is a failure to read the store. When it
+  must ask tmux, the answer decides per row: the row's session is not there
+  (GONE: gone, or only an earlier launch's session) marks the row
+  `missing`; conflicting labels or a scope value (CONFLICT) leave it
+  unverified with `liveness_note` `provenance_conflict`; a different tmux
+  server leaves it unverified with `tmux_server_changed`; tmux not
+  answering usably, unavailable or refusing the socket (UNAVAILABLE,
+  ENVIRONMENT) leaves it unverified with `probe_eacces` or
+  `process_not_seen_tmux_unchecked`, and the run makes no more calls on
+  that socket. An unverified row stays live and is judged again on the
+  next run.
+- A plain `spawn` that created a new row and is refused with
+  `ErrTmuxNotAvailable` at session creation leaves that row `pending` (a
+  reuse and a `resume` restore their rows instead). While tmux stays
+  unavailable, `find-missing` cannot mark the row; it stays unverified. So
+  a retry with the reuse opt-in returns `ErrInstanceIdCollision` until
+  tmux is back and a `find-missing` run past the pending grace period
+  marks the row `missing`.
 
 ### The lookup rule
 
@@ -4965,6 +5261,11 @@ adds it here.
   - on the wrong tmux server, a row wrongly marked `missing`, `kill`'s
     no-op success and a reuse together start a second agent for the same
     id.
+- This covers `find-missing`: it must run as the agents' user in their
+  tmux environment. A run as another user, as root or against another tmux
+  server can mark live rows `missing`, because their processes may read
+  unreadable and the other server answers that their sessions are gone
+  (see [Cron user invariant](#cron-user-invariant)).
 
 ### Live-row sequence
 
@@ -5168,8 +5469,12 @@ After a successful `kill`:
 
 1. The row stays in its live state (`waiting`, `pending` and so on).
 2. `find-missing` marks it `missing` once it judges the agent process
-   gone, from the row's recorded process identity (see
-   [`find-missing`](#find-missing)). For a `pending` row, a caller first
+   gone, from the row's recorded process identity. Only when that process
+   cannot be checked (unreadable, a pid-only identity that reads alive, or
+   no identity recorded) does it consult
+   tmux, and then it marks the row when the lookup finds no session of the
+   row's current launch (see [`find-missing`](#find-missing)). For a
+   `pending` row, a caller first
    waits out the pending grace period (step 2 of the
    [live-row sequence](#live-row-sequence)).
 3. `status` or `get` then shows `missing`, or `ended` if the agent's own
@@ -5573,7 +5878,7 @@ For each verb in `manifest.CallableVerbs()`, the harness copies a fixture store 
 
 **Epic scope.** Task 1 builds the scaffold and unit tests. Per-verb success cases (Task 3) and documented-error cases (Task 4) follow. CI wiring (Task 5) and the nondeterministic.json completeness check (Task 6) close the Epic. `serve` and `hook` are excluded — they are non-callable and carry no envelope contract.
 
-**Error-coverage contract.** Every callable verb with non-empty `ErrorNames` has at least one error-path subtest in `test/envelope-diff/error_cases.go` asserting that CLI and Client envelopes carry an identical `err_name` and a matching `err_description` (prefix-match policy documented in `test/envelope-diff/nondeterministic.md`). `TestErrorTableCoverage` is the CI gate enforcing this: it iterates `manifest.CallableVerbs()` and fails if any verb with non-empty `ErrorNames` lacks a corresponding row in `errorCases` (`error_cases.go`, plus the appended `error_cases_spawn_tmux.go` rows), so new error sentinels cannot land without coverage — analogous to the `nondeterministic.json` completeness gate that enforces every callable verb is represented in the non-determinism manifest. Two entries are explicitly exempted: `ErrTemplateExists` for `make-template` (its `err_description` embeds an absolute temp-dir path that the prefix-match policy cannot normalize across the two fixture copies on Linux; `ErrTemplateNameUnsafe` provides alternative make-template coverage) and `ErrProbeUnsupported` for `find-missing` (only compiled on non-linux/non-darwin targets via build tags; the empty-store success path covers find-missing on CI).
+**Error-coverage contract.** Every callable verb with non-empty `ErrorNames` has at least one error-path subtest in `test/envelope-diff/error_cases.go` asserting that CLI and Client envelopes carry an identical `err_name` and a matching `err_description` (prefix-match policy documented in `test/envelope-diff/nondeterministic.md`). `TestErrorTableCoverage` is the CI gate enforcing this: it iterates `manifest.CallableVerbs()` and fails if any verb with non-empty `ErrorNames` lacks a corresponding row in `errorCases` (`error_cases.go`, plus the appended `error_cases_spawn_tmux.go` rows), so new error sentinels cannot land without coverage — analogous to the `nondeterministic.json` completeness gate that enforces every callable verb is represented in the non-determinism manifest. Two entries are explicitly exempted: `ErrTemplateExists` for `make-template` (its `err_description` embeds an absolute temp-dir path that the prefix-match policy cannot normalize across the two fixture copies on Linux; `ErrTemplateNameUnsafe` provides alternative make-template coverage) and `ErrProbeUnsupported` for `find-missing` (no verb returns it; it stays catalogued and in `find-missing`'s `ErrorNames` by SR-1.7, so its row stays in `errorCases` and counts for `TestErrorTableCoverage`, while the row's skip hook skips the subtest on every platform; the empty-store success path covers find-missing on CI).
 
 **`descContains`.** The prefix-match policy compares descriptions only up to the first `:` (what follows, such as a minted id, may differ between the two runs), so the text that shows which path produced an `err_name` goes unchecked. An `errorCase` may therefore set the optional `descContains []string`: phrases that both the CLI and the Client `err_description` must contain. The spawn tmux rows use it; rows without it keep the prefix check alone.
 
@@ -5937,8 +6242,8 @@ detail.
   `EnvReads() == 0` proves no environment was read.
 - Every method is safe for concurrent use.
 
-It is a leaf package (standard library only; it deliberately does not mimic
-`probe.LivenessChecker`), so the external tests of `internal/tmux` (package
+It is a leaf package (standard library only; it mimics no
+environment-reading judgement), so the external tests of `internal/tmux` (package
 `tmux_test`) import it with no cycle and a `go list -deps` check that code
 under test does not reach `internal/probe` stays meaningful. Its compile-time `tmux.ProcChecker` check
 lives in its external test file. Start-time values come from
@@ -6169,6 +6474,14 @@ so it skips in the sandbox. That is the run's one skip.
   adopted by `@ad_pane` with `base-index` and `pane-base-index` 1; `$` and
   `\` names, a prefix neighbour, a non-ASCII name under a hostile locale and
   a socket at mode 000 (`ErrTmuxNotAvailable`).
+- `find_missing_test.go` (SR-3.8, SR-11.1, SR-11.3, SR-20.7): the
+  production `find-missing` against real tmux, on the kill fixture. A dead
+  agent whose session `remain-on-exit` keeps is marked `missing` with no
+  tmux call and the session stays; under `LC_ALL=C` and with no locale
+  variables, lost-reply rows named `ü-x` and `agent-ü1` adopt their panes
+  and stay live while a sessionless control row is marked; with the socket
+  at mode 000, rows with no process identity stay live with
+  `process_not_seen_tmux_unchecked` after one refused tmux call.
 - Lookup (SR-3.3, SR-3.4, SR-3.7, SR-3.8, SR-3.10, SR-3.12, SR-3.13,
   SR-20.7; AC-LKP-04 and the real-tmux halves of AC-LKP-19 and AC-LKP-20):
   one `tmux.Lookup` per case against real tmux, through the lookup fixture
@@ -6311,14 +6624,22 @@ comment has the detail):
   name needs it, as spawn does) and seeds the matching live row;
   `f.seedRow` seeds a row with no agent process recorded, and
   `f.assertRowUnchanged` checks every column still holds its seeded value.
-  `f.kill(t, id, wait)` runs one `kill` through the production client
-  (`api.New`, with `kill_exit_wait_ms` = `wait`, default
-  `killDefaultWait`) and returns a `killCall` (`Res`, `Err`, `Took`) with
+  `f.open(t, wait, tmuxCommand)` opens the production client (`api.New`
+  on the fixture's store, with the client timeouts and
+  `kill_exit_wait_ms` = `wait`, default `killDefaultWait`; `tmuxCommand`
+  `""` is tmux on `PATH`). `f.kill(t, id, wait)` runs one `kill` through
+  it and returns a `killCall` (`Res`, `Err`, `Took`) with
   `assertSuccess(t, sent)` and `assertRefused(t, name, descCase,
   forbid...)`. `hupSurvivor()` is a pane command that ignores SIGHUP (a
   survivor); `endAtCleanup` ends such a process at cleanup; `assertProcs`,
   `rt.hasSession`, `rt.assertSession` and `rt.windowsOf` observe the
-  result.
+  result. `find-missing` (`find_missing_test.go`): `f.findMissing(t,
+  recorded)` runs one sweep through `f.open` with the grace period and
+  sweep budget at their defaults, returning an `fmSweep` (`Res`, and
+  `Calls` when `recorded` runs tmux through the recording wrapper, so not
+  for locale cases) with `assertListed(t, id, list)`;
+  `f.assertStateNote(t, id, state, note)` checks the stored state and
+  liveness note.
 
 **Must use:** later real-tmux tests (the lookup scenarios, then the verb
 tests per SR-20.7) add their cases to `test/realtmux`. They reuse these helpers
@@ -6331,10 +6652,10 @@ assertions with the lookup fixture and uses the production reader
 identity comes from the fixture (`agent.Server`, `f.serverOf`). A
 `tmux.ProcIdentity{PID, Starttime}` view of such a recorded identity, for
 `f.judge`, is allowed.
-A real-tmux test of a verb that acts on a live row (`kill` today; the
+A real-tmux test of a verb that acts on a live row (`kill` and `find-missing` today; the
 finished-row opt-in and the pane verbs later) seeds its rows and runs the
-verb through the kill fixture (`liveRow`, `kill` or a sibling built the
-same way), never through its own store or client setup.
+verb through the kill fixture (`liveRow`, `kill`, `findMissing` or a
+sibling built the same way on `open`), never through its own store or client setup.
 New helpers go in a `harness_*_test.go` file other than `harness_test.go`,
 or in a named fixture file such as `lookup_helpers_test.go` for a
 feature's shared fixture.
@@ -6411,6 +6732,10 @@ unchanged. When two options set the same column, the later one wins.
     included, are NULL, the same as
     `WithLaunchIdentity(store.LaunchIdentity{})`. For a row with no token but
     a socket, use `WithLaunchIdentity(store.LaunchIdentity{Socket: TestSocket})`.
+  - `WithNoPane()`: seeds a live row whose launch reply was lost (SR-11.3):
+    `pane_id`, `pane_pid` and `pane_starttime` NULL, every other
+    launch-identity column kept (the default token and `TestSocket`
+    included), so its session can still read as Ours on the tmux path.
 - Raw JSON columns: `WithRawLabels(text)`, `WithRawClaudeArgs(text)` and
   `WithRawExtraEnv(text)`, each stored byte for byte. `WithRawExtraEnv` and
   `WithExtraEnv` write the same column.
@@ -6446,7 +6771,11 @@ unchanged. When two options set the same column, the later one wins.
   it) and no pane start time. Both constants are defined once in the leaf
   `internal/testsupport/launchfix`. The default is the pane only; the
   server identity stays NULL. A terminal-state row has no pane (NULL).
-  `WithLaunchIdentity` and `WithNoLaunchToken` override it. Every live row
+  `WithLaunchIdentity`, `WithNoLaunchToken` and `WithNoPane` override it.
+  Because the default pane's process is never found, `find-missing` judges
+  a default-seeded live row gone and marks it `proc_absent`; a test that
+  needs the row left live records a process the checker answers alive.
+  Every live row
   gets the same pane, so two live rows on one socket that both need a
   Recorder session must set distinct panes with `WithLaunchIdentity`.
 
@@ -6792,6 +7121,32 @@ package doc comment (`doc.go`, "# Description helper") says the same.
       before `LiveRowPointer`, so a check covers its own sentences only. It
       panics when `text` does not carry the pointer, so a description that
       lost the pointer fails the calling test.
+    - `DescFindMissingManifest()`: `find-missing`'s liveness and
+      same-environment rules (SR-18.9, SR-18.7, SR-3.8), by key phrase:
+      liveness only from the agent process; tmux, on the row's recorded
+      socket, only for a row whose process cannot be checked or was never
+      recorded; the agents' user and tmux environment, and a run as another
+      user, as root or against another tmux server can mark live rows
+      `missing`; SR-18.7's two consequences. The environment probe-set scan
+      and "on ambiguous evidence" are must-nots. Check it with
+      `AssertAgentTextCase` on `FindMissingOwnText`.
+    - `DescFindMissingField(f)`, with `FindMissingField` values
+      `FindMissingIDs` and `FindMissingUnverifiedIDs`: the `ids` or
+      `unverified_ids` result field text (SR-11.7, SR-18.3, SR-18.11). Both
+      require that a row whose guarded write found it changed or gone, or
+      failed, is in neither list, and "Never null"; "left untouched" is a
+      must-not. It panics on any other field. Check it with
+      `AssertAgentTextCase`.
+    - `DescMissingNotProof()`: SR-18.2's statement for any text that
+      describes `missing` (a manifest description or result field, a Go
+      doc): the sweep's judgement on the evidence available to it, not proof
+      that the agent has exited. Its must-nots are claims that `ended` or
+      `missing` means dead or safe to delete; negations pass.
+    - SR-18.7's two consequences are shared constants in
+      `descriptions_kill.go` (`notVerification`,
+      `finishedRowNotVerification`, `wrongServerSecondAgent`), which both
+      `DescKillManifest` and `DescFindMissingManifest` require; a new case
+      stating them reuses the constants.
   - Held name (`descriptions_held.go`, SR-1.4, SR-9.4): `HeldName{Name,
     SessionID, Row}` gives the requested name, the holder's `$N` (empty
     when no single holder was identified) and the end write's result as a
@@ -6899,6 +7254,61 @@ fixed at `apiTrailDir/.agent-director/ad-trail.jsonl` before any test runs.
 A test that moves HOME and emits first no longer moves the trail. The one
 exception is the `TestScanNameHeldFailOpen` child process
 (`scanTrailChildEnv` set), which needs the singleton unfixed.
+
+### pkg/api find-missing sweep helper (package-internal test fixture)
+
+`pkg/api/find_missing_test.go` (package `api_test`) holds the shared
+`find-missing` unit-test fakes and the one sweep helper. Its doc comments
+carry the detail.
+
+- `runFindMissing(s, pc, fmSweep{...})` runs one sweep: the one place the
+  unit tests call `api.FindMissing`. By default it passes a fresh
+  `tmuxfix.Recorder` as the `FindMissingTmux` (no server, so every lookup
+  is Gone), the pending grace period and sweep budget from
+  `internal/config`'s defaults (`fmGrace`, `fmBudget`), a
+  `recordingLogger`, and one `tmuxfix.Clock` (`fmNow`) that is both the
+  sweep's clock and the Recorder's virtual time. `fmSweep` overrides any
+  of them (`grace`, `budget`, `now`, `clock`, `tmux`, `lg`).
+  `fmBudgetSpent` is a spent budget (no tmux call; every row reaching the
+  lookup gets the "not called" note). `mustSweep` adds the sweep-error
+  check and, on the fake store, `assertGuards`; `mustFindMissing` is
+  `mustSweep` with every default.
+- `fakeFindMissingStore` is the `api.FindMissingStore` fake: a fixed
+  live-row read, every write logged in order with the snapshot it carried,
+  and each guarded write answered per row from `answers` (op `adopt`,
+  `mark`, `note` or `clear`, then instance id; `fmAnswer` gives a
+  `CondResult` or an error; unset is `CondApplied`). An applied adoption's
+  returned snapshot becomes the row's guard, and `assertGuards` fails a
+  verdict write that did not carry it. `StoreID()` is `tmuxfix.StoreID`.
+- Rows and Recorders: `liveRow(id, opts...)` (a `working` row with a token
+  on `apitest.TestSocket`, with `withSessionStart`, `withPane`,
+  `withServer`, `withLaunch`, `withNote`); `fmOurs(rows...)` (a Recorder
+  whose server `fmServer` holds each row's own labelled session, and one
+  token-carrying pane for a row that records none); `fmCantTell()` (every
+  lookup and pane listing unreadable). Assertions: `assertLists`,
+  `assertMarkReason`, `assertLookups`. Process answers come from
+  `procfix.Checker`.
+
+**Must use:** every `find-missing` sweep test in `pkg/api` calls the sweep
+through `runFindMissing` (or `mustSweep` / `mustFindMissing`) with a
+`tmuxfix.Recorder` and `procfix.Checker`; it never adds a second store,
+tmux or process-checker fake and never waits in real time. A budget or
+timeout is reached through the Recorder's virtual time on the shared
+`tmuxfix.Clock` (or `fmBudgetSpent`), never by sleeping. Tests through
+`Client.FindMissing` use a Recorder bound to a `tmuxfix.Clock` the same
+way.
+
+**Store tests of the guarded writes.** Tests of `MarkMissingIfSameLife`,
+`SetLivenessNoteIfSameLife`, `ClearLivenessIfSameLife`,
+`AdoptIdentityIfSameLife` and the live-row read live in the external
+`store_test` package (`internal/store/find_missing_writes_test.go`,
+`live_identity_read_test.go`) and seed rows only through `apitest`
+(`SeedSpawn` and its options). Their version deltas are cases of the SR-5.2
+versioning test: `row_version_find_missing_test.go` appends them to
+`internal/store/row_version_test.go`'s applied and no-op tables. A new
+guarded write adds its cases the same way. The note write's and clear's
+store errors are covered through `pkg/api`'s fake store, not injected in
+the store.
 
 ### pkg/api pre-trust fixture (package-internal test fixture)
 
