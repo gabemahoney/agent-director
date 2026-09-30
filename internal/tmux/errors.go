@@ -15,6 +15,16 @@
 // the name holder (StoredForms). It consumes only typed results and never
 // imports internal/probe.
 //
+// Shared helpers for the verbs sit beside it: the unusable-recorded-name
+// guard (Unusable, SR-3.2; unusable.go); agent-process selection and the one
+// recorded-process judgement over the start-time reader (SelectAgentProcess,
+// JudgeProcess, SR-3.8; agent_process.go), which the server check also uses;
+// the pane-by-token selector over a pane listing (PaneByToken, SR-3.6,
+// SR-3.7; pane_token.go); and the sweep helpers (Sweep, NewSweep, SR-3.15,
+// SR-13.5; sweep.go): one lookup and at most one adoption pane listing per
+// socket per run, the per-socket stop rule and the run's tmux time budget on
+// an injected clock.
+//
 // All operations are direct exec invocations — no shell, no interpolation,
 // no &&/|/$VAR (SRD §4.3, §14.3). The package never imports internal/config.
 package tmux

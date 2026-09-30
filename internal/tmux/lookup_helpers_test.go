@@ -2,11 +2,14 @@ package tmux_test
 
 import (
 	"cmp"
+	"maps"
 	"reflect"
 	"slices"
 	"strconv"
 	"testing"
+	"time"
 
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procstarttimefix"
@@ -298,4 +301,144 @@ func (f *lookupFixture) sessions(idx at) []tmux.Session {
 		out = append(out, f.ans.Sessions[j])
 	}
 	return out
+}
+
+// The multi-socket sweep run of lookup_sweep_test.go and
+// lookup_sweep_panes_test.go.
+
+// sweepQuery is each call's virtual duration where the budget is not under
+// test: the default query timeout.
+var sweepQuery = config.Tmux{}.EffectiveQueryTimeout()
+
+// sweepT0 is the virtual clock's start.
+var sweepT0 = time.Unix(lookupRecorded.Start+60, 0)
+
+// sweepSocket is the i-th socket of a sweep run.
+func sweepSocket(i int) string { return testSocket + "-" + strconv.Itoa(i) }
+
+// sockA, sockB and sockC are the first three sockets of a sweep run.
+var sockA, sockB, sockC = sweepSocket(0), sweepSocket(1), sweepSocket(2)
+
+// noBudget is a budget no sweep test reaches.
+const noBudget = time.Hour
+
+// rowOn puts the row on socket; rowServer records s as its server identity.
+func rowOn(socket string) lookupRowOpt { return func(l *tmux.Launch) { l.Socket = socket } }
+func rowServer(s tmuxfix.Server) lookupRowOpt {
+	return func(l *tmux.Launch) { l.ServerPID, l.ServerStart, l.ServerStarttime = s.PID, s.Start, s.ProcStart }
+}
+
+// sweepRun is one sweep case: a Recorder on virtual time (each lookup or pane
+// listing takes Query) with lookupRecorded bound to every socket and alive in
+// the fake. It is the sweep's LookupClient and keeps each lookup's outcome.
+type sweepRun struct {
+	t     *testing.T
+	Rec   *tmuxfix.Recorder
+	PC    *procfix.Checker
+	Clock *tmuxfix.Clock
+	Query time.Duration
+	// Reads counts the sweep's clock reads.
+	Reads int
+	fails map[string]tmux.Failure // scripted lookup failure per socket
+	held  map[string]sweepOutcome // last lookup outcome per socket
+}
+
+type sweepOutcome struct {
+	ans tmux.LookupAnswer
+	err error
+}
+
+func newSweepRun(t *testing.T, query time.Duration, sockets ...string) *sweepRun {
+	r := &sweepRun{t: t, Rec: tmuxfix.NewRecorder(), PC: procfix.New(), Clock: tmuxfix.NewClock(sweepT0), Query: query,
+		fails: map[string]tmux.Failure{}, held: map[string]sweepOutcome{}}
+	r.Rec.WithVirtualTime(r.Clock, tmux.Timeouts{Query: query})
+	for _, s := range sockets {
+		r.Rec.StartServer(s, lookupRecorded)
+	}
+	r.PC.Set(lookupRecorded.PID, procfix.Alive(lookupRecorded.ProcStart))
+	return r
+}
+
+// row is newLookupRow on socket.
+func (r *sweepRun) row(socket string, opts ...lookupRowOpt) tmux.Launch {
+	return newLookupRow(append([]lookupRowOpt{rowOn(socket)}, opts...)...)
+}
+
+// seed adds s to socket's server with k's label for the default row.
+func (r *sweepRun) seed(socket string, k lbl, s tmuxfix.SeedSession) *sweepRun {
+	s.Created, s.Label, s.LabelSet = lookupRecorded.Start, k.label(newLookupRow()), k == lblNone
+	r.Rec.SeedSessions(socket, s)
+	return r
+}
+
+// fail scripts every call of the given kinds on socket to fail with fl.
+func (r *sweepRun) fail(socket string, fl tmux.Failure, calls ...tmux.Call) *sweepRun {
+	r.Rec.Script(socket, tmuxfix.Script{Failure: fl}, calls...)
+	if slices.Contains(calls, tmux.CallLookup) {
+		r.fails[socket] = fl
+	}
+	return r
+}
+
+// sweep is the run's Sweep with budget.
+func (r *sweepRun) sweep(budget time.Duration) *tmux.Sweep {
+	return tmux.NewSweep(r, r.PC, r.now, budget)
+}
+
+func (r *sweepRun) now() time.Time {
+	r.Reads++
+	return r.Clock.Now()
+}
+
+func (r *sweepRun) Lookup(socket string) (tmux.LookupAnswer, error) {
+	ans, err := r.Rec.Lookup(socket)
+	r.held[socket] = sweepOutcome{ans, err}
+	return ans, err
+}
+
+// lookupFailing is tmux.Lookup's result for row on a fresh Recorder whose
+// lookup fails with fl (0: no server), at the same virtual timeouts.
+func (r *sweepRun) lookupFailing(fl tmux.Failure, row tmux.Launch, holder string) tmux.Result {
+	rec := tmuxfix.NewRecorder().WithVirtualTime(tmuxfix.NewClock(sweepT0), tmux.Timeouts{Query: r.Query})
+	if fl != 0 {
+		rec.Script(row.Socket, tmuxfix.Script{Failure: fl}, tmux.CallLookup)
+	}
+	return tmux.Lookup(rec, r.PC, row, holder)
+}
+
+// check asserts got is row's judged result: Classify on its socket's held
+// answer, or Lookup's result for the held failure; never Skipped.
+func (r *sweepRun) check(got tmux.Result, row tmux.Launch, holder string) {
+	r.t.Helper()
+	h, ok := r.held[row.Socket]
+	if !ok {
+		r.t.Fatalf("no lookup was made on %s", row.Socket)
+	}
+	want := tmux.Classify(h.ans, r.PC, row, holder)
+	if h.err != nil {
+		want = r.lookupFailing(r.fails[row.Socket], row, holder)
+	}
+	if !reflect.DeepEqual(got, want) {
+		r.t.Errorf("sweep result on %s:\n got %+v\nwant %+v", row.Socket, got, want)
+	}
+}
+
+// checkCalls asserts the Recorder's per-socket count of call kind.
+func (r *sweepRun) checkCalls(call tmux.Call, want map[string]int) {
+	r.t.Helper()
+	got := map[string]int{}
+	for _, c := range r.Rec.SocketCallsOf(call) {
+		got[c.Socket]++
+	}
+	if !maps.Equal(got, want) {
+		r.t.Errorf("%s calls per socket %v, want %v", call, got, want)
+	}
+}
+
+// checkSkipped asserts got is a bare Skipped result, token not_run.
+func checkSkipped(t *testing.T, got tmux.Result) {
+	t.Helper()
+	if !reflect.DeepEqual(got, tmux.Result{Skipped: true}) || got.Token() != "not_run" {
+		t.Errorf("result %+v (token %q), want only Skipped (not_run)", got, got.Token())
+	}
 }

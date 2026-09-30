@@ -63,7 +63,7 @@ still holds: nothing in `internal/` imports `pkg/api`.
 | `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. `classifyDispatchError` delegates to `errnames.Classify`. | stdlib; `pkg/api`; `pkg/api/manifest`; `pkg/api/errnames`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
 | `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
 | `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). Builds env maps, synthesizes `--settings` JSON, and asks `internal/tmux` to start the session. Inserts the `pending` row via `internal/store`. | stdlib; `internal/config`; `internal/store`; `internal/tmux`; `github.com/google/uuid` for UUID4 minting. | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
-| `internal/tmux` | Thin client over the tmux binary, built only by `New(binary, Timeouts)` (`""` = tmux on `PATH`). **Phase 1 call set (SR-2.1, Appendix F.1)**, every call taking the socket: `Lookup` (the one-invocation lookup: session listing with labels plus the three `@ad_owner` scope reads), `ListPanes` (`list-panes -a`), `KillPane` (by pane id), `KillSessionID` (by session id), `SendKeysPane` (by pane id: the text call `send-keys -t <pane id> -l -- <text>`, then an optional separate `send-keys -t <pane id> Enter`; the `--` makes a text starting with `-` literal, never read as a send-keys flag; a text ending in `;` is sent with that `;` escaped as `\;`, because tmux reads an argument-final `;` as a command separator even after `--` — the escape is `escapeFinalSemicolon`, used only by the text call), `CapturePaneID` (by pane id), `SetLabel` (label by id: the session label by session id and the pane label by pane id) and `NewSession` (the create with its chained `@ad_owner` and `@ad_pane` labels). **Label form (SR-3.4, SR-3.5):** `ad1 <token> <$N> <instance id> <store id>`, five fields. The store id is the writing store's `store_meta.store_id`, which callers pass from `(*store.Store).StoreID()`; it is the last field, so the instance id is everything between the third and the last space and may contain spaces. `NewSession` and `SetLabel` both take the token, the instance id and the store id; the chain doubles `#` only inside the instance id. **Pane label (SR-2.1, SR-3.5):** every created pane carries the per-pane user option `@ad_pane` = `<token> <pane id>`, so a launch whose create reply was lost can later find its own pane by token, whatever the base-index or window layout. The create sets it with a second chained step, `; set-option -p -F -t =<name>: @ad_pane '<token> #{pane_id}'`, after the `@ad_owner` step; each `;` is its own argv element, and a name for which `NeedsLabelByID` holds gets neither chained step. A failure of either chained step is the create's `FailLabel` (tmux stops the chain at the first failing step). `SetLabel(socket, sessionID, paneID, token, instanceID, storeID)` sets both labels in one invocation, `set-option -t <$N> @ad_owner '<label>' ; set-option -p -t <%N> @ad_pane '<token> <%N>'`, with the session and pane ids from the create reply; a failure may leave the session labelled and its pane not. Neither label value ends in `;`. Only the new session's one pane is labelled: a pane split from it later has no value. **Pane listing:** `ListPanes` reads `#{@ad_pane}` as the sixth and last field, the value being everything after the fifth tab, so a tab inside it cannot shift the other fields. `Pane.AdPane` is the token only when the value is exactly `<16 lowercase hex token> <pane id>` and that pane id equals the line's own `%N` (`classifyPaneLabel`); anything else gives `""`, so a window, session, global or server value borrowed through the format, which names another pane or none, never counts (the scope guard of SR-3.6). Caveat: on tmux 3.3a a server-scope `@ad_pane` (`set-option -s`) is listed on every pane in place of its own value, so while one exists only the pane that value names can report a token and every other pane reads `""`; no other pane is matched, but a pane reading `""` then does not show that its label is gone. The raw value never leaves the client, and a malformed listing's `CallError.FirstLine` is its first line cut before the pane label field (`paneListingFirstLine`). The lookup does not read `@ad_pane`. No verb calls the pane label yet: it exists for adoption of a lost create reply (SR-3.6), the leftover-pane check (SR-3.7) and the no-pane row check (SR-11.3). A value in any other form, a four-field one included, parses as no label (`LabelNone`), except that a four-field value whose instance id ends in a space and 16 lowercase hex reads as a shorter id plus that word as its store id; and `Label.StoreID` is set only on a valid label. Typed results and failures: `Call`, `Failure`, `CallError`, `LookupAnswer`, `Session`, `Label` / `LabelKind`, `CreateReply`, `Pane`, `Timeouts`. Mechanics: every call runs `-u -S <socket>` first; targets are ids only (never a name or pattern); each call class (query, action, create) has its own timeout, plus the pipe-close wait (`Timeouts.WaitDelay`); data is parsed only from standard output of an exit-0 call; replies are recognised only from the first line of standard error; the client's environment has every `AGENT_DIRECTOR_*` variable removed. Socket-taking calls fail only with `*CallError`. Labels reach callers only classified (the raw value never leaves the client) and recognised replies only as a `Failure`; the one exception is an unrecognised reply, whose first line (trimmed, at most 200 bytes) is carried in `CallError.FirstLine`. **Socket resolution (RN-5):** `ResolveSocket(create)` resolves the socket as tmux does (`TMUX`, then `TMUX_TMPDIR`, then `/tmp`, with tmux's per-user directory checks) and `EnsureSocketDir(socket)` creates only a missing per-user directory; refusals are `*SocketDirError` (with `SocketDirReason`), matching `ErrTmuxNotAvailable`. **Must use** `tmux.NeedsLabelByID(name)` to decide whether a session name (one containing `$` or `\`) must be labelled by id rather than by the chain; never re-implement that test. The client receives its timeouts and pipe-close wait from `pkg/api` at construction, never from `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); the package defines no defaults. The runner seam types (`Invocation`, `RunStatus`, `RunResult`, `Runner`) are exported for replay tests; tests install a runner only through the test-only `NewWithRunner` in `export_test.go`. The name-based methods (`NewSessionByName`, `HasSession`, `KillSession`, `SendKeys`, `CapturePane`) keep their contracts until their last verb moves to the socket-taking calls. `HasSession` matches by prefix: `resume` still calls it until it moves to the lookup, and no verb may newly adopt it. `StripANSI` post-processes captures. **Shared lookup (SR-3.3, SR-3.4, SR-3.10, Appendix F.2):** `Lookup` / `Classify` in `lookup.go`, `lookup_class.go`, `lookup_holder.go` and `lookup_server.go` turn one lookup answer and a row's `Launch` into a verdict; see [Shared tmux lookup](#shared-tmux-lookup). | stdlib (`bytes`, `context`, `errors`, `fmt`, `io/fs`, `os`, `os/exec`, `path/filepath`, `regexp`, `slices`, `sort`, `strconv`, `strings`, `syscall`, `time`, `unicode`, `unicode/utf8`). | `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); `internal/probe` (the lookup's `ProcChecker` is satisfied structurally); template and store packages; shell processes (`/bin/sh`); anything other than direct `exec.Command`. |
+| `internal/tmux` | Thin client over the tmux binary, built only by `New(binary, Timeouts)` (`""` = tmux on `PATH`). **Phase 1 call set (SR-2.1, Appendix F.1)**, every call taking the socket: `Lookup` (the one-invocation lookup: session listing with labels plus the three `@ad_owner` scope reads), `ListPanes` (`list-panes -a`), `KillPane` (by pane id), `KillSessionID` (by session id), `SendKeysPane` (by pane id: the text call `send-keys -t <pane id> -l -- <text>`, then an optional separate `send-keys -t <pane id> Enter`; the `--` makes a text starting with `-` literal, never read as a send-keys flag; a text ending in `;` is sent with that `;` escaped as `\;`, because tmux reads an argument-final `;` as a command separator even after `--` — the escape is `escapeFinalSemicolon`, used only by the text call), `CapturePaneID` (by pane id), `SetLabel` (label by id: the session label by session id and the pane label by pane id) and `NewSession` (the create with its chained `@ad_owner` and `@ad_pane` labels). **Label form (SR-3.4, SR-3.5):** `ad1 <token> <$N> <instance id> <store id>`, five fields. The store id is the writing store's `store_meta.store_id`, which callers pass from `(*store.Store).StoreID()`; it is the last field, so the instance id is everything between the third and the last space and may contain spaces. `NewSession` and `SetLabel` both take the token, the instance id and the store id; the chain doubles `#` only inside the instance id. **Pane label (SR-2.1, SR-3.5):** every created pane carries the per-pane user option `@ad_pane` = `<token> <pane id>`, so a launch whose create reply was lost can later find its own pane by token, whatever the base-index or window layout. The create sets it with a second chained step, `; set-option -p -F -t =<name>: @ad_pane '<token> #{pane_id}'`, after the `@ad_owner` step; each `;` is its own argv element, and a name for which `NeedsLabelByID` holds gets neither chained step. A failure of either chained step is the create's `FailLabel` (tmux stops the chain at the first failing step). `SetLabel(socket, sessionID, paneID, token, instanceID, storeID)` sets both labels in one invocation, `set-option -t <$N> @ad_owner '<label>' ; set-option -p -t <%N> @ad_pane '<token> <%N>'`, with the session and pane ids from the create reply; a failure may leave the session labelled and its pane not. Neither label value ends in `;`. Only the new session's one pane is labelled: a pane split from it later has no value. **Pane listing:** `ListPanes` reads `#{@ad_pane}` as the sixth and last field, the value being everything after the fifth tab, so a tab inside it cannot shift the other fields. `Pane.AdPane` is the token only when the value is exactly `<16 lowercase hex token> <pane id>` and that pane id equals the line's own `%N` (`classifyPaneLabel`); anything else gives `""`, so a window, session, global or server value borrowed through the format, which names another pane or none, never counts (the scope guard of SR-3.6). Caveat: on tmux 3.3a a server-scope `@ad_pane` (`set-option -s`) is listed on every pane in place of its own value, so while one exists only the pane that value names can report a token and every other pane reads `""`; no other pane is matched, but a pane reading `""` then does not show that its label is gone. The raw value never leaves the client, and a malformed listing's `CallError.FirstLine` is its first line cut before the pane label field (`paneListingFirstLine`). The lookup does not read `@ad_pane`. No verb calls the pane label yet: it exists for adoption of a lost create reply (SR-3.6), the leftover-pane check (SR-3.7) and the no-pane row check (SR-11.3). A value in any other form, a four-field one included, parses as no label (`LabelNone`), except that a four-field value whose instance id ends in a space and 16 lowercase hex reads as a shorter id plus that word as its store id; and `Label.StoreID` is set only on a valid label. Typed results and failures: `Call`, `Failure`, `CallError`, `LookupAnswer`, `Session`, `Label` / `LabelKind`, `CreateReply`, `Pane`, `Timeouts`. Mechanics: every call runs `-u -S <socket>` first; targets are ids only (never a name or pattern); each call class (query, action, create) has its own timeout, plus the pipe-close wait (`Timeouts.WaitDelay`); data is parsed only from standard output of an exit-0 call; replies are recognised only from the first line of standard error; the client's environment has every `AGENT_DIRECTOR_*` variable removed. Socket-taking calls fail only with `*CallError`. Labels reach callers only classified (the raw value never leaves the client) and recognised replies only as a `Failure`; the one exception is an unrecognised reply, whose first line (trimmed, at most 200 bytes) is carried in `CallError.FirstLine`. **Socket resolution (RN-5):** `ResolveSocket(create)` resolves the socket as tmux does (`TMUX`, then `TMUX_TMPDIR`, then `/tmp`, with tmux's per-user directory checks) and `EnsureSocketDir(socket)` creates only a missing per-user directory; refusals are `*SocketDirError` (with `SocketDirReason`), matching `ErrTmuxNotAvailable`. **Must use** `tmux.NeedsLabelByID(name)` to decide whether a session name (one containing `$` or `\`) must be labelled by id rather than by the chain; never re-implement that test. The client receives its timeouts and pipe-close wait from `pkg/api` at construction, never from `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); the package defines no defaults. The runner seam types (`Invocation`, `RunStatus`, `RunResult`, `Runner`) are exported for replay tests; tests install a runner only through the test-only `NewWithRunner` in `export_test.go`. The name-based methods (`NewSessionByName`, `HasSession`, `KillSession`, `SendKeys`, `CapturePane`) keep their contracts until their last verb moves to the socket-taking calls. `HasSession` matches by prefix: `resume` still calls it until it moves to the lookup, and no verb may newly adopt it. `StripANSI` post-processes captures. **Shared lookup (SR-3.3, SR-3.4, SR-3.10, Appendix F.2):** `Lookup` / `Classify` in `lookup.go`, `lookup_class.go`, `lookup_holder.go` and `lookup_server.go` turn one lookup answer and a row's `Launch` into a verdict; see [Shared tmux lookup](#shared-tmux-lookup). Beside it: `unusable.go` (the unusable-name guard `Unusable`), `agent_process.go` (agent-process selection `SelectAgentProcess` and judgement `JudgeProcess`), `pane_token.go` (`PaneByToken`, a pane found by its `@ad_pane` token) and `sweep.go` (the multi-socket sweep `Sweep`, built by `NewSweep`, under one tmux budget). | stdlib (`bytes`, `context`, `errors`, `fmt`, `io/fs`, `os`, `os/exec`, `path/filepath`, `regexp`, `slices`, `sort`, `strconv`, `strings`, `syscall`, `time`, `unicode`, `unicode/utf8`). | `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); `internal/probe` (the lookup's `ProcChecker` is satisfied structurally); template and store packages; shell processes (`/bin/sh`); anything other than direct `exec.Command`. |
 | `internal/hook` | Reads payload JSON from stdin, classifies per SRD §5.2, writes the row UPSERT, exits 0 (state-tracking fail-open). | stdlib; `internal/store`. | `internal/tmux`; `internal/spawn`; `internal/config` (the cmd-side wrapper loads config; the package itself stays narrow). |
 
 ### `[tmux]` timing settings
@@ -102,14 +102,21 @@ of truth for them, following the `Relay.EffectiveTimeoutSeconds` pattern:
 `internal/tmux` holds the one shared lookup (SRD SR-3.3, SR-3.4, SR-3.10,
 Appendix F.2): given a row's launch identity and this store's id, one lookup
 answer gives exactly one verdict for the row, plus the holder of a given
-name. The doc comments in the four files carry the detail.
+name. Beside it sit the shared helpers the verbs build on: the
+unusable-name guard, agent-process selection and the recorded-process
+judgement, the pane-by-token selector and the sweep. The doc comments in the
+files carry the detail.
 
 | File | Holds |
 | --- | --- |
-| `lookup.go` | `Launch` (the row: `InstanceID`, `Token`, `StoreID`, `Socket`, `ServerPID`, `ServerStart`, `ServerStarttime`; zero means none), `ProcChecker`, `LookupClient`, `Verdict`, `CantTellKind`, `Result` with `Token()`, `Lookup`, `Classify`, the `Server*` and `Reason*` constants. |
+| `lookup.go` | `Launch` (the row: `InstanceID`, `Token`, `StoreID`, `Socket`, `ServerPID`, `ServerStart`, `ServerStarttime`; zero means none), `ProcChecker`, `LookupClient`, `Verdict`, `CantTellKind`, `Result` with `Token()`, `Lookup`, `Classify`, the `Server*` and `Reason*` constants, and the one outcome mapping (unexported `resultForCall`, and `resultForFailure` for a failed call, shared with the sweep's pane listing). |
 | `lookup_class.go` | `LabelClass`, `(LabelClass) CaseWords()`, `(Launch) ClassOf(Label)`. |
 | `lookup_holder.go` | `StoredForms(name)` and the name-holder match. |
-| `lookup_server.go` | The clock-free server check (unexported `checkServer`, `recordedServer`). |
+| `lookup_server.go` | The clock-free server check (unexported `checkServer`), which judges the recorded server process through `JudgeProcess`. |
+| `unusable.go` | `UnusableKind` and `Unusable(name)`, the unusable recorded-name guard. |
+| `agent_process.go` | `ProcIdentity`, `AgentSource`, `AgentProcess`, `SelectAgentProcess`, `ProcState` and `JudgeProcess`. |
+| `pane_token.go` | `PaneMatch` and `PaneByToken(panes, token)`. |
+| `sweep.go` | `Sweep`, `NewSweep`, `(*Sweep) Lookup`, `PaneLister`, `PaneListing`, `(*Sweep) ListPanes`. |
 
 **Entry points.**
 
@@ -130,7 +137,9 @@ name. The doc comments in the four files carry the detail.
 `CantTellDifferentServer`, `CantTellProvenanceConflict` or
 `CantTellUnavailable`. `Result.Token()` gives the outcome token: `ours`,
 `leftover`, `gone`, `cant_tell` (unreadable), `different_server`,
-`provenance_conflict` or `tmux_unavailable` (`""` for a zero value).
+`provenance_conflict` or `tmux_unavailable` (`""` for a zero value), and
+`not_run` for a `Skipped` result (set only by the sweep; see
+[Sweep](#sweep-sweepgo)).
 `Result` also carries `Session` (Ours), `Leftovers` (old-labelled sessions,
 in listing order), `Holder`, `HolderClass`, `HolderAmbiguous`, `Server`,
 `ServerPID` / `ServerStart` (the answering server), `Adopt` (Ours on a row
@@ -179,7 +188,9 @@ most once, on `Launch.ServerPID`:
   no-server reply is Gone.
 - A listing whose `ServerPID` and `ServerStart` equal the recorded ones:
   `match`; the reader is not called.
-- Otherwise the recorded process decides. Gone (absent or zombie, or alive
+- Otherwise the recorded process decides, judged by `JudgeProcess` on
+  (`ServerPID`, `ServerStarttime`); anything but `ProcGone` counts as a
+  different server. Gone (absent or zombie, or alive
   with a start time other than `ServerStarttime`) gives `restarted`: a
   listing is judged on the answering server and logs `server_restarted`; an
   empty listing or a no-server reply is Gone with no reason. Running (alive
@@ -211,14 +222,165 @@ as running), no store and no `@ad_pane`. It consumes only `LookupAnswer`,
 held). Never re-implement label classes, the server check, the verdict
 order or stored-name matching. No verb uses the lookup yet.
 
-Tests: `internal/tmux/lookup_test.go`, `lookup_server_test.go` and
-`lookup_holder_test.go` share the external-test-package fixture
+Tests: `internal/tmux/lookup_test.go`, `lookup_server_test.go`,
+`lookup_holder_test.go`, `lookup_unusable_test.go` (the unusable-name
+guard), `lookup_agent_test.go` (agent-process selection and judgement),
+`lookup_adopt_test.go` (`PaneByToken`), `lookup_sweep_test.go` (the sweep's
+lookups, stop rule and budget) and `lookup_sweep_panes_test.go` (the sweep's
+pane listings) share the external-test-package fixture
 `internal/tmux/lookup_helpers_test.go` (package `tmux_test`): a default row
 (`newLookupRow` with its `row*` options), label kinds (`lbl*`), a Recorder
 table plus a [`procfix`](#procfix-the-process-checker-fake-reusable-test-fixture)
 checker (`newLookupFixture`), and a runner (`run` / `runOn`) that makes one
-lookup call and holds `Lookup` and `Classify` equal. New lookup tests in the
-package use it rather than building their own.
+lookup call and holds `Lookup` and `Classify` equal. **Reusable sweep
+fixture:** `newSweepRun(t, query, sockets...)` returns a `*sweepRun`, one
+sweep case: a Recorder on virtual time (each lookup or pane listing takes
+`query`) with the recorded server alive on every socket, acting as the
+sweep's `LookupClient` and keeping each socket's lookup outcome. Its
+`check(got, row, holder)` asserts a sweep result equals the row's judged
+result (`Classify` on the held answer, or `Lookup` for a held failure),
+`checkCalls(call, want)` asserts the per-socket count of a call kind, and
+the free function `checkSkipped(t, got)` asserts a bare Skipped result
+(token `not_run`). New lookup and sweep tests in the package use these
+rather than building their own.
+
+#### Unusable-name guard (`unusable.go`)
+
+`Unusable(name string) UnusableKind` classifies a recorded session name
+(SR-3.2). When a name has more than one fault, the first in this order
+decides:
+
+1. `UnusableEmpty`: `""` (tmux reads it as "the most recent session").
+2. `UnusableControl`: any byte 0x00-0x1f or 0x7f, judged byte by byte on the
+   raw bytes, so an invalid-UTF-8 name that also carries a control byte is
+   Control. C1 code points and other Unicode characters do not count.
+3. `UnusableRewritten`: `.` or `:` (tmux stores them as `_`), or bytes that
+   are not valid UTF-8 (tmux stores them as backslash-octal escapes).
+4. Otherwise `UnusableNone`, the zero value. `$`, `\`, `#` and valid
+   non-ASCII UTF-8 are usable.
+
+The guard only classifies (no error sentinel); the caller decides what each
+kind means. It is separate from `internal/spawn`'s validation of a new
+explicit name, which also refuses `#`, `$`, `\` and long names; the guard
+allows `$`, `\` and `#` in a recorded name.
+
+**Must use** `tmux.Unusable` to decide whether a recorded name may be passed
+to tmux; never re-implement the test or its order. No verb uses it yet.
+
+#### Agent-process selection and judgement (`agent_process.go`)
+
+A `ProcIdentity` (`PID`, `Starttime`) is recorded when `PID > 0`; a pid with
+no start time is a recorded pid-only identity.
+
+`SelectAgentProcess(sessionStart, pane ProcIdentity) AgentProcess` picks a
+row's agent process (SR-3.8):
+
+- neither recorded: `AgentNone`, zero identity;
+- only one recorded: that one (`AgentSessionStart` or `AgentPane`);
+- both recorded and they disagree (the pids differ, or both start times are
+  recorded and differ): `AgentPane`, the pane identity wins;
+- both recorded and they agree: `AgentSessionStart`, as recorded.
+
+The two can differ only on a hand-edited row. A disagreement signals
+nothing: there is no disagree reason for it, and `pid_mismatch` is retired
+as an `ad.provenance.disagree` reason.
+
+`JudgeProcess(pc ProcChecker, id ProcIdentity) ProcState` judges a recorded
+process with the start-time reader, calling `pc.StartTime` at most once and
+never when `id` is not recorded:
+
+| Case | `ProcState` |
+| --- | --- |
+| Not recorded | `ProcNone` (no reader call) |
+| Unreadable (`known` false) | `ProcUnknown` |
+| Gone (absent or zombie) | `ProcGone` |
+| Alive, pid-only identity | `ProcUnknown` (never alive) |
+| Alive, start time equals the recorded one | `ProcAlive` |
+| Alive, another start time (pid reused) | `ProcGone` |
+
+Both read no clock and no environment and make no tmux call. The lookup's
+server check already judges the recorded server through `JudgeProcess`.
+
+**Must use** `tmux.SelectAgentProcess` to choose a row's agent process and
+`tmux.JudgeProcess` to judge any recorded process (liveness, `kill`'s wait,
+`expire`'s process check, `find-missing`'s process path, `resume`'s and
+reuse's running-process check); never re-implement either. No verb uses them
+yet.
+
+#### Pane-by-token selector (`pane_token.go`)
+
+`PaneByToken(panes []Pane, token string) (Pane, PaneMatch)` picks, from one
+pane listing, the pane whose `Pane.AdPane` equals `token` (the client has
+already applied the `@ad_pane` scope guard). Panes are counted by distinct
+pane id, because `list-panes -a` lists a shared pane once per session
+showing its window:
+
+- `PaneOne`: exactly one distinct pane id carries the token; the `Pane` is
+  its first entry in listing order.
+- `PaneNone`: none carries it, or `token` is `""`; the `Pane` is zero.
+- `PaneMany`: more than one distinct pane id carries it; the `Pane` is zero.
+
+Its callers are adoption of a lost create reply (SR-3.6, the row's token), a
+leftover's pane (SR-3.7, the leftover label's token) and the no-pane row
+check (SR-11.3). What each outcome means is the caller's. Adoption
+(SR-3.6) and a leftover's pane (SR-3.7) take a pane only on `PaneOne`; for
+adoption, none and more than one alike adopt no pane (the pane verbs refuse
+with "the agent's pane was not found"). In the SR-11.3 check of a row that
+records no pane, `PaneNone` counts as Gone and `PaneMany` is unverified,
+never Gone. It makes no tmux call.
+
+**Must use** `tmux.PaneByToken` to find a pane by its `@ad_pane` token;
+never match `AdPane` by hand. No verb uses it yet.
+
+#### Sweep (`sweep.go`)
+
+A `Sweep` serves one `find-missing` or `expire` run (SR-3.15, SR-13.3,
+SR-13.5) and is not for concurrent use.
+
+- `NewSweep(c LookupClient, pc ProcChecker, now func() time.Time, budget time.Duration) *Sweep`
+  makes no call and does not read `now`. Callers pass the effective sweep
+  budget (`config.Tmux.EffectiveSweepBudget`); the Sweep reads no
+  configuration and no environment.
+- `(*Sweep) Lookup(row Launch, holderName string) Result`: **one lookup per
+  socket**, keyed by `row.Socket` exactly as passed (never resolved or
+  created). The first row to reach a socket makes its one
+  `c.Lookup(row.Socket)` call and the outcome (answer or error) is held;
+  every row of that socket is then mapped from the held outcome through the
+  same outcome mapping and `Classify` as `tmux.Lookup`, with its own
+  `Launch`, so each row is judged against its own recorded server.
+- `(*Sweep) ListPanes(pl PaneLister, row Launch) PaneListing`: the adoption
+  pane listing, at most one `pl.ListPanes` call per socket, under the same
+  gate, stop rule and budget. `PaneLister` is `ListPanes(socket) ([]Pane,
+  error)`; `*Client` and `tmuxfix.Recorder` satisfy it. A held listing is
+  returned as a copy (`Listed`, `Panes`); a failure is mapped for the
+  requesting row exactly as a lookup failure (`PaneListing.Result`).
+  `expire` never lists panes.
+
+**Stop rule (per socket).** A result on a socket that is Can't tell
+unreadable or tmux unavailable, from the lookup or the pane listing, stops
+that socket: that row gets its real result, and every later row of the
+socket is Skipped with no call, even when its answer is held. Other sockets
+go on. A different server, a `provenance_conflict` and a no-server or
+no-socket reply stop nothing.
+
+**Budget (on the injected clock).** Each call's time is `now()` at its
+return minus `now()` at its start, added only when positive (a clock stepped
+back refunds nothing). The budget is spent once the total is at least
+`budget`; a non-positive budget is spent from the start, so no call is ever
+made. Before every call, and before handing out anything held, a spent
+budget or a stopped socket makes the row Skipped. A call that leaves the
+total at or over the budget has its outcome discarded, nothing is held and
+its row is Skipped; every later row on every socket is then Skipped. A run
+spends at most the budget plus one call.
+
+**Skipped rows.** A Skipped result is `Result{Skipped: true}` with nothing
+else set; `Result.Token()` gives `not_run`, which is none of the seven
+outcome tokens. Callers check `Skipped` first.
+
+**Must use:** a sweep verb (`find-missing`, `expire`) judges its rows only
+through one `tmux.NewSweep` per run and its `Lookup` and `ListPanes`; never
+call `tmux.Lookup` per row in a sweep, and never re-implement the grouping,
+the stop rule or the budget. No verb uses it yet.
 
 ### No-business-logic-in-cmd contract
 

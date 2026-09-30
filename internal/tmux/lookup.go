@@ -151,6 +151,12 @@ const (
 	tokenTmuxUnavailable    = "tmux_unavailable"
 )
 
+// tokenNotRun is the token of a Skipped result: no call was made for the row
+// because the sweep had stopped calling tmux, or the row's own call spent the
+// budget and its outcome was discarded (SR-3.15, SR-13.5). It is none
+// of the seven outcome tokens; callers check Skipped first.
+const tokenNotRun = "not_run"
+
 // Result is the lookup result (Appendix F.2). It stays internal: no exported
 // signature of pkg/api uses it.
 //
@@ -197,15 +203,23 @@ type Result struct {
 	// Cause is the call failure behind CantTellUnreadable or
 	// CantTellUnavailable when it is a *CallError; nil otherwise.
 	Cause *CallError
-	// Skipped reports that no call was made because the sweep had stopped
-	// calling tmux (SR-3.15). Set only by the sweep.
+	// Skipped reports that the row is "tmux already skipped": the sweep had
+	// stopped calling tmux on the row's socket or for the run, or the row's
+	// own call spent the run's budget and its outcome was discarded (SR-3.15,
+	// SR-13.5). Set only by the sweep; a Skipped result carries nothing else
+	// (no verdict, Can't tell kind, Cause, holder or server status), and its
+	// Token is not_run. Callers check Skipped first.
 	Skipped bool
 }
 
 // Token returns the outcome token of SR-3.4: ours, leftover, gone, cant_tell
-// (unreadable), different_server, provenance_conflict or tmux_unavailable.
-// It returns "" for a zero or unknown verdict or variant.
+// (unreadable), different_server, provenance_conflict or tmux_unavailable;
+// not_run for a Skipped result. It returns "" for a zero or unknown verdict
+// or variant.
 func (r Result) Token() string {
+	if r.Skipped {
+		return tokenNotRun
+	}
 	switch r.Verdict {
 	case Ours:
 		return tokenOurs
@@ -302,8 +316,18 @@ func classifySessions(r *Result, sessions []Session, row Launch) {
 
 // resultForCall maps one lookup call's outcome to a result for row: the one
 // shared mapping of Lookup and the sweep (SR-3.3, SR-3.4, SR-2.5, SR-2.6).
+// No error: Classify; an error: resultForFailure.
+func resultForCall(ans LookupAnswer, err error, pc ProcChecker, row Launch, holderName string) Result {
+	if err == nil {
+		return Classify(ans, pc, row, holderName)
+	}
+	return resultForFailure(err, pc, row)
+}
+
+// resultForFailure maps a failed call to a result for row: the one failure
+// mapping of the lookup call and of the sweep's pane listing (SR-2.5, SR-2.6,
+// SR-3.3, SR-3.7). err must not be nil.
 //
-//   - No error: Classify.
 //   - FailUnavailable, FailSocketDenied: Can't tell, tmux unavailable, Cause
 //     set.
 //   - FailNoServer, FailNoSocket: the server check for a no-server reply:
@@ -311,10 +335,7 @@ func classifySessions(r *Result, sessions []Session, row Launch) {
 //   - Any other *CallError (a timeout, an unrecognised or malformed answer):
 //     Can't tell, unreadable, Cause set; any other error: the same with no
 //     Cause.
-func resultForCall(ans LookupAnswer, err error, pc ProcChecker, row Launch, holderName string) Result {
-	if err == nil {
-		return Classify(ans, pc, row, holderName)
-	}
+func resultForFailure(err error, pc ProcChecker, row Launch) Result {
 	var ce *CallError
 	if !errors.As(err, &ce) {
 		return Result{Verdict: CantTell, CantTell: CantTellUnreadable}
