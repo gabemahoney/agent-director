@@ -8,9 +8,10 @@ package store
 //
 // Dispositions: authorised migration; refusal without sentinel (byte-identical,
 // ErrSchemaMigrationRequired); idempotent and partial re-entry; fresh vs
-// migrated convergence on both tables; rollback on an injected failure; history
-// fixture at life 0 (AC-REUSE-25, AC-RES-20); pending row with no launch start
-// (AC-FM-14).
+// migrated convergence on every v5 shape table (store_meta included); rollback
+// on an injected failure; history fixture at life 0 (AC-REUSE-25, AC-RES-20);
+// pending row with no launch start (AC-FM-14). store_id cases live in
+// schema_v5_store_id_test.go.
 
 import (
 	"encoding/json"
@@ -194,7 +195,8 @@ func TestV5Migration_IdempotentReentry(t *testing.T) {
 }
 
 // TestV5FreshCreate_And_MigratedConverge: a fresh store and a v1→current
-// migrated store expose identical table_info for spawns and session_history.
+// migrated store expose identical table_info for every v5 shape table;
+// store_meta matches its SR-5.1 shape.
 func TestV5FreshCreate_And_MigratedConverge(t *testing.T) {
 	freshPath := t.TempDir() + "/state.db"
 	fresh, err := OpenOrInit(freshPath)
@@ -212,11 +214,14 @@ func TestV5FreshCreate_And_MigratedConverge(t *testing.T) {
 	}
 	defer migrated.Close()
 
-	for _, table := range []string{"spawns", "session_history"} {
+	for _, table := range v5ShapeTables {
 		f, m := readTableShape(t, fresh.db, table), readTableShape(t, migrated.db, table)
 		if !reflect.DeepEqual(f, m) {
 			t.Errorf("%s shape diverges:\n fresh    %+v\n migrated %+v", table, f, m)
 		}
+	}
+	if got := readTableShape(t, fresh.db, "store_meta"); !reflect.DeepEqual(got, storeMetaShape) {
+		t.Errorf("store_meta shape = %+v; want %+v", got, storeMetaShape)
 	}
 	assertV5Columns(t, freshPath)
 }

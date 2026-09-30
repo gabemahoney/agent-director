@@ -204,6 +204,33 @@ func setupTamperedDB(t *testing.T, home string) {
 	}
 }
 
+// tamperStoreID rewrites the store_id row of the existing state.db under home
+// raw, as only a hand edit could: the row is deleted when remove is true,
+// otherwise its value is set to value (SR-5.1).
+func tamperStoreID(t *testing.T, home, value string, remove bool) {
+	t.Helper()
+	db, err := sql.Open("sqlite", stateDB(home))
+	if err != nil {
+		t.Fatalf("raw open: %v", err)
+	}
+	defer func() {
+		if cerr := db.Close(); cerr != nil {
+			t.Errorf("close raw db: %v", cerr)
+		}
+	}()
+	query, args := `UPDATE store_meta SET value = ? WHERE key = 'store_id'`, []any{value}
+	if remove {
+		query, args = `DELETE FROM store_meta WHERE key = 'store_id'`, nil
+	}
+	res, err := db.Exec(query, args...)
+	if err != nil {
+		t.Fatalf("tamper store_id: %v", err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		t.Fatalf("tamper store_id: rows affected = %d, err = %v; want 1", n, err)
+	}
+}
+
 // TestStoreOpeningVerbEmitsSchemaMismatchWhenDBTampered replaces the old
 // TestHelpEmitsSchemaMismatchEnvelopeWhenDBTampered. Post-Part-D `help` is
 // DB-free and never surfaces the mismatch, so a store-opening verb (`list`)

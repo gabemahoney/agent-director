@@ -58,7 +58,7 @@ still holds: nothing in `internal/` imports `pkg/api`.
 | `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, `KillTmux`, `KillLogger`, etc.), params/result types, and error sentinels. Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director` and `internal/mcp`. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the eight socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the five name-based ones (`NewSessionByName`, `HasSession`, `KillSession`, `SendKeys`, `CapturePane`); `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`. `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`. | Direct `database/sql`; raw SQL strings; MCP framing. |
 | `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v5; see "Schema v5" below), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default; a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
-| `pkg/api/apitest` | Test seed helpers extracted from `pkg/api/*_test.go` for cross-package importing. Provides `Seed*` functions (`SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`) that set up fixture DB rows and filesystem state for `test/envelope-diff` and future Epic 4/5 smoke tests. Also provides the config writer `WriteTmuxConfig` (settings built with `TmuxInt`, or `TmuxFloat` / `TmuxString` / `TmuxBool` for malformed values, keyed by `config.TmuxKey`): `pkg/api`, CLI and MCP tests write `[tmux]` settings only through it, so no test outside `internal/config` spells a `[tmux]` key (rules: Test Harness, "apitest `[tmux]` config writer"). Provides `SeedSpawn`'s trailing `SpawnOption`s for the v5 columns, timestamps and raw text (`WithTmuxSessionName`, `WithStartedAt` / `WithEndedAt`, `WithLaunchStartedAt`, `WithRawLaunchStartedAt`, `WithNoLaunchStartedAt`, `WithLifeNumber`, `WithNoPreTrust`, `WithRawNoPreTrust`, `WithLaunchIdentity`, `WithNoLaunchToken`, `WithRawLabels`, `WithRawClaudeArgs`, `WithRawExtraEnv`) and archived session history (`WithSessionHistory`), the default socket `TestSocket`, the default pane `TestPaneID` / `TestPanePID` that `SeedSpawn` gives a live row (both re-exported from `internal/testsupport/launchfix`; a terminal row gets no pane), the store-read helper `ReadSpawnColumns` and the every-life history-read helper `ReadSessionHistoryAllLives`: new tests seed rows and read columns no verb shows only through these (rules: Test Harness, "apitest Seed* factory contract"). To place a seeded row's own labelled session in the Recorder, tests use `tmuxfix.Recorder.SeedRowSession` (in `internal/testsupport/tmuxfix`, not this package). Non-test package (regular `.go` files) so it can be imported by harnesses outside `pkg/api`. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
+| `pkg/api/apitest` | Test seed helpers extracted from `pkg/api/*_test.go` for cross-package importing. Provides `Seed*` functions (`SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`) that set up fixture DB rows and filesystem state for `test/envelope-diff` and future Epic 4/5 smoke tests. Also provides the config writer `WriteTmuxConfig` (settings built with `TmuxInt`, or `TmuxFloat` / `TmuxString` / `TmuxBool` for malformed values, keyed by `config.TmuxKey`): `pkg/api`, CLI and MCP tests write `[tmux]` settings only through it, so no test outside `internal/config` spells a `[tmux]` key (rules: Test Harness, "apitest `[tmux]` config writer"). Provides `SeedSpawn`'s trailing `SpawnOption`s for the v5 columns, timestamps and raw text (`WithTmuxSessionName`, `WithStartedAt` / `WithEndedAt`, `WithLaunchStartedAt`, `WithRawLaunchStartedAt`, `WithNoLaunchStartedAt`, `WithLifeNumber`, `WithNoPreTrust`, `WithRawNoPreTrust`, `WithLaunchIdentity`, `WithNoLaunchToken`, `WithRawLabels`, `WithRawClaudeArgs`, `WithRawExtraEnv`) and archived session history (`WithSessionHistory`), the default socket `TestSocket`, the default pane `TestPaneID` / `TestPanePID` that `SeedSpawn` gives a live row (both re-exported from `internal/testsupport/launchfix`; a terminal row gets no pane), the store-read helper `ReadSpawnColumns`, the every-life history-read helper `ReadSessionHistoryAllLives`, and the store-id helpers `ReadStoreID`, `SeedStoreID` and `OtherStoreID` (with `ErrNoStoreID`): new tests seed rows and read columns no verb shows only through these (rules: Test Harness, "apitest Seed* factory contract"). To place a seeded row's own labelled session in the Recorder, tests use `tmuxfix.Recorder.SeedRowSession` (in `internal/testsupport/tmuxfix`, not this package). Non-test package (regular `.go` files) so it can be imported by harnesses outside `pkg/api`. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
 | `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. The `Catalog` is consumed by `cmd/agent-director`'s envelope writer and `internal/mcp`'s `classifyDispatchError`. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
 | `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. `classifyDispatchError` delegates to `errnames.Classify`. | stdlib; `pkg/api`; `pkg/api/manifest`; `pkg/api/errnames`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
 | `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
@@ -172,7 +172,7 @@ verbatim so future code review can grep for it:
 
 > No SQL outside `internal/store`; callers use typed query primitives only.
 
-**Schema v5** lives in `internal/store/schema.go`. Three tables:
+**Schema v5** lives in `internal/store/schema.go`. Four tables:
 
 - `spawns` — one row per Claude Code instance under direction, with
   parent/child link (`parent_id`), lifecycle (`state`, `started_at`,
@@ -224,6 +224,30 @@ verbatim so future code review can grep for it:
     and advances no `row_version`; callers own their events and failure
     policy. The rotation archive calls it today. Every new code path that
     archives a session must call it too, never a second upsert.
+- `store_meta` (v5, b.fmk; SR-5.1) — `key TEXT PRIMARY KEY, value TEXT NOT
+  NULL`, with one row in Phase 1: `store_id`, the store's identity, carried
+  by every label (Task t2.h98.15.3f).
+  - **Value.** 64 random bits from `crypto/rand`, written as 16 lowercase hex
+    characters. It is random, not secret, but no error message ever contains
+    it (SR-15).
+  - **Created once, never changed.** `createSchema` (a new store) and
+    `migrateV4toV5` (the hop) insert it inside their own transaction, before
+    the stamp, only when no `store_id` row exists (`insertStoreIDOnceSQL` in
+    `internal/store/storeid.go`, the only statement that writes
+    `store_meta`). No verb changes it, and a restore keeps it because it is in
+    the file.
+  - **Read once at open.** `openDB` reads it after `ensureSchema` succeeds
+    (`readStoreID`), and `(*Store).StoreID()` returns it. A current-version
+    store with no `store_meta` table, no `store_id` row, or a value that is
+    not 16 lowercase hex refuses to open with an error wrapping
+    `ErrSchemaMismatch`; the DB is closed and nothing is written. Any other
+    read error (busy, I/O) is returned as it is. So every open `*Store` holds
+    a well-formed id; treating a malformed value like a missing row keeps a
+    made-up id out of labels.
+  - **Must use:** production code reads the id through `(*Store).StoreID()`,
+    never by querying `store_meta`, and writes it only through
+    `insertStoreIDOnce`. Tests read and pin it through the `apitest` store-id
+    helpers (`ReadStoreID`, `SeedStoreID`).
 
 **v5 columns (b.fmk).** Schema v5 adds twelve `spawns` columns, after the
 v4 columns, and one `session_history` column. They are the storage later work
@@ -337,8 +361,9 @@ still the one it read, so it knows the row has not changed since. As built:
 **Schema versioning convention.** SQLite's `PRAGMA user_version` is the
 source of truth for which schema this binary expects. On `Open`:
 
-- `user_version == 0` → fresh DB: create the v5 tables and indexes inside a
-  single transaction, then stamp `PRAGMA user_version = 5`.
+- `user_version == 0` → fresh DB: create the v5 tables and indexes and insert
+  the store id inside a single transaction, then stamp `PRAGMA user_version =
+  5`.
 - `0 < user_version < 5` (older-than-binary, i.e. v1, v2, v3, or v4) → **gated**: the
   store does **not** auto-migrate on `Open`. The open is refused with
   `store.ErrSchemaMigrationRequired` (an exported `errors.New` value; callers
@@ -354,7 +379,7 @@ source of truth for which schema this binary expects. On `Open`:
   V1 rows discarded), `{from: 2, apply: migrateV2toV3}` (five ADD COLUMN on
   `spawns`), `{from: 3, apply: migrateV3toV4}` (CREATE `session_history`), and
   `{from: 4, apply: migrateV4toV5}` (thirteen ADD COLUMN across `spawns` and
-  `session_history`) — see "Schema v1 → v2 Migration", "Schema v2 → v3
+  `session_history`, then CREATE `store_meta` and its store id) — see "Schema v1 → v2 Migration", "Schema v2 → v3
   Migration", "Schema v3 → v4 Migration", and "Schema v4 → v5 Migration" below.
   A v1 DB opened against this binary chains v1→v2→v3→v4→v5 in one pass. The
   sentinel is consumed after the chain commits.
@@ -362,6 +387,9 @@ source of truth for which schema this binary expects. On `Open`:
 - `user_version > 5` (newer-than-binary) → return the sentinel
   `store.ErrSchemaMismatch` (an exported `errors.New` value, so callers use
   `errors.Is`). No DDL runs in this case.
+- After any of the successful arms, `openDB` reads the store id; a store
+  without a valid one also fails with `ErrSchemaMismatch` (see `store_meta`
+  above).
 
 **Schema v1 → v2 Migration.** The first real migration:
 
@@ -409,32 +437,41 @@ b.v2c):
    in-transaction step before `COMMIT`; a rollback on any error leaves
    `user_version = 3` intact.
 
-**Schema v4 → v5 Migration.** The current migration adds the v5 columns
-(`migrateV4toV5`, b.fmk):
+**Schema v4 → v5 Migration.** The current migration adds the v5 columns and
+the `store_meta` table (`migrateV4toV5`, b.fmk):
 
 1. **Migration shape**: thirteen `ALTER TABLE … ADD COLUMN` statements across
    two tables inside a single transaction — the twelve `spawns` columns first,
    then `session_history.life_number`, in the order listed under "v5 columns"
    above. SQLite has no `ADD COLUMN IF NOT EXISTS`, so each one is guarded by a
    `pragma_table_info` probe of its own table and skipped when the column is
-   already present; re-entering the hop is safe.
+   already present; re-entering the hop is safe. Then, in the same
+   transaction, a new-table step: `CREATE TABLE IF NOT EXISTS store_meta`
+   (the same text as `schemaDDL`) and the guarded insert of one new random
+   `store_id`, which writes only when no `store_id` row exists. A second run,
+   or a run on a store whose `store_meta` already holds an id, keeps that id.
 2. **No backfill**: there is no phase 3. `ADD COLUMN` gives every existing row
    and history entry the column's ordinary default — row version 0, life 0,
    `no_pre_trust` 0, and NULL for the launch start, launch token, socket and
    server/pane identity. No row is a special case (a `pending` row included),
-   and no existing value is rewritten.
+   and no existing value is rewritten. The store id is the one row of a new
+   table, not a backfill.
 3. **`user_version` stamp**: `PRAGMA user_version = 5` is the final
-   in-transaction step before `COMMIT`; a rollback on any error leaves
-   `user_version = 4` and neither table with any of the new columns.
-   `user_version > 5` surfaces `ErrSchemaMismatch`.
+   in-transaction step before `COMMIT`; a rollback on any error (a column,
+   the table or the insert) leaves `user_version = 4`, neither table with any
+   of the new columns, and no `store_id`. `user_version > 5` surfaces
+   `ErrSchemaMismatch`.
 4. **Install-only**: like every hop, it runs only when the install flow's
    `migrate-authorized` sentinel authorizes `{"from": 4, "to": 5}`; a v4 store
    opened without it is refused with `ErrSchemaMigrationRequired`. `install.sh`
    learns the target version from that refusal, so it needed no change.
 5. **Downgrade**: to return a migrated store to v4, use the v5 → v4 emergency
-   downgrade recipe in docs/migration-guide.md §5 (drop the thirteen columns,
-   then `PRAGMA user_version = 4`), or restore a copy of `state.db` taken
-   before the install.
+   downgrade recipe in docs/migration-guide.md §5 (drop the thirteen columns
+   and the `store_meta` table, then `PRAGMA user_version = 4`), or restore a
+   copy of `state.db` taken before the install. Either way the store id is
+   gone: a later re-migration creates a new one, so every label written
+   before the rollback reads as another store's. Every agent is stopped
+   before the rollback and started again after a re-migration.
 
 **Concurrency.** `Open` calls `db.SetMaxOpenConns(1)`. `journal_mode=WAL`
 and `foreign_keys=ON` are applied via DSN PRAGMAs and verified after open;
@@ -1539,7 +1576,9 @@ store-opening verb (`agent-director list`, deliberately not the DB-free
 `help`/`version`) to run the migration and consume the sentinel, then
 verifies the post-open `user_version` and aborts loudly (exit 5) on any
 mismatch. A brief hook-failure window between the binary swap and that
-open is accepted, not worked around.
+open is accepted, not worked around. That same open gives the store its
+store id: the v4→v5 hop creates it on an upgrade, and `createSchema` on a
+fresh install. `install.sh` never reads or writes `store_meta`.
 
 The full ordered six-step flow — including how `<target>` is learned
 from the binary's own refusal message and why `list` rather than
@@ -1646,9 +1685,12 @@ migrated forward makes the older binary newer-than-DB in reverse and
 surfaces `ErrSchemaMismatch`. Roll back only before letting the new
 binary migrate the DB. After it has migrated, first return the store to
 the older version with the emergency downgrade recipe in
-docs/migration-guide.md §5 (for v5 → v4: drop the thirteen v5 columns,
-then stamp `user_version = 4`), or restore a copy of `state.db` taken
-before the install.
+docs/migration-guide.md §5 (for v5 → v4: drop the thirteen v5 columns
+and the `store_meta` table, then stamp `user_version = 4`), or restore a
+copy of `state.db` taken before the install. Either way the store id is
+gone, so a later re-migration creates a new one and every label written
+before the rollback reads as another store's; stop every agent before the
+rollback and start them again after a re-migration.
 
 ### Uninstall semantics
 
@@ -1679,14 +1721,33 @@ to the DB file, in which case the gated migration chain runs (v1→v2, DROP+CREA
 `permission_requests` with v1 rows discarded; v2→v3, five `spawns` ADD COLUMN
 preserving every row; v3→v4, CREATE `session_history` preserving every row;
 v4→v5, thirteen ADD COLUMN across `spawns` and `session_history` preserving
-every row and entry). Rolling the binary back after such a migration needs the
+every row and entry, then CREATE `store_meta` with one new store id).
+Rolling the binary back after such a migration needs the
 emergency downgrade recipe in docs/migration-guide.md §5 or a copy of
 `state.db` taken before the install.
 
-If a store-opening verb (e.g. `agent-director list`) reports `ErrSchemaMismatch` after an upgrade, the
-recovery is `rm ~/.agent-director/state.db*` followed by a re-run. Spawn
-history in the DB is lost; JSONL transcripts under `~/.claude/projects/`
-survive independently and can be re-resumed by id via `agent-director resume`.
+`ErrSchemaMismatch` also fires for a store at the current version that has no
+valid store id: no `store_meta` table, no `store_id` row, or a value that is
+not 16 lowercase hex (see `internal/store`, `store_meta`). The store and the
+migration never produce that state; only a hand edit of `state.db` does (the
+v5 → v4 recipe leaves the store at v4, which a v5 binary refuses with
+`ErrSchemaMigrationRequired` instead). The error never contains the stored
+value.
+
+If a store-opening verb (e.g. `agent-director list`) reports `ErrSchemaMismatch`,
+the recovery depends on the cause, and it is never to delete `state.db`:
+
+- **Store newer than the binary.** Install the agent-director release that
+  matches the store's schema. This loses nothing; it is the fix `install.sh`'s
+  exit-5 message and the install skill give.
+- **Hand-edited or missing store id, or a binary rolled back over a migrated
+  store.** Restore the copy of `state.db` (with its `-wal` and `-shm` files)
+  taken before the install. That copy is v4, so re-run the install afterwards;
+  a v5 binary's install migrates it again. Writes made since the install are
+  lost.
+
+Deleting the store loses every row and the store id. JSONL transcripts under
+`~/.claude/projects/` survive independently either way.
 
 ## Stdio MCP server
 
@@ -3228,12 +3289,16 @@ file. Only then does the migration chain run: the v1→v2 hop (DROP+CREATE
 `permission_requests`, no row preservation), the v2→v3 hop (five
 `spawns` ADD COLUMN, no backfill), the v3→v4 hop (CREATE
 `session_history`, no backfill), and/or the v4→v5 hop (thirteen ADD COLUMN
-across `spawns` and `session_history`, no backfill), walking from the DB's
-`user_version` up to `schemaVersion` in one pass. `ErrSchemaMismatch` only
-fires when `user_version > 5` — meaning the store was written by a binary
-newer than the current one. Rolling a release back after its install migrated
-the store needs the emergency downgrade recipe in docs/migration-guide.md §5
-or a copy of `state.db` taken before the install.
+across `spawns` and `session_history`, no backfill, then CREATE `store_meta`
+with one new store id), walking from the DB's `user_version` up to
+`schemaVersion` in one pass. `ErrSchemaMismatch` fires when `user_version >
+5` — meaning the store was written by a binary newer than the current one —
+or when a v5 store has no valid store id, which only a hand edit causes (see
+"ErrSchemaMismatch recovery"). Rolling a release back after its install
+migrated the store needs the emergency downgrade recipe in
+docs/migration-guide.md §5 (the thirteen columns and `store_meta`) or a copy
+of `state.db` taken before the install; a later re-migration then creates a
+new store id.
 
 Bumping `schemaVersion` beyond 5 requires:
 
@@ -3959,6 +4024,29 @@ values, except for a row the test inserted itself.
     inserted. No entries gives an empty non-nil slice.
   - It reads the table directly, never through the store's history read.
 
+**Store-id helpers** (`pkg/api/apitest/storeid.go`):
+
+- `ReadStoreID(dbPath) (string, error)`
+  - Returns `store_meta`'s `store_id` raw, through a direct connection. It
+    does not check the value's form, so it also reads a hand-edited value.
+  - A missing `store_meta` table or `store_id` row returns an error wrapping
+    `apitest.ErrNoStoreID`. It never creates a store file.
+  - A test that holds a `*store.Store` uses its `StoreID()` instead: the
+    value read when that store opened.
+- `SeedStoreID(dbPath, id) error`
+  - Overwrites the store's id with `id`, so a test can build this store's
+    labels deterministically. Test-only; no production path changes the id.
+  - Rejects an `id` that is not 16 lowercase hex and writes nothing. A store
+    with no `store_id` row or no `store_meta` table gives an error wrapping
+    `ErrNoStoreID`.
+  - A store opened before the call keeps the id it read, so seed before
+    opening the client or store under test.
+- `OtherStoreID(id) string`
+  - Returns a well-formed id that always differs from `id`, for another
+    store's labels. It is deterministic: for a well-formed id it changes the
+    last hex digit to the next one (`f` wraps to `0`); for any other input it
+    returns `0000000000000000`.
+
 **Row-to-Recorder session helper:**
 
 - `(*tmuxfix.Recorder).SeedRowSession(t, dbPath, instanceID, opts...) SeedSession`
@@ -3990,6 +4078,9 @@ values, except for a row the test inserted itself.
   `ReadSpawnColumns`, and history through `ReadSessionHistoryAllLives`.
 - They seed history only through `WithSessionHistory` or the hook path (a
   session rotation), never by writing `session_history`.
+- A label of this store ends with its id, taken from `ReadStoreID`, the
+  store's `StoreID()` or an id pinned with `SeedStoreID`; another store's
+  labels use `OtherStoreID`. No test writes `store_meta` any other way.
 - A test that needs a seeded row's own session in the Recorder uses
   `tmuxfix.Recorder.SeedRowSession`. It never reads a row's launch token or
   spells one by hand (SR-20.2).

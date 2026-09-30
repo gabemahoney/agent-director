@@ -108,9 +108,12 @@ type Client struct {
 //     CreateIfMissing: true or initialize the store out-of-band before calling
 //     New.
 //
-//   - [ErrSchemaMismatch]: returned when the database file exists but was
-//     created by a different schema version. The store cannot be used; the
-//     operator must remove the database file and start fresh.
+//   - [ErrSchemaMismatch]: returned when this binary cannot use the store.
+//     For a store newer than the binary, install the matching binary. For a
+//     store at the current version without a valid store id (only a hand
+//     edit causes this), restore the copy of state.db taken before the
+//     install. Never delete state.db. See docs/architecture.md
+//     "ErrSchemaMismatch recovery".
 //
 //   - [ErrSchemaMigrationRequired]: returned when the database is older than
 //     the schema version this binary understands and no valid administrator

@@ -23,7 +23,7 @@ dbPath)` (`schema.go`) is called from `openDB` on every `Open`/`OpenOrInit`
 | `user_version` on disk                 | `ensureSchema` does                                                 |
 | -------------------------------------- | ------------------------------------------------------------------- |
 | `== schemaVersion`                     | nothing — no-op, already current                                    |
-| `0`                                    | `createSchema(db)` — full latest-schema DDL + stamp                 |
+| `0`                                    | `createSchema(db)` — full latest-schema DDL + store id + stamp      |
 | `0 < v < schemaVersion` (older-than-binary) | **gated** — refuse with `ErrSchemaMigrationRequired` unless an administrator authorization sentinel exact-matches; when authorized, run the chained migration steps (see §1a) |
 | `> schemaVersion`                      | wrap `ErrSchemaMismatch` (typed error), run **no** DDL              |
 
@@ -38,6 +38,22 @@ The newer-than-binary arm is the guard rail: a DB from a *newer* binary (say
 `user_version=6` opened by a v5 binary) returns `ErrSchemaMismatch` (`store.go`)
 rather than touching the file. Callers detect it with
 `errors.Is(err, ErrSchemaMismatch)`.
+
+**The store id.** Schema v5 has a `store_meta` table (`key TEXT PRIMARY KEY,
+value TEXT NOT NULL`) whose one row, `store_id`, identifies the store: 64
+random bits from `crypto/rand`, written as 16 lowercase hex characters
+(`storeid.go`). It is written only when the store gets its v5 schema: by
+`createSchema` for a fresh store, or by `migrateV4toV5` for a migrated one. The
+insert is guarded (`insertStoreIDOnceSQL`, `INSERT … SELECT … WHERE NOT
+EXISTS`), so it never replaces an id that is already there. No other statement
+writes `store_meta`, and no verb changes the id. After `ensureSchema` succeeds,
+`openDB` reads the id once (`readStoreID`), and `(*Store).StoreID()` returns
+it. A current-version store with no `store_meta` table, no `store_id` row, or a
+value that is not 16 lowercase hex characters fails the open with an error that
+wraps `ErrSchemaMismatch`. The error never contains the value, the DB is
+closed, and nothing is written. Only a hand edit leaves a store in that state;
+the v5 → v4 recipe (§5) stamps v4, which a v5 binary refuses with
+`ErrSchemaMigrationRequired`.
 
 **A registry of steps, not a switch.** Version transitions are no longer
 `case` arms. Each single-version upgrade is a `migrationStep{from: N, apply:
@@ -60,8 +76,11 @@ the DB stamped at the last successfully-committed version, never at an
 intermediate un-stamped state, so a re-open resumes the chain cleanly from
 there. Look at the shape of `migrateV1toV2`: begin → DDL → stamp → commit, with
 a rollback on every error path. `createSchema` follows the same
-begin/exec/stamp/commit pattern so a crash mid-creation leaves `user_version`
-at 0 and the next open retries.
+begin/exec/stamp/commit pattern (`schemaDDL`, then the guarded store-id
+insert, then the stamp) so a crash mid-creation leaves `user_version` at 0 and
+the next open retries. A retry, or any run on a DB whose tables already exist
+with `user_version` stamped back to 0, keeps the existing tables and store id:
+the DDL is `IF NOT EXISTS` and the insert is guarded.
 
 ## 1a. The chained step engine and the sentinel gate
 
@@ -142,7 +161,10 @@ never touching `state.db`) — there is no logger plumbed into the store:
 
 1. Bump `schemaVersion` to `6` (`store.go`).
 2. Evolve `schemaDDL` so a fresh DB is created directly at v6 (the two-places
-   rule — §1, §4).
+   rule — §1, §4). `schemaDDL` already includes `store_meta`, and
+   `createSchema` inserts a fresh store's `store_id` in the same transaction;
+   keep both. A v5 → v6 hop must keep `store_meta` and its row: the id is
+   created once and never changed (§1).
 3. Write `migrateV5toV6(db)` following the one-transaction/validate-first
    pattern (§2).
 4. Append `{from: 5, apply: migrateV5toV6}` to `migrationSteps` (`schema.go`).
@@ -223,7 +245,14 @@ hop across two tables: twelve `ALTER TABLE spawns ADD COLUMN` (`row_version`,
 `tmux_server_starttime`, `pane_id`, `pane_pid`, `pane_starttime`) and one
 `ALTER TABLE session_history ADD COLUMN life_number`. Each `ADD COLUMN` is
 guarded by its own table's `pragma_table_info` probe and skipped when the
-column is already there, so the hop is safe to re-enter.)
+column is already there, so the hop is safe to re-enter. After the thirteen
+columns it also does a new-table step: `CREATE TABLE IF NOT EXISTS
+store_meta`, with `schemaDDL`'s exact text (the two-places rule), then the
+guarded insert of one new random `store_id`, which writes only when no
+`store_id` row exists. A second run, or a run on a store whose `store_meta`
+already holds an id, keeps that id. Any failure in the columns, the table or
+the insert rolls the whole hop back: `user_version` stays 4, neither table has
+any new column, and there is no `store_id`.)
 
 **Phase 3 — data backfill/transform.** `UPDATE`/`INSERT … SELECT` to populate
 new columns or reshape rows, if the migration keeps data. Not every hop needs
@@ -241,7 +270,9 @@ row or entry gets — row version 0, life 0 (on `spawns` and on every
 (`launch_started_at` NULL, a `pending` row included), and NULL launch token,
 socket and server/pane identity. There are no special cases: no row or entry is
 treated differently for its state, its history or its origin, and no existing
-value is rewritten.
+value is rewritten. The `store_id` insert is not a backfill: it adds the one
+row of a new table and touches no existing row. The stamp is still the last
+statement of the hop.
 
 Session history belongs to a life: each `session_history` entry carries the
 life of the id that was current when its session ran, and after the v5 hop
@@ -307,15 +338,23 @@ by step against the recipe below:
 - **Step 4:** `TestV5FreshCreate_And_MigratedConverge` compares a fresh
   `OpenOrInit` store against a v1 store taken through the whole chain
   (`makeV1DB` plus a `{1→5}` sentinel). It compares `PRAGMA table_info`
-  (`readTableShape`) for `spawns` and `session_history` only — not indexes and
-  not other tables. Your hop's test should also compare `sqlite_master` for
-  the tables and indexes your hop touches.
+  (`readTableShape`) for the tables in `v5ShapeTables` (`spawns`,
+  `session_history` and `store_meta`, in `migration_fixtures_test.go`) — not
+  indexes and not other tables. Your hop's test should add any table it
+  creates to that list, and should also compare `sqlite_master` for the tables
+  and indexes your hop touches.
 - **Rollback:** `TestV5Migration_RollbackOnInjectedFailure` breaks the hop
   after the `spawns` columns land (`breakV5SessionHistoryHop`) and asserts v4,
   no new columns, unchanged rows and a kept sentinel.
 - **Data:** `TestV5Migration_HistoryFixtureAtLifeZero` and
   `TestV5Migration_PendingRowHasNoLaunchStart` assert the migrated values
   (`readV5Columns`, `readRawSpawn`, `readRawHistory`, `assertV5Defaults`).
+- **Store id:** `internal/store/schema_v5_store_id_test.go` covers the
+  `store_meta` part of v5: one well-formed id for a fresh and a migrated
+  store, a kept id on reopen, on hop re-entry, on a fresh-create re-run and on
+  a restored copy, the hop's rollback when its `store_meta` step fails, the
+  open failure for a missing or malformed id, and the v5 → v4 recipe followed
+  by a re-migration that creates a new id.
 
 The v4 fixture is `makeV4HistoryFixture` in
 `internal/store/migration_fixtures_test.go`. It builds a genuine v4 store on
@@ -487,17 +526,20 @@ ALTER TABLE spawns DROP COLUMN pane_id;
 ALTER TABLE spawns DROP COLUMN pane_pid;
 ALTER TABLE spawns DROP COLUMN pane_starttime;
 ALTER TABLE session_history DROP COLUMN life_number;
+DROP TABLE store_meta;
 PRAGMA user_version = 4;
 COMMIT;
 ```
 
-That is exactly the thirteen columns `migrateV4toV5` adds: twelve on `spawns`
-and `session_history.life_number`. Drop all thirteen, so that a later
-migration back to v5 never keeps a stale token, socket or identity (SR-21.4),
-and drop no other column. `PRAGMA user_version
-= 4` is the last statement before `COMMIT`. `PRAGMA user_version;` should then print `4`, and
+That is exactly what `migrateV4toV5` adds: the thirteen columns (twelve on
+`spawns` and `session_history.life_number`) and the `store_meta` table. Drop
+all thirteen columns, so that a later migration back to v5 never keeps a stale
+token, socket or identity (SR-21.4), and drop the `store_meta` table with its
+store id. Drop no other column or table. `PRAGMA user_version = 4` is the last
+statement before `COMMIT`. `PRAGMA user_version;` should then print `4`,
 `.schema spawns` and `.schema session_history` should show none of the
-thirteen columns. A v4 binary then opens the store.
+thirteen columns, and `.schema store_meta` should print nothing. A v4 binary
+then opens the store.
 
 SQLite refuses `DROP COLUMN` on a column that is a PRIMARY KEY, has a UNIQUE
 constraint, is indexed, appears in a CHECK or foreign-key constraint, or is
@@ -506,7 +548,9 @@ any of these in the v5 DDL: each is a plain column with at most `NOT NULL
 DEFAULT 0`. `session_history`'s table-level
 `UNIQUE(claude_instance_id, claude_session_id)` and its
 `idx_session_history_instance` index do not include `life_number`, and the
-three `spawns` indexes cover only `state`, `last_seen_at` and `parent_id`. So
+three `spawns` indexes cover only `state`, `last_seen_at` and `parent_id`.
+`store_meta` has no index, trigger or view of its own beyond its primary key,
+and no other table refers to it, so `DROP TABLE store_meta` succeeds too. So
 every statement in the recipe succeeds on a v5 store. If one fails, bail mode
 stops the CLI at that statement. `COMMIT` never runs, the open transaction is
 rolled back when the CLI exits, and the store is still v5; check the schema
@@ -514,9 +558,10 @@ for a hand-added index or constraint before you retry. Without bail mode the
 CLI reports the error, runs the remaining statements and commits them, leaving
 a partial downgrade stamped v4. If that happens, restore the copy from step 2.
 
-The recipe deletes no row and no history entry. What is lost is the values
-in the dropped columns: row versions, launch starts and tokens, sockets,
-server and pane identities, lives and recorded pre-trust choices. A v4 binary
+The recipe deletes no `spawns` row and no history entry. What is lost is the
+values in the dropped columns (row versions, launch starts and tokens,
+sockets, server and pane identities, lives and recorded pre-trust choices) and
+the store id. A v4 binary
 reads every history entry of an id, so after the rollback it shows every
 life's conversations again, as it did before schema v5.
 
@@ -529,11 +574,20 @@ entry the ordinary defaults again (no phase 3, §2):
 - Every row gets `no_pre_trust` 0, so a recorded pre-trust opt-out is lost and
   a later `resume` of that row pre-trusts its folder. To keep an opt-out, start
   the agent again with a spawn or reuse that turns pre-trust off.
+- The hop finds no `store_meta`, so it creates the table and a **new** random
+  store id. The old id is gone from the store (only the step-2 copy still
+  holds it), so every label written before the
+  rollback (the store id is carried by every label, Task t2.h98.15.3f) reads
+  as another store's. That is why every agent is stopped before the rollback
+  (step 1) and started again after the re-migration, never carried across it.
 
 **Alternative: restore a backup.** Restoring a copy of `state.db` taken before
-the v5 install avoids both consequences, but loses every write made since the
-install, for every caller on the host. `install.sh` does not make that copy;
-the operator must take it before installing.
+the v5 install avoids the history and pre-trust consequences, but loses every
+write made since the install, for every caller on the host. It does not keep
+the store id: that copy is v4 and has none, so a later migration of it also
+creates a new id, and agents are stopped and started around it the same way.
+`install.sh` does not make that copy; the operator must take it before
+installing.
 
 ## References
 
@@ -546,6 +600,11 @@ the operator must take it before installing.
   `sentinelFilename` (`migrate-authorized`), the trail events.
 - `internal/store/store.go` — `schemaVersion`, `ErrSchemaMismatch`,
   `ErrSchemaMigrationRequired`, `Open`/`OpenOrInit`/`openDB`.
+- `internal/store/storeid.go` — the store id: `(*Store).StoreID`,
+  `readStoreID` (the open-time read), `insertStoreIDOnce` /
+  `insertStoreIDOnceSQL` (the guarded insert used by `createSchema` and
+  `migrateV4toV5`), `newStoreID`, `validStoreID`.
+- `internal/store/schema_v5_store_id_test.go` — the store-id tests (§3).
 - `pkg/api/aliases.go` — `ErrSchemaMigrationRequired` alias (mirrors the
   `ErrSchemaMismatch` precedent).
 - `internal/store/schema_test.go` — the fresh-path, idempotency, and v1→v2
@@ -560,6 +619,10 @@ the operator must take it before installing.
   `assertDBBytesUnchanged`) and the v5 helpers: `makeV4HistoryFixture` (the v4
   store seeded with session history and a `pending` row), `v5ColumnSpecs`,
   `readTableShape`, `readRawSpawn`, `readRawHistory`, `readV5Columns`,
-  `preAddV5Columns`, `breakV5SessionHistoryHop`.
+  `preAddV5Columns`, `breakV5SessionHistoryHop`; and the store-id helpers:
+  `readStoreMetaRaw`, `deleteStoreIDRow`, `setStoreIDRaw`, `preAddStoreMeta`,
+  `breakV5StoreMetaStep`, and `applyV5ToV4Recipe` (with
+  `v5ToV4RecipeStatements`, which must match the v5 → v4 recipe statement for
+  statement).
 - `internal/store/testdata/schema_v1.sql` — the version-N fixture pattern.
 - docs/engineering-guide.md §10 — sandboxed execution, the b.8dr incident.

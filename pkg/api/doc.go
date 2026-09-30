@@ -43,7 +43,8 @@
 //	    // store does not exist; run with CreateIfMissing:true or init first
 //	}
 //	if errors.Is(err, api.ErrSchemaMismatch) {
-//	    // DB schema version mismatch; operator must re-initialize the store
+//	    // store unusable by this binary; see ErrSchemaMismatch (install the
+//	    // matching binary, or restore the pre-install copy of state.db)
 //	}
 //	if errors.Is(err, api.ErrSchemaMigrationRequired) {
 //	    // DB is older than this binary; migration must be performed by an

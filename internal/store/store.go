@@ -20,7 +20,9 @@ import (
 
 // ErrSchemaMismatch is returned by Open/OpenOrInit when the SQLite
 // user_version is non-zero and does not match the schema version this binary
-// understands. Callers should use errors.Is to detect it.
+// understands, and when a store at the current version has no valid store id
+// (store_meta's store_id row missing, or not 16 lowercase hex; SR-5.1, WD
+// 2026-09-29 STORE). Callers should use errors.Is to detect it.
 var ErrSchemaMismatch = errors.New("store: schema version mismatch")
 
 // ErrSchemaMigrationRequired is returned by Open/OpenOrInit when the SQLite
@@ -57,6 +59,9 @@ const parentDirMode os.FileMode = 0o700
 // The underlying *sql.DB is unexported on purpose — see package doc.
 type Store struct {
 	db *sql.DB
+	// storeID is store_meta's store_id, read once at open (SR-5.1); see
+	// StoreID.
+	storeID string
 }
 
 // Open opens an existing SQLite database at path. It does NOT create the
@@ -158,7 +163,16 @@ func openDB(resolved string) (*Store, error) {
 		return nil, err
 	}
 
-	return &Store{db: db}, nil
+	// Read the store id once, now that the schema is current (SR-5.1). A
+	// missing or malformed id fails the open (ErrSchemaMismatch); the read
+	// writes nothing.
+	storeID, err := readStoreID(db)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+
+	return &Store{db: db, storeID: storeID}, nil
 }
 
 // Close releases the underlying database handle. Safe to call once.

@@ -69,9 +69,12 @@ var ErrAlreadyDecided = store.ErrAlreadyDecided
 // without importing internal/store directly.
 var ErrPermissionRequestNotFound = store.ErrPermissionRequestNotFound
 
-// ErrSchemaMismatch is returned by api.New when the SQLite database was
-// created by a different schema version. Callers should treat this as a
-// fatal configuration error; the store cannot be used.
+// ErrSchemaMismatch is returned by api.New when this binary cannot use the
+// store. For a store newer than the binary, install the matching binary. For
+// a store at the current version without a valid store id (store_meta's
+// store_id, SR-5.1; only a hand edit causes this), restore the copy of
+// state.db taken before the install. Never delete state.db. See
+// docs/architecture.md "ErrSchemaMismatch recovery".
 var ErrSchemaMismatch = store.ErrSchemaMismatch
 
 // ErrSchemaMigrationRequired is returned by api.New when the SQLite database

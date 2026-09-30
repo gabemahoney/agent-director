@@ -722,6 +722,218 @@ func breakV5SessionHistoryHop(t *testing.T, path string) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Store-id fixtures (Epic 4b; SR-5.1, SR-5.4, SR-20.6 "The store id"). Each
+// helper opens its own raw connection and closes it before returning, so the
+// store is closed afterwards and byte-identity snapshots are well defined.
+// ---------------------------------------------------------------------------
+
+// v5ShapeTables lists the tables whose fresh and migrated shapes must match
+// (SR-20.6 shape case); store_meta is a table, so it is here, not in v5ColumnSpecs.
+var v5ShapeTables = []string{"spawns", "session_history", "store_meta"}
+
+// storeMetaShape is store_meta's expected PRAGMA table_info (SR-5.1; SR-20.6 shape case).
+var storeMetaShape = []tableColumn{
+	{name: "key", typ: "TEXT", notNull: 0, pk: 1},
+	{name: "value", typ: "TEXT", notNull: 1, pk: 0},
+}
+
+// storeMetaRow is one raw store_meta row; typ is SQLite's typeof(value).
+type storeMetaRow struct{ key, value, typ string }
+
+// storeMetaRaw is store_meta read raw; present is false when the table is absent.
+type storeMetaRaw struct {
+	present bool
+	rows    []storeMetaRow // ordered by key; empty when absent or empty
+}
+
+// storeID returns the store_id row's value and whether that row exists.
+func (m storeMetaRaw) storeID() (string, bool) {
+	for _, r := range m.rows {
+		if r.key == "store_id" {
+			return r.value, true
+		}
+	}
+	return "", false
+}
+
+// openExistingRaw opens a raw connection to an existing DB file; it fails the
+// test rather than let sql.Open create a missing file. The caller closes it.
+func openExistingRaw(t *testing.T, who, path string) *sql.DB {
+	t.Helper()
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("%s: stat %q: %v", who, path, err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("%s: raw open %q: %v", who, path, err)
+	}
+	return db
+}
+
+// readStoreMetaRaw reads every store_meta row raw, telling "table absent" from
+// "table empty" (SR-20.6 one-id, keep-the-id, rollback and recipe cases).
+func readStoreMetaRaw(t *testing.T, path string) storeMetaRaw {
+	t.Helper()
+	db := openExistingRaw(t, "readStoreMetaRaw", path)
+	defer func() { _ = db.Close() }()
+	var n int
+	if err := db.QueryRow(
+		`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'store_meta'`,
+	).Scan(&n); err != nil {
+		t.Fatalf("readStoreMetaRaw: probe sqlite_master: %v", err)
+	}
+	if n == 0 {
+		return storeMetaRaw{}
+	}
+	out := storeMetaRaw{present: true}
+	rows, err := db.Query(`SELECT key, CAST(value AS TEXT), typeof(value) FROM store_meta ORDER BY key`)
+	if err != nil {
+		t.Fatalf("readStoreMetaRaw: query store_meta: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var r storeMetaRow
+		if err := rows.Scan(&r.key, &r.value, &r.typ); err != nil {
+			t.Fatalf("readStoreMetaRaw: scan store_meta: %v", err)
+		}
+		out.rows = append(out.rows, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("readStoreMetaRaw: iterate store_meta: %v", err)
+	}
+	return out
+}
+
+// execStoreIDRow runs one store_id-row statement on a closed store and fails
+// unless it changed exactly one row.
+func execStoreIDRow(t *testing.T, who, path, stmt string, args ...any) {
+	t.Helper()
+	db := openExistingRaw(t, who, path)
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("%s: close raw db: %v", who, err)
+		}
+	}()
+	res, err := db.Exec(stmt, args...)
+	if err != nil {
+		t.Fatalf("%s: %v", who, err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		t.Fatalf("%s: changed %d store_id rows (err %v); want 1", who, n, err)
+	}
+}
+
+// deleteStoreIDRow hand-edits a closed v5 store to remove its store_id row
+// (SR-20.6 missing-row case: the open fails with ErrSchemaMismatch).
+func deleteStoreIDRow(t *testing.T, path string) {
+	t.Helper()
+	execStoreIDRow(t, "deleteStoreIDRow", path, `DELETE FROM store_meta WHERE key = 'store_id'`)
+}
+
+// setStoreIDRaw hand-edits a closed v5 store's store_id to value, unvalidated;
+// a []byte stores a BLOB (SR-20.6 malformed-value case).
+func setStoreIDRaw(t *testing.T, path string, value any) {
+	t.Helper()
+	execStoreIDRow(t, "setStoreIDRaw", path, `UPDATE store_meta SET value = ? WHERE key = 'store_id'`, value)
+}
+
+// dropStoreMetaTable hand-edits a closed v5 store to drop store_meta, failing
+// unless the table existed (SR-20.6 missing-row case, table-absent variant:
+// the open fails with ErrSchemaMismatch).
+func dropStoreMetaTable(t *testing.T, path string) {
+	t.Helper()
+	db := openExistingRaw(t, "dropStoreMetaTable", path)
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("dropStoreMetaTable: close raw db: %v", err)
+		}
+	}()
+	var n int
+	if err := db.QueryRow(
+		`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'store_meta'`,
+	).Scan(&n); err != nil {
+		t.Fatalf("dropStoreMetaTable: probe sqlite_master: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("dropStoreMetaTable: store_meta tables = %d; want 1", n)
+	}
+	if _, err := db.Exec(`DROP TABLE store_meta`); err != nil {
+		t.Fatalf("dropStoreMetaTable: drop store_meta: %v", err)
+	}
+}
+
+// preAddStoreMeta creates store_meta on a v4 fixture before the hop, holding id,
+// or no row when id is "" (SR-20.6 partial re-entry: the hop keeps an existing id).
+func preAddStoreMeta(t *testing.T, path, id string) {
+	t.Helper()
+	db := openExistingRaw(t, "preAddStoreMeta", path)
+	defer func() { _ = db.Close() }()
+	// Same text as schemaDDL and migrateV4toV5 (the two-places rule).
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS store_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`); err != nil {
+		t.Fatalf("preAddStoreMeta: create store_meta: %v", err)
+	}
+	if id == "" {
+		return
+	}
+	if _, err := db.Exec(`INSERT INTO store_meta(key, value) VALUES ('store_id', ?)`, id); err != nil {
+		t.Fatalf("preAddStoreMeta: insert store_id: %v", err)
+	}
+}
+
+// breakV5StoreMetaStep pre-creates an empty store_meta whose value CHECK always
+// fails, so the hop's guarded insert fails after all thirteen ADD COLUMNs (SR-20.6
+// rollback case). The table survives the rollback, present and empty.
+func breakV5StoreMetaStep(t *testing.T, path string) {
+	t.Helper()
+	db := openExistingRaw(t, "breakV5StoreMetaStep", path)
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(`CREATE TABLE store_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL CHECK (0))`); err != nil {
+		t.Fatalf("breakV5StoreMetaStep: create store_meta: %v", err)
+	}
+}
+
+// v5ToV4RecipeStatements is the v5 → v4 recipe in docs/migration-guide.md
+// ("#### v5 → v4"); it must match the guide statement for statement.
+var v5ToV4RecipeStatements = []string{
+	"ALTER TABLE spawns DROP COLUMN row_version",
+	"ALTER TABLE spawns DROP COLUMN launch_started_at",
+	"ALTER TABLE spawns DROP COLUMN life_number",
+	"ALTER TABLE spawns DROP COLUMN no_pre_trust",
+	"ALTER TABLE spawns DROP COLUMN launch_token",
+	"ALTER TABLE spawns DROP COLUMN tmux_socket",
+	"ALTER TABLE spawns DROP COLUMN tmux_server_pid",
+	"ALTER TABLE spawns DROP COLUMN tmux_server_started",
+	"ALTER TABLE spawns DROP COLUMN tmux_server_starttime",
+	"ALTER TABLE spawns DROP COLUMN pane_id",
+	"ALTER TABLE spawns DROP COLUMN pane_pid",
+	"ALTER TABLE spawns DROP COLUMN pane_starttime",
+	"ALTER TABLE session_history DROP COLUMN life_number",
+	"DROP TABLE store_meta",
+	"PRAGMA user_version = 4",
+}
+
+// applyV5ToV4Recipe runs v5ToV4RecipeStatements on a closed v5 store in one
+// transaction (SR-20.6 recipe case); it must match the guide statement for statement.
+func applyV5ToV4Recipe(t *testing.T, path string) {
+	t.Helper()
+	db := openExistingRaw(t, "applyV5ToV4Recipe", path)
+	defer func() { _ = db.Close() }()
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("applyV5ToV4Recipe: begin: %v", err)
+	}
+	for _, stmt := range v5ToV4RecipeStatements {
+		if _, err := tx.Exec(stmt); err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("applyV5ToV4Recipe: %s: %v", stmt, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("applyV5ToV4Recipe: commit: %v", err)
+	}
+}
+
 // injectWriteFailure makes kind's writes to instanceID's rows fail on s, via
 // writefailfix (the single trigger source); the test's cleanup removes it.
 // Seed the row first: several kinds also match seeding writes.

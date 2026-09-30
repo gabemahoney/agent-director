@@ -35,6 +35,13 @@ import (
 // column, life_number (INTEGER NOT NULL DEFAULT 0), appended last. The column
 // order and constraint text match migrateV4toV5 exactly, so a fresh store and
 // a migrated store have identical column lists on both tables.
+//
+// v5 also adds one new table (SR-5.1, WD 2026-09-29 STORE): store_meta (key
+// TEXT PRIMARY KEY, value TEXT NOT NULL), whose one Phase 1 row is store_id —
+// 64 random bits as 16 lowercase hex, inserted once when the store is created
+// (createSchema) or by the hop (migrateV4toV5), only when absent, and never
+// changed (SR-5.4). Its CREATE text is identical here and in migrateV4toV5
+// (the two-places rule), so both give the same PRAGMA table_info(store_meta).
 const schemaDDL = `
 CREATE TABLE IF NOT EXISTS spawns (
     claude_instance_id         TEXT PRIMARY KEY,
@@ -99,6 +106,8 @@ CREATE TABLE IF NOT EXISTS session_history (
     UNIQUE(claude_instance_id, claude_session_id)
 );
 CREATE INDEX IF NOT EXISTS idx_session_history_instance ON session_history(claude_instance_id);
+
+CREATE TABLE IF NOT EXISTS store_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `
 
 // migrationStep upgrades a database from `from` to `from+1` inside a single
@@ -128,8 +137,9 @@ var migrationSteps = []migrationStep{
 
 // ensureSchema enforces the schema-version contract on an opened *sql.DB.
 //
-//	user_version == 0             -> fresh DB; create tables/indexes in one tx,
-//	                                 stamp user_version = schemaVersion.
+//	user_version == 0             -> fresh DB; create tables/indexes and the
+//	                                 store id in one tx, stamp user_version =
+//	                                 schemaVersion.
 //	0 < user_version < schemaVersion (older-than-binary)
 //	                              -> gated: migrate ONLY when an administrator
 //	                                 authorization sentinel exact-matches;
@@ -223,8 +233,11 @@ func buildMigrationRefusal(current int) error {
 		ErrSchemaMigrationRequired, current, schemaVersion)
 }
 
-// createSchema runs the v-current (schemaVersion) DDL and stamps user_version
-// in a single tx.
+// createSchema runs the v-current (schemaVersion) DDL, inserts the store's
+// store_id when none exists (SR-5.4), and stamps user_version, in a single tx.
+// It may run on a DB whose tables already exist (user_version stamped back to
+// 0); the IF NOT EXISTS DDL and the guarded insert then keep the existing
+// tables and id.
 // PRAGMA user_version cannot take a bound parameter, so the version is
 // interpolated from a trusted package constant — never user input.
 func createSchema(db *sql.DB) error {
@@ -235,6 +248,10 @@ func createSchema(db *sql.DB) error {
 	if _, err := tx.Exec(schemaDDL); err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("store: apply schema: %w", err)
+	}
+	if err := insertStoreIDOnce(tx); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("store: create schema: %w", err)
 	}
 	if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
 		_ = tx.Rollback()
@@ -393,9 +410,15 @@ CREATE INDEX IF NOT EXISTS idx_session_history_instance ON session_history(claud
 //
 // SQLite has no ADD COLUMN IF NOT EXISTS (migration-guide §2), so each ALTER
 // is guarded by a pragma_table_info probe of its own table and skipped when
-// the column is already present, making the hop idempotent on re-entry. Any
-// probe or ALTER failure rolls the whole hop back, leaving user_version=4 and
-// neither table with any of the new columns.
+// the column is already present, making the hop idempotent on re-entry.
+//
+// After the thirteen columns the hop creates store_meta (CREATE TABLE IF NOT
+// EXISTS, with schemaDDL's exact text: the two-places rule) and inserts one
+// new random store_id only when no store_id row exists (SR-5.1, SR-5.4; WD
+// 2026-09-29 STORE), so a second run, or a run on a store that already holds
+// an id, keeps that id. Any probe, ALTER, CREATE or insert failure rolls the
+// whole hop back, leaving user_version=4, neither table with any of the new
+// columns, and no store_id.
 func migrateV4toV5(db *sql.DB) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -438,6 +461,15 @@ func migrateV4toV5(db *sql.DB) error {
 			_ = tx.Rollback()
 			return fmt.Errorf("store: v4→v5 add %s.%s: %w", col.table, col.name, err)
 		}
+	}
+	const v5StoreMeta = `CREATE TABLE IF NOT EXISTS store_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`
+	if _, err := tx.Exec(v5StoreMeta); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("store: v4→v5 create store_meta: %w", err)
+	}
+	if err := insertStoreIDOnce(tx); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("store: v4→v5 %w", err)
 	}
 	if _, err := tx.Exec("PRAGMA user_version = 5"); err != nil {
 		_ = tx.Rollback()

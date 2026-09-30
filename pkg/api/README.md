@@ -352,7 +352,7 @@ Common sentinels across verbs:
 | `ErrSpawnNotFound` | No row for the given `claude_instance_id` |
 | `ErrClientClosed` | Called after `Close()` |
 | `ErrStoreNotInitialized` | Store file absent and `CreateIfMissing` is false |
-| `ErrSchemaMismatch` | DB schema version mismatch — remove and reinitialize |
+| `ErrSchemaMismatch` | DB schema is newer than the binary, or the store has no valid store id — install the matching binary for a newer store; restore the pre-install copy of `state.db` for a store with no valid id. Never delete `state.db` |
 | `ErrSpawnNotInteractive` | State is not a live conversational state |
 | `ErrSendKeysWhileRelayed` | Relay path still owns the `check_permission` answer — refused while any request window is live; releases once every window has elapsed |
 | `ErrListInvalidLabel` | Label filter not in `key=value` form |

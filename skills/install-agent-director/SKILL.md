@@ -602,25 +602,32 @@ because migrations are forward-only. Roll the binary back only if you
 have not yet let the new binary migrate the DB, or be prepared to
 restore an older state.db from your own backup.
 
-## ErrSchemaMismatch recovery (DB NEWER than the binary)
+## ErrSchemaMismatch recovery
 
-`ErrSchemaMismatch` means the opposite of the migration case:
-state.db is NEWER than the installed binary (its `user_version` is
-higher than the binary supports). This is not something the sentinel
-can fix — migrations only run forward, and the install will not
-downgrade a DB.
+`ErrSchemaMismatch` is not the migration case, and the sentinel cannot
+fix it. It has two causes you can meet; the error message says which.
+Never delete state.db to clear it: that loses every Spawn row and the
+store id.
+
+**state.db is NEWER than the binary** (the error says "found
+user_version=N, want M" with N greater than M). Migrations only run
+forward, and the install will not downgrade a DB.
 
 1. Inspect: `sqlite3 ~/.agent-director/state.db "PRAGMA user_version"`
    and compare against the version the binary expects (shown in the
    error).
-2. **Install a newer agent-director** that understands this schema —
-   the correct fix in almost every case (you likely rolled the binary
-   back below the DB). Re-run this install skill with `--from-release`
-   (latest) or point it at a newer binary.
-3. Only if you deliberately want to discard the newer DB and start
-   fresh at this binary's version: `rm ~/.agent-director/state.db*`,
-   then re-run the install so step 4 fresh-creates it. **This loses
-   Spawn history.** Live Spawns whose `claude_instance_id` you have
-   noted can still be re-resumed via `agent-director resume` — the
-   JSONL transcripts persist under `~/.claude/projects/`
-   independently of our DB.
+2. **Install the agent-director release that matches this schema.**
+   This loses nothing; you likely rolled the binary back below the DB.
+   Re-run this install skill with `--from-release` (latest) or point
+   it at a newer binary.
+
+**state.db has no valid store id** (the error says "store has no
+valid store id"): the DB is at the binary's version but its
+`store_meta` table or `store_id` row is missing or malformed. Only a
+hand edit of state.db leaves it that way. Restore the copy of
+state.db (with its `-wal` and `-shm` files) taken before the install
+(install.sh does not make one), then re-run the install so it
+migrates that copy. Writes made since the install are lost.
+
+The JSONL transcripts under `~/.claude/projects/` persist
+independently of state.db in every case.

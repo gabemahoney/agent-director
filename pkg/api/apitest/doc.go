@@ -41,6 +41,13 @@
 //     storage class kept), for columns no verb shows.
 //   - ReadSessionHistoryAllLives returns an id's history entries from every
 //     life, with each entry's life number and recorded_at, newest first.
+//   - The store id (store_meta's store_id; SR-5.1, WD 2026-09-29 STORE):
+//     ReadStoreID reads the file's value raw (never creating a store file;
+//     ErrNoStoreID when the table or row is missing); SeedStoreID pins a
+//     well-formed id (16 lowercase hex) for deterministic labels, before the
+//     client or store under test opens, since an open store keeps the id it
+//     read; OtherStoreID returns a well-formed id certain to differ from a
+//     given one, for another store's labels.
 //
 // Rules for tests (the same as docs/architecture.md, "apitest Seed* factory
 // contract (reusable test fixtures)"):
@@ -56,6 +63,9 @@
 //     inserted itself. A seeded row's starting version depends on the seed:
 //     a pending row seeded with no session id is at 0 and every other seed
 //     starts above 0 (SeedSpawn's doc comment, "Seeding and row_version").
+//   - Labels of this store end with its id, taken from ReadStoreID, the
+//     store's StoreID() or an id pinned with SeedStoreID; another store's
+//     labels use OtherStoreID. No test writes store_meta any other way.
 //   - Concrete-store write failures come only from
 //     storefix.InjectWriteFailure or its white-box counterpart in
 //     internal/store. Writes behind a store interface fail through a failing

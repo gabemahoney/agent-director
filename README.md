@@ -104,7 +104,11 @@ under a directory it indexes.
 Upgrading is the same skill: re-running the install brings an
 existing `state.db` up to the current schema automatically. If a
 session ever reports a schema-version error, re-run the install to
-resolve it.
+resolve it. If the store is newer than the binary, install the
+matching agent-director release instead. If a command that opens the
+store still reports a schema error after the install has run, restore
+the copy of `~/.agent-director/state.db` (with its `-wal` and `-shm`
+files) taken before the install, then re-run the install.
 
 ### Install the TS client
 

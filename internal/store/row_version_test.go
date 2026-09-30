@@ -1,7 +1,8 @@
 package store_test
 
 // SR-5.2 versioning test: every exported spawns write advances row_version by
-// exactly one; later Epics append their new writes to rowVersionWrites.
+// exactly one and leaves the store_id unchanged (SR-5.1); later Epics append
+// their new writes to rowVersionWrites.
 // SeedSpawn's store calls advance the version but its options and defaults do
 // not, so the seeded version depends on the seed path: assert deltas only.
 
@@ -83,6 +84,19 @@ func assertVersionedWrite(t *testing.T, before, after apitest.SpawnColumns, clea
 		t.Errorf("launch_started_at = %#v, want NULL after a non-pending state write", after.LaunchStartedAt)
 	case !clears && !reflect.DeepEqual(after.LaunchStartedAt, before.LaunchStartedAt):
 		t.Errorf("launch_started_at %#v -> %#v, want unchanged", before.LaunchStartedAt, after.LaunchStartedAt)
+	}
+}
+
+// assertStoreIDKept fails unless the raw store_id still equals the id the store
+// read when it opened (SR-5.1: no write changes it).
+func assertStoreIDKept(t *testing.T, f *v5Store) {
+	t.Helper()
+	raw, err := apitest.ReadStoreID(f.path)
+	if err != nil {
+		t.Fatalf("ReadStoreID: %v", err)
+	}
+	if want := f.s.StoreID(); raw != want {
+		t.Errorf("store_id %q -> %q, want unchanged", want, raw)
 	}
 }
 
@@ -266,6 +280,7 @@ func TestRowVersionEveryWriteAdvancesByOne(t *testing.T) {
 			if c.wantState != "" && after.State != c.wantState {
 				t.Errorf("state = %#v, want %q (wrong branch?)", after.State, c.wantState)
 			}
+			assertStoreIDKept(t, f)
 		})
 	}
 }
@@ -283,6 +298,7 @@ func TestRowVersionInsertStartsAtZero(t *testing.T) {
 	if want := []any{int64(0), nil, int64(0), int64(0)}; !reflect.DeepEqual(got, want) {
 		t.Errorf("row_version, launch_started_at, life_number, no_pre_trust = %#v, want %#v", got, want)
 	}
+	assertStoreIDKept(t, f)
 }
 
 // TestRowVersionNoOpWritesChangeNothing checks the hold path, zero-row writes
@@ -339,6 +355,7 @@ func TestRowVersionNoOpWritesChangeNothing(t *testing.T) {
 			if after := f.rawColumns(id); !reflect.DeepEqual(after, before) {
 				t.Errorf("row changed:\nbefore %+v\nafter  %+v", before, after)
 			}
+			assertStoreIDKept(t, f)
 		})
 	}
 }
