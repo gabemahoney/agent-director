@@ -10,7 +10,8 @@ import (
 )
 
 // LiveSpawnIdentity is the per-row identity the find-missing verdict
-// engine needs to decide liveness: the instance id plus the recorded
+// engine needs to decide liveness: the instance id, the row's state and
+// launch start (for the pending grace period, SR-11.2), plus the recorded
 // process identity (pid + proc_starttime) captured at SessionStart.
 //
 // Zero values follow the COALESCE scan convention (spawns.go): PID==0
@@ -18,11 +19,20 @@ import (
 // recorded identity — a NULL-pid row that falls back to the environ
 // probe-set diff). The read deliberately carries NO liveness fields;
 // the guarded SetLivenessUnverified setter's transitioned return is
-// the sole NULL→set signal (PM decision, SR-8.1).
+// the sole NULL→set signal (PM decision, SR-8.1). Its fields grow
+// additively (SR-16.1, Appendix F.4).
 type LiveSpawnIdentity struct {
 	ClaudeInstanceID string
-	PID              int
-	ProcStarttime    string
+	// State is the row's stored state: one of the live states, pending
+	// included.
+	State         string
+	PID           int
+	ProcStarttime string
+	// LaunchStartedAtMillis is launch_started_at in milliseconds since the
+	// epoch, the start the pending grace period is measured from (SR-11.2);
+	// 0 = absent: NULL, a stored value that is not an integer, or an integer
+	// outside the years 0 to 9999 UTC (decodeLaunchStartedAt, SR-5.5).
+	LaunchStartedAtMillis int64
 }
 
 // ListLiveSpawnIdentities returns a LiveSpawnIdentity for every row in a
@@ -30,11 +40,16 @@ type LiveSpawnIdentity struct {
 // per-row verdict engine works against (SRD §4.4). Including `pending`
 // is intentional per SRD §5.2: a Spawn whose tmux session vanished
 // before SessionStart fired is still "live" from the DB's view and
-// should be reconciled to `missing`.
+// should be reconciled to `missing`. Each row carries its state and
+// launch start so the sweep can tell a `pending` row inside its pending
+// grace period, which it then leaves untouched (SR-11.2).
 //
-// pid / proc_starttime are scanned via COALESCE(pid, 0) /
-// COALESCE(proc_starttime, '') so a row with no recorded identity
-// yields the zero values rather than a scan error.
+// pid / proc_starttime are scanned through COALESCE, defaulting to 0
+// and an empty string respectively, so a row with no recorded identity
+// yields the zero values rather than a scan error. launch_started_at is
+// decoded by decodeLaunchStartedAt, so no stored value (NULL, text, real,
+// blob, an out-of-range integer) fails the read; the structured columns
+// (labels, claude_args, extra_env) are never read (SR-5.5).
 //
 // Order is unspecified. Callers that need stable ordering sort the
 // result themselves.
@@ -45,7 +60,7 @@ func (s *Store) ListLiveSpawnIdentities() ([]LiveSpawnIdentity, error) {
 		placeholders[i] = "?"
 		args[i] = st
 	}
-	q := "SELECT claude_instance_id, COALESCE(pid, 0), COALESCE(proc_starttime, '') " +
+	q := "SELECT claude_instance_id, state, COALESCE(pid, 0), COALESCE(proc_starttime, ''), launch_started_at " +
 		"FROM spawns WHERE state IN (" + strings.Join(placeholders, ",") + ")"
 	rows, err := s.db.Query(q, args...)
 	if err != nil {
@@ -55,9 +70,11 @@ func (s *Store) ListLiveSpawnIdentities() ([]LiveSpawnIdentity, error) {
 	var ids []LiveSpawnIdentity
 	for rows.Next() {
 		var it LiveSpawnIdentity
-		if err := rows.Scan(&it.ClaudeInstanceID, &it.PID, &it.ProcStarttime); err != nil {
+		var launchStartedAt any
+		if err := rows.Scan(&it.ClaudeInstanceID, &it.State, &it.PID, &it.ProcStarttime, &launchStartedAt); err != nil {
 			return nil, fmt.Errorf("store: list live identities scan: %w", err)
 		}
+		it.LaunchStartedAtMillis = decodeLaunchStartedAt(launchStartedAt)
 		ids = append(ids, it)
 	}
 	if err := rows.Err(); err != nil {

@@ -6,7 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -23,9 +25,9 @@ import (
 //     verb routes them through the SR-7.5 environ probe-set fallback exactly as
 //     the pre-verdict-engine sweep behaved. The trail tests and the legacy
 //     fallback tests depend on this shape.
-//   - liveRows: full LiveSpawnIdentity rows (pid + proc_starttime set). These
-//     carry a recorded identity, so the verb asks the liveness checker for a
-//     per-row verdict. Verdict-engine tests use this shape.
+//   - liveRows: LiveSpawnIdentity rows returned as given. Full-identity rows
+//     (pid + proc_starttime set) get a per-row liveness verdict; the grace
+//     tests also add partial-identity pending rows with a launch start.
 //
 // When both are set, liveRows are returned first, then the liveIDs wrappers.
 //
@@ -272,6 +274,15 @@ func intToStr(n int) string {
 	return out
 }
 
+// fmGrace is the default pending grace period (SR-11.2) every api_test sweep
+// passes unless a test configures its own.
+var fmGrace = time.Duration(config.DefaultPendingGraceSeconds) * time.Second
+
+// fmNow is the fixed sweep clock; fmClock is the now func the seam takes.
+var fmNow = time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+
+func fmClock() time.Time { return fmNow }
+
 // row is a small constructor for a full-identity LiveSpawnIdentity.
 func row(id string, pid int, starttime string) store.LiveSpawnIdentity {
 	return store.LiveSpawnIdentity{ClaudeInstanceID: id, PID: pid, ProcStarttime: starttime}
@@ -321,7 +332,7 @@ func TestFindMissingHealsProvisionalTranscript(t *testing.T) {
 		},
 	}
 	prober := &fakeProber{set: map[string]struct{}{id: {}}}
-	if _, err := api.FindMissing(context.Background(), st, prober, newFakeChecker(), &recordingLogger{}); err != nil {
+	if _, err := api.FindMissing(context.Background(), st, prober, newFakeChecker(), fmGrace, fmClock, &recordingLogger{}); err != nil {
 		t.Fatalf("FindMissing: %v", err)
 	}
 
@@ -347,7 +358,7 @@ func TestFindMissingSkipsProvisionalWhenTranscriptStillAbsent(t *testing.T) {
 		},
 	}
 	prober := &fakeProber{set: map[string]struct{}{"prov-absent-1": {}}}
-	if _, err := api.FindMissing(context.Background(), st, prober, newFakeChecker(), &recordingLogger{}); err != nil {
+	if _, err := api.FindMissing(context.Background(), st, prober, newFakeChecker(), fmGrace, fmClock, &recordingLogger{}); err != nil {
 		t.Fatalf("FindMissing: %v", err)
 	}
 	if len(st.healed) != 0 {
@@ -359,7 +370,7 @@ func TestFindMissingNoChangesWhenAllAlive(t *testing.T) {
 	st := &fakeFindMissingStore{liveIDs: []string{"a", "b"}}
 	prober := &fakeProber{set: map[string]struct{}{"a": {}, "b": {}}}
 	chk := newFakeChecker()
-	res, err := api.FindMissing(context.Background(), st, prober, chk, &recordingLogger{})
+	res, err := api.FindMissing(context.Background(), st, prober, chk, fmGrace, fmClock, &recordingLogger{})
 	if err != nil {
 		t.Fatalf("FindMissing: %v", err)
 	}
@@ -377,7 +388,7 @@ func TestFindMissingNoChangesWhenAllAlive(t *testing.T) {
 func TestFindMissingTransitionsUnprobeableRows(t *testing.T) {
 	st := &fakeFindMissingStore{liveIDs: []string{"a", "b", "c"}}
 	prober := &fakeProber{set: map[string]struct{}{"b": {}}}
-	res, err := api.FindMissing(context.Background(), st, prober, newFakeChecker(), &recordingLogger{})
+	res, err := api.FindMissing(context.Background(), st, prober, newFakeChecker(), fmGrace, fmClock, &recordingLogger{})
 	if err != nil {
 		t.Fatalf("FindMissing: %v", err)
 	}
@@ -403,7 +414,7 @@ func TestFindMissingNullPidFallbackGuardFree(t *testing.T) {
 	prober := &fakeProber{set: map[string]struct{}{}}
 	lg := &recordingLogger{}
 
-	res, err := api.FindMissing(context.Background(), st, prober, newFakeChecker(), lg)
+	res, err := api.FindMissing(context.Background(), st, prober, newFakeChecker(), fmGrace, fmClock, lg)
 	if err != nil {
 		t.Fatalf("FindMissing: %v (post-reboot shape must not error)", err)
 	}
@@ -427,7 +438,7 @@ func TestFindMissingZeroLiveRowsZeroProbeIsNoopSuccess(t *testing.T) {
 	prober := &fakeProber{set: map[string]struct{}{}}
 	lg := &recordingLogger{}
 
-	res, err := api.FindMissing(context.Background(), st, prober, newFakeChecker(), lg)
+	res, err := api.FindMissing(context.Background(), st, prober, newFakeChecker(), fmGrace, fmClock, lg)
 	if err != nil {
 		t.Fatalf("FindMissing: %v", err)
 	}
@@ -439,15 +450,16 @@ func TestFindMissingZeroLiveRowsZeroProbeIsNoopSuccess(t *testing.T) {
 	}
 }
 
+// TestFindMissingPendingRowIsScanned: a `pending` row past its grace period
+// (launch start older than the setting) with no identity rides the fallback and reconciles to missing (SRD §5.2).
 func TestFindMissingPendingRowIsScanned(t *testing.T) {
-	// Per SRD §5.2: a `pending` row whose tmux session vanished before
-	// SessionStart fired must reconcile to `missing` on the next sweep. A
-	// pending row has no recorded identity yet (pid/starttime NULL), so it
-	// rides the fallback path. ListLiveSpawnIdentities includes `pending` in
-	// its IN-list; this test pins the downstream effect.
-	st := &fakeFindMissingStore{liveIDs: []string{"p-1"}}
+	st := &fakeFindMissingStore{liveRows: []store.LiveSpawnIdentity{{
+		ClaudeInstanceID:      "p-1",
+		State:                 store.StatePending,
+		LaunchStartedAtMillis: fmNow.Add(-fmGrace - time.Second).UnixMilli(),
+	}}}
 	prober := &fakeProber{set: map[string]struct{}{"other": {}}}
-	res, err := api.FindMissing(context.Background(), st, prober, newFakeChecker(), &recordingLogger{})
+	res, err := api.FindMissing(context.Background(), st, prober, newFakeChecker(), fmGrace, fmClock, &recordingLogger{})
 	if err != nil {
 		t.Fatalf("FindMissing: %v", err)
 	}
@@ -463,7 +475,7 @@ func TestFindMissingResultIDsSorted(t *testing.T) {
 	st := &fakeFindMissingStore{liveIDs: []string{"z", "a", "m"}}
 	prober := &fakeProber{set: map[string]struct{}{}}
 
-	res, err := api.FindMissing(context.Background(), st, prober, newFakeChecker(), &recordingLogger{})
+	res, err := api.FindMissing(context.Background(), st, prober, newFakeChecker(), fmGrace, fmClock, &recordingLogger{})
 	if err != nil {
 		t.Fatalf("FindMissing: %v", err)
 	}
@@ -480,7 +492,7 @@ func TestFindMissingUnverifiedIDsNeverNull(t *testing.T) {
 	// No unverified rows: slice must still be non-nil.
 	st := &fakeFindMissingStore{liveIDs: []string{"a"}}
 	prober := &fakeProber{set: map[string]struct{}{"a": {}}}
-	res, err := api.FindMissing(context.Background(), st, prober, newFakeChecker(), &recordingLogger{})
+	res, err := api.FindMissing(context.Background(), st, prober, newFakeChecker(), fmGrace, fmClock, &recordingLogger{})
 	if err != nil {
 		t.Fatalf("FindMissing: %v", err)
 	}
@@ -499,7 +511,7 @@ func TestFindMissingUnverifiedIDsNeverNull(t *testing.T) {
 	st2 := &fakeFindMissingStore{liveRows: []store.LiveSpawnIdentity{
 		row("z", 10, "100"), row("a", 11, "101"), row("m", 12, "102"),
 	}}
-	res2, err := api.FindMissing(context.Background(), st2, &fakeProber{}, chk, &recordingLogger{})
+	res2, err := api.FindMissing(context.Background(), st2, &fakeProber{}, chk, fmGrace, fmClock, &recordingLogger{})
 	if err != nil {
 		t.Fatalf("FindMissing: %v", err)
 	}
@@ -525,7 +537,7 @@ func TestFindMissingCheckerDeadMarks(t *testing.T) {
 	chk.verdicts["dead-1"] = probe.VerdictProvablyDead
 	st := &fakeFindMissingStore{liveRows: []store.LiveSpawnIdentity{row("dead-1", 4242, "9988")}}
 
-	res, err := api.FindMissing(context.Background(), st, &fakeProber{}, chk, &recordingLogger{})
+	res, err := api.FindMissing(context.Background(), st, &fakeProber{}, chk, fmGrace, fmClock, &recordingLogger{})
 	if err != nil {
 		t.Fatalf("FindMissing: %v", err)
 	}
@@ -559,7 +571,7 @@ func TestFindMissingCheckerAliveSkipsAndClears(t *testing.T) {
 	chk.verdicts["alive-1"] = probe.VerdictVerifiedAlive
 	st := &fakeFindMissingStore{liveRows: []store.LiveSpawnIdentity{row("alive-1", 500, "700")}}
 
-	res, err := api.FindMissing(context.Background(), st, &fakeProber{}, chk, &recordingLogger{})
+	res, err := api.FindMissing(context.Background(), st, &fakeProber{}, chk, fmGrace, fmClock, &recordingLogger{})
 	if err != nil {
 		t.Fatalf("FindMissing: %v", err)
 	}
@@ -590,7 +602,7 @@ func TestFindMissingCheckerUnknownIsolatesRow(t *testing.T) {
 		row("dead-2", 20, "200"),
 	}}
 
-	res, err := api.FindMissing(context.Background(), st, &fakeProber{}, chk, &recordingLogger{})
+	res, err := api.FindMissing(context.Background(), st, &fakeProber{}, chk, fmGrace, fmClock, &recordingLogger{})
 	if err != nil {
 		t.Fatalf("FindMissing: %v", err)
 	}
@@ -635,7 +647,7 @@ func TestFindMissingUnknownRepeatStillUnverified(t *testing.T) {
 		setTransitioned: map[string]bool{"walled": false},
 	}
 
-	res, err := api.FindMissing(context.Background(), st, &fakeProber{}, chk, &recordingLogger{})
+	res, err := api.FindMissing(context.Background(), st, &fakeProber{}, chk, fmGrace, fmClock, &recordingLogger{})
 	if err != nil {
 		t.Fatalf("FindMissing: %v", err)
 	}
@@ -660,7 +672,7 @@ func TestFindMissingPartialIdentityPidOnlyFallsBack(t *testing.T) {
 	st := &fakeFindMissingStore{liveRows: []store.LiveSpawnIdentity{row("pid-only", 999, "")}}
 	prober := &fakeProber{set: map[string]struct{}{}} // not in probe set → marked
 
-	res, err := api.FindMissing(context.Background(), st, prober, chk, &recordingLogger{})
+	res, err := api.FindMissing(context.Background(), st, prober, chk, fmGrace, fmClock, &recordingLogger{})
 	if err != nil {
 		t.Fatalf("FindMissing: %v", err)
 	}
@@ -680,7 +692,7 @@ func TestFindMissingPartialIdentityStarttimeOnlyFallsBack(t *testing.T) {
 	// not the checker).
 	prober := &fakeProber{set: map[string]struct{}{"st-only": {}}}
 
-	res, err := api.FindMissing(context.Background(), st, prober, chk, &recordingLogger{})
+	res, err := api.FindMissing(context.Background(), st, prober, chk, fmGrace, fmClock, &recordingLogger{})
 	if err != nil {
 		t.Fatalf("FindMissing: %v", err)
 	}
@@ -707,7 +719,7 @@ func TestFindMissingMarkingOrderPinned(t *testing.T) {
 	chk.verdicts["ord-1"] = probe.VerdictProvablyDead
 	st := &fakeFindMissingStore{liveRows: []store.LiveSpawnIdentity{row("ord-1", 7, "77")}}
 
-	if _, err := api.FindMissing(context.Background(), st, &fakeProber{}, chk, &recordingLogger{}); err != nil {
+	if _, err := api.FindMissing(context.Background(), st, &fakeProber{}, chk, fmGrace, fmClock, &recordingLogger{}); err != nil {
 		t.Fatalf("FindMissing: %v", err)
 	}
 
@@ -737,7 +749,7 @@ func TestFindMissingAlreadyTerminalRowMarkOnly(t *testing.T) {
 		markPrior: map[string]string{"gone": ""}, // no write happened
 	}
 
-	res, err := api.FindMissing(context.Background(), st, &fakeProber{}, chk, &recordingLogger{})
+	res, err := api.FindMissing(context.Background(), st, &fakeProber{}, chk, fmGrace, fmClock, &recordingLogger{})
 	if err != nil {
 		t.Fatalf("FindMissing: %v", err)
 	}
@@ -773,7 +785,7 @@ func TestFindMissingAlreadyTerminalRowMarkOnly(t *testing.T) {
 
 func TestFindMissingListErrorAborts(t *testing.T) {
 	st := &fakeFindMissingStore{listErr: errSentinel}
-	_, err := api.FindMissing(context.Background(), st, &fakeProber{}, newFakeChecker(), &recordingLogger{})
+	_, err := api.FindMissing(context.Background(), st, &fakeProber{}, newFakeChecker(), fmGrace, fmClock, &recordingLogger{})
 	if err == nil {
 		t.Fatalf("FindMissing: nil error; want the list error to bubble up")
 	}
@@ -784,7 +796,7 @@ func TestFindMissingProbeErrorWithFallbackAborts(t *testing.T) {
 	// error must abort the sweep.
 	st := &fakeFindMissingStore{liveIDs: []string{"a"}}
 	prober := &fakeProber{err: errSentinel}
-	_, err := api.FindMissing(context.Background(), st, prober, newFakeChecker(), &recordingLogger{})
+	_, err := api.FindMissing(context.Background(), st, prober, newFakeChecker(), fmGrace, fmClock, &recordingLogger{})
 	if err == nil {
 		t.Fatalf("FindMissing: nil error; want the probe error to bubble up")
 	}

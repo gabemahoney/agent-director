@@ -85,7 +85,10 @@
 //     live-row sequence the kill, find-missing and spawn manifest
 //     descriptions share (descriptions_live_row.go: DescLiveRowSequence, and
 //     LiveRowSequenceSpans, which cuts each statement of the sequence out of
-//     a text so they can be compared).
+//     a text so they can be compared), or of find-missing's pending-grace
+//     rule (descriptions_find_missing.go: DescFindMissingGrace, and
+//     FindMissingOwnText, which cuts find-missing's own text before the
+//     sequence).
 //
 // Rules for tests (the same as docs/architecture.md, "apitest Seed* factory
 // contract (reusable test fixtures)"):

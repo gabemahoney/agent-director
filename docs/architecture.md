@@ -55,7 +55,7 @@ still holds: nothing in `internal/` imports `pkg/api`.
 | Path | Responsibility | Allowed imports | Prohibited imports |
 | --- | --- | --- | --- |
 | `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`; every store-backed verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. **DB-free exceptions:** `help`, `--help`, `version`, no-args (routes to help), and `trail-emit` are dispatched BEFORE `setupClient` so they never open or create `~/.agent-director` (SR-4.1/4.2); help/version run against a zero-value `Client` and consult no store. **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. | stdlib; `pkg/api`; `pkg/api/errnames`; `internal/hook`; `internal/config` and `internal/store` (error sentinels only) in `setupClient`; `internal/config` in `runHook` and `newHookLogger`. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook`, `newHookLogger`, and `setupClient`'s logger bootstrap. |
-| `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, etc.), params/result types, and error sentinels (the seven tmux sentinels of SR-1.1 are all re-exported in `aliases.go`). Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director` and `internal/mcp`. **`kill` seams** (`kill.go`): `KillStore` (`GetSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`; `*store.Store` satisfies it), `KillTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `KillPane`, `KillSessionID`; `TmuxClient` satisfies it) and the start-time reader `ProcChecker`; `Kill` also takes the three `[tmux]` durations, the clock and the sleep, and has no logger. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the eight socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the three name-based ones (`HasSession`, `SendKeys`, `CapturePane`); `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`; it also re-exports the start-time reader interface as `ProcChecker` (`= tmux.ProcChecker`). The Client holds its clock (`time.Now`), its sleep (`time.Sleep`, the pause of `kill`'s process wait) and its start-time reader (`probe.NewProcChecker()`), all set in `New`; plain spawn uses the clock and reader for the launch start and the identity write, and `kill` uses all three for its lookup, adoption and process wait. The label scan of a plain spawn lives in `spawn_scan.go` (see [Launch identity](#launch-identity)). `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`. | Direct `database/sql`; raw SQL strings; MCP framing. |
+| `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, etc.), params/result types, and error sentinels (the seven tmux sentinels of SR-1.1 are all re-exported in `aliases.go`). Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director` and `internal/mcp`. **`kill` seams** (`kill.go`): `KillStore` (`GetSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`; `*store.Store` satisfies it), `KillTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `KillPane`, `KillSessionID`; `TmuxClient` satisfies it) and the start-time reader `ProcChecker`; `Kill` also takes the three `[tmux]` durations, the clock and the sleep, and has no logger. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the eight socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the three name-based ones (`HasSession`, `SendKeys`, `CapturePane`); `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`; it also re-exports the start-time reader interface as `ProcChecker` (`= tmux.ProcChecker`). The Client holds its clock (`time.Now`), its sleep (`time.Sleep`, the pause of `kill`'s process wait) and its start-time reader (`probe.NewProcChecker()`), all set in `New`; plain spawn uses the clock and reader for the launch start and the identity write, and `kill` uses all three for its lookup, adoption and process wait; `find-missing` measures the pending grace period on the same clock, with the value from `EffectivePendingGrace`. The label scan of a plain spawn lives in `spawn_scan.go` (see [Launch identity](#launch-identity)). `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`. | Direct `database/sql`; raw SQL strings; MCP framing. |
 | `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v5; see "Schema v5" below), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default; a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
 | `pkg/api/apitest` | Test seed helpers extracted from `pkg/api/*_test.go` for cross-package importing. Provides `Seed*` functions (`SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`) that set up fixture DB rows and filesystem state for `test/envelope-diff` and future Epic 4/5 smoke tests. Also provides the config writer `WriteTmuxConfig` (settings built with `TmuxInt`, or `TmuxFloat` / `TmuxString` / `TmuxBool` for malformed values, keyed by `config.TmuxKey`): `pkg/api`, CLI and MCP tests write `[tmux]` settings only through it, so no test outside `internal/config` spells a `[tmux]` key (rules: Test Harness, "apitest `[tmux]` config writer"). Provides `SeedSpawn`'s trailing `SpawnOption`s for the v5 columns, timestamps and raw text (`WithTmuxSessionName`, `WithStartedAt` / `WithEndedAt`, `WithLaunchStartedAt`, `WithRawLaunchStartedAt`, `WithNoLaunchStartedAt`, `WithLifeNumber`, `WithNoPreTrust`, `WithRawNoPreTrust`, `WithLaunchIdentity`, `WithTmuxSocket`, `WithNoLaunchToken`, `WithRawLabels`, `WithRawClaudeArgs`, `WithRawExtraEnv`) and archived session history (`WithSessionHistory`), the default socket `TestSocket`, the default pane `TestPaneID` / `TestPanePID` that `SeedSpawn` gives a live row (both re-exported from `internal/testsupport/launchfix`; a terminal row gets no pane), the store-read helper `ReadSpawnColumns`, the every-life history-read helper `ReadSessionHistoryAllLives`, and the store-id helpers `ReadStoreID`, `SeedStoreID` and `OtherStoreID` (with `ErrNoStoreID`): new tests seed rows and read columns no verb shows only through these (rules: Test Harness, "apitest Seed* factory contract"). To place a seeded row's own labelled session in the Recorder, tests use `tmuxfix.Recorder.SeedRowSession` (in `internal/testsupport/tmuxfix`, not this package). Provides the shared description helper (`descriptions.go`: `AssertDescription`, `AssertAgentText`, `AssertAgentTextCase` and the `Desc*` cases; `descriptions_resume.go`: resume's `DescResume*` cases and `DescCase.AfterResumeRestore`; `descriptions_lookup.go`: lookup's `DescConflictingLabels` and `DescDifferentServer`; `descriptions_kill.go`: kill's `DescKill*`, `DescSocketDirNothingDone` and `DescUnusableName*` cases and `DescCase.AfterKillSent`; `descriptions_live_row.go`: `DescLiveRowSequence` and `LiveRowSequenceSpans`): every Go test that checks an error or manifest description for required phrases or forbidden forms uses it (rules: Test Harness, "apitest description helper"). Non-test package (regular `.go` files) so it can be imported by harnesses outside `pkg/api`. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `internal/tmux` (the `tmux.Call` names the description cases use); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
@@ -678,10 +678,18 @@ the socket is shown").
   `decodeLaunchToken`, `decodeNoPreTrust`; each takes the column scanned into
   an `any` and never fails). The year 0 to 9999 range rule lives only in
   `decodeLaunchStartedAt`, so every consumer inherits it: `SpawnStatus`,
-  `GetSpawn`/`ListSpawns` (through `scanSpawn`) and `resume`'s refusal, which
-  reads the row with `GetSpawn`. A new read returning a `Spawn` selects
-  `spawnColumns` and scans with `scanSpawn`. Never re-derive the rules in a
-  new read.
+  `GetSpawn`/`ListSpawns` (through `scanSpawn`), `ListLiveSpawnIdentities`
+  (`find-missing`'s live-row read, in `internal/store/recovery.go`) and
+  `resume`'s refusal, which reads the row with `GetSpawn`. A new read
+  returning a `Spawn` selects `spawnColumns` and scans with `scanSpawn`. Never
+  re-derive the rules in a new read.
+- **Must use:** `store.InsidePendingGrace` (in
+  `internal/store/rowsnapshot.go`) is the only statement of the SR-11.2 rule:
+  a `pending` row is inside its grace period while its age, measured from the
+  launch start, is below the grace period. Any check of whether a `pending`
+  row is inside its grace period calls it, passing the decoded launch start,
+  the grace period and the caller's clock. Never re-derive the age
+  arithmetic.
 
 **Versioned writes (b.fmk, SR-5.2).** The row version exists so that a later
 compare-and-set write can guard on it: the write checks that the version is
@@ -1528,6 +1536,7 @@ ended
 pending / waiting / working / ask_user / check_permission
   │
   ▼   find-missing: DB live row, no live tmux/Claude
+  │   (a pending row only once past its pending grace period)
 missing
 
 ended / missing
@@ -4078,8 +4087,12 @@ unreadable row is skipped and surfaced as unverified rather than blocking
 anything.
 
 **Per-row evidence model.** `find-missing` lists every live-state identity
-(`ListLiveSpawnIdentities` — each row's `claude_instance_id` plus its
-recorded `pid` + `proc_starttime`) and partitions on identity completeness:
+(`ListLiveSpawnIdentities` — each row's `claude_instance_id`, state and
+launch start plus its recorded `pid` + `proc_starttime`). It first leaves
+out every `pending` row still inside the pending grace period, measured
+from its launch start: such a row is not judged and appears in neither
+result list (see [`find-missing`](#find-missing), step 2). It partitions
+the remaining rows on identity completeness:
 
 - **Full identity (pid AND starttime recorded)** — the row gets an
   evidence-based verdict from the `LivenessChecker` seam
@@ -4176,19 +4189,39 @@ probe set that can actually see them.
 `pkg/api/find_missing.go`:
 
 1. `ListLiveSpawnIdentities` returns every row where `state NOT IN (ended,
-   missing)`, each carrying its recorded `pid` + `proc_starttime`. This
-   includes `pending` — SRD §5.2 explicitly scans pending rows so a Spawn
-   whose tmux died before SessionStart fired still reconciles correctly.
-2. Rows are partitioned by identity completeness (see
+   missing)`, `pending` included, each carrying its state, its launch start
+   (`launch_started_at` in milliseconds, read through
+   `decodeLaunchStartedAt`) and its recorded `pid` + `proc_starttime`. The
+   sweep reads its injected clock once, after the list.
+2. A `pending` row inside the pending grace period is not judged at all
+   (SR-11.2; `store.InsidePendingGrace`). Its age is the sweep's clock minus
+   its launch start, and it is inside while that age is below the setting;
+   a launch start in the future counts as inside. The row gets no liveness
+   check, no probe entry, no mark, no liveness-note write or clear, no
+   `ad.find_missing.tick`, no permission close-out and no tmux call, and it
+   is in neither `ids` nor `unverified_ids`. The rule is the same for a
+   fresh spawn's, a reuse's and a `resume`'s launch: `started_at` (for a
+   resumed row, the original spawn's time) plays no part. A `pending` row
+   whose launch start is absent or cannot be read (NULL, not an integer,
+   or an integer outside years 0 to 9999 UTC, all of which decode to 0)
+   counts as past the grace period and is judged at once. A row past the
+   grace period, and every row in another live state, goes on to the steps
+   below. The setting is `pending_grace_seconds` in the `[tmux]` table
+   (60 s by default), read through `config.Tmux.EffectivePendingGrace` and
+   handed to the sweep by `Client.FindMissing` together with the client's
+   clock; its minimum rule is in
+   [`[tmux]` timing settings](#tmux-timing-settings).
+3. Rows are partitioned by identity completeness (see
    [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)).
-3. Full-identity rows get a per-row `LivenessChecker` verdict:
+4. Full-identity rows get a per-row `LivenessChecker` verdict:
    provably-dead → mark missing; verified-alive → clear stale liveness
    fields; unknown → skip that row only, set `liveness_unverified_since` +
    `liveness_note`, and record the id in `unverified_ids`. There is no
    global refusal — an unreadable row is surfaced, not a blocker.
-4. Partial-identity rows fall back to `probe.Probe()`'s set: a live id
-   absent from the set is marked missing.
-5. Each marked row runs the pinned marking order (`MarkSpawnMissing` →
+5. Partial-identity rows fall back to `probe.Probe()`'s set: a live id
+   absent from the set is marked missing. The prober runs only when at
+   least one row reaches this step.
+6. Each marked row runs the pinned marking order (`MarkSpawnMissing` →
    `ClearLivenessUnverified` → `proc_absent` tick →
    `CloseOrphanedPermissionRequests`). Per-row failures (e.g. transient
    SQLite I/O error) are logged and the sweep continues — one bad row does
@@ -4409,6 +4442,13 @@ adds it here.
   A process that merely carries the row's id, such as a leftover of an
   earlier life or a nested `claude`, never ends, revives or takes over the
   row.
+- The pending grace period is 60 s by default and configurable
+  (`pending_grace_seconds`), measured from the launch start that `status`,
+  `get` and `list` show. `find-missing` never judges a `pending` row inside
+  it: the row is left as it is and is in neither result list, so a caller
+  waiting on a launch reads a `pending` row inside its grace period as
+  "wait and check again later", never as a reason to escalate. A `pending`
+  row with no launch start counts as past the grace period.
 
 ### The lookup rule
 

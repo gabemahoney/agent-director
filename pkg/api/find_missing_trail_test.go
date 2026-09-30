@@ -27,6 +27,9 @@ package api_test
 // first Emit. All trail reads in this file go through readAPITrailLines, which
 // opens apiTrailDir/.agent-director/ad-trail.jsonl.
 //
+// The pending grace period's trail obligation (SR-11.2: no tick for a pending
+// row inside grace) is pinned in find_missing_grace_trail_test.go.
+//
 // Coordination: another test writer owns cmd/agent-director/find_missing_cli_test.go
 // (or recovery_cmd_test.go) for the CLI surface, and a sibling owns
 // find_missing_test.go (the shared fakeFindMissingStore). This file owns no
@@ -40,6 +43,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"testing"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -137,6 +141,13 @@ func checkerFor(verdicts map[string]probe.LivenessVerdict) *fakeChecker {
 	return c
 }
 
+// trailNow is the sweep clock of the working-row tests; grace never applies to
+// a working row, so any fixed time serves.
+var trailNow = time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+
+// trailClock returns a sweep clock that always reads at.
+func trailClock(at time.Time) func() time.Time { return func() time.Time { return at } }
+
 // seedFullIdentityStore opens a fresh temp store and seeds each id as a
 // working-state row WITH a recorded pid+proc_starttime (a full identity, so the
 // sweep routes it through the checker rather than the environ fallback).
@@ -181,7 +192,7 @@ func TestFindMissingProcAbsentEmitsTrail(t *testing.T) {
 	})
 	before := len(readAPITrailLines(t))
 
-	res, err := api.FindMissing(context.Background(), st, &fakeProber{}, chk, &recordingLogger{})
+	res, err := api.FindMissing(context.Background(), st, &fakeProber{}, chk, fmGrace, trailClock(trailNow), &recordingLogger{})
 	if err != nil {
 		t.Fatalf("FindMissing: %v", err)
 	}
@@ -247,7 +258,7 @@ func TestFindMissingProbeEaccesEmitsExactlyOnceTick(t *testing.T) {
 
 	// ── First sweep: NULL→set transition → exactly one probe_eacces tick. ──
 	before := len(readAPITrailLines(t))
-	res, err := api.FindMissing(context.Background(), st, &fakeProber{}, chk, &recordingLogger{})
+	res, err := api.FindMissing(context.Background(), st, &fakeProber{}, chk, fmGrace, trailClock(trailNow), &recordingLogger{})
 	if err != nil {
 		t.Fatalf("first sweep: %v", err)
 	}
@@ -281,7 +292,7 @@ func TestFindMissingProbeEaccesEmitsExactlyOnceTick(t *testing.T) {
 
 	// ── Second sweep: row still unverified → transitioned=false → ZERO ticks. ──
 	before2 := len(readAPITrailLines(t))
-	res2, err := api.FindMissing(context.Background(), st, &fakeProber{}, chk, &recordingLogger{})
+	res2, err := api.FindMissing(context.Background(), st, &fakeProber{}, chk, fmGrace, trailClock(trailNow), &recordingLogger{})
 	if err != nil {
 		t.Fatalf("second sweep: %v", err)
 	}
@@ -322,7 +333,7 @@ func TestFindMissingZeroTouchEmitsNoTrail(t *testing.T) {
 	})
 	before := len(readAPITrailLines(t))
 
-	res, err := api.FindMissing(context.Background(), st, &fakeProber{}, chk, &recordingLogger{})
+	res, err := api.FindMissing(context.Background(), st, &fakeProber{}, chk, fmGrace, trailClock(trailNow), &recordingLogger{})
 	if err != nil {
 		t.Fatalf("FindMissing: %v", err)
 	}
@@ -364,7 +375,7 @@ func TestFindMissingEmptyProbeSetNoDegradedModeSkip(t *testing.T) {
 
 	before := len(readAPITrailLines(t))
 	// Empty probe set: the condition that formerly tripped the degraded-mode guard.
-	res, err := api.FindMissing(context.Background(), st, &fakeProber{}, newFakeChecker(), &recordingLogger{})
+	res, err := api.FindMissing(context.Background(), st, &fakeProber{}, newFakeChecker(), fmGrace, trailClock(trailNow), &recordingLogger{})
 	if err != nil {
 		t.Fatalf("FindMissing: %v", err)
 	}

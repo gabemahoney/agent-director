@@ -20,9 +20,10 @@ import (
 // test spells these phrases or forms itself. A new SR-1.4 case is added here
 // as a constructor, or in a sibling file of one verb's cases
 // (descriptions_resume.go, descriptions_kill.go), of the lookup's shared
-// Can't tell cases (descriptions_lookup.go) or of SR-18.6's live-row
+// Can't tell cases (descriptions_lookup.go), of SR-18.6's live-row
 // sequence, which three manifest descriptions state
-// (descriptions_live_row.go).
+// (descriptions_live_row.go), or of find-missing's own pending-grace rule
+// (descriptions_find_missing.go).
 
 // DescCase is one SR-1.4 description case: Name (shown in every failure),
 // the phrases the description must contain, the case's own must-not phrases

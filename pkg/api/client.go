@@ -82,8 +82,8 @@ type Client struct {
 	cfg        config.Config
 	logger     *log.Logger
 	// now is the Client's clock, time.Now in production (Appendix F.5); the
-	// spawn's launch start and kill's process wait read it. Tests replace it
-	// per Client.
+	// spawn's launch start, kill's process wait and find-missing's pending
+	// grace period read it. Tests replace it per Client.
 	now func() time.Time
 	// procChecker is the start-time reader (SR-3.8), probe.NewProcChecker in
 	// production; the spawn's identity write reads the server's and the

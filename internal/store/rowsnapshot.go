@@ -1,5 +1,7 @@
 package store
 
+import "time"
+
 // RowSnapshot is a row's change-detection key (SR-5.3): the values exactly as
 // stored, never parsed and re-formatted, so two snapshots compare with ==.
 // Conditional writes apply only when the row still holds the snapshot the
@@ -101,6 +103,25 @@ func decodeLaunchStartedAt(v any) int64 {
 		return 0
 	}
 	return ms
+}
+
+// InsidePendingGrace reports whether a row is a pending row inside its
+// pending grace period (SR-11.2, SR-22.8): state is StatePending and the row's
+// age, now minus its launch start, is below grace. The age is measured from
+// the launch start, never started_at, so a reused or resumed row is inside
+// however old its started_at. A launch start later than now is inside. An
+// absent launch start (0, as decodeLaunchStartedAt reads NULL, a non-integer
+// or an out-of-range value) is past, so the row is judged at once. Every
+// other state is never inside. grace is used as given, with no default or
+// minimum applied here (configuration loading owns those, SR-4.1).
+//
+// The comparison never subtracts the launch start, so no int64 value, however
+// extreme, can overflow into looking young: a huge age is past.
+func InsidePendingGrace(state string, launchStartedAtMillis int64, grace time.Duration, now time.Time) bool {
+	if state != StatePending || launchStartedAtMillis == 0 {
+		return false
+	}
+	return launchStartedAtMillis > now.UnixMilli()-grace.Milliseconds()
 }
 
 // decodeLaunchToken maps launch_token to the token. Only text of exactly 16

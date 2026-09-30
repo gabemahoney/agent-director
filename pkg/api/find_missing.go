@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/spawn"
@@ -84,11 +85,26 @@ type FindMissingLogger interface {
 // directly and is not part of the public API surface; external consumers use
 // the Client method instead.
 //
+// pendingGrace is the pending grace period (SR-11.2) as a duration; the
+// handler uses it exactly as given, with no default and no minimum check of
+// its own (SR-4.1: the configuration's minimum, config.PendingGraceMinimumSeconds,
+// is 30 s, rising with the create timeout and pipe-close wait, and is
+// enforced when the configuration loads). now is the clock every age is
+// measured against; the handler never reads time.Now itself (Appendix F.5).
+//
 // Behavior (SR-7 + SR-8):
 //
-//  1. List live-state identities (anything not ended/missing, including
-//     pending — SRD §5.2 explicitly scans pending). Each carries the
-//     recorded pid + proc_starttime.
+//  1. List live-state identities (anything not ended/missing, pending
+//     included — SRD §5.2 scans pending). Each carries the row's state,
+//     launch start and recorded pid + proc_starttime. A `pending` row inside
+//     its grace period, measured from its launch start rather than its
+//     started_at (store.InsidePendingGrace), is left untouched: no checker
+//     or prober call on its account, no mark, no liveness-note write or
+//     clear, no tick, no permission-request close, and it is in neither
+//     result list. Such a row may be a spawn's, a reuse's or a resume's
+//     launch. A `pending` row with no readable launch start is past the
+//     grace period and judged at once (SR-22.8). Every other row goes on
+//     to steps 2 and 3.
 //  2. For each row with BOTH a recorded pid and proc_starttime, ask the
 //     liveness checker for an evidence-based verdict:
 //     - provably-dead → mark missing in the pinned order (MarkSpawnMissing →
@@ -107,11 +123,12 @@ type FindMissingLogger interface {
 // iff the prober + list calls succeeded; a hard prober error (e.g. /proc
 // unreachable) or a list error bubbles up because there's nothing useful the
 // verb can do without them.
-func findMissingImpl(ctx context.Context, s FindMissingStore, p probe.Prober, chk probe.LivenessChecker, lg FindMissingLogger) (FindMissingResult, error) {
+func findMissingImpl(ctx context.Context, s FindMissingStore, p probe.Prober, chk probe.LivenessChecker, pendingGrace time.Duration, now func() time.Time, lg FindMissingLogger) (FindMissingResult, error) {
 	identities, err := s.ListLiveSpawnIdentities()
 	if err != nil {
 		return FindMissingResult{}, err
 	}
+	sweepNow := now()
 
 	// Partition rows: those with a full recorded identity (pid+starttime) get
 	// an evidence-based checker verdict; those with a partial/absent identity
@@ -121,6 +138,10 @@ func findMissingImpl(ctx context.Context, s FindMissingStore, p probe.Prober, ch
 	unverified := make([]string, 0)
 
 	for _, it := range identities {
+		if store.InsidePendingGrace(it.State, it.LaunchStartedAtMillis, pendingGrace, sweepNow) {
+			// A booting launch inside its grace period (SR-11.2): not judged.
+			continue
+		}
 		if it.PID <= 0 || it.ProcStarttime == "" {
 			// Partial identity → SR-7.5 fallback. Defer to the probe-set diff.
 			fallbackIDs = append(fallbackIDs, it.ClaudeInstanceID)
@@ -284,11 +305,15 @@ func healProvisionalTranscripts(s FindMissingStore, lg FindMissingLogger) {
 }
 
 // FindMissing reconciles DB state against live OS processes. It scans all
-// live-state rows (including pending) and, per row, applies an evidence-based
-// liveness verdict: a provably-dead process transitions to missing; a
-// permission-walled row is left untouched and flagged unverified; rows with a
-// partial recorded identity fall back to an environ probe-set diff. Intended
-// for periodic cron use.
+// live-state rows and, per row, applies an evidence-based liveness verdict: a
+// provably-dead process transitions to missing; a permission-walled row is
+// left untouched and flagged unverified; rows with a partial recorded
+// identity fall back to an environ probe-set diff. A `pending` row (a
+// spawn's, a reuse's or a resume's launch) inside the pending grace period
+// (pending_grace_seconds from the loaded configuration, 60 s by default),
+// measured from its launch start, is not judged: it is left as it is and is
+// in neither result list (SR-11.2). Ages are read from the Client's clock.
+// Intended for periodic cron use.
 //
 // CLI: agent-director find-missing
 //
@@ -300,5 +325,5 @@ func (c *Client) FindMissing(ctx context.Context) (FindMissingResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return FindMissingResult{}, err
 	}
-	return findMissingImpl(ctx, c.st, probe.New(), probe.NewChecker(), c.logger)
+	return findMissingImpl(ctx, c.st, probe.New(), probe.NewChecker(), c.cfg.Tmux.EffectivePendingGrace(), c.now, c.logger)
 }
