@@ -431,7 +431,7 @@ them. Their doc comments carry the detail.
 
 | File | Holds | Must use |
 | --- | --- | --- |
-| `lookup_outcome.go` | `cantTellError(res, cantTellRefusal{InstanceID, Context, Socket, Call, Consequence})`: the one mapping from a Can't tell lookup or pane-listing `Result` to its verb error (different server and tmux unavailable → `ErrTmuxNotAvailable`, conflicting labels → `ErrTmuxSessionConflict` naming the sessions or the scope, unreadable → `ErrTmuxUnresponsive` with "retry later"); nil for any other verdict. `Consequence` `""` means "nothing was done"; a verb that already acted passes its own sentence. `rowSocket(recorded)`: the socket every call for a row uses, the recorded one as is, else `spawn.ResolveQuerySocket("nothing was done")`. The constants `nothingWasDone`, `operatorActionsPointer` and `listSessionNameHint`. | Every single-row verb maps a Can't tell lookup or pane listing through `cantTellError` and takes a row's socket from `rowSocket`; never write another Can't tell description or socket rule. Plain spawn's label scan uses `cantTellError` too. |
+| `lookup_outcome.go` | `cantTellError(res, cantTellRefusal{InstanceID, Context, Socket, Call, Consequence, Retry})`: the one mapping from a Can't tell lookup or pane-listing `Result` to its verb error (different server and tmux unavailable → `ErrTmuxNotAvailable`, conflicting labels → `ErrTmuxSessionConflict` naming the sessions or the scope, unreadable → `ErrTmuxUnresponsive` ending with the retry sentence); nil for any other verdict. `Consequence` `""` means "nothing was done"; a verb that already acted passes its own sentence. `Retry` `""` means the default `retryLater` ("retry later"); only a caller whose retry of the same call cannot work passes its own (plain spawn's held-name path). It is verb-agnostic: kill and the label scan keep the default. `rowSocket(recorded)`: the socket every call for a row uses, the recorded one as is, else `spawn.ResolveQuerySocket("nothing was done")`. The constants `nothingWasDone`, `operatorActionsPointer` and `listSessionNameHint`. | Every single-row verb maps a Can't tell lookup or pane listing through `cantTellError` and takes a row's socket from `rowSocket`; never write another Can't tell description or socket rule. Plain spawn's label scan uses `cantTellError` too. |
 | `unusable_name.go` | `unusableNameError(name)`: nil for a usable recorded name, else the verb-agnostic `ErrInternal` refusal (empty, control character, or which rewritten character via `tmux.RewrittenIn`), pointing to "Operator actions" and saying no tmux call was made. The verb prefixes the instance id. | Every verb that passes a live row's recorded name to tmux refuses an unusable one through it, before any tmux call (`kill` today; the other verbs and the opt-in later). |
 | `agent_pane.go` | `agentPane(panes, paneID, panePID)`: the agent's pane in one listing, by recorded pane id and pid, wherever it now is (SR-3.7). `adoptIdentity(s, row, res, panes, pc) adoption`: the adoption step (SR-3.6), due when the lookup is Ours and the row records no server identity or no pane; the pane by `@ad_pane` token (`tmux.PaneByToken`), one `AdoptIdentityIfUnchanged` write, and the found identity (`adoption.Identity`) used for this call whatever the write's outcome; `Applied` only when the write applied. `identityAdopter` is the store capability it needs. | `kill`, `send-keys` and `pause` find the agent's pane with `agentPane` and adopt with `adoptIdentity`, using the verb's own one pane listing; never match panes or write an adoption by hand. |
 | `provenance_disagree.go` | `emitProvenanceDisagree(provenanceDisagree{...}, reasons...)`: writes one `ad.provenance.disagree` per distinct reason among the six (`disagreeReasons`), in a fixed order, nothing for none, dropping unknown reasons; fail-open; never a label's content. `nameChanged(res, recordedName)`: the `name_changed` condition (Ours under a name that is not a stored form of the recorded one, `tmux.StoredForms`). | A verb collects every reason of its call (lookups, a pane-listing failure, `adopted` when the adoption applied, `name_changed`) and calls the emitter once per call; a sweep calls it once per row. Never write the event directly. |
@@ -2301,7 +2301,9 @@ launch start, and never reaches a caller. `runSpawn` hands it to
    instance id and token with this store's id and no server identity,
    and the requested name as the holder name.
 3. Builds the classified error with `heldNameOutcome`
-   (`pkg/api/held_name.go`), carrying exactly one row sentence.
+   (`pkg/api/held_name.go`), carrying exactly one row sentence and, for
+   `ErrTmuxUnresponsive`, the retry sentence the end write's result
+   picks (below).
 4. Writes the lookup's `ad.provenance.disagree` records (reason
    `scope_value` is the only one this lookup can give; `action` is the
    row result), then exactly one `ad.launch.name_held` (source
@@ -2329,8 +2331,24 @@ The re-lookup's outcome gives the error (each wraps one sentinel):
 | One holder, no valid label | `ErrTmuxSessionConflict`, "no valid instance id"; points to "Operator actions" |
 | Can't tell, `provenance_conflict` | `ErrTmuxSessionConflict`, "conflicting labels" (no label claim) |
 | No holder: the session vanished before the re-lookup | `ErrTmuxSessionCreate` (LAUNCH FAILURE), "session creation failed: duplicate session", naming the session |
-| More than one listing entry matches the name, or Can't tell, unreadable | `ErrTmuxUnresponsive` (UNAVAILABLE) |
+| More than one listing entry matches the name, or Can't tell, unreadable (a timeout or an unrecognised reply) | `ErrTmuxUnresponsive` (UNAVAILABLE), with the retry sentence below in place of "retry later" |
 | Can't tell, tmux unavailable (socket permission included) | `ErrTmuxNotAvailable` (ENVIRONMENT) |
+
+`ErrTmuxUnresponsive` here never says "retry later" (WD 2026-09-30d
+(a), SR-1.4 row "Every error a plain spawn returns after 'duplicate
+session'"): a plain spawn of the same id cannot simply be retried. Its
+retry sentence comes from the end write's result:
+
+| End write | Retry sentence |
+|---|---|
+| Applied (`ended`) | "a retry with this id uses the reuse opt-in (reuse_finished) once the name is free, since a plain spawn of the id now collides" (`heldRetryReuse`) |
+| Not applied or store error (`left_changed`, `still_pending`) | "do not retry until get shows the row ended or missing" (`heldRetryWait`, the launch-timeout rule) |
+
+For a timeout or an unrecognised reply it ends the shared Can't tell
+text in place of "retry later"; for more than one matching entry it
+follows the row sentence, before the `list --tmux-session-name` hint.
+The conflict, `ErrTmuxNotAvailable` and `ErrTmuxSessionCreate` texts
+carry neither retry sentence.
 
 Every description names the quoted requested name and, when one session
 holds it, its tmux id; a single holder's also says whether its label
@@ -2384,14 +2402,18 @@ these builders and never re-spells their text.
 
 **Shared held-name components** (`pkg/api`):
 
-- `heldNameOutcome(res, instanceID, name, socket, rowSentence)`
+- `heldNameOutcome(res, instanceID, name, socket, rowSentence, retry)`
   (`held_name.go`) classifies a re-lookup's holder after "duplicate
   session" and builds the SR-1.4 description around a caller-supplied
-  row sentence, returning the holder facts (`heldNameHolder`) the trail
-  record needs. It is verb-agnostic. Plain spawn's three row sentences
-  are the unexported constants beside it (`heldRowEnded`,
-  `heldRowLeftAsIs`, `heldRowStaysPending`), the single source of that
-  wording.
+  row sentence and retry sentence, returning the holder facts
+  (`heldNameHolder`) the trail record needs. It is verb-agnostic:
+  `retry` `""` keeps the default (unreadable ends with "retry later";
+  the ambiguous holder gets no retry sentence), which resume and reuse
+  (Epics 16 and 17) keep. Plain spawn's three row sentences
+  (`heldRowEnded`, `heldRowLeftAsIs`, `heldRowStaysPending`) and two
+  retry sentences (`heldRetryReuse`, `heldRetryWait`) are the unexported
+  constants beside it, the single source of that wording; `spawnHeldName`
+  picks the retry sentence from the end write's result.
 - `emitNameHeld(nameHeld{...})` (`name_held_trail.go`) is the one
   emitter of `ad.launch.name_held`, with its source (`nameHeldSourceSpawn`),
   launch (`nameHeldLaunchSpawn`) and row-result constants
@@ -2404,7 +2426,8 @@ these builders and never re-spells their text.
 builds its error with `heldNameOutcome` and its record with
 `emitNameHeld`, adding its own row sentence and source, launch and
 row-result constants beside the existing ones; it never re-spells the
-case words, the row sentences, the field set or the commands.
+case words, the row sentences, the retry sentences, the field set or
+the commands.
 
 **Accepted risks of plain spawn.** A failed label step followed by a
 failed kill leaves an unlabelled session of agent-director's that may
@@ -6593,6 +6616,9 @@ package doc comment (`doc.go`, "# Description helper") says the same.
   must-not phrases and forbidden values. It always rejects:
   - kill or pause named as a command to run;
   - the tmux commands `kill-session` and `kill-server`;
+  - the tmux commands `attach-session` and `tmux attach` (whole words,
+    so "tmux session" and "tmux attached" pass), so no agent-visible text
+    tells an agent to run a tmux command;
   - every flag spelling of the operator-only opt-in (SR-6.8);
   - a label's raw value (`ad1 <16 hex> ...`);
   - every `forbid` value (empty values are ignored).
@@ -6600,7 +6626,8 @@ package doc comment (`doc.go`, "# Description helper") says the same.
   The one exception is `ErrTmuxKillFailed`'s "retry kill later".
 - `AssertAgentText(t, what, text)` checks a text agents see that may name
   kill as a documented procedure, such as a manifest description or help.
-  It rejects only `kill-session`, `kill-server` and the opt-in spellings;
+  It rejects only `kill-session`, `kill-server`, `attach-session`,
+  `tmux attach` and the opt-in spellings;
   `what` names the text in failures.
 - `AssertAgentTextCase(t, what, text, c DescCase)` is `AssertAgentText`
   plus case `c`'s required phrases, must-not phrases and forbid values:
@@ -6777,15 +6804,22 @@ package doc comment (`doc.go`, "# Description helper") says the same.
       ended, no pointer), `DescHeldOtherStore(p, storeID)` ("another
       agent-director store", must not be ended, no pointer; forbids the
       store ids) and `DescHeldAmbiguous(p)` (`ErrTmuxUnresponsive`, more
-      than one session's name matches, no `$N`, no label claim). The case
+      than one session's name matches, no `$N`, no label claim, the
+      retry guidance by `HeldRow` as for an unanswered case below). The case
       words come from `tmux.LabelClass.CaseWords`.
     - `DescCase.AfterHeldName(p)`: overlays a Can't tell, unavailable or
       vanished case (`DescConflictingLabels`, `DescDifferentServer`,
       `DescCallTimeout`, `DescUnrecognisedReply`, `DescSocketPermission`,
       `DescTmuxNotRun`, `DescSessionCreateFailed`) for the held-name path:
-      drops "nothing was done", requires the quoted name, the `$N` when
-      set and the chosen row sentence, forbids the other two, and makes no
-      label claim.
+      drops "nothing was done" and "retry later", requires the quoted
+      name, the `$N` when set and the chosen row sentence, forbids the
+      other two and "retry later", and makes no label claim. An
+      unanswered case (`DescCallTimeout`, `DescUnrecognisedReply`,
+      `DescHeldAmbiguous`) also requires the retry guidance by `HeldRow`:
+      for `HeldRowEnded`, "reuse_finished" and "once the name is free" and
+      not the launch-timeout rule; otherwise the launch-timeout rule ("do
+      not retry until get shows the row ended or missing") and not
+      "reuse_finished". Every other case must state neither.
     - `DescSpawnHeldName()` and `DescSpawnSessionNameParam()`: spawn's
       manifest description and `tmux-session-name` parameter text on a
       held name. `DescSpawnHeldName()` forbids the three row sentences;

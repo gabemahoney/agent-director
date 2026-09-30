@@ -50,6 +50,23 @@ type cantTellRefusal struct {
 	// written; kill after a sent kill says the kill was sent and may or may
 	// not have taken effect; a later verb its own row sentence.
 	Consequence string
+	// Retry is the unreadable refusal's closing retry sentence: "" means
+	// retryLater. Only a caller whose retry of the same call cannot work
+	// sets it: plain spawn after "duplicate session", whose row is already
+	// ended or may still be pending (heldRetryReuse, heldRetryWait).
+	Retry string
+}
+
+// retryLater is the unreadable refusal's default retry sentence (SR-1.4 rows
+// "timeout" and "unrecognised reply").
+const retryLater = "retry later"
+
+// retry returns r's retry sentence, retryLater by default.
+func (r cantTellRefusal) retry() string {
+	if r.Retry == "" {
+		return retryLater
+	}
+	return r.Retry
 }
 
 // consequence returns r's consequence sentence, nothingWasDone by default.
@@ -86,7 +103,8 @@ func (r cantTellRefusal) lead() string {
 //   - unreadable: tmux.ErrTmuxUnresponsive, which call timed out and its
 //     effective timeout in seconds, or which call gave a reply agent-director
 //     does not recognise with its first line (trimmed to 200 bytes by the
-//     client), the consequence, and "retry later";
+//     client), the consequence, and the retry sentence ("retry later" unless
+//     the caller sets cantTellRefusal.Retry);
 //   - tmux unavailable: tmux.ErrTmuxNotAvailable through
 //     spawn.TmuxUnavailableError (a missing binary, or the socket-permission
 //     reply naming the socket and "not accessible to this user").
@@ -133,7 +151,8 @@ func conflictingLabelsError(res tmux.Result, r cantTellRefusal) error {
 // unreadableError is the unreadable refusal (SR-1.4 rows "timeout" and
 // "unrecognised reply"): cause names the call and its effective timeout, or
 // the unrecognised reply's first line; a cause that is nil (an error that was
-// not a *tmux.CallError) is an unrecognised reply of r.Call.
+// not a *tmux.CallError) is an unrecognised reply of r.Call. It ends with r's
+// retry sentence.
 func unreadableError(cause *tmux.CallError, r cantTellRefusal) error {
 	what := "tmux " + string(r.Call) + " failed: unrecognized reply"
 	if cause != nil {
@@ -142,7 +161,7 @@ func unreadableError(cause *tmux.CallError, r cantTellRefusal) error {
 	if cause == nil || cause.Failure != tmux.FailTimeout {
 		what += "; tmux gave a reply agent-director does not recognise"
 	}
-	return fmt.Errorf("%w: %s: %s; %s; retry later", tmux.ErrTmuxUnresponsive, r.lead(), what, r.consequence())
+	return fmt.Errorf("%w: %s: %s; %s; %s", tmux.ErrTmuxUnresponsive, r.lead(), what, r.consequence(), r.retry())
 }
 
 // rowSocket returns the socket every call for a row uses (SR-3.3): its

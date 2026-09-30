@@ -71,9 +71,13 @@
 //     Desc* constructor holding an SR-1.4 case's required and must-not
 //     phrases) and always rejects SR-1.4's session-ending command forms (only
 //     "retry kill later", and only for an ErrTmuxKillFailed case, excepted),
-//     the opt-in's SR-6.8 spellings, a label
-//     value and the caller's forbid values. AssertAgentText is the
-//     forbidden-only check for manifest-like texts; AssertAgentTextCase adds
+//     the tmux attach commands (attach-session, and tmux attach as whole
+//     words), the opt-in's SR-6.8 spellings, a label value and the caller's
+//     forbid values. AssertAgentText is the forbidden-only check for
+//     manifest-like texts (the same session-ending, attach and opt-in forms,
+//     so no agent-visible text tells an agent to run a tmux command; the
+//     ad.launch.name_held trail and the README's "Operator actions" are not
+//     checked); AssertAgentTextCase adds
 //     a DescCase's phrases for a rule such a text must state (for example
 //     DescSpawnLaunchTimeoutRule, DescSpawnScanRefusal). No test spells these
 //     phrases or forms itself; a new case is a new Desc* constructor in
@@ -83,7 +87,10 @@
 //     whose DescCase.AfterKillSent states a kill was sent), of plain spawn's
 //     errors after "duplicate session" (descriptions_held.go, whose
 //     DescCase.AfterHeldName adds the requested name, the holder's tmux id
-//     and the end write's row sentence), of the
+//     and the end write's row sentence, never "retry later", and on an
+//     unanswered re-lookup the retry guidance by the same result: the reuse
+//     opt-in once the name is free when the row was ended, else the
+//     launch-timeout rule), of the
 //     lookup's shared Can't tell cases (descriptions_lookup.go), or of the
 //     live-row sequence (descriptions_live_row.go: DescLiveRowSequence, its
 //     short form, which only kill's manifest description states;

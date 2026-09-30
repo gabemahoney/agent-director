@@ -5,7 +5,9 @@ package api_test
 // competing write or a delete-and-reinsert keeps from applying, a store
 // error that leaves the row pending with one WARN line, an ended row that
 // the leftover's hooks and find-missing leave as it is, what the id answers
-// afterwards, and no end write on a path without "duplicate session". It
+// afterwards, the retry guidance of an ErrTmuxUnresponsive when the end
+// write did not apply or failed, and no end write on a path without
+// "duplicate session". It
 // uses the held-name fixture of spawn_held_test.go.
 
 import (
@@ -154,6 +156,80 @@ func TestSpawnHeldEndStoreError(t *testing.T) {
 	warn := apitest.DescCase{Name: "held-name end-write WARN line", Require: []string{"WARN", id}}
 	apitest.AssertDescription(t, lines[0], warn, append(e.forbid(id, []tmuxfix.SeedSession{holder}),
 		token, heldRowName, holder.ID)...)
+}
+
+// TestSpawnHeldUnansweredRow: when the re-lookup cannot answer (a timeout, or
+// more than one session matching the name) and the end write did not apply
+// or failed, the ErrTmuxUnresponsive says the row's sentence and, in place
+// of "retry later", not to retry until get shows the row ended or missing,
+// never the reuse opt-in (SR-1.4; WD 2026-09-30d (a)).
+func TestSpawnHeldUnansweredRow(t *testing.T) {
+	relookups := []struct {
+		name    string
+		holders []tmuxfix.SeedSession
+		timeout bool // the re-lookup times out
+		forbid  []string
+		desc    func(p apitest.HeldName) apitest.DescCase
+	}{
+		{name: "re-lookup timeout", holders: []tmuxfix.SeedSession{heldSession(heldRowName, "$4", tmux.Label{}, false)},
+			timeout: true, desc: func(p apitest.HeldName) apitest.DescCase {
+				return apitest.DescCallTimeout(tmux.CallLookup, boundQ).AfterHeldName(p)
+			}},
+		// Plain spawn names cannot hold $ or \, so two entries with one stored name stand in.
+		{name: "ambiguous holder", holders: []tmuxfix.SeedSession{
+			heldSession(heldRowName, "$4", tmux.Label{}, false), heldSession(heldRowName, "$5", tmux.Label{}, false)},
+			forbid: []string{"$4", "$5"}, desc: apitest.DescHeldAmbiguous},
+	}
+	rows := []struct {
+		name  string
+		row   apitest.HeldRow
+		warns int
+	}{
+		{"left as it is", apitest.HeldRowLeftAsIs, 0},
+		{"store error", apitest.HeldRowStoreError, 1},
+	}
+	for _, rl := range relookups {
+		for _, r := range rows {
+			t.Run(rl.name+"/"+r.name, func(t *testing.T) {
+				e := newHeldEnv(t)
+				id := heldID()
+				e.rec.SeedSessions(e.socket, rl.holders...)
+				switch r.row {
+				case apitest.HeldRowLeftAsIs:
+					e.rec.AfterCall(tmux.CallCreate, func(tmuxfix.SocketCall, error) {
+						apitest.SeedSessionID(t, e.dbPath, id, uuid.NewString())
+					})
+				case apitest.HeldRowStoreError:
+					storefix.InjectWriteFailure(t, e.dbPath, storefix.WriteFailReuseRestore, id)
+				}
+				var onScan func()
+				if rl.timeout {
+					onScan = func() {
+						e.rec.Script(e.socket, tmuxfix.Script{Failure: tmux.FailTimeout, Times: 1}, tmux.CallLookup)
+					}
+				}
+
+				run := e.spawnHeld(t, id, heldRowName, onScan)
+
+				cols := e.readRow(t, id)
+				if cols.State != store.StatePending || cols.EndedAt != nil {
+					t.Errorf("row: state %v, ended_at %v; want pending, NULL (the end write wrote nothing)",
+						cols.State, cols.EndedAt)
+				}
+				assertOneSentinel(t, run.err, api.ErrTmuxUnresponsive)
+				if run.err != nil {
+					_, desc := errnames.Classify(run.err)
+					token, _ := cols.LaunchToken.(string)
+					p := apitest.HeldName{Name: heldRowName, Row: r.row}
+					forbid := append(e.forbid(id, rl.holders), append(rl.forbid, token)...)
+					apitest.AssertDescription(t, desc, rl.desc(p), forbid...)
+				}
+				if n := strings.Count(e.logs.String(), "WARN"); n != r.warns {
+					t.Errorf("client log WARN lines = %d (%q); want %d", n, e.logs.String(), r.warns)
+				}
+			})
+		}
+	}
 }
 
 // TestSpawnHeldEndedSticks: after the end write applies, the leftover's hooks

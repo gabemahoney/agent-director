@@ -13,15 +13,15 @@ import (
 
 // descriptions.go is the shared description helper of SR-20.2: it holds the
 // required phrases of the SR-1.4 cases (as DescCase constructors) and the
-// forms no description may contain (SR-1.4's session-ending commands and the
-// opt-in's SR-6.8 spellings). Tests assert error descriptions only through
-// AssertDescription, and agent-facing texts that may name kill as a
-// documented procedure (manifest descriptions) through AssertAgentText; no
-// test spells these phrases or forms itself. A new SR-1.4 case is added here
-// as a constructor, or in a sibling file of one verb's cases
-// (descriptions_resume.go, descriptions_kill.go), of plain spawn's errors
-// after "duplicate session" (descriptions_held.go), of the lookup's shared
-// Can't tell cases (descriptions_lookup.go), of SR-18.6's live-row
+// forms no description may contain (SR-1.4's session-ending commands, the
+// tmux attach commands and the opt-in's SR-6.8 spellings). Tests assert
+// error descriptions only through AssertDescription, and agent-facing texts
+// that may name kill as a documented procedure (manifest descriptions)
+// through AssertAgentText; no test spells these phrases or forms itself. A
+// new SR-1.4 case is added here as a constructor, or in a sibling file of
+// one verb's cases (descriptions_resume.go, descriptions_kill.go), of plain
+// spawn's errors after "duplicate session" (descriptions_held.go), of the
+// lookup's shared Can't tell cases (descriptions_lookup.go), of SR-18.6's live-row
 // sequence, which kill's manifest description states in its short form and
 // the find-missing and spawn descriptions point to (descriptions_live_row.go),
 // or of find-missing's own pending-grace rule (descriptions_find_missing.go).
@@ -31,7 +31,9 @@ import (
 // (case-insensitive, whole words where they are words) and values it must
 // never carry (exact substrings, such as the id itself). Only an
 // ErrTmuxKillFailed case (DescKillWaitExpired, DescKillUncheckable,
-// DescKillNoPane) allows "retry kill later".
+// DescKillNoPane) allows "retry kill later". An unanswered case
+// (DescCallTimeout, DescUnrecognisedReply, DescHeldAmbiguous) is an
+// ErrTmuxUnresponsive whose retry guidance AfterHeldName replaces.
 type DescCase struct {
 	Name    string
 	Require []string
@@ -39,6 +41,7 @@ type DescCase struct {
 	Forbid  []string
 
 	allowRetryKill bool
+	unanswered     bool
 }
 
 // DescSession is a tmux session a description names: its name (quoted in the
@@ -71,13 +74,21 @@ type form struct {
 	re   *regexp.Regexp
 }
 
-// tmuxEndingForms and optInForms are forbidden in every agent-facing text;
-// commandForms (kill or pause named as a command to run) only in error
-// descriptions (SR-1.4, SR-6.8).
+// tmuxEndingForms, tmuxAttachForms and optInForms are forbidden in every
+// agent-facing text; commandForms (kill or pause named as a command to run)
+// only in error descriptions (SR-1.4, SR-6.8, SR-20.2). tmuxAttachForms keeps
+// agent-visible text from telling an agent to run a tmux command: "tmux
+// attach" matches as whole words only, so "tmux session" and "tmux
+// attached" pass. The by-hand attach command of ad.launch.name_held (a trail
+// read by humans) and the README's "Operator actions" are not checked here.
 var (
 	tmuxEndingForms = []form{
 		{"the tmux command kill-session", regexp.MustCompile(`(?i)\bkill-session\b`)},
 		{"the tmux command kill-server", regexp.MustCompile(`(?i)\bkill-server\b`)},
+	}
+	tmuxAttachForms = []form{
+		{"the tmux command attach-session", regexp.MustCompile(`(?i)\battach-session\b`)},
+		{"the tmux command tmux attach", regexp.MustCompile(`(?i)\btmux\s+attach\b`)},
 	}
 	optInForms = []form{
 		{"the opt-in's flag (--include-finished, include-finished, include_finished, IncludeFinished)", regexp.MustCompile(`(?i)include[-_]?finished`)},
@@ -88,8 +99,8 @@ var (
 		{"kill or pause quoted as a command", regexp.MustCompile("(?i)[`\"](kill|pause)[`\"]")},
 		{"kill or pause given a flag", regexp.MustCompile(`(?i)\b(kill|pause)\s+-`)},
 	}
-	descriptionForms = concatForms(commandForms, tmuxEndingForms, optInForms)
-	agentTextForms   = concatForms(tmuxEndingForms, optInForms)
+	descriptionForms = concatForms(commandForms, tmuxEndingForms, tmuxAttachForms, optInForms)
+	agentTextForms   = concatForms(tmuxEndingForms, tmuxAttachForms, optInForms)
 )
 
 // labelValue matches a label's raw value (`ad1 <16-hex token> ...`), which no
@@ -107,9 +118,10 @@ func concatForms(lists ...[]form) []form {
 // AssertDescription checks an error description against case c: every
 // required phrase present; none of c's must-not phrases, no session-ending
 // command form (SR-1.4; "retry kill later" excepted for an ErrTmuxKillFailed
-// case only), no opt-in spelling (SR-6.8), no label raw value, and none of
-// the caller's forbid values (another row's id, session-environment values,
-// a token, a store id, a label value; empty values are ignored).
+// case only), no tmux attach command (attach-session, tmux attach), no
+// opt-in spelling (SR-6.8), no label raw value, and none of the caller's
+// forbid values (another row's id, session-environment values, a token, a
+// store id, a label value; empty values are ignored).
 func AssertDescription(t testing.TB, desc string, c DescCase, forbid ...string) {
 	t.Helper()
 	label := "description case " + strconv.Quote(c.Name)
@@ -122,8 +134,9 @@ func AssertDescription(t testing.TB, desc string, c DescCase, forbid ...string) 
 
 // AssertAgentText checks a text agent-director shows agents but which may
 // name kill as a documented procedure (a manifest description, help): no
-// opt-in spelling and no tmux session-ending command (SR-1.4, SR-6.8). what
-// names the text in failures.
+// opt-in spelling, no tmux session-ending command and no tmux attach command
+// (attach-session, tmux attach) (SR-1.4, SR-6.8, SR-20.2). what names the
+// text in failures.
 func AssertAgentText(t testing.TB, what, text string) {
 	t.Helper()
 	checkForms(t, what, text, agentTextForms)
@@ -284,9 +297,10 @@ func DescLaunchTimeout(p LaunchTimeout) DescCase {
 // create) that did not answer within its effective timeout.
 func DescCallTimeout(call tmux.Call, timeout time.Duration) DescCase {
 	return DescCase{
-		Name:    "ErrTmuxUnresponsive, " + string(call) + " timeout",
-		Require: []string{string(call), seconds(timeout), "nothing was done", "retry later"},
-		MustNot: unresponsiveMustNot,
+		Name:       "ErrTmuxUnresponsive, " + string(call) + " timeout",
+		Require:    []string{string(call), seconds(timeout), "nothing was done", "retry later"},
+		MustNot:    unresponsiveMustNot,
+		unanswered: true,
 	}
 }
 
@@ -300,9 +314,10 @@ func DescUnrecognisedReply(call tmux.Call, firstLine string) DescCase {
 		req = append(req, firstLine)
 	}
 	return DescCase{
-		Name:    "ErrTmuxUnresponsive, " + string(call) + " unrecognised reply",
-		Require: req,
-		MustNot: unresponsiveMustNot,
+		Name:       "ErrTmuxUnresponsive, " + string(call) + " unrecognised reply",
+		Require:    req,
+		MustNot:    unresponsiveMustNot,
+		unanswered: true,
 	}
 }
 

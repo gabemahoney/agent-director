@@ -12,7 +12,9 @@ import (
 // (SR-9.4, SR-3.10; PO 2026-09-27 HELD): the overlay every such error carries
 // (DescCase.AfterHeldName: the quoted requested name, the holder's tmux id,
 // and exactly one row sentence by the end write's result, in place of
-// "nothing was done"), the four holder conflicts (DescHeldLeftover,
+// "nothing was done", never "retry later", and on an ErrTmuxUnresponsive the
+// retry sentence by the same result, WD 2026-09-30d (a)), the four holder
+// conflicts (DescHeldLeftover,
 // DescHeldNoValidID, DescHeldDifferentID, DescHeldOtherStore), which also
 // state whether the holder's label names this instance id, and the
 // ambiguous holder (DescHeldAmbiguous). The re-lookup's other outcomes reuse
@@ -60,6 +62,16 @@ const (
 	heldLabelNotThisID
 )
 
+// The retry guidance of SR-1.4's "after duplicate session" row for an
+// ErrTmuxUnresponsive (the re-lookup could not answer), in place of "retry
+// later", which no held-name description says: once the end write applied,
+// a retry uses the reuse opt-in once the name is free (heldRetryReuse);
+// otherwise the launch-timeout rule (launchRetryRule).
+var heldRetryReuse = []string{"reuse_finished", "once the name is free"}
+
+// retryLater is the default retry sentence a held-name description replaces.
+const retryLater = "retry later"
+
 // heldNotPendingStatements are statements that the row stays pending or will
 // heal, which a held-name description makes only for HeldRowStoreError.
 var heldNotPendingStatements = []string{"stays pending", "will heal"}
@@ -79,7 +91,12 @@ type HeldName struct {
 // requested name, p.SessionID when set, and exactly p.Row's row sentence, in
 // place of "nothing was done", which it must not say; no label sentence;
 // never that the row stays pending or will heal unless the end write failed;
-// a statement that the row was ended only when it was. Use it on
+// a statement that the row was ended only when it was; never "retry later".
+// An unanswered case (DescCallTimeout, DescUnrecognisedReply,
+// DescHeldAmbiguous) also requires the retry guidance by p.Row: for
+// HeldRowEnded the reuse opt-in (reuse_finished) "once the name is free" and
+// not the launch-timeout rule; otherwise the launch-timeout rule and not
+// reuse_finished. Any other case states neither. Use it on
 // DescSessionCreateFailed (Duplicate), DescConflictingLabels
 // (NothingWasDone), DescDifferentServer, DescCallTimeout,
 // DescUnrecognisedReply, DescSocketPermission and DescTmuxNotRun; the
@@ -95,7 +112,9 @@ func (c DescCase) afterHeldName(p HeldName, label heldLabel) DescCase {
 		panic("apitest: HeldName with no end-write result")
 	}
 	c.Name += ", after duplicate session"
-	req := slices.DeleteFunc(append([]string(nil), c.Require...), func(s string) bool { return s == nothingWasDone })
+	req := slices.DeleteFunc(append([]string(nil), c.Require...), func(s string) bool {
+		return s == nothingWasDone || s == retryLater
+	})
 	req = append(req, strconv.Quote(p.Name), row)
 	if p.SessionID != "" {
 		req = append(req, p.SessionID)
@@ -114,6 +133,16 @@ func (c DescCase) afterHeldName(p HeldName, label heldLabel) DescCase {
 			mustNot = appendMissing(mustNot, heldRowSentences[r])
 		}
 	}
+	switch {
+	case c.unanswered && p.Row == HeldRowEnded:
+		req = append(req, heldRetryReuse...)
+		mustNot = appendMissing(mustNot, launchRetryRule)
+	case c.unanswered:
+		req = append(req, launchRetryRule)
+		mustNot = appendMissing(mustNot, heldRetryReuse[0])
+	default:
+		mustNot = appendMissing(mustNot, launchRetryRule, heldRetryReuse[1])
+	}
 	switch label {
 	case heldLabelNamesThisID:
 		req = append(req, heldLabelNames)
@@ -125,7 +154,7 @@ func (c DescCase) afterHeldName(p HeldName, label heldLabel) DescCase {
 		mustNot = appendMissing(mustNot, heldLabelNames, heldLabelNotNames)
 	}
 	c.Require = req
-	c.MustNot = appendMissing(mustNot, nothingWasDone, rowStaysPending)
+	c.MustNot = appendMissing(mustNot, nothingWasDone, rowStaysPending, retryLater)
 	return c
 }
 
@@ -211,17 +240,19 @@ func DescHeldOtherStore(p HeldName, storeID string) DescCase {
 // DescHeldAmbiguous is ErrTmuxUnresponsive for a re-lookup in which more
 // than one listing entry matches the requested name, so its holder cannot be
 // told (SR-3.10): the quoted name, "more than one tmux session's name
-// matches it", the row sentence and "list --tmux-session-name"; no label
-// sentence; never "dead" or "gone". p.SessionID must be empty: pass the
+// matches it", the row sentence, the retry guidance by p.Row (see
+// AfterHeldName) and "list --tmux-session-name"; no label sentence; never
+// "dead" or "gone". p.SessionID must be empty: pass the
 // matching sessions' tmux ids as forbid.
 func DescHeldAmbiguous(p HeldName) DescCase {
 	if p.SessionID != "" {
 		panic("apitest: DescHeldAmbiguous names no holder")
 	}
 	return DescCase{
-		Name:    "ErrTmuxUnresponsive, held name, ambiguous holder",
-		Require: []string{"more than one tmux session's name matches it", "list --tmux-session-name"},
-		MustNot: unresponsiveMustNot,
+		Name:       "ErrTmuxUnresponsive, held name, ambiguous holder",
+		Require:    []string{"more than one tmux session's name matches it", "list --tmux-session-name"},
+		MustNot:    unresponsiveMustNot,
+		unanswered: true,
 	}.afterHeldName(p, heldLabelNoClaim)
 }
 
