@@ -202,6 +202,14 @@
             "ended",
             "missing"
           ]
+        },
+        {
+          "name": "launch_started_at",
+          "type": "timestamp?",
+          "description": "Start of the launch in progress: RFC3339 UTC with millisecond precision. Present only while the row is pending; omitted otherwise.",
+          "nullable": true,
+          "allow_empty": false,
+          "allowed_values": null
         }
       ],
       "error_names": [
@@ -336,6 +344,14 @@
           "name": "ended_at",
           "type": "timestamp?",
           "description": "Set when state moves to ended (omitted while live).",
+          "nullable": true,
+          "allow_empty": false,
+          "allowed_values": null
+        },
+        {
+          "name": "launch_started_at",
+          "type": "timestamp?",
+          "description": "Start of the launch in progress: RFC3339 UTC with millisecond precision. Present only while the row is pending; omitted otherwise.",
           "nullable": true,
           "allow_empty": false,
           "allowed_values": null
@@ -990,7 +1006,7 @@
         {
           "name": "spawns",
           "type": "[]Spawn",
-          "description": "Matching rows. Empty array when none match (never null). Each row carries liveness_unverified_since (timestamp?) and liveness_note (string?), both omitted while NULL (never unverified).",
+          "description": "Matching rows. Empty array when none match (never null). Each row carries liveness_unverified_since (timestamp?) and liveness_note (string?), both omitted while NULL (never unverified), and launch_started_at (timestamp?), the start of the launch in progress (RFC3339 UTC with millisecond precision), omitted unless the row is pending.",
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null

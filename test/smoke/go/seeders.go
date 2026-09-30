@@ -7,9 +7,10 @@
 //   - Manifest: the VerbDef, used by the asserts.go helpers to know which
 //     result fields and error names to expect.
 //   - SeedKind: a coarse-grained tag the driver dispatches on to call the
-//     right storefix.Seed* helper. This indirection keeps seeders.go free
-//     of internal/store imports (only stdlib + pkg/api + manifest +
-//     internal/testsupport/* are allowed per the import-graph guard).
+//     right storefix.Seed* helper (or apitest.SeedSpawn for a pending
+//     row). This indirection keeps seeders.go free of internal/store
+//     imports (only stdlib + pkg/api + manifest + internal/testsupport/*
+//     are allowed per the import-graph guard).
 //   - SeedID: the claude_instance_id the seeded row will carry. The Happy
 //     closure references the same id when calling the verb method.
 //   - PaneText: scripted CapturePane response, set on the recorder before
@@ -19,6 +20,8 @@
 //     result into AssertResultMatchesManifest.
 //   - Error: invokes the verb method with deliberately bad input so the
 //     driver can feed the returned error into AssertExpectedError.
+//   - LaunchStartedAt: for status, get and list, reads the launch start the
+//     Happy result shows for the seeded row; the driver checks it.
 //
 // Adding a new callable verb to the manifest requires adding a matching
 // entry here. The driver's startup check fails the build with a clear
@@ -35,7 +38,7 @@ import (
 )
 
 // seedKind enumerates the precondition shapes the driver knows how to set
-// up via storefix. Each value maps to a specific storefix.Seed* call in
+// up. Each value maps to one storefix.Seed* or apitest.SeedSpawn call in
 // the driver's setup switch.
 type seedKind int
 
@@ -46,7 +49,7 @@ const (
 	seedNone seedKind = iota
 
 	// seedLive seeds a spawn in StateWorking — a live, interactive row
-	// usable by status, get, kill, send-keys, read-pane.
+	// usable by kill, read-pane and delete.
 	seedLive
 
 	// seedWaiting seeds a spawn in StateWaiting — used by send-keys
@@ -72,7 +75,17 @@ const (
 	// days, so it qualifies for expiry under the default retention
 	// window. Used by expire's happy path.
 	seedExpired
+
+	// seedPendingLaunch seeds a pending row whose launch start is
+	// smokeLaunchStartMillis, through apitest.SeedSpawn and
+	// WithLaunchStartedAt. Used by status, get and list (SR-22.2).
+	seedPendingLaunch
 )
+
+// smokeLaunchStartMillis is the launch start seedPendingLaunch records, in
+// ms since the Unix epoch; its non-zero millisecond part (.123) checks that
+// the verbs keep millisecond precision.
+const smokeLaunchStartMillis int64 = 1790000000123
 
 // seederSpec carries everything the driver needs to exercise one verb.
 type seederSpec struct {
@@ -80,8 +93,8 @@ type seederSpec struct {
 	// the asserts.go helpers so they know which fields to check.
 	Manifest manifest.VerbDef
 
-	// SeedKind tells the driver which storefix.Seed* helper to call
-	// before constructing the Client.
+	// SeedKind tells the driver which seed helper to call before
+	// constructing the Client.
 	SeedKind seedKind
 
 	// SeedID is the claude_instance_id the seeded row uses. Happy
@@ -110,6 +123,12 @@ type seederSpec struct {
 	// trigger one of the verb's declared ErrorNames. The returned err
 	// is fed to AssertExpectedError.
 	Error func(c *api.Client, ctx context.Context) error
+
+	// LaunchStartedAt, when non-nil, returns the launch start the Happy
+	// result shows for the seeded row id (nil when absent). The driver
+	// asserts it equals smokeLaunchStartMillis, in UTC. Set by the specs
+	// seeded with seedPendingLaunch.
+	LaunchStartedAt func(result any, id string) *time.Time
 }
 
 // seeders is the canonical registry: one entry per callable verb. The
@@ -157,7 +176,7 @@ func init() {
 	// ── status ────────────────────────────────────────────────────────────
 	seeders["status"] = seederSpec{
 		Manifest: mustVerb("status"),
-		SeedKind: seedLive,
+		SeedKind: seedPendingLaunch,
 		SeedID:   "smoke-status-id",
 		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
 			return c.Status(id)
@@ -166,12 +185,15 @@ func init() {
 			_, err := c.Status(bogusID)
 			return err
 		},
+		LaunchStartedAt: func(result any, _ string) *time.Time {
+			return result.(api.StatusResult).LaunchStartedAt
+		},
 	}
 
 	// ── get ───────────────────────────────────────────────────────────────
 	seeders["get"] = seederSpec{
 		Manifest: mustVerb("get"),
-		SeedKind: seedLive,
+		SeedKind: seedPendingLaunch,
 		SeedID:   "smoke-get-id",
 		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
 			return c.Get(id)
@@ -179,6 +201,9 @@ func init() {
 		Error: func(c *api.Client, _ context.Context) error {
 			_, err := c.Get(bogusID)
 			return err
+		},
+		LaunchStartedAt: func(result any, _ string) *time.Time {
+			return result.(api.SpawnRow).LaunchStartedAt
 		},
 	}
 
@@ -368,7 +393,7 @@ func init() {
 	// ── list ──────────────────────────────────────────────────────────────
 	seeders["list"] = seederSpec{
 		Manifest: mustVerb("list"),
-		SeedKind: seedLive,
+		SeedKind: seedPendingLaunch,
 		SeedID:   "smoke-list-id",
 		Happy: func(c *api.Client, _ string, _ context.Context) (any, error) {
 			return c.List(api.ListParams{})
@@ -378,6 +403,14 @@ func init() {
 			// the store is reached.
 			_, err := c.List(api.ListParams{Labels: []string{"no-equals-sign"}})
 			return err
+		},
+		LaunchStartedAt: func(result any, id string) *time.Time {
+			for _, r := range result.(api.ListResult).Spawns {
+				if r.ClaudeInstanceID == id {
+					return r.LaunchStartedAt
+				}
+			}
+			return nil
 		},
 	}
 

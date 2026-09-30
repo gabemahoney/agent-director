@@ -123,6 +123,8 @@ export interface ListRow {
   last_seen_at: string;
   /** Set when state moves to ended (omitted while live). */
   ended_at?: string | null;
+  /** Start of the launch in progress (RFC3339 UTC, millisecond precision); present only on a pending row, omitted otherwise. */
+  launch_started_at?: string | null;
   /** RFC3339 timestamp of the first sweep that could not verify this live row's liveness; omitted/null when never unverified. */
   liveness_unverified_since?: string | null;
   /** Human-readable reason liveness could not be verified; omitted/null when never unverified. */
@@ -184,6 +186,8 @@ export interface StatusParams {
 export interface StatusResult {
   /** Current lifecycle state (pending/waiting/working/ask_user/check_permission/ended/missing). */
   state: string;
+  /** Start of the launch in progress (RFC3339 UTC, millisecond precision); present only on a pending row, omitted otherwise. */
+  launch_started_at?: string | null;
 }
 
 /** Mirrors the `get` CLI verb's --claude-instance-id flag (pkg/api.Client.Get arg). */
@@ -210,6 +214,8 @@ export interface GetResult {
   last_seen_at: string;
   /** Set when state moves to ended; omitted while live. */
   ended_at?: string | null;
+  /** Start of the launch in progress (RFC3339 UTC, millisecond precision); present only on a pending row, omitted otherwise. */
+  launch_started_at?: string | null;
   /** RFC3339 timestamp of the first sweep that could not verify this live row's liveness; omitted/null when never unverified. */
   liveness_unverified_since?: string | null;
   /** Human-readable reason liveness could not be verified; omitted/null when never unverified. */

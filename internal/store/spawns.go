@@ -305,8 +305,9 @@ func scanSpawn(sc rowScanner, errs spawnReadErrs) (Spawn, error) {
 	return sp, nil
 }
 
-// GetSpawnState is a narrow lookup returning only the state column. Used
-// by api.Status to avoid materializing the full row.
+// GetSpawnState is a narrow lookup returning only the state column. It
+// serves pause's wait loop and api.Status's fallback for a store without
+// SpawnStatus; production Status reads through SpawnStatus instead.
 func (s *Store) GetSpawnState(instanceID string) (string, error) {
 	const q = `SELECT state FROM spawns WHERE claude_instance_id = ?`
 	var state string
@@ -318,6 +319,23 @@ func (s *Store) GetSpawnState(instanceID string) (string, error) {
 		return "", fmt.Errorf("store: get state: %w", err)
 	}
 	return state, nil
+}
+
+// SpawnStatus returns the row's state and its launch start in milliseconds
+// (0 = absent) in one read by primary key, for status (SR-22.2, SR-16.1).
+// It decodes no structured column and never fails because of a stored
+// launch start value (SR-5.5).
+func (s *Store) SpawnStatus(instanceID string) (state string, launchStartedAtMillis int64, err error) {
+	const q = `SELECT state, launch_started_at FROM spawns WHERE claude_instance_id = ?`
+	var launchStartedAt any
+	err = s.db.QueryRow(q, instanceID).Scan(&state, &launchStartedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", 0, fmt.Errorf("%w: %s", ErrSpawnNotFound, instanceID)
+	}
+	if err != nil {
+		return "", 0, fmt.Errorf("store: spawn status: %w", err)
+	}
+	return state, decodeLaunchStartedAt(launchStartedAt), nil
 }
 
 // SpawnState returns the state of the row with the given claude_instance_id

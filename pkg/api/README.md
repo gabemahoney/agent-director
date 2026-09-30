@@ -137,7 +137,9 @@ if err != nil {
 fmt.Println(res.State) // e.g. "waiting"
 ```
 
-Returns `StatusResult` (`.State`). Most-likely sentinel error:
+Returns `StatusResult` (`.State`, and `.LaunchStartedAt`, the start of
+the launch in progress, set only while the row is `pending`; JSON key
+`launch_started_at`, omitted otherwise). Most-likely sentinel error:
 `ErrSpawnNotFound`. See `(*Client).Status` godoc.
 
 ---

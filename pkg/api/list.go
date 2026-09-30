@@ -67,6 +67,10 @@ type ListRow struct {
 	LastSeenAt time.Time `json:"last_seen_at"`
 	// EndedAt is set when state moves to ended. Omitted from JSON while live.
 	EndedAt *time.Time `json:"ended_at,omitempty"`
+	// LaunchStartedAt is the start of the launch in progress, RFC3339 UTC
+	// with millisecond precision. Present only on a pending row; nil (and
+	// omitted from JSON) otherwise (SR-22.2).
+	LaunchStartedAt *time.Time `json:"launch_started_at,omitempty"`
 	// LivenessUnverifiedSince is the RFC3339 timestamp of the first sweep that
 	// could not verify this live row's liveness. Nil (omitted from JSON) when
 	// NULL in the store. The store carries it as a COALESCE-scanned string
@@ -135,6 +139,7 @@ func List(s ListStore, params ListParams) (ListResult, error) {
 			StartedAt:               r.StartedAt,
 			LastSeenAt:              r.LastSeenAt,
 			EndedAt:                 r.EndedAt,
+			LaunchStartedAt:         launchStartedAt(r.State, r.LaunchStartedAtMillis),
 			LivenessUnverifiedSince: nullableTimestamp(r.LivenessUnverifiedSince),
 			LivenessNote:            nullableString(r.LivenessNote),
 		})
@@ -145,7 +150,8 @@ func List(s ListStore, params ListParams) (ListResult, error) {
 // List enumerates Spawn rows matching the supplied filter set. All filters AND
 // together; an absent filter is permissive. State values OR together. When no
 // rows match, ListResult.Spawns is a non-nil empty slice. Returned order is
-// unspecified.
+// unspecified. A pending row also carries launch_started_at, when the agent's
+// launch began.
 //
 // CLI: agent-director list
 //

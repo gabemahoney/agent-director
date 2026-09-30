@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
@@ -962,5 +963,76 @@ func TestSpawnDescriptionStatesPreCheckErrInternal(t *testing.T) {
 				t.Errorf("%s: spawn description does not contain %q; got %q", source, tok, desc)
 			}
 		}
+	}
+}
+
+// launchResultField is one verb's launch_started_at result text as a source
+// gives it: the field's type and nullability ("[]Spawn" and false for list,
+// whose composite spawns text carries it) and the text itself.
+type launchResultField struct {
+	typ      string
+	nullable bool
+	desc     string
+	enum     []string
+}
+
+// TestLaunchStartedAtResultFields pins SR-22.2 on the manifest and in
+// surface.json: status and get carry a nullable timestamp? launch_started_at
+// field, list names it in its spawns text, each stating the SR-22.2 rule.
+func TestLaunchStartedAtResultFields(t *testing.T) {
+	_, surface := readSurfaceJSON(t)
+	cases := []struct {
+		verb    string
+		field   string // the result field holding the text
+		listRow bool
+	}{
+		{"status", "launch_started_at", false},
+		{"get", "launch_started_at", false},
+		{"list", "spawns", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.verb, func(t *testing.T) {
+			sources := map[string]launchResultField{}
+			v, ok := manifest.Lookup(tc.verb)
+			if !ok {
+				t.Fatalf("%s not in manifest", tc.verb)
+			}
+			for _, f := range v.ResultFields {
+				if f.Name == tc.field {
+					if !tc.listRow && f.AllowEmpty {
+						t.Errorf("manifest: %s.%s.AllowEmpty = true; want false", tc.verb, f.Name)
+					}
+					sources["manifest"] = launchResultField{f.Type, f.Nullable, f.Description, f.AllowedValues}
+				}
+			}
+			for _, sv := range surface.Verbs {
+				if sv.Name != tc.verb {
+					continue
+				}
+				for _, f := range sv.ResultFields {
+					if f.Name == tc.field {
+						sources["surface.json"] = launchResultField{f.Type, f.Nullable, f.Description, f.AllowedValues}
+					}
+				}
+			}
+			for _, source := range []string{"manifest", "surface.json"} {
+				f, ok := sources[source]
+				if !ok {
+					t.Errorf("%s: %s has no %q result field", source, tc.verb, tc.field)
+					continue
+				}
+				if !tc.listRow {
+					if f.typ != "timestamp?" || !f.nullable {
+						t.Errorf("%s: %s.launch_started_at type %q nullable %v; want \"timestamp?\" nullable true",
+							source, tc.verb, f.typ, f.nullable)
+					}
+					if f.enum != nil {
+						t.Errorf("%s: %s.launch_started_at allowed values %v; want none", source, tc.verb, f.enum)
+					}
+				}
+				apitest.AssertAgentTextCase(t, source+": "+tc.verb+" result field "+tc.field, f.desc,
+					apitest.DescLaunchStartedAtField(tc.listRow))
+			}
+		})
 	}
 }

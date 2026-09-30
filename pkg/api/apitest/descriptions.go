@@ -424,6 +424,19 @@ func DescSpawnLaunchTimeoutRule() DescCase {
 	}
 }
 
+// DescLaunchStartedAtField is launch_started_at as a manifest result text
+// states it (SR-22.2): RFC3339 UTC with millisecond precision, shown only on
+// a pending row and omitted otherwise. listRow is list's composite spawns
+// text, which also names the field and its type. Check it with
+// AssertAgentTextCase.
+func DescLaunchStartedAtField(listRow bool) DescCase {
+	req := []string{"RFC3339 UTC with millisecond precision", "pending", "omitted"}
+	if listRow {
+		req = append(req, "launch_started_at (timestamp?)")
+	}
+	return DescCase{Name: "manifest result, launch_started_at", Require: req}
+}
+
 // DescSpawnScanRefusal is the label scan's refusal as the spawn manifest
 // description states it (SR-9.3, SR-18): a leftover of an explicit id is
 // ErrTmuxSessionConflict, a CONFLICT pointing to "Operator actions", and

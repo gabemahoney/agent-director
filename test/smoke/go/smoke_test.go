@@ -8,6 +8,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
@@ -20,12 +21,13 @@ import (
 //  2. Opens a fresh storefix.OpenTempStore and a fresh tmuxfix.NewRecorder
 //     — no state crosses verbs.
 //  3. Applies the verb's SeedKind precondition via the appropriate
-//     storefix helper.
+//     storefix or apitest seed helper.
 //  4. Constructs an api.Client wired with the temp store path and the
 //     recorder. CreateIfMissing is true so api.New reuses the store
 //     file created by storefix.OpenTempStore.
 //  5. Calls the verb's Happy closure and feeds the result into
-//     AssertResultMatchesManifest.
+//     AssertResultMatchesManifest; for status, get and list it also checks
+//     the pending row's launch_started_at (see assertLaunchStartedAt).
 //  6. Calls the verb's Error closure (when defined) and feeds the
 //     returned error into AssertExpectedError.
 //
@@ -88,7 +90,7 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 	// Apply the per-verb seed precondition. The switch is inline so
 	// the typed *store.Store handle (st) stays local — keeping
 	// seeders.go free of internal/store imports per the import-graph
-	// guard. Each branch calls one storefix.Seed* helper.
+	// guard. Each branch calls one storefix.Seed* helper or apitest.SeedSpawn.
 	switch spec.SeedKind {
 	case seedNone:
 		// no row needed (spawn, find-missing, expire-empty,
@@ -108,6 +110,11 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 		// retention so Expire(d=0) reaps it regardless.
 		storefix.SeedExpiredCandidate(t, st, storePath, spec.SeedID,
 			8*24*time.Hour)
+	case seedPendingLaunch:
+		if _, err := apitest.SeedSpawn(storePath, spec.SeedID, "pending", "", "", "", false,
+			apitest.WithLaunchStartedAt(smokeLaunchStartMillis)); err != nil {
+			t.Fatalf("runVerbSubtest: seed pending %q: %v", spec.SeedID, err)
+		}
 	default:
 		t.Fatalf("runVerbSubtest: unknown SeedKind %v for verb %q",
 			spec.SeedKind, vd.Name)
@@ -143,6 +150,9 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 		t.Fatalf("happy-path %s: unexpected error: %v", vd.Name, happyErr)
 	}
 	AssertResultMatchesManifest(t, vd, result)
+	if spec.LaunchStartedAt != nil {
+		assertLaunchStartedAt(t, vd.Name, spec.LaunchStartedAt(result, spec.SeedID))
+	}
 
 	// ── Error path (when declared) ──────────────────────────────────────
 	if spec.Error != nil {
@@ -150,6 +160,21 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 		defer errCancel()
 		err := spec.Error(c, errCtx)
 		AssertExpectedError(t, vd, err)
+	}
+}
+
+// assertLaunchStartedAt checks a pending row's launch start is present and is
+// the seeded smokeLaunchStartMillis in UTC, milliseconds kept (SR-22.2).
+func assertLaunchStartedAt(t *testing.T, verb string, got *time.Time) {
+	t.Helper()
+	want := time.UnixMilli(smokeLaunchStartMillis).UTC()
+	switch {
+	case got == nil:
+		t.Errorf("%s: launch_started_at missing on the pending row; want %s",
+			verb, want.Format(time.RFC3339Nano))
+	case !got.Equal(want) || got.Location() != time.UTC:
+		t.Errorf("%s: launch_started_at = %s; want %s", verb,
+			got.Format(time.RFC3339Nano), want.Format(time.RFC3339Nano))
 	}
 }
 

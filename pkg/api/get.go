@@ -2,6 +2,8 @@ package api
 
 import (
 	"time"
+
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // PermissionRequestInfo is the open permission_requests row projection
@@ -66,6 +68,10 @@ type SpawnRow struct {
 	// EndedAt is set when state moves to ended. Omitted from JSON (omitempty)
 	// while the Spawn is live.
 	EndedAt *time.Time `json:"ended_at,omitempty"`
+	// LaunchStartedAt is the start of the launch in progress, RFC3339 UTC
+	// with millisecond precision. Present only on a pending row; nil (and
+	// omitted from JSON) otherwise (SR-22.2).
+	LaunchStartedAt *time.Time `json:"launch_started_at,omitempty"`
 	// LivenessUnverifiedSince is the RFC3339 timestamp of the first sweep that
 	// could not verify this live row's liveness (an unknown verdict). Nil (and
 	// omitted from JSON) when NULL in the store — i.e. never unverified or
@@ -162,6 +168,18 @@ func nullableTimestamp(s string) *string {
 	return &s
 }
 
+// launchStartedAt maps a row's state and its launch start in milliseconds
+// (0 = absent) to the launch_started_at field shared by status, get and
+// list: nil unless the row is pending with a launch start, otherwise the
+// instant in UTC at millisecond precision (SR-22.2).
+func launchStartedAt(state string, millis int64) *time.Time {
+	if state != store.StatePending || millis == 0 {
+		return nil
+	}
+	t := time.UnixMilli(millis).UTC()
+	return &t
+}
+
 // GetStore is the narrow store surface Get needs. Matches the existing
 // methods on *store.Store; defined as an interface so api.Get's
 // permission-fetch branch is testable without raw SQL fixtures.
@@ -229,6 +247,7 @@ func Get(s GetStore, instanceID string) (SpawnRow, error) {
 		StartedAt:               row.StartedAt,
 		LastSeenAt:              row.LastSeenAt,
 		EndedAt:                 row.EndedAt,
+		LaunchStartedAt:         launchStartedAt(row.State, row.LaunchStartedAtMillis),
 		LivenessUnverifiedSince: nullableTimestamp(row.LivenessUnverifiedSince),
 		LivenessNote:            nullableString(row.LivenessNote),
 		PermissionRequests:      []PermissionRequestInfo{},
@@ -283,7 +302,8 @@ func Get(s GetStore, instanceID string) (SpawnRow, error) {
 
 // Get returns the full DB row for a tracked Spawn: state, cwd, tmux session
 // name, relay mode, session id, labels, timestamps, and (when applicable) the
-// open permission-requests slice.
+// open permission-requests slice. On a pending row it also carries
+// launch_started_at, when the agent's launch began.
 //
 // CLI: agent-director get
 //

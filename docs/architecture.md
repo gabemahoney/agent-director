@@ -576,8 +576,11 @@ fresh store and a migrated store have identical column lists on both tables.
 scanner, `scanSpawn`, so both fill them identically): `RowVersion`,
 `LaunchStartedAtMillis` (0 = absent), `LifeNumber`, `NoPreTrust` (the
 recorded pre-trust choice), `EndedAtText` (`ended_at` exactly as stored, ""
-for NULL), `Snapshot` and `Identity`. The fields are read-only. No write takes
-them from a `Spawn`, and no verb reports them.
+for NULL), `Snapshot` and `Identity`. The fields are read-only: no write takes
+them from a `Spawn`. No verb reports them, with one exception, the launch
+start: `get` and `list` report `LaunchStartedAtMillis` as `launch_started_at`
+on a `pending` row, and `status` reports it through `SpawnStatus` (see "Where
+callers see the launch start").
 
 - **`store.RowSnapshot`** (alias `api.RowSnapshot`) is the SR-5.3
   change-detection key: `row_version`, `started_at`, `claude_session_id`,
@@ -1708,6 +1711,20 @@ failed kill leaves an unlabelled session of agent-director's that may
 run; the error says so. A plain spawn's recorded socket comes from the
 caller's tmux environment (`TMUX`, `TMUX_TMPDIR`), so a caller with a
 different environment launches on a different server.
+
+**Where callers see the launch start.** `status`, `get` and `list` carry
+`launch_started_at` (RFC3339 UTC, millisecond precision) only on a
+`pending` row whose stored launch start is a non-zero integer; otherwise,
+on any other state included, the key is omitted, never `null`
+(SR-22.2). One helper, `launchStartedAt` (`pkg/api/get.go`), makes that
+projection for all three. Any verb that reports the launch start must use
+`launchStartedAt`, not its own state check or timestamp format. `status`
+reads the launch start through an optional narrow read: if its
+`StatusStore` also implements the unexported `statusReader`
+(`SpawnStatus`, one read by primary key of `state` and
+`launch_started_at`), `Status` uses it. `*store.Store` implements it, so
+`StatusStore` and `Status` keep their signatures, and an injected store
+without it gives no launch start (SR-16.1).
 
 ### Workspace-trust pre-write
 
@@ -4019,9 +4036,9 @@ For each verb in `manifest.CallableVerbs()`, the harness copies a fixture store 
 
 **Verb coverage.** `manifest.CallableVerbs()` drives the verb list (16 verbs). `serve` and `hook` have `Callable=false` and are excluded.
 
-**Import constraint.** The smoke target imports only `pkg/api`, `pkg/api/manifest`, and `internal/testsupport/*`. Imports of `internal/api`, `internal/store`, or any other `internal/` package are prohibited and enforced at test time by `test/smoke/go/import_graph_test.go` (Task c8). This keeps the smoke test honest as a consumer: if `pkg/api` does not expose something, the smoke test cannot reach around it.
+**Import constraint.** The smoke target imports only `pkg/api`, `pkg/api/manifest`, `pkg/api/apitest` (for `SeedSpawn`), and `internal/testsupport/*`. Imports of `internal/api`, `internal/store`, or any other `internal/` package are prohibited and enforced at test time by `test/smoke/go/import_graph_test.go` (Task c8). This keeps the smoke test honest as a consumer: if `pkg/api` does not expose something, the smoke test cannot reach around it.
 
-**No verb chaining.** Each subtest receives a fresh store and a fresh tmux recorder. Preconditions (e.g., a live Spawn row required by `status` or `send-keys`) are injected by the `internal/testsupport` seeders — never produced by calling another verb first. This makes subtests independent and order-invariant; a subtest failure cannot cascade into later subtests through shared state.
+**No verb chaining.** Each subtest receives a fresh store and a fresh tmux recorder. Preconditions (e.g., a live Spawn row required by `status` or `send-keys`) are injected by the `internal/testsupport` seeders or `apitest.SeedSpawn` (a `pending` row with a launch start) — never produced by calling another verb first. This makes subtests independent and order-invariant; a subtest failure cannot cascade into later subtests through shared state.
 
 **Race and repeatability.** The smoke target must pass under:
 
@@ -4948,6 +4965,11 @@ package doc comment (`doc.go`, "# Description helper") says the same.
     rule; check with `AssertAgentTextCase`)
   - `DescSpawnScanRefusal()` (the spawn manifest's label-scan refusal;
     check with `AssertAgentTextCase`)
+  - `DescLaunchStartedAtField(listRow bool)`: the `launch_started_at`
+    result text of `status` and `get` (RFC3339 UTC with millisecond
+    precision, shown only on a `pending` row, omitted otherwise). With
+    `listRow` set, it checks `list`'s `spawns` text, which must also name
+    `launch_started_at (timestamp?)`. Check with `AssertAgentTextCase`.
 
   `call` is a `tmux.Call` (for example `tmux.CallCreate`).
   `DescCase.PointsToOperatorActions()` adds the pointer to the README's

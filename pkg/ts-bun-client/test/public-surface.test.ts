@@ -153,7 +153,8 @@ test("public-surface: Client exposes no migrate method (SR-1)", () => {
 // deliberate additive change — a regenerated golden is self-consistent. These
 // NAMED assertions read the checked-in types.d.ts.golden and pin the specific
 // SR-8.3 shapes (additive-optional liveness fields; find-missing unverified
-// fields; state stays a plain string, no union/enum), so golden regeneration
+// fields; state stays a plain string, no union/enum) and the SR-22.2
+// additive-optional launch_started_at field, so golden regeneration
 // cannot silently drop or mutate them without also tripping a targeted test.
 // ---------------------------------------------------------------------------
 
@@ -195,6 +196,18 @@ test("public-surface: ListRow & GetResult carry additive-optional liveness field
     ).toMatch(/liveness_note\?\s*:\s*string\s*\|\s*null/);
   }
 });
+
+test.each(["StatusResult", "GetResult", "ListRow"])(
+  "public-surface: %s carries additive-optional nullable launch_started_at (SR-22.2)",
+  (iface) => {
+    // Optional (`?`) mirrors the Go pointer+omitempty key that is absent off
+    // a pending row; `| null` follows the liveness-field precedent above.
+    expect(
+      interfaceBody(typesGolden(), iface),
+      `${iface} must declare launch_started_at as additive-optional nullable`
+    ).toMatch(/\blaunch_started_at\?\s*:\s*string\s*\|\s*null\s*;/);
+  }
+);
 
 test("public-surface: GetResult carries jsonl_path; ListRow does not (SR-9.3/SR-10.3)", () => {
   const golden = typesGolden();
