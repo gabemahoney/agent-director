@@ -190,6 +190,15 @@ func TestHookAppliesOnlyFromThePaneProcess(t *testing.T) {
 					t.Fatalf("split-window reply %q is not a pane pid", out)
 				}
 				s.rt.trackPane(second)
+				// split-window -P replies once tmux has forked the pane; until
+				// the child execs, /proc/<pid>/environ still shows the tmux
+				// server's environment. Wait for the exec before reading it.
+				waitFor(t, "the second pane execs the stand-in",
+					func() bool {
+						argv := procCmdline(t, second)
+						return len(argv) >= 2 && filepath.Base(argv[0]) == "bash" && argv[1] == stub
+					},
+					func() string { return fmt.Sprintf("%s, argv %q", procState(second), procCmdline(t, second)) })
 				if v, _ := envValue(procEnviron(t, second), "AGENT_DIRECTOR_INSTANCE_ID"); v != s.ID {
 					t.Fatalf("second pane AGENT_DIRECTOR_INSTANCE_ID = %q, want the row's id %q", v, s.ID)
 				}
