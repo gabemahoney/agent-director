@@ -1,6 +1,9 @@
 package tmux
 
-import "strconv"
+import (
+	"strconv"
+	"strings"
+)
 
 // This file holds the socket-taking methods of SR-2.1 other than the create
 // (see create.go). Every target is a session id or pane id: never a name, an
@@ -68,18 +71,39 @@ func (c *Client) KillSessionID(socket, sessionID string) error {
 	return c.runAction(CallKillSession, socket, "kill-session", "-t", sessionID)
 }
 
-// SendKeysPane types text into the pane paneID on socket with send-keys -l,
-// then, when pressEnter is set and the text call succeeded, sends a real
-// Enter key in a second call (SR-2.1). Action timeout for each. The error's
-// Call says which call failed (CallSendText or CallSendEnter).
+// SendKeysPane types text into the pane paneID on socket with
+// send-keys -t <pane id> -l -- <text>, then, when pressEnter is set and the
+// text call succeeded, sends a real Enter key in a second call,
+// send-keys -t <pane id> Enter (SR-2.1). The "--" ends tmux's options, so a
+// text starting with "-" (such as "-x", "--" or "-l") is typed literally and
+// never read as a flag. The text is passed through escapeFinalSemicolon, so a
+// text ending in ";" is typed whole and never ends the command. Action
+// timeout for each. The error's Call says which call failed (CallSendText or
+// CallSendEnter).
 func (c *Client) SendKeysPane(socket, paneID, text string, pressEnter bool) error {
-	if err := c.runAction(CallSendText, socket, "send-keys", "-t", paneID, "-l", text); err != nil {
+	if err := c.runAction(CallSendText, socket, "send-keys", "-t", paneID, "-l", "--", escapeFinalSemicolon(text)); err != nil {
 		return err
 	}
 	if !pressEnter {
 		return nil
 	}
 	return c.runAction(CallSendEnter, socket, "send-keys", "-t", paneID, "Enter")
+}
+
+// escapeFinalSemicolon returns text with one backslash inserted before its
+// final ";" when it ends in ";" (`;` becomes `\;`, `a;` becomes `a\;`, `a\;`
+// becomes `a\\;`), and any other text unchanged. tmux's command parser reads
+// every argv element that ends in ";" as a command separator, even after
+// "--": the ";" is dropped and the element's text before it, if any, is the
+// command's last argument. An element ending in `\;` is instead one argument
+// with that backslash removed, so the escaped text reaches the pane exactly
+// as written. A ";" anywhere else in the text is not special. Used only by
+// the text call of SendKeysPane.
+func escapeFinalSemicolon(text string) string {
+	if !strings.HasSuffix(text, cmdSeparator) {
+		return text
+	}
+	return text[:len(text)-len(cmdSeparator)] + `\` + cmdSeparator
 }
 
 // CapturePaneID returns the last nLines lines of the pane paneID on socket:

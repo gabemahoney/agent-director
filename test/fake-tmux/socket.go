@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix"
@@ -157,15 +158,28 @@ func takeInjection(tb *faketmuxfix.Table, call tmux.Call) (inj *faketmuxfix.Inje
 	return nil, false
 }
 
-// splitCommands splits argv on standalone ";" arguments.
+// splitCommands splits argv into commands as tmux's command parser does:
+// an argument that ends in an unescaped ";" ends the command, its text
+// before the ";" (if any) staying as the command's last argument, so a
+// standalone ";" is a plain separator; an argument that ends in `\;` is one
+// argument with that backslash removed and is not a separator. Any other
+// argument, including one with a ";" elsewhere, is kept as it is. An empty
+// command is kept, so the caller can reject it.
 func splitCommands(args []string) [][]string {
 	cmds := [][]string{{}}
 	for _, a := range args {
-		if a == ";" {
+		body, ends := strings.CutSuffix(a, ";")
+		switch {
+		case !ends:
+			cmds[len(cmds)-1] = append(cmds[len(cmds)-1], a)
+		case strings.HasSuffix(body, `\`):
+			cmds[len(cmds)-1] = append(cmds[len(cmds)-1], body[:len(body)-1]+";")
+		default:
+			if body != "" {
+				cmds[len(cmds)-1] = append(cmds[len(cmds)-1], body)
+			}
 			cmds = append(cmds, []string{})
-			continue
 		}
-		cmds[len(cmds)-1] = append(cmds[len(cmds)-1], a)
 	}
 	return cmds
 }

@@ -502,6 +502,39 @@ func TestSendAndCaptureLogged(t *testing.T) {
 	}
 }
 
+// TestSendTextAfterDoubleDash checks the fake accepts socket-form
+// `send-keys -t %N -l -- <text>` for a text tmux would otherwise read as
+// flags or as a command separator, logging the text as the client sent it (a
+// final ";" escaped as `\;`).
+func TestSendTextAfterDoubleDash(t *testing.T) {
+	c := newClient(t, callTimeout)
+	for _, tc := range []struct{ text, sent string }{
+		{"-x", "-x"},
+		{"--", "--"},
+		{";", `\;`},
+		{"a;", `a\;`},
+		{"a ;", `a \;`},
+		{`a\;`, `a\\;`},
+		{";a", ";a"},
+		{"a;b", "a;b"},
+		{"-x;", `-x\;`},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			logPath := filepath.Join(t.TempDir(), "fake-tmux.log")
+			t.Setenv(faketmuxfix.EnvLog, logPath)
+			socket := seed(t)
+			if err := c.SendKeysPane(socket, "%0", tc.text, false); err != nil {
+				t.Fatalf("SendKeysPane(%q): %v", tc.text, err)
+			}
+			recs := readLog(t, logPath)
+			want := []string{"-u", "-S", socket, "send-keys", "-t", "%0", "-l", "--", tc.sent}
+			if len(recs) != 1 || !reflect.DeepEqual(recs[0][1:], want) {
+				t.Errorf("log = %q, want one record with argv %q", recs, want)
+			}
+		})
+	}
+}
+
 // TestInjectedRepliesYieldTypedKind injects each catalogue reply once on one
 // call kind it is recorded for; permission and duplicate replies on the create.
 func TestInjectedRepliesYieldTypedKind(t *testing.T) {

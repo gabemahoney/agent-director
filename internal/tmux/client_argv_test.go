@@ -35,7 +35,7 @@ type argvCase struct {
 // argvCases covers every socket-taking method, answered with success.
 func argvCases() []argvCase {
 	createReply := exitZero(tmuxfix.CreateReplyLine(tmuxfix.RecordedCreate))
-	return []argvCase{
+	return slices.Concat([]argvCase{
 		{
 			name:   "lookup",
 			script: []tmux.RunResult{exitZero("")},
@@ -72,23 +72,24 @@ func argvCases() []argvCase {
 			name:    "text then Enter",
 			script:  []tmux.RunResult{exitZero(""), exitZero("")},
 			call:    func(c *tmux.Client) error { return c.SendKeysPane(testSocket, "%3", "hello world", true) },
-			want:    [][]string{{"send-keys", "-t", "%3", "-l", "hello world"}, {"send-keys", "-t", "%3", "Enter"}},
+			want:    [][]string{{"send-keys", "-t", "%3", "-l", "--", "hello world"}, {"send-keys", "-t", "%3", "Enter"}},
 			timeout: testTimeouts.Action,
 		},
 		{
 			name:    "text without Enter",
 			script:  []tmux.RunResult{exitZero("")},
 			call:    func(c *tmux.Client) error { return c.SendKeysPane(testSocket, "%3", "hello", false) },
-			want:    [][]string{{"send-keys", "-t", "%3", "-l", "hello"}},
+			want:    [][]string{{"send-keys", "-t", "%3", "-l", "--", "hello"}},
 			timeout: testTimeouts.Action,
 		},
 		{
 			name:    "keysym-like text stays literal",
 			script:  []tmux.RunResult{exitZero(""), exitZero("")},
 			call:    func(c *tmux.Client) error { return c.SendKeysPane(testSocket, "%3", "C-c", true) },
-			want:    [][]string{{"send-keys", "-t", "%3", "-l", "C-c"}, {"send-keys", "-t", "%3", "Enter"}},
+			want:    [][]string{{"send-keys", "-t", "%3", "-l", "--", "C-c"}, {"send-keys", "-t", "%3", "Enter"}},
 			timeout: testTimeouts.Action,
 		},
+	}, argvDashTextCases(), argvSemicolonTextCases(), []argvCase{
 		{
 			name:   "capture",
 			script: []tmux.RunResult{exitZero("")},
@@ -145,7 +146,62 @@ func argvCases() []argvCase {
 				tmuxfix.ChainLabelValue(tmuxfix.Token, "agent-1", tmuxfix.StoreID)}},
 			timeout: testTimeouts.Create,
 		},
+	})
+}
+
+// argvTextRow is a SendKeysPane text and the text element its text call must carry.
+type argvTextRow struct{ text, sent string }
+
+// argvTextCases: each text gives exactly one text call
+// "send-keys -t %3 -l -- <sent>", then the Enter call only when asked.
+func argvTextCases(rows []argvTextRow) []argvCase {
+	var cases []argvCase
+	for _, row := range rows {
+		for _, enter := range []bool{true, false} {
+			want := [][]string{{"send-keys", "-t", "%3", "-l", "--", row.sent}}
+			script := []tmux.RunResult{exitZero("")}
+			name := fmt.Sprintf("text %q without Enter", row.text)
+			if enter {
+				want = append(want, []string{"send-keys", "-t", "%3", "Enter"})
+				script = append(script, exitZero(""))
+				name = fmt.Sprintf("text %q then Enter", row.text)
+			}
+			cases = append(cases, argvCase{
+				name:    name,
+				script:  script,
+				call:    func(c *tmux.Client) error { return c.SendKeysPane(testSocket, "%3", row.text, enter) },
+				want:    want,
+				timeout: testTimeouts.Action,
+			})
+		}
 	}
+	return cases
+}
+
+// argvDashTextCases: a text that looks like tmux flags (or is an ordinary
+// text) is sent unchanged after "-l --" (SR-2.1 "Text" row, SR-20.7).
+// "-t%5" must not retarget to %5.
+func argvDashTextCases() []argvCase {
+	var rows []argvTextRow
+	for _, text := range []string{"-x", "--", "-l", "-t%5", "plain text"} {
+		rows = append(rows, argvTextRow{text, text})
+	}
+	return argvTextCases(rows)
+}
+
+// argvSemicolonTextCases: a text ending in ";" gets one backslash before that
+// final ";" so tmux does not read it as a command separator; a ";" anywhere
+// else passes through unescaped.
+func argvSemicolonTextCases() []argvCase {
+	return argvTextCases([]argvTextRow{
+		{`;`, `\;`},
+		{`a;`, `a\;`},
+		{`a ;`, `a \;`},
+		{`a\;`, `a\\;`},
+		{`-x;`, `-x\;`},
+		{`;a`, `;a`},
+		{`a;b`, `a;b`},
+	})
 }
 
 // argvRun drives c through a scripted client and returns its invocations.

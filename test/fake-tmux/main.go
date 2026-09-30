@@ -12,9 +12,15 @@
 //
 // # Socket form (the Phase 1 call set, SR-2.1)
 //
-// argv: -u -S <socket> <command> [; <command> ...], each ";" its own
-// argument. The commands run in order against the socket's table, and the
-// first that fails ends the invocation with its exit status, as in tmux.
+// argv: -u -S <socket> <command> [; <command> ...]. Commands split as in
+// tmux's command parser: an argument ending in an unescaped ";" ends the
+// command (a standalone ";" is the separator the client sends; any text
+// before the ";" stays as the command's last argument), and an argument
+// ending in `\;` is one argument with that backslash removed (so the text
+// call's escaped final ";" arrives as ";"). An empty command is argv the fake
+// does not understand. The commands run in order against the socket's
+// table, and the first that fails ends the invocation with its exit status,
+// as in tmux.
 // Answers go to standard output, replies to standard error (Appendix E.10).
 // The fake expands the -F formats the client sends (#{session_id},
 // #{session_created}, #{pid}, #{start_time}, #{session_name}, #{@ad_owner},
@@ -30,7 +36,7 @@
 //   - list-panes -a -F <fmt>: every pane of every session.
 //   - kill-pane -t <%N>: removes the pane; the last pane removes its session.
 //   - kill-session -t <$N>: removes the session.
-//   - send-keys -t <%N> -l <text> and send-keys -t <%N> Enter: no effect
+//   - send-keys -t <%N> -l -- <text> and send-keys -t <%N> Enter: no effect
 //     beyond the log.
 //   - capture-pane -p [-e] -t <%N> -S -<n>: the pane's capture text, else
 //     FAKE_TMUX_PANE_OUTPUT, else a fixed two-line stub.
