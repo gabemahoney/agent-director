@@ -15,6 +15,7 @@ package api_test
 // writing their own.
 
 import (
+	"maps"
 	"reflect"
 	"slices"
 	"testing"
@@ -183,10 +184,10 @@ type callTableVerb struct {
 	run         func(t *testing.T, v callTableVerb, col callTableColumn, cell callTableCell)
 }
 
-// callTableVerbs is every verb's row. Epic 11 appends read-pane, send-keys
-// and pause here, each an adapter and its cells like callTableKill.
+// callTableVerbs is every verb's row. Epic 11 appends send-keys and pause
+// here, each an adapter and its cells like callTableKill and callTableReadPane.
 func callTableVerbs() []callTableVerb {
-	return []callTableVerb{callTableKill(), callTableSpawn(), callTableFindMissing()}
+	return []callTableVerb{callTableKill(), callTableSpawn(), callTableFindMissing(), callTableReadPane()}
 }
 
 // TestCallTable runs every verb in every column: error name through the
@@ -269,6 +270,51 @@ func runCallTableRowCell(t *testing.T, v callTableVerb, col callTableColumn, cel
 	}
 }
 
+// callTableLookupRefusals are the single-row verbs' shared cells for a
+// lookup that cannot decide or finds tmux unavailable: only the lookup is
+// made, and the refusal says nothing was done (SR-1.4).
+func callTableLookupRefusals() map[callTableOutcome]callTableCell {
+	refused := func(name string, desc func(e *killEnv, r killRow) apitest.DescCase) callTableCell {
+		return callTableCell{errName: name, calls: []tmux.Call{tmux.CallLookup}, desc: desc}
+	}
+	differentServer := refused("ErrTmuxNotAvailable", func(_ *killEnv, r killRow) apitest.DescCase {
+		return apitest.DescDifferentServer(r.ID)
+	})
+	return map[callTableOutcome]callTableCell{
+		ctDifferentRebound:   differentServer,
+		ctDifferentRestarted: differentServer,
+		ctDifferentNoServer:  differentServer,
+		ctConflictScope: refused("ErrTmuxSessionConflict", func(_ *killEnv, r killRow) apitest.DescCase {
+			return apitest.DescConflictingLabels(apitest.ConflictingLabels{InstanceID: r.ID, Scope: true, NothingWasDone: true})
+		}),
+		ctConflictDuplicate: refused("ErrTmuxSessionConflict", func(e *killEnv, r killRow) apitest.DescCase {
+			var carrying []apitest.DescSession
+			for _, s := range e.rec.Sessions(r.Socket) {
+				if s.Label == r.current() {
+					carrying = append(carrying, apitest.DescSession{Name: s.Name, ID: s.ID})
+				}
+			}
+			return apitest.DescConflictingLabels(apitest.ConflictingLabels{InstanceID: r.ID, Sessions: carrying,
+				NothingWasDone: true})
+		}),
+		ctUnreadableTimeout: refused("ErrTmuxUnresponsive", func(e *killEnv, _ killRow) apitest.DescCase {
+			return apitest.DescCallTimeout(tmux.CallLookup, e.cfg.EffectiveQueryTimeout())
+		}),
+		ctUnreadableUnrecognised: refused("ErrTmuxUnresponsive", func(*killEnv, killRow) apitest.DescCase {
+			return apitest.DescUnrecognisedReply(tmux.CallLookup, callTableFirstLine())
+		}),
+		ctUnreadableMalformed: refused("ErrTmuxUnresponsive", func(*killEnv, killRow) apitest.DescCase {
+			return apitest.DescUnrecognisedReply(tmux.CallLookup, "")
+		}),
+		ctUnavailableBinary: refused("ErrTmuxNotAvailable", func(*killEnv, killRow) apitest.DescCase {
+			return apitest.DescTmuxNotRun()
+		}),
+		ctUnavailableSocket: refused("ErrTmuxNotAvailable", func(_ *killEnv, r killRow) apitest.DescCase {
+			return apitest.DescSocketPermission(r.Socket)
+		}),
+	}
+}
+
 // callTableKill is kill's row (SR-6.1): Ours kills the agent's pane and the
 // session by id; Gone with the process dead sends nothing; every refusal
 // makes only the lookup; a failed first action (the pane kill) does not stop
@@ -276,16 +322,27 @@ func runCallTableRowCell(t *testing.T, v callTableVerb, col callTableColumn, cel
 func callTableKill() callTableVerb {
 	lookup := []tmux.Call{tmux.CallLookup}
 	gone := callTableCell{calls: lookup}
-	refused := func(name string, desc func(e *killEnv, r killRow) apitest.DescCase) callTableCell {
-		return callTableCell{errName: name, calls: lookup, desc: desc}
-	}
 	endedBy := func(call tmux.Call) callTableCell {
 		return callTableCell{sent: true,
 			calls:   []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallKillPane, tmux.CallKillSession},
 			prepare: func(e *killEnv, r killRow) { e.setAfterCall(call, procfix.Gone(), r.AgentPID) }}
 	}
-	differentServer := refused("ErrTmuxNotAvailable", func(_ *killEnv, r killRow) apitest.DescCase {
-		return apitest.DescDifferentServer(r.ID)
+	cells := callTableLookupRefusals()
+	maps.Copy(cells, map[callTableOutcome]callTableCell{
+		ctOurs: endedBy(tmux.CallKillPane),
+		ctLeftover: {errName: "ErrTmuxSessionConflict", calls: lookup, desc: func(_ *killEnv, r killRow) apitest.DescCase {
+			return apitest.DescKillLeftover([]apitest.DescSession{{Name: r.Session.Name, ID: r.Session.ID}})
+		}},
+		ctGoneNoLabel:              gone,
+		ctGoneOtherStoreRowToken:   gone,
+		ctGoneOtherStoreOtherToken: gone,
+		ctGoneForeignLabel:         gone,
+		ctGoneNameUnlabelled:       gone,
+		ctGoneServerRestarted:      gone,
+		ctGoneNoServer:             gone,
+		ctGoneNoSocket:             gone,
+		ctActionRecognised:         endedBy(tmux.CallKillSession),
+		ctActionTimeout:            endedBy(tmux.CallKillSession),
 	})
 	return callTableVerb{
 		name: "kill",
@@ -295,52 +352,6 @@ func callTableKill() callTableVerb {
 		},
 		firstAction: tmux.CallKillPane,
 		actions:     []tmux.Call{tmux.CallKillPane, tmux.CallKillSession},
-		cells: map[callTableOutcome]callTableCell{
-			ctOurs: endedBy(tmux.CallKillPane),
-			ctLeftover: refused("ErrTmuxSessionConflict", func(_ *killEnv, r killRow) apitest.DescCase {
-				return apitest.DescKillLeftover([]apitest.DescSession{{Name: r.Session.Name, ID: r.Session.ID}})
-			}),
-			ctGoneNoLabel:              gone,
-			ctGoneOtherStoreRowToken:   gone,
-			ctGoneOtherStoreOtherToken: gone,
-			ctGoneForeignLabel:         gone,
-			ctGoneNameUnlabelled:       gone,
-			ctGoneServerRestarted:      gone,
-			ctGoneNoServer:             gone,
-			ctGoneNoSocket:             gone,
-			ctDifferentRebound:         differentServer,
-			ctDifferentRestarted:       differentServer,
-			ctDifferentNoServer:        differentServer,
-			ctConflictScope: refused("ErrTmuxSessionConflict", func(_ *killEnv, r killRow) apitest.DescCase {
-				return apitest.DescConflictingLabels(apitest.ConflictingLabels{InstanceID: r.ID, Scope: true, NothingWasDone: true})
-			}),
-			ctConflictDuplicate: refused("ErrTmuxSessionConflict", func(e *killEnv, r killRow) apitest.DescCase {
-				var carrying []apitest.DescSession
-				for _, s := range e.rec.Sessions(r.Socket) {
-					if s.Label == r.current() {
-						carrying = append(carrying, apitest.DescSession{Name: s.Name, ID: s.ID})
-					}
-				}
-				return apitest.DescConflictingLabels(apitest.ConflictingLabels{InstanceID: r.ID, Sessions: carrying,
-					NothingWasDone: true})
-			}),
-			ctUnreadableTimeout: refused("ErrTmuxUnresponsive", func(e *killEnv, _ killRow) apitest.DescCase {
-				return apitest.DescCallTimeout(tmux.CallLookup, e.cfg.EffectiveQueryTimeout())
-			}),
-			ctUnreadableUnrecognised: refused("ErrTmuxUnresponsive", func(*killEnv, killRow) apitest.DescCase {
-				return apitest.DescUnrecognisedReply(tmux.CallLookup, callTableFirstLine())
-			}),
-			ctUnreadableMalformed: refused("ErrTmuxUnresponsive", func(*killEnv, killRow) apitest.DescCase {
-				return apitest.DescUnrecognisedReply(tmux.CallLookup, "")
-			}),
-			ctUnavailableBinary: refused("ErrTmuxNotAvailable", func(*killEnv, killRow) apitest.DescCase {
-				return apitest.DescTmuxNotRun()
-			}),
-			ctUnavailableSocket: refused("ErrTmuxNotAvailable", func(_ *killEnv, r killRow) apitest.DescCase {
-				return apitest.DescSocketPermission(r.Socket)
-			}),
-			ctActionRecognised: endedBy(tmux.CallKillSession),
-			ctActionTimeout:    endedBy(tmux.CallKillSession),
-		},
+		cells:       cells,
 	}
 }

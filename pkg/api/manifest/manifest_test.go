@@ -185,31 +185,6 @@ func TestSendKeysHasInteractErrorNames(t *testing.T) {
 	}
 }
 
-// TestReadPaneHasInteractErrorNames pins the read-pane entry's error
-// catalog against the SRD §13.1 surface: the row-lookup miss and the two
-// transport-layer tmux sentinels. read-pane has no state precondition, so
-// no ErrSpawnNotInteractive.
-func TestReadPaneHasInteractErrorNames(t *testing.T) {
-	v, ok := manifest.Lookup("read-pane")
-	if !ok {
-		t.Fatal("read-pane not in manifest")
-	}
-	want := []string{
-		"ErrSpawnNotFound",
-		"ErrTmuxNotAvailable",
-		"ErrTmuxCaptureFailed",
-	}
-	have := map[string]bool{}
-	for _, n := range v.ErrorNames {
-		have[n] = true
-	}
-	for _, n := range want {
-		if !have[n] {
-			t.Errorf("read-pane.ErrorNames missing %q", n)
-		}
-	}
-}
-
 // TestListHasSRDErrorNames pins the list entry's error catalog against
 // SRD §13.1: the label k=v parse rejection is the only verb-surface
 // error; the verb has no state precondition and no transport-layer tmux.

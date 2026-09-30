@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os/exec"
 	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -106,7 +105,7 @@ func (c *Client) HasSession(name string) (bool, error) {
 }
 
 // paneTarget is the canonical tmux pane address agent-director uses for
-// every send-keys / capture-pane invocation. tmux session creation runs
+// every name-based send-keys invocation. tmux session creation runs
 // without a window/pane suffix, so the first pane is always at index 0
 // inside window 0. Pinning this here keeps callers from constructing
 // ad-hoc targets and accidentally hitting a sibling pane.
@@ -159,40 +158,6 @@ func (c *Client) sendKeysCall(name string, payload []string) error {
 		return err
 	}
 	return fmt.Errorf("%w: %s: %v", ErrTmuxSendKeys, trimOutput(out), err)
-}
-
-// CapturePane returns the last nLines lines of the named tmux session's
-// first pane.
-//
-// When ansi is true the invocation is
-// `tmux capture-pane -p -e -t <name>:0.0 -S -<n>`: `-e` tells tmux to
-// emit ANSI escape sequences for SGR colors / cursor moves so the
-// caller can re-render or inspect the original styling. When ansi is
-// false `-e` is omitted and tmux returns the rendered text without
-// escapes; the verb-layer ANSI-strip helper still runs on top to
-// scrub any residual sequences that survive the default render.
-//
-// nLines is passed through verbatim — callers wanting "all available
-// scrollback" set it to a large number. There is no upper cap; SRD §12
-// explicitly leaves the bound to the caller.
-//
-// On a non-zero tmux exit the error chain contains ErrTmuxCaptureFailed
-// plus the tmux stderr blob; on a missing tmux binary, ErrTmuxNotAvailable.
-func (c *Client) CapturePane(name string, nLines int, ansi bool) (string, error) {
-	scroll := "-" + strconv.Itoa(nLines)
-	args := []string{"capture-pane", "-p"}
-	if ansi {
-		args = append(args, "-e")
-	}
-	args = append(args, "-t", paneTarget(name), "-S", scroll)
-	out, err := c.run(binaryName, args...)
-	if err != nil {
-		if errors.Is(err, ErrTmuxNotAvailable) {
-			return "", err
-		}
-		return "", fmt.Errorf("%w: %s: %v", ErrTmuxCaptureFailed, trimOutput(out), err)
-	}
-	return string(out), nil
 }
 
 // sortedEnvFlags returns env entries as KEY=VAL strings in a deterministic

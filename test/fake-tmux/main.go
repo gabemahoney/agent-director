@@ -98,11 +98,10 @@
 //
 // # Control variables
 //
-//   - FAKE_TMUX_LOG: a file every invocation (both forms; legacy: the four
-//     logged subcommands, as before) appends its argv to, one element per
+//   - FAKE_TMUX_LOG: a file every invocation (both forms; legacy: the three
+//     logged subcommands) appends its argv to, one element per
 //     line followed by a "---" line.
-//   - FAKE_TMUX_PANE_OUTPUT: capture text (see capture-pane above; the
-//     legacy capture-pane prints it too).
+//   - FAKE_TMUX_PANE_OUTPUT: capture text (see capture-pane above).
 //   - FAKE_TMUX_FAIL_NEWSESSION_NAME: a create (either form) whose -s name
 //     equals it prints the catalogue's "duplicate session: <stored name>" on
 //     standard error and exits 1, creating nothing.
@@ -111,11 +110,11 @@
 // # Legacy form
 //
 // argv without a leading -u is the name-based call set the name-based client
-// methods still send; it behaves as before: new-session, send-keys,
-// kill-session and capture-pane log their argv and exit 0 (capture-pane
-// printing FAKE_TMUX_PANE_OUTPUT or the stub); has-session exits 1;
-// new-session honours FAKE_TMUX_FAIL_NEWSESSION_NAME; anything else exits 0
-// with no side effects. No table is read or written.
+// methods still send: new-session, send-keys and kill-session log their argv
+// and exit 0; has-session exits 1; new-session honours
+// FAKE_TMUX_FAIL_NEWSESSION_NAME; anything else (a name-based capture-pane
+// included: no client method sends one) exits 0 with no output or side
+// effects. No table is read or written.
 package main
 
 import (

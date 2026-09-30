@@ -2,11 +2,15 @@ package tmuxfix_test
 
 import (
 	"errors"
+	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // Shared fixtures for the Recorder tests: two sockets, a one-session
@@ -355,5 +359,96 @@ func TestRecorder_CapturePaneID(t *testing.T) {
 	}
 	if _, err := r.CapturePaneID(sockA, "%9", 1, false); callErr(t, err).Failure != tmux.FailUnrecognized {
 		t.Errorf("unknown pane error = %v", err)
+	}
+}
+
+// readPaneRow seeds the row id (the apitest defaults: a socket, a pane and no
+// server identity) and returns the lookup's view of it.
+func readPaneRow(t *testing.T, id string) (dbPath string, launch tmux.Launch) {
+	t.Helper()
+	dbPath = filepath.Join(t.TempDir(), "state.db")
+	if _, err := apitest.SeedSpawn(dbPath, id, "waiting", "/tmp", "off", "", true); err != nil {
+		t.Fatalf("SeedSpawn: %v", err)
+	}
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer s.Close() //nolint:errcheck // read-only use
+	row, err := s.GetSpawn(id)
+	if err != nil {
+		t.Fatalf("GetSpawn: %v", err)
+	}
+	ri := row.Identity
+	return dbPath, tmux.Launch{InstanceID: id, Token: ri.Token, StoreID: s.StoreID(), Socket: ri.Socket,
+		ServerPID: ri.ServerPID, ServerStart: ri.ServerStart, ServerStarttime: ri.ServerStarttime}
+}
+
+// TestNewRecorderForReadPane: the seeded table gives the lookup the verdict
+// the label option asks for, created at the shared clock's second, and the
+// pane read-pane would pick (the row's pane by id for Ours, the lone
+// leftover's pane by its @ad_pane for Leftover) captures the given text;
+// the process-checker fake answers the seeded pane and server processes as
+// alive.
+func TestNewRecorderForReadPane(t *testing.T) {
+	const id, text, loText = "agent-row", "row pane text", "leftover pane text"
+	cases := []struct {
+		name     string
+		opts     []tmuxfix.ReadPaneOption
+		want     tmux.Verdict
+		wantText string // "": nothing to read
+	}{
+		{"ours", nil, tmux.Ours, text},
+		{"old-label", []tmuxfix.ReadPaneOption{tmuxfix.WithReadPaneLabel(tmuxfix.RowLabelOld)}, tmux.Leftover, text},
+		{"other-store", []tmuxfix.ReadPaneOption{tmuxfix.WithReadPaneLabel(tmuxfix.RowLabelOtherStore)}, tmux.Gone, ""},
+		{"leftover-option", []tmuxfix.ReadPaneOption{tmuxfix.WithReadPaneLabel(tmuxfix.RowLabelNone),
+			tmuxfix.WithReadPaneLeftover("left", loText)}, tmux.Leftover, loText},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dbPath, launch := readPaneRow(t, id)
+			clock := tmuxfix.NewClock(start.Add(42 * time.Second))
+			opts := append([]tmuxfix.ReadPaneOption{tmuxfix.WithReadPaneVirtualTime(clock, tmux.Timeouts{})}, tc.opts...)
+			r, pc := tmuxfix.NewRecorderForReadPane(t, dbPath, id, text, opts...)
+			for _, s := range r.Sessions(launch.Socket) {
+				if s.Created != clock.Now().Unix() {
+					t.Errorf("session %s created %d, want the clock's second %d", s.ID, s.Created, clock.Now().Unix())
+				}
+			}
+
+			res := tmux.Lookup(r, pc, launch, "")
+			if res.Verdict != tc.want {
+				t.Fatalf("verdict = %v, want %v (result %+v)", res.Verdict, tc.want, res)
+			}
+			if tc.want == tmux.Gone {
+				if len(res.Leftovers) != 0 {
+					t.Errorf("leftovers = %+v, want none (another store's session)", res.Leftovers)
+				}
+				return
+			}
+			panes, err := r.ListPanes(launch.Socket)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pane := tmux.Pane{ID: apitest.TestPaneID, PID: apitest.TestPanePID}
+			if tc.want == tmux.Leftover {
+				if len(res.Leftovers) != 1 {
+					t.Fatalf("leftovers = %+v, want one", res.Leftovers)
+				}
+				var match tmux.PaneMatch
+				if pane, match = tmux.PaneByToken(panes, res.Leftovers[0].Label.Token); match != tmux.PaneOne {
+					t.Fatalf("leftover's pane by @ad_pane = %v in %+v, want one", match, panes)
+				}
+			}
+			if got, err := r.CapturePaneID(launch.Socket, pane.ID, 25, false); err != nil || got != tc.wantText {
+				t.Errorf("CapturePaneID(%s) = %q, %v; want %q", pane.ID, got, err, tc.wantText)
+			}
+			srv, _ := r.Server(launch.Socket)
+			for _, pid := range []int{pane.PID, srv.PID} {
+				if _, alive, known := pc.StartTime(pid); !alive || !known {
+					t.Errorf("process checker for pid %d: alive %v known %v, want alive", pid, alive, known)
+				}
+			}
+		})
 	}
 }

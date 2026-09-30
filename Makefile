@@ -559,12 +559,21 @@ consumer-dryrun:
 # ts-helper builds the fixture-seeding CLI used by TypeScript smoke tests.
 # Built like any other binary (no special build tags); source lives under
 # test/smoke/ts-helper/, but the CLI also imports pkg/api/apitest (SeedSpawn)
-# to seed stores. modernc.org/sqlite is pure Go; CGO_ENABLED=0 suffices. The
-# target is incremental: it depends on every source file that feeds the
-# binary — including the apitest seeder sources — so make rebuilds when a
-# seeder changes and skips the build when nothing has changed. Without the
-# apitest prereqs, a stale binary can seed pre-migration stores (b.93m).
-TS_HELPER_SRCS := $(wildcard test/smoke/ts-helper/*.go) $(wildcard pkg/api/apitest/*.go)
+# to seed stores and the fake-tmux table/label packages (faketmuxfix,
+# tmuxfix). modernc.org/sqlite is pure Go; CGO_ENABLED=0 suffices. The
+# target is incremental: its prerequisites are every non-test source the
+# binary links from this module (`go list -deps ./test/smoke/ts-helper`) —
+# including the apitest seeder sources — so make rebuilds when one changes
+# and skips the build when nothing has changed. Without the apitest prereqs,
+# a stale binary can seed pre-migration stores (b.93m). Extend the list when
+# one of them gains a module import, or the binary can go stale.
+TS_HELPER_SRC_DIRS := test/smoke/ts-helper pkg/api/apitest \
+	internal/testsupport/faketmuxfix internal/testsupport/tmuxfix \
+	internal/testsupport/launchfix internal/testsupport/procfix \
+	internal/testsupport/procstarttimefix internal/testsupport/storefix \
+	internal/testsupport/writefailfix internal/spawn internal/hook \
+	internal/tmux internal/config internal/store internal/trail
+TS_HELPER_SRCS := $(filter-out %_test.go,$(foreach d,$(TS_HELPER_SRC_DIRS),$(wildcard $(d)/*.go))) go.mod go.sum
 
 bin/ts-helper: $(TS_HELPER_SRCS)
 	CGO_ENABLED=0 go build -o bin/ts-helper ./test/smoke/ts-helper/

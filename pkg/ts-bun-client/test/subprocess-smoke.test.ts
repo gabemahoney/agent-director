@@ -116,16 +116,19 @@ describe("subprocess-smoke / happy paths (SR-10.3)", () => {
     });
   }, 10_000);
 
-  test("read-pane — returns captured text", async () => {
+  test("read-pane — Ours through the fake's table returns the row's pane text", async () => {
     await withTempHome(async (homeDir) => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
       const id = "subsmoke-readpane";
+      const paneText = "subsmoke read-pane line\n";
       runHelper("seed-spawn", {
         store: storePath, id, state: "working", "create-store": true,
+        socket: privateTmuxSocket(homeDir),
       });
+      runHelper("seed-row-session", { store: storePath, id, capture: paneText });
       using client = await Client.create({ storePath, createIfMissing: true, tmuxCommand: FAKE_TMUX_BIN , _cliPath: process.env.CLI_PATH } as any);
       const r: ReadPaneResult = await client.readPane({ claude_instance_id: id });
-      expect(typeof r.pane).toBe("string");
+      expect(r.pane).toBe(paneText);
     });
   }, 10_000);
 

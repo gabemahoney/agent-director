@@ -31,14 +31,7 @@ const killLeftoversNamed = 3
 // pointer to "Operator actions"; and "list --tmux-session-name".
 func leftoverError(instanceID string, leftovers []tmux.Session) error {
 	sorted := sortedBySessionNumber(leftovers)
-	named := make([]string, 0, killLeftoversNamed)
-	for _, s := range sorted[:min(len(sorted), killLeftoversNamed)] {
-		named = append(named, strconv.Quote(s.Name)+" ("+s.ID+")")
-	}
-	found := strings.Join(named, ", ")
-	if more := len(sorted) - len(named); more > 0 {
-		found += fmt.Sprintf(" and %d more", more)
-	}
+	found := namedSessions(sorted, killLeftoversNamed)
 	what := "tmux session " + found + " carries the label of an earlier launch with this row's own id"
 	if len(sorted) > 1 {
 		what = "tmux sessions " + found + " carry labels of earlier launches with this row's own id"

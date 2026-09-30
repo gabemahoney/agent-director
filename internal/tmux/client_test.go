@@ -46,7 +46,6 @@ type nameBasedOp struct {
 var nameBasedOps = []nameBasedOp{
 	{"HasSession", func(c *Client) error { _, err := c.HasSession("x"); return err }, "", nil},
 	{"SendKeys", func(c *Client) error { return c.SendKeys("x", "hi", true) }, "can't find pane: x:0.0", ErrTmuxSendKeys},
-	{"CapturePane", func(c *Client) error { _, err := c.CapturePane("x", 25, false); return err }, "can't find session: x", ErrTmuxCaptureFailed},
 }
 
 // TestNameBasedArgv pins the exact argv each name-based method hands tmux,
@@ -87,30 +86,6 @@ func TestNameBasedArgv(t *testing.T) {
 				{"tmux", "send-keys", "-t", "foo:0.0", "-l", "Enter the password"},
 				{"tmux", "send-keys", "-t", "foo:0.0", "Enter"},
 			},
-		},
-		{
-			name: "capture-pane with ansi=false omits -e",
-			fn: func(c *Client) error {
-				_, err := c.CapturePane("foo", 25, false)
-				return err
-			},
-			want: [][]string{{"tmux", "capture-pane", "-p", "-t", "foo:0.0", "-S", "-25"}},
-		},
-		{
-			name: "capture-pane with ansi=true passes -e",
-			fn: func(c *Client) error {
-				_, err := c.CapturePane("foo", 25, true)
-				return err
-			},
-			want: [][]string{{"tmux", "capture-pane", "-p", "-e", "-t", "foo:0.0", "-S", "-25"}},
-		},
-		{
-			name: "capture-pane passes a large n verbatim",
-			fn: func(c *Client) error {
-				_, err := c.CapturePane("foo", 1000, false)
-				return err
-			},
-			want: [][]string{{"tmux", "capture-pane", "-p", "-t", "foo:0.0", "-S", "-1000"}},
 		},
 	}
 	for _, tc := range cases {
@@ -180,19 +155,6 @@ func TestHasSessionFalseOnNonzeroExit(t *testing.T) {
 	ok, err := (&Client{run: cap.runner()}).HasSession("absent")
 	if err != nil || ok {
 		t.Fatalf("HasSession = (%v, %v); want (false, nil)", ok, err)
-	}
-}
-
-// TestCapturePaneReturnsStdout pins that capture returns tmux's stdout bytes
-// exactly, trailing newline included.
-func TestCapturePaneReturnsStdout(t *testing.T) {
-	cap := &captured{stdout: []byte("first line\nsecond line\n")}
-	got, err := (&Client{run: cap.runner()}).CapturePane("foo", 25, false)
-	if err != nil {
-		t.Fatalf("CapturePane: %v", err)
-	}
-	if got != "first line\nsecond line\n" {
-		t.Fatalf("got %q; want exact stdout passthrough", got)
 	}
 }
 

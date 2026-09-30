@@ -6,7 +6,7 @@ import (
 )
 
 // This file holds the pane helpers the single-row verbs that act on a pane
-// share (kill, and in Epic 11 send-keys and pause): the agent's pane in a
+// share (kill, read-pane, send-keys and pause): the agent's pane in a
 // pane listing (SR-3.7) and the adoption of a lost create reply's identity
 // (SR-3.6). The adoption rules live once, in findAdoption; the single-row
 // verbs write through adoptIdentity with their own listing, and find-missing
@@ -86,7 +86,11 @@ func adoptionNeedsListing(recorded LaunchIdentity) bool {
 // write, over the row's recorded launch identity, the lookup's Result, a pane
 // listing of the same socket and the start-time reader. It is the one place
 // the adoption rules live; adoptIdentity (kill, send-keys, pause) and
-// adoptInSweep (find-missing) add their own listing source and write:
+// adoptInSweep (find-missing) add their own listing source and write, and
+// they are the only writers of an adoption (SR-3.6; LFR H2). read-pane calls
+// findAdoption directly with its own listing and uses what it found for that
+// call only, with no write (SR-3.6, SR-3.7, SR-7.5); it takes no store
+// capability, so it cannot write:
 //
 //   - It is due only when adoptionDue. Otherwise the recorded identity is
 //     returned with Due false.

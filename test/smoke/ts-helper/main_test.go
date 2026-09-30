@@ -400,6 +400,7 @@ func TestDispatch(t *testing.T) {
 			"seed-permission-request",
 			"seed-template",
 			"seed-empty-store",
+			"seed-row-session",
 		}
 		for _, k := range wantKeys {
 			if _, ok := schema[k]; !ok {

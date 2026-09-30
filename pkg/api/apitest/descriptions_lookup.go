@@ -6,7 +6,8 @@ import "strconv"
 // for a lookup or pane listing that cannot decide (Can't tell) and that every
 // single-row verb and the plain-spawn label scan share: conflicting labels
 // and a different tmux server. A verb's refusal after it sent a kill adds
-// DescCase.AfterKillSent (descriptions_kill.go). The unreadable and
+// DescCase.AfterKillSent (descriptions_kill.go); the pane verbs use these
+// cases unchanged. The unreadable and
 // unavailable outcomes use DescCallTimeout, DescUnrecognisedReply,
 // DescSocketPermission and DescTmuxNotRun (descriptions.go).
 

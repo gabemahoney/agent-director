@@ -1,9 +1,10 @@
 /**
  * Smoke test — read-pane verb
  *
- * Happy path: seed a working spawn, call readPane. The fake-tmux stub's
- * capture-pane handler writes "fake pane line one\nfake pane line two\n"
- * (or $FAKE_TMUX_PANE_OUTPUT if set) to stdout, so result.pane is non-empty.
+ * Happy path: seed a working spawn on a private socket, then write the row's
+ * own labelled session into the fake-tmux table (ts-helper seed-row-session)
+ * with a known capture text; read-pane finds it Ours, captures the row's pane
+ * by id and returns exactly that text (SR-7.2, SR-3.7).
  *
  * Error path: unknown id → ErrSpawnNotFound.
  */
@@ -11,7 +12,7 @@
 import { test, expect } from "bun:test";
 import * as path from "path";
 import { withTempHome } from "../internal/tempHome.js";
-import { runHelper } from "../internal/helper.js";
+import { runHelper, privateTmuxSocket } from "../internal/helper.js";
 import { Client, ErrSpawnNotFound, AgentDirectorError } from "../../src/index.js";
 import type { ReadPaneResult } from "../../src/index.js";
 
@@ -24,26 +25,27 @@ const fakeTmuxBin = path.join(
 
 const BOGUS_ID = "smoke-bogus-id-does-not-exist";
 
-test("read-pane: happy path — returns pane text from fake-tmux stub", async () => {
+test("read-pane: happy path — returns the row's pane text from its fake-tmux session", async () => {
   await withTempHome(async (homeDir) => {
     const storePath = path.join(homeDir, ".agent-director", "state.db");
     const spawnId = "smoke-read-pane-id";
+    const paneText = "smoke read-pane line one\nsmoke read-pane line two\n";
 
     runHelper("seed-spawn", {
       store: storePath,
       state: "working",
       id: spawnId,
       "create-store": true,
+      socket: privateTmuxSocket(homeDir),
     });
+    runHelper("seed-row-session", { store: storePath, id: spawnId, capture: paneText });
 
     using client = await Client.create({ storePath, createIfMissing: true, tmuxCommand: fakeTmuxBin , _cliPath: process.env.CLI_PATH } as any);
     const result: ReadPaneResult = await client.readPane({
       claude_instance_id: spawnId,
       n_lines: 5,
     });
-    expect(typeof result.pane).toBe("string");
-    // fake-tmux returns deterministic stub text; just assert non-empty.
-    expect(result.pane.length).toBeGreaterThan(0);
+    expect(result.pane).toBe(paneText);
   });
 }, 10_000);
 

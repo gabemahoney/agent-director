@@ -8,9 +8,9 @@
 // (recorder_table.go, recorder_calls.go), tests script a typed result per
 // call kind (recorder_script.go), and session hooks, after-call hooks and
 // virtual time sit around each call (recorder_hooks.go). It never produces
-// or parses tmux reply text. The name-based methods (HasSession, SendKeys,
-// CapturePane) only record their calls and return
-// their two scripted answers, as before.
+// or parses tmux reply text. The name-based methods (HasSession, SendKeys)
+// only record their calls, and HasSession returns its scripted answer, as
+// before.
 package tmuxfix
 
 import (
@@ -23,9 +23,8 @@ import (
 type CallKind string
 
 const (
-	CallHasSession  CallKind = "HasSession"
-	CallSendKeys    CallKind = "SendKeys"
-	CallCapturePane CallKind = "CapturePane"
+	CallHasSession CallKind = "HasSession"
+	CallSendKeys   CallKind = "SendKeys"
 )
 
 // Call records a single invocation of a tmux method and its arguments.
@@ -33,8 +32,7 @@ type Call struct {
 	// Kind is the name of the method that was called.
 	Kind CallKind
 
-	// Name is the session name passed to HasSession, SendKeys or
-	// CapturePane.
+	// Name is the session name passed to HasSession or SendKeys.
 	Name string
 
 	// --- SendKeys fields ---
@@ -43,13 +41,6 @@ type Call struct {
 	Text string
 	// PressEnter is the pressEnter flag of SendKeys.
 	PressEnter bool
-
-	// --- CapturePane fields ---
-
-	// NLines is the n_lines argument of CapturePane.
-	NLines int
-	// ANSI is the ansi flag of CapturePane.
-	ANSI bool
 }
 
 // Recorder is a fake that satisfies the pkg/api TmuxClient interface. The
@@ -76,10 +67,6 @@ type Recorder struct {
 	timeouts    tmux.Timeouts
 	nextPID     int // last auto-assigned server or pane pid
 
-	// paneOutput is the scripted response returned by CapturePane.
-	// Defaults to empty string (no pane output) when not set.
-	paneOutput string
-
 	// hasSessionResult is the scripted return value for HasSession.
 	// Defaults to false.
 	hasSessionResult bool
@@ -89,15 +76,6 @@ type Recorder struct {
 // (empty/false) scripted responses.
 func NewRecorder() *Recorder {
 	return &Recorder{}
-}
-
-// WithPaneOutput sets the string that CapturePane returns for every call.
-// Returns the receiver for chaining.
-func (r *Recorder) WithPaneOutput(s string) *Recorder {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.paneOutput = s
-	return r
 }
 
 // WithHasSession configures the bool that HasSession returns.
@@ -132,13 +110,12 @@ func (r *Recorder) CallsOfKind(kind CallKind) []Call {
 }
 
 // Reset discards all recorded calls (name-based and socket-taking), resets
-// the name-based scripted responses to defaults and discards every scripted
+// HasSession's scripted answer to false and discards every scripted
 // typed result. Session tables, capture texts, hooks and virtual time stay.
 func (r *Recorder) Reset() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = r.calls[:0]
-	r.paneOutput = ""
 	r.hasSessionResult = false
 	r.socketCalls = nil
 	r.scripts = nil
@@ -163,17 +140,4 @@ func (r *Recorder) SendKeys(name, text string, pressEnter bool) error {
 		PressEnter: pressEnter,
 	})
 	return nil
-}
-
-// CapturePane records a CapturePane call and returns the scripted pane output.
-func (r *Recorder) CapturePane(name string, nLines int, ansi bool) (string, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.calls = append(r.calls, Call{
-		Kind:   CallCapturePane,
-		Name:   name,
-		NLines: nLines,
-		ANSI:   ansi,
-	})
-	return r.paneOutput, nil
 }

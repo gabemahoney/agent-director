@@ -28,8 +28,8 @@ const defaultStorePath = "~/.agent-director/state.db"
 // SRD Appendix F.3). Every socket-taking method takes the socket (SR-3.3)
 // and reports a failure as *TmuxCallError; an error of any other type from
 // an injected implementation counts as TmuxFailUnrecognized for that call.
-// The name-based methods (SendKeys, CapturePane) are transitional: they
-// stay until their last verb moves to the socket-taking calls. HasSession stays (SR-2.1) and matches by prefix: resume still calls
+// The name-based SendKeys is transitional: it stays until its last verb
+// moves to the socket-taking calls. HasSession stays (SR-2.1) and matches by prefix: resume still calls
 // it until resume moves to the lookup, and no verb may newly adopt it.
 // *tmux.Client and tmuxfix.Recorder implement it.
 type TmuxClient interface {
@@ -62,8 +62,6 @@ type TmuxClient interface {
 	HasSession(name string) (bool, error)
 	// SendKeys delivers text to the named session's first pane (transitional).
 	SendKeys(name, text string, pressEnter bool) error
-	// CapturePane returns the last nLines of the named session's first pane (transitional).
-	CapturePane(name string, nLines int, ansi bool) (string, error)
 }
 
 // The production client satisfies TmuxClient (tmuxfix.Recorder's assertion
@@ -87,7 +85,8 @@ type Client struct {
 	now func() time.Time
 	// procChecker is the start-time reader (SR-3.8), probe.NewProcChecker in
 	// production; the spawn's identity write reads the server's and the
-	// pane's start times through it, and kill judges processes with it.
+	// pane's start times through it, kill judges processes with it, and
+	// read-pane's lookup checks the server with it.
 	// Tests replace it per Client.
 	procChecker ProcChecker
 	// sleep pauses kill's process wait between two readings (SR-6.1),

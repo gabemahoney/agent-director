@@ -15,8 +15,7 @@ const (
 	// EnvLog names a file every invocation appends its argv to: one argv
 	// element per line, then a "---" line.
 	EnvLog = "FAKE_TMUX_LOG"
-	// EnvPaneOutput is the capture text for a pane with no Capture (and for
-	// every legacy capture-pane).
+	// EnvPaneOutput is the capture text for a pane with no Capture.
 	EnvPaneOutput = "FAKE_TMUX_PANE_OUTPUT"
 	// EnvFailNewSessionName makes a create (legacy or socket form) whose -s
 	// name equals its value print the catalogue's "duplicate session"

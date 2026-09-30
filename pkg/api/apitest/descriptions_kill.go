@@ -138,17 +138,31 @@ func DescKillNoPane(instanceID, name string, agentPID int) DescCase {
 // decision, with the "Operator actions" pointer; "list --tmux-session-name".
 // Pass any other row's id as forbid.
 func DescKillLeftover(sessions []DescSession) DescCase {
+	return leftoverCase("ErrTmuxSessionConflict, kill of a Leftover", sessions,
+		[]string{"no kill was sent", "a human's decision"}, []string{"a kill was sent"})
+}
+
+// leftoverCase is the Leftover refusal's part that kill's (DescKillLeftover)
+// and the pane verbs' (DescPaneLeftover) share (SR-1.4, SR-3.4): each
+// leftover session's quoted name and tmux id as namedSessions gives them
+// (the rest's quoted names must not appear), "this row's own id", "not this
+// launch's session", "list --tmux-session-name" and the "Operator actions"
+// pointer, plus the verb's own req and mustNot phrases.
+func leftoverCase(name string, sessions []DescSession, req, mustNot []string) DescCase {
 	named, unnamed := namedSessions(sessions)
-	req := append([]string{
-		"this row's own id", "not this launch's session", "no kill was sent",
-		"a human's decision", "list --tmux-session-name",
-	}, named...)
 	return DescCase{
-		Name:    "ErrTmuxSessionConflict, kill of a Leftover",
-		Require: req,
-		MustNot: append([]string{"a kill was sent"}, unnamed...),
+		Name:    name,
+		Require: append(append([]string{thisRowsOwnID, notThisLaunch, listSessionName}, req...), named...),
+		MustNot: append(append([]string(nil), mustNot...), unnamed...),
 	}.PointsToOperatorActions()
 }
+
+// The phrases every Leftover and pane-not-found refusal shares (SR-1.4).
+const (
+	thisRowsOwnID   = "this row's own id"
+	notThisLaunch   = "not this launch's session"
+	listSessionName = "list --tmux-session-name"
+)
 
 // AfterKillSent returns c as a refusal given after a kill was sent, whose
 // follow-up lookup could not answer (SR-1.4): that the kill was sent and may

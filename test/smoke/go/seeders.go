@@ -13,8 +13,6 @@
 //     are allowed per the import-graph guard).
 //   - SeedID: the claude_instance_id the seeded row will carry. The Happy
 //     closure references the same id when calling the verb method.
-//   - PaneText: scripted CapturePane response, set on the recorder before
-//     read-pane runs.
 //   - Happy: invokes the verb method on the supplied Client in its happy
 //     path. Returns the result struct and any error; the driver feeds the
 //     result into AssertResultMatchesManifest.
@@ -28,6 +26,8 @@
 //     checks it is the socket the seeded row records.
 //   - KillSent: for kill, reads the Happy result's kill_sent; the driver
 //     checks it is true.
+//   - Pane: for read-pane, reads the Happy result's pane; the driver checks
+//     it is smokePaneText, the text the row's own pane captures.
 //
 // Adding a new callable verb to the manifest requires adding a matching
 // entry here. The driver's startup check fails the build with a clear
@@ -55,7 +55,7 @@ const (
 	seedNone seedKind = iota
 
 	// seedLive seeds a spawn in StateWorking — a live, interactive row
-	// usable by kill, read-pane and delete.
+	// with no tmux session in the Recorder. Used by delete.
 	seedLive
 
 	// seedWaiting seeds a spawn in StateWaiting — used by send-keys
@@ -93,7 +93,18 @@ const (
 	// session into the Recorder (SeedRowSession). Used by kill, so its happy
 	// path finds the session, sends the kills and sees the agent gone.
 	seedLiveSession
+
+	// seedReadPane seeds a working row as seedLiveSession does and swaps the
+	// driver's Recorder for tmuxfix.NewRecorderForReadPane's: the row's own
+	// labelled session, whose pane captures smokePaneText by its pane id.
+	// Used by read-pane, so its happy path takes the Ours path (SR-7.2).
+	seedReadPane
 )
+
+// smokePaneText is the capture text seedReadPane scripts for the row's own
+// pane; non-empty so the manifest's AllowEmpty pane field is exercised with
+// content.
+const smokePaneText = "smoke-pane-output"
 
 // smokeLaunchStartMillis is the launch start seedPendingLaunch records, in
 // ms since the Unix epoch; its non-zero millisecond part (.123) checks that
@@ -113,10 +124,6 @@ type seederSpec struct {
 	// SeedID is the claude_instance_id the seeded row uses. Happy
 	// references this same id when calling the verb method.
 	SeedID string
-
-	// PaneText is the scripted CapturePane response for the read-pane
-	// verb. Empty for other verbs.
-	PaneText string
 
 	// HappyCtx, when non-nil, is the context the driver passes to verbs
 	// that take a context (pause, find-missing). Verbs that don't take
@@ -158,6 +165,11 @@ type seederSpec struct {
 	// The driver asserts it is true: the kill was sent to the session
 	// seedLiveSession seeds (SR-20.3). Set by kill only.
 	KillSent func(result any) bool
+
+	// Pane, when non-nil, returns the pane the Happy result shows. The
+	// driver asserts it is smokePaneText, the text seedReadPane scripts for
+	// the row's own pane. Set by read-pane only.
+	Pane func(result any) string
 }
 
 // seeders is the canonical registry: one entry per callable verb. The
@@ -265,12 +277,8 @@ func init() {
 	// ── read-pane ─────────────────────────────────────────────────────────
 	seeders["read-pane"] = seederSpec{
 		Manifest: mustVerb("read-pane"),
-		SeedKind: seedLive,
+		SeedKind: seedReadPane,
 		SeedID:   "smoke-read-pane-id",
-		// Non-empty pane text so the manifest's AllowEmpty pane field
-		// still encodes consistently; the driver scripts this into the
-		// recorder via WithPaneOutput before constructing the Client.
-		PaneText: "smoke-pane-output",
 		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
 			return c.ReadPane(api.ReadPaneParams{
 				ClaudeInstanceID: id,
@@ -282,6 +290,9 @@ func init() {
 				ClaudeInstanceID: bogusID,
 			})
 			return err
+		},
+		Pane: func(result any) string {
+			return result.(api.ReadPaneResult).Pane
 		},
 	}
 

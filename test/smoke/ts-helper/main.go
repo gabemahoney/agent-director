@@ -18,6 +18,10 @@
 //	seed-permission-request  Insert an open permission request for a spawn.
 //	seed-template        Write a .toml template file.
 //	seed-empty-store     Initialise a fresh SQLite store.
+//	seed-row-session     Write a seeded row's own labelled session and pane
+//	                     into test/fake-tmux's table for the row's socket
+//	                     (--capture sets the pane's capture text;
+//	                     --tables-dir defaults to $FAKE_TMUX_TABLES).
 //	json-schema          Print the result shapes of every subcommand.
 package main
 
@@ -45,6 +49,7 @@ var availableSubcmds = []string{
 	"seed-permission-request",
 	"seed-template",
 	"seed-empty-store",
+	"seed-row-session",
 	"json-schema",
 }
 
@@ -70,6 +75,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return cmdSeedTemplate(args[1:], stdout, stderr)
 	case "seed-empty-store":
 		return cmdSeedEmptyStore(args[1:], stdout, stderr)
+	case "seed-row-session":
+		return cmdSeedRowSession(args[1:], stdout, stderr)
 	case "json-schema":
 		return cmdJSONSchema(args[1:], stdout, stderr)
 	default:
@@ -328,6 +335,12 @@ var resultSchemas = map[string]map[string]string{
 	},
 	"seed-empty-store": {
 		"path": "string",
+	},
+	"seed-row-session": {
+		"socket":     "string",
+		"session_id": "string",
+		"pane_id":    "string",
+		"table":      "string",
 	},
 }
 

@@ -163,7 +163,6 @@ func TestRecorder_VirtualTimeOnlyWhenBound(t *testing.T) {
 	r = tmuxfix.NewRecorder().WithVirtualTime(bound, tmux.Timeouts{})
 	_, _ = r.HasSession("n")
 	_ = r.SendKeys("n", "x", true)
-	_, _ = r.CapturePane("n", 1, false)
 	if got := bound.Now(); !got.Equal(start) {
 		t.Errorf("name-based calls advanced the clock to %v", got)
 	}

@@ -34,8 +34,11 @@ import (
 // heldRowName is the requested name every test here finds held.
 const heldRowName = "held-row"
 
-// heldPaneText is what the Recorder answers a name-based capture with.
+// heldPaneText is the capture text of the leftover's pane.
 const heldPaneText = "leftover pane text"
+
+// heldLeftoverPane is the pane id of the leftover's one pane.
+const heldLeftoverPane = "%4"
 
 // readRow reads every column of id's row, failing the test on a read error.
 func (e heldEnv) readRow(t *testing.T, id string) apitest.SpawnColumns {
@@ -283,8 +286,9 @@ func TestSpawnHeldEndedSticks(t *testing.T) {
 
 // TestSpawnHeldIdAfterwards: once the end write applied, the id is a
 // finished row: spawn collides, resume has no session id, and nothing
-// touches the holder; for the leftover, read-pane captures it by name while
-// send-keys and kill do nothing.
+// touches the holder; for the leftover, read-pane makes one lookup (the
+// lone leftover), one pane listing and a capture of the leftover's pane by
+// its pane id, while send-keys and kill make no tmux call.
 func TestSpawnHeldIdAfterwards(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -296,11 +300,14 @@ func TestSpawnHeldIdAfterwards(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newHeldEnv(t)
-			e.rec.WithPaneOutput(heldPaneText)
 			id := heldID()
 			var onScan func()
 			if tc.leftover {
-				onScan = func() { e.rec.SeedSessions(e.socket, e.leftover(heldRowName, "$4", id, 0)) }
+				onScan = func() {
+					lo := e.leftover(heldRowName, "$4", id, 0)
+					lo.Panes = []tmuxfix.SeedPane{{ID: heldLeftoverPane, AdPane: tmuxfix.OtherToken}}
+					e.rec.SeedSessions(e.socket, lo).SetCapture(e.socket, heldLeftoverPane, heldPaneText)
+				}
 			} else {
 				e.rec.SeedSessions(e.socket, heldSession(heldRowName, "$4", tmux.Label{}, false))
 			}
@@ -317,11 +324,19 @@ func TestSpawnHeldIdAfterwards(t *testing.T) {
 
 			if tc.leftover {
 				pane, err := e.c.ReadPane(api.ReadPaneParams{ClaudeInstanceID: id})
-				captures := e.rec.CallsOfKind(tmuxfix.CallCapturePane)
-				if err != nil || pane.Pane != heldPaneText || len(captures) != 1 || captures[0].Name != ended.TmuxSessionName {
-					t.Errorf("ReadPane = %q, %v with captures %+v; want %q captured by the row's name %v",
-						pane.Pane, err, captures, heldPaneText, ended.TmuxSessionName)
+				if err != nil || pane.Pane != heldPaneText {
+					t.Errorf("ReadPane = %q, %v; want %q", pane.Pane, err, heldPaneText)
 				}
+				var got []tmuxfix.SocketCall
+				for _, c := range e.rec.SocketCalls()[socketCalls:] {
+					got = append(got, tmuxfix.SocketCall{Call: c.Call, Socket: c.Socket, Target: c.Target})
+				}
+				want := []tmuxfix.SocketCall{{Call: tmux.CallLookup, Socket: e.socket}, {Call: tmux.CallListPanes, Socket: e.socket},
+					{Call: tmux.CallCapture, Socket: e.socket, Target: heldLeftoverPane}}
+				if !reflect.DeepEqual(got, want) {
+					t.Errorf("read-pane socket calls = %+v; want %+v", got, want)
+				}
+				socketCalls = len(e.rec.SocketCalls())
 				for _, allow := range []bool{false, true} {
 					_, err := e.c.SendKeys(api.SendKeysParams{ClaudeInstanceID: id, Text: "hello", AllowPending: allow})
 					if !errors.Is(err, api.ErrSpawnNotInteractive) {
@@ -338,7 +353,7 @@ func TestSpawnHeldIdAfterwards(t *testing.T) {
 
 			e.assertRowIs(t, id, "after the later verbs", ended)
 			if n := len(e.rec.SocketCalls()); n != socketCalls {
-				t.Errorf("socket calls after the held spawn = %+v; want none", e.rec.SocketCalls()[socketCalls:])
+				t.Errorf("socket calls after the held spawn (and read-pane) = %+v; want none", e.rec.SocketCalls()[socketCalls:])
 			}
 			if after := e.rec.Sessions(e.socket); !reflect.DeepEqual(after, sessions) {
 				t.Errorf("sessions changed:\nbefore %+v\nafter  %+v", sessions, after)

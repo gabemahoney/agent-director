@@ -92,19 +92,10 @@ func seqWaitExpired(calls []tmux.Call, sent apitest.KillSent, agent, teammates b
 		}}
 }
 
-// seqSeedOurs seeds r's current-labelled session with panes laid out by hand;
-// for a row with no recorded pane, the pane carrying r's @ad_pane is its
-// agent process, alive.
+// seqSeedOurs seeds r's current-labelled session with panes laid out by hand (e.seedOurs).
 func seqSeedOurs(t *testing.T, e *killEnv, r *killRow, panes ...tmuxfix.SeedPane) {
 	t.Helper()
-	e.ensureServer(r)
-	r.Session = e.seedOther(t, r.Socket, tmuxfix.SeedSession{Name: r.Name, Label: r.current(), Panes: panes})
-	for _, p := range r.Session.Panes {
-		if r.Spawn.Identity.PaneID == "" && p.AdPane == r.Token {
-			e.setAgent(r, p.PID, apitest.LinuxProcStarttime)
-		}
-	}
-	e.syncServers()
+	e.seedOurs(t, r, panes...)
 }
 
 // seqAlivePID returns a new pid, alive in the fake until a call of kind exit.

@@ -7,7 +7,8 @@ package api_test
 // nor another store's id may appear in the verb's result, error description,
 // client log or trail. It is a per-verb table (kill first, Epic 10; plain
 // spawn's held name, Epic 13; find-missing's lookup, Epic 14, in
-// security_find_missing_test.go; later Epics add their verbs).
+// security_find_missing_test.go; read-pane, which writes no trail event,
+// Epic 11, in security_read_pane_test.go; later Epics add their verbs).
 
 import (
 	"encoding/json"
@@ -53,8 +54,9 @@ type securityScene struct {
 
 // securityCase is one arrangement of a verb: the target row's spec, who holds
 // its name, the socket's server before the planted sessions are created,
-// extra setup, the expected error (nil: success) and description, and the
-// record the call writes once for the subject with field values it carries.
+// extra setup, the expected error (nil: success) and description, the
+// record the call writes once for the subject with field values it carries,
+// and extra checks of the call's result (nil: none).
 type securityCase struct {
 	name     string
 	target   killRowSpec
@@ -66,10 +68,13 @@ type securityCase struct {
 	disagree bool           // the call writes at least one ad.provenance.disagree record
 	event    string         // the record written once for the subject; "": the verb's event
 	fields   map[string]any // values that record carries (nil: not checked)
+	// check makes extra checks of the call's result (nil: none).
+	check func(t *testing.T, s *securityScene, res any)
 }
 
 // securityVerb is one verb under SR-15: its call through the Client on the
-// scene's subject, the trail event it writes once per call, extra checks of
+// scene's subject, the trail event it writes once per call ("": none, and no
+// record of any event for the subject; securityCheckTrail), extra checks of
 // that record against the call's texts (description, client log, result;
 // nil: none), and its arrangements. A launch verb acts on a fresh id on
 // target's socket, requesting target's name, and makes one create.
@@ -111,6 +116,10 @@ var securityVerbs = []securityVerb{{
 	call:   securityFindMissingCall,
 	record: securityFindMissingRecord,
 	cases:  securityFindMissingCases,
+}, {
+	verb:  "read-pane",
+	call:  securityReadPaneCall,
+	cases: securityReadPaneCases,
 }}
 
 // securityKillCases meet the planted sessions on kill's Gone, Leftover,
@@ -284,10 +293,11 @@ func securityCreate(t *testing.T, e *killEnv, socket, name, token, id, storeID s
 }
 
 // securityForbidden are the values nothing may carry: the secret, both rows'
-// launch tokens (a label's content), the other row's id and another store's
-// id.
+// launch tokens and an earlier launch's (the leftovers'; a label's content),
+// the other row's id and another store's id.
 func securityForbidden(s *securityScene) []string {
-	return []string{securitySecret, s.target.Token, s.other.Token, s.other.ID, apitest.OtherStoreID(s.e.storeID)}
+	return []string{securitySecret, s.target.Token, s.other.Token, tmuxfix.OtherToken, s.other.ID,
+		apitest.OtherStoreID(s.e.storeID)}
 }
 
 // securityAbsent fails when text carries a securityForbidden value.
@@ -328,6 +338,9 @@ func TestSecuritySecretAndOtherRowID(t *testing.T) {
 				}
 				securityAbsent(t, "result", string(out), s)
 				securityAbsent(t, "client log", logs.String(), s)
+				if c.check != nil {
+					c.check(t, s, res)
+				}
 				event := v.event
 				if c.event != "" {
 					event = c.event
@@ -350,7 +363,9 @@ func TestSecuritySecretAndOtherRowID(t *testing.T) {
 
 // securityCheckTrail fails unless lines hold exactly one event record for the
 // subject (and a disagree record when wanted), none carrying a forbidden
-// value; it returns that record (nil when not exactly one).
+// value; it returns that record (nil when not exactly one). With event ""
+// (a verb that writes no trail event, e.g. read-pane, SR-7.5) it fails on
+// any record for the subject, ad.provenance.disagree included, and returns nil.
 func securityCheckTrail(t *testing.T, event string, s *securityScene, lines []map[string]any, disagree bool) map[string]any {
 	t.Helper()
 	var called []map[string]any
@@ -359,6 +374,10 @@ func securityCheckTrail(t *testing.T, event string, s *securityScene, lines []ma
 		b, _ := json.Marshal(l)
 		securityAbsent(t, "trail record", string(b), s)
 		if l["claude_instance_id"] != s.subject {
+			continue
+		}
+		if event == "" {
+			t.Errorf("trail record %v for %s; want none", l["event"], s.subject)
 			continue
 		}
 		switch l["event"] {
@@ -370,6 +389,9 @@ func securityCheckTrail(t *testing.T, event string, s *securityScene, lines []ma
 	}
 	if disagree && disagrees == 0 {
 		t.Errorf("no ad.provenance.disagree record for %s; want one", s.subject)
+	}
+	if event == "" {
+		return nil
 	}
 	if len(called) != 1 {
 		t.Errorf("%s records for %s = %d; want 1", event, s.subject, len(called))

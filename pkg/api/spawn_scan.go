@@ -82,14 +82,7 @@ func scanForLeftover(t tmux.LookupClient, pc ProcChecker, storeID, instanceID st
 // the README's "Operator actions"; and "list --tmux-session-name". It never
 // carries a label value, a token or a store id.
 func scanLeftoverError(instanceID string, leftovers []tmux.Session) error {
-	named := make([]string, 0, scanLeftoversNamed)
-	for _, s := range leftovers[:min(len(leftovers), scanLeftoversNamed)] {
-		named = append(named, fmt.Sprintf("%q (%s)", s.Name, s.ID))
-	}
-	found := strings.Join(named, ", ")
-	if more := len(leftovers) - len(named); more > 0 {
-		found += fmt.Sprintf(" and %d more", more)
-	}
+	found := namedSessions(leftovers, scanLeftoversNamed)
 	return fmt.Errorf("%w: instance %s: left over from an earlier life: %d tmux session(s) labelled by this agent-director store with this instance id still run: %s; %s; "+
 		"ending such a session is a human's decision, %s; %s",
 		tmux.ErrTmuxSessionConflict, instanceID, len(leftovers), found, scanNothingWritten, operatorActionsPointer, listSessionNameHint)

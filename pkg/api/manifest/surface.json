@@ -525,7 +525,9 @@
       "error_names": [
         "ErrSpawnNotFound",
         "ErrTmuxNotAvailable",
-        "ErrTmuxCaptureFailed"
+        "ErrTmuxCaptureFailed",
+        "ErrTmuxUnresponsive",
+        "ErrTmuxSessionConflict"
       ]
     },
     {

@@ -194,6 +194,16 @@ function assertErrorEnvelopes(cliStderr: string, tsErr: unknown): void {
   );
 }
 
+/** The argv of each fake-tmux invocation logged to logPath ([] when nothing was logged). */
+function fakeTmuxCalls(logPath: string): string[][] {
+  if (!fs.existsSync(logPath)) return [];
+  return fs
+    .readFileSync(logPath, "utf8")
+    .split("---\n")
+    .filter((rec) => rec !== "")
+    .map((rec) => rec.split("\n").slice(0, -1));
+}
+
 // ── per-verb tests ────────────────────────────────────────────────────────────
 
 // ── spawn ─────────────────────────────────────────────────────────────────────
@@ -483,35 +493,82 @@ describe("send-keys", () => {
 // ── read-pane ─────────────────────────────────────────────────────────────────
 
 describe("read-pane", () => {
+  // Plain text: the default ANSI stripping leaves it unchanged.
+  const READ_PANE_TEXT = "envelope-diff pane line one\nenvelope-diff pane line two\n";
+
   test(
-    "success path",
+    "success path: the row's own session, lookup + pane listing + one capture by pane id on both sides",
     async () => {
-      const { homeA, storeB, cleanup } = prepareStores((store) => {
-        runHelper("seed-spawn", {
-          store,
-          id: "id-rp-1",
-          state: "waiting",
-          "create-store": true,
-        });
+      const id = "id-rp-1";
+      // Both store copies record this private socket; each run reads its own
+      // fake-tmux table (FAKE_TMUX_TABLES) holding the row's labelled session.
+      const tmuxDir = fs.mkdtempSync(path.join(os.tmpdir(), "ed-tmux-"));
+      const socket = privateTmuxSocket(tmuxDir);
+      const tablesCli = path.join(tmuxDir, "tables-cli");
+      const tablesClient = path.join(tmuxDir, "tables-client");
+      const logCli = path.join(tmuxDir, "log-cli");
+      const logClient = path.join(tmuxDir, "log-client");
+      const { homeA, storeA, storeB, cleanup } = prepareStores((store) => {
+        runHelper("seed-spawn", { store, id, state: "waiting", "create-store": true, socket });
       });
+      const paneIds = [
+        [storeA, tablesCli],
+        [storeB, tablesClient],
+      ].map(([store, tablesDir]) => {
+        const seeded = runHelper("seed-row-session", {
+          store, id, capture: READ_PANE_TEXT, "tables-dir": tablesDir,
+        });
+        expect(seeded["socket"]).toBe(socket);
+        return seeded["pane_id"] as string;
+      });
+      expect(paneIds[0]).toBe(paneIds[1]);
+      const paneId = paneIds[0];
+
+      const priorLog = process.env.FAKE_TMUX_LOG;
+      const priorTables = process.env.FAKE_TMUX_TABLES;
       try {
         const cli = runCli(
-          ["read-pane", "--claude-instance-id", "id-rp-1"],
-          cliEnv(homeA)
+          ["read-pane", "--claude-instance-id", id],
+          { ...cliEnv(homeA), FAKE_TMUX_TABLES: tablesCli, FAKE_TMUX_LOG: logCli }
         );
         expect(cli.exitCode).toBe(0);
 
+        // The Client's CLI subprocess inherits process.env.
+        process.env.FAKE_TMUX_TABLES = tablesClient;
+        process.env.FAKE_TMUX_LOG = logClient;
         using client = await Client.create({
           storePath: storeB,
           tmuxCommand: FAKE_TMUX_BIN, _cliPath: process.env.CLI_PATH
         } as any);
-        const ts = await client.readPane({ claude_instance_id: "id-rp-1" });
+        const ts = await client.readPane({ claude_instance_id: id });
 
-        assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
+        const cliEnvelope = JSON.parse(cli.stdout) as { pane?: unknown };
+        assertEnvelopesEqual(cliEnvelope, ts, {
           ignorePaths: loadIgnorePathsForVerb("read-pane"),
         });
+        expect(cliEnvelope.pane).toBe(READ_PANE_TEXT);
+        expect(ts.pane).toBe(READ_PANE_TEXT);
+
+        // Each run: one lookup, one pane listing, one capture by pane id,
+        // all on the row's socket (SR-7.2, SR-3.7).
+        for (const log of [logCli, logClient]) {
+          const calls = fakeTmuxCalls(log);
+          expect(calls.map((argv) => argv.slice(1, 5))).toEqual([
+            ["-u", "-S", socket, "list-sessions"],
+            ["-u", "-S", socket, "list-panes"],
+            ["-u", "-S", socket, "capture-pane"],
+          ]);
+          const capture = calls[2];
+          const target = capture.indexOf("-t");
+          expect(capture.slice(target, target + 2)).toEqual(["-t", paneId]);
+        }
       } finally {
+        if (priorLog === undefined) delete process.env.FAKE_TMUX_LOG;
+        else process.env.FAKE_TMUX_LOG = priorLog;
+        if (priorTables === undefined) delete process.env.FAKE_TMUX_TABLES;
+        else process.env.FAKE_TMUX_TABLES = priorTables;
         cleanup();
+        fs.rmSync(tmuxDir, { recursive: true, force: true });
       }
     },
     TIMEOUT
@@ -550,16 +607,6 @@ describe("read-pane", () => {
 // ── kill ──────────────────────────────────────────────────────────────────────
 
 describe("kill", () => {
-  /** The argv of each fake-tmux invocation logged to logPath ([] when nothing was logged). */
-  function fakeTmuxCalls(logPath: string): string[][] {
-    if (!fs.existsSync(logPath)) return [];
-    return fs
-      .readFileSync(logPath, "utf8")
-      .split("---\n")
-      .filter((rec) => rec !== "")
-      .map((rec) => rec.split("\n"));
-  }
-
   test(
     "success path: Gone row, lookup only, kill_sent false on both sides",
     async () => {

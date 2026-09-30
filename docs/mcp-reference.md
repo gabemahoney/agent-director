@@ -158,6 +158,8 @@ Capture the last N lines of a tracked Spawn's tmux pane. Default 25 lines, no up
 - `ErrSpawnNotFound`
 - `ErrTmuxNotAvailable`
 - `ErrTmuxCaptureFailed`
+- `ErrTmuxUnresponsive`
+- `ErrTmuxSessionConflict`
 
 ## Tool: kill
 

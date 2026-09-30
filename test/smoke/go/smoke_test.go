@@ -24,7 +24,8 @@ import (
 //     — no state crosses verbs.
 //  3. Applies the verb's SeedKind precondition via the appropriate
 //     storefix or apitest seed helper (for kill, also the row's own
-//     labelled session in the recorder).
+//     labelled session in the recorder; for read-pane, a recorder from
+//     tmuxfix.NewRecorderForReadPane whose own pane captures smokePaneText).
 //  4. Constructs an api.Client wired with the temp store path and the
 //     recorder. CreateIfMissing is true so api.New reuses the store
 //     file created by storefix.OpenTempStore.
@@ -32,7 +33,8 @@ import (
 //     AssertResultMatchesManifest; for status, get and list it also checks
 //     the pending row's launch_started_at (see assertLaunchStartedAt), for
 //     get that tmux_socket is the seeded apitest.TestSocket, for kill that
-//     kill_sent is true, and for spawn and resume, with a .claude.json
+//     kill_sent is true, for read-pane that the pane is smokePaneText, and
+//     for spawn and resume, with a .claude.json
 //     planted in HOME first, that pre_trust is "ok" (see plantClaudeJSON).
 //  6. Calls the verb's Error closure (when defined) and feeds the
 //     returned error into AssertExpectedError.
@@ -127,16 +129,16 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 			t.Fatalf("runVerbSubtest: seed working %q: %v", spec.SeedID, err)
 		}
 		rec.SeedRowSession(t, storePath, spec.SeedID)
+	case seedReadPane:
+		if _, err := apitest.SeedSpawn(storePath, spec.SeedID, "working", "", "", "", false); err != nil {
+			t.Fatalf("runVerbSubtest: seed working %q: %v", spec.SeedID, err)
+		}
+		// The process-checker fake is not used: the Client built below
+		// reads start times with the production reader.
+		rec, _ = tmuxfix.NewRecorderForReadPane(t, storePath, spec.SeedID, smokePaneText)
 	default:
 		t.Fatalf("runVerbSubtest: unknown SeedKind %v for verb %q",
 			spec.SeedKind, vd.Name)
-	}
-
-	// Per-verb recorder configuration. read-pane is the only verb that
-	// reads a scripted pane response; other verbs use the recorder's
-	// no-op defaults.
-	if spec.PaneText != "" {
-		rec.WithPaneOutput(spec.PaneText)
 	}
 
 	// Construct the Client. CreateIfMissing=true reuses the store file
@@ -179,6 +181,12 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 	}
 	if spec.KillSent != nil && !spec.KillSent(result) {
 		t.Errorf("%s: kill_sent = false; want true, a kill sent to the seeded row's session", vd.Name)
+	}
+	if spec.Pane != nil {
+		if got := spec.Pane(result); got != smokePaneText {
+			t.Errorf("%s: pane = %q; want %q, the text the row's own pane captures",
+				vd.Name, got, smokePaneText)
+		}
 	}
 	if spec.PreTrust != nil {
 		if got := spec.PreTrust(result); got != "ok" {

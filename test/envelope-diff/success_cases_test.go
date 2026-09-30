@@ -13,9 +13,10 @@
 //     this is a no-op; for resume it creates the JSONL transcript, and
 //     for spawn and resume it plants HOME/.claude.json for pre-trust.
 //  4. Run    — collect JSON envelopes from runCLI and runClient, each
-//     against a private fake tmux (its own socket and tables).
+//     against a private fake tmux (its own socket and tables, which
+//     successCase.tmuxTable fills when set).
 //  5. Diff   — normalize both envelopes, check each carries the case's
-//     wantPreTrust (spawn, resume) and want fields (kill), and compare via structuralDiff,
+//     wantPreTrust (spawn, resume) and want fields (kill, read-pane), and compare via structuralDiff,
 //     suppressing fields listed in nondeterministic.json.
 //  6. Assert — t.Errorf if any diff entries remain after suppression.
 package envelope_diff
@@ -83,14 +84,19 @@ func TestEnvelopeDiff_Success(t *testing.T) {
 			// must not be on the server the Client run creates on, or the
 			// second create meets the first's session ("duplicate
 			// session"). Neither run touches the default socket.
-			usePrivateFakeTmux(t)
+			// A case with tmuxTable writes its tables into each run's.
+			if _, tables := usePrivateFakeTmux(t); sc.tmuxTable != nil {
+				sc.tmuxTable(t, tables, ctx)
+			}
 			cliEnv, exitCode := runCLI(t, binPath, dbPath1, sc.cliArgv(ctx)...)
 			if exitCode != 0 {
 				t.Fatalf("CLI exited %d on success path; stderr:\n%s",
 					exitCode, cliEnv)
 			}
 
-			usePrivateFakeTmux(t)
+			if _, tables := usePrivateFakeTmux(t); sc.tmuxTable != nil {
+				sc.tmuxTable(t, tables, ctx)
+			}
 			clientEnv, errReturned := runClient(t, dbPath2, verb.Name, sc.params(ctx))
 			if errReturned {
 				t.Fatalf("Client returned error envelope on success path:\n%s",

@@ -7,7 +7,8 @@ package api_test
 // failure kinds. The spawnEnv fixture is in spawn_test.go, resumeEnv in
 // resume_fixture_test.go, killEnv in kill_fixture_test.go. Later verb Epics
 // extend this file (a oneName<Verb>Rows added to oneNameRows, every error
-// through assertOneName) instead of writing their own one-name check.
+// through assertOneName) instead of writing their own one-name check; the
+// pane verbs' rows are in one_name_pane_verbs_test.go.
 
 import (
 	"errors"
@@ -113,7 +114,8 @@ type oneNameRow struct {
 
 // oneNameRows is every returned-error row.
 func oneNameRows() []oneNameRow {
-	return slices.Concat(oneNameSpawnRows(), oneNameHeldRows(), oneNameResumeRows(), oneNameInternalRows(), oneNameKillRows())
+	return slices.Concat(oneNameSpawnRows(), oneNameHeldRows(), oneNameResumeRows(), oneNameInternalRows(), oneNameKillRows(),
+		oneNameReadPaneRows())
 }
 
 // TestOneNameReturnedErrors: every tmux-caused error the verbs return matches

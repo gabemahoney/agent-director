@@ -16,7 +16,8 @@
 //     HOME/.claude/projects/<slug>/<session_id>.jsonl; spawn and resume
 //     need HOME/.claude.json for pre-trust).
 //   - wantPreTrust: when set, both envelopes must carry pre_trust equal to it.
-//   - want:        when set, fields both envelopes must carry (kill_sent).
+//   - want:        when set, fields both envelopes must carry (kill_sent, pane).
+//   - tmuxTable:   when set, writes each run's fake-tmux tables (read-pane).
 //
 // The test driver (success_cases_test.go) always calls
 // t.Setenv("HOME", homeDir) immediately before each extraSetup invocation so
@@ -34,6 +35,7 @@ import (
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
@@ -75,6 +77,10 @@ type successCase struct {
 	// want, when set, holds fields both envelopes must carry with these
 	// values (success_fields.go).
 	want map[string]any
+
+	// tmuxTable, when set, writes the case's fake-tmux tables into each
+	// run's private tables (read-pane), so both runners see the same tmux.
+	tmuxTable func(t *testing.T, tables faketmuxfix.Tables, ctx map[string]any)
 }
 
 // successCases is the authoritative per-verb fixture table.
@@ -169,18 +175,15 @@ var successCases = []successCase{
 	},
 
 	// ── read-pane ─────────────────────────────────────────────────────────
-	// fake-tmux outputs "fake pane line one\nfake pane line two\n" for
-	// capture-pane (no ANSI codes); default ANSI=false stripping leaves
-	// the content unchanged.  Both CLI and Client call the same fake binary,
-	// so the pane field is identical.
+	// A live row on a socket of its own; each run's fake table holds the
+	// row's own labelled session and @ad_pane-tagged pane (Ours, agent's
+	// pane found), so both runners capture that pane by id and both
+	// envelopes carry its fixed text (success_readpane.go; SR-7.2, SR-3.7).
 	{
-		verb: "read-pane",
-		seed: func(t *testing.T) (string, map[string]any) {
-			t.Helper()
-			_, dbPath := apitest.OpenStoreWithRow(t,
-				"id-rp-1", "cd-rp-1", store.StateWaiting, "off")
-			return filepath.Dir(dbPath), map[string]any{"id": "id-rp-1"}
-		},
+		verb:      "read-pane",
+		seed:      seedReadPane,
+		tmuxTable: writeReadPaneTable,
+		want:      map[string]any{"pane": readPaneText},
 		params: func(ctx map[string]any) map[string]any {
 			return map[string]any{"claude_instance_id": ctx["id"]}
 		},

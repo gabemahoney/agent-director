@@ -480,6 +480,8 @@ var Verbs = []VerbDef{
 			"ErrSpawnNotFound",
 			"ErrTmuxNotAvailable",
 			"ErrTmuxCaptureFailed",
+			"ErrTmuxUnresponsive",
+			"ErrTmuxSessionConflict",
 		},
 	},
 	{
