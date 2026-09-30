@@ -82,21 +82,27 @@ type SpawnRow struct {
 	// specific row with the decide verb.
 	PermissionRequests []PermissionRequestInfo `json:"permission_requests"`
 	// TranscriptStatus is a derived, operator-facing summary of the current
-	// session's transcript state (b.v2c AC8). One of:
+	// session's transcript state (b.v2c AC8). Session history belongs to a
+	// life; "never_written" and "rotated" are decided on the visible history
+	// — the current life's history minus the entry for the row's current
+	// session id — the same entries PriorSessions lists. One of:
 	//   - "present":      jsonl_path is recorded (a verified transcript).
 	//   - "never_written": a session id exists but jsonl_path is NULL and the
-	//                      instance has NO archived session history — nothing was
-	//                      ever written for this instance (the freshly-restarted,
-	//                      un-messaged case).
-	//   - "rotated":       jsonl_path is NULL but the instance HAS archived prior
-	//                      sessions — history exists under a different session id
-	//                      (see prior_sessions). This is the case a bare
-	//                      jsonl_path could not distinguish from "never_written".
+	//                      visible history is empty — nothing was ever written
+	//                      in the current life (the case of a freshly restarted
+	//                      agent that has not been messaged).
+	//   - "rotated":       jsonl_path is NULL and the visible history is
+	//                      non-empty — the current life has history under a
+	//                      different session id (see prior_sessions). This is
+	//                      the case a bare jsonl_path could not distinguish
+	//                      from "never_written".
 	//   - "no_session":    no claude_session_id yet (pre-first-SessionStart).
 	TranscriptStatus string `json:"transcript_status"`
-	// PriorSessions is the instance's archived session history, newest first —
-	// the queryable link from this row back to earlier sessions orphaned by a
-	// rotation (b.v2c AC6/AC8). Always a non-nil slice (encodes as []).
+	// PriorSessions is the row's visible history, newest first: the archived
+	// sessions of the current life (session history belongs to a life),
+	// minus the entry for the row's current session id. It is the queryable
+	// link from this row back to earlier sessions orphaned by a rotation
+	// (b.v2c AC6/AC8). Always a non-nil slice (encodes as []).
 	PriorSessions []PriorSession `json:"prior_sessions"`
 }
 
@@ -162,14 +168,19 @@ func nullableTimestamp(s string) *string {
 type GetStore interface {
 	GetSpawn(instanceID string) (Spawn, error)
 	OpenPermissionRequestsForSpawn(instanceID string) ([]PermissionRow, error)
-	// ListSessionHistory returns the instance's archived prior sessions in
-	// life, the LifeNumber of the row Get read (newest first), so Get can
+	// ListSessionHistory returns the instance's archived sessions of one
+	// life only — life is the LifeNumber of the row Get read — newest
+	// first. Session history belongs to a life: each entry is a session that
+	// ran while that life's id was current. The read does not apply the
+	// current-session rule; Get does, keeping the visible history (that
+	// life's entries minus the entry for the row's current session id) to
 	// populate PriorSessions and derive TranscriptStatus (b.v2c AC6/AC8).
 	ListSessionHistory(instanceID string, life int64) ([]SessionHistoryEntry, error)
 }
 
 // deriveTranscriptStatus computes the operator-facing transcript-status summary
-// (b.v2c AC8) from the row's session id, jsonl_path, and archived history.
+// (b.v2c AC8) from the row's session id, jsonl_path, and the length of its
+// visible history (visibleHistory).
 func deriveTranscriptStatus(sessionID, jsonlPath string, historyLen int) string {
 	switch {
 	case sessionID == "":
@@ -194,6 +205,11 @@ func deriveTranscriptStatus(sessionID, jsonlPath string, historyLen int) string 
 // Open-rows-only contract: closed (decided) rows are never visible in
 // the PermissionRequests output. OpenPermissionRequestsForSpawn enforces
 // this at the SQL layer (decision IS NULL predicate).
+//
+// PriorSessions and TranscriptStatus cover the visible history only.
+// Session history belongs to a life: Get reads the entries of the life of
+// the row it read, then drops the entry for the row's current session id
+// (a row with no current session id drops nothing).
 func Get(s GetStore, instanceID string) (SpawnRow, error) {
 	row, err := s.GetSpawn(instanceID)
 	if err != nil {
@@ -219,13 +235,16 @@ func Get(s GetStore, instanceID string) (SpawnRow, error) {
 		PriorSessions:           []PriorSession{},
 	}
 
-	// b.v2c AC6/AC8: surface archived prior sessions and derive the
-	// operator-facing transcript status so "no history ever existed" is
-	// distinguishable from "history exists under a different session id".
-	history, err := s.ListSessionHistory(instanceID, row.LifeNumber)
+	// b.v2c AC6/AC8: surface the visible history (the current life's archived
+	// sessions minus the entry for the row's current session id) and derive
+	// the operator-facing transcript status from it, so "no history in this
+	// life" is distinguishable from "history exists under a different session
+	// id".
+	lifeHistory, err := s.ListSessionHistory(instanceID, row.LifeNumber)
 	if err != nil {
 		return SpawnRow{}, err
 	}
+	history := visibleHistory(row, lifeHistory)
 	for _, h := range history {
 		out.PriorSessions = append(out.PriorSessions, PriorSession{
 			ClaudeSessionID: h.ClaudeSessionID,

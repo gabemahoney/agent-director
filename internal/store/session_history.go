@@ -9,23 +9,33 @@ import (
 )
 
 // SessionHistoryEntry is one archived (claude_session_id, jsonl_path) pair a
-// spawn previously pointed at before a session rotation (b.v2c). jsonl_path is
-// the empty string when the archived session never had a recorded transcript
-// path (NULL in the column). Ordered newest-first by callers.
+// spawn previously pointed at before a session rotation (b.v2c). Session
+// history belongs to a life: every entry belongs to the life (SR-5.9) of the
+// id that was current when its session ran, and the life-taking read returns
+// one life's entries only. jsonl_path is the empty string when the archived
+// session never had a recorded transcript path (NULL in the column). Ordered
+// newest-first by callers.
 type SessionHistoryEntry struct {
 	ClaudeSessionID string
 	JSONLPath       string
 	RecordedAt      string
 }
 
-// ListSessionHistory returns the instance's archived prior sessions in the
-// given life (SR-5.9) only, newest recorded first; entries of the instance's
-// other lives, and of every other instance, never appear. Callers pass the
-// life_number of the row they already read (Spawn.LifeNumber). No entries —
-// including an absent instance — yields an empty (non-nil) slice; there is
-// nothing to distinguish "no history" from "no row" here, so callers that need
-// that distinction check the spawns row separately. Used by get and resume to
-// surface the "history exists under a different session id" case (AC6/AC8).
+// ListSessionHistory returns the instance's archived sessions of the given
+// life (SR-5.9) only, newest recorded first; entries of the instance's other
+// lives, and of every other instance, never appear. Session history belongs to
+// a life: every entry belongs to the life of the id that was current when its
+// session ran. Callers pass the life_number of the row they already read
+// (Spawn.LifeNumber). No entries — including an absent instance — yields an
+// empty (non-nil) slice; there is nothing to distinguish "no history" from
+// "no row" here, so callers that need that distinction check the spawns row
+// separately.
+//
+// The read keeps the entry for the row's current session id, if any; it does
+// not apply the current-session rule. resume and get do: they show that life's
+// history minus the entry for the row's current session id (SR-8.7), and use
+// it to surface the "history exists under a different session id" case
+// (AC6/AC8).
 func (s *Store) ListSessionHistory(instanceID string, life int64) ([]SessionHistoryEntry, error) {
 	const q = `SELECT claude_session_id, COALESCE(jsonl_path, ''), recorded_at
 	             FROM session_history

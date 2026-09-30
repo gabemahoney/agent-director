@@ -262,9 +262,10 @@ func TestGetReadsHistoryForItsRowsLife(t *testing.T) {
 
 // TestGetTranscriptStatusAndPriorSessions is the b.v2c AC8 REGRESSION test: get
 // derives an operator-facing transcript_status and surfaces prior_sessions so
-// "pointer dead, no history ever existed" (never_written) is distinguishable
+// "pointer dead, no visible history" (never_written) is distinguishable
 // from "pointer dead, history exists under a different session id" (rotated)
-// without reading source or running find.
+// without reading source or running find. The visible-history rule itself
+// (life filter, current id dropped) is pinned in get_history_test.go.
 //
 // PRE-FIX get had neither field; the derivation + prior_sessions surfacing is
 // what this pins.

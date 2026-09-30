@@ -21,11 +21,15 @@ const resumeEnvInstanceID = "AGENT_DIRECTOR_INSTANCE_ID"
 type ResumeStore interface {
 	GetSpawn(instanceID string) (Spawn, error)
 	SetParentID(instanceID, parentID string) error
-	// ListSessionHistory returns the instance's archived prior sessions in
-	// life, the LifeNumber of the row Resume read (newest first). Used both
-	// to try earlier transcripts as resume candidates (b.v2c AC6 — a
-	// rotation must not strand history) and to distinguish
-	// ErrJsonlNeverWritten from ErrJsonlMissing (AC2).
+	// ListSessionHistory returns the instance's archived sessions of one
+	// life only — life is the LifeNumber of the row Resume read — newest
+	// first. Session history belongs to a life: each entry is a session that
+	// ran while that life's id was current. The read does not apply the
+	// current-session rule; Resume does, keeping the visible history (that
+	// life's entries minus the entry for the row's current session id).
+	// Resume uses the visible history both to try earlier transcripts as
+	// resume candidates (b.v2c AC6 — a rotation must not strand history)
+	// and to distinguish ErrJsonlNeverWritten from ErrJsonlMissing (AC2).
 	ListSessionHistory(instanceID string, life int64) ([]SessionHistoryEntry, error)
 }
 
@@ -90,13 +94,19 @@ type ResumeResult struct {
 //     persisted jsonl_path, and rows whose recorded path has rotted.
 //     A successful fallback resume re-fires SessionStart, which
 //     re-persists the correct path.
-//     When every candidate (including archived session-history
-//     transcripts, b.v2c AC6) fails, the verb distinguishes two cases:
-//     ErrJsonlNeverWritten when the persisted jsonl_path was NULL and the
-//     instance has no session history (nothing was ever written — AC2);
-//     ErrJsonlMissing otherwise (a path was once recorded/composed and has
-//     rotted). Both messages report each path tried with its source
-//     (persisted / fallback / history) and its stat error.
+//     c. Then each entry of the row's visible history, newest first
+//     (b.v2c AC6): its recorded path, then its recomputed fallback.
+//     Session history belongs to a life, and the visible history is the
+//     current life's history minus the entry for the row's current
+//     session id, whose own candidates are a and b; a recorded path on
+//     that dropped entry is never tried.
+//     When every candidate fails, the verb distinguishes two cases, both
+//     decided on the visible history: ErrJsonlNeverWritten when the
+//     persisted jsonl_path was NULL and the visible history is empty
+//     (nothing was ever written — AC2); ErrJsonlMissing otherwise (a path
+//     was once recorded/composed and has rotted). Both messages report
+//     each path tried with its source (persisted / fallback / history)
+//     and its stat error; every one of them is from the current life.
 //  5. Canonical tmux session name must NOT already exist → otherwise
 //     the tmux.NewSessionByName at step 7 would surface ErrTmuxSessionCreate
 //     anyway, and we'd rather error out cleanly here than after a
@@ -182,11 +192,15 @@ func resumeImpl(s ResumeStore, t ResumeTmux, cfg config.Config, params ResumePar
 		})
 	}
 
-	// b.v2c AC6: a session rotation (CSCB fleet restart) archives the prior
-	// session's (session id, jsonl_path) into session_history. If the current
-	// session has no live transcript, fall back to the most recent archived
-	// session whose transcript still exists on disk — this recovers history
-	// orphaned by a rotation rather than abandoning it. Resume does not persist
+	// b.v2c AC6: a session rotation (a new session id reported for the row)
+	// archives the prior session's (session id, jsonl_path) into
+	// session_history, as an entry of the row's life. If the current session
+	// has no live transcript, fall back to the most recent entry of the
+	// visible history whose transcript still exists on disk — this recovers
+	// history orphaned by a rotation rather than abandoning it. The visible
+	// history is the current life's entries (the read below takes the life of
+	// the row read above) minus the entry for the row's current session id,
+	// whose candidates were already tried above (SR-8.7). Resume does not persist
 	// a session-id change: it points the relaunch at the recovered archived
 	// session id (via row.ClaudeSessionID, which spawn.Relaunch reads), so
 	// `claude --resume` reattaches to the recovered transcript. The row's
@@ -200,10 +214,11 @@ func resumeImpl(s ResumeStore, t ResumeTmux, cfg config.Config, params ResumePar
 	// id before advancing to the next, older entry. Without this, a newer entry
 	// whose recorded path has rotted would be skipped outright and an older
 	// entry could win, silently reattaching resume to older history.
-	history, herr := s.ListSessionHistory(params.ClaudeInstanceID, row.LifeNumber)
+	lifeHistory, herr := s.ListSessionHistory(params.ClaudeInstanceID, row.LifeNumber)
 	if herr != nil {
 		return ResumeResult{}, fmt.Errorf("resume: list session history: %w", herr)
 	}
+	history := visibleHistory(row, lifeHistory)
 	for _, h := range history {
 		// Step 1: try the archived recorded path, if any. It wins outright when
 		// it stats; on any stat failure fall through to the recomputed path.
@@ -253,9 +268,10 @@ func resumeImpl(s ResumeStore, t ResumeTmux, cfg config.Config, params ResumePar
 	// AC2: distinguish "no transcript has EVER been written for this session"
 	// from "candidates were tried and none matched". The never-written case is
 	// narrow and specific: the persisted jsonl_path was NULL/empty (the
-	// SessionStart hook found no file), AND the instance has no archived session
-	// history to have lost. A persisted-but-rotted path, or a row that HAS
-	// history, is the classic ErrJsonlMissing.
+	// SessionStart hook found no file), AND the visible history — the current
+	// life's entries minus the entry for the row's current session id — is
+	// empty, so there is nothing to have lost. A persisted-but-rotted path, or
+	// a row whose visible history is non-empty, is the classic ErrJsonlMissing.
 	if row.JSONLPath == "" && len(history) == 0 {
 		return ResumeResult{}, fmt.Errorf(
 			"%w: spawn %s session %s has produced no transcript on disk (tried %s)",
@@ -345,13 +361,15 @@ func resumeAfterJsonl(s ResumeStore, t ResumeTmux, cfg config.Config, row Spawn,
 //     before its first SessionStart hook; delete and re-spawn instead.
 //   - [ErrJsonlMissing]: no candidate JSONL transcript exists on disk —
 //     neither the persisted jsonl_path, the CLAUDE_CONFIG_DIR-aware
-//     fallback, nor any archived session-history transcript (the message
-//     names every path tried and its source). Meaning: history existed but
-//     the file is gone.
+//     fallback, nor any transcript of the visible history (the message
+//     names every path tried and its source, all from the current life).
+//     Meaning: history existed but the file is gone. Session history
+//     belongs to a life; the visible history is the current life's
+//     history minus the entry for the row's current session id.
 //   - [ErrJsonlNeverWritten]: the row has a session id but no transcript was
-//     ever written (persisted jsonl_path NULL and no session history) — the
-//     b.v2c freshly-restarted, un-messaged case. Recourse: message it, or
-//     delete + re-spawn.
+//     ever written (persisted jsonl_path NULL and the visible history
+//     empty) — the b.v2c case of a freshly restarted agent that has not
+//     been messaged. Recourse: message it, or delete + re-spawn.
 //   - ErrTmuxNotAvailable: tmux binary is not on PATH.
 //   - [ErrTmuxSessionCreate]: a tmux session with the same name already exists.
 //

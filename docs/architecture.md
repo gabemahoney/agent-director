@@ -58,7 +58,7 @@ still holds: nothing in `internal/` imports `pkg/api`.
 | `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, `KillTmux`, `KillLogger`, etc.), params/result types, and error sentinels. Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director` and `internal/mcp`. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the eight socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the five name-based ones (`NewSessionByName`, `HasSession`, `KillSession`, `SendKeys`, `CapturePane`); `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`. `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`. | Direct `database/sql`; raw SQL strings; MCP framing. |
 | `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v5; see "Schema v5" below), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default; a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
-| `pkg/api/apitest` | Test seed helpers extracted from `pkg/api/*_test.go` for cross-package importing. Provides `Seed*` functions (`SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`) that set up fixture DB rows and filesystem state for `test/envelope-diff` and future Epic 4/5 smoke tests. Also provides the config writer `WriteTmuxConfig` (settings built with `TmuxInt`, or `TmuxFloat` / `TmuxString` / `TmuxBool` for malformed values, keyed by `config.TmuxKey`): `pkg/api`, CLI and MCP tests write `[tmux]` settings only through it, so no test outside `internal/config` spells a `[tmux]` key (rules: Test Harness, "apitest `[tmux]` config writer"). Provides `SeedSpawn`'s trailing `SpawnOption`s for the v5 columns, timestamps and raw text (`WithTmuxSessionName`, `WithStartedAt` / `WithEndedAt`, `WithLaunchStartedAt`, `WithRawLaunchStartedAt`, `WithNoLaunchStartedAt`, `WithLifeNumber`, `WithNoPreTrust`, `WithRawNoPreTrust`, `WithLaunchIdentity`, `WithNoLaunchToken`, `WithRawLabels`, `WithRawClaudeArgs`, `WithRawExtraEnv`), the default socket `TestSocket`, the default pane `TestPaneID` / `TestPanePID` that `SeedSpawn` gives a live row (both re-exported from `internal/testsupport/launchfix`; a terminal row gets no pane), the store-read helper `ReadSpawnColumns` and the every-life history-read helper `ReadSessionHistoryAllLives`: new tests seed rows and read columns no verb shows only through these (rules: Test Harness, "apitest Seed* factory contract"). To place a seeded row's own labelled session in the Recorder, tests use `tmuxfix.Recorder.SeedRowSession` (in `internal/testsupport/tmuxfix`, not this package). Non-test package (regular `.go` files) so it can be imported by harnesses outside `pkg/api`. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
+| `pkg/api/apitest` | Test seed helpers extracted from `pkg/api/*_test.go` for cross-package importing. Provides `Seed*` functions (`SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`) that set up fixture DB rows and filesystem state for `test/envelope-diff` and future Epic 4/5 smoke tests. Also provides the config writer `WriteTmuxConfig` (settings built with `TmuxInt`, or `TmuxFloat` / `TmuxString` / `TmuxBool` for malformed values, keyed by `config.TmuxKey`): `pkg/api`, CLI and MCP tests write `[tmux]` settings only through it, so no test outside `internal/config` spells a `[tmux]` key (rules: Test Harness, "apitest `[tmux]` config writer"). Provides `SeedSpawn`'s trailing `SpawnOption`s for the v5 columns, timestamps and raw text (`WithTmuxSessionName`, `WithStartedAt` / `WithEndedAt`, `WithLaunchStartedAt`, `WithRawLaunchStartedAt`, `WithNoLaunchStartedAt`, `WithLifeNumber`, `WithNoPreTrust`, `WithRawNoPreTrust`, `WithLaunchIdentity`, `WithNoLaunchToken`, `WithRawLabels`, `WithRawClaudeArgs`, `WithRawExtraEnv`) and archived session history (`WithSessionHistory`), the default socket `TestSocket`, the default pane `TestPaneID` / `TestPanePID` that `SeedSpawn` gives a live row (both re-exported from `internal/testsupport/launchfix`; a terminal row gets no pane), the store-read helper `ReadSpawnColumns` and the every-life history-read helper `ReadSessionHistoryAllLives`: new tests seed rows and read columns no verb shows only through these (rules: Test Harness, "apitest Seed* factory contract"). To place a seeded row's own labelled session in the Recorder, tests use `tmuxfix.Recorder.SeedRowSession` (in `internal/testsupport/tmuxfix`, not this package). Non-test package (regular `.go` files) so it can be imported by harnesses outside `pkg/api`. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
 | `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. The `Catalog` is consumed by `cmd/agent-director`'s envelope writer and `internal/mcp`'s `classifyDispatchError`. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
 | `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. `classifyDispatchError` delegates to `errnames.Classify`. | stdlib; `pkg/api`; `pkg/api/manifest`; `pkg/api/errnames`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
 | `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
@@ -184,22 +184,55 @@ verbatim so future code review can grep for it:
   `decision`, `decision_reason`, and `decided_at`. Indexed on
   `(claude_instance_id, decision)` and `(decision, decided_at)`.
 - `session_history` (v4, b.v2c) — one row per `(claude_instance_id,
-  claude_session_id)` pair the spawn has ever pointed at, FK-cascaded on spawn
+  claude_session_id)` pair the row has archived, FK-cascaded on spawn
   delete; `claude_session_id TEXT NOT NULL`, nullable `jsonl_path`,
   `recorded_at`, composite `UNIQUE(claude_instance_id, claude_session_id)`,
-  indexed on `claude_instance_id`. When a session rotates (a CSCB fleet
-  restart hands the bot a new session id), the prior `(session id, jsonl_path)`
+  indexed on `claude_instance_id`. When a session rotates (the agent's row
+  is reported with a new session id), the prior `(session id, jsonl_path)`
   is archived here before the `spawns` row is overwritten, so the earlier
-  session's transcript is never orphaned. It is the queryable link from a live
-  row back to its earlier sessions — surfaced through `get`'s `prior_sessions`
-  and consulted by `resume` as a fallback candidate source.
+  session's transcript is never orphaned.
+  - **History belongs to a life.** Each entry carries the life it belongs to
+    (`life_number`, see "v5 columns" below): the life the row was in when that
+    session ran. The rotation archive takes that life from the same read as
+    the outgoing session id and jsonl path.
+  - **One entry per instance and session id.** Re-archiving a session id
+    within the same life keeps an already-recorded path when the new path is
+    NULL and refreshes `recorded_at`. Re-archiving it in a later life moves
+    the entry to that life, with that life's path exactly (NULL included),
+    and refreshes `recorded_at`; no path from the earlier life survives.
+  - **Retention and reads.** The store keeps every entry until the row is
+    deleted or expired. Its history read, `ListSessionHistory(id, life)`,
+    returns one life's entries, newest first, and keeps an entry equal to the
+    row's current session id. `resume` and `get` read the life of the row
+    they read and use only its *visible history*: that life's entries minus
+    any entry whose session id equals the row's current, non-empty session
+    id (`visibleHistory` in `pkg/api/visible_history.go`). The visible
+    history is the queryable link from a row back to the earlier sessions of
+    its current life, surfaced through `get`'s `prior_sessions` and consulted
+    by `resume` as a fallback candidate source. **Must use:** every
+    `pkg/api` reader of session history applies the current-session rule
+    through `visibleHistory` (`pkg/api/visible_history.go`), never its own
+    filter.
+  - **Must use:** every product-code archive into `session_history` goes
+    through
+    `upsertSessionHistoryEntry(q querier, instanceID, sessionID, jsonlPath,
+    life)` in `internal/store/session_history.go`. It runs one statement on
+    the pool or on a transaction the caller already holds, reads nothing
+    (the caller passes values it has already read), and applies the rules
+    above: within the same life a known path is kept, and in another life
+    the entry moves with that life's path exactly. It emits no trail event
+    and advances no `row_version`; callers own their events and failure
+    policy. The rotation archive calls it today. Every new code path that
+    archives a session must call it too, never a second upsert.
 
 **v5 columns (b.fmk).** Schema v5 adds twelve `spawns` columns, after the
 v4 columns, and one `session_history` column. They are the storage later work
 builds on. The store gives each column its default on insert and on
-migration. Beyond that, the only v5 writes are the ones under "Versioned
-writes" below: every `spawns` update advances `row_version`, and some clear
-`launch_started_at`. No verb reports any of the columns yet.
+migration. Beyond that, the v5 writes are the ones under "Versioned writes"
+below (every `spawns` update advances `row_version`, and some clear
+`launch_started_at`) and the rotation archive, which writes
+`session_history.life_number` through `upsertSessionHistoryEntry`. No verb
+reports any of the columns yet.
 
 - **Row version** — `spawns.row_version INTEGER NOT NULL DEFAULT 0`. A
   per-row change counter, so a conditional write can tell that the row changed
@@ -1046,7 +1079,7 @@ waiting (after SessionStart fires)
 
 | Event | Tool / reason carve-out | Resulting state |
 | --- | --- | --- |
-| `SessionStart` | — | `waiting` (also writes `claude_session_id` from `transcript_path`; `jsonl_path` only when the file exists on disk, else NULL/provisional — b.v2c; a differing session id archives the prior pair to `session_history`) |
+| `SessionStart` | — | `waiting` (also writes `claude_session_id` from `transcript_path`; `jsonl_path` only when the file exists on disk, else NULL/provisional — b.v2c; a differing session id archives the prior pair to `session_history`, tagged with the row's current life) |
 | `UserPromptSubmit` | — | `working` |
 | `PreToolUse` | `tool_name = AskUserQuestion` | `ask_user` |
 | `PreToolUse` | any other tool | `working` |
@@ -2488,8 +2521,12 @@ mutation, no half-created tmux session):
       `~/.claude` when that key is absent/empty) `+ slug(cwd) + session
       id`, and that is `os.Stat`'d.
    3. If neither the current session's persisted path nor its fallback
-      exists, `resume` walks the instance's archived `session_history`
-      (newest first, b.v2c AC6). Each archived entry gets the **same
+      exists, `resume` walks the row's *visible history* (newest first,
+      b.v2c AC6): the `session_history` entries of the row's current life,
+      minus any entry whose session id equals the row's current session id
+      (see `internal/store`, `session_history`). That entry is never tried;
+      its session's own two candidates were already tried above, and a path
+      recorded only on it is never stat'd. Each visible entry gets the **same
       persisted→fallback two-step the current session gets** (bug b.5jm):
       the recorded `jsonl_path` is stat'd first, and on ANY stat failure of
       a non-empty path — the b.1ba rot mode — the `CLAUDE_CONFIG_DIR`-aware
@@ -2497,31 +2534,36 @@ mutation, no half-created tmux session):
       advancing to the next, older entry. (A NULL/empty recorded path skips
       straight to the recomputed path.) Without this two-step, a newer entry
       whose recorded path had rotted would be skipped and an older entry
-      could silently win. The first archived
+      could silently win. The first visible
       transcript that exists **wins**: `resume` relaunches `claude
       --resume` against the archived id so it points at the recovered
       transcript (the mutation is in-memory only — the DB row itself is
       re-stamped by the relaunched Claude's subsequent SessionStart). This
-      is what stops a CSCB fleet-restart
-      rotation from stranding intact history.
+      is what stops a rotation (the agent's row reported with a new session
+      id, for example after the caller restarts its agents) from stranding
+      intact history.
 
    This heals legacy rows written before the SessionStart hook persisted
    `jsonl_path`, rows whose recorded path has rotted, and rows whose history
    moved to an earlier session id on rotation — a successful fallback resume
    re-fires SessionStart, which re-persists the correct path. When **every**
-   candidate (persisted, fallback, and every archived session-history
-   transcript) fails, the verb distinguishes two cases (b.v2c AC2):
+   candidate (persisted, fallback, and every visible-history transcript)
+   fails, the verb distinguishes two cases (b.v2c AC2), decided on the
+   visible history:
    - `ErrJsonlNeverWritten` when the persisted `jsonl_path` was NULL/empty
-     **and** the instance has no archived session history — nothing was ever
-     written for this instance (the freshly-restarted, un-messaged bot; a
-     fresh Claude session writes no `.jsonl` until its first user turn).
-     Recourse: message it, or delete + re-spawn.
-   - `ErrJsonlMissing` otherwise — a path was once recorded/composed (or
-     history exists) and has since rotted. Recourse: `delete` + fresh
-     `spawn`.
+     **and** the visible history is empty (a history holding only the
+     current session id counts as empty) — nothing was ever written in the
+     row's current life (a freshly restarted agent the caller has not yet
+     messaged; a fresh Claude session writes no `.jsonl` until its first
+     user turn). Recourse: message it, or delete + re-spawn.
+   - `ErrJsonlMissing` otherwise — the persisted path was set and has
+     rotted, or the visible history is non-empty and none of its
+     transcripts exists. Recourse: `delete` + fresh `spawn`.
 
    Both messages report each path tried with its source (`persisted`,
-   `fallback`, or `history`) and its stat error (see
+   `fallback`, or `history`) and its stat error; every path named comes
+   from the current session's own two candidates or the current life's
+   visible history (see
    [JSONL path resolver](#jsonl-path-resolver-internalspawnjsonlgo)).
 5. Canonical tmux session name is free → otherwise the wrapped
    `tmux.ErrTmuxSessionCreate` sentinel. Resume does NOT auto-kill
@@ -2560,14 +2602,16 @@ as a chance to clear `ended_at`:
 - Fresh spawn `pending → waiting`: `ended_at` was already NULL; the
   `ended_at = NULL` write is a no-op.
 - Resurrection `ended/missing → waiting`: `ended_at` is cleared so
-  the row's metadata reflects the active life rather than the dead
-  past.
+  the row's metadata reflects the running agent rather than the ended
+  launch. A resume does not start a new life: the row keeps its
+  `life_number`.
 
 `claude_session_id` is overwritten by the same hook payload's
 `transcript_path` basename. Claude Code rotates the UUID on every
 `--resume`, so the column carries the freshly-rotated value after
-the hook fires — the next resume from THIS resurrected lifetime uses
-the new id, pointing at the new JSONL.
+the hook fires — the next resume of this resumed launch uses
+the new id, pointing at the new JSONL. The rotation stays within the
+row's current life.
 
 **Conditional `jsonl_path` write (b.v2c AC1).** A fresh Claude session writes
 no `.jsonl` transcript until its first user turn, so the `transcript_path` the
@@ -2583,11 +2627,15 @@ row once the transcript appears (below).
 
 **Session-history archival on rotation (b.v2c AC6).** When the SessionStart
 payload carries a **different** `claude_session_id` than the row currently holds
-(a rotation — typically a CSCB fleet restart handing the bot a new session), the
+(a rotation — for example the agent restarted with a new session), the
 store archives the prior `(claude_session_id, jsonl_path)` pair into
 `session_history` **before** overwriting the `spawns` row with the new session.
-The earlier session's transcript is therefore never orphaned: it is reachable
-through `get`'s `prior_sessions` and is a resume fallback candidate.
+The archived pair is tagged with the row's life, read in the same statement as
+the outgoing session id and path, and written through
+`upsertSessionHistoryEntry`. The earlier session's transcript is therefore never
+orphaned: while the row stays in that life and the entry is not the row's
+current session id, it is reachable through `get`'s `prior_sessions` and is a
+resume fallback candidate.
 
 **Lazy transcript healing in `find-missing` (b.v2c AC3).** `find-missing`
 already sweeps every live row; on each sweep it also lists rows with a NULL
@@ -2945,10 +2993,11 @@ live state (`waiting`/`working`). Recovering a Spawn's conversation is a
    persisted `ExtraEnv` (auth/config, incl. `CLAUDE_CONFIG_DIR`) and
    replaying the JSONL transcript. The transcript is located by the
    [pre-flight precedence](#verb-pkgapiresumego) (persisted `jsonl_path`,
-   then the `CLAUDE_CONFIG_DIR`-aware fallback, then any archived
-   `session_history` transcript), which is what lets a Spawn that ran under
-   a custom config dir — or whose session rotated on a fleet restart —
-   recover across a reboot.
+   then the `CLAUDE_CONFIG_DIR`-aware fallback, then any transcript of the
+   row's visible history: the current life's archived `session_history`
+   entries, minus the entry for the row's current session id), which is
+   what lets a Spawn that ran under a custom config dir — or whose session
+   rotated when its agent restarted — recover across a reboot.
 
 ```
 agent-director find-missing        # reconcile frozen rows → missing
@@ -2959,17 +3008,23 @@ agent-director resume --claude-instance-id <id>   # relaunch each
 ways, and the errors mean different things:
 
 - `ErrJsonlNeverWritten` — the row has a session id but no transcript was ever
-  written (persisted `jsonl_path` NULL and no archived session history). This is
-  the freshly-restarted, un-messaged bot: a fresh Claude session writes no
-  `.jsonl` until its first user turn. There is genuinely nothing to resume;
-  message the bot (its transcript then appears and `find-missing` heals the row)
+  written in its current life (persisted `jsonl_path` NULL and an empty
+  visible history: no archived session of the current life other than the
+  row's current session id). This is a freshly restarted agent the caller has
+  not yet messaged: a fresh Claude session writes no `.jsonl` until its first
+  user turn. There is genuinely nothing to resume; the caller messages the
+  agent (its transcript then appears and `find-missing` heals the row)
   or `delete` + re-spawn.
-- `ErrJsonlMissing` — a path was once recorded or composed (or history exists)
-  and has since rotted. Recovery is `delete` + fresh `spawn`.
+- `ErrJsonlMissing` — the persisted path was recorded and has since rotted, or
+  the visible history is non-empty and none of its transcripts exists. The
+  paths it names all come from the current life. Recovery is `delete` + fresh
+  `spawn`.
 
 `get`'s `transcript_status` field surfaces this distinction **before** a resume
-is attempted: `never_written`, `rotated` (history exists under a different
-session id — see `prior_sessions`), `present`, or `no_session`.
+is attempted: `never_written`, `rotated` (the current life's visible history
+is non-empty, i.e. history exists under a different session id — see
+`prior_sessions`, which lists that visible history), `present`, or
+`no_session`.
 
 **Recovering a pre-v4 orphaned transcript (manual).** When a session rotated and
 intact history was stranded under an earlier session id that the store does not
@@ -2982,8 +3037,9 @@ that can no longer occur is a bad trade). Instead, the
 (`.claude/skills/repair-orphaned-transcript/`) walks an operator (or an LLM)
 through locating the orphaned transcript across both config dirs and issuing the
 single-transaction SQL that archives the row's current
-`(claude_session_id, jsonl_path)` pair into `session_history` and re-points the
-row. Post-v4 rotations self-archive and need no repair.
+`(claude_session_id, jsonl_path)` pair into `session_history`, as an entry of
+the row's current life, and re-points the row. Post-v4 rotations self-archive
+and need no repair.
 
 **`delete` is NOT a recovery step.** It is destructive: it removes the
 row along with its `claude_session_id`, labels, and `extra_env`, making
@@ -3001,9 +3057,11 @@ contract **starts at** "the caller invokes `find-missing` then
 unit, a startup script, a `find-missing` cron loop — is owned and
 operated by the caller, not by agent-director. Before reaching for `delete`
 after a failed resume, check `get`'s `transcript_status` and `prior_sessions`:
-`rotated` means history is recoverable — a plain `resume` now walks archived
-sessions and reattaches automatically — and `never_written` means the bot simply
-hasn't been messaged yet; neither warrants a destructive delete.
+`rotated` means the current life's visible history is non-empty and may be
+recoverable — a plain `resume` walks the current life's archived sessions
+(minus the row's current session id) and reattaches automatically — and
+`never_written` means the caller simply hasn't messaged the agent yet; neither
+warrants a destructive delete.
 
 ## Stop semantics
 
@@ -3829,6 +3887,14 @@ unchanged. When two options set the same column, the later one wins.
 - Raw JSON columns: `WithRawLabels(text)`, `WithRawClaudeArgs(text)` and
   `WithRawExtraEnv(text)`, each stored byte for byte. `WithRawExtraEnv` and
   `WithExtraEnv` write the same column.
+- Session history: `WithSessionHistory(entry SessionHistorySeed)` seeds one
+  archived `session_history` entry per use: `SessionID` (it may equal the
+  row's current session id), `JSONLPath` (empty stores NULL), the `Life` it
+  belongs to (need not be the row's life) and an optional `RecordedAt`
+  (stored as UTC whole seconds; zero takes the store's default, the current
+  time). Two entries with the same session id for one row are a `SeedSpawn`
+  error, never an overwrite. Without the option no history is seeded; history
+  is otherwise seeded only through the hook path (a session rotation).
 - Existing v3 options: `WithPID`, `WithProcStarttime` (use
   `LinuxProcStarttime` / `DarwinProcStarttime`), `WithJsonlPath`,
   `WithExtraEnv`, `WithLivenessUnverifiedSince`, `WithLivenessNote`.
@@ -3857,9 +3923,14 @@ unchanged. When two options set the same column, the later one wins.
   gets the same pane, so two live rows on one socket that both need a
   Recorder session must set distinct panes with `WithLaunchIdentity`.
 
-The options and defaults are applied by raw UPDATEs in one transaction,
-after the store's `InsertPending` / `RecordSessionStartIdentity` /
-`ApplyHookTransition` sequence. Those UPDATEs do not advance `row_version`.
+The options and defaults are applied by apitest-internal SQL in one
+transaction, after the store's `InsertPending` / `RecordSessionStartIdentity` /
+`ApplyHookTransition` sequence: one UPDATE writes the options and defaults;
+for a `pending` row with no launch-start option a second UPDATE sets the
+default launch start; then each `WithSessionHistory` entry is INSERTed into
+`session_history` in seeding order, so with no stated `RecordedAt` a
+later-seeded entry reads as newer. None of these statements advances
+`row_version`.
 
 **Seeding and `row_version`.** The store calls in that sequence are versioned
 writes (see `internal/store`, "Versioned writes"): `InsertPending` starts at
@@ -3917,8 +3988,8 @@ values, except for a row the test inserted itself.
   seeders.
 - They read columns that `status`/`get`/`list` do not expose through
   `ReadSpawnColumns`, and history through `ReadSessionHistoryAllLives`.
-- They seed history only through the hook path (a session rotation), never
-  by writing `session_history`.
+- They seed history only through `WithSessionHistory` or the hook path (a
+  session rotation), never by writing `session_history`.
 - A test that needs a seeded row's own session in the Recorder uses
   `tmuxfix.Recorder.SeedRowSession`. It never reads a row's launch token or
   spells one by hand (SR-20.2).

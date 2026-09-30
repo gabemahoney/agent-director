@@ -73,12 +73,15 @@ func SeedErrSpawnNotInteractive(t *testing.T) (*store.Store, string) {
 }
 
 // SeedErrJsonlMissing returns a store with one ended spawn whose current session
-// has a NULL jsonl_path AND at least one ARCHIVED prior session (also with no
+// has a NULL jsonl_path AND a non-empty visible history — one ARCHIVED prior
+// session of the row's current life under a different session id (also with no
 // live transcript). resume on this spawn triggers ErrJsonlMissing — the b.v2c
 // AC2 meaning "a path was recorded/composed and has rotted" — because the row
-// HAS history to have lost, which is what distinguishes it from
-// ErrJsonlNeverWritten (NULL path AND no history at all). The calling test must
-// NOT create any JSONL under HOME.
+// HAS visible history to have lost, which is what distinguishes it from
+// ErrJsonlNeverWritten (NULL path AND an empty visible history). Session
+// history belongs to a life; the visible history is the current life's history
+// minus the entry for the row's current session id. The calling test must NOT
+// create any JSONL under HOME.
 //
 // The archived session is produced through the real rotation path: a first
 // SessionStart records session "sess-err-jm-0", then a second SessionStart with
@@ -99,10 +102,12 @@ func SeedErrJsonlMissing(t *testing.T) (*store.Store, string) {
 }
 
 // SeedErrJsonlNeverWritten returns a store with one ended spawn whose current
-// session has a NULL jsonl_path and NO archived history — the b.v2c
-// freshly-restarted, un-messaged case. resume triggers ErrJsonlNeverWritten
-// (not ErrJsonlMissing): nothing was ever written for this instance. The calling
-// test must NOT create any JSONL under HOME.
+// session has a NULL jsonl_path and an empty visible history (no archived
+// session of the row's current life other than its current session id) — the
+// b.v2c case of a freshly restarted agent that has not been messaged. resume
+// triggers ErrJsonlNeverWritten (not ErrJsonlMissing): nothing was ever
+// written in the current life. The calling test must NOT create any JSONL
+// under HOME.
 func SeedErrJsonlNeverWritten(t *testing.T) (*store.Store, string) {
 	t.Helper()
 	s, dbPath := openErrStore(t)

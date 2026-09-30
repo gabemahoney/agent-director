@@ -57,11 +57,16 @@ var ErrNoSessionId = errors.New("ErrNoSessionId")
 // ErrJsonlMissing is returned by the resume verb when NO candidate
 // JSONL transcript path stats successfully on disk. Resume tries the
 // persisted jsonl_path first, then a CLAUDE_CONFIG_DIR-aware fallback
-// recomputed from the row's ExtraEnv (bug b.1ba); this sentinel fires
-// only when every candidate fails. The file may have been hand-deleted,
-// archived by the operator, or never written. The error message names
-// every path tried and its source (persisted vs fallback) with the
-// stat error for each, so callers can log which candidates failed —
+// recomputed from the row's ExtraEnv (bug b.1ba), then each entry of the
+// row's visible history, newest first (its recorded path, then its
+// recomputed fallback); this sentinel fires only when every candidate
+// fails. It is decided on the current life's history: session history
+// belongs to a life, and the visible history is the current life's
+// history minus the entry for the row's current session id. The file may
+// have been hand-deleted, archived by the operator, or never written. The
+// error message names every path tried and its source (persisted,
+// fallback or history; all from the current life) with the stat error for
+// each, so callers can log which candidates failed —
 // the error NAME is stable, so name-based mapping is unaffected.
 // Resume cannot proceed; `delete` + fresh `spawn` is the recourse.
 var ErrJsonlMissing = errors.New("ErrJsonlMissing")
@@ -70,9 +75,13 @@ var ErrJsonlMissing = errors.New("ErrJsonlMissing")
 // claude_session_id but no transcript has EVER been written for it — the
 // persisted jsonl_path is NULL (the SessionStart hook found no file on disk),
 // the CLAUDE_CONFIG_DIR-aware fallback path also does not exist, and the
-// instance has no archived session history to fall back on. This is the b.v2c
-// "freshly-restarted, un-messaged bot" case: a fresh Claude session writes no
-// .jsonl until its first user turn, so there is genuinely nothing to resume.
+// row's visible history is empty, so there is nothing to fall back on. It is
+// decided on the current life's history: session history belongs to a life,
+// and the visible history is the current life's history minus the entry for
+// the row's current session id, so that entry never counts as history. This
+// is the b.v2c case of a freshly restarted agent that has not been messaged:
+// a fresh Claude session writes no .jsonl until its first user turn, so there
+// is genuinely nothing to resume.
 //
 // It is deliberately distinct from ErrJsonlMissing, whose meaning is
 // "candidates were tried and none matched" — a path was once recorded (or

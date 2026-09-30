@@ -394,13 +394,16 @@ agent-director resume --claude-instance-id <id>
 `find-missing` has already marked `missing`. `resume` relaunches under
 the same id and restores the session's env and conversation transcript.
 
-`resume` also recovers history from a session that rotated (for example when a
-bot fleet was restarted and Claude handed the session a new id) — it falls back
-to the session's earlier transcripts automatically. If `resume` reports that no
-transcript was ever written, the session simply hasn't been messaged yet; send
-it a message and its transcript appears. Run `agent-director get
---claude-instance-id <id>` to see a session's `transcript_status` and its prior
-sessions before deciding anything.
+`resume` also recovers history from a session that rotated (for example when
+agents were restarted and Claude handed the session a new id) — it falls back
+to the session's earlier transcripts automatically. A session's history
+belongs to the life of its id, which starts at the spawn that created it:
+`resume` falls back only to earlier transcripts of that life. If `resume`
+reports that no transcript was ever written, the session simply hasn't been
+messaged yet; send it a message and its transcript appears. Run
+`agent-director get --claude-instance-id <id>` to see a session's
+`transcript_status` and its prior sessions — the earlier sessions of the
+current life, not the current one — before deciding anything.
 
 Session rotations are archived automatically, so `resume` recovers them on
 its own — no manual step is needed.

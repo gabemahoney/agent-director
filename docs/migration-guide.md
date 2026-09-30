@@ -243,6 +243,19 @@ socket and server/pane identity. There are no special cases: no row or entry is
 treated differently for its state, its history or its origin, and no existing
 value is rewritten.
 
+Session history belongs to a life: each `session_history` entry carries the
+life of the id that was current when its session ran, and after the v5 hop
+every existing entry is in its row's current life (life 0). `resume`
+and `get` read only the visible history — the entries of the row's current
+life, minus the entry for the row's current session id. The migration
+therefore changes nothing those verbs read for an existing row. The one
+visible difference for existing rows comes from that current-session rule,
+which this release applies to every row, not from the migration: a row whose
+history holds its current session id no longer lists that entry in `get`'s
+`prior_sessions`, and `resume` no longer tries a path recorded only on that
+entry (the current session's own persisted path and recomputed fallback are
+still tried).
+
 **Phase 4 — stamp `user_version`.** The **last** statement in the transaction,
 via the `fmt.Sprintf` form from §1. Stamping last guarantees the version only
 advances once every preceding statement succeeded.

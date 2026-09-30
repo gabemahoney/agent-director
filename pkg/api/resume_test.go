@@ -22,8 +22,9 @@ type recordingResumeStore struct {
 	setParentErr   error
 	setParentArgs  [2]string
 	setParentCalls int
-	// history is returned by ListSessionHistory (b.v2c AC6). Nil = no archived
-	// sessions, which is the default existing tests rely on.
+	// history is returned by ListSessionHistory (b.v2c AC6) whatever the life
+	// requested. Nil = no archived sessions, which is the default existing tests
+	// rely on.
 	history    []store.SessionHistoryEntry
 	historyErr error
 	// historyLives records the life passed to each ListSessionHistory call.
@@ -178,8 +179,9 @@ func TestResumeJsonlMissingReturnsErrJsonlMissing(t *testing.T) {
 
 // TestResumeNeverWrittenReturnsErrJsonlNeverWritten pins the b.v2c AC2 sentinel
 // split from the resume side: a row with a session id but a NULL jsonl_path and
-// NO archived session history has genuinely never produced a transcript (the
-// freshly-restarted, un-messaged bot). Resume must return ErrJsonlNeverWritten,
+// an empty visible history (the current life's entries minus the entry for the
+// current session id) has genuinely never produced a transcript (a freshly
+// restarted agent that has not been messaged). Resume must return ErrJsonlNeverWritten,
 // NOT ErrJsonlMissing, so an operator can tell "nothing was ever written" apart
 // from "history existed but the file is gone".
 //
@@ -659,7 +661,7 @@ func TestResumeBothCandidatesAbsentReturnsErrJsonlMissing(t *testing.T) {
 }
 
 // TestResumeNullPathBothAbsentReportsSingleFallback covers the AC 4 variant
-// where jsonl_path is NULL and no history exists: the row never produced a
+// where jsonl_path is NULL and the visible history is empty: the row never produced a
 // transcript, so the sentinel is ErrJsonlNeverWritten (b.v2c AC2). The message
 // must still carry exactly one attempt — the fallback — with no spurious
 // persisted entry.
