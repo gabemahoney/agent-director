@@ -149,7 +149,10 @@ func heldNameOutcome(res tmux.Result, instanceID, name, socket, rowSentence, ret
 
 // heldHolderFacts returns res's holder facts (heldNameHolder): identified
 // when exactly one session holds the name, with its class only when the
-// verdict is not Can't tell.
+// verdict is not Can't tell. It is the one derivation of the holder/null rules
+// for ad.launch.name_held (SR-14), builds no error and makes no call: plain
+// spawn reaches it through heldNameOutcome, and find-missing calls it on a
+// row's lookup Result directly (SR-11.3).
 func heldHolderFacts(res tmux.Result) heldNameHolder {
 	if res.Holder == nil || res.HolderAmbiguous {
 		return heldNameHolder{}

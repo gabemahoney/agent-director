@@ -70,7 +70,7 @@ func TestFindMissingPendingGraceTrail(t *testing.T) {
 				pc.Set(kind.identity.pid(), kind.proc)
 				before := len(readAPITrailLines(t))
 
-				res, err := runFindMissing(st, pc, fmSweep{now: trailClock(launchAt.Add(age.age))})
+				res, err := runFindMissing(st, pc, fmSweep{now: trailClock(launchAt.Add(age.age)), tmux: fmCantTell()})
 				if err != nil {
 					t.Fatalf("FindMissing: %v", err)
 				}

@@ -44,10 +44,6 @@ func SetPauseTestKnobs(interval time.Duration, sleeper func(time.Duration)) {
 // can drive the production client api.New wired from the [tmux] config.
 func TmuxClientOf(c *Client) TmuxClient { return c.tmuxClient }
 
-// FindMissing exposes the unexported findMissingImpl for white-box unit tests
-// in package api_test. External callers use (c *Client).FindMissing instead.
-var FindMissing = findMissingImpl
-
 // Resume exposes the unexported resumeImpl for white-box unit tests in
 // package api_test. External callers use (c *Client).Resume instead.
 var Resume = resumeImpl

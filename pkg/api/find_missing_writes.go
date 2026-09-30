@@ -17,8 +17,11 @@ import (
 // The ad.find_missing.tick event, its source and the values these writers
 // compare or write (SR-11.4, SR-14).
 const (
-	findMissingTickEvent  = "ad.find_missing.tick"
-	findMissingTickSource = "ad_find_missing"
+	findMissingTickEvent = "ad.find_missing.tick"
+	// findMissingTickSource is the sweep's one source value
+	// (nameHeldSourceFindMissing), shared by its ticks, its
+	// ad.provenance.disagree records and its ad.launch.name_held records.
+	findMissingTickSource = nameHeldSourceFindMissing
 	// noteProvenanceConflict is the liveness note whose every entry, from no
 	// note or from a different one, ticks (SR-11.4).
 	noteProvenanceConflict = "provenance_conflict"

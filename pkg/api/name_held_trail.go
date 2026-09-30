@@ -9,10 +9,14 @@ import (
 )
 
 // The ad.launch.name_held source values (SR-14). Plain spawn and reuse write
-// nameHeldSourceSpawn; resume (Epic 16) and find-missing's sweep (Epic 14)
-// add theirs here.
+// nameHeldSourceSpawn; find-missing's sweep writes nameHeldSourceFindMissing
+// after a mark attempt whose tick reason is tmux_name_held (SR-11.3); resume
+// (Epic 16) adds its own here. nameHeldSourceFindMissing is also the source of
+// every other record the sweep writes (ad.find_missing.tick,
+// ad.provenance.disagree): pkg/api declares the value only here.
 const (
-	nameHeldSourceSpawn = "ad_spawn"
+	nameHeldSourceSpawn       = "ad_spawn"
+	nameHeldSourceFindMissing = "ad_find_missing"
 )
 
 // The ad.launch.name_held launch values (SR-14): which launch's create
@@ -25,12 +29,19 @@ const (
 // The ad.launch.name_held row_result values (SR-14). Plain spawn's
 // conditional end write after "duplicate session" gives one of the first
 // three (SR-5.8, SR-9.4); the label scan's refusal, which runs before the
-// insert, gives nameHeldRowNotInserted (SR-9.3).
+// insert, gives nameHeldRowNotInserted (SR-9.3). find-missing's guarded mark
+// with tick reason tmux_name_held gives nameHeldRowMarkedMissing when it
+// applied, nameHeldRowLeftChanged when the same-life guard did not apply, and
+// nameHeldRowStillPending (with store_error) on a store error (SR-11.3,
+// SR-11.6, SR-5.8). nameHeldRowMarkedMissing is also find-missing's
+// ad.provenance.disagree action for a marked row (findMissingActionMarked):
+// pkg/api declares the value only here.
 const (
-	nameHeldRowEnded        = "ended"
-	nameHeldRowLeftChanged  = "left_changed"
-	nameHeldRowStillPending = "still_pending"
-	nameHeldRowNotInserted  = "not_inserted"
+	nameHeldRowEnded         = "ended"
+	nameHeldRowLeftChanged   = "left_changed"
+	nameHeldRowStillPending  = "still_pending"
+	nameHeldRowNotInserted   = "not_inserted"
+	nameHeldRowMarkedMissing = "marked_missing"
 )
 
 // nameHeld is one ad.launch.name_held record's content (SR-14): everything
@@ -39,10 +50,11 @@ const (
 // id a label names, another store's id, another row's id or any
 // session-environment content (SR-15, SR-3.12).
 type nameHeld struct {
-	// Source is the trail source (nameHeldSourceSpawn, ...).
+	// Source is the trail source (nameHeldSourceSpawn,
+	// nameHeldSourceFindMissing, ...).
 	Source string
 	// Launch is the launch kind (nameHeldLaunchSpawn, ...); "" writes null
-	// (the sweep).
+	// (find-missing's sweep, which launches nothing).
 	Launch string
 	// InstanceID is the launch's claude_instance_id.
 	InstanceID string
@@ -54,14 +66,16 @@ type nameHeld struct {
 	// StoreID is this store's store_meta.store_id as the Client read it,
 	// never a label's.
 	StoreID string
-	// Holder is the re-lookup's holder facts (heldNameHolder). When no single
+	// Holder is the holder facts (heldHolderFacts) of the lookup that saw the
+	// name held: plain spawn's re-lookup, or find-missing's per-row lookup
+	// with the row's recorded name as the holder name. When no single
 	// holder was identified the session id, creation time and both commands
 	// are null; a zero Class makes carries_this_id and current_launch null.
 	Holder heldNameHolder
 	// LookupOutcome is the lookup Result's token unchanged (tmux.Result.Token).
 	LookupOutcome string
 	// Err is the error the verb returned, named through errorName; nil
-	// writes null (the sweep).
+	// writes null (find-missing's sweep, which returns no per-row error).
 	Err error
 	// RowResult is the row's result (nameHeldRowEnded, ...); "" writes null.
 	RowResult string
@@ -79,9 +93,13 @@ type nameHeld struct {
 // SR-3.12), fail-open: a trail-write failure is discarded and never changes
 // the verb's result, error or description (the ad.kill.called pattern). It is
 // the one emitter of the event: plain spawn's label scan (pkg/api
-// spawn_scan.go) and its "duplicate session" path call it today; find-missing
-// (Epic 14), resume (Epic 16) and reuse (Epic 17) add their sources through
-// it.
+// spawn_scan.go) and its "duplicate session" path call it, and find-missing
+// calls it once per row after a mark attempt whose tick reason is
+// tmux_name_held (SR-11.3) with source nameHeldSourceFindMissing, no launch
+// kind and no error (launch and outcome null), row_result
+// nameHeldRowMarkedMissing, nameHeldRowLeftChanged or nameHeldRowStillPending,
+// and the Client's store id; resume (Epic 16) and reuse (Epic 17) add their
+// sources through it.
 //
 // carries_this_id and current_launch come from the holder's label class
 // only, never the environment (SR-3.12): an old or current label of this

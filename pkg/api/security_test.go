@@ -3,10 +3,11 @@ package api_test
 // security_test.go is SR-15's secret and other-row-id test: beside the row a
 // verb acts on, a no-id session and another row's session each carry
 // SECRET=xyz (in their create's environment and their pane processes'), and
-// neither xyz, the other row's id nor another store's id may appear in the
-// verb's result, error description, client log or trail. It is a per-verb
-// table (kill first, Epic 10; plain spawn's held name, Epic 13; later Epics
-// add their verbs).
+// neither xyz, a row's launch token (so no label value), the other row's id
+// nor another store's id may appear in the verb's result, error description,
+// client log or trail. It is a per-verb table (kill first, Epic 10; plain
+// spawn's held name, Epic 13; find-missing's lookup, Epic 14, in
+// security_find_missing_test.go; later Epics add their verbs).
 
 import (
 	"encoding/json"
@@ -51,27 +52,33 @@ type securityScene struct {
 }
 
 // securityCase is one arrangement of a verb: the target row's spec, who holds
-// its name, extra setup, and the expected error (nil: success) and description.
+// its name, the socket's server before the planted sessions are created,
+// extra setup, the expected error (nil: success) and description, and the
+// record the call writes once for the subject with field values it carries.
 type securityCase struct {
 	name     string
 	target   killRowSpec
 	holder   securityHolder
+	server   func(e *killEnv, socket string) // nil: the target's recorded server
 	arrange  func(t *testing.T, s *securityScene)
 	wantErr  error
 	desc     func(s *securityScene) apitest.DescCase
-	disagree bool // the call writes at least one ad.provenance.disagree record
+	disagree bool           // the call writes at least one ad.provenance.disagree record
+	event    string         // the record written once for the subject; "": the verb's event
+	fields   map[string]any // values that record carries (nil: not checked)
 }
 
 // securityVerb is one verb under SR-15: its call through the Client on the
 // scene's subject, the trail event it writes once per call, extra checks of
-// that record (nil: none), and its arrangements. A launch verb acts on a
-// fresh id on target's socket, requesting target's name, and makes one create.
+// that record against the call's texts (description, client log, result;
+// nil: none), and its arrangements. A launch verb acts on a fresh id on
+// target's socket, requesting target's name, and makes one create.
 type securityVerb struct {
 	verb   string
 	event  string
 	launch bool
 	call   func(t *testing.T, c *api.Client, s *securityScene) (any, error)
-	record func(t *testing.T, s *securityScene, rec map[string]any, desc, logs string)
+	record func(t *testing.T, s *securityScene, rec map[string]any, texts map[string]string)
 	cases  []securityCase
 }
 
@@ -96,8 +103,14 @@ var securityVerbs = []securityVerb{{
 		return c.Spawn(api.SpawnParams{CWD: t.TempDir(), ClaudeInstanceID: s.subject,
 			TmuxSessionName: s.target.Name, TmuxSessionNameSupplied: true})
 	},
-	record: securitySpawnRecord,
+	record: securityNameHeldRecord,
 	cases:  securitySpawnCases,
+}, {
+	verb:   "find-missing",
+	event:  "ad.launch.name_held",
+	call:   securityFindMissingCall,
+	record: securityFindMissingRecord,
+	cases:  securityFindMissingCases,
 }}
 
 // securityKillCases meet the planted sessions on kill's Gone, Leftover,
@@ -235,6 +248,10 @@ func newSecurityScene(t *testing.T, v securityVerb, c securityCase) *securitySce
 	s.other = e.seedRow(t, killRowSpec{NoSession: true})
 	e.pc.Set(s.other.AgentPID, procfix.Alive(s.other.AgentStart).WithEnv(securityEnv()))
 	e.ensureServer(&s.target)
+	if c.server != nil {
+		c.server(e, s.target.Socket)
+		e.syncServers()
+	}
 	noIDName, otherName := "noid-"+uuid.NewString()[:8], s.other.Name
 	switch c.holder {
 	case securityHolderNoID:
@@ -266,10 +283,11 @@ func securityCreate(t *testing.T, e *killEnv, socket, name, token, id, storeID s
 	return reply.SessionID
 }
 
-// securityForbidden are the values nothing may carry: the secret, the other
-// row's id and another store's id.
+// securityForbidden are the values nothing may carry: the secret, both rows'
+// launch tokens (a label's content), the other row's id and another store's
+// id.
 func securityForbidden(s *securityScene) []string {
-	return []string{securitySecret, s.other.ID, apitest.OtherStoreID(s.e.storeID)}
+	return []string{securitySecret, s.target.Token, s.other.Token, s.other.ID, apitest.OtherStoreID(s.e.storeID)}
 }
 
 // securityAbsent fails when text carries a securityForbidden value.
@@ -283,8 +301,8 @@ func securityAbsent(t *testing.T, what, text string, s *securityScene) {
 }
 
 // TestSecuritySecretAndOtherRowID checks SR-15 for every verb in the table:
-// no result, description, log line or trail record carries xyz, the other
-// row's id or another store's id.
+// no result, description, log line or trail record carries xyz, a launch
+// token, the other row's id or another store's id.
 func TestSecuritySecretAndOtherRowID(t *testing.T) {
 	for _, v := range securityVerbs {
 		for _, c := range v.cases {
@@ -310,9 +328,19 @@ func TestSecuritySecretAndOtherRowID(t *testing.T) {
 				}
 				securityAbsent(t, "result", string(out), s)
 				securityAbsent(t, "client log", logs.String(), s)
-				rec := securityCheckTrail(t, v.event, s, readAPITrailLines(t)[before:], c.disagree)
-				if v.record != nil && rec != nil {
-					v.record(t, s, rec, desc, logs.String())
+				event := v.event
+				if c.event != "" {
+					event = c.event
+				}
+				if rec := securityCheckTrail(t, event, s, readAPITrailLines(t)[before:], c.disagree); rec != nil {
+					for k, want := range c.fields {
+						if got, ok := rec[k]; !ok || got != want {
+							t.Errorf("%s: %s = %v (present %t); want %v", event, k, got, ok, want)
+						}
+					}
+					if v.record != nil {
+						v.record(t, s, rec, map[string]string{"description": desc, "client log": logs.String(), "result": string(out)})
+					}
 				}
 				securityCheckReads(t, s, v.launch)
 			})
@@ -350,10 +378,11 @@ func securityCheckTrail(t *testing.T, event string, s *securityScene, lines []ma
 	return called[0]
 }
 
-// securitySpawnRecord checks spawn's ad.launch.name_held record: this
-// store's store_id, a boolean carries_this_id, and by-hand commands for the
-// identified holder that neither the description nor the client log carries.
-func securitySpawnRecord(t *testing.T, s *securityScene, rec map[string]any, desc, logs string) {
+// securityNameHeldRecord checks an ad.launch.name_held record: this store's
+// store_id, a boolean carries_this_id, and by-hand commands for the
+// identified holder that none of texts (description, client log, result)
+// carries.
+func securityNameHeldRecord(t *testing.T, s *securityScene, rec map[string]any, texts map[string]string) {
 	t.Helper()
 	if rec["store_id"] != s.e.storeID {
 		t.Errorf("store_id = %v; want this store's %q", rec["store_id"], s.e.storeID)
@@ -370,7 +399,7 @@ func securitySpawnRecord(t *testing.T, s *securityScene, rec map[string]any, des
 		}
 		leaks = append(leaks, cmd)
 	}
-	for what, text := range map[string]string{"description": desc, "client log": logs} {
+	for what, text := range texts {
 		for _, v := range leaks {
 			if strings.Contains(text, v) {
 				t.Errorf("%s carries the by-hand command text %q: %s", what, v, text)

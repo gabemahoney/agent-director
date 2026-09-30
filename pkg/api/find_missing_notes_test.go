@@ -29,12 +29,13 @@ func ticksSince(t *testing.T, before int, id string) []map[string]any {
 	return out
 }
 
-// sweepFake runs one sweep of st judged by pc and returns the result, the log and the trail checkpoint taken before it.
+// sweepFake runs one sweep of st judged by pc, with no tmux call (spent budget: rows reaching the lookup are not
+// called), and returns the result, the log and the trail checkpoint taken before it.
 func sweepFake(t *testing.T, st *fakeFindMissingStore, pc *procfix.Checker) (api.FindMissingResult, *recordingLogger, int) {
 	t.Helper()
 	before := len(readAPITrailLines(t))
 	lg := &recordingLogger{}
-	res, err := runFindMissing(st, pc, fmSweep{lg: lg})
+	res, err := runFindMissing(st, pc, fmSweep{lg: lg, budget: fmBudgetSpent})
 	if err != nil {
 		t.Fatalf("FindMissing: %v", err)
 	}
@@ -304,12 +305,13 @@ func paneChecker(p procfix.Process) *procfix.Checker {
 	return pc
 }
 
-// sweepReal runs one sweep of s judged by pc and returns the result, the log and the trail checkpoint.
+// sweepReal runs one sweep of s judged by pc, with no tmux call (spent budget), and returns the result, the log
+// and the trail checkpoint.
 func sweepReal(t *testing.T, s api.FindMissingStore, pc *procfix.Checker) (api.FindMissingResult, *recordingLogger, int) {
 	t.Helper()
 	before := len(readAPITrailLines(t))
 	lg := &recordingLogger{}
-	res, err := runFindMissing(s, pc, fmSweep{lg: lg})
+	res, err := runFindMissing(s, pc, fmSweep{lg: lg, budget: fmBudgetSpent})
 	if err != nil {
 		t.Fatalf("FindMissing: %v", err)
 	}

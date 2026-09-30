@@ -63,7 +63,8 @@ func seedCase(t *testing.T, f *v5Store, c rowVersionCase) string {
 // MoveToPending and RestoreAfterFailedResume write launch_token and
 // tmux_socket (c.writesToken). The six identity columns (identityColumns) are
 // kept too, except by RecordLaunchIdentity, AdoptIdentityIfUnchanged,
-// MoveToPending and RestoreAfterFailedResume, which write them (c.identity).
+// AdoptIdentityIfSameLife, MoveToPending and RestoreAfterFailedResume, which
+// write them (c.identity).
 func stableColumns(c apitest.SpawnColumns) map[string]any {
 	return map[string]any{
 		"life_number": c.LifeNumber, "no_pre_trust": c.NoPreTrust,

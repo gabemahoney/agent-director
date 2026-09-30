@@ -1,10 +1,12 @@
 package api_test
 
 // find_missing_trail_test.go: the trail records find-missing writes on the
-// process path (SR-11.1, SR-11.3, SR-11.4, SR-3.8, SR-14). Each test sweeps a
-// real store seeded through apitest.SeedSpawn, judged by procfix, and asserts
-// on the trail lines added since a checkpoint. TestMain (example_main_test.go)
-// points the trail at apiTrailDir. The pending grace period's trail side is in
+// process path (SR-11.1, SR-11.3, SR-11.4, SR-3.8, SR-14), and the trail
+// helpers the find-missing tests share. Each test sweeps a real store seeded
+// through apitest.SeedSpawn, judged by procfix, and asserts on the trail
+// lines added since a checkpoint. TestMain (example_main_test.go) points the
+// trail at apiTrailDir. The ticks of rows the tmux lookup decides are in
+// find_missing_trail_tmux_test.go, the pending grace period's trail side in
 // find_missing_grace_trail_test.go.
 
 import (
@@ -140,6 +142,16 @@ func seedTrailStore(t *testing.T, rows ...trailRow) (*store.Store, string) {
 	return st, dbPath
 }
 
+// recordedName is the row id's recorded tmux session name in st.
+func recordedName(t *testing.T, st *store.Store, id string) string {
+	t.Helper()
+	sp, err := st.GetSpawn(id)
+	if err != nil {
+		t.Fatalf("GetSpawn %s: %v", id, err)
+	}
+	return sp.TmuxSessionName
+}
+
 // trailOf keeps the lines of recs naming instance id.
 func trailOf(recs []map[string]any, id string) []map[string]any {
 	var out []map[string]any
@@ -151,20 +163,45 @@ func trailOf(recs []map[string]any, id string) []map[string]any {
 	return out
 }
 
+// tickExtras are the fields SR-11.4 adds to a mark tick by reason: lookup_outcome on the tmux path's ticks,
+// tmux_session_name on tmux_name_held's.
+var tickExtras = []string{"lookup_outcome", "tmux_session_name"}
+
+// assertTick fails unless tick is an ad_find_missing tick with reason: a mark from prior to missing, or (prior "")
+// a note with null states; it carries exactly extra of tickExtras, with those values.
+func assertTick(t *testing.T, tick map[string]any, reason, prior string, extra map[string]any) {
+	t.Helper()
+	assertAPITrailStr(t, tick, "reconciliation_reason", reason)
+	assertAPITrailStr(t, tick, "source", "ad_find_missing")
+	if prior != "" {
+		assertAPITrailStr(t, tick, "prior_state", prior)
+		assertAPITrailStr(t, tick, "new_state", store.StateMissing)
+	} else {
+		for _, k := range []string{"prior_state", "new_state"} {
+			if v, ok := tick[k]; !ok || v != nil {
+				t.Errorf("[%s] = %v (present %v); want null", k, v, ok)
+			}
+		}
+	}
+	if ts, ok := tick["ts"].(string); !ok || !apiTSRe.MatchString(ts) {
+		t.Errorf("[ts] = %v; want RFC3339Nano timestamp", tick["ts"])
+	}
+	for _, k := range tickExtras {
+		got, has := tick[k]
+		want, wanted := extra[k]
+		if has != wanted || got != want {
+			t.Errorf("%s tick [%s] = %v (present %v); want %v (present %v)", reason, k, got, has, want, wanted)
+		}
+	}
+}
+
 // assertProcAbsentTick fails unless ticks is one proc_absent tick from prior to missing for id.
 func assertProcAbsentTick(t *testing.T, ticks []map[string]any, id, prior string) {
 	t.Helper()
 	if len(ticks) != 1 {
 		t.Fatalf("%s ticks = %v; want exactly one proc_absent", id, ticks)
 	}
-	tick := ticks[0]
-	assertAPITrailStr(t, tick, "reconciliation_reason", "proc_absent")
-	assertAPITrailStr(t, tick, "source", "ad_find_missing")
-	assertAPITrailStr(t, tick, "prior_state", prior)
-	assertAPITrailStr(t, tick, "new_state", store.StateMissing)
-	if ts, ok := tick["ts"].(string); !ok || !apiTSRe.MatchString(ts) {
-		t.Errorf("[ts] = %v; want RFC3339Nano timestamp", tick["ts"])
-	}
+	assertTick(t, ticks[0], "proc_absent", prior, nil)
 }
 
 // TestFindMissingProcAbsentEmitsTrail: a dead SessionStart or pane process gives its row one proc_absent tick;
@@ -259,53 +296,6 @@ func TestFindMissingIdentitiesDisagreePaneDecides(t *testing.T) {
 	}
 }
 
-// TestFindMissingUnverifiedNoteTicksOnce: a row whose process cannot decide gets one tick naming its note on
-// entry and none on a repeat sweep; it stays live and unverified on both (SR-11.4).
-func TestFindMissingUnverifiedNoteTicksOnce(t *testing.T) {
-	cases := []struct {
-		name string
-		row  trailRow
-		proc procfix.Process
-		note string
-	}{
-		{"unreadable process", trailRow{id: "un-unreadable", ssPID: 1301}, procfix.Unreadable(), "probe_eacces"},
-		{"pid-only pane alive", trailRow{id: "un-pid-only", panePID: 1302, pidOnly: true}, procfix.Alive(fmStart), "probe_eacces"},
-		{"no identity recorded", trailRow{id: "un-none"}, procfix.Gone(), "process_not_seen_tmux_unchecked"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			pc := procfix.New()
-			if pid := c.row.pid(); pid > 0 {
-				pc.Set(pid, c.proc)
-			}
-			st, _ := seedTrailStore(t, c.row)
-
-			for sweep, wantTicks := range []int{1, 0} {
-				before := trailLen(t)
-				res, err := runFindMissing(st, pc, fmSweep{})
-				if err != nil {
-					t.Fatalf("sweep %d: %v", sweep+1, err)
-				}
-				assertLists(t, res, nil, []string{c.row.id})
-				ticks := trailOf(apiFindMissingTicksAt(t, before), c.row.id)
-				if len(ticks) != wantTicks {
-					t.Fatalf("sweep %d ticks = %v; want %d", sweep+1, ticks, wantTicks)
-				}
-				if wantTicks == 0 {
-					continue
-				}
-				assertAPITrailStr(t, ticks[0], "reconciliation_reason", c.note)
-				assertAPITrailStr(t, ticks[0], "source", "ad_find_missing")
-				for _, k := range []string{"prior_state", "new_state"} {
-					if v, ok := ticks[0][k]; !ok || v != nil {
-						t.Errorf("[%s] = %v (present %v); want null", k, v, ok)
-					}
-				}
-			}
-		})
-	}
-}
-
 // TestFindMissingAllDeadNoDegradedModeSkip: when every recorded process is gone (after a reboot) every row is
 // marked with only proc_absent ticks; no refusal is recorded.
 func TestFindMissingAllDeadNoDegradedModeSkip(t *testing.T) {
@@ -328,67 +318,5 @@ func TestFindMissingAllDeadNoDegradedModeSkip(t *testing.T) {
 	// The removed guard's reason is assembled at runtime so a repo grep for the literal stays clean.
 	if got := apiTicksWithReason(apiFindMissingTicksAt(t, before), "degraded_mode"+"_skip"); len(got) != 0 {
 		t.Errorf("degraded-mode skip ticks = %v; want none", got)
-	}
-}
-
-// orderStore is a real store that notes the trail's line count when the mark returns and when the
-// permission-request close starts.
-type orderStore struct {
-	*store.Store
-	t                     *testing.T
-	afterMark, atClose    int
-	markCalls, closeCalls int
-}
-
-func (o *orderStore) MarkMissingIfSameLife(id string, examined store.RowSnapshot) (string, store.CondResult, error) {
-	prior, res, err := o.Store.MarkMissingIfSameLife(id, examined)
-	o.markCalls++
-	o.afterMark = trailLen(o.t)
-	return prior, res, err
-}
-
-func (o *orderStore) CloseOrphanedPermissionRequests(id string) error {
-	o.closeCalls++
-	o.atClose = trailLen(o.t)
-	return o.Store.CloseOrphanedPermissionRequests(id)
-}
-
-// TestFindMissingMarkOrderTrail: a dead row's proc_absent tick is written after the mark and before the
-// permission-request close, whose permission_orphan_closeout tick follows; the open request is denied.
-func TestFindMissingMarkOrderTrail(t *testing.T) {
-	const id = "ord-trail"
-	st, dbPath := seedTrailStore(t, trailRow{id: id, ssPID: 1501})
-	if _, err := apitest.SeedPermissionRequest(dbPath, id, "Bash"); err != nil {
-		t.Fatalf("SeedPermissionRequest: %v", err)
-	}
-	ord := &orderStore{Store: st, t: t}
-	before := trailLen(t)
-
-	res, err := runFindMissing(ord, procfix.New(), fmSweep{})
-	if err != nil {
-		t.Fatalf("FindMissing: %v", err)
-	}
-	assertLists(t, res, []string{id}, nil)
-	if ord.markCalls != 1 || ord.closeCalls != 1 {
-		t.Fatalf("mark calls = %d, close calls = %d; want 1, 1", ord.markCalls, ord.closeCalls)
-	}
-
-	var reasons []string
-	var at []int // trail line index of each of id's ticks
-	for i, rec := range readAPITrailLines(t) {
-		if i >= before && rec["event"] == "ad.find_missing.tick" && rec["claude_instance_id"] == id {
-			reason, _ := rec["reconciliation_reason"].(string)
-			reasons, at = append(reasons, reason), append(at, i)
-		}
-	}
-	if !slices.Equal(reasons, []string{"proc_absent", "permission_orphan_closeout"}) {
-		t.Fatalf("ticks = %v; want [proc_absent permission_orphan_closeout]", reasons)
-	}
-	if at[0] < ord.afterMark || at[0] >= ord.atClose || at[1] < ord.atClose {
-		t.Errorf("proc_absent at line %d, closeout at %d; mark returned at %d, close began at %d: want mark, proc_absent, close",
-			at[0], at[1], ord.afterMark, ord.atClose)
-	}
-	if open, err := st.OpenPermissionRequestsForSpawn(id); err != nil || len(open) != 0 {
-		t.Errorf("open permission requests = %v (err %v); want none", open, err)
 	}
 }

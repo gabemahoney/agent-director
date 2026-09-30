@@ -23,7 +23,8 @@ const (
 	fpPanePID = 1102
 )
 
-// fpOutcome is what one sweep does to a row: left live untouched, marked missing, or noted probe_eacces.
+// fpOutcome is what one sweep does to a row: left live untouched, marked missing, or noted probe_eacces (the
+// sweeps here get a lookup that cannot tell, so a row the process cannot decide is noted).
 type fpOutcome int
 
 const (
@@ -134,7 +135,7 @@ func TestFindMissingProcessSelectionVerdict(t *testing.T) {
 					st := &fakeFindMissingStore{rows: []store.LiveSpawnIdentity{r}}
 					mark := trailLen(t)
 
-					res := mustFindMissing(t, st, pc)
+					res := mustSweep(t, st, pc, fmSweep{tmux: fmCantTell()})
 					want := ans.full
 					if sel.pidOnly {
 						want = ans.pidOnly
@@ -212,7 +213,7 @@ func TestFindMissingLiveProcessWithoutIDKeepsRow(t *testing.T) {
 }
 
 // TestFindMissingMixedProcessSweep: one sweep over alive, dead, unreadable, mismatched and unrecorded rows lists
-// only the dead rows in ids and reads each selected process exactly once, never an unselected one.
+// only the dead rows in ids and reads each selected process exactly once, never an unselected one; tmux can't tell.
 func TestFindMissingMixedProcessSweep(t *testing.T) {
 	pc := procfix.New()
 	for pid, p := range map[int]procfix.Process{
@@ -233,7 +234,7 @@ func TestFindMissingMixedProcessSweep(t *testing.T) {
 		liveRow("y-no-identity"),
 	}}
 
-	res := mustFindMissing(t, st, pc)
+	res := mustSweep(t, st, pc, fmSweep{tmux: fmCantTell()})
 	assertLists(t, res, []string{"b-reused", "c-pane-dead-ss-alive", "z-dead-pane"},
 		[]string{"a-pid-only-alive", "q-unreadable", "y-no-identity"})
 	got := pc.StartTimeCalls()

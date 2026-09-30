@@ -544,17 +544,35 @@ func (s *Store) EndHeldLaunch(instanceID string, insertLaunchStartedAtMillis int
 	return s.condNotApplied(instanceID, "store: end held launch")
 }
 
-// adoptIdentitySQL is AdoptIdentityIfUnchanged's one statement: the six
-// server and pane identity columns and the version advance, guarded by the
-// row snapshot the verb examined (SR-3.6, SR-5.3).
-const adoptIdentitySQL = `UPDATE spawns
-    SET tmux_server_pid       = ?,
+// adoptIdentitySet is the one identity-column assignment every adoption write
+// carries (SR-3.6, SR-5.2): the six server and pane identity columns and the
+// version advance, as a SET list whose placeholders take adoptIdentityArgs in
+// order. AdoptIdentityIfUnchanged and AdoptIdentityIfSameLife share it; it
+// never names launch_token, tmux_socket, the state, the liveness columns,
+// launch_started_at, life_number, no_pre_trust or any request column.
+const adoptIdentitySet = `tmux_server_pid       = ?,
         tmux_server_started   = ?,
         tmux_server_starttime = ?,
         pane_id               = ?,
         pane_pid              = ?,
         pane_starttime        = ?,
-        ` + rowVersionAdvance + `
+        ` + rowVersionAdvance
+
+// adoptIdentityArgs returns the bound arguments for adoptIdentitySet, in its
+// placeholder order, a zero value of id as NULL.
+func adoptIdentityArgs(id LaunchIdentity) []any {
+	return []any{
+		positiveIntArg(id.ServerPID), positiveInt64Arg(id.ServerStart),
+		nullableStringArg(id.ServerStarttime), nullableStringArg(id.PaneID),
+		positiveIntArg(id.PanePID), nullableStringArg(id.PaneStarttime),
+	}
+}
+
+// adoptIdentitySQL is AdoptIdentityIfUnchanged's one statement: the shared
+// identity-column assignment, guarded by the row snapshot the verb examined
+// (SR-3.6, SR-5.3).
+const adoptIdentitySQL = `UPDATE spawns
+    SET ` + adoptIdentitySet + `
   WHERE claude_instance_id = ? AND ` + snapshotMatchSQL
 
 // AdoptIdentityIfUnchanged is the adoption write (SR-3.6; LFR H2; Appendix
@@ -576,16 +594,13 @@ const adoptIdentitySQL = `UPDATE spawns
 // row has the id. A driver error is returned wrapped, with a zero CondResult,
 // never as a CondResult value.
 //
-// Only kill, send-keys, pause and find-missing may call it (SR-3.6; LFR H2);
-// find-missing's snapshot-returning variant is separate. read-pane, resume's
-// pre-launch check, reuse and expire never write an adoption.
+// Only kill, send-keys and pause call it (SR-3.6; LFR H2); find-missing
+// writes its adoption through the snapshot-returning, live-state-guarded
+// variant AdoptIdentityIfSameLife, which shares this write's identity-column
+// assignment (adoptIdentitySet). read-pane, resume's pre-launch check, reuse
+// and expire never write an adoption.
 func (s *Store) AdoptIdentityIfUnchanged(instanceID string, examined RowSnapshot, id LaunchIdentity) (CondResult, error) {
-	args := []any{
-		positiveIntArg(id.ServerPID), positiveInt64Arg(id.ServerStart),
-		nullableStringArg(id.ServerStarttime), nullableStringArg(id.PaneID),
-		positiveIntArg(id.PanePID), nullableStringArg(id.PaneStarttime),
-		instanceID,
-	}
+	args := append(adoptIdentityArgs(id), instanceID)
 	res, err := s.db.Exec(adoptIdentitySQL, append(args, snapshotMatchArgs(examined)...)...)
 	if err != nil {
 		return 0, fmt.Errorf("store: adopt identity: %w", err)

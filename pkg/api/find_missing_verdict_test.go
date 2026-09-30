@@ -6,12 +6,13 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 )
 
 // find-missing's per-row outcome by the recorded process's start-time answer, with the fake store (SR-3.8,
 // SR-11.1, SR-11.4); fakes and runFindMissing live in find_missing_test.go.
 // TestFindMissingStartTimeVerdict: the recorded process's start-time answer decides the row: dead marks it,
-// alive clears only a carried note, unreadable notes it probe_eacces; every write carries the read snapshot.
+// alive clears only a carried note, unreadable with a lookup that cannot tell notes it probe_eacces.
 func TestFindMissingStartTimeVerdict(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -35,7 +36,7 @@ func TestFindMissingStartTimeVerdict(t *testing.T) {
 			r := liveRow("r", withSessionStart(800, fmStart), withNote(tc.note))
 			st := &fakeFindMissingStore{rows: []store.LiveSpawnIdentity{r}}
 
-			res := mustFindMissing(t, st, pc)
+			res := mustSweep(t, st, pc, fmSweep{tmux: fmCantTell()})
 			assertLists(t, res, tc.ids, tc.unver)
 			if got := st.ops("r"); !equalStrings(got, tc.wantOps) {
 				t.Errorf("writes = %v; want %v", got, tc.wantOps)
@@ -55,73 +56,123 @@ func TestFindMissingStartTimeVerdict(t *testing.T) {
 	}
 }
 
-// TestFindMissingCheckerUnknownIsolatesRow: an unreadable row is noted probe_eacces and never marked, while a
-// dead sibling in the same sweep is still marked and closed.
-func TestFindMissingCheckerUnknownIsolatesRow(t *testing.T) {
-	pc := procfix.New()
-	pc.Set(10, procfix.Unreadable())
-	st := &fakeFindMissingStore{rows: []store.LiveSpawnIdentity{
-		liveRow("walled", withSessionStart(10, fmStart)),
-		liveRow("dead-2", withSessionStart(20, fmStart)),
-	}}
+// fmUnknownLookups are the lookups that decide a row whose process cannot be checked: Gone marks it tmux_absent;
+// Ours and Can't tell (unreadable) leave it unverified, noted probe_eacces.
+var fmUnknownLookups = []struct {
+	name   string
+	tmux   func(rows ...store.LiveSpawnIdentity) *tmuxfix.Recorder
+	marked bool
+}{
+	{"gone", func(...store.LiveSpawnIdentity) *tmuxfix.Recorder { return tmuxfix.NewRecorder() }, true},
+	{"ours", fmOurs, false},
+	{"cant tell", func(...store.LiveSpawnIdentity) *tmuxfix.Recorder { return fmCantTell() }, false},
+}
 
-	res := mustFindMissing(t, st, pc)
-	assertLists(t, res, []string{"dead-2"}, []string{"walled"})
-	if got := st.ops("walled"); !equalStrings(got, []string{"note"}) || st.calls[0].note != "probe_eacces" {
-		t.Errorf("writes on walled = %+v; want one note probe_eacces", st.calls)
-	}
-	if got := st.ops("dead-2"); !equalStrings(got, []string{"mark", "close"}) {
-		t.Errorf("writes on dead-2 = %v; want [mark close]", got)
+// unknownRow is a row recording its server and a pane process pid (start fmStart), so an Ours lookup adopts nothing.
+func unknownRow(id string, pid int, opts ...fmRowOpt) store.LiveSpawnIdentity {
+	return liveRow(id, append([]fmRowOpt{withServer(), withPane(pid, fmStart)}, opts...)...)
+}
+
+// TestFindMissingCheckerUnknownIsolatesRow: unreadable rows take one lookup on their socket and are never marked
+// unless it is Gone, while a dead sibling in the same sweep is still marked and closed.
+func TestFindMissingCheckerUnknownIsolatesRow(t *testing.T) {
+	for _, lk := range fmUnknownLookups {
+		t.Run(lk.name, func(t *testing.T) {
+			pc := procfix.New()
+			pc.Set(10, procfix.Unreadable())
+			pc.Set(11, procfix.Unreadable())
+			walled := []store.LiveSpawnIdentity{unknownRow("walled-1", 10), unknownRow("walled-2", 11)}
+			st := &fakeFindMissingStore{rows: append(slices.Clone(walled), liveRow("dead", withSessionStart(20, fmStart)))}
+			rec := lk.tmux(walled...)
+			before := len(readAPITrailLines(t))
+
+			res := mustSweep(t, st, pc, fmSweep{tmux: rec})
+			wantOps, ids, unver := []string{"note"}, []string{"dead"}, []string{"walled-1", "walled-2"}
+			if lk.marked {
+				wantOps, ids, unver = []string{"mark", "close"}, []string{"dead", "walled-1", "walled-2"}, nil
+			}
+			assertLists(t, res, ids, unver)
+			for _, w := range walled {
+				if got := st.ops(w.ClaudeInstanceID); !equalStrings(got, wantOps) {
+					t.Errorf("writes on %s = %v; want %v", w.ClaudeInstanceID, got, wantOps)
+				}
+				if lk.marked {
+					assertMarkReason(t, before, w.ClaudeInstanceID, "tmux_absent")
+				}
+			}
+			for _, c := range st.calls {
+				if c.op == "note" && c.note != "probe_eacces" {
+					t.Errorf("note on %s = %q; want probe_eacces", c.id, c.note)
+				}
+			}
+			if got := st.ops("dead"); !equalStrings(got, []string{"mark", "close"}) {
+				t.Errorf("writes on dead = %v; want [mark close]", got)
+			}
+			assertMarkReason(t, before, "dead", "proc_absent")
+			assertLookups(t, rec, 1)
+		})
 	}
 }
 
 // TestFindMissingUnknownRepeatStillUnverified: an unreadable row already noted probe_eacces gets no write on a
-// repeat sweep and is still in unverified_ids.
+// repeat sweep and stays unverified when its lookup is Ours or Can't tell; Gone marks it.
 func TestFindMissingUnknownRepeatStillUnverified(t *testing.T) {
-	pc := procfix.New()
-	pc.Set(10, procfix.Unreadable())
-	st := &fakeFindMissingStore{rows: []store.LiveSpawnIdentity{
-		liveRow("walled", withSessionStart(10, fmStart), withNote("probe_eacces")),
-	}}
+	for _, lk := range fmUnknownLookups {
+		t.Run(lk.name, func(t *testing.T) {
+			pc := procfix.New()
+			pc.Set(10, procfix.Unreadable())
+			r := unknownRow("walled", 10, withNote("probe_eacces"))
+			st := &fakeFindMissingStore{rows: []store.LiveSpawnIdentity{r}}
 
-	res := mustFindMissing(t, st, pc)
-	assertLists(t, res, nil, []string{"walled"})
-	if len(st.calls) != 0 {
-		t.Errorf("writes = %+v; want none (equal note)", st.calls)
+			res := mustSweep(t, st, pc, fmSweep{tmux: lk.tmux(r)})
+			if lk.marked {
+				assertLists(t, res, []string{"walled"}, nil)
+				if got := st.ops("walled"); !equalStrings(got, []string{"mark", "close"}) {
+					t.Errorf("writes = %v; want [mark close]", got)
+				}
+				return
+			}
+			assertLists(t, res, nil, []string{"walled"})
+			if len(st.calls) != 0 {
+				t.Errorf("writes = %+v; want none (equal note)", st.calls)
+			}
+		})
 	}
 }
 
-// TestFindMissingPartialIdentityPidOnlyFallsBack: a pid-only identity (no start time) reading gone is marked;
-// reading alive proves nothing, so the row is noted probe_eacces, never marked (Task 2's lookup decides it).
+// TestFindMissingPartialIdentityPidOnlyFallsBack: a pid-only identity (no start time) reading gone is marked
+// proc_absent; reading alive proves nothing, so its lookup decides: Gone marks it tmux_absent.
 func TestFindMissingPartialIdentityPidOnlyFallsBack(t *testing.T) {
 	cases := []struct {
-		name       string
-		identity   fmRowOpt
-		proc       procfix.Process
-		ids, unver []string
+		name     string
+		identity fmRowOpt
+		proc     procfix.Process
+		reason   string
 	}{
-		{"sessionstart pid-only gone", withSessionStart(900, ""), procfix.Gone(), []string{"r"}, nil},
-		{"pane pid-only gone", withPane(900, ""), procfix.Gone(), []string{"r"}, nil},
-		{"sessionstart pid-only alive", withSessionStart(900, ""), procfix.Alive(fmStart), nil, []string{"r"}},
-		{"pane pid-only alive", withPane(900, ""), procfix.Alive(fmStart), nil, []string{"r"}},
+		{"sessionstart pid-only gone", withSessionStart(900, ""), procfix.Gone(), "proc_absent"},
+		{"pane pid-only gone", withPane(900, ""), procfix.Gone(), "proc_absent"},
+		{"sessionstart pid-only alive", withSessionStart(900, ""), procfix.Alive(fmStart), "tmux_absent"},
+		{"pane pid-only alive", withPane(900, ""), procfix.Alive(fmStart), "tmux_absent"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			pc := procfix.New()
 			pc.Set(900, tc.proc)
 			st := &fakeFindMissingStore{rows: []store.LiveSpawnIdentity{liveRow("r", tc.identity)}}
+			before := len(readAPITrailLines(t))
 
 			res := mustFindMissing(t, st, pc)
-			assertLists(t, res, tc.ids, tc.unver)
-			if tc.unver != nil && (len(st.calls) != 1 || st.calls[0].note != "probe_eacces") {
-				t.Errorf("writes = %+v; want one note probe_eacces", st.calls)
+			assertLists(t, res, []string{"r"}, nil)
+			assertMarkReason(t, before, "r", tc.reason)
+			if got := pc.StartTimeCalls(); !slices.Equal(got, []int{900}) {
+				t.Errorf("StartTime calls = %v; want [900]", got)
 			}
 		})
 	}
 }
 
 // TestFindMissingPartialIdentityStarttimeOnlyFallsBack: a start time with no pid records no process, so the
-// reader is not called and the row is noted process_not_seen_tmux_unchecked, never marked (Task 2's lookup).
+// reader is not called and the lookup decides: Gone marks the row tmux_absent.
 func TestFindMissingPartialIdentityStarttimeOnlyFallsBack(t *testing.T) {
 	for name, identity := range map[string]fmRowOpt{
 		"sessionstart": withSessionStart(0, fmStart),
@@ -130,12 +181,11 @@ func TestFindMissingPartialIdentityStarttimeOnlyFallsBack(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			pc := procfix.New()
 			st := &fakeFindMissingStore{rows: []store.LiveSpawnIdentity{liveRow("st-only", identity)}}
+			before := len(readAPITrailLines(t))
 
 			res := mustFindMissing(t, st, pc)
-			assertLists(t, res, nil, []string{"st-only"})
-			if len(st.calls) != 1 || st.calls[0].note != "process_not_seen_tmux_unchecked" {
-				t.Errorf("writes = %+v; want one note process_not_seen_tmux_unchecked", st.calls)
-			}
+			assertLists(t, res, []string{"st-only"}, nil)
+			assertMarkReason(t, before, "st-only", "tmux_absent")
 			if got := pc.StartTimeCalls(); len(got) != 0 {
 				t.Errorf("StartTime calls = %v; want none", got)
 			}

@@ -1,13 +1,15 @@
 package store_test
 
-// Store tests for find-missing's three guarded writes (SR-5.3, SR-11.3,
-// SR-11.4, SR-11.6; Appendix F.4): the applied mark, note write and clear, and
-// the refusals that write nothing. Rows are seeded through apitest (SR-20.2);
-// the note write's and clear's store errors are covered through pkg/api's
-// failing store (SR-20.3), so only the mark's is injected here.
+// Store tests for find-missing's guarded writes (SR-3.6, SR-5.3, SR-11.3,
+// SR-11.4, SR-11.6; Appendix F.4): the applied mark, note write, clear and
+// adoption, and the refusals that write nothing. Rows are seeded through
+// apitest (SR-20.2); the note write's and clear's store errors are covered
+// through pkg/api's failing store (SR-20.3), so only the mark's and the
+// adoption's are injected here.
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -51,8 +53,19 @@ func withNote(since, note string) []apitest.SpawnOption {
 	return []apitest.SpawnOption{apitest.WithLivenessUnverifiedSince(since), apitest.WithLivenessNote(note)}
 }
 
-// fmWrite is one of the three guarded writes; prior is the mark's returned
-// prior state and "" for the others.
+// fmAdopted is the identity the adoption writes: every field differs from
+// moveIdentity's, so "written" and "unchanged" are never vacuous.
+func fmAdopted() store.LaunchIdentity {
+	return store.LaunchIdentity{
+		Token: "ffffffffffffffff", Socket: "/tmp/ad-fm-test/other-sock", // never written
+		ServerPID: 555, ServerStart: 1767225900, ServerStarttime: apitest.DarwinProcStarttime,
+		PaneID: "%11", PanePID: 666, PaneStarttime: apitest.LinuxProcStarttime,
+	}
+}
+
+// fmWrite is one of the guarded writes; prior is the mark's returned prior
+// state and "" for the others. The adoption reports a non-zero snapshot on a
+// refusal as an error.
 type fmWrite struct {
 	name string
 	run  func(s *store.Store, id string, snap store.RowSnapshot) (prior string, res store.CondResult, err error)
@@ -68,6 +81,13 @@ var fmWrites = []fmWrite{
 	}},
 	{"clear", func(s *store.Store, id string, snap store.RowSnapshot) (string, store.CondResult, error) {
 		res, err := s.ClearLivenessIfSameLife(id, snap)
+		return "", res, err
+	}},
+	{"adopt", func(s *store.Store, id string, snap store.RowSnapshot) (string, store.CondResult, error) {
+		res, now, err := s.AdoptIdentityIfSameLife(id, snap, fmAdopted())
+		if err == nil && res != store.CondApplied && now != (store.RowSnapshot{}) {
+			err = fmt.Errorf("snapshot %+v on %v; want the zero value", now, res)
+		}
 		return "", res, err
 	}},
 }
@@ -165,9 +185,8 @@ func TestLivenessIfSameLifeApplied(t *testing.T) {
 	}
 }
 
-// TestFindMissingIfSameLifeRefused checks each write is refused, writing
-// nothing, for a snapshot differing in one component, an earlier write from
-// the same snapshot, a finished row and a deleted row.
+// TestFindMissingIfSameLifeRefused checks each write (adoption included) is refused,
+// writing nothing, for a differing snapshot component, an earlier write, a finished or deleted row.
 func TestFindMissingIfSameLifeRefused(t *testing.T) {
 	type refusal struct {
 		name   string
@@ -230,15 +249,104 @@ func TestFindMissingIfSameLifeRefused(t *testing.T) {
 	}
 }
 
-// TestMarkMissingIfSameLifeStoreError checks a failing mark returns an error,
-// no prior state or CondResult, and leaves the row unchanged (SR-5.8).
-func TestMarkMissingIfSameLifeStoreError(t *testing.T) {
-	f := newV5Store(t)
-	r := seedFMRow(t, f, store.StatePending)
-	storefix.InjectWriteFailure(t, f.path, storefix.WriteFailReuseRestore, r.id)
-	prior, res, err := f.s.MarkMissingIfSameLife(r.id, r.examined)
-	if err == nil || res != 0 || prior != "" {
-		t.Fatalf("MarkMissingIfSameLife = %q, %v, %v; want no prior, no CondResult and an error", prior, res, err)
+// TestIfSameLifeStoreError checks a failing mark or adoption returns an error,
+// a zero CondResult and zero prior state or snapshot, row unchanged (SR-5.8).
+func TestIfSameLifeStoreError(t *testing.T) {
+	cases := []struct {
+		name string
+		kind storefix.WriteFailureKind
+		run  func(s *store.Store, r fmRow) (extra any, res store.CondResult, err error)
+		zero any
+	}{
+		{"mark", storefix.WriteFailReuseRestore, func(s *store.Store, r fmRow) (any, store.CondResult, error) {
+			return s.MarkMissingIfSameLife(r.id, r.examined)
+		}, ""},
+		{"adopt", storefix.WriteFailLaunchIdentity, func(s *store.Store, r fmRow) (any, store.CondResult, error) {
+			res, now, err := s.AdoptIdentityIfSameLife(r.id, r.examined, fmAdopted())
+			return now, res, err
+		}, store.RowSnapshot{}},
 	}
-	assertRow(t, f, r.id, r.before)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newV5Store(t)
+			r := seedFMRow(t, f, store.StatePending)
+			storefix.InjectWriteFailure(t, f.path, tc.kind, r.id)
+			extra, res, err := tc.run(f.s, r)
+			if err == nil || res != 0 || extra != tc.zero {
+				t.Fatalf("%s = %#v, %v, %v; want %#v, no CondResult and an error", tc.name, extra, res, err, tc.zero)
+			}
+			assertRow(t, f, r.id, r.before)
+		})
+	}
+}
+
+// seedAdoptRow seeds a live row recording only its launch token and socket,
+// a lost create reply, with the liveness columns set.
+func seedAdoptRow(t *testing.T, f *v5Store, state string) fmRow {
+	t.Helper()
+	prev := moveIdentity()
+	lost := store.LaunchIdentity{Token: prev.Token, Socket: prev.Socket}
+	return seedFMRow(t, f, state, append(withNote("2026-09-28 10:00:00", "fm old note"), apitest.WithLaunchIdentity(lost))...)
+}
+
+// TestAdoptIdentityIfSameLifeApplied checks the adoption writes the six identity
+// columns (zero as NULL), version +1, all else kept, and returns a fresh read's snapshot.
+func TestAdoptIdentityIfSameLifeApplied(t *testing.T) {
+	serverOnly := fmAdopted()
+	serverOnly.PaneID, serverOnly.PanePID, serverOnly.PaneStarttime = "", 0, ""
+	cases := []struct {
+		name  string
+		state string
+		adopt store.LaunchIdentity
+	}{
+		{"waiting row, server and pane", store.StateWaiting, fmAdopted()},
+		{"pending row, server and pane", store.StatePending, fmAdopted()},
+		{"server only leaves pane columns NULL", store.StateWaiting, serverOnly},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newV5Store(t)
+			r := seedAdoptRow(t, f, tc.state)
+			b := r.before
+			requireSet(t, map[string]any{"launch_token": b.LaunchToken, "tmux_socket": b.TmuxSocket,
+				"launch_started_at": b.LaunchStartedAt, "liveness_note": b.LivenessNote,
+				"liveness_unverified_since": b.LivenessUnverifiedSince, "life_number": b.LifeNumber, "no_pre_trust": b.NoPreTrust})
+			if !reflect.DeepEqual(identityColumns(b), wantIdentityColumns(store.LaunchIdentity{})) {
+				t.Fatalf("seeded identity %v; want all NULL", identityColumns(b))
+			}
+			mark := store.TrailMark(t)
+			res, now, err := f.s.AdoptIdentityIfSameLife(r.id, r.examined, tc.adopt)
+			if err != nil || res != store.CondApplied {
+				t.Fatalf("AdoptIdentityIfSameLife = %v, %v; want CondApplied, nil", res, err)
+			}
+			assertRow(t, f, r.id, withIdentity(wantAdvanced(t, r.before), tc.adopt))
+			if fresh := rvExamine(t, f, r.id).Snapshot; now != fresh || now.RowVersion != r.examined.RowVersion+1 {
+				t.Errorf("returned snapshot %+v; want the fresh read %+v, version %d", now, fresh, r.examined.RowVersion+1)
+			}
+			adoptNoTrail(t, mark, r.id)
+		})
+	}
+}
+
+// TestAdoptIdentityIfSameLifeChainsGuard checks the adoption's returned snapshot
+// guards each verdict write, while the pre-adoption snapshot is refused.
+func TestAdoptIdentityIfSameLifeChainsGuard(t *testing.T) {
+	for _, w := range fmWrites[:3] {
+		t.Run(w.name, func(t *testing.T) {
+			f := newV5Store(t)
+			r := seedAdoptRow(t, f, store.StateWaiting)
+			res, now, err := f.s.AdoptIdentityIfSameLife(r.id, r.examined, fmAdopted())
+			if err != nil || res != store.CondApplied {
+				t.Fatalf("AdoptIdentityIfSameLife = %v, %v; want CondApplied, nil", res, err)
+			}
+			adopted := f.rawColumns(r.id)
+			if _, res, err := w.run(f.s, r.id, r.examined); err != nil || res != store.CondChanged {
+				t.Fatalf("%s from the pre-adoption snapshot = %v, %v; want CondChanged, nil", w.name, res, err)
+			}
+			assertRow(t, f, r.id, adopted)
+			if _, res, err := w.run(f.s, r.id, now); err != nil || res != store.CondApplied {
+				t.Fatalf("%s from the returned snapshot = %v, %v; want CondApplied, nil", w.name, res, err)
+			}
+		})
+	}
 }

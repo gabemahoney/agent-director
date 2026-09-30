@@ -45,7 +45,7 @@ func assertUntouched(t *testing.T, r store.LiveSpawnIdentity, st *fakeFindMissin
 }
 
 // TestFindMissingGraceSweep: a pending row inside the grace period (measured from its launch start) is not
-// judged; past it, with no launch start, or in a non-pending state it is judged by its process (SR-11.2, SR-22.8).
+// judged; past it, with no launch start, or in a non-pending state it is judged (tmux can't tell) (SR-11.2, SR-22.8).
 func TestFindMissingGraceSweep(t *testing.T) {
 	floor := time.Duration(config.PendingGraceFloorSeconds) * time.Second
 	cases := []struct {
@@ -84,7 +84,7 @@ func TestFindMissingGraceSweep(t *testing.T) {
 			pc := procfix.New()
 			pc.Set(gracePID, tc.proc) // the zero Process answers gone
 
-			res, err := runFindMissing(st, pc, fmSweep{grace: tc.grace})
+			res, err := runFindMissing(st, pc, fmSweep{grace: tc.grace, tmux: fmCantTell()})
 			if err != nil {
 				t.Fatalf("FindMissing: %v", err)
 			}
@@ -137,7 +137,7 @@ func TestFindMissingGraceSweepMixed(t *testing.T) {
 		provisional: []store.ProvisionalTranscript{{ClaudeInstanceID: "boot", ClaudeSessionID: session, CWD: "/tmp/proj"}},
 	}
 
-	res := mustFindMissing(t, st, pc)
+	res := mustSweep(t, st, pc, fmSweep{tmux: fmCantTell()})
 	assertLists(t, res, []string{"dead", "gone"}, []string{"walled"})
 	assertUntouched(t, boot, st, pc, res)
 	if len(st.healed) != 1 || st.healed[0].id != "boot" {

@@ -10,7 +10,7 @@ package store
 // Trail emission tests pin the ad.find_missing.tick events emitted by
 // CloseOrphanedPermissionRequests (permission_orphan_closeout) and verify that
 // zero trail lines are emitted when no orphaned rows exist. The find-missing
-// paths emitted by findMissingImpl (not the store layer) are tested in
+// paths emitted by api.FindMissing (not the store layer) are tested in
 // pkg/api/find_missing_trail_test.go.
 
 import (

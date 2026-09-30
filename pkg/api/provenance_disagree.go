@@ -58,8 +58,10 @@ type provenanceDisagree struct {
 // were collected (the first lookup, a follow-up lookup, adoption and
 // agent-process selection may each report one). A reason that is not one of
 // the six is dropped. Records are written in the order of disagreeReasons.
-// A sweep (find-missing, expire) calls it once per row, so each reason is
-// written at most once per row per sweep.
+// A sweep writes each reason at most once per row per sweep: expire calls it
+// once per row, and find-missing once per distinct reason of a row, each
+// call carrying the fields of the observation that produced that reason
+// (findMissingRun.emitDisagree).
 //
 // Each record carries claude_instance_id, verb, reason, tmux_socket,
 // tmux_session_name (the recorded name), tmux_session_id (null when none),
