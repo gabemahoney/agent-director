@@ -2,6 +2,8 @@ package smoke_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -27,7 +29,9 @@ import (
 //     file created by storefix.OpenTempStore.
 //  5. Calls the verb's Happy closure and feeds the result into
 //     AssertResultMatchesManifest; for status, get and list it also checks
-//     the pending row's launch_started_at (see assertLaunchStartedAt).
+//     the pending row's launch_started_at (see assertLaunchStartedAt), and
+//     for spawn and resume, with a .claude.json planted in HOME first, that
+//     pre_trust is "ok" (see plantClaudeJSON).
 //  6. Calls the verb's Error closure (when defined) and feeds the
 //     returned error into AssertExpectedError.
 //
@@ -80,7 +84,8 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 	// most visibly, make-template would surface ErrTemplateExists on the
 	// second call because the .toml file from the first call still exists.
 	// t.Setenv restores the prior HOME on t.Cleanup automatically.
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 
 	// Fresh store and recorder per subtest. storefix.OpenTempStore
 	// registers a t.Cleanup that closes the store internally.
@@ -142,6 +147,12 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 	}
 	t.Cleanup(func() { _ = c.Close() })
 
+	// Launch verbs pre-trust into HOME/.claude.json; without one they
+	// report "failed", so plant one lacking the entry to pin "ok".
+	if spec.PreTrust != nil {
+		plantClaudeJSON(t, home)
+	}
+
 	// ── Happy path ──────────────────────────────────────────────────────
 	ctx, cancel := buildHappyCtx(spec)
 	defer cancel()
@@ -152,6 +163,12 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 	AssertResultMatchesManifest(t, vd, result)
 	if spec.LaunchStartedAt != nil {
 		assertLaunchStartedAt(t, vd.Name, spec.LaunchStartedAt(result, spec.SeedID))
+	}
+	if spec.PreTrust != nil {
+		if got := spec.PreTrust(result); got != "ok" {
+			t.Errorf("%s: pre_trust = %q; want \"ok\" (.claude.json planted in HOME)",
+				vd.Name, got)
+		}
 	}
 
 	// ── Error path (when declared) ──────────────────────────────────────
@@ -175,6 +192,17 @@ func assertLaunchStartedAt(t *testing.T, verb string, got *time.Time) {
 	case !got.Equal(want) || got.Location() != time.UTC:
 		t.Errorf("%s: launch_started_at = %s; want %s", verb,
 			got.Format(time.RFC3339Nano), want.Format(time.RFC3339Nano))
+	}
+}
+
+// plantClaudeJSON writes a .claude.json with no folder-trust entries into
+// home, the per-subtest HOME, which is the file pre-trust targets when the
+// launch sets no CLAUDE_CONFIG_DIR.
+func plantClaudeJSON(t *testing.T, home string) {
+	t.Helper()
+	path := filepath.Join(home, ".claude.json")
+	if err := os.WriteFile(path, []byte(`{"projects":{}}`), 0o600); err != nil {
+		t.Fatalf("plantClaudeJSON: write %s: %v", path, err)
 	}
 }
 

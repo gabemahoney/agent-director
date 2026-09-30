@@ -13,7 +13,9 @@
 //   - extraSetup:  optional hook called after each copyFixtureStore with the
 //     resulting homeDir.  Used for verbs that need files outside
 //     .agent-director/ (e.g. resume needs a JSONL transcript at
-//     HOME/.claude/projects/<slug>/<session_id>.jsonl).
+//     HOME/.claude/projects/<slug>/<session_id>.jsonl; spawn and resume
+//     need HOME/.claude.json for pre-trust).
+//   - wantPreTrust: when set, both envelopes must carry pre_trust equal to it.
 //
 // The test driver (success_cases_test.go) always calls
 // t.Setenv("HOME", homeDir) immediately before each extraSetup invocation so
@@ -64,6 +66,10 @@ type successCase struct {
 	// apitest.SeedJsonl, config.EnsureTemplatesDir) resolves to homeDir.
 	// nil for most verbs.
 	extraSetup func(t *testing.T, homeDir string, ctx map[string]any)
+
+	// wantPreTrust, when non-empty, is the pre_trust both envelopes must
+	// carry (spawn and resume); see success_pretrust.go.
+	wantPreTrust string
 }
 
 // successCases is the authoritative per-verb fixture table.
@@ -75,7 +81,8 @@ var successCases = []successCase{
 	// spawn mints a fresh claude_instance_id (excluded from diff via
 	// nondeterministic.json ".claude_instance_id") and launches a tmux
 	// session via fake-tmux. An empty store is sufficient — spawn creates
-	// its own row.
+	// its own row. Each home gets the same .claude.json, so both sides
+	// report pre_trust "ok" (compared, not excluded).
 	{
 		verb: "spawn",
 		seed: func(t *testing.T) (string, map[string]any) {
@@ -90,6 +97,8 @@ var successCases = []successCase{
 		cliArgv: func(ctx map[string]any) []string {
 			return []string{"spawn", "--cwd", ctx["cwd"].(string)}
 		},
+		extraSetup:   plantClaudeJSON,
+		wantPreTrust: "ok",
 	},
 
 	// ── status ────────────────────────────────────────────────────────────
@@ -258,8 +267,9 @@ var successCases = []successCase{
 	// tmux; fake-tmux answers the name check (has-session exits 1 =
 	// "absent") and creates and labels the session on that socket.
 	//
-	// The result {claude_instance_id: "id-resume-1"} is fully deterministic;
-	// nondeterministic.json lists no excluded fields for resume.
+	// extraSetup also plants the same .claude.json in each home, so the
+	// result {claude_instance_id: "id-resume-1", pre_trust: "ok"} is fully
+	// deterministic; nondeterministic.json lists no excluded fields for resume.
 	{
 		verb: "resume",
 		seed: func(t *testing.T) (string, map[string]any) {
@@ -288,7 +298,7 @@ var successCases = []successCase{
 				"--claude-instance-id", ctx["id"].(string),
 			}
 		},
-		extraSetup: func(t *testing.T, _ string, ctx map[string]any) {
+		extraSetup: func(t *testing.T, homeDir string, ctx map[string]any) {
 			// HOME has been pointed at homeDir by the test driver before
 			// this call.  apitest.SeedJsonl calls spawn.JsonlPath which
 			// calls os.UserHomeDir(), so the file lands at
@@ -298,7 +308,9 @@ var successCases = []successCase{
 			apitest.SeedJsonl(t,
 				ctx["cwd"].(string),
 				ctx["sessID"].(string))
+			plantClaudeJSON(t, homeDir, ctx)
 		},
+		wantPreTrust: "ok",
 	},
 
 	// ── find-missing ──────────────────────────────────────────────────────

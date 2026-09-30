@@ -4,12 +4,12 @@ package api_test
 // SR-5.1/5.2; AC-RES-19, AC-RES-20): the trust entry is on disk when the move
 // to pending runs, is never written over the row's opt-out (also on a retry
 // after a restored failure) and is never written by a resume refused before
-// its move. Each row points CLAUDE_CONFIG_DIR at a per-test directory; the
-// shared fixture is in resume_fixture_test.go.
+// its move; every resume that returns a result reports what its pre-trust did
+// as ResumeResult.PreTrust (JSON pre_trust). Each row points CLAUDE_CONFIG_DIR
+// at a per-test directory; the shared fixtures are in resume_fixture_test.go
+// and pretrust_fixture_test.go.
 
 import (
-	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -20,93 +20,14 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
+	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 )
 
-// rptFile is the state of the .claude.json a test's config directory holds.
-type rptFile int
-
-const (
-	rptLacksEntry rptFile = iota // present, trusting another folder only
-	rptMissing                   // absent
-	rptUnwritable                // present, in a directory no temp file can be created in
-)
-
-// rptSeedJSON is the compact .claude.json a config directory starts with, so
-// any rewrite (which indents) changes its bytes.
-const rptSeedJSON = `{"numStartups":7,"projects":{"/elsewhere":{"hasTrustDialogAccepted":true}}}`
-
-// rptConfig is a config directory and its .claude.json as seeded (before is
-// nil when the file is absent).
-type rptConfig struct {
-	dir, path string
-	before    []byte
-}
-
-// rptSeedConfig puts a .claude.json in state file into dir. The unwritable
-// state (a 0500 directory) is skipped as root, where permissions do not bite.
-func rptSeedConfig(t *testing.T, dir string, file rptFile) rptConfig {
-	t.Helper()
-	c := rptConfig{dir: dir, path: filepath.Join(dir, ".claude.json")}
-	if file == rptMissing {
-		return c
-	}
-	c.before = []byte(rptSeedJSON)
-	if err := os.WriteFile(c.path, c.before, 0o600); err != nil {
-		t.Fatalf("write %s: %v", c.path, err)
-	}
-	if file == rptUnwritable {
-		if os.Geteuid() == 0 {
-			t.Skip("root ignores directory permissions; the unwritable .claude.json cannot be simulated")
-		}
-		if err := os.Chmod(dir, 0o500); err != nil {
-			t.Fatalf("chmod %s: %v", dir, err)
-		}
-		t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
-	}
-	return c
-}
-
-// env is the seed option pointing a row's CLAUDE_CONFIG_DIR at c.
-func (c rptConfig) env() apitest.SpawnOption {
-	return apitest.WithExtraEnv(map[string]string{"CLAUDE_CONFIG_DIR": c.dir})
-}
-
-// reset writes the seeded bytes back, removing an entry a resume wrote.
-func (c rptConfig) reset(t *testing.T) {
-	t.Helper()
-	if err := os.WriteFile(c.path, c.before, 0o600); err != nil {
-		t.Fatalf("reset %s: %v", c.path, err)
-	}
-}
-
-// check asserts, at when, that the file trusts cwd (trusted) or is exactly as
-// seeded (still absent when it was).
-func (c rptConfig) check(t *testing.T, cwd string, trusted bool, when string) {
-	t.Helper()
-	got, err := os.ReadFile(c.path)
-	if !trusted {
-		if c.before == nil {
-			if !errors.Is(err, os.ErrNotExist) {
-				t.Errorf("%s: %s = %q (%v); want still absent", when, c.path, got, err)
-			}
-		} else if err != nil || string(got) != string(c.before) {
-			t.Errorf("%s: %s = %q (%v); want unchanged %q", when, c.path, got, err, c.before)
-		}
-		return
-	}
-	var top struct {
-		Projects map[string]map[string]any `json:"projects"`
-	}
-	if err != nil || json.Unmarshal(got, &top) != nil || top.Projects[cwd]["hasTrustDialogAccepted"] != true {
-		t.Errorf("%s: %s = %q (%v); want projects[%q].hasTrustDialogAccepted true", when, c.path, got, err, cwd)
-	}
-}
-
 // rptResume resumes r and checks, when the move runs, that the file is as
-// trusted says and that the move kept no_pre_trust.
-func rptResume(t *testing.T, e *resumeEnv, r resumableRow, c rptConfig, trusted bool, when string) error {
+// trusted says and that the move kept no_pre_trust; it returns Resume's result.
+func rptResume(t *testing.T, e *resumeEnv, r resumableRow, c trustConfig, trusted bool, when string) (api.ResumeResult, error) {
 	t.Helper()
 	moved := false
 	e.store.afterMove(func() {
@@ -116,11 +37,20 @@ func rptResume(t *testing.T, e *resumeEnv, r resumableRow, c rptConfig, trusted 
 			t.Errorf("%s: no_pre_trust after the move = %#v; want %#v", when, got, r.Before.NoPreTrust)
 		}
 	})
-	_, err := e.resume(r.ID)
+	res, err := e.resume(r.ID)
 	if err == nil && !moved {
 		t.Errorf("%s: the resume succeeded without a move", when)
 	}
-	return err
+	return res, err
+}
+
+// rptAssertPreTrust checks res reports want as PreTrust and as its JSON pre_trust.
+func rptAssertPreTrust(t *testing.T, res api.ResumeResult, want, when string) {
+	t.Helper()
+	if res.PreTrust != want {
+		t.Errorf("%s: ResumeResult.PreTrust = %q; want %q", when, res.PreTrust, want)
+	}
+	checkPreTrustJSON(t, res, want)
 }
 
 // rptAssertLaunched checks r is pending after creates creates, the last one
@@ -141,28 +71,30 @@ func rptAssertLaunched(t *testing.T, e *resumeEnv, id, session string, creates i
 }
 
 // TestResumePreTrustBeforeMove: an allowed row's entry is on disk when the move
-// runs; a missing or unwritable file, or the row's opt-out, leaves the file as
-// it was, and every case launches. The archived-session path behaves the same.
+// runs (ok); a missing or unwritable file (failed) or the row's opt-out
+// (skipped) leaves the file as it was, and every case launches. The
+// archived-session path behaves the same.
 func TestResumePreTrustBeforeMove(t *testing.T) {
 	cases := []struct {
-		name     string
-		file     rptFile
-		opts     []apitest.SpawnOption
-		archived bool // the current transcript is gone; resume takes the archived session
-		trusted  bool // the entry is written; otherwise the file is left as seeded
+		name         string
+		file         trustFile
+		opts         []apitest.SpawnOption
+		archived     bool // the current transcript is gone; resume takes the archived session
+		trusted      bool // the entry is written; otherwise the file is left as seeded
+		wantPreTrust string
 	}{
-		{"allowed row, entry lacking", rptLacksEntry, nil, false, true},
-		{".claude.json missing", rptMissing, nil, false, false},
-		{".claude.json unwritable", rptUnwritable, nil, false, false},
-		{"opted-out row", rptLacksEntry, []apitest.SpawnOption{apitest.WithNoPreTrust()}, false, false},
-		{"opted-out row, unusual stored value", rptLacksEntry, []apitest.SpawnOption{apitest.WithRawNoPreTrust("sometimes")}, false, false},
-		{"archived session, allowed row", rptLacksEntry, nil, true, true},
-		{"archived session, opted-out row", rptLacksEntry, []apitest.SpawnOption{apitest.WithNoPreTrust()}, true, false},
+		{"allowed row, entry lacking", trustLacksEntry, nil, false, true, "ok"},
+		{".claude.json missing", trustMissing, nil, false, false, "failed"},
+		{".claude.json unwritable", trustUnwritable, nil, false, false, "failed"},
+		{"opted-out row", trustLacksEntry, []apitest.SpawnOption{apitest.WithNoPreTrust()}, false, false, "skipped"},
+		{"opted-out row, unusual stored value", trustLacksEntry, []apitest.SpawnOption{apitest.WithRawNoPreTrust("sometimes")}, false, false, "skipped"},
+		{"archived session, allowed row", trustLacksEntry, nil, true, true, "ok"},
+		{"archived session, opted-out row", trustLacksEntry, []apitest.SpawnOption{apitest.WithNoPreTrust()}, true, false, "skipped"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newResumeEnv(t)
-			c := rptSeedConfig(t, t.TempDir(), tc.file)
+			c := seedTrustConfig(t, t.TempDir(), tc.file)
 			r := e.seedResumable(t, store.StateEnded, append([]apitest.SpawnOption{c.env()}, tc.opts...)...)
 			session := r.SessionID
 			if tc.archived {
@@ -171,9 +103,11 @@ func TestResumePreTrustBeforeMove(t *testing.T) {
 				}
 				session = r.HistorySessionID
 			}
-			if err := rptResume(t, e, r, c, tc.trusted, "resume"); err != nil {
+			res, err := rptResume(t, e, r, c, tc.trusted, "resume")
+			if err != nil {
 				t.Fatalf("Resume: %v", err)
 			}
+			rptAssertPreTrust(t, res, tc.wantPreTrust, "resume")
 			c.check(t, r.CWD, tc.trusted, "after the resume")
 			rptAssertLaunched(t, e, r.ID, session, 1)
 		})
@@ -181,40 +115,44 @@ func TestResumePreTrustBeforeMove(t *testing.T) {
 }
 
 // TestResumePreTrustHomeWithoutConfigDir: a row with no CLAUDE_CONFIG_DIR gets
-// its entry in $HOME/.claude.json (a per-test HOME; not parallel).
+// its entry in $HOME/.claude.json and reports ok (a per-test HOME; not parallel).
 func TestResumePreTrustHomeWithoutConfigDir(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	e := newResumeEnv(t)
-	c := rptSeedConfig(t, home, rptLacksEntry)
+	c := seedTrustConfig(t, home, trustLacksEntry)
 	r := e.seedResumable(t, store.StateMissing) // default extra env: no CLAUDE_CONFIG_DIR
-	if err := rptResume(t, e, r, c, true, "resume"); err != nil {
+	res, err := rptResume(t, e, r, c, true, "resume")
+	if err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
+	rptAssertPreTrust(t, res, "ok", "resume")
 	c.check(t, r.CWD, true, "after the resume")
 	rptAssertLaunched(t, e, r.ID, r.SessionID, 1)
 }
 
 // TestResumePreTrustRetryAfterRestoredFailure: after a failed create and its
 // restore, no_pre_trust is kept, and the retry pre-trusts again for an allowed
-// row and still writes nothing for an opted-out one.
+// row (ok) and still writes nothing for an opted-out one (skipped).
 func TestResumePreTrustRetryAfterRestoredFailure(t *testing.T) {
 	cases := []struct {
-		name    string
-		opts    []apitest.SpawnOption
-		trusted bool
+		name         string
+		opts         []apitest.SpawnOption
+		trusted      bool
+		wantPreTrust string // the successful retry's
 	}{
-		{"allowed row pre-trusts again", nil, true},
-		{"opted-out row stays skipped", []apitest.SpawnOption{apitest.WithNoPreTrust()}, false},
+		{"allowed row pre-trusts again", nil, true, "ok"},
+		{"opted-out row stays skipped", []apitest.SpawnOption{apitest.WithNoPreTrust()}, false, "skipped"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newResumeEnv(t)
-			c := rptSeedConfig(t, t.TempDir(), rptLacksEntry)
+			c := seedTrustConfig(t, t.TempDir(), trustLacksEntry)
 			r := e.seedResumable(t, store.StateEnded, append([]apitest.SpawnOption{c.env()}, tc.opts...)...)
 			e.rec.Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 1, Times: 1}, tmux.CallCreate)
 
-			assertLaunchSentinel(t, rptResume(t, e, r, c, tc.trusted, "first resume"), tmux.ErrTmuxSessionCreate)
+			_, firstErr := rptResume(t, e, r, c, tc.trusted, "first resume")
+			assertLaunchSentinel(t, firstErr, tmux.ErrTmuxSessionCreate)
 			restored := e.columns(t, r.ID)
 			if restored.State != r.Before.State || restored.NoPreTrust != r.Before.NoPreTrust {
 				t.Fatalf("after the restore: state %v, no_pre_trust %#v; want %v, %#v",
@@ -224,9 +162,11 @@ func TestResumePreTrustRetryAfterRestoredFailure(t *testing.T) {
 				c.reset(t) // so the retry's entry is its own
 			}
 
-			if err := rptResume(t, e, r, c, tc.trusted, "retry"); err != nil {
+			res, err := rptResume(t, e, r, c, tc.trusted, "retry")
+			if err != nil {
 				t.Fatalf("retry Resume: %v", err)
 			}
+			rptAssertPreTrust(t, res, tc.wantPreTrust, "retry")
 			c.check(t, r.CWD, tc.trusted, "after the retry")
 			rptAssertLaunched(t, e, r.ID, r.SessionID, 2)
 		})
@@ -278,7 +218,7 @@ func TestResumePreTrustRefusedBeforeMoveWritesNothing(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newResumeEnv(t)
-			c := rptSeedConfig(t, t.TempDir(), rptLacksEntry)
+			c := seedTrustConfig(t, t.TempDir(), trustLacksEntry)
 			id := tc.seed(t, e, c.env())
 			_, err := e.resume(id)
 			if name, _ := errnames.Classify(err); name != tc.wantName {

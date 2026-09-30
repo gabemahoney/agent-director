@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 
@@ -33,6 +34,7 @@ type surfaceDoc struct {
 			Name          string   `json:"name"`
 			Type          string   `json:"type"`
 			Nullable      bool     `json:"nullable"`
+			AllowEmpty    bool     `json:"allow_empty"`
 			Description   string   `json:"description"`
 			AllowedValues []string `json:"allowed_values"`
 		} `json:"result_fields"`
@@ -1026,14 +1028,41 @@ func TestResumeDescriptionStatesPreTrust(t *testing.T) {
 	}
 }
 
-// launchResultField is one verb's launch_started_at result text as a source
-// gives it: the field's type and nullability ("[]Spawn" and false for list,
-// whose composite spawns text carries it) and the text itself.
-type launchResultField struct {
-	typ      string
-	nullable bool
-	desc     string
-	enum     []string
+// resultField is one verb's result field as a source (manifest or
+// surface.json) gives it.
+type resultField struct {
+	typ        string
+	nullable   bool
+	allowEmpty bool
+	desc       string
+	enum       []string
+}
+
+// resultFieldSources returns verb's result field named field keyed by source
+// ("manifest", "surface.json"); a source lacking the field has no key.
+func resultFieldSources(t *testing.T, surface surfaceDoc, verb, field string) map[string]resultField {
+	t.Helper()
+	sources := map[string]resultField{}
+	v, ok := manifest.Lookup(verb)
+	if !ok {
+		t.Fatalf("%s not in manifest", verb)
+	}
+	for _, f := range v.ResultFields {
+		if f.Name == field {
+			sources["manifest"] = resultField{f.Type, f.Nullable, f.AllowEmpty, f.Description, f.AllowedValues}
+		}
+	}
+	for _, sv := range surface.Verbs {
+		if sv.Name != verb {
+			continue
+		}
+		for _, f := range sv.ResultFields {
+			if f.Name == field {
+				sources["surface.json"] = resultField{f.Type, f.Nullable, f.AllowEmpty, f.Description, f.AllowedValues}
+			}
+		}
+	}
+	return sources
 }
 
 // TestLaunchStartedAtResultFields pins SR-22.2 on the manifest and in
@@ -1052,29 +1081,7 @@ func TestLaunchStartedAtResultFields(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.verb, func(t *testing.T) {
-			sources := map[string]launchResultField{}
-			v, ok := manifest.Lookup(tc.verb)
-			if !ok {
-				t.Fatalf("%s not in manifest", tc.verb)
-			}
-			for _, f := range v.ResultFields {
-				if f.Name == tc.field {
-					if !tc.listRow && f.AllowEmpty {
-						t.Errorf("manifest: %s.%s.AllowEmpty = true; want false", tc.verb, f.Name)
-					}
-					sources["manifest"] = launchResultField{f.Type, f.Nullable, f.Description, f.AllowedValues}
-				}
-			}
-			for _, sv := range surface.Verbs {
-				if sv.Name != tc.verb {
-					continue
-				}
-				for _, f := range sv.ResultFields {
-					if f.Name == tc.field {
-						sources["surface.json"] = launchResultField{f.Type, f.Nullable, f.Description, f.AllowedValues}
-					}
-				}
-			}
+			sources := resultFieldSources(t, surface, tc.verb, tc.field)
 			for _, source := range []string{"manifest", "surface.json"} {
 				f, ok := sources[source]
 				if !ok {
@@ -1082,6 +1089,9 @@ func TestLaunchStartedAtResultFields(t *testing.T) {
 					continue
 				}
 				if !tc.listRow {
+					if f.allowEmpty {
+						t.Errorf("%s: %s.%s allow_empty = true; want false", source, tc.verb, tc.field)
+					}
 					if f.typ != "timestamp?" || !f.nullable {
 						t.Errorf("%s: %s.launch_started_at type %q nullable %v; want \"timestamp?\" nullable true",
 							source, tc.verb, f.typ, f.nullable)
@@ -1092,6 +1102,68 @@ func TestLaunchStartedAtResultFields(t *testing.T) {
 				}
 				apitest.AssertAgentTextCase(t, source+": "+tc.verb+" result field "+tc.field, f.desc,
 					apitest.DescLaunchStartedAtField(tc.listRow))
+			}
+		})
+	}
+}
+
+// TestPreTrustResultField pins SR-22.6's pre_trust result field (AC-SPN-08,
+// AC-CAT-04) on spawn and resume, on the manifest and in surface.json: a
+// non-nullable, non-empty string whose value set is exactly ok/skipped/failed,
+// its text stating each meaning, and the verb description (all help shows)
+// naming it. Key phrases only, never full sentences.
+func TestPreTrustResultField(t *testing.T) {
+	_, surface := readSurfaceJSON(t)
+	cases := []struct {
+		verb       string
+		skippedWhy string // why pre-trust was off for this launch
+	}{
+		{"spawn", "the caller passed no-pre-trust"},
+		{"resume", "the spawn that began the row's life turned it off with no-pre-trust"},
+	}
+	wantEnum := []string{"failed", "ok", "skipped"}
+	for _, tc := range cases {
+		t.Run(tc.verb, func(t *testing.T) {
+			sources := resultFieldSources(t, surface, tc.verb, "pre_trust")
+			for _, source := range []string{"manifest", "surface.json"} {
+				f, ok := sources[source]
+				if !ok {
+					t.Errorf("%s: %s has no pre_trust result field", source, tc.verb)
+					continue
+				}
+				if f.typ != "string" || f.nullable || f.allowEmpty {
+					t.Errorf("%s: %s.pre_trust type %q nullable %v allow_empty %v; want \"string\" false false",
+						source, tc.verb, f.typ, f.nullable, f.allowEmpty)
+				}
+				got := append([]string(nil), f.enum...)
+				sort.Strings(got)
+				if !reflect.DeepEqual(got, wantEnum) {
+					t.Errorf("%s: %s.pre_trust allowed values %v; want exactly ok, skipped, failed", source, tc.verb, f.enum)
+				}
+				for _, tok := range []string{
+					"ok = the folder-trust entry was written",
+					"skipped = pre-trust was off for this launch", tc.skippedWhy, "nothing was attempted",
+					"failed = pre-trust was attempted", "entry was not written", "launch still proceeds",
+				} {
+					if !strings.Contains(f.desc, tok) {
+						t.Errorf("%s: %s.pre_trust description does not contain %q; got %q", source, tc.verb, tok, f.desc)
+					}
+				}
+			}
+
+			v, _ := manifest.Lookup(tc.verb)
+			descs := map[string]string{"manifest": v.Description}
+			for _, sv := range surface.Verbs {
+				if sv.Name == tc.verb {
+					descs["surface.json"] = sv.Description
+				}
+			}
+			for _, source := range []string{"manifest", "surface.json"} {
+				for _, tok := range []string{"Returns the claude_instance_id and pre_trust", "ok, skipped or failed"} {
+					if !strings.Contains(descs[source], tok) {
+						t.Errorf("%s: %s description does not contain %q; got %q", source, tc.verb, tok, descs[source])
+					}
+				}
 			}
 		})
 	}

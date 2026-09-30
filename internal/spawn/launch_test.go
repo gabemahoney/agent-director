@@ -78,18 +78,26 @@ func isolateTmux(t *testing.T) string {
 }
 
 // launch runs Launch on e's store, Recorder, reader, config and clock.
-func (e *launchEnv) launch() (string, error) {
+func (e *launchEnv) launch() (string, PreTrustOutcome, error) {
 	return Launch(e.s, e.rec, e.pc, e.r, e.cfg, e.clock.Now, log.New(&e.logs, "", 0))
 }
 
-// mustLaunch runs launch and fails the test on an error.
+// mustLaunch runs launch, fails the test on an error and returns the id.
 func (e *launchEnv) mustLaunch() string {
 	e.t.Helper()
-	id, err := e.launch()
+	id, _ := e.mustLaunchOutcome()
+	return id
+}
+
+// mustLaunchOutcome runs launch, fails the test on an error and returns the
+// id and the pre-trust outcome Launch reported.
+func (e *launchEnv) mustLaunchOutcome() (string, PreTrustOutcome) {
+	e.t.Helper()
+	id, outcome, err := e.launch()
 	if err != nil {
 		e.t.Fatalf("Launch: %v", err)
 	}
-	return id
+	return id, outcome
 }
 
 // onlyCreate returns the one recorded tmux call, which must be the create.
@@ -185,9 +193,12 @@ func TestLaunchCreateFailureLeavesRowPending(t *testing.T) {
 			e.r.TmuxSessionName, e.r.TmuxSessionNameSupplied = "bot-claude-status", true
 			e.rec.Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tc.failure}, tmux.CallCreate)
 
-			_, err := e.launch()
+			_, outcome, err := e.launch()
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("Launch err = %v; want %v", err, tc.want)
+			}
+			if outcome != "" {
+				t.Errorf("outcome = %q; want none on an error (the error, not a result)", outcome)
 			}
 			if errors.Is(err, ErrTmuxSessionNameInvalid) || errors.Is(err, ErrInstanceIdCollision) {
 				t.Errorf("err = %v; must not read as a validation or collision sentinel", err)
@@ -307,18 +318,28 @@ func openRawForRead(t *testing.T, dbPath string) *sql.DB {
 	return db
 }
 
-// TestLaunchPreTrust pins b.f75 and SR-5.2: Launch trusts the cwd unless
-// NoPreTrust, prints nothing, creates the session and records the choice.
+// TestLaunchPreTrust pins b.f75, SR-5.2 and SR-22.6: Launch trusts the cwd
+// unless NoPreTrust, reports ok or skipped, prints nothing, creates the
+// session and records the choice.
 func TestLaunchPreTrust(t *testing.T) {
-	for _, noPreTrust := range []bool{false, true} {
+	cases := []struct {
+		noPreTrust bool
+		want       PreTrustOutcome
+	}{{false, PreTrustOK}, {true, PreTrustSkipped}}
+	for _, tc := range cases {
+		noPreTrust, want := tc.noPreTrust, tc.want
 		t.Run(fmt.Sprintf("NoPreTrust=%v", noPreTrust), func(t *testing.T) {
 			e := newLaunchEnv(t)
 			stub := withStubClaudeJSON(t)
 			seedFile(t, stub, `{"projects":{}}`)
 			warn := capturePreTrustWarn(t)
 			e.r.NoPreTrust = noPreTrust
-			id := e.mustLaunch()
+			id, outcome := e.mustLaunchOutcome()
 			e.onlyCreate()
+
+			if outcome != want {
+				t.Errorf("Launch outcome = %q; want %q", outcome, want)
+			}
 
 			if got := e.row(id).NoPreTrust; got != noPreTrust {
 				t.Errorf("row.NoPreTrust = %v; want %v (the spawn's choice recorded)", got, noPreTrust)
@@ -342,14 +363,18 @@ func TestLaunchPreTrust(t *testing.T) {
 }
 
 // TestLaunchMissingClaudeJSONDoesNotBlockSpawn: with no .claude.json the
-// pre-trust warns once naming the file, and the spawn still launches.
+// pre-trust warns once naming the file, Launch reports failed, and the spawn
+// still launches.
 func TestLaunchMissingClaudeJSONDoesNotBlockSpawn(t *testing.T) {
 	e := newLaunchEnv(t)
 	stub := withStubClaudeJSON(t) // a path that is never created
 	warn := capturePreTrustWarn(t)
 
-	id := e.mustLaunch()
+	id, outcome := e.mustLaunchOutcome()
 	e.onlyCreate()
+	if outcome != PreTrustFailed {
+		t.Errorf("Launch outcome = %q; want %q", outcome, PreTrustFailed)
+	}
 	if row := e.row(id); row.State != store.StatePending || row.NoPreTrust {
 		t.Errorf("row = {state %q, NoPreTrust %v}; want pending with pre-trust allowed", row.State, row.NoPreTrust)
 	}
@@ -376,7 +401,7 @@ func TestLaunchSecondInsertSurfacesCollision(t *testing.T) {
 	e := newLaunchEnv(t)
 	e.mustLaunch()
 	e.rec.Reset()
-	if _, err := e.launch(); !errors.Is(err, ErrInstanceIdCollision) {
+	if _, _, err := e.launch(); !errors.Is(err, ErrInstanceIdCollision) {
 		t.Fatalf("second Launch err = %v; want ErrInstanceIdCollision", err)
 	}
 	if calls := e.rec.SocketCalls(); len(calls) != 0 {

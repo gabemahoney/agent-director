@@ -110,13 +110,25 @@ type ResumeParams struct {
 	ClaudeInstanceID string `json:"claude_instance_id"`
 }
 
-// ResumeResult is the typed return shape. The id field is the same
-// id the caller passed in; resume preserves the instance id across
-// the resurrection (SRD §8.1).
+// ResumeResult is the typed return shape: the id and what the launch's
+// pre-trust did (pre_trust). The id field is the same id the caller passed
+// in; resume preserves the instance id across the resurrection (SRD §8.1).
 type ResumeResult struct {
 	// ClaudeInstanceID is the id of the resurrected Spawn — identical to the
 	// value passed in ResumeParams.ClaudeInstanceID.
 	ClaudeInstanceID string `json:"claude_instance_id"`
+	// PreTrust is what the launch's folder-trust pre-trust did, always one
+	// of three values (SR-22.6):
+	//   - "ok": the folder-trust entry was written.
+	//   - "skipped": pre-trust was off for this launch because the row
+	//     records that the spawn that began its life turned it off
+	//     (SpawnParams.NoPreTrust); nothing was attempted.
+	//   - "failed": pre-trust was attempted and the entry was not written
+	//     (the .claude.json file is missing, or could not be read, parsed or
+	//     written); the agent may stop at Claude Code's folder-trust prompt.
+	//
+	// A pre-trust failure never fails the resume.
+	PreTrust string `json:"pre_trust"`
 }
 
 // resumeDeps is what resume's launch uses besides the row: the handler's
@@ -414,6 +426,8 @@ func formatJsonlAttempts(attempts []jsonlAttempt) string {
 //     restore keep, so a retry after a restored failure follows it too). Best
 //     effort: its outcome never changes resume's control flow or error, and a
 //     failure prints the "pre-trust failed" line and the launch proceeds.
+//     The outcome is carried to resumeLaunchOutcome, which reports it as
+//     ResumeResult.PreTrust on success.
 //  6. The move to pending (MoveToPending): one conditional write with the
 //     snapshot of the row as read, the launch start from one read of now in
 //     milliseconds, the token, the socket and the parent id re-derived from
@@ -471,8 +485,8 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 		return ResumeResult{}, err
 	}
 
-	// The outcome is not reported yet; a failure never fails the launch.
-	_ = spawn.PreTrust(row.CWD, row.ExtraEnv, row.NoPreTrust)
+	// A failure never fails the launch; the outcome goes into the result.
+	preTrust := spawn.PreTrust(row.CWD, row.ExtraEnv, row.NoPreTrust)
 
 	// What the move clears, from the row as read: the restore writes it back
 	// byte for byte (SR-8.5).
@@ -498,7 +512,7 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 		"claude_session_id":  row.ClaudeSessionID,
 		"source":             "ad_resume",
 	})
-	return resumeLaunchOutcome(d, out, req, movedVersion, prior)
+	return resumeLaunchOutcome(d, out, req, movedVersion, prior, preTrust)
 }
 
 // resumeMoveError maps the move to pending's outcome to resume's error
@@ -523,7 +537,8 @@ func resumeMoveError(id string, res CondResult, err error) error {
 // (SR-8.5), the one place this mapping lives (SR-1.8), using internal/spawn's
 // shared description builders. A labelled session gets the identity write
 // with the move's version and token when the store provides it; a lost reply
-// is a success with no identity; a timeout or a non-zero-exit unparseable
+// is a success with no identity; both successes report preTrust, the outcome
+// of the pre-trust resumeAfterJsonl ran, as PreTrust. A timeout or a non-zero-exit unparseable
 // reply is ErrTmuxUnresponsive with the launch-timeout description and no
 // write, the row staying pending. Every other outcome restores the row
 // (resumeRestore) and returns its launch error, whose row sentence is the
@@ -532,15 +547,15 @@ func resumeMoveError(id string, res CondResult, err error) error {
 // kill by id, or saying it may still run), for "duplicate session" (whose
 // re-lookup comes with the pre-launch lookup) and for any other launch
 // failure. Every error matches exactly one catalogued sentinel (SR-1.5).
-func resumeLaunchOutcome(d resumeDeps, out spawn.CreateOutcome, req spawn.CreateRequest, movedVersion int64, prior ResumePrior) (ResumeResult, error) {
+func resumeLaunchOutcome(d resumeDeps, out spawn.CreateOutcome, req spawn.CreateRequest, movedVersion int64, prior ResumePrior, preTrust spawn.PreTrustOutcome) (ResumeResult, error) {
 	switch out.Kind {
 	case spawn.CreateLabelled:
 		if w, ok := d.s.(resumeIdentityWriter); ok {
 			spawn.RecordLaunchIdentity(w, d.pc, d.lg, req.InstanceID, movedVersion, req.Token, out.Reply)
 		}
-		return ResumeResult{ClaudeInstanceID: req.InstanceID}, nil
+		return ResumeResult{ClaudeInstanceID: req.InstanceID, PreTrust: string(preTrust)}, nil
 	case spawn.CreateLostReply:
-		return ResumeResult{ClaudeInstanceID: req.InstanceID}, nil
+		return ResumeResult{ClaudeInstanceID: req.InstanceID, PreTrust: string(preTrust)}, nil
 	case spawn.CreateUnresponsive:
 		return ResumeResult{}, spawn.LaunchTimeoutError(out.Cause, "resume", req.InstanceID, spawn.RowStaysPending)
 	}
@@ -629,14 +644,16 @@ func launchInProgressError(row Spawn) error {
 
 // Resume brings a finished (ended/missing) Spawn back to life by launching
 // `claude --resume` in a fresh tmux session pointed at the same JSONL
-// transcript. The claude_instance_id is preserved.
+// transcript. The claude_instance_id is preserved; the result returns it and
+// pre_trust (what the launch's pre-trust did: ok, skipped or failed).
 //
 // Before its launch, Resume pre-trusts the row's working directory (marks it
 // trusted in the .claude.json file of the row's CLAUDE_CONFIG_DIR, or
 // ~/.claude.json) so the agent skips Claude Code's folder-trust prompt, as a
 // spawn does, unless the spawn that began the row's life turned pre-trust off
 // (SpawnParams.NoPreTrust); then nothing is pre-trusted, on every resume of
-// that life. A pre-trust failure never fails the launch. A resume refused
+// that life, and pre_trust is skipped. A pre-trust failure never fails the
+// launch. A resume refused
 // before its move to pending writes no trust entry.
 //
 // Before it creates the session, Resume moves the row to pending in one

@@ -63,7 +63,8 @@ func trustAccepted(t *testing.T, p, cwd string) bool {
 
 // TestPreTrustMigratedV4RowResumePreTrusts: the fixture's resumable finished
 // row, migrated from v4, reads back with pre-trust allowed, and its resume
-// writes the trust entry for its cwd and moves it to pending.
+// reports pre_trust ok, writes the trust entry for its cwd and moves it to
+// pending.
 func TestPreTrustMigratedV4RowResumePreTrusts(t *testing.T) {
 	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "")
 	t.Setenv("TMUX", "")
@@ -95,8 +96,12 @@ func TestPreTrustMigratedV4RowResumePreTrusts(t *testing.T) {
 		t.Fatalf("seeded %s already trusts %s; the check would be vacuous", p, cwd)
 	}
 
-	if _, err := m.c.Resume(api.ResumeParams{ClaudeInstanceID: id}); err != nil {
+	res, err := m.c.Resume(api.ResumeParams{ClaudeInstanceID: id})
+	if err != nil {
 		t.Fatalf("Resume(%s): %v", id, err)
+	}
+	if res.PreTrust != "ok" {
+		t.Errorf("Resume(%s) pre_trust = %q; want ok (migrated rows carry the default, pre-trust allowed)", id, res.PreTrust)
 	}
 	if launches := m.rec.SocketCallsOf(tmux.CallCreate); len(launches) != 1 {
 		t.Fatalf("Resume(%s) made %d relaunches; want 1", id, len(launches))

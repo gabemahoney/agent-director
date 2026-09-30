@@ -5,16 +5,20 @@
  * the JSONL placeholder to disk, then call resume. The row records a socket
  * under the temp HOME; the fake-tmux stub creates the session on it.
  *
- * Post-b.eiv-cutover: the subprocess CLI inherits HOME=homeDir (set by
- * SubprocessClient's #homeOverride from the canonical storePath layout), so
- * the JSONL pre-flight resolves against the temp HOME. We write the JSONL
- * under homeDir; cleanup is implicit via withTempHome's rmSync.
+ * The subprocess CLI inherits HOME=homeDir (set by withTempHome), so the
+ * JSONL pre-flight and pre-trust resolve against the temp HOME. We write the
+ * JSONL and .claude.json under homeDir; cleanup is implicit via withTempHome.
  *
  * JSONL path formula (mirrors Go's spawn.JsonlPath):
  *   ${HOME}/.claude/projects/${slug(cwd)}/${sessionId}.jsonl
  * where slug() replaces every non-[A-Za-z0-9-] rune with '-'. For cwd="/tmp":
  *   slug("/tmp") = "-tmp"
  *   path = ${homeDir}/.claude/projects/-tmp/${sessionId}.jsonl
+ *
+ * pre_trust (SR-22.6): the temp HOME holds a .claude.json lacking the cwd's
+ * trust entry. An allowed row reports ok and gains the entry; a row seeded
+ * with the opt-out (seed-spawn --no-pre-trust) reports skipped and leaves the
+ * file byte-identical.
  *
  * Error path: unknown id → ErrSpawnNotFound.
  */
@@ -48,49 +52,73 @@ function slugifyCwd(cwd: string): string {
   return out;
 }
 
-test("resume: happy path — relaunches an ended spawn", async () => {
-  await withTempHome(async (homeDir) => {
-    const storePath = path.join(homeDir, ".agent-director", "state.db");
-    const spawnId = "smoke-resume-id";
-    const cwd = "/tmp";
-    const sessionId = `sess-${spawnId}`;
+/** The temp HOME's .claude.json as planted before the resume: no trust entry for any folder. */
+const CLAUDE_JSON = '{"projects": {}}\n';
 
-    // Pre-seed the parent row so the FK constraint is satisfied when the worker
-    // sets parent_id = OUTER_INSTANCE_ID via SetParentID in resumeImpl.
-    if (OUTER_INSTANCE_ID) {
+/** projects[cwd].hasTrustDialogAccepted in claudeJsonPath (undefined when absent). */
+function trustEntry(claudeJsonPath: string, cwd: string): unknown {
+  return JSON.parse(fs.readFileSync(claudeJsonPath, "utf8")).projects?.[cwd]?.hasTrustDialogAccepted;
+}
+
+test.each([
+  ["ok", "an allowed row", false],
+  ["skipped", "an opted-out row", true],
+] as const)(
+  "resume: happy path — relaunches an ended spawn, pre_trust %s for %s",
+  async (want, _label, noPreTrust) => {
+    await withTempHome(async (homeDir) => {
+      const storePath = path.join(homeDir, ".agent-director", "state.db");
+      const spawnId = `smoke-resume-${crypto.randomUUID().slice(0, 8)}`;
+      const cwd = "/tmp";
+      const sessionId = `sess-${spawnId}`;
+      const claudeJson = path.join(homeDir, ".claude.json");
+      fs.writeFileSync(claudeJson, CLAUDE_JSON);
+
+      // Pre-seed the parent row so the FK constraint is satisfied when the worker
+      // sets parent_id = OUTER_INSTANCE_ID via SetParentID in resumeImpl.
+      if (OUTER_INSTANCE_ID) {
+        runHelper("seed-spawn", {
+          store: storePath,
+          id: OUTER_INSTANCE_ID,
+          state: "working",
+          "create-store": true,
+        });
+      }
+
+      // Seed a spawn in ended state with a claude_session_id set, recorded on
+      // a socket whose directory exists (resume launches on that socket).
       runHelper("seed-spawn", {
         store: storePath,
-        id: OUTER_INSTANCE_ID,
-        state: "working",
+        state: "ended",
+        id: spawnId,
+        cwd,
+        "session-id": sessionId,
         "create-store": true,
+        socket: privateTmuxSocket(homeDir),
+        ...(noPreTrust ? { "no-pre-trust": true as const } : {}),
       });
-    }
 
-    // Seed a spawn in ended state with a claude_session_id set, recorded on
-    // a socket whose directory exists (resume launches on that socket).
-    runHelper("seed-spawn", {
-      store: storePath,
-      state: "ended",
-      id: spawnId,
-      cwd,
-      "session-id": sessionId,
-      "create-store": true,
-      socket: privateTmuxSocket(homeDir),
+      // Write the JSONL placeholder at the path the subprocess CLI's
+      // os.UserHomeDir() resolves to (HOME=homeDir, inherited from withTempHome):
+      // ${homeDir}/.claude/projects/${slug(cwd)}/${sessionId}.jsonl
+      const jsonlDir = path.join(homeDir, ".claude", "projects", slugifyCwd(cwd));
+      const jsonlFile = path.join(jsonlDir, `${sessionId}.jsonl`);
+      fs.mkdirSync(jsonlDir, { recursive: true });
+      fs.writeFileSync(jsonlFile, "{}\n");
+
+      using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
+      const result: ResumeResult = await client.resume({ claude_instance_id: spawnId });
+      expect(result.claude_instance_id).toBe(spawnId);
+      expect(result.pre_trust).toBe(want);
+      if (noPreTrust) {
+        expect(fs.readFileSync(claudeJson, "utf8")).toBe(CLAUDE_JSON);
+      } else {
+        expect(trustEntry(claudeJson, cwd)).toBe(true);
+      }
     });
-
-    // Write the JSONL placeholder at the path the subprocess CLI's
-    // os.UserHomeDir() resolves to. Since #homeOverride injects HOME=homeDir,
-    // the CLI resolves: ${homeDir}/.claude/projects/${slug(cwd)}/${sessionId}.jsonl
-    const jsonlDir = path.join(homeDir, ".claude", "projects", slugifyCwd(cwd));
-    const jsonlFile = path.join(jsonlDir, `${sessionId}.jsonl`);
-    fs.mkdirSync(jsonlDir, { recursive: true });
-    fs.writeFileSync(jsonlFile, "{}\n");
-
-    using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
-    const result: ResumeResult = await client.resume({ claude_instance_id: spawnId });
-    expect(result.claude_instance_id).toBe(spawnId);
-  });
-}, 10_000);
+  },
+  10_000,
+);
 
 test("resume: error — unknown id → ErrSpawnNotFound", async () => {
   await withTempHome(async (homeDir) => {

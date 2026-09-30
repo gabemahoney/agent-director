@@ -107,7 +107,10 @@ if err != nil {
 fmt.Println(result.ClaudeInstanceID)
 ```
 
-Returns `SpawnResult` (`.ClaudeInstanceID`). Most-likely sentinel errors:
+Returns `SpawnResult` (`.ClaudeInstanceID`, `.PreTrust`). `.PreTrust` is
+`"ok"`, `"skipped"` or `"failed"`: what the folder-trust pre-trust did (a
+failed pre-trust never fails the spawn; see the `SpawnResult.PreTrust`
+godoc). Most-likely sentinel errors:
 `ErrCwdNotFound`, `ErrCwdNotADirectory`, `ErrRelayModeInvalid`,
 `ErrTmuxNotAvailable`, `ErrTmuxSessionCreate`, `ErrTmuxUnresponsive` (the
 session-creating call timed out, here or in `Resume`: the row stays

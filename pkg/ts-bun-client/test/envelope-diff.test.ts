@@ -127,6 +127,27 @@ function slugifyCwd(cwd: string): string {
   return cwd.replace(/[^A-Za-z0-9-]/g, "-");
 }
 
+/** A .claude.json lacking any trust entry, planted identically in both homes. */
+const CLAUDE_JSON = '{"projects": {}}\n';
+
+/** plantClaudeJson writes CLAUDE_JSON into each temp home so both sides pre-trust alike. */
+function plantClaudeJson(...homes: string[]): void {
+  for (const home of homes) fs.writeFileSync(path.join(home, ".claude.json"), CLAUDE_JSON);
+}
+
+/**
+ * assertPreTrustOk pins pre_trust "ok" on both envelopes (so an ignore path
+ * cannot hide it) and checks each home's .claude.json now trusts cwd (SR-22.6).
+ */
+function assertPreTrustOk(cli: unknown, ts: unknown, cwd: string, ...homes: string[]): void {
+  expect((cli as { pre_trust?: unknown }).pre_trust).toBe("ok");
+  expect((ts as { pre_trust?: unknown }).pre_trust).toBe("ok");
+  for (const home of homes) {
+    const cfg = JSON.parse(fs.readFileSync(path.join(home, ".claude.json"), "utf8"));
+    expect(cfg.projects?.[cwd]?.hasTrustDialogAccepted).toBe(true);
+  }
+}
+
 /**
  * trimNamePrefix mirrors Go's errnames.TrimNamePrefix: strips the redundant
  * "ErrName: " prefix from desc when present, returning the bare message.
@@ -181,7 +202,7 @@ describe("spawn", () => {
   test(
     "success path",
     async () => {
-      const { homeA, storeB, cleanup } = prepareStores((store) => {
+      const { homeA, homeB, storeB, cleanup } = prepareStores((store) => {
         runHelper("seed-empty-store", { store });
         // If running inside a Claude session, seed the parent row so FK passes.
         if (OUTER_INSTANCE_ID) {
@@ -192,21 +213,26 @@ describe("spawn", () => {
           });
         }
       });
+      plantClaudeJson(homeA, homeB);
       try {
         const cli = runCli(["spawn", "--cwd", "/tmp"], cliEnv(homeA));
         expect(cli.exitCode).toBe(0);
 
+        // home: homeB keeps the Client's pre-trust on homeB's .claude.json.
         using client = await Client.create({
           storePath: storeB,
+          home: homeB,
           tmuxCommand: FAKE_TMUX_BIN, _cliPath: process.env.CLI_PATH
         } as any);
         const ts = await client.spawn({ cwd: "/tmp" });
 
+        const cliEnvelope = JSON.parse(cli.stdout) as unknown;
         assertEnvelopesEqual(
-          JSON.parse(cli.stdout) as unknown,
+          cliEnvelope,
           ts,
           { ignorePaths: loadIgnorePathsForVerb("spawn") }
         );
+        assertPreTrustOk(cliEnvelope, ts, "/tmp", homeA, homeB);
       } finally {
         cleanup();
       }
@@ -812,6 +838,7 @@ describe("resume", () => {
       const jsonlDirB = path.join(homeB, ".claude", "projects", slug);
       fs.mkdirSync(jsonlDirB, { recursive: true });
       fs.writeFileSync(path.join(jsonlDirB, `${sessId}.jsonl`), "{}\n");
+      plantClaudeJson(homeA, homeB);
 
       const priorTables = process.env.FAKE_TMUX_TABLES;
       try {
@@ -830,9 +857,11 @@ describe("resume", () => {
         } as any);
         const ts = await client.resume({ claude_instance_id: resumeId });
 
-        assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
+        const cliEnvelope = JSON.parse(cli.stdout) as unknown;
+        assertEnvelopesEqual(cliEnvelope, ts, {
           ignorePaths: loadIgnorePathsForVerb("resume"),
         });
+        assertPreTrustOk(cliEnvelope, ts, cwd, homeA, homeB);
       } finally {
         if (priorTables === undefined) delete process.env.FAKE_TMUX_TABLES;
         else process.env.FAKE_TMUX_TABLES = priorTables;

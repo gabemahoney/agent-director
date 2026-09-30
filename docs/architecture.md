@@ -1688,7 +1688,7 @@ so each stage can be tested in isolation against synthesized input.
         │       create that labels the session (@ad_owner, @ad_pane);
         │       one conditional identity write. See "Launch identity".
         ▼
-   claude_instance_id (state stays `pending` until SessionStart fires)
+   claude_instance_id, pre_trust (state stays `pending` until SessionStart fires)
 ```
 
 The verb returns once the create answers; it never waits for the agent
@@ -2017,7 +2017,8 @@ any launch path, current or future, pre-trusts by calling
 `spawn.PreTrust`; do not call `preTrustCwd` directly or write
 `.claude.json` any other way. `PreTrust` returns a `PreTrustOutcome`
 (`ok`, `skipped`, `failed`) and never returns an error; both callers
-discard the outcome today.
+carry it into their result as `pre_trust` (see "The `pre_trust` result
+field" below).
 
 Placement: pre-trust runs after every check that can refuse the launch
 without a write, and immediately before the write that begins the
@@ -2071,6 +2072,34 @@ failed for <path> (<reason>); the agent may stop at Claude Code's
 folder-trust prompt`, with the reason "file does not exist" for a
 missing file. The launch proceeds, and the agent may wait at the trust
 dialog.
+
+**The `pre_trust` result field.** Every successful `spawn` and `resume`
+result carries `pre_trust`, always exactly one of three values:
+
+- `ok`: the folder-trust entry was written.
+- `skipped`: pre-trust was off for this launch, so nothing was attempted.
+  For `spawn`, the caller passed `no-pre-trust`. For `resume`, the row
+  records that the spawn that began its life opted out; this holds on
+  every `resume` of that life, including a retry after a launch failure
+  whose row was restored.
+- `failed`: pre-trust was attempted and the entry was not written (the
+  `.claude.json` file is missing, or could not be read, parsed or
+  written). The launch still proceeds, and the agent may stop at Claude
+  Code's folder-trust prompt.
+
+A `failed` pre-trust never fails the launch; a launch that fails returns
+its error, not a result. The value is the `PreTrustOutcome` the shared
+step returned, carried unchanged into the result by both verbs
+(`string(outcome)` in `pkg/api`'s `runSpawn` and `resumeLaunchOutcome`);
+it is never recomputed from the file. The standard-error warning line
+above is printed only for `failed`, uses the same word, and is for humans
+at the CLI. Callers read the field on every surface (CLI, MCP, Go,
+TypeScript); standard error never reaches an MCP caller. The field is
+declared in the manifest's `spawn` and `resume` result fields (with its
+allowed values), as Go `SpawnResult.PreTrust` and `ResumeResult.PreTrust`
+(a plain `string`; `pkg/api` exports no type or constant for it) and as
+the TypeScript `pre_trust: "ok" | "skipped" | "failed"` on `SpawnResult`
+and `ResumeResult`.
 
 Only `hasTrustDialogAccepted` is touched. Sibling keys
 (`hasCompletedProjectOnboarding`, `hasClaudeMdExternalIncludesApproved`,
@@ -4577,6 +4606,7 @@ For each verb in `manifest.CallableVerbs()`, the harness copies a fixture store 
 - `runners.go` — `runCLI` (subprocess) and `runClient` (in-process) plus per-verb dispatch. `runCLI` passes the child a minimal environment (`HOME`, `PATH` with the fake tmux first) plus each of `TMUX`, `TMUX_TMPDIR` and `FAKE_TMUX_TABLES` (`faketmuxfix.EnvTables`) that is set in the test process (`forwardedTmuxEnv`), so a row's private socket and fake-tmux tables reach the CLI as they reach `runClient`.
 - `error_cases.go` — the per-verb error-path table (`errorCases`), with `spawnTmuxErrorCases` appended.
 - `error_cases_spawn_tmux.go` — the spawn error rows whose error comes from tmux (SR-20.5): `spawn` / `ErrTmuxUnresponsive` (the create hangs past a short configured create timeout on a minted-id spawn) and `spawn` / `ErrTmuxSessionConflict` (no row for the explicit id, and a session this store labelled for it under another token still runs, so the label scan refuses). Each row calls `usePrivateFakeTmux(t)`, which sets `TMUX` empty, a fresh `TMUX_TMPDIR` and a fresh `FAKE_TMUX_TABLES` directory, and returns the socket spawn resolves and the `faketmuxfix.Tables` the row writes or injects into; no row shares a socket or table with another test.
+- `success_pretrust.go` — the pre-trust fixture and check for the spawn and resume success cases (SR-22.6). `plantClaudeJSON` is an `extraSetup` hook that writes a `.claude.json` with no folder-trust entries into a run's HOME, so both sides report `ok`. `preTrustMismatch` checks that an envelope carries `pre_trust` equal to the case's `successCase.wantPreTrust` (`success_cases.go`); the diff alone cannot catch the field vanishing from both sides.
 - `selectors.go` — path matching with `[*]` wildcard support.
 - `diff.go` — JSON normalization and structural diff.
 - `manifest_loader.go` — loads and validates `nondeterministic.json`.
@@ -5706,6 +5736,32 @@ A test that moves HOME and emits first no longer moves the trail. The one
 exception is the `TestScanNameHeldFailOpen` child process
 (`scanTrailChildEnv` set), which needs the singleton unfixed.
 
+### pkg/api pre-trust fixture (package-internal test fixture)
+
+`pkg/api/pretrust_fixture_test.go` (package `api_test`, no tests) is the
+shared `.claude.json` fixture for the pre-trust tests in `pkg/api`
+(`spawn_pretrust_test.go`, `resume_pretrust_test.go`). Its doc comments
+carry the detail.
+
+- `seedTrustConfig(t, dir, file)` puts a `.claude.json` into `dir` in one
+  of three `trustFile` states and returns a `trustConfig`:
+  `trustLacksEntry` (present, trusting another folder only),
+  `trustMissing` (absent) or `trustUnwritable` (present, in a `0500`
+  directory; skipped as root).
+- `c.env()` is the `apitest.SpawnOption` that points a seeded row's
+  `CLAUDE_CONFIG_DIR` at `dir`; `c.extraEnv()` is the same as an extra-env
+  map for a launch. Either gives each test its own config directory.
+- `c.reset(t)` writes the seeded bytes back, removing an entry a resume
+  wrote.
+- `c.check(t, cwd, trusted, when)` asserts that the file trusts `cwd`
+  (`trusted`) or is exactly as seeded (still absent when it was); `when`
+  labels the failure.
+- `checkPreTrustJSON(t, result, want)` asserts that `result`'s JSON
+  encoding carries `pre_trust` equal to `want`, pinning the field's tag.
+
+**Must use:** a pre-trust test in `pkg/api` uses this fixture to seed and
+check `.claude.json`. Do not write a new `.claude.json` reader or seeder.
+
 ### ts-helper wrapper CLI
 
 `test/smoke/ts-helper/` is a small Go binary compiled exclusively with the
@@ -5748,7 +5804,7 @@ emptiness on success means a non-empty stderr is an unambiguous failure signal.
 
 | Subcommand | Key flags | Result shape |
 | --- | --- | --- |
-| `seed-spawn` | `--store`, `--state`, `--id`, `--cwd`, `--relay-mode`, `--session-id`, `--create-store`, `--socket` (recorded tmux socket via `apitest.WithTmuxSocket`; default `apitest.TestSocket`) | `{"claude_instance_id": "..."}` |
+| `seed-spawn` | `--store`, `--state`, `--id`, `--cwd`, `--relay-mode`, `--session-id`, `--create-store`, `--socket` (recorded tmux socket via `apitest.WithTmuxSocket`; default `apitest.TestSocket`), `--no-pre-trust` (records the pre-trust opt-out via `apitest.WithNoPreTrust`; default pre-trust allowed) | `{"claude_instance_id": "..."}` |
 | `seed-parent-child` | `--store`, `--parent-id`, `--child-id` | `{"parent_id": "...", "child_id": "..."}` |
 | `seed-permission-request` | `--store`, `--spawn-id`, `--tool` | `{"request_id": <number>}` |
 | `seed-template` | `--templates-dir`, `--name`, `--body` | `{"path": "..."}` |

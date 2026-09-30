@@ -127,6 +127,36 @@ func TestDispatch(t *testing.T) {
 		})
 	}
 
+	// --no-pre-trust records the opt-out (no_pre_trust 1); without it the row
+	// records pre-trust allowed (0).
+	for _, tc := range []struct {
+		name       string
+		noPreTrust bool
+		want       int64
+	}{
+		{"a_success_seed_spawn_no_pre_trust", true, 1},
+		{"a_success_seed_spawn_pre_trust_allowed", false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "spawn.db")
+			args := []string{"seed-spawn", "--store", dbPath, "--id", "ts-helper-npt", "--state", "ended", "--create-store"}
+			if tc.noPreTrust {
+				args = append(args, "--no-pre-trust")
+			}
+			var stdout, stderr bytes.Buffer
+			if code := dispatch(args, &stdout, &stderr); code != 0 {
+				t.Fatalf("expected exit 0, got %d; stderr: %s", code, stderr.String())
+			}
+			cols, err := apitest.ReadSpawnColumns(dbPath, "ts-helper-npt")
+			if err != nil {
+				t.Fatalf("ReadSpawnColumns: %v", err)
+			}
+			if cols.NoPreTrust != tc.want {
+				t.Fatalf("no_pre_trust = %#v, want %d", cols.NoPreTrust, tc.want)
+			}
+		})
+	}
+
 	t.Run("a_success_seed_parent_child", func(t *testing.T) {
 		dbPath := filepath.Join(t.TempDir(), "pc.db")
 

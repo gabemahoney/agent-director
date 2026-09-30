@@ -11,14 +11,26 @@ import (
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
-// SpawnResult is the typed return shape of Spawn. The CLI marshals this
-// directly to its single-JSON-object stdout (SRD §12.3); the MCP server
-// returns it as the tool result.
+// SpawnResult is the typed return shape of Spawn: the new row's id and what
+// the launch's pre-trust did (pre_trust). The CLI marshals this directly to
+// its single-JSON-object stdout (SRD §12.3); the MCP server returns it as the
+// tool result.
 type SpawnResult struct {
 	// ClaudeInstanceID is the id under which the new Spawn is tracked.
 	// Nondeterministic when SpawnParams.ClaudeInstanceID was empty — a
 	// UUID4 is minted per call.
 	ClaudeInstanceID string `json:"claude_instance_id"`
+	// PreTrust is what the launch's folder-trust pre-trust did, always one
+	// of three values (SR-22.6):
+	//   - "ok": the folder-trust entry was written.
+	//   - "skipped": pre-trust was off for this launch because the caller
+	//     passed SpawnParams.NoPreTrust; nothing was attempted.
+	//   - "failed": pre-trust was attempted and the entry was not written
+	//     (the .claude.json file is missing, or could not be read, parsed or
+	//     written); the agent may stop at Claude Code's folder-trust prompt.
+	//
+	// A pre-trust failure never fails the spawn.
+	PreTrust string `json:"pre_trust"`
 }
 
 // spawnTmux is plain spawn's tmux surface (Appendix F.5): the create, the
@@ -74,11 +86,11 @@ func runSpawn(s *store.Store, collisions spawn.CollisionChecker, t spawnTmux, pc
 			return SpawnResult{}, err
 		}
 	}
-	id, err := spawn.Launch(s, t, pc, r, cfg, now, lg)
+	id, preTrust, err := spawn.Launch(s, t, pc, r, cfg, now, lg)
 	if err != nil {
 		return SpawnResult{}, err
 	}
-	return SpawnResult{ClaudeInstanceID: id}, nil
+	return SpawnResult{ClaudeInstanceID: id, PreTrust: string(preTrust)}, nil
 }
 
 // validateExplicitInstanceID rejects a caller-supplied instance id that
@@ -109,8 +121,9 @@ func hasControlChar(id string) bool {
 }
 
 // Spawn launches a tracked Claude Code instance inside a new tmux session.
-// The call returns the claude_instance_id without waiting for the agent; the
-// row is pending from its insert until the agent reports in (Claude Code's
+// The call returns the claude_instance_id and pre_trust (what the launch's
+// folder-trust pre-trust did: ok, skipped or failed; a failure never fails
+// the spawn) without waiting for the agent; the row is pending from its insert until the agent reports in (Claude Code's
 // SessionStart), then waiting. Use [Client.Status] or [Client.Get] to observe
 // progress. The session is labelled for this launch when it is created, and
 // the session-creating call is bounded by the create timeout. If it times

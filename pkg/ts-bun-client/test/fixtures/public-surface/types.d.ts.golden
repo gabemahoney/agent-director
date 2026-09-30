@@ -149,15 +149,33 @@ export interface SpawnParams {
     extra_env?: Record<string, string>;
     /** Pass-through argv to `claude` after --settings. */
     claude_args?: string[];
-    /** Skip pre-writing workspace-trust into ~/.claude.json. Default false. */
+    /**
+     * Skip pre-writing the folder-trust entry for `cwd` (into
+     * `<CLAUDE_CONFIG_DIR>/.claude.json` when `extra_env` sets `CLAUDE_CONFIG_DIR`,
+     * otherwise `~/.claude.json`). The choice is recorded on the row for its life,
+     * and every `resume` of that life follows it. The result then reports
+     * `pre_trust: "skipped"`. Default false.
+     */
     no_pre_trust?: boolean;
     /** Explicit tmux session name. Auto-derived when absent. */
     tmux_session_name?: string;
 }
-/** Mirrors pkg/api/spawn.go::SpawnResult */
+/**
+ * Mirrors pkg/api/spawn.go::SpawnResult. The row is `pending` from its insert until
+ * the agent reports in (Claude Code's SessionStart), then `waiting`.
+ */
 export interface SpawnResult {
     /** The id the new Spawn is tracked under. */
     claude_instance_id: string;
+    /**
+     * What the launch's folder-trust pre-trust did. `"ok"`: the folder-trust entry was
+     * written. `"skipped"`: pre-trust was off for this launch because the caller passed
+     * `no_pre_trust`; nothing was attempted. `"failed"`: pre-trust was attempted and the
+     * entry was not written (the `.claude.json` file is missing, or could not be read,
+     * parsed or written); the agent may stop at Claude Code's folder-trust prompt.
+     * A pre-trust failure never fails the spawn.
+     */
+    pre_trust: "ok" | "skipped" | "failed";
 }
 /** Mirrors the `status` CLI verb's --claude-instance-id flag (pkg/api.Client.Status arg). */
 export interface StatusParams {
@@ -302,10 +320,23 @@ export interface ResumeParams {
     /** Id of the terminated Spawn to resurrect. */
     claude_instance_id: string;
 }
-/** Mirrors pkg/api/resume.go::ResumeResult */
+/**
+ * Mirrors pkg/api/resume.go::ResumeResult. Resume moved the row to `pending`, keeping
+ * its session id and history, until the agent reports in (Claude Code's SessionStart),
+ * then `waiting`.
+ */
 export interface ResumeResult {
     /** Same id that was passed in (preserved across resurrection). */
     claude_instance_id: string;
+    /**
+     * What the launch's folder-trust pre-trust did. `"ok"`: the folder-trust entry was
+     * written. `"skipped"`: pre-trust was off for this launch because the row records that
+     * the spawn that began its life turned it off (`no_pre_trust`); nothing was attempted.
+     * `"failed"`: pre-trust was attempted and the entry was not written (the `.claude.json`
+     * file is missing, or could not be read, parsed or written); the agent may stop at
+     * Claude Code's folder-trust prompt. A pre-trust failure never fails the resume.
+     */
+    pre_trust: "ok" | "skipped" | "failed";
 }
 /** Mirrors the `find-missing` CLI verb's --timeout flag (pkg/api.Client.FindMissing ctx deadline). */
 export interface FindMissingParams {

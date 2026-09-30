@@ -1,8 +1,10 @@
 /**
  * Smoke test — spawn verb
  *
- * Happy path: cwd = the temp HOME dir (already exists). Asserts result has
- * claude_instance_id field.
+ * Happy path: cwd = the temp HOME dir (already exists), with a temp-HOME
+ * .claude.json lacking its trust entry. Asserts claude_instance_id and
+ * pre_trust: ok writes the entry; no_pre_trust reports skipped and leaves the
+ * file byte-identical (SR-22.6).
  *
  * Error paths: empty cwd → ErrCwdMissing; an id with a control character →
  * ErrInvalidFlags with no row and no tmux session created.
@@ -62,20 +64,44 @@ function newSessionCount(logPath: string): number {
     .filter((rec) => rec.split("\n").includes("new-session")).length;
 }
 
-test("spawn: happy path — creates instance with valid cwd", async () => {
-  await withTempHome(async (homeDir) => {
-    const storePath = path.join(homeDir, ".agent-director", "state.db");
+/** The temp HOME's .claude.json as planted before the spawn: no trust entry for any folder. */
+const CLAUDE_JSON = '{"projects": {}}\n';
 
-    // Pre-seed the parent row so the FK constraint is satisfied when the worker
-    // sets parent_id = OUTER_INSTANCE_ID on the new spawn row.
-    seedOuterParent(storePath);
+/** projects[cwd].hasTrustDialogAccepted in claudeJsonPath (undefined when absent). */
+function trustEntry(claudeJsonPath: string, cwd: string): unknown {
+  return JSON.parse(fs.readFileSync(claudeJsonPath, "utf8")).projects?.[cwd]?.hasTrustDialogAccepted;
+}
 
-    using client = await Client.create({ storePath, createIfMissing: true, tmuxCommand: fakeTmuxBin , _cliPath: process.env.CLI_PATH } as any);
-    const result: SpawnResult = await client.spawn({ cwd: homeDir });
-    expect(typeof result.claude_instance_id).toBe("string");
-    expect(result.claude_instance_id.length).toBeGreaterThan(0);
-  });
-}, 10_000);
+test.each([
+  ["ok", false],
+  ["skipped", true],
+] as const)(
+  "spawn: happy path — creates instance with valid cwd, pre_trust %s",
+  async (want, noPreTrust) => {
+    await withTempHome(async (homeDir) => {
+      const storePath = path.join(homeDir, ".agent-director", "state.db");
+      const claudeJson = path.join(homeDir, ".claude.json");
+      fs.writeFileSync(claudeJson, CLAUDE_JSON);
+
+      // Pre-seed the parent row so the FK constraint is satisfied when the worker
+      // sets parent_id = OUTER_INSTANCE_ID on the new spawn row.
+      seedOuterParent(storePath);
+
+      using client = await Client.create({ storePath, createIfMissing: true, tmuxCommand: fakeTmuxBin , _cliPath: process.env.CLI_PATH } as any);
+      const result: SpawnResult = await client.spawn({ cwd: homeDir, ...(noPreTrust ? { no_pre_trust: true } : {}) });
+      expect(typeof result.claude_instance_id).toBe("string");
+      expect(result.claude_instance_id.length).toBeGreaterThan(0);
+      expect(result.pre_trust).toBe(want);
+      if (noPreTrust) {
+        expect(fs.readFileSync(claudeJson, "utf8")).toBe(CLAUDE_JSON);
+      } else {
+        // The entry is keyed by the canonical cwd (the spawn resolves symlinks).
+        expect(trustEntry(claudeJson, fs.realpathSync(homeDir))).toBe(true);
+      }
+    });
+  },
+  10_000,
+);
 
 test("spawn: error — empty cwd → ErrCwdMissing", async () => {
   await withTempHome(async (homeDir) => {

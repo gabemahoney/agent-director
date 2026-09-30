@@ -22,6 +22,8 @@
 //     driver can feed the returned error into AssertExpectedError.
 //   - LaunchStartedAt: for status, get and list, reads the launch start the
 //     Happy result shows for the seeded row; the driver checks it.
+//   - PreTrust: for spawn and resume, reads the Happy result's pre_trust; the
+//     driver plants HOME/.claude.json first and checks it is "ok".
 //
 // Adding a new callable verb to the manifest requires adding a matching
 // entry here. The driver's startup check fails the build with a clear
@@ -129,6 +131,12 @@ type seederSpec struct {
 	// asserts it equals smokeLaunchStartMillis, in UTC. Set by the specs
 	// seeded with seedPendingLaunch.
 	LaunchStartedAt func(result any, id string) *time.Time
+
+	// PreTrust, when non-nil, returns the pre_trust the Happy result
+	// reports. The driver plants a .claude.json lacking the folder-trust
+	// entry in the per-subtest HOME before Happy and asserts "ok"
+	// (SR-22.6). Set by the launch verbs, spawn and resume.
+	PreTrust func(result any) string
 }
 
 // seeders is the canonical registry: one entry per callable verb. The
@@ -170,6 +178,9 @@ func init() {
 			// ErrCwdMissing — empty CWD violates the spawn precondition.
 			_, err := c.Spawn(api.SpawnParams{})
 			return err
+		},
+		PreTrust: func(result any) string {
+			return result.(api.SpawnResult).PreTrust
 		},
 	}
 
@@ -322,6 +333,9 @@ func init() {
 		Error: func(c *api.Client, _ context.Context) error {
 			_, err := c.Resume(api.ResumeParams{ClaudeInstanceID: bogusID})
 			return err
+		},
+		PreTrust: func(result any) string {
+			return result.(api.ResumeResult).PreTrust
 		},
 	}
 

@@ -111,7 +111,7 @@ func TestLaunchRefusesUnusableSocketDir(t *testing.T) {
 				t.Fatalf("seed claude.json: %v", err)
 			}
 
-			_, err := e.launch()
+			_, _, err := e.launch()
 			if !errors.Is(err, tmux.ErrTmuxNotAvailable) {
 				t.Fatalf("Launch err = %v; want ErrTmuxNotAvailable", err)
 			}

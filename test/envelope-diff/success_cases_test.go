@@ -10,10 +10,12 @@
 //     so mutations from each execution path stay isolated.
 //  3. Setup  — if successCase.extraSetup is non-nil, call it once per copy
 //     with HOME pointing at that copy's homeDir.  For most verbs
-//     this is a no-op; for resume it creates the JSONL transcript.
+//     this is a no-op; for resume it creates the JSONL transcript, and
+//     for spawn and resume it plants HOME/.claude.json for pre-trust.
 //  4. Run    — collect JSON envelopes from runCLI and runClient, each
 //     against a private fake tmux (its own socket and tables).
-//  5. Diff   — normalize both envelopes and compare via structuralDiff,
+//  5. Diff   — normalize both envelopes, check each carries the case's
+//     wantPreTrust (spawn, resume), and compare via structuralDiff,
 //     suppressing fields listed in nondeterministic.json.
 //  6. Assert — t.Errorf if any diff entries remain after suppression.
 package envelope_diff
@@ -105,6 +107,18 @@ func TestEnvelopeDiff_Success(t *testing.T) {
 			if err != nil {
 				t.Fatalf("normalize Client envelope for %q: %v\nraw: %s",
 					verb.Name, err, clientEnv)
+			}
+
+			// ── 5. Pin pre_trust (spawn, resume) ───────────────────────
+			// The diff alone passes when the field vanishes from both
+			// sides, so both envelopes must carry the expected value.
+			if sc.wantPreTrust != "" {
+				if err := preTrustMismatch(cliNorm, sc.wantPreTrust); err != nil {
+					t.Errorf("%s: CLI envelope: %v\nraw: %s", verb.Name, err, cliNorm)
+				}
+				if err := preTrustMismatch(clientNorm, sc.wantPreTrust); err != nil {
+					t.Errorf("%s: Client envelope: %v\nraw: %s", verb.Name, err, clientNorm)
+				}
 			}
 
 			// ── 5. Load ignore selectors ───────────────────────────────

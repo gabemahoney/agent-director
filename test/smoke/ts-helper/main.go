@@ -10,7 +10,8 @@
 // Available subcommands (use `ts-helper json-schema` for machine-readable
 // result shapes):
 //
-//	seed-spawn           Insert one spawn row at a requested state.
+//	seed-spawn           Insert one spawn row at a requested state
+//	                     (--no-pre-trust records the pre-trust opt-out).
 //	seed-parent-child    Link an existing child spawn to an existing parent.
 //	seed-permission-request  Insert an open permission request for a spawn.
 //	seed-template        Write a .toml template file.
@@ -91,6 +92,7 @@ func cmdSeedSpawn(args []string, stdout, stderr io.Writer) int {
 		sessionID   = fs.String("session-id", "", "claude_session_id; non-empty enables resume pre-flight")
 		createStore = fs.Bool("create-store", false, "create the store if it does not exist")
 		socket      = fs.String("socket", "", "recorded tmux socket; defaults to apitest.TestSocket (a resume needs its directory to exist)")
+		noPreTrust  = fs.Bool("no-pre-trust", false, "record the pre-trust opt-out on the row (apitest.WithNoPreTrust); default records pre-trust allowed")
 	)
 
 	if err := fs.Parse(args); err != nil {
@@ -107,6 +109,9 @@ func cmdSeedSpawn(args []string, stdout, stderr io.Writer) int {
 	var opts []apitest.SpawnOption
 	if *socket != "" {
 		opts = append(opts, apitest.WithTmuxSocket(*socket))
+	}
+	if *noPreTrust {
+		opts = append(opts, apitest.WithNoPreTrust())
 	}
 
 	instanceID, err := apitest.SeedSpawn(*storePath, *id, *state, *cwd, *relayMode, *sessionID, *createStore, opts...)

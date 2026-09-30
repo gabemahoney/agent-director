@@ -60,32 +60,38 @@ const envInstanceID = "AGENT_DIRECTOR_INSTANCE_ID"
 // with no identity recorded. On an insert collision ErrInstanceIdCollision
 // surfaces (the TOCTOU fallback of the pre-check).
 //
+// On success Launch returns the instance id and the outcome of the step 3
+// pre-trust exactly as PreTrust reported it: PreTrustSkipped when
+// NoPreTrust is set (no file touched), otherwise PreTrustOK or
+// PreTrustFailed (SR-22.6 "The field"). Every error path returns its error
+// and no outcome.
+//
 // Launch does not wait for Claude to come up: the row stays pending until
 // the first SessionStart hook moves it.
-func Launch(s *store.Store, t LaunchTmux, pc tmux.ProcChecker, r Resolved, cfg config.Config, now func() time.Time, lg *log.Logger) (string, error) {
+func Launch(s *store.Store, t LaunchTmux, pc tmux.ProcChecker, r Resolved, cfg config.Config, now func() time.Time, lg *log.Logger) (string, PreTrustOutcome, error) {
 	socket, err := ResolveLaunchSocket()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	token, err := NewLaunchToken()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	envs := composeEnv(r)
 	settings, err := synthesizeSettings(r, cfg)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
-	// The outcome is not reported yet; a failure never fails the spawn.
-	_ = PreTrust(r.CWD, r.ExtraEnv, r.NoPreTrust)
+	// A failure never fails the spawn; the outcome is returned on success.
+	preTrust := PreTrust(r.CWD, r.ExtraEnv, r.NoPreTrust)
 
 	command := []string{claudeBinary, "--settings", settings}
 	command = append(command, r.ClaudeArgs...)
 
 	if err := insertPending(s, r, now().UnixMilli(), token, socket); err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	// The create's own -e entry carries AGENT_DIRECTOR_INSTANCE_ID once; the
@@ -102,12 +108,12 @@ func Launch(s *store.Store, t LaunchTmux, pc tmux.ProcChecker, r Resolved, cfg c
 	}
 	out := CreateAndLabel(t, req)
 	if err := plainSpawnCreateError(out, req); err != nil {
-		return "", err
+		return "", "", err
 	}
 	if out.Kind == CreateLabelled {
 		RecordLaunchIdentity(s, pc, lg, r.ClaudeInstanceID, insertRowVersion, token, out.Reply)
 	}
-	return r.ClaudeInstanceID, nil
+	return r.ClaudeInstanceID, preTrust, nil
 }
 
 // insertRowVersion is the row_version the pending insert leaves, the version
