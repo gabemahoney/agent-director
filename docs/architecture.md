@@ -4232,7 +4232,8 @@ entry the replay tests use. The package is `realtmux_test`, all `_test.go`
 files. The package doc comment is in `main_test.go`. The shared helpers are in
 `harness_test.go` (isolation, raw runner, cleanup), `harness_client_test.go`
 (production client, recording, creates, starters, generators, assertions)
-and `harness_proc_test.go` (polling, `/proc` readers). tmux 3.2a is covered
+and `harness_proc_test.go` (polling, `/proc` readers). The shared lookup
+fixture is in `lookup_helpers_test.go`. tmux 3.2a is covered
 only by the replay catalogue; the real-tmux tests run on the sandbox image's
 3.3a (SR-20.8, AC-TEST-03).
 
@@ -4326,6 +4327,69 @@ so it skips in the sandbox. That is the run's one skip.
   (`-x`, `--`, `-l`) and texts holding a `;` (a final `;` included, which
   the client sends escaped) go through the production `SendKeysPane` with
   Enter into a pane running `cat -` and arrive literally.
+- Lookup (SR-3.3, SR-3.4, SR-3.7, SR-3.8, SR-3.10, SR-3.12, SR-3.13,
+  SR-20.7; AC-LKP-04 and the real-tmux halves of AC-LKP-19 and AC-LKP-20):
+  one `tmux.Lookup` per case against real tmux, through the lookup fixture
+  below. These files drive only the lookup (and, for `remain-on-exit`, the
+  shared process judgement), never `Sweep` or the pane listing. Four files:
+  - `lookup_ownership_test.go`: the Ours side. A row with the create's
+    server identity reads Ours (`ours`, server status `match`, no
+    `Disagree`, `Adopt` false); a row with no recorded identity is also Ours
+    with status `unknown` and `Adopt` true. Both rows report the create
+    reply's server as the answering server. A renamed
+    session is still Ours by the same session id, with no `Disagree`; the
+    new name's holder is that session (class current) and the old name is
+    not held. A grouped viewer session (`new-session -t`) and a session
+    holding a linked window share the agent's pane id, but only the agent's
+    own session is Ours; the viewers are never Ours or Leftover. Killing
+    only the agent's session reads Gone while its pane process still reads
+    alive. With `remain-on-exit` on and the pane dead (`pane_dead` 1), the
+    row is still Ours while the process judgement reads gone.
+  - `lookup_provenance_test.go`: paths that never make a session Ours. An
+    `@ad_owner` value set alone at `-g`, `-s` or `-gw` gives Can't tell
+    `provenance_conflict` with `scope_value`, both next to the agent's own
+    label and when it is the exact label an unlabelled session would carry.
+    Unsetting it returns the labelled shape to Ours and the unlabelled shape
+    to Gone. A label carrying a raw newline gives `provenance_conflict` with
+    `scope_value` when its session lists last, and a malformed answer
+    (`cant_tell`) when it lists before another session; never Ours or
+    Leftover either way. In the `cant_tell` case `Cause` is
+    `FailUnrecognized` and its error quotes no label text. AC-LKP-04: an
+    unlabelled session is created with `-e AGENT_DIRECTOR_INSTANCE_ID=<id>`
+    and each case looks up two rows, the row and another row. In one case
+    the row's id is in the session `-e`. In the other, the row's id is in
+    the global environment (`set-environment -g`) and the other row's id
+    is in the session `-e`. In each case both rows read Gone, with the
+    session as the name's holder at class none.
+  - `lookup_server_test.go`: the server check. After `kill-server`, once
+    the recorded server reads gone, the lookup is Gone (status `restarted`,
+    no `Disagree`). A new server on the same socket reads `restarted` with
+    `server_restarted`, never `different_server`: Gone unlabelled, Ours
+    when relabelled by id. A new server re-bound on the socket path while
+    the recorded one still runs reads Can't tell `different_server` with
+    `server_mismatch`, never Ours, even with the row's label. Before the
+    re-bind the old server reads alive and carries no `AGENT_DIRECTOR_*`
+    variables; after it, the old server is still Ours on the moved socket.
+    A row with no recorded identity accepts whichever server answers
+    (status `unknown`; Ours with `Adopt` true only when that server's
+    session carries the row's label). Every row checks the answering
+    server's identity. Cases pass whether the killed server is reaped or a
+    zombie.
+  - `lookup_store_test.go`: two stores on one server. For both stores, each
+    with and without a spaced id, the production create writes the
+    five-field label ending in the store id it was given; the creating
+    store's row reads Ours and the listed label parses as `Valid`. Another
+    store's session with the row's id reads Gone for the row with the row's
+    token, another token or none, and with no recorded identity (status
+    `unknown`); never Ours or Leftover, no leftovers, `Adopt` false. As a
+    name holder it has class other store, whose case words are "another
+    agent-director store". With both stores' agents under one id, with
+    different tokens and with the same token, each store's row is Ours with
+    its own session only, and the other store's session holds the other
+    name at class other store. Renaming either or both sessions changes
+    nothing. A row with an empty `StoreID` reads Gone, with the holder at
+    class other store, for this store's token, the other store's token and
+    no token.
 
 **Helpers** (package-level identifiers in the `_test.go` files; each doc
 comment has the detail):
@@ -4371,12 +4435,48 @@ comment has the detail):
   10 s), `waitForObserved` (own budget), `pidGone`, `waitPidGone`,
   `procState`, `procEnviron`, `procCmdline` and `envValue`. Waits poll
   every `pollInterval` and never sleep a fixed time.
+- Lookup fixture (`lookup_helpers_test.go`): `newLookupFix(t)` returns a
+  `*lookupFix` (the embedded `*realTmux`, `Client` from `newClient()` and
+  `PC` = `probe.NewProcChecker()`, the production start-time reader).
+  `f.agent(t, createSpec)` and `f.agentOn(t, rt, spec)` run the production
+  create and return an `agent` (`created`, `Socket`, `PaneStart`, and
+  `Server`, a `serverIdentity{PID, Start, Starttime}` taken from the create
+  reply plus the reader, never from a lookup). Another store's agent is
+  `createSpec{StoreID: tmuxfix.OtherStoreID}`. `f.serverOf(t, rt,
+  sessionID)` reads the identity of a server a raw starter began;
+  `f.startOf(t, pid)` reads a live process's start time. Rows:
+  `a.row(opts...)` and `rowFor(instanceID, token, socket, srv, opts...)`
+  build a `tmux.Launch` whose store id is `tmuxfix.StoreID` by default
+  (whatever store the agent was created for), with options
+  `withoutIdentity()`, `withServer(srv)`, `withInstanceID(id)`,
+  `withToken(tok)` (`""` is no token), `withStoreID(id)` (overrides the
+  store id) and `withSocket(sock)`. `a.pane()` is the recorded pane identity for
+  `f.judge(id)` (`tmux.JudgeProcess` with the production reader).
+  `f.lookup(row, holder)` is the one `tmux.Lookup` call (`""` for no
+  holder). `f.rebind(t, rt, spec)` moves the running server's socket
+  aside (still tracked for cleanup) and starts a new server at the old
+  path, returning the aside world and the new agent. `f.endServer(t, rt,
+  srv)` sends `kill-server` and waits until `srv` reads gone (a zombie
+  counts). `assertResult(t, what, got, wantResult{...})` compares
+  `Verdict`, `CantTell`, `Token()`, the Ours `Session`, `Leftovers`,
+  `Holder`, `HolderClass`, `Server` and `Disagree` strictly (empty means
+  none) and never prints a label value; check `Adopt`, the answering
+  server's identity and `Cause` directly.
 
-**Must use:** later real-tmux tests (Epic 5 Task 4, then the verb Epics
-per SR-20.7) add their cases to `test/realtmux`. They reuse these helpers
+**Must use:** later real-tmux tests (the lookup scenarios, then the verb
+tests per SR-20.7) add their cases to `test/realtmux`. They reuse these helpers
 and never shell out to tmux themselves, never pass a socket outside
 `rt.Dir`, and never spell a reply wording: it comes from the catalogue.
-New helpers go in a `harness_*_test.go` file other than `harness_test.go`.
+Every real-tmux lookup test builds its agents, rows, lookups and
+assertions with the lookup fixture and uses the production reader
+`probe.NewProcChecker()` (never `procfix`). It never builds a
+`tmux.Launch` by hand and never invents a server identity: every recorded
+identity comes from the fixture (`agent.Server`, `f.serverOf`). A
+`tmux.ProcIdentity{PID, Starttime}` view of such a recorded identity, for
+`f.judge`, is allowed.
+New helpers go in a `harness_*_test.go` file other than `harness_test.go`,
+or in a named fixture file such as `lookup_helpers_test.go` for a
+feature's shared fixture.
 
 ### apitest `[tmux]` config writer (reusable test fixture)
 
