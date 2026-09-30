@@ -41,6 +41,30 @@ type RowSnapshot = store.RowSnapshot
 // server identity and pane (SR-3.3 to SR-3.6); zero values mean NULL.
 type LaunchIdentity = store.LaunchIdentity
 
+// ResumePrior is re-exported from internal/store for the same reason. It holds
+// what resume's move to pending clears, exactly as stored, so the restore after
+// a failed launch writes it back byte for byte (SR-8.5); zero values mean NULL.
+type ResumePrior = store.ResumePrior
+
+// CondResult is re-exported from internal/store for the same reason. It
+// reports the outcome of a conditional write (SR-5.3): CondApplied,
+// CondChanged or CondAbsent.
+type CondResult = store.CondResult
+
+// The outcomes of a conditional write (SR-5.3), re-exported from
+// internal/store; each is identical to its original.
+const (
+	// CondApplied is store.CondApplied: the row met the condition and the
+	// write was applied.
+	CondApplied = store.CondApplied
+	// CondChanged is store.CondChanged: the row exists but no longer meets
+	// the condition; nothing was written.
+	CondChanged = store.CondChanged
+	// CondAbsent is store.CondAbsent: the row no longer exists; nothing was
+	// written.
+	CondAbsent = store.CondAbsent
+)
+
 // ── Error sentinel re-exports ─────────────────────────────────────────────────
 //
 // These var declarations re-export internal error sentinels under the pkg/api

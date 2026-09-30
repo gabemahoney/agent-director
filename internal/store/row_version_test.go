@@ -27,6 +27,10 @@ type rowVersionCase struct {
 	wantState string
 	// identity is the server and pane identity the write stores; nil keeps it.
 	identity *store.LaunchIdentity
+	// writesToken: the write also stores identity's launch token and socket.
+	writesToken bool
+	// launchStart is the launch_started_at the write sets; 0 = cleared or kept per clears.
+	launchStart int64
 }
 
 // rowVersionSeed sets every column no write may touch, and the launch start,
@@ -50,9 +54,11 @@ func seedCase(t *testing.T, f *v5Store, c rowVersionCase) string {
 	return id
 }
 
-// stableColumns are the columns no write in this release may change (SR-5.2).
-// The six identity columns (identityColumns) are stable too, except for
-// RecordLaunchIdentity, which writes them.
+// stableColumns are the columns a versioned write keeps (SR-5.2), except that
+// MoveToPending and RestoreAfterFailedResume write launch_token and
+// tmux_socket (c.writesToken). The six identity columns (identityColumns) are
+// kept too, except by RecordLaunchIdentity, MoveToPending and
+// RestoreAfterFailedResume, which write them (c.identity).
 func stableColumns(c apitest.SpawnColumns) map[string]any {
 	return map[string]any{
 		"life_number": c.LifeNumber, "no_pre_trust": c.NoPreTrust,
@@ -73,19 +79,41 @@ func assertColumns(t *testing.T, before, after, want map[string]any) {
 	}
 }
 
+// rvNilIfZero is v as a NULLable column stores it: the zero value as NULL.
+func rvNilIfZero[T comparable](v T) any {
+	var zero T
+	if v == zero {
+		return nil
+	}
+	return v
+}
+
 // assertVersionedWrite checks the SR-5.2 rules between two reads of one row:
-// stable columns kept, identity columns kept or as c.identity stores them.
+// stable columns kept, identity columns kept or as c.identity stores them,
+// launch token and socket kept or as c.identity stores them (c.writesToken).
 func assertVersionedWrite(t *testing.T, before, after apitest.SpawnColumns, c rowVersionCase) {
 	t.Helper()
-	assertColumns(t, stableColumns(before), stableColumns(after), stableColumns(before))
-	wantID := identityColumns(before)
-	if c.identity != nil {
-		wantID = wantIdentityColumns(*c.identity)
-		if reflect.DeepEqual(wantID, identityColumns(before)) {
-			t.Fatal("seeded identity equals the written one; the write check would be vacuous")
+	wantStable := stableColumns(before)
+	if c.writesToken {
+		wantStable["launch_token"], wantStable["tmux_socket"] = rvNilIfZero(c.identity.Token), rvNilIfZero(c.identity.Socket)
+		if wantStable["launch_token"] == before.LaunchToken || wantStable["tmux_socket"] == before.TmuxSocket {
+			t.Fatal("token or socket before the write equals the written one; the write check would be vacuous")
 		}
 	}
-	assertColumns(t, identityColumns(before), identityColumns(after), wantID)
+	assertColumns(t, stableColumns(before), stableColumns(after), wantStable)
+	if c.identity == nil {
+		assertColumns(t, identityColumns(before), identityColumns(after), identityColumns(before))
+	} else {
+		// A write of the identity may start from a NULL one (the restore), so
+		// the vacuity guard is that the written identity differs from before.
+		wantID := wantIdentityColumns(*c.identity)
+		if reflect.DeepEqual(wantID, identityColumns(before)) {
+			t.Fatal("identity before the write equals the written one; the write check would be vacuous")
+		}
+		if got := identityColumns(after); !reflect.DeepEqual(got, wantID) {
+			t.Errorf("identity %#v -> %#v, want %#v", identityColumns(before), got, wantID)
+		}
+	}
 	bv, bok := before.RowVersion.(int64)
 	av, aok := after.RowVersion.(int64)
 	if !bok || !aok || av != bv+1 {
@@ -95,6 +123,13 @@ func assertVersionedWrite(t *testing.T, before, after apitest.SpawnColumns, c ro
 		t.Fatal("seed left launch_started_at NULL; the launch-start check would be vacuous")
 	}
 	switch {
+	case c.launchStart != 0:
+		if before.LaunchStartedAt == c.launchStart {
+			t.Fatal("launch_started_at before the write equals the written one; the check would be vacuous")
+		}
+		if after.LaunchStartedAt != c.launchStart {
+			t.Errorf("launch_started_at %#v -> %#v, want %d", before.LaunchStartedAt, after.LaunchStartedAt, c.launchStart)
+		}
 	case c.clears && after.LaunchStartedAt != nil:
 		t.Errorf("launch_started_at = %#v, want NULL after a non-pending state write", after.LaunchStartedAt)
 	case !c.clears && !reflect.DeepEqual(after.LaunchStartedAt, before.LaunchStartedAt):
@@ -220,6 +255,154 @@ var liveness = []apitest.SpawnOption{
 	apitest.WithLivenessUnverifiedSince("2026-01-01 00:00:00"), apitest.WithLivenessNote("probe_eacces"),
 }
 
+// rvMove* are resume's move arguments: a launch start, token and socket unlike the seed's.
+const (
+	rvMoveStart  int64 = 1767225900456
+	rvMoveToken        = "fedcba9876543210"
+	rvMoveSocket       = "/tmp/rv/resume-sock"
+)
+
+// rvMoveIdentity is what the move stores: its token and socket, no server or pane.
+func rvMoveIdentity() store.LaunchIdentity {
+	return store.LaunchIdentity{Token: rvMoveToken, Socket: rvMoveSocket}
+}
+
+// rvExamine reads id's row as resume does before the move.
+func rvExamine(t *testing.T, f *v5Store, id string) store.Spawn {
+	t.Helper()
+	sp, err := f.s.GetSpawn(id)
+	if err != nil {
+		t.Fatalf("GetSpawn: %v", err)
+	}
+	return sp
+}
+
+// rvMove runs the move of id from examined with no parent, expecting want and,
+// when applied, the examined version plus one; it returns the moved version.
+func rvMove(t *testing.T, f *v5Store, id string, examined store.Spawn, want store.CondResult) int64 {
+	t.Helper()
+	var wantV int64
+	if want == store.CondApplied {
+		wantV = examined.Snapshot.RowVersion + 1
+	}
+	got, v, err := f.s.MoveToPending(id, examined.Snapshot, rvMoveStart, rvMoveToken, rvMoveSocket, "")
+	if err != nil || got != want || v != wantV {
+		t.Fatalf("MoveToPending = %v, %d, %v; want %v, %d, nil", got, v, err, want, wantV)
+	}
+	return v
+}
+
+// rvHealPath is a versioned write that is not a hook: it advances id's version
+// between resume's read and its write (the row must be seeded with sess-rv).
+func rvHealPath(t *testing.T, f *v5Store, id string) {
+	t.Helper()
+	got, err := f.s.HealJsonlPath(id, "sess-rv", "/tmp/rv/healed.jsonl")
+	wantBool(t, "HealJsonlPath", got, err, true)
+}
+
+// rvResume carries one resume's prior row and moved version from a case's
+// setup to its write.
+type rvResume struct {
+	prior store.ResumePrior
+	moved int64
+}
+
+// move examines id, keeps its prior values and moves it to pending.
+func (r *rvResume) move(t *testing.T, f *v5Store, id string) {
+	t.Helper()
+	sp := rvExamine(t, f, id)
+	r.prior = store.ResumePrior{State: sp.State, EndedAtText: sp.EndedAtText, PID: sp.PID,
+		ProcStarttime: sp.ProcStarttime, LivenessUnverifiedSince: sp.LivenessUnverifiedSince,
+		LivenessNote: sp.LivenessNote, Identity: sp.Identity}
+	r.moved = rvMove(t, f, id, sp, store.CondApplied)
+}
+
+// restore returns the restore of r's prior row at r's moved version, expecting want.
+func (r *rvResume) restore(want store.CondResult) func(*testing.T, *v5Store, string) {
+	return func(t *testing.T, f *v5Store, id string) {
+		if got, err := f.s.RestoreAfterFailedResume(id, r.moved, r.prior); err != nil || got != want {
+			t.Fatalf("RestoreAfterFailedResume(version %d) = %v, %v; want %v, nil", r.moved, got, err, want)
+		}
+	}
+}
+
+// rvResumeWrites are the applied move and restore for each finished state: the
+// move sets the launch start, token and socket and clears the identity; the
+// restore clears the launch start and writes the pre-move token, socket and
+// identity back (SR-5.2).
+func rvResumeWrites() []rowVersionCase {
+	var cases []rowVersionCase
+	for _, st := range []string{"ended", "missing"} {
+		moved, full, r := rvMoveIdentity(), fullIdentity(), &rvResume{}
+		cases = append(cases,
+			rowVersionCase{name: "MoveToPending/applied, " + st + " row", state: st, wantState: "pending",
+				identity: &moved, writesToken: true, launchStart: rvMoveStart,
+				write: func(t *testing.T, f *v5Store, id string) { rvMove(t, f, id, rvExamine(t, f, id), store.CondApplied) }},
+			rowVersionCase{name: "RestoreAfterFailedResume/applied, " + st + " row", state: st, wantState: st,
+				clears: true, identity: &full, writesToken: true, setup: r.move, write: r.restore(store.CondApplied)},
+		)
+	}
+	return cases
+}
+
+// rvResumeNoOps are a move and a restore that do not apply: each writes nothing.
+func rvResumeNoOps() []rowVersionCase {
+	staleMove := func() rowVersionCase {
+		var examined store.Spawn
+		return rowVersionCase{name: "MoveToPending/stale snapshot, another write first", state: "ended", session: "sess-rv",
+			setup: func(t *testing.T, f *v5Store, id string) { examined = rvExamine(t, f, id); rvHealPath(t, f, id) },
+			write: func(t *testing.T, f *v5Store, id string) { rvMove(t, f, id, examined, store.CondChanged) }}
+	}
+	moveNow := func(want store.CondResult) func(*testing.T, *v5Store, string) {
+		return func(t *testing.T, f *v5Store, id string) { rvMove(t, f, id, rvExamine(t, f, id), want) }
+	}
+	afterWrite, neverMoved, badPrior := &rvResume{}, &rvResume{}, &rvResume{}
+	return []rowVersionCase{
+		staleMove(),
+		{name: "MoveToPending/live row", state: "waiting", write: moveNow(store.CondChanged)},
+		{name: "MoveToPending/pending row", state: "pending", write: moveNow(store.CondChanged)},
+		{name: "MoveToPending/parent id names no row", state: "ended",
+			write: func(t *testing.T, f *v5Store, id string) {
+				sp := rvExamine(t, f, id)
+				got, v, err := f.s.MoveToPending(id, sp.Snapshot, rvMoveStart, rvMoveToken, rvMoveSocket, "rv-no-such-parent")
+				if err == nil || got != 0 || v != 0 {
+					t.Fatalf("MoveToPending(bad parent) = %v, %d, %v; want 0, 0, an error", got, v, err)
+				}
+			}},
+		{name: "MoveToPending/absent row", state: "ended",
+			write: func(t *testing.T, f *v5Store, id string) {
+				got, v, err := f.s.MoveToPending("rv-absent", rvExamine(t, f, id).Snapshot, rvMoveStart, rvMoveToken, rvMoveSocket, "")
+				if err != nil || got != store.CondAbsent || v != 0 {
+					t.Fatalf("MoveToPending(absent) = %v, %d, %v; want CondAbsent, 0, nil", got, v, err)
+				}
+			}},
+		{name: "RestoreAfterFailedResume/another write after the move", state: "ended", session: "sess-rv",
+			setup: func(t *testing.T, f *v5Store, id string) { afterWrite.move(t, f, id); rvHealPath(t, f, id) },
+			write: afterWrite.restore(store.CondChanged)},
+		{name: "RestoreAfterFailedResume/finished row never moved", state: "ended",
+			setup: func(t *testing.T, f *v5Store, id string) {
+				sp := rvExamine(t, f, id)
+				neverMoved.prior, neverMoved.moved = store.ResumePrior{State: sp.State, Identity: sp.Identity}, sp.RowVersion
+			},
+			write: neverMoved.restore(store.CondChanged)},
+		{name: "RestoreAfterFailedResume/prior state not finished", state: "ended", setup: badPrior.move,
+			write: func(t *testing.T, f *v5Store, id string) {
+				prior := badPrior.prior
+				prior.State = "waiting"
+				if got, err := f.s.RestoreAfterFailedResume(id, badPrior.moved, prior); err == nil || got != 0 {
+					t.Fatalf("RestoreAfterFailedResume(prior waiting) = %v, %v; want 0, an error", got, err)
+				}
+			}},
+		{name: "RestoreAfterFailedResume/absent row", state: "pending",
+			write: func(t *testing.T, f *v5Store, id string) {
+				got, err := f.s.RestoreAfterFailedResume("rv-absent", 1, store.ResumePrior{State: "ended"})
+				if err != nil || got != store.CondAbsent {
+					t.Fatalf("RestoreAfterFailedResume(absent) = %v, %v; want CondAbsent, nil", got, err)
+				}
+			}},
+	}
+}
+
 // rowVersionWrites is every exported write that updates a spawns row, one case
 // per branch. Later Epics append a case for each new spawns write.
 func rowVersionWrites() []rowVersionCase {
@@ -241,6 +424,7 @@ func rowVersionWrites() []rowVersionCase {
 		cases = append(cases, hookCases(h.name, h.from, h.to, h.soft, h.clears, store.UpsertUpdated)...)
 	}
 	created := createdIdentity()
+	cases = append(cases, rvResumeWrites()...)
 	return append(cases,
 		rowVersionCase{name: "RecordLaunchIdentity/applied", state: "pending", wantState: "pending",
 			identity: &created, write: recordLaunch(0, store.CondApplied)},
@@ -379,6 +563,7 @@ func TestRowVersionNoOpWritesChangeNothing(t *testing.T) {
 		hold.setup = func(t *testing.T, f *v5Store, id string) { seedRequest(t, f, id) }
 		cases = append(cases, hold)
 	}
+	cases = append(cases, rvResumeNoOps()...)
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			f := newV5Store(t)

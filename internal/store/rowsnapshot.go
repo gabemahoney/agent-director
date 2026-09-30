@@ -13,6 +13,29 @@ type RowSnapshot struct {
 	TmuxSessionName string
 }
 
+// snapshotMatchSQL is the one row-snapshot condition (SR-5.3) every write
+// guarded on a full snapshot uses (resume's move, reuse's reset, expire's
+// delete, find-missing's marks): a WHERE fragment, joined with AND, whose
+// placeholders take snapshotMatchArgs in order. Each column is compared
+// through the same expression the read that filled the snapshot uses
+// (spawnColumns), so the comparison sees exactly the stored value the snapshot
+// holds and never parses or re-formats it: started_at through CAST(... AS
+// TEXT), because the TIMESTAMP column has NUMERIC affinity and its stored text
+// must not be coerced; the nullable columns through COALESCE to the snapshot's
+// zero value, so a NULL column matches that zero value and no other value.
+const snapshotMatchSQL = `COALESCE(row_version, 0) = ?
+    AND CAST(started_at AS TEXT) = ?
+    AND COALESCE(claude_session_id, '') = ?
+    AND COALESCE(pid, 0) = ?
+    AND COALESCE(proc_starttime, '') = ?
+    AND tmux_session_name = ?`
+
+// snapshotMatchArgs returns the bound arguments for snapshotMatchSQL, in its
+// placeholder order.
+func snapshotMatchArgs(s RowSnapshot) []any {
+	return []any{s.RowVersion, s.StartedAt, s.ClaudeSessionID, s.PID, s.ProcStarttime, s.TmuxSessionName}
+}
+
 // CondResult reports the outcome of a conditional write (SR-5.3): a write
 // that applies only while the row still holds the state, version or snapshot
 // the caller examined.

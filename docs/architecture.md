@@ -576,8 +576,10 @@ fresh store and a migrated store have identical column lists on both tables.
 scanner, `scanSpawn`, so both fill them identically): `RowVersion`,
 `LaunchStartedAtMillis` (0 = absent), `LifeNumber`, `NoPreTrust` (the
 recorded pre-trust choice), `EndedAtText` (`ended_at` exactly as stored, ""
-for NULL), `Snapshot` and `Identity`. The fields are read-only: no write takes
-them from a `Spawn`. No verb reports them, with one exception, the launch
+for NULL), `Snapshot` and `Identity`. No write takes a `Spawn`; a caller
+passes `Snapshot` to `MoveToPending`, and builds the `store.ResumePrior` that
+`RestoreAfterFailedResume` takes from `EndedAtText`, `Identity` and the other
+fields the move clears. No verb reports these fields, with one exception, the launch
 start: `get` and `list` report `LaunchStartedAtMillis` as `launch_started_at`
 on a `pending` row, and `status` reports it through `SpawnStatus` (see "Where
 callers see the launch start").
@@ -620,8 +622,9 @@ still the one it read, so it knows the row has not changed since. As built:
   (state transitions, the `ended` transition, soft refreshes), both variants
   of `RecordSessionStartIdentity`, `SetParentID`, `MarkSpawnMissing`,
   `SetLivenessUnverified`, `ClearLivenessUnverified` (on every matched row,
-  whether or not a note was set), `HealJsonlPath` and
-  `RecordLaunchIdentity` (when it applies).
+  whether or not a note was set), `HealJsonlPath`, and
+  `RecordLaunchIdentity`, `MoveToPending` and `RestoreAfterFailedResume`
+  (each when it applies).
 - `InsertPending` starts a row at 0 (the column default). A path that writes
   nothing advances nothing. Examples are the `working`-transition hold path
   (open permission requests), a write whose `WHERE` matches no row, and
@@ -636,20 +639,36 @@ still the one it read, so it knows the row has not changed since. As built:
 - Launch-start rule: every write that sets `state` to a value other than
   `pending` also sets `launch_started_at` to NULL in the same statement
   (shared fragment `launchStartClear`). These writes are the `ended`
-  transition, every other hook transition whose target is not `pending`, and
-  `MarkSpawnMissing`. Every other write leaves `launch_started_at` unchanged.
-  Only `InsertPending` sets a launch start (plain spawn).
+  transition, every other hook transition whose target is not `pending`,
+  `MarkSpawnMissing` and `RestoreAfterFailedResume`. Every other write leaves
+  `launch_started_at` unchanged, except the two that set a launch start:
+  `InsertPending` (plain spawn) and `MoveToPending` (resume's move).
 - `InsertPending` writes `launch_started_at`, `launch_token` and
   `tmux_socket` in the INSERT (zero values as NULL) and never the six
   identity columns. `RecordLaunchIdentity(instanceID, launchVersion, token,
-  identity)` is the one update of the six tmux server and pane identity
-  columns: one UPDATE, guarded on `state = 'pending'`, the given
+  identity)` is the one update that records a launch's six tmux server and
+  pane identity columns: one UPDATE, guarded on `state = 'pending'`, the given
   `row_version` and the given `launch_token`, that advances `row_version`
   (zero values written as NULL). When it updates nothing, one follow-up
   read tells `CondChanged` from `CondAbsent` (`store.CondResult`,
-  `rowsnapshot.go`; the helper `condNotApplied` is for later conditional
-  writes). No store update touches `life_number`, `no_pre_trust`,
-  `launch_token` or `tmux_socket`.
+  `rowsnapshot.go`; every conditional write shares the helper
+  `condNotApplied`). No store update touches `life_number` or
+  `no_pre_trust`.
+- Resume's writes (SR-8.3, SR-8.5; `internal/store/resume_writes.go`; no verb
+  calls them yet). `MoveToPending` moves an `ended` or `missing` row whose
+  `RowSnapshot` still equals the examined one to `pending`: it sets the launch
+  start, `launch_token`, `tmux_socket` and `parent_id`, and clears `pid`,
+  `proc_starttime`, `ended_at`, the liveness columns and the six identity
+  columns. It returns the version it produced. `RestoreAfterFailedResume`,
+  guarded on `pending` at that version, writes a `ResumePrior` back (state,
+  cleared columns, token, socket, identity; `parent_id` keeps the move's value)
+  and clears the launch start. Neither emits a trail event.
+- **Must use:** every write guarded on a full `RowSnapshot` uses
+  `snapshotMatchSQL` with `snapshotMatchArgs` (`rowsnapshot.go`), and any read
+  that fills a `RowSnapshot` selects its columns with the `spawnColumns`
+  expressions. The guard compares through those same expressions (`CAST` for
+  `started_at`, `COALESCE` to the zero value for nullable columns); a snapshot
+  read any other way never matches.
 - **Must use:** any new or changed store statement that updates a `spawns`
   row must advance `row_version` in that same statement (concatenate
   `rowVersionAdvance`), and must follow the launch-start rule (concatenate

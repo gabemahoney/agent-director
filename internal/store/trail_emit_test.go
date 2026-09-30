@@ -1,7 +1,8 @@
 package store
 
 // trail_emit_test.go — table-driven tests for ad.row_mutation.committed
-// emission across (writer_process × mutation_kind × decision) combinations.
+// emission across (writer_process × mutation_kind × decision) combinations,
+// and for ad.spawn.state_transition around resume's move and restore.
 //
 // Singleton note: trail.Emit uses a process-level sync.Once whose file path
 // is locked in on the first call. TestMain (store_test.go) redirects HOME via
@@ -281,5 +282,157 @@ func TestRowMutationNoEmitOnAlreadyDecided(t *testing.T) {
 	}
 	if got := rowMutationsAt(t, before); len(got) != 0 {
 		t.Errorf("already-decided path emitted %d ad.row_mutation.committed; want 0", len(got))
+	}
+}
+
+// trailResumeToken is a well-formed launch token (SR-3.5) for the move.
+const trailResumeToken = "0123456789abcdef"
+
+// trailMoveStart is a fixed launch start (Unix ms) for the move; no test
+// asserts it, so a constant keeps the move deterministic.
+const trailMoveStart int64 = 1767225600000
+
+// trailSeedFinished inserts a pending row and finishes it as state, then
+// returns the row as resume examines it. A missing row is marked by
+// MarkSpawnMissing, a non-hook write; an ended row can only be reached by a
+// hook transition today, so its seed uses ApplyHookTransition.
+func trailSeedFinished(t *testing.T, s *Store, id, state string) Spawn {
+	t.Helper()
+	if err := s.InsertPending(Spawn{
+		ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-trail-" + id, RelayMode: "off",
+	}); err != nil {
+		t.Fatalf("InsertPending(%s): %v", id, err)
+	}
+	switch state {
+	case StateEnded:
+		if err := s.ApplyHookTransition(id, StateEnded, false, "test_seed"); err != nil {
+			t.Fatalf("seed ended: ApplyHookTransition(%s): %v", id, err)
+		}
+	case StateMissing:
+		prior, err := s.MarkSpawnMissing(id)
+		if err != nil || prior != StatePending {
+			t.Fatalf("seed missing: MarkSpawnMissing(%s) = %q, %v; want %q, nil", id, prior, err, StatePending)
+		}
+	default:
+		t.Fatalf("trailSeedFinished: state %q is not ended or missing", state)
+	}
+	sp, err := s.GetSpawn(id)
+	if err != nil {
+		t.Fatalf("GetSpawn(%s): %v", id, err)
+	}
+	if sp.State != state {
+		t.Fatalf("seeded state = %q; want %q", sp.State, state)
+	}
+	return sp
+}
+
+// trailMove applies resume's move to pending on the examined row and fails
+// the test unless it applied.
+func trailMove(t *testing.T, s *Store, examined Spawn) int64 {
+	t.Helper()
+	res, movedVersion, err := s.MoveToPending(examined.ClaudeInstanceID, examined.Snapshot,
+		trailMoveStart, trailResumeToken, "/tmp/trail-sock", "")
+	if err != nil || res != CondApplied {
+		t.Fatalf("MoveToPending(%s) = %v, %d, %v; want CondApplied", examined.ClaudeInstanceID, res, movedVersion, err)
+	}
+	return movedVersion
+}
+
+// TestTrailResumeWritesEmitNoStateTransition pins SR-14 and SR-18.13:
+// ad.spawn.state_transition comes only from hook-driven writes, so resume's
+// move to pending and its restore, each applied, add none to the store trail
+// (and no store trail line of any kind names the row).
+func TestTrailResumeWritesEmitNoStateTransition(t *testing.T) {
+	for _, write := range []string{"move", "restore"} {
+		for _, finished := range []string{StateEnded, StateMissing} {
+			write, finished := write, finished
+			t.Run(write+"_"+finished, func(t *testing.T) {
+				s := openTestStore(t)
+				id := "trail-resume-" + write + "-" + finished
+				examined := trailSeedFinished(t, s, id, finished)
+
+				var before int
+				switch write {
+				case "move":
+					before = len(readStoreTrailLines(t))
+					trailMove(t, s, examined)
+				case "restore":
+					movedVersion := trailMove(t, s, examined)
+					before = len(readStoreTrailLines(t))
+					prior := ResumePrior{
+						State:                   examined.State,
+						EndedAtText:             examined.EndedAtText,
+						PID:                     examined.PID,
+						ProcStarttime:           examined.ProcStarttime,
+						LivenessUnverifiedSince: examined.LivenessUnverifiedSince,
+						LivenessNote:            examined.LivenessNote,
+						Identity:                examined.Identity,
+					}
+					res, err := s.RestoreAfterFailedResume(id, movedVersion, prior)
+					if err != nil || res != CondApplied {
+						t.Fatalf("RestoreAfterFailedResume = %v, %v; want CondApplied", res, err)
+					}
+				}
+
+				if got := spawnStateTransitionLines(t, before); len(got) != 0 {
+					t.Errorf("applied %s emitted %d ad.spawn.state_transition; want 0: %v", write, len(got), got)
+				}
+				for _, row := range readStoreTrailLines(t)[before:] {
+					if row["claude_instance_id"] == id {
+						t.Errorf("applied %s emitted trail event %v naming the row; want none", write, row["event"])
+					}
+				}
+
+				// The write did apply: the row is where the write put it.
+				got, err := s.GetSpawn(id)
+				if err != nil {
+					t.Fatalf("GetSpawn: %v", err)
+				}
+				wantState := StatePending
+				if write == "restore" {
+					wantState = finished
+				}
+				if got.State != wantState {
+					t.Errorf("state after %s = %q; want %q", write, got.State, wantState)
+				}
+			})
+		}
+	}
+}
+
+// TestTrailSessionStartAfterResumeMovePriorPending pins SR-14's SessionStart
+// part: on a resumed row the move made the row pending, so SessionStart's
+// ad.spawn.state_transition records prior_state pending, not the finished
+// state the row had before resume.
+func TestTrailSessionStartAfterResumeMovePriorPending(t *testing.T) {
+	for _, finished := range []string{StateEnded, StateMissing} {
+		finished := finished
+		t.Run(finished, func(t *testing.T) {
+			s := openTestStore(t)
+			id := "trail-sessionstart-after-move-" + finished
+			examined := trailSeedFinished(t, s, id, finished)
+			trailMove(t, s, examined)
+
+			before := len(readStoreTrailLines(t))
+			if err := s.ApplyHookTransition(id, StateWaiting, false, "SessionStart"); err != nil {
+				t.Fatalf("SessionStart ApplyHookTransition: %v", err)
+			}
+			lines := spawnStateTransitionLines(t, before)
+			if len(lines) != 1 {
+				t.Fatalf("want 1 ad.spawn.state_transition after SessionStart; got %d: %v", len(lines), lines)
+			}
+			assertSpawnStateTransitionFields(t, lines[0], id, StatePending, StateWaiting, "SessionStart", false)
+
+			got, err := s.GetSpawn(id)
+			if err != nil {
+				t.Fatalf("GetSpawn: %v", err)
+			}
+			if got.State != StateWaiting {
+				t.Errorf("state after SessionStart = %q; want waiting", got.State)
+			}
+			if got.LaunchStartedAtMillis != 0 {
+				t.Errorf("launch_started_at after SessionStart = %d; want cleared (0)", got.LaunchStartedAtMillis)
+			}
+		})
 	}
 }
