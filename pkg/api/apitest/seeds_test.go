@@ -49,14 +49,14 @@ func TestSeedSpawn_Defaults(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name       string
-		id         string
-		state      string
-		cwd        string
-		relayMode  string
-		wantState  string
-		wantCWD    string
-		wantRelay  string
+		name      string
+		id        string
+		state     string
+		cwd       string
+		relayMode string
+		wantState string
+		wantCWD   string
+		wantRelay string
 	}{
 		{
 			name:      "empty id generates uuid",

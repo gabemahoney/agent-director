@@ -16,12 +16,13 @@ import (
 // follow-up lookup that could not answer after a kill was sent
 // (DescCase.AfterKillSent), the socket-directory refusal that ends "nothing
 // was done", the unusable recorded name's three ErrInternal cases, and
-// kill's own texts: its manifest description (DescKillManifest) and the
-// ErrInternal trigger it shares with Client.Kill's Go doc prose
-// (DescKillInternalTrigger). Kill reuses DescConflictingLabels (with
-// NothingWasDone), DescDifferentServer, DescCallTimeout (lookup, pane
-// listing, pane kill, session kill), DescUnrecognisedReply,
-// DescSocketPermission and DescTmuxNotRun as they are.
+// kill's own texts: its manifest description (DescKillManifest), and the
+// ErrInternal trigger (DescKillInternalTrigger) and repeated-kill limitation
+// (DescKillRepeatedAfterLastSession) it shares with Client.Kill's Go doc
+// prose. Kill reuses DescConflictingLabels (with NothingWasDone),
+// DescDifferentServer, DescCallTimeout (lookup, pane listing, pane kill,
+// session kill), DescUnrecognisedReply, DescSocketPermission and
+// DescTmuxNotRun as they are.
 
 // killFailedMustNot is what no kill refusal may say (SR-1.4).
 var killFailedMustNot = []string{"dead", "gone"}
@@ -275,33 +276,55 @@ func DescKillInternalTrigger() DescCase {
 	}.PointsToOperatorActions()
 }
 
+// DescKillRepeatedAfterLastSession is the limitation kill's manifest
+// description and Client.Kill's Go doc prose state (decision-0930b Q5): a
+// repeated kill right after the last session on its tmux server ends can get
+// ErrTmuxUnresponsive or ErrTmuxNotAvailable while the server exits, and the
+// caller waits and checks again. verb is how the text names the verb: "kill"
+// in the manifest description, "Kill" in the Go doc.
+func DescKillRepeatedAfterLastSession(verb string) DescCase {
+	return DescCase{
+		Name: "kill, repeated kill after the last session ends",
+		Require: []string{
+			"A repeated " + verb + " right after the last session on its tmux server ends",
+			"can get ErrTmuxUnresponsive or ErrTmuxNotAvailable while the server exits",
+			"the caller waits and checks again",
+		},
+	}
+}
+
 // DescKillManifest is kill's manifest description (SR-6.1, SR-1.7, SR-18.1,
-// SR-18.7, SR-18.9; decision-0930b Q4): success only once the agent process
-// is gone, else ErrTmuxKillFailed; kill_sent; a finished row's no-op success
-// is not verification; the row's state is not changed; the per-call
-// contract; each error's class, GONE being success; never delete; the same
-// user and tmux environment and their two consequences; and
-// DescKillInternalTrigger. Check it with AssertAgentTextCase.
+// SR-18.7, SR-18.9; decision-0930b Q4 and Q5): success only once the agent
+// process is gone, else ErrTmuxKillFailed; kill_sent; a finished row's no-op
+// success is not verification; the row's state is not changed; the per-call
+// contract; each error's class, GONE being success;
+// DescKillRepeatedAfterLastSession("kill"); never delete; the same user and
+// tmux environment and their two consequences; and DescKillInternalTrigger.
+// Check it with AssertAgentTextCase.
 func DescKillManifest() DescCase {
 	trigger := DescKillInternalTrigger()
+	require := []string{
+		"succeeds only once the agent process is gone; otherwise it returns ErrTmuxKillFailed",
+		"kill_sent says whether a kill was sent",
+		"On a finished row (ended or missing) kill is a no-op success with kill_sent false and no tmux call",
+		"that is not verification that the agent exited",
+		"kill never changes the row's state",
+		"Success is judged per call", "later calls do not track it",
+		"a retried kill checks only the agent process",
+		"A retry's success means only that the agent is gone",
+		"(for kill, GONE is success)", "ErrTmuxKillFailed (UNAVAILABLE)", "ErrTmuxUnresponsive (UNAVAILABLE)",
+		"ErrTmuxSessionConflict (CONFLICT", "ErrTmuxNotAvailable (ENVIRONMENT)",
+	}
+	require = append(require, DescKillRepeatedAfterLastSession("kill").Require...)
+	require = append(require,
+		"None of these errors means that the agent is dead",
+		"Never delete a row after a kill that did not succeed",
+		"kill must run as the same user and in the same tmux environment as the agents",
+		"on the wrong tmux server, a row wrongly marked missing, kill's no-op success and a reuse together start a second agent for the same id",
+	)
 	return DescCase{
-		Name: "kill manifest description",
-		Require: append([]string{
-			"succeeds only once the agent process is gone; otherwise it returns ErrTmuxKillFailed",
-			"kill_sent says whether a kill was sent",
-			"On a finished row (ended or missing) kill is a no-op success with kill_sent false and no tmux call",
-			"that is not verification that the agent exited",
-			"kill never changes the row's state",
-			"Success is judged per call", "later calls do not track it",
-			"a retried kill checks only the agent process",
-			"A retry's success means only that the agent is gone",
-			"(for kill, GONE is success)", "ErrTmuxKillFailed (UNAVAILABLE)", "ErrTmuxUnresponsive (UNAVAILABLE)",
-			"ErrTmuxSessionConflict (CONFLICT", "ErrTmuxNotAvailable (ENVIRONMENT)",
-			"None of these errors means that the agent is dead",
-			"Never delete a row after a kill that did not succeed",
-			"kill must run as the same user and in the same tmux environment as the agents",
-			"on the wrong tmux server, a row wrongly marked missing, kill's no-op success and a reuse together start a second agent for the same id",
-		}, trigger.Require...),
+		Name:    "kill manifest description",
+		Require: append(require, trigger.Require...),
 		MustNot: append([]string{"Terminate the Spawn's tmux session"}, trigger.MustNot...),
 	}
 }

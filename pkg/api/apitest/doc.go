@@ -82,13 +82,15 @@
 //     restore's result a resume launch error ends with; descriptions_kill.go,
 //     whose DescCase.AfterKillSent states a kill was sent), of the
 //     lookup's shared Can't tell cases (descriptions_lookup.go), or of the
-//     live-row sequence the kill, find-missing and spawn manifest
-//     descriptions share (descriptions_live_row.go: DescLiveRowSequence, and
-//     LiveRowSequenceSpans, which cuts each statement of the sequence out of
-//     a text so they can be compared), or of find-missing's pending-grace
-//     rule (descriptions_find_missing.go: DescFindMissingGrace, and
-//     FindMissingOwnText, which cuts find-missing's own text before the
-//     sequence).
+//     live-row sequence (descriptions_live_row.go: DescLiveRowSequence, its
+//     short form, which only kill's manifest description states;
+//     DescLiveRowPointer and LiveRowPointer, the one sentence that ends the
+//     find-missing and spawn descriptions in its place and restates no step;
+//     LiveRowSequenceCount and LiveRowPointerCount, which count statements
+//     of the sequence and pointer sentences in a text separately), or of
+//     find-missing's pending-grace rule (descriptions_find_missing.go:
+//     DescFindMissingGrace, and FindMissingOwnText, which cuts
+//     find-missing's own text before the pointer).
 //
 // Rules for tests (the same as docs/architecture.md, "apitest Seed* factory
 // contract (reusable test fixtures)"):

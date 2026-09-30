@@ -7,64 +7,132 @@ import (
 	"github.com/gabemahoney/agent-director/internal/config"
 )
 
-// descriptions_live_row.go holds SR-18.6's bounded, paced live-row sequence
-// as the kill, find-missing and spawn manifest descriptions state it
-// (Epic 10): DescLiveRowSequence, and LiveRowSequenceSpans, which cuts each
-// statement of the sequence out of a text so the three can be compared.
+// descriptions_live_row.go holds SR-18.6's live-row sequence as the manifest
+// states it (decision-0930b Q6): its short form, which only kill's
+// description states (DescLiveRowSequence, LiveRowSequenceCount), and the one-sentence pointer to it that ends the
+// find-missing and spawn descriptions (LiveRowPointer, DescLiveRowPointer,
+// LiveRowPointerCount). The two are told apart by their openings: the short
+// form opens with liveRowShortOpening, the pointer with liveRowOpening.
 
-// The live-row sequence's first and last phrases, which bound a statement of
-// it (LiveRowSequenceSpans).
 const (
+	// liveRowShortOpening opens the short form.
+	liveRowShortOpening = "Live-row sequence (a pending row included):"
+	// liveRowShortClosing is the short form's last phrase (step 6's).
+	liveRowShortClosing = "callers whose ids agent-director mints spawn fresh)."
+	// liveRowOpening opens the pointer, and opened the long form the manifest
+	// stated before the short form; LiveRowSequenceCount counts a long-form
+	// statement by it.
 	liveRowOpening = "To end a live row (pending included) and relaunch its id"
-	liveRowClosing = "a reuse makes that conversation unreachable for good"
 )
 
-// DescLiveRowSequence is SR-18.6's live-row sequence as a manifest
-// description states it, by key phrase: kill first, follow the error's class
-// and never delete; for a pending row, wait out its launch start plus the
-// pending grace period (config.DefaultPendingGraceSeconds, a default the
-// operator can change), and inside it wait and check again, never escalate;
-// up to three find-missing runs about 5 s apart, each confirmed with status or
-// get; one more kill, a wait and a last find-missing; then a human; once
-// ended or missing, resume or spawn with --reuse-finished, and a caller whose
-// ids agent-director mints spawns fresh. Check it with AssertAgentTextCase.
-func DescLiveRowSequence() DescCase {
-	return DescCase{
-		Name: "manifest description, live-row sequence",
-		Require: []string{
-			liveRowOpening, "bounded, paced sequence",
-			"(1) kill, and check the result; on any error follow its class and never delete the row",
-			"(2) If the row is pending, wait until its launch start (shown by status)",
-			fmt.Sprintf("plus the pending grace period (%d s unless the operator configured another value) has passed", config.DefaultPendingGraceSeconds),
-			"a pending row inside its grace period means wait and check again later, never escalate",
-			"(3) Run find-missing, then confirm with status or get that the row is ended or missing",
-			"if not, wait about 5 s and repeat, up to three find-missing runs in all",
-			"(4) If still live, kill once more, wait about 5 s, run find-missing once more and check",
-			"(5) If still live, stop and escalate to a human",
-			"(6) Once the row is ended or missing, resume it if it has a session id and the caller wants the conversation back",
-			"otherwise spawn with --reuse-finished",
-			"A caller whose ids agent-director mints spawns fresh instead of reusing",
-			"A pending row, a resumed one included, enters this sequence", liveRowClosing,
+// LiveRowPointer is SR-18.6's pointer sentence, verbatim: it ends the
+// find-missing and spawn descriptions in place of the sequence.
+const LiveRowPointer = liveRowOpening + ", follow the live-row sequence in kill's description."
+
+// liveRowStep is one step of the short form: phrases, the step's text as
+// DescLiveRowSequence requires it (the first one numbered), and keys, short
+// phrases of it that DescLiveRowPointer forbids so a text restating the step
+// in any wording that keeps them fails.
+type liveRowStep struct {
+	phrases []string
+	keys    []string
+}
+
+// liveRowSteps is the short form's six steps, in order.
+func liveRowSteps() []liveRowStep {
+	return []liveRowStep{
+		{
+			phrases: []string{"kill and check the result; on an error follow its class, never delete the row"},
+			keys:    []string{"kill and check the result", "never delete the row"},
+		},
+		{
+			phrases: []string{
+				"If the row is pending, wait until its launch start (status)",
+				fmt.Sprintf("plus the pending grace period (%d s unless configured)", config.DefaultPendingGraceSeconds),
+				"inside it, wait and check again, never escalate",
+			},
+			keys: []string{"wait until its launch start", "unless configured", "never escalate"},
+		},
+		{
+			phrases: []string{"Run find-missing, then check status; repeat about 5 s apart until the row is ended or missing, at most three runs"},
+			keys:    []string{"then check status", "about 5 s apart", "at most three runs"},
+		},
+		{
+			phrases: []string{"Still live: kill once more, wait about 5 s, run find-missing once more and check"},
+			keys:    []string{"kill once more", "wait about 5 s", "find-missing once more"},
+		},
+		{
+			phrases: []string{"Still live: escalate to a human"},
+			keys:    []string{"escalate to a human"},
+		},
+		{
+			phrases: []string{
+				"Then resume the row if it has a session id and the caller wants the conversation back",
+				"otherwise spawn with --reuse-finished",
+				liveRowShortClosing,
+			},
+			keys: []string{"if it has a session id", "wants the conversation back", "otherwise spawn with --reuse-finished", "spawn fresh"},
 		},
 	}
 }
 
-// LiveRowSequenceSpans returns each statement of the live-row sequence in
-// text, from its opening phrase through its closing phrase, in order; a
-// statement with no closing phrase runs to the end of text.
-func LiveRowSequenceSpans(text string) []string {
-	var spans []string
-	for {
-		i := strings.Index(text, liveRowOpening)
-		if i < 0 {
-			return spans
-		}
-		text = text[i:]
-		end := len(text)
-		if j := strings.Index(text, liveRowClosing); j >= 0 {
-			end = j + len(liveRowClosing)
-		}
-		spans = append(spans, text[:end])
-		text = text[end:]
+// DescLiveRowSequence is SR-18.6's live-row sequence in its short form, as
+// kill's manifest description states it, by key phrase: its opening; (1) kill,
+// follow the error's class and never delete; (2) for a pending row, wait out
+// its launch start plus the pending grace period
+// (config.DefaultPendingGraceSeconds, a default the operator can change), and
+// inside it wait and check again, never escalate; (3) up to three find-missing
+// runs about 5 s apart, each checked with status; (4) one more kill, "wait
+// about 5 s" and a last find-missing; (5) a human; (6) resume or spawn with
+// --reuse-finished, and a caller whose ids agent-director mints spawns fresh.
+// It must not carry the rationale the README keeps ("history belongs to a
+// life", "unreachable for good", SR/OFR citations), the long form's or the
+// pointer's opening, or the pointer. Check it with AssertAgentTextCase.
+func DescLiveRowSequence() DescCase {
+	req := []string{liveRowShortOpening}
+	for i, s := range liveRowSteps() {
+		req = append(req, fmt.Sprintf("%d. %s", i+1, s.phrases[0]))
+		req = append(req, s.phrases[1:]...)
 	}
+	return DescCase{
+		Name:    "manifest description, live-row sequence (short form)",
+		Require: req,
+		MustNot: []string{
+			"history belongs to a life", "unreachable for good", "SR-", "OFR",
+			liveRowOpening, LiveRowPointer,
+		},
+	}
+}
+
+// DescLiveRowPointer is SR-18.6's pointer to the live-row sequence as the
+// find-missing and spawn manifest descriptions state it: LiveRowPointer
+// exactly, and neither the short form's opening nor any key phrase of its
+// steps, so a description that restates a step, with or without the opening,
+// fails. Check it with AssertAgentTextCase.
+func DescLiveRowPointer() DescCase {
+	mustNot := []string{liveRowShortOpening}
+	for _, s := range liveRowSteps() {
+		mustNot = append(mustNot, s.keys...)
+	}
+	return DescCase{
+		Name:    "manifest description, pointer to the live-row sequence",
+		Require: []string{LiveRowPointer},
+		MustNot: mustNot,
+	}
+}
+
+// LiveRowSequenceCount returns how many times text states the live-row
+// sequence itself: each short-form opening, plus each long-form opening
+// (liveRowOpening where it does not begin LiveRowPointer). Pointer sentences
+// are never counted; LiveRowPointerCount counts those.
+func LiveRowSequenceCount(text string) int {
+	return strings.Count(text, liveRowShortOpening) +
+		strings.Count(text, liveRowOpening) - LiveRowPointerCount(text)
+}
+
+// LiveRowPointerCount returns how many times text carries LiveRowPointer,
+// the whole sentence. A short-form or long-form statement of the sequence is
+// never counted; LiveRowSequenceCount counts those.
+func LiveRowPointerCount(text string) int {
+	return strings.Count(text, LiveRowPointer)
 }

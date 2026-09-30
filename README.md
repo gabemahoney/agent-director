@@ -451,6 +451,10 @@ the class of every tmux error, is in
 - A situation that needs a human is described in
   [Operator actions](#operator-actions); callers never perform those
   actions.
+- Right after a `kill` ends the last session on its tmux server, the
+  server takes a moment to exit. A repeated `kill` in that moment can get
+  `ErrTmuxUnresponsive` or `ErrTmuxNotAvailable`; the caller waits and
+  checks again.
 
 To end a live row (`pending` included) and relaunch its id, a caller
 follows this bounded, paced sequence:
@@ -478,7 +482,8 @@ follows this bounded, paced sequence:
    A caller whose ids agent-director mints spawns fresh instead of reusing.
    A `pending` row, a resumed one included, enters this sequence, so a
    stuck `resume` handled this way can still get its conversation back; a
-   reuse makes that conversation unreachable for good.
+   reuse makes that conversation unreachable for good, because a row's
+   session history belongs to one life and a reuse starts a new one.
 
 ## Operator actions
 

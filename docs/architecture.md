@@ -58,7 +58,7 @@ still holds: nothing in `internal/` imports `pkg/api`.
 | `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, etc.), params/result types, and error sentinels (the seven tmux sentinels of SR-1.1 are all re-exported in `aliases.go`). Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director` and `internal/mcp`. **`kill` seams** (`kill.go`): `KillStore` (`GetSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`; `*store.Store` satisfies it), `KillTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `KillPane`, `KillSessionID`; `TmuxClient` satisfies it) and the start-time reader `ProcChecker`; `Kill` also takes the three `[tmux]` durations, the clock and the sleep, and has no logger. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the eight socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the three name-based ones (`HasSession`, `SendKeys`, `CapturePane`); `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`; it also re-exports the start-time reader interface as `ProcChecker` (`= tmux.ProcChecker`). The Client holds its clock (`time.Now`), its sleep (`time.Sleep`, the pause of `kill`'s process wait) and its start-time reader (`probe.NewProcChecker()`), all set in `New`; plain spawn uses the clock and reader for the launch start and the identity write, and `kill` uses all three for its lookup, adoption and process wait; `find-missing` measures the pending grace period on the same clock, with the value from `EffectivePendingGrace`. The label scan of a plain spawn lives in `spawn_scan.go` (see [Launch identity](#launch-identity)). `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`. | Direct `database/sql`; raw SQL strings; MCP framing. |
 | `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v5; see "Schema v5" below), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default; a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
-| `pkg/api/apitest` | Test seed helpers extracted from `pkg/api/*_test.go` for cross-package importing. Provides `Seed*` functions (`SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`) that set up fixture DB rows and filesystem state for `test/envelope-diff` and future Epic 4/5 smoke tests. Also provides the config writer `WriteTmuxConfig` (settings built with `TmuxInt`, or `TmuxFloat` / `TmuxString` / `TmuxBool` for malformed values, keyed by `config.TmuxKey`): `pkg/api`, CLI and MCP tests write `[tmux]` settings only through it, so no test outside `internal/config` spells a `[tmux]` key (rules: Test Harness, "apitest `[tmux]` config writer"). Provides `SeedSpawn`'s trailing `SpawnOption`s for the v5 columns, timestamps and raw text (`WithTmuxSessionName`, `WithStartedAt` / `WithEndedAt`, `WithLaunchStartedAt`, `WithRawLaunchStartedAt`, `WithNoLaunchStartedAt`, `WithLifeNumber`, `WithNoPreTrust`, `WithRawNoPreTrust`, `WithLaunchIdentity`, `WithTmuxSocket`, `WithNoLaunchToken`, `WithRawLabels`, `WithRawClaudeArgs`, `WithRawExtraEnv`) and archived session history (`WithSessionHistory`), the default socket `TestSocket`, the default pane `TestPaneID` / `TestPanePID` that `SeedSpawn` gives a live row (both re-exported from `internal/testsupport/launchfix`; a terminal row gets no pane), the store-read helper `ReadSpawnColumns`, the every-life history-read helper `ReadSessionHistoryAllLives`, and the store-id helpers `ReadStoreID`, `SeedStoreID` and `OtherStoreID` (with `ErrNoStoreID`): new tests seed rows and read columns no verb shows only through these (rules: Test Harness, "apitest Seed* factory contract"). To place a seeded row's own labelled session in the Recorder, tests use `tmuxfix.Recorder.SeedRowSession` (in `internal/testsupport/tmuxfix`, not this package). Provides the shared description helper (`descriptions.go`: `AssertDescription`, `AssertAgentText`, `AssertAgentTextCase` and the `Desc*` cases; `descriptions_resume.go`: resume's `DescResume*` cases and `DescCase.AfterResumeRestore`; `descriptions_lookup.go`: lookup's `DescConflictingLabels` and `DescDifferentServer`; `descriptions_kill.go`: kill's `DescKill*`, `DescSocketDirNothingDone` and `DescUnusableName*` cases and `DescCase.AfterKillSent`; `descriptions_live_row.go`: `DescLiveRowSequence` and `LiveRowSequenceSpans`): every Go test that checks an error or manifest description for required phrases or forbidden forms uses it (rules: Test Harness, "apitest description helper"). Non-test package (regular `.go` files) so it can be imported by harnesses outside `pkg/api`. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `internal/tmux` (the `tmux.Call` names the description cases use); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
+| `pkg/api/apitest` | Test seed helpers extracted from `pkg/api/*_test.go` for cross-package importing. Provides `Seed*` functions (`SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`) that set up fixture DB rows and filesystem state for `test/envelope-diff` and future Epic 4/5 smoke tests. Also provides the config writer `WriteTmuxConfig` (settings built with `TmuxInt`, or `TmuxFloat` / `TmuxString` / `TmuxBool` for malformed values, keyed by `config.TmuxKey`): `pkg/api`, CLI and MCP tests write `[tmux]` settings only through it, so no test outside `internal/config` spells a `[tmux]` key (rules: Test Harness, "apitest `[tmux]` config writer"). Provides `SeedSpawn`'s trailing `SpawnOption`s for the v5 columns, timestamps and raw text (`WithTmuxSessionName`, `WithStartedAt` / `WithEndedAt`, `WithLaunchStartedAt`, `WithRawLaunchStartedAt`, `WithNoLaunchStartedAt`, `WithLifeNumber`, `WithNoPreTrust`, `WithRawNoPreTrust`, `WithLaunchIdentity`, `WithTmuxSocket`, `WithNoLaunchToken`, `WithRawLabels`, `WithRawClaudeArgs`, `WithRawExtraEnv`) and archived session history (`WithSessionHistory`), the default socket `TestSocket`, the default pane `TestPaneID` / `TestPanePID` that `SeedSpawn` gives a live row (both re-exported from `internal/testsupport/launchfix`; a terminal row gets no pane), the store-read helper `ReadSpawnColumns`, the every-life history-read helper `ReadSessionHistoryAllLives`, and the store-id helpers `ReadStoreID`, `SeedStoreID` and `OtherStoreID` (with `ErrNoStoreID`): new tests seed rows and read columns no verb shows only through these (rules: Test Harness, "apitest Seed* factory contract"). To place a seeded row's own labelled session in the Recorder, tests use `tmuxfix.Recorder.SeedRowSession` (in `internal/testsupport/tmuxfix`, not this package). Provides the shared description helper (`descriptions.go`: `AssertDescription`, `AssertAgentText`, `AssertAgentTextCase` and the `Desc*` cases; `descriptions_resume.go`: resume's `DescResume*` cases and `DescCase.AfterResumeRestore`; `descriptions_lookup.go`: lookup's `DescConflictingLabels` and `DescDifferentServer`; `descriptions_kill.go`: kill's `DescKill*`, `DescSocketDirNothingDone` and `DescUnusableName*` cases and `DescCase.AfterKillSent`; `descriptions_live_row.go`: the live-row sequence's short form and pointer, `DescLiveRowSequence`, `DescLiveRowPointer`, `LiveRowPointer`, `LiveRowSequenceCount` and `LiveRowPointerCount`; `descriptions_find_missing.go`: `DescFindMissingGrace` and `FindMissingOwnText`): every Go test that checks an error or manifest description for required phrases or forbidden forms uses it (rules: Test Harness, "apitest description helper"). Non-test package (regular `.go` files) so it can be imported by harnesses outside `pkg/api`. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `internal/tmux` (the `tmux.Call` names the description cases use); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
 | `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. The `Catalog` is consumed by `cmd/agent-director`'s envelope writer and `internal/mcp`'s `classifyDispatchError`. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
 | `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. `classifyDispatchError` delegates to `errnames.Classify`. | stdlib; `pkg/api`; `pkg/api/manifest`; `pkg/api/errnames`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
 | `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
@@ -923,6 +923,12 @@ A package-level `var Verbs []VerbDef` holds the ordered registry, and
 
 Verb additions/edits go in `pkg/api/manifest` only; the CI doc-drift
 gate re-runs `go generate` and fails if any tracked file changes.
+
+**Help size guard.** `TestHelpSizeGuard` in
+`cmd/agent-director/help_size_test.go` fails when `agent-director help`'s
+stdout grows more than 10% past the byte count recorded in
+`helpStdoutBytes`; a deliberate growth of the descriptions updates that
+constant to the newly measured count in the same commit (SR-20.6).
 
 **How to add a verb.**
 
@@ -4498,6 +4504,16 @@ adds it here.
   `kill` never signals a process itself and never changes the row's state.
 - If the row finished while `kill` waited, a retried `kill` is a
   finished-row no-op.
+- A repeated `kill` on a row whose session and agent process are already
+  gone succeeds once the tmux server has finished exiting (SR-6.1,
+  SR-18.12; decision-0930b Q5). Right after a `kill` ends the last
+  session on its tmux server, a repeated `kill` or any lookup on that
+  socket can get `ErrTmuxUnresponsive` or `ErrTmuxNotAvailable` while the
+  server exits (`exit-empty`, tmux's default). An exiting server is never read as Gone: nothing outside it
+  tells it from a live server or a re-bound socket, so Gone still needs the
+  recorded server process gone (SR-3.3). The caller waits and checks
+  again; the live-row sequence's pacing already does. `kill`'s manifest
+  description and `Client.Kill`'s Go doc state this limitation.
 - On a `pending` row, `kill` ends only the current launch's session and
   refuses a session left over from an earlier launch with
   `ErrTmuxSessionConflict`, so a leftover is ended only by a human (README
@@ -4520,8 +4536,25 @@ adds it here.
 ### Live-row sequence
 
 To end a live row (`pending` included) and relaunch its id, a caller
-follows this bounded, paced sequence (SR-18.6). The `kill`, `find-missing`
-and `spawn` manifest descriptions and the README state the same steps.
+follows this bounded, paced sequence (SR-18.6). Where it is stated
+(decision-0930b Q6):
+
+- `kill`'s manifest description states it in a short form: the same six
+  steps and limits, without the rationale. The one constant
+  `liveRowSequence` in `pkg/api/manifest/manifest.go` holds it.
+- `find-missing`'s and `spawn`'s descriptions end with one sentence that
+  points to it (constant `liveRowSequencePointer`): "To end a live row
+  (pending included) and relaunch its id, follow the live-row sequence in
+  kill's description." Every surface that shows one description shows all
+  three (`help`, MCP `tools/list`, the generated references), so the
+  pointer always resolves.
+- The README's "Caller contract" and this section state it in full, with
+  the rationale of steps 2 and 6.
+
+The short form is kept out of the other descriptions because `help` goes
+into every agent's context and MCP sends every description each turn; the
+[help size guard](#pkgapimanifest--verb-registry) keeps it from growing
+back unnoticed.
 
 1. `kill`, and check the result; on any error follow its class and never
    delete the row.
@@ -4538,9 +4571,11 @@ and `spawn` manifest descriptions and the README state the same steps.
 6. Once the row is `ended` or `missing`, `resume` it if it has a session id
    and the caller wants the conversation back; otherwise spawn with
    `--reuse-finished`. A caller whose ids agent-director mints spawns fresh
-   instead of reusing. A `pending` row, a resumed one included, enters this
-   sequence, so a stuck `resume` handled this way can still get its
-   conversation back; a reuse makes that conversation unreachable for good.
+   instead of reusing (OFR 6). A `pending` row, a resumed one included,
+   enters this sequence, so a stuck `resume` handled this way can still get
+   its conversation back; a reuse makes that conversation unreachable for
+   good, because a row's session history belongs to one life and a reuse
+   starts a new one (SR-8.7).
 
 ## Stop semantics
 
@@ -6079,9 +6114,11 @@ values, except for a row the test inserted itself.
 `pkg/api/apitest/descriptions.go` is the one shared description helper
 (SR-20.2); `descriptions_resume.go`, `descriptions_lookup.go` and
 `descriptions_kill.go` in the same package hold the cases `resume`, the
-shared lookup and `kill` add, and `descriptions_live_row.go` holds SR-18.6's
-live-row sequence that the `kill`, `find-missing` and `spawn` manifest
-descriptions state. It holds, as code, the required phrases of each SR-1.4 error
+shared lookup and `kill` add; `descriptions_live_row.go` holds SR-18.6's
+live-row sequence in the short form only `kill`'s manifest description
+states, and the one-sentence pointer to it that ends the `find-missing` and
+`spawn` descriptions; `descriptions_find_missing.go` holds `find-missing`'s
+own description texts. It holds, as code, the required phrases of each SR-1.4 error
 description case and the forms no agent-facing text may contain. The
 package doc comment (`doc.go`, "# Description helper") says the same.
 
@@ -6192,11 +6229,19 @@ package doc comment (`doc.go`, "# Description helper") says the same.
       Go doc prose state it (the three kinds of name, no tmux call, removing
       the row is a human's decision, the "Operator actions" pointer). Saying
       that a tmux failure is swallowed or logged is a must-not.
+    - `DescKillRepeatedAfterLastSession(verb)`: the Q5 limitation
+      (decision-0930b Q5): a repeated kill right after the last session on
+      its tmux server ends can get `ErrTmuxUnresponsive` or
+      `ErrTmuxNotAvailable` while the server exits, and the caller waits
+      and checks again. `verb` is how the text names the verb: "kill" for
+      `kill`'s manifest description, "Kill" for `Client.Kill`'s Go doc
+      prose (checked with `AssertDescription`).
     - `DescKillManifest()`: `kill`'s manifest description (success only
       once the agent process is gone, `kill_sent`, a finished row's no-op
       is not verification, the row's state is unchanged, the per-call
       contract, each error's class with GONE as success, never delete, the
       same user and tmux environment). It includes
+      `DescKillRepeatedAfterLastSession("kill")` and
       `DescKillInternalTrigger`. Check it with `AssertAgentTextCase`.
 
     Later single-row verbs reuse these cases (with `AfterKillSent` where
@@ -6226,16 +6271,36 @@ package doc comment (`doc.go`, "# Description helper") says the same.
     Resume's launch timeout, socket-dir and pre-move socket-permission
     errors use `DescLaunchTimeout`, `DescSocketDir` and
     `DescSocketPermission` unchanged.
-  - Live-row sequence (`descriptions_live_row.go`, SR-18.6):
-    - `DescLiveRowSequence()`: the bounded, paced sequence for ending a
-      live row (pending included) and relaunching its id, by key phrase.
-      Its grace-period phrase is built from
-      `config.DefaultPendingGraceSeconds`. Check it with
+  - Live-row sequence (`descriptions_live_row.go`, SR-18.6,
+    decision-0930b Q6):
+    - `DescLiveRowSequence()`: the short form `kill`'s manifest
+      description states, by key phrase: its opening "Live-row sequence (a
+      pending row included):" and each numbered step. Its grace-period
+      phrase is built from `config.DefaultPendingGraceSeconds`. The
+      rationale the README and this doc keep, SR/OFR citations, the
+      pointer and the pointer's opening are must-nots. Check it with
       `AssertAgentTextCase`.
-    - `LiveRowSequenceSpans(text)`: each statement of the sequence in
-      `text`, from its opening phrase to its closing phrase, in order. Use
-      it to check that a text states the sequence exactly once, and that
-      the texts agree word for word.
+    - `LiveRowPointer`: the pointer sentence, verbatim, that ends the
+      `find-missing` and `spawn` descriptions.
+    - `DescLiveRowPointer()`: the pointer case. It requires
+      `LiveRowPointer`; the short form's opening and key phrases of every
+      step are must-nots, so a text that restates any step fails. Check
+      it with `AssertAgentTextCase`.
+    - `LiveRowSequenceCount(text)` and `LiveRowPointerCount(text)`: how
+      many times `text` states the sequence (short form, or the old long
+      form) and how many times it carries the pointer. Neither counts the
+      other. Use them to check that `kill` states the sequence once and no
+      pointer, and every other verb states it zero times.
+  - Find-missing (`descriptions_find_missing.go`, SR-18.9):
+    - `DescFindMissingGrace()`: `find-missing`'s pending grace statement
+      (a pending row is not judged inside the pending grace period,
+      measured from its launch start; the default from
+      `config.DefaultPendingGraceSeconds`; a resume's launch included).
+      Check it with `AssertAgentTextCase` on `FindMissingOwnText`.
+    - `FindMissingOwnText(text)`: the part of `find-missing`'s description
+      before `LiveRowPointer`, so a check covers its own sentences only. It
+      panics when `text` does not carry the pointer, so a description that
+      lost the pointer fails the calling test.
 
   `call` is a `tmux.Call` (for example `tmux.CallCreate`).
   `DescCase.PointsToOperatorActions()` adds the pointer to the README's
@@ -6259,11 +6324,15 @@ package doc comment (`doc.go`, "# Description helper") says the same.
 - A new SR-1.4 case is a new `Desc*` constructor in `descriptions.go`
   (resume's in `descriptions_resume.go`), not phrases spelled in a test.
 - A Go check of a text that states the live-row sequence goes through
-  `DescLiveRowSequence` and `LiveRowSequenceSpans`. A check of a text that
-  points to the README's "Operator actions" section goes through
-  `PointsToOperatorActions` or `OperatorActionsTitle`. Never spell the
-  sequence's phrases or the section title as literals in a test. This
-  applies to later changes to those texts too (Epics 12 and 17).
+  `DescLiveRowSequence`, and one of a text that points to it through
+  `DescLiveRowPointer` or `LiveRowPointer`; how often a text states either
+  goes through `LiveRowSequenceCount` or `LiveRowPointerCount`. A check
+  of `find-missing`'s own sentences cuts them with `FindMissingOwnText`. A
+  check of a text that points to the README's "Operator actions" section
+  goes through `PointsToOperatorActions` or `OperatorActionsTitle`. Never
+  spell the sequence's phrases, the pointer or the section title as
+  literals in a test. This applies to later changes to those texts too
+  (Epics 12 and 17).
 - TypeScript tests cannot import the helper. They spell the phrases they
   check themselves.
 

@@ -448,10 +448,13 @@ func sessionProcesses(pc ProcChecker, panes []tmux.Pane, sessionID string, agent
 // Error classes: ErrTmuxKillFailed and ErrTmuxUnresponsive are UNAVAILABLE
 // (retry later), ErrTmuxSessionConflict is CONFLICT (permanent until a human
 // looks; see "Operator actions" in the agent-director README) and
-// ErrTmuxNotAvailable is ENVIRONMENT; for Kill, GONE is success. None of these
-// errors means that the agent is dead, and a caller never deletes a row after
-// a Kill that did not succeed. The live-row sequence in the agent-director
-// README's caller-contract summary says what a caller does next.
+// ErrTmuxNotAvailable is ENVIRONMENT; for Kill, GONE is success. A repeated
+// Kill right after the last session on its tmux server ends can get
+// ErrTmuxUnresponsive or ErrTmuxNotAvailable while the server exits; the
+// caller waits and checks again. None of these errors means that the agent is
+// dead, and a caller never deletes a row after a Kill that did not succeed.
+// The live-row sequence in the agent-director README's caller-contract
+// summary says what a caller does next.
 //
 // The caller must run as the same user and in the same tmux environment as
 // the agents. Two consequences: Kill's success on a finished row is not

@@ -21,17 +21,23 @@ import (
 // SeedSpawn inserts a single spawn row and transitions it to state.
 //
 //   - dbPath: path to the SQLite store file.
+//
 //   - id: claude_instance_id; auto-generated UUID if empty.
+//
 //   - state: target state (e.g. "waiting", "working", "ended"). Defaults to
 //     "waiting" if empty.
+//
 //   - cwd: working directory stored on the row; defaults to "/tmp" if empty.
+//
 //   - relayMode: relay_mode value ("on"|"off"|""). Defaults to "off" if empty.
+//
 //   - sessionID: if non-empty, recorded after InsertPending through a gated
 //     soft-refresh hook (SR-22.9) so the row has a claude_session_id (required
 //     by the resume verb's pre-flight) and keeps its state: a pending row
 //     seeded with a session id stays pending. Only the session id is seeded
 //     here; the identity columns (pid/proc_starttime/jsonl_path) are seeded
 //     via opts below.
+//
 //   - createStore: if true the store is created when missing (OpenOrInit);
 //     if false the store must already exist (Open).
 //

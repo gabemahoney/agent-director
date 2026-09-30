@@ -344,6 +344,10 @@ control character, or with a character tmux stores differently) returns an
 error classified `ErrInternal`, with no tmux call. None of these errors
 means that the agent is dead.
 
+A repeated kill right after the last session on its tmux server ends can
+get `ErrTmuxUnresponsive` or `ErrTmuxNotAvailable` while the server exits;
+the caller waits and checks again.
+
 ```go
 _, err := c.Kill(api.KillParams{ClaudeInstanceID: id})
 switch {
