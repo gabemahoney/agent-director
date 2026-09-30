@@ -165,7 +165,9 @@ need to populate a SQLite store with realistic spawn/permission/template
 state MUST use these factories rather than re-implementing seeding inline.
 
 Exported factories (in pkg/api/apitest/seeds.go):
-- `SeedSpawn(dbPath, id, state, cwd, relayMode, sessionID string, createStore bool) (string, error)`
+- `SeedSpawn(dbPath, id, state, cwd, relayMode, sessionID string, createStore bool, opts ...SpawnOption) (string, error)`
+  — the `With…` options in pkg/api/apitest/options.go (e.g. `WithLaunchIdentity`,
+  `WithLaunchStartedAt`, `WithNoLaunchToken`) set further spawn columns.
 - `SeedParentChild(dbPath, parentID, childID string) error`
 - `SeedPermissionRequest(dbPath, spawnID, toolName string) (PermissionRequestSeed, error)`
 - `SeedTemplate(templatesDir, name, body string) (string, error)`
