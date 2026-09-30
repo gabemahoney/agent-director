@@ -66,7 +66,7 @@ func replyCall(t *testing.T, k tmux.Call, name string, res tmux.RunResult) (*scr
 	case tmux.CallCreate:
 		_, err = c.NewSession(testSocket, name, "/tmp", nil, []string{"claude"}, tmuxfix.Token, "agent-x", tmuxfix.StoreID)
 	case tmux.CallSetLabel:
-		err = c.SetLabel(testSocket, "$0", tmuxfix.Token, "agent-x", tmuxfix.StoreID)
+		err = c.SetLabel(testSocket, "$0", "%0", tmuxfix.Token, "agent-x", tmuxfix.StoreID)
 	default:
 		t.Fatalf("unknown call kind %q", k)
 	}

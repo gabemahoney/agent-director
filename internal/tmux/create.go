@@ -21,18 +21,23 @@ func NeedsLabelByID(name string) bool { return strings.ContainsAny(name, `$\`) }
 //	new-session -d -s <name> -c <cwd> -e AGENT_DIRECTOR_INSTANCE_ID=<id>
 //	  [-e KEY=VAL ...] -P -F '<reply format>' -- <command>
 //	  ; set-option -F -t =<name>: @ad_owner 'ad1 <token> #{session_id} <id, # doubled> <store id>'
+//	  ; set-option -p -F -t =<name>: @ad_pane '<token> #{pane_id}'
 //
-// The label is five fields (WD 2026-09-29 STORE): the store id, storeID, is
-// the writing store's store_meta.store_id and goes last, unchanged; only the
-// instance id's '#' are doubled, so that -F keeps them literal. The client
-// does not validate storeID: callers pass (*store.Store).StoreID(), which the
-// store's open has already validated (SR-5.1).
+// The session label is five fields (WD 2026-09-29 STORE): the store id,
+// storeID, is the writing store's store_meta.store_id and goes last,
+// unchanged; only the instance id's '#' are doubled, so that -F keeps them
+// literal. The client does not validate storeID: callers pass
+// (*store.Store).StoreID(), which the store's open has already validated
+// (SR-5.1). The pane label @ad_pane, "<token> <pane id>", is a per-pane
+// option set on the new session's one pane, so a pane split from it later
+// does not carry it; it is read only through ListPanes (Pane.AdPane) to find
+// a launch's pane after a lost reply (SR-3.5, SR-3.6; WD 2026-09-29c).
 //
-// The chained target is exactly =<name>: (never untargeted, never colon-less).
-// For a name for which NeedsLabelByID holds there is no chain: NewSession
-// makes that one invocation, never calls SetLabel, and returns the parsed
-// reply with a nil error whatever the exit status; the caller then makes the
-// one label-by-id call (SR-3.5).
+// Both chained targets are exactly =<name>: (never untargeted, never
+// colon-less). For a name for which NeedsLabelByID holds there is no chain:
+// NewSession makes that one invocation, never calls SetLabel, and returns the
+// parsed reply with a nil error whatever the exit status; the caller then
+// makes the one label-by-id call, which sets both labels (SR-3.5).
 //
 // envs entries other than AGENT_DIRECTOR_INSTANCE_ID follow in key order and
 // are passed as given (other AGENT_DIRECTOR_* keys included); an
@@ -43,7 +48,8 @@ func NeedsLabelByID(name string) bool { return strings.ContainsAny(name, `$\`) }
 // The reply is parsed from standard output whatever the exit status: a reply
 // means the session was created. A reply with exit 0 is returned with a nil
 // error; a reply with a non-zero exit and a chain is returned with FailLabel
-// (the chained label step failed). With no parseable reply, a non-zero exit
+// (a chained label step failed: the session label's or the pane label's; tmux
+// stops the chain at the first failure). With no parseable reply, a non-zero exit
 // is recognised from the first line of standard error (FailDuplicate,
 // FailSocketDenied, FailNoServer, FailNoSocket, else FailUnrecognized), and
 // an exit 0, or a reply cut short by the pipe-close wait, is
@@ -74,8 +80,11 @@ func (c *Client) NewSession(socket, name, cwd string, envs map[string]string, co
 }
 
 // createArgs composes the create's argv after "-u -S <socket>". When chained,
-// the set-option value is "ad1 <token> #{session_id} <instance id, every #
-// doubled> <store id>" (SR-3.5, Appendix F.1; WD 2026-09-29 STORE).
+// two set-options follow, each after a standalone ";" element: the session
+// label "ad1 <token> #{session_id} <instance id, every # doubled> <store id>"
+// and the pane label "<token> #{pane_id}" with -p (SR-2.1, SR-3.5; WD
+// 2026-09-29 STORE, WD 2026-09-29c). Neither value ends in ";", which tmux
+// would read as a command separator (see escapeFinalSemicolon).
 func createArgs(name, cwd string, envs map[string]string, command []string, token, instanceID, storeID string, chained bool) []string {
 	args := []string{"new-session", "-d", "-s", name, "-c", cwd, "-e", instanceIDEnv + "=" + instanceID}
 	rest := make(map[string]string, len(envs))
@@ -91,7 +100,9 @@ func createArgs(name, cwd string, envs map[string]string, command []string, toke
 	args = append(args, command...)
 	if chained {
 		value := labelPrefix + token + " #{session_id} " + strings.ReplaceAll(instanceID, "#", "##") + " " + storeID
-		args = append(args, cmdSeparator, "set-option", "-F", "-t", "="+name+":", ownerOption, value)
+		target := "=" + name + ":"
+		args = append(args, cmdSeparator, "set-option", "-F", "-t", target, ownerOption, value,
+			cmdSeparator, "set-option", "-p", "-F", "-t", target, paneOption, token+" #{pane_id}")
 	}
 	return args
 }

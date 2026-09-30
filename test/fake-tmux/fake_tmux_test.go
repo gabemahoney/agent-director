@@ -121,7 +121,7 @@ func invoke(t *testing.T, c *tmux.Client, socket string, call tmux.Call) error {
 	case tmux.CallCreate:
 		_, err = create(t, c, socket, "fresh", "agent-new")
 	case tmux.CallSetLabel:
-		err = c.SetLabel(socket, "$1", tmuxfix.Token, "agent-b", tmuxfix.StoreID)
+		err = c.SetLabel(socket, "$1", "%2", tmuxfix.Token, "agent-b", tmuxfix.StoreID)
 	default:
 		t.Fatalf("no invocation for call kind %q", call)
 	}
@@ -274,8 +274,9 @@ func TestLookupAnswersFromTable(t *testing.T) {
 }
 
 // TestCreateChainLabelsOwnID checks a chained create stores the five-field
-// label naming its own id and the caller's store id, and lists it valid; a
-// '#' or spaces in the instance id and another store's id included.
+// label naming its own id and the caller's store id, and lists it valid, and
+// lists its pane label; a '#' or spaces in the instance id and another
+// store's id included.
 func TestCreateChainLabelsOwnID(t *testing.T) {
 	shapeID := map[string]string{}
 	for _, s := range tmuxfix.LabelShapes() {
@@ -307,7 +308,7 @@ func TestCreateChainLabelsOwnID(t *testing.T) {
 			if !reflect.DeepEqual(got, want) {
 				t.Errorf("Lookup = %+v, want %+v", got, want)
 			}
-			wantPanes := []tmux.Pane{{SessionID: reply.SessionID, ID: reply.PaneID, PID: reply.PanePID}}
+			wantPanes := []tmux.Pane{{SessionID: reply.SessionID, ID: reply.PaneID, PID: reply.PanePID, AdPane: tmuxfix.Token}}
 			if panes := listPanes(t, c, socket); !reflect.DeepEqual(panes, wantPanes) {
 				t.Errorf("ListPanes = %+v, want %+v", panes, wantPanes)
 			}
@@ -342,7 +343,7 @@ func TestCreateByIDNameThenSetLabel(t *testing.T) {
 			if got := label(); got != (tmux.Label{}) {
 				t.Fatalf("label before SetLabel = %+v, want none", got)
 			}
-			if err := c.SetLabel(socket, reply.SessionID, tmuxfix.Token, "agent-d", storeID); err != nil {
+			if err := c.SetLabel(socket, reply.SessionID, reply.PaneID, tmuxfix.Token, "agent-d", storeID); err != nil {
 				t.Fatalf("SetLabel: %v", err)
 			}
 			if rawLabel(t, socket, reply.SessionID) != fiveFields(reply.SessionID, "agent-d", storeID) {

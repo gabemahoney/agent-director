@@ -174,7 +174,8 @@ func longReply() (line, capped string) {
 
 // Replies returns every reply entry, the socket replies naming socket: the
 // four recognised replies (duplicate with plain and escaped stored names),
-// the unrecognised replies tmux prints, a non-zero exit with empty stderr,
+// the unrecognised replies tmux prints (the label by id's session and pane
+// steps included), a non-zero exit with empty stderr,
 // multi-line stderr, reply wording on stdout, and silent successes.
 func Replies(socket string) []Entry {
 	long, capped := longReply()
@@ -191,6 +192,8 @@ func Replies(socket string) []Entry {
 		unrecognized("reply/cant-find-session", "E.10 O4; E.3 D1, D3", "can't find session: $0", tmux.CallKillSession),
 		unrecognized("reply/no-such-session", "E.10 O3; E.13 R1 (option reads of a vanished id)",
 			"no such session: $99", tmux.CallSetLabel),
+		unrecognized("reply/no-such-pane", "label by id's pane step, set-option -p -t on a vanished pane id; "+
+			"recorded on tmux 3.3a only (WD 2026-09-29c)", "no such pane: %99", tmux.CallSetLabel),
 		unrecognized("reply/server-exited", "E.3 I1", wordExited,
 			tmux.CallCreate, tmux.CallLookup, tmux.CallListPanes),
 		{Name: "reply/over-200-bytes", Source: "composed: E.3 D1 wording past the F.1 cap",

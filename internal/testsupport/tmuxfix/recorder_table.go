@@ -41,7 +41,7 @@ type ServerStatus struct {
 }
 
 // SeedPane is one pane of a seeded session (SR-3.7): window index, pane
-// index, pane id "%N" and pane pid.
+// index, pane id "%N", pane pid and pane label.
 type SeedPane struct {
 	Window, Index int
 	// ID is the pane id; "" assigns the server's next "%N".
@@ -49,6 +49,11 @@ type SeedPane struct {
 	// PID is the pane pid; 0 assigns a fresh pid above Linux's PID_MAX_LIMIT,
 	// which no process-start-time reader finds.
 	PID int
+	// AdPane is the pane label as the pane listing classifies it
+	// (tmux.Pane.AdPane; WD 2026-09-29c): the launch token of the pane's own
+	// "<token> <pane id>" value, or "" for none (a split pane, a teammate) or
+	// for a malformed or borrowed value. Typed, never raw text.
+	AdPane string
 }
 
 // SeedSession is one session of a socket's table.

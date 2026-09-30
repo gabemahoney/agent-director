@@ -156,8 +156,8 @@ const duplicatePrefix = "reply/duplicate:"
 
 // ResolveEntry finds the replay catalogue entry named name, the socket
 // replies built for socket: every Replies, CreateReplies, LookupAnswers,
-// PaneListings and Captures entry, each LabelShape's and StoredName's entry,
-// and "reply/duplicate:<stored>" for any stored name.
+// PaneListings and Captures entry, each LabelShape's, PaneLabelShape's and
+// StoredName's entry, and "reply/duplicate:<stored>" for any stored name.
 func ResolveEntry(name, socket string) (tmuxfix.Entry, bool) {
 	if stored, ok := strings.CutPrefix(name, duplicatePrefix); ok {
 		return tmuxfix.Duplicate(stored), true
@@ -172,6 +172,11 @@ func ResolveEntry(name, socket string) (tmuxfix.Entry, bool) {
 		}
 	}
 	for _, s := range tmuxfix.LabelShapes() {
+		if e := s.Entry(); e.Name == name {
+			return e, true
+		}
+	}
+	for _, s := range tmuxfix.PaneLabelShapes() {
 		if e := s.Entry(); e.Name == name {
 			return e, true
 		}

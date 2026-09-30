@@ -65,10 +65,19 @@ func ChainLabelValue(token, instanceID, storeID string) string {
 	return "ad1 " + token + " #{session_id} " + strings.ReplaceAll(instanceID, "#", "##") + " " + storeID
 }
 
+// PaneLabelValue builds the @ad_pane value as stored and listed, "<token>
+// <pane id>" (SR-2.1, SR-3.5; WD 2026-09-29c), also SetLabel's pane value.
+func PaneLabelValue(token, paneID string) string { return token + " " + paneID }
+
+// ChainPaneLabelValue builds the create chain's set-option -p -F value,
+// "<token> #{pane_id}" (SR-2.1, SR-3.5; WD 2026-09-29c).
+func ChainPaneLabelValue(token string) string { return token + " #{pane_id}" }
+
 // PaneLine builds one list-panes -a line, without its newline: session id,
-// window index, pane index, pane id and pane pid, tab separated (SR-2.1).
-func PaneLine(sessionID string, window, index int, paneID string, pid int) string {
-	return strings.Join([]string{sessionID, strconv.Itoa(window), strconv.Itoa(index), paneID, strconv.Itoa(pid)}, "\t")
+// window index, pane index, pane id, pane pid and the raw @ad_pane value
+// ("" when unset), tab separated (SR-2.1; WD 2026-09-29c).
+func PaneLine(sessionID string, window, index int, paneID string, pid int, adPane string) string {
+	return strings.Join([]string{sessionID, strconv.Itoa(window), strconv.Itoa(index), paneID, strconv.Itoa(pid), adPane}, "\t")
 }
 
 // CreateReplyLine builds the create's -P -F reply with its newline:
@@ -188,28 +197,139 @@ func LookupAnswers() []Entry {
 	}
 }
 
-// PaneListings returns list-panes -a answers: P1's one pane, P2's
-// base-index 1 indices, F4's grouped session listing a pane twice, and a
-// line that does not parse (FailUnrecognized carrying it).
-func PaneListings() []Entry {
-	listing := func(name, source string, panes ...tmux.Pane) Entry {
-		var out strings.Builder
-		for _, p := range panes {
-			out.WriteString(PaneLine(p.SessionID, p.Window, p.Index, p.ID, p.PID) + "\n")
+// PaneListing is one pane line of a listing entry: the parsed pane the
+// client must return, whose AdPane is the wanted token, and the raw @ad_pane
+// value on the line.
+type PaneListing struct {
+	Pane tmux.Pane
+	// Value is the raw #{@ad_pane} on the line ("" when unset).
+	Value string
+}
+
+// Listing builds a successful list-panes -a entry from its lines.
+func Listing(name, source string, lines ...PaneListing) Entry {
+	var out strings.Builder
+	var panes []tmux.Pane
+	var labels []string
+	for _, l := range lines {
+		p := l.Pane
+		out.WriteString(PaneLine(p.SessionID, p.Window, p.Index, p.ID, p.PID, l.Value) + "\n")
+		panes = append(panes, p)
+		if l.Value != "" {
+			labels = append(labels, l.Value)
 		}
-		return Entry{Name: name, Source: source, Stdout: out.String(), Want: only(0, tmux.CallListPanes), Panes: panes}
 	}
-	bad := strings.Join([]string{"$0", "0", "0", "%0"}, "\t")
+	return Entry{Name: name, Source: source, Stdout: out.String(), Want: only(0, tmux.CallListPanes),
+		Panes: panes, LabelValues: labels}
+}
+
+// PaneListings returns list-panes -a answers: P1's one pane, P2's
+// base-index 1 indices, F4's grouped session listing a pane twice, the pane
+// label on the created pane only with a split pane reading empty, a server
+// value borrowed by every pane, lines that do not parse (FailUnrecognized
+// with the first line cut before its label field), and a label field
+// holding a tab. The pane label forms themselves are PaneLabelShapes.
+func PaneListings() []Entry {
+	pane := func(sessionID string, window, index int, id string, pid int, token string) tmux.Pane {
+		return tmux.Pane{SessionID: sessionID, Window: window, Index: index, ID: id, PID: pid, AdPane: token}
+	}
+	own := func(p tmux.Pane) PaneListing { return PaneListing{Pane: p, Value: PaneLabelValue(p.AdPane, p.ID)} }
+	unlabelled := func(p tmux.Pane) PaneListing { return PaneListing{Pane: p} }
+	borrowed := func(p tmux.Pane, value string) PaneListing { return PaneListing{Pane: p, Value: value} }
+	// unparseable is a listing the client rejects; firstLine is its first
+	// line cut before the fifth tab, so it never quotes a pane label value.
+	unparseable := func(name, source, stdout, firstLine string, labels ...string) Entry {
+		return Entry{Name: name, Source: source, Stdout: stdout, Want: only(tmux.FailUnrecognized, tmux.CallListPanes),
+			FirstLine: firstLine, LabelValues: labels}
+	}
+	const decision = "WD 2026-09-29c; decision-0929c item 5"
+	fourFields := strings.Join([]string{"$0", "0", "0", "%0"}, "\t")
+	fiveFields := fourFields + "\t295"
+	badPID := fourFields + "\t-295"
+	labelled := PaneLabelValue(Token, "%0")
 	return []Entry{
-		listing("panes/P1", "E.3 P1", tmux.Pane{SessionID: "$0", Window: 0, Index: 0, ID: "%0", PID: 295}),
-		listing("panes/P2-base-index-1", "E.3 P2",
-			tmux.Pane{SessionID: "$0", Window: 0, Index: 1, ID: "%0", PID: 295},
-			tmux.Pane{SessionID: "$1", Window: 1, Index: 1, ID: "%1", PID: 298}),
-		listing("panes/F4-grouped", "provenance-fresh F4; SR-3.7: one pane per session showing it",
-			tmux.Pane{SessionID: "$0", Window: 0, Index: 0, ID: "%0", PID: 1641},
-			tmux.Pane{SessionID: "$1", Window: 0, Index: 0, ID: "%0", PID: 1641}),
-		{Name: "panes/four-fields", Source: "SR-2.1: five fields", Stdout: bad + "\n",
-			Want: only(tmux.FailUnrecognized, tmux.CallListPanes), FirstLine: bad},
+		Listing("panes/P1", "E.3 P1; its pane labelled by the create (WD 2026-09-29c)",
+			own(pane("$0", 0, 0, "%0", 295, Token))),
+		Listing("panes/P2-base-index-1", "E.3 P2; the pane label with base-index 1 (WD 2026-09-29c)",
+			own(pane("$0", 0, 1, "%0", 295, Token)),
+			own(pane("$1", 1, 1, "%1", 298, OtherToken))),
+		Listing("panes/F4-grouped", "provenance-fresh F4; SR-3.7: one pane per session showing it",
+			unlabelled(pane("$0", 0, 0, "%0", 1641, "")),
+			unlabelled(pane("$1", 0, 0, "%0", 1641, ""))),
+		Listing("panes/split-pane-unlabelled", decision+": a pane split from the created one has no value",
+			own(pane("$0", 0, 0, "%0", 36, Token)),
+			unlabelled(pane("$0", 0, 1, "%2", 43, ""))),
+		Listing("panes/server-value-borrowed", decision+"; SR-3.6 scope guard: a server value is listed on every pane, "+
+			"its own value included; only the pane it names counts",
+			borrowed(pane("$0", 0, 0, "%0", 36, Token), labelled),
+			borrowed(pane("$0", 0, 1, "%2", 43, ""), labelled),
+			borrowed(pane("$1", 0, 0, "%1", 40, ""), labelled)),
+		Listing("panes/label-with-tab", "SR-2.1: the label is everything after the fifth tab",
+			borrowed(pane("$0", 0, 0, "%0", 295, ""), Token+"\t%0")),
+		unparseable("panes/four-fields", "SR-2.1: six fields", fourFields+"\n", fourFields),
+		unparseable("panes/five-fields", "SR-2.1: six fields; the form before WD 2026-09-29c", fiveFields+"\n", fiveFields),
+		unparseable("panes/pid-unparseable-with-label", "SR-2.1, SR-2.3: FirstLine never quotes the label",
+			badPID+"\t"+labelled+"\n", badPID, labelled),
+		unparseable("panes/second-line-unparseable", "SR-2.1, SR-2.3: FirstLine is the first line, cut before its label",
+			PaneLine("$0", 0, 0, "%0", 295, labelled)+"\n"+fourFields+"\n", fiveFields, labelled),
+	}
+}
+
+// PaneLabelShape is one pane label form, listed as the #{@ad_pane} of the
+// one pane PaneLabelLineID of a one-pane listing, and the AdPane the client
+// must give it (WD 2026-09-29c; the scope guard of SR-3.6).
+type PaneLabelShape struct {
+	Name   string
+	Source string
+	// Value is the raw value after the line's fifth tab.
+	Value string
+	// Want is the pane's AdPane: the token, or "".
+	Want string
+}
+
+// PaneLabelLineID is the pane id of the line every PaneLabelShape is listed
+// on (in session $1).
+const PaneLabelLineID = "%1"
+
+// Entry is the one-pane listing entry listing the shape.
+func (s PaneLabelShape) Entry() Entry {
+	return Listing("panes/label:"+s.Name, s.Source, PaneListing{
+		Pane:  tmux.Pane{SessionID: "$1", Window: 0, Index: 0, ID: PaneLabelLineID, PID: 298, AdPane: s.Want},
+		Value: s.Value,
+	})
+}
+
+// PaneLabelShapes returns the pane label forms (WD 2026-09-29c): a valid
+// "<token> <pane id>" naming the line's own pane, which gives its token, and
+// every other form, which gives "": unset; borrowed values naming another
+// pane (a window, session, global or server value, or a prefix neighbour's
+// id); no pane id or a session id; tokens that are not 16 lowercase hex;
+// extra fields and spacing; and a session label value.
+func PaneLabelShapes() []PaneLabelShape {
+	none := func(name, source, value string) PaneLabelShape {
+		return PaneLabelShape{Name: name, Source: source, Value: value}
+	}
+	const guard = "SR-3.6 scope guard; WD 2026-09-29c"
+	return []PaneLabelShape{
+		{Name: "valid", Source: "SR-2.1 pane listing; WD 2026-09-29c", Value: PaneLabelValue(Token, PaneLabelLineID), Want: Token},
+		{Name: "valid-other-token", Source: "SR-3.7: a leftover's pane carries its own launch's token",
+			Value: PaneLabelValue(OtherToken, PaneLabelLineID), Want: OtherToken},
+		none("empty-value", "decision-0929c item 5: a split pane has no value", ""),
+		none("borrowed-other-pane", guard+": a window, session, global or server value naming another pane",
+			PaneLabelValue(Token, "%0")),
+		none("prefix-neighbour-pane-id", guard, PaneLabelValue(Token, PaneLabelLineID+"2")),
+		none("session-id", guard, PaneLabelValue(Token, "$1")),
+		none("no-pane-id", guard, Token),
+		none("trailing-space", guard, Token+" "),
+		none("extra-field", guard, PaneLabelValue(Token, PaneLabelLineID)+" x"),
+		none("double-space", guard, Token+"  "+PaneLabelLineID),
+		none("tab-separator", guard, Token+"\t"+PaneLabelLineID),
+		none("token-uppercase", guard, PaneLabelValue(strings.ToUpper(Token), PaneLabelLineID)),
+		none("token-15-hex", guard, PaneLabelValue(Token[:15], PaneLabelLineID)),
+		none("token-17-hex", guard, PaneLabelValue(Token+"0", PaneLabelLineID)),
+		none("token-placeholder", guard, PaneLabelValue("TOK1", PaneLabelLineID)),
+		none("session-label", guard+": an @ad_owner value is not a pane label",
+			LabelValue(Token, "$1", "agent-x", StoreID)),
 	}
 }
 

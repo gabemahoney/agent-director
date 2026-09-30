@@ -17,7 +17,7 @@ import (
 
 const (
 	argvLookupFormat = "#{session_id}\t#{session_created}\t#{pid}\t#{start_time}\t#{session_name}\t#{@ad_owner}"
-	argvPanesFormat  = "#{session_id}\t#{window_index}\t#{pane_index}\t#{pane_id}\t#{pane_pid}"
+	argvPanesFormat  = "#{session_id}\t#{window_index}\t#{pane_index}\t#{pane_id}\t#{pane_pid}\t#{@ad_pane}"
 	argvCreateFormat = "#{session_id} #{pid} #{start_time} #{pane_id} #{pane_pid}"
 )
 
@@ -114,20 +114,22 @@ func argvCases() []argvCase {
 			name:   "label by id",
 			script: []tmux.RunResult{exitZero("")},
 			call: func(c *tmux.Client) error {
-				return c.SetLabel(testSocket, "$2", tmuxfix.Token, "id#1", tmuxfix.StoreID)
+				return c.SetLabel(testSocket, "$2", "%2", tmuxfix.Token, "id#1", tmuxfix.StoreID)
 			},
 			want: [][]string{{"set-option", "-t", "$2", "@ad_owner",
-				tmuxfix.LabelValue(tmuxfix.Token, "$2", "id#1", tmuxfix.StoreID)}},
+				tmuxfix.LabelValue(tmuxfix.Token, "$2", "id#1", tmuxfix.StoreID),
+				";", "set-option", "-p", "-t", "%2", "@ad_pane", tmuxfix.PaneLabelValue(tmuxfix.Token, "%2")}},
 			timeout: testTimeouts.Action,
 		},
 		{
-			name:   "label by id, spaced id and other store",
+			name:   "label by id, other pane, token, spaced id and store",
 			script: []tmux.RunResult{exitZero("")},
 			call: func(c *tmux.Client) error {
-				return c.SetLabel(testSocket, "$2", tmuxfix.Token, "agent x#1", tmuxfix.OtherStoreID)
+				return c.SetLabel(testSocket, "$2", "%17", tmuxfix.OtherToken, "agent x#1", tmuxfix.OtherStoreID)
 			},
 			want: [][]string{{"set-option", "-t", "$2", "@ad_owner",
-				tmuxfix.LabelValue(tmuxfix.Token, "$2", "agent x#1", tmuxfix.OtherStoreID)}},
+				tmuxfix.LabelValue(tmuxfix.OtherToken, "$2", "agent x#1", tmuxfix.OtherStoreID),
+				";", "set-option", "-p", "-t", "%17", "@ad_pane", tmuxfix.PaneLabelValue(tmuxfix.OtherToken, "%17")}},
 			timeout: testTimeouts.Action,
 		},
 		{
@@ -143,7 +145,8 @@ func argvCases() []argvCase {
 				"-e", "AGENT_DIRECTOR_INSTANCE_ID=agent-1", "-e", "ABC=a b", "-e", "ZED=z",
 				"-P", "-F", argvCreateFormat, "--", "claude", "--resume", "x",
 				";", "set-option", "-F", "-t", "=proj-abc:", "@ad_owner",
-				tmuxfix.ChainLabelValue(tmuxfix.Token, "agent-1", tmuxfix.StoreID)}},
+				tmuxfix.ChainLabelValue(tmuxfix.Token, "agent-1", tmuxfix.StoreID),
+				";", "set-option", "-p", "-F", "-t", "=proj-abc:", "@ad_pane", tmuxfix.ChainPaneLabelValue(tmuxfix.Token)}},
 			timeout: testTimeouts.Create,
 		},
 	})
@@ -307,9 +310,10 @@ func argvChainedNames() []string {
 	return names
 }
 
-// TestNewSessionChain: the chain is one ';' then set-option -F -t =<name>:
-// with the five-field value; # is doubled in the id only, and the store id
-// is the last field, once and unchanged.
+// TestNewSessionChain: the chain is ';' set-option -F -t =<name>: @ad_owner
+// with the five-field value, then ';' set-option -p -F -t =<name>: @ad_pane
+// '<token> #{pane_id}'; # is doubled in the id only, the store id ends the
+// session label once and unchanged, and it never reaches the pane label.
 func TestNewSessionChain(t *testing.T) {
 	labels := []struct{ id, store string }{
 		{"agent-1", tmuxfix.StoreID}, {"id#1", tmuxfix.StoreID}, {"#a##", tmuxfix.StoreID},
@@ -332,17 +336,22 @@ func TestNewSessionChain(t *testing.T) {
 					args := argvCommand(t, runner.Only())
 					head := []string{"new-session", "-d", "-s", name, "-c", "/work",
 						"-e", "AGENT_DIRECTOR_INSTANCE_ID=" + l.id, "-P", "-F", argvCreateFormat, "--"}
-					tail := []string{";", "set-option", "-F", "-t", "=" + name + ":", "@ad_owner",
+					owner := []string{";", "set-option", "-F", "-t", "=" + name + ":", "@ad_owner",
 						tmuxfix.ChainLabelValue(tmuxfix.Token, l.id, l.store)}
-					want := slices.Concat(head, command, tail)
+					pane := []string{";", "set-option", "-p", "-F", "-t", "=" + name + ":", "@ad_pane",
+						tmuxfix.ChainPaneLabelValue(tmuxfix.Token)}
+					want := slices.Concat(head, command, owner, pane)
 					if !slices.Equal(args, want) {
 						t.Errorf("argv:\n got %q\nwant %q", args, want)
 					}
-					if n := argvCount(args, ";"); n != 1 {
-						t.Errorf("got %d ';' separators, want 1", n)
+					if n := argvCount(args, ";"); n != 2 {
+						t.Errorf("got %d ';' separators, want 2", n)
 					}
-					if value := args[len(args)-1]; !strings.HasSuffix(value, " "+l.store) || strings.Count(value, l.store) != 1 {
-						t.Errorf("chain value %q does not end with store id %q exactly once", value, l.store)
+					if value := args[len(args)-len(pane)-1]; !strings.HasSuffix(value, " "+l.store) || strings.Count(value, l.store) != 1 {
+						t.Errorf("session label value %q does not end with store id %q exactly once", value, l.store)
+					}
+					if value := args[len(args)-1]; strings.Contains(value, l.store) || strings.Contains(value, l.id) {
+						t.Errorf("pane label value %q carries the store id or instance id", value)
 					}
 				})
 			}

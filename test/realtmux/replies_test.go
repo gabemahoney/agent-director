@@ -197,9 +197,10 @@ func TestRepliesSuccessfulCallStreams(t *testing.T) {
 		cl, log := newRecordingClient(t)
 		got, err := cl.ListPanes(rt.Socket)
 		p := tmux.Pane{SessionID: id, Window: rt.formatInt(t, pane, "#{window_index}"),
-			Index: rt.formatInt(t, pane, "#{pane_index}"), ID: pane, PID: anchor.Reply.PanePID}
+			Index: rt.formatInt(t, pane, "#{pane_index}"), ID: pane, PID: anchor.Reply.PanePID, AdPane: anchor.Token}
 		want := tmuxfix.Find(tmuxfix.PaneListings(), "panes/P1")
-		want.Stdout, want.Panes = tmuxfix.PaneLine(p.SessionID, p.Window, p.Index, p.ID, p.PID)+"\n", []tmux.Pane{p}
+		want.Stdout = tmuxfix.PaneLine(p.SessionID, p.Window, p.Index, p.ID, p.PID, tmuxfix.PaneLabelValue(anchor.Token, pane)) + "\n"
+		want.Panes = []tmux.Pane{p}
 		assertCallError(t, err, tmux.CallListPanes, want)
 		assertTriple(t, log.last(t).rawResult, want)
 		if !reflect.DeepEqual(got, want.Panes) {
@@ -220,7 +221,7 @@ func TestRepliesSuccessfulCallStreams(t *testing.T) {
 			// A fresh token and id, so the check sees the new value, not the chained one.
 			func(t *testing.T, cl *tmux.Client, c *created) error {
 				c.Token, c.InstanceID = newToken(t), newInstanceID("agent")
-				return cl.SetLabel(rt.Socket, c.Reply.SessionID, c.Token, c.InstanceID, c.StoreID)
+				return cl.SetLabel(rt.Socket, c.Reply.SessionID, c.Reply.PaneID, c.Token, c.InstanceID, c.StoreID)
 			},
 			func(t *testing.T, c created) {
 				if rt.label(t, c.Reply.SessionID) != tmuxfix.LabelValue(c.Token, c.Reply.SessionID, c.InstanceID, c.StoreID) {

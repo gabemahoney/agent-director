@@ -110,7 +110,7 @@ func TestRecorder_NewSessionStoredNames(t *testing.T) {
 			if !n.LabelByID {
 				return
 			}
-			if err := r.SetLabel(sockA, reply.SessionID, tmuxfix.Token, agent, tmuxfix.StoreID); err != nil {
+			if err := r.SetLabel(sockA, reply.SessionID, reply.PaneID, tmuxfix.Token, agent, tmuxfix.StoreID); err != nil {
 				t.Fatal(err)
 			}
 			if a := lookup(t, r, sockA); a.Sessions[0].Label != tmuxfix.Valid(tmuxfix.Token, agent, tmuxfix.StoreID) {
@@ -134,7 +134,7 @@ func TestRecorder_LabelsWithCallersStoreID(t *testing.T) {
 			calls := 1
 			if tmux.NeedsLabelByID(tc.session) {
 				calls++
-				if err := r.SetLabel(sockA, reply.SessionID, tmuxfix.Token, agent, tmuxfix.OtherStoreID); err != nil {
+				if err := r.SetLabel(sockA, reply.SessionID, reply.PaneID, tmuxfix.Token, agent, tmuxfix.OtherStoreID); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -314,8 +314,8 @@ func TestRecorder_AppliedCreate(t *testing.T) {
 	}
 }
 
-// TestRecorder_RecordsCalls: each call is recorded with its kind, socket and
-// target; Reset discards the records.
+// TestRecorder_RecordsCalls: each call is recorded with its kind, socket,
+// target and (SetLabel only) pane id; Reset discards the records.
 func TestRecorder_RecordsCalls(t *testing.T) {
 	for _, inv := range invokers {
 		t.Run(string(inv.call), func(t *testing.T) {
@@ -323,8 +323,12 @@ func TestRecorder_RecordsCalls(t *testing.T) {
 			_ = inv.do(r, sockA)
 			calls := r.SocketCalls()
 			last := calls[len(calls)-1]
-			if last.Call != inv.call || last.Socket != sockA || last.Target != inv.target {
-				t.Errorf("recorded %+v, want %s on %s at %q", last, inv.call, sockA, inv.target)
+			wantPane := ""
+			if inv.call == tmux.CallSetLabel {
+				wantPane = "%0"
+			}
+			if last.Call != inv.call || last.Socket != sockA || last.Target != inv.target || last.PaneID != wantPane {
+				t.Errorf("recorded %+v, want %s on %s at %q pane %q", last, inv.call, sockA, inv.target, wantPane)
 			}
 			if got := r.SocketCallsOf(inv.call); len(got) != 1 || !reflect.DeepEqual(got[0], last) {
 				t.Errorf("SocketCallsOf = %+v", got)

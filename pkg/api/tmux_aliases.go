@@ -20,8 +20,9 @@ type TmuxLookupAnswer = tmux.LookupAnswer
 type TmuxSession = tmux.Session
 
 // TmuxPane is re-exported from internal/tmux for the same reason. It is one
-// line of TmuxClient's ListPanes: session id, window, pane index, pane id and
-// pane pid (SR-3.7).
+// line of TmuxClient's ListPanes: session id, window, pane index, pane id,
+// pane pid (SR-3.7) and AdPane, the launch token of the pane's own @ad_pane
+// label, "" when it has none or the value is borrowed (WD 2026-09-29c).
 type TmuxPane = tmux.Pane
 
 // TmuxLabel is re-exported from internal/tmux for the same reason. It is a
@@ -66,9 +67,10 @@ const (
 	TmuxCallSendEnter = tmux.CallSendEnter
 	// TmuxCallCapture is tmux.CallCapture: the capture by pane id.
 	TmuxCallCapture = tmux.CallCapture
-	// TmuxCallCreate is tmux.CallCreate: the create with its chained label.
+	// TmuxCallCreate is tmux.CallCreate: the create with its chained labels.
 	TmuxCallCreate = tmux.CallCreate
-	// TmuxCallSetLabel is tmux.CallSetLabel: the label by session id.
+	// TmuxCallSetLabel is tmux.CallSetLabel: sets the session label by
+	// session id and the pane label by pane id, in one invocation.
 	TmuxCallSetLabel = tmux.CallSetLabel
 )
 

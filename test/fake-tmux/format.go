@@ -62,13 +62,16 @@ func sessionVars(tb *faketmuxfix.Table, s *faketmuxfix.Session) vars {
 	return v
 }
 
-// paneVars is the pane part of a format context.
+// paneVars is the pane part of a format context. #{@ad_pane} is the pane's
+// own value only: the fake models no window, session, global or server
+// @ad_pane (a table writes a borrowed value's text on the pane instead).
 func paneVars(p faketmuxfix.Pane) vars {
 	return vars{
 		"window_index": strconv.Itoa(p.Window),
 		"pane_index":   strconv.Itoa(p.Index),
 		"pane_id":      p.ID,
 		"pane_pid":     strconv.Itoa(p.PID),
+		"@ad_pane":     p.AdPane,
 	}
 }
 

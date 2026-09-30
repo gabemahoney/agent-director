@@ -46,8 +46,10 @@ func WithRowSessionLabel(label tmux.Label, set bool) RowSessionOption {
 // SeedRowSession makes the Recorder's table hold the session of the row
 // instanceID of the store at dbPath, seeded through apitest.SeedSpawn
 // (SR-20.2, SR-20.3), and returns it as stored. The session is on the
-// row's socket, with the row's pane (a new pane when the row records none),
-// the stored form of the row's session name, and the five-field label valid
+// row's socket, with the row's pane (a new pane when the row records none)
+// carrying the pane label of the session label's token (SeedPane.AdPane; ""
+// when that label is not LabelValid; WD 2026-09-29c), as the create leaves
+// it, the stored form of the row's session name, and the five-field label valid
 // for the row's id and launch token and the store's id, all read from the
 // store (the store id through (*store.Store).StoreID() on the store it opens
 // to read the row; WD 2026-09-29 STORE), so a test never copies the token or
@@ -80,9 +82,11 @@ func (r *Recorder) SeedRowSession(t testing.TB, dbPath, instanceID string, opts 
 	} else if id.Token == "" {
 		t.Fatalf("tmuxfix.SeedRowSession: row %s records no well-formed launch token; give WithRowSessionLabel", instanceID)
 	}
-	if id.PaneID != "" {
-		seed.Panes = []SeedPane{{ID: id.PaneID, PID: id.PanePID}}
+	pane := SeedPane{ID: id.PaneID, PID: id.PanePID}
+	if seed.Label.Kind == tmux.LabelValid {
+		pane.AdPane = seed.Label.Token
 	}
+	seed.Panes = []SeedPane{pane}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()

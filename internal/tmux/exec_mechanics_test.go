@@ -139,7 +139,7 @@ func TestExecPipeCloseWaitPerCallKind(t *testing.T) {
 	const wait = 50 * time.Millisecond
 	fullReply := tmux.CreateReply{SessionID: "$1", ServerPID: 123, ServerStart: 456, PaneID: "%2", PanePID: 789}
 	lookupLine := tmuxfix.SessionLine("$1", 100, 200, 300, "agent-x", "") + "\n"
-	paneLine := tmuxfix.PaneLine("$1", 0, 0, "%1", 42) + "\n"
+	paneLine := tmuxfix.PaneLine("$1", 0, 0, "%1", 42, "") + "\n"
 	cutShort := tmuxfix.Find(tmuxfix.CreateReplies(), "create/reply-cut-short").Stdout
 	createRun := func(c *tmux.Client, s string) (any, error) { return execCreate(c, s) }
 	noValue := func(err error) (any, error) { return nil, err }
@@ -156,7 +156,7 @@ func TestExecPipeCloseWaitPerCallKind(t *testing.T) {
 		{name: "text", run: func(c *tmux.Client, s string) (any, error) { return noValue(c.SendKeysPane(s, "%1", "hi", false)) }},
 		{name: "text and Enter", run: func(c *tmux.Client, s string) (any, error) { return noValue(c.SendKeysPane(s, "%1", "hi", true)) }},
 		{name: "label by id", run: func(c *tmux.Client, s string) (any, error) {
-			return noValue(c.SetLabel(s, "$1", execToken, "id-1", tmuxfix.StoreID))
+			return noValue(c.SetLabel(s, "$1", "%1", execToken, "id-1", tmuxfix.StoreID))
 		}},
 		{name: "lookup", stdout: lookupLine, wantCut: true,
 			run: func(c *tmux.Client, s string) (any, error) { return c.Lookup(s) }},

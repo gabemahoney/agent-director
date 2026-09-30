@@ -49,8 +49,9 @@ type sessionChange struct {
 // ReplaceSessionAfter arranges that, when the next call of kind call on
 // socket (AnySocket for any) returns, the session sessionID is replaced by a
 // new one with the same stored name, a new session id, new panes (same
-// window and pane indices, new pane ids and pids), the current second as
-// its creation time and label as its label (LabelNone: unset). The hook
+// window and pane indices, new pane ids and pids, no pane label), the
+// current second as its creation time and label as its label (LabelNone:
+// unset). The hook
 // fires once, whatever the call's result; it does nothing if the session is
 // gone by then.
 func (r *Recorder) ReplaceSessionAfter(call tmux.Call, socket, sessionID string, label tmux.Label) *Recorder {

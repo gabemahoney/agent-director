@@ -53,7 +53,7 @@ var invokers = []invoker{
 		return err
 	}},
 	{tmux.CallSetLabel, "$0", func(r *tmuxfix.Recorder, s string) error {
-		return r.SetLabel(s, "$0", tmuxfix.Token, agent, tmuxfix.StoreID)
+		return r.SetLabel(s, "$0", "%0", tmuxfix.Token, agent, tmuxfix.StoreID)
 	}},
 }
 
@@ -221,21 +221,21 @@ func TestRecorder_Servers(t *testing.T) {
 }
 
 // TestRecorder_ListPanes: panes by session listing order then window and
-// pane index, from the named socket only.
+// pane index, with their pane labels, from the named socket only.
 func TestRecorder_ListPanes(t *testing.T) {
 	r := tmuxfix.NewRecorder().
 		SeedSessions(sockA,
-			tmuxfix.SeedSession{ID: "$1", Name: "b", Panes: []tmuxfix.SeedPane{{Window: 1, Index: 0, ID: "%3", PID: 13}, {Window: 0, Index: 1, ID: "%2", PID: 12}, {Window: 0, Index: 0, ID: "%1", PID: 11}}},
-			tmuxfix.SeedSession{ID: "$0", Name: "a", Panes: []tmuxfix.SeedPane{{ID: "%0", PID: 10}}}).
+			tmuxfix.SeedSession{ID: "$1", Name: "b", Panes: []tmuxfix.SeedPane{{Window: 1, Index: 0, ID: "%3", PID: 13}, {Window: 0, Index: 1, ID: "%2", PID: 12, AdPane: tmuxfix.OtherToken}, {Window: 0, Index: 0, ID: "%1", PID: 11}}},
+			tmuxfix.SeedSession{ID: "$0", Name: "a", Panes: []tmuxfix.SeedPane{{ID: "%0", PID: 10, AdPane: tmuxfix.Token}}}).
 		SeedSessions(sockB, tmuxfix.SeedSession{ID: "$0", Name: "x", Panes: []tmuxfix.SeedPane{{ID: "%9", PID: 99}}})
 	got, err := r.ListPanes(sockA)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []tmux.Pane{
-		{SessionID: "$0", ID: "%0", PID: 10},
+		{SessionID: "$0", ID: "%0", PID: 10, AdPane: tmuxfix.Token},
 		{SessionID: "$1", Window: 0, Index: 0, ID: "%1", PID: 11},
-		{SessionID: "$1", Window: 0, Index: 1, ID: "%2", PID: 12},
+		{SessionID: "$1", Window: 0, Index: 1, ID: "%2", PID: 12, AdPane: tmuxfix.OtherToken},
 		{SessionID: "$1", Window: 1, Index: 0, ID: "%3", PID: 13},
 	}
 	if !reflect.DeepEqual(got, want) {

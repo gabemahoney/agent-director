@@ -35,7 +35,8 @@ type TmuxClient interface {
 	// Lookup makes the one-call lookup on socket: sessions with labels and
 	// the scope reads.
 	Lookup(socket string) (TmuxLookupAnswer, error)
-	// ListPanes lists every pane of the server at socket.
+	// ListPanes lists every pane of the server at socket, each with its pane
+	// label's token (TmuxPane.AdPane).
 	ListPanes(socket string) ([]TmuxPane, error)
 	// KillPane kills the pane paneID on socket.
 	KillPane(socket, paneID string) error
@@ -45,13 +46,15 @@ type TmuxClient interface {
 	SendKeysPane(socket, paneID, text string, pressEnter bool) error
 	// CapturePaneID returns the last nLines lines of the pane paneID on socket.
 	CapturePaneID(socket, paneID string, nLines int, ansi bool) (string, error)
-	// NewSession creates the session name on socket with its chained label
-	// "ad1 <token> <session id> <instance id> <store id>", storeID being this
-	// store's (*store.Store).StoreID(), and returns the create reply.
+	// NewSession creates the session name on socket with its chained labels,
+	// the session label "ad1 <token> <session id> <instance id> <store id>",
+	// storeID being this store's (*store.Store).StoreID(), and the pane label
+	// "<token> <pane id>" on its pane, and returns the create reply.
 	NewSession(socket, name, cwd string, envs map[string]string, command []string, token, instanceID, storeID string) (TmuxCreateReply, error)
-	// SetLabel labels the session sessionID on socket by its id with
-	// "ad1 <token> <session id> <instance id> <store id>".
-	SetLabel(socket, sessionID, token, instanceID, storeID string) error
+	// SetLabel labels, in one call, the session sessionID on socket by its id
+	// with "ad1 <token> <session id> <instance id> <store id>" and its pane
+	// paneID by its id with "<token> <pane id>".
+	SetLabel(socket, sessionID, paneID, token, instanceID, storeID string) error
 	// NewSessionByName creates a detached session by name (transitional).
 	NewSessionByName(name, cwd string, envs map[string]string, command []string) error
 	// HasSession reports whether a session whose name begins with name

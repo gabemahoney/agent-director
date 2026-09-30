@@ -28,8 +28,9 @@ const (
 	CallCapture Call = "capture"
 	// CallCreate is the create invocation with its chained label (SR-3.5).
 	CallCreate Call = "session creation"
-	// CallSetLabel is the label by session id: a name containing $ or \, or a
-	// relabel after a failed chained label (SR-3.5).
+	// CallSetLabel is the label by id, the session label by session id and
+	// the pane label by pane id in one invocation: a name containing $ or \,
+	// or a relabel after a failed chained label (SR-3.5).
 	CallSetLabel Call = "label by id"
 )
 
@@ -55,8 +56,8 @@ const (
 	// FailDuplicate: the "duplicate session: " prefix, on the create only
 	// (SR-2.5).
 	FailDuplicate
-	// FailLabel: create only; a reply was printed but the chained label step
-	// failed (SR-3.5).
+	// FailLabel: create only; a reply was printed but a chained label step
+	// (the session label's or the pane label's) failed (SR-3.5).
 	FailLabel
 	// FailUnrecognized: anything else, unparseable output and the data-call
 	// pipe-close-wait case included (SR-2.4, SR-2.5).
@@ -235,7 +236,7 @@ type CreateReply struct {
 }
 
 // Pane is one list-panes -a line (SR-3.7): session id, window index, pane
-// index, pane id and pane pid.
+// index, pane id, pane pid and the pane label's token.
 type Pane struct {
 	// SessionID is the id of the session the line lists the pane under.
 	SessionID string
@@ -247,6 +248,13 @@ type Pane struct {
 	ID string
 	// PID is #{pane_pid}.
 	PID int
+	// AdPane is the launch token of the line's #{@ad_pane}, the pane label
+	// "<16 lowercase hex token> <pane id>" the create sets on its pane (WD
+	// 2026-09-29c), when the value embeds this line's own pane id (ID); ""
+	// otherwise: unset, malformed, or a window, session, global or server
+	// value borrowed through the format, which names another pane or none
+	// (the scope guard of SR-3.6). The raw value never leaves the client.
+	AdPane string
 }
 
 // Timeouts holds the effective per-call bounds (SR-2.4, SR-4.1, SR-13.1):

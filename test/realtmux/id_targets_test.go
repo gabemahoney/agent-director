@@ -164,7 +164,7 @@ func idtFails(t testing.TB, rt *realTmux, err error, call tmux.Call, entry strin
 func idtAllFail(t testing.TB, rt *realTmux, cl *tmux.Client, sessionID, paneID string) {
 	t.Helper()
 	idtFails(t, rt, cl.KillSessionID(rt.Socket, sessionID), tmux.CallKillSession, "reply/cant-find-session")
-	idtFails(t, rt, cl.SetLabel(rt.Socket, sessionID, newToken(t), newInstanceID("agent"), tmuxfix.StoreID), tmux.CallSetLabel, "reply/no-such-session")
+	idtFails(t, rt, cl.SetLabel(rt.Socket, sessionID, paneID, newToken(t), newInstanceID("agent"), tmuxfix.StoreID), tmux.CallSetLabel, "reply/no-such-session")
 	idtFails(t, rt, cl.KillPane(rt.Socket, paneID), tmux.CallKillPane, "") // no catalogue entry
 	idtFails(t, rt, cl.SendKeysPane(rt.Socket, paneID, "idt-never-typed", true), tmux.CallSendText, "reply/cant-find-pane")
 	got, err := cl.CapturePaneID(rt.Socket, paneID, idtCapLines, false)
@@ -234,7 +234,7 @@ func TestIdTargetReachesOnlyItsTarget(t *testing.T) {
 	}
 
 	token, id := newToken(t), newInstanceID("relabel")
-	if err := cl.SetLabel(rt.Socket, a.Reply.SessionID, token, id, tmuxfix.StoreID); err != nil {
+	if err := cl.SetLabel(rt.Socket, a.Reply.SessionID, a.Reply.PaneID, token, id, tmuxfix.StoreID); err != nil {
 		t.Fatalf("SetLabel on A: %s", describe(err))
 	}
 	if rt.label(t, a.Reply.SessionID) != tmuxfix.LabelValue(token, a.Reply.SessionID, id, tmuxfix.StoreID) {

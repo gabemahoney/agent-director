@@ -38,8 +38,9 @@ import (
 )
 
 // Table is one socket's state as test/fake-tmux answers from it (SR-20.3):
-// the server, the scope values of @ad_owner, the sessions with their panes,
-// and the injections that replace or delay the fake's answers.
+// the server, the scope values of @ad_owner, the sessions with their panes
+// and pane labels, and the injections that replace or delay the fake's
+// answers.
 type Table struct {
 	// Socket is the socket path the table answers for (written by the
 	// helpers; informational).
@@ -109,6 +110,12 @@ type Pane struct {
 	// Capture is what capture-pane prints for the pane; "" falls back to
 	// FAKE_TMUX_PANE_OUTPUT, then to the fake's fixed stub text.
 	Capture string `json:"capture,omitempty"`
+	// AdPane is the pane's own @ad_pane value, raw, as the pane listing's
+	// #{@ad_pane} prints it; "" is unset (a split pane). The create chain
+	// and the label by id set it (WD 2026-09-29c). A value borrowed from
+	// another scope is written here as the text the listing would show,
+	// such as a value naming another pane (tmuxfix.PaneLabelShapes).
+	AdPane string `json:"ad_pane,omitempty"`
 }
 
 // tableSuffix and lockSuffix name the files beside a socket path (or in the

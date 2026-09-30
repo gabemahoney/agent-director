@@ -31,6 +31,9 @@ type SocketCall struct {
 	// (pane kill, sends, capture) or the name (create); "" for the lookup
 	// and the pane listing.
 	Target string
+	// PaneID is SetLabel's pane id, the pane its pane label is set on (WD
+	// 2026-09-29c); "" for every other call.
+	PaneID string
 	// Text and PressEnter are SendKeysPane's arguments (on the text call).
 	Text       string
 	PressEnter bool
@@ -42,8 +45,8 @@ type SocketCall struct {
 	Envs    map[string]string
 	Command []string
 	// Token, InstanceID and StoreID are NewSession's and SetLabel's label
-	// arguments (the label's second, fourth and fifth fields; WD 2026-09-29
-	// STORE).
+	// arguments (the session label's second, fourth and fifth fields; WD
+	// 2026-09-29 STORE); Token is also the pane label's first field.
 	Token, InstanceID, StoreID string
 }
 
@@ -124,7 +127,8 @@ func (r *Recorder) Lookup(socket string) (tmux.LookupAnswer, error) {
 }
 
 // ListPanes answers the pane listing from socket's table: every pane of the
-// server, sessions in listing order, panes by window then pane index.
+// server, sessions in listing order, panes by window then pane index, each
+// with its SeedPane.AdPane.
 func (r *Recorder) ListPanes(socket string) ([]tmux.Pane, error) {
 	ans, err := r.do(SocketCall{Call: tmux.CallListPanes, Socket: socket}, func(st *socketState, _ Script) (any, *tmux.CallError) {
 		var out []tmux.Pane
@@ -137,7 +141,8 @@ func (r *Recorder) ListPanes(socket string) ([]tmux.Pane, error) {
 				return panes[i].Index < panes[j].Index
 			})
 			for _, p := range panes {
-				out = append(out, tmux.Pane{SessionID: s.id, Window: p.Window, Index: p.Index, ID: p.ID, PID: p.PID})
+				out = append(out, tmux.Pane{SessionID: s.id, Window: p.Window, Index: p.Index, ID: p.ID, PID: p.PID,
+					AdPane: p.AdPane})
 			}
 		}
 		return out, nil
@@ -211,9 +216,13 @@ func (r *Recorder) CapturePaneID(socket, paneID string, nLines int, ansi bool) (
 
 // SetLabel sets the session's label to the valid label for token,
 // instanceID and storeID (as the lookup classifies "ad1 <token> <$N> <id>
-// <store id>" on its own line; WD 2026-09-29 STORE).
-func (r *Recorder) SetLabel(socket, sessionID, token, instanceID, storeID string) error {
-	c := SocketCall{Call: tmux.CallSetLabel, Socket: socket, Target: sessionID, Token: token,
+// <store id>" on its own line; WD 2026-09-29 STORE), then the pane label of
+// the pane paneID, anywhere on the server, to token (WD 2026-09-29c), in
+// that order, as tmux runs the two steps: a session id the server does not
+// hold changes nothing, and a pane id it does not hold leaves the session
+// labelled; either fails.
+func (r *Recorder) SetLabel(socket, sessionID, paneID, token, instanceID, storeID string) error {
+	c := SocketCall{Call: tmux.CallSetLabel, Socket: socket, Target: sessionID, PaneID: paneID, Token: token,
 		InstanceID: instanceID, StoreID: storeID}
 	_, err := r.do(c, func(st *socketState, _ Script) (any, *tmux.CallError) {
 		s := st.server.findSession(sessionID)
@@ -221,6 +230,11 @@ func (r *Recorder) SetLabel(socket, sessionID, token, instanceID, storeID string
 			return nil, notFound(tmux.CallSetLabel)
 		}
 		s.label, s.labelSet = Valid(token, instanceID, storeID), true
+		i, owner := st.server.findPane(paneID)
+		if owner == nil {
+			return nil, notFound(tmux.CallSetLabel)
+		}
+		owner.panes[i].AdPane = token
 		return nil, nil
 	})
 	return err
@@ -231,13 +245,13 @@ func (r *Recorder) SetLabel(socket, sessionID, token, instanceID, storeID string
 // new session id, the server identity and a new first pane (window 0,
 // pane 0). The stored name is the catalogue's stored form of name
 // (StoredNames), else name. The session is labelled valid for token,
-// instanceID and storeID (the five-field label; WD 2026-09-29 STORE) exactly
-// when the production client chains the label
-// (!tmux.NeedsLabelByID(name)). A stored name the server already holds is
-// FailDuplicate and adds nothing. A scripted FailLabel adds the session
-// unlabelled and returns its reply with the error; with Script.Applied,
-// any other scripted failure adds the session (labelled by the same rule)
-// and returns no reply.
+// instanceID and storeID (the five-field label; WD 2026-09-29 STORE), and
+// its pane's AdPane is token (the pane label; WD 2026-09-29c), exactly when
+// the production client chains the labels (!tmux.NeedsLabelByID(name)). A
+// stored name the server already holds is FailDuplicate and adds nothing. A
+// scripted FailLabel adds the session and its pane with neither label and
+// returns its reply with the error; with Script.Applied, any other scripted
+// failure adds the session (labelled by the same rule) and returns no reply.
 func (r *Recorder) NewSession(socket, name, cwd string, envs map[string]string, command []string, token, instanceID, storeID string) (tmux.CreateReply, error) {
 	c := SocketCall{Call: tmux.CallCreate, Socket: socket, Target: name, Cwd: cwd, Envs: envs,
 		Command: command, Token: token, InstanceID: instanceID, StoreID: storeID}
@@ -248,7 +262,7 @@ func (r *Recorder) NewSession(socket, name, cwd string, envs map[string]string, 
 
 // createEffect is NewSession's table effect. It runs with or without a
 // bound server (a create starts one); a scripted FailLabel leaves the new
-// session unlabelled. Callers hold r.mu.
+// session and its pane unlabelled. Callers hold r.mu.
 func (r *Recorder) createEffect(socket, name, token, instanceID, storeID string) effect {
 	return func(_ *socketState, s Script) (any, *tmux.CallError) {
 		srv := r.serverFor(socket)
@@ -261,6 +275,7 @@ func (r *Recorder) createEffect(socket, name, token, instanceID, storeID string)
 		seed := SeedSession{Name: stored}
 		if !tmux.NeedsLabelByID(name) && s.Failure != tmux.FailLabel {
 			seed.Label = Valid(token, instanceID, storeID)
+			seed.Panes = []SeedPane{{AdPane: token}}
 		}
 		added := r.addSession(srv, seed)
 		p := added.Panes[0]

@@ -9,7 +9,8 @@ import (
 
 // This file holds the pure parsers of the Phase 1 call set: label
 // classification (SR-3.4, LFR G1), the lookup answer (SR-3.4, LFR H6), the
-// pane listing and the create reply (SR-2.1), and reply recognition from the
+// pane listing with its pane labels (SR-2.1, WD 2026-09-29c) and the create
+// reply (SR-2.1), and reply recognition from the
 // first line of standard error (SR-2.3, SR-2.5). None reads the environment,
 // the clock or configuration.
 
@@ -41,7 +42,7 @@ const (
 // Field counts of the parsed lines (SR-2.1, SR-3.4).
 const (
 	lookupFieldCount      = 6 // id, created, pid, start_time, name, label
-	paneFieldCount        = 5 // session id, window, pane index, pane id, pane pid
+	paneFieldCount        = 6 // session id, window, pane index, pane id, pane pid, pane label
 	createReplyFieldCount = 5 // session id, pid, start_time, pane id, pane pid
 )
 
@@ -151,9 +152,10 @@ func parseSessionLine(line string) (s Session, pid int, start int64, ok bool) {
 }
 
 // parsePanes parses the pane listing's standard output: each non-empty line
-// is session id, window index, pane index, pane id and pane pid, tab
-// separated. A line that does not parse makes the listing malformed; ok is
-// false and firstLine is the listing's first line (panes carry no label).
+// is session id, window index, pane index, pane id, pane pid and pane label,
+// tab separated, the label being everything after the fifth tab. A line that
+// does not parse makes the listing malformed; ok is false and firstLine is
+// the listing's first line cut before its label field (paneListingFirstLine).
 func parsePanes(out []byte) (panes []Pane, ok bool, firstLine string) {
 	for _, line := range strings.Split(string(out), "\n") {
 		if line == "" {
@@ -161,7 +163,7 @@ func parsePanes(out []byte) (panes []Pane, ok bool, firstLine string) {
 		}
 		p, good := parsePaneLine(line)
 		if !good {
-			return nil, false, firstLineOf(out)
+			return nil, false, paneListingFirstLine(out)
 		}
 		panes = append(panes, p)
 	}
@@ -170,7 +172,7 @@ func parsePanes(out []byte) (panes []Pane, ok bool, firstLine string) {
 
 // parsePaneLine parses one list-panes -a line.
 func parsePaneLine(line string) (Pane, bool) {
-	f := strings.Split(line, "\t")
+	f := strings.SplitN(line, "\t", paneFieldCount)
 	if len(f) != paneFieldCount || !isSessionID(f[0]) || !isPaneID(f[3]) {
 		return Pane{}, false
 	}
@@ -180,7 +182,36 @@ func parsePaneLine(line string) (Pane, bool) {
 	if !ok1 || !ok2 || !ok3 {
 		return Pane{}, false
 	}
-	return Pane{SessionID: f[0], Window: window, Index: index, ID: f[3], PID: pid}, true
+	return Pane{SessionID: f[0], Window: window, Index: index, ID: f[3], PID: pid,
+		AdPane: classifyPaneLabel(f[5], f[3])}, true
+}
+
+// classifyPaneLabel returns the launch token of a raw #{@ad_pane} value read
+// on the listing line of pane paneID, or "" (WD 2026-09-29c). The value
+// counts only when it is exactly "<16 lowercase hex token> <pane id>" with
+// that pane id equal to paneID: tmux lists a server, window, session or
+// global value on every pane with no value of its own (a server value even on
+// a pane with one), so a value naming another pane, or none, is borrowed and
+// never counts (the scope guard of SR-3.4 and SR-3.6). The raw value is never
+// retained.
+func classifyPaneLabel(raw, paneID string) string {
+	token, embedded, ok := strings.Cut(raw, " ")
+	if !ok || len(token) != labelTokenLen || !isLowerHex(token) || embedded != paneID {
+		return ""
+	}
+	return token
+}
+
+// paneListingFirstLine is a malformed pane listing's FirstLine: its first
+// line cut before the fifth tab, so the pane label field is never quoted
+// (SR-2.3, SR-15), then trimmed and capped like firstLineOf. The continuation
+// of a label value holding a newline is never a listing's first line.
+func paneListingFirstLine(out []byte) string {
+	line, _, _ := strings.Cut(string(out), "\n")
+	if f := strings.SplitN(line, "\t", paneFieldCount); len(f) == paneFieldCount {
+		line = strings.Join(f[:paneFieldCount-1], "\t")
+	}
+	return truncateFirstLine(strings.TrimSpace(line))
 }
 
 // parseCreateReply parses the create's standard output: exactly one complete

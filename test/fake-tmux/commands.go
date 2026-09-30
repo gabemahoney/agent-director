@@ -11,8 +11,12 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 )
 
-// ownerOption is the one option the fake stores (SR-3.4).
-const ownerOption = "@ad_owner"
+// The two options the fake stores: the session label (SR-3.4) and the pane
+// label (WD 2026-09-29c).
+const (
+	ownerOption = "@ad_owner"
+	paneOption  = "@ad_pane"
+)
 
 // createReplyDefault is tmux's -P format when no -F is given.
 const createReplyDefault = "#{session_name}:"
@@ -309,9 +313,19 @@ func (s *server) nextIDs() (int, int) {
 	return sessNum, paneNum
 }
 
+// setOption sets the session label (set-option [-F] -t <target> @ad_owner
+// <value>) or, with -p, the pane label (set-option -p [-F] -t <target>
+// @ad_pane <value>) of the target's pane; -F expands the value for the
+// target session and pane. A chain-form target (=<name>: or none) that
+// matches nothing fails with the recorded chain failure; any other target
+// with the catalogue's no-such-session or no-such-pane reply.
 func (s *server) setOption(args []string) (int, error) {
-	o, rest, ok := getopt(args, "t", "F")
-	if !ok || len(o['t']) > 1 || len(rest) != 2 || rest[0] != ownerOption {
+	o, rest, ok := getopt(args, "t", "Fp")
+	option := ownerOption
+	if o.has('p') {
+		option = paneOption
+	}
+	if !ok || len(o['t']) > 1 || len(rest) != 2 || rest[0] != option {
 		return 0, errBadArgv
 	}
 	t := ""
@@ -320,35 +334,65 @@ func (s *server) setOption(args []string) (int, error) {
 	}
 	chainForm := t == "" || strings.HasPrefix(t, "=")
 	fail := s.catalogued("reply/no-such-session")
+	if option == paneOption {
+		fail = s.catalogued("reply/no-such-pane")
+	}
 	if chainForm {
 		fail = chainFailure()
 	}
 	if s.failChain && s.created {
 		return s.reply(chainFailure()), nil
 	}
-	i, found := -1, false
+	i, j, found := s.optionTarget(t, option == paneOption)
+	if !found {
+		return s.reply(fail), nil
+	}
+	sess := &s.tb.Sessions[i]
+	value := rest[1]
+	if option == ownerOption {
+		if o.has('F') {
+			value = expand(value, sessionVars(s.tb, sess))
+		}
+		sess.Label = value
+		s.changed = true
+		return 0, nil
+	}
+	if o.has('F') {
+		v := sessionVars(s.tb, sess)
+		for k, val := range paneVars(sess.Panes[j]) {
+			v[k] = val
+		}
+		value = expand(value, v)
+	}
+	sess.Panes[j].AdPane = value
+	s.changed = true
+	return 0, nil
+}
+
+// optionTarget resolves a set-option target to a session index and, for a
+// pane option, a pane index. For the session label: a session id ($N) or
+// =<name>: matching a stored name exactly. For the pane label: a pane id
+// (%N), or =<name>: as above, giving that session's first pane (the fake's
+// active pane). Anything else is not found.
+func (s *server) optionTarget(t string, pane bool) (sess, paneIdx int, found bool) {
 	switch {
-	case strings.HasPrefix(t, "$"):
-		i, found = s.findSession(t)
+	case pane && strings.HasPrefix(t, "%"):
+		return s.findPane(t)
+	case !pane && strings.HasPrefix(t, "$"):
+		sess, found = s.findSession(t)
 	case len(t) > 2 && strings.HasPrefix(t, "=") && strings.HasSuffix(t, ":"):
 		name := t[1 : len(t)-1]
-		for k, sess := range s.tb.Sessions {
-			if sess.Name == name {
-				i, found = k, true
+		for k, have := range s.tb.Sessions {
+			if have.Name == name {
+				sess, found = k, true
 				break
 			}
 		}
 	}
-	if !found {
-		return s.reply(fail), nil
+	if found && pane && len(s.tb.Sessions[sess].Panes) == 0 {
+		found = false
 	}
-	value := rest[1]
-	if o.has('F') {
-		value = expand(value, sessionVars(s.tb, &s.tb.Sessions[i]))
-	}
-	s.tb.Sessions[i].Label = value
-	s.changed = true
-	return 0, nil
+	return sess, 0, found
 }
 
 // opts holds parsed flags: each flag's values in order ("" for a boolean).

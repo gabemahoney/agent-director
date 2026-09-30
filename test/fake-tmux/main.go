@@ -24,7 +24,8 @@
 // Answers go to standard output, replies to standard error (Appendix E.10).
 // The fake expands the -F formats the client sends (#{session_id},
 // #{session_created}, #{pid}, #{start_time}, #{session_name}, #{@ad_owner},
-// #{window_index}, #{pane_index}, #{pane_id}, #{pane_pid}; "##" is "#").
+// #{window_index}, #{pane_index}, #{pane_id}, #{pane_pid}, #{@ad_pane};
+// "##" is "#").
 //
 //   - list-sessions -F <fmt>: one line per session, sorted by name. A
 //     session's #{@ad_owner} is the server or global-window scope value when
@@ -33,7 +34,11 @@
 //   - show-options -gqv|-sqv|-gwqv @ad_owner: the global, server or
 //     global-window value with a newline, nothing when unset. With the
 //     listing this is the lookup.
-//   - list-panes -a -F <fmt>: every pane of every session.
+//   - list-panes -a -F <fmt>: every pane of every session. A pane's
+//     #{@ad_pane} is its own value only (per-pane options; "" when unset,
+//     as on a pane split from a labelled one); the fake models no window,
+//     session, global or server @ad_pane, so a borrowed value is written
+//     into the pane's table entry as the text tmux would list.
 //   - kill-pane -t <%N>: removes the pane; the last pane removes its session.
 //   - kill-session -t <$N>: removes the session.
 //   - send-keys -t <%N> -l -- <text> and send-keys -t <%N> Enter: no effect
@@ -51,6 +56,15 @@
 //     colon-less =<name>, any other target or no target fails with the
 //     catalogue's recorded "no such session" line (exit 1), so a chain that
 //     is untargeted or colon-less is never silently accepted.
+//   - set-option -p [-F] -t <target> @ad_pane <value>: sets the pane label,
+//     a per-pane option, of the target pane only; with -F the value is
+//     expanded for that pane (#{pane_id}). The target is a pane id, or
+//     =<name>: as above, meaning that session's first pane (the fake's
+//     active pane). An unknown pane id or any other target fails with the
+//     catalogue's "no such pane" reply, except that an =<name> form that
+//     matches nothing or no target fails with the "no such session" line,
+//     as for @ad_owner. The create chain and the label by id
+//     each end with this step, after @ad_owner's.
 //
 // A target that matches nothing fails with the catalogue's reply for it
 // (reply/cant-find-pane, reply/cant-find-session, reply/no-such-session),

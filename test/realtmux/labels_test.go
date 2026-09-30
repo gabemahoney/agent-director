@@ -209,7 +209,7 @@ func TestLabelDollarNameByID(t *testing.T) {
 					t.Errorf("session %s: lookup name = %q, want the stored form %q", id, got, name.Stored)
 				}
 
-				if err := newClient().SetLabel(rt.Socket, id, c.Token, c.InstanceID, c.StoreID); err != nil {
+				if err := newClient().SetLabel(rt.Socket, id, c.Reply.PaneID, c.Token, c.InstanceID, c.StoreID); err != nil {
 					t.Fatalf("SetLabel %s: %s", id, describe(err))
 				}
 				labelled := rt.labelState(t)
@@ -249,7 +249,7 @@ func TestLabelStoreIDLast(t *testing.T) {
 					if rt.label(t, id) != "" {
 						t.Fatalf("session %s: a label-by-id name was labelled by the create", id)
 					}
-					if err := newClient().SetLabel(rt.Socket, id, c.Token, c.InstanceID, c.StoreID); err != nil {
+					if err := newClient().SetLabel(rt.Socket, id, c.Reply.PaneID, c.Token, c.InstanceID, c.StoreID); err != nil {
 						t.Fatalf("SetLabel %s: %s", id, describe(err))
 					}
 				}

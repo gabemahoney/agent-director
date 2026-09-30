@@ -14,10 +14,16 @@ import (
 // ownerOption is the session user option holding a session's label (SR-3.4).
 const ownerOption = "@ad_owner"
 
+// paneOption is the pane user option holding a created pane's label, "<launch
+// token> <pane id>" (SR-2.1, SR-3.5; WD 2026-09-29c).
+const paneOption = "@ad_pane"
+
 // The -F formats of the lookup and the pane listing (SR-2.1), tab separated.
+// Each ends with its label field, so a tab inside a label value cannot shift
+// the fields before it.
 const (
 	lookupFormat = "#{session_id}\t#{session_created}\t#{pid}\t#{start_time}\t#{session_name}\t#{@ad_owner}"
-	panesFormat  = "#{session_id}\t#{window_index}\t#{pane_index}\t#{pane_id}\t#{pane_pid}"
+	panesFormat  = "#{session_id}\t#{window_index}\t#{pane_index}\t#{pane_id}\t#{pane_pid}\t#{@ad_pane}"
 )
 
 // cmdSeparator is tmux's command separator, passed as its own argv element.
@@ -46,7 +52,11 @@ func (c *Client) Lookup(socket string) (LookupAnswer, error) {
 
 // ListPanes lists every pane of the server at socket, list-panes -a (SR-2.1,
 // SR-3.7). Query timeout. A shared pane appears once per session showing its
-// window. A line that does not parse is FailUnrecognized.
+// window. Each pane's #{@ad_pane} is returned as Pane.AdPane: the launch
+// token when the value embeds the line's own pane id, else "" (the scope
+// guard of SR-3.6), never raw. A line that does not parse is
+// FailUnrecognized, its FirstLine the listing's first line cut before its
+// pane label field.
 func (c *Client) ListPanes(socket string) ([]Pane, error) {
 	out, err := c.runData(CallListPanes, socket, "list-panes", "-a", "-F", panesFormat)
 	if err != nil {
@@ -122,17 +132,26 @@ func (c *Client) CapturePaneID(socket, paneID string, nLines int, ansi bool) (st
 	return string(out), nil
 }
 
-// SetLabel labels the session sessionID on socket by its id: set-option -t
-// <$N> @ad_owner 'ad1 <token> <$N> <instance id> <store id>', the value one
-// argv element, with no -F and no doubling, so a # in the instance id stays
-// as written (SR-2.1, SR-3.5, Appendix F.1; WD 2026-09-29 STORE). storeID is
-// the writing store's store_meta.store_id, written last; the client does not
-// validate it, callers passing (*store.Store).StoreID(), which the store's
-// open has already validated (SR-5.1). A failure's *CallError is built from
-// the reply alone, never from the value (SR-15). Action timeout. Used for a
-// name containing $ or \ and for the one relabel after a failed chained
-// label.
-func (c *Client) SetLabel(socket, sessionID, token, instanceID, storeID string) error {
+// SetLabel labels the session sessionID and its pane paneID on socket by
+// their ids, in one invocation (SR-2.1, SR-3.5, Appendix F.1; WD 2026-09-29
+// STORE, WD 2026-09-29c):
+//
+//	set-option -t <$N> @ad_owner 'ad1 <token> <$N> <instance id> <store id>'
+//	  ; set-option -p -t <%N> @ad_pane '<token> <%N>'
+//
+// Each value is one argv element, with no -F and no doubling, so a # in the
+// instance id stays as written; the ";" is its own element, and neither value
+// ends in ";". storeID is the writing store's store_meta.store_id, written
+// last; the client does not validate it, callers passing
+// (*store.Store).StoreID(), which the store's open has already validated
+// (SR-5.1). sessionID and paneID are the create reply's. tmux stops at the
+// first failing step, so a failure may leave the session labelled and its
+// pane not. A failure's *CallError is built from the reply alone, never from
+// a value (SR-15). Action timeout. Used for a name containing $ or \ and for
+// the one relabel after a failed chained label.
+func (c *Client) SetLabel(socket, sessionID, paneID, token, instanceID, storeID string) error {
 	value := labelPrefix + token + " " + sessionID + " " + instanceID + " " + storeID
-	return c.runAction(CallSetLabel, socket, "set-option", "-t", sessionID, ownerOption, value)
+	return c.runAction(CallSetLabel, socket,
+		"set-option", "-t", sessionID, ownerOption, value,
+		cmdSeparator, "set-option", "-p", "-t", paneID, paneOption, token+" "+paneID)
 }
