@@ -7,6 +7,14 @@
 // handed in through New, runs with every AGENT_DIRECTOR_* variable removed
 // from the client's environment, and reports failures as *CallError. The
 // pre-Phase-1 name-based methods remain until their last user moves.
+//
+// The package also holds the shared lookup (SR-3.3, SR-3.4, SR-3.10,
+// Appendix F.2; lookup.go): Lookup and Classify turn one lookup answer and a
+// row's Launch into a verdict (Ours, Leftover, Gone or Can't tell) with the
+// clock-free server check over a ProcChecker, the label classes (ClassOf) and
+// the name holder (StoredForms). It consumes only typed results and never
+// imports internal/probe.
+//
 // All operations are direct exec invocations — no shell, no interpolation,
 // no &&/|/$VAR (SRD §4.3, §14.3). The package never imports internal/config.
 package tmux
