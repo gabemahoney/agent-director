@@ -2814,7 +2814,13 @@ Per-OS implementations are selected by build tags:
   `kinfoProcStartSecOffset`/`kinfoProcStartUsecOffset` (0 and 8 — the
   `kp_proc.p_starttime` timeval aliases the head of extern_proc's leading
   `p_un` union, so `tv_sec` sits at the very start of the entry and `tv_usec`
-  8 bytes in). All five are pinned to XNU 11.x (macOS 14 / 15) off the same
+  8 bytes in). A sixth, `kinfoProcStatOffset` (36), pins the process state
+  `extern_proc.p_stat` (a char) that the start-time reader uses to recognise a
+  zombie: `p_un` (16) + `p_vmspace` (8) + `p_sigacts` (8) + `p_flag` (4) = 36,
+  from `<bsd/sys/proc.h>`, just before `p_pid` at 40 (3 bytes of padding align
+  the pid). Its known values are `kinfoStatSIDL` (1) through `kinfoStatSZOMB`
+  (5, a zombie); `parseKinfoStat` treats any value outside that range as
+  drift. All six are pinned to XNU 11.x (macOS 14 / 15) off the same
   LP64 header basis and are NOT a kernel ABI guarantee — a future macOS major
   bump that resizes the struct will silently drift both the stride-based
   walker and the identity offsets.
@@ -2824,7 +2830,7 @@ Per-OS implementations are selected by build tags:
   if more than 10% of decoded PIDs fall outside `[1, 4_194_304]`,
   `parsePIDsFromSysctlBuf` returns `ErrProbeUnsupported` and `find-missing`
   refuses to emit a garbage probe set. The per-entry identity extractors
-  (`parseKinfoPPID`, `parseKinfoStartTime`) fail **open**: when an entry's
+  (`parseKinfoPPID`, `parseKinfoStartTime`, `parseKinfoStat`) fail **open**: when an entry's
   bytes fail their field plausibility guards they return the distinct
   `ErrKinfoLayoutDrift` sentinel, which deliberately does NOT wrap
   `ErrProbeUnsupported` — drift here maps to unknown identity (SessionStart
@@ -2837,7 +2843,8 @@ Per-OS implementations are selected by build tags:
   `apple-oss-distributions/xnu`), re-derive `kinfoProcSize` +
   `kinfoProcPIDOffset` **and** the identity offsets
   `kinfoEprocPPIDOffset` / `kinfoProcStartSecOffset` /
-  `kinfoProcStartUsecOffset` from `<bsd/sys/proc.h>` +
+  `kinfoProcStartUsecOffset` / `kinfoProcStatOffset` (and the
+  `kinfoStatSIDL`..`kinfoStatSZOMB` values) from `<bsd/sys/proc.h>` +
   `<bsd/sys/sysctl.h>`, refresh the constant comments in `parse_kinfo.go`,
   and re-run `GOOS=darwin GOARCH=arm64 go build ./...` plus the prober's
   integration test under that macOS version. The plausibility guards are
@@ -2849,6 +2856,12 @@ Per-OS implementations are selected by build tags:
   affects the checker as well as the probe. That path is fail-open by the
   same rule: a `parseKinfoStartTime` layout-drift (`ErrKinfoLayoutDrift`)
   or any unpinned sysctl errno classifies to UNKNOWN, never provably-dead.
+  The start-time reader (below) depends on the same pair plus
+  `kinfoProcStatOffset`: it reads the start time and the process state from
+  the single per-pid KERN_PROC_PID entry, and drift in either
+  (`ErrKinfoLayoutDrift`, a short entry included) gives unreadable, never
+  gone. A bump that drifts any of those three offsets therefore affects the
+  start-time reader too.
 
 - **Other** — the fallback returns `ErrProbeUnsupported` so
   `find-missing` fails closed rather than silently treating "no
@@ -2856,6 +2869,63 @@ Per-OS implementations are selected by build tags:
 
 Permission-denied / process-gone errors mid-walk are skipped silently;
 a single foreign-owned process can't poison the whole probe.
+
+#### Start-time reader (`ProcChecker`, `starttime.go`)
+
+`ProcChecker` is the one start-time-only process reader (SR-3.8, SRD
+Appendix F.2). New code that needs to know whether a pid is alive, and with
+what start time, MUST use it (via `NewProcChecker()`) rather than reading
+`/proc` or calling sysctl itself. Its intended users (SR-3.8) are the tmux
+server check (SR-3.3); the start times of the identity write and of
+adoption (SR-3.6); the SR-22.9 hook gate, which compares the hook parent's
+start time with the row's recorded `pane_starttime`; SessionStart-identity
+and pane liveness in `find-missing` (SR-11.1); kill's wait (SR-6.1);
+expire's `process_alive` (SR-12.2); and resume's and reuse's check of a
+running agent process (SR-4.2). No verb, command or hook calls it yet:
+`find-missing` still uses `LivenessChecker` / `NewChecker()` unchanged.
+
+```go
+type ProcChecker interface {
+    StartTime(pid int) (start string, alive bool, known bool)
+}
+func NewProcChecker() ProcChecker
+```
+
+`StartTime(pid)` answers exactly one of:
+
+| Answer | Return | Meaning |
+|---|---|---|
+| alive | `(start, true, true)` | The process runs with this start time. |
+| gone | `("", false, true)` | No such process, or a zombie (Linux state `Z` or `X`; darwin `p_stat == SZOMB`). |
+| unreadable | `("", false, false)` | EACCES/EPERM, no or unreadable `/proc` root, a malformed entry, kinfo layout drift, a pid ≤ 0, or an unsupported OS. |
+
+`start` is empty unless alive. Its form is the `proc_starttime` the store
+already records: on Linux field 22 of `/proc/<pid>/stat` verbatim; on darwin
+the KERN_PROC_PID entry's `p_starttime` as `<tv_sec>.<tv_usec>`
+(`formatDarwinProcStartTime`). Callers compare it byte-for-byte with their
+recorded value; a different start time means the pid was reused. The reader
+never reads a process environment and never reads the clock.
+
+`NewProcChecker()` picks the implementation by build tag:
+
+- **Linux** — `linuxStartTimeReader` reads only `<procRoot>/<pid>/stat`,
+  parsed by `parseLinuxStatWithState`. A missing entry (ENOENT/ESRCH) is
+  gone only when `<procRoot>/self` resolves; otherwise the answer is
+  unreadable, so an unmounted procfs (an empty `/proc`) reads unreadable,
+  never gone. Under `hidepid=noaccess` the kernel returns EPERM, and the
+  reader answers unreadable. Under `hidepid=invisible` or `ptraceable`,
+  another user's pid returns ENOENT and reads gone; those two modes also
+  hide a non-dumpable process of the same user. The agent, its pane and the
+  tmux server run as the caller's own user, so they stay visible.
+- **darwin** — `darwinStartTimeReader` fetches the single KERN_PROC_PID
+  entry (the fetch today's checker uses; no KERN_PROCARGS2) and parses both
+  `parseKinfoStat` and `parseKinfoStartTime` before the zombie check. ESRCH
+  or an empty buffer is gone; any other errno or layout drift is unreadable.
+- **Other** — `unsupportedProcChecker` answers unreadable for every pid.
+
+The Linux and darwin cores and `unsupportedProcChecker` are build-tag-free,
+so tests drive them on any OS through their seams: `procRoot` (a temp
+directory) and `fetchKinfo` (a synthetic 648-byte entry).
 
 ### Degraded-mode reconciliation + cron user
 

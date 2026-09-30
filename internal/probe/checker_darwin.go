@@ -25,3 +25,12 @@ func newChecker() LivenessChecker {
 func fetchKinfoPID(pid int) ([]byte, error) {
 	return unix.SysctlRaw("kern.proc.pid", pid)
 }
+
+// newProcChecker returns the production darwin start-time reader (SR-3.8). It
+// wires ONLY the real per-pid KERN_PROC_PID fetch (fetchKinfoPID, the one
+// today's checker uses) into the build-tag-free darwinStartTimeReader
+// (starttime_darwin_core.go); there is no KERN_PROCARGS2 wiring, so it cannot
+// read a process environment.
+func newProcChecker() ProcChecker {
+	return darwinStartTimeReader{fetchKinfo: fetchKinfoPID}
+}

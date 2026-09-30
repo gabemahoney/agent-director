@@ -14,11 +14,11 @@ import (
 // to read each process's argv + env blob. The KERN_PROCARGS2 format
 // is (per the XNU sources):
 //
-//   uint32  argc                            // 4 bytes, native byte order
-//   string  exec_path '\0'                  // null-terminated
-//   <pad>                                   // pad to word alignment
-//   string  argv[0..argc-1], each '\0'-terminated
-//   string  envp[0..], each '\0'-terminated, list ends at empty string
+//	uint32  argc                            // 4 bytes, native byte order
+//	string  exec_path '\0'                  // null-terminated
+//	<pad>                                   // pad to word alignment
+//	string  argv[0..argc-1], each '\0'-terminated
+//	string  envp[0..], each '\0'-terminated, list ends at empty string
 //
 // We skip past argc + exec + argv to reach envp, then scan for
 // AGENT_DIRECTOR_INSTANCE_ID=... entries.
@@ -84,4 +84,3 @@ func listPIDs() ([]int, error) {
 func procArgs(pid int) ([]byte, error) {
 	return unix.SysctlRaw("kern.procargs2", pid)
 }
-

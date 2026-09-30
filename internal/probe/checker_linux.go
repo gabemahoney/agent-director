@@ -10,3 +10,11 @@ package probe
 func newChecker() LivenessChecker {
 	return linuxChecker{procRoot: defaultProcRoot}
 }
+
+// newProcChecker returns the production Linux start-time reader (SR-3.8) over
+// the kernel procfs mount. Its answer logic lives in the build-tag-free
+// linuxStartTimeReader (starttime_linux_core.go); this file only pins the
+// default proc root, as newChecker does.
+func newProcChecker() ProcChecker {
+	return linuxStartTimeReader{procRoot: defaultProcRoot}
+}

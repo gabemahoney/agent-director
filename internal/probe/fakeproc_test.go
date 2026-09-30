@@ -23,34 +23,46 @@ import (
 	"testing"
 )
 
-// writeFakeProc writes a fabricated <root>/<pid>/{stat,environ} pair. stat is
-// composed so parseLinuxStat reads ppid from field 4 and starttime from field
-// 22; the comm deliberately contains a ')' and spaces to prove the parser
-// anchors on the LAST ')'. envVal, when non-empty, plants EnvKey=<envVal> in
-// environ (NUL-separated, mixed with an unrelated var).
-func writeFakeProc(t *testing.T, root string, pid, ppid int, starttime, envVal string) {
-	t.Helper()
-	dir := filepath.Join(root, strconv.Itoa(pid))
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir %s: %v", dir, err)
-	}
+// fakeStatDefaultState is the field-3 state the state-less helpers write.
+const fakeStatDefaultState = "S"
 
-	// Build a stat line: field1 pid, field2 comm (with a nasty ')'), field3
-	// state, field4 ppid, fields 5..21 filler, field22 starttime, plus tail.
+// fakeStatLine builds a stat line: pid, a comm with ')' and spaces, state
+// (field 3, written verbatim so malformed tokens are possible), ppid, and starttime at field 22.
+func fakeStatLine(pid, ppid int, state, starttime string) string {
 	fields := make([]string, 0, 24)
 	fields = append(fields, strconv.Itoa(pid))       // 1
 	fields = append(fields, "(claude (weird) proc)") // 2 comm w/ ')' and spaces
-	fields = append(fields, "S")                     // 3 state
+	fields = append(fields, state)                   // 3 state
 	fields = append(fields, strconv.Itoa(ppid))      // 4 ppid
 	for f := 5; f <= 21; f++ {                       // 5..21 filler
 		fields = append(fields, "0")
 	}
 	fields = append(fields, starttime) // 22 starttime
 	fields = append(fields, "0", "0")  // tail
-	stat := strings.Join(fields, " ") + "\n"
+	return strings.Join(fields, " ") + "\n"
+}
+
+// writeStatWithState writes <root>/<pid>/stat only (no environ) with the given
+// field-3 state and starttime. Returns the pid dir.
+func writeStatWithState(t *testing.T, root string, pid, ppid int, state, starttime string) string {
+	t.Helper()
+	dir := filepath.Join(root, strconv.Itoa(pid))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	stat := fakeStatLine(pid, ppid, state, starttime)
 	if err := os.WriteFile(filepath.Join(dir, "stat"), []byte(stat), 0o644); err != nil {
 		t.Fatalf("write stat: %v", err)
 	}
+	return dir
+}
+
+// writeFakeProc writes a fabricated <root>/<pid>/{stat,environ} pair with state
+// "S". envVal, when non-empty, plants EnvKey=<envVal> in environ (NUL-separated,
+// mixed with an unrelated var).
+func writeFakeProc(t *testing.T, root string, pid, ppid int, starttime, envVal string) {
+	t.Helper()
+	dir := writeStatWithState(t, root, pid, ppid, fakeStatDefaultState, starttime)
 
 	var environ []byte
 	if envVal != "" {
@@ -68,28 +80,9 @@ func writeFakeProc(t *testing.T, root string, pid, ppid int, starttime, envVal s
 	}
 }
 
-// writeStatOnly writes <root>/<pid>/stat only (no environ) with the given
-// starttime — used to fabricate an environ-read failure (ENOENT) after a matched
-// stat, and as the base for permission-mode fixtures. Returns the pid dir.
+// writeStatOnly writes <root>/<pid>/stat only (no environ, state "S") — for an
+// environ-read failure (ENOENT) after a matched stat. Returns the pid dir.
 func writeStatOnly(t *testing.T, root string, pid, ppid int, starttime string) string {
 	t.Helper()
-	dir := filepath.Join(root, strconv.Itoa(pid))
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir %s: %v", dir, err)
-	}
-	fields := []string{
-		strconv.Itoa(pid),       // 1 pid
-		"(claude (weird) proc)", // 2 comm w/ ')' and spaces
-		"S",                     // 3 state
-		strconv.Itoa(ppid),      // 4 ppid
-	}
-	for f := 5; f <= 21; f++ {
-		fields = append(fields, "0")
-	}
-	fields = append(fields, starttime, "0", "0") // 22 starttime + tail
-	stat := strings.Join(fields, " ") + "\n"
-	if err := os.WriteFile(filepath.Join(dir, "stat"), []byte(stat), 0o644); err != nil {
-		t.Fatalf("write stat: %v", err)
-	}
-	return dir
+	return writeStatWithState(t, root, pid, ppid, fakeStatDefaultState, starttime)
 }

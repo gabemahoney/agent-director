@@ -18,12 +18,14 @@ import (
 // https://github.com/apple-oss-distributions/xnu) and re-derive
 // kinfoProcSize + kinfoProcPIDOffset (and the identity offsets
 // kinfoProcStartSecOffset / kinfoProcStartUsecOffset / kinfoEprocPPIDOffset
-// below) from the headers, then refresh the comment above + the
-// bump-policy paragraph in docs/architecture.md.
+// and the process-state offset kinfoProcStatOffset below) from the
+// headers, then refresh the comment above + the bump-policy paragraph in
+// docs/architecture.md.
 //
 // See also: <bsd/sys/proc.h> (extern_proc.p_pid, extern_proc.p_starttime)
 // and <bsd/sys/sysctl.h> (struct kinfo_proc, struct eproc.e_ppid) in the
-// XNU source tree.
+// XNU source tree; extern_proc.p_stat and the S* values also come from
+// <bsd/sys/proc.h>.
 const kinfoProcSize = 648
 
 // kinfoProcPIDOffset is the byte offset of extern_proc.p_pid inside
@@ -56,6 +58,27 @@ const (
 	// e_sess(8) + e_pcred(104) + e_ucred(76) + 4 bytes of padding to
 	// 8-align e_vm + e_vm(64) = 264.
 	kinfoEprocPPIDOffset = 560
+)
+
+// Process-state offset (SR-3.8). The start-time reader counts a zombie as
+// gone, so it needs extern_proc.p_stat from the same single kinfo_proc entry
+// it reads p_starttime from. Derived from the SAME XNU LP64 header basis as
+// the offsets above (bsd/sys/proc.h, struct extern_proc): p_un (16: the
+// p_starttime timeval / two pointers) + p_vmspace (8) + p_sigacts (8) +
+// p_flag (int, 4) = 36, so p_stat (char) sits at offset 36, immediately
+// before p_pid at 40 (3 bytes of padding align the pid_t), which matches
+// kinfoProcPIDOffset. Same XNU-version sensitivity and bump policy as
+// kinfoProcSize.
+const kinfoProcStatOffset = 36
+
+// extern_proc.p_stat values (bsd/sys/proc.h). SIDL..SZOMB is the whole known
+// range; a value outside it is the drift signal for kinfoProcStatOffset.
+const (
+	kinfoStatSIDL   = 1 // process being created by fork
+	kinfoStatSRUN   = 2 // currently runnable
+	kinfoStatSSLEEP = 3 // sleeping on an address
+	kinfoStatSSTOP  = 4 // process debugging or suspension
+	kinfoStatSZOMB  = 5 // awaiting collection by parent (a zombie)
 )
 
 // maxPlausibleStartSec bounds extern_proc.p_starttime.tv_sec for the
@@ -119,9 +142,10 @@ func parsePIDsFromSysctlBuf(buf []byte) ([]int, error) {
 }
 
 // ErrKinfoLayoutDrift is returned by the entry-granular identity extractors
-// (parseKinfoPPID, parseKinfoStartTime) when a single kinfo_proc entry's
-// bytes fail their field plausibility guards — the signal that the pinned
-// XNU offsets (kinfoEprocPPIDOffset / kinfoProcStart*Offset) have drifted
+// (parseKinfoPPID, parseKinfoStartTime, parseKinfoStat) when a single
+// kinfo_proc entry's bytes fail their field plausibility guards — the signal
+// that the pinned XNU offsets (kinfoEprocPPIDOffset / kinfoProcStart*Offset /
+// kinfoProcStatOffset) have drifted
 // under us, e.g. after a macOS major bump resized struct kinfo_proc.
 //
 // It is DELIBERATELY a distinct sentinel that does NOT wrap
@@ -204,6 +228,27 @@ func parseKinfoStartTime(buf []byte, off int) (sec int64, usec int64, err error)
 			ErrKinfoLayoutDrift, usec, off, kinfoProcStartUsecOffset)
 	}
 	return sec, usec, nil
+}
+
+// parseKinfoStat extracts extern_proc.p_stat (the S* process status) from the
+// single kinfo_proc entry beginning at byte offset off within buf, so the
+// start-time reader can recognise a zombie (kinfoStatSZOMB). Build-tag-free
+// for off-darwin unit testing; entry-granular like parseKinfoPPID and
+// parseKinfoStartTime.
+//
+// Returns ErrKinfoLayoutDrift when the entry does not fit or when the value
+// is outside the known p_stat range [kinfoStatSIDL, kinfoStatSZOMB]: a
+// drifted kinfoProcStatOffset reinterpreting an unrelated byte lands here.
+func parseKinfoStat(buf []byte, off int) (int, error) {
+	if err := entryOffset(buf, off); err != nil {
+		return 0, err
+	}
+	stat := int(buf[off+kinfoProcStatOffset])
+	if stat < kinfoStatSIDL || stat > kinfoStatSZOMB {
+		return 0, fmt.Errorf("%w: p_stat=%d out of range at entry offset %d (kinfoProcStatOffset=%d may be stale for this XNU version)",
+			ErrKinfoLayoutDrift, stat, off, kinfoProcStatOffset)
+	}
+	return stat, nil
 }
 
 // formatDarwinProcStartTime renders a kinfo_proc p_starttime timeval into

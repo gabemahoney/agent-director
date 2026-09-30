@@ -7,10 +7,10 @@
 //
 //   - Linux:   walk /proc/<pid>/environ entries (probe_linux.go).
 //   - macOS:   sysctl(KERN_PROC, KERN_PROC_ALL) + sysctl(KERN_PROCARGS2)
-//              per PID (probe_darwin.go).
+//     per PID (probe_darwin.go).
 //   - Other:   the fallback returns an explicit ErrProbeUnsupported so
-//              find-missing fails closed rather than silently
-//              under-reporting (probe_unsupported.go).
+//     find-missing fails closed rather than silently
+//     under-reporting (probe_unsupported.go).
 //
 // Cron user invariant (SRD §14.6): the prober only sees processes the
 // invoking user has permission to read. Running find-missing as a
@@ -21,6 +21,16 @@
 // impls resolve a permission wall to an UNKNOWN verdict and skip just that
 // row (fail-open) rather than misreport it — so an unreadable process
 // never masquerades as dead.
+//
+// The start-time reader (ProcChecker / NewProcChecker, starttime.go; SR-3.8,
+// LFR C1) is the start-time-only process reader later process judgements
+// use: the tmux server check, the identity write and adoption, the SR-22.9
+// hook gate, find-missing liveness, kill's wait, expire's process_alive and
+// resume's and reuse's process check. It answers alive (with the start time),
+// gone (no such process, or a zombie) or unreadable, reads no process
+// environment and reads no clock. The environment-tiebreaking
+// LivenessChecker / NewChecker above stay, unchanged, for find-missing until
+// Epic 14 removes them; no verb uses the start-time reader yet.
 package probe
 
 import (

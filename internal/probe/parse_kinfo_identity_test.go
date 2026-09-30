@@ -23,6 +23,12 @@ func plantEntry(buf []byte, off int, ppid int32, sec int64, usec int32) {
 	binary.LittleEndian.PutUint32(buf[u:u+4], uint32(usec))
 }
 
+// plantStat writes extern_proc.p_stat at kinfoProcStatOffset within the entry
+// that begins at byte offset off in buf; a sibling of plantEntry.
+func plantStat(buf []byte, off int, stat byte) {
+	buf[off+kinfoProcStatOffset] = stat
+}
+
 // TestParseKinfoPPIDRoundTrip pins the e_ppid happy path: a plausible
 // parent-pid planted at kinfoEprocPPIDOffset inside a single 648-byte entry
 // round-trips through the entry-granular extractor at offset 0.
@@ -295,4 +301,102 @@ func TestParseKinfoEntryTruncatedBuffer(t *testing.T) {
 			assertKinfoDrift(t, err)
 		}
 	})
+}
+
+// TestParseKinfoStatRoundTrip pins the p_stat happy path, including both ends
+// of the accepted [kinfoStatSIDL, kinfoStatSZOMB] range.
+func TestParseKinfoStatRoundTrip(t *testing.T) {
+	cases := []struct {
+		name string
+		stat byte
+	}{
+		{"running", kinfoStatSRUN},
+		{"zombie", kinfoStatSZOMB},
+		{"idl_low_bound", kinfoStatSIDL},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			buf := make([]byte, kinfoProcSize)
+			plantEntry(buf, 0, 4242, 1700000000, 123456)
+			plantStat(buf, 0, tc.stat)
+
+			got, err := parseKinfoStat(buf, 0)
+			if err != nil {
+				t.Fatalf("parseKinfoStat: %v", err)
+			}
+			if got != int(tc.stat) {
+				t.Errorf("stat = %d; want %d", got, tc.stat)
+			}
+		})
+	}
+}
+
+// TestParseKinfoStatNonZeroEntryOffset proves the state extractor reads the
+// entry at off: a zombie decoy in entry 0 must not leak into the entry-2 read.
+func TestParseKinfoStatNonZeroEntryOffset(t *testing.T) {
+	buf := make([]byte, 3*kinfoProcSize)
+	plantStat(buf, 0, kinfoStatSZOMB) // decoy
+	const targetOff = 2 * kinfoProcSize
+	plantStat(buf, targetOff, kinfoStatSRUN)
+
+	got, err := parseKinfoStat(buf, targetOff)
+	if err != nil {
+		t.Fatalf("parseKinfoStat at offset %d: %v", targetOff, err)
+	}
+	if got != kinfoStatSRUN {
+		t.Errorf("stat = %d; want %d (must read the entry at off, not entry 0)", got, kinfoStatSRUN)
+	}
+}
+
+// TestParseKinfoStatDriftRefusals: a p_stat outside [SIDL, SZOMB] is refused
+// as ErrKinfoLayoutDrift with no partial value.
+func TestParseKinfoStatDriftRefusals(t *testing.T) {
+	cases := []struct {
+		name string
+		stat byte
+	}{
+		{"zero", 0},
+		{"above_zombie", kinfoStatSZOMB + 1},
+		{"max_byte", 0xff},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			buf := make([]byte, kinfoProcSize)
+			plantStat(buf, 0, tc.stat)
+
+			got, err := parseKinfoStat(buf, 0)
+			assertKinfoDrift(t, err)
+			if got != 0 {
+				t.Errorf("stat = %d; want 0 (no partial/garbage value on drift)", got)
+			}
+		})
+	}
+}
+
+// TestParseKinfoStatTruncatedBuffer: an entry that does not fit in buf is
+// refused as ErrKinfoLayoutDrift, even when the p_stat byte itself is present.
+func TestParseKinfoStatTruncatedBuffer(t *testing.T) {
+	cases := []struct {
+		name   string
+		bufLen int
+		off    int
+	}{
+		{"buffer_shorter_than_one_entry", kinfoProcSize - 1, 0},
+		{"entry_offset_runs_past_end", kinfoProcSize, kinfoProcSize},
+		{"negative_offset", kinfoProcSize, -1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			buf := make([]byte, tc.bufLen)
+			if tc.off >= 0 && tc.off+kinfoProcStatOffset < len(buf) {
+				plantStat(buf, tc.off, kinfoStatSRUN)
+			}
+
+			got, err := parseKinfoStat(buf, tc.off)
+			assertKinfoDrift(t, err)
+			if got != 0 {
+				t.Errorf("stat = %d; want 0 (no value from a truncated entry)", got)
+			}
+		})
+	}
 }
