@@ -107,9 +107,9 @@ func copyFile(dst, src string) error {
 // ── CLI binary builder ───────────────────────────────────────────────────────
 
 var (
-	cliOnce          sync.Once
-	cliBinPath       string
-	cliBinErr        error
+	cliOnce           sync.Once
+	cliBinPath        string
+	cliBinErr         error
 	cliOnceBuildCount int // incremented exactly once inside cliOnce.Do; observable by same-package tests
 )
 

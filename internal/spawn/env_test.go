@@ -70,10 +70,10 @@ func TestComposeEnvExtraEnvPassthrough(t *testing.T) {
 
 func TestComposeEnvDeterministic(t *testing.T) {
 	r := Resolved{SpawnParams: SpawnParams{
-		ClaudeInstanceID:     "id",
-		RelayMode:            "off",
+		ClaudeInstanceID:    "id",
+		RelayMode:           "off",
 		AgentDirectorLabels: map[string]string{"k1": "v1", "k2": "v2"},
-		ExtraEnv:             map[string]string{"E": "1"},
+		ExtraEnv:            map[string]string{"E": "1"},
 	}}
 	env1 := composeEnv(r)
 	env2 := composeEnv(r)

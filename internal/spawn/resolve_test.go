@@ -219,7 +219,6 @@ claude_args = ["--model", "opus"]
 	}
 }
 
-
 func TestResolveTemplateNotFound(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	_, err := spawn.Resolve(spawn.SpawnParams{Template: "nope"}, config.Default())
@@ -275,4 +274,3 @@ func slicesEqual(a, b []string) bool {
 	}
 	return true
 }
-

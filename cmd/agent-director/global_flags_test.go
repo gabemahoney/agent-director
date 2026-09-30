@@ -7,16 +7,17 @@ import (
 )
 
 // TestParseGlobalFlags covers the three global flags introduced for b.32k:
-//   --store-path / --home / --tmux-command
+//
+//	--store-path / --home / --tmux-command
 //
 // Each subtest verifies (a) the parsed values land on the right field, (b) the
 // `*Set` sentinels go true, and (c) flag tokens are stripped from the returned
 // argv so per-verb FlagSets see the verb args unchanged.
 func TestParseGlobalFlags(t *testing.T) {
 	cases := []struct {
-		name        string
-		argv        []string
-		wantOpts    globalOptions
+		name             string
+		argv             []string
+		wantOpts         globalOptions
 		wantStrippedArgv []string
 	}{
 		{
@@ -98,9 +99,9 @@ func TestParseGlobalFlags(t *testing.T) {
 			wantStrippedArgv: []string{"version"},
 		},
 		{
-			name: "unknown flags pass through untouched",
-			argv: []string{"spawn", "--cwd", "/x", "--label", "k=v"},
-			wantOpts: globalOptions{},
+			name:             "unknown flags pass through untouched",
+			argv:             []string{"spawn", "--cwd", "/x", "--label", "k=v"},
+			wantOpts:         globalOptions{},
 			wantStrippedArgv: []string{"spawn", "--cwd", "/x", "--label", "k=v"},
 		},
 		{

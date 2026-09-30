@@ -19,14 +19,15 @@ var binaryPath string
 
 // TestMain builds the CLI binary once and shares it across every test in
 // this package. Building once per package run avoids per-test compile cost
-// and keeps the race-detector run cheap.
+// and keeps the race-detector run cheap. It then pins $HOME to a temp dir, so
+// in-process store writes (apitest.SeedSpawn's trail records) never reach the
+// real ~/.agent-director.
 func TestMain(m *testing.M) {
 	sandboxguard.Require()
 	tmp, err := os.MkdirTemp("", "agent-director-test-")
 	if err != nil {
 		panic(err)
 	}
-	defer os.RemoveAll(tmp)
 
 	binaryPath = filepath.Join(tmp, "agent-director")
 	build := exec.Command("go", "build", "-o", binaryPath, ".")
@@ -35,7 +36,16 @@ func TestMain(m *testing.M) {
 	if err := build.Run(); err != nil {
 		panic(err)
 	}
-	os.Exit(m.Run())
+	home := filepath.Join(tmp, "home")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("HOME", home); err != nil {
+		panic(err)
+	}
+	code := m.Run()
+	_ = os.RemoveAll(tmp)
+	os.Exit(code)
 }
 
 // errorEnvelope mirrors the JSON shape main.go emits on dispatch errors.
