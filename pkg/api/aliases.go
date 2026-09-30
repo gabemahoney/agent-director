@@ -97,3 +97,19 @@ var ErrStoreNotInitialized = store.ErrStoreNotInitialized
 // new-session exits non-zero. Check the system tmux installation and
 // TMUX_TMPDIR if this surfaces in production.
 var ErrTmuxSessionCreate = tmux.ErrTmuxSessionCreate
+
+// ErrTmuxUnresponsive (class UNAVAILABLE, transient) is returned when tmux did
+// not answer usably, so the outcome is unknown; the caller may retry later.
+// It never means the agent is dead (SR-1.1, SR-1.6). spawn returns it when
+// the session-creating call timed out or its reply does not parse with a
+// non-zero exit (the row stays pending), and when the label scan for a caller-supplied instance id
+// cannot read tmux's answer.
+var ErrTmuxUnresponsive = tmux.ErrTmuxUnresponsive
+
+// ErrTmuxSessionConflict (class CONFLICT) is returned when a tmux session
+// conflicts with the request in a way waiting does not resolve: a human must
+// look (SR-1.1, SR-1.6). It never means the agent is dead. spawn with a
+// caller-supplied instance id returns it, before anything is written, when a
+// session of this store labelled with that id is left over from an earlier
+// life, or when tmux holds conflicting labels.
+var ErrTmuxSessionConflict = tmux.ErrTmuxSessionConflict

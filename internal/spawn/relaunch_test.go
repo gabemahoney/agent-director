@@ -7,6 +7,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 )
 
 // baseRelaunchRow builds a persisted-shaped store.Spawn for the Relaunch
@@ -40,30 +41,28 @@ func TestRelaunchRestoresExtraEnvVerbatim(t *testing.T) {
 		"ANTHROPIC_API_KEY":       "sk-ant-test",
 		"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-test",
 	}
-	tmux := &captureTmux{}
+	rec := tmuxfix.NewRecorder()
 
-	if err := Relaunch(RelaunchInput{Row: row, SessionID: "session-uuid-1"}, tmux, config.Default()); err != nil {
+	if err := Relaunch(RelaunchInput{Row: row, SessionID: "session-uuid-1"}, rec, config.Default()); err != nil {
 		t.Fatalf("Relaunch: %v", err)
 	}
-	if !tmux.got.called {
-		t.Fatal("tmux.NewSession not called")
-	}
+	got := onlyByNameCreate(t, rec)
 
 	// composeEnv received the row's ExtraEnv verbatim: every key/value
 	// lands in the env map passed to NewSession.
 	for k, want := range row.ExtraEnv {
-		if got := tmux.got.envs[k]; got != want {
+		if got := got.Envs[k]; got != want {
 			t.Errorf("relaunch env[%q] = %q; want %q (ExtraEnv restored verbatim)", k, got, want)
 		}
 	}
 
 	// The resume argv still carries `claude --resume <session_id> --settings`.
-	if len(tmux.got.command) < 4 ||
-		tmux.got.command[0] != "claude" ||
-		tmux.got.command[1] != "--resume" ||
-		tmux.got.command[2] != "session-uuid-1" ||
-		tmux.got.command[3] != "--settings" {
-		t.Errorf("resume argv prefix = %v", tmux.got.command)
+	if len(got.Command) < 4 ||
+		got.Command[0] != "claude" ||
+		got.Command[1] != "--resume" ||
+		got.Command[2] != "session-uuid-1" ||
+		got.Command[3] != "--settings" {
+		t.Errorf("resume argv prefix = %v", got.Command)
 	}
 }
 
@@ -82,13 +81,11 @@ func TestRelaunchLeavesPermissionsNil(t *testing.T) {
 	// direct field check is done via the Resolved synthesized inside
 	// Relaunch, mirrored here: the store.Spawn has no Permissions field,
 	// so there is nothing to carry.
-	tmux := &captureTmux{}
-	if err := Relaunch(RelaunchInput{Row: row, SessionID: "s1"}, tmux, config.Default()); err != nil {
+	rec := tmuxfix.NewRecorder()
+	if err := Relaunch(RelaunchInput{Row: row, SessionID: "s1"}, rec, config.Default()); err != nil {
 		t.Fatalf("Relaunch: %v", err)
 	}
-	if !tmux.got.called {
-		t.Fatal("tmux.NewSession not called")
-	}
+	onlyByNameCreate(t, rec)
 	// Guard against store.Spawn ever growing a Permissions field that a
 	// future Relaunch might wire in without a persistence story: the row
 	// type must not expose one.
@@ -114,10 +111,11 @@ func TestRelaunchLegacyEmptyExtraEnvBaseline(t *testing.T) {
 	// the same baseline set.
 	for _, extra := range []map[string]string{nil, {}} {
 		row.ExtraEnv = extra
-		tmux := &captureTmux{}
-		if err := Relaunch(RelaunchInput{Row: row, SessionID: "s1"}, tmux, config.Default()); err != nil {
+		rec := tmuxfix.NewRecorder()
+		if err := Relaunch(RelaunchInput{Row: row, SessionID: "s1"}, rec, config.Default()); err != nil {
 			t.Fatalf("Relaunch: %v", err)
 		}
+		envs := onlyByNameCreate(t, rec).Envs
 
 		// The exact pre-change env key set: base keys + one label var per
 		// row label. Nothing else.
@@ -129,16 +127,26 @@ func TestRelaunchLegacyEmptyExtraEnvBaseline(t *testing.T) {
 			want["AGENT_DIRECTOR_LABEL_"+normalizeLabelKey(k)] = v
 		}
 
-		if !reflect.DeepEqual(tmux.got.envs, want) {
+		if !reflect.DeepEqual(envs, want) {
 			t.Errorf("ExtraEnv=%v: relaunch env = %v; want exactly %v (no new keys vs pre-SR-10 baseline)",
-				extra, tmux.got.envs, want)
+				extra, envs, want)
 		}
 		// Explicit key-set guard so a future stray key is named, not just
 		// diffed as a map.
-		if got, wantKeys := sortedKeys(tmux.got.envs), sortedKeys(want); !reflect.DeepEqual(got, wantKeys) {
+		if got, wantKeys := sortedKeys(envs), sortedKeys(want); !reflect.DeepEqual(got, wantKeys) {
 			t.Errorf("ExtraEnv=%v: env key set = %v; want %v", extra, got, wantKeys)
 		}
 	}
+}
+
+// onlyByNameCreate returns the one name-based create Relaunch made.
+func onlyByNameCreate(t *testing.T, rec *tmuxfix.Recorder) tmuxfix.Call {
+	t.Helper()
+	calls := rec.CallsOfKind(tmuxfix.CallNewSession)
+	if len(calls) != 1 {
+		t.Fatalf("name-based creates = %d; want 1", len(calls))
+	}
+	return calls[0]
 }
 
 func sortedKeys(m map[string]string) []string {

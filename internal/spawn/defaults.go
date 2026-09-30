@@ -6,20 +6,46 @@ import (
 	"strings"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/google/uuid"
 )
 
-// CollisionChecker is the narrow store surface ApplyDefaults needs. It
-// returns true when a row with the given claude_instance_id exists in a
-// live state (anything except `ended` / `missing`), and an error when the
-// store cannot be read. A true result becomes ErrInstanceIdCollision; an
-// error becomes PreCheckReadError's uncatalogued error (ErrInternal on
-// every surface), never a collision. Production callers pass
+// CollisionChecker is the narrow store surface ApplyDefaults needs: the one
+// pre-check read, which returns the state of the row with the given
+// claude_instance_id, exists false when there is no row, and an error only
+// when the store cannot be read. So the one read tells no row, a live row
+// and a finished row apart (SR-9.3). A live state (see store.IsLiveState)
+// becomes ErrInstanceIdCollision; a read error, whatever it wraps, becomes
+// PreCheckReadError's uncatalogued error (ErrInternal on every surface),
+// never a collision and never "no row". Production callers pass
 // *store.Store; tests pass a fake or a failing wrapper to drive either
 // outcome.
 type CollisionChecker interface {
-	LiveSpawnExists(instanceID string) (bool, error)
+	SpawnState(instanceID string) (state string, exists bool, err error)
 }
+
+// IDCheck is what ApplyDefaults found for the instance id: whether it minted
+// it, and for a caller-supplied id, what the collision pre-check read (SR-9.3).
+// The zero value is not a valid answer.
+type IDCheck int
+
+// The pre-check's answers.
+const (
+	// IDMinted: the caller supplied no id and a fresh UUID4 was minted; no
+	// store read was made. A fresh random id cannot have a leftover, so it is
+	// never scanned.
+	IDMinted IDCheck = iota + 1
+	// IDNoRow: a caller-supplied id with no row of any state: the plain
+	// spawn's label scan runs for it.
+	IDNoRow
+	// IDFinishedRow: a caller-supplied id whose row is finished (not live):
+	// not scanned; without the reuse parameter the insert still collides
+	// with ErrInstanceIdCollision (AC-SPN-03).
+	IDFinishedRow
+	// IDNotChecked: a caller-supplied id and no CollisionChecker given; no
+	// read was made.
+	IDNotChecked
+)
 
 // PreCheckReadError is the single mapping (SR-1.8) of a failed collision
 // pre-check store read. The result wraps no sentinel, so it matches no
@@ -41,34 +67,29 @@ func PreCheckReadError(err error) error {
 // ApplyDefaults fills SRD §7.3 defaults and runs the SRD §7.2 step 6
 // collision check (the only validation step that needs DB access). The
 // function takes a CollisionChecker rather than the full store so tests
-// can drive it without spinning up SQLite.
+// can drive it without spinning up SQLite. It returns what it found for the
+// instance id, which tells the caller whether the label scan applies.
 //
 // Behavior:
-//   - ClaudeInstanceID ← UUID4 if absent. UUID4 from github.com/google/uuid
-//     reads crypto/rand under the hood (not math/rand). An empty id never
-//     consults the store.
+//   - ClaudeInstanceID ← UUID4 if absent (IDMinted). UUID4 from
+//     github.com/google/uuid reads crypto/rand under the hood (not
+//     math/rand). An empty id never consults the store.
 //   - TmuxSessionName ← <sanitize(basename(cwd))>-<id[:8]>. The sanitizer
 //     replaces every char outside [A-Za-z0-9_-] with `-`; an empty or
 //     all-dashes result collapses to the literal `root`.
 //   - RelayMode ← cfg.Defaults.RelayMode if the caller left it empty.
-//   - Caller-supplied ClaudeInstanceID triggers a collision query against
-//     the store. A live row (`pending` included) returns
+//   - Caller-supplied ClaudeInstanceID triggers one pre-check read of the
+//     row's state. A live row (`pending` included) returns
 //     ErrInstanceIdCollision. A failed read returns PreCheckReadError's
 //     error, which surfaces as ErrInternal, not as a collision. Either way
 //     nothing is created: the pre-check runs before Launch, so no row, no
-//     pre-trust write and no tmux call follow. SQLite's PRIMARY KEY catches
-//     any TOCTOU race at INSERT.
-func ApplyDefaults(r *Resolved, cfg config.Config, store CollisionChecker) error {
-	if r.ClaudeInstanceID == "" {
-		r.ClaudeInstanceID = uuid.NewString()
-	} else if store != nil {
-		exists, err := store.LiveSpawnExists(r.ClaudeInstanceID)
-		if err != nil {
-			return PreCheckReadError(err)
-		}
-		if exists {
-			return fmt.Errorf("%w: %s already live", ErrInstanceIdCollision, r.ClaudeInstanceID)
-		}
+//     pre-trust write and no tmux call follow. No row gives IDNoRow and a
+//     finished row IDFinishedRow; SQLite's PRIMARY KEY catches the finished
+//     row, and any TOCTOU race, at INSERT.
+func ApplyDefaults(r *Resolved, cfg config.Config, checker CollisionChecker) (IDCheck, error) {
+	check, err := preCheckID(r, checker)
+	if err != nil {
+		return 0, err
 	}
 	if r.TmuxSessionName == "" {
 		r.TmuxSessionName = composeSessionName(r.CWD, r.ClaudeInstanceID)
@@ -76,7 +97,29 @@ func ApplyDefaults(r *Resolved, cfg config.Config, store CollisionChecker) error
 	if r.RelayMode == "" {
 		r.RelayMode = cfg.Defaults.RelayMode
 	}
-	return nil
+	return check, nil
+}
+
+// preCheckID mints an absent instance id, or runs the collision pre-check's
+// one read for a caller-supplied one (SR-9.3).
+func preCheckID(r *Resolved, checker CollisionChecker) (IDCheck, error) {
+	if r.ClaudeInstanceID == "" {
+		r.ClaudeInstanceID = uuid.NewString()
+		return IDMinted, nil
+	}
+	if checker == nil {
+		return IDNotChecked, nil
+	}
+	state, exists, err := checker.SpawnState(r.ClaudeInstanceID)
+	switch {
+	case err != nil:
+		return 0, PreCheckReadError(err)
+	case !exists:
+		return IDNoRow, nil
+	case store.IsLiveState(state):
+		return 0, fmt.Errorf("%w: %s already live", ErrInstanceIdCollision, r.ClaudeInstanceID)
+	}
+	return IDFinishedRow, nil
 }
 
 // composeSessionName builds the canonical session name from the canonical

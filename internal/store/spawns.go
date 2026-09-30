@@ -38,9 +38,10 @@ const (
 )
 
 // liveStates is the set of state values find-missing considers "alive"
-// (anything except the terminal ones). The collision check on a
-// caller-supplied claude_instance_id uses NOT IN over this set so an
-// `ended` Spawn's id can be reused (the resume verb handles that case).
+// (anything except the terminal ones). The collision pre-check on a
+// caller-supplied claude_instance_id tests the row's state against this set
+// (IsLiveState) so an `ended` Spawn's id can be reused (the resume verb
+// handles that case).
 var liveStates = []string{
 	StatePending, StateWaiting, StateWorking, StateAskUser, StateCheckPermission,
 }
@@ -96,8 +97,9 @@ type Spawn struct {
 	LivenessNote            string
 
 	// The schema-v5 fields (SR-5.1, Appendix F.4), filled by every read that
-	// returns a Spawn. They are read-only in this release step: no write
-	// takes them from a Spawn yet. The SR-5.5 columns never fail a read.
+	// returns a Spawn. InsertPending takes LaunchStartedAtMillis,
+	// Identity.Token and Identity.Socket from a Spawn; no write takes the
+	// others from one. The SR-5.5 columns never fail a read.
 
 	// RowVersion is row_version: advanced by one by every write (SR-5.2).
 	RowVersion int64
@@ -128,8 +130,15 @@ type Spawn struct {
 // chain contains the bare driver error; spawn.Launch maps this back to
 // ErrInstanceIdCollision for surface parity with the TOCTOU pre-check.
 //
-// The new row starts at row_version 0 with launch_started_at NULL (both
-// column defaults; SR-5.2).
+// The insert is one of the writes that begin a launch (SR-5.2): in the same
+// statement it writes launch_started_at from sp.LaunchStartedAtMillis
+// (milliseconds from the caller's injected clock), launch_token from
+// sp.Identity.Token and tmux_socket from sp.Identity.Socket. A zero value
+// writes NULL, following LaunchIdentity's zero-means-NULL convention. The
+// server and pane identity columns (tmux_server_pid, tmux_server_started,
+// tmux_server_starttime, pane_id, pane_pid, pane_starttime) stay NULL
+// whatever sp.Identity carries: RecordLaunchIdentity writes them after the
+// create (SR-3.6). The new row starts at row_version 0 (the column default).
 func (s *Store) InsertPending(sp Spawn) error {
 	argsJSON, err := encodeArgs(sp.ClaudeArgs)
 	if err != nil {
@@ -147,8 +156,9 @@ func (s *Store) InsertPending(sp Spawn) error {
 	const stmt = `
         INSERT INTO spawns (
             claude_instance_id, parent_id, state, cwd, tmux_session_name,
-            claude_args, relay_mode, labels, extra_env
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            claude_args, relay_mode, labels, extra_env,
+            launch_started_at, launch_token, tmux_socket
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
 	var parent any
 	if sp.ParentID != "" {
@@ -160,6 +170,8 @@ func (s *Store) InsertPending(sp Spawn) error {
 		sp.ClaudeInstanceID, parent, StatePending,
 		sp.CWD, sp.TmuxSessionName,
 		argsJSON, sp.RelayMode, labelsJSON, extraEnvJSON,
+		positiveInt64Arg(sp.LaunchStartedAtMillis),
+		nullableStringArg(sp.Identity.Token), nullableStringArg(sp.Identity.Socket),
 	)
 	if err != nil {
 		var serr *sqlite.Error
@@ -308,32 +320,21 @@ func (s *Store) GetSpawnState(instanceID string) (string, error) {
 	return state, nil
 }
 
-// LiveSpawnExists returns true when a row in a live state exists for the
-// given claude_instance_id. The collision check in spawn.ApplyDefaults
-// uses this; the row's existence in `ended`/`missing` does not block
-// re-use of the id (resume covers that case).
-func (s *Store) LiveSpawnExists(instanceID string) (bool, error) {
-	placeholders := make([]any, 0, 1+len(liveStates))
-	placeholders = append(placeholders, instanceID)
-	q := `SELECT 1 FROM spawns WHERE claude_instance_id = ? AND state IN (`
-	for i, st := range liveStates {
-		if i > 0 {
-			q += ","
-		}
-		q += "?"
-		placeholders = append(placeholders, st)
-	}
-	q += `) LIMIT 1`
-	row := s.db.QueryRow(q, placeholders...)
-	var one int
-	err := row.Scan(&one)
+// SpawnState returns the state of the row with the given claude_instance_id
+// in one read, with exists false and no error when there is no such row. It
+// is the collision pre-check's read (spawn.CollisionChecker; SR-9.3): it
+// tells no row, a live row (IsLiveState) and a finished row apart. err is
+// set only when the store cannot be read.
+func (s *Store) SpawnState(instanceID string) (state string, exists bool, err error) {
+	const q = `SELECT state FROM spawns WHERE claude_instance_id = ?`
+	err = s.db.QueryRow(q, instanceID).Scan(&state)
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
+		return "", false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("store: live spawn lookup: %w", err)
+		return "", false, fmt.Errorf("store: spawn state: %w", err)
 	}
-	return true, nil
+	return state, true, nil
 }
 
 // rowVersionAdvance is the SET fragment every statement that updates a
@@ -695,6 +696,82 @@ func positiveIntArg(n int) any {
 		return n
 	}
 	return nil
+}
+
+// positiveInt64Arg is positiveIntArg for int64 columns (launch_started_at,
+// tmux_server_started), where 0 means absent.
+func positiveInt64Arg(n int64) any {
+	if n > 0 {
+		return n
+	}
+	return nil
+}
+
+// recordLaunchIdentitySQL is RecordLaunchIdentity's one statement: the six
+// server and pane identity columns and the version advance, guarded by the
+// launch's state, version and token (SR-3.6, SR-5.3).
+const recordLaunchIdentitySQL = `UPDATE spawns
+    SET tmux_server_pid       = ?,
+        tmux_server_started   = ?,
+        tmux_server_starttime = ?,
+        pane_id               = ?,
+        pane_pid              = ?,
+        pane_starttime        = ?,
+        ` + rowVersionAdvance + `
+  WHERE claude_instance_id = ? AND state = ? AND row_version = ? AND launch_token = ?`
+
+// RecordLaunchIdentity is the identity write after a create reply (SR-3.6,
+// SR-5.3). It applies only while the row is pending with row_version equal to
+// launchVersion (the version the write that began the launch produced) and
+// launch_token equal to token. It then writes, in one statement, the tmux
+// server's identity (tmux_server_pid, tmux_server_started,
+// tmux_server_starttime) and the agent's pane (pane_id, pane_pid,
+// pane_starttime) from id, a zero value as NULL (an unreadable start time
+// passed as "" is stored as NULL), and advances row_version by one. It never
+// writes id.Token, id.Socket, launch_started_at, state or any other column.
+//
+// It returns CondApplied when the write applied; CondChanged, having written
+// nothing, when the row exists but is no longer pending with that version and
+// token (a hook wrote first, or another launch began); CondAbsent when no row
+// has the id. The two are told apart by an existence read after the guarded
+// statement matched no row; nothing is written a second time. A driver error
+// is returned wrapped, with a zero CondResult.
+//
+// Used by plain spawn after its create, and later by resume and reuse. It is
+// on the concrete *Store only, like InsertPending (Appendix F.4).
+func (s *Store) RecordLaunchIdentity(instanceID string, launchVersion int64, token string, id LaunchIdentity) (CondResult, error) {
+	res, err := s.db.Exec(recordLaunchIdentitySQL,
+		positiveIntArg(id.ServerPID), positiveInt64Arg(id.ServerStart),
+		nullableStringArg(id.ServerStarttime), nullableStringArg(id.PaneID),
+		positiveIntArg(id.PanePID), nullableStringArg(id.PaneStarttime),
+		instanceID, StatePending, launchVersion, token,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("store: record launch identity: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("store: record launch identity rows affected: %w", err)
+	}
+	if n > 0 {
+		return CondApplied, nil
+	}
+	return s.condNotApplied(instanceID, "store: record launch identity")
+}
+
+// condNotApplied tells CondChanged from CondAbsent after a conditional write
+// matched no row, by reading whether a row with the id exists (SR-5.3). It
+// only reads. errPrefix names the write in a driver error.
+func (s *Store) condNotApplied(instanceID, errPrefix string) (CondResult, error) {
+	var one int
+	err := s.db.QueryRow(`SELECT 1 FROM spawns WHERE claude_instance_id = ?`, instanceID).Scan(&one)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return CondAbsent, nil
+	case err != nil:
+		return 0, fmt.Errorf("%s: existence read: %w", errPrefix, err)
+	}
+	return CondChanged, nil
 }
 
 // archivePriorSessionOnRotate archives the row's CURRENT (claude_session_id,

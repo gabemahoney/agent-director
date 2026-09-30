@@ -8,6 +8,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/mcp"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 	api "github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -81,9 +82,7 @@ func TestToolsCallSpawnRejectsControlCharacterID(t *testing.T) {
 			if data.ErrName != "ErrInvalidFlags" {
 				t.Errorf("err_name = %q; want ErrInvalidFlags", data.ErrName)
 			}
-			if !strings.Contains(data.ErrDescription, "the instance id contains a control character") {
-				t.Errorf("err_description = %q; want the control-character phrase", data.ErrDescription)
-			}
+			apitest.AssertDescription(t, data.ErrDescription, apitest.DescInstanceIDControlChar(tc.id))
 			for _, text := range []string{data.ErrDescription, resp.Error.Message} {
 				if strings.Contains(text, tc.id) || strings.Contains(text, "mcp-head") || strings.Contains(text, "mcp-tail") {
 					t.Errorf("error text %q contains the instance id", text)
@@ -104,16 +103,29 @@ func TestToolsCallSpawnRejectsControlCharacterID(t *testing.T) {
 }
 
 // TestToolsCallSpawnPlainIDControl is the control for the rejection test: the
-// same harness with a plain id creates one row and one tmux session.
+// same harness with a plain id scans once, then makes one labelled create.
 func TestToolsCallSpawnPlainIDControl(t *testing.T) {
+	t.Setenv("TMUX", "")
+	t.Setenv("TMUX_TMPDIR", t.TempDir())
 	d, client, rec := newSpawnInputServer(t)
 	resp := callSpawn(t, d, t.TempDir(), "mcp-plain-id")
 
 	if resp == nil || resp.Error != nil {
 		t.Fatalf("tools/call spawn failed: %+v", resp)
 	}
-	if n := len(rec.CallsOfKind(tmuxfix.CallNewSession)); n != 1 {
-		t.Errorf("NewSession calls = %d; want 1", n)
+	socket, err := tmux.ResolveSocket(false)
+	if err != nil {
+		t.Fatalf("ResolveSocket: %v", err)
+	}
+	calls := rec.SocketCalls()
+	if len(calls) != 2 || calls[0].Call != tmux.CallLookup || calls[1].Call != tmux.CallCreate {
+		t.Fatalf("socket calls = %+v; want one lookup, then one create", calls)
+	}
+	if c := calls[1]; c.Socket != socket || c.InstanceID != "mcp-plain-id" || len(c.Token) != 16 || c.StoreID == "" {
+		t.Errorf("create = %+v; want socket %q, id mcp-plain-id, a 16-hex token and the store id", c, socket)
+	}
+	if n := len(rec.CallsOfKind(tmuxfix.CallNewSession)); n != 0 {
+		t.Errorf("name-based creates = %d; want 0", n)
 	}
 	list, err := client.List(api.ListParams{})
 	if err != nil {

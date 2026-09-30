@@ -62,6 +62,8 @@ var Catalog = []Entry{
 	// called by any pkg/api verb handler, so this error never reaches callers.
 	{Name: "ErrTmuxSendKeys", Err: tmux.ErrTmuxSendKeys},
 	{Name: "ErrTmuxCaptureFailed", Err: tmux.ErrTmuxCaptureFailed},
+	{Name: "ErrTmuxUnresponsive", Err: tmux.ErrTmuxUnresponsive},
+	{Name: "ErrTmuxSessionConflict", Err: tmux.ErrTmuxSessionConflict},
 	// ErrSchemaMismatch is intentionally absent: it surfaces from store
 	// initialization (pkg/api.NewClient), not from individual verb handlers.
 	// cmd/agent-director handles it via direct errors.Is before any verb call.

@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix"
 	api "github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
@@ -65,22 +66,22 @@ type clientDispatchFn func(c *api.Client, params map[string]any) ([]byte, bool)
 // The init() guard below ensures this table is complete with respect to
 // manifest.CallableVerbs() at startup; missing entries cause a panic.
 var dispatch = map[string]clientDispatchFn{
-	"spawn":             dispatchSpawn,
-	"status":            dispatchStatus,
-	"get":               dispatchGet,
-	"send-keys":         dispatchSendKeys,
-	"read-pane":         dispatchReadPane,
-	"kill":              dispatchKill,
-	"decide":            dispatchDecide,
-	"get-permission":    dispatchGetPermission,
-	"resume":            dispatchResume,
-	"find-missing":      dispatchFindMissing,
-	"expire":            dispatchExpire,
-	"delete":            dispatchDelete,
-	"make-template":     dispatchMakeTemplate,
-	"list":              dispatchList,
-	"pause":             dispatchPause,
-	"version":           dispatchVersion,
+	"spawn":          dispatchSpawn,
+	"status":         dispatchStatus,
+	"get":            dispatchGet,
+	"send-keys":      dispatchSendKeys,
+	"read-pane":      dispatchReadPane,
+	"kill":           dispatchKill,
+	"decide":         dispatchDecide,
+	"get-permission": dispatchGetPermission,
+	"resume":         dispatchResume,
+	"find-missing":   dispatchFindMissing,
+	"expire":         dispatchExpire,
+	"delete":         dispatchDelete,
+	"make-template":  dispatchMakeTemplate,
+	"list":           dispatchList,
+	"pause":          dispatchPause,
+	"version":        dispatchVersion,
 }
 
 func init() {
@@ -117,6 +118,11 @@ func ensureFakeTmuxOnPath(t *testing.T) {
 
 // ── CLI subprocess runner ─────────────────────────────────────────────────────
 
+// forwardedTmuxEnv are the test process's variables runCLI passes on to the
+// CLI when set, so a case's private socket and fake-tmux tables (set with
+// t.Setenv, see usePrivateFakeTmux) reach the CLI as they reach runClient.
+var forwardedTmuxEnv = []string{"TMUX", "TMUX_TMPDIR", faketmuxfix.EnvTables}
+
 // runCLI executes the CLI binary at binPath as a subprocess against the
 // fixture store at dbPath. args is the full verb + argument list (e.g.
 // []string{"status", "<id>"}).
@@ -129,7 +135,8 @@ func ensureFakeTmuxOnPath(t *testing.T) {
 // The subprocess environment is kept minimal: HOME is set to the parent of
 // .agent-director/ (derived from dbPath) so the CLI resolves its store at
 // dbPath without reading the test runner's real config. PATH is prepended with
-// the fake-tmux directory so tmux-dependent verbs hit the fake binary.
+// the fake-tmux directory so tmux-dependent verbs hit the fake binary; the
+// forwardedTmuxEnv variables are passed on when set.
 //
 // runCLI does NOT call t.Fatal on a non-zero exit code; callers decide how to
 // interpret the returned envelope and exit code.
@@ -146,6 +153,11 @@ func runCLI(t *testing.T, binPath, dbPath string, args ...string) (envelope []by
 	cmd.Env = []string{
 		"HOME=" + homeDir,
 		"PATH=" + fakeTmuxDir + ":" + os.Getenv("PATH"),
+	}
+	for _, k := range forwardedTmuxEnv {
+		if v, ok := os.LookupEnv(k); ok {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
 	}
 
 	var stdout, stderr bytes.Buffer

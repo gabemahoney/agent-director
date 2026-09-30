@@ -13,6 +13,22 @@ type RowSnapshot struct {
 	TmuxSessionName string
 }
 
+// CondResult reports the outcome of a conditional write (SR-5.3): a write
+// that applies only while the row still holds the state, version or snapshot
+// the caller examined.
+type CondResult int
+
+const (
+	// CondApplied: the row met the condition and the write was applied
+	// (SR-5.3).
+	CondApplied CondResult = iota + 1
+	// CondChanged: the row exists but no longer meets the condition; nothing
+	// was written (SR-5.3).
+	CondChanged
+	// CondAbsent: the row no longer exists; nothing was written (SR-5.3).
+	CondAbsent
+)
+
 // LaunchIdentity is a launch's identity: the eight launch-identity columns
 // (SR-3.3 to SR-3.6, SR-5.1). Zero values mean NULL. It holds handles and
 // liveness evidence only; the session label is the proof of ownership and

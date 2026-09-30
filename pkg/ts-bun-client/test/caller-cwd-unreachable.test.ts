@@ -130,11 +130,11 @@ test.skipIf(cliMissing || systemUndiscoverable)(
     fs.rmSync(tmpDir, { recursive: true, force: true });
 
     try {
-      await withRepoBinaryOnPath(() =>
-        expect(resolveSystemBinary()).rejects.toBeInstanceOf(
+      await withRepoBinaryOnPath(async () => {
+        await expect(resolveSystemBinary()).rejects.toBeInstanceOf(
           ErrCallerCwdUnreachable
-        )
-      );
+        );
+      });
     } finally {
       process.chdir(orig);
     }

@@ -237,6 +237,12 @@ export declare class ErrTmuxSendKeys extends AgentDirectorError {
 /** Mirrors ErrTmuxCaptureFailed (package: tmux) */
 export declare class ErrTmuxCaptureFailed extends AgentDirectorError {
 }
+/** Mirrors ErrTmuxUnresponsive (package: tmux) */
+export declare class ErrTmuxUnresponsive extends AgentDirectorError {
+}
+/** Mirrors ErrTmuxSessionConflict (package: tmux) */
+export declare class ErrTmuxSessionConflict extends AgentDirectorError {
+}
 /** Mirrors ErrSpawnNotInteractive (package: api) */
 export declare class ErrSpawnNotInteractive extends AgentDirectorError {
 }

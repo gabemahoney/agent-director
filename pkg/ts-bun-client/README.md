@@ -320,7 +320,7 @@ Thrown per verb call by the subprocess transport, not by the CLI's own validatio
 
 ### 4. Catalog-derived (CLI-side validation)
 
-These 37 classes are generated one-to-one from the shared `err_name` catalog ([`../../pkg/api/errnames/catalog.json`](../../pkg/api/errnames/catalog.json), the canonical source). They surface bad input or a verb's own state preconditions — almost all are either **programmer error** or a **normal operational signal**, so few catch sites need to name them individually. They are grouped by domain below.
+These 41 classes are generated one-to-one from the shared `err_name` catalog ([`../../pkg/api/errnames/catalog.json`](../../pkg/api/errnames/catalog.json), the canonical source). They surface bad input or a verb's own state preconditions — almost all are either **programmer error** or a **normal operational signal**, so few catch sites need to name them individually. They are grouped by domain below.
 
 **cwd validation** (bad `cwd` argument to `spawn` — programmer error):
 
@@ -366,8 +366,10 @@ These 37 classes are generated one-to-one from the shared `err_name` catalog ([`
 
 | Error | When it fires |
 |---|---|
-| `ErrTmuxNotAvailable` | The `tmux` binary is not on PATH or refuses to execute. |
-| `ErrTmuxSessionCreate` | `tmux new-session` exited non-zero (name collision, invalid cwd, missing default-shell). |
+| `ErrTmuxNotAvailable` | The `tmux` binary is not on PATH or refuses to execute, the tmux socket is not accessible to this user, or its per-user socket directory cannot be used (`spawn` then writes nothing). |
+| `ErrTmuxSessionCreate` | `tmux new-session` exited non-zero (name collision, invalid cwd, missing default-shell), or `spawn` created a session it could not label. The new row stays `pending`. |
+| `ErrTmuxUnresponsive` | tmux did not answer in time, or gave a reply agent-director does not recognise (UNAVAILABLE, transient). From `spawn`'s session-creating call: the session may have been created and the row stays `pending`; do not retry until `get` shows the row `ended` or `missing`. |
+| `ErrTmuxSessionConflict` | A tmux session conflict that needs a human (CONFLICT, permanent until a human looks). From `spawn` with an explicit `claude_instance_id` that has no row: a session of this store still labelled with that id is left over from an earlier life, or labels conflict; nothing is written. See "Operator actions" in the agent-director README. |
 | `ErrTmuxSendKeys` | `tmux send-keys` exited non-zero (typically no live pane). |
 | `ErrTmuxCaptureFailed` | `tmux capture-pane` exited non-zero (session/pane vanished mid-call). |
 

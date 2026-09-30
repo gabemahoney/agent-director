@@ -36,7 +36,11 @@ SQLite file; everything else is tmux.
 
 - `claude` (Claude Code) on PATH — install per
   <https://claude.com/claude-code>.
-- `tmux` 3.0+ on PATH.
+- `tmux` 3.2 or later on PATH. Verified: 3.2a (by a scripted one-off
+  run and recorded replies) and 3.3a (by the test suites).
+  - Keep `remain-on-exit` off, the tmux default.
+  - No tmux server needs to be running: agent-director starts one when
+    it launches an agent.
 - `jq` on PATH.
 
 ### Install the CLI
@@ -418,6 +422,60 @@ its conversation history, so there is nothing left to resume.
 agent-director does not restart sessions for you. Deciding when to run
 `find-missing` then `resume` after a boot — from a startup script,
 service, or scheduler — is up to you.
+
+## Operator actions
+
+These actions are for humans only: automated callers (scripts, agents,
+MCP clients) must not perform them.
+
+### A spawn refused as "left over from an earlier life"
+
+A `spawn` with a `--claude-instance-id` that has no row is refused with
+`ErrTmuxSessionConflict` ("left over from an earlier life") when a tmux
+session of this agent-director store still carries that id. Nothing was
+written. The error names each such session by name and tmux session id
+(`$N`). The spawn's trail record gives the tmux socket, this store's id
+and the first session's id:
+
+```sh
+jq -c 'select(.event == "ad.launch.name_held" and .claude_instance_id == "<id>") | {tmux_socket, store_id, tmux_session_id, session_created}' ~/.agent-director/ad-trail.jsonl | tail -n 1
+```
+
+The socket is the one the spawning caller's tmux environment resolves,
+by default `/tmp/tmux-<uid>/default`. Keep the single quotes in the
+commands below, so the shell leaves the `$` of a session id alone. For
+each session the error names:
+
+1. Check its label:
+
+   ```sh
+   tmux -u -S '<socket>' show-options -t '<session id>' -v @ad_owner
+   ```
+
+   A leftover of this id prints `ad1`, a launch token, the session's own
+   id, the instance id and, last, this store's id (the record's
+   `store_id`). A label whose last field is not this store's id belongs to
+   another agent-director store's agent: never end it. `no such session`
+   means it has gone. The session's environment is not evidence.
+2. Look at it read-only (detach with the tmux prefix key, then `d`):
+
+   ```sh
+   tmux -u -S '<socket>' attach-session -r -t '<session id>'
+   ```
+
+3. If it is not wanted, end it by its session id, never by its name:
+
+   ```sh
+   tmux -u -S '<socket>' kill-session -t '<session id>'
+   ```
+
+4. Spawn the id again.
+
+If the error says "and N more", list the sessions with
+`tmux -u -S '<socket>' list-sessions -F '#{session_id} #{session_name}'`
+and check each label as in step 1. The check before a spawn sees only
+this socket: it misses leftovers on another tmux server or socket, and
+sessions with no label.
 
 ## Uninstall
 

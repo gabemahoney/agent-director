@@ -374,12 +374,14 @@ func SeedAgentDirectorDir(t *testing.T, homeDir string) string {
 // existing writes each kind also matches.
 type WriteFailureKind = writefailfix.Kind
 
-// The four kinds of SR-20.3, re-exported from writefailfix.
+// The four reuse kinds of SR-20.3 and the launch identity write kind
+// (SR-3.6), re-exported from writefailfix.
 const (
 	WriteFailReuseArchive          = writefailfix.ReuseArchive
 	WriteFailReuseReset            = writefailfix.ReuseReset
 	WriteFailReusePermissionDelete = writefailfix.ReusePermissionDelete
 	WriteFailReuseRestore          = writefailfix.ReuseRestore
+	WriteFailLaunchIdentity        = writefailfix.LaunchIdentityWrite
 )
 
 // InjectWriteFailure makes one kind of write to instanceID's rows fail with a

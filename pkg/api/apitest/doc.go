@@ -50,6 +50,19 @@
 //     read; OtherStoreID returns a well-formed id certain to differ from a
 //     given one, for another store's labels.
 //
+// # Description helper (SR-20.2)
+//
+//   - AssertDescription checks an error description against a DescCase (a
+//     Desc* constructor holding an SR-1.4 case's required and must-not
+//     phrases) and always rejects SR-1.4's session-ending command forms (only
+//     "retry kill later" excepted), the opt-in's SR-6.8 spellings, a label
+//     value and the caller's forbid values. AssertAgentText is the
+//     forbidden-only check for manifest-like texts; AssertAgentTextCase adds
+//     a DescCase's phrases for a rule such a text must state (for example
+//     DescSpawnLaunchTimeoutRule, DescSpawnScanRefusal). No test spells these
+//     phrases or forms itself; a new case is a new Desc* constructor in
+//     descriptions.go.
+//
 // Rules for tests (the same as docs/architecture.md, "apitest Seed* factory
 // contract (reusable test fixtures)"):
 //

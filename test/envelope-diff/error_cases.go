@@ -65,12 +65,20 @@ type errorCase struct {
 
 	// cliArgv returns the argv slice (verb + flags) passed to runCLI.
 	cliArgv func(ctx map[string]any) []string
+
+	// desc, if set, returns the SR-1.4 description case both err_descriptions
+	// are checked against with apitest.AssertDescription (SR-20.2), and the
+	// values they must never carry (a token, a store id, a label value), for
+	// rows whose errName alone does not show which path gave it.
+	desc func(ctx map[string]any) (c apitest.DescCase, forbid []string)
 }
 
-// errorCases is the authoritative per-verb error-path fixture table.
-// The init() guard below validates every errName and verb name at startup.
+// errorCases is the authoritative per-verb error-path fixture table: the rows
+// below, then the spawn rows that need a private fake-tmux socket
+// (spawnTmuxErrorCases, error_cases_spawn_tmux.go). The init() guard below
+// validates every errName and verb name at startup.
 // TestErrorTableCoverage (error_cases_test.go) enforces completeness.
-var errorCases = []errorCase{
+var errorCases = append([]errorCase{
 
 	// ── spawn / ErrCwdMissing ─────────────────────────────────────────────
 	// Most representative spawn error: pure parameter validation, no tmux
@@ -434,7 +442,7 @@ var errorCases = []errorCase{
 			return []string{"find-missing"}
 		},
 	},
-}
+}, spawnTmuxErrorCases...)
 
 // ── lookup helper ─────────────────────────────────────────────────────────────
 

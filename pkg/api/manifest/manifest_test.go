@@ -118,9 +118,10 @@ func TestVerbsContainsExpectedSurface(t *testing.T) {
 
 // TestSpawnHasAllSRDErrorNames asserts the spawn entry advertises every
 // validation / launch error name from SRD §13.1, including ErrInvalidFlags
-// (control-character instance id, SR-1.7, SR-9.1) and ErrTmuxSessionNameInvalid
-// (reserved session-name characters, SR-9.2). Doc drift CI catches the
-// reference-doc side; this test pins the source-of-truth side.
+// (control-character instance id, SR-1.7, SR-9.1), ErrTmuxSessionNameInvalid
+// (reserved session-name characters, SR-9.2), ErrTmuxUnresponsive (bounded
+// create) and ErrTmuxSessionConflict (label scan, SR-9.3). Doc drift CI
+// catches the reference-doc side; this test pins the source-of-truth side.
 func TestSpawnHasAllSRDErrorNames(t *testing.T) {
 	v, ok := manifest.Lookup("spawn")
 	if !ok {
@@ -131,6 +132,7 @@ func TestSpawnHasAllSRDErrorNames(t *testing.T) {
 		"ErrRelayModeInvalid", "ErrSpawnDeniedFlag", "ErrReservedEnvKey",
 		"ErrInvalidFlags", "ErrInstanceIdCollision", "ErrTmuxSessionNameInvalid",
 		"ErrTmuxNotAvailable", "ErrTmuxSessionCreate",
+		"ErrTmuxUnresponsive", "ErrTmuxSessionConflict",
 	}
 	have := map[string]bool{}
 	for _, n := range v.ErrorNames {

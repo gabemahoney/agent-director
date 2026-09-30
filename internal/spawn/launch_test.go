@@ -1,269 +1,238 @@
 package spawn
 
 import (
+	"bytes"
 	"database/sql"
 	"errors"
+	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
-// captureTmux is a TmuxClient test double — records the argv that
-// Launch would have handed tmux, and returns a programmable error.
-// failOnSessionName injects a NewSession failure only when the
-// supplied name matches — used by the live-collision case so the
-// "tmux already has this name" path can be exercised without a real
-// tmux.
-type captureTmux struct {
-	got struct {
-		name    string
-		cwd     string
-		envs    map[string]string
-		command []string
-		called  bool
-	}
-	err               error
-	failOnSessionName string
+// launchEnv is one Launch under test: a temp store, a per-test TMUX_TMPDIR,
+// the Recorder, the start-time reader fake, a test clock and a captured log.
+type launchEnv struct {
+	t      *testing.T
+	dbPath string
+	s      *store.Store
+	rec    *tmuxfix.Recorder
+	pc     *procfix.Checker
+	clock  *tmuxfix.Clock
+	logs   bytes.Buffer
+	socket string // the socket Launch resolves in this environment
+	r      Resolved
+	cfg    config.Config
 }
 
-func (c *captureTmux) NewSessionByName(name, cwd string, envs map[string]string, command []string) error {
-	c.got.called = true
-	c.got.name = name
-	c.got.cwd = cwd
-	c.got.envs = envs
-	c.got.command = command
-	if c.failOnSessionName != "" && name == c.failOnSessionName {
-		return errors.New("tmux: duplicate session: can't create session")
-	}
-	return c.err
-}
-
-// newStoreAndLaunchInputs builds a Resolved that has already passed
-// validation + defaults. Centralizing the boilerplate keeps each test
-// focused on the behavior it pins.
-func newStoreAndLaunchInputs(t *testing.T) (*store.Store, Resolved, config.Config) {
+// newLaunchEnv builds a launchEnv whose Resolved has passed validation and
+// defaults; tests override only the fields they pin.
+func newLaunchEnv(t *testing.T) *launchEnv {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "state.db")
-	s, err := store.OpenOrInit(dbPath)
+	withStubExe(t, "/bin/agent-director")
+	t.Setenv(envInstanceID, "") // no parent leakage from the host shell
+	e := &launchEnv{t: t, socket: isolateTmux(t), rec: tmuxfix.NewRecorder(), pc: procfix.New(),
+		clock: tmuxfix.NewClock(time.Date(2026, 9, 29, 12, 0, 0, 123_000_000, time.UTC)), cfg: config.Default()}
+	e.dbPath = filepath.Join(t.TempDir(), "state.db")
+	s, err := store.OpenOrInit(e.dbPath)
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("store.OpenOrInit: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	cwd := t.TempDir()
-	r := Resolved{SpawnParams: SpawnParams{
-		CWD:              cwd,
-		ClaudeInstanceID: "id-launch-1",
-		TmuxSessionName:  "cd-launch-1",
-		RelayMode:        "off",
-		ClaudeArgs:       []string{"--model", "opus"},
-		AgentDirectorLabels: map[string]string{
-			"role": "worker",
-		},
+	e.s = s
+	e.r = Resolved{SpawnParams: SpawnParams{
+		CWD:                 t.TempDir(),
+		ClaudeInstanceID:    "id-launch-1",
+		TmuxSessionName:     "cd-launch-1",
+		RelayMode:           "off",
+		ClaudeArgs:          []string{"--model", "opus"},
+		AgentDirectorLabels: map[string]string{"role": "worker"},
 	}}
-	return s, r, config.Default()
+	return e
 }
 
-func TestLaunchInsertsPendingAndCallsTmux(t *testing.T) {
-	withStubExe(t, "/bin/agent-director")
-	t.Setenv(envInstanceID, "") // ensure no parent leakage from the host shell
-	s, r, cfg := newStoreAndLaunchInputs(t)
-	tmux := &captureTmux{}
-
-	id, err := Launch(s, tmux, r, cfg)
+// isolateTmux points TMUX_TMPDIR at a fresh directory, unsets TMUX and
+// returns the socket tmux would resolve there.
+func isolateTmux(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
-		t.Fatalf("Launch: %v", err)
+		t.Fatalf("EvalSymlinks: %v", err)
 	}
+	t.Setenv("TMUX_TMPDIR", dir)
+	t.Setenv("TMUX", "")
+	os.Unsetenv("TMUX")
+	return filepath.Join(dir, fmt.Sprintf("tmux-%d", os.Getuid()), "default")
+}
+
+// launch runs Launch on e's store, Recorder, reader, config and clock.
+func (e *launchEnv) launch() (string, error) {
+	return Launch(e.s, e.rec, e.pc, e.r, e.cfg, e.clock.Now, log.New(&e.logs, "", 0))
+}
+
+// mustLaunch runs launch and fails the test on an error.
+func (e *launchEnv) mustLaunch() string {
+	e.t.Helper()
+	id, err := e.launch()
+	if err != nil {
+		e.t.Fatalf("Launch: %v", err)
+	}
+	return id
+}
+
+// onlyCreate returns the one recorded tmux call, which must be the create.
+func (e *launchEnv) onlyCreate() tmuxfix.SocketCall {
+	e.t.Helper()
+	calls := e.rec.SocketCalls()
+	if len(calls) != 1 || calls[0].Call != tmux.CallCreate {
+		e.t.Fatalf("tmux calls = %+v; want exactly one create", calls)
+	}
+	return calls[0]
+}
+
+// row reads id's row through the store.
+func (e *launchEnv) row(id string) store.Spawn {
+	e.t.Helper()
+	row, err := e.s.GetSpawn(id)
+	if err != nil {
+		e.t.Fatalf("GetSpawn(%s): %v", id, err)
+	}
+	return row
+}
+
+// TestLaunchInsertsPendingAndCreatesSession: the pending row's fields, and
+// one labelled create on the resolved socket carrying the launch's inputs.
+func TestLaunchInsertsPendingAndCreatesSession(t *testing.T) {
+	e := newLaunchEnv(t)
+	id := e.mustLaunch()
 	if id != "id-launch-1" {
 		t.Errorf("Launch returned %q; want id-launch-1", id)
 	}
 
-	// Pending row written.
-	row, err := s.GetSpawn(id)
-	if err != nil {
-		t.Fatalf("GetSpawn: %v", err)
+	row := e.row(id)
+	if row.State != store.StatePending || row.CWD != e.r.CWD || row.TmuxSessionName != "cd-launch-1" {
+		t.Errorf("row = {state %q, cwd %q, name %q}; want pending, %q, cd-launch-1",
+			row.State, row.CWD, row.TmuxSessionName, e.r.CWD)
 	}
-	if row.State != store.StatePending {
-		t.Errorf("State = %q; want pending", row.State)
-	}
-	if row.CWD != r.CWD {
-		t.Errorf("CWD = %q; want %q", row.CWD, r.CWD)
-	}
-	if row.TmuxSessionName != "cd-launch-1" {
-		t.Errorf("TmuxSessionName = %q", row.TmuxSessionName)
-	}
-	if !reflect.DeepEqual(row.ClaudeArgs, []string{"--model", "opus"}) {
-		t.Errorf("ClaudeArgs = %v", row.ClaudeArgs)
-	}
-	if row.Labels["role"] != "worker" {
-		t.Errorf("Labels = %v", row.Labels)
+	if !reflect.DeepEqual(row.ClaudeArgs, []string{"--model", "opus"}) || row.Labels["role"] != "worker" {
+		t.Errorf("row args/labels = %v / %v", row.ClaudeArgs, row.Labels)
 	}
 
-	// tmux call observed.
-	if !tmux.got.called {
-		t.Fatal("tmux.NewSession not called")
+	c := e.onlyCreate()
+	if c.Socket != e.socket || c.Target != "cd-launch-1" || c.Cwd != e.r.CWD {
+		t.Errorf("create = {socket %q, name %q, cwd %q}; want %q, cd-launch-1, %q", c.Socket, c.Target, c.Cwd, e.socket, e.r.CWD)
 	}
-	if tmux.got.name != "cd-launch-1" {
-		t.Errorf("session name = %q", tmux.got.name)
+	if c.Token != row.Identity.Token || c.InstanceID != id || c.StoreID != e.s.StoreID() {
+		t.Errorf("create label args = {%q %q %q}; want {%q %q %q}", c.Token, c.InstanceID, c.StoreID,
+			row.Identity.Token, id, e.s.StoreID())
 	}
-	if tmux.got.cwd != r.CWD {
-		t.Errorf("cwd = %q; want %q", tmux.got.cwd, r.CWD)
+	n := len(c.Command)
+	if n < 5 || c.Command[0] != "claude" || c.Command[1] != "--settings" || c.Command[n-2] != "--model" || c.Command[n-1] != "opus" {
+		t.Errorf("create command = %v; want claude --settings <json> --model opus", c.Command)
 	}
-	if len(tmux.got.command) < 3 || tmux.got.command[0] != "claude" || tmux.got.command[1] != "--settings" {
-		t.Errorf("command argv prefix = %v", tmux.got.command[:3])
-	}
-	if tmux.got.command[len(tmux.got.command)-2] != "--model" || tmux.got.command[len(tmux.got.command)-1] != "opus" {
-		t.Errorf("user claude_args missing from command tail: %v", tmux.got.command)
-	}
-
-	// Env vars composed correctly.
-	if tmux.got.envs["AGENT_DIRECTOR_INSTANCE_ID"] != "id-launch-1" {
-		t.Errorf("env AGENT_DIRECTOR_INSTANCE_ID = %q", tmux.got.envs["AGENT_DIRECTOR_INSTANCE_ID"])
-	}
-	if tmux.got.envs["AGENT_DIRECTOR_RELAY_MODE"] != "off" {
-		t.Errorf("env AGENT_DIRECTOR_RELAY_MODE = %q", tmux.got.envs["AGENT_DIRECTOR_RELAY_MODE"])
-	}
-	if tmux.got.envs["AGENT_DIRECTOR_LABEL_ROLE"] != "worker" {
-		t.Errorf("env AGENT_DIRECTOR_LABEL_ROLE = %q", tmux.got.envs["AGENT_DIRECTOR_LABEL_ROLE"])
+	for k, want := range map[string]string{"AGENT_DIRECTOR_RELAY_MODE": "off", "AGENT_DIRECTOR_LABEL_ROLE": "worker"} {
+		if c.Envs[k] != want {
+			t.Errorf("create env %s = %q; want %q", k, c.Envs[k], want)
+		}
 	}
 }
 
 // TestLaunchPersistsExtraEnv pins SR-10 write-side: a resolved ExtraEnv
-// flows into the row Launch INSERTs, so GetSpawn reads it back verbatim.
-// Before this Epic the value was used only to compose the tmux env and
-// then dropped; now it round-trips through the store so a later Resume
-// can restore it.
+// reaches the create's env and round-trips through the row verbatim.
 func TestLaunchPersistsExtraEnv(t *testing.T) {
-	withStubExe(t, "/bin/agent-director")
-	t.Setenv(envInstanceID, "")
-	s, r, cfg := newStoreAndLaunchInputs(t)
-	r.ClaudeInstanceID = "id-extraenv"
-	r.TmuxSessionName = "cd-extraenv"
-	r.ExtraEnv = map[string]string{
+	e := newLaunchEnv(t)
+	e.r.ExtraEnv = map[string]string{
 		"CLAUDE_CONFIG_DIR": "/home/bee/.claude-alt",
 		"ANTHROPIC_API_KEY": "sk-ant-test",
 	}
-	tmux := &captureTmux{}
-
-	if _, err := Launch(s, tmux, r, cfg); err != nil {
-		t.Fatalf("Launch: %v", err)
+	id := e.mustLaunch()
+	if got := e.onlyCreate().Envs["CLAUDE_CONFIG_DIR"]; got != "/home/bee/.claude-alt" {
+		t.Errorf("create env CLAUDE_CONFIG_DIR = %q; want /home/bee/.claude-alt", got)
 	}
-
-	// The composed tmux env carries the ExtraEnv keys (sanity that the
-	// values reached the session), but the load-bearing assertion is the
-	// persisted row.
-	if tmux.got.envs["CLAUDE_CONFIG_DIR"] != "/home/bee/.claude-alt" {
-		t.Errorf("tmux env CLAUDE_CONFIG_DIR = %q; want /home/bee/.claude-alt", tmux.got.envs["CLAUDE_CONFIG_DIR"])
-	}
-
-	row, err := s.GetSpawn("id-extraenv")
-	if err != nil {
-		t.Fatalf("GetSpawn: %v", err)
-	}
-	if !reflect.DeepEqual(row.ExtraEnv, r.ExtraEnv) {
-		t.Errorf("row.ExtraEnv = %v; want %v (persisted verbatim)", row.ExtraEnv, r.ExtraEnv)
+	if got := e.row(id).ExtraEnv; !reflect.DeepEqual(got, e.r.ExtraEnv) {
+		t.Errorf("row.ExtraEnv = %v; want %v (persisted verbatim)", got, e.r.ExtraEnv)
 	}
 }
 
-func TestLaunchTmuxFailureLeavesRowPending(t *testing.T) {
-	withStubExe(t, "/bin/agent-director")
-	t.Setenv(envInstanceID, "") // ensure no parent leakage from the host shell
-	s, r, cfg := newStoreAndLaunchInputs(t)
-	tmux := &captureTmux{err: errors.New("tmux: name collision")}
-
-	_, err := Launch(s, tmux, r, cfg)
-	if err == nil {
-		t.Fatal("expected error from Launch when tmux fails")
+// TestLaunchCreateFailureLeavesRowPending: a failed create maps to its tmux
+// sentinel; the row stays pending with its launch fields and no identity.
+func TestLaunchCreateFailureLeavesRowPending(t *testing.T) {
+	cases := []struct {
+		name    string
+		failure tmux.Failure
+		want    error
+	}{
+		{"duplicate session", tmux.FailDuplicate, tmux.ErrTmuxSessionCreate},
+		{"no server", tmux.FailNoServer, tmux.ErrTmuxSessionCreate},
+		{"timed out", tmux.FailTimeout, tmux.ErrTmuxUnresponsive},
+		{"binary unavailable", tmux.FailUnavailable, tmux.ErrTmuxNotAvailable},
 	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newLaunchEnv(t)
+			e.r.TmuxSessionName, e.r.TmuxSessionNameSupplied = "bot-claude-status", true
+			e.rec.Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tc.failure}, tmux.CallCreate)
 
-	row, getErr := s.GetSpawn("id-launch-1")
-	if getErr != nil {
-		t.Fatalf("GetSpawn: %v", getErr)
-	}
-	if row.State != store.StatePending {
-		t.Errorf("row should remain pending after tmux failure; got %q", row.State)
+			_, err := e.launch()
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("Launch err = %v; want %v", err, tc.want)
+			}
+			if errors.Is(err, ErrTmuxSessionNameInvalid) || errors.Is(err, ErrInstanceIdCollision) {
+				t.Errorf("err = %v; must not read as a validation or collision sentinel", err)
+			}
+			e.onlyCreate()
+			row := e.row("id-launch-1")
+			if row.State != store.StatePending || row.Identity.Token == "" || row.Identity.Socket != e.socket {
+				t.Errorf("row = {state %q, token %q, socket %q}; want pending with token and %q",
+					row.State, row.Identity.Token, row.Identity.Socket, e.socket)
+			}
+			if row.Identity.ServerPID != 0 || row.Identity.PaneID != "" {
+				t.Errorf("identity = %+v; want none recorded after a failed create", row.Identity)
+			}
+		})
 	}
 }
 
-// TestLaunchSerializesLabelsAsJSON pins SRD §4.2: the labels column is a
-// JSON object. The deserialized round-trip is already covered by the
-// happy-path test; this one reads the raw column directly so a future
-// change to the column format (e.g. base64, msgpack) breaks the test.
+// TestLaunchSerializesLabelsAsJSON pins SRD §4.2: the raw labels column is a
+// JSON object with the verbatim keys.
 func TestLaunchSerializesLabelsAsJSON(t *testing.T) {
-	withStubExe(t, "/bin/agent-director")
-	t.Setenv(envInstanceID, "") // ensure no parent leakage from the host shell
+	e := newLaunchEnv(t)
+	e.r.AgentDirectorLabels = map[string]string{"project": "agent-director", "env": "dev"}
+	id := e.mustLaunch()
 
-	dbPath := filepath.Join(t.TempDir(), "state.db")
-	s, err := store.OpenOrInit(dbPath)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
-	r := Resolved{SpawnParams: SpawnParams{
-		CWD:              t.TempDir(),
-		ClaudeInstanceID: "id-labels-json",
-		TmuxSessionName:  "cd-labels-json",
-		RelayMode:        "off",
-		AgentDirectorLabels: map[string]string{
-			"project": "agent-director",
-			"env":     "dev",
-		},
-	}}
-	if _, err := Launch(s, &captureTmux{}, r, config.Default()); err != nil {
-		t.Fatalf("Launch: %v", err)
-	}
-
-	// Read the raw labels column. The store does not export a "raw JSON"
-	// accessor — opening a parallel sql.DB is the narrowest way to assert
-	// on the stored byte shape without leaking SQL into internal/spawn's
-	// production code.
-	raw := openRawForRead(t, dbPath)
+	raw := openRawForRead(t, e.dbPath)
 	defer raw.Close()
-
 	var labelsCol string
-	if err := raw.QueryRow(`SELECT labels FROM spawns WHERE claude_instance_id = ?`,
-		"id-labels-json").Scan(&labelsCol); err != nil {
+	if err := raw.QueryRow(`SELECT labels FROM spawns WHERE claude_instance_id = ?`, id).Scan(&labelsCol); err != nil {
 		t.Fatalf("raw read labels: %v", err)
 	}
-	// JSON object representations differ only in key order; both keys
-	// must be present with their literal values. A substring check is
-	// resilient to encoder-determined key ordering.
 	for _, want := range []string{`"project":"agent-director"`, `"env":"dev"`} {
-		if !contains(labelsCol, want) {
+		if !strings.Contains(labelsCol, want) {
 			t.Errorf("labels column %q missing %q", labelsCol, want)
 		}
 	}
 }
 
-// TestLaunchEmitsEnvForNonAlphanumericLabelKey pins SRD §7.2 step 5:
-// label keys are uppercased with non-alphanumerics replaced by `_` for
-// the env-var name. The DB column keeps the original key verbatim
-// (SRD §19 Q12) — the test asserts both.
+// TestLaunchEmitsEnvForNonAlphanumericLabelKey pins SRD §7.2 step 5: env
+// names are normalised while the row keeps the verbatim keys.
 func TestLaunchEmitsEnvForNonAlphanumericLabelKey(t *testing.T) {
-	withStubExe(t, "/bin/agent-director")
-	t.Setenv(envInstanceID, "")
+	e := newLaunchEnv(t)
+	e.r.AgentDirectorLabels = map[string]string{"my-key": "v1", "x.y.z": "v2", "already_ok": "v3", "with spaces": "v4"}
+	id := e.mustLaunch()
 
-	s, r, cfg := newStoreAndLaunchInputs(t)
-	r.ClaudeInstanceID = "id-label-norm"
-	r.TmuxSessionName = "cd-label-norm"
-	r.AgentDirectorLabels = map[string]string{
-		"my-key":      "v1",
-		"x.y.z":       "v2",
-		"already_ok":  "v3",
-		"with spaces": "v4",
-	}
-	tmux := &captureTmux{}
-
-	if _, err := Launch(s, tmux, r, cfg); err != nil {
-		t.Fatalf("Launch: %v", err)
-	}
-
+	envs := e.onlyCreate().Envs
 	wantEnv := map[string]string{
 		"AGENT_DIRECTOR_LABEL_MY_KEY":      "v1",
 		"AGENT_DIRECTOR_LABEL_X_Y_Z":       "v2",
@@ -271,160 +240,64 @@ func TestLaunchEmitsEnvForNonAlphanumericLabelKey(t *testing.T) {
 		"AGENT_DIRECTOR_LABEL_WITH_SPACES": "v4",
 	}
 	for k, v := range wantEnv {
-		if tmux.got.envs[k] != v {
-			t.Errorf("env %s = %q; want %q", k, tmux.got.envs[k], v)
+		if envs[k] != v {
+			t.Errorf("env %s = %q; want %q", k, envs[k], v)
 		}
 	}
-
-	// DB column preserves the verbatim keys, not the normalized ones.
-	row, err := s.GetSpawn("id-label-norm")
-	if err != nil {
-		t.Fatalf("GetSpawn: %v", err)
-	}
-	for k, v := range r.AgentDirectorLabels {
-		if row.Labels[k] != v {
-			t.Errorf("labels[%q] = %q; want %q", k, row.Labels[k], v)
-		}
+	if got := e.row(id).Labels; !reflect.DeepEqual(got, e.r.AgentDirectorLabels) {
+		t.Errorf("row labels = %v; want %v", got, e.r.AgentDirectorLabels)
 	}
 }
 
-// TestLaunchParentIDNullWhenEnvUnset pins SRD §7.5: a Spawn launched
-// from a plain shell (with no AGENT_DIRECTOR_INSTANCE_ID set) has a
-// NULL parent_id. The store materializes NULL as the empty string in
-// the Go struct; the test asserts that contract.
-func TestLaunchParentIDNullWhenEnvUnset(t *testing.T) {
-	withStubExe(t, "/bin/agent-director")
-	t.Setenv(envInstanceID, "")
-
-	s, r, cfg := newStoreAndLaunchInputs(t)
-	r.ClaudeInstanceID = "id-no-parent"
-	r.TmuxSessionName = "cd-no-parent"
-	if _, err := Launch(s, &captureTmux{}, r, cfg); err != nil {
-		t.Fatalf("Launch: %v", err)
-	}
-
-	row, err := s.GetSpawn("id-no-parent")
-	if err != nil {
-		t.Fatalf("GetSpawn: %v", err)
-	}
-	if row.ParentID != "" {
-		t.Errorf("ParentID = %q; want \"\" (NULL in DB)", row.ParentID)
+// TestLaunchParentID pins SRD §7.5: parent_id is NULL with no caller
+// AGENT_DIRECTOR_INSTANCE_ID and the caller's id when set.
+func TestLaunchParentID(t *testing.T) {
+	for _, parent := range []string{"", "id-the-parent"} {
+		t.Run("parent="+parent, func(t *testing.T) {
+			e := newLaunchEnv(t)
+			if parent != "" {
+				seedParent(t, e.s, parent)
+				t.Setenv(envInstanceID, parent)
+			}
+			if got := e.row(e.mustLaunch()).ParentID; got != parent {
+				t.Errorf("ParentID = %q; want %q", got, parent)
+			}
+		})
 	}
 }
 
-// TestLaunchParentIDInheritsCallerEnv pins SRD §7.5: when the spawning
-// process has AGENT_DIRECTOR_INSTANCE_ID set, that value lands in the
-// new row's parent_id.
-func TestLaunchParentIDInheritsCallerEnv(t *testing.T) {
-	withStubExe(t, "/bin/agent-director")
-	t.Setenv(envInstanceID, "id-the-parent")
-
-	s, r, cfg := newStoreAndLaunchInputs(t)
-	r.ClaudeInstanceID = "id-the-child"
-	r.TmuxSessionName = "cd-the-child"
-
-	// Pre-seed the parent row so the FK constraint is satisfied —
-	// production code relies on parent already existing when its env
-	// var is set.
-	parent := store.Spawn{
-		ClaudeInstanceID: "id-the-parent",
-		CWD:              "/tmp",
-		TmuxSessionName:  "cd-the-parent",
-		RelayMode:        "off",
-	}
-	if err := s.InsertPending(parent); err != nil {
+// seedParent inserts a parent row so a child's parent_id FK is satisfied.
+func seedParent(t *testing.T, s *store.Store, id string) {
+	t.Helper()
+	if err := s.InsertPending(store.Spawn{ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-" + id, RelayMode: "off"}); err != nil {
 		t.Fatalf("seed parent: %v", err)
 	}
-
-	if _, err := Launch(s, &captureTmux{}, r, cfg); err != nil {
-		t.Fatalf("Launch: %v", err)
-	}
-
-	row, err := s.GetSpawn("id-the-child")
-	if err != nil {
-		t.Fatalf("GetSpawn: %v", err)
-	}
-	if row.ParentID != "id-the-parent" {
-		t.Errorf("ParentID = %q; want id-the-parent", row.ParentID)
-	}
 }
 
-// TestLaunchParentDeleteCascadesToChild pins the schema's
-// `parent_id ... ON DELETE SET NULL` clause. When the parent row is
-// removed (Epic 8's delete verb will be the production trigger), the
-// child's parent_id flips to NULL — orphans are not surfaced as a
-// foreign-key constraint failure to callers.
+// TestLaunchParentDeleteCascadesToChild pins `parent_id ... ON DELETE SET
+// NULL`: deleting the parent leaves the child with a NULL parent_id.
 func TestLaunchParentDeleteCascadesToChild(t *testing.T) {
-	withStubExe(t, "/bin/agent-director")
+	e := newLaunchEnv(t)
+	seedParent(t, e.s, "id-cascade-parent")
 	t.Setenv(envInstanceID, "id-cascade-parent")
-
-	dbPath := filepath.Join(t.TempDir(), "state.db")
-	s, err := store.OpenOrInit(dbPath)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
-	// Pre-seed parent so FK on child INSERT is satisfied.
-	parent := store.Spawn{
-		ClaudeInstanceID: "id-cascade-parent",
-		CWD:              "/tmp",
-		TmuxSessionName:  "cd-cp",
-		RelayMode:        "off",
-	}
-	if err := s.InsertPending(parent); err != nil {
-		t.Fatalf("seed parent: %v", err)
+	id := e.mustLaunch()
+	if got := e.row(id).ParentID; got != "id-cascade-parent" {
+		t.Fatalf("precondition: ParentID = %q; want id-cascade-parent", got)
 	}
 
-	r := Resolved{SpawnParams: SpawnParams{
-		CWD:              t.TempDir(),
-		ClaudeInstanceID: "id-cascade-child",
-		TmuxSessionName:  "cd-cc",
-		RelayMode:        "off",
-	}}
-	if _, err := Launch(s, &captureTmux{}, r, config.Default()); err != nil {
-		t.Fatalf("Launch child: %v", err)
-	}
-
-	// Sanity check the precondition: child's parent_id is the parent.
-	row, err := s.GetSpawn("id-cascade-child")
-	if err != nil {
-		t.Fatalf("GetSpawn child: %v", err)
-	}
-	if row.ParentID != "id-cascade-parent" {
-		t.Fatalf("precondition: ParentID = %q; want id-cascade-parent", row.ParentID)
-	}
-
-	// Delete the parent via a parallel sql.DB connection — no DeleteSpawn
-	// primitive exists yet (Epic 8). PRAGMA foreign_keys = ON must be set
-	// on the new connection too; the store does it on open, but a fresh
-	// raw conn defaults to off.
-	raw := openRawForRead(t, dbPath)
+	// No store primitive deletes a row, so a raw connection (foreign keys on) does.
+	raw := openRawForRead(t, e.dbPath)
 	defer raw.Close()
-	if _, err := raw.Exec(`PRAGMA foreign_keys = ON`); err != nil {
-		t.Fatalf("enable FK: %v", err)
-	}
-	if _, err := raw.Exec(`DELETE FROM spawns WHERE claude_instance_id = ?`,
-		"id-cascade-parent"); err != nil {
+	if _, err := raw.Exec(`DELETE FROM spawns WHERE claude_instance_id = ?`, "id-cascade-parent"); err != nil {
 		t.Fatalf("delete parent: %v", err)
 	}
-
-	// Re-read child via the store. ParentID should now be empty (NULL).
-	row, err = s.GetSpawn("id-cascade-child")
-	if err != nil {
-		t.Fatalf("GetSpawn child after parent delete: %v", err)
-	}
-	if row.ParentID != "" {
-		t.Errorf("ParentID after parent delete = %q; want \"\" (NULL via ON DELETE SET NULL)",
-			row.ParentID)
+	if got := e.row(id).ParentID; got != "" {
+		t.Errorf("ParentID after parent delete = %q; want \"\" (ON DELETE SET NULL)", got)
 	}
 }
 
-// openRawForRead returns a *sql.DB pointed at the same SQLite file the
-// store uses, with foreign-key enforcement enabled. Used by the small
-// number of tests that need to drop into raw SQL (e.g. verifying the
-// labels column byte shape or driving a DELETE that no store primitive
-// exposes yet).
+// openRawForRead opens the store's SQLite file with foreign keys enforced,
+// for the byte-shape and delete checks no store primitive exposes.
 func openRawForRead(t *testing.T, dbPath string) *sql.DB {
 	t.Helper()
 	db, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=foreign_keys(1)")
@@ -434,185 +307,76 @@ func openRawForRead(t *testing.T, dbPath string) *sql.DB {
 	return db
 }
 
-// contains is a tiny strings.Contains alias to keep the JSON-shape
-// asserts readable.
-func contains(haystack, needle string) bool {
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return true
-		}
-	}
-	return false
-}
+// TestLaunchPreTrust pins b.f75: Launch trusts the cwd in ~/.claude.json
+// unless NoPreTrust, and still creates the session either way.
+func TestLaunchPreTrust(t *testing.T) {
+	for _, noPreTrust := range []bool{false, true} {
+		t.Run(fmt.Sprintf("NoPreTrust=%v", noPreTrust), func(t *testing.T) {
+			e := newLaunchEnv(t)
+			stub := withStubClaudeJSON(t)
+			if err := os.WriteFile(stub, []byte(`{"projects":{}}`), 0o600); err != nil {
+				t.Fatalf("seed claude.json: %v", err)
+			}
+			e.r.NoPreTrust = noPreTrust
+			e.mustLaunch()
+			e.onlyCreate()
 
-// TestLaunchPreTrustsCwdByDefault pins the b.f75 fix at the Launch
-// integration boundary: with NoPreTrust=false (the default), Launch
-// writes hasTrustDialogAccepted=true into ~/.claude.json for the
-// resolved cwd before exec'ing tmux.
-func TestLaunchPreTrustsCwdByDefault(t *testing.T) {
-	withStubExe(t, "/bin/agent-director")
-	t.Setenv(envInstanceID, "")
-	stub := withStubClaudeJSON(t)
-	// Seed an empty projects map so preTrustCwd has a file to read+rewrite.
-	if err := os.WriteFile(stub, []byte(`{"projects":{}}`), 0o600); err != nil {
-		t.Fatalf("seed claude.json: %v", err)
-	}
-
-	s, r, cfg := newStoreAndLaunchInputs(t)
-	if _, err := Launch(s, &captureTmux{}, r, cfg); err != nil {
-		t.Fatalf("Launch: %v", err)
-	}
-
-	got := readClaudeJSON(t, stub)
-	projects, ok := got["projects"].(map[string]any)
-	if !ok {
-		t.Fatalf("projects missing: %T", got["projects"])
-	}
-	entry, ok := projects[r.CWD].(map[string]any)
-	if !ok {
-		t.Fatalf("projects[%q] missing after Launch", r.CWD)
-	}
-	if b, _ := entry["hasTrustDialogAccepted"].(bool); !b {
-		t.Errorf("hasTrustDialogAccepted = %v; want true", entry["hasTrustDialogAccepted"])
+			projects, _ := readClaudeJSON(t, stub)["projects"].(map[string]any)
+			entry, present := projects[e.r.CWD].(map[string]any)
+			if noPreTrust {
+				if present {
+					t.Errorf("projects[%q] was written despite NoPreTrust", e.r.CWD)
+				}
+				return
+			}
+			if b, _ := entry["hasTrustDialogAccepted"].(bool); !b {
+				t.Errorf("projects[%q] = %v; want hasTrustDialogAccepted true", e.r.CWD, entry)
+			}
+		})
 	}
 }
 
-// TestLaunchNoPreTrustFlagSkipsWrite pins AC #2: --no-pre-trust
-// (NoPreTrust=true) opts out of the ~/.claude.json write entirely.
-func TestLaunchNoPreTrustFlagSkipsWrite(t *testing.T) {
-	withStubExe(t, "/bin/agent-director")
-	t.Setenv(envInstanceID, "")
-	stub := withStubClaudeJSON(t)
-	if err := os.WriteFile(stub, []byte(`{"projects":{}}`), 0o600); err != nil {
-		t.Fatalf("seed claude.json: %v", err)
-	}
-
-	s, r, cfg := newStoreAndLaunchInputs(t)
-	r.NoPreTrust = true
-	if _, err := Launch(s, &captureTmux{}, r, cfg); err != nil {
-		t.Fatalf("Launch: %v", err)
-	}
-
-	got := readClaudeJSON(t, stub)
-	projects, _ := got["projects"].(map[string]any)
-	if _, present := projects[r.CWD]; present {
-		t.Errorf("projects[%q] was written despite NoPreTrust=true", r.CWD)
-	}
-}
-
-// TestLaunchMissingClaudeJSONDoesNotBlockSpawn pins AC #5: when
-// ~/.claude.json doesn't exist (truly-fresh-machine case), Launch
-// still proceeds to insert the row and start the tmux session — the
-// soft warning lands in preTrustWarn but the spawn is not blocked.
+// TestLaunchMissingClaudeJSONDoesNotBlockSpawn: with no ~/.claude.json the
+// pre-trust warns and the session is still created.
 func TestLaunchMissingClaudeJSONDoesNotBlockSpawn(t *testing.T) {
-	withStubExe(t, "/bin/agent-director")
-	t.Setenv(envInstanceID, "")
-	// Stub points at a path we never create — preTrustCwd will surface
-	// ErrClaudeJSONMissing, and Launch should swallow it.
-	withStubClaudeJSON(t)
-
-	// Redirect the warn writer so the test's stderr stays clean and we
-	// can assert the warning text.
-	var warn captureWriter
+	e := newLaunchEnv(t)
+	withStubClaudeJSON(t) // a path that is never created
+	var warn bytes.Buffer
 	saved := preTrustWarn
 	preTrustWarn = &warn
 	t.Cleanup(func() { preTrustWarn = saved })
 
-	s, r, cfg := newStoreAndLaunchInputs(t)
-	tmux := &captureTmux{}
-	if _, err := Launch(s, tmux, r, cfg); err != nil {
-		t.Fatalf("Launch should succeed despite missing claude.json: %v", err)
-	}
-	if !tmux.got.called {
-		t.Errorf("tmux.NewSession not called; pre-trust failure should not block the spawn")
-	}
-	if warn.buf == "" {
-		t.Errorf("expected a warning written to preTrustWarn; got empty")
+	e.mustLaunch()
+	e.onlyCreate()
+	if warn.Len() == 0 {
+		t.Errorf("expected a pre-trust warning; got none")
 	}
 }
 
-// captureWriter is an io.Writer that records writes as a string.
-type captureWriter struct{ buf string }
-
-func (c *captureWriter) Write(p []byte) (int, error) {
-	c.buf += string(p)
-	return len(p), nil
-}
-
-// TestLaunchPassesUserSuppliedTmuxSessionName pins SR-4.1 + SR-3.1: a
-// caller-supplied TmuxSessionName flows verbatim into
-// TmuxClient.NewSession and into the persisted spawns row — no
-// sanitization, no suffix.
+// TestLaunchPassesUserSuppliedTmuxSessionName pins SR-4.1/SR-3.1: a
+// caller-supplied name reaches the create and the row verbatim.
 func TestLaunchPassesUserSuppliedTmuxSessionName(t *testing.T) {
-	withStubExe(t, "/bin/agent-director")
-	t.Setenv(envInstanceID, "")
-	s, r, cfg := newStoreAndLaunchInputs(t)
-	r.ClaudeInstanceID = "id-user-name"
-	r.TmuxSessionName = "bot-claude-status"
-	r.TmuxSessionNameSupplied = true
-	tmux := &captureTmux{}
-
-	if _, err := Launch(s, tmux, r, cfg); err != nil {
-		t.Fatalf("Launch: %v", err)
+	e := newLaunchEnv(t)
+	e.r.TmuxSessionName, e.r.TmuxSessionNameSupplied = "bot-claude-status", true
+	id := e.mustLaunch()
+	if got := e.onlyCreate().Target; got != "bot-claude-status" {
+		t.Errorf("create name = %q; want bot-claude-status (verbatim)", got)
 	}
-	if tmux.got.name != "bot-claude-status" {
-		t.Errorf("tmux.NewSession name = %q; want bot-claude-status (verbatim, no decoration)", tmux.got.name)
-	}
-	row, err := s.GetSpawn("id-user-name")
-	if err != nil {
-		t.Fatalf("GetSpawn: %v", err)
-	}
-	if row.TmuxSessionName != "bot-claude-status" {
-		t.Errorf("row.TmuxSessionName = %q; want bot-claude-status", row.TmuxSessionName)
+	if got := e.row(id).TmuxSessionName; got != "bot-claude-status" {
+		t.Errorf("row.TmuxSessionName = %q; want bot-claude-status", got)
 	}
 }
 
-// TestLaunchSurfacesTmuxNewSessionFailureUnchanged pins SR-2.4 + SR-4.1:
-// a NewSession failure (incl. tmux's own live-name-collision refusal)
-// wraps through unchanged — no ErrTmuxSessionNameTaken, no new spawn
-// state. The pending row is left for find-missing.
-func TestLaunchSurfacesTmuxNewSessionFailureUnchanged(t *testing.T) {
-	withStubExe(t, "/bin/agent-director")
-	t.Setenv(envInstanceID, "")
-	s, r, cfg := newStoreAndLaunchInputs(t)
-	r.ClaudeInstanceID = "id-collide"
-	r.TmuxSessionName = "bot-claude-status"
-	r.TmuxSessionNameSupplied = true
-	tmux := &captureTmux{failOnSessionName: "bot-claude-status"}
-
-	_, err := Launch(s, tmux, r, cfg)
-	if err == nil {
-		t.Fatal("expected Launch to surface NewSession failure")
-	}
-	// No typed sentinel: the wrapped tmux error must surface as-is.
-	if errors.Is(err, ErrTmuxSessionNameEmpty) ||
-		errors.Is(err, ErrTmuxSessionNameInvalid) ||
-		errors.Is(err, ErrTmuxSessionNameTooLong) {
-		t.Errorf("collision must not be classified as a name-validation sentinel: %v", err)
-	}
-	row, getErr := s.GetSpawn("id-collide")
-	if getErr != nil {
-		t.Fatalf("GetSpawn: %v", getErr)
-	}
-	if row.State != store.StatePending {
-		t.Errorf("State after NewSession failure = %q; want pending (find-missing reconciles)", row.State)
-	}
-}
-
+// TestLaunchSecondInsertSurfacesCollision: a second Launch of the same id
+// collides at the insert and makes no create call.
 func TestLaunchSecondInsertSurfacesCollision(t *testing.T) {
-	withStubExe(t, "/bin/agent-director")
-	t.Setenv(envInstanceID, "") // ensure no parent leakage from the host shell
-	s, r, cfg := newStoreAndLaunchInputs(t)
-	tmux := &captureTmux{}
-	if _, err := Launch(s, tmux, r, cfg); err != nil {
-		t.Fatalf("first Launch: %v", err)
-	}
-	tmux2 := &captureTmux{}
-	_, err := Launch(s, tmux2, r, cfg)
-	if !errors.Is(err, ErrInstanceIdCollision) {
+	e := newLaunchEnv(t)
+	e.mustLaunch()
+	e.rec.Reset()
+	if _, err := e.launch(); !errors.Is(err, ErrInstanceIdCollision) {
 		t.Fatalf("second Launch err = %v; want ErrInstanceIdCollision", err)
 	}
-	if tmux2.got.called {
-		t.Error("tmux.NewSession should not be called on collision")
+	if calls := e.rec.SocketCalls(); len(calls) != 0 {
+		t.Errorf("tmux calls after collision = %+v; want none", calls)
 	}
 }

@@ -5,61 +5,88 @@ package api_test
 // ErrInvalidFlags and leave no row and no tmux session; empty and printable
 // ids still spawn; existing control-character rows stay listable. It also
 // covers the collision pre-check (SR-9.3, AC-SPN-03): a failed store read is
-// ErrInternal, while a live row is still ErrInstanceIdCollision.
+// ErrInternal, while a live row is still ErrInstanceIdCollision. It holds the
+// shared spawn fixture; the recorded launch is in spawn_launch_test.go.
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 )
 
-// controlIDPhrase is the description every rejected control-character id carries.
-const controlIDPhrase = "the instance id contains a control character"
-
-// spawnEnv is an isolated Client wired to a tmuxfix.Recorder, plus its paths.
+// spawnEnv is an isolated Client wired to a tmuxfix.Recorder (nil with
+// fake-tmux), its start-time reader, clock, captured log, paths and socket.
 type spawnEnv struct {
 	c      *api.Client
 	rec    *tmuxfix.Recorder
+	pc     *procfix.Checker
+	clock  *tmuxfix.Clock
+	logs   *bytes.Buffer
 	dbPath string
 	home   string
+	socket string // the socket a launch resolves with TMUX unset
 }
 
-// newSpawnEnv builds a Client over a fresh store and empty config under a
-// temp HOME (spawn pre-trusts under HOME), with a Recorder as its tmux client.
-func newSpawnEnv(t *testing.T) spawnEnv {
+// newSpawnEnv builds a spawnEnv over a fresh store and empty config under a
+// temp HOME and a per-test TMUX_TMPDIR, with a Recorder as its tmux client.
+func newSpawnEnv(t *testing.T) spawnEnv { return buildSpawnEnv(t, "") }
+
+// buildSpawnEnv is newSpawnEnv; a non-empty tmuxCommand wires the production
+// client running that binary instead of a Recorder.
+func buildSpawnEnv(t *testing.T, tmuxCommand string) spawnEnv {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	dbPath := filepath.Join(home, "state.db")
+	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "") // no parent id from the host shell
+	tmpdir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	t.Setenv("TMUX_TMPDIR", tmpdir)
+	t.Setenv("TMUX", "")
+	os.Unsetenv("TMUX")
+	env := spawnEnv{dbPath: filepath.Join(home, "state.db"), home: home, logs: &bytes.Buffer{},
+		pc: procfix.New(), clock: tmuxfix.NewClock(time.Date(2026, 9, 29, 12, 0, 0, 123_000_000, time.UTC)),
+		socket: filepath.Join(userSocketDir(tmpdir), "default")}
 	cfgPath := filepath.Join(home, "config.toml")
 	if err := os.WriteFile(cfgPath, []byte(""), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
-	rec := tmuxfix.NewRecorder()
-	c, err := api.New(api.Options{
-		StorePath:       dbPath,
-		ConfigPath:      cfgPath,
-		CreateIfMissing: true,
-		TmuxClient:      rec,
-	})
-	if err != nil {
+	opts := api.Options{StorePath: env.dbPath, ConfigPath: cfgPath, CreateIfMissing: true,
+		Logger: log.New(env.logs, "", 0), TmuxCommand: tmuxCommand}
+	if tmuxCommand == "" {
+		env.rec = tmuxfix.NewRecorder()
+		opts.TmuxClient = env.rec
+	}
+	if env.c, err = api.New(opts); err != nil {
 		t.Fatalf("api.New: %v", err)
 	}
-	t.Cleanup(func() { _ = c.Close() })
-	return spawnEnv{c: c, rec: rec, dbPath: dbPath, home: home}
+	t.Cleanup(func() { _ = env.c.Close() })
+	api.SetClockForTest(env.c, env.clock.Now)
+	api.SetProcCheckerForTest(env.c, env.pc)
+	return env
+}
+
+// userSocketDir is tmux's per-user socket directory under base.
+func userSocketDir(base string) string {
+	return filepath.Join(base, fmt.Sprintf("tmux-%d", os.Getuid()))
 }
 
 // assertNoTmuxCalls fails when the Recorder saw any name-based or socket call.
@@ -85,19 +112,13 @@ func listIDs(t *testing.T, c *api.Client) []string {
 }
 
 // assertInvalidFlags checks err is ErrInvalidFlags with the control-character
-// phrase and without the id or its printable marker in the description.
+// description case, without the id or its printable marker.
 func assertInvalidFlags(t *testing.T, err error, id, marker string) {
 	t.Helper()
 	if !errors.Is(err, api.ErrInvalidFlags) {
 		t.Fatalf("Spawn err = %v; want ErrInvalidFlags", err)
 	}
-	msg := err.Error()
-	if !strings.Contains(msg, controlIDPhrase) {
-		t.Errorf("description %q lacks %q", msg, controlIDPhrase)
-	}
-	if strings.Contains(msg, id) || strings.Contains(msg, marker) {
-		t.Errorf("description %q quotes the id", msg)
-	}
+	apitest.AssertDescription(t, err.Error(), apitest.DescInstanceIDControlChar(id), marker)
 }
 
 // TestSpawnRejectsControlCharacterInstanceID: every byte 0x00-0x1f or 0x7f,
@@ -204,8 +225,8 @@ func TestSpawnAcceptsEmptyAndPrintableInstanceID(t *testing.T) {
 			} else if got != tc.id {
 				t.Errorf("ClaudeInstanceID = %q; want %q", got, tc.id)
 			}
-			if n := len(env.rec.CallsOfKind(tmuxfix.CallNewSession)); n != 1 {
-				t.Errorf("NewSession calls = %d; want 1", n)
+			if n := len(env.rec.SocketCallsOf(tmux.CallCreate)); n != 1 {
+				t.Errorf("create calls = %d; want 1", n)
 			}
 			if ids := listIDs(t, env.c); len(ids) != 1 || ids[0] != got {
 				t.Errorf("List ids = %q; want [%q]", ids, got)
@@ -227,13 +248,10 @@ func TestSpawnControlCharacterRowStillListed(t *testing.T) {
 	}
 }
 
-// preCheckPhrase is the description every failed pre-check store read carries.
-const preCheckPhrase = "the collision pre-check could not read the store"
-
 // failingCollisionReader is a spawn.CollisionChecker whose store read fails.
 type failingCollisionReader struct{ err error }
 
-func (f failingCollisionReader) LiveSpawnExists(string) (bool, error) { return false, f.err }
+func (f failingCollisionReader) SpawnState(string) (string, bool, error) { return "", false, f.err }
 
 // TestSpawnPreCheckReadFailureIsErrInternal: a failed pre-check read is
 // ErrInternal (even when the store error wraps a sentinel) and creates nothing.
@@ -271,9 +289,7 @@ func TestSpawnPreCheckReadFailureIsErrInternal(t *testing.T) {
 			if name != "ErrInternal" {
 				t.Errorf("Classify name = %q; want ErrInternal", name)
 			}
-			if !strings.Contains(desc, preCheckPhrase) {
-				t.Errorf("description %q lacks %q", desc, preCheckPhrase)
-			}
+			apitest.AssertDescription(t, desc, apitest.DescPreCheckRead())
 			assertNoTmuxCalls(t, env.rec)
 			if ids := listIDs(t, env.c); len(ids) != 0 {
 				t.Errorf("List ids = %q; want none", ids)

@@ -52,6 +52,14 @@ const (
 	// spawn's end write after "duplicate session", and SeedSpawn of a
 	// finished row (install after seeding).
 	ReuseRestore Kind = 4
+	// LaunchIdentityWrite fails the launch identity write
+	// (store.RecordLaunchIdentity, SR-3.6): an update of the id's spawns row
+	// whose SET names the server and pane identity columns and leaves state
+	// unchanged. It fires whether or not the values differ, and never on the
+	// insert, a hook write or any other kind's write. Also matched: SeedSpawn's
+	// option and default update (install after seeding). Later adoption writes
+	// (SR-3.6) have the same shape and would also match.
+	LaunchIdentityWrite Kind = 5
 )
 
 // String names the kind, for test failure messages.
@@ -65,6 +73,8 @@ func (k Kind) String() string {
 		return "reuse permission-request deletion"
 	case ReuseRestore:
 		return "reuse restore"
+	case LaunchIdentityWrite:
+		return "launch identity write"
 	default:
 		return fmt.Sprintf("writefailfix.Kind(%d)", int(k))
 	}
@@ -72,7 +82,7 @@ func (k Kind) String() string {
 
 // Kinds lists every kind, for table-driven tests.
 func Kinds() []Kind {
-	return []Kind{ReuseArchive, ReuseReset, ReusePermissionDelete, ReuseRestore}
+	return []Kind{ReuseArchive, ReuseReset, ReusePermissionDelete, ReuseRestore, LaunchIdentityWrite}
 }
 
 // createTargetsTable creates the bookkeeping table: one row per installed
@@ -151,6 +161,23 @@ END`,
                   WHERE kind = 4 AND claude_instance_id = OLD.claude_instance_id)
 BEGIN
     SELECT RAISE(ABORT, 'injected write failure: reuse restore');
+END`,
+		},
+	},
+	// UPDATE OF fires when the statement's SET names any listed column, so a
+	// write of the same values still fails. NEW.state IS OLD.state excludes
+	// the writes that begin a launch or restore one, which change the state.
+	LaunchIdentityWrite: {
+		{
+			name: "ad_test_fail_launch_identity_write",
+			create: `CREATE TRIGGER IF NOT EXISTS ad_test_fail_launch_identity_write
+    BEFORE UPDATE OF tmux_server_pid, tmux_server_started, tmux_server_starttime,
+                     pane_id, pane_pid, pane_starttime ON spawns
+    WHEN NEW.state IS OLD.state
+     AND EXISTS (SELECT 1 FROM ad_test_write_failure
+                  WHERE kind = 5 AND claude_instance_id = OLD.claude_instance_id)
+BEGIN
+    SELECT RAISE(ABORT, 'injected write failure: launch identity write');
 END`,
 		},
 	},

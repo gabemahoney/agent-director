@@ -80,6 +80,16 @@
     "description": ""
   },
   {
+    "name": "ErrTmuxUnresponsive",
+    "package": "tmux",
+    "description": ""
+  },
+  {
+    "name": "ErrTmuxSessionConflict",
+    "package": "tmux",
+    "description": ""
+  },
+  {
     "name": "ErrSpawnNotInteractive",
     "package": "api",
     "description": ""

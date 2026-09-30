@@ -98,7 +98,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "spawn",
-		Description: "Launch a tracked Claude Code instance inside a new tmux session. Fire-and-forget: returns the claude_instance_id; state moves from pending to waiting on the first SessionStart hook. When an explicit claude_instance_id is supplied and the collision pre-check cannot read the store, spawn returns ErrInternal and creates nothing; this is a store fault and says nothing about whether the id is in use.",
+		Description: "Launch a tracked Claude Code instance inside a new tmux session. Returns the claude_instance_id without waiting for the agent; state moves from pending to waiting on the first SessionStart hook. The session is labelled for this launch when it is created, and the session-creating call is bounded by the create timeout. If it times out, spawn returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may have been created and the new row stays pending; do not retry until get shows the row ended or missing, since a retried spawn without an explicit id would start a second agent. With an explicit claude_instance_id that has no row, spawn first looks for a tmux session of this agent-director store still labelled with that id; one left over from an earlier life refuses the spawn with ErrTmuxSessionConflict (CONFLICT: permanent until a human looks; see the README's \"Operator actions\"), and nothing is written. ErrTmuxNotAvailable is ENVIRONMENT and ErrTmuxSessionCreate a LAUNCH FAILURE. When an explicit claude_instance_id is supplied and the collision pre-check cannot read the store, spawn returns ErrInternal and creates nothing; this is a store fault and says nothing about whether the id is in use.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -236,6 +236,8 @@ var Verbs = []VerbDef{
 			"ErrTmuxSessionNameTooLong",
 			"ErrTmuxNotAvailable",
 			"ErrTmuxSessionCreate",
+			"ErrTmuxUnresponsive",
+			"ErrTmuxSessionConflict",
 			"ErrTemplateNotFound",
 			"ErrTemplateMalformed",
 			"ErrTemplateNameUnsafe",

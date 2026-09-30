@@ -25,6 +25,8 @@ type rowVersionCase struct {
 	clears  bool                                      // the write sets a state other than pending
 	// wantState is the state after the write, confirming the branch ran; "" skips it.
 	wantState string
+	// identity is the server and pane identity the write stores; nil keeps it.
+	identity *store.LaunchIdentity
 }
 
 // rowVersionSeed sets every column no write may touch, and the launch start,
@@ -49,28 +51,41 @@ func seedCase(t *testing.T, f *v5Store, c rowVersionCase) string {
 }
 
 // stableColumns are the columns no write in this release may change (SR-5.2).
+// The six identity columns (identityColumns) are stable too, except for
+// RecordLaunchIdentity, which writes them.
 func stableColumns(c apitest.SpawnColumns) map[string]any {
 	return map[string]any{
 		"life_number": c.LifeNumber, "no_pre_trust": c.NoPreTrust,
 		"launch_token": c.LaunchToken, "tmux_socket": c.TmuxSocket,
-		"tmux_server_pid": c.TmuxServerPID, "tmux_server_started": c.TmuxServerStarted,
-		"tmux_server_starttime": c.TmuxServerStarttime, "pane_id": c.PaneID,
-		"pane_pid": c.PanePID, "pane_starttime": c.PaneStarttime,
 	}
 }
 
-// assertVersionedWrite checks the SR-5.2 rules between two reads of one row.
-func assertVersionedWrite(t *testing.T, before, after apitest.SpawnColumns, clears bool) {
+// assertColumns fails unless after holds want's values; before must be non-default.
+func assertColumns(t *testing.T, before, after, want map[string]any) {
 	t.Helper()
-	b, a := stableColumns(before), stableColumns(after)
-	for col, v := range b {
+	for col, v := range before {
 		if v == nil || v == int64(0) {
-			t.Fatalf("seed left %s at a default (%#v); the unchanged check would be vacuous", col, v)
+			t.Fatalf("seed left %s at a default (%#v); the column check would be vacuous", col, v)
 		}
-		if !reflect.DeepEqual(a[col], v) {
-			t.Errorf("%s changed: %#v -> %#v", col, v, a[col])
+		if !reflect.DeepEqual(after[col], want[col]) {
+			t.Errorf("%s: %#v -> %#v, want %#v", col, v, after[col], want[col])
 		}
 	}
+}
+
+// assertVersionedWrite checks the SR-5.2 rules between two reads of one row:
+// stable columns kept, identity columns kept or as c.identity stores them.
+func assertVersionedWrite(t *testing.T, before, after apitest.SpawnColumns, c rowVersionCase) {
+	t.Helper()
+	assertColumns(t, stableColumns(before), stableColumns(after), stableColumns(before))
+	wantID := identityColumns(before)
+	if c.identity != nil {
+		wantID = wantIdentityColumns(*c.identity)
+		if reflect.DeepEqual(wantID, identityColumns(before)) {
+			t.Fatal("seeded identity equals the written one; the write check would be vacuous")
+		}
+	}
+	assertColumns(t, identityColumns(before), identityColumns(after), wantID)
 	bv, bok := before.RowVersion.(int64)
 	av, aok := after.RowVersion.(int64)
 	if !bok || !aok || av != bv+1 {
@@ -80,9 +95,9 @@ func assertVersionedWrite(t *testing.T, before, after apitest.SpawnColumns, clea
 		t.Fatal("seed left launch_started_at NULL; the launch-start check would be vacuous")
 	}
 	switch {
-	case clears && after.LaunchStartedAt != nil:
+	case c.clears && after.LaunchStartedAt != nil:
 		t.Errorf("launch_started_at = %#v, want NULL after a non-pending state write", after.LaunchStartedAt)
-	case !clears && !reflect.DeepEqual(after.LaunchStartedAt, before.LaunchStartedAt):
+	case !c.clears && !reflect.DeepEqual(after.LaunchStartedAt, before.LaunchStartedAt):
 		t.Errorf("launch_started_at %#v -> %#v, want unchanged", before.LaunchStartedAt, after.LaunchStartedAt)
 	}
 }
@@ -140,6 +155,17 @@ func sessionStart(session, path string, present bool) func(*testing.T, *v5Store,
 	return func(t *testing.T, f *v5Store, id string) {
 		if err := f.s.RecordSessionStartIdentity(id, session, path, present, 4242, apitest.LinuxProcStarttime); err != nil {
 			t.Fatalf("RecordSessionStartIdentity: %v", err)
+		}
+	}
+}
+
+// recordLaunch returns a RecordLaunchIdentity write of createdIdentity with the
+// seeded token at the row's version minus stale, expecting want.
+func recordLaunch(stale int64, want store.CondResult) func(*testing.T, *v5Store, string) {
+	return func(t *testing.T, f *v5Store, id string) {
+		v := f.rawColumns(id).RowVersion.(int64) - stale
+		if got, err := f.s.RecordLaunchIdentity(id, v, goodToken, createdIdentity()); err != nil || got != want {
+			t.Fatalf("RecordLaunchIdentity(version %d) = %v, %v; want %v, nil", v, got, err, want)
 		}
 	}
 }
@@ -214,7 +240,10 @@ func rowVersionWrites() []rowVersionCase {
 	} {
 		cases = append(cases, hookCases(h.name, h.from, h.to, h.soft, h.clears, store.UpsertUpdated)...)
 	}
+	created := createdIdentity()
 	return append(cases,
+		rowVersionCase{name: "RecordLaunchIdentity/applied", state: "pending", wantState: "pending",
+			identity: &created, write: recordLaunch(0, store.CondApplied)},
 		rowVersionCase{name: "RecordSessionStartIdentity/path present", state: "pending",
 			write: sessionStart("sess-a", "/tmp/rv/a.jsonl", true)},
 		rowVersionCase{name: "RecordSessionStartIdentity/path not on disk", state: "pending",
@@ -276,7 +305,7 @@ func TestRowVersionEveryWriteAdvancesByOne(t *testing.T) {
 			before := f.rawColumns(id)
 			c.write(t, f, id)
 			after := f.rawColumns(id)
-			assertVersionedWrite(t, before, after, c.clears)
+			assertVersionedWrite(t, before, after, c)
 			if c.wantState != "" && after.State != c.wantState {
 				t.Errorf("state = %#v, want %q (wrong branch?)", after.State, c.wantState)
 			}
@@ -285,18 +314,15 @@ func TestRowVersionEveryWriteAdvancesByOne(t *testing.T) {
 	}
 }
 
-// TestRowVersionInsertStartsAtZero checks a new row starts at version 0, no
-// launch start, life 0 and no_pre_trust 0.
+// TestRowVersionInsertStartsAtZero checks a new row starts at version 0 with
+// the launch start, token and socket given, no identity, life 0, no_pre_trust 0.
 func TestRowVersionInsertStartsAtZero(t *testing.T) {
 	f := newV5Store(t)
-	const id = "rv-insert"
-	if err := f.s.InsertPending(store.Spawn{ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "ts-" + id, RelayMode: "off"}); err != nil {
-		t.Fatalf("InsertPending: %v", err)
-	}
-	c := f.rawColumns(id)
-	got := []any{c.RowVersion, c.LaunchStartedAt, c.LifeNumber, c.NoPreTrust}
-	if want := []any{int64(0), nil, int64(0), int64(0)}; !reflect.DeepEqual(got, want) {
-		t.Errorf("row_version, launch_started_at, life_number, no_pre_trust = %#v, want %#v", got, want)
+	sp := f.insertLaunch("rv-insert", launchStart, store.LaunchIdentity{Token: goodToken, Socket: "/tmp/rv/sock"})
+	c := f.rawColumns("rv-insert")
+	assertInsertedLaunch(t, c, sp)
+	if got, want := []any{c.LifeNumber, c.NoPreTrust}, []any{int64(0), int64(0)}; !reflect.DeepEqual(got, want) {
+		t.Errorf("life_number, no_pre_trust = %#v, want %#v", got, want)
 	}
 	assertStoreIDKept(t, f)
 }
@@ -316,6 +342,13 @@ func TestRowVersionNoOpWritesChangeNothing(t *testing.T) {
 				wantBool(t, "SetLivenessUnverified", got, err, false)
 			}},
 		{name: "MarkSpawnMissing/finished row", state: "ended", write: markMissing("")},
+		{name: "RecordLaunchIdentity/stale version, hook wrote first", state: "pending",
+			setup: func(t *testing.T, f *v5Store, id string) {
+				if err := f.s.ApplyHookTransition(id, "", true, "row_version_test"); err != nil {
+					t.Fatalf("ApplyHookTransition soft refresh: %v", err)
+				}
+			},
+			write: recordLaunch(1, store.CondChanged)},
 		{name: "HealJsonlPath/path already set", state: "waiting", session: "sess-heal",
 			opts: []apitest.SpawnOption{apitest.WithJsonlPath("/tmp/rv/have.jsonl")},
 			write: func(t *testing.T, f *v5Store, id string) {

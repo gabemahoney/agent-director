@@ -32,6 +32,59 @@ func seedState(state, sessionID string) func(*testing.T, *store.Store, string, s
 	}
 }
 
+// seedLaunchPending seeds id as a fresh launch's pending row: a token and the
+// test socket, with the six server and pane identity columns NULL.
+func seedLaunchPending(t *testing.T, _ *store.Store, dbPath, id string) {
+	t.Helper()
+	launch := store.LaunchIdentity{Token: "0123456789abcdef", Socket: apitest.TestSocket}
+	if _, err := apitest.SeedSpawn(dbPath, id, store.StatePending, "", "", "", false, apitest.WithLaunchIdentity(launch)); err != nil {
+		t.Fatalf("SeedSpawn(%q, pending): %v", id, err)
+	}
+	c := observeColumns(t, nil, dbPath, id).(apitest.SpawnColumns)
+	for name, v := range identityColumns(c) {
+		if v != nil {
+			t.Fatalf("seeded %q: %s = %v, want NULL", id, name, v)
+		}
+	}
+}
+
+// recordLaunchIdentity runs the identity write with the row's current version
+// and token, as the launch that produced them would; anything but CondApplied
+// is an error.
+func recordLaunchIdentity(s *store.Store, id string) error {
+	sp, err := s.GetSpawn(id)
+	if err != nil {
+		return err
+	}
+	res, err := s.RecordLaunchIdentity(id, sp.RowVersion, sp.Identity.Token, store.LaunchIdentity{
+		ServerPID: 4101, ServerStart: 1700000000, ServerStarttime: "5101",
+		PaneID: "%41", PanePID: 4102, PaneStarttime: "5102",
+	})
+	if err == nil && res != store.CondApplied {
+		err = fmt.Errorf("RecordLaunchIdentity(%q) = %v, want CondApplied", id, res)
+	}
+	return err
+}
+
+// observeColumns returns every stored column of the spawns row, raw.
+func observeColumns(t *testing.T, _ *store.Store, dbPath, id string) any {
+	t.Helper()
+	c, err := apitest.ReadSpawnColumns(dbPath, id)
+	if err != nil {
+		t.Fatalf("ReadSpawnColumns(%q): %v", id, err)
+	}
+	return c
+}
+
+// identityColumns names the six server and pane identity columns of c.
+func identityColumns(c apitest.SpawnColumns) map[string]any {
+	return map[string]any{
+		"tmux_server_pid": c.TmuxServerPID, "tmux_server_started": c.TmuxServerStarted,
+		"tmux_server_starttime": c.TmuxServerStarttime, "pane_id": c.PaneID,
+		"pane_pid": c.PanePID, "pane_starttime": c.PaneStarttime,
+	}
+}
+
 // observeSpawn returns the whole spawns row.
 func observeSpawn(t *testing.T, s *store.Store, _, id string) any {
 	t.Helper()
@@ -93,6 +146,14 @@ var proxyWrites = []proxyWrite{
 			return s.ApplyHookTransition(id, store.StateEnded, false, "test")
 		},
 		observe: observeSpawn,
+	},
+	{
+		// The raw row: a blocked write leaves the identity columns NULL and
+		// row_version where it was.
+		kind:    storefix.WriteFailLaunchIdentity,
+		seed:    seedLaunchPending,
+		write:   recordLaunchIdentity,
+		observe: observeColumns,
 	},
 }
 

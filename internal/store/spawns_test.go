@@ -211,49 +211,39 @@ func TestGetSpawnStateNotFound(t *testing.T) {
 	}
 }
 
-func TestLiveSpawnExistsDetectsLiveRows(t *testing.T) {
-	s, _ := openTempStore(t)
-	id := "22222222-aaaa-4bbb-8ccc-000000000002"
-	if err := s.InsertPending(Spawn{
-		ClaudeInstanceID: id,
-		CWD:              "/tmp",
-		TmuxSessionName:  "cd-tmp",
-		RelayMode:        "off",
-	}); err != nil {
-		t.Fatalf("InsertPending: %v", err)
+// TestSpawnState checks the collision pre-check read (SR-9.3): no row is
+// found=false with no error, and every stored state reads back as itself.
+func TestSpawnState(t *testing.T) {
+	s := openTestStore(t)
+	if state, found, err := s.SpawnState("ss-absent"); err != nil || found || state != "" {
+		t.Fatalf("SpawnState(no row) = %q, %v, %v; want \"\", false, nil", state, found, err)
 	}
-	exists, err := s.LiveSpawnExists(id)
-	if err != nil {
-		t.Fatalf("LiveSpawnExists: %v", err)
-	}
-	if !exists {
-		t.Fatalf("LiveSpawnExists = false; want true (pending is a live state)")
+	for _, want := range []string{
+		StatePending, StateWaiting, StateWorking, StateAskUser,
+		StateCheckPermission, StateEnded, StateMissing,
+	} {
+		t.Run(want, func(t *testing.T) {
+			id := "ss-" + want
+			seedWriteFailureRow(t, s, id, want)
+			state, found, err := s.SpawnState(id)
+			if err != nil || !found || state != want {
+				t.Fatalf("SpawnState = %q, %v, %v; want %q, true, nil", state, found, err, want)
+			}
+		})
 	}
 }
 
-func TestLiveSpawnExistsIgnoresTerminalRows(t *testing.T) {
-	s, _ := openTempStore(t)
-	id := "33333333-aaaa-4bbb-8ccc-000000000003"
-	if err := s.InsertPending(Spawn{
-		ClaudeInstanceID: id, CWD: "/tmp", TmuxSessionName: "cd-tmp", RelayMode: "off",
-	}); err != nil {
-		t.Fatalf("InsertPending: %v", err)
+// TestSpawnStateReadError checks a failed read is an error, never "no row",
+// even when the row exists.
+func TestSpawnStateReadError(t *testing.T) {
+	s := openTestStore(t)
+	seedWriteFailureRow(t, s, "ss-row", StateWorking)
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
-	beforeTrail := len(readStoreTrailLines(t))
-	if err := s.ApplyHookTransition(id, StateEnded, false, "test_seed"); err != nil {
-		t.Fatalf("transition to ended: %v", err)
-	}
-	trailLines := spawnStateTransitionLines(t, beforeTrail)
-	if len(trailLines) != 1 {
-		t.Fatalf("want 1 ad.spawn.state_transition after ended transition; got %d", len(trailLines))
-	}
-	assertSpawnStateTransitionFields(t, trailLines[0], id, StatePending, StateEnded, "test_seed", false)
-	exists, err := s.LiveSpawnExists(id)
-	if err != nil {
-		t.Fatalf("LiveSpawnExists: %v", err)
-	}
-	if exists {
-		t.Fatalf("LiveSpawnExists = true for ended row; want false")
+	state, found, err := s.SpawnState("ss-row")
+	if err == nil || found || state != "" {
+		t.Fatalf("SpawnState on a closed store = %q, %v, %v; want \"\", false and an error", state, found, err)
 	}
 }
 
@@ -1153,4 +1143,3 @@ func TestRecordSessionStartIdentityClearsLiveness(t *testing.T) {
 	}
 	assertLivenessCleared(t, s, id)
 }
-

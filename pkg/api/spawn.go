@@ -2,10 +2,13 @@ package api
 
 import (
 	"fmt"
+	"log"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
 // SpawnResult is the typed return shape of Spawn. The CLI marshals this
@@ -16,6 +19,14 @@ type SpawnResult struct {
 	// Nondeterministic when SpawnParams.ClaudeInstanceID was empty — a
 	// UUID4 is minted per call.
 	ClaudeInstanceID string `json:"claude_instance_id"`
+}
+
+// spawnTmux is plain spawn's tmux surface (Appendix F.5): the create, the
+// label by id and the session kill of the create-and-label step, and the
+// label scan's one lookup. The Client's TmuxClient satisfies it.
+type spawnTmux interface {
+	spawn.LaunchTmux
+	tmux.LookupClient
 }
 
 // runSpawn is the unexported verb handler called by (c *Client).Spawn.
@@ -31,12 +42,19 @@ type SpawnResult struct {
 // through this handler, so every surface returns the same error (SR-9.1).
 //
 // collisions is the reader for the collision pre-check in ApplyDefaults; s
-// is the store Launch inserts the row into. Client.Spawn passes its own
-// store for both. They are separate so a white-box test can substitute a
-// failing reader for the pre-check alone (SR-20.2). The pre-check still
-// runs before pre-trust, the insert and every tmux call, all of which
-// happen in Launch.
-func runSpawn(s *store.Store, collisions spawn.CollisionChecker, tmuxClient spawn.TmuxClient, cfg config.Config, params spawn.SpawnParams) (SpawnResult, error) {
+// is the store Launch inserts the row into and whose id (s.StoreID()) every
+// label carries. Client.Spawn passes its own store for both. They are
+// separate so a white-box test can substitute a failing reader for the
+// pre-check alone (SR-20.2). The pre-check still runs before pre-trust, the
+// insert and every tmux call.
+//
+// A caller-supplied id whose pre-check finds no row gets the label scan
+// (scanForLeftover) next, before Launch resolves its socket, mints its token,
+// pre-trusts and inserts, so a refusal writes nothing (SR-9.3). A minted id
+// and a finished row are not scanned. pc, now and lg are the Client's
+// start-time reader, clock and logger, which Launch uses for the identity
+// write, the launch start and the identity write's WARN line.
+func runSpawn(s *store.Store, collisions spawn.CollisionChecker, t spawnTmux, pc ProcChecker, cfg config.Config, now func() time.Time, lg *log.Logger, params spawn.SpawnParams) (SpawnResult, error) {
 	if err := validateExplicitInstanceID(params.ClaudeInstanceID); err != nil {
 		return SpawnResult{}, err
 	}
@@ -47,10 +65,16 @@ func runSpawn(s *store.Store, collisions spawn.CollisionChecker, tmuxClient spaw
 	if err := spawn.Validate(&r); err != nil {
 		return SpawnResult{}, err
 	}
-	if err := spawn.ApplyDefaults(&r, cfg, collisions); err != nil {
+	idCheck, err := spawn.ApplyDefaults(&r, cfg, collisions)
+	if err != nil {
 		return SpawnResult{}, err
 	}
-	id, err := spawn.Launch(s, tmuxClient, r, cfg)
+	if idCheck == spawn.IDNoRow {
+		if err := scanForLeftover(t, pc, s.StoreID(), r.ClaudeInstanceID); err != nil {
+			return SpawnResult{}, err
+		}
+	}
+	id, err := spawn.Launch(s, t, pc, r, cfg, now, lg)
 	if err != nil {
 		return SpawnResult{}, err
 	}
@@ -74,9 +98,22 @@ func validateExplicitInstanceID(id string) error {
 }
 
 // Spawn launches a tracked Claude Code instance inside a new tmux session.
-// The call returns immediately with the claude_instance_id; the Spawn's state
-// transitions from pending to waiting when the first SessionStart hook fires.
-// Use [Client.Status] or [Client.Get] to observe progress.
+// The call returns the claude_instance_id without waiting for the agent; the
+// Spawn's state transitions from pending to waiting when the first
+// SessionStart hook fires. Use [Client.Status] or [Client.Get] to observe
+// progress. The session is labelled for this launch when it is created, and
+// the session-creating call is bounded by the create timeout. If it times
+// out, Spawn returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the
+// session may have been created and the new row stays pending; do not retry
+// until get shows the row ended or missing, since a retried spawn without an
+// explicit id would start a second agent.
+//
+// With an explicit ClaudeInstanceID that has no row, Spawn first makes one
+// tmux lookup for a session of this agent-director store still labelled with
+// that id. One left over from an earlier life refuses the spawn with
+// ErrTmuxSessionConflict (CONFLICT: permanent until a human looks; see the
+// README's "Operator actions"), and nothing is written. A minted id is not
+// looked up.
 //
 // CLI: agent-director spawn
 //
@@ -93,8 +130,23 @@ func validateExplicitInstanceID(id string) error {
 //   - ErrTmuxSessionNameEmpty: TmuxSessionName was supplied but is empty.
 //   - ErrTmuxSessionNameInvalid: TmuxSessionName contains illegal characters.
 //   - ErrTmuxSessionNameTooLong: TmuxSessionName exceeds 64 bytes.
-//   - ErrTmuxNotAvailable: tmux binary is not on PATH or returns an error.
-//   - [ErrTmuxSessionCreate]: tmux new-session exited non-zero.
+//   - ErrTmuxNotAvailable: the tmux binary cannot be run, or the tmux socket
+//     is not accessible to this user (at session creation the row stays
+//     pending); or the per-user socket directory cannot be created or fails
+//     tmux's own check, before anything is written (nothing launched).
+//   - [ErrTmuxSessionCreate]: session creation failed ("duplicate session"
+//     included), or a created session could not be labelled; the row stays
+//     pending.
+//   - ErrTmuxUnresponsive: the session-creating call timed out or gave a
+//     reply that does not parse with a non-zero exit: the session may have
+//     been created and the row stays pending; do not retry until get shows
+//     the row ended or missing. Also, with an explicit ClaudeInstanceID
+//     that has no row, the label scan's lookup could not be read; nothing
+//     was written.
+//   - ErrTmuxSessionConflict: with an explicit ClaudeInstanceID that has no
+//     row, the label scan found a session of an earlier life of that id,
+//     labelled by this store, or conflicting labels; nothing was written, and
+//     a human must look (README "Operator actions").
 //   - ErrTemplateNotFound: the named template file does not exist.
 //   - ErrTemplateMalformed: the template TOML could not be parsed.
 //   - ErrTemplateNameUnsafe: the template name contains path-unsafe characters.
@@ -105,5 +157,5 @@ func (c *Client) Spawn(params SpawnParams) (SpawnResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return SpawnResult{}, err
 	}
-	return runSpawn(c.st, c.st, c.tmuxClient, c.cfg, params)
+	return runSpawn(c.st, c.st, c.tmuxClient, c.procChecker, c.cfg, c.now, c.logger, params)
 }

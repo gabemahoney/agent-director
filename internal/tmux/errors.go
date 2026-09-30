@@ -36,13 +36,40 @@ import "errors"
 // ErrTmuxNotAvailable is returned when the tmux binary cannot be located on
 // PATH or refuses to execute (e.g. wrong arch). It is distinct from "tmux ran
 // but reported an error" — which surfaces as a verb-specific error below.
+// Plain spawn also returns it when the session-creating call gets tmux's
+// socket "Permission denied" reply (the row stays pending), and, before the
+// insert and with nothing launched, when the launch's per-user socket
+// directory cannot be created or fails tmux's own check (SR-1.2, SR-3.3; a
+// *SocketDirError).
 var ErrTmuxNotAvailable = errors.New("tmux: binary not available on PATH")
 
 // ErrTmuxSessionCreate is returned when `tmux new-session` exits non-zero.
 // Common causes: name collision, invalid cwd, the user-set default-shell is
 // missing. The wrapped tmux stderr (when present) appears in the unwrapped
-// chain so callers building error envelopes can include it.
+// chain so callers building error envelopes can include it. Plain spawn also
+// returns it for a created session that could not be labelled, which was then
+// ended or could not be (SR-1.2, SR-3.5).
 var ErrTmuxSessionCreate = errors.New("tmux: new-session failed")
+
+// ErrTmuxUnresponsive is class UNAVAILABLE (like 503) and transient: tmux did
+// not answer usably, so the outcome is unknown and the caller may retry
+// later. It must never be read as "the agent is dead" (SR-1.1). Plain spawn
+// returns it when the session-creating call timed out, or its reply does not
+// parse with a non-zero exit (the session may have been created and the row
+// stays pending), and when, for a caller-supplied instance id, the label
+// scan's lookup before anything is written is unreadable (SR-1.2, SR-9.3).
+// Later verbs add their own triggers. It wraps no other sentinel (SR-1.5).
+var ErrTmuxUnresponsive = errors.New("tmux: unresponsive")
+
+// ErrTmuxSessionConflict is class CONFLICT (like 409): permanent until a
+// human looks, since waiting does not resolve it. It must never be read as
+// "the agent is dead" (SR-1.1). Plain spawn with a caller-supplied instance
+// id returns it, before anything is written, when the label scan finds a
+// session carrying a valid label of this store that names the id ("left over
+// from an earlier life"), or when the scan's lookup finds conflicting labels
+// (SR-1.2, SR-9.3). Later verbs add their own triggers. It wraps no other
+// sentinel (SR-1.5).
+var ErrTmuxSessionConflict = errors.New("tmux: session conflict")
 
 // ErrTmuxKillFailed is returned when `tmux kill-session` exits non-zero for
 // any reason other than the canonical "session not found" (which is mapped to

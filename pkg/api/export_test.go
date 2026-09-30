@@ -17,8 +17,14 @@ func SpawnWithCollisionReader(c *Client, collisions spawn.CollisionChecker, para
 	if err := c.checkClosed(); err != nil {
 		return SpawnResult{}, err
 	}
-	return runSpawn(c.st, collisions, c.tmuxClient, c.cfg, params)
+	return runSpawn(c.st, collisions, c.tmuxClient, c.procChecker, c.cfg, c.now, c.logger, params)
 }
+
+// SetClockForTest replaces c's clock (time.Now in production) for this Client only (Appendix F.5).
+func SetClockForTest(c *Client, now func() time.Time) { c.now = now }
+
+// SetProcCheckerForTest replaces c's start-time reader (SR-3.8) for this Client only.
+func SetProcCheckerForTest(c *Client, pc ProcChecker) { c.procChecker = pc }
 
 // SetPauseTestKnobs lets pause_test override the polling cadence and
 // sleeper without exporting them broadly. Tests pair this with

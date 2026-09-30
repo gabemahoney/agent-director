@@ -10,17 +10,18 @@ import (
 	"github.com/gabemahoney/agent-director/internal/config"
 )
 
-// fakeChecker is a CollisionChecker test double: scripted bool/err return,
-// records the lookups so tests can assert it was (or wasn't) consulted.
+// fakeChecker is a CollisionChecker test double: scripted state/exists/err
+// return, records the lookups so tests can assert it was (or wasn't) consulted.
 type fakeChecker struct {
+	state   string
 	exists  bool
 	err     error
 	lookups []string
 }
 
-func (f *fakeChecker) LiveSpawnExists(id string) (bool, error) {
+func (f *fakeChecker) SpawnState(id string) (string, bool, error) {
 	f.lookups = append(f.lookups, id)
-	return f.exists, f.err
+	return f.state, f.exists, f.err
 }
 
 // TestApplyDefaultsMintsUuid4 also pins that an empty id never consults the
@@ -29,7 +30,7 @@ func TestApplyDefaultsMintsUuid4(t *testing.T) {
 	r := Resolved{SpawnParams: SpawnParams{CWD: "/tmp"}}
 	cfg := config.Default()
 	checker := &fakeChecker{err: errors.New("store: live spawn lookup: disk I/O error")}
-	if err := ApplyDefaults(&r, cfg, checker); err != nil {
+	if _, err := ApplyDefaults(&r, cfg, checker); err != nil {
 		t.Fatalf("ApplyDefaults: %v", err)
 	}
 	if len(checker.lookups) != 0 {
@@ -43,33 +44,49 @@ func TestApplyDefaultsMintsUuid4(t *testing.T) {
 	}
 }
 
-func TestApplyDefaultsRespectsExplicitID(t *testing.T) {
-	r := Resolved{SpawnParams: SpawnParams{
-		CWD:              "/tmp",
-		ClaudeInstanceID: "deadbeef-0000-4000-8000-000000000001",
-	}}
-	cfg := config.Default()
-	checker := &fakeChecker{exists: false}
-	if err := ApplyDefaults(&r, cfg, checker); err != nil {
-		t.Fatalf("ApplyDefaults: %v", err)
+// TestApplyDefaultsPreCheckOutcomes pins SR-9.3's one pre-check read: minted,
+// no row, finished row and nil checker each give their IDCheck; a live row collides.
+func TestApplyDefaultsPreCheckOutcomes(t *testing.T) {
+	const id = "deadbeef-0000-4000-8000-000000000001"
+	cases := []struct {
+		name      string
+		id        string
+		checker   *fakeChecker // nil passes no CollisionChecker
+		want      IDCheck
+		collides  bool
+		wantReads int
+	}{
+		{"minted id makes no read", "", &fakeChecker{state: "waiting", exists: true}, IDMinted, false, 0},
+		{"no row", id, &fakeChecker{}, IDNoRow, false, 1},
+		{"ended row", id, &fakeChecker{state: "ended", exists: true}, IDFinishedRow, false, 1},
+		{"missing row", id, &fakeChecker{state: "missing", exists: true}, IDFinishedRow, false, 1},
+		{"no checker", id, nil, IDNotChecked, false, 0},
+		{"pending row", id, &fakeChecker{state: "pending", exists: true}, 0, true, 1},
+		{"waiting row", id, &fakeChecker{state: "waiting", exists: true}, 0, true, 1},
+		{"check_permission row", id, &fakeChecker{state: "check_permission", exists: true}, 0, true, 1},
 	}
-	if r.ClaudeInstanceID != "deadbeef-0000-4000-8000-000000000001" {
-		t.Fatalf("explicit id overwritten: %q", r.ClaudeInstanceID)
-	}
-	if len(checker.lookups) != 1 || checker.lookups[0] != r.ClaudeInstanceID {
-		t.Fatalf("collision check not run: lookups=%v", checker.lookups)
-	}
-}
-
-func TestApplyDefaultsCollisionError(t *testing.T) {
-	r := Resolved{SpawnParams: SpawnParams{
-		CWD:              "/tmp",
-		ClaudeInstanceID: "11111111-1111-4111-8111-111111111111",
-	}}
-	cfg := config.Default()
-	err := ApplyDefaults(&r, cfg, &fakeChecker{exists: true})
-	if !errors.Is(err, ErrInstanceIdCollision) {
-		t.Fatalf("err = %v; want ErrInstanceIdCollision", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := Resolved{SpawnParams: SpawnParams{CWD: "/tmp", ClaudeInstanceID: tc.id}}
+			var checker CollisionChecker
+			if tc.checker != nil {
+				checker = tc.checker
+			}
+			got, err := ApplyDefaults(&r, config.Default(), checker)
+			if tc.collides {
+				if !errors.Is(err, ErrInstanceIdCollision) {
+					t.Fatalf("err = %v; want ErrInstanceIdCollision", err)
+				}
+			} else if err != nil || got != tc.want {
+				t.Fatalf("ApplyDefaults = (%v, %v); want (%v, nil)", got, err, tc.want)
+			}
+			if tc.id != "" && r.ClaudeInstanceID != tc.id {
+				t.Fatalf("explicit id overwritten: %q", r.ClaudeInstanceID)
+			}
+			if tc.checker != nil && len(tc.checker.lookups) != tc.wantReads {
+				t.Fatalf("lookups = %v; want %d read(s)", tc.checker.lookups, tc.wantReads)
+			}
+		})
 	}
 }
 
@@ -95,8 +112,8 @@ func TestApplyDefaultsPreCheckReadError(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			const id = "22222222-2222-4222-8222-222222222222"
 			r := Resolved{SpawnParams: SpawnParams{CWD: "/tmp", ClaudeInstanceID: id}}
-			checker := &fakeChecker{exists: true, err: tc.storeErr}
-			err := ApplyDefaults(&r, config.Default(), checker)
+			checker := &fakeChecker{state: "waiting", exists: true, err: tc.storeErr}
+			_, err := ApplyDefaults(&r, config.Default(), checker)
 			if err == nil {
 				t.Fatal("ApplyDefaults returned nil; want the pre-check read error")
 			}
@@ -105,9 +122,6 @@ func TestApplyDefaultsPreCheckReadError(t *testing.T) {
 			}
 			if got, want := err.Error(), PreCheckReadError(tc.storeErr).Error(); got != want {
 				t.Fatalf("err = %q; want PreCheckReadError's %q", got, want)
-			}
-			if !strings.Contains(err.Error(), "the collision pre-check could not read the store") {
-				t.Fatalf("err = %q; missing the pre-check phrase", err)
 			}
 			if errors.Is(err, tc.storeErr) {
 				t.Fatalf("err = %v; wraps the store error (want text only)", err)
@@ -125,7 +139,7 @@ func TestApplyDefaultsRelayModeFallsBackToConfig(t *testing.T) {
 	r := Resolved{SpawnParams: SpawnParams{CWD: "/tmp"}}
 	cfg := config.Default()
 	cfg.Defaults.RelayMode = "on"
-	if err := ApplyDefaults(&r, cfg, &fakeChecker{}); err != nil {
+	if _, err := ApplyDefaults(&r, cfg, &fakeChecker{}); err != nil {
 		t.Fatalf("ApplyDefaults: %v", err)
 	}
 	if r.RelayMode != "on" {
@@ -137,7 +151,7 @@ func TestApplyDefaultsRelayModePreservesExplicit(t *testing.T) {
 	r := Resolved{SpawnParams: SpawnParams{CWD: "/tmp", RelayMode: "off"}}
 	cfg := config.Default()
 	cfg.Defaults.RelayMode = "on" // config says on but caller said off
-	if err := ApplyDefaults(&r, cfg, &fakeChecker{}); err != nil {
+	if _, err := ApplyDefaults(&r, cfg, &fakeChecker{}); err != nil {
 		t.Fatalf("ApplyDefaults: %v", err)
 	}
 	if r.RelayMode != "off" {
@@ -197,7 +211,7 @@ func TestComposeSessionName(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := Resolved{SpawnParams: SpawnParams{CWD: tc.cwd, ClaudeInstanceID: tc.id}}
-			if err := ApplyDefaults(&r, config.Default(), &fakeChecker{}); err != nil {
+			if _, err := ApplyDefaults(&r, config.Default(), &fakeChecker{}); err != nil {
 				t.Fatalf("ApplyDefaults: %v", err)
 			}
 			if r.TmuxSessionName != tc.want {
@@ -221,7 +235,7 @@ func TestApplyDefaultsPreservesUserSuppliedTmuxSessionName(t *testing.T) {
 		TmuxSessionName:         "bot-claude-status",
 		TmuxSessionNameSupplied: true,
 	}}
-	if err := ApplyDefaults(&r, config.Default(), &fakeChecker{}); err != nil {
+	if _, err := ApplyDefaults(&r, config.Default(), &fakeChecker{}); err != nil {
 		t.Fatalf("ApplyDefaults: %v", err)
 	}
 	if r.TmuxSessionName != "bot-claude-status" {
@@ -239,7 +253,7 @@ func TestComposeSessionNameSanitizesDotInInstanceID(t *testing.T) {
 		ClaudeInstanceID: "b.18k-fix-test",
 	}}
 	cfg := config.Default()
-	if err := ApplyDefaults(&r, cfg, &fakeChecker{}); err != nil {
+	if _, err := ApplyDefaults(&r, cfg, &fakeChecker{}); err != nil {
 		t.Fatalf("ApplyDefaults: %v", err)
 	}
 	if strings.Contains(r.TmuxSessionName, ".") {
@@ -258,7 +272,7 @@ func TestComposeSessionNameAllBadBasename(t *testing.T) {
 		CWD:              "/////",
 		ClaudeInstanceID: "abcdef1234567890",
 	}}
-	if err := ApplyDefaults(&r, config.Default(), &fakeChecker{}); err != nil {
+	if _, err := ApplyDefaults(&r, config.Default(), &fakeChecker{}); err != nil {
 		t.Fatalf("ApplyDefaults: %v", err)
 	}
 	if !strings.HasPrefix(r.TmuxSessionName, "root-") {

@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // fakeTmuxBin is the path to the fake-tmux helper compiled by buildFakeTmux.
@@ -53,7 +55,9 @@ func runSpawnCLI(t *testing.T, home, fakeTmuxDir string, args ...string) (string
 // runSpawnCLIEnv is the same as runSpawnCLI plus an optional extraEnv
 // map appended to the child env. Used by tests that need to inject
 // fake-tmux failure-injection vars (e.g. FAKE_TMUX_FAIL_NEWSESSION_NAME)
-// without rebuilding the binary.
+// without rebuilding the binary. The child gets home's private TMUX_TMPDIR
+// and no TMUX, so no two tests share a tmux socket or fake-tmux table
+// (SR-20.3).
 func runSpawnCLIEnv(t *testing.T, home, fakeTmuxDir string, extraEnv map[string]string, args ...string) (string, string, int) {
 	t.Helper()
 	cmd := exec.Command(binaryPath, args...)
@@ -62,6 +66,7 @@ func runSpawnCLIEnv(t *testing.T, home, fakeTmuxDir string, extraEnv map[string]
 		"PATH=" + fakeTmuxDir + ":" + os.Getenv("PATH"),
 		"HOME=" + home,
 		"FAKE_TMUX_LOG=" + logPath,
+		"TMUX_TMPDIR=" + spawnTmuxTmpdir(t, home),
 	}
 	for k, v := range extraEnv {
 		env = append(env, k+"="+v)
@@ -81,6 +86,17 @@ func runSpawnCLIEnv(t *testing.T, home, fakeTmuxDir string, extraEnv map[string]
 		}
 	}
 	return stdout.String(), stderr.String(), exitCode
+}
+
+// spawnTmuxTmpdir returns home's private TMUX_TMPDIR, <home>/tmux-tmpdir,
+// creating it (mode 0700) so tmux's resolution takes it rather than /tmp.
+func spawnTmuxTmpdir(t *testing.T, home string) string {
+	t.Helper()
+	dir := filepath.Join(home, "tmux-tmpdir")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir TMUX_TMPDIR: %v", err)
+	}
+	return dir
 }
 
 // spawnResult mirrors api.SpawnResult for the CLI integration tests.
@@ -472,12 +488,7 @@ func TestSpawnCLIInstanceIDControlCharRejected(t *testing.T) {
 			if env.ErrName != "ErrInvalidFlags" {
 				t.Errorf("err_name = %q; want ErrInvalidFlags (stderr=%q)", env.ErrName, stderr)
 			}
-			if !strings.Contains(env.ErrDescription, "the instance id contains a control character") {
-				t.Errorf("err_description = %q; want the control-character phrase", env.ErrDescription)
-			}
-			if strings.Contains(env.ErrDescription, "leakmarker") {
-				t.Errorf("err_description quotes the id: %q", env.ErrDescription)
-			}
+			apitest.AssertDescription(t, env.ErrDescription, apitest.DescInstanceIDControlChar(id), "leakmarker")
 			assertNoRowNoSession(t, home, fakeDir)
 		})
 	}

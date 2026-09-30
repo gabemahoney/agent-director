@@ -14,6 +14,10 @@
  *   9. ErrCallTimeout — fields, name, instanceof chain.
  *  10. ErrUnknownErrorName — fields, name, instanceof chain, envelope field.
  *  11. All four new classes appear in TS_ONLY_ERROR_NAMES (drift-test allow-list).
+ *
+ * b.fmk Epic 7 additions:
+ *  12. ErrTmuxUnresponsive / ErrTmuxSessionConflict — instanceof chain when
+ *      constructed and when built by errorFromEnvelope for verb "spawn".
  */
 
 import { test, expect, describe, spyOn } from "bun:test";
@@ -35,6 +39,9 @@ import {
   ErrPermissionRequestNotFound,
   ErrAmbiguousRequest,
   ErrMissingRequestToken,
+  // b.fmk Epic 7: tmux classes the spawn label scan and bounded launch return.
+  ErrTmuxUnresponsive,
+  ErrTmuxSessionConflict,
 } from "../src/errors.js";
 
 // ---------------------------------------------------------------------------
@@ -449,6 +456,37 @@ describe("ErrMissingRequestToken (catalog-derived, api)", () => {
     expect(err.verb).toBe("decide");
     expect(err.errDescription).toBe("must supply --request-token");
   });
+});
+
+// ---------------------------------------------------------------------------
+// b.fmk Epic 7 — Case 12: ErrTmuxUnresponsive / ErrTmuxSessionConflict (tmux)
+// ---------------------------------------------------------------------------
+describe("spawn tmux classes (catalog-derived, tmux)", () => {
+  const cases = [
+    { name: "ErrTmuxUnresponsive", cls: ErrTmuxUnresponsive },
+    { name: "ErrTmuxSessionConflict", cls: ErrTmuxSessionConflict },
+  ] as const;
+
+  for (const { name, cls } of cases) {
+    /** A constructed instance keeps the subclass → base → Error chain and its name. */
+    test(`${name} constructed: instanceof chain and name`, () => {
+      const err = new cls("spawn", name, "synthetic description");
+      expect(err).toBeInstanceOf(cls);
+      expect(err).toBeInstanceOf(AgentDirectorError);
+      expect(err).toBeInstanceOf(Error);
+      expect(err.name).toBe(name);
+    });
+
+    /** errorFromEnvelope maps the spawn envelope's err_name to this class. */
+    test(`${name} via errorFromEnvelope for verb spawn`, () => {
+      const err = errorFromEnvelope("spawn", name, "synthetic description");
+      expect(err).toBeInstanceOf(cls);
+      expect(err).toBeInstanceOf(AgentDirectorError);
+      expect(err.errName).toBe(name);
+      expect(err.verb).toBe("spawn");
+      expect(err.message).toBe(`${name}: synthetic description`);
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------

@@ -109,8 +109,12 @@ fmt.Println(result.ClaudeInstanceID)
 
 Returns `SpawnResult` (`.ClaudeInstanceID`). Most-likely sentinel errors:
 `ErrCwdNotFound`, `ErrCwdNotADirectory`, `ErrRelayModeInvalid`,
-`ErrTmuxNotAvailable`, `ErrTmuxSessionCreate`. See `(*Client).Spawn`
-godoc for the full enumeration.
+`ErrTmuxNotAvailable`, `ErrTmuxSessionCreate`, `ErrTmuxUnresponsive` (the
+session-creating call timed out: the row stays `pending`; do not retry
+until `Get` shows it `ended` or `missing`) and `ErrTmuxSessionConflict`
+(an explicit id with no row whose labelled session from an earlier life
+still runs, or conflicting labels; nothing is written).
+See `(*Client).Spawn` godoc for the full enumeration.
 
 ---
 

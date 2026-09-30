@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
@@ -84,8 +86,15 @@ type Client struct {
 	tmuxClient TmuxClient
 	cfg        config.Config
 	logger     *log.Logger
-	mu         sync.Mutex
-	closed     bool
+	// now is the Client's clock, time.Now in production (Appendix F.5); the
+	// spawn's launch start reads it. Tests replace it per Client.
+	now func() time.Time
+	// procChecker is the start-time reader (SR-3.8), probe.NewProcChecker in
+	// production; the spawn's identity write reads the server's and the
+	// pane's start times through it. Tests replace it per Client.
+	procChecker ProcChecker
+	mu          sync.Mutex
+	closed      bool
 }
 
 // New constructs a Client from opts, wiring config, store, and tmux.
@@ -100,6 +109,9 @@ type Client struct {
 //     query, action and create timeouts and the pipe-close wait taken from
 //     the loaded config's [tmux] table at construction (SR-2.4, SR-4.1), so
 //     a changed value applies to the next Client built.
+//  6. Set the Client's clock (time.Now) and the production start-time
+//     reader (probe.NewProcChecker). This store's id is read once by the
+//     store's open (Store.StoreID) and used from there.
 //
 // On any error a nil *Client is returned together with a descriptive,
 // errors.Is-matchable error. The constructor never leaves partially-
@@ -196,10 +208,12 @@ func New(opts Options) (*Client, error) {
 	}
 
 	return &Client{
-		st:         st,
-		tmuxClient: tc,
-		cfg:        cfg,
-		logger:     logger,
+		st:          st,
+		tmuxClient:  tc,
+		cfg:         cfg,
+		logger:      logger,
+		now:         time.Now,
+		procChecker: probe.NewProcChecker(),
 	}, nil
 }
 

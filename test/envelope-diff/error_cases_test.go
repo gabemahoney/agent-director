@@ -22,6 +22,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
@@ -33,7 +34,8 @@ import (
 //   - The CLI exits non-zero and its stderr carries {"err_name":…,"err_description":…}.
 //   - The Client returns an error envelope with the same fields.
 //   - Both err_name values equal the row's expected errName.
-//   - Both err_description values match under the prefix policy (errDescriptionsMatch).
+//   - Both err_description values match under the prefix policy (errDescriptionsMatch)
+//     and, for a row with desc, pass apitest.AssertDescription for its case.
 func TestEnvelopeDiff_Error(t *testing.T) {
 	binPath := buildCLI(t)
 
@@ -103,6 +105,11 @@ func TestEnvelopeDiff_Error(t *testing.T) {
 			if !errDescriptionsMatch(cliParsed.ErrDescription, clientParsed.ErrDescription) {
 				t.Errorf("err_description mismatch (prefix policy):\n  CLI:    %q\n  Client: %q",
 					cliParsed.ErrDescription, clientParsed.ErrDescription)
+			}
+			if ec.desc != nil {
+				c, forbid := ec.desc(ctx)
+				apitest.AssertDescription(t, cliParsed.ErrDescription, c, forbid...)
+				apitest.AssertDescription(t, clientParsed.ErrDescription, c, forbid...)
 			}
 
 			// ── 9. Structural diff on the error envelope ───────────────
@@ -194,7 +201,6 @@ func TestErrorTableCoverage(t *testing.T) {
 		}
 	}
 }
-
 
 // ── TestErrDescriptionPrefix ──────────────────────────────────────────────────
 

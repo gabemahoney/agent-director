@@ -77,10 +77,12 @@ var packageOf = map[string]string{
 	// internal/tmux
 	// ErrTmuxKillFailed and ErrTmuxListPanesFailed are intentionally absent:
 	// they were removed from Catalog in Task 7 (never surfaced to API callers).
-	"ErrTmuxNotAvailable":  "tmux",
-	"ErrTmuxSessionCreate": "tmux",
-	"ErrTmuxSendKeys":      "tmux",
-	"ErrTmuxCaptureFailed": "tmux",
+	"ErrTmuxNotAvailable":    "tmux",
+	"ErrTmuxSessionCreate":   "tmux",
+	"ErrTmuxSendKeys":        "tmux",
+	"ErrTmuxCaptureFailed":   "tmux",
+	"ErrTmuxUnresponsive":    "tmux",
+	"ErrTmuxSessionConflict": "tmux",
 
 	// internal/config
 	"ErrTemplateNameUnsafe": "config",
@@ -92,20 +94,20 @@ var packageOf = map[string]string{
 	"ErrProbeUnsupported": "probe",
 
 	// pkg/api
-	"ErrSpawnNotInteractive":     "api",
-	"ErrSendKeysWhileRelayed":    "api",
-	"ErrSpawnNotPausable":        "api",
-	"ErrPauseTimeout":            "api",
-	"ErrListInvalidLabel":        "api",
-	"ErrSpawnNotResumable":       "api",
-	"ErrNoSessionId":             "api",
-	"ErrJsonlMissing":            "api",
-	"ErrJsonlNeverWritten":       "api",
-	"ErrRelayModeOff":            "api",
-	"ErrRelayFallenBack":         "api",
-	"ErrInvalidDecision":         "api",
-	"ErrInvalidFlags":            "api",
-	"ErrMissingRequestToken":     "api",
+	"ErrSpawnNotInteractive":  "api",
+	"ErrSendKeysWhileRelayed": "api",
+	"ErrSpawnNotPausable":     "api",
+	"ErrPauseTimeout":         "api",
+	"ErrListInvalidLabel":     "api",
+	"ErrSpawnNotResumable":    "api",
+	"ErrNoSessionId":          "api",
+	"ErrJsonlMissing":         "api",
+	"ErrJsonlNeverWritten":    "api",
+	"ErrRelayModeOff":         "api",
+	"ErrRelayFallenBack":      "api",
+	"ErrInvalidDecision":      "api",
+	"ErrInvalidFlags":         "api",
+	"ErrMissingRequestToken":  "api",
 
 	// ErrUnknownTool is intentionally absent: it was moved from pkg/api/errnames
 	// to internal/mcp in Task 7 (dispatch-level error, not a verb-surface error).
