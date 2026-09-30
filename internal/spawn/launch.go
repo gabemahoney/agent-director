@@ -3,7 +3,6 @@ package spawn
 import (
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"time"
@@ -12,12 +11,6 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
-
-// preTrustWarn is where pre-trust warnings land — missing-file or
-// best-effort failures. Held as a var so tests can capture without
-// touching os.Stderr (which the test harness drains for the JSON error
-// envelope).
-var preTrustWarn io.Writer = os.Stderr
 
 // claudeBinary is the program tmux launches inside the new session. Held
 // as a var so tests can swap it for a fake-claude helper without
@@ -40,9 +33,12 @@ const envInstanceID = "AGENT_DIRECTOR_INSTANCE_ID"
 //     writes nothing and launches nothing (SR-20.6).
 //  2. Composes the session environment, synthesizes --settings and builds
 //     the claude argv.
-//  3. Pre-trusts the cwd unless NoPreTrust (best effort).
+//  3. Pre-trusts the cwd through PreTrust, off when NoPreTrust (best effort;
+//     a failure never fails the spawn, SR-22.6).
 //  4. INSERTs the pending row with the launch start (one read of now, in
-//     milliseconds), the token and the socket (SR-22.2, SR-3.3).
+//     milliseconds), the token, the socket and the NoPreTrust choice step 3
+//     used, so the row records what the spawn did for its life and every
+//     resume of that life follows it (SR-22.2, SR-3.3, SR-5.2, SR-22.6).
 //  5. Creates the session and labels it through CreateAndLabel, on the
 //     socket, with the token, the instance id and this store's id
 //     (s.StoreID()): one create invocation with the chained label, at most
@@ -82,9 +78,8 @@ func Launch(s *store.Store, t LaunchTmux, pc tmux.ProcChecker, r Resolved, cfg c
 		return "", err
 	}
 
-	if !r.NoPreTrust {
-		preTrustBestEffort(r)
-	}
+	// The outcome is not reported yet; a failure never fails the spawn.
+	_ = PreTrust(r.CWD, r.ExtraEnv, r.NoPreTrust)
 
 	command := []string{claudeBinary, "--settings", settings}
 	command = append(command, r.ClaudeArgs...)
@@ -164,24 +159,9 @@ func knownStartTime(pc tmux.ProcChecker, pid int) string {
 	return start
 }
 
-// preTrustBestEffort pre-trusts r's cwd in ~/.claude.json so the spawned
-// Claude Code skips its workspace-trust dialog (bug b.f75). Best-effort: any
-// failure (missing file on truly-fresh machines, parse error, perm issue) is
-// surfaced as a soft warning on preTrustWarn but does not block the spawn;
-// the operator will see the trust dialog in that case and can dismiss it.
-func preTrustBestEffort(r Resolved) {
-	err := preTrustCwd(r.CWD, r.ExtraEnv)
-	switch {
-	case err == nil:
-	case errors.Is(err, ErrClaudeJSONMissing):
-		fmt.Fprintf(preTrustWarn, "agent-director: pre-trust skipped (%v); spawn may block on Claude Code's trust dialog\n", err)
-	default:
-		fmt.Fprintf(preTrustWarn, "agent-director: pre-trust failed: %v\n", err)
-	}
-}
-
 // insertPending inserts r's pending row with the launch start (milliseconds),
-// the launch token and the launch socket (SR-22.2, SR-3.3, SR-3.5). parent_id
+// the launch token, the launch socket (SR-22.2, SR-3.3, SR-3.5) and r's
+// NoPreTrust, the choice Launch passed to PreTrust (SR-5.2, SR-22.6). parent_id
 // is auto-detected from our own environment (SRD §7.5); empty is stored as
 // NULL. A primary-key collision, the TOCTOU fallback of the pre-check in
 // ApplyDefaults, maps to ErrInstanceIdCollision (store.ErrPrimaryKeyCollision
@@ -197,6 +177,7 @@ func insertPending(s *store.Store, r Resolved, launchStartMillis int64, token, s
 		Labels:                r.AgentDirectorLabels,
 		ExtraEnv:              r.ExtraEnv,
 		LaunchStartedAtMillis: launchStartMillis,
+		NoPreTrust:            r.NoPreTrust,
 		Identity:              store.LaunchIdentity{Token: token, Socket: socket},
 	}
 	if err := s.InsertPending(row); err != nil {

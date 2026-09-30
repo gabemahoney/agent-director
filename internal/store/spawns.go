@@ -103,7 +103,7 @@ type Spawn struct {
 	LivenessNote            string
 
 	// The schema-v5 fields (SR-5.1, Appendix F.4), filled by every read that
-	// returns a Spawn. InsertPending takes LaunchStartedAtMillis,
+	// returns a Spawn. InsertPending takes LaunchStartedAtMillis, NoPreTrust,
 	// Identity.Token and Identity.Socket from a Spawn; no write takes the
 	// others from one. The SR-5.5 columns never fail a read.
 
@@ -115,7 +115,12 @@ type Spawn struct {
 	// LifeNumber is life_number, the row's current life (SR-5.9).
 	LifeNumber int64
 	// NoPreTrust is no_pre_trust (SR-5.1): true for any stored value other
-	// than the integer 0 (SR-5.5).
+	// than the integer 0 (SR-5.5). The insert records the spawn caller's
+	// pre-trust choice here (1 = opted out, 0 = allowed); resume's move and
+	// restore, hooks, find-missing and every other write leave it unchanged
+	// (SR-5.2), so every resume of a life follows the spawn that began it.
+	// Rows that existed at the migration carry the column default, 0, and so
+	// read as pre-trust allowed.
 	NoPreTrust bool
 	// EndedAtText is ended_at exactly as stored, never parsed and re-formatted;
 	// "" = NULL. resume's restore writes it back byte for byte (SR-5.3).
@@ -140,7 +145,10 @@ type Spawn struct {
 // statement it writes launch_started_at from sp.LaunchStartedAtMillis
 // (milliseconds from the caller's injected clock), launch_token from
 // sp.Identity.Token and tmux_socket from sp.Identity.Socket. A zero value
-// writes NULL, following LaunchIdentity's zero-means-NULL convention. The
+// writes NULL, following LaunchIdentity's zero-means-NULL convention. It
+// also records the caller's pre-trust choice: no_pre_trust is 1 when
+// sp.NoPreTrust is true and 0 when it is false. No later write changes that
+// column (see Spawn.NoPreTrust), so the choice holds for the row's life. The
 // server and pane identity columns (tmux_server_pid, tmux_server_started,
 // tmux_server_starttime, pane_id, pane_pid, pane_starttime) stay NULL
 // whatever sp.Identity carries: RecordLaunchIdentity writes them after the
@@ -163,8 +171,8 @@ func (s *Store) InsertPending(sp Spawn) error {
         INSERT INTO spawns (
             claude_instance_id, parent_id, state, cwd, tmux_session_name,
             claude_args, relay_mode, labels, extra_env,
-            launch_started_at, launch_token, tmux_socket
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            launch_started_at, launch_token, tmux_socket, no_pre_trust
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
 	var parent any
 	if sp.ParentID != "" {
@@ -172,12 +180,17 @@ func (s *Store) InsertPending(sp Spawn) error {
 	} else {
 		parent = nil
 	}
+	noPreTrust := 0
+	if sp.NoPreTrust {
+		noPreTrust = 1
+	}
 	_, err = s.db.Exec(stmt,
 		sp.ClaudeInstanceID, parent, StatePending,
 		sp.CWD, sp.TmuxSessionName,
 		argsJSON, sp.RelayMode, labelsJSON, extraEnvJSON,
 		positiveInt64Arg(sp.LaunchStartedAtMillis),
 		nullableStringArg(sp.Identity.Token), nullableStringArg(sp.Identity.Socket),
+		noPreTrust,
 	)
 	if err != nil {
 		var serr *sqlite.Error

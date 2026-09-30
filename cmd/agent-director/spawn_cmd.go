@@ -49,7 +49,7 @@ func parseSpawnFlags(args []string) (pkgapi.SpawnParams, error) {
 	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "explicit instance id (default: minted UUID4)")
 	fs.StringVar(&p.TmuxSessionName, "tmux-session-name", "", "explicit tmux session name (default: <basename(cwd)>-<id[:8]>); rejects ':' '.' '#' '$' '\\' (backslash), control chars, and >64 bytes; no DB uniqueness check, name reuse across ended spawns supported")
 	fs.StringVar(&p.RelayMode, "relay-mode", "", "on / off (default: config defaults.relay_mode)")
-	fs.BoolVar(&p.NoPreTrust, "no-pre-trust", false, "skip pre-writing ~/.claude.json's trust key for cwd (bug b.f75); default off (pre-trust IS performed)")
+	fs.BoolVar(&p.NoPreTrust, "no-pre-trust", false, "skip pre-writing the cwd's folder-trust key into .claude.json (<CLAUDE_CONFIG_DIR>/.claude.json if CLAUDE_CONFIG_DIR is set in extra-env, otherwise ~/.claude.json); default off (pre-trust IS performed); the choice is recorded on the row for its life and every resume of that life follows it")
 	fs.Var(newKVSlice(&labelKVs, "--label"), "label", "k=v (repeatable)")
 	fs.Var(newKVSlice(&extraEnvKVs, "--extra-env"), "extra-env", "K=V (repeatable)")
 	fs.Var(newStringSlice(&allow), "allow", "permissions.allow entry (repeatable)")

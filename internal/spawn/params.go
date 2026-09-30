@@ -57,12 +57,14 @@ type SpawnParams struct {
 	// AGENT_DIRECTOR_RELAY_MODE on the session env for the hook.
 	RelayMode string
 
-	// NoPreTrust opts out of the workspace-trust pre-write into
-	// ~/.claude.json. Default false (= pre-trust IS performed) skips
-	// Claude Code's trust dialog so the spawn is interactive within
-	// ~5s. Setting this to true preserves today's behavior where the
-	// operator must answer the trust dialog manually for an unseen cwd
-	// (per bug b.f75).
+	// NoPreTrust opts out of the folder-trust pre-write (PreTrust) into
+	// <CLAUDE_CONFIG_DIR>/.claude.json when the spawn's extra env sets
+	// CLAUDE_CONFIG_DIR, and ~/.claude.json otherwise. Default false
+	// (= pre-trust IS performed) marks the cwd trusted so the agent skips
+	// Claude Code's folder-trust prompt. True attempts no pre-trust, so the
+	// prompt must be answered for an unseen cwd. The choice is recorded on
+	// the row (no_pre_trust) for its life, and every resume of that life
+	// follows it: no resume pre-trusts over an opt-out (SR-22.6).
 	NoPreTrust bool
 }
 

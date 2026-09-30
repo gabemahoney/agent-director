@@ -1,10 +1,12 @@
 package spawn
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -113,19 +115,6 @@ func TestPreTrustUpdatesExistingEntry(t *testing.T) {
 	files, ok := entry["exampleFiles"].([]any)
 	if !ok || len(files) != 2 {
 		t.Errorf("exampleFiles lost or wrong shape: %v", entry["exampleFiles"])
-	}
-}
-
-// TestPreTrustMissingFileReturnsSentinel pins AC #5: when ~/.claude.json
-// does not exist (truly-fresh-machine case), preTrustCwd returns
-// ErrClaudeJSONMissing. Launch's caller treats that as a soft warning
-// and continues.
-func TestPreTrustMissingFileReturnsSentinel(t *testing.T) {
-	withStubClaudeJSON(t) // file does not exist; helper just sets the path.
-
-	err := preTrustCwd("/tmp/some-cwd", nil)
-	if !errors.Is(err, ErrClaudeJSONMissing) {
-		t.Fatalf("err = %v; want ErrClaudeJSONMissing", err)
 	}
 }
 
@@ -280,20 +269,6 @@ func TestPreTrustUsesClaudeConfigDirOverride(t *testing.T) {
 	}
 }
 
-// TestPreTrustClaudeConfigDirMissingFileSurfacesSentinel pins the b.18k
-// soft-warn contract for the override path: when CLAUDE_CONFIG_DIR points to
-// an existing directory that has no .claude.json, preTrustCwd returns
-// ErrClaudeJSONMissing (same behavior as the home-path missing-file case).
-func TestPreTrustClaudeConfigDirMissingFileSurfacesSentinel(t *testing.T) {
-	overrideDir := t.TempDir() // exists but .claude.json not created inside it
-	extraEnv := map[string]string{"CLAUDE_CONFIG_DIR": overrideDir}
-
-	err := preTrustCwd("/tmp/missing-override-cwd", extraEnv)
-	if !errors.Is(err, ErrClaudeJSONMissing) {
-		t.Fatalf("err = %v; want ErrClaudeJSONMissing", err)
-	}
-}
-
 // TestPreTrustEmptyClaudeConfigDirFallsBack pins the b.18k fix-sketch
 // point 1: an empty-string CLAUDE_CONFIG_DIR value is equivalent to "not
 // set", so preTrustCwd must fall back to the home claudeJSONPath stub.
@@ -322,6 +297,158 @@ func TestPreTrustEmptyClaudeConfigDirFallsBack(t *testing.T) {
 	if b, _ := entry["hasTrustDialogAccepted"].(bool); !b {
 		t.Errorf("hasTrustDialogAccepted = %v; want true", entry["hasTrustDialogAccepted"])
 	}
+}
+
+// TestPreTrustOutcome pins SR-22.6's shared step on a CLAUDE_CONFIG_DIR target:
+// ok writes silently, off attempts nothing, and each failure reports failed with
+// one warning line; no temp file is left and the home file is never touched.
+func TestPreTrustOutcome(t *testing.T) {
+	const cwd = "/tmp/pretrust-outcome-cwd"
+	const seed = `{"projects":{},"userID":"u"}`
+	cases := []struct {
+		name     string
+		seed     string
+		missing  bool // no .claude.json in the config dir
+		readOnly bool // config dir the process cannot create files in
+		off      bool
+		want     PreTrustOutcome
+		reason   string // extra text the failed line must carry
+	}{
+		{name: "ok", seed: seed, want: PreTrustOK},
+		{name: "off leaves file lacking the entry", seed: seed, off: true, want: PreTrustSkipped},
+		{name: "off creates no missing file", missing: true, off: true, want: PreTrustSkipped},
+		{name: "missing file", missing: true, want: PreTrustFailed, reason: "file does not exist"},
+		{name: "unparseable file", seed: "{not json", want: PreTrustFailed},
+		{name: "unwritable config dir", seed: seed, readOnly: true, want: PreTrustFailed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.readOnly && os.Geteuid() == 0 {
+				t.Skip("root ignores directory mode bits")
+			}
+			home := withStubClaudeJSON(t)
+			seedFile(t, home, `{"projects":{}}`)
+			dir := t.TempDir()
+			path := filepath.Join(dir, ".claude.json")
+			if !tc.missing {
+				seedFile(t, path, tc.seed)
+			}
+			if tc.readOnly {
+				if err := os.Chmod(dir, 0o500); err != nil {
+					t.Fatalf("chmod: %v", err)
+				}
+				t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+			}
+			warn := capturePreTrustWarn(t)
+
+			if got := PreTrust(cwd, map[string]string{"CLAUDE_CONFIG_DIR": dir}, tc.off); got != tc.want {
+				t.Fatalf("PreTrust = %q; want %q", got, tc.want)
+			}
+
+			switch {
+			case tc.want == PreTrustOK:
+				got := readClaudeJSON(t, path)
+				entry, _ := got["projects"].(map[string]any)[cwd].(map[string]any)
+				if b, _ := entry["hasTrustDialogAccepted"].(bool); !b || got["userID"] != "u" {
+					t.Errorf("claude.json = %v; want projects[%q].hasTrustDialogAccepted true and userID kept", got, cwd)
+				}
+			case tc.missing:
+				if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("stat %s: %v; want the file still absent", path, err)
+				}
+			default:
+				if got := mustReadFile(t, path); string(got) != tc.seed {
+					t.Errorf("claude.json = %q; want byte-identical %q", got, tc.seed)
+				}
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatalf("ReadDir: %v", err)
+			}
+			for _, e := range entries {
+				if e.Name() != ".claude.json" {
+					t.Errorf("stray file in config dir: %s", e.Name())
+				}
+			}
+
+			if tc.want == PreTrustFailed {
+				assertOneFailedLine(t, warn.String(), path, tc.reason)
+			} else if warn.Len() != 0 {
+				t.Errorf("warning = %q; want nothing printed", warn.String())
+			}
+			if got := mustReadFile(t, home); string(got) != `{"projects":{}}` {
+				t.Errorf("home claude.json = %q; want untouched (CLAUDE_CONFIG_DIR wins)", got)
+			}
+		})
+	}
+}
+
+// TestPreTrustFailedWithoutConfigDir: with no CLAUDE_CONFIG_DIR a missing home
+// file is named and not created; an unresolvable home still warns once.
+func TestPreTrustFailedWithoutConfigDir(t *testing.T) {
+	t.Run("home file missing", func(t *testing.T) {
+		home := withStubClaudeJSON(t)
+		warn := capturePreTrustWarn(t)
+		if got := PreTrust("/tmp/x", nil, false); got != PreTrustFailed {
+			t.Fatalf("PreTrust = %q; want failed", got)
+		}
+		assertOneFailedLine(t, warn.String(), home, "file does not exist")
+		if _, err := os.Stat(home); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("stat %s: %v; want the file still absent", home, err)
+		}
+	})
+	t.Run("home unresolvable", func(t *testing.T) {
+		saved := claudeJSONPath
+		claudeJSONPath = func() (string, error) { return "", errors.New("no home dir") }
+		t.Cleanup(func() { claudeJSONPath = saved })
+		warn := capturePreTrustWarn(t)
+		if got := PreTrust("/tmp/x", nil, false); got != PreTrustFailed {
+			t.Fatalf("PreTrust = %q; want failed", got)
+		}
+		assertOneFailedLine(t, warn.String(), "no home dir", "")
+	})
+}
+
+// capturePreTrustWarn swaps preTrustWarn for a buffer for the test's life.
+func capturePreTrustWarn(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	saved := preTrustWarn
+	preTrustWarn = &buf
+	t.Cleanup(func() { preTrustWarn = saved })
+	return &buf
+}
+
+// assertOneFailedLine checks warn is exactly one "pre-trust failed" line
+// containing each non-empty want.
+func assertOneFailedLine(t *testing.T, warn string, wants ...string) {
+	t.Helper()
+	ok := strings.Count(warn, "\n") == 1 && strings.HasSuffix(warn, "\n") &&
+		strings.Contains(warn, "pre-trust failed") && !strings.Contains(warn, "skipped")
+	for _, w := range wants {
+		ok = ok && strings.Contains(warn, w)
+	}
+	if !ok {
+		t.Errorf("warning = %q; want one \"pre-trust failed\" line containing %q", warn, wants)
+	}
+}
+
+// seedFile writes content to path, failing the test on error.
+func seedFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("seed %s: %v", path, err)
+	}
+}
+
+// mustReadFile returns path's bytes, failing the test on error.
+func mustReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return b
 }
 
 // readClaudeJSON parses the stub claude.json file as a generic JSON

@@ -307,28 +307,33 @@ func openRawForRead(t *testing.T, dbPath string) *sql.DB {
 	return db
 }
 
-// TestLaunchPreTrust pins b.f75: Launch trusts the cwd in ~/.claude.json
-// unless NoPreTrust, and still creates the session either way.
+// TestLaunchPreTrust pins b.f75 and SR-5.2: Launch trusts the cwd unless
+// NoPreTrust, prints nothing, creates the session and records the choice.
 func TestLaunchPreTrust(t *testing.T) {
 	for _, noPreTrust := range []bool{false, true} {
 		t.Run(fmt.Sprintf("NoPreTrust=%v", noPreTrust), func(t *testing.T) {
 			e := newLaunchEnv(t)
 			stub := withStubClaudeJSON(t)
-			if err := os.WriteFile(stub, []byte(`{"projects":{}}`), 0o600); err != nil {
-				t.Fatalf("seed claude.json: %v", err)
-			}
+			seedFile(t, stub, `{"projects":{}}`)
+			warn := capturePreTrustWarn(t)
 			e.r.NoPreTrust = noPreTrust
-			e.mustLaunch()
+			id := e.mustLaunch()
 			e.onlyCreate()
 
-			projects, _ := readClaudeJSON(t, stub)["projects"].(map[string]any)
-			entry, present := projects[e.r.CWD].(map[string]any)
+			if got := e.row(id).NoPreTrust; got != noPreTrust {
+				t.Errorf("row.NoPreTrust = %v; want %v (the spawn's choice recorded)", got, noPreTrust)
+			}
+			if warn.Len() != 0 {
+				t.Errorf("warning = %q; want nothing printed", warn.String())
+			}
 			if noPreTrust {
-				if present {
-					t.Errorf("projects[%q] was written despite NoPreTrust", e.r.CWD)
+				if got := mustReadFile(t, stub); string(got) != `{"projects":{}}` {
+					t.Errorf("claude.json = %q; want untouched despite NoPreTrust", got)
 				}
 				return
 			}
+			projects, _ := readClaudeJSON(t, stub)["projects"].(map[string]any)
+			entry, _ := projects[e.r.CWD].(map[string]any)
 			if b, _ := entry["hasTrustDialogAccepted"].(bool); !b {
 				t.Errorf("projects[%q] = %v; want hasTrustDialogAccepted true", e.r.CWD, entry)
 			}
@@ -336,21 +341,19 @@ func TestLaunchPreTrust(t *testing.T) {
 	}
 }
 
-// TestLaunchMissingClaudeJSONDoesNotBlockSpawn: with no ~/.claude.json the
-// pre-trust warns and the session is still created.
+// TestLaunchMissingClaudeJSONDoesNotBlockSpawn: with no .claude.json the
+// pre-trust warns once naming the file, and the spawn still launches.
 func TestLaunchMissingClaudeJSONDoesNotBlockSpawn(t *testing.T) {
 	e := newLaunchEnv(t)
-	withStubClaudeJSON(t) // a path that is never created
-	var warn bytes.Buffer
-	saved := preTrustWarn
-	preTrustWarn = &warn
-	t.Cleanup(func() { preTrustWarn = saved })
+	stub := withStubClaudeJSON(t) // a path that is never created
+	warn := capturePreTrustWarn(t)
 
-	e.mustLaunch()
+	id := e.mustLaunch()
 	e.onlyCreate()
-	if warn.Len() == 0 {
-		t.Errorf("expected a pre-trust warning; got none")
+	if row := e.row(id); row.State != store.StatePending || row.NoPreTrust {
+		t.Errorf("row = {state %q, NoPreTrust %v}; want pending with pre-trust allowed", row.State, row.NoPreTrust)
 	}
+	assertOneFailedLine(t, warn.String(), stub)
 }
 
 // TestLaunchPassesUserSuppliedTmuxSessionName pins SR-4.1/SR-3.1: a

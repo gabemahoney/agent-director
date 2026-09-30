@@ -190,8 +190,9 @@ func TestSpawnCLIHappyPath(t *testing.T) {
 // TestSpawnCLIPreTrustWritesClaudeJSON pins bug b.f75 at the CLI
 // boundary: `agent-director spawn --cwd <fresh>` with no other flags
 // writes hasTrustDialogAccepted=true into ~/.claude.json for the
-// resolved cwd before exec'ing tmux. HOME is overridden to a per-test
-// tmpdir so the operator's real ~/.claude.json is never touched.
+// resolved cwd before exec'ing tmux, and records no_pre_trust 0 on the
+// row. HOME is overridden to a per-test tmpdir so the operator's real
+// ~/.claude.json is never touched.
 func TestSpawnCLIPreTrustWritesClaudeJSON(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
@@ -203,10 +204,11 @@ func TestSpawnCLIPreTrustWritesClaudeJSON(t *testing.T) {
 	}
 	cwd := t.TempDir()
 
-	_, stderr, code := runSpawnCLI(t, home, fakeDir, "spawn", "--cwd", cwd)
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "spawn", "--cwd", cwd)
 	if code != 0 {
 		t.Fatalf("exit = %d; stderr=%s", code, stderr)
 	}
+	assertRecordedNoPreTrust(t, home, stdout, 0)
 
 	raw, err := os.ReadFile(claudeJSON)
 	if err != nil {
@@ -227,7 +229,8 @@ func TestSpawnCLIPreTrustWritesClaudeJSON(t *testing.T) {
 }
 
 // TestSpawnCLINoPreTrustFlagSkipsWrite pins AC #2: --no-pre-trust opts
-// out of the workspace-trust pre-write.
+// out of the workspace-trust pre-write and records no_pre_trust 1 on
+// the row (SR-22.6).
 func TestSpawnCLINoPreTrustFlagSkipsWrite(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
@@ -237,10 +240,11 @@ func TestSpawnCLINoPreTrustFlagSkipsWrite(t *testing.T) {
 	}
 	cwd := t.TempDir()
 
-	_, stderr, code := runSpawnCLI(t, home, fakeDir, "spawn", "--cwd", cwd, "--no-pre-trust")
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "spawn", "--cwd", cwd, "--no-pre-trust")
 	if code != 0 {
 		t.Fatalf("exit = %d; stderr=%s", code, stderr)
 	}
+	assertRecordedNoPreTrust(t, home, stdout, 1)
 
 	raw, _ := os.ReadFile(claudeJSON)
 	var got map[string]any
@@ -250,6 +254,25 @@ func TestSpawnCLINoPreTrustFlagSkipsWrite(t *testing.T) {
 	projects, _ := got["projects"].(map[string]any)
 	if _, present := projects[cwd]; present {
 		t.Errorf("projects[%q] was written despite --no-pre-trust", cwd)
+	}
+}
+
+// assertRecordedNoPreTrust reads the spawned row's no_pre_trust column
+// from home's store and fails unless it is want (SR-22.6, SR-5.1: the
+// insert records the caller's opt-out for every resume of the life).
+// status, get and list do not expose the column, so this reads the store.
+func assertRecordedNoPreTrust(t *testing.T, home, spawnStdout string, want int64) {
+	t.Helper()
+	var res spawnResult
+	if err := json.Unmarshal([]byte(spawnStdout), &res); err != nil || res.ClaudeInstanceID == "" {
+		t.Fatalf("parse spawn stdout %q: %v", spawnStdout, err)
+	}
+	cols, err := apitest.ReadSpawnColumns(filepath.Join(home, ".agent-director", "state.db"), res.ClaudeInstanceID)
+	if err != nil {
+		t.Fatalf("ReadSpawnColumns: %v", err)
+	}
+	if cols.NoPreTrust != want {
+		t.Errorf("no_pre_trust = %#v; want %d", cols.NoPreTrust, want)
 	}
 }
 
@@ -522,8 +545,8 @@ func TestSpawnCLITmuxSessionNameLiveCollision(t *testing.T) {
 }
 
 // lastJSONLine returns the last non-empty line of s that begins with `{`.
-// Used to skip soft warning lines (e.g. pre-trust skipped) that the spawn
-// path may emit on stderr ahead of the JSON envelope.
+// Used to skip soft warning lines (e.g. "pre-trust failed for <path> …")
+// that the spawn path may emit on stderr ahead of the JSON envelope.
 func lastJSONLine(s string) string {
 	lines := strings.Split(s, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {

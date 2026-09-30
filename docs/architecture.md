@@ -62,7 +62,7 @@ still holds: nothing in `internal/` imports `pkg/api`.
 | `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. The `Catalog` is consumed by `cmd/agent-director`'s envelope writer and `internal/mcp`'s `classifyDispatchError`. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
 | `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. `classifyDispatchError` delegates to `errnames.Classify`. | stdlib; `pkg/api`; `pkg/api/manifest`; `pkg/api/errnames`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
 | `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
-| `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). `ApplyDefaults` makes the collision pre-check's one `SpawnState` read and returns an `IDCheck`. Builds env maps and synthesizes `--settings` JSON. Plain spawn's `Launch` resolves the launch socket and mints the launch token (`launchid.go`: `ResolveLaunchSocket`, `ResolveScanSocket`, `NewLaunchToken`), inserts the `pending` row with launch start, token and socket, creates and labels the session through the shared create-and-label step (`createlabel.go`: `LaunchTmux`, `CreateRequest`, `CreateAndLabel`, `CreateOutcome` / `CreateKind`), maps its failures in one place (`launch_errors.go`: `plainSpawnCreateError`, built from the exported description builders shared by every launch verb, `TmuxUnavailableError` (also the label scan's), `LaunchTimeoutError`, `UnlabelledSessionError`, `CreateFailedError` and the row sentence `RowStaysPending`) and makes the conditional identity write (`RecordLaunchIdentity`, shared with resume). Resume's launch uses the same pieces: `ResolveRowLaunchSocket` (the row's recorded socket), `ComposeRelaunch` (the `CreateRequest`, with no tmux call or write) and `Relaunch` (`CreateAndLabel` on that request). The clock and the start-time reader are passed in. See [Launch identity](#launch-identity). | stdlib; `internal/config`; `internal/store`; `internal/tmux`; `github.com/google/uuid` for UUID4 minting. | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
+| `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). `ApplyDefaults` makes the collision pre-check's one `SpawnState` read and returns an `IDCheck`. Builds env maps and synthesizes `--settings` JSON. Plain spawn's `Launch` resolves the launch socket and mints the launch token (`launchid.go`: `ResolveLaunchSocket`, `ResolveScanSocket`, `NewLaunchToken`), inserts the `pending` row with launch start, token and socket, creates and labels the session through the shared create-and-label step (`createlabel.go`: `LaunchTmux`, `CreateRequest`, `CreateAndLabel`, `CreateOutcome` / `CreateKind`), maps its failures in one place (`launch_errors.go`: `plainSpawnCreateError`, built from the exported description builders shared by every launch verb, `TmuxUnavailableError` (also the label scan's), `LaunchTimeoutError`, `UnlabelledSessionError`, `CreateFailedError` and the row sentence `RowStaysPending`) and makes the conditional identity write (`RecordLaunchIdentity`, shared with resume). Every launch pre-trusts its folder through the one shared step `PreTrust` (`pretrust.go`), which plain spawn runs before its insert and resume before its move to `pending`; see [Workspace-trust pre-write](#workspace-trust-pre-write). Resume's launch uses the same pieces: `ResolveRowLaunchSocket` (the row's recorded socket), `ComposeRelaunch` (the `CreateRequest`, with no tmux call or write) and `Relaunch` (`CreateAndLabel` on that request). The clock and the start-time reader are passed in. See [Launch identity](#launch-identity). | stdlib; `internal/config`; `internal/store`; `internal/tmux`; `github.com/google/uuid` for UUID4 minting. | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
 | `internal/tmux` | Thin client over the tmux binary, built only by `New(binary, Timeouts)` (`""` = tmux on `PATH`). **Phase 1 call set (SR-2.1, Appendix F.1)**, every call taking the socket: `Lookup` (the one-invocation lookup: session listing with labels plus the three `@ad_owner` scope reads), `ListPanes` (`list-panes -a`), `KillPane` (by pane id), `KillSessionID` (by session id), `SendKeysPane` (by pane id: the text call `send-keys -t <pane id> -l -- <text>`, then an optional separate `send-keys -t <pane id> Enter`; the `--` makes a text starting with `-` literal, never read as a send-keys flag; a text ending in `;` is sent with that `;` escaped as `\;`, because tmux reads an argument-final `;` as a command separator even after `--` — the escape is `escapeFinalSemicolon`, used only by the text call), `CapturePaneID` (by pane id), `SetLabel` (label by id: the session label by session id and the pane label by pane id) and `NewSession` (the create with its chained `@ad_owner` and `@ad_pane` labels). **Label form (SR-3.4, SR-3.5):** `ad1 <token> <$N> <instance id> <store id>`, five fields. The store id is the writing store's `store_meta.store_id`, which callers pass from `(*store.Store).StoreID()`; it is the last field, so the instance id is everything between the third and the last space and may contain spaces. `NewSession` and `SetLabel` both take the token, the instance id and the store id; the chain doubles `#` only inside the instance id. **Pane label (SR-2.1, SR-3.5):** every created pane carries the per-pane user option `@ad_pane` = `<token> <pane id>`, so a launch whose create reply was lost can later find its own pane by token, whatever the base-index or window layout. The create sets it with a second chained step, `; set-option -p -F -t =<name>: @ad_pane '<token> #{pane_id}'`, after the `@ad_owner` step; each `;` is its own argv element, and a name for which `NeedsLabelByID` holds gets neither chained step. A failure of either chained step is the create's `FailLabel` (tmux stops the chain at the first failing step). `SetLabel(socket, sessionID, paneID, token, instanceID, storeID)` sets both labels in one invocation, `set-option -t <$N> @ad_owner '<label>' ; set-option -p -t <%N> @ad_pane '<token> <%N>'`, with the session and pane ids from the create reply; a failure may leave the session labelled and its pane not. Neither label value ends in `;`. Only the new session's one pane is labelled: a pane split from it later has no value. **Pane listing:** `ListPanes` reads `#{@ad_pane}` as the sixth and last field, the value being everything after the fifth tab, so a tab inside it cannot shift the other fields. `Pane.AdPane` is the token only when the value is exactly `<16 lowercase hex token> <pane id>` and that pane id equals the line's own `%N` (`classifyPaneLabel`); anything else gives `""`, so a window, session, global or server value borrowed through the format, which names another pane or none, never counts (the scope guard of SR-3.6). Caveat: on tmux 3.3a a server-scope `@ad_pane` (`set-option -s`) is listed on every pane in place of its own value, so while one exists only the pane that value names can report a token and every other pane reads `""`; no other pane is matched, but a pane reading `""` then does not show that its label is gone. The raw value never leaves the client, and a malformed listing's `CallError.FirstLine` is its first line cut before the pane label field (`paneListingFirstLine`). The lookup does not read `@ad_pane`. No verb calls the pane label yet: it exists for adoption of a lost create reply (SR-3.6), the leftover-pane check (SR-3.7) and the no-pane row check (SR-11.3). A value in any other form, a four-field one included, parses as no label (`LabelNone`), except that a four-field value whose instance id ends in a space and 16 lowercase hex reads as a shorter id plus that word as its store id; and `Label.StoreID` is set only on a valid label. Typed results and failures: `Call`, `Failure`, `CallError`, `LookupAnswer`, `Session`, `Label` / `LabelKind`, `CreateReply`, `Pane`, `Timeouts`. Mechanics: every call runs `-u -S <socket>` first; targets are ids only (never a name or pattern); each call class (query, action, create) has its own timeout, plus the pipe-close wait (`Timeouts.WaitDelay`); data is parsed only from standard output of an exit-0 call; replies are recognised only from the first line of standard error; the client's environment has every `AGENT_DIRECTOR_*` variable removed. Socket-taking calls fail only with `*CallError`. Labels reach callers only classified (the raw value never leaves the client) and recognised replies only as a `Failure`; the one exception is an unrecognised reply, whose first line (trimmed, at most 200 bytes) is carried in `CallError.FirstLine`. **Socket resolution (RN-5):** `ResolveSocket(create)` resolves the socket as tmux does (`TMUX`, then `TMUX_TMPDIR`, then `/tmp`, with tmux's per-user directory checks) and `EnsureSocketDir(socket)` creates only a missing per-user directory; refusals are `*SocketDirError` (with `SocketDirReason`), matching `ErrTmuxNotAvailable`. **Must use** `tmux.NeedsLabelByID(name)` to decide whether a session name (one containing `$` or `\`) must be labelled by id rather than by the chain; never re-implement that test. The client receives its timeouts and pipe-close wait from `pkg/api` at construction, never from `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); the package defines no defaults. The runner seam types (`Invocation`, `RunStatus`, `RunResult`, `Runner`) are exported for replay tests; tests install a runner only through the test-only `NewWithRunner` in `export_test.go`. The name-based methods (`HasSession`, `KillSession`, `SendKeys`, `CapturePane`) keep their contracts until their last verb moves to the socket-taking calls. `HasSession` matches by prefix: `resume` still calls it until it moves to the lookup, and no verb may newly adopt it. `StripANSI` post-processes captures. **Shared lookup (SR-3.3, SR-3.4, SR-3.10, Appendix F.2):** `Lookup` / `Classify` in `lookup.go`, `lookup_class.go`, `lookup_holder.go` and `lookup_server.go` turn one lookup answer and a row's `Launch` into a verdict; see [Shared tmux lookup](#shared-tmux-lookup). Beside it: `unusable.go` (the unusable-name guard `Unusable`), `agent_process.go` (agent-process selection `SelectAgentProcess` and judgement `JudgeProcess`), `pane_token.go` (`PaneByToken`, a pane found by its `@ad_pane` token) and `sweep.go` (the multi-socket sweep `Sweep`, built by `NewSweep`, under one tmux budget). | stdlib (`bytes`, `context`, `errors`, `fmt`, `io/fs`, `os`, `os/exec`, `path/filepath`, `regexp`, `slices`, `sort`, `strconv`, `strings`, `syscall`, `time`, `unicode`, `unicode/utf8`). | `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); `internal/probe` (the lookup's `ProcChecker` is satisfied structurally); template and store packages; shell processes (`/bin/sh`); anything other than direct `exec.Command`. |
 | `internal/hook` | Reads payload JSON from stdin, classifies per SRD §5.2, and writes the row only through the gated store writes: a hook applies only when its parent process (`getppid()` and that pid's start time, captured once at entry) is the row's recorded pane process; otherwise it changes nothing and writes one `ad.hook.ignored` (SR-22.9; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). Exits 0 (state-tracking fail-open). | stdlib; `internal/store`; `internal/trail`; `internal/config` (the `config.Relay` settings type only; the cmd-side wrapper loads config); `github.com/google/uuid`. The parent-process readers arrive as `HandleConfig.ParentPID` / `ParentProc`, wired by `cmd/agent-director`. | `internal/tmux`; `internal/spawn`; `internal/probe` (no tmux call and no ancestry walk on the hook path). |
 
@@ -579,8 +579,10 @@ fresh store and a migrated store have identical column lists on both tables.
 scanner, `scanSpawn`, so both fill them identically): `RowVersion`,
 `LaunchStartedAtMillis` (0 = absent), `LifeNumber`, `NoPreTrust` (the
 recorded pre-trust choice), `EndedAtText` (`ended_at` exactly as stored, ""
-for NULL), `Snapshot` and `Identity`. No write takes a `Spawn`; a caller
-passes `Snapshot` to `MoveToPending`, and builds the `store.ResumePrior` that
+for NULL), `Snapshot` and `Identity`. The one write that takes a `Spawn` is
+`InsertPending`, which takes `LaunchStartedAtMillis`, `NoPreTrust`,
+`Identity.Token` and `Identity.Socket` from it; no write takes the other v5
+fields from one. A caller passes `Snapshot` to `MoveToPending`, and builds the `store.ResumePrior` that
 `RestoreAfterFailedResume` takes from `EndedAtText`, `Identity` and the other
 fields the move clears. No verb reports these fields, with one exception, the launch
 start: `get` and `list` report `LaunchStartedAtMillis` as `launch_started_at`
@@ -649,7 +651,8 @@ still the one it read, so it knows the row has not changed since. As built:
   `InsertPending` (plain spawn) and `MoveToPending` (resume's move).
 - `InsertPending` writes `launch_started_at`, `launch_token` and
   `tmux_socket` in the INSERT (zero values as NULL) and never the six
-  identity columns. `RecordLaunchIdentity(instanceID, launchVersion, token,
+  identity columns. The same INSERT records the caller's pre-trust choice:
+  `no_pre_trust` is 1 when `Spawn.NoPreTrust` is true, else 0. `RecordLaunchIdentity(instanceID, launchVersion, token,
   identity)` is the one update that records a launch's six tmux server and
   pane identity columns: one UPDATE, guarded on `state = 'pending'`, the given
   `row_version` and the given `launch_token`, that advances `row_version`
@@ -657,7 +660,7 @@ still the one it read, so it knows the row has not changed since. As built:
   read tells `CondChanged` from `CondAbsent` (`store.CondResult`,
   `rowsnapshot.go`; every conditional write shares the helper
   `condNotApplied`). No store update touches `life_number` or
-  `no_pre_trust`.
+  `no_pre_trust`, so the insert's pre-trust choice holds for the row's life.
 - Resume's writes (SR-8.3, SR-8.5; `internal/store/resume_writes.go`;
   called only by `resume`, see [Resume](#resume)). `MoveToPending` moves
   an `ended` or `missing` row whose `RowSnapshot` still equals the
@@ -1852,7 +1855,9 @@ pending insert (`InsertPending`) then writes, in the INSERT itself:
 - `launch_started_at`: the Client's clock (`now`), read once, in
   milliseconds;
 - `launch_token`: the token;
-- `tmux_socket`: the resolved socket.
+- `tmux_socket`: the resolved socket;
+- `no_pre_trust`: the caller's pre-trust choice (1 for `--no-pre-trust`,
+  else 0).
 
 The six server and pane identity columns stay NULL and `row_version` is
 0. A plain spawn's recorded socket therefore comes from the caller's tmux
@@ -2001,10 +2006,37 @@ Claude Code shows a one-time "Quick safety check: Is this a project you
 created or one you trust?" modal the first time it sees a new cwd. The
 modal blocks before `SessionStart` fires, so a Spawn into a fresh cwd
 sits in `pending` forever and `send-keys` refuses to drive it (the
-precondition is a live state). Before exec'ing tmux, `internal/spawn`
-resolves the target `.claude.json`: if the spawn's `extra_env` supplies
-`CLAUDE_CONFIG_DIR`, that directory is used (`<CLAUDE_CONFIG_DIR>/.claude.json`);
-otherwise the operator's `~/.claude.json` is used. It then sets
+precondition is a live state).
+
+Every launch pre-trusts the agent's folder through one shared step,
+`spawn.PreTrust(cwd, extraEnv, off)` in `internal/spawn/pretrust.go`: a
+plain `spawn` (`spawn.Launch`, with the resolved cwd, extra env and
+`NoPreTrust`) and `resume` (`resumeAfterJsonl` in `pkg/api/resume.go`,
+with the row's cwd, extra env and recorded `NoPreTrust`). **Must use:**
+any launch path, current or future, pre-trusts by calling
+`spawn.PreTrust`; do not call `preTrustCwd` directly or write
+`.claude.json` any other way. `PreTrust` returns a `PreTrustOutcome`
+(`ok`, `skipped`, `failed`) and never returns an error; both callers
+discard the outcome today.
+
+Placement: pre-trust runs after every check that can refuse the launch
+without a write, and immediately before the write that begins the
+launch: the pending insert for `spawn` (after the socket, token, env
+compose and `--settings` synthesis), the move to `pending` for `resume`
+(after its guards, transcript search, control-character check, socket
+resolution, name pre-check, token and `ComposeRelaunch`). A launch
+refused before pre-trust writes no trust entry. A launch refused after
+it (a `spawn` insert collision, a `resume` whose move finds the row
+changed or gone) leaves the entry written, which is harmless: it only
+marks the folder trusted. Because pre-trust runs before the launch-start
+write, it never lengthens the window between the launch start and the
+create.
+
+The step resolves the target `.claude.json` (`claudeJSONFor`): if the
+launch's extra env supplies `CLAUDE_CONFIG_DIR`, that directory is used
+(`<CLAUDE_CONFIG_DIR>/.claude.json`); otherwise the operator's
+`~/.claude.json` is used. For `resume` the extra env is the row's, so it
+targets the same file the row's spawn did. It then sets
 `projects.<canonical cwd>.hasTrustDialogAccepted = true` and writes
 the file back atomically (temp + rename) so a torn write against the
 operator's own Claude Code session is impossible. The same file is
@@ -2015,10 +2047,30 @@ end up with the same key set to `true`) is safe.
 `--no-pre-trust` (`SpawnParams.NoPreTrust`) opts out for callers that
 explicitly want the human-in-the-loop trust dialog — e.g. spawning into
 a directory handed in by an untrusted caller. The flag defaults off, so
-pre-trust is the default behavior. When the resolved file does not exist (truly
-fresh Claude Code install, or a fresh `CLAUDE_CONFIG_DIR`), the write is
-skipped and a soft warning lands on stderr; the spawn proceeds and the
-trust dialog is unavoidable in that case.
+pre-trust is the default behavior. With the opt-out, `PreTrust` attempts
+nothing, touches no file and prints nothing.
+
+The choice is recorded on the row at the spawn's pending insert
+(`no_pre_trust`, see [internal/store](#internalstore)), and every
+`resume` of that life honours it: `resume` passes the recorded
+`NoPreTrust` as `off`, so over an opt-out it attempts no pre-trust and
+writes no trust entry. The move to `pending` and the restore after a
+failed launch keep the column, so a retry after a restored launch
+failure honours it too. `resume` has no pre-trust parameter, and no
+verb, parameter or setting turns pre-trust back on over a recorded
+opt-out. Rows from before this release carry the column's default
+(pre-trust allowed), so their `resume` pre-trusts whatever their
+original spawn chose.
+
+Pre-trust is best effort on both verbs: a failure never fails the
+launch. When the write cannot be made (the resolved file does not exist,
+as on a fresh Claude Code install or a fresh `CLAUDE_CONFIG_DIR`, or it
+cannot be read, parsed or written), `PreTrust` returns `failed` and
+prints one line to stderr (`preTrustWarn`): `agent-director: pre-trust
+failed for <path> (<reason>); the agent may stop at Claude Code's
+folder-trust prompt`, with the reason "file does not exist" for a
+missing file. The launch proceeds, and the agent may wait at the trust
+dialog.
 
 Only `hasTrustDialogAccepted` is touched. Sibling keys
 (`hasCompletedProjectOnboarding`, `hasClaudeMdExternalIncludesApproved`,
@@ -2040,8 +2092,8 @@ Layer boundaries (load-bearing):
 - For `resume`, `pkg/api` makes the store writes (`MoveToPending`, then
   `RestoreAfterFailedResume` after a failed launch) and calls
   `internal/spawn` for `ResolveRowLaunchSocket`, `NewLaunchToken`,
-  `ComposeRelaunch`, `Relaunch` (the shared create-and-label step through
-  the `LaunchTmux` calls) and `RecordLaunchIdentity`, which writes through
+  `ComposeRelaunch`, `PreTrust`, `Relaunch` (the shared create-and-label
+  step through the `LaunchTmux` calls) and `RecordLaunchIdentity`, which writes through
   the `IdentityWriter` it is given. `internal/spawn` opens no store for
   resume.
 - The label scan lives in `pkg/api` (`spawn_scan.go`): one `tmux.Lookup`
@@ -3372,9 +3424,11 @@ Bringing a terminated Spawn back to life via `claude --resume`. Same
 
 ### Verb (`pkg/api/resume.go`)
 
-Steps run in order. Every refusal before the move to `pending` (step 9)
-writes nothing, not even the parent id, and the only tmux call before
-the move is the name pre-check (step 7):
+Steps run in order. Every refusal before the move to `pending` (step 10)
+writes nothing to the store, not even the parent id, and the only tmux
+call before the move is the name pre-check (step 7). A refusal before
+pre-trust (step 9) also writes no trust entry; a move that loses its race
+after pre-trust leaves the entry written, harmlessly:
 
 1. `GetSpawn` → `ErrSpawnNotFound` on unknown id.
 2. State must be `ended` or `missing` → otherwise
@@ -3466,28 +3520,33 @@ the move is the name pre-check (step 7):
    the argv `claude --resume <session_id> --settings <json> [user
    claude_args]` into a `CreateRequest`. Both run before the move, so a
    failure writes nothing.
-9. The move to `pending` (`MoveToPending`, SR-8.3): one conditional write
-   guarded on the row's `RowSnapshot` as read. It sets the launch start
-   (one read of the Client's clock), the new token, the launch's socket
-   and the `parent_id` re-derived from the caller's
-   `AGENT_DIRECTOR_INSTANCE_ID` (NULL when unset). It clears `pid`,
-   `proc_starttime`, `ended_at`, the liveness note and the server and
-   pane identity, and keeps the session id, transcript path, life and
-   history. This is resume's only parent-id write. Before the move,
-   resume builds the `store.ResumePrior` (state, `ended_at` text, pid,
-   start time, liveness note, launch identity) from the row as read.
-   Outcomes of the move: the row changed → `ErrSpawnNotResumable` ("the
-   row changed after resume examined it"); the row is gone →
-   `ErrSpawnNotFound`; a store error → `ErrInternal`. In each case
-   nothing is written and nothing is launched.
-10. The create (`spawn.Relaunch`, the shared create-and-label step) on
+9. Pre-trust (`spawn.PreTrust`, SR-8.1 step 4, SR-22.6) for the row's
+   cwd and extra env, skipped when the row records the spawn's opt-out
+   (`NoPreTrust`). Best effort: its outcome never changes resume's control
+   flow or error. See
+   [Workspace-trust pre-write](#workspace-trust-pre-write).
+10. The move to `pending` (`MoveToPending`, SR-8.3): one conditional write
+    guarded on the row's `RowSnapshot` as read. It sets the launch start
+    (one read of the Client's clock), the new token, the launch's socket
+    and the `parent_id` re-derived from the caller's
+    `AGENT_DIRECTOR_INSTANCE_ID` (NULL when unset). It clears `pid`,
+    `proc_starttime`, `ended_at`, the liveness note and the server and
+    pane identity, and keeps the session id, transcript path, life,
+    pre-trust choice and history. This is resume's only parent-id write.
+    Before the move, resume builds the `store.ResumePrior` (state, `ended_at` text, pid,
+    start time, liveness note, launch identity) from the row as read.
+    Outcomes of the move: the row changed → `ErrSpawnNotResumable` ("the
+    row changed after resume examined it"); the row is gone →
+    `ErrSpawnNotFound`; a store error → `ErrInternal`. In each case
+    nothing is written to the store and nothing is launched.
+11. The create (`spawn.Relaunch`, the shared create-and-label step) on
     the launch's socket, with the recorded name, labelled `ad1 <token>
     <$N> <instance id> <store id>`. It runs directly after the move, with
     no store, file or network I/O between them. When it returns, resume
     emits `ad.resume.moved_to_pending` (`claude_instance_id`,
     `prior_state`, the row's `claude_session_id` as read, source
     `ad_resume`), fail-open.
-11. The outcome (`resumeLaunchOutcome`, SR-8.5):
+12. The outcome (`resumeLaunchOutcome`, SR-8.5):
     - A labelled session: the identity write, `spawn.RecordLaunchIdentity`
       with the move's version and token. The store must also implement the
       optional `RecordLaunchIdentity` method; `*store.Store` does, and an
@@ -3529,7 +3588,7 @@ originally created it:
 - A Spawn originally parented to A and later resumed by B → `parent_id
   = B`.
 
-Resume writes the parent id only in its move to `pending` (step 9
+Resume writes the parent id only in its move to `pending` (step 10
 above). A refusal before the move writes none, and a restore after a
 failed launch keeps the value the move wrote. The store's `SetParentID`
 is called by no verb.

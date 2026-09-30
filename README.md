@@ -171,6 +171,9 @@ A row is `pending` while its launch is in progress and its agent has not
 reported in yet (it may be loading or waiting at a startup prompt); it
 becomes `waiting` once the agent reports in.
 
+`spawn` marks the folder as trusted so the agent does not stop at Claude
+Code's folder-trust prompt; add `--no-pre-trust` to keep the prompt.
+
 #### Naming the tmux session yourself
 
 `spawn` accepts `--tmux-session-name <name>` so Slack-channel bots,
@@ -408,6 +411,9 @@ agent-director resume --claude-instance-id <id>
 the same id and restores the session's env and conversation transcript.
 The resumed row shows `pending`, keeping its session id and history, until
 its agent reports in, then `waiting`.
+`resume` marks the folder as trusted too, unless the session was spawned
+with `--no-pre-trust`: then no `resume` of it marks the folder, and the
+agent may wait at the trust prompt.
 
 `resume` also recovers history from a session that rotated (for example when
 agents were restarted and Claude handed the session a new id) — it falls back

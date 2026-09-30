@@ -530,16 +530,39 @@ func TestRowVersionEveryWriteAdvancesByOne(t *testing.T) {
 }
 
 // TestRowVersionInsertStartsAtZero checks a new row starts at version 0 with
-// the launch start, token and socket given, no identity, life 0, no_pre_trust 0.
+// the launch start, token and socket given, no identity, life 0, and the
+// caller's pre-trust choice: the insert is the write that records no_pre_trust
+// (SR-5.1), 1 for the opt-out and 0 otherwise; no versioned write above
+// changes it.
 func TestRowVersionInsertStartsAtZero(t *testing.T) {
-	f := newV5Store(t)
-	sp := f.insertLaunch("rv-insert", launchStart, store.LaunchIdentity{Token: goodToken, Socket: "/tmp/rv/sock"})
-	c := f.rawColumns("rv-insert")
-	assertInsertedLaunch(t, c, sp)
-	if got, want := []any{c.LifeNumber, c.NoPreTrust}, []any{int64(0), int64(0)}; !reflect.DeepEqual(got, want) {
-		t.Errorf("life_number, no_pre_trust = %#v, want %#v", got, want)
+	cases := []struct {
+		name       string
+		noPreTrust bool
+		want       int64 // no_pre_trust as stored
+	}{
+		{"pre-trust allowed stores 0", false, 0},
+		{"pre-trust opt-out stores 1", true, 1},
 	}
-	assertStoreIDKept(t, f)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newV5Store(t)
+			sp := store.Spawn{ClaudeInstanceID: "rv-insert", CWD: "/tmp", TmuxSessionName: "ts-rv-insert",
+				RelayMode: "off", LaunchStartedAtMillis: launchStart, NoPreTrust: tc.noPreTrust,
+				Identity: store.LaunchIdentity{Token: goodToken, Socket: "/tmp/rv/sock"}}
+			if err := f.s.InsertPending(sp); err != nil {
+				t.Fatalf("InsertPending: %v", err)
+			}
+			c := f.rawColumns("rv-insert")
+			assertInsertedLaunch(t, c, sp)
+			if got, want := []any{c.LifeNumber, c.NoPreTrust}, []any{int64(0), tc.want}; !reflect.DeepEqual(got, want) {
+				t.Errorf("life_number, no_pre_trust = %#v, want %#v", got, want)
+			}
+			if got := rvExamine(t, f, "rv-insert").NoPreTrust; got != tc.noPreTrust {
+				t.Errorf("GetSpawn NoPreTrust = %v, want %v", got, tc.noPreTrust)
+			}
+			assertStoreIDKept(t, f)
+		})
+	}
 }
 
 // TestRowVersionNoOpWritesChangeNothing checks the hold path, zero-row writes

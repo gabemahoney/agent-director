@@ -166,7 +166,8 @@ type resumeDeps struct {
 //     ~/.claude when that key is absent/empty) + slug(cwd) + session
 //     id, and that is os.Stat'd. The CLAUDE_CONFIG_DIR value is used
 //     ONLY when it is non-empty AND absolute (filepath.IsAbs): an
-//     empty string is treated as absent (mirroring pretrust.go:58),
+//     empty string is treated as absent (mirroring the `dir != ""` check
+//     of internal/spawn's pre-trust file resolution, claudeJSONFor),
 //     and a non-absolute value (relative, `~`-prefixed, or
 //     whitespace-only) is ALSO treated as absent — in every such
 //     case the fallback resolves to ~/.claude, since a relative dir
@@ -191,6 +192,12 @@ type resumeDeps struct {
 //
 // The winning candidate's session id is the one `claude --resume` names;
 // the launch itself (resumeAfterJsonl) always works from the row as read.
+// After these guards and resumeAfterJsonl's own pre-launch checks, and just
+// before the move to pending, resume pre-trusts the row's folder
+// (spawn.PreTrust) unless the spawn that began the row's life turned
+// pre-trust off (the row's NoPreTrust). A pre-trust failure never fails the
+// launch, and a refusal above the move writes no trust entry (SR-8.1 step 4,
+// SR-22.6).
 func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, storeID string, now func() time.Time, lg *log.Logger, params ResumeParams) (ResumeResult, error) {
 	if lg == nil {
 		lg = log.New(io.Discard, "", 0)
@@ -235,13 +242,14 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 	}
 
 	// Fallback: recompute from the persisted CLAUDE_CONFIG_DIR (bug b.1ba),
-	// following the internal/spawn/pretrust.go pattern — fall back to
-	// ~/.claude when the key is absent/empty via spawn.JsonlPath.
+	// following the pattern of internal/spawn's pre-trust file resolution
+	// (claudeJSONFor) — fall back to ~/.claude when the key is absent/empty
+	// via spawn.JsonlPath.
 	//
 	// CLAUDE_CONFIG_DIR value semantics (decision of record, bug b.1ba):
 	// the ExtraEnv value is used ONLY if it is non-empty AND absolute.
-	// Empty string is treated as absent (mirrors pretrust.go:58's
-	// `dir != ""` check). A non-empty but non-ABSOLUTE value — relative,
+	// Empty string is treated as absent (mirrors claudeJSONFor's
+	// `dir != ""` check in internal/spawn). A non-empty but non-ABSOLUTE value — relative,
 	// `~`-prefixed, or whitespace-only (whitespace-only is non-absolute,
 	// so the single filepath.IsAbs check covers it) — is ALSO treated as
 	// absent, because a relative dir would stat against the process cwd,
@@ -398,18 +406,26 @@ func formatJsonlAttempts(attempts []jsonlAttempt) string {
 //  4. A new launch token (a failure → ErrInternal, nothing written), then
 //     the environment, settings and argv (spawn.ComposeRelaunch), all before
 //     the move, so a failure writes nothing.
-//  5. The move to pending (MoveToPending): one conditional write with the
+//  5. Pre-trust (spawn.PreTrust, SR-8.1 step 4, SR-22.6): after every check
+//     above that can refuse without a write and immediately before the move,
+//     for the row's cwd and extra env (so CLAUDE_CONFIG_DIR resolves the file
+//     a spawn of the row used), off when the row records the opt-out of the
+//     spawn that began its life (row.NoPreTrust, which the move and the
+//     restore keep, so a retry after a restored failure follows it too). Best
+//     effort: its outcome never changes resume's control flow or error, and a
+//     failure prints the "pre-trust failed" line and the launch proceeds.
+//  6. The move to pending (MoveToPending): one conditional write with the
 //     snapshot of the row as read, the launch start from one read of now in
 //     milliseconds, the token, the socket and the parent id re-derived from
 //     the caller's AGENT_DIRECTOR_INSTANCE_ID ("" = NULL); the only parent-id
 //     write. Row changed → ErrSpawnNotResumable; row removed →
 //     ErrSpawnNotFound; store error → ErrInternal. Each writes nothing and
 //     launches nothing.
-//  6. The create (spawn.Relaunch), the first step after the move, with no
+//  7. The create (spawn.Relaunch), the first step after the move, with no
 //     store, file or network I/O between them: the recorded name on the
 //     launch's socket, labelled "ad1 <token> <session id> <instance id>
 //     <store id>". Once it returns, ad.resume.moved_to_pending is emitted.
-//  7. Its outcome (SR-8.5), mapped in resumeLaunchOutcome: a labelled
+//  8. Its outcome (SR-8.5), mapped in resumeLaunchOutcome: a labelled
 //     session → the identity write with the move's version and token (when
 //     the store provides it), success; a lost reply → success with no
 //     identity; a timeout or a non-zero-exit unparseable reply →
@@ -454,6 +470,9 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 	if err != nil {
 		return ResumeResult{}, err
 	}
+
+	// The outcome is not reported yet; a failure never fails the launch.
+	_ = spawn.PreTrust(row.CWD, row.ExtraEnv, row.NoPreTrust)
 
 	// What the move clears, from the row as read: the restore writes it back
 	// byte for byte (SR-8.5).
@@ -611,6 +630,14 @@ func launchInProgressError(row Spawn) error {
 // Resume brings a finished (ended/missing) Spawn back to life by launching
 // `claude --resume` in a fresh tmux session pointed at the same JSONL
 // transcript. The claude_instance_id is preserved.
+//
+// Before its launch, Resume pre-trusts the row's working directory (marks it
+// trusted in the .claude.json file of the row's CLAUDE_CONFIG_DIR, or
+// ~/.claude.json) so the agent skips Claude Code's folder-trust prompt, as a
+// spawn does, unless the spawn that began the row's life turned pre-trust off
+// (SpawnParams.NoPreTrust); then nothing is pre-trusted, on every resume of
+// that life. A pre-trust failure never fails the launch. A resume refused
+// before its move to pending writes no trust entry.
 //
 // Before it creates the session, Resume moves the row to pending in one
 // conditional write, keeping its session id and history and writing the

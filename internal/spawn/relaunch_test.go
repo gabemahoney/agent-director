@@ -2,6 +2,8 @@ package spawn
 
 import (
 	"encoding/json"
+	"fmt"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"testing"
@@ -199,6 +201,32 @@ func TestRelaunchLabelledCreateOnPassedSocket(t *testing.T) {
 			}
 			if out.Reply.SessionID != after.ID || out.Reply.PaneID != after.Panes[0].ID {
 				t.Errorf("outcome reply = %+v; want session %q pane %q", out.Reply, after.ID, after.Panes[0].ID)
+			}
+		})
+	}
+}
+
+// TestRelaunchWritesNoTrustEntry pins SR-8.1 step 4: resume pre-trusts before
+// its move, so composing and creating writes neither .claude.json, opted out or not.
+func TestRelaunchWritesNoTrustEntry(t *testing.T) {
+	const seed = `{"projects":{}}`
+	for _, noPreTrust := range []bool{false, true} {
+		t.Run(fmt.Sprintf("NoPreTrust=%v", noPreTrust), func(t *testing.T) {
+			e := newRelaunchEnv(t)
+			home := withStubClaudeJSON(t)
+			seedFile(t, home, seed)
+			dir := t.TempDir()
+			seedFile(t, filepath.Join(dir, ".claude.json"), seed)
+			e.row.ExtraEnv = map[string]string{"CLAUDE_CONFIG_DIR": dir}
+			e.row.NoPreTrust = noPreTrust
+
+			if out := e.relaunch("s1"); out.Kind != CreateLabelled {
+				t.Fatalf("Relaunch kind = %v (cause %v); want CreateLabelled", out.Kind, out.Cause)
+			}
+			for _, p := range []string{home, filepath.Join(dir, ".claude.json")} {
+				if got := mustReadFile(t, p); string(got) != seed {
+					t.Errorf("%s = %q; want byte-identical %q (no trust entry at create time)", p, got, seed)
+				}
 			}
 		})
 	}

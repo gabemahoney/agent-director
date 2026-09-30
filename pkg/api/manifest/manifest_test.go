@@ -891,11 +891,13 @@ func TestListSpawnsDescriptionNamesLivenessFields(t *testing.T) {
 }
 
 // TestSpawnParamDescriptionsPinValidationRules pins the load-bearing tokens of
-// two spawn param descriptions, on the manifest source of truth AND in the
+// three spawn param descriptions, on the manifest source of truth AND in the
 // committed surface.json: the tmux-session-name text must name '$' and '\'
-// among the rejected characters (SR-9.2), and the claude_instance_id text must
+// among the rejected characters (SR-9.2), the claude_instance_id text must
 // state that an id with a control character is rejected with ErrInvalidFlags
-// (SR-18.9). Only tokens are asserted, never full sentences, so wording edits
+// (SR-18.9), and the no-pre-trust text must state that the choice is recorded
+// for the row's life and followed by every resume of it (SR-22.6).
+// Only tokens are asserted, never full sentences, so wording edits
 // do not break the test. The claude_instance_id collision sentence is
 // deliberately not pinned.
 func TestSpawnParamDescriptionsPinValidationRules(t *testing.T) {
@@ -925,6 +927,7 @@ func TestSpawnParamDescriptionsPinValidationRules(t *testing.T) {
 	}{
 		{"session name rejects dollar and backslash", "tmux-session-name", []string{`'$'`, `'\'`}},
 		{"instance id rejects control characters", "claude_instance_id", []string{"control character", "ErrInvalidFlags"}},
+		{"no-pre-trust is recorded for the life", "no-pre-trust", []string{"recorded on the row for its life", "every resume of that life follows it"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -989,6 +992,35 @@ func TestSpawnDescriptionStatesPreCheckErrInternal(t *testing.T) {
 		for _, tok := range []string{"ErrInternal", "collision pre-check", "read the store"} {
 			if !strings.Contains(desc, tok) {
 				t.Errorf("%s: spawn description does not contain %q; got %q", source, tok, desc)
+			}
+		}
+	}
+}
+
+// TestResumeDescriptionStatesPreTrust pins SR-22.6 on resume's Description:
+// resume pre-trusts unless the row's spawn opted out with no-pre-trust, and a
+// pre-trust failure never fails the resume. Tokens only, on the manifest and in
+// surface.json (help shows this same description).
+func TestResumeDescriptionStatesPreTrust(t *testing.T) {
+	v, ok := manifest.Lookup("resume")
+	if !ok {
+		t.Fatal("resume not in manifest")
+	}
+	descs := map[string]string{"manifest": v.Description}
+	_, surface := readSurfaceJSON(t)
+	for _, vv := range surface.Verbs {
+		if vv.Name == "resume" {
+			descs["surface.json"] = vv.Description
+		}
+	}
+	if _, ok := descs["surface.json"]; !ok {
+		t.Fatal("surface.json has no resume verb")
+	}
+	for source, desc := range descs {
+		for _, tok := range []string{"best-effort pre-trust", "unless the spawn that began the row's life",
+			"no-pre-trust", "pre-trust failure never fails the resume"} {
+			if !strings.Contains(desc, tok) {
+				t.Errorf("%s: resume description does not contain %q; got %q", source, tok, desc)
 			}
 		}
 	}
