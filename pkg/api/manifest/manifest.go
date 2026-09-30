@@ -98,7 +98,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "spawn",
-		Description: "Launch a tracked Claude Code instance inside a new tmux session. Returns the claude_instance_id without waiting for the agent; state moves from pending to waiting on the first SessionStart hook. The session is labelled for this launch when it is created, and the session-creating call is bounded by the create timeout. If it times out, spawn returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may have been created and the new row stays pending; do not retry until get shows the row ended or missing, since a retried spawn without an explicit id would start a second agent. With an explicit claude_instance_id that has no row, spawn first looks for a tmux session of this agent-director store still labelled with that id; one left over from an earlier life refuses the spawn with ErrTmuxSessionConflict (CONFLICT: permanent until a human looks; see the README's \"Operator actions\"), and nothing is written. ErrTmuxNotAvailable is ENVIRONMENT and ErrTmuxSessionCreate a LAUNCH FAILURE. When an explicit claude_instance_id is supplied and the collision pre-check cannot read the store, spawn returns ErrInternal and creates nothing; this is a store fault and says nothing about whether the id is in use.",
+		Description: "Launch a tracked Claude Code instance inside a new tmux session. Returns the claude_instance_id without waiting for the agent; the row is pending from its insert until the agent reports in (Claude Code's SessionStart), then waiting. The session is labelled for this launch when it is created, and the session-creating call is bounded by the create timeout. If it times out, spawn returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may have been created and the new row stays pending; do not retry until get shows the row ended or missing, since a retried spawn without an explicit id would start a second agent. With an explicit claude_instance_id that has no row, spawn first looks for a tmux session of this agent-director store still labelled with that id; one left over from an earlier life refuses the spawn with ErrTmuxSessionConflict (CONFLICT: permanent until a human looks; see the README's \"Operator actions\"), and nothing is written. ErrTmuxNotAvailable is ENVIRONMENT and ErrTmuxSessionCreate a LAUNCH FAILURE. When an explicit claude_instance_id is supplied and the collision pre-check cannot read the store, spawn returns ErrInternal and creates nothing; this is a store fault and says nothing about whether the id is in use.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -245,7 +245,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "status",
-		Description: "Return the current state of a tracked Spawn (pending/waiting/working/ask_user/check_permission/ended/missing).",
+		Description: "Return the current state of a tracked Spawn (pending/waiting/working/ask_user/check_permission/ended/missing). pending means a launch (spawn, reuse or resume) is in progress and the agent has not reported in yet (Claude Code's SessionStart); it may be loading or waiting at a startup prompt. A resumed pending row keeps its session id and history; a caller tells it from a fresh one by its non-empty claude_session_id (shown by get).",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -263,7 +263,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "state",
 				Type:          "string",
-				Description:   "Current state column value.",
+				Description:   "Current state, one of the allowed values. pending: a launch (spawn, reuse or resume) is in progress and the agent has not reported in yet (Claude Code's SessionStart); it may be loading or waiting at a startup prompt. A resumed pending row keeps its session id and history (non-empty claude_session_id).",
 				Nullable:      false,
 				AllowEmpty:    false,
 				AllowedValues: stateEnum,
@@ -300,7 +300,7 @@ var Verbs = []VerbDef{
 		ResultFields: []FieldDef{
 			{Name: "claude_instance_id", Type: "string", Description: "Stable id of the Spawn.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			{Name: "parent_id", Type: "string", Description: "Parent Spawn id (AGENT_DIRECTOR_INSTANCE_ID env at spawn time), empty when launched by a human shell.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
-			{Name: "state", Type: "string", Description: "Current state column value.", Nullable: false, AllowEmpty: false, AllowedValues: stateEnum},
+			{Name: "state", Type: "string", Description: "Current state, one of the allowed values. pending: a launch (spawn, reuse or resume) is in progress and the agent has not reported in yet (Claude Code's SessionStart); it may be loading or waiting at a startup prompt. A resumed pending row keeps its session id and history (non-empty claude_session_id).", Nullable: false, AllowEmpty: false, AllowedValues: stateEnum},
 			{Name: "cwd", Type: "string", Description: "Canonicalized cwd.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			{Name: "tmux_session_name", Type: "string", Description: "tmux session under which the Spawn is running.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			{Name: "claude_args", Type: "[]string", Description: "Verbatim argv passed through to claude after --settings.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
@@ -532,7 +532,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "resume",
-		Description: "Bring a terminated (ended/missing) Spawn back to life via `claude --resume`. Same claude_instance_id, fresh tmux session, same JSONL transcript. parent_id is re-derived from the caller's AGENT_DIRECTOR_INSTANCE_ID env var on every resume. A row whose instance id contains a control character is refused with ErrInternal before any tmux call or write, because its session could never be labelled. If the launch cannot be recorded in the store, resume returns ErrInternal and launches nothing.",
+		Description: "Bring a finished (ended/missing) Spawn back to life via `claude --resume`. Same claude_instance_id, fresh tmux session, same JSONL transcript. Before it creates the session, resume moves the row to pending, keeping its session id and history, and writes parent_id, re-derived from the caller's AGENT_DIRECTOR_INSTANCE_ID env var on every resume. The row stays pending until the agent reports in (Claude Code's SessionStart), then becomes waiting. If the launch fails other than by timing out (ErrTmuxNotAvailable is ENVIRONMENT and ErrTmuxSessionCreate a LAUNCH FAILURE), resume restores the row to its prior ended or missing state; if the restore cannot be applied, the error says so. The session-creating call is bounded by the create timeout. If it times out, resume returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may have been created and the row stays pending; do not retry until get shows the row ended or missing, since a retried resume of the pending row is refused and changes nothing. A pending row (a launch in progress, including a resumed one) is refused with ErrSpawnNotResumable and nothing is written. A row whose instance id contains a control character is refused with ErrInternal before any tmux call or write, because its session could never be labelled. If the launch cannot be recorded in the store, resume returns ErrInternal and launches nothing.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -787,7 +787,7 @@ var Verbs = []VerbDef{
 			},
 		},
 		ResultFields: []FieldDef{
-			{Name: "spawns", Type: "[]Spawn", Description: "Matching rows. Empty array when none match (never null). Each row carries liveness_unverified_since (timestamp?) and liveness_note (string?), both omitted while NULL (never unverified), and launch_started_at (timestamp?), the start of the launch in progress (RFC3339 UTC with millisecond precision), omitted unless the row is pending.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "spawns", Type: "[]Spawn", Description: "Matching rows. Empty array when none match (never null). Each row carries liveness_unverified_since (timestamp?) and liveness_note (string?), both omitted while NULL (never unverified), and launch_started_at (timestamp?), the start of the launch in progress (RFC3339 UTC with millisecond precision), omitted unless the row is pending. Each row's state takes the same values as status, with the same meaning of pending: a launch (spawn, reuse or resume) in progress whose agent has not reported in yet; a resumed pending row keeps its session id and history.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 		},
 		ErrorNames: []string{
 			"ErrListInvalidLabel",

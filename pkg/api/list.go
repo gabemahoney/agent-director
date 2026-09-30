@@ -51,7 +51,11 @@ type ListRow struct {
 	ClaudeInstanceID string `json:"claude_instance_id"`
 	// ParentID is the id of the spawning Spawn. Omitted from JSON when empty.
 	ParentID string `json:"parent_id,omitempty"`
-	// State is the current lifecycle state.
+	// State is the current lifecycle state. One of: pending, waiting, working,
+	// ask_user, check_permission, ended, missing. pending means a launch
+	// (spawn, reuse or resume) is in progress and the agent has not reported
+	// in yet (Claude Code's SessionStart); it may be loading or waiting at a
+	// startup prompt. A resumed pending row keeps its session id and history.
 	State string `json:"state"`
 	// CWD is the canonicalized working directory the Spawn was started in.
 	CWD string `json:"cwd"`

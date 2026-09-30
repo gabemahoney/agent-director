@@ -25,7 +25,8 @@
 //   - SeedSpawn options for the v5 columns and raw values: WithTmuxSessionName,
 //     WithStartedAt / WithEndedAt (a time.Time or raw text), WithLaunchStartedAt,
 //     WithRawLaunchStartedAt, WithNoLaunchStartedAt, WithLifeNumber,
-//     WithNoPreTrust, WithRawNoPreTrust, WithLaunchIdentity, WithNoLaunchToken
+//     WithNoPreTrust, WithRawNoPreTrust, WithLaunchIdentity, WithTmuxSocket
+//     (the row's recorded socket in place of TestSocket), WithNoLaunchToken
 //     (a row from before the release: no token, socket or identity, the same
 //     as WithLaunchIdentity(store.LaunchIdentity{})), WithRawLabels,
 //     WithRawClaudeArgs, WithRawExtraEnv, and WithSessionHistory (one archived

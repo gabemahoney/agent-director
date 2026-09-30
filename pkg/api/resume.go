@@ -608,10 +608,21 @@ func launchInProgressError(row Spawn) error {
 		ErrSpawnNotResumable, row.ClaudeInstanceID, began)
 }
 
-// Resume brings a terminated (ended/missing) Spawn back to life by launching
+// Resume brings a finished (ended/missing) Spawn back to life by launching
 // `claude --resume` in a fresh tmux session pointed at the same JSONL
-// transcript. The claude_instance_id is preserved across the resurrection;
-// state transitions back to waiting when the first SessionStart hook fires.
+// transcript. The claude_instance_id is preserved.
+//
+// Before it creates the session, Resume moves the row to pending in one
+// conditional write, keeping its session id and history and writing the
+// parent id (the caller's AGENT_DIRECTOR_INSTANCE_ID). The row stays pending
+// until the agent reports in (Claude Code's SessionStart), then becomes
+// waiting. If the launch fails other than by timing out, Resume restores the
+// row to its prior ended or missing state; if the restore cannot be applied,
+// the error says so. The session-creating call is bounded by the create
+// timeout. If it times out, Resume returns ErrTmuxUnresponsive (UNAVAILABLE,
+// transient): the session may have been created and the row stays pending;
+// do not retry until get shows the row ended or missing, since a retried
+// resume of the pending row is refused and changes nothing.
 //
 // CLI: agent-director resume
 //

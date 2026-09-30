@@ -22,9 +22,10 @@ var ErrClientClosed = errors.New("api: client is closed")
 // state is not one of the live conversational states. Live states for
 // send-keys are pending, waiting, working, ask_user, and check_permission;
 // ended / missing reject (SRD §4.3, §5.1). pending is *technically* live
-// but a Spawn that has not yet emitted SessionStart has no readable TUI,
-// so this verb treats pending as non-interactive too — the caller must
-// wait for the first hook to flip to waiting.
+// but it is a launch (spawn, reuse or resume) in progress whose agent has
+// not reported in yet (a resumed row included), so its TUI may still be
+// loading or at a startup prompt; this verb treats pending as
+// non-interactive too.
 var ErrSpawnNotInteractive = errors.New("ErrSpawnNotInteractive")
 
 // ErrSpawnNotPausable is returned by the pause verb when the target
@@ -41,10 +42,13 @@ var ErrSpawnNotPausable = errors.New("ErrSpawnNotPausable")
 var ErrPauseTimeout = errors.New("ErrPauseTimeout")
 
 // ErrSpawnNotResumable is returned by the resume verb when the target
-// Spawn's state is not terminal. Resume only resurrects rows in
-// `ended` or `missing`; any live state means the original Spawn is
-// still running and the caller should attach or send-keys, not
-// resurrect.
+// Spawn's state is not `ended` or `missing`: resume applies only to a
+// finished row. A live row is refused because its agent is running. A
+// `pending` row is refused too: it is a launch (spawn, reuse or resume) in
+// progress whose agent has not reported in, a resumed row included, and the
+// description says when the launch began. It is also returned when resume
+// loses a race: the row changed between resume's read and its move to
+// `pending`, and nothing was written.
 var ErrSpawnNotResumable = errors.New("ErrSpawnNotResumable")
 
 // ErrNoSessionId is returned by the resume verb when the row's

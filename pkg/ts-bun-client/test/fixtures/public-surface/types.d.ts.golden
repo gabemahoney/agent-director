@@ -99,7 +99,12 @@ export interface ListRow {
     claude_instance_id: string;
     /** Parent Spawn id (omitted when launched from a plain shell). */
     parent_id?: string;
-    /** Current lifecycle state. */
+    /**
+     * Current lifecycle state (pending/waiting/working/ask_user/check_permission/ended/missing).
+     * pending means a launch (spawn, reuse or resume) is in progress and the agent has not
+     * reported in yet (Claude Code's SessionStart); it may be loading or waiting at a startup
+     * prompt. A resumed pending row keeps its session id and history.
+     */
     state: string;
     /** Canonicalized working directory. */
     cwd: string;
@@ -161,7 +166,13 @@ export interface StatusParams {
 }
 /** Mirrors pkg/api/status.go::StatusResult */
 export interface StatusResult {
-    /** Current lifecycle state (pending/waiting/working/ask_user/check_permission/ended/missing). */
+    /**
+     * Current lifecycle state (pending/waiting/working/ask_user/check_permission/ended/missing).
+     * pending means a launch (spawn, reuse or resume) is in progress and the agent has not
+     * reported in yet (Claude Code's SessionStart); it may be loading or waiting at a startup
+     * prompt. A resumed pending row keeps its session id and history; a caller tells it
+     * from a fresh one by its non-empty `claude_session_id`, shown by `get`.
+     */
     state: string;
     /** Start of the launch in progress (RFC3339 UTC, millisecond precision); present only on a pending row, omitted otherwise. */
     launch_started_at?: string | null;
@@ -175,6 +186,13 @@ export interface GetParams {
 export interface GetResult {
     claude_instance_id: string;
     parent_id: string;
+    /**
+     * Current lifecycle state (pending/waiting/working/ask_user/check_permission/ended/missing).
+     * pending means a launch (spawn, reuse or resume) is in progress and the agent has not
+     * reported in yet (Claude Code's SessionStart); it may be loading or waiting at a startup
+     * prompt. A resumed pending row keeps its session id and history; a non-empty
+     * `claude_session_id` tells it from a fresh one.
+     */
     state: string;
     cwd: string;
     tmux_session_name: string;

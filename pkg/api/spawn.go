@@ -110,8 +110,8 @@ func hasControlChar(id string) bool {
 
 // Spawn launches a tracked Claude Code instance inside a new tmux session.
 // The call returns the claude_instance_id without waiting for the agent; the
-// Spawn's state transitions from pending to waiting when the first
-// SessionStart hook fires. Use [Client.Status] or [Client.Get] to observe
+// row is pending from its insert until the agent reports in (Claude Code's
+// SessionStart), then waiting. Use [Client.Status] or [Client.Get] to observe
 // progress. The session is labelled for this launch when it is created, and
 // the session-creating call is bounded by the create timeout. If it times
 // out, Spawn returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the

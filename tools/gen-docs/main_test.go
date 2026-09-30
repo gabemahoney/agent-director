@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -131,6 +132,59 @@ func TestGenerate_MCPRespectsExposedVerb(t *testing.T) {
 	}
 	if !sawExcluded {
 		t.Fatal("no excluded verbs in manifest — nothing for this regression to guard (precondition)")
+	}
+}
+
+// retiredPendingConcepts matches the concepts SR-20.6 retires, in hyphen and
+// space spellings (twin: pkg/api/manifest/pending_meaning_test.go).
+var retiredPendingConcepts = regexp.MustCompile(`(?i)resume[-\s]?starting|young[-\s]claim|launched[-\s]mark|claim[-\s]withdrawal`)
+
+// TestGenerate_PendingMeaning checks each generated reference renders the
+// manifest's pending texts and names no retired concept (SR-20.6, AC-DOC-17).
+func TestGenerate_PendingMeaning(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmp, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+	if err := generate(tmp); err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+
+	status, ok := manifest.Lookup("status")
+	if !ok {
+		t.Fatal("manifest missing status verb (precondition)")
+	}
+	spawn, ok := manifest.Lookup("spawn")
+	if !ok {
+		t.Fatal("manifest missing spawn verb (precondition)")
+	}
+	var stateText string
+	for _, f := range status.ResultFields {
+		if f.Name == "state" {
+			stateText = f.Description
+		}
+	}
+	if !strings.Contains(stateText, "has not reported in") {
+		t.Fatalf("status state text does not define pending (precondition): %q", stateText)
+	}
+	wants := []string{status.Description, stateText, spawn.Description}
+
+	for _, name := range []string{"cli-reference.md", "mcp-reference.md"} {
+		t.Run(name, func(t *testing.T) {
+			raw, err := os.ReadFile(filepath.Join(tmp, "docs", name))
+			if err != nil {
+				t.Fatalf("read %s: %v", name, err)
+			}
+			got := string(raw)
+			for _, want := range wants {
+				mustContain(t, name, got, want)
+			}
+			for i, line := range strings.Split(got, "\n") {
+				if m := retiredPendingConcepts.FindString(line); m != "" {
+					t.Errorf("%s:%d names retired concept %q: %s", name, i+1, m, line)
+				}
+			}
+		})
 	}
 }
 

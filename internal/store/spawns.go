@@ -27,6 +27,15 @@ var ErrPrimaryKeyCollision = errors.New("store: primary key collision")
 // State constants mirror the SRD §5.1 enum. They live here (the package
 // that owns the column's text values) so the rest of the codebase has
 // exactly one source of truth for valid state strings.
+//
+// StatePending means a launch (spawn, reuse or resume) is in progress and
+// the agent has not reported in yet (Claude Code's SessionStart); it may be
+// loading or waiting at a startup prompt, and a resumed pending row keeps its
+// session id and history (SR-22.1). The writes that set it are a spawn's
+// insert (InsertPending) and resume's move (MoveToPending). The agent's
+// report-in (SessionStart, pending -> waiting) ends it, as does any other
+// write that sets another state, such as find-missing's mark or a failed
+// resume's restore (RestoreAfterFailedResume).
 const (
 	StatePending         = "pending"
 	StateWaiting         = "waiting"
@@ -542,12 +551,13 @@ func (s *Store) ApplyHookTransitionResult(instanceID, newState string, softRefre
 			return UpsertNoChange, nil
 		}
 	}
-	// Non-terminal transitions clear ended_at. This handles the resume
-	// path (SRD §8.1): SessionStart on a resurrected Claude transitions
-	// the row from ended/missing back to waiting; ended_at must reset
-	// so the row's metadata reflects the active life. For fresh-spawn
-	// pending→waiting transitions the column was already NULL, so the
-	// `ended_at = NULL` is a no-op there.
+	// Non-terminal transitions clear ended_at. A resumed row reports in
+	// from pending like a fresh spawn's (SR-22.3): resume's move to pending
+	// already cleared ended_at, so on either row's pending→waiting
+	// report-in the column is already NULL and the `ended_at = NULL` is a
+	// no-op. The clear stays for a hook that reaches a finished row (such
+	// as one from another process carrying the id), so a row a hook moves
+	// to a live state never keeps its old ended_at.
 	priorState, found, serr := s.selectPriorState(instanceID)
 	if serr != nil {
 		return UpsertError, serr

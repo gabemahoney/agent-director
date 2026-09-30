@@ -20,7 +20,7 @@ Print the manifest-derived list of verbs as JSON; intended for SessionStart / Se
 
 ## Tool: spawn
 
-Launch a tracked Claude Code instance inside a new tmux session. Returns the claude_instance_id without waiting for the agent; state moves from pending to waiting on the first SessionStart hook. The session is labelled for this launch when it is created, and the session-creating call is bounded by the create timeout. If it times out, spawn returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may have been created and the new row stays pending; do not retry until get shows the row ended or missing, since a retried spawn without an explicit id would start a second agent. With an explicit claude_instance_id that has no row, spawn first looks for a tmux session of this agent-director store still labelled with that id; one left over from an earlier life refuses the spawn with ErrTmuxSessionConflict (CONFLICT: permanent until a human looks; see the README's "Operator actions"), and nothing is written. ErrTmuxNotAvailable is ENVIRONMENT and ErrTmuxSessionCreate a LAUNCH FAILURE. When an explicit claude_instance_id is supplied and the collision pre-check cannot read the store, spawn returns ErrInternal and creates nothing; this is a store fault and says nothing about whether the id is in use.
+Launch a tracked Claude Code instance inside a new tmux session. Returns the claude_instance_id without waiting for the agent; the row is pending from its insert until the agent reports in (Claude Code's SessionStart), then waiting. The session is labelled for this launch when it is created, and the session-creating call is bounded by the create timeout. If it times out, spawn returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may have been created and the new row stays pending; do not retry until get shows the row ended or missing, since a retried spawn without an explicit id would start a second agent. With an explicit claude_instance_id that has no row, spawn first looks for a tmux session of this agent-director store still labelled with that id; one left over from an earlier life refuses the spawn with ErrTmuxSessionConflict (CONFLICT: permanent until a human looks; see the README's "Operator actions"), and nothing is written. ErrTmuxNotAvailable is ENVIRONMENT and ErrTmuxSessionCreate a LAUNCH FAILURE. When an explicit claude_instance_id is supplied and the collision pre-check cannot read the store, spawn returns ErrInternal and creates nothing; this is a store fault and says nothing about whether the id is in use.
 
 ### Input schema
 
@@ -65,7 +65,7 @@ Launch a tracked Claude Code instance inside a new tmux session. Returns the cla
 
 ## Tool: status
 
-Return the current state of a tracked Spawn (pending/waiting/working/ask_user/check_permission/ended/missing).
+Return the current state of a tracked Spawn (pending/waiting/working/ask_user/check_permission/ended/missing). pending means a launch (spawn, reuse or resume) is in progress and the agent has not reported in yet (Claude Code's SessionStart); it may be loading or waiting at a startup prompt. A resumed pending row keeps its session id and history; a caller tells it from a fresh one by its non-empty claude_session_id (shown by get).
 
 ### Input schema
 
@@ -73,7 +73,7 @@ Return the current state of a tracked Spawn (pending/waiting/working/ask_user/ch
 
 ### Output schema
 
-- `state`: type=string — Current state column value.
+- `state`: type=string — Current state, one of the allowed values. pending: a launch (spawn, reuse or resume) is in progress and the agent has not reported in yet (Claude Code's SessionStart); it may be loading or waiting at a startup prompt. A resumed pending row keeps its session id and history (non-empty claude_session_id).
 - `launch_started_at`: type=timestamp? — Start of the launch in progress: RFC3339 UTC with millisecond precision. Present only while the row is pending; omitted otherwise.
 
 ### Errors
@@ -92,7 +92,7 @@ Return the full DB row for a tracked Spawn (id, parent, state, cwd, session name
 
 - `claude_instance_id`: type=string — Stable id of the Spawn.
 - `parent_id`: type=string — Parent Spawn id (AGENT_DIRECTOR_INSTANCE_ID env at spawn time), empty when launched by a human shell.
-- `state`: type=string — Current state column value.
+- `state`: type=string — Current state, one of the allowed values. pending: a launch (spawn, reuse or resume) is in progress and the agent has not reported in yet (Claude Code's SessionStart); it may be loading or waiting at a startup prompt. A resumed pending row keeps its session id and history (non-empty claude_session_id).
 - `cwd`: type=string — Canonicalized cwd.
 - `tmux_session_name`: type=string — tmux session under which the Spawn is running.
 - `claude_args`: type=[]string — Verbatim argv passed through to claude after --settings.
@@ -224,7 +224,7 @@ Fetch a single permission_requests row by request_token. Token-only lookup (SR-3
 
 ## Tool: resume
 
-Bring a terminated (ended/missing) Spawn back to life via `claude --resume`. Same claude_instance_id, fresh tmux session, same JSONL transcript. parent_id is re-derived from the caller's AGENT_DIRECTOR_INSTANCE_ID env var on every resume. A row whose instance id contains a control character is refused with ErrInternal before any tmux call or write, because its session could never be labelled. If the launch cannot be recorded in the store, resume returns ErrInternal and launches nothing.
+Bring a finished (ended/missing) Spawn back to life via `claude --resume`. Same claude_instance_id, fresh tmux session, same JSONL transcript. Before it creates the session, resume moves the row to pending, keeping its session id and history, and writes parent_id, re-derived from the caller's AGENT_DIRECTOR_INSTANCE_ID env var on every resume. The row stays pending until the agent reports in (Claude Code's SessionStart), then becomes waiting. If the launch fails other than by timing out (ErrTmuxNotAvailable is ENVIRONMENT and ErrTmuxSessionCreate a LAUNCH FAILURE), resume restores the row to its prior ended or missing state; if the restore cannot be applied, the error says so. The session-creating call is bounded by the create timeout. If it times out, resume returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may have been created and the row stays pending; do not retry until get shows the row ended or missing, since a retried resume of the pending row is refused and changes nothing. A pending row (a launch in progress, including a resumed one) is refused with ErrSpawnNotResumable and nothing is written. A row whose instance id contains a control character is refused with ErrInternal before any tmux call or write, because its session could never be labelled. If the launch cannot be recorded in the store, resume returns ErrInternal and launches nothing.
 
 ### Input schema
 
@@ -339,7 +339,7 @@ Enumerate Spawn rows. All filters AND together. Returned order is unspecified �
 
 ### Output schema
 
-- `spawns`: type=[]Spawn — Matching rows. Empty array when none match (never null). Each row carries liveness_unverified_since (timestamp?) and liveness_note (string?), both omitted while NULL (never unverified), and launch_started_at (timestamp?), the start of the launch in progress (RFC3339 UTC with millisecond precision), omitted unless the row is pending.
+- `spawns`: type=[]Spawn — Matching rows. Empty array when none match (never null). Each row carries liveness_unverified_since (timestamp?) and liveness_note (string?), both omitted while NULL (never unverified), and launch_started_at (timestamp?), the start of the launch in progress (RFC3339 UTC with millisecond precision), omitted unless the row is pending. Each row's state takes the same values as status, with the same meaning of pending: a launch (spawn, reuse or resume) in progress whose agent has not reported in yet; a resumed pending row keeps its session id and history.
 
 ### Errors
 

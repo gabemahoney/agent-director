@@ -1,7 +1,7 @@
 package api_test
 
 // resume_pending_restore_test.go covers resume after its move to pending
-// (SR-8.5, SR-3.5, SR-5.8, SR-14; AC-RES-06, AC-RES-07, AC-RES-12, AC-RES-13):
+// (SR-8.5, SR-3.5, SR-5.8, SR-14; AC-RES-06, AC-RES-07, AC-RES-12):
 // the restore after each launch failure, a restore that is not applied, store
 // errors on the move and the restore, timeouts that leave the row pending, and
 // the unlabelled-session path. The resumeEnv fixture is in resume_fixture_test.go.

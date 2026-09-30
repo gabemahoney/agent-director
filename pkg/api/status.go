@@ -18,6 +18,11 @@ type StatusStore interface {
 type StatusResult struct {
 	// State is the current lifecycle state of the Spawn. One of:
 	// pending, waiting, working, ask_user, check_permission, ended, missing.
+	// pending means a launch (spawn, reuse or resume) is in progress and the
+	// agent has not reported in yet (Claude Code's SessionStart); it may be
+	// loading or waiting at a startup prompt. A resumed pending row keeps its
+	// session id and history; a caller tells it from a fresh one by its
+	// non-empty claude_session_id, shown by [Client.Get].
 	State string `json:"state"`
 	// LaunchStartedAt is the start of the launch in progress, RFC3339 UTC
 	// with millisecond precision. Present only on a pending row; nil (and

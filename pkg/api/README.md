@@ -80,9 +80,9 @@ acceptable alternative when you want to confirm store access as well.
 ### Spawn
 
 Launch a tracked Claude Code instance inside a new tmux session.
-`Spawn` returns immediately with the `claude_instance_id`; the Spawn's
-state transitions from `pending` to `waiting` when the first
-`SessionStart` hook fires. Use `Status` or `Get` to observe progress.
+`Spawn` returns immediately with the `claude_instance_id`; the row is
+`pending` from its insert until the agent reports in (Claude Code's
+`SessionStart`), then `waiting`. Use `Status` or `Get` to observe progress.
 
 ```bash
 # CLI: spawn in current directory, tagged for later filtering
@@ -110,8 +110,8 @@ fmt.Println(result.ClaudeInstanceID)
 Returns `SpawnResult` (`.ClaudeInstanceID`). Most-likely sentinel errors:
 `ErrCwdNotFound`, `ErrCwdNotADirectory`, `ErrRelayModeInvalid`,
 `ErrTmuxNotAvailable`, `ErrTmuxSessionCreate`, `ErrTmuxUnresponsive` (the
-session-creating call timed out: the row stays `pending`; do not retry
-until `Get` shows it `ended` or `missing`) and `ErrTmuxSessionConflict`
+session-creating call timed out, here or in `Resume`: the row stays
+`pending`; do not retry until `Get` shows it `ended` or `missing`) and `ErrTmuxSessionConflict`
 (an explicit id with no row whose labelled session from an earlier life
 still runs, or conflicting labels; nothing is written).
 See `(*Client).Spawn` godoc for the full enumeration.
@@ -123,6 +123,11 @@ See `(*Client).Spawn` godoc for the full enumeration.
 Return the current lifecycle state of a tracked Spawn. State values:
 `pending`, `waiting`, `working`, `ask_user`, `check_permission`, `ended`,
 `missing`.
+`pending` means a launch (spawn, reuse or resume) is in progress and the
+agent has not reported in yet (Claude Code's `SessionStart`); it may be
+loading or waiting at a startup prompt. A resumed `pending` row keeps its
+session id and history; a caller tells it from a fresh one by its non-empty
+`claude_session_id`, shown by `Get`.
 
 ```bash
 agent-director status \

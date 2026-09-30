@@ -89,8 +89,10 @@ func ComposeRelaunch(in RelaunchInput, cfg config.Config) (CreateRequest, error)
 // in pkg/api. On CreateLabelled the caller makes the identity write
 // (RecordLaunchIdentity) with the move's version and token.
 //
-// Relaunch does not wait for Claude to come up: the row stays pending until
-// the resumed agent's first SessionStart hook moves it.
+// Relaunch does not wait for Claude to come up. The caller (resume) has
+// moved the row to pending before the create, writing the parent id; the row
+// stays pending until the resumed agent's first SessionStart takes it to
+// waiting.
 func Relaunch(t LaunchTmux, req CreateRequest) CreateOutcome {
 	return CreateAndLabel(t, req)
 }

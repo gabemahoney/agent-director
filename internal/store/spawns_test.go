@@ -308,13 +308,9 @@ func TestApplyHookTransitionEndedSetsEndedAt(t *testing.T) {
 	}
 }
 
-// TestApplyHookTransitionResurrectionClearsEndedAt pins SRD §8.1's
-// resurrection behavior: when SessionStart on a previously-ended (or
-// missing) Spawn fires, the row's state moves back to `waiting` and
-// `ended_at` is cleared so the row's metadata reflects the active
-// life. This is the hook-side half of the resume contract — resume
-// itself doesn't touch state; only SessionStart does.
-func TestApplyHookTransitionResurrectionClearsEndedAt(t *testing.T) {
+// TestApplyHookTransitionOnFinishedRowClearsEndedAt pins that a SessionStart hook on a
+// finished row (as from another process carrying the id) sets waiting and clears ended_at.
+func TestApplyHookTransitionOnFinishedRowClearsEndedAt(t *testing.T) {
 	s, _ := openTempStore(t)
 	id := "55555555-aaaa-4bbb-8ccc-000000000099"
 	if err := s.InsertPending(Spawn{
@@ -340,25 +336,26 @@ func TestApplyHookTransitionResurrectionClearsEndedAt(t *testing.T) {
 		t.Fatal("precondition: ended_at not set after ended transition")
 	}
 
-	// Simulate the SessionStart hook firing on the resurrected Claude.
-	beforeResurrect := len(readStoreTrailLines(t))
+	// A SessionStart hook reaches the ended row. (resume's own agent reports
+	// in from pending instead: resume's move to pending clears ended_at first.)
+	beforeHook := len(readStoreTrailLines(t))
 	if err := s.ApplyHookTransition(id, StateWaiting, false, "test_seed"); err != nil {
-		t.Fatalf("resurrection transition: %v", err)
+		t.Fatalf("transition to waiting from ended: %v", err)
 	}
-	resurrectLines := spawnStateTransitionLines(t, beforeResurrect)
-	if len(resurrectLines) != 1 {
-		t.Fatalf("want 1 ad.spawn.state_transition after resurrection; got %d", len(resurrectLines))
+	hookLines := spawnStateTransitionLines(t, beforeHook)
+	if len(hookLines) != 1 {
+		t.Fatalf("want 1 ad.spawn.state_transition after the hook; got %d", len(hookLines))
 	}
-	assertSpawnStateTransitionFields(t, resurrectLines[0], id, StateEnded, StateWaiting, "test_seed", false)
+	assertSpawnStateTransitionFields(t, hookLines[0], id, StateEnded, StateWaiting, "test_seed", false)
 	got, err = s.GetSpawn(id)
 	if err != nil {
-		t.Fatalf("GetSpawn after resurrection: %v", err)
+		t.Fatalf("GetSpawn after the hook: %v", err)
 	}
 	if got.State != StateWaiting {
 		t.Errorf("state = %q; want waiting", got.State)
 	}
 	if got.EndedAt != nil {
-		t.Errorf("ended_at = %v; want nil after resurrection", got.EndedAt)
+		t.Errorf("ended_at = %v; want nil after the hook", got.EndedAt)
 	}
 }
 

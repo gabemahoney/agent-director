@@ -356,7 +356,7 @@ These 41 classes are generated one-to-one from the shared `err_name` catalog ([`
 | `ErrSpawnNotInteractive` | The target spawn is not in a live interactive state (`waiting`/`working`/`ask_user`/`check_permission`); `pending`, `ended`, and `missing` are rejected (`AllowPending=true` relaxes the `pending` rejection). |
 | `ErrSpawnNotPausable` | The target spawn is not in a pausable (`waiting`) state. |
 | `ErrPauseTimeout` | The spawn did not reach `ended` within `pause.timeout_seconds` after `/exit`. Retry or `kill`. |
-| `ErrSpawnNotResumable` | The target spawn is not terminal (`ended`/`missing`), so it cannot be resumed. |
+| `ErrSpawnNotResumable` | `resume` applies only to a finished (`ended`/`missing`) spawn. A live spawn is refused because its agent is running. A `pending` spawn is refused too: it is a launch (spawn, reuse or resume) in progress whose agent has not reported in, a resumed row included. Also returned when the row changed after `resume` examined it; nothing is written. |
 | `ErrNoSessionId` | The spawn has no `claude_session_id` (killed before its first SessionStart), so there is nothing to resume — `delete` and spawn fresh. |
 | `ErrJsonlMissing` | The resume JSONL could not be located at any candidate path — `delete` and spawn fresh. |
 | `ErrListInvalidLabel` | A `list` label filter could not be parsed as `key=value`. |
@@ -368,7 +368,7 @@ These 41 classes are generated one-to-one from the shared `err_name` catalog ([`
 |---|---|
 | `ErrTmuxNotAvailable` | The `tmux` binary is not on PATH or refuses to execute, the tmux socket is not accessible to this user, or its per-user socket directory cannot be used (`spawn` then writes nothing). |
 | `ErrTmuxSessionCreate` | `tmux new-session` exited non-zero (name collision, invalid cwd, missing default-shell), or `spawn` created a session it could not label. The new row stays `pending`. |
-| `ErrTmuxUnresponsive` | tmux did not answer in time, or gave a reply agent-director does not recognise (UNAVAILABLE, transient). From `spawn`'s session-creating call: the session may have been created and the row stays `pending`; do not retry until `get` shows the row `ended` or `missing`. |
+| `ErrTmuxUnresponsive` | tmux did not answer in time, or gave a reply agent-director does not recognise (UNAVAILABLE, transient). From `spawn`'s or `resume`'s session-creating call: the session may have been created and the row stays `pending`; do not retry until `get` shows the row `ended` or `missing`. |
 | `ErrTmuxSessionConflict` | A tmux session conflict that needs a human (CONFLICT, permanent until a human looks). From `spawn` with an explicit `claude_instance_id` that has no row: a session of this store still labelled with that id is left over from an earlier life, or labels conflict; nothing is written. See "Operator actions" in the agent-director README. |
 | `ErrTmuxSendKeys` | `tmux send-keys` exited non-zero (typically no live pane). |
 | `ErrTmuxCaptureFailed` | `tmux capture-pane` exited non-zero (session/pane vanished mid-call). |

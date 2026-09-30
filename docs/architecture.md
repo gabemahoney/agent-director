@@ -1399,8 +1399,15 @@ state value comes from the SRD §5.1 enum; transitions are driven either
 by hook events (SRD §5.2) or by direct verb action (`pause`, `resume`,
 `expire`, `delete`).
 
+`pending` has one meaning (SRD SR-22.1): a launch (spawn, reuse or
+resume) is in progress and the agent has not reported in yet (Claude
+Code's SessionStart). It may be loading or waiting at a startup prompt.
+A resumed row in `pending` keeps its session id and history; a caller
+tells it from a fresh one by its non-empty `claude_session_id`. While a
+row is `pending` it carries its launch start, `launch_started_at`.
+
 ```
-pending  ──spawn() launches tmux session
+pending  ──spawn() inserts the row, then launches its tmux session
   │
   ▼   SessionStart hook fires
 waiting  ◄─── Stop
@@ -1422,13 +1429,23 @@ waiting / working / ask_user / check_permission
   ▼   SessionEnd hook (real end)
 ended
 
-waiting / working / ask_user / check_permission
+pending / waiting / working / ask_user / check_permission
   │
-  ▼   find-missing (Epic 8): DB live row, no live tmux/Claude
+  ▼   find-missing: DB live row, no live tmux/Claude
 missing
+
+ended / missing
   │
-  ▼   resume() relaunches with --resume (Epic 9)
-waiting (after SessionStart fires)
+  ▼   resume(): the move to pending (one conditional write), then the
+  │   launch with --resume
+pending   (keeps its session id and history)
+  │
+  ├──► SessionStart hook fires (the resumed agent reports in) ──► waiting
+  │
+  ├──► the launch fails other than by timing out: the restore, applied
+  │    only at the move's row_version ──► the prior ended / missing
+  │
+  └──► the create times out ──► stays pending
 ```
 
 ### Event → state mapping (SRD §5.2)
@@ -1447,8 +1464,19 @@ waiting (after SessionStart fires)
 | `SessionEnd` | any other reason | `ended` (also sets `ended_at`) |
 | unknown event | — | soft refresh + info-level log entry |
 
-`missing` is only written by `find-missing` (Epic 8). `pending` is only
-written by `spawn()`; the first SessionStart hook flips it to `waiting`.
+`missing` is set by `find-missing`'s mark, and written back by a failed
+resume's restore when the row was `missing` before the move.
+
+`pending` is set only by the writes that begin a launch: a spawn's
+insert (`InsertPending`) and `resume`'s move (`MoveToPending`, see
+[Resume](#verb-pkgapiresumego)). It is ended by every write that sets
+another state: the agent's report-in (the first SessionStart hook, to
+`waiting`), another hook's state transition (`ApplyHookTransition`),
+`find-missing`'s mark (to `missing`) and a failed resume's restore
+(`RestoreAfterFailedResume`, to the prior `ended` or `missing`). Each of
+these clears `launch_started_at` in the same statement. A timed-out
+create writes nothing and leaves the row `pending`, because the session
+may exist; so does a restore that does not apply or fails.
 
 State-tracking hook writes are fail-open: any internal failure logs and
 exits 0 (SRD §3.2). A missed UPSERT never blocks Claude.
@@ -3041,18 +3069,23 @@ tool_input (PRD §9, SR-A-2.1).
 
 ### `ad.*` event namespace
 
-Ten event strings are emitted today. The first nine are the primary
-event families; the last is a self-reporting meta event.
+The table lists twelve event strings. The first eleven are the primary
+event families; the last is a self-reporting meta event. The store's
+session-history events (`ad.session.archived`, `ad.session.archive_failed`,
+`ad.session.jsonl_healed`) and schema-migration events (`ad.schema.*`)
+are also emitted but are not listed here.
 
 | Event | Source | Description |
 |-------|--------|-------------|
 | `ad.hook.fired` | `ad_hook` | One per `agent-director hook` invocation — records the hook payload and caller identity (SR-A-2.1, Epic 1) |
-| `ad.spawn.state_transition` | `ad_spawn_store` | One per write to `spawns.state`, including no-ops and soft-refresh ticks (SR-A-2.2, Epic 2) |
+| `ad.spawn.state_transition` | `ad_spawn_store` | One per hook-driven write (`ApplyHookTransition`), including no-ops and soft-refresh ticks; SessionStart on a resumed row records `prior_state` `pending`. Hook-driven writes are the only ones that emit it: a spawn's insert and `find-missing`'s mark never did, and `resume`'s move and restore do not (their own `ad.resume.*` events record them) (SR-A-2.2, SR-14) |
 | `ad.row_mutation.committed` | `ad_store` | One per successful write to `permission_requests` (SR-A-2.6, Epic 3) |
 | `ad.decide.called` | `ad_decide` | One per `agent-director decide` invocation on every return path, carrying an `outcome` field set to the canonical err_name (or `ok`). Recognized failure outcomes include the no-op refusals `ErrAlreadyDecided` and `ErrRelayFallenBack` (a fallen-back refusal is a recognized outcome, not `ErrInternal`) (SR-A-2.4, Epic 4) |
 | `ad.find_missing.tick` | `ad_find_missing` | One per row find-missing reconciles or flags: `reconciliation_reason=proc_absent` per row marked missing, `permission_orphan_closeout` per orphaned permission_requests row closed on that mark, and `probe_eacces` per live row that first transitions into the unverified (permission-walled) state — one tick per NULL→set transition only, never on a repeat sweep. There is no global-refusal tick (the old degraded-mode refusal is gone; unreadable rows are skipped and surfaced per-row). (SR-A-2.5, Epic 5; SR-7/SR-8) |
 | `ad.relay_attempt.completed` | `relay_hook` | One per worker permission-relay attempt (SR-A-2.3, Epic 6) |
 | `ad.resume.observed` | `ad_polling` | One per hook-resume back to Claude Code (SR-A-2.7, Epic 7) |
+| `ad.resume.moved_to_pending` | `ad_resume` | Once per applied move to `pending` by the `resume` verb, emitted when the create that directly follows the move returns (no I/O may run between the move and the create, SR-8.3); fail-open. Carries `claude_instance_id`, `prior_state` (`ended` or `missing`) and `claude_session_id` (the session id the row keeps). A `resume` refused before or at its move emits none. Emitted in `pkg/api/resume.go`, so every surface gets it. Unrelated to `ad.resume.observed`, a permission relay's hook resume (SR-8.3, SR-14) |
+| `ad.resume.restored` | `ad_resume` | Once per restore attempt after a failed `resume` launch (a failure other than a timeout), applied or not; fail-open. Carries `claude_instance_id`, `applied` (boolean), `launch_error` (the err_name of the launch error `resume` returns) and `restore_error` (null, or the store error's text when the restore's write failed). Emitted in `pkg/api/resume.go`, so a failed restore behind the MCP server, whose client has no logger, is still recorded. Unrelated to `ad.resume.observed` (SR-8.5, SR-14) |
 | `ad.send_keys.called` | `ad_send_keys` | One per `agent-director send-keys` invocation on every return path (fail-open, mirroring `ad.decide.called`). Carries `outcome` (canonical err_name or `ok`), AD-collected `caller_*` identity, and a `guard_evaluation` field — `not-applicable` (relay guard did not apply), `held` (refused, relay could still act), or `released` (guard released, the audited recovery of a fallen-back relay) — so recovery sends are distinguishable from ordinary sends and refusals (SR-5.2) |
 | `ad.launch.name_held` | `ad_spawn` | Exactly one per plain-spawn label-scan refusal ("left over from an earlier life"; see [Launch identity](#launch-identity)), emitted in `pkg/api`, fail-open. Carries `claude_instance_id`, `launch` (`spawn`), `row_result` (`not_inserted`), `lookup_outcome` (`leftover`), `outcome` (`ErrTmuxSessionConflict`), `leftover_count`, `carries_this_id` (true), `current_launch` (false), `store_error` (null), the first leftover's (lowest `$N`) `tmux_session_name`, `tmux_session_id` and `session_created`, `tmux_socket`, `store_id`, the by-hand `attach_command` (`tmux -u -S '<socket>' attach-session -r -t '<$N>'`) and `end_command` (`tmux -u -S '<socket>' kill-session -t '<$N>'`) for humans, and the `caller_*` identity. Never a label value or another row's id (SR-9.3, SR-14) |
 | `ad.trail_meta.emit_failed` | `ad_trail_meta` | Self-reporting envelope written when a primary emit fails — carries `original_event` and `error_class` (SR-A-3.2) |
@@ -3064,7 +3097,7 @@ The `source` field identifies which emitter wrote the line:
 | Value | Emitter |
 |-------|---------|
 | `ad_hook` | `internal/hook/handler.go` — the hook ingestion handler |
-| `ad_spawn_store` | `internal/store/spawns.go` — spawn state-machine writes |
+| `ad_spawn_store` | `internal/store/spawns.go` — hook-driven spawn state-machine writes (and the store's session-history events) |
 | `ad_store` | `internal/store/permission.go` — permission-request row mutations |
 | `ad_decide` | `pkg/api/decide.go` and `cmd/agent-director/spawn_cmd.go` — decide verb |
 | `ad_find_missing` | `pkg/api/find_missing.go` and `internal/store/recovery.go` — reconciliation |
@@ -3072,6 +3105,7 @@ The `source` field identifies which emitter wrote the line:
 | `ad_polling` | `internal/hook/permission.go` — resume observed on hook return |
 | `ad_send_keys` | `pkg/api/sendkeys.go` — send-keys verb (per-invocation, carries the relay-guard evaluation) |
 | `ad_spawn` | `pkg/api/spawn_scan.go` — the spawn verb's label scan (`ad.launch.name_held`) |
+| `ad_resume` | `pkg/api/resume.go` — the resume verb's move and restore (`ad.resume.moved_to_pending`, `ad.resume.restored`) |
 | `ad_trail_meta` | `internal/trail/trail.go` — the trail writer itself (meta-events only) |
 
 ### Operator access
@@ -3781,7 +3815,9 @@ live state (`waiting`/`working`). Recovering a Spawn's conversation is a
    row's visible history: the current life's archived `session_history`
    entries, minus the entry for the row's current session id), which is
    what lets a Spawn that ran under a custom config dir — or whose session
-   rotated when its agent restarted — recover across a reboot.
+   rotated when its agent restarted — recover across a reboot. Each
+   resumed row shows `pending`, keeping its session id and history,
+   until its agent reports in (SessionStart), then `waiting`.
 
 ```
 agent-director find-missing        # reconcile frozen rows → missing
@@ -5365,8 +5401,11 @@ parent's `HOME` env var points at. Smoke tests use the explicit
 
 When tests run inside a live Claude session the environment variable
 `AGENT_DIRECTOR_INSTANCE_ID` is set to the session's UUID. The CLI
-subprocess inherits this value and passes it as `parent_id` on every
-`InsertPending` and `SetParentID` call. Because the test stores are
+subprocess inherits this value and writes it as `parent_id` in the two
+verb writes that carry one: `spawn`'s insert (`InsertPending`) and
+`resume`'s move to `pending` (`MoveToPending`). No verb calls the
+store's `SetParentID`; only the test seeder `apitest.SeedParentChild`
+does. Because the test stores are
 fresh SQLite files that do not contain a row for the session UUID, the
 FOREIGN KEY constraint fails.
 
@@ -5379,9 +5418,13 @@ constraint without altering the subprocess's inherited environment.
 
 `test/fake-tmux` is the subprocess tmux double (see [test/fake-tmux: the
 subprocess tmux double](#testfake-tmux-the-subprocess-tmux-double-reusable-test-fixture)).
-The smoke tests' verbs still send the legacy name-based argv, which the fake
-accepts and answers with exit 0 (`has-session` exits 1), with no live tmux
-session needed.  For `capture-pane` it writes a fixed stub string to stdout so
+`spawn` and `resume` create their sessions with the socket form
+(`-u -S <socket>`: the labelled create, and `spawn`'s label scan), which
+the fake answers from its per-socket table. The name-based client methods
+(`HasSession`, `KillSession`, `SendKeys`, `CapturePane`, used by
+`resume`'s name pre-check, `kill`, `pause`, `send-keys` and `read-pane`)
+still send the legacy argv, which the fake accepts and answers with exit
+0 (`has-session` exits 1), with no live tmux session needed.  For `capture-pane` it writes a fixed stub string to stdout so
 `read-pane` tests can assert the return value is non-empty.  The binary is built
 by `make fake-tmux` (which `test/setup.ts` calls before any test runs).  Both
 the Makefile recipe and `setup.ts` explicitly `chmod 755` the output: without the
