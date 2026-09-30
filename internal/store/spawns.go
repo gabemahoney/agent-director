@@ -582,6 +582,9 @@ func (s *Store) ApplyHookTransitionResult(instanceID, newState string, softRefre
 // when the row already holds a non-empty session id that is being replaced by a
 // different non-empty one — a fresh spawn's first SessionStart (empty prior id)
 // and a soft re-fire with the same id both archive nothing.
+// The archived entry carries the row's life_number, read together with the
+// outgoing session id and path (SR-5.9); re-archiving a session id recorded in
+// an earlier life moves its entry to the row's life with the row's path.
 //
 // Column semantics (PM-mandated):
 //   - pid / proc_starttime are ALWAYS written — fresh captured values, or
@@ -700,22 +703,28 @@ func positiveIntArg(n int) any {
 // when the row is absent, when the current session id is empty (fresh spawn),
 // or when the current id already equals newSessionID (same-session re-fire).
 // Best-effort and fail-open: any error is emitted to the trail and swallowed so
-// the identity write proceeds. The UNIQUE(claude_instance_id, claude_session_id)
-// constraint makes re-archiving the same prior session id a conflict; rather
-// than ignore it, the write upserts: a re-archive fills in a now-known path
-// over a previously NULL one (COALESCE keeps an already-recorded path) and
-// always refreshes recorded_at, so the newest-first ordering resume depends on
-// (b.5jm/1) tracks the latest re-archive rather than pinning a stale NULL-path
-// entry (b.5jm/4).
+// the identity write proceeds.
+//
+// The entry's life (SR-5.9) is the row's life_number, read in the same
+// statement as the outgoing session id and its transcript path, so the entry
+// always belongs to the life in which that session ran; there is no second
+// read of the life. The write itself is upsertSessionHistoryEntry: within one
+// life a re-archive keeps today's upsert (a now-known path fills in a NULL one,
+// an already-recorded path survives a NULL one, recorded_at is refreshed, so the
+// newest-first ordering resume depends on (b.5jm/1) tracks the latest
+// re-archive rather than pinning a stale NULL-path entry (b.5jm/4)); a
+// re-archive of a session id recorded in another life moves the entry to this
+// life with this life's path, NULL included.
 func (s *Store) archivePriorSessionOnRotate(instanceID, newSessionID string) {
 	var (
 		curSession string
 		curJsonl   sql.NullString
+		curLife    int64
 	)
 	err := s.db.QueryRow(
-		`SELECT COALESCE(claude_session_id, ''), jsonl_path
+		`SELECT COALESCE(claude_session_id, ''), jsonl_path, COALESCE(life_number, 0)
 		   FROM spawns WHERE claude_instance_id = ?`, instanceID,
-	).Scan(&curSession, &curJsonl)
+	).Scan(&curSession, &curJsonl, &curLife)
 	if errors.Is(err, sql.ErrNoRows) {
 		return
 	}
@@ -730,20 +739,7 @@ func (s *Store) archivePriorSessionOnRotate(instanceID, newSessionID string) {
 	if curSession == "" || curSession == newSessionID {
 		return
 	}
-	var priorJsonl any
-	if curJsonl.Valid && curJsonl.String != "" {
-		priorJsonl = curJsonl.String
-	} else {
-		priorJsonl = nil
-	}
-	if _, err := s.db.Exec(
-		`INSERT INTO session_history
-		     (claude_instance_id, claude_session_id, jsonl_path)
-		 VALUES (?, ?, ?)
-		 ON CONFLICT(claude_instance_id, claude_session_id) DO UPDATE SET
-		     jsonl_path  = COALESCE(excluded.jsonl_path, jsonl_path),
-		     recorded_at = CURRENT_TIMESTAMP`, instanceID, curSession, priorJsonl,
-	); err != nil {
+	if err := upsertSessionHistoryEntry(s.db, instanceID, curSession, curJsonl.String, curLife); err != nil {
 		_ = trail.Emit(context.Background(), "ad.session.archive_failed", map[string]any{
 			"claude_instance_id": instanceID,
 			"claude_session_id":  curSession,

@@ -26,6 +26,8 @@ type recordingResumeStore struct {
 	// sessions, which is the default existing tests rely on.
 	history    []store.SessionHistoryEntry
 	historyErr error
+	// historyLives records the life passed to each ListSessionHistory call.
+	historyLives []int64
 }
 
 func (r *recordingResumeStore) GetSpawn(_ string) (store.Spawn, error) {
@@ -35,7 +37,8 @@ func (r *recordingResumeStore) GetSpawn(_ string) (store.Spawn, error) {
 	return r.row, nil
 }
 
-func (r *recordingResumeStore) ListSessionHistory(_ string) ([]store.SessionHistoryEntry, error) {
+func (r *recordingResumeStore) ListSessionHistory(_ string, life int64) ([]store.SessionHistoryEntry, error) {
+	r.historyLives = append(r.historyLives, life)
 	return r.history, r.historyErr
 }
 
@@ -411,6 +414,23 @@ func TestResumeListSessionHistoryErrorPropagates(t *testing.T) {
 	}
 	if tm.newSessionCalls != 0 {
 		t.Errorf("NewSession fired despite history read failure")
+	}
+}
+
+// TestResumeHistoryWalkReadsRowsOwnLife pins that, with no current transcript,
+// resume reads history for exactly the life of the row it read (Epic 6).
+func TestResumeHistoryWalkReadsRowsOwnLife(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "")
+
+	row := baseRow() // JSONLPath == "" and computed fallback absent under the temp HOME
+	row.LifeNumber = 3
+	st := &recordingResumeStore{row: row}
+	tm := &recordingResumeTmux{}
+
+	_, _ = api.Resume(st, tm, config.Default(), api.ResumeParams{ClaudeInstanceID: "id-r-1"})
+	if len(st.historyLives) != 1 || st.historyLives[0] != 3 {
+		t.Fatalf("ListSessionHistory lives = %v; want [3] (the row's own life)", st.historyLives)
 	}
 }
 

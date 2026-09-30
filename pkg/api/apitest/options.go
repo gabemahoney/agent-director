@@ -38,13 +38,16 @@ const (
 // seconds), in which WithStartedAt and WithEndedAt write a time.Time.
 const storeTimestampLayout = "2006-01-02 15:04:05"
 
-// spawnOpts accumulates the column overrides requested via SeedSpawn's
-// variadic SpawnOption arguments: column name to the value stored, where a
-// nil value stores NULL. Only columns an option names are written from here
+// spawnOpts accumulates what SeedSpawn's variadic SpawnOption arguments
+// request. cols maps a spawns column name to the value stored, where a nil
+// value stores NULL. Only columns an option names are written from here
 // (SeedSpawn adds its SR-20.3 defaults for the v5 columns no option names);
-// a later option for the same column wins.
+// a later option for the same column wins. history holds the
+// session_history entries WithSessionHistory seeds, in seeding order; they
+// are not spawns columns and never enter cols.
 type spawnOpts struct {
-	cols map[string]any
+	cols    map[string]any
+	history []SessionHistorySeed
 }
 
 // set records value for column; nil stores NULL.
@@ -156,6 +159,36 @@ func WithNoLaunchStartedAt() SpawnOption {
 // WithLifeNumber seeds life_number, the row's current life (SR-5.9).
 func WithLifeNumber(life int64) SpawnOption {
 	return func(o *spawnOpts) { o.set("life_number", life) }
+}
+
+// SessionHistorySeed is one archived session_history entry WithSessionHistory
+// seeds on the row (SR-5.9, SR-8.7).
+type SessionHistorySeed struct {
+	// SessionID is the entry's claude_session_id. It may equal the row's
+	// current session id (the current-session-rule fixtures, SR-8.7).
+	SessionID string
+	// JSONLPath is the entry's transcript path; empty stores NULL.
+	JSONLPath string
+	// Life is the life the entry belongs to (life_number); it need not be
+	// the row's life.
+	Life int64
+	// RecordedAt, when non-zero, is stored as recorded_at in the store's
+	// timestamp layout (UTC, whole seconds). When zero the entry takes the
+	// store's default, the current time.
+	RecordedAt time.Time
+}
+
+// WithSessionHistory adds one archived session_history entry to the seeded
+// row, with its session id, transcript path (empty = NULL) and life, and
+// optionally its recorded_at (SR-20.2, SR-20.3). Give it once per entry.
+// Entries are inserted after the row's columns are written, in seeding order,
+// so with no stated RecordedAt a later-seeded entry reads as newer (equal
+// recorded_at is broken by insertion order, newest first); entries with a
+// stated RecordedAt order by that time. Two entries with the same session id
+// are a SeedSpawn error (one entry per instance and session id), never an
+// overwrite. With no WithSessionHistory, SeedSpawn writes no history.
+func WithSessionHistory(entry SessionHistorySeed) SpawnOption {
+	return func(o *spawnOpts) { o.history = append(o.history, entry) }
 }
 
 // WithNoPreTrust records the pre-trust opt-out (no_pre_trust 1, SR-5.1);

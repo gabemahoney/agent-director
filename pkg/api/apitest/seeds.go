@@ -34,13 +34,16 @@ import (
 //
 //   - opts: optional trailing SpawnOption values seeding columns the store
 //     writes above cannot (the v3 identity/liveness columns, the v5 columns,
-//     timestamps and raw structured text). Options and the SR-20.3 defaults
-//     are applied by apitest-internal SQL UPDATEs in one transaction after
-//     the InsertPending/RecordSessionStartIdentity/ApplyHookTransition
-//     sequence: one UPDATE writes the options and defaults, and for a
-//     pending row with no launch-start option a second UPDATE sets the
-//     default launch start from the final started_at. Neither UPDATE
-//     advances row_version.
+//     timestamps and raw structured text) and session history
+//     (WithSessionHistory). Options and the SR-20.3 defaults are applied by
+//     apitest-internal SQL in one transaction after the
+//     InsertPending/RecordSessionStartIdentity/ApplyHookTransition sequence:
+//     one UPDATE writes the options and defaults, for a pending row with no
+//     launch-start option a second UPDATE sets the default launch start from
+//     the final started_at, and then each WithSessionHistory entry is
+//     inserted into session_history in seeding order (a duplicate session id
+//     is an error; with no WithSessionHistory no history is written). None of
+//     these statements advances row_version.
 //
 // SR-20.3 defaults, for every column no option names: a well-formed launch
 // token (16 lowercase hex, distinct per row), tmux_socket TestSocket,
@@ -121,8 +124,8 @@ func SeedSpawn(dbPath, id, state, cwd, relayMode, sessionID string, createStore 
 }
 
 // applySpawnColumns writes the option overrides and the SR-20.3 defaults onto
-// the already-seeded row through a raw parameterised UPDATE, in one
-// transaction. apitest is the single blessed location for these column
+// the already-seeded row through a raw parameterised UPDATE, then inserts the
+// WithSessionHistory entries, all in one transaction. apitest is the single blessed location for these column
 // literals (SR-20.2 binds the no-inline-SQL rule to tests, not this helper).
 // The column names come from the options' literals, never from input. The
 // pending default launch start is a second statement because it reads the
@@ -155,6 +158,13 @@ func applySpawnColumns(dbPath, id, state string, opts []SpawnOption) error {
 		if !o.has(col) {
 			o.set(col, v)
 		}
+	}
+	seen := make(map[string]bool, len(o.history))
+	for _, h := range o.history {
+		if seen[h.SessionID] {
+			return fmt.Errorf("SeedSpawn: WithSessionHistory: duplicate session id %q for instance %s (one entry per instance and session id)", h.SessionID, id)
+		}
+		seen[h.SessionID] = true
 	}
 	pendingDefaultStart := !o.has("launch_started_at") && state == store.StatePending
 	if !o.has("launch_started_at") && !pendingDefaultStart {
@@ -196,8 +206,38 @@ func applySpawnColumns(dbPath, id, state string, opts []SpawnOption) error {
 			return fmt.Errorf("SeedSpawn: default launch start UPDATE: %w", err)
 		}
 	}
+	if err := insertSessionHistory(tx, id, o.history); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("SeedSpawn: commit options tx: %w", err)
+	}
+	return nil
+}
+
+// insertSessionHistory inserts the WithSessionHistory entries for id on tx,
+// one INSERT each in seeding order, so history_id rises with seeding order.
+// An entry with no RecordedAt takes the column's default (the current time).
+func insertSessionHistory(tx *sql.Tx, id string, entries []SessionHistorySeed) error {
+	for _, h := range entries {
+		var pathArg any
+		if h.JSONLPath != "" {
+			pathArg = h.JSONLPath
+		}
+		var err error
+		if h.RecordedAt.IsZero() {
+			_, err = tx.Exec(`INSERT INTO session_history
+			    (claude_instance_id, claude_session_id, jsonl_path, life_number)
+			  VALUES (?, ?, ?, ?)`, id, h.SessionID, pathArg, h.Life)
+		} else {
+			_, err = tx.Exec(`INSERT INTO session_history
+			    (claude_instance_id, claude_session_id, jsonl_path, life_number, recorded_at)
+			  VALUES (?, ?, ?, ?, ?)`, id, h.SessionID, pathArg, h.Life,
+				h.RecordedAt.UTC().Format(storeTimestampLayout))
+		}
+		if err != nil {
+			return fmt.Errorf("SeedSpawn: WithSessionHistory %q: %w", h.SessionID, err)
+		}
 	}
 	return nil
 }

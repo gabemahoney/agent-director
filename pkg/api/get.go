@@ -162,10 +162,10 @@ func nullableTimestamp(s string) *string {
 type GetStore interface {
 	GetSpawn(instanceID string) (Spawn, error)
 	OpenPermissionRequestsForSpawn(instanceID string) ([]PermissionRow, error)
-	// ListSessionHistory returns the instance's archived prior sessions
-	// (newest first) so Get can populate PriorSessions and derive
-	// TranscriptStatus (b.v2c AC6/AC8).
-	ListSessionHistory(instanceID string) ([]SessionHistoryEntry, error)
+	// ListSessionHistory returns the instance's archived prior sessions in
+	// life, the LifeNumber of the row Get read (newest first), so Get can
+	// populate PriorSessions and derive TranscriptStatus (b.v2c AC6/AC8).
+	ListSessionHistory(instanceID string, life int64) ([]SessionHistoryEntry, error)
 }
 
 // deriveTranscriptStatus computes the operator-facing transcript-status summary
@@ -222,7 +222,7 @@ func Get(s GetStore, instanceID string) (SpawnRow, error) {
 	// b.v2c AC6/AC8: surface archived prior sessions and derive the
 	// operator-facing transcript status so "no history ever existed" is
 	// distinguishable from "history exists under a different session id".
-	history, err := s.ListSessionHistory(instanceID)
+	history, err := s.ListSessionHistory(instanceID, row.LifeNumber)
 	if err != nil {
 		return SpawnRow{}, err
 	}

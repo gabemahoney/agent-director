@@ -295,7 +295,16 @@ func TestV5Migration_HistoryFixtureAtLifeZero(t *testing.T) {
 	}
 	for _, id := range f.ids {
 		assertSpawnMatchesRaw(t, s, id, f.rows[id])
-		hist, err := s.ListSessionHistory(id)
+		// Read history the way a verb does: in the life of the row just read,
+		// which for every migrated row is life 0.
+		sp, err := s.GetSpawn(id)
+		if err != nil {
+			t.Fatalf("GetSpawn(%s): %v", id, err)
+		}
+		if sp.LifeNumber != 0 {
+			t.Fatalf("%s: migrated row LifeNumber = %d; want 0", id, sp.LifeNumber)
+		}
+		hist, err := s.ListSessionHistory(id, sp.LifeNumber)
 		if err != nil {
 			t.Fatalf("ListSessionHistory(%s): %v", id, err)
 		}

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
 	"github.com/gabemahoney/agent-director/internal/trail"
@@ -17,17 +18,21 @@ type SessionHistoryEntry struct {
 	RecordedAt      string
 }
 
-// ListSessionHistory returns every archived prior session for the instance,
-// newest recorded first. An absent instance yields an empty (non-nil) slice —
-// there is nothing to distinguish "no history" from "no row" here; callers that
-// need that distinction check the spawns row separately. Used by get/list to
+// ListSessionHistory returns the instance's archived prior sessions in the
+// given life (SR-5.9) only, newest recorded first; entries of the instance's
+// other lives, and of every other instance, never appear. Callers pass the
+// life_number of the row they already read (Spawn.LifeNumber). No entries —
+// including an absent instance — yields an empty (non-nil) slice; there is
+// nothing to distinguish "no history" from "no row" here, so callers that need
+// that distinction check the spawns row separately. Used by get and resume to
 // surface the "history exists under a different session id" case (AC6/AC8).
-func (s *Store) ListSessionHistory(instanceID string) ([]SessionHistoryEntry, error) {
+func (s *Store) ListSessionHistory(instanceID string, life int64) ([]SessionHistoryEntry, error) {
 	const q = `SELECT claude_session_id, COALESCE(jsonl_path, ''), recorded_at
 	             FROM session_history
 	            WHERE claude_instance_id = ?
+	              AND life_number = ?
 	         ORDER BY recorded_at DESC, history_id DESC`
-	rows, err := s.db.Query(q, instanceID)
+	rows, err := s.db.Query(q, instanceID, life)
 	if err != nil {
 		return nil, fmt.Errorf("store: list session history: %w", err)
 	}
@@ -44,6 +49,54 @@ func (s *Store) ListSessionHistory(instanceID string) ([]SessionHistoryEntry, er
 		return nil, fmt.Errorf("store: list session history iterate: %w", err)
 	}
 	return out, nil
+}
+
+// querier is the statement surface shared by *sql.DB and *sql.Tx, so a
+// store-internal write can run on the pool or inside a caller's own
+// transaction.
+type querier interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+// upsertSessionHistoryEntry archives (sessionID, jsonlPath) as an entry of
+// instanceID's history in life (SR-5.9), on q — the pool, or a transaction
+// the caller already holds; it runs exactly one statement and reads
+// nothing, so the caller supplies values it has already read. An empty
+// jsonlPath is stored as NULL. Entries stay keyed on (instance id, session id)
+// and are never duplicated:
+//   - no entry yet: a new entry in life, recorded_at now;
+//   - an entry in the same life: the path is updated only when jsonlPath is
+//     non-empty (an already-recorded path survives a NULL one), and
+//     recorded_at is refreshed (b.5jm/4);
+//   - an entry in another life: the entry moves to life and takes jsonlPath
+//     exactly, NULL included — no path from the other life survives, since it
+//     may point under that life's directories — and recorded_at is refreshed.
+//
+// It emits nothing, advances no row_version and returns the driver's error
+// unwrapped; callers own their trail events, error wrapping and failure
+// policy.
+func upsertSessionHistoryEntry(q querier, instanceID, sessionID, jsonlPath string, life int64) error {
+	var pathArg any
+	if jsonlPath != "" {
+		pathArg = jsonlPath
+	}
+	// In an upsert's DO UPDATE every right-hand side reads the existing
+	// entry's values, so life_number in the CASE is the stored life even
+	// though the same statement assigns it.
+	_, err := q.Exec(
+		`INSERT INTO session_history
+		     (claude_instance_id, claude_session_id, jsonl_path, life_number)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT(claude_instance_id, claude_session_id) DO UPDATE SET
+		     jsonl_path  = CASE WHEN session_history.life_number = excluded.life_number
+		                        THEN COALESCE(excluded.jsonl_path, session_history.jsonl_path)
+		                        ELSE excluded.jsonl_path
+		                   END,
+		     life_number = excluded.life_number,
+		     recorded_at = CURRENT_TIMESTAMP`,
+		instanceID, sessionID, pathArg, life,
+	)
+	return err
 }
 
 // HealJsonlPath records a now-present transcript path onto a row whose

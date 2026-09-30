@@ -2,11 +2,13 @@ package store
 
 // session_history_test.go — b.v2c store-level coverage for the session-rotation
 // archive, lazy transcript heal, and provisional-transcript listing. Tests drive
-// the real *Store against a temp SQLite DB (openTempStore) and read back through
-// the store API. The exceptions are the b.5jm/4 upsert helpers (countHistoryRows,
-// historyRecordedAt, and the backdate helper) which query s.db directly: row
-// count and recorded_at are not exposed by the store API but are exactly what the
-// upsert semantics must be pinned on.
+// the real *Store against a temp SQLite DB (openTempStore) and read history back
+// through the store API at the row's life (SR-5.9); every archive test also shows
+// each entry is in the row's life (assertHistoryInRowLife, via the v5 white-box
+// readRawHistory). The b.5jm/4 upsert helpers (countHistoryRows,
+// historyRecordedAt, and the backdate helper) query s.db directly: row count and
+// recorded_at are not exposed by the store API but are exactly what the upsert
+// semantics must be pinned on.
 
 import (
 	"fmt"
@@ -28,11 +30,45 @@ func countHistoryRows(t *testing.T, s *Store, instanceID, sessionID string) int 
 	return n
 }
 
+// rowLife returns the row's current life_number through the store API.
+func rowLife(t *testing.T, s *Store, instanceID string) int64 {
+	t.Helper()
+	row, err := s.GetSpawn(instanceID)
+	if err != nil {
+		t.Fatalf("GetSpawn(%q): %v", instanceID, err)
+	}
+	return row.LifeNumber
+}
+
+// assertHistoryInRowLife asserts the instance has exactly want history entries
+// across every life, and that each is in the row's current life and is listed
+// by the life-filtered read at that life.
+func assertHistoryInRowLife(t *testing.T, s *Store, path, instanceID string, want int) {
+	t.Helper()
+	life := rowLife(t, s, instanceID)
+	all := readRawHistory(t, path, instanceID, []string{"claude_session_id", "life_number"})
+	if len(all) != want {
+		t.Fatalf("history entries across every life = %d; want %d", len(all), want)
+	}
+	for _, h := range all {
+		if h["life_number"] != fmt.Sprint(life) {
+			t.Errorf("entry %s life_number = %s; want the row's life %d", h["claude_session_id"], h["life_number"], life)
+		}
+	}
+	listed, err := s.ListSessionHistory(instanceID, life)
+	if err != nil {
+		t.Fatalf("ListSessionHistory(%q, %d): %v", instanceID, life, err)
+	}
+	if len(listed) != want {
+		t.Errorf("ListSessionHistory at the row's life %d returned %d entries; want %d", life, len(listed), want)
+	}
+}
+
 // historyJsonl reads back the archived jsonl_path for one (instance, session)
-// pair through the store API (empty string when the column is NULL).
+// pair through the store API at the row's life (empty string when NULL).
 func historyJsonl(t *testing.T, s *Store, instanceID, sessionID string) string {
 	t.Helper()
-	hist, err := s.ListSessionHistory(instanceID)
+	hist, err := s.ListSessionHistory(instanceID, rowLife(t, s, instanceID))
 	if err != nil {
 		t.Fatalf("ListSessionHistory: %v", err)
 	}
@@ -98,7 +134,7 @@ func seedWaitingRow(t *testing.T, s *Store, id string) {
 // PRE-FIX there is no session_history and the prior pair is silently overwritten;
 // POST-FIX ListSessionHistory returns the archived prior session with its path.
 func TestSessionRotationArchivesPriorTranscript(t *testing.T) {
-	s, _ := openTempStore(t)
+	s, path := openTempStore(t)
 	const id = "rot-archive-1"
 	seedWaitingRow(t, s, id)
 
@@ -111,7 +147,8 @@ func TestSessionRotationArchivesPriorTranscript(t *testing.T) {
 		t.Fatalf("record session B: %v", err)
 	}
 
-	hist, err := s.ListSessionHistory(id)
+	assertHistoryInRowLife(t, s, path, id, 1)
+	hist, err := s.ListSessionHistory(id, rowLife(t, s, id))
 	if err != nil {
 		t.Fatalf("ListSessionHistory: %v", err)
 	}
@@ -137,7 +174,7 @@ func TestSessionRotationArchivesPriorTranscript(t *testing.T) {
 // re-fire (identical session id) and a fresh spawn's first SessionStart (empty
 // prior id) both archive nothing — history is written only on a genuine change.
 func TestSessionRotationNoArchiveWhenSameSession(t *testing.T) {
-	s, _ := openTempStore(t)
+	s, path := openTempStore(t)
 	const id = "rot-noarchive-1"
 	seedWaitingRow(t, s, id)
 
@@ -150,13 +187,8 @@ func TestSessionRotationNoArchiveWhenSameSession(t *testing.T) {
 		t.Fatalf("record re-fire: %v", err)
 	}
 
-	hist, err := s.ListSessionHistory(id)
-	if err != nil {
-		t.Fatalf("ListSessionHistory: %v", err)
-	}
-	if len(hist) != 0 {
-		t.Fatalf("len(history) = %d; want 0 (no rotation happened)", len(hist))
-	}
+	// No rotation happened: no entry in the row's life or in any other.
+	assertHistoryInRowLife(t, s, path, id, 0)
 }
 
 // TestRecordSessionStartIdentityReportedButAbsentNullsPath is the b.v2c AC1
@@ -266,7 +298,7 @@ func TestListProvisionalTranscripts(t *testing.T) {
 // jsonl_path stays NULL and recorded_at stale, so this test's path assertion
 // fails. POST-FIX the upsert fills the path and there is still exactly one A row.
 func TestReArchiveFillsNullPathAndRefreshesRecordedAt(t *testing.T) {
-	s, _ := openTempStore(t)
+	s, path := openTempStore(t)
 	const id = "rearchive-fill-1"
 	seedWaitingRow(t, s, id)
 
@@ -310,13 +342,15 @@ func TestReArchiveFillsNullPathAndRefreshesRecordedAt(t *testing.T) {
 	if at := historyRecordedAt(t, s, id, "session-A"); at <= firstRecordedAt {
 		t.Errorf("recorded_at = %q; want strictly newer than backdated %q (upsert must refresh)", at, firstRecordedAt)
 	}
+	// Entries A and B, both in the row's life.
+	assertHistoryInRowLife(t, s, path, id, 2)
 }
 
 // TestReArchiveWithNullDoesNotClobberKnownPath is the b.5jm/4 (AC7) COALESCE
 // guard: re-archiving a session id that already has a NON-NULL path entry, this
 // time with a NULL path, must KEEP the recorded path (COALESCE(excluded, existing)).
 func TestReArchiveWithNullDoesNotClobberKnownPath(t *testing.T) {
-	s, _ := openTempStore(t)
+	s, path := openTempStore(t)
 	const id = "rearchive-keep-1"
 	seedWaitingRow(t, s, id)
 
@@ -347,4 +381,6 @@ func TestReArchiveWithNullDoesNotClobberKnownPath(t *testing.T) {
 	if n := countHistoryRows(t, s, id, "session-A"); n != 1 {
 		t.Errorf("session-A history rows = %d; want 1", n)
 	}
+	// Entries A and B, both in the row's life.
+	assertHistoryInRowLife(t, s, path, id, 2)
 }

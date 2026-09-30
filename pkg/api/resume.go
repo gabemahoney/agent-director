@@ -21,11 +21,12 @@ const resumeEnvInstanceID = "AGENT_DIRECTOR_INSTANCE_ID"
 type ResumeStore interface {
 	GetSpawn(instanceID string) (Spawn, error)
 	SetParentID(instanceID, parentID string) error
-	// ListSessionHistory returns the instance's archived prior sessions
-	// (newest first). Used both to try earlier transcripts as resume
-	// candidates (b.v2c AC6 — a rotation must not strand history) and to
-	// distinguish ErrJsonlNeverWritten from ErrJsonlMissing (AC2).
-	ListSessionHistory(instanceID string) ([]SessionHistoryEntry, error)
+	// ListSessionHistory returns the instance's archived prior sessions in
+	// life, the LifeNumber of the row Resume read (newest first). Used both
+	// to try earlier transcripts as resume candidates (b.v2c AC6 — a
+	// rotation must not strand history) and to distinguish
+	// ErrJsonlNeverWritten from ErrJsonlMissing (AC2).
+	ListSessionHistory(instanceID string, life int64) ([]SessionHistoryEntry, error)
 }
 
 // SessionHistoryEntry is re-exported from internal/store so external consumers
@@ -199,7 +200,7 @@ func resumeImpl(s ResumeStore, t ResumeTmux, cfg config.Config, params ResumePar
 	// id before advancing to the next, older entry. Without this, a newer entry
 	// whose recorded path has rotted would be skipped outright and an older
 	// entry could win, silently reattaching resume to older history.
-	history, herr := s.ListSessionHistory(params.ClaudeInstanceID)
+	history, herr := s.ListSessionHistory(params.ClaudeInstanceID, row.LifeNumber)
 	if herr != nil {
 		return ResumeResult{}, fmt.Errorf("resume: list session history: %w", herr)
 	}

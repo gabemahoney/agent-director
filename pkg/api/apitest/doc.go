@@ -28,7 +28,10 @@
 //     WithNoPreTrust, WithRawNoPreTrust, WithLaunchIdentity, WithNoLaunchToken
 //     (a row from before the release: no token, socket or identity, the same
 //     as WithLaunchIdentity(store.LaunchIdentity{})), WithRawLabels,
-//     WithRawClaudeArgs, WithRawExtraEnv. SeedSpawn's doc comment states the
+//     WithRawClaudeArgs, WithRawExtraEnv, and WithSessionHistory (one archived
+//     session_history entry per use, a SessionHistorySeed: session id,
+//     transcript path or NULL, the life it belongs to and an optional
+//     recorded_at). SeedSpawn's doc comment states the
 //     SR-20.3 defaults; TestSocket is the default socket, and TestPaneID /
 //     TestPanePID the default pane of a live row. To make the Recorder hold
 //     a seeded row's own session (the row's socket and pane, labelled valid
@@ -46,8 +49,8 @@
 //     its options, OpenStoreWithRow, SeedExpireFixture or the storefix
 //     seeders, and read columns no verb shows through ReadSpawnColumns and
 //     history through ReadSessionHistoryAllLives.
-//   - They seed session history only through the hook path (a session
-//     rotation), never by writing session_history.
+//   - They seed session history only through WithSessionHistory or the hook
+//     path (a session rotation), never by writing session_history.
 //   - They assert row_version deltas (after minus before, both read through
 //     ReadSpawnColumns), never absolute values, except for a row the test
 //     inserted itself. A seeded row's starting version depends on the seed:

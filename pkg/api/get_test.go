@@ -209,6 +209,10 @@ type recordingGetStore struct {
 	// archived sessions, the default existing tests rely on.
 	history    []store.SessionHistoryEntry
 	historyErr error
+	// historyLives records the life passed on each ListSessionHistory call,
+	// in call order. The fake returns history/historyErr whatever the life;
+	// life filtering itself is covered in internal/store.
+	historyLives []int64
 }
 
 func (r *recordingGetStore) GetSpawn(id string) (store.Spawn, error) {
@@ -226,10 +230,34 @@ func (r *recordingGetStore) OpenPermissionRequestsForSpawn(_ string) ([]store.Pe
 	return r.permRows, nil
 }
 
-// ListSessionHistory satisfies the widened GetStore interface (b.v2c AC6/AC8),
-// returning the programmable history/historyErr.
-func (r *recordingGetStore) ListSessionHistory(_ string) ([]store.SessionHistoryEntry, error) {
+// ListSessionHistory satisfies the life-taking GetStore interface (b.v2c
+// AC6/AC8; SR-5.9), recording the life asked for and returning the
+// programmable history/historyErr.
+func (r *recordingGetStore) ListSessionHistory(_ string, life int64) ([]store.SessionHistoryEntry, error) {
+	r.historyLives = append(r.historyLives, life)
 	return r.history, r.historyErr
+}
+
+// TestGetReadsHistoryForItsRowsLife pins SR-5.9/SR-8.7 plumbing: Get reads
+// session history for the life of the row it read, exactly once. A non-zero
+// life proves Get passes row.LifeNumber rather than a default.
+func TestGetReadsHistoryForItsRowsLife(t *testing.T) {
+	fake := &recordingGetStore{
+		spawn: store.Spawn{
+			ClaudeInstanceID: "id-g-life",
+			State:            store.StateWaiting,
+			CWD:              "/tmp",
+			TmuxSessionName:  "cd-id-g-life",
+			RelayMode:        "on",
+			LifeNumber:       3,
+		},
+	}
+	if _, err := api.Get(fake, "id-g-life"); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(fake.historyLives) != 1 || fake.historyLives[0] != 3 {
+		t.Errorf("ListSessionHistory lives = %v; want [3] (one read, for the row's own life)", fake.historyLives)
+	}
 }
 
 // TestGetTranscriptStatusAndPriorSessions is the b.v2c AC8 REGRESSION test: get
