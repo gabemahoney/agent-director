@@ -576,9 +576,8 @@ entry the ordinary defaults again (no phase 3, §2):
   the agent again with a spawn or reuse that turns pre-trust off.
 - The hop finds no `store_meta`, so it creates the table and a **new** random
   store id. The old id is gone from the store (only the step-2 copy still
-  holds it), so every label written before the
-  rollback (the store id is carried by every label, Task t2.h98.15.3f) reads
-  as another store's. That is why every agent is stopped before the rollback
+  holds it). Every label carries the store id as its last field, so every
+  label written before the rollback reads as another store's. That is why every agent is stopped before the rollback
   (step 1) and started again after the re-migration, never carried across it.
 
 **Alternative: restore a backup.** Restoring a copy of `state.db` taken before

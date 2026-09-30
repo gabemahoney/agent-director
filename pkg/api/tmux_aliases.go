@@ -25,8 +25,10 @@ type TmuxSession = tmux.Session
 type TmuxPane = tmux.Pane
 
 // TmuxLabel is re-exported from internal/tmux for the same reason. It is a
-// session's classified @ad_owner label in a TmuxSession; its Kind is one of
-// TmuxLabelNone and TmuxLabelValid (SR-3.4).
+// session's classified @ad_owner label in a TmuxSession, "ad1 <token>
+// <session id> <instance id> <store id>" when valid; its Kind is one of
+// TmuxLabelNone and TmuxLabelValid, and its StoreID names the writing store
+// (SR-3.4; WD 2026-09-29 STORE).
 type TmuxLabel = tmux.Label
 
 // TmuxCreateReply is re-exported from internal/tmux for the same reason. It

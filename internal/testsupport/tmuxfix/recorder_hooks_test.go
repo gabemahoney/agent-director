@@ -16,7 +16,7 @@ var start = time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 // TestRecorder_SessionHooks: a replace or remove hook fires once after its
 // call kind on its socket, between that call and the caller's next action.
 func TestRecorder_SessionHooks(t *testing.T) {
-	cur := tmuxfix.Valid(tmuxfix.Token, agent)
+	cur := tmuxfix.Valid(tmuxfix.Token, agent, tmuxfix.StoreID)
 	type left struct {
 		id, name, pane string
 		label          tmux.Label

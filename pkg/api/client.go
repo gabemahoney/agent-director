@@ -45,10 +45,13 @@ type TmuxClient interface {
 	SendKeysPane(socket, paneID, text string, pressEnter bool) error
 	// CapturePaneID returns the last nLines lines of the pane paneID on socket.
 	CapturePaneID(socket, paneID string, nLines int, ansi bool) (string, error)
-	// NewSession creates the session name on socket with its chained label and returns the create reply.
-	NewSession(socket, name, cwd string, envs map[string]string, command []string, token, instanceID string) (TmuxCreateReply, error)
-	// SetLabel labels the session sessionID on socket by its id.
-	SetLabel(socket, sessionID, token, instanceID string) error
+	// NewSession creates the session name on socket with its chained label
+	// "ad1 <token> <session id> <instance id> <store id>", storeID being this
+	// store's (*store.Store).StoreID(), and returns the create reply.
+	NewSession(socket, name, cwd string, envs map[string]string, command []string, token, instanceID, storeID string) (TmuxCreateReply, error)
+	// SetLabel labels the session sessionID on socket by its id with
+	// "ad1 <token> <session id> <instance id> <store id>".
+	SetLabel(socket, sessionID, token, instanceID, storeID string) error
 	// NewSessionByName creates a detached session by name (transitional).
 	NewSessionByName(name, cwd string, envs map[string]string, command []string) error
 	// HasSession reports whether a session whose name begins with name

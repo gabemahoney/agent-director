@@ -33,8 +33,10 @@ func WithRowSessionName(stored string) RowSessionOption {
 }
 
 // WithRowSessionLabel gives the session another label instead of the row's
-// current one: Valid(OtherToken, id) for an old label, Valid(token, another
-// id) for a foreign one, or a LabelShape's Want. set is SeedSession.LabelSet:
+// current one: Valid(OtherToken, id, storeID) for an old label, Valid(token,
+// another id, storeID) for a foreign one, Valid(token, id,
+// apitest.OtherStoreID(storeID)) for another store's, or a LabelShape's
+// Want; storeID is the store's own (apitest.ReadStoreID). set is SeedSession.LabelSet:
 // true with a LabelNone label for a malformed or borrowed value, false for
 // none (unset).
 func WithRowSessionLabel(label tmux.Label, set bool) RowSessionOption {
@@ -45,9 +47,11 @@ func WithRowSessionLabel(label tmux.Label, set bool) RowSessionOption {
 // instanceID of the store at dbPath, seeded through apitest.SeedSpawn
 // (SR-20.2, SR-20.3), and returns it as stored. The session is on the
 // row's socket, with the row's pane (a new pane when the row records none),
-// the stored form of the row's session name, and the label valid for the
-// row's id and launch token as read from the store, so a test never copies
-// the token. Its creation time is the bound clock's current second
+// the stored form of the row's session name, and the five-field label valid
+// for the row's id and launch token and the store's id, all read from the
+// store (the store id through (*store.Store).StoreID() on the store it opens
+// to read the row; WD 2026-09-29 STORE), so a test never copies the token or
+// the store id. Its creation time is the bound clock's current second
 // (WithVirtualTime), else the wall clock's. When the socket has no server,
 // one is started with the row's recorded server identity (new values for
 // what the row does not record). Options give another creation time, label
@@ -57,7 +61,7 @@ func WithRowSessionLabel(label tmux.Label, set bool) RowSessionOption {
 // distinct panes through apitest.WithLaunchIdentity).
 func (r *Recorder) SeedRowSession(t testing.TB, dbPath, instanceID string, opts ...RowSessionOption) SeedSession {
 	t.Helper()
-	row := readRow(t, dbPath, instanceID)
+	row, storeID := readRow(t, dbPath, instanceID)
 	o := rowSession{}
 	for _, opt := range opts {
 		opt(&o)
@@ -67,7 +71,7 @@ func (r *Recorder) SeedRowSession(t testing.TB, dbPath, instanceID string, opts 
 		t.Fatalf("tmuxfix.SeedRowSession: row %s records no tmux socket", instanceID)
 	}
 	seed := SeedSession{Name: storedName(row.TmuxSessionName), Created: o.created,
-		Label: Valid(id.Token, instanceID), LabelSet: true}
+		Label: Valid(id.Token, instanceID, storeID), LabelSet: true}
 	if o.hasName {
 		seed.Name = o.name
 	}
@@ -93,9 +97,9 @@ func (r *Recorder) SeedRowSession(t testing.TB, dbPath, instanceID string, opts 
 	return r.addSession(srv, seed)
 }
 
-// readRow reads the row instanceID through the store, failing the test when
-// it cannot.
-func readRow(t testing.TB, dbPath, instanceID string) store.Spawn {
+// readRow reads the row instanceID and the store's id through the store,
+// failing the test when it cannot.
+func readRow(t testing.TB, dbPath, instanceID string) (store.Spawn, string) {
 	t.Helper()
 	s, err := store.Open(dbPath)
 	if err != nil {
@@ -106,5 +110,5 @@ func readRow(t testing.TB, dbPath, instanceID string) store.Spawn {
 	if err != nil {
 		t.Fatalf("tmuxfix.SeedRowSession: read row %s: %v", instanceID, err)
 	}
-	return row
+	return row, s.StoreID()
 }

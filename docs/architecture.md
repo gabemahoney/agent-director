@@ -63,7 +63,7 @@ still holds: nothing in `internal/` imports `pkg/api`.
 | `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. `classifyDispatchError` delegates to `errnames.Classify`. | stdlib; `pkg/api`; `pkg/api/manifest`; `pkg/api/errnames`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
 | `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
 | `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). Builds env maps, synthesizes `--settings` JSON, and asks `internal/tmux` to start the session. Inserts the `pending` row via `internal/store`. | stdlib; `internal/config`; `internal/store`; `internal/tmux`; `github.com/google/uuid` for UUID4 minting. | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
-| `internal/tmux` | Thin client over the tmux binary, built only by `New(binary, Timeouts)` (`""` = tmux on `PATH`). **Phase 1 call set (SR-2.1, Appendix F.1)**, every call taking the socket: `Lookup` (the one-invocation lookup: session listing with labels plus the three `@ad_owner` scope reads), `ListPanes` (`list-panes -a`), `KillPane` (by pane id), `KillSessionID` (by session id), `SendKeysPane` (text, then Enter, by pane id), `CapturePaneID` (by pane id), `SetLabel` (label by session id) and `NewSession` (the create with its chained `@ad_owner` label `ad1 <token> <$N> <id>`). Typed results and failures: `Call`, `Failure`, `CallError`, `LookupAnswer`, `Session`, `Label` / `LabelKind`, `CreateReply`, `Pane`, `Timeouts`. Mechanics: every call runs `-u -S <socket>` first; targets are ids only (never a name or pattern); each call class (query, action, create) has its own timeout, plus the pipe-close wait (`Timeouts.WaitDelay`); data is parsed only from standard output of an exit-0 call; replies are recognised only from the first line of standard error; the client's environment has every `AGENT_DIRECTOR_*` variable removed. Socket-taking calls fail only with `*CallError`. Labels reach callers only classified (the raw value never leaves the client) and recognised replies only as a `Failure`; the one exception is an unrecognised reply, whose first line (trimmed, at most 200 bytes) is carried in `CallError.FirstLine`. **Socket resolution (RN-5):** `ResolveSocket(create)` resolves the socket as tmux does (`TMUX`, then `TMUX_TMPDIR`, then `/tmp`, with tmux's per-user directory checks) and `EnsureSocketDir(socket)` creates only a missing per-user directory; refusals are `*SocketDirError` (with `SocketDirReason`), matching `ErrTmuxNotAvailable`. **Must use** `tmux.NeedsLabelByID(name)` to decide whether a session name (one containing `$` or `\`) must be labelled by id rather than by the chain; never re-implement that test. The client receives its timeouts and pipe-close wait from `pkg/api` at construction, never from `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); the package defines no defaults. The runner seam types (`Invocation`, `RunStatus`, `RunResult`, `Runner`) are exported for replay tests; tests install a runner only through the test-only `NewWithRunner` in `export_test.go`. The name-based methods (`NewSessionByName`, `HasSession`, `KillSession`, `SendKeys`, `CapturePane`) keep their contracts until their last verb moves to the socket-taking calls. `HasSession` matches by prefix: `resume` still calls it until it moves to the lookup, and no verb may newly adopt it. `StripANSI` post-processes captures. | stdlib (`bytes`, `context`, `errors`, `fmt`, `io/fs`, `os`, `os/exec`, `path/filepath`, `regexp`, `sort`, `strconv`, `strings`, `syscall`, `time`, `unicode`, `unicode/utf8`). | `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); template and store packages; shell processes (`/bin/sh`); anything other than direct `exec.Command`. |
+| `internal/tmux` | Thin client over the tmux binary, built only by `New(binary, Timeouts)` (`""` = tmux on `PATH`). **Phase 1 call set (SR-2.1, Appendix F.1)**, every call taking the socket: `Lookup` (the one-invocation lookup: session listing with labels plus the three `@ad_owner` scope reads), `ListPanes` (`list-panes -a`), `KillPane` (by pane id), `KillSessionID` (by session id), `SendKeysPane` (text, then Enter, by pane id), `CapturePaneID` (by pane id), `SetLabel` (label by session id) and `NewSession` (the create with its chained `@ad_owner` label). **Label form (SR-3.4, SR-3.5):** `ad1 <token> <$N> <instance id> <store id>`, five fields. The store id is the writing store's `store_meta.store_id`, which callers pass from `(*store.Store).StoreID()`; it is the last field, so the instance id is everything between the third and the last space and may contain spaces. `NewSession` and `SetLabel` both take the token, the instance id and the store id; the chain doubles `#` only inside the instance id. A value in any other form, a four-field one included, parses as no label (`LabelNone`), except that a four-field value whose instance id ends in a space and 16 lowercase hex reads as a shorter id plus that word as its store id; and `Label.StoreID` is set only on a valid label. Typed results and failures: `Call`, `Failure`, `CallError`, `LookupAnswer`, `Session`, `Label` / `LabelKind`, `CreateReply`, `Pane`, `Timeouts`. Mechanics: every call runs `-u -S <socket>` first; targets are ids only (never a name or pattern); each call class (query, action, create) has its own timeout, plus the pipe-close wait (`Timeouts.WaitDelay`); data is parsed only from standard output of an exit-0 call; replies are recognised only from the first line of standard error; the client's environment has every `AGENT_DIRECTOR_*` variable removed. Socket-taking calls fail only with `*CallError`. Labels reach callers only classified (the raw value never leaves the client) and recognised replies only as a `Failure`; the one exception is an unrecognised reply, whose first line (trimmed, at most 200 bytes) is carried in `CallError.FirstLine`. **Socket resolution (RN-5):** `ResolveSocket(create)` resolves the socket as tmux does (`TMUX`, then `TMUX_TMPDIR`, then `/tmp`, with tmux's per-user directory checks) and `EnsureSocketDir(socket)` creates only a missing per-user directory; refusals are `*SocketDirError` (with `SocketDirReason`), matching `ErrTmuxNotAvailable`. **Must use** `tmux.NeedsLabelByID(name)` to decide whether a session name (one containing `$` or `\`) must be labelled by id rather than by the chain; never re-implement that test. The client receives its timeouts and pipe-close wait from `pkg/api` at construction, never from `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); the package defines no defaults. The runner seam types (`Invocation`, `RunStatus`, `RunResult`, `Runner`) are exported for replay tests; tests install a runner only through the test-only `NewWithRunner` in `export_test.go`. The name-based methods (`NewSessionByName`, `HasSession`, `KillSession`, `SendKeys`, `CapturePane`) keep their contracts until their last verb moves to the socket-taking calls. `HasSession` matches by prefix: `resume` still calls it until it moves to the lookup, and no verb may newly adopt it. `StripANSI` post-processes captures. | stdlib (`bytes`, `context`, `errors`, `fmt`, `io/fs`, `os`, `os/exec`, `path/filepath`, `regexp`, `sort`, `strconv`, `strings`, `syscall`, `time`, `unicode`, `unicode/utf8`). | `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); template and store packages; shell processes (`/bin/sh`); anything other than direct `exec.Command`. |
 | `internal/hook` | Reads payload JSON from stdin, classifies per SRD §5.2, writes the row UPSERT, exits 0 (state-tracking fail-open). | stdlib; `internal/store`. | `internal/tmux`; `internal/spawn`; `internal/config` (the cmd-side wrapper loads config; the package itself stays narrow). |
 
 ### `[tmux]` timing settings
@@ -225,8 +225,9 @@ verbatim so future code review can grep for it:
     policy. The rotation archive calls it today. Every new code path that
     archives a session must call it too, never a second upsert.
 - `store_meta` (v5, b.fmk; SR-5.1) — `key TEXT PRIMARY KEY, value TEXT NOT
-  NULL`, with one row in Phase 1: `store_id`, the store's identity, carried
-  by every label (Task t2.h98.15.3f).
+  NULL`, with one row in Phase 1: `store_id`, the store's identity. Every
+  `@ad_owner` label carries it as its last field (see `internal/tmux` in the
+  package inventory).
   - **Value.** 64 random bits from `crypto/rand`, written as 16 lowercase hex
     characters. It is random, not secret, but no error message ever contains
     it (SR-15).
@@ -3583,7 +3584,16 @@ parsed answer. It contains:
   the label class it reads as.
 - Builders for composed data: `SessionLine`, `LabelValue`,
   `ChainLabelValue`, `PaneLine`, `CreateReplyLine`, `Valid`, `Answer`; the
-  tokens `Token` and `OtherToken`.
+  tokens `Token` and `OtherToken`; the store ids `StoreID` and
+  `OtherStoreID` (fixed 16-hex values for catalogue entries).
+- Every label is in the five-field form `ad1 <token> <$N> <instance id>
+  <store id>`. `LabelValue(token, sessionID, instanceID, storeID)`,
+  `ChainLabelValue(token, instanceID, storeID)` (`#` doubled only in the
+  instance id) and `Valid(token, instanceID, storeID)` all take the store
+  id last. `LookupAnswers` and `StoredNames` use `StoreID`. `LabelShapes`
+  includes the AC-LKP-05 store-id shapes (`four-fields`, a store id in
+  uppercase, of 15 or 17 hex characters, empty or a placeholder) and valid
+  shapes whose instance id has spaces or `#` or ends in a 16-hex word.
 
 Consumers: the `internal/tmux` replay tests, which feed `Entry.Result()`
 to the client through the test-only runner seam `tmux.NewWithRunner`
@@ -3616,7 +3626,7 @@ parses reply text.
 - **Default answers from the table.** Lookup, pane listing, both kills,
   sends, capture and label by id act on the table. The create starts a
   server if none is bound, adds `$N` with one pane, labels it
-  `Valid(token, id)` only when `!tmux.NeedsLabelByID(name)` (the chained
+  `Valid(token, id, storeID)` with the caller's store id only when `!tmux.NeedsLabelByID(name)` (the chained
   label rule), and gives `FailDuplicate` for a stored name already held.
   An unknown pane or session id gives `FailUnrecognized`. A server stays
   bound after its last session; `StopServer` models its exit. A call on a
@@ -3635,7 +3645,18 @@ parses reply text.
   after-call hooks (outside the Recorder's lock, so they may call back into
   the Recorder or the store), then returns.
 - **Recorded calls.** `SocketCalls` / `SocketCallsOf(call)` return
-  `SocketCall` records.
+  `SocketCall` records. A create or label-by-id record carries the label's
+  `Token`, `InstanceID` and `StoreID`.
+- **Store ids.** Sessions the Recorder creates, labels by id or seeds from
+  a row carry the caller's store id: `SetLabel` stores
+  `Valid(token, id, storeID)`, and `SeedRowSession` labels with the id of
+  the store it reads the row from. Tests take this store's id from
+  `apitest.ReadStoreID` or the open store's `StoreID()`, and another
+  store's from `apitest.OtherStoreID`. A test may pass the catalogue's
+  `tmuxfix.StoreID` as a caller's store id (the argv, replay, Recorder,
+  fake-tmux and realtmux tests do). A test that seeds rows from a store
+  labels them with that store's id (`apitest.ReadStoreID` / `StoreID()`),
+  never with the catalogue constant.
 - **Name-based methods.** `NewSessionByName`, `HasSession`, `KillSession`,
   `SendKeys` and `CapturePane` keep their old behaviour (`Calls`,
   `CallsOfKind`, `WithPaneOutput`, `WithHasSession`) until their last user
@@ -3816,9 +3837,12 @@ so it skips in the sandbox. That is the run's one skip.
 - `permission_test.go`: a socket at mode 000 gives `FailSocketDenied` with
   the socket path on every call kind.
 - `labels_test.go`: a created session carries `ad1 <token> <its own $N>
-  <id>` for every valid id shape (`#` included), both detached and from
+  <id> <store id>` for every valid id shape (`#` included), both detached and from
   inside another labelled session's pane, whose label stays unchanged; a
-  `$`-bearing name gets no chain and is labelled only by id.
+  `$`-bearing name gets no chain and is labelled only by id. The
+  `TestLabelStoreIDLast` group: an instance id with spaces, or ending in a
+  16-hex word, round-trips through the production lookup with its store
+  id, both chained and by id.
 - `socket_resolution_test.go`: RN-5. `tmux.ResolveSocket` equals tmux's own
   `#{socket_path}`; a `TMUX_TMPDIR` that is unset or names a missing path
   (a value containing `:` included) falls back to `/tmp` as tmux does
@@ -4056,14 +4080,16 @@ values, except for a row the test inserted itself.
     identity when the socket has none;
   - with the row's pane (a new pane when the row records none);
   - named by the stored form of the row's session name;
-  - labelled valid for the row's id and stored launch token;
+  - labelled valid for the row's id, its stored launch token and the
+    store's id (`StoreID()` on the store it opens to read the row);
   - created at the bound clock's current second (`WithVirtualTime`), else
     the wall clock's.
 - Options (`RowSessionOption`): `WithRowSessionCreated(epoch)` for another
   creation time; `WithRowSessionName(stored)` for another stored name;
   `WithRowSessionLabel(label, set)` for another label: no label
-  (`LabelNone`, `set` false), an old one (`Valid(OtherToken, id)`), a
-  foreign one (`Valid(token, other id)`), or a borrowed or malformed value
+  (`LabelNone`, `set` false), an old one (`Valid(OtherToken, id, storeID)`),
+  a foreign one (`Valid(token, other id, storeID)`), another store's
+  (`Valid(token, id, apitest.OtherStoreID(storeID))`), or a borrowed or malformed value
   (`LabelNone`, `set` true, or a `LabelShape`'s `Want`).
 - The test fails when the row cannot be read, records no socket, records no
   well-formed token and no label option is given, or its pane is already on

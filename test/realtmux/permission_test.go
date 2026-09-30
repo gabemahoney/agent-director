@@ -48,7 +48,7 @@ func TestPermissionDeniedEveryCall(t *testing.T) {
 		}},
 		tmux.CallCreate: {nil, func(t *testing.T, cl *tmux.Client) error { _, err := rt.create(t, createSpec{Client: cl}); return err }},
 		tmux.CallSetLabel: {nil, func(t *testing.T, cl *tmux.Client) error {
-			return cl.SetLabel(rt.Socket, session, newToken(t), newInstanceID("agent"))
+			return cl.SetLabel(rt.Socket, session, newToken(t), newInstanceID("agent"), tmuxfix.StoreID)
 		}},
 	}
 

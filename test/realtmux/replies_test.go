@@ -127,10 +127,10 @@ func TestRepliesDuplicateSession(t *testing.T) {
 	if second.Reply != (tmux.CreateReply{}) {
 		t.Errorf("duplicate create returned reply %+v, want none", second.Reply)
 	}
-	if rt.label(t, holder.Reply.SessionID) != tmuxfix.LabelValue(holder.Token, holder.Reply.SessionID, holder.InstanceID) {
+	if rt.label(t, holder.Reply.SessionID) != tmuxfix.LabelValue(holder.Token, holder.Reply.SessionID, holder.InstanceID, holder.StoreID) {
 		t.Errorf("holder %s's label changed after the duplicate create (the chained label ran)", holder.Reply.SessionID)
 	}
-	if ans.Sessions[0].Label != tmuxfix.Valid(holder.Token, holder.InstanceID) {
+	if ans.Sessions[0].Label != tmuxfix.Valid(holder.Token, holder.InstanceID, holder.StoreID) {
 		t.Errorf("lookup classifies the holder's label as kind %d, want the holder's valid label", ans.Sessions[0].Label.Kind)
 	}
 }
@@ -184,7 +184,7 @@ func TestRepliesSuccessfulCallStreams(t *testing.T) {
 		got, err := cl.Lookup(rt.Socket)
 		want := tmuxfix.Answer("lookup/live", "this server", anchor.Reply.ServerPID, anchor.Reply.ServerStart,
 			[]tmuxfix.Listed{{ID: id, Created: int64(rt.formatInt(t, id, "#{session_created}")), Name: anchor.Name,
-				Label: tmuxfix.LabelValue(anchor.Token, id, anchor.InstanceID), Want: tmuxfix.Valid(anchor.Token, anchor.InstanceID)}})
+				Label: tmuxfix.LabelValue(anchor.Token, id, anchor.InstanceID, anchor.StoreID), Want: tmuxfix.Valid(anchor.Token, anchor.InstanceID, anchor.StoreID)}})
 		assertCallError(t, err, tmux.CallLookup, want)
 		assertTriple(t, log.last(t).rawResult, want)
 		if !reflect.DeepEqual(got, want.Lookup) {
@@ -220,10 +220,10 @@ func TestRepliesSuccessfulCallStreams(t *testing.T) {
 			// A fresh token and id, so the check sees the new value, not the chained one.
 			func(t *testing.T, cl *tmux.Client, c *created) error {
 				c.Token, c.InstanceID = newToken(t), newInstanceID("agent")
-				return cl.SetLabel(rt.Socket, c.Reply.SessionID, c.Token, c.InstanceID)
+				return cl.SetLabel(rt.Socket, c.Reply.SessionID, c.Token, c.InstanceID, c.StoreID)
 			},
 			func(t *testing.T, c created) {
-				if rt.label(t, c.Reply.SessionID) != tmuxfix.LabelValue(c.Token, c.Reply.SessionID, c.InstanceID) {
+				if rt.label(t, c.Reply.SessionID) != tmuxfix.LabelValue(c.Token, c.Reply.SessionID, c.InstanceID, c.StoreID) {
 					t.Errorf("session %s does not carry the label set by id", c.Reply.SessionID)
 				}
 			}},

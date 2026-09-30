@@ -135,13 +135,13 @@ func uniqueName() string { return "rt-" + uuid.NewString()[:8] }
 
 // createSpec is a production create; zero fields take defaults: a unique
 // name, the private TMUX_TMPDIR as cwd, stubCommand, a fresh token, a
-// UUID-suffixed instance id and newClient.
+// UUID-suffixed instance id, tmuxfix.StoreID and newClient.
 type createSpec struct {
-	Name, Cwd         string
-	Envs              map[string]string
-	Command           []string
-	Token, InstanceID string
-	Client            *tmux.Client
+	Name, Cwd                  string
+	Envs                       map[string]string
+	Command                    []string
+	Token, InstanceID, StoreID string
+	Client                     *tmux.Client
 }
 
 // created is a create's filled-in spec and its reply.
@@ -169,11 +169,14 @@ func (r *realTmux) create(t testing.TB, spec createSpec) (created, error) {
 	if spec.InstanceID == "" {
 		spec.InstanceID = newInstanceID("agent")
 	}
+	if spec.StoreID == "" {
+		spec.StoreID = tmuxfix.StoreID
+	}
 	if spec.Client == nil {
 		spec.Client = newClient()
 	}
 	r.tr.addSocket(r.Socket)
-	reply, err := spec.Client.NewSession(r.Socket, spec.Name, spec.Cwd, spec.Envs, spec.Command, spec.Token, spec.InstanceID)
+	reply, err := spec.Client.NewSession(r.Socket, spec.Name, spec.Cwd, spec.Envs, spec.Command, spec.Token, spec.InstanceID, spec.StoreID)
 	r.tr.addProc(reply.ServerPID)
 	r.tr.addProc(reply.PanePID)
 	return created{createSpec: spec, Reply: reply}, err

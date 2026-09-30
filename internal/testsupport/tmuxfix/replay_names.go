@@ -1,6 +1,10 @@
 package tmuxfix
 
-import "github.com/gabemahoney/agent-director/internal/tmux"
+import (
+	"strings"
+
+	"github.com/gabemahoney/agent-director/internal/tmux"
+)
 
 // Stored name forms and label shapes of the replay catalogue (SR-20.4),
 // recorded on tmux 3.2a; identical on 3.3a.
@@ -18,11 +22,11 @@ type StoredName struct {
 }
 
 // Entry is a one-session lookup answer listing the stored name with a
-// valid label, for asserting that Session.Name is the stored bytes.
+// valid five-field label (StoreID), for asserting that Session.Name is the stored bytes.
 func (n StoredName) Entry() Entry {
 	return Answer("lookup/name:"+n.Stored, n.Source, serverPID, f9ServerStart, []Listed{{
 		ID: "$0", Created: f9ServerStart, Name: n.Stored,
-		Label: LabelValue(Token, "$0", "agent-x"), Want: Valid(Token, "agent-x"),
+		Label: LabelValue(Token, "$0", "agent-x", StoreID), Want: Valid(Token, "agent-x", StoreID),
 	}})
 }
 
@@ -119,35 +123,50 @@ func (s LabelShape) Entry() Entry {
 
 // LabelShapes returns the AC-LKP-05 shapes (each LabelNone), the control
 // characters of LFR G1, and valid labels, an id with '#' (F7), spaces or
-// UTF-8 (U2) included.
+// UTF-8 (U2) included. Every shape is five fields, "ad1 <token> <$N>
+// <instance id> <store id>", ending with StoreID unless it tests the store
+// id, except four-fields, the old form (WD 2026-09-29 STORE). The store-id
+// shapes are LabelNone for the store id alone; valid-other-store is
+// LabelValid with OtherStoreID, whose class is the lookup's job (SR-3.4).
 func LabelShapes() []LabelShape {
-	own := func(id string) string { return LabelValue(Token, LabelLineID, id) }
+	withStore := func(id, storeID string) string { return LabelValue(Token, LabelLineID, id, storeID) }
+	own := func(id string) string { return withStore(id, StoreID) }
 	none := func(name, source, value string) LabelShape {
 		return LabelShape{Name: name, Source: source, Value: value}
 	}
 	valid := func(name, source, id string) LabelShape {
-		return LabelShape{Name: name, Source: source, Value: own(id), Want: Valid(Token, id)}
+		return LabelShape{Name: name, Source: source, Value: own(id), Want: Valid(Token, id, StoreID)}
 	}
+	const storeSource = "AC-LKP-05; WD 2026-09-29 STORE"
 	return []LabelShape{
-		none("no-space", "AC-LKP-05", "ad1_"+Token+"_$1_agent-x"),
-		none("version-ad2", "AC-LKP-05", "ad2 "+Token+" $1 agent-x"),
-		none("token-uppercase", "AC-LKP-05", "ad1 3F9C1E7A2B6D4058 $1 agent-x"),
-		none("token-15-hex", "AC-LKP-05", "ad1 "+Token[:15]+" $1 agent-x"),
-		none("token-17-hex", "AC-LKP-05", "ad1 "+Token+"0 $1 agent-x"),
-		none("token-placeholder", "AC-LKP-05; provenance-fresh F9's TOK1", "ad1 TOK1 $1 agent-x"),
-		none("embedded-other-session", "AC-LKP-05; provenance-fresh F2, F9b", LabelValue(Token, "$0", "agent-x")),
-		none("embedded-pane-id", "AC-LKP-05", LabelValue(Token, "%1", "agent-x")),
+		none("no-space", "AC-LKP-05", "ad1_"+Token+"_$1_agent-x_"+StoreID),
+		none("version-ad2", "AC-LKP-05", "ad2 "+Token+" $1 agent-x "+StoreID),
+		none("token-uppercase", "AC-LKP-05", "ad1 3F9C1E7A2B6D4058 $1 agent-x "+StoreID),
+		none("token-15-hex", "AC-LKP-05", "ad1 "+Token[:15]+" $1 agent-x "+StoreID),
+		none("token-17-hex", "AC-LKP-05", "ad1 "+Token+"0 $1 agent-x "+StoreID),
+		none("token-placeholder", "AC-LKP-05; provenance-fresh F9's TOK1", "ad1 TOK1 $1 agent-x "+StoreID),
+		none("embedded-other-session", "AC-LKP-05; provenance-fresh F2, F9b", LabelValue(Token, "$0", "agent-x", StoreID)),
+		none("embedded-pane-id", "AC-LKP-05", LabelValue(Token, "%1", "agent-x", StoreID)),
 		none("empty-instance-id", "AC-LKP-05; LFR G1", own("")),
-		none("no-instance-id", "AC-LKP-05", "ad1 "+Token+" $1"),
+		none("no-instance-id", "AC-LKP-05", "ad1 "+Token+" $1 "+StoreID),
 		none("empty-value", "AC-LKP-05; SR-3.5: empty means unset", ""),
 		none("id-with-esc", "LFR G1", own("agent\x1bx")),
 		none("id-with-tab", "LFR G1", own("agent\tx")),
 		none("id-with-del", "LFR G1", own("agent\x7fx")),
+		none("four-fields", storeSource, "ad1 "+Token+" $1 agent-x"),
+		none("store-id-uppercase", storeSource, withStore("agent-x", strings.ToUpper(StoreID))),
+		none("store-id-15-hex", storeSource, withStore("agent-x", StoreID[:15])),
+		none("store-id-17-hex", storeSource, withStore("agent-x", StoreID+"0")),
+		none("store-id-empty", storeSource, withStore("agent-x", "")),
+		none("store-id-placeholder", storeSource, withStore("agent-x", "storeidplacehold")),
 		{Name: "extra-line", Source: "AC-LKP-05; LFR H6: the rest is a scope-section line",
-			Value: own("agent-x") + "\nx", Want: Valid(Token, "agent-x"), ScopeValue: true},
+			Value: own("agent-x") + "\nx", Want: Valid(Token, "agent-x", StoreID), ScopeValue: true},
 		valid("valid", "SR-3.4", "agent-x"),
 		valid("valid-hash", "provenance-fresh F7", "id#1"),
-		valid("valid-spaces", "SR-3.4: the id is everything after the third space", "agent x y"),
+		valid("valid-spaces", "SR-3.4: the id is everything between the third and the last space", "agent x y"),
 		valid("valid-utf8", "E.3 U2, U3", "agent-ü1"),
+		valid("valid-id-ends-in-hex-word", "SR-3.4: the store id is the last field; WD 2026-09-29 STORE", "agent 0123456789abcdef"),
+		{Name: "valid-other-store", Source: "SR-3.4: another store's label parses; its class is the lookup's; WD 2026-09-29 STORE",
+			Value: withStore("agent-x", OtherStoreID), Want: Valid(Token, "agent-x", OtherStoreID)},
 	}
 }

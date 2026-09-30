@@ -64,9 +64,9 @@ func replyCall(t *testing.T, k tmux.Call, name string, res tmux.RunResult) (*scr
 	case tmux.CallCapture:
 		_, err = c.CapturePaneID(testSocket, "%0", 10, false)
 	case tmux.CallCreate:
-		_, err = c.NewSession(testSocket, name, "/tmp", nil, []string{"claude"}, tmuxfix.Token, "agent-x")
+		_, err = c.NewSession(testSocket, name, "/tmp", nil, []string{"claude"}, tmuxfix.Token, "agent-x", tmuxfix.StoreID)
 	case tmux.CallSetLabel:
-		err = c.SetLabel(testSocket, "$0", tmuxfix.Token, "agent-x")
+		err = c.SetLabel(testSocket, "$0", tmuxfix.Token, "agent-x", tmuxfix.StoreID)
 	default:
 		t.Fatalf("unknown call kind %q", k)
 	}
@@ -74,7 +74,8 @@ func replyCall(t *testing.T, k tmux.Call, name string, res tmux.RunResult) (*scr
 }
 
 // wantCallError checks err is nil for want 0, else a *CallError of kind want on
-// call k that wraps no sentinel and carries no launch token; it returns it.
+// call k that wraps no sentinel and carries no launch token or store id; it
+// returns it.
 func wantCallError(t *testing.T, err error, k tmux.Call, want tmux.Failure) *tmux.CallError {
 	t.Helper()
 	if want == 0 {
@@ -95,8 +96,10 @@ func wantCallError(t *testing.T, err error, k tmux.Call, want tmux.Failure) *tmu
 			t.Errorf("CallError satisfies errors.Is(%v)", s)
 		}
 	}
-	if strings.Contains(err.Error(), tmuxfix.Token) || strings.Contains(ce.FirstLine, tmuxfix.Token) {
-		t.Errorf("CallError carries the launch token: %q", err.Error())
+	for _, secret := range []string{tmuxfix.Token, tmuxfix.StoreID} {
+		if strings.Contains(err.Error(), secret) || strings.Contains(ce.FirstLine, secret) {
+			t.Errorf("CallError carries the launch token or store id %q: %q", secret, err.Error())
+		}
 	}
 	return ce
 }

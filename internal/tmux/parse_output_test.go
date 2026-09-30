@@ -117,7 +117,7 @@ func TestParseCreateReply(t *testing.T) {
 		for _, n := range names {
 			t.Run(e.Name+"/"+strconv.Quote(n.name), func(t *testing.T) {
 				c, _ := newReplay(t, e)
-				reply, err := c.NewSession(testSocket, n.name, "/tmp", nil, nil, tmuxfix.Token, "agent-x")
+				reply, err := c.NewSession(testSocket, n.name, "/tmp", nil, nil, tmuxfix.Token, "agent-x", tmuxfix.StoreID)
 				want := e.Want[tmux.CallCreate]
 				if e.ChainOnly && n.byID {
 					want = 0

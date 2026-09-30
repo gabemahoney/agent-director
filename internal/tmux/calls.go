@@ -180,10 +180,15 @@ type Session struct {
 	Label Label
 }
 
-// Label is a classified @ad_owner value (SR-3.4, LFR G1). It is LabelValid
-// only when the value is "ad1 <16 lowercase hex> <$N> <instance id>" with $N
-// its own line's session id and a non-empty instance id with no control
-// character. Token and InstanceID are empty otherwise.
+// Label is a classified @ad_owner value (SR-3.4, LFR G1; WD 2026-09-29
+// STORE). It is LabelValid only when the value is "ad1 <16 lowercase hex>
+// <$N> <instance id> <16 lowercase hex store id>" with $N its own line's
+// session id. The store id is the last field, so the instance id is
+// everything between the third and the last space: non-empty, with no
+// control character, and possibly holding spaces. A four-field value is
+// LabelNone, except that a four-field value whose instance id ends in a
+// space and 16 lowercase hex reads as a shorter id plus that word as its
+// store id. Token, InstanceID and StoreID are empty unless LabelValid.
 type Label struct {
 	// Kind is the label's class.
 	Kind LabelKind
@@ -193,6 +198,12 @@ type Label struct {
 	// InstanceID is the instance id, byte for byte (LabelValid only). It is
 	// compared, never logged.
 	InstanceID string
+	// StoreID is the writing store's id, its store_meta.store_id: 16
+	// lowercase hex characters (LabelValid only; SR-5.1). A label whose
+	// StoreID is not this store's is another store's, never Ours or
+	// Leftover; comparing it with this store's is the lookup's job, not the
+	// parser's (SR-3.4). It is never put in an error description (SR-15).
+	StoreID string
 }
 
 // LabelKind is a label's class as the client parses it (SR-3.4).
@@ -200,8 +211,9 @@ type LabelKind int
 
 // The label classes. LabelNone is the zero value.
 const (
-	// LabelNone: empty, unparseable, a borrowed value (another session's id)
-	// or a control character in the instance id.
+	// LabelNone: empty, unparseable (a four-field value or a store id that
+	// is not 16 lowercase hex included), a borrowed value (another session's
+	// id) or a control character in the instance id.
 	LabelNone LabelKind = iota
 	// LabelValid: a well-formed label embedding its own session's id.
 	LabelValid

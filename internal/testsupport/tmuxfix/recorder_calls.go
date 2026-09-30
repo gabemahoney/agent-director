@@ -41,8 +41,10 @@ type SocketCall struct {
 	Cwd     string
 	Envs    map[string]string
 	Command []string
-	// Token and InstanceID are NewSession's and SetLabel's label arguments.
-	Token, InstanceID string
+	// Token, InstanceID and StoreID are NewSession's and SetLabel's label
+	// arguments (the label's second, fourth and fifth fields; WD 2026-09-29
+	// STORE).
+	Token, InstanceID, StoreID string
 }
 
 // effect applies a call's table effect on the socket's table and returns
@@ -207,17 +209,18 @@ func (r *Recorder) CapturePaneID(socket, paneID string, nLines int, ansi bool) (
 	return text, err
 }
 
-// SetLabel sets the session's label to the valid label for token and
-// instanceID (as the lookup classifies "ad1 <token> <$N> <id>" on its own
-// line).
-func (r *Recorder) SetLabel(socket, sessionID, token, instanceID string) error {
-	c := SocketCall{Call: tmux.CallSetLabel, Socket: socket, Target: sessionID, Token: token, InstanceID: instanceID}
+// SetLabel sets the session's label to the valid label for token,
+// instanceID and storeID (as the lookup classifies "ad1 <token> <$N> <id>
+// <store id>" on its own line; WD 2026-09-29 STORE).
+func (r *Recorder) SetLabel(socket, sessionID, token, instanceID, storeID string) error {
+	c := SocketCall{Call: tmux.CallSetLabel, Socket: socket, Target: sessionID, Token: token,
+		InstanceID: instanceID, StoreID: storeID}
 	_, err := r.do(c, func(st *socketState, _ Script) (any, *tmux.CallError) {
 		s := st.server.findSession(sessionID)
 		if s == nil {
 			return nil, notFound(tmux.CallSetLabel)
 		}
-		s.label, s.labelSet = Valid(token, instanceID), true
+		s.label, s.labelSet = Valid(token, instanceID, storeID), true
 		return nil, nil
 	})
 	return err
@@ -227,17 +230,18 @@ func (r *Recorder) SetLabel(socket, sessionID, token, instanceID string) error {
 // with a new identity when none is bound, and returns its create reply: a
 // new session id, the server identity and a new first pane (window 0,
 // pane 0). The stored name is the catalogue's stored form of name
-// (StoredNames), else name. The session is labelled valid for token and
-// instanceID exactly when the production client chains the label
+// (StoredNames), else name. The session is labelled valid for token,
+// instanceID and storeID (the five-field label; WD 2026-09-29 STORE) exactly
+// when the production client chains the label
 // (!tmux.NeedsLabelByID(name)). A stored name the server already holds is
 // FailDuplicate and adds nothing. A scripted FailLabel adds the session
 // unlabelled and returns its reply with the error; with Script.Applied,
 // any other scripted failure adds the session (labelled by the same rule)
 // and returns no reply.
-func (r *Recorder) NewSession(socket, name, cwd string, envs map[string]string, command []string, token, instanceID string) (tmux.CreateReply, error) {
+func (r *Recorder) NewSession(socket, name, cwd string, envs map[string]string, command []string, token, instanceID, storeID string) (tmux.CreateReply, error) {
 	c := SocketCall{Call: tmux.CallCreate, Socket: socket, Target: name, Cwd: cwd, Envs: envs,
-		Command: command, Token: token, InstanceID: instanceID}
-	ans, err := r.do(c, r.createEffect(socket, name, token, instanceID))
+		Command: command, Token: token, InstanceID: instanceID, StoreID: storeID}
+	ans, err := r.do(c, r.createEffect(socket, name, token, instanceID, storeID))
 	reply, _ := ans.(tmux.CreateReply)
 	return reply, err
 }
@@ -245,7 +249,7 @@ func (r *Recorder) NewSession(socket, name, cwd string, envs map[string]string, 
 // createEffect is NewSession's table effect. It runs with or without a
 // bound server (a create starts one); a scripted FailLabel leaves the new
 // session unlabelled. Callers hold r.mu.
-func (r *Recorder) createEffect(socket, name, token, instanceID string) effect {
+func (r *Recorder) createEffect(socket, name, token, instanceID, storeID string) effect {
 	return func(_ *socketState, s Script) (any, *tmux.CallError) {
 		srv := r.serverFor(socket)
 		stored := storedName(name)
@@ -256,7 +260,7 @@ func (r *Recorder) createEffect(socket, name, token, instanceID string) effect {
 		}
 		seed := SeedSession{Name: stored}
 		if !tmux.NeedsLabelByID(name) && s.Failure != tmux.FailLabel {
-			seed.Label = Valid(token, instanceID)
+			seed.Label = Valid(token, instanceID, storeID)
 		}
 		added := r.addSession(srv, seed)
 		p := added.Panes[0]

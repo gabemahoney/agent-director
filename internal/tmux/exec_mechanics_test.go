@@ -65,7 +65,7 @@ func execPids(path string) []int {
 
 // execCreate runs the create with fixed arguments.
 func execCreate(c *tmux.Client, socket string) (tmux.CreateReply, error) {
-	return c.NewSession(socket, "agent-x", "/tmp", nil, []string{"true"}, execToken, "id-1")
+	return c.NewSession(socket, "agent-x", "/tmp", nil, []string{"true"}, execToken, "id-1", tmuxfix.StoreID)
 }
 
 // roomyTimeouts gives every class 3 s, far past the wait, with pipe-close wait w.
@@ -156,7 +156,7 @@ func TestExecPipeCloseWaitPerCallKind(t *testing.T) {
 		{name: "text", run: func(c *tmux.Client, s string) (any, error) { return noValue(c.SendKeysPane(s, "%1", "hi", false)) }},
 		{name: "text and Enter", run: func(c *tmux.Client, s string) (any, error) { return noValue(c.SendKeysPane(s, "%1", "hi", true)) }},
 		{name: "label by id", run: func(c *tmux.Client, s string) (any, error) {
-			return noValue(c.SetLabel(s, "$1", execToken, "id-1"))
+			return noValue(c.SetLabel(s, "$1", execToken, "id-1", tmuxfix.StoreID))
 		}},
 		{name: "lookup", stdout: lookupLine, wantCut: true,
 			run: func(c *tmux.Client, s string) (any, error) { return c.Lookup(s) }},

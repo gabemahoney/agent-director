@@ -48,7 +48,7 @@ func timeoutClasses() []timeoutClass {
 			func(c *tmux.Client, s string) error { return c.KillSessionID(s, "$0") }},
 		{"create", tmux.CallCreate, config.TmuxCreateTimeoutMs, d.EffectiveCreateTimeout(),
 			func(c *tmux.Client, s string) error {
-				_, err := c.NewSession(s, "w4", os.TempDir(), nil, []string{"true"}, "tok", "w4-id")
+				_, err := c.NewSession(s, "w4", os.TempDir(), nil, []string{"true"}, "tok", "w4-id", "sid")
 				return err
 			}},
 	}

@@ -56,7 +56,7 @@ func seeded() faketmuxfix.Table {
 		Server: &faketmuxfix.Server{PID: seedPID, Start: seedStart},
 		Sessions: []faketmuxfix.Session{
 			{ID: "$1", Created: seedStart + 2, Name: "beta", Panes: []faketmuxfix.Pane{{ID: "%2", PID: 502}}},
-			{ID: "$0", Created: seedStart + 1, Name: "alpha", Label: tmuxfix.LabelValue(tmuxfix.Token, "$0", "agent-a"),
+			{ID: "$0", Created: seedStart + 1, Name: "alpha", Label: tmuxfix.LabelValue(tmuxfix.Token, "$0", "agent-a", tmuxfix.StoreID),
 				Panes: []faketmuxfix.Pane{{ID: "%0", PID: 500}, {Index: 1, ID: "%1", PID: 501}}},
 		},
 	}
@@ -73,7 +73,30 @@ func seed(t *testing.T) string {
 // create runs a chained or by-id create of name with instance id on socket.
 func create(t *testing.T, c *tmux.Client, socket, name, id string) (tmux.CreateReply, error) {
 	t.Helper()
-	return c.NewSession(socket, name, t.TempDir(), nil, []string{"claude"}, tmuxfix.Token, id)
+	return createIn(t, c, socket, name, id, tmuxfix.StoreID)
+}
+
+// createIn is create with the given store id.
+func createIn(t *testing.T, c *tmux.Client, socket, name, id, storeID string) (tmux.CreateReply, error) {
+	t.Helper()
+	return c.NewSession(socket, name, t.TempDir(), nil, []string{"claude"}, tmuxfix.Token, id, storeID)
+}
+
+// fiveFields is the @ad_owner value written for the session: ad1 <token> <$N> <id> <store id>.
+func fiveFields(sessionID, id, storeID string) string {
+	return "ad1 " + tmuxfix.Token + " " + sessionID + " " + id + " " + storeID
+}
+
+// rawLabel returns the table's stored @ad_owner value of session id on socket.
+func rawLabel(t *testing.T, socket, id string) string {
+	t.Helper()
+	for _, s := range tables.Read(t, socket).Sessions {
+		if s.ID == id {
+			return s.Label
+		}
+	}
+	t.Fatalf("table for %s has no session %s", socket, id)
+	return ""
 }
 
 // invoke makes one call of kind call against seeded()'s targets.
@@ -98,7 +121,7 @@ func invoke(t *testing.T, c *tmux.Client, socket string, call tmux.Call) error {
 	case tmux.CallCreate:
 		_, err = create(t, c, socket, "fresh", "agent-new")
 	case tmux.CallSetLabel:
-		err = c.SetLabel(socket, "$1", tmuxfix.Token, "agent-b")
+		err = c.SetLabel(socket, "$1", tmuxfix.Token, "agent-b", tmuxfix.StoreID)
 	default:
 		t.Fatalf("no invocation for call kind %q", call)
 	}
@@ -202,7 +225,7 @@ func TestLookupAnswersFromTable(t *testing.T) {
 			Server:   &faketmuxfix.Server{PID: seedPID, Start: seedStart},
 			Sessions: []faketmuxfix.Session{{ID: "$1", Created: seedStart, Name: "bare", Panes: []faketmuxfix.Pane{{ID: "%1"}}}},
 		}
-		set(&tb.Scope, tmuxfix.LabelValue(tmuxfix.Token, "$0", "agent-x"))
+		set(&tb.Scope, tmuxfix.LabelValue(tmuxfix.Token, "$0", "agent-x", tmuxfix.StoreID))
 		return &tb
 	}
 	borrowedWant := tmux.LookupAnswer{ServerPID: seedPID, ServerStart: seedStart, ScopeValue: true,
@@ -217,7 +240,7 @@ func TestLookupAnswersFromTable(t *testing.T) {
 		{name: "no table", want: tmux.LookupAnswer{}},
 		{name: "sessions valid and none", table: &seededTable, want: tmux.LookupAnswer{
 			ServerPID: seedPID, ServerStart: seedStart, Sessions: []tmux.Session{
-				{ID: "$0", Created: seedStart + 1, Name: "alpha", Label: tmuxfix.Valid(tmuxfix.Token, "agent-a")},
+				{ID: "$0", Created: seedStart + 1, Name: "alpha", Label: tmuxfix.Valid(tmuxfix.Token, "agent-a", tmuxfix.StoreID)},
 				{ID: "$1", Created: seedStart + 2, Name: "beta"},
 			}}},
 		{name: "borrowed global", want: borrowedWant,
@@ -250,29 +273,36 @@ func TestLookupAnswersFromTable(t *testing.T) {
 	}
 }
 
-// TestCreateChainLabelsOwnID checks a chained create lists its session with
-// a valid label naming its own id, a '#' in the instance id included.
+// TestCreateChainLabelsOwnID checks a chained create stores the five-field
+// label naming its own id and the caller's store id, and lists it valid; a
+// '#' or spaces in the instance id and another store's id included.
 func TestCreateChainLabelsOwnID(t *testing.T) {
-	var hashID string
+	shapeID := map[string]string{}
 	for _, s := range tmuxfix.LabelShapes() {
-		if s.Name == "valid-hash" {
-			hashID = s.Want.InstanceID
-		}
+		shapeID[s.Name] = s.Want.InstanceID
 	}
-	cases := []struct{ name, session, id string }{
-		{"plain id", "agent-a", "agent-a"},
-		{"hash in id", "agent-h", hashID},
+	cases := []struct{ name, session, id, storeID string }{
+		{"plain id", "agent-a", "agent-a", tmuxfix.StoreID},
+		{"hash in id", "agent-h", shapeID["valid-hash"], tmuxfix.StoreID},
+		{"spaces in id", "agent-s", shapeID["valid-spaces"], tmuxfix.StoreID},
+		{"other store", "agent-o", "agent-o", tmuxfix.OtherStoreID},
 	}
 	c := newClient(t, callTimeout)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.id == "" {
+				t.Fatalf("the catalogue lacks the shape's instance id")
+			}
 			socket := newSocket(t)
-			reply := must[tmux.CreateReply](t)(create(t, c, socket, tc.session, tc.id))
+			reply := must[tmux.CreateReply](t)(createIn(t, c, socket, tc.session, tc.id, tc.storeID))
+			if rawLabel(t, socket, reply.SessionID) != fiveFields(reply.SessionID, tc.id, tc.storeID) {
+				t.Errorf("session %s: stored label is not ad1 <token> <$N> <id> <store id>", reply.SessionID)
+			}
 			want := tmux.LookupAnswer{ServerPID: reply.ServerPID, ServerStart: reply.ServerStart}
 			got := lookup(t, c, socket)
 			if len(got.Sessions) == 1 {
 				want.Sessions = []tmux.Session{{ID: reply.SessionID, Created: got.Sessions[0].Created,
-					Name: tc.session, Label: tmuxfix.Valid(tmuxfix.Token, tc.id)}}
+					Name: tc.session, Label: tmuxfix.Valid(tmuxfix.Token, tc.id, tc.storeID)}}
 			}
 			if !reflect.DeepEqual(got, want) {
 				t.Errorf("Lookup = %+v, want %+v", got, want)
@@ -286,10 +316,13 @@ func TestCreateChainLabelsOwnID(t *testing.T) {
 }
 
 // TestCreateByIDNameThenSetLabel checks a '$' or '\' name is created
-// unlabelled under its stored form and SetLabel then labels it by id.
+// unlabelled under its stored form and SetLabel then labels it by id with
+// the caller's store id (another store's for '\').
 func TestCreateByIDNameThenSetLabel(t *testing.T) {
 	c := newClient(t, callTimeout)
+	storeIDs := map[string]string{`$`: tmuxfix.StoreID, `\`: tmuxfix.OtherStoreID}
 	for _, marker := range []string{`$`, `\`} {
+		storeID := storeIDs[marker]
 		var n tmuxfix.StoredName
 		for _, cand := range tmuxfix.StoredNames() {
 			if cand.LabelByID && strings.Contains(cand.Raw, marker) && n.Raw == "" {
@@ -309,10 +342,13 @@ func TestCreateByIDNameThenSetLabel(t *testing.T) {
 			if got := label(); got != (tmux.Label{}) {
 				t.Fatalf("label before SetLabel = %+v, want none", got)
 			}
-			if err := c.SetLabel(socket, reply.SessionID, tmuxfix.Token, "agent-d"); err != nil {
+			if err := c.SetLabel(socket, reply.SessionID, tmuxfix.Token, "agent-d", storeID); err != nil {
 				t.Fatalf("SetLabel: %v", err)
 			}
-			if got, want := label(), tmuxfix.Valid(tmuxfix.Token, "agent-d"); got != want {
+			if rawLabel(t, socket, reply.SessionID) != fiveFields(reply.SessionID, "agent-d", storeID) {
+				t.Errorf("session %s: stored label is not ad1 <token> <$N> <id> <store id>", reply.SessionID)
+			}
+			if got, want := label(), tmuxfix.Valid(tmuxfix.Token, "agent-d", storeID); got != want {
 				t.Errorf("label after SetLabel = %+v, want %+v", got, want)
 			}
 		})
@@ -337,11 +373,11 @@ func TestCreateOutcomes(t *testing.T) {
 		wantLabel *tmux.Label
 	}{
 		{name: "effect then hang", inj: faketmuxfix.Hang(tmux.CallCreate).WithEffect(),
-			want: tmux.FailTimeout, timeout: hangTimeout, wantLabel: ptr(tmuxfix.Valid(tmuxfix.Token, "agent-o"))},
+			want: tmux.FailTimeout, timeout: hangTimeout, wantLabel: ptr(tmuxfix.Valid(tmuxfix.Token, "agent-o", tmuxfix.StoreID))},
 		{name: "effect then exit 0 unparseable", inj: faketmuxfix.Reply(tmux.CallCreate, unparseable).WithEffect(),
-			entry: unparseable, want: unparseable.Want[tmux.CallCreate], wantLabel: ptr(tmuxfix.Valid(tmuxfix.Token, "agent-o"))},
+			entry: unparseable, want: unparseable.Want[tmux.CallCreate], wantLabel: ptr(tmuxfix.Valid(tmuxfix.Token, "agent-o", tmuxfix.StoreID))},
 		{name: "effect then non-zero unparseable", inj: faketmuxfix.Reply(tmux.CallCreate, unparseableNonzero).WithEffect(),
-			entry: unparseableNonzero, want: unparseableNonzero.Want[tmux.CallCreate], wantLabel: ptr(tmuxfix.Valid(tmuxfix.Token, "agent-o"))},
+			entry: unparseableNonzero, want: unparseableNonzero.Want[tmux.CallCreate], wantLabel: ptr(tmuxfix.Valid(tmuxfix.Token, "agent-o", tmuxfix.StoreID))},
 		{name: "non-zero with no output creates nothing", inj: faketmuxfix.ExitCode(tmux.CallCreate, bare.Exit),
 			entry: bare, want: bare.Want[tmux.CallCreate]},
 		{name: "chained label step fails", inj: faketmuxfix.ChainFails(),
@@ -503,7 +539,7 @@ func TestSocketsIsolated(t *testing.T) {
 	}
 	noServer := tmuxfix.NoServer(b)
 	tables.Inject(t, b, faketmuxfix.Reply(tmux.CallLookup, noServer))
-	if ans := lookup(t, c, a); len(ans.Sessions) != 1 || ans.Sessions[0].Label != tmuxfix.Valid(tmuxfix.Token, "agent-i") {
+	if ans := lookup(t, c, a); len(ans.Sessions) != 1 || ans.Sessions[0].Label != tmuxfix.Valid(tmuxfix.Token, "agent-i", tmuxfix.StoreID) {
 		t.Errorf("Lookup(a) sessions = %+v, want one labelled session", ans.Sessions)
 	}
 	_, err := c.Lookup(b)

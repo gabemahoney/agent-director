@@ -16,11 +16,17 @@ import (
 // maxFirstLine bounds CallError.FirstLine (Appendix F.1).
 const maxFirstLine = 200
 
-// labelPrefix begins every label agent-director writes (SR-3.4).
+// labelPrefix begins every label agent-director writes (SR-3.4). The label
+// is "ad1 <launch token> <session id> <instance id> <store id>" (WD
+// 2026-09-29 STORE); ad1 is not bumped, the release being unpublished.
 const labelPrefix = "ad1 "
 
 // labelTokenLen is the launch token's length: 64 bits as lowercase hex.
 const labelTokenLen = 16
+
+// labelStoreIDLen is the store id's length: the writing store's
+// store_meta.store_id, 64 bits as lowercase hex (SR-5.1).
+const labelStoreIDLen = 16
 
 // The reply wordings tmux prints on standard error (SR-2.5; verified
 // identical on 3.2a and 3.3a, Appendix E.10).
@@ -49,7 +55,17 @@ const (
 )
 
 // classifyLabel classifies a raw @ad_owner value read on the lookup line of
-// session sessionID (SR-3.4, LFR G1). The raw value is never retained.
+// session sessionID (SR-3.4, LFR G1; WD 2026-09-29 STORE). It is LabelValid
+// only for "ad1 <token> <$N> <instance id> <store id>": ad1 and a space; a
+// 16-lowercase-hex token and a space; an embedded session id equal to
+// sessionID and a space; then the rest, split at its last space into a
+// non-empty instance id with no control character and a 16-lowercase-hex
+// store id. The instance id may therefore hold spaces and '#', and is kept
+// byte for byte. A four-field value, an empty (trailing-space) store id or
+// anything else is LabelNone with every field empty, except that a
+// four-field value whose instance id ends in a space and 16 lowercase hex
+// reads as a shorter id plus that word as its store id. The raw value is
+// never retained, and neither it nor the store id is ever put in a CallError.
 func classifyLabel(raw, sessionID string) Label {
 	rest, ok := strings.CutPrefix(raw, labelPrefix)
 	if !ok || len(rest) <= labelTokenLen || rest[labelTokenLen] != ' ' {
@@ -59,14 +75,22 @@ func classifyLabel(raw, sessionID string) Label {
 	if !isLowerHex(token) {
 		return Label{}
 	}
-	embedded, instanceID, ok := strings.Cut(rest[labelTokenLen+1:], " ")
+	embedded, tail, ok := strings.Cut(rest[labelTokenLen+1:], " ")
 	if !ok || embedded != sessionID || !isSessionID(embedded) {
 		return Label{}
 	}
+	last := strings.LastIndexByte(tail, ' ')
+	if last < 0 {
+		return Label{}
+	}
+	instanceID, storeID := tail[:last], tail[last+1:]
 	if instanceID == "" || hasControlChar(instanceID) {
 		return Label{}
 	}
-	return Label{Kind: LabelValid, Token: token, InstanceID: instanceID}
+	if len(storeID) != labelStoreIDLen || !isLowerHex(storeID) {
+		return Label{}
+	}
+	return Label{Kind: LabelValid, Token: token, InstanceID: instanceID, StoreID: storeID}
 }
 
 // parseLookup parses the lookup's standard output by the rule of SR-3.4 (LFR

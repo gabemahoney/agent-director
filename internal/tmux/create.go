@@ -20,7 +20,13 @@ func NeedsLabelByID(name string) bool { return strings.ContainsAny(name, `$\`) }
 //
 //	new-session -d -s <name> -c <cwd> -e AGENT_DIRECTOR_INSTANCE_ID=<id>
 //	  [-e KEY=VAL ...] -P -F '<reply format>' -- <command>
-//	  ; set-option -F -t =<name>: @ad_owner 'ad1 <token> #{session_id} <id, # doubled>'
+//	  ; set-option -F -t =<name>: @ad_owner 'ad1 <token> #{session_id} <id, # doubled> <store id>'
+//
+// The label is five fields (WD 2026-09-29 STORE): the store id, storeID, is
+// the writing store's store_meta.store_id and goes last, unchanged; only the
+// instance id's '#' are doubled, so that -F keeps them literal. The client
+// does not validate storeID: callers pass (*store.Store).StoreID(), which the
+// store's open has already validated (SR-5.1).
 //
 // The chained target is exactly =<name>: (never untargeted, never colon-less).
 // For a name for which NeedsLabelByID holds there is no chain: NewSession
@@ -43,9 +49,9 @@ func NeedsLabelByID(name string) bool { return strings.ContainsAny(name, `$\`) }
 // an exit 0, or a reply cut short by the pipe-close wait, is
 // FailUnrecognized. The *CallError's ExitStatus and HadStdout tell these
 // apart for the caller.
-func (c *Client) NewSession(socket, name, cwd string, envs map[string]string, command []string, token, instanceID string) (CreateReply, error) {
+func (c *Client) NewSession(socket, name, cwd string, envs map[string]string, command []string, token, instanceID, storeID string) (CreateReply, error) {
 	chained := !NeedsLabelByID(name)
-	res := c.invoke(CallCreate, socket, createArgs(name, cwd, envs, command, token, instanceID, chained)...)
+	res := c.invoke(CallCreate, socket, createArgs(name, cwd, envs, command, token, instanceID, storeID, chained)...)
 	if res.Status == RunNotStarted || res.Status == RunTimedOut {
 		return CreateReply{}, c.runFailure(CallCreate, res)
 	}
@@ -67,8 +73,10 @@ func (c *Client) NewSession(socket, name, cwd string, envs map[string]string, co
 		ExitStatus: res.ExitStatus, HadStdout: len(res.Stdout) > 0}
 }
 
-// createArgs composes the create's argv after "-u -S <socket>".
-func createArgs(name, cwd string, envs map[string]string, command []string, token, instanceID string, chained bool) []string {
+// createArgs composes the create's argv after "-u -S <socket>". When chained,
+// the set-option value is "ad1 <token> #{session_id} <instance id, every #
+// doubled> <store id>" (SR-3.5, Appendix F.1; WD 2026-09-29 STORE).
+func createArgs(name, cwd string, envs map[string]string, command []string, token, instanceID, storeID string, chained bool) []string {
 	args := []string{"new-session", "-d", "-s", name, "-c", cwd, "-e", instanceIDEnv + "=" + instanceID}
 	rest := make(map[string]string, len(envs))
 	for k, v := range envs {
@@ -82,7 +90,7 @@ func createArgs(name, cwd string, envs map[string]string, command []string, toke
 	args = append(args, "-P", "-F", createReplyFormat, "--")
 	args = append(args, command...)
 	if chained {
-		value := labelPrefix + token + " #{session_id} " + strings.ReplaceAll(instanceID, "#", "##")
+		value := labelPrefix + token + " #{session_id} " + strings.ReplaceAll(instanceID, "#", "##") + " " + storeID
 		args = append(args, cmdSeparator, "set-option", "-F", "-t", "="+name+":", ownerOption, value)
 	}
 	return args

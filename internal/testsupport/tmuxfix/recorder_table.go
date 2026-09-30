@@ -62,8 +62,9 @@ type SeedSession struct {
 	// clock's current second (WithVirtualTime), else the wall clock's.
 	Created int64
 	// Label is the session's own label as the lookup classifies it: Valid
-	// (token, id) for a current, old (OtherToken) or foreign (another id)
-	// label, or a LabelShape's Want.
+	// (token, id, store id) for a current, old (OtherToken), foreign
+	// (another id) or another store's (OtherStoreID) label, or a
+	// LabelShape's Want.
 	Label tmux.Label
 	// LabelSet reports that the session carries its own @ad_owner value
 	// even though Label is LabelNone (a malformed or borrowed value); a

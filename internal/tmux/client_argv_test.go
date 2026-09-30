@@ -112,9 +112,21 @@ func argvCases() []argvCase {
 		{
 			name:   "label by id",
 			script: []tmux.RunResult{exitZero("")},
-			call:   func(c *tmux.Client) error { return c.SetLabel(testSocket, "$2", tmuxfix.Token, "id#1") },
+			call: func(c *tmux.Client) error {
+				return c.SetLabel(testSocket, "$2", tmuxfix.Token, "id#1", tmuxfix.StoreID)
+			},
 			want: [][]string{{"set-option", "-t", "$2", "@ad_owner",
-				tmuxfix.LabelValue(tmuxfix.Token, "$2", "id#1")}},
+				tmuxfix.LabelValue(tmuxfix.Token, "$2", "id#1", tmuxfix.StoreID)}},
+			timeout: testTimeouts.Action,
+		},
+		{
+			name:   "label by id, spaced id and other store",
+			script: []tmux.RunResult{exitZero("")},
+			call: func(c *tmux.Client) error {
+				return c.SetLabel(testSocket, "$2", tmuxfix.Token, "agent x#1", tmuxfix.OtherStoreID)
+			},
+			want: [][]string{{"set-option", "-t", "$2", "@ad_owner",
+				tmuxfix.LabelValue(tmuxfix.Token, "$2", "agent x#1", tmuxfix.OtherStoreID)}},
 			timeout: testTimeouts.Action,
 		},
 		{
@@ -123,14 +135,14 @@ func argvCases() []argvCase {
 			call: func(c *tmux.Client) error {
 				envs := map[string]string{"ZED": "z", "ABC": "a b", "AGENT_DIRECTOR_INSTANCE_ID": "stale"}
 				_, err := c.NewSession(testSocket, "proj-abc", "/work", envs,
-					[]string{"claude", "--resume", "x"}, tmuxfix.Token, "agent-1")
+					[]string{"claude", "--resume", "x"}, tmuxfix.Token, "agent-1", tmuxfix.StoreID)
 				return err
 			},
 			want: [][]string{{"new-session", "-d", "-s", "proj-abc", "-c", "/work",
 				"-e", "AGENT_DIRECTOR_INSTANCE_ID=agent-1", "-e", "ABC=a b", "-e", "ZED=z",
 				"-P", "-F", argvCreateFormat, "--", "claude", "--resume", "x",
 				";", "set-option", "-F", "-t", "=proj-abc:", "@ad_owner",
-				tmuxfix.ChainLabelValue(tmuxfix.Token, "agent-1")}},
+				tmuxfix.ChainLabelValue(tmuxfix.Token, "agent-1", tmuxfix.StoreID)}},
 			timeout: testTimeouts.Create,
 		},
 	}
@@ -240,32 +252,41 @@ func argvChainedNames() []string {
 }
 
 // TestNewSessionChain: the chain is one ';' then set-option -F -t =<name>:
-// with the label value, and # is doubled in the id only.
+// with the five-field value; # is doubled in the id only, and the store id
+// is the last field, once and unchanged.
 func TestNewSessionChain(t *testing.T) {
-	ids := []string{"agent-1", "id#1", "#a##", "agent-ü1"}
+	labels := []struct{ id, store string }{
+		{"agent-1", tmuxfix.StoreID}, {"id#1", tmuxfix.StoreID}, {"#a##", tmuxfix.StoreID},
+		{"agent-ü1", tmuxfix.StoreID}, {"agent x#y", tmuxfix.OtherStoreID},
+		{"agent 0123456789abcdef", tmuxfix.StoreID},
+		{"id#2", "st#re"}, // not a store id: shows the client never doubles the store id's '#'
+	}
 	commands := map[string][]string{"command": {"sh", "-c", "exit 0"}, "no command": nil}
 	for _, name := range argvChainedNames() {
-		for _, id := range ids {
+		for _, l := range labels {
 			for cmdName, command := range commands {
-				t.Run(name+"/"+id+"/"+cmdName, func(t *testing.T) {
+				t.Run(name+"/"+l.id+"/"+cmdName, func(t *testing.T) {
 					if tmux.NeedsLabelByID(name) {
 						t.Fatalf("NeedsLabelByID(%q) = true, want false", name)
 					}
 					client, runner := newScripted(t, exitZero(tmuxfix.CreateReplyLine(tmuxfix.RecordedCreate)))
-					if _, err := client.NewSession(testSocket, name, "/work", nil, command, tmuxfix.Token, id); err != nil {
+					if _, err := client.NewSession(testSocket, name, "/work", nil, command, tmuxfix.Token, l.id, l.store); err != nil {
 						t.Fatalf("NewSession: %v", err)
 					}
 					args := argvCommand(t, runner.Only())
 					head := []string{"new-session", "-d", "-s", name, "-c", "/work",
-						"-e", "AGENT_DIRECTOR_INSTANCE_ID=" + id, "-P", "-F", argvCreateFormat, "--"}
+						"-e", "AGENT_DIRECTOR_INSTANCE_ID=" + l.id, "-P", "-F", argvCreateFormat, "--"}
 					tail := []string{";", "set-option", "-F", "-t", "=" + name + ":", "@ad_owner",
-						"ad1 " + tmuxfix.Token + " #{session_id} " + strings.ReplaceAll(id, "#", "##")}
+						tmuxfix.ChainLabelValue(tmuxfix.Token, l.id, l.store)}
 					want := slices.Concat(head, command, tail)
 					if !slices.Equal(args, want) {
 						t.Errorf("argv:\n got %q\nwant %q", args, want)
 					}
 					if n := argvCount(args, ";"); n != 1 {
 						t.Errorf("got %d ';' separators, want 1", n)
+					}
+					if value := args[len(args)-1]; !strings.HasSuffix(value, " "+l.store) || strings.Count(value, l.store) != 1 {
+						t.Errorf("chain value %q does not end with store id %q exactly once", value, l.store)
 					}
 				})
 			}
@@ -297,7 +318,7 @@ func TestNewSessionNoChainForDollarOrBackslash(t *testing.T) {
 				}
 				client, runner := newScripted(t, exited(exit, reply, ""))
 				got, err := client.NewSession(testSocket, name, "/work", nil,
-					[]string{"claude"}, tmuxfix.Token, "id#1")
+					[]string{"claude"}, tmuxfix.Token, "id#1", tmuxfix.StoreID)
 				if err != nil || got != tmuxfix.RecordedCreate {
 					t.Fatalf("NewSession = %+v, %v; want %+v, nil", got, err, tmuxfix.RecordedCreate)
 				}
@@ -309,6 +330,9 @@ func TestNewSessionNoChainForDollarOrBackslash(t *testing.T) {
 				}
 				if slices.Contains(args, ";") || slices.Contains(args, "set-option") {
 					t.Errorf("chained label present for %q: %q", name, args)
+				}
+				if strings.Contains(strings.Join(args, " "), tmuxfix.StoreID) {
+					t.Errorf("store id in an unchained create: %q", args)
 				}
 			})
 		}

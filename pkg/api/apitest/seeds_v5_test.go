@@ -325,7 +325,8 @@ func TestSeedSpawn_V5Defaults(t *testing.T) {
 }
 
 // TestSeedRowSession_MatchesSeedSpawnPane seeds rows and their Recorder sessions, then asserts the
-// lookup and pane listing on the test socket name each row's pane under a label valid for its id and token.
+// lookup and pane listing on the test socket name each row's pane under a label valid for its id, token and
+// the store's own id (a reseeded id included, so the label is read from the store, not a constant).
 func TestSeedRowSession_MatchesSeedSpawnPane(t *testing.T) {
 	t.Parallel()
 	type row struct {
@@ -341,8 +342,9 @@ func TestSeedRowSession_MatchesSeedSpawnPane(t *testing.T) {
 	other := store.LaunchIdentity{Token: "0123456789abcdef", Socket: TestSocket, PaneID: "%7", PanePID: 4343}
 
 	cases := []struct {
-		name string
-		rows []row
+		name          string
+		rows          []row
+		reseedStoreID bool // replace the store's id before seeding the sessions
 	}{
 		{name: "pending", rows: live("pending")},
 		{name: "waiting", rows: live("waiting")},
@@ -351,6 +353,7 @@ func TestSeedRowSession_MatchesSeedSpawnPane(t *testing.T) {
 		{name: "check_permission", rows: live("check_permission")},
 		{name: "two rows on one socket", rows: append(live("waiting"), row{id: "v5-match-other", state: "working",
 			opts: []SpawnOption{WithLaunchIdentity(other)}, paneID: other.PaneID, panePID: other.PanePID})},
+		{name: "reseeded store id", rows: live("waiting"), reseedStoreID: true},
 	}
 
 	for _, tc := range cases {
@@ -363,6 +366,14 @@ func TestSeedRowSession_MatchesSeedSpawnPane(t *testing.T) {
 			seeded := make([]tmuxfix.SeedSession, len(tc.rows))
 			for i, r := range tc.rows {
 				tokens[i], _ = seedV5Row(t, dbPath, r.id, r.state, r.opts...).LaunchToken.(string)
+			}
+			if tc.reseedStoreID {
+				if err := SeedStoreID(dbPath, OtherStoreID(mustReadStoreID(t, dbPath))); err != nil {
+					t.Fatalf("SeedStoreID: %v", err)
+				}
+			}
+			storeID := mustReadStoreID(t, dbPath)
+			for i, r := range tc.rows {
 				seeded[i] = rec.SeedRowSession(t, dbPath, r.id)
 			}
 
@@ -380,7 +391,7 @@ func TestSeedRowSession_MatchesSeedSpawnPane(t *testing.T) {
 
 			for i, r := range tc.rows {
 				sid := seeded[i].ID
-				wantLabel := tmux.Label{Kind: tmux.LabelValid, Token: tokens[i], InstanceID: r.id}
+				wantLabel := tmux.Label{Kind: tmux.LabelValid, Token: tokens[i], InstanceID: r.id, StoreID: storeID}
 				var found bool
 				for _, s := range ans.Sessions {
 					if s.ID == sid {

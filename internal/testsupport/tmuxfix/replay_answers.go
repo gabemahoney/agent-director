@@ -12,14 +12,25 @@ import (
 // on 3.3a. The F1, F2 and F9 transcripts were taken with other -F formats
 // and placeholder tokens (TOK1, TOK2): the lookup answers keep their ids,
 // names, server pid and start time and label structure, in SR-2.1's format
-// with 16-hex tokens and the ad1 label form. Session creation times not in
-// a transcript are the server's start time.
+// with 16-hex tokens and the ad1 label form, now five fields with StoreID
+// last (WD 2026-09-29 STORE). Session creation times not in a transcript are
+// the server's start time.
 
 // Token and OtherToken are launch tokens: 16 lowercase hex characters
 // (SR-3.5), a row's current token and an earlier launch's.
 const (
 	Token      = "3f9c1e7a2b6d4058"
 	OtherToken = "a1b2c3d4e5f60718"
+)
+
+// StoreID and OtherStoreID are store ids: 16 lowercase hex characters, a
+// store_meta.store_id (SR-5.1; WD 2026-09-29 STORE). StoreID is this
+// store's id and OtherStoreID another agent-director store's, for catalogue
+// entries. A test that seeds rows labels them with its store's real id
+// (apitest.ReadStoreID or (*store.Store).StoreID()), not with these.
+const (
+	StoreID      = "7c4e19b2d05a8f36"
+	OtherStoreID = "e2a86d0f3b917c54"
 )
 
 // Recorded server identities: the pid F1, F2 and F9 share, F1/F2's start
@@ -38,16 +49,20 @@ func SessionLine(id string, created int64, serverPID int, serverStart int64, nam
 		strconv.FormatInt(serverStart, 10), name, label}, "\t")
 }
 
-// LabelValue builds the @ad_owner value as stored and listed:
-// "ad1 <token> <session id> <instance id>" (SR-3.4), also SetLabel's value.
-func LabelValue(token, sessionID, instanceID string) string {
-	return "ad1 " + token + " " + sessionID + " " + instanceID
+// LabelValue builds the @ad_owner value as stored and listed, five fields:
+// "ad1 <token> <session id> <instance id> <store id>" (SR-3.4; WD 2026-09-29
+// STORE), also SetLabel's value. The store id is store_meta.store_id and
+// comes last, so the instance id may contain spaces.
+func LabelValue(token, sessionID, instanceID, storeID string) string {
+	return "ad1 " + token + " " + sessionID + " " + instanceID + " " + storeID
 }
 
-// ChainLabelValue builds the create chain's set-option -F value:
-// "ad1 <token> #{session_id} <instance id with every # doubled>" (SR-3.5, F7).
-func ChainLabelValue(token, instanceID string) string {
-	return "ad1 " + token + " #{session_id} " + strings.ReplaceAll(instanceID, "#", "##")
+// ChainLabelValue builds the create chain's set-option -F value, five
+// fields: "ad1 <token> #{session_id} <instance id with every # doubled>
+// <store id>", the store id appended unchanged (SR-3.5, F7; WD 2026-09-29
+// STORE).
+func ChainLabelValue(token, instanceID, storeID string) string {
+	return "ad1 " + token + " #{session_id} " + strings.ReplaceAll(instanceID, "#", "##") + " " + storeID
 }
 
 // PaneLine builds one list-panes -a line, without its newline: session id,
@@ -75,9 +90,11 @@ type Listed struct {
 	Want tmux.Label
 }
 
-// Valid is the tmux.Label a valid label with token and instance id classifies as.
-func Valid(token, instanceID string) tmux.Label {
-	return tmux.Label{Kind: tmux.LabelValid, Token: token, InstanceID: instanceID}
+// Valid is the tmux.Label a valid five-field label with token, instance id
+// and store id classifies as: "ad1 <token> <$N> <instance id> <store id>" on
+// its own line (SR-3.4; WD 2026-09-29 STORE).
+func Valid(token, instanceID, storeID string) tmux.Label {
+	return tmux.Label{Kind: tmux.LabelValid, Token: token, InstanceID: instanceID, StoreID: storeID}
 }
 
 // Answer builds a successful lookup entry: sessions on one server, then the
@@ -116,13 +133,13 @@ func malformed(name, source string, labels []string, lines ...string) Entry {
 // cases of LFR H6 (scope blank lines, a session line after a scope value,
 // session lines disagreeing on the server, unparseable numeric fields).
 func LookupAnswers() []Entry {
-	own0 := LabelValue(Token, "$0", "agent-x") // F9's and F2's value, embedding $0
-	own1 := LabelValue(Token, "$1", "agent-x")
-	own2 := LabelValue(OtherToken, "$2", "agent-y")
-	x, y := Valid(Token, "agent-x"), Valid(OtherToken, "agent-y")
+	own0 := LabelValue(Token, "$0", "agent-x", StoreID) // F9's and F2's value, embedding $0
+	own1 := LabelValue(Token, "$1", "agent-x", StoreID)
+	own2 := LabelValue(OtherToken, "$2", "agent-y", StoreID)
+	x, y := Valid(Token, "agent-x", StoreID), Valid(OtherToken, "agent-y", StoreID)
 	none := tmux.Label{}
 	f2 := func(name, bare, keep, made, made2 string, keepWant, madeWant, made2Want tmux.Label, scope ...string) Entry {
-		return Answer(name, "provenance-fresh F2 (one-call lookup form)", serverPID, f1ServerStart, []Listed{
+		return Answer(name, "provenance-fresh F2 (one-call lookup form) (five-field form, WD 2026-09-29 STORE)", serverPID, f1ServerStart, []Listed{
 			{ID: "$3", Created: f1ServerStart, Name: "bare", Label: bare, Want: none},
 			{ID: "$0", Created: f1ServerStart, Name: "keep", Label: keep, Want: keepWant},
 			{ID: "$1", Created: f1ServerStart, Name: "made", Label: made, Want: madeWant},
@@ -134,15 +151,15 @@ func LookupAnswers() []Entry {
 	}
 	pid, start := strconv.Itoa(serverPID), strconv.Itoa(f9ServerStart)
 	return []Entry{
-		Answer("lookup/F9a", "provenance-fresh F9a", serverPID, f9ServerStart, []Listed{
+		Answer("lookup/F9a", "provenance-fresh F9a (five-field form, WD 2026-09-29 STORE)", serverPID, f9ServerStart, []Listed{
 			{ID: "$0", Created: f9ServerStart, Name: "a", Label: own0, Want: x},
 			{ID: "$1", Created: f9ServerStart, Name: "b", Want: none},
 		}),
-		Answer("lookup/F9b", "provenance-fresh F9b: a server-scope value, borrowed by every line", serverPID, f9ServerStart, []Listed{
+		Answer("lookup/F9b", "provenance-fresh F9b: a server-scope value, borrowed by every line (five-field form, WD 2026-09-29 STORE)", serverPID, f9ServerStart, []Listed{
 			{ID: "$0", Created: f9ServerStart, Name: "a", Label: own0, Want: x},
 			{ID: "$1", Created: f9ServerStart, Name: "b", Label: own0, Want: none},
 		}, own0),
-		Answer("lookup/F1", "provenance-fresh F1: made from outside, made2 from keep's pane", serverPID, f1ServerStart, []Listed{
+		Answer("lookup/F1", "provenance-fresh F1: made from outside, made2 from keep's pane (five-field form, WD 2026-09-29 STORE)", serverPID, f1ServerStart, []Listed{
 			{ID: "$0", Created: f1ServerStart, Name: "keep", Want: none},
 			{ID: "$1", Created: f1ServerStart, Name: "made", Label: own1, Want: x},
 			{ID: "$2", Created: f1ServerStart, Name: "made2", Label: own2, Want: y},

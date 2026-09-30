@@ -49,10 +49,12 @@ var invokers = []invoker{
 	{tmux.CallSendEnter, "%0", func(r *tmuxfix.Recorder, s string) error { return r.SendKeysPane(s, "%0", "hi", true) }},
 	{tmux.CallCapture, "%0", func(r *tmuxfix.Recorder, s string) error { _, err := r.CapturePaneID(s, "%0", 10, false); return err }},
 	{tmux.CallCreate, "new", func(r *tmuxfix.Recorder, s string) error {
-		_, err := r.NewSession(s, "new", "/tmp", nil, []string{"claude"}, tmuxfix.Token, agent)
+		_, err := r.NewSession(s, "new", "/tmp", nil, []string{"claude"}, tmuxfix.Token, agent, tmuxfix.StoreID)
 		return err
 	}},
-	{tmux.CallSetLabel, "$0", func(r *tmuxfix.Recorder, s string) error { return r.SetLabel(s, "$0", tmuxfix.Token, agent) }},
+	{tmux.CallSetLabel, "$0", func(r *tmuxfix.Recorder, s string) error {
+		return r.SetLabel(s, "$0", tmuxfix.Token, agent, tmuxfix.StoreID)
+	}},
 }
 
 // callErr returns err as a *tmux.CallError, failing the test otherwise.
@@ -82,14 +84,14 @@ func TestRecorder_LookupAnswersEachSocketsTable(t *testing.T) {
 		StartServer(sockA, tmuxfix.Server{PID: 111, Start: 1000}).
 		StartServer(sockB, tmuxfix.Server{PID: 222, Start: 2000}).
 		SeedSessions(sockA,
-			tmuxfix.SeedSession{ID: "$4", Name: "zeta", Created: 1100, Label: tmuxfix.Valid(tmuxfix.Token, agent)},
+			tmuxfix.SeedSession{ID: "$4", Name: "zeta", Created: 1100, Label: tmuxfix.Valid(tmuxfix.Token, agent, tmuxfix.StoreID)},
 			tmuxfix.SeedSession{ID: "$7", Name: `a\$b`, Created: 1200}).
 		SeedSessions(sockB, tmuxfix.SeedSession{ID: "$4", Name: "other", Created: 2100})
 
 	want := map[string]tmux.LookupAnswer{
 		sockA: {ServerPID: 111, ServerStart: 1000, Sessions: []tmux.Session{
 			{ID: "$7", Created: 1200, Name: `a\$b`},
-			{ID: "$4", Created: 1100, Name: "zeta", Label: tmuxfix.Valid(tmuxfix.Token, agent)},
+			{ID: "$4", Created: 1100, Name: "zeta", Label: tmuxfix.Valid(tmuxfix.Token, agent, tmuxfix.StoreID)},
 		}},
 		sockB: {ServerPID: 222, ServerStart: 2000, Sessions: []tmux.Session{{ID: "$4", Created: 2100, Name: "other"}}},
 	}
@@ -103,8 +105,8 @@ func TestRecorder_LookupAnswersEachSocketsTable(t *testing.T) {
 // TestRecorder_LookupLabels: each line's typed label under own labels and the
 // scope values (server, then global-window, then own, then global).
 func TestRecorder_LookupLabels(t *testing.T) {
-	cur, old := tmuxfix.Valid(tmuxfix.Token, agent), tmuxfix.Valid(tmuxfix.OtherToken, agent)
-	foreign := tmuxfix.Valid(tmuxfix.Token, "agent-y")
+	cur, old := tmuxfix.Valid(tmuxfix.Token, agent, tmuxfix.StoreID), tmuxfix.Valid(tmuxfix.OtherToken, agent, tmuxfix.StoreID)
+	foreign := tmuxfix.Valid(tmuxfix.Token, "agent-y", tmuxfix.StoreID)
 	none := tmux.Label{}
 	owned := func(id string) tmuxfix.ScopeValue { return tmuxfix.ScopeValue{SessionID: id, Label: cur} }
 	cases := []struct {
@@ -203,7 +205,7 @@ func TestRecorder_Servers(t *testing.T) {
 			if a := lookup(t, r, sockA); len(a.Sessions) != 0 || a.ServerPID != 0 || a.ScopeValue {
 				t.Errorf("lookup after %s = %+v, want an empty server with no scope value", tc.name, a)
 			}
-			reply, err := r.NewSession(sockA, "n", "/tmp", nil, nil, tmuxfix.Token, agent)
+			reply, err := r.NewSession(sockA, "n", "/tmp", nil, nil, tmuxfix.Token, agent, tmuxfix.StoreID)
 			if err != nil {
 				t.Fatal(err)
 			}

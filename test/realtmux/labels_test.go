@@ -69,13 +69,14 @@ func assertOnlyLabelChange(t testing.TB, before, after labelState, id, wantRaw s
 		t.Fatalf("production lookup does not list session %s", id)
 	}
 	if s.Label != want {
-		t.Errorf("session %s: lookup label = {Kind %d, token match %v, id match %v}, want Kind %d",
-			id, s.Label.Kind, s.Label.Token == want.Token, s.Label.InstanceID == want.InstanceID, want.Kind)
+		t.Errorf("session %s: lookup label = {Kind %d, token match %v, id match %v, store id match %v}, want Kind %d",
+			id, s.Label.Kind, s.Label.Token == want.Token, s.Label.InstanceID == want.InstanceID,
+			s.Label.StoreID == want.StoreID, want.Kind)
 	}
 }
 
 // validLabelShapes returns the catalogue's valid label shapes whose instance
-// id stands alone on the line (plain, '#', spaces, UTF-8).
+// id stands alone on the line (plain, '#', spaces, UTF-8, another store's id).
 func validLabelShapes(t testing.TB) []tmuxfix.LabelShape {
 	t.Helper()
 	var out []tmuxfix.LabelShape
@@ -110,8 +111,9 @@ func (r *realTmux) enterPane(t testing.TB, c created) {
 	}
 }
 
-// TestLabelChainedCreate: a created session carries ad1 <token> <own $N> <id>, for
-// every valid id shape ('#' included), detached or from inside a labelled pane.
+// TestLabelChainedCreate: a created session carries ad1 <token> <own $N> <id>
+// <store id>, for every valid shape ('#', spaces, another store's id),
+// detached or from inside a labelled pane.
 func TestLabelChainedCreate(t *testing.T) {
 	for _, shape := range validLabelShapes(t) {
 		for _, inside := range []bool{false, true} {
@@ -127,18 +129,18 @@ func TestLabelChainedCreate(t *testing.T) {
 					rt.enterPane(t, holder)
 				}
 				before := rt.labelState(t)
-				if before.listed[holder.Reply.SessionID].Label != tmuxfix.Valid(holder.Token, holder.InstanceID) {
+				if before.listed[holder.Reply.SessionID].Label != tmuxfix.Valid(holder.Token, holder.InstanceID, holder.StoreID) {
 					t.Fatalf("holder %s is not validly labelled before the create", holder.Reply.SessionID)
 				}
 
-				c := rt.mustCreate(t, createSpec{InstanceID: newInstanceID(shape.Want.InstanceID)})
+				c := rt.mustCreate(t, createSpec{InstanceID: newInstanceID(shape.Want.InstanceID), StoreID: shape.Want.StoreID})
 				after := rt.labelState(t)
 				id := c.Reply.SessionID
 				if _, clash := before.raw[id]; clash {
 					t.Fatalf("create reply names existing session %s", id)
 				}
 				assertOnlyLabelChange(t, before, after, id,
-					tmuxfix.LabelValue(c.Token, id, c.InstanceID), tmuxfix.Valid(c.Token, c.InstanceID))
+					tmuxfix.LabelValue(c.Token, id, c.InstanceID, c.StoreID), tmuxfix.Valid(c.Token, c.InstanceID, c.StoreID))
 				if got := after.listed[id].Name; got != c.Name {
 					t.Errorf("session %s: lookup name = %q, want %q", id, got, c.Name)
 				}
@@ -173,7 +175,8 @@ func labelByIDNames(t testing.TB) (names []tmuxfix.StoredName, collider tmuxfix.
 }
 
 // TestLabelDollarNameByID proves F3: a $-bearing name gets no chain, even when
-// a session with that id exists, and is labelled only by SetLabel on its id.
+// a session with that id exists, and is labelled only by SetLabel on its id,
+// with the store id last.
 func TestLabelDollarNameByID(t *testing.T) {
 	names, collider := labelByIDNames(t)
 	for _, name := range names {
@@ -195,7 +198,7 @@ func TestLabelDollarNameByID(t *testing.T) {
 					t.Fatalf("session %s is not validly labelled before the create", collider.Raw)
 				}
 
-				c := rt.mustCreate(t, createSpec{Name: name.Raw, InstanceID: newInstanceID(shape.Want.InstanceID)})
+				c := rt.mustCreate(t, createSpec{Name: name.Raw, InstanceID: newInstanceID(shape.Want.InstanceID), StoreID: shape.Want.StoreID})
 				id := c.Reply.SessionID
 				if _, clash := before.raw[id]; clash {
 					t.Fatalf("create reply names existing session %s", id)
@@ -206,12 +209,58 @@ func TestLabelDollarNameByID(t *testing.T) {
 					t.Errorf("session %s: lookup name = %q, want the stored form %q", id, got, name.Stored)
 				}
 
-				if err := newClient().SetLabel(rt.Socket, id, c.Token, c.InstanceID); err != nil {
+				if err := newClient().SetLabel(rt.Socket, id, c.Token, c.InstanceID, c.StoreID); err != nil {
 					t.Fatalf("SetLabel %s: %s", id, describe(err))
 				}
 				labelled := rt.labelState(t)
 				assertOnlyLabelChange(t, created, labelled, id,
-					tmuxfix.LabelValue(c.Token, id, c.InstanceID), tmuxfix.Valid(c.Token, c.InstanceID))
+					tmuxfix.LabelValue(c.Token, id, c.InstanceID, c.StoreID), tmuxfix.Valid(c.Token, c.InstanceID, c.StoreID))
+			})
+		}
+	}
+}
+
+// TestLabelStoreIDLast: an instance id with spaces, or whose last word is 16
+// hex, is written ad1 <token> <$N> <id> <store id>, chained and by id, and
+// the production Lookup returns that id and store id (SR-3.4, SR-20.6).
+func TestLabelStoreIDLast(t *testing.T) {
+	ids := []struct {
+		name  string
+		newID func(t *testing.T) string
+	}{
+		{"spaces", func(*testing.T) string { return newInstanceID("agent x y") }},
+		{"last-word-16hex", func(t *testing.T) string { return newInstanceID("agent") + " " + newToken(t) }},
+	}
+	for _, shape := range ids {
+		for _, byID := range []bool{false, true} {
+			how := "chained"
+			if byID {
+				how = "by-id"
+			}
+			t.Run(shape.name+"/"+how, func(t *testing.T) {
+				rt := newRealTmux(t)
+				spec := createSpec{InstanceID: shape.newID(t), StoreID: newToken(t)}
+				if byID {
+					spec.Name = uniqueName() + "$b"
+				}
+				c := rt.mustCreate(t, spec)
+				id := c.Reply.SessionID
+				if byID {
+					if rt.label(t, id) != "" {
+						t.Fatalf("session %s: a label-by-id name was labelled by the create", id)
+					}
+					if err := newClient().SetLabel(rt.Socket, id, c.Token, c.InstanceID, c.StoreID); err != nil {
+						t.Fatalf("SetLabel %s: %s", id, describe(err))
+					}
+				}
+				if rt.label(t, id) != "ad1 "+c.Token+" "+id+" "+c.InstanceID+" "+c.StoreID {
+					t.Errorf("session %s: label read by id is not ad1 <token> <$N> <id> <store id>", id)
+				}
+				want := tmux.Label{Kind: tmux.LabelValid, Token: c.Token, InstanceID: c.InstanceID, StoreID: c.StoreID}
+				if got := rt.labelState(t).listed[id].Label; got != want {
+					t.Errorf("session %s: lookup label = {Kind %d, token match %v, id match %v, store id match %v}, want valid",
+						id, got.Kind, got.Token == want.Token, got.InstanceID == want.InstanceID, got.StoreID == want.StoreID)
+				}
 			})
 		}
 	}

@@ -99,11 +99,16 @@ func (c *Client) CapturePaneID(socket, paneID string, nLines int, ansi bool) (st
 }
 
 // SetLabel labels the session sessionID on socket by its id: set-option -t
-// <$N> @ad_owner 'ad1 <token> <$N> <instance id>', the value one argv
-// element, with no -F, so a # in the instance id stays as written (SR-2.1,
-// SR-3.5). Action timeout. Used for a name containing $ or \ and for the one
-// relabel after a failed chained label.
-func (c *Client) SetLabel(socket, sessionID, token, instanceID string) error {
-	value := labelPrefix + token + " " + sessionID + " " + instanceID
+// <$N> @ad_owner 'ad1 <token> <$N> <instance id> <store id>', the value one
+// argv element, with no -F and no doubling, so a # in the instance id stays
+// as written (SR-2.1, SR-3.5, Appendix F.1; WD 2026-09-29 STORE). storeID is
+// the writing store's store_meta.store_id, written last; the client does not
+// validate it, callers passing (*store.Store).StoreID(), which the store's
+// open has already validated (SR-5.1). A failure's *CallError is built from
+// the reply alone, never from the value (SR-15). Action timeout. Used for a
+// name containing $ or \ and for the one relabel after a failed chained
+// label.
+func (c *Client) SetLabel(socket, sessionID, token, instanceID, storeID string) error {
+	value := labelPrefix + token + " " + sessionID + " " + instanceID + " " + storeID
 	return c.runAction(CallSetLabel, socket, "set-option", "-t", sessionID, ownerOption, value)
 }
