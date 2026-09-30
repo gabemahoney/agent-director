@@ -1,7 +1,10 @@
 // Hook payload fixtures (SR-20.6, AC-HOOK-01): testdata/hook-payloads holds
 // one payload per event agent-director registers (hookEvents in
 // internal/spawn/settings.go): SessionStart, UserPromptSubmit, PreToolUse,
-// PostToolUse, Stop, Notification, SessionEnd and PermissionRequest.
+// PostToolUse, Stop, Notification, SessionEnd and PermissionRequest. The
+// *-subagent fixtures carry agent_id (a subagent or in-process teammate,
+// SR-22.9, AC-HOOK-02); session-start-agent-type-only carries only
+// agent_type (a session started with --agent).
 // Shapes follow Claude Code's hooks reference, https://code.claude.com/docs/en/hooks
 // (read 2026-09-30; the page has no version stamp, the newest version it cites is v2.1.274).
 package hook_test
@@ -20,24 +23,29 @@ import (
 	"github.com/gabemahoney/agent-director/internal/hook"
 )
 
-// payloadFixtures lists every fixture with its event and the event's own
-// field that names the case (value "" = the field need only be present).
+// payloadFixtures lists every fixture with its event, the event's own
+// field that names the case (value "" = the field need only be present)
+// and the agent_id it carries ("" = none).
 var payloadFixtures = []struct {
-	file, event, field, value string
+	file, event, field, value, agentID string
 }{
-	{"session-start-startup.json", "SessionStart", "source", "startup"},
-	{"session-start-resume.json", "SessionStart", "source", "resume"},
-	{"session-start-clear.json", "SessionStart", "source", "clear"},
-	{"session-start-compact.json", "SessionStart", "source", "compact"},
-	{"user-prompt-submit.json", "UserPromptSubmit", "prompt", ""},
-	{"pre-tool-use-ask-user-question.json", "PreToolUse", "tool_name", "AskUserQuestion"},
-	{"pre-tool-use-bash.json", "PreToolUse", "tool_name", "Bash"},
-	{"post-tool-use.json", "PostToolUse", "tool_response", ""},
-	{"stop.json", "Stop", "last_assistant_message", ""},
-	{"notification.json", "Notification", "notification_type", "idle_prompt"},
-	{"session-end-prompt-input-exit.json", "SessionEnd", "reason", "prompt_input_exit"},
-	{"session-end-clear.json", "SessionEnd", "reason", "clear"},
-	{"permission-request.json", "PermissionRequest", "tool_name", "Bash"},
+	{"session-start-startup.json", "SessionStart", "source", "startup", ""},
+	{"session-start-resume.json", "SessionStart", "source", "resume", ""},
+	{"session-start-clear.json", "SessionStart", "source", "clear", ""},
+	{"session-start-compact.json", "SessionStart", "source", "compact", ""},
+	{"session-start-subagent.json", "SessionStart", "source", "startup", "a7c41e9b2d5f8036"},
+	{"session-start-agent-type-only.json", "SessionStart", "agent_type", "security-reviewer", ""},
+	{"user-prompt-submit.json", "UserPromptSubmit", "prompt", "", ""},
+	{"pre-tool-use-ask-user-question.json", "PreToolUse", "tool_name", "AskUserQuestion", ""},
+	{"pre-tool-use-bash.json", "PreToolUse", "tool_name", "Bash", ""},
+	{"pre-tool-use-subagent.json", "PreToolUse", "tool_name", "Grep", "a5b92f0e7d3c6184"},
+	{"post-tool-use.json", "PostToolUse", "tool_response", "", ""},
+	{"stop.json", "Stop", "last_assistant_message", "", ""},
+	{"notification.json", "Notification", "notification_type", "idle_prompt", ""},
+	{"session-end-prompt-input-exit.json", "SessionEnd", "reason", "prompt_input_exit", ""},
+	{"session-end-clear.json", "SessionEnd", "reason", "clear", ""},
+	{"session-end-subagent.json", "SessionEnd", "reason", "prompt_input_exit", "a3e08d6f1c9b4275"},
+	{"permission-request.json", "PermissionRequest", "tool_name", "Bash", ""},
 }
 
 // readPayloadFixture returns the raw bytes of testdata/hook-payloads/<name>.
@@ -75,6 +83,16 @@ func TestPayloadFixtureParses(t *testing.T) {
 			}
 			if tc.value != "" && own != tc.value {
 				t.Errorf("%s = %v; want %q", tc.field, own, tc.value)
+			}
+			if _, has := p["agent_id"]; has != (tc.agentID != "") {
+				t.Errorf("agent_id present = %v; want %v", has, tc.agentID != "")
+			}
+			res, err := hook.ClassifyEvent(raw)
+			if err != nil {
+				t.Fatalf("ClassifyEvent: %v", err)
+			}
+			if res.AgentID != tc.agentID {
+				t.Errorf("ClassifyEvent AgentID = %q; want %q", res.AgentID, tc.agentID)
 			}
 		})
 	}

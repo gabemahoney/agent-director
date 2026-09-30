@@ -1,0 +1,9 @@
+{
+  "session_id": "c7fe2a9f-681d-43f3-bf5d-f7836e9808c9",
+  "transcript_path": "/home/agent/.claude/projects/-work-demo/c7fe2a9f-681d-43f3-bf5d-f7836e9808c9.jsonl",
+  "cwd": "/work/demo",
+  "hook_event_name": "SessionEnd",
+  "reason": "prompt_input_exit",
+  "agent_id": "a3e08d6f1c9b4275",
+  "agent_type": "Explore"
+}

@@ -1,0 +1,20 @@
+{
+  "session_id": "25be558d-6fc8-4e51-8b33-a96c7a7020bf",
+  "transcript_path": "/home/agent/.claude/projects/-work-demo/25be558d-6fc8-4e51-8b33-a96c7a7020bf.jsonl",
+  "cwd": "/work/demo",
+  "prompt_id": "6f1d2c3b-8a9e-4f70-b1c2-d3e4f5a6b7c8",
+  "permission_mode": "default",
+  "effort": {
+    "level": "high"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Grep",
+  "tool_input": {
+    "pattern": "func Handle",
+    "path": "/work/demo/internal",
+    "output_mode": "files_with_matches"
+  },
+  "tool_use_id": "toolu_01GHI789",
+  "agent_id": "a5b92f0e7d3c6184",
+  "agent_type": "Explore"
+}

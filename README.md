@@ -36,7 +36,10 @@ SQLite file; everything else is tmux.
 
 - `claude` (Claude Code) 2.1.285 or later on PATH — install per
   <https://claude.com/claude-code>. agent-director launches only
-  Claude Code; other agent CLIs are unsupported in this release.
+  Claude Code; other agent CLIs are unsupported in this release. With an
+  older Claude Code the agent's hooks apply nothing, rows stay `pending`,
+  and the trail records `ad.hook.ignored` with reason `no_exec_form`:
+  upgrade Claude Code.
 - `tmux` 3.2 or later on PATH. Verified: 3.2a (by a scripted one-off
   run and recorded replies) and 3.3a (by the test suites).
   - Keep `remain-on-exit` off, the tmux default.
@@ -648,6 +651,18 @@ Each created pane carries the pane label `@ad_pane`, `<token> <pane id>`.
    session and waits for every pane process of it. Then resume or reuse the
    id, so that the next launch records its pane. An agent that is wanted can
    be left running until then.
+
+### A row stays `pending` and the trail shows `no_exec_form`
+
+The agent runs a Claude Code older than 2.1.285, so none of its hooks
+apply. List the records:
+
+```sh
+jq -c 'select(.event == "ad.hook.ignored" and .reason == "no_exec_form") | {ts, claude_instance_id, hook_event, parent_command}' ~/.agent-director/ad-trail.jsonl | tail -n 5
+```
+
+Upgrade `claude` on PATH to 2.1.285 or later. Then end and relaunch each
+row that stays `pending` as the [caller contract](#caller-contract) says.
 
 ### A row on a different tmux server
 

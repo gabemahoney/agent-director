@@ -21,17 +21,22 @@ type HookGate struct {
 }
 
 // HookApplied says whether a gated hook write applied (SR-22.9; Appendix
-// F.4). When it did not, Reason is HookReasonPIDMismatch or
-// HookReasonNoPaneRecorded and the hook handler writes ad.hook.ignored (SR-14);
-// Reason is "" when no row has the id (nothing to report) or, for
-// SessionStart, when the row changed after the caller examined it.
+// F.4). When it did not, the hook handler writes ad.hook.ignored with Reason
+// (pid_mismatch, no_pane_recorded or subagent_event), ParentPID and the
+// parent's command; no_exec_form is written by the no-verb path, never here
+// (WD 2026-09-30b). A store write reports only HookReasonPIDMismatch or
+// HookReasonNoPaneRecorded: subagent_event is decided by the handler from the
+// payload, before any write. Reason is "" when no row has the id (nothing to
+// report) or, for SessionStart, when the row changed after the caller examined
+// it.
 type HookApplied struct {
 	Applied bool
 	Reason  string
 }
 
-// The two reasons a gated hook write did not apply (SR-22.9, SR-14's
-// ad.hook.ignored).
+// The four reasons of SR-14's ad.hook.ignored: a hook that SR-22.9 did not
+// apply. The first two come from a gated store write; the last two are
+// decided before any store write (WD 2026-09-30b).
 const (
 	// HookReasonPIDMismatch: the hook's parent process, with its start time,
 	// is not the row's recorded pane process (or its start time could not be
@@ -40,6 +45,14 @@ const (
 	// HookReasonNoPaneRecorded: the row records no pane yet (a lost create
 	// reply not yet adopted, SR-3.6), so no hook matches it.
 	HookReasonNoPaneRecorded = "no_pane_recorded"
+	// HookReasonSubagentEvent: a SessionStart or SessionEnd whose payload
+	// carries a non-empty agent_id (a subagent or an in-process teammate). It
+	// changes nothing, even from the pane process.
+	HookReasonSubagentEvent = "subagent_event"
+	// HookReasonNoExecForm: a no-verb run that received a hook payload on
+	// standard input, from a Claude Code that does not run exec-form hooks.
+	// Written with no store access.
+	HookReasonNoExecForm = "no_exec_form"
 )
 
 // hookGateSQL is the parent-process gate (SR-22.9): a WHERE fragment, joined

@@ -1008,7 +1008,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "hook",
-		Description: "Internal: invoked by Claude Code on lifecycle events via the per-Spawn --settings hooks. Reads payload JSON from stdin and writes the row only when the hook's parent process is the row's recorded pane process, the agent itself; a hook from any other process changes nothing and is logged as ad.hook.ignored. Exits 0 (state-tracking fail-open).",
+		Description: "Internal: invoked by Claude Code on lifecycle events via the per-Spawn --settings hooks. Reads payload JSON from stdin and writes the row only when the hook's parent process is the row's recorded pane process, the agent itself; a hook from any other process, or a subagent's SessionStart or SessionEnd, changes nothing and is logged as ad.hook.ignored. Exits 0 (state-tracking fail-open).",
 		Callable:    false,
 		HandleFree:  false,
 		Params: []ParamDef{

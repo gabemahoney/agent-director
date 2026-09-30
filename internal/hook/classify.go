@@ -51,6 +51,7 @@ type payload struct {
 	Matcher        string `json:"matcher"`
 	EndReason      string `json:"endReason"`
 	TranscriptPath string `json:"transcript_path"`
+	AgentID        string `json:"agent_id"`
 }
 
 // sessionEndCause picks the best-available exit-cause field from a
@@ -97,8 +98,8 @@ type ClassifyResult struct {
 	// every event whose payload carries the path. It is recorded, never a
 	// gate (SR-22.9): SessionStart writes it to spawns.claude_session_id
 	// (SRD §8.3), an applied ordinary hook writes it when the row records no
-	// session id yet, and ad.hook.ignored reports it as hook_session_id
-	// (SR-14).
+	// session id yet and the hook carries no AgentID, and ad.hook.ignored
+	// reports it as hook_session_id (SR-14).
 	SessionID string
 
 	// TranscriptPath is the full hook-reported transcript_path, for every
@@ -116,6 +117,20 @@ type ClassifyResult struct {
 	// the payload carried no tool_name. Used by trail emission (SR-A-2.1)
 	// to populate the top-level tool_name field.
 	ToolName string
+
+	// AgentID is the payload's agent_id verbatim: non-empty when the hook
+	// comes from a subagent or an in-process teammate running inside the
+	// agent's own process (SR-22.9; WD 2026-09-30b). agent_type alone (a
+	// session started with --agent) does not mark one and is not read.
+	AgentID string
+}
+
+// SubagentLifecycle reports whether the result is a SessionStart or
+// SessionEnd from a subagent or an in-process teammate (a non-empty
+// AgentID). Such a hook changes nothing and is ignored as subagent_event
+// (SR-22.9).
+func (r ClassifyResult) SubagentLifecycle() bool {
+	return r.AgentID != "" && (r.EventName == "SessionStart" || r.EventName == "SessionEnd")
 }
 
 // PeekEventName extracts the event name from a raw hook payload without
@@ -157,6 +172,7 @@ func ClassifyEvent(raw json.RawMessage) (ClassifyResult, error) {
 		ToolName:       p.ToolName,
 		SessionID:      extractSessionID(p.TranscriptPath),
 		TranscriptPath: p.TranscriptPath,
+		AgentID:        p.AgentID,
 	}
 
 	switch res.EventName {

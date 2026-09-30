@@ -17,9 +17,31 @@ is in exec form — `{"type": "command", "command": "<abs-path>/agent-director",
 "args": ["hook"]}` — so Claude Code starts `agent-director hook`
 directly, with no shell in between, and feeds it the payload JSON on
 stdin. The hook's parent process is therefore the Claude process that
-fired it. A Claude Code version that ignores `args` would run the binary
-with no verb, and no hook would apply; the README states the minimum
-supported Claude Code version.
+fired it. The README states the minimum supported Claude Code version.
+
+A Claude Code version older than that ignores `args` and runs the bare
+binary through `/bin/sh`, so each hook reaches agent-director with no
+verb and its payload on stdin. No hook applies, and the row stays
+`pending`. A no-verb run checks stdin for this case:
+
+- When stdin is not a terminal, the run reads it with a 1 MiB cap and a
+  1-second deadline.
+- If the input is a hook payload (a JSON object whose `hook_event_name`
+  is a non-empty string; the `event_name` alias does not count), the run
+  prints nothing, exits 0 and writes one `ad.hook.ignored` trail record
+  with reason `no_exec_form`. It opens no store, loads no config, writes
+  no `ad.hook.fired` and writes nothing on stderr.
+- In every other case it prints help as before: a terminal, a read
+  error, empty input, input over 1 MiB, input still open at the deadline,
+  or input that is not a hook payload.
+- A run with only global flags counts as a no-verb run. With `--home`,
+  the record goes under that home.
+- `help`, `--help` and `version` never read stdin.
+
+The `no_exec_form` record carries `claude_instance_id` from the
+environment (null when absent or invalid), `hook_event`, `parent_pid`,
+`parent_command`, and `hook_session_id` (the `transcript_path` basename,
+or null). `row_session_id` and `row_pane_pid` are always null.
 
 | Event | Tool matcher | Resulting state (SRD §5.2) |
 | --- | --- | --- |
@@ -68,9 +90,45 @@ come from the same process, so they apply, and SessionStart records the
 new session id. The payload's session id is recorded, never used to
 decide whether a hook applies. The hook makes no tmux call.
 
-Consequences: a nested agent's or a teammate's work is not reflected in
-the row, and an `ended` row stays `ended` against every other process's
-hooks.
+### Subagents and in-process teammates
+
+Claude Code runs every subagent inside the agent's own process. It does
+the same for an in-process agent-team teammate's turns (the default
+`teammateMode`). Their hooks therefore pass the parent-process check.
+Claude Code marks them with a non-empty `agent_id` in the payload.
+`agent_type` alone does not mark one: a session started with `--agent`
+carries it and is the agent itself.
+
+- **SessionStart or SessionEnd with `agent_id`:** the hook changes
+  nothing. It is decided from the payload, before the parent-process
+  check and before any write. It writes no state and no session id, and
+  exits 0 with empty stdout. It writes one `ad.hook.ignored` record with
+  reason `subagent_event`, and its `ad.hook.fired` record has
+  `upsert_outcome` `no_change`. If no row has the id, no
+  `ad.hook.ignored` record is written. So a subagent can neither replace
+  the row's session id (which `resume` uses) nor end a live row.
+- **Every other hook with `agent_id`:** it applies its state transition
+  like any hook from the agent's process, but it records no session id
+  and no transcript path. A subagent's tool and permission events
+  therefore move the row's state and use its relay: the row reflects the
+  process.
+
+### The `ad.hook.ignored` reasons
+
+| Reason | When |
+| --- | --- |
+| `pid_mismatch` | The hook's parent is not the row's recorded pane process. |
+| `no_pane_recorded` | The row records no pane yet. |
+| `subagent_event` | A SessionStart or SessionEnd whose payload carries a non-empty `agent_id`. |
+| `no_exec_form` | A no-verb run received a hook payload on stdin, from a Claude Code that does not run exec-form hooks. It is written with no store access. |
+
+Each record carries `claude_instance_id`, `hook_event`, `reason`,
+`parent_pid`, `parent_command`, `hook_session_id`, `row_session_id`,
+`row_pane_pid` and `source` = `ad_hook`. It never names another row.
+
+Consequences: a nested agent's or a teammate pane's work is not
+reflected in the row, and an `ended` row stays `ended` against every
+other process's hooks.
 
 ## Fail-open invariant
 
@@ -88,6 +146,14 @@ it does not apply:
 - Hook from a process other than the row's recorded pane process, or for
   a row that records no pane → exit 0, nothing written, one
   `ad.hook.ignored` trail record.
+- SessionStart or SessionEnd from a subagent or in-process teammate
+  (non-empty `agent_id`) → exit 0, nothing written to the row, one
+  `ad.hook.ignored` record with reason `subagent_event` (none when no row
+  has the id).
+- Hook from a Claude Code that does not run exec-form hooks (a no-verb
+  run given a hook payload on stdin) → exit 0, nothing on stdout or
+  stderr, no store opened, one `ad.hook.ignored` record with reason
+  `no_exec_form`.
 - Hook for an id with no row → exit 0, nothing written.
 
 All log entries land in `~/.agent-director/errors.log` (configurable
@@ -166,6 +232,13 @@ operator runs, regardless of whether agent-director launched it.
 They inject the verb list into the new conversation so the model
 knows the supervision API surface after a `/compact` or fresh
 session. Mirrors the `bees sting` pattern.
+
+Both entries are in shell form (`"command": "<install path> help"`, no
+`args`) and name the `help` verb explicitly. A Claude Code that does not
+run exec-form hooks still runs `agent-director help`, so the no-verb
+`no_exec_form` check never applies to them. The same holds for the
+per-Spawn `inject_help_hook` SessionStart entry, which is also shell
+form.
 
 ### Why both events
 

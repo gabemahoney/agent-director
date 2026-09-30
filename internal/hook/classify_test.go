@@ -323,3 +323,68 @@ func TestClassifyEventSessionEndMissingReasonIsSoft(t *testing.T) {
 		t.Errorf("NewState = %q; want empty (soft-refresh leaves state alone)", res.NewState)
 	}
 }
+
+// TestClassifyEventAgentID pins SR-22.9: only a non-empty agent_id marks a subagent
+// SessionStart/SessionEnd; agent_id and agent_type never change the classification itself.
+func TestClassifyEventAgentID(t *testing.T) {
+	const tp = "~/x/abc.jsonl"
+	cases := []struct {
+		name          string
+		payload       map[string]any
+		wantAgentID   string
+		wantLifecycle bool
+	}{
+		{"SessionStart_agent_id", map[string]any{"hook_event_name": "SessionStart", "agent_id": "a1"}, "a1", true},
+		{"SessionStart_legacy_event_name_agent_id", map[string]any{"event_name": "SessionStart", "agent_id": "a1"}, "a1", true},
+		{"SessionEnd_terminal_agent_id", map[string]any{"hook_event_name": "SessionEnd", "reason": "prompt_input_exit", "agent_id": "a1"}, "a1", true},
+		{"SessionEnd_soft_agent_id", map[string]any{"hook_event_name": "SessionEnd", "reason": "clear", "agent_id": "a1"}, "a1", true},
+		{"PreToolUse_agent_id", map[string]any{"hook_event_name": "PreToolUse", "tool_name": "Bash", "agent_id": "a1"}, "a1", false},
+		{"Stop_agent_id", map[string]any{"hook_event_name": "Stop", "agent_id": "a1"}, "a1", false},
+		{"SessionStart_agent_id_empty", map[string]any{"hook_event_name": "SessionStart", "agent_id": ""}, "", false},
+		{"SessionEnd_agent_id_empty", map[string]any{"hook_event_name": "SessionEnd", "reason": "logout", "agent_id": ""}, "", false},
+		{"SessionStart_agent_id_absent", map[string]any{"hook_event_name": "SessionStart"}, "", false},
+		{"SessionStart_agent_type_only", map[string]any{"hook_event_name": "SessionStart", "agent_type": "reviewer"}, "", false},
+		{"SessionEnd_agent_type_only", map[string]any{"hook_event_name": "SessionEnd", "reason": "logout", "agent_type": "reviewer"}, "", false},
+		{"PreToolUse_agent_type_only", map[string]any{"hook_event_name": "PreToolUse", "tool_name": "AskUserQuestion", "agent_type": "reviewer"}, "", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.payload["transcript_path"] = tp
+			res := classifyMap(t, tc.payload)
+			if res.AgentID != tc.wantAgentID {
+				t.Errorf("AgentID = %q; want %q", res.AgentID, tc.wantAgentID)
+			}
+			if got := res.SubagentLifecycle(); got != tc.wantLifecycle {
+				t.Errorf("SubagentLifecycle() = %v; want %v", got, tc.wantLifecycle)
+			}
+
+			// Apart from AgentID, the result equals the same payload without agent fields.
+			plain := map[string]any{}
+			for k, v := range tc.payload {
+				if k != "agent_id" && k != "agent_type" {
+					plain[k] = v
+				}
+			}
+			want := classifyMap(t, plain)
+			want.AgentID = res.AgentID
+			if res != want {
+				t.Errorf("result = %+v; want %+v", res, want)
+			}
+		})
+	}
+}
+
+// classifyMap marshals payload and classifies it, failing the test on error.
+func classifyMap(t *testing.T, payload map[string]any) ClassifyResult {
+	t.Helper()
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	res, err := ClassifyEvent(raw)
+	if err != nil {
+		t.Fatalf("ClassifyEvent: %v", err)
+	}
+	return res
+}

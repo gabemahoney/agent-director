@@ -74,6 +74,15 @@ type HandleConfig struct {
 // is today's silent no-op, with no ad.hook.ignored (decision A2). The hook
 // path makes no tmux call and walks no process ancestry.
 //
+// Subagents and in-process teammates (SR-22.9; WD 2026-09-30b) run inside the
+// agent's process, so their hooks pass the gate; the payload marks them with a
+// non-empty agent_id. Their SessionStart and SessionEnd are decided from the
+// payload before the gate and any write: nothing is written, stdout stays
+// empty, and one ad.hook.ignored with reason subagent_event is written (none
+// when no row has the id), with ad.hook.fired's upsert_outcome no_change.
+// Their other hooks apply as any hook does but record no session id and no
+// transcript path. agent_type alone does not mark a subagent.
+//
 // SessionStart (SR-22.9, SR-5.3): the row is read for the snapshot the write
 // is conditioned on, and one gated RecordSessionStartIdentity records the
 // payload's session id and transcript path and the parent as pid and
@@ -188,18 +197,39 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		logf(logger, "hook: unknown event %q (instance=%s) — treating as soft refresh", res.EventName, instanceID)
 	}
 
+	if res.SubagentLifecycle() {
+		// A subagent's or in-process teammate's SessionStart or SessionEnd
+		// (SR-22.9): decided from the payload, before the gate and any write.
+		fields["upsert_outcome"] = string(store.UpsertNoChange)
+		emitIgnored(ctx, st, hc.ParentProc, ignoredHook{
+			instanceID:       instanceID,
+			event:            res.EventName,
+			sessionID:        res.SessionID,
+			parent:           parent,
+			reason:           store.HookReasonSubagentEvent,
+			silentWithoutRow: true,
+		})
+		return nil
+	}
+
+	// An ordinary hook carrying agent_id applies its transition but records
+	// no session id and no transcript path (SR-22.9).
+	sessionID, transcriptPath := res.SessionID, res.TranscriptPath
+	if res.AgentID != "" {
+		sessionID, transcriptPath = "", ""
+	}
 	gate := store.HookGate{
 		Event:       res.EventName,
 		ParentPID:   parent.pid,
 		ParentStart: parent.start,
-		SessionID:   res.SessionID,
+		SessionID:   sessionID,
 	}
-	jsonlPresent := transcriptPresent(res.TranscriptPath)
+	jsonlPresent := transcriptPresent(transcriptPath)
 
 	var applied store.HookApplied
 	if res.EventName == "SessionStart" {
 		var outcome store.UpsertOutcome
-		applied, outcome, err = recordSessionStart(st, instanceID, gate, res.TranscriptPath, jsonlPresent, logger)
+		applied, outcome, err = recordSessionStart(st, instanceID, gate, transcriptPath, jsonlPresent, logger)
 		fields["upsert_outcome"] = string(outcome)
 		if err != nil {
 			failClosed(fmt.Sprintf("record session start identity (instance=%s): %v", instanceID, err))
@@ -212,9 +242,9 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		// conservative sentinel.
 		var upsertOutcome store.UpsertOutcome
 		if ot, ok := st.(outcomeTransitioner); ok {
-			upsertOutcome, applied, err = ot.ApplyHookTransitionResult(instanceID, gate, res.NewState, res.SoftRefresh, res.EventName, res.TranscriptPath, jsonlPresent)
+			upsertOutcome, applied, err = ot.ApplyHookTransitionResult(instanceID, gate, res.NewState, res.SoftRefresh, res.EventName, transcriptPath, jsonlPresent)
 		} else {
-			applied, err = st.ApplyHookTransition(instanceID, gate, res.NewState, res.SoftRefresh, res.EventName, res.TranscriptPath, jsonlPresent)
+			applied, err = st.ApplyHookTransition(instanceID, gate, res.NewState, res.SoftRefresh, res.EventName, transcriptPath, jsonlPresent)
 			if err != nil {
 				upsertOutcome = store.UpsertError
 			} else {

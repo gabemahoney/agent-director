@@ -63,10 +63,14 @@ var matcherFields = map[hookEventName]bool{
 // dash does not exec its last command, so the hook's parent would be that
 // shell. In exec form the hook's getppid() is the Claude process itself —
 // the row's recorded pane process — which is what the hook gate compares
-// (SR-22.9). The README states the minimum Claude Code version (RN-9); a
-// version that ignores `args` never runs `<bin> hook` (Claude Code 2.1.120
-// runs `command` through /bin/sh with no verb), so no hook applies and the
-// row stays pending (SR-18.12).
+// (SR-22.9). The README states the minimum Claude Code version (RN-9). A
+// version that ignores `args` never runs `<bin> hook`: it runs `command`
+// through /bin/sh with no verb (Claude Code 2.1.120 does), so no hook applies
+// and the row stays pending until kill or find-missing (SR-18.12). Such a
+// no-verb run with a hook payload on stdin prints no help text (none reaches
+// the agent's context), exits 0 and writes ad.hook.ignored with reason
+// no_exec_form (SR-22.9, SR-14; cmd/agent-director noVerbHookIgnored), so the
+// trail says why.
 //
 // The inner `timeout` (seconds) is emitted ONLY on the two relay hook
 // entries (PermissionRequest, PreToolUse). It carries the effective relay

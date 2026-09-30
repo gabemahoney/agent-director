@@ -3,11 +3,12 @@ package main_test
 import "testing"
 
 // helpStdoutBytes is the measured byte count of `agent-director help` stdout
-// (trailing newline included) after the live-row sequence trim.
+// (trailing newline included) after the live-row sequence trim and the hook
+// description's subagent clause.
 //
 // SR-20.6: this guard checks growth only. Deliberate help growth updates this
 // constant, to the newly measured count, in the same commit as the change.
-const helpStdoutBytes = 13298
+const helpStdoutBytes = 13343
 
 // TestHelpSizeGuard fails when help stdout grows past the recorded
 // byte count plus 10% (SR-20.6).

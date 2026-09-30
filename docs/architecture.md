@@ -54,7 +54,7 @@ still holds: nothing in `internal/` imports `pkg/api`.
 
 | Path | Responsibility | Allowed imports | Prohibited imports |
 | --- | --- | --- | --- |
-| `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`; every store-backed verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. **DB-free exceptions:** `help`, `--help`, `version`, no-args (routes to help), and `trail-emit` are dispatched BEFORE `setupClient` so they never open or create `~/.agent-director` (SR-4.1/4.2); help/version run against a zero-value `Client` and consult no store. **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. | stdlib; `pkg/api`; `pkg/api/errnames`; `internal/hook`; `internal/config` and `internal/store` (error sentinels only) in `setupClient`; `internal/config` in `runHook` and `newHookLogger`. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook`, `newHookLogger`, and `setupClient`'s logger bootstrap. |
+| `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`; every store-backed verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. **DB-free exceptions:** `help`, `--help`, `version`, the no-verb run (no verb after the global flags, so a run with only global flags counts), and `trail-emit` are dispatched BEFORE `setupClient` so they never open or create a store (SR-4.1/4.2, b.8dr); help/version run against a zero-value `Client` and consult no store. The no-verb run prints help, except that when stdin is not a terminal and carries a hook payload (a Claude Code that does not run exec-form hooks, SR-22.9) it prints nothing, exits 0 and writes one `ad.hook.ignored` `no_exec_form`, still with no store and no config load; the trail file is the only thing it may create (`noVerbHookIgnored` in `noverb.go`, which reads stdin with a 1 MiB cap and a 1 s deadline and hands the bytes to `hook.HandleNoExecForm`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `help`, `--help` and `version` never read stdin. **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. | stdlib; `pkg/api`; `pkg/api/errnames`; `internal/hook`; `internal/probe` (the hook's parent-process readers, `hookParentProc`, shared by `runHook` and the no-verb run); `golang.org/x/sys/unix` (the no-verb run's terminal check, `isTerminal`, with the per-OS `ioctlReadTermios` in `noverb_linux.go` / `noverb_darwin.go`); `internal/config` and `internal/store` (error sentinels only) in `setupClient`; `internal/config` in `runHook` and `newHookLogger`. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook`, `newHookLogger`, and `setupClient`'s logger bootstrap. |
 | `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, etc.), params/result types, and error sentinels (the seven tmux sentinels of SR-1.1 are all re-exported in `aliases.go`). Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director` and `internal/mcp`. **`kill` seams** (`kill.go`): `KillStore` (`GetSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`; `*store.Store` satisfies it), `KillTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `KillPane`, `KillSessionID`; `TmuxClient` satisfies it) and the start-time reader `ProcChecker`; `Kill` also takes the three `[tmux]` durations, the clock and the sleep, and has no logger. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the eight socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the three name-based ones (`HasSession`, `SendKeys`, `CapturePane`); `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`; it also re-exports the start-time reader interface as `ProcChecker` (`= tmux.ProcChecker`). The Client holds its clock (`time.Now`), its sleep (`time.Sleep`, the pause of `kill`'s process wait) and its start-time reader (`probe.NewProcChecker()`), all set in `New`; plain spawn uses the clock and reader for the launch start and the identity write, and `kill` uses all three for its lookup, adoption and process wait; `find-missing` measures the pending grace period on the same clock, with the value from `EffectivePendingGrace`. The label scan of a plain spawn lives in `spawn_scan.go` (see [Launch identity](#launch-identity)). `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`. | Direct `database/sql`; raw SQL strings; MCP framing. |
 | `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v5; see "Schema v5" below), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default; a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
@@ -64,7 +64,7 @@ still holds: nothing in `internal/` imports `pkg/api`.
 | `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
 | `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). `ApplyDefaults` makes the collision pre-check's one `SpawnState` read and returns an `IDCheck`. Builds env maps and synthesizes `--settings` JSON. Plain spawn's `Launch` resolves the launch socket and mints the launch token (`launchid.go`: `ResolveLaunchSocket`, `ResolveScanSocket`, `NewLaunchToken`, and `ResolveQuerySocket` for a query on a row that records no socket), inserts the `pending` row with launch start, token and socket, creates and labels the session through the shared create-and-label step (`createlabel.go`: `LaunchTmux`, `CreateRequest`, `CreateAndLabel`, `CreateOutcome` / `CreateKind`), maps its failures in one place (`launch_errors.go`: `plainSpawnCreateError`, built from the exported description builders shared by every launch verb, `TmuxUnavailableError` (also the label scan's), `LaunchTimeoutError`, `UnlabelledSessionError`, `CreateFailedError` and the row sentence `RowStaysPending`) and makes the conditional identity write (`RecordLaunchIdentity`, shared with resume). Every launch pre-trusts its folder through the one shared step `PreTrust` (`pretrust.go`), which plain spawn runs before its insert and resume before its move to `pending`; see [Workspace-trust pre-write](#workspace-trust-pre-write). Resume's launch uses the same pieces: `ResolveRowLaunchSocket` (the row's recorded socket), `ComposeRelaunch` (the `CreateRequest`, with no tmux call or write) and `Relaunch` (`CreateAndLabel` on that request). The clock and the start-time reader are passed in. See [Launch identity](#launch-identity). | stdlib; `internal/config`; `internal/store`; `internal/tmux`; `github.com/google/uuid` for UUID4 minting. | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
 | `internal/tmux` | Thin client over the tmux binary, built only by `New(binary, Timeouts)` (`""` = tmux on `PATH`). **Phase 1 call set (SR-2.1, Appendix F.1)**, every call taking the socket: `Lookup` (the one-invocation lookup: session listing with labels plus the three `@ad_owner` scope reads), `ListPanes` (`list-panes -a`), `KillPane` (by pane id), `KillSessionID` (by session id), `SendKeysPane` (by pane id: the text call `send-keys -t <pane id> -l -- <text>`, then an optional separate `send-keys -t <pane id> Enter`; the `--` makes a text starting with `-` literal, never read as a send-keys flag; a text ending in `;` is sent with that `;` escaped as `\;`, because tmux reads an argument-final `;` as a command separator even after `--` — the escape is `escapeFinalSemicolon`, used only by the text call), `CapturePaneID` (by pane id), `SetLabel` (label by id: the session label by session id and the pane label by pane id) and `NewSession` (the create with its chained `@ad_owner` and `@ad_pane` labels). **Label form (SR-3.4, SR-3.5):** `ad1 <token> <$N> <instance id> <store id>`, five fields. The store id is the writing store's `store_meta.store_id`, which callers pass from `(*store.Store).StoreID()`; it is the last field, so the instance id is everything between the third and the last space and may contain spaces. `NewSession` and `SetLabel` both take the token, the instance id and the store id; the chain doubles `#` only inside the instance id. **Pane label (SR-2.1, SR-3.5):** every created pane carries the per-pane user option `@ad_pane` = `<token> <pane id>`, so a launch whose create reply was lost can later find its own pane by token, whatever the base-index or window layout. The create sets it with a second chained step, `; set-option -p -F -t =<name>: @ad_pane '<token> #{pane_id}'`, after the `@ad_owner` step; each `;` is its own argv element, and a name for which `NeedsLabelByID` holds gets neither chained step. A failure of either chained step is the create's `FailLabel` (tmux stops the chain at the first failing step). `SetLabel(socket, sessionID, paneID, token, instanceID, storeID)` sets both labels in one invocation, `set-option -t <$N> @ad_owner '<label>' ; set-option -p -t <%N> @ad_pane '<token> <%N>'`, with the session and pane ids from the create reply; a failure may leave the session labelled and its pane not. Neither label value ends in `;`. Only the new session's one pane is labelled: a pane split from it later has no value. **Pane listing:** `ListPanes` reads `#{@ad_pane}` as the sixth and last field, the value being everything after the fifth tab, so a tab inside it cannot shift the other fields. `Pane.AdPane` is the token only when the value is exactly `<16 lowercase hex token> <pane id>` and that pane id equals the line's own `%N` (`classifyPaneLabel`); anything else gives `""`, so a window, session, global or server value borrowed through the format, which names another pane or none, never counts (the scope guard of SR-3.6). Caveat: on tmux 3.3a a server-scope `@ad_pane` (`set-option -s`) is listed on every pane in place of its own value, so while one exists only the pane that value names can report a token and every other pane reads `""`; no other pane is matched, but a pane reading `""` then does not show that its label is gone. The raw value never leaves the client, and a malformed listing's `CallError.FirstLine` is its first line cut before the pane label field (`paneListingFirstLine`). The lookup does not read `@ad_pane`. `kill`'s adoption of a lost create reply (SR-3.6) is its first reader; it also exists for the leftover-pane check (SR-3.7) and the no-pane row check (SR-11.3). A value in any other form, a four-field one included, parses as no label (`LabelNone`), except that a four-field value whose instance id ends in a space and 16 lowercase hex reads as a shorter id plus that word as its store id; and `Label.StoreID` is set only on a valid label. Typed results and failures: `Call`, `Failure`, `CallError`, `LookupAnswer`, `Session`, `Label` / `LabelKind`, `CreateReply`, `Pane`, `Timeouts`. Mechanics: every call runs `-u -S <socket>` first; targets are ids only (never a name or pattern); each call class (query, action, create) has its own timeout, plus the pipe-close wait (`Timeouts.WaitDelay`); data is parsed only from standard output of an exit-0 call; replies are recognised only from the first line of standard error; the client's environment has every `AGENT_DIRECTOR_*` variable removed. Socket-taking calls fail only with `*CallError`. Labels reach callers only classified (the raw value never leaves the client) and recognised replies only as a `Failure`; the one exception is an unrecognised reply, whose first line (trimmed, at most 200 bytes) is carried in `CallError.FirstLine`. **Socket resolution (RN-5):** `ResolveSocket(create)` resolves the socket as tmux does (`TMUX`, then `TMUX_TMPDIR`, then `/tmp`, with tmux's per-user directory checks) and `EnsureSocketDir(socket)` creates only a missing per-user directory; refusals are `*SocketDirError` (with `SocketDirReason`), matching `ErrTmuxNotAvailable`. **Must use** `tmux.NeedsLabelByID(name)` to decide whether a session name (one containing `$` or `\`) must be labelled by id rather than by the chain; never re-implement that test. The client receives its timeouts and pipe-close wait from `pkg/api` at construction, never from `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); the package defines no defaults. The runner seam types (`Invocation`, `RunStatus`, `RunResult`, `Runner`) are exported for replay tests; tests install a runner only through the test-only `NewWithRunner` in `export_test.go`. The name-based methods (`HasSession`, `SendKeys`, `CapturePane`) keep their contracts until their last verb moves to the socket-taking calls; the name-based kill is removed (`kill` targets ids only). `HasSession` matches by prefix: `resume` still calls it until it moves to the lookup, and no verb may newly adopt it. `StripANSI` post-processes captures. **Shared lookup (SR-3.3, SR-3.4, SR-3.10, Appendix F.2):** `Lookup` / `Classify` in `lookup.go`, `lookup_class.go`, `lookup_holder.go` and `lookup_server.go` turn one lookup answer and a row's `Launch` into a verdict; see [Shared tmux lookup](#shared-tmux-lookup). Beside it: `unusable.go` (the unusable-name guard `Unusable`, and `RewrittenIn`), `agent_process.go` (agent-process selection `SelectAgentProcess`, judgement `JudgeProcess` and `KnownStartTime`), `pane_token.go` (`PaneByToken`, a pane found by its `@ad_pane` token) and `sweep.go` (the multi-socket sweep `Sweep`, built by `NewSweep`, under one tmux budget). | stdlib (`bytes`, `context`, `errors`, `fmt`, `io/fs`, `os`, `os/exec`, `path/filepath`, `regexp`, `slices`, `sort`, `strconv`, `strings`, `syscall`, `time`, `unicode`, `unicode/utf8`). | `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); `internal/probe` (the lookup's `ProcChecker` is satisfied structurally); template and store packages; shell processes (`/bin/sh`); anything other than direct `exec.Command`. |
-| `internal/hook` | Reads payload JSON from stdin, classifies per SRD §5.2, and writes the row only through the gated store writes: a hook applies only when its parent process (`getppid()` and that pid's start time, captured once at entry) is the row's recorded pane process; otherwise it changes nothing and writes one `ad.hook.ignored` (SR-22.9; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). Exits 0 (state-tracking fail-open). | stdlib; `internal/store`; `internal/trail`; `internal/config` (the `config.Relay` settings type only; the cmd-side wrapper loads config); `github.com/google/uuid`. The parent-process readers arrive as `HandleConfig.ParentPID` / `ParentProc`, wired by `cmd/agent-director`. | `internal/tmux`; `internal/spawn`; `internal/probe` (no tmux call and no ancestry walk on the hook path). |
+| `internal/hook` | Reads payload JSON from stdin, classifies per SRD §5.2, and writes the row only through the gated store writes: a hook applies only when its parent process (`getppid()` and that pid's start time, captured once at entry) is the row's recorded pane process; otherwise it changes nothing and writes one `ad.hook.ignored` (SR-22.9; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). A subagent's or in-process teammate's SessionStart or SessionEnd (non-empty `agent_id`) is decided from the payload before any write and ignored as `subagent_event`. `HandleNoExecForm` (`noexec.go`) is the no-verb run's side: it takes the raw stdin bytes, writes `ad.hook.ignored` `no_exec_form` when they are a hook payload, and opens no store. Exits 0 (state-tracking fail-open). | stdlib; `internal/store`; `internal/trail`; `internal/config` (the `config.Relay` settings type only; the cmd-side wrapper loads config); `github.com/google/uuid`. The parent-process readers arrive as `HandleConfig.ParentPID` / `ParentProc`, wired by `cmd/agent-director`. | `internal/tmux`; `internal/spawn`; `internal/probe` (no tmux call and no ancestry walk on the hook path). |
 
 ### `[tmux]` timing settings
 
@@ -1561,7 +1561,8 @@ pending   (keeps its session id and history)
 any state
   │
   ▼   a hook the gate does not apply (another process's, or any hook
-  │   before the row records its pane)
+  │   before the row records its pane), or a subagent's or in-process
+  │   teammate's SessionStart / SessionEnd (agent_id in the payload)
 unchanged   (nothing written; one ad.hook.ignored)
 ```
 
@@ -1581,11 +1582,13 @@ unchanged   (nothing written; one ad.hook.ignored)
 | `SessionEnd` | any other reason | `ended` (also sets `ended_at`) |
 | unknown event | — | soft refresh + info-level log entry |
 | any event | the gate does not apply (the hook's parent is not the row's recorded pane process, or the row records no pane) | unchanged; one `ad.hook.ignored` |
+| `SessionStart`, `SessionEnd` | the payload carries a non-empty `agent_id` (a subagent or in-process teammate), any reason or source | unchanged, decided before the gate; one `ad.hook.ignored` `subagent_event` (none when no row has the id) |
 
 Every ordinary (non-SessionStart) hook that applies to a row with no
 recorded `claude_session_id` also records the payload's session id and
 transcript path (presence rule) in the same write; a row that already
-records one keeps it.
+records one keeps it. An ordinary hook whose payload carries `agent_id`
+records neither.
 
 `missing` is set by `find-missing`'s mark, and written back by a failed
 resume's restore when the row was `missing` before the move.
@@ -1622,6 +1625,53 @@ hook` directly, with no `sh` between them. The hook's parent
 (`getppid()`) is then the Claude process that fired it. A shell-form
 entry would put an `sh` there (dash does not exec its last command), and
 the parent would be that shell.
+
+A Claude Code older than the exec-form minimum ignores `args` and runs
+`command`, the bare binary, through `/bin/sh`, so each of its hooks runs
+`agent-director` with no verb and the payload on stdin; no hook applies.
+The no-verb run detects this (`noVerbHookIgnored`,
+`cmd/agent-director/noverb.go`): when stdin is not a terminal it reads at
+most `hook.MaxPayloadBytes` (1 MiB), bounded by `noVerbStdinDeadline`
+(1 s, a timer around a goroutine read, since an inherited blocking stdin
+has no read deadline), and passes the bytes to `hook.HandleNoExecForm`
+(`internal/hook/noexec.go`). Input counts as a hook payload only when it
+is a JSON object whose `hook_event_name` is a non-empty string
+(`noExecFormPayload`; the `event_name` alias that `PeekEventName`
+accepts does not count). Then the run prints nothing, exits 0, runs no
+hook logic and writes one `ad.hook.ignored` `no_exec_form`
+(`emitNoExecForm`), with no store, no config load, no `ad.hook.fired`
+and no logger, so nothing reaches stderr. Anything else (a terminal, a
+read error, empty input, input over 1 MiB, input still open at the
+deadline, or input that is not a hook payload) prints help as before.
+The run happens after the global flags and `--home` are applied, so the
+record lands under that home. `help`, `--help` and `version` never read
+stdin. The installed persistent hooks and the per-Spawn
+`inject_help_hook` entry are shell form with an explicit `help` verb, so
+this check never applies to them.
+
+**Subagents and in-process teammates.** Claude Code runs every subagent,
+and an in-process agent-team teammate's turns, inside the agent's own
+process, so their hooks pass the gate; the payload marks them with a
+non-empty `agent_id` (`ClassifyResult.AgentID`, `internal/hook/classify.go`).
+`agent_type` alone (a session started with `--agent`) does not mark one
+and is not read.
+
+- **SessionStart and SessionEnd** with `agent_id`
+  (`ClassifyResult.SubagentLifecycle`) are decided from the payload in
+  `hook.Handle`, before the gate and before any write: nothing is written
+  to the row, stdout stays empty, `ad.hook.fired` carries
+  `upsert_outcome` `no_change`, and `emitIgnored` writes one
+  `ad.hook.ignored` with reason `subagent_event`
+  (`store.HookReasonSubagentEvent`). `emitIgnored`'s one row read carries
+  the no-row rule (`ignoredHook.silentWithoutRow`): when no row has the
+  id, nothing is written, as for the other hook-path reasons. So a
+  subagent can neither replace the row's session id (which `resume` uses)
+  nor end a live row.
+- **Every other hook** with `agent_id` goes through the gate as any hook
+  does and applies its state transition, but the handler passes an empty
+  session id (in the `store.HookGate`) and an empty transcript path, so
+  it records neither. A relayed PermissionRequest from a subagent uses the
+  row's relay.
 
 **Capture.** `hook.Handle` captures the parent once, at entry, before any
 store call (`captureParent`, `internal/hook/gate.go`): the pid from
@@ -1671,6 +1721,7 @@ relay's `UpsertOpenPermissionRequest` / `UpsertOpenPermissionRequestResult`
 | Row | Result |
 |---|---|
 | no row with the id | `HookApplied{}`, no reason: today's silent no-op, no `ad.hook.ignored` |
+| a subagent's SessionStart / SessionEnd (never reaches the store write) | reason `subagent_event` (`store.HookReasonSubagentEvent`), set by the handler from the payload before any write; none when no row has the id |
 | `pane_pid` NULL | reason `no_pane_recorded` (`store.HookReasonNoPaneRecorded`), even with an unreadable parent start time |
 | SessionStart, gate holds (only the snapshot changed) | `snapshotChanged`: the handler re-reads and retries once; a second change logs one line and writes no `ad.hook.ignored` |
 | anything else | reason `pid_mismatch` (`store.HookReasonPIDMismatch`) |
@@ -1681,7 +1732,10 @@ stdout (a relayed PermissionRequest returns no decision, so the process's
 own Claude Code asks as it would with no relay), and, when there is a
 reason, writes exactly one `ad.hook.ignored` (`emitIgnored`,
 `internal/hook/gate.go`; see [`ad.*` event
-namespace](#ad-event-namespace)). Its `ad.hook.fired` carries
+namespace](#ad-event-namespace)). A store write reports only
+`pid_mismatch` or `no_pane_recorded`; the other two of SR-14's four
+reasons are decided before any store write: `subagent_event` by the
+handler, `no_exec_form` by the no-verb run (with no store at all). Its `ad.hook.fired` carries
 `upsert_outcome` `no_change`.
 
 **SessionStart is one statement.** An applied SessionStart sets
@@ -1702,7 +1756,18 @@ reports
 (`internal/store/hook_gate.go`). No ungated hook write exists in
 production code; never add one, and never check the gate in a separate
 read before the write. An ordinary hook records the session id only
-through `hookSessionRecordSet`.
+through `hookSessionRecordSet`; a hook whose payload carries `agent_id`
+passes an empty session id in its `store.HookGate` (and an empty
+transcript path), so that fragment records nothing. The `ad.hook.ignored`
+reason constants (`store.HookReasonPIDMismatch`,
+`store.HookReasonNoPaneRecorded`, `store.HookReasonSubagentEvent`,
+`store.HookReasonNoExecForm`) live together in
+`internal/store/hook_gate.go`; a new reason goes beside them. Every
+`ad.hook.ignored` record's SR-14 fields come from the one builder
+`ignoredFields` (`internal/hook/gate.go`), which `emitIgnored` (hook
+path, then filling `row_session_id` / `row_pane_pid` from its row read)
+and `emitNoExecForm` (no-verb path, row fields null) both use; never
+build those fields elsewhere.
 
 **No resolver, no tmux.** The hook path makes no tmux call and walks no
 process ancestry: `internal/hook` imports neither `internal/tmux` nor
@@ -1720,18 +1785,22 @@ because the process is the same, and SessionStart records the new session
 id. An `ended` row stays `ended` against every other process's hooks:
 only the row's own agent, or a verb such as `resume`, moves it again. The
 ended transition therefore comes only from the row's own agent (or from
-agent-director's own writes).
+agent-director's own writes). A subagent's or in-process teammate's
+SessionStart and SessionEnd (`agent_id`) are rejected too, even from the
+pane process; its other hooks are kept but record no session id.
 
 **Residuals (SR-18.12).** A nested `claude`'s and a teammate pane's hooks
 are ignored, so their work is not reflected in the row. A row whose
 create reply was lost takes no hook, and stays `pending`, until its pane
 is adopted by `@ad_pane`; no verb adopts a pane yet. A Claude Code
-version that does not run exec-form hooks never applies a hook, so its
-rows stay `pending`: the SRD expects such hooks to be ignored as
-`pid_mismatch`, but Claude Code 2.1.120 (the Docker pin) ignores `args`
-and runs the binary through `/bin/sh` with no verb, so there is no hook
-invocation and no `ad.hook.ignored` at all (RN-9; the README states the
-minimum version). Other agent
+version that does not run exec-form hooks (Claude Code 2.1.120, the
+Docker pin, is one) never applies a hook, so its rows stay `pending`
+until `kill` or `find-missing`; each of its hooks writes
+`ad.hook.ignored` `no_exec_form`, so the trail says why (RN-9; the
+README states the minimum version). Subagents' and in-process teammates'
+tool and permission events move the row's state and use its relay, so a
+row can read `working` while only they work: the row reflects the
+process. Other agent
 CLIs are unsupported in this release: agent-director launches only
 Claude Code. `respawn-pane` of the agent's pane changes the pane pid, so
 the agent's hooks are then ignored, visibly.
@@ -2242,7 +2311,9 @@ Layer boundaries (load-bearing):
   trail record. `pkg/api` passes the Client's clock (`time.Now`) and
   start-time reader (`probe.NewProcChecker()`) down to `spawn.Launch`.
 - `internal/hook` calls `internal/store` (the gated hook writes, and one
-  `GetSpawn` read for SessionStart's snapshot and for `ad.hook.ignored`).
+  `GetSpawn` read for SessionStart's snapshot and for `ad.hook.ignored`;
+  `HandleNoExecForm`, the no-verb run's `no_exec_form` path, makes no
+  store call).
   Never `internal/tmux`, never `internal/spawn`, never `internal/probe`:
   `cmd/agent-director` wires the hook's parent-process readers in
   (`hook.HandleConfig.ParentPID`, `ParentProc`).
@@ -3483,7 +3554,7 @@ are also emitted but are not listed here.
 | Event | Source | Description |
 |-------|--------|-------------|
 | `ad.hook.fired` | `ad_hook` | One per `agent-director hook` invocation — records the hook payload and caller identity (SR-A-2.1, Epic 1) |
-| `ad.hook.ignored` | `ad_hook` | Exactly one per hook the gate did not apply (SR-22.9; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)), fail-open: a trail-write failure changes nothing and the hook still exits 0. Emitted by `emitIgnored` (`internal/hook/gate.go`). Carries `claude_instance_id`, `hook_event`, `reason` (`pid_mismatch`: the hook's parent process, with its start time, is not the row's recorded pane process; `no_pane_recorded`: the row records no pane), `parent_pid`, `parent_command` (the parent's command name from `probe.CommandNameReader`, read only for this record; null when unreadable), `hook_session_id` (null when the payload gives none), `row_session_id` and `row_pane_pid` (from one read of the row; null when the row records none or the read fails; `row_pane_pid` is build-lead decision A4). Not written for a hook whose id has no row, or for a SessionStart that lost to a changed row twice. Never another row's id or any session-environment content (SR-14, SR-15) |
+| `ad.hook.ignored` | `ad_hook` | Exactly one per hook SR-22.9 did not apply (see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)), fail-open: a trail-write failure changes nothing and the hook still exits 0. Emitted by `emitIgnored` (`internal/hook/gate.go`) on the hook path and by `emitNoExecForm` (`internal/hook/noexec.go`, called from `cmd/agent-director`'s no-verb run through `hook.HandleNoExecForm`); both build the fields with `ignoredFields`. Carries `claude_instance_id`, `hook_event`, `reason` (one of four: `pid_mismatch`: the hook's parent process, with its start time, is not the row's recorded pane process; `no_pane_recorded`: the row records no pane; `subagent_event`: a SessionStart or SessionEnd whose payload carries a non-empty `agent_id`, decided before any write; `no_exec_form`: a no-verb run given a hook payload on stdin, from a Claude Code that does not run exec-form hooks, written with no store access, so `row_session_id` and `row_pane_pid` are always null and `claude_instance_id` is null when the environment has none or an invalid one), `parent_pid`, `parent_command` (the parent's command name from `probe.CommandNameReader`, read only for this record; null when unreadable), `hook_session_id` (null when the payload gives none), `row_session_id` and `row_pane_pid` (from one read of the row; null when the row records none or the read fails; `row_pane_pid` is build-lead decision A4). On the hook path, not written for a hook whose id has no row (`subagent_event` included), or for a SessionStart that lost to a changed row twice; `no_exec_form` reads no row and is always written. No `ad.hook.fired` accompanies a `no_exec_form` record. Never another row's id or any session-environment content (SR-14, SR-15) |
 | `ad.spawn.state_transition` | `ad_spawn_store` | One per applied hook write (`ApplyHookTransition`, `RecordSessionStartIdentity`), including same-state writes, soft-refresh ticks and the gated `working` hold; a hook the gate did not apply emits none. SessionStart on a resumed row records `prior_state` `pending`. Hook-driven writes are the only ones that emit it: a spawn's insert and `find-missing`'s mark never did, and `resume`'s move and restore do not (their own `ad.resume.*` events record them) (SR-A-2.2, SR-14) |
 | `ad.row_mutation.committed` | `ad_store` | One per successful write to `permission_requests` (SR-A-2.6, Epic 3) |
 | `ad.decide.called` | `ad_decide` | One per `agent-director decide` invocation on every return path, carrying an `outcome` field set to the canonical err_name (or `ok`). Recognized failure outcomes include the no-op refusals `ErrAlreadyDecided` and `ErrRelayFallenBack` (a fallen-back refusal is a recognized outcome, not `ErrInternal`) (SR-A-2.4, Epic 4) |
@@ -3504,7 +3575,7 @@ The `source` field identifies which emitter wrote the line:
 
 | Value | Emitter |
 |-------|---------|
-| `ad_hook` | `internal/hook/handler.go` — the hook ingestion handler (`ad.hook.fired`); `internal/hook/gate.go` — `ad.hook.ignored` |
+| `ad_hook` | `internal/hook/handler.go` — the hook ingestion handler (`ad.hook.fired`); `internal/hook/gate.go` — `ad.hook.ignored` on the hook path (`emitIgnored`); `internal/hook/noexec.go` — `ad.hook.ignored` `no_exec_form` (`emitNoExecForm`), called from the no-verb run in `cmd/agent-director/noverb.go` |
 | `ad_spawn_store` | `internal/store/hook_writes.go` — the gated hook writes (`ad.spawn.state_transition`, and SessionStart's `ad.session.archived` / `ad.session.archive_failed`); `internal/store/session_history.go` — `ad.session.jsonl_healed` |
 | `ad_store` | `internal/store/permission.go` — permission-request row mutations |
 | `ad_decide` | `pkg/api/decide.go` and `cmd/agent-director/spawn_cmd.go` — decide verb |
@@ -4998,7 +5069,8 @@ hook surface) are recorded in `reference/*-research.md`.
 
 Claude Code 2.1.120 starts with exec-form hook settings but ignores the
 exec form's `args` and runs `command` through `/bin/sh`, so a real 2.1.120
-agent's hooks would run `agent-director` with no verb and never apply. No
+agent's hooks would run `agent-director` with no verb and never apply;
+each would print nothing and write `ad.hook.ignored` `no_exec_form`. No
 Docker case relies on a real Claude Code hook (the pinned agent stops at
 first-run onboarding and sends none): every case that needs a hook uses
 the stand-in pattern below. A future case that needs a real agent's hook
@@ -5051,6 +5123,14 @@ except to assert that such a hook is ignored. Instead:
   driver's shell with `AGENT_DIRECTOR_INSTANCE_ID="$id"` and asserts the
   row is unchanged and `~/.agent-director/ad-trail.jsonl` holds an
   `ad.hook.ignored` with `reason` `pid_mismatch`.
+- The no-verb case (`spawn-21-no-verb-hook-payload`, `t2.75s.qo.7v` in
+  `epic-03-spawn`) needs no stand-in and no row: it pipes a SessionStart
+  payload into `agent-director` with no verb from the driver's shell and
+  asserts empty stdout and stderr, exit 0, no `state.db`, and exactly one
+  `ad.hook.ignored` `no_exec_form` (with `parent_pid` the case shell's
+  pid and null row fields) selected by its own instance and session ids,
+  and that `</dev/null` and a non-hook JSON object still print help
+  byte-identical to `agent-director help`.
 
 **Must use:** every Docker case that needs a hook to apply spawns with the
 stand-in and fires the hook through `pane-hook.sh`; never hand-roll the

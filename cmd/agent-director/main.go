@@ -62,32 +62,33 @@ const configPath = "~/.agent-director/config.toml"
 //
 // The DB-free static-data verbs `help`, `--help`, and `version` remain in this
 // table for the unknown-verb-free lookup shape, but run() dispatches them (and
-// the no-args → help case) BEFORE setupClient with a zero-value Client, so on
-// the normal path these entries are never reached (SR-4.1/4.2, b.93m). Their
+// the no-verb case: help, or nothing for a hook payload on stdin, SR-22.9)
+// BEFORE setupClient with a zero-value Client, so on the normal path these
+// entries are never reached (SR-4.1/4.2, b.93m). Their
 // closures here are the store-backed fallback only and behave identically —
 // helpHandler ignores its client and versionHandler consults no store.
 func handlers(client *pkgapi.Client, cfg config.Config) map[string]func([]string) error {
 	return map[string]func([]string) error{
-		"help":              func(args []string) error { return helpHandler(client, args) },
-		"--help":            func(args []string) error { return helpHandler(client, args) },
-		"version":           func(args []string) error { return versionHandler(client, args) },
-		"spawn":             func(args []string) error { return spawnHandlerWith(client, args) },
-		"status":            func(args []string) error { return statusHandlerWith(client, args) },
-		"get":               func(args []string) error { return getHandlerWith(client, args) },
-		"send-keys":         func(args []string) error { return sendKeysHandlerWith(client, args) },
-		"read-pane":         func(args []string) error { return readPaneHandlerWith(client, args) },
-		"kill":              func(args []string) error { return killHandlerWith(client, args) },
-		"pause":             func(args []string) error { return pauseHandlerWith(client, args) },
-		"list":              func(args []string) error { return listHandlerWith(client, args) },
-		"make-template":     func(args []string) error { return makeTemplateHandlerWith(client, args) },
-		"decide":            func(args []string) error { return decideHandlerWith(client, args) },
-		"get-permission":    func(args []string) error { return getPermissionHandlerWith(client, args) },
-		"resume":            func(args []string) error { return resumeHandlerWith(client, args) },
-		"find-missing":      func(args []string) error { return findMissingHandlerWith(client, args) },
-		"expire":            func(args []string) error { return expireHandlerWith(client, args) },
-		"delete":            func(args []string) error { return deleteHandlerWith(client, args) },
-		"serve":             func(args []string) error { return serveHandlerWith(cfg, args) },
-		"trail-emit":        func(args []string) error { return trailEmitHandlerWith(args) },
+		"help":           func(args []string) error { return helpHandler(client, args) },
+		"--help":         func(args []string) error { return helpHandler(client, args) },
+		"version":        func(args []string) error { return versionHandler(client, args) },
+		"spawn":          func(args []string) error { return spawnHandlerWith(client, args) },
+		"status":         func(args []string) error { return statusHandlerWith(client, args) },
+		"get":            func(args []string) error { return getHandlerWith(client, args) },
+		"send-keys":      func(args []string) error { return sendKeysHandlerWith(client, args) },
+		"read-pane":      func(args []string) error { return readPaneHandlerWith(client, args) },
+		"kill":           func(args []string) error { return killHandlerWith(client, args) },
+		"pause":          func(args []string) error { return pauseHandlerWith(client, args) },
+		"list":           func(args []string) error { return listHandlerWith(client, args) },
+		"make-template":  func(args []string) error { return makeTemplateHandlerWith(client, args) },
+		"decide":         func(args []string) error { return decideHandlerWith(client, args) },
+		"get-permission": func(args []string) error { return getPermissionHandlerWith(client, args) },
+		"resume":         func(args []string) error { return resumeHandlerWith(client, args) },
+		"find-missing":   func(args []string) error { return findMissingHandlerWith(client, args) },
+		"expire":         func(args []string) error { return expireHandlerWith(client, args) },
+		"delete":         func(args []string) error { return deleteHandlerWith(client, args) },
+		"serve":          func(args []string) error { return serveHandlerWith(cfg, args) },
+		"trail-emit":     func(args []string) error { return trailEmitHandlerWith(args) },
 	}
 }
 
@@ -169,19 +170,27 @@ func runHook() int {
 	// start-time reader and its command name (for ad.hook.ignored only,
 	// SR-14) from the command-name reader.
 	hc := hook.HandleConfig{
-		Env:       hook.OSGetenv,
-		Cfg:       cfg.Relay,
-		Clock:     hook.DefaultPollClock(),
-		ParentPID: os.Getppid,
-		ParentProc: struct {
-			probe.ProcChecker
-			probe.CommandNameReader
-		}{probe.NewProcChecker(), probe.NewCommandNameReader()},
+		Env:        hook.OSGetenv,
+		Cfg:        cfg.Relay,
+		Clock:      hook.DefaultPollClock(),
+		ParentPID:  os.Getppid,
+		ParentProc: hookParentProc(),
 	}
 	if err := hook.Handle(context.Background(), bytes.NewReader(stdinRaw), stdout, st, hc, logger); err != nil {
 		hookLog(logger, "hook: handle: %v", err)
 	}
 	return hookExitCode
+}
+
+// hookParentProc is the hook's parent-process reader: the per-OS start-time
+// reader (the gate, SR-22.9) and command-name reader (ad.hook.ignored's
+// parent_command only, SR-14). runHook and a no-verb run's hook check
+// (noVerbHookIgnored) share it.
+func hookParentProc() hook.ParentProc {
+	return struct {
+		probe.ProcChecker
+		probe.CommandNameReader
+	}{probe.NewProcChecker(), probe.NewCommandNameReader()}
 }
 
 // newHookLogger opens the configured error_log_path (best-effort) and
@@ -287,8 +296,11 @@ func writeError(w io.Writer, name, desc string) error {
 	return err
 }
 
-// dispatch picks a handler for argv and invokes it. argv is os.Args[1:].
-// No-args routes to help (PM call, see Subtask 1.2 spec).
+// dispatch picks a handler for argv and invokes it. argv is the verb and its
+// arguments, global flags stripped. run() handles the no-verb case itself
+// before setupClient (help, or nothing for a hook payload on stdin, SR-22.9),
+// so an empty argv reaches dispatch only from a direct caller; it routes to
+// help (PM call, see Subtask 1.2 spec).
 //
 // On unknown verb it writes the JSON envelope to stderr and returns
 // errDispatch so the caller can set a non-zero exit code without
@@ -391,10 +403,18 @@ func setupClient(gOpts globalOptions) (*pkgapi.Client, config.Config, error) {
 // Startup wiring (config + store) runs on every STORE-BACKED invocation to
 // satisfy Epic 1 AC #4 (idempotent dir/file creation) and AC #5
 // (ErrSchemaMismatch surfaces). The DB-free verbs below never reach it: help,
-// --help, version, no-args (routes to help), and trail-emit are dispatched
-// before setupClient so they neither open nor create ~/.agent-director
-// (SR-4.1/4.2). ErrSchemaMismatch now surfaces on a store-opening verb (e.g.
-// `list`), not on `help`.
+// --help, version, the no-verb run, and trail-emit are dispatched before
+// setupClient so they neither open nor create ~/.agent-director (SR-4.1/4.2).
+// ErrSchemaMismatch now surfaces on a store-opening verb (e.g. `list`), not on
+// `help`.
+//
+// The no-verb run (no verb after the global flags, which counts a run with
+// only global flags) prints help, except for a hook from a Claude Code that
+// does not run exec-form hooks (SR-22.9): when stdin is not a terminal and
+// carries a hook payload (read with a 1 MiB cap and a 1 s deadline), it prints
+// nothing, exits 0 and writes one ad.hook.ignored no_exec_form to the trail
+// under the (possibly --home) home, with no config load and no store
+// (noVerbHookIgnored). `help`, `--help` and `version` never read stdin.
 //
 // The hook verb is special-cased: it bypasses the normal store-setup-and-
 // dispatch path so every failure mode is fail-open per SRD §3.2. The
@@ -453,8 +473,8 @@ func run() int {
 		return 0
 	}
 
-	// help / --help / version / no-args (routes to help): DB-free static-data
-	// verbs — special-cased before setupClient so they never open or create
+	// help / --help / version / no verb: DB-free static-data verbs —
+	// special-cased before setupClient so they never open or create
 	// ~/.agent-director (SR-4.1/4.2, t3.93m.nr.om.wq). This closes the path by
 	// which the npm client's version probe rewrote the prod DB (b.8dr) and lets
 	// every SessionStart hook (`agent-director help`) fire without touching the
@@ -463,12 +483,20 @@ func run() int {
 	// its client; versionHandler only calls checkClosed + pure data, so a
 	// non-nil zero-value &Client{} (closed=false) passes and stdout is
 	// byte-identical to the setupClient path. Error mapping mirrors trail-emit.
+	//
+	// No verb prints help unless stdin carries a hook payload from a Claude
+	// Code that does not run exec-form hooks: then nothing on stdout, exit 0,
+	// and one trail record (SR-22.9; noVerbHookIgnored). The check runs here,
+	// after --home is applied, so the record lands under that home.
 	if len(strippedArgv) == 0 ||
 		strippedArgv[0] == "help" || strippedArgv[0] == "--help" ||
 		strippedArgv[0] == "version" {
 		var derr error
 		switch {
 		case len(strippedArgv) == 0:
+			if noVerbHookIgnored() {
+				return 0
+			}
 			derr = helpHandler(&pkgapi.Client{}, nil)
 		case strippedArgv[0] == "version":
 			derr = versionHandler(&pkgapi.Client{}, strippedArgv[1:])
