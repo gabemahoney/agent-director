@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -54,6 +55,17 @@ type HandleConfig struct {
 	// readers; tests inject a double. A nil ParentProc leaves the start time
 	// unreadable, so the hook matches no row.
 	ParentProc ParentProc
+	// Now reads the injected clock that bounds SessionStart's wait for its
+	// launch's identity write (SR-22.9, SR-20.2). cmd/agent-director wires
+	// time.Now; tests inject a virtual clock that Clock.Sleep advances. A nil
+	// Now means SessionStart never waits.
+	Now func() time.Time
+	// PendingGrace is the effective pending grace period
+	// (config.Tmux.EffectivePendingGrace, SR-13.4): SessionStart waits for its
+	// launch's identity write until the row's launch start plus PendingGrace.
+	// cmd/agent-director wires the loaded config's value. Zero or negative
+	// means SessionStart never waits.
+	PendingGrace time.Duration
 }
 
 // Handle is the entry point cmd/ dispatches into. It captures the hook's
@@ -88,7 +100,16 @@ type HandleConfig struct {
 // payload's session id and transcript path and the parent as pid and
 // proc_starttime, and sets waiting. When only the snapshot changed, the row is
 // re-read and the write retried once; a second change logs one line and
-// writes no ad.hook.ignored (decision A3). Every other event is one gated
+// writes no ad.hook.ignored (decision A3). A SessionStart that arrives before
+// its launch's identity write (the write does not apply because the row
+// records no pane) logs nothing yet: while the row is pending with no pane
+// and inside its pending grace period (HandleConfig.PendingGrace, measured
+// from the launch start), it re-reads the row every 250 ms on the injected
+// clock, then makes the ordinary gated write with the new snapshot; only the
+// result of that write is logged, so no_pane_recorded is written for
+// SessionStart only after its bounded wait (recordSessionStart). Only
+// SessionStart waits, a subagent's never does, and the wait makes no tmux
+// call. Every other event is one gated
 // ApplyHookTransitionResult with the payload's session id, transcript path and
 // its presence on disk; the session id is recorded, never a gate.
 //
@@ -229,7 +250,7 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 	var applied store.HookApplied
 	if res.EventName == "SessionStart" {
 		var outcome store.UpsertOutcome
-		applied, outcome, err = recordSessionStart(st, instanceID, gate, transcriptPath, jsonlPresent, logger)
+		applied, outcome, err = recordSessionStart(ctx, st, hc, instanceID, gate, transcriptPath, jsonlPresent, logger)
 		fields["upsert_outcome"] = string(outcome)
 		if err != nil {
 			failClosed(fmt.Sprintf("record session start identity (instance=%s): %v", instanceID, err))
@@ -296,38 +317,137 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 	return nil
 }
 
-// recordSessionStart is Handle's SessionStart write (SR-22.9, SR-5.3): read
+// sessionStartWaitInterval is how often SessionStart re-reads its row while it
+// waits for its launch's identity write (SR-22.9).
+const sessionStartWaitInterval = 250 * time.Millisecond
+
+// recordSessionStart is Handle's SessionStart write (SR-22.9, SR-5.3): the
+// gated write (writeSessionStart), and, when that did not apply only because
+// the row records no pane yet, the bounded wait for the launch's identity
+// write (waitForLaunchIdentity) followed by the ordinary gated write again.
+//
+// The wait runs only when the write reported HookReasonNoPaneRecorded and the
+// row it examined is pending, records no pane_pid and is inside its pending
+// grace period (store.InsidePendingGrace with hc.PendingGrace and hc.Now: the
+// launch start is set and the clock reads before launch start plus the
+// grace). A row with no launch start, a row past the grace, a zero grace or a
+// nil hc.Now never waits. After the wait, the ordinary gated write runs with
+// the snapshot it reads then (with its one retry on a snapshot change), and
+// its result is the hook's: applied when the pane recorded meanwhile is the
+// hook's parent; pid_mismatch for a leftover or stray that waited;
+// no_pane_recorded when the row still records no pane at the bound (this
+// last gated write, rather than a verdict of the wait, gives the reason, so
+// an identity written between the last read and the bound still applies); no
+// reason when the row is gone. Handle writes the one ad.hook.ignored from
+// that result, so SessionStart's no_pane_recorded is written only after its
+// bounded wait.
+//
+// The outcome is ad.hook.fired's upsert_outcome: updated when applied,
+// no_change when not, error on a store error (returned).
+func recordSessionStart(ctx context.Context, st HookStore, hc HandleConfig, instanceID string, gate store.HookGate, jsonlPath string, jsonlPresent bool, logger *log.Logger) (store.HookApplied, store.UpsertOutcome, error) {
+	gate.SessionStart = true
+	applied, outcome, examined, err := writeSessionStart(st, instanceID, gate, jsonlPath, jsonlPresent, logger)
+	if err != nil || applied.Applied || applied.Reason != store.HookReasonNoPaneRecorded {
+		return applied, outcome, err
+	}
+	if !waitForLaunchIdentity(ctx, st, hc, instanceID, examined, logger) {
+		return applied, outcome, nil
+	}
+	applied, outcome, _, err = writeSessionStart(st, instanceID, gate, jsonlPath, jsonlPresent, logger)
+	return applied, outcome, err
+}
+
+// writeSessionStart is one gated SessionStart write (SR-22.9, SR-5.3): read
 // the row for the snapshot the write is conditioned on, then one gated
 // RecordSessionStartIdentity. When only the snapshot changed (the gate held),
 // it re-reads and retries once; a second change logs one line and returns not
 // applied with no reason, so no ad.hook.ignored is written (decision A3). No
-// row is a silent no-op (decision A2). The outcome is ad.hook.fired's
-// upsert_outcome: updated when applied, no_change when not, error on a store
-// error (returned).
-func recordSessionStart(st HookStore, instanceID string, gate store.HookGate, jsonlPath string, jsonlPresent bool, logger *log.Logger) (store.HookApplied, store.UpsertOutcome, error) {
-	gate.SessionStart = true
+// row is a silent no-op (decision A2). It also returns the row it last
+// examined (zero when none), which decides whether SessionStart waits.
+func writeSessionStart(st HookStore, instanceID string, gate store.HookGate, jsonlPath string, jsonlPresent bool, logger *log.Logger) (store.HookApplied, store.UpsertOutcome, store.Spawn, error) {
 	for attempt := 0; attempt < 2; attempt++ {
 		sp, err := st.GetSpawn(instanceID)
 		if errors.Is(err, store.ErrSpawnNotFound) {
-			return store.HookApplied{}, store.UpsertNoChange, nil
+			return store.HookApplied{}, store.UpsertNoChange, store.Spawn{}, nil
 		}
 		if err != nil {
-			return store.HookApplied{}, store.UpsertError, err
+			return store.HookApplied{}, store.UpsertError, store.Spawn{}, err
 		}
 		gate.Examined = sp.Snapshot
 		applied, changed, err := st.RecordSessionStartIdentity(instanceID, gate, jsonlPath, jsonlPresent)
 		if err != nil {
-			return store.HookApplied{}, store.UpsertError, err
+			return store.HookApplied{}, store.UpsertError, sp, err
 		}
 		if applied.Applied {
-			return applied, store.UpsertUpdated, nil
+			return applied, store.UpsertUpdated, sp, nil
 		}
 		if !changed {
-			return applied, store.UpsertNoChange, nil
+			return applied, store.UpsertNoChange, sp, nil
 		}
 	}
 	logf(logger, "hook: SessionStart not recorded (instance=%s): the row changed twice while it was written", instanceID)
-	return store.HookApplied{}, store.UpsertNoChange, nil
+	return store.HookApplied{}, store.UpsertNoChange, store.Spawn{}, nil
+}
+
+// waitingForIdentity reports whether sp is a row a SessionStart waits on
+// (SR-22.9): pending, no pane_pid recorded, and inside its pending grace
+// period at now (store.InsidePendingGrace: a launch start is set and now is
+// before launch start plus grace).
+func waitingForIdentity(sp store.Spawn, grace time.Duration, now time.Time) bool {
+	return sp.Identity.PanePID == 0 && store.InsidePendingGrace(sp.State, sp.LaunchStartedAtMillis, grace, now)
+}
+
+// waitForLaunchIdentity is SessionStart's bounded wait for its launch's
+// identity write (SR-22.9; SR-13.4): it reports false, having waited not at
+// all, unless examined is a row a SessionStart waits on (waitingForIdentity)
+// with hc.Now wired and hc.PendingGrace positive. Otherwise it sleeps on
+// hc.Clock (the production sleeper when nil) and re-reads the row through
+// GetSpawn every sessionStartWaitInterval, a read only that never blocks the
+// identity write, and reports true once the wait has ended: when a pane is
+// recorded, the row leaves pending or changes version, the row is gone, the
+// row is no longer inside its grace period (the bound: launch start plus
+// hc.PendingGrace on hc.Now), ctx is cancelled, or a read fails (fail-open:
+// logged, and the caller's gated write decides). No sleep runs past the
+// bound. As a safety net against a clock that does not advance or steps back,
+// the number of re-reads is capped at what the time left at the start allows.
+// It writes nothing and makes no tmux call.
+func waitForLaunchIdentity(ctx context.Context, st HookStore, hc HandleConfig, instanceID string, examined store.Spawn, logger *log.Logger) bool {
+	grace := hc.PendingGrace
+	if hc.Now == nil || grace <= 0 || !waitingForIdentity(examined, grace, hc.Now()) {
+		return false
+	}
+	clock := hc.Clock
+	if clock == nil {
+		clock = DefaultPollClock()
+	}
+	bound := time.UnixMilli(examined.LaunchStartedAtMillis).Add(grace)
+	maxReads := int(bound.Sub(hc.Now())/sessionStartWaitInterval) + 1
+	for reads := 0; reads < maxReads; reads++ {
+		sleep := bound.Sub(hc.Now())
+		if sleep <= 0 {
+			break
+		}
+		if sleep > sessionStartWaitInterval {
+			sleep = sessionStartWaitInterval
+		}
+		clock.Sleep(ctx, sleep)
+		if ctx.Err() != nil {
+			break
+		}
+		sp, err := st.GetSpawn(instanceID)
+		if errors.Is(err, store.ErrSpawnNotFound) {
+			break
+		}
+		if err != nil {
+			logf(logger, "hook: SessionStart wait (instance=%s): read row: %v", instanceID, err)
+			break
+		}
+		if sp.State != examined.State || sp.Snapshot.RowVersion != examined.Snapshot.RowVersion ||
+			!waitingForIdentity(sp, grace, hc.Now()) {
+			break
+		}
+	}
+	return true
 }
 
 // transcriptPresent reports whether the hook-reported transcript path exists

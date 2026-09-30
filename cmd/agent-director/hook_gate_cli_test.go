@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -408,5 +409,106 @@ func assertOneTimeoutDeny(t *testing.T, home, id string) {
 	}
 	if len(reqs) != 1 || reqs[0].Decision != "deny" || reqs[0].DecisionReason != store.DecisionReasonTimeout {
 		t.Errorf("permission requests = %+v; want one decided deny/%s", reqs, store.DecisionReasonTimeout)
+	}
+}
+
+// gateWaitInside is how far inside its pending grace period the waiting case's
+// launch start sits: the hook must wait about this long for the bound.
+const gateWaitInside = 3 * time.Second
+
+// gateWaitFloor is the least of the grace the waiting case must have left
+// when its hook starts, so a hook that does not wait (a few ms) stays clearly
+// apart from one that does. Setup gets gateWaitInside - gateWaitFloor.
+const gateWaitFloor = time.Second
+
+// gateWaitEarly is how much sooner than the grace left at its start a waiting
+// hook may return: the stored launch start is truncated to the millisecond.
+const gateWaitEarly = 250 * time.Millisecond
+
+// gatePromptLimit bounds a hook that must not wait: well below the 10 s margin
+// every no-wait launch start keeps from any other grace boundary.
+const gatePromptLimit = 5 * time.Second
+
+// TestHookGateCLISessionStartGrace: SessionStart on a no-pane pending row waits
+// until launch start + the configured (or default) grace, then is ignored as
+// no_pane_recorded (SR-22.9, SR-13.4). The CLI has no injected clock, so every
+// launch start except the waiting case's sits 10 s or more from any boundary.
+func TestHookGateCLISessionStartGrace(t *testing.T) {
+	minimum := config.PendingGraceMinimumSeconds(config.DefaultCreateTimeoutMs, config.DefaultPipeCloseWaitMs)
+	def := int64(config.DefaultPendingGraceSeconds)
+	if def-minimum < 20 {
+		t.Fatalf("default %d s - minimum %d s < 20 s: no 10 s margin either side", def, minimum)
+	}
+	sec := func(s int64) time.Duration { return time.Duration(s) * time.Second }
+	configured := []apitest.TmuxSetting{apitest.TmuxInt(config.TmuxPendingGraceSeconds, minimum)}
+	cases := []struct {
+		name     string
+		settings []apitest.TmuxSetting // the [tmux] table written; none = defaults
+		grace    time.Duration         // the effective grace the hook must use
+		age      time.Duration         // launch start this long before the hook
+		wait     bool                  // the hook waits until launch start + grace
+	}{
+		{name: "configured_grace_waits", settings: configured, grace: sec(minimum), age: sec(minimum) - gateWaitInside, wait: true},
+		{name: "configured_grace_past", settings: configured, grace: sec(minimum), age: sec(minimum+def) / 2},
+		{name: "default_grace_past", grace: sec(def), age: sec(def) + 10*time.Second},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newGateHome(t)
+			const id = "id-gate-grace"
+			apitest.WriteTmuxConfig(t, filepath.Join(directorDir(h.home), "config.toml"), tc.settings...)
+			// The store exists before the launch start is taken, so the
+			// waiting case's timed window holds only the row insert.
+			st, err := store.OpenOrInit(stateDB(h.home))
+			if err != nil {
+				t.Fatalf("store.OpenOrInit: %v", err)
+			}
+			if err := st.Close(); err != nil {
+				t.Fatalf("store.Close: %v", err)
+			}
+			launch := time.Now().Add(-tc.age)
+			noPane := store.LaunchIdentity{Token: "5eed0000000000c3", Socket: apitest.TestSocket}
+			if _, err := apitest.SeedSpawn(stateDB(h.home), id, store.StatePending, "", "off", "", false,
+				apitest.WithLaunchIdentity(noPane), apitest.WithLaunchStartedAt(launch.UnixMilli())); err != nil {
+				t.Fatalf("SeedSpawn: %v", err)
+			}
+			before := h.row(t, id)
+			if before.Identity.PanePID != 0 || before.LaunchStartedAtMillis != launch.UnixMilli() {
+				t.Fatalf("seeded pane_pid=%d launch_started_at=%d; want 0, %d",
+					before.Identity.PanePID, before.LaunchStartedAtMillis, launch.UnixMilli())
+			}
+			// The waiting hook's expected wait is the grace left just before
+			// it runs, not gateWaitInside: setup time is not charged to it.
+			left := time.Until(launch.Add(tc.grace))
+			if tc.wait && left < gateWaitFloor {
+				t.Fatalf("setup took too long: %s left of the grace; want at least %s", left, gateWaitFloor)
+			}
+
+			// h.hook fails the test after gateHookDeadline and on any tmux call.
+			began := time.Now()
+			out := h.hook(t, id, "", `{"hook_event_name":"SessionStart"}`)
+			elapsed := time.Since(began)
+			if out != "" {
+				t.Errorf("stdout = %q; want empty", out)
+			}
+			if tc.wait {
+				if elapsed < left-gateWaitEarly || elapsed > left+gatePromptLimit {
+					t.Errorf("hook took %s; want about %s, the grace left at its start (it waits until launch start + %s)",
+						elapsed, left, tc.grace)
+				}
+			} else if elapsed > gatePromptLimit {
+				t.Errorf("hook took %s; want under %s (launch start + %s already past)", elapsed, gatePromptLimit, tc.grace)
+			}
+
+			after := h.row(t, id)
+			if after.State != store.StatePending || after.RowVersion != before.RowVersion ||
+				after.Identity != before.Identity || after.ClaudeSessionID != before.ClaudeSessionID {
+				t.Errorf("row changed by an ignored SessionStart:\nbefore=%+v\nafter =%+v", before, after)
+			}
+			ign := trailEvents(t, h.home, "ad.hook.ignored")
+			if len(ign) != 1 || ign[0]["reason"] != store.HookReasonNoPaneRecorded || ign[0]["hook_event"] != "SessionStart" {
+				t.Errorf("ad.hook.ignored = %v; want one SessionStart line with reason %s", ign, store.HookReasonNoPaneRecorded)
+			}
+		})
 	}
 }

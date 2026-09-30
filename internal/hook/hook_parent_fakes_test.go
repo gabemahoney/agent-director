@@ -9,13 +9,19 @@ package hook_test
 //   - seedAgentRow: a temp store with one row whose pane is recorded.
 //   - agentParent / foreignParent: the row's own agent, or another process
 //     carrying the row's id (pid_mismatch; no_pane_recorded on a pane-less row).
-//   - hookConfig: a HandleConfig whose ParentPID and ParentProc report a parent.
+//   - hookConfig: a HandleConfig whose ParentPID and ParentProc report a parent,
+//     on a virtual clock (Clock, Now) with the default pending grace, so
+//     SessionStart's wait for its launch's identity write never sleeps in real time.
+//   - hookClock: that virtual clock, for its recorded sleeps.
+//   - identityAtSleep: the launch's identity write, landing at the Nth sleep.
 //   - fakeParentProc: the hook.ParentProc double (procfix.Checker + name table).
 //   - hookIgnoredAfter: the ad.hook.ignored lines one row got after a checkpoint.
 
 import (
 	"testing"
+	"time"
 
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
@@ -60,13 +66,53 @@ func newParentProc(parents ...hookParent) *fakeParentProc {
 	return p
 }
 
-// hookConfig returns a HandleConfig with env for a hook whose parent is p
-// (getppid() = p.PID). Callers set Cfg and Clock on the result as needed.
+// hookConfig returns a HandleConfig with env for a hook whose parent is p, on a
+// virtual clock starting now with the default pending grace. Callers may override Cfg/Clock.
 func hookConfig(env func(string) string, p hookParent) hook.HandleConfig {
+	now := time.Now()
+	clock := &advancingClock{now: &now}
 	return hook.HandleConfig{
-		Env:        env,
-		ParentPID:  func() int { return p.PID },
-		ParentProc: newParentProc(p),
+		Env:          env,
+		ParentPID:    func() int { return p.PID },
+		ParentProc:   newParentProc(p),
+		Clock:        clock,
+		Now:          clock.Now,
+		PendingGrace: config.Tmux{}.EffectivePendingGrace(),
+	}
+}
+
+// hookClock returns hookConfig's virtual clock from hc (fails if Clock was replaced).
+func hookClock(t *testing.T, hc hook.HandleConfig) *advancingClock {
+	t.Helper()
+	c, ok := hc.Clock.(*advancingClock)
+	if !ok {
+		t.Fatalf("hookClock: hc.Clock is %T, want hookConfig's *advancingClock", hc.Clock)
+	}
+	return c
+}
+
+// identityAtSleep runs the launch's identity write for id (RecordLaunchIdentity, recording
+// agentParent's pane) at hc's clock's nth sleep; a write that does not apply fails the test.
+func identityAtSleep(t *testing.T, hc hook.HandleConfig, st *store.Store, id string, n int) {
+	t.Helper()
+	pid, start, err := storefix.AgentHookParent(st, id)
+	if err != nil {
+		t.Fatalf("identityAtSleep(%q): %v", id, err)
+	}
+	c := hookClock(t, hc)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.runAt, c.run = n, func() {
+		sp, err := st.GetSpawn(id)
+		if err != nil {
+			t.Errorf("identityAtSleep(%q): read row: %v", id, err)
+			return
+		}
+		res, err := st.RecordLaunchIdentity(id, sp.RowVersion, sp.Identity.Token,
+			store.LaunchIdentity{PaneID: apitest.TestPaneID, PanePID: pid, PaneStarttime: start})
+		if err != nil || res != store.CondApplied {
+			t.Errorf("identityAtSleep(%q): RecordLaunchIdentity = %v, %v; want applied", id, res, err)
+		}
 	}
 }
 

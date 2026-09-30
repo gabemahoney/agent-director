@@ -38,10 +38,11 @@ verb and its payload on stdin. No hook applies, and the row stays
   the record goes under that home.
 - `help`, `--help` and `version` never read stdin.
 
-The `no_exec_form` record carries `claude_instance_id` from the
-environment (null when absent or invalid), `hook_event`, `parent_pid`,
-`parent_command`, and `hook_session_id` (the `transcript_path` basename,
-or null). `row_session_id` and `row_pane_pid` are always null.
+The `no_exec_form` record has the fields every `ad.hook.ignored` record
+has (see "The `ad.hook.ignored` reasons" below). Because it reads no
+row, its `claude_instance_id` comes from the environment (null when
+absent or invalid), and `row_session_id` and `row_pane_pid` are always
+null.
 
 | Event | Tool matcher | Resulting state (SRD §5.2) |
 | --- | --- | --- |
@@ -76,7 +77,8 @@ A hook from any other process that carries the row's
 in the agent's shell, a teammate pane split in the agent's session, a
 leftover of an earlier launch, or a shell that pipes a payload into
 `agent-director hook`. So does every hook while the row records no pane
-yet. Such a hook:
+yet (for SessionStart, only after the bounded wait described below).
+Such a hook:
 
 - writes no state, no `last_seen_at` and no permission request;
 - exits 0 with empty stdout (a relayed PermissionRequest returns no
@@ -89,6 +91,50 @@ yet. Such a hook:
 come from the same process, so they apply, and SessionStart records the
 new session id. The payload's session id is recorded, never used to
 decide whether a hook applies. The hook makes no tmux call.
+
+### SessionStart before the launch's identity write
+
+The agent starts inside the call that creates its tmux session.
+agent-director records the pane process (the launch's identity) only
+after that call returns, so the agent's first SessionStart can arrive
+while the row still records no pane. An idle agent fires no further
+hook, so ignoring that SessionStart would leave the row `pending`.
+
+So when SessionStart's gated write does not apply only because the row
+records no pane, the hook waits instead of logging `no_pane_recorded`
+at once. It waits while all of these hold:
+
+- the row is `pending`;
+- the row records no pane;
+- the row has a launch start;
+- the time is before the launch start plus the effective
+  `pending_grace_seconds` (the same grace period `find-missing` uses).
+
+While it waits, it re-reads the row every 250 ms. Each re-read is a
+read only, so it never blocks the identity write. No sleep runs past the
+bound. The wait ends early when:
+
+- a pane is recorded;
+- the row changes (it leaves `pending`, or its version moves);
+- the row is gone;
+- a read fails (logged; the hook stays fail-open).
+
+After the wait, the hook makes the ordinary gated write once more with
+the row as it is then, and that write decides the result:
+
+- applied, when the pane now recorded is the hook's parent;
+- `pid_mismatch`, when another process waited (a leftover or a stray);
+- `no_pane_recorded`, when the row still records no pane at the bound;
+- no record, when the row is gone.
+
+An identity written just before the bound therefore still applies.
+
+Only SessionStart waits. Claude Code sends no prompt to the agent until
+its SessionStart hooks finish, so every later hook fires after the
+wait. A subagent's or in-process teammate's SessionStart never waits
+(see below). A row with no launch start, or one already past the grace
+period, never waits. The wait makes no tmux
+call and writes nothing until its final gated write.
 
 ### Subagents and in-process teammates
 
@@ -118,13 +164,16 @@ carries it and is the agent itself.
 | Reason | When |
 | --- | --- |
 | `pid_mismatch` | The hook's parent is not the row's recorded pane process. |
-| `no_pane_recorded` | The row records no pane yet. |
+| `no_pane_recorded` | The row records no pane yet. For SessionStart, written only after its bounded wait (see "SessionStart before the launch's identity write"). |
 | `subagent_event` | A SessionStart or SessionEnd whose payload carries a non-empty `agent_id`. |
 | `no_exec_form` | A no-verb run received a hook payload on stdin, from a Claude Code that does not run exec-form hooks. It is written with no store access. |
 
 Each record carries `claude_instance_id`, `hook_event`, `reason`,
 `parent_pid`, `parent_command`, `hook_session_id`, `row_session_id`,
-`row_pane_pid` and `source` = `ad_hook`. It never names another row.
+`row_pane_pid` and `source` = `ad_hook`. `hook_session_id` is the
+basename of the payload's `transcript_path` with its extension removed
+(the text from its last `.` on), or null when the payload gives none. It
+never names another row.
 
 Consequences: a nested agent's or a teammate pane's work is not
 reflected in the row, and an `ended` row stays `ended` against every
@@ -145,7 +194,9 @@ it does not apply:
 - Unknown event name → exit 0, soft refresh, log entry.
 - Hook from a process other than the row's recorded pane process, or for
   a row that records no pane → exit 0, nothing written, one
-  `ad.hook.ignored` trail record.
+  `ad.hook.ignored` trail record. A SessionStart for a `pending` row
+  that records no pane first waits, bounded by the grace period (see
+  "SessionStart before the launch's identity write").
 - SessionStart or SessionEnd from a subagent or in-process teammate
   (non-empty `agent_id`) → exit 0, nothing written to the row, one
   `ad.hook.ignored` record with reason `subagent_event` (none when no row
@@ -159,6 +210,13 @@ it does not apply:
 All log entries land in `~/.agent-director/errors.log` (configurable
 via `[log] error_log_path` in `config.toml`). A missed state update is
 annoying but never breaks a Claude session.
+
+SessionStart's wait for the launch's identity write is the one case
+where the hook deliberately takes time. It can delay the hook's exit by
+up to the effective `pending_grace_seconds`, measured from the launch
+start, and Claude Code's first response waits for SessionStart hooks to
+finish. It happens only in the race described above; the hook still
+exits 0 with empty stdout whatever the wait's result.
 
 The relay-mode `PermissionRequest` path is fail-*closed*: any internal
 error emits a `deny` decision envelope on stdout before the hook exits.

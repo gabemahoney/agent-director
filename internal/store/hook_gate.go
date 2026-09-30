@@ -28,7 +28,10 @@ type HookGate struct {
 // HookReasonNoPaneRecorded: subagent_event is decided by the handler from the
 // payload, before any write. Reason is "" when no row has the id (nothing to
 // report) or, for SessionStart, when the row changed after the caller examined
-// it.
+// it. For SessionStart the handler logs no_pane_recorded only after its
+// bounded wait for the launch's identity write (SR-22.9, SR-13.4): a
+// no_pane_recorded from its first write starts the wait, and the result of
+// the gated write after the wait is the one reported.
 type HookApplied struct {
 	Applied bool
 	Reason  string
@@ -43,7 +46,9 @@ const (
 	// read).
 	HookReasonPIDMismatch = "pid_mismatch"
 	// HookReasonNoPaneRecorded: the row records no pane yet (a lost create
-	// reply not yet adopted, SR-3.6), so no hook matches it.
+	// reply not yet adopted, SR-3.6), so no hook matches it. SessionStart is
+	// logged with it only after its bounded wait for the identity write
+	// (SR-22.9).
 	HookReasonNoPaneRecorded = "no_pane_recorded"
 	// HookReasonSubagentEvent: a SessionStart or SessionEnd whose payload
 	// carries a non-empty agent_id (a subagent or an in-process teammate). It
@@ -111,7 +116,10 @@ func (s *Store) readHookGateRow(instanceID string, g HookGate, errPrefix string)
 // reports, from the read taken after its statement (decision A1): no row
 // yields no reason; a row that records no pane yields
 // HookReasonNoPaneRecorded, even when the parent's start time was unreadable;
-// any other row yields HookReasonPIDMismatch.
+// any other row yields HookReasonPIDMismatch. A SessionStart that gets
+// HookReasonNoPaneRecorded may wait, bounded by the pending grace period, for
+// the launch's identity write and write again; the handler logs the reason
+// only after that wait (SR-22.9).
 func notAppliedReason(r hookGateRow) HookApplied {
 	switch {
 	case !r.found:

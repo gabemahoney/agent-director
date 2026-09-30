@@ -248,7 +248,13 @@ func TestTmuxConfigRefusalStopsEverySurface(t *testing.T) {
 		}},
 		{"hook_session_start", func(t *testing.T, rc tmuxRefusal, h refusedHome) {
 			payload := `{"hook_event_name":"SessionStart","transcript_path":"/x/tmux-config-session.jsonl"}`
-			stdout, stderr, code := runCLIWithEnv(t, h.home, map[string]string{probe.EnvKey: h.instanceID}, payload, "hook")
+			// Bounded: a refusal that let SessionStart reach the handler could
+			// sit in its identity wait up to the pending grace (SR-13.4).
+			stdout, stderr, code, timedOut := runBounded(t, h.home, map[string]string{probe.EnvKey: h.instanceID},
+				payload, false, surfaceDeadline, "hook")
+			if timedOut {
+				t.Fatalf("hook still running after %v (stderr=%q)", surfaceDeadline, stderr)
+			}
 			if code != 0 || stdout != "" {
 				t.Errorf("hook exit=%d stdout=%q; want 0 and empty (stderr=%q)", code, stdout, stderr)
 			}

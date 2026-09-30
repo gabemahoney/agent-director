@@ -1,0 +1,55 @@
+#!/bin/bash
+# Delayed-create `tmux` for the Docker harness (SRD SR-22.9, SR-20.9).
+#
+# A SessionStart can reach agent-director before the launch's identity
+# write: the pane's process starts as soon as tmux creates the pane, but
+# agent-director records the pane only after it has read the create's reply.
+# This wrapper makes that order certain. It passes every call through to the
+# real tmux (/usr/bin/tmux) unchanged. For the session-creating call
+# (`new-session`) it captures the reply, waits DELAY_CREATE_SECONDS (default
+# 2, inside the 5 s create timeout), and only then writes the reply and exits
+# with tmux's own status. Standard error is never held back.
+#
+# Use: put this directory first on the PATH of the agent-director process
+# that launches the session (agent-director runs `tmux` from its PATH):
+#
+#   PATH=/opt/driver/delay-create-tmux:/opt/driver/early-hook-claude:$PATH \
+#       DELAY_CREATE_LOG=<file> agent-director spawn --cwd /tmp
+#
+# Each delayed create appends one line to DELAY_CREATE_LOG (default
+# /tmp/delay-create-tmux.log):
+#
+#   <created ns> <released ns> <tmux exit status>
+#
+# created is when the real tmux returned the reply, released when this
+# wrapper wrote it to agent-director, both as `date +%s%N`. The variables
+# must not start with AGENT_DIRECTOR_: agent-director removes those from
+# every tmux client's environment.
+
+real=/usr/bin/tmux
+
+create=0
+for arg in "$@"; do
+    # The session command follows "--"; only the tmux command before it
+    # counts.
+    [[ "$arg" == "--" ]] && break
+    if [[ "$arg" == "new-session" ]]; then
+        create=1
+        break
+    fi
+done
+
+if [[ "$create" -eq 0 ]]; then
+    exec "$real" "$@"
+fi
+
+reply="$(mktemp /tmp/delay-create-tmux.XXXXXX)"
+"$real" "$@" >"$reply"
+rc=$?
+created="$(date +%s%N)"
+sleep "${DELAY_CREATE_SECONDS:-2}"
+released="$(date +%s%N)"
+printf '%s %s %s\n' "$created" "$released" "$rc" >>"${DELAY_CREATE_LOG:-/tmp/delay-create-tmux.log}"
+cat "$reply"
+rm -f "$reply"
+exit "$rc"

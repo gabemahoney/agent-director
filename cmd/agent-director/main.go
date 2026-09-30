@@ -16,6 +16,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/hook"
@@ -168,13 +169,17 @@ func runHook() int {
 	// The hook gate's parent process (SR-22.9): with exec-form hooks
 	// getppid() is the agent process; its start time comes from the
 	// start-time reader and its command name (for ad.hook.ignored only,
-	// SR-14) from the command-name reader.
+	// SR-14) from the command-name reader. Now and the loaded config's
+	// effective pending grace period bound SessionStart's wait for its
+	// launch's identity write (SR-22.9, SR-13.4).
 	hc := hook.HandleConfig{
-		Env:        hook.OSGetenv,
-		Cfg:        cfg.Relay,
-		Clock:      hook.DefaultPollClock(),
-		ParentPID:  os.Getppid,
-		ParentProc: hookParentProc(),
+		Env:          hook.OSGetenv,
+		Cfg:          cfg.Relay,
+		Clock:        hook.DefaultPollClock(),
+		ParentPID:    os.Getppid,
+		ParentProc:   hookParentProc(),
+		Now:          time.Now,
+		PendingGrace: cfg.Tmux.EffectivePendingGrace(),
 	}
 	if err := hook.Handle(context.Background(), bytes.NewReader(stdinRaw), stdout, st, hc, logger); err != nil {
 		hookLog(logger, "hook: handle: %v", err)
@@ -404,7 +409,7 @@ func setupClient(gOpts globalOptions) (*pkgapi.Client, config.Config, error) {
 // satisfy Epic 1 AC #4 (idempotent dir/file creation) and AC #5
 // (ErrSchemaMismatch surfaces). The DB-free verbs below never reach it: help,
 // --help, version, the no-verb run, and trail-emit are dispatched before
-// setupClient so they neither open nor create ~/.agent-director (SR-4.1/4.2).
+// setupClient so they neither open nor create the store (SR-4.1/4.2).
 // ErrSchemaMismatch now surfaces on a store-opening verb (e.g. `list`), not on
 // `help`.
 //
@@ -474,12 +479,12 @@ func run() int {
 	}
 
 	// help / --help / version / no verb: DB-free static-data verbs —
-	// special-cased before setupClient so they never open or create
-	// ~/.agent-director (SR-4.1/4.2, t3.93m.nr.om.wq). This closes the path by
-	// which the npm client's version probe rewrote the prod DB (b.8dr) and lets
-	// every SessionStart hook (`agent-director help`) fire without touching the
+	// special-cased before setupClient so they never open or create the store
+	// (SR-4.1/4.2, t3.93m.nr.om.wq). This closes the path by which the npm
+	// client's version probe rewrote the prod DB (b.8dr) and lets every
+	// SessionStart hook (`agent-director help`) fire without touching the
 	// store. Keyed off stripped argv so global flags still apply
-	// (`--home /x help` works and creates nothing under /x). helpHandler ignores
+	// (`--home /x help` works and creates no store under /x). helpHandler ignores
 	// its client; versionHandler only calls checkClosed + pure data, so a
 	// non-nil zero-value &Client{} (closed=false) passes and stdout is
 	// byte-identical to the setupClient path. Error mapping mirrors trail-emit.

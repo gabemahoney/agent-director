@@ -26,11 +26,13 @@ const (
 	// long an ended agent counts as "still stopping" (SR-4.1, SR-4.2).
 	DefaultStoppingWindowSeconds = 90
 
-	// DefaultPendingGraceSeconds is the default pending grace period of
-	// find-missing, in whole seconds (60). Safe minimum: the derived
+	// DefaultPendingGraceSeconds is the default pending grace period, in
+	// whole seconds (60). Safe minimum: the derived
 	// PendingGraceMinimumSeconds (30 at the default create timeout and
-	// pipe-close wait). Bounds how long a pending row is left untouched
-	// after its launch start (SR-4.1, SR-11.2, SR-13.4).
+	// pipe-close wait). Bounds how long find-missing leaves a pending row
+	// untouched after its launch start, and how long a SessionStart hook
+	// waits for its launch's identity write (SR-4.1, SR-11.2, SR-13.4,
+	// SR-22.9).
 	DefaultPendingGraceSeconds = 60
 
 	// DefaultQueryTimeoutMs is the default timeout of each tmux lookup and
@@ -110,10 +112,12 @@ type Tmux struct {
 	// MinStoppingWindowSeconds (30) (SR-4.1, SR-4.2).
 	StoppingWindowSeconds int64 `toml:"stopping_window_seconds"`
 
-	// PendingGraceSeconds is find-missing's pending grace period, in whole
-	// seconds. Default DefaultPendingGraceSeconds (60); safe minimum
-	// PendingGraceMinimumSeconds of the effective create timeout and
-	// pipe-close wait (30 at their defaults) (SR-4.1, SR-11.2, SR-13.4).
+	// PendingGraceSeconds is the pending grace period, in whole seconds:
+	// find-missing's, and also the bound of a SessionStart hook's wait for its
+	// launch's identity write, both measured from the launch start. Default
+	// DefaultPendingGraceSeconds (60); safe minimum PendingGraceMinimumSeconds
+	// of the effective create timeout and pipe-close wait (30 at their
+	// defaults) (SR-4.1, SR-11.2, SR-13.4, SR-22.9).
 	PendingGraceSeconds int64 `toml:"pending_grace_seconds"`
 
 	// QueryTimeoutMs is the timeout of each tmux lookup and pane listing, in
@@ -344,11 +348,13 @@ func (t Tmux) EffectiveStoppingWindow() time.Duration {
 	return t.Effective(TmuxStoppingWindowSeconds)
 }
 
-// EffectivePendingGrace returns find-missing's pending grace period
+// EffectivePendingGrace returns the pending grace period
 // (pending_grace_seconds, whole seconds): the configured value when positive,
 // otherwise DefaultPendingGraceSeconds (60 s); the largest duration when too
 // large. Safe minimum PendingGraceMinimumSeconds (30 s at the defaults),
-// enforced by Load, not here (SR-4.1, SR-11.2, SR-13.4).
+// enforced by Load, not here. find-missing uses it, and the hook passes it to
+// hook.HandleConfig.PendingGrace as the bound of SessionStart's wait for its
+// launch's identity write (SR-4.1, SR-11.2, SR-13.4, SR-22.9).
 func (t Tmux) EffectivePendingGrace() time.Duration {
 	return t.Effective(TmuxPendingGraceSeconds)
 }

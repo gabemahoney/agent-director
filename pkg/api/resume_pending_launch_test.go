@@ -217,6 +217,9 @@ func TestResumeRecordsLaunchIdentity(t *testing.T) {
 		}, func(*resumeEnv, tmuxfix.SeedSession) []any { return noIdentity }},
 		// SR-22.9 (decision A7): the moved row records no pane until the
 		// identity write, so hooks before it are ignored and it applies.
+		// These drive the store's gated write directly; the hook handler's
+		// SessionStart first waits for the identity write, bounded by the
+		// pending grace (SR-13.4).
 		{"hooks before the identity write ignored", func(t *testing.T, e *resumeEnv, r resumableRow) any {
 			e.rec.AfterCall(tmux.CallCreate, func(tmuxfix.SocketCall, error) {
 				for _, ev := range []string{"Stop", "SessionStart"} {

@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
@@ -66,9 +67,14 @@ func ssgPayload(t *testing.T, source string) (payload, sessionID, path string) {
 // ssgHandle runs one Handle for id's row from parent p and returns its stdout.
 func ssgHandle(t *testing.T, st hook.HookStore, id string, p hookParent, payload string, logger *log.Logger) string {
 	t.Helper()
+	return ssgHandleWith(t, st, hookConfig(envHook(id, ""), p), payload, logger)
+}
+
+// ssgHandleWith runs one Handle with hc and returns its stdout.
+func ssgHandleWith(t *testing.T, st hook.HookStore, hc hook.HandleConfig, payload string, logger *log.Logger) string {
+	t.Helper()
 	var out bytes.Buffer
-	if err := hook.Handle(context.Background(), strings.NewReader(payload), &out, st,
-		hookConfig(envHook(id, ""), p), logger); err != nil {
+	if err := hook.Handle(context.Background(), strings.NewReader(payload), &out, st, hc, logger); err != nil {
 		t.Fatalf("Handle: %v (want nil: the hook is fail-open)", err)
 	}
 	return out.String()
@@ -204,7 +210,9 @@ func TestSessionStartGateApplied(t *testing.T) {
 }
 
 // TestSessionStartGateIgnored: a SessionStart from any process but the row's
-// recorded pane process changes nothing and writes one ad.hook.ignored.
+// recorded pane process changes nothing and writes one ad.hook.ignored at once,
+// with no wait (SR-22.9: a pane-less pending row here has no launch start or
+// one past the pending grace, so SessionStart has nothing to wait for).
 func TestSessionStartGateIgnored(t *testing.T) {
 	leftoverOfOldLife := func(*testing.T, *store.Store, string) hookParent {
 		return hookParent{PID: ssgOldPane.PanePID, Start: ssgOldPane.PaneStarttime, Name: "claude"}
@@ -212,8 +220,14 @@ func TestSessionStartGateIgnored(t *testing.T) {
 	endedWithPane := func(t *testing.T, id string) (*store.Store, string) {
 		return ssgSeed(t, id, store.StateEnded, "sess-ended", apitest.WithLaunchIdentity(ssgFreshPane))
 	}
-	pendingNoPane := func(t *testing.T, id string) (*store.Store, string) {
-		return ssgSeed(t, id, store.StatePending, "", apitest.WithLaunchIdentity(ssgNoPane))
+	pendingNoPaneNoLaunchStart := func(t *testing.T, id string) (*store.Store, string) {
+		return ssgSeed(t, id, store.StatePending, "", apitest.WithLaunchIdentity(ssgNoPane),
+			apitest.WithNoLaunchStartedAt())
+	}
+	pendingNoPanePastGrace := func(t *testing.T, id string) (*store.Store, string) {
+		pastGrace := time.Now().Add(-config.Tmux{}.EffectivePendingGrace() - time.Second).UnixMilli()
+		return ssgSeed(t, id, store.StatePending, "", apitest.WithLaunchIdentity(ssgNoPane),
+			apitest.WithLaunchStartedAt(pastGrace))
 	}
 	cases := []struct {
 		name       string
@@ -234,10 +248,10 @@ func TestSessionStartGateIgnored(t *testing.T) {
 		{"leftover on an ended row with no pane", func(t *testing.T, id string) (*store.Store, string) {
 			return ssgSeed(t, id, store.StateEnded, "sess-ended")
 		}, foreignParent, store.HookReasonNoPaneRecorded, "sess-ended", nil},
-		{"leftover on a pending row with no pane", pendingNoPane, foreignParent,
-			store.HookReasonNoPaneRecorded, nil, nil},
-		{"the launch's own agent on a pane-less pending row", pendingNoPane, agentParent,
-			store.HookReasonNoPaneRecorded, nil, nil},
+		{"leftover on a pending row with no pane, launch start past the grace", pendingNoPanePastGrace,
+			foreignParent, store.HookReasonNoPaneRecorded, nil, nil},
+		{"the launch's own agent on a pane-less pending row, no launch start", pendingNoPaneNoLaunchStart,
+			agentParent, store.HookReasonNoPaneRecorded, nil, nil},
 	}
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -252,8 +266,12 @@ func TestSessionStartGateIgnored(t *testing.T) {
 			priorHistory := ssgHistory(t, dbPath, id)
 			before := len(readTrailLines(t, trailFile()))
 
-			if out := ssgHandle(t, st, id, parent, payload, nil); out != "" {
+			hc := hookConfig(envHook(id, ""), parent)
+			if out := ssgHandleWith(t, st, hc, payload, nil); out != "" {
 				t.Errorf("stdout = %q; want empty", out)
+			}
+			if sleeps := hookClock(t, hc).Sleeps(); len(sleeps) != 0 {
+				t.Errorf("SessionStart slept %d times; want no wait", len(sleeps))
 			}
 
 			// SR-22.9: a hook not applied changes nothing (state, last_seen_at, identity, row_version).

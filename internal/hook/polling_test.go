@@ -19,10 +19,10 @@ import (
 // next entry, with the LAST entry sticky (so a long-running test
 // settles on a final state).
 type scriptedPollStore struct {
-	mu     sync.Mutex
-	rows   []scriptedRow
-	idx    int
-	calls  int
+	mu    sync.Mutex
+	rows  []scriptedRow
+	idx   int
+	calls int
 }
 
 type scriptedRow struct {
@@ -55,26 +55,51 @@ func (fastClock) Sleep(ctx context.Context, _ time.Duration) {
 	}
 }
 
-// advancingClock is a virtual-time sleeper. Each Sleep call records
-// the requested duration and advances a *time.Time the test owns,
-// so Poll's deadline math (against the injected nowFunc) progresses
-// without any real wall-clock wait. cancelAfter triggers ctx
-// cancellation after a fixed iteration count so the ctx-cancel test
-// runs synchronously.
+// advancingClock is a concurrency-safe virtual-time sleeper: each Sleep records d and
+// advances *now; cancelAfter/runAt fire cancel/run once at the Nth Sleep.
 type advancingClock struct {
+	mu          sync.Mutex
 	now         *time.Time
 	sleeps      []time.Duration
 	cancel      context.CancelFunc
 	cancelAfter int // ≥1 to enable; cancels after the Nth Sleep call.
+	runAt       int // ≥1 to enable; calls run after the Nth Sleep call.
+	run         func()
 }
 
 func (c *advancingClock) Sleep(_ context.Context, d time.Duration) {
+	c.mu.Lock()
 	c.sleeps = append(c.sleeps, d)
 	*c.now = c.now.Add(d)
+	var cancel context.CancelFunc
 	if c.cancelAfter > 0 && len(c.sleeps) >= c.cancelAfter && c.cancel != nil {
-		c.cancel()
-		c.cancel = nil // one-shot
+		cancel, c.cancel = c.cancel, nil // one-shot
 	}
+	var run func()
+	if c.runAt > 0 && len(c.sleeps) >= c.runAt && c.run != nil {
+		run, c.run = c.run, nil // one-shot
+	}
+	c.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if run != nil {
+		run()
+	}
+}
+
+// Now reads the virtual time; it is HandleConfig.Now for hookConfig's clock.
+func (c *advancingClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return *c.now
+}
+
+// Sleeps returns a copy of the durations slept so far.
+func (c *advancingClock) Sleeps() []time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]time.Duration(nil), c.sleeps...)
 }
 
 // setupVirtualClock installs a fresh virtual time origin and the

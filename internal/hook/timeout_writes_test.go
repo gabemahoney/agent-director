@@ -42,10 +42,10 @@ func (w *orderingWriter) Write(p []byte) (int, error) {
 // TestFailClosedTimeoutWritesDBBeforeStdout drives runRelay to the
 // polling-timeout branch using the virtual clock (zero wall-clock cost)
 // and then asserts:
-//   1. DecidePermissionRequest("id-tout", "deny", "timeout") was recorded.
-//   2. ApplyHookTransition("id-tout", "working", false) was recorded.
-//   3. Both calls were captured BEFORE the first stdout byte was written.
-//   4. The stdout envelope is a valid deny envelope (SRD §6.4).
+//  1. DecidePermissionRequest("id-tout", "deny", "timeout") was recorded.
+//  2. ApplyHookTransition("id-tout", "working", false) was recorded.
+//  3. Both calls were captured BEFORE the first stdout byte was written.
+//  4. The stdout envelope is a valid deny envelope (SRD §6.4).
 //
 // Note: Handle calls ApplyHookTransition once BEFORE runRelay (to record
 // the check_permission state transition from the PermissionRequest

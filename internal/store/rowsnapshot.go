@@ -115,6 +115,11 @@ func decodeLaunchStartedAt(v any) int64 {
 // other state is never inside. grace is used as given, with no default or
 // minimum applied here (configuration loading owns those, SR-4.1).
 //
+// Two callers use it with the same effective pending grace period (SR-13.4):
+// find-missing, which leaves a row inside it untouched, and the hook's
+// SessionStart, which waits for its launch's identity write only while the
+// row is inside it (SR-22.9).
+//
 // The comparison never subtracts the launch start, so no int64 value, however
 // extreme, can overflow into looking young: a huge age is past.
 func InsidePendingGrace(state string, launchStartedAtMillis int64, grace time.Duration, now time.Time) bool {

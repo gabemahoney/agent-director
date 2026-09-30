@@ -22,11 +22,13 @@ import (
 )
 
 // relayAgentConfig is the HandleConfig of a relayed hook from instanceID's own
-// agent (SR-22.9: its pane process) with the given relay timeout.
+// agent (SR-22.9: its pane process) with the given relay timeout, polling on
+// the real poll clock: these tests time out and decide rows in real time.
 func relayAgentConfig(t *testing.T, st *store.Store, instanceID string, timeoutSeconds int) hook.HandleConfig {
 	t.Helper()
 	hc := hookConfig(envWith(instanceID), agentParent(t, st, instanceID))
 	hc.Cfg = config.Relay{TimeoutSeconds: timeoutSeconds, PollBaseMs: 0, PollJitterMs: 0}
+	hc.Clock = hook.DefaultPollClock()
 	return hc
 }
 

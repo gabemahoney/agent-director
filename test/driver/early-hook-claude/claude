@@ -1,0 +1,54 @@
+#!/bin/bash
+# Early-hook stand-in `claude` for the Docker harness (SRD SR-22.9, SR-20.9).
+#
+# Like ../stand-in-claude/claude it ends as an interactive bash under the
+# pane process's pid, but first it runs one SessionStart hook at once, the
+# way a Claude Code that starts quickly does: `agent-director hook` is a
+# simple command in this script, so this process (the pane process tmux
+# reports at the create) is the hook's direct parent, and `exec` then keeps
+# the same pid for the shell. With ../delay-create-tmux/tmux holding the
+# create's reply back, the hook starts before agent-director records the
+# pane.
+#
+# Use: put this directory first on the PATH of the agent-director process
+# that launches the session (see stand-in-claude/claude for why the PATH
+# prefix and not --extra-env):
+#
+#   PATH=/opt/driver/delay-create-tmux:/opt/driver/early-hook-claude:$PATH \
+#       agent-director spawn --cwd /tmp
+#
+# Every argument is ignored. The hook's files go in
+# ${EARLY_HOOK_DIR:-/tmp/early-hook-claude}/<AGENT_DIRECTOR_INSTANCE_ID>/:
+#
+#   pid           this process's pid (the pane process)
+#   session_id    the payload's session_id, a fresh uuid
+#   payload.json  the SessionStart payload (transcript_path
+#                 $HOME/.claude/projects/early-hook/<session_id>.jsonl)
+#   started       `date +%s%N` just before the hook starts
+#   out, err      the hook's stdout and stderr
+#   ended         `date +%s%N` just after the hook exits
+#   rc            the hook's exit status, written last
+#
+# If AGENT_DIRECTOR_INSTANCE_ID is unset or not [A-Za-z0-9._-]+, no hook runs.
+
+id="${AGENT_DIRECTOR_INSTANCE_ID:-}"
+if [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    dir="${EARLY_HOOK_DIR:-/tmp/early-hook-claude}/$id"
+    mkdir -p "$dir"
+    printf '%s\n' "$$" >"$dir/pid"
+    sid="$(cat /proc/sys/kernel/random/uuid)"
+    printf '%s\n' "$sid" >"$dir/session_id"
+    jq -cn --arg s "$sid" --arg t "$HOME/.claude/projects/early-hook/$sid.jsonl" \
+        --arg c "$PWD" \
+        '{session_id: $s, transcript_path: $t, cwd: $c,
+          hook_event_name: "SessionStart", source: "startup"}' >"$dir/payload.json"
+    date +%s%N >"$dir/started"
+    agent-director hook <"$dir/payload.json" >"$dir/out" 2>"$dir/err"
+    rc=$?
+    date +%s%N >"$dir/ended"
+    printf '%s\n' "$rc" >"$dir/rc"
+fi
+
+# --noprofile --norc: nothing from the image's dotfiles runs; -i: the shell
+# reads commands from the pane's terminal.
+exec bash --noprofile --norc -i

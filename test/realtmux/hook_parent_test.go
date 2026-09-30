@@ -34,8 +34,12 @@ const (
 )
 
 // hookStubScript is the stand-in `claude`. It fires its hook only after the
-// test writes $AD_HOOKSTUB_DIR/go, which the test does after spawn returns:
-// a hook before spawn's identity write would be ignored as no_pane_recorded.
+// test writes $AD_HOOKSTUB_DIR/go, which the test does after spawn returns,
+// so the pane is always recorded when the hook reads the row and this test
+// never exercises the SessionStart wait (SR-22.9). A SessionStart sent before
+// spawn's identity write would wait, bounded by the pending grace period, and
+// be judged by the parent rule once the identity lands; only if it has not
+// landed by the bound would the hook be ignored as no_pane_recorded.
 // It records the would-be parent's pid ($$ of the shell that runs the hook)
 // in "parent", the hook's stdout in "stdout" and its exit status in "exit".
 const hookStubScript = `#!/bin/bash

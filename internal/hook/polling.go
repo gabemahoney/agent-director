@@ -51,8 +51,11 @@ type PollStore interface {
 	GetPermissionRequest(instanceID, requestToken string) (store.PermissionRow, error)
 }
 
-// PollClock is the sleeper seam. Production uses time.NewTimer to
-// honor ctx.Done; tests can inject a fast variant.
+// PollClock is the sleeper seam of the relay polling loop and of
+// SessionStart's bounded wait for its launch's identity write (SR-22.9;
+// HandleConfig.Clock, with HandleConfig.Now as the clock it advances).
+// Production uses time.NewTimer to honor ctx.Done; tests can inject a fast
+// variant.
 type PollClock interface {
 	Sleep(ctx context.Context, d time.Duration)
 }
@@ -83,8 +86,7 @@ func DefaultPollClock() PollClock { return realPollClock{} }
 //
 //  1. Read the permission_requests row by (instanceID, requestToken).
 //     - sql.ErrNoRows → another hook event preempted; fail-closed deny.
-//     - any other error → bounded retry (pollMaxReadRetries); if the
-//       retry budget is exhausted, fail-closed deny.
+//     - any other error → bounded retry (pollMaxReadRetries), then fail-closed deny.
 //     - decision still NULL → sleep and loop.
 //     - decision populated → return it.
 //  2. The per-iteration sleep is `max(pollFloor, cfg.PollBaseMs + uniform(0, cfg.PollJitterMs))`.

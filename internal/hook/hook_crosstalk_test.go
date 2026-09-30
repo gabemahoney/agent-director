@@ -95,7 +95,8 @@ func (r crossTalkRig) payload(t *testing.T, h crossTalkHook) string {
 }
 
 // fire runs Handle for h from parent from and returns stdout; the 1 s relay
-// window makes a wrongly applied relayed hook print a decision, not block.
+// window on the real poll clock makes a wrongly applied relayed hook print a
+// decision, not block.
 func (r crossTalkRig) fire(t *testing.T, from hookParent, h crossTalkHook) string {
 	t.Helper()
 	mode := ""
@@ -104,6 +105,9 @@ func (r crossTalkRig) fire(t *testing.T, from hookParent, h crossTalkHook) strin
 	}
 	hc := hookConfig(envHook(r.id, mode), from)
 	hc.Cfg = config.Relay{TimeoutSeconds: 1}
+	if h.relay {
+		hc.Clock = hook.DefaultPollClock()
+	}
 	var out bytes.Buffer
 	if err := hook.Handle(context.Background(), strings.NewReader(r.payload(t, h)), &out, r.st, hc, nil); err != nil {
 		t.Fatalf("Handle(%s): %v", h.fixture, err)

@@ -311,7 +311,10 @@ func TestSpawnRefusesUnusableSocketDir(t *testing.T) {
 
 // TestSpawnHookBeforeIdentityWriteIsIgnored (SR-22.9): the pending row records no
 // pane until the identity write, so a hook between the create and it is ignored
-// (no_pane_recorded); the identity write applies and spawn succeeds.
+// (no_pane_recorded); the identity write applies and spawn succeeds. The hook
+// here is the store's gated write, driven directly; the hook handler's
+// SessionStart first waits for the identity write, bounded by the pending
+// grace (SR-13.4), and that wait is tested in internal/hook.
 func TestSpawnHookBeforeIdentityWriteIsIgnored(t *testing.T) {
 	env := newSpawnEnv(t)
 	var got store.HookApplied
