@@ -329,30 +329,6 @@ func TestSendKeysActionFailureFollowUp(t *testing.T) {
 	}
 }
 
-// skaAdoptCounter is e.store counting the adoption writes send-keys attempts.
-type skaAdoptCounter struct {
-	*killStore
-	tries int
-}
-
-// AdoptIdentityIfUnchanged counts the attempt, then delegates.
-func (c *skaAdoptCounter) AdoptIdentityIfUnchanged(id string, examined api.RowSnapshot, li api.LaunchIdentity) (api.CondResult, error) {
-	c.tries++
-	return c.killStore.AdoptIdentityIfUnchanged(id, examined, li)
-}
-
-// skaAdopted counts id's send-keys ad.provenance.disagree records with reason adopted.
-func skaAdopted(t *testing.T, id string) int {
-	t.Helper()
-	n := 0
-	for _, l := range pendTrail(t, "ad.provenance.disagree", id) {
-		if l["verb"] == "send-keys" && l["reason"] == tmux.ReasonAdopted {
-			n++
-		}
-	}
-	return n
-}
-
 // TestSendKeysAdoptionWrite: a lost reply's identity is written once and
 // logged adopted only when applied; no write when it adds nothing; the
 // write's outcome never changes where the keys go (SR-3.6).
@@ -396,12 +372,7 @@ func TestSendKeysAdoptionWrite(t *testing.T) {
 			if tc.setup != nil {
 				tc.setup(t, e, &r)
 			}
-			store := &skaAdoptCounter{killStore: e.store}
-			send := func() verbRun[api.SendKeysResult] {
-				return runVerb(e, func() (api.SendKeysResult, error) {
-					return api.SendKeys(store, e.rec, e.pc, sendKeysWindow(), e.clock.Now(), skaParams(r))
-				})
-			}
+			send := func() verbRun[api.SendKeysResult] { return e.sendKeysRun(skaParams(r)) }
 			logs := &bytes.Buffer{}
 			prev := log.Writer()
 			log.SetOutput(logs)
@@ -423,8 +394,8 @@ func TestSendKeysAdoptionWrite(t *testing.T) {
 				}
 				e.assertDelivered(t, r.Socket, pane, skaText)
 			}
-			if store.tries != tc.tries {
-				t.Errorf("adoption writes attempted = %d; want %d", store.tries, tc.tries)
+			if e.store.adoptTries != tc.tries {
+				t.Errorf("adoption writes attempted = %d; want %d", e.store.adoptTries, tc.tries)
 			}
 			after := e.adoption(t, r.ID)
 			wantAdopted := 0
@@ -444,7 +415,7 @@ func TestSendKeysAdoptionWrite(t *testing.T) {
 					t.Errorf("adoption columns %+v; want the identity unchanged %+v", after, before)
 				}
 			}
-			if got := skaAdopted(t, r.ID); got != wantAdopted {
+			if got := adoptedRecords(t, "send-keys", r.ID); got != wantAdopted {
 				t.Errorf("adopted records = %d; want %d", got, wantAdopted)
 			}
 			if logs.Len() != 0 {
@@ -452,9 +423,9 @@ func TestSendKeysAdoptionWrite(t *testing.T) {
 			}
 			if tc.applied {
 				assertSameRun(t, send(), first)
-				if store.tries != tc.tries || skaAdopted(t, r.ID) != 1 {
-					t.Errorf("re-issued: %d writes attempted, %d adopted records; want %d and 1", store.tries,
-						skaAdopted(t, r.ID), tc.tries)
+				if e.store.adoptTries != tc.tries || adoptedRecords(t, "send-keys", r.ID) != 1 {
+					t.Errorf("re-issued: %d writes attempted, %d adopted records; want %d and 1", e.store.adoptTries,
+						adoptedRecords(t, "send-keys", r.ID), tc.tries)
 				}
 			}
 		})

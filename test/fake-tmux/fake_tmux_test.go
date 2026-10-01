@@ -8,6 +8,7 @@ package main_test
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -454,7 +455,8 @@ func TestKillsChangeNextAnswers(t *testing.T) {
 }
 
 // TestSendAndCaptureLogged checks text, Enter and capture by pane id work and
-// are logged with -u -S <socket> first; the legacy argv logs in the same format.
+// are logged with -u -S <socket> first; a legacy kill-session logs in the
+// same format and a legacy send-keys is not logged.
 func TestSendAndCaptureLogged(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "fake-tmux.log")
 	t.Setenv(faketmuxfix.EnvLog, logPath)
@@ -479,8 +481,10 @@ func TestSendAndCaptureLogged(t *testing.T) {
 			t.Errorf("CapturePaneID(%s) = %q, %v; want %q", cc.pane, got, err, cc.want)
 		}
 	}
-	if err := c.SendKeys("legacy", "hi", false); err != nil {
-		t.Fatalf("legacy SendKeys: %v", err)
+	for _, argv := range [][]string{{"send-keys", "-t", "legacy:0.0", "hi"}, {"kill-session", "-t", "legacy"}} {
+		if err := exec.Command(faketmuxfix.Binary(t), argv...).Run(); err != nil {
+			t.Fatalf("legacy %q: %v", argv, err)
+		}
 	}
 
 	recs := readLog(t, logPath)
@@ -498,8 +502,8 @@ func TestSendAndCaptureLogged(t *testing.T) {
 			t.Errorf("record %d = %q, want target %s", i, rec, w.pane)
 		}
 	}
-	if legacy := recs[len(wantCmds)]; len(legacy) < 2 || legacy[1] != "send-keys" {
-		t.Errorf("legacy record = %q, want send-keys with no -u", legacy)
+	if legacy := recs[len(wantCmds)]; len(legacy) < 2 || legacy[1] != "kill-session" {
+		t.Errorf("legacy record = %q, want kill-session with no -u (legacy send-keys not logged)", legacy)
 	}
 }
 

@@ -40,6 +40,10 @@ func SetPauseTestKnobs(interval time.Duration, sleeper func(time.Duration)) {
 	pauseSleep = sleeper
 }
 
+// PauseTestKnobs returns the pause wait's current poll interval and sleeper,
+// so a SetPauseTestKnobs caller restores them without spelling the default.
+func PauseTestKnobs() (time.Duration, func(time.Duration)) { return pausePollInterval, pauseSleep }
+
 // TmuxClientOf returns the tmux client c was built with, so package api_test
 // can drive the production client api.New wired from the [tmux] config.
 func TmuxClientOf(c *Client) TmuxClient { return c.tmuxClient }

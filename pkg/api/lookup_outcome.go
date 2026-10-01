@@ -183,7 +183,8 @@ func rowSocket(recorded string) (string, error) {
 // launch token and recorded server identity of id (the row's recorded launch
 // identity, or the one adoption found for this call); this store's id,
 // storeID; and socket, the socket the row's calls use (rowSocket). kill,
-// read-pane, send-keys and find-missing build every lookup's Launch with it.
+// read-pane, send-keys, pause and find-missing build every lookup's Launch
+// with it.
 func rowLaunch(instanceID string, id LaunchIdentity, storeID, socket string) tmux.Launch {
 	return tmux.Launch{
 		InstanceID:      instanceID,

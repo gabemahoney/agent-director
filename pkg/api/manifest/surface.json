@@ -1088,7 +1088,9 @@
         "ErrSpawnNotPausable",
         "ErrPauseTimeout",
         "ErrTmuxNotAvailable",
-        "ErrTmuxSendKeys"
+        "ErrTmuxSendKeys",
+        "ErrTmuxUnresponsive",
+        "ErrTmuxSessionConflict"
       ]
     },
     {

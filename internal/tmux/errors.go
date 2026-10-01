@@ -6,7 +6,7 @@
 // -S <socket> next, is bounded by its class's timeout and the pipe-close wait
 // handed in through New, runs with every AGENT_DIRECTOR_* variable removed
 // from the client's environment, and reports failures as *CallError. The
-// pre-Phase-1 name-based methods remain until their last user moves.
+// name-based HasSession stays (SR-2.1); no other name-based method remains.
 //
 // The package also holds the shared lookup (SR-3.3, SR-3.4, SR-3.10,
 // Appendix F.2; lookup.go): Lookup and Classify turn one lookup answer and a

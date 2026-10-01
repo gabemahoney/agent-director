@@ -53,18 +53,6 @@ func skpOtherStore(t *testing.T, e *killEnv, r killRow) tmuxfix.SeedSession {
 	return s
 }
 
-// skpAdopted counts id's send-keys ad.provenance.disagree records with reason adopted.
-func skpAdopted(t *testing.T, id string) int {
-	t.Helper()
-	n := 0
-	for _, l := range pendTrail(t, "ad.provenance.disagree", id) {
-		if l["verb"] == "send-keys" && l["reason"] == "adopted" {
-			n++
-		}
-	}
-	return n
-}
-
 // skpAssertAdoptedOnce fails unless after is before with the server identity
 // and pane (nil: none) written in one write.
 func skpAssertAdoptedOnce(t *testing.T, before, after adoptionColumns, pane any) {
@@ -134,7 +122,7 @@ func TestSendKeysPendingDelivered(t *testing.T) {
 					}
 					after := e.adoption(t, r.ID)
 					skpAssertAdoptedOnce(t, before, after, pane)
-					if n := skpAdopted(t, r.ID); n != 1 {
+					if n := adoptedRecords(t, "send-keys", r.ID); n != 1 {
 						t.Errorf("adopted records = %d; want 1", n)
 					}
 
@@ -146,7 +134,7 @@ func TestSendKeysPendingDelivered(t *testing.T) {
 					if again := e.adoption(t, r.ID); again != after {
 						t.Errorf("adoption after the second call = %+v; want no further write %+v", again, after)
 					}
-					if n := skpAdopted(t, r.ID); n != 1 {
+					if n := adoptedRecords(t, "send-keys", r.ID); n != 1 {
 						t.Errorf("adopted records after the second call = %d; want still 1", n)
 					}
 				})
@@ -355,7 +343,7 @@ func TestSendKeysPendingRowChangesBeforeSend(t *testing.T) {
 				if after := e.adoption(t, r.ID); after != want {
 					t.Errorf("adoption = %+v; want only the row write's row_version +1 %+v", after, want)
 				}
-				if n := skpAdopted(t, r.ID); n != 0 {
+				if n := adoptedRecords(t, "send-keys", r.ID); n != 0 {
 					t.Errorf("adopted records = %d; want none (the write did not apply)", n)
 				}
 			})

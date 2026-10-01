@@ -23,7 +23,7 @@ type Options struct {
 	ConfigPath string
 
 	// TmuxCommand overrides the tmux binary used for session management,
-	// by both the socket-taking calls and the name-based methods. When empty
+	// by both the socket-taking calls and the name-based HasSession. When empty
 	// the tmux binary on PATH is used (standard behavior). The production
 	// client New builds from it takes its query, action and create timeouts
 	// and its pipe-close wait from the config's [tmux] table, read once at

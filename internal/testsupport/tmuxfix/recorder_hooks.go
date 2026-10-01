@@ -8,12 +8,12 @@ import (
 )
 
 // Session hooks, after-call hooks and virtual time (SRD SR-20.3, Appendix
-// F.5). They apply to the socket-taking calls only: the name-based methods
-// are never charged and run no hook. Each socket-taking call runs in this
-// order: its table effect (or scripted result), then the virtual-time
-// charge, then the session hooks, then the after-call hooks (outside the
-// Recorder's lock, so they may call back into the Recorder or the store),
-// then it returns to the caller.
+// F.5). They apply to the socket-taking calls only: the name-based
+// HasSession is never charged and runs no hook. Each socket-taking call runs
+// in this order: its table effect (or scripted result), then the
+// virtual-time charge, then the session hooks, then the after-call hooks
+// (outside the Recorder's lock, so they may call back into the Recorder or
+// the store), then it returns to the caller.
 
 // AfterCallHook is a test function run when a socket-taking call returns,
 // before the caller sees the result: c is the recorded call and err its

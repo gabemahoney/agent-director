@@ -250,14 +250,6 @@ func TestKillTrailClosedClient(t *testing.T) {
 	}
 }
 
-// ktrDisagree is one expected ad.provenance.disagree record; current is the
-// current_session_name (null when "") and ours says tmux_session_id is the
-// row's session id (else null).
-type ktrDisagree struct {
-	reason, server, verdict, action, current string
-	ours                                     bool
-}
-
 // ktrRestart restarts r's server and seeds r's session on the new one.
 func ktrRestart(t *testing.T, e *killEnv, r *killRow) {
 	e.rec.RestartServer(r.Socket, tmuxfix.Server{})
@@ -274,37 +266,37 @@ func ktrRenamed(t *testing.T, e *killEnv, r *killRow) {
 // with its fields, never with a label value or another row's id; the normal
 // Ours case writes none.
 func TestKillTrailProvenanceDisagree(t *testing.T) {
-	restarted := ktrDisagree{reason: "server_restarted", server: "restarted", verdict: "ours", action: "kill_sent", ours: true}
-	adopted := ktrDisagree{reason: "adopted", server: "unknown", verdict: "ours", action: "kill_sent", ours: true}
+	restarted := disagreeWant{reason: "server_restarted", server: "restarted", verdict: "ours", action: "kill_sent", ours: true}
+	adopted := disagreeWant{reason: "adopted", server: "unknown", verdict: "ours", action: "kill_sent", ours: true}
 	cases := []struct {
 		name     string
 		spec     killRowSpec
 		setup    func(*testing.T, *killEnv, *killRow)
-		want     []ktrDisagree
+		want     []disagreeWant
 		followup string // the ad.kill.called followup_outcome, when checked
 	}{
 		{name: "normal ours writes none"},
-		{name: "server_restarted", setup: ktrRestart, want: []ktrDisagree{restarted}},
+		{name: "server_restarted", setup: ktrRestart, want: []disagreeWant{restarted}},
 		{name: "server_restarted on the lookup and the follow-up is written once",
-			spec: killRowSpec{Agent: agentNotRecorded}, setup: ktrRestart, want: []ktrDisagree{restarted}, followup: "gone"},
-		{name: "server_mismatch", setup: ktrRebind, want: []ktrDisagree{
+			spec: killRowSpec{Agent: agentNotRecorded}, setup: ktrRestart, want: []disagreeWant{restarted}, followup: "gone"},
+		{name: "server_mismatch", setup: ktrRebind, want: []disagreeWant{
 			{reason: "server_mismatch", server: "differs", verdict: "different_server", action: "nothing_sent"}}},
-		{name: "adopted", spec: killRowSpec{NoServerIdentity: true}, want: []ktrDisagree{adopted}},
+		{name: "adopted", spec: killRowSpec{NoServerIdentity: true}, want: []disagreeWant{adopted}},
 		{name: "duplicate_label",
 			setup: func(_ *testing.T, e *killEnv, r *killRow) {
 				e.rec.SeedSessions(r.Socket, tmuxfix.SeedSession{Name: "dup", Label: r.current()})
 			},
-			want: []ktrDisagree{{reason: "duplicate_label", server: "match", verdict: "provenance_conflict", action: "nothing_sent"}}},
+			want: []disagreeWant{{reason: "duplicate_label", server: "match", verdict: "provenance_conflict", action: "nothing_sent"}}},
 		{name: "scope_value",
 			setup: func(_ *testing.T, e *killEnv, r *killRow) {
 				e.rec.SetScope(r.Socket, tmuxfix.ScopeGlobal, tmuxfix.ScopeValue{SessionID: r.Session.ID, Label: r.current()})
 			},
-			want: []ktrDisagree{{reason: "scope_value", server: "match", verdict: "provenance_conflict", action: "nothing_sent"}}},
-		{name: "name_changed", spec: killRowSpec{NoSession: true}, setup: ktrRenamed, want: []ktrDisagree{
+			want: []disagreeWant{{reason: "scope_value", server: "match", verdict: "provenance_conflict", action: "nothing_sent"}}},
+		{name: "name_changed", spec: killRowSpec{NoSession: true}, setup: ktrRenamed, want: []disagreeWant{
 			{reason: "name_changed", server: "match", verdict: "ours", action: "kill_sent", current: "renamed-kill", ours: true}}},
 		{name: "adopted and name_changed",
 			spec: killRowSpec{NoServerIdentity: true, NoPane: true, NoSession: true}, setup: ktrRenamed,
-			want: []ktrDisagree{adopted,
+			want: []disagreeWant{adopted,
 				{reason: "name_changed", server: "unknown", verdict: "ours", action: "kill_sent", current: "renamed-kill", ours: true}}},
 	}
 	for _, tc := range cases {
@@ -328,7 +320,7 @@ func TestKillTrailProvenanceDisagree(t *testing.T) {
 				t.Fatalf("ad.provenance.disagree records = %d; want %d: %v", len(recs), len(tc.want), recs)
 			}
 			for i, want := range tc.want {
-				ktrAssertDisagree(t, recs[i], r, want)
+				assertDisagreeRecord(t, recs[i], r, "kill", "ad_kill", want)
 				ktrAssertNoForeignContent(t, recs[i], r.Token, e.storeID, other)
 			}
 			called := killCalled(t, r.ID)
@@ -341,29 +333,6 @@ func TestKillTrailProvenanceDisagree(t *testing.T) {
 			}
 		})
 	}
-}
-
-// ktrAssertDisagree checks one ad.provenance.disagree record of r against want.
-func ktrAssertDisagree(t *testing.T, rec map[string]any, r killRow, want ktrDisagree) {
-	t.Helper()
-	var sessionID, current any
-	if want.ours {
-		sessionID = r.Session.ID
-	}
-	if want.current != "" {
-		current = want.current
-	}
-	fields := map[string]any{
-		"claude_instance_id": r.ID, "verb": "kill", "source": "ad_kill", "reason": want.reason,
-		"tmux_socket": r.Socket, "tmux_session_name": r.Name, "tmux_session_id": sessionID,
-		"current_session_name": current, "server": want.server, "verdict": want.verdict, "action": want.action,
-	}
-	for k, v := range fields {
-		if got, ok := rec[k]; !ok || got != v {
-			t.Errorf("%s: %s = %v (present %t); want %v", want.reason, k, got, ok, v)
-		}
-	}
-	ktrAssertCaller(t, rec)
 }
 
 // ktrAssertNoForeignContent fails when rec's text holds any of the values

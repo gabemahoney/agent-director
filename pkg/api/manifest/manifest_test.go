@@ -208,32 +208,6 @@ func TestKillHasSRDErrorNames(t *testing.T) {
 	assertGoDocErrorsMatchManifest(t, "Kill", "kill")
 }
 
-// TestPauseHasSRDErrorNames pins the pause entry's error catalog against
-// SRD §13.1: state-precondition guard, the poll-timeout sentinel, and the
-// two transport-layer tmux sentinels.
-func TestPauseHasSRDErrorNames(t *testing.T) {
-	v, ok := manifest.Lookup("pause")
-	if !ok {
-		t.Fatal("pause not in manifest")
-	}
-	want := []string{
-		"ErrSpawnNotFound",
-		"ErrSpawnNotPausable",
-		"ErrPauseTimeout",
-		"ErrTmuxNotAvailable",
-		"ErrTmuxSendKeys",
-	}
-	have := map[string]bool{}
-	for _, n := range v.ErrorNames {
-		have[n] = true
-	}
-	for _, n := range want {
-		if !have[n] {
-			t.Errorf("pause.ErrorNames missing %q", n)
-		}
-	}
-}
-
 // TestResumeIncludesErrTmuxUnresponsive pins that resume advertises the launch
 // timeout (SR-1.7) beside its seven earlier names; Epic 16 pins the full list.
 func TestResumeIncludesErrTmuxUnresponsive(t *testing.T) {

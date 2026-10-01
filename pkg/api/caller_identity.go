@@ -17,8 +17,8 @@ type caller struct {
 }
 
 // callerIdentity collects the invoking process's identity once per call.
-// Shared by Client.Decide, Kill and send-keys (sendKeys) so the trail emit
-// fields stay identical across those surfaces.
+// Shared by Client.Decide, Kill, send-keys (sendKeys) and Pause so the trail
+// emit fields stay identical across those surfaces.
 func callerIdentity() caller {
 	c := caller{
 		process: filepath.Base(os.Args[0]),

@@ -257,77 +257,15 @@ func (en sktEntry) send(t *testing.T, e *killEnv, id string) error {
 // written once per call with its fields and action, never with a label value
 // or another row's id; the normal Ours case writes none.
 func TestSendKeysTrailProvenanceDisagree(t *testing.T) {
-	restarted := func(action string) []ktrDisagree {
-		return []ktrDisagree{{reason: "server_restarted", server: "restarted", verdict: "ours", action: action, ours: true}}
-	}
-	adopted := ktrDisagree{reason: "adopted", server: "unknown", verdict: "ours", action: "keys_sent", ours: true}
-	lostReply := killRowSpec{NoServerIdentity: true, NoPane: true}
-	conflict := func(reason string) []ktrDisagree {
-		return []ktrDisagree{{reason: reason, server: "match", verdict: "provenance_conflict", action: "nothing_sent"}}
-	}
-	cases := []struct {
-		name  string
-		spec  killRowSpec
-		setup []func(*testing.T, *killEnv, *killRow)
-		want  []ktrDisagree
-	}{
-		{name: "normal ours writes none"},
-		{name: "SessionStart pid differs from the pane pid writes none",
-			spec: killRowSpec{Opts: []apitest.SpawnOption{apitest.WithPID(apitest.TestPanePID + 5)}}},
-		{name: "server_restarted", setup: []func(*testing.T, *killEnv, *killRow){ktrRestart}, want: restarted("keys_sent")},
-		{name: "server_restarted, text call timed out",
-			setup: []func(*testing.T, *killEnv, *killRow){ktrRestart, ktrScript(tmux.FailTimeout, tmux.CallSendText)},
-			want:  restarted("text_sent")},
-		{name: "server_restarted, Enter call timed out",
-			setup: []func(*testing.T, *killEnv, *killRow){ktrRestart, ktrScript(tmux.FailTimeout, tmux.CallSendEnter)},
-			want:  restarted("text_sent")},
-		{name: "server_restarted, Enter call failed",
-			setup: []func(*testing.T, *killEnv, *killRow){ktrRestart, ktrScript(tmux.FailUnrecognized, tmux.CallSendEnter)},
-			want:  restarted("text_sent")},
-		{name: "server_restarted on the lookup and the follow-up, text call failed",
-			setup: []func(*testing.T, *killEnv, *killRow){ktrRestart, ktrScript(tmux.FailUnrecognized, tmux.CallSendText)},
-			want:  restarted("nothing_sent")},
-		{name: "server_mismatch", setup: []func(*testing.T, *killEnv, *killRow){ktrRebind}, want: []ktrDisagree{
-			{reason: "server_mismatch", server: "differs", verdict: "different_server", action: "nothing_sent"}}},
-		{name: "adopted", spec: lostReply, want: []ktrDisagree{adopted}},
-		{name: "adoption write not applied writes no adopted", spec: lostReply,
-			setup: []func(*testing.T, *killEnv, *killRow){func(t *testing.T, e *killEnv, r *killRow) {
-				e.rowWriteAfter(t, tmux.CallLookup, *r)
-			}}},
-		{name: "duplicate_label", setup: []func(*testing.T, *killEnv, *killRow){sktDuplicate}, want: conflict("duplicate_label")},
-		{name: "scope_value",
-			setup: []func(*testing.T, *killEnv, *killRow){func(_ *testing.T, e *killEnv, r *killRow) {
-				e.rec.SetScope(r.Socket, tmuxfix.ScopeGlobal, tmuxfix.ScopeValue{SessionID: r.Session.ID, Label: r.current()})
-			}},
-			want: conflict("scope_value")},
-		{name: "name_changed", spec: killRowSpec{NoSession: true}, setup: []func(*testing.T, *killEnv, *killRow){ktrRenamed},
-			want: []ktrDisagree{{reason: "name_changed", server: "match", verdict: "ours", action: "keys_sent",
-				current: "renamed-kill", ours: true}}},
-		{name: "adopted and name_changed",
-			spec:  killRowSpec{NoServerIdentity: true, NoPane: true, NoSession: true},
-			setup: []func(*testing.T, *killEnv, *killRow){ktrRenamed},
-			want: []ktrDisagree{adopted, {reason: "name_changed", server: "unknown", verdict: "ours", action: "keys_sent",
-				current: "renamed-kill", ours: true}}},
-	}
 	for _, entry := range []sktEntry{{"SendKeys", false}, {"Client.SendKeys", true}} {
-		for _, tc := range cases {
+		for _, tc := range keysDisagreeCases() {
 			t.Run(entry.name+"/"+tc.name, func(t *testing.T) {
 				e := newKillEnv(t)
-				r := sktRow(tc.spec, tc.setup...)(t, e)
-				// Another row's label on the server: its id must appear in no record.
-				other := "sk-other-" + uuid.NewString()[:8]
-				e.rec.SeedSessions(r.Socket, tmuxfix.SeedSession{Name: "foreign-" + uuid.NewString()[:8], Label: r.foreign(other)})
+				r, other := e.seedKeysDisagreeCase(t, tc)
 
 				_ = entry.send(t, e, r.ID)
 
-				recs := sktDisagrees(t, r.ID)
-				if len(recs) != len(tc.want) {
-					t.Fatalf("ad.provenance.disagree records = %d; want %d: %v", len(recs), len(tc.want), recs)
-				}
-				for i, want := range tc.want {
-					sktAssertDisagree(t, recs[i], r, want)
-					ktrAssertNoForeignContent(t, recs[i], r.Token, e.storeID, other)
-				}
+				assertKeysDisagrees(t, e, sktDisagrees(t, r.ID), r, "send-keys", other, tc.want)
 				called := sktCalled(t, r.ID)
 				if !entry.client {
 					if len(called) != 0 {
@@ -342,29 +280,6 @@ func TestSendKeysTrailProvenanceDisagree(t *testing.T) {
 			})
 		}
 	}
-}
-
-// sktAssertDisagree checks one send-keys ad.provenance.disagree record of r against want.
-func sktAssertDisagree(t *testing.T, rec map[string]any, r killRow, want ktrDisagree) {
-	t.Helper()
-	var sessionID, current any
-	if want.ours {
-		sessionID = r.Session.ID
-	}
-	if want.current != "" {
-		current = want.current
-	}
-	fields := map[string]any{
-		"claude_instance_id": r.ID, "verb": "send-keys", "source": "ad_send_keys", "reason": want.reason,
-		"tmux_socket": r.Socket, "tmux_session_name": r.Name, "tmux_session_id": sessionID,
-		"current_session_name": current, "server": want.server, "verdict": want.verdict, "action": want.action,
-	}
-	for k, v := range fields {
-		if got, ok := rec[k]; !ok || got != v {
-			t.Errorf("%s: %s = %v (present %t); want %v", want.reason, k, got, ok, v)
-		}
-	}
-	ktrAssertCaller(t, rec)
 }
 
 // sktChildEnv gates TestSendKeysTrailFailOpenChild and carries the id prefix.

@@ -28,9 +28,9 @@ const defaultStorePath = "~/.agent-director/state.db"
 // SRD Appendix F.3). Every socket-taking method takes the socket (SR-3.3)
 // and reports a failure as *TmuxCallError; an error of any other type from
 // an injected implementation counts as TmuxFailUnrecognized for that call.
-// The name-based SendKeys is transitional: it stays until its last verb
-// moves to the socket-taking calls. HasSession stays (SR-2.1) and matches by prefix: resume still calls
-// it until resume moves to the lookup, and no verb may newly adopt it.
+// HasSession, the one name-based method, stays (SR-2.1) and matches by
+// prefix: resume still calls it until resume moves to the lookup, and no verb
+// may newly adopt it.
 // *tmux.Client and tmuxfix.Recorder implement it.
 type TmuxClient interface {
 	// Lookup makes the one-call lookup on socket: sessions with labels and
@@ -60,8 +60,6 @@ type TmuxClient interface {
 	// exists (prefix match; stays per SR-2.1). Resume still calls it until
 	// it moves to the lookup; no verb may newly adopt it.
 	HasSession(name string) (bool, error)
-	// SendKeys delivers text to the named session's first pane (transitional).
-	SendKeys(name, text string, pressEnter bool) error
 }
 
 // The production client satisfies TmuxClient (tmuxfix.Recorder's assertion

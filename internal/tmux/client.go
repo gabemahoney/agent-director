@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os/exec"
 	"sort"
-	"strings"
 )
 
 // binaryName is the program agent-director invokes. Held as a var (not a
@@ -40,7 +39,7 @@ func defaultRunner(name string, args ...string) ([]byte, error) {
 }
 
 // Client is the entry point callers hold to drive tmux. It carries two
-// seams: run, used by the pre-Phase-1 name-based methods (combined output, no
+// seams: run, used by the name-based HasSession (combined output, no
 // timeout), and runCall, used by the socket-taking call set (separate
 // streams, per-class timeout, pipe-close wait). Tests inject either without
 // touching the production exec path.
@@ -55,7 +54,7 @@ type Client struct {
 // otherwise it is the program to run (Options.TmuxCommand). t holds the
 // effective per-class timeouts and the pipe-close wait of the socket-taking
 // calls; pkg/api fills it and internal/tmux defines no defaults (SR-2.4). The
-// name-based methods keep their behaviour: same binary, no timeout.
+// name-based HasSession keeps its behaviour: same binary, no timeout.
 func New(binary string, t Timeouts) *Client {
 	c := &Client{binary: binary, timeouts: t, runCall: execRunner}
 	if binary == "" {
@@ -104,62 +103,6 @@ func (c *Client) HasSession(name string) (bool, error) {
 	return false, err
 }
 
-// paneTarget is the canonical tmux pane address agent-director uses for
-// every name-based send-keys invocation. tmux session creation runs
-// without a window/pane suffix, so the first pane is always at index 0
-// inside window 0. Pinning this here keeps callers from constructing
-// ad-hoc targets and accidentally hitting a sibling pane.
-func paneTarget(name string) string { return name + ":0.0" }
-
-// SendKeys delivers text to the named tmux session's first pane. The
-// text call uses `-l` (literal) so any argv element that exactly matches
-// a keysym (`Enter`, `Tab`, `C-c`, `BSpace`, …) or starts with `-` is
-// treated as text rather than a key event. Without `-l`, a caller that
-// composes `"Enter the password"` would have tmux fire a real Enter
-// keypress on the first token and submit the buffer prematurely
-// (worse: a Spawn-driving Claude composing a multi-token payload could
-// accidentally fire C-c into the target).
-//
-// When pressEnter is true a SECOND tmux send-keys call (without `-l`)
-// delivers a real `Enter` keystroke as the submit. The split into two
-// calls is deliberate — the trailing Enter must be a real key event so
-// Claude's input handler sees the submit, while the text payload must
-// be literal so its bytes are never interpreted as keystrokes.
-//
-// `\r` stripping in text is the verb layer's responsibility (SRD §4.3,
-// reference/send-keys-research.md).
-//
-// On a non-zero tmux exit the error chain contains ErrTmuxSendKeys plus
-// the tmux stderr blob; on a missing tmux binary, ErrTmuxNotAvailable.
-// If the literal-text call succeeds but the Enter call fails, the
-// buffer is already typed into the pane — the caller observes the
-// error and surfaces it, but the partial state is not rolled back
-// (tmux exposes no atomic "type + submit" primitive).
-func (c *Client) SendKeys(name, text string, pressEnter bool) error {
-	if err := c.sendKeysCall(name, []string{"-l", text}); err != nil {
-		return err
-	}
-	if !pressEnter {
-		return nil
-	}
-	return c.sendKeysCall(name, []string{"Enter"})
-}
-
-// sendKeysCall is the per-invocation wire to tmux send-keys. Factored
-// out so the literal-text and submit-Enter paths share identical error
-// shaping. payload is appended after the -t target argv.
-func (c *Client) sendKeysCall(name string, payload []string) error {
-	args := append([]string{"send-keys", "-t", paneTarget(name)}, payload...)
-	out, err := c.run(binaryName, args...)
-	if err == nil {
-		return nil
-	}
-	if errors.Is(err, ErrTmuxNotAvailable) {
-		return err
-	}
-	return fmt.Errorf("%w: %s: %v", ErrTmuxSendKeys, trimOutput(out), err)
-}
-
 // sortedEnvFlags returns env entries as KEY=VAL strings in a deterministic
 // order so the argv NewSession composes is stable across runs (important
 // for tests asserting exact argv slices).
@@ -174,17 +117,4 @@ func sortedEnvFlags(envs map[string]string) []string {
 		out = append(out, k+"="+envs[k])
 	}
 	return out
-}
-
-// trimOutput crops a tmux stderr blob to a single line and bounded length so
-// error envelopes don't carry kilobytes of pane content.
-func trimOutput(out []byte) string {
-	s := strings.TrimSpace(string(out))
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		s = s[:i]
-	}
-	if len(s) > 200 {
-		s = s[:200]
-	}
-	return s
 }

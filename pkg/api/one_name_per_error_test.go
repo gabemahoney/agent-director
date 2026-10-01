@@ -115,7 +115,7 @@ type oneNameRow struct {
 // oneNameRows is every returned-error row.
 func oneNameRows() []oneNameRow {
 	return slices.Concat(oneNameSpawnRows(), oneNameHeldRows(), oneNameResumeRows(), oneNameInternalRows(), oneNameKillRows(),
-		oneNameReadPaneRows(), oneNameSendKeysRows())
+		oneNameReadPaneRows(), oneNameSendKeysRows(), oneNamePauseRows())
 }
 
 // TestOneNameReturnedErrors: every tmux-caused error the verbs return matches

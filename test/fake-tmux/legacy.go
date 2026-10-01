@@ -8,10 +8,10 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 )
 
-// legacyMain handles the name-based argv (no leading -u) the name-based
-// client methods still send, as the fake always has; the duplicate-name
-// reply's wording comes from the replay catalogue. A name-based capture-pane
-// is no longer answered: no client method sends one.
+// legacyMain handles the name-based argv (no leading -u), as the fake always
+// has; the duplicate-name reply's wording comes from the replay catalogue. A
+// name-based capture-pane or send-keys is no longer answered or logged: no
+// client method sends one.
 func legacyMain() {
 	if len(os.Args) < 2 {
 		// `tmux` with no subcommand; nothing to record. Exit 0 so the
@@ -35,7 +35,7 @@ func legacyMain() {
 			fmt.Fprint(os.Stderr, duplicateReply(name).Stderr)
 			os.Exit(duplicateReply(name).Exit)
 		}
-	case "send-keys", "kill-session":
+	case "kill-session":
 		logArgv()
 	}
 	os.Exit(0)

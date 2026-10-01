@@ -8,7 +8,7 @@
 //     result fields and error names to expect.
 //   - SeedKind: a coarse-grained tag the driver dispatches on to call the
 //     right storefix.Seed* helper (or apitest.SeedSpawn for a pending
-//     row). This indirection keeps seeders.go free of internal/store
+//     row). This indirection keeps the seeder files free of internal/store
 //     imports (only stdlib + pkg/api + manifest + internal/testsupport/*
 //     are allowed per the import-graph guard).
 //   - SeedID: the claude_instance_id the seeded row will carry. The Happy
@@ -28,19 +28,23 @@
 //     checks it is true.
 //   - Pane: for read-pane, reads the Happy result's pane; the driver checks
 //     it is smokePaneText, the text the row's own pane captures.
-//   - SentText: for send-keys, the text Happy sends; the driver checks the
-//     Recorder saw it sent to the seeded row's pane by its pane id.
+//   - SentText: for send-keys and pause, the text Happy sends; the driver
+//     checks the Recorder saw it sent to the seeded row's pane by its pane id,
+//     then one Enter to that pane.
+//
+// This file holds the spec type and the registry; the entries live in
+// seeders_verbs.go (verbs that need no tmux) and seeders_tmux.go (verbs that
+// reach the row's tmux session).
 //
 // Adding a new callable verb to the manifest requires adding a matching
-// entry here. The driver's startup check fails the build with a clear
-// message naming any verb in manifest.CallableVerbs() that lacks an entry.
+// entry. The driver's startup check fails the build with a clear message
+// naming any verb in manifest.CallableVerbs() that lacks an entry.
 package smoke_test
 
 import (
 	"context"
 	"time"
 
-	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
@@ -59,10 +63,6 @@ const (
 	// seedLive seeds a spawn in StateWorking — a live, interactive row
 	// with no tmux session in the Recorder. Used by delete.
 	seedLive
-
-	// seedEnded seeds a spawn in StateEnded — used by pause (which
-	// short-circuits to no-op success when the row is already terminal).
-	seedEnded
 
 	// seedCheckPermission seeds a spawn in StateCheckPermission with
 	// relay_mode=on and an open permission_requests row. Used by decide.
@@ -98,6 +98,15 @@ const (
 	// labelled session, whose pane captures smokePaneText by its pane id.
 	// Used by read-pane, so its happy path takes the Ours path (SR-7.2).
 	seedReadPane
+
+	// seedPause seeds a waiting row through apitest.SeedSpawn (the same
+	// SR-20.3 defaults) and swaps the driver's Recorder for
+	// tmuxfix.NewRecorderForPause's, with an after-call hook on the Enter
+	// that ends the row as its own agent (a SessionEnd through
+	// apitest.ApplyAgentHook). Used by pause, so its happy path takes the
+	// Ours path, sends /exit and Enter by pane id and its wait sees the row
+	// ended (SR-7.2, SR-20.3).
+	seedPause
 )
 
 // smokePaneText is the capture text seedReadPane scripts for the row's own
@@ -107,6 +116,9 @@ const smokePaneText = "smoke-pane-output"
 
 // smokeSentText is the text the send-keys spec sends.
 const smokeSentText = "hello"
+
+// smokeExitText is the text pause sends to the agent's pane.
+const smokeExitText = "/exit"
 
 // smokeLaunchStartMillis is the launch start seedPendingLaunch records, in
 // ms since the Unix epoch; its non-zero millisecond part (.123) checks that
@@ -127,13 +139,10 @@ type seederSpec struct {
 	// references this same id when calling the verb method.
 	SeedID string
 
-	// HappyCtx, when non-nil, is the context the driver passes to verbs
-	// that take a context (pause, find-missing). Verbs that don't take
-	// a context ignore this field.
-	//
-	// For pause specifically we use a short (2s) deadline so the
-	// poll-loop cannot hang the suite — though for the happy path
-	// (seedEnded), pause returns no-op success before the loop runs.
+	// HappyCtxDeadline, when non-zero, bounds the context the driver passes
+	// to verbs that take one (pause, find-missing); zero means 5s. Pause
+	// uses a short one so a wait that never sees the row ended fails the
+	// subtest instead of hanging the suite.
 	HappyCtxDeadline time.Duration
 
 	// Happy calls the verb method on c in its happy path. id is the
@@ -175,8 +184,8 @@ type seederSpec struct {
 
 	// SentText, when non-empty, is the text Happy sends. The driver asserts
 	// the Recorder saw one call carrying it, to apitest.TestPaneID (the pane
-	// seedLiveSession seeds) on apitest.TestSocket, with Enter. Set by
-	// send-keys only.
+	// the row records) on apitest.TestSocket, with Enter, and one Enter to
+	// that pane. Set by send-keys and pause.
 	SentText string
 }
 
@@ -185,327 +194,21 @@ type seederSpec struct {
 // up in this map; a missing entry fails the test with a clear message
 // (see TestSmokeAllVerbs's startup check in smoke_test.go).
 //
-// The map is populated in init() so we can reference the verb's own
-// VerbDef from manifest.Lookup — keeps the source of truth for the
-// VerbDef pointer next to the verb name string.
+// The map is populated by the init functions of seeders_verbs.go and
+// seeders_tmux.go, so each entry can reference the verb's own VerbDef from
+// manifest.Lookup (mustVerb) next to the verb name string.
 var seeders = map[string]seederSpec{}
 
 // bogusID is the claude_instance_id used in error-path Happy/Error closures
 // — chosen to be very unlikely to collide with any seeded row.
 const bogusID = "smoke-bogus-id-does-not-exist"
 
-func init() {
-	mustVerb := func(name string) manifest.VerbDef {
-		vd, ok := manifest.Lookup(name)
-		if !ok {
-			panic("seeders init: manifest.Lookup(" + name + ") not found")
-		}
-		return vd
+// mustVerb returns the manifest's VerbDef for name; it panics when the
+// manifest has none, so a renamed verb fails the package at init.
+func mustVerb(name string) manifest.VerbDef {
+	vd, ok := manifest.Lookup(name)
+	if !ok {
+		panic("seeders init: manifest.Lookup(" + name + ") not found")
 	}
-
-	// ── spawn ─────────────────────────────────────────────────────────────
-	seeders["spawn"] = seederSpec{
-		Manifest: mustVerb("spawn"),
-		SeedKind: seedNone, // spawn creates its own row
-		SeedID:   "smoke-spawn-id",
-		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
-			return c.Spawn(api.SpawnParams{
-				ClaudeInstanceID: id,
-				CWD:              "/tmp",
-				RelayMode:        "off",
-			})
-		},
-		Error: func(c *api.Client, _ context.Context) error {
-			// ErrCwdMissing — empty CWD violates the spawn precondition.
-			_, err := c.Spawn(api.SpawnParams{})
-			return err
-		},
-		PreTrust: func(result any) string {
-			return result.(api.SpawnResult).PreTrust
-		},
-	}
-
-	// ── status ────────────────────────────────────────────────────────────
-	seeders["status"] = seederSpec{
-		Manifest: mustVerb("status"),
-		SeedKind: seedPendingLaunch,
-		SeedID:   "smoke-status-id",
-		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
-			return c.Status(id)
-		},
-		Error: func(c *api.Client, _ context.Context) error {
-			_, err := c.Status(bogusID)
-			return err
-		},
-		LaunchStartedAt: func(result any, _ string) *time.Time {
-			return result.(api.StatusResult).LaunchStartedAt
-		},
-	}
-
-	// ── get ───────────────────────────────────────────────────────────────
-	seeders["get"] = seederSpec{
-		Manifest: mustVerb("get"),
-		SeedKind: seedPendingLaunch,
-		SeedID:   "smoke-get-id",
-		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
-			return c.Get(id)
-		},
-		Error: func(c *api.Client, _ context.Context) error {
-			_, err := c.Get(bogusID)
-			return err
-		},
-		LaunchStartedAt: func(result any, _ string) *time.Time {
-			return result.(api.SpawnRow).LaunchStartedAt
-		},
-		TmuxSocket: func(result any) string {
-			return result.(api.SpawnRow).TmuxSocket
-		},
-	}
-
-	// ── send-keys ─────────────────────────────────────────────────────────
-	seeders["send-keys"] = seederSpec{
-		Manifest: mustVerb("send-keys"),
-		SeedKind: seedLiveSession, // the row's own session and pane (Ours)
-		SeedID:   "smoke-send-keys-id",
-		SentText: smokeSentText,
-		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
-			return c.SendKeys(api.SendKeysParams{
-				ClaudeInstanceID: id,
-				Text:             smokeSentText,
-			})
-		},
-		Error: func(c *api.Client, _ context.Context) error {
-			_, err := c.SendKeys(api.SendKeysParams{
-				ClaudeInstanceID: bogusID,
-				Text:             "hello",
-			})
-			return err
-		},
-	}
-
-	// ── read-pane ─────────────────────────────────────────────────────────
-	seeders["read-pane"] = seederSpec{
-		Manifest: mustVerb("read-pane"),
-		SeedKind: seedReadPane,
-		SeedID:   "smoke-read-pane-id",
-		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
-			return c.ReadPane(api.ReadPaneParams{
-				ClaudeInstanceID: id,
-				NLines:           5,
-			})
-		},
-		Error: func(c *api.Client, _ context.Context) error {
-			_, err := c.ReadPane(api.ReadPaneParams{
-				ClaudeInstanceID: bogusID,
-			})
-			return err
-		},
-		Pane: func(result any) string {
-			return result.(api.ReadPaneResult).Pane
-		},
-	}
-
-	// ── kill ──────────────────────────────────────────────────────────────
-	seeders["kill"] = seederSpec{
-		Manifest: mustVerb("kill"),
-		SeedKind: seedLiveSession,
-		SeedID:   "smoke-kill-id",
-		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
-			return c.Kill(api.KillParams{ClaudeInstanceID: id})
-		},
-		Error: func(c *api.Client, _ context.Context) error {
-			_, err := c.Kill(api.KillParams{ClaudeInstanceID: bogusID})
-			return err
-		},
-		KillSent: func(result any) bool {
-			return result.(api.KillResult).KillSent
-		},
-	}
-
-	// ── decide ────────────────────────────────────────────────────────────
-	seeders["decide"] = seederSpec{
-		Manifest: mustVerb("decide"),
-		SeedKind: seedCheckPermission,
-		SeedID:   "smoke-decide-id",
-		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
-			// SeedCheckPermission seeds the open row using storefix.TestRequestTokenA.
-			return c.Decide(api.DecideParams{
-				ClaudeInstanceID: id,
-				RequestToken:     storefix.TestRequestTokenA,
-				Decision:         "allow",
-			})
-		},
-		Error: func(c *api.Client, _ context.Context) error {
-			// Invalid decision string — triggers ErrInvalidDecision
-			// before the store is even hit. Robust against the seeded
-			// row's state.
-			_, err := c.Decide(api.DecideParams{
-				ClaudeInstanceID: bogusID,
-				Decision:         "maybe",
-			})
-			return err
-		},
-	}
-
-	// ── get-permission ────────────────────────────────────────────────────
-	seeders["get-permission"] = seederSpec{
-		Manifest: mustVerb("get-permission"),
-		// Reuse the check_permission fixture: it seeds an open row keyed
-		// under storefix.TestRequestTokenA, which is exactly what the
-		// happy-path GetPermission call resolves.
-		SeedKind: seedCheckPermission,
-		SeedID:   "smoke-get-permission-id",
-		Happy: func(c *api.Client, _ string, _ context.Context) (any, error) {
-			return c.GetPermission(api.GetPermissionParams{
-				RequestToken: storefix.TestRequestTokenA,
-			})
-		},
-		Error: func(c *api.Client, _ context.Context) error {
-			// Token never written → ErrPermissionRequestNotFound.
-			_, err := c.GetPermission(api.GetPermissionParams{
-				RequestToken: "deadbeef-dead-4dea-adea-deadbeefdead",
-			})
-			return err
-		},
-	}
-
-	// ── resume ────────────────────────────────────────────────────────────
-	seeders["resume"] = seederSpec{
-		Manifest: mustVerb("resume"),
-		SeedKind: seedResumable,
-		SeedID:   "smoke-resume-id",
-		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
-			return c.Resume(api.ResumeParams{ClaudeInstanceID: id})
-		},
-		Error: func(c *api.Client, _ context.Context) error {
-			_, err := c.Resume(api.ResumeParams{ClaudeInstanceID: bogusID})
-			return err
-		},
-		PreTrust: func(result any) string {
-			return result.(api.ResumeResult).PreTrust
-		},
-	}
-
-	// ── find-missing ──────────────────────────────────────────────────────
-	seeders["find-missing"] = seederSpec{
-		Manifest: mustVerb("find-missing"),
-		SeedKind: seedNone, // no row needed; sweeps an empty live set
-		SeedID:   "",
-		Happy: func(c *api.Client, _ string, ctx context.Context) (any, error) {
-			return c.FindMissing(ctx)
-		},
-		// find-missing has no verb-surface error to trigger: its only
-		// declared error, ErrProbeUnsupported, stays listed by SR-1.7
-		// but find-missing no longer returns it. Skipping the error
-		// assertion is handled by the driver when Error is nil.
-		Error: nil,
-	}
-
-	// ── expire ────────────────────────────────────────────────────────────
-	seeders["expire"] = seederSpec{
-		Manifest: mustVerb("expire"),
-		SeedKind: seedExpired,
-		SeedID:   "smoke-expire-id",
-		Happy: func(c *api.Client, _ string, _ context.Context) (any, error) {
-			// Override retention to zero so the back-dated row is
-			// reaped regardless of config defaults.
-			d := time.Duration(0)
-			return c.Expire(&d)
-		},
-		// expire declares no ErrorNames in the manifest — per-row
-		// failures surface in the result map, not as a verb error.
-		Error: nil,
-	}
-
-	// ── delete ────────────────────────────────────────────────────────────
-	seeders["delete"] = seederSpec{
-		Manifest: mustVerb("delete"),
-		SeedKind: seedLive,
-		SeedID:   "smoke-delete-id",
-		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
-			return c.Delete([]string{id})
-		},
-		// delete declares no ErrorNames — missing ids are reported in
-		// the per-row results map, not as a verb-level error.
-		Error: nil,
-	}
-
-	// ── make-template ─────────────────────────────────────────────────────
-	seeders["make-template"] = seederSpec{
-		Manifest: mustVerb("make-template"),
-		SeedKind: seedNone, // template is created on disk under HOME
-		SeedID:   "",
-		Happy: func(c *api.Client, _ string, _ context.Context) (any, error) {
-			return c.MakeTemplate(api.MakeTemplateParams{
-				Name: "smoke-template",
-				CWD:  "/tmp",
-			})
-		},
-		Error: func(c *api.Client, _ context.Context) error {
-			// Unsafe name (path separator) — triggers ErrTemplateNameUnsafe.
-			_, err := c.MakeTemplate(api.MakeTemplateParams{
-				Name: "a/b",
-			})
-			return err
-		},
-	}
-
-	// ── list ──────────────────────────────────────────────────────────────
-	seeders["list"] = seederSpec{
-		Manifest: mustVerb("list"),
-		SeedKind: seedPendingLaunch,
-		SeedID:   "smoke-list-id",
-		Happy: func(c *api.Client, _ string, _ context.Context) (any, error) {
-			return c.List(api.ListParams{})
-		},
-		Error: func(c *api.Client, _ context.Context) error {
-			// Invalid label format triggers ErrListInvalidLabel before
-			// the store is reached.
-			_, err := c.List(api.ListParams{Labels: []string{"no-equals-sign"}})
-			return err
-		},
-		LaunchStartedAt: func(result any, id string) *time.Time {
-			for _, r := range result.(api.ListResult).Spawns {
-				if r.ClaudeInstanceID == id {
-					return r.LaunchStartedAt
-				}
-			}
-			return nil
-		},
-	}
-
-	// ── pause ─────────────────────────────────────────────────────────────
-	//
-	// Important: we seed the row in StateEnded so pause short-circuits to
-	// no-op success (PauseResult is an empty struct — nothing to assert),
-	// avoiding the 200ms*N polling loop entirely. The 2s context deadline
-	// is a safety net; the happy path never enters the poll loop because
-	// the state-switch returns before /exit is sent. The error path uses
-	// a bogus id to trigger ErrSpawnNotFound, which also returns
-	// immediately without polling.
-	seeders["pause"] = seederSpec{
-		Manifest:         mustVerb("pause"),
-		SeedKind:         seedEnded,
-		SeedID:           "smoke-pause-id",
-		HappyCtxDeadline: 2 * time.Second,
-		Happy: func(c *api.Client, id string, ctx context.Context) (any, error) {
-			return c.Pause(ctx, api.PauseParams{ClaudeInstanceID: id})
-		},
-		Error: func(c *api.Client, ctx context.Context) error {
-			_, err := c.Pause(ctx, api.PauseParams{ClaudeInstanceID: bogusID})
-			return err
-		},
-	}
-
-	// ── version ───────────────────────────────────────────────────────────
-	seeders["version"] = seederSpec{
-		Manifest: mustVerb("version"),
-		SeedKind: seedNone,
-		SeedID:   "",
-		Happy: func(c *api.Client, _ string, _ context.Context) (any, error) {
-			return c.Version()
-		},
-		// version declares no ErrorNames.
-		Error: nil,
-	}
+	return vd
 }

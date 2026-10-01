@@ -216,58 +216,38 @@ type sendKeysFacts struct {
 	// Guard is the relay guard's evaluation (guardNotApplicable when the
 	// guard did not run or did not apply).
 	Guard string
-	// Socket is the socket the row's calls used; "" when none was resolved.
-	Socket string
-	// LookupRan reports that the first lookup was made; Lookup is its Result
-	// (zero when it was not made).
-	LookupRan bool
-	Lookup    tmux.Result
-	// Listing is a failed pane listing's Result (tmux.ListingFailure); zero
-	// when the listing answered or none was made.
-	Listing tmux.Result
-	// Adopted reports that the adoption write applied (SR-3.6).
-	Adopted bool
-	// Session is the session concerned: the Ours session the lookup found;
-	// zero on every other verdict.
-	Session tmux.Session
-	// Sent reports that SendKeysPane was called (keys may have reached the
-	// pane); SendErr is its error, nil when the text and Enter both went
-	// through. enterFailedAfterText tells a failed Enter after the text.
-	Sent    bool
-	SendErr error
-	// FollowUp is the follow-up lookup after a failed action (Ran false when
-	// none was made).
-	FollowUp paneFollowUp
+	// keysFacts is what the tmux phase found and did: the socket, the first
+	// lookup, a failed listing, the adoption, the session concerned, the
+	// send and the follow-up (zero when the phase did not run).
+	keysFacts
 	// Caller is the invoking process's identity, collected once per call on
 	// the path Client.SendKeys and SendKeys share (callerIdentity).
 	Caller caller
 }
 
-// sendKeysRun is one SendKeys call: the pane verbs' shared run with
-// send-keys' gone sentinel, "nothing was sent" and the adoption write, and
-// the facts the call keeps.
+// sendKeysRun is one SendKeys call: the keys verbs' tmux phase (keysRun)
+// with send-keys' pending-row Leftover refusal, and the facts the call keeps.
 type sendKeysRun struct {
-	paneRun
+	keysRun
 	s     SendKeysStore
-	st    SendKeysTmux
 	facts sendKeysFacts
 }
 
 // sendKeys is the inner implementation shared by the pure SendKeys entry point
 // and Client.SendKeys. It collects the caller identity once, runs the call,
-// writes the call's ad.provenance.disagree records (emitDisagree) and returns
-// the call's facts alongside the result/error so the Client wrapper can
-// record them on the ad.send_keys.called trail event without re-deriving
-// them.
+// writes the call's ad.provenance.disagree records (keysRun.emitDisagree)
+// and returns the call's facts alongside the result/error so the Client
+// wrapper can record them on the ad.send_keys.called trail event without
+// re-deriving them.
 func sendKeys(s SendKeysStore, t SendKeysTmux, pc ProcChecker, effectiveWindow time.Duration, now time.Time, params SendKeysParams) (sendKeysFacts, SendKeysResult, error) {
-	r := &sendKeysRun{s: s, st: t, facts: sendKeysFacts{Guard: guardNotApplicable, Caller: callerIdentity()}}
-	err := r.run(pc, effectiveWindow, now, params)
-	r.emitDisagree(params.ClaudeInstanceID)
+	r := &sendKeysRun{s: s, facts: sendKeysFacts{Guard: guardNotApplicable, Caller: callerIdentity()}}
+	err := r.run(t, pc, effectiveWindow, now, params)
+	r.emitDisagree("send-keys", params.ClaudeInstanceID, r.facts.Caller)
 	return r.facts, SendKeysResult{}, err
 }
 
 // run is the send-keys flow; the returned error is SendKeys'.
-func (r *sendKeysRun) run(pc ProcChecker, effectiveWindow time.Duration, now time.Time, params SendKeysParams) error {
+func (r *sendKeysRun) run(t SendKeysTmux, pc ProcChecker, effectiveWindow time.Duration, now time.Time, params SendKeysParams) error {
 	row, err := r.s.GetSpawn(params.ClaudeInstanceID)
 	if err != nil {
 		return err
@@ -293,33 +273,15 @@ func (r *sendKeysRun) run(pc ProcChecker, effectiveWindow time.Duration, now tim
 	if err != nil {
 		return fmt.Errorf("instance %s: %w", row.ClaudeInstanceID, err)
 	}
-	r.facts.Socket = socket
-	r.paneRun = paneRun{
-		t: r.st, pc: pc, row: row, storeID: r.s.StoreID(), socket: socket,
-		gone: tmux.ErrTmuxSendKeys, nothing: nothingSent, adopter: r.s,
+	r.keysRun = newKeysRun(t, pc, row, r.s.StoreID(), socket, r.s)
+	if row.State == store.StatePending {
+		r.leftover = func(leftovers []tmux.Session) error {
+			return pendingLeftoverError(row.ClaudeInstanceID, leftovers)
+		}
 	}
-
-	paneID, launch, err := r.target()
-	r.facts.Listing, r.facts.Adopted = r.listing, r.adoption.Applied
-	if err != nil {
-		return err
-	}
-
-	cleaned := strings.ReplaceAll(params.Text, "\r", "")
-	r.facts.Sent = true
-	if err := r.st.SendKeysPane(socket, paneID, cleaned, true); err != nil {
-		r.facts.SendErr = err
-		fu, verr := paneActionFailureError(err, paneActionFailure{
-			Call:    tmux.CallSendText,
-			Gone:    tmux.ErrTmuxSendKeys,
-			Pane:    r.refusal(row.TmuxSessionName),
-			Refusal: r.cantTellRefusal(tmux.CallSendText),
-			Keys:    true,
-		}, r.st, r.pc, launch)
-		r.facts.FollowUp = fu
-		return verr
-	}
-	return nil
+	err = r.deliver(strings.ReplaceAll(params.Text, "\r", ""))
+	r.facts.keysFacts = r.found
+	return err
 }
 
 // sendKeysStateGuard is send-keys' state guard (SR-7.1, SR-22.8): a live
@@ -340,29 +302,6 @@ func sendKeysStateGuard(row Spawn, params SendKeysParams) error {
 			ErrSpawnNotInteractive, params.ClaudeInstanceID, row.State)
 	}
 	return nil
-}
-
-// target makes the lookup (holder name the row's recorded name, as kill
-// passes it) and, on Ours, the pane listing, and returns the agent's pane id
-// with the launch view a failed action's follow-up lookup uses, or the verb
-// error, with nothing sent.
-func (r *sendKeysRun) target() (string, tmux.Launch, error) {
-	launch := r.launchFor(r.row.Identity)
-	res := tmux.Lookup(r.t, r.pc, launch, r.row.TmuxSessionName)
-	r.facts.LookupRan, r.facts.Lookup = true, res
-	switch res.Verdict {
-	case tmux.Ours:
-		r.facts.Session = res.Session
-		return r.ours(res, launch)
-	case tmux.Leftover:
-		if r.row.State == store.StatePending {
-			return "", launch, pendingLeftoverError(r.row.ClaudeInstanceID, res.Leftovers)
-		}
-		return "", launch, paneLeftoverError(r.refusal(""), res.Leftovers, false)
-	case tmux.Gone:
-		return "", launch, r.goneError()
-	}
-	return "", launch, cantTellError(res, r.cantTellRefusal(tmux.CallLookup))
 }
 
 // evaluateRelayGuard decides whether the time-bounded relay guard refuses the

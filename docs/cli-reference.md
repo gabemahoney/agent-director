@@ -375,6 +375,8 @@ _None._
 - `ErrPauseTimeout`
 - `ErrTmuxNotAvailable`
 - `ErrTmuxSendKeys`
+- `ErrTmuxUnresponsive`
+- `ErrTmuxSessionConflict`
 
 ## serve
 

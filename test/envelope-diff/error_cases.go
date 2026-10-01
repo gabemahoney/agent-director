@@ -69,9 +69,9 @@ type errorCase struct {
 }
 
 // errorCases is the authoritative per-verb error-path fixture table: the rows
-// below, then the spawn, kill, read-pane and send-keys rows that need a
+// below, then the spawn, kill, read-pane, send-keys and pause rows that need a
 // private fake-tmux socket (spawnTmuxErrorCases, killTmuxErrorCases,
-// paneTmuxErrorCases, sendKeysTmuxErrorCases; error_cases_*_tmux.go). The
+// paneTmuxErrorCases, keysTmuxErrorCases; error_cases_*_tmux.go). The
 // init() guard below validates every errName and verb name at startup.
 // TestErrorTableCoverage (error_cases_test.go) enforces completeness.
 var errorCases = append(append(append(append([]errorCase{
@@ -434,7 +434,7 @@ var errorCases = append(append(append(append([]errorCase{
 		},
 	},
 }, spawnTmuxErrorCases...), killTmuxErrorCases...), paneTmuxErrorCases...),
-	sendKeysTmuxErrorCases...)
+	keysTmuxErrorCases...)
 
 // ── lookup helper ─────────────────────────────────────────────────────────────
 

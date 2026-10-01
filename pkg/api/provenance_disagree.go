@@ -73,8 +73,9 @@ type provenanceDisagree struct {
 // Fail-open: a trail-write failure is discarded and never changes the verb's
 // result. Its users are kill (this release's first), plain spawn's re-lookup
 // after "duplicate session" (spawnHeldName: a scope value, SR-3.16),
-// send-keys, pause, resume, reuse's spawn, find-missing and expire (Epics 11
-// and 14 to 17); the plain-spawn label scan never writes it (SR-9.3, SR-14).
+// send-keys and pause (both source ad_send_keys, keysRun.emitDisagree),
+// resume, reuse's spawn, find-missing and expire (Epics 11 and 14 to 17);
+// the plain-spawn label scan never writes it (SR-9.3, SR-14).
 func emitProvenanceDisagree(d provenanceDisagree, reasons ...string) {
 	server := d.Server
 	if server == "" {

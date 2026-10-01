@@ -148,7 +148,7 @@ func TestRecorder_VirtualTime(t *testing.T) {
 }
 
 // TestRecorder_VirtualTimeOnlyWhenBound: without virtual time the clock stays
-// put; with it, name-based calls are not charged and seeds take the clock's second.
+// put; with it, the name-based HasSession is not charged and seeds take the clock's second.
 func TestRecorder_VirtualTimeOnlyWhenBound(t *testing.T) {
 	unbound := tmuxfix.NewClock(start)
 	r := seeded()
@@ -162,9 +162,8 @@ func TestRecorder_VirtualTimeOnlyWhenBound(t *testing.T) {
 	bound := tmuxfix.NewClock(start)
 	r = tmuxfix.NewRecorder().WithVirtualTime(bound, tmux.Timeouts{})
 	_, _ = r.HasSession("n")
-	_ = r.SendKeys("n", "x", true)
 	if got := bound.Now(); !got.Equal(start) {
-		t.Errorf("name-based calls advanced the clock to %v", got)
+		t.Errorf("HasSession advanced the clock to %v", got)
 	}
 	bound.Advance(90 * time.Second)
 	r.SeedSessions(sockA, tmuxfix.SeedSession{Name: "s"})

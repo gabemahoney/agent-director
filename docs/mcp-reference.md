@@ -375,6 +375,8 @@ Politely shut down a waiting Spawn by sending `/exit` and waiting up to pause.ti
 - `ErrPauseTimeout`
 - `ErrTmuxNotAvailable`
 - `ErrTmuxSendKeys`
+- `ErrTmuxUnresponsive`
+- `ErrTmuxSessionConflict`
 
 ## Tool: version
 

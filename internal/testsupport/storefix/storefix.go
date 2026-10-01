@@ -105,14 +105,6 @@ func SeedKilled(t *testing.T, s *store.Store, id string) store.Spawn {
 	return seed(t, s, id, store.StateEnded)
 }
 
-// SeedPaused inserts a Spawn in StateWaiting — a live but idle row. Useful
-// for list examples showing a mix of states, or for send-keys examples that
-// need a waiting Spawn.
-func SeedPaused(t *testing.T, s *store.Store, id string) store.Spawn {
-	t.Helper()
-	return seed(t, s, id, store.StateWaiting)
-}
-
 // SeedAskUser inserts a Spawn in StateAskUser — a row blocked on human input.
 // Useful for list and status examples demonstrating the ask_user state.
 func SeedAskUser(t *testing.T, s *store.Store, id string) store.Spawn {

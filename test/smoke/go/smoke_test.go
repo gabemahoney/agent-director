@@ -25,7 +25,9 @@ import (
 //  3. Applies the verb's SeedKind precondition via the appropriate
 //     storefix or apitest seed helper (for kill and send-keys, also the
 //     row's own labelled session in the recorder; for read-pane, a recorder from
-//     tmuxfix.NewRecorderForReadPane whose own pane captures smokePaneText).
+//     tmuxfix.NewRecorderForReadPane whose own pane captures smokePaneText; for
+//     pause, one from tmuxfix.NewRecorderForPause whose Enter ends the row,
+//     see endRowAfterEnter).
 //  4. Constructs an api.Client wired with the temp store path and the
 //     recorder. CreateIfMissing is true so api.New reuses the store
 //     file created by storefix.OpenTempStore.
@@ -34,16 +36,16 @@ import (
 //     the pending row's launch_started_at (see assertLaunchStartedAt), for
 //     get that tmux_socket is the seeded apitest.TestSocket, for kill that
 //     kill_sent is true, for read-pane that the pane is smokePaneText, for
-//     send-keys that the text went to the row's pane id (see
-//     assertSentToPane), and for spawn and resume, with a .claude.json
+//     send-keys and pause that the text (/exit for pause) went to the row's
+//     pane id (see assertSentToPane), and for spawn and resume, with a .claude.json
 //     planted in HOME first, that pre_trust is "ok" (see plantClaudeJSON).
 //  6. Calls the verb's Error closure (when defined) and feeds the
 //     returned error into AssertExpectedError.
 //
-// Crucial: pause uses a 2s context deadline, but its happy-path seed
-// (seedEnded) makes the verb short-circuit before the poll-loop runs.
-// The error-path uses a bogus id so ErrSpawnNotFound returns immediately
-// — also no polling.
+// Crucial: pause uses a 2s context deadline; its happy path enters the wait,
+// which sees the row ended on its first poll because the Enter's after-call
+// hook ended it. The error path uses a bogus id so ErrSpawnNotFound returns
+// before any tmux call or polling.
 //
 // No verb chaining: each subtest's seed is independent of every other.
 func TestSmokeAllVerbs(t *testing.T) {
@@ -99,7 +101,7 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 
 	// Apply the per-verb seed precondition. The switch is inline so
 	// the typed *store.Store handle (st) stays local — keeping
-	// seeders.go free of internal/store imports per the import-graph
+	// the seeder files free of internal/store imports per the import-graph
 	// guard. Each branch calls one storefix.Seed* helper or apitest.SeedSpawn.
 	switch spec.SeedKind {
 	case seedNone:
@@ -107,8 +109,6 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 		// make-template, version)
 	case seedLive:
 		storefix.SeedLiveSpawn(t, st, spec.SeedID)
-	case seedEnded:
-		storefix.SeedKilled(t, st, spec.SeedID)
 	case seedCheckPermission:
 		storefix.SeedCheckPermission(t, st, spec.SeedID)
 	case seedResumable:
@@ -135,6 +135,13 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 		// The process-checker fake is not used: the Client built below
 		// reads start times with the production reader.
 		rec, _ = tmuxfix.NewRecorderForReadPane(t, storePath, spec.SeedID, smokePaneText)
+	case seedPause:
+		if _, err := apitest.SeedSpawn(storePath, spec.SeedID, "waiting", "", "", "", false); err != nil {
+			t.Fatalf("runVerbSubtest: seed waiting %q: %v", spec.SeedID, err)
+		}
+		// As for read-pane, the process-checker fake is not used.
+		rec, _ = tmuxfix.NewRecorderForPause(t, storePath, spec.SeedID)
+		endRowAfterEnter(t, rec, storePath, spec.SeedID)
 	default:
 		t.Fatalf("runVerbSubtest: unknown SeedKind %v for verb %q",
 			spec.SeedKind, vd.Name)
@@ -222,13 +229,17 @@ func assertLaunchStartedAt(t *testing.T, verb string, got *time.Time) {
 }
 
 // assertSentToPane checks rec saw exactly one call carrying text, sent with
-// Enter to the seeded row's pane by its pane id on its socket (SR-7.1).
+// Enter to the seeded row's pane by its pane id on its socket, and exactly
+// one Enter, to that pane (SR-7.1).
 func assertSentToPane(t *testing.T, verb string, rec *tmuxfix.Recorder, text string) {
 	t.Helper()
-	var sent []tmuxfix.SocketCall
+	var sent, enters []tmuxfix.SocketCall
 	for _, c := range rec.SocketCalls() {
 		if c.Text == text {
 			sent = append(sent, c)
+		}
+		if c.Call == api.TmuxCallSendEnter {
+			enters = append(enters, c)
 		}
 	}
 	if len(sent) != 1 {
@@ -239,6 +250,27 @@ func assertSentToPane(t *testing.T, verb string, rec *tmuxfix.Recorder, text str
 		t.Errorf("%s: text sent to %q on %q (Enter %v); want pane %q on %q with Enter",
 			verb, c.Target, c.Socket, c.PressEnter, apitest.TestPaneID, apitest.TestSocket)
 	}
+	if len(enters) != 1 || enters[0].Target != apitest.TestPaneID || enters[0].Socket != apitest.TestSocket {
+		t.Errorf("%s: Enter calls %+v; want one, to pane %q on %q",
+			verb, enters, apitest.TestPaneID, apitest.TestSocket)
+	}
+}
+
+// endRowAfterEnter ends id's row as its own agent (a SessionEnd through
+// apitest.ApplyAgentHook; SR-22.9) when the first Enter call on rec succeeds,
+// so pause's wait sees it ended. The test fails unless the end applied.
+func endRowAfterEnter(t *testing.T, rec *tmuxfix.Recorder, dbPath, id string) {
+	t.Helper()
+	ended := false
+	rec.AfterCall(api.TmuxCallSendEnter, func(_ tmuxfix.SocketCall, err error) {
+		if err != nil || ended {
+			return
+		}
+		ended = true
+		if a := apitest.ApplyAgentHook(t, dbPath, id, "SessionEnd", ""); !a.Applied {
+			t.Errorf("endRowAfterEnter: SessionEnd on %q not applied (reason %q)", id, a.Reason)
+		}
+	})
 }
 
 // plantClaudeJSON writes a .claude.json with no folder-trust entries into
@@ -254,7 +286,7 @@ func plantClaudeJSON(t *testing.T, home string) {
 
 // buildHappyCtx returns a context.Context appropriate for the verb's
 // HappyCtxDeadline. Verbs with a zero deadline get a 5s safety-net
-// deadline. pause uses 2s explicitly via the spec.
+// deadline. pause uses 2s explicitly via the spec, bounding its wait.
 func buildHappyCtx(spec seederSpec) (context.Context, context.CancelFunc) {
 	d := spec.HappyCtxDeadline
 	if d == 0 {

@@ -184,11 +184,12 @@ type callTableVerb struct {
 	run         func(t *testing.T, v callTableVerb, col callTableColumn, cell callTableCell)
 }
 
-// callTableVerbs is every verb's row. Epic 11 appends pause here, an adapter
-// and its cells like callTableKill, callTableReadPane and callTableSendKeys.
+// callTableVerbs is every verb's row; a later verb appends its adapter and
+// cells here, like callTableKill, callTableReadPane and callTableSendKeys.
 func callTableVerbs() []callTableVerb {
 	return []callTableVerb{callTableKill(), callTableSpawn(), callTableFindMissing(), callTableReadPane(),
-		callTableSendKeys(), callTableSendKeysPending()}
+		callTableSendKeys(), callTableSendKeysPending(), callTablePause(), callTablePausePending(),
+		callTablePauseEnded()}
 }
 
 // TestCallTable runs every verb in every column: error name through the

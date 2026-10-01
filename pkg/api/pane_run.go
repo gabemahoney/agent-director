@@ -8,12 +8,13 @@ import (
 
 // This file holds the pane verbs' shared per-call run (SR-3.6, SR-3.7,
 // SR-7.2): the row, the socket its calls use, the lookup's view of it, the
-// one pane listing and the agent's pane on Ours. read-pane is its first user
-// and send-keys reuses it; each verb keeps its own lookup verdict handling
-// (Leftover differs per verb) and its own action.
+// one pane listing and the agent's pane on Ours. read-pane is its first user;
+// send-keys and pause reuse it through the keys verbs' phase (keysRun). Each
+// verb keeps its own lookup verdict handling (Leftover differs per verb) and
+// its own action.
 
 // paneTmux is the lookup and the pane listing every pane verb's tmux surface
-// has (ReadPaneTmux, SendKeysTmux).
+// has (ReadPaneTmux, SendKeysTmux, PauseTmux).
 type paneTmux interface {
 	TmuxLookup
 	// ListPanes lists every pane of the server at socket.
@@ -30,12 +31,12 @@ type paneRun struct {
 	storeID string
 	socket  string
 	// gone is the verb's gone sentinel: tmux.ErrTmuxCaptureFailed
-	// (read-pane) or tmux.ErrTmuxSendKeys (send-keys).
+	// (read-pane) or tmux.ErrTmuxSendKeys (send-keys, pause).
 	gone error
 	// nothing is what the verb's pane refusals say was not done.
 	nothing paneNothing
 	// adopter, when set, writes a due adoption through adoptIdentity
-	// (send-keys); nil takes what findAdoption found for this call only, with
+	// (send-keys, pause); nil takes what findAdoption found for this call only, with
 	// no write (read-pane, SR-7.5).
 	adopter identityAdopter
 

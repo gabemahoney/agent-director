@@ -98,7 +98,7 @@
 //
 // # Control variables
 //
-//   - FAKE_TMUX_LOG: a file every invocation (both forms; legacy: the three
+//   - FAKE_TMUX_LOG: a file every invocation (both forms; legacy: the two
 //     logged subcommands) appends its argv to, one element per
 //     line followed by a "---" line.
 //   - FAKE_TMUX_PANE_OUTPUT: capture text (see capture-pane above).
@@ -109,12 +109,11 @@
 //
 // # Legacy form
 //
-// argv without a leading -u is the name-based call set the name-based client
-// methods still send: new-session, send-keys and kill-session log their argv
-// and exit 0; has-session exits 1; new-session honours
-// FAKE_TMUX_FAIL_NEWSESSION_NAME; anything else (a name-based capture-pane
-// included: no client method sends one) exits 0 with no output or side
-// effects. No table is read or written.
+// argv without a leading -u is the name-based call set: new-session and
+// kill-session log their argv and exit 0; has-session exits 1; new-session
+// honours FAKE_TMUX_FAIL_NEWSESSION_NAME; anything else (a name-based
+// capture-pane or send-keys included: no client method sends one) exits 0
+// with no output or side effects. No table is read or written.
 package main
 
 import (

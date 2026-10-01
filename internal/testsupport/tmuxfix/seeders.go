@@ -14,8 +14,9 @@ import (
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
-// RowLabel names the label NewRecorderForReadPane gives the row's session
-// (SR-20.3). Every label but RowLabelOtherStore carries the seeded store's id.
+// RowLabel names the label NewRecorderForReadPane and NewRecorderForPause
+// give the row's session (SR-20.3). Every label but RowLabelOtherStore
+// carries the seeded store's id.
 type RowLabel int
 
 const (
@@ -41,42 +42,44 @@ const (
 	RowLabelBorrowed
 )
 
-// ReadPaneOption adjusts what NewRecorderForReadPane seeds.
-type ReadPaneOption func(*readPaneSeed)
-
-// readPaneSeed holds NewRecorderForReadPane's option values.
-type readPaneSeed struct {
+// rowSeed holds the option values of NewRecorderForReadPane and
+// NewRecorderForPause.
+type rowSeed struct {
 	clock     *Clock
 	timeouts  tmux.Timeouts
 	session   []RowSessionOption
 	label     RowLabel
-	leftovers []readPaneLeftover
+	leftovers []rowLeftover
 }
 
-// readPaneLeftover is one WithReadPaneLeftover session.
-type readPaneLeftover struct{ name, text string }
+// rowLeftover is one leftover option's session: its name and, for
+// read-pane, its pane's capture text.
+type rowLeftover struct{ name, text string }
+
+// ReadPaneOption adjusts what NewRecorderForReadPane seeds.
+type ReadPaneOption func(*rowSeed)
 
 // WithReadPaneVirtualTime binds the Recorder to the shared clock c with
 // timeouts t (WithVirtualTime) before anything is seeded, so the sessions
 // are created at c's current second unless WithReadPaneCreated gives a time.
 func WithReadPaneVirtualTime(c *Clock, t tmux.Timeouts) ReadPaneOption {
-	return func(o *readPaneSeed) { o.clock, o.timeouts = c, t }
+	return func(o *rowSeed) { o.clock, o.timeouts = c, t }
 }
 
 // WithReadPaneCreated gives the row's session's creation time, epoch seconds.
 func WithReadPaneCreated(epoch int64) ReadPaneOption {
-	return func(o *readPaneSeed) { o.session = append(o.session, WithRowSessionCreated(epoch)) }
+	return func(o *rowSeed) { o.session = append(o.session, WithRowSessionCreated(epoch)) }
 }
 
 // WithReadPaneName gives the row's session another stored name.
 func WithReadPaneName(stored string) ReadPaneOption {
-	return func(o *readPaneSeed) { o.session = append(o.session, WithRowSessionName(stored)) }
+	return func(o *rowSeed) { o.session = append(o.session, WithRowSessionName(stored)) }
 }
 
 // WithReadPaneLabel gives the row's session another label than its current
 // one.
 func WithReadPaneLabel(l RowLabel) ReadPaneOption {
-	return func(o *readPaneSeed) { o.label = l }
+	return func(o *rowSeed) { o.label = l }
 }
 
 // WithReadPaneLeftover seeds, besides the row's session, a leftover of the
@@ -84,7 +87,7 @@ func WithReadPaneLabel(l RowLabel) ReadPaneOption {
 // (RowLabelOld's) and one new pane carrying OtherToken as @ad_pane, whose
 // capture text is text. Give it more than once for more than one leftover.
 func WithReadPaneLeftover(name, text string) ReadPaneOption {
-	return func(o *readPaneSeed) { o.leftovers = append(o.leftovers, readPaneLeftover{name, text}) }
+	return func(o *rowSeed) { o.leftovers = append(o.leftovers, rowLeftover{name, text}) }
 }
 
 // NewRecorderForReadPane returns a Recorder and a process-checker fake for
@@ -102,10 +105,88 @@ func WithReadPaneLeftover(name, text string) ReadPaneOption {
 // afterwards.
 func NewRecorderForReadPane(t testing.TB, dbPath, instanceID, paneText string, opts ...ReadPaneOption) (*Recorder, *procfix.Checker) {
 	t.Helper()
-	var o readPaneSeed
+	var o rowSeed
 	for _, opt := range opts {
 		opt(&o)
 	}
+	sr := seedRow(t, dbPath, instanceID, o)
+	sr.r.SetCapture(sr.socket, sr.own.Panes[0].ID, paneText)
+	for i, s := range sr.leftovers {
+		sr.r.SetCapture(sr.socket, s.Panes[0].ID, o.leftovers[i].text)
+	}
+	return sr.r, sr.pc
+}
+
+// PauseOption adjusts what NewRecorderForPause seeds.
+type PauseOption func(*rowSeed)
+
+// WithPauseVirtualTime binds the Recorder to the shared clock c with
+// timeouts t (WithVirtualTime) before anything is seeded, so the sessions
+// are created at c's current second unless WithPauseCreated gives a time.
+func WithPauseVirtualTime(c *Clock, t tmux.Timeouts) PauseOption {
+	return func(o *rowSeed) { o.clock, o.timeouts = c, t }
+}
+
+// WithPauseCreated gives the row's session's creation time, epoch seconds.
+func WithPauseCreated(epoch int64) PauseOption {
+	return func(o *rowSeed) { o.session = append(o.session, WithRowSessionCreated(epoch)) }
+}
+
+// WithPauseName gives the row's session another stored name.
+func WithPauseName(stored string) PauseOption {
+	return func(o *rowSeed) { o.session = append(o.session, WithRowSessionName(stored)) }
+}
+
+// WithPauseLabel gives the row's session another label than its current one.
+func WithPauseLabel(l RowLabel) PauseOption {
+	return func(o *rowSeed) { o.label = l }
+}
+
+// WithPauseLeftover seeds, besides the row's session, a leftover of the row:
+// a session named name on the row's socket with the row's old label
+// (RowLabelOld's) and one new pane carrying OtherToken as @ad_pane. Give it
+// more than once for more than one leftover.
+func WithPauseLeftover(name string) PauseOption {
+	return func(o *rowSeed) { o.leftovers = append(o.leftovers, rowLeftover{name: name}) }
+}
+
+// NewRecorderForPause returns a Recorder and a process-checker fake for pause
+// on the row instanceID of the store at dbPath (SR-20.3). The Recorder holds
+// the row's session, seeded by SeedRowSession with the row's current label
+// unless WithPauseLabel gives another, and the row's pane (a new one when
+// the row records none), so on a waiting row pause finds it Ours and sends
+// /exit then Enter to that pane by id. Options also give a clock, a creation
+// time, another name and leftovers. The fake answers as
+// NewRecorderForReadPane's does.
+//
+// Nothing here ends the row: pause's wait polls the store, so a test whose
+// pause should return success ends the row itself (for example from an
+// after-call hook on the Enter), else the wait runs to its timeout.
+func NewRecorderForPause(t testing.TB, dbPath, instanceID string, opts ...PauseOption) (*Recorder, *procfix.Checker) {
+	t.Helper()
+	var o rowSeed
+	for _, opt := range opts {
+		opt(&o)
+	}
+	sr := seedRow(t, dbPath, instanceID, o)
+	return sr.r, sr.pc
+}
+
+// seededRow is what seedRow seeded: the Recorder, the process-checker fake
+// (see NewRecorderForReadPane), the row's socket, and the row's session and
+// the leftovers (in the options' order) as stored.
+type seededRow struct {
+	r         *Recorder
+	pc        *procfix.Checker
+	socket    string
+	own       SeedSession
+	leftovers []SeedSession
+}
+
+// seedRow seeds what o asks for on a new Recorder for the row instanceID of
+// the store at dbPath.
+func seedRow(t testing.TB, dbPath, instanceID string, o rowSeed) seededRow {
+	t.Helper()
 	row, storeID := readRow(t, dbPath, instanceID)
 	id := row.Identity
 	r := NewRecorder()
@@ -118,7 +199,6 @@ func NewRecorderForReadPane(t testing.TB, dbPath, instanceID, paneText string, o
 		sessionOpts = append(sessionOpts, WithRowSessionLabel(label, set))
 	}
 	own := r.SeedRowSession(t, dbPath, instanceID, sessionOpts...)
-	r.SetCapture(id.Socket, own.Panes[0].ID, paneText)
 
 	pc := procfix.New()
 	if row.PID > 0 {
@@ -126,18 +206,19 @@ func NewRecorderForReadPane(t testing.TB, dbPath, instanceID, paneText string, o
 	}
 	pc.Set(own.Panes[0].PID, procfix.Alive(startOr(id.PaneStarttime)))
 	old := Valid(OtherToken, instanceID, storeID)
+	var leftovers []SeedSession
 	for _, lo := range o.leftovers {
 		s := r.seedLeftover(id.Socket, SeedSession{Name: lo.name, Label: old,
 			Panes: []SeedPane{{AdPane: OtherToken}}})
-		r.SetCapture(id.Socket, s.Panes[0].ID, lo.text)
 		pc.Set(s.Panes[0].PID, procfix.Alive(procstarttimefix.LinuxProcStarttime))
+		leftovers = append(leftovers, s)
 	}
 	for _, s := range r.Servers() {
 		if s.Running {
 			pc.Set(s.PID, procfix.Alive(startOr(s.ProcStart)))
 		}
 	}
-	return r, pc
+	return seededRow{r: r, pc: pc, socket: id.Socket, own: own, leftovers: leftovers}
 }
 
 // rowLabel is the label l for the row instanceID with launch token token in
@@ -190,15 +271,4 @@ func (r *Recorder) seedLeftover(socket string, s SeedSession) SeedSession {
 // requirement explicitly so seeders are self-explanatory.)
 func NewRecorderForResume() *Recorder {
 	return NewRecorder().WithHasSession(false)
-}
-
-// NewRecorderForPause returns a Recorder suitable for the pause verb. Pause
-// sends one /exit SendKeys call; the recorder's default no-op return is
-// sufficient. The note here documents that pause's poll-loop reads the store
-// (not the tmux client), so no scripted tmux response is needed to make
-// pause terminate — the caller's context deadline controls exit.
-func NewRecorderForPause() *Recorder {
-	// No special scripted responses needed: pause polls GetSpawnState on the
-	// store to detect ended, and the caller's context deadline prevents a hang.
-	return NewRecorder()
 }

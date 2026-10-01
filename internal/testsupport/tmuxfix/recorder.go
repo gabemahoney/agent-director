@@ -8,9 +8,8 @@
 // (recorder_table.go, recorder_calls.go), tests script a typed result per
 // call kind (recorder_script.go), and session hooks, after-call hooks and
 // virtual time sit around each call (recorder_hooks.go). It never produces
-// or parses tmux reply text. The name-based methods (HasSession, SendKeys)
-// only record their calls, and HasSession returns its scripted answer, as
-// before.
+// or parses tmux reply text. The one name-based method, HasSession, only
+// records its calls and returns its scripted answer, as before.
 package tmuxfix
 
 import (
@@ -24,27 +23,20 @@ type CallKind string
 
 const (
 	CallHasSession CallKind = "HasSession"
-	CallSendKeys   CallKind = "SendKeys"
 )
 
-// Call records a single invocation of a tmux method and its arguments.
+// Call records a single invocation of a name-based tmux method and its
+// arguments.
 type Call struct {
 	// Kind is the name of the method that was called.
 	Kind CallKind
 
-	// Name is the session name passed to HasSession or SendKeys.
+	// Name is the session name passed to HasSession.
 	Name string
-
-	// --- SendKeys fields ---
-
-	// Text is the text argument of SendKeys.
-	Text string
-	// PressEnter is the pressEnter flag of SendKeys.
-	PressEnter bool
 }
 
 // Recorder is a fake that satisfies the pkg/api TmuxClient interface. The
-// name-based methods are no-ops that record every invocation (Calls,
+// name-based HasSession is a no-op that records every invocation (Calls,
 // CallsOfKind). The socket-taking methods, with exactly *tmux.Client's
 // signatures, are answered from per-socket session tables or from scripted
 // typed results, and are recorded separately (SocketCalls, SocketCallsOf).
@@ -127,17 +119,4 @@ func (r *Recorder) HasSession(name string) (bool, error) {
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, Call{Kind: CallHasSession, Name: name})
 	return r.hasSessionResult, nil
-}
-
-// SendKeys records a SendKeys call and returns nil.
-func (r *Recorder) SendKeys(name, text string, pressEnter bool) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.calls = append(r.calls, Call{
-		Kind:       CallSendKeys,
-		Name:       name,
-		Text:       text,
-		PressEnter: pressEnter,
-	})
-	return nil
 }

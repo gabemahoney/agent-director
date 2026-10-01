@@ -10,6 +10,7 @@ package api_test
 // security_find_missing_test.go; read-pane, which writes no trail event,
 // Epic 11, in security_read_pane_test.go; send-keys on a live row and on a
 // pending row with allow_pending, Epic 11, in security_send_keys_test.go;
+// pause, which writes no call event, Epic 11, in security_pause_test.go;
 // later Epics add their verbs).
 
 import (
@@ -18,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -59,7 +61,8 @@ type securityScene struct {
 // its name, the socket's server before the planted sessions are created,
 // extra setup, the expected error (nil: success) and description, the
 // record the call writes once for the subject with field values it carries,
-// and extra checks of the call's result (nil: none).
+// records of the subject the arrangement writes during the call, and extra
+// checks of the call's result (nil: none).
 type securityCase struct {
 	name     string
 	target   killRowSpec
@@ -71,13 +74,15 @@ type securityCase struct {
 	disagree bool           // the call writes at least one ad.provenance.disagree record
 	event    string         // the record written once for the subject; "": the verb's event
 	fields   map[string]any // values that record carries (nil: not checked)
+	others   []string       // events the arrangement writes for the subject during the call (the agent's own hooks)
 	// check makes extra checks of the call's result (nil: none).
 	check func(t *testing.T, s *securityScene, res any)
 }
 
 // securityVerb is one verb under SR-15: its call through the Client on the
 // scene's subject, the trail event it writes once per call ("": none, and no
-// record of any event for the subject; securityCheckTrail), extra checks of
+// record for the subject but the ad.provenance.disagree records a case
+// expects; securityCheckTrail), extra checks of
 // that record against the call's texts (description, client log, result;
 // nil: none), and its arrangements. A launch verb acts on a fresh id on
 // target's socket, requesting target's name, and makes one create.
@@ -133,6 +138,10 @@ var securityVerbs = []securityVerb{{
 	event: "ad.send_keys.called",
 	call:  securitySendKeysCall(true),
 	cases: securitySendKeysCases(store.StatePending),
+}, {
+	verb:  "pause",
+	call:  securityPauseCall,
+	cases: securityPauseCases,
 }}
 
 // securityKillCases meet the planted sessions on kill's Gone, Leftover,
@@ -358,7 +367,7 @@ func TestSecuritySecretAndOtherRowID(t *testing.T) {
 				if c.event != "" {
 					event = c.event
 				}
-				if rec := securityCheckTrail(t, event, s, readAPITrailLines(t)[before:], c.disagree); rec != nil {
+				if rec := securityCheckTrail(t, event, s, readAPITrailLines(t)[before:], c); rec != nil {
 					for k, want := range c.fields {
 						if got, ok := rec[k]; !ok || got != want {
 							t.Errorf("%s: %s = %v (present %t); want %v", event, k, got, ok, want)
@@ -375,35 +384,37 @@ func TestSecuritySecretAndOtherRowID(t *testing.T) {
 }
 
 // securityCheckTrail fails unless lines hold exactly one event record for the
-// subject (and a disagree record when wanted), none carrying a forbidden
+// subject (and a disagree record when c wants one), none carrying a forbidden
 // value; it returns that record (nil when not exactly one). With event ""
-// (a verb that writes no trail event, e.g. read-pane, SR-7.5) it fails on
-// any record for the subject, ad.provenance.disagree included, and returns nil.
-func securityCheckTrail(t *testing.T, event string, s *securityScene, lines []map[string]any, disagree bool) map[string]any {
+// (a verb that writes no call event: read-pane, SR-7.5; pause) it fails on
+// any record for the subject but c.others', and on an ad.provenance.disagree
+// record unless c wants one, and returns nil.
+func securityCheckTrail(t *testing.T, event string, s *securityScene, lines []map[string]any, c securityCase) map[string]any {
 	t.Helper()
 	var called []map[string]any
 	disagrees := 0
 	for _, l := range lines {
 		b, _ := json.Marshal(l)
 		securityAbsent(t, "trail record", string(b), s)
-		if l["claude_instance_id"] != s.subject {
+		if l["claude_instance_id"] != s.subject || slices.Contains(c.others, fmt.Sprint(l["event"])) {
 			continue
 		}
-		if event == "" {
-			t.Errorf("trail record %v for %s; want none", l["event"], s.subject)
-			continue
-		}
-		switch l["event"] {
-		case event:
+		switch ev := l["event"]; {
+		case event != "" && ev == event:
 			called = append(called, l)
-		case "ad.provenance.disagree":
+		case ev == "ad.provenance.disagree":
 			disagrees++
+		case event == "":
+			t.Errorf("trail record %v for %s; want none", ev, s.subject)
 		}
 	}
-	if disagree && disagrees == 0 {
+	if c.disagree && disagrees == 0 {
 		t.Errorf("no ad.provenance.disagree record for %s; want one", s.subject)
 	}
 	if event == "" {
+		if !c.disagree && disagrees > 0 {
+			t.Errorf("ad.provenance.disagree records for %s = %d; want none", s.subject, disagrees)
+		}
 		return nil
 	}
 	if len(called) != 1 {

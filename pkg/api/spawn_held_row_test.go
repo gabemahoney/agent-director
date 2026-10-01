@@ -346,9 +346,6 @@ func TestSpawnHeldIdAfterwards(t *testing.T) {
 				if res, err := e.c.Kill(api.KillParams{ClaudeInstanceID: id}); err != nil || res.KillSent {
 					t.Errorf("Kill = %+v, %v; want kill_sent false, nil", res, err)
 				}
-				if n := len(e.rec.CallsOfKind(tmuxfix.CallSendKeys)); n != 0 {
-					t.Errorf("name-based send-keys calls = %d; want 0", n)
-				}
 			}
 
 			e.assertRowIs(t, id, "after the later verbs", ended)

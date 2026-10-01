@@ -899,6 +899,8 @@ var Verbs = []VerbDef{
 			"ErrPauseTimeout",
 			"ErrTmuxNotAvailable",
 			"ErrTmuxSendKeys",
+			"ErrTmuxUnresponsive",
+			"ErrTmuxSessionConflict",
 		},
 	},
 	{

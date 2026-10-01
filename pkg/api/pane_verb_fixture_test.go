@@ -1,7 +1,8 @@
 package api_test
 
 // pane_verb_fixture_test.go extends the kill fixture (killEnv, killRow) for
-// the pane verbs (read-pane and send-keys; pause later; SR-20.2): their
+// the pane verbs (read-pane and send-keys; pause's own pieces are
+// pause_fixture_test.go; SR-20.2): their
 // invocations and repeatable runs, per-pane capture texts, extra session and
 // pending-launch seeds, the recorded-call lists and assertions, the
 // between-read-and-send writes and the "changes nothing" readers. It holds no tests.
@@ -394,13 +395,11 @@ func (e *killEnv) assertDelivered(t *testing.T, socket, paneID, text string) {
 	}
 }
 
-// assertNothingSent fails when a text or Enter call, or a name-based send, was made.
+// assertNothingSent fails when a text or Enter call was made (the Recorder
+// has no name-based send).
 func (e *killEnv) assertNothingSent(t *testing.T) {
 	t.Helper()
 	e.assertNoCalls(t, tmux.CallSendText, tmux.CallSendEnter)
-	if sends := e.rec.CallsOfKind(tmuxfix.CallSendKeys); len(sends) != 0 {
-		t.Errorf("name-based sends = %+v; want none", sends)
-	}
 }
 
 // assertNoCalls fails when a recorded socket-taking call is of any of kinds.

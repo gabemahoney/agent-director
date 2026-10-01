@@ -89,7 +89,7 @@ func (f Failure) String() string {
 }
 
 // CallError is the only error the socket-taking methods return (Appendix
-// F.1; HasSession and the name-based methods keep their own contracts). It
+// F.1; the name-based HasSession keeps its own contract). It
 // wraps no catalogued sentinel (SR-1.5): the verb layer maps it to verb
 // errors. Its message never carries a label's value.
 type CallError struct {
