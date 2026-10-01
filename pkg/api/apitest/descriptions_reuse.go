@@ -18,6 +18,8 @@ package apitest
 //   - after "duplicate session": the cases resume uses
 //     (descriptions_resume_held.go), with HeldName.Name the requested name
 //     and HeldName.Restore.Launch LaunchReuse.
+//
+// Reuse's documentation cases (Task 4) are in descriptions_reuse_docs.go.
 
 // LaunchKind is the write that began a launch onto a row examined as
 // finished, which the restore's changed and removed sentences name

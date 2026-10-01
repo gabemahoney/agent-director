@@ -50,7 +50,7 @@ func parseSpawnFlags(args []string) (pkgapi.SpawnParams, error) {
 	fs.StringVar(&p.TmuxSessionName, "tmux-session-name", "", "explicit tmux session name (default: <basename(cwd)>-<id[:8]>); rejects ':' '.' '#' '$' '\\' (backslash), control chars, and >64 bytes; no DB uniqueness check, name reuse across ended spawns supported")
 	fs.StringVar(&p.RelayMode, "relay-mode", "", "on / off (default: config defaults.relay_mode)")
 	fs.BoolVar(&p.NoPreTrust, "no-pre-trust", false, "skip pre-writing the cwd's folder-trust key into .claude.json (<CLAUDE_CONFIG_DIR>/.claude.json if CLAUDE_CONFIG_DIR is set in extra-env, otherwise ~/.claude.json); default off (pre-trust IS performed); the choice is recorded on the row for its life and every resume of that life follows it")
-	fs.BoolVar(&p.ReuseFinished, "reuse-finished", false, "reuse an explicit --claude-instance-id whose row is ended or missing; no effect without --claude-instance-id; this call only; default off (any existing row collides with ErrInstanceIdCollision)")
+	fs.BoolVar(&p.ReuseFinished, "reuse-finished", false, "reuse an explicit --claude-instance-id whose row is finished (ended or missing); a live row, pending included, still collides; no effect without --claude-instance-id; this call only; default off (any existing row collides with ErrInstanceIdCollision); success does not say whether a row was reset")
 	fs.Var(newKVSlice(&labelKVs, "--label"), "label", "k=v (repeatable)")
 	fs.Var(newKVSlice(&extraEnvKVs, "--extra-env"), "extra-env", "K=V (repeatable)")
 	fs.Var(newStringSlice(&allow), "allow", "permissions.allow entry (repeatable)")
@@ -175,8 +175,9 @@ func parseReadPaneFlags(args []string) (pkgapi.ReadPaneParams, error) {
 }
 
 // makeTemplateHandlerWith implements `agent-director make-template`.
-// Flags mirror the per-call spawn surface minus the three reserved
-// per-invocation params (template, claude-instance-id, tmux-session-name).
+// Flags mirror the per-call spawn surface minus the four reserved
+// per-invocation params (template, claude-instance-id, tmux-session-name,
+// reuse-finished, which applies to one spawn call only).
 func makeTemplateHandlerWith(client *pkgapi.Client, args []string) error {
 	var (
 		labelKVs    map[string]string

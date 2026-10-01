@@ -119,12 +119,18 @@ type SpawnRow struct {
 	//                      the case a bare jsonl_path could not distinguish
 	//                      from "never_written".
 	//   - "no_session":    no claude_session_id yet (pre-first-SessionStart).
+	// A reuse starts a new life, so its status is decided on that life's
+	// history alone; a failed reuse's restore returns the row to its
+	// pre-reuse life, whose history counts again.
 	TranscriptStatus string `json:"transcript_status"`
 	// PriorSessions is the row's visible history, newest first: the archived
 	// sessions of the current life (session history belongs to a life),
 	// minus the entry for the row's current session id. It is the queryable
 	// link from this row back to earlier sessions orphaned by a rotation
-	// (b.v2c AC6/AC8). Always a non-nil slice (encodes as []).
+	// (b.v2c AC6/AC8). A reuse starts a new life, so after a reuse it lists
+	// none of the earlier lives' sessions; a failed reuse's restore returns
+	// the row to its pre-reuse life, whose sessions are listed again. Always
+	// a non-nil slice (encodes as []).
 	PriorSessions []PriorSession `json:"prior_sessions"`
 }
 
@@ -209,6 +215,8 @@ type GetStore interface {
 	// current-session rule; Get does, keeping the visible history (that
 	// life's entries minus the entry for the row's current session id) to
 	// populate PriorSessions and derive TranscriptStatus (b.v2c AC6/AC8).
+	// A reuse starts a new life, so after a reuse no earlier life's entry is
+	// read.
 	ListSessionHistory(instanceID string, life int64) ([]SessionHistoryEntry, error)
 }
 
@@ -322,7 +330,9 @@ func Get(s GetStore, instanceID string) (SpawnRow, error) {
 // open permission-requests slice. On a pending row it also carries
 // launch_started_at, when the agent's launch began. When the row records
 // one, it carries tmux_socket, the tmux socket the row's latest launch
-// uses, in any state.
+// uses, in any state. prior_sessions and transcript_status come from the
+// current life's history only: after a reuse (spawn with ReuseFinished),
+// which starts a new life, Get shows none of the earlier lives' history.
 //
 // CLI: agent-director get
 //

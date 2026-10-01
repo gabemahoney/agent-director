@@ -213,7 +213,12 @@ func hasControlChar(id string) bool {
 //   - ErrSpawnDeniedFlag: a denied claude flag was passed in ClaudeArgs.
 //   - ErrReservedEnvKey: ExtraEnv contains a reserved AGENT_DIRECTOR_* key.
 //   - ErrInvalidFlags: ClaudeInstanceID contains an ASCII control character.
-//   - ErrInstanceIdCollision: ClaudeInstanceID is already in use by a live row.
+//   - ErrInstanceIdCollision: without ReuseFinished, a row already exists
+//     for the explicit ClaudeInstanceID, in any state (the pre-check refuses
+//     a live row and the insert's primary key a finished one). With
+//     ReuseFinished, the row is live (pending included), or it changed or
+//     was removed after this spawn examined it (a lost race); nothing was
+//     changed.
 //   - ErrTmuxSessionNameEmpty: TmuxSessionName was supplied but is empty.
 //   - ErrTmuxSessionNameInvalid: TmuxSessionName contains illegal characters.
 //   - ErrTmuxSessionNameTooLong: TmuxSessionName exceeds 64 bytes.
@@ -274,8 +279,11 @@ func hasControlChar(id string) bool {
 //     or the requested name held by another row's session, another
 //     agent-director store's session or one with no valid instance id; after
 //     "duplicate session", the same cases for the session holding the
-//     requested name, then the row is restored. A human must look (README
-//     "Operator actions").
+//     requested name, then the row is restored. For a leftover, this row's
+//     own old session, conflicting labels or a session with no valid
+//     instance id, a human must look (README "Operator actions"); another
+//     row's or another agent-director store's session is another agent and
+//     must not be ended.
 //   - ErrTemplateNotFound: the named template file does not exist.
 //   - ErrTemplateMalformed: the template TOML could not be parsed.
 //   - ErrTemplateNameUnsafe: the template name contains path-unsafe characters.

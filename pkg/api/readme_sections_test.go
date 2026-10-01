@@ -205,12 +205,10 @@ func pointersIn(source, text string) []readmePointer {
 	return out
 }
 
-// collectREADMEPointers gathers pointers from non-test Go sources under pkg/,
-// internal/ and cmd/ (wrapped comments joined, \" unescaped), every manifest
-// text, and the title runtime descriptions carry via PointsToOperatorActions.
-func collectREADMEPointers(t *testing.T) []readmePointer {
+// walkGoSources calls fn with each non-test Go source under pkg/, internal/
+// and cmd/, by repo-relative path, wrapped comments joined and \" unescaped.
+func walkGoSources(t *testing.T, fn func(rel, text string)) {
 	t.Helper()
-	ptrs := []readmePointer{{source: "apitest.OperatorActionsTitle", title: apitest.OperatorActionsTitle}}
 	for _, dir := range []string{"pkg", "internal", "cmd"} {
 		err := filepath.WalkDir(filepath.Join(mdRepoRoot, dir), func(path string, e fs.DirEntry, err error) error {
 			if err != nil {
@@ -226,24 +224,39 @@ func collectREADMEPointers(t *testing.T) []readmePointer {
 			if err != nil {
 				return err
 			}
-			text := strings.ReplaceAll(goCommentWrapRe.ReplaceAllString(string(data), " "), `\"`, `"`)
 			rel, _ := filepath.Rel(mdRepoRoot, path)
-			ptrs = append(ptrs, pointersIn(rel, text)...)
+			fn(rel, strings.ReplaceAll(goCommentWrapRe.ReplaceAllString(string(data), " "), `\"`, `"`))
 			return nil
 		})
 		if err != nil {
 			t.Fatalf("walk %s: %v", dir, err)
 		}
 	}
+}
+
+// eachManifestText calls fn with every manifest text (each verb's
+// Description, param and result-field texts), named by its source.
+func eachManifestText(fn func(source, text string)) {
 	for _, v := range manifest.Verbs {
-		ptrs = append(ptrs, pointersIn("manifest "+v.Name+" Description", v.Description)...)
+		fn("manifest "+v.Name+" Description", v.Description)
 		for _, p := range v.Params {
-			ptrs = append(ptrs, pointersIn("manifest "+v.Name+" param "+p.Name, p.Description)...)
+			fn("manifest "+v.Name+" param "+p.Name, p.Description)
 		}
 		for _, f := range v.ResultFields {
-			ptrs = append(ptrs, pointersIn("manifest "+v.Name+" result field "+f.Name, f.Description)...)
+			fn("manifest "+v.Name+" result field "+f.Name, f.Description)
 		}
 	}
+}
+
+// collectREADMEPointers gathers pointers from non-test Go sources
+// (walkGoSources), every manifest text, and the title runtime descriptions
+// carry via PointsToOperatorActions.
+func collectREADMEPointers(t *testing.T) []readmePointer {
+	t.Helper()
+	ptrs := []readmePointer{{source: "apitest.OperatorActionsTitle", title: apitest.OperatorActionsTitle}}
+	collect := func(source, text string) { ptrs = append(ptrs, pointersIn(source, text)...) }
+	walkGoSources(t, collect)
+	eachManifestText(collect)
 	return ptrs
 }
 

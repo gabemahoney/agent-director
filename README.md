@@ -147,9 +147,10 @@ make build
 bash skills/install-agent-director/install.sh --binary ./bin/agent-director
 ```
 
-`install.sh` version-checks the local binary against `git rev-parse HEAD`
-and refuses option `--binary` if the artifact is stale — re-run
-`make build` to refresh it.
+`install.sh` uses `agent-director version` (its `{version, commit}`
+stamp) to compare the local binary with the source tree: it checks the
+binary's commit against `git rev-parse HEAD` and refuses option
+`--binary` if the artifact is stale — re-run `make build` to refresh it.
 
 To run the test suite without touching your `~/.agent-director`:
 
@@ -410,8 +411,9 @@ it, not proof that the agent has exited. A run as another user, as root or
 against another tmux server can mark live rows `missing`.
 
 Finished rows (`ended` or `missing`) are never removed on their own: an
-`expire` you schedule removes them at the default retention, and `delete`
-removes one row when asked; a row's state alone never gets it deleted. `expire` checks each row's agent process and, unless it runs,
+`expire` you schedule removes them at the default retention, and the
+deprecated `delete` (not a cleanup or recovery step) removes one row when
+asked; a row's state alone never gets it deleted. `expire` checks each row's agent process and, unless it runs,
 asks tmux on the row's recorded socket (else yours): it deletes the row only when the process is not
 running and tmux shows no session of the agent, and lists it in `ids`. Rows
 whose session runs or that it cannot check are kept and listed in
@@ -449,10 +451,11 @@ agent may wait at the trust prompt.
 `resume` also recovers history from a session that rotated (for example when
 agents were restarted and Claude handed the session a new id) — it falls back
 to the session's earlier transcripts automatically. A session's history
-belongs to the life of its id, which starts at the spawn that created it:
-`resume` falls back only to earlier transcripts of that life. If `resume`
-reports that no transcript was ever written, the session simply hasn't been
-messaged yet; send it a message and its transcript appears. Run
+belongs to the life of its id, which starts at the spawn that created it
+or at a reuse: `resume` falls back only to earlier transcripts of that
+life, and a reuse starts the id over with no earlier history. If `resume`
+reports that no transcript was ever written, the session was never
+messaged before it stopped, so there is no conversation to bring back. Run
 `agent-director get --claude-instance-id <id>` to see a session's
 `transcript_status` and its prior sessions — the earlier sessions of the
 current life, not the current one — before deciding anything.
@@ -460,8 +463,16 @@ current life, not the current one — before deciding anything.
 Session rotations are archived automatically, so `resume` recovers them on
 its own — no manual step is needed.
 
-Do **not** use `delete` to recover — it permanently removes the row and
-its conversation history, so there is nothing left to resume.
+When `resume` cannot bring the conversation back (for example it reports
+no session id, or that the transcript was never written or is missing),
+spawn the id again, opting in to reuse:
+
+```sh
+agent-director spawn --cwd <dir> --claude-instance-id <id> --reuse-finished
+```
+
+The new agent starts with no memory of the old conversation. `delete` is
+not a recovery step.
 
 agent-director does not restart sessions for you. Deciding when to run
 `find-missing` then `resume` after a boot — from a startup script,
@@ -600,24 +611,29 @@ On a `pending` row, first wait until `find-missing` marks the row `missing`
 again and check that the session id still shows the `session_created` you
 noted; afterwards spawn the id with `--reuse-finished`.
 
-When `resume` refuses with `ErrTmuxSessionConflict` ("left over from an
-earlier life" or "no valid instance id"), the row stays `ended` or
-`missing` (after "duplicate session" the error says whether the row was
-restored). The error names the session and its id (`$N`); the socket is the
-row's `tmux_socket`. For a leftover, handle each session it names as in
-steps 2 to 4 (if it says "and N more", find the others with the listing of
-step 1). For "no valid instance id", look first (steps 2 and 3): it may be a
-person's own session; end it as in step 4 only if it is not wanted. Then run
-`resume` again:
+When `resume`, or a `spawn` with `--reuse-finished`, refuses with
+`ErrTmuxSessionConflict` ("left over from an earlier life" or "no valid
+instance id"), the row stays `ended` or `missing` (after "duplicate
+session" the error says whether the row was restored). The error names the
+session and its id (`$N`); the socket is the row's `tmux_socket`. For a
+leftover, handle each session it names as in steps 2 to 4 (if it says "and
+N more", find the others with the listing of step 1). For "no valid
+instance id", look first (steps 2 and 3): it may be a person's own session;
+end it as in step 4 only if it is not wanted. Then run the refused command
+again, whichever it was:
 
 ```sh
+# if resume was refused
 agent-director resume --claude-instance-id <id>
+# if the spawn with --reuse-finished was refused
+agent-director spawn --cwd <dir> --claude-instance-id <id> --reuse-finished
 ```
 
 ### A spawn refused as "left over from an earlier life"
 
-`ErrTmuxSessionConflict` ("left over from an earlier life") comes in two
-cases:
+`ErrTmuxSessionConflict` ("left over from an earlier life") from a plain
+`spawn` (without `--reuse-finished`; a refused reuse is handled as in the
+leftover item above) comes in two cases:
 
 - A `spawn` with a `--claude-instance-id` that has no row, when a tmux
   session of this agent-director store still carries that id. Nothing was

@@ -10,7 +10,8 @@ package api_test
 // tmuxfix.WithRowSessionName), a leftover or a holder (seedHolder, under the
 // requested name through killRow.withName), the agent process (the
 // agentState argument), the bound and window (the runners' settings) and
-// "duplicate session" (arrangeHeld).
+// "duplicate session" (arrangeHeld). Later reuse tests use these helpers,
+// never a copy of them.
 
 import (
 	"path/filepath"

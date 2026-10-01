@@ -355,7 +355,7 @@ These 42 classes are generated one-to-one from the shared `err_name` catalog ([`
 | `ErrRelayModeInvalid` | `relay_mode` was something other than `on` / `off` / empty. |
 | `ErrSpawnDeniedFlag` | `claude_args` contains a flag the supervisor must own (`--settings`, `--resume`, `--continue`, `--print`, `--output-format`). |
 | `ErrReservedEnvKey` | `extra_env` contains an `AGENT_DIRECTOR_*` key (reserved prefix). |
-| `ErrInstanceIdCollision` | The supplied `claude_instance_id` is already in use by a live spawn. |
+| `ErrInstanceIdCollision` | Without `reuse_finished`, a row already exists for the supplied `claude_instance_id`, in any state. With `reuse_finished: true`, the row is live (`pending` included), or it changed or was removed after this spawn examined it (a lost race); nothing was changed. |
 
 **tmux session naming** (bad `--tmux-session-name` — programmer error):
 
@@ -374,8 +374,8 @@ These 42 classes are generated one-to-one from the shared `err_name` catalog ([`
 | `ErrSpawnNotPausable` | The target spawn is not in a pausable (`waiting`) state. |
 | `ErrPauseTimeout` | The spawn did not reach `ended` within `pause.timeout_seconds` after `/exit`. Retry or `kill`. |
 | `ErrSpawnNotResumable` | `resume` applies only to a finished (`ended`/`missing`) spawn. A live spawn is refused because its agent is running. A `pending` spawn is refused too: it is a launch (spawn, reuse or resume) in progress whose agent has not reported in, a resumed row included. Also returned when the row changed after `resume` examined it; nothing is written. |
-| `ErrNoSessionId` | The spawn has no `claude_session_id` (killed before its first SessionStart), so there is nothing to resume — `delete` and spawn fresh. |
-| `ErrJsonlMissing` | The resume JSONL could not be located at any candidate path — `delete` and spawn fresh. |
+| `ErrNoSessionId` | The spawn has no `claude_session_id` (killed before its first SessionStart), so there is nothing to resume — spawn the same `claude_instance_id` again with `reuse_finished: true`, which starts with no memory of the old conversation. |
+| `ErrJsonlMissing` | The resume JSONL could not be located at any candidate path — spawn the same `claude_instance_id` again with `reuse_finished: true`, which starts with no memory of the old conversation. |
 | `ErrListInvalidLabel` | A `list` label filter could not be parsed as `key=value`. |
 | `ErrProbeUnsupported` | No verb returns it: `find-missing` no longer reads process environments, the only path that returned it. The name stays catalogued (and listed for `find-missing`) so the client still maps it. |
 

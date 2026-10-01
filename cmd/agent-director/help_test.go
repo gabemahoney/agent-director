@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // helpStdout is the JSON shape the help verb writes to stdout. The struct
@@ -116,6 +118,26 @@ func TestHelpVerbSurfaceTrailReadRemoved(t *testing.T) {
 	if strings.Contains(stdout, "trail-path") {
 		t.Errorf("raw help JSON contains the string \"trail-path\"; it must be absent")
 	}
+}
+
+// TestHelpShowsDeleteDeprecated checks that help's delete description carries
+// SR-18.8's deprecation notice (AC-DOC-07).
+func TestHelpShowsDeleteDeprecated(t *testing.T) {
+	stdout, stderr, code := runCLI(t, "help")
+	if code != 0 {
+		t.Fatalf("exit=%d want 0; stderr=%q", code, stderr)
+	}
+	var parsed helpStdout
+	if err := json.Unmarshal([]byte(stdout), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, v := range parsed.Verbs {
+		if v.Name == "delete" {
+			apitest.AssertAgentTextCase(t, "help: delete description", v.Description, apitest.DescDeleteDeprecated())
+			return
+		}
+	}
+	t.Fatal("help lists no delete verb")
 }
 
 // firstByte returns the first byte of s as a string, or "<empty>" if s is

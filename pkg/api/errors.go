@@ -61,7 +61,9 @@ var ErrSpawnNotResumable = errors.New("ErrSpawnNotResumable")
 // claude_session_id column is empty — typically because the Spawn
 // was killed before its first SessionStart hook fired. With no
 // session id there is no JSONL to point `claude --resume` at; the
-// caller's recourse is to `delete` and `spawn` fresh.
+// caller's recourse is to spawn again with the same id, opting in to reuse
+// (SpawnParams.ReuseFinished, --reuse-finished). The reused id starts a new
+// life with no memory of the earlier one.
 var ErrNoSessionId = errors.New("ErrNoSessionId")
 
 // ErrJsonlMissing is returned by the resume verb when NO candidate
@@ -78,7 +80,10 @@ var ErrNoSessionId = errors.New("ErrNoSessionId")
 // fallback or history; all from the current life) with the stat error for
 // each, so callers can log which candidates failed —
 // the error NAME is stable, so name-based mapping is unaffected.
-// Resume cannot proceed; `delete` + fresh `spawn` is the recourse.
+// Resume cannot proceed; the recourse is to spawn again with the same id,
+// opting in to reuse (SpawnParams.ReuseFinished, --reuse-finished). The
+// reused id starts a new life with no memory of the earlier one, so the
+// earlier conversation cannot be resumed through agent-director afterwards.
 var ErrJsonlMissing = errors.New("ErrJsonlMissing")
 
 // ErrJsonlNeverWritten is returned by the resume verb when the row carries a
@@ -95,10 +100,13 @@ var ErrJsonlMissing = errors.New("ErrJsonlMissing")
 //
 // It is deliberately distinct from ErrJsonlMissing, whose meaning is
 // "candidates were tried and none matched" — a path was once recorded (or
-// composed) and has since rotted or been removed. The recourse differs:
-// ErrJsonlNeverWritten means the session never produced history (send it a
-// message, or delete + re-spawn), whereas ErrJsonlMissing means history existed
-// but the file is gone. Callers map by error NAME; both remain stable.
+// composed) and has since rotted or been removed: ErrJsonlNeverWritten means
+// the session never produced history, whereas ErrJsonlMissing means history
+// existed but the file is gone. Callers map by error NAME; both remain
+// stable. resume returns it only for a finished row, which send-keys
+// refuses, so the recourse is to spawn again with the same id, opting in to
+// reuse (SpawnParams.ReuseFinished, --reuse-finished); the reused id starts a
+// new life with no memory of the earlier one.
 var ErrJsonlNeverWritten = errors.New("ErrJsonlNeverWritten")
 
 // ErrSendKeysWhileRelayed is returned when a caller tries to send keys

@@ -176,9 +176,12 @@ A template MUST NOT bake any of:
 - `template` (recursion would be ill-defined)
 - `claude_instance_id` (must be per-invocation for uniqueness)
 - `tmux_session_name` (derived from the id + cwd)
+- `reuse_finished` (applies to one `spawn` call only, and only with an
+  explicit `claude_instance_id`)
 
-`make-template` rejects these at the CLI flag layer; a hand-edited
-template carrying them surfaces `ErrTemplateMalformed` on load.
+`make-template` on the CLI rejects these flags; over MCP it ignores
+these parameters. A hand-edited template carrying any of them surfaces
+`ErrTemplateMalformed` on load.
 
 ### Example
 

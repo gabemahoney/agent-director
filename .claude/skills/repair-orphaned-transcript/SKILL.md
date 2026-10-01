@@ -25,8 +25,8 @@ Before doing anything, confirm you are in the pre-v4-orphan case:
   `transcript_status` and `prior_sessions[]`.
   - `rotated` with the transcript listed under `prior_sessions[]` → **STOP.**
     `resume` will recover this automatically. Do not hand-repair it.
-  - `never_written` → the bot simply hasn't been messaged yet; there is no
-    transcript to repair. Message it instead.
+  - `never_written` → the agent was never messaged in this life; there is no
+    transcript to repair.
   - The transcript is genuinely orphaned (no `prior_sessions[]` entry points at
     it) and you have found an on-disk `.jsonl` you believe belongs to the row →
     this skill applies.
@@ -47,8 +47,9 @@ session id and loses the current conversation.
   `ended` or `missing`. Rewriting the `claude_session_id` of a live row
   (`pending`, `waiting`, `working`, `ask_user`, `check_permission`) mid-session
   corrupts tracking and can strand the in-flight conversation. If the row is not
-  terminal, run `agent-director find-missing` (which reaps dead sessions to
-  `missing`) or wait for it to end — do not force it.
+  terminal, run `agent-director find-missing` (which marks the row `missing`
+  when it judges the agent's process gone; `missing` is the sweep's judgement,
+  not proof that the agent exited) or wait for it to end — do not force it.
 - **Do not migrate the schema by accident.** Open the DB with a plain `sqlite3`
   client (below). Do not run agent-director test binaries or `go run` against
   your real `$HOME` — see the `run-tests` skill for why (the b.8dr incident).
@@ -57,13 +58,21 @@ session id and loses the current conversation.
 
 ```sh
 sqlite3 ~/.agent-director/state.db \
-  "SELECT claude_instance_id, state, cwd, claude_session_id, jsonl_path
+  "SELECT claude_instance_id, state, cwd, claude_session_id, jsonl_path,
+          life_number, row_version
      FROM spawns WHERE claude_instance_id = '<id>';"
 ```
 
 Note the `cwd` (you need it to locate transcripts), the current
 `claude_session_id` and `jsonl_path` (the pair you will archive), and confirm
 `state` is `ended` or `missing`.
+
+**Stop if `life_number` is greater than 0.** The row has been reused, which
+started a new life of the id. A pre-v4 orphan belongs to the id's first life,
+and a session's history belongs to one life, so re-pointing the row at it would
+bring an earlier life's conversation into the current one. Do not repair such a
+row: make no change through the store, and leave the orphaned conversation on
+disk.
 
 ## Step 2 — locate the candidate transcript on disk
 
@@ -115,44 +124,59 @@ Substitute your verified values for `<id>`, `<recovered-session-id>`, and
 BEGIN IMMEDIATE;
 
 -- 1. Archive the row's CURRENT (session id, jsonl_path) so the pointer being
---    replaced is never silently discarded. COALESCE keeps an already-known
---    path and refreshes recorded_at if this pair was archived before.
-INSERT INTO session_history (claude_instance_id, claude_session_id, jsonl_path)
-SELECT claude_instance_id, claude_session_id, jsonl_path
+--    replaced is never silently discarded. The entry records the row's
+--    current life_number (the life of the session being archived). If this
+--    pair was archived before in the same life, COALESCE keeps an
+--    already-known path; the entry is kept in the row's current life and
+--    recorded_at is refreshed. The life_number guard matches Step 1's stop rule.
+INSERT INTO session_history (claude_instance_id, claude_session_id, jsonl_path, life_number)
+SELECT claude_instance_id, claude_session_id, jsonl_path, life_number
   FROM spawns
  WHERE claude_instance_id = '<id>'
+   AND life_number = 0
    AND claude_session_id IS NOT NULL
    AND claude_session_id <> ''
    AND claude_session_id <> '<recovered-session-id>'
 ON CONFLICT(claude_instance_id, claude_session_id) DO UPDATE SET
-  jsonl_path  = COALESCE(excluded.jsonl_path, jsonl_path),
+  jsonl_path  = CASE WHEN session_history.life_number = excluded.life_number
+                     THEN COALESCE(excluded.jsonl_path, session_history.jsonl_path)
+                     ELSE excluded.jsonl_path
+                END,
+  life_number = excluded.life_number,
   recorded_at = CURRENT_TIMESTAMP;
 
--- 2. Re-point the row at the recovered transcript. Guarded on terminal state so
---    a row that went live again between Step 1 and now is left untouched.
+-- 2. Re-point the row at the recovered transcript and advance row_version by
+--    one, as every write to a spawns row does. Guarded on terminal state and
+--    on the life_number read in Step 1 (0), so a row that went live again or
+--    was reused between Step 1 and now is left untouched.
 UPDATE spawns
    SET claude_session_id = '<recovered-session-id>',
-       jsonl_path        = '<absolute-recovered-jsonl-path>'
+       jsonl_path        = '<absolute-recovered-jsonl-path>',
+       row_version       = row_version + 1
  WHERE claude_instance_id = '<id>'
-   AND state IN ('ended', 'missing');
+   AND state IN ('ended', 'missing')
+   AND life_number = 0;
 
 COMMIT;
 ```
 
-If the `UPDATE` reports `0 rows changed`, the row was not terminal (or the id was
-wrong) — the `COMMIT` still archived nothing harmful, but investigate before
-retrying; do **not** drop the `state IN ('ended','missing')` guard to force it.
+If the `UPDATE` reports `0 rows changed`, the row was not terminal, was reused
+(its `life_number` is no longer 0), or the id was wrong — the `COMMIT` still
+archived nothing harmful, but investigate before retrying; do **not** drop the
+`state IN ('ended','missing')` or `life_number` guard to force it. A reused row
+is not repaired (see Step 1).
 
 ## Step 4 — verify, then resume
 
 ```sh
 sqlite3 ~/.agent-director/state.db \
-  "SELECT claude_session_id, jsonl_path FROM spawns WHERE claude_instance_id='<id>';
-   SELECT claude_session_id, jsonl_path, recorded_at FROM session_history WHERE claude_instance_id='<id>';"
+  "SELECT claude_session_id, jsonl_path, life_number, row_version FROM spawns WHERE claude_instance_id='<id>';
+   SELECT claude_session_id, jsonl_path, life_number, recorded_at FROM session_history WHERE claude_instance_id='<id>';"
 ```
 
-Confirm the row now points at the recovered transcript and the old pair is in
-`session_history`. Then relaunch normally:
+Confirm the row now points at the recovered transcript, its `life_number` is
+still 0 and its `row_version` is one more than Step 1 showed, and the old pair is
+in `session_history` with `life_number` 0. Then relaunch normally:
 
 ```sh
 agent-director resume --claude-instance-id <id>

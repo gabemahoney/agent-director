@@ -41,6 +41,10 @@ type ResumeStore interface {
 	// Resume uses the visible history both to try earlier transcripts as
 	// resume candidates (b.v2c AC6 — a rotation must not strand history)
 	// and to distinguish ErrJsonlNeverWritten from ErrJsonlMissing (AC2).
+	// A reuse starts a new life, so after a reuse no earlier life's entry is
+	// read and the earlier conversation cannot be resumed; a failed reuse's
+	// restore returns the row to its pre-reuse life, whose history counts
+	// again.
 	ListSessionHistory(instanceID string, life int64) ([]SessionHistoryEntry, error)
 	// MoveToPending applies only if the row is ended or missing and its
 	// snapshot equals examined (SR-8.3). In one statement it sets state
@@ -234,7 +238,8 @@ func (d resumeDeps) launchOnto(row Spawn, disagreeWritten []string, movedVersion
 //     Session history belongs to a life, and the visible history is the
 //     current life's history minus the entry for the row's current
 //     session id, whose own candidates are a and b; a recorded path on
-//     that dropped entry is never tried.
+//     that dropped entry is never tried. After a reuse, which starts a new
+//     life, no earlier life's transcript is a candidate.
 //     When every candidate fails, the verb distinguishes two cases, both
 //     decided on the visible history: ErrJsonlNeverWritten when the
 //     persisted jsonl_path was NULL and the visible history is empty
@@ -715,18 +720,26 @@ func launchInProgressError(row Spawn) error {
 //     one re-read after the pre-launch check found a left-over session), and
 //     nothing was written.
 //   - [ErrNoSessionId]: claude_session_id is empty — the Spawn was killed
-//     before its first SessionStart hook; delete and re-spawn instead.
+//     before its first SessionStart hook. Recourse: spawn again with the
+//     same id, opting in to reuse (SpawnParams.ReuseFinished); the reused id
+//     starts a new life with no memory of the earlier one.
 //   - [ErrJsonlMissing]: no candidate JSONL transcript exists on disk —
 //     neither the persisted jsonl_path, the CLAUDE_CONFIG_DIR-aware
 //     fallback, nor any transcript of the visible history (the message
 //     names every path tried and its source, all from the current life).
 //     Meaning: history existed but the file is gone. Session history
 //     belongs to a life; the visible history is the current life's
-//     history minus the entry for the row's current session id.
+//     history minus the entry for the row's current session id. Recourse:
+//     spawn again with the same id, opting in to reuse
+//     (SpawnParams.ReuseFinished); the reused id starts a new life with no
+//     memory of the earlier one, so the earlier conversation cannot be
+//     resumed through agent-director afterwards.
 //   - [ErrJsonlNeverWritten]: the row has a session id but no transcript was
-//     ever written (persisted jsonl_path NULL and the visible history
-//     empty) — the b.v2c case of a freshly restarted agent that has not
-//     been messaged. Recourse: message it, or delete + re-spawn.
+//     ever written (persisted jsonl_path NULL and the visible history,
+//     the current life's, empty) — the b.v2c case of a freshly restarted
+//     agent that has not been messaged. Recourse: spawn again with the same
+//     id, opting in to reuse (SpawnParams.ReuseFinished); the reused id
+//     starts a new life with no memory of the earlier one.
 //   - ErrTmuxNotAvailable: ENVIRONMENT. At the pre-launch lookup, before
 //     anything is written, this is not the tmux server the agent was launched
 //     on, or the tmux binary cannot be run or the socket is not accessible to

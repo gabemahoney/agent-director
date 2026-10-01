@@ -15,7 +15,9 @@ import (
 // MakeTemplateParams is the typed parameter shape for the
 // make-template verb. The Name + per-call spawn parameters subset is
 // the SRD §10 surface; reserved per-invocation params (template,
-// claude_instance_id, tmux_session_name) are intentionally absent.
+// claude_instance_id, tmux_session_name, reuse_finished) are intentionally
+// absent. reuse_finished applies to one spawn call only, so no template
+// records it.
 type MakeTemplateParams struct {
 	// Name is the template filename (without extension). Must be filename-safe:
 	// no path separators, no leading dot, no "..". Required.
@@ -107,10 +109,10 @@ func MakeTemplate(params MakeTemplateParams) (MakeTemplateResult, error) {
 	}
 
 	file := config.TemplateFile{
-		CWD:                  params.CWD,
-		RelayMode:            params.RelayMode,
-		ClaudeArgs:           params.ClaudeArgs,
-		ExtraEnv:             params.ExtraEnv,
+		CWD:                 params.CWD,
+		RelayMode:           params.RelayMode,
+		ClaudeArgs:          params.ClaudeArgs,
+		ExtraEnv:            params.ExtraEnv,
 		AgentDirectorLabels: params.AgentDirectorLabels,
 	}
 	if params.Permissions != nil {

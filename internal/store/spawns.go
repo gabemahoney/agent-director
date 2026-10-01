@@ -156,9 +156,11 @@ type Spawn struct {
 // row and minted any defaults — InsertPending does no semantic checks
 // beyond what SQLite's constraints enforce.
 //
-// On PRIMARY KEY collision (claude_instance_id already exists) the error
-// chain contains the bare driver error; spawn.Launch maps this back to
-// ErrInstanceIdCollision for surface parity with the TOCTOU pre-check.
+// On PRIMARY KEY collision (claude_instance_id already exists, in any
+// state) it returns ErrPrimaryKeyCollision; spawn.Launch maps that to
+// ErrInstanceIdCollision. This is where a plain spawn's finished row
+// collides (the pre-check refuses only a live row) and where a row inserted
+// after the pre-check is caught.
 //
 // The insert is one of the writes that begin a launch (SR-5.2): in the same
 // statement it writes launch_started_at from sp.LaunchStartedAtMillis

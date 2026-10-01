@@ -150,10 +150,11 @@ func RecordLaunchIdentity(w IdentityWriter, pc tmux.ProcChecker, lg *log.Logger,
 
 // insertPending inserts row as the pending row: ComposeLaunch's row with the
 // launch start (milliseconds), the launch token and the launch socket
-// (SR-22.2, SR-3.3, SR-3.5). A primary-key collision, the TOCTOU fallback of
-// the pre-check in ApplyDefaults, maps to ErrInstanceIdCollision
-// (store.ErrPrimaryKeyCollision is detected from the SQLite error code, not
-// its text).
+// (SR-22.2, SR-3.3, SR-3.5). A primary-key collision maps to
+// ErrInstanceIdCollision: a finished row, which the pre-check in
+// ApplyDefaults lets through to the insert, or a row inserted after the
+// pre-check (store.ErrPrimaryKeyCollision is detected from the SQLite error
+// code, not its text).
 func insertPending(s *store.Store, row store.Spawn) error {
 	if err := s.InsertPending(row); err != nil {
 		if errors.Is(err, store.ErrPrimaryKeyCollision) {

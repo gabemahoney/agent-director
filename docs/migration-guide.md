@@ -276,7 +276,12 @@ statement of the hop.
 
 Session history belongs to a life: each `session_history` entry carries the
 life of the id that was current when its session ran, and after the v5 hop
-every existing entry is in its row's current life (life 0). `resume`
+every existing entry is in its row's current life (life 0). Only a reuse
+(`spawn` with the reuse opt-in on a finished id) starts a new life: its reset
+advances the row's `life_number` by one, and if its launch fails and its
+restore applies, the restore sets it back. No other write changes it. So the
+first reuse of a row after the migration starts life 1, and a row that is
+never reused keeps all its history in life 0. `resume`
 and `get` read only the visible history — the entries of the row's current
 life, minus the entry for the row's current session id. The migration
 therefore changes nothing those verbs read for an existing row. The one
@@ -562,8 +567,9 @@ The recipe deletes no `spawns` row and no history entry. What is lost is the
 values in the dropped columns (row versions, launch starts and tokens,
 sockets, server and pane identities, lives and recorded pre-trust choices) and
 the store id. A v4 binary
-reads every history entry of an id, so after the rollback it shows every
-life's conversations again, as it did before schema v5.
+reads every history entry of an id, so after the rollback it reattaches and
+reports the conversations of every life again, earlier lives' included, as it
+did before schema v5.
 
 **If the store is later migrated to v5 again**, the hop gives every row and
 entry the ordinary defaults again (no phase 3, §2):

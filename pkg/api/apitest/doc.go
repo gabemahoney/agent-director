@@ -81,7 +81,11 @@
 //     ad.launch.name_held trail and the README's "Operator actions" are not
 //     checked); AssertAgentTextCase adds
 //     a DescCase's phrases for a rule such a text must state (for example
-//     DescSpawnLaunchTimeoutRule, DescSpawnScanRefusal). No test spells these
+//     DescSpawnLaunchTimeoutRule, DescSpawnScanRefusal). AssertMustNot checks
+//     only a DescCase's must-not phrases, naming each match with its
+//     context, for a text the agent-text forms do not govern (a Go source
+//     file, a README); a scan of such texts for a forbidden form uses it,
+//     never its own matcher. No test spells these
 //     phrases or forms itself; a new case is a new Desc* constructor in
 //     descriptions.go, or in a sibling file of one verb's cases
 //     (descriptions_resume.go, whose DescCase.AfterResumeRestore adds the
@@ -148,7 +152,16 @@
 //     (descriptions_expire.go: DescExpireManifest, its Description;
 //     DescExpireField, its count, ids, kept and kept_ids result fields;
 //     DescCleanupGuidance, SR-18.7's cleanup guidance in full at expire, and
-//     DescCleanupPointer, its short pointer at kill and find-missing).
+//     DescCleanupPointer, its short pointer at kill and find-missing), or of
+//     reuse's documentation (descriptions_reuse_docs.go:
+//     DescReuseFinishedParam, spawn's reuse-finished parameter text;
+//     DescReuseHistoryByLife, SR-18.16's forbidden history-by-life claims;
+//     DescDeleteDeprecated, delete's deprecation notice;
+//     DescInstanceIDCollision, SR-18.9's collision text, parameterised by
+//     CollisionSite; DescReuseRecourse, SR-18.4's recovery recourse,
+//     parameterised by RecourseSite; and DescReuseDocsForbidden, the
+//     recovery, collision and history-by-life forbidden forms together, for
+//     AssertMustNot).
 //
 // Rules for tests (the same as docs/architecture.md, "apitest Seed* factory
 // contract (reusable test fixtures)"):

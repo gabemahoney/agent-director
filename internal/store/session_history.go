@@ -12,7 +12,10 @@ import (
 // spawn previously pointed at before a session rotation (b.v2c). Session
 // history belongs to a life: every entry belongs to the life (SR-5.9) of the
 // id that was current when its session ran, and the life-taking read returns
-// one life's entries only. jsonl_path is the empty string when the archived
+// one life's entries only. A reuse starts a new life, so the reused row's
+// reads see none of its earlier lives' entries; a failed reuse's restore
+// returns the row to its pre-reuse life, whose entries are read again.
+// jsonl_path is the empty string when the archived
 // session never had a recorded transcript path (NULL in the column). Ordered
 // newest-first by callers.
 type SessionHistoryEntry struct {
@@ -26,7 +29,8 @@ type SessionHistoryEntry struct {
 // lives, and of every other instance, never appear. Session history belongs to
 // a life: every entry belongs to the life of the id that was current when its
 // session ran. Callers pass the life_number of the row they already read
-// (Spawn.LifeNumber). No entries — including an absent instance — yields an
+// (Spawn.LifeNumber); after a reuse that is the new life, so no earlier
+// life's entry appears. No entries — including an absent instance — yields an
 // empty (non-nil) slice; there is nothing to distinguish "no history" from
 // "no row" here, so callers that need that distinction check the spawns row
 // separately.

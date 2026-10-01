@@ -154,7 +154,8 @@ func (e *killEnv) seedRow(t *testing.T, spec killRowSpec) killRow {
 // extra_env and timestamps: a full launch identity with a new pane and pid,
 // edited by ident (nil: none), then spec.Opts; its agent in spec.Agent's
 // state. Name, Socket and Token are read raw; Spawn holds only the id, name
-// and identity. No session is seeded.
+// and identity. No session is seeded. Later tests that need a row GetSpawn
+// refuses use it, never their own raw seeder.
 func (e *killEnv) seedRawRow(t *testing.T, spec killRowSpec, ident func(*store.LaunchIdentity)) killRow {
 	t.Helper()
 	if spec.ID == "" {

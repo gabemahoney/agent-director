@@ -26,11 +26,10 @@ type DeleteResult struct {
 //   - Each id is processed independently. A miss on one id does NOT
 //     abort the batch — the result map records ErrSpawnNotFound for
 //     the offending id and continues.
-//   - The verb does NOT touch tmux sessions or JSONL transcripts.
-//     A delete on a live-state row removes the DB row and leaves the
-//     orphan tmux session running; the caller is expected to have
-//     killed it first (or accepted the orphan).
-//   - Bypasses all state-precondition guards by design (admin verb).
+//   - The verb does NOT touch tmux sessions or JSONL transcripts: a
+//     delete on a live-state row removes the DB row and leaves its
+//     session and agent running, untracked.
+//   - Bypasses all state-precondition guards by design.
 //
 // Returns nil error unconditionally; the per-row map is the canonical
 // reporting surface. A future infrastructure failure that prevents
@@ -57,7 +56,8 @@ func Delete(s DeleteStore, ids []string) (DeleteResult, error) {
 }
 
 // Delete removes one or more Spawn rows by id, bypassing all state guards.
-// Each id is processed independently; a missing id records ErrSpawnNotFound in
+// The verb is deprecated (see the delete manifest description); it is not a
+// cleanup or recovery step. Each id is processed independently; a missing id records ErrSpawnNotFound in
 // the result map rather than aborting the batch. Does not touch tmux sessions
 // or JSONL transcripts. Per-row outcomes are in DeleteResult.Results.
 //

@@ -292,6 +292,8 @@ func (e *killEnv) assertResumeWroteNothing(t *testing.T, before resumeSnapshot) 
 
 // snapshotWrites takes id's writesSnapshot for a call of verb, with trust and
 // the sessions of every bound socket and of sockets; take it just before the call.
+// A later test proving a refusal of any verb wrote nothing uses it with
+// assertWroteNothing, never its own copy.
 func (e *killEnv) snapshotWrites(t *testing.T, verb, id string, trust trustConfig, sockets ...string) writesSnapshot {
 	t.Helper()
 	history, err := apitest.ReadSessionHistoryAllLives(e.dbPath, id)

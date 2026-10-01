@@ -29,8 +29,10 @@ type SpawnParams struct {
 	TmuxSessionNameSupplied bool
 
 	// ClaudeInstanceID is an explicit override. Almost always empty so the
-	// defaults pass mints a UUID4. When supplied, validation checks it
-	// against the store for live-state collisions before INSERT.
+	// defaults pass mints a UUID4. When supplied, it collides with any
+	// existing row (ErrInstanceIdCollision) unless ReuseFinished is set, in
+	// which case a finished row is reused and a live row, pending included,
+	// still collides.
 	ClaudeInstanceID string
 
 	// ExtraEnv injects KEY=VAL env vars on the tmux session. Reserved
@@ -68,10 +70,19 @@ type SpawnParams struct {
 	NoPreTrust bool
 
 	// ReuseFinished opts in to reusing an explicit ClaudeInstanceID whose
-	// row is ended or missing. It has no effect without an explicit
-	// ClaudeInstanceID (a minted id cannot collide) and applies to this
-	// call only; templates never carry it. Default false keeps the
-	// collision behaviour: any existing row gives ErrInstanceIdCollision.
+	// row is finished (ended or missing); a live row, pending included,
+	// still gives ErrInstanceIdCollision. It has no effect without an
+	// explicit ClaudeInstanceID (a minted id cannot collide) and applies to
+	// this call only; templates and config never carry it. Default false
+	// keeps the collision behaviour: any existing row gives
+	// ErrInstanceIdCollision. A successful spawn does not say whether it
+	// created a fresh row or reset a finished one. A reused id starts a new
+	// life with no memory of its earlier lives: Resume and Get never use or
+	// show an earlier life's history, so the earlier conversation cannot be
+	// resumed through agent-director afterwards. Go callers link the
+	// library, so the field exists at compile time; CLI, MCP and TypeScript
+	// callers detect it by the binary's version (the manifest's
+	// reuse-finished text gives each surface's source).
 	ReuseFinished bool
 }
 
