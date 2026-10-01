@@ -21,6 +21,13 @@ var ErrSpawnNotFound = errors.New("ErrSpawnNotFound")
 // so callers don't string-match the driver's prose.
 var ErrPrimaryKeyCollision = errors.New("store: primary key collision")
 
+// ErrReuseArchive marks a failure of reuse's archive of the old session
+// (ResetForReuse, SR-10.3, SR-5.8): the error chain holds it and the driver
+// error, so a caller tells an archive failure from any other failure of the
+// reuse change with errors.Is. It is the store's own marker, not a catalogued
+// sentinel, and is never aliased in pkg/api (SR-1.5).
+var ErrReuseArchive = errors.New("store: reuse archive failed")
+
 // State constants mirror the SRD §5.1 enum. They live here (the package
 // that owns the column's text values) so the rest of the codebase has
 // exactly one source of truth for valid state strings.
@@ -29,10 +36,10 @@ var ErrPrimaryKeyCollision = errors.New("store: primary key collision")
 // the agent has not reported in yet (Claude Code's SessionStart); it may be
 // loading or waiting at a startup prompt, and a resumed pending row keeps its
 // session id and history (SR-22.1). The writes that set it are a spawn's
-// insert (InsertPending) and resume's move (MoveToPending). The agent's
-// report-in (SessionStart, pending -> waiting) ends it, as does any other
-// write that sets another state, such as find-missing's mark or a failed
-// resume's restore (RestoreAfterFailedResume).
+// insert (InsertPending), reuse's reset (ResetForReuse) and resume's move
+// (MoveToPending). The agent's report-in (SessionStart, pending -> waiting)
+// ends it, as does any other write that sets another state, such as
+// find-missing's mark or a failed resume's restore (RestoreAfterFailedResume).
 const (
 	StatePending         = "pending"
 	StateWaiting         = "waiting"
@@ -109,9 +116,9 @@ type Spawn struct {
 	LivenessNote            string
 
 	// The schema-v5 fields (SR-5.1, Appendix F.4), filled by every read that
-	// returns a Spawn. InsertPending takes LaunchStartedAtMillis, NoPreTrust,
-	// Identity.Token and Identity.Socket from a Spawn; no write takes the
-	// others from one. The SR-5.5 columns never fail a read.
+	// returns a Spawn. InsertPending and ResetForReuse take
+	// LaunchStartedAtMillis, NoPreTrust, Identity.Token and Identity.Socket
+	// from a Spawn; no write takes the others from one. The SR-5.5 columns never fail a read.
 
 	// RowVersion is row_version: advanced by one by every write (SR-5.2).
 	RowVersion int64
@@ -123,10 +130,12 @@ type Spawn struct {
 	// LifeNumber is life_number, the row's current life (SR-5.9).
 	LifeNumber int64
 	// NoPreTrust is no_pre_trust (SR-5.1): true for any stored value other
-	// than the integer 0 (SR-5.5). The insert records the spawn caller's
-	// pre-trust choice here (1 = opted out, 0 = allowed); resume's move and
-	// restore, hooks, find-missing and every other write leave it unchanged
-	// (SR-5.2), so every resume of a life follows the spawn that began it.
+	// than the integer 0 (SR-5.5). The insert and reuse's reset each record
+	// their caller's pre-trust choice here (1 = opted out, 0 = allowed), and
+	// an applied reuse restore (RestoreAfterFailedReuse) writes the old life's
+	// value back as stored. Resume's move and restore, hooks, find-missing and
+	// every other write leave it unchanged (SR-5.2), so every resume of a life
+	// follows the spawn or reuse that began it.
 	// Rows that existed at the migration carry the column default, 0, and so
 	// read as pre-trust allowed.
 	NoPreTrust bool
@@ -155,8 +164,9 @@ type Spawn struct {
 // sp.Identity.Token and tmux_socket from sp.Identity.Socket. A zero value
 // writes NULL, following LaunchIdentity's zero-means-NULL convention. It
 // also records the caller's pre-trust choice: no_pre_trust is 1 when
-// sp.NoPreTrust is true and 0 when it is false. No later write changes that
-// column (see Spawn.NoPreTrust), so the choice holds for the row's life. The
+// sp.NoPreTrust is true and 0 when it is false. Only reuse's reset (which
+// begins a new life) and an applied reuse restore change that column later
+// (see Spawn.NoPreTrust), so the choice holds for this first life. The
 // server and pane identity columns (tmux_server_pid, tmux_server_started,
 // tmux_server_starttime, pane_id, pane_pid, pane_starttime) stay NULL
 // whatever sp.Identity carries: RecordLaunchIdentity writes them after the

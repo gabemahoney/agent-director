@@ -33,6 +33,8 @@ type rowVersionCase struct {
 	writesToken bool
 	// launchStart is the launch_started_at the write sets; 0 = cleared or kept per clears.
 	launchStart int64
+	// lifeWrite is the life_number and no_pre_trust the write stores (reuse); nil keeps them.
+	lifeWrite map[string]any
 	// check runs further assertions on the row before and after the write; nil skips.
 	check func(t *testing.T, before, after apitest.SpawnColumns)
 }
@@ -64,7 +66,8 @@ func seedCase(t *testing.T, f *v5Store, c rowVersionCase) string {
 // tmux_socket (c.writesToken). The six identity columns (identityColumns) are
 // kept too, except by RecordLaunchIdentity, AdoptIdentityIfUnchanged,
 // AdoptIdentityIfSameLife, MoveToPending and RestoreAfterFailedResume, which
-// write them (c.identity).
+// write them (c.identity). Reuse's reset and restore write all of them
+// (c.writesToken, c.identity, c.lifeWrite).
 func stableColumns(c apitest.SpawnColumns) map[string]any {
 	return map[string]any{
 		"life_number": c.LifeNumber, "no_pre_trust": c.NoPreTrust,
@@ -106,7 +109,7 @@ func assertVersionedWrite(t *testing.T, before, after apitest.SpawnColumns, c ro
 			t.Fatal("token or socket before the write equals the written one; the write check would be vacuous")
 		}
 	}
-	assertColumns(t, stableColumns(before), stableColumns(after), wantStable)
+	assertColumns(t, rvLifeWritten(t, before, after, c), stableColumns(after), wantStable)
 	if c.identity == nil {
 		assertColumns(t, identityColumns(before), identityColumns(after), identityColumns(before))
 	} else {
@@ -479,6 +482,7 @@ func rowVersionWrites() []rowVersionCase {
 	created := createdIdentity()
 	cases = append(cases, rvResumeWrites()...)
 	cases = append(cases, rvFindMissingWrites()...)
+	cases = append(cases, rvReuseWrites()...)
 	return append(cases,
 		rowVersionCase{name: "RecordLaunchIdentity/applied", state: "pending", wantState: "pending",
 			identity: &created, write: recordLaunch(0, store.CondApplied)},
@@ -559,9 +563,10 @@ func TestRowVersionEveryWriteAdvancesByOne(t *testing.T) {
 
 // TestRowVersionInsertStartsAtZero checks a new row starts at version 0 with
 // the launch start, token and socket given, no identity, life 0, and the
-// caller's pre-trust choice: the insert is the write that records no_pre_trust
-// (SR-5.1), 1 for the opt-out and 0 otherwise; no versioned write above
-// changes it.
+// caller's pre-trust choice: the insert records no_pre_trust (SR-5.1), 1 for
+// the opt-out and 0 otherwise. Of the versioned writes above, only reuse's
+// reset (the new launch's choice) and its restore (the pre-reuse value)
+// change it.
 func TestRowVersionInsertStartsAtZero(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -671,6 +676,7 @@ func TestRowVersionNoOpWritesChangeNothing(t *testing.T) {
 	cases = append(cases, rvResumeNoOps()...)
 	cases = append(cases, rvFindMissingNoOps()...)
 	cases = append(cases, rvExpireNoOps()...)
+	cases = append(cases, rvReuseNoOps()...)
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			f := newV5Store(t)

@@ -40,7 +40,7 @@ const moveToPendingSQL = `UPDATE spawns
         tmux_socket               = ?,
         parent_id                 = ?,
         ` + rowVersionAdvance + `
-  WHERE claude_instance_id = ? AND state IN (?, ?) AND ` + snapshotMatchSQL
+  WHERE claude_instance_id = ? AND ` + finishedStateGuardSQL + ` AND ` + snapshotMatchSQL
 
 // MoveToPending is resume's move of a finished row to pending, the write that
 // begins its launch (SR-8.3). It is one conditional statement (SR-5.6) that
@@ -70,8 +70,9 @@ func (s *Store) MoveToPending(instanceID string, examined RowSnapshot, launchSta
 		positiveInt64Arg(launchStartedAtMillis),
 		nullableStringArg(token), nullableStringArg(socket),
 		nullableStringArg(parentID),
-		instanceID, StateEnded, StateMissing,
+		instanceID,
 	}
+	args = append(args, finishedStateGuardArgs()...)
 	args = append(args, snapshotMatchArgs(examined)...)
 	r, err := s.db.Exec(moveToPendingSQL, args...)
 	if err != nil {

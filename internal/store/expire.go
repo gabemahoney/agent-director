@@ -5,9 +5,11 @@ import (
 	"time"
 )
 
-// finishedStateGuardSQL is the WHERE fragment that confines an expire read or
-// write to a finished row (SR-12.1, SR-12.3): state ended or missing, whose
-// arguments finishedStateGuardArgs returns in order.
+// finishedStateGuardSQL is the one WHERE fragment that confines a read or
+// write to a finished row: state ended or missing, whose arguments
+// finishedStateGuardArgs returns in order. Expire's read and delete (SR-12.1,
+// SR-12.3), resume's move to pending (SR-8.3) and reuse's reset (SR-10.3) use
+// it.
 const finishedStateGuardSQL = `state IN (?, ?)`
 
 // finishedStateGuardArgs returns the bound arguments for

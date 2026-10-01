@@ -61,11 +61,24 @@ func (s *Store) ListSessionHistory(instanceID string, life int64) ([]SessionHist
 	return out, nil
 }
 
-// querier is the statement surface shared by *sql.DB and *sql.Tx, so a
-// store-internal write can run on the pool or inside a caller's own
-// transaction.
+// querier is the statement surface shared by *sql.DB, *sql.Tx and
+// connQuerier, so a store-internal write can run on the pool or inside a
+// caller's own transaction.
 type querier interface {
 	Exec(query string, args ...any) (sql.Result, error)
+}
+
+// connQuerier adapts a *sql.Conn, which has ExecContext but no Exec, to
+// querier, so a helper taking a querier runs inside a transaction begun on
+// that connection by hand (ResetForReuse's BEGIN IMMEDIATE).
+type connQuerier struct {
+	ctx  context.Context
+	conn *sql.Conn
+}
+
+// Exec runs query on the adapted connection.
+func (q connQuerier) Exec(query string, args ...any) (sql.Result, error) {
+	return q.conn.ExecContext(q.ctx, query, args...)
 }
 
 // upsertSessionHistoryEntry archives (sessionID, jsonlPath) as an entry of
