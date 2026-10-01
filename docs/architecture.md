@@ -1047,20 +1047,42 @@ Verb additions/edits go in `pkg/api/manifest` only; the CI doc-drift
 gate re-runs `go generate` and fails if any tracked file changes.
 
 **Help size guard.** `TestHelpSizeGuard` in
-`cmd/agent-director/help_size_test.go` fails when `agent-director help`'s
-stdout grows more than 10% past the byte count recorded in
-`helpStdoutBytes`. The baseline is re-recorded to the newly measured
-count in the same commit that changes the size (SR-20.6,
+`cmd/agent-director/help_size_test.go` measures `agent-director help`'s
+stdout and runs two checks. Both must pass:
+
+1. **Hard cap.** The test fails when help stdout is larger than
+   `helpHardCap`, the user's cap of 15160 B. There is no slack: 15160 B
+   passes and 15161 B fails. The failure message says to trim help.
+2. **Baseline.** The test fails when help stdout grows more than 10% past
+   the byte count recorded in `helpStdoutBytes` (SR-20.6). This check
+   catches growth relative to the last recorded size.
+
+The hard cap is the binding limit: while the baseline sits near the cap,
+baseline + 10% is well above it, so a growth that the baseline check
+allows still fails on the cap. The test logs the measured size, the
+baseline, the baseline limit and the cap on every run.
+
+**Approval rule for the cap.** `helpHardCap` moves only with the user's
+approval. The change is recorded in the constant's doc comment in the
+test, with the date and the reason. A Task whose description text grows
+help must trim other description text to fit at or under the cap, with no
+change in meaning. If it cannot fit, the Task stops and reports the
+measured size; it never raises the cap on its own.
+
+**Re-recording the baseline.** `helpStdoutBytes` is re-recorded to the
+newly measured count in the same commit that changes the size (SR-20.6,
 decision-0930e):
 
 - Downward, after a trim: free, no approval needed.
 - Upward: only with the orchestrator's approval given before the commit,
   and a reason recorded in the commit message (what grew, by how many
-  bytes, and why it cannot be shorter).
+  bytes, and why it cannot be shorter). An upward re-record never lifts
+  the hard cap.
 - Never to make a failing guard pass.
 
-The guard exists to stop silent creep: several upward re-records, none of
-them large, can add up to undo a trim. To keep repeated text out of every
+The baseline check exists to stop silent creep: several upward
+re-records, none of them large, can add up to undo a trim. The hard cap
+puts a fixed upper limit on that. To keep repeated text out of every
 description, a statement several verbs need goes into one constant in
 `pkg/api/manifest/manifest.go` with a short form (for example
 `liveRowSequence` and `missingNotProofShort`), and the full text lives in
@@ -7723,7 +7745,7 @@ package doc comment (`doc.go`, "# Description helper") says the same.
       "operator-scheduled", and rejects the full sentence's phrases
       ("at the default retention", the keeps-and-reports phrase, "zero
       window"), so the full sentence cannot come back at those sites and
-      push help stdout past the size cap (`helpStdoutBytes`). Check
+      push help stdout past the hard cap (`helpHardCap`). Check
       `find-missing`'s on `FindMissingOwnText`.
     - Both cleanup cases reject the schedule claims ("cron", "crontab",
       "daily", "hourly", "nightly", "weekly", "runs every"): no text says
