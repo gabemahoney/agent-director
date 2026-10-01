@@ -218,10 +218,11 @@ func (r *readPaneRun) leftover(res tmux.Result, launch tmux.Launch) (string, tmu
 	return pane.ID, launch, nil
 }
 
-// ReadPane captures the last N lines of a tracked Spawn's tmux pane. When
-// NLines is 0 the default of [DefaultReadPaneLines] (25) is used; there is no
-// upper cap. By default ANSI escape sequences are stripped while unicode TUI
-// glyphs are preserved; set ANSI:true to receive raw bytes.
+// ReadPane captures the last N lines of the agent's own pane: the row's pane,
+// found by the row's label on its recorded socket and targeted by pane id.
+// When NLines is 0 the default of [DefaultReadPaneLines] (25) is used; there
+// is no upper cap. By default ANSI escape sequences are stripped while
+// unicode TUI glyphs are preserved; set ANSI:true to receive raw bytes.
 //
 // The pane read is the agent's own pane in the tmux session that carries the
 // row's current launch label, on the row's recorded socket, found by its pane

@@ -8,8 +8,9 @@ import (
 // This file holds the socket-taking methods of SR-2.1 other than the create
 // (see create.go). Every target is a session id or pane id: never a name, an
 // =name, a :0.0 suffix or a pattern. Each method returns only *CallError on
-// failure. No verb calls them in this release step; they are the call set the
-// shared lookup and the verbs move onto.
+// failure. They are the call set of the shared lookup (lookup.go), the
+// find-missing sweep (sweep.go) and the verbs: spawn, read-pane, send-keys,
+// pause and kill call them.
 
 // ownerOption is the session user option holding a session's label (SR-3.4).
 const ownerOption = "@ad_owner"

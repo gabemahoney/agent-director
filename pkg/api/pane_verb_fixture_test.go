@@ -6,6 +6,8 @@ package api_test
 // invocations and repeatable runs, per-pane capture texts, extra session and
 // pending-launch seeds, the recorded-call lists and assertions, the
 // between-read-and-send writes and the "changes nothing" readers. It holds no tests.
+// A later verb that acts on the agent's pane must extend this fixture and
+// pause_fixture_test.go, not copy them.
 
 import (
 	"fmt"

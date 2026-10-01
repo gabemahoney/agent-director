@@ -18,14 +18,20 @@ var ErrClientClosed = errors.New("api: client is closed")
 // pkg/api/errnames → pkg/api. Coherence is runtime-tested, not static.
 
 // ErrSpawnNotInteractive is returned by interactive verbs (send-keys, and
-// any future verb that drives the Spawn's input) when the target Spawn's
-// state is not one of the live conversational states. Live states for
-// send-keys are pending, waiting, working, ask_user, and check_permission;
-// ended / missing reject (SRD §4.3, §5.1). pending is *technically* live
-// but it is a launch (spawn, reuse or resume) in progress whose agent has
-// not reported in yet (a resumed row included), so its TUI may still be
-// loading or at a startup prompt; this verb treats pending as
-// non-interactive too.
+// any future verb that drives the agent's input) when the row cannot take
+// keys. send-keys types into waiting, working, ask_user and check_permission
+// rows. pending is a launch (spawn, reuse or resume) in progress whose agent
+// has not reported in yet (a resumed row included); it may be loading or at
+// a startup prompt. send-keys returns this error for:
+//   - a finished row (ended or missing), with or without allow_pending;
+//   - a pending row without allow_pending;
+//   - a pending row with allow_pending whose launch start or launch token is
+//     absent or unreadable, before any tmux call;
+//   - a pending row with allow_pending whose lookup found only a session not
+//     started by the row's current launch ("not this launch's session").
+//
+// With allow_pending, keys reach a pending row only in a session started by
+// its current launch (SR-7.1, SR-18.14, SR-22.8).
 var ErrSpawnNotInteractive = errors.New("ErrSpawnNotInteractive")
 
 // ErrSpawnNotPausable is returned by the pause verb when the target

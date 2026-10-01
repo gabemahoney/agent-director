@@ -3,7 +3,9 @@ package api_test
 // pause_fixture_test.go extends the kill and pane-verb fixtures for pause
 // (SR-20.2, SR-20.3): its invocations, the wait's poll seam, the /exit
 // assertions, the SessionEnd that ends the row after Enter, the failing state
-// read and pause's disagree reader. It holds no tests.
+// read and pause's disagree reader. It holds no tests. A later verb that
+// acts on the agent's pane must extend this fixture and
+// pane_verb_fixture_test.go, not copy them.
 
 import (
 	"context"
@@ -18,8 +20,10 @@ import (
 // killStore is pause's store too.
 var _ api.PauseStore = (*killStore)(nil)
 
-// GetSpawnState returns failStateReads' error, else delegates.
+// GetSpawnState counts the read, then returns failStateReads' error, else
+// delegates.
 func (w *killStore) GetSpawnState(id string) (string, error) {
+	w.stateReads++
 	if w.stateErr != nil {
 		return "", w.stateErr
 	}

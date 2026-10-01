@@ -3,6 +3,7 @@ package apitest
 import (
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/tmux"
@@ -28,7 +29,9 @@ import (
 // (DescCase.AfterTextFailed). send-keys' two pending-row refusals are
 // DescSendKeysPendingNoLaunch and DescSendKeysPendingLeftover. No pane-verb
 // case may give the retired "no pane 0.0" clause or a base-index hint
-// (WD 2026-09-29c).
+// (WD 2026-09-29c). The pane verbs' manifest texts are here too: each
+// Description's tmux error classes (DescPaneManifest, SR-18.1) and
+// send-keys' allow_pending text (DescAllowPending, SR-18.14).
 
 // PaneVerb is a pane verb whose refusals the pane cases check.
 type PaneVerb string
@@ -263,6 +266,112 @@ func (c DescCase) AfterTextFailed() DescCase {
 	c.Name += ", after the text send failed"
 	c.MustNot = append(append([]string(nil), c.MustNot...), textNotSubmitted, keysMayHaveBeenDelivered)
 	return c
+}
+
+// goneName returns v's gone error: ErrTmuxCaptureFailed for read-pane,
+// ErrTmuxSendKeys for send-keys and pause (SR-7.2, SR-7.3).
+func (v PaneVerb) goneName() string {
+	switch v {
+	case PaneReadPane:
+		return "ErrTmuxCaptureFailed"
+	case PaneSendKeys, PanePause:
+		return "ErrTmuxSendKeys"
+	}
+	panic("apitest: unknown pane verb " + strconv.Quote(string(v)))
+}
+
+// DescPaneManifest is a pane verb's manifest Description as it states its
+// tmux errors (SR-18.1's last paragraph, SR-1.1): the class of v's gone name
+// and of each tmux error (an "ErrTmux" name) in errorNames, the verb's
+// manifest ErrorNames, each as classStated gives it from tmuxErrorClasses
+// (shared with DescKillManifest), and that only the gone error means "the
+// row's session is not there". It must not state a class for a tmux error
+// outside that set, nor give the stale "tracked Spawn's tmux pane", the
+// retired "no pane 0.0" clause or a base-index hint. A tmux name with no
+// defined class panics. Check it with AssertAgentTextCase.
+func DescPaneManifest(v PaneVerb, errorNames []string) DescCase {
+	names := []string{v.goneName()}
+	for _, n := range errorNames {
+		if strings.HasPrefix(n, "ErrTmux") && !slices.Contains(names, n) {
+			names = append(names, n)
+		}
+	}
+	req := []string{rowSessionNotThere}
+	for _, n := range names {
+		req = append(req, classStated(n))
+	}
+	mustNot := append(append([]string(nil), paneMustNot...), "tracked Spawn's tmux pane")
+	var others []string
+	for n := range tmuxErrorClasses {
+		if !slices.Contains(names, n) {
+			others = append(others, classStated(n))
+		}
+	}
+	slices.Sort(others)
+	mustNot = append(mustNot, others...)
+	return DescCase{
+		Name:    string(v) + " manifest description, tmux error classes",
+		Require: req,
+		MustNot: mustNot,
+	}
+}
+
+// AllowPendingSite is the kind of SR-18.14 site whose allow_pending text
+// DescAllowPending checks.
+type AllowPendingSite int
+
+const (
+	// AllowPendingFlag is the flag's own text: the send-keys manifest
+	// parameter, the CLI usage string, the SendKeysParams.AllowPending Go
+	// doc and the TypeScript SendKeysParams.allow_pending doc comment.
+	AllowPendingFlag AllowPendingSite = iota
+	// AllowPendingRefusals is a text that lists send-keys' state refusals:
+	// the SendKeys state-precondition paragraph and the
+	// ErrSpawnNotInteractive doc comment.
+	AllowPendingRefusals
+)
+
+// allowPendingMustNot is what no allow_pending site may say (SR-18.14,
+// SR-20.6): the retired resume-starting and young-claim concepts (hyphen,
+// space and joined spellings), that a pending row is always refused, and
+// that the caller must wait for the first hook (the pre-Task wording).
+var allowPendingMustNot = []string{
+	"resume-starting", "resume starting", "resumestarting", "young claim", "young-claim",
+	"always refused", "always rejected", "non-interactive too",
+	"pre-SessionStart", "first SessionStart hook", "first hook",
+}
+
+// DescAllowPending is send-keys' allow_pending text at an SR-18.14 site, by
+// key phrase. Every site: a pending row, whose agent has not reported in
+// yet, and the current launch. AllowPendingFlag adds that the flag also
+// allows a pending row of a spawn, reuse or resume, that keys go only to a
+// session started by the row's current launch, and that ended and missing
+// rows are still rejected. AllowPendingRefusals adds that a finished row
+// (ended or missing) is refused with or without the flag, and the refusal
+// when the launch start or launch token is absent or unreadable (SR-22.8).
+// Pass a doc comment with its line wrapping and comment markers removed.
+// Check it with AssertAgentTextCase. Another site kind panics.
+func DescAllowPending(site AllowPendingSite) DescCase {
+	req := []string{"a pending row", "whose agent has not reported in yet", "current launch"}
+	var name string
+	switch site {
+	case AllowPendingFlag:
+		name = "flag text"
+		req = append(req, "also allow", "spawn, reuse or resume",
+			"only to a session started by the row's current launch",
+			"ended and missing rows are still rejected")
+	case AllowPendingRefusals:
+		name = "refusals text"
+		req = append(req, "finished row (ended or missing)", "with or without",
+			"launch start or launch token is absent or unreadable")
+	default:
+		panic("apitest: DescAllowPending: unknown site kind " + strconv.Itoa(int(site)))
+	}
+	return DescCase{
+		Name:    "SR-18.14, send-keys allow_pending, " + name,
+		Require: req,
+		MustNot: append([]string(nil), allowPendingMustNot...),
+	}
 }
 
 // withoutPhrases returns a copy of phrases without any of drop.

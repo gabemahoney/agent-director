@@ -120,7 +120,7 @@ for (const spawn of result.spawns) {
 
 ### sendKeys
 
-Send text to a Spawn's tmux pane.
+Send text to the agent's own pane.
 
 ```sh
 agent-director send-keys --claude-instance-id <id> --text "what is 2+2?"
@@ -130,14 +130,16 @@ agent-director send-keys --claude-instance-id <id> --text "what is 2+2?"
 await client.sendKeys({ claude_instance_id: "<id>", text: "what is 2+2?" });
 ```
 
-Pass `allow_pending: true` to also permit sending to a `pending` Spawn (state
-before `SessionStart` fires). The primary use case is dismissing interactive
-prompts that Claude Code renders before the session becomes interactive — for
-example the `--dangerously-load-development-channels` safety warning. `ended`
-and `missing` Spawns are still rejected regardless of the flag.
+Pass `allow_pending: true` to also allow a `pending` row: a launch (spawn,
+reuse or resume) whose agent has not reported in yet, for example to dismiss a
+prompt the agent shows before it reports in. Keys are delivered only to a
+session started by the row's current launch. `ended` and `missing` rows are
+still rejected. A `pending` row whose launch start or launch token is not recorded, or where
+only a session an earlier launch left behind is found, gets
+`ErrSpawnNotInteractive` and nothing is sent.
 
-Send an empty string with `allow_pending: true` to press Enter and dismiss the
-pre-`SessionStart` prompt:
+Send an empty string with `allow_pending: true` to press Enter and dismiss such
+a prompt:
 
 ```ts
 await client.sendKeys({
@@ -149,7 +151,7 @@ await client.sendKeys({
 
 ### readPane
 
-Read the last N lines of a Spawn's tmux pane (default 25).
+Read the last N lines of the agent's own pane (default 25).
 
 ```sh
 agent-director read-pane --claude-instance-id <id> --n-lines 50
@@ -161,7 +163,7 @@ console.log(result.pane);
 ```
 
 `readPane` has no state guard — it works on `pending`, `ended`, and `missing`
-Spawns as well as live ones. The `allow_pending` flag is accepted for symmetry
+rows as well as live ones. The `allow_pending` flag is accepted for symmetry
 with `sendKeys` but has no behavioral effect.
 
 ---
@@ -368,7 +370,7 @@ These 42 classes are generated one-to-one from the shared `err_name` catalog ([`
 | Error | When it fires |
 |---|---|
 | `ErrSpawnNotFound` | No spawn row matches the supplied `claude_instance_id`. |
-| `ErrSpawnNotInteractive` | The target spawn is not in a live interactive state (`waiting`/`working`/`ask_user`/`check_permission`); `pending`, `ended`, and `missing` are rejected (`AllowPending=true` relaxes the `pending` rejection). |
+| `ErrSpawnNotInteractive` | The target spawn is not in a live interactive state (`waiting`/`working`/`ask_user`/`check_permission`); `pending`, `ended`, and `missing` are rejected. With `allow_pending: true`, `sendKeys` allows a `pending` row but delivers keys only to a session started by the row's current launch: a `pending` row with no launch start or launch token recorded, or where only a session an earlier launch left behind is found, is still refused and nothing is sent. |
 | `ErrSpawnNotPausable` | The target spawn is not in a pausable (`waiting`) state. |
 | `ErrPauseTimeout` | The spawn did not reach `ended` within `pause.timeout_seconds` after `/exit`. Retry or `kill`. |
 | `ErrSpawnNotResumable` | `resume` applies only to a finished (`ended`/`missing`) spawn. A live spawn is refused because its agent is running. A `pending` spawn is refused too: it is a launch (spawn, reuse or resume) in progress whose agent has not reported in, a resumed row included. Also returned when the row changed after `resume` examined it; nothing is written. |
@@ -381,13 +383,13 @@ These 42 classes are generated one-to-one from the shared `err_name` catalog ([`
 
 | Error | Class | When it fires |
 |---|---|---|
-| `ErrTmuxNotAvailable` | ENVIRONMENT | The `tmux` binary is not on PATH or refuses to execute, the tmux socket is not accessible to this user, or its per-user socket directory cannot be used (`spawn` then writes nothing). `kill` returns it too: tmux could not be run, the socket is not accessible to this user, or this is not the tmux server the agent was launched on. |
+| `ErrTmuxNotAvailable` | ENVIRONMENT | The `tmux` binary is not on PATH or refuses to execute, the tmux socket is not accessible to this user, or its per-user socket directory cannot be used (`spawn` then writes nothing). `kill`, `readPane`, `sendKeys` and `pause` return it too: tmux could not be run, the socket is not accessible to this user, or this is not the tmux server the agent was launched on. |
 | `ErrTmuxSessionCreate` | LAUNCH FAILURE | The session could not be created or labelled; the new row stays `pending`. After tmux answers "duplicate session", `spawn` returns it only when the session holding the requested name was gone by the re-lookup; the new row is then ended (the error says if it was not). |
-| `ErrTmuxUnresponsive` | UNAVAILABLE (transient) | tmux did not answer in time, or gave a reply agent-director does not recognise. From `spawn`'s or `resume`'s session-creating call: the session may have been created and the row stays `pending`; do not retry until `get` shows the row `ended` or `missing`. From `kill`: the lookup or the pane listing could not be read (nothing was done), or a kill was sent, the agent process could not be checked and the follow-up lookup could not be read (the kill may or may not have taken effect); retry later with backoff. |
-| `ErrTmuxSessionConflict` | CONFLICT (permanent until a human looks) | A tmux session conflict that needs a human. From `spawn` with an explicit `claude_instance_id` that has no row: a session of this store still labelled with that id is left over from an earlier life, or labels conflict; nothing is written. From a plain `spawn` whose requested tmux session name is already held (tmux answered "duplicate session"): the holder is a session left over from an earlier life of this id, another row's session, a session of another agent-director store, or one with no valid instance id, or labels conflict; the new row is ended (the error says if it was not) and the error names the blocking session. Another row's or another store's session is another agent and is never ended; the holding session is never read or typed into. From `kill` on a live row: the session found is not this launch's session (it carries the label of an earlier launch with this row's own id), or labels conflict; no kill was sent. See "Operator actions" in the agent-director README. |
+| `ErrTmuxUnresponsive` | UNAVAILABLE (transient) | tmux did not answer in time, or gave a reply agent-director does not recognise. From `spawn`'s or `resume`'s session-creating call: the session may have been created and the row stays `pending`; do not retry until `get` shows the row `ended` or `missing`. From `kill`: the lookup or the pane listing could not be read (nothing was done), or a kill was sent, the agent process could not be checked and the follow-up lookup could not be read (the kill may or may not have taken effect); retry later with backoff. From `readPane`, `sendKeys` and `pause`: tmux did not answer usably; after a timed-out send the keys (or `/exit`) may have been delivered. |
+| `ErrTmuxSessionConflict` | CONFLICT (permanent until a human looks) | A tmux session conflict that needs a human. From `spawn` with an explicit `claude_instance_id` that has no row: a session of this store still labelled with that id is left over from an earlier life, or labels conflict; nothing is written. From a plain `spawn` whose requested tmux session name is already held (tmux answered "duplicate session"): the holder is a session left over from an earlier life of this id, another row's session, a session of another agent-director store, or one with no valid instance id, or labels conflict; the new row is ended (the error says if it was not) and the error names the blocking session. Another row's or another store's session is another agent and is never ended; the holding session is never read or typed into. From `kill` on a live row: the session found is not this launch's session (it carries the label of an earlier launch with this row's own id), or labels conflict; no kill was sent. From `readPane`, `sendKeys` and `pause`: the agent's pane was not found, a session an earlier launch left behind is there (for `readPane`, more than one; for `sendKeys`, on a live row), or labels conflict; nothing was read or sent. See "Operator actions" in the agent-director README. |
 | `ErrTmuxKillFailed` | UNAVAILABLE | `kill` only: the agent process still runs after `kill`. A kill was sent and the agent process, or another process in a pane of the agent's session, still ran after the kill exit wait (`kill_exit_wait_ms`); or the process cannot be checked and its labelled session is still there; or no session or pane of this launch was found while the agent process runs, so no kill was sent. Retry `kill` later; never `delete` the row. |
-| `ErrTmuxSendKeys` | GONE | `tmux send-keys` exited non-zero (typically no live pane). |
-| `ErrTmuxCaptureFailed` | GONE | `tmux capture-pane` exited non-zero (session/pane vanished mid-call). |
+| `ErrTmuxSendKeys` | GONE | `sendKeys` and `pause`: the row's session or pane is not there. |
+| `ErrTmuxCaptureFailed` | GONE | `readPane`: the row's session or pane is not there. |
 
 Only a GONE error means the row's session is not there (for `kill`, GONE is success); no other tmux error ever means the agent is dead.
 

@@ -2,6 +2,7 @@ package realtmux_test
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -60,7 +61,8 @@ type killRowSpec struct {
 	State      string
 	Token      string
 	InstanceID string
-	NoPane     bool // a lost create reply: the server identity recorded, no pane
+	NoPane     bool   // a lost create reply: the server identity recorded, no pane
+	PaneID     string // recorded in place of the reply's pane id (e.g. one the server never issued)
 }
 
 // killRow is a seeded live row: its agent (id, token, name, reply, identity),
@@ -87,6 +89,9 @@ func (f *killFix) liveRow(t *testing.T, spec killRowSpec) killRow {
 	}
 	id := store.LaunchIdentity{Token: a.Token, Socket: a.Socket, ServerPID: a.Server.PID, ServerStart: a.Server.Start,
 		ServerStarttime: a.Server.Starttime, PaneID: a.Reply.PaneID, PanePID: a.Reply.PanePID, PaneStarttime: a.PaneStart}
+	if spec.PaneID != "" {
+		id.PaneID = spec.PaneID
+	}
 	if spec.NoPane {
 		id.PaneID, id.PanePID, id.PaneStarttime = "", 0, ""
 	}
@@ -179,18 +184,56 @@ func (k killCall) assertRefused(t testing.TB, name string, c apitest.DescCase, f
 	if k.Err == nil {
 		t.Fatalf("kill succeeded (kill_sent %v); want %s", k.Res.KillSent, name)
 	}
+	assertVerbError(t, "kill", k.Err, name, c, forbid...)
+	if k.Res.KillSent {
+		t.Errorf("a refused kill returned kill_sent true")
+	}
+}
+
+// assertVerbError checks verb's error is exactly the catalogued error name
+// (SR-1.5) with a description matching c without any forbid value.
+func assertVerbError(t testing.TB, verb string, err error, name string, c apitest.DescCase, forbid ...string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("%s succeeded; want %s", verb, name)
+	}
 	var matched []string
 	for _, e := range errnames.Catalog {
-		if errors.Is(k.Err, e.Err) {
+		if errors.Is(err, e.Err) {
 			matched = append(matched, e.Name)
 		}
 	}
-	if got, _ := errnames.Classify(k.Err); len(matched) != 1 || matched[0] != name || got != name {
-		t.Errorf("kill error %s matches catalogued %v, classified %s; want exactly %s", describe(k.Err), matched, got, name)
+	if got, _ := errnames.Classify(err); len(matched) != 1 || matched[0] != name || got != name {
+		t.Errorf("%s error %s matches catalogued %v, classified %s; want exactly %s", verb, describe(err), matched, got, name)
 	}
-	apitest.AssertDescription(t, k.Err.Error(), c, forbid...)
-	if k.Res.KillSent {
-		t.Errorf("a refused kill returned kill_sent true")
+	apitest.AssertDescription(t, err.Error(), c, forbid...)
+}
+
+// baseIndexOneLostReply sets base-index and pane-base-index 1 on a new
+// server, then makes a row in state with a live session but no recorded pane.
+func (f *killFix) baseIndexOneLostReply(t *testing.T, state string) killRow {
+	t.Helper()
+	f.startSession(t, "") // starts the server the options are set on
+	f.must(t, "set-option", "-g", "base-index", "1")
+	f.must(t, "set-option", "-gw", "pane-base-index", "1")
+	r := f.liveRow(t, killRowSpec{State: state, NoPane: true})
+	if w, i := f.formatInt(t, r.Reply.PaneID, "#{window_index}"), f.formatInt(t, r.Reply.PaneID, "#{pane_index}"); w != 1 || i != 1 {
+		t.Fatalf("agent pane %s is window %d pane %d, want 1.1", r.Reply.PaneID, w, i)
+	}
+	if r.Before.PaneID != nil {
+		t.Fatalf("row records pane %v, want none (a lost reply)", r.Before.PaneID)
+	}
+	return r
+}
+
+// assertAdopted checks the row is in state and records the agent's pane
+// (id, pid, start time): the lost reply's pane was adopted (SR-3.6).
+func (f *killFix) assertAdopted(t testing.TB, r killRow, state string) {
+	t.Helper()
+	row := readRow(t, f.DBPath, r.InstanceID)
+	got := fmt.Sprint(row.State, " ", row.PaneID, " ", row.PanePID, " ", row.PaneStarttime)
+	if want := fmt.Sprint(state, " ", r.Reply.PaneID, " ", r.Reply.PanePID, " ", r.PaneStart); got != want {
+		t.Errorf("row state and pane = %s, want %s (pane adopted, state kept)", got, want)
 	}
 }
 

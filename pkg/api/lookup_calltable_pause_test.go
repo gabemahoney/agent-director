@@ -9,34 +9,21 @@ package api_test
 // failures and the other follow-up outcomes are pause's per-verb files'.
 
 import (
-	"context"
 	"maps"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
-	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
-
-// pausePollCounter is e.store counting the wait's state reads.
-type pausePollCounter struct {
-	*killStore
-	polls int
-}
-
-// GetSpawnState counts the read, then delegates.
-func (s *pausePollCounter) GetSpawnState(id string) (string, error) {
-	s.polls++
-	return s.killStore.GetSpawnState(id)
-}
 
 // pauseCallTableInvoke pauses r and reports whether a text call was made; any
 // must type /exit into the pane of r.Session carrying its label's token, with
 // Enter to that pane, and the wait polls only after a delivered /exit.
 func pauseCallTableInvoke(t *testing.T, e *killEnv, r killRow) (bool, error) {
-	s := &pausePollCounter{killStore: e.store}
-	_, err := api.Pause(context.Background(), s, e.rec, e.pc, pauseTimeoutSeconds, pauseParams(r))
+	reads := e.store.stateReads
+	_, err := e.pause(pauseParams(r))
+	polls := e.store.stateReads - reads
 	typed := len(e.rec.SocketCallsOf(tmux.CallSendText)) > 0
 	if typed {
 		pane := labelledPane(t, r.Session, r.Session.Label.Token)
@@ -47,8 +34,8 @@ func pauseCallTableInvoke(t *testing.T, e *killEnv, r killRow) (bool, error) {
 			}
 		}
 	}
-	if waited, want := s.polls > 0, typed && err == nil; waited != want {
-		t.Errorf("wait polled %d times (err %v); want a wait %v", s.polls, err, want)
+	if waited, want := polls > 0, typed && err == nil; waited != want {
+		t.Errorf("wait polled %d times (err %v); want a wait %v", polls, err, want)
 	}
 	return typed, err
 }

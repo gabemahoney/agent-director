@@ -465,6 +465,9 @@ the class of every tmux error, is in
 - Never `delete` a row after a `kill` that did not succeed.
 - The row state, kept honest by `find-missing`, is the liveness authority;
   there is no liveness verb.
+- `read-pane` changes nothing and is not a liveness check; a caller polling
+  a launch polls `status`, and calls `read-pane` only while the row is
+  `pending`, about once a second at most.
 - Run as the same user and in the same tmux environment as the agents.
 - A situation that needs a human is described in
   [Operator actions](#operator-actions); callers never perform those
@@ -526,10 +529,13 @@ A leftover is a session of an earlier launch of the agent: its label names
 the row's id with another launch token. Whether the row is `pending` or
 live, `agent-director kill` refuses it with `ErrTmuxSessionConflict` ("not
 this launch's session"), sends nothing and names the session's id (`$N`).
-Beside a live row, `read-pane` of the id shows the leftover's pane, not the
-agent's. The leftover never keeps the row live: its hooks change nothing on
-the row, and `find-missing` judges the row by its own agent's process. A session with no valid label may be a person's own, so look before
-acting.
+While the current launch's session runs, `read-pane` of the id shows the
+agent's pane. With no session of the current launch, it shows the
+leftover's pane if there is one leftover (not the agent's), and answers
+`ErrTmuxSessionConflict` if there are several. The leftover never keeps the
+row live: its hooks change nothing on the row, and `find-missing` judges
+the row by its own agent's process. A session with no valid label may be a
+person's own, so look before acting.
 
 1. Find the session and note its `session_created`:
 
@@ -645,7 +651,9 @@ agent-director spawn --cwd <dir> --tmux-session-name <other name> --claude-insta
 
 `agent-director kill` returns `ErrTmuxKillFailed` saying that no session or
 pane of this launch was found while the agent process still runs, and that
-no kill was sent. `find-missing` keeps a live row live, because its
+no kill was sent. `read-pane` answers `ErrTmuxCaptureFailed` although the
+agent runs (a gone answer about the launch's session, not proof that the
+agent has exited). `find-missing` keeps a live row live, because its
 process is alive. agent-director never signals a process itself; ending it
 is a human's decision:
 
@@ -691,6 +699,45 @@ a process of a pane of the agent's session that outlived the pane kill and
 the session kill (for example one that ignores SIGHUP). Its pid is in the
 error's description and in `ad.kill.called`'s `survivor_pids`.
 
+### The agent's pane was not found
+
+`ErrTmuxSessionConflict` ("the agent's pane was not found") from
+`read-pane`, `send-keys` or `pause`: nothing was read or sent. The row's
+current launch still has its labelled session, but the pane it recorded is
+not there with the agent's pid. Either the agent's program ended while the
+session stayed (another window keeps it open, or `remain-on-exit` is on),
+or the pane was respawned with another program. If the error also says the
+pane was not adopted, see the next item.
+
+1. Find the labelled session and read its label (steps 1 and 2 of the
+   leftover item) for the session the error quotes, and for others if it
+   was renamed. The agent's session prints the five-field label with this
+   row's id and this store's id; a label with another store's id is
+   another store's agent: never end it.
+2. Look at what runs in it, and look read-only as above:
+
+   ```sh
+   tmux -u -S '<socket>' list-panes -s -t '<session id>' -F '#{pane_id} #{pane_pid} #{pane_current_command} #{pane_dead}'
+   ```
+
+3. Decide:
+   - Nothing of value runs there (the agent's program has ended, a dead
+     pane, an idle shell): end the session by its session id (step 4 of
+     the leftover item). `find-missing` marks the row once its process is
+     gone; then resume or reuse the id.
+   - Another program that someone uses runs there: leave the session and
+     only remove its claim to the launch, then tell its owner.
+     `find-missing` then settles the row by its process. Never end a
+     session someone uses without asking:
+
+     ```sh
+     tmux -u -S '<socket>' set-option -t '<session id>' -u @ad_owner
+     ```
+
+   - The agent still runs in another pane of that session (its pid, from
+     `ps`, matches the row's SessionStart pid): leave it. Only the pane
+     verbs cannot reach it; `agent-director kill` still ends the session.
+
 ### The agent's pane was not adopted after a lost create reply
 
 When the reply to the call that created a launch's session was lost,
@@ -710,9 +757,9 @@ and the hooks apply from then on. Each created pane carries the pane label
 
    The agent's pane is the one whose value starts with this launch's token
    and ends with its own pane id.
-2. A wanted agent can be left running: `find-missing` adopts its pane
-   (while tmux cannot answer, or two panes carry the token, the row stays
-   unverified). If no pane carries the token, `find-missing` marks the row
+2. A wanted agent can be left running: `find-missing` adopts its pane, and
+   so does any `kill`, `send-keys` or `pause` of the row (while tmux cannot
+   answer, or two panes carry the token, the row stays unverified). If no pane carries the token, `find-missing` marks the row
    `missing` although the agent may still run. To end the session while the
    row is live, use `agent-director kill --claude-instance-id <id>`, not a
    hand kill: it is this launch's session. `kill` adopts the labelled pane,
@@ -720,6 +767,42 @@ and the hooks apply from then on. Each created pane carries the pane label
    is `missing`, end the session by its session id (steps 3 and 4 of the
    leftover item). Then resume or reuse the id, so that the next launch
    records its pane.
+
+### A `pending` row with no launch start or token
+
+`ErrSpawnNotInteractive` from `send-keys` saying the row's launch start or
+launch token is "not recorded": nothing was sent and no tmux call was made.
+Only a row that was `pending` when agent-director was upgraded, one written
+by an agent-director process started before the install and not restarted,
+or a hand edit can be like this. agent-director never acts on any session
+for such a row.
+
+1. Look at the row (state `pending`, no `launch_started_at`), and look in
+   `ps` for an `agent-director` process (an MCP `serve` included) started
+   before the install; restart it:
+
+   ```sh
+   agent-director get --claude-instance-id <id>
+   ```
+
+2. Look for a session of this agent on the socket (for a row from before
+   the install, the socket of your tmux environment): the session with the
+   row's recorded name (step 1 of the leftover item). Read its label (step
+   2; a session from before the install has none) and, as a hint only, its
+   environment, then look at it read-only as above:
+
+   ```sh
+   tmux -u -S '<socket>' show-environment -t '<session id>' AGENT_DIRECTOR_INSTANCE_ID
+   ```
+
+3. Decide. An agent from before the install that is not wanted: end its
+   session by its session id (step 4 of the leftover item), because
+   `agent-director kill` never ends a session for such a row. An agent that
+   is wanted: leave it running until it can be stopped and started again
+   properly. A session that belongs to someone else, or shows no sign of
+   this agent: leave it alone. `find-missing` marks the row `missing` at
+   once when no recorded process of it runs and no session carries its
+   current label; then resume or reuse the id.
 
 ### A row stays `pending` and the trail shows `no_exec_form`
 

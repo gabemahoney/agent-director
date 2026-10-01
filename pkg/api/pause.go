@@ -27,8 +27,9 @@ type PauseTmux interface {
 // (a lost create reply's server and pane identity, applied only if the row
 // still has the snapshot Pause examined) and this store's id, which every
 // label the lookup accepts ends with (SR-3.4). The adoption is the only
-// write pause makes. *store.Store satisfies it; tests fake the surface so
-// the wait's cadence can be driven without touching SQLite.
+// write pause makes. *store.Store satisfies it; tests use the shared
+// killStore fixture, a wrapper over a real store that can fail the state
+// read or the adoption write.
 type PauseStore interface {
 	// GetSpawn reads the row; an unknown id is ErrSpawnNotFound.
 	GetSpawn(instanceID string) (Spawn, error)

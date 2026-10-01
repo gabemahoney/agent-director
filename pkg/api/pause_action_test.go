@@ -339,18 +339,6 @@ func TestPauseActionFailureFollowUp(t *testing.T) {
 	}
 }
 
-// pfAdopted counts id's pause ad.provenance.disagree records with reason adopted.
-func pfAdopted(t *testing.T, id string) int {
-	t.Helper()
-	n := 0
-	for _, l := range pauseDisagrees(t, id) {
-		if l["reason"] == tmux.ReasonAdopted {
-			n++
-		}
-	}
-	return n
-}
-
 // TestPauseAdoptionWrite: a lost reply's identity is written once and logged
 // adopted only when applied; never when it adds nothing or pause refuses
 // first; the write's outcome never changes where /exit goes (SR-3.6).
@@ -448,7 +436,7 @@ func TestPauseAdoptionWrite(t *testing.T) {
 					t.Errorf("adoption columns %+v; want the identity unchanged %+v", after, before)
 				}
 			}
-			if got := pfAdopted(t, r.ID); got != wantAdopted {
+			if got := adoptedRecords(t, "pause", r.ID); got != wantAdopted {
 				t.Errorf("adopted records = %d; want %d", got, wantAdopted)
 			}
 			if logs.Len() != 0 {
@@ -456,9 +444,9 @@ func TestPauseAdoptionWrite(t *testing.T) {
 			}
 			if tc.applied {
 				assertSameRun(t, pfPause(e, r).verbRun, first.verbRun)
-				if e.store.adoptTries != tc.tries || pfAdopted(t, r.ID) != 1 {
+				if e.store.adoptTries != tc.tries || adoptedRecords(t, "pause", r.ID) != 1 {
 					t.Errorf("re-issued: %d writes attempted, %d adopted records; want %d and 1", e.store.adoptTries,
-						pfAdopted(t, r.ID), tc.tries)
+						adoptedRecords(t, "pause", r.ID), tc.tries)
 				}
 			}
 		})

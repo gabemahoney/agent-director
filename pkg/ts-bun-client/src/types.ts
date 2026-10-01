@@ -295,8 +295,10 @@ export interface SendKeysParams {
   /** Text to deliver to the pane. CR bytes stripped; LF preserved; Enter appended. */
   text: string;
   /**
-   * When true, also permit send-keys on a pending Spawn (pre-SessionStart
-   * use case). ended/missing Spawns are still rejected even with this flag.
+   * When true, also allows a pending row: a launch (spawn, reuse or resume)
+   * whose agent has not reported in yet. Keys are delivered only to a
+   * session started by the row's current launch. ended and missing rows are
+   * still rejected.
    */
   allow_pending?: boolean;
 }

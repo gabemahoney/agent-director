@@ -1,7 +1,6 @@
 package realtmux_test
 
 import (
-	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -135,24 +134,11 @@ func TestKillPendingRefusesOldLabel(t *testing.T) {
 // kill of a pending row with no recorded pane adopts it by @ad_pane and ends it.
 func TestKillBaseIndexOneAdoptsLostReply(t *testing.T) {
 	f := newKillFix(t)
-	f.startSession(t, "") // starts the server the options are set on
-	f.must(t, "set-option", "-g", "base-index", "1")
-	f.must(t, "set-option", "-gw", "pane-base-index", "1")
-	r := f.liveRow(t, killRowSpec{State: "pending", NoPane: true})
-	if w, i := f.formatInt(t, r.Reply.PaneID, "#{window_index}"), f.formatInt(t, r.Reply.PaneID, "#{pane_index}"); w != 1 || i != 1 {
-		t.Fatalf("agent pane %s is window %d pane %d, want 1.1", r.Reply.PaneID, w, i)
-	}
-	if r.Before.PaneID != nil {
-		t.Fatalf("row records pane %v, want none (a lost reply)", r.Before.PaneID)
-	}
+	r := f.baseIndexOneLostReply(t, "pending")
 
 	k := f.kill(t, r.InstanceID, 0)
 	k.assertSuccess(t, true)
 	assertProcs(t, true, r.Reply.PanePID)
 	f.assertSession(t, r.Reply.SessionID, false)
-	row := readRow(t, f.DBPath, r.InstanceID)
-	got := fmt.Sprint(row.State, " ", row.PaneID, " ", row.PanePID, " ", row.PaneStarttime)
-	if want := fmt.Sprint("pending ", r.Reply.PaneID, " ", r.Reply.PanePID, " ", r.PaneStart); got != want {
-		t.Errorf("row state and pane after kill = %s, want %s (pane adopted, still pending)", got, want)
-	}
+	f.assertAdopted(t, r, "pending")
 }

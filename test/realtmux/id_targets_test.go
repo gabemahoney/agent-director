@@ -56,9 +56,16 @@ func idtWorld(t testing.TB, rt *realTmux) map[string]idtPane {
 			labels[f[0]] = label
 		}
 		world[f[2]] = idtPane{SessionID: f[0], SessionName: f[1], PaneID: f[2], PanePID: f[3], Label: label,
-			Capture: strings.TrimRight(rt.must(t, "capture-pane", "-p", "-t", f[2]), "\n")}
+			Capture: rt.capture(t, f[2])}
 	}
 	return world
+}
+
+// capture reads a pane's visible text by pane id through the raw runner,
+// without its trailing empty rows.
+func (r *realTmux) capture(t testing.TB, paneID string) string {
+	t.Helper()
+	return strings.TrimRight(r.must(t, "capture-pane", "-p", "-t", paneID), "\n")
 }
 
 // idtDump prints a world in pane-id order, labels hidden.

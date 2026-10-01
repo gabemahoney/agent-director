@@ -16,7 +16,9 @@ import (
 // follow-up lookup that could not answer after a kill was sent
 // (DescCase.AfterKillSent), the socket-directory refusal that ends "nothing
 // was done", the unusable recorded name's three ErrInternal cases, and
-// kill's own texts: its manifest description (DescKillManifest), and the
+// kill's own texts: its manifest description (DescKillManifest, whose
+// tmux error classes come from tmuxErrorClasses, the definition the pane
+// verbs' DescPaneManifest shares), and the
 // ErrInternal trigger (DescKillInternalTrigger) and repeated-kill limitation
 // (DescKillRepeatedAfterLastSession) it shares with Client.Kill's Go doc
 // prose. Kill reuses DescConflictingLabels (with NothingWasDone),
@@ -321,11 +323,50 @@ const (
 		"kill's no-op success and a reuse together start a second agent for the same id"
 )
 
+// The tmux error classes of SR-1.1 that verb manifest Descriptions state
+// (SR-18.1's last paragraph).
+const (
+	classGone        = "GONE"
+	classUnavailable = "UNAVAILABLE"
+	classConflict    = "CONFLICT"
+	classEnvironment = "ENVIRONMENT"
+)
+
+// tmuxErrorClasses is the one tmux error name to class definition that the
+// manifest Description cases share (DescKillManifest, DescPaneManifest;
+// SR-1.1). The pane verbs' gone names are GONE; kill has none (for kill,
+// GONE is success).
+var tmuxErrorClasses = map[string]string{
+	"ErrTmuxCaptureFailed":   classGone,
+	"ErrTmuxSendKeys":        classGone,
+	"ErrTmuxKillFailed":      classUnavailable,
+	"ErrTmuxUnresponsive":    classUnavailable,
+	"ErrTmuxSessionConflict": classConflict,
+	"ErrTmuxNotAvailable":    classEnvironment,
+}
+
+// classStated returns the phrase stating tmux error name's class in a
+// manifest Description, "ErrX (CLASS", left open so that a note may follow
+// the class before the ")". It panics on a name tmuxErrorClasses lacks.
+func classStated(name string) string {
+	class, ok := tmuxErrorClasses[name]
+	if !ok {
+		panic("apitest: no SR-1.1 class defined for tmux error " + strconv.Quote(name))
+	}
+	return name + " (" + class
+}
+
+// classStatedAlone is classStated closed, "ErrX (CLASS)": the class with no
+// note after it.
+func classStatedAlone(name string) string {
+	return classStated(name) + ")"
+}
+
 // DescKillManifest is kill's manifest description (SR-6.1, SR-1.7, SR-18.1,
 // SR-18.7, SR-18.9; decision-0930b Q4 and Q5): success only once the agent
 // process is gone, else ErrTmuxKillFailed; kill_sent; a finished row's no-op
 // success is not verification; the row's state is not changed; the per-call
-// contract; each error's class, GONE being success;
+// contract; each error's class (tmuxErrorClasses), GONE being success;
 // DescKillRepeatedAfterLastSession("kill"); never delete; the same user and
 // tmux environment and their two consequences; and DescKillInternalTrigger.
 // Check it with AssertAgentTextCase.
@@ -340,8 +381,9 @@ func DescKillManifest() DescCase {
 		"Success is judged per call", "later calls do not track it",
 		"a retried kill checks only the agent process",
 		"A retry's success means only that the agent is gone",
-		"(for kill, GONE is success)", "ErrTmuxKillFailed (UNAVAILABLE)", "ErrTmuxUnresponsive (UNAVAILABLE)",
-		"ErrTmuxSessionConflict (CONFLICT", "ErrTmuxNotAvailable (ENVIRONMENT)",
+		"(for kill, " + classGone + " is success)",
+		classStatedAlone("ErrTmuxKillFailed"), classStatedAlone("ErrTmuxUnresponsive"),
+		classStated("ErrTmuxSessionConflict"), classStatedAlone("ErrTmuxNotAvailable"),
 	}
 	require = append(require, DescKillRepeatedAfterLastSession("kill").Require...)
 	require = append(require,

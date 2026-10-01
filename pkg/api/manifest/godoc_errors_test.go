@@ -2,11 +2,7 @@ package manifest_test
 
 import (
 	"go/ast"
-	"go/parser"
-	"go/token"
-	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -28,23 +24,7 @@ var goDocErrorBullet = regexp.MustCompile(`^- \[?(Err[A-Za-z0-9]+)\]?:`)
 // parsed from the non-test Go sources of pkg/api.
 func clientMethodDoc(t *testing.T, method string) string {
 	t.Helper()
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller(0) failed")
-	}
-	files, err := filepath.Glob(filepath.Join(filepath.Dir(thisFile), "..", "*.go"))
-	if err != nil {
-		t.Fatalf("glob pkg/api sources: %v", err)
-	}
-	fset := token.NewFileSet()
-	for _, path := range files {
-		if strings.HasSuffix(path, "_test.go") {
-			continue
-		}
-		f, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
-		if err != nil {
-			t.Fatalf("parse %s: %v", path, err)
-		}
+	for _, f := range parseGoSources(t, "..") {
 		for _, decl := range f.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if !ok || fn.Name.Name != method || fn.Recv == nil || len(fn.Recv.List) != 1 {

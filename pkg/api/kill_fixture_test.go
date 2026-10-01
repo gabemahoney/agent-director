@@ -49,12 +49,14 @@ var (
 // killStore is api.KillStore (and the pane verbs' stores) over a real store;
 // the adoption write delegates unless failAdopt or refuseAdopt set its
 // answer (nothing is written then); adoptTries counts every adoption write
-// attempted; permErr is failPermissionRequests', stateErr failStateReads'.
+// attempted, stateReads every state read (pause's wait polls); permErr is
+// failPermissionRequests', stateErr failStateReads'.
 type killStore struct {
 	st         *store.Store
 	adoptErr   error
 	adoptRes   api.CondResult
 	adoptTries int
+	stateReads int
 	permErr    error
 	stateErr   error
 }

@@ -55,7 +55,7 @@ still holds: nothing in `internal/` imports `pkg/api`.
 | Path | Responsibility | Allowed imports | Prohibited imports |
 | --- | --- | --- | --- |
 | `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`; every store-backed verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. **DB-free exceptions:** `help`, `--help`, `version`, the no-verb run (no verb after the global flags, so a run with only global flags counts), and `trail-emit` are dispatched BEFORE `setupClient` so they never open or create a store (SR-4.1/4.2, b.8dr); help/version run against a zero-value `Client` and consult no store. The no-verb run prints help, except that when stdin is not a terminal and carries a hook payload (a Claude Code that does not run exec-form hooks, SR-22.9) it prints nothing, exits 0 and writes one `ad.hook.ignored` `no_exec_form`, still with no store and no config load; the trail file is the only thing it may create (`noVerbHookIgnored` in `noverb.go`, which reads stdin with a 1 MiB cap and a 1 s deadline and hands the bytes to `hook.HandleNoExecForm`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `help`, `--help` and `version` never read stdin. **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. `runHook` builds the `hook.HandleConfig`, wiring `Now: time.Now` and `PendingGrace: cfg.Tmux.EffectivePendingGrace()` (the grace bound of SessionStart's wait for its launch's identity write, SR-22.9, SR-13.4) beside the parent-process readers and the production `PollClock`. | stdlib; `pkg/api`; `pkg/api/errnames`; `internal/hook`; `internal/probe` (the hook's parent-process readers, `hookParentProc`, shared by `runHook` and the no-verb run); `golang.org/x/sys/unix` (the no-verb run's terminal check, `isTerminal`, with the per-OS `ioctlReadTermios` in `noverb_linux.go` / `noverb_darwin.go`); `internal/config` and `internal/store` (error sentinels only) in `setupClient`; `internal/config` in `runHook` and `newHookLogger`. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook`, `newHookLogger`, and `setupClient`'s logger bootstrap. |
-| `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, etc.), params/result types, and error sentinels (the seven tmux sentinels of SR-1.1 are all re-exported in `aliases.go`). Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director` and `internal/mcp`. **`kill` seams** (`kill.go`): `KillStore` (`GetSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`; `*store.Store` satisfies it), `KillTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `KillPane`, `KillSessionID`; `TmuxClient` satisfies it) and the start-time reader `ProcChecker`; `Kill` also takes the three `[tmux]` durations, the clock and the sleep, and has no logger. **`find-missing` seams** (`find_missing.go`): `FindMissingStore` (the live-row read, the four same-life guarded writes, `CloseOrphanedPermissionRequests`, `ListProvisionalTranscripts`, `HealJsonlPath`, `StoreID`; `*store.Store` satisfies it), `FindMissingTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`) and `ProcChecker`; the exported `FindMissing` also takes the pending grace period, the sweep budget, the clock and a `FindMissingLogger` (see [`find-missing`](#find-missing)). **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the eight socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the three name-based ones (`HasSession`, `SendKeys`, `CapturePane`); `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`; it also re-exports the start-time reader interface as `ProcChecker` (`= tmux.ProcChecker`). The Client holds its clock (`time.Now`), its sleep (`time.Sleep`, the pause of `kill`'s process wait) and its start-time reader (`probe.NewProcChecker()`), all set in `New`; plain spawn uses the clock and reader for the launch start and the identity write, and `kill` uses all three for its lookup, adoption and process wait; `find-missing` measures the pending grace period on the same clock, with the value from `EffectivePendingGrace`. The label scan of a plain spawn lives in `spawn_scan.go`, its held-name path after "duplicate session" (the end write, one re-lookup, the classified error) in `spawn_held.go`, the shared held-name error builder in `held_name.go` and the one `ad.launch.name_held` emitter in `name_held_trail.go` (see [Launch identity](#launch-identity)). `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`. | Direct `database/sql`; raw SQL strings; MCP framing. |
+| `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, etc.), params/result types, and error sentinels (the seven tmux sentinels of SR-1.1 are all re-exported in `aliases.go`). Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director` and `internal/mcp`. **`kill` seams** (`kill.go`): `KillStore` (`GetSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`; `*store.Store` satisfies it), `KillTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `KillPane`, `KillSessionID`; `TmuxClient` satisfies it) and the start-time reader `ProcChecker`; `Kill` also takes the three `[tmux]` durations, the clock and the sleep, and has no logger. **`find-missing` seams** (`find_missing.go`): `FindMissingStore` (the live-row read, the four same-life guarded writes, `CloseOrphanedPermissionRequests`, `ListProvisionalTranscripts`, `HealJsonlPath`, `StoreID`; `*store.Store` satisfies it), `FindMissingTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`) and `ProcChecker`; the exported `FindMissing` also takes the pending grace period, the sweep budget, the clock and a `FindMissingLogger` (see [`find-missing`](#find-missing)). **Pane-verb seams** (`readpane.go`, `sendkeys.go`, `pause.go`; see [Interact](#interact-send-keys--read-pane) and [`pause`](#pause)): `ReadPaneStore` (`GetSpawn`, `StoreID`; no write) and `ReadPaneTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `CapturePaneID`); `SendKeysStore` (`GetSpawn`, `PermissionRequestsForSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`) and `SendKeysTmux` (`Lookup`, `ListPanes`, `SendKeysPane`); `PauseStore` (`GetSpawn`, `GetSpawnState`, `AdoptIdentityIfUnchanged`, `StoreID`) and `PauseTmux` (`Lookup`, `ListPanes`, `SendKeysPane`). `*store.Store` and `TmuxClient` satisfy them. `SendKeys` and `Pause` take the start-time reader `ProcChecker`; the exported `ReadPane` uses `probe.NewProcChecker()` and `Client.ReadPane` the Client's reader. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the eight socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the one name-based method left, `HasSession` (`resume` still calls it); the name-based send and capture are gone. `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`; it also re-exports the start-time reader interface as `ProcChecker` (`= tmux.ProcChecker`). The Client holds its clock (`time.Now`), its sleep (`time.Sleep`, the pause of `kill`'s process wait) and its start-time reader (`probe.NewProcChecker()`), all set in `New`; plain spawn uses the clock and reader for the launch start and the identity write, and `kill` uses all three for its lookup, adoption and process wait; `find-missing` measures the pending grace period on the same clock, with the value from `EffectivePendingGrace`. The label scan of a plain spawn lives in `spawn_scan.go`, its held-name path after "duplicate session" (the end write, one re-lookup, the classified error) in `spawn_held.go`, the shared held-name error builder in `held_name.go` and the one `ad.launch.name_held` emitter in `name_held_trail.go` (see [Launch identity](#launch-identity)). `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`. | Direct `database/sql`; raw SQL strings; MCP framing. |
 | `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v5; see "Schema v5" below), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). The pending grace period bounds both `find-missing`'s hands-off window for a `pending` row and a SessionStart hook's wait for its launch's identity write, each measured from the launch start (SR-13.4, SR-22.9); it has no maximum. The hook's wait is also capped at 540 s after it began (`sessionStartWaitCap` in `internal/hook`; WD 2026-09-30c), so a grace above 540 s lengthens only `find-missing`'s window, which is unchanged. Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default; a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
 | `pkg/api/apitest` | Test seed helpers extracted from `pkg/api/*_test.go` for cross-package importing. Provides `Seed*` functions (`SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`) that set up fixture DB rows and filesystem state for `test/envelope-diff` and future Epic 4/5 smoke tests. Also provides the config writer `WriteTmuxConfig` (settings built with `TmuxInt`, or `TmuxFloat` / `TmuxString` / `TmuxBool` for malformed values, keyed by `config.TmuxKey`): `pkg/api`, CLI and MCP tests write `[tmux]` settings only through it, so no test outside `internal/config` spells a `[tmux]` key (rules: Test Harness, "apitest `[tmux]` config writer"). Provides `SeedSpawn`'s trailing `SpawnOption`s for the v5 columns, timestamps and raw text (`WithTmuxSessionName`, `WithStartedAt` / `WithEndedAt`, `WithLaunchStartedAt`, `WithRawLaunchStartedAt`, `WithNoLaunchStartedAt`, `WithLifeNumber`, `WithRowVersion`, `WithNoPreTrust`, `WithRawNoPreTrust`, `WithLaunchIdentity`, `WithTmuxSocket`, `WithNoLaunchToken`, `WithNoPane`, `WithRawLabels`, `WithRawClaudeArgs`, `WithRawExtraEnv`) and archived session history (`WithSessionHistory`), the default socket `TestSocket`, the default pane `TestPaneID` / `TestPanePID` that `SeedSpawn` gives a live row (both re-exported from `internal/testsupport/launchfix`; a terminal row gets no pane), the store-read helper `ReadSpawnColumns`, the every-life history-read helper `ReadSessionHistoryAllLives`, and the store-id helpers `ReadStoreID`, `SeedStoreID` and `OtherStoreID` (with `ErrNoStoreID`): new tests seed rows and read columns no verb shows only through these (rules: Test Harness, "apitest Seed* factory contract"). To place a seeded row's own labelled session in the Recorder, tests use `tmuxfix.Recorder.SeedRowSession` (in `internal/testsupport/tmuxfix`, not this package). Provides the shared description helper (`descriptions.go`: `AssertDescription`, `AssertAgentText`, `AssertAgentTextCase` and the `Desc*` cases; `descriptions_resume.go`: resume's `DescResume*` cases and `DescCase.AfterResumeRestore`; `descriptions_lookup.go`: lookup's `DescConflictingLabels` and `DescDifferentServer`; `descriptions_kill.go`: kill's `DescKill*`, `DescSocketDirNothingDone` and `DescUnusableName*` cases and `DescCase.AfterKillSent`; `descriptions_live_row.go`: the live-row sequence's short form and pointer, `DescLiveRowSequence`, `DescLiveRowPointer`, `LiveRowPointer`, `LiveRowSequenceCount` and `LiveRowPointerCount`; `descriptions_find_missing.go`: `DescFindMissingGrace`, `DescFindMissingManifest`, `DescFindMissingField` (`FindMissingIDs` / `FindMissingUnverifiedIDs`), `DescMissingNotProof` (full statement), `DescMissingNotProofShort` (short form) and `FindMissingOwnText`; `descriptions_held.go`: the held-name cases `DescHeldLeftover`, `DescHeldNoValidID`, `DescHeldDifferentID`, `DescHeldOtherStore`, `DescHeldAmbiguous`, the overlay `DescCase.AfterHeldName` with `HeldName` and `HeldRow` (`HeldRowEnded` / `HeldRowLeftAsIs` / `HeldRowStoreError`), and spawn's manifest cases `DescSpawnHeldName` and `DescSpawnSessionNameParam`): every Go test that checks an error or manifest description for required phrases or forbidden forms uses it (rules: Test Harness, "apitest description helper"). Non-test package (regular `.go` files) so it can be imported by harnesses outside `pkg/api`. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `internal/tmux` (the `tmux.Call` names the description cases use); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
@@ -63,7 +63,7 @@ still holds: nothing in `internal/` imports `pkg/api`.
 | `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. `classifyDispatchError` delegates to `errnames.Classify`. | stdlib; `pkg/api`; `pkg/api/manifest`; `pkg/api/errnames`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
 | `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
 | `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). `ApplyDefaults` makes the collision pre-check's one `SpawnState` read and returns an `IDCheck`. Builds env maps and synthesizes `--settings` JSON. Plain spawn's `Launch` resolves the launch socket and mints the launch token (`launchid.go`: `ResolveLaunchSocket`, `ResolveScanSocket`, `NewLaunchToken`, and `ResolveQuerySocket` for a query on a row that records no socket), inserts the `pending` row with launch start, token and socket, creates and labels the session through the shared create-and-label step (`createlabel.go`: `LaunchTmux`, `CreateRequest`, `CreateAndLabel`, `CreateOutcome` / `CreateKind`), maps its failures in one place (`launch_errors.go`: `plainSpawnCreateError`, built from the exported description builders shared by every launch verb, `TmuxUnavailableError` (also the label scan's), `LaunchTimeoutError`, `UnlabelledSessionError`, `CreateFailedError` and the row sentence `RowStaysPending`; "duplicate session" is no verb error there but a `*HeldNameError` handed to `pkg/api`'s held-name path) and makes the conditional identity write (`RecordLaunchIdentity`, shared with resume). Every launch pre-trusts its folder through the one shared step `PreTrust` (`pretrust.go`), which plain spawn runs before its insert and resume before its move to `pending`; see [Workspace-trust pre-write](#workspace-trust-pre-write). Resume's launch uses the same pieces: `ResolveRowLaunchSocket` (the row's recorded socket), `ComposeRelaunch` (the `CreateRequest`, with no tmux call or write) and `Relaunch` (`CreateAndLabel` on that request). The clock and the start-time reader are passed in. See [Launch identity](#launch-identity). | stdlib; `internal/config`; `internal/store`; `internal/tmux`; `github.com/google/uuid` for UUID4 minting. | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
-| `internal/tmux` | Thin client over the tmux binary, built only by `New(binary, Timeouts)` (`""` = tmux on `PATH`). **Phase 1 call set (SR-2.1, Appendix F.1)**, every call taking the socket: `Lookup` (the one-invocation lookup: session listing with labels plus the three `@ad_owner` scope reads), `ListPanes` (`list-panes -a`), `KillPane` (by pane id), `KillSessionID` (by session id), `SendKeysPane` (by pane id: the text call `send-keys -t <pane id> -l -- <text>`, then an optional separate `send-keys -t <pane id> Enter`; the `--` makes a text starting with `-` literal, never read as a send-keys flag; a text ending in `;` is sent with that `;` escaped as `\;`, because tmux reads an argument-final `;` as a command separator even after `--` — the escape is `escapeFinalSemicolon`, used only by the text call), `CapturePaneID` (by pane id), `SetLabel` (label by id: the session label by session id and the pane label by pane id) and `NewSession` (the create with its chained `@ad_owner` and `@ad_pane` labels). **Label form (SR-3.4, SR-3.5):** `ad1 <token> <$N> <instance id> <store id>`, five fields. The store id is the writing store's `store_meta.store_id`, which callers pass from `(*store.Store).StoreID()`; it is the last field, so the instance id is everything between the third and the last space and may contain spaces. `NewSession` and `SetLabel` both take the token, the instance id and the store id; the chain doubles `#` only inside the instance id. **Pane label (SR-2.1, SR-3.5):** every created pane carries the per-pane user option `@ad_pane` = `<token> <pane id>`, so a launch whose create reply was lost can later find its own pane by token, whatever the base-index or window layout. The create sets it with a second chained step, `; set-option -p -F -t =<name>: @ad_pane '<token> #{pane_id}'`, after the `@ad_owner` step; each `;` is its own argv element, and a name for which `NeedsLabelByID` holds gets neither chained step. A failure of either chained step is the create's `FailLabel` (tmux stops the chain at the first failing step). `SetLabel(socket, sessionID, paneID, token, instanceID, storeID)` sets both labels in one invocation, `set-option -t <$N> @ad_owner '<label>' ; set-option -p -t <%N> @ad_pane '<token> <%N>'`, with the session and pane ids from the create reply; a failure may leave the session labelled and its pane not. Neither label value ends in `;`. Only the new session's one pane is labelled: a pane split from it later has no value. **Pane listing:** `ListPanes` reads `#{@ad_pane}` as the sixth and last field, the value being everything after the fifth tab, so a tab inside it cannot shift the other fields. `Pane.AdPane` is the token only when the value is exactly `<16 lowercase hex token> <pane id>` and that pane id equals the line's own `%N` (`classifyPaneLabel`); anything else gives `""`, so a window, session, global or server value borrowed through the format, which names another pane or none, never counts (the scope guard of SR-3.6). Caveat: on tmux 3.3a a server-scope `@ad_pane` (`set-option -s`) is listed on every pane in place of its own value, so while one exists only the pane that value names can report a token and every other pane reads `""`; no other pane is matched, but a pane reading `""` then does not show that its label is gone. The raw value never leaves the client, and a malformed listing's `CallError.FirstLine` is its first line cut before the pane label field (`paneListingFirstLine`). The lookup does not read `@ad_pane`. `kill`'s adoption of a lost create reply (SR-3.6) is its first reader; it also exists for the leftover-pane check (SR-3.7) and the no-pane row check (SR-11.3). A value in any other form, a four-field one included, parses as no label (`LabelNone`), except that a four-field value whose instance id ends in a space and 16 lowercase hex reads as a shorter id plus that word as its store id; and `Label.StoreID` is set only on a valid label. Typed results and failures: `Call`, `Failure`, `CallError`, `LookupAnswer`, `Session`, `Label` / `LabelKind`, `CreateReply`, `Pane`, `Timeouts`. Mechanics: every call runs `-u -S <socket>` first; targets are ids only (never a name or pattern); each call class (query, action, create) has its own timeout, plus the pipe-close wait (`Timeouts.WaitDelay`); data is parsed only from standard output of an exit-0 call; replies are recognised only from the first line of standard error; the client's environment has every `AGENT_DIRECTOR_*` variable removed. Socket-taking calls fail only with `*CallError`. Labels reach callers only classified (the raw value never leaves the client) and recognised replies only as a `Failure`; the one exception is an unrecognised reply, whose first line (trimmed, at most 200 bytes) is carried in `CallError.FirstLine`. **Socket resolution (RN-5):** `ResolveSocket(create)` resolves the socket as tmux does (`TMUX`, then `TMUX_TMPDIR`, then `/tmp`, with tmux's per-user directory checks) and `EnsureSocketDir(socket)` creates only a missing per-user directory; refusals are `*SocketDirError` (with `SocketDirReason`), matching `ErrTmuxNotAvailable`. **Must use** `tmux.NeedsLabelByID(name)` to decide whether a session name (one containing `$` or `\`) must be labelled by id rather than by the chain; never re-implement that test. The client receives its timeouts and pipe-close wait from `pkg/api` at construction, never from `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); the package defines no defaults. The runner seam types (`Invocation`, `RunStatus`, `RunResult`, `Runner`) are exported for replay tests; tests install a runner only through the test-only `NewWithRunner` in `export_test.go`. The name-based methods (`HasSession`, `SendKeys`, `CapturePane`) keep their contracts until their last verb moves to the socket-taking calls; the name-based kill is removed (`kill` targets ids only). `HasSession` matches by prefix: `resume` still calls it until it moves to the lookup, and no verb may newly adopt it. `StripANSI` post-processes captures. **Shared lookup (SR-3.3, SR-3.4, SR-3.10, Appendix F.2):** `Lookup` / `Classify` in `lookup.go`, `lookup_class.go`, `lookup_holder.go` and `lookup_server.go` turn one lookup answer and a row's `Launch` into a verdict; see [Shared tmux lookup](#shared-tmux-lookup). Beside it: `unusable.go` (the unusable-name guard `Unusable`, and `RewrittenIn`), `agent_process.go` (agent-process selection `SelectAgentProcess`, judgement `JudgeProcess` and `KnownStartTime`), `pane_token.go` (`PaneByToken`, a pane found by its `@ad_pane` token) and `sweep.go` (the multi-socket sweep `Sweep`, built by `NewSweep`, under one tmux budget). | stdlib (`bytes`, `context`, `errors`, `fmt`, `io/fs`, `os`, `os/exec`, `path/filepath`, `regexp`, `slices`, `sort`, `strconv`, `strings`, `syscall`, `time`, `unicode`, `unicode/utf8`). | `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); `internal/probe` (the lookup's `ProcChecker` is satisfied structurally); template and store packages; shell processes (`/bin/sh`); anything other than direct `exec.Command`. |
+| `internal/tmux` | Thin client over the tmux binary, built only by `New(binary, Timeouts)` (`""` = tmux on `PATH`). **Phase 1 call set (SR-2.1, Appendix F.1)**, every call taking the socket: `Lookup` (the one-invocation lookup: session listing with labels plus the three `@ad_owner` scope reads), `ListPanes` (`list-panes -a`), `KillPane` (by pane id), `KillSessionID` (by session id), `SendKeysPane` (by pane id: the text call `send-keys -t <pane id> -l -- <text>`, then an optional separate `send-keys -t <pane id> Enter`; the `--` makes a text starting with `-` literal, never read as a send-keys flag; a text ending in `;` is sent with that `;` escaped as `\;`, because tmux reads an argument-final `;` as a command separator even after `--` — the escape is `escapeFinalSemicolon`, used only by the text call), `CapturePaneID` (by pane id), `SetLabel` (label by id: the session label by session id and the pane label by pane id) and `NewSession` (the create with its chained `@ad_owner` and `@ad_pane` labels). **Label form (SR-3.4, SR-3.5):** `ad1 <token> <$N> <instance id> <store id>`, five fields. The store id is the writing store's `store_meta.store_id`, which callers pass from `(*store.Store).StoreID()`; it is the last field, so the instance id is everything between the third and the last space and may contain spaces. `NewSession` and `SetLabel` both take the token, the instance id and the store id; the chain doubles `#` only inside the instance id. **Pane label (SR-2.1, SR-3.5):** every created pane carries the per-pane user option `@ad_pane` = `<token> <pane id>`, so a launch whose create reply was lost can later find its own pane by token, whatever the base-index or window layout. The create sets it with a second chained step, `; set-option -p -F -t =<name>: @ad_pane '<token> #{pane_id}'`, after the `@ad_owner` step; each `;` is its own argv element, and a name for which `NeedsLabelByID` holds gets neither chained step. A failure of either chained step is the create's `FailLabel` (tmux stops the chain at the first failing step). `SetLabel(socket, sessionID, paneID, token, instanceID, storeID)` sets both labels in one invocation, `set-option -t <$N> @ad_owner '<label>' ; set-option -p -t <%N> @ad_pane '<token> <%N>'`, with the session and pane ids from the create reply; a failure may leave the session labelled and its pane not. Neither label value ends in `;`. Only the new session's one pane is labelled: a pane split from it later has no value. **Pane listing:** `ListPanes` reads `#{@ad_pane}` as the sixth and last field, the value being everything after the fifth tab, so a tab inside it cannot shift the other fields. `Pane.AdPane` is the token only when the value is exactly `<16 lowercase hex token> <pane id>` and that pane id equals the line's own `%N` (`classifyPaneLabel`); anything else gives `""`, so a window, session, global or server value borrowed through the format, which names another pane or none, never counts (the scope guard of SR-3.6). Caveat: on tmux 3.3a a server-scope `@ad_pane` (`set-option -s`) is listed on every pane in place of its own value, so while one exists only the pane that value names can report a token and every other pane reads `""`; no other pane is matched, but a pane reading `""` then does not show that its label is gone. The raw value never leaves the client, and a malformed listing's `CallError.FirstLine` is its first line cut before the pane label field (`paneListingFirstLine`). The lookup does not read `@ad_pane`. `kill`'s adoption of a lost create reply (SR-3.6) is its first reader; it also exists for the leftover-pane check (SR-3.7) and the no-pane row check (SR-11.3). A value in any other form, a four-field one included, parses as no label (`LabelNone`), except that a four-field value whose instance id ends in a space and 16 lowercase hex reads as a shorter id plus that word as its store id; and `Label.StoreID` is set only on a valid label. Typed results and failures: `Call`, `Failure`, `CallError`, `LookupAnswer`, `Session`, `Label` / `LabelKind`, `CreateReply`, `Pane`, `Timeouts`. Mechanics: every call runs `-u -S <socket>` first; targets are ids only (never a name or pattern); each call class (query, action, create) has its own timeout, plus the pipe-close wait (`Timeouts.WaitDelay`); data is parsed only from standard output of an exit-0 call; replies are recognised only from the first line of standard error; the client's environment has every `AGENT_DIRECTOR_*` variable removed. Socket-taking calls fail only with `*CallError`. Labels reach callers only classified (the raw value never leaves the client) and recognised replies only as a `Failure`; the one exception is an unrecognised reply, whose first line (trimmed, at most 200 bytes) is carried in `CallError.FirstLine`. **Socket resolution (RN-5):** `ResolveSocket(create)` resolves the socket as tmux does (`TMUX`, then `TMUX_TMPDIR`, then `/tmp`, with tmux's per-user directory checks) and `EnsureSocketDir(socket)` creates only a missing per-user directory; refusals are `*SocketDirError` (with `SocketDirReason`), matching `ErrTmuxNotAvailable`. **Must use** `tmux.NeedsLabelByID(name)` to decide whether a session name (one containing `$` or `\`) must be labelled by id rather than by the chain; never re-implement that test. The client receives its timeouts and pipe-close wait from `pkg/api` at construction, never from `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); the package defines no defaults. The runner seam types (`Invocation`, `RunStatus`, `RunResult`, `Runner`) are exported for replay tests; tests install a runner only through the test-only `NewWithRunner` in `export_test.go`. The one name-based method left is `HasSession`; the name-based kill, send and capture are removed (`kill`, `send-keys`, `pause` and `read-pane` target ids only). `HasSession` matches by prefix: `resume` still calls it until it moves to the lookup, and no verb may newly adopt it. `StripANSI` post-processes captures. **Shared lookup (SR-3.3, SR-3.4, SR-3.10, Appendix F.2):** `Lookup` / `Classify` in `lookup.go`, `lookup_class.go`, `lookup_holder.go` and `lookup_server.go` turn one lookup answer and a row's `Launch` into a verdict; see [Shared tmux lookup](#shared-tmux-lookup). Beside it: `unusable.go` (the unusable-name guard `Unusable`, and `RewrittenIn`), `agent_process.go` (agent-process selection `SelectAgentProcess`, judgement `JudgeProcess` and `KnownStartTime`), `pane_token.go` (`PaneByToken`, a pane found by its `@ad_pane` token) and `sweep.go` (the multi-socket sweep `Sweep`, built by `NewSweep`, under one tmux budget). | stdlib (`bytes`, `context`, `errors`, `fmt`, `io/fs`, `os`, `os/exec`, `path/filepath`, `regexp`, `slices`, `sort`, `strconv`, `strings`, `syscall`, `time`, `unicode`, `unicode/utf8`). | `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); `internal/probe` (the lookup's `ProcChecker` is satisfied structurally); template and store packages; shell processes (`/bin/sh`); anything other than direct `exec.Command`. |
 | `internal/hook` | Reads payload JSON from stdin, classifies per SRD §5.2, and writes the row only through the gated store writes: a hook applies only when its parent process (`getppid()` and that pid's start time, captured once at entry) is the row's recorded pane process; otherwise it changes nothing and writes one `ad.hook.ignored` (SR-22.9; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). A subagent's or in-process teammate's SessionStart or SessionEnd (non-empty `agent_id`) is decided from the payload before any write and ignored as `subagent_event`. A SessionStart that arrives before its launch's identity write waits for it until the launch start plus the pending grace period or 540 s after it began waiting (`sessionStartWaitCap`), whichever comes first, re-reading the row every 250 ms on the injected clock, before its final gated write (`recordSessionStart`, `waitForLaunchIdentity` in `handler.go`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `HandleNoExecForm` (`noexec.go`) is the no-verb run's side: it takes the raw stdin bytes, writes `ad.hook.ignored` `no_exec_form` when they are a hook payload, and opens no store. Exits 0 (state-tracking fail-open). | stdlib; `internal/store`; `internal/trail`; `internal/config` (the `config.Relay` settings type only; the cmd-side wrapper loads config); `github.com/google/uuid`. The parent-process readers arrive as `HandleConfig.ParentPID` / `ParentProc`, and the wait's clock and grace period as `HandleConfig.Now` and `HandleConfig.PendingGrace` (a `time.Duration`, so the package reads no `[tmux]` setting), all wired by `cmd/agent-director`; the wait sleeps on `HandleConfig.Clock` (the relay poll's `PollClock`). | `internal/tmux`; `internal/spawn`; `internal/probe` (no tmux call and no ancestry walk on the hook path). |
 
 ### `[tmux]` timing settings
@@ -371,8 +371,9 @@ never Gone. It makes no tmux call.
 
 **Must use** `tmux.PaneByToken` to find a pane by its `@ad_pane` token;
 never match `AdPane` by hand. Its user is `pkg/api`'s adoption rules
-(`findAdoption`, which `kill` reaches through `adoptIdentity` and
-`find-missing` through `adoptInSweep`).
+(`findAdoption`, which `kill`, `send-keys` and `pause` reach through
+`adoptIdentity`, `find-missing` through `adoptInSweep`, and `read-pane`
+directly, for the call only, with no write).
 
 #### Sweep (`sweep.go`)
 
@@ -427,18 +428,23 @@ the stop rule or the budget. `find-missing` uses it (see
 
 ### Single-row verb helpers (`pkg/api`)
 
-`kill` is the first live-row verb on the shared lookup. The pieces it built
-for that are shared, unexported helpers in `pkg/api`; `read-pane`,
-`send-keys`, `pause`, `resume`, reuse and the finished-row opt-in reuse
-them. Their doc comments carry the detail.
+`kill` is the first live-row verb on the shared lookup, and the pane verbs
+(`read-pane`, `send-keys`, `pause`) the next. The pieces they built are
+shared, unexported helpers in `pkg/api`; `resume`, reuse, `expire`, the
+sweeps and the finished-row opt-in reuse them. Their doc comments carry
+the detail.
 
 | File | Holds | Must use |
 | --- | --- | --- |
-| `lookup_outcome.go` | `cantTellError(res, cantTellRefusal{InstanceID, Context, Socket, Call, Consequence, Retry})`: the one mapping from a Can't tell lookup or pane-listing `Result` to its verb error (different server and tmux unavailable → `ErrTmuxNotAvailable`, conflicting labels → `ErrTmuxSessionConflict` naming the sessions or the scope, unreadable → `ErrTmuxUnresponsive` ending with the retry sentence); nil for any other verdict. `Consequence` `""` means "nothing was done"; a verb that already acted passes its own sentence. `Retry` `""` means the default `retryLater` ("retry later"); only a caller whose retry of the same call cannot work passes its own (plain spawn's held-name path). It is verb-agnostic: kill and the label scan keep the default. `rowSocket(recorded)`: the socket every call for a row uses, the recorded one as is, else `spawn.ResolveQuerySocket("nothing was done")`. The constants `nothingWasDone`, `operatorActionsPointer` and `listSessionNameHint`. | Every single-row verb maps a Can't tell lookup or pane listing through `cantTellError` and takes a row's socket from `rowSocket`; never write another Can't tell description or socket rule. Plain spawn's label scan uses `cantTellError` too. |
+| `lookup_outcome.go` | `cantTellError(res, cantTellRefusal{InstanceID, Context, Socket, Call, Consequence, Retry})`: the one mapping from a Can't tell lookup or pane-listing `Result` to its verb error (different server and tmux unavailable → `ErrTmuxNotAvailable`, conflicting labels → `ErrTmuxSessionConflict` naming the sessions or the scope, unreadable → `ErrTmuxUnresponsive` ending with the retry sentence); nil for any other verdict. `Consequence` `""` means "nothing was done"; a verb that already acted passes its own sentence. `Retry` `""` means the default `retryLater` ("retry later"); only a caller whose retry of the same call cannot work passes its own (plain spawn's held-name path). It is verb-agnostic: kill and the label scan keep the default. `rowSocket(recorded)`: the socket every call for a row uses, the recorded one as is, else `spawn.ResolveQuerySocket("nothing was done")`. `rowLaunch(instanceID, id, storeID, socket) tmux.Launch`: the lookup's view of a row (instance id, the token and server identity of `id`, this store's id, the socket); `kill`, `read-pane`, `send-keys`, `pause` and `find-missing` build every lookup's `Launch` with it. The constants `nothingWasDone`, `operatorActionsPointer` and `listSessionNameHint`. | Every single-row verb maps a Can't tell lookup or pane listing through `cantTellError`, takes a row's socket from `rowSocket` and builds its `tmux.Launch` with `rowLaunch`; never write another Can't tell description, socket rule or launch builder. Plain spawn's label scan uses `cantTellError` too. |
 | `unusable_name.go` | `unusableNameError(name)`: nil for a usable recorded name, else the verb-agnostic `ErrInternal` refusal (empty, control character, or which rewritten character via `tmux.RewrittenIn`), pointing to "Operator actions" and saying no tmux call was made. The verb prefixes the instance id. | Every verb that passes a live row's recorded name to tmux refuses an unusable one through it, before any tmux call (`kill` today; the other verbs and the opt-in later). |
-| `agent_pane.go` | `agentPane(panes, paneID, panePID)`: the agent's pane in one listing, by recorded pane id and pid, wherever it now is (SR-3.7). `findAdoption(recorded, res, panes, pc) adoption`: the one home of the adoption rules (SR-3.6), with no write: due when the lookup is Ours and the row records no server identity or no pane; the server identity from the answering server, the pane by `@ad_pane` token (`tmux.PaneByToken`), start times through `tmux.KnownStartTime`. `adoptIdentity(s, row, res, panes, pc) adoption`: the single-row verbs' step, `findAdoption` over the verb's own listing plus one `AdoptIdentityIfUnchanged` write; the found identity (`adoption.Identity`) is used for this call whatever the write's outcome, and `Applied` is set only when the write applied. `identityAdopter` is the store capability it needs. `adoptInSweep(s, sw, pl, it, launch, res, pc, lg) sweepAdoption`: `find-missing`'s step, `findAdoption` over the Sweep's pane listing (`sw.ListPanes`, at most one per socket per run) plus one `AdoptIdentityIfSameLife` write guarded on the snapshot the sweep read; `sweepAdoption` reports `Unlisted` (the listing did not answer: nothing adopted, no write) with the listing's `Listing` result, `Guard` (the snapshot the row's verdict write is guarded on: the adoption write's new one when it applied), `Write` and `Left` (the write found the row changed or absent, or failed: the row gets no verdict write). `sameLifeAdopter` is its store capability. | `findAdoption` holds the adoption rules; never decide or build an adopted identity elsewhere. `kill`, `send-keys` and `pause` find the agent's pane with `agentPane` and adopt with `adoptIdentity`, using the verb's own one pane listing; a sweep adopts only with `adoptInSweep`. Never match panes or write an adoption by hand. |
-| `provenance_disagree.go` | `emitProvenanceDisagree(provenanceDisagree{...}, reasons...)`: writes one `ad.provenance.disagree` per distinct reason among the six (`disagreeReasons`), in a fixed order, nothing for none, dropping unknown reasons; fail-open; never a label's content. `nameChanged(res, recordedName)`: the `name_changed` condition (Ours under a name that is not a stored form of the recorded one, `tmux.StoredForms`). | A verb collects every reason of its call (lookups, a pane-listing failure, `adopted` when the adoption applied, `name_changed`) and calls the emitter once per call; a sweep calls it once per row. Never write the event directly. |
-| `error_name.go` | `errorName(err)`: the err_name the CLI would print, for trail fields (`ad.kill.called`'s `outcome`, `ad.resume.restored`'s `launch_error`); `ErrInternal` for anything else. `pkg/api` cannot import `errnames`, so this is its one mapping. | A trail field that carries an err_name uses it, and a verb that gains a name extends it here. |
+| `agent_pane.go` | `agentPane(panes, paneID, panePID)`: the agent's pane in one listing, by recorded pane id and pid, wherever it now is (SR-3.7). `findAdoption(recorded, res, panes, pc) adoption`: the one home of the adoption rules (SR-3.6), with no write: due when the lookup is Ours and the row records no server identity or no pane; the server identity from the answering server, the pane by `@ad_pane` token (`tmux.PaneByToken`), start times through `tmux.KnownStartTime`. `adoptIdentity(s, row, res, panes, pc) adoption`: the single-row verbs' step, `findAdoption` over the verb's own listing plus one `AdoptIdentityIfUnchanged` write; the found identity (`adoption.Identity`) is used for this call whatever the write's outcome, and `Applied` is set only when the write applied. `identityAdopter` is the store capability it needs. `adoptInSweep(s, sw, pl, it, launch, res, pc, lg) sweepAdoption`: `find-missing`'s step, `findAdoption` over the Sweep's pane listing (`sw.ListPanes`, at most one per socket per run) plus one `AdoptIdentityIfSameLife` write guarded on the snapshot the sweep read; `sweepAdoption` reports `Unlisted` (the listing did not answer: nothing adopted, no write) with the listing's `Listing` result, `Guard` (the snapshot the row's verdict write is guarded on: the adoption write's new one when it applied), `Write` and `Left` (the write found the row changed or absent, or failed: the row gets no verdict write). `sameLifeAdopter` is its store capability. | `findAdoption` holds the adoption rules; never decide or build an adopted identity elsewhere. `kill`, `send-keys` and `pause` find the agent's pane with `agentPane` and adopt with `adoptIdentity`, using the verb's own one pane listing; `read-pane` calls `findAdoption` directly and uses what it found for that call only, with no write (SR-7.5), as `resume`, reuse and `expire` must when they need an identity without writing it; a sweep adopts only with `adoptInSweep`. Never match panes or write an adoption by hand. |
+| `pane_run.go` | `paneRun`: one pane-verb call's run, with `paneTmux` (`TmuxLookup` + `ListPanes`). It holds the row, the socket, the store id, the verb's gone sentinel (`ErrTmuxCaptureFailed` or `ErrTmuxSendKeys`), what its refusals say was not done (`paneNothing`) and an optional `adopter`. Methods: `launchFor` (through `rowLaunch`), `ours` (the one pane listing, adoption — `adoptIdentity` with an adopter, else `findAdoption` for the call only — then `agentPane`, or `paneNotFoundError`), `listPanes` (a failed listing classified by `tmux.ListingFailure`: Gone → the gone error, otherwise `cantTellError`), `goneError`, `refusal` and `cantTellRefusal`. `readPaneRun` embeds it. | Every pane verb runs its lookup's Ours step, pane listing, gone error and Can't tell mapping through `paneRun`; a new pane verb embeds it and keeps only its own Leftover handling and action. |
+| `pane_keys.go` | `keysRun` (embeds `paneRun`), `newKeysRun(t, pc, row, storeID, socket, adopter)` and `keysFacts`: the tmux phase shared by the verbs that type keys (`send-keys`' text, `pause`'s `/exit`). `deliver(text)`: one lookup (`target`, holder name the recorded name), on Ours one listing and the adoption write, then `SendKeysPane` by pane id, a failure mapped by `paneActionFailureError` in Keys mode; nothing sent before Ours and the agent's pane. `keysRun.leftover` is the verb's Leftover refusal (nil gives `paneLeftoverError`; `send-keys` sets `pendingLeftoverError` on a `pending` row). `keysFacts` keeps the socket, the first lookup, a failed listing, `Adopted`, the Ours session, `Sent` / `SendErr` and the follow-up. `emitDisagree(verb, instanceID, who)`: the keys verbs' one `ad.provenance.disagree` emit, source `ad_send_keys`, reasons collected as `kill` collects them, action from `sendKeysAction` (`sendkeys_trail.go`: `keys_sent`, `text_sent`, `nothing_sent`). | A verb that types keys into the agent's pane runs `keysRun.deliver` and writes its disagree records with `keysRun.emitDisagree`; never a second keys phase, action mapping or disagree collection. |
+| `pane_refusals.go` | The pane verbs' refusal descriptions, verb-neutral through `paneRefusal{InstanceID, Name, Nothing}` and `paneNothing` (`nothingRead`, `nothingSent`, `textNotSubmitted`): `paneNotFoundError(r, notAdopted)` ("the agent's pane was not found", plus "the agent's pane was not adopted (no pane carries this launch's pane label)" for a lost create reply), `paneLeftoverError(r, leftovers, moreThanOne)` ("not this launch's session"; "more than one leftover session exists" for `read-pane`), `paneGoneError(gone, r, detail)` ("the row's session is not there", matching only the verb's gone sentinel). `leftoverSessions(leftovers)`: the one sentence naming leftover sessions, shared with `kill`'s `leftoverError`; `namedSessions(sessions, limit)`: quoted names and `$N`, then a count. `send-keys`' two `pending`-row `ErrSpawnNotInteractive` builders: `pendingNoLaunchError(instanceID)` (no launch start or token; no tmux call made) and `pendingLeftoverError(instanceID, leftovers)`. | No verb builds its own pane-verb refusal text: pane not found, Leftover and the gone error go through these builders, a Leftover sentence through `leftoverSessions`. Tests check them with `apitest`'s `DescPane*` and `DescSendKeysPending*` cases. |
+| `pane_action_failure.go` | `paneActionFailureError(err, paneActionFailure{Call, Gone, Pane, Refusal, Keys}, t, pc, launch)`: the SR-7.3 mapping of a failed action call (capture, text, Enter): a timeout → `ErrTmuxUnresponsive` with no follow-up; any other failure → exactly one follow-up lookup (Gone or Leftover → the verb's gone error; a different server or tmux unavailable → `ErrTmuxNotAvailable`; otherwise `ErrTmuxUnresponsive`); returns the follow-up (`paneFollowUp`) for the trail. `Keys` selects the "keys may have reached the pane" mode (`keysReached`): "the keys may have been delivered" after a timeout and "the text may be typed but not submitted" once the text went through (`enterFailedAfterText`). The reply text never classifies. | Every pane action failure goes through it (`read-pane` with `Keys` false; `send-keys` and `pause` with `Keys` true); later verbs whose action is a pane action (resume, reuse, expire, the sweeps) use it rather than their own timeout or follow-up rule. |
+| `provenance_disagree.go` | `emitProvenanceDisagree(provenanceDisagree{...}, reasons...)` (callers: `kill`, `find-missing`, plain spawn's held-name path, and the keys verbs through `keysRun.emitDisagree`): writes one `ad.provenance.disagree` per distinct reason among the six (`disagreeReasons`), in a fixed order, nothing for none, dropping unknown reasons; fail-open; never a label's content. `nameChanged(res, recordedName)`: the `name_changed` condition (Ours under a name that is not a stored form of the recorded one, `tmux.StoredForms`). | A verb collects every reason of its call (lookups, a pane-listing failure, `adopted` when the adoption applied, `name_changed`) and calls the emitter once per call; a sweep calls it once per row. Never write the event directly. |
+| `error_name.go` | `errorName(err)`: the err_name the CLI would print, for trail fields (`ad.kill.called`'s and `ad.send_keys.called`'s `outcome`, `ad.resume.restored`'s `launch_error`, `ad.launch.name_held`'s `outcome`); `ErrInternal` for anything else. `pkg/api` cannot import `errnames`, so this is its one mapping. | A trail field that carries an err_name uses it, and a verb that gains a name extends it here. |
 | `kill.go` | `killPollInterval` (100 ms): the pause between two readings of `kill`'s process wait, a named constant, not a setting. `Client.sleep` (`time.Sleep` in production) is the pause, set in tests through `SetSleepForTest`. | A wait that polls a process uses the injected clock and sleep, never `time.Sleep` directly. |
 
 `internal/spawn.ResolveQuerySocket(consequence)` resolves the caller's
@@ -2025,9 +2031,10 @@ pane process; its other hooks are kept but record no session id.
 **Residuals (SR-18.12).** A nested `claude`'s and a teammate pane's hooks
 are ignored, so their work is not reflected in the row. A row whose
 create reply was lost takes no hook, and stays `pending`, until a verb
-adopts its pane by `@ad_pane` (SR-3.6: `kill` through `adoptIdentity`,
-and `find-missing`, once the row is past its pending grace period, through
-`adoptInSweep`). Its SessionStart waits to the bound and, unless the
+adopts its pane by `@ad_pane` (SR-3.6: `kill`, and `send-keys` with
+`allow_pending`, through `adoptIdentity`, and `find-missing`, once the row
+is past its pending grace period, through `adoptInSweep`; `read-pane` uses
+the pane for its call only and writes nothing). Its SessionStart waits to the bound and, unless the
 pane is adopted meanwhile, is ignored as `no_pane_recorded`, so after a
 later adoption an idle agent's row stays `pending` until the agent's
 next hook (the lost-reply residual). The SessionStart wait bounds the
@@ -2329,9 +2336,9 @@ This write is what lets the agent's hooks apply: `pane_pid` and
 A store error gives one `WARN:` line on the Client's logger and does not
 change the spawn's result. A reply lost with exit 0 (`CreateLostReply`) is
 a success with no identity written; that row takes no hook until its
-pane is adopted by `@ad_pane` (SR-3.6: `kill` adopts through
-`adoptIdentity`, and `find-missing`, once the row is past its pending grace
-period, through `adoptInSweep`). A SessionStart that arrives before the identity write
+pane is adopted by `@ad_pane` (SR-3.6: `kill`, and `send-keys` with
+`allow_pending`, adopt through `adoptIdentity`, and `find-missing`, once
+the row is past its pending grace period, through `adoptInSweep`). A SessionStart that arrives before the identity write
 waits for it until the launch start plus the pending grace period or
 540 s after it began waiting, whichever comes first (see [the hook
 gate](#hooks-move-a-row-only-for-its-own-agent)), so when this write
@@ -2594,8 +2601,7 @@ its `tmux_socket`, the socket the holder is on.
 Claude Code shows a one-time "Quick safety check: Is this a project you
 created or one you trust?" modal the first time it sees a new cwd. The
 modal blocks before `SessionStart` fires, so a Spawn into a fresh cwd
-sits in `pending` forever and `send-keys` refuses to drive it (the
-precondition is a live state).
+sits in `pending` until something answers the modal.
 
 Every launch pre-trusts the agent's folder through one shared step,
 `spawn.PreTrust(cwd, extraEnv, off)` in `internal/spawn/pretrust.go`: a
@@ -2793,19 +2799,31 @@ manipulation can run.
 
 ## Interact: `send-keys` + `read-pane`
 
-A tracked Spawn is externally drivable: an orchestrator can deliver text
-into its tmux pane and read the rendered TUI back out without attaching
-to the session. The two verbs are typed Go functions
-in `pkg/api`, each calling exactly one method on the shared
-`*tmux.Client` (`SendKeys` / `CapturePane`). Cross-reference SRD §4.3
-(send-keys multiline semantics), SRD §12 (verb shapes),
+A tracked row is externally drivable: a caller can deliver text into the
+agent's own pane and read the rendered TUI back out without attaching to
+the session. The two verbs (and `pause`, see
+[Stop semantics](#stop-semantics)) are the pane verbs: typed Go functions in
+`pkg/api` that each make one lookup (`tmux.Lookup`, the session found by
+its label on the row's recorded socket) and one pane listing
+(`ListPanes`) through the shared tmux client, then act by pane id
+(`SendKeysPane` / `CapturePaneID`). They share one run, `paneRun`
+(`pkg/api/pane_run.go`); see
+[Single-row verb helpers](#single-row-verb-helpers-pkgapi). There is no
+name-based send or capture. Cross-reference SRD SR-7 (pane verbs), SRD
+§4.3 (send-keys multiline semantics), SRD §12 (verb shapes),
 `reference/send-keys-research.md` (empirical LF/CR behavior),
 `reference/pane-output-research.md` (capture-pane sanitization).
 
 ### `send-keys`
 
-Submits text into a live Spawn's first pane. Three behaviors are
-load-bearing:
+`pkg/api/sendkeys.go` holds the flow (`SendKeys`, unexported `sendKeysRun`
+and `sendKeysStateGuard`); its tmux phase is the keys verbs' shared
+`keysRun` (`pkg/api/pane_keys.go`), which `pause` also uses. Delivery
+(SRD SR-7.1, SR-7.2): one lookup (the session found by its `@ad_owner`
+label on the row's recorded socket) and, on Ours, one pane listing; then
+the text and a separate Enter, both by the agent's pane id
+(`SendKeysPane`). Keys are never sent before the lookup returned Ours and
+the listing showed the agent's pane. Three behaviors are load-bearing:
 
 - **`\r` (CR, 0x0D) stripped before tmux receives the argv.** Per
   `reference/send-keys-research.md` "CR caveat", a literal CR in the
@@ -2815,31 +2833,99 @@ load-bearing:
 
 - **`\n` (LF, 0x0A) passed through verbatim.** Claude Code's input
   handler treats LF as "insert newline in input box", not as a submit.
-  A multi-line payload composes as one message. The argv to tmux is
-  *one* element containing the literal LFs; tmux's own quoting handles
-  them.
+  A multi-line payload composes as one message. The text goes to tmux as
+  *one* literal argv element (`send-keys -t %N -l -- <text>`) containing
+  the LFs; tmux's own quoting handles them.
 
-- **A single Enter is always appended after the text.** Implemented
-  as a *separate* `tmux send-keys -t <name>:0.0 Enter` call after the
-  text. Mixing the submit byte into the text argv would re-introduce
-  the same "premature submission" failure mode the CR strip prevents.
+- **A single Enter is always appended after the text.** It is a
+  *separate* `send-keys -t %N Enter` call to the same pane id, made only
+  if the text call succeeded. Mixing the submit byte into the text argv
+  would re-introduce the same "premature submission" failure mode the CR
+  strip prevents.
 
-State precondition: the row's `state` must be one of `waiting`,
-`working`, `ask_user`, `check_permission`. `ended` and `missing` always
-reject with `ErrSpawnNotInteractive` — there is no pane to write to.
-`pending` also rejects by default; pass `allow_pending: true` to bypass
-the check for the pre-SessionStart window (see below). The agent's first
-SessionStart hook flips `pending` to `waiting`, after which the Spawn is
-reachable without the flag.
+State precondition (`sendKeysStateGuard`, before any tmux call): the
+row's `state` must be one of `waiting`, `working`, `ask_user`,
+`check_permission`. `ended` and `missing` are refused with
+`ErrSpawnNotInteractive` and no tmux call, with or without
+`allow_pending`. `pending` is refused the same way unless `allow_pending`
+is set. The agent's first SessionStart hook moves `pending` to `waiting`,
+after which the row is reachable without the flag.
 
-`allow_pending` opt-in: when `allow_pending=true` AND `state=pending`, the
-state check is skipped and text is delivered directly to the tmux pane. The
-canonical use case is dismissing interactive prompts that Claude Code renders
-*before* SessionStart — e.g. the `--dangerously-load-development-channels`
-warning. Without the flag a caller in this situation deadlocks: the prompt
-blocks SessionStart, so the state never advances, and `send-keys` keeps
-rejecting with `ErrSpawnNotInteractive`. `ended`/`missing` are still rejected
-even when `allow_pending=true`.
+`allow_pending` opt-in (SR-18.14): the flag also allows a `pending` row: a
+launch (spawn, reuse or resume) whose agent has not reported in yet. Keys
+are delivered only to a session started by the row's current launch.
+`ended` and `missing` rows are still rejected. The canonical use case is
+dismissing a prompt that Claude Code renders *before* SessionStart, such
+as the `--dangerously-load-development-channels` warning or the
+workspace-trust modal: the prompt blocks SessionStart, so without the
+flag the row never leaves `pending` and `send-keys` keeps refusing. On a
+`pending` row with the flag, using the row as `send-keys` read it:
+
+- **No launch start or no launch token** (absent, or a stored value that
+  does not parse): `ErrSpawnNotInteractive` (`pendingNoLaunchError`,
+  "cannot show that a session belongs to the current launch"), before
+  the lookup, with no tmux call and nothing sent (SR-22.8). Without a
+  token no label can be current, so the row fails closed.
+- **The current-launch check.** Otherwise the keys go only to the
+  current launch's session: the one whose `@ad_owner` label carries the
+  row's id, its launch token and this store's id (SR-3.4). A fresh
+  spawn, a reuse and a resume are reached the same way. A leftover (an
+  earlier launch's session holding the name or the id) is Leftover, never
+  Ours: `ErrSpawnNotInteractive` (`pendingLeftoverError`, "not this
+  launch's session", naming the leftover sessions), nothing sent. A
+  different server gives `ErrTmuxNotAvailable`; every other outcome is as
+  on a live row (below).
+
+What agent-director does and does not guarantee when a caller types into
+a launching session (SR-22.7):
+
+- **Guaranteed.** The keys go only to the current launch's agent pane,
+  found by the lookup and the pane listing for the row as `send-keys` read
+  it. A SessionStart between that read and the send changes neither the
+  session nor the pane, so the keys still land there, whatever the state
+  by the time they arrive.
+- **Not guaranteed.** That the prompt the caller saw is still showing.
+  The agent can report in between the caller's `read-pane` and its
+  `send-keys`, or between the text and the Enter of one `send-keys`,
+  which are not one atomic step. Text meant for a prompt can then land in
+  the agent's input line, and with the Enter it is submitted as a user
+  turn. Whether and what to answer is the caller's business: no option
+  types only while a row is `pending`, and no verb blocks until the agent
+  reports in.
+
+Outcomes on a live row, and on a `pending` row past the checks above (the
+full table is SRD SR-7.2; the failure rules SR-7.3):
+
+- **Ours:** one pane listing; the agent's pane is the entry with the row's
+  recorded pane id and pid, wherever it now is. A row that records no
+  server identity or no pane (a lost create reply) adopts the pane whose
+  `@ad_pane` names its launch token, written once through `adoptIdentity`
+  (SR-3.6); the write's outcome never changes the result. No agent's pane
+  → `ErrTmuxSessionConflict` ("the agent's pane was not found"), nothing
+  sent.
+- **Leftover** on a live row → `ErrTmuxSessionConflict` ("not this
+  launch's session"), nothing sent.
+- **Gone** (another store's sessions included) → `ErrTmuxSendKeys` ("the
+  row's session is not there"), nothing sent.
+- **Can't tell / tmux unavailable** → the single-row verbs' shared mapping
+  (`ErrTmuxNotAvailable`, `ErrTmuxSessionConflict` "conflicting labels",
+  `ErrTmuxUnresponsive`), nothing sent.
+- **A failed text or Enter call.** A timeout → `ErrTmuxUnresponsive`
+  saying the keys may have been delivered, with no follow-up call. Any
+  other failure makes one follow-up lookup (Gone or Leftover →
+  `ErrTmuxSendKeys`; a different server or tmux unavailable →
+  `ErrTmuxNotAvailable`; otherwise `ErrTmuxUnresponsive`). Once the text
+  call went through and the Enter failed or timed out, every description
+  says the text may be typed but not submitted, never that nothing was
+  sent.
+
+`send-keys` never writes the row's state; the adoption is its only store
+write. Its tmux calls are at most one lookup, one pane listing, the text
+call, the Enter call and one follow-up lookup; its ceiling is
+3Q + 2A + 5W, **9 s** at the defaults (SRD SR-13.2, the one source for
+this bound). Its trail is `ad.send_keys.called` from `Client.SendKeys` and
+`ad.provenance.disagree` with source `ad_send_keys` (see
+[`ad.*` event namespace](#ad-event-namespace)).
 
 Relay-mode guard (time-bounded): when `relay_mode=on` AND
 `state=check_permission`, the permission relay normally owns the modal
@@ -2866,9 +2952,55 @@ timeout arithmetic.
 
 ### `read-pane`
 
-Captures the last N lines of a Spawn's first pane via
-`tmux capture-pane -p -t <name>:0.0 -S -<n>`. Default `n=25`, no upper
-cap (SRD §12 explicitly leaves the bound to the caller).
+`pkg/api/readpane.go` holds the flow (`ReadPane`, unexported `readPane`
+and `readPaneRun`, built on `paneRun`). It captures the last N lines of
+the agent's own pane by pane id: `capture-pane -p [-e] -t %N -S -<n>`.
+Default `n=25`, no upper cap (SRD §12 explicitly leaves the bound to the
+caller). `n` counts lines of history before the visible pane, so
+`n_lines: 1` is the smallest capture.
+
+Outcomes of its one lookup (SRD SR-7.2, SR-7.5):
+
+- **Ours:** one pane listing, then the agent's pane (the entry with the
+  row's recorded pane id and pid, wherever it now is) is captured. A row
+  that records no pane (a lost create reply) uses the pane whose
+  `@ad_pane` names its launch token, found by `findAdoption` for this
+  call only, with no write. No agent's pane → `ErrTmuxSessionConflict`
+  ("the agent's pane was not found"; for a lost create reply also "the
+  agent's pane was not adopted (no pane carries this launch's pane
+  label)"), nothing read.
+- **Leftover:** with exactly one leftover session of this store, one pane
+  listing, then the pane whose `@ad_pane` names that leftover's token
+  (`tmux.PaneByToken`) is captured; no such pane → the same "the agent's
+  pane was not found" conflict. More than one leftover →
+  `ErrTmuxSessionConflict` ("more than one leftover session exists"),
+  with no listing and nothing read.
+- **Gone** (another store's sessions included) → `ErrTmuxCaptureFailed`,
+  meaning only that no session of this agent is there ("the row's session
+  is not there"), no listing, nothing read.
+- **Can't tell / tmux unavailable** → `ErrTmuxNotAvailable`,
+  `ErrTmuxSessionConflict` ("conflicting labels") or
+  `ErrTmuxUnresponsive`. `ErrTmuxUnresponsive` and `ErrTmuxNotAvailable`
+  give no information about the agent.
+- **A failed capture** (SR-7.3): a timeout → `ErrTmuxUnresponsive` with no
+  further call; any other failure makes one follow-up lookup (Gone or
+  Leftover → `ErrTmuxCaptureFailed`; a different server or tmux
+  unavailable → `ErrTmuxNotAvailable`; otherwise `ErrTmuxUnresponsive`).
+
+**`read-pane` changes nothing** (SR-7.5). It sends no keys; creates, kills
+and renames no session; writes nothing to the store, so the row's
+`row_version` and snapshot are unchanged (`ReadPaneStore` has no write
+method); and emits no trail event. It has no state guard: a `pending`,
+live or finished row behaves alike, and a finished row whose own session
+runs still returns its pane (a post-mortem read). Its results answer only
+about the row's own session; it is not a liveness verb, and the row's
+state stays the liveness authority (see
+[Liveness authority](#liveness-authority)).
+
+**Cost.** At most three tmux calls normally (lookup, pane listing,
+capture); only a capture that fails other than by timing out adds the
+follow-up lookup. Ceiling 3Q + A + 4W, **6.9 s** at the defaults (SRD
+SR-13.2, the one source for this bound).
 
 ANSI handling:
 
@@ -2878,30 +3010,29 @@ ANSI handling:
   scrubs any residuals with a byte-oriented regex (`\x1b\[[0-9;]*[a-zA-Z]`)
   that never touches non-ASCII bytes. The TUI glyphs Claude uses
   (`❯` U+276F, `⎿` U+23BF, `🐝` U+1F41D, box-drawing chars) survive —
-  the orchestrator reads them as state signal per
+  the caller reads them as state signal per
   `reference/pane-output-research.md` "State-signal value".
 
 - **`ansi=true` — `tmux capture-pane -p -e` is invoked.** The `-e` flag
   tells tmux to emit SGR / cursor escapes in its output; the bytes are
   returned verbatim with no verb-layer strip.
 
-Errors: `ErrSpawnNotFound` (unknown id), `ErrTmuxCaptureFailed`
-(transport-layer tmux failure — e.g. the session vanished between the
-row lookup and the capture call). Unlike `send-keys`, `read-pane` has
-*no* state precondition: a caller can inspect an `ended` Spawn's final
-pane bytes as a post-mortem.
-
 ### Layer boundaries
 
-- `pkg/api/sendkeys.go` and `pkg/api/readpane.go` are the
-  verb surfaces — typed params in, typed result + error out, errors
-  matched via `errors.Is`.
-- They call `internal/store` for the row lookup and `internal/tmux` for
-  the wire op. Each verb is one row read plus one or two tmux calls.
+- `pkg/api/sendkeys.go`, `pkg/api/readpane.go` and `pkg/api/pause.go`
+  are the pane-verb surfaces — typed params in, typed result + error out,
+  errors matched via `errors.Is`.
+- Each is one row read, one lookup, one pane listing, at most two actions
+  (`read-pane`: one capture; `send-keys` and `pause`: the text and Enter)
+  and at most one follow-up lookup after an action failure. They call
+  `internal/store` for the row read (and, for `send-keys` and `pause`, the
+  adoption write) and `internal/tmux` through the id-based client methods
+  (`Lookup`'s session listing, `ListPanes`, `SendKeysPane`,
+  `CapturePaneID`), each on the row's socket.
 - No SQL strings, no shell, no `&&`/`|`/`$VAR` at any layer (SRD §4.3,
-  §14.3). tmux invocations go through `*tmux.Client.SendKeys` /
-  `CapturePane`, both of which use direct `exec.Command` with the text
-  as a single argv element.
+  §14.3). tmux invocations use direct `exec.Command` argv, with the text
+  as a single argv element after `--`. The name-based send and capture no
+  longer exist; `HasSession` is the only name-based tmux method left.
 
 ## Label model
 
@@ -3466,7 +3597,7 @@ or catalog Go source requires regenerating the corresponding JSON file.
    between `manifest.CallableVerbs()` and `test/envelope-diff/nondeterministic.json`: a
    **missing verb** (callable verb present in the manifest but absent as a JSON key) or an
    **extraneous key** (JSON key that names a non-callable verb) both fail the step. See
-   [envelope-diff harness](#envelope-diff-harness) for the full non-determinism model.
+   [envelope-diff harness](#envelope-diff-regression-harness) for the full non-determinism model.
 4. `make check-sandbox-bypass` asserts the sandbox-guard bypass
    (`BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS`) does not appear in
    `.github/workflows/pre-release-verify-mac.yml`, whose `[self-hosted, macOS, ARM64]`
@@ -3994,10 +4125,10 @@ are also emitted but are not listed here.
 | `ad.resume.observed` | `ad_polling` | One per hook-resume back to Claude Code (SR-A-2.7, Epic 7) |
 | `ad.resume.moved_to_pending` | `ad_resume` | Once per applied move to `pending` by the `resume` verb, emitted when the create that directly follows the move returns (no I/O may run between the move and the create, SR-8.3); fail-open. Carries `claude_instance_id`, `prior_state` (`ended` or `missing`) and `claude_session_id` (the session id the row keeps). A `resume` refused before or at its move emits none. Emitted in `pkg/api/resume.go`, so every surface gets it. Unrelated to `ad.resume.observed`, a permission relay's hook resume (SR-8.3, SR-14) |
 | `ad.resume.restored` | `ad_resume` | Once per restore attempt after a failed `resume` launch (a failure other than a timeout), applied or not; fail-open. Carries `claude_instance_id`, `applied` (boolean), `launch_error` (the err_name of the launch error `resume` returns) and `restore_error` (null, or the store error's text when the restore's write failed). Emitted in `pkg/api/resume.go`, so a failed restore behind the MCP server, whose client has no logger, is still recorded. Unrelated to `ad.resume.observed` (SR-8.5, SR-14) |
-| `ad.send_keys.called` | `ad_send_keys` | One per `agent-director send-keys` invocation on every return path (fail-open, mirroring `ad.decide.called`). Carries `outcome` (canonical err_name or `ok`), AD-collected `caller_*` identity, and a `guard_evaluation` field — `not-applicable` (relay guard did not apply), `held` (refused, relay could still act), or `released` (guard released, the audited recovery of a fallen-back relay) — so recovery sends are distinguishable from ordinary sends and refusals (SR-5.2) |
+| `ad.send_keys.called` | `ad_send_keys` | One per `Client.SendKeys` call past the closed check (every `agent-director send-keys` invocation), on every return path, fail-open (mirroring `ad.decide.called`); emitted by `emitSendKeysCalled` (`pkg/api/sendkeys_trail.go`). The exported `SendKeys` writes none. Carries `claude_instance_id`; `allow_pending`; `row_state` (the stored state of the row the verb read, `""` when no row was read: it tells keys typed into a launching agent's startup prompt, a `pending` row, from keys sent to a live conversation, and records the state a refusal met); `outcome` (`ok` or the err_name from `errorName`: `ErrTmuxUnresponsive`, `ErrTmuxSessionConflict`, `ErrTmuxNotAvailable`, `ErrTmuxSendKeys`, `ErrSpawnNotInteractive` (its `pending`-row triggers included), `ErrSendKeysWhileRelayed` and `ErrSpawnNotFound` by name; `ErrInternal` only for an error none of those matches, such as a relay-guard store error); the AD-collected `caller_*` identity (collected once per call); and a `guard_evaluation` field — `not-applicable` (relay guard did not apply), `held` (refused, relay could still act), `released` (guard released, the audited recovery of a fallen-back relay) or `error` (the guard's store read failed) — so recovery sends are distinguishable from ordinary sends and refusals (SR-5.2, SR-7.4). Never the typed text. `pause` and `read-pane` write no call event |
 | `ad.launch.name_held` | `ad_spawn`; `ad_find_missing` | Written by the one emitter `emitNameHeld` (`pkg/api/name_held_trail.go`), fail-open: a trail-write failure never changes the verb's result, error or description. Exactly one per plain-spawn label-scan refusal ("left over from an earlier life"), and exactly one per plain spawn whose create answered "duplicate session" (the held-name path); see [Launch identity](#launch-identity). Carries `source`, `claude_instance_id`, `launch` (`spawn`), `tmux_session_name` (the requested name; for the scan, the first leftover's), `tmux_socket`, `tmux_session_id` and `session_created` (the blocking session; for the scan, the leftover with the lowest `$N`), `store_id` (this store's `store_meta.store_id`, never a label's, for comparison with a label's last field), `carries_this_id` and `current_launch` (from the holder's label class only, never the environment: true and false for an old label; false and null for another id's, another store's or no valid label, another store's counting as not carrying the id even when it names it; both null when no single holder was identified or its class cannot be trusted), `lookup_outcome` (the lookup's outcome token), `outcome` (the returned error's name), `row_result` (`not_inserted` for the scan; `ended`, `left_changed` or `still_pending` after "duplicate session"), `store_error` (the end write's store error text, else null), the by-hand `attach_command` (`tmux -u -S '<socket>' attach-session -r -t '<$N>'`) and `end_command` (`tmux -u -S '<socket>' kill-session -t '<$N>'`), and the `caller_*` identity; `leftover_count` only on the scan's record. `tmux_session_id`, `session_created` and both commands are present whenever one blocking session was identified, a holder with no valid label included, and null otherwise (vanished, ambiguous, unreadable, tmux unavailable). The trail carries the two commands because humans read it; no error description carries them. Later sources and launch kinds (another launch's `launch` value, the sweep's null `launch` and `outcome`) add their constants beside the existing ones without changing the field set. **find-missing** (source `ad_find_missing`, `emitRowNameHeld` in `pkg/api/find_missing_lookup.go`) writes exactly one per row per sweep whose mark attempt had tick reason `tmux_name_held`, whatever the mark's outcome, with the same field set: `launch` and `outcome` null; `tmux_session_name` the row's recorded name; `tmux_socket` the socket the lookup used; `store_id` this store's, as for every source; the holder fields from the row's lookup (`heldHolderFacts`), so `carries_this_id` false and `current_launch` null when the holder is another store's session, and the holder fields null when more than one listing entry matches the name; `lookup_outcome` the lookup's token (`gone` or `leftover`); `row_result` `marked_missing` (the mark applied), `left_changed` (the row was changed or absent) or `still_pending` (the mark failed in the store, with `store_error`); no `leftover_count`. The sweep never touches the holding session (see [`find-missing`](#find-missing)). Never a label value, the id a label names, another row's id or session-environment content (SR-9.3, SR-9.4, SR-14, SR-15) |
 | `ad.kill.called` | `ad_kill` | Exactly one per call of the exported `Kill` (`pkg/api/kill.go`), on every return path, so `Client.Kill` and direct callers both get it; fail-open (a trail-write failure never changes the result). A call on a closed `Client` returns `ErrClientClosed` before `Kill` runs and emits nothing. Emitted by `killRun.emit` (`pkg/api/kill_trail.go`). Carries `claude_instance_id`; `tmux_session_name` (the recorded name, empty when there is no row); `outcome` (`ok` or the err_name the CLI would print, from `errorName`); `lookup_outcome` (the lookup's outcome token, or `not_run` when no lookup ran: unknown id, finished row, unusable recorded name, unusable socket directory); `followup_outcome` (the follow-up lookup's token, `not_run` when none ran); `kill_sent` (as in the result); `pane_killed` (whether a pane kill was sent); `process_check` (`gone`, `alive`, `unreadable` or `not_recorded` whenever a process check ran, on the Gone path or after a kill; after an expired wait `alive` when the agent still counted as running, else `gone` with survivors listed; `not_run` when none ran); `agent_pid` (the pid of the agent process that was checked, null when no check read one); `survivor_pids` (the pane processes of the labelled session still running when the wait ended, `[]` otherwise); `include_finished` (whether the operator-only finished-row opt-in was set); and the AD-collected `caller_process`, `caller_pid`, `caller_hostname`, `caller_user`. A human uses `agent_pid` and `survivor_pids` in the README's "Operator actions" procedure. Never session-environment content or another row's id (SR-6.4, SR-14, SR-15) |
-| `ad.provenance.disagree` | the verb that decided (`ad_kill`; `ad_spawn` for plain spawn's re-lookup after "duplicate session", reason `scope_value`; `ad_find_missing`) | Written only when a verb call meets a disagreement, never in the normal case: at most once per reason per verb call, or per reason per row per sweep; fail-open. Emitted through the shared `emitProvenanceDisagree` (`pkg/api/provenance_disagree.go`), which drops duplicates and unknown reasons. `reason` is one of six: `server_restarted`, `server_mismatch`, `adopted` (a lost create reply's identity adopted and written), `duplicate_label` (two sessions with the current label), `scope_value` (an `@ad_owner` value at the global, server or global-window scope) or `name_changed` (Ours found under a name other than the recorded one); `pid_mismatch` is retired. Also carries `claude_instance_id`, `verb`, `tmux_socket`, `tmux_session_name` (the recorded name), `tmux_session_id` (the session concerned, null when none), `current_session_name` (on `name_changed` only, null otherwise), `server` (`match`, `restarted`, `differs` or `unknown`), `verdict` (the lookup's outcome token), `action` (what the verb did; `kill` writes `kill_sent` or `nothing_sent`, plain spawn its held-name row result `ended`, `left_changed` or `still_pending`) and the `caller_*` identity. **find-missing** (`verb` `find-missing`, written by `emitDisagree` in `pkg/api/find_missing.go` once the row's write has settled) writes one record per distinct reason per row per sweep, in the order above, and none for a row judged without a lookup or a row whose lookup was not called. Its reasons are the lookup's own, `name_changed`, `adopted` (only when the adoption write applied) and those of an adoption pane listing that did not answer; each record carries the fields of the observation that produced its reason. A lookup reason carries the lookup's `server` and `verdict` and the lookup's session as `tmux_session_id` (the Ours session; null when none), with that session's stored name as `current_session_name` on `name_changed`. A reason only the listing reported (`server_mismatch`, on a no-server reply while the recorded server process is not gone) carries the listing's `server` (`differs`), its `verdict` (`different_server`) and `tmux_session_id` null. A reason both reported is written once, with the lookup's fields. `tmux_socket` is the socket the lookup used; `action` is the row's outcome: `marked_missing`, `left_live`, `left_unverified`, `left_changed` (a guarded write, adoption included, found the row changed or absent) or `store_error`. Never a label's content or another row's id (SR-14, SR-15) |
+| `ad.provenance.disagree` | the verb that decided (`ad_kill`; `ad_send_keys` for both keys verbs, `send-keys` and `pause`, told apart by `verb`; `ad_spawn` for plain spawn's re-lookup after "duplicate session", reason `scope_value`; `ad_find_missing`) | Written only when a verb call meets a disagreement, never in the normal case: at most once per reason per verb call, or per reason per row per sweep; fail-open. Emitted through the shared `emitProvenanceDisagree` (`pkg/api/provenance_disagree.go`), which drops duplicates and unknown reasons. `reason` is one of six: `server_restarted`, `server_mismatch`, `adopted` (a lost create reply's identity adopted and written), `duplicate_label` (two sessions with the current label), `scope_value` (an `@ad_owner` value at the global, server or global-window scope) or `name_changed` (Ours found under a name other than the recorded one); `pid_mismatch` is retired. Also carries `claude_instance_id`, `verb`, `tmux_socket`, `tmux_session_name` (the recorded name), `tmux_session_id` (the session concerned, null when none), `current_session_name` (on `name_changed` only, null otherwise), `server` (`match`, `restarted`, `differs` or `unknown`), `verdict` (the lookup's outcome token), `action` (what the verb did; `kill` writes `kill_sent` or `nothing_sent`; `send-keys` and `pause` write `keys_sent` (the text and Enter both went through), `text_sent` (the text call timed out, or the text went through and the Enter call failed or timed out) or `nothing_sent` (no keys call, or the text call failed other than by timing out); plain spawn its held-name row result `ended`, `left_changed` or `still_pending`) and the `caller_*` identity. **send-keys and pause** (source `ad_send_keys`, `verb` `send-keys` or `pause`, written by the shared `keysRun.emitDisagree` in `pkg/api/pane_keys.go`) collect their reasons as `kill` does: the first lookup's, `name_changed`, a failed pane listing's, `adopted` only when the adoption write applied, and the follow-up lookup's; they write none when the call made no lookup. `pause` writes its records before its wait, so the wait's outcome neither adds nor removes one. `read-pane` writes none. **find-missing** (`verb` `find-missing`, written by `emitDisagree` in `pkg/api/find_missing.go` once the row's write has settled) writes one record per distinct reason per row per sweep, in the order above, and none for a row judged without a lookup or a row whose lookup was not called. Its reasons are the lookup's own, `name_changed`, `adopted` (only when the adoption write applied) and those of an adoption pane listing that did not answer; each record carries the fields of the observation that produced its reason. A lookup reason carries the lookup's `server` and `verdict` and the lookup's session as `tmux_session_id` (the Ours session; null when none), with that session's stored name as `current_session_name` on `name_changed`. A reason only the listing reported (`server_mismatch`, on a no-server reply while the recorded server process is not gone) carries the listing's `server` (`differs`), its `verdict` (`different_server`) and `tmux_session_id` null. A reason both reported is written once, with the lookup's fields. `tmux_socket` is the socket the lookup used; `action` is the row's outcome: `marked_missing`, `left_live`, `left_unverified`, `left_changed` (a guarded write, adoption included, found the row changed or absent) or `store_error`. Never a label's content or another row's id (SR-14, SR-15) |
 | `ad.trail_meta.emit_failed` | `ad_trail_meta` | Self-reporting envelope written when a primary emit fails — carries `original_event` and `error_class` (SR-A-3.2) |
 
 ### Sources
@@ -4013,7 +4144,7 @@ The `source` field identifies which emitter wrote the line:
 | `ad_find_missing` | The find-missing sweep: `pkg/api/find_missing_writes.go` — the mark and note ticks (`markMissingSameLife`, `writeLivenessNote`); `internal/store/recovery.go` — the `permission_orphan_closeout` ticks (`CloseOrphanedPermissionRequests`); `pkg/api/find_missing_lookup.go` — the `ad.launch.name_held` record through `emitNameHeld` (`emitRowNameHeld`); `pkg/api/find_missing.go` — the `ad.provenance.disagree` records through `pkg/api/provenance_disagree.go` (`emitDisagree`) |
 | `relay_hook` | `internal/hook/permission.go` and `cmd/agent-director/trail_emit_cmd.go` — relay-attempt completion |
 | `ad_polling` | `internal/hook/permission.go` — resume observed on hook return |
-| `ad_send_keys` | `pkg/api/sendkeys.go` — send-keys verb (per-invocation, carries the relay-guard evaluation) |
+| `ad_send_keys` | `pkg/api/sendkeys_trail.go` — send-keys' `ad.send_keys.called` (`emitSendKeysCalled`, called from `Client.SendKeys` in `pkg/api/sendkeys.go`; per invocation, carries the relay-guard evaluation and `row_state`); `pkg/api/pane_keys.go` — the keys verbs' shared `ad.provenance.disagree` emit (`keysRun.emitDisagree`, through `pkg/api/provenance_disagree.go`), called by `pkg/api/sendkeys.go` (`verb` `send-keys`) and `pkg/api/pause.go` (`verb` `pause`; pause writes no call event) |
 | `ad_spawn` | `pkg/api/name_held_trail.go` — the one `ad.launch.name_held` emitter (`emitNameHeld`), called by the spawn verb's label scan (`pkg/api/spawn_scan.go`) and by plain spawn's held-name path after "duplicate session" (`pkg/api/spawn_held.go`, which also writes its `ad.provenance.disagree` records through `pkg/api/provenance_disagree.go`) |
 | `ad_resume` | `pkg/api/resume.go` — the resume verb's move and restore (`ad.resume.moved_to_pending`, `ad.resume.restored`) |
 | `ad_kill` | `pkg/api/kill_trail.go` — the kill verb (`ad.kill.called`, and its `ad.provenance.disagree` records through `pkg/api/provenance_disagree.go`) |
@@ -4817,7 +4948,7 @@ step). The evidence model, notes, guard and marking order are in
 unknown or absent reach tmux. The run holds one `tmux.Sweep` (see
 [Sweep](#sweep-sweepgo)): one lookup per socket per run, taken by the first
 row that needs it and shared by every later row of that socket, each row
-judged against its own launch (`findMissingLaunch`: instance id, token,
+judged against its own launch (the shared `rowLaunch`: instance id, token,
 recorded server identity, this store's `store_id`, socket) and holding its
 recorded session name as the holder name.
 
@@ -4922,7 +5053,7 @@ but is never returned.
 
 | File | Holds | Must use |
 | --- | --- | --- |
-| `find_missing_lookup.go` | `lookupRow` (SR-11.3's table), `oursRow`, `adoptedPaneRow`, `lookupMarkRow`, `emitRowNameHeld`, `notCalledNote`, `findMissingLaunch`. | The one mapping from a sweep row's lookup to its mark or note; a sweep never decides a row from a `tmux.Result` another way. |
+| `find_missing_lookup.go` | `lookupRow` (SR-11.3's table), `oursRow`, `adoptedPaneRow`, `lookupMarkRow`, `emitRowNameHeld`, `notCalledNote` (each row's `tmux.Launch` comes from the shared `rowLaunch`, `lookup_outcome.go`). | The one mapping from a sweep row's lookup to its mark or note; a sweep never decides a row from a `tmux.Result` another way. |
 | `find_missing_writes.go` | The per-row outcome writers, shared by the process path and the tmux path: `markMissingSameLife` (the pinned marking order: guarded `MarkMissingIfSameLife`, then one `ad.find_missing.tick` with any extra fields the tmux path passes, then `CloseOrphanedPermissionRequests`), `writeLivenessNote` (skips a note equal to the one read; the guarded `SetLivenessNoteIfSameLife`; the SR-11.4 tick rule in `noteTickReason`) and `clearLivenessNote` (no write for a row with no note; the guarded `ClearLivenessIfSameLife`, no tick). Each takes the snapshot to guard on (the read one, or the adoption's) and returns a `findMissingWrite`; a changed, absent or failed write ticks nothing and lists the row nowhere, and a store error is logged through `logFindMissing`. | The only way a sweep marks, notes or clears a row: every mark, note write and clear (process or tmux evidence, adopted or not) goes through these three writers; never call the guarded store writes, write a tick or deny permission requests for a sweep row another way. |
 | `sweep_socket.go` | `sweepSockets.forRow(recorded)`: the socket a sweep row's calls use, the caller's resolved at most once per run for rows that record none, creating nothing; a refused resolution gives tmux unavailable, then not called. It implements SR-3.3's socket rule for a sweep (a recorded socket exactly as recorded; none recorded: the caller's socket, resolved as tmux would through `rowSocket` / `spawn.ResolveQuerySocket`, creating nothing, LFR H1), with SR-3.15's stop after a refusal. | The shared no-socket helper: every sweep (`find-missing`, and `expire` when it looks up rows) takes a row's socket from one `sweepSockets` per run; never resolve a sweep row's socket another way. |
 
@@ -5100,11 +5231,11 @@ adds it here.
 
 | Name | Class | Returned by | What the caller does |
 | --- | --- | --- | --- |
-| `ErrTmuxSendKeys` | GONE | `send-keys`, `pause` | The row's session is not there. The row stays live until `find-missing` marks it; to relaunch the id, follow the [live-row sequence](#live-row-sequence). |
-| `ErrTmuxCaptureFailed` | GONE | `read-pane` | As `ErrTmuxSendKeys`. |
-| `ErrTmuxUnresponsive` | UNAVAILABLE (transient) | `kill`, `resume`, `spawn` | tmux did not answer usably. Retry later with backoff and a retry cap, and alert when the cap is reached. The description says whether anything was sent first (for `kill`: "the kill was sent and may or may not have taken effect"). |
+| `ErrTmuxSendKeys` | GONE | `send-keys`, `pause` | Only that the row's session is not there: no session of this agent was found (nothing sent, or, when the Enter failed after the text, the text may be typed but not submitted). The row stays live until `find-missing` marks it; to relaunch the id, follow the [live-row sequence](#live-row-sequence). |
+| `ErrTmuxCaptureFailed` | GONE | `read-pane` | As `ErrTmuxSendKeys`: only that the row's session is not there; nothing was read. |
+| `ErrTmuxUnresponsive` | UNAVAILABLE (transient) | `kill`, `read-pane`, `send-keys`, `pause`, `resume`, `spawn` | tmux did not answer usably. Retry later with backoff and a retry cap, and alert when the cap is reached. The description says whether anything was sent first (for `kill`: "the kill was sent and may or may not have taken effect"; for `send-keys` and `pause` after a timed-out text or Enter call: "the keys may have been delivered"). |
 | `ErrTmuxKillFailed` | UNAVAILABLE | `kill` only | The agent process still runs after `kill`, cannot be checked while its labelled session is still there, or runs while no session or pane of the launch was found (no kill sent). The description says which. Retry `kill` later with backoff and a cap; alert when the cap is reached; never delete the row. |
-| `ErrTmuxSessionConflict` | CONFLICT (permanent until a human looks) | `kill`, `spawn` | The session found is not this launch's session, or tmux holds conflicting labels. For a plain `spawn` it also means the requested name is held by another session (see the held-name bullet under [Reading a refusal](#reading-a-refusal)). Stop, surface the named session to a human (README "Operator actions") and never end it yourself; retrying changes nothing until a human has acted. |
+| `ErrTmuxSessionConflict` | CONFLICT (permanent until a human looks) | `kill`, `read-pane`, `send-keys`, `pause`, `spawn` | The session found is not this launch's session, or tmux holds conflicting labels. For the pane verbs it also means the agent's pane was not found in the session carrying this row's id, or (for `read-pane`) more than one leftover session exists. For a plain `spawn` it also means the requested name is held by another session (see the held-name bullet under [Reading a refusal](#reading-a-refusal)). Stop, surface the named session to a human (README "Operator actions") and never end it yourself; retrying changes nothing until a human has acted. |
 | `ErrTmuxNotAvailable` | ENVIRONMENT | `kill`, `read-pane`, `send-keys`, `pause`, `resume`, `spawn`; never `find-missing` or `expire` | tmux could not be run, its socket is not accessible to this user, or this is not the tmux server the agent was launched on. An environment problem for an operator to fix; alert, and never read it as gone. |
 | `ErrTmuxSessionCreate` | LAUNCH FAILURE | `spawn`, `resume` | The launch's session could not be created or labelled. The description says what became of the row (a plain spawn's new row stays `pending`, or, when the create found the name held but its holder was gone by the re-lookup, is ended; a `resume` restores its row); follow it. A name held by a session that is still there is never this class for a plain spawn. |
 
@@ -5142,7 +5273,8 @@ adds it here.
 - A refusal returned before the verb's first write or tmux action changes
   nothing, so re-issuing it is always safe. A `kill` refused before its
   kill call sends nothing: a leftover, a lookup or pane listing that cannot
-  decide, an unusable recorded name or an unusable socket directory.
+  decide, an unusable recorded name or an unusable socket directory. A
+  pane verb refused before its action sends and reads nothing.
 - A refusal returned after a write or an action says what may have
   happened, and its own rule applies: `ErrTmuxKillFailed` says whether a
   kill was sent, and `ErrTmuxUnresponsive` or `ErrTmuxNotAvailable` from
@@ -5155,6 +5287,15 @@ adds it here.
 
 - The row state, kept honest by `find-missing`, is the liveness authority.
   There is no liveness verb, and `get`, `status` and `list` read no tmux.
+- `read-pane` changes nothing: no keys, no session created, killed or
+  renamed, no store write (`row_version` and the snapshot are unchanged)
+  and no trail event. Its results are the lookup classes of the row's own
+  session only: the pane (the current launch's agent pane, or the one
+  leftover's), GONE (`ErrTmuxCaptureFailed`: no session of this agent is
+  there), CONFLICT (the agent's pane not found, or more than one
+  leftover), and UNAVAILABLE or ENVIRONMENT, which give no information.
+  It is not a liveness verb: the row state stays the authority (see
+  [`read-pane`](#read-pane)).
 - `ended` and `missing` are not proof that the agent exited: `missing` is
   the sweep's judgement on the evidence available to it.
 - Only the row's own agent moves the row: a hook applies only when its
@@ -5218,6 +5359,29 @@ adds it here.
   a retry with the reuse opt-in returns `ErrInstanceIdCollision` until
   tmux is back and a `find-missing` run past the pending grace period
   marks the row `missing`.
+
+### Launch pending
+
+- `pending` means a launch (spawn, reuse or resume) is in progress and the
+  agent has not reported in. A caller that polls a launch polls `status`,
+  and calls `read-pane` only while the row is `pending`, at most about
+  once a second, backing off once the launch start is old and stopping as
+  soon as the row leaves `pending`: each `read-pane` makes up to three
+  tmux calls.
+- `send-keys` with `allow_pending` reaches only the current launch's
+  session, found by its label with the row's launch token. A session left
+  over from an earlier launch is refused with `ErrSpawnNotInteractive`
+  ("not this launch's session") and nothing is sent.
+- A `pending` row with no launch start or no launch token has no current
+  label and fails closed for actions: `send-keys` refuses it with
+  `ErrSpawnNotInteractive` before any tmux call.
+- When a caller types into a launching session, agent-director
+  guarantees only that the keys reach the current launch's agent pane, not
+  that the prompt the caller saw is still showing: the agent can report in
+  between the caller's `read-pane` and its `send-keys`, or between the text
+  and the Enter, and the text is then submitted as a user turn. Whether
+  and what to answer is the caller's business (see
+  [`send-keys`](#send-keys)).
 
 ### The lookup rule
 
@@ -5482,17 +5646,59 @@ full.
 
 ### `pause`
 
-`pause` is the only verb with a polling loop:
+`pkg/api/pause.go` holds the flow (`Pause`, unexported `pauseRun` and
+`waitEnded`); its tmux phase is the keys verbs' shared `keysRun`
+(`pkg/api/pane_keys.go`), the same one `send-keys` uses (SRD SR-7.1 to
+SR-7.3). `pause` is the only verb with a polling loop:
 
-1. Row lookup. Unknown id → `ErrSpawnNotFound`.
-2. Terminal state (`ended` / `missing`) → no-op success.
-3. State == `waiting` → send `/exit` then `Enter` via two
-   `tmux.SendKeys` calls, then poll the row's state column at a
-   fixed interval until either `state == ended` (success) or
-   `pause.timeout_seconds` elapses (`ErrPauseTimeout`). `ctx.Done()`
-   short-circuits the loop with `ctx.Err()`.
-4. State ∈ {`pending`, `working`, `ask_user`, `check_permission`}
-   → `ErrSpawnNotPausable`.
+1. **Row read.** Unknown id → `ErrSpawnNotFound`.
+2. **Finished row** (`ended` / `missing`) → no-op success, no tmux call,
+   no wait.
+3. **Every other live state but `waiting`** (`pending`, `working`,
+   `ask_user`, `check_permission`) → `ErrSpawnNotPausable`, no tmux call.
+   `/exit` is never typed in these states, where the slash would be read
+   as input text.
+4. **`waiting` row: the tmux phase.** The row's socket (an unusable socket
+   directory → `ErrTmuxNotAvailable`), one lookup by the row's current
+   label and, on Ours, one pane listing; then `/exit` and a separate Enter
+   to the agent's pane by pane id (`SendKeysPane`). A row that records no
+   server identity or no pane (a lost create reply) adopts the pane whose
+   `@ad_pane` names its launch token, written once through
+   `adoptIdentity` (SR-3.6); the write's outcome never changes the
+   result. Outcomes, with `/exit` not sent on every refusal:
+   - the agent's pane not found, Leftover, or conflicting labels →
+     `ErrTmuxSessionConflict`;
+   - Gone (another store's sessions included) → `ErrTmuxSendKeys` ("the
+     row's session is not there");
+   - a different server or tmux unavailable → `ErrTmuxNotAvailable`;
+   - unreadable → `ErrTmuxUnresponsive`;
+   - a failed `/exit` or Enter call, as for `send-keys` (SR-7.3): a
+     timeout → `ErrTmuxUnresponsive` saying the keys may have been
+     delivered, with no follow-up; any other failure makes one follow-up
+     lookup (Gone or Leftover → `ErrTmuxSendKeys`, a different server or
+     tmux unavailable → `ErrTmuxNotAvailable`, otherwise
+     `ErrTmuxUnresponsive`); once `/exit` went through and the Enter
+     failed or timed out, the description says the text may be typed but
+     not submitted.
+5. **The wait** (unchanged), only once `/exit` and Enter went through:
+   poll the row's state column every `pausePollInterval` (200 ms) until
+   `state == ended` (success) or `pause.timeout_seconds` elapses on the
+   real clock (`ErrPauseTimeout`). `ctx.Done()` short-circuits the loop
+   with `ctx.Err()`. On any error before it, the wait does not start.
+
+`pause` never writes the row's state; the adoption is its only store
+write. **Trail:** no call event of its own. It writes at most one
+`ad.provenance.disagree` per distinct reason per call, with verb `pause`
+and source `ad_send_keys` (the action values as for `send-keys`), only for
+those reasons, none in the normal case, and before the wait, so the wait's
+outcome neither adds nor removes one (see
+[`ad.*` event namespace](#ad-event-namespace)).
+
+**Worst case** (SRD SR-13.2, the one source for this bound): the tmux
+phase is at most one lookup, one pane listing, the `/exit` call, the Enter
+call and one follow-up lookup, 3Q + 2A + 5W, **9 s** at the defaults. The
+configured pause wait (`pause.timeout_seconds`, default 30 s) is separate
+and comes on top.
 
 Pause is one-shot; no incremental progress callback.
 
@@ -5901,6 +6107,8 @@ For each verb in `manifest.CallableVerbs()`, the harness copies a fixture store 
 - `runners.go` — `runCLI` (subprocess) and `runClient` (in-process) plus per-verb dispatch. `runCLI` passes the child a minimal environment (`HOME`, `PATH` with the fake tmux first) plus each of `TMUX`, `TMUX_TMPDIR` and `FAKE_TMUX_TABLES` (`faketmuxfix.EnvTables`) that is set in the test process (`forwardedTmuxEnv`), so a row's private socket and fake-tmux tables reach the CLI as they reach `runClient`.
 - `error_cases.go` — the per-verb error-path table (`errorCases`), with `spawnTmuxErrorCases` appended.
 - `error_cases_spawn_tmux.go` — the spawn error rows whose error comes from tmux (SR-20.5): `spawn` / `ErrTmuxUnresponsive` (the create hangs past a short configured create timeout on a minted-id spawn) and `spawn` / `ErrTmuxSessionConflict` (no row for the explicit id, and a session this store labelled for it under another token still runs, so the label scan refuses). Each row calls `usePrivateFakeTmux(t)`, which sets `TMUX` empty, a fresh `TMUX_TMPDIR` and a fresh `FAKE_TMUX_TABLES` directory, and returns the socket spawn resolves and the `faketmuxfix.Tables` the row writes or injects into; no row shares a socket or table with another test.
+- `error_cases_pane_tmux.go`, `error_cases_keys_tmux.go`, `error_cases_kill_tmux.go` — the `read-pane`, keys-verb (`send-keys` and `pause`, the same Gone and Leftover rows each) and `kill` error rows whose error comes from tmux: each seeds a live row on a private socket whose fake-tmux table the row writes (or leaves empty), so both runners see the same tmux and nothing is sent or captured.
+- `success_pane.go` — the pane verbs' success seed: a live row on its own socket whose table holds the row's own labelled session and pane (`writePaneRowTable`), so both runners reach the pane through the lookup and pane listing and act on it by pane id.
 - `success_pretrust.go` — the pre-trust fixture and check for the spawn and resume success cases (SR-22.6). `plantClaudeJSON` is an `extraSetup` hook that writes a `.claude.json` with no folder-trust entries into a run's HOME, so both sides report `ok`. `preTrustMismatch` checks that an envelope carries `pre_trust` equal to the case's `successCase.wantPreTrust` (`success_cases.go`); the diff alone cannot catch the field vanishing from both sides.
 - `selectors.go` — path matching with `[*]` wildcard support.
 - `diff.go` — JSON normalization and structural diff.
@@ -5927,6 +6135,15 @@ For each verb in `manifest.CallableVerbs()`, the harness copies a fixture store 
 **Import constraint.** The smoke target imports only `pkg/api`, `pkg/api/manifest`, `pkg/api/apitest` (for `SeedSpawn`), and `internal/testsupport/*`. Imports of `internal/api`, `internal/store`, or any other `internal/` package are prohibited and enforced at test time by `test/smoke/go/import_graph_test.go` (Task c8). This keeps the smoke test honest as a consumer: if `pkg/api` does not expose something, the smoke test cannot reach around it.
 
 **No verb chaining.** Each subtest receives a fresh store and a fresh tmux recorder. Preconditions (e.g., a live Spawn row required by `status` or `send-keys`) are injected by the `internal/testsupport` seeders or `apitest.SeedSpawn` (a `pending` row with a launch start) — never produced by calling another verb first. This makes subtests independent and order-invariant; a subtest failure cannot cascade into later subtests through shared state.
+
+**Seeder files.** `seeders.go` holds the spec and the registry;
+`seeders_verbs.go` the verbs that need no tmux session; `seeders_tmux.go`
+the verbs that reach the row's session (`send-keys`, `read-pane`, `kill`,
+`pause`), whose Recorder holds the row's own labelled session
+(`tmuxfix.NewRecorderForReadPane` / `NewRecorderForPause` /
+`SeedRowSession`), so each reaches the agent's pane by id. `read-pane`'s
+`Pane` check compares the result with the text the row's own pane
+captures.
 
 **Race and repeatability.** The smoke target must pass under:
 
@@ -6217,11 +6434,14 @@ parses reply text.
   fake-tmux and realtmux tests do). A test that seeds rows from a store
   labels them with that store's id (`apitest.ReadStoreID` / `StoreID()`),
   never with the catalogue constant.
-- **Name-based methods.** `HasSession`, `SendKeys` and `CapturePane`
-  keep their old behaviour (`Calls`,
-  `CallsOfKind`, `WithPaneOutput`, `WithHasSession`) until their last user
-  moves. They are never charged and run no hooks. `Reset` clears recorded
-  calls and scripts; tables, hooks and virtual time stay.
+- **Name-based method.** `HasSession` (for `resume`'s name pre-check) is
+  the only one left, with `Calls`, `CallsOfKind(CallHasSession)` and
+  `WithHasSession`; it is never charged and runs no hooks. The name-based
+  send and capture are gone: `read-pane`, `send-keys` and `pause` tests
+  configure the row's own labelled session in the table and read the
+  id-based calls (`SocketCallsOf`), with per-pane capture text from
+  `SetCapture`. `Reset` clears recorded calls and scripts; tables, hooks
+  and virtual time stay.
 
 **Must use:** in-process verb tests use the Recorder, never a hand-written
 `TmuxClient` fake.
@@ -6248,6 +6468,34 @@ clock.
 `Recorder.SeedRowSession` places a seeded row's own labelled session in
 the Recorder. See [apitest Seed* factory
 contract](#apitest-seed-factory-contract-reusable-test-fixtures).
+
+**Pane-verb constructors** (`seeders.go`). Both read the row from the
+store, seed its own labelled session through `SeedRowSession` (the row's
+recorded pane included) and return a `procfix.Checker` that answers every
+running server, the agent pid and every seeded pane pid alive; they share
+one core (`seedRow`) and one label choice, `RowLabel` (`RowLabelCurrent`,
+the default, gives Ours; `RowLabelOld` Leftover, the pane carrying
+`OtherToken`; `RowLabelForeign`; `RowLabelOtherStore` Gone;
+`RowLabelNone`, `RowLabelMalformed`, `RowLabelBorrowed`).
+
+- `NewRecorderForReadPane(t, dbPath, instanceID, paneText, opts...)`: the
+  row's pane captures `paneText`. Options: `WithReadPaneVirtualTime(clock,
+  timeouts)`, `WithReadPaneCreated(epoch)`, `WithReadPaneName(stored)`,
+  `WithReadPaneLabel(RowLabel)`, `WithReadPaneLeftover(name, text)` (an
+  extra leftover session, old label, one pane with `@ad_pane`
+  `OtherToken`; repeatable).
+- `NewRecorderForPause(t, dbPath, instanceID, opts...)`: the same without
+  pane text, so on a `waiting` row `pause` gets Ours and sends `/exit` and
+  Enter to the row's pane by id. Options: `WithPauseVirtualTime`,
+  `WithPauseCreated`, `WithPauseName`, `WithPauseLabel`,
+  `WithPauseLeftover(name)`. Nothing ends the row: the test ends it (an
+  after-call hook on `tmux.CallSendEnter` applying the agent's SessionEnd)
+  or the wait runs to its timeout.
+
+**Must use:** tests outside `pkg/api` seed a pane verb's row session
+through these constructors (or `SeedRowSession`), and subprocess tests
+through `ts-helper seed-row-session` or the fake's table helpers; never
+hand-built label strings.
 
 `tmuxfix` imports `internal/tmux`, `internal/config` and `internal/store`.
 
@@ -6307,7 +6555,8 @@ client bug fails loudly.
 
 It answers the Phase 1 call set: the lookup (`list-sessions -F` with `#{@ad_owner}` resolved by tmux's scope precedence, plus the three
 `show-options` scope reads), `list-panes -a`, `kill-pane` and
-`kill-session` by id, both `send-keys` forms, `capture-pane`, `new-session`
+`kill-session` by id, both `send-keys` forms by pane id (the literal
+text and the Enter), `capture-pane` by pane id, `new-session`
 with its `-P -F` reply and chained `set-option`s, and `set-option` by id.
 Commands run in order; the first failure ends the invocation, as in tmux.
 A name already held gets the catalogue's `duplicate session: <stored name>`
@@ -6373,13 +6622,14 @@ starts with `AGENT_DIRECTOR_`, which the production client strips.
 replay catalogue. Its only literal output is the capture stub, which is
 pane content, not a reply.
 
-**Legacy form.** Argv without a leading `-u` is what the name-based client
-methods send, and behaves as before: `new-session`, `send-keys`,
-`kill-session` (which no client method sends any more: `kill` uses the
-socket form by id) and `capture-pane` log their argv to `FAKE_TMUX_LOG` in the
-same format (one element per line, then `---`) and exit 0; `capture-pane`
-prints `FAKE_TMUX_PANE_OUTPUT` or the stub; `has-session` exits 1; anything
-else exits 0. The socket form logs every invocation.
+**Legacy form.** Argv without a leading `-u` is the name-based call set:
+`new-session` and `kill-session` log their argv to `FAKE_TMUX_LOG` in the
+same format (one element per line, then `---`) and exit 0 (`new-session`
+honours `FAKE_TMUX_FAIL_NEWSESSION_NAME`); `has-session` exits 1; anything
+else, a name-based `capture-pane` or `send-keys` included (no client method
+sends one), exits 0 with no output, unlogged. The socket form logs every
+invocation; its `capture-pane` prints the pane's table capture text, else
+`FAKE_TMUX_PANE_OUTPUT`, else the stub.
 
 **Build helper.** `faketmuxfix.Binary(t)` builds the fake once per test
 binary and returns the path of a file named `tmux`; `faketmuxfix.Dir(t)`
@@ -6508,6 +6758,20 @@ so it skips in the sandbox. That is the run's one skip.
   adopted by `@ad_pane` with `base-index` and `pane-base-index` 1; `$` and
   `\` names, a prefix neighbour, a non-ASCII name under a hostile locale and
   a socket at mode 000 (`ErrTmuxNotAvailable`).
+- `pane_verbs_names_test.go` and `pane_verbs_targets_test.go` (SR-3.7,
+  SR-7.2, SR-20.7; Appendix E.9 T2a): `read-pane`, `send-keys` and `pause`
+  through the production client, on the kill fixture. With the socket at
+  mode 000 each verb is `ErrTmuxNotAvailable` naming the socket, and
+  nothing changes. For the nine `$` and `\` names kill uses, beside the
+  labelled bystanders `$0` and `$1`, `read-pane` returns the row's own pane
+  and `send-keys` types into it, and the bystanders are unchanged. Sessions
+  named `$7` and `%9` are never reached: a row whose recorded pane id is
+  the never-issued `%9` is `ErrTmuxSessionConflict` (`DescPaneNotFound`), and
+  a row whose own session `$7` ended, with a raw `$7` now holding the name,
+  is the verb's gone error (`DescPaneGone`). With `base-index` and
+  `pane-base-index` 1 and a lost reply, all three verbs reach the agent's
+  pane by id. `send-keys` and `pause` write the adoption; `read-pane` writes
+  nothing.
 - `find_missing_test.go` (SR-3.8, SR-11.1, SR-11.3, SR-20.7): the
   production `find-missing` against real tmux, on the kill fixture. A dead
   agent whose session `remain-on-exit` keeps is marked `missing` with no
@@ -6655,7 +6919,9 @@ comment has the detail):
   `kill_names_test.go`): `newKillFix(t)` is the lookup fixture plus a temp
   HOME holding a fresh store (`DBPath`, `StoreID`). `f.liveRow(t,
   killRowSpec{...})` runs the production create (labelled by id when the
-  name needs it, as spawn does) and seeds the matching live row;
+  name needs it, as spawn does) and seeds the matching live row
+  (`killRowSpec.PaneID` records a given pane id in place of the reply's,
+  such as one the server never issued);
   `f.seedRow` seeds a row with no agent process recorded, and
   `f.assertRowUnchanged` checks every column still holds its seeded value.
   `f.open(t, wait, tmuxCommand)` opens the production client (`api.New`
@@ -6664,7 +6930,18 @@ comment has the detail):
   `""` is tmux on `PATH`). `f.kill(t, id, wait)` runs one `kill` through
   it and returns a `killCall` (`Res`, `Err`, `Took`) with
   `assertSuccess(t, sent)` and `assertRefused(t, name, descCase,
-  forbid...)`. `hupSurvivor()` is a pane command that ignores SIGHUP (a
+  forbid...)`. `assertRefused` calls the shared
+  `assertVerbError(t, verb, err, name, descCase, forbid...)`, which every
+  real-tmux verb test uses for a refusal: the error matches exactly one
+  catalogued name, `name`, and `apitest.AssertDescription` passes.
+  `dollarBackslashNames(t)` gives the catalogue's stored forms of the nine
+  `$` and `\` names, and `f.namedRow(t, n)` starts the labelled bystanders
+  `$0` and `$1`, then the live row named `n`, returning the row and the
+  bystanders' world. `f.baseIndexOneLostReply(t, state)` sets `base-index`
+  and `pane-base-index` 1 on a new server and makes a row in `state` with a
+  live session and no recorded pane. `f.assertAdopted(t, row, state)` checks
+  that the row kept `state` and records the agent's pane id, pid and start
+  time. `hupSurvivor()` is a pane command that ignores SIGHUP (a
   survivor); `endAtCleanup` ends such a process at cleanup; `assertProcs`,
   `rt.hasSession`, `rt.assertSession` and `rt.windowsOf` observe the
   result. `find-missing` (`find_missing_test.go`): `f.findMissing(t,
@@ -6674,6 +6951,27 @@ comment has the detail):
   for locale cases) with `assertListed(t, id, list)`;
   `f.assertStateNote(t, id, state, note)` checks the stored state and
   liveness note.
+- Pane observation (`id_targets_test.go`): `rt.capture(t, paneID)` is the
+  raw capture of one pane by id, without trailing empty rows.
+  `idtWorld(t, rt)` reads every pane of the bound server, keyed by pane id
+  (session id and name, pane pid, label and capture). `idtSame(t, what,
+  before, after, paneIDs...)` fails unless each listed pane is unchanged.
+  `idtSendAndSee(t, rt, cl, paneID)` types a fresh marker by pane id and
+  waits until the pane shows it; it is both a check and a barrier.
+  `idtIDShapedName(t, sigil)` gives the catalogue's `$N` or `%N` stored name.
+- Pane verbs (`pane_verbs_names_test.go`, `pane_verbs_targets_test.go`):
+  `paneVerbs` lists the three verbs as `apitest.PaneVerb`.
+  `f.paneVerb(t, verb, id, text)` runs one call through `f.open` and returns
+  a `paneCall` (`Pane`, `Err`). `send-keys` passes `allow_pending`. `pause`
+  runs with a cancelled context, so its wait ends at once, and that
+  `context.Canceled` (which means `/exit` and Enter went through) counts
+  as success. `paneGoneName(verb)` is the verb's gone error
+  (`ErrTmuxCaptureFailed` for `read-pane`, `ErrTmuxSendKeys` otherwise).
+  `paneMarker(t)` is a fresh text to type. `waitPaneShows(t, rt, paneID,
+  text)` polls the raw capture by pane id. `newIDShapedWorld(t, f)` builds
+  an `idShapedWorld`: raw `$7` and `%9` sessions, a barrier session, the
+  pane-not-found row and the gone row, with preconditions that neither id
+  exists.
 
 **Must use:** later real-tmux tests (the lookup scenarios, then the verb
 tests per SR-20.7) add their cases to `test/realtmux`. They reuse these helpers
@@ -6686,10 +6984,14 @@ assertions with the lookup fixture and uses the production reader
 identity comes from the fixture (`agent.Server`, `f.serverOf`). A
 `tmux.ProcIdentity{PID, Starttime}` view of such a recorded identity, for
 `f.judge`, is allowed.
-A real-tmux test of a verb that acts on a live row (`kill` and `find-missing` today; the
-finished-row opt-in and the pane verbs later) seeds its rows and runs the
-verb through the kill fixture (`liveRow`, `kill`, `findMissing` or a
-sibling built the same way on `open`), never through its own store or client setup.
+A real-tmux test of a verb that acts on a live row (`kill`, `find-missing`
+and the pane verbs today; the finished-row opt-in later) seeds its rows and
+runs the verb through the kill fixture (`liveRow`, `kill`, `findMissing`,
+`paneVerb` or a sibling built the same way on `open`), never through its own
+store or client setup. It checks refusals with `assertVerbError` and
+adoption with `assertAdopted`. It observes panes by pane id through
+`rt.capture`, `idtWorld` and `idtSame`, and uses `waitPaneShows` or
+`idtSendAndSee` as a barrier, never a sleep.
 New helpers go in a `harness_*_test.go` file other than `harness_test.go`,
 or in a named fixture file such as `lookup_helpers_test.go` for a
 feature's shared fixture.
@@ -6967,7 +7269,9 @@ live-row sequence in the short form only `kill`'s manifest description
 states, and the one-sentence pointer to it that ends the `find-missing` and
 `spawn` descriptions; `descriptions_find_missing.go` holds `find-missing`'s
 own description texts; `descriptions_held.go` holds the held-name cases
-(an error after "duplicate session") and spawn's held-name manifest texts.
+(an error after "duplicate session") and spawn's held-name manifest texts;
+`descriptions_pane.go` holds the pane verbs' (`read-pane`, `send-keys`,
+`pause`) cases.
 It holds, as code, the required phrases of each SR-1.4 error
 description case and the forms no agent-facing text may contain. The
 package doc comment (`doc.go`, "# Description helper") says the same.
@@ -7101,6 +7405,41 @@ package doc comment (`doc.go`, "# Description helper") says the same.
     Later single-row verbs reuse these cases (with `AfterKillSent` where
     they already acted) and add their own constructors in a file of their
     own, never phrases in a test.
+  - Pane verbs (`descriptions_pane.go`, SR-1.4, SR-7.2, SR-7.3). `PaneVerb`
+    (`PaneReadPane`, `PaneSendKeys`, `PanePause`) selects the verb's
+    "nothing was read" / "nothing was sent" sentence. Every pane case
+    forbids "no pane 0.0" and "base-index".
+    - `DescPaneNotFound(PaneNotFound{Verb, InstanceID, Name, LostReply})`:
+      "the agent's pane was not found" (with `LostReply`, also "the agent's
+      pane was not adopted" and "no pane carries this launch's pane
+      label"); also the lone leftover with no token pane, `Name` the
+      leftover's.
+    - `DescPaneLeftover(PaneLeftover{Verb, InstanceID, Sessions})`: a live
+      row's Leftover (built on kill's leftover blocks); `read-pane` also
+      requires "more than one leftover session exists" and needs two or
+      more sessions.
+    - `DescPaneGone(PaneGone{Verb, InstanceID, Name, FailedCall})`: the gone
+      error ("the row's session is not there"), with "tmux <call> failed"
+      after an action failure's follow-up.
+    - `DescSendKeysPendingNoLaunch(instanceID)` and
+      `DescSendKeysPendingLeftover(instanceID, sessions)`: `send-keys`' two
+      `pending`-row `ErrSpawnNotInteractive` refusals.
+    - `DescKeysTimeout(call, timeout)` (text or Enter call): a timed-out
+      keys action, "the keys may have been delivered" (and, for Enter, "the
+      text may be typed but not submitted"). `DescCase.AfterEnterFailed()`
+      and `DescCase.AfterTextFailed()` turn a base case (`DescPaneGone`,
+      `DescUnrecognisedReply`, `DescDifferentServer`, `DescTmuxNotRun`,
+      `DescSocketPermission`) into the refusal after a non-timeout Enter or
+      text failure.
+    - `DescPaneManifest(verb, errorNames)`: the tmux error classes a pane
+      verb's manifest Description states, from one name-to-class map shared
+      with `DescKillManifest`. `DescAllowPending(site)`: `send-keys`'
+      SR-18.14 `allow_pending` text at a site (`AllowPendingFlag`,
+      `AllowPendingRefusals`).
+
+    The pane verbs' Can't tell, timeout and follow-up refusals use the
+    lookup cases unchanged ("nothing was done"); only the pane refusals
+    carry the verb's sentence.
   - Resume (`descriptions_resume.go`):
     - `DescResumeLaunchInProgress(LaunchInProgress{InstanceID, LaunchStart})`:
       `ErrSpawnNotResumable` for a `pending` row. A zero `LaunchStart`
@@ -7387,10 +7726,15 @@ check `.claude.json`. Do not write a new `.claude.json` reader or seeder.
 fixture and the per-verb tables are package `api_test` files in `pkg/api`;
 each file's doc comments carry the detail.
 
-- **Kill fixture** (`kill_fixture_test.go`, no tests). `newKillEnv(t)`
-  returns a `*killEnv`: a real store (`e.st`) behind the `api.KillStore`
-  wrapper `e.store` (`failAdopt(err)` / `refuseAdopt(result)` inject an
-  adoption-write failure without writing), a `tmuxfix.Recorder` on virtual
+- **Kill fixture** (`kill_fixture_test.go`, with its row factory in
+  `kill_fixture_rows_test.go`; no tests). `newKillEnv(t)`
+  returns a `*killEnv`: a real store (`e.st`, registered with `storefix`)
+  behind the wrapper `e.store`, which is also the pane verbs'
+  `api.SendKeysStore` and `api.PauseStore` (`failAdopt(err)` /
+  `refuseAdopt(result)` inject an adoption-write failure without writing;
+  `adoptTries` counts adoption attempts; `failPermissionRequests` and
+  `failStateReads` fail the relay guard's read and pause's wait polls), a
+  `tmuxfix.Recorder` on virtual
   time (`e.rec`, `e.clock`), a `procfix.Checker` (`e.pc`), the `[tmux]`
   defaults (`e.cfg`), `kill`'s sleep (`e.sleep`, the clock's `Advance`) and a
   per-test `TMUX_TMPDIR` (so no `t.Parallel`). `e.kill(id)` calls the
@@ -7398,7 +7742,8 @@ each file's doc comments carry the detail.
   the same store with a config written by `apitest.WriteTmuxConfig`.
   `e.seedRow(t, killRowSpec{...})` seeds a live row with a full launch
   identity, its own labelled session and its agent process (options for a
-  lost reply, no session, teammate split panes, the agent's process state);
+  lost reply, no session, teammate split panes, the agent's process state,
+  `RelayOn`, `SessionID`);
   `seedSession`, `seedTeamSession`, `seedViewer` (a session sharing the
   agent's pane, `SeedPane.Shared`) and `seedBystander` (an unrelated session,
   so the server outlives the row's session; or `serverExitsWhenEmpty`) add
@@ -7408,21 +7753,80 @@ each file's doc comments carry the detail.
   trail records; `assertKillCalls` / `assertKillsByID` check the recorded
   tmux calls. `export_test.go` gives `api.SetSleepForTest` and
   `api.KillPollInterval`.
+- **Pane-verb fixture** (`pane_verb_fixture_test.go`, no tests; SR-20.2),
+  the kill fixture's extension for `read-pane` and `send-keys`:
+  - invocations: `e.readPane` / `e.readPaneClient` / `e.readPaneRun`,
+    `e.sendKeys` / `e.sendKeysAt(window, now, p)` / `e.sendKeysClient` /
+    `e.sendKeysRun`; the generic `verbRun[R]`, `runVerb`, `assertSameRun`
+    (a repeat makes the same calls and error) and `errText`;
+  - seeds: `e.seedOurs` (hand-laid panes), `e.seedLeftover(t, r, token)`,
+    `r.pane()`, `newToken()`, `labelledPane` (the one pane carrying a
+    token), and per-pane capture text (`e.setPaneTexts(socket)`,
+    `paneText(socket, paneID)`) to tell which pane was read;
+  - launch-kind seeds: `pendingKind` (`pendingFresh`, `pendingResumed`;
+    `pendingKinds()`) × `pendingShape` (`pendingOurs`, `pendingLostReply`,
+    `pendingLeftover`) through `e.pendingSpec` / `e.seedPending`;
+  - between the row read and the send: `e.sessionStartAfter(t, call, r,
+    sessionID)` applies the agent's SessionStart through
+    `apitest.ApplyAgentHook` once, after the first call of a kind;
+    `e.rowWriteAfter(t, call, r)` makes a non-hook versioned write (the
+    lost-reply variant); both fail the test if they did not apply or never
+    ran;
+  - call lists and assertions: `paneReadCalls`, `paneSendCalls`,
+    `paneTextCalls`, `withFollowUp(calls)`, `paneWriteCalls`;
+    `e.assertPaneCalls` (kinds in order, every action by pane id, no
+    name-based call), `e.assertCaptured`, `e.assertDelivered` (text after
+    CR stripping, then Enter), `e.assertTextSent`, `e.assertNothingSent`,
+    `e.assertNoTmuxCall`, `e.assertNoCalls(kinds...)`;
+  - "changes nothing" readers: `e.assertRowUnchanged(t, id, e.columns(t,
+    id))` (every column, `row_version` and the snapshot included),
+    `trailMark` / `assertNoTrailSince` (no trail record for the id), and
+    `e.adoption(t, id)` (`adoptionColumns`: unchanged, written once, or
+    not applied).
+- **Pause fixture** (`pause_fixture_test.go`, no tests): `e.pause` /
+  `e.pauseWithin(ctx, timeoutSeconds, p)` / `e.pauseRun` / `e.pauseClient`,
+  `pauseParams`, `exitText`; `e.endAfterEnter(t, r)` (a row-ending
+  after-call hook: the agent's SessionEnd through `apitest.ApplyAgentHook`
+  when the first Enter returns); `e.assertExitDelivered` /
+  `e.assertExitTyped`; `pauseDisagrees(t, id)`. The wait is driven through
+  the test knob seam: `fastPausePolls(t)` (`api.SetPauseTestKnobs` with a
+  1 ms poll, restored at cleanup through `api.PauseTestKnobs`) and
+  `pauseTimeoutSeconds` (1 s): a row nothing ends times out after about
+  1 s. `e.store` is the failing `PauseStore` wrapper (`failStateReads`,
+  `failAdopt`, `refuseAdopt`).
+- **Disagree records** (`disagree_record_test.go`, no tests):
+  `assertDisagreeRecord(t, rec, r, verb, source, disagreeWant)` (the one
+  check of an `ad.provenance.disagree` record, used by `kill`, `send-keys`
+  and `pause`), `adoptedRecords(t, verb, id)`, and the 14-row disagree
+  table the keys verbs share (`keysDisagreeCases()`,
+  `e.seedKeysDisagreeCase`, `assertKeysDisagrees`).
 - **One name per error** (`one_name_per_error_test.go`): `assertOneName(t,
   err, want)` checks SR-1.5 on a returned error (exactly one catalogued
   sentinel, or none for `ErrInternal`), and `oneNameRows()` is the table of
   every tmux-caused error (and reachable `ErrInternal` case) the verbs
   return, one `oneName<Verb>Rows()` list per verb (`oneNameKillRows()` for
-  `kill`).
+  `kill`; the pane verbs' in `one_name_pane_verbs_test.go`).
 - **Call-site table** (`lookup_calltable_test.go`, SR-20.5): every lookup
   outcome (the verdicts and their variants, the server cases, and the
   action-failure column) against every single-row verb, built on the kill
-  fixture. A verb is a `callTableVerb` adapter with one cell per column,
-  listed in `callTableVerbs()`.
+  fixture. A verb is a `callTableVerb` adapter with one cell per column
+  (`callTableCell`, with `na` for a column that does not apply, `held` and
+  `fm` for the spawn and find-missing variants; `run` replaces the
+  seeded-row run for a verb that builds its own world), listed in
+  `callTableVerbs()`. Each verb's adapter is in a sibling file
+  (`lookup_calltable_<verb>_test.go`; `send-keys` and `pause` add
+  `pending`-row and finished-row adapters).
 - **Security** (`security_test.go`, SR-15): beside the row a verb acts on,
   a session with no id and another row's session carry a planted secret; the
-  secret and the other row's id must appear in none of the verb's result,
-  error description, client log or trail. A per-verb table (`securityVerb`).
+  secret, both rows' launch tokens and the other row's id must appear in
+  none of the verb's result, error description, client log or trail. A
+  per-verb table (`securityVerb`, its cases `securityCase` with `server`,
+  `event`, `fields` and `others`; `record` takes the call's `texts`), one
+  file per later verb (`security_<verb>_test.go`). A verb with no call event
+  (`read-pane`, `pause`) sets `event` `""`: the harness then requires no
+  record for the subject but the `ad.provenance.disagree` records a case
+  expects (`disagree`) and the events listed in `others` (the agent's own
+  hooks, such as `pause`'s SessionEnd).
 - **Go doc "Errors:" lists** (`pkg/api/manifest/godoc_errors_test.go`,
   package `manifest_test`): `assertGoDocErrorsMatchManifest(t, method,
   verb)` checks that a `Client` method's "Errors:" list names exactly its
@@ -7455,12 +7859,25 @@ each file's doc comments carry the detail.
 
   Each of its test names contains `README`, so `-run README` runs them.
 
-**Must use:** a later single-row verb (`read-pane`, `send-keys`, `pause`,
-`resume`, reuse, the finished-row opt-in) extends these rather than writing
-its own: its tests build on the kill fixture's pattern and world helpers,
-every error it returns gets a row through `assertOneName`, it appends its
-adapter to `callTableVerbs()`, its SR-15 case to the security table, and its
-"Errors:" check goes through `assertGoDocErrorsMatchManifest`.
+**Must use:** a later single-row verb (`resume`, reuse, `spawn`, the
+sweeps, the finished-row opt-in) extends these rather than writing its own
+row seeding, Recorder tables or call assertions: its tests build on the
+kill fixture's pattern and world helpers and the pane-verb fixture's
+invocation, seed and assertion helpers, every error it returns gets a row
+through `assertOneName`, it appends its adapter to `callTableVerbs()`, its
+SR-15 case to the security table, and its "Errors:" check goes through
+`assertGoDocErrorsMatchManifest`.
+
+**Pane-verb test patterns.** Every recorded action must target a pane id
+(`assertPaneCalls`). A state change between the row read and the send is
+made with `sessionStartAfter` / `rowWriteAfter` (or `endAfterEnter` for
+pause's wait), never with sleeps. Pause's wait runs through the test knob
+seam (`fastPausePolls`, the 1 s `pauseTimeoutSeconds`). Store-write and
+read failures use the failing-store wrapper (`failAdopt`, `refuseAdopt`,
+`failStateReads`, `failPermissionRequests`), and trail-write failures the
+re-exec pattern of `kill_trail_failopen_test.go`; no source seam is added
+for either. Tests seed the row's own labelled session through the fixture
+or the Recorder constructors, never hand-built label strings.
 
 **Must use:** a later check of a README or doc section (a heading exists,
 a pointer names it, a section's text says something), such as Epic 19's
@@ -7471,8 +7888,8 @@ new pattern in `pointersIn`.
 
 ### ts-helper wrapper CLI
 
-`test/smoke/ts-helper/` is a small Go binary compiled exclusively with the
-`helper` build tag (`go build -tags helper`).  It bridges Go fixture-seed
+`test/smoke/ts-helper/` is a small Go binary (a normal Go program, no
+build tags).  It bridges Go fixture-seed
 helpers into the TypeScript smoke test suite so that Bun-side tests can shell
 out to it for store / template setup without reimplementing the seeding logic
 in TypeScript.
@@ -7484,15 +7901,11 @@ designed for Go-internal use.  Bun's test runner cannot call Go functions
 in-process.  A thin CLI wrapper is the minimal seam that avoids duplicating
 store-schema knowledge and state-machine details in a second language.
 
-**Build tag isolation.**
-
-`pkg/api/export_for_helper.go` carries `//go:build helper` and lives in
-package `api`.  It exposes `HelperSeedSpawn`, `HelperSeedParentChild`,
-`HelperSeedPermissionRequest`, `HelperSeedTemplate`, and `HelperInitStore` —
-functions that open the SQLite store directly (via `internal/store`) and write
-fixture rows without going through a `pkg/api.Client`.  Because the file is
-excluded from all non-helper builds, the production `agent-director` binary and
-`go test ./...` (no tag) are completely unaffected.
+**Seeding sources.** The CLI seeds stores through `pkg/api/apitest`
+(`SeedSpawn` and its options) and writes fake-tmux tables through
+`internal/testsupport/faketmuxfix` with label values from `tmuxfix`'s
+builders; it writes no row or label by hand. It is not linked into the
+production binary.
 
 **Subcommand contract.**
 
@@ -7516,7 +7929,19 @@ emptiness on success means a non-empty stderr is an unambiguous failure signal.
 | `seed-permission-request` | `--store`, `--spawn-id`, `--tool` | `{"request_id": <number>}` |
 | `seed-template` | `--templates-dir`, `--name`, `--body` | `{"path": "..."}` |
 | `seed-empty-store` | `--store` | `{"path": "..."}` |
+| `seed-row-session` | `--store`, `--id`, `--capture` (the row's pane's capture text; empty uses the fake's default), `--tables-dir` (default `$FAKE_TMUX_TABLES`, else the table beside the socket) | `{"socket": "...", "session_id": "...", "pane_id": "...", "table": "..."}` |
 | `json-schema` | — | machine-readable result-shape map for all subcommands |
+
+`seed-row-session` (`row_session.go`) writes a seeded row's own labelled
+session and pane into `test/fake-tmux`'s table for the row's recorded
+socket, so a CLI `read-pane` or `send-keys` on the row finds it Ours and
+reaches its pane by id. The token, socket, name and pane come from the
+store (`apitest.ReadSpawnColumns`, `apitest.ReadStoreID`), the label values
+from `tmuxfix.LabelValue` / `PaneLabelValue`; a row with no recorded pane
+gets `apitest.TestPaneID`, found by its `@ad_pane`. It fails, writing
+nothing, when the row records no launch token or socket or its pane is
+already in the table. **Must use:** a TypeScript test of a pane verb seeds
+the row's session with it, never by writing a table or a label itself.
 
 **Must use:** a TypeScript test that needs a row from before the release
 (no launch token, socket or identity) seeds it with `seed-spawn
@@ -7526,10 +7951,16 @@ combined with `--socket`: that call exits 1 with "--socket and
 
 **Makefile target.**
 
-`make ts-helper` builds `bin/ts-helper`.  The target lists every
-`.go` source under `test/smoke/ts-helper/` and
-`pkg/api/export_for_helper.go` as prerequisites so Make's mtime tracking
-makes subsequent runs no-ops when nothing has changed.
+`make ts-helper` builds `bin/ts-helper`. Its prerequisites
+(`TS_HELPER_SRCS`) are every non-test `.go` source of the directories in
+`TS_HELPER_SRC_DIRS` (every package of this module the binary links, `go
+list -deps ./test/smoke/ts-helper`: the CLI itself, `pkg/api/apitest`,
+`faketmuxfix`, `tmuxfix` and the other `internal/testsupport` packages,
+`internal/spawn`, `internal/hook`, `internal/tmux`, `internal/config`,
+`internal/store`, `internal/trail`) plus `go.mod` and `go.sum`, so Make
+rebuilds when a seeder changes and skips the build otherwise. A package
+that gains a module import extends the list, or the binary can go stale
+(b.93m).
 
 **Bun integration — `TS_HELPER_PATH`.**
 
@@ -7640,12 +8071,15 @@ subprocess tmux double](#testfake-tmux-the-subprocess-tmux-double-reusable-test-
 `spawn` and `resume` create their sessions with the socket form
 (`-u -S <socket>`: the labelled create, and `spawn`'s label scan), which
 the fake answers from its per-socket table; so does `kill` (its lookup,
-pane listing and kills by id). The name-based client methods
-(`HasSession`, `SendKeys`, `CapturePane`, used by
-`resume`'s name pre-check, `pause`, `send-keys` and `read-pane`)
-still send the legacy argv, which the fake accepts and answers with exit
-0 (`has-session` exits 1), with no live tmux session needed.  For `capture-pane` it writes a fixed stub string to stdout so
-`read-pane` tests can assert the return value is non-empty.  The binary is built
+pane listing and kills by id), and so do `read-pane`, `send-keys` and
+`pause` (lookup, pane listing, then capture or text and Enter by pane id).
+A `read-pane` or `send-keys` test seeds the row's own labelled session
+into the table first (`runHelper("seed-row-session", ...)`, with
+`capture` for the text `read-pane` must return); without it the lookup is
+Gone. The `pause` smoke cases cover only a finished row and a refused
+state, which make no tmux call. The only name-based method left,
+`HasSession` (`resume`'s name pre-check), sends the legacy argv, which the
+fake answers with exit 1.  The binary is built
 by `make fake-tmux` (which `test/setup.ts` calls before any test runs).  Both
 the Makefile recipe and `setup.ts` explicitly `chmod 755` the output: without the
 execute bit, `exec.LookPath` silently skips the stub and falls through to the

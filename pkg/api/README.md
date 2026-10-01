@@ -200,7 +200,7 @@ encodes as `[]` when empty. Most-likely sentinel error:
 
 ### SendKeys
 
-Send text into a tracked Spawn's tmux pane. CR bytes (`\r`, `0x0D`) are
+Send text into the agent's own pane. CR bytes (`\r`, `0x0D`) are
 stripped automatically before delivery to prevent premature buffer
 submission; LF bytes (`\n`, `0x0A`) are preserved as composed newlines
 in Claude's input box. A single Enter is always appended to submit the
@@ -224,32 +224,47 @@ if err != nil {
 ```
 
 Returns `SendKeysResult` (empty struct, reserved for future fields).
-Most-likely sentinel errors: `ErrSpawnNotFound`,
-`ErrSpawnNotInteractive` (state is not `waiting/working/ask_user/
-check_permission`), `ErrSendKeysWhileRelayed` (relay_mode=on and state
-is `check_permission` **and** at least one of the Spawn's permission
-requests is still within its relay window — or the Spawn has zero request
-rows; the relay still owns the answer). This guard is **time-bounded**:
-once every request row's window has elapsed the delivering hook is dead
-and the guard releases, letting the operator recover the wedged Spawn
-through this sanctioned, audited surface. See `(*Client).SendKeys` godoc.
+Most-likely sentinel errors:
 
-#### `AllowPending` — pre-SessionStart opt-in
+- `ErrSpawnNotFound`: no row has this id.
+- `ErrSpawnNotInteractive`: the state is not `waiting/working/ask_user/
+  check_permission` (a `pending` row needs `AllowPending`, below); nothing
+  was sent.
+- `ErrSendKeysWhileRelayed`: relay_mode=on and state is `check_permission`
+  **and** at least one of the row's permission requests is still within its
+  relay window — or the row has zero request rows; the relay still owns the
+  answer. This guard is **time-bounded**: once every request row's window
+  has elapsed the delivering hook is dead and the guard releases, letting
+  the caller recover the wedged row through this sanctioned, audited
+  surface.
+- `ErrTmuxSendKeys`: the row's session or pane is not there.
+- `ErrTmuxSessionConflict`: the agent's pane was not found, a session an
+  earlier launch left behind is there on a live row, or tmux holds
+  conflicting labels; nothing was sent.
+- `ErrTmuxUnresponsive`: tmux did not answer usably; after a timed-out
+  send the keys may have been delivered, and after a failed Enter the
+  text may be typed but not submitted.
+- `ErrTmuxNotAvailable`: tmux could not be run, its socket is not
+  accessible to this user, or this is not the tmux server the agent was
+  launched on.
 
-By default `SendKeys` rejects a `pending` Spawn with
-`ErrSpawnNotInteractive`. Set `AllowPending: true` to bypass that check
-and send text directly into the tmux pane while the Spawn is still in
-`pending` state.
+See `(*Client).SendKeys` godoc.
 
-**Use case:** Claude Code renders some interactive prompts *before* its
-`SessionStart` hook fires — for example the
-`--dangerously-load-development-channels` safety warning. The Spawn stays
-`pending` until the user (or orchestrator) dismisses the prompt, so the
-hook never fires and the state never advances. `AllowPending: true` lets
-a caller detect and dismiss such prompts without deadlocking.
+#### `AllowPending` — reaching a `pending` launch
 
-`ended` and `missing` Spawns are still rejected regardless of
-`AllowPending` — there is no pane to write to.
+By default `SendKeys` rejects a `pending` row with
+`ErrSpawnNotInteractive`. `AllowPending: true` also allows a `pending`
+row: a launch (spawn, reuse or resume) whose agent has not reported in
+yet, for example to dismiss a prompt the agent shows before it reports
+in. Keys are delivered only to a session started by the row's current
+launch. `ended` and `missing` rows are still rejected, with no tmux call.
+
+A `pending` row is refused with `ErrSpawnNotInteractive` and nothing sent
+when its launch start or launch token is not recorded (before any tmux
+call), or when the only session found is one an earlier launch left
+behind (not this launch's session). The keys reach the agent's pane, but
+the caller cannot be sure the prompt it saw is still showing when they
+arrive.
 
 #### Pure `SendKeys` function
 
@@ -258,13 +273,17 @@ that takes the relay window and the clock as explicit inputs so the
 guard-release verdict is deterministic and testable:
 
 ```go
-func SendKeys(s SendKeysStore, tmux SendKeysTmux, effectiveWindow time.Duration, now time.Time, params SendKeysParams) (SendKeysResult, error)
+func SendKeys(s SendKeysStore, t SendKeysTmux, pc ProcChecker, effectiveWindow time.Duration, now time.Time, params SendKeysParams) (SendKeysResult, error)
 ```
 
-The `Client` method resolves `effectiveWindow` via
+`SendKeysStore` is the row read, the permission-request read, the
+conditional adoption write and the store id; `SendKeysTmux` is the lookup,
+the pane listing and the send by pane id; `ProcChecker` checks the agent
+process. The `Client` method passes its store, tmux client and process
+checker, resolves `effectiveWindow` via
 `cfg.Relay.EffectiveTimeoutSeconds()` (the single source for the
-non-positive → default fallback) and injects `time.Now()`, then records the
-guard evaluation on the `ad.send_keys.called` trail event. Most callers use
+non-positive → default fallback) and passes its own clock as `now`, then
+records the call on the `ad.send_keys.called` trail event. Most callers use
 the `Client` method; the pure function is for tests and callers that need to
 control the window and clock.
 
@@ -283,7 +302,7 @@ if err != nil {
 
 ### ReadPane
 
-Capture the last N lines of a tracked Spawn's tmux pane. Default 25 lines;
+Capture the last N lines of the agent's own pane. Default 25 lines;
 no upper cap. ANSI escape codes are stripped by default (pass `ANSI: true`
 to get raw bytes).
 
@@ -294,14 +313,26 @@ agent-director read-pane \
 ```
 
 Call `c.ReadPane(api.ReadPaneParams{ClaudeInstanceID: id, NLines: 50})`.
-Returns `ReadPaneResult` (`.Pane` string). Most-likely sentinel errors:
-`ErrSpawnNotFound`, `ErrTmuxCaptureFailed`. See `(*Client).ReadPane` godoc.
+Returns `ReadPaneResult` (`.Pane` string). `ReadPane` reads only this
+agent's pane (or, with no session of the current launch, the pane of the
+one session an earlier launch of this row left behind) and changes
+nothing. Most-likely sentinel errors:
+
+- `ErrSpawnNotFound`: no row has this id.
+- `ErrTmuxCaptureFailed`: no session of this agent is there.
+- `ErrTmuxSessionConflict`: the agent's pane was not found, more than one
+  session an earlier launch left behind is there, or tmux holds
+  conflicting labels.
+- `ErrTmuxUnresponsive`, `ErrTmuxNotAvailable`: no information about the
+  pane; nothing was read.
+
+See `(*Client).ReadPane` godoc.
 
 #### `AllowPending` — surface symmetry with `send-keys`
 
 `ReadPane` has **no state guard** — it can read the pane of a `pending`,
-`ended`, or `missing` Spawn just as easily as a live one (provided tmux still
-holds the session). Passing `AllowPending: true` is accepted but has no
+`ended`, or `missing` row just as easily as a live one (provided tmux still
+holds the agent's session). Passing `AllowPending: true` is accepted but has no
 behavioral effect. The flag exists only so callers that pair `readPane` +
 `sendKeys` with `allow_pending: true` can set the same option on both calls
 without special-casing.
@@ -425,7 +456,7 @@ Common sentinels across verbs:
 | `ErrClientClosed` | Called after `Close()` |
 | `ErrStoreNotInitialized` | Store file absent and `CreateIfMissing` is false |
 | `ErrSchemaMismatch` | DB schema is newer than the binary, or the store has no valid store id — install the matching binary for a newer store; restore the pre-install copy of `state.db` for a store with no valid id. Never delete `state.db` |
-| `ErrSpawnNotInteractive` | State is not a live conversational state |
+| `ErrSpawnNotInteractive` | State is not a live conversational state; with `AllowPending`, a `pending` row is refused when its launch start or token is not recorded or only a session of an earlier launch is found |
 | `ErrSendKeysWhileRelayed` | Relay path still owns the `check_permission` answer — refused while any request window is live; releases once every window has elapsed |
 | `ErrListInvalidLabel` | Label filter not in `key=value` form |
 

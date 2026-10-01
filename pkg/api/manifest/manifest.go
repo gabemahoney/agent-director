@@ -117,7 +117,7 @@ const killDescription = "End the agent of a live row's current launch (pending i
 	"kill never changes the row's state: find-missing marks the row once its agent process is gone. kill never signals a process itself; success means the agent process exited, not that every process it started did. " +
 	"On a pending row kill aborts only the current launch, and the row stays pending until find-missing marks it; a kill made before the launch created its session returns kill_sent false and does not stop the launch. kill never ends a session that an earlier launch left behind. " +
 	"Success is judged per call: kill succeeds when the agent process and every other process it found in the panes of the agent's session are gone. If ErrTmuxKillFailed named another process that outlived the kill (its pid is in the error), that process is not the agent and later calls do not track it: a retried kill checks only the agent process, so once the agent is gone it succeeds with kill_sent false whether or not that process still runs. A retry's success means only that the agent is gone; the named process needs a human (see \"Operator actions\" in the agent-director README). If the row finishes while kill waits and the agent outlives the wait, kill returns ErrTmuxKillFailed, and a retried kill is a finished-row no-op. " +
-	"Errors and what the caller does (for kill, GONE is success): ErrTmuxKillFailed (UNAVAILABLE): a kill was sent and the agent process, or another process of the session's panes, still ran after the kill exit wait, or the process cannot be checked and its labelled session is still there, or no session or pane of this launch was found while the agent process runs; retry later. ErrTmuxUnresponsive (UNAVAILABLE): tmux did not answer usably, before or after a kill was sent; retry later with backoff. ErrTmuxSessionConflict (CONFLICT, permanent until a human looks): the session found is not this launch's session, or tmux holds conflicting labels; no kill was sent, and a human must look (see \"Operator actions\" in the agent-director README). ErrTmuxNotAvailable (ENVIRONMENT): tmux could not be run, its socket is not accessible to this user, or this is not the tmux server the agent was launched on; an environment problem for an operator to fix. A repeated kill right after the last session on its tmux server ends can get ErrTmuxUnresponsive or ErrTmuxNotAvailable while the server exits; the caller waits and checks again. ErrSpawnNotFound: no row has this id. None of these errors means that the agent is dead. Never delete a row after a kill that did not succeed. " +
+	"Errors and what the caller does (for kill, GONE is success): ErrTmuxKillFailed (UNAVAILABLE): a kill was sent and the agent process, or another process of the session's panes, still ran after the kill exit wait, or the process cannot be checked and its labelled session is still there, or no session or pane of this launch was found while the agent process runs; retry later. ErrTmuxUnresponsive (UNAVAILABLE): tmux did not answer usably, before or after a kill was sent; retry later with backoff. ErrTmuxSessionConflict (CONFLICT, permanent until a human looks): the session found is not this launch's session, or tmux holds conflicting labels; no kill was sent (see \"Operator actions\" in the agent-director README). ErrTmuxNotAvailable (ENVIRONMENT): tmux could not be run, its socket is not accessible to this user, or this is not the tmux server the agent was launched on; an environment problem for an operator to fix. A repeated kill right after the last session on its tmux server ends can get ErrTmuxUnresponsive or ErrTmuxNotAvailable while the server exits; the caller waits and checks again. ErrSpawnNotFound: no row has this id. None of these errors means that the agent is dead. Never delete a row after a kill that did not succeed. " +
 	"kill must run as the same user and in the same tmux environment as the agents. Two consequences: kill's success on a finished row is not verification that the agent exited; and on the wrong tmux server, a row wrongly marked missing, kill's no-op success and a reuse together start a second agent for the same id. " +
 	"A live row whose recorded tmux session name cannot be used (it is empty, contains a control character, or contains a character tmux stores differently) gets ErrInternal with no tmux call; removing the row is a human's decision (see \"Operator actions\" in the agent-director README). " +
 	liveRowSequence
@@ -127,7 +127,7 @@ const killDescription = "End the agent of a live row's current launch (pending i
 var Verbs = []VerbDef{
 	{
 		Name:        "help",
-		Description: "Print the manifest-derived list of verbs as JSON; intended for SessionStart / SessionEnd reason=compact hooks.",
+		Description: "Print the verb list as JSON; intended for SessionStart and SessionEnd reason=compact hooks.",
 		Callable:    false,
 		HandleFree:  false,
 		Params:      []ParamDef{},
@@ -302,7 +302,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "status",
-		Description: "Return the current state of a tracked Spawn (pending/waiting/working/ask_user/check_permission/ended/missing). pending means a launch (spawn, reuse or resume) is in progress and the agent has not reported in yet (Claude Code's SessionStart); it may be loading or waiting at a startup prompt. A resumed pending row keeps its session id and history; a caller tells it from a fresh one by its non-empty claude_session_id (shown by get).",
+		Description: "Return a row's current state (pending/waiting/working/ask_user/check_permission/ended/missing). pending means a launch (spawn, reuse or resume) is in progress and the agent has not reported in yet (Claude Code's SessionStart); it may be loading or waiting at a startup prompt. A resumed pending row keeps its session id and history; a caller tells it from a fresh one by its non-empty claude_session_id (shown by get).",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -340,7 +340,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "get",
-		Description: "Return the full DB row for a tracked Spawn (id, parent, state, cwd, session name, tmux socket, args, relay mode, session_id, labels, timestamps).",
+		Description: "Return a tracked row in full (id, parent, state, cwd, session name, tmux socket, args, relay mode, session_id, labels, timestamps).",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -382,7 +382,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "send-keys",
-		Description: "Send text into a tracked Spawn's tmux pane. `\\r` bytes are stripped (prevent premature submission); `\\n` bytes are preserved (composed-but-unsubmitted newlines in Claude's input box); a single Enter is always appended to submit the composed buffer.",
+		Description: "Send text into the agent's own pane: `\\r` is stripped (no premature submit), `\\n` kept (newline in the input box), and one Enter always appended to submit. tmux errors: ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE; after a timeout the keys may have been delivered), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT).",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -407,7 +407,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "allow_pending",
 				Type:          "bool",
-				Description:   "When true, also permit send-keys on a pending Spawn (pre-SessionStart use case). ended/missing Spawns are still rejected even with this flag set.",
+				Description:   "When true, also allows a pending row: a launch (spawn, reuse or resume) whose agent has not reported in yet. Keys are delivered only to a session started by the row's current launch. ended and missing rows are still rejected.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
@@ -427,7 +427,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "read-pane",
-		Description: "Capture the last N lines of a tracked Spawn's tmux pane. Default 25 lines, no upper cap. Default ANSI handling strips escape codes but preserves unicode TUI glyphs (❯, ⎿, 🐝). `ansi=true` returns raw bytes.",
+		Description: "Capture the last N lines of the agent's own pane (default 25, no upper cap). By default ANSI escape codes are stripped and unicode TUI glyphs kept; `ansi=true` returns raw bytes. tmux errors: ErrTmuxCaptureFailed (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT).",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -522,7 +522,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "decide",
-		Description: "Orchestrator's allow/deny verdict on an open PermissionRequest. Deliver-or-refuse: a single-statement UPDATE atomically writes the verdict only when the row is still open and deliverable (`decision IS NULL AND request_token = ? AND created_at > cutoff`), making the write race-free first-call-wins; an open request whose relay window has already elapsed is refused with ErrRelayFallenBack (answer at the pane) rather than recording a verdict into a void. Only callable on Spawns with relay_mode=on.",
+		Description: "Caller's allow/deny verdict on an open PermissionRequest. Deliver-or-refuse: one atomic write records the verdict only while the request is still open and deliverable, so the first call wins; an open request whose relay window has elapsed is refused with ErrRelayFallenBack (answer at the pane) and no verdict is recorded. Only for Spawns with relay_mode=on.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -577,7 +577,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "get-permission",
-		Description: "Fetch a single permission_requests row by request_token. Token-only lookup (SR-3.5: UUIDv4 is globally selective); no claude_instance_id required. Nullable columns (decision, decision_reason, decided_at) surface as JSON null while the row is open.",
+		Description: "Fetch one permission_requests row by request_token alone (no claude_instance_id). Nullable columns (decision, decision_reason, decided_at) are JSON null while the row is open.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -607,7 +607,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "resume",
-		Description: "Bring a finished (ended/missing) Spawn back to life via `claude --resume`. " + missingNotProofShort + " Same claude_instance_id, fresh tmux session, same JSONL transcript. Before its launch, resume runs the same best-effort pre-trust as spawn for the row's working directory, unless the spawn that began the row's life turned it off with no-pre-trust; a pre-trust failure never fails the resume. Returns the claude_instance_id and pre_trust (ok, skipped or failed). Before it creates the session, resume moves the row to pending, keeping its session id and history, and writes parent_id, re-derived from the caller's AGENT_DIRECTOR_INSTANCE_ID env var on every resume. The row stays pending until the agent reports in (Claude Code's SessionStart), then becomes waiting. If the launch fails other than by timing out (ErrTmuxNotAvailable is ENVIRONMENT and ErrTmuxSessionCreate a LAUNCH FAILURE), resume restores the row to its prior ended or missing state; if the restore cannot be applied, the error says so. The session-creating call is bounded by the create timeout. If it times out, resume returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may have been created and the row stays pending; do not retry until get shows the row ended or missing, since a retried resume of the pending row is refused and changes nothing. A pending row (a launch in progress, including a resumed one) is refused with ErrSpawnNotResumable and nothing is written. A row whose instance id contains a control character is refused with ErrInternal before any tmux call or write, because its session could never be labelled. If the launch cannot be recorded in the store, resume returns ErrInternal and launches nothing.",
+		Description: "Relaunch a finished (ended/missing) row via `claude --resume`. " + missingNotProofShort + " Same claude_instance_id, fresh tmux session, same JSONL transcript. Before its launch, resume runs the same best-effort pre-trust as spawn for the row's working directory, unless the spawn that began the row's life turned it off with no-pre-trust; a pre-trust failure never fails the resume. Returns the claude_instance_id and pre_trust (ok, skipped or failed). Before it creates the session, resume moves the row to pending, keeping its session id and history, and writes parent_id, re-derived from the caller's AGENT_DIRECTOR_INSTANCE_ID env var on every resume. The row stays pending until the agent reports in (Claude Code's SessionStart), then becomes waiting. If the launch fails other than by timing out (ErrTmuxNotAvailable is ENVIRONMENT and ErrTmuxSessionCreate a LAUNCH FAILURE), resume restores the row to its prior ended or missing state; if the restore cannot be applied, the error says so. The session-creating call is bounded by the create timeout. If it times out, resume returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may have been created and the row stays pending; do not retry until get shows the row ended or missing, since a retried resume of the pending row is refused and changes nothing. A pending row (a launch in progress, including a resumed one) is refused with ErrSpawnNotResumable and nothing is written. A row whose instance id contains a control character is refused with ErrInternal before any tmux call or write, because its session could never be labelled. If the launch cannot be recorded in the store, resume returns ErrInternal and launches nothing.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -645,7 +645,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "find-missing",
-		Description: "Reconcile live rows with their agents. A row's liveness comes only from its agent process, checked by its recorded start time; no process environment is read, and no child process or copy of the row's id keeps it alive. A live process keeps the row live, and a dead one marks it `missing` whatever tmux shows, with no tmux call. Only a row whose process cannot be checked or was never recorded is looked up in tmux, once per socket, on its recorded socket (else the caller's): its own labelled session leaves it unverified (a row with no recorded pane is judged by the pane carrying its launch token, and marked if none does), as does a tmux answer that cannot be used; no session of its current launch marks it `missing` whatever holds its name. A session holding the name is never touched (see the README's \"Operator actions\"). tmux problems never fail the sweep; they leave rows unverified. `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. Run it as the same user and in the same tmux environment as the agents: a run as another user, as root or against another tmux server can mark live rows `missing`. Two consequences: kill's success on a finished row is not verification that the agent exited; and on the wrong tmux server, a row wrongly marked missing, kill's no-op success and a reuse together start a second agent for the same id. ErrProbeUnsupported stays listed but is no longer returned. A pending row (a spawn's, a reuse's or a resume's launch) is not judged while inside the pending grace period (pending_grace_seconds, 60 s by default), measured from its launch start, not its started_at: it is left as it is and is in neither ids nor unverified_ids; a pending row with no readable launch start is judged at once. " + liveRowSequencePointer,
+		Description: "Reconcile live rows with their agents. A row's liveness comes only from its agent process, checked by its recorded start time; no process environment is read, and no child process or copy of the row's id keeps it alive. A live process keeps the row live, and a dead one marks it `missing` whatever tmux shows, with no tmux call. Only a row whose process cannot be checked or was never recorded is looked up in tmux, once per socket, on its recorded socket (else the caller's): its own labelled session leaves it unverified (a row with no recorded pane is judged by the pane carrying its launch token, and marked if none does), as does a tmux answer that cannot be used; no session of its current launch marks it `missing` whatever holds its name. A session holding the name is never touched (see the README's \"Operator actions\"). tmux problems never fail the sweep; they leave rows unverified. `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. Run it as the same user and in the same tmux environment as the agents: a run as another user, as root or against another tmux server can mark live rows `missing`. Two consequences: kill's success on a finished row is not verification that the agent exited; and on the wrong tmux server, a row wrongly marked missing, kill's no-op success and a reuse together start a second agent for the same id. ErrProbeUnsupported is no longer returned. A pending row (a spawn's, a reuse's or a resume's launch) is not judged while inside the pending grace period (pending_grace_seconds, 60 s by default), measured from its launch start, not its started_at: it is left as it is and is in neither ids nor unverified_ids; a pending row with no readable launch start is judged at once. " + liveRowSequencePointer,
 		Callable:    true,
 		HandleFree:  false,
 		Params:      []ParamDef{},
@@ -661,7 +661,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "expire",
-		Description: "Remove terminal-state rows (ended/missing) whose ended_at is older than the retention window. " + missingNotProofShort + " Default window is config defaults.expire_retention_days; --older-than overrides. Does NOT touch tmux or JSONL transcripts.",
+		Description: "Remove finished rows (ended/missing) whose ended_at is older than the retention window (config defaults.expire_retention_days; --older-than overrides). " + missingNotProofShort + " Does NOT touch tmux or JSONL transcripts.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -704,7 +704,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "make-template",
-		Description: "Save a reusable spawn preset. The TOML file lands under ~/.agent-director/templates/<name>.toml; spawn --template <name> applies it. Reserved per-invocation params (template, claude_instance_id, tmux_session_name) are NOT accepted.",
+		Description: "Save a reusable spawn preset as ~/.agent-director/templates/NAME.toml; spawn --template NAME applies it. Reserved per-invocation params (template, claude_instance_id, tmux_session_name) are NOT accepted.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -810,7 +810,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "list",
-		Description: "Enumerate Spawn rows. All filters AND together. Returned order is unspecified — callers sort with jq etc.",
+		Description: "Enumerate rows. All filters AND together. Order is unspecified; callers sort.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -878,7 +878,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "pause",
-		Description: "Politely shut down a waiting Spawn by sending `/exit` and waiting up to pause.timeout_seconds for the row to reach `ended`. One-shot — no caller-side polling. Terminal states (ended/missing) are no-op success. " + missingNotProofShort,
+		Description: "Shut down a waiting row: send `/exit` to the agent's own pane and wait up to pause.timeout_seconds for `ended` (no caller-side polling). A finished row (ended/missing) is a no-op success. " + missingNotProofShort + " tmux errors: ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT).",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -905,7 +905,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "serve",
-		Description: "Start the stdio MCP server. Long-lived process that exposes the CLI verbs (except `hook`, `serve`, and `trail-emit`) as MCP tools over JSON-RPC on stdin/stdout. Typically registered with `claude mcp add agent-director <binary-path> serve --stdio`.",
+		Description: "Start the stdio MCP server, a long-lived process exposing the CLI verbs (except `hook`, `serve` and `trail-emit`) as MCP tools over JSON-RPC on stdin/stdout. Register it with `claude mcp add agent-director BINARY_PATH serve --stdio`.",
 		Callable:    false,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -924,7 +924,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "version",
-		Description: "Print the binary's build-time version stamp as JSON ({version, commit}). Used by install.sh to verify a local binary matches the current source tree before installing it.",
+		Description: "Print the binary's build-time version stamp as JSON ({version, commit}); install.sh uses it to check a local binary against the source tree before installing.",
 		Callable:    true,
 		HandleFree:  true,
 		Params:      []ParamDef{},
@@ -950,7 +950,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "trail-emit",
-		Description: "Emit an ad.* audit-trail event directly. Sub-verb: relay-attempt. Does not open state.db — works in corrupted-state recovery scenarios (SR-A-2.3).",
+		Description: "Emit an ad.* audit-trail event directly. Sub-verb: relay-attempt. Does not open state.db, so it works during corrupted-state recovery.",
 		Callable:    false,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -1023,7 +1023,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "hook",
-		Description: "Internal: invoked by Claude Code on lifecycle events via the per-Spawn --settings hooks. Reads payload JSON from stdin and writes the row only when the hook's parent process is the row's recorded pane process, the agent itself; a hook from any other process, or a subagent's SessionStart or SessionEnd, changes nothing and is logged as ad.hook.ignored. Exits 0 (state-tracking fail-open).",
+		Description: "Internal: run by Claude Code's per-Spawn --settings hooks on lifecycle events. Reads payload JSON from stdin and writes the row only when the hook's parent process is the row's recorded pane process, the agent itself; a hook from any other process, or a subagent's SessionStart or SessionEnd, changes nothing and is logged as ad.hook.ignored. Exits 0 (state-tracking fail-open).",
 		Callable:    false,
 		HandleFree:  false,
 		Params: []ParamDef{

@@ -85,14 +85,20 @@
 //     descriptions.go, or in a sibling file of one verb's cases
 //     (descriptions_resume.go, whose DescCase.AfterResumeRestore adds the
 //     restore's result a resume launch error ends with; descriptions_kill.go,
-//     whose DescCase.AfterKillSent states a kill was sent), of the pane
+//     whose DescCase.AfterKillSent states a kill was sent, and whose
+//     tmuxErrorClasses is the one tmux error name to class definition that
+//     DescKillManifest and DescPaneManifest share), of the pane
 //     verbs' cases, parameterised by PaneVerb (descriptions_pane.go:
 //     DescPaneNotFound with its lost-reply variant, DescPaneLeftover,
 //     DescPaneGone; a pane verb's tmux trouble uses the shared cases, which
 //     say "nothing was done"; the keys actions' DescKeysTimeout,
 //     DescCase.AfterEnterFailed and DescCase.AfterTextFailed; send-keys'
 //     pending-row DescSendKeysPendingNoLaunch and
-//     DescSendKeysPendingLeftover), of plain spawn's
+//     DescSendKeysPendingLeftover; DescPaneManifest, the classes a pane
+//     verb's manifest Description states for its tmux errors, driven by its
+//     ErrorNames; DescAllowPending, send-keys' SR-18.14 allow_pending text at
+//     a flag site, AllowPendingFlag, or a refusals site,
+//     AllowPendingRefusals), of plain spawn's
 //     errors after "duplicate session" (descriptions_held.go, whose
 //     DescCase.AfterHeldName adds the requested name, the holder's tmux id
 //     and the end write's row sentence, never "retry later", and on an

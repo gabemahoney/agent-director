@@ -14,9 +14,10 @@ import (
 // kill's name, locale and socket-permission cases on real tmux (SRD SR-20.7,
 // SR-3.2, SR-1.8, SR-2.2; PRD AC-LKP-09, AC-LKP-08, AC-CLS-02 kill halves).
 
-// TestKillDollarAndBackslashNames: kill removes each $ or \ name's session,
-// labelled by id, touching no other; the session whose id a$1 spells survives.
-func TestKillDollarAndBackslashNames(t *testing.T) {
+// dollarBackslashNames returns the catalogue's stored forms of AC-LKP-09's
+// $ and \ cases plus a$B and a$$ (SR-20.7).
+func dollarBackslashNames(t testing.TB) []tmuxfix.StoredName {
+	t.Helper()
 	raws := []string{`a$b`, `a$_b`, `a${b}`, `a$1`, `a$`, `a$$b`, `a\b`, `a$B`, `a$$`}
 	var names []tmuxfix.StoredName
 	for _, n := range tmuxfix.StoredNames() {
@@ -27,20 +28,34 @@ func TestKillDollarAndBackslashNames(t *testing.T) {
 	if len(names) != len(raws) {
 		t.Fatalf("the replay catalogue holds %d of the %d names %q", len(names), len(raws), raws)
 	}
-	for _, n := range names {
+	return names
+}
+
+// namedRow starts the labelled bystanders $0 and $1, then the live row named
+// n.Raw (labelled by id); it returns the row and the bystanders' world.
+func (f *killFix) namedRow(t *testing.T, n tmuxfix.StoredName) (killRow, map[string]idtPane) {
+	t.Helper()
+	for range 2 {
+		f.agent(t, createSpec{StoreID: f.StoreID})
+	}
+	if !f.hasSession(t, "$1") {
+		t.Fatalf("no session $1 after two creates on a fresh server")
+	}
+	others := idtWorld(t, f.realTmux)
+	r := f.liveRow(t, killRowSpec{Name: n.Raw})
+	if f.label(t, r.Reply.SessionID) == "" {
+		t.Fatalf("session %s (name %q) carries no label", r.Reply.SessionID, n.Stored)
+	}
+	return r, others
+}
+
+// TestKillDollarAndBackslashNames: kill removes each $ or \ name's session,
+// labelled by id, touching no other; the session whose id a$1 spells survives.
+func TestKillDollarAndBackslashNames(t *testing.T) {
+	for _, n := range dollarBackslashNames(t) {
 		t.Run(n.Raw, func(t *testing.T) {
 			f := newKillFix(t)
-			for range 2 { // labelled bystanders $0 and $1
-				f.agent(t, createSpec{StoreID: f.StoreID})
-			}
-			if !f.hasSession(t, "$1") {
-				t.Fatalf("no session $1 after two creates on a fresh server")
-			}
-			others := idtWorld(t, f.realTmux)
-			r := f.liveRow(t, killRowSpec{Name: n.Raw})
-			if f.label(t, r.Reply.SessionID) == "" {
-				t.Fatalf("session %s (name %q) carries no label", r.Reply.SessionID, n.Stored)
-			}
+			r, others := f.namedRow(t, n)
 
 			f.kill(t, r.InstanceID, 0).assertSuccess(t, true)
 			f.assertSession(t, r.Reply.SessionID, false)

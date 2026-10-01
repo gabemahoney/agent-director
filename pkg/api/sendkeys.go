@@ -58,15 +58,14 @@ var (
 type SendKeysParams struct {
 	// ClaudeInstanceID identifies the Spawn whose pane will receive the text.
 	ClaudeInstanceID string `json:"claude_instance_id"`
-	// Text is the string to deliver to the Spawn's pane. CR bytes (0x0D) are
+	// Text is the string to deliver to the agent's own pane. CR bytes (0x0D) are
 	// stripped before delivery; LF bytes (0x0A) are preserved as input newlines.
 	// A single Enter is always appended to submit the composed buffer.
 	Text string `json:"text"`
-	// AllowPending relaxes the interactive-state guard to also allow pending
-	// Spawns. Use this when you need to pre-load text before the first
-	// SessionStart hook fires (e.g. inserting an initial prompt while the TUI
-	// is still booting). ended/missing Spawns are still rejected even with
-	// this flag set.
+	// AllowPending also allows a pending row: a launch (spawn, reuse or
+	// resume) whose agent has not reported in yet. Keys are delivered only to
+	// a session started by the row's current launch. ended and missing rows
+	// are still rejected (SR-18.14).
 	AllowPending bool `json:"allow_pending"`
 }
 
@@ -124,15 +123,20 @@ type sendKeysGuard struct {
 //     pane as a separate call, only if the text call succeeded. That is the
 //     single submit.
 //
-// State precondition: the Spawn must be in a live, interactive state
-// (waiting / working / ask_user / check_permission); ended / missing Spawns
-// have nothing to type into. A non-interactive state surfaces
-// ErrSpawnNotInteractive, with no tmux call.
-// Set AllowPending=true to also permit pending Spawns (pre-SessionStart
-// use case); ended/missing are still rejected.
-// A pending row whose launch start or launch token is not recorded is
-// refused with ErrSpawnNotInteractive before any tmux call: without them no
-// session can be shown to belong to the current launch (SR-7.1, SR-22.8).
+// State precondition: the row must be in a live interactive state (waiting,
+// working, ask_user or check_permission). A finished row (ended or missing)
+// is refused with ErrSpawnNotInteractive, with or without AllowPending, and
+// with no tmux call; so is a pending row (a launch whose agent has not
+// reported in yet) without AllowPending. With AllowPending, a pending row
+// whose launch start or launch token is absent or unreadable is refused with
+// ErrSpawnNotInteractive before any tmux call: without them no session can be
+// shown to belong to the current launch (SR-7.1, SR-22.8). Otherwise the keys
+// are sent only when the lookup finds the current launch's session by its
+// label and launch token and the agent's pane is found; a leftover found for
+// a pending row is refused with ErrSpawnNotInteractive (Leftover, below). A
+// row that turns live between the read and the send still gets the keys in
+// the same pane; agent-director does not guarantee that the prompt the
+// caller saw is still showing (SR-22.7).
 //
 // Relay-mode guard (time-bounded): when relay_mode=on AND
 // state=check_permission, the permission relay normally owns the answer, so
@@ -184,8 +188,7 @@ type sendKeysGuard struct {
 // Every tmux call uses the row's socket and every action targets a pane id.
 // The calls are at most one lookup, one pane listing, the text call, the
 // Enter call and, only after an action failure other than a timeout, one
-// follow-up lookup (SR-13.2). A row that turns live between the read and the
-// send still gets the keys in the same pane (SR-22.7). SendKeys never writes
+// follow-up lookup (SR-13.2). SendKeys never writes
 // the row's state; the adoption is its only store write.
 //
 // Trail (SR-7.4, SR-14): SendKeys writes at most one ad.provenance.disagree
@@ -362,10 +365,11 @@ func isInteractiveState(state string) bool {
 	return false
 }
 
-// SendKeys sends text into a tracked Spawn's tmux pane. CR bytes (0x0D) are
-// stripped before delivery to prevent premature submission; LF bytes (0x0A)
-// are preserved as composed newlines in Claude's input box. A single Enter is
-// always appended to submit the composed buffer.
+// SendKeys sends text into the agent's own pane: the row's pane, found by the
+// row's label on its recorded socket and targeted by pane id. CR bytes
+// (0x0D) are stripped before delivery to prevent premature submission; LF
+// bytes (0x0A) are preserved as composed newlines in Claude's input box. A
+// single Enter is always appended to submit the composed buffer.
 //
 // CLI: agent-director send-keys
 //

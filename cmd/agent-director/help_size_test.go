@@ -11,7 +11,7 @@ import "testing"
 // the orchestrator's approval before the commit and a recorded reason in the
 // commit message (what grew, by how many bytes, why it cannot be shorter);
 // never to make a failing guard pass.
-const helpStdoutBytes = 15170
+const helpStdoutBytes = 15160
 
 // TestHelpSizeGuard fails when help stdout grows past the recorded
 // byte count plus 10% (SR-20.6).

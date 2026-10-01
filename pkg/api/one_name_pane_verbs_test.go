@@ -6,7 +6,6 @@ package api_test
 // assertOneName through oneNameRows (one_name_per_error_test.go).
 
 import (
-	"context"
 	"testing"
 
 	"github.com/google/uuid"
@@ -245,12 +244,12 @@ func oneNamePause(name, want string, spec killRowSpec, setup func(t *testing.T, 
 }
 
 // oneNamePauseTimeout is pause's wait running out: /exit delivered to a row
-// nothing ends, through api.Pause with no time left to wait.
+// nothing ends, through api.Pause with the fixture's pauseTimeoutSeconds.
 func oneNamePauseTimeout() oneNameRow {
 	return oneNameRow{name: "pause/wait timed out", want: "ErrPauseTimeout", run: func(t *testing.T) error {
 		e := newKillEnv(t)
 		r := e.seedRow(t, killRowSpec{})
-		_, err := e.pauseWithin(context.Background(), 0, pauseParams(r))
+		_, err := e.pause(pauseParams(r))
 		return err
 	}}
 }

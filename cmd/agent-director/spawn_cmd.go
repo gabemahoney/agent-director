@@ -124,7 +124,7 @@ func parseSendKeysFlags(args []string) (pkgapi.SendKeysParams, error) {
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the Spawn to drive")
 	fs.StringVar(&p.Text, "text", "", "text to type into the Spawn's input")
-	fs.BoolVar(&p.AllowPending, "allow-pending", false, "allow send-keys on a pending Spawn (pre-SessionStart use case); ended/missing still rejected")
+	fs.BoolVar(&p.AllowPending, "allow-pending", false, "also allow a pending row (a spawn, reuse or resume whose agent has not reported in yet); keys go only to a session started by the row's current launch; ended and missing rows are still rejected")
 	if err := fs.Parse(args); err != nil {
 		return p, err
 	}
