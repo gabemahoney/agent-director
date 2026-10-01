@@ -195,7 +195,7 @@ type callTableVerb struct {
 func callTableVerbs() []callTableVerb {
 	return []callTableVerb{callTableKill(), callTableSpawn(), callTableFindMissing(), callTableReadPane(),
 		callTableSendKeys(), callTableSendKeysPending(), callTablePause(), callTablePausePending(),
-		callTablePauseEnded(), callTableExpire(), callTableResume(), callTableResumeHeld()}
+		callTablePauseEnded(), callTableExpire(), callTableResume(), callTableResumeHeld(), callTableKillOptIn()}
 }
 
 // TestCallTable runs every verb in every column: error name through the

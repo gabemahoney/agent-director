@@ -113,9 +113,9 @@ const (
 //
 // Kill applies no fallback and no minimum: every duration is used as given.
 // startingSession is the starting-session bound (safe minimum 60 s) and
-// stoppingWindow the stopping window (safe minimum 30 s), both unused by
-// today's kill; exitWait is the kill exit wait, which has no safe minimum
-// (too short a wait returns ErrTmuxKillFailed for an agent still exiting).
+// stoppingWindow the stopping window (safe minimum 30 s) of SR-4.2; exitWait
+// is the kill exit wait, which has no safe minimum (too short a wait returns
+// ErrTmuxKillFailed for an agent still exiting).
 // The configuration file enforces the minimums (SR-4.1); a direct caller
 // passes values at or above them. pc, now and sleep must not be nil, and
 // sleep must advance the clock now reads: the wait ends only once now shows
@@ -124,6 +124,7 @@ func Kill(s KillStore, t KillTmux, pc ProcChecker, startingSession, stoppingWind
 	now func() time.Time, sleep func(time.Duration), params KillParams) (result KillResult, err error) {
 	k := &killRun{
 		s: s, t: t, pc: pc, exitWait: exitWait, now: now, sleep: sleep,
+		startingSession: startingSession, stoppingWindow: stoppingWindow,
 		id:           params.ClaudeInstanceID,
 		optIn:        params.IncludeFinished,
 		lookup:       tmux.TokenNotRun,
@@ -150,6 +151,8 @@ type killRun struct {
 	id       string
 	optIn    bool // the operator-only finished-row opt-in (SR-6.5)
 
+	startingSession, stoppingWindow time.Duration // as passed (SR-4.2)
+
 	row     Spawn
 	socket  string
 	context string // the quoted recorded name, as descriptions lead with it
@@ -175,13 +178,13 @@ func (k *killRun) run() error {
 		return err
 	}
 	k.row = row
-	if k.optIn {
-		return k.withOptIn()
-	}
-	if row.State == store.StateEnded || row.State == store.StateMissing {
+	if k.optIn { // the live-row refusal, or the finished-row path (SR-6.5)
+		if err := k.withOptIn(); err != nil {
+			return err
+		}
+	} else if k.rowFinished() {
 		return nil
-	}
-	if err := unusableNameError(row.TmuxSessionName); err != nil {
+	} else if err := unusableNameError(row.TmuxSessionName); err != nil {
 		return fmt.Errorf("instance %s: %w", k.id, err)
 	}
 	socket, err := rowSocket(row.Identity.Socket)
@@ -197,9 +200,13 @@ func (k *killRun) run() error {
 	k.reasons = append(k.reasons, res.Disagree...)
 	switch res.Verdict {
 	case tmux.Ours:
+		k.noteOurs(res)
+		if err := k.finishedOurs(res); err != nil {
+			return err
+		}
 		return k.ours(res, launch)
 	case tmux.Leftover:
-		return leftoverError(k.id, res.Leftovers)
+		return k.leftoverRefusal(res.Leftovers)
 	case tmux.Gone:
 		return k.gone(launch, true)
 	}
@@ -215,11 +222,6 @@ func (k *killRun) launchFor(id LaunchIdentity) tmux.Launch {
 // ours is the kill sequence on the labelled session (SR-6.1 steps 1 to 4).
 // A failed or timed-out kill never stops it; the check decides.
 func (k *killRun) ours(res tmux.Result, launch tmux.Launch) error {
-	k.sessionID = res.Session.ID
-	if nameChanged(res, k.row.TmuxSessionName) {
-		k.reasons = append(k.reasons, tmux.ReasonNameChanged)
-		k.currentName = res.Session.Name
-	}
 	panes, err := k.t.ListPanes(k.socket)
 	if err != nil {
 		lres := tmux.ListingFailure(err, k.pc, launch)
@@ -231,10 +233,7 @@ func (k *killRun) ours(res tmux.Result, launch tmux.Launch) error {
 		}
 		return k.cantTell(lres, tmux.CallListPanes, "")
 	}
-	a := adoptIdentity(k.s, k.row, res, panes, k.pc)
-	if a.Applied {
-		k.reasons = append(k.reasons, tmux.ReasonAdopted)
-	}
+	a := k.adopt(res, panes)
 	agent := agentProcess(k.row, a.Identity)
 	listed := sessionProcesses(k.pc, panes, res.Session.ID, agent.Identity.PID)
 	if pane, ok := agentPane(panes, a.Identity.PaneID, a.Identity.PanePID); ok {

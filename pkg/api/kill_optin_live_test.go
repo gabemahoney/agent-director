@@ -3,8 +3,8 @@ package api_test
 // kill_optin_live_test.go: kill with the finished-row opt-in refuses every
 // live row, pending included, with ErrSpawnNotResumable before any lookup
 // (SR-6.5, SR-1.4); ad.kill.called records include_finished (SR-6.4); kill
-// without the opt-in never returns that name (SR-6.8). Finished rows are
-// pinned only where Task 2's finished-row table keeps them.
+// without the opt-in never returns that name (SR-6.8). A finished row with no
+// session gets the one lookup the live-row refusal never makes.
 
 import (
 	"errors"
@@ -151,22 +151,27 @@ func TestKillIncludeFinishedNotSetOnLiveRow(t *testing.T) {
 }
 
 // TestKillIncludeFinishedFinishedRowNoSession: an ended or missing row with
-// the opt-in and no session succeeds with kill_sent false and no kill; the
-// lookup outcome and call count are Task 2's and not pinned.
+// the opt-in, no session and its agent gone or not recorded makes exactly one
+// lookup (Gone, not the live-row refusal's not_run) and succeeds with kill_sent false.
 func TestKillIncludeFinishedFinishedRowNoSession(t *testing.T) {
+	gone := tmux.Result{Verdict: tmux.Gone}.Token()
+	agents := []struct {
+		name  string
+		agent agentState
+	}{{"agent gone", agentGone}, {"no agent recorded", agentNotRecorded}}
 	for _, state := range []string{store.StateEnded, store.StateMissing} {
-		t.Run(state, func(t *testing.T) {
-			e := newKillEnv(t)
-			r := e.seedRow(t, killRowSpec{State: state, NoSession: true, Agent: agentGone})
-			res, err := e.killOptIn(r.ID)
-			if err != nil || res.KillSent {
-				t.Fatalf("kill = %+v, %v; want kill_sent false, nil", res, err)
-			}
-			if n := len(e.rec.SocketCallsOf(tmux.CallKillPane)) + len(e.rec.SocketCallsOf(tmux.CallKillSession)); n != 0 {
-				t.Errorf("pane or session kills = %d; want none", n)
-			}
-			kolAssertCalled(t, r.ID, map[string]any{"include_finished": true, "outcome": "ok", "kill_sent": false,
-				"pane_killed": false})
-		})
+		for _, a := range agents {
+			t.Run(state+", "+a.name, func(t *testing.T) {
+				e := newKillEnv(t)
+				r := e.seedRow(t, killRowSpec{State: state, NoSession: true, Agent: a.agent})
+				res, err := e.killOptIn(r.ID)
+				if err != nil || res.KillSent {
+					t.Fatalf("kill = %+v, %v; want kill_sent false, nil", res, err)
+				}
+				e.assertKillCalls(t, tmux.CallLookup)
+				kolAssertCalled(t, r.ID, map[string]any{"include_finished": true, "outcome": "ok", "kill_sent": false,
+					"pane_killed": false, "lookup_outcome": gone, "followup_outcome": tmux.TokenNotRun})
+			})
+		}
 	}
 }

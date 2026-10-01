@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 
+	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/internal/trail"
 )
 
@@ -12,6 +13,19 @@ const (
 	killActionKillSent    = "kill_sent"
 	killActionNothingSent = "nothing_sent"
 )
+
+// noteOurs records an Ours lookup's ad.provenance.disagree facts on every
+// Ours verdict, whether or not the kill sequence follows (SR-14, as
+// lookupTrailFacts does for a launch onto a finished row): the session's tmux
+// id and, when it was found under another name than the recorded one,
+// name_changed with its stored name.
+func (k *killRun) noteOurs(res tmux.Result) {
+	k.sessionID = res.Session.ID
+	if nameChanged(res, k.row.TmuxSessionName) {
+		k.reasons = append(k.reasons, tmux.ReasonNameChanged)
+		k.currentName = res.Session.Name
+	}
+}
 
 // emit writes one Kill call's trail events, fail-open (SR-6.4, SR-14): the
 // call's ad.provenance.disagree records, one per distinct reason it collected

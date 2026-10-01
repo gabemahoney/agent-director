@@ -3,7 +3,8 @@ package main_test
 // kill_optin_flag_cli_test.go covers kill's operator-only --include-finished
 // through the built CLI (SR-6.5, SR-6.8): only the exact name parses, it
 // reaches Kill (a live row is refused with no tmux call), off is the default,
-// and no path prints usage text. Its finished-row effect is Task 2's.
+// and no path prints usage text. Its finished-row effect is in
+// kill_optin_cli_test.go.
 
 import (
 	"regexp"
@@ -52,19 +53,35 @@ func TestKillCLIIncludeFinishedUnknownID(t *testing.T) {
 }
 
 // TestKillCLIIncludeFinishedFalseOnEndedRow: an explicit false is the plain
-// finished-row no-op: kill_sent false, no tmux call, row unchanged.
+// finished-row no-op, even beside the row's own reported-in session.
 func TestKillCLIIncludeFinishedFalseOnEndedRow(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
-	home, id, _ := seedKillRow(t, store.StateEnded)
-	before := rowColumns(t, home, id)
+	t.Run("no session", func(t *testing.T) {
+		home, id, _ := seedKillRow(t, store.StateEnded)
+		before := rowColumns(t, home, id)
 
-	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "kill", "--claude-instance-id", id, "--include-finished=false")
-	if code != 0 || stderr != "" {
-		t.Fatalf("kill exit = %d, stderr = %q; want 0 and empty", code, stderr)
-	}
-	assertKillSent(t, stdout, false)
-	assertInvocationKinds(t, home)
-	assertCLIRowUnchanged(t, home, id, before)
+		stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "kill", "--claude-instance-id", id, "--include-finished=false")
+		if code != 0 || stderr != "" {
+			t.Fatalf("kill exit = %d, stderr = %q; want 0 and empty", code, stderr)
+		}
+		assertKillSent(t, stdout, false)
+		assertInvocationKinds(t, home)
+		assertCLIRowUnchanged(t, home, id, before)
+	})
+	t.Run("own reported-in session", func(t *testing.T) {
+		r := seedFinishedWithSession(t)
+
+		stdout, stderr, code := runSpawnCLI(t, r.home, fakeDir, "kill", "--claude-instance-id", r.id, "--include-finished=false")
+		if code != 0 || stderr != "" {
+			t.Fatalf("kill exit = %d, stderr = %q; want 0 and empty", code, stderr)
+		}
+		assertKillSent(t, stdout, false)
+		assertInvocationKinds(t, r.home)
+		if left := r.sessionsLeft(t); len(left) != 1 {
+			t.Errorf("sessions after kill = %+v; want the row's session untouched", left)
+		}
+		assertCLIRowUnchanged(t, r.home, r.id, r.before)
+	})
 }
 
 // TestKillCLIOptInNearMissesAndHelp: near-miss spellings, a non-boolean value

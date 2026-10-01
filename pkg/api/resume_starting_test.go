@@ -2,60 +2,20 @@ package api_test
 
 // resume_starting_test.go tests the starting-session rule at resume's
 // pre-launch check (SR-8.2, SR-4.2; AC-RES-03, AC-RES-04, AC-RES-17) on the
-// kill fixture: the window before the age, the ended_at read before the move,
-// Gone while the agent runs, and every refusal writing nothing. The rule's
-// pure boundaries are internal/tmux's; the configured values are
+// kill fixture and the shared finished row (starting_row_fixture_test.go):
+// the window before the age, the ended_at read before the move, Gone while
+// the agent runs, and every refusal writing nothing. The rule's pure
+// boundaries are internal/tmux's; the configured values are
 // resume_client_test.go's.
 
 import (
 	"testing"
 	"time"
 
-	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
-
-// The default starting-session bound and stopping window.
-var (
-	defBound  = secs(config.DefaultStartingSessionSeconds)
-	defWindow = secs(config.DefaultStoppingWindowSeconds)
-)
-
-// startingRow is a resumable row as the rule sees it at ruleInstant: its
-// state, when it ended (endedAgo, negative in the future; noEndedAt for
-// NULL), its agent, and its own session's age (noSession: Gone).
-type startingRow struct {
-	state     string
-	endedAgo  time.Duration
-	noEndedAt bool
-	agent     agentState
-	noSession bool
-	age       time.Duration
-}
-
-// seedStarting seeds s's row, resumable, with its own session unless noSession.
-func (e *killEnv) seedStarting(t *testing.T, s startingRow) resumeRow {
-	t.Helper()
-	spec := killRowSpec{State: s.state, Agent: s.agent, NoSession: true}
-	if !s.noEndedAt {
-		spec = e.resumableSpec(s.endedAgo, s.agent)
-		spec.State = s.state
-	}
-	r := e.seedResumableRow(t, spec)
-	if !s.noSession {
-		e.seedSession(t, &r.killRow, e.createdBefore(s.age))
-	}
-	return r
-}
-
-// startingCase is r's starting-session description parameters under bound
-// and window.
-func (s startingRow) startingCase(r resumeRow, bound, window time.Duration) apitest.StartingSession {
-	return apitest.StartingSession{InstanceID: r.ID, Name: r.Name, Window: window, Bound: bound,
-		NoSession: s.noSession, WindowChecked: !s.noEndedAt, SessionID: true}
-}
 
 // assertStartingRefusal checks err, a resume refused by the rule with want,
 // against p's description case, and that nothing was written since before.

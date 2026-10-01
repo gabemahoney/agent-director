@@ -94,7 +94,9 @@
 //     tmuxErrorClasses is the one tmux error name to class definition that
 //     DescKillManifest and DescPaneManifest share; descriptions_kill_optin.go,
 //     kill's finished-row opt-in: DescKillOptInLiveRow, its live-row
-//     refusal), of the pane
+//     refusal, and DescKillOptInNeverReportedIn and
+//     DescKillOptInNeverReportedInLeftover, its "never reported in"
+//     refusals), of the pane
 //     verbs' cases, parameterised by PaneVerb (descriptions_pane.go:
 //     DescPaneNotFound with its lost-reply variant, DescPaneLeftover,
 //     DescPaneGone; a pane verb's tmux trouble uses the shared cases, which

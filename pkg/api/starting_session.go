@@ -14,9 +14,9 @@ import (
 // finished and builds the refusal for its outcome. resume's pre-launch check
 // (decidePreLaunch) and its re-lookup after "duplicate session"
 // (heldNameOutcome, with the restore's sentence as the row's Consequence) use
-// it. Its later users are reuse (the old row's lookup and its re-lookup) and
-// kill's finished-row opt-in, which takes steps 1 and 2 (unavailableError)
-// and replaces step 3 with its reported-in rule (SR-6.5, SR-6.7). It makes no
+// it, and so do reuse (the old row's lookup and its re-lookup) and kill's
+// finished-row opt-in, which takes steps 1 and 2 (unavailableError) and
+// replaces step 3 with its reported-in rule (SR-6.5, SR-6.7). It makes no
 // tmux call, no store read or write, no trail write and no log line: a
 // refusal is reported by its error alone (SR-4.3). No description names a session-ending command, another
 // row's id or a label value, and the stopping texts never say "dead" or

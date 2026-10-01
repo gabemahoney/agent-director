@@ -74,6 +74,17 @@ func WithPID(pid int) SpawnOption {
 	return func(o *spawnOpts) { o.set("pid", pid) }
 }
 
+// WithNoPID stores NULL in pid and proc_starttime: a row whose latest launch
+// never reported in (no SessionStart identity write), such as a finished row
+// that keeps its pane identity (SR-6.7). It wins over an earlier WithPID or
+// WithProcStarttime, as a later option for the same column does.
+func WithNoPID() SpawnOption {
+	return func(o *spawnOpts) {
+		o.set("pid", nil)
+		o.set("proc_starttime", nil)
+	}
+}
+
 // WithProcStarttime seeds the proc_starttime column. Use the canonical per-OS
 // fixture constants (LinuxProcStarttime / DarwinProcStarttime) rather than
 // inline literals.

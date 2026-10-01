@@ -3,7 +3,8 @@ package api_test
 // kill_test.go holds kill's SR-6.1 rows that are not lookup outcomes (unknown
 // id, finished rows, an unusable recorded name, an unusable socket
 // directory), the four SR-20.6 rewrites (their names kept for the sprint
-// demo's -run Kill), the no-log-line check and Client.Kill. The lookup
+// demo's -run Kill), the no-log-line check, Client.Kill, and the finished-row
+// opt-in's SessionStart race and its companion (SR-20.6). The lookup
 // outcomes are lookup_calltable_test.go's; the sequence, the check, the
 // ceilings, pending rows and the trail have their own kill_*_test.go files.
 // The fixture is kill_fixture_test.go.
@@ -313,4 +314,69 @@ func TestKillClient(t *testing.T) {
 	if _, err := c.Kill(api.KillParams{ClaudeInstanceID: r.ID}); !errors.Is(err, api.ErrClientClosed) {
 		t.Errorf("Kill after Close: %v; want ErrClientClosed", err)
 	}
+}
+
+// killRaceRow seeds a missing row whose resumed agent never reported in: its
+// pane recorded, no pid, its session id kept, ended the window ago, and its own
+// session older than ended_at and the bound.
+func killRaceRow(t *testing.T, e *killEnv) resumeRow {
+	t.Helper()
+	r := e.seedStarting(t, startingRow{state: store.StateMissing, endedAgo: defWindow, noPID: true, age: defWindow + defBound})
+	if c := e.columns(t, r.ID); c.PID != nil || c.ClaudeSessionID == nil || c.PanePID == nil {
+		t.Fatalf("precondition: pid %v, session id %v, pane pid %v; want NULL, set, set", c.PID, c.ClaudeSessionID, c.PanePID)
+	}
+	return r
+}
+
+// killAssertAgentRuns fails unless r's agent process still runs in the fake.
+func killAssertAgentRuns(t *testing.T, e *killEnv, r killRow) {
+	t.Helper()
+	if _, alive, _ := e.pc.StartTime(r.AgentPID); !alive {
+		t.Errorf("agent process %d gone; want it still running", r.AgentPID)
+	}
+}
+
+// TestKillIncludeFinishedSessionStartAfterLookupSendsNoKill (SR-20.6,
+// AC-KILL-15): the agent's own SessionStart landing after kill's row read
+// changes nothing: "never reported in", no listing and no kill.
+func TestKillIncludeFinishedSessionStartAfterLookupSendsNoKill(t *testing.T) {
+	e := newKillEnv(t)
+	r := killRaceRow(t, e)
+	e.sessionStartAfter(t, tmux.CallLookup, r.killRow, r.Spawn.ClaudeSessionID)
+
+	res, err := e.killOptIn(r.ID)
+	assertOneName(t, err, "ErrTmuxSessionConflict")
+	apitest.AssertDescription(t, err.Error(), apitest.DescKillOptInNeverReportedIn(r.ID, r.Name, defBound), r.Token, r.StoreID)
+	if res.KillSent {
+		t.Error("kill_sent = true; want false")
+	}
+	e.assertKillCalls(t, tmux.CallLookup)
+	if !seqHas(e, r.Socket, r.Session.ID) {
+		t.Errorf("session %s gone; want it still running", r.Session.ID)
+	}
+	killAssertAgentRuns(t, e, r.killRow)
+	if c := e.columns(t, r.ID); c.State != store.StateWaiting || c.PID != int64(r.Spawn.Identity.PanePID) {
+		t.Errorf("row after the SessionStart: state %v, pid %v; want waiting, %d", c.State, c.PID, r.Spawn.Identity.PanePID)
+	}
+	kolAssertCalled(t, r.ID, map[string]any{"include_finished": true, "lookup_outcome": "ours",
+		"outcome": "ErrTmuxSessionConflict", "kill_sent": false})
+}
+
+// TestKillIncludeFinishedSessionStartBeforeReadRefusesLiveRow (AC-KILL-16):
+// the agent's own SessionStart before kill's read makes the row live, so the
+// opt-in gets the live-row refusal with no tmux call; the agent runs on.
+func TestKillIncludeFinishedSessionStartBeforeReadRefusesLiveRow(t *testing.T) {
+	e := newKillEnv(t)
+	r := killRaceRow(t, e)
+	if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "SessionStart", r.Spawn.ClaudeSessionID); !a.Applied {
+		t.Fatalf("SessionStart from the agent = %+v; want applied", a)
+	}
+	started, sessions := e.columns(t, r.ID), e.rec.Sessions(r.Socket)
+	if started.State != store.StateWaiting {
+		t.Fatalf("state after the SessionStart = %v; want waiting", started.State)
+	}
+
+	res, err := e.killOptIn(r.ID)
+	kolAssertRefused(t, e, r.killRow, store.StateWaiting, res, err, started, sessions)
+	killAssertAgentRuns(t, e, r.killRow)
 }

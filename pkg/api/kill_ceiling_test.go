@@ -1,8 +1,9 @@
 package api_test
 
 // kill_ceiling_test.go proves kill's SR-13.2 ceilings in virtual time (the
-// Recorder charges every call its full timeout) and the SR-20.6
-// kill_exit_wait_ms case through api.New. Nothing waits in real time.
+// Recorder charges every call its full timeout), on a live row and on a
+// finished row with the opt-in (SR-6.2), and the SR-20.6 kill_exit_wait_ms
+// case through api.New. Nothing waits in real time.
 
 import (
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -88,6 +90,47 @@ func TestKillCeilingVirtualTime(t *testing.T) {
 				}
 				if *slept != 0 {
 					t.Errorf("waited %v on the follow-up path; want no wait", *slept)
+				}
+				if err != nil || !res.KillSent {
+					t.Fatalf("Kill = %+v, %v; want kill_sent true, nil", res, err)
+				}
+				e.assertKillCalls(t, append(kills, tmux.CallLookup)...)
+			})
+		}
+	}
+}
+
+// TestKillIncludeFinishedCeilingVirtualTime: with the opt-in, an ended or
+// missing row's reported-in session past both is charged 2Q + 2A + E on path (i), 3Q + 2A on path (ii), never both.
+func TestKillIncludeFinishedCeilingVirtualTime(t *testing.T) {
+	q, a, ex := ceilDefaults()
+	kills := []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallKillPane, tmux.CallKillSession}
+	paths := []struct {
+		name  string
+		agent agentState
+	}{{"path i, agent alive through the wait", agentAlive}, {"path ii, agent unreadable", agentUnreadable}}
+	for _, state := range []string{store.StateEnded, store.StateMissing} {
+		for _, p := range paths {
+			t.Run(state+"/"+p.name, func(t *testing.T) {
+				e := newKillEnv(t)
+				r := e.seedStarting(t, startingRow{state: state, endedAgo: defWindow, agent: p.agent, age: defWindow + defBound})
+				slept := ceilSleeps(e)
+				start := e.clock.Now()
+				res, err := e.killOptIn(r.ID)
+				elapsed := e.clock.Now().Sub(start)
+				if p.agent == agentAlive {
+					if want := 2*q + 2*a + ex; elapsed != want || *slept != ex {
+						t.Errorf("virtual time = %v, waited %v; want 2Q + 2A + E = %v with the whole wait %v", elapsed, *slept, want, ex)
+					}
+					assertOneName(t, err, "ErrTmuxKillFailed")
+					apitest.AssertDescription(t, err.Error(), apitest.DescKillWaitExpired(apitest.KillWaitExpired{
+						InstanceID: r.ID, Name: r.Name, Sent: apitest.KillSent{Pane: true, Session: true},
+						ExitWait: ex, AgentPID: r.AgentPID}))
+					e.assertKillCalls(t, kills...)
+					return
+				}
+				if want := 3*q + 2*a; elapsed != want || *slept != 0 {
+					t.Errorf("virtual time = %v, waited %v; want 3Q + 2A = %v with no wait", elapsed, *slept, want)
 				}
 				if err != nil || !res.KillSent {
 					t.Fatalf("Kill = %+v, %v; want kill_sent true, nil", res, err)
