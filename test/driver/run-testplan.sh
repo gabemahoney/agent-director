@@ -174,6 +174,12 @@ run_case_shell() {
     if [[ -n "$out" ]]; then
         combined+=": ${out:0:300}"
     fi
+    # The trace comes from a second run. When that run passes, its tail ends
+    # at the case's success line and does not show the first run's failure:
+    # say so, so the trace is not read as a failure after the success line.
+    if [[ "$xrc" -eq 0 ]]; then
+        combined+=" | xtrace rerun passed (exit=0): the trace below is that passing rerun, not the failure"
+    fi
     if [[ -n "$last_trace" ]]; then
         combined+=" | xtrace_tail: ${last_trace:0:400}"
     fi
