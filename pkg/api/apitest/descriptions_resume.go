@@ -13,7 +13,9 @@ import (
 // (SR-8.5). Resume reuses DescLaunchTimeout, DescSocketDir,
 // DescSocketPermission, DescTmuxNotRun and DescSessionCreateFailed as they
 // are, and DescUnlabelledSession with its Restore field. The pre-launch
-// check's refusals (Epic 16) are in descriptions_resume_lookup.go.
+// check's refusals (Epic 16) are in descriptions_resume_lookup.go, and the
+// overlay of its errors after "duplicate session" in
+// descriptions_resume_held.go.
 
 // RestoreOutcome is what resume's one restore attempt after a failed launch
 // did (SR-8.5). RestoreNone (the zero value) means the launch was not a
@@ -37,11 +39,15 @@ type ResumeRestore struct {
 	PriorState string
 }
 
+// restoredToPrior is the applied restore's row sentence before its prior
+// state.
+const restoredToPrior = "the row was restored to its prior state"
+
 // restorePhrase is the row sentence each restore outcome gives.
 func (r ResumeRestore) restorePhrase() string {
 	switch r.Outcome {
 	case RestoreApplied:
-		return "the row was restored to its prior state, " + r.PriorState
+		return restoredToPrior + ", " + r.PriorState
 	case RestoreRowChanged:
 		return "the row changed after resume moved it to pending and was left as it is"
 	case RestoreRowRemoved:
@@ -50,6 +56,27 @@ func (r ResumeRestore) restorePhrase() string {
 		return "the row could not be restored and stays pending"
 	}
 	panic("apitest: ResumeRestore with no outcome")
+}
+
+// otherRestorePhrases are the row sentences of the restore results other
+// than r: the other outcomes' and, for RestoreApplied, the other prior
+// state's.
+func (r ResumeRestore) otherRestorePhrases() []string {
+	var out []string
+	for _, o := range []RestoreOutcome{RestoreApplied, RestoreRowChanged, RestoreRowRemoved, RestoreStoreError} {
+		if o != r.Outcome && o != RestoreApplied {
+			out = append(out, ResumeRestore{Outcome: o}.restorePhrase())
+		}
+	}
+	if r.Outcome != RestoreApplied {
+		return append(out, restoredToPrior)
+	}
+	for _, s := range []string{"ended", "missing"} {
+		if s != r.PriorState {
+			out = append(out, restoredToPrior+", "+s)
+		}
+	}
+	return out
 }
 
 // AfterResumeRestore returns c also requiring the restore's result r as the

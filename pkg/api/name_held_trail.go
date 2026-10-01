@@ -9,13 +9,14 @@ import (
 )
 
 // The ad.launch.name_held source values (SR-14). Plain spawn and reuse write
-// nameHeldSourceSpawn; find-missing's sweep writes nameHeldSourceFindMissing
-// after a mark attempt whose tick reason is tmux_name_held (SR-11.3).
-// nameHeldSourceFindMissing is also the source of every other record the
-// sweep writes (ad.find_missing.tick, ad.provenance.disagree), and
-// nameHeldSourceResume the source of every record resume writes
-// (ad.resume.*, ad.provenance.disagree): pkg/api declares each value only
-// here.
+// nameHeldSourceSpawn; resume writes nameHeldSourceResume after "duplicate
+// session" (resumeHeldName, SR-8.5); find-missing's sweep writes
+// nameHeldSourceFindMissing after a mark attempt whose tick reason is
+// tmux_name_held (SR-11.3). nameHeldSourceFindMissing is also the source of
+// every other record the sweep writes (ad.find_missing.tick,
+// ad.provenance.disagree), and nameHeldSourceResume the source of every
+// record resume writes (ad.resume.*, ad.provenance.disagree): pkg/api
+// declares each value only here.
 const (
 	nameHeldSourceSpawn       = "ad_spawn"
 	nameHeldSourceFindMissing = "ad_find_missing"
@@ -23,10 +24,11 @@ const (
 )
 
 // The ad.launch.name_held launch values (SR-14): which launch's create
-// reported "duplicate session". Reuse (Epic 17) and resume (Epic 16) add
-// theirs here; the sweep writes none (null).
+// reported "duplicate session". Reuse (Epic 17) adds its own here; the sweep
+// writes none (null).
 const (
-	nameHeldLaunchSpawn = "spawn"
+	nameHeldLaunchSpawn  = "spawn"
+	nameHeldLaunchResume = "resume"
 )
 
 // The ad.launch.name_held row_result values (SR-14). Plain spawn's
@@ -36,11 +38,15 @@ const (
 // with tick reason tmux_name_held gives nameHeldRowMarkedMissing when it
 // applied, nameHeldRowLeftChanged when the same-life guard did not apply, and
 // nameHeldRowStillPending (with store_error) on a store error (SR-11.3,
-// SR-11.6, SR-5.8). nameHeldRowMarkedMissing is also find-missing's
-// ad.provenance.disagree action for a marked row (findMissingActionMarked):
-// pkg/api declares the value only here.
+// SR-11.6, SR-5.8). resume's restore after "duplicate session" gives
+// nameHeldRowRestored when it applied, nameHeldRowLeftChanged when the row
+// changed or was removed, and nameHeldRowStillPending on a store error
+// (resumeRestoreResultOf; SR-8.5). nameHeldRowMarkedMissing is also
+// find-missing's ad.provenance.disagree action for a marked row
+// (findMissingActionMarked): pkg/api declares the value only here.
 const (
 	nameHeldRowEnded         = "ended"
+	nameHeldRowRestored      = "restored"
 	nameHeldRowLeftChanged   = "left_changed"
 	nameHeldRowStillPending  = "still_pending"
 	nameHeldRowNotInserted   = "not_inserted"
@@ -70,8 +76,8 @@ type nameHeld struct {
 	// never a label's.
 	StoreID string
 	// Holder is the holder facts (heldHolderFacts) of the lookup that saw the
-	// name held: plain spawn's re-lookup, or find-missing's per-row lookup
-	// with the row's recorded name as the holder name. When no single
+	// name held: plain spawn's or resume's re-lookup, or find-missing's
+	// per-row lookup with the row's recorded name as the holder name. When no single
 	// holder was identified the session id, creation time and both commands
 	// are null; a zero Class makes carries_this_id and current_launch null.
 	Holder heldNameHolder
@@ -101,8 +107,10 @@ type nameHeld struct {
 // tmux_name_held (SR-11.3) with source nameHeldSourceFindMissing, no launch
 // kind and no error (launch and outcome null), row_result
 // nameHeldRowMarkedMissing, nameHeldRowLeftChanged or nameHeldRowStillPending,
-// and the Client's store id; resume (Epic 16) and reuse (Epic 17) add their
-// sources through it.
+// and the Client's store id; resume's "duplicate session" path
+// (resumeHeldName) calls it once after its restore attempt with source
+// nameHeldSourceResume, launch nameHeldLaunchResume and the restore's row
+// result; reuse (Epic 17) will add its own through it.
 //
 // carries_this_id and current_launch come from the holder's label class
 // only, never the environment (SR-3.12): an old or current label of this

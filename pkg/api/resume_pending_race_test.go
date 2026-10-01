@@ -2,16 +2,19 @@ package api_test
 
 // resume_pending_race_test.go covers two resumes of one id (SR-8.1 step 3,
 // SR-8.3, SR-8.4, SR-20.6; AC-RES-11): a loser that examined the row before
-// the winner's move, refused at its lookup or at its conditional move, and a
-// loser that examined it after, refused by its state guard; each writes
-// nothing. On the shared fixture in resume_fixture_test.go against a real
-// store; pendRefuse and the call counters are in resume_pending_test.go.
+// the winner's move, refused by its re-read after its lookup or at its
+// conditional move, a loser whose re-read finds the row deleted, and a loser
+// that examined it after, refused by its state guard; each writes nothing. On
+// the shared fixture in resume_fixture_test.go against a real store (the
+// deleted row on the kill fixture, for its trust file); pendRefuse and the
+// call counters are in resume_pending_test.go.
 
 import (
 	"errors"
 	"os"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,10 +26,10 @@ import (
 )
 
 // TestResumeLoserExaminedBeforeWinnersMove: a resume whose examination preceded
-// another's whole resume writes nothing. When the winner's session is up at the
-// loser's lookup, it carries a token other than the one the loser examined, so
-// the loser refuses there with the Leftover conflict (lead decision (a)) and
-// makes no other call; when the winner moves and creates after the loser's
+// another's whole resume writes nothing and gets the lost-race refusal. When the
+// winner's session is up at the loser's lookup, it reads as left over, and the
+// loser's one re-read finds the row changed (lead decision (a), revised), with no
+// call after its lookup; when the winner moves and creates after the loser's
 // lookup, the loser loses at its conditional move.
 func TestResumeLoserExaminedBeforeWinnersMove(t *testing.T) {
 	for _, atLookup := range []bool{true, false} {
@@ -62,27 +65,64 @@ func TestResumeLoserExaminedBeforeWinnersMove(t *testing.T) {
 				t.Fatalf("winner Resume: %v", winErr)
 			}
 			tok, _ := afterWinner.LaunchToken.(string)
+			if !errors.Is(err, api.ErrSpawnNotResumable) || errors.Is(err, api.ErrTmuxSessionConflict) {
+				t.Fatalf("loser Resume = %v; want ErrSpawnNotResumable", err)
+			}
+			apitest.AssertDescription(t, err.Error(), apitest.DescResumeLostRace(), tok, r.Identity.Token, e.storeID)
 			if atLookup {
-				sess := e.rec.Sessions(e.socket)
-				if !errors.Is(err, api.ErrTmuxSessionConflict) || errors.Is(err, api.ErrSpawnNotResumable) || len(sess) != 1 {
-					t.Fatalf("loser Resume = %v, sessions %+v; want ErrTmuxSessionConflict over the winner's one session", err, sess)
+				if sess := e.rec.Sessions(e.socket); len(sess) != 1 {
+					t.Errorf("sessions = %+v; want the winner's one", sess)
 				}
-				apitest.AssertDescription(t, err.Error(), apitest.DescPreLaunchLeftover(r.ID,
-					[]apitest.DescSession{{Name: sess[0].Name, ID: sess[0].ID}}), tok, r.Identity.Token, e.storeID)
 				if got, want := pendCallKinds(e.rec), append(kindsAfterWinner, tmux.CallLookup); !slices.Equal(got, want) || pendCalls(e.rec) != callsAfterWinner+1 {
 					t.Errorf("tmux calls = %v; want the winner's, then the loser's one lookup: %v", got, want)
 				}
-			} else {
-				if !errors.Is(err, api.ErrSpawnNotResumable) {
-					t.Fatalf("loser Resume = %v; want ErrSpawnNotResumable", err)
-				}
-				apitest.AssertDescription(t, err.Error(), apitest.DescResumeLostRace(), tok, e.storeID)
-				if n := pendCalls(e.rec); n != callsAfterWinner {
-					t.Errorf("loser made %d tmux calls after the winner; want none", n-callsAfterWinner)
-				}
+			} else if n := pendCalls(e.rec); n != callsAfterWinner {
+				t.Errorf("loser made %d tmux calls after the winner; want none", n-callsAfterWinner)
 			}
 			pendAssertLoserWroteNothing(t, e, r.ID, afterWinner, winnerParent)
 		})
+	}
+}
+
+// TestResumeLoserRowDeletedBeforeReRead: a left-over session (the winner's) at
+// the lookup, with the row deleted after resume's read, makes the one re-read
+// return the move's ErrSpawnNotFound, not the Leftover conflict; resume makes
+// only that lookup and writes nothing (no move, no trust entry, no ad.resume.*).
+func TestResumeLoserRowDeletedBeforeReRead(t *testing.T) {
+	e := newKillEnv(t)
+	r := e.seedResumable(t, time.Hour, agentGone)
+	e.seedHolder(t, r.killRow, holderOld)
+	w := &hookedResumeStore{st: e.st}
+	w.failMove(nil) // a move would return the injected store error instead
+	w.afterGet(func() {
+		if err := e.st.DeleteSpawn(r.ID); err != nil {
+			t.Fatalf("DeleteSpawn: %v", err)
+		}
+	})
+	before := e.snapshotResume(t, r)
+
+	_, err := e.resumeWith(w, r.ID)
+
+	if !errors.Is(err, api.ErrSpawnNotFound) || errors.Is(err, api.ErrTmuxSessionConflict) {
+		t.Fatalf("Resume = %v; want ErrSpawnNotFound, not the Leftover conflict", err)
+	}
+	if got := e.rec.SocketCalls()[before.calls:]; len(got) != 1 || got[0].Call != tmux.CallLookup {
+		t.Errorf("tmux calls = %+v; want the one lookup", got)
+	}
+	if n := len(e.rec.Calls()) - before.nameCalls; n != 0 {
+		t.Errorf("%d name-based tmux calls; want none", n)
+	}
+	if got := e.rec.Sessions(r.Socket); !reflect.DeepEqual(got, before.sessions[r.Socket]) {
+		t.Errorf("sessions on %s = %+v; want unchanged %+v", r.Socket, got, before.sessions[r.Socket])
+	}
+	r.Trust.check(t, r.CWD, false, "after the refused resume")
+	for _, l := range readAPITrailLines(t)[before.mark:] {
+		if ev, _ := l["event"].(string); strings.HasPrefix(ev, "ad.resume.") {
+			t.Errorf("trail record %s for %v; want no ad.resume.* line", ev, l["claude_instance_id"])
+		}
+	}
+	if _, err := apitest.ReadSpawnColumns(e.dbPath, r.ID); !errors.Is(err, store.ErrSpawnNotFound) {
+		t.Errorf("ReadSpawnColumns = %v; want the row still absent", err)
 	}
 }
 

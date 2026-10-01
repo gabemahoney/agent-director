@@ -25,7 +25,8 @@ import (
 // DescSpawnSessionNameParam are the same contract as spawn's manifest texts
 // state it. With HeldName.BeforeLaunch, the DescHeld* cases are instead the
 // holder refusals of a launch's pre-launch check (SR-8.2), without the
-// overlay (descriptions_resume_lookup.go).
+// overlay (descriptions_resume_lookup.go); with HeldName.Restore, resume's
+// errors after "duplicate session" (descriptions_resume_held.go).
 
 // HeldRow is the result of a plain spawn's conditional end write after
 // "duplicate session" (SR-9.4, Appendix F.4), which picks the description's
@@ -84,12 +85,16 @@ var heldNotPendingStatements = []string{"stays pending", "will heal"}
 // unavailable); Row is the end write's result. BeforeLaunch selects the
 // holder found by a pre-launch lookup instead (resume, SR-8.2; see
 // BeforeLaunch's overlay): Name is then the recorded name, SessionID the
-// holder's tmux id, and Row stays zero.
+// holder's tmux id, and Row stays zero. Restore selects resume's error after
+// "duplicate session" instead (SR-8.5; afterResumeHeld): Name is then the
+// recorded name, SessionID the holder's tmux id, Restore the restore's result,
+// and Row stays zero.
 type HeldName struct {
 	Name         string
 	SessionID    string
 	Row          HeldRow
 	BeforeLaunch bool
+	Restore      ResumeRestore
 }
 
 // AfterHeldName returns c as an error a plain spawn returns after "duplicate
@@ -106,8 +111,13 @@ type HeldName struct {
 // DescSessionCreateFailed (Duplicate), DescConflictingLabels
 // (NothingWasDone), DescDifferentServer, DescCallTimeout,
 // DescUnrecognisedReply, DescSocketPermission and DescTmuxNotRun; the
-// DescHeld* cases apply it themselves.
+// DescHeld* cases apply it themselves. With p.Restore set it is resume's
+// overlay instead (afterResumeHeld), also for DescPreLaunchLeftover,
+// DescStillStopping, DescStillStarting and DescOwnOldSession.
 func (c DescCase) AfterHeldName(p HeldName) DescCase {
+	if p.Restore.Outcome != RestoreNone {
+		return c.afterResumeHeld(p, heldLabelNoClaim)
+	}
 	return c.afterHeldName(p, heldLabelNoClaim)
 }
 
@@ -182,10 +192,16 @@ func (label heldLabel) wrong() []string {
 }
 
 // holderOverlay applies p's overlay: the pre-launch one (beforeLaunch) when
-// p.BeforeLaunch, else the one after "duplicate session" (afterHeldName).
+// p.BeforeLaunch, resume's after "duplicate session" (afterResumeHeld) when
+// p.Restore is set, else plain spawn's (afterHeldName).
 func (c DescCase) holderOverlay(p HeldName, label heldLabel) DescCase {
-	if p.BeforeLaunch {
+	switch {
+	case p.BeforeLaunch && p.Restore.Outcome != RestoreNone:
+		panic("apitest: HeldName.BeforeLaunch excludes Restore")
+	case p.BeforeLaunch:
 		return c.beforeLaunch(p, label)
+	case p.Restore.Outcome != RestoreNone:
+		return c.afterResumeHeld(p, label)
 	}
 	return c.afterHeldName(p, label)
 }
@@ -236,8 +252,13 @@ const spawnOnlyHolder = "no agent-director row described it before this spawn"
 // "Operator actions" pointer, and "list --tmux-session-name". Pass any other
 // row's id as forbid. With BeforeLaunch (a pre-launch holder, which the
 // lookup makes Leftover, so met only defensively) it never says that no row
-// described it.
+// described it. A Restore p panics: resume words an old holder after
+// "duplicate session" as its Leftover (DescPreLaunchLeftover with
+// AfterHeldName).
 func DescHeldLeftover(p HeldName) DescCase {
+	if p.Restore.Outcome != RestoreNone {
+		panic("apitest: resume's old holder is DescPreLaunchLeftover(...).AfterHeldName(p)")
+	}
 	req := []string{"a human's decision"}
 	if !p.BeforeLaunch {
 		req = append([]string{spawnOnlyHolder}, req...)
@@ -288,14 +309,18 @@ func DescHeldOtherStore(p HeldName, storeID string) DescCase {
 // "dead" or "gone". p.SessionID must be empty: pass the
 // matching sessions' tmux ids as forbid. With BeforeLaunch it requires
 // "nothing was done" and "retry later" instead of a row sentence and retry
-// guidance.
+// guidance; with Restore, the restore's sentence and "retry later".
 func DescHeldAmbiguous(p HeldName) DescCase {
 	if p.SessionID != "" {
 		panic("apitest: DescHeldAmbiguous names no holder")
 	}
+	req := []string{"more than one tmux session's name matches it", listSessionName}
+	if p.Restore.Outcome != RestoreNone {
+		req = append(req, retryLater)
+	}
 	return DescCase{
 		Name:       "ErrTmuxUnresponsive, held name, ambiguous holder",
-		Require:    []string{"more than one tmux session's name matches it", listSessionName},
+		Require:    req,
 		MustNot:    unresponsiveMustNot,
 		unanswered: true,
 	}.holderOverlay(p, heldLabelNoClaim)

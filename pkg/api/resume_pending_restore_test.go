@@ -125,9 +125,9 @@ func rstOneCreate(t *testing.T, e *resumeEnv) tmuxfix.SocketCall {
 	return creates[0]
 }
 
-// TestResumeRestoreAfterEachLaunchFailure: every non-timeout create failure
-// restores the ended or missing row byte for byte, keeps the move's parent id,
-// emits one applied ad.resume.restored, and a second resume then launches.
+// TestResumeRestoreAfterEachLaunchFailure: every non-timeout create failure,
+// and "duplicate session" whose holder vanished (SR-8.5), restores the row byte
+// for byte with the move's parent id and one applied ad.resume.restored; a second resume launches.
 func TestResumeRestoreAfterEachLaunchFailure(t *testing.T) {
 	createFailed := func(*resumeEnv, string) apitest.DescCase {
 		return apitest.DescSessionCreateFailed(apitest.SessionCreateFailed{})
@@ -141,7 +141,8 @@ func TestResumeRestoreAfterEachLaunchFailure(t *testing.T) {
 	}{
 		{"unrecognised create failure", tmux.FailUnrecognized, tmux.ErrTmuxSessionCreate, "ErrTmuxSessionCreate", createFailed},
 		{"no-socket reply", tmux.FailNoSocket, tmux.ErrTmuxSessionCreate, "ErrTmuxSessionCreate", createFailed},
-		{"duplicate session", tmux.FailDuplicate, tmux.ErrTmuxSessionCreate, "ErrTmuxSessionCreate",
+		// The only "duplicate session" still ErrTmuxSessionCreate: no session holds the name.
+		{"duplicate session, holder vanished", tmux.FailDuplicate, tmux.ErrTmuxSessionCreate, "ErrTmuxSessionCreate",
 			func(_ *resumeEnv, name string) apitest.DescCase {
 				return apitest.DescSessionCreateFailed(apitest.SessionCreateFailed{Name: name, Duplicate: true})
 			}},
@@ -162,12 +163,24 @@ func TestResumeRestoreAfterEachLaunchFailure(t *testing.T) {
 				_, err := e.resume(r.ID)
 				assertLaunchSentinel(t, err, tr.want)
 				create := rstOneCreate(t, e)
-				if got := callKinds(e.rec); !reflect.DeepEqual(got, []tmux.Call{tmux.CallLookup, tmux.CallCreate}) {
-					t.Errorf("tmux calls = %v; want the lookup, then the one create", got)
+				want := []tmux.Call{tmux.CallLookup, tmux.CallCreate}
+				restore := apitest.ResumeRestore{Outcome: apitest.RestoreApplied, PriorState: prior}
+				desc := tr.desc(e, create.Target)
+				if tr.fail == tmux.FailDuplicate { // SR-8.5: one re-lookup on the row's socket, then the restore sentence
+					want = append(want, tmux.CallLookup)
+					desc = desc.AfterHeldName(apitest.HeldName{Name: create.Target, Restore: restore})
+				} else {
+					desc = desc.AfterResumeRestore(restore)
 				}
-				apitest.AssertDescription(t, err.Error(), tr.desc(e, create.Target).AfterResumeRestore(
-					apitest.ResumeRestore{Outcome: apitest.RestoreApplied, PriorState: prior}),
-					create.Token, e.storeID, r.Identity.Token)
+				if got := callKinds(e.rec); !reflect.DeepEqual(got, want) {
+					t.Errorf("tmux calls = %v; want %v", got, want)
+				}
+				for _, c := range e.rec.SocketCalls() {
+					if c.Socket != e.socket {
+						t.Errorf("%v on %q; want every call on %s", c.Call, c.Socket, e.socket)
+					}
+				}
+				apitest.AssertDescription(t, err.Error(), desc, create.Token, e.storeID, r.Identity.Token)
 				rstAssertRow(t, e, r.ID, rstRestored(r, parent))
 				if moved := rstTrailOf(t, r.ID, "ad.resume.moved_to_pending"); len(moved) != 1 || moved[0]["prior_state"] != prior {
 					t.Errorf("ad.resume.moved_to_pending = %v; want one with prior_state %s", moved, prior)

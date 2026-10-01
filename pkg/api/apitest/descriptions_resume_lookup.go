@@ -12,7 +12,9 @@ import "strconv"
 // existing cases unchanged: DescStillStopping, DescStillStarting and
 // DescOwnOldSession (descriptions_starting.go); DescConflictingLabels with
 // NothingWasDone, DescDifferentServer, DescCallTimeout,
-// DescUnrecognisedReply, DescSocketPermission and DescTmuxNotRun.
+// DescUnrecognisedReply, DescSocketPermission and DescTmuxNotRun. After
+// resume's "duplicate session" DescPreLaunchLeftover also words an old
+// holder, with DescCase.AfterHeldName (descriptions_resume_held.go).
 
 // The Leftover refusals' consequence sentences: the plain-spawn scan's,
 // which creates no row, and the pre-launch check's, whose row exists.

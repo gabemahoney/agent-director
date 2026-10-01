@@ -1,10 +1,10 @@
 package api_test
 
-// resume_ceiling_test.go proves resume's SR-13.2 ceiling Q + C + 2A in virtual
-// time on the kill fixture (the Recorder charges every call its full class
-// timeout and no pipe-close wait W, which SR-20.6 proves per call elsewhere,
-// so this is SR-13.2's 10.9 s less W). Path (ii), the re-lookup after
-// "duplicate session", is Task 3's.
+// resume_ceiling_test.go proves resume's SR-13.2 ceiling in virtual time on
+// the kill fixture (the Recorder charges every call its full class timeout
+// and no pipe-close wait W, which SR-20.6 proves per call elsewhere): path
+// (i) Q + C + 2A (SR-13.2's 10.9 s less W) and path (ii), the re-lookup after
+// "duplicate session", 2Q + C (SR-13.2's 8.3 s less its three W).
 
 import (
 	"errors"
@@ -15,6 +15,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // TestResumeCeilingVirtualTime: path (i) (lookup, create whose label fails,
@@ -89,6 +90,64 @@ func TestResumeCeilingRefusalChargesOnlyLookup(t *testing.T) {
 			}
 			e.assertKillCalls(t, tmux.CallLookup)
 			e.assertResumeWroteNothing(t, before)
+		})
+	}
+}
+
+// TestResumeCeilingDuplicateSession: path (ii) (lookup, create answering
+// "duplicate session", re-lookup) charges 2Q + C, 8 s at the defaults, and
+// with Q raised above 2A more than path (i)'s Q + C + 2A at the same settings.
+func TestResumeCeilingDuplicateSession(t *testing.T) {
+	q, a, _ := ceilDefaults()
+	c := config.Default().Tmux.EffectiveCreateTimeout()
+	if got := 2*q + c; got != 8*time.Second {
+		t.Fatalf("2Q + C at the defaults = %v; the Epic says 8 s", got)
+	}
+	raised := config.Tmux{QueryTimeoutMs: 2*config.DefaultActionTimeoutMs + config.DefaultQueryTimeoutMs}
+	rq, written := raised.EffectiveQueryTimeout(), []apitest.TmuxSetting{
+		apitest.TmuxInt(config.TmuxQueryTimeoutMs, raised.QueryTimeoutMs)}
+	if rq <= 2*a || 2*rq+c <= rq+c+2*a {
+		t.Fatalf("raised Q = %v; want above 2A = %v, making path (ii) the larger", rq, 2*a)
+	}
+	cases := []struct {
+		name   string
+		q      time.Duration
+		config []apitest.TmuxSetting // also written for api.New
+		held   bool                  // path (ii); false: path (i), a create whose label fails
+	}{
+		{"default Q/path ii", q, nil, true},
+		{"Q above 2A/path ii", rq, written, true},
+		{"Q above 2A/path i", rq, written, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newKillEnv(t)
+			e.rec.WithVirtualTime(e.clock, tmux.Timeouts{Query: tc.q})
+			r := e.seedHeldResumable(t, rceSettled(e), agentGone)
+			want, wantErr := tc.q+c+2*a, api.ErrTmuxSessionCreate
+			calls := []tmux.Call{tmux.CallLookup, tmux.CallCreate, tmux.CallSetLabel, tmux.CallKillSession}
+			var sc *heldScene
+			if tc.held {
+				want, wantErr, calls = 2*tc.q+c, api.ErrTmuxSessionConflict, []tmux.Call{tmux.CallLookup, tmux.CallCreate, tmux.CallLookup}
+				sc = e.arrangeHeld(t, r, heldSpec{Holder: holderForeign})
+			} else {
+				e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailLabel, Times: 1}, tmux.CallCreate).
+					Script(r.Socket, tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 1}, tmux.CallSetLabel, tmux.CallKillSession)
+			}
+			start := e.clock.Now()
+
+			_, _, err := e.resumeClient(t, r.ID, tc.config...)
+
+			if elapsed := e.clock.Now().Sub(start); elapsed != want {
+				t.Errorf("virtual time = %v; want %v", elapsed, want)
+			}
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("err = %v; want %v", err, wantErr)
+			}
+			e.assertKillCalls(t, calls...)
+			if sc != nil {
+				e.assertHeldRestored(t, sc)
+			}
 		})
 	}
 }

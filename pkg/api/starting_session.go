@@ -12,12 +12,13 @@ import (
 // This file holds the shared starting-session refusal (SR-4.2, SR-1.2,
 // SR-1.4): it runs tmux.StartingSession on a row the verb examined as
 // finished and builds the refusal for its outcome. resume's pre-launch check
-// (decidePreLaunch) uses it. Its later users are resume's re-lookup after
-// "duplicate session", reuse (the old row's lookup and its re-lookup) and
+// (decidePreLaunch) and its re-lookup after "duplicate session"
+// (heldNameOutcome, with the restore's sentence as the row's Consequence) use
+// it. Its later users are reuse (the old row's lookup and its re-lookup) and
 // kill's finished-row opt-in, which takes steps 1 and 2 (unavailableError)
-// and replaces step 3 with its reported-in rule (SR-6.5, SR-6.7). It makes no tmux call, no store read or
-// write, no trail write and no log line: a refusal is reported by its error
-// alone (SR-4.3). No description names a session-ending command, another
+// and replaces step 3 with its reported-in rule (SR-6.5, SR-6.7). It makes no
+// tmux call, no store read or write, no trail write and no log line: a
+// refusal is reported by its error alone (SR-4.3). No description names a session-ending command, another
 // row's id or a label value, and the stopping texts never say "dead" or
 // "gone".
 
@@ -53,6 +54,20 @@ type startingSessionRow struct {
 	RecordsPID bool
 	// RecordsSessionID reports that the row records a session id.
 	RecordsSessionID bool
+	// Consequence is the sentence saying what the caller's state is, in the
+	// cantTellRefusal.Consequence style: "" means nothingWasDone (a refusal
+	// before any write). A refusal that follows writes states what was done
+	// instead: resume after "duplicate session" passes its restore's row
+	// sentence (resumeRestoreResultOf).
+	Consequence string
+}
+
+// consequence returns r's consequence sentence, nothingWasDone by default.
+func (r startingSessionRow) consequence() string {
+	if r.Consequence == "" {
+		return nothingWasDone
+	}
+	return r.Consequence
 }
 
 // startingSessionCheck is a classified row: the facts, and the rule's
@@ -103,13 +118,13 @@ func (c startingSessionCheck) unavailableError() error {
 	switch {
 	case c.class.Outcome == tmux.StillStopping && c.class.SessionPresent:
 		return fmt.Errorf("%w: instance %s: its session %s appears to still be stopping: the row ended less than the stopping window of %s ago and its agent has not yet exited; %s; %s",
-			tmux.ErrTmuxUnresponsive, r.InstanceID, strconv.Quote(r.Name), inSeconds(c.class.Window), nothingWasDone, retryLater)
+			tmux.ErrTmuxUnresponsive, r.InstanceID, strconv.Quote(r.Name), inSeconds(c.class.Window), r.consequence(), retryLater)
 	case c.class.Outcome == tmux.StillStopping:
 		return fmt.Errorf("%w: instance %s appears to still be stopping: the row ended less than the stopping window of %s ago and its agent process still runs although no session of its launch was found; %s; %s",
-			tmux.ErrTmuxUnresponsive, r.InstanceID, inSeconds(c.class.Window), nothingWasDone, retryLater)
+			tmux.ErrTmuxUnresponsive, r.InstanceID, inSeconds(c.class.Window), r.consequence(), retryLater)
 	case c.class.Outcome == tmux.StillStarting:
 		return fmt.Errorf("%w: instance %s: its session %s appears to still be starting: it has run for less than the starting-session bound of %s; %s; %s",
-			tmux.ErrTmuxUnresponsive, r.InstanceID, strconv.Quote(r.Name), inSeconds(c.class.Bound), nothingWasDone, retryLater)
+			tmux.ErrTmuxUnresponsive, r.InstanceID, strconv.Quote(r.Name), inSeconds(c.class.Bound), r.consequence(), retryLater)
 	}
 	return nil
 }
@@ -139,6 +154,6 @@ func (c startingSessionCheck) ownIDConflictError() error {
 		resumable = "; the conversation stays resumable"
 	}
 	return fmt.Errorf("%w: instance %s: session name %s: this row's own id: %s; the agent may be hung or running on a row wrongly marked finished, so no automated action on it is safe and a human must look, %s; %s%s; %s",
-		tmux.ErrTmuxSessionConflict, r.InstanceID, strconv.Quote(r.Name), why, operatorActionsPointer, nothingWasDone,
+		tmux.ErrTmuxSessionConflict, r.InstanceID, strconv.Quote(r.Name), why, operatorActionsPointer, r.consequence(),
 		resumable, listSessionNameHint)
 }

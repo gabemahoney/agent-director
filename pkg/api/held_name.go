@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/tmux"
@@ -12,9 +13,10 @@ import (
 // session-creating call answered "duplicate session" (SR-1.2, SR-1.4,
 // SR-3.10, SR-9.4): the re-lookup's classified verb error and the holder
 // facts its ad.launch.name_held record needs. It is verb-agnostic: plain
-// spawn is its first caller, passing one of its three row sentences and one
-// of its two retry sentences below; resume (Epic 16) and reuse (Epic 17) will
-// call it unchanged with their own restore sentence and the default retry.
+// spawn passes one of its three row sentences and one of its two retry
+// sentences below and no examined row; resume (resumeHeldName) passes its
+// restore's sentence, retryLater and the row it examined before its
+// move (heldExaminedRow), and reuse (Epic 17) will call it the same way.
 // resume's pre-launch check (resume_lookup.go) builds its holder conflicts
 // with the same class wording (heldHolderError, ambiguousHolderError) under
 // heldBeforeLaunch, which makes no "duplicate session" claim.
@@ -73,18 +75,39 @@ type heldNameHolder struct {
 	Class      tmux.LabelClass
 }
 
+// heldExaminedRow is the row a launch examined before its move or reset,
+// given to heldNameOutcome by a verb whose row existed before its create
+// (resume after "duplicate session", SR-8.5; reuse, SR-10.4): the
+// starting-session rule's facts as examined (Name is the recorded name, the
+// holder name and the name every description quotes; EndedAt, RecordsPID and
+// RecordsSessionID are the pre-move values, never a re-read; Consequence is
+// ignored, as heldNameOutcome sets it to the row sentence), the effective
+// bound and window (startingSessionLimitsOf) and Now, the verb's instant read
+// once after the re-lookup returned.
+type heldExaminedRow struct {
+	startingSessionRow
+	Limits startingSessionLimits
+	Now    time.Time
+}
+
 // heldNameOutcome maps the re-lookup after a create's "duplicate session" to
 // the verb error and the holder facts (SR-1.2, SR-1.4, SR-1.5, SR-3.10,
-// SR-9.4). res is the one tmux.Lookup on the launch socket with the new
-// row's instance id and launch token, this store's id, no recorded server
-// identity, and name as the holder name; socket is that launch socket;
-// rowSentence is the caller's row sentence (plain spawn: heldRowEnded,
-// heldRowLeftAsIs or heldRowStaysPending; resume and reuse, Epics 16 and 17:
-// their restore result); retry is the caller's retry sentence for the
-// ErrTmuxUnresponsive errors below, "" meaning the default (plain spawn:
-// heldRetryReuse when its end write applied, else heldRetryWait; resume and
-// reuse keep the default). Each error matches exactly one catalogued sentinel
-// under errors.Is (SR-1.5) and carries the row sentence exactly once:
+// SR-4.2, SR-8.5, SR-9.4). res is the one tmux.Lookup on the launch socket
+// with name as the holder name, for plain spawn's new row (its instance id
+// and launch token, this store's id, no recorded server identity) or, for
+// resume, the row as examined before its move (its instance id, earlier
+// launch token and recorded server identity, this store's id); socket is
+// that launch socket; rowSentence is the caller's row sentence (plain spawn:
+// heldRowEnded, heldRowLeftAsIs or heldRowStaysPending; resume, and reuse in
+// Epic 17: the restore's, resumeRestoreResultOf); retry is the caller's retry
+// sentence for the ErrTmuxUnresponsive errors below, "" meaning the default
+// (plain spawn: heldRetryReuse when its end write applied, else
+// heldRetryWait; resume passes retryLater, so its ambiguous holder also ends
+// with "retry later"); examined is the row the
+// verb examined before its move (heldExaminedRow), nil for plain spawn, whose
+// row did not exist before. Each error matches exactly one catalogued
+// sentinel under errors.Is (SR-1.5) and carries the row sentence exactly once,
+// never "nothing was done" or "nothing was written":
 //
 //   - Can't tell, first, through the single-row verbs' shared cantTellError
 //     with the row sentence as its consequence (so no "nothing was done"):
@@ -92,9 +115,10 @@ type heldNameHolder struct {
 //     "retry later" when retry is set ("retry later" otherwise);
 //     provenance_conflict is tmux.ErrTmuxSessionConflict ("conflicting
 //     labels", no label sentence, since the holder's class cannot be
-//     trusted); a different server (unreachable here, as the new row records
-//     no server identity; mapped for safety) and tmux unavailable, socket
-//     permission included, are tmux.ErrTmuxNotAvailable. The consequence
+//     trusted); a different server and tmux unavailable, socket permission
+//     included, are tmux.ErrTmuxNotAvailable (a different server is
+//     unreachable for plain spawn, whose new row records no server identity,
+//     and live for resume, which carries the examined one). The consequence
 //     also names the quoted requested name and, when one session holds it,
 //     its tmux id, so every variant carries them.
 //   - More than one listing entry matching the name: Can't tell for the
@@ -116,15 +140,27 @@ type heldNameHolder struct {
 //     tmux.ErrTmuxSessionConflict, naming the quoted requested name, the
 //     holder's tmux id and the label sentence, and ending with "list
 //     --tmux-session-name".
-//   - A holder with this launch's current label cannot occur (the token is
-//     new and the create made nothing); it is handled defensively, never as
-//     a success: tmux.ErrTmuxSessionConflict saying a human must look, with
-//     the pointer.
+//   - A holder with this launch's current label cannot occur for plain spawn
+//     (the token is new and the create made nothing); it is handled
+//     defensively, never as a success: tmux.ErrTmuxSessionConflict saying a
+//     human must look, with the pointer.
+//   - With examined set, the holder is judged against that row by its label
+//     class, whatever the verdict: an old label gets resume's Leftover
+//     wording (preLaunchLeftoverError, quoting name with the holder's tmux
+//     id, the row sentence in place of "nothing was written"), never the
+//     spawn-only sentence; a current label (the row's own session for the
+//     examined token) gets the starting-session rule with the holder's
+//     creation time, stopping window first (checkStartingSession(...).
+//     refusal() with the row sentence as Consequence): "appears to still be
+//     stopping" or "appears to still be starting" (tmux.ErrTmuxUnresponsive),
+//     else "this row's own id" (tmux.ErrTmuxSessionConflict, with the
+//     pointer). Foreign, other-store and no-valid-label holders are worded as
+//     above.
 //
 // No description carries a label's value, the id a label names, another
 // row's id, a store id, a session-environment value, "dead" or "gone", or a
 // session-ending command (SR-1.4). It makes no call and writes nothing.
-func heldNameOutcome(res tmux.Result, instanceID, name, socket, rowSentence, retry string) (heldNameHolder, error) {
+func heldNameOutcome(res tmux.Result, instanceID, name, socket, rowSentence, retry string, examined *heldExaminedRow) (heldNameHolder, error) {
 	holder := heldHolderFacts(res)
 	if res.Verdict == tmux.CantTell {
 		return holder, cantTellError(res, cantTellRefusal{
@@ -145,6 +181,19 @@ func heldNameOutcome(res tmux.Result, instanceID, name, socket, rowSentence, ret
 	if res.Holder == nil {
 		return holder, spawn.CreateFailedError(&tmux.CallError{Call: tmux.CallCreate, Failure: tmux.FailDuplicate}, name,
 			"no session held the name when it was looked up again; "+rowSentence)
+	}
+	if examined != nil {
+		switch res.HolderClass {
+		case tmux.ClassOld:
+			held := *res.Holder
+			held.Name = name
+			return holder, preLaunchLeftoverError(instanceID, []tmux.Session{held}, rowSentence)
+		case tmux.ClassCurrent:
+			row := examined.startingSessionRow
+			row.Consequence = rowSentence
+			session := *res.Holder
+			return holder, checkStartingSession(examined.Limits, examined.Now, row, &session).refusal()
+		}
 	}
 	return holder, heldHolderError(heldAfterDuplicate, res.HolderClass, instanceID, name, res.Holder.ID, rowSentence)
 }
@@ -249,9 +298,11 @@ func heldHolderError(p holderPhrasing, c tmux.LabelClass, instanceID, name, sess
 		detail = "agent-director cannot tell whose session it is"
 		human = "a human must look, " + operatorActionsPointer
 	default:
-		// ClassCurrent cannot occur: after "duplicate session" the new row's
-		// token is fresh, so no session can carry this launch's label; before a
-		// launch such a session is the lookup's Ours. Should the listing say
+		// ClassCurrent cannot occur here: after plain spawn's "duplicate
+		// session" the new row's token is fresh, so no session can carry this
+		// launch's label (a verb with an examined row decides it by the
+		// starting-session rule in heldNameOutcome instead); before a launch
+		// such a session is the lookup's Ours. Should the listing say
 		// otherwise, it is a conflict for a human, never a success.
 		words, label = p.CurrentWords, labelNamesThisID
 		detail = "agent-director cannot tell how"

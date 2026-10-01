@@ -12,7 +12,9 @@ import (
 // (DescStillStopping, its session present or not), its session still starting
 // (DescStillStarting), and its own old session (DescOwnOldSession). The own
 // old session is told apart from a Leftover refusal by its sentinel and by
-// its own phrases, never by "this row's own id" alone, which both say.
+// its own phrases, never by "this row's own id" alone, which both say. After
+// resume's "duplicate session" (the holder is the row's own session) each
+// takes DescCase.AfterHeldName with HeldName.Restore.
 
 // StartingSession parameterises the starting-session cases: the row's
 // instance id; Name, the session name the caller looked up or asked tmux to
@@ -63,7 +65,7 @@ func DescStillStopping(p StartingSession) DescCase {
 		req = append(req, strconv.Quote(p.Name), agentNotExited)
 		mustNot = append(mustNot, noLaunchSession)
 	}
-	return DescCase{Name: name, Require: req, MustNot: mustNot}
+	return DescCase{Name: name, Require: req, MustNot: mustNot, transient: true}
 }
 
 // DescStillStarting is ErrTmuxUnresponsive for an own session younger than
@@ -76,9 +78,10 @@ func DescStillStarting(p StartingSession) DescCase {
 		panic("apitest: DescStillStarting needs a session")
 	}
 	return DescCase{
-		Name:    "ErrTmuxUnresponsive, still starting",
-		Require: []string{strconv.Quote(p.Name), stillStarting, "less than the starting-session bound of " + inSeconds(p.Bound)},
-		MustNot: append([]string{stillStopping, stoppingWindow, thisRowsOwnID}, unresponsiveMustNot...),
+		Name:      "ErrTmuxUnresponsive, still starting",
+		Require:   []string{strconv.Quote(p.Name), stillStarting, "less than the starting-session bound of " + inSeconds(p.Bound)},
+		MustNot:   append([]string{stillStopping, stoppingWindow, thisRowsOwnID}, unresponsiveMustNot...),
+		transient: true,
 	}
 }
 
@@ -94,7 +97,9 @@ func DescStillStarting(p StartingSession) DescCase {
 // the conversation stays resumable (otherwise never "resumable"); "list
 // --tmux-session-name". Never a Leftover's "not this launch's session", "left
 // over from an earlier life" or "nothing was written", nor that it is
-// stopping or starting.
+// stopping or starting. With the window skipped, "row ended" is forbidden as
+// well as "ended", so the check holds where a restore sentence's prior state
+// "ended" lifts the latter (afterResumeHeld).
 func DescOwnOldSession(p StartingSession) DescCase {
 	req := []string{
 		p.InstanceID, strconv.Quote(p.Name), thisRowsOwnID,
@@ -115,7 +120,7 @@ func DescOwnOldSession(p StartingSession) DescCase {
 		req = append(req, "the row ended at least the "+stoppingWindow+" of "+inSeconds(p.Window)+" ago")
 	} else {
 		name += ", window skipped"
-		mustNot = append(mustNot, "ended", "ended_at", stoppingWindow)
+		mustNot = append(mustNot, "ended", "row ended", "ended_at", stoppingWindow)
 	}
 	if p.SessionID {
 		name += ", with a session id"

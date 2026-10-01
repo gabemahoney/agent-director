@@ -9,7 +9,7 @@ package api_test
 // extend this file (a oneName<Verb>Rows added to oneNameRows, every error
 // through assertOneName) instead of writing their own one-name check; the
 // pane verbs' rows are in one_name_pane_verbs_test.go, resume's pre-launch
-// rows in one_name_resume_test.go.
+// and "duplicate session" rows in one_name_resume_test.go.
 
 import (
 	"errors"
@@ -116,7 +116,8 @@ type oneNameRow struct {
 // oneNameRows is every returned-error row.
 func oneNameRows() []oneNameRow {
 	return slices.Concat(oneNameSpawnRows(), oneNameHeldRows(), oneNameResumeRows(), oneNameResumeLookupRows(),
-		oneNameInternalRows(), oneNameKillRows(), oneNameReadPaneRows(), oneNameSendKeysRows(), oneNamePauseRows())
+		oneNameResumeHeldRows(), oneNameInternalRows(), oneNameKillRows(), oneNameReadPaneRows(), oneNameSendKeysRows(),
+		oneNamePauseRows())
 }
 
 // TestOneNameReturnedErrors: every tmux-caused error the verbs return matches
@@ -299,8 +300,8 @@ func scriptResume(s tmuxfix.Script) func(*testing.T, *resumeEnv) []apitest.Spawn
 }
 
 // oneNameResumeRows are resume's tmux-caused errors at its socket and its
-// create (SR-8.1, SR-8.5); its pre-launch refusals, a held recorded name
-// included, are oneNameResumeLookupRows (one_name_resume_test.go).
+// create (SR-8.1, SR-8.5); its pre-launch refusals and its errors after
+// "duplicate session" are in one_name_resume_test.go.
 func oneNameResumeRows() []oneNameRow {
 	return []oneNameRow{
 		oneNameResume("recorded socket's parent vanished", "ErrTmuxNotAvailable", func(t *testing.T, _ *resumeEnv) []apitest.SpawnOption {

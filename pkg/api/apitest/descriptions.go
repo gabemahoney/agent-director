@@ -28,8 +28,9 @@ import (
 // of find-missing's manifest texts and SR-18.2's "not proof" statement
 // (descriptions_find_missing.go), of expire's manifest texts and SR-18.7's
 // cleanup guidance (descriptions_expire.go), of the shared
-// starting-session refusal (descriptions_starting.go), or of resume's
-// pre-launch check (descriptions_resume_lookup.go).
+// starting-session refusal (descriptions_starting.go), of resume's
+// pre-launch check (descriptions_resume_lookup.go), or of resume's errors
+// after "duplicate session" (descriptions_resume_held.go).
 
 // DescCase is one SR-1.4 description case: Name (shown in every failure),
 // the phrases the description must contain, the case's own must-not phrases
@@ -47,6 +48,7 @@ type DescCase struct {
 
 	allowRetryKill bool
 	unanswered     bool
+	transient      bool // may say "retry later" (DescStillStopping, DescStillStarting)
 }
 
 // DescSession is a tmux session a description names: its name (quoted in the

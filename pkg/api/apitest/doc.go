@@ -104,7 +104,8 @@
 //     and the end write's row sentence, never "retry later", and on an
 //     unanswered re-lookup the retry guidance by the same result: the reuse
 //     opt-in once the name is free when the row was ended, else the
-//     launch-timeout rule), of the
+//     launch-timeout rule; with HeldName.Restore, resume's errors after
+//     "duplicate session", descriptions_resume_held.go), of the
 //     lookup's shared Can't tell cases (descriptions_lookup.go), or of the
 //     live-row sequence (descriptions_live_row.go: DescLiveRowSequence, its
 //     short form, which only kill's manifest description states;

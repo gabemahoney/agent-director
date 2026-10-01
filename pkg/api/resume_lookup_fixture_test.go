@@ -90,7 +90,9 @@ func (e *killEnv) seedResumableRow(t *testing.T, spec killRowSpec) resumeRow {
 
 // holderKind is a session seeded on a row's socket by seedHolder: one
 // holding the row's recorded name (in tmux's stored form) by its label's
-// class, or one that holds nothing.
+// class, or one that holds nothing. The kinds from holderCurrent on serve
+// resume's re-lookup after "duplicate session" (arrangeHeld,
+// resume_held_fixture_test.go).
 type holderKind int
 
 const (
@@ -102,11 +104,29 @@ const (
 	holderMalformed                             // an @ad_owner value that does not parse
 	holderOtherStoreElsewhere                   // another store's label with the row's id and token, under another name
 	holderPrefixNeighbour                       // no label, under the row's name plus a suffix
+	holderCurrent                               // r.current(): the row's own session for its examined token
+	holderAmbiguous                             // two unlabelled sessions under the name: more than one entry matches
+	holderConflicting                           // no label, with a malformed global scope value: conflicting labels
+	holderVanished                              // nothing holds the name
 )
 
 // seedHolder seeds k's session on r's socket, with one new pane, and returns
-// it as stored; for holderForeign the label's instance id is the other row's.
+// it as stored (the first of holderAmbiguous's two; the zero session for
+// holderVanished); for holderForeign the label's instance id is the other
+// row's.
 func (e *killEnv) seedHolder(t *testing.T, r killRow, k holderKind) tmuxfix.SeedSession {
+	t.Helper()
+	placed := e.placeHolder(t, r, k, e.holderSessions(t, r, k))
+	if len(placed) == 0 {
+		return tmuxfix.SeedSession{}
+	}
+	return placed[0]
+}
+
+// holderSessions is k's sessions for r, not yet seeded (holderForeign seeds
+// its other row now): under storedFormOf(r.Name) unless Elsewhere or
+// Neighbour, each valid label's one pane carrying its token.
+func (e *killEnv) holderSessions(t *testing.T, r killRow, k holderKind) []tmuxfix.SeedSession {
 	t.Helper()
 	s := tmuxfix.SeedSession{Name: storedFormOf(r.Name), LabelSet: true}
 	switch k {
@@ -118,18 +138,52 @@ func (e *killEnv) seedHolder(t *testing.T, r killRow, k holderKind) tmuxfix.Seed
 		s.Label = tmuxfix.Valid(newToken(), "other-"+uuid.NewString()[:8], apitest.OtherStoreID(r.StoreID))
 	case holderOtherStoreOwn:
 		s.Label = r.otherStore(r.Token)
-	case holderNone:
+	case holderNone, holderAmbiguous, holderConflicting:
 		s.LabelSet = false
 	case holderOtherStoreElsewhere:
 		s.Name, s.Label = "elsewhere-"+uuid.NewString()[:8], r.otherStore(r.Token)
 	case holderPrefixNeighbour:
 		s.Name, s.LabelSet = s.Name+"-neighbour", false
+	case holderCurrent:
+		s.Label = r.current()
+	case holderVanished:
+		return nil
 	}
 	if s.Label.Kind == tmux.LabelValid {
 		s.Panes = []tmuxfix.SeedPane{{AdPane: s.Label.Token}}
 	}
+	if k == holderAmbiguous {
+		return []tmuxfix.SeedSession{s, s}
+	}
+	return []tmuxfix.SeedSession{s}
+}
+
+// placeHolder seeds sessions (holderSessions' for k) on r's socket, its
+// server bound when none is, sets holderConflicting's malformed global scope
+// value, and returns the sessions as stored, in seeding order.
+func (e *killEnv) placeHolder(t *testing.T, r killRow, k holderKind, sessions []tmuxfix.SeedSession) []tmuxfix.SeedSession {
+	t.Helper()
 	e.ensureServer(&r)
-	return e.seedOther(t, r.Socket, s)
+	var placed []tmuxfix.SeedSession
+	for _, s := range sessions {
+		before := map[string]bool{}
+		for _, got := range e.rec.Sessions(r.Socket) {
+			before[got.ID] = true
+		}
+		e.rec.SeedSessions(r.Socket, s)
+		for _, got := range e.rec.Sessions(r.Socket) {
+			if !before[got.ID] {
+				placed = append(placed, got)
+			}
+		}
+	}
+	if len(placed) != len(sessions) {
+		t.Fatalf("seeded %d of %d holder sessions on %s", len(placed), len(sessions), r.Socket)
+	}
+	if k == holderConflicting {
+		e.rec.SetScope(r.Socket, tmuxfix.ScopeGlobal, tmuxfix.ScopeValue{})
+	}
+	return placed
 }
 
 // storedFormOf is the name tmux stores and lists for raw (the replay

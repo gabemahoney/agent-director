@@ -8,9 +8,9 @@ package api_test
 // verb is a small adapter (invoke, its action calls, its first action) with
 // one expected cell per column. A verb that inserts its own row (plain
 // spawn), writes the row's result (find-missing's sweep), deletes it
-// (expire) or launches it (resume) runs its own
-// world and row check instead, and marks the columns that cannot arise for
-// it not applicable, with the reason. Sequence
+// (expire) or launches it (resume, and resume's re-lookup after "duplicate
+// session") runs its own world and row check instead, and marks the columns
+// that cannot arise for it not applicable, with the reason. Sequence
 // details, the process wait and the ceilings are kill_test.go's. Later verb
 // Epics extend this table (an adapter appended to callTableVerbs) instead of
 // writing their own.
@@ -160,17 +160,19 @@ func callTableFirstLine() string {
 // when set, says why the column cannot arise for the verb; held is plain
 // spawn's world and description (lookup_calltable_spawn_test.go); fm is
 // find-missing's row result (lookup_calltable_findmissing_test.go); kept is
-// expire's kept reason, "" when it deletes the row (lookup_calltable_expire_test.go).
+// expire's kept reason, "" when it deletes the row (lookup_calltable_expire_test.go);
+// heldResume is resume's "duplicate session" arrangement (lookup_calltable_resume_test.go).
 type callTableCell struct {
-	errName string
-	sent    bool
-	calls   []tmux.Call
-	desc    func(e *killEnv, r killRow) apitest.DescCase
-	prepare func(e *killEnv, r killRow)
-	na      string
-	held    callTableHeld
-	fm      callTableFM
-	kept    string
+	errName    string
+	sent       bool
+	calls      []tmux.Call
+	desc       func(e *killEnv, r killRow) apitest.DescCase
+	prepare    func(e *killEnv, r killRow)
+	na         string
+	held       callTableHeld
+	fm         callTableFM
+	kept       string
+	heldResume callTableHeldResume
 }
 
 // callTableVerb is one verb's row: invoke runs it on r and reports whether it
@@ -192,7 +194,7 @@ type callTableVerb struct {
 func callTableVerbs() []callTableVerb {
 	return []callTableVerb{callTableKill(), callTableSpawn(), callTableFindMissing(), callTableReadPane(),
 		callTableSendKeys(), callTableSendKeysPending(), callTablePause(), callTablePausePending(),
-		callTablePauseEnded(), callTableExpire(), callTableResume()}
+		callTablePauseEnded(), callTableExpire(), callTableResume(), callTableResumeHeld()}
 }
 
 // TestCallTable runs every verb in every column: error name through the

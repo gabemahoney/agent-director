@@ -146,9 +146,10 @@ func UnlabelledSessionError(o CreateOutcome, name, consequence string) error {
 // CreateFailedError is the description of a create that created no session
 // (SR-1.4, SR-2.5), shared by every launch verb (SR-1.8): a launch failure
 // such as the no-server and no-socket replies or a non-zero exit with no
-// reply, and, for a verb that maps it so (resume), "duplicate session". It
-// carries the quoted name and the create call's failure, then consequence,
-// the verb's row sentence, and wraps tmux.ErrTmuxSessionCreate only.
+// reply, and "duplicate session" whose holder vanished before the re-lookup
+// (no session held the name any more). It carries the quoted name and the
+// create call's failure, then consequence, the verb's row sentence, and wraps
+// tmux.ErrTmuxSessionCreate only.
 func CreateFailedError(ce *tmux.CallError, name, consequence string) error {
 	return fmt.Errorf("%w: tmux session %q: %s; %s", tmux.ErrTmuxSessionCreate, name, ce.Error(), consequence)
 }

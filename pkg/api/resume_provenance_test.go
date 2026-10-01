@@ -4,7 +4,9 @@ package api_test
 // resume's pre-launch lookup (SR-14, SR-3.3, SR-3.4, SR-3.16; AC-LKP-18,
 // AC-LKP-19): one per reason per call, verb resume and source ad_resume,
 // written before any ad.resume.* line and before the move; none in the
-// normal case; never adopted; fail-open.
+// normal case; never adopted; fail-open. It also covers the re-lookup's
+// after "duplicate session" (SR-8.5): after the create, action the restore's
+// row result, and never a reason the pre-launch lookup already wrote.
 
 import (
 	"cmp"
@@ -20,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/trail"
@@ -316,5 +319,109 @@ func TestResumeProvenanceFailOpenChild(t *testing.T) {
 
 	if _, err := os.Stat(apiTrailFilePath()); !os.IsNotExist(err) {
 		t.Errorf("trail file stat err = %v; want it never created", err)
+	}
+}
+
+// rpvHeldCase is one "duplicate session" arrangement and its disagree
+// records: pre from the pre-launch lookup, then post from the re-lookup,
+// whose tmux_session_id is session's (nil: null).
+type rpvHeldCase struct {
+	name      string
+	spec      heldSpec
+	restore   func(t *testing.T, e *killEnv, r resumeRow, w *hookedResumeStore) // the restore's result; nil: applied
+	pre, post []disagreeWant
+	session   func(sc *heldScene) string
+}
+
+// rpvHeldCases is the re-lookup's reason table: each reason it can meet, a
+// reason both lookups meet, the restore results as action, and none.
+func rpvHeldCases() []rpvHeldCase {
+	holder := func(sc *heldScene) string { return sc.Holder().ID }
+	conflict := func(reason, server string) []disagreeWant {
+		return []disagreeWant{{reason: reason, server: server, verdict: "provenance_conflict", action: "restored"}}
+	}
+	mismatch := func(action string) []disagreeWant {
+		return []disagreeWant{{reason: "server_mismatch", server: "differs", verdict: "different_server", action: action}}
+	}
+	restarted := []disagreeWant{{reason: "server_restarted", server: "restarted", verdict: "gone", action: "proceeded"}}
+	rebound := heldSpec{Holder: holderNone, Server: heldServerRebound}
+	scope := func(level tmuxfix.ScopeLevel) heldSpec { return heldSpec{Holder: holderCurrent, Scope: level} }
+	return []rpvHeldCase{
+		{name: "no reason at the re-lookup writes none", spec: heldSpec{Holder: holderOld}},
+		{name: "server_restarted at both lookups is written once", spec: heldSpec{Holder: holderOld, Server: heldServerRestarted},
+			pre: restarted},
+		{name: "server_mismatch new at the re-lookup", spec: rebound, post: mismatch("restored"), session: holder},
+		{name: "server_mismatch with no holder", spec: heldSpec{Holder: holderVanished, Server: heldServerRebound},
+			post: mismatch("restored")},
+		{name: "server_mismatch, row changed before the restore", spec: rebound, post: mismatch("left_changed"), session: holder,
+			restore: func(t *testing.T, e *killEnv, r resumeRow, w *hookedResumeStore) {
+				parent := e.seedRow(t, killRowSpec{State: store.StateEnded, Agent: agentGone, NoSession: true}).ID
+				w.afterMove(func() {
+					if err := e.st.SetParentID(r.ID, parent); err != nil {
+						t.Errorf("SetParentID: %v", err)
+					}
+				})
+			}},
+		{name: "server_mismatch, restore store error", spec: rebound, post: mismatch("still_pending"), session: holder,
+			restore: func(_ *testing.T, _ *killEnv, _ resumeRow, w *hookedResumeStore) { w.failRestore(nil) }},
+		{name: "duplicate_label", spec: heldSpec{Holder: holderCurrent, OursRenamed: "dup-resume"},
+			post: conflict("duplicate_label", "match"), session: holder},
+		{name: "scope_value global", spec: scope(tmuxfix.ScopeGlobal), post: conflict("scope_value", "match"), session: holder},
+		{name: "scope_value server", spec: scope(tmuxfix.ScopeServer), post: conflict("scope_value", "match"), session: holder},
+		{name: "scope_value global-window", spec: scope(tmuxfix.ScopeGlobalWindow), post: conflict("scope_value", "match"),
+			session: holder},
+		{name: "name_changed", spec: heldSpec{Holder: holderForeign, OursRenamed: "renamed-resume"},
+			post: []disagreeWant{{reason: "name_changed", server: "match", verdict: "ours", action: "restored",
+				current: "renamed-resume"}},
+			session: func(sc *heldScene) string { return sc.Ours.ID }},
+		{name: "server_restarted at both lookups, scope_value new at the re-lookup",
+			spec: heldSpec{Holder: holderCurrent, Scope: tmuxfix.ScopeGlobal, Server: heldServerRestarted},
+			pre:  restarted, post: conflict("scope_value", "restarted"), session: holder},
+	}
+}
+
+// TestResumeProvenanceAfterDuplicateSession: the re-lookup after "duplicate
+// session" writes each reason the pre-launch lookup did not, once, after the
+// create, with every SR-14 field and no label content; never adopted.
+func TestResumeProvenanceAfterDuplicateSession(t *testing.T) {
+	for _, tc := range rpvHeldCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newKillEnv(t)
+			r := e.seedHeldResumable(t, rceSettled(e), agentGone)
+			s := &hookedResumeStore{st: e.st}
+			if tc.restore != nil {
+				tc.restore(t, e, r, s)
+			}
+			atCreate := -1
+
+			run := e.rhtResume(t, r, tc.spec, s, func() { atCreate = len(resumeDisagrees(t, r.ID)) })
+
+			if !run.sc.Placed {
+				t.Fatalf("the create never answered %q", "duplicate session")
+			}
+			if atCreate != len(tc.pre) {
+				t.Errorf("records written by the create = %d; want the pre-launch lookup's %d", atCreate, len(tc.pre))
+			}
+			recs := resumeDisagrees(t, r.ID)
+			if len(recs) != len(tc.pre)+len(tc.post) {
+				t.Fatalf("ad.provenance.disagree records = %d; want %d: %v", len(recs), len(tc.pre)+len(tc.post), recs)
+			}
+			post := r.killRow
+			post.Session = tmuxfix.SeedSession{}
+			if tc.session != nil {
+				post.Session.ID = tc.session(run.sc)
+			}
+			for i, want := range append(slices.Clone(tc.pre), tc.post...) {
+				row := r.killRow
+				if i >= len(tc.pre) {
+					row, want.ours = post, post.Session.ID != ""
+				}
+				assertDisagreeRecord(t, recs[i], row, "resume", "ad_resume", want)
+				ktrAssertNoForeignContent(t, recs[i], rhtForbid(e, run.sc)...)
+			}
+			if n := adoptedRecords(t, "resume", r.ID); n != 0 {
+				t.Errorf("adopted records = %d; want none", n)
+			}
+		})
 	}
 }

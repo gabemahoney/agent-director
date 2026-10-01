@@ -59,7 +59,7 @@ func spawnHeldName(s *store.Store, t tmux.LookupClient, pc ProcChecker, now func
 	if rowResult == nameHeldRowEnded {
 		retry = heldRetryReuse
 	}
-	holder, err := heldNameOutcome(res, held.InstanceID, held.Name, held.Socket, sentence, retry)
+	holder, err := heldNameOutcome(res, held.InstanceID, held.Name, held.Socket, sentence, retry, nil)
 
 	who := callerIdentity()
 	var holderID string

@@ -60,6 +60,8 @@ func preLaunchRowOf(row Spawn, name, socket string) preLaunchRow {
 }
 
 // preLaunchDecision is the pre-launch check's outcome and its trail facts.
+// The re-lookup after "duplicate session" (resumeHeldName) carries its own
+// trail facts in the same fields (lookupTrailFacts), with Err unused.
 type preLaunchDecision struct {
 	// Err is the refusal; nil means proceed.
 	Err error
@@ -118,21 +120,16 @@ type preLaunchDecision struct {
 // runs, so after the lookup returned. It makes no tmux call, no store read or
 // write, no trail write and no log line, and reads no environment.
 func decidePreLaunch(res tmux.Result, row preLaunchRow, pc ProcChecker, lim startingSessionLimits, now func() time.Time) preLaunchDecision {
-	d := preLaunchDecision{Verdict: res.Token(), Server: res.Server}
-	d.Reasons = append(d.Reasons, res.Disagree...)
+	d := lookupTrailFacts(res, row.Name)
 	switch res.Verdict {
 	case tmux.Ours:
 		d.SessionID = res.Session.ID
-		if nameChanged(res, row.Name) && !slices.Contains(d.Reasons, tmux.ReasonNameChanged) {
-			d.Reasons = append(d.Reasons, tmux.ReasonNameChanged)
-			d.CurrentName = res.Session.Name
-		}
 		session := res.Session
 		d.Err = checkStartingSession(lim, now(), row.startingSessionRow, &session).refusal()
 	case tmux.Leftover:
 		leftovers := sortedBySessionNumber(res.Leftovers)
 		d.SessionID = leftovers[0].ID
-		d.Err = preLaunchLeftoverError(row.InstanceID, leftovers)
+		d.Err = preLaunchLeftoverError(row.InstanceID, leftovers, preLaunchNothingWritten)
 	case tmux.Gone:
 		if res.Holder != nil {
 			d.SessionID = res.Holder.ID
@@ -153,6 +150,24 @@ func decidePreLaunch(res tmux.Result, row preLaunchRow, pc ProcChecker, lim star
 	return d
 }
 
+// lookupTrailFacts returns the ad.provenance.disagree facts of one of
+// resume's lookups res of the recorded name (SR-14, SR-3.16): the verdict
+// token, the Server value, and the distinct reasons, the lookup's own plus
+// name_changed (with the Ours session's stored name as CurrentName) when Ours
+// was found under another name (nameChanged); never adopted. SessionID and
+// Err are the caller's. The pre-launch check (decidePreLaunch) and the
+// re-lookup after "duplicate session" (resumeHeldName) both derive their
+// reasons here.
+func lookupTrailFacts(res tmux.Result, name string) preLaunchDecision {
+	d := preLaunchDecision{Verdict: res.Token(), Server: res.Server}
+	d.Reasons = append(d.Reasons, res.Disagree...)
+	if nameChanged(res, name) && !slices.Contains(d.Reasons, tmux.ReasonNameChanged) {
+		d.Reasons = append(d.Reasons, tmux.ReasonNameChanged)
+		d.CurrentName = res.Session.Name
+	}
+	return d
+}
+
 // preLaunchHolderError is the name-holder check on Gone (SR-3.10, SR-8.2):
 // nil when no session holds name; the ambiguous holder's
 // tmux.ErrTmuxUnresponsive; or the holder's class conflict. Both refusals
@@ -167,15 +182,22 @@ func preLaunchHolderError(res tmux.Result, instanceID, name string) error {
 	return heldHolderError(heldBeforeLaunch, res.HolderClass, instanceID, name, res.Holder.ID, nothingWasDone)
 }
 
-// preLaunchLeftoverError is the pre-launch Leftover refusal (SR-1.4, SR-8.2),
-// worded as the plain-spawn scan's (scanLeftoverError): the instance id; "left
-// over from an earlier life"; each leftover's quoted name and tmux id, lowest
-// $N first, up to three, then the rest as a count (leftoverSessions); that
-// nothing was written; that ending such a session is a human's decision, with
+// preLaunchNothingWritten is the pre-launch Leftover refusal's consequence:
+// it is returned before the move, so nothing was written.
+const preLaunchNothingWritten = "nothing was written"
+
+// preLaunchLeftoverError is resume's Leftover refusal (SR-1.4, SR-8.2,
+// SR-8.5), worded as the plain-spawn scan's (scanLeftoverError): the instance
+// id; "left over from an earlier life"; each leftover's quoted name and tmux
+// id, lowest $N first, up to three, then the rest as a count
+// (leftoverSessions); consequence, what the caller's state is
+// (preLaunchNothingWritten at the pre-launch check; the restore's row
+// sentence for an old-label holder after "duplicate session",
+// heldNameOutcome); that ending such a session is a human's decision, with
 // the pointer to "Operator actions"; and "list --tmux-session-name". It never
 // carries a label value, a token or a store id, and wraps only
 // tmux.ErrTmuxSessionConflict.
-func preLaunchLeftoverError(instanceID string, leftovers []tmux.Session) error {
-	return fmt.Errorf("%w: instance %s: %s: %s; nothing was written; ending such a session is a human's decision, %s; %s",
-		tmux.ErrTmuxSessionConflict, instanceID, tmux.ClassOld.CaseWords(), leftoverSessions(leftovers), operatorActionsPointer, listSessionNameHint)
+func preLaunchLeftoverError(instanceID string, leftovers []tmux.Session, consequence string) error {
+	return fmt.Errorf("%w: instance %s: %s: %s; %s; ending such a session is a human's decision, %s; %s",
+		tmux.ErrTmuxSessionConflict, instanceID, tmux.ClassOld.CaseWords(), leftoverSessions(leftovers), consequence, operatorActionsPointer, listSessionNameHint)
 }
