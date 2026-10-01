@@ -26,8 +26,9 @@ import (
 // sequence, which kill's manifest description states in its short form and
 // the find-missing and spawn descriptions point to (descriptions_live_row.go),
 // of find-missing's manifest texts and SR-18.2's "not proof" statement
-// (descriptions_find_missing.go), or of expire's manifest texts and SR-18.7's
-// cleanup guidance (descriptions_expire.go).
+// (descriptions_find_missing.go), of expire's manifest texts and SR-18.7's
+// cleanup guidance (descriptions_expire.go), or of the shared
+// starting-session refusal (descriptions_starting.go).
 
 // DescCase is one SR-1.4 description case: Name (shown in every failure),
 // the phrases the description must contain, the case's own must-not phrases
@@ -211,7 +212,13 @@ func isWordByte(b byte) bool {
 // seconds renders d as descriptions give an effective timeout ("within 5 s",
 // "within 0.3 s").
 func seconds(d time.Duration) string {
-	return "within " + strconv.FormatFloat(d.Seconds(), 'f', -1, 64) + " s"
+	return "within " + inSeconds(d)
+}
+
+// inSeconds renders d as descriptions give an effective value in seconds
+// ("90 s", "0.3 s").
+func inSeconds(d time.Duration) string {
+	return strconv.FormatFloat(d.Seconds(), 'f', -1, 64) + " s"
 }
 
 // unresponsiveMustNot is what no ErrTmuxUnresponsive description may say.

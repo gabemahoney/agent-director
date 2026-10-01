@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/spawn"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
 // SpawnWithCollisionReader runs the spawn verb path on c (its store for the
@@ -70,3 +71,35 @@ func EvaluateRelayGuardForTest(s SendKeysStore, effectiveWindow time.Duration, n
 	g, err := evaluateRelayGuard(s, effectiveWindow, now, row, instanceID)
 	return g.eval, g.refuse, err
 }
+
+// StartingSessionLimits and StartingSessionRow expose the starting-session
+// rule's inputs (starting_session.go) to package api_test.
+type (
+	StartingSessionLimits = startingSessionLimits
+	StartingSessionRow    = startingSessionRow
+)
+
+// StartingSessionLimitsOf exposes startingSessionLimitsOf, the bound and window
+// read through config.Tmux's accessors.
+var StartingSessionLimitsOf = startingSessionLimitsOf
+
+// StartingSessionCheck exposes a classified row's classification and its
+// refusal builders to package api_test.
+type StartingSessionCheck struct{ c startingSessionCheck }
+
+// CheckStartingSession runs checkStartingSession.
+func CheckStartingSession(lim StartingSessionLimits, now time.Time, row StartingSessionRow, session *tmux.Session) StartingSessionCheck {
+	return StartingSessionCheck{checkStartingSession(lim, now, row, session)}
+}
+
+// Class returns the rule's classification.
+func (s StartingSessionCheck) Class() tmux.StartingSessionClass { return s.c.class }
+
+// Refusal returns the refusal for every outcome.
+func (s StartingSessionCheck) Refusal() error { return s.c.refusal() }
+
+// UnavailableError returns steps 1 and 2's error, nil past both.
+func (s StartingSessionCheck) UnavailableError() error { return s.c.unavailableError() }
+
+// OwnIDConflictError returns step 3's own-id conflict.
+func (s StartingSessionCheck) OwnIDConflictError() error { return s.c.ownIDConflictError() }
