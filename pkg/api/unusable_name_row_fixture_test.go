@@ -11,7 +11,8 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// unusableFixture is unusableNameFixtures' entry labelled label.
+// unusableFixture is unusableNameFixtures' entry labelled label. Later tests
+// pick a fixture with it, never their own lookup.
 func unusableFixture(t *testing.T, label string) unusableNameFixture {
 	t.Helper()
 	for _, f := range unusableNameFixtures() {
@@ -25,6 +26,7 @@ func unusableFixture(t *testing.T, label string) unusableNameFixture {
 
 // seedUnusableRow seeds spec's row recording f's raw name, with its
 // current-labelled session up as "renamed-<id>" and every pane's capture text set.
+// Later pane-verb tests seed such a row with it, never their own seeder.
 func (e *killEnv) seedUnusableRow(t *testing.T, spec killRowSpec, f unusableNameFixture) killRow {
 	t.Helper()
 	spec.NoSession = true

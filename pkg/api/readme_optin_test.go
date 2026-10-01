@@ -19,14 +19,16 @@ import (
 // TypeScript field and trail field.
 var optInRe = regexp.MustCompile(`(?i)include.?finished`)
 
-// sectionLines returns the 0-based line range [from, to) of h's body.
+// sectionLines returns the 0-based line range [from, to) of h's body. Later
+// README tests use it, never their own line counting.
 func sectionLines(d mdDoc, h mdHeading) (from, to int) {
 	from = h.line + 1
 	return from, from + strings.Count(d.body(h), "\n") + 1
 }
 
 // operatorActions returns the README's "Operator actions" heading, failing
-// the test when it is missing.
+// the test when it is missing. Later README tests find the section with it,
+// never their own heading search.
 func operatorActions(t *testing.T, d mdDoc) mdHeading {
 	t.Helper()
 	hs := d.titled(apitest.OperatorActionsTitle)

@@ -248,6 +248,11 @@ Most-likely sentinel errors:
   accessible to this user, or this is not the tmux server the agent was
   launched on.
 
+After the state and relay refusals, a row whose recorded tmux session name
+cannot be used (empty, with a control character, or with a character tmux
+stores differently) returns an error classified `ErrInternal`, with no tmux
+call; nothing was sent.
+
 See `(*Client).SendKeys` godoc.
 
 #### `AllowPending` — reaching a `pending` launch
@@ -325,6 +330,12 @@ nothing. Most-likely sentinel errors:
   conflicting labels.
 - `ErrTmuxUnresponsive`, `ErrTmuxNotAvailable`: no information about the
   pane; nothing was read.
+
+A row in any state whose recorded tmux session name cannot be used (empty,
+with a control character, or with a character tmux stores differently)
+returns an error classified `ErrInternal`, with no tmux call. Its
+description quotes the recorded name exactly, every control character and
+invalid byte written as an escape.
 
 See `(*Client).ReadPane` godoc.
 

@@ -4,7 +4,8 @@ package api_test
 // (resume_lookup_fixture_test.go, resume_held_fixture_test.go) for spawn with
 // the reuse opt-in (SR-10, SR-20.2): the reusable finished row, the new
 // request, the Client runners, the reuse-store seam (hookedReuseStore), a
-// pending row made by a real reuse and reuse's "wrote nothing" snapshot. It
+// pending row made by a real reuse (reuseLaunch, reusePending, reusedAs,
+// agentOnCreate, newReuseEnv) and reuse's "wrote nothing" snapshot. It
 // holds no tests. The other arrangements are already one call on killEnv: the
 // row's own session (seedSession with createdBefore or
 // tmuxfix.WithRowSessionName), a leftover or a holder (seedHolder, under the

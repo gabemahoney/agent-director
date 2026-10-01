@@ -312,6 +312,7 @@ func TestResumeLabelsDollarAndBackslashNamesByID(t *testing.T) {
 }
 
 // vanishedUserSocket is a socket under a per-user directory that does not exist, in a parent that does.
+// Later tests needing such a socket use it, never their own path.
 func vanishedUserSocket(t *testing.T) string {
 	return filepath.Join(userSocketDir(t.TempDir()), "default")
 }

@@ -135,7 +135,8 @@ func assertGoDocErrorsMatchManifest(t *testing.T, method, verb string) {
 }
 
 // clientGoDocProse returns (*api.Client).<method>'s Go doc prose outside
-// "Errors:" and its CLI: line, line wrapping rejoined.
+// "Errors:" and its CLI: line, line wrapping rejoined. Later Go doc prose
+// checks use it, never their own doc reader.
 func clientGoDocProse(t *testing.T, method string) string {
 	t.Helper()
 	_, prose := splitGoDocErrors(clientMethodDoc(t, method))

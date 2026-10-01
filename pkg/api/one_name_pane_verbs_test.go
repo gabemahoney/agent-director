@@ -132,6 +132,7 @@ func oneNameReadPaneRows() []oneNameRow {
 }
 
 // unusableNameSpec is a waiting row, no session seeded, recording the pre-b.gqe default name ('.').
+// Later one-name tables use it for their unusable-name case, never their own spec.
 func unusableNameSpec() killRowSpec {
 	return killRowSpec{NoSession: true, Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(preGqeDefaultName)}}
 }

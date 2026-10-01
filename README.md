@@ -91,6 +91,9 @@ bash skills/install-agent-director/install.sh --binary ./agent-director
 Optional flags:
 
 - `--register-mcp` — register the stdio MCP server with Claude Code.
+  To register it yourself instead, run
+  `claude mcp add agent-director ~/.agent-director/bin/agent-director serve --stdio`
+  (or give the path of your binary).
 - `--symlink-dir <dir>` — override the default PATH-symlink directory.
 - `--binary <path>` — install from an explicit source binary.
 - `--from-release [tag]` — download a pre-built binary for this host's
@@ -402,7 +405,9 @@ stale `waiting`/`working` rows.
 process runs stays live, and a row whose process is gone is marked
 `missing`. Only when the process cannot be checked does it ask tmux, on the
 row's recorded socket: the row is marked `missing` when tmux shows no
-session of its current launch, and otherwise left unverified. A `pending`
+session of its current launch, and otherwise left unverified; a row whose
+recorded tmux session name cannot be used is never looked up, but left
+unverified with a note of its own. A `pending`
 row is not judged until its grace period has passed. Marked rows are
 listed in `ids`; rows it cannot decide are listed in `unverified_ids`, and
 each carries `liveness_unverified_since` and a `liveness_note` in `list`
@@ -413,11 +418,15 @@ against another tmux server can mark live rows `missing`.
 Finished rows (`ended` or `missing`) are never removed on their own: an
 `expire` you schedule removes them at the default retention, and the
 deprecated `delete` (not a cleanup or recovery step) removes one row when
-asked; a row's state alone never gets it deleted. `expire` checks each row's agent process and, unless it runs,
-asks tmux on the row's recorded socket (else yours): it deletes the row only when the process is not
-running and tmux shows no session of the agent, and lists it in `ids`. Rows
-whose session runs or that it cannot check are kept and listed in
-`kept_ids`; the trail's `ad.expire.kept` records give each reason. Agents
+asked; a row's state alone never gets it deleted. `expire` first keeps
+every row whose recorded tmux session name cannot be used, on every run,
+without reading its process or asking tmux (see "A row whose recorded name
+cannot be used" under [Operator actions](#operator-actions)). For every
+other row it checks the agent process and, unless it runs, asks tmux on the
+row's recorded socket (else yours): it deletes the row only when the process
+is not running and tmux shows no session of the agent, and lists it in
+`ids`. Rows whose session runs or that it cannot check are kept and listed
+in `kept_ids`; the trail's `ad.expire.kept` records give each reason. Agents
 never run `expire`, least of all with `--older-than 0d`. A run as another
 user, as root or against another tmux server can wrongly delete rows whose
 agent still runs.
@@ -552,8 +561,9 @@ Never `delete` a row after a `kill` that did not succeed.
 `resume`, or a `spawn` with `--reuse-finished`, refuses with
 `ErrTmuxSessionConflict` ("this row's own id"): the row is `ended` or
 `missing`, but its own session still runs past the stopping window and the
-starting-session bound. If, after looking at it (steps 1 to 3 of the
-leftover item below), you want that session gone, end it with the
+starting-session bound, or no session of it is found while its agent
+process still runs. If, after looking at it (steps 1 to 3 of the
+leftover item below), you want that session or agent gone, end it with the
 finished-row opt-in on `kill`:
 
 ```sh
@@ -564,6 +574,9 @@ It ends the agent's pane and the row's labelled session, then waits for the
 agent process (or, when the process cannot be checked, looks the session up
 once more), and succeeds with `kill_sent` true once the agent process is
 gone, otherwise `ErrTmuxKillFailed` (retry later; never `delete` the row).
+When that second lookup cannot answer, it returns `ErrTmuxUnresponsive` or
+`ErrTmuxNotAvailable` with `kill_sent` true: the kill was sent and may or
+may not have taken effect, so check again later.
 The row's state and every other field stay unchanged, so the
 conversation stays resumable: run the refused `resume` (or the
 `spawn --reuse-finished`) again.
@@ -585,6 +598,9 @@ Every other answer sends no kill and changes nothing:
   included); no lookup was made. To end a live agent, or to abort a launch
   stuck at a startup prompt, run `agent-director kill --claude-instance-id <id>`
   without the opt-in.
+- `ErrInternal`: the row's recorded tmux session name cannot be used; no
+  lookup and no tmux call were made. See "A row whose recorded name cannot
+  be used".
 - `ErrTmuxUnresponsive` ("appears to still be stopping" or "appears to
   still be starting"): the row ended less than the stopping window ago, or
   the session is younger than the starting-session bound (the configured
@@ -596,15 +612,18 @@ Every other answer sends no kill and changes nothing:
   a finished row, so ending the session is your decision: check its
   ownership and end it by hand by its session id, as steps 1 to 4 of
   "A leftover, or a session with no valid label, or one that never reported in on a finished row"
-  below describe.
+  below describe, then run the refused `resume` (or the
+  `spawn --reuse-finished`) again.
 - `ErrTmuxSessionConflict` ("conflicting labels"): see "A stray `@ad_owner`
   value or a duplicate label".
-- `ErrTmuxNotAvailable`: tmux could not be run or its socket is not
-  accessible, or the socket reaches another server ("not the tmux server
-  the agent was launched on"; see "A row on a different tmux server").
-- `ErrTmuxUnresponsive` otherwise: tmux did not answer usably; retry later.
+- `ErrTmuxNotAvailable` before any kill: tmux could not be
+  run or its socket is not accessible, or the socket reaches another server
+  ("not the tmux server the agent was launched on"; see "A row on a
+  different tmux server").
+- `ErrTmuxUnresponsive` otherwise, before any kill: tmux did not answer
+  usably; retry later.
 
-If no session carries the row's current label, it acts as a plain `kill`:
+If no session carries the row's current label, it acts as on a live row:
 success with `kill_sent` false unless the agent process still runs; a
 surviving agent pane is ended and the process waited for; otherwise
 `ErrTmuxKillFailed` (see "An agent process that runs with no session or
@@ -727,6 +746,117 @@ agent-director resume --claude-instance-id <id>
 agent-director spawn --cwd <dir> --claude-instance-id <id> --reuse-finished
 ```
 
+### A row whose recorded name cannot be used
+
+A row's recorded tmux session name cannot be used when it is empty, holds a
+control character, or holds `.`, `:` or bytes that are not valid UTF-8.
+This includes a default name made before the b.gqe fix, which kept a `.`
+from its id: the id `b.18k-fix` gave `<folder>-b.18k-fi`. agent-director
+never touches such a row's session: every verb that would look the row up
+returns `ErrInternal` with no tmux call, `find-missing` leaves a live row
+unverified with a note of its own when the row's process cannot decide it,
+and `expire` keeps a finished row on every run. A human removes such a row,
+working as the agents' user and against their tmux server, in this order:
+
+1. Identify the row and its recorded name. On a live row,
+   `agent-director list` shows the `liveness_note` `tmux_session_name_empty`,
+   `tmux_session_name_control_char` or `tmux_session_name_rewritten`. A
+   finished row is in `expire`'s `kept_ids` on every run, and its
+   `ad.expire.kept` trail record gives the reason `empty_session_name`,
+   `control_char_session_name` or `rewritten_session_name`:
+
+   ```sh
+   jq -c 'select(.event == "ad.expire.kept" and .claude_instance_id == "<id>") | {reason, tmux_session_name}' ~/.agent-director/ad-trail.jsonl | tail -n 1
+   ```
+
+   Every verb that would look the row up answers `ErrInternal`, and `list`
+   shows every row's recorded name (`tmux_session_name`). For the exact
+   name, use `read-pane`, which changes nothing:
+
+   ```sh
+   agent-director read-pane --claude-instance-id <id>
+   ```
+
+   Its `ErrInternal` quotes the recorded name, writing each control
+   character and each byte that is not valid UTF-8 as an escape. `list`,
+   `get` and the `ad.expire.kept` record cannot show such a byte: their JSON
+   replaces it.
+2. Work out the name tmux stores and find the candidate sessions. In the
+   stored form, `.` and `:` become `_`, a byte that is not valid UTF-8
+   becomes a backslash and three octal digits (byte 0xff becomes `\377`),
+   and a control character becomes its escape (tab `\t`, newline `\n`, ESC
+   `\033`). A `\` of the name is stored as `\\`, and a `$` followed by a
+   letter, `_` or `{` as `\$`, so `mix.$b` is stored as `mix_\$b` (tmux 3.2
+   and 3.3; other versions escape `$` differently, so compare by eye). List
+   the sessions and note the session id (`$N`) of each one whose name equals
+   the stored form:
+
+   ```sh
+   tmux -u -S '<socket>' list-sessions -F '#{session_id} #{session_created} #{session_name}'
+   ```
+
+   An empty name has no stored form, so every listed session is a
+   candidate.
+3. Confirm ownership by hand. Such a row's session usually carries no
+   label. For each candidate, check its label:
+
+   ```sh
+   tmux -u -S '<socket>' show-options -t '<session id>' -v @ad_owner
+   ```
+
+   If it prints nothing, or `invalid option: @ad_owner` (tmux 3.3a), the
+   session has no label.
+
+   A label marks the session as this row's only if it is the five-field
+   label of step 2 of "A leftover, or a session with no valid label, or one
+   that never reported in on a finished row": `ad1`, a launch token, the
+   session's own id (the `$N` you passed to `-t`), this row's id and, last,
+   this store's id (compare it with the `store_id` of the
+   `ad.launch.name_held` record, as "A session of another agent-director
+   store" says). A label whose last field is a different id belongs to
+   another agent-director store's agent, even when it names this row's id:
+   never end it from this store. For a session with no label, its
+   environment is a hint only, because environments are inherited:
+
+   ```sh
+   tmux -u -S '<socket>' show-environment -t '<session id>' AGENT_DIRECTOR_INSTANCE_ID
+   ```
+
+   Only a session that prints exactly `AGENT_DIRECTOR_INSTANCE_ID=` followed
+   by this row's id may be this row's. A session that names another id is
+   another row's agent, whose own valid name can equal the stored form (for
+   `<folder>-b.18k-fi`, another row's `<folder>-b_18k-fi`): never end it.
+   Handle a session with no valid id as "A leftover, or a session with no
+   valid label, or one that never reported in on a finished row" says.
+4. If this row's session runs, end it by its session id from the listing,
+   keeping the quotes, then list again and check that the id is gone:
+
+   ```sh
+   tmux -u -S '<socket>' kill-session -t '<session id>'
+   tmux -u -S '<socket>' list-sessions -F '#{session_id} #{session_created} #{session_name}'
+   ```
+
+   If the session you ended was the server's last one, the second listing
+   prints `no server running on <socket>` instead; this also means the
+   session is gone.
+
+   Never target it by name, not even with tmux's exact-match `=` prefix: the
+   recorded name is not the name tmux holds, tmux reads `.` and `:` in a
+   target as window and pane separators, and the stored form can be another
+   session's name.
+5. Remove the row:
+
+   ```sh
+   agent-director delete --claude-instance-id <id>
+   ```
+
+   This also removes the row's permission requests and session history,
+   and clears it as the parent of any other row; it touches no tmux session
+   and no transcript. `delete` is deprecated for agents, but stays as the
+   operator-only way to remove such a row, because `resume` and reuse refuse
+   it and `expire` keeps it. b.tep, which removes `delete`, must give this
+   case another route.
+
 ### A spawn refused as "left over from an earlier life"
 
 `ErrTmuxSessionConflict` ("left over from an earlier life") from a plain
@@ -743,7 +873,8 @@ leftover item above) comes in two cases:
 The spawn's trail record gives the socket, this store's id, the session's
 id and its creation time (for the second case also `row_result`, and the
 record's `attach_command` and `end_command` are the commands of steps 3
-and 4):
+and 4 of "A leftover, or a session with no valid label, or one that never
+reported in on a finished row"):
 
 ```sh
 jq -c 'select(.event == "ad.launch.name_held" and .claude_instance_id == "<id>") | {tmux_socket, store_id, tmux_session_id, session_created, row_result}' ~/.agent-director/ad-trail.jsonl | tail -n 1
@@ -754,7 +885,9 @@ ended, so `kill --include-finished` answers "never reported in" and sends
 no kill: end the leftover by hand by its session id, as the leftover item
 above describes.
 
-Handle each session as a leftover (steps 2 to 4 above; this store's id is
+Handle each session as a leftover (steps 2 to 4 of "A leftover, or a
+session with no valid label, or one that never reported in on a finished
+row"; this store's id is
 the record's `store_id`), then spawn the id again. In the first case no row
 exists, so no reuse opt-in is needed. In the second the row is `ended`, so
 spawn with `--reuse-finished`:
@@ -774,7 +907,8 @@ it is `pending`, follow the `pending` paragraph of the leftover item above
 before spawning with `--reuse-finished`.
 
 In the first case, if the error says "and N more", find the others with the
-listing of step 1. The check before a spawn sees only this socket: it misses
+listing of step 1 of "A leftover, or a session with no valid label, or one
+that never reported in on a finished row". The check before a spawn sees only this socket: it misses
 leftovers on another tmux server or socket, and sessions with no label.
 
 When a held name's error says "no valid instance id", handle the session

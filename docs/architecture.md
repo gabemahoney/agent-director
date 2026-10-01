@@ -58,7 +58,7 @@ still holds: nothing in `internal/` imports `pkg/api`.
 | `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, etc.), params/result types, and error sentinels (the seven tmux sentinels of SR-1.1 are all re-exported in `aliases.go`). Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director` and `internal/mcp`. **`kill` seams** (`kill.go`): `KillStore` (`GetSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`; `*store.Store` satisfies it), `KillTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `KillPane`, `KillSessionID`; `TmuxClient` satisfies it) and the start-time reader `ProcChecker`; `Kill` also takes the three `[tmux]` durations, the clock and the sleep, and has no logger. **`find-missing` seams** (`find_missing.go`): `FindMissingStore` (the live-row read, the four same-life guarded writes, `CloseOrphanedPermissionRequests`, `ListProvisionalTranscripts`, `HealJsonlPath`, `StoreID`; `*store.Store` satisfies it), `FindMissingTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`) and `ProcChecker`; the exported `FindMissing` also takes the pending grace period, the sweep budget, the clock and a `FindMissingLogger` (see [`find-missing`](#find-missing)). **Pane-verb seams** (`readpane.go`, `sendkeys.go`, `pause.go`; see [Interact](#interact-send-keys--read-pane) and [`pause`](#pause)): `ReadPaneStore` (`GetSpawn`, `StoreID`; no write) and `ReadPaneTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `CapturePaneID`); `SendKeysStore` (`GetSpawn`, `PermissionRequestsForSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`) and `SendKeysTmux` (`Lookup`, `ListPanes`, `SendKeysPane`); `PauseStore` (`GetSpawn`, `GetSpawnState`, `AdoptIdentityIfUnchanged`, `StoreID`) and `PauseTmux` (`Lookup`, `ListPanes`, `SendKeysPane`). `*store.Store` and `TmuxClient` satisfy them. `SendKeys` and `Pause` take the start-time reader `ProcChecker`; the exported `ReadPane` uses `probe.NewProcChecker()` and `Client.ReadPane` the Client's reader. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the eight socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the one name-based method left, `HasSession`, which is kept but no verb uses, and none may; the name-based send and capture are gone. `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`; it also re-exports the start-time reader interface as `ProcChecker` (`= tmux.ProcChecker`). The Client holds its clock (`time.Now`), its sleep (`time.Sleep`, the pause of `kill`'s process wait) and its start-time reader (`probe.NewProcChecker()`), all set in `New`; plain spawn uses the clock and reader for the launch start and the identity write, and `kill` uses all three for its lookup, adoption and process wait; `find-missing` measures the pending grace period on the same clock, with the value from `EffectivePendingGrace`. The label scan of a plain spawn lives in `spawn_scan.go`, its held-name path after "duplicate session" (the end write, one re-lookup, the classified error) in `spawn_held.go`, the shared held-name error builder in `held_name.go` and the one `ad.launch.name_held` emitter in `name_held_trail.go` (see [Launch identity](#launch-identity)). **`resume` seams** (`resume.go`): `ResumeStore` and `ResumeTmux` (`TmuxLookup`'s `Lookup` plus `NewSession`, `SetLabel` and `KillSessionID`; no pane listing, since `resume` adopts nothing, and no name-based method; `TmuxClient` satisfies it), with the start-time reader `ProcChecker`, the configuration, the store id, the clock and the logger. Its pre-launch lookup's decision lives in `resume_lookup.go` (`decidePreLaunch`), the launch outcome, restore and path after "duplicate session" it shares with reuse in `finished_launch.go` (`finishedLaunch`) and the shared starting-session refusal in `starting_session.go` (see [Resume](#resume) and [Starting-session rule](#starting-session-rule-starting_sessiongo)). **Reuse** (`spawn` with `ReuseFinished` and an explicit id whose row is finished; `spawn_reuse.go`): the unexported `reuseStore` (`ReadForReuse`, `ResetForReuse`, `RestoreAfterFailedReuse`, `RecordLaunchIdentity`; `*store.Store` satisfies it), injected through `runSpawnWithReuseStore` (`runSpawn` passes its store), and its own descriptions in `spawn_reuse_errors.go` (see [Reuse of a finished id](#reuse-of-a-finished-id)). `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`. | Direct `database/sql`; raw SQL strings; MCP framing. |
 | `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v5; see "Schema v5" below), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). The pending grace period bounds both `find-missing`'s hands-off window for a `pending` row and a SessionStart hook's wait for its launch's identity write, each measured from the launch start (SR-13.4, SR-22.9); it has no maximum. The hook's wait is also capped at 540 s after it began (`sessionStartWaitCap` in `internal/hook`; WD 2026-09-30c), so a grace above 540 s lengthens only `find-missing`'s window, which is unchanged. Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default; a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
-| `pkg/api/apitest` | Test seed helpers extracted from `pkg/api/*_test.go` for cross-package importing. Provides `Seed*` functions (`SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`) that set up fixture DB rows and filesystem state for `test/envelope-diff` and future Epic 4/5 smoke tests. Also provides the config writer `WriteTmuxConfig` (settings built with `TmuxInt`, or `TmuxFloat` / `TmuxString` / `TmuxBool` for malformed values, keyed by `config.TmuxKey`): `pkg/api`, CLI and MCP tests write `[tmux]` settings only through it, so no test outside `internal/config` spells a `[tmux]` key (rules: Test Harness, "apitest `[tmux]` config writer"). Provides `SeedSpawn`'s trailing `SpawnOption`s for the v5 columns, timestamps and raw text (`WithTmuxSessionName`, `WithStartedAt` / `WithEndedAt` / `WithNoEndedAt`, `WithLaunchStartedAt`, `WithRawLaunchStartedAt`, `WithNoLaunchStartedAt`, `WithLifeNumber`, `WithRowVersion`, `WithNoPreTrust`, `WithRawNoPreTrust`, `WithLaunchIdentity`, `WithTmuxSocket`, `WithNoLaunchToken`, `WithNoPane`, `WithNoPID`, `WithRawLabels`, `WithRawClaudeArgs`, `WithRawExtraEnv`) and archived session history (`WithSessionHistory`), the default socket `TestSocket`, the default pane `TestPaneID` / `TestPanePID` that `SeedSpawn` gives a live row (both re-exported from `internal/testsupport/launchfix`; a terminal row gets no pane), the store-read helper `ReadSpawnColumns`, the every-life history-read helper `ReadSessionHistoryAllLives`, and the store-id helpers `ReadStoreID`, `SeedStoreID` and `OtherStoreID` (with `ErrNoStoreID`): new tests seed rows and read columns no verb shows only through these (rules: Test Harness, "apitest Seed* factory contract"). To place a seeded row's own labelled session in the Recorder, tests use `tmuxfix.Recorder.SeedRowSession` (in `internal/testsupport/tmuxfix`, not this package). Provides the shared description helper (`descriptions.go`: `AssertDescription`, `AssertAgentText`, `AssertAgentTextCase` and the `Desc*` cases; `descriptions_resume.go`: resume's `DescResume*` cases and `DescCase.AfterResumeRestore` (with `ResumeRestore.Launch`, a `LaunchKind`: `LaunchResume` or `LaunchReuse`); `descriptions_reuse.go`: reuse's `DescReuseLostRace`, `DescReuseArchiveFailure` and `DescReuseChangeFailure`, `LaunchKind`, and the row-reset rules of `DescLaunchTimeout`'s `RowReset`; `descriptions_reuse_docs.go`: reuse's documentation cases `DescReuseFinishedParam`, `DescReuseHistoryByLife`, `DescDeleteDeprecated`, `DescInstanceIDCollision` (with `CollisionSite`), `DescReuseRecourse` (with `RecourseSite`: `RecourseGoDoc` / `RecourseTSREADME`) and `DescReuseDocsForbidden`, and the must-not-only check `AssertMustNot` for Go source and Markdown; `descriptions_lookup.go`: lookup's `DescConflictingLabels` and `DescDifferentServer`; `descriptions_kill.go`: kill's `DescKill*`, `DescSocketDirNothingDone` and `DescUnusableName*` cases and `DescCase.AfterKillSent`; `descriptions_kill_optin.go`: the cases of `kill`'s finished-row opt-in, `DescKillOptInLiveRow`, `DescKillOptInNeverReportedIn` and `DescKillOptInNeverReportedInLeftover`; `descriptions_live_row.go`: the live-row sequence's short form and pointer, `DescLiveRowSequence`, `DescLiveRowPointer`, `LiveRowPointer`, `LiveRowSequenceCount` and `LiveRowPointerCount`; `descriptions_find_missing.go`: `DescFindMissingGrace`, `DescFindMissingManifest`, `DescFindMissingField` (`FindMissingIDs` / `FindMissingUnverifiedIDs`), `DescMissingNotProof` (full statement), `DescMissingNotProofShort` (short form) and `FindMissingOwnText`; `descriptions_expire.go`: `DescExpireManifest`, `DescExpireField` (`ExpireCount` / `ExpireIDs` / `ExpireKept` / `ExpireKeptIDs`), and SR-18.7's cleanup guidance as `DescCleanupGuidance` (full form, `expire` only) and `DescCleanupPointer` (the pointer at `kill` and `find-missing`, which rejects the full sentence so the help size cap holds), applied by `pkg/api/manifest/manifest_expire_description_test.go`; `descriptions_held.go`: the held-name cases `DescHeldLeftover`, `DescHeldNoValidID`, `DescHeldDifferentID`, `DescHeldOtherStore`, `DescHeldAmbiguous`, the overlay `DescCase.AfterHeldName` with `HeldName` (`Row` as a `HeldRow`: `HeldRowEnded` / `HeldRowLeftAsIs` / `HeldRowStoreError`; `BeforeLaunch` for resume's pre-launch lookup; `Restore` for resume after "duplicate session"), and spawn's manifest cases `DescSpawnHeldName` and `DescSpawnSessionNameParam`; `descriptions_starting.go`: the shared starting-session refusal's cases `DescStillStopping`, `DescStillStarting` and `DescOwnOldSession` with `StartingSession`; `descriptions_resume_lookup.go`: resume's pre-launch Leftover case `DescPreLaunchLeftover` and the `BeforeLaunch` overlay): every Go test that checks an error or manifest description for required phrases or forbidden forms uses it (rules: Test Harness, "apitest description helper"). Non-test package (regular `.go` files) so it can be imported by harnesses outside `pkg/api`. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `internal/tmux` (the `tmux.Call` names the description cases use); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
+| `pkg/api/apitest` | Test seed helpers extracted from `pkg/api/*_test.go` for cross-package importing. Provides `Seed*` functions (`SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`) that set up fixture DB rows and filesystem state for `test/envelope-diff` and future Epic 4/5 smoke tests. Also provides the config writer `WriteTmuxConfig` (settings built with `TmuxInt`, or `TmuxFloat` / `TmuxString` / `TmuxBool` for malformed values, keyed by `config.TmuxKey`): `pkg/api`, CLI and MCP tests write `[tmux]` settings only through it, so no test outside `internal/config` spells a `[tmux]` key (rules: Test Harness, "apitest `[tmux]` config writer"). Provides `SeedSpawn`'s trailing `SpawnOption`s for the v5 columns, timestamps and raw text (`WithTmuxSessionName`, `WithStartedAt` / `WithEndedAt` / `WithNoEndedAt`, `WithLaunchStartedAt`, `WithRawLaunchStartedAt`, `WithNoLaunchStartedAt`, `WithLifeNumber`, `WithRowVersion`, `WithNoPreTrust`, `WithRawNoPreTrust`, `WithLaunchIdentity`, `WithTmuxSocket`, `WithNoLaunchToken`, `WithNoPane`, `WithNoPID`, `WithRawLabels`, `WithRawClaudeArgs`, `WithRawExtraEnv`) and archived session history (`WithSessionHistory`), the default socket `TestSocket`, the default pane `TestPaneID` / `TestPanePID` that `SeedSpawn` gives a live row (both re-exported from `internal/testsupport/launchfix`; a terminal row gets no pane), the store-read helper `ReadSpawnColumns`, the every-life history-read helper `ReadSessionHistoryAllLives`, and the store-id helpers `ReadStoreID`, `SeedStoreID` and `OtherStoreID` (with `ErrNoStoreID`): new tests seed rows and read columns no verb shows only through these (rules: Test Harness, "apitest Seed* factory contract"). To place a seeded row's own labelled session in the Recorder, tests use `tmuxfix.Recorder.SeedRowSession` (in `internal/testsupport/tmuxfix`, not this package). Provides the shared description helper (`descriptions.go`: `AssertDescription`, `AssertAgentText`, `AssertAgentTextCase` and the `Desc*` cases; `descriptions_resume.go`: resume's `DescResume*` cases and `DescCase.AfterResumeRestore` (with `ResumeRestore.Launch`, a `LaunchKind`: `LaunchResume` or `LaunchReuse`); `descriptions_reuse.go`: reuse's `DescReuseLostRace`, `DescReuseArchiveFailure` and `DescReuseChangeFailure`, `LaunchKind`, and the row-reset rules of `DescLaunchTimeout`'s `RowReset`; `descriptions_reuse_docs.go`: reuse's documentation cases `DescReuseFinishedParam`, `DescReuseHistoryByLife`, `DescDeleteDeprecated`, `DescInstanceIDCollision` (with `CollisionSite`), `DescReuseRecourse` (with `RecourseSite`: `RecourseGoDoc` / `RecourseTSREADME`) and `DescReuseDocsForbidden`, and the must-not-only check `AssertMustNot` for Go source and Markdown; `descriptions_lookup.go`: lookup's `DescConflictingLabels` and `DescDifferentServer`; `descriptions_kill.go`: kill's `DescKill*` and `DescSocketDirNothingDone` cases and `DescCase.AfterKillSent`; `descriptions_unusable.go`: the unusable recorded name's `DescUnusableName*` cases (the three refusals, `DescUnusableNameTrigger`, `DescUnusableNamePointer`, `DescUnusableNameFindMissingField`, `DescUnusableNameExpireField`); `descriptions_kill_optin.go`: the cases of `kill`'s finished-row opt-in, `DescKillOptInLiveRow`, `DescKillOptInNeverReportedIn` and `DescKillOptInNeverReportedInLeftover`; `descriptions_live_row.go`: the live-row sequence's short form and pointer, `DescLiveRowSequence`, `DescLiveRowPointer`, `LiveRowPointer`, `LiveRowSequenceCount` and `LiveRowPointerCount`; `descriptions_find_missing.go`: `DescFindMissingGrace`, `DescFindMissingManifest`, `DescFindMissingField` (`FindMissingIDs` / `FindMissingUnverifiedIDs`), `DescMissingNotProof` (full statement), `DescMissingNotProofShort` (short form) and `FindMissingOwnText`; `descriptions_expire.go`: `DescExpireManifest`, `DescExpireField` (`ExpireCount` / `ExpireIDs` / `ExpireKept` / `ExpireKeptIDs`), and SR-18.7's cleanup guidance as `DescCleanupGuidance` (full form, `expire` only) and `DescCleanupPointer` (the pointer at `kill` and `find-missing`, which rejects the full sentence so the help size cap holds), applied by `pkg/api/manifest/manifest_expire_description_test.go`; `descriptions_held.go`: the held-name cases `DescHeldLeftover`, `DescHeldNoValidID`, `DescHeldDifferentID`, `DescHeldOtherStore`, `DescHeldAmbiguous`, the overlay `DescCase.AfterHeldName` with `HeldName` (`Row` as a `HeldRow`: `HeldRowEnded` / `HeldRowLeftAsIs` / `HeldRowStoreError`; `BeforeLaunch` for resume's pre-launch lookup; `Restore` for resume after "duplicate session"), and spawn's manifest cases `DescSpawnHeldName` and `DescSpawnSessionNameParam`; `descriptions_starting.go`: the shared starting-session refusal's cases `DescStillStopping`, `DescStillStarting` and `DescOwnOldSession` with `StartingSession`; `descriptions_resume_lookup.go`: resume's pre-launch Leftover case `DescPreLaunchLeftover` and the `BeforeLaunch` overlay): every Go test that checks an error or manifest description for required phrases or forbidden forms uses it (rules: Test Harness, "apitest description helper"). Non-test package (regular `.go` files) so it can be imported by harnesses outside `pkg/api`. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `internal/tmux` (the `tmux.Call` names the description cases use); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
 | `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. The `Catalog` is consumed by `cmd/agent-director`'s envelope writer and `internal/mcp`'s `classifyDispatchError`. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
 | `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. `classifyDispatchError` delegates to `errnames.Classify`. | stdlib; `pkg/api`; `pkg/api/manifest`; `pkg/api/errnames`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
 | `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
@@ -4219,12 +4219,12 @@ or catalog Go source requires regenerating the corresponding JSON file.
 claude mcp add agent-director /path/to/agent-director serve --stdio
 ```
 
-This section is the registration command's home: `serve`'s manifest
-Description no longer carries it (removed to keep `help` under its size
-cap), so neither `help` nor the generated CLI and MCP references show
-it. The install skill (`skills/install-agent-director/SKILL.md`) and
-`serve`'s own stderr hint (`cmd/agent-director/serve_cmd.go`) also state
-it; the README names only the installer's `--register-mcp` flag.
+`serve`'s manifest Description does not carry this command, so `help`
+and the generated CLI and MCP references do not show it. It is stated
+here, in the README's install section (beside the installer's
+`--register-mcp` flag, for a human registering by hand), in the install
+skill (`skills/install-agent-director/SKILL.md`) and in `serve`'s own
+stderr hint (`cmd/agent-director/serve_cmd.go`).
 
 Claude Code stores this in its MCP config and launches the binary
 on session start. The binary's `~/.agent-director/config.toml` is
@@ -6261,7 +6261,8 @@ a caller does about it. Each subsection is a table or a list, so a rule
 added later goes in as a row or a bullet under the subsection it belongs
 to. Where a human is
 needed, the contract points to the README's "Operator actions" section and
-names no command for a caller to run.
+names no command for a caller to run. Its limits are listed under
+[Known limitations](#known-limitations).
 
 ### Classes
 
@@ -6613,6 +6614,26 @@ back unnoticed.
    its conversation back; a reuse makes that conversation unreachable for
    good, because a row's session history belongs to one life and a reuse
    starts a new one (SR-8.7).
+
+## Known limitations
+
+The limits and accepted risks of this release that callers and operators
+should know (SRD SR-18.12); each is one bullet in this list.
+
+- **Rows whose recorded tmux session names cannot be used** (SR-3.2,
+  SR-18.12). A recorded name that is empty, contains a control character,
+  or contains a character tmux stores differently (`.`, `:` or bytes that
+  are not valid UTF-8) can never be matched to its session; the
+  [unusable-name guard](#unusable-name-guard-unusablego) classifies it.
+  Every verb that would look such a row up returns `ErrInternal` with no
+  tmux call, [`find-missing`](#find-missing) gives the row a note of its
+  own when its process cannot decide it, and [`expire`](#expire) keeps it
+  on every run with a reason of its own. Besides hand-edited rows, this
+  covers rows created between 2026-05-18 and the b.gqe fix of 2026-05-27
+  (commit `dab3a80`) whose default names took a `.` from their id.
+  agent-director never touches such a row's session; a human removes the
+  row by the procedure in the README's "Operator actions" section, whose
+  last step is the operator-only `delete`.
 
 ## Stop semantics
 
@@ -7907,6 +7928,19 @@ so it skips in the sandbox. That is the run's one skip.
   and stay live while a sessionless control row is marked; with the socket
   at mode 000, rows with no process identity stay live with
   `process_not_seen_tmux_unchecked` after one refused tmux call.
+- `unusable_name_procedure_test.go` (SR-18.17 steps 2 to 5, SR-20.7,
+  Appendix E.10 N6; AC-DOC-18): the README "Operator actions" item "A row
+  whose recorded name cannot be used" on real tmux, on the kill fixture.
+  Each catalogue N6 name (holding `.`, `:` or a byte that is not valid
+  UTF-8) is listed under its stored form with its session id, and the
+  exact-name target of `dot.x` does not reach `dot_x`'s session. For a
+  `dot.x` row whose session is labelled by id, or carries only the row's
+  id in its environment, the procedure finds the session by id, ends it
+  by id (its pane process goes), and `Delete` removes the row. A `dot_x`
+  session labelled for another row is left running, with that row
+  unchanged, also when it carries the `dot.x` row's id in its environment
+  (the label wins over the hint). An unlabelled bystander session runs
+  throughout.
 - `expire_test.go` (SR-12.2, SR-3.10, SR-20.7): the production `expire`
   against real tmux, on the kill fixture, through the built CLI
   (`buildHookCLI`, `expire --older-than 0d`) rather than the in-process
@@ -8111,6 +8145,18 @@ comment has the detail):
   an `idShapedWorld`: raw `$7` and `%9` sessions, a barrier session, the
   pane-not-found row and the gone row, with preconditions that neither id
   exists.
+- Operator procedure (`unusable_name_procedure_test.go`): `n6Names(t)` and
+  `dotX(t)` give the catalogue's E.10 N6 entries (`tmuxfix.StoredNames()`
+  with source `E.10 N6`). `rt.procedureListing(t)` runs the README step 2
+  listing (`list-sessions -F` with session id, creation time and name) and
+  returns `listedSession` (`ID`, `Name`) in order.
+  `f.procedureRemove(t, row, n)` runs the README steps 2 to 5 for a row
+  recorded under `n`, targeting every session by id only: it reads each
+  candidate's label (class by the production `ClassOf`) and environment
+  line, ends only a candidate that is the row's own, checks it left the
+  listing, then runs `Client.Delete` and checks the row is gone from the
+  store. It returns each candidate as a `procCandidate` (`ID`, `Class`,
+  `Env`, `Ended`).
 
 **Must use:** later real-tmux tests (the lookup scenarios, then the verb
 tests per SR-20.7) add their cases to `test/realtmux`. They reuse these helpers
@@ -8123,11 +8169,15 @@ assertions with the lookup fixture and uses the production reader
 identity comes from the fixture (`agent.Server`, `f.serverOf`). A
 `tmux.ProcIdentity{PID, Starttime}` view of such a recorded identity, for
 `f.judge`, is allowed.
-A real-tmux test of a verb that acts on a live row (`kill`, `find-missing`
-and the pane verbs today; the finished-row opt-in later) seeds its rows and
-runs the verb through the kill fixture (`liveRow`, `kill`, `findMissing`,
-`paneVerb` or a sibling built the same way on `open`), never through its own
-store or client setup. It checks refusals with `assertVerbError` and
+A real-tmux test of a verb that acts on a row (`kill`, `find-missing`,
+`expire`, the pane verbs and `delete` in the operator procedure; `kill`'s
+finished-row opt-in has no real-tmux case; its tests run on the tmux
+doubles in `pkg/api` and `cmd/agent-director`)
+seeds its rows and runs the verb through the kill fixture (`liveRow`,
+`seedRow`, `kill`, `findMissing`, `paneVerb` or a sibling built the same
+way on `open`), never through its own store or client setup. A test of a
+README tmux procedure runs its steps through `rt.run`/`rt.must` with
+every `-t` target a session or pane id, as `procedureRemove` does. It checks refusals with `assertVerbError` and
 adoption with `assertAdopted`. It observes panes by pane id through
 `rt.capture`, `idtWorld` and `idtSame`, and uses `waitPaneShows` or
 `idtSendAndSee` as a barrier, never a sleep.
@@ -8428,7 +8478,10 @@ deprecation notice, the collision text, the recovery recourse and the
 history-by-life forbidden forms) and `AssertMustNot`;
 `descriptions_pane.go` holds the pane verbs'
 (`read-pane`, `send-keys`, `pause`) cases; `descriptions_kill_optin.go`
-holds the cases of `kill`'s finished-row opt-in.
+holds the cases of `kill`'s finished-row opt-in;
+`descriptions_unusable.go` holds the cases of a row whose recorded tmux
+session name cannot be used (every verb's refusal, the trigger, the
+manifest pointer and the sweeps' result fields).
 It holds, as code, the required phrases of each SR-1.4 error
 description case and the forms no agent-facing text may contain. The
 package doc comment (`doc.go`, "# Description helper") says the same.
@@ -8439,7 +8492,7 @@ package doc comment (`doc.go`, "# Description helper") says the same.
   error description. It requires every phrase of case `c` and rejects `c`'s
   must-not phrases and forbidden values. It always rejects:
   - kill or pause named as a command to run;
-  - the tmux commands `kill-session` and `kill-server`;
+  - the tmux commands `kill-session`, `kill-server` and `kill-pane`;
   - the tmux commands `attach-session` and `tmux attach` (whole words,
     so "tmux session" and "tmux attached" pass), so no agent-visible text
     tells an agent to run a tmux command;
@@ -8450,8 +8503,8 @@ package doc comment (`doc.go`, "# Description helper") says the same.
   The one exception is `ErrTmuxKillFailed`'s "retry kill later".
 - `AssertAgentText(t, what, text)` checks a text agents see that may name
   kill as a documented procedure, such as a manifest description or help.
-  It rejects only `kill-session`, `kill-server`, `attach-session`,
-  `tmux attach` and the opt-in spellings;
+  It rejects only `kill-session`, `kill-server`, `kill-pane`,
+  `attach-session`, `tmux attach` and the opt-in spellings;
   `what` names the text in failures.
 - `AssertAgentTextCase(t, what, text, c DescCase)` is `AssertAgentText`
   plus case `c`'s required phrases, must-not phrases and forbid values:
@@ -8546,14 +8599,10 @@ package doc comment (`doc.go`, "# Description helper") says the same.
     - `DescSocketDirNothingDone(socket, dir, reason)`: the unusable socket
       directory of a single-row verb ("nothing was done", never "nothing
       was launched").
-    - `DescUnusableNameEmpty()`, `DescUnusableNameControlChar(name)` and
-      `DescUnusableNameRewritten(name, RewrittenChars{...})`: the
-      unusable recorded name's three `ErrInternal` cases.
-    - `DescKillInternalTrigger()`: `kill`'s unusable recorded-name
-      `ErrInternal` trigger as its manifest description and `Client.Kill`'s
-      Go doc prose state it (the three kinds of name, no tmux call, removing
-      the row is a human's decision, the "Operator actions" pointer). Saying
-      that a tmux failure is swallowed or logged is a must-not.
+    - `DescKillInternalTrigger()`: `DescUnusableNameTrigger()` (below) as
+      `kill`'s manifest description and `Client.Kill`'s Go doc prose state
+      it, renamed for `kill`; saying that a tmux failure is swallowed or
+      logged is also a must-not.
     - `DescKillRepeatedAfterLastSession(verb)`: the Q5 limitation
       (decision-0930b Q5): a repeated kill right after the last session on
       its tmux server ends can get `ErrTmuxUnresponsive` or
@@ -8592,6 +8641,30 @@ package doc comment (`doc.go`, "# Description helper") says the same.
       was sent", the still stopping or starting phrases and "not this
       launch's session" are must-nots. Pass any other row's id as
       `forbid`.
+  - Unusable recorded name (`descriptions_unusable.go`, SR-1.4, SR-1.7,
+    SR-3.2, SR-11.3, SR-12.2, SR-18.11). No case may say "delete" as an
+    instruction (SR-18.8); only the README's "Operator actions" does.
+    - `DescUnusableNameEmpty()`, `DescUnusableNameControlChar(name)` and
+      `DescUnusableNameRewritten(name, RewrittenChars{Dot, Colon,
+      InvalidUTF8})`: the three `ErrInternal` refusals every looking-up
+      verb gives (the quoted name, the kind, "no tmux call was made",
+      removing the row is a human's decision, the pointer). A rewritten
+      case requires each set character and rejects each unset one.
+    - `DescUnusableNameTrigger()`: the full verb-neutral trigger (the
+      three kinds, `ErrInternal` with no tmux call, the human's decision,
+      the pointer), for any looking-up verb's `Client` Go doc prose and
+      `kill`'s manifest description.
+    - `DescUnusableNamePointer()`: the short "(see kill)" pointer the
+      `read-pane`, `send-keys`, `pause`, `resume` and `spawn` manifest
+      descriptions carry; "unusable" is matched in any case. Check it with
+      `AssertAgentTextCase`.
+    - `DescUnusableNameFindMissingField()` and
+      `DescUnusableNameExpireField(ExpireKept | ExpireKeptIDs)`:
+      `find-missing`'s `unverified_ids` and `expire`'s `kept` / `kept_ids`
+      on such a row, checked with `AssertAgentTextCase` beside
+      `DescFindMissingField` and `DescExpireField`. They reject
+      `ErrInternal` and delete instructions, not the plain word ("a failed
+      delete" passes). The expire case panics on any other field.
   - Pane verbs (`descriptions_pane.go`, SR-1.4, SR-7.2, SR-7.3). `PaneVerb`
     (`PaneReadPane`, `PaneSendKeys`, `PanePause`) selects the verb's
     "nothing was read" / "nothing was sent" sentence. Every pane case
@@ -8938,6 +9011,16 @@ package doc comment (`doc.go`, "# Description helper") says the same.
 - **Must use** the `DescKillOptIn*` cases for any Go check of `kill`'s
   finished-row opt-in refusals (the live row, the two "never reported
   in" variants); never spell their phrases in a test.
+- **Must use** the `descriptions_unusable.go` cases for any Go check of
+  an unusable recorded name's text: a verb's refusal through the
+  fixture's `desc` (`unusableNameFixtures()` in `pkg/api`, which picks
+  `DescUnusableNameEmpty`, `DescUnusableNameControlChar` or
+  `DescUnusableNameRewritten`), a `Client` Go doc or `kill`'s manifest
+  description through `DescUnusableNameTrigger` (or
+  `DescKillInternalTrigger` for `kill`), another verb's manifest pointer
+  through `DescUnusableNamePointer`, and a sweep result field through
+  `DescUnusableNameFindMissingField` or `DescUnusableNameExpireField`.
+  Never spell their phrases in a test.
 - **Must use** the reuse-docs cases for any Go check of the texts they
   cover: the reuse parameter through `DescReuseFinishedParam`, `delete`'s
   notice through `DescDeleteDeprecated`, a collision text through
@@ -8980,6 +9063,12 @@ detail.
   start the move records (the clock plus `resumeLookupQ`). A test that
   checks `launch_started_at` or the launch's timing uses them. With no
   server started, a normal resume's lookup reads Gone and proceeds.
+- `vanishedUserSocket(t)` (`pkg/api/resume_pending_launch_test.go`) is a
+  socket path under a per-user directory that does not exist, in a parent
+  that does. `TestResumeLaunchSocket` and the unusable-name resume tests
+  (`resume_unusable_name_test.go`) use it. **Must use:** a test that
+  records a socket whose per-user directory vanished takes it from
+  `vanishedUserSocket`, never its own path arithmetic.
 
 **Lookup and held-name scenes on the kill fixture.** Tests of resume's
 pre-launch lookup and of its path after "duplicate session" build on
@@ -9240,7 +9329,10 @@ each file's doc comments carry the detail.
   return, one `oneName<Verb>Rows()` list per verb (`oneNameKillRows()` for
   `kill`; the pane verbs' in `one_name_pane_verbs_test.go`; `kill`'s
   finished-row opt-in's `oneNameKillOptInRows()` in
-  `one_name_kill_optin_test.go`, run by its own test).
+  `one_name_kill_optin_test.go`, run by its own test). A row's
+  "unusable recorded name" case seeds `unusableNameSpec()`
+  (`one_name_pane_verbs_test.go`: a waiting row with no session,
+  recording the pre-b.gqe default name).
 - **Call-site table** (`lookup_calltable_test.go`, SR-20.5): every lookup
   outcome (the verdicts and their variants, the server cases, and the
   action-failure column) against every single-row verb, built on the kill
@@ -9252,6 +9344,37 @@ each file's doc comments carry the detail.
   (`lookup_calltable_<verb>_test.go`; `send-keys` and `pause` add
   `pending`-row and finished-row adapters, and `kill`'s finished-row
   opt-in has its own, `lookup_calltable_kill_optin_test.go`).
+  `callTableColumns()` is the lookup columns (`callTableLookupColumns()`)
+  followed by the unusable-name column family
+  (`lookup_calltable_unusable_test.go`, SR-3.2): `callTableUnusables()`
+  gives one column per `unusableNameFixtures()` entry ("Unusable name,
+  <label>", a row with no session recording that raw name), plus one whose
+  row records no socket while the socket directory is unusable, so a
+  guard placed after the socket resolution fails the table. A verb merges
+  its cells with `maps.Copy`: `callTableUnusableRefused()` (`ErrInternal`
+  with the fixture's `desc`, no tmux call) or `callTableUnusableNA(reason)`;
+  `find-missing` and `expire` build theirs from the fixture's `note` and
+  `kept`. `callTableCell.keptLater` is `expire`'s expected kept reason for
+  a later row on the same socket (`""` deleted). `-run
+  'CallTable.*/Unusable'` selects the family.
+- **Unusable recorded names** (`unusable_name_fixture_test.go`, no tests;
+  SR-3.2, SR-11.3, SR-12.2). `unusableNameFixtures()` is the one table of
+  unusable recorded names: empty, a newline, DEL, ESC, the pre-b.gqe
+  default name (`preGqeDefaultName`, holding `.`), `:`, invalid UTF-8,
+  and `.` with a newline (the control character decides). Each
+  `unusableNameFixture` carries `label`, `raw`, `kind` (`tmux.Unusable`'s
+  verdict), `desc` (its `apitest.DescUnusableName*` case), `note`
+  (`find-missing`'s liveness note) and `kept` (`expire`'s kept reason).
+  `usableNameFixture()` is the usable control (`usableDefaultName`, kind
+  `UnusableNone`, no note or reason). `unusableNameTokens()` gives the
+  three kinds in SR-3.2's order with their note and kept reason, the one
+  place those six tokens are spelled in tests; `unusableNameTokenOf(kind)`
+  is one kind's entry (zero for `UnusableNone`); `newNameFixture` builds
+  a fixture from them. On the kill fixture,
+  `unusable_name_row_fixture_test.go` adds `unusableFixture(t, label)`
+  (one entry by label) and `e.seedUnusableRow(t, spec, f)` (a row
+  recording `f`'s raw name with its own current-labelled session up under
+  a usable name, so only the name guard stops the verb).
 - **Security** (`security_test.go`, SR-15): beside the row a verb acts on,
   a session with no id and another row's session carry a planted secret; the
   secret, both rows' launch tokens and the other row's id must appear in
@@ -9269,6 +9392,11 @@ each file's doc comments carry the detail.
   verb)` checks that a `Client` method's "Errors:" list names exactly its
   verb's manifest `ErrorNames`, with `clientMethodDoc`, `splitGoDocErrors`
   (the list apart from the prose) and `goDocErrorNames`.
+  `clientGoDocProse(t, method)` returns a `Client` method's Go doc prose
+  outside "Errors:" and its `CLI:` line, with line wrapping rejoined; a
+  check of what a method's Go doc says (such as
+  `DescUnusableNameTrigger` in `manifest_unusable_name_test.go`, or
+  `kill`'s cases) reads the prose through it, never its own doc reader.
 - **README section checks** (`readme_sections_test.go`, SR-1.4, SR-18.1,
   SR-18.17). The file holds the one Markdown heading parser in `pkg/api`
   tests:
@@ -9303,6 +9431,26 @@ each file's doc comments carry the detail.
     refusal classes" heading of this document included.
 
   Each of its test names contains `README`, so `-run README` runs them.
+  Two sibling files check sections on the same parser:
+  - `readme_optin_test.go` (SR-6.8, SR-18.15, SR-18.17): `kill`'s
+    finished-row opt-in is spelled only in the README's "Operator actions"
+    and in no doc under `docs/` or either package README. It holds the
+    section helpers `operatorActions(t, d)` (the "Operator actions"
+    heading, by `apitest.OperatorActionsTitle`, failing when missing) and
+    `sectionLines(d, h)` (a heading's 0-based body line range).
+  - `readme_operator_actions_test.go` (SR-18.17, SR-20.6; AC-DOC-18):
+    `TestReadmeOperatorActionsUnusableNameSteps` checks that the item "A
+    row whose recorded name cannot be used" gives SR-18.17's five steps in
+    order (`unusableNameSteps()`, each step's required content and tmux
+    command shapes, the notes and kept reasons from
+    `unusableNameTokens()`); `TestReadmeOperatorActionsTargetsByID`
+    checks that every tmux command in "Operator actions" targets a
+    session or pane by id (`byIDTargets`). Its extractors:
+    `tmuxCommands(lines, first)` collects the tmux commands of fenced-block
+    lines and inline code spans as `tmuxCmd` (subcommand, words,
+    `targets()`, `hasFlag`), and `numberedSteps(lines, first)` splits a
+    top-level numbered list into `procStep`s. `-run ReadmeOperatorActions`
+    runs them.
 - **Recovery wording scan** (`pkg/api/recovery_wording_test.go`, Epic 17;
   SR-18.4, SR-18.9, SR-18.16):
   - `TestRecoveryWordingScan` runs `apitest.AssertMustNot` with
@@ -9337,6 +9485,18 @@ through `assertOneName`, it appends its adapter to `callTableVerbs()`, its
 SR-15 case to the security table, and its "Errors:" check goes through
 `assertGoDocErrorsMatchManifest`.
 
+**Must use:** a test of a row whose recorded name cannot be used takes
+its names, kinds, description cases, notes and kept reasons from
+`unusableNameFixtures()` (and its usable control from
+`usableNameFixture()`), or the six tokens alone from `unusableNameTokens()`
+/ `unusableNameTokenOf`, never a second name table or a spelled note or
+reason; on the kill fixture it picks an entry with `unusableFixture` and
+seeds a row with its own session through `seedUnusableRow`. A verb that
+looks a row up gets the unusable-name columns by merging
+`callTableUnusableRefused()` or `callTableUnusableNA` (or cells built from
+the fixtures' `note` / `kept`) into its call-table cells, never columns of
+its own.
+
 **Must use:** a test that seeds a finished row against the
 starting-session rule or kill's reported-in rule on the kill fixture
 (`resume`'s starting-session tests, `kill`'s finished-row opt-in, a later
@@ -9360,11 +9520,15 @@ for either. Tests seed the row's own labelled session through the fixture
 or the Recorder constructors, never hand-built label strings.
 
 **Must use:** a later check of a README or doc section (a heading exists,
-a pointer names it, a section's text says something), such as Epic 19's
-README procedure checks, goes in `readme_sections_test.go` on
-`readMD` / `mdDoc` / `mdAnchor` and the pointer collector. Do not write a
-second Markdown heading parser or pointer scan. A new pointer form is a
-new pattern in `pointersIn`.
+a pointer names it, a section's text says something) is built on
+`readMD` / `mdDoc` / `mdAnchor` and the pointer collector, in
+`readme_sections_test.go` or a sibling `readme_*_test.go`
+(`readme_optin_test.go`, `readme_operator_actions_test.go`), never a
+second Markdown heading parser or pointer scan. It finds "Operator
+actions" through `operatorActions` and a section's lines through
+`sectionLines`; a check of the tmux commands or numbered steps of a README
+section goes through `tmuxCommands` and `numberedSteps`, never a second
+extractor. A new pointer form is a new pattern in `pointersIn`.
 
 **Must use:** a later check that reads every Go source or every manifest
 text (a wording scan, a pointer scan) walks them through `walkGoSources`
@@ -9473,7 +9637,8 @@ SR-20.2), with methods on `*killEnv`. Its doc comments carry the detail.
   `EndedAt` (`endedAged`, `endedNull`, `endedUnparseable`), `NoPreTrust`,
   `Malformed` (labels, `claude_args` and `extra_env` that do not decode),
   `Bare` (no parent, history or permission requests), `Child`, `Held`
-  (the held-name instants) and extra `apitest` options. Raw variants are
+  (the held-name instants), `ID` (a given instance id in place of the
+  default `reuse-<8 hex>`) and extra `apitest` options. Raw variants are
   seeded through `seedRawRow`. `seedRelative` and `seedRequest` add a
   parent or child row and an open permission request.
 - **The request and the runners.** `reuseParams(t, r, reuseRequest{...})`
@@ -9491,8 +9656,19 @@ SR-20.2), with methods on `*killEnv`. Its doc comments carry the detail.
   call); `readCount()` counts reads (the lost-race re-read shows as 2).
   Store write failures go through `storefix.InjectWriteFailure` with the
   `WriteFailReuse*` kinds.
-- **Other arrangements.** `e.reusePending(...)` gives a `pending` row made
-  by a real reuse; `killRow.withName(name)` places a holder of a requested
+- **A real reuse.** `e.reuseLaunch(t, r, a, q)` reuses `r` with `q`
+  through `Client.Spawn`, the new pane's agent in state `a`, failing
+  unless it succeeds, and returns the row as reused and the
+  `api.SpawnResult`. `e.reusedAs(t, r)` reads a reused row back (pending,
+  its stored name and token, the session carrying the new token).
+  `e.reusePending(t, a, spec, q)` seeds `spec`'s row with its old agent
+  gone and runs `reuseLaunch`, giving a `pending` row made by a real
+  reuse. `e.agentOnCreate(id, a)` puts the first pane of a session a
+  successful create labels in the fake in state `a` (for `id`'s first
+  create, or every create when `id` is `""`); `newReuseEnv(t)` is a kill
+  fixture with it set for every create, for tests that reuse rows more
+  than once.
+- **Other arrangements.** `killRow.withName(name)` places a holder of a requested
   name through `seedHolder`; `e.snapshotReuse(t, r)` takes the
   `writesSnapshot` for `assertWroteNothing`; "duplicate session" is
   `arrangeHeld`; the agent's process state, the bound and the window come
@@ -9501,8 +9677,9 @@ SR-20.2), with methods on `*killEnv`. Its doc comments carry the detail.
 **Must use:** a later test of reuse, or of any path that must prove a
 refusal of a finished-row launch changed nothing, seeds through
 `seedReusable` (or `seedRawRow` for a row no `Spawn` read accepts), builds
-its request with `reuseParams`, runs through `e.reuse` / `e.reuseWith`,
-injects reads and interleavings through `hookedReuseStore`, and checks
+its request with `reuseParams`, runs through `e.reuse` / `e.reuseWith`
+(or `reuseLaunch` / `reusePending` when the reuse is the arrangement, not
+the subject), injects reads and interleavings through `hookedReuseStore`, and checks
 "wrote nothing" with `snapshotReuse` / `assertWroteNothing`; it never adds
 a second reusable-row seeder, runner, store wrapper or "wrote nothing"
 check. A row's columns are compared byte for byte only through

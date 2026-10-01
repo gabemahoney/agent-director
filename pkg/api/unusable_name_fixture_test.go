@@ -6,7 +6,8 @@ package api_test
 // verb's refusal must match, find-missing's note (SR-11.3) and expire's kept
 // reason (SR-12.2). The call table builds a column per fixture
 // (lookup_calltable_unusable_test.go). It also holds the usable control
-// fixture. It holds no tests.
+// fixture. It holds no tests. Later tests add a name here, never a second
+// table.
 
 import (
 	"github.com/gabemahoney/agent-director/internal/tmux"
