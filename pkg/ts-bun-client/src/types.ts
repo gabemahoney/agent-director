@@ -462,21 +462,34 @@ export interface ExpireParams {
 
 /** Mirrors pkg/api/expire.go::ExpireResult */
 export interface ExpireResult {
-  /** Number of terminal rows removed. */
+  /**
+   * Number of rows deleted (the length of `ids`): rows deleted after tmux
+   * showed no session of the agent (Gone) and its recorded process was not
+   * seen running. Zero is a legitimate result when no row was deleted.
+   */
   count: number;
-  /** Sorted ids of rows removed. */
+  /**
+   * Sorted ids of the rows deleted after tmux showed no session of the agent
+   * (Gone) and its recorded process was not seen running, each only while
+   * the row was unchanged since expire examined it. Never null; `[]` when
+   * none.
+   */
   ids: string[];
   /**
    * Number of selected rows kept rather than deleted (the length of
-   * `kept_ids`), for example because the agent process or a session of the
-   * agent may still run, tmux could not be read, or the row changed after it
-   * was examined.
+   * `kept_ids`), for example because the agent's process or a session of the
+   * agent (its own, or a leftover of an earlier launch) may still run, tmux
+   * could not be checked or answered from a different server, the run's tmux
+   * time budget (`sweep_budget_seconds`) was spent, or the row changed after
+   * it was examined.
    */
   kept: number;
   /**
    * Sorted ids of the selected rows kept rather than deleted, each reported
-   * with its reason in the trail (`ad.expire.kept`). A row another caller
-   * removed first is in neither list. Never null; `[]` when none.
+   * with its reason in the trail (`ad.expire.kept`). tmux problems and a
+   * failed delete of one row never fail the run: the row is kept. A failed
+   * read of the selected rows fails the run. A row another caller removed
+   * first is in neither list. Never null; `[]` when none.
    */
   kept_ids: string[];
 }

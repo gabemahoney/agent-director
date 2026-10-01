@@ -5,8 +5,7 @@ import "github.com/gabemahoney/agent-director/internal/tmux"
 // sweepSockets is a sweep run's socket rule for its rows (SR-3.3, SR-3.15,
 // SR-13.5; LFR H1): the socket each row's lookup uses, with the caller's
 // socket for rows that record none resolved at most once per run. find-missing
-// holds one per run; expire (Epic 15) reuses it. The zero value is ready to
-// use. It serves one run and is not for concurrent use.
+// and expire each hold one per run. The zero value is ready to use. It serves one run and is not for concurrent use.
 type sweepSockets struct {
 	// resolved reports that the caller's socket was resolved; socket and err
 	// hold the outcome.

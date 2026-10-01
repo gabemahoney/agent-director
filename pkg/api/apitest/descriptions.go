@@ -25,8 +25,9 @@ import (
 // lookup's shared Can't tell cases (descriptions_lookup.go), of SR-18.6's live-row
 // sequence, which kill's manifest description states in its short form and
 // the find-missing and spawn descriptions point to (descriptions_live_row.go),
-// or of find-missing's manifest texts and SR-18.2's "not proof" statement
-// (descriptions_find_missing.go).
+// of find-missing's manifest texts and SR-18.2's "not proof" statement
+// (descriptions_find_missing.go), or of expire's manifest texts and SR-18.7's
+// cleanup guidance (descriptions_expire.go).
 
 // DescCase is one SR-1.4 description case: Name (shown in every failure),
 // the phrases the description must contain, the case's own must-not phrases

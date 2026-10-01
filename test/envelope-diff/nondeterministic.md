@@ -64,7 +64,7 @@ When a verb fails, the harness compares the error envelope fields as follows:
 
 ## Per-verb summary
 
-Every callable verb in `manifest.CallableVerbs()` is a key (15 total). Verbs whose output is entirely fixture-derived carry `[]` and are diffed in full.
+Every callable verb in `manifest.CallableVerbs()` is a key (16 total). Verbs whose output is entirely fixture-derived carry `[]` and are diffed in full.
 
 | Verb | Non-deterministic selectors | Reason |
 |---|---|---|
@@ -72,9 +72,10 @@ Every callable verb in `manifest.CallableVerbs()` is a key (15 total). Verbs who
 | `version` | `.version`, `.commit` | CLI stamped with -ldflags; `pkg/api.Version()` returns package default |
 | `decide` | — | all values fixture-derived |
 | `delete` | — | all values fixture-derived |
-| `expire` | — | all values fixture-derived |
+| `expire` | `.ids` | which rows are selected depends on the call-time cutoff (now minus the window); `count`, `kept` and `kept_ids` are diffed; both cases in `success_expire.go` pin `kept` and `kept_ids` through `want`, and `TestEnvelopeDiff_Success/expire/kept` pins `ids` as well |
 | `find-missing` | — | all values fixture-derived |
 | `get` | — | all values fixture-derived |
+| `get-permission` | `.request_id`, `.requested_at` | excluded as the store-assigned columns named in the case's comment (`success_cases.go`): `request_id` is the autoincrement row id, `requested_at` the row's `CURRENT_TIMESTAMP`. Both are written once, when the case seeds its `permission_requests` row, and both store copies carry them, so by the decision tree above they are fixture-derived; the other six fields are diffed |
 | `kill` | — | all values fixture-derived |
 | `list` | — | all values fixture-derived |
 | `make-template` | `.path` | output path resolved at call time |

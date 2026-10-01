@@ -26,12 +26,13 @@ SQLite file; everything else is tmux.
   allow/deny out-of-band.
 - A **persistent session model** — pause / resume preserves the
   JSONL transcript across Claude sessions.
-- A **crash-recovery cron** — `find-missing` + `expire` reconcile the
-  DB against the agents: `find-missing` judges each live row by its
+- **Crash-recovery verbs** you schedule yourself — `find-missing` +
+  `expire`: `find-missing` judges each live row by its
   agent's process, checks tmux when that process cannot be read, and marks
   the row `missing` or leaves it unverified. `missing` is the sweep's
   judgement on the evidence available to it, not proof that the agent has
-  exited.
+  exited. `expire` removes old finished rows whose agent is gone and keeps
+  those it cannot prove gone.
 
 ## 5-minute install
 
@@ -387,7 +388,8 @@ with the same user and tmux environment as the agents:
 # Mark live rows whose agent process is gone as `missing` — run often (e.g. every 2 min):
 agent-director find-missing
 
-# Delete terminal rows older than expire_retention_days — run daily:
+# Delete finished rows older than expire_retention_days whose agent's process
+# is not running and whose agent has no tmux session; keep the others:
 agent-director expire
 ```
 
@@ -406,6 +408,17 @@ each carries `liveness_unverified_since` and a `liveness_note` in `list`
 and `get`. `missing` is the sweep's judgement on the evidence available to
 it, not proof that the agent has exited. A run as another user, as root or
 against another tmux server can mark live rows `missing`.
+
+Finished rows (`ended` or `missing`) are never removed on their own: an
+`expire` you schedule removes them at the default retention, and `delete`
+removes one row when asked; a row's state alone never gets it deleted. `expire` checks each row's agent process and, unless it runs,
+asks tmux on the row's recorded socket (else yours): it deletes the row only when the process is not
+running and tmux shows no session of the agent, and lists it in `ids`. Rows
+whose session runs or that it cannot check are kept and listed in
+`kept_ids`; the trail's `ad.expire.kept` records give each reason. Agents
+never run `expire`, least of all with `--older-than 0d`. A run as another
+user, as root or against another tmux server can wrongly delete rows whose
+agent still runs.
 
 ## Recovering after a reboot
 
@@ -617,6 +630,11 @@ spawn with `--reuse-finished`:
 agent-director spawn --cwd <dir> --tmux-session-name <name> --claude-instance-id <id> --reuse-finished
 ```
 
+If you leave the row `ended`, `expire` keeps it while the leftover runs
+(reason `leftover_running`, listed in `kept_ids`); its first run after the
+leftover is gone deletes the row, once the row is older than the retention
+window.
+
 If the error instead says the new row "stays pending" or "was left as it
 is", check the row with `agent-director get --claude-instance-id <id>`; if
 it is `pending`, follow the `pending` paragraph of the leftover item above
@@ -654,7 +672,8 @@ pane of this launch was found while the agent process still runs, and that
 no kill was sent. `read-pane` answers `ErrTmuxCaptureFailed` although the
 agent runs (a gone answer about the launch's session, not proof that the
 agent has exited). `find-missing` keeps a live row live, because its
-process is alive. agent-director never signals a process itself; ending it
+process is alive, and `expire` keeps a finished one (`process_alive`).
+agent-director never signals a process itself; ending it
 is a human's decision:
 
 1. Take the pid from the error, or from the trail (`agent_pid`; for a

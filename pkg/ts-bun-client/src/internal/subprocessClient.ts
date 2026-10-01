@@ -453,7 +453,10 @@ export class SubprocessClient {
     return this.#enqueue<FindMissingResult>("find-missing", params);
   }
 
-  /** expire — remove terminal-state rows older than the retention window. */
+  /**
+   * expire — remove finished rows older than the retention window whose
+   * agent is gone, and report the rows it keeps.
+   */
   async expire(params: ExpireParams): Promise<ExpireResult> {
     this.#assertOpen();
     return this.#enqueue<ExpireResult>("expire", params);

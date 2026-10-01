@@ -121,7 +121,11 @@
 //     it in full, and DescMissingNotProofShort, its short form for the
 //     kill, resume, pause, expire and delete descriptions (decision-0930e);
 //     and FindMissingOwnText, which cuts find-missing's own text
-//     before the pointer).
+//     before the pointer), or of expire's manifest texts
+//     (descriptions_expire.go: DescExpireManifest, its Description;
+//     DescExpireField, its count, ids, kept and kept_ids result fields;
+//     DescCleanupGuidance, SR-18.7's cleanup guidance in full at expire, and
+//     DescCleanupPointer, its short pointer at kill and find-missing).
 //
 // Rules for tests (the same as docs/architecture.md, "apitest Seed* factory
 // contract (reusable test fixtures)"):

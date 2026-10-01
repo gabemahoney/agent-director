@@ -53,24 +53,27 @@ var (
 // IDs and KeptIDs, except a row another caller removed first, which is in
 // neither.
 type ExpireResult struct {
-	// Count is the number of rows deleted: the length of IDs.
+	// Count is the number of rows deleted (the length of IDs): rows deleted
+	// after tmux showed no session of the agent (Gone) and its recorded
+	// process was not seen running. Zero is a legitimate result.
 	Count int `json:"count"`
-	// IDs is the sorted slice of instance ids deleted: rows whose recorded
-	// agent process was not seen running and whose lookup found no session
-	// of the agent (Gone), deleted only while each still held the snapshot
+	// IDs is the sorted slice of instance ids deleted after tmux showed no
+	// session of the agent (Gone) and its recorded agent process was not
+	// seen running, each deleted only while the row still held the snapshot
 	// expire examined. Always non-nil — encodes as [] when no row was
 	// deleted.
 	IDs []string `json:"ids"`
 	// Kept is the number of selected rows kept rather than deleted: the
 	// length of KeptIDs.
 	Kept int `json:"kept"`
-	// KeptIDs is the sorted slice of instance ids kept rather than deleted:
-	// rows whose agent process may still run, whose agent still has a
-	// session (its own or one left from an earlier launch), whose tmux could
-	// not be read or was not called, or which changed after expire examined
-	// them or whose delete failed in the store. Each is reported with its
-	// reason in an ad.expire.kept trail record. Always non-nil — encodes as
-	// [] when no row was kept.
+	// KeptIDs is the sorted slice of instance ids kept rather than deleted,
+	// for example rows whose agent process may still run, whose agent still
+	// has a session (its own or one left from an earlier launch), whose tmux
+	// could not be read, answered from a different server or was not
+	// called, or which changed after expire examined them or whose delete
+	// failed in the store. Each is reported with its reason in an
+	// ad.expire.kept trail record. Always non-nil — encodes as [] when no
+	// row was kept.
 	KeptIDs []string `json:"kept_ids"`
 }
 
@@ -349,8 +352,8 @@ func (r *expireRun) deleteRow(row expireRow, cand ExpireCandidate) expireRow {
 }
 
 // Expire removes finished rows (ended or missing) whose ended_at is older than
-// the retention window, but only those whose agent can no longer run. When
-// olderThan is nil the window comes from defaults.expire_retention_days in
+// the retention window, and keeps any whose agent, own session or leftover
+// may still run, or for which it cannot tell. When olderThan is nil the window comes from defaults.expire_retention_days in
 // config.toml; a non-nil value overrides it, and a zero or negative duration
 // selects every finished row. Live rows and rows with a NULL ended_at are
 // never selected.
@@ -368,6 +371,13 @@ func (r *expireRun) deleteRow(row expireRow, cand ExpireCandidate) expireRow {
 // configuration) caps all its calls; rows not reached are kept. expire never
 // kills a session, never touches JSONL transcripts, and tmux problems never
 // fail the run.
+//
+// Finished rows are removed by an operator-scheduled expire at the default
+// retention, run as the same user and in the same tmux environment as the
+// agents; a row recorded without a socket is judged in the caller's own tmux
+// environment. A run as another user, as root or against another tmux server
+// can wrongly delete rows whose agent still runs. Agents never run expire,
+// least of all with a zero window.
 //
 // A finished row is not proof that its agent is dead: missing is the sweep's
 // judgement on the evidence available to it, not proof that the agent has
