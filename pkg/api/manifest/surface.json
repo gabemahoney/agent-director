@@ -726,7 +726,7 @@
         {
           "name": "claude_instance_id",
           "type": "string",
-          "description": "Id of the terminated Spawn to resurrect.",
+          "description": "Id of the finished (ended or missing) row to resume.",
           "required": true,
           "nullable": false,
           "allow_empty": false,
@@ -737,7 +737,7 @@
         {
           "name": "claude_instance_id",
           "type": "string",
-          "description": "The same id passed in (resume preserves the instance id across resurrection).",
+          "description": "The same id passed in (resume keeps the instance id).",
           "nullable": false,
           "allow_empty": false,
           "allowed_values": null

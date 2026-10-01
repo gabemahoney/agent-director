@@ -2,8 +2,10 @@
  * Asserts that the fake-tmux stub has the executable bit set after setup.ts runs.
  *
  * Regression guard for b.or3: if the stub lands at mode 644, Go's exec.LookPath
- * silently falls through to /usr/bin/tmux, leaking real tmux sessions and causing
- * spurious ErrTmuxSessionCreate failures in subsequent resume / kill test runs.
+ * silently falls through to /usr/bin/tmux, leaking real tmux sessions that hold
+ * fixed session names. Later test runs then find those names held: resume refuses
+ * with a classified error (ErrTmuxSessionConflict for a holder with no valid
+ * instance id), and spawn and kill see a name held by a session that is not theirs.
  */
 
 import { test, expect } from "bun:test";

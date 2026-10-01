@@ -600,6 +600,20 @@ On a `pending` row, first wait until `find-missing` marks the row `missing`
 again and check that the session id still shows the `session_created` you
 noted; afterwards spawn the id with `--reuse-finished`.
 
+When `resume` refuses with `ErrTmuxSessionConflict` ("left over from an
+earlier life" or "no valid instance id"), the row stays `ended` or
+`missing` (after "duplicate session" the error says whether the row was
+restored). The error names the session and its id (`$N`); the socket is the
+row's `tmux_socket`. For a leftover, handle each session it names as in
+steps 2 to 4 (if it says "and N more", find the others with the listing of
+step 1). For "no valid instance id", look first (steps 2 and 3): it may be a
+person's own session; end it as in step 4 only if it is not wanted. Then run
+`resume` again:
+
+```sh
+agent-director resume --claude-instance-id <id>
+```
+
 ### A spawn refused as "left over from an earlier life"
 
 `ErrTmuxSessionConflict` ("left over from an earlier life") comes in two

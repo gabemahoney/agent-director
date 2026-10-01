@@ -385,7 +385,7 @@ export interface GetPermissionResult {
 
 /** Mirrors pkg/api.ResumeParams (json tags). */
 export interface ResumeParams {
-  /** Id of the terminated Spawn to resurrect. */
+  /** Id of the finished (ended or missing) row to resume. */
   claude_instance_id: string;
 }
 
@@ -395,7 +395,7 @@ export interface ResumeParams {
  * then `waiting`.
  */
 export interface ResumeResult {
-  /** Same id that was passed in (preserved across resurrection). */
+  /** Same id that was passed in (resume preserves it). */
   claude_instance_id: string;
   /**
    * What the launch's folder-trust pre-trust did. `"ok"`: the folder-trust entry was

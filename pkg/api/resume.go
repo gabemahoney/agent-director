@@ -111,15 +111,15 @@ var _ ResumeTmux = TmuxClient(nil)
 
 // ResumeParams is the typed parameter shape for the resume verb.
 type ResumeParams struct {
-	// ClaudeInstanceID identifies the terminated Spawn to resurrect.
+	// ClaudeInstanceID identifies the finished (ended or missing) row to resume.
 	ClaudeInstanceID string `json:"claude_instance_id"`
 }
 
 // ResumeResult is the typed return shape: the id and what the launch's
 // pre-trust did (pre_trust). The id field is the same id the caller passed
-// in; resume preserves the instance id across the resurrection (SRD §8.1).
+// in; resume preserves the instance id (SRD §8.1).
 type ResumeResult struct {
-	// ClaudeInstanceID is the id of the resurrected Spawn — identical to the
+	// ClaudeInstanceID is the id of the resumed row — identical to the
 	// value passed in ResumeParams.ClaudeInstanceID.
 	ClaudeInstanceID string `json:"claude_instance_id"`
 	// PreTrust is what the launch's folder-trust pre-trust did, always one
@@ -768,7 +768,7 @@ func launchInProgressError(row Spawn) error {
 		ErrSpawnNotResumable, row.ClaudeInstanceID, began)
 }
 
-// Resume brings a finished (ended/missing) Spawn back to life by launching
+// Resume relaunches a finished (ended/missing) row by launching
 // `claude --resume` in a fresh tmux session pointed at the same JSONL
 // transcript. The claude_instance_id is preserved; the result returns it and
 // pre_trust (what the launch's pre-trust did: ok, skipped or failed). A

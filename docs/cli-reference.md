@@ -238,11 +238,11 @@ Relaunch a finished (ended/missing) row via `claude --resume`. `missing` is not 
 
 ### Parameters
 
-- `claude_instance_id` (string, required): Id of the terminated Spawn to resurrect.
+- `claude_instance_id` (string, required): Id of the finished (ended or missing) row to resume.
 
 ### Result
 
-- `claude_instance_id` (string): The same id passed in (resume preserves the instance id across resurrection).
+- `claude_instance_id` (string): The same id passed in (resume keeps the instance id).
 - `pre_trust` (string): What the launch's folder-trust pre-trust did. ok = the folder-trust entry was written; skipped = pre-trust was off for this launch because the spawn that began the row's life turned it off with no-pre-trust, so nothing was attempted; failed = pre-trust was attempted and the entry was not written (the .claude.json file is missing, or could not be read, parsed or written); the launch still proceeds and the agent may stop at Claude Code's folder-trust prompt.
 
 ### Errors

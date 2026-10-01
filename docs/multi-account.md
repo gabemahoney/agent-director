@@ -46,8 +46,8 @@ The reserved-key validation (SRD §7.2 step 4) rejects `AGENT_DIRECTOR_*`
 keys but *does not reserve* the auth env vars — they pass through to
 the tmux session and into Claude verbatim. agent-director never logs
 the value. It *does* persist the per-spawn `--extra-env` map to the
-store — with no opt-out — so a terminated Spawn can restore its original
-env on `resume` (see `internal/spawn/relaunch.go`: "ExtraEnv is restored
+store — with no opt-out — so `resume` can restore a finished (`ended` or
+`missing`) row's original env (see `internal/spawn/relaunch.go`: "ExtraEnv is restored
 from the persisted row … including CLAUDE_CONFIG_DIR and any auth vars").
 That means the auth token sits at rest in `~/.agent-director/state.db`;
 the store file is forced `0600` in a `0700` directory on every open, so

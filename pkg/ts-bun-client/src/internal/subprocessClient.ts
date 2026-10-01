@@ -441,7 +441,7 @@ export class SubprocessClient {
     return this.#enqueue<GetPermissionResult>("get-permission", params);
   }
 
-  /** resume — restart a terminated Spawn. */
+  /** resume — relaunch a finished (ended or missing) row. */
   async resume(params: ResumeParams): Promise<ResumeResult> {
     this.#assertOpen();
     return this.#enqueue<ResumeResult>("resume", params);

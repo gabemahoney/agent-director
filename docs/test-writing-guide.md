@@ -139,7 +139,7 @@ def test_create_record_uses_utf8(mock_open):
 
 Any test that exercises a verb which creates a tmux session (e.g. `resume`) must
 use a UUID-suffixed instance id — e.g. `` `id-resume-${crypto.randomUUID().slice(0, 8)}` `` — rather than a fixed string like `id-resume-1`.
-Fixed names collide across runs when the fake-tmux stub is bypassed (e.g. mode-644 binary) and a real tmux session leaks: the `HasSession` pre-flight check then blocks every subsequent run.
+Fixed names collide across runs when the fake-tmux stub is bypassed (e.g. mode-644 binary) and a real tmux session leaks: a leaked session labelled for that fixed id then makes `resume`'s pre-launch lookup and a plain spawn's label scan refuse ("left over from an earlier life", `ErrTmuxSessionConflict`) on every subsequent run.
 
 ### Parallel mode is pinned off
 

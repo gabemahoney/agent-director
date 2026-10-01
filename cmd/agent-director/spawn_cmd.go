@@ -362,7 +362,7 @@ func resumeHandlerWith(client *pkgapi.Client, args []string) error {
 	var p pkgapi.ResumeParams
 	fs := flag.NewFlagSet("resume", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the terminated Spawn to resurrect")
+	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the finished (ended or missing) row to resume")
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}

@@ -104,8 +104,25 @@
 //     and the end write's row sentence, never "retry later", and on an
 //     unanswered re-lookup the retry guidance by the same result: the reuse
 //     opt-in once the name is free when the row was ended, else the
-//     launch-timeout rule; with HeldName.Restore, resume's errors after
-//     "duplicate session", descriptions_resume_held.go), of the
+//     launch-timeout rule; HeldName.BeforeLaunch makes the DescHeld* holder
+//     cases resume's pre-launch holder refusals instead, with no
+//     "duplicate session" overlay (descriptions_resume_lookup.go); and
+//     HeldName.Restore makes AfterHeldName, and the DescHeld* cases that
+//     apply it, resume's errors after "duplicate session"
+//     (descriptions_resume_held.go: the restore's row sentence,
+//     ResumeRestore, in place of "nothing was done" or "nothing was
+//     written", also over DescPreLaunchLeftover for an old holder and over
+//     the starting-session cases for the row's own session; DescHeldLeftover
+//     stays plain spawn's wording only), of the starting-session refusal
+//     that resume, reuse and kill's finished-row opt-in share
+//     (descriptions_starting.go: DescStillStopping, DescStillStarting and
+//     DescOwnOldSession, parameterised by StartingSession; the own old
+//     session is told apart from a Leftover refusal by its own phrases,
+//     never by "this row's own id" alone), of resume's pre-launch check
+//     (descriptions_resume_lookup.go: DescPreLaunchLeftover, its Leftover
+//     refusal, worded as the plain-spawn scan's but for a row that exists;
+//     its other refusals reuse the starting-session and Can't tell cases
+//     unchanged), of the
 //     lookup's shared Can't tell cases (descriptions_lookup.go), or of the
 //     live-row sequence (descriptions_live_row.go: DescLiveRowSequence, its
 //     short form, which only kill's manifest description states;

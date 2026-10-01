@@ -633,7 +633,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "claude_instance_id",
 				Type:          "string",
-				Description:   "Id of the terminated Spawn to resurrect.",
+				Description:   "Id of the finished (ended or missing) row to resume.",
 				Required:      true,
 				Nullable:      false,
 				AllowEmpty:    false,
@@ -641,7 +641,7 @@ var Verbs = []VerbDef{
 			},
 		},
 		ResultFields: []FieldDef{
-			{Name: "claude_instance_id", Type: "string", Description: "The same id passed in (resume preserves the instance id across resurrection).", Nullable: false, AllowEmpty: false, AllowedValues: nil},
+			{Name: "claude_instance_id", Type: "string", Description: "The same id passed in (resume keeps the instance id).", Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			{
 				Name:          "pre_trust",
 				Type:          "string",
