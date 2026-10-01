@@ -156,14 +156,17 @@ func init() {
 		SeedKind: seedExpired,
 		SeedID:   "smoke-expire-id",
 		Happy: func(c *api.Client, _ string, _ context.Context) (any, error) {
-			// Override retention to zero so the back-dated row is
-			// reaped regardless of config defaults.
+			// Override retention to zero so the ended row is selected
+			// regardless of config defaults.
 			d := time.Duration(0)
 			return c.Expire(&d)
 		},
-		// expire declares no ErrorNames in the manifest — per-row
-		// failures surface in the result map, not as a verb error.
+		// expire declares no ErrorNames in the manifest — a row it does
+		// not delete is kept and listed in kept_ids, not a verb error.
 		Error: nil,
+		Expired: func(result any) api.ExpireResult {
+			return result.(api.ExpireResult)
+		},
 	}
 
 	// ── delete ────────────────────────────────────────────────────────────

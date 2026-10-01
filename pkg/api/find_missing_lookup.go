@@ -191,7 +191,7 @@ func (r *findMissingRun) emitRowNameHeld(it LiveSpawnIdentity, row findMissingRo
 		StoreID:       r.s.StoreID(),
 		Holder:        heldHolderFacts(row.res),
 		LookupOutcome: row.res.Token(),
-		Caller:        r.callerOnce(),
+		Caller:        r.caller.get(),
 	}
 	switch {
 	case row.write.Err != nil:

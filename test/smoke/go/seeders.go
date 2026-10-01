@@ -31,6 +31,8 @@
 //   - SentText: for send-keys and pause, the text Happy sends; the driver
 //     checks the Recorder saw it sent to the seeded row's pane by its pane id,
 //     then one Enter to that pane.
+//   - Expired: for expire, returns the Happy result; the driver checks the
+//     seeded row is the one deleted, none is kept and the row is gone.
 //
 // This file holds the spec type and the registry; the entries live in
 // seeders_verbs.go (verbs that need no tmux) and seeders_tmux.go (verbs that
@@ -56,7 +58,7 @@ type seedKind int
 
 const (
 	// seedNone means no DB row is seeded. Used for verbs whose happy path
-	// does not require any pre-existing row (find-missing, expire, version,
+	// does not require any pre-existing row (spawn, find-missing, version,
 	// make-template).
 	seedNone seedKind = iota
 
@@ -74,9 +76,12 @@ const (
 	// (the smoke TestMain does this).
 	seedResumable
 
-	// seedExpired seeds a terminal row whose ended_at is back-dated 8
-	// days, so it qualifies for expiry under the default retention
-	// window. Used by expire's happy path.
+	// seedExpired seeds an ended row through apitest.SeedSpawn (its SR-20.3
+	// defaults: apitest.TestSocket, a launch token, no pane and no process
+	// identity) with an old ended_at, and gives the Recorder a server on that
+	// socket holding one unlabelled session that is not the row's (SR-20.3).
+	// Used by expire, so its happy path looks the socket up, reads Gone and
+	// deletes the row (SR-12.1).
 	seedExpired
 
 	// seedPendingLaunch seeds a pending row whose launch start is
@@ -124,6 +129,10 @@ const smokeExitText = "/exit"
 // ms since the Unix epoch; its non-zero millisecond part (.123) checks that
 // the verbs keep millisecond precision.
 const smokeLaunchStartMillis int64 = 1790000000123
+
+// smokeEndedAt is the ended_at seedExpired records: a fixed past time, so the
+// row is old under any retention window.
+var smokeEndedAt = time.Date(2020, time.January, 1, 0, 0, 0, 0, time.UTC)
 
 // seederSpec carries everything the driver needs to exercise one verb.
 type seederSpec struct {
@@ -187,6 +196,12 @@ type seederSpec struct {
 	// the row records) on apitest.TestSocket, with Enter, and one Enter to
 	// that pane. Set by send-keys and pause.
 	SentText string
+
+	// Expired, when non-nil, returns the Happy result as an
+	// api.ExpireResult. The driver asserts the seeded row is the one row
+	// deleted, none is kept (kept 0, kept_ids []) and the row is gone from
+	// the store (SR-12.1). Set by expire only.
+	Expired func(result any) api.ExpireResult
 }
 
 // seeders is the canonical registry: one entry per callable verb. The

@@ -221,7 +221,8 @@ func (s *Store) AdoptIdentityIfSameLife(instanceID string, examined RowSnapshot,
 	return res, RowSnapshot{}, err
 }
 
-// execGuarded runs one guarded UPDATE and reports whether it matched a row.
+// execGuarded runs one guarded UPDATE or DELETE and reports whether it
+// matched a row.
 // errPrefix names the write in a driver error.
 func (s *Store) execGuarded(q string, args []any, errPrefix string) (bool, error) {
 	r, err := s.db.Exec(q, args...)

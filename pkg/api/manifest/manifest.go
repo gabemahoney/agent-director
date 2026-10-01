@@ -678,6 +678,8 @@ var Verbs = []VerbDef{
 		ResultFields: []FieldDef{
 			{Name: "count", Type: "int", Description: "Number of rows removed. Zero is a legitimate happy-path result when no terminal rows matched the retention window.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "ids", Type: "[]string", Description: "Sorted IDs of rows removed.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "kept", Type: "int", Description: "Number of selected rows kept rather than deleted (the length of kept_ids), for example because the agent process or a session of the agent may still run, tmux could not be read, or the row changed after it was examined.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "kept_ids", Type: "[]string", Description: "Sorted IDs of the selected rows kept rather than deleted, each reported with its reason in the trail (ad.expire.kept). A row another caller removed first is in neither list. Never null; [] when none.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 		},
 		ErrorNames: []string{},
 	},

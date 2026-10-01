@@ -213,12 +213,12 @@ describe("subprocess-smoke / happy paths (SR-10.3)", () => {
     });
   }, 10_000);
 
-  test("expire — returns expired count", async () => {
+  test("expire — empty store: nothing deleted or kept, both id lists []", async () => {
     await withTempHome(async (homeDir) => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
       using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
       const r: ExpireResult = await client.expire({ older_than: "0d" });
-      expect(typeof r).toBe("object");
+      expect(r).toEqual({ count: 0, ids: [], kept: 0, kept_ids: [] });
     });
   }, 10_000);
 

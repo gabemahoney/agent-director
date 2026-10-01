@@ -287,6 +287,8 @@ Remove finished rows (ended/missing) whose ended_at is older than the retention 
 
 - `count` (int): Number of rows removed. Zero is a legitimate happy-path result when no terminal rows matched the retention window.
 - `ids` ([]string): Sorted IDs of rows removed.
+- `kept` (int): Number of selected rows kept rather than deleted (the length of kept_ids), for example because the agent process or a session of the agent may still run, tmux could not be read, or the row changed after it was examined.
+- `kept_ids` ([]string): Sorted IDs of the selected rows kept rather than deleted, each reported with its reason in the trail (ad.expire.kept). A row another caller removed first is in neither list. Never null; [] when none.
 
 ### Errors
 

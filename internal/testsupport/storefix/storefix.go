@@ -193,49 +193,13 @@ func SeedResumable(t *testing.T, s *store.Store, id string) store.Spawn {
 	return row
 }
 
-// SeedExpiredCandidate inserts a Spawn in StateEnded and then backdates its
-// ended_at column by age so the row qualifies for expiry under the default
-// retention window. dbPath must be the SQLite file path returned by
-// OpenTempStore — a second raw connection is used to issue the UPDATE since
-// the store API does not expose a backdating method.
-//
-// Precondition: the expire verb uses ended_at < deadline; a duration of
-// 8 * 24 * time.Hour exceeds the typical 7-day default retention.
-func SeedExpiredCandidate(t *testing.T, s *store.Store, dbPath, id string, age time.Duration) store.Spawn {
-	t.Helper()
-	_ = seed(t, s, id, store.StateEnded)
-
-	// Backdate ended_at via a raw connection — the only way to simulate
-	// elapsed time without modifying production store methods.
-	raw, err := sql.Open("sqlite", "file:"+dbPath)
-	if err != nil {
-		t.Fatalf("storefix.SeedExpiredCandidate: open raw db %q: %v", dbPath, err)
-	}
-	defer func() { _ = raw.Close() }()
-
-	backdate := time.Now().UTC().Add(-age).Format("2006-01-02 15:04:05")
-	if _, err := raw.Exec(
-		`UPDATE spawns SET ended_at = ? WHERE claude_instance_id = ?`,
-		backdate, id,
-	); err != nil {
-		t.Fatalf("storefix.SeedExpiredCandidate: backdate ended_at for %q: %v", id, err)
-	}
-
-	// Re-fetch via the store so the returned row reflects the updated ended_at.
-	row, err := s.GetSpawn(id)
-	if err != nil {
-		t.Fatalf("storefix.SeedExpiredCandidate: GetSpawn(%q): %v", id, err)
-	}
-	return row
-}
-
 // SeedClosedPermissionRequests seeds n decided (closed) permission_requests rows for
 // instanceID with deterministic decided_at values suitable for cap-eviction tests.
 // For each row i in [0, n): an open row is inserted via the gated
 // UpsertOpenPermissionRequest, played by the row's own agent (WithSeedPane),
 // immediately closed via DecidePermissionRequest (decision="deny",
 // reason=DecisionReasonOperator), then its decided_at is backdated to
-// baseTime+i*step via a raw sql.DB connection (mirrors SeedExpiredCandidate).
+// baseTime+i*step via a raw sql.DB connection.
 //
 // The spawn row is created if it does not already exist. dbPath must be the
 // SQLite file path returned by OpenTempStore. Returns the request tokens in
@@ -311,7 +275,7 @@ func SeedClosedPermissionRequests(t *testing.T, s *store.Store, dbPath, instance
 //
 // dbPath must be the SQLite file path returned by OpenTempStore. Backdating
 // uses a second raw sql.Open connection with a UTC-formatted UPDATE, mirroring
-// SeedExpiredCandidate / SeedClosedPermissionRequests: the store API
+// SeedClosedPermissionRequests: the store API
 // deliberately exposes no created_at mutation, so a raw connection is the only
 // way to simulate elapsed time without altering production store methods.
 //

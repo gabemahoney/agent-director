@@ -30,3 +30,21 @@ func callerIdentity() caller {
 	}
 	return c
 }
+
+// lazyCaller is a sweep run's caller identity, collected inside agent-director
+// (callerIdentity) on first use and shared by every trail record of the run,
+// so a run collects it at most once and a run that writes no record carrying
+// it collects none. find-missing and expire each hold one per run. The zero
+// value is ready to use; it serves one run and is not for concurrent use.
+type lazyCaller struct {
+	c         caller
+	collected bool
+}
+
+// get returns the run's caller identity, collecting it on the first call.
+func (l *lazyCaller) get() caller {
+	if !l.collected {
+		l.c, l.collected = callerIdentity(), true
+	}
+	return l.c
+}

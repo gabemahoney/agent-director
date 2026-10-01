@@ -11,7 +11,8 @@ package api_test
 // Epic 11, in security_read_pane_test.go; send-keys on a live row and on a
 // pending row with allow_pending, Epic 11, in security_send_keys_test.go;
 // pause, which writes no call event, Epic 11, in security_pause_test.go;
-// later Epics add their verbs).
+// expire, Epic 15, in security_expire_test.go, as kept rows (ad.expire.kept)
+// and deleted rows (no record); later Epics add their verbs).
 
 import (
 	"encoding/json"
@@ -142,6 +143,11 @@ var securityVerbs = []securityVerb{{
 	verb:  "pause",
 	call:  securityPauseCall,
 	cases: securityPauseCases,
+}, {
+	verb: "expire", event: expireKeptEvent, call: securityExpireCall, record: securityExpireKeptRecord,
+	cases: securityExpireKeptCases,
+}, {
+	verb: "expire, deleted rows", call: securityExpireCall, cases: securityExpireGoneCases,
 }}
 
 // securityKillCases meet the planted sessions on kill's Gone, Leftover,

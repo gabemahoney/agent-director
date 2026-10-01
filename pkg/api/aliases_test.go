@@ -5,7 +5,8 @@ package api_test
 // for internal/store types, so they are assignment-compatible and share
 // identical field layouts without any explicit conversion.
 //
-// It also covers SRD Appendix F.3's internal/tmux re-exports: the eight Tmux*
+// It also covers expire's api.ExpireCandidate alias and api.ExpireTmux
+// implementers, and SRD Appendix F.3's internal/tmux re-exports: the eight Tmux*
 // type aliases, the start-time reader alias api.ProcChecker, and the structural rule that every internal/tmux Call*, Fail*
 // and Label* constant is re-declared in pkg/api as Tmux<Name> = tmux.<Name>.
 
@@ -38,6 +39,13 @@ import (
 // The Recorder is the test double for api.TmuxClient (F.3: "*tmux.Client and
 // tmuxfix.Recorder implement it"); *tmux.Client's assertion is in client.go.
 var _ api.TmuxClient = (*tmuxfix.Recorder)(nil)
+
+// expire's tmux surface (Appendix F.3): the Recorder and the production
+// client both satisfy api.ExpireTmux.
+var (
+	_ api.ExpireTmux = (*tmuxfix.Recorder)(nil)
+	_ api.ExpireTmux = (*tmux.Client)(nil)
+)
 
 // Kill's start-time reader (SR-3.8): the production reader and the shared
 // process-checker fake both satisfy api.ProcChecker.
@@ -133,6 +141,41 @@ func TestListFiltersAliasRoundTrip(t *testing.T) {
 	}
 	if asStore.Limit != orig.Limit {
 		t.Errorf("round-trip Limit: got %d; want %d", asStore.Limit, orig.Limit)
+	}
+}
+
+// TestExpireCandidateAliasRoundTrip proves api.ExpireCandidate is store.ExpireCandidate
+// itself: assignment works both ways and every field, Identity and Snapshot included, survives.
+func TestExpireCandidateAliasRoundTrip(t *testing.T) {
+	if a, s := reflect.TypeFor[api.ExpireCandidate](), reflect.TypeFor[store.ExpireCandidate](); a != s {
+		t.Fatalf("api.ExpireCandidate is %s.%s; want the alias of store.ExpireCandidate", a.PkgPath(), a.Name())
+	}
+	orig := store.ExpireCandidate{
+		ClaudeInstanceID: "exp-alias-id",
+		TmuxSessionName:  "exp-alias-sess",
+		PID:              4242,
+		ProcStarttime:    "1700000000",
+		Identity: store.LaunchIdentity{
+			Token: "0123456789abcdef", Socket: "/tmp/exp-alias.sock", ServerPID: 77,
+			ServerStart: 1700000001, ServerStarttime: "1700000002",
+			PaneID: "%3", PanePID: 4241, PaneStarttime: "1700000003",
+		},
+		Snapshot: store.RowSnapshot{
+			RowVersion: 5, StartedAt: "2026-09-30 12:00:00", ClaudeSessionID: "sess-uuid",
+			PID: 4242, ProcStarttime: "1700000000", TmuxSessionName: "exp-alias-sess",
+		},
+	}
+	v := reflect.ValueOf(orig)
+	for i := range v.NumField() {
+		if v.Field(i).IsZero() {
+			t.Fatalf("fixture leaves ExpireCandidate.%s zero; set every field", v.Type().Field(i).Name)
+		}
+	}
+
+	var asAPI api.ExpireCandidate = orig
+	var asStore store.ExpireCandidate = asAPI
+	if !reflect.DeepEqual(asAPI, orig) || !reflect.DeepEqual(asStore, orig) {
+		t.Errorf("round-trip changed the candidate: api %+v, store %+v; want %+v", asAPI, asStore, orig)
 	}
 }
 

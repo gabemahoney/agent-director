@@ -2,8 +2,10 @@ package smoke_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -24,7 +26,9 @@ import (
 //     — no state crosses verbs.
 //  3. Applies the verb's SeedKind precondition via the appropriate
 //     storefix or apitest seed helper (for kill and send-keys, also the
-//     row's own labelled session in the recorder; for read-pane, a recorder from
+//     row's own labelled session in the recorder; for expire, an ended row
+//     and a recorder server on its socket without the row's session; for
+//     read-pane, a recorder from
 //     tmuxfix.NewRecorderForReadPane whose own pane captures smokePaneText; for
 //     pause, one from tmuxfix.NewRecorderForPause whose Enter ends the row,
 //     see endRowAfterEnter).
@@ -37,7 +41,9 @@ import (
 //     get that tmux_socket is the seeded apitest.TestSocket, for kill that
 //     kill_sent is true, for read-pane that the pane is smokePaneText, for
 //     send-keys and pause that the text (/exit for pause) went to the row's
-//     pane id (see assertSentToPane), and for spawn and resume, with a .claude.json
+//     pane id (see assertSentToPane), for expire that the seeded row is the
+//     one deleted and none is kept (see assertExpiredRow), and for spawn and
+//     resume, with a .claude.json
 //     planted in HOME first, that pre_trust is "ok" (see plantClaudeJSON).
 //  6. Calls the verb's Error closure (when defined) and feeds the
 //     returned error into AssertExpectedError.
@@ -105,8 +111,7 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 	// guard. Each branch calls one storefix.Seed* helper or apitest.SeedSpawn.
 	switch spec.SeedKind {
 	case seedNone:
-		// no row needed (spawn, find-missing, expire-empty,
-		// make-template, version)
+		// no row needed (spawn, find-missing, make-template, version)
 	case seedLive:
 		storefix.SeedLiveSpawn(t, st, spec.SeedID)
 	case seedCheckPermission:
@@ -114,10 +119,13 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 	case seedResumable:
 		storefix.SeedResumable(t, st, spec.SeedID)
 	case seedExpired:
-		// 8 days back-dated — comfortably older than typical 7-day
-		// retention so Expire(d=0) reaps it regardless.
-		storefix.SeedExpiredCandidate(t, st, storePath, spec.SeedID,
-			8*24*time.Hour)
+		// The row records apitest.TestSocket, whose server holds only
+		// another, unlabelled session: the lookup reads Gone.
+		if _, err := apitest.SeedSpawn(storePath, spec.SeedID, "ended", "", "", "", false,
+			apitest.WithEndedAt(smokeEndedAt)); err != nil {
+			t.Fatalf("runVerbSubtest: seed ended %q: %v", spec.SeedID, err)
+		}
+		rec.SeedSessions(apitest.TestSocket, tmuxfix.SeedSession{Name: "smoke-other"})
 	case seedPendingLaunch:
 		if _, err := apitest.SeedSpawn(storePath, spec.SeedID, "pending", "", "", "", false,
 			apitest.WithLaunchStartedAt(smokeLaunchStartMillis)); err != nil {
@@ -197,6 +205,9 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 	if spec.SentText != "" {
 		assertSentToPane(t, vd.Name, rec, spec.SentText)
 	}
+	if spec.Expired != nil {
+		assertExpiredRow(t, vd.Name, spec.Expired(result), storePath, spec.SeedID)
+	}
 	if spec.PreTrust != nil {
 		if got := spec.PreTrust(result); got != "ok" {
 			t.Errorf("%s: pre_trust = %q; want \"ok\" (.claude.json planted in HOME)",
@@ -253,6 +264,21 @@ func assertSentToPane(t *testing.T, verb string, rec *tmuxfix.Recorder, text str
 	if len(enters) != 1 || enters[0].Target != apitest.TestPaneID || enters[0].Socket != apitest.TestSocket {
 		t.Errorf("%s: Enter calls %+v; want one, to pane %q on %q",
 			verb, enters, apitest.TestPaneID, apitest.TestSocket)
+	}
+}
+
+// assertExpiredRow checks res deleted exactly id and kept none, kept_ids []
+// not null, and that id's row is gone from the store (SR-12.1).
+func assertExpiredRow(t *testing.T, verb string, res api.ExpireResult, dbPath, id string) {
+	t.Helper()
+	if res.Count != 1 || !slices.Equal(res.IDs, []string{id}) {
+		t.Errorf("%s: count %d, ids %v; want 1, [%s], the ended row with no session", verb, res.Count, res.IDs, id)
+	}
+	if res.Kept != 0 || res.KeptIDs == nil || len(res.KeptIDs) != 0 {
+		t.Errorf("%s: kept %d, kept_ids %#v; want 0 and [] (not nil)", verb, res.Kept, res.KeptIDs)
+	}
+	if _, err := apitest.ReadSpawnColumns(dbPath, id); !errors.Is(err, api.ErrSpawnNotFound) {
+		t.Errorf("%s: read row %s after the delete: %v; want ErrSpawnNotFound", verb, id, err)
 	}
 }
 

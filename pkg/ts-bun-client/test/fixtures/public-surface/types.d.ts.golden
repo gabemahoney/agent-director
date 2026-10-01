@@ -425,6 +425,19 @@ export interface ExpireResult {
     count: number;
     /** Sorted ids of rows removed. */
     ids: string[];
+    /**
+     * Number of selected rows kept rather than deleted (the length of
+     * `kept_ids`), for example because the agent process or a session of the
+     * agent may still run, tmux could not be read, or the row changed after it
+     * was examined.
+     */
+    kept: number;
+    /**
+     * Sorted ids of the selected rows kept rather than deleted, each reported
+     * with its reason in the trail (`ad.expire.kept`). A row another caller
+     * removed first is in neither list. Never null; `[]` when none.
+     */
+    kept_ids: string[];
 }
 /** Mirrors the `delete` CLI verb's --claude-instance-id flag(s) (pkg/api.Client.Delete arg). */
 export interface DeleteParams {

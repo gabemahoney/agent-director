@@ -372,20 +372,9 @@ type findMissingRun struct {
 	sw      *tmux.Sweep
 	lg      FindMissingLogger
 	sockets sweepSockets
-	// caller is the invoking process's identity, collected on first use
-	// (callerOnce) and shared by every trail record of the run.
-	caller    caller
-	hasCaller bool
-}
-
-// callerOnce returns the run's caller identity, collecting it inside
-// agent-director on first use (callerIdentity), so a run collects it at most
-// once and a run that writes no record carrying it collects none.
-func (r *findMissingRun) callerOnce() caller {
-	if !r.hasCaller {
-		r.caller, r.hasCaller = callerIdentity(), true
-	}
-	return r.caller
+	// caller is the invoking process's identity, collected on first use and
+	// shared by every trail record of the run.
+	caller lazyCaller
 }
 
 // judgeLiveRow judges one live row past its grace period by its agent process
@@ -495,7 +484,7 @@ func (r *findMissingRun) emitDisagree(it LiveSpawnIdentity, row findMissingRow) 
 			Server:             from.Server,
 			Verdict:            verdict,
 			Action:             action,
-			Caller:             r.callerOnce(),
+			Caller:             r.caller.get(),
 		}, reason)
 	}
 }

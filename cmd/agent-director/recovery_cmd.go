@@ -64,9 +64,8 @@ func expireHandlerWith(client *pkgapi.Client, args []string) error {
 		name, desc := errnames.Classify(err)
 		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
-	if result.IDs == nil {
-		result.IDs = []string{}
-	}
+	// ids and kept_ids are never nil on success (ExpireResult), so both
+	// encode as [] when empty.
 	return writeJSON(os.Stdout, result)
 }
 

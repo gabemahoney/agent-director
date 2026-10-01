@@ -31,6 +31,12 @@ type ListFilters = store.ListFilters
 // It appears in the FindMissingStore interface method signature.
 type LiveSpawnIdentity = store.LiveSpawnIdentity
 
+// ExpireCandidate is re-exported from internal/store for the same reason.
+// It appears in the ExpireStore interface method signature: one finished row
+// expire selected, with its recorded session name, SessionStart identity,
+// launch identity and row snapshot (SR-12.1, SR-16.1).
+type ExpireCandidate = store.ExpireCandidate
+
 // RowSnapshot is re-exported from internal/store for the same reason.
 // It is the type of api.Spawn's Snapshot field: the row's change-detection
 // key, values exactly as stored (SR-5.3).

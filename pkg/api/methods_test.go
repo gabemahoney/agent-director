@@ -325,16 +325,22 @@ func TestFindMissingEmptyStoreHappy(t *testing.T) {
 }
 
 // TestExpireNilOlderThanHappy verifies Expire with a nil olderThan (use the
-// config-default retention window) against an empty store returns no error and
-// removes nothing.
+// config-default retention window) against an empty store returns no error,
+// removes and keeps nothing, and returns both id lists non-nil and empty.
 func TestExpireNilOlderThanHappy(t *testing.T) {
 	c, _ := newTestClient(t)
 	res, err := c.Expire(nil)
 	if err != nil {
 		t.Fatalf("Expire(nil): %v", err)
 	}
-	if res.Count != 0 {
-		t.Errorf("Count = %d; want 0 (empty store)", res.Count)
+	if res.Count != 0 || res.Kept != 0 {
+		t.Errorf("Count = %d, Kept = %d; want 0 and 0 (empty store)", res.Count, res.Kept)
+	}
+	if res.IDs == nil || len(res.IDs) != 0 {
+		t.Errorf("IDs = %#v; want a non-nil empty slice", res.IDs)
+	}
+	if res.KeptIDs == nil || len(res.KeptIDs) != 0 {
+		t.Errorf("KeptIDs = %#v; want a non-nil empty slice", res.KeptIDs)
 	}
 }
 

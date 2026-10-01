@@ -4,7 +4,8 @@
 // Each successCase entry describes:
 //
 //   - verb:        one of manifest.CallableVerbs()
-//   - seed:        seeds a fresh store in a temp dir; returns srcDir (the
+//   - name:        optional; tells a verb's further cases apart (expire).
+//   - seed:       seeds a fresh store in a temp dir; returns srcDir (the
 //     directory whose contents copyFixtureStore copies into
 //     homeDir/.agent-director/) and a ctx map with any dynamic
 //     values (ids, sessionIDs, cwds) the other callbacks need.
@@ -27,7 +28,7 @@
 //
 // An init() guard at the bottom of this file panics at startup if any
 // callable verb has no case, any case references a non-callable verb, or any
-// verb appears more than once.
+// verb and name pair appears more than once.
 package envelope_diff
 
 import (
@@ -46,6 +47,10 @@ import (
 // envelope-diff harness.
 type successCase struct {
 	verb string
+
+	// name, when set, tells this case apart from the verb's other cases;
+	// the subtest is verb/name. A verb's first case leaves it empty.
+	name string
 
 	// seed builds a fixture store in a fresh temp dir and returns:
 	//   srcDir: the directory whose contents copyFixtureStore copies into
@@ -85,10 +90,11 @@ type successCase struct {
 	tmuxTable func(t *testing.T, tables faketmuxfix.Tables, ctx map[string]any)
 }
 
-// successCases is the authoritative per-verb fixture table.
-// The init() guard below ensures every callable verb is represented exactly
-// once, and that no non-callable verb sneaks in.
-var successCases = []successCase{
+// successCases is the authoritative per-verb fixture table, with expire's
+// cases appended (expireSuccessCases, success_expire.go).
+// The init() guard below ensures every callable verb is represented at least
+// once, no verb and name pair twice, and that no non-callable verb sneaks in.
+var successCases = append([]successCase{
 
 	// ── spawn ─────────────────────────────────────────────────────────────
 	// spawn mints a fresh claude_instance_id (excluded from diff via
@@ -335,25 +341,7 @@ var successCases = []successCase{
 		},
 	},
 
-	// ── expire ────────────────────────────────────────────────────────────
-	// SeedExpireFixture seeds 5 rows including two backdated terminal rows
-	// (ended_at = now-2h) that the "--older-than 1h" window will catch.
-	// The result {count:2, ids:["row-ended-old","row-missing-old"]} is
-	// deterministic (sorted IDs, stable rows).
-	{
-		verb: "expire",
-		seed: func(t *testing.T) (string, map[string]any) {
-			t.Helper()
-			_, dbPath := apitest.SeedExpireFixture(t)
-			return filepath.Dir(dbPath), nil
-		},
-		params: func(_ map[string]any) map[string]any {
-			return map[string]any{"older_than": "1h"}
-		},
-		cliArgv: func(_ map[string]any) []string {
-			return []string{"expire", "--older-than", "1h"}
-		},
-	},
+	// ── expire: see success_expire.go ────────────────────────────────────
 
 	// ── delete ────────────────────────────────────────────────────────────
 	// delete one ended row; result is {results:{"row-ended":"ok"}}.
@@ -465,7 +453,7 @@ var successCases = []successCase{
 			return []string{"version"}
 		},
 	},
-}
+}, expireSuccessCases...)
 
 // ── completeness guard ────────────────────────────────────────────────────────
 
@@ -478,18 +466,20 @@ func init() {
 		callableSet[v.Name] = true
 	}
 
-	// Each case must reference a callable verb with no duplicates.
+	// Each case must reference a callable verb with no duplicate verb and
+	// name pair.
 	seen := make(map[string]bool, len(successCases))
+	seenCase := make(map[string]bool, len(successCases))
 	for _, sc := range successCases {
 		if !callableSet[sc.verb] {
 			panic(fmt.Sprintf(
 				"envelope_diff: successCases: %q is not a callable verb", sc.verb))
 		}
-		if seen[sc.verb] {
+		if seenCase[sc.subtestName()] {
 			panic(fmt.Sprintf(
-				"envelope_diff: successCases: duplicate entry for verb %q", sc.verb))
+				"envelope_diff: successCases: duplicate entry %q", sc.subtestName()))
 		}
-		seen[sc.verb] = true
+		seen[sc.verb], seenCase[sc.subtestName()] = true, true
 	}
 
 	// Every callable verb must have exactly one case.
@@ -501,13 +491,22 @@ func init() {
 	}
 }
 
-// lookupSuccessCase returns the successCase for verb, or (zero, false) when
-// no entry exists.
-func lookupSuccessCase(verb string) (successCase, bool) {
+// successCasesFor returns verb's successCases in table order; none when no
+// entry exists.
+func successCasesFor(verb string) []successCase {
+	var out []successCase
 	for _, sc := range successCases {
 		if sc.verb == verb {
-			return sc, true
+			out = append(out, sc)
 		}
 	}
-	return successCase{}, false
+	return out
+}
+
+// subtestName is the case's subtest name: the verb, then /name when set.
+func (sc successCase) subtestName() string {
+	if sc.name == "" {
+		return sc.verb
+	}
+	return sc.verb + "/" + sc.name
 }

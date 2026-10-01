@@ -670,6 +670,7 @@ func TestRowVersionNoOpWritesChangeNothing(t *testing.T) {
 	}
 	cases = append(cases, rvResumeNoOps()...)
 	cases = append(cases, rvFindMissingNoOps()...)
+	cases = append(cases, rvExpireNoOps()...)
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			f := newV5Store(t)

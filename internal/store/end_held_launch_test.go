@@ -191,18 +191,18 @@ func TestEndHeldLaunchStoreError(t *testing.T) {
 	}
 }
 
-// TestEndHeldLaunchExpireSelection checks expire's text comparison selects the
+// TestEndHeldLaunchExpireSelection checks expire's candidate read selects the
 // stored ended_at once older than the cutoff, and not before.
 func TestEndHeldLaunchExpireSelection(t *testing.T) {
-	const cutoff = time.Hour
-	now := time.Now()
+	const window = time.Hour
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	cases := []struct {
 		name     string
 		endedAt  time.Time // off UTC, so an unconverted time compares wrongly
 		selected bool
 	}{
-		{"older than the cutoff", now.Add(-2 * cutoff).In(time.FixedZone("UTC+5", 5*3600)), true},
-		{"not yet older than the cutoff", now.Add(-cutoff / 2).In(time.FixedZone("UTC-5", -5*3600)), false},
+		{"older than the cutoff", now.Add(-2 * window).In(time.FixedZone("UTC+5", 5*3600)), true},
+		{"not yet older than the cutoff", now.Add(-window / 2).In(time.FixedZone("UTC-5", -5*3600)), false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -211,16 +211,12 @@ func TestEndHeldLaunchExpireSelection(t *testing.T) {
 			if got, err := f.s.EndHeldLaunch(id, heldStart, c.endedAt); err != nil || got != store.CondApplied {
 				t.Fatalf("EndHeldLaunch = %v, %v; want CondApplied, nil", got, err)
 			}
-			n, ids, err := f.s.DeleteTerminalOlderThan(cutoff)
-			if err != nil {
-				t.Fatalf("DeleteTerminalOlderThan: %v", err)
+			var want []string
+			if c.selected {
+				want = []string{id}
 			}
-			if got := n == 1 && slices.Equal(ids, []string{id}); got != c.selected || (!c.selected && n != 0) {
-				t.Errorf("DeleteTerminalOlderThan = %d, %v; want selected %v", n, ids, c.selected)
-			}
-			_, err = apitest.ReadSpawnColumns(f.path, id)
-			if gone := errors.Is(err, store.ErrSpawnNotFound); gone != c.selected {
-				t.Errorf("row gone = %v (%v); want %v", gone, err, c.selected)
+			if got := expCandidateIDs(t, f, now.Add(-window)); !slices.Equal(got, want) {
+				t.Errorf("ListExpireCandidates = %v; want %v", got, want)
 			}
 		})
 	}

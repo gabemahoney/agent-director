@@ -13,8 +13,9 @@
  *   Both sides use fake-tmux so spawn/send-keys/read-pane/kill/resume don't
  *   touch a real tmux session. Fake-tmux answers lookups from its session
  *   tables: a row with no labelled session there is Gone, so the send-keys
- *   and read-pane success cases first write the row's own labelled session
- *   and pane into a per-side table (ts-helper seed-row-session).
+ *   and read-pane success cases, and expire's kept row, first write the
+ *   row's own labelled session and pane into a per-side table (ts-helper
+ *   seed-row-session).
  *
  * See docs/architecture.md "TS envelope-diff regression" for design notes.
  */
@@ -1076,11 +1077,95 @@ describe("expire", () => {
         using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
         const ts = await client.expire({ older_than: "1h" });
 
-        assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
+        const cliEnvelope = JSON.parse(cli.stdout) as unknown;
+        assertEnvelopesEqual(cliEnvelope, ts, {
           ignorePaths: loadIgnorePathsForVerb("expire"),
         });
+        // Both lists present and [] (never null) on both sides (SR-12.4).
+        const empty = { count: 0, ids: [], kept: 0, kept_ids: [] };
+        expect(cliEnvelope).toEqual(empty);
+        expect(ts).toEqual(empty);
       } finally {
         cleanup();
+      }
+    },
+    TIMEOUT
+  );
+
+  test(
+    "success path: one ended row deleted, one kept for its own session, one lookup on both sides",
+    async () => {
+      const goneId = "id-ex-gone";
+      const keptId = "id-ex-kept";
+      // Both ended rows record this private socket and no agent process, so
+      // each run looks them up; each run reads its own fake-tmux table, which
+      // holds only the kept row's labelled session (SR-12.2).
+      const tmuxDir = fs.mkdtempSync(path.join(os.tmpdir(), "ed-tmux-"));
+      const socket = privateTmuxSocket(tmuxDir);
+      const tablesCli = path.join(tmuxDir, "tables-cli");
+      const tablesClient = path.join(tmuxDir, "tables-client");
+      const logCli = path.join(tmuxDir, "log-cli");
+      const logClient = path.join(tmuxDir, "log-client");
+      const { homeA, storeA, storeB, cleanup } = prepareStores((store) => {
+        for (const id of [goneId, keptId]) {
+          runHelper("seed-spawn", { store, id, state: "ended", "create-store": true, socket });
+        }
+      });
+      for (const [store, tablesDir] of [[storeA, tablesCli], [storeB, tablesClient]]) {
+        const seeded = runHelper("seed-row-session", { store, id: keptId, "tables-dir": tablesDir });
+        expect(seeded["socket"]).toBe(socket);
+      }
+
+      const priorLog = process.env.FAKE_TMUX_LOG;
+      const priorTables = process.env.FAKE_TMUX_TABLES;
+      try {
+        const cli = runCli(
+          ["expire", "--older-than", "0d"],
+          { ...cliEnv(homeA), FAKE_TMUX_TABLES: tablesCli, FAKE_TMUX_LOG: logCli }
+        );
+        expect(cli.exitCode).toBe(0);
+
+        // The Client's CLI subprocess inherits process.env.
+        process.env.FAKE_TMUX_TABLES = tablesClient;
+        process.env.FAKE_TMUX_LOG = logClient;
+        using client = await Client.create({
+          storePath: storeB,
+          tmuxCommand: FAKE_TMUX_BIN, _cliPath: process.env.CLI_PATH
+        } as any);
+        const ts = await client.expire({ older_than: "0d" });
+
+        const cliEnvelope = JSON.parse(cli.stdout) as unknown;
+        assertEnvelopesEqual(cliEnvelope, ts, {
+          ignorePaths: loadIgnorePathsForVerb("expire"),
+        });
+        // `.ids` is an ignore path, so both results are pinned in full.
+        const want = { count: 1, ids: [goneId], kept: 1, kept_ids: [keptId] };
+        expect(cliEnvelope).toEqual(want);
+        expect(ts).toEqual(want);
+        // The CLI run (HOME=homeA) trails one ad.expire.kept, reason ours.
+        const kept = fs
+          .readFileSync(path.join(homeA, ".agent-director", "ad-trail.jsonl"), "utf8")
+          .split("\n")
+          .filter((line) => line !== "")
+          .map((line) => JSON.parse(line) as Record<string, unknown>)
+          .filter((rec) => rec["event"] === "ad.expire.kept");
+        expect(kept).toHaveLength(1);
+        expect(kept[0]).toMatchObject({ claude_instance_id: keptId, reason: "ours", source: "ad_expire" });
+
+        // Each run: one lookup for the socket both rows share, and no other
+        // tmux call (expire never lists panes or kills) (SR-12.2, SR-5.8).
+        for (const log of [logCli, logClient]) {
+          expect(fakeTmuxCalls(log).map((argv) => argv.slice(1, 5))).toEqual([
+            ["-u", "-S", socket, "list-sessions"],
+          ]);
+        }
+      } finally {
+        if (priorLog === undefined) delete process.env.FAKE_TMUX_LOG;
+        else process.env.FAKE_TMUX_LOG = priorLog;
+        if (priorTables === undefined) delete process.env.FAKE_TMUX_TABLES;
+        else process.env.FAKE_TMUX_TABLES = priorTables;
+        cleanup();
+        fs.rmSync(tmuxDir, { recursive: true, force: true });
       }
     },
     TIMEOUT
