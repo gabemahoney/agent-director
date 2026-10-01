@@ -547,7 +547,102 @@ none uses the socket of your tmux environment, by default
 whose it is. Trail records are lines of `~/.agent-director/ad-trail.jsonl`.
 Never `delete` a row after a `kill` that did not succeed.
 
-### A leftover, or a session with no valid label
+### A finished row's own old session
+
+`resume`, or a `spawn` with `--reuse-finished`, refuses with
+`ErrTmuxSessionConflict` ("this row's own id"): the row is `ended` or
+`missing`, but its own session still runs past the stopping window and the
+starting-session bound. If, after looking at it (steps 1 to 3 of the
+leftover item below), you want that session gone, end it with the
+finished-row opt-in on `kill`:
+
+```sh
+agent-director kill --include-finished --claude-instance-id <id>
+```
+
+It ends the agent's pane and the row's labelled session, then waits for the
+agent process (or, when the process cannot be checked, looks the session up
+once more), and succeeds with `kill_sent` true once the agent process is
+gone, otherwise `ErrTmuxKillFailed` (retry later; never `delete` the row).
+The row's state and every other field stay unchanged, so the
+conversation stays resumable: run the refused `resume` (or the
+`spawn --reuse-finished`) again.
+
+It ends a session only if that session reported in to the row: the row
+records the agent's process id (the agent's SessionStart reached
+agent-director for the row's latest launch) and the session was created, in
+whole seconds, before the row finished. A session created in the same
+second, a row with no finish time, and an agent whose SessionStart could not
+record its process are refused too. A row the opt-in acts on was finished by
+its own agent, by `find-missing`, a restore, a plain spawn's end write or a
+hand edit, never by a leftover or a nested `claude` carrying the id:
+agent-director ignores hooks that do not come from the row's own agent, so a
+working agent's row stays live and gets the live-row refusal below.
+
+Every other answer sends no kill and changes nothing:
+
+- `ErrSpawnNotResumable` ("the row is live"): the row is live (`pending`
+  included); no lookup was made. To end a live agent, or to abort a launch
+  stuck at a startup prompt, run `agent-director kill --claude-instance-id <id>`
+  without the opt-in.
+- `ErrTmuxUnresponsive` ("appears to still be stopping" or "appears to
+  still be starting"): the row ended less than the stopping window ago, or
+  the session is younger than the starting-session bound (the configured
+  `stopping_window_seconds` and `starting_session_seconds`). Wait and run
+  it again.
+- `ErrTmuxSessionConflict` ("never reported in"): the row's own session
+  past both, or a leftover of an earlier launch (the error names its session
+  and its id, `$N`), that never reported in to the row. `send-keys` refuses
+  a finished row, so ending the session is your decision: check its
+  ownership and end it by hand by its session id, as steps 1 to 4 of
+  "A leftover, or a session with no valid label, or one that never reported in on a finished row"
+  below describe.
+- `ErrTmuxSessionConflict` ("conflicting labels"): see "A stray `@ad_owner`
+  value or a duplicate label".
+- `ErrTmuxNotAvailable`: tmux could not be run or its socket is not
+  accessible, or the socket reaches another server ("not the tmux server
+  the agent was launched on"; see "A row on a different tmux server").
+- `ErrTmuxUnresponsive` otherwise: tmux did not answer usably; retry later.
+
+If no session carries the row's current label, it acts as a plain `kill`:
+success with `kill_sent` false unless the agent process still runs; a
+surviving agent pane is ended and the process waited for; otherwise
+`ErrTmuxKillFailed` (see "An agent process that runs with no session or
+pane of its launch", which also covers a process that outlives the kill).
+
+`kill_sent` is true exactly when a pane or session kill was sent. The
+`ad.kill.called` trail record shows whether the opt-in was set
+(`include_finished`); a refusal records `kill_sent` false, except an error
+that follows a sent kill:
+
+```sh
+jq -c 'select(.event == "ad.kill.called" and .claude_instance_id == "<id>") | {include_finished, kill_sent, lookup_outcome, outcome}' ~/.agent-director/ad-trail.jsonl | tail -n 1
+```
+
+The opt-in exists on the CLI and in the Go (`KillParams.IncludeFinished`)
+and TypeScript (`include_finished`) client libraries, not over MCP: an MCP
+`kill` on a finished row is always the no-op success. Detect it by the
+version of the binary that serves you. CLI: the `version` verb. TypeScript:
+`binaryVersion` from `Client.create()` or the `version` that
+`resolveSystemBinary()` returns, never `version()` (the npm package's
+version). Go: at compile time. Over MCP the opt-in never exists, whatever
+the MCP `version` tool (the running `serve` process's own version) reports.
+It exists from 0.11.0 on; a release candidate `0.11.0-rc.N` sorts before
+0.11.0 but counts as 0.11.0. Development builds (`0.0.0-dev` from `make`,
+which the TypeScript client accepts as its sentinel; `dev` from a plain
+`go build`, which it rejects) cannot be compared, so expect the
+older-binary answer: `ErrInvalidFlags` on the CLI and in the TypeScript
+client.
+
+Accepted risks: on a row wrongly marked `missing` (a hand edit of the
+store, or an agent-director process from before the install) it ends a
+healthy agent whose row says finished; the conversation stays resumable,
+and you chose it. The checks above fail closed, so some sessions you may
+want gone are refused and left to you. A live row is always refused. An
+agent that learns of the opt-in, for example from this README, could run
+it; nothing enforces that only humans do.
+
+### A leftover, or a session with no valid label, or one that never reported in on a finished row
 
 A leftover is a session of an earlier launch of the agent: its label names
 the row's id with another launch token. Whether the row is `pending` or
@@ -558,8 +653,11 @@ agent's pane. With no session of the current launch, it shows the
 leftover's pane if there is one leftover (not the agent's), and answers
 `ErrTmuxSessionConflict` if there are several. The leftover never keeps the
 row live: its hooks change nothing on the row, and `find-missing` judges
-the row by its own agent's process. A session with no valid label may be a
-person's own, so look before acting.
+the row by its own agent's process. On an `ended` or `missing` row,
+`kill --include-finished` answers a leftover, or the row's own session that
+never reported in to it, with `ErrTmuxSessionConflict` ("never reported
+in") and sends no kill; these steps end such a session by hand. A session
+with no valid label may be a person's own, so look before acting.
 
 1. Find the session and note its `session_created`:
 
@@ -650,6 +748,11 @@ and 4):
 ```sh
 jq -c 'select(.event == "ad.launch.name_held" and .claude_instance_id == "<id>") | {tmux_socket, store_id, tmux_session_id, session_created, row_result}' ~/.agent-director/ad-trail.jsonl | tail -n 1
 ```
+
+In the second case the leftover never reported in to the row the spawn
+ended, so `kill --include-finished` answers "never reported in" and sends
+no kill: end the leftover by hand by its session id, as the leftover item
+above describes.
 
 Handle each session as a leftover (steps 2 to 4 above; this store's id is
 the record's `store_id`), then spawn the id again. In the first case no row

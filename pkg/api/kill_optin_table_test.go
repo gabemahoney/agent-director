@@ -230,6 +230,12 @@ func kftCases() []kftCase {
 	return []kftCase{
 		{name: "Gone, agent process gone", row: goneRow(agentGone, defWindow), want: gone},
 		{name: "Gone, no agent process recorded", row: goneRow(agentNotRecorded, defWindow), want: gone},
+		// AC-KILL-12: a holder of the name is not the row's session, so with
+		// the agent known dead the kill succeeds and the holder still runs.
+		{name: "Gone, agent process gone, name held by an unlabelled session", row: goneRow(agentGone, defWindow),
+			world: kftHolder(holderNone), want: gone},
+		{name: "Gone, agent process gone, name held by another row's session", row: goneRow(agentGone, defWindow),
+			world: kftHolder(holderForeign), want: gone},
 		{name: "Gone, agent pane shown in a viewer session, inside the window", row: goneRow(agentAlive, defWindow-time.Second),
 			paneEnds: true,
 			world: func(t *testing.T, e *killEnv, r *resumeRow) []string {
