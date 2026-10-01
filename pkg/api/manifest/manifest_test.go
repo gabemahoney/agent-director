@@ -208,34 +208,6 @@ func TestKillHasSRDErrorNames(t *testing.T) {
 	assertGoDocErrorsMatchManifest(t, "Kill", "kill")
 }
 
-// TestResumeIncludesErrTmuxUnresponsive pins that resume advertises the launch
-// timeout (SR-1.7) beside its seven earlier names; Epic 16 pins the full list.
-func TestResumeIncludesErrTmuxUnresponsive(t *testing.T) {
-	v, ok := manifest.Lookup("resume")
-	if !ok {
-		t.Fatal("resume not in manifest")
-	}
-	want := []string{
-		"ErrSpawnNotFound",
-		"ErrSpawnNotResumable",
-		"ErrNoSessionId",
-		"ErrJsonlMissing",
-		"ErrJsonlNeverWritten",
-		"ErrTmuxNotAvailable",
-		"ErrTmuxSessionCreate",
-		"ErrTmuxUnresponsive",
-	}
-	have := map[string]bool{}
-	for _, n := range v.ErrorNames {
-		have[n] = true
-	}
-	for _, n := range want {
-		if !have[n] {
-			t.Errorf("resume.ErrorNames missing %q", n)
-		}
-	}
-}
-
 // TestLookup covers the hit and miss paths of Lookup against the real
 // registry. No hand-constructed entries.
 func TestLookup(t *testing.T) {

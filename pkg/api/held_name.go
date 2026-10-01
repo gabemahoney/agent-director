@@ -15,6 +15,9 @@ import (
 // spawn is its first caller, passing one of its three row sentences and one
 // of its two retry sentences below; resume (Epic 16) and reuse (Epic 17) will
 // call it unchanged with their own restore sentence and the default retry.
+// resume's pre-launch check (resume_lookup.go) builds its holder conflicts
+// with the same class wording (heldHolderError, ambiguousHolderError) under
+// heldBeforeLaunch, which makes no "duplicate session" claim.
 
 // Plain spawn's row sentences after "duplicate session" (SR-1.4 row "Every
 // error a plain spawn returns after duplicate session"; SR-5.8, SR-9.4), one
@@ -137,14 +140,13 @@ func heldNameOutcome(res tmux.Result, instanceID, name, socket, rowSentence, ret
 		if retry != "" {
 			rest += "; " + retry
 		}
-		return holder, fmt.Errorf("%w: instance %s: tmux session %q already exists (duplicate session), and more than one tmux session's name matches it, so the session holding it cannot be told; %s; %s",
-			tmux.ErrTmuxUnresponsive, instanceID, name, rest, listSessionNameHint)
+		return holder, ambiguousHolderError(heldAfterDuplicate, instanceID, name, rest)
 	}
 	if res.Holder == nil {
 		return holder, spawn.CreateFailedError(&tmux.CallError{Call: tmux.CallCreate, Failure: tmux.FailDuplicate}, name,
 			"no session held the name when it was looked up again; "+rowSentence)
 	}
-	return holder, heldHolderError(res.HolderClass, instanceID, name, res.Holder.ID, rowSentence)
+	return holder, heldHolderError(heldAfterDuplicate, res.HolderClass, instanceID, name, res.Holder.ID, rowSentence)
 }
 
 // heldHolderFacts returns res's holder facts (heldNameHolder): identified
@@ -175,20 +177,66 @@ func heldNameClause(name string, holder *tmux.Session) string {
 	return "tmux session " + strconv.Quote(name) + " (" + holder.ID + ") already exists (duplicate session)"
 }
 
+// holderPhrasing is the wording of a name-holder description that depends on
+// when the holder was found: after a create's "duplicate session"
+// (heldAfterDuplicate) or by a lookup before the launch (heldBeforeLaunch,
+// resume's pre-launch check). The class words, label sentences and pointers
+// are shared; only these parts differ.
+type holderPhrasing struct {
+	// Exists follows the quoted name (and, for one holder, its tmux id).
+	Exists string
+	// Holds follows Exists when one session holds the name.
+	Holds string
+	// OldDetail is the old class's own sentence; "" gives none.
+	OldDetail string
+	// CurrentWords stand in for the case words of the defensive current class.
+	CurrentWords string
+}
+
+// heldAfterDuplicate is the wording after a create answered "duplicate
+// session" (SR-1.4 row "Every error a plain spawn returns after duplicate
+// session"); plain spawn's descriptions use it.
+var heldAfterDuplicate = holderPhrasing{
+	Exists:       "already exists (duplicate session)",
+	Holds:        " and holds the requested name",
+	OldDetail:    "no agent-director row described it before this spawn",
+	CurrentWords: "it carries this launch's own label although this spawn created no session",
+}
+
+// heldBeforeLaunch is the wording of a holder found by the lookup before a
+// launch (SR-8.2): no create was made, so no "duplicate session" claim. An
+// old or current label holding the name is the lookup's Leftover or Ours, so
+// the holder check meets them only defensively.
+var heldBeforeLaunch = holderPhrasing{
+	Exists:       "already exists",
+	Holds:        " and holds the name",
+	CurrentWords: "it carries this launch's own label although the lookup did not find it as this launch's session",
+}
+
+// ambiguousHolderError is the ErrTmuxUnresponsive for more than one listing
+// entry matching name (Can't tell for the holder check, SR-3.10): the
+// instance id, the quoted name, that the session holding it cannot be told,
+// rest (the caller's consequence and retry sentences) and "list
+// --tmux-session-name". It names no tmux id and no label sentence.
+func ambiguousHolderError(p holderPhrasing, instanceID, name, rest string) error {
+	return fmt.Errorf("%w: instance %s: tmux session %q %s, and more than one tmux session's name matches it, so the session holding it cannot be told; %s; %s",
+		tmux.ErrTmuxUnresponsive, instanceID, name, p.Exists, rest, listSessionNameHint)
+}
+
 // heldHolderError is the conflict for a single identified holder of class c
 // (SR-1.4 rows for an old, foreign, other-store or no valid label, and the
-// "after duplicate session" row): the instance id; the quoted name and the
-// holder's tmux id; the case words (tmux.LabelClass.CaseWords); the label
-// sentence; the class's own sentence; the row sentence; for the old and
-// no-valid-label cases (and the defensive current one) the "Operator
-// actions" pointer; and "list --tmux-session-name". It wraps
-// tmux.ErrTmuxSessionConflict only.
-func heldHolderError(c tmux.LabelClass, instanceID, name, sessionID, rowSentence string) error {
+// "after duplicate session" row), worded by p: the instance id; the quoted
+// name and the holder's tmux id; the case words (tmux.LabelClass.CaseWords);
+// the label sentence; the class's own sentence; the row sentence (for a
+// pre-launch holder, what was done); for the old and no-valid-label cases (and
+// the defensive current one) the "Operator actions" pointer; and "list
+// --tmux-session-name". It wraps tmux.ErrTmuxSessionConflict only.
+func heldHolderError(p holderPhrasing, c tmux.LabelClass, instanceID, name, sessionID, rowSentence string) error {
 	var words, label, detail, human string
 	switch c {
 	case tmux.ClassOld:
 		words, label = c.CaseWords(), labelNamesThisID
-		detail = "no agent-director row described it before this spawn"
+		detail = p.OldDetail
 		human = heldNameHumanDecision + ", " + operatorActionsPointer
 	case tmux.ClassForeign:
 		words, label = c.CaseWords(), labelNotNamesThisID
@@ -201,16 +249,19 @@ func heldHolderError(c tmux.LabelClass, instanceID, name, sessionID, rowSentence
 		detail = "agent-director cannot tell whose session it is"
 		human = "a human must look, " + operatorActionsPointer
 	default:
-		// ClassCurrent cannot occur: the new row's token is fresh and the
-		// create answered "duplicate session", so no session can carry this
-		// launch's label. Should the listing say otherwise, it is a conflict
-		// for a human, never a success.
-		words, label = "it carries this launch's own label although this spawn created no session", labelNamesThisID
+		// ClassCurrent cannot occur: after "duplicate session" the new row's
+		// token is fresh, so no session can carry this launch's label; before a
+		// launch such a session is the lookup's Ours. Should the listing say
+		// otherwise, it is a conflict for a human, never a success.
+		words, label = p.CurrentWords, labelNamesThisID
 		detail = "agent-director cannot tell how"
 		human = "a human must look, " + operatorActionsPointer
 	}
-	desc := fmt.Sprintf("instance %s: tmux session %q (%s) already exists (duplicate session) and holds the requested name: %s: %s; %s; %s",
-		instanceID, name, sessionID, words, label, detail, rowSentence)
+	desc := fmt.Sprintf("instance %s: tmux session %q (%s) %s%s: %s: %s", instanceID, name, sessionID, p.Exists, p.Holds, words, label)
+	if detail != "" {
+		desc += "; " + detail
+	}
+	desc += "; " + rowSentence
 	if human != "" {
 		desc += "; " + human
 	}

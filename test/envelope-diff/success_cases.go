@@ -273,8 +273,8 @@ var successCases = append([]successCase{
 	// pointed HOME there via t.Setenv.  OpenStoreWithRow records no tmux
 	// socket (a row from before the release), so resume resolves one from
 	// the environment, which the driver points at each run's private fake
-	// tmux; fake-tmux answers the name check (has-session exits 1 =
-	// "absent") and creates and labels the session on that socket.
+	// tmux; its empty table answers the pre-launch lookup Gone with no
+	// holder, and fake-tmux creates and labels the session on that socket.
 	//
 	// extraSetup also plants the same .claude.json in each home, so the
 	// result {claude_instance_id: "id-resume-1", pre_trust: "ok"} is fully

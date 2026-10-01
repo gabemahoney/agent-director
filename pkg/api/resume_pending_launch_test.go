@@ -68,8 +68,8 @@ func rplTrailCount(t *testing.T, event, id string) int {
 	return n
 }
 
-// TestResumeCreatesLabelledSessionOnRecordedSocket: one create on the recorded
-// socket carries the new token, the id and this store's id; the session holds the five-field label.
+// TestResumeCreatesLabelledSessionOnRecordedSocket: the lookup, then one create, both on the
+// recorded socket; the create carries the new token, the id and this store's id; the session holds the five-field label.
 func TestResumeCreatesLabelledSessionOnRecordedSocket(t *testing.T) {
 	for _, state := range []string{store.StateEnded, store.StateMissing} {
 		t.Run(state, func(t *testing.T) {
@@ -81,11 +81,14 @@ func TestResumeCreatesLabelledSessionOnRecordedSocket(t *testing.T) {
 				t.Fatalf("ReadStoreID = %q, %v; want the store's id %q", storeID, err, e.storeID)
 			}
 
-			calls := e.rec.SocketCalls()
-			if len(calls) != 1 || calls[0].Call != tmux.CallCreate {
-				t.Fatalf("socket calls = %+v; want exactly one create", calls)
+			if got := callKinds(e.rec); !reflect.DeepEqual(got, []tmux.Call{tmux.CallLookup, tmux.CallCreate}) {
+				t.Fatalf("socket calls = %v; want the lookup, then exactly one create", got)
 			}
-			c := calls[0]
+			calls := e.rec.SocketCalls()
+			if calls[0].Socket != e.socket {
+				t.Errorf("lookup on socket %q; want %q", calls[0].Socket, e.socket)
+			}
+			c := calls[1]
 			if c.Socket != e.socket || c.Target != r.Name || c.Cwd != r.CWD {
 				t.Errorf("create {socket %q, name %q, cwd %q}; want {%q %q %q}", c.Socket, c.Target, c.Cwd, e.socket, r.Name, r.CWD)
 			}
@@ -103,8 +106,8 @@ func TestResumeCreatesLabelledSessionOnRecordedSocket(t *testing.T) {
 	}
 }
 
-// TestResumeCreateArgvChainsLabelOnRecordedSocket: through the production client,
-// a plain name gets one create on -S <socket> with both chained labels; a $ or \ name gets no chain and one label by id.
+// TestResumeCreateArgvChainsLabelOnRecordedSocket: through the production client, after the lookup on -S <socket>,
+// a plain name gets one create there with both chained labels; a $ or \ name gets no chain and one label by id.
 func TestResumeCreateArgvChainsLabelOnRecordedSocket(t *testing.T) {
 	bin := faketmuxfix.Binary(t)
 	for _, name := range []string{"", `a$b`, `a\b`} {
@@ -144,10 +147,13 @@ func TestResumeCreateArgvChainsLabelOnRecordedSocket(t *testing.T) {
 				}
 			}
 			byID := tmux.NeedsLabelByID(name)
-			if want := map[bool]int{false: 1, true: 2}[byID]; len(argvs) != want {
+			if want := map[bool]int{false: 2, true: 3}[byID]; len(argvs) != want {
 				t.Fatalf("socket invocations = %q; want %d", argvs, want)
 			}
-			create, target := argvs[0], "="+name+":"
+			if lookup := argvs[0]; !containsRun(lookup, []string{"-S", e.socket, "list-sessions"}) {
+				t.Errorf("first socket invocation %q; want the lookup, list-sessions on -S %s", lookup, e.socket)
+			}
+			create, target := argvs[1], "="+name+":"
 			if !containsRun(create, []string{"-u", "-S", e.socket, "new-session"}) || !containsRun(create, []string{"-s", name}) {
 				t.Errorf("create argv %q; want new-session -s %q on -S %s", create, name, e.socket)
 			}
@@ -169,7 +175,7 @@ func TestResumeCreateArgvChainsLabelOnRecordedSocket(t *testing.T) {
 			if slices.Contains(create, "@ad_owner") || slices.Contains(create, "@ad_pane") {
 				t.Errorf("create argv %q chains a label for %q; want none", create, name)
 			}
-			label := argvs[1]
+			label := argvs[2]
 			sid := ""
 			if i := slices.Index(label, "-t"); i > 0 && i+1 < len(label) {
 				sid = label[i+1]
@@ -256,15 +262,15 @@ func TestResumeRecordsLaunchIdentity(t *testing.T) {
 			if cols.ParentID != wantParent || cols.TmuxSocket != e.socket {
 				t.Errorf("row {parent %v, socket %v}; want {%v, %s}", cols.ParentID, cols.TmuxSocket, wantParent, e.socket)
 			}
-			if n := len(e.rec.SocketCalls()); n != 1 || strings.Contains(e.logs.String(), "WARN") {
-				t.Errorf("socket calls = %d, log %q; want the create only and no WARN", n, e.logs.String())
+			if got := callKinds(e.rec); !reflect.DeepEqual(got, []tmux.Call{tmux.CallLookup, tmux.CallCreate}) || strings.Contains(e.logs.String(), "WARN") {
+				t.Errorf("socket calls = %v, log %q; want the lookup and the create only, and no WARN", got, e.logs.String())
 			}
 		})
 	}
 }
 
-// TestResumeLabelsDollarAndBackslashNamesByID: every catalogued $ or \ name gets one label by id
-// on the reply's session and pane; the session whose id "$7" spells keeps its label.
+// TestResumeLabelsDollarAndBackslashNamesByID: every catalogued $ or \ name gets the lookup, the create, then one
+// label by id on the reply's session and pane; the session whose id "$7" spells keeps its label.
 func TestResumeLabelsDollarAndBackslashNamesByID(t *testing.T) {
 	for _, n := range tmuxfix.StoredNames() {
 		if !n.LabelByID {
@@ -288,8 +294,9 @@ func TestResumeLabelsDollarAndBackslashNamesByID(t *testing.T) {
 				t.Errorf("bystander $7 = %+v; want unchanged %+v", got, bystander)
 			}
 			creates, labels := e.rec.SocketCallsOf(tmux.CallCreate), e.rec.SocketCallsOf(tmux.CallSetLabel)
-			if len(creates) != 1 || creates[0].Target != n.Raw || len(labels) != 1 || len(e.rec.SocketCalls()) != 2 {
-				t.Fatalf("socket calls = %+v; want one create of %q and one label by id", e.rec.SocketCalls(), n.Raw)
+			order := []tmux.Call{tmux.CallLookup, tmux.CallCreate, tmux.CallSetLabel}
+			if len(creates) != 1 || creates[0].Target != n.Raw || len(labels) != 1 || !reflect.DeepEqual(callKinds(e.rec), order) {
+				t.Fatalf("socket calls = %+v; want the lookup, one create of %q, then one label by id", e.rec.SocketCalls(), n.Raw)
 			}
 			l := labels[0]
 			if l.Socket != e.socket || l.Target != s.ID || l.PaneID != s.Panes[0].ID ||
@@ -352,8 +359,8 @@ func TestResumeLaunchSocket(t *testing.T) {
 			}
 			cols, _ := rplResumed(t, e, r)
 			calls := e.rec.SocketCalls()
-			if len(calls) == 0 || cols.TmuxSocket != sock {
-				t.Errorf("socket calls %d, row socket %v; want calls and the row on %s", len(calls), cols.TmuxSocket, sock)
+			if len(calls) == 0 || calls[0].Call != tmux.CallLookup || cols.TmuxSocket != sock {
+				t.Errorf("socket calls %v, row socket %v; want the lookup first and the row on %s", callKinds(e.rec), cols.TmuxSocket, sock)
 			}
 			for _, c := range calls {
 				if c.Socket != sock {

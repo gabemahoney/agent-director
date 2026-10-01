@@ -54,6 +54,7 @@ type killRowSpec struct {
 	Teammates        int        // extra split panes in the row's session, each alive
 	RelayOn          bool       // relay_mode on (default off)
 	SessionID        string     // the row's claude_session_id (default none)
+	CWD              string     // the row's cwd (default none; a resumable row needs one)
 	Opts             []apitest.SpawnOption
 }
 
@@ -123,7 +124,7 @@ func (e *killEnv) seedRow(t *testing.T, spec killRowSpec) killRow {
 	if spec.RelayOn {
 		relay = "on"
 	}
-	if _, err := apitest.SeedSpawn(e.dbPath, id, state, "", relay, spec.SessionID, false, append(opts, spec.Opts...)...); err != nil {
+	if _, err := apitest.SeedSpawn(e.dbPath, id, state, spec.CWD, relay, spec.SessionID, false, append(opts, spec.Opts...)...); err != nil {
 		t.Fatalf("SeedSpawn(%s): %v", id, err)
 	}
 	row, err := e.st.GetSpawn(id)

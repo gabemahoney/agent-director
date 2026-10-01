@@ -78,10 +78,11 @@ func fgcAssertResumeRefused(t *testing.T, e *resumeEnv, id string) {
 }
 
 // fgcAssertResumeLaunches fails unless Resume on id makes one create and moves
-// the row to pending with the clock's launch start, other than prior.
+// the row to pending with the launch start its move records (moveStart: after
+// its pre-launch lookup), other than prior.
 func fgcAssertResumeLaunches(t *testing.T, e *resumeEnv, id string, prior int64) {
 	t.Helper()
-	creates, want := len(e.rec.SocketCallsOf(tmux.CallCreate)), e.clock.Now().UnixMilli()
+	creates, want := len(e.rec.SocketCallsOf(tmux.CallCreate)), e.moveStart().UnixMilli()
 	if _, err := e.c.Resume(api.ResumeParams{ClaudeInstanceID: id}); err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
@@ -89,7 +90,7 @@ func fgcAssertResumeLaunches(t *testing.T, e *resumeEnv, id string, prior int64)
 		t.Errorf("creates by the resume = %d; want 1", n)
 	}
 	if cols := e.columns(t, id); cols.State != store.StatePending || cols.LaunchStartedAt != want || want == prior {
-		t.Errorf("row {state %v, launch %#v}; want pending at the clock's %d, not the earlier %d",
+		t.Errorf("row {state %v, launch %#v}; want pending at the move's %d, not the earlier %d",
 			cols.State, cols.LaunchStartedAt, want, prior)
 	}
 }

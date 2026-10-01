@@ -8,7 +8,6 @@ package api_test
 // internal/tmux; the verbs' use of it in their own tests.
 
 import (
-	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -33,9 +32,7 @@ func loadStartingLimits(t *testing.T, settings ...apitest.TmuxSetting) api.Start
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if len(settings) == 0 {
-		if err := os.WriteFile(path, nil, 0o600); err != nil {
-			t.Fatalf("WriteFile: %v", err)
-		}
+		writeConfig(t, path, "")
 	} else {
 		apitest.WriteTmuxConfig(t, path, settings...)
 	}

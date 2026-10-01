@@ -14,7 +14,7 @@ import "testing"
 // the orchestrator's approval before the commit and a recorded reason in the
 // commit message (what grew, by how many bytes, why it cannot be shorter);
 // never to make a failing guard pass.
-const helpStdoutBytes = 15143
+const helpStdoutBytes = 15136
 
 // helpHardCap is the user's hard cap on `agent-director help` stdout, in
 // bytes. Help stdout must stay at or under it, with no slack.

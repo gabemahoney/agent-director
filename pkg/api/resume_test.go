@@ -2,7 +2,7 @@ package api_test
 
 // resume_test.go covers resume's guards and its launch (SR-8, SR-20.6): the
 // move to pending and its outcomes, the parent id, the restore after a failed
-// create and the name pre-check, through recordingResumeStore over the shared
+// create and a name held at the pre-launch lookup, through recordingResumeStore over the shared
 // resume fixture (resume_fixture_test.go) and its tmuxfix.Recorder. Transcript
 // resolution is in resume_transcript_test.go.
 
@@ -118,15 +118,12 @@ func columnSnapshot(cols apitest.SpawnColumns) api.RowSnapshot {
 		ProcStarttime: str(cols.ProcStarttime), TmuxSessionName: str(cols.TmuxSessionName)}
 }
 
-// assertNothingLaunched asserts no move, no restore and no socket tmux call,
-// and, when before is non-nil, that id's row still equals *before.
-func assertNothingLaunched(t *testing.T, e *resumeEnv, rs *recordingResumeStore, id string, before *apitest.SpawnColumns) {
+// assertNotMoved asserts no move and no restore and, when before is non-nil,
+// that id's row still equals *before.
+func assertNotMoved(t *testing.T, e *resumeEnv, rs *recordingResumeStore, id string, before *apitest.SpawnColumns) {
 	t.Helper()
 	if len(rs.moves) != 0 || len(rs.restores) != 0 {
 		t.Errorf("moves %d, restores %d; want none", len(rs.moves), len(rs.restores))
-	}
-	if n := len(e.rec.SocketCalls()); n != 0 {
-		t.Errorf("%d socket tmux calls (create included); want none", n)
 	}
 	if before != nil {
 		if after := e.columns(t, id); !reflect.DeepEqual(after, *before) {
@@ -135,20 +132,30 @@ func assertNothingLaunched(t *testing.T, e *resumeEnv, rs *recordingResumeStore,
 	}
 }
 
-// assertResumed asserts one move carrying snap, no restore, and one create on
-// the move's socket running `claude --resume session`; it returns both calls.
+// assertNothingLaunched is assertNotMoved plus no tmux call at all, the lookup
+// included: a guard refuses before it (SR-3.11, SR-8.1).
+func assertNothingLaunched(t *testing.T, e *resumeEnv, rs *recordingResumeStore, id string, before *apitest.SpawnColumns) {
+	t.Helper()
+	assertNotMoved(t, e, rs, id, before)
+	assertNoTmuxCalls(t, e.rec)
+}
+
+// assertResumed asserts one move carrying snap, no restore, and exactly one
+// lookup then one create, both on the move's socket, the create running
+// `claude --resume session`; it returns the move and the create.
 func assertResumed(t *testing.T, e *resumeEnv, rs *recordingResumeStore, snap api.RowSnapshot, session string) (resumeMoveCall, tmuxfix.SocketCall) {
 	t.Helper()
-	creates := e.rec.SocketCallsOf(tmux.CallCreate)
-	if len(rs.moves) != 1 || len(rs.restores) != 0 || len(creates) != 1 {
-		t.Fatalf("moves %d, restores %d, creates %d; want 1, 0, 1", len(rs.moves), len(rs.restores), len(creates))
+	calls := e.rec.SocketCalls()
+	if kinds := callKinds(e.rec); len(rs.moves) != 1 || len(rs.restores) != 0 ||
+		!reflect.DeepEqual(kinds, []tmux.Call{tmux.CallLookup, tmux.CallCreate}) {
+		t.Fatalf("moves %d, restores %d, tmux calls %v; want 1, 0, [lookup create]", len(rs.moves), len(rs.restores), kinds)
 	}
-	mv, cr := rs.moves[0], creates[0]
+	mv, cr := rs.moves[0], calls[1]
 	if mv.examined != snap {
 		t.Errorf("move examined %+v; want the stored row's snapshot %+v", mv.examined, snap)
 	}
-	if cr.Socket != mv.socket {
-		t.Errorf("create socket %q; want the move's %q", cr.Socket, mv.socket)
+	if calls[0].Socket != mv.socket || cr.Socket != mv.socket {
+		t.Errorf("lookup socket %q, create socket %q; want the move's %q", calls[0].Socket, cr.Socket, mv.socket)
 	}
 	if len(cr.Command) < 3 || cr.Command[0] != "claude" || cr.Command[1] != "--resume" || cr.Command[2] != session {
 		t.Errorf("command = %v; want `claude --resume %s ...`", cr.Command, session)
@@ -192,28 +199,40 @@ func TestResumeGuardsRefuseWithoutMove(t *testing.T) {
 				t.Fatalf("err = %v; want %v", err, tc.want)
 			}
 			assertNothingLaunched(t, e, rs, id, before)
-			assertNoTmuxCalls(t, e.rec)
 		})
 	}
 }
 
-// TestResumeStaleTmuxSessionReturnsErrTmuxSessionCreate: a session holding the
-// row's name gives ErrTmuxSessionCreate with no move, restore or create.
-func TestResumeStaleTmuxSessionReturnsErrTmuxSessionCreate(t *testing.T) {
+// TestResumeIdlessStaleTmuxSessionReturnsErrTmuxSessionConflict: an unlabelled
+// session holding the row's name refuses at the lookup; nothing else is called.
+func TestResumeIdlessStaleTmuxSessionReturnsErrTmuxSessionConflict(t *testing.T) {
 	e, rs := newRecordingEnv(t)
 	r := e.seedResumable(t, store.StateEnded)
-	e.rec.WithHasSession(true)
+	e.rec.StartServer(r.Identity.Socket, tmuxfix.Server{PID: resumableServerPID, Start: resumableSrvStart}).
+		SeedSessions(r.Identity.Socket, tmuxfix.SeedSession{Name: r.Name})
+	held := e.rec.Sessions(r.Identity.Socket)
 	_, err := rs.resume(e, r.ID)
-	if !errors.Is(err, api.ErrTmuxSessionCreate) {
-		t.Fatalf("err = %v; want ErrTmuxSessionCreate", err)
+	if !errors.Is(err, api.ErrTmuxSessionConflict) {
+		t.Fatalf("err = %v; want ErrTmuxSessionConflict", err)
 	}
-	apitest.AssertDescription(t, err.Error(), apitest.DescSessionCreateFailed(apitest.SessionCreateFailed{Name: r.Name}),
-		r.Identity.Token, e.storeID)
-	assertNothingLaunched(t, e, rs, r.ID, &r.Before)
+	assertOnlyCatalogued(t, err, "ErrTmuxSessionConflict")
+	apitest.AssertDescription(t, err.Error(), apitest.DescHeldNoValidID(apitest.HeldName{Name: r.Name,
+		SessionID: held[0].ID, BeforeLaunch: true}), r.Identity.Token, e.storeID)
+	assertNotMoved(t, e, rs, r.ID, &r.Before)
+	if calls := e.rec.SocketCalls(); len(calls) != 1 || calls[0].Call != tmux.CallLookup || calls[0].Socket != r.Identity.Socket {
+		t.Errorf("socket tmux calls = %+v; want one lookup on %s", calls, r.Identity.Socket)
+	}
+	if n := len(e.rec.Calls()); n != 0 {
+		t.Errorf("%d name-based tmux calls; want none", n)
+	}
+	if got := e.rec.Sessions(r.Identity.Socket); !reflect.DeepEqual(got, held) {
+		t.Errorf("sessions = %+v; want the holder untouched %+v", got, held)
+	}
 }
 
 // TestResumeMoveOutcomes: a move that finds the row changed or removed, or
-// fails in the store, returns its error with no create, no restore, no write.
+// fails in the store, returns its error after the lookup alone: no create,
+// no restore, no write.
 func TestResumeMoveOutcomes(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -243,8 +262,8 @@ func TestResumeMoveOutcomes(t *testing.T) {
 				t.Fatalf("moves = %d; want 1", len(rs.moves))
 			}
 			apitest.AssertDescription(t, desc, tc.desc, rs.moves[0].token, r.Identity.Token, e.storeID)
-			if len(rs.restores) != 0 || len(e.rec.SocketCalls()) != 0 {
-				t.Errorf("restores %d, socket tmux calls %d; want none", len(rs.restores), len(e.rec.SocketCalls()))
+			if kinds := callKinds(e.rec); len(rs.restores) != 0 || !reflect.DeepEqual(kinds, []tmux.Call{tmux.CallLookup}) {
+				t.Errorf("restores %d, tmux calls %v; want none, [lookup]", len(rs.restores), kinds)
 			}
 			if after := e.columns(t, r.ID); !reflect.DeepEqual(after, r.Before) {
 				t.Errorf("row changed:\n before %+v\n after  %+v", r.Before, after)
@@ -259,7 +278,7 @@ func TestResumeHappyPathLaunchesAndUpdatesParent(t *testing.T) {
 	e, rs := newRecordingEnv(t)
 	resumeFromCaller(t, e, "caller-id")
 	r := e.seedResumable(t, store.StateEnded)
-	start := e.clock.Now()
+	start := e.moveStart()
 	res, err := rs.resume(e, r.ID)
 	if err != nil {
 		t.Fatalf("Resume: %v", err)

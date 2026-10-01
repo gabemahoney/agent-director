@@ -23,7 +23,9 @@ import (
 // DescDifferentServer, DescCallTimeout, DescUnrecognisedReply,
 // DescSocketPermission and DescTmuxNotRun. DescSpawnHeldName and
 // DescSpawnSessionNameParam are the same contract as spawn's manifest texts
-// state it.
+// state it. With HeldName.BeforeLaunch, the DescHeld* cases are instead the
+// holder refusals of a launch's pre-launch check (SR-8.2), without the
+// overlay (descriptions_resume_lookup.go).
 
 // HeldRow is the result of a plain spawn's conditional end write after
 // "duplicate session" (SR-9.4, Appendix F.4), which picks the description's
@@ -79,11 +81,15 @@ var heldNotPendingStatements = []string{"stays pending", "will heal"}
 // HeldName parameterises the held-name cases: Name is the requested session
 // name; SessionID is the holder's tmux id ($N) when the re-lookup found one
 // session holding it ("" otherwise: vanished, ambiguous, unreadable, tmux
-// unavailable); Row is the end write's result.
+// unavailable); Row is the end write's result. BeforeLaunch selects the
+// holder found by a pre-launch lookup instead (resume, SR-8.2; see
+// BeforeLaunch's overlay): Name is then the recorded name, SessionID the
+// holder's tmux id, and Row stays zero.
 type HeldName struct {
-	Name      string
-	SessionID string
-	Row       HeldRow
+	Name         string
+	SessionID    string
+	Row          HeldRow
+	BeforeLaunch bool
 }
 
 // AfterHeldName returns c as an error a plain spawn returns after "duplicate
@@ -143,19 +149,45 @@ func (c DescCase) afterHeldName(p HeldName, label heldLabel) DescCase {
 	default:
 		mustNot = appendMissing(mustNot, launchRetryRule, heldRetryReuse[1])
 	}
-	switch label {
-	case heldLabelNamesThisID:
-		req = append(req, heldLabelNames)
-		mustNot = appendMissing(mustNot, heldLabelNotNames)
-	case heldLabelNotThisID:
-		req = append(req, heldLabelNotNames)
-		mustNot = appendMissing(mustNot, heldLabelNames)
-	default:
-		mustNot = appendMissing(mustNot, heldLabelNames, heldLabelNotNames)
+	if s := label.sentence(); s != "" {
+		req = append(req, s)
 	}
+	mustNot = appendMissing(mustNot, label.wrong()...)
 	c.Require = req
 	c.MustNot = appendMissing(mustNot, nothingWasDone, rowStaysPending, retryLater)
 	return c
+}
+
+// sentence is the label sentence label requires ("" for none).
+func (label heldLabel) sentence() string {
+	switch label {
+	case heldLabelNamesThisID:
+		return heldLabelNames
+	case heldLabelNotThisID:
+		return heldLabelNotNames
+	}
+	return ""
+}
+
+// wrong is the label sentences a description with label must not say: the
+// other one, or both when it makes no claim.
+func (label heldLabel) wrong() []string {
+	switch label {
+	case heldLabelNamesThisID:
+		return []string{heldLabelNotNames}
+	case heldLabelNotThisID:
+		return []string{heldLabelNames}
+	}
+	return []string{heldLabelNames, heldLabelNotNames}
+}
+
+// holderOverlay applies p's overlay: the pre-launch one (beforeLaunch) when
+// p.BeforeLaunch, else the one after "duplicate session" (afterHeldName).
+func (c DescCase) holderOverlay(p HeldName, label heldLabel) DescCase {
+	if p.BeforeLaunch {
+		return c.beforeLaunch(p, label)
+	}
+	return c.afterHeldName(p, label)
 }
 
 // appendMissing appends each of ps not already in list.
@@ -178,7 +210,8 @@ func (c DescCase) withoutOperatorActions() DescCase {
 
 // heldConflict is an ErrTmuxSessionConflict for a single holder of the
 // requested name of class class: its case words (tmux.LabelClass.CaseWords),
-// req and "list --tmux-session-name", with the overlay and label sentence.
+// req and "list --tmux-session-name", with p's overlay (holderOverlay) and,
+// after "duplicate session", the label sentence.
 func heldConflict(class tmux.LabelClass, p HeldName, label heldLabel, req ...string) DescCase {
 	if p.SessionID == "" {
 		panic("apitest: held-name holder case with no SessionID")
@@ -186,9 +219,14 @@ func heldConflict(class tmux.LabelClass, p HeldName, label heldLabel, req ...str
 	words := class.CaseWords()
 	return DescCase{
 		Name:    "ErrTmuxSessionConflict, held name, " + words,
-		Require: append([]string{words, "list --tmux-session-name"}, req...),
-	}.afterHeldName(p, label)
+		Require: append([]string{words, listSessionName}, req...),
+	}.holderOverlay(p, label)
 }
+
+// spawnOnlyHolder is the old holder's sentence only a plain spawn's
+// held-name conflict says (SR-1.4): its row is new, so no row described the
+// holder.
+const spawnOnlyHolder = "no agent-director row described it before this spawn"
 
 // DescHeldLeftover is ErrTmuxSessionConflict for a name held by a session
 // whose label names the new row's id with an earlier launch's token (SR-1.4;
@@ -196,10 +234,15 @@ func heldConflict(class tmux.LabelClass, p HeldName, label heldLabel, req ...str
 // instance id", that no agent-director row described it before this spawn,
 // the holder's tmux id, that ending it is a human's decision with the
 // "Operator actions" pointer, and "list --tmux-session-name". Pass any other
-// row's id as forbid.
+// row's id as forbid. With BeforeLaunch (a pre-launch holder, which the
+// lookup makes Leftover, so met only defensively) it never says that no row
+// described it.
 func DescHeldLeftover(p HeldName) DescCase {
-	return heldConflict(tmux.ClassOld, p, heldLabelNamesThisID,
-		"no agent-director row described it before this spawn", "a human's decision").PointsToOperatorActions()
+	req := []string{"a human's decision"}
+	if !p.BeforeLaunch {
+		req = append([]string{spawnOnlyHolder}, req...)
+	}
+	return heldConflict(tmux.ClassOld, p, heldLabelNamesThisID, req...).PointsToOperatorActions()
 }
 
 // DescHeldNoValidID is ErrTmuxSessionConflict for a name held by a session
@@ -243,17 +286,19 @@ func DescHeldOtherStore(p HeldName, storeID string) DescCase {
 // matches it", the row sentence, the retry guidance by p.Row (see
 // AfterHeldName) and "list --tmux-session-name"; no label sentence; never
 // "dead" or "gone". p.SessionID must be empty: pass the
-// matching sessions' tmux ids as forbid.
+// matching sessions' tmux ids as forbid. With BeforeLaunch it requires
+// "nothing was done" and "retry later" instead of a row sentence and retry
+// guidance.
 func DescHeldAmbiguous(p HeldName) DescCase {
 	if p.SessionID != "" {
 		panic("apitest: DescHeldAmbiguous names no holder")
 	}
 	return DescCase{
 		Name:       "ErrTmuxUnresponsive, held name, ambiguous holder",
-		Require:    []string{"more than one tmux session's name matches it", "list --tmux-session-name"},
+		Require:    []string{"more than one tmux session's name matches it", listSessionName},
 		MustNot:    unresponsiveMustNot,
 		unanswered: true,
-	}.afterHeldName(p, heldLabelNoClaim)
+	}.holderOverlay(p, heldLabelNoClaim)
 }
 
 // DescSpawnHeldName is the held-name contract as the spawn manifest

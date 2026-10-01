@@ -12,7 +12,8 @@ package api_test
 // pending row with allow_pending, Epic 11, in security_send_keys_test.go;
 // pause, which writes no call event, Epic 11, in security_pause_test.go;
 // expire, Epic 15, in security_expire_test.go, as kept rows (ad.expire.kept)
-// and deleted rows (no record); later Epics add their verbs).
+// and deleted rows (no record); resume's pre-launch refusals, which write no
+// call event, Epic 16, in security_resume_test.go; later Epics add theirs).
 
 import (
 	"encoding/json"
@@ -148,6 +149,8 @@ var securityVerbs = []securityVerb{{
 	cases: securityExpireKeptCases,
 }, {
 	verb: "expire, deleted rows", call: securityExpireCall, cases: securityExpireGoneCases,
+}, {
+	verb: "resume", call: securityResumeCall, cases: securityResumeCases,
 }}
 
 // securityKillCases meet the planted sessions on kill's Gone, Leftover,

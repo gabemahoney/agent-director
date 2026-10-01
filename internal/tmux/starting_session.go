@@ -4,11 +4,11 @@ import "time"
 
 // This file holds the session-age helper (SRD SR-3.9) and the pure
 // starting-session rule (SR-4.2, SR-4.3): the one place the stopping window
-// and the starting-session bound are compared. Its callers are resume (the
-// pre-launch check and the re-lookup after "duplicate session"), reuse (the
-// old row's lookup and the re-lookup after "duplicate session") and kill's
-// finished-row opt-in, which applies steps 1 and 2 and replaces step 3 with
-// its reported-in rule (SR-6.5, SR-6.7). pkg/api builds the refusal errors
+// and the starting-session bound are compared. resume's pre-launch check uses
+// it. Its later callers are resume's re-lookup after "duplicate session",
+// reuse (the old row's lookup and the re-lookup after "duplicate session")
+// and kill's finished-row opt-in, which applies steps 1 and 2 and replaces
+// step 3 with its reported-in rule (SR-6.5, SR-6.7). pkg/api builds the refusal errors
 // from the classification.
 // Like agent_process.go it takes plain values: it reads no clock (the verb
 // passes its injected current instant), no environment and no configuration

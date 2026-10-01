@@ -10,13 +10,16 @@ import (
 
 // The ad.launch.name_held source values (SR-14). Plain spawn and reuse write
 // nameHeldSourceSpawn; find-missing's sweep writes nameHeldSourceFindMissing
-// after a mark attempt whose tick reason is tmux_name_held (SR-11.3); resume
-// (Epic 16) adds its own here. nameHeldSourceFindMissing is also the source of
-// every other record the sweep writes (ad.find_missing.tick,
-// ad.provenance.disagree): pkg/api declares the value only here.
+// after a mark attempt whose tick reason is tmux_name_held (SR-11.3).
+// nameHeldSourceFindMissing is also the source of every other record the
+// sweep writes (ad.find_missing.tick, ad.provenance.disagree), and
+// nameHeldSourceResume the source of every record resume writes
+// (ad.resume.*, ad.provenance.disagree): pkg/api declares each value only
+// here.
 const (
 	nameHeldSourceSpawn       = "ad_spawn"
 	nameHeldSourceFindMissing = "ad_find_missing"
+	nameHeldSourceResume      = "ad_resume"
 )
 
 // The ad.launch.name_held launch values (SR-14): which launch's create

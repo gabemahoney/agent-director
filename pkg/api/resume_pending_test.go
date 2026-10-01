@@ -1,11 +1,13 @@
 package api_test
 
 // resume_pending_test.go covers resume's move to pending (SR-8.3, SR-8.4,
-// SR-8.6, SR-14, SR-20.6; AC-RES-08, AC-RES-09, AC-RES-11, AC-RES-18): the
-// move's columns, its visibility, the launch-in-progress refusal and two
-// resumes in each order, on the shared fixture in resume_fixture_test.go
-// against a real store; SessionStart after the move is in
-// resume_pending_hook_test.go.
+// SR-8.6, SR-14, SR-20.6; AC-RES-08, AC-RES-09, AC-RES-18): the move's
+// columns after the one pre-launch lookup, its visibility and the
+// launch-in-progress refusal, on the shared fixture in resume_fixture_test.go
+// against a real store. Two resumes in each order (AC-RES-11) are in
+// resume_pending_race_test.go, SessionStart after the move in
+// resume_pending_hook_test.go, and a second resume inside the stopping window
+// (AC-RES-13) in resume_pending_stopping_test.go.
 
 import (
 	"errors"
@@ -59,6 +61,15 @@ func pendParent(t *testing.T, e *resumeEnv) string {
 // pendCalls is every tmux call rec recorded, name-based and socket-taking.
 func pendCalls(rec *tmuxfix.Recorder) int { return len(rec.Calls()) + len(rec.SocketCalls()) }
 
+// pendCallKinds is the kind of each socket-taking call rec recorded, in order.
+func pendCallKinds(rec *tmuxfix.Recorder) []tmux.Call {
+	var out []tmux.Call
+	for _, c := range rec.SocketCalls() {
+		out = append(out, c.Call)
+	}
+	return out
+}
+
 // pendRowNullOr returns nil for "" and s otherwise (a column's raw NULL or text).
 func pendRowNullOr(s string) any {
 	if s == "" {
@@ -67,9 +78,11 @@ func pendRowNullOr(s string) any {
 	return s
 }
 
-// TestResumeMoveToPendingColumns: the move clears the old process, liveness and
-// tmux identity, records the clock's launch start, a new token, the create's
-// socket and the caller's parent, keeps the session columns, and emits once.
+// TestResumeMoveToPendingColumns: one lookup on the row's socket precedes the
+// move (SR-8.1 step 3); the move clears the old process, liveness and tmux
+// identity, records the clock's launch start (after the lookup), a new token,
+// the create's socket and the caller's parent, keeps the session columns, and
+// emits once.
 func TestResumeMoveToPendingColumns(t *testing.T) {
 	cases := []struct {
 		name, state string
@@ -93,12 +106,19 @@ func TestResumeMoveToPendingColumns(t *testing.T) {
 				parent = pendParent(t, e)
 				t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", parent)
 			}
-			wantStart := e.clock.Now().UnixMilli()
+			wantStart := e.moveStart().UnixMilli()
 			var moved apitest.SpawnColumns
-			e.store.afterMove(func() { moved = e.columns(t, r.ID) })
+			var callsAtMove []tmux.Call
+			e.store.afterMove(func() { moved, callsAtMove = e.columns(t, r.ID), pendCallKinds(e.rec) })
 
 			if _, err := e.resume(r.ID); err != nil {
 				t.Fatalf("Resume: %v", err)
+			}
+			if want := []tmux.Call{tmux.CallLookup}; !slices.Equal(callsAtMove, want) || e.rec.SocketCalls()[0].Socket != e.socket {
+				t.Errorf("tmux calls before the move = %v on %q; want %v on the row's socket %q", callsAtMove, e.rec.SocketCalls()[0].Socket, want, e.socket)
+			}
+			if calls := e.rec.Calls(); len(calls) != 0 {
+				t.Errorf("name-based tmux calls = %v; want none", calls)
 			}
 			b := r.Before
 			if moved.State != store.StatePending {
@@ -163,12 +183,12 @@ func TestResumeMoveToPendingColumns(t *testing.T) {
 }
 
 // TestResumePendingVisibleOnEverySurface: after the move, status, get and list
-// show pending with the resume time as the launch start; get keeps the session
-// id and prior_sessions.
+// show pending with the resume's move time (after its lookup) as the launch
+// start; get keeps the session id and prior_sessions.
 func TestResumePendingVisibleOnEverySurface(t *testing.T) {
 	e := newResumeEnv(t)
 	r := e.seedResumable(t, store.StateEnded, apitest.WithStartedAt(pendStartedAt))
-	want := time.UnixMilli(e.clock.Now().UnixMilli()).UTC()
+	want := time.UnixMilli(e.moveStart().UnixMilli()).UTC()
 	if _, err := e.resume(r.ID); err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
@@ -261,7 +281,7 @@ func TestResumeRefusesLaunchInProgress(t *testing.T) {
 			r := e.seedResumable(t, store.StateEnded)
 			var got pendRefusal
 			e.store.afterMove(func() { got = pendRefuse(t, e, r.ID, p) })
-			start := e.clock.Now().UnixMilli()
+			start := e.moveStart().UnixMilli()
 			if _, err := e.resume(r.ID); err != nil {
 				t.Fatalf("first Resume: %v", err)
 			}
@@ -269,7 +289,7 @@ func TestResumeRefusesLaunchInProgress(t *testing.T) {
 		}},
 		{"moved by another resume, session up and not reported in", func(t *testing.T, e *resumeEnv, p string) (string, *pendRefusal, int64) {
 			r := e.seedResumable(t, store.StateMissing)
-			start := e.clock.Now().UnixMilli()
+			start := e.moveStart().UnixMilli()
 			if _, err := e.resume(r.ID); err != nil {
 				t.Fatalf("first Resume: %v", err)
 			}
@@ -326,89 +346,6 @@ func TestResumeRefusesLaunchInProgress(t *testing.T) {
 				t.Errorf("row after the refusal = %+v; want unchanged %+v", got.after, got.before)
 			}
 		})
-	}
-}
-
-// TestResumeLoserExaminedBeforeWinnersMove: a resume whose examination preceded
-// another's move loses at its conditional write and writes nothing.
-func TestResumeLoserExaminedBeforeWinnersMove(t *testing.T) {
-	e := newResumeEnv(t)
-	r := e.seedResumable(t, store.StateEnded)
-	winnerParent, loserParent := pendParent(t, e), pendParent(t, e)
-	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", loserParent)
-	var winErr error
-	var afterWinner apitest.SpawnColumns
-	e.store.afterGet(func() {
-		os.Setenv("AGENT_DIRECTOR_INSTANCE_ID", winnerParent) //nolint:errcheck
-		_, winErr = e.resume(r.ID)
-		os.Setenv("AGENT_DIRECTOR_INSTANCE_ID", loserParent) //nolint:errcheck
-		afterWinner = e.columns(t, r.ID)
-	})
-
-	_, err := e.resume(r.ID)
-	if winErr != nil {
-		t.Fatalf("winner Resume: %v", winErr)
-	}
-	if !errors.Is(err, api.ErrSpawnNotResumable) {
-		t.Fatalf("loser Resume = %v; want ErrSpawnNotResumable", err)
-	}
-	tok, _ := afterWinner.LaunchToken.(string)
-	apitest.AssertDescription(t, err.Error(), apitest.DescResumeLostRace(), tok, e.storeID)
-	pendAssertLoserWroteNothing(t, e, r.ID, afterWinner, winnerParent)
-}
-
-// TestResumeLoserExaminedAfterWinnersMove: a resume that examines the row after
-// another's move, while pending and once its agent reported in, is refused by
-// its state guard and writes nothing.
-func TestResumeLoserExaminedAfterWinnersMove(t *testing.T) {
-	for _, reportedIn := range []bool{false, true} {
-		name := map[bool]string{false: "winner pending", true: "winner reported in"}[reportedIn]
-		t.Run(name, func(t *testing.T) {
-			e := newResumeEnv(t)
-			r := e.seedResumable(t, store.StateMissing)
-			winnerParent, loserParent := pendParent(t, e), pendParent(t, e)
-			t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", winnerParent)
-			start := time.UnixMilli(e.clock.Now().UnixMilli()).UTC()
-			if _, err := e.resume(r.ID); err != nil {
-				t.Fatalf("winner Resume: %v", err)
-			}
-			if reportedIn {
-				pendSessionStart(t, e, r.ID, r.JSONLPath)
-			}
-			got := pendRefuse(t, e, r.ID, loserParent)
-			if !errors.Is(got.err, api.ErrSpawnNotResumable) {
-				t.Fatalf("loser Resume = %v; want ErrSpawnNotResumable", got.err)
-			}
-			if !reportedIn {
-				tok, _ := got.before.LaunchToken.(string)
-				apitest.AssertDescription(t, got.err.Error(), apitest.DescResumeLaunchInProgress(apitest.LaunchInProgress{
-					InstanceID: r.ID, LaunchStart: start}), tok, e.storeID)
-			} else if got.before.State != store.StateWaiting {
-				t.Fatalf("row after SessionStart is %v; want waiting", got.before.State)
-			}
-			if got.calls != 0 {
-				t.Errorf("loser made %d tmux calls; want none", got.calls)
-			}
-			pendAssertLoserWroteNothing(t, e, r.ID, got.before, winnerParent)
-		})
-	}
-}
-
-// pendAssertLoserWroteNothing checks that the row is want with the winner's
-// parent, one create call was made and one move event emitted.
-func pendAssertLoserWroteNothing(t *testing.T, e *resumeEnv, id string, want apitest.SpawnColumns, winnerParent string) {
-	t.Helper()
-	if got := e.columns(t, id); !reflect.DeepEqual(got, want) {
-		t.Errorf("row after the loser = %+v; want the winner's %+v", got, want)
-	}
-	if want.ParentID != winnerParent {
-		t.Errorf("parent_id = %#v; want the winner's %q", want.ParentID, winnerParent)
-	}
-	if n := len(e.rec.SocketCallsOf(tmux.CallCreate)); n != 1 {
-		t.Errorf("creates = %d; want the winner's one", n)
-	}
-	if n := pendMoved(t, id); n != 1 {
-		t.Errorf("ad.resume.moved_to_pending lines = %d; want the winner's one", n)
 	}
 }
 

@@ -7,8 +7,8 @@ package api_test
 // its tmux and process world on the kill fixture (kill_fixture_test.go); a
 // verb is a small adapter (invoke, its action calls, its first action) with
 // one expected cell per column. A verb that inserts its own row (plain
-// spawn), writes the row's result (find-missing's sweep) or deletes it
-// (expire) runs its own
+// spawn), writes the row's result (find-missing's sweep), deletes it
+// (expire) or launches it (resume) runs its own
 // world and row check instead, and marks the columns that cannot arise for
 // it not applicable, with the reason. Sequence
 // details, the process wait and the ceilings are kill_test.go's. Later verb
@@ -192,7 +192,7 @@ type callTableVerb struct {
 func callTableVerbs() []callTableVerb {
 	return []callTableVerb{callTableKill(), callTableSpawn(), callTableFindMissing(), callTableReadPane(),
 		callTableSendKeys(), callTableSendKeysPending(), callTablePause(), callTablePausePending(),
-		callTablePauseEnded(), callTableExpire()}
+		callTablePauseEnded(), callTableExpire(), callTableResume()}
 }
 
 // TestCallTable runs every verb in every column: error name through the

@@ -28,9 +28,8 @@ const defaultStorePath = "~/.agent-director/state.db"
 // SRD Appendix F.3). Every socket-taking method takes the socket (SR-3.3)
 // and reports a failure as *TmuxCallError; an error of any other type from
 // an injected implementation counts as TmuxFailUnrecognized for that call.
-// HasSession, the one name-based method, stays (SR-2.1) and matches by
-// prefix: resume still calls it until resume moves to the lookup, and no verb
-// may newly adopt it.
+// HasSession, the one name-based method, stays (SR-2.1; SR-16.2 item 2) and
+// matches by prefix: no verb uses it, and none may.
 // *tmux.Client and tmuxfix.Recorder implement it.
 type TmuxClient interface {
 	// Lookup makes the one-call lookup on socket: sessions with labels and
@@ -57,8 +56,8 @@ type TmuxClient interface {
 	// paneID by its id with "<token> <pane id>".
 	SetLabel(socket, sessionID, paneID, token, instanceID, storeID string) error
 	// HasSession reports whether a session whose name begins with name
-	// exists (prefix match; stays per SR-2.1). Resume still calls it until
-	// it moves to the lookup; no verb may newly adopt it.
+	// exists (prefix match; stays per SR-2.1). No verb uses it, and none
+	// may: a verb finds a session by its label (Lookup).
 	HasSession(name string) (bool, error)
 }
 

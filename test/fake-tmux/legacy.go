@@ -20,9 +20,9 @@ func legacyMain() {
 	}
 	sub := os.Args[1]
 	if sub == "has-session" {
-		// Production code calls HasSession as a precondition probe. The
-		// real tmux exits non-zero for absent sessions; mirror that so a
-		// "session already exists" branch isn't accidentally taken.
+		// No verb calls the name-based HasSession; *tmux.Client keeps it
+		// (SR-16.2 item 2). Answer as real tmux does for an absent
+		// session: exit non-zero, logging nothing.
 		os.Exit(1)
 	}
 

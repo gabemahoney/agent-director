@@ -41,6 +41,7 @@ const (
 	agentNotExited   = "its agent has not yet exited"
 	runForAtLeast    = "it has run for at least the starting-session bound of "
 	stoppingWindow   = "stopping window"
+	mayBeHung        = "the agent may be hung or running on a row wrongly marked finished"
 )
 
 // DescStillStopping is ErrTmuxUnresponsive for a row that ended less than the
@@ -97,10 +98,9 @@ func DescStillStarting(p StartingSession) DescCase {
 func DescOwnOldSession(p StartingSession) DescCase {
 	req := []string{
 		p.InstanceID, strconv.Quote(p.Name), thisRowsOwnID,
-		"the agent may be hung or running on a row wrongly marked finished",
-		"no automated action on it is safe", "a human must look", listSessionName,
+		mayBeHung, "no automated action on it is safe", "a human must look", listSessionName,
 	}
-	mustNot := []string{stillStopping, stillStarting, notThisLaunch, scanLeftoverWord, "nothing was written"}
+	mustNot := []string{stillStopping, stillStarting, notThisLaunch, scanLeftoverWord, nothingWritten}
 	name := "ErrTmuxSessionConflict, own old session"
 	if p.NoSession {
 		name += ", no session of its launch"

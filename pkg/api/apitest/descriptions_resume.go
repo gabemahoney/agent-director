@@ -12,7 +12,8 @@ import (
 // restore's result that ends every resume launch error after a failed launch
 // (SR-8.5). Resume reuses DescLaunchTimeout, DescSocketDir,
 // DescSocketPermission, DescTmuxNotRun and DescSessionCreateFailed as they
-// are, and DescUnlabelledSession with its Restore field.
+// are, and DescUnlabelledSession with its Restore field. The pre-launch
+// check's refusals (Epic 16) are in descriptions_resume_lookup.go.
 
 // RestoreOutcome is what resume's one restore attempt after a failed launch
 // did (SR-8.5). RestoreNone (the zero value) means the launch was not a

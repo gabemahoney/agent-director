@@ -110,8 +110,9 @@
 // # Legacy form
 //
 // argv without a leading -u is the name-based call set: new-session and
-// kill-session log their argv and exit 0; has-session exits 1; new-session
-// honours FAKE_TMUX_FAIL_NEWSESSION_NAME; anything else (a name-based
+// kill-session log their argv and exit 0; has-session (no verb sends it)
+// exits 1, as for an absent session; new-session honours
+// FAKE_TMUX_FAIL_NEWSESSION_NAME; anything else (a name-based
 // capture-pane or send-keys included: no client method sends one) exits 0
 // with no output or side effects. No table is read or written.
 package main

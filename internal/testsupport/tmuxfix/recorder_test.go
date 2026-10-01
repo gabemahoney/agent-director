@@ -452,3 +452,33 @@ func TestNewRecorderForReadPane(t *testing.T) {
 		})
 	}
 }
+
+// TestRecorder_HasSessionAnswersNotFound: the name-based HasSession records
+// its call and answers not found even for a seeded name, with no socket call;
+// Reset clears the record.
+func TestRecorder_HasSessionAnswersNotFound(t *testing.T) {
+	r := seeded()
+	if got, err := r.HasSession("s0"); got || err != nil {
+		t.Errorf("HasSession(s0) = %v, %v; want false, nil", got, err)
+	}
+	want := []tmuxfix.Call{{Kind: tmuxfix.CallHasSession, Name: "s0"}}
+	if got := r.CallsOfKind(tmuxfix.CallHasSession); !reflect.DeepEqual(got, want) {
+		t.Errorf("HasSession calls = %+v, want %+v", got, want)
+	}
+	if got := r.SocketCalls(); len(got) != 0 {
+		t.Errorf("socket calls = %+v, want none", got)
+	}
+	r.Reset()
+	if got := r.Calls(); len(got) != 0 {
+		t.Errorf("calls after Reset = %+v, want none", got)
+	}
+}
+
+// TestNewRecorderForResume: an empty listing, so the lookup on any socket
+// lists no session and fails as no socket.
+func TestNewRecorderForResume(t *testing.T) {
+	a, err := tmuxfix.NewRecorderForResume().Lookup(sockA)
+	if ce := callErr(t, err); ce.Failure != tmux.FailNoSocket || len(a.Sessions) != 0 {
+		t.Errorf("Lookup = %+v, failure %v; want no session, %v", a, ce.Failure, tmux.FailNoSocket)
+	}
+}

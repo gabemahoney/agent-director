@@ -3,10 +3,10 @@ package tmux
 // This file holds agent-process selection and the shared judgement of a
 // recorded process (SRD SR-3.8, SR-11.1, SR-12.2; LFR M8, C1): which of a
 // row's recorded identities is its agent process, and whether a recorded
-// process is alive, judged only by the start-time reader. Liveness, kill's
-// wait, expire's process_alive, find-missing's process path and resume's and
-// reuse's running-process check are their intended users; today only the
-// lookup's server check uses them.
+// process is alive, judged only by the start-time reader. The lookup's
+// server check, kill's wait and its Gone path, expire's process_alive,
+// find-missing's process path and resume's running-process check use them;
+// reuse's will too.
 // They take plain values (no store type), read no clock and no environment,
 // and make no tmux call.
 

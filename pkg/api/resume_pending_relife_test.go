@@ -42,7 +42,8 @@ func relifeResumeAs(t *testing.T, e *resumeEnv, id, parent string) {
 // reports in with a new session id and later ends (SessionEnd, then its session
 // goes); a second resume succeeds with one new create resuming the reported
 // session, and its move applies again: pending, a new launch start, token and
-// parent, ended_at cleared, row_version advanced and a second move event.
+// parent, ended_at cleared, row_version advanced and a second move event. Its
+// pre-launch lookup finds nothing in the way and writes no disagree record.
 // Both hooks come from the resumed agent, the pane resume recorded (SR-22.9).
 func TestResumeAgainAfterResumedAgentsLifeEnds(t *testing.T) {
 	e := newResumeEnv(t)
@@ -50,7 +51,7 @@ func TestResumeAgainAfterResumedAgentsLifeEnds(t *testing.T) {
 	firstParent, secondParent := pendParent(t, e), pendParent(t, e)
 
 	// (1) The first resume.
-	firstStart := e.clock.Now().UnixMilli()
+	firstStart := e.moveStart().UnixMilli()
 	relifeResumeAs(t, e, r.ID, firstParent)
 	first := e.columns(t, r.ID)
 	sess := e.rec.Sessions(e.socket)
@@ -79,8 +80,8 @@ func TestResumeAgainAfterResumedAgentsLifeEnds(t *testing.T) {
 	}
 
 	// (5) The second resume.
-	createsBefore := len(e.rec.SocketCallsOf(tmux.CallCreate))
-	secondStart := e.clock.Now().UnixMilli()
+	createsBefore, callsBefore := len(e.rec.SocketCallsOf(tmux.CallCreate)), len(e.rec.SocketCalls())
+	secondStart := e.moveStart().UnixMilli()
 	var moved map[string]any
 	e.store.afterMove(func() {
 		c := e.columns(t, r.ID)
@@ -89,6 +90,12 @@ func TestResumeAgainAfterResumedAgentsLifeEnds(t *testing.T) {
 	})
 	relifeResumeAs(t, e, r.ID, secondParent)
 
+	if got, want := pendCallKinds(e.rec)[callsBefore:], []tmux.Call{tmux.CallLookup, tmux.CallCreate}; !slices.Equal(got, want) {
+		t.Errorf("calls by the second resume = %v; want %v (its lookup finds nothing in the way)", got, want)
+	}
+	if d := resumeDisagrees(t, r.ID); len(d) != 0 {
+		t.Errorf("ad.provenance.disagree records = %+v; want none", d)
+	}
 	creates := e.rec.SocketCallsOf(tmux.CallCreate)[createsBefore:]
 	if len(creates) != 1 {
 		t.Fatalf("creates by the second resume = %d; want 1", len(creates))

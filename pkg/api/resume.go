@@ -81,16 +81,15 @@ var _ resumeIdentityWriter = (*store.Store)(nil)
 type SessionHistoryEntry = store.SessionHistoryEntry
 
 // ResumeTmux is the narrow tmux surface Resume needs (Appendix F.3): the
-// session-creating call with its chained labels, the one label by id and the
-// kill by id of a session that could not be labelled (SR-3.5), exactly as
-// TmuxClient declares them, plus HasSession for the name pre-check. Each
-// socket-taking method reports a failure as *TmuxCallError; an error of any
-// other type counts as TmuxFailUnrecognized for that call.
+// lookup of its pre-launch check (SR-8.2), the session-creating call with its
+// chained labels, the one label by id and the kill by id of a session that
+// could not be labelled (SR-3.5), exactly as TmuxClient declares them. It has
+// no pane listing, because resume writes no adoption (SR-3.6), and no
+// name-based method. Every method takes a socket and reports a failure as
+// *TmuxCallError; an error of any other type counts as TmuxFailUnrecognized
+// for that call. TmuxClient, *tmux.Client and tmuxfix.Recorder satisfy it.
 type ResumeTmux interface {
-	// HasSession reports whether a session whose name begins with name
-	// exists (prefix match). It serves only resume's name pre-check, which
-	// the pre-launch lookup on the row's socket (SR-8.2) replaces.
-	HasSession(name string) (bool, error)
+	TmuxLookup
 	// NewSession creates the session name on socket with its chained labels,
 	// the session label "ad1 <token> <session id> <instance id> <store id>"
 	// and the pane label "<token> <pane id>", and returns the create reply.
@@ -103,6 +102,9 @@ type ResumeTmux interface {
 	// could not be labelled.
 	KillSessionID(socket, sessionID string) error
 }
+
+// The production tmux client satisfies ResumeTmux.
+var _ ResumeTmux = TmuxClient(nil)
 
 // ResumeParams is the typed parameter shape for the resume verb.
 type ResumeParams struct {
@@ -133,7 +135,8 @@ type ResumeResult struct {
 
 // resumeDeps is what resume's launch uses besides the row: the handler's
 // store, tmux client, start-time reader, configuration, this store's id, clock
-// and logger, carried from resumeImpl to resumeAfterJsonl.
+// and logger, and the caller identity collected at entry, carried from
+// resumeImpl to resumeAfterJsonl.
 type resumeDeps struct {
 	s       ResumeStore
 	t       ResumeTmux
@@ -142,6 +145,18 @@ type resumeDeps struct {
 	storeID string
 	now     func() time.Time
 	lg      *log.Logger
+	who     caller
+}
+
+// resumeExamined is what resume's launch keeps from before its move, so
+// nothing after the move re-reads it: the row exactly as read (its ended_at,
+// pid and session-id presence, launch token and server identity, and the
+// prior values the restore writes back), and the ad.provenance.disagree
+// reasons the pre-launch check already wrote, so a later lookup in the same
+// call (the re-lookup after "duplicate session") writes no reason twice.
+type resumeExamined struct {
+	row             Spawn
+	disagreeWritten []string
 }
 
 // resumeImpl is the unexported verb handler called by (c *Client).Resume.
@@ -149,11 +164,12 @@ type resumeDeps struct {
 // external consumers use the Client method instead. pc is the start-time
 // reader the identity write uses, storeID this store's id, which every label
 // the launch writes ends with (SR-3.5; never in a description or trail
-// field, SR-15), now the clock the launch start is read from, and lg the
-// client logger (nil logs nothing).
+// field, SR-15), now the clock the launch start and the pre-launch check's
+// starting-session rule read, and lg the client logger (nil logs nothing).
+// The caller identity of the trail records is collected once, here.
 //
-// Guards (in order; each refusal writes nothing and makes no tmux call
-// unless stated):
+// Guards (SR-8.1 step 1, in order; each refusal writes nothing and makes no
+// tmux call):
 //
 //  1. GetSpawn → ErrSpawnNotFound when the id is unknown.
 //  2. State must be `ended` or `missing` → otherwise
@@ -204,17 +220,16 @@ type resumeDeps struct {
 //
 // The winning candidate's session id is the one `claude --resume` names;
 // the launch itself (resumeAfterJsonl) always works from the row as read.
-// After these guards and resumeAfterJsonl's own pre-launch checks, and just
-// before the move to pending, resume pre-trusts the row's folder
-// (spawn.PreTrust) unless the spawn that began the row's life turned
-// pre-trust off (the row's NoPreTrust). A pre-trust failure never fails the
-// launch, and a refusal above the move writes no trust entry (SR-8.1 step 4,
-// SR-22.6).
+// After these guards come resumeAfterJsonl's steps (SR-8.1 steps 2 to 7):
+// the control-character id refusal, the launch socket, the one pre-launch
+// lookup on it (SR-8.2), pre-trust, the move to pending, the launch and,
+// after a failed launch, the restore. Every refusal before the move writes
+// nothing: no move, no parent id, no trust entry, no ad.resume.* event.
 func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, storeID string, now func() time.Time, lg *log.Logger, params ResumeParams) (ResumeResult, error) {
 	if lg == nil {
 		lg = log.New(io.Discard, "", 0)
 	}
-	d := resumeDeps{s: s, t: t, pc: pc, cfg: cfg, storeID: storeID, now: now, lg: lg}
+	d := resumeDeps{s: s, t: t, pc: pc, cfg: cfg, storeID: storeID, now: now, lg: lg, who: callerIdentity()}
 
 	row, err := s.GetSpawn(params.ClaudeInstanceID)
 	if err != nil {
@@ -412,9 +427,17 @@ func formatJsonlAttempts(attempts []jsonlAttempt) string {
 //     socket, its vanished per-user directory re-created, or, when the row
 //     records none, the one a plain spawn would resolve. A refusal →
 //     ErrTmuxNotAvailable, no tmux call, nothing written.
-//  3. The name pre-check (HasSession): a session with the recorded name →
-//     ErrTmuxSessionCreate, nothing written. Resume does NOT auto-kill a
-//     stale session. The pre-launch lookup (SR-8.2) replaces this check.
+//  3. The pre-launch check (SR-8.2): exactly one tmux.Lookup on that socket
+//     for the row's launch identity as read (instance id, launch token,
+//     recorded server identity, this store's id) with the recorded name as
+//     the holder name, decided by decidePreLaunch: proceed, or a refusal
+//     (Can't tell by its kind; Ours, or Gone while the agent process runs, by
+//     the starting-session rule with the configured bound and window;
+//     Leftover; a name held on Gone, by the holder's class). Its
+//     ad.provenance.disagree records, one per distinct reason, are written
+//     right after the decision, before any write, fail-open. A refusal makes
+//     no further tmux call and writes nothing else; no blocking session is
+//     touched, and nothing is adopted.
 //  4. A new launch token (a failure → ErrInternal, nothing written), then
 //     the environment, settings and argv (spawn.ComposeRelaunch), all before
 //     the move, so a failure writes nothing.
@@ -461,13 +484,12 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 		return ResumeResult{}, err
 	}
 
-	exists, err := d.t.HasSession(row.TmuxSessionName)
-	if err != nil {
-		return ResumeResult{}, fmt.Errorf("resume: probe tmux: %w", err)
-	}
-	if exists {
-		return ResumeResult{}, fmt.Errorf("%w: tmux session %s already exists",
-			tmux.ErrTmuxSessionCreate, row.TmuxSessionName)
+	lookup := tmux.Lookup(d.t, d.pc, rowLaunch(id, row.Identity, d.storeID, socket), row.TmuxSessionName)
+	pre := decidePreLaunch(lookup, preLaunchRowOf(row, row.TmuxSessionName, socket), d.pc,
+		startingSessionLimitsOf(d.cfg.Tmux), d.now)
+	emitResumeDisagree(d, row, socket, pre)
+	if pre.Err != nil {
+		return ResumeResult{}, pre.Err
 	}
 
 	token, err := spawn.NewLaunchToken()
@@ -488,17 +510,6 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 	// A failure never fails the launch; the outcome goes into the result.
 	preTrust := spawn.PreTrust(row.CWD, row.ExtraEnv, row.NoPreTrust)
 
-	// What the move clears, from the row as read: the restore writes it back
-	// byte for byte (SR-8.5).
-	prior := ResumePrior{
-		State:                   row.State,
-		EndedAtText:             row.EndedAtText,
-		PID:                     row.PID,
-		ProcStarttime:           row.ProcStarttime,
-		LivenessUnverifiedSince: row.LivenessUnverifiedSince,
-		LivenessNote:            row.LivenessNote,
-		Identity:                row.Identity,
-	}
 	parent := os.Getenv(resumeEnvInstanceID)
 	res, movedVersion, err := d.s.MoveToPending(id, row.Snapshot, d.now().UnixMilli(), token, socket, parent)
 	if err := resumeMoveError(id, res, err); err != nil {
@@ -510,9 +521,50 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 		"claude_instance_id": id,
 		"prior_state":        row.State,
 		"claude_session_id":  row.ClaudeSessionID,
-		"source":             "ad_resume",
+		"source":             nameHeldSourceResume,
 	})
-	return resumeLaunchOutcome(d, out, req, movedVersion, prior, preTrust)
+	return resumeLaunchOutcome(d, resumeExamined{row: row, disagreeWritten: pre.Reasons}, out, req, movedVersion, preTrust)
+}
+
+// emitResumeDisagree writes the pre-launch check's ad.provenance.disagree
+// records through the shared emitter (SR-14, SR-3.16), one per distinct
+// reason and none in the normal case: verb resume, source ad_resume, the
+// recorded name, the lookup's socket, the session concerned, the server
+// value, the verdict token, the action (refused, or proceeded to the launch)
+// and the caller identity. It runs before any write, so no trail write falls
+// between the move and the create (SR-8.3). Fail-open.
+func emitResumeDisagree(d resumeDeps, row Spawn, socket string, pre preLaunchDecision) {
+	action := resumeActionProceeded
+	if pre.Err != nil {
+		action = resumeActionRefused
+	}
+	emitProvenanceDisagree(provenanceDisagree{
+		Verb:               "resume",
+		Source:             nameHeldSourceResume,
+		InstanceID:         row.ClaudeInstanceID,
+		Socket:             socket,
+		SessionName:        row.TmuxSessionName,
+		SessionID:          pre.SessionID,
+		CurrentSessionName: pre.CurrentName,
+		Server:             pre.Server,
+		Verdict:            pre.Verdict,
+		Action:             action,
+		Caller:             d.who,
+	}, pre.Reasons...)
+}
+
+// resumePriorOf returns what the move to pending clears, from the row as
+// read: the restore writes it back byte for byte (SR-8.5).
+func resumePriorOf(row Spawn) ResumePrior {
+	return ResumePrior{
+		State:                   row.State,
+		EndedAtText:             row.EndedAtText,
+		PID:                     row.PID,
+		ProcStarttime:           row.ProcStarttime,
+		LivenessUnverifiedSince: row.LivenessUnverifiedSince,
+		LivenessNote:            row.LivenessNote,
+		Identity:                row.Identity,
+	}
 }
 
 // resumeMoveError maps the move to pending's outcome to resume's error
@@ -535,19 +587,20 @@ func resumeMoveError(id string, res CondResult, err error) error {
 
 // resumeLaunchOutcome maps resume's create-and-label outcome to its result
 // (SR-8.5), the one place this mapping lives (SR-1.8), using internal/spawn's
-// shared description builders. A labelled session gets the identity write
-// with the move's version and token when the store provides it; a lost reply
-// is a success with no identity; both successes report preTrust, the outcome
-// of the pre-trust resumeAfterJsonl ran, as PreTrust. A timeout or a non-zero-exit unparseable
+// shared description builders. ex is what the call examined before its move.
+// A labelled session gets the identity write with the move's version and
+// token when the store provides it; a lost reply is a success with no
+// identity; both successes report preTrust, the outcome of the pre-trust
+// resumeAfterJsonl ran, as PreTrust. A timeout or a non-zero-exit unparseable
 // reply is ErrTmuxUnresponsive with the launch-timeout description and no
 // write, the row staying pending. Every other outcome restores the row
-// (resumeRestore) and returns its launch error, whose row sentence is the
-// restore's result: ErrTmuxNotAvailable for tmux unavailable, and
-// ErrTmuxSessionCreate for a session that could not be labelled (after its
-// kill by id, or saying it may still run), for "duplicate session" (whose
-// re-lookup comes with the pre-launch lookup) and for any other launch
-// failure. Every error matches exactly one catalogued sentinel (SR-1.5).
-func resumeLaunchOutcome(d resumeDeps, out spawn.CreateOutcome, req spawn.CreateRequest, movedVersion int64, prior ResumePrior, preTrust spawn.PreTrustOutcome) (ResumeResult, error) {
+// (resumeRestore, with the prior values of ex's row) and returns its launch
+// error, whose row sentence is the restore's result: ErrTmuxNotAvailable for
+// tmux unavailable, and ErrTmuxSessionCreate for a session that could not be
+// labelled (after its kill by id, or saying it may still run), for "duplicate
+// session" and for any other launch failure. Every error matches exactly one
+// catalogued sentinel (SR-1.5).
+func resumeLaunchOutcome(d resumeDeps, ex resumeExamined, out spawn.CreateOutcome, req spawn.CreateRequest, movedVersion int64, preTrust spawn.PreTrustOutcome) (ResumeResult, error) {
 	switch out.Kind {
 	case spawn.CreateLabelled:
 		if w, ok := d.s.(resumeIdentityWriter); ok {
@@ -560,7 +613,7 @@ func resumeLaunchOutcome(d resumeDeps, out spawn.CreateOutcome, req spawn.Create
 		return ResumeResult{}, spawn.LaunchTimeoutError(out.Cause, "resume", req.InstanceID, spawn.RowStaysPending)
 	}
 
-	return ResumeResult{}, resumeRestore(d, req.InstanceID, movedVersion, prior, func(restored string) error {
+	return ResumeResult{}, resumeRestore(d, req.InstanceID, movedVersion, resumePriorOf(ex.row), func(restored string) error {
 		switch out.Kind {
 		case spawn.CreateUnavailable:
 			return spawn.TmuxUnavailableError(out.Cause, req.Socket, restored)
@@ -605,7 +658,7 @@ func resumeRestore(d resumeDeps, id string, movedVersion int64, prior ResumePrio
 		"applied":            rerr == nil && res == CondApplied,
 		"launch_error":       errorName(err),
 		"restore_error":      restoreError,
-		"source":             "ad_resume",
+		"source":             nameHeldSourceResume,
 	})
 	return err
 }
@@ -632,14 +685,31 @@ func launchInProgressError(row Spawn) error {
 // judgement on the evidence available to it, not proof that the agent has
 // exited.
 //
+// Before anything is written, Resume looks the row up once on its recorded
+// tmux socket (SR-8.2) and refuses when a session is in the way, touching no
+// session: the row's own session, or its agent process still running with
+// no session of its launch, gives ErrTmuxUnresponsive (UNAVAILABLE,
+// transient) while it appears to still be stopping (the row ended less than
+// the stopping window ago) or starting (younger than the starting-session
+// bound), and past both ErrTmuxSessionConflict ("this row's own id"); a
+// session left over from an earlier life, a session holding the recorded
+// name (another row's, another agent-director store's, which must not be
+// ended, or one with no valid label) and conflicting labels give
+// ErrTmuxSessionConflict. ErrTmuxSessionConflict is CONFLICT and lasts until
+// a human looks (see "Operator actions" in the agent-director README). A
+// tmux server other than the one the agent was launched on, or tmux that
+// cannot be run, gives ErrTmuxNotAvailable (ENVIRONMENT), and an answer that
+// cannot be read ErrTmuxUnresponsive. A refusal before the move to pending
+// writes nothing, so re-issuing resume later is safe. None of these errors
+// means that the agent is dead.
+//
 // Before its launch, Resume pre-trusts the row's working directory (marks it
 // trusted in the .claude.json file of the row's CLAUDE_CONFIG_DIR, or
 // ~/.claude.json) so the agent skips Claude Code's folder-trust prompt, as a
 // spawn does, unless the spawn that began the row's life turned pre-trust off
 // (SpawnParams.NoPreTrust); then nothing is pre-trusted, on every resume of
 // that life, and pre_trust is skipped. A pre-trust failure never fails the
-// launch. A resume refused
-// before its move to pending writes no trust entry.
+// launch. A resume refused before its move to pending writes no trust entry.
 //
 // Before it creates the session, Resume moves the row to pending in one
 // conditional write, keeping its session id and history and writing the
@@ -675,14 +745,31 @@ func launchInProgressError(row Spawn) error {
 //     ever written (persisted jsonl_path NULL and the visible history
 //     empty) — the b.v2c case of a freshly restarted agent that has not
 //     been messaged. Recourse: message it, or delete + re-spawn.
-//   - ErrTmuxNotAvailable: the tmux binary cannot be run, or the tmux socket
-//     is not accessible to this user (at session creation, followed by the
-//     restore); or the socket's directory is unusable, before anything is
-//     written (nothing launched).
-//   - [ErrTmuxSessionCreate]: a tmux session with the same name already
-//     exists; or session creation failed ("duplicate session" included), or
-//     a created session could not be labelled, each followed by the restore.
-//   - ErrTmuxUnresponsive: the session-creating call timed out or gave a
+//   - ErrTmuxNotAvailable: ENVIRONMENT. At the pre-launch lookup, before
+//     anything is written, this is not the tmux server the agent was launched
+//     on, or the tmux binary cannot be run or the socket is not accessible to
+//     this user; the socket's directory is unusable, also before anything is
+//     written; or, at session creation, the binary cannot be run or the
+//     socket is not accessible, followed by the restore.
+//   - [ErrTmuxSessionConflict]: CONFLICT, until a human looks (see
+//     "Operator actions" in the agent-director README). At the pre-launch
+//     lookup, before anything is written and with no session touched, a
+//     session holds the recorded name (another row's agent, another
+//     agent-director store's agent, which must not be ended, or a session with
+//     no valid instance id); a session is left over from an earlier life of
+//     this row; the row's own session, or its agent process still running
+//     with no session, is past the stopping window and the starting-session
+//     bound ("this row's own id"); or tmux holds conflicting labels.
+//   - [ErrTmuxSessionCreate]: LAUNCH FAILURE. Session creation failed, or a
+//     created session could not be labelled, each followed by the restore.
+//     "duplicate session" at the create also maps to it, followed by the
+//     restore.
+//   - ErrTmuxUnresponsive: UNAVAILABLE, transient. At the pre-launch lookup,
+//     before anything is written, the row's own session or agent appears to
+//     still be stopping (the row ended less than the stopping window ago) or
+//     still starting (younger than the starting-session bound), tmux's answer
+//     could not be read, or more than one session's name matches the recorded
+//     name; retry later. Or the session-creating call timed out or gave a
 //     reply that does not parse with a non-zero exit: the session may have
 //     been created and the row stays pending; do not retry until get shows
 //     the row ended or missing.

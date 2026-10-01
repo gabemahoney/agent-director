@@ -8,8 +8,9 @@
 // (recorder_table.go, recorder_calls.go), tests script a typed result per
 // call kind (recorder_script.go), and session hooks, after-call hooks and
 // virtual time sit around each call (recorder_hooks.go). It never produces
-// or parses tmux reply text. The one name-based method, HasSession, only
-// records its calls and returns its scripted answer, as before.
+// or parses tmux reply text. The one name-based method, HasSession, stays
+// only so the Recorder satisfies api.TmuxClient (SR-16.2 item 2): no verb
+// calls it, so it records its calls and always answers not found.
 package tmuxfix
 
 import (
@@ -37,7 +38,7 @@ type Call struct {
 
 // Recorder is a fake that satisfies the pkg/api TmuxClient interface. The
 // name-based HasSession is a no-op that records every invocation (Calls,
-// CallsOfKind). The socket-taking methods, with exactly *tmux.Client's
+// CallsOfKind) and answers not found. The socket-taking methods, with exactly *tmux.Client's
 // signatures, are answered from per-socket session tables or from scripted
 // typed results, and are recorded separately (SocketCalls, SocketCallsOf).
 //
@@ -58,25 +59,12 @@ type Recorder struct {
 	clock       *Clock
 	timeouts    tmux.Timeouts
 	nextPID     int // last auto-assigned server or pane pid
-
-	// hasSessionResult is the scripted return value for HasSession.
-	// Defaults to false.
-	hasSessionResult bool
 }
 
-// NewRecorder returns a new *Recorder with no recorded calls and default
-// (empty/false) scripted responses.
+// NewRecorder returns a new *Recorder with no recorded calls, no server on
+// any socket and no scripted result.
 func NewRecorder() *Recorder {
 	return &Recorder{}
-}
-
-// WithHasSession configures the bool that HasSession returns.
-// Returns the receiver for chaining.
-func (r *Recorder) WithHasSession(v bool) *Recorder {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.hasSessionResult = v
-	return r
 }
 
 // Calls returns a copy of all recorded invocations in call order.
@@ -101,22 +89,21 @@ func (r *Recorder) CallsOfKind(kind CallKind) []Call {
 	return out
 }
 
-// Reset discards all recorded calls (name-based and socket-taking), resets
-// HasSession's scripted answer to false and discards every scripted
-// typed result. Session tables, capture texts, hooks and virtual time stay.
+// Reset discards all recorded calls (name-based and socket-taking) and every
+// scripted typed result. Session tables, capture texts, hooks and virtual time stay.
 func (r *Recorder) Reset() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = r.calls[:0]
-	r.hasSessionResult = false
 	r.socketCalls = nil
 	r.scripts = nil
 }
 
-// HasSession records a HasSession call and returns the scripted result.
+// HasSession records a HasSession call and answers not found (false, nil),
+// whatever the session tables hold: no verb calls it, and none may.
 func (r *Recorder) HasSession(name string) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, Call{Kind: CallHasSession, Name: name})
-	return r.hasSessionResult, nil
+	return false, nil
 }

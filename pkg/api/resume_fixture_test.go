@@ -6,7 +6,9 @@ package api_test
 // hookedResumeStore (api.ResumeStore over the real store with injected store
 // errors and interleaving hooks) and the resumable-row factory. It holds no
 // tests. HOME is left as TestMain set it, so readAPITrailLines
-// (find_missing_trail_test.go) reads the trail resume writes.
+// (find_missing_trail_test.go) reads the trail resume writes. The pre-launch
+// lookup's arrangements (holders, the row's own session, process states) are
+// on the kill fixture: resume_lookup_fixture_test.go.
 
 import (
 	"bytes"
@@ -171,6 +173,10 @@ type resumeEnv struct {
 	socket  string
 }
 
+// resumeLookupQ is the virtual time the Recorder charges resume's one
+// pre-launch lookup: Q, the default query timeout.
+var resumeLookupQ = config.Tmux{}.EffectiveQueryTimeout()
+
 // newResumeEnv builds a resumeEnv over a fresh store, with TMUX unset, no
 // caller instance id and config.Default() as resume's configuration.
 func newResumeEnv(t *testing.T) *resumeEnv {
@@ -221,6 +227,10 @@ func (e *resumeEnv) resume(id string) (api.ResumeResult, error) {
 	return api.Resume(e.store, e.rec, e.pc, e.cfg, e.storeID, e.clock.Now, e.lg,
 		api.ResumeParams{ClaudeInstanceID: id})
 }
+
+// moveStart is the launch start a resume called now records: e.clock's now
+// plus resumeLookupQ, the one lookup before its move.
+func (e *resumeEnv) moveStart() time.Time { return e.clock.Now().Add(resumeLookupQ) }
 
 // columns reads id's row raw through apitest.ReadSpawnColumns, failing the test on an error.
 func (e *resumeEnv) columns(t *testing.T, id string) apitest.SpawnColumns {

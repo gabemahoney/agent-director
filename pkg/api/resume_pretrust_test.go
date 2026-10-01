@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -210,9 +211,15 @@ func TestResumePreTrustRefusedBeforeMoveWritesNothing(t *testing.T) {
 			sock := filepath.Join(userSocketDir(filepath.Join(t.TempDir(), "gone")), "default")
 			return e.seedResumable(t, store.StateEnded, env, apitest.WithTmuxSocket(sock)).ID
 		}},
-		{"session name already taken", "ErrTmuxSessionCreate", func(t *testing.T, e *resumeEnv, env apitest.SpawnOption) string {
-			e.rec.WithHasSession(true)
-			return e.seedResumable(t, store.StateEnded, env).ID
+		{"session name held by an unlabelled session", "ErrTmuxSessionConflict", func(t *testing.T, e *resumeEnv, env apitest.SpawnOption) string {
+			// The row's recorded server answers the lookup with a session under
+			// the row's name and no label (no valid instance id): Gone, held.
+			r := e.seedResumable(t, store.StateEnded, env)
+			e.rec.StartServer(e.socket, tmuxfix.Server{PID: r.Identity.ServerPID, Start: r.Identity.ServerStart,
+				ProcStart: r.Identity.ServerStarttime})
+			e.pc.Set(r.Identity.ServerPID, procfix.Alive(r.Identity.ServerStarttime))
+			e.rec.SeedSessions(e.socket, tmuxfix.SeedSession{Name: r.Name})
+			return r.ID
 		}},
 	}
 	for _, tc := range cases {

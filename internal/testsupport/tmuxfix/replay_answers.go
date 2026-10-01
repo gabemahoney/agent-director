@@ -186,7 +186,7 @@ func LookupAnswers() []Entry {
 			line("$0", pid, start, own0), line("$1", "295", start, "")),
 		malformed("lookup/server-start-disagrees", "LFR H6", []string{own0},
 			line("$0", pid, start, own0), line("$1", pid, "1790549354", "")),
-		malformed("lookup/created-unparseable", "SR-3.9", []string{own0},
+		malformed("lookup/created-unparseable", "synthesised, not a tmux recording: SR-3.9 non-decimal creation field", []string{own0},
 			strings.Join([]string{"$0", "", pid, start, "a", own0}, "\t")),
 		malformed("lookup/pid-unparseable", "SR-3.4", []string{own0},
 			line("$0", "-294", start, own0)),

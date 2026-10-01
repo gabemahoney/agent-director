@@ -162,8 +162,8 @@ func TestResumeRestoreAfterEachLaunchFailure(t *testing.T) {
 				_, err := e.resume(r.ID)
 				assertLaunchSentinel(t, err, tr.want)
 				create := rstOneCreate(t, e)
-				if got := callKinds(e.rec); !reflect.DeepEqual(got, []tmux.Call{tmux.CallCreate}) {
-					t.Errorf("tmux calls = %v; want the one create", got)
+				if got := callKinds(e.rec); !reflect.DeepEqual(got, []tmux.Call{tmux.CallLookup, tmux.CallCreate}) {
+					t.Errorf("tmux calls = %v; want the lookup, then the one create", got)
 				}
 				apitest.AssertDescription(t, err.Error(), tr.desc(e, create.Target).AfterResumeRestore(
 					apitest.ResumeRestore{Outcome: apitest.RestoreApplied, PriorState: prior}),
@@ -253,7 +253,7 @@ func TestResumeRestoreNotAppliedAfterAnotherWrite(t *testing.T) {
 }
 
 // TestResumeRestoreSkippedOnMoveStoreError: a failing move is ErrInternal with
-// no create call, no trail line and the row unchanged.
+// no tmux call after the lookup, no trail line and the row unchanged.
 func TestResumeRestoreSkippedOnMoveStoreError(t *testing.T) {
 	e := newResumeEnv(t)
 	r := e.seedResumable(t, store.StateMissing)
@@ -265,8 +265,8 @@ func TestResumeRestoreSkippedOnMoveStoreError(t *testing.T) {
 		t.Fatalf("resume err = %v (%s); want ErrInternal", err, name)
 	}
 	apitest.AssertDescription(t, desc, apitest.DescResumeMoveStoreError(), r.Identity.Token, e.storeID)
-	if calls := e.rec.SocketCalls(); len(calls) != 0 {
-		t.Errorf("socket calls = %+v; want none", calls)
+	if got := callKinds(e.rec); !reflect.DeepEqual(got, []tmux.Call{tmux.CallLookup}) {
+		t.Errorf("tmux calls = %v; want the lookup only", got)
 	}
 	rstAssertRow(t, e, r.ID, r.Before)
 	if lines := rstTrail(t, r.ID); len(lines) != 0 {
@@ -281,7 +281,7 @@ func TestResumeRestoreStoreErrorLeavesPending(t *testing.T) {
 	r := e.seedResumable(t, store.StateEnded)
 	e.store.failRestore(nil)
 	e.rec.Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 1}, tmux.CallCreate)
-	start := e.clock.Now().UnixMilli()
+	start := e.moveStart().UnixMilli()
 
 	_, err := e.resume(r.ID)
 	assertLaunchSentinel(t, err, tmux.ErrTmuxSessionCreate)
@@ -335,13 +335,13 @@ func TestResumeRestoreSkippedOnUnresponsiveCreate(t *testing.T) {
 			} else {
 				e.store.afterMove(func() { runtime.Goexit() })
 			}
-			start := e.clock.Now()
+			called, start := e.clock.Now(), e.moveStart()
 
 			err, returned := rstResumeAsync(e, r.ID)
 			token, _ := e.columns(t, r.ID).LaunchToken.(string)
 			if tc.script == nil {
-				if returned || len(e.rec.SocketCalls()) != 0 {
-					t.Fatalf("resume returned %v (err %v) with calls %+v; want it stopped before any tmux call", returned, err, e.rec.SocketCalls())
+				if got := callKinds(e.rec); returned || !reflect.DeepEqual(got, []tmux.Call{tmux.CallLookup}) {
+					t.Fatalf("resume returned %v (err %v) with calls %v; want it stopped after the lookup, before any other tmux call", returned, err, got)
 				}
 				if !spawnTokenRE.MatchString(token) || token == r.Identity.Token {
 					t.Errorf("launch_token = %q; want a new 16-hex token", token)
@@ -351,8 +351,8 @@ func TestResumeRestoreSkippedOnUnresponsiveCreate(t *testing.T) {
 				token = rstOneCreate(t, e).Token
 				apitest.AssertDescription(t, err.Error(), apitest.DescLaunchTimeout(apitest.LaunchTimeout{
 					InstanceID: r.ID, Timeout: boundC, Unrecognised: tc.unrecognised}), token, e.storeID)
-				if got := e.clock.Now().Sub(start); got != boundC {
-					t.Errorf("virtual time charged = %v; want the default create timeout %v", got, boundC)
+				if got, want := e.clock.Now().Sub(called), resumeLookupQ+boundC; got != want {
+					t.Errorf("virtual time charged = %v; want the lookup's Q plus the default create timeout, %v", got, want)
 				}
 			}
 			rstAssertRow(t, e, r.ID, rstMoved(r, start.UnixMilli(), token, e.socket))
@@ -369,16 +369,16 @@ func TestResumeRestoreSkippedOnUnresponsiveCreate(t *testing.T) {
 // TestResumeRestoreAfterUnlabelledSession: a failed chained label is relabelled
 // by id with this store's id; a failed relabel kills by id, then restores.
 func TestResumeRestoreAfterUnlabelledSession(t *testing.T) {
-	create, label, kill := tmux.CallCreate, tmux.CallSetLabel, tmux.CallKillSession
+	lookup, create, label, kill := tmux.CallLookup, tmux.CallCreate, tmux.CallSetLabel, tmux.CallKillSession
 	cases := []struct {
 		name      string
 		labelFail bool
 		killFail  bool
 		wantCalls []tmux.Call
 	}{
-		{"relabel by id succeeds", false, false, []tmux.Call{create, label}},
-		{"relabel fails, kill by id succeeds", true, false, []tmux.Call{create, label, kill}},
-		{"relabel fails, kill by id fails", true, true, []tmux.Call{create, label, kill}},
+		{"relabel by id succeeds", false, false, []tmux.Call{lookup, create, label}},
+		{"relabel fails, kill by id succeeds", true, false, []tmux.Call{lookup, create, label, kill}},
+		{"relabel fails, kill by id fails", true, true, []tmux.Call{lookup, create, label, kill}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -393,13 +393,13 @@ func TestResumeRestoreAfterUnlabelledSession(t *testing.T) {
 			}
 			var created tmuxfix.SeedSession
 			e.rec.AfterCall(create, func(tmuxfix.SocketCall, error) { created = e.rec.Sessions(e.socket)[0] })
-			start := e.clock.Now().UnixMilli()
+			start := e.moveStart().UnixMilli()
 
 			_, err := e.resume(r.ID)
 			if got := callKinds(e.rec); !reflect.DeepEqual(got, tc.wantCalls) {
 				t.Fatalf("tmux calls = %v; want %v", got, tc.wantCalls)
 			}
-			calls := e.rec.SocketCalls()
+			calls := e.rec.SocketCalls()[1:] // after the lookup
 			c, l, tok := calls[0], calls[1], calls[0].Token
 			if l.Socket != e.socket || l.Target != created.ID || l.PaneID != created.Panes[0].ID ||
 				l.Token != tok || l.InstanceID != r.ID || l.StoreID != e.storeID {

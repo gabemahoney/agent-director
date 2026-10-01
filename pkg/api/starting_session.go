@@ -11,11 +11,11 @@ import (
 
 // This file holds the shared starting-session refusal (SR-4.2, SR-1.2,
 // SR-1.4): it runs tmux.StartingSession on a row the verb examined as
-// finished and builds the refusal for its outcome. resume (its pre-launch
-// check and the re-lookup after "duplicate session"), reuse (the old row's
-// lookup and its re-lookup) and kill's finished-row opt-in use it; the opt-in
-// takes steps 1 and 2 (unavailableError) and replaces step 3 with its
-// reported-in rule (SR-6.5, SR-6.7). It makes no tmux call, no store read or
+// finished and builds the refusal for its outcome. resume's pre-launch check
+// (decidePreLaunch) uses it. Its later users are resume's re-lookup after
+// "duplicate session", reuse (the old row's lookup and its re-lookup) and
+// kill's finished-row opt-in, which takes steps 1 and 2 (unavailableError)
+// and replaces step 3 with its reported-in rule (SR-6.5, SR-6.7). It makes no tmux call, no store read or
 // write, no trail write and no log line: a refusal is reported by its error
 // alone (SR-4.3). No description names a session-ending command, another
 // row's id or a label value, and the stopping texts never say "dead" or

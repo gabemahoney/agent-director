@@ -264,11 +264,11 @@ func (r *Recorder) seedLeftover(socket string, s SeedSession) SeedSession {
 	return r.addSession(r.serverFor(socket), s)
 }
 
-// NewRecorderForResume returns a Recorder whose HasSession always returns
-// false — the precondition resume requires so its session-existence check
-// does not report ErrTmuxSessionCreate before the new session is launched.
-// (HasSession defaults to false already; this constructor documents the
-// requirement explicitly so seeders are self-explanatory.)
+// NewRecorderForResume returns a Recorder with an empty listing (SR-20.3):
+// no server and no session on any socket, so resume's pre-launch lookup gets
+// the no-socket reply, reads Gone with no name holder, and the resume goes on
+// to its create. It is
+// NewRecorder under a name that says what a resume test starts from.
 func NewRecorderForResume() *Recorder {
-	return NewRecorder().WithHasSession(false)
+	return NewRecorder()
 }

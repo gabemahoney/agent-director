@@ -27,8 +27,9 @@ import (
 // the find-missing and spawn descriptions point to (descriptions_live_row.go),
 // of find-missing's manifest texts and SR-18.2's "not proof" statement
 // (descriptions_find_missing.go), of expire's manifest texts and SR-18.7's
-// cleanup guidance (descriptions_expire.go), or of the shared
-// starting-session refusal (descriptions_starting.go).
+// cleanup guidance (descriptions_expire.go), of the shared
+// starting-session refusal (descriptions_starting.go), or of resume's
+// pre-launch check (descriptions_resume_lookup.go).
 
 // DescCase is one SR-1.4 description case: Name (shown in every failure),
 // the phrases the description must contain, the case's own must-not phrases
@@ -436,13 +437,7 @@ var rowEndedStatements = []string{"row was ended", "row has ended", "rows were e
 // finding a leftover of instanceID; sessions are all those found, in the
 // order the description names them (lowest $N first).
 func DescScanLeftover(instanceID string, sessions []DescSession) DescCase {
-	named, unnamed := namedSessions(sessions)
-	req := append([]string{
-		instanceID, scanLeftoverWord, "nothing was written and no row was created",
-		"a human's decision", "list --tmux-session-name",
-	}, named...)
-	mustNot := append(append([]string(nil), rowEndedStatements...), unnamed...)
-	return DescCase{Name: "ErrTmuxSessionConflict, scan leftover", Require: req, MustNot: mustNot}.PointsToOperatorActions()
+	return earlierLifeCase("ErrTmuxSessionConflict, scan leftover", instanceID, sessions, nothingWrittenNoRow)
 }
 
 // namedSessions splits sessions (in the order a description names them) into
