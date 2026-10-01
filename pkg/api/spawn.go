@@ -77,7 +77,32 @@ type spawnTmux interface {
 // on the launch socket (with pc), then the classified error naming the
 // blocking session, which runSpawn returns, and exactly one
 // ad.launch.name_held. The HeldNameError itself never reaches the caller.
+//
+// With the reuse opt-in (ReuseFinished) and a caller-supplied id, s is also
+// the reuse store (runSpawnWithReuseStore): its ReadForReuse is the one
+// pre-check read, in place of collisions.
 func runSpawn(s *store.Store, collisions spawn.CollisionChecker, t spawnTmux, pc ProcChecker, cfg config.Config, now func() time.Time, lg *log.Logger, params spawn.SpawnParams) (SpawnResult, error) {
+	return runSpawnWithReuseStore(s, collisions, s, t, pc, cfg, now, lg, params)
+}
+
+// runSpawnWithReuseStore is runSpawn with rs, the reuse store, as its own
+// parameter: the injection point a white-box test uses to wrap the reuse
+// store's reads and writes (failures, interleavings) while s stays the store
+// a fresh spawn inserts into. runSpawn passes s for both.
+//
+// The reuse branch is taken only when the caller opted in (ReuseFinished)
+// and supplied a non-empty instance id, after the control-character check,
+// template resolution and validation; a minted id, and every call without
+// the opt-in, take exactly the plain path above (without the opt-in a
+// finished row still collides at the insert). On the branch, rs.ReadForReuse
+// is the one pre-check read: its answer feeds ApplyDefaults through
+// reusePreCheck, so the live-row collision (ErrInstanceIdCollision, a pending
+// row included, with no tmux call and nothing written) and the read failure
+// (spawn.PreCheckReadError, ErrInternal) keep their single mappings, and
+// collisions is not read. No row hands over to the ordinary fresh spawn: the
+// label scan, then Launch, whose insert collision in a race is
+// ErrInstanceIdCollision (SR-9.3). A finished row goes to spawnReuse.
+func runSpawnWithReuseStore(s *store.Store, collisions spawn.CollisionChecker, rs reuseStore, t spawnTmux, pc ProcChecker, cfg config.Config, now func() time.Time, lg *log.Logger, params spawn.SpawnParams) (SpawnResult, error) {
 	if err := validateExplicitInstanceID(params.ClaudeInstanceID); err != nil {
 		return SpawnResult{}, err
 	}
@@ -88,9 +113,18 @@ func runSpawn(s *store.Store, collisions spawn.CollisionChecker, t spawnTmux, pc
 	if err := spawn.Validate(&r); err != nil {
 		return SpawnResult{}, err
 	}
+	reuse := r.ReuseFinished && r.ClaudeInstanceID != ""
+	var reused reusePreCheck
+	if reuse {
+		reused.row, reused.found, reused.err = rs.ReadForReuse(r.ClaudeInstanceID)
+		collisions = reused
+	}
 	idCheck, err := spawn.ApplyDefaults(&r, cfg, collisions)
 	if err != nil {
 		return SpawnResult{}, err
+	}
+	if reuse && idCheck == spawn.IDFinishedRow {
+		return spawnReuse(reuseDeps{rs: rs, t: t, pc: pc, cfg: cfg, storeID: s.StoreID(), now: now, lg: lg, who: callerIdentity()}, r, reused.row)
 	}
 	if idCheck == spawn.IDNoRow {
 		if err := scanForLeftover(t, pc, s.StoreID(), r.ClaudeInstanceID); err != nil {
@@ -189,13 +223,24 @@ func hasControlChar(id string) bool {
 //     tmux's own check, before anything is written (nothing launched). Also,
 //     after "duplicate session", tmux was unavailable at the re-lookup of the
 //     requested name, or the re-lookup found a different tmux server; the new
-//     row is ended (the description says if it could not be).
+//     row is ended (the description says if it could not be). With the reuse
+//     opt-in (ReuseFinished) on a finished row: at the lookup, before
+//     anything is changed, this is not the tmux server the agent was launched
+//     on, tmux cannot be run or the socket is not accessible, or the socket's
+//     directory is unusable; or, after the row was reset, tmux was unavailable
+//     at session creation or at the re-lookup after "duplicate session" (or
+//     the re-lookup found a different tmux server), then the row is restored
+//     (the description says what the restore did).
 //   - [ErrTmuxSessionCreate]: session creation failed other than by timing
 //     out, by tmux being unavailable or by "duplicate session", or a created
 //     session could not be labelled; the row stays pending. Also, after
 //     "duplicate session", the session holding the requested name was gone
 //     by the re-lookup; the new row is ended (the description says if it
-//     could not be).
+//     could not be). With the reuse opt-in: after the row was reset, session
+//     creation failed, a created session could not be labelled, or after
+//     "duplicate session" no session held the requested name when it was
+//     looked up again; then the row is restored (the description says what
+//     the restore did). A name found held is never this error.
 //   - ErrTmuxUnresponsive: the session-creating call timed out or gave a
 //     reply that does not parse with a non-zero exit: the session may have
 //     been created and the row stays pending; do not retry until get shows
@@ -203,7 +248,16 @@ func hasControlChar(id string) bool {
 //     that has no row, the label scan's lookup could not be read; nothing
 //     was written. Also, after "duplicate session", the re-lookup of the
 //     requested name could not be read; the new row is ended (the
-//     description says if it could not be).
+//     description says if it could not be). With the reuse opt-in: at the
+//     lookup, before anything is changed, the row's own session or agent
+//     appears to still be stopping (the row ended less than the stopping
+//     window ago) or still starting (younger than the starting-session
+//     bound), tmux's answer could not be read, or more than one session's
+//     name matches the requested name; retry later. After "duplicate
+//     session", the same cases at the re-lookup, then the row is restored.
+//     Or the session-creating call timed out after the row was reset: the
+//     session may have been created, the row was reset and stays pending; do
+//     not retry until get shows the row ended or missing.
 //   - ErrTmuxSessionConflict: with an explicit ClaudeInstanceID that has no
 //     row, the label scan found a session of an earlier life of that id,
 //     labelled by this store, or conflicting labels; nothing was written, and
@@ -213,7 +267,15 @@ func hasControlChar(id string) bool {
 //     instance id), by a session of another agent-director store, or by one
 //     with no valid instance id, or the re-lookup found conflicting labels;
 //     the new row is ended (the description says if it could not be). The
-//     error names the blocking session.
+//     error names the blocking session. With the reuse opt-in, at the lookup
+//     before anything is changed: a session left over from an earlier life
+//     of this id, this row's own old session past the stopping window and
+//     the starting-session bound ("this row's own id"), conflicting labels,
+//     or the requested name held by another row's session, another
+//     agent-director store's session or one with no valid instance id; after
+//     "duplicate session", the same cases for the session holding the
+//     requested name, then the row is restored. A human must look (README
+//     "Operator actions").
 //   - ErrTemplateNotFound: the named template file does not exist.
 //   - ErrTemplateMalformed: the template TOML could not be parsed.
 //   - ErrTemplateNameUnsafe: the template name contains path-unsafe characters.

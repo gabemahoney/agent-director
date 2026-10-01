@@ -6,10 +6,12 @@ import (
 )
 
 // descriptions_resume_held.go holds the shared description helper's overlay
-// for resume's errors after its create answered "duplicate session" (Epic 16;
-// SR-8.5, SR-1.4, SR-3.10, SR-4.2), selected by HeldName.Restore: the
-// restore's row sentence (ResumeRestore) in place of "nothing was done" or
-// "nothing was written". It applies to the existing cases, never a copy:
+// for resume's and reuse's errors after their create answered "duplicate
+// session" (Epics 16 and 17; SR-8.5, SR-10.4, SR-1.4, SR-3.10, SR-4.2),
+// selected by HeldName.Restore, whose Launch picks the verb: the restore's
+// row sentence (ResumeRestore) in place of "nothing was done" or "nothing
+// was written". For reuse, p.Name is the requested name. It applies to the
+// existing cases, never a copy:
 //
 //   - a holder with a foreign, another store's or no valid label:
 //     DescHeldDifferentID, DescHeldOtherStore and DescHeldNoValidID, and the
@@ -25,8 +27,9 @@ import (
 //     DescCallTimeout, DescUnrecognisedReply, DescSocketPermission and
 //     DescTmuxNotRun, each .AfterHeldName(p).
 
-// afterResumeHeld returns c as an error resume returns after "duplicate
-// session" (p.Restore set): the quoted recorded name, p.SessionID when set,
+// afterResumeHeld returns c as an error resume or reuse (p.Restore.Launch)
+// returns after "duplicate session" (p.Restore set), its case named after the
+// launch: the quoted name the create asked for, p.SessionID when set,
 // the label sentence label requires and the restore's row sentence; never
 // "nothing was done" or "nothing was written", another restore result's
 // sentence, "the row stays pending", that the row stays pending or will heal
@@ -42,7 +45,7 @@ func (c DescCase) afterResumeHeld(p HeldName, label heldLabel) DescCase {
 		panic("apitest: HeldName.Restore excludes Row and BeforeLaunch")
 	}
 	restored := p.Restore.restorePhrase()
-	c.Name += ", resume after duplicate session"
+	c.Name += ", " + p.Restore.Launch.name() + " after duplicate session"
 	req := append(withoutPhrases(c.Require, nothingWasDone, nothingWritten), strconv.Quote(p.Name), restored)
 	if p.SessionID != "" {
 		req = append(req, p.SessionID)

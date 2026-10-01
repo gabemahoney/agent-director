@@ -10,7 +10,7 @@ import (
 
 // The ad.launch.name_held source values (SR-14). Plain spawn and reuse write
 // nameHeldSourceSpawn; resume writes nameHeldSourceResume after "duplicate
-// session" (resumeHeldName, SR-8.5); find-missing's sweep writes
+// session" (finishedLaunch.heldName, SR-8.5); find-missing's sweep writes
 // nameHeldSourceFindMissing after a mark attempt whose tick reason is
 // tmux_name_held (SR-11.3). nameHeldSourceFindMissing is also the source of
 // every other record the sweep writes (ad.find_missing.tick,
@@ -24,11 +24,12 @@ const (
 )
 
 // The ad.launch.name_held launch values (SR-14): which launch's create
-// reported "duplicate session". Reuse (Epic 17) adds its own here; the sweep
-// writes none (null).
+// reported "duplicate session" (reuse's: spawn with the reuse opt-in onto a
+// finished row, SR-10.6); the sweep writes none (null).
 const (
 	nameHeldLaunchSpawn  = "spawn"
 	nameHeldLaunchResume = "resume"
+	nameHeldLaunchReuse  = "reuse"
 )
 
 // The ad.launch.name_held row_result values (SR-14). Plain spawn's
@@ -41,9 +42,10 @@ const (
 // SR-11.6, SR-5.8). resume's restore after "duplicate session" gives
 // nameHeldRowRestored when it applied, nameHeldRowLeftChanged when the row
 // changed or was removed, and nameHeldRowStillPending on a store error
-// (resumeRestoreResultOf; SR-8.5). nameHeldRowMarkedMissing is also
-// find-missing's ad.provenance.disagree action for a marked row
-// (findMissingActionMarked): pkg/api declares the value only here.
+// (restoreResultOf; SR-8.5), and reuse's restore likewise (SR-10.4).
+// nameHeldRowMarkedMissing is also find-missing's ad.provenance.disagree
+// action for a marked row (findMissingActionMarked): pkg/api declares the
+// value only here.
 const (
 	nameHeldRowEnded         = "ended"
 	nameHeldRowRestored      = "restored"
@@ -108,9 +110,10 @@ type nameHeld struct {
 // kind and no error (launch and outcome null), row_result
 // nameHeldRowMarkedMissing, nameHeldRowLeftChanged or nameHeldRowStillPending,
 // and the Client's store id; resume's "duplicate session" path
-// (resumeHeldName) calls it once after its restore attempt with source
-// nameHeldSourceResume, launch nameHeldLaunchResume and the restore's row
-// result; reuse (Epic 17) will add its own through it.
+// (finishedLaunch.heldName) calls it once after its restore attempt with
+// source nameHeldSourceResume, launch nameHeldLaunchResume and the restore's
+// row result; reuse's the same way, with source nameHeldSourceSpawn and
+// launch nameHeldLaunchReuse.
 //
 // carries_this_id and current_launch come from the holder's label class
 // only, never the environment (SR-3.12): an old or current label of this

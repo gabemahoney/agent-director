@@ -18,10 +18,9 @@ import (
 	"github.com/gabemahoney/agent-director/internal/trail"
 )
 
-// resumeEnvInstanceID is the env-var key resume reads to re-derive
-// parent_id (SRD §7.5). Mirrored verbatim from spawn's constant of
-// the same name; both refer to the same operational concept.
-const resumeEnvInstanceID = "AGENT_DIRECTOR_INSTANCE_ID"
+// resumeRestoredEvent is the trail event of each restore attempt after a
+// failed resume launch (SR-8.5, SR-14; finishedLaunch.restore).
+const resumeRestoredEvent = "ad.resume.restored"
 
 // ResumeStore is the narrow store surface Resume needs (Appendix F.4). The
 // parent id is written only by the move to pending: resume makes no other
@@ -151,15 +150,38 @@ type resumeDeps struct {
 	who     caller
 }
 
-// resumeExamined is what resume's launch keeps from before its move, so
-// nothing after the move re-reads it: the row exactly as read (its ended_at,
-// pid and session-id presence, launch token and server identity, and the
-// prior values the restore writes back), and the ad.provenance.disagree
-// reasons the pre-launch check already wrote, so a later lookup in the same
-// call (the re-lookup after "duplicate session") writes no reason twice.
-type resumeExamined struct {
-	row             Spawn
-	disagreeWritten []string
+// launchOnto returns resume's launch after its move applied (finishedLaunch,
+// shared with reuse): row is the row exactly as read, never re-read (its
+// ended_at, pid and session-id presence, launch token and server identity,
+// and the prior values the restore writes back); disagreeWritten the
+// ad.provenance.disagree reasons the pre-launch check already wrote, so the
+// re-lookup after "duplicate session" writes no reason twice; movedVersion
+// the version the move produced. The identity write is the store's when it
+// provides one (resumeIdentityWriter); the restore is
+// RestoreAfterFailedResume with movedVersion and the row's prior values
+// (resumePriorOf).
+func (d resumeDeps) launchOnto(row Spawn, disagreeWritten []string, movedVersion int64) finishedLaunch {
+	var identity spawn.IdentityWriter
+	if w, ok := d.s.(resumeIdentityWriter); ok {
+		identity = w
+	}
+	return finishedLaunch{
+		v:        resumeLaunchVerb,
+		t:        d.t,
+		pc:       d.pc,
+		cfg:      d.cfg,
+		storeID:  d.storeID,
+		now:      d.now,
+		lg:       d.lg,
+		who:      d.who,
+		identity: identity,
+		restoreWrite: func() (CondResult, error) {
+			return d.s.RestoreAfterFailedResume(row.ClaudeInstanceID, movedVersion, resumePriorOf(row))
+		},
+		row:             row,
+		disagreeWritten: disagreeWritten,
+		version:         movedVersion,
+	}
 }
 
 // resumeImpl is the unexported verb handler called by (c *Client).Resume.
@@ -459,25 +481,25 @@ func formatJsonlAttempts(attempts []jsonlAttempt) string {
 //     restore keep, so a retry after a restored failure follows it too). Best
 //     effort: its outcome never changes resume's control flow or error, and a
 //     failure prints the "pre-trust failed" line and the launch proceeds.
-//     The outcome is carried to resumeLaunchOutcome, which reports it as
-//     ResumeResult.PreTrust on success.
+//     The outcome is reported as ResumeResult.PreTrust on success.
 //  6. The move to pending (MoveToPending): one conditional write with the
 //     snapshot of the row as read, the launch start from one read of now in
 //     milliseconds, the token, the socket and the parent id re-derived from
-//     the caller's AGENT_DIRECTOR_INSTANCE_ID ("" = NULL); the only parent-id
-//     write. Row changed → ErrSpawnNotResumable; row removed →
+//     the caller's AGENT_DIRECTOR_INSTANCE_ID (spawn.ParentIDFromEnv, "" =
+//     NULL); the only parent-id write. Row changed → ErrSpawnNotResumable; row removed →
 //     ErrSpawnNotFound; store error → ErrInternal. Each writes nothing and
 //     launches nothing.
 //  7. The create (spawn.Relaunch), the first step after the move, with no
 //     store, file or network I/O between them: the recorded name on the
 //     launch's socket, labelled "ad1 <token> <session id> <instance id>
 //     <store id>". Once it returns, ad.resume.moved_to_pending is emitted.
-//  8. Its outcome (SR-8.5), mapped in resumeLaunchOutcome: a labelled
+//  8. Its outcome (SR-8.5), mapped by finishedLaunch.outcome, which reuse
+//     shares (resumeDeps.launchOnto, verb values resumeLaunchVerb): a labelled
 //     session → the identity write with the move's version and token (when
 //     the store provides it), success; a lost reply → success with no
 //     identity; a timeout or a non-zero-exit unparseable reply →
 //     ErrTmuxUnresponsive, nothing written, the row stays pending.
-//     "duplicate session" → resumeHeldName: exactly one re-lookup of the
+//     "duplicate session" → finishedLaunch.heldName: exactly one re-lookup of the
 //     recorded name on the launch socket for the row as examined (its id,
 //     earlier token and recorded server identity), the restore, the holder's
 //     classified error carrying the restore's sentence (the holder class; the
@@ -504,11 +526,7 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 	lookup := tmux.Lookup(d.t, d.pc, rowLaunch(id, row.Identity, d.storeID, socket), row.TmuxSessionName)
 	pre := decidePreLaunch(lookup, preLaunchRowOf(row, row.TmuxSessionName, socket), d.pc,
 		startingSessionLimitsOf(d.cfg.Tmux), d.now)
-	action := resumeActionProceeded
-	if pre.Err != nil {
-		action = resumeActionRefused
-	}
-	emitResumeDisagree(d, row, socket, action, pre)
+	emitFinishedRowDisagree(resumeLaunchVerb, row, socket, d.who, preLaunchActionOf(pre.Err), pre)
 	if pre.Err != nil {
 		if lookup.Verdict == tmux.Leftover {
 			if lost := resumeLostRace(d.s, row); lost != nil {
@@ -536,7 +554,7 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 	// A failure never fails the launch; the outcome goes into the result.
 	preTrust := spawn.PreTrust(row.CWD, row.ExtraEnv, row.NoPreTrust)
 
-	parent := os.Getenv(resumeEnvInstanceID)
+	parent := spawn.ParentIDFromEnv()
 	res, movedVersion, err := d.s.MoveToPending(id, row.Snapshot, d.now().UnixMilli(), token, socket, parent)
 	if err := resumeMoveError(id, res, err); err != nil {
 		return ResumeResult{}, err
@@ -549,32 +567,10 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 		"claude_session_id":  row.ClaudeSessionID,
 		"source":             nameHeldSourceResume,
 	})
-	return resumeLaunchOutcome(d, resumeExamined{row: row, disagreeWritten: pre.Reasons}, out, req, movedVersion, preTrust)
-}
-
-// emitResumeDisagree writes one of resume's lookups' ad.provenance.disagree
-// records through the shared emitter (SR-14, SR-3.16), one per distinct
-// reason in pre.Reasons and none in the normal case: verb resume, source
-// ad_resume, the recorded name, the lookup's socket, the session concerned,
-// the server value, the verdict token, action and the caller identity. The
-// pre-launch check's records (action refused, or proceeded to the launch) are
-// written before any write, so no trail write falls between the move and the
-// create (SR-8.3); the re-lookup's after "duplicate session" follow the
-// restore, with its row result as action (resumeHeldName). Fail-open.
-func emitResumeDisagree(d resumeDeps, row Spawn, socket, action string, pre preLaunchDecision) {
-	emitProvenanceDisagree(provenanceDisagree{
-		Verb:               "resume",
-		Source:             nameHeldSourceResume,
-		InstanceID:         row.ClaudeInstanceID,
-		Socket:             socket,
-		SessionName:        row.TmuxSessionName,
-		SessionID:          pre.SessionID,
-		CurrentSessionName: pre.CurrentName,
-		Server:             pre.Server,
-		Verdict:            pre.Verdict,
-		Action:             action,
-		Caller:             d.who,
-	}, pre.Reasons...)
+	if err := d.launchOnto(row, pre.Reasons, movedVersion).outcome(out, req); err != nil {
+		return ResumeResult{}, err
+	}
+	return ResumeResult{ClaudeInstanceID: id, PreTrust: string(preTrust)}, nil
 }
 
 // resumePriorOf returns what the move to pending clears, from the row as
@@ -613,145 +609,22 @@ func resumeMoveError(id string, res CondResult, err error) error {
 // Leftover (SR-8.6, AC-RES-09): a competing resume whose move followed this
 // call's read leaves a session whose label carries a token this call did not
 // examine, which the lookup sees as left over. One GetSpawn and no write,
-// mapped as the move would map its outcome (resumeMoveError): the row removed
-// (ErrSpawnNotFound) gives the move's ErrSpawnNotFound; a snapshot that is no
-// longer the one row holds gives the move's lost-race ErrSpawnNotResumable;
-// an unchanged snapshot, or a re-read that fails otherwise, gives nil, and the
-// Leftover refusal stands. Nothing was written either way.
+// decided by leftoverLostRace (which reuse shares) and mapped as the move
+// would map its outcome (resumeMoveError): the row removed (ErrSpawnNotFound)
+// gives the move's ErrSpawnNotFound; a snapshot that is no longer the one row
+// holds gives the move's lost-race ErrSpawnNotResumable; an unchanged
+// snapshot, or a re-read that fails otherwise, gives nil, and the Leftover
+// refusal stands. Nothing was written either way.
 func resumeLostRace(s ResumeStore, row Spawn) error {
 	again, err := s.GetSpawn(row.ClaudeInstanceID)
-	switch {
-	case errors.Is(err, ErrSpawnNotFound):
-		return resumeMoveError(row.ClaudeInstanceID, CondAbsent, nil)
-	case err != nil || again.Snapshot == row.Snapshot:
-		return nil
+	found := true
+	if errors.Is(err, ErrSpawnNotFound) {
+		found, err = false, nil
 	}
-	return resumeMoveError(row.ClaudeInstanceID, CondChanged, nil)
-}
-
-// resumeLaunchOutcome maps resume's create-and-label outcome to its result
-// (SR-8.5), the one place this mapping lives (SR-1.8), using internal/spawn's
-// shared description builders. ex is what the call examined before its move.
-// A labelled session gets the identity write with the move's version and
-// token when the store provides it; a lost reply is a success with no
-// identity; both successes report preTrust, the outcome of the pre-trust
-// resumeAfterJsonl ran, as PreTrust. A timeout or a non-zero-exit unparseable
-// reply is ErrTmuxUnresponsive with the launch-timeout description and no
-// write, the row staying pending. "duplicate session" goes to resumeHeldName:
-// one re-lookup classifying the name's holder against ex's row, the restore,
-// the classified error and one ad.launch.name_held. Every other outcome
-// restores the row (resumeRestore, with the prior values of ex's row) and
-// returns its launch error, whose row sentence is the restore's result:
-// ErrTmuxNotAvailable for tmux unavailable, and ErrTmuxSessionCreate for a
-// session that could not be labelled (after its kill by id, or saying it may
-// still run) and for any other launch failure. Every error matches exactly
-// one catalogued sentinel (SR-1.5).
-func resumeLaunchOutcome(d resumeDeps, ex resumeExamined, out spawn.CreateOutcome, req spawn.CreateRequest, movedVersion int64, preTrust spawn.PreTrustOutcome) (ResumeResult, error) {
-	switch out.Kind {
-	case spawn.CreateLabelled:
-		if w, ok := d.s.(resumeIdentityWriter); ok {
-			spawn.RecordLaunchIdentity(w, d.pc, d.lg, req.InstanceID, movedVersion, req.Token, out.Reply)
-		}
-		return ResumeResult{ClaudeInstanceID: req.InstanceID, PreTrust: string(preTrust)}, nil
-	case spawn.CreateLostReply:
-		return ResumeResult{ClaudeInstanceID: req.InstanceID, PreTrust: string(preTrust)}, nil
-	case spawn.CreateUnresponsive:
-		return ResumeResult{}, spawn.LaunchTimeoutError(out.Cause, "resume", req.InstanceID, spawn.RowStaysPending)
-	case spawn.CreateDuplicate:
-		return ResumeResult{}, resumeHeldName(d, ex, req, movedVersion)
+	if res := leftoverLostRace(row.Snapshot, again.Snapshot, found, err); res != 0 {
+		return resumeMoveError(row.ClaudeInstanceID, res, nil)
 	}
-
-	_, err := resumeRestore(d, req.InstanceID, movedVersion, resumePriorOf(ex.row), func(restored string) error {
-		switch out.Kind {
-		case spawn.CreateUnavailable:
-			return spawn.TmuxUnavailableError(out.Cause, req.Socket, restored)
-		case spawn.CreateUnlabelledEnded, spawn.CreateUnlabelledRunning:
-			return spawn.UnlabelledSessionError(out, req.Name, restored)
-		}
-		// CreateFailed.
-		return spawn.CreateFailedError(out.Cause, req.Name, restored)
-	})
-	return ResumeResult{}, err
-}
-
-// The restore's row sentences (SR-1.4, SR-8.5): every launch error resume
-// returns after its restore attempt carries exactly one of them, and
-// resumeRestoreResultOf is the one place that picks it. pkg/api declares the
-// wording only here.
-const (
-	// restoreSentenceApplied: the restore applied; the prior state follows.
-	restoreSentenceApplied = "the row was restored to its prior state, "
-	// restoreSentenceChanged: the restore did not apply because the row
-	// changed after the move; nothing was written.
-	restoreSentenceChanged = "the row changed after resume moved it to pending and was left as it is"
-	// restoreSentenceAbsent: the restore did not apply because the row was
-	// removed after the move.
-	restoreSentenceAbsent = "the row was removed after resume moved it to pending, so nothing was restored"
-	// restoreSentenceStaysPending: the restore failed with a store error.
-	restoreSentenceStaysPending = "the row could not be restored and stays pending"
-)
-
-// resumeRestoreResult is one restore attempt's result as resume reports it:
-// Sentence, the row sentence of the launch error; RowResult, the
-// ad.launch.name_held row_result (SR-14: nameHeldRowRestored,
-// nameHeldRowLeftChanged or nameHeldRowStillPending); and StoreErr, the
-// restore's store error (nil unless the write failed).
-type resumeRestoreResult struct {
-	Sentence  string
-	RowResult string
-	StoreErr  error
-}
-
-// resumeRestoreResultOf maps the restore's outcome (res and its store error
-// rerr, as RestoreAfterFailedResume returned them) to its resumeRestoreResult,
-// the one mapping of the restore's result (SR-1.4, SR-8.5, SR-14): applied
-// gives restoreSentenceApplied with priorState, and restored; changed and
-// absent give their sentences, and left_changed; a store error gives
-// restoreSentenceStaysPending, still_pending and the error. It makes no call,
-// writes nothing and logs nothing.
-func resumeRestoreResultOf(res CondResult, rerr error, priorState string) resumeRestoreResult {
-	switch {
-	case rerr != nil:
-		return resumeRestoreResult{Sentence: restoreSentenceStaysPending, RowResult: nameHeldRowStillPending, StoreErr: rerr}
-	case res == CondApplied:
-		return resumeRestoreResult{Sentence: restoreSentenceApplied + priorState, RowResult: nameHeldRowRestored}
-	case res == CondAbsent:
-		return resumeRestoreResult{Sentence: restoreSentenceAbsent, RowResult: nameHeldRowLeftChanged}
-	}
-	return resumeRestoreResult{Sentence: restoreSentenceChanged, RowResult: nameHeldRowLeftChanged}
-}
-
-// resumeRestore makes the one restore attempt after a failed launch (SR-8.5):
-// RestoreAfterFailedResume with the move's version and the prior values of
-// the row as read. It returns the launch error launchErr builds from the
-// restore's row sentence (resumeRestoreResultOf): restored to the prior
-// state; left as it is because the row changed or was removed (nothing
-// written); or, on a store error, that the row could not be restored and
-// stays pending, with one WARN line on the client logger naming the instance
-// id (no token, label or environment value). It then emits
-// ad.resume.restored, fail-open, and returns the restore's result too, for a
-// trail record that follows it (ad.launch.name_held after "duplicate
-// session").
-func resumeRestore(d resumeDeps, id string, movedVersion int64, prior ResumePrior, launchErr func(restored string) error) (resumeRestoreResult, error) {
-	res, rerr := d.s.RestoreAfterFailedResume(id, movedVersion, prior)
-	if rerr != nil {
-		d.lg.Printf("WARN: resume: restoring instance %s to its prior state after a failed launch failed: %v", id, rerr)
-	}
-	restored := resumeRestoreResultOf(res, rerr, prior.State)
-	err := launchErr(restored.Sentence)
-
-	var restoreError any
-	if rerr != nil {
-		restoreError = rerr.Error()
-	}
-	_ = trail.Emit(context.Background(), "ad.resume.restored", map[string]any{
-		"claude_instance_id": id,
-		"applied":            rerr == nil && res == CondApplied,
-		"launch_error":       errorName(err),
-		"restore_error":      restoreError,
-		"source":             nameHeldSourceResume,
-	})
-	return restored, err
+	return nil
 }
 
 // launchInProgressError is resume's refusal of a pending row (SR-8.4,

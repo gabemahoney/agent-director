@@ -53,8 +53,10 @@ const (
 // liveStates is the set of live state values (anything except the terminal
 // ones): the rows find-missing reads and judges (ListLiveSpawnIdentities).
 // The collision pre-check on a caller-supplied claude_instance_id tests the
-// row's state against this set (IsLiveState) so an `ended` Spawn's id can be
-// reused (the resume verb handles that case). A terminal state is not proof
+// row's state against this set (IsLiveState): a live row collides, while a
+// finished row's id is reused only by a spawn with the reuse opt-in (SR-10.2)
+// and otherwise collides at the insert (resume relaunches a finished row
+// under its own life instead). A terminal state is not proof
 // that the agent is dead: `missing` is the sweep's judgement on the evidence
 // available to it, not proof that the agent has exited, and neither `ended`
 // nor `missing` means that the row is safe to delete.

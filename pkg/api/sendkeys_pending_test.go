@@ -1,10 +1,11 @@
 package api_test
 
 // sendkeys_pending_test.go: send-keys --allow-pending on a pending launch of
-// a fresh spawn and of a resumed row (SR-7.1, SR-7.2, SR-3.4, SR-3.6, SR-22.7,
-// SR-22.8; AC-PANE-09, AC-SPN-07, AC-LKP-20): delivered only into the current
-// launch's own pane by id, the refusals with nothing sent, the no-launch-identity
-// refusals with no tmux call, and a row change between the read and the send.
+// a fresh spawn, a resumed row and a reuse (SR-7.1, SR-7.2, SR-3.4, SR-3.6,
+// SR-22.7, SR-22.8, SR-10; AC-PANE-08, AC-PANE-09, AC-SPN-07, AC-LKP-20):
+// delivered only into the current launch's own pane by id, the refusals with
+// nothing sent, the no-launch-identity refusals with no tmux call, a row change
+// between the read and the send, and a reuse's read-pane and allow_pending halves.
 
 import (
 	"testing"
@@ -34,14 +35,6 @@ var skpClockSteps = []struct {
 	d    time.Duration
 }{{"clock as seeded", 0}, {"clock stepped forward", 48 * time.Hour}, {"clock stepped back", -48 * time.Hour}}
 
-// skpSeedNoSession seeds k's pending row with shape v and no session.
-func skpSeedNoSession(t *testing.T, e *killEnv, k pendingKind, v pendingShape) killRow {
-	t.Helper()
-	spec := e.pendingSpec(k, v)
-	spec.NoSession = true
-	return e.seedRow(t, spec)
-}
-
 // skpOtherStore seeds, under a new name, another store's session labelled with
 // r's id and token whose one pane carries r's token.
 func skpOtherStore(t *testing.T, e *killEnv, r killRow) tmuxfix.SeedSession {
@@ -62,9 +55,38 @@ func skpAssertAdoptedOnce(t *testing.T, before, after adoptionColumns, pane any)
 	}
 }
 
-// TestSendKeysPendingDelivered: a pending launch's own pane gets the text and
-// Enter by id, whatever the clock did; a lost reply's adoption is written once.
-func TestSendKeysPendingDelivered(t *testing.T) {
+// skpPane is the pane a delivery to r goes to: its recorded pane, or for a
+// lost reply the one pane carrying its token.
+func skpPane(t *testing.T, r killRow, lostReply bool) string {
+	t.Helper()
+	if lostReply {
+		return labelledPane(t, r.Session, r.Token)
+	}
+	return r.Spawn.Identity.PaneID
+}
+
+// skpAssertReadPane fails unless read-pane on r returns pane's text and the row stays pending (AC-PANE-08).
+func skpAssertReadPane(t *testing.T, e *killEnv, r killRow, pane string) {
+	t.Helper()
+	e.setPaneTexts(r.Socket)
+	res, err := e.readPaneClient(t, api.ReadPaneParams{ClaudeInstanceID: r.ID})
+	if err != nil || res.Pane != paneText(r.Socket, pane) {
+		t.Errorf("ReadPane = %q, %v; want %q", res.Pane, err, paneText(r.Socket, pane))
+	}
+	if got := e.columns(t, r.ID).State; got != store.StatePending {
+		t.Errorf("state after read-pane = %v; want pending", got)
+	}
+}
+
+// TestSendKeysPendingDelivered: skpDelivered for a fresh spawn's and a resumed row's launch.
+func TestSendKeysPendingDelivered(t *testing.T) { skpDelivered(t, pendingKinds()) }
+
+// TestSendKeysPendingReuseDelivered (AC-PANE-08): skpDelivered for a reuse's launch, read-pane included.
+func TestSendKeysPendingReuseDelivered(t *testing.T) { skpDelivered(t, []pendingKind{pendingReused}) }
+
+// skpDelivered: a pending launch of each of kinds gets the text and Enter in its own pane by id, whatever
+// the clock did; a lost reply's adoption is written once. For a reuse, read-pane returns that pane too.
+func skpDelivered(t *testing.T, kinds []pendingKind) {
 	cases := []struct {
 		name string
 		seed func(*testing.T, *killEnv, pendingKind) killRow
@@ -75,7 +97,7 @@ func TestSendKeysPendingDelivered(t *testing.T) {
 			return e.seedPending(t, k, pendingOurs)
 		}},
 		{name: "Ours renamed", seed: func(t *testing.T, e *killEnv, k pendingKind) killRow {
-			r := skpSeedNoSession(t, e, k, pendingOurs)
+			r := e.seedPendingNoSession(t, k, pendingOurs)
 			e.seedSession(t, &r, tmuxfix.WithRowSessionName("renamed-"+uuid.NewString()[:8]))
 			return r
 		}},
@@ -99,16 +121,21 @@ func TestSendKeysPendingDelivered(t *testing.T) {
 			return r
 		}},
 	}
-	for _, k := range pendingKinds() {
+	for _, k := range kinds {
 		for _, tc := range cases {
 			for _, step := range skpClockSteps {
+				if k == pendingReused {
+					t.Run(k.String()+"/"+tc.name+"/"+step.name+"/read-pane", func(t *testing.T) {
+						e := newKillEnv(t)
+						r := tc.seed(t, e, k)
+						e.clock.Advance(step.d)
+						skpAssertReadPane(t, e, r, skpPane(t, r, tc.lostReply))
+					})
+				}
 				t.Run(k.String()+"/"+tc.name+"/"+step.name, func(t *testing.T) {
 					e := newKillEnv(t)
 					r := tc.seed(t, e, k)
-					pane := r.Spawn.Identity.PaneID
-					if tc.lostReply {
-						pane = labelledPane(t, r.Session, r.Token)
-					}
+					pane := skpPane(t, r, tc.lostReply)
 					cols, before := e.columns(t, r.ID), e.adoption(t, r.ID)
 					e.clock.Advance(step.d)
 
@@ -151,9 +178,15 @@ type skpRefusal struct {
 	calls []tmux.Call
 }
 
-// TestSendKeysPendingRefused: leftover, different server, conflicting labels, an
-// unadoptable lost reply and another store's sessions send nothing, whatever the clock did.
-func TestSendKeysPendingRefused(t *testing.T) {
+// TestSendKeysPendingRefused: skpRefused for a fresh spawn's and a resumed row's launch.
+func TestSendKeysPendingRefused(t *testing.T) { skpRefused(t, pendingKinds()) }
+
+// TestSendKeysPendingReuseRefused (AC-PANE-08): skpRefused for a reuse's launch.
+func TestSendKeysPendingReuseRefused(t *testing.T) { skpRefused(t, []pendingKind{pendingReused}) }
+
+// skpRefused: for each of kinds, leftover, different server, conflicting labels, an unadoptable
+// lost reply and another store's sessions send nothing, whatever the clock did.
+func skpRefused(t *testing.T, kinds []pendingKind) {
 	lookup := []tmux.Call{tmux.CallLookup}
 	listed := []tmux.Call{tmux.CallLookup, tmux.CallListPanes}
 	leftover := func(_ *killEnv, r killRow) skpRefusal {
@@ -202,26 +235,26 @@ func TestSendKeysPendingRefused(t *testing.T) {
 		}},
 		{name: "lost reply, no pane carries the token", want: notAdopted, adoptsServer: true,
 			seed: func(t *testing.T, e *killEnv, k pendingKind) (killRow, []string) {
-				r := skpSeedNoSession(t, e, k, pendingLostReply)
+				r := e.seedPendingNoSession(t, k, pendingLostReply)
 				e.seedOurs(t, &r, tmuxfix.SeedPane{PID: e.newPID()})
 				return r, nil
 			}},
 		{name: "lost reply, two panes carry the token", want: notAdopted, adoptsServer: true,
 			seed: func(t *testing.T, e *killEnv, k pendingKind) (killRow, []string) {
-				r := skpSeedNoSession(t, e, k, pendingLostReply)
+				r := e.seedPendingNoSession(t, k, pendingLostReply)
 				e.seedOurs(t, &r, tmuxfix.SeedPane{PID: e.newPID(), AdPane: r.Token},
 					tmuxfix.SeedPane{Index: 1, PID: e.newPID(), AdPane: r.Token})
 				return r, nil
 			}},
 		{name: "only another store's session, with this row's token", want: gone,
 			seed: func(t *testing.T, e *killEnv, k pendingKind) (killRow, []string) {
-				r := skpSeedNoSession(t, e, k, pendingOurs)
+				r := e.seedPendingNoSession(t, k, pendingOurs)
 				e.seedSession(t, &r, tmuxfix.WithRowSessionLabel(r.otherStore(r.Token), true))
 				return r, nil
 			}},
 		{name: "only another store's session, with another token", want: gone,
 			seed: func(t *testing.T, e *killEnv, k pendingKind) (killRow, []string) {
-				r := skpSeedNoSession(t, e, k, pendingOurs)
+				r := e.seedPendingNoSession(t, k, pendingOurs)
 				e.seedSession(t, &r, tmuxfix.WithRowSessionLabel(r.otherStore(newToken()), true))
 				return r, nil
 			}},
@@ -231,7 +264,7 @@ func TestSendKeysPendingRefused(t *testing.T) {
 				return r, []string{skpOtherStore(t, e, r).Name}
 			}},
 	}
-	for _, k := range pendingKinds() {
+	for _, k := range kinds {
 		for _, tc := range cases {
 			for _, step := range skpClockSteps {
 				t.Run(k.String()+"/"+tc.name+"/"+step.name, func(t *testing.T) {
@@ -263,7 +296,7 @@ func TestSendKeysPendingRefused(t *testing.T) {
 }
 
 // TestSendKeysPendingNoLaunchIdentity: no usable launch start or token, under any
-// recorded name, is refused before the lookup with no tmux call.
+// recorded name, is refused before the lookup with no tmux call (a reuse records both).
 func TestSendKeysPendingNoLaunchIdentity(t *testing.T) {
 	identities := []struct {
 		name string
@@ -309,10 +342,18 @@ func TestSendKeysPendingNoLaunchIdentity(t *testing.T) {
 	}
 }
 
-// TestSendKeysPendingRowChangesBeforeSend: a gated SessionStart, or a versioned write on a lost
-// reply (adoption then not applied), after the lookup or listing still sends to the same pane.
-func TestSendKeysPendingRowChangesBeforeSend(t *testing.T) {
-	for _, k := range pendingKinds() {
+// TestSendKeysPendingRowChangesBeforeSend: skpRowChanges for a fresh spawn's and a resumed row's launch.
+func TestSendKeysPendingRowChangesBeforeSend(t *testing.T) { skpRowChanges(t, pendingKinds()) }
+
+// TestSendKeysPendingReuseRowChangesBeforeSend: skpRowChanges for a reuse's launch.
+func TestSendKeysPendingReuseRowChangesBeforeSend(t *testing.T) {
+	skpRowChanges(t, []pendingKind{pendingReused})
+}
+
+// skpRowChanges: for each of kinds, a gated SessionStart, or a versioned write on a lost reply
+// (adoption then not applied), after the lookup or listing still sends to the same pane.
+func skpRowChanges(t *testing.T, kinds []pendingKind) {
+	for _, k := range kinds {
 		for _, call := range []tmux.Call{tmux.CallLookup, tmux.CallListPanes} {
 			t.Run(k.String()+"/SessionStart after "+string(call), func(t *testing.T) {
 				e := newKillEnv(t)
@@ -348,5 +389,26 @@ func TestSendKeysPendingRowChangesBeforeSend(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestSendKeysPendingReuseWithoutAllowPending (AC-PANE-08): without allow_pending a reuse's pending row,
+// its session up or its reply lost, is ErrSpawnNotInteractive with no tmux call and the row unchanged.
+func TestSendKeysPendingReuseWithoutAllowPending(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		shape pendingShape
+	}{{"Ours", pendingOurs}, {"lost reply", pendingLostReply}} {
+		t.Run(pendingReused.String()+"/"+tc.name, func(t *testing.T) {
+			e := newKillEnv(t)
+			r := e.seedPending(t, pendingReused, tc.shape)
+			cols := e.columns(t, r.ID)
+
+			_, err := e.sendKeys(api.SendKeysParams{ClaudeInstanceID: r.ID, Text: skpText})
+
+			assertOneName(t, err, "ErrSpawnNotInteractive")
+			e.assertNoTmuxCall(t)
+			e.assertRowUnchanged(t, r.ID, cols)
+		})
 	}
 }

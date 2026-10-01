@@ -4,11 +4,13 @@ package api_test
 // for resume's pre-launch lookup (SR-8.2, SR-20.2, SR-20.6): resumable
 // finished rows, the instant the starting-session rule reads, the name
 // holders, the resume runners and the "wrote nothing" snapshot. It holds no
-// tests. resumeEnv (resume_fixture_test.go) keeps the move, restore and
-// pending tests.
+// tests. The "wrote nothing" check is verb-neutral (writesSnapshot,
+// assertWroteNothing; reuse's in spawn_reuse_fixture_test.go). resumeEnv
+// (resume_fixture_test.go) keeps the move, restore and pending tests.
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -63,25 +65,37 @@ func (e *killEnv) seedResumable(t *testing.T, age time.Duration, a agentState, o
 	return e.seedResumableRow(t, e.resumableSpec(age, a, opts...))
 }
 
-// seedResumableRow seeds spec's row made resumable: a session id and cwd (when
-// spec gives none), its transcript under a config directory whose .claude.json
-// lacks the cwd's entry, e.defaultSocket as its socket, and its recorded
-// server running there with a bystander session (an empty listing names no
-// server), so a normal resume's lookup reads Gone with no
-// ad.provenance.disagree; spec.Opts still go last.
+// seedResumableRow seeds spec's row made resumable: a session id (when spec
+// gives none), then seedOnServer through seedRow.
 func (e *killEnv) seedResumableRow(t *testing.T, spec killRowSpec) resumeRow {
 	t.Helper()
 	if spec.SessionID == "" {
 		spec.SessionID = "sess-" + uuid.NewString()[:8]
 	}
+	return e.seedOnServer(t, spec, e.seedRow)
+}
+
+// seedOnServer seeds spec's row through seed (seedRow, or seedRawRow for rows
+// GetSpawn refuses) with a cwd (when spec gives none), a config directory
+// whose .claude.json lacks the cwd's entry, its transcript there (when it has
+// a session id), e.defaultSocket as its socket, and its recorded server
+// running there with a bystander session (an empty listing names no server),
+// so a normal lookup reads Gone with no ad.provenance.disagree; spec.Opts
+// still go last.
+func (e *killEnv) seedOnServer(t *testing.T, spec killRowSpec, seed func(*testing.T, killRowSpec) killRow) resumeRow {
+	t.Helper()
 	if spec.CWD == "" {
 		spec.CWD = t.TempDir()
 	}
 	trust := seedTrustConfig(t, t.TempDir(), trustLacksEntry)
-	jsonl := apitest.SeedJsonlUnder(t, trust.dir, spec.CWD, spec.SessionID)
-	spec.Opts = append([]apitest.SpawnOption{apitest.WithTmuxSocket(e.defaultSocket), apitest.WithJsonlPath(jsonl),
-		trust.env()}, spec.Opts...)
-	r := resumeRow{killRow: e.seedRow(t, spec), CWD: spec.CWD, JSONLPath: jsonl, Trust: trust}
+	opts := []apitest.SpawnOption{apitest.WithTmuxSocket(e.defaultSocket), trust.env()}
+	var jsonl string
+	if spec.SessionID != "" {
+		jsonl = apitest.SeedJsonlUnder(t, trust.dir, spec.CWD, spec.SessionID)
+		opts = append(opts, apitest.WithJsonlPath(jsonl))
+	}
+	spec.Opts = append(opts, spec.Opts...)
+	r := resumeRow{killRow: seed(t, spec), CWD: spec.CWD, JSONLPath: jsonl, Trust: trust}
 	e.ensureServer(&r.killRow)
 	e.seedBystander(t, r.Socket)
 	e.syncServers()
@@ -108,6 +122,7 @@ const (
 	holderAmbiguous                             // two unlabelled sessions under the name: more than one entry matches
 	holderConflicting                           // no label, with a malformed global scope value: conflicting labels
 	holderVanished                              // nothing holds the name
+	holderOtherStoreOldToken                    // another store's label with the row's id and an earlier token
 )
 
 // seedHolder seeds k's session on r's socket, with one new pane, and returns
@@ -138,6 +153,8 @@ func (e *killEnv) holderSessions(t *testing.T, r killRow, k holderKind) []tmuxfi
 		s.Label = tmuxfix.Valid(newToken(), "other-"+uuid.NewString()[:8], apitest.OtherStoreID(r.StoreID))
 	case holderOtherStoreOwn:
 		s.Label = r.otherStore(r.Token)
+	case holderOtherStoreOldToken:
+		s.Label = r.otherStore(tmuxfix.OtherToken)
 	case holderNone, holderAmbiguous, holderConflicting:
 		s.LabelSet = false
 	case holderOtherStoreElsewhere:
@@ -223,54 +240,116 @@ func (e *killEnv) resumeClient(t *testing.T, id string, settings ...apitest.Tmux
 // resumeDisagrees returns id's ad.provenance.disagree records written by resume.
 func resumeDisagrees(t *testing.T, id string) []map[string]any {
 	t.Helper()
+	return verbDisagrees(t, "resume", id)
+}
+
+// verbDisagrees returns id's ad.provenance.disagree records written by verb
+// (reuse's are verb spawn).
+func verbDisagrees(t *testing.T, verb, id string) []map[string]any {
+	t.Helper()
 	var out []map[string]any
 	for _, l := range pendTrail(t, "ad.provenance.disagree", id) {
-		if l["verb"] == "resume" {
+		if l["verb"] == verb {
 			out = append(out, l)
 		}
 	}
 	return out
 }
 
-// resumeSnapshot is what a refused resume of r must leave as it was: the
-// row, its session history and permission requests, the trail length, the
-// Recorder's call counts and every bound socket's sessions.
-type resumeSnapshot struct {
-	r                      resumeRow
+// writesSnapshot is what a refused call of verb on row id must leave as it
+// was: the row's raw columns, its history over every life, its permission
+// requests, its children's ids (rows whose parent_id is id), the trust file
+// (trust; none when its dir is ""), the trail length, the Recorder's call
+// counts and every bound socket's sessions.
+type writesSnapshot struct {
+	verb, id               string
+	trust                  trustConfig
 	cols                   apitest.SpawnColumns
 	history                []apitest.HistoryEntry
 	perms                  []api.PermissionRow
+	children               []string
 	mark, calls, nameCalls int
 	sessions               map[string][]tmuxfix.SeedSession
+}
+
+// resumeSnapshot is a resume's writesSnapshot with the resumed row.
+type resumeSnapshot struct {
+	writesSnapshot
+	r resumeRow
 }
 
 // snapshotResume takes r's resumeSnapshot; take it just before the resume.
 func (e *killEnv) snapshotResume(t *testing.T, r resumeRow) resumeSnapshot {
 	t.Helper()
-	history, err := apitest.ReadSessionHistoryAllLives(e.dbPath, r.ID)
+	return resumeSnapshot{writesSnapshot: e.snapshotWrites(t, "resume", r.ID, r.Trust, r.Socket), r: r}
+}
+
+// assertResumeWroteNothing is assertWroteNothing for a refused resume.
+func (e *killEnv) assertResumeWroteNothing(t *testing.T, before resumeSnapshot) {
+	t.Helper()
+	e.assertWroteNothing(t, before.writesSnapshot)
+}
+
+// snapshotWrites takes id's writesSnapshot for a call of verb, with trust and
+// the sessions of every bound socket and of sockets; take it just before the call.
+func (e *killEnv) snapshotWrites(t *testing.T, verb, id string, trust trustConfig, sockets ...string) writesSnapshot {
+	t.Helper()
+	history, err := apitest.ReadSessionHistoryAllLives(e.dbPath, id)
 	if err != nil {
-		t.Fatalf("ReadSessionHistoryAllLives(%s): %v", r.ID, err)
+		t.Fatalf("ReadSessionHistoryAllLives(%s): %v", id, err)
 	}
-	perms, err := e.st.PermissionRequestsForSpawn(r.ID)
+	perms, err := e.st.PermissionRequestsForSpawn(id)
 	if err != nil {
-		t.Fatalf("PermissionRequestsForSpawn(%s): %v", r.ID, err)
+		t.Fatalf("PermissionRequestsForSpawn(%s): %v", id, err)
 	}
-	s := resumeSnapshot{r: r, cols: e.columns(t, r.ID), history: history, perms: perms, mark: trailMark(t),
-		calls: len(e.rec.SocketCalls()), nameCalls: len(e.rec.Calls()), sessions: map[string][]tmuxfix.SeedSession{}}
+	s := writesSnapshot{verb: verb, id: id, trust: trust, cols: e.columns(t, id), history: history, perms: perms,
+		children: e.childIDs(t, id), mark: trailMark(t), calls: len(e.rec.SocketCalls()), nameCalls: len(e.rec.Calls()),
+		sessions: map[string][]tmuxfix.SeedSession{}}
 	for _, srv := range e.rec.Servers() {
 		s.sessions[srv.Socket] = e.rec.Sessions(srv.Socket)
 	}
-	s.sessions[r.Socket] = e.rec.Sessions(r.Socket)
+	for _, socket := range sockets {
+		s.sessions[socket] = e.rec.Sessions(socket)
+	}
 	return s
 }
 
-// assertResumeWroteNothing fails unless, since before was taken, resume made
-// at most one tmux call, a lookup, and changed nothing: the row, its history,
-// permission requests and trust entry, every seeded session, and the trail
-// apart from ad.provenance.disagree records.
-func (e *killEnv) assertResumeWroteNothing(t *testing.T, before resumeSnapshot) {
+// childIDs returns the sorted ids of the rows whose parent_id is id.
+func (e *killEnv) childIDs(t *testing.T, id string) []string {
 	t.Helper()
-	id := before.r.ID
+	rows, err := e.st.ListSpawns(store.ListFilters{Parent: id})
+	if err != nil {
+		t.Fatalf("ListSpawns(parent %s): %v", id, err)
+	}
+	ids := []string{}
+	for _, r := range rows {
+		ids = append(ids, r.ClaudeInstanceID)
+	}
+	slices.Sort(ids)
+	return ids
+}
+
+// since returns the snapshot row's event records written after it was taken.
+func (s writesSnapshot) since(t *testing.T, event string) []map[string]any {
+	t.Helper()
+	return ptRecords(t, s.mark, event, s.id)
+}
+
+// wroteNothingExcept names an item assertWroteNothing leaves unchecked.
+type wroteNothingExcept int
+
+// exceptTrust skips the trust file: a reuse's reset that is not applied
+// runs after its pre-trust.
+const exceptTrust wroteNothingExcept = 1
+
+// assertWroteNothing fails unless, since before was taken, the call made at
+// most one tmux call, a lookup, and changed nothing: the row (every column,
+// raw), its history, permission requests and children, the trust file
+// (unless exceptTrust), every seeded session, and the trail apart from
+// ad.provenance.disagree records.
+func (e *killEnv) assertWroteNothing(t *testing.T, before writesSnapshot, except ...wroteNothingExcept) {
+	t.Helper()
+	id := before.id
 	e.assertRowUnchanged(t, id, before.cols)
 	if got, err := apitest.ReadSessionHistoryAllLives(e.dbPath, id); err != nil || !reflect.DeepEqual(got, before.history) {
 		t.Errorf("session history of %s = %+v (%v); want unchanged %+v", id, got, err, before.history)
@@ -278,7 +357,12 @@ func (e *killEnv) assertResumeWroteNothing(t *testing.T, before resumeSnapshot) 
 	if got, err := e.st.PermissionRequestsForSpawn(id); err != nil || !reflect.DeepEqual(got, before.perms) {
 		t.Errorf("permission requests of %s = %+v (%v); want unchanged %+v", id, got, err, before.perms)
 	}
-	before.r.Trust.check(t, before.r.CWD, false, "after the refused resume")
+	if got := e.childIDs(t, id); !slices.Equal(got, before.children) {
+		t.Errorf("children of %s = %q; want unchanged %q", id, got, before.children)
+	}
+	if before.trust.dir != "" && !slices.Contains(except, exceptTrust) {
+		before.trust.check(t, "", false, "after the refused "+before.verb)
+	}
 	for _, l := range readAPITrailLines(t)[before.mark:] {
 		if l["event"] != "ad.provenance.disagree" {
 			t.Errorf("trail record %v for %v; want none but ad.provenance.disagree", l["event"], l["claude_instance_id"])

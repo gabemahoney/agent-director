@@ -13,7 +13,8 @@ package api_test
 // that cannot arise for it not applicable, with the reason. Sequence
 // details, the process wait and the ceilings are kill_test.go's. Later verb
 // Epics extend this table (an adapter appended to callTableVerbs) instead of
-// writing their own.
+// writing their own; reuse's rows run under TestCallTableReuse
+// (lookup_calltable_reuse_test.go), so -run Reuse selects them.
 
 import (
 	"maps"
@@ -200,9 +201,13 @@ func callTableVerbs() []callTableVerb {
 // TestCallTable runs every verb in every column: error name through the
 // one-name helper, action sent, recorded calls, description, row unchanged
 // (or the verb's own row check); a not-applicable cell is skipped with its reason.
-func TestCallTable(t *testing.T) {
+func TestCallTable(t *testing.T) { runCallTableVerbs(t, callTableVerbs()) }
+
+// runCallTableVerbs runs each of verbs in every column (TestCallTable;
+// reuse's rows: TestCallTableReuse, lookup_calltable_reuse_test.go).
+func runCallTableVerbs(t *testing.T, verbs []callTableVerb) {
 	cols := callTableColumns()
-	for _, v := range callTableVerbs() {
+	for _, v := range verbs {
 		for outcome := range v.cells {
 			if !slices.ContainsFunc(cols, func(c callTableColumn) bool { return c.outcome == outcome }) {
 				t.Errorf("%s: cell %q names no column", v.name, outcome)

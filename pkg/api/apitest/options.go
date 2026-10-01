@@ -127,6 +127,12 @@ func WithEndedAt[T time.Time | string](at T) SpawnOption {
 	return func(o *spawnOpts) { o.set("ended_at", v) }
 }
 
+// WithNoEndedAt stores NULL in ended_at: a finished row whose end time is
+// unknown (SR-4.2).
+func WithNoEndedAt() SpawnOption {
+	return func(o *spawnOpts) { o.set("ended_at", nil) }
+}
+
 // storedTimestamp is the text WithStartedAt and WithEndedAt store.
 func storedTimestamp[T time.Time | string](at T) string {
 	switch v := any(at).(type) {

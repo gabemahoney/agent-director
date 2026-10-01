@@ -210,15 +210,20 @@ type pendingKind int
 const (
 	pendingFresh   pendingKind = iota // a fresh spawn's launch
 	pendingResumed                    // a resumed row's: its session id, transcript and an archived earlier session
+	pendingReused                     // a reuse's, made by a real reuse (seedReusedPending): life + 1, a new token, no session id
 )
 
-// pendingKinds are the launch kinds send-keys meets on a pending row.
+// pendingKinds are the launch kinds send-keys meets on a pending row that a
+// pendingSpec seeds; a reuse's (pendingReused) is made by seedPending alone.
 func pendingKinds() []pendingKind { return []pendingKind{pendingFresh, pendingResumed} }
 
-// String names k for subtest names.
+// String names k for subtest names; a reuse's carries "Reuse", so -run Reuse selects it.
 func (k pendingKind) String() string {
-	if k == pendingResumed {
+	switch k {
+	case pendingResumed:
 		return "resumed row"
+	case pendingReused:
+		return "Reuse of a finished row"
 	}
 	return "fresh spawn"
 }
@@ -233,7 +238,7 @@ const (
 )
 
 // pendingSpec is the killRowSpec of k's pending row with shape v, launch
-// start at e.clock.Now; opts go last.
+// start at e.clock.Now; opts go last. A reuse's row has none: seedPending makes it.
 func (e *killEnv) pendingSpec(k pendingKind, v pendingShape, opts ...apitest.SpawnOption) killRowSpec {
 	spec := killRowSpec{State: store.StatePending,
 		Opts: []apitest.SpawnOption{apitest.WithLaunchStartedAt(e.clock.Now().UnixMilli())}}
@@ -255,8 +260,15 @@ func (e *killEnv) pendingSpec(k pendingKind, v pendingShape, opts ...apitest.Spa
 
 // seedPending seeds k's pending row with shape v (pendingSpec) and its
 // session: the current-labelled one, or for pendingLeftover one labelled r.old().
+// A reuse's row comes from seedReusedPending and takes no opts.
 func (e *killEnv) seedPending(t *testing.T, k pendingKind, v pendingShape, opts ...apitest.SpawnOption) killRow {
 	t.Helper()
+	if k == pendingReused {
+		if len(opts) > 0 {
+			t.Fatalf("seedPending: a reuse's pending row takes no seed options (got %d)", len(opts))
+		}
+		return e.seedReusedPending(t, v)
+	}
 	r := e.seedRow(t, e.pendingSpec(k, v, opts...))
 	if v == pendingLeftover {
 		e.seedSession(t, &r, tmuxfix.WithRowSessionLabel(r.old(), true))

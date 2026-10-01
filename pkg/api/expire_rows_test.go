@@ -6,13 +6,10 @@ package api_test
 // locale. The real-tmux locale case is test/realtmux's.
 
 import (
-	"fmt"
 	"os"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/google/uuid"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
@@ -53,32 +50,13 @@ func (w exrWorld) want(noToken bool) string {
 	return "ours"
 }
 
-// exrSeed seeds through apitest.SeedSpawn a row that ended exrAge ago with
-// seedRow's launch identity (a new pane and pid) edited by ident, then opts,
-// and its agent in state a. It reads nothing through GetSpawn, which refuses
-// malformed labels, claude_args and extra_env.
+// exrSeed seeds through seedRawRow a row that ended exrAge ago with ident's
+// edits to its launch identity, then opts, and its agent in state a.
 func exrSeed(t *testing.T, e *killEnv, id string, a agentState, ident func(*store.LaunchIdentity), opts ...apitest.SpawnOption) killRow {
 	t.Helper()
-	pid := e.newPID()
-	li := store.LaunchIdentity{Token: strings.ReplaceAll(uuid.NewString(), "-", "")[:16], Socket: apitest.TestSocket,
-		ServerPID: killServerPID, ServerStart: killServerStart, ServerStarttime: apitest.LinuxProcStarttime,
-		PaneID: fmt.Sprintf("%%%d", pid), PanePID: pid, PaneStarttime: apitest.LinuxProcStarttime}
-	if ident != nil {
-		ident(&li)
-	}
-	spec := e.finishedSpec(exrAge, a, append([]apitest.SpawnOption{apitest.WithLaunchIdentity(li),
-		apitest.WithPID(pid), apitest.WithProcStarttime(apitest.LinuxProcStarttime)}, opts...)...)
-	if _, err := apitest.SeedSpawn(e.dbPath, id, spec.State, "", "off", "", false, spec.Opts...); err != nil {
-		t.Fatalf("SeedSpawn(%s): %v", id, err)
-	}
-	name, _ := e.columns(t, id).TmuxSessionName.(string)
-	r := killRow{ID: id, Name: name, Socket: li.Socket, Token: li.Token, StoreID: e.storeID, Agent: a,
-		Spawn: api.Spawn{ClaudeInstanceID: id, TmuxSessionName: name, Identity: li}}
-	if r.Socket == "" {
-		r.Socket = e.defaultSocket
-	}
-	e.setAgent(&r, pid, apitest.LinuxProcStarttime)
-	return r
+	spec := e.finishedSpec(exrAge, a, opts...)
+	spec.ID = id
+	return e.seedRawRow(t, spec, ident)
 }
 
 // exrHoldName seeds on r's socket a session holding r's name: r's own (its

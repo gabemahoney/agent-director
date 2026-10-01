@@ -85,10 +85,11 @@ var heldNotPendingStatements = []string{"stays pending", "will heal"}
 // unavailable); Row is the end write's result. BeforeLaunch selects the
 // holder found by a pre-launch lookup instead (resume, SR-8.2; see
 // BeforeLaunch's overlay): Name is then the recorded name, SessionID the
-// holder's tmux id, and Row stays zero. Restore selects resume's error after
-// "duplicate session" instead (SR-8.5; afterResumeHeld): Name is then the
-// recorded name, SessionID the holder's tmux id, Restore the restore's result,
-// and Row stays zero.
+// holder's tmux id, and Row stays zero. Restore selects resume's or reuse's
+// (Restore.Launch) error after "duplicate session" instead (SR-8.5, SR-10.4;
+// afterResumeHeld): Name is then the name the create asked for (resume's
+// recorded name, reuse's requested name), SessionID the holder's tmux id,
+// Restore the restore's result, and Row stays zero.
 type HeldName struct {
 	Name         string
 	SessionID    string

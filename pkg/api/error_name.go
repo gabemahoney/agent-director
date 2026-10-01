@@ -8,9 +8,10 @@ import (
 )
 
 // errorName names a verb error as errnames.Classify would, for the trail
-// fields that carry an err_name: ad.resume.restored's launch_error,
-// ad.kill.called's outcome, ad.send_keys.called's outcome and
-// ad.launch.name_held's outcome (SR-6.4, SR-7.4, SR-14). pkg/api cannot import
+// fields that carry an err_name: ad.resume.restored's and
+// ad.spawn.reuse_restored's launch_error, ad.kill.called's outcome,
+// ad.send_keys.called's outcome and ad.launch.name_held's outcome (SR-6.4,
+// SR-7.4, SR-10.6, SR-14). pkg/api cannot import
 // pkg/api/errnames (errnames imports pkg/api for its sentinels), so this is
 // the one pkg/api mapping of those verbs' names; extend it here when one of
 // them gains a name. Every name it gives matches exactly one catalogued

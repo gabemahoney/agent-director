@@ -1,8 +1,9 @@
 package api_test
 
 // expire_conditional_test.go covers expire's conditional delete (SR-12.3,
-// SR-5.3, AC-EXP-03, AC-EXP-04): another caller's write between the row's
-// examination and its delete, injected with the fixture's beforeDelete.
+// SR-5.3, SR-10.4, AC-EXP-03, AC-EXP-04): another caller's write between the
+// row's examination and its delete, injected with the fixture's beforeDelete,
+// or a real reuse's reset run when expire's lookup returns.
 
 import (
 	"errors"
@@ -12,6 +13,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -145,6 +148,54 @@ func TestExpireConditionalDelete(t *testing.T) {
 			if !tc.rerunDeletes {
 				e.assertRowUnchanged(t, r.ID, written)
 			}
+		})
+	}
+}
+
+// TestExpireConditionalDeleteReuseReset (AC-EXP-04): a finished row that a real reuse resets as expire's lookup of it
+// returns is kept changed_since_examined, not deleted; it stays pending in its new life, and a later run skips it.
+func TestExpireConditionalDeleteReuseReset(t *testing.T) {
+	for _, prior := range []string{store.StateEnded, store.StateMissing} {
+		t.Run("Reuse/"+prior, func(t *testing.T) {
+			e := newKillEnv(t)
+			r := e.seedReusable(t, agentGone, reuseRowSpec{State: prior, Age: time.Hour, Bare: true})
+			// On r's socket: the one lookup there decides both rows, and the fixture server runs there.
+			unchanged := e.seedFinished(t, time.Hour, agentGone, apitest.WithTmuxSocket(r.Socket))
+			p := reuseParams(t, r, reuseRequest{})
+			reused := false
+			e.rec.AfterCall(tmux.CallLookup, func(c tmuxfix.SocketCall, _ error) {
+				if reused || c.Socket != r.Socket {
+					return
+				}
+				reused = true
+				if _, logs, err := e.reuse(t, p); err != nil {
+					t.Errorf("reuse of %s after expire's lookup: %v (log %q)", r.ID, err, logs)
+				}
+			})
+			mark := trailMark(t)
+
+			res, lg, err := e.expire(olderThan(0))
+
+			if err != nil || !reused {
+				t.Fatalf("Expire = %v (reuse ran: %v); want success with the reuse after its lookup", err, reused)
+			}
+			if len(lg.lines) != 0 {
+				t.Errorf("logged %q; want nothing", lg.lines)
+			}
+			assertExpired(t, res, mark, map[string]string{unchanged.ID: "", r.ID: "changed_since_examined"})
+			assertRowGone(t, e, unchanged.ID)
+			written := e.columns(t, r.ID)
+			if written.State != store.StatePending || written.LifeNumber != reuseLife+1 {
+				t.Errorf("row %s {state %v, life %#v}; want pending in life %d", r.ID, written.State, written.LifeNumber, reuseLife+1)
+			}
+
+			mark = trailMark(t)
+			again, _, err := e.expire(olderThan(0))
+			if err != nil {
+				t.Fatalf("second Expire: %v", err)
+			}
+			assertExpired(t, again, mark, map[string]string{})
+			e.assertRowUnchanged(t, r.ID, written)
 		})
 	}
 }

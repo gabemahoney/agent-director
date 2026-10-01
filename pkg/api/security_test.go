@@ -6,15 +6,13 @@ package api_test
 // neither xyz, a row's launch token (so no label value), the other row's id
 // nor another store's id may appear in the verb's result, error description,
 // client log or trail. It is a per-verb table (kill first, Epic 10; plain
-// spawn's held name, Epic 13; find-missing's lookup, Epic 14, in
-// security_find_missing_test.go; read-pane, which writes no trail event,
-// Epic 11, in security_read_pane_test.go; send-keys on a live row and on a
-// pending row with allow_pending, Epic 11, in security_send_keys_test.go;
-// pause, which writes no call event, Epic 11, in security_pause_test.go;
-// expire, Epic 15, in security_expire_test.go, as kept rows (ad.expire.kept)
-// and deleted rows (no record); resume, Epic 16, in security_resume_test.go:
-// its pre-launch refusals and its held name after "duplicate session"; later
-// Epics add theirs).
+// spawn's held name, Epic 13; then, each in its security_<verb>_test.go,
+// find-missing's lookup, Epic 14; read-pane, which writes no trail event,
+// Epic 11; send-keys on a live row and on a pending row with allow_pending,
+// Epic 11; pause, which writes no call event, Epic 11; expire, Epic 15, as
+// kept rows (ad.expire.kept) and deleted rows (no record); resume, Epic 16:
+// its pre-launch refusals and its held name after "duplicate session"; reuse,
+// Epic 17, run by TestSecurityReuse).
 
 import (
 	"encoding/json"
@@ -50,14 +48,15 @@ const (
 
 // securityScene is one SR-15 arrangement: the target row, another row, the
 // ids of the no-id session and the other row's session on target's socket,
-// and subject, the instance id the call acts on (target's, or a launch's
-// fresh id).
+// subject, the instance id the call acts on (target's, or a launch's fresh
+// id), and forbid, values the call learns that nothing may carry either.
 type securityScene struct {
 	e                   *killEnv
 	target, other       killRow
 	noIDSess, otherSess string
 	extraSess           tmuxfix.SeedSession
 	subject             string
+	forbid              []string
 }
 
 // securityCase is one arrangement of a verb: the target row's spec, who holds
@@ -324,10 +323,10 @@ func securityCreate(t *testing.T, e *killEnv, socket, name, token, id, storeID s
 
 // securityForbidden are the values nothing may carry: the secret, both rows'
 // launch tokens and an earlier launch's (the leftovers'; a label's content),
-// the other row's id and another store's id.
+// the other row's id, another store's id and s.forbid.
 func securityForbidden(s *securityScene) []string {
-	return []string{securitySecret, s.target.Token, s.other.Token, tmuxfix.OtherToken, s.other.ID,
-		apitest.OtherStoreID(s.e.storeID)}
+	return append([]string{securitySecret, s.target.Token, s.other.Token, tmuxfix.OtherToken, s.other.ID,
+		apitest.OtherStoreID(s.e.storeID)}, s.forbid...)
 }
 
 // securityAbsent fails when text carries a securityForbidden value.
@@ -341,10 +340,12 @@ func securityAbsent(t *testing.T, what, text string, s *securityScene) {
 }
 
 // TestSecuritySecretAndOtherRowID checks SR-15 for every verb in the table:
-// no result, description, log line or trail record carries xyz, a launch
-// token, the other row's id or another store's id.
-func TestSecuritySecretAndOtherRowID(t *testing.T) {
-	for _, v := range securityVerbs {
+// no result, description, log line or trail record carries a forbidden value.
+func TestSecuritySecretAndOtherRowID(t *testing.T) { runSecurityVerbs(t, securityVerbs) }
+
+// runSecurityVerbs runs every case of verbs (reuse's: TestSecurityReuse).
+func runSecurityVerbs(t *testing.T, verbs []securityVerb) {
+	for _, v := range verbs {
 		for _, c := range v.cases {
 			t.Run(v.verb+"/"+c.name, func(t *testing.T) {
 				s := newSecurityScene(t, v, c)

@@ -10,15 +10,16 @@
  * ErrInvalidFlags with no row and no tmux session created, with or without
  * reuse_finished.
  *
- * reuse_finished (SR-10.1): without an id it mints one; without the opt-in an
- * ended row collides (ErrInstanceIdCollision), row unchanged, no session.
+ * reuse_finished (SR-10.1, SR-10.2): without an id it mints one; with an id an
+ * ended row is reused (pending, one session); without the opt-in an ended row
+ * collides (ErrInstanceIdCollision), row unchanged, no session.
  */
 
 import { test, expect } from "bun:test";
 import * as path from "path";
 import * as fs from "fs";
 import { withTempHome } from "../internal/tempHome.js";
-import { runHelper } from "../internal/helper.js";
+import { runHelper, privateTmuxSocket } from "../internal/helper.js";
 import { Client, ErrCwdMissing, ErrInvalidFlags, ErrInstanceIdCollision, AgentDirectorError } from "../../src/index.js";
 import type { SpawnResult } from "../../src/index.js";
 
@@ -189,6 +190,25 @@ test("spawn: reuse_finished without claude_instance_id → fresh spawn with a mi
     const result = await client.spawn({ cwd: homeDir, reuse_finished: true });
     expect(result.claude_instance_id.length).toBeGreaterThan(0);
     expect((await client.get({ claude_instance_id: result.claude_instance_id })).state).toBe("pending");
+  });
+}, 10_000);
+
+// SR-10.2: with the opt-in an ended row whose session is gone is reused: one new session, row pending.
+test("spawn: reuse_finished over an ended row → reused, get shows pending", async () => {
+  await withTempHome(async (homeDir) => {
+    const storePath = path.join(homeDir, ".agent-director", "state.db");
+    const logPath = path.join(homeDir, "fake-tmux.log");
+    const id = `reuse-ended-${crypto.randomUUID().slice(0, 8)}`;
+    seedOuterParent(storePath);
+    runHelper("seed-spawn", { store: storePath, id, state: "ended", "create-store": true, socket: privateTmuxSocket(homeDir) });
+
+    using client = await Client.create({ storePath, createIfMissing: true, tmuxCommand: fakeTmuxBin, _cliPath: process.env.CLI_PATH } as any);
+    await withFakeTmuxLog(logPath, async () => {
+      const result = await client.spawn({ cwd: homeDir, claude_instance_id: id, reuse_finished: true });
+      expect(result.claude_instance_id).toBe(id);
+      expect((await client.get({ claude_instance_id: id })).state).toBe("pending");
+      expect(newSessionCount(logPath)).toBe(1);
+    });
   });
 }, 10_000);
 

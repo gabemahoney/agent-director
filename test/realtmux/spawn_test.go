@@ -17,8 +17,9 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// Plain spawn through the production pkg/api client on real tmux (SRD SR-20.4,
-// SR-20.7, SR-3.3, SR-3.5, SR-3.6; PRD AC-LKP-17, AC-LKP-19, AC-CLS-02). Each
+// Plain spawn, and spawn with the reuse opt-in on a finished row, through the
+// production pkg/api client on real tmux (SRD SR-20.4, SR-20.7, SR-3.3,
+// SR-3.5, SR-3.6, SR-10.2, SR-10.3; PRD AC-LKP-17, AC-LKP-19, AC-CLS-02). Each
 // test has a temp HOME and store, a stand-in `claude` that sleeps first on
 // PATH, and the lookup fixture's private tmux world.
 
@@ -67,9 +68,10 @@ func (f *spawnFix) storeID(t testing.TB) string {
 	return id
 }
 
-// spawn runs a plain spawn with instance id id ("" mints one), without pre-trust.
-func (f *spawnFix) spawn(id string) (string, error) {
-	res, err := f.API.Spawn(api.SpawnParams{CWD: f.CWD, ClaudeInstanceID: id, NoPreTrust: true})
+// spawn runs a spawn with instance id id ("" mints one), without pre-trust;
+// reuse sets the reuse opt-in (ReuseFinished).
+func (f *spawnFix) spawn(id string, reuse bool) (string, error) {
+	res, err := f.API.Spawn(api.SpawnParams{CWD: f.CWD, ClaudeInstanceID: id, NoPreTrust: true, ReuseFinished: reuse})
 	return res.ClaudeInstanceID, err
 }
 
@@ -95,12 +97,19 @@ type spawned struct {
 	Before, After int64
 }
 
-// mustSpawn spawns id, reads the row and finds its session through the
-// recorded pane; the recorded socket must lie in the private TMUX_TMPDIR.
+// mustSpawn is a plain spawn of id through mustLaunch.
 func (f *spawnFix) mustSpawn(t *testing.T, id string) spawned {
 	t.Helper()
+	return f.mustLaunch(t, id, false)
+}
+
+// mustLaunch spawns id (with the reuse opt-in when reuse is set), reads the
+// row and finds its session through the recorded pane; the recorded socket
+// must lie in the private TMUX_TMPDIR.
+func (f *spawnFix) mustLaunch(t *testing.T, id string, reuse bool) spawned {
+	t.Helper()
 	before := time.Now().UnixMilli()
-	got, err := f.spawn(id)
+	got, err := f.spawn(id, reuse)
 	after := time.Now().UnixMilli()
 	if err != nil {
 		t.Fatalf("spawn %q: %s", id, describe(err))
@@ -123,9 +132,10 @@ func (f *spawnFix) mustSpawn(t *testing.T, id string) spawned {
 
 var tokenForm = regexp.MustCompile(`^[0-9a-f]{16}$`)
 
-// assertSpawned checks the row, the five-field label, @ad_pane and the
-// recorded server and pane identity against real tmux and the start-time reader.
-func (f *spawnFix) assertSpawned(t *testing.T, s spawned, wantSocket string) {
+// assertSpawned checks the row (pending at wantVersion), the five-field label,
+// @ad_pane and the recorded server and pane identity against real tmux and
+// the start-time reader.
+func (f *spawnFix) assertSpawned(t *testing.T, s spawned, wantSocket string, wantVersion int64) {
 	t.Helper()
 	row, rt := s.Row, s.rt
 	token, _ := row.LaunchToken.(string)
@@ -136,8 +146,8 @@ func (f *spawnFix) assertSpawned(t *testing.T, s spawned, wantSocket string) {
 	if row.TmuxSocket != wantSocket {
 		t.Errorf("tmux_socket = %v, want %s", row.TmuxSocket, wantSocket)
 	}
-	if row.State != "pending" || fmt.Sprint(row.RowVersion) != "1" {
-		t.Errorf("state %v, row_version %v; want pending, 1 (insert plus identity write)", row.State, row.RowVersion)
+	if row.State != "pending" || fmt.Sprint(row.RowVersion) != fmt.Sprint(wantVersion) {
+		t.Errorf("state %v, row_version %v; want pending, %d", row.State, row.RowVersion, wantVersion)
 	}
 	if ms, ok := row.LaunchStartedAt.(int64); !ok || ms < s.Before || ms > s.After {
 		t.Errorf("launch_started_at = %v, want within the spawn call [%d, %d]", row.LaunchStartedAt, s.Before, s.After)
@@ -228,7 +238,7 @@ func TestSpawnLabelsSessionWithStoreToken(t *testing.T) {
 			}
 
 			s := f.mustSpawn(t, tc.id)
-			f.assertSpawned(t, s, wantSocket)
+			f.assertSpawned(t, s, wantSocket, 1) // the insert's 0, plus the identity write
 
 			if tc.inPane {
 				ort := f.at(t, other.Socket)
@@ -266,7 +276,7 @@ func TestSpawnSocketDeniedIsTmuxNotAvailable(t *testing.T) {
 			f.startSession(t, "")
 			chmodSocket(t, f.Socket, 0o000)
 
-			_, err := f.spawn(tc.id)
+			_, err := f.spawn(tc.id, false)
 			if !errors.Is(err, tmux.ErrTmuxNotAvailable) {
 				t.Fatalf("spawn error = %s, want ErrTmuxNotAvailable", describe(err))
 			}
@@ -303,5 +313,66 @@ func TestSpawnSocketDeniedIsTmuxNotAvailable(t *testing.T) {
 				t.Errorf("server holds %d sessions after the denied spawn, want 1", n)
 			}
 		})
+	}
+}
+
+// reuseRows is the kill fixture over the spawn fixture's store, for seeding
+// finished rows (seedRow) and comparing them (assertRowUnchanged).
+func (f *spawnFix) reuseRows(t testing.TB) *killFix {
+	t.Helper()
+	return &killFix{lookupFix: f.lookupFix, DBPath: f.DBPath, StoreID: f.storeID(t)}
+}
+
+// TestSpawnReuseLabelsSessionWithNewToken reuses an ended row whose session is
+// gone: a new life on the recorded socket's server, labelled with a new token.
+func TestSpawnReuseLabelsSessionWithNewToken(t *testing.T) {
+	f := newSpawnFix(t)
+	k := f.reuseRows(t)
+	recorded := f.fresh(t) // not the socket a plain spawn would resolve
+	keep := recorded.startSession(t, "")
+	old := f.agentOn(t, recorded, createSpec{StoreID: k.StoreID})
+	before := k.seedRow(t, old.InstanceID, old.Name, store.StateEnded, store.LaunchIdentity{
+		Token: old.Token, Socket: old.Socket, ServerPID: old.Server.PID, ServerStart: old.Server.Start,
+		ServerStarttime: old.Server.Starttime, PaneID: old.Reply.PaneID, PanePID: old.Reply.PanePID, PaneStarttime: old.PaneStart})
+	recorded.must(t, "kill-session", "-t", old.Reply.SessionID)
+
+	s := f.mustLaunch(t, old.InstanceID, true)
+	f.assertSpawned(t, s, recorded.Socket, before.RowVersion.(int64)+2) // the reset, then the identity write
+	if s.Row.LaunchToken == before.LaunchToken {
+		t.Errorf("launch_token is the old life's; want a new token")
+	}
+	if s.Row.EndedAt != nil || fmt.Sprint(s.Row.LifeNumber) != fmt.Sprint(before.LifeNumber.(int64)+1) {
+		t.Errorf("ended_at %v, life_number %v; want NULL, %v + 1", s.Row.EndedAt, s.Row.LifeNumber, before.LifeNumber)
+	}
+	if srv := s.rt.formatInt(t, s.SessionID, "#{pid}"); srv != keep.ServerPID || s.SessionID == old.Reply.SessionID {
+		t.Errorf("new session %s on server pid %d; want a new session on the recorded server %d", s.SessionID, srv, keep.ServerPID)
+	}
+	if res := f.run(t, "list-sessions"); res.Exit == 0 {
+		t.Errorf("a server runs on the resolved socket %s; the reuse should create only on the recorded one", f.Socket)
+	}
+}
+
+// TestSpawnReuseSocketDeniedIsTmuxNotAvailable denies an ended row's recorded
+// socket (mode 000): reuse is ErrTmuxNotAvailable naming it; nothing changes.
+func TestSpawnReuseSocketDeniedIsTmuxNotAvailable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: root's access ignores the socket's mode 000, so tmux would still connect")
+	}
+	f := newSpawnFix(t)
+	k := f.reuseRows(t)
+	raw := f.startSession(t, "")
+	srv := f.serverOf(t, f.realTmux, raw.ID)
+	id := newInstanceID("reuse-denied")
+	token := newToken(t)
+	before := k.seedRow(t, id, uniqueName(), store.StateEnded, store.LaunchIdentity{
+		Token: token, Socket: f.Socket, ServerPID: srv.PID, ServerStart: srv.Start, ServerStarttime: srv.Starttime})
+	chmodSocket(t, f.Socket, 0o000)
+
+	_, err := f.spawn(id, true)
+	assertVerbError(t, "spawn", err, "ErrTmuxNotAvailable", apitest.DescSocketPermission(f.Socket), token, k.StoreID)
+	chmodSocket(t, f.Socket, 0o600)
+	k.assertRowUnchanged(t, id, before)
+	if got := strings.Fields(f.must(t, "list-sessions", "-F", "#{session_id}")); len(got) != 1 || got[0] != raw.ID {
+		t.Errorf("server holds sessions %v after the refused reuse, want only %s", got, raw.ID)
 	}
 }

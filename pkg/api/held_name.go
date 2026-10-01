@@ -14,9 +14,9 @@ import (
 // SR-3.10, SR-9.4): the re-lookup's classified verb error and the holder
 // facts its ad.launch.name_held record needs. It is verb-agnostic: plain
 // spawn passes one of its three row sentences and one of its two retry
-// sentences below and no examined row; resume (resumeHeldName) passes its
-// restore's sentence, retryLater and the row it examined before its
-// move (heldExaminedRow), and reuse (Epic 17) will call it the same way.
+// sentences below and no examined row; resume and reuse
+// (finishedLaunch.heldName) pass their restore's sentence, retryLater and the
+// row they examined before their move or reset (heldExaminedRow).
 // resume's pre-launch check (resume_lookup.go) builds its holder conflicts
 // with the same class wording (heldHolderError, ambiguousHolderError) under
 // heldBeforeLaunch, which makes no "duplicate session" claim.
@@ -95,17 +95,18 @@ type heldExaminedRow struct {
 // SR-4.2, SR-8.5, SR-9.4). res is the one tmux.Lookup on the launch socket
 // with name as the holder name, for plain spawn's new row (its instance id
 // and launch token, this store's id, no recorded server identity) or, for
-// resume, the row as examined before its move (its instance id, earlier
-// launch token and recorded server identity, this store's id); socket is
+// resume and reuse, the row as examined before the move or reset (its
+// instance id, earlier launch token and recorded server identity, this
+// store's id); socket is
 // that launch socket; rowSentence is the caller's row sentence (plain spawn:
-// heldRowEnded, heldRowLeftAsIs or heldRowStaysPending; resume, and reuse in
-// Epic 17: the restore's, resumeRestoreResultOf); retry is the caller's retry
+// heldRowEnded, heldRowLeftAsIs or heldRowStaysPending; resume and reuse: the
+// restore's, restoreResultOf); retry is the caller's retry
 // sentence for the ErrTmuxUnresponsive errors below, "" meaning the default
 // (plain spawn: heldRetryReuse when its end write applied, else
-// heldRetryWait; resume passes retryLater, so its ambiguous holder also ends
-// with "retry later"); examined is the row the
-// verb examined before its move (heldExaminedRow), nil for plain spawn, whose
-// row did not exist before. Each error matches exactly one catalogued
+// heldRetryWait; resume and reuse pass retryLater, so their ambiguous holder
+// also ends with "retry later"); examined is the row the verb examined before
+// its move or reset (heldExaminedRow), nil for plain spawn, whose row did not
+// exist before. Each error matches exactly one catalogued
 // sentinel under errors.Is (SR-1.5) and carries the row sentence exactly once,
 // never "nothing was done" or "nothing was written":
 //
@@ -118,7 +119,7 @@ type heldExaminedRow struct {
 //     trusted); a different server and tmux unavailable, socket permission
 //     included, are tmux.ErrTmuxNotAvailable (a different server is
 //     unreachable for plain spawn, whose new row records no server identity,
-//     and live for resume, which carries the examined one). The consequence
+//     and live for resume and reuse, which carry the examined one). The consequence
 //     also names the quoted requested name and, when one session holds it,
 //     its tmux id, so every variant carries them.
 //   - More than one listing entry matching the name: Can't tell for the

@@ -6,7 +6,8 @@ package api_test
 // store with the Client's clock, configured grace and sweep budget, its tmux
 // client a tmuxfix.Recorder and its start-time reader the procfix fake. Rows
 // come from killEnv (kill_fixture_test.go); the resumed-row cases are in
-// find_missing_grace_launch_test.go. Inside the grace period a row is never
+// find_missing_grace_launch_test.go, and a reuse's rows come from real reuses
+// (spawn_reuse_fixture_test.go; AC-FM-15). Inside the grace period a row is never
 // judged; past it a dead recorded pane process is marked proc_absent with no
 // tmux call, and a row whose process cannot be checked is decided by one
 // lookup, which the Recorder (no server on the row's socket) answers Gone:
@@ -14,7 +15,9 @@ package api_test
 
 import (
 	"context"
+	"errors"
 	"math"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -255,6 +258,91 @@ func TestFindMissingGraceLaunchStartValues(t *testing.T) {
 				fgcAssertInside(t, e.dbPath, id, run)
 			} else {
 				fgcAssertMarked(t, e.dbPath, id, run, fgcProcAbsent)
+			}
+		})
+	}
+}
+
+// fgcSpawnParams is a spawn of id (reuse: with the opt-in) pre-trusting in its own new CLAUDE_CONFIG_DIR.
+func fgcSpawnParams(t *testing.T, id string, reuse bool) api.SpawnParams {
+	return api.SpawnParams{ClaudeInstanceID: id, ReuseFinished: reuse, CWD: t.TempDir(),
+		ExtraEnv: map[string]string{"CLAUDE_CONFIG_DIR": t.TempDir()}}
+}
+
+// fgcReuseStopsBeforeCreate reuses r through the store seam, its goroutine stopping (runtime.Goexit) as the
+// reset returns: the row is reset to pending and nothing is created, as when the launching process stops then.
+func fgcReuseStopsBeforeCreate(t *testing.T, e *killEnv, r reuseRow) {
+	t.Helper()
+	rs := &hookedReuseStore{st: e.st}
+	rs.afterReset(runtime.Goexit)
+	c, _ := e.client(t)
+	p := reuseParams(t, r, reuseRequest{})
+	returned := make(chan bool, 1)
+	go func() {
+		defer close(returned)
+		_, _ = api.SpawnWithReuseStore(c, rs, p)
+		returned <- true
+	}()
+	if <-returned || len(e.rec.SocketCallsOf(tmux.CallCreate)) != 0 {
+		t.Fatalf("reuse of %s returned or created (calls %v); want it stopped as its reset returned", r.ID, callKinds(e.rec))
+	}
+}
+
+// TestFindMissingGraceReuseAfterNeverReportedIn (AC-FM-15): a fresh spawn's or a reuse's pending row with no session
+// is held inside grace and marked tmux_absent past it; then resume is ErrNoSessionId and a reuse launches (life + 1).
+func TestFindMissingGraceReuseAfterNeverReportedIn(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(*testing.T, *killEnv, *api.Client) string
+	}{
+		{"fresh spawn: create timed out creating nothing", func(t *testing.T, e *killEnv, c *api.Client) string {
+			e.rec.Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailTimeout, Times: 1}, tmux.CallCreate)
+			id := "fgc-" + uuid.NewString()[:8]
+			if _, err := c.Spawn(fgcSpawnParams(t, id, false)); !errors.Is(err, api.ErrTmuxUnresponsive) {
+				t.Fatalf("Spawn = %v; want ErrTmuxUnresponsive", err)
+			}
+			return id
+		}},
+		{"fresh spawn: launching process stopped before its create", func(t *testing.T, e *killEnv, _ *api.Client) string {
+			now := e.clock.Now()
+			return fgcSeedPending(t, e, "", apitest.WithNoPane(), apitest.WithTmuxSocket(e.defaultSocket),
+				apitest.WithStartedAt(now), apitest.WithLaunchStartedAt(now.UnixMilli()))
+		}},
+		{"Reuse: create timed out creating nothing", func(t *testing.T, e *killEnv, _ *api.Client) string {
+			return e.reuseTimesOut(t, e.seedReusable(t, agentGone, reuseRowSpec{}), reuseRequest{}, false).ID
+		}},
+		{"Reuse: launching process stopped before its create", func(t *testing.T, e *killEnv, _ *api.Client) string {
+			r := e.seedReusable(t, agentGone, reuseRowSpec{})
+			fgcReuseStopsBeforeCreate(t, e, r)
+			return r.ID
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newKillEnv(t)
+			c, _ := e.client(t)
+			id := tc.setup(t, e, c)
+			cols := e.columns(t, id)
+			start, ok := cols.LaunchStartedAt.(int64)
+			life, _ := cols.LifeNumber.(int64)
+			if cols.State != store.StatePending || !ok || cols.PanePID != nil {
+				t.Fatalf("precondition: {state %v, launch %#v, pane pid %#v}; want pending with a launch start and no pane",
+					cols.State, cols.LaunchStartedAt, cols.PanePID)
+			}
+
+			fgcSetClock(e.clock, time.UnixMilli(start).Add(fmGrace-time.Second))
+			fgcAssertInside(t, e.dbPath, id, fgcSweep(t, c, e.rec, e.pc))
+			fgcSetClock(e.clock, time.UnixMilli(start).Add(fmGrace+time.Second))
+			fgcAssertMarked(t, e.dbPath, id, fgcSweep(t, c, e.rec, e.pc), fgcWant{"tmux_absent", 1, 0})
+
+			if _, err := c.Resume(api.ResumeParams{ClaudeInstanceID: id}); !errors.Is(err, api.ErrNoSessionId) {
+				t.Errorf("Resume = %v; want ErrNoSessionId", err)
+			}
+			if res, err := c.Spawn(fgcSpawnParams(t, id, true)); err != nil || res.ClaudeInstanceID != id {
+				t.Fatalf("reuse Spawn = %+v, %v; want %s launched", res, err, id)
+			}
+			if after := e.columns(t, id); after.State != store.StatePending || after.LifeNumber != life+1 {
+				t.Errorf("after the reuse: {state %v, life %#v}; want pending, life %d", after.State, after.LifeNumber, life+1)
 			}
 		})
 	}

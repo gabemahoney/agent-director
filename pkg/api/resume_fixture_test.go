@@ -46,7 +46,7 @@ var errInjectedStore = errors.New("injected store failure: database is locked")
 type hookedResumeStore struct {
 	st *store.Store
 
-	mu         sync.Mutex
+	hookLock
 	moveErr    error
 	restoreErr error
 	afterGetFn func()
@@ -93,19 +93,23 @@ func orInjected(err error) error {
 	return err
 }
 
+// hookLock guards a hooked store wrapper's injected errors and one-shot hooks
+// (hookedResumeStore, hookedReuseStore in spawn_reuse_fixture_test.go).
+type hookLock struct{ mu sync.Mutex }
+
 // take returns *fn and clears it, under the lock.
-func (w *hookedResumeStore) take(fn *func()) func() {
-	w.mu.Lock()
-	defer w.mu.Unlock()
+func (h *hookLock) take(fn *func()) func() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	f := *fn
 	*fn = nil
 	return f
 }
 
 // injected returns *err under the lock.
-func (w *hookedResumeStore) injected(err *error) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
+func (h *hookLock) injected(err *error) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	return *err
 }
 

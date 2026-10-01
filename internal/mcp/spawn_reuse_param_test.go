@@ -2,23 +2,31 @@ package mcp_test
 
 // spawn_reuse_param_test.go pins the MCP side of spawn's reuse-finished opt-in
 // (SR-10.1, AC-REUSE-13): tools/list advertises it on spawn only, the spawn
-// decoder knows the field, and without the opt-in a finished row still
-// collides. make_template ignores it. The opt-in's effect on a finished row is
-// Task 3's; no case here relies on tmux-session-name or no-pre-trust (b.7or).
+// decoder knows the field, without the opt-in a finished row still collides
+// (with the Go client's envelope), and with it the row is reused through the
+// live dispatcher. make_template ignores it. No case here relies on
+// tmux-session-name or no-pre-trust (b.7or).
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/BurntSushi/toml"
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/mcp"
+	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
+	api "github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
+	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 )
 
 // newReuseParamEnv is a pre-trust env under a temp HOME, plus a per-test
@@ -96,11 +104,12 @@ func assertNothingCreated(t *testing.T, d mcp.Dispatcher, rec *tmuxfix.Recorder)
 	}
 }
 
-// seedFinished seeds id's row in state and returns its columns as stored.
-func seedFinished(t *testing.T, e *ptEnv, id, state string) apitest.SpawnColumns {
+// seedFinished seeds id's row in state on e's socket, with no session id and
+// opts, and returns its columns as stored.
+func seedFinished(t *testing.T, e *ptEnv, id, state string, opts ...apitest.SpawnOption) apitest.SpawnColumns {
 	t.Helper()
 	if _, err := apitest.SeedSpawn(e.storePath, id, state, t.TempDir(), "off", "", false,
-		apitest.WithTmuxSocket(e.socket)); err != nil {
+		append([]apitest.SpawnOption{apitest.WithTmuxSocket(e.socket)}, opts...)...); err != nil {
 		t.Fatalf("SeedSpawn(%s): %v", id, err)
 	}
 	return readColumns(t, e.storePath, id)
@@ -257,6 +266,93 @@ func TestMCPSpawnFinishedRowCollidesWithoutOptIn(t *testing.T) {
 			})
 		}
 	}
+}
+
+// TestSpawnReuseMCPFinishedRow: with reuse-finished an ended or missing row
+// whose session is gone is reused: pending at life + 1 with a new launch.
+func TestSpawnReuseMCPFinishedRow(t *testing.T) {
+	const id = "mcp-reuse-finished-row"
+	for _, state := range []string{store.StateEnded, store.StateMissing} {
+		t.Run(state, func(t *testing.T) {
+			e, c := newReuseParamEnv(t)
+			before := seedFinished(t, e, id, state, apitest.WithLifeNumber(2))
+
+			obj := callToolText(t, e.d, "spawn", spawnArgs(t, t.TempDir(), c,
+				map[string]any{"claude_instance_id": id, "reuse-finished": true}))
+
+			if got := string(obj["claude_instance_id"]); got != strconv.Quote(id) {
+				t.Errorf("claude_instance_id = %s; want %q", got, id)
+			}
+			assertPreTrust(t, obj, "ok")
+			after := readColumns(t, e.storePath, id)
+			if after.State != store.StatePending || fmt.Sprint(after.LifeNumber) != "3" {
+				t.Errorf("state, life = %v, %v; want pending, 3 (seeded %v, 2)", after.State, after.LifeNumber, before.State)
+			}
+			if after.LaunchStartedAt == nil || after.LaunchToken == before.LaunchToken {
+				t.Errorf("launch_started_at, token = %v, %v; want a new launch (seeded %v, %v)",
+					after.LaunchStartedAt, after.LaunchToken, before.LaunchStartedAt, before.LaunchToken)
+			}
+			want := []tmuxfix.SocketCall{{Call: tmux.CallLookup, Socket: e.socket}, {Call: tmux.CallCreate, Socket: e.socket}}
+			var got []tmuxfix.SocketCall
+			for _, sc := range e.rec.SocketCalls() {
+				got = append(got, tmuxfix.SocketCall{Call: sc.Call, Socket: sc.Socket})
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("tmux calls = %+v; want the lookup, then the create, on the row's socket", got)
+			}
+		})
+	}
+}
+
+// TestSpawnReuseMCPCollisionMatchesGoClient: without the opt-in (absent or
+// false) the MCP envelope carries the Go client's collision; the row is unchanged.
+func TestSpawnReuseMCPCollisionMatchesGoClient(t *testing.T) {
+	const id = "mcp-reuse-collision-row"
+	for _, form := range []struct {
+		name  string
+		extra map[string]any
+	}{
+		{"absent", map[string]any{"claude_instance_id": id}},
+		{"false", map[string]any{"claude_instance_id": id, "reuse-finished": false}},
+	} {
+		t.Run(form.name, func(t *testing.T) {
+			e, c := newReuseParamEnv(t)
+			before := seedFinished(t, e, id, store.StateEnded)
+			cwd := t.TempDir()
+
+			resp := callTool(t, e.d, "spawn", spawnArgs(t, cwd, c, form.extra))
+			data := toolErrorData(t, resp)
+
+			goErr := goClientSpawn(t, e.storePath, api.SpawnParams{CWD: cwd, ExtraEnv: c.env(), ClaudeInstanceID: id})
+			if !errors.Is(goErr, spawn.ErrInstanceIdCollision) {
+				t.Fatalf("Go client Spawn err = %v; want ErrInstanceIdCollision", goErr)
+			}
+			name, desc := errnames.Classify(goErr)
+			if data.ErrName != name || data.ErrDescription != desc {
+				t.Errorf("MCP data = %+v; want the Go client's {%s %s}", data, name, desc)
+			}
+			if resp.Error.Code != -32000 || resp.Error.Message != desc || resp.Result != nil {
+				t.Errorf("MCP error = %+v, result %v; want code -32000, message = the description, no result", resp.Error, resp.Result)
+			}
+			if got := readColumns(t, e.storePath, id); !reflect.DeepEqual(got, before) {
+				t.Errorf("row changed:\n got %+v\nwant %+v", got, before)
+			}
+		})
+	}
+}
+
+// goClientSpawn runs p through a Go client on the store at dbPath, with a
+// Recorder of its own, and returns the error.
+func goClientSpawn(t *testing.T, dbPath string, p api.SpawnParams) error {
+	t.Helper()
+	client, err := api.New(api.Options{StorePath: dbPath, ConfigPath: filepath.Join(t.TempDir(), "config.toml"),
+		TmuxClient: tmuxfix.NewRecorder()})
+	if err != nil {
+		t.Fatalf("api.New: %v", err)
+	}
+	defer client.Close() //nolint:errcheck
+	_, err = client.Spawn(p)
+	return err
 }
 
 // TestMCPMakeTemplateIgnoresReuseFinished: make_template accepts either

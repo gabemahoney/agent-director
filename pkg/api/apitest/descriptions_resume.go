@@ -10,19 +10,20 @@ import (
 // that `resume` introduces (Epic 8): the launch-in-progress and lost-race
 // refusals, the move's store error, the control-character id, and the
 // restore's result that ends every resume launch error after a failed launch
-// (SR-8.5). Resume reuses DescLaunchTimeout, DescSocketDir,
+// (SR-8.5), which reuse shares through ResumeRestore.Launch (SR-10.4). Resume
+// reuses DescLaunchTimeout, DescSocketDir,
 // DescSocketPermission, DescTmuxNotRun and DescSessionCreateFailed as they
 // are, and DescUnlabelledSession with its Restore field. The pre-launch
-// check's refusals (Epic 16) are in descriptions_resume_lookup.go, and the
+// check's refusals (Epic 16) are in descriptions_resume_lookup.go, the
 // overlay of its errors after "duplicate session" in
-// descriptions_resume_held.go.
+// descriptions_resume_held.go, and reuse's own cases in descriptions_reuse.go.
 
-// RestoreOutcome is what resume's one restore attempt after a failed launch
-// did (SR-8.5). RestoreNone (the zero value) means the launch was not a
-// resume's.
+// RestoreOutcome is what a resume's or reuse's one restore attempt after a
+// failed launch did (SR-8.5, SR-10.4). RestoreNone (the zero value) means the
+// launch was neither.
 type RestoreOutcome int
 
-// The restore outcomes a resume launch error states.
+// The restore outcomes a resume or reuse launch error states.
 const (
 	RestoreNone       RestoreOutcome = iota
 	RestoreApplied                   // the row is back in its prior state
@@ -31,27 +32,31 @@ const (
 	RestoreStoreError                // the restore write failed; the row stays pending
 )
 
-// ResumeRestore is the restore's result as a resume launch error states it:
-// the outcome and, for RestoreApplied, the prior state the row went back to
-// ("ended" or "missing").
+// ResumeRestore is the restore's result as a resume or reuse launch error
+// states it: the outcome; for RestoreApplied, the prior state the row went
+// back to ("ended" or "missing"); and Launch, the write that began the launch,
+// which the changed and removed sentences name (LaunchResume, the zero value,
+// or LaunchReuse; descriptions_reuse.go).
 type ResumeRestore struct {
 	Outcome    RestoreOutcome
 	PriorState string
+	Launch     LaunchKind
 }
 
 // restoredToPrior is the applied restore's row sentence before its prior
 // state.
 const restoredToPrior = "the row was restored to its prior state"
 
-// restorePhrase is the row sentence each restore outcome gives.
+// restorePhrase is the row sentence each restore outcome gives; the changed
+// and removed sentences name r.Launch's write.
 func (r ResumeRestore) restorePhrase() string {
 	switch r.Outcome {
 	case RestoreApplied:
 		return restoredToPrior + ", " + r.PriorState
 	case RestoreRowChanged:
-		return "the row changed after resume moved it to pending and was left as it is"
+		return "the row changed after " + r.Launch.write() + " and was left as it is"
 	case RestoreRowRemoved:
-		return "the row was removed after resume moved it to pending, so nothing was restored"
+		return "the row was removed after " + r.Launch.write() + ", so nothing was restored"
 	case RestoreStoreError:
 		return "the row could not be restored and stays pending"
 	}
@@ -60,12 +65,13 @@ func (r ResumeRestore) restorePhrase() string {
 
 // otherRestorePhrases are the row sentences of the restore results other
 // than r: the other outcomes' and, for RestoreApplied, the other prior
-// state's.
+// state's; for a launch other than resume's, also resume's write
+// (LaunchKind.otherWrites).
 func (r ResumeRestore) otherRestorePhrases() []string {
-	var out []string
+	out := r.Launch.otherWrites()
 	for _, o := range []RestoreOutcome{RestoreApplied, RestoreRowChanged, RestoreRowRemoved, RestoreStoreError} {
 		if o != r.Outcome && o != RestoreApplied {
-			out = append(out, ResumeRestore{Outcome: o}.restorePhrase())
+			out = append(out, ResumeRestore{Outcome: o, Launch: r.Launch}.restorePhrase())
 		}
 	}
 	if r.Outcome != RestoreApplied {
@@ -80,14 +86,15 @@ func (r ResumeRestore) otherRestorePhrases() []string {
 }
 
 // AfterResumeRestore returns c also requiring the restore's result r as the
-// description's row sentence (SR-1.4, SR-8.5), in place of a plain spawn's
-// "the row stays pending", which it must not say. Use it on the case of a
-// resume launch error that follows a restore (DescSocketPermission,
+// description's row sentence (SR-1.4, SR-8.5, SR-10.4), in place of a plain
+// spawn's "the row stays pending", which it must not say. Use it on the case
+// of a resume or reuse (r.Launch) launch error that follows a restore
+// (DescSocketPermission,
 // DescTmuxNotRun, DescSessionCreateFailed; DescUnlabelledSession applies it
 // through its Restore field).
 func (c DescCase) AfterResumeRestore(r ResumeRestore) DescCase {
 	c.Require = append(append([]string(nil), c.Require...), r.restorePhrase())
-	c.MustNot = append(append([]string(nil), c.MustNot...), rowStaysPending)
+	c.MustNot = append(append(append([]string(nil), c.MustNot...), rowStaysPending), r.Launch.otherWrites()...)
 	return c
 }
 

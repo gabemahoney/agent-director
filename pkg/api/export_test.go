@@ -21,6 +21,20 @@ func SpawnWithCollisionReader(c *Client, collisions spawn.CollisionChecker, para
 	return runSpawn(c.st, collisions, c.tmuxClient, c.procChecker, c.cfg, c.now, c.logger, params)
 }
 
+// ReuseStore is the reuse path's store surface (reuseStore), so package
+// api_test can wrap the store to inject failures and interleavings.
+type ReuseStore = reuseStore
+
+// SpawnWithReuseStore runs the spawn verb path on c, as Client.Spawn does,
+// with rs as the reuse path's store (its pre-check read, change, restore and
+// identity write). External callers use (c *Client).Spawn instead.
+func SpawnWithReuseStore(c *Client, rs ReuseStore, params SpawnParams) (SpawnResult, error) {
+	if err := c.checkClosed(); err != nil {
+		return SpawnResult{}, err
+	}
+	return runSpawnWithReuseStore(c.st, c.st, rs, c.tmuxClient, c.procChecker, c.cfg, c.now, c.logger, params)
+}
+
 // SetClockForTest replaces c's clock (time.Now in production) for this Client only (Appendix F.5).
 func SetClockForTest(c *Client, now func() time.Time) { c.now = now }
 

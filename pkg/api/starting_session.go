@@ -57,8 +57,8 @@ type startingSessionRow struct {
 	// Consequence is the sentence saying what the caller's state is, in the
 	// cantTellRefusal.Consequence style: "" means nothingWasDone (a refusal
 	// before any write). A refusal that follows writes states what was done
-	// instead: resume after "duplicate session" passes its restore's row
-	// sentence (resumeRestoreResultOf).
+	// instead: resume and reuse after "duplicate session" pass their
+	// restore's row sentence (restoreResultOf).
 	Consequence string
 }
 

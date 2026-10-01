@@ -30,18 +30,30 @@ const (
 // mxOtherServer is a server other than the row's recorded fmServer.
 var mxOtherServer = tmuxfix.Server{PID: 7002, Start: fmServer.Start + 60, ProcStart: fmStart}
 
-// mxKind is a pending row kind: its started_at age before fmNow and its row version.
+// mxKind is a pending row kind: its started_at age before fmNow and its row version, or for a reuse's (mxReuse,
+// find_missing_matrix_reuse_test.go) the row a real reuse left (base, filled by made).
 type mxKind struct {
 	name    string
 	age     time.Duration
 	version int64
+	reused  bool
+	base    *store.LiveSpawnIdentity
 }
 
-// mxKinds: a fresh spawn's pending row, a resume's (started hours ago) and a seeded reuse's (a later life).
+// mxKinds: a fresh spawn's pending row and a resume's (started hours ago); a reuse's is mxReuse.
 var mxKinds = []mxKind{
-	{"fresh spawn", fmGrace + time.Second, 1},
-	{"resumed", 6 * time.Hour, 7},
-	{"reuse", fmGrace + time.Second, 12},
+	{name: "fresh spawn", age: fmGrace + time.Second, version: 1},
+	{name: "resumed", age: 6 * time.Hour, version: 7},
+}
+
+// made is k ready for one cell: for a reuse, with a new real reuse's row as its base (mxReusedRow).
+func (k mxKind) made(t *testing.T) mxKind {
+	t.Helper()
+	if k.reused {
+		row := mxReusedRow(t)
+		k.base = &row
+	}
+	return k
 }
 
 // mxWant is a cell's expected outcome: the row's writes and the note written, its one tick's reason ("" = no
@@ -85,16 +97,26 @@ var mxPanes = []mxPane{
 }
 
 // mxRow is a pending row past the default grace period, of kind k; with pane it records the pane process
-// mxPanePID, with server fmServer's identity; opts apply last.
+// mxPanePID, with server fmServer's identity; opts apply last. A reuse's row is k.base (its own id, state, launch
+// start, name and snapshot) with only those identities set.
 func mxRow(id string, k mxKind, pane, server bool, opts ...fmRowOpt) store.LiveSpawnIdentity {
-	o := []fmRowOpt{withLaunch(store.StatePending, fmNow.Add(-fmGrace-time.Second).UnixMilli())}
+	var o []fmRowOpt
 	if server {
 		o = append(o, withServer())
 	}
 	if pane {
 		o = append(o, withPane(mxPanePID, fmStart))
 	}
-	r := liveRow(id, append(o, opts...)...)
+	o = append(o, opts...)
+	if k.base != nil {
+		r := *k.base
+		r.Identity = store.LaunchIdentity{Token: r.Identity.Token, Socket: r.Identity.Socket}
+		for _, f := range o {
+			f(&r)
+		}
+		return r
+	}
+	r := liveRow(id, append([]fmRowOpt{withLaunch(store.StatePending, fmNow.Add(-fmGrace-time.Second).UnixMilli())}, o...)...)
 	r.Snapshot.StartedAt, r.Snapshot.RowVersion = fmNow.Add(-k.age).Format(time.DateTime), k.version
 	return r
 }
@@ -351,10 +373,13 @@ func assertMxCalls(t *testing.T, rec *tmuxfix.Recorder, lookups, listings int) {
 	}
 }
 
-// TestFindMissingPendingMatrix: each pending row kind x pane identity x lookup cell past the grace period gets
-// SR-11.3's outcome, and the holding session is never touched.
-func TestFindMissingPendingMatrix(t *testing.T) {
-	for ki, k := range mxKinds {
+// TestFindMissingPendingMatrix: mxMatrix for a fresh spawn's and a resume's pending row.
+func TestFindMissingPendingMatrix(t *testing.T) { mxMatrix(t, mxKinds) }
+
+// mxMatrix: each pending row kind of kinds x pane identity x lookup cell past the grace period gets SR-11.3's
+// outcome, and the holding session is never touched.
+func mxMatrix(t *testing.T, kinds []mxKind) {
+	for ki, k := range kinds {
 		for pi, p := range mxPanes {
 			for li, lk := range mxLookups {
 				if lk.lostReply && !p.none {
@@ -362,12 +387,12 @@ func TestFindMissingPendingMatrix(t *testing.T) {
 				}
 				name, id := k.name+"/"+p.name+"/"+lk.name, fmt.Sprintf("mx-%d-%d-%d", ki, pi, li)
 				if !lk.ours || !p.none {
-					t.Run(name, func(t *testing.T) { runMxCell(t, mxPlainCell(id, k, p, lk)) })
+					t.Run(name, func(t *testing.T) { runMxCell(t, mxPlainCell(id, k.made(t), p, lk)) })
 					continue
 				}
 				for vi, v := range mxListings {
 					t.Run(name+"/"+v.name, func(t *testing.T) {
-						runMxCell(t, mxOursNoPaneCell(fmt.Sprintf("%s-%d", id, vi), k, lk, v))
+						runMxCell(t, mxOursNoPaneCell(fmt.Sprintf("%s-%d", id, vi), k.made(t), lk, v))
 					})
 				}
 			}
@@ -375,12 +400,15 @@ func TestFindMissingPendingMatrix(t *testing.T) {
 	}
 }
 
-// TestFindMissingPendingMatrixInsideGrace: a pending row 59 s into the default grace period, whose name an
-// unlabelled session holds, is not judged: no reader or tmux call, no write, in neither list.
-func TestFindMissingPendingMatrixInsideGrace(t *testing.T) {
-	for ki, k := range mxKinds {
+// TestFindMissingPendingMatrixInsideGrace: mxInsideGrace for a fresh spawn's and a resume's pending row.
+func TestFindMissingPendingMatrixInsideGrace(t *testing.T) { mxInsideGrace(t, mxKinds) }
+
+// mxInsideGrace: a pending row of each of kinds 59 s into the default grace period, whose name an unlabelled
+// session holds, is not judged: no reader or tmux call, no write, in neither list.
+func mxInsideGrace(t *testing.T, kinds []mxKind) {
+	for ki, k := range kinds {
 		t.Run(k.name, func(t *testing.T) {
-			r := mxRow(fmt.Sprintf("mx-grace-%d", ki), k, true, true,
+			r := mxRow(fmt.Sprintf("mx-grace-%d", ki), k.made(t), true, true,
 				withLaunch(store.StatePending, fmNow.Add(-(fmGrace-time.Second)).UnixMilli()))
 			runMxCell(t, mxCell{row: r, pc: mxChecker(mxPanePID, procfix.Unreadable()),
 				rec: mxHeldBy(mxRecorded, mxNoLabel)(r, nil), want: mxWant{reads: []int{}}})

@@ -227,13 +227,7 @@ func killCalled(t *testing.T, id string) []map[string]any {
 // killDisagrees returns id's ad.provenance.disagree records written by kill.
 func killDisagrees(t *testing.T, id string) []map[string]any {
 	t.Helper()
-	var out []map[string]any
-	for _, l := range pendTrail(t, "ad.provenance.disagree", id) {
-		if l["verb"] == "kill" {
-			out = append(out, l)
-		}
-	}
-	return out
+	return verbDisagrees(t, "kill", id)
 }
 
 // assertKillCalls fails unless the Recorder's socket-taking calls are

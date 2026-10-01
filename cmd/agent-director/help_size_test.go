@@ -10,15 +10,17 @@ import "testing"
 // fit; Epic 16 Task 96 lowered it to 15136 when resume's description gained
 // its pre-launch refusal text and other descriptions were trimmed to fit.
 // On 2026-10-01 it was re-recorded up to 15154 with the user's approval, for
-// Epic 16's resume text after "duplicate session". The user's cap is 15160 B:
-// help must stay at or under it.
+// Epic 16's resume text after "duplicate session". Epic 17 Task tm lowered it
+// to 15101 when spawn's description gained reuse's two ErrInternal triggers
+// and the spawn, status and hook descriptions were trimmed to fit. The
+// user's cap is 15160 B: help must stay at or under it.
 //
 // SR-20.6: this guard checks growth only. Re-recording it downward, to the
 // newly measured count after a trim, is free. Re-recording it upward needs
 // the orchestrator's approval before the commit and a recorded reason in the
 // commit message (what grew, by how many bytes, why it cannot be shorter);
 // never to make a failing guard pass.
-const helpStdoutBytes = 15154
+const helpStdoutBytes = 15101
 
 // helpHardCap is the user's hard cap on `agent-director help` stdout, in
 // bytes. Help stdout must stay at or under it, with no slack.

@@ -3,19 +3,27 @@ package api_test
 // spawn_reuse_test.go covers SpawnParams.ReuseFinished (SR-10.1, AC-REUSE-13)
 // at the parameter level: with no explicit id it is an ordinary fresh spawn;
 // a control-character id is still ErrInvalidFlags; without the opt-in a
-// finished row still collides with ErrInstanceIdCollision.
+// finished row still collides with ErrInstanceIdCollision. It also covers
+// SR-10.2's rows that need no lookup of an old row (AC-REUSE-05, AC-REUSE-14,
+// AC-REUSE-18): no row (a fresh spawn after the label scan, and the insert
+// race), every live state, and a failed pre-check read.
 
 import (
+	"errors"
 	"reflect"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
+	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 )
 
 // finishedStates are the row states the reuse opt-in is about.
@@ -152,4 +160,224 @@ func TestSpawnFinishedRowCollidesWithoutReuse(t *testing.T) {
 			}
 		})
 	}
+}
+
+// rtabParams is a reuse request for id under name, in a new cwd, pre-trusting
+// in trust's config directory.
+func rtabParams(t *testing.T, id, name string, trust trustConfig) api.SpawnParams {
+	return api.SpawnParams{ClaudeInstanceID: id, ReuseFinished: true, TmuxSessionName: name, CWD: t.TempDir(),
+		ExtraEnv: trust.extraEnv()}
+}
+
+// rtabNoNewCalls fails when the Recorder saw any call since before was taken.
+func (e *killEnv) rtabNoNewCalls(t *testing.T, before writesSnapshot) {
+	t.Helper()
+	if n, m := len(e.rec.SocketCalls())-before.calls, len(e.rec.Calls())-before.nameCalls; n != 0 || m != 0 {
+		t.Errorf("tmux calls since the snapshot: %d socket, %d name-based; want none", n, m)
+	}
+}
+
+// rtabAssertInternal fails unless err is ErrInternal (it wraps no catalogued
+// sentinel) worded as c.
+func rtabAssertInternal(t *testing.T, err error, c apitest.DescCase) {
+	t.Helper()
+	if name, _ := errnames.Classify(err); err == nil || name != "ErrInternal" {
+		t.Fatalf("err = %v (classified %q); want ErrInternal", err, name)
+	}
+	apitest.AssertDescription(t, err.Error(), c)
+}
+
+// TestSpawnReuseNoRowIsFreshSpawn: with no row, one label-scan lookup comes
+// before the insert; another store's label proceeds to a plain launch (life 0,
+// no archive, no ad.spawn.reused) and this store's leftover refuses, writing nothing.
+func TestSpawnReuseNoRowIsFreshSpawn(t *testing.T) {
+	cases := []struct {
+		name    string
+		label   func(e *killEnv, id string) tmux.Label // nil: no session, no server
+		refused bool
+	}{
+		{"no session", nil, false},
+		{"another store's label for the id", func(e *killEnv, id string) tmux.Label {
+			return tmuxfix.Valid(tmuxfix.OtherToken, id, apitest.OtherStoreID(e.storeID))
+		}, false},
+		{"this store's leftover under another name", func(e *killEnv, id string) tmux.Label {
+			return tmuxfix.Valid(tmuxfix.OtherToken, id, e.storeID)
+		}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newKillEnv(t)
+			id := "reuse-" + uuid.NewString()[:8]
+			var held tmuxfix.SeedSession
+			if tc.label != nil {
+				e.ensureServer(&killRow{Socket: e.defaultSocket})
+				e.syncServers()
+				held = e.seedOther(t, e.defaultSocket, tmuxfix.SeedSession{Name: "elsewhere-" + uuid.NewString()[:8],
+					Label: tc.label(e, id)})
+			}
+			trust := seedTrustConfig(t, t.TempDir(), trustLacksEntry)
+			p := rtabParams(t, id, "", trust)
+			rowAtLookup := true
+			e.rec.AfterCall(tmux.CallLookup, func(tmuxfix.SocketCall, error) {
+				_, err := apitest.ReadSpawnColumns(e.dbPath, id)
+				rowAtLookup = !errors.Is(err, store.ErrSpawnNotFound)
+			})
+			mark := trailMark(t)
+
+			res, _, err := e.reuse(t, p)
+
+			want := []tmux.Call{tmux.CallLookup, tmux.CallCreate}
+			if tc.refused {
+				want = want[:1]
+				assertOneSentinel(t, err, api.ErrTmuxSessionConflict)
+				apitest.AssertDescription(t, err.Error(), apitest.DescScanLeftover(id,
+					[]apitest.DescSession{{Name: held.Name, ID: held.ID}}))
+				if _, rerr := apitest.ReadSpawnColumns(e.dbPath, id); !errors.Is(rerr, store.ErrSpawnNotFound) {
+					t.Errorf("ReadSpawnColumns(%s) err = %v; want no row", id, rerr)
+				}
+				trust.check(t, "", false, "after the refused spawn")
+			} else {
+				if err != nil || res.ClaudeInstanceID != id {
+					t.Fatalf("Spawn = %+v, %v; want %s", res, err, id)
+				}
+				cols, creates := e.columns(t, id), e.rec.SocketCallsOf(tmux.CallCreate)
+				if cols.State != store.StatePending || cols.LifeNumber != int64(0) || len(creates) != 1 ||
+					creates[0].Token != cols.LaunchToken {
+					t.Errorf("row state %v, life %v, token %v, creates %+v; want pending at life 0, labelled by the one create",
+						cols.State, cols.LifeNumber, cols.LaunchToken, creates)
+				}
+				if h, herr := apitest.ReadSessionHistoryAllLives(e.dbPath, id); herr != nil || len(h) != 0 {
+					t.Errorf("history = %+v (%v); want none", h, herr)
+				}
+			}
+			if got := pendCallKinds(e.rec); !slices.Equal(got, want) || rowAtLookup {
+				t.Errorf("tmux calls = %v, row present at the lookup %v; want %v with no row yet", got, rowAtLookup, want)
+			}
+			if recs := ptRecords(t, mark, "ad.spawn.reused", id); len(recs) != 0 {
+				t.Errorf("ad.spawn.reused records = %v; want none", recs)
+			}
+		})
+	}
+}
+
+// TestSpawnReuseInsertRace: a row inserted after the pre-check read found
+// none makes the insert collide: ErrInstanceIdCollision, no create, and the
+// competing row is left as it was.
+func TestSpawnReuseInsertRace(t *testing.T) {
+	e := newKillEnv(t)
+	id := "reuse-" + uuid.NewString()[:8]
+	w := &hookedReuseStore{st: e.st}
+	var seeded apitest.SpawnColumns
+	w.afterRead(func() {
+		if _, err := apitest.SeedSpawn(e.dbPath, id, store.StateWaiting, t.TempDir(), "off", "", false); err != nil {
+			t.Fatalf("SeedSpawn(%s): %v", id, err)
+		}
+		seeded = e.columns(t, id)
+	})
+
+	_, _, err := e.reuseWith(t, w, rtabParams(t, id, "", seedTrustConfig(t, t.TempDir(), trustLacksEntry)))
+
+	assertOneSentinel(t, err, spawn.ErrInstanceIdCollision)
+	e.assertRowUnchanged(t, id, seeded)
+	if n := len(e.rec.SocketCallsOf(tmux.CallCreate)); n != 0 {
+		t.Errorf("create calls = %d; want 0", n)
+	}
+}
+
+// rtabLive is one live row a reuse meets: how it is made, returning the row's
+// id, recorded session name and socket.
+type rtabLive struct {
+	name string
+	make func(t *testing.T, e *killEnv) (id, recorded, socket string)
+}
+
+// rtabLiveRows are the live rows of SR-10.2: every live state, a pending row
+// from a fresh spawn and from a resume's move, and a row whose kill just failed.
+func rtabLiveRows() []rtabLive {
+	seeded := func(state string) rtabLive {
+		return rtabLive{state, func(t *testing.T, e *killEnv) (string, string, string) {
+			r := e.seedRow(t, killRowSpec{State: state})
+			return r.ID, r.Name, r.Socket
+		}}
+	}
+	return []rtabLive{
+		{"pending from a fresh spawn", func(t *testing.T, e *killEnv) (string, string, string) {
+			id := "reuse-" + uuid.NewString()[:8]
+			c, _ := e.client(t)
+			p := rtabParams(t, id, "", seedTrustConfig(t, t.TempDir(), trustLacksEntry))
+			p.ReuseFinished = false
+			if _, err := c.Spawn(p); err != nil {
+				t.Fatalf("Spawn(%s): %v", id, err)
+			}
+			cols := e.columns(t, id)
+			name, _ := cols.TmuxSessionName.(string)
+			return id, name, e.defaultSocket
+		}},
+		{"pending from a resume's move, its session young", func(t *testing.T, e *killEnv) (string, string, string) {
+			r := e.seedResumable(t, time.Hour, agentGone)
+			if _, err := e.resume(r.ID); err != nil {
+				t.Fatalf("resume(%s): %v", r.ID, err)
+			}
+			if cols := e.columns(t, r.ID); cols.State != store.StatePending || len(e.rec.SocketCallsOf(tmux.CallCreate)) != 1 {
+				t.Fatalf("after the resume: state %v; want pending with one create", cols.State)
+			}
+			return r.ID, r.Name, r.Socket
+		}},
+		seeded(store.StateWaiting),
+		seeded(store.StateWorking),
+		seeded(store.StateAskUser),
+		seeded(store.StateCheckPermission),
+		{"waiting after a failed kill", func(t *testing.T, e *killEnv) (string, string, string) {
+			r := e.seedRow(t, killRowSpec{})
+			if _, err := e.kill(r.ID); !errors.Is(err, api.ErrTmuxKillFailed) {
+				t.Fatalf("kill(%s) err = %v; want ErrTmuxKillFailed", r.ID, err)
+			}
+			return r.ID, r.Name, r.Socket
+		}},
+	}
+}
+
+// TestSpawnReuseLiveRowCollides: a live row, requested under its recorded
+// name or another, is ErrInstanceIdCollision with no tmux call and nothing
+// written, its launch start and the trust file included.
+func TestSpawnReuseLiveRowCollides(t *testing.T) {
+	for _, row := range rtabLiveRows() {
+		for _, other := range []bool{false, true} {
+			name := row.name + "/recorded name"
+			if other {
+				name = row.name + "/another name"
+			}
+			t.Run(name, func(t *testing.T) {
+				e := newKillEnv(t)
+				id, requested, socket := row.make(t, e)
+				if other {
+					requested = "other-" + uuid.NewString()[:8]
+				}
+				trust := seedTrustConfig(t, t.TempDir(), trustLacksEntry)
+				before := e.snapshotWrites(t, "spawn", id, trust, socket)
+
+				_, _, err := e.reuse(t, rtabParams(t, id, requested, trust))
+
+				assertOneSentinel(t, err, spawn.ErrInstanceIdCollision)
+				e.rtabNoNewCalls(t, before)
+				e.assertWroteNothing(t, before)
+			})
+		}
+	}
+}
+
+// TestSpawnReusePreCheckReadFails: a failed pre-check read is ErrInternal with
+// the pre-check wording, no tmux call and nothing written, trust file included.
+func TestSpawnReusePreCheckReadFails(t *testing.T) {
+	e := newKillEnv(t)
+	r := e.seedReusable(t, agentGone, reuseRowSpec{})
+	w := &hookedReuseStore{st: e.st}
+	w.failRead(nil)
+	before := e.snapshotReuse(t, r)
+
+	_, _, err := e.reuseWith(t, w, reuseParams(t, r, reuseRequest{}))
+
+	rtabAssertInternal(t, err, apitest.DescPreCheckRead())
+	e.rtabNoNewCalls(t, before)
+	e.assertWroteNothing(t, before)
 }

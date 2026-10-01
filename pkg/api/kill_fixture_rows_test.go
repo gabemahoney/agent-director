@@ -149,6 +149,51 @@ func (e *killEnv) seedRow(t *testing.T, spec killRowSpec) killRow {
 	return r
 }
 
+// seedRawRow seeds spec's row through apitest.SeedSpawn without reading it
+// back through GetSpawn, which refuses malformed labels, claude_args,
+// extra_env and timestamps: a full launch identity with a new pane and pid,
+// edited by ident (nil: none), then spec.Opts; its agent in spec.Agent's
+// state. Name, Socket and Token are read raw; Spawn holds only the id, name
+// and identity. No session is seeded.
+func (e *killEnv) seedRawRow(t *testing.T, spec killRowSpec, ident func(*store.LaunchIdentity)) killRow {
+	t.Helper()
+	if spec.ID == "" {
+		spec.ID = "kill-" + uuid.NewString()[:8]
+	}
+	pid := e.newPID()
+	li := store.LaunchIdentity{Token: newToken(), Socket: apitest.TestSocket, ServerPID: killServerPID,
+		ServerStart: killServerStart, ServerStarttime: apitest.LinuxProcStarttime, PaneID: "%" + strconv.Itoa(pid),
+		PanePID: pid, PaneStarttime: apitest.LinuxProcStarttime}
+	if ident != nil {
+		ident(&li)
+	}
+	if spec.Agent == agentNotRecorded {
+		pid, li.PanePID, li.PaneStarttime = 0, 0, ""
+	}
+	opts := []apitest.SpawnOption{apitest.WithLaunchIdentity(li)}
+	if pid > 0 {
+		opts = append(opts, apitest.WithPID(pid), apitest.WithProcStarttime(apitest.LinuxProcStarttime))
+	}
+	relay := "off"
+	if spec.RelayOn {
+		relay = "on"
+	}
+	if _, err := apitest.SeedSpawn(e.dbPath, spec.ID, spec.State, spec.CWD, relay, spec.SessionID, false, append(opts, spec.Opts...)...); err != nil {
+		t.Fatalf("SeedSpawn(%s): %v", spec.ID, err)
+	}
+	cols := e.columns(t, spec.ID)
+	name, _ := cols.TmuxSessionName.(string)
+	li.Socket, _ = cols.TmuxSocket.(string)
+	li.Token, _ = cols.LaunchToken.(string)
+	r := killRow{ID: spec.ID, Name: name, Socket: li.Socket, Token: li.Token, StoreID: e.storeID, Agent: spec.Agent,
+		Spawn: api.Spawn{ClaudeInstanceID: spec.ID, TmuxSessionName: name, Identity: li}}
+	if r.Socket == "" {
+		r.Socket = e.defaultSocket
+	}
+	e.setAgent(&r, pid, apitest.LinuxProcStarttime)
+	return r
+}
+
 // setAgent records pid and start as r's agent process and puts it in the
 // fake in r.Agent's state; a pid of 0 (none recorded) is not put.
 func (e *killEnv) setAgent(r *killRow, pid int, start string) {

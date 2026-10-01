@@ -29,8 +29,9 @@ import (
 // (descriptions_find_missing.go), of expire's manifest texts and SR-18.7's
 // cleanup guidance (descriptions_expire.go), of the shared
 // starting-session refusal (descriptions_starting.go), of resume's
-// pre-launch check (descriptions_resume_lookup.go), or of resume's errors
-// after "duplicate session" (descriptions_resume_held.go).
+// pre-launch check (descriptions_resume_lookup.go), of resume's and reuse's
+// errors after "duplicate session" (descriptions_resume_held.go), or of
+// reuse's own cases (descriptions_reuse.go).
 
 // DescCase is one SR-1.4 description case: Name (shown in every failure),
 // the phrases the description must contain, the case's own must-not phrases
@@ -261,7 +262,8 @@ func DescPreCheckRead() DescCase {
 
 // LaunchTimeout parameterises DescLaunchTimeout. Timeout is the create call's
 // effective timeout; Unrecognised is a non-zero exit with an unparseable
-// reply instead; RowReset is reuse's "the row was reset" (Epic 17).
+// reply instead; RowReset is reuse's "the row was reset" (Epic 17;
+// DescCase.withRowReset).
 type LaunchTimeout struct {
 	InstanceID   string
 	Timeout      time.Duration
@@ -296,14 +298,11 @@ func DescLaunchTimeout(p LaunchTimeout) DescCase {
 	} else {
 		req = append(req, seconds(p.Timeout))
 	}
-	if p.RowReset {
-		req = append(req, "the row was reset")
-	}
 	return DescCase{
 		Name:    "ErrTmuxUnresponsive, launch timeout",
 		Require: req,
 		MustNot: append([]string{"nothing was done", "retry later"}, unresponsiveMustNot...),
-	}
+	}.withRowReset(p.RowReset)
 }
 
 // DescCallTimeout is ErrTmuxUnresponsive for a call (other than a launch's

@@ -23,7 +23,8 @@
 // # Schema-v5 seeding and store reads (SR-20.2, SR-20.3)
 //
 //   - SeedSpawn options for the v5 columns and raw values: WithTmuxSessionName,
-//     WithStartedAt / WithEndedAt (a time.Time or raw text), WithLaunchStartedAt,
+//     WithStartedAt / WithEndedAt (a time.Time or raw text), WithNoEndedAt
+//     (NULL), WithLaunchStartedAt,
 //     WithRawLaunchStartedAt, WithNoLaunchStartedAt, WithLifeNumber,
 //     WithNoPreTrust, WithRawNoPreTrust, WithLaunchIdentity, WithTmuxSocket
 //     (the row's recorded socket in place of TestSocket), WithNoLaunchToken
@@ -113,7 +114,11 @@
 //     ResumeRestore, in place of "nothing was done" or "nothing was
 //     written", also over DescPreLaunchLeftover for an old holder and over
 //     the starting-session cases for the row's own session; DescHeldLeftover
-//     stays plain spawn's wording only), of the starting-session refusal
+//     stays plain spawn's wording only; ResumeRestore.Launch, LaunchReuse,
+//     words it for reuse), of reuse's own cases (descriptions_reuse.go:
+//     DescReuseLostRace, DescReuseArchiveFailure, DescReuseChangeFailure;
+//     its launch timeout is DescLaunchTimeout with RowReset), of the
+//     starting-session refusal
 //     that resume, reuse and kill's finished-row opt-in share
 //     (descriptions_starting.go: DescStillStopping, DescStillStarting and
 //     DescOwnOldSession, parameterised by StartingSession; the own old

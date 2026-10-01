@@ -9,7 +9,8 @@ package api_test
 // extend this file (a oneName<Verb>Rows added to oneNameRows, every error
 // through assertOneName) instead of writing their own one-name check; the
 // pane verbs' rows are in one_name_pane_verbs_test.go, resume's pre-launch
-// and "duplicate session" rows in one_name_resume_test.go.
+// and "duplicate session" rows in one_name_resume_test.go; reuse's run under
+// TestOneNameReuseReturnedErrors (one_name_reuse_test.go).
 
 import (
 	"errors"
