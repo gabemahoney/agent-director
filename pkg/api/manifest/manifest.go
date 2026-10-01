@@ -278,6 +278,15 @@ var Verbs = []VerbDef{
 				AllowEmpty:    false,
 				AllowedValues: nil,
 			},
+			{
+				Name:          "reuse-finished",
+				Type:          "bool",
+				Description:   "Opt in to reusing an explicit claude_instance_id whose row is ended or missing. No effect without an explicit claude_instance_id (a minted id cannot collide). Applies to this call only. Default off: any existing row with the id collides with ErrInstanceIdCollision.",
+				Required:      false,
+				Nullable:      false,
+				AllowEmpty:    false,
+				AllowedValues: nil,
+			},
 		},
 		ResultFields: []FieldDef{
 			{

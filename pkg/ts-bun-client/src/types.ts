@@ -192,6 +192,13 @@ export interface SpawnParams {
   no_pre_trust?: boolean;
   /** Explicit tmux session name. Auto-derived when absent. */
   tmux_session_name?: string;
+  /**
+   * Reuse an explicit `claude_instance_id` whose row is `ended` or `missing`.
+   * No effect without an explicit `claude_instance_id`; applies to this call
+   * only. Default false: any existing row with the id collides with
+   * `ErrInstanceIdCollision`.
+   */
+  reuse_finished?: boolean;
 }
 
 /**

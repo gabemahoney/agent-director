@@ -66,6 +66,13 @@ type SpawnParams struct {
 	// the row (no_pre_trust) for its life, and every resume of that life
 	// follows it: no resume pre-trusts over an opt-out (SR-22.6).
 	NoPreTrust bool
+
+	// ReuseFinished opts in to reusing an explicit ClaudeInstanceID whose
+	// row is ended or missing. It has no effect without an explicit
+	// ClaudeInstanceID (a minted id cannot collide) and applies to this
+	// call only; templates never carry it. Default false keeps the
+	// collision behaviour: any existing row gives ErrInstanceIdCollision.
+	ReuseFinished bool
 }
 
 // Permissions captures the three SRD §6.1 arrays. Nil entries are omitted

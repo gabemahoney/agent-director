@@ -7,7 +7,11 @@
  * file byte-identical (SR-22.6).
  *
  * Error paths: empty cwd → ErrCwdMissing; an id with a control character →
- * ErrInvalidFlags with no row and no tmux session created.
+ * ErrInvalidFlags with no row and no tmux session created, with or without
+ * reuse_finished.
+ *
+ * reuse_finished (SR-10.1): without an id it mints one; without the opt-in an
+ * ended row collides (ErrInstanceIdCollision), row unchanged, no session.
  */
 
 import { test, expect } from "bun:test";
@@ -15,7 +19,7 @@ import * as path from "path";
 import * as fs from "fs";
 import { withTempHome } from "../internal/tempHome.js";
 import { runHelper } from "../internal/helper.js";
-import { Client, ErrCwdMissing, ErrInvalidFlags, AgentDirectorError } from "../../src/index.js";
+import { Client, ErrCwdMissing, ErrInvalidFlags, ErrInstanceIdCollision, AgentDirectorError } from "../../src/index.js";
 import type { SpawnResult } from "../../src/index.js";
 
 // The FFI worker inherits a snapshot of process.env at spawn time and does NOT
@@ -126,13 +130,15 @@ test("spawn: error — empty cwd → ErrCwdMissing", async () => {
 
 // SR-9.1 / AC-SPN-02: the printable prefix is UUID-suffixed so a leaked session
 // cannot collide across runs, and so the message can be checked for any echo of the id.
+// The reuse_finished rows prove the opt-in does not bypass the check (SR-10.1).
 test.each([
-  ["newline", "\n"],
-  ["tab", "\t"],
-  ["DEL (0x7f)", "\x7f"],
-])(
+  ["newline", "\n", false],
+  ["tab", "\t", false],
+  ["DEL (0x7f)", "\x7f", false],
+  ["newline with reuse_finished", "\n", true],
+] as const)(
   "spawn: error — id containing %s → ErrInvalidFlags, no row, no session",
-  async (_label, ctl) => {
+  async (_label, ctl, reuse) => {
     await withTempHome(async (homeDir) => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
       const logPath = path.join(homeDir, "fake-tmux.log");
@@ -147,7 +153,7 @@ test.each([
 
         let caught: unknown;
         try {
-          await client.spawn({ cwd: homeDir, claude_instance_id: badId });
+          await client.spawn({ cwd: homeDir, claude_instance_id: badId, ...(reuse ? { reuse_finished: true } : {}) });
         } catch (e) {
           caught = e;
         }
@@ -167,6 +173,57 @@ test.each([
         // zero above is not an artefact of an unrouted FAKE_TMUX_LOG.
         const ok = await client.spawn({ cwd: homeDir, claude_instance_id: goodId });
         expect(ok.claude_instance_id).toBe(goodId);
+        expect(newSessionCount(logPath)).toBe(1);
+      });
+    });
+  },
+  20_000,
+);
+
+// SR-10.1: reuse_finished has no effect without an explicit id; the spawn mints one.
+test("spawn: reuse_finished without claude_instance_id → fresh spawn with a minted id", async () => {
+  await withTempHome(async (homeDir) => {
+    const storePath = path.join(homeDir, ".agent-director", "state.db");
+    seedOuterParent(storePath);
+    using client = await Client.create({ storePath, createIfMissing: true, tmuxCommand: fakeTmuxBin, _cliPath: process.env.CLI_PATH } as any);
+    const result = await client.spawn({ cwd: homeDir, reuse_finished: true });
+    expect(result.claude_instance_id.length).toBeGreaterThan(0);
+    expect((await client.get({ claude_instance_id: result.claude_instance_id })).state).toBe("pending");
+  });
+}, 10_000);
+
+// AC-REUSE-13: without the opt-in an ended row still collides; the row is unchanged and no session is created.
+test.each([
+  ["absent", {}],
+  ["false", { reuse_finished: false }],
+] as const)(
+  "spawn: error — ended row, reuse_finished %s → ErrInstanceIdCollision",
+  async (_label, extra) => {
+    await withTempHome(async (homeDir) => {
+      const storePath = path.join(homeDir, ".agent-director", "state.db");
+      const logPath = path.join(homeDir, "fake-tmux.log");
+      const id = `reuse-ended-${crypto.randomUUID().slice(0, 8)}`;
+      seedOuterParent(storePath);
+      runHelper("seed-spawn", { store: storePath, id, state: "ended", "create-store": true });
+
+      using client = await Client.create({ storePath, createIfMissing: true, tmuxCommand: fakeTmuxBin, _cliPath: process.env.CLI_PATH } as any);
+      await withFakeTmuxLog(logPath, async () => {
+        const before = await client.get({ claude_instance_id: id });
+        expect(before.state).toBe("ended");
+
+        let caught: unknown;
+        try {
+          await client.spawn({ cwd: homeDir, claude_instance_id: id, ...extra });
+        } catch (e) {
+          caught = e;
+        }
+        expect(caught).toBeInstanceOf(ErrInstanceIdCollision);
+        expect((caught as AgentDirectorError).errName).toBe("ErrInstanceIdCollision");
+        expect(await client.get({ claude_instance_id: id })).toEqual(before);
+        expect(newSessionCount(logPath)).toBe(0);
+
+        // Control: a fresh id in the same wiring records new-session.
+        await client.spawn({ cwd: homeDir, claude_instance_id: `${id}-ok` });
         expect(newSessionCount(logPath)).toBe(1);
       });
     });

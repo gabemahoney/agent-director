@@ -2,6 +2,7 @@ package spawn_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -248,6 +249,41 @@ project = "foo"
 	}
 	if r2.AgentDirectorLabels["project"] != "foo" {
 		t.Errorf("template state was mutated: %v", r2.AgentDirectorLabels)
+	}
+}
+
+// TestResolveReuseFinishedIsPerCallOnly pins SR-10.1: the per-call
+// ReuseFinished value leaves Resolve unchanged, and a template never sets it.
+func TestResolveReuseFinishedIsPerCallOnly(t *testing.T) {
+	for _, template := range []string{"", "base"} {
+		for _, reuse := range []bool{true, false} {
+			t.Run(fmt.Sprintf("template=%q,reuse=%v", template, reuse), func(t *testing.T) {
+				withTemplate(t, "base", `
+cwd = "/tmp"
+relay_mode = "off"
+claude_args = ["--model", "opus"]
+
+[labels]
+project = "foo"
+
+[extra_env]
+EXTRA = "kept"
+
+[permissions]
+allow = ["A"]
+`)
+				r, err := spawn.Resolve(spawn.SpawnParams{
+					Template:      template,
+					ReuseFinished: reuse,
+				}, config.Default())
+				if err != nil {
+					t.Fatalf("Resolve: %v", err)
+				}
+				if r.ReuseFinished != reuse {
+					t.Errorf("ReuseFinished = %v; want %v (per-call value)", r.ReuseFinished, reuse)
+				}
+			})
+		}
 	}
 }
 

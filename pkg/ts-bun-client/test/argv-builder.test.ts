@@ -69,6 +69,11 @@ describe("argv builder — make-template", () => {
     const argv = buildArgv(CLI, "make-template", { name: "tpl" });
     expect(hasFlag(argv, "--overwrite")).toBe(false);
   });
+
+  test("untyped reuse_finished: true → no --reuse-finished (spawn-only; the CLI rejects it here)", () => {
+    const argv = buildArgv(CLI, "make-template", { name: "tpl", reuse_finished: true });
+    expect(hasFlag(argv, "--reuse-finished")).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -146,6 +151,15 @@ describe("argv builder — spawn", () => {
     expect(hasFlag(argvTrue, "--no-pre-trust")).toBe(true);
     const argvFalse = buildArgv(CLI, "spawn", { cwd: "/ws", no_pre_trust: false });
     expect(hasFlag(argvFalse, "--no-pre-trust")).toBe(false);
+  });
+
+  test.each([
+    ["true", { reuse_finished: true }, true],
+    ["false", { reuse_finished: false }, false],
+    ["absent", {}, false],
+  ] as const)("reuse_finished %s → --reuse-finished only when true (SR-10.1)", (_l, extra, want) => {
+    const argv = buildArgv(CLI, "spawn", { cwd: "/ws", claude_instance_id: "id-1", ...extra });
+    expect(hasFlag(argv, "--reuse-finished")).toBe(want);
   });
 
   test("label array → repeated --label k=v entries", () => {

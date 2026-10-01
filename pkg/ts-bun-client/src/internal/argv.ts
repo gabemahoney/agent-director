@@ -12,8 +12,8 @@
  *   - Mapping between camelCase method name and kebab CLI verb follows the
  *     same mapping in src/internal/verbs.ts.
  *   - Optional fields are omitted when undefined / falsy.
- *   - Boolean flags (--no-pre-trust, --ansi, --overwrite) are only appended
- *     when the field is explicitly true.
+ *   - Boolean flags (--no-pre-trust, --reuse-finished, --ansi, --overwrite)
+ *     are only appended when the field is explicitly true.
  *   - Global flags (b.32k: --store-path, --home, --tmux-command) appear
  *     BEFORE the verb token so the CLI's global-flag parser in
  *     cmd/agent-director/global_flags.go strips them prior to verb dispatch.
@@ -174,6 +174,7 @@ function buildSpawn(p: SpawnParams): string[] {
   if (p.relay_mode !== undefined && p.relay_mode !== "")
     f.push("--relay-mode", p.relay_mode);
   if (p.no_pre_trust === true) f.push("--no-pre-trust");
+  if (p.reuse_finished === true) f.push("--reuse-finished");
 
   // Repeatable --label k=v
   if (p.label) {

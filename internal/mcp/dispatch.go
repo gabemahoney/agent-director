@@ -68,6 +68,7 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 			RelayMode        string            `json:"relay-mode"`
 			ExtraEnv         map[string]string `json:"extra-env"`
 			ClaudeArgs       []string          `json:"claude_args"`
+			ReuseFinished    bool              `json:"reuse-finished"`
 		}
 		if err := json.Unmarshal(args, &raw); err != nil {
 			return nil, fmt.Errorf("decode spawn params: %w", err)
@@ -88,6 +89,7 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 			AgentDirectorLabels: labels,
 			ClaudeArgs:          raw.ClaudeArgs,
 			RelayMode:           raw.RelayMode,
+			ReuseFinished:       raw.ReuseFinished,
 		}
 		if len(raw.Allow) > 0 || len(raw.Deny) > 0 || len(raw.Ask) > 0 {
 			p.Permissions = &api.Permissions{
