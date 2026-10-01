@@ -236,7 +236,9 @@ function buildReadPane(p: ReadPaneParams): string[] {
 }
 
 function buildKill(p: KillParams): string[] {
-  return ["kill", "--claude-instance-id", p.claude_instance_id];
+  const f: string[] = ["kill", "--claude-instance-id", p.claude_instance_id];
+  if (p.include_finished === true) f.push("--include-finished");
+  return f;
 }
 
 function buildDecide(p: DecideParams): string[] {

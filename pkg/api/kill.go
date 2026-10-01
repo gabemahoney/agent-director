@@ -56,6 +56,8 @@ var (
 type KillParams struct {
 	// ClaudeInstanceID identifies the Spawn whose agent kill ends.
 	ClaudeInstanceID string `json:"claude_instance_id"`
+	// Operator-only: see "Operator actions" in the agent-director README.
+	IncludeFinished bool `json:"-"`
 }
 
 // KillResult is the typed return shape of the kill verb (SR-6.6).
@@ -123,6 +125,7 @@ func Kill(s KillStore, t KillTmux, pc ProcChecker, startingSession, stoppingWind
 	k := &killRun{
 		s: s, t: t, pc: pc, exitWait: exitWait, now: now, sleep: sleep,
 		id:           params.ClaudeInstanceID,
+		optIn:        params.IncludeFinished,
 		lookup:       tmux.TokenNotRun,
 		followup:     tmux.TokenNotRun,
 		processCheck: tmux.TokenNotRun,
@@ -145,6 +148,7 @@ type killRun struct {
 	now      func() time.Time
 	sleep    func(time.Duration)
 	id       string
+	optIn    bool // the operator-only finished-row opt-in (SR-6.5)
 
 	row     Spawn
 	socket  string
@@ -171,6 +175,9 @@ func (k *killRun) run() error {
 		return err
 	}
 	k.row = row
+	if k.optIn {
+		return k.withOptIn()
+	}
 	if row.State == store.StateEnded || row.State == store.StateMissing {
 		return nil
 	}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -18,9 +19,9 @@ import (
 // and returns a programmable result/error so the framing tests can
 // drive both code paths without spinning up the live api wiring.
 type fakeDispatcher struct {
-	calls    []dispatchedCall
-	result   any
-	err      error
+	calls  []dispatchedCall
+	result any
+	err    error
 }
 
 type dispatchedCall struct {
@@ -312,4 +313,73 @@ func TestUnknownToolReturnsErrUnknownTool(t *testing.T) {
 	if !errors.Is(err, mcp.ErrUnknownTool) {
 		t.Fatalf("err = %v; want ErrUnknownTool", err)
 	}
+}
+
+// killOptInRe matches kill's operator-only finished-row opt-in in any spelling
+// (include-finished, include_finished, IncludeFinished, ...).
+var killOptInRe = regexp.MustCompile(`(?i)include.?finished`)
+
+// TestToolsListOmitsKillOptIn: kill's input schema has no opt-in property and
+// the whole tools/list body never names it (SR-6.8).
+func TestToolsListOmitsKillOptIn(t *testing.T) {
+	resp := runOne(t, &fakeDispatcher{}, mcp.Request{JSONRPC: "2.0", ID: json.RawMessage(`1`), Method: "tools/list"})
+	if resp == nil || resp.Error != nil {
+		t.Fatalf("tools/list failed: %+v", resp)
+	}
+	body, _ := json.Marshal(resp.Result)
+	if m := killOptInRe.FindString(string(body)); m != "" {
+		t.Errorf("SR-6.8: tools/list names the operator-only kill opt-in %q: %s", m, body)
+	}
+	var got struct {
+		Tools []struct {
+			Name        string `json:"name"`
+			InputSchema struct {
+				Properties map[string]any `json:"properties"`
+			} `json:"inputSchema"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("parse tools/list: %v", err)
+	}
+	for _, tool := range got.Tools {
+		if tool.Name != "kill" {
+			continue
+		}
+		if _, ok := tool.InputSchema.Properties["claude_instance_id"]; !ok {
+			t.Errorf("kill schema lacks claude_instance_id; the SR-6.8 check would pass vacuously: %v", tool.InputSchema.Properties)
+		}
+		for name := range tool.InputSchema.Properties {
+			if killOptInRe.MatchString(name) {
+				t.Errorf("SR-6.8: kill schema has opt-in property %q", name)
+			}
+		}
+		return
+	}
+	t.Fatalf("tools/list has no kill tool: %s", body)
+}
+
+// TestHelpToolOmitsKillOptIn: the MCP help tool, over a live dispatcher, lists
+// kill and never names its opt-in (SR-6.8).
+func TestHelpToolOmitsKillOptIn(t *testing.T) {
+	d, _ := newKillMCPServer(t, killMCPCase{state: "ended"})
+	resp := callTool(t, d, "help", `{}`)
+	if resp == nil || resp.Error != nil {
+		t.Fatalf("tools/call help failed: %+v", resp)
+	}
+	body, _ := json.Marshal(resp.Result)
+	if m := killOptInRe.FindString(string(body)); m != "" {
+		t.Errorf("SR-6.8: MCP help names the operator-only kill opt-in %q: %s", m, body)
+	}
+	var verbs []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(callToolText(t, d, "help", `{}`)["verbs"], &verbs); err != nil {
+		t.Fatalf("parse help verbs: %v", err)
+	}
+	for _, v := range verbs {
+		if v.Name == "kill" {
+			return
+		}
+	}
+	t.Errorf("MCP help does not list kill; the SR-6.8 check would pass vacuously: %+v", verbs)
 }

@@ -336,10 +336,12 @@ export interface ReadPaneResult {
   pane: string;
 }
 
-/** Mirrors pkg/api.KillParams (json tags). */
+/** Mirrors pkg/api.KillParams. */
 export interface KillParams {
   /** Id of the Spawn to kill. */
   claude_instance_id: string;
+  /** Operator-only: see "Operator actions" in the agent-director README. */
+  include_finished?: boolean;
 }
 
 /** Mirrors pkg/api/kill.go::KillResult (json tags). */

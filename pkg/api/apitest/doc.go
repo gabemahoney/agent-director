@@ -92,7 +92,9 @@
 //     restore's result a resume launch error ends with; descriptions_kill.go,
 //     whose DescCase.AfterKillSent states a kill was sent, and whose
 //     tmuxErrorClasses is the one tmux error name to class definition that
-//     DescKillManifest and DescPaneManifest share), of the pane
+//     DescKillManifest and DescPaneManifest share; descriptions_kill_optin.go,
+//     kill's finished-row opt-in: DescKillOptInLiveRow, its live-row
+//     refusal), of the pane
 //     verbs' cases, parameterised by PaneVerb (descriptions_pane.go:
 //     DescPaneNotFound with its lost-reply variant, DescPaneLeftover,
 //     DescPaneGone; a pane verb's tmux trouble uses the shared cases, which

@@ -38,6 +38,8 @@ func errorName(err error) string {
 		return "ErrSpawnNotInteractive"
 	case errors.Is(err, ErrSendKeysWhileRelayed):
 		return "ErrSendKeysWhileRelayed"
+	case errors.Is(err, ErrSpawnNotResumable):
+		return "ErrSpawnNotResumable"
 	}
 	return "ErrInternal"
 }

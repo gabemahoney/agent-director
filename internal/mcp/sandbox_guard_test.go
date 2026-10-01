@@ -2,10 +2,15 @@ package mcp_test
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard"
+	"github.com/gabemahoney/agent-director/internal/trail"
 )
+
+// mcpTrailPath is the trail file every Emit in this test binary writes to.
+var mcpTrailPath string
 
 // TestMain refuses to run this package's tests outside the sandbox container.
 // internal/mcp's tests construct clients that open the store, which can rewrite
@@ -32,6 +37,10 @@ func TestMain(m *testing.M) {
 	if err := os.Setenv("HOME", tmpHome); err != nil { //nolint:errcheck — os.Setenv never errors on non-nil key
 		panic("TestMain: Setenv HOME: " + err.Error())
 	}
+	// Pin the trail singleton here, so tests that move HOME cannot pin it to
+	// theirs by emitting first, and trail readers find it at mcpTrailPath.
+	trail.Default()
+	mcpTrailPath = filepath.Join(tmpHome, ".agent-director", "ad-trail.jsonl")
 	code := m.Run()
 	_ = os.RemoveAll(tmpHome)
 	os.Exit(code)

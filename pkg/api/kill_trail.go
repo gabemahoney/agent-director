@@ -62,7 +62,7 @@ func (k *killRun) emit(who caller, err error) {
 		"process_check":      k.processCheck,
 		"agent_pid":          agentPID,
 		"survivor_pids":      survivors,
-		"include_finished":   false,
+		"include_finished":   k.optIn,
 		"caller_process":     who.process,
 		"caller_pid":         who.pid,
 		"caller_hostname":    who.hostname,

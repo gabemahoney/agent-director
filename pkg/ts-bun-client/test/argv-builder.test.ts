@@ -295,6 +295,16 @@ describe("argv builder — kill", () => {
     assertBase(argv, "kill");
     expect(flagValue(argv, "--claude-instance-id")).toBe("id-kill");
   });
+
+  test.each([
+    ["true", { include_finished: true }, ["--include-finished"]],
+    ["false", { include_finished: false }, []],
+    ["absent", {}, []],
+  ] as const)("include_finished %s → one bare --include-finished only when true (SR-6.5)", (_l, extra, want) => {
+    const argv = buildArgv(CLI, "kill", { claude_instance_id: "id-kill", ...extra });
+    expect(argv).toEqual([CLI, "kill", "--claude-instance-id", "id-kill", ...want]);
+    expect(argv.filter((a) => /include.?finished/i.test(a))).toEqual([...want]);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -30,8 +30,9 @@ import (
 // cleanup guidance (descriptions_expire.go), of the shared
 // starting-session refusal (descriptions_starting.go), of resume's
 // pre-launch check (descriptions_resume_lookup.go), of resume's and reuse's
-// errors after "duplicate session" (descriptions_resume_held.go), or of
-// reuse's own cases (descriptions_reuse.go).
+// errors after "duplicate session" (descriptions_resume_held.go), of reuse's
+// own cases (descriptions_reuse.go), or of kill's finished-row opt-in
+// (descriptions_kill_optin.go).
 
 // DescCase is one SR-1.4 description case: Name (shown in every failure),
 // the phrases the description must contain, the case's own must-not phrases

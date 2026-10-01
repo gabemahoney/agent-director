@@ -25,6 +25,7 @@ type killMCPCase struct {
 	wantSent  bool
 	wantErr   string
 	wantKills int
+	opts      []apitest.SpawnOption // further row columns for SeedSpawn
 }
 
 // seedOurs seeds the row's own labelled session plus an unrelated session, so
@@ -61,7 +62,7 @@ func newKillMCPServer(t *testing.T, tc killMCPCase) (mcp.Dispatcher, *tmuxfix.Re
 	storePath := filepath.Join(dir, "state.db")
 	cfgPath := filepath.Join(dir, "config.toml")
 	apitest.WriteTmuxConfig(t, cfgPath)
-	if _, err := apitest.SeedSpawn(storePath, killMCPID, tc.state, "/tmp", "off", "", true); err != nil {
+	if _, err := apitest.SeedSpawn(storePath, killMCPID, tc.state, "/tmp", "off", "", true, tc.opts...); err != nil {
 		t.Fatalf("seed %s: %v", tc.state, err)
 	}
 	rec := tmuxfix.NewRecorder()

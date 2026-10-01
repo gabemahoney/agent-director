@@ -188,6 +188,46 @@ func TestGenerate_PendingMeaning(t *testing.T) {
 	}
 }
 
+// killOptIn matches kill's operator-only finished-row opt-in in any spelling
+// (include-finished, include_finished, IncludeFinished, ...).
+var killOptIn = regexp.MustCompile(`(?i)include.?finished`)
+
+// TestGenerate_KillOptInAbsent: neither generated nor committed reference names
+// the kill opt-in (SR-6.8), and each still documents kill with kill_sent.
+func TestGenerate_KillOptInAbsent(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmp, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+	if err := generate(tmp); err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	sections := map[string]string{"cli-reference.md": "## kill\n", "mcp-reference.md": "## Tool: kill\n"}
+	for _, dir := range []string{filepath.Join(tmp, "docs"), filepath.Join("..", "..", "docs")} {
+		for name, heading := range sections {
+			path := filepath.Join(dir, name)
+			t.Run(path, func(t *testing.T) {
+				raw, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatalf("read %s: %v", path, err)
+				}
+				got := string(raw)
+				for i, line := range strings.Split(got, "\n") {
+					if m := killOptIn.FindString(line); m != "" {
+						t.Errorf("SR-6.8: %s:%d names the operator-only kill opt-in %q: %s", path, i+1, m, line)
+					}
+				}
+				_, section, ok := strings.Cut(got, heading)
+				if !ok {
+					t.Fatalf("%s has no %q section; the SR-6.8 absence check would pass vacuously", path, strings.TrimSpace(heading))
+				}
+				section, _, _ = strings.Cut(section, "\n## ")
+				mustContain(t, path+" kill section", section, "kill_sent")
+			})
+		}
+	}
+}
+
 // TestGenerate_Deterministic asserts byte-identical output across two runs
 // against the same tempdir — the contract the CI drift gate relies on.
 func TestGenerate_Deterministic(t *testing.T) {

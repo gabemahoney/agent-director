@@ -140,6 +140,34 @@ func TestHelpShowsDeleteDeprecated(t *testing.T) {
 	t.Fatal("help lists no delete verb")
 }
 
+// TestHelpOmitsKillOptIn: help and --help, which agents are shown, list kill
+// and never name its operator-only opt-in (SR-6.8).
+func TestHelpOmitsKillOptIn(t *testing.T) {
+	for _, arg := range []string{"help", "--help"} {
+		t.Run(arg, func(t *testing.T) {
+			stdout, stderr, code := runCLI(t, arg)
+			if code != 0 {
+				t.Fatalf("exit=%d want 0; stderr=%q", code, stderr)
+			}
+			for stream, out := range map[string]string{"stdout": stdout, "stderr": stderr} {
+				if m := cliOptInRe.FindString(out); m != "" {
+					t.Errorf("SR-6.8: %s %s names the operator-only kill opt-in %q", arg, stream, m)
+				}
+			}
+			var parsed helpStdout
+			if err := json.Unmarshal([]byte(stdout), &parsed); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			for _, v := range parsed.Verbs {
+				if v.Name == "kill" {
+					return
+				}
+			}
+			t.Errorf("%s does not list kill; the SR-6.8 check would pass vacuously", arg)
+		})
+	}
+}
+
 // firstByte returns the first byte of s as a string, or "<empty>" if s is
 // empty. Used for diagnostics in assertions that care about the leading byte.
 func firstByte(s string) string {
