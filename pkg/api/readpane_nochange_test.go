@@ -8,7 +8,6 @@ package api_test
 import (
 	"errors"
 	"reflect"
-	"slices"
 	"testing"
 	"time"
 
@@ -21,20 +20,10 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// rpnRun is one read-pane call's answer and the socket-taking calls it made.
-type rpnRun struct {
-	res   api.ReadPaneResult
-	err   error
-	calls []tmuxfix.SocketCall
-}
-
-// rpnRead runs read-pane on id through a Client (e.pc as its reader) and
-// returns its answer with the calls it added to the Recorder.
-func rpnRead(t *testing.T, e *killEnv, id string, nLines int) rpnRun {
+// rpnRead runs read-pane on id with nLines through a Client (e.pc as its reader).
+func rpnRead(t *testing.T, e *killEnv, id string, nLines int) verbRun[api.ReadPaneResult] {
 	t.Helper()
-	mark := len(e.rec.SocketCalls())
-	res, err := e.readPaneClient(t, api.ReadPaneParams{ClaudeInstanceID: id, NLines: nLines})
-	return rpnRun{res: res, err: err, calls: e.rec.SocketCalls()[mark:]}
+	return e.readPaneRun(t, api.ReadPaneParams{ClaudeInstanceID: id, NLines: nLines})
 }
 
 // rpnAssertErr fails unless err is nil when want is, else wraps want.
@@ -128,7 +117,7 @@ func TestReadPaneNothingChangedPane10(t *testing.T) {
 				if run.err != nil || run.res.Pane != paneText(r.Socket, pane) {
 					t.Fatalf("ReadPane = %+v, %v; want pane %s's text", run.res, run.err, pane)
 				}
-				e.assertPaneCalls(t, tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture)
+				e.assertPaneCalls(t, paneReadCalls...)
 				e.assertCaptured(t, pane, 1, false)
 			}
 			rpnAssertNothingChanged(t, e, r, &before, sessions, mark)
@@ -164,7 +153,7 @@ func TestReadPaneNoAdoptionWrite(t *testing.T) {
 	if run.err != nil || run.res.Pane != paneText(r.Socket, pane) {
 		t.Fatalf("ReadPane = %+v, %v; want the token pane %s's text", run.res, run.err, pane)
 	}
-	e.assertPaneCalls(t, tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture)
+	e.assertPaneCalls(t, paneReadCalls...)
 	e.assertCaptured(t, pane, 1, false)
 	rpnAssertNothingChanged(t, e, r, &before, sessions, mark)
 }
@@ -180,7 +169,6 @@ func rpnSeedPane(t *testing.T, e *killEnv, r *killRow) {
 // reason, and on every refusal, read-pane writes no trail record and changes
 // nothing; re-issued, it gives the same answer and the same calls.
 func TestReadPaneNoTrailAndRepeatable(t *testing.T) {
-	ours := []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture}
 	lookup := []tmux.Call{tmux.CallLookup}
 	cases := []struct {
 		name  string
@@ -190,9 +178,9 @@ func TestReadPaneNoTrailAndRepeatable(t *testing.T) {
 		want  error
 		calls []tmux.Call
 	}{
-		{name: "restarted server", setup: ktrRestart, calls: ours},
+		{name: "restarted server", setup: ktrRestart, calls: paneReadCalls},
 		{name: "re-bound server", setup: ktrRebind, want: api.ErrTmuxNotAvailable, calls: lookup},
-		{name: "lost-reply adoption", spec: killRowSpec{NoPane: true, NoServerIdentity: true}, calls: ours},
+		{name: "lost-reply adoption", spec: killRowSpec{NoPane: true, NoServerIdentity: true}, calls: paneReadCalls},
 		{name: "two sessions with the current label",
 			setup: func(_ *testing.T, e *killEnv, r *killRow) {
 				e.rec.SeedSessions(r.Socket, tmuxfix.SeedSession{Name: "dup", Label: r.current()})
@@ -203,7 +191,7 @@ func TestReadPaneNoTrailAndRepeatable(t *testing.T) {
 				e.rec.SetScope(r.Socket, tmuxfix.ScopeGlobal, tmuxfix.ScopeValue{SessionID: r.Session.ID, Label: r.current()})
 			},
 			want: api.ErrTmuxSessionConflict, calls: lookup},
-		{name: "renamed Ours session", spec: killRowSpec{NoSession: true}, setup: ktrRenamed, calls: ours},
+		{name: "renamed Ours session", spec: killRowSpec{NoSession: true}, setup: ktrRenamed, calls: paneReadCalls},
 		{name: "unknown id", noRow: true, want: api.ErrSpawnNotFound},
 		{name: "gone", spec: killRowSpec{NoSession: true}, setup: ktrBystander, want: api.ErrTmuxCaptureFailed, calls: lookup},
 		{name: "two leftovers", spec: killRowSpec{NoSession: true},
@@ -222,9 +210,9 @@ func TestReadPaneNoTrailAndRepeatable(t *testing.T) {
 		{name: "socket permission", setup: ktrScript(tmux.FailSocketDenied, tmux.CallLookup), want: api.ErrTmuxNotAvailable, calls: lookup},
 		{name: "pane listing times out", setup: ktrScript(tmux.FailTimeout, tmux.CallListPanes),
 			want: api.ErrTmuxUnresponsive, calls: []tmux.Call{tmux.CallLookup, tmux.CallListPanes}},
-		{name: "capture times out", setup: ktrScript(tmux.FailTimeout, tmux.CallCapture), want: api.ErrTmuxUnresponsive, calls: ours},
+		{name: "capture times out", setup: ktrScript(tmux.FailTimeout, tmux.CallCapture), want: api.ErrTmuxUnresponsive, calls: paneReadCalls},
 		{name: "capture fails, follow-up finds Ours", setup: ktrScript(tmux.FailUnrecognized, tmux.CallCapture),
-			want: api.ErrTmuxUnresponsive, calls: append(slices.Clone(ours), tmux.CallLookup)},
+			want: api.ErrTmuxUnresponsive, calls: withFollowUp(paneReadCalls)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -250,19 +238,7 @@ func TestReadPaneNoTrailAndRepeatable(t *testing.T) {
 			e.assertPaneCalls(t, tc.calls...)
 			rpnAssertNothingChanged(t, e, r, before, sessions, mark)
 
-			again := rpnRead(t, e, r.ID, 1)
-			if again.res != first.res || rpnErrText(again.err) != rpnErrText(first.err) || !reflect.DeepEqual(again.calls, first.calls) {
-				t.Errorf("re-issued ReadPane = %+v, %v, calls %+v; want %+v, %v, calls %+v",
-					again.res, again.err, again.calls, first.res, first.err, first.calls)
-			}
+			assertSameRun(t, rpnRead(t, e, r.ID, 1), first)
 		})
 	}
-}
-
-// rpnErrText is err's text, "" for nil.
-func rpnErrText(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
 }

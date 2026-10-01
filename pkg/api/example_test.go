@@ -12,6 +12,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -197,14 +198,18 @@ func ExampleClient_List() {
 	// list-working-example working
 }
 
-// ExampleClient_SendKeys demonstrates delivering text to a Spawn's tmux pane.
-// The CR-strip behavior (SRD §4.3) is always applied before delivery;
-// Enter is always appended to submit the composed buffer (press_enter=true).
+// ExampleClient_SendKeys demonstrates delivering text to a Spawn's own pane
+// (SR-7.1): the Recorder holds the row's own labelled session, so send-keys
+// makes one lookup and one pane listing, then sends the text and Enter by the
+// row's pane id (apitest.TestPaneID, "%42").
 func ExampleClient_SendKeys() {
-	c, s, path, rec, cleanup := exampleClient()
+	c, _, path, rec, cleanup := exampleClient()
 	defer cleanup()
-	// Seed a live Spawn in waiting state (interactive — required by SendKeys).
-	seedRow(s, path, "claude_2026-05-22T18-23-15", store.StateWaiting, nil)
+	// Seed a live Spawn in waiting state and its own labelled session.
+	if _, err := apitest.SeedSpawn(path, "claude_2026-05-22T18-23-15", store.StateWaiting, "/tmp", "off", "", false); err != nil {
+		panic("ExampleClient_SendKeys: SeedSpawn: " + err.Error())
+	}
+	rec.SeedRowSession(exampleTB{}, path, "claude_2026-05-22T18-23-15")
 	// README:start ExampleClient_SendKeys
 	_, err := c.SendKeys(api.SendKeysParams{
 		ClaudeInstanceID: "claude_2026-05-22T18-23-15",
@@ -214,12 +219,24 @@ func ExampleClient_SendKeys() {
 		log.Fatal(err)
 	}
 	// README:end
-	// The recorder captures what tmux actually received. pressEnter is always
-	// true — SendKeys always appends an Enter to submit the composed buffer.
-	calls := rec.CallsOfKind(tmuxfix.CallSendKeys)
-	fmt.Println(calls[0].PressEnter)
+
+	// The Recorder shows every tmux call: both sends target the pane id.
+	for _, call := range rec.SocketCalls() {
+		switch call.Call {
+		case tmux.CallSendText:
+			fmt.Printf("%s %q to pane %s\n", call.Call, call.Text, call.Target)
+		case tmux.CallSendEnter:
+			fmt.Printf("%s to pane %s\n", call.Call, call.Target)
+		default:
+			fmt.Println(call.Call)
+		}
+	}
+
 	// Output:
-	// true
+	// lookup
+	// pane listing
+	// text send "what is 2+2?" to pane %42
+	// Enter send to pane %42
 }
 
 // ExampleClient_Kill demonstrates ending a live Spawn's agent (SR-6.1): the

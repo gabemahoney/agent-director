@@ -1,7 +1,7 @@
 package api_test
 
 // one_name_pane_verbs_test.go holds the pane verbs' SR-1.5 one-name rows
-// (read-pane now; send-keys and pause append theirs here), each driven on the
+// (read-pane and send-keys; pause appends its own here), each driven on the
 // kill fixture with tmuxfix.Recorder failure kinds and checked by
 // assertOneName through oneNameRows (one_name_per_error_test.go).
 
@@ -10,9 +10,11 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // oneNameReadPane is a row that runs Client.ReadPane on a row seeded with
@@ -29,15 +31,21 @@ func oneNameReadPane(name, want string, spec killRowSpec, setup func(t *testing.
 	}}
 }
 
-// captureFails makes r's first capture fail other than by a timeout, then
-// runs then (when set) to shape what the one follow-up lookup finds.
-func captureFails(then func(t *testing.T, e *killEnv, r *killRow)) func(*testing.T, *killEnv, *killRow) {
+// actionFails makes r's first call of kind call (a capture, text or Enter)
+// fail other than by a timeout, then runs then (when set) to shape what the
+// one follow-up lookup finds.
+func actionFails(call tmux.Call, then func(t *testing.T, e *killEnv, r *killRow)) func(*testing.T, *killEnv, *killRow) {
 	return func(t *testing.T, e *killEnv, r *killRow) {
-		scriptKill(tmux.CallCapture, tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 1, Times: 1})(t, e, r)
+		scriptKill(call, tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 1, Times: 1})(t, e, r)
 		if then != nil {
 			then(t, e, r)
 		}
 	}
+}
+
+// captureFails is actionFails on the capture.
+func captureFails(then func(t *testing.T, e *killEnv, r *killRow)) func(*testing.T, *killEnv, *killRow) {
+	return actionFails(tmux.CallCapture, then)
 }
 
 // rebindServer binds a new server on r's socket (a different server, SR-3.3)
@@ -119,5 +127,101 @@ func oneNameReadPaneRows() []oneNameRow {
 		oneNameReadPane("capture failed, follow-up finds the session", unresponsive, killRowSpec{}, captureFails(nil)),
 		oneNameReadPane("capture failed, follow-up timeout", unresponsive, killRowSpec{},
 			captureFails(scriptKill(lookup, tmuxfix.Script{Times: 1}, timeout))),
+	}
+}
+
+// oneNameSendKeys is a row that runs Client.SendKeys (AllowPending on a
+// pending row) on a row seeded with spec(e) after setup (when set) prepares e and r.
+func oneNameSendKeys(name, want string, spec func(e *killEnv) killRowSpec, setup func(t *testing.T, e *killEnv, r *killRow)) oneNameRow {
+	return oneNameRow{name: "send-keys/" + name, want: want, run: func(t *testing.T) error {
+		e := newKillEnv(t)
+		s := spec(e)
+		r := e.seedRow(t, s)
+		if setup != nil {
+			setup(t, e, &r)
+		}
+		_, _, err := e.sendKeysClient(t, api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "hello",
+			AllowPending: s.State == store.StatePending})
+		return err
+	}}
+}
+
+// liveSpec is spec whatever the fixture.
+func liveSpec(spec killRowSpec) func(*killEnv) killRowSpec {
+	return func(*killEnv) killRowSpec { return spec }
+}
+
+// pendingNoSession is a fresh spawn's pending row with opts and no session
+// seeded (a row with no launch token cannot be given one).
+func pendingNoSession(opts ...apitest.SpawnOption) func(*killEnv) killRowSpec {
+	return func(e *killEnv) killRowSpec {
+		spec := e.pendingSpec(pendingFresh, pendingOurs, opts...)
+		spec.NoSession = true
+		return spec
+	}
+}
+
+// seedOld seeds r's session under this store's label of an earlier launch (a leftover).
+func seedOld(t *testing.T, e *killEnv, r *killRow) {
+	e.seedSession(t, r, tmuxfix.WithRowSessionLabel(r.old(), true))
+}
+
+// oneNameSendKeysRows are send-keys' returned errors (SR-7.1 to SR-7.3): the
+// pending refusals before and after the lookup, its gone error, each
+// ErrTmuxSessionConflict refusal, each ErrTmuxNotAvailable and
+// ErrTmuxUnresponsive cause, and each follow-up outcome of a failed text or Enter call.
+func oneNameSendKeysRows() []oneNameRow {
+	lookup, text, enter := tmux.CallLookup, tmux.CallSendText, tmux.CallSendEnter
+	timeout := tmuxfix.Script{Failure: tmux.FailTimeout}
+	live, noSession := liveSpec(killRowSpec{}), liveSpec(killRowSpec{NoSession: true})
+	lostReply := liveSpec(killRowSpec{NoPane: true, NoServerIdentity: true, NoSession: true})
+	pendingLeft := func(e *killEnv) killRowSpec { return e.pendingSpec(pendingFresh, pendingLeftover) }
+	notInteractive, gone, conflict := "ErrSpawnNotInteractive", "ErrTmuxSendKeys", "ErrTmuxSessionConflict"
+	unavailable, unresponsive := "ErrTmuxNotAvailable", "ErrTmuxUnresponsive"
+	followUpGone := func(call tmux.Call) func(*testing.T, *killEnv, *killRow) {
+		return actionFails(call, func(t *testing.T, e *killEnv, r *killRow) {
+			e.seedBystander(t, r.Socket)
+			e.rec.RemoveSessionAfter(call, r.Socket, r.Session.ID)
+		})
+	}
+	return []oneNameRow{
+		oneNameSendKeys("pending, leftover only", notInteractive, pendingLeft, seedOld),
+		oneNameSendKeys("pending, no launch start", notInteractive, pendingNoSession(apitest.WithNoLaunchStartedAt()), nil),
+		oneNameSendKeys("pending, unreadable launch start", notInteractive,
+			pendingNoSession(apitest.WithRawLaunchStartedAt("not a time")), nil),
+		oneNameSendKeys("pending, no launch token", notInteractive, pendingNoSession(apitest.WithNoLaunchToken()), nil),
+		oneNameSendKeys("session not there", gone, noSession, func(t *testing.T, e *killEnv, r *killRow) {
+			e.ensureServer(r)
+			e.seedBystander(t, r.Socket)
+		}),
+		oneNameSendKeys("text failed, follow-up gone", gone, live, followUpGone(text)),
+		oneNameSendKeys("text failed, follow-up leftover", gone, live, actionFails(text, func(_ *testing.T, e *killEnv, r *killRow) {
+			e.rec.ReplaceSessionAfter(text, r.Socket, r.Session.ID, r.old())
+		})),
+		oneNameSendKeys("Enter failed, follow-up gone", gone, live, followUpGone(enter)),
+		oneNameSendKeys("agent's pane not found", conflict, noSession, func(t *testing.T, e *killEnv, r *killRow) {
+			e.seedOurs(t, r)
+		}),
+		oneNameSendKeys("lost reply, no pane carries the row's token", conflict, lostReply,
+			func(t *testing.T, e *killEnv, r *killRow) {
+				e.seedOurs(t, r)
+			}),
+		oneNameSendKeys("live row, leftover only", conflict, noSession, seedOld),
+		oneNameSendKeys("conflicting labels: scope value", conflict, live, func(_ *testing.T, e *killEnv, r *killRow) {
+			e.rec.SetScope(r.Socket, tmuxfix.ScopeGlobal, tmuxfix.ScopeValue{})
+		}),
+		oneNameSendKeys("different server", unavailable, live, rebindServer),
+		oneNameSendKeys("binary unavailable", unavailable, live, scriptKill(lookup, tmuxfix.Script{Failure: tmux.FailUnavailable})),
+		oneNameSendKeys("socket permission", unavailable, live, scriptKill(lookup, tmuxfix.Script{Failure: tmux.FailSocketDenied})),
+		oneNameSendKeys("text failed, follow-up different server", unavailable, live,
+			actionFails(text, func(t *testing.T, e *killEnv, r *killRow) {
+				e.rec.AfterCall(text, func(tmuxfix.SocketCall, error) { rebindServer(t, e, r) })
+			})),
+		oneNameSendKeys("lookup timeout", unresponsive, live, scriptKill(lookup, timeout)),
+		oneNameSendKeys("pane-listing timeout", unresponsive, live, scriptKill(tmux.CallListPanes, timeout)),
+		oneNameSendKeys("text timeout", unresponsive, live, scriptKill(text, timeout)),
+		oneNameSendKeys("Enter timeout", unresponsive, live, scriptKill(enter, timeout)),
+		oneNameSendKeys("text failed, follow-up finds the session", unresponsive, live, actionFails(text, nil)),
+		oneNameSendKeys("Enter failed, follow-up finds the session", unresponsive, live, actionFails(enter, nil)),
 	}
 }

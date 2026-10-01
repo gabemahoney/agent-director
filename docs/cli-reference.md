@@ -137,6 +137,8 @@ _None._
 - `ErrSendKeysWhileRelayed`
 - `ErrTmuxNotAvailable`
 - `ErrTmuxSendKeys`
+- `ErrTmuxUnresponsive`
+- `ErrTmuxSessionConflict`
 
 ## read-pane
 

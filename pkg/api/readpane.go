@@ -2,7 +2,6 @@ package api
 
 import (
 	"fmt"
-	"strconv"
 
 	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -145,7 +144,10 @@ func readPane(s ReadPaneStore, t ReadPaneTmux, pc ProcChecker, params ReadPanePa
 	if err != nil {
 		return ReadPaneResult{}, fmt.Errorf("instance %s: %w", row.ClaudeInstanceID, err)
 	}
-	r := &readPaneRun{t: t, pc: pc, row: row, storeID: s.StoreID(), socket: socket}
+	r := &readPaneRun{paneRun{
+		t: t, pc: pc, row: row, storeID: s.StoreID(), socket: socket,
+		gone: tmux.ErrTmuxCaptureFailed, nothing: nothingRead,
+	}}
 
 	paneID, launch, err := r.target()
 	if err != nil {
@@ -173,27 +175,10 @@ func readPane(s ReadPaneStore, t ReadPaneTmux, pc ProcChecker, params ReadPanePa
 	return ReadPaneResult{Pane: pane}, nil
 }
 
-// readPaneRun is one ReadPane call's row and the socket its calls use.
+// readPaneRun is one ReadPane call: the pane verbs' shared run with
+// read-pane's gone sentinel and "nothing was read", and no adoption write.
 type readPaneRun struct {
-	t       ReadPaneTmux
-	pc      ProcChecker
-	row     Spawn
-	storeID string
-	socket  string
-}
-
-// launchFor is the lookup's view of the row with identity id: its instance
-// id, token, recorded server identity, this store's id and the row's socket.
-func (r *readPaneRun) launchFor(id LaunchIdentity) tmux.Launch {
-	return tmux.Launch{
-		InstanceID:      r.row.ClaudeInstanceID,
-		Token:           id.Token,
-		StoreID:         r.storeID,
-		Socket:          r.socket,
-		ServerPID:       id.ServerPID,
-		ServerStart:     id.ServerStart,
-		ServerStarttime: id.ServerStarttime,
-	}
+	paneRun
 }
 
 // target makes the lookup and, when it needs one, the pane listing, and
@@ -211,24 +196,6 @@ func (r *readPaneRun) target() (string, tmux.Launch, error) {
 		return "", launch, r.goneError()
 	}
 	return "", launch, cantTellError(res, r.cantTellRefusal(tmux.CallLookup))
-}
-
-// ours finds the agent's pane in one pane listing (SR-3.7). A row that
-// records no pane takes the pane findAdoption found for this call only; it
-// is never written (SR-3.6, SR-7.5). The follow-up's launch view carries
-// what adoption found, so its server check uses the answering server.
-func (r *readPaneRun) ours(res tmux.Result, launch tmux.Launch) (string, tmux.Launch, error) {
-	panes, err := r.listPanes(launch)
-	if err != nil {
-		return "", launch, err
-	}
-	a := findAdoption(r.row.Identity, res, panes, r.pc)
-	followUp := r.launchFor(a.Identity)
-	if pane, ok := agentPane(panes, a.Identity.PaneID, a.Identity.PanePID); ok {
-		return pane.ID, followUp, nil
-	}
-	notAdopted := a.Due && adoptionNeedsListing(r.row.Identity) && a.Pane != tmux.PaneOne
-	return "", followUp, paneNotFoundError(r.refusal(res.Session.Name), notAdopted)
 }
 
 // leftover reads a lone leftover's pane (SR-3.7, SR-7.2): with exactly one
@@ -249,47 +216,6 @@ func (r *readPaneRun) leftover(res tmux.Result, launch tmux.Launch) (string, tmu
 		return "", launch, paneNotFoundError(r.refusal(lone.Name), false)
 	}
 	return pane.ID, launch, nil
-}
-
-// listPanes makes the one pane listing. A failed listing is classified as a
-// lookup with the same failure would be (SR-3.7): no server or no socket is
-// the gone error, anything else Can't tell's error; nothing is read.
-func (r *readPaneRun) listPanes(launch tmux.Launch) ([]tmux.Pane, error) {
-	panes, err := r.t.ListPanes(r.socket)
-	if err == nil {
-		return panes, nil
-	}
-	lres := tmux.ListingFailure(err, r.pc, launch)
-	if lres.Verdict == tmux.Gone {
-		return nil, r.goneError()
-	}
-	return nil, cantTellError(lres, r.cantTellRefusal(tmux.CallListPanes))
-}
-
-// goneError is read-pane's gone error: ErrTmuxCaptureFailed, "the row's
-// session is not there", naming the recorded name, nothing read.
-func (r *readPaneRun) goneError() error {
-	return paneGoneError(tmux.ErrTmuxCaptureFailed, r.refusal(r.row.TmuxSessionName), "")
-}
-
-// refusal is the pane refusal's inputs for this row with the session name
-// name, saying that nothing was read.
-func (r *readPaneRun) refusal(name string) paneRefusal {
-	return paneRefusal{InstanceID: r.row.ClaudeInstanceID, Name: name, Nothing: nothingRead}
-}
-
-// cantTellRefusal is the shared mapping's inputs for call on this row: the
-// recorded name as context and the row's socket. Its consequence is the
-// default "nothing was done" (SR-1.4 rows timeout, unrecognised reply,
-// different server, tmux unavailable and conflicting labels); only the pane
-// refusals (r.refusal) say "nothing was read".
-func (r *readPaneRun) cantTellRefusal(call tmux.Call) cantTellRefusal {
-	return cantTellRefusal{
-		InstanceID: r.row.ClaudeInstanceID,
-		Context:    "tmux session " + strconv.Quote(r.row.TmuxSessionName),
-		Socket:     r.socket,
-		Call:       call,
-	}
 }
 
 // ReadPane captures the last N lines of a tracked Spawn's tmux pane. When

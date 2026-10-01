@@ -22,10 +22,9 @@ import (
 // rppLines is the n_lines every case asks for (not the default).
 const rppLines = 7
 
-// The call sequences: a pane read, a refusal after the listing, a refusal
-// after the lookup alone.
+// The refusal call sequences: after the listing, after the lookup alone (a
+// read is paneReadCalls).
 var (
-	rppReadCalls   = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture}
 	rppListedCalls = []tmux.Call{tmux.CallLookup, tmux.CallListPanes}
 	rppLookupCalls = []tmux.Call{tmux.CallLookup}
 )
@@ -40,7 +39,7 @@ type rppWant struct {
 }
 
 // rppCaptured expects pane to be read, by its id.
-func rppCaptured(pane string) rppWant { return rppWant{pane: pane, calls: rppReadCalls} }
+func rppCaptured(pane string) rppWant { return rppWant{pane: pane, calls: paneReadCalls} }
 
 // rppNotFound expects the pane-not-found conflict naming session name.
 func rppNotFound(r killRow, name string, lostReply bool) rppWant {
@@ -55,25 +54,16 @@ func rppGone(r killRow) rppWant {
 		desc: apitest.DescPaneGone(apitest.PaneGone{Verb: apitest.PaneReadPane, InstanceID: r.ID, Name: r.Name})}
 }
 
-// rppRun is one read-pane call's answer and the socket-taking calls it added.
-type rppRun struct {
-	res   api.ReadPaneResult
-	err   error
-	calls []tmuxfix.SocketCall
-}
-
 // rppRead runs read-pane on r through a Client (e.pc as its reader).
-func rppRead(t *testing.T, e *killEnv, r killRow) rppRun {
+func rppRead(t *testing.T, e *killEnv, r killRow) verbRun[api.ReadPaneResult] {
 	t.Helper()
-	mark := len(e.rec.SocketCalls())
-	res, err := e.readPaneClient(t, api.ReadPaneParams{ClaudeInstanceID: r.ID, NLines: rppLines, ANSI: true})
-	return rppRun{res: res, err: err, calls: e.rec.SocketCalls()[mark:]}
+	return e.readPaneRun(t, api.ReadPaneParams{ClaudeInstanceID: r.ID, NLines: rppLines, ANSI: true})
 }
 
 // rppCheck gives every pane on r's socket its own text, runs read-pane on r
 // and fails unless it answers want with want's calls, captures at most want's
 // pane, and changes no row, session, tmux state or trail. It returns the run.
-func rppCheck(t *testing.T, e *killEnv, r killRow, want rppWant) rppRun {
+func rppCheck(t *testing.T, e *killEnv, r killRow, want rppWant) verbRun[api.ReadPaneResult] {
 	t.Helper()
 	e.setPaneTexts(r.Socket)
 	before, sessions, mark := e.columns(t, r.ID), e.rec.Sessions(r.Socket), trailMark(t)
@@ -100,22 +90,6 @@ func rppCheck(t *testing.T, e *killEnv, r killRow, want rppWant) rppRun {
 	}
 	assertNoTrailSince(t, mark, r.ID)
 	return run
-}
-
-// rppTokenPane is the id of the one pane of s carrying token, failing
-// unless exactly one does.
-func rppTokenPane(t *testing.T, s tmuxfix.SeedSession, token string) string {
-	t.Helper()
-	var ids []string
-	for _, p := range s.Panes {
-		if p.AdPane == token {
-			ids = append(ids, p.ID)
-		}
-	}
-	if len(ids) != 1 {
-		t.Fatalf("session %s panes carrying the token = %v; want one", s.ID, ids)
-	}
-	return ids[0]
 }
 
 // rppOtherPane is a pane that is not the agent's: a new id and pid, no pane label.
@@ -183,7 +157,7 @@ func TestReadPaneAgentPane(t *testing.T) {
 func TestReadPaneLostReply(t *testing.T) {
 	lost := killRowSpec{NoPane: true, NoServerIdentity: true}
 	seeded := func(t *testing.T, _ *killEnv, r *killRow) rppWant {
-		return rppCaptured(rppTokenPane(t, r.Session, r.Token))
+		return rppCaptured(labelledPane(t, r.Session, r.Token))
 	}
 	cases := []struct {
 		name  string
@@ -197,7 +171,7 @@ func TestReadPaneLostReply(t *testing.T) {
 		{name: "a teammate at 0.0, the token pane at 1.1", spec: killRowSpec{NoPane: true, NoSession: true},
 			setup: func(t *testing.T, e *killEnv, r *killRow) rppWant {
 				e.seedOurs(t, r, rppOtherPane(e), tmuxfix.SeedPane{Window: 1, Index: 1, AdPane: r.Token})
-				return rppCaptured(rppTokenPane(t, r.Session, r.Token))
+				return rppCaptured(labelledPane(t, r.Session, r.Token))
 			}},
 		{name: "no pane carries the token", spec: killRowSpec{NoPane: true, NoServerIdentity: true, NoSession: true},
 			setup: func(t *testing.T, e *killEnv, r *killRow) rppWant {
@@ -216,21 +190,9 @@ func TestReadPaneLostReply(t *testing.T) {
 			r := e.seedRow(t, tc.spec)
 			first := rppCheck(t, e, r, tc.setup(t, e, &r))
 
-			again := rppRead(t, e, r)
-			if again.res != first.res || rppErrText(again.err) != rppErrText(first.err) || !reflect.DeepEqual(again.calls, first.calls) {
-				t.Errorf("re-issued ReadPane = %+v, %v, calls %+v; want %+v, %v, calls %+v",
-					again.res, again.err, again.calls, first.res, first.err, first.calls)
-			}
+			assertSameRun(t, rppRead(t, e, r), first)
 		})
 	}
-}
-
-// rppErrText is err's text, "" for nil.
-func rppErrText(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
 }
 
 // rppFinished is a finished row's spec: ended longer ago than the stopping window.
@@ -244,7 +206,7 @@ func rppFinished(e *killEnv) killRowSpec {
 func TestReadPaneLeftover(t *testing.T) {
 	lone := func(t *testing.T, e *killEnv, r *killRow) rppWant {
 		e.seedSession(t, r, tmuxfix.WithRowSessionLabel(r.old(), true))
-		return rppCaptured(rppTokenPane(t, r.Session, tmuxfix.OtherToken))
+		return rppCaptured(labelledPane(t, r.Session, tmuxfix.OtherToken))
 	}
 	cases := []struct {
 		name  string
@@ -260,7 +222,7 @@ func TestReadPaneLeftover(t *testing.T) {
 				e.ensureServer(r)
 				s := e.seedOther(t, r.Socket, tmuxfix.SeedSession{Name: "leftover-moved", Label: r.old(),
 					Panes: []tmuxfix.SeedPane{rppOtherPane(e), {Window: 2, Index: 1, AdPane: tmuxfix.OtherToken}}})
-				return rppCaptured(rppTokenPane(t, s, tmuxfix.OtherToken))
+				return rppCaptured(labelledPane(t, s, tmuxfix.OtherToken))
 			}},
 		{name: "no pane carries its token",
 			setup: func(t *testing.T, e *killEnv, r *killRow) rppWant {

@@ -89,7 +89,10 @@
 //     verbs' cases, parameterised by PaneVerb (descriptions_pane.go:
 //     DescPaneNotFound with its lost-reply variant, DescPaneLeftover,
 //     DescPaneGone; a pane verb's tmux trouble uses the shared cases, which
-//     say "nothing was done"), of plain spawn's
+//     say "nothing was done"; the keys actions' DescKeysTimeout,
+//     DescCase.AfterEnterFailed and DescCase.AfterTextFailed; send-keys'
+//     pending-row DescSendKeysPendingNoLaunch and
+//     DescSendKeysPendingLeftover), of plain spawn's
 //     errors after "duplicate session" (descriptions_held.go, whose
 //     DescCase.AfterHeldName adds the requested name, the holder's tmux id
 //     and the end write's row sentence, never "retry later", and on an

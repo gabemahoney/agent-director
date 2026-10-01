@@ -1,433 +1,253 @@
 package api_test
 
+// sendkeys_test.go: send-keys' guards and their precedence, its text
+// handling, and which pane it types into (SR-7.1, SR-7.2, SR-3.3, SR-3.7,
+// SR-4.4): always the agent's pane by its pane id on the row's recorded
+// socket, text then Enter, never a session name, a neighbour's session or a
+// session holding the name. On the pane-verb fixture
+// (pane_verb_fixture_test.go) and tmuxfix.Recorder.
+
 import (
 	"errors"
 	"fmt"
-	"reflect"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// sendKeysTestWindow / sendKeysTestNow are the effective-window + injected-clock
-// arguments the pure SendKeys entry point now takes (mechanical seam added by
-// the relay-guard-release subtask). These fixed values preserve the pre-release
-// behavior of every legacy test: no permission_requests rows are seeded, so the
-// zero-rows guard keeps refusing and the window/clock never change an outcome.
-// Behavior assertions for the release path live in the dedicated test subtasks.
-var (
-	sendKeysTestWindow = 24 * time.Hour
-	sendKeysTestNow    = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-)
+// errSentinel is a stand-in error for injected failures (find_missing_core_test.go uses it).
+var errSentinel = errors.New("test sentinel")
 
-// recordingTmux records each (session, text, pressEnter) triple its
-// SendKeys is asked to emit, in order. The literal-text-then-real-Enter
-// split is owned by *tmux.Client; the api verb makes exactly one
-// SendKeys call per send-keys invocation.
-type recordingTmux struct {
-	calls   []recordedSend
-	failOn  int // 0-based call index that should return err; -1 to never fail
-	failErr error
-}
-
-type recordedSend struct {
-	name       string
-	text       string
-	pressEnter bool
-}
-
-func (r *recordingTmux) SendKeys(name, text string, pressEnter bool) error {
-	idx := len(r.calls)
-	r.calls = append(r.calls, recordedSend{name: name, text: text, pressEnter: pressEnter})
-	if r.failOn >= 0 && idx == r.failOn {
-		return r.failErr
-	}
-	return nil
-}
-
-// newTmux constructs a recording fake that never fails.
-func newTmux() *recordingTmux { return &recordingTmux{failOn: -1} }
-
-func TestSendKeysSingleLineWithEnter(t *testing.T) {
-	s, _ := apitest.OpenStoreWithRow(t, "id-1", "cd-tmp", store.StateWaiting, "off")
-	tmux := newTmux()
-
-	if _, err := api.SendKeys(s, tmux, sendKeysTestWindow, sendKeysTestNow, api.SendKeysParams{
-		ClaudeInstanceID: "id-1",
-		Text:             "hello",
-	}); err != nil {
+// skDeliver runs send-keys on r with text and fails unless it typed text
+// into r's agent pane by id, then pressed Enter there (assertDelivered).
+func skDeliver(t *testing.T, e *killEnv, r killRow, text string) {
+	t.Helper()
+	if _, err := e.sendKeys(api.SendKeysParams{ClaudeInstanceID: r.ID, Text: text}); err != nil {
 		t.Fatalf("SendKeys: %v", err)
 	}
-
-	want := []recordedSend{
-		{name: "cd-tmp", text: "hello", pressEnter: true},
-	}
-	if !reflect.DeepEqual(tmux.calls, want) {
-		t.Fatalf("calls = %v; want %v", tmux.calls, want)
-	}
+	e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, text)
 }
 
-func TestSendKeysMultilinePreservesLF(t *testing.T) {
-	// Per reference/send-keys-research.md case #3: LF in the text payload
-	// composes a newline in Claude's input box and does NOT submit. Only
-	// the trailing Enter submits — so a multi-line text must produce
-	// exactly two tmux calls (the text once, Enter once).
-	s, _ := apitest.OpenStoreWithRow(t, "id-2", "cd-tmp", store.StateWorking, "off")
-	tmux := newTmux()
-
-	if _, err := api.SendKeys(s, tmux, sendKeysTestWindow, sendKeysTestNow, api.SendKeysParams{
-		ClaudeInstanceID: "id-2",
-		Text:             "line one\nline two",
-	}); err != nil {
-		t.Fatalf("SendKeys: %v", err)
+// TestSendKeysText: CR bytes are stripped, LF is kept, and one Enter
+// submits; an empty text submits Enter only.
+func TestSendKeysText(t *testing.T) {
+	cases := []struct{ name, text, want string }{
+		{"single line", "hello", "hello"},
+		{"multi-line keeps LF", "line one\nline two", "line one\nline two"},
+		{"CR stripped", "ab\rcd\r\nef", "abcd\nef"},
+		{"empty text", "", ""},
 	}
-
-	want := []recordedSend{
-		{name: "cd-tmp", text: "line one\nline two", pressEnter: true},
-	}
-	if !reflect.DeepEqual(tmux.calls, want) {
-		t.Fatalf("calls = %v; want %v", tmux.calls, want)
-	}
-}
-
-func TestSendKeysStripsCR(t *testing.T) {
-	// Per reference/send-keys-research.md "CR caveat": a CR (0x0D) byte
-	// anywhere in the payload would submit the partial buffer at that
-	// position — split one logical message into multiple submissions.
-	// The verb strips CRs pre-send so only the trailing Enter submits.
-	s, _ := apitest.OpenStoreWithRow(t, "id-3", "cd-tmp", store.StateWaiting, "off")
-	tmux := newTmux()
-
-	if _, err := api.SendKeys(s, tmux, sendKeysTestWindow, sendKeysTestNow, api.SendKeysParams{
-		ClaudeInstanceID: "id-3",
-		Text:             "ab\rcd\r\nef",
-	}); err != nil {
-		t.Fatalf("SendKeys: %v", err)
-	}
-
-	// CR stripped; LF preserved. Composed text is "abcd\nef".
-	want := []recordedSend{
-		{name: "cd-tmp", text: "abcd\nef", pressEnter: true},
-	}
-	if !reflect.DeepEqual(tmux.calls, want) {
-		t.Fatalf("calls = %v; want %v", tmux.calls, want)
-	}
-}
-
-func TestSendKeysRejectsPendingState(t *testing.T) {
-	// pending Spawns have not received their first SessionStart hook;
-	// the TUI is not yet up. Treating pending as interactive would let
-	// a caller race the bootstrap window.
-	s, _ := apitest.OpenStoreWithRow(t, "id-5", "cd-tmp", store.StatePending, "off")
-	tmux := newTmux()
-
-	_, err := api.SendKeys(s, tmux, sendKeysTestWindow, sendKeysTestNow, api.SendKeysParams{
-		ClaudeInstanceID: "id-5",
-		Text:             "hi",
-	})
-	if !errors.Is(err, api.ErrSpawnNotInteractive) {
-		t.Fatalf("err = %v; want ErrSpawnNotInteractive", err)
-	}
-	if len(tmux.calls) != 0 {
-		t.Fatalf("tmux was called for non-interactive state: %v", tmux.calls)
-	}
-}
-
-func TestSendKeysRejectsEndedState(t *testing.T) {
-	s, _ := apitest.OpenStoreWithRow(t, "id-6", "cd-tmp", store.StateEnded, "off")
-	tmux := newTmux()
-
-	_, err := api.SendKeys(s, tmux, sendKeysTestWindow, sendKeysTestNow, api.SendKeysParams{
-		ClaudeInstanceID: "id-6",
-		Text:             "hi",
-	})
-	if !errors.Is(err, api.ErrSpawnNotInteractive) {
-		t.Fatalf("err = %v; want ErrSpawnNotInteractive", err)
-	}
-}
-
-func TestSendKeysCheckPermissionWithRelayOn(t *testing.T) {
-	// relay_mode=on AND state=check_permission means the relay path (Epic
-	// 10) owns the answer. Sending pane-side keystrokes would race the
-	// decide() write. Return the stub guard error.
-	//
-	// This is the plain guard-refusal envelope check via OpenStoreWithRow
-	// (relay=on + check_permission with no permission_requests row). The
-	// zero-rows RATIONALE (no deliverability signal, no authority to release,
-	// mid-insert transient) is pinned — with its full explanation — by
-	// TestSendKeysGuardRefusesZeroRows in relay_fallenback_test.go; this test
-	// deliberately does not restate it. The deliverable-row hold path is pinned
-	// by TestSendKeysCheckPermissionRelayOnDeliverableRowHolds.
-	s, _ := apitest.OpenStoreWithRow(t, "id-7", "cd-tmp", store.StateCheckPermission, "on")
-	tmux := newTmux()
-
-	_, err := api.SendKeys(s, tmux, sendKeysTestWindow, sendKeysTestNow, api.SendKeysParams{
-		ClaudeInstanceID: "id-7",
-		Text:             "1",
-	})
-	if !errors.Is(err, api.ErrSendKeysWhileRelayed) {
-		t.Fatalf("err = %v; want ErrSendKeysWhileRelayed", err)
-	}
-	if len(tmux.calls) != 0 {
-		t.Fatalf("tmux was called while relay guard tripped: %v", tmux.calls)
-	}
-}
-
-func TestSendKeysCheckPermissionRelayOnDeliverableRowHolds(t *testing.T) {
-	// relay_mode=on + check_permission with a fresh (in-window) open
-	// permission_requests row: the row's delivery window has not elapsed, so a
-	// live poller can still deliver the decision. The guard must HOLD and refuse
-	// the send. This is the deliverable-row hold path that the zero-rows pin
-	// (TestSendKeysCheckPermissionWithRelayOn) no longer exercises.
-	//
-	// The row is seeded at real wall-clock time, so the injected clock is
-	// time.Now() (not the fixed legacy fixture) and the window is wide — the
-	// fresh row reads as in-window/deliverable and the guard holds.
-	s, _ := apitest.OpenStoreWithRow(t, "id-7d", "cd-tmp", store.StateCheckPermission, "on")
-	apitest.SeedPermissionRow(t, s, "id-7d")
-	tmux := newTmux()
-
-	_, err := api.SendKeys(s, tmux, sendKeysTestWindow, time.Now().UTC(), api.SendKeysParams{
-		ClaudeInstanceID: "id-7d",
-		Text:             "1",
-	})
-	if !errors.Is(err, api.ErrSendKeysWhileRelayed) {
-		t.Fatalf("err = %v; want ErrSendKeysWhileRelayed", err)
-	}
-	if len(tmux.calls) != 0 {
-		t.Fatalf("tmux was called while relay guard tripped on a deliverable row: %v", tmux.calls)
-	}
-}
-
-func TestSendKeysCheckPermissionWithRelayOff(t *testing.T) {
-	// relay_mode=off means no relay is consuming the modal — the
-	// orchestrator drives the answer via send-keys directly. The
-	// state-precondition guard must allow this combination.
-	s, _ := apitest.OpenStoreWithRow(t, "id-8", "cd-tmp", store.StateCheckPermission, "off")
-	tmux := newTmux()
-
-	if _, err := api.SendKeys(s, tmux, sendKeysTestWindow, sendKeysTestNow, api.SendKeysParams{
-		ClaudeInstanceID: "id-8",
-		Text:             "1",
-	}); err != nil {
-		t.Fatalf("SendKeys: %v", err)
-	}
-	want := []recordedSend{
-		{name: "cd-tmp", text: "1", pressEnter: true},
-	}
-	if !reflect.DeepEqual(tmux.calls, want) {
-		t.Fatalf("calls = %v; want %v", tmux.calls, want)
-	}
-}
-
-func TestSendKeysSpawnNotFound(t *testing.T) {
-	s, _ := apitest.OpenStoreWithRow(t, "id-9", "cd-tmp", store.StateWaiting, "off")
-	tmux := newTmux()
-
-	_, err := api.SendKeys(s, tmux, sendKeysTestWindow, sendKeysTestNow, api.SendKeysParams{
-		ClaudeInstanceID: "absent",
-		Text:             "hi",
-	})
-	if !errors.Is(err, store.ErrSpawnNotFound) {
-		t.Fatalf("err = %v; want ErrSpawnNotFound", err)
-	}
-}
-
-func TestSendKeysPropagatesTmuxError(t *testing.T) {
-	// A transport-layer tmux failure must surface to the caller without
-	// being remapped to a verb-surface error. errors.Is must still see
-	// the underlying tmux sentinel.
-	s, _ := apitest.OpenStoreWithRow(t, "id-10", "cd-tmp", store.StateWaiting, "off")
-	tmux := &recordingTmux{
-		failOn:  0,
-		failErr: errSentinel,
-	}
-
-	_, err := api.SendKeys(s, tmux, sendKeysTestWindow, sendKeysTestNow, api.SendKeysParams{
-		ClaudeInstanceID: "id-10",
-		Text:             "hi",
-	})
-	if !errors.Is(err, errSentinel) {
-		t.Fatalf("err = %v; want errSentinel chain", err)
-	}
-	// Exactly one SendKeys attempt — the tmux client owns the
-	// literal-text-then-Enter split internally now, so api-side
-	// recording sees a single failed call rather than two attempts.
-	if len(tmux.calls) != 1 {
-		t.Fatalf("calls = %v; want exactly 1 (single SendKeys attempt)", tmux.calls)
-	}
-}
-
-// TestSendKeysAllowPendingPermitsOnlyPending pins the AllowPending flag
-// semantics: true bypasses the guard for pending but not for ended/missing;
-// false (default) keeps the guard for pending.
-func TestSendKeysAllowPendingPermitsOnlyPending(t *testing.T) {
-	cases := []struct {
-		name         string
-		state        string
-		allowPending bool
-		wantErr      error // nil means success
-	}{
-		{
-			name:         "allow_pending=true + state=pending → success",
-			state:        store.StatePending,
-			allowPending: true,
-			wantErr:      nil,
-		},
-		{
-			name:         "allow_pending=true + state=ended → ErrSpawnNotInteractive",
-			state:        store.StateEnded,
-			allowPending: true,
-			wantErr:      api.ErrSpawnNotInteractive,
-		},
-		{
-			name:         "allow_pending=true + state=missing → ErrSpawnNotInteractive",
-			state:        store.StateMissing,
-			allowPending: true,
-			wantErr:      api.ErrSpawnNotInteractive,
-		},
-		{
-			name:         "allow_pending=false + state=pending → ErrSpawnNotInteractive",
-			state:        store.StatePending,
-			allowPending: false,
-			wantErr:      api.ErrSpawnNotInteractive,
-		},
-	}
-	for i, tc := range cases {
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			id := fmt.Sprintf("id-ap-%d", i)
-			s, _ := apitest.OpenStoreWithRow(t, id, "cd-ap-"+fmt.Sprint(i), tc.state, "off")
-			tmux := newTmux()
-			_, err := api.SendKeys(s, tmux, sendKeysTestWindow, sendKeysTestNow, api.SendKeysParams{
-				ClaudeInstanceID: id,
-				Text:             "hello",
-				AllowPending:     tc.allowPending,
-			})
-			if tc.wantErr == nil {
-				if err != nil {
-					t.Fatalf("SendKeys: unexpected error: %v", err)
-				}
-				if len(tmux.calls) != 1 {
-					t.Fatalf("tmux.calls = %v; want exactly 1 call", tmux.calls)
-				}
-			} else {
-				if !errors.Is(err, tc.wantErr) {
-					t.Fatalf("err = %v; want %v", err, tc.wantErr)
-				}
-				if len(tmux.calls) != 0 {
-					t.Fatalf("tmux was called for rejected state: %v", tmux.calls)
-				}
+			e := newKillEnv(t)
+			r := e.seedRow(t, killRowSpec{})
+			if _, err := e.sendKeys(api.SendKeysParams{ClaudeInstanceID: r.ID, Text: tc.text}); err != nil {
+				t.Fatalf("SendKeys: %v", err)
 			}
+			e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, tc.want)
 		})
 	}
 }
 
-// erroringSendKeysStore is a SendKeysStore whose GetSpawn returns a valid
-// relay-on check_permission Spawn but whose PermissionRequestsForSpawn fails.
-// It drives the guard's store-read error path (guardError, SR-5.2) without a
-// real DB: the pure SendKeys must surface the underlying error and never touch
-// tmux, and evaluateRelayGuard must record guard_evaluation="error".
-type erroringSendKeysStore struct {
-	spawn     api.Spawn
-	queryErr  error
-	getCalls  int
-	permCalls int
+// TestSendKeysSpawnNotFound: an unknown id is ErrSpawnNotFound with no tmux call.
+func TestSendKeysSpawnNotFound(t *testing.T) {
+	e := newKillEnv(t)
+	e.seedRow(t, killRowSpec{})
+	_, err := e.sendKeys(api.SendKeysParams{ClaudeInstanceID: "absent", Text: "hi"})
+	if !errors.Is(err, store.ErrSpawnNotFound) {
+		t.Fatalf("err = %v; want ErrSpawnNotFound", err)
+	}
+	e.assertNoTmuxCall(t)
 }
 
-func (e *erroringSendKeysStore) GetSpawn(string) (api.Spawn, error) {
-	e.getCalls++
-	return e.spawn, nil
+// skRelay is a guard case's relay_mode and permission request.
+type skRelay int
+
+const (
+	skRelayOff      skRelay = iota // relay_mode off
+	skRelayNoGuard                 // relay_mode on, the state is not check_permission
+	skRelayHeld                    // relay_mode on, one request still in its window
+	skRelayReleased                // relay_mode on, the one request past its window
+)
+
+// TestSendKeysGuards: the state and relay guards refuse before any tmux call
+// though the row's own session is up; a row they pass gets the keys by pane id.
+func TestSendKeysGuards(t *testing.T) {
+	type guardCase struct {
+		name  string
+		state string
+		allow bool
+		relay skRelay
+		want  error // nil: delivered
+	}
+	var cases []guardCase
+	for _, state := range []string{store.StateEnded, store.StateMissing} {
+		for _, allow := range []bool{false, true} {
+			cases = append(cases, guardCase{fmt.Sprintf("%s allow_pending=%v", state, allow), state, allow,
+				skRelayOff, api.ErrSpawnNotInteractive})
+		}
+	}
+	cases = append(cases, guardCase{"pending without allow_pending", store.StatePending, false, skRelayOff,
+		api.ErrSpawnNotInteractive})
+	for _, state := range []string{store.StateWaiting, store.StateWorking, store.StateAskUser, store.StateCheckPermission} {
+		for _, allow := range []bool{false, true} {
+			cases = append(cases, guardCase{fmt.Sprintf("%s allow_pending=%v", state, allow), state, allow,
+				skRelayOff, nil})
+		}
+	}
+	cases = append(cases,
+		guardCase{"relay on, waiting", store.StateWaiting, false, skRelayNoGuard, nil},
+		guardCase{"relay held on check_permission", store.StateCheckPermission, false, skRelayHeld,
+			api.ErrSendKeysWhileRelayed},
+		guardCase{"relay held on check_permission, allow_pending", store.StateCheckPermission, true, skRelayHeld,
+			api.ErrSendKeysWhileRelayed},
+		guardCase{"relay released on check_permission", store.StateCheckPermission, false, skRelayReleased, nil},
+	)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newKillEnv(t)
+			r := e.seedRow(t, killRowSpec{State: tc.state, RelayOn: tc.relay != skRelayOff})
+			if tc.relay == skRelayHeld || tc.relay == skRelayReleased {
+				storefix.SeedOpenPermissionRequests(t, e.st, r.ID, []string{storefix.TestRequestTokenA})
+			}
+			if tc.relay == skRelayReleased {
+				storefix.SeedUndeliverablePermissionRequest(t, e.st, e.dbPath, r.ID, storefix.TestRequestTokenA,
+					2*sendKeysWindow())
+			}
+			// The requests are stored at wall-clock time, so the guard is judged against it.
+			_, err := e.sendKeysAt(sendKeysWindow(), time.Now(), api.SendKeysParams{ClaudeInstanceID: r.ID,
+				Text: "1", AllowPending: tc.allow})
+			if tc.want == nil {
+				if err != nil {
+					t.Fatalf("SendKeys: %v", err)
+				}
+				e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, "1")
+				return
+			}
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("err = %v; want %v", err, tc.want)
+			}
+			e.assertNoTmuxCall(t)
+		})
+	}
 }
 
-func (e *erroringSendKeysStore) PermissionRequestsForSpawn(string) ([]api.PermissionRow, error) {
-	e.permCalls++
-	return nil, e.queryErr
-}
-
-// TestSendKeysGuardStoreReadErrorPropagates pins the guard_evaluation="error"
-// path: for a relay-on check_permission Spawn, when the guard's store read
-// (PermissionRequestsForSpawn) fails, the send must fail with that exact error
-// (errors.Is) and make zero tmux calls. The observable API-layer behavior
-// (error propagation + no tmux) is asserted through the public SendKeys entry
-// point; the guardError trail string itself — which Client.SendKeys records but
-// the pure SendKeys discards — is pinned directly via the test-only
-// EvaluateRelayGuardForTest seam.
-func TestSendKeysGuardStoreReadErrorPropagates(t *testing.T) {
-	const id = "id-guard-err-1"
+// TestSendKeysGuardStoreReadError: a failed relay-guard read on a relay-on
+// check_permission row fails the send with that error and no tmux call.
+func TestSendKeysGuardStoreReadError(t *testing.T) {
+	e := newKillEnv(t)
+	r := e.seedRow(t, killRowSpec{State: store.StateCheckPermission, RelayOn: true})
 	storeErr := errors.New("permission_requests read exploded")
-	fake := &erroringSendKeysStore{
-		spawn: api.Spawn{
-			ClaudeInstanceID: id,
-			State:            store.StateCheckPermission,
-			RelayMode:        "on",
-			TmuxSessionName:  "cd-guard-err-1",
-		},
-		queryErr: storeErr,
-	}
-	tmux := newTmux()
-
-	// API-layer observable behavior: the store error propagates (wrapped ok —
-	// errors.Is) and tmux is never invoked.
-	_, err := api.SendKeys(fake, tmux, sendKeysTestWindow, sendKeysTestNow, api.SendKeysParams{
-		ClaudeInstanceID: id,
-		Text:             "1",
-	})
+	e.store.failPermissionRequests(storeErr)
+	_, err := e.sendKeys(api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "1"})
 	if !errors.Is(err, storeErr) {
-		t.Fatalf("err = %v; want chain containing storeErr", err)
+		t.Fatalf("err = %v; want %v", err, storeErr)
 	}
-	if len(tmux.calls) != 0 {
-		t.Fatalf("tmux was called despite guard store-read failure: %v", tmux.calls)
-	}
-	if fake.permCalls != 1 {
-		t.Fatalf("PermissionRequestsForSpawn calls = %d; want exactly 1", fake.permCalls)
-	}
-
-	// Guard-evaluation outcome string: the failing read records guardError
-	// ("error") — the value Client.SendKeys writes to guard_evaluation on the
-	// ad.send_keys.called trail event. Assert it directly through the
-	// test-only seam since the pure SendKeys discards it. The guard does not
-	// refuse (refuse=false); the send fails on the returned error instead.
-	eval, refuse, gerr := api.EvaluateRelayGuardForTest(
-		fake, sendKeysTestWindow, sendKeysTestNow, fake.spawn, id)
-	if !errors.Is(gerr, storeErr) {
-		t.Fatalf("guard err = %v; want chain containing storeErr", gerr)
-	}
-	if eval != api.GuardErrorEval {
-		t.Fatalf("guard_evaluation = %q; want %q", eval, api.GuardErrorEval)
-	}
-	if refuse {
-		t.Fatalf("guard refuse = true; want false (send fails on the error, not a refusal)")
+	e.assertNoTmuxCall(t)
+	eval, refuse, gerr := api.EvaluateRelayGuardForTest(e.store, sendKeysWindow(), e.clock.Now(), r.Spawn, r.ID)
+	if !errors.Is(gerr, storeErr) || eval != api.GuardErrorEval || refuse {
+		t.Errorf("guard = %q, refuse %v, err %v; want %q, false, %v", eval, refuse, gerr, api.GuardErrorEval, storeErr)
 	}
 }
 
-// errSentinel stands in for tmux.ErrTmuxSendKeys without importing the
-// tmux package directly into this test (the verb only sees
-// SendKeysTmux.SendKeys's error return, so any sentinel proves the chain
-// is preserved).
-var errSentinel = errors.New("test sentinel")
-
-func TestSendKeysEmptyTextSubmits(t *testing.T) {
-	// An empty text is a valid "submit the existing buffer" call — the
-	// equivalent of pressing Enter at the keyboard when the user already
-	// has text composed. The verb sends an empty text then the Enter.
-	// (tmux will accept an empty argv for send-keys as a no-op; we mirror
-	// that.)
-	s, _ := apitest.OpenStoreWithRow(t, "id-11", "cd-tmp", store.StateWaiting, "off")
-	tmux := newTmux()
-
-	if _, err := api.SendKeys(s, tmux, sendKeysTestWindow, sendKeysTestNow, api.SendKeysParams{
-		ClaudeInstanceID: "id-11",
-		Text:             "",
-	}); err != nil {
-		t.Fatalf("SendKeys: %v", err)
+// TestSendKeysRenamedSession: the renamed session's agent pane gets the keys
+// by id; a session now holding the recorded name never does.
+func TestSendKeysRenamedSession(t *testing.T) {
+	cases := []struct {
+		name   string
+		holder func(r killRow) *tmuxfix.SeedSession
+	}{
+		{"renamed", func(killRow) *tmuxfix.SeedSession { return nil }},
+		{"renamed, unlabelled session holds the name", func(r killRow) *tmuxfix.SeedSession {
+			return &tmuxfix.SeedSession{Name: r.Name}
+		}},
+		{"renamed, another store's session holds the name", func(r killRow) *tmuxfix.SeedSession {
+			return &tmuxfix.SeedSession{Name: r.Name, Label: r.otherStore(newToken()),
+				Panes: []tmuxfix.SeedPane{{AdPane: newToken()}}}
+		}},
 	}
-	want := []recordedSend{
-		{name: "cd-tmp", text: "", pressEnter: true},
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newKillEnv(t)
+			r := e.seedRow(t, killRowSpec{NoSession: true})
+			e.seedSession(t, &r, tmuxfix.WithRowSessionName("renamed-"+r.ID))
+			if h := tc.holder(r); h != nil {
+				e.seedOther(t, r.Socket, *h)
+			}
+			skDeliver(t, e, r, "hi")
+		})
 	}
-	if !reflect.DeepEqual(tmux.calls, want) {
-		t.Fatalf("calls = %v; want %v", tmux.calls, want)
+}
+
+// TestSendKeysNeighbours (AC-LKP-01/02/03): a row with no session gets the gone
+// error and never sends to a prefix-, name- or 8-character-id-sharing neighbour.
+func TestSendKeysNeighbours(t *testing.T) {
+	cases := []struct {
+		name         string
+		xID, yID     string
+		xName, yName string
+	}{
+		{"name prefix", "", "", "proj-abc", "proj-abc123"},
+		{"same name, held by the other row's session", "", "", "proj-same", "proj-same"},
+		{"ids share first 8 characters, same-named folders", "abcd1234-x-row", "abcd1234-y-row", "work", "work"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newKillEnv(t)
+			x := e.seedRow(t, killRowSpec{ID: tc.xID, NoSession: true,
+				Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(tc.xName)}})
+			y := e.seedRow(t, killRowSpec{ID: tc.yID, Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(tc.yName)}})
+			_, err := e.sendKeys(api.SendKeysParams{ClaudeInstanceID: x.ID, Text: "hi"})
+			if !errors.Is(err, tmux.ErrTmuxSendKeys) {
+				t.Fatalf("err = %v; want ErrTmuxSendKeys", err)
+			}
+			apitest.AssertDescription(t, err.Error(), apitest.DescPaneGone(apitest.PaneGone{
+				Verb: apitest.PaneSendKeys, InstanceID: x.ID, Name: x.Name}), y.ID, y.Token)
+			e.assertPaneCalls(t, tmux.CallLookup)
+		})
+	}
+}
+
+// TestSendKeysStoredNames (AC-LKP-09): a row whose recorded name holds $ or \
+// is found by its label under tmux's stored form and sent to by pane id.
+func TestSendKeysStoredNames(t *testing.T) {
+	for _, n := range tmuxfix.StoredNames() {
+		if !n.LabelByID {
+			continue
+		}
+		t.Run(n.Raw, func(t *testing.T) {
+			e := newKillEnv(t)
+			r := e.seedRow(t, killRowSpec{Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(n.Raw)}})
+			if r.Session.Name != n.Stored {
+				t.Fatalf("seeded session name %q; want the stored form %q", r.Session.Name, n.Stored)
+			}
+			skDeliver(t, e, r, "hi")
+		})
+	}
+}
+
+// TestSendKeysRecordedSocket (AC-LKP-19): with TMUX and TMUX_TMPDIR naming
+// another server, every call names the row's recorded socket.
+func TestSendKeysRecordedSocket(t *testing.T) {
+	e := newKillEnv(t)
+	r := e.seedRow(t, killRowSpec{})
+	// No commas: TMUX's socket field ends at one.
+	elsewhere := filepath.Join(t.TempDir(), "elsewhere")
+	t.Setenv("TMUX", elsewhere+",4242,0")
+	t.Setenv("TMUX_TMPDIR", t.TempDir())
+	e.seedOther(t, elsewhere, tmuxfix.SeedSession{Name: r.Name, Label: r.current(),
+		Panes: []tmuxfix.SeedPane{{AdPane: r.Token}}})
+	skDeliver(t, e, r, "hi")
+	for _, c := range e.rec.SocketCalls() {
+		if c.Socket != r.Socket {
+			t.Errorf("%v on socket %q; want the recorded %q", c.Call, c.Socket, r.Socket)
+		}
 	}
 }

@@ -11,7 +11,10 @@
  *   TS side   — storePath = homeB/.agent-director/state.db (direct path)
  *   Both stores are byte-identical copies of the same seed — timestamps match.
  *   Both sides use fake-tmux so spawn/send-keys/read-pane/kill/resume don't
- *   touch a real tmux session.
+ *   touch a real tmux session. Fake-tmux answers lookups from its session
+ *   tables: a row with no labelled session there is Gone, so the send-keys
+ *   and read-pane success cases first write the row's own labelled session
+ *   and pane into a per-side table (ts-helper seed-row-session).
  *
  * See docs/architecture.md "TS envelope-diff regression" for design notes.
  */
@@ -409,37 +412,76 @@ describe("get", () => {
 
 describe("send-keys", () => {
   test(
-    "success path",
+    "success path: the row's own session, lookup + pane listing + text then Enter by pane id on both sides",
     async () => {
-      const { homeA, storeB, cleanup } = prepareStores((store) => {
-        runHelper("seed-spawn", {
-          store,
-          id: "id-sk-1",
-          state: "waiting",
-          "create-store": true,
-        });
+      const id = "id-sk-1";
+      // Both store copies record this private socket; each run reads its own
+      // fake-tmux table (FAKE_TMUX_TABLES) holding the row's labelled session.
+      const tmuxDir = fs.mkdtempSync(path.join(os.tmpdir(), "ed-tmux-"));
+      const socket = privateTmuxSocket(tmuxDir);
+      const tablesCli = path.join(tmuxDir, "tables-cli");
+      const tablesClient = path.join(tmuxDir, "tables-client");
+      const logCli = path.join(tmuxDir, "log-cli");
+      const logClient = path.join(tmuxDir, "log-client");
+      const { homeA, storeA, storeB, cleanup } = prepareStores((store) => {
+        runHelper("seed-spawn", { store, id, state: "waiting", "create-store": true, socket });
       });
+      const paneIds = [
+        [storeA, tablesCli],
+        [storeB, tablesClient],
+      ].map(([store, tablesDir]) => {
+        const seeded = runHelper("seed-row-session", { store, id, "tables-dir": tablesDir });
+        expect(seeded["socket"]).toBe(socket);
+        return seeded["pane_id"] as string;
+      });
+      expect(paneIds[0]).toBe(paneIds[1]);
+      const paneId = paneIds[0];
+
+      const priorLog = process.env.FAKE_TMUX_LOG;
+      const priorTables = process.env.FAKE_TMUX_TABLES;
       try {
         const cli = runCli(
-          ["send-keys", "--claude-instance-id", "id-sk-1", "--text", "hello"],
-          cliEnv(homeA)
+          ["send-keys", "--claude-instance-id", id, "--text", "hello"],
+          { ...cliEnv(homeA), FAKE_TMUX_TABLES: tablesCli, FAKE_TMUX_LOG: logCli }
         );
         expect(cli.exitCode).toBe(0);
 
+        // The Client's CLI subprocess inherits process.env.
+        process.env.FAKE_TMUX_TABLES = tablesClient;
+        process.env.FAKE_TMUX_LOG = logClient;
         using client = await Client.create({
           storePath: storeB,
           tmuxCommand: FAKE_TMUX_BIN, _cliPath: process.env.CLI_PATH
         } as any);
         const ts = await client.sendKeys({
-          claude_instance_id: "id-sk-1",
+          claude_instance_id: id,
           text: "hello",
         });
 
         assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
           ignorePaths: loadIgnorePathsForVerb("send-keys"),
         });
+
+        // Each run: one lookup, one pane listing, then the text and Enter by
+        // pane id, all on the row's socket (SR-7.2, SR-3.7).
+        for (const log of [logCli, logClient]) {
+          const calls = fakeTmuxCalls(log);
+          expect(calls.map((argv) => argv.slice(1, 5))).toEqual([
+            ["-u", "-S", socket, "list-sessions"],
+            ["-u", "-S", socket, "list-panes"],
+            ["-u", "-S", socket, "send-keys"],
+            ["-u", "-S", socket, "send-keys"],
+          ]);
+          expect(calls[2].slice(4)).toEqual(["send-keys", "-t", paneId, "-l", "--", "hello"]);
+          expect(calls[3].slice(4)).toEqual(["send-keys", "-t", paneId, "Enter"]);
+        }
       } finally {
+        if (priorLog === undefined) delete process.env.FAKE_TMUX_LOG;
+        else process.env.FAKE_TMUX_LOG = priorLog;
+        if (priorTables === undefined) delete process.env.FAKE_TMUX_TABLES;
+        else process.env.FAKE_TMUX_TABLES = priorTables;
         cleanup();
+        fs.rmSync(tmuxDir, { recursive: true, force: true });
       }
     },
     TIMEOUT

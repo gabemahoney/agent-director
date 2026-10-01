@@ -8,7 +8,9 @@ package api_test
 // client log or trail. It is a per-verb table (kill first, Epic 10; plain
 // spawn's held name, Epic 13; find-missing's lookup, Epic 14, in
 // security_find_missing_test.go; read-pane, which writes no trail event,
-// Epic 11, in security_read_pane_test.go; later Epics add their verbs).
+// Epic 11, in security_read_pane_test.go; send-keys on a live row and on a
+// pending row with allow_pending, Epic 11, in security_send_keys_test.go;
+// later Epics add their verbs).
 
 import (
 	"encoding/json"
@@ -21,6 +23,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
@@ -120,6 +123,16 @@ var securityVerbs = []securityVerb{{
 	verb:  "read-pane",
 	call:  securityReadPaneCall,
 	cases: securityReadPaneCases,
+}, {
+	verb:  "send-keys",
+	event: "ad.send_keys.called",
+	call:  securitySendKeysCall(false),
+	cases: securitySendKeysCases(store.StateWaiting),
+}, {
+	verb:  "send-keys allow_pending",
+	event: "ad.send_keys.called",
+	call:  securitySendKeysCall(true),
+	cases: securitySendKeysCases(store.StatePending),
 }}
 
 // securityKillCases meet the planted sessions on kill's Gone, Leftover,

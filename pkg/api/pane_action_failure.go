@@ -10,7 +10,9 @@ import (
 // the verb error (SR-2.5, SR-7.3, SR-1.4, SR-13.2): read-pane's capture, and
 // send-keys' and pause's text and Enter sends. It has no verb-specific
 // branch: each verb passes its action call, its gone sentinel and the
-// sentences that say what it did not do or may have done.
+// sentences that say what it did not do, and the verbs that type keys select
+// the "keys may have reached the pane" mode (paneActionFailure.Keys), which
+// says what they may have done.
 
 // paneActionFailure holds what a pane verb gives the action-failure mapping.
 type paneActionFailure struct {
@@ -25,13 +27,66 @@ type paneActionFailure struct {
 	Pane paneRefusal
 	// Refusal holds the ErrTmuxUnresponsive and ErrTmuxNotAvailable
 	// descriptions' inputs: the instance id, the context, and the verb's
-	// Consequence sentence ("" for "nothing was done", as read-pane gives,
-	// or that the keys may have been delivered, or that the text may be
-	// typed but not submitted).
+	// Consequence sentence ("" for "nothing was done", as read-pane gives).
+	// In Keys mode the mapping sets the consequence itself (keysReached).
 	// Retry stays "" ("retry later"). Socket and Call are set by the mapping:
 	// the socket from the follow-up's launch, the call from Call or
 	// tmux.CallLookup.
 	Refusal cantTellRefusal
+	// Keys selects the "keys may have reached the pane" mode, for the verbs
+	// whose action types keys (send-keys' text and Enter, pause's /exit and
+	// Enter): a failure may leave keys in the pane, so the descriptions say
+	// what may have happened instead of that nothing was done (keysReached).
+	// read-pane leaves it false.
+	Keys bool
+}
+
+// The "keys may have reached the pane" mode's sentences (SR-1.4 rows "keys
+// action timed out" and "Enter failed after the text went through", SR-7.3).
+const (
+	// keysMayHaveBeenDelivered replaces "nothing was done" when a text or
+	// Enter call timed out.
+	keysMayHaveBeenDelivered = "the keys may have been delivered"
+	// textNotSubmitted is said, in whatever class results, when the text
+	// call succeeded and the Enter call then failed or timed out; it replaces
+	// the gone error's "nothing was sent" and the other classes' "nothing
+	// was done".
+	textNotSubmitted paneNothing = "the text may be typed but not submitted"
+)
+
+// enterFailedAfterText reports that a keys action's failure is its Enter
+// call's, so its text call went through (tmux.SendKeysPane makes the Enter
+// call only after the text call succeeded).
+func enterFailedAfterText(ce *tmux.CallError) bool {
+	return ce != nil && ce.Call == tmux.CallSendEnter
+}
+
+// keysReached applies the "keys may have reached the pane" mode to a keys
+// action's failure ce (SR-1.4, SR-7.3), returning the gone error's inputs
+// and the other classes' refusal with their sentences set:
+//
+//   - a timed-out text or Enter call: the consequence is "the keys may have
+//     been delivered" (never "nothing was done"), followed, for the Enter
+//     call, by "the text may be typed but not submitted";
+//   - any other failure of the Enter call: the gone error and every other
+//     class say "the text may be typed but not submitted", and neither
+//     "nothing was sent" nor "nothing was done";
+//   - any other failure of the text call, or an error that is not a
+//     *tmux.CallError (counted as the text call's unrecognised reply): pane
+//     and r unchanged, since no key was typed.
+func keysReached(ce *tmux.CallError, pane paneRefusal, r cantTellRefusal) (paneRefusal, cantTellRefusal) {
+	enter := enterFailedAfterText(ce)
+	switch {
+	case ce != nil && ce.Failure == tmux.FailTimeout:
+		r.Consequence = keysMayHaveBeenDelivered
+		if enter {
+			r.Consequence += "; " + string(textNotSubmitted)
+		}
+	case enter:
+		pane.Nothing = textNotSubmitted
+		r.Consequence = string(textNotSubmitted)
+	}
+	return pane, r
 }
 
 // paneFollowUp is the follow-up lookup of a failed action, for the verbs
@@ -61,6 +116,9 @@ func (f paneFollowUp) Token() string {
 //   - A timeout (*tmux.CallError with tmux.FailTimeout): ErrTmuxUnresponsive
 //     naming the call and its effective timeout in seconds, the verb's
 //     consequence and "retry later"; no follow-up call.
+//   - In Keys mode, keysReached first sets the sentences every class below
+//     gives: "the keys may have been delivered" after a timeout, and "the
+//     text may be typed but not submitted" once the text call went through.
 //   - Any other failure: exactly one follow-up, tmux.Lookup on launch (the
 //     row's launch identity with this store's id and the socket already
 //     resolved for the action) through t and pc, mapped by the cases below.
@@ -86,7 +144,10 @@ func paneActionFailureError(actionErr error, f paneActionFailure, t TmuxLookup, 
 	if !errors.As(actionErr, &ce) {
 		ce = nil
 	}
-	r := f.Refusal
+	pane, r := f.Pane, f.Refusal
+	if f.Keys {
+		pane, r = keysReached(ce, pane, r)
+	}
 	r.Socket = launch.Socket
 	r.Call = f.Call
 	if ce != nil && ce.Failure == tmux.FailTimeout {
@@ -97,7 +158,7 @@ func paneActionFailureError(actionErr error, f paneActionFailure, t TmuxLookup, 
 	action := actionFailureText(ce, f.Call)
 	switch res.Verdict {
 	case tmux.Gone, tmux.Leftover:
-		return fu, paneGoneError(f.Gone, f.Pane, action)
+		return fu, paneGoneError(f.Gone, pane, action)
 	case tmux.Ours:
 		r.Consequence = "the follow-up lookup found this launch's session; " + r.consequence()
 		return fu, unreadableError(ce, r)

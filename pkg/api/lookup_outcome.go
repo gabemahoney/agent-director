@@ -12,10 +12,11 @@ import (
 
 // This file holds the single-row verbs' shared mapping from a Can't tell
 // lookup or pane-listing outcome to the verb error (SR-1.2, SR-1.4, SR-1.8,
-// SR-3.3, SR-3.4), and the socket a row's calls use. It is the one place
-// these mappings live: kill is their first live-row user; plain spawn's label
-// scan uses the mapping; read-pane, send-keys and pause (Epic 11) and resume
-// and reuse (Epic 16) reuse both unchanged.
+// SR-3.3, SR-3.4), the socket a row's calls use, and the lookup's view of a
+// row (rowLaunch). It is the one place these live: kill is their first
+// live-row user; plain spawn's label scan uses the mapping; read-pane,
+// send-keys and pause (Epic 11) and resume and reuse (Epic 16) reuse them
+// unchanged, and find-missing builds its rows' lookup views with rowLaunch.
 
 // nothingWasDone is the default consequence sentence of a Can't tell refusal
 // (SR-1.4): no tmux action was sent and nothing was written.
@@ -176,4 +177,21 @@ func rowSocket(recorded string) (string, error) {
 		return recorded, nil
 	}
 	return spawn.ResolveQuerySocket(nothingWasDone)
+}
+
+// rowLaunch is the lookup's view of a row (SR-3.4): its instance id; the
+// launch token and recorded server identity of id (the row's recorded launch
+// identity, or the one adoption found for this call); this store's id,
+// storeID; and socket, the socket the row's calls use (rowSocket). kill,
+// read-pane, send-keys and find-missing build every lookup's Launch with it.
+func rowLaunch(instanceID string, id LaunchIdentity, storeID, socket string) tmux.Launch {
+	return tmux.Launch{
+		InstanceID:      instanceID,
+		Token:           id.Token,
+		StoreID:         storeID,
+		Socket:          socket,
+		ServerPID:       id.ServerPID,
+		ServerStart:     id.ServerStart,
+		ServerStarttime: id.ServerStarttime,
+	}
 }

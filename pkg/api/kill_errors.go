@@ -30,14 +30,8 @@ const killLeftoversNamed = 3
 // kill was sent; that ending the session is a human's decision, with the
 // pointer to "Operator actions"; and "list --tmux-session-name".
 func leftoverError(instanceID string, leftovers []tmux.Session) error {
-	sorted := sortedBySessionNumber(leftovers)
-	found := namedSessions(sorted, killLeftoversNamed)
-	what := "tmux session " + found + " carries the label of an earlier launch with this row's own id"
-	if len(sorted) > 1 {
-		what = "tmux sessions " + found + " carry labels of earlier launches with this row's own id"
-	}
 	return fmt.Errorf("%w: instance %s: not this launch's session: %s; no kill was sent; ending such a session is a human's decision, %s; %s",
-		tmux.ErrTmuxSessionConflict, instanceID, what, operatorActionsPointer, listSessionNameHint)
+		tmux.ErrTmuxSessionConflict, instanceID, leftoverSessions(leftovers), operatorActionsPointer, listSessionNameHint)
 }
 
 // noPaneError is ErrTmuxKillFailed variant (c) (SR-1.4, SR-6.1): the lookup

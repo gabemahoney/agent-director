@@ -23,8 +23,8 @@ import (
 //  2. Opens a fresh storefix.OpenTempStore and a fresh tmuxfix.NewRecorder
 //     — no state crosses verbs.
 //  3. Applies the verb's SeedKind precondition via the appropriate
-//     storefix or apitest seed helper (for kill, also the row's own
-//     labelled session in the recorder; for read-pane, a recorder from
+//     storefix or apitest seed helper (for kill and send-keys, also the
+//     row's own labelled session in the recorder; for read-pane, a recorder from
 //     tmuxfix.NewRecorderForReadPane whose own pane captures smokePaneText).
 //  4. Constructs an api.Client wired with the temp store path and the
 //     recorder. CreateIfMissing is true so api.New reuses the store
@@ -33,8 +33,9 @@ import (
 //     AssertResultMatchesManifest; for status, get and list it also checks
 //     the pending row's launch_started_at (see assertLaunchStartedAt), for
 //     get that tmux_socket is the seeded apitest.TestSocket, for kill that
-//     kill_sent is true, for read-pane that the pane is smokePaneText, and
-//     for spawn and resume, with a .claude.json
+//     kill_sent is true, for read-pane that the pane is smokePaneText, for
+//     send-keys that the text went to the row's pane id (see
+//     assertSentToPane), and for spawn and resume, with a .claude.json
 //     planted in HOME first, that pre_trust is "ok" (see plantClaudeJSON).
 //  6. Calls the verb's Error closure (when defined) and feeds the
 //     returned error into AssertExpectedError.
@@ -106,8 +107,6 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 		// make-template, version)
 	case seedLive:
 		storefix.SeedLiveSpawn(t, st, spec.SeedID)
-	case seedWaiting:
-		storefix.SeedPaused(t, st, spec.SeedID)
 	case seedEnded:
 		storefix.SeedKilled(t, st, spec.SeedID)
 	case seedCheckPermission:
@@ -188,6 +187,9 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 				vd.Name, got, smokePaneText)
 		}
 	}
+	if spec.SentText != "" {
+		assertSentToPane(t, vd.Name, rec, spec.SentText)
+	}
 	if spec.PreTrust != nil {
 		if got := spec.PreTrust(result); got != "ok" {
 			t.Errorf("%s: pre_trust = %q; want \"ok\" (.claude.json planted in HOME)",
@@ -216,6 +218,26 @@ func assertLaunchStartedAt(t *testing.T, verb string, got *time.Time) {
 	case !got.Equal(want) || got.Location() != time.UTC:
 		t.Errorf("%s: launch_started_at = %s; want %s", verb,
 			got.Format(time.RFC3339Nano), want.Format(time.RFC3339Nano))
+	}
+}
+
+// assertSentToPane checks rec saw exactly one call carrying text, sent with
+// Enter to the seeded row's pane by its pane id on its socket (SR-7.1).
+func assertSentToPane(t *testing.T, verb string, rec *tmuxfix.Recorder, text string) {
+	t.Helper()
+	var sent []tmuxfix.SocketCall
+	for _, c := range rec.SocketCalls() {
+		if c.Text == text {
+			sent = append(sent, c)
+		}
+	}
+	if len(sent) != 1 {
+		t.Fatalf("%s: %d calls carry %q; want 1, the text sent to the row's pane (calls: %+v)",
+			verb, len(sent), text, rec.SocketCalls())
+	}
+	if c := sent[0]; c.Target != apitest.TestPaneID || c.Socket != apitest.TestSocket || !c.PressEnter {
+		t.Errorf("%s: text sent to %q on %q (Enter %v); want pane %q on %q with Enter",
+			verb, c.Target, c.Socket, c.PressEnter, apitest.TestPaneID, apitest.TestSocket)
 	}
 }
 

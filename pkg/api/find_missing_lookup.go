@@ -12,7 +12,8 @@ import "github.com/gabemahoney/agent-director/internal/tmux"
 // absent (tmux.ProcNone: none recorded) by SR-11.3's table.
 //
 // The row's socket is its recorded one, or for a row that records none the
-// caller's (sweepSockets.forRow); its lookup view is findMissingLaunch, and
+// caller's (sweepSockets.forRow); its lookup view is rowLaunch of its
+// recorded launch identity with this store's id and that socket, and
 // its recorded session name is the holder name. The lookup goes through the
 // run's Sweep, which takes one lookup per socket and applies the stop rule
 // and the budget. Then, on the typed Result:
@@ -39,7 +40,7 @@ func (r *findMissingRun) lookupRow(it LiveSpawnIdentity, state tmux.ProcState) f
 	)
 	row.socket, row.res, ok = r.sockets.forRow(it.Identity.Socket)
 	if ok {
-		launch = findMissingLaunch(it, row.socket, r.s.StoreID())
+		launch = rowLaunch(it.ClaudeInstanceID, it.Identity, r.s.StoreID(), row.socket)
 		row.res = r.sw.Lookup(launch, it.TmuxSessionName)
 	}
 	res := row.res
@@ -78,22 +79,6 @@ func notCalledNote(state tmux.ProcState) string {
 		return noteProbeEACCES
 	}
 	return noteProcessNotSeenTmuxUnchecked
-}
-
-// findMissingLaunch is the lookup's view of a live row (SR-3.4): its
-// instance id, launch token and recorded server identity, this store's id,
-// and socket, the socket the row's calls use. It is built as kill builds
-// its own (killRun.launchFor).
-func findMissingLaunch(it LiveSpawnIdentity, socket, storeID string) tmux.Launch {
-	return tmux.Launch{
-		InstanceID:      it.ClaudeInstanceID,
-		Token:           it.Identity.Token,
-		StoreID:         storeID,
-		Socket:          socket,
-		ServerPID:       it.Identity.ServerPID,
-		ServerStart:     it.Identity.ServerStart,
-		ServerStarttime: it.Identity.ServerStarttime,
-	}
 }
 
 // oursRow decides a row whose lookup is Ours (SR-11.3, SR-3.6, SR-11.6; LFR

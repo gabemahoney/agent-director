@@ -199,18 +199,10 @@ func (k *killRun) run() error {
 	return k.cantTell(res, tmux.CallLookup, "")
 }
 
-// launchFor is the lookup's view of the row with identity id: its instance
-// id, token, recorded server identity, this store's id and the row's socket.
+// launchFor is the lookup's view of the row with identity id (rowLaunch),
+// with this store's id and the row's socket.
 func (k *killRun) launchFor(id LaunchIdentity) tmux.Launch {
-	return tmux.Launch{
-		InstanceID:      k.row.ClaudeInstanceID,
-		Token:           id.Token,
-		StoreID:         k.s.StoreID(),
-		Socket:          k.socket,
-		ServerPID:       id.ServerPID,
-		ServerStart:     id.ServerStart,
-		ServerStarttime: id.ServerStarttime,
-	}
+	return rowLaunch(k.row.ClaudeInstanceID, id, k.s.StoreID(), k.socket)
 }
 
 // ours is the kill sequence on the labelled session (SR-6.1 steps 1 to 4).

@@ -1,7 +1,9 @@
 package apitest
 
 import (
+	"slices"
 	"strconv"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
@@ -19,8 +21,13 @@ import (
 // and the follow-up after a failed action) says "nothing was done", like
 // kill, so it uses DescCallTimeout, DescUnrecognisedReply,
 // DescDifferentServer, DescConflictingLabels (with NothingWasDone),
-// DescSocketPermission and DescTmuxNotRun unchanged. No pane-verb case may
-// give the retired "no pane 0.0" clause or a base-index hint
+// DescSocketPermission and DescTmuxNotRun unchanged. The keys actions
+// (send-keys' text and Enter, pause's) add what they may have done: a
+// timed-out text or Enter send (DescKeysTimeout), and any class after a
+// failed Enter send (DescCase.AfterEnterFailed) or text send
+// (DescCase.AfterTextFailed). send-keys' two pending-row refusals are
+// DescSendKeysPendingNoLaunch and DescSendKeysPendingLeftover. No pane-verb
+// case may give the retired "no pane 0.0" clause or a base-index hint
 // (WD 2026-09-29c).
 
 // PaneVerb is a pane verb whose refusals the pane cases check.
@@ -156,4 +163,109 @@ func DescPaneGone(p PaneGone) DescCase {
 		Require: req,
 		MustNot: append(append([]string(nil), paneMustNot...), unresponsiveMustNot...),
 	}
+}
+
+// The keys actions' phrases (send-keys' text and Enter, pause's /exit and
+// Enter; SR-1.4 rows "keys action timed out" and "Enter failed after the
+// text went through", SR-7.3) and the pending refusals' "no tmux call was
+// made" (SR-1.4, SR-7.1).
+const (
+	keysMayHaveBeenDelivered = "the keys may have been delivered"
+	textNotSubmitted         = "the text may be typed but not submitted"
+	noTmuxCallMade           = "no tmux call was made"
+)
+
+// keysMustNot is what a description after a keys action that may have typed
+// keys must not say: that nothing was done or sent.
+var keysMustNot = []string{nothingWasDone, "nothing was sent"}
+
+// DescSendKeysPendingNoLaunch is send-keys' ErrSpawnNotInteractive for a
+// pending row, with allow_pending, whose launch start or launch token is not
+// recorded (SR-1.4, SR-7.1, SR-22.8): the instance id; that the launch start
+// or launch token is not recorded, so agent-director cannot show that a
+// session belongs to the current launch; that nothing was sent and no tmux
+// call was made; the "Operator actions" pointer. Never "not this launch's
+// session".
+func DescSendKeysPendingNoLaunch(instanceID string) DescCase {
+	return DescCase{
+		Name: "ErrSpawnNotInteractive, send-keys, pending row with no launch start or token",
+		Require: []string{
+			instanceID, "launch start or launch token is not recorded",
+			"agent-director cannot show that a session belongs to the current launch",
+			PaneSendKeys.nothing(), noTmuxCallMade,
+		},
+		MustNot: append(append([]string(nil), paneMustNot...), notThisLaunch),
+	}.PointsToOperatorActions()
+}
+
+// DescSendKeysPendingLeftover is send-keys' ErrSpawnNotInteractive for a
+// pending row, with allow_pending, whose lookup is Leftover (SR-1.4, SR-7.1,
+// SR-3.4): the instance id; each leftover session's quoted name and tmux id
+// in the order the description names them (lowest $N first; up to three,
+// then their count; the rest's names must not appear); "not this launch's
+// session"; that nothing was sent. Never "no tmux call was made" (the lookup
+// ran), "the agent's pane was not found" or that more than one leftover
+// session exists.
+func DescSendKeysPendingLeftover(instanceID string, sessions []DescSession) DescCase {
+	named, unnamed := namedSessions(sessions)
+	return DescCase{
+		Name:    "ErrSpawnNotInteractive, send-keys, pending row on Leftover",
+		Require: append([]string{instanceID, notThisLaunch, PaneSendKeys.nothing()}, named...),
+		MustNot: append(append(append([]string(nil), paneMustNot...),
+			noTmuxCallMade, paneNotFound, moreThanOneLeftover), unnamed...),
+	}
+}
+
+// DescKeysTimeout is ErrTmuxUnresponsive for a timed-out keys action, call
+// tmux.CallSendText or tmux.CallSendEnter (SR-1.4, SR-7.3): DescCallTimeout's
+// call, effective timeout and "retry later", with "the keys may have been
+// delivered" in place of "nothing was done", which it must not say (nor
+// "nothing was sent"); for the Enter call also "the text may be typed but not
+// submitted", which a text call's timeout must not say. Never "dead" or
+// "gone". Any other call panics.
+func DescKeysTimeout(call tmux.Call, timeout time.Duration) DescCase {
+	c := DescCallTimeout(call, timeout)
+	c.Name += ", the keys may have been delivered"
+	c.Require = append(withoutPhrases(c.Require, nothingWasDone), keysMayHaveBeenDelivered)
+	c.MustNot = append(append([]string(nil), c.MustNot...), keysMustNot...)
+	switch call {
+	case tmux.CallSendEnter:
+		c.Require = append(c.Require, textNotSubmitted)
+	case tmux.CallSendText:
+		c.MustNot = append(c.MustNot, textNotSubmitted)
+	default:
+		panic("apitest: DescKeysTimeout takes the text or Enter send, not " + strconv.Quote(string(call)))
+	}
+	return c
+}
+
+// AfterEnterFailed returns c as given after a keys action whose text call
+// went through and whose Enter call then failed other than by a timeout
+// (SR-1.4, SR-7.3), in any class: "the text may be typed but not submitted"
+// in place of "nothing was done" and "nothing was sent", which it must not
+// say, and never "the keys may have been delivered" (DescKeysTimeout's
+// Enter case covers the timeout). Use it on DescPaneGone (FailedCall
+// tmux.CallSendEnter), DescUnrecognisedReply (tmux.CallSendEnter),
+// DescDifferentServer, DescSocketPermission or DescTmuxNotRun.
+func (c DescCase) AfterEnterFailed() DescCase {
+	c.Name += ", after the Enter send failed"
+	c.Require = append(withoutPhrases(c.Require, keysMustNot...), textNotSubmitted)
+	c.MustNot = append(append(append([]string(nil), c.MustNot...), keysMustNot...), keysMayHaveBeenDelivered)
+	return c
+}
+
+// AfterTextFailed returns c as given after a keys action whose text call
+// failed other than by a timeout, so no key was typed (SR-1.4, SR-7.3): c
+// unchanged but for its name, and never "the text may be typed but not
+// submitted" or "the keys may have been delivered". Use it on the cases
+// AfterEnterFailed takes, with tmux.CallSendText.
+func (c DescCase) AfterTextFailed() DescCase {
+	c.Name += ", after the text send failed"
+	c.MustNot = append(append([]string(nil), c.MustNot...), textNotSubmitted, keysMayHaveBeenDelivered)
+	return c
+}
+
+// withoutPhrases returns a copy of phrases without any of drop.
+func withoutPhrases(phrases []string, drop ...string) []string {
+	return slices.DeleteFunc(slices.Clone(phrases), func(p string) bool { return slices.Contains(drop, p) })
 }

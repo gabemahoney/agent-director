@@ -16,22 +16,6 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// readPaneReadCalls are a read's calls: the lookup, the pane listing and the capture.
-var readPaneReadCalls = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture}
-
-// readPaneTokenPane is the pane of r.Session carrying its label's token: the
-// agent's pane of Ours, or a lone leftover's.
-func readPaneTokenPane(t *testing.T, r killRow) string {
-	t.Helper()
-	for _, p := range r.Session.Panes {
-		if p.AdPane != "" && p.AdPane == r.Session.Label.Token {
-			return p.ID
-		}
-	}
-	t.Fatalf("session %q has no pane carrying its label's token", r.Session.Name)
-	return ""
-}
-
 // readPaneCallTableInvoke reads r's pane through a Client (e.pc judges the
 // server); any capture must be of r.Session's token pane, and a result its text.
 func readPaneCallTableInvoke(t *testing.T, e *killEnv, r killRow) (bool, error) {
@@ -39,11 +23,11 @@ func readPaneCallTableInvoke(t *testing.T, e *killEnv, r killRow) (bool, error) 
 	res, err := e.readPaneClient(t, api.ReadPaneParams{ClaudeInstanceID: r.ID})
 	captured := len(e.rec.SocketCallsOf(tmux.CallCapture)) > 0
 	if captured {
-		e.assertCaptured(t, readPaneTokenPane(t, r), api.DefaultReadPaneLines, false)
+		e.assertCaptured(t, labelledPane(t, r.Session, r.Session.Label.Token), api.DefaultReadPaneLines, false)
 	}
 	switch {
-	case err == nil && res.Pane != paneText(r.Socket, readPaneTokenPane(t, r)):
-		t.Errorf("pane = %q; want %q", res.Pane, paneText(r.Socket, readPaneTokenPane(t, r)))
+	case err == nil && res.Pane != paneText(r.Socket, labelledPane(t, r.Session, r.Session.Label.Token)):
+		t.Errorf("pane = %q; want %q", res.Pane, paneText(r.Socket, labelledPane(t, r.Session, r.Session.Label.Token)))
 	case err != nil && res.Pane != "":
 		t.Errorf("pane = %q with error %v; want nothing read", res.Pane, err)
 	}
@@ -60,7 +44,7 @@ func callTableReadPane() callTableVerb {
 		desc: func(_ *killEnv, r killRow) apitest.DescCase {
 			return apitest.DescPaneGone(apitest.PaneGone{Verb: apitest.PaneReadPane, InstanceID: r.ID, Name: r.Name})
 		}}
-	read := callTableCell{sent: true, calls: readPaneReadCalls}
+	read := callTableCell{sent: true, calls: paneReadCalls}
 	cells := callTableLookupRefusals()
 	maps.Copy(cells, map[callTableOutcome]callTableCell{
 		ctOurs:                     read,
@@ -74,11 +58,11 @@ func callTableReadPane() callTableVerb {
 		ctGoneNoServer:             gone,
 		ctGoneNoSocket:             gone,
 		ctActionRecognised: {errName: "ErrTmuxUnresponsive", sent: true,
-			calls: append(append([]tmux.Call(nil), readPaneReadCalls...), tmux.CallLookup),
+			calls: withFollowUp(paneReadCalls),
 			desc: func(*killEnv, killRow) apitest.DescCase {
 				return apitest.DescUnrecognisedReply(tmux.CallCapture, "")
 			}},
-		ctActionTimeout: {errName: "ErrTmuxUnresponsive", sent: true, calls: readPaneReadCalls,
+		ctActionTimeout: {errName: "ErrTmuxUnresponsive", sent: true, calls: paneReadCalls,
 			desc: func(e *killEnv, _ killRow) apitest.DescCase {
 				return apitest.DescCallTimeout(tmux.CallCapture, e.cfg.EffectiveActionTimeout())
 			}},
@@ -172,7 +156,7 @@ func TestCallTableReadPaneFollowUp(t *testing.T) {
 
 			assertOneName(t, err, tc.errName)
 			apitest.AssertDescription(t, err.Error(), tc.desc(e, r), r.Token, r.StoreID, apitest.OtherStoreID(r.StoreID))
-			e.assertPaneCalls(t, append(append([]tmux.Call(nil), readPaneReadCalls...), tmux.CallLookup)...)
+			e.assertPaneCalls(t, withFollowUp(paneReadCalls)...)
 			e.assertRowUnchanged(t, r.ID, before)
 		})
 	}

@@ -24,7 +24,6 @@ func TestReadPaneCeilingVirtualTime(t *testing.T) {
 		t.Fatalf("3Q + A at the defaults = %v; SR-7.5 says 6.5 s", got)
 	}
 	raised := 2*a + q // above 2A and above the default Q
-	ours := []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture}
 	paths := []struct {
 		name    string
 		failure tmux.Failure
@@ -32,9 +31,9 @@ func TestReadPaneCeilingVirtualTime(t *testing.T) {
 		want    func(q time.Duration) time.Duration
 		desc    apitest.DescCase
 	}{
-		{"capture fails, follow-up finds Ours", tmux.FailUnrecognized, append(ours, tmux.CallLookup),
+		{"capture fails, follow-up finds Ours", tmux.FailUnrecognized, withFollowUp(paneReadCalls),
 			func(q time.Duration) time.Duration { return 3*q + a }, apitest.DescUnrecognisedReply(tmux.CallCapture, "")},
-		{"capture times out", tmux.FailTimeout, ours,
+		{"capture times out", tmux.FailTimeout, paneReadCalls,
 			func(q time.Duration) time.Duration { return 2*q + a }, apitest.DescCallTimeout(tmux.CallCapture, a)},
 	}
 	for _, qc := range []struct {

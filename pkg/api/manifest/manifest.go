@@ -421,6 +421,8 @@ var Verbs = []VerbDef{
 			"ErrSendKeysWhileRelayed",
 			"ErrTmuxNotAvailable",
 			"ErrTmuxSendKeys",
+			"ErrTmuxUnresponsive",
+			"ErrTmuxSessionConflict",
 		},
 	},
 	{

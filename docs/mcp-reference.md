@@ -137,6 +137,8 @@ Send text into a tracked Spawn's tmux pane. `\r` bytes are stripped (prevent pre
 - `ErrSendKeysWhileRelayed`
 - `ErrTmuxNotAvailable`
 - `ErrTmuxSendKeys`
+- `ErrTmuxUnresponsive`
+- `ErrTmuxSessionConflict`
 
 ## Tool: read-pane
 

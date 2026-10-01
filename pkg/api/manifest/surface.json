@@ -466,7 +466,9 @@
         "ErrSpawnNotInteractive",
         "ErrSendKeysWhileRelayed",
         "ErrTmuxNotAvailable",
-        "ErrTmuxSendKeys"
+        "ErrTmuxSendKeys",
+        "ErrTmuxUnresponsive",
+        "ErrTmuxSessionConflict"
       ]
     },
     {

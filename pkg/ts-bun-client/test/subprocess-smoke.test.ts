@@ -103,13 +103,15 @@ describe("subprocess-smoke / happy paths (SR-10.3)", () => {
     });
   }, 10_000);
 
-  test("send-keys — succeeds against working spawn", async () => {
+  test("send-keys — Ours through the fake's table delivers to the row's pane", async () => {
     await withTempHome(async (homeDir) => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
       const id = "subsmoke-sendkeys";
       runHelper("seed-spawn", {
         store: storePath, id, state: "working", "create-store": true,
+        socket: privateTmuxSocket(homeDir),
       });
+      runHelper("seed-row-session", { store: storePath, id });
       using client = await Client.create({ storePath, createIfMissing: true, tmuxCommand: FAKE_TMUX_BIN , _cliPath: process.env.CLI_PATH } as any);
       const r: SendKeysResult = await client.sendKeys({ claude_instance_id: id, text: "hi" });
       expect(typeof r).toBe("object");

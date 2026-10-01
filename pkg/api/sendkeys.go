@@ -1,36 +1,56 @@
 package api
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
-	"github.com/gabemahoney/agent-director/internal/trail"
 )
 
-// SendKeysStore is the narrow store surface SendKeys needs. *store.Store
-// satisfies it; tests pass the real store.
+// SendKeysStore is the narrow store surface SendKeys needs (SRD Appendix
+// F.3): the row read, the relay guard's permission-request read, the
+// adoption write of SR-3.6 (a lost create reply's server and pane identity,
+// applied only if the row still has the snapshot SendKeys examined) and this
+// store's id, which every label the lookup accepts ends with (SR-3.4; WD
+// 2026-09-29 STORE). The adoption is the only write send-keys makes.
+// *store.Store satisfies it.
 //
 // PermissionRequestsForSpawn returns ALL of the Spawn's permission_requests
 // rows (decided and undecided) so the relay-guard release can evaluate
 // deliverability across every row regardless of decision status (SR-4.2).
 type SendKeysStore interface {
+	// GetSpawn reads the row; an unknown id is ErrSpawnNotFound.
 	GetSpawn(instanceID string) (Spawn, error)
+	// PermissionRequestsForSpawn reads every permission request of the row.
 	PermissionRequestsForSpawn(instanceID string) ([]PermissionRow, error)
+	// AdoptIdentityIfUnchanged records a found launch identity when the
+	// row is still as examined (SR-3.6).
+	AdoptIdentityIfUnchanged(instanceID string, examined RowSnapshot, id LaunchIdentity) (CondResult, error)
+	// StoreID returns this store's store_meta.store_id.
+	StoreID() string
 }
 
-// SendKeysTmux is the narrow tmux surface SendKeys needs. *tmux.Client
-// satisfies it; tests pass a recording fake that captures the text +
-// press_enter pair without launching real tmux. The tmux client owns
-// the literal-text-then-Enter sequencing internally — see
-// (*tmux.Client).SendKeys for the wire shape.
+// SendKeysTmux is the narrow tmux surface SendKeys needs (Appendix F.3): the
+// lookup, the pane listing and the keys sent to one pane by its pane id.
+// TmuxClient, *tmux.Client and tmuxfix.Recorder satisfy it. Every method
+// takes the row's socket (SR-3.3) and reports a failure as *TmuxCallError.
 type SendKeysTmux interface {
-	SendKeys(name, text string, pressEnter bool) error
+	TmuxLookup
+	// ListPanes lists every pane of the server at socket.
+	ListPanes(socket string) ([]TmuxPane, error)
+	// SendKeysPane types text literally into the pane paneID on socket and
+	// then, only if that succeeded and pressEnter is set, sends Enter; the
+	// failed call is named on the *TmuxCallError (text send or Enter send).
+	SendKeysPane(socket, paneID, text string, pressEnter bool) error
 }
+
+// The production types satisfy SendKeys' interfaces.
+var (
+	_ SendKeysStore = (*store.Store)(nil)
+	_ SendKeysTmux  = TmuxClient(nil)
+)
 
 // SendKeysParams is the typed parameter shape for the send-keys verb.
 // JSON tags use snake_case so MCP clients can decode into the struct
@@ -88,8 +108,10 @@ type sendKeysGuard struct {
 	refuse bool
 }
 
-// SendKeys is the verb-handler entry point for `agent-director send-keys`.
-// Behavior (SRD §4.3 + reference/send-keys-research.md):
+// SendKeys is the verb-handler entry point for `agent-director send-keys`
+// (SRD SR-7.1, SR-7.2, SR-7.3, SR-3.6, SR-3.7, SR-13.2, SR-22.7, SR-22.8).
+// It types text into the agent's own pane of the row's current launch, by
+// pane id, then submits it with Enter:
 //
 //   - `\r` (CR, 0x0D) bytes in Text are STRIPPED before invoking tmux. CR
 //     submits the buffer at the position it appears, which would split
@@ -98,16 +120,19 @@ type sendKeysGuard struct {
 //   - `\n` (LF, 0x0A) bytes are PRESERVED — Claude's input handler treats
 //     LF as "insert newline in input box", not as a submit. Multi-line
 //     prompts compose as one message.
-//   - A single Enter is always appended via a separate
-//     `tmux send-keys -t <name>:0.0 Enter` call after the text. That is
-//     the single submit.
+//   - The text is typed literally, then a single Enter is sent to the same
+//     pane as a separate call, only if the text call succeeded. That is the
+//     single submit.
 //
 // State precondition: the Spawn must be in a live, interactive state
-// (waiting / working / ask_user / check_permission). pending Spawns have
-// not yet booted their TUI; ended / missing Spawns have nothing to type
-// into. A non-interactive state surfaces ErrSpawnNotInteractive.
+// (waiting / working / ask_user / check_permission); ended / missing Spawns
+// have nothing to type into. A non-interactive state surfaces
+// ErrSpawnNotInteractive, with no tmux call.
 // Set AllowPending=true to also permit pending Spawns (pre-SessionStart
 // use case); ended/missing are still rejected.
+// A pending row whose launch start or launch token is not recorded is
+// refused with ErrSpawnNotInteractive before any tmux call: without them no
+// session can be shown to belong to the current launch (SR-7.1, SR-22.8).
 //
 // Relay-mode guard (time-bounded): when relay_mode=on AND
 // state=check_permission, the permission relay normally owns the answer, so
@@ -128,49 +153,216 @@ type sendKeysGuard struct {
 // with no row there is no signal and no authority to release, and the state
 // is a real mid-insert transient.
 //
-// effectiveWindow is the resolved relay window (obtained by the caller via
-// Epic 1's accessor and consumed only through the shared deliverability
-// function); now is the injected clock so the release verdict is deterministic
-// and testable.
-func SendKeys(s SendKeysStore, tmux SendKeysTmux, effectiveWindow time.Duration, now time.Time, params SendKeysParams) (SendKeysResult, error) {
-	_, res, err := sendKeys(s, tmux, effectiveWindow, now, params)
+// Then the row's socket (SR-3.3; a resolution refusal is
+// ErrTmuxNotAvailable) and one lookup by the row's current label:
+//
+//   - Ours: one pane listing, then the text and Enter to the agent's pane
+//     (the entry with the row's recorded pane id and pid, wherever it now
+//     is). For a row that records no server identity or no pane (a lost
+//     create reply), what the lookup and the pane whose @ad_pane names the
+//     row's launch token show is used for this call and written once,
+//     guarded on the row as read; the write's outcome never changes the
+//     result (SR-3.6). No agent's pane: ErrTmuxSessionConflict ("the agent's
+//     pane was not found"), nothing sent.
+//   - Leftover: on a pending row ErrSpawnNotInteractive ("not this launch's
+//     session"), otherwise ErrTmuxSessionConflict; nothing sent.
+//   - Gone (another agent-director store's sessions included):
+//     ErrTmuxSendKeys ("the row's session is not there"), nothing sent.
+//   - Can't tell, tmux unavailable, and a pane listing that fails other than
+//     by showing no server: the single-row verbs' shared mapping
+//     (ErrTmuxNotAvailable, ErrTmuxSessionConflict "conflicting labels",
+//     ErrTmuxUnresponsive), nothing sent. A listing that shows no server is
+//     Gone.
+//   - A failed text or Enter call: a timeout is ErrTmuxUnresponsive saying
+//     the keys may have been delivered, with no further call; any other
+//     failure makes one follow-up lookup, whose Gone or Leftover gives
+//     ErrTmuxSendKeys and whose other outcomes give ErrTmuxUnresponsive, or
+//     ErrTmuxNotAvailable for a different server or tmux unavailable
+//     (SR-7.3). Once the text call went through, every description says the
+//     text may be typed but not submitted, never that nothing was sent.
+//
+// Every tmux call uses the row's socket and every action targets a pane id.
+// The calls are at most one lookup, one pane listing, the text call, the
+// Enter call and, only after an action failure other than a timeout, one
+// follow-up lookup (SR-13.2). A row that turns live between the read and the
+// send still gets the keys in the same pane (SR-22.7). SendKeys never writes
+// the row's state; the adoption is its only store write.
+//
+// Trail (SR-7.4, SR-14): SendKeys writes at most one ad.provenance.disagree
+// record per distinct reason per call (source ad_send_keys), fail-open, and
+// none in the normal case; Client.SendKeys writes the same records through
+// the same path, plus its one ad.send_keys.called. Each record's action is
+// what the call typed: keys_sent (the text and Enter both went through),
+// text_sent (the text call timed out, or the text went through and the Enter
+// call failed or timed out) or nothing_sent (no keys call, or the text call
+// failed other than by timing out).
+//
+// pc is the start-time reader that judges the lookup's server (SR-3.3) and
+// an adopted pane (SR-3.6). effectiveWindow is the resolved relay window
+// (obtained by the caller via Epic 1's accessor and consumed only through the
+// shared deliverability function); now is the injected clock so the release
+// verdict is deterministic and testable.
+func SendKeys(s SendKeysStore, t SendKeysTmux, pc ProcChecker, effectiveWindow time.Duration, now time.Time, params SendKeysParams) (SendKeysResult, error) {
+	_, res, err := sendKeys(s, t, pc, effectiveWindow, now, params)
 	return res, err
 }
 
+// sendKeysFacts is what one send-keys call read, found and did, kept by
+// sendKeys so Client.SendKeys and the trail (ad.send_keys.called,
+// ad.provenance.disagree) read them without re-deriving them (SR-7.4, SR-14).
+type sendKeysFacts struct {
+	// RowState is the stored state of the row read; "" when no row was read.
+	RowState string
+	// Guard is the relay guard's evaluation (guardNotApplicable when the
+	// guard did not run or did not apply).
+	Guard string
+	// Socket is the socket the row's calls used; "" when none was resolved.
+	Socket string
+	// LookupRan reports that the first lookup was made; Lookup is its Result
+	// (zero when it was not made).
+	LookupRan bool
+	Lookup    tmux.Result
+	// Listing is a failed pane listing's Result (tmux.ListingFailure); zero
+	// when the listing answered or none was made.
+	Listing tmux.Result
+	// Adopted reports that the adoption write applied (SR-3.6).
+	Adopted bool
+	// Session is the session concerned: the Ours session the lookup found;
+	// zero on every other verdict.
+	Session tmux.Session
+	// Sent reports that SendKeysPane was called (keys may have reached the
+	// pane); SendErr is its error, nil when the text and Enter both went
+	// through. enterFailedAfterText tells a failed Enter after the text.
+	Sent    bool
+	SendErr error
+	// FollowUp is the follow-up lookup after a failed action (Ran false when
+	// none was made).
+	FollowUp paneFollowUp
+	// Caller is the invoking process's identity, collected once per call on
+	// the path Client.SendKeys and SendKeys share (callerIdentity).
+	Caller caller
+}
+
+// sendKeysRun is one SendKeys call: the pane verbs' shared run with
+// send-keys' gone sentinel, "nothing was sent" and the adoption write, and
+// the facts the call keeps.
+type sendKeysRun struct {
+	paneRun
+	s     SendKeysStore
+	st    SendKeysTmux
+	facts sendKeysFacts
+}
+
 // sendKeys is the inner implementation shared by the pure SendKeys entry point
-// and Client.SendKeys. It returns the guard-evaluation outcome string
-// alongside the result/error so the Client wrapper can record it on the
-// ad.send_keys.called trail event without re-deriving it.
-func sendKeys(s SendKeysStore, tmux SendKeysTmux, effectiveWindow time.Duration, now time.Time, params SendKeysParams) (string, SendKeysResult, error) {
-	row, err := s.GetSpawn(params.ClaudeInstanceID)
+// and Client.SendKeys. It collects the caller identity once, runs the call,
+// writes the call's ad.provenance.disagree records (emitDisagree) and returns
+// the call's facts alongside the result/error so the Client wrapper can
+// record them on the ad.send_keys.called trail event without re-deriving
+// them.
+func sendKeys(s SendKeysStore, t SendKeysTmux, pc ProcChecker, effectiveWindow time.Duration, now time.Time, params SendKeysParams) (sendKeysFacts, SendKeysResult, error) {
+	r := &sendKeysRun{s: s, st: t, facts: sendKeysFacts{Guard: guardNotApplicable, Caller: callerIdentity()}}
+	err := r.run(pc, effectiveWindow, now, params)
+	r.emitDisagree(params.ClaudeInstanceID)
+	return r.facts, SendKeysResult{}, err
+}
+
+// run is the send-keys flow; the returned error is SendKeys'.
+func (r *sendKeysRun) run(pc ProcChecker, effectiveWindow time.Duration, now time.Time, params SendKeysParams) error {
+	row, err := r.s.GetSpawn(params.ClaudeInstanceID)
 	if err != nil {
-		return guardNotApplicable, SendKeysResult{}, err
+		return err
+	}
+	r.facts.RowState = row.State
+
+	if err := sendKeysStateGuard(row, params); err != nil {
+		return err
 	}
 
-	if !isInteractiveState(row.State) && !(params.AllowPending && row.State == store.StatePending) {
-		return guardNotApplicable, SendKeysResult{}, fmt.Errorf("%w: spawn %s state=%s",
-			ErrSpawnNotInteractive, params.ClaudeInstanceID, row.State)
-	}
-
-	guard, err := evaluateRelayGuard(s, effectiveWindow, now, row, params.ClaudeInstanceID)
+	guard, err := evaluateRelayGuard(r.s, effectiveWindow, now, row, params.ClaudeInstanceID)
+	r.facts.Guard = guard.eval
 	if err != nil {
-		return guard.eval, SendKeysResult{}, err
+		return err
 	}
 	if guard.refuse {
-		return guard.eval, SendKeysResult{}, fmt.Errorf(
+		return fmt.Errorf(
 			"%w: spawn %s is awaiting a relayed permission decision (guard releases once every request's delivery window elapses)",
 			ErrSendKeysWhileRelayed, params.ClaudeInstanceID)
 	}
 
-	cleaned := strings.ReplaceAll(params.Text, "\r", "")
-	// The tmux client handles the literal-text-then-real-Enter split
-	// internally (see (*tmux.Client).SendKeys); the verb hands it the
-	// cleaned text plus pressEnter=true.
-	if err := tmux.SendKeys(row.TmuxSessionName, cleaned, true); err != nil {
-		return guard.eval, SendKeysResult{}, err
+	socket, err := rowSocket(row.Identity.Socket)
+	if err != nil {
+		return fmt.Errorf("instance %s: %w", row.ClaudeInstanceID, err)
+	}
+	r.facts.Socket = socket
+	r.paneRun = paneRun{
+		t: r.st, pc: pc, row: row, storeID: r.s.StoreID(), socket: socket,
+		gone: tmux.ErrTmuxSendKeys, nothing: nothingSent, adopter: r.s,
 	}
 
-	return guard.eval, SendKeysResult{}, nil
+	paneID, launch, err := r.target()
+	r.facts.Listing, r.facts.Adopted = r.listing, r.adoption.Applied
+	if err != nil {
+		return err
+	}
+
+	cleaned := strings.ReplaceAll(params.Text, "\r", "")
+	r.facts.Sent = true
+	if err := r.st.SendKeysPane(socket, paneID, cleaned, true); err != nil {
+		r.facts.SendErr = err
+		fu, verr := paneActionFailureError(err, paneActionFailure{
+			Call:    tmux.CallSendText,
+			Gone:    tmux.ErrTmuxSendKeys,
+			Pane:    r.refusal(row.TmuxSessionName),
+			Refusal: r.cantTellRefusal(tmux.CallSendText),
+			Keys:    true,
+		}, r.st, r.pc, launch)
+		r.facts.FollowUp = fu
+		return verr
+	}
+	return nil
+}
+
+// sendKeysStateGuard is send-keys' state guard (SR-7.1, SR-22.8): a live
+// interactive row passes; a pending row passes only with AllowPending and
+// only when its launch start and launch token are recorded (the store's
+// decoded values: 0 launch start, or no well-formed token, is absent),
+// otherwise pendingNoLaunchError; every other state, finished rows included,
+// is ErrSpawnNotInteractive naming the state. It makes no tmux call.
+func sendKeysStateGuard(row Spawn, params SendKeysParams) error {
+	if params.AllowPending && row.State == store.StatePending {
+		if row.LaunchStartedAtMillis == 0 || row.Identity.Token == "" {
+			return pendingNoLaunchError(row.ClaudeInstanceID)
+		}
+		return nil
+	}
+	if !isInteractiveState(row.State) {
+		return fmt.Errorf("%w: spawn %s state=%s",
+			ErrSpawnNotInteractive, params.ClaudeInstanceID, row.State)
+	}
+	return nil
+}
+
+// target makes the lookup (holder name the row's recorded name, as kill
+// passes it) and, on Ours, the pane listing, and returns the agent's pane id
+// with the launch view a failed action's follow-up lookup uses, or the verb
+// error, with nothing sent.
+func (r *sendKeysRun) target() (string, tmux.Launch, error) {
+	launch := r.launchFor(r.row.Identity)
+	res := tmux.Lookup(r.t, r.pc, launch, r.row.TmuxSessionName)
+	r.facts.LookupRan, r.facts.Lookup = true, res
+	switch res.Verdict {
+	case tmux.Ours:
+		r.facts.Session = res.Session
+		return r.ours(res, launch)
+	case tmux.Leftover:
+		if r.row.State == store.StatePending {
+			return "", launch, pendingLeftoverError(r.row.ClaudeInstanceID, res.Leftovers)
+		}
+		return "", launch, paneLeftoverError(r.refusal(""), res.Leftovers, false)
+	case tmux.Gone:
+		return "", launch, r.goneError()
+	}
+	return "", launch, cantTellError(res, r.cantTellRefusal(tmux.CallLookup))
 }
 
 // evaluateRelayGuard decides whether the time-bounded relay guard refuses the
@@ -219,45 +411,16 @@ func evaluateRelayGuard(s SendKeysStore, effectiveWindow time.Duration, now time
 }
 
 // isInteractiveState returns true iff the supplied state value belongs to
-// the set of live conversational states send-keys is allowed to drive.
-// pending is excluded because the TUI isn't up yet — the first
-// SessionStart hook flips pending to waiting, after which the Spawn is
-// reachable.
+// the set of live conversational states send-keys drives without
+// AllowPending. pending is excluded: it means a launch (spawn, reuse or
+// resume) is in progress until its agent reports in, and send-keys reaches
+// such a launch only with AllowPending (sendKeysStateGuard).
 func isInteractiveState(state string) bool {
 	switch state {
 	case store.StateWaiting, store.StateWorking, store.StateAskUser, store.StateCheckPermission:
 		return true
 	}
 	return false
-}
-
-// sendKeysOutcome maps a SendKeys error to its canonical outcome string for
-// ad.send_keys.called. nil → "ok"; known sentinels → their err_name;
-// unrecognized errors → "ErrInternal". The function uses errors.Is so
-// %w-wrapped errors are matched correctly.
-//
-// As with decideOutcome, errnames.Classify cannot be used here: pkg/api/errnames
-// imports pkg/api for its sentinel variables, so importing errnames from pkg/api
-// would create an unresolvable import cycle. This local switch is the canonical
-// pattern for send-keys-path outcome strings.
-func sendKeysOutcome(err error) string {
-	if err == nil {
-		return "ok"
-	}
-	switch {
-	case errors.Is(err, ErrSpawnNotInteractive):
-		return "ErrSpawnNotInteractive"
-	case errors.Is(err, ErrSendKeysWhileRelayed):
-		return "ErrSendKeysWhileRelayed"
-	case errors.Is(err, store.ErrSpawnNotFound):
-		return "ErrSpawnNotFound"
-	case errors.Is(err, tmux.ErrTmuxNotAvailable):
-		return "ErrTmuxNotAvailable"
-	case errors.Is(err, tmux.ErrTmuxSendKeys):
-		return "ErrTmuxSendKeys"
-	default:
-		return "ErrInternal"
-	}
 }
 
 // SendKeys sends text into a tracked Spawn's tmux pane. CR bytes (0x0D) are
@@ -269,16 +432,27 @@ func sendKeysOutcome(err error) string {
 //
 // Errors:
 //   - [ErrSpawnNotFound]: no row exists for the instance id.
-//   - [ErrSpawnNotInteractive]: the Spawn's state is not one of waiting,
-//     working, ask_user, check_permission, or (with AllowPending=true) pending.
+//   - [ErrSpawnNotInteractive]: the row is finished or otherwise not in a
+//     live interactive state, or pending without AllowPending, or pending
+//     with no launch start or launch token recorded, or pending and the
+//     lookup found only a session an earlier launch left behind; nothing was
+//     sent.
 //   - [ErrSendKeysWhileRelayed]: relay_mode is on and state is
 //     check_permission and at least one of the Spawn's permission requests is
 //     still within its relay delivery window (or the Spawn has zero request
 //     rows). The refusal is time-bounded: once every request row's window has
 //     elapsed the delivering hook is dead and the guard releases, letting the
 //     operator recover the wedged Spawn through this sanctioned surface.
-//   - ErrTmuxNotAvailable: tmux binary is not on PATH.
-//   - ErrTmuxSendKeys: tmux send-keys exited non-zero.
+//   - [ErrTmuxSendKeys]: the row's tmux session is not there.
+//   - [ErrTmuxSessionConflict]: the agent's pane was not found, a session an
+//     earlier launch left behind is there on a live row, or tmux holds
+//     conflicting labels; nothing was sent.
+//   - [ErrTmuxUnresponsive]: tmux did not answer, or gave a reply that could
+//     not be recognised; after a text or Enter call the keys may have been
+//     delivered.
+//   - [ErrTmuxNotAvailable]: the tmux binary could not be run, the socket is
+//     not accessible to this user, or this is not the tmux server the agent
+//     was launched on.
 //
 // Nondeterminism: none.
 func (c *Client) SendKeys(params SendKeysParams) (SendKeysResult, error) {
@@ -286,37 +460,16 @@ func (c *Client) SendKeys(params SendKeysParams) (SendKeysResult, error) {
 		return SendKeysResult{}, err
 	}
 
-	// Collect caller identity once at entry — must come from inside AD, not
-	// from caller-asserted params (SR-5.2), mirroring Client.Decide.
-	callerID := callerIdentity()
-
-	var callErr error
-	guardEval := guardNotApplicable
-	defer func() {
-		// Emit exactly one ad.send_keys.called per invocation, on every return
-		// path including error outcomes (SR-5.2). The guard_evaluation field
-		// makes the relay-recovery send (guard released) distinguishable from
-		// ordinary sends and from guard refusals. Fail-open per SR-A-3.2: a
-		// trail-emit failure is silently discarded and never fails the send.
-		_ = trail.Emit(context.Background(), "ad.send_keys.called", map[string]any{
-			"claude_instance_id": params.ClaudeInstanceID,
-			"allow_pending":      params.AllowPending,
-			"guard_evaluation":   guardEval,
-			"outcome":            sendKeysOutcome(callErr),
-			"caller_process":     callerID.process,
-			"caller_pid":         callerID.pid,
-			"caller_hostname":    callerID.hostname,
-			"caller_user":        callerID.user,
-			"source":             "ad_send_keys",
-		})
-	}()
-
 	// Effective relay window is resolved here via Epic 1's accessor (the single
-	// source for the non-positive→default fallback); the clock is injected as
-	// time.Now() so the guard-release verdict is deterministic at the API
-	// boundary, mirroring Client.Decide.
+	// source for the non-positive→default fallback); the clock is the
+	// Client's own (c.now), so the guard-release verdict is deterministic at
+	// the API boundary and tests can step it. The start-time reader is the
+	// Client's too. The caller identity is collected inside agent-director,
+	// never from caller-asserted params (SR-5.2), once per call by sendKeys.
 	effectiveWindow := time.Duration(c.cfg.Relay.EffectiveTimeoutSeconds()) * time.Second
-	var result SendKeysResult
-	guardEval, result, callErr = sendKeys(c.st, c.tmuxClient, effectiveWindow, time.Now(), params)
-	return result, callErr
+	facts, result, err := sendKeys(c.st, c.tmuxClient, c.procChecker, effectiveWindow, c.now(), params)
+	// Exactly one ad.send_keys.called per call past the closed check, on
+	// every outcome (SR-7.4, SR-5.2), fail-open.
+	emitSendKeysCalled(params, facts, err)
+	return result, err
 }

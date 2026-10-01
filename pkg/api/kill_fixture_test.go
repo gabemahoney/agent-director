@@ -27,6 +27,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -49,12 +50,14 @@ var (
 	killSessionIDRe = regexp.MustCompile(`^\$[0-9]+$`)
 )
 
-// killStore is api.KillStore over a real store; the adoption write delegates
-// unless failAdopt or refuseAdopt set its answer (nothing is written then).
+// killStore is api.KillStore (and the pane verbs' stores) over a real store;
+// the adoption write delegates unless failAdopt or refuseAdopt set its
+// answer (nothing is written then); permErr is failPermissionRequests'.
 type killStore struct {
 	st       *store.Store
 	adoptErr error
 	adoptRes api.CondResult
+	permErr  error
 }
 
 // failAdopt makes every later adoption write return err (errInjectedStore when nil).
@@ -145,6 +148,7 @@ func newKillEnv(t *testing.T) *killEnv {
 		t.Fatalf("store.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
+	storefix.RegisterStorePath(t, st, dbPath) // storefix's permission-request seeders take st
 	storeID, err := apitest.ReadStoreID(dbPath)
 	if err != nil {
 		t.Fatalf("ReadStoreID: %v", err)
@@ -208,6 +212,8 @@ type killRowSpec struct {
 	NoPane           bool       // the row records no pane (a lost create reply)
 	NoSession        bool       // seed no session (seedSession or seedTeamSession later)
 	Teammates        int        // extra split panes in the row's session, each alive
+	RelayOn          bool       // relay_mode on (default off)
+	SessionID        string     // the row's claude_session_id (default none)
 	Opts             []apitest.SpawnOption
 }
 
@@ -273,7 +279,11 @@ func (e *killEnv) seedRow(t *testing.T, spec killRowSpec) killRow {
 	if li.PanePID > 0 {
 		opts = append(opts, apitest.WithPID(li.PanePID), apitest.WithProcStarttime(li.PaneStarttime))
 	}
-	if _, err := apitest.SeedSpawn(e.dbPath, id, state, "", "off", "", false, append(opts, spec.Opts...)...); err != nil {
+	relay := "off"
+	if spec.RelayOn {
+		relay = "on"
+	}
+	if _, err := apitest.SeedSpawn(e.dbPath, id, state, "", relay, spec.SessionID, false, append(opts, spec.Opts...)...); err != nil {
 		t.Fatalf("SeedSpawn(%s): %v", id, err)
 	}
 	row, err := e.st.GetSpawn(id)

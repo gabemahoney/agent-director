@@ -20,14 +20,8 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// rpCalls are a successful read's calls: one lookup, one listing, one capture.
-var rpCalls = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture}
-
-// rpFollowUpCalls are a failed capture's calls: rpCalls, then one follow-up lookup.
-var rpFollowUpCalls = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture, tmux.CallLookup}
-
 // rpAssertRead fails unless read-pane returned paneID's text from exactly
-// rpCalls, capturing paneID by its id with the default parameters.
+// paneReadCalls, capturing paneID by its id with the default parameters.
 func rpAssertRead(t *testing.T, e *killEnv, r killRow, paneID string, res api.ReadPaneResult, err error) {
 	t.Helper()
 	if err != nil {
@@ -36,7 +30,7 @@ func rpAssertRead(t *testing.T, e *killEnv, r killRow, paneID string, res api.Re
 	if want := paneText(r.Socket, paneID); res.Pane != want {
 		t.Errorf("Pane = %q; want %q", res.Pane, want)
 	}
-	e.assertPaneCalls(t, rpCalls...)
+	e.assertPaneCalls(t, paneReadCalls...)
 	e.assertCaptured(t, paneID, api.DefaultReadPaneLines, false)
 }
 
@@ -84,7 +78,7 @@ func TestReadPaneParameters(t *testing.T) {
 			if res.Pane != tc.want {
 				t.Errorf("Pane = %q; want %q", res.Pane, tc.want)
 			}
-			e.assertPaneCalls(t, rpCalls...)
+			e.assertPaneCalls(t, paneReadCalls...)
 			e.assertCaptured(t, r.Spawn.Identity.PaneID, tc.wantLines, tc.ansi)
 		})
 	}
@@ -243,13 +237,13 @@ func TestReadPaneSessionReplaced(t *testing.T) {
 					Name: r.Name})
 			}},
 		{name: "after the listing, unlabelled replacement", after: tmux.CallListPanes,
-			calls: rpFollowUpCalls, want: tmux.ErrTmuxCaptureFailed, captured: true,
+			calls: withFollowUp(paneReadCalls), want: tmux.ErrTmuxCaptureFailed, captured: true,
 			desc: func(r killRow) apitest.DescCase {
 				return apitest.DescPaneGone(apitest.PaneGone{Verb: apitest.PaneReadPane, InstanceID: r.ID,
 					Name: r.Name, FailedCall: tmux.CallCapture})
 			}},
 		{name: "after the listing, replacement with the current label", after: tmux.CallListPanes, current: true,
-			calls: rpFollowUpCalls, want: tmux.ErrTmuxUnresponsive, captured: true,
+			calls: withFollowUp(paneReadCalls), want: tmux.ErrTmuxUnresponsive, captured: true,
 			desc: func(killRow) apitest.DescCase { return apitest.DescUnrecognisedReply(tmux.CallCapture, "") }},
 	}
 	for _, tc := range cases {

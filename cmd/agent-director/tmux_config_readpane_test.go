@@ -8,7 +8,6 @@ import (
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix"
-	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -24,11 +23,8 @@ func TestTmuxConfigReadPaneCLIHungCapture(t *testing.T) {
 	home, id, socket := seedKillRow(t, store.StateWaiting)
 	token, _, storeID := launchIdentity(t, home, id)
 	name, _ := rowColumns(t, home, id).TmuxSessionName.(string)
-	const sessionID = "$3"
-	faketmuxfix.Tables{}.Write(t, socket, killTable(faketmuxfix.Session{
-		ID: sessionID, Created: time.Now().Unix(), Name: name, Label: tmuxfix.LabelValue(token, sessionID, id, storeID),
-		Panes: []faketmuxfix.Pane{{ID: apitest.TestPaneID, PID: apitest.TestPanePID, AdPane: token}},
-	}))
+	faketmuxfix.Tables{}.Write(t, socket, killTable(
+		readPaneSession("$3", name, token, id, storeID, apitest.TestPaneID, apitest.TestPanePID, "")))
 	faketmuxfix.Tables{}.Inject(t, socket, faketmuxfix.Hang(tmux.CallCapture).Bound(fakeHangBound))
 	apitest.WriteTmuxConfig(t, filepath.Join(directorDir(home), "config.toml"),
 		apitest.TmuxInt(config.TmuxActionTimeoutMs, timeout.Milliseconds()))

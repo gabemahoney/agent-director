@@ -12,13 +12,17 @@ import (
 // SR-1.5, SR-3.7, SR-7.2, SR-7.3): the agent's pane was not found, a pane
 // verb on Leftover, and the verb's gone error "the row's session is not
 // there". read-pane is their first user; send-keys and pause reuse them
-// unchanged, each saying what it did not do through paneNothing. kill's own
-// Leftover refusal (kill_errors.go) keeps its own wording. No description
+// unchanged, each saying what it did not do through paneNothing. send-keys'
+// two pending-row ErrSpawnNotInteractive refusals (no launch start or token,
+// and Leftover) live here too. kill's own Leftover refusal (kill_errors.go)
+// keeps its own wording around the shared leftoverSessions. No description
 // carries a label's value, a session-environment value, another row's id,
 // "dead" or "gone", a session-ending command or a tmux attach command.
 
 // paneNothing is the sentence a pane-verb refusal gives for what was not
-// done: read-pane's nothingRead, send-keys' and pause's nothingSent.
+// done: read-pane's nothingRead, send-keys' and pause's nothingSent; after a
+// keys action whose text went through, textNotSubmitted instead
+// (keysReached).
 type paneNothing string
 
 const (
@@ -86,17 +90,50 @@ func paneNotFoundError(r paneRefusal, notAdopted bool) error {
 // lone leftover whose token no pane carries is paneNotFoundError's case, not
 // this one.
 func paneLeftoverError(r paneRefusal, leftovers []tmux.Session, moreThanOne bool) error {
-	sorted := sortedBySessionNumber(leftovers)
-	found := namedSessions(sorted, killLeftoversNamed)
-	what := "tmux session " + found + " carries the label of an earlier launch with this row's own id"
-	if len(sorted) > 1 {
-		what = "tmux sessions " + found + " carry labels of earlier launches with this row's own id"
-	}
+	what := leftoverSessions(leftovers)
 	if moreThanOne {
 		what += "; more than one leftover session exists"
 	}
 	return fmt.Errorf("%w: instance %s: not this launch's session: %s; %s; a human can look, %s; %s",
 		tmux.ErrTmuxSessionConflict, r.InstanceID, what, r.nothing(), operatorActionsPointer, listSessionNameHint)
+}
+
+// leftoverSessions is what every Leftover refusal says of the leftover
+// sessions (kill's, the pane verbs' and send-keys' on a pending row; SR-1.4):
+// each one's quoted name and tmux id, lowest $N first, up to
+// killLeftoversNamed, then the rest as a count (namedSessions), and that they
+// carry the label of an earlier launch with this row's own id.
+func leftoverSessions(leftovers []tmux.Session) string {
+	sorted := sortedBySessionNumber(leftovers)
+	found := namedSessions(sorted, killLeftoversNamed)
+	if len(sorted) > 1 {
+		return "tmux sessions " + found + " carry labels of earlier launches with this row's own id"
+	}
+	return "tmux session " + found + " carries the label of an earlier launch with this row's own id"
+}
+
+// pendingNoLaunchError is send-keys' ErrSpawnNotInteractive for a pending
+// row, with allow_pending, whose launch start or launch token is not recorded
+// (SR-1.4, SR-7.1, SR-22.8): the instance id; that the launch start or launch
+// token is not recorded, so agent-director cannot show that a session belongs
+// to the current launch; that nothing was sent and no tmux call was made;
+// and the pointer to "Operator actions" (SR-18.17). It wraps only
+// ErrSpawnNotInteractive (SR-1.5).
+func pendingNoLaunchError(instanceID string) error {
+	return fmt.Errorf("%w: instance %s: the row's launch start or launch token is not recorded, so agent-director cannot show that a session belongs to the current launch; %s and no tmux call was made; %s",
+		ErrSpawnNotInteractive, instanceID, nothingSent, operatorActionsPointer)
+}
+
+// pendingLeftoverError is send-keys' ErrSpawnNotInteractive for a pending
+// row, with allow_pending, whose lookup is Leftover (SR-1.4, SR-7.1, SR-7.2):
+// the instance id; "not this launch's session"; each leftover session by
+// quoted name and tmux id (leftoverSessions), an earlier launch's by its
+// label; and that nothing was sent. It never names a session-ending command
+// and wraps only ErrSpawnNotInteractive (SR-1.5). A live row's Leftover is
+// paneLeftoverError's ErrTmuxSessionConflict instead.
+func pendingLeftoverError(instanceID string, leftovers []tmux.Session) error {
+	return fmt.Errorf("%w: instance %s: not this launch's session: %s; %s",
+		ErrSpawnNotInteractive, instanceID, leftoverSessions(leftovers), nothingSent)
 }
 
 // paneGoneError is a pane verb's gone error (SR-1.4, SR-7.2, SR-7.3): "the

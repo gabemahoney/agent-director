@@ -17,7 +17,8 @@
 //     need HOME/.claude.json for pre-trust).
 //   - wantPreTrust: when set, both envelopes must carry pre_trust equal to it.
 //   - want:        when set, fields both envelopes must carry (kill_sent, pane).
-//   - tmuxTable:   when set, writes each run's fake-tmux tables (read-pane).
+//   - tmuxTable:   when set, writes each run's fake-tmux tables (read-pane,
+//     send-keys).
 //
 // The test driver (success_cases_test.go) always calls
 // t.Setenv("HOME", homeDir) immediately before each extraSetup invocation so
@@ -79,7 +80,8 @@ type successCase struct {
 	want map[string]any
 
 	// tmuxTable, when set, writes the case's fake-tmux tables into each
-	// run's private tables (read-pane), so both runners see the same tmux.
+	// run's private tables (read-pane, send-keys), so both runners see the
+	// same tmux.
 	tmuxTable func(t *testing.T, tables faketmuxfix.Tables, ctx map[string]any)
 }
 
@@ -147,19 +149,14 @@ var successCases = []successCase{
 	},
 
 	// ── send-keys ─────────────────────────────────────────────────────────
-	// send-keys result is empty ({}).  The row must be in an interactive
-	// state (waiting); fake-tmux absorbs the send-keys syscall.
+	// A waiting row on a socket of its own; each run's fake table holds the
+	// row's own labelled session and @ad_pane-tagged pane (Ours, agent's pane
+	// found), so both runners send the text and Enter to that pane by its id
+	// (success_pane.go; SR-7.2, SR-3.7). The result is empty ({}).
 	{
-		verb: "send-keys",
-		seed: func(t *testing.T) (string, map[string]any) {
-			t.Helper()
-			_, dbPath := apitest.OpenStoreWithRow(t,
-				"id-sk-1", "cd-sk-1", store.StateWaiting, "off")
-			return filepath.Dir(dbPath), map[string]any{
-				"id":   "id-sk-1",
-				"text": "hello",
-			}
-		},
+		verb:      "send-keys",
+		seed:      seedSendKeys,
+		tmuxTable: writePaneRowTable,
 		params: func(ctx map[string]any) map[string]any {
 			return map[string]any{
 				"claude_instance_id": ctx["id"],
@@ -178,11 +175,11 @@ var successCases = []successCase{
 	// A live row on a socket of its own; each run's fake table holds the
 	// row's own labelled session and @ad_pane-tagged pane (Ours, agent's
 	// pane found), so both runners capture that pane by id and both
-	// envelopes carry its fixed text (success_readpane.go; SR-7.2, SR-3.7).
+	// envelopes carry its fixed text (success_pane.go; SR-7.2, SR-3.7).
 	{
 		verb:      "read-pane",
 		seed:      seedReadPane,
-		tmuxTable: writeReadPaneTable,
+		tmuxTable: writePaneRowTable,
 		want:      map[string]any{"pane": readPaneText},
 		params: func(ctx map[string]any) map[string]any {
 			return map[string]any{"claude_instance_id": ctx["id"]}

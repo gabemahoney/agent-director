@@ -28,6 +28,8 @@
 //     checks it is true.
 //   - Pane: for read-pane, reads the Happy result's pane; the driver checks
 //     it is smokePaneText, the text the row's own pane captures.
+//   - SentText: for send-keys, the text Happy sends; the driver checks the
+//     Recorder saw it sent to the seeded row's pane by its pane id.
 //
 // Adding a new callable verb to the manifest requires adding a matching
 // entry here. The driver's startup check fails the build with a clear
@@ -58,11 +60,6 @@ const (
 	// with no tmux session in the Recorder. Used by delete.
 	seedLive
 
-	// seedWaiting seeds a spawn in StateWaiting — used by send-keys
-	// happy paths that need an interactive non-working state. (pause's
-	// happy-path uses seedEnded instead; see the pause spec.)
-	seedWaiting
-
 	// seedEnded seeds a spawn in StateEnded — used by pause (which
 	// short-circuits to no-op success when the row is already terminal).
 	seedEnded
@@ -91,7 +88,9 @@ const (
 	// SR-20.3 defaults: apitest.TestSocket, a launch token and the pane
 	// apitest.TestPaneID, whose pid reads gone) and the row's own labelled
 	// session into the Recorder (SeedRowSession). Used by kill, so its happy
-	// path finds the session, sends the kills and sees the agent gone.
+	// path finds the session, sends the kills and sees the agent gone, and by
+	// send-keys, so its happy path takes the Ours path and sends into the
+	// agent's pane by its pane id (SR-7.2).
 	seedLiveSession
 
 	// seedReadPane seeds a working row as seedLiveSession does and swaps the
@@ -105,6 +104,9 @@ const (
 // pane; non-empty so the manifest's AllowEmpty pane field is exercised with
 // content.
 const smokePaneText = "smoke-pane-output"
+
+// smokeSentText is the text the send-keys spec sends.
+const smokeSentText = "hello"
 
 // smokeLaunchStartMillis is the launch start seedPendingLaunch records, in
 // ms since the Unix epoch; its non-zero millisecond part (.123) checks that
@@ -170,6 +172,12 @@ type seederSpec struct {
 	// driver asserts it is smokePaneText, the text seedReadPane scripts for
 	// the row's own pane. Set by read-pane only.
 	Pane func(result any) string
+
+	// SentText, when non-empty, is the text Happy sends. The driver asserts
+	// the Recorder saw one call carrying it, to apitest.TestPaneID (the pane
+	// seedLiveSession seeds) on apitest.TestSocket, with Enter. Set by
+	// send-keys only.
+	SentText string
 }
 
 // seeders is the canonical registry: one entry per callable verb. The
@@ -257,12 +265,13 @@ func init() {
 	// ── send-keys ─────────────────────────────────────────────────────────
 	seeders["send-keys"] = seederSpec{
 		Manifest: mustVerb("send-keys"),
-		SeedKind: seedWaiting, // interactive state required
+		SeedKind: seedLiveSession, // the row's own session and pane (Ours)
 		SeedID:   "smoke-send-keys-id",
+		SentText: smokeSentText,
 		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
 			return c.SendKeys(api.SendKeysParams{
 				ClaudeInstanceID: id,
-				Text:             "hello",
+				Text:             smokeSentText,
 			})
 		},
 		Error: func(c *api.Client, _ context.Context) error {

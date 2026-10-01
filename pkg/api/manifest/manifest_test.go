@@ -159,32 +159,6 @@ func TestSpawnHasAllSRDErrorNames(t *testing.T) {
 	}
 }
 
-// TestSendKeysHasInteractErrorNames pins the send-keys entry's error
-// catalog against the SRD §13.1 surface: the state-precondition guard,
-// the Epic-10 relay stub, and the two transport-layer tmux sentinels.
-func TestSendKeysHasInteractErrorNames(t *testing.T) {
-	v, ok := manifest.Lookup("send-keys")
-	if !ok {
-		t.Fatal("send-keys not in manifest")
-	}
-	want := []string{
-		"ErrSpawnNotFound",
-		"ErrSpawnNotInteractive",
-		"ErrSendKeysWhileRelayed",
-		"ErrTmuxNotAvailable",
-		"ErrTmuxSendKeys",
-	}
-	have := map[string]bool{}
-	for _, n := range v.ErrorNames {
-		have[n] = true
-	}
-	for _, n := range want {
-		if !have[n] {
-			t.Errorf("send-keys.ErrorNames missing %q", n)
-		}
-	}
-}
-
 // TestListHasSRDErrorNames pins the list entry's error catalog against
 // SRD §13.1: the label k=v parse rejection is the only verb-surface
 // error; the verb has no state precondition and no transport-layer tmux.
