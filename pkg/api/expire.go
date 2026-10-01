@@ -67,11 +67,13 @@ type ExpireResult struct {
 	// length of KeptIDs.
 	Kept int `json:"kept"`
 	// KeptIDs is the sorted slice of instance ids kept rather than deleted,
-	// for example rows whose agent process may still run, whose agent still
-	// has a session (its own or one left from an earlier launch), whose tmux
-	// could not be read, answered from a different server or was not
-	// called, or which changed after expire examined them or whose delete
-	// failed in the store. Each is reported with its reason in an
+	// for example rows whose recorded session name cannot be used (kept on
+	// every run, first, with no tmux call), whose agent process may still
+	// run, whose agent still has a session (its own or one left from an
+	// earlier launch), whose tmux could not be read, answered from a
+	// different server or was not called, or which changed after expire
+	// examined them or whose delete failed in the store. Each is reported
+	// with its reason in an
 	// ad.expire.kept trail record. Always non-nil — encodes as [] when no
 	// row was kept.
 	KeptIDs []string `json:"kept_ids"`
@@ -85,10 +87,20 @@ type ExpireLogger interface {
 
 // The kept reasons of SR-12.2 and SR-12.3, one per kept row, carried by its
 // ad.expire.kept record (SR-12.5) and as the action of its
-// ad.provenance.disagree records (SR-14). Epic 19 adds the three
-// unusable-name reasons (empty_session_name, control_char_session_name,
-// rewritten_session_name) beside them, checked before the process check.
+// ad.provenance.disagree records (SR-14). The three unusable-name reasons
+// (keptEmptySessionName, keptControlCharSessionName,
+// keptRewrittenSessionName) are checked first, before the process check.
 const (
+	// keptEmptySessionName, keptControlCharSessionName and
+	// keptRewrittenSessionName: the row's recorded session name cannot be
+	// used (SR-3.2, SR-12.2): empty, holding a control character, or holding
+	// a character tmux stores differently (`.`, `:` or invalid UTF-8). The
+	// row is kept on every run, ahead of every other check, with no
+	// start-time reader call and no tmux call (unusableKeptReason); removing
+	// it is a human's decision.
+	keptEmptySessionName       = "empty_session_name"
+	keptControlCharSessionName = "control_char_session_name"
+	keptRewrittenSessionName   = "rewritten_session_name"
 	// keptProcessAlive: the row's recorded agent process runs with its
 	// recorded start time; no tmux call was made for the row.
 	keptProcessAlive = "process_alive"
@@ -124,6 +136,22 @@ const (
 	keptStoreError = "store_error"
 )
 
+// unusableKeptReason is the one mapping from the unusable-name guard's kind
+// (tmux.Unusable) to expire's kept reason (SR-3.2, SR-12.2); "" for a usable
+// name. The guard's precedence (empty, then control character, then
+// rewritten) decides a name with several faults.
+func unusableKeptReason(kind tmux.UnusableKind) string {
+	switch kind {
+	case tmux.UnusableEmpty:
+		return keptEmptySessionName
+	case tmux.UnusableControl:
+		return keptControlCharSessionName
+	case tmux.UnusableRewritten:
+		return keptRewrittenSessionName
+	}
+	return ""
+}
+
 // farFutureCutoff is the cutoff of a zero or negative retention window: later
 // than any ended_at the store writes, so every finished row with an ended_at
 // is selected (SR-12.1).
@@ -138,10 +166,12 @@ type expireRow struct {
 	// for a deleted row and for a row another caller removed first.
 	reason string
 	// socket is the socket the row's lookup used; "" when no lookup was made
-	// (process_alive) or the caller's socket could not be resolved.
+	// (an unusable recorded name, process_alive) or the caller's socket could
+	// not be resolved.
 	socket string
 	// res is the row's lookup Result: the Sweep's, or sweepSockets.forRow's
-	// for a refused resolution; the zero Result for a process_alive row.
+	// for a refused resolution; the zero Result for a row kept for an
+	// unusable recorded name or process_alive.
 	res tmux.Result
 	// disagree is the row's ad.provenance.disagree reasons: the lookup
 	// Result's and name_changed for an Ours session whose stored name is not
@@ -174,6 +204,12 @@ func (r expireRow) verdict() string {
 // Each selected row is judged in instance-id order, so the per-socket stop
 // and the budget's cut-off fall on the same rows on every run (SR-12.2):
 //
+//  0. its recorded session name (tmux.Unusable): an empty name keeps the row
+//     empty_session_name, a control character control_char_session_name,
+//     and a character tmux stores differently (`.`, `:` or invalid UTF-8)
+//     rewritten_session_name, the first fault in that order, ahead of every
+//     other check, with no process check and no tmux call; such a row takes
+//     no lookup, stop or budget from its socket or the run (SR-3.2);
 //  1. its recorded agent process (tmux.SelectAgentProcess: the SessionStart
 //     identity, else the recorded pane's, the pane's when both are recorded
 //     and disagree), judged once through pc (tmux.JudgeProcess): alive with
@@ -263,9 +299,15 @@ type expireRun struct {
 	caller  lazyCaller
 }
 
-// judgeRow judges one selected row by SR-12.2's order: its agent process
-// first, then its socket's lookup (lookupRow).
+// judgeRow judges one selected row by SR-12.2's order: its recorded session
+// name first (an unusable one keeps the row with unusableKeptReason's reason,
+// with no reader call, no socket resolution, no Sweep charge and no
+// disagree record), then its agent process, then its socket's lookup
+// (lookupRow).
 func (r *expireRun) judgeRow(cand ExpireCandidate) expireRow {
+	if reason := unusableKeptReason(tmux.Unusable(cand.TmuxSessionName)); reason != "" {
+		return expireRow{reason: reason}
+	}
 	agent := tmux.SelectAgentProcess(
 		tmux.ProcIdentity{PID: cand.PID, Starttime: cand.ProcStarttime},
 		tmux.ProcIdentity{PID: cand.Identity.PanePID, Starttime: cand.Identity.PaneStarttime},
@@ -358,16 +400,24 @@ func (r *expireRun) deleteRow(row expireRow, cand ExpireCandidate) expireRow {
 // selects every finished row. Live rows and rows with a NULL ended_at are
 // never selected.
 //
-// expire reads tmux to decide. A selected row whose recorded agent process
-// still runs is kept with no tmux call; otherwise one lookup of its socket
-// (its recorded one, else the caller's), shared by every row of that socket,
-// decides it. The row is deleted only when tmux shows no session of the agent
-// and the row is unchanged since expire examined it. A row whose agent still
-// has a session (its own, or one left from an earlier launch), whose tmux
-// could not be read, or which changed or failed to delete is kept and listed
-// in KeptIDs, with its reason in the trail. After an unreadable or
-// unavailable answer on a socket no more tmux calls are made on that socket,
-// and the run's tmux time (sweep_budget_seconds from the loaded
+// A selected row whose recorded tmux session name cannot be used (it is
+// empty, contains a control character, or contains a character tmux stores
+// differently) is kept on every run, before any other check and with no
+// process check or tmux call, with reason empty_session_name,
+// control_char_session_name or rewritten_session_name (the first fault in
+// that order); removing it is a human's decision (see "Operator actions" in
+// the agent-director README).
+//
+// For every other row, expire reads tmux to decide. A selected row whose
+// recorded agent process still runs is kept with no tmux call; otherwise one
+// lookup of its socket (its recorded one, else the caller's), shared by every
+// row of that socket, decides it. The row is deleted only when tmux shows no
+// session of the agent and the row is unchanged since expire examined it. A
+// row whose agent still has a session (its own, or one left from an earlier
+// launch), whose tmux could not be read, or which changed or failed to delete
+// is kept and listed in KeptIDs, with its reason in the trail. After an
+// unreadable or unavailable answer on a socket no more tmux calls are made on
+// that socket, and the run's tmux time (sweep_budget_seconds from the loaded
 // configuration) caps all its calls; rows not reached are kept. expire never
 // kills a session, never touches JSONL transcripts, and tmux problems never
 // fail the run.

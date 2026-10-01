@@ -1,9 +1,11 @@
 package api_test
 
 // expire_reasons_test.go pins expire's per-row outcome and kept reason
-// (SR-12.2) for every process state and lookup outcome, and its call
-// discipline (SR-12.5, SR-3.15): lookups only, at most one per socket, no
-// adoption, no session touched.
+// (SR-12.2) for every process state and the outcomes beyond the call table's
+// (lookup_calltable_expire_test.go has each lookup outcome, with a later row
+// on the same socket), and its call discipline (SR-12.5, SR-3.15): lookups
+// only, at most one per socket, no adoption, no session touched. The
+// unusable-name reasons are expire_reasons_unusable_test.go's.
 
 import (
 	"reflect"
@@ -146,55 +148,6 @@ func TestExpireReasons_Process(t *testing.T) {
 				sockets = []string{apitest.TestSocket}
 			}
 			e.rsnExpect(t, 0, map[string]string{r.ID: c.want}, sockets...)
-		})
-	}
-}
-
-// rsnLookupWant is, per call-table column, the first row's outcome and that of
-// a later row on the same socket with no server identity and no session.
-var rsnLookupWant = map[callTableOutcome]struct{ first, later string }{
-	ctOurs:                     {"ours", ""},
-	ctLeftover:                 {"leftover_running", ""},
-	ctGoneNoLabel:              {"", ""},
-	ctGoneOtherStoreRowToken:   {"", ""},
-	ctGoneOtherStoreOtherToken: {"", ""},
-	ctGoneForeignLabel:         {"", ""},
-	ctGoneNameUnlabelled:       {"", ""},
-	ctGoneServerRestarted:      {"", ""},
-	ctGoneNoServer:             {"", ""},
-	ctGoneNoSocket:             {"", ""},
-	ctDifferentRebound:         {"tmux_server_changed", ""},
-	ctDifferentRestarted:       {"tmux_server_changed", ""},
-	ctDifferentNoServer:        {"tmux_server_changed", ""},
-	ctConflictScope:            {"provenance_conflict", "provenance_conflict"},
-	ctConflictDuplicate:        {"provenance_conflict", ""},
-	ctUnreadableTimeout:        {"cant_tell", "tmux_skipped"},
-	ctUnreadableUnrecognised:   {"cant_tell", "tmux_skipped"},
-	ctUnreadableMalformed:      {"cant_tell", "tmux_skipped"},
-	ctUnavailableBinary:        {"tmux_unavailable", "tmux_skipped"},
-	ctUnavailableSocket:        {"tmux_unavailable", "tmux_skipped"},
-}
-
-// TestExpireReasons_Lookup runs every lookup world of the call table on a
-// finished row with its agent gone, plus a later row on the same socket: one
-// lookup decides both unless the first stops the socket (tmux_skipped).
-func TestExpireReasons_Lookup(t *testing.T) {
-	for _, col := range callTableLookupColumns() {
-		if col.actionFailure != 0 {
-			continue // expire makes no action call
-		}
-		t.Run(string(col.outcome), func(t *testing.T) {
-			w, ok := rsnLookupWant[col.outcome]
-			if !ok {
-				t.Fatalf("no expire expectation for column %q", col.outcome)
-			}
-			e := newKillEnv(t)
-			first := e.seedRow(t, e.rsnFinish(col.spec, rsnID("a")))
-			later := e.seedRow(t, e.rsnFinish(killRowSpec{NoSession: true, NoServerIdentity: true}, rsnID("b")))
-			if col.world != nil {
-				col.world(t, e, &first)
-			}
-			e.rsnExpect(t, 0, map[string]string{first.ID: w.first, later.ID: w.later}, apitest.TestSocket)
 		})
 	}
 }

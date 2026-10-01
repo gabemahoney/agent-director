@@ -810,7 +810,7 @@
         {
           "name": "unverified_ids",
           "type": "[]string",
-          "description": "Sorted IDs of live rows this sweep left unverified with a liveness note, whether it wrote the note or found it already current: rows whose agent process could not be checked and which tmux did not mark, for example because their own session is present, tmux could not tell or was unavailable, or tmux was not called. Never a pending row inside the pending grace period. A row whose guarded write found it changed or gone, or failed, and a row whose note was cleared, is in neither list. Never null; [] when none.",
+          "description": "Sorted IDs of live rows this sweep left unverified with a liveness note, whether it wrote the note or found it already current: rows whose agent process could not be checked and which tmux did not mark, for example because their own session is present, tmux could not tell or was unavailable, or tmux was not called, or their recorded tmux session name cannot be used (empty, a control character, or a character tmux stores differently: no tmux call, and a liveness note of its own; removing such a row is a human's decision, see \"Operator actions\" in the agent-director README). Never a pending row inside the pending grace period. A row whose guarded write found it changed or gone, or failed, and a row whose note was cleared, is in neither list. Never null; [] when none.",
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null
@@ -856,7 +856,7 @@
         {
           "name": "kept",
           "type": "int",
-          "description": "Number of selected rows kept rather than deleted (the length of kept_ids), for example because the agent's process or a session of the agent (its own, or a leftover of an earlier launch) may still run, tmux could not be checked or answered from a different server, the run's tmux time budget (sweep_budget_seconds) was spent, or the row changed after it was examined.",
+          "description": "Number of selected rows kept rather than deleted (the length of kept_ids), for example because the agent's process or a session of the agent (its own, or a leftover of an earlier launch) may still run, tmux could not be checked or answered from a different server, the run's tmux time budget (sweep_budget_seconds) was spent, the row changed after it was examined, or its recorded tmux session name cannot be used (kept on every run, before any other check, with no tmux call).",
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null
@@ -864,7 +864,7 @@
         {
           "name": "kept_ids",
           "type": "[]string",
-          "description": "Sorted IDs of the selected rows kept rather than deleted, each reported with its reason in the trail (ad.expire.kept). tmux problems and a failed delete of one row never fail the run: the row is kept. A failed read of the selected rows fails the run. A row another caller removed first is in neither list. Never null; [] when none.",
+          "description": "Sorted IDs of the selected rows kept rather than deleted, each reported with its reason in the trail (ad.expire.kept). A row whose recorded tmux session name cannot be used (empty, a control character, or a character tmux stores differently) is kept on every run, before any other check, with no tmux call and a reason of its own; removing it is a human's decision (see \"Operator actions\" in the agent-director README). tmux problems and a failed delete of one row never fail the run: the row is kept. A failed read of the selected rows fails the run. A row another caller removed first is in neither list. Never null; [] when none.",
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null

@@ -1,7 +1,7 @@
 package api_test
 
 // lookup_calltable_findmissing_test.go is find-missing's row of the call-site
-// table (lookup_calltable_test.go; SR-3.16, SR-11.3, SR-20.6): the column's
+// table (lookup_calltable_test.go; SR-3.2, SR-3.16, SR-11.3, SR-20.6): the column's
 // row, seeded on the kill fixture, has its agent process made uncheckable (a
 // start time that cannot be read, or none recorded) so its socket's lookup
 // decides, and one sweep writes its note or mark. Each cell runs for both
@@ -119,7 +119,8 @@ func assertCallTableNameHeld(t *testing.T, id string, held bool) {
 // evidence, Leftover and Gone are marked missing (tmux_name_held when a
 // session holds the recorded name, else tmux_absent), a different server
 // and a provenance conflict are noted, and an unreadable answer or tmux
-// unavailable leave the "not called" note.
+// unavailable leave the "not called" note. An unusable recorded name is
+// noted with no tmux call (SR-3.2).
 func callTableFindMissing() callTableVerb {
 	lookup := []tmux.Call{tmux.CallLookup}
 	noted := func(unknown, none string) callTableCell {
@@ -161,6 +162,18 @@ func callTableFindMissing() callTableVerb {
 			ctActionTimeout:            {na: noAction},
 		},
 	}
-	maps.Copy(v.cells, callTableUnusableNA("filled by t3.h98.7g.64.xx (Epic 19 Task 2)"))
+	maps.Copy(v.cells, callTableFindMissingUnusable())
 	return v
+}
+
+// callTableFindMissingUnusable is find-missing's unusable-name cells (SR-11.3):
+// for either evidence, the row left unverified with the fixture's note and
+// its entry tick, with no tmux call.
+func callTableFindMissingUnusable() map[callTableOutcome]callTableCell {
+	cells := map[callTableOutcome]callTableCell{}
+	for _, u := range callTableUnusables() {
+		noted := callTableFMResult{note: u.fixture.note}
+		cells[u.outcome] = callTableCell{fm: callTableFM{unknown: noted, none: noted}}
+	}
+	return cells
 }

@@ -9,7 +9,9 @@ import "strconv"
 // DescUnusableNameRewritten), the full trigger sentence a Client method's Go
 // doc prose and kill's manifest Description state (DescUnusableNameTrigger),
 // and the short pointer the other verbs' manifest Descriptions carry
-// (DescUnusableNamePointer). None may tell the caller to delete the row
+// (DescUnusableNamePointer), and the find-missing and expire result fields
+// that report such a row (DescUnusableNameFindMissingField,
+// DescUnusableNameExpireField). None may tell the caller to delete the row
 // (SR-18.8, SR-18.17 step 5).
 
 // unusableNameMustNot is what no unusable-name refusal or pointer may say:
@@ -98,4 +100,52 @@ func DescUnusableNamePointer() DescCase {
 		MustNot:     unusableNameMustNot,
 		requireFold: []string{"unusable"},
 	}
+}
+
+// unusableNameKinds is the three kinds as the sweeps' result fields list them.
+const unusableNameKinds = "empty, a control character, or a character tmux stores differently"
+
+// unusableNameFieldMustNot is ErrInternal (neither sweep has it) and any
+// instruction to delete the row; plain "delete" passes ("a failed delete").
+var unusableNameFieldMustNot = []string{
+	"ErrInternal", "`delete`", "delete the row", "delete such a row", "delete it",
+	"run delete", "call delete", "use delete",
+}
+
+// unusableNameField is a sweep result field's unusable-name case: the
+// recorded name cannot be used, and req.
+func unusableNameField(name string, req ...string) DescCase {
+	return DescCase{
+		Name:    name + ", unusable recorded name",
+		Require: append([]string{"recorded tmux session name cannot be used"}, req...),
+		MustNot: unusableNameFieldMustNot,
+	}
+}
+
+// DescUnusableNameFindMissingField is find-missing's unverified_ids on such a
+// row (SR-11.3, SR-18.11): its kinds, no tmux call, a note of its own, a
+// human's decision and the "Operator actions" pointer. Check it with
+// AssertAgentTextCase, beside DescFindMissingField.
+func DescUnusableNameFindMissingField() DescCase {
+	return unusableNameField("find-missing result field, unverified_ids",
+		unusableNameKinds, "no tmux call", "a liveness note of its own", "a human's decision",
+	).PointsToOperatorActions()
+}
+
+// DescUnusableNameExpireField is expire's kept or kept_ids on such a row
+// (SR-12.2, SR-18.11). kept: kept on every run, before any other check, with
+// no tmux call. kept_ids: also its kinds, a reason of its own, a human's
+// decision and the "Operator actions" pointer. Check it with
+// AssertAgentTextCase, beside DescExpireField; it panics on another field.
+func DescUnusableNameExpireField(f ExpireField) DescCase {
+	kept := []string{"kept on every run", "before any other check", "no tmux call"}
+	switch f {
+	case ExpireKept:
+		return unusableNameField("expire result field, kept", kept...)
+	case ExpireKeptIDs:
+		return unusableNameField("expire result field, kept_ids",
+			append(kept, unusableNameKinds, "a reason of its own", "a human's decision")...,
+		).PointsToOperatorActions()
+	}
+	panic("apitest: DescUnusableNameExpireField: not a kept field of expire: " + string(f))
 }

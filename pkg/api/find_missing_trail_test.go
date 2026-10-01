@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -318,5 +319,68 @@ func TestFindMissingAllDeadNoDegradedModeSkip(t *testing.T) {
 	// The removed guard's reason is assembled at runtime so a repo grep for the literal stays clean.
 	if got := apiTicksWithReason(apiFindMissingTicksAt(t, before), "degraded_mode"+"_skip"); len(got) != 0 {
 		t.Errorf("degraded-mode skip ticks = %v; want none", got)
+	}
+}
+
+// TestFindMissingUnusableNameTrail: per note token, rows with an unusable name (pane and SessionStart pids
+// differing with the pane unreadable, or no evidence) get only their entry tick, with no lookup fields, no
+// disagree or name-held record, nothing of another row or any environment; a second sweep writes nothing.
+func TestFindMissingUnusableNameTrail(t *testing.T) {
+	const marker = "ut-environment-marker"
+	env := map[string]string{"AD_TRAIL_MARKER": marker}
+	for _, f := range fmuReps() {
+		t.Run(f.note, func(t *testing.T) {
+			name := apitest.WithTmuxSessionName(f.raw)
+			pc := procfix.New()
+			pc.Set(1501, procfix.Alive(fmStart).WithEnv(env)) // ut-mismatch's SessionStart process
+			pc.Set(1502, procfix.Unreadable())                // ut-mismatch's pane process, which decides
+			pc.Set(1503, procfix.Alive(fmStart).WithEnv(env)) // ut-other's
+			st, _ := seedTrailStore(t,
+				trailRow{id: "ut-mismatch", ssPID: 1501, panePID: 1502, opts: []apitest.SpawnOption{name}},
+				trailRow{id: "ut-none", opts: []apitest.SpawnOption{name}},
+				trailRow{id: "ut-other", ssPID: 1503},
+			)
+			noted := []string{"ut-mismatch", "ut-none"}
+
+			for sweep := 1; sweep <= 2; sweep++ {
+				before := trailLen(t)
+				res, err := runFindMissing(st, pc, fmSweep{})
+				if err != nil {
+					t.Fatalf("sweep %d: %v", sweep, err)
+				}
+				assertLists(t, res, nil, noted)
+				added := readAPITrailLines(t)[before:]
+				for _, id := range noted {
+					recs := trailOf(added, id)
+					if sweep == 2 {
+						if len(recs) != 0 {
+							t.Errorf("sweep 2: %s records = %v; want none", id, recs)
+						}
+						continue
+					}
+					if len(recs) != 1 || recs[0]["event"] != "ad.find_missing.tick" {
+						t.Fatalf("%s records = %v; want only its entry tick", id, recs)
+					}
+					assertTick(t, recs[0], f.note, "", nil)
+				}
+				for _, l := range added {
+					line, _ := json.Marshal(l)
+					if l["event"] == "ad.provenance.disagree" || l["event"] == "ad.launch.name_held" {
+						t.Errorf("sweep %d wrote %s", sweep, line)
+					}
+					for _, id := range append(noted, "ut-other") {
+						if l["claude_instance_id"] != id && strings.Contains(string(line), `"`+id+`"`) {
+							t.Errorf("sweep %d record names %s: %s", sweep, id, line)
+						}
+					}
+					if strings.Contains(string(line), marker) {
+						t.Errorf("sweep %d record carries environment content: %s", sweep, line)
+					}
+				}
+			}
+			if n := pc.EnvReads(); n != 0 {
+				t.Errorf("environment reads = %d; want 0", n)
+			}
+		})
 	}
 }

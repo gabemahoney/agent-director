@@ -119,10 +119,12 @@ type FindMissingResult struct {
 	// Unverified is the number of live rows this sweep left live with a
 	// liveness note: their agent process could not be checked (the
 	// start-time reader could not tell, a pid-only identity read alive, or no
-	// process identity is recorded) and the tmux lookup of the row's socket
-	// did not mark them (Ours, Can't tell, or not called) (SR-11.1, SR-11.3,
-	// SR-11.4). It counts rows whose note was already current. A row whose
-	// note write found it changed, or failed in the store, is not counted.
+	// process identity is recorded) and either their recorded session name
+	// cannot be used, so no tmux call was made for them (a note of its own,
+	// SR-3.2), or the tmux lookup of the row's socket did not mark them (Ours,
+	// Can't tell, or not called) (SR-11.1, SR-11.3, SR-11.4). It counts rows
+	// whose note was already current. A row whose note write found it
+	// changed, or failed in the store, is not counted.
 	Unverified int `json:"unverified"`
 	// UnverifiedIDs is the sorted slice of instance ids left unverified.
 	// Always non-nil — encodes as [] when no rows were unverified (same
@@ -168,7 +170,33 @@ const (
 	// noteTmuxServerChanged is the note of a row whose lookup is Can't tell,
 	// a different server.
 	noteTmuxServerChanged = "tmux_server_changed"
+	// noteTmuxSessionNameEmpty, noteTmuxSessionNameControlChar and
+	// noteTmuxSessionNameRewritten are the notes of a row whose agent process
+	// evidence is unknown or absent and whose recorded session name cannot be
+	// used (SR-3.2, SR-11.3, SR-11.4): empty, holding a control character, or
+	// holding a character tmux stores differently (`.`, `:` or invalid
+	// UTF-8). No tmux call is made for such a row, so this note wins over
+	// every tmux-path note (unusableNameNote).
+	noteTmuxSessionNameEmpty       = "tmux_session_name_empty"
+	noteTmuxSessionNameControlChar = "tmux_session_name_control_char"
+	noteTmuxSessionNameRewritten   = "tmux_session_name_rewritten"
 )
+
+// unusableNameNote is the one mapping from the unusable-name guard's kind
+// (tmux.Unusable) to find-missing's note (SR-3.2, SR-11.4); "" for a usable
+// name. The guard's precedence (empty, then control character, then
+// rewritten) decides a name with several faults.
+func unusableNameNote(kind tmux.UnusableKind) string {
+	switch kind {
+	case tmux.UnusableEmpty:
+		return noteTmuxSessionNameEmpty
+	case tmux.UnusableControl:
+		return noteTmuxSessionNameControlChar
+	case tmux.UnusableRewritten:
+		return noteTmuxSessionNameRewritten
+	}
+	return ""
+}
 
 // The extra ad.find_missing.tick fields of a mark the lookup decided
 // (SR-11.4, SR-14).
@@ -277,11 +305,19 @@ func findMissingAction(r findMissingRow) string {
 //     leaves it live and clears any note; dead marks it missing with reason
 //     proc_absent. Neither makes a tmux call. A child process or another
 //     process carrying the row's id never keeps it alive.
-//  4. A row whose process evidence is unknown or absent is decided by the
-//     lookup of its socket, per SR-11.3's table (lookupRow): Ours leaves it
-//     unverified (after adoption, a row that records no pane is judged by
-//     the adopted pane's process, or marked when no pane carries its launch
-//     token); Leftover and Gone mark it missing, with tick reason
+//  4. A row whose process evidence is unknown or absent and whose recorded
+//     session name cannot be used (tmux.Unusable: empty, then a control
+//     character, then a character tmux stores differently) is left
+//     unverified with note tmux_session_name_empty,
+//     tmux_session_name_control_char or tmux_session_name_rewritten, ahead
+//     of every tmux-path note: no tmux call, no socket resolution, and it
+//     takes no lookup, stop or budget from its socket or the run (SR-3.2,
+//     SR-11.3, SR-11.4). Removing such a row is a human's decision.
+//  5. Any other row whose process evidence is unknown or absent is decided
+//     by the lookup of its socket, per SR-11.3's table (lookupRow): Ours
+//     leaves it unverified (after adoption, a row that records no pane is
+//     judged by the adopted pane's process, or marked when no pane carries
+//     its launch token); Leftover and Gone mark it missing, with tick reason
 //     tmux_name_held and one ad.launch.name_held when a session holds its
 //     recorded name, tmux_absent otherwise; Can't tell and not called leave
 //     it unverified with a note. One tmux.Sweep serves the run: one lookup
@@ -289,14 +325,14 @@ func findMissingAction(r findMissingRow) string {
 //     needs it, no more calls on a socket after an unreadable or unavailable
 //     result there, and none at all once sweepBudget is spent. tmux problems
 //     never fail the sweep.
-//  5. Every write is guarded on the row snapshot the sweep read, or on the
+//  6. Every write is guarded on the row snapshot the sweep read, or on the
 //     one its adoption write produced (SR-11.6): a write that finds the row
 //     changed or absent, or fails in the store, leaves the row in neither
 //     list with no tick. The start-time reader's unreadable answer and every
 //     per-row store error are row outcomes, never a sweep error (SR-11.7,
 //     SR-5.8). A row's ad.provenance.disagree records are written once its
 //     write settled.
-//  6. Provisional transcripts are healed (healProvisionalTranscripts).
+//  7. Provisional transcripts are healed (healProvisionalTranscripts).
 //
 // The result lists are sorted. The only error returned is the live-row
 // read's.
@@ -393,7 +429,11 @@ type findMissingRun struct {
 //   - gone (absent, a zombie, or another start time): marked missing with
 //     reason proc_absent, with no tmux call;
 //   - unknown (unreadable, or a pid-only identity reading alive) or no
-//     identity recorded: the lookup decides (lookupRow).
+//     identity recorded: a row whose recorded session name cannot be used
+//     (tmux.Unusable) is left unverified with its own note
+//     (unusableNameNote), guarded on the snapshot the sweep read, with no
+//     tmux call, no socket resolution and no charge to the Sweep (SR-3.2,
+//     SR-11.3); otherwise the lookup decides (lookupRow).
 func (r *findMissingRun) judgeLiveRow(it LiveSpawnIdentity) findMissingRow {
 	agent := tmux.SelectAgentProcess(
 		tmux.ProcIdentity{PID: it.PID, Starttime: it.ProcStarttime},
@@ -405,6 +445,9 @@ func (r *findMissingRun) judgeLiveRow(it LiveSpawnIdentity) findMissingRow {
 	case tmux.ProcGone:
 		return r.markRow(findMissingRow{}, it, it.Snapshot, reasonProcAbsent, nil)
 	default: // tmux.ProcUnknown, tmux.ProcNone
+		if note := unusableNameNote(tmux.Unusable(it.TmuxSessionName)); note != "" {
+			return r.noteRow(findMissingRow{}, it, it.Snapshot, note)
+		}
 		return r.lookupRow(it, state)
 	}
 }
@@ -537,10 +580,19 @@ func healProvisionalTranscripts(s FindMissingStore, lg FindMissingLogger) {
 // clears any liveness note; a dead one marks the row missing whatever tmux
 // shows, with no tmux call.
 //
-// Only a row whose process cannot be checked (unreadable, a pid-only
-// identity that reads alive, or none recorded; a pid-only identity that
-// reads gone is marked) is looked up in tmux: one lookup of its recorded
-// socket, else the caller's, shared by every row of that socket. Its own
+// A row whose process cannot be checked (unreadable, a pid-only identity
+// that reads alive, or none recorded; a pid-only identity that reads gone is
+// marked) and whose recorded tmux session name cannot be used (it is empty,
+// contains a control character, or contains a character tmux stores
+// differently) is left live and reported unverified with a liveness note of
+// its own (tmux_session_name_empty, tmux_session_name_control_char or
+// tmux_session_name_rewritten, the first fault in that order), with no tmux
+// call; removing such a row is a human's decision (see "Operator actions" in
+// the agent-director README).
+//
+// Every other row whose process cannot be checked is looked up in tmux: one
+// lookup of its recorded socket, else the caller's, shared by every row of
+// that socket; a row with an unusable name takes none of it. Its own
 // labelled session leaves it live and reported unverified with a liveness
 // note (a row whose create reply was lost first adopts the one pane carrying
 // its launch token and is judged by that pane's process, and is marked when

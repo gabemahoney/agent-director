@@ -169,7 +169,8 @@ func callTableFirstLine() string {
 // when set, says why the column cannot arise for the verb; held is plain
 // spawn's world and description (lookup_calltable_spawn_test.go); fm is
 // find-missing's row result (lookup_calltable_findmissing_test.go); kept is
-// expire's kept reason, "" when it deletes the row (lookup_calltable_expire_test.go);
+// expire's kept reason, "" when it deletes the row, and keptLater that of a
+// later row on the same socket (lookup_calltable_expire_test.go);
 // heldResume is resume's "duplicate session" arrangement (lookup_calltable_resume_test.go).
 type callTableCell struct {
 	errName    string
@@ -181,6 +182,7 @@ type callTableCell struct {
 	held       callTableHeld
 	fm         callTableFM
 	kept       string
+	keptLater  string
 	heldResume callTableHeldResume
 }
 

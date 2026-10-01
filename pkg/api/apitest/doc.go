@@ -171,7 +171,9 @@
 //     ErrInternal refusal every verb gives; DescUnusableNameTrigger, the
 //     full trigger sentence of kill's manifest Description and a Client
 //     method's Go doc prose; DescUnusableNamePointer, the short pointer the
-//     read-pane, send-keys, pause, resume and spawn Descriptions carry).
+//     read-pane, send-keys, pause, resume and spawn Descriptions carry;
+//     DescUnusableNameFindMissingField and DescUnusableNameExpireField, the
+//     unverified_ids, kept and kept_ids result fields that report such a row).
 //
 // Rules for tests (the same as docs/architecture.md, "apitest Seed* factory
 // contract (reusable test fixtures)"):

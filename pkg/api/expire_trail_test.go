@@ -359,12 +359,13 @@ const xtrChildEnv = "AD_EXPIRE_TRAIL_FAIL_CHILD"
 // xtrLinePrefix marks the child's result lines in its output.
 const xtrLinePrefix = "XTR|"
 
-// xtrFailOpenRuns runs every case's world once, ids prefix-<n>-<name>, with no
+// xtrFailOpenRuns runs every case's world once (the unusable-name ones of
+// expire_trail_unusable_test.go included), ids prefix-<n>-<name>, with no
 // trail check, and returns one line per case (result lists, log lines, tmux
 // calls and each row's columns) and the records a working trail must get.
 func xtrFailOpenRuns(t *testing.T, prefix string) (lines []string, kept, disagree int) {
 	t.Helper()
-	for i, tc := range append(xtrKeptCases(), xtrDisagreeCases()...) {
+	for i, tc := range slices.Concat(xtrKeptCases(), xtrDisagreeCases(), xtrUnusableCases()) {
 		x := newXtrWorld(t, fmt.Sprintf("%s-%02d", prefix, i))
 		tc.seed(t, x)
 		x.foreign()

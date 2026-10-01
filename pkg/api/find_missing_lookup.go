@@ -9,7 +9,9 @@ import "github.com/gabemahoney/agent-director/internal/tmux"
 
 // lookupRow decides a live row whose process evidence is unknown (state
 // tmux.ProcUnknown: unreadable, or a pid-only identity reading alive) or
-// absent (tmux.ProcNone: none recorded) by SR-11.3's table.
+// absent (tmux.ProcNone: none recorded) by SR-11.3's table. judgeLiveRow
+// calls it only for a row whose recorded session name is usable: a row with
+// an unusable name gets its own note there and never reaches tmux (SR-3.2).
 //
 // The row's socket is its recorded one, or for a row that records none the
 // caller's (sweepSockets.forRow); its lookup view is rowLaunch of its
