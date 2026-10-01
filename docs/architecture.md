@@ -7762,22 +7762,28 @@ constants and never spell them: `EnvLog` (`FAKE_TMUX_LOG`), `EnvPaneOutput`
 (`FAKE_TMUX_PANE_OUTPUT`), `EnvFailNewSessionName`
 (`FAKE_TMUX_FAIL_NEWSESSION_NAME`) and `EnvTables` (`FAKE_TMUX_TABLES`). None
 starts with `AGENT_DIRECTOR_`, which the production client strips.
-`FAKE_TMUX_FAIL_NEWSESSION_NAME` now prints the catalogue's
-`duplicate session: <stored name>` wording.
+`FAKE_TMUX_FAIL_NEWSESSION_NAME` applies to the socket-form create only,
+which then prints the catalogue's `duplicate session: <stored name>`
+wording. The socket form logs every invocation to `FAKE_TMUX_LOG` (one
+element per line, then `---`); its `capture-pane` prints the pane's table
+capture text, else `FAKE_TMUX_PANE_OUTPUT`, else the stub.
 
 **No wording of its own.** Every reply the fake prints comes from the
 replay catalogue. Its only literal output is the capture stub, which is
 pane content, not a reply.
 
-**Legacy form.** Argv without a leading `-u` is the name-based call set:
-`new-session` and `kill-session` log their argv to `FAKE_TMUX_LOG` in the
-same format (one element per line, then `---`) and exit 0 (`new-session`
-honours `FAKE_TMUX_FAIL_NEWSESSION_NAME`); `has-session` exits 1 (no verb
-sends it); anything
-else, a name-based `capture-pane` or `send-keys` included (no client method
-sends one), exits 0 with no output, unlogged. The socket form logs every
-invocation; its `capture-pane` prints the pane's table capture text, else
-`FAKE_TMUX_PANE_OUTPUT`, else the stub.
+**Socket-less argv.** Argv without a leading `-u` has only two answered
+forms. The bare invocation (no subcommand) exits 0, so `command -v tmux`
+probes succeed. `has-session` exits 1 with no output, as for an absent
+session; it is kept only for `HasSession`, which no verb calls. There is no
+socket-less `new-session`, `send-keys`, `capture-pane` or `kill-session`.
+Every other socket-less invocation, those four included, is logged to
+`FAKE_TMUX_LOG` in the same format and refused with the catalogue's
+`tmuxfix.NoServer` entry (`reply/no-server`) for the default socket, on
+standard error with exit 1, as tmux answers when no server runs on the
+default socket. A client call that names no socket therefore fails in
+tests instead of passing with exit 0 (SRD SR-2.1). No table is read or
+written.
 
 **Build helper.** `faketmuxfix.Binary(t)` builds the fake once per test
 binary and returns the path of a file named `tmux`; `faketmuxfix.Dir(t)`
@@ -9356,7 +9362,7 @@ each file's doc comments carry the detail.
   `find-missing` and `expire` build theirs from the fixture's `note` and
   `kept`. `callTableCell.keptLater` is `expire`'s expected kept reason for
   a later row on the same socket (`""` deleted). `-run
-  'CallTable.*/Unusable'` selects the family.
+  'CallTable/.*/Unusable'` selects the family.
 - **Unusable recorded names** (`unusable_name_fixture_test.go`, no tests;
   SR-3.2, SR-11.3, SR-12.2). `unusableNameFixtures()` is the one table of
   unusable recorded names: empty, a newline, DEL, ESC, the pre-b.gqe
@@ -9878,8 +9884,10 @@ A `read-pane` or `send-keys` test seeds the row's own labelled session
 into the table first (`runHelper("seed-row-session", ...)`, with
 `capture` for the text `read-pane` must return); without it the lookup is
 Gone. The `pause` smoke cases cover only a finished row and a refused
-state, which make no tmux call. The fake still answers the legacy argv (a `has-session` exits
-1), but no verb sends it.  The binary is built
+state, which make no tmux call. Without a socket the fake answers only the
+bare invocation and `has-session` (exit 1), which no verb sends; it refuses
+any other socket-less call with the catalogue's no-server reply, so a verb
+that named no socket would fail its smoke test.  The binary is built
 by `make fake-tmux` (which `test/setup.ts` calls before any test runs).  Both
 the Makefile recipe and `setup.ts` explicitly `chmod 755` the output: without the
 execute bit, `exec.LookPath` silently skips the stub and falls through to the

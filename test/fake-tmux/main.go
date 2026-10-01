@@ -98,23 +98,25 @@
 //
 // # Control variables
 //
-//   - FAKE_TMUX_LOG: a file every invocation (both forms; legacy: the two
-//     logged subcommands) appends its argv to, one element per
-//     line followed by a "---" line.
+//   - FAKE_TMUX_LOG: a file every invocation (except the two socket-less
+//     answers below) appends its argv to, one element per line followed by
+//     a "---" line.
 //   - FAKE_TMUX_PANE_OUTPUT: capture text (see capture-pane above).
-//   - FAKE_TMUX_FAIL_NEWSESSION_NAME: a create (either form) whose -s name
-//     equals it prints the catalogue's "duplicate session: <stored name>" on
-//     standard error and exits 1, creating nothing.
+//   - FAKE_TMUX_FAIL_NEWSESSION_NAME: a create whose -s name equals it
+//     prints the catalogue's "duplicate session: <stored name>" on standard
+//     error and exits 1, creating nothing.
 //   - FAKE_TMUX_TABLES: the directory holding the tables (see Tables).
 //
-// # Legacy form
+// # Socket-less argv
 //
-// argv without a leading -u is the name-based call set: new-session and
-// kill-session log their argv and exit 0; has-session (no verb sends it)
-// exits 1, as for an absent session; new-session honours
-// FAKE_TMUX_FAIL_NEWSESSION_NAME; anything else (a name-based
-// capture-pane or send-keys included: no client method sends one) exits 0
-// with no output or side effects. No table is read or written.
+// The only argv without a leading -u the fake answers are has-session (for
+// the name-based HasSession, which no verb sends), which exits 1 as for an
+// absent session, and the bare invocation, which exits 0; neither is
+// logged. Every other socket-less invocation (a name-based new-session,
+// kill-session, send-keys or capture-pane included) is logged and refused
+// with the catalogue's "no server running on <socket>" reply for the socket
+// tmux would use in the fake's environment, exit 1, as tmux answers when no
+// server runs there. No table is read or written.
 package main
 
 import (
@@ -149,7 +151,7 @@ func main() {
 	if len(os.Args) >= 2 && os.Args[1] == "-u" {
 		os.Exit(socketMain(os.Args[2:]))
 	}
-	legacyMain()
+	os.Exit(socketlessMain())
 }
 
 // boundOf turns a millisecond count into a wait capped at MaxBound, with

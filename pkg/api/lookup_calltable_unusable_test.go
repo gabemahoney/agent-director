@@ -8,7 +8,7 @@ package api_test
 // look the row up refuses with the fixture's ErrInternal, with no tmux call
 // and the row unchanged; a state guard that answers first keeps its answer.
 // The cells are merged into each verb's row with maps.Copy; -run
-// 'CallTable.*/Unusable' selects them. Later verbs merge these cells, never
+// 'CallTable/.*/Unusable' selects them. Later verbs merge these cells, never
 // their own unusable-name columns.
 
 import (

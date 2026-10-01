@@ -17,9 +17,9 @@ const (
 	EnvLog = "FAKE_TMUX_LOG"
 	// EnvPaneOutput is the capture text for a pane with no Capture.
 	EnvPaneOutput = "FAKE_TMUX_PANE_OUTPUT"
-	// EnvFailNewSessionName makes a create (legacy or socket form) whose -s
-	// name equals its value print the catalogue's "duplicate session"
-	// reply for the name's stored form and exit 1, creating nothing.
+	// EnvFailNewSessionName makes a create whose -s name equals its value
+	// print the catalogue's "duplicate session" reply for the name's stored
+	// form and exit 1, creating nothing.
 	EnvFailNewSessionName = "FAKE_TMUX_FAIL_NEWSESSION_NAME"
 	// EnvTables names a directory holding every socket's table; unset, each
 	// table lives beside its socket path (see TablePath).

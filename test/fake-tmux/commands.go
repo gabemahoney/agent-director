@@ -296,6 +296,19 @@ func (s *server) newSession(args []string) (int, error) {
 	return 0, nil
 }
 
+// failNewSession reports whether FAKE_TMUX_FAIL_NEWSESSION_NAME is set and
+// equals name.
+func failNewSession(name string) bool {
+	fail := os.Getenv(faketmuxfix.EnvFailNewSessionName)
+	return fail != "" && name == fail
+}
+
+// duplicateReply is the catalogue's "duplicate session" reply for a create
+// with -s name: the stored form of the name, on standard error, exit 1.
+func duplicateReply(name string) tmuxfix.Entry {
+	return tmuxfix.Duplicate(faketmuxfix.StoredForm(name))
+}
+
 // nextIDs returns the numbers of the next $N and %N: the table's counters,
 // raised past every id already in the table.
 func (s *server) nextIDs() (int, int) {
