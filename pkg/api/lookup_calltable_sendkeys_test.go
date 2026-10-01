@@ -77,6 +77,7 @@ func callTableSendKeys() callTableVerb {
 				return apitest.DescKeysTimeout(tmux.CallSendText, e.cfg.EffectiveActionTimeout())
 			}},
 	})
+	maps.Copy(cells, callTableUnusableRefused())
 	return callTableVerb{
 		name:        "send-keys",
 		invoke:      sendKeysCallTableInvoke(false),

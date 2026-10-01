@@ -5,7 +5,8 @@ package api_test
 // fresh spawn's row and a resumed row finished before their agent reported
 // in (AC-KILL-14), a failed resume's restored row, and a plain spawn's
 // held-name row beside a leftover (AC-SPN-07). Hooks come from the row's own
-// pane (SR-22.9); the rlf helpers are spawn_reuse_history_test.go's.
+// pane (SR-22.9); newReuseEnv is spawn_reuse_fixture_test.go's, the rlf
+// helpers spawn_reuse_history_test.go's.
 
 import (
 	"errors"
@@ -165,7 +166,7 @@ func TestKillIncludeFinishedNeverReportedInHistory(t *testing.T) {
 	for _, rc := range rows {
 		for _, state := range []string{store.StateEnded, store.StateMissing} {
 			t.Run(rc.name+"/"+state, func(t *testing.T) {
-				e := newRlfEnv(t)
+				e := newReuseEnv(t)
 				id := rc.make(t, e)
 				kohFinish(t, e, id, state)
 				row := rlfRow(t, e, id)
@@ -190,7 +191,7 @@ func TestKillIncludeFinishedRestoredRow(t *testing.T) {
 			name = "session created after the restore: never reported in"
 		}
 		t.Run(name, func(t *testing.T) {
-			e := newRlfEnv(t)
+			e := newReuseEnv(t)
 			id := kohSpawn(t, e)
 			rlfReportIn(t, e, id, rlfNewSession(), true)
 			rlfEndLife(t, e, id)

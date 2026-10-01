@@ -38,11 +38,12 @@ const (
 //     UnusableRewritten;
 //   - anything else is UnusableNone.
 //
-// The guard only classifies: callers decide what a kind means (Epic 19
-// applies it to the verbs). It reads no environment and no clock and makes no
-// tmux call. It is separate from internal/spawn's validation of a new
-// explicit name, which also refuses `#`, `$`, `\` and long names; the guard
-// allows `$`, `\` and `#` in a recorded name.
+// The guard only classifies: callers decide what a kind means (pkg/api's
+// verbs refuse any kind but UnusableNone before a tmux call). It reads no
+// environment and no clock and makes no tmux call. It is separate from
+// internal/spawn's validation of a new explicit name, which also refuses
+// `#`, `$`, `\` and long names; the guard allows `$`, `\` and `#` in a
+// recorded name.
 func Unusable(name string) UnusableKind {
 	switch {
 	case name == "":

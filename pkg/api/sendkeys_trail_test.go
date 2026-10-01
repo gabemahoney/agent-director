@@ -73,6 +73,19 @@ func sktNoLaunchStart(t *testing.T, e *killEnv) killRow {
 	return e.seedRow(t, e.pendingSpec(pendingFresh, pendingOurs, apitest.WithNoLaunchStartedAt()))
 }
 
+// sktUnusable seeds spec's row recording the named unusable-name fixture (seedUnusableRow).
+func sktUnusable(spec killRowSpec, fixture string) sktSeed {
+	return func(t *testing.T, e *killEnv) killRow { return e.seedUnusableRow(t, spec, unusableFixture(t, fixture)) }
+}
+
+// sktUnusablePending seeds a fresh spawn's pending row (launch start, token,
+// then opts) recording the pre-b.gqe default name.
+func sktUnusablePending(opts ...apitest.SpawnOption) sktSeed {
+	return func(t *testing.T, e *killEnv) killRow {
+		return sktUnusable(e.pendingSpec(pendingFresh, pendingOurs, opts...), "pre-b.gqe default name")(t, e)
+	}
+}
+
 // sktReleased gives r one permission request past its relay window at the
 // fixture clock, which Client.SendKeys judges the guard by.
 func sktReleased(t *testing.T, e *killEnv, r *killRow) {
@@ -112,6 +125,7 @@ func TestSendKeysTrailCalledPerReturnPath(t *testing.T) {
 		allow             bool
 		outcome, rowState string
 		guard             string // "" is not-applicable
+		unusable          bool   // an unusable recorded name: no ad.provenance.disagree either
 	}{
 		{name: "unknown id", outcome: "ErrSpawnNotFound"},
 		{name: "finished row", seed: sktRow(killRowSpec{State: store.StateEnded, NoSession: true}), allow: true,
@@ -152,6 +166,12 @@ func TestSendKeysTrailCalledPerReturnPath(t *testing.T) {
 		{name: "follow-up different server",
 			seed:    sktRow(killRowSpec{}, ktrScript(tmux.FailUnrecognized, tmux.CallSendText), sktRebindAfterText),
 			outcome: "ErrTmuxNotAvailable", rowState: "waiting"},
+		{name: "unusable name, waiting", seed: sktUnusable(killRowSpec{}, "empty"), unusable: true,
+			outcome: "ErrInternal", rowState: "waiting"},
+		{name: "unusable name, pending", seed: sktUnusablePending(), allow: true, unusable: true,
+			outcome: "ErrInternal", rowState: "pending"},
+		{name: "unusable name, pending with no launch start", seed: sktUnusablePending(apitest.WithNoLaunchStartedAt()),
+			allow: true, unusable: true, outcome: "ErrSpawnNotInteractive", rowState: "pending"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -175,6 +195,9 @@ func TestSendKeysTrailCalledPerReturnPath(t *testing.T) {
 			sktAssertCalled(t, recs[0], p, tc.outcome, tc.rowState, guard)
 			if name, _ := errnames.Classify(err); (err == nil) != (tc.outcome == "ok") || (err != nil && name != tc.outcome) {
 				t.Errorf("err = %v (class %q); want outcome %s", err, name, tc.outcome)
+			}
+			if d := sktDisagrees(t, id); tc.unusable && len(d) != 0 {
+				t.Errorf("ad.provenance.disagree records = %v; want none", d)
 			}
 		})
 	}

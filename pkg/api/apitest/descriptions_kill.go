@@ -15,16 +15,17 @@ import (
 // only cases that allow "retry kill later"), the Leftover refusal, the
 // follow-up lookup that could not answer after a kill was sent
 // (DescCase.AfterKillSent), the socket-directory refusal that ends "nothing
-// was done", the unusable recorded name's three ErrInternal cases, and
-// kill's own texts: its manifest description (DescKillManifest, whose
-// tmux error classes come from tmuxErrorClasses, the definition the pane
-// verbs' DescPaneManifest shares), and the
-// ErrInternal trigger (DescKillInternalTrigger) and repeated-kill limitation
+// was done", and kill's own texts: its manifest description
+// (DescKillManifest, whose tmux error classes come from tmuxErrorClasses, the
+// definition the pane verbs' DescPaneManifest shares), and the ErrInternal
+// trigger (DescKillInternalTrigger, over descriptions_unusable.go's
+// DescUnusableNameTrigger) and repeated-kill limitation
 // (DescKillRepeatedAfterLastSession) it shares with Client.Kill's Go doc
 // prose. Kill reuses DescConflictingLabels (with NothingWasDone),
 // DescDifferentServer, DescCallTimeout (lookup, pane listing, pane kill,
-// session kill), DescUnrecognisedReply, DescSocketPermission and
-// DescTmuxNotRun as they are.
+// session kill), DescUnrecognisedReply, DescSocketPermission,
+// DescTmuxNotRun and the unusable-name cases (descriptions_unusable.go) as
+// they are.
 
 // killFailedMustNot is what no kill refusal may say (SR-1.4).
 var killFailedMustNot = []string{"dead", "gone"}
@@ -217,79 +218,18 @@ func DescSocketDirNothingDone(socket, dir, reason string) DescCase {
 	}
 }
 
-// unusableName is an unusable recorded name's ErrInternal case (SR-1.4,
-// SR-3.2): req, then that the name cannot be used, so removing the row is a
-// human's decision, the "Operator actions" pointer, and that no tmux call
-// was made.
-func unusableName(kind string, req, mustNot []string) DescCase {
-	return DescCase{
-		Name: "ErrInternal, recorded name " + kind,
-		Require: append(req,
-			"the name cannot be used, so removing the row is a human's decision", "no tmux call was made"),
-		MustNot: mustNot,
-	}.PointsToOperatorActions()
-}
-
-// DescUnusableNameEmpty is ErrInternal for a live row whose recorded tmux
-// session name is empty.
-func DescUnusableNameEmpty() DescCase {
-	return unusableName("empty", []string{"the recorded tmux session name is empty"}, nil)
-}
-
-// DescUnusableNameControlChar is ErrInternal for a recorded tmux session name
-// with a control character, quoted (Go quoted-string form).
-func DescUnusableNameControlChar(name string) DescCase {
-	return unusableName("with a control character",
-		[]string{strconv.Quote(name), "the recorded tmux session name contains a control character"}, nil)
-}
-
-// RewrittenChars says which characters tmux stores differently a recorded
-// name holds: '.', ':', bytes that are not valid UTF-8.
-type RewrittenChars struct {
-	Dot         bool
-	Colon       bool
-	InvalidUTF8 bool
-}
-
-// DescUnusableNameRewritten is ErrInternal for a recorded tmux session name
-// holding a character tmux stores differently: the quoted name and which
-// (each of which's set; each unset one must not be named).
-func DescUnusableNameRewritten(name string, which RewrittenChars) DescCase {
-	req := []string{strconv.Quote(name), "the recorded tmux session name contains a character tmux stores differently"}
-	var mustNot []string
-	for _, ch := range []struct {
-		set    bool
-		phrase string
-	}{{which.Dot, "'.'"}, {which.Colon, "':'"}, {which.InvalidUTF8, "bytes that are not valid UTF-8"}} {
-		if ch.set {
-			req = append(req, ch.phrase)
-		} else {
-			mustNot = append(mustNot, ch.phrase)
-		}
-	}
-	return unusableName("tmux rewrites", req, mustNot)
-}
-
 // swallowedStatements are statements that a tmux failure of kill is
 // swallowed or only logged, which kill's texts never make (SR-18.9).
 var swallowedStatements = []string{"swallow", "swallowed", "swallows", "logged", "WARN"}
 
-// DescKillInternalTrigger is kill's unusable recorded-name ErrInternal
-// trigger as its manifest description and Client.Kill's Go doc prose state it
-// (SR-1.7, SR-3.2): the name's three kinds (empty, a control character, a
-// character tmux stores differently), ErrInternal with no tmux call, and
-// removing the row a human's decision with the "Operator actions" pointer;
-// never that tmux failures are swallowed or logged.
+// DescKillInternalTrigger is DescUnusableNameTrigger as kill's manifest
+// description and Client.Kill's Go doc prose state it (SR-1.7, SR-3.2), also
+// never saying that tmux failures are swallowed or logged (SR-18.9).
 func DescKillInternalTrigger() DescCase {
-	return DescCase{
-		Name: "kill, unusable recorded-name ErrInternal trigger",
-		Require: []string{
-			"recorded tmux session name cannot be used",
-			"it is empty, contains a control character, or contains a character tmux stores differently",
-			"gets ErrInternal", "with no tmux call", "removing the row is a human's decision",
-		},
-		MustNot: swallowedStatements,
-	}.PointsToOperatorActions()
+	c := DescUnusableNameTrigger()
+	c.Name = "kill, " + c.Name
+	c.MustNot = append(append([]string(nil), c.MustNot...), swallowedStatements...)
+	return c
 }
 
 // DescKillRepeatedAfterLastSession is the limitation kill's manifest

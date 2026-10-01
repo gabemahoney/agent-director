@@ -32,12 +32,12 @@ func rlvAssertLife(t *testing.T, e *killEnv, id string, life int64) {
 // candidate and listed within its life; after a second reuse only the latest
 // life's entries are, and a session re-archived there moves to that life.
 func TestSpawnReuseLivesRotationsAndTwoReuses(t *testing.T) {
-	e := newRlfEnv(t)
+	e := newReuseEnv(t)
 	r0 := e.seedReusable(t, agentGone, reuseRowSpec{})
 	rlfEarlierOnDisk(t, r0)
 
 	// First reuse: s1 messaged, rotated to s2, listed and resumed in that life.
-	r, _ := rlfReuse(t, e, r0, reuseRequest{})
+	r, _ := e.reuseLaunch(t, r0, agentAlive, reuseRequest{})
 	s1, s2 := rlfNewSession(), rlfNewSession()
 	p1 := rlfReportIn(t, e, r.ID, s1, true)
 	rlfReportIn(t, e, r.ID, s2, false)
@@ -51,7 +51,7 @@ func TestSpawnReuseLivesRotationsAndTwoReuses(t *testing.T) {
 	rlvAssertLife(t, e, r.ID, reuseLife+1)
 
 	// Second reuse: a new life lists nothing until its own sessions archive.
-	r, _ = rlfReuse(t, e, r, reuseRequest{})
+	r, _ = e.reuseLaunch(t, r, agentAlive, reuseRequest{})
 	rlvAssertLife(t, e, r.ID, reuseLife+2)
 	s3, s4 := rlfNewSession(), rlfNewSession()
 	rlfReportIn(t, e, r.ID, s3, false)
@@ -80,7 +80,7 @@ func rlvFailedReuse(t *testing.T, e *killEnv) (r0, r reuseRow, before api.SpawnR
 	t.Helper()
 	r0 = e.seedReusable(t, agentGone, reuseRowSpec{})
 	rlfEarlierOnDisk(t, r0)
-	r, _ = rlfReuse(t, e, r0, reuseRequest{})
+	r, _ = e.reuseLaunch(t, r0, agentAlive, reuseRequest{})
 	s1, s2 = rlfNewSession(), rlfNewSession()
 	p1 = rlfReportIn(t, e, r.ID, s1, true)
 	p2 = rlfReportIn(t, e, r.ID, s2, true)
@@ -111,7 +111,7 @@ func TestSpawnReuseLivesFailedReuseKeepsLife(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			e := newRlfEnv(t)
+			e := newReuseEnv(t)
 			r0, r, before, s1, p1, s2, p2 := rlvFailedReuse(t, e)
 			after := rlfGet(t, e, r.ID)
 			rlfAssertListed(t, after, "present", getWantPrior{id: s1, path: p1})
@@ -145,7 +145,7 @@ func TestSpawnReuseLivesFailedReuseKeepsLife(t *testing.T) {
 // seeded as migrated, its life-0 history holding its current session id, is
 // reused and the new life sees none of that history.
 func TestSpawnReuseLivesHistoryHoldsCurrentID(t *testing.T) {
-	e := newRlfEnv(t)
+	e := newReuseEnv(t)
 	sid, older := rlfNewSession(), rlfNewSession()
 	cur, old := apitest.SessionHistorySeed{SessionID: sid, JSONLPath: filepath.Join(t.TempDir(), "cur.jsonl")},
 		apitest.SessionHistorySeed{SessionID: older, JSONLPath: filepath.Join(t.TempDir(), "older.jsonl")}
@@ -155,7 +155,7 @@ func TestSpawnReuseLivesHistoryHoldsCurrentID(t *testing.T) {
 	rlfEarlierOnDisk(t, r0)
 	rlfAssertListed(t, rlfGet(t, e, r0.ID), "present", getWantPrior{id: older, path: old.JSONLPath})
 
-	r, _ := rlfReuse(t, e, r0, reuseRequest{})
+	r, _ := e.reuseLaunch(t, r0, agentAlive, reuseRequest{})
 	rlvAssertLife(t, e, r.ID, 1)
 	rlfReportIn(t, e, r.ID, rlfNewSession(), false)
 	rlfEndLife(t, e, r.ID)

@@ -98,6 +98,7 @@ func callTablePause() callTableVerb {
 				return apitest.DescKeysTimeout(tmux.CallSendText, e.cfg.EffectiveActionTimeout())
 			}},
 	})
+	maps.Copy(cells, callTableUnusableRefused())
 	return callTableVerb{
 		name:        "pause",
 		invoke:      pauseCallTableInvoke,

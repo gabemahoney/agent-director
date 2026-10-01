@@ -8,6 +8,7 @@ package api_test
 // spawn_held*_test.go's.
 
 import (
+	"maps"
 	"reflect"
 	"testing"
 
@@ -123,7 +124,7 @@ func callTableSpawn() callTableVerb {
 	}
 	noServerIdentity := "the new row records no tmux server identity, so no recorded server can be restarted, rebound or gone"
 	noDuplicate := noServerIdentity + `; a create finding no server or no socket answers that, not "duplicate session"`
-	return callTableVerb{
+	v := callTableVerb{
 		name: "spawn",
 		run:  runCallTableSpawn,
 		cells: map[callTableOutcome]callTableCell{
@@ -218,4 +219,6 @@ func callTableSpawn() callTableVerb {
 			ctActionTimeout:    {na: "spawn sends no action after the re-lookup: it never acts on the holder"},
 		},
 	}
+	maps.Copy(v.cells, callTableUnusableNA("a plain spawn records no earlier name: it validates its requested name first (ErrTmuxSessionNameInvalid)"))
+	return v
 }

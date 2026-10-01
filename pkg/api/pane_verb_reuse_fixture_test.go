@@ -9,7 +9,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -76,21 +75,4 @@ func (e *killEnv) reuseTimesOut(t *testing.T, r reuseRow, q reuseRequest, made b
 		t.Fatalf("reuse of %s = %v (log %q); want ErrTmuxUnresponsive", r.ID, err, logs)
 	}
 	return e.reusedAs(t, r)
-}
-
-// reusedAs is r as a reuse left it, failing unless its row is pending: Spawn,
-// Name and Token as stored, and Session the one carrying the new token (zero when none).
-func (e *killEnv) reusedAs(t *testing.T, r reuseRow) reuseRow {
-	t.Helper()
-	row, err := e.st.GetSpawn(r.ID)
-	if err != nil || row.State != store.StatePending {
-		t.Fatalf("GetSpawn(%s) after the reuse = %s, %v; want pending", r.ID, row.State, err)
-	}
-	r.Spawn, r.Name, r.Token, r.Session = row, row.TmuxSessionName, row.Identity.Token, tmuxfix.SeedSession{}
-	for _, s := range e.rec.Sessions(r.Socket) {
-		if s.Label.Token == r.Token {
-			r.Session = s
-		}
-	}
-	return r
 }

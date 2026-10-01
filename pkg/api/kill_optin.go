@@ -30,16 +30,20 @@ func (k *killRun) rowFinished() bool {
 // withOptIn is the start of the kill flow when the opt-in is set, right after
 // the row read (SR-6.5, SR-6.1): a live row, pending included, gets
 // liveRowRefusal before the unusable-name check, any lookup or any tmux call.
-// A finished row (ended, missing) takes the finished-row path: nil here, and
-// run goes on to the socket, the one lookup and SR-6.5's table in its verdict
+// A finished row (ended, missing) takes the finished-row path, which never
+// reaches the live row's unusable-name check in run. Its first row is SR-6.5's
+// unusable recorded name (SR-3.2): unusableNameError's ErrInternal here,
+// before the socket is resolved, with no tmux call. Otherwise nil, and run
+// goes on to the socket, the one lookup and SR-6.5's table in its verdict
 // switch (finishedOurs before the kill sequence on Ours,
 // neverReportedInLeftoverError on Leftover, the live row's Gone and Can't
-// tell handling otherwise). The finished-row path
-// never reaches the live row's unusable-name check: SR-6.5's unusable-name
-// row belongs here, at the path's start, before the socket is resolved.
+// tell handling otherwise).
 func (k *killRun) withOptIn() error {
 	if !k.rowFinished() {
 		return liveRowRefusal(k.id, k.row.State)
+	}
+	if err := unusableNameError(k.row.TmuxSessionName); err != nil {
+		return fmt.Errorf("instance %s: %w", k.id, err)
 	}
 	return nil
 }

@@ -42,7 +42,7 @@ func oneNameKillOptIn(name, want string, spec killRowSpec, setup func(t *testing
 // refusal, then the finished-row table's on an ended row (koEnded): both
 // "never reported in" and conflicting labels, still stopping and still
 // starting, the follow-up after a sent kill, a different server, and the
-// agent outliving a sent kill.
+// agent outliving a sent kill; then ErrInternal for an unusable recorded name.
 func oneNameKillOptInRows() []oneNameRow {
 	reportedIn, startedLater := koEnded(killRowSpec{}, time.Second), koEnded(killRowSpec{}, -time.Hour)
 	pastBoth := func(_ *testing.T, e *killEnv, _ *killRow) { koPastBoth(e) }
@@ -70,5 +70,6 @@ func oneNameKillOptInRows() []oneNameRow {
 			e.seedBystander(t, r.Socket)
 		}),
 		oneNameKillOptIn("agent outlives a sent kill", "ErrTmuxKillFailed", reportedIn, pastBoth),
+		oneNameKillOptIn("unusable recorded name", "", koEnded(unusableNameSpec(), time.Second), nil),
 	}
 }

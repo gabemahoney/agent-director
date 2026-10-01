@@ -157,6 +157,10 @@ type sendKeysGuard struct {
 // with no row there is no signal and no authority to release, and the state
 // is a real mid-insert transient.
 //
+// After the state and relay guards, a row whose recorded name is unusable
+// (SR-3.2) is ErrInternal with no tmux call; a pending row with no launch
+// start or token has already been refused by the state guard.
+//
 // Then the row's socket (SR-3.3; a resolution refusal is
 // ErrTmuxNotAvailable) and one lookup by the row's current label:
 //
@@ -272,6 +276,10 @@ func (r *sendKeysRun) run(t SendKeysTmux, pc ProcChecker, effectiveWindow time.D
 			ErrSendKeysWhileRelayed, params.ClaudeInstanceID)
 	}
 
+	if err := unusableNameError(row.TmuxSessionName); err != nil {
+		return fmt.Errorf("instance %s: %w", row.ClaudeInstanceID, err)
+	}
+
 	socket, err := rowSocket(row.Identity.Socket)
 	if err != nil {
 		return fmt.Errorf("instance %s: %w", row.ClaudeInstanceID, err)
@@ -370,6 +378,12 @@ func isInteractiveState(state string) bool {
 // (0x0D) are stripped before delivery to prevent premature submission; LF
 // bytes (0x0A) are preserved as composed newlines in Claude's input box. A
 // single Enter is always appended to submit the composed buffer.
+//
+// After the state and relay refusals, a row whose recorded tmux session name
+// cannot be used (it is empty, contains a control character, or contains a
+// character tmux stores differently) gets ErrInternal (an error matching no
+// catalogued sentinel) with no tmux call; removing the row is a human's
+// decision (see "Operator actions" in the agent-director README).
 //
 // CLI: agent-director send-keys
 //

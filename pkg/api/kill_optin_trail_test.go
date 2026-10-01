@@ -23,6 +23,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/internal/trail"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // kotAssertCalled checks rec, one opt-in ad.kill.called of r, against want
@@ -121,6 +122,34 @@ func TestKillIncludeFinishedTrailPerReturnPath(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestKillIncludeFinishedTrailUnusableName: the opt-in's refusal of an ended or
+// missing row's unusable name writes one ad.kill.called, ErrInternal with nothing run, and no ad.provenance.disagree.
+func TestKillIncludeFinishedTrailUnusableName(t *testing.T) {
+	notRun := tmux.TokenNotRun
+	for _, state := range kosFinished {
+		t.Run(state, func(t *testing.T) {
+			e := newKillEnv(t)
+			r := e.seedRow(t, killRowSpec{State: state, NoSession: true,
+				Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(preGqeDefaultName)}})
+
+			res, err := e.killOptIn(r.ID)
+
+			recs := killCalled(t, r.ID)
+			if len(recs) != 1 {
+				t.Fatalf("ad.kill.called records = %d; want 1: %v", len(recs), recs)
+			}
+			kotAssertCalled(t, recs[0], r, ktrCalled{outcome: "ErrInternal", lookup: notRun, followup: notRun, check: notRun})
+			assertOneName(t, err, "ErrInternal")
+			if res.KillSent {
+				t.Error("KillResult.KillSent = true; want false")
+			}
+			if recs := killDisagrees(t, r.ID); len(recs) != 0 {
+				t.Errorf("ad.provenance.disagree records = %v; want none", recs)
+			}
+		})
 	}
 }
 

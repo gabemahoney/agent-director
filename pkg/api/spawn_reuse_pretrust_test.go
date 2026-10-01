@@ -56,11 +56,11 @@ func rtrResume(t *testing.T, e *killEnv, id, cwd string, c trustConfig, want str
 func TestSpawnReuseFollowsOwnPreTrustChoice(t *testing.T) {
 	for _, tc := range rtrChoices {
 		t.Run(tc.name, func(t *testing.T) {
-			e := newRlfEnv(t)
+			e := newReuseEnv(t)
 			r0 := e.seedReusable(t, agentGone, reuseRowSpec{NoPreTrust: tc.rowOptOut})
 			want, trusted, column := rtrOutcome(tc.callOptOut)
 
-			r, res := rlfReuse(t, e, r0, reuseRequest{NoPreTrust: tc.callOptOut})
+			r, res := e.reuseLaunch(t, r0, agentAlive, reuseRequest{NoPreTrust: tc.callOptOut})
 			if res.PreTrust != want {
 				t.Errorf("reuse pre_trust = %q; want %q", res.PreTrust, want)
 			}
@@ -87,7 +87,7 @@ func TestSpawnReuseFollowsOwnPreTrustChoice(t *testing.T) {
 func TestSpawnReuseFailedRestoresPreTrustChoice(t *testing.T) {
 	for _, tc := range rtrChoices {
 		t.Run(tc.name, func(t *testing.T) {
-			e := newRlfEnv(t)
+			e := newReuseEnv(t)
 			r := e.seedReusable(t, agentGone, reuseRowSpec{NoPreTrust: tc.rowOptOut})
 			want, trusted, column := rtrOutcome(tc.rowOptOut)
 			e.rec.Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 1, Times: 1}, tmux.CallCreate)
@@ -142,11 +142,11 @@ func TestSpawnReusePreTrustWriteFailureStillLaunches(t *testing.T) {
 		file trustFile
 	}{{".claude.json missing", trustMissing}, {".claude.json unwritable", trustUnwritable}} {
 		t.Run(tc.name, func(t *testing.T) {
-			e := newRlfEnv(t)
+			e := newReuseEnv(t)
 			c := seedTrustConfig(t, t.TempDir(), tc.file)
 			r0 := e.seedReusable(t, agentGone, reuseRowSpec{})
 
-			r, res := rlfReuse(t, e, r0, reuseRequest{Env: c.extraEnv()})
+			r, res := e.reuseLaunch(t, r0, agentAlive, reuseRequest{Env: c.extraEnv()})
 			if res.PreTrust != "failed" {
 				t.Errorf("reuse pre_trust = %q; want failed", res.PreTrust)
 			}

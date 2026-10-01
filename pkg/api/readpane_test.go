@@ -1,7 +1,8 @@
 package api_test
 
 // readpane_test.go: read-pane's parameters, its freedom from a state guard,
-// and which pane it reads (SR-7.1, SR-7.2, SR-7.3, SR-3.3, SR-3.7, SR-20.5):
+// its refusal of an unusable recorded name in any state (SR-3.2), and which
+// pane it reads (SR-7.1, SR-7.2, SR-7.3, SR-3.3, SR-3.7, SR-20.5):
 // always the agent's pane by its pane id on the row's recorded socket, never
 // a session name, a neighbour's session or a session holding the name. On
 // the pane-verb fixture (pane_verb_fixture_test.go) and tmuxfix.Recorder.
@@ -10,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/config"
@@ -118,6 +120,46 @@ func TestReadPaneNoStateGuard(t *testing.T) {
 	}
 }
 
+// TestReadPaneUnusableName (SR-3.2, AC-LKP-10): in every state, a recorded
+// name that cannot be used is ErrInternal quoting it, with no tmux call and the row unchanged.
+func TestReadPaneUnusableName(t *testing.T) {
+	cases := []struct{ state, fixture string }{
+		{store.StatePending, "pre-b.gqe default name"},
+		{store.StateWaiting, "empty"},
+		{store.StateWorking, "newline"},
+		{store.StateEnded, "colon"},
+		{store.StateMissing, "invalid UTF-8"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.state+"/"+tc.fixture, func(t *testing.T) {
+			e := newKillEnv(t)
+			f := unusableFixture(t, tc.fixture)
+			r := e.seedUnusableRow(t, killRowSpec{State: tc.state}, f)
+			before := e.columns(t, r.ID)
+
+			res, err := e.readPane(api.ReadPaneParams{ClaudeInstanceID: r.ID})
+
+			assertOneName(t, err, "ErrInternal")
+			apitest.AssertDescription(t, err.Error(), f.desc, r.Token)
+			if res.Pane != "" {
+				t.Errorf("Pane = %q; want none", res.Pane)
+			}
+			e.assertNoTmuxCall(t)
+			e.assertRowUnchanged(t, r.ID, before)
+		})
+	}
+}
+
+// TestReadPaneUnusableNameUnknownID: an unknown id stays ErrSpawnNotFound
+// beside a row whose recorded name cannot be used, with no tmux call.
+func TestReadPaneUnusableNameUnknownID(t *testing.T) {
+	e := newKillEnv(t)
+	e.seedUnusableRow(t, killRowSpec{}, unusableFixture(t, "pre-b.gqe default name"))
+	_, err := e.readPane(api.ReadPaneParams{ClaudeInstanceID: "absent"})
+	assertOneName(t, err, "ErrSpawnNotFound")
+	e.assertNoTmuxCall(t)
+}
+
 // TestReadPaneRenamedSession: the renamed session's agent pane is read by id;
 // a session now holding the recorded name is never captured.
 func TestReadPaneRenamedSession(t *testing.T) {
@@ -180,7 +222,7 @@ func TestReadPaneNeighbours(t *testing.T) {
 // \ is found by its label under tmux's stored form and read by pane id.
 func TestReadPaneStoredNames(t *testing.T) {
 	for _, n := range tmuxfix.StoredNames() {
-		if !n.LabelByID {
+		if !n.LabelByID || strings.ContainsAny(n.Raw, ".:") { // '.' and ':' names are unusable (Epic 19)
 			continue
 		}
 		t.Run(n.Raw, func(t *testing.T) {

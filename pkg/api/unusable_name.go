@@ -34,9 +34,11 @@ const unusableNameConsequence = "the name cannot be used, so removing the row is
 // Each then says the name cannot be used, so removing the row is a human's
 // decision, points to "Operator actions", and says no tmux call was made. No
 // description names a session-ending command, another row's id or the
-// opt-in. kill's live-row guard uses it (SR-6.1); Epic 19 applies it to the
-// other verbs (read-pane, send-keys, pause, resume, reuse and kill's
-// finished-row opt-in).
+// opt-in. Every verb that would look a row up calls it on the recorded name
+// before the socket and any tmux call: kill of a live row (SR-6.1) and of a
+// finished row with the opt-in, read-pane, send-keys after its state and
+// relay guards, pause on a waiting row, resume first in its step 2, and
+// reuse after its live-row collision.
 func unusableNameError(name string) error {
 	switch tmux.Unusable(name) {
 	case tmux.UnusableEmpty:

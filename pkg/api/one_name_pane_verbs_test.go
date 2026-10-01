@@ -59,7 +59,7 @@ func rebindServer(t *testing.T, e *killEnv, r *killRow) {
 // oneNameReadPaneRows are read-pane's tmux-caused errors (SR-7.2, SR-7.3):
 // its gone error, each ErrTmuxSessionConflict refusal, each
 // ErrTmuxNotAvailable and ErrTmuxUnresponsive cause, and each follow-up
-// outcome of a failed capture.
+// outcome of a failed capture, and ErrInternal for an unusable recorded name.
 func oneNameReadPaneRows() []oneNameRow {
 	lookup, timeout := tmux.CallLookup, tmuxfix.Script{Failure: tmux.FailTimeout}
 	noSession := killRowSpec{NoSession: true}
@@ -127,7 +127,13 @@ func oneNameReadPaneRows() []oneNameRow {
 		oneNameReadPane("capture failed, follow-up finds the session", unresponsive, killRowSpec{}, captureFails(nil)),
 		oneNameReadPane("capture failed, follow-up timeout", unresponsive, killRowSpec{},
 			captureFails(scriptKill(lookup, tmuxfix.Script{Times: 1}, timeout))),
+		oneNameReadPane("unusable recorded name", "", unusableNameSpec(), nil),
 	}
+}
+
+// unusableNameSpec is a waiting row, no session seeded, recording the pre-b.gqe default name ('.').
+func unusableNameSpec() killRowSpec {
+	return killRowSpec{NoSession: true, Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(preGqeDefaultName)}}
 }
 
 // oneNameSendKeys is a row that runs Client.SendKeys (AllowPending on a
@@ -178,7 +184,8 @@ func followUpGone(call tmux.Call) func(*testing.T, *killEnv, *killRow) {
 // oneNameSendKeysRows are send-keys' returned errors (SR-7.1 to SR-7.3): the
 // pending refusals before and after the lookup, its gone error, each
 // ErrTmuxSessionConflict refusal, each ErrTmuxNotAvailable and
-// ErrTmuxUnresponsive cause, and each follow-up outcome of a failed text or Enter call.
+// ErrTmuxUnresponsive cause, each follow-up outcome of a failed text or Enter call,
+// and ErrInternal for an unusable recorded name.
 func oneNameSendKeysRows() []oneNameRow {
 	lookup, text, enter := tmux.CallLookup, tmux.CallSendText, tmux.CallSendEnter
 	timeout := tmuxfix.Script{Failure: tmux.FailTimeout}
@@ -226,6 +233,7 @@ func oneNameSendKeysRows() []oneNameRow {
 		oneNameSendKeys("Enter timeout", unresponsive, live, scriptKill(enter, timeout)),
 		oneNameSendKeys("text failed, follow-up finds the session", unresponsive, live, actionFails(text, nil)),
 		oneNameSendKeys("Enter failed, follow-up finds the session", unresponsive, live, actionFails(enter, nil)),
+		oneNameSendKeys("unusable recorded name", "", liveSpec(unusableNameSpec()), nil),
 	}
 }
 
@@ -257,7 +265,8 @@ func oneNamePauseTimeout() oneNameRow {
 // oneNamePauseRows are pause's returned errors (SR-7.1 to SR-7.3): the state
 // refusal, the wait's timeout, its gone error, each ErrTmuxSessionConflict
 // refusal, each ErrTmuxNotAvailable and ErrTmuxUnresponsive cause, and each
-// follow-up outcome of a failed /exit or Enter call.
+// follow-up outcome of a failed /exit or Enter call, and ErrInternal for an
+// unusable recorded name on a waiting row.
 func oneNamePauseRows() []oneNameRow {
 	lookup, text, enter := tmux.CallLookup, tmux.CallSendText, tmux.CallSendEnter
 	timeout := tmuxfix.Script{Failure: tmux.FailTimeout}
@@ -302,5 +311,6 @@ func oneNamePauseRows() []oneNameRow {
 		oneNamePause("Enter timeout", unresponsive, live, scriptKill(enter, timeout)),
 		oneNamePause("exit text failed, follow-up finds the session", unresponsive, live, actionFails(text, nil)),
 		oneNamePause("Enter failed, follow-up finds the session", unresponsive, live, actionFails(enter, nil)),
+		oneNamePause("unusable recorded name", "", unusableNameSpec(), nil),
 	}
 }

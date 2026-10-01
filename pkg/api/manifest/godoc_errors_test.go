@@ -15,7 +15,9 @@ import (
 // assertGoDocErrorsMatchManifest. kill's list is its first user
 // (TestKillHasSRDErrorNames); the later verb Epics (11, 13, 16) check their
 // verbs' "Errors:" lists through assertGoDocErrorsMatchManifest instead of
-// writing their own.
+// writing their own. clientGoDocProse gives a method's prose outside
+// "Errors:" for the Go doc statement checks (kill's, then Epic 19's per-verb
+// unusable-name trigger).
 
 // goDocErrorBullet matches an "Errors:" bullet head: "- [ErrX]:" or "- ErrX:".
 var goDocErrorBullet = regexp.MustCompile(`^- \[?(Err[A-Za-z0-9]+)\]?:`)
@@ -130,4 +132,18 @@ func assertGoDocErrorsMatchManifest(t *testing.T, method, verb string) {
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("(*Client).%s Errors: names %v; manifest %s.ErrorNames %v", method, got, verb, want)
 	}
+}
+
+// clientGoDocProse returns (*api.Client).<method>'s Go doc prose outside
+// "Errors:" and its CLI: line, line wrapping rejoined.
+func clientGoDocProse(t *testing.T, method string) string {
+	t.Helper()
+	_, prose := splitGoDocErrors(clientMethodDoc(t, method))
+	var lines []string
+	for _, line := range strings.Split(prose, "\n") {
+		if !strings.HasPrefix(line, "CLI:") {
+			lines = append(lines, line)
+		}
+	}
+	return strings.Join(strings.Fields(strings.Join(lines, "\n")), " ")
 }

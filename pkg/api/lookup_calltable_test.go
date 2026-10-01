@@ -3,10 +3,11 @@ package api_test
 // lookup_calltable_test.go is the SR-20.5 call-site table (SR-20.6 "every
 // cell of the call-site table, including the action-failure column"): each
 // lookup outcome of SR-3.3/SR-3.4, plus the first action failing once the
-// lookup is Ours, against each single-row verb. A column builds the row and
-// its tmux and process world on the kill fixture (kill_fixture_test.go); a
-// verb is a small adapter (invoke, its action calls, its first action) with
-// one expected cell per column. A verb that inserts its own row (plain
+// lookup is Ours and each unusable recorded name of SR-3.2
+// (lookup_calltable_unusable_test.go), against each single-row verb. A
+// column builds the row and its tmux and process world on the kill fixture
+// (kill_fixture_test.go); a verb is a small adapter (invoke, its action
+// calls, its first action) with one expected cell per column. A verb that inserts its own row (plain
 // spawn), writes the row's result (find-missing's sweep), deletes it
 // (expire) or launches it (resume, and resume's re-lookup after "duplicate
 // session") runs its own world and row check instead, and marks the columns
@@ -84,9 +85,16 @@ func callTableStop(f tmux.Failure, sync bool) func(*testing.T, *killEnv, *killRo
 	}
 }
 
-// callTableColumns returns every column. Gone columns seed the agent process
-// gone; the others leave it running, so nothing sent is not for want of an agent.
+// callTableColumns returns every column: the lookup columns, then the
+// unusable-name family (lookup_calltable_unusable_test.go).
 func callTableColumns() []callTableColumn {
+	return append(callTableLookupColumns(), callTableUnusableColumns()...)
+}
+
+// callTableLookupColumns returns the columns a lookup decides (and the action
+// failures). Gone columns seed the agent process gone; the others leave it
+// running, so nothing sent is not for want of an agent.
+func callTableLookupColumns() []callTableColumn {
 	noSession, gone := killRowSpec{NoSession: true}, killRowSpec{Agent: agentGone}
 	goneNoSession := killRowSpec{NoSession: true, Agent: agentGone}
 	otherStore := func(token func(killRow) string) func(*testing.T, *killEnv, *killRow) {
@@ -356,6 +364,7 @@ func callTableKill() callTableVerb {
 		ctActionRecognised:         endedBy(tmux.CallKillSession),
 		ctActionTimeout:            endedBy(tmux.CallKillSession),
 	})
+	maps.Copy(cells, callTableUnusableRefused())
 	return callTableVerb{
 		name: "kill",
 		invoke: func(_ *testing.T, e *killEnv, r killRow) (bool, error) {

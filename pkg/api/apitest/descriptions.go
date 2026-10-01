@@ -31,8 +31,10 @@ import (
 // starting-session refusal (descriptions_starting.go), of resume's
 // pre-launch check (descriptions_resume_lookup.go), of resume's and reuse's
 // errors after "duplicate session" (descriptions_resume_held.go), of reuse's
-// own cases (descriptions_reuse.go), or of kill's finished-row opt-in
-// (descriptions_kill_optin.go).
+// own cases (descriptions_reuse.go), of kill's finished-row opt-in
+// (descriptions_kill_optin.go), or of an unusable recorded name's
+// ErrInternal refusal, trigger and manifest pointer
+// (descriptions_unusable.go).
 
 // DescCase is one SR-1.4 description case: Name (shown in every failure),
 // the phrases the description must contain, the case's own must-not phrases
@@ -50,7 +52,8 @@ type DescCase struct {
 
 	allowRetryKill bool
 	unanswered     bool
-	transient      bool // may say "retry later" (DescStillStopping, DescStillStarting)
+	transient      bool     // may say "retry later" (DescStillStopping, DescStillStarting)
+	requireFold    []string // required phrases matched case-insensitively (DescUnusableNamePointer)
 }
 
 // DescSession is a tmux session a description names: its name (quoted in the
@@ -94,6 +97,7 @@ var (
 	tmuxEndingForms = []form{
 		{"the tmux command kill-session", regexp.MustCompile(`(?i)\bkill-session\b`)},
 		{"the tmux command kill-server", regexp.MustCompile(`(?i)\bkill-server\b`)},
+		{"the tmux command kill-pane", regexp.MustCompile(`(?i)\bkill-pane\b`)},
 	}
 	tmuxAttachForms = []form{
 		{"the tmux command attach-session", regexp.MustCompile(`(?i)\battach-session\b`)},
@@ -168,6 +172,11 @@ func checkPhrases(t testing.TB, label, text string, c DescCase, forbid ...string
 	for _, p := range c.Require {
 		if !strings.Contains(text, p) {
 			t.Errorf("%s: missing required phrase %q in %q", label, p, text)
+		}
+	}
+	for _, p := range c.requireFold {
+		if !strings.Contains(strings.ToLower(text), strings.ToLower(p)) {
+			t.Errorf("%s: missing required phrase %q (any case) in %q", label, p, text)
 		}
 	}
 	for _, p := range c.MustNot {

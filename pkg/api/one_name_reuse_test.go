@@ -18,6 +18,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // TestOneNameReuseReturnedErrors: every error reuse returns matches exactly
@@ -86,7 +87,7 @@ func oneReuseChange(t *testing.T, r *reuseRow, fn func(id string) error) func() 
 // oneNameReuseRows are reuse's errors before and at the launch (SR-10.2 to
 // SR-10.5, SR-10.8, SR-4.2, SR-5.8): each conflict and unanswered refusal,
 // tmux not available, a failed or timed-out create, the live row, the lost
-// races and the change's two ErrInternal failures.
+// races, the change's ErrInternal failures and an unusable recorded name's.
 func oneNameReuseRows() []oneNameRow {
 	conflict, unresponsive, unavailable := "ErrTmuxSessionConflict", "ErrTmuxUnresponsive", "ErrTmuxNotAvailable"
 	created, collision, hour := "ErrTmuxSessionCreate", "ErrInstanceIdCollision", time.Hour
@@ -162,6 +163,13 @@ func oneNameReuseRows() []oneNameRow {
 		oneNameReuse("archive fails", "", hour, agentGone, inject(storefix.WriteFailReuseArchive)),
 		oneNameReuse("reset fails", "", hour, agentGone, inject(storefix.WriteFailReuseReset)),
 		oneNameReuse("permission-request delete fails", "", hour, agentGone, inject(storefix.WriteFailReusePermissionDelete)),
+		oneNameReuse("unusable recorded name", "", hour, agentGone,
+			func(t *testing.T, e *killEnv, r *reuseRow, q *reuseRequest) api.ReuseStore {
+				*r = e.seedReusable(t, agentGone, reuseRowSpec{Age: hour,
+					Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName(preGqeDefaultName)}})
+				q.Name = oneReuseNewName // Spawn refuses an unusable requested name before the reuse path
+				return nil
+			}),
 	}
 }
 

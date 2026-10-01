@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"time"
@@ -124,8 +125,10 @@ func spawnReuse(d reuseDeps, r spawn.Resolved, row store.ReuseRow) (SpawnResult,
 // SR-4.2, SR-3.6, SR-22.6), for row, read by ReadForReuse as finished. In
 // order, after the pre-check read and the live-row collision (runSpawn):
 //
-//  1. [Epic 19's unusable recorded-name guard (SR-3.2) goes here, on the
-//     recorded name from row, with no second read.]
+//  1. The unusable recorded-name guard (SR-3.2, SR-10.2) on the recorded
+//     (old) name from row, with no second read: an unusable name is
+//     unusableNameError's ErrInternal, with no tmux call and nothing written.
+//     The requested name is not checked here.
 //  2. The launch socket (spawn.ResolveRowLaunchSocket): the row's recorded
 //     socket, or the one a plain spawn resolves when it records none. A
 //     refusal is ErrTmuxNotAvailable, with no tmux call and nothing written.
@@ -165,8 +168,9 @@ func reuseExamine(d reuseDeps, r spawn.Resolved, row store.ReuseRow) (reuseExami
 	id := r.ClaudeInstanceID
 	recorded := row.Snapshot.TmuxSessionName
 
-	// Epic 19: the unusable recorded-name guard (SR-3.2) on recorded goes
-	// here, between the live-row collision and the socket.
+	if err := unusableNameError(recorded); err != nil {
+		return reuseExamined{}, fmt.Errorf("instance %s: %w", id, err)
+	}
 
 	socket, err := spawn.ResolveRowLaunchSocket(row.Identity.Socket)
 	if err != nil {
@@ -231,8 +235,9 @@ func reuseLostRace(rs reuseStore, instanceID string, examined RowSnapshot) error
 // the call's own choice); ex what reuseExamine kept. The whole order of the
 // reuse path, with this function's part from step 3:
 //
-//  1. The decision (reuseExamine): the socket, the one old-row lookup with the
-//     new-name pre-check on the same listing, proceed or the refusal.
+//  1. The decision (reuseExamine): the unusable recorded-name guard, the
+//     socket, the one old-row lookup with the new-name pre-check on the same
+//     listing, proceed or the refusal.
 //  2. Its ad.provenance.disagree records, on a refusal as on proceed.
 //  3. A new launch token (spawn.NewLaunchToken); a failure is ErrInternal,
 //     with nothing written.

@@ -67,6 +67,7 @@ func callTableReadPane() callTableVerb {
 				return apitest.DescCallTimeout(tmux.CallCapture, e.cfg.EffectiveActionTimeout())
 			}},
 	})
+	maps.Copy(cells, callTableUnusableRefused())
 	return callTableVerb{
 		name:        "read-pane",
 		invoke:      readPaneCallTableInvoke,

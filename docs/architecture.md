@@ -299,8 +299,8 @@ to tmux; never re-implement the test or its order. `RewrittenIn(name)`
 rewritten characters a name holds; `Unusable` uses it, so the rules live in
 one place, and a description that names the character uses it too. Verbs
 reach the guard through `pkg/api`'s `unusableNameError` (see
-[Single-row verb helpers](#single-row-verb-helpers-pkgapi)); `kill` is its
-first user.
+[Single-row verb helpers](#single-row-verb-helpers-pkgapi)), which lists
+every verb that calls it.
 
 #### Agent-process selection and judgement (`agent_process.go`)
 
@@ -502,7 +502,7 @@ the detail.
 | File | Holds | Must use |
 | --- | --- | --- |
 | `lookup_outcome.go` | `cantTellError(res, cantTellRefusal{InstanceID, Context, Socket, Call, Consequence, Retry})`: the one mapping from a Can't tell lookup or pane-listing `Result` to its verb error (different server and tmux unavailable → `ErrTmuxNotAvailable`, conflicting labels → `ErrTmuxSessionConflict` naming the sessions or the scope, unreadable → `ErrTmuxUnresponsive` ending with the retry sentence); nil for any other verdict. `Consequence` `""` means "nothing was done"; a verb that already acted passes its own sentence. `Retry` `""` means the default `retryLater` ("retry later"); only a caller whose retry of the same call cannot work passes its own (plain spawn's held-name path). It is verb-agnostic: kill, the label scan and resume's pre-launch lookup keep the default. `rowSocket(recorded)`: the socket every call for a row uses, the recorded one as is, else `spawn.ResolveQuerySocket("nothing was done")`. `rowLaunch(instanceID, id, storeID, socket) tmux.Launch`: the lookup's view of a row (instance id, the token and server identity of `id`, this store's id, the socket); `kill`, `read-pane`, `send-keys`, `pause`, `resume`, `find-missing` and `expire` build every lookup's `Launch` with it. The constants `nothingWasDone`, `operatorActionsPointer` and `listSessionNameHint`. | Every single-row verb maps a Can't tell lookup or pane listing through `cantTellError`, takes a row's socket from `rowSocket` and builds its `tmux.Launch` with `rowLaunch`; never write another Can't tell description, socket rule or launch builder. Plain spawn's label scan uses `cantTellError` too. |
-| `unusable_name.go` | `unusableNameError(name)`: nil for a usable recorded name, else the verb-agnostic `ErrInternal` refusal (empty, control character, or which rewritten character via `tmux.RewrittenIn`), pointing to "Operator actions" and saying no tmux call was made. The verb prefixes the instance id. | Every verb that passes a live row's recorded name to tmux refuses an unusable one through it, before any tmux call (`kill` today; the other verbs and the opt-in later). |
+| `unusable_name.go` | `unusableNameError(name)`: nil for a usable recorded name, else the verb-agnostic `ErrInternal` refusal (empty, control character, or which rewritten character via `tmux.RewrittenIn`), pointing to "Operator actions" and saying no tmux call was made. The verb prefixes the instance id. | Every verb that would look a row up refuses an unusable recorded name through it, before the socket and any tmux call: `kill` of a live row and, with the finished-row opt-in, of a finished row (`killRun.withOptIn`); `read-pane` (any state); `send-keys` after its state and relay guards; `pause` on a `waiting` row; `resume` first in `resumeAfterJsonl`, wrapped `resume: ` in place of the instance id; reuse in `reuseExamine`. Never write another unusable-name description. |
 | `agent_pane.go` | `agentPane(panes, paneID, panePID)`: the agent's pane in one listing, by recorded pane id and pid, wherever it now is (SR-3.7). `findAdoption(recorded, res, panes, pc) adoption`: the one home of the adoption rules (SR-3.6), with no write: due when the lookup is Ours and the row records no server identity or no pane; the server identity from the answering server, the pane by `@ad_pane` token (`tmux.PaneByToken`), start times through `tmux.KnownStartTime`. `adoptIdentity(s, row, res, panes, pc) adoption`: the single-row verbs' step, `findAdoption` over the verb's own listing plus one `AdoptIdentityIfUnchanged` write; the found identity (`adoption.Identity`) is used for this call whatever the write's outcome, and `Applied` is set only when the write applied. `identityAdopter` is the store capability it needs. `adoptInSweep(s, sw, pl, it, launch, res, pc, lg) sweepAdoption`: `find-missing`'s step, `findAdoption` over the Sweep's pane listing (`sw.ListPanes`, at most one per socket per run) plus one `AdoptIdentityIfSameLife` write guarded on the snapshot the sweep read; `sweepAdoption` reports `Unlisted` (the listing did not answer: nothing adopted, no write) with the listing's `Listing` result, `Guard` (the snapshot the row's verdict write is guarded on: the adoption write's new one when it applied), `Write` and `Left` (the write found the row changed or absent, or failed: the row gets no verdict write). `sameLifeAdopter` is its store capability. | `findAdoption` holds the adoption rules; never decide or build an adopted identity elsewhere. `kill`, `send-keys` and `pause` find the agent's pane with `agentPane` and adopt with `adoptIdentity`, using the verb's own one pane listing; `read-pane` calls `findAdoption` directly and uses what it found for that call only, with no write (SR-7.5), as `resume`, reuse and `expire` must when they need an identity without writing it; a sweep adopts only with `adoptInSweep`. Never match panes or write an adoption by hand. |
 | `pane_run.go` | `paneRun`: one pane-verb call's run, with `paneTmux` (`TmuxLookup` + `ListPanes`). It holds the row, the socket, the store id, the verb's gone sentinel (`ErrTmuxCaptureFailed` or `ErrTmuxSendKeys`), what its refusals say was not done (`paneNothing`) and an optional `adopter`. Methods: `launchFor` (through `rowLaunch`), `ours` (the one pane listing, adoption — `adoptIdentity` with an adopter, else `findAdoption` for the call only — then `agentPane`, or `paneNotFoundError`), `listPanes` (a failed listing classified by `tmux.ListingFailure`: Gone → the gone error, otherwise `cantTellError`), `goneError`, `refusal` and `cantTellRefusal`. `readPaneRun` embeds it. | Every pane verb runs its lookup's Ours step, pane listing, gone error and Can't tell mapping through `paneRun`; a new pane verb embeds it and keeps only its own Leftover handling and action. |
 | `pane_keys.go` | `keysRun` (embeds `paneRun`), `newKeysRun(t, pc, row, storeID, socket, adopter)` and `keysFacts`: the tmux phase shared by the verbs that type keys (`send-keys`' text, `pause`'s `/exit`). `deliver(text)`: one lookup (`target`, holder name the recorded name), on Ours one listing and the adoption write, then `SendKeysPane` by pane id, a failure mapped by `paneActionFailureError` in Keys mode; nothing sent before Ours and the agent's pane. `keysRun.leftover` is the verb's Leftover refusal (nil gives `paneLeftoverError`; `send-keys` sets `pendingLeftoverError` on a `pending` row). `keysFacts` keeps the socket, the first lookup, a failed listing, `Adopted`, the Ours session, `Sent` / `SendErr` and the follow-up. `emitDisagree(verb, instanceID, who)`: the keys verbs' one `ad.provenance.disagree` emit, source `ad_send_keys`, reasons collected as `kill` collects them, action from `sendKeysAction` (`sendkeys_trail.go`: `keys_sent`, `text_sent`, `nothing_sent`). | A verb that types keys into the agent's pane runs `keysRun.deliver` and writes its disagree records with `keysRun.emitDisagree`; never a second keys phase, action mapping or disagree collection. |
@@ -2975,9 +2975,14 @@ collision and read-failure mappings stay single (see
 | Live, `pending` included (a `resume`'s launch too) | `ErrInstanceIdCollision`; no tmux call, nothing changed, whatever name the request names |
 | Finished | `reuseExamine`, below |
 
-The unusable-recorded-name guard (SR-3.2) has a reserved place in
-`reuseExamine`, before the socket; it is not built yet. Today
-`reuseExamine`, for a finished row:
+`reuseExamine`, for a finished row, first applies the
+unusable-recorded-name guard (SR-3.2) to the row's **recorded** name, as
+read by the pre-check, with no second read: a name that is empty, holds a
+control character, or holds a character tmux stores differently (`.`,
+`:`, invalid UTF-8) → `ErrInternal` (`unusableNameError`, prefixed with
+the instance id), with no tmux call and nothing written or changed;
+removing the row is a human's decision (README "Operator actions"). The
+requested name is not checked here. Then it:
 
 1. Resolves the launch socket with `spawn.ResolveRowLaunchSocket` (the
    row's recorded socket, or the caller's resolved one when it records
@@ -3507,6 +3512,16 @@ and "Invariant — relay-listener pairing" in the relay chapter). There is
 no second independent check — no dialog-visibility probe, no re-derived
 timeout arithmetic.
 
+Order of the refusals before any tmux call (`sendKeysRun.run`): the state
+guard (which also refuses a `pending` row with no launch start or no
+launch token, so that row keeps `ErrSpawnNotInteractive` whatever its
+name), then the relay-mode guard, then the unusable-recorded-name check:
+a recorded session name that is empty, holds a control character, or
+holds a character tmux stores differently (`.`, `:`, invalid UTF-8) →
+`ErrInternal` (`unusableNameError`, SR-3.2), no tmux call, nothing sent;
+removing the row is a human's decision (README "Operator actions"). Only
+then the row's socket and the one lookup.
+
 ### `read-pane`
 
 `pkg/api/readpane.go` holds the flow (`ReadPane`, unexported `readPane`
@@ -3515,6 +3530,14 @@ the agent's own pane by pane id: `capture-pane -p [-e] -t %N -S -<n>`.
 Default `n=25`, no upper cap (SRD §12 explicitly leaves the bound to the
 caller). `n` counts lines of history before the visible pane, so
 `n_lines: 1` is the smallest capture.
+
+Order (`readPane`): the row read (unknown id → `ErrSpawnNotFound`); then,
+for a row in any state, the unusable-recorded-name check: a recorded
+session name that is empty, holds a control character, or holds a
+character tmux stores differently (`.`, `:`, invalid UTF-8) →
+`ErrInternal` (`unusableNameError`, SR-3.2), no tmux call, nothing read;
+removing the row is a human's decision (README "Operator actions"). Then
+the row's socket and the one lookup.
 
 Outcomes of its one lookup (SRD SR-7.2, SR-7.5):
 
@@ -4054,7 +4077,14 @@ failures, and production paths do reach it: for example, the `spawn`
 collision pre-check's store read failure (see
 [Collision pre-check](#collision-pre-check)). `ErrInternal` is listed in
 no verb's `ErrorNames`; a verb states its `ErrInternal` triggers in its
-manifest description text instead.
+manifest description text instead. The unusable-recorded-name trigger
+(SR-1.7) is stated in full only in `kill`'s Description; `read-pane`,
+`send-keys` and `pause` carry the shared pointer `unusableNamePointer`
+("Unusable recorded name: ErrInternal (see kill).", in
+`pkg/api/manifest/manifest.go`), and `resume` and `spawn` merge "recorded
+name is unusable (see kill)" into their own `ErrInternal` sentences, so
+`help` stays under its size cap. A new verb that adds this trigger uses
+the pointer, never a second full statement.
 
 **`TrimNamePrefix(name, description string) string`** — strips the
 redundant `"ErrName: "` prefix from a description string when present.
@@ -4184,6 +4214,13 @@ or catalog Go source requires regenerating the corresponding JSON file.
 ```sh
 claude mcp add agent-director /path/to/agent-director serve --stdio
 ```
+
+This section is the registration command's home: `serve`'s manifest
+Description no longer carries it (removed to keep `help` under its size
+cap), so neither `help` nor the generated CLI and MCP references show
+it. The install skill (`skills/install-agent-director/SKILL.md`) and
+`serve`'s own stderr hint (`cmd/agent-director/serve_cmd.go`) also state
+it; the README names only the installer's `--register-mcp` flag.
 
 Claude Code stores this in its MCP config and launches the binary
 on session start. The binary's `~/.agent-director/config.toml` is
@@ -4873,10 +4910,19 @@ written, harmlessly:
    is re-read only once, and only when the pre-launch lookup refuses a
    Leftover (`resumeLostRace`), solely to compare snapshots (the "lost
    race" case below).
-5. An instance id containing a control character (`hasControlChar`,
+5. The first statement of `resumeAfterJsonl` (SR-8.1 step 2), the
+   recorded name before the id. First a recorded session name that is
+   empty, holds a control character, or holds a character tmux stores
+   differently (`.`, `:`, invalid UTF-8) → `ErrInternal`
+   (`unusableNameError`, SR-3.2, wrapped with `resume: ` so the instance
+   id is not printed as a prefix); removing the row is a human's decision.
+   Then an instance id containing a control character (`hasControlChar`,
    SR-3.13) → `ErrInternal` (no catalogued sentinel), because its session
-   could never be labelled. The description points to "Operator actions"
-   in the README.
+   could never be labelled. Both come before the socket, with no tmux
+   call and nothing written, and both descriptions point to "Operator
+   actions" in the README. A recorded name that tmux rewrites (such as
+   `mix.$b`, whose `.` tmux stores as `_`) is refused here, before the
+   pre-launch lookup, which could not match that name's holder.
 6. The launch's socket: `spawn.ResolveRowLaunchSocket` on the row's
    recorded `tmux_socket` (see [Launch identity](#launch-identity)). A
    refusal → `ErrTmuxNotAvailable`.
@@ -5162,8 +5208,13 @@ natural exit, can get "appears to still be stopping" while the agent's
 process exits; a retry after a short wait proceeds. A `resume` right after the last
 session on its tmux server ended can also get `ErrTmuxNotAvailable` ("not
 the tmux server the agent was launched on") while that server exits; wait
-and retry. A refusal after "duplicate session" leaves the row restored
-(its error says so), so re-issuing `resume` is equally safe.
+and retry. A refusal after "duplicate session" is followed by the
+restore, and its error's last sentence says what the restore did
+(`restoreResultOf`). Only when the row was restored to its prior state is
+re-issuing `resume` equally safe. When the restore found the row changed
+after the move (left as it is) or removed, or hit a store error (the row
+stays `pending`), the row is not restored; read it with `get` before
+acting on it.
 
 ### parent_id re-derivation (SRD §7.5)
 
@@ -6175,7 +6226,7 @@ adds it here.
 | `ErrTmuxKillFailed` | UNAVAILABLE | `kill` only | The agent process still runs after `kill`, cannot be checked while its labelled session is still there, or runs while no session or pane of the launch was found (no kill sent). The description says which. Retry `kill` later with backoff and a cap; alert when the cap is reached; never delete the row. |
 | `ErrTmuxSessionConflict` | CONFLICT (permanent until a human looks) | `kill`, `read-pane`, `send-keys`, `pause`, `resume`, `spawn` | The session found is not this launch's session, or tmux holds conflicting labels. For the pane verbs it also means the agent's pane was not found in the session carrying this row's id, or (for `read-pane`) more than one leftover session exists. For a plain `spawn` it also means the requested name is held by another session (see the held-name bullet under [Reading a refusal](#reading-a-refusal)). For `resume` it means a session is in the way of the relaunch: one left over from an earlier life, one holding the recorded name, or the row's own session (the own-id conflict bullet under [Reading a refusal](#reading-a-refusal)). For `spawn` with the reuse opt-in it means the same before anything is changed: a session left over from an earlier life of the id, the row's own old session ("this row's own id"), conflicting labels, or the requested name held by another row's session, another agent-director store's session or one with no valid instance id; after "duplicate session", the same cases for the holder of the requested name, then the row is restored. Another row's or another store's session is another agent and is never ended. Stop, surface the named session to a human (README "Operator actions") and never end it yourself; retrying changes nothing until a human has acted. |
 | `ErrTmuxNotAvailable` | ENVIRONMENT | `kill`, `read-pane`, `send-keys`, `pause`, `resume`, `spawn` (with or without the reuse opt-in); never `find-missing` or `expire` | tmux could not be run, its socket is not accessible to this user, or this is not the tmux server the agent was launched on. For `spawn` with the reuse opt-in: at the old-row lookup, before anything is changed (a different server, tmux unavailable, an unusable socket directory), or, after the reset, at session creation or the re-lookup after "duplicate session", then the row is restored. An environment problem for an operator to fix; alert, and never read it as gone. |
-| `ErrTmuxSessionCreate` | LAUNCH FAILURE | `spawn` (with or without the reuse opt-in), `resume` | The launch's session could not be created or labelled. The description says what became of the row (a plain spawn's new row stays `pending`, or, when the create found the name held but its holder was gone by the re-lookup, is ended; a `resume` and a reuse restore their rows: after the reset, a failed create, a session that could not be labelled, or a holder gone by the re-lookup after "duplicate session"); follow it. A name held by a session that is still there is never this class: `resume` and reuse return it only for a launch failure or for a holder that vanished before their re-lookup after "duplicate session". |
+| `ErrTmuxSessionCreate` | LAUNCH FAILURE | `spawn` (with or without the reuse opt-in), `resume` | The launch's session could not be created or labelled. The description says what became of the row (a plain spawn's new row stays `pending`, or, when the create found the name held but its holder was gone by the re-lookup, is ended; a `resume` and a reuse restore their rows: after the reset, a failed create, a session that could not be labelled, or a holder gone by the re-lookup after "duplicate session"); follow it. A name found held by a session that is still there is never this class: `resume` and reuse return it only for a launch failure or for a holder their re-lookup after "duplicate session" did not find. That is usually a holder that vanished first, but a holder still there can also go unmatched (a name with `$` or `\`, which stays usable), so this class does not prove the name is free. |
 
 ### Reading a refusal
 
@@ -6527,7 +6578,12 @@ this is how the code gets there.
 
 1. **Row read.** Unknown id → `ErrSpawnNotFound`. No tmux call.
 2. **Finished row** (`ended` / `missing`) → success, `kill_sent` false, no
-   tmux call. That is not verification that the agent exited.
+   tmux call. That is not verification that the agent exited. With the
+   operator-only finished-row opt-in, `killRun.withOptIn`
+   (`pkg/api/kill_optin.go`) runs instead: a live row is refused first; a
+   finished row whose recorded name is unusable (as in step 3) →
+   `ErrInternal` (`unusableNameError`) before the socket, no tmux call;
+   any other finished row goes on to the socket and the one lookup.
 3. **Unusable recorded name.** A live row (`pending` included) whose
    recorded session name is empty, holds a control character, or holds a
    character tmux stores differently (`.`, `:`, invalid UTF-8) →
@@ -6660,7 +6716,13 @@ SR-7.3). `pause` is the only verb with a polling loop:
    `ask_user`, `check_permission`) → `ErrSpawnNotPausable`, no tmux call.
    `/exit` is never typed in these states, where the slash would be read
    as input text.
-4. **`waiting` row: the tmux phase.** The row's socket (an unusable socket
+4. **`waiting` row: unusable recorded name.** A recorded session name that
+   is empty, holds a control character, or holds a character tmux stores
+   differently (`.`, `:`, invalid UTF-8) → `ErrInternal`
+   (`unusableNameError`, SR-3.2), no tmux call, `/exit` not sent and no
+   wait; removing the row is a human's decision (README "Operator
+   actions"). A finished row never reaches this check (step 2).
+5. **`waiting` row: the tmux phase.** The row's socket (an unusable socket
    directory → `ErrTmuxNotAvailable`), one lookup by the row's current
    label and, on Ours, one pane listing; then `/exit` and a separate Enter
    to the agent's pane by pane id (`SendKeysPane`). A row that records no
@@ -6682,7 +6744,7 @@ SR-7.3). `pause` is the only verb with a polling loop:
      `ErrTmuxUnresponsive`); once `/exit` went through and the Enter
      failed or timed out, the description says the text may be typed but
      not submitted.
-5. **The wait** (unchanged), only once `/exit` and Enter went through:
+6. **The wait** (unchanged), only once `/exit` and Enter went through:
    poll the row's state column every `pausePollInterval` (200 ms) until
    `state == ended` (success) or `pause.timeout_seconds` elapses on the
    real clock (`ErrPauseTimeout`). `ctx.Done()` short-circuits the loop

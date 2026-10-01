@@ -202,6 +202,13 @@ func hasControlChar(id string) bool {
 // instance id, is for a human to end (README "Operator actions"), after
 // which the id is spawned again with reuse-finished (--reuse-finished).
 //
+// With ReuseFinished, a finished row whose recorded tmux session name cannot
+// be used (it is empty, contains a control character, or contains a
+// character tmux stores differently) gets ErrInternal (an error matching no
+// catalogued sentinel) with no tmux call, and nothing is changed; removing
+// the row is a human's decision (see "Operator actions" in the agent-director
+// README).
+//
 // CLI: agent-director spawn
 //
 // Errors:

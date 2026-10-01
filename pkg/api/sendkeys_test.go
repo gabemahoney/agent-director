@@ -1,6 +1,7 @@
 package api_test
 
-// sendkeys_test.go: send-keys' guards and their precedence, its text
+// sendkeys_test.go: send-keys' guards and their precedence (the unusable-name
+// refusal after the state and relay guards, SR-3.2), its text
 // handling, and which pane it types into (SR-7.1, SR-7.2, SR-3.3, SR-3.7,
 // SR-4.4): always the agent's pane by its pane id on the row's recorded
 // socket, text then Enter, never a session name, a neighbour's session or a
@@ -11,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -219,7 +221,7 @@ func TestSendKeysNeighbours(t *testing.T) {
 // is found by its label under tmux's stored form and sent to by pane id.
 func TestSendKeysStoredNames(t *testing.T) {
 	for _, n := range tmuxfix.StoredNames() {
-		if !n.LabelByID {
+		if !n.LabelByID || strings.ContainsAny(n.Raw, ".:") { // '.' and ':' names are unusable (Epic 19)
 			continue
 		}
 		t.Run(n.Raw, func(t *testing.T) {
@@ -229,6 +231,62 @@ func TestSendKeysStoredNames(t *testing.T) {
 				t.Fatalf("seeded session name %q; want the stored form %q", r.Session.Name, n.Stored)
 			}
 			skDeliver(t, e, r, "hi")
+		})
+	}
+}
+
+// TestSendKeysUnusableName (SR-3.2, FR1 C7(k)): after the state and relay
+// guards, an unusable recorded name is ErrInternal; their refusals keep their answer.
+func TestSendKeysUnusableName(t *testing.T) {
+	state := func(s string) func(*killEnv) killRowSpec {
+		return func(*killEnv) killRowSpec { return killRowSpec{State: s} }
+	}
+	pending := func(k pendingKind) func(*killEnv) killRowSpec {
+		return func(e *killEnv) killRowSpec { return e.pendingSpec(k, pendingOurs) }
+	}
+	cases := []struct {
+		name    string
+		spec    func(*killEnv) killRowSpec
+		allow   bool
+		relay   bool // relay_mode on, one request still in its window
+		fixture string
+		want    string
+	}{
+		{"waiting", state(store.StateWaiting), false, false, "empty", "ErrInternal"},
+		{"working", state(store.StateWorking), true, false, "newline", "ErrInternal"},
+		{"ask_user", state(store.StateAskUser), false, false, "escape", "ErrInternal"},
+		{"check_permission, relay off", state(store.StateCheckPermission), false, false, "colon", "ErrInternal"},
+		{"pending fresh spawn, allow_pending", pending(pendingFresh), true, false, "pre-b.gqe default name", "ErrInternal"},
+		{"pending resumed row, allow_pending", pending(pendingResumed), true, false, "invalid UTF-8", "ErrInternal"},
+		{"pending without allow_pending", pending(pendingFresh), false, false, "pre-b.gqe default name", "ErrSpawnNotInteractive"},
+		{"ended", state(store.StateEnded), false, false, "pre-b.gqe default name", "ErrSpawnNotInteractive"},
+		{"ended, allow_pending", state(store.StateEnded), true, false, "dot and newline", "ErrSpawnNotInteractive"},
+		{"missing", state(store.StateMissing), false, false, "empty", "ErrSpawnNotInteractive"},
+		{"missing, allow_pending", state(store.StateMissing), true, false, "colon", "ErrSpawnNotInteractive"},
+		{"relay held on check_permission", func(*killEnv) killRowSpec {
+			return killRowSpec{State: store.StateCheckPermission, RelayOn: true}
+		}, false, true, "pre-b.gqe default name", "ErrSendKeysWhileRelayed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name+"/"+tc.fixture, func(t *testing.T) {
+			e := newKillEnv(t)
+			f := unusableFixture(t, tc.fixture)
+			r := e.seedUnusableRow(t, tc.spec(e), f)
+			if tc.relay {
+				storefix.SeedOpenPermissionRequests(t, e.st, r.ID, []string{storefix.TestRequestTokenA})
+			}
+			before := e.columns(t, r.ID)
+
+			// The requests are stored at wall-clock time, so the guard is judged against it.
+			_, err := e.sendKeysAt(sendKeysWindow(), time.Now(), api.SendKeysParams{ClaudeInstanceID: r.ID,
+				Text: "1", AllowPending: tc.allow})
+
+			assertOneName(t, err, tc.want)
+			if tc.want == "ErrInternal" && err != nil {
+				apitest.AssertDescription(t, err.Error(), f.desc, r.Token)
+			}
+			e.assertNoTmuxCall(t)
+			e.assertRowUnchanged(t, r.ID, before)
 		})
 	}
 }

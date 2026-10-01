@@ -165,7 +165,13 @@
 //     CollisionSite; DescReuseRecourse, SR-18.4's recovery recourse,
 //     parameterised by RecourseSite; and DescReuseDocsForbidden, the
 //     recovery, collision and history-by-life forbidden forms together, for
-//     AssertMustNot).
+//     AssertMustNot), or of a row whose recorded tmux session name is
+//     unusable (descriptions_unusable.go: DescUnusableNameEmpty,
+//     DescUnusableNameControlChar and DescUnusableNameRewritten, the
+//     ErrInternal refusal every verb gives; DescUnusableNameTrigger, the
+//     full trigger sentence of kill's manifest Description and a Client
+//     method's Go doc prose; DescUnusableNamePointer, the short pointer the
+//     read-pane, send-keys, pause, resume and spawn Descriptions carry).
 //
 // Rules for tests (the same as docs/architecture.md, "apitest Seed* factory
 // contract (reusable test fixtures)"):

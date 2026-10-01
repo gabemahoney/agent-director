@@ -10,6 +10,7 @@ package api_test
 // find_missing_*_test.go files'.
 
 import (
+	"maps"
 	"slices"
 	"testing"
 
@@ -132,7 +133,7 @@ func callTableFindMissing() callTableVerb {
 	nameHeld, absent := marked("tmux_name_held"), marked("tmux_absent")
 	notCalled := noted("probe_eacces", "process_not_seen_tmux_unchecked")
 	noAction := "find-missing sends no action: its sweep makes only lookups and pane listings"
-	return callTableVerb{
+	v := callTableVerb{
 		name: "find-missing",
 		run:  runCallTableFindMissing,
 		cells: map[callTableOutcome]callTableCell{
@@ -160,4 +161,6 @@ func callTableFindMissing() callTableVerb {
 			ctActionTimeout:            {na: noAction},
 		},
 	}
+	maps.Copy(v.cells, callTableUnusableNA("filled by t3.h98.7g.64.xx (Epic 19 Task 2)"))
+	return v
 }

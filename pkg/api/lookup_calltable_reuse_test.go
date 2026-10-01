@@ -83,7 +83,8 @@ func callTableReuseYoung() callTableCell {
 }
 
 // runCallTableReuseCell seeds col's row reusable with agent a (gone in an
-// action column, so the create runs), its own session (when the column has
+// action column, so the create runs) and col.spec.Opts, requesting its
+// recorded name unless that is unusable, its own session (when the column has
 // one) created age before the rule's instant, builds col's world, reuses it
 // and checks cell: one name, description, calls, then "wrote nothing" for a
 // refusal, else the row's state after the launch.
@@ -92,7 +93,7 @@ func runCallTableReuseCell(t *testing.T, col callTableColumn, cell callTableCell
 	if col.actionFailure != 0 {
 		a = agentGone
 	}
-	r := e.seedReusable(t, a, reuseRowSpec{Age: time.Hour})
+	r := e.seedReusable(t, a, reuseRowSpec{Age: time.Hour, Opts: col.spec.Opts})
 	if !col.spec.NoSession && col.actionFailure == 0 {
 		e.seedSession(t, &r.killRow, e.createdBefore(age))
 	}
@@ -102,9 +103,13 @@ func runCallTableReuseCell(t *testing.T, col callTableColumn, cell callTableCell
 	if col.actionFailure != 0 {
 		e.rec.Script(r.Socket, tmuxfix.Script{Failure: col.actionFailure}, tmux.CallCreate)
 	}
+	var q reuseRequest
+	if tmux.Unusable(r.Name) != tmux.UnusableNone {
+		q.Name = "calltable-reuse" // the request is validated first; the guard judges the recorded name
+	}
 	before := e.snapshotReuse(t, r)
 
-	_, _, err := e.reuse(t, reuseParams(t, r, reuseRequest{}))
+	_, _, err := e.reuse(t, reuseParams(t, r, q))
 
 	if cell.errName == "" && err != nil {
 		t.Fatalf("err = %v; want success", err)

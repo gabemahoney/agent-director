@@ -82,9 +82,10 @@ var pauseSleep = time.Sleep
 //   - State pending, working, ask_user or check_permission:
 //     ErrSpawnNotPausable, with no tmux call. `/exit` is never typed in these
 //     states, where the slash would be read as input text.
-//   - State waiting: the row's socket (SR-3.3; a resolution refusal is
-//     ErrTmuxNotAvailable) and one lookup by the row's current label, then
-//     as below.
+//   - State waiting: a recorded name that is unusable (SR-3.2) is
+//     ErrInternal, with no tmux call and no wait; otherwise the row's socket
+//     (SR-3.3; a resolution refusal is ErrTmuxNotAvailable) and one lookup by
+//     the row's current label, then as below.
 //
 // The lookup's outcomes on a waiting row:
 //
@@ -193,6 +194,10 @@ func (r *pauseRun) exit(t PauseTmux, pc ProcChecker, params PauseParams) (bool, 
 			ErrSpawnNotPausable, params.ClaudeInstanceID, row.State)
 	}
 
+	if err := unusableNameError(row.TmuxSessionName); err != nil {
+		return false, fmt.Errorf("instance %s: %w", row.ClaudeInstanceID, err)
+	}
+
 	socket, err := rowSocket(row.Identity.Socket)
 	if err != nil {
 		return false, fmt.Errorf("instance %s: %w", row.ClaudeInstanceID, err)
@@ -249,6 +254,12 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 // (pause.timeout_seconds in config.toml) elapses. Terminal states
 // (ended/missing) are treated as no-op success. Pause is one-shot — no
 // incremental progress callback; ctx cancellation short-circuits the poll.
+//
+// A waiting row whose recorded tmux session name cannot be used (it is empty,
+// contains a control character, or contains a character tmux stores
+// differently) gets ErrInternal (an error matching no catalogued sentinel)
+// with no tmux call and no wait; removing the row is a human's decision (see
+// "Operator actions" in the agent-director README).
 //
 // CLI: agent-director pause
 //

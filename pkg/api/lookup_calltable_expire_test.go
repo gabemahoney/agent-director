@@ -10,6 +10,7 @@ package api_test
 
 import (
 	"errors"
+	"maps"
 	"reflect"
 	"slices"
 	"testing"
@@ -86,7 +87,7 @@ func callTableExpire() callTableVerb {
 	kept := func(reason string) callTableCell { return callTableCell{kept: reason} }
 	deleted := callTableCell{}
 	noAction := "expire makes no action call: its run makes only lookups"
-	return callTableVerb{
+	v := callTableVerb{
 		name: "expire",
 		run:  runCallTableExpire,
 		cells: map[callTableOutcome]callTableCell{
@@ -114,4 +115,6 @@ func callTableExpire() callTableVerb {
 			ctActionTimeout:            {na: noAction},
 		},
 	}
+	maps.Copy(v.cells, callTableUnusableNA("filled by t3.h98.7g.64.xx (Epic 19 Task 2)"))
+	return v
 }

@@ -1,6 +1,7 @@
 package api_test
 
-// pause_test.go: pause's state guards, the agent's pane it types /exit into
+// pause_test.go: pause's state guards, its refusal of an unusable recorded
+// name on a waiting row (SR-3.2), the agent's pane it types /exit into
 // (by pane id on the row's recorded socket, never a session name, a
 // neighbour's session, a session holding the name or another store's) and
 // its unchanged wait (SR-7.1, SR-7.2, SR-3.3, SR-3.4, SR-3.7, SR-17). On the
@@ -99,6 +100,52 @@ func TestPauseGuards(t *testing.T) {
 			}
 			e.assertNoTmuxCall(t)
 			e.assertRowUnchanged(t, r.ID, before)
+		})
+	}
+}
+
+// TestPauseUnusableName (SR-3.2, AC-LKP-11): an unusable recorded name is
+// ErrInternal on a waiting row only, with no tmux call and no wait; other states keep their answer.
+func TestPauseUnusableName(t *testing.T) {
+	cases := []struct {
+		state, fixture string
+		want           string // "": no-op success
+	}{
+		{store.StateWaiting, "pre-b.gqe default name", "ErrInternal"},
+		{store.StateWaiting, "escape", "ErrInternal"},
+		{store.StateEnded, "pre-b.gqe default name", ""},
+		{store.StateMissing, "empty", ""},
+		{store.StatePending, "pre-b.gqe default name", "ErrSpawnNotPausable"},
+		{store.StateWorking, "colon", "ErrSpawnNotPausable"},
+		{store.StateAskUser, "invalid UTF-8", "ErrSpawnNotPausable"},
+		{store.StateCheckPermission, "newline", "ErrSpawnNotPausable"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.state+"/"+tc.fixture, func(t *testing.T) {
+			e := newKillEnv(t)
+			f := unusableFixture(t, tc.fixture)
+			r := e.seedUnusableRow(t, killRowSpec{State: tc.state}, f)
+			before := e.columns(t, r.ID)
+			slept := pauSleeps(t, time.Millisecond, false, nil)
+
+			_, err := e.pause(pauseParams(r))
+
+			switch tc.want {
+			case "":
+				if err != nil {
+					t.Fatalf("Pause: %v; want the no-op success", err)
+				}
+			case "ErrInternal":
+				assertOneName(t, err, tc.want)
+				apitest.AssertDescription(t, err.Error(), f.desc, r.Token)
+			default:
+				assertOneName(t, err, tc.want)
+			}
+			e.assertNoTmuxCall(t)
+			e.assertRowUnchanged(t, r.ID, before)
+			if len(*slept) != 0 || e.store.stateReads != 0 {
+				t.Errorf("sleeps %v, state reads %d; want no wait", *slept, e.store.stateReads)
+			}
 		})
 	}
 }
@@ -289,7 +336,7 @@ func TestPauseNeighbours(t *testing.T) {
 // is found by its label under tmux's stored form and gets /exit by pane id.
 func TestPauseStoredNames(t *testing.T) {
 	for _, n := range tmuxfix.StoredNames() {
-		if !n.LabelByID {
+		if !n.LabelByID || strings.ContainsAny(n.Raw, ".:") { // '.' and ':' names are unusable (Epic 19)
 			continue
 		}
 		t.Run(n.Raw, func(t *testing.T) {

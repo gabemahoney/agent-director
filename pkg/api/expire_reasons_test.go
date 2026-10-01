@@ -179,7 +179,7 @@ var rsnLookupWant = map[callTableOutcome]struct{ first, later string }{
 // finished row with its agent gone, plus a later row on the same socket: one
 // lookup decides both unless the first stops the socket (tmux_skipped).
 func TestExpireReasons_Lookup(t *testing.T) {
-	for _, col := range callTableColumns() {
+	for _, col := range callTableLookupColumns() {
 		if col.actionFailure != 0 {
 			continue // expire makes no action call
 		}

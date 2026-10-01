@@ -273,7 +273,7 @@ func TestResumeRecordsLaunchIdentity(t *testing.T) {
 // label by id on the reply's session and pane; the session whose id "$7" spells keeps its label.
 func TestResumeLabelsDollarAndBackslashNamesByID(t *testing.T) {
 	for _, n := range tmuxfix.StoredNames() {
-		if !n.LabelByID {
+		if !n.LabelByID || strings.ContainsAny(n.Raw, ".:") { // '.' and ':' names are refused (resume_unusable_name_test.go)
 			continue
 		}
 		t.Run(n.Raw, func(t *testing.T) {
@@ -311,6 +311,11 @@ func TestResumeLabelsDollarAndBackslashNamesByID(t *testing.T) {
 	}
 }
 
+// vanishedUserSocket is a socket under a per-user directory that does not exist, in a parent that does.
+func vanishedUserSocket(t *testing.T) string {
+	return filepath.Join(userSocketDir(t.TempDir()), "default")
+}
+
 // TestResumeLaunchSocket: resume launches on the recorded socket (its vanished per-user directory
 // made again 0700), refuses a socket whose parent vanished before the move, and records a resolved one for a pre-release row.
 func TestResumeLaunchSocket(t *testing.T) {
@@ -324,7 +329,7 @@ func TestResumeLaunchSocket(t *testing.T) {
 			return apitest.WithTmuxSocket(sock), sock, nil
 		}},
 		{"per-user directory vanished", true, func(t *testing.T, _ *resumeEnv) (apitest.SpawnOption, string, *tmux.SocketDirError) {
-			sock := filepath.Join(userSocketDir(t.TempDir()), "default")
+			sock := vanishedUserSocket(t)
 			return apitest.WithTmuxSocket(sock), sock, nil
 		}},
 		{"parent directory vanished", false, func(t *testing.T, _ *resumeEnv) (apitest.SpawnOption, string, *tmux.SocketDirError) {
@@ -375,15 +380,32 @@ func TestResumeLaunchSocket(t *testing.T) {
 }
 
 // TestResumeRefusesControlCharacterID: a legacy id with a control character is ErrInternal
-// before anything: no tmux call, the row (version, parent id) unchanged, no move trail.
+// before anything: no tmux call, the row (version, parent id) unchanged, no move trail. When
+// the recorded name holds the id (so is unusable too), the name's refusal wins, never printing the raw id.
 func TestResumeRefusesControlCharacterID(t *testing.T) {
-	for name, ctl := range map[string]string{"newline": "\n", "escape": "\x1b"} {
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range []struct {
+		name, ctl  string
+		nameFromID bool // keep seedRow's default name, "ts-" + the id
+	}{
+		{"newline", "\n", false},
+		{"escape", "\x1b", false},
+		{"newline, recorded name from the id", "\n", true},
+		{"escape, recorded name from the id", "\x1b", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			e := newResumeEnv(t)
 			parent := e.seedResumable(t, "")
 			t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", parent.ID)
 			suffix := uuid.NewString()[:8]
-			r := e.seedRow(t, resumableSpec{ID: "legacy" + ctl + suffix, SessionID: "sess-ctl-" + suffix})
+			var opts []apitest.SpawnOption
+			if !tc.nameFromID {
+				opts = append(opts, apitest.WithTmuxSessionName("ctl-"+suffix))
+			}
+			r := e.seedRow(t, resumableSpec{ID: "legacy" + tc.ctl + suffix, SessionID: "sess-ctl-" + suffix, Opts: opts})
+			want := apitest.DescResumeInstanceIDControlChar(r.ID)
+			if tc.nameFromID {
+				want = apitest.DescUnusableNameControlChar(r.Name)
+			}
 
 			_, err := e.resume(r.ID)
 			if err == nil {
@@ -393,7 +415,7 @@ func TestResumeRefusesControlCharacterID(t *testing.T) {
 			if name != "ErrInternal" {
 				t.Errorf("Classify name = %q (%v); want ErrInternal", name, err)
 			}
-			apitest.AssertDescription(t, desc, apitest.DescResumeInstanceIDControlChar(r.ID))
+			apitest.AssertDescription(t, desc, want, r.ID)
 			assertNoTmuxCalls(t, e.rec)
 			if got := e.columns(t, r.ID); !reflect.DeepEqual(got, r.Before) {
 				t.Errorf("row = %+v; want unchanged %+v", got, r.Before)

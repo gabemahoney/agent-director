@@ -50,7 +50,7 @@ func runCallTableResume(t *testing.T, _ callTableVerb, col callTableColumn, cell
 }
 
 // runCallTableResumeCell seeds col's row resumable with agent a (gone in an
-// action column, so the create runs), builds col's world, resumes it and
+// action column, so the create runs) and col.spec.Opts, builds col's world, resumes it and
 // checks cell: one name, description, calls, then "wrote nothing" for a
 // refusal, else the row's state after the launch.
 func runCallTableResumeCell(t *testing.T, col callTableColumn, cell callTableCell, a agentState) {
@@ -58,7 +58,7 @@ func runCallTableResumeCell(t *testing.T, col callTableColumn, cell callTableCel
 	if col.actionFailure != 0 {
 		a = agentGone
 	}
-	r := e.seedResumable(t, time.Hour, a)
+	r := e.seedResumable(t, time.Hour, a, col.spec.Opts...)
 	if !col.spec.NoSession && col.actionFailure == 0 {
 		e.seedSession(t, &r.killRow, e.createdBefore(time.Hour))
 	}
@@ -153,6 +153,7 @@ func callTableResume() callTableVerb {
 				return apitest.DescLaunchTimeout(apitest.LaunchTimeout{InstanceID: r.ID, Timeout: e.cfg.EffectiveCreateTimeout()})
 			}},
 	})
+	maps.Copy(cells, callTableUnusableRefused())
 	return callTableVerb{name: "resume", run: runCallTableResume, firstAction: tmux.CallCreate,
 		actions: []tmux.Call{tmux.CallCreate}, cells: cells}
 }
@@ -239,7 +240,7 @@ func callTableResumeHeld() callTableVerb {
 		return after(errName, heldSpec{Holder: holderNone, Relookup: s}, false, false, base)
 	}
 	noAction := "resume sends nothing after the re-lookup: it never acts on the holder"
-	return callTableVerb{
+	v := callTableVerb{
 		name: "resume after duplicate session",
 		run:  runCallTableResumeHeld,
 		cells: map[callTableOutcome]callTableCell{
@@ -301,4 +302,6 @@ func callTableResumeHeld() callTableVerb {
 			ctActionTimeout:    {na: noAction},
 		},
 	}
+	maps.Copy(v.cells, callTableUnusableNA("resume refuses an unusable recorded name before its lookup, so no create can meet a holder"))
+	return v
 }

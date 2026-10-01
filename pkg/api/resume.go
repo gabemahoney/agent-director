@@ -251,7 +251,8 @@ func (d resumeDeps) launchOnto(row Spawn, disagreeWritten []string, movedVersion
 // The winning candidate's session id is the one `claude --resume` names;
 // the launch itself (resumeAfterJsonl) always works from the row as read.
 // After these guards come resumeAfterJsonl's steps (SR-8.1 steps 2 to 7):
-// the control-character id refusal, the launch socket, the one pre-launch
+// the unusable recorded-name refusal (SR-3.2), then the control-character id
+// refusal, the launch socket, the one pre-launch
 // lookup on it (SR-8.2), pre-trust, the move to pending, the launch and,
 // after a failed launch, the restore (after "duplicate session", preceded by
 // one re-lookup that classifies the name's holder against the row as
@@ -454,8 +455,11 @@ func formatJsonlAttempts(attempts []jsonlAttempt) string {
 // or an earlier session of the visible history whose transcript still
 // exists). In order (SR-8.1, SR-8.3, SR-8.5):
 //
-//  1. An instance id containing a control character → ErrInternal (SR-3.13):
-//     its session could never be labelled. No tmux call, nothing written.
+//  1. SR-8.1 step 2, the recorded name first, then the id: a recorded name
+//     that is unusable (SR-3.2) → unusableNameError's ErrInternal, wrapped
+//     with "resume: " so an id is never printed; then an instance id
+//     containing a control character → ErrInternal (SR-3.13): its session
+//     could never be labelled. No tmux call, nothing written.
 //  2. The launch's socket (spawn.ResolveRowLaunchSocket): the row's recorded
 //     socket, its vanished per-user directory re-created, or, when the row
 //     records none, the one a plain spawn would resolve. A refusal →
@@ -518,6 +522,9 @@ func formatJsonlAttempts(attempts []jsonlAttempt) string {
 // On success the row stays pending until the resumed agent's first
 // SessionStart hook moves it and rotates its claude_session_id.
 func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, error) {
+	if err := unusableNameError(row.TmuxSessionName); err != nil {
+		return ResumeResult{}, fmt.Errorf("resume: %w", err)
+	}
 	id := row.ClaudeInstanceID
 	if hasControlChar(id) {
 		return ResumeResult{}, errors.New(`resume: the instance id contains a control character, so its session cannot be labelled; removing the row is a human's decision, see "Operator actions" in the agent-director README; no tmux call was made and nothing was written`)
@@ -705,6 +712,12 @@ func launchInProgressError(row Spawn) error {
 // transient): the session may have been created and the row stays pending;
 // do not retry until get shows the row ended or missing, since a retried
 // resume of the pending row is refused and changes nothing.
+//
+// A finished row whose recorded tmux session name cannot be used (it is
+// empty, contains a control character, or contains a character tmux stores
+// differently) gets ErrInternal (an error matching no catalogued sentinel)
+// with no tmux call, and nothing is written; removing the row is a human's
+// decision (see "Operator actions" in the agent-director README).
 //
 // CLI: agent-director resume
 //

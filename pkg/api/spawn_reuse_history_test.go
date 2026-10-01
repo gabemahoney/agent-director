@@ -4,7 +4,8 @@ package api_test
 // SR-8.7; AC-REUSE-20, 21, 22, 26), end to end through the real store on the
 // reuse fixture (spawn_reuse_fixture_test.go). The new agent's report-in,
 // rotation and end are its own pane's hooks (SR-22.9). The rlf helpers here
-// are shared with spawn_reuse_lives_test.go and spawn_reuse_pretrust_test.go.
+// are shared with spawn_reuse_lives_test.go and spawn_reuse_pretrust_test.go;
+// the reuse itself is the fixture's (newReuseEnv, reuseLaunch).
 
 import (
 	"context"
@@ -21,43 +22,10 @@ import (
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
-	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
-
-// newRlfEnv is a killEnv in which every created session's first pane is a
-// live agent, so each launch's identity write records it and its hooks pass the gate.
-func newRlfEnv(t *testing.T) *killEnv {
-	t.Helper()
-	e := newKillEnv(t)
-	e.rec.AfterCall(tmux.CallCreate, func(c tmuxfix.SocketCall, err error) {
-		for _, s := range e.rec.Sessions(c.Socket) {
-			if err == nil && s.Label.Token == c.Token && len(s.Panes) > 0 {
-				e.pc.Set(s.Panes[0].PID, procfix.Alive(apitest.LinuxProcStarttime))
-			}
-		}
-	})
-	return e
-}
-
-// rlfReuse reuses r with q through Client.Spawn, failing unless the row is
-// then pending; it returns r as reused (row, name, token, cwd, agent) and the result.
-func rlfReuse(t *testing.T, e *killEnv, r reuseRow, q reuseRequest) (reuseRow, api.SpawnResult) {
-	t.Helper()
-	res, logs, err := e.reuse(t, reuseParams(t, r, q))
-	if err != nil {
-		t.Fatalf("reuse of %s: %v (log %q)", r.ID, err, logs)
-	}
-	row := rlfRow(t, e, r.ID)
-	if row.State != store.StatePending {
-		t.Fatalf("state after the reuse = %s; want pending", row.State)
-	}
-	r.Spawn, r.Name, r.Token, r.CWD = row, row.TmuxSessionName, row.Identity.Token, row.CWD
-	r.Agent, r.AgentPID = agentAlive, row.Identity.PanePID
-	return r, res
-}
 
 // rlfRow reads id's row through the store.
 func rlfRow(t *testing.T, e *killEnv, id string) api.Spawn {
@@ -266,14 +234,14 @@ func TestSpawnReuseHistoryNeverMessaged(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			e := newRlfEnv(t)
+			e := newReuseEnv(t)
 			r0 := e.seedReusable(t, agentGone, reuseRowSpec{})
 			rlfEarlierOnDisk(t, r0)
 			var q reuseRequest
 			if tc.request != nil {
 				q = tc.request(t)
 			}
-			r, _ := rlfReuse(t, e, r0, q)
+			r, _ := e.reuseLaunch(t, r0, agentAlive, q)
 			if q.Name == "" && r.Name != r0.Name {
 				t.Fatalf("reused under %q; want the recorded name %q", r.Name, r0.Name)
 			}
@@ -301,10 +269,10 @@ func TestSpawnReuseHistoryNeverMessaged(t *testing.T) {
 // the session and its transcript path.
 func rlfMessagedLife(t *testing.T) (e *killEnv, r0, r reuseRow, sid, path string) {
 	t.Helper()
-	e = newRlfEnv(t)
+	e = newReuseEnv(t)
 	r0 = e.seedReusable(t, agentGone, reuseRowSpec{})
 	rlfEarlierOnDisk(t, r0)
-	r, _ = rlfReuse(t, e, r0, reuseRequest{})
+	r, _ = e.reuseLaunch(t, r0, agentAlive, reuseRequest{})
 	sid = rlfNewSession()
 	return e, r0, r, sid, rlfReportIn(t, e, r.ID, sid, true)
 }

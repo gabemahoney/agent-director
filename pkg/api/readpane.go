@@ -79,6 +79,8 @@ type ReadPaneResult struct {
 //   - Unknown id: ErrSpawnNotFound. There is no state guard: a pending,
 //     live or finished row behaves alike, and a finished row whose own
 //     session runs returns its pane.
+//   - A row whose recorded name is unusable (SR-3.2): ErrInternal, no tmux
+//     call.
 //   - Then the row's socket (SR-3.3; a resolution refusal is
 //     ErrTmuxNotAvailable) and one lookup by the row's current label.
 //   - Ours: one pane listing, then the agent's pane (the entry with the
@@ -139,6 +141,9 @@ func readPane(s ReadPaneStore, t ReadPaneTmux, pc ProcChecker, params ReadPanePa
 	row, err := s.GetSpawn(params.ClaudeInstanceID)
 	if err != nil {
 		return ReadPaneResult{}, err
+	}
+	if err := unusableNameError(row.TmuxSessionName); err != nil {
+		return ReadPaneResult{}, fmt.Errorf("instance %s: %w", row.ClaudeInstanceID, err)
 	}
 	socket, err := rowSocket(row.Identity.Socket)
 	if err != nil {
@@ -238,6 +243,12 @@ func (r *readPaneRun) leftover(res tmux.Result, launch tmux.Launch) (string, tmu
 // (including pending and ended/missing) is readable as-is. AllowPending is
 // accepted for surface symmetry with send-keys but has no behavioral effect
 // here.
+//
+// A row in any state whose recorded tmux session name cannot be used (it is
+// empty, contains a control character, or contains a character tmux stores
+// differently) gets ErrInternal (an error matching no catalogued sentinel)
+// with no tmux call; removing the row is a human's decision (see "Operator
+// actions" in the agent-director README).
 //
 // CLI: agent-director read-pane
 //

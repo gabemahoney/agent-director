@@ -13,6 +13,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // oneNameResumeLookup is a row that runs Client.Resume on a resumable row
@@ -32,7 +33,8 @@ func oneNameResumeLookup(name, want string, age time.Duration, a agentState, set
 
 // oneNameResumeLookupRows are resume's pre-launch refusals (SR-8.2, SR-4.2,
 // SR-3.10): the own-id, Leftover, holder and conflicting-labels conflicts,
-// still stopping or starting and an unreadable lookup, and tmux not available.
+// still stopping or starting and an unreadable lookup, and tmux not available;
+// then ErrInternal for an unusable recorded name, refused before the lookup.
 func oneNameResumeLookupRows() []oneNameRow {
 	conflict, unresponsive, unavailable := "ErrTmuxSessionConflict", "ErrTmuxUnresponsive", "ErrTmuxNotAvailable"
 	session := func(age time.Duration) func(*testing.T, *killEnv, *killRow) {
@@ -61,6 +63,12 @@ func oneNameResumeLookupRows() []oneNameRow {
 		oneNameResumeLookup("different server", unavailable, time.Hour, agentAlive, rebindServer),
 		oneNameResumeLookup("tmux unavailable", unavailable, time.Hour, agentAlive, lookup(tmuxfix.Script{Failure: tmux.FailUnavailable})),
 		oneNameResumeLookup("socket permission", unavailable, time.Hour, agentAlive, lookup(tmuxfix.Script{Failure: tmux.FailSocketDenied})),
+		{name: "resume/unusable recorded name", want: "", run: func(t *testing.T) error {
+			e := newKillEnv(t)
+			r := e.seedResumable(t, time.Hour, agentGone, apitest.WithTmuxSessionName(preGqeDefaultName))
+			_, _, err := e.resumeClient(t, r.ID)
+			return err
+		}},
 	}
 }
 

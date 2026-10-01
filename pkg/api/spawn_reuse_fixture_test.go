@@ -51,6 +51,7 @@ const (
 
 // reuseRowSpec overrides seedReusable's defaults; Opts go last, so they win.
 type reuseRowSpec struct {
+	ID          string        // default "reuse-<8 hex>"
 	State       string        // ended (default) or missing
 	Age         time.Duration // endedAged: how long before ruleInstant (heldInstant when Held) the row ended
 	Held        bool          // Age is measured from heldInstant, the rule's reading after "duplicate session"
@@ -88,7 +89,10 @@ func (r killRow) withName(name string) killRow {
 // one open and one decided permission request.
 func (e *killEnv) seedReusable(t *testing.T, a agentState, spec reuseRowSpec) reuseRow {
 	t.Helper()
-	ks := killRowSpec{ID: "reuse-" + uuid.NewString()[:8], State: spec.State, Agent: a, NoSession: true}
+	ks := killRowSpec{ID: spec.ID, State: spec.State, Agent: a, NoSession: true}
+	if ks.ID == "" {
+		ks.ID = "reuse-" + uuid.NewString()[:8]
+	}
 	if ks.State == "" {
 		ks.State = store.StateEnded
 	}
@@ -227,40 +231,71 @@ func (e *killEnv) snapshotReuse(t *testing.T, r reuseRow) writesSnapshot {
 	return e.snapshotWrites(t, "spawn", r.ID, r.Trust, r.Socket)
 }
 
-// reusePending seeds spec's row, its old agent gone, and reuses it with q
-// through Client.Spawn, failing unless that succeeds; it returns the row as
-// the reuse left it (pending, its new name, token, identity and session),
-// the new pane's process put in the fake in state a before the identity
-// write reads it.
-func (e *killEnv) reusePending(t *testing.T, a agentState, spec reuseRowSpec, q reuseRequest) reuseRow {
+// newReuseEnv is a killEnv in which every created session's first pane is a
+// live agent, so each launch's identity write records it and its hooks pass the gate.
+func newReuseEnv(t *testing.T) *killEnv {
 	t.Helper()
-	r := e.seedReusable(t, agentGone, spec)
-	var created bool
+	e := newKillEnv(t)
+	e.agentOnCreate("", agentAlive)
+	return e
+}
+
+// agentOnCreate puts the first pane of the session a successful create labels
+// in the fake in state a: for id's first such create, or every create when id is "".
+func (e *killEnv) agentOnCreate(id string, a agentState) {
+	var done bool
 	e.rec.AfterCall(tmux.CallCreate, func(c tmuxfix.SocketCall, err error) {
-		if created || err != nil || c.InstanceID != r.ID {
+		if done || err != nil || (id != "" && c.InstanceID != id) {
 			return
 		}
-		created = true
+		done = id != ""
 		for _, s := range e.rec.Sessions(c.Socket) {
 			if s.Label.Token == c.Token && len(s.Panes) > 0 {
 				e.pc.Set(s.Panes[0].PID, a.process(apitest.LinuxProcStarttime))
 			}
 		}
 	})
-	if _, logs, err := e.reuse(t, reuseParams(t, r, q)); err != nil {
+}
+
+// reusePending seeds spec's row, its old agent gone, and reuses it with q
+// (reuseLaunch), its new pane's agent in state a.
+func (e *killEnv) reusePending(t *testing.T, a agentState, spec reuseRowSpec, q reuseRequest) reuseRow {
+	t.Helper()
+	r, _ := e.reuseLaunch(t, e.seedReusable(t, agentGone, spec), a, q)
+	return r
+}
+
+// reuseLaunch reuses r with q through Client.Spawn, the new pane's process
+// put in the fake in state a before the identity write reads it, failing
+// unless that succeeds; it returns r as reused (reusedAs, with its cwd and
+// agent) and the result.
+func (e *killEnv) reuseLaunch(t *testing.T, r reuseRow, a agentState, q reuseRequest) (reuseRow, api.SpawnResult) {
+	t.Helper()
+	e.agentOnCreate(r.ID, a)
+	res, logs, err := e.reuse(t, reuseParams(t, r, q))
+	if err != nil {
 		t.Fatalf("reuse of %s: %v (log %q)", r.ID, err, logs)
 	}
+	r = e.reusedAs(t, r)
+	r.CWD, r.Agent = r.Spawn.CWD, a
+	e.setAgent(&r.killRow, r.Spawn.Identity.PanePID, apitest.LinuxProcStarttime)
+	return r, res
+}
+
+// reusedAs is r as a reuse left it, failing unless its row is pending: Spawn,
+// Name and Token as stored, and Session the one carrying the new token (zero when none).
+func (e *killEnv) reusedAs(t *testing.T, r reuseRow) reuseRow {
+	t.Helper()
 	row, err := e.st.GetSpawn(r.ID)
 	if err != nil || row.State != store.StatePending {
 		t.Fatalf("GetSpawn(%s) after the reuse = %s, %v; want pending", r.ID, row.State, err)
 	}
-	r.Spawn, r.Name, r.Token, r.Agent = row, row.TmuxSessionName, row.Identity.Token, a
+	r.Spawn, r.Name, r.Token, r.Session = row, row.TmuxSessionName, row.Identity.Token, tmuxfix.SeedSession{}
 	for _, s := range e.rec.Sessions(r.Socket) {
 		if s.Label.Token == r.Token {
 			r.Session = s
 		}
 	}
-	e.setAgent(&r.killRow, row.Identity.PanePID, apitest.LinuxProcStarttime)
 	return r
 }
 
