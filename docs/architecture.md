@@ -7289,6 +7289,9 @@ than `go test ./...`.
 - Installs `@anthropic-ai/claude-code@<pinned>` (see "Pinned Claude Code
   version" below).
 - Copies in the pre-built `agent-director` binary from `./bin/`.
+- Copies all of `test/driver/` to `/opt/driver/`: the driver, its prompt,
+  `db-reset.sh`, and the helpers cases call (`sql.sh`, `pane-hook.sh` and
+  the Docker hook pattern's stand-ins).
 - Runs as a non-root `tester` user with `HOME=/home/tester`.
 - Default command is `/opt/driver/run-testplan.sh`.
 
@@ -7318,7 +7321,14 @@ it standalone: confirms `claude --version` reports the pinned version,
    - `DRIVER_MODE=shell` (default) — extracts the t2 body's fenced
      ```bash``` block and executes it directly. No API calls. Used by
      `harness-smoke` and by any other testplan whose cases are observable
-     shell-level checks.
+     shell-level checks. When the block fails, the driver runs
+     `db-reset.sh` again and re-runs the block under `bash -x`. The case's
+     `details` hold the first run's exit status and output, then the last
+     six lines of the re-run's trace. The re-run starts from a fresh reset
+     so it does not meet the first run's leftovers. If that reset fails,
+     `details` say `xtrace rerun skipped: db-reset failed before it`. If
+     the re-run passes, they say the trace is from that passing re-run,
+     not the failure.
    - `DRIVER_MODE=claude` — concatenates `test/driver/prompt.md` + the t2
      body and runs `claude --print --output-format json` against it. The
      driver-Claude reads the t2's "Pass criteria" section and emits a
@@ -7337,7 +7347,8 @@ make test-docker EPIC=<slug>
 Fixed signature. Every functional Epic's Progression Contract references
 this verbatim; changing the form would require updating every gated Epic
 ticket. Required env: `EPIC`. Optional: `DRIVER_MODE`, `ANTHROPIC_API_KEY`,
-`CLAUDE_CODE_OAUTH_TOKEN`.
+`CLAUDE_CODE_OAUTH_TOKEN`, `SQL_BUSY_TIMEOUT_MS` (see
+[`sql.sh`](#store-access-from-a-case-sqlsh-reusable-driver-helper)).
 
 ### Auth
 
@@ -7369,6 +7380,84 @@ are plain-English bodies. The driver reads `t1.*.md` and `t2.*.md` files
 directly. Each t2 body has a fenced ```bash``` block executed by
 `DRIVER_MODE=shell`; the same prose is the spec the `DRIVER_MODE=claude`
 path hands to the driver-Claude.
+
+### Store access from a case: `sql.sh` (reusable driver helper)
+
+`test/driver/sql.sh` (installed at `/opt/driver/sql.sh`) is the `sqlite3`
+shell with a busy timeout. It runs `exec sqlite3 -cmd ".timeout <ms>"
+"$@"`, so its arguments and stdin pass through unchanged and its output and
+exit status are sqlite3's own. The wait is `SQL_BUSY_TIMEOUT_MS` whole
+milliseconds (default 5000); any other value exits 2 before sqlite3 runs.
+`make test-docker` forwards `SQL_BUSY_TIMEOUT_MS` into the container only
+when it is set, so set it on the command line to change the wait
+(`make test-docker EPIC=<slug> SQL_BUSY_TIMEOUT_MS=10000`).
+
+```bash
+token="$(/opt/driver/sql.sh -readonly "$HOME/.agent-director/state.db" "SELECT ...")"
+```
+
+**Why:** a bare `sqlite3` waits 0 ms and fails at once with `database is
+locked` (exit 5) while an agent-director process briefly holds the
+database's exclusive locks; agent-director's own connections wait 10 s
+(details in `docs/test-writing-guide.md`, "Reading and writing a store").
+
+**Must use:** every `sqlite3` command in a testplan shell block or a driver
+script runs through `sql.sh`, for reads and writes, on `state.db` or any
+other database. Cases call `/opt/driver/sql.sh`; a driver script calls the
+`sql.sh` beside it, as `pane-hook.sh` does. `test/driver/prompt.md` gives
+the driver-Claude the same rule and tells it to run `sql.sh` where a case's
+prose says `sqlite3`. Never write another `sqlite3` wrapper or call
+`sqlite3` with its own `.timeout`. `TestNoBareSqlite3InCasesOrDriver`
+(below) enforces the rule.
+
+**Driver-script tests (`test/driver-scripts/`).** Package
+`driverscripts_test` calls `sandboxguard.Require()` from `TestMain` and
+runs in `make test-sandbox` (`go test ./...`); no workflow runs it. The
+`sql.sh` tests use temp-dir stores and a real `sqlite3` (with none on PATH
+they fail inside the sandbox and skip elsewhere); the re-run test uses a
+temp-dir plan and a fake `db-reset.sh`, with no store or `sqlite3`. None
+touches `~/.agent-director`, tmux or Docker.
+
+- **`sqlite_guard_test.go`**:
+  - `TestNoBareSqlite3InCasesOrDriver` scans every `bash`, `sh` and
+    `shell` fence in the markdown under `tickets/testplans/` and
+    `test/driver/`, and every `#!` script in `test/driver/` except
+    `sql.sh`. It fails on each line that names `sqlite3` anywhere but a
+    full-line comment: as a command, by path (`/usr/bin/sqlite3`), inside a
+    quoted string or in a trailing comment. Longer names
+    (`sqlite3_analyzer`, `libsqlite3`, `state.sqlite3`) and `sqlite3` in
+    prose or another fence do not count. It also fails if it scanned no
+    shell blocks or no scripts, so a moved layout cannot pass it
+    vacuously.
+  - `TestBareSqlite3Detection` pins which forms the guard flags and which
+    it lets through.
+- **`sql_sh_test.go`** runs the scripts against a real held lock
+  (`holdLock`: a `sqlite3` shell in exclusive locking mode inside `BEGIN
+  EXCLUSIVE`):
+  - `TestHeldLockFailsReadsWithoutAWait`: a bare `sqlite3` read and
+    `sql.sh` with `SQL_BUSY_TIMEOUT_MS=0` fail with `database is locked`,
+    and `sql.sh` with a 300 ms wait gives up only after it. Every one gives
+    up in under 3 s, short of the 5000 ms default, which proves `sql.sh`
+    applies `SQL_BUSY_TIMEOUT_MS`;
+  - `TestDriverReadsWaitOutAHeldLock`: `sql.sh` with its default wait and
+    `pane-hook.sh`'s row lookup are still waiting while the lock is held
+    and finish normally once it is released;
+  - `TestSQLShPassesArgumentsThrough` and
+    `TestSQLShRejectsANonIntegerTimeout` cover the pass-through and the
+    exit 2.
+- **`run_testplan_test.go`**: `TestShellModeRerunStartsFromAFreshReset`
+  copies `run-testplan.sh` beside a fake `db-reset.sh` (it counts its runs
+  and removes the case's marker file) and runs a one-case plan in
+  `DRIVER_MODE=shell` whose case fails, and fails differently if the
+  first run's marker survived. It checks that `db-reset.sh` runs before the
+  case and again before the re-run, that the re-run's trace shows the
+  case's own failure, and that `details` say `xtrace rerun skipped:
+  db-reset failed before it` when the second reset fails.
+
+**Must use:** a test of a `test/driver/` script goes in
+`test/driver-scripts/` and reuses its `newStore`, `holdLock`,
+`start`/`run` and `driverScript` helpers. Never put a Go file in
+`test/driver/`: the image copies that whole directory.
 
 ### Pinned Claude Code version
 
@@ -7422,8 +7511,9 @@ except to assert that such a hook is ignored. Instead:
   prefixes the typed command (for example
   `AGENT_DIRECTOR_RELAY_MODE=on`), and `--pane <target>` types into
   another pane on the row's socket (a split pane, for the teammate case).
-  It reads the row's `pane_id` and `tmux_socket` with one read-only
-  `sqlite3` query (`PANE_HOOK_DB` overrides the store path). Exit 2 is bad
+  It reads the row's `pane_id` and `tmux_socket` with one read-only query
+  through the `sql.sh` beside it, so the lookup waits out a briefly held
+  lock (`PANE_HOOK_DB` overrides the store path). Exit 2 is bad
   usage, 3 a row with no pane or no row, 124 a timeout (the pane's last
   lines go to stderr).
 - A hook typed from a shell inside the pane must be a simple command or a
@@ -8043,6 +8133,11 @@ test cache does not track files that only the runner subprocess reads.
 The TLA+ model check has no workflow and no CI hook. It is an on-demand
 check that runs only through `make tla`, on the fast tier by default (see
 [Model check (`make tla`)](#model-check-make-tla)).
+
+No workflow runs `test/driver-scripts/` either: the guard against a bare
+`sqlite3` in a case, the `sql.sh` lock tests and the driver's re-run test
+run in `make test-sandbox` (see
+[Store access from a case: `sql.sh`](#store-access-from-a-case-sqlsh-reusable-driver-helper)).
 
 ### Audit standard
 

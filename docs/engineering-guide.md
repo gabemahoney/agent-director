@@ -253,7 +253,11 @@ states the actual intent ("there is nothing here to protect").
 tests write agent-director state (open the store, emit trail events) or exec a
 built binary. Currently: `internal/trail`, `internal/store`, `internal/hook`,
 `internal/spawn`, `pkg/api`, `internal/mcp`, `cmd/agent-director`,
-`test/smoke/go`, `test/envelope-diff`, `test/grounding-replay`. Pure-logic packages with no
+`internal/testsupport/storefix`, `internal/testsupport/tmuxfix`,
+`test/smoke/go`, `test/smoke/ts-helper`, `test/envelope-diff`,
+`test/grounding-replay`, `test/realtmux`, `test/reboot-recovery`,
+`test/sandbox/cmdinject`, `test/tla`, `test/driver-scripts`,
+`tools/measure-exit` and `tools/measure-exit/dryrun`. Pure-logic packages with no
 state or exec surface (e.g. `pkg/api/manifest`, `pkg/api/errnames`) may skip
 it. When you add a package that opens the store or execs a binary, add
 `sandboxguard.Require()` to its `TestMain`.

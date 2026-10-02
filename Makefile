@@ -173,6 +173,9 @@ test-image-smoke: test-image
 #                 "claude" (real driver-Claude; requires
 #                 ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN to be set
 #                 in the calling environment).
+#   SQL_BUSY_TIMEOUT_MS — optional. How long, in whole milliseconds, the
+#                 driver's sql.sh helper waits on a locked state.db
+#                 (default 5000; b.ai5). Forwarded only when set.
 #
 # Auth env vars are inherited from the host process — never hard-coded. CI
 # sources them from secrets; see `.github/workflows/integration.yml` and
@@ -187,6 +190,7 @@ test-docker: test-image
 		-e DRIVER_MODE=$${DRIVER_MODE:-shell} \
 		-e ANTHROPIC_API_KEY \
 		-e CLAUDE_CODE_OAUTH_TOKEN \
+		-e SQL_BUSY_TIMEOUT_MS \
 		-v "$(CURDIR)/tickets/testplans:/work/tickets/testplans:ro" \
 		-v "$(CURDIR):/work/source:ro" \
 		$(TEST_IMAGE)

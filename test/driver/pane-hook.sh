@@ -37,15 +37,18 @@
 #                      into a shell.
 #   --timeout <secs>   bound on the wait (default 20).
 #
-# The pane and socket come from one read-only sqlite3 SELECT of the row's
-# pane_id and tmux_socket in $PANE_HOOK_DB (default
-# $HOME/.agent-director/state.db). A payload of "-" is read from stdin.
+# The pane and socket come from one read-only SELECT of the row's pane_id
+# and tmux_socket in $PANE_HOOK_DB (default $HOME/.agent-director/state.db),
+# run through sql.sh beside this file (sqlite3 with a busy timeout, b.ai5).
+# A payload of "-" is read from stdin.
 #
 # Exit status: the hook's own, or 2 for bad usage, 3 when the row records no
 # pane, 124 when no exit status arrives in time (the pane's last lines are
 # printed on stderr).
 
 set -euo pipefail
+
+driver_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 die() {
     local rc="$1"
@@ -123,7 +126,7 @@ db="${PANE_HOOK_DB:-$HOME/.agent-director/state.db}"
 # Read-only lookup of the row's pane and socket; the id's quotes are doubled
 # for the SQL literal.
 esc="${id//\'/\'\'}"
-row="$(sqlite3 -readonly -separator '|' "$db" \
+row="$("$driver_dir/sql.sh" -readonly -separator '|' "$db" \
     "SELECT COALESCE(pane_id, ''), COALESCE(tmux_socket, '') FROM spawns WHERE claude_instance_id = '${esc}';")"
 row_pane="${row%%|*}"
 socket="${row#*|}"

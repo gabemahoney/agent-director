@@ -162,8 +162,17 @@ run_case_shell() {
     # JSONL stream alone is impossible. Re-run under `bash -x` so the last
     # command attempted appears in stderr; the xtrace tail is then the
     # detail block.
-    local xout xrc
-    xout="$(bash -x -c "$script" 2>&1)" && xrc=0 || xrc=$?
+    #
+    # The rerun starts from a fresh DB-reset, as the first run did. Without
+    # it the rerun meets the first run's leftovers (b.ai5: the first run's
+    # cd- session made the rerun's spawn fail with ErrTmuxSessionConflict,
+    # so the trace pointed at a step that had not failed).
+    local xout="" xrc=0 reset_failed=0
+    if bash "$DB_RESET" >&2; then
+        xout="$(bash -x -c "$script" 2>&1)" && xrc=0 || xrc=$?
+    else
+        reset_failed=1
+    fi
     local last_trace=""
     if [[ -n "$xout" ]]; then
         # Keep the last ~6 xtrace lines so the failing assertion is visible
@@ -177,7 +186,9 @@ run_case_shell() {
     # The trace comes from a second run. When that run passes, its tail ends
     # at the case's success line and does not show the first run's failure:
     # say so, so the trace is not read as a failure after the success line.
-    if [[ "$xrc" -eq 0 ]]; then
+    if [[ "$reset_failed" -eq 1 ]]; then
+        combined+=" | xtrace rerun skipped: db-reset failed before it"
+    elif [[ "$xrc" -eq 0 ]]; then
         combined+=" | xtrace rerun passed (exit=0): the trace below is that passing rerun, not the failure"
     fi
     if [[ -n "$last_trace" ]]; then

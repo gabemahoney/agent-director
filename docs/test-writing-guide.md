@@ -301,17 +301,55 @@ v1). Cases should rely on that clean state; never reach into a sibling
 case's leftovers.
 
 **Never hard-code the schema version a case expects.** The reset produces
-whatever `internal/store/store.go`'s `schemaVersion` is today (v4), and it
+whatever `internal/store/store.go`'s `schemaVersion` is today, and it
 bumps on intentional schema additions. A case that asserts a literal
 `user_version = 3` re-breaks on the next bump — that is exactly what turned
 the harness-smoke lane red in b.m9q. Instead, derive the expected version
 from the binary itself: create a throwaway reference DB
 (`ref_db=$(mktemp -u)` then `agent-director list --store-path
-"$ref_db"`), read its version (`sqlite3 "$ref_db" 'PRAGMA
+"$ref_db"`), read its version (`/opt/driver/sql.sh "$ref_db" 'PRAGMA
 user_version'`), and compare the case's DB against that. If you
 *want* to test isolation (as the harness-smoke `smoke-2` + `smoke-3` pair
 does), structure it as two paired cases under the same t1: A creates
 state, B asserts the state is gone.
+
+### Reading and writing a store: `/opt/driver/sql.sh`
+
+Every `sqlite3` command in a case runs as `/opt/driver/sql.sh`, never a
+bare `sqlite3`. This covers reads and writes, and `state.db` or any other
+database (such as the reference DB above). `sql.sh` is the `sqlite3` shell
+with a busy timeout. It takes the same arguments and stdin, and its output
+and exit status are sqlite3's own:
+
+```bash
+token="$(/opt/driver/sql.sh -readonly "$HOME/.agent-director/state.db" \
+    "SELECT request_token FROM permission_requests
+     WHERE claude_instance_id = '$id' AND decision IS NULL;")"
+```
+
+Why: a bare `sqlite3` waits 0 ms for a lock. In WAL mode a reader is
+normally not blocked by a writer, but it gets SQLITE_BUSY while another
+connection briefly holds the database's exclusive locks: when an exiting
+agent-director process's last connection checkpoints and removes the
+`-wal`/`-shm` files, and when the next opener rebuilds the WAL index. A
+bare `sqlite3` that opens the store then fails at once with `Error: in
+prepare, database is locked (5)` and exit 5, and under `set -e` the case
+ends. A case that reads the store just after one agent-director process
+exits and as another starts (a verb, then a hook typed into the pane) can
+open in exactly that window (b.ai5: relay-3 failed 1 run in 6).
+agent-director's own connections wait 10 s (`busy_timeout(10000)` in
+`internal/store/store.go`); `sql.sh` waits up to 5000 ms. To change its
+wait, set `SQL_BUSY_TIMEOUT_MS` (whole milliseconds) on the
+`make test-docker` command line:
+`make test-docker EPIC=<slug> SQL_BUSY_TIMEOUT_MS=10000`.
+
+`TestNoBareSqlite3InCasesOrDriver` (`test/driver-scripts/`, run by
+`make test-sandbox`) fails on any line of a `bash`, `sh` or `shell` block
+under `tickets/testplans/` that names `sqlite3` anywhere but a full-line
+comment. That includes a path such as `/usr/bin/sqlite3`, a `sqlite3`
+inside a quoted string and a trailing comment. Prose outside the block may
+still say "read it with `sqlite3`": the driver-Claude's prompt tells it to
+run `sql.sh`.
 
 ### Audit standard
 
