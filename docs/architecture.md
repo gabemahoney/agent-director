@@ -7704,6 +7704,336 @@ never opens a live database.
   `tools/measure-exit/dryrun` call `sandboxguard.Require()` from `TestMain`
   (see "Sandbox guard and the CI bypass").
 
+### Model check (`make tla`)
+
+An on-demand design check, taken before engineering when the design
+changes. It is not CI: no GitHub workflow or CI hook runs it, and it is not
+part of `all`, `test`, `test-sandbox` or any release target. No other target
+depends on it.
+
+`spec/tla/` holds bee b.zuj's TLA+ model of the Phase 1 LABEL design, its
+model-check suite and the runner. b.zuj owns the model and its results. The
+repo copy is vendored byte for byte under SHA-256 pins and is never edited
+here. [`spec/tla/PROVENANCE.txt`](../spec/tla/PROVENANCE.txt) records the
+source, the pin list, the delivering run, the layout and the TLC build:
+`tla2tools.jar` rev `4260e47`, committed because that nightly build has no
+immutable upstream URL.
+
+**What the suite checks.** The threat model is accidents only. Respawn and
+`remain-on-exit` are out of scope. The model's three actors are named here
+as follows:
+
+- the *task caller* launches agents under fixed ids and kills them;
+- the *supervising caller* keeps one agent id running: it spawns, gets,
+  resumes and reuses the id, runs `find-missing`, kills a launch that
+  never reports in (the model's `B_NrKill`), and answers the agent's
+  startup prompts with `send-keys` on its `pending` row;
+- the *operator* resumes and kills by hand.
+
+The model has three specs:
+
+- `Phase4Split.tla` (65 runs) and `Phase4.tla` (5 runs: the unsplit
+  cross-check `ci_smoke_*`, plus `ci_C7` and `ci_L1`). Together they model:
+  - the label as proof of a session's launch;
+  - the lookup's verdicts;
+  - `kill`'s pane kill plus process check;
+  - process-only liveness;
+  - the recorded socket and adoption after a lost create reply;
+  - `find-missing` and `expire` under those rules;
+  - the plain-spawn scan;
+  - the store id in the label.
+
+  The in-scope accidents are:
+  - a rename;
+  - a grouped viewing session;
+  - a failed label step;
+  - a lost create reply;
+  - a server restart;
+  - a different server at the recorded socket;
+  - a leftover session of an earlier life;
+  - strays and crashes;
+  - the /proc wall;
+  - a `$` name;
+  - another store's agent under the same id.
+
+  Their hook gate (`HookGate`) is the earlier session-based gate of WD
+  2026-09-29 HOOK, which decision-0929c replaced.
+- `Phase5Hook.tla` (22 runs), decision-0929c's hook identity for one
+  instance id. It models:
+  - the built gate (SR-22.9, `internal/store/hook_gate.go`), where a hook
+    applies only when its parent process (pid and start time) is the row's
+    recorded pane process;
+  - adoption by `@ad_pane`;
+  - `kill` waiting for every pane process of the session;
+  - SessionStart's bounded wait for the launch's identity write (0930b Q1).
+
+  Its actors include a nested `claude`, teammates, leftovers, strays, a
+  `/clear`, a lost reply, processes that survive the hangup, and pid reuse.
+
+`mkci.py` sets the design values. The runs that turn one off are:
+
+- the controls, each of which removes one design amendment;
+- `ci_G3b_ren_noscan`, a safety run with the spawn scan off (the AC-SPN-11
+  row relies on it);
+- the probes `ci_V_Leftover` and `ci_V_P1Conflict`, with the spawn scan
+  off;
+- the residual `ci_Cact`, with the action-time process check off.
+
+The properties checked are:
+
+- **Phase4 / Phase4Split safety:**
+  - `VerdictSound`: the lookup's verdict is true to the ground truth;
+  - `HandsOff`: kills and keys reach only the row's current launch;
+  - `KillHonest`: a kill that reports success leaves no process of the
+    current launch;
+  - `KillFinishedOnlyLeftover`: the operator's finished-row kill never ends
+    a working agent;
+  - the supervising caller never kills a finished row;
+  - `SendOnlyCurrentLaunch`, `NonGoneInert`, `MarksRightLife`,
+    `ResumeNoEarlierLife`, `GetNoEarlierLife`, `NoOrphan`, `NoOrphanLife`,
+    `OneAgentPerId`, `NoWrongMemory` and `SidBound`;
+  - the action properties `NoFalseMissing` and `KillPendingOnlyCurrent`.
+- **Phase4 / Phase4Split liveness:** `PendingResolves` and `StuckHeals`.
+- **Phase5Hook:**
+  - `RowOnlyByAgent`: the row's state and session id move only by the
+    current launch's agent;
+  - `KillAllGone`: `kill` never succeeds while a pane process of the
+    session survives;
+  - `PendingResolves` and `ReportInResolves`.
+
+The run kinds and their expected results:
+
+| Kind | Expected result |
+|---|---|
+| Safety run | pass |
+| Eventual-resolution run (a launch that never reports in) | pass |
+| Control that removes one design amendment | a violation |
+| Reachability probe | a violation, meaning the state is reached |
+| Accepted residual, such as `ci_Cact` (the listing and the act as separate steps) and `ci_H_Rns` (an unreadable recorded pane start time plus pid reuse) | a violation |
+
+The model's limits:
+
+- **Small bounds:** 2 or 3 sessions, 1 to 3 lives, and one fault per
+  behaviour.
+- **One accident group per safety run**, with a state-reducing view on the
+  safety runs only.
+- **Phase4 and Phase4Split's liveness runs have no stray.** Phase5Hook's
+  liveness runs (`ci_H_L`, `ci_H_Lrep` and their controls) do allow
+  strays (`AllowStray = TRUE`).
+- **The listing and the act are one step**, except in the residual run.
+- **`ci_C7` uses `remain-on-exit`**, a setting that is out of scope.
+- **Phase5Hook covers one instance id** and no label lookup.
+
+**The manifest and tiers.** [`spec/tla/ci/suite.tsv`](../spec/tla/ci/suite.tsv)
+has 92 rows. Its columns are group, spec, cfg, cap_s, expect, tier and
+what. Its groups are g1, g2, g3, g4a, g4b, g5a, g5b, g5c and g6.
+
+| Tier | Runs | Contents | Scheduler time |
+|---|---|---|---|
+| `fast` (the default) | 71 | every must-fail run, plus `mkci.py`'s fast-pass rows | about 1.5 h |
+| `full` | 92 | every row | about 6–7 h |
+
+**Criteria to runs.** Each row below lists the PRD criteria, the runs that
+check them with each run's tier, and the expected results. Every listed run
+met its expectation in b.zuj CI run 4 (see Evidence). The rows follow the
+current SRD (0929c, 0930b and 0930c are final) and change if the design
+does. In that case b.zuj revises the model. A probe is expected to be
+reached, and a residual to violate its property.
+
+| PRD criteria | Runs (tier) and expected result |
+|---|---|
+| AC-HOOK-01 to AC-HOOK-04 (the built parent-process gate) | <ul><li>`ci_H_Sns` (fast) and `ci_H_S` (full), `RowOnlyByAgent`: pass.</li><li>Controls `ci_H_Ctop` (gate by the topmost ancestor) and `ci_H_Cpane` (gate by the hook's pane) (fast): a violation.</li><li>Probes `ci_H_V_NestedIgnored`, `_TeammateLive`, `_RotationApplied`, `_PidReused` and `_NullStart` (fast).</li><li>Residual `ci_H_Rns` (fast).</li></ul> |
+| AC-KILL-19 (every pane process gone) | <ul><li>`ci_H_Sns` (fast) and `ci_H_S` (full), `KillAllGone`: pass.</li><li>Control `ci_H_Ckill` (waits for the agent process only) (fast): a violation.</li><li>Probes `ci_H_V_KillFailed` and `_ChildOutlives` (fast).</li></ul> |
+| AC-HOOK-05 (SessionStart's wait) | <ul><li>`ci_H_Lrep` (fast), `ReportInResolves`: pass.</li><li>Control `ci_H_Lrep_nowait` and residual (ii) `ci_H_Lrep_slow` (fast): a violation, as designed.</li><li>Probes `ci_H_V_WaitedApplied` and `_WaitedIgnored` (fast).</li></ul> |
+| AC-LKP-21 (adoption by `@ad_pane`; a no-pane row is Gone) | <ul><li>`ci_H_L` (full), `PendingResolves`: pass.</li><li>Control `ci_H_Lsrd` (fast): a violation.</li><li>Control `ci_H_Cadopt` (adopts any pane) (fast): a violation.</li><li>Probe `ci_H_V_Adopted` (fast).</li></ul> |
+| AC-HOOK-03's "never kills a working agent" | <ul><li>The earlier gate's runs: `ci_G3b_ren`, `ci_G3b_ren_u` (an unlabelled leftover) and `ci_G3b_ren_noscan` (full), `KillFinishedOnlyLeftover`: pass.</li><li>Control `ci_Chook` (fast): a violation.</li><li>Probe `ci_V_HookIgnored` (fast).</li><li>These check the earlier session-based gate. The property carries over to the narrower built gate by argument, not by TLC.</li></ul> |
+| AC-SPN-11 (the plain-spawn scan) | <ul><li>Probe `ci_V_ScanBlocks` (fast).</li><li>`ci_G3b_ren` (full) runs with the scan on.</li><li>`ci_G3b_ren_noscan` (full) shows that safety does not rest on the scan.</li></ul> |
+| AC-LKP-20 (the store id in the label) | <ul><li>`ci_S_store` (fast), `VerdictSound` and `HandsOff` with another store's agent under the same id: pass.</li><li>Control `ci_Cstore` (fast): a violation.</li><li>Probe `ci_V_OtherStore` (fast).</li><li>The store id's creation, migration and restore are not modelled.</li></ul> |
+| AC-KILL-17 and AC-KILL-18 (the strict `kill`; PRD Traceability row "PO 2026-09-27 REVIEW") | <ul><li>`HandsOff`, `KillHonest` and `KillPendingOnlyCurrent` in the safety runs `ci_S1o_*` (fast), `ci_S1b_*` and `ci_S1h_*` (`_lab` fast, the rest full), and `ci_smoke_*` (fast): pass.</li><li>Control `ci_C5` (session kill only, with a grouped viewer) (fast): a violation.</li><li>Probes `ci_V_KillFailed` and `ci_V_KillWithViewer` (fast).</li></ul> |
+| The LABEL lookup's mechanisms from the PRD Traceability row "PO 2026-09-27 LABEL": the label as proof of launch and the four verdicts, the recorded socket, and process-only liveness. The row's other criteria (for example AC-CFG-01's timing defaults, AC-TEST-02 and AC-EXP-08) are not covered. | <ul><li>`VerdictSound` and the safety properties in `ci_S1o_*`, `ci_S3o` and `ci_smoke_*` (fast), `ci_S1b_*` and `ci_S1h_*` (`_lab` fast, the rest full), `ci_S3b` (full) and `ci_G3b_*` (`ci_G3b_lab` fast, the rest full): pass.</li><li>`PendingResolves` and `StuckHeals` in `ci_L5o`, `ci_L5b_*` and `ci_L1` (`ci_L5o`, `ci_L5b_lab` and `ci_L1` fast, the rest full): pass.</li><li>Controls `ci_C1` (token cleared at report-in), `ci_C2` (lookup by name), `ci_C3` (`$` name chained), `ci_C4` (failed label step), `ci_C6` (the caller's server, no adoption) and `ci_C7` (session presence as liveness) (fast): a violation.</li><li>The verdict probes `ci_V_*` (fast).</li></ul> |
+
+The PRD's "to be modelled" notes predate the suite. They stand on the
+criteria of the last three rows, on AC-HOOK-03's own text, and on the
+Traceability rows "WD 2026-09-29 HOOK and STORE" and "WD 2026-09-29c".
+
+**Not covered.** The model does not cover:
+
+- the `agent_id` guard (`subagent_event`), or subagents' and in-process
+  teammates' other events moving the row;
+- `no_exec_form`;
+- the 540 s cap on the SessionStart wait;
+- an unreadable parent start time;
+- kill's exit-wait value, its skip of a pane process whose start time is
+  unreadable, and the retry-after-survivors residual;
+- the store id's creation, migration and restore;
+- the `@ad_owner` scope-value check;
+- locale, unusable names, timing settings, pre-trust and schema migration.
+
+**Model-vs-built gaps (for b.zuj, which owns the model; nothing here changes it).**
+
+1. Phase4's hook gate is the superseded one. The built gate is narrower,
+   so Phase4's safety results carry over only by argument. Phase4's
+   liveness runs assume the wider gate. No run composes the built gate
+   with the label lookup.
+2. An unreadable parent start time is not modelled. The built rule, under
+   which the hook never applies, is safety-conservative. For liveness the
+   row stays `pending`, like a lost reply.
+3. The SessionStart wait's 540 s cap (`sessionStartWaitCap` in
+   `internal/hook/handler.go`, AC-HOOK-05) is not modelled. It binds when
+   the grace period is over 540 s, and also when the recorded launch start
+   is in the future or the clock steps. `ci_H_Lrep_slow` covers it in
+   spirit.
+4. Subagents and in-process teammates are not modelled: no `agent_id` and
+   no in-process actors. The SRD says they need no model.
+5. `no_exec_form` is not modelled. The SRD says it needs no model.
+6. The model's kill is one atomic step. The built 5 s exit wait, the skip
+   of a pane process whose start time is unreadable, and the retry after
+   survivors are not modelled.
+7. The model's spawn scan covers "a plain spawn". The built scan
+   (`scanForLeftover` in `pkg/api/spawn_scan.go`) covers a caller-supplied id
+   with no row. Its Can't-tell refusal on an unreadable lookup is not in
+   the model.
+8. Environment assumptions:
+   - the jobs need a scheduler timeout of at least the group budget plus
+     margin, and at least 24 GiB;
+   - `tlcjob.sh`'s comment about the scheduler timeout is stale;
+   - the job image's base is not pinned by digest.
+
+**How to run it.** Only an operator runs `make tla`. Agents never
+submit. They may run `make tla-print` and the runner tests.
+
+```
+make tla-print                          # the plan and the pin check; submits nothing
+make tla TLA_CHANNEL=<channel id> TLA_JOBSCHED=<absolute path to the scheduler CLI>
+```
+
+The variables:
+
+- `TLA_CHANNEL` is required and has no default. It is the job scheduler's
+  notice channel ID, which the operator supplies and which must be on the
+  scheduler's allow-list. Each job sends one notice to it.
+- `TLA_JOBSCHED` names the job scheduler CLI. Its default, `jobsched` on
+  PATH, fails closed by design, because the CLI is not installed on PATH.
+  Pass the CLI's absolute path.
+- `TLA_TIER` is `fast` (the default) or `full`.
+- `TLA_GROUPS` lists the groups to run, space-separated, in the order
+  given. The default is every manifest group.
+- `TLA_SPEC_DIR` and `TLA_SUITE` point at another copy of the three specs
+  and another manifest. An override is not pinned. The cfgs, the jar and
+  the job image files always come from the pinned tree.
+
+The host needs `bash`, `sha256sum` and `jq`. The runner reads the
+scheduler's `--json` output with `jq`. The scheduler's dispatcher must
+already be running: `make tla` never starts or stops it.
+
+TLC and java never run on this host, nor in a local container. The runner
+builds job contexts, submits them, polls them and reads their logs. The
+checker runs only inside each job's container on the scheduler's remote
+host. Nothing local builds the job image. `make tla` is a host target only
+because the scheduler CLI is a host tool. It runs nothing built from the
+repo and never opens `~/.agent-director`, so it does not breach the rule
+that nothing built runs on the host.
+
+The runner, [`spec/tla/ci/run_ci.sh`](../spec/tla/ci/run_ci.sh), runs in
+this order:
+
+1. **Preflight, before any submit.** It checks:
+   - the tier;
+   - the tools;
+   - every pin in `PROVENANCE.txt`, and the jar's size;
+   - the manifest's rows and groups;
+   - that `TLA_CHANNEL` is set;
+   - that the CLI resolves;
+   - that `$TMPDIR` lies outside the repo;
+   - that `list --json` reports a running dispatcher.
+
+   The dispatcher check comes first among the scheduler calls because the
+   scheduler has no cancel operation: a job submitted while the dispatcher
+   is down would run whenever it next starts. Any failure prints
+   `FAIL <step> -- <reason>` and a `CI-VERDICT FAIL (<reason>, tier <t>)`
+   line, submits nothing, and exits 1.
+2. **A parse-only job** over every spec module gates the rest. Its submit
+   reply carries the scheduler's limits. The run timeout must cover the
+   largest selected group budget plus 300 s (10500 s for either tier with
+   every group), and the
+   memory must be at least 24 GiB. Otherwise the runner waits for that
+   job to end, then fails with nothing more submitted.
+3. **One job per non-empty group,** strictly one at a time, in manifest
+   order or `TLA_GROUPS`'s order. Each job runs with `--network off`. A job's budget is the sum of
+   each run's cap plus 20 s, plus 120 s, at most 10200 s.
+
+Job contexts, logs and the per-run directory:
+
+- Contexts and logs live in a per-run directory under `$TMPDIR`, which the
+  runner prints.
+- A context is kept until its job ends, then removed.
+- Logs are fetched through the scheduler's `results` and always kept.
+- The output is one line per run, then the `CI-VERDICT` line with ok/total,
+  minutes and tier.
+- A run is ok only when its result matches its expectation. INCOMPLETE,
+  ERROR, SKIPPED and NO-VERDICT are never ok.
+- The exit status is 0 only on PASS. Nothing is retried.
+
+**Interrupts.** On SIGINT, SIGTERM or SIGHUP the runner exits 130 with
+`CI-VERDICT FAIL (interrupted, …)`. It then acts on the current job:
+
+| The current job | What the runner does |
+|---|---|
+| Still queued | Cancels it in effect: removes the job's context, so the scheduler rejects the job when it reaches the head of the queue. |
+| Already building or running | Keeps the context. The job finishes on the scheduler, because the scheduler has no cancel operation. |
+| State unreadable | Keeps the context (fail safe). |
+
+The logs are always kept.
+
+**Evidence.** No repo `make tla` run is recorded. Gabe skipped the live
+acceptance runs on 2026-10-02 (fast tier, falsifiability and full tier),
+with the job scheduler shut down on purpose. The evidence is b.zuj CI run
+4 (2026-09-30):
+
+- it ended PASS, 92/92 runs ok in 364 min, on the full tier, which
+  contains the fast tier;
+- its job-context inputs are byte-identical to the vendored files: the
+  three specs, all 92 cfgs, the jar and the Dockerfile;
+- `tlcjob.sh` differs only in the budget and disk-cap lines the runner
+  patches;
+- `PROVENANCE.txt` records the run's job ids and every SHA-256.
+
+The suite's own controls, such as `ci_H_Ctop`, `ci_H_Cpane` and `ci_Chook`,
+were expected to violate their properties and did so in that run. That
+shows the checks catch a broken gate. The Epic itself is accepted on its
+offline runner tests.
+
+**Runner tests (`test/tla/`, reusable test fixtures).** Package `tla_test`
+calls `sandboxguard.Require()` from `TestMain`. It runs the real runner
+against a fake scheduler CLI and never runs TLC, java, docker or a real
+scheduler. The suite's files:
+
+- **`rig_test.go`** has three parts:
+  - the fake `jobsched`. Its scripted answers for `list`, `submit`,
+    `status` and `results` come from per-call plan files. Holds make a
+    call block. It serves canned run logs built from a verdict table;
+  - never-call shims for `java`, `docker`, `podman`, `tlc` and `tlc2`;
+  - the `rig` fixture: `newRig`, `private` (a copy of `spec/tla/` that a
+    test may change), `plan`, `verdict`, `expectAll`, `hold` and `run`,
+    with a clean environment, `TLA_POLL_S=0` and a `TMPDIR` outside the
+    repo.
+- **`runner_test.go`** covers the job order and tiers, the ok rules, the
+  fail-closed paths and the overrides.
+- **`interrupt_test.go`** covers the interrupt cases above.
+- **`provenance_test.go`** has three tests:
+  - every pin matches its file, and only `.gitattributes`,
+    `PROVENANCE.txt` and `ci/run_ci.sh` are unpinned;
+  - the runner names no checker or container command;
+  - `make -n tla` and `make -n tla-print` run only the runner, none of
+    `all`, `test` and `test-sandbox` reaches it, and `make tla-print` contacts no scheduler.
+
+**Must use:** every test of `spec/tla/ci/run_ci.sh` or the `tla` make
+targets goes in `test/tla/` and uses its `rig` and fake `jobsched`. Never
+write another scheduler double, and never call a real scheduler. A test
+that changes vendored files uses `rig.private`, never the worktree's
+`spec/tla/`. Run the package with `-count=1` after a runner change. The Go
+test cache does not track files that only the runner subprocess reads.
+
 ### CI lane
 
 `.github/workflows/integration.yml` defines two jobs:
@@ -7715,6 +8045,10 @@ never opens a live database.
 - `macos-stub` — runs on `macos-latest`, exits 0 with a stub message.
   Epic 8 (sysctl-based liveness probe) will swap this for a real macOS
   test that exercises the sysctl path. SRD §19 Q7.
+
+The TLA+ model check has no workflow and no CI hook. It is an on-demand
+check that runs only through `make tla`, on the fast tier by default (see
+[Model check (`make tla`)](#model-check-make-tla)).
 
 ### Audit standard
 
