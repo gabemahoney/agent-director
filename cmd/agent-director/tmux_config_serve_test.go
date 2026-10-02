@@ -32,7 +32,13 @@ type serveSession struct {
 // (PATH included); the caller registers kill as cleanup.
 func startServe(t *testing.T, home string, env ...string) *serveSession {
 	t.Helper()
-	s := &serveSession{cmd: exec.Command(binaryPath, "serve", "--stdio"), lines: make(chan string, 8), nextID: 1}
+	return startServeBin(t, binaryPath, home, env...)
+}
+
+// startServeBin is startServe for the binary at bin.
+func startServeBin(t *testing.T, bin, home string, env ...string) *serveSession {
+	t.Helper()
+	s := &serveSession{cmd: exec.Command(bin, "serve", "--stdio"), lines: make(chan string, 8), nextID: 1}
 	s.cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + home}, env...)
 	s.cmd.Stderr = &s.stderr
 	var err error

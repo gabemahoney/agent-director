@@ -79,83 +79,53 @@ func TestNoCabiResidue(t *testing.T) {
 // matches the output of the catalog generator against the current in-tree catalog.go.
 // A mismatch means catalog.go was edited without running `make errnames-json`.
 func TestCatalogJSONUpToDate(t *testing.T) {
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("os.Getwd: %v", err)
-	}
-
-	catalogPath := filepath.Join(wd, "catalog.json")
-	committed, err := os.ReadFile(catalogPath)
-	if err != nil {
-		t.Fatalf("read committed catalog.json: %v", err)
-	}
-
-	// Run the generator. It writes to catalogPath (same file) using
-	// runtime.Caller(0) to locate the output directory.
-	cmd := exec.Command("go", "run", "./generate.go")
-	cmd.Dir = wd
-	out, runErr := cmd.CombinedOutput()
-
-	// Read whatever the generator produced, then restore the original content
-	// so the working tree is always left clean.
-	generated, readErr := os.ReadFile(catalogPath)
-	restoreErr := os.WriteFile(catalogPath, committed, 0o644)
-
-	if runErr != nil {
-		t.Fatalf("catalog generator failed: %v\n%s", runErr, out)
-	}
-	if readErr != nil {
-		t.Fatalf("read generated catalog.json: %v", readErr)
-	}
-	if restoreErr != nil {
-		t.Fatalf("restore catalog.json: %v", restoreErr)
-	}
-
-	if !bytes.Equal(committed, generated) {
-		t.Errorf(
-			"pkg/api/errnames/catalog.json is stale; run `make errnames-json` to update it\n%s",
-			jsonDiffSnippet(string(committed), string(generated)),
-		)
-	}
+	assertGeneratedUpToDate(t, ".", "catalog.json", "errnames-json")
 }
 
 // TestSurfaceJSONUpToDate verifies that the committed pkg/api/manifest/surface.json
 // matches the output of the surface generator against the current in-tree manifest.go.
 // A mismatch means manifest.go was edited without running `make surface-json`.
 func TestSurfaceJSONUpToDate(t *testing.T) {
-	wd, err := os.Getwd()
+	assertGeneratedUpToDate(t, filepath.Join("..", "manifest"), "surface.json", "surface-json")
+}
+
+// assertGeneratedUpToDate runs pkgDir/generate.go from a temp copy, so its
+// output lands in the temp dir and the committed file is never written (a
+// rewrite raced the manifest tests reading it), then diffs against the committed file.
+func assertGeneratedUpToDate(t *testing.T, pkgDir, outName, makeTarget string) {
+	t.Helper()
+	committedPath := filepath.Join(pkgDir, outName)
+	committed, err := os.ReadFile(committedPath)
 	if err != nil {
-		t.Fatalf("os.Getwd: %v", err)
+		t.Fatalf("read committed %s: %v", outName, err)
 	}
 
-	manifestDir := filepath.Join(wd, "..", "manifest")
-	surfacePath := filepath.Join(manifestDir, "surface.json")
-
-	committed, err := os.ReadFile(surfacePath)
+	// The generator writes beside its own source (runtime.Caller(0)); running
+	// a copy redirects the write. cmd.Dir keeps the build inside this module.
+	src, err := os.ReadFile(filepath.Join(pkgDir, "generate.go"))
 	if err != nil {
-		t.Fatalf("read committed surface.json: %v", err)
+		t.Fatalf("read generator: %v", err)
 	}
-
-	cmd := exec.Command("go", "run", "./generate.go")
-	cmd.Dir = manifestDir
-	out, runErr := cmd.CombinedOutput()
-
-	generated, readErr := os.ReadFile(surfacePath)
-	restoreErr := os.WriteFile(surfacePath, committed, 0o644)
-
-	if runErr != nil {
-		t.Fatalf("surface generator failed: %v\n%s", runErr, out)
+	tmp := t.TempDir()
+	genCopy := filepath.Join(tmp, "generate.go")
+	if err := os.WriteFile(genCopy, src, 0o644); err != nil {
+		t.Fatalf("copy generator: %v", err)
 	}
-	if readErr != nil {
-		t.Fatalf("read generated surface.json: %v", readErr)
+	cmd := exec.Command("go", "run", genCopy)
+	cmd.Dir = pkgDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%s generator failed: %v\n%s", outName, err, out)
 	}
-	if restoreErr != nil {
-		t.Fatalf("restore surface.json: %v", restoreErr)
+	generated, err := os.ReadFile(filepath.Join(tmp, outName))
+	if err != nil {
+		t.Fatalf("read generated %s: %v", outName, err)
 	}
 
 	if !bytes.Equal(committed, generated) {
 		t.Errorf(
-			"pkg/api/manifest/surface.json is stale; run `make surface-json` to update it\n%s",
+			"%s is stale; run `make %s` to update it\n%s",
+			filepath.ToSlash(filepath.Clean(filepath.Join("pkg", "api", "errnames", committedPath))),
+			makeTarget,
 			jsonDiffSnippet(string(committed), string(generated)),
 		)
 	}

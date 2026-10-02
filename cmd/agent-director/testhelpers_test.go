@@ -68,7 +68,13 @@ func runCLI(t *testing.T, args ...string) (string, string, int) {
 // created) pass the same home into multiple invocations.
 func runCLIWithHome(t *testing.T, home string, args ...string) (string, string, int) {
 	t.Helper()
-	cmd := exec.Command(binaryPath, args...)
+	return runBinWithHome(t, binaryPath, home, args...)
+}
+
+// runBinWithHome is runCLIWithHome for the binary at bin.
+func runBinWithHome(t *testing.T, bin, home string, args ...string) (string, string, int) {
+	t.Helper()
+	cmd := exec.Command(bin, args...)
 	cmd.Env = []string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + home,

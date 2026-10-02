@@ -21,6 +21,7 @@
 
 import { resolve } from "path";
 import { chmodSync } from "fs";
+import { underSeedsLock } from "./internal/seedsLock.js";
 
 // ── Sandbox guard (b.nh2 / absorbed b.4v7) ─────────────────────────────────
 // These tests build and exec the agent-director binary, which can open (and,
@@ -44,34 +45,15 @@ const fakeTmuxDir = resolve(repoRoot, "test/fake-tmux");
 const cliBin = resolve(repoRoot, "bin/agent-director");
 
 // ── Seeds flock (b.3jn / b.2y5 seeds-flock protocol) ───────────────────────
-// The coverage gates run concurrently in one container. Each `make` below is a
-// cross-package builder that reads walk-reachable tree sources (pkg/api/apitest
-// among them). Sibling gate coverage.go-root's synthetic-regression test
-// helper-tag-replay MUTATES pkg/api/apitest/seeds.go under an exclusive flock
-// on pkg/api/apitest/.seeds-mutation.lock (b.2y5's acquireSeedsLock, LOCK_EX).
-// Without the same lock, a make here can compile mid-mutation and fail (observed:
-// "seeds.go:222: assignment mismatch: 1 variable but SeedSpawn returns 2 values").
-// Invariant: any cross-package reader/builder of walk-reachable tree sources
-// must hold the seeds flock while reading. We use /usr/bin/flock (util-linux,
-// present in the sandbox image); it creates the lock file if missing and blocks
-// until free — the same file and same flock(2) semantics as acquireSeedsLock, so
-// these builds and go-root's mutators mutually exclude. One short flock per make
-// call (three holds), not one long hold.
-const seedsLockPath = resolve(repoRoot, "pkg/api/apitest/.seeds-mutation.lock");
-// flock is util-linux and does NOT exist on darwin; this file is the bun test
-// preload, so an unconditional `flock` spawn would ENOENT the whole suite before
-// any test runs (the suite explicitly supports darwin via skip patterns). The
-// cross-gate mutator we're locking against (coverage.go-root) only exists in the
-// Linux sandbox, so where flock is absent the lock is unnecessary — fall back to
-// a plain `make` invocation.
-const hasFlock = Bun.which("flock") !== null;
+// Each `make` below is a cross-package builder that reads walk-reachable tree
+// sources (pkg/api/apitest among them), so it holds the seeds flock; see
+// test/internal/seedsLock.ts. One short flock per make call (three holds), not
+// one long hold.
 const flockMake = (target: string) =>
-  Bun.spawnSync(
-    hasFlock
-      ? ["flock", seedsLockPath, "make", "-C", repoRoot, target]
-      : ["make", "-C", repoRoot, target],
-    { stdout: "inherit", stderr: "inherit" }
-  );
+  Bun.spawnSync(underSeedsLock(["make", "-C", repoRoot, target]), {
+    stdout: "inherit",
+    stderr: "inherit",
+  });
 
 // ── ts-helper ─────────────────────────────────────────────────────────────
 const helperProc = flockMake("ts-helper");
