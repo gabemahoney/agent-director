@@ -1,0 +1,4 @@
+# The vendored b.zuj files are pinned byte for byte by SHA-256
+# (PROVENANCE.txt), so git must never convert their line endings.
+* -text
+*.jar binary

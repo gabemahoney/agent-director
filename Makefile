@@ -566,6 +566,66 @@ measure-exit: _measure-exit-credentials
 	tools/measure-exit/run.sh $(MEASURE_MODE) --run --image $(MEASURE_IMAGE) \
 		--claude-code-version $(MEASURE_CLAUDE_CODE_VERSION) --base-image $(TEST_IMAGE) $(MEASURE_ARGS)
 
+# ─────────────────────────────────────────────────────────────────────────
+# tla (Epic 22): the TLA+ model check of the LABEL design (bee b.zuj's
+# specs and suite, vendored in spec/tla/; runner spec/tla/ci/run_ci.sh).
+#
+# An ON-DEMAND design check taken before engineering when the design changes;
+# not CI. Not part of all, test, test-sandbox or any release target, and no
+# other target depends on it.
+#
+#   tla        submits the suite to the job scheduler and blocks until the
+#              last job ends, streaming one PASS/FAIL line per run and ending
+#              with the runner's CI-VERDICT line; exits non-zero on FAIL. The
+#              fast tier (default) is 10 jobs and about 1.5 h of scheduler
+#              time; the full tier about 6-7 h. Each job sends one notice to
+#              TLA_CHANNEL. It needs the scheduler's dispatcher already
+#              running (it refuses, before submitting anything, when it is
+#              not) and never starts or stops it. It runs on the host because
+#              the scheduler CLI is a host tool, but never starts the model
+#              checker on this host: that runs only in each job's container on
+#              the scheduler's remote host. Interrupting it cancels a job that
+#              is still queued (its context is removed, so the scheduler
+#              rejects it); a job already building or running finishes on the
+#              scheduler, which has no cancel operation. Run it only with the
+#              operator's go-ahead.
+#   tla-print  prints the plan (tier, groups, jobs, runs, budgets, the limits
+#              needed) and the pin check; submits nothing, never contacts the
+#              scheduler. Safe offline.
+#
+# Variables (each overridable on the make command line):
+#   TLA_CHANNEL   required, no default: the job scheduler's notice channel ID
+#                 (must be on the scheduler's allow-list)
+#   TLA_JOBSCHED  the job scheduler CLI; default jobsched on PATH, but the CLI
+#                 is meant to be run by its absolute path, so pass that
+#   TLA_TIER      fast (default) or full
+#   TLA_GROUPS    groups to run, space-separated (default: every manifest group)
+#   TLA_SPEC_DIR  directory holding the three .tla specs (default spec/tla/;
+#                 an override is not pinned), e.g. a broken copy under $TMPDIR
+#   TLA_SUITE     manifest override (default spec/tla/ci/suite.tsv; an
+#                 override is not pinned)
+# Job contexts and logs go in a per-run directory under $TMPDIR, outside the
+# repo; the runner prints it.
+TLA_JOBSCHED ?= jobsched
+TLA_CHANNEL ?=
+TLA_TIER ?= fast
+TLA_GROUPS ?=
+TLA_SPEC_DIR ?=
+TLA_SUITE ?=
+tla tla-print: export TLA_JOBSCHED := $(TLA_JOBSCHED)
+tla tla-print: export TLA_CHANNEL := $(TLA_CHANNEL)
+tla tla-print: export TLA_TIER := $(TLA_TIER)
+tla tla-print: export TLA_GROUPS := $(TLA_GROUPS)
+tla tla-print: export TLA_SPEC_DIR := $(TLA_SPEC_DIR)
+tla tla-print: export TLA_SUITE := $(TLA_SUITE)
+
+.PHONY: tla tla-print
+tla:
+	bash spec/tla/ci/run_ci.sh
+
+tla-print:
+	bash spec/tla/ci/run_ci.sh --print
+
 # release-binaries cross-compiles the three supported targets into
 # $(RELEASE_DIST_DIR) (default ./dist/; override for test isolation — b.aur).
 # CGO_ENABLED=0 + modernc.org/sqlite (pure Go SQLite) yields fully static

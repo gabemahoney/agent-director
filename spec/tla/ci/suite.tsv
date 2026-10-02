@@ -1,0 +1,93 @@
+# group	spec	cfg	cap_s	expect	tier	what
+g1	Phase4Split	ci_C1	1800	violation	fast	control A1: token cleared at report-in
+g1	Phase4Split	ci_C2	1800	violation	fast	control A2: lookup by name, rename
+g1	Phase4Split	ci_C3	1800	violation	fast	control A3: `$` name chained
+g1	Phase4Split	ci_C4	1800	violation	fast	control A4: failed label step leaves an unlabelled session
+g1	Phase4Split	ci_C5	1800	violation	fast	control A5: kill-session only, grouped viewer
+g1	Phase4Split	ci_C6	1800	violation	fast	control A6: caller's server, no adoption
+g1	Phase4	ci_C7	1800	violation	fast	control A7: session presence = alive (needs remain-on-exit; out-of-scope setting)
+g1	Phase4Split	ci_Cact	1800	violation	fast	accepted residual: listing and act as separate steps + restart (declined if-shell guard)
+g1	Phase4Split	ci_Chook	1800	violation	fast	control decision 1: hooks from any process move the row (no gating), unlabelled leftover + rename (the ci_G3b_ren trace)
+g1	Phase4Split	ci_Cstore	1800	violation	fast	control decision 2: no store id in the label, another store's agent with the same id
+g1	Phase4Split	ci_V_HookIgnored	1800	violation	fast	probe: a hook from another process is ignored
+g1	Phase4Split	ci_V_ScanBlocks	1800	violation	fast	probe: a plain spawn is blocked by a labelled leftover
+g1	Phase4Split	ci_V_OtherStore	1800	violation	fast	probe: another store's agent with this id is present
+g1	Phase4Split	ci_V_Ours	1800	violation	fast	probe: Ours reachable
+g1	Phase4Split	ci_V_Leftover	1800	violation	fast	probe: Leftover reachable (spawn scan off)
+g1	Phase4Split	ci_V_Gone	1800	violation	fast	probe: Gone reachable
+g1	Phase4Split	ci_V_CantDiff	1800	violation	fast	probe: CantDiff reachable
+g1	Phase4Split	ci_V_Cant	1800	violation	fast	probe: Cant reachable
+g1	Phase4Split	ci_V_OursRenamed	1800	violation	fast	probe: OursRenamed reachable
+g1	Phase4Split	ci_V_Renamed	1800	violation	fast	probe: Renamed reachable
+g1	Phase4Split	ci_V_Grouped	1800	violation	fast	probe: Grouped reachable
+g1	Phase4Split	ci_V_KillWithViewer	1800	violation	fast	probe: KillWithViewer reachable
+g1	Phase4Split	ci_V_LabfailKilled	1800	violation	fast	probe: LabfailKilled reachable
+g1	Phase4Split	ci_V_LostReply	1800	violation	fast	probe: LostReply reachable
+g1	Phase4Split	ci_V_Adopted	1800	violation	fast	probe: Adopted reachable
+g1	Phase4Split	ci_V_Restarted	1800	violation	fast	probe: Restarted reachable
+g1	Phase4Split	ci_V_RestartGone	1800	violation	fast	probe: RestartGone reachable
+g1	Phase4Split	ci_V_P1Conflict	1800	violation	fast	probe: P1Conflict reachable (spawn scan off)
+g1	Phase4Split	ci_V_HeldEnd	1800	violation	fast	probe: HeldEnd reachable
+g1	Phase4Split	ci_V_SquatGoneMark	1800	violation	fast	probe: SquatGoneMark reachable
+g1	Phase4Split	ci_V_KillFailed	1800	violation	fast	probe: KillFailed reachable
+g1	Phase4Split	ci_V_HumanKillFinished	1800	violation	fast	probe: HumanKillFinished reachable
+g1	Phase4Split	ci_V_DollarById	1800	violation	fast	probe: a `$` session carries its own current label
+g1	Phase4Split	ci_V_ApproveResumed	1800	violation	fast	probe: send-keys reaches a resumed launch's pane
+g2	Phase4Split	ci_L5o	1800	pass	fast	PendingResolves, orchestrator + human kill, no stray, 2/2, all in-scope accidents
+g2	Phase4Split	ci_L5b_ren	1800	pass	full	PendingResolves, bot + human resume + human kill, no stray, 2 sessions / 1 life; rename
+g2	Phase4Split	ci_L5b_grp	1800	pass	full	PendingResolves, bot + human resume + human kill, no stray, 2 sessions / 1 life; grouped viewer
+g2	Phase4Split	ci_L5b_lab	1800	pass	fast	PendingResolves, bot + human resume + human kill, no stray, 2 sessions / 1 life; failed label step
+g2	Phase4Split	ci_L5b_rst	1800	pass	full	PendingResolves, bot + human resume + human kill, no stray, 2 sessions / 1 life; server restart
+g2	Phase4Split	ci_L5b_reb	1800	pass	full	PendingResolves, bot + human resume + human kill, no stray, 2 sessions / 1 life; different server at the socket
+g2	Phase4	ci_L1	1800	pass	fast	StuckHeals, orchestrator, no stray, 2/2
+g3	Phase4Split	ci_S1o_ren	1800	pass	fast	safety, orchestrator + human kill, 3/3; rename
+g3	Phase4Split	ci_S1o_grp	1800	pass	fast	safety, orchestrator + human kill, 3/3; grouped viewer
+g3	Phase4Split	ci_S1o_lab	1800	pass	fast	safety, orchestrator + human kill, 3/3; failed label step
+g3	Phase4Split	ci_S1o_rst	1800	pass	fast	safety, orchestrator + human kill, 3/3; server restart
+g3	Phase4Split	ci_S1o_reb	1800	pass	fast	safety, orchestrator + human kill, 3/3; different server at the socket
+g3	Phase4Split	ci_S1o_D	1800	pass	fast	safety, orchestrator with a `$` name, 3/3
+g3	Phase4Split	ci_S3o	1800	pass	fast	safety, orchestrator on {n, nx} with bot sessions on n, 3/3
+g4a	Phase4Split	ci_S1b_ren	1800	pass	full	safety, bot + human kill (+unlatch), 3 sessions / 2 lives; rename
+g4a	Phase4Split	ci_S1b_grp	1800	pass	full	safety, bot + human kill (+unlatch), 3 sessions / 2 lives; grouped viewer
+g4a	Phase4Split	ci_S1b_lab	1800	pass	fast	safety, bot + human kill (+unlatch), 3 sessions / 2 lives; failed label step
+g4a	Phase4Split	ci_S1b_rst	1800	pass	full	safety, bot + human kill (+unlatch), 3 sessions / 2 lives; server restart
+g4a	Phase4Split	ci_S1b_reb	1800	pass	full	safety, bot + human kill (+unlatch), 3 sessions / 2 lives; different server at the socket
+g4b	Phase4Split	ci_S1h_ren	1800	pass	full	safety, bot + human resume, 3 sessions / 2 lives; rename
+g4b	Phase4Split	ci_S1h_grp	1800	pass	full	safety, bot + human resume, 3 sessions / 2 lives; grouped viewer
+g4b	Phase4Split	ci_S1h_lab	1800	pass	fast	safety, bot + human resume, 3 sessions / 2 lives; failed label step
+g4b	Phase4Split	ci_S1h_rst	1800	pass	full	safety, bot + human resume, 3 sessions / 2 lives; server restart
+g4b	Phase4Split	ci_S1h_reb	1800	pass	full	safety, bot + human resume, 3 sessions / 2 lives; different server at the socket
+g5a	Phase4Split	ci_G3b_ren	1800	pass	full	safety, bot + human kill + leftover, 3/2; rename
+g5a	Phase4Split	ci_G3b_grp	1800	pass	full	safety, bot + human kill + leftover, 3/3; grouped viewer
+g5a	Phase4Split	ci_G3b_lab	1800	pass	fast	safety, bot + human kill + leftover, 3/3; failed label step
+g5a	Phase4Split	ci_G3b_rst	1800	pass	full	safety, bot + human kill + leftover, 3/2; server restart
+g5a	Phase4Split	ci_G3b_reb	1800	pass	full	safety, bot + human kill + leftover, 3/3; different server at the socket
+g5b	Phase4Split	ci_G3b_ren_u	1800	pass	full	safety, as G3b_ren (3/2) with an UNLABELLED leftover (the scan cannot see it; hook gating must hold)
+g5b	Phase4Split	ci_G3b_ren_noscan	1800	pass	full	safety, as G3b_ren (3/2) with the pre-spawn scan off (hook gating alone)
+g5b	Phase4Split	ci_S_store	1800	pass	fast	safety, orchestrator + human kill, 3/3, another store's agent with the same id
+g5b	Phase4Split	ci_S3b	1800	pass	full	safety, bot with orchestrator sessions on n/nx, 3/3
+g5c	Phase4	ci_smoke_win	600	pass	fast	safety, UNSPLIT bot + orchestrator + human kill, 2 sessions / 1 life, no /proc wall; rename + grouped viewer
+g5c	Phase4	ci_smoke_lab	600	pass	fast	safety, UNSPLIT bot + orchestrator + human kill, 2 sessions / 1 life, no /proc wall; failed label step
+g5c	Phase4	ci_smoke_srv	600	pass	fast	safety, UNSPLIT bot + orchestrator + human kill, 2 sessions / 1 life, no /proc wall; restart + different server
+g6	Phase5Hook	ci_H_S	1800	pass	full	hook gate by parent pid+start, nested + teammates + leftover + stray + /clear + lost reply + SIGHUP survivors + pid reuse
+g6	Phase5Hook	ci_H_Sns	600	pass	fast	as ci_H_S with an unreadable pane start time (pid alone decides), no pid reuse (unbounded processes: MaxClock 4)
+g6	Phase5Hook	ci_H_Rns	1800	violation	fast	residual: unreadable start time + pid reuse (the agent dies before its first hook and another Claude gets its pid)
+g6	Phase5Hook	ci_H_L	1800	pass	full	PendingResolves, find-missing reads a gone @ad_pane pane as Gone
+g6	Phase5Hook	ci_H_Lsrd	1800	violation	fast	PendingResolves as SRD rev 17 (no pane recorded + labelled session kept by a teammate)
+g6	Phase5Hook	ci_H_Lrep_nowait	1800	violation	fast	control: SessionStart does not wait for the identity write (ReportInResolves)
+g6	Phase5Hook	ci_H_Lrep	1800	pass	fast	ReportInResolves: SessionStart waits (bounded by the grace period) for the identity write
+g6	Phase5Hook	ci_H_Lrep_slow	1800	violation	fast	residual (ii): the identity write comes after the grace period (late not excused)
+g6	Phase5Hook	ci_H_Ctop	1800	violation	fast	control: gate by the topmost ancestor carrying the id (the old walk)
+g6	Phase5Hook	ci_H_Cpane	1800	violation	fast	control: gate by the hook's pane only
+g6	Phase5Hook	ci_H_Ckill	1800	violation	fast	control: kill waits for the agent process only
+g6	Phase5Hook	ci_H_Cadopt	1800	violation	fast	control: a lost reply adopts any pane of the labelled session
+g6	Phase5Hook	ci_H_V_NestedIgnored	1800	violation	fast	probe: NestedIgnored reachable
+g6	Phase5Hook	ci_H_V_RotationApplied	1800	violation	fast	probe: RotationApplied reachable
+g6	Phase5Hook	ci_H_V_Adopted	1800	violation	fast	probe: Adopted reachable
+g6	Phase5Hook	ci_H_V_KillFailed	1800	violation	fast	probe: KillFailed reachable
+g6	Phase5Hook	ci_H_V_ChildOutlives	1800	violation	fast	probe: ChildOutlives reachable
+g6	Phase5Hook	ci_H_V_TeammateLive	1800	violation	fast	probe: TeammateLive reachable
+g6	Phase5Hook	ci_H_V_PidReused	1800	violation	fast	probe: PidReused reachable
+g6	Phase5Hook	ci_H_V_NullStart	1800	violation	fast	probe: NullStart reachable
+g6	Phase5Hook	ci_H_V_WaitedApplied	1800	violation	fast	probe: WaitedApplied reachable
+g6	Phase5Hook	ci_H_V_WaitedIgnored	1800	violation	fast	probe: WaitedIgnored reachable

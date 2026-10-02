@@ -1,0 +1,206 @@
+spec/tla/ provenance
+
+What this is
+  Bee b.zuj's TLA+ model of the Phase 1 LABEL design and its on-demand
+  model-check suite, vendored so `make tla` can submit it to the job
+  scheduler (Epic 22, t1.h98.8p; subtask t3.h98.8p.q1.74). Bee b.zuj owns
+  the model and its results: nothing in this tree changes the specs, the
+  cfgs, the manifest or the expectations. To re-sync, copy the files from
+  b.zuj again and replace the pin lines at the end of this file.
+
+Source
+  Bee b.zuj, directory tickets/Ideas/b.zuj/ of the Apiary ticket tree (outside
+  this repo). Copied byte for byte with cp on 2026-10-02. Every file's SHA-256
+  is in the pin list below; each was checked equal to its b.zuj source with
+  sha256sum at copy time.
+
+Delivering run: b.zuj CI run 4
+  CI-VERDICT PASS (92/92 runs ok, 364 min, tier full)
+  2026-09-30, 14:43Z to 20:47Z. Jobs, in order:
+    parse j20260930144325-5586a2   g1  j20260930144425-b76825
+    g2    j20260930144926-6e5fa6   g3  j20260930152029-24a59e
+    g4a   j20260930153030-966ca3   g4b j20260930161505-dba491
+    g5a   j20260930172541-bed0d1   g5b j20260930182818-a5b1c6
+    g5c   j20260930193024-46910e   g6  j20260930193154-3f3239
+  The inputs in that run's job contexts are byte-identical (cmp, 2026-10-02)
+  to the files vendored here: the three specs, every cfg, tla2tools.jar and
+  jobs/lib/Dockerfile. Each context's tlcjob.sh differs from
+  jobs/lib/tlcjob.sh only in the BUDGET and DISKCAP_MB defaults (lines 14 and
+  15), which the runner patches per job. The full tier is a superset of the
+  default fast tier.
+  Caveats: b.zuj wrote no delivery note. b.zuj's run_ci.sh, mkci.py and
+  suite.tsv were rewritten at 18:44Z, during run 4 (the tier column); the
+  run's inputs did not change.
+
+Generator check (decision D4, option b)
+  ci/mkci.py was not run here: there is no python3 at run time, the sandbox
+  image has none, and host python is not used. The evidence that the
+  vendored cfgs and manifest are exactly mkci.py's output is b.zuj's own
+  generation: mkci.py has mtime 2026-09-30 18:44:15.843Z, ci/suite.tsv
+  18:44:15.858Z, and every one of the 92 cfgs suite.tsv names falls between
+  18:44:15.851Z and 18:44:15.858Z, so a single mkci.py run wrote all of them;
+  run 4 above then passed on these exact bytes. b.zuj's ci/cfg/ also holds
+  six cfgs from 2026-09-29 00:35Z (ci_S1bs_ren, ci_S1bs_grp, ci_S1bs_lab,
+  ci_S1bs_rst, ci_S1bs_reb and ci_smoke) that the current mkci.py does not
+  write; they are not vendored. mkci.py is vendored unchanged for re-syncing
+  from b.zuj; the runner never runs it and checks the pins below instead.
+
+Layout (b.zuj's relative layout, so mkci.py's paths stay valid)
+  Phase4.tla, Phase4Split.tla, Phase5Hook.tla   the specs
+  tla2tools.jar                                 TLC, pinned below
+  ci/mkci.py                                    the generator
+  ci/suite.tsv                                  the manifest
+  ci/cfg/*.cfg                                  the 92 cfgs suite.tsv names
+  jobs/lib/Dockerfile, jobs/lib/tlcjob.sh       the job image files
+  ci/run_ci.sh                                  the repo runner, adapted from
+                                                b.zuj's run_ci.sh; written for
+                                                this repo, so not pinned
+  PROVENANCE.txt                                this file
+
+Not vendored
+  b.zuj's ci/run_ci.sh as written (the repo runner replaces it),
+  ci/targeted-*.tsv (8 one-off subset manifests), ci/README.md, ci/jobs/,
+  ci/logs/, exp/, Phase5Hook.tla.pre0930b, the six older cfgs above, the
+  older cfgs, specs and generators at the b.zuj root, and the reports.
+
+The suite
+  ci/suite.tsv: 92 rows; columns group, spec, cfg, cap_s, expect, tier, what.
+  Groups, in manifest order: g1 g2 g3 g4a g4b g5a g5b g5c g6.
+  Tiers: fast 71 runs (every must-fail run plus mkci.py's FAST_PASS; the
+  default of `make tla`); full 92 runs (every row; optional).
+  Specs: Phase4 5 rows, Phase4Split 65 rows, Phase5Hook 22 rows.
+
+Design values mkci.py sets (only controls turn them off)
+  Phase4 / Phase4Split: HookGate TRUE, SpawnScan TRUE, StoreInLabel TRUE,
+    AllowOtherStore FALSE, LeftoverLabelled TRUE.
+    Phase4's HookGate models WD 2026-09-29 HOOK, a session-id gate that
+    decision-0929c superseded; its runs (ci_G3b_ren*, ci_Chook,
+    ci_V_HookIgnored) check that superseded gate.
+  Phase5Hook (decision-0929c hook identity, plus decision-0930b Q1's
+    SessionStart wait): Gate = "parent" (the built gate), AdoptBy = "adpane",
+    KillAll = TRUE, HookWait = TRUE, FMNoPaneGone = TRUE.
+
+Wording
+  The vendored b.zuj files, and verbatim copies of their output lines, keep
+  their own wording, which predates the repo's wording rule. Everything this
+  Epic writes follows that rule.
+
+tla2tools.jar pin (committed, not fetched)
+  jar.bytes   4493033
+  jar.tlc     TLC2 Version 2026.09.23.154203 (rev: 4260e47), a nightly
+              master build
+  jar.source  bee b.zuj, tickets/Ideas/b.zuj/tla2tools.jar
+  jar.sha256  in the pin list below
+  Why committed: this build has no immutable upstream URL. The GitHub v1.8.0
+  release is a rolling prerelease whose jar each nightly replaces,
+  nightly.tlapl.us keeps only the latest jar, v1.7.4 is a different TLC that
+  never ran this suite, and Maven Central has no tla2tools artifact. A fetch
+  by checksum would either break at the next nightly or run a TLC b.zuj never
+  validated. The jar is MIT-licensed.
+
+Pin list
+  One line per vendored file: SHA-256, two spaces, the path relative to
+  spec/tla/ (sha256sum format). ci/run_ci.sh checks every line before it
+  builds or submits anything and fails closed on any difference, except the
+  three specs when TLA_SPEC_DIR is set and ci/suite.tsv when TLA_SUITE is set.
+
+77c292490c2cb2fe40f363cacf6fd4008741fb225ff96f3ccc1dddaed4f3f45d  Phase4.tla
+257a0f1d79c73a0efb4897959c9ca0335e2b705695e7aaae2a48242760a1811e  Phase4Split.tla
+e34dc7153b6c9d7230440f96c2b11a308e55a68608e46de75f37a236ed5f3a2e  Phase5Hook.tla
+320d5f022777a8194c194388bc7c39ba54c0570a0a6b40dcffd374e551057067  ci/cfg/ci_C1.cfg
+eccd5071110e7f6d2ca718461e17052a78d6b3cd0135f93b7d16f53c5f139828  ci/cfg/ci_C2.cfg
+37406b2fbbd17d263acb7da30a020585d1bbeae4427a54e88fcbdaecb02e4494  ci/cfg/ci_C3.cfg
+338534d3dac649ac02e4977809234ba0aeec36af2d072613acedc33a2a0894be  ci/cfg/ci_C4.cfg
+f1ebb53a8af6ac799423e9b47e77c1820ed6e07f23fae819f6dc6e0aba5df6a3  ci/cfg/ci_C5.cfg
+2144705cf0903c0d0cbe4bd94a0661ad24254db30c5d8afbfbe16a7367871aa3  ci/cfg/ci_C6.cfg
+c24b97f85ba05b8f68ab623da0c6628c3509d68bc6793a89405af6599538f655  ci/cfg/ci_C7.cfg
+9ba6a5768984c07d464ec4cf5a5472ef6d44c3a1ffaa34a8249d09aa8f7ea04f  ci/cfg/ci_Cact.cfg
+79784c3e53c99426eb991fba88511bb322b4dde8061225930782cd8e4ec1e45d  ci/cfg/ci_Chook.cfg
+750a1314cf553110640a88cdb04d834134ce694b94d14f44270df9ebc0e63d98  ci/cfg/ci_Cstore.cfg
+ffd319a68c08ef0e52184c28ac96e0e80f274257282eb7d14cdf49bcd226c6cc  ci/cfg/ci_G3b_grp.cfg
+2553252fad692e36255e7127080c96933333d3101621a6ae3a7c99d8403e8343  ci/cfg/ci_G3b_lab.cfg
+8a94e13e5e79de1c87fe0b8efb6bb86fc5c86527d679df493d70065769a2a9c1  ci/cfg/ci_G3b_reb.cfg
+b6fe49d50979f7f736e2e5f8bb8cd7bfb801812810fbf115a6d1787f2386aead  ci/cfg/ci_G3b_ren.cfg
+035ea69d8c383b326b8b97d6a6a639d8e714abfa7735abb881692c9fc18714e9  ci/cfg/ci_G3b_ren_noscan.cfg
+c3465b7d9cb58e1e03380d23e01b90709afef4eb2a56b0c8623e71b8e48f2d7b  ci/cfg/ci_G3b_ren_u.cfg
+a5058beda6a17ae959c8095c021cc13e6f167b539a99182b6d55c43e7b60f25a  ci/cfg/ci_G3b_rst.cfg
+7148464115cfa1e866ba3b42d06f1504f2715626ccba374c1f6e7a893f136380  ci/cfg/ci_H_Cadopt.cfg
+0945941ba818f5c1ade606fb9a084f1ebe7a24f1019ee35cb14881d1773d6b0c  ci/cfg/ci_H_Ckill.cfg
+10d6703079b60f64d50526e795bff7301aef9033086d09ec68622f09cd8e0251  ci/cfg/ci_H_Cpane.cfg
+78edf076ea92afeddde7ec8991cde754eaf0c0e9bbfe37052bb5fa837001dd5c  ci/cfg/ci_H_Ctop.cfg
+769d41fb5d0ef4498f3394726b84bfd1c93a9b14900f19f07e4e10bce2c587f0  ci/cfg/ci_H_L.cfg
+dde3a2298982d893395ac77bae462684f63a6309dd538825a8b18ec85f4e3a73  ci/cfg/ci_H_Lrep.cfg
+2b787e83cf17e302307c32ca62215b6b9e5f4c128d4be2ccb6350b0339ef9e19  ci/cfg/ci_H_Lrep_nowait.cfg
+f83d18edf9f3d3ded9cedcf2fca4f67a1842901fd8c29c9b9441498df4c5382c  ci/cfg/ci_H_Lrep_slow.cfg
+54951a4d047b046657cab3ae5137907e9f489364d141c27ec445bec022f6d17a  ci/cfg/ci_H_Lsrd.cfg
+f874223a04d117e729a8ad68d5c29a6b5f989a943a7f0570ee0cc2f72fb6c14f  ci/cfg/ci_H_Rns.cfg
+eb1652c47e5e5e91eaff87bde81d040e2f7cbf5f18d6591f026176d4e0b5d4d7  ci/cfg/ci_H_S.cfg
+993d3e6f3d262730047a35df3a7e4be069b4bda65943cb84061bdac75e336ab3  ci/cfg/ci_H_Sns.cfg
+7cccb0f97d3b3ac4bd197dd74f8ec1ead14187d345e69a89af623f1855464dd4  ci/cfg/ci_H_V_Adopted.cfg
+0668c29502af0f13e5b8d5aafc4e31ffc7461bbe55f3305eccf08c9a7cc046c0  ci/cfg/ci_H_V_ChildOutlives.cfg
+6dcf83e61d9bddd9ae1bc37955c7107457dcad29092bd06d70268552bcd29b3e  ci/cfg/ci_H_V_KillFailed.cfg
+6cddd9483d3dc5d55a050c2b591f75a289283dbe8534f1c672b0770dba1297cb  ci/cfg/ci_H_V_NestedIgnored.cfg
+02506acf382317556cd676e998bcc0a5b934c834c0959eedf8e37f75a1adc9d1  ci/cfg/ci_H_V_NullStart.cfg
+55c9ba945a7a1b8253d2d71675f995ea0b02aa7cde5462d93455d5092a944f65  ci/cfg/ci_H_V_PidReused.cfg
+0b5f93ec7a2aa4b84c754a1a307951a47cd1ed41fbc52958729d78fbeb2eba4b  ci/cfg/ci_H_V_RotationApplied.cfg
+8eefed8bd766c26d69f233c981e530f9a79e51b0dec55b034d27c8053375cf00  ci/cfg/ci_H_V_TeammateLive.cfg
+6bb60abcde7a1669a1eb03f0e52f452551dec4c0fdbba26bc3ca05e8d32b9b90  ci/cfg/ci_H_V_WaitedApplied.cfg
+09b50c5d2b3b5abc8c4f6d0bbc9fbc2d8cf0139246aa3f0b11781769b0fd6119  ci/cfg/ci_H_V_WaitedIgnored.cfg
+293d7bb31d11c72f9276de57d277304706a5291297174545f75275497a7b65f1  ci/cfg/ci_L1.cfg
+90f586fdceb2e2c7fbcc21874ec15456c5e07e63f94b3777f2d1d4802082d0c7  ci/cfg/ci_L5b_grp.cfg
+c046fde742b24abed3b70642cc435d52b5f659e2e2e5b585254ee7f15409c893  ci/cfg/ci_L5b_lab.cfg
+7ad863beeac8a57e04c02c2e5cbea221ca1f48bafc70862ef77885eee1d3244a  ci/cfg/ci_L5b_reb.cfg
+454a9366e662d39fcc4a1c4479582be37279443b1dc43c4a7233a85fcebf5ed3  ci/cfg/ci_L5b_ren.cfg
+df81c341e56869ae0226cffa3f8567f26eccd4cda11bdab65ade20fe4f16d096  ci/cfg/ci_L5b_rst.cfg
+8539b7d2d70dc822ca8f6c0a6b73926bdbaac6c9fbb4e6df589ac53419fcc844  ci/cfg/ci_L5o.cfg
+e5cb6fff6ee32bdfbcbca9c55a3c199306ea8751dce7d5c564ea0b8fd1784539  ci/cfg/ci_S1b_grp.cfg
+ecac6868bd30d38ebd1e8fa40448e7e9c436274baeb822ae60732cd8b5ad62dc  ci/cfg/ci_S1b_lab.cfg
+73ce5f4bb14ea78522d32f80a3d1266c528b2b8d783008987429e76e8412e4e2  ci/cfg/ci_S1b_reb.cfg
+5dd5af8560fa401ff47b2366c4a62d31e57abe94de0b1881c987275741efe2f1  ci/cfg/ci_S1b_ren.cfg
+319ac0ab928a1510113d6e40aefc3533407ceae485e73bc7388271b3919a08ff  ci/cfg/ci_S1b_rst.cfg
+502d2cc05f130747348f9636ac688a5a755edf85a49054741537923ef79e6100  ci/cfg/ci_S1h_grp.cfg
+bd119d421ba6f96a4b06ed05ca539cb4e19c6b7ae944dd098f5cb1f26d2517bf  ci/cfg/ci_S1h_lab.cfg
+283a4a37ee7166c7ad91095d8569a5ed6e8b637470f9e6f07de1504a87bd76fc  ci/cfg/ci_S1h_reb.cfg
+2146b4cf41998094c95abb96ef65eb4928438aaf0d7922662022a9b5f02f2de3  ci/cfg/ci_S1h_ren.cfg
+2a6f7e3f35541b85431245f7712805877acda6f8b20e01ef42662dc649f1a5e8  ci/cfg/ci_S1h_rst.cfg
+1d8f1875217e019fb0220cf331f7d4ae4ab0ca884c038a9b0270044a6045b020  ci/cfg/ci_S1o_D.cfg
+64e6866f2bdbaf7a7732314583f1d31451159ac16505e80a6c15554450926161  ci/cfg/ci_S1o_grp.cfg
+8651485a3233ad6ac58afa5be0bec41c44cb517e11b1033aef6f2a8a793b6264  ci/cfg/ci_S1o_lab.cfg
+a585d2fb257b83d0defb3d26be1aa6189e9a968a0c9a973257660b749d84d495  ci/cfg/ci_S1o_reb.cfg
+fc39533181fb1a8c6fff8db2571997f733c9f8152d458d2196b345791c56329a  ci/cfg/ci_S1o_ren.cfg
+4ab31d40cd5ab955dc6c15b8a1fe756eaf50920fe5adf21a418cfaf2242c60c8  ci/cfg/ci_S1o_rst.cfg
+9010fe2422f344a127adcbe8b9498d8e37189d64f70f233fff383a8328785735  ci/cfg/ci_S3b.cfg
+12462e5b12cc8994ef39dff9eb5b6692c387b261eda5791cd6d759bc8fc02449  ci/cfg/ci_S3o.cfg
+ad31a54733aff39618a0ffb7183ad667016b147961cb6e5729bbbb3d5bfb7c80  ci/cfg/ci_S_store.cfg
+49b679dbba22ff8637790f549b917d13c40e7f2036d708c6879847a4d5554f6f  ci/cfg/ci_V_Adopted.cfg
+ad4ce134a6c16de8677c9f9cf2a86b2716d065e9fdef86aa1d2228efe7429e99  ci/cfg/ci_V_ApproveResumed.cfg
+9a7229d3e444b0deec629c951768e9323037b4f046913bce0cde673ae7925b7a  ci/cfg/ci_V_Cant.cfg
+e23c1d1c3e06b9d16022ccbde0ad8e16e50d496d662a99230d190286bc38f5a4  ci/cfg/ci_V_CantDiff.cfg
+726f0bdd56a99fd636dc05702266131ad794517f99ce8ed7bcfb9343d667c6ab  ci/cfg/ci_V_DollarById.cfg
+9ae8594976716dbae97865582a9be2aa870c9c1d7871f7c5ea8bb20d36e359c5  ci/cfg/ci_V_Gone.cfg
+e7c9328616b46a77826a1b35c5590016fcb300a59d3c813750836edb8c92c057  ci/cfg/ci_V_Grouped.cfg
+d248d089dbd98accaa7c26199fde1e3cbb08438873c3017a1de377af40b62dce  ci/cfg/ci_V_HeldEnd.cfg
+cb12749671f16b7032f15523a162ef949fb43fb4adc0c162e88dbb9161150312  ci/cfg/ci_V_HookIgnored.cfg
+eeb11cae39f85af7f21c12ad538040bb3b7b3a5de9de555989fd06f46f78561e  ci/cfg/ci_V_HumanKillFinished.cfg
+7f97a32b6f25453d797efcf06702ac21f702e87166371ccb9f2a11803a7d5119  ci/cfg/ci_V_KillFailed.cfg
+802441dfaa6c4fa3a6a8bc8824ac9bb977eb7df58923b29e95951d81a51fef2d  ci/cfg/ci_V_KillWithViewer.cfg
+ff807d6b43f0916768a5d825f752af8b908a3ed133a141ccbc06d044c853ae39  ci/cfg/ci_V_LabfailKilled.cfg
+ae0d089ac7c5f0d5351b9b11c63db8d9253d31127f40521d816cf926709eeaf5  ci/cfg/ci_V_Leftover.cfg
+f3b7dad86e21e314edbdf0790718a663f0ed7822cc2206f490df6e8924aac5ca  ci/cfg/ci_V_LostReply.cfg
+ff5339b0d65b6ce8166c0b51b4271254fd52f9cc3dba7fea8f653ee7d5c9638e  ci/cfg/ci_V_OtherStore.cfg
+ce42a77d571d33a8b98150c2c26e140313555ab6841bae42534669e35387bd08  ci/cfg/ci_V_Ours.cfg
+1b3a17ab4f4ccd55228663eb055959f3d9af473bbfe98966156f4e7e3b9bd910  ci/cfg/ci_V_OursRenamed.cfg
+ffb5a359ebc53acfb153d9fd49b6fe54eeec60f01f31b6ee355de20a0393d698  ci/cfg/ci_V_P1Conflict.cfg
+8fb6ce0efc011d2d909769178f4f0d65ec43d48fc49a6e5dfe9c3b5307b04d41  ci/cfg/ci_V_Renamed.cfg
+e25de0f662525392cc7f4ca3d2eeea3fa6e70a48338438c75203f4cc9550d906  ci/cfg/ci_V_RestartGone.cfg
+cc893917e39b2ff687ba7ca1a9bd52f49274bb0cdebdab4cc20877537f81054c  ci/cfg/ci_V_Restarted.cfg
+7f64580d3676dc2a1612d1a6438e5772a3f666b240c08a95860f8065983d738d  ci/cfg/ci_V_ScanBlocks.cfg
+9138f1c159793e168943060c17c75c7164850e4f79e0c6f29e35d1fe07afa19b  ci/cfg/ci_V_SquatGoneMark.cfg
+a299ecdec463cb8524cc0e198036f49300b77b3c9c955765a33b062b77989eae  ci/cfg/ci_smoke_lab.cfg
+1dddbb48c525f25d198edba9b9293a38265daa15b419e40332d0c50da8c4b6ce  ci/cfg/ci_smoke_srv.cfg
+8d0db542560f6979cfb0361d87123f26612244b18b3a1499b0c146e68db4d000  ci/cfg/ci_smoke_win.cfg
+3f440fbf1599e4fca3beee91270908059046cba746c5ce9ac64896bd580d4b21  ci/mkci.py
+e1ebf061d488d95bacad86e3ad9f7bdf286c35d522190c983b346eb930698fbf  ci/suite.tsv
+f34091493564da5d8abe05b206021dda1d7435a70e46f34e4936c6fcbb001b85  jobs/lib/Dockerfile
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  jobs/lib/tlcjob.sh
+32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81  tla2tools.jar
