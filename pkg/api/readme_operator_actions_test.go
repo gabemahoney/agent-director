@@ -223,15 +223,16 @@ func unusableNameSteps() []stepSpec {
 	}
 }
 
-// unusableNameItem returns the procedure's item heading, failing the test
-// unless it is exactly one heading inside "Operator actions".
-func unusableNameItem(t *testing.T, d mdDoc) mdHeading {
+// operatorActionsItem returns the item heading titled title, failing the test
+// unless it is exactly one heading inside "Operator actions". Later README
+// item checks use it, never their own heading search.
+func operatorActionsItem(t *testing.T, d mdDoc, title string) mdHeading {
 	t.Helper()
 	oa := operatorActions(t, d)
 	from, to := sectionLines(d, oa)
-	hs := d.titled(unusableNameItemTitle)
+	hs := d.titled(title)
 	if len(hs) != 1 || hs[0].line < from || hs[0].line >= to || hs[0].level <= oa.level {
-		t.Fatalf("%s: want exactly one item %q inside %q; found %v", d.path, unusableNameItemTitle, apitest.OperatorActionsTitle, hs)
+		t.Fatalf("%s: want exactly one item %q inside %q; found %v", d.path, title, apitest.OperatorActionsTitle, hs)
 	}
 	return hs[0]
 }
@@ -240,16 +241,21 @@ func unusableNameItem(t *testing.T, d mdDoc) mdHeading {
 // procedure gives SR-18.17's five steps in order, each with its content.
 func TestReadmeOperatorActionsUnusableNameSteps(t *testing.T) {
 	d := readMD(t, mdTopREADME)
-	from, to := sectionLines(d, unusableNameItem(t, d))
-	steps := numberedSteps(d.lines[from:to], from)
-	want := unusableNameSteps()
+	from, to := sectionLines(d, operatorActionsItem(t, d, unusableNameItemTitle))
+	checkSteps(t, d, unusableNameItemTitle, numberedSteps(d.lines[from:to], from), unusableNameSteps())
+}
+
+// checkSteps checks steps are want's steps, numbered 1 on, each naming its
+// prose and giving its tmux commands in order (one subtest per step).
+func checkSteps(t *testing.T, d mdDoc, item string, steps []procStep, want []stepSpec) {
+	t.Helper()
 	if len(steps) != len(want) {
-		t.Errorf("%s %q has %d numbered steps; want %d", d.path, unusableNameItemTitle, len(steps), len(want))
+		t.Errorf("%s %q has %d numbered steps; want %d", d.path, item, len(steps), len(want))
 	}
 	for i, w := range want {
 		t.Run(fmt.Sprintf("step %d %s", i+1, w.name), func(t *testing.T) {
 			if i >= len(steps) {
-				t.Fatalf("step %d (%s) is missing", i+1, w.name)
+				t.Fatalf("%s %q: step %d (%s) is missing", d.path, item, i+1, w.name)
 			}
 			s := steps[i]
 			if s.num != fmt.Sprint(i+1) {

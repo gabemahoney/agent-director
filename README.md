@@ -556,6 +556,25 @@ none uses the socket of your tmux environment, by default
 whose it is. Trail records are lines of `~/.agent-director/ad-trail.jsonl`.
 Never `delete` a row after a `kill` that did not succeed.
 
+### This store's id
+
+The last field of a session's `@ad_owner` label, and the `store_id` of a
+trail record, is a store's id. Read this store's own id directly, as the
+agents' user:
+
+```sh
+sqlite3 -readonly ~/.agent-director/state.db "SELECT value FROM store_meta WHERE key = 'store_id'"
+```
+
+It prints 16 lowercase hexadecimal characters and changes nothing (if your
+config sets another `db_path`, use that file). `sqlite3` is already a
+prerequisite of `install.sh`. This works in a store that has no
+`ad.launch.name_held` record; where one exists, its `store_id` is the same
+value. No verb changes the id. A store taken back to schema v4, by the
+downgrade recipe or by restoring a copy from before the install, gets a new
+id when it is migrated again; trail records written before then carry the
+old one.
+
 ### A finished row's own old session
 
 `resume`, or a `spawn` with `--reuse-finished`, refuses with
@@ -692,7 +711,9 @@ with no valid label may be a person's own, so look before acting.
 
    A valid label has five fields: `ad1`, a launch token, the session's own
    id, the row's id and, last, the store id. Every leftover `kill` names
-   carries this store's id; a label whose last field is a different id
+   carries this store's id, which [This store's id](#this-stores-id) shows
+   (as does the `store_id` of an `ad.launch.name_held` record); a label
+   whose last field is a different id
    belongs to another agent-director store's agent: never end it from this
    store. A session with no label prints nothing
    (`invalid option: @ad_owner` on tmux 3.3a); an invalid label prints
@@ -811,7 +832,8 @@ working as the agents' user and against their tmux server, in this order:
    label of step 2 of "A leftover, or a session with no valid label, or one
    that never reported in on a finished row": `ad1`, a launch token, the
    session's own id (the `$N` you passed to `-t`), this row's id and, last,
-   this store's id (compare it with the `store_id` of the
+   this store's id (compare it with the id
+   [This store's id](#this-stores-id) prints, or with the `store_id` of the
    `ad.launch.name_held` record, as "A session of another agent-director
    store" says). A label whose last field is a different id belongs to
    another agent-director store's agent, even when it names this row's id:
@@ -888,7 +910,8 @@ above describes.
 Handle each session as a leftover (steps 2 to 4 of "A leftover, or a
 session with no valid label, or one that never reported in on a finished
 row"; this store's id is
-the record's `store_id`), then spawn the id again. In the first case no row
+the record's `store_id`, the same id [This store's id](#this-stores-id)
+prints), then spawn the id again. In the first case no row
 exists, so no reuse opt-in is needed. In the second the row is `ended`, so
 spawn with `--reuse-finished`:
 
@@ -921,7 +944,8 @@ spawn has already ended its own row, so spawning the same
 ### A session of another agent-director store
 
 `ErrTmuxSessionConflict` ("another agent-director store"), or a label whose
-last field is not this store's id (compare it with the `store_id` of the
+last field is not this store's id (compare it with the id
+[This store's id](#this-stores-id) prints, or with the `store_id` of the
 `ad.launch.name_held` record): another store on the same tmux server (a
 test sandbox, a second `HOME`, a CI container using the host's socket) owns
 the session. Never end it from this store. Find which store it belongs to
@@ -998,7 +1022,9 @@ pane was not adopted, see the next item.
 1. Find the labelled session and read its label (steps 1 and 2 of the
    leftover item) for the session the error quotes, and for others if it
    was renamed. The agent's session prints the five-field label with this
-   row's id and this store's id; a label with another store's id is
+   row's id and this store's id (compare it with the id
+   [This store's id](#this-stores-id) prints, or with the `store_id` of the
+   `ad.launch.name_held` record); a label with another store's id is
    another store's agent: never end it.
 2. Look at what runs in it, and look read-only as above:
 
@@ -1089,6 +1115,123 @@ for such a row.
    this agent: leave it alone. `find-missing` marks the row `missing` at
    once when no recorded process of it runs and no session carries its
    current label; then resume or reuse the id.
+
+### Stopping a set of agents before a binary change
+
+Every agent is stopped before agent-director's binary changes. When the
+caller's own stop path cannot run, a human stops one labelled set of agents
+(for example the label `service=<name>`) in this order. Never delete,
+hand-edit or migrate `state.db` to stop agents, and never delete a row.
+
+1. Stop whatever starts agents first: the caller's service, its schedulers
+   and its cron jobs. Otherwise they relaunch what you stop.
+2. Use a binary that opens the store. List the set with the installed
+   binary:
+
+   ```sh
+   agent-director list --label <key>=<value>
+   ```
+
+   If it refuses with `ErrSchemaMismatch`, the store is newer than the
+   binary: use the binary that wrote the store. If it refuses with
+   `ErrSchemaMigrationRequired`, the store is older: use the previous
+   binary. Keep a copy of the previous binary before any install, because
+   a rollback needs it too. If it refuses with `ErrConfigMalformed`, first
+   fix the `[tmux]` value it names.
+3. Note every row of the set in a live state (`pending`, `waiting`,
+   `working`, `ask_user` or `check_permission`).
+4. Only with a binary from before this release (0.11.0): its `kill`,
+   `pause` and `send-keys` find a session by name with tmux's prefix match,
+   and its `kill` reports success when tmux failed. For each live row, look
+   for another session whose name begins with the row's name (such rows
+   record no socket, so use the socket of your tmux environment, by default
+   `/tmp/tmux-<uid>/default`):
+
+   ```sh
+   tmux -u -S '<socket>' list-sessions -F '#{session_id} #{session_name}'
+   ```
+
+   Stop such a row by hand (step 6) instead.
+5. Stop each live row. `pause` asks the agent to exit and waits until the
+   row reads `ended`:
+
+   ```sh
+   agent-director pause --claude-instance-id <id>
+   ```
+
+   `pause` stops only a `waiting` row. For every other live row, and for
+   any row `pause` refuses (a row this binary cannot reach, for example) or
+   that does not end in time, use `agent-director kill` and steps 1 to 5 of
+   the live-row sequence of the [caller contract](#caller-contract), which
+   `kill`'s description also gives. With a binary from before this release,
+   confirm each result with `agent-director status --claude-instance-id
+   <id>` and the session listing. Never delete a row.
+6. Handle anything still running by the items of this section: "An agent
+   process that runs with no session or pane of its launch", "A leftover,
+   or a session with no valid label, or one that never reported in on a
+   finished row" and "A `pending` row with no launch start or token". With
+   this release's binary, the last covers every row from before the
+   install.
+7. Confirm that the listing shows no live row of the set and that no
+   session of the set remains:
+
+   ```sh
+   agent-director list --label <key>=<value>
+   tmux -u -S '<socket>' list-sessions -F '#{session_id} #{session_created} #{session_name}'
+   ```
+
+   Then stop every other long-running agent-director process, every
+   `agent-director serve` included, and change the binary.
+
+### agent-director was installed outside the caller's switch-over
+
+This release was installed, and the store migrated, before the caller's
+version for it was deployed. Agents and long-running agent-director
+processes from before the install may still run, and the caller's old
+version cannot run against the migrated store. Stop the caller and whatever
+starts agents (step 1 of "Stopping a set of agents before a binary
+change"), then choose a direction.
+
+**Forward**, preferred when the caller's version for this release can be
+deployed now; it keeps every write since the install:
+
+1. Find the rows from before the install: `get` shows no `tmux_socket` and
+   no `launch_started_at` for them.
+
+   ```sh
+   agent-director list --label <key>=<value>
+   agent-director get --claude-instance-id <id>
+   ```
+
+2. End each live one's agent by hand by its session id, as "A `pending`
+   row with no launch start or token" says. This release's `kill` and
+   `pause` never end such a row's session: it has no label to prove which
+   session is its own.
+3. Restart every long-running agent-director process started before the
+   install, every `agent-director serve` included.
+4. Run `agent-director find-missing`. It marks each such row `missing` once
+   its process is gone.
+5. Deploy the caller's version, which brings its agents back by `resume` or
+   by a spawn with `--reuse-finished`.
+
+Never delete those rows: their history is what `resume` uses.
+
+**Back**, when the caller's version cannot be deployed:
+
+1. Stop every agent of the set as "Stopping a set of agents before a binary
+   change" says, with this release's binary, the only one that opens the
+   migrated store. End the rows from before the install by hand, as in
+   Forward step 2.
+2. Stop every long-running agent-director process.
+3. Restore the store, then the previous binary. For the store, either put
+   back the copy of `state.db` (with its `-wal` and `-shm` files) taken
+   before the install and delete any `state.db-wal` or `state.db-shm` the
+   copy does not include, which loses every write since the install, or run
+   the [downgrade recipe](docs/migration-guide.md#v5--v4-reverses-migratev4tov5),
+   which keeps the rows but loses the values of the columns the migration
+   added.
+4. Start the caller's old version.
+5. Later, follow the caller's switch-over runbook from its start.
 
 ### A row stays `pending` and the trail shows `no_exec_form`
 

@@ -9437,7 +9437,7 @@ each file's doc comments carry the detail.
     refusal classes" heading of this document included.
 
   Each of its test names contains `README`, so `-run README` runs them.
-  Two sibling files check sections on the same parser:
+  Four sibling files check sections on the same parser:
   - `readme_optin_test.go` (SR-6.8, SR-18.15, SR-18.17): `kill`'s
     finished-row opt-in is spelled only in the README's "Operator actions"
     and in no doc under `docs/` or either package README. It holds the
@@ -9455,8 +9455,37 @@ each file's doc comments carry the detail.
     `tmuxCommands(lines, first)` collects the tmux commands of fenced-block
     lines and inline code spans as `tmuxCmd` (subcommand, words,
     `targets()`, `hasFlag`), and `numberedSteps(lines, first)` splits a
-    top-level numbered list into `procStep`s. `-run ReadmeOperatorActions`
-    runs them.
+    top-level numbered list into `procStep`s. Two shared helpers live
+    here too: `operatorActionsItem(t, d, title)` returns the one item
+    heading of that title inside "Operator actions" (failing unless there
+    is exactly one), and `checkSteps(t, d, item, steps, want)` checks a
+    numbered list against `stepSpec`s (count, numbering, each step's prose
+    and its tmux command shapes in order, one subtest per step).
+    `-run ReadmeOperatorActions` runs them.
+  - `readme_operator_actions_more_test.go` (SR-18.17, SR-5.4; AC-DOC-19):
+    `TestReadmeOperatorActionsACDOC19Items` checks the AC-DOC-19 items
+    (their titles are constants here, `stoppingItemTitle` and
+    `switchOverItemTitle`) come once each after the pending-row item, with
+    their prose, the items they name and their numbered procedures
+    (`acDoc19Items()`, `itemProcedure`, `stepSpec`s through `checkSteps`).
+    A step that may name a set in more than one way is checked by
+    `stepForms`; the live-state step takes its forms from
+    `liveStateForms()`, which splits the store's state constants with
+    `store.IsLiveState`, so it holds no state literal.
+    `TestReadmeOperatorActionsACDOC19TitlesNotAgentVisible` checks no
+    manifest text, Go source or package README names those items.
+    `TestReadmeOperatorActionsStoreIDCommand` and
+    `TestReadmeOperatorActionsStoreIDPointers` pin "This store's id" (title
+    `storeIDItemTitle`, command `storeIDCommand`) and the items that link
+    to it beside the trail's `store_id`. Its shared helper
+    `storeIDItemCommands(t, d)` returns the trimmed `sqlite3` lines in that
+    item's fenced blocks.
+  - `readme_store_id_test.go` (SR-5.4): `TestReadmeStoreIDCommandPrintsStoreID`
+    runs the README's store-id line (`runnableStoreIDLine`, through
+    `storeIDItemCommands`, refusing a line without `-readonly`) with HOME at
+    a temp dir holding a fresh store, closed and held open, and checks it
+    prints `Store.StoreID`. A missing `sqlite3` fails inside the sandbox
+    and skips only outside it.
 - **Recovery wording scan** (`pkg/api/recovery_wording_test.go`, Epic 17;
   SR-18.4, SR-18.9, SR-18.16):
   - `TestRecoveryWordingScan` runs `apitest.AssertMustNot` with
@@ -9529,12 +9558,26 @@ or the Recorder constructors, never hand-built label strings.
 a pointer names it, a section's text says something) is built on
 `readMD` / `mdDoc` / `mdAnchor` and the pointer collector, in
 `readme_sections_test.go` or a sibling `readme_*_test.go`
-(`readme_optin_test.go`, `readme_operator_actions_test.go`), never a
+(`readme_optin_test.go`, `readme_operator_actions_test.go`,
+`readme_operator_actions_more_test.go`, `readme_store_id_test.go`), never a
 second Markdown heading parser or pointer scan. It finds "Operator
-actions" through `operatorActions` and a section's lines through
-`sectionLines`; a check of the tmux commands or numbered steps of a README
-section goes through `tmuxCommands` and `numberedSteps`, never a second
-extractor. A new pointer form is a new pattern in `pointersIn`.
+actions" through `operatorActions`, an item inside it through
+`operatorActionsItem` (never `d.titled` and its own range check), and a
+section's lines through `sectionLines`; a check of the tmux commands or
+numbered steps of a README section goes through `tmuxCommands` and
+`numberedSteps`, never a second extractor, and a check of a numbered
+procedure against expected steps goes through `checkSteps` with
+`stepSpec`s, never its own step loop. A new pointer form is a new pattern
+in `pointersIn`.
+
+**Must use:** a later check of the AC-DOC-19 items names them by the
+title constants in `readme_operator_actions_more_test.go`, never a spelled
+title, and a step that may name the live states in more than one way takes
+them from `liveStateForms()`, never a list of state literals. A check or a
+run of the "This store's id" command reads it through
+`storeIDItemCommands`, never its own scan of that item's code blocks; only
+`readme_store_id_test.go` runs it, and only after `runnableStoreIDLine`'s
+`-readonly` check.
 
 **Must use:** a later check that reads every Go source or every manifest
 text (a wording scan, a pointer scan) walks them through `walkGoSources`
