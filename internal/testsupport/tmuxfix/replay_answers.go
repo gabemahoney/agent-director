@@ -1,6 +1,7 @@
 package tmuxfix
 
 import (
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -58,11 +59,26 @@ func LabelValue(token, sessionID, instanceID, storeID string) string {
 }
 
 // ChainLabelValue builds the create chain's set-option -F value, five
-// fields: "ad1 <token> #{session_id} <instance id with every # doubled>
-// <store id>", the store id appended unchanged (SR-3.5, F7; WD 2026-09-29
-// STORE).
+// fields: "ad1 <token> #{session_id} <instance id, format-escaped> <store
+// id>", the store id appended unchanged (SR-3.5, F7; WD 2026-09-29 STORE;
+// b.dsx).
 func ChainLabelValue(token, instanceID, storeID string) string {
-	return "ad1 " + token + " #{session_id} " + strings.ReplaceAll(instanceID, "#", "##") + " " + storeID
+	return "ad1 " + token + " #{session_id} " + formatEscaped(instanceID) + " " + storeID
+}
+
+// hashRun matches a run of "#" and the "[" that follows it, if any.
+var hashRun = regexp.MustCompile(`#+\[?`)
+
+// formatEscaped is text as the client escapes it for tmux's format expansion
+// (b.dsx): each run of "#" doubled, except a run before "[", which tmux
+// copies through as a style and so is left as written.
+func formatEscaped(text string) string {
+	return hashRun.ReplaceAllStringFunc(text, func(run string) string {
+		if strings.HasSuffix(run, "[") {
+			return run
+		}
+		return run + run
+	})
 }
 
 // PaneLabelValue builds the @ad_pane value as stored and listed, "<token>

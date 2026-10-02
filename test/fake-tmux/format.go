@@ -11,9 +11,11 @@ import (
 // variables the client's -F formats name.
 type vars map[string]string
 
-// expand expands a tmux -F format with v: "##" is "#", "#{name}" is v's
-// value (empty for a name v lacks, as tmux gives), and any other "#" stays.
-// Nested formats and conditionals are not supported; the client sends none.
+// expand expands a tmux -F format with v: "##" is "#", except that a run of
+// two or more "#" directly before "[" is a style and is copied as written
+// (tmux's format_expand1), "#{name}" is v's value (empty for a name v lacks,
+// as tmux gives), and any other "#" stays. Nested formats and conditionals
+// are not supported; the client sends none.
 func expand(format string, v vars) string {
 	var b strings.Builder
 	for i := 0; i < len(format); i++ {
@@ -24,6 +26,15 @@ func expand(format string, v vars) string {
 		}
 		switch format[i+1] {
 		case '#':
+			j := i + 2
+			for j < len(format) && format[j] == '#' {
+				j++
+			}
+			if j < len(format) && format[j] == '[' {
+				b.WriteString(format[i : j+1])
+				i = j
+				continue
+			}
 			b.WriteByte('#')
 			i++
 		case '{':

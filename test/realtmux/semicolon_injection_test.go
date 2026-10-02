@@ -1,7 +1,6 @@
 package realtmux_test
 
 import (
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,9 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api"
-	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // Bug b.ukw: tmux splits its argv into commands at every element ending in
@@ -126,7 +123,7 @@ func TestResumeClaudeArgsEndingInSemicolonRunNoTmuxCommand(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newInjectionFix(t)
 			args := append([]string{"x;"}, tc.cmd(f.Marker)...)
-			id, sessionID := f.seedResumable(t, args)
+			id, sessionID := f.seedResumable(t, f.CWD, args)
 			_, err := f.API.Resume(api.ResumeParams{ClaudeInstanceID: id})
 			f.assertNoSecondCommand(t)
 			if err != nil {
@@ -135,24 +132,6 @@ func TestResumeClaudeArgsEndingInSemicolonRunNoTmuxCommand(t *testing.T) {
 			f.assertAgentArgv(t, f.launched(t, id), []string{"--resume", sessionID, "--settings"}, args)
 		})
 	}
-}
-
-// seedResumable seeds an ended row in f.CWD with args as its stored claude
-// args, the socket spawn resolves, the pre-trust opt-out and a transcript on
-// disk; it returns the row's id and session id.
-func (f *injectionFix) seedResumable(t *testing.T, args []string) (id, sessionID string) {
-	t.Helper()
-	id, sessionID = newInstanceID("resume-semi"), newInstanceID("sess")
-	encoded, err := json.Marshal(args)
-	if err != nil {
-		t.Fatalf("encode claude args: %v", err)
-	}
-	if _, err := apitest.SeedSpawn(f.DBPath, id, store.StateEnded, f.CWD, "", sessionID, false,
-		apitest.WithRawClaudeArgs(string(encoded)), apitest.WithTmuxSocket(f.Socket), apitest.WithNoPreTrust(),
-		apitest.WithJsonlPath(apitest.SeedJsonl(t, f.CWD, sessionID))); err != nil {
-		t.Fatalf("SeedSpawn %s: %v", id, err)
-	}
-	return id, sessionID
 }
 
 // TestSpawnValuesEndingInSemicolonAreLiteral spawns with a session name, a

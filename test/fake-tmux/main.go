@@ -26,7 +26,7 @@
 // The fake expands the -F formats the client sends (#{session_id},
 // #{session_created}, #{pid}, #{start_time}, #{session_name}, #{@ad_owner},
 // #{window_index}, #{pane_index}, #{pane_id}, #{pane_pid}, #{@ad_pane};
-// "##" is "#").
+// "##" is "#", but a run of two or more "#" before "[" stays as written).
 //
 //   - list-sessions -F <fmt>: one line per session, sorted by name. A
 //     session's #{@ad_owner} is the server or global-window scope value when

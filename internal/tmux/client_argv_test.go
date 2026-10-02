@@ -167,6 +167,38 @@ func argvCases() []argvCase {
 				";", "set-option", "-p", "-F", "-t", "=n;:", "@ad_pane", tmuxfix.ChainPaneLabelValue(tmuxfix.Token)}},
 			timeout: testTimeouts.Create,
 		},
+		{
+			// b.dsx: the -c cwd and the label's instance id are format-escaped;
+			// the -e entries, which tmux does not expand, are passed raw.
+			name:   "create with format sequences in cwd and id",
+			script: []tmux.RunResult{createReply},
+			call: func(c *tmux.Client) error {
+				_, err := c.NewSession(testSocket, "proj-abc", "/w/x#(touch m)#[y]#S", map[string]string{"K": "#(v)"},
+					[]string{"claude"}, tmuxfix.Token, "id#(x)##[a#", tmuxfix.StoreID)
+				return err
+			},
+			want: [][]string{{"new-session", "-d", "-s", "proj-abc", "-c", "/w/x##(touch m)#[y]##S",
+				"-e", "AGENT_DIRECTOR_INSTANCE_ID=id#(x)##[a#", "-e", "K=#(v)",
+				"-P", "-F", argvCreateFormat, "--", "claude",
+				";", "set-option", "-F", "-t", "=proj-abc:", "@ad_owner",
+				"ad1 " + tmuxfix.Token + " #{session_id} id##(x)##[a## " + tmuxfix.StoreID,
+				";", "set-option", "-p", "-F", "-t", "=proj-abc:", "@ad_pane", tmuxfix.ChainPaneLabelValue(tmuxfix.Token)}},
+			timeout: testTimeouts.Create,
+		},
+		{
+			// b.dsx: an unchained ($ name) create format-escapes the -c cwd too,
+			// and the escape composes with b.ukw's: "#;" is sent as "##\;".
+			name:   "create, $ name, with format sequences and a final ; in cwd",
+			script: []tmux.RunResult{createReply},
+			call: func(c *tmux.Client) error {
+				_, err := c.NewSession(testSocket, "x$", "/w/x#(touch m)#;", nil,
+					[]string{"claude"}, tmuxfix.Token, "agent-1", tmuxfix.StoreID)
+				return err
+			},
+			want: [][]string{{"new-session", "-d", "-s", "x$", "-c", `/w/x##(touch m)##\;`,
+				"-e", "AGENT_DIRECTOR_INSTANCE_ID=agent-1", "-P", "-F", argvCreateFormat, "--", "claude"}},
+			timeout: testTimeouts.Create,
+		},
 	})
 }
 
@@ -330,7 +362,7 @@ func argvChainedNames() []string {
 
 // TestNewSessionChain: the chain is ';' set-option -F -t =<name>: @ad_owner
 // with the five-field value, then ';' set-option -p -F -t =<name>: @ad_pane
-// '<token> #{pane_id}'; # is doubled in the id only, the store id ends the
+// '<token> #{pane_id}'; only the id is format-escaped, the store id ends the
 // session label once and unchanged, and it never reaches the pane label.
 func TestNewSessionChain(t *testing.T) {
 	labels := []struct{ id, store string }{

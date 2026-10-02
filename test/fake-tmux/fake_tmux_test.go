@@ -260,8 +260,8 @@ func TestLookupAnswersFromTable(t *testing.T) {
 
 // TestCreateChainLabelsOwnID checks a chained create stores the five-field
 // label naming its own id and the caller's store id, and lists it valid, and
-// lists its pane label; a '#' or spaces in the instance id and another
-// store's id included.
+// lists its pane label; a '#' (a style's "#[" and "##[" included, b.dsx)
+// or spaces in the instance id and another store's id included.
 func TestCreateChainLabelsOwnID(t *testing.T) {
 	shapeID := map[string]string{}
 	for _, s := range tmuxfix.LabelShapes() {
@@ -270,6 +270,7 @@ func TestCreateChainLabelsOwnID(t *testing.T) {
 	cases := []struct{ name, session, id, storeID string }{
 		{"plain id", "agent-a", "agent-a", tmuxfix.StoreID},
 		{"hash in id", "agent-h", shapeID["valid-hash"], tmuxfix.StoreID},
+		{"style in id", "agent-y", "id#[a##[b#", tmuxfix.StoreID},
 		{"spaces in id", "agent-s", shapeID["valid-spaces"], tmuxfix.StoreID},
 		{"other store", "agent-o", "agent-o", tmuxfix.OtherStoreID},
 	}
