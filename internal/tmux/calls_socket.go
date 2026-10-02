@@ -1,9 +1,6 @@
 package tmux
 
-import (
-	"strconv"
-	"strings"
-)
+import "strconv"
 
 // This file holds the socket-taking methods of SR-2.1 other than the create
 // (see create.go). Every target is a session id or pane id: never a name, an
@@ -27,9 +24,6 @@ const (
 	panesFormat  = "#{session_id}\t#{window_index}\t#{pane_index}\t#{pane_id}\t#{pane_pid}\t#{@ad_pane}"
 )
 
-// cmdSeparator is tmux's command separator, passed as its own argv element.
-const cmdSeparator = ";"
-
 // Lookup makes the one-invocation lookup on socket (SR-2.1, SR-3.4): the
 // session listing with each session's label, then the global, server and
 // global-window @ad_owner reads, as one server step. Query timeout. Labels
@@ -37,10 +31,10 @@ const cmdSeparator = ";"
 // does not parse by the rule of SR-3.4 is FailUnrecognized.
 func (c *Client) Lookup(socket string) (LookupAnswer, error) {
 	out, err := c.runData(CallLookup, socket,
-		"list-sessions", "-F", lookupFormat,
-		cmdSeparator, "show-options", "-gqv", ownerOption,
-		cmdSeparator, "show-options", "-sqv", ownerOption,
-		cmdSeparator, "show-options", "-gwqv", ownerOption)
+		[]string{"list-sessions", "-F", lookupFormat},
+		[]string{"show-options", "-gqv", ownerOption},
+		[]string{"show-options", "-sqv", ownerOption},
+		[]string{"show-options", "-gwqv", ownerOption})
 	if err != nil {
 		return LookupAnswer{}, err
 	}
@@ -59,7 +53,7 @@ func (c *Client) Lookup(socket string) (LookupAnswer, error) {
 // FailUnrecognized, its FirstLine the listing's first line cut before its
 // pane label field.
 func (c *Client) ListPanes(socket string) ([]Pane, error) {
-	out, err := c.runData(CallListPanes, socket, "list-panes", "-a", "-F", panesFormat)
+	out, err := c.runData(CallListPanes, socket, []string{"list-panes", "-a", "-F", panesFormat})
 	if err != nil {
 		return nil, err
 	}
@@ -73,13 +67,13 @@ func (c *Client) ListPanes(socket string) ([]Pane, error) {
 // KillPane kills the pane paneID ("%N") on socket (SR-2.1, SR-6.1). Action
 // timeout.
 func (c *Client) KillPane(socket, paneID string) error {
-	return c.runAction(CallKillPane, socket, "kill-pane", "-t", paneID)
+	return c.runAction(CallKillPane, socket, []string{"kill-pane", "-t", paneID})
 }
 
 // KillSessionID kills the session sessionID ("$N") on socket (SR-2.1,
 // SR-3.5, SR-6.1). Action timeout.
 func (c *Client) KillSessionID(socket, sessionID string) error {
-	return c.runAction(CallKillSession, socket, "kill-session", "-t", sessionID)
+	return c.runAction(CallKillSession, socket, []string{"kill-session", "-t", sessionID})
 }
 
 // SendKeysPane types text into the pane paneID on socket with
@@ -87,34 +81,18 @@ func (c *Client) KillSessionID(socket, sessionID string) error {
 // text call succeeded, sends a real Enter key in a second call,
 // send-keys -t <pane id> Enter (SR-2.1). The "--" ends tmux's options, so a
 // text starting with "-" (such as "-x", "--" or "-l") is typed literally and
-// never read as a flag. The text is passed through escapeFinalSemicolon, so a
-// text ending in ";" is typed whole and never ends the command. Action
-// timeout for each. The error's Call says which call failed (CallSendText or
-// CallSendEnter).
+// never read as a flag. Like every argv element, the text is passed through
+// escapeFinalSemicolon (commandArgv), so a text ending in ";" is typed whole
+// and never ends the command. Action timeout for each. The error's Call says
+// which call failed (CallSendText or CallSendEnter).
 func (c *Client) SendKeysPane(socket, paneID, text string, pressEnter bool) error {
-	if err := c.runAction(CallSendText, socket, "send-keys", "-t", paneID, "-l", "--", escapeFinalSemicolon(text)); err != nil {
+	if err := c.runAction(CallSendText, socket, []string{"send-keys", "-t", paneID, "-l", "--", text}); err != nil {
 		return err
 	}
 	if !pressEnter {
 		return nil
 	}
-	return c.runAction(CallSendEnter, socket, "send-keys", "-t", paneID, "Enter")
-}
-
-// escapeFinalSemicolon returns text with one backslash inserted before its
-// final ";" when it ends in ";" (`;` becomes `\;`, `a;` becomes `a\;`, `a\;`
-// becomes `a\\;`), and any other text unchanged. tmux's command parser reads
-// every argv element that ends in ";" as a command separator, even after
-// "--": the ";" is dropped and the element's text before it, if any, is the
-// command's last argument. An element ending in `\;` is instead one argument
-// with that backslash removed, so the escaped text reaches the pane exactly
-// as written. A ";" anywhere else in the text is not special. Used only by
-// the text call of SendKeysPane.
-func escapeFinalSemicolon(text string) string {
-	if !strings.HasSuffix(text, cmdSeparator) {
-		return text
-	}
-	return text[:len(text)-len(cmdSeparator)] + `\` + cmdSeparator
+	return c.runAction(CallSendEnter, socket, []string{"send-keys", "-t", paneID, "Enter"})
 }
 
 // CapturePaneID returns the last nLines lines of the pane paneID on socket:
@@ -126,7 +104,7 @@ func (c *Client) CapturePaneID(socket, paneID string, nLines int, ansi bool) (st
 		args = append(args, "-e")
 	}
 	args = append(args, "-t", paneID, "-S", "-"+strconv.Itoa(nLines))
-	out, err := c.runData(CallCapture, socket, args...)
+	out, err := c.runData(CallCapture, socket, args)
 	if err != nil {
 		return "", err
 	}
@@ -141,8 +119,9 @@ func (c *Client) CapturePaneID(socket, paneID string, nLines int, ansi bool) (st
 //	  ; set-option -p -t <%N> @ad_pane '<token> <%N>'
 //
 // Each value is one argv element, with no -F and no doubling, so a # in the
-// instance id stays as written; the ";" is its own element, and neither value
-// ends in ";". storeID is the writing store's store_meta.store_id, written
+// instance id stays as written; the ";" is its own element, and every other
+// element goes through escapeFinalSemicolon (commandArgv), so neither value
+// can end a step. storeID is the writing store's store_meta.store_id, written
 // last; the client does not validate it, callers passing
 // (*store.Store).StoreID(), which the store's open has already validated
 // (SR-5.1). sessionID and paneID are the create reply's. tmux stops at the
@@ -153,6 +132,6 @@ func (c *Client) CapturePaneID(socket, paneID string, nLines int, ansi bool) (st
 func (c *Client) SetLabel(socket, sessionID, paneID, token, instanceID, storeID string) error {
 	value := labelPrefix + token + " " + sessionID + " " + instanceID + " " + storeID
 	return c.runAction(CallSetLabel, socket,
-		"set-option", "-t", sessionID, ownerOption, value,
-		cmdSeparator, "set-option", "-p", "-t", paneID, paneOption, token+" "+paneID)
+		[]string{"set-option", "-t", sessionID, ownerOption, value},
+		[]string{"set-option", "-p", "-t", paneID, paneOption, token + " " + paneID})
 }

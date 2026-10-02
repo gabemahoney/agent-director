@@ -16,8 +16,9 @@
 // tmux's command parser: an argument ending in an unescaped ";" ends the
 // command (a standalone ";" is the separator the client sends; any text
 // before the ";" stays as the command's last argument), and an argument
-// ending in `\;` is one argument with that backslash removed (so the text
-// call's escaped final ";" arrives as ";"). An empty command is argv the fake
+// ending in `\;` is one argument with that backslash removed (so any argument
+// the client escaped, such as a send-keys text or a claude argument ending in
+// ";", arrives with its ";"). An empty command is argv the fake
 // does not understand. The commands run in order against the socket's
 // table, and the first that fails ends the invocation with its exit status,
 // as in tmux.

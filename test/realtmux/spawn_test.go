@@ -71,7 +71,17 @@ func (f *spawnFix) storeID(t testing.TB) string {
 // spawn runs a spawn with instance id id ("" mints one), without pre-trust;
 // reuse sets the reuse opt-in (ReuseFinished).
 func (f *spawnFix) spawn(id string, reuse bool) (string, error) {
-	res, err := f.API.Spawn(api.SpawnParams{CWD: f.CWD, ClaudeInstanceID: id, NoPreTrust: true, ReuseFinished: reuse})
+	return f.spawnWith(api.SpawnParams{ClaudeInstanceID: id, ReuseFinished: reuse})
+}
+
+// spawnWith runs a spawn of p without pre-trust, in f.CWD unless p names a
+// cwd, and returns the spawned id.
+func (f *spawnFix) spawnWith(p api.SpawnParams) (string, error) {
+	if p.CWD == "" {
+		p.CWD = f.CWD
+	}
+	p.NoPreTrust = true
+	res, err := f.API.Spawn(p)
 	return res.ClaudeInstanceID, err
 }
 
@@ -103,28 +113,43 @@ func (f *spawnFix) mustSpawn(t *testing.T, id string) spawned {
 	return f.mustLaunch(t, id, false)
 }
 
-// mustLaunch spawns id (with the reuse opt-in when reuse is set), reads the
-// row and finds its session through the recorded pane; the recorded socket
-// must lie in the private TMUX_TMPDIR.
+// mustLaunch spawns id (with the reuse opt-in when reuse is set) through
+// mustLaunchWith.
 func (f *spawnFix) mustLaunch(t *testing.T, id string, reuse bool) spawned {
 	t.Helper()
+	return f.mustLaunchWith(t, api.SpawnParams{ClaudeInstanceID: id, ReuseFinished: reuse})
+}
+
+// mustLaunchWith spawns p (spawnWith) and finds the launch (launched),
+// failing the test on any spawn error.
+func (f *spawnFix) mustLaunchWith(t *testing.T, p api.SpawnParams) spawned {
+	t.Helper()
 	before := time.Now().UnixMilli()
-	got, err := f.spawn(id, reuse)
+	got, err := f.spawnWith(p)
 	after := time.Now().UnixMilli()
 	if err != nil {
-		t.Fatalf("spawn %q: %s", id, describe(err))
+		t.Fatalf("spawn %q: %s", p.ClaudeInstanceID, describe(err))
 	}
-	if id != "" && got != id {
-		t.Fatalf("spawn returned id %q, want %q", got, id)
+	if p.ClaudeInstanceID != "" && got != p.ClaudeInstanceID {
+		t.Fatalf("spawn returned id %q, want %q", got, p.ClaudeInstanceID)
 	}
-	row := readRow(t, f.DBPath, got)
+	s := f.launched(t, got)
+	s.Before, s.After = before, after
+	return s
+}
+
+// launched reads id's row and finds its session through the recorded pane;
+// the recorded socket must lie in the private TMUX_TMPDIR.
+func (f *spawnFix) launched(t *testing.T, id string) spawned {
+	t.Helper()
+	row := readRow(t, f.DBPath, id)
 	socket, ok1 := row.TmuxSocket.(string)
 	paneID, ok2 := row.PaneID.(string)
 	if !ok1 || !ok2 {
-		t.Fatalf("row %s: tmux_socket %T, pane_id %T; want both recorded", got, row.TmuxSocket, row.PaneID)
+		t.Fatalf("row %s: tmux_socket %T, pane_id %T; want both recorded", id, row.TmuxSocket, row.PaneID)
 	}
 	rt := f.at(t, socket)
-	s := spawned{ID: got, Row: row, SessionID: rt.format(t, paneID, "#{session_id}"), rt: rt, Before: before, After: after}
+	s := spawned{ID: id, Row: row, SessionID: rt.format(t, paneID, "#{session_id}"), rt: rt}
 	rt.trackServer(rt.formatInt(t, paneID, "#{pid}"))
 	rt.trackPane(rt.formatInt(t, paneID, "#{pane_pid}"))
 	return s

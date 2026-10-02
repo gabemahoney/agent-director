@@ -32,15 +32,18 @@ func (c *captured) runner() runner {
 	}
 }
 
-// TestHasSessionArgv pins the exact argv HasSession hands tmux.
+// TestHasSessionArgv pins the exact argv HasSession hands tmux; a name ending
+// in ";" is escaped so it cannot end the command (b.ukw).
 func TestHasSessionArgv(t *testing.T) {
-	cap := &captured{}
-	if _, err := (&Client{run: cap.runner()}).HasSession("foo"); err != nil {
-		t.Fatalf("HasSession failed: %v", err)
-	}
-	want := [][]string{{"tmux", "has-session", "-t", "foo"}}
-	if !reflect.DeepEqual(cap.calls, want) {
-		t.Fatalf("argv mismatch\n got=%q\nwant=%q", cap.calls, want)
+	for _, c := range []struct{ name, target string }{{"foo", "foo"}, {"n;", `n\;`}} {
+		cap := &captured{}
+		if _, err := (&Client{run: cap.runner()}).HasSession(c.name); err != nil {
+			t.Fatalf("HasSession(%q) failed: %v", c.name, err)
+		}
+		want := [][]string{{"tmux", "has-session", "-t", c.target}}
+		if !reflect.DeepEqual(cap.calls, want) {
+			t.Errorf("HasSession(%q) argv mismatch\n got=%q\nwant=%q", c.name, cap.calls, want)
+		}
 	}
 }
 

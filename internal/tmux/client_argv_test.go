@@ -149,6 +149,24 @@ func argvCases() []argvCase {
 				";", "set-option", "-p", "-F", "-t", "=proj-abc:", "@ad_pane", tmuxfix.ChainPaneLabelValue(tmuxfix.Token)}},
 			timeout: testTimeouts.Create,
 		},
+		{
+			// b.ukw: every caller value ending in ";" is escaped; the chain's
+			// =<name>: target ends in ":" and is not.
+			name:   "create with caller values ending in ;",
+			script: []tmux.RunResult{createReply},
+			call: func(c *tmux.Client) error {
+				_, err := c.NewSession(testSocket, "n;", "/w;", map[string]string{"K": "v;"},
+					[]string{"claude", "x;", "run-shell", "touch /f"}, tmuxfix.Token, "id;", tmuxfix.StoreID)
+				return err
+			},
+			want: [][]string{{"new-session", "-d", "-s", `n\;`, "-c", `/w\;`,
+				"-e", `AGENT_DIRECTOR_INSTANCE_ID=id\;`, "-e", `K=v\;`,
+				"-P", "-F", argvCreateFormat, "--", "claude", `x\;`, "run-shell", "touch /f",
+				";", "set-option", "-F", "-t", "=n;:", "@ad_owner",
+				tmuxfix.ChainLabelValue(tmuxfix.Token, "id;", tmuxfix.StoreID),
+				";", "set-option", "-p", "-F", "-t", "=n;:", "@ad_pane", tmuxfix.ChainPaneLabelValue(tmuxfix.Token)}},
+			timeout: testTimeouts.Create,
+		},
 	})
 }
 

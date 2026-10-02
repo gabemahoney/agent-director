@@ -45,6 +45,11 @@ func NeedsLabelByID(name string) bool { return strings.ContainsAny(name, `$\`) }
 // instanceID being the only one. The client's own environment has every
 // AGENT_DIRECTOR_* variable removed, as for every call.
 //
+// name, cwd, every -e entry and every command element are passed to tmux as
+// written, an element ending in ";" included: each argv element but the
+// chain's ";" separators has its final ";" escaped (see createCommands), so
+// none can end the new-session and start another tmux command (b.ukw).
+//
 // The reply is parsed from standard output whatever the exit status: a reply
 // means the session was created. A reply with exit 0 is returned with a nil
 // error; a reply with a non-zero exit and a chain is returned with FailLabel
@@ -57,7 +62,7 @@ func NeedsLabelByID(name string) bool { return strings.ContainsAny(name, `$\`) }
 // apart for the caller.
 func (c *Client) NewSession(socket, name, cwd string, envs map[string]string, command []string, token, instanceID, storeID string) (CreateReply, error) {
 	chained := !NeedsLabelByID(name)
-	res := c.invoke(CallCreate, socket, createArgs(name, cwd, envs, command, token, instanceID, storeID, chained)...)
+	res := c.invoke(CallCreate, socket, createCommands(name, cwd, envs, command, token, instanceID, storeID, chained)...)
 	if res.Status == RunNotStarted || res.Status == RunTimedOut {
 		return CreateReply{}, c.runFailure(CallCreate, res)
 	}
@@ -79,14 +84,20 @@ func (c *Client) NewSession(socket, name, cwd string, envs map[string]string, co
 		ExitStatus: res.ExitStatus, HadStdout: len(res.Stdout) > 0}
 }
 
-// createArgs composes the create's argv after "-u -S <socket>". When chained,
-// two set-options follow, each after a standalone ";" element: the session
+// createCommands composes the create's command list, which invoke turns into
+// the argv after "-u -S <socket>" (commandArgv): the new-session, then, when
+// chained, two set-options, each after a standalone ";" element: the session
 // label "ad1 <token> #{session_id} <instance id, every # doubled> <store id>"
 // and the pane label "<token> #{pane_id}" with -p (SR-2.1, SR-3.5; WD
-// 2026-09-29 STORE, WD 2026-09-29c). Neither value ends in ";", which tmux
-// would read as a command separator (see escapeFinalSemicolon).
-func createArgs(name, cwd string, envs map[string]string, command []string, token, instanceID, storeID string, chained bool) []string {
-	args := []string{"new-session", "-d", "-s", name, "-c", cwd, "-e", instanceIDEnv + "=" + instanceID}
+// 2026-09-29 STORE, WD 2026-09-29c). Every element other than those two
+// separators goes through escapeFinalSemicolon, so a name, cwd, -e entry or
+// command element ending in ";" (a claude argument "x;", say) reaches tmux
+// as written and never ends the new-session to start a command of the
+// caller's choosing (b.ukw). The chained target =<name>: always ends in ":",
+// so it is never escaped, and tmux matches it against the name it stores,
+// which is the unescaped name.
+func createCommands(name, cwd string, envs map[string]string, command []string, token, instanceID, storeID string, chained bool) [][]string {
+	create := []string{"new-session", "-d", "-s", name, "-c", cwd, "-e", instanceIDEnv + "=" + instanceID}
 	rest := make(map[string]string, len(envs))
 	for k, v := range envs {
 		if k != instanceIDEnv {
@@ -94,15 +105,16 @@ func createArgs(name, cwd string, envs map[string]string, command []string, toke
 		}
 	}
 	for _, kv := range sortedEnvFlags(rest) {
-		args = append(args, "-e", kv)
+		create = append(create, "-e", kv)
 	}
-	args = append(args, "-P", "-F", createReplyFormat, "--")
-	args = append(args, command...)
-	if chained {
-		value := labelPrefix + token + " #{session_id} " + strings.ReplaceAll(instanceID, "#", "##") + " " + storeID
-		target := "=" + name + ":"
-		args = append(args, cmdSeparator, "set-option", "-F", "-t", target, ownerOption, value,
-			cmdSeparator, "set-option", "-p", "-F", "-t", target, paneOption, token+" #{pane_id}")
+	create = append(create, "-P", "-F", createReplyFormat, "--")
+	create = append(create, command...)
+	if !chained {
+		return [][]string{create}
 	}
-	return args
+	value := labelPrefix + token + " #{session_id} " + strings.ReplaceAll(instanceID, "#", "##") + " " + storeID
+	target := "=" + name + ":"
+	return [][]string{create,
+		{"set-option", "-F", "-t", target, ownerOption, value},
+		{"set-option", "-p", "-F", "-t", target, paneOption, token + " #{pane_id}"}}
 }

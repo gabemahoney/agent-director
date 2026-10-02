@@ -84,9 +84,10 @@ func (c *Client) binaryPath() string {
 // it (resume, its last user, moved to the lookup), and it must never be used
 // for a new lookup: the socket-taking Lookup finds a
 // session by its label (SRD SR-2.1, SR-3.4). Its signature, meaning and
-// error contract are unchanged.
+// error contract are unchanged. Its argv goes through commandArgv, so a name
+// ending in ";" is passed as written.
 func (c *Client) HasSession(name string) (bool, error) {
-	_, err := c.run(binaryName, "has-session", "-t", name)
+	_, err := c.run(binaryName, commandArgv([]string{"has-session", "-t", name})...)
 	if err == nil {
 		return true, nil
 	}

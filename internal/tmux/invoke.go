@@ -11,7 +11,8 @@ import (
 )
 
 // This file holds the call mechanics of the socket-taking call set (SRD
-// SR-2.2 to SR-2.4, SR-3.12, SR-13.1): the argv prefix, the clean client
+// SR-2.2 to SR-2.4, SR-3.12, SR-13.1): the argv prefix, the command-list
+// argv with its separators and final-";" escape (b.ukw), the clean client
 // environment, the per-class timeout, the pipe-close wait, the runner seam and
 // the shaping of a run into a typed failure.
 
@@ -144,12 +145,58 @@ func (c *Client) timeoutFor(call Call) time.Duration {
 	return c.timeouts.Action
 }
 
-// invoke runs one socket-taking call: "-u", "-S", socket, then args, with the
-// clean client environment, the call's class timeout and the pipe-close wait.
-func (c *Client) invoke(call Call, socket string, args ...string) RunResult {
-	argv := make([]string, 0, len(args)+3)
-	argv = append(argv, "-u", "-S", socket)
-	argv = append(argv, args...)
+// cmdSeparator is tmux's command separator, passed as its own argv element.
+// Only commandArgv puts one in an argv.
+const cmdSeparator = ";"
+
+// commandArgv returns the argv of a tmux command list: the elements of each
+// command in cmds, every one passed through escapeFinalSemicolon, with a
+// standalone cmdSeparator element between one command and the next. It is
+// the only way an argv element ending in ";" reaches tmux, so no element a
+// caller supplies (a session name, a cwd, an -e entry, a command or claude
+// argument, a send-keys text) can end its command and start another, which
+// would run a tmux command of the caller's choosing (b.ukw).
+func commandArgv(cmds ...[]string) []string {
+	n := len(cmds)
+	for _, cmd := range cmds {
+		n += len(cmd)
+	}
+	argv := make([]string, 0, n)
+	for i, cmd := range cmds {
+		if i > 0 {
+			argv = append(argv, cmdSeparator)
+		}
+		for _, a := range cmd {
+			argv = append(argv, escapeFinalSemicolon(a))
+		}
+	}
+	return argv
+}
+
+// escapeFinalSemicolon returns text with one backslash inserted before its
+// final ";" when it ends in ";" (`;` becomes `\;`, `a;` becomes `a\;`, `a\;`
+// becomes `a\\;`), and any other text unchanged. tmux's command parser reads
+// every argv element that ends in ";" as a command separator, before any
+// option parsing and so even after "--": the ";" is dropped and the
+// element's text before it, if any, is the command's last argument. An
+// element ending in `\;` is instead one argument with that backslash
+// removed, so the escaped text reaches the command exactly as written (tmux
+// 3.2a to 3.5a). A ";" anywhere else in the text is not special. Applied by
+// commandArgv to every element of every command.
+func escapeFinalSemicolon(text string) string {
+	if !strings.HasSuffix(text, cmdSeparator) {
+		return text
+	}
+	return text[:len(text)-len(cmdSeparator)] + `\` + cmdSeparator
+}
+
+// invoke runs one socket-taking call: "-u", "-S", socket, then the argv of
+// the command list cmds (commandArgv), with the clean client environment,
+// the call's class timeout and the pipe-close wait. The socket is not
+// escaped: it is -S's option argument, which tmux's own option parsing
+// consumes before the command parser sees the argv.
+func (c *Client) invoke(call Call, socket string, cmds ...[]string) RunResult {
+	argv := append([]string{"-u", "-S", socket}, commandArgv(cmds...)...)
 	run := c.runCall
 	if run == nil {
 		run = execRunner
@@ -193,8 +240,8 @@ func cutShort(call Call, res RunResult) *CallError {
 
 // runAction runs a call whose output is not used (kills, sends, label by
 // id): exit 0 is success, with or without the pipe-close wait (SR-2.4).
-func (c *Client) runAction(call Call, socket string, args ...string) error {
-	if e := c.runFailure(call, c.invoke(call, socket, args...)); e != nil {
+func (c *Client) runAction(call Call, socket string, cmds ...[]string) error {
+	if e := c.runFailure(call, c.invoke(call, socket, cmds...)); e != nil {
 		return e
 	}
 	return nil
@@ -203,8 +250,8 @@ func (c *Client) runAction(call Call, socket string, args ...string) error {
 // runData runs a data call (lookup, pane listing, capture) and returns its
 // standard output only after an exit 0 whose pipes closed on their own
 // (SR-2.3, SR-2.4).
-func (c *Client) runData(call Call, socket string, args ...string) ([]byte, error) {
-	res := c.invoke(call, socket, args...)
+func (c *Client) runData(call Call, socket string, cmds ...[]string) ([]byte, error) {
+	res := c.invoke(call, socket, cmds...)
 	if e := c.runFailure(call, res); e != nil {
 		return nil, e
 	}
