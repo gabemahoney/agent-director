@@ -9,8 +9,8 @@ description: Manually re-attach a Claude conversation transcript that was orphan
 
 agent-director tracks, per spawn row, a single `(claude_session_id, jsonl_path)`
 pair pointing at the live Claude transcript. When a session **rotates** (Claude
-hands the process a new session id — typically after a bot-fleet restart), the
-store archives the prior pair into the `session_history` table **before**
+hands the process a new session id — typically after a caller restarts its
+agents), the store archives the prior pair into the `session_history` table **before**
 overwriting the row. A later `resume` walks that archived history and reattaches
 to the newest recoverable transcript on its own.
 
@@ -37,9 +37,9 @@ session id and loses the current conversation.
 ## Warnings — read before touching the database
 
 - **The store is live and shared.** `~/.agent-director/state.db` is the single
-  SQLite database every running bot reads and writes (there are ~7 bots in the
-  fleet). You are editing a production database out from under live processes.
-- **Back it up first.** With the fleet briefly quiesced if possible:
+  SQLite database every running agent's hooks and every caller read and write.
+  You are editing a production database out from under live processes.
+- **Back it up first.** With the agents briefly quiesced if possible:
   ```sh
   cp ~/.agent-director/state.db ~/.agent-director/state.db.bak-$(date +%Y%m%d-%H%M%S)
   ```
@@ -59,7 +59,7 @@ session id and loses the current conversation.
 ```sh
 sqlite3 ~/.agent-director/state.db \
   "SELECT claude_instance_id, state, cwd, claude_session_id, jsonl_path,
-          life_number, row_version
+          life_number, row_version, extra_env
      FROM spawns WHERE claude_instance_id = '<id>';"
 ```
 
@@ -82,23 +82,25 @@ Claude writes each session's transcript to:
 <config-dir>/projects/<slug-of-cwd>/<claude_session_id>.jsonl
 ```
 
-Two config dirs are in play, because orchestrators and workers run under
-different `CLAUDE_CONFIG_DIR` values:
+More than one config dir can be in play, because agents spawned with a
+`CLAUDE_CONFIG_DIR` in their extra env write under that dir instead:
 
 - `~/.claude/projects/` — the default config dir.
-- `~/.claude-infhub/projects/` — the infhub worker config dir.
+- `<config-dir>/projects/` — the dir named by the row's `CLAUDE_CONFIG_DIR`, if
+  any. `get` does not show a row's extra env; read the `extra_env` column
+  from Step 1's query.
 
-Search **both**. The `<slug-of-cwd>` folder name is the row's `cwd` with every
+Search **each**. The `<slug-of-cwd>` folder name is the row's `cwd` with every
 path separator and non-alphanumeric character replaced by `-` (e.g.
 `/home/foo/my_repo` → `-home-foo-my-repo`). You do not need to compute the slug
 by hand — list the project dirs and match by eye, or grep for the session id:
 
 ```sh
-# List candidate project dirs under both config roots:
-ls -d ~/.claude/projects/*/ ~/.claude-infhub/projects/*/ 2>/dev/null
+# List candidate project dirs under each config root:
+ls -d ~/.claude/projects/*/ <config-dir>/projects/*/ 2>/dev/null
 
 # Or find any transcript whose basename looks like a session id:
-find ~/.claude/projects ~/.claude-infhub/projects -name '*.jsonl' 2>/dev/null
+find ~/.claude/projects <config-dir>/projects -name '*.jsonl' 2>/dev/null
 ```
 
 Confirm a candidate actually belongs to the row before using it — open it and
@@ -112,7 +114,7 @@ check the conversation content matches what the instance was doing, and that the
 Archiving the row's current pair before overwriting it is what keeps the repair
 non-destructive: if you ever mis-identify the transcript, the pointer you
 replaced is still recoverable from `session_history`. Do the archive INSERT and
-the row UPDATE in a **single transaction** so a bot's `SessionStart` landing
+the row UPDATE in a **single transaction** so an agent's `SessionStart` landing
 between them cannot overwrite the just-recorded pair without it having been
 archived.
 

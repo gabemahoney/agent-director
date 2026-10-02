@@ -20,9 +20,9 @@ import (
 //
 // v4 changes vs v3 (b.v2c): a new session_history table records every
 // (claude_session_id, jsonl_path) pair a spawn has ever pointed at, so a
-// session rotation on CSCB fleet restart no longer orphans the previous
-// session's transcript — the prior pair is archived before the spawns row is
-// overwritten with the new session id. session_history is the queryable link
+// session rotation when a caller restarts its agents no longer orphans the
+// previous session's transcript — the prior pair is archived before the
+// spawns row is overwritten with the new session id. session_history is the queryable link
 // from a live row back to its earlier sessions (AC6/AC8). See migrateV3toV4.
 //
 // v5 changes vs v4 (b.fmk, SR-5.1/SR-5.4): twelve new spawns columns, appended

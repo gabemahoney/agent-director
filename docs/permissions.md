@@ -188,8 +188,8 @@ failure modes:
 #### Relay timeout default and override
 
 The relay window (`relay.timeout_seconds`) defaults to **86400 seconds (1 day)**,
-long enough for human-paced approval flows — a Slack approval that arrives after
-a meeting or overnight still lands inside the window. Operators who want a
+long enough for human-paced approval flows — a human's approval that arrives
+after a meeting or overnight still lands inside the window. Operators who want a
 tighter bound can override it in `~/.agent-director/config.toml`:
 
 ```toml

@@ -208,7 +208,7 @@ func runRelay(
 	// CASE B: relay is DB-poll-based — no outbound HTTP shim exists today.
 	// Emit ad.relay_attempt.completed with degenerate fields so the SR-A-2.3
 	// trail shape is established and the §11 replay harness has a real event
-	// to assert against. Future outbound-network work (a real CSCB shim)
+	// to assert against. Future outbound-network work (a real caller shim)
 	// should replace target_endpoint / outcome with real values via the
 	// `agent-director trail-emit relay-attempt` sub-verb (for external
 	// processes); in-process trail.Emit is used here because the hook IS an

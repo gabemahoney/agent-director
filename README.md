@@ -46,10 +46,15 @@ SQLite file; everything else is tmux.
   upgrade Claude Code.
 - `tmux` 3.2 or later on PATH. Verified: 3.2a (by a scripted one-off
   run and recorded replies) and 3.3a (by the test suites).
-  - Keep `remain-on-exit` off, the tmux default.
+  - Keep `remain-on-exit` off, the tmux default. With it on, a finished
+    agent's session outlives its agent: `resume` and `spawn
+    --reuse-finished` get `ErrTmuxUnresponsive`, then
+    `ErrTmuxSessionConflict`, and `expire` keeps the row on every run.
+    `find-missing` still marks a row whose agent process is dead,
+    whatever tmux shows.
   - No tmux server needs to be running: agent-director starts one when
     it launches an agent.
-- `jq` on PATH.
+- `jq`, `sqlite3` and `file` on PATH (the installer checks for them).
 
 ### Install the CLI
 
@@ -187,12 +192,12 @@ Code's folder-trust prompt; add `--no-pre-trust` to keep the prompt.
 
 #### Naming the tmux session yourself
 
-`spawn` accepts `--tmux-session-name <name>` so Slack-channel bots,
-test harnesses, or manual-debug operators can pick a readable session
-name instead of the default `<basename(cwd)>-<id[:8]>`:
+`spawn` accepts `--tmux-session-name <name>` so callers, test harnesses,
+or operators debugging by hand can pick a readable session name instead
+of the default `<basename(cwd)>-<id[:8]>`:
 
 ```sh
-agent-director spawn --cwd "$PWD" --tmux-session-name bot-claude-status
+agent-director spawn --cwd "$PWD" --tmux-session-name status-agent
 ```
 
 Rules (validated app-side, no silent rewrite): the name must be
@@ -212,7 +217,7 @@ and wants to round-trip back from `tmux ls` to the persisted Spawn
 without consulting the id:
 
 ```sh
-agent-director list --tmux-session-name bot-claude-status
+agent-director list --tmux-session-name status-agent
 ```
 
 The filter is exact-match, AND-combines with `--state`, `--label`,
@@ -508,6 +513,29 @@ the class of every tmux error, is in
 - A `spawn` whose tmux session name is already held returns an error naming
   the holder and ends its new row; the holder is left to a human, never
   ended by the caller.
+- A call refused before anything was written or sent is safe to re-issue
+  later; that is how a caller learns a condition has cleared. Retry
+  `ErrTmuxUnresponsive` and `ErrTmuxKillFailed` with backoff and a cap, and alert at the cap
+  (a timed-out launch is the exception below).
+- A `resume` or `spawn --reuse-finished` refused because the row's own
+  session or agent "appears to still be stopping" or "starting": wait and
+  retry. Refused with "this row's own id": stop and surface the named
+  session to a human ([Operator actions](#operator-actions)); never end it
+  yourself.
+- After a timed-out `spawn` or `resume` the row stays `pending`: do not
+  retry until `get` shows it `ended` or `missing`.
+- `pending` means a launch is in progress; `status`, `get` and `list` show
+  its start (`launch_started_at`). `kill` on a `pending` row aborts a stuck
+  launch.
+- `ErrConfigMalformed` means agent-director cannot use its config file:
+  take no action, alert once, never read it as "dead".
+- A reused id starts with no memory of its earlier lives.
+- Detect features by the binary's version (`agent-director version`, the
+  MCP `version` tool, or the TypeScript client's `binaryVersion`); a
+  release candidate `X.Y.Z-rc.N` counts as `X.Y.Z`.
+- The contract also lists this release's
+  [known limitations](docs/architecture.md#known-limitations) and
+  [meaning changes](docs/architecture.md#meaning-changes).
 - Right after a `kill` ends the last session on its tmux server, the
   server takes a moment to exit. A repeated `kill` in that moment can get
   `ErrTmuxUnresponsive` or `ErrTmuxNotAvailable`; the caller waits and

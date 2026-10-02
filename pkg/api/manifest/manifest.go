@@ -227,7 +227,7 @@ var Verbs = []VerbDef{
 				Description:   "Optional explicit id; an empty or absent id mints a fresh UUID4. An explicit id containing an ASCII control character (0x00-0x1f or 0x7f) is rejected with ErrInvalidFlags. An explicit id that already has a row returns ErrInstanceIdCollision: without the reuse opt-in any existing row collides, in any state; with it, only a live row (pending included) or a row that changed or was removed after this spawn examined it.",
 				Required:      false,
 				Nullable:      false,
-				AllowEmpty:    false,
+				AllowEmpty:    true,
 				AllowedValues: nil,
 			},
 			{

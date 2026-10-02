@@ -29,6 +29,7 @@ type surfaceDoc struct {
 		Params      []struct {
 			Name        string `json:"name"`
 			Description string `json:"description"`
+			AllowEmpty  bool   `json:"allow_empty"`
 		} `json:"params"`
 		ResultFields []struct {
 			Name          string   `json:"name"`
@@ -521,6 +522,40 @@ func TestNullableAndAllowEmptyAreExplicit(t *testing.T) {
 	spawnsField := lv.ResultFields[0]
 	if !spawnsField.AllowEmpty {
 		t.Errorf("list.spawns.AllowEmpty = false; want true (empty array is valid)")
+	}
+}
+
+// TestSpawnClaudeInstanceIDParamAllowsEmpty pins spawn's claude_instance_id
+// param as allow_empty in the manifest and surface.json: "" mints a fresh id.
+func TestSpawnClaudeInstanceIDParamAllowsEmpty(t *testing.T) {
+	sources := map[string]bool{}
+	sv, ok := manifest.Lookup("spawn")
+	if !ok {
+		t.Fatal("spawn not in manifest")
+	}
+	for _, p := range sv.Params {
+		if p.Name == "claude_instance_id" {
+			sources["manifest"] = p.AllowEmpty
+		}
+	}
+	_, surface := readSurfaceJSON(t)
+	for _, v := range surface.Verbs {
+		if v.Name != "spawn" {
+			continue
+		}
+		for _, p := range v.Params {
+			if p.Name == "claude_instance_id" {
+				sources["surface.json"] = p.AllowEmpty
+			}
+		}
+	}
+	for _, source := range []string{"manifest", "surface.json"} {
+		allowEmpty, found := sources[source]
+		if !found {
+			t.Errorf("%s: spawn has no claude_instance_id param", source)
+		} else if !allowEmpty {
+			t.Errorf("%s: spawn.claude_instance_id param allow_empty = false; want true (an empty id mints a fresh UUID4)", source)
+		}
 	}
 }
 

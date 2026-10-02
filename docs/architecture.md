@@ -3253,7 +3253,16 @@ declared in the manifest's `spawn` and `resume` result fields (with its
 allowed values), as Go `SpawnResult.PreTrust` and `ResumeResult.PreTrust`
 (a plain `string`; `pkg/api` exports no type or constant for it) and as
 the TypeScript `pre_trust: "ok" | "skipped" | "failed"` on `SpawnResult`
-and `ResumeResult`.
+and `ResumeResult`. A result without `pre_trust` comes from a binary
+older than this release.
+
+**MCP limitation (bug b.7or, open).** The MCP `spawn` decoder
+(`internal/mcp/dispatch.go`) has no `no-pre-trust` field, so an MCP spawn
+or reuse that sends it still pre-trusts: it reports `ok` or `failed`,
+never `skipped`, and records pre-trust allowed for its life, so that
+life's resumes pre-trust too. The row records what the spawn did. A
+`resume` over MCP reports `skipped` for a row whose recorded choice is an
+opt-out. The CLI, Go and TypeScript surfaces honour `no-pre-trust`.
 
 Only `hasTrustDialogAccepted` is touched. Sibling keys
 (`hasCompletedProjectOnboarding`, `hasClaudeMdExternalIncludesApproved`,
@@ -4428,11 +4437,11 @@ error.)
 
 **Aggregate invariant (per Spawn).** If `spawns.state = check_permission`,
 then either a `runRelay` polling loop is alive consuming `decide()` writes,
-OR `permission_requests.decision` is non-NULL for the corresponding row. A
-bot must never be sitting in "waiting for permission" with no live listener AND
+OR `permission_requests.decision` is non-NULL for the corresponding row. An
+agent must never be sitting in "waiting for permission" with no live listener AND
 no decision *and no sanctioned way out*: if a relay listener is gone and every
-row is undeliverable, an external surface (e.g. a Slack approval message from
-CSCB) would be a lying ghost — buttons that go nowhere.
+row is undeliverable, an external surface (for example a caller's approval
+prompt) would be a lying ghost — buttons that go nowhere.
 
 **Sanctioned handling of the all-rows-undeliverable state.** The
 listener-gone/decision-NULL state is not a stranded dead end. Once every
@@ -4619,8 +4628,8 @@ must use them, never free-form strings:
 All closed-deny rows carry a non-null `decision_reason`.
 
 **Stability policy.** New values are release-note-only changes; there is no
-`protocol_version` field on the wire. CSCB (and any other consumer of
-`decision_reason` values) must fail closed on unknown values — treat any
+`protocol_version` field on the wire. Every caller that consumes
+`decision_reason` values must fail closed on unknown values — treat any
 unrecognized `decision_reason` as a deny with an opaque reason. This gives
 agent-director room to add new deny sources without a coordinated
 breaking-change rollout across consumers.
@@ -4773,21 +4782,23 @@ tail -f ~/.agent-director/ad-trail.jsonl
 jq -c 'select(.request_token=="<TOKEN>")' ~/.agent-director/ad-trail.jsonl
 ```
 
-**Channel + time window** — filter by `channel` and timestamp range:
+**Agent + time window** — filter by `claude_instance_id` and timestamp
+range:
 
 ```sh
-jq -c 'select(.channel=="C..." and .ts >= "T1" and .ts <= "T2")' \
+jq -c 'select(.claude_instance_id=="<ID>" and .ts >= "T1" and .ts <= "T2")' \
   ~/.agent-director/ad-trail.jsonl
 ```
 
-### Stitching with CSCB
+### Stitching with a caller's own trail
 
-AD's trail and CSCB's `permission-trail.jsonl` share `request_token` as a
-join key. To get a single chronologically-ordered view across both surfaces
-for one interaction:
+A caller that keeps its own trail and records each permission request's
+`request_token` can join it with AD's trail on that key. To get a single
+chronologically-ordered view across both for one interaction (the
+caller's file holds JSON lines with a `ts` field):
 
 ```sh
-cat ~/.agent-director/ad-trail.jsonl ~/.claude/channels/slack/permission-trail.jsonl \
+cat ~/.agent-director/ad-trail.jsonl <caller-trail>.jsonl \
   | jq -sc 'sort_by(.ts) | map(select(.request_token=="<TOKEN>"))[]'
 ```
 
@@ -5285,7 +5296,7 @@ SessionStart payload reports may not exist yet. The hook `os.Stat`s that path an
 tells the store whether the file is present; the store records `jsonl_path`
 **only when the file actually exists on disk**, and leaves it NULL (provisional)
 otherwise. This is what stops a row from asserting a dead pointer: an
-un-messaged, freshly-restarted bot has a NULL `jsonl_path`, not a path to a file
+un-messaged, freshly-restarted agent has a NULL `jsonl_path`, not a path to a file
 that was never written. A stat error other than not-exist (e.g. a permission
 wall) is treated conservatively as "not present". The provisional NULL is not
 lossy — the resume fallback recomputes the path, and `find-missing` heals the
@@ -5317,7 +5328,7 @@ exactly as before.
 already sweeps every live row; on each sweep it also lists rows with a NULL
 `jsonl_path` (provisional — a session that started before its transcript was
 written), recomposes each path the same way the resume fallback does, `os.Stat`s
-it, and records it when present. So the normal case — bot starts, operator
+it, and records it when present. So the normal case — an agent starts, and a caller
 messages it an hour later — heals with no operator intervention. Per-row errors
 are logged and skipped; healing never aborts the sweep.
 
@@ -6262,7 +6273,9 @@ added later goes in as a row or a bullet under the subsection it belongs
 to. Where a human is
 needed, the contract points to the README's "Operator actions" section and
 names no command for a caller to run. Its limits are listed under
-[Known limitations](#known-limitations).
+[Known limitations](#known-limitations), and what a caller must now
+assume differently from earlier releases under
+[Meaning changes](#meaning-changes).
 
 ### Classes
 
@@ -6454,7 +6467,9 @@ adds it here.
 ### Launch pending
 
 - `pending` means a launch (spawn, reuse or resume) is in progress and the
-  agent has not reported in. A caller that polls a launch polls `status`,
+  agent has not reported in; a resumed `pending` row keeps its session id
+  and history. The launch start, shown by `status`, `get` and `list`, lets
+  a caller bound how long it waits. A caller that polls a launch polls `status`,
   and calls `read-pane` only while the row is `pending`, at most about
   once a second, backing off once the launch start is old and stopping as
   soon as the row leaves `pending`: each `read-pane` makes up to three
@@ -6479,6 +6494,10 @@ adds it here.
   follows the choice recorded by the spawn or reuse that began the row's
   life; a row from before this release has pre-trust allowed, the
   column's default (see [Workspace-trust pre-write](#workspace-trust-pre-write)).
+  A result without `pre_trust` comes from a binary older than this
+  release. Until bug b.7or is fixed, an MCP spawn or reuse that sends
+  `no-pre-trust` still pre-trusts (never `skipped`) and records pre-trust
+  allowed for its life, so that life's resumes pre-trust too.
 - A reused id starts with no memory of its earlier lives: `resume` and
   `get` see only the current life's history, so after a reuse the earlier
   conversation cannot be resumed through agent-director (SR-8.7).
@@ -6490,6 +6509,15 @@ adds it here.
   wherever it is and whatever its name. The lookup checks the scope values,
   reads tmux as UTF-8 and targets sessions and panes by id (see
   [Shared tmux lookup](#shared-tmux-lookup)).
+- The lookup gives one of four verdicts: Ours (the current launch's
+  session), Leftover (only sessions labelled by an earlier launch of this
+  id), Gone (no session carries a valid label of this store for this id)
+  or Can't tell (unreadable,
+  a different server, conflicting labels, or tmux unavailable). Each
+  verb's table maps them to its result.
+- `AGENT_DIRECTOR_INSTANCE_ID` in an agent's environment only tells the
+  agent who it is. agent-director never reads it, or any other
+  `AGENT_DIRECTOR_*` value, as evidence of whose a session or process is.
 - Every call for a row goes to its recorded socket. A row from before this
   release, which records none, uses the caller's socket resolved as tmux
   resolves it.
@@ -6530,7 +6558,8 @@ adds it here.
 - The promise covers the Claude process, not processes it detached.
   `kill` never signals a process itself and never changes the row's state.
 - If the row finished while `kill` waited, a retried `kill` is a
-  finished-row no-op.
+  finished-row no-op, and the row then follows the finished-row rules:
+  `expire` keeps it while its agent process runs.
 - A repeated `kill` on a row whose session and agent process are already
   gone succeeds once the tmux server has finished exiting (SR-6.1,
   SR-18.12; decision-0930b Q5). Right after a `kill` ends the last
@@ -6618,8 +6647,24 @@ back unnoticed.
 ## Known limitations
 
 The limits and accepted risks of this release that callers and operators
-should know (SRD SR-18.12); each is one bullet in this list.
+should know (SRD SR-18.12); each is one bullet in this list, with a link to
+the section that describes it in detail.
 
+- **Accidents only** (SR-3.1). A same-user process that deliberately sets,
+  copies or removes `@ad_owner`, or renames, re-links or respawns an
+  agent's session to fool agent-director, is not defended against. A
+  session renamed by accident is still found by its label (see
+  [The lookup rule](#the-lookup-rule)).
+- **Inherited `AGENT_DIRECTOR_*` values** (SR-3.12). An agent launched on a
+  tmux server that something other than agent-director started from inside
+  another agent's pane can inherit that agent's other `AGENT_DIRECTOR_*`
+  values (its labels, for example) through the server's global
+  environment. This affects only the agent's self-identification, never
+  provenance: agent-director reads no such variable as evidence.
+- **Ids with control characters** (SR-3.13). A row whose instance id
+  contains a control character can never carry a valid label, so its
+  session is never Ours (see the label classes under
+  [Shared tmux lookup](#shared-tmux-lookup)).
 - **Rows whose recorded tmux session names cannot be used** (SR-3.2,
   SR-18.12). A recorded name that is empty, contains a control character,
   or contains a character tmux stores differently (`.`, `:` or bytes that
@@ -6634,6 +6679,211 @@ should know (SRD SR-18.12); each is one bullet in this list.
   agent-director never touches such a row's session; a human removes the
   row by the procedure in the README's "Operator actions" section, whose
   last step is the operator-only `delete`.
+- **Names with `$` or `\`** (SR-3.5, SR-3.10). New explicit names may not
+  contain them, but existing rows' names may. Such a session is labelled
+  by its session id when relaunched, never by a name target (see the create
+  under [Launch identity](#launch-identity)). A name that matches none of
+  its stored forms counts as not held (see the name holder under
+  [Shared tmux lookup](#shared-tmux-lookup)).
+- **Other tmux versions.** tmux versions other than 3.2a and 3.3a may
+  store `$` differently (observed on 3.4 and 3.5a). The name then matches
+  none of its stored forms and counts as not held, which fails safe: the
+  create decides.
+- **The sweeps' tmux time budget** (SR-13.5). `find-missing` and `expire`
+  stop calling tmux once the per-run budget (`sweep_budget_seconds`, 15 s
+  by default) is spent. While tmux stays that slow, rows beyond the budget
+  stay unverified or kept (see [`find-missing`](#find-missing) and
+  [`expire`](#expire)).
+- **The plain spawn's label scan** sees only the caller's socket. It
+  misses a leftover on another server or socket, an unlabelled one (from
+  before this release) and a process that carries the id but has no
+  labelled session; the hook gate keeps their hooks off the row (see the
+  label scan under [Launch identity](#launch-identity)).
+- **Accepted risks.**
+  - A re-bound or different tmux server gives Can't tell
+    (`ErrTmuxNotAvailable`; `find-missing` note `tmux_server_changed`).
+    Every call for a row goes to its recorded socket, so only a plain
+    spawn and a row from before this release depend on the caller's tmux
+    environment (see [The lookup rule](#the-lookup-rule)).
+  - Behind a permission wall, an agent whose window lives on in another
+    session after its own labelled session ended reads as Gone and can be
+    marked `missing`; `kill` of such a live row succeeds with nothing sent
+    (see [`kill`](#kill)).
+  - A label step and the kill of the unlabelled session that both fail
+    leave an unlabelled session of agent-director's that may run, and so
+    does a create for a name containing `$` or `\` whose reply exits 0 but
+    does not parse.
+  - A window- or pane-scope `@ad_owner` value, which only a deliberate
+    `set-option` sets, can mask a real label, so the row reads Gone.
+  - `kill` promises that the Claude process has exited, not processes it
+    detached (see [`kill`'s promises](#kills-promises)).
+  - After a `kill` whose wait timed out while SessionEnd finished the row,
+    a retried `kill` is a no-op on the finished row.
+  - Orphans that already carry a row's id (from before this release, from
+    a wrong-server mistake, or a leftover beside a row a plain spawn ended)
+    no longer drive that row through their hooks (see
+    [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)).
+    Finished rows whose own session keeps running are kept by `expire`
+    indefinitely and reported.
+  - `delete` racing a spawn, reuse or `resume`.
+  - Identifier reuse across a tmux server restart.
+  - A launch suspended for longer than the pending grace period between
+    recording its launch start and its session-creating call, or during
+    which the host clock steps forward by at least that period.
+  - An agent slower to exit than the stopping window: a `resume` or reuse
+    after the window, whose session is at least the starting-session bound
+    old, gets `ErrTmuxSessionConflict`. One example is an agent whose
+    SessionEnd hook budget is raised past 60 s by
+    `CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS`, which has no stated cap and
+    can come from the host environment, a settings `env` block or a
+    spawn's `extra_env` (agent-director reserves only
+    `AGENT_DIRECTOR_`-prefixed keys there). An operator covers it by
+    configuring a longer window (see
+    [`[tmux]` timing settings](#tmux-timing-settings)).
+  - A server-scope `@ad_pane` value, which only a deliberate
+    `set-option -s` sets, hides every pane's own value, so a lost reply's
+    pane is not adopted and its row can be marked `missing` past its grace
+    period while its agent runs.
+  - A run as another user on a host whose `/proc` is mounted with
+    `hidepid=invisible` reads every agent process as gone, which the
+    same-user rule already rules out (see [Same environment](#same-environment)).
+  - A process whose main thread has exited while its other threads run
+    shows state `Z` and reads as gone (neither tmux nor Claude Code does
+    this).
+  - In the moments after a `kill` ends the last session on its tmux
+    server, a repeated `kill` or any lookup on that socket can get
+    `ErrTmuxNotAvailable` or `ErrTmuxUnresponsive` while the server exits;
+    the caller waits and checks again.
+  - tmux replies on macOS are not verified.
+- **The hook gate's residuals** (SR-22.9; see the residuals under
+  [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)).
+  A hook applies only when its parent process is the row's recorded pane
+  process. So:
+  - a nested `claude`'s and a teammate pane's hooks are ignored, and their
+    work is not reflected in the row;
+  - a row whose create reply was lost takes no hook, and stays `pending`,
+    until `kill`, `send-keys`, `pause` or `find-missing` adopts its pane by
+    `@ad_pane`; after the adoption an idle agent's row stays `pending`
+    until the agent's next hook;
+  - a SessionStart that arrives before its launch's identity write waits
+    for it, bounded by the pending grace period, so only an identity write
+    slower than that period leaves a row `pending` the same way. The wait
+    also ends 540 s after it began, so with a grace period above 540 s the
+    hook stops waiting while `find-missing` still counts the row as inside
+    its grace period; the row stays `pending` until adoption or the
+    agent's next hook, with its `no_pane_recorded` record;
+  - a Claude Code version that does not run exec-form hooks applies no
+    hook: each hook writes `ad.hook.ignored` `no_exec_form`, and rows stay
+    `pending` until `kill` or `find-missing` (the README states the
+    minimum version);
+  - subagents' and in-process agent-team teammates' tool and permission
+    events move the row's state and use its relay, so a row can read
+    `working` while only teammates work; their SessionStart and SessionEnd
+    are ignored (`subagent_event`);
+  - other agent CLIs, Codex included, are unsupported in this release;
+  - `kill` does not wait for a pane process whose start time it could not
+    read;
+  - a `kill` retried after `ErrTmuxKillFailed` named a non-agent survivor
+    succeeds (`kill_sent` false) without checking that survivor again; only
+    the first failure reports it (see [`kill`'s promises](#kills-promises)).
+- **Several stores on one tmux server** are supported (WD 2026-09-29
+  STORE). Each store's labels carry its own id, and another store's agents
+  are never acted on (see [The lookup rule](#the-lookup-rule)).
+
+## Meaning changes
+
+What a caller must now assume, where this release changes the meaning of
+a result, a field or an error (SRD SR-18.3). Each item states the new
+meaning and links to the section that describes it in detail.
+
+- **`kill` success.** On a live row: the agent process of the row's
+  current launch is gone, whether `kill` ended its pane and session or it
+  was gone already. On a finished row: still a no-op, not verification
+  that the agent exited (see [`kill`'s promises](#kills-promises)).
+- **`kill_sent`** says whether a kill was sent to a pane or session.
+- **`kill` errors.** `kill` ends the agent's pane and reports
+  `ErrTmuxKillFailed` while the agent process runs. `ErrTmuxKillFailed`
+  and `ErrTmuxNotAvailable` are now reachable from `kill` (see
+  [Classes](#classes)).
+- **`kill` on a `pending` row** ends only the current launch's session and
+  returns `ErrTmuxSessionConflict` for a leftover of an earlier launch.
+- **`find-missing`'s `ids`** add rows whose process could not be checked
+  and that tmux shows with no session of their current launch, and rows
+  whose recorded pane process is dead; `pending` rows are marked only past
+  the pending grace period. **`unverified_ids`** add rows whose own session
+  is there (Ours), rows tmux could not tell about, and rows tmux was
+  unavailable for; never a `pending` row inside its grace period (see
+  [`find-missing`](#find-missing)).
+- **`find-missing` and squatted names.** Past its grace period, a
+  `pending` row is marked `missing` when no process or session of its
+  current launch exists, even while another session holds its name.
+- **`find-missing` no longer scans process environments.**
+- **`expire`** deletes only on Gone and keeps a row whose agent process
+  runs. Its `ids` are the rows deleted, and its new `kept` and `kept_ids`
+  fields report the rows kept. A store error on one row no longer fails
+  the run (see [`expire`](#expire)).
+- **Opted-in `spawn` success** (`--reuse-finished`): a fresh row or a
+  reset finished row. Afterwards the earlier life's conversation is
+  unreachable through `resume` and `get` (see
+  [Reuse of a finished id](#reuse-of-a-finished-id)).
+- **`resume` success:** no session of the agent's current or earlier
+  launches, and no holder of its name, was on its server; the row is then
+  `pending` until the agent reports in (see
+  [The pre-launch lookup](#the-pre-launch-lookup)).
+- **`resume` and reuse on a finished row whose own session runs** get
+  `ErrTmuxUnresponsive` while the row ended less than the stopping window
+  ago or the session is younger than the starting-session bound, and
+  `ErrTmuxSessionConflict` after both (see
+  [Reading a refusal](#reading-a-refusal)).
+- **Pane-verb success** (`read-pane`, `send-keys`, `pause`) means the row's
+  own session.
+- **Error names.** The narrowings, new triggers and new names of SRD
+  SR-1.3: `ErrInstanceIdCollision`, `ErrSpawnNotResumable`,
+  `ErrSpawnNotFound`, `ErrTmuxSessionNameInvalid`, `ErrInvalidFlags`,
+  `ErrInternal`, `ErrJsonlNeverWritten`, `ErrJsonlMissing`,
+  `ErrPermissionRequestNotFound`, `ErrNoOpenPermissionRequest`,
+  `ErrSpawnNotInteractive`, `ErrTmuxKillFailed` and
+  `ErrTmuxSessionCreate`, with the new `ErrTmuxUnresponsive` and
+  `ErrTmuxSessionConflict` (see [Classes](#classes) and the
+  [err_name catalog](#err_name-catalog)).
+- **Older TypeScript clients** surface each new error name as
+  `ErrUnknownErrorName`; `ErrCallTimeout` stays their symptom when a call
+  outlasts 30 s (see [Error mapping](#error-mapping)).
+- **Plain `spawn`'s held name.** `ErrTmuxSessionCreate` is narrowed to
+  launch failures; a held name now gives `ErrTmuxSessionConflict`,
+  `ErrTmuxUnresponsive` or `ErrTmuxNotAvailable`, unless the holder
+  vanished before the re-lookup. A plain spawn whose create reports
+  "duplicate session" ends its new row (`ended`, not `pending`) (see
+  [Reading a refusal](#reading-a-refusal)).
+- **`pending` covers every launch.** After a successful `resume` the row
+  is `pending`, with its process identity and `ended_at` cleared and its
+  launch start set, until the agent reports in; a failed launch restores
+  the finished row. `status`, `get` and `list` show the launch start
+  (`launch_started_at`) (see [Launch pending](#launch-pending)).
+- **`ErrSpawnNotResumable` on a `pending` row** says that a launch of the
+  row began and its agent has not reported in.
+- **Pre-trust.** `spawn` and `resume` report `pre_trust`, and `resume`
+  pre-trusts only a row whose spawn or latest reuse did not turn it off. A
+  row from before this release has pre-trust allowed, the column's
+  default, so its `resume` now pre-trusts whatever its spawn chose (see
+  [Workspace-trust pre-write](#workspace-trust-pre-write)).
+- **`resume`'s trail.** `resume` records its move
+  (`ad.resume.moved_to_pending`) and each restore attempt
+  (`ad.resume.restored`), and SessionStart's `ad.spawn.state_transition`
+  on a resumed row gives `pending` as its prior state (see
+  [`ad.*` event namespace](#ad-event-namespace)).
+- **`send-keys` with `allow_pending`** on a `pending` row reaches only the
+  current launch's session, found by the `@ad_owner` label with its launch
+  token that every created session now carries; otherwise
+  `ErrSpawnNotInteractive` (see [Launch pending](#launch-pending)).
+- **A different tmux server.** A row whose recorded server differs gets
+  `ErrTmuxNotAvailable` instead of a false "gone", and every call for a row
+  goes to its recorded socket (see [The lookup rule](#the-lookup-rule)).
+- **History by life.** `prior_sessions`, `transcript_status`,
+  `ErrJsonlNeverWritten` and `ErrJsonlMissing` cover the current life
+  only; rows never reused see no change beyond the current-session rule
+  (the history entry for the row's current session id is not part of its
+  visible history; see [Resume](#resume)).
 
 ## Stop semantics
 
@@ -6675,9 +6925,10 @@ this is how the code gets there.
         no second listing; if it cannot decide, its error, nothing sent.
      2. Adoption when due (SR-3.6): the row records no server identity or
         no pane. The pane adopted is the one whose `@ad_pane` carries the
-        row's launch token (`tmux.PaneByToken`), never a pane index. One
-        conditional write records it; the identity found is used for this
-        call whatever the write's outcome.
+        row's launch token (`tmux.PaneByToken`), never a pane index. On a
+        live row one conditional write records it; the identity found is
+        used for this call whatever the write's outcome. A finished row's
+        identity is used for the call only, with no write.
      3. The agent process is chosen as SR-3.8 says (`tmux.SelectAgentProcess`).
         The listed processes are the other pane processes of the labelled
         session in the same listing (linked windows included), each pid
@@ -6750,7 +7001,7 @@ README's "Operator actions" procedure.
 - `kill` never signals a process: tmux ends the pane, and success means
   the Claude process exited, not every process it started.
 - `kill` never changes the row's state. Its only row write is the adoption
-  (`AdoptIdentityIfUnchanged`, which advances `row_version`). A `pending`
+  on a live row (`AdoptIdentityIfUnchanged`, which advances `row_version`). A `pending`
   row takes the same path and stays `pending`.
 - If the row finishes while `kill` waits and the agent outlives the wait,
   `kill` returns `ErrTmuxKillFailed`, and a retried `kill` is a
@@ -6869,14 +7120,14 @@ Pre-release operator checklist: see bee `b.dc1` in the `Release` hive.
 
 ### Supported platforms
 
-agent-director ships as four pre-built static binaries, one per
-target tuple:
+agent-director ships as three pre-built static binaries, one per
+target tuple (`darwin/amd64` was dropped on 2026-05-24; see
+[Supported platforms (v1)](#supported-platforms-v1)):
 
 | OS | Arch | Format | Static |
 |---|---|---|---|
 | linux | amd64 | ELF 64 LE | yes (no libc dep) |
 | linux | arm64 | ELF 64 LE | yes (no libc dep) |
-| darwin | amd64 | Mach-O 64 LE | n/a (no system linker) |
 | darwin | arm64 | Mach-O 64 LE | n/a (no system linker) |
 
 Windows is not supported (SRD §16.1).
@@ -6901,7 +7152,11 @@ versioning. For v1:
 
 Pre-release tags (e.g. `v0.1.0-rc1`) are **not supported in v1**.
 The release skill rejects them at the semver gate. Iterating
-toward a release happens on a branch; the tag lands once.
+toward a release happens on a branch; the tag lands once. A release
+candidate is a stamped build, never a tag: `make build` (or
+`make release-binaries`) with `AGENT_DIRECTOR_BUILD_VERSION=X.Y.Z-rc.N`
+stamps that version verbatim, and feature detection counts it as `X.Y.Z`
+(see [Reuse of a finished id](#reuse-of-a-finished-id)).
 
 ### The release skill
 

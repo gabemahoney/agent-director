@@ -32,9 +32,8 @@ import (
 const ProtocolVersion = "2024-11-05"
 
 // ServerName + ServerVersion are returned in the initialize response.
-// The version follows the binary's own version pin; for v1 we hard-
-// code "0.1.0" — Epic 13 (release) will replace this with a build-
-// time injected string.
+// ServerVersion is the fixed "0.1.0" sent as serverInfo.version; it is
+// not the binary's version, which the MCP `version` tool reports.
 const (
 	ServerName    = "agent-director"
 	ServerVersion = "0.1.0"
