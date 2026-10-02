@@ -1,0 +1,9 @@
+#!/bin/bash
+# Version-probe dry-run stub `claude` that DROPS exec-form hooks' args and
+# runs `command` through /bin/sh, as Claude Code 2.1.120 does. DRY RUNS ONLY.
+# See ../lib/probe-stub.sh.
+if [[ "${1:-}" == "--version" ]]; then
+    printf '%s\n' "2.1.120 (measure-exit dry-run stub: exec-form args dropped)"
+    exit 0
+fi
+exec "$(dirname "$(readlink -f "$0")")/../lib/probe-stub.sh" drop "$@"

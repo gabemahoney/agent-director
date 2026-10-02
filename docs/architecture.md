@@ -7469,6 +7469,180 @@ before the identity write, which uses the delayed-create `tmux` and the
 early-hook stand-in above; never add another way to hold the create
 back.
 
+### Exit-time measurement harness (`tools/measure-exit/`)
+
+An operator tool, not a test plan. It is not in `test/docker-epics.txt`
+and no CI job runs it. It measures real Claude Code exits for SRD Open
+Questions RN-6 (pane kill to process gone; sets `kill_exit_wait_ms`) and
+RN-2 (stored `ended_at` to the session no longer listing; informs
+`stopping_window_seconds` and the stopping window's minimum). It also runs
+RN-9: an in-session `/resume`, agent teams in the in-process and split-pane
+modes, the per-hook parent-pid outcome, and the exec-form version probe.
+RN-7's payload keys are recorded inside RN-9's run, for the record only.
+Operating it, including approval, credentials, `decide` and reading the
+results, is in [`tools/measure-exit/README.md`](../tools/measure-exit/README.md).
+This section does not repeat it.
+
+**Parts.**
+
+- **`run.sh`**, the host runner. It is shell only and never runs tmux,
+  agent-director or a Go artifact on the host. It is print-only unless
+  `--run`. It stages copies of the settings layers, starts one container per
+  run (one per probed version for the probe), and wraps it in the guard.
+  - For `measure` and `rn9` it always passes `-cases`: the mode's ids by
+    default, and it refuses (exit 2) a `--cases` id from another mode.
+  - It refuses (exit 2) a staged layer that is or links to `.claude.json`
+    or `.credentials.json`, is not JSON, or holds a credential-like key.
+    The refusal applies in print-only too, and names the key, never a value.
+  - The probe takes its candidate versions from `npm view` in a
+    credential-free base-image container on the host network, or from
+    `--versions` / `--versions-file`. A failed or empty listing stops the
+    bisection.
+  - A deployed-version STOP ends the probe right after the guard verify,
+    with no bisection and no further build (exit 3).
+- **The measurement image** (`tools/measure-exit/Dockerfile`), built FROM
+  the test image. Claude Code is reinstalled at `CLAUDE_CODE_VERSION` under
+  its own tag (`agent-director-measure:cc-<version>`), on Node 22. The test
+  image's own pin is unchanged. The driver compiles in the image's build
+  stage, and the image holds no stub. The `REQUIRE_NATIVE_CLAUDE` build
+  argument checks that `claude` resolves to the package's native ELF binary,
+  not a JS launcher, which would make every hook a `pid_mismatch`. The image
+  records the result in `/opt/measure-exit/claude-launcher.txt`.
+  `make measure-image` requires the native binary. The probe's per-version
+  builds only record the result.
+- **The driver** (`measure-exit`, Go `package main`). Its subcommands are
+  `run -mode real|dry|probe`, `decide` and `record`.
+  - `run` spawns agents through the v-next binary on a private tmux server
+    and takes one measured action per sample: a pane kill, `pause`'s
+    `/exit`, or a natural-exit keystroke. It polls every 100 ms. RN-6 uses
+    the same start-time reader as `kill`'s wait, and RN-2 polls the
+    session's presence.
+  - Cases register through `registerCase` (`cases.go`). The ids are
+    `rn6.{idle,midturn,mcp}`, each also with `.raised-hook` and
+    `.raised-env`; `rn2.{natural,pause,mcp}`; `rn9.{drive,resume,team-inprocess,team-splitpane}`;
+    and `probe.exec-form`. Real mode refuses to run without `-cases`
+    (`selectCases`). Dry and probe modes default to every case.
+  - Generated layers (the raised SessionEnd budget, the RN-9 recorder) are
+    `.claude/settings.local.json` in a harness-owned working directory per
+    agent, because `--settings` is a denied caller arg. MCP servers come
+    through `--mcp-config`.
+  - `record` is the RN-9 recorder hook, in exec form on 11 events. It keeps
+    key names and id-shaped values only. `rn9eval.go` joins each recorded
+    hook to the container trail's `ad.hook.fired` / `ad.hook.ignored`
+    records and gives the verdicts and STOP flags.
+  - The RN-9 drive answers permission requests through `decide`, scoped per
+    scenario (`rn9ExpectedTools`). It reads only the tool name from `get`,
+    allows the scenario's expected tools and denies everything else.
+  - `decide` is pure. It reads results directories and prints the RN-6,
+    RN-2 and RN-9 decision record. It exits 0 when decided, 2 on invalid
+    input, and 3 for a STOP. It reads the current values from
+    `internal/config`.
+    - Each sampled case's rules read its first 20 usable samples in
+      recorded order (`useSamples`). The record shows the recorded, used
+      and dropped counts.
+    - A default-budget "did not exit" is invalid in any position. Under a
+      raised budget, a "did not exit" counts as a measured sample.
+    - A case whose stored counts disagree with its samples is invalid.
+    - `killCeilingAt` derives kill's SR-13.2 ceiling from the
+      `internal/config` constants, never from a literal. The record shows
+      both paths and their max.
+- **The dry-run stubs** (`stub/claude`, plus the probe's `probe-args-kept`
+  and `probe-args-dropped`) and `dryrun.sh`, the sandbox dry run.
+- **`guard.sh`**, the host-state guard (below).
+- **Makefile targets:**
+  - `make measure-exit-dryrun`: the dry run, inside the sandbox. It needs
+    no credentials, no network and no operator.
+  - `make measure-exit-print`: prints the runner's container command lines
+    and session counts. It builds and runs nothing.
+  - `make measure-image`: builds the measurement image.
+  - `make measure-exit`: the gated live run (`MEASURE_MODE` `probe`,
+    `measure` or `rn9`). It needs approval and credentials.
+
+  `measure-image` and `measure-exit` chain through `test-image` to the host
+  `make build`, the same as `make test-image`. The live runs L0, L1 and L2
+  are launched by the user from their own shell, or by the orchestrator
+  with explicit approval. Gabe approves the spend, and the orchestrator sets
+  `MX_ORCHESTRATOR_LAUNCH=1` and runs from its own shell, which holds the
+  real InferenceHub values. Workers never launch them.
+
+  The launch order is L0, then L1, then L2, one after the other under one
+  shared lock. L1 and L2 refuse unless L0's `deployed-verdict.txt` reads
+  that the deployed version runs exec-form hooks. That file, not make's
+  exit status, is the success or STOP signal, because make reports every
+  runner failure as exit 2.
+
+**Isolation contract.**
+
+- The container has its own HOME with no `.agent-director`, its own store,
+  and a private tmux server (a private `TMUX_TMPDIR` at mode 0700, with
+  `TMUX` unset). Every spawned row's socket must lie under that directory,
+  or the run aborts.
+- The driver's preflight refuses to start without the container marker
+  (`AGENT_DIRECTOR_MEASURE_CONTAINER`, or the sandbox marker in dry mode).
+  It also refuses with `TMUX` set, with a store under `$HOME` or the
+  passwd-entry home, below the sample floor, or below the version floor.
+- Child processes get an allowlisted environment. `TMUX`, the host's Claude
+  Code session variables and `AGENT_DIRECTOR_*` never reach a child.
+- Credentials travel by environment only, forwarded by name. The runner's
+  list holds exactly the gateway pair and the two pinned models. The probe
+  forwards none and runs with `--network none`.
+- Real mode is gateway-only. `checkRealModeEnv` refuses with rule
+  `real-gateway-only` when any variable in `realModeRefusedEnv` (an API
+  key, an OAuth token, the Bedrock and AWS variables) is set, even empty.
+  `realModeEnv` also drops them from every child.
+- Mounts are staged settings copies (read-only) and one results directory.
+  The host home, `~/.agent-director`, `~/.claude*`, a tmux socket
+  directory, `/tmp` and the engine socket are never mounted.
+- The driver never opens the store. Besides spawning its own agents, it
+  makes only the measured exits and pane kills, the RN-9 drive's sends to
+  its own agents, and read-only calls (`get` and tmux `list-*`). Every call goes to `run-log.jsonl`, as argv only with
+  credentials scrubbed.
+
+**A second isolation boundary.** The real run's measurement container is a
+second isolation boundary beside the sandbox. It holds the same invariant:
+its HOME has no `.agent-director`, its tmux server is private, and nothing
+built runs on the host. The host-state guard backs it. It is not a
+substitute for the sandbox for tests: tests still run only through
+`make sandbox*`.
+
+**The guard.** `guard.sh` reads only `state.db` and `ad-trail.jsonl` under
+the passwd-entry home, not `$HOME`, because the store resolves its home that
+way (b.8dr). It takes a snapshot before the run and verifies after it, even
+when the container fails. Quiet-host mode compares SHA-256 sums and fails on
+any change. Busy-host mode, the runner's default, scans only the trail bytes
+appended since the snapshot for the run's identifiers (from
+`harness-ids.txt` and `--id`). It reports `state.db` as not checked, and it
+never opens a live database.
+
+**Reuse and scope.**
+
+- **Must use:** any future tool that runs agents on a host to measure them
+  wraps the run in `tools/measure-exit/guard.sh` (snapshot, then verify).
+  Never write another checksum or trail guard.
+- **Scoped to this harness:** the dry-run stubs. The driver's dry mode
+  refuses any `claude` whose `--version` lacks "measure-exit dry-run
+  stub". They follow the stand-in pattern above: the stub is the pane
+  process and fires each hook as its direct child. Docker cases keep using
+  `test/driver/stand-in-claude` and `early-hook-claude`.
+- **Test helpers (must use within the package):**
+  `tools/measure-exit/helpers_test.go` holds the package's doubles:
+  - `fakeEnv`, the `environment` seam;
+  - `virtualClock`, which drives `pollUntilGone` without sleeping;
+  - `fakeExec`, which records agent-director and tmux argv;
+  - `fakeProcs`, for start-time reads;
+  - `newRig`, a harness on a temp tree;
+  - `credentialSentinels` with `assertAbsent`, for no-leak checks.
+
+  New tests in `tools/measure-exit` must use these. Do not add another
+  environment, clock, exec or process double there.
+- **The dry-run E2E:** `tools/measure-exit/dryrun` runs `dryrun.sh` with a
+  private `TMUX_TMPDIR`. Run it with `-count=1`, because it builds in a
+  subprocess. It is the one end-to-end proof of the harness; extend it
+  rather than adding a second one.
+- **Sandbox guard:** both `tools/measure-exit` and
+  `tools/measure-exit/dryrun` call `sandboxguard.Require()` from `TestMain`
+  (see "Sandbox guard and the CI bypass").
+
 ### CI lane
 
 `.github/workflows/integration.yml` defines two jobs:

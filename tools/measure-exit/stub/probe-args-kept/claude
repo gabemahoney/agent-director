@@ -1,0 +1,8 @@
+#!/bin/bash
+# Version-probe dry-run stub `claude` that runs exec-form hooks WITH their
+# args, as Claude Code 2.1.285 does. DRY RUNS ONLY. See ../lib/probe-stub.sh.
+if [[ "${1:-}" == "--version" ]]; then
+    printf '%s\n' "2.1.285 (measure-exit dry-run stub: exec-form args kept)"
+    exit 0
+fi
+exec "$(dirname "$(readlink -f "$0")")/../lib/probe-stub.sh" keep "$@"

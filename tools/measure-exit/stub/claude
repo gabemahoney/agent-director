@@ -1,0 +1,306 @@
+#!/bin/bash
+# measure-exit dry-run stub `claude` (Epic 21, t3.h98.w4.yu.c7). DRY RUNS
+# ONLY: it is never copied into the measurement image, and the driver's dry
+# mode refuses any claude whose --version lacks "measure-exit dry-run stub".
+#
+# It stands in for Claude Code as the pane process of an agent-director
+# spawn, so the harness's dry run exercises every case end to end through the
+# real v-next binary and real tmux on the private server:
+#
+#   - It is the process tmux starts (put this directory first on the PATH of
+#     the agent-director process; tmux ignores --extra-env PATH, Epic 8 rc
+#     S19). It keeps its argv, so agent-director's --settings layer stays
+#     readable in /proc/<pid>/cmdline for the budget capture.
+#   - It fires every hook of an event as its own direct child, in exec form
+#     (command + args) when the entry has args, so each hook's parent is the
+#     pane process and agent-director's parent-process gate (SR-22.9) applies
+#     it. Hooks come from the --settings JSON it is given and from the
+#     working directory's .claude/settings.local.json (the harness's
+#     generated layer), the way Claude Code merges them.
+#   - Hook budgets: SessionEnd hooks get the entry's `timeout` (seconds), else
+#     CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS, else 1.5 s; other hooks their
+#     `timeout`, else 600 s. A hook past its budget is sent SIGTERM and
+#     abandoned. So the raised-budget variants are exercised offline.
+#
+# Behaviour (every payload carries session_id, transcript_path, cwd and
+# hook_event_name; the transcript file is created under $HOME):
+#   start           SessionStart (source startup, or resume with --resume)
+#   initial prompt  UserPromptSubmit and PreToolUse, then stays in its turn
+#                   (the mid-turn cases)
+#   typed prompt    UserPromptSubmit, PreToolUse, PermissionRequest (blocks
+#                   while the relay waits for decide), PostToolUse, Stop,
+#                   Notification. With agent teams enabled in the generated
+#                   layer: teammateMode in-process fires one teammate's
+#                   SessionStart, PreToolUse and SessionEnd carrying agent_id
+#                   from this process; teammateMode tmux splits the window
+#                   and runs a teammate stub there, whose hooks have another
+#                   parent.
+#   /clear          SessionEnd (reason clear), then SessionStart (source
+#                   clear) with a new session id
+#   /compact        PreCompact, then SessionStart (source compact) with a
+#                   new session id
+#   /resume <id>    SessionStart (source resume) with session <id>
+#   /exit, Ctrl-D   SessionEnd (reason prompt_input_exit), then exit
+#   SIGHUP          (pane killed) SessionEnd (reason other), output to
+#                   files, then exit
+#
+# Its own files go under $HOME/.mx-stub/<instance id>/<pid>/.
+
+set -u
+export LC_ALL=C
+
+readonly STUB_VERSION="0.0.0 (measure-exit dry-run stub)"
+readonly SESSIONEND_DEFAULT_BUDGET_MS=1500
+readonly HOOK_DEFAULT_TIMEOUT_S=600
+readonly TEAMMATE_ID="mx-stub-teammate-1"
+readonly TEAMMATE_TYPE="mx-stub-teammate"
+readonly TEAMMATE_WAIT_S=15
+
+if [[ "${1:-}" == "--version" ]]; then
+    printf '%s\n' "$STUB_VERSION"
+    exit 0
+fi
+
+self="$(readlink -f "$0")"
+settings=""
+prompt=""
+resume_id=""
+teammate_settings=""
+teammate_done=""
+while (($#)); do
+    case "$1" in
+        --settings) settings="${2:-}"; shift 2 || shift ;;
+        --settings=*) settings="${1#*=}"; shift ;;
+        --resume) resume_id="${2:-}"; shift 2 || shift ;;
+        --mx-teammate) teammate_settings="${2:-}"; shift 2 || shift ;;
+        --mx-done) teammate_done="${2:-}"; shift 2 || shift ;;
+        --mcp-config | --model | --permission-mode | --append-system-prompt | --allowedTools | \
+            --disallowedTools | --session-id | --setting-sources | --add-dir) shift 2 || shift ;;
+        --*) shift ;;
+        *) prompt="$1"; shift ;;
+    esac
+done
+
+instance="${AGENT_DIRECTOR_INSTANCE_ID:-no-instance}"
+[[ "$instance" =~ ^[A-Za-z0-9._-]+$ ]] || instance="no-instance"
+state="$HOME/.mx-stub/$instance/$$"
+mkdir -p "$state"
+layer="$PWD/.claude/settings.local.json"
+n=0
+sid=""
+tp=""
+
+now_ms() {
+    local t="${EPOCHREALTIME/./}"
+    printf '%s\n' "$((10#$t / 1000))"
+}
+
+# new_session starts a conversation: a new session id and its transcript.
+new_session() {
+    sid="${1:-$(cat /proc/sys/kernel/random/uuid)}"
+    tp="$HOME/.claude/projects/mx-stub/$sid.jsonl"
+    mkdir -p "${tp%/*}"
+    : >>"$tp"
+}
+
+# hook_entries prints, one JSON object per line, every command hook
+# registered for event $1 in agent-director's layer and the generated layer.
+hook_entries() {
+    local f
+    for f in "$state/settings.json" "$layer"; do
+        [[ -s "$f" ]] || continue
+        jq -c --arg e "$1" '.hooks[$e][]?.hooks[]? | select(.type == "command")' "$f" 2>/dev/null
+    done
+}
+
+# budget_ms prints a hook's budget in milliseconds.
+budget_ms() {
+    local event="$1" timeout_s="$2"
+    if [[ -n "$timeout_s" ]]; then
+        printf '%s\n' "$((${timeout_s%.*} * 1000))"
+    elif [[ "$event" == SessionEnd ]]; then
+        printf '%s\n' "${CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS:-$SESSIONEND_DEFAULT_BUDGET_MS}"
+    else
+        printf '%s\n' "$((HOOK_DEFAULT_TIMEOUT_S * 1000))"
+    fi
+}
+
+# run_hooks starts every hook of the event at once, each as a direct child
+# (a simple command run in the background, so bash execs it in the forked
+# child), and waits until each exits or passes its budget.
+run_hooks() {
+    local event="$1" payload="$2" entry cmd timeout_s i=0 start p k running
+    local -a pids=() deadlines=() args=()
+    start="$(now_ms)"
+    while IFS= read -r entry; do
+        i=$((i + 1))
+        cmd="$(jq -r '.command' <<<"$entry")"
+        timeout_s="$(jq -r '.timeout // empty' <<<"$entry")"
+        if jq -e 'has("args")' >/dev/null <<<"$entry"; then
+            mapfile -t args < <(jq -r '.args[]' <<<"$entry")
+            "$cmd" "${args[@]}" <"$payload" >"$state/h$n.$i.out" 2>"$state/h$n.$i.err" &
+        else
+            /bin/sh -c "$cmd" <"$payload" >"$state/h$n.$i.out" 2>"$state/h$n.$i.err" &
+        fi
+        pids+=("$!")
+        deadlines+=("$((start + $(budget_ms "$event" "$timeout_s")))")
+    done < <(hook_entries "$event")
+    while ((${#pids[@]})); do
+        running=" $(jobs -rp | tr '\n' ' ') "
+        for k in "${!pids[@]}"; do
+            p="${pids[$k]}"
+            if [[ "$running" != *" $p "* ]]; then
+                wait "$p" 2>/dev/null
+                unset 'pids[k]'
+            elif (($(now_ms) >= deadlines[k])); then
+                kill -TERM "$p" 2>/dev/null
+                unset 'pids[k]'
+            fi
+        done
+        ((${#pids[@]})) && sleep 0.02
+    done
+    return 0
+}
+
+# fire sends event $1 with the extra payload fields $2 (a JSON object).
+fire() {
+    local event="$1" extra="${2:-}"
+    [[ -n "$extra" ]] || extra='{}'
+    n=$((n + 1))
+    local payload="$state/p$n.json"
+    jq -cn --arg s "$sid" --arg t "$tp" --arg c "$PWD" --arg e "$event" --argjson x "$extra" \
+        '{session_id: $s, transcript_path: $t, cwd: $c, hook_event_name: $e} + $x' >"$payload"
+    run_hooks "$event" "$payload"
+}
+
+# end_session fires SessionEnd with reason $1 and exits.
+end_session() {
+    fire SessionEnd "$(jq -cn --arg r "$1" '{reason: $r}')"
+    exit 0
+}
+
+# on_hup: the pane was killed. The terminal is gone, so every output goes
+# to files; SessionEnd still runs within its budget.
+on_hup() {
+    trap '' HUP TERM
+    exec </dev/null >>"$state/after-hup.log" 2>&1
+    end_session other
+}
+
+# team_mode prints the generated layer's teammateMode when agent teams are
+# enabled in its env.
+team_mode() {
+    [[ -s "$layer" ]] || return 0
+    jq -r 'select((.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS // "") == "1") | .teammateMode // empty' "$layer" 2>/dev/null
+}
+
+# inprocess_teammate fires one in-process teammate's hooks from this
+# process, each carrying agent_id and agent_type, in the teammate's own
+# session.
+inprocess_teammate() {
+    local lead_sid="$sid" ids
+    ids="$(jq -cn --arg a "$TEAMMATE_ID" --arg t "$TEAMMATE_TYPE" '{agent_id: $a, agent_type: $t}')"
+    new_session
+    fire SessionStart "$(jq -c '. + {source: "startup"}' <<<"$ids")"
+    fire PreToolUse "$(jq -c '. + {tool_name: "SendMessage", tool_input: {to: "lead"}, tool_use_id: "stub"}' <<<"$ids")"
+    fire SessionEnd "$(jq -c '. + {reason: "other"}' <<<"$ids")"
+    new_session "$lead_sid"
+}
+
+# splitpane_teammate starts a teammate stub in a split pane of this
+# window (tmux reaches this pane's server through TMUX) and waits for it.
+splitpane_teammate() {
+    local done="$state/teammate.done" i
+    tmux split-window -d -c "$PWD" "$self" --mx-teammate "$state/settings.json" --mx-done "$done" \
+        2>>"$state/stub.err" || return 0
+    for ((i = 0; i < TEAMMATE_WAIT_S * 10; i++)); do
+        [[ -e "$done" ]] && return 0
+        sleep 0.1
+    done
+}
+
+# do_turn answers one typed prompt.
+do_turn() {
+    fire UserPromptSubmit '{"prompt": "stub prompt"}'
+    case "$(team_mode)" in
+        in-process) inprocess_teammate ;;
+        tmux) splitpane_teammate ;;
+        *)
+            fire PreToolUse '{"tool_name": "Bash", "tool_input": {"command": "date"}, "tool_use_id": "stub"}'
+            fire PermissionRequest '{"tool_name": "Bash", "tool_input": {"command": "date"}}'
+            fire PostToolUse '{"tool_name": "Bash", "tool_input": {"command": "date"}, "tool_response": {"stdout": "stub"}}'
+            ;;
+    esac
+    fire Stop '{"stop_hook_active": false}'
+    fire Notification '{"message": "stub idle", "notification_type": "idle_prompt"}'
+}
+
+# handle_line acts on one line typed into the pane.
+handle_line() {
+    local line="$1" id
+    case "$line" in
+        "") ;;
+        /exit) end_session prompt_input_exit ;;
+        /clear)
+            fire SessionEnd '{"reason": "clear"}'
+            new_session
+            fire SessionStart '{"source": "clear"}'
+            ;;
+        /compact*)
+            fire PreCompact '{"trigger": "manual", "custom_instructions": ""}'
+            new_session
+            fire SessionStart '{"source": "compact"}'
+            ;;
+        "/resume "*)
+            id="${line#/resume }"
+            id="${id//[^A-Za-z0-9._-]/}"
+            new_session "$id"
+            fire SessionStart '{"source": "resume"}'
+            ;;
+        *) do_turn ;;
+    esac
+}
+
+# run_teammate is a split-pane teammate: its own session and hooks, from
+# its own process, then it ends.
+run_teammate() {
+    cp "$teammate_settings" "$state/settings.json" 2>/dev/null || : >"$state/settings.json"
+    new_session
+    fire SessionStart '{"source": "startup"}'
+    fire PreToolUse '{"tool_name": "SendMessage", "tool_input": {"to": "lead"}, "tool_use_id": "stub"}'
+    fire Stop '{"stop_hook_active": false}'
+    fire SessionEnd '{"reason": "prompt_input_exit"}'
+    [[ -n "$teammate_done" ]] && : >"$teammate_done"
+    exit 0
+}
+
+trap on_hup HUP
+trap 'end_session other' TERM
+
+if [[ -n "$teammate_settings" ]]; then
+    run_teammate
+fi
+
+printf '%s' "$settings" >"$state/settings.json"
+if [[ -n "$resume_id" ]]; then
+    new_session "$resume_id"
+    fire SessionStart '{"source": "resume"}'
+else
+    new_session
+    fire SessionStart '{"source": "startup"}'
+fi
+if [[ -n "$prompt" ]]; then
+    fire UserPromptSubmit '{"prompt": "stub prompt"}'
+    fire PreToolUse '{"tool_name": "Bash", "tool_input": {"command": "sleep 600"}, "tool_use_id": "stub"}'
+fi
+
+while :; do
+    if IFS= read -r line; then
+        handle_line "$line"
+        continue
+    fi
+    # End of input: Ctrl-D at the prompt, or the terminal hung up (then a
+    # pending SIGHUP runs its trap during this pause).
+    sleep 0.05
+    end_session prompt_input_exit
+done
