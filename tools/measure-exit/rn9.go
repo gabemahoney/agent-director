@@ -112,10 +112,12 @@ func (h *harness) recorderFile(caseID string) string {
 
 // startRN9Agent spawns one RN-9 agent in cwd with relay on (the harness
 // answers permission requests with decide), waits for it to report in and
-// identifies its pane process. A refusal is returned as is (it aborts the
-// run); any other failure is a reason the scenario is inconclusive.
-func (h *harness) startRN9Agent(caseID, cwd, file string) (*rn9Agent, error) {
-	a, err := h.spawnAgent(caseID, spawnSpec{CWD: cwd, RelayMode: "on"})
+// identifies its pane process. claudeArgs go to claude after spawn's "--"
+// (an agent team lead's --debug-file). A refusal is returned as is (it
+// aborts the run); any other failure is a reason the scenario is
+// inconclusive.
+func (h *harness) startRN9Agent(caseID, cwd, file string, claudeArgs ...string) (*rn9Agent, error) {
+	a, err := h.spawnAgent(caseID, spawnSpec{CWD: cwd, RelayMode: "on", ClaudeArgs: claudeArgs})
 	if err != nil {
 		return nil, err
 	}
@@ -478,10 +480,15 @@ func (h *harness) runResume(spec caseSpec) (rn9Scenario, error) {
 }
 
 // runTeam starts an agent team from one lead (agent teams enabled and
-// teammateMode set through the generated layer), waits until the team
-// settles (the lead's Stop, then settleQuiet with no recorded hook,
-// bounded by stepTimeout), records the panes Claude itself split, pauses
-// the lead and evaluates every teammate hook.
+// teammateMode set through the generated layer; Claude's debug log on),
+// waits for the lead's prompt box, sends the team prompt, waits for the
+// lead's UserPromptSubmit and then until the team settles (the lead's Stop,
+// then settleQuiet with no recorded hook, bounded by stepTimeout), records
+// the panes Claude itself split, pauses the lead and evaluates every
+// teammate hook. When the run is cut short, the panes' text is captured
+// before pause (and again after a failed pause), and an inconclusive
+// verdict's reason leads with the cause. Claude's debug logs are kept
+// either way (capture.go).
 func (h *harness) runTeam(spec caseSpec, teamMode string) (rn9Scenario, error) {
 	file := h.recorderFile(spec.id)
 	layer := recorderLayer(h.self, file, map[string]any{
@@ -492,9 +499,16 @@ func (h *harness) runTeam(spec caseSpec, teamMode string) (rn9Scenario, error) {
 	if err != nil {
 		return rn9Scenario{ID: spec.id}, err
 	}
-	lead, err := h.startRN9Agent(spec.id, dir, file)
+	debugFile, err := h.leadDebugFile(spec.id)
 	if err != nil {
-		return inconclusive(spec.id, err)
+		return rn9Scenario{ID: spec.id}, err
+	}
+	debugBefore := h.debugLogStamps()
+	lead, err := h.startRN9Agent(spec.id, dir, file, "--debug-file", debugFile)
+	if err != nil {
+		sc, rerr := inconclusive(spec.id, err)
+		sc.Artifacts, sc.Notes = h.keepDebugLogs(spec.id, debugFile, debugBefore)
+		return sc, rerr
 	}
 	leadIDs := map[string]bool{}
 	stepErr := func() error {
@@ -503,14 +517,34 @@ func (h *harness) runTeam(spec caseSpec, teamMode string) (rn9Scenario, error) {
 			return err
 		}
 		leadIDs[r.PayloadID], leadIDs[r.RowID] = true, true
+		if err := lead.waitInputReady(); err != nil {
+			return err
+		}
 		m := lead.mark()
 		if err := lead.send(teamPrompt); err != nil {
 			return err
 		}
+		if _, err := lead.waitFor(m, h.cfg.promptAcceptWait, "UserPromptSubmit", func(l recordLine) bool {
+			return lead.own(l) && l.Event == "UserPromptSubmit"
+		}); err != nil {
+			return fmt.Errorf("the team prompt was not accepted: %w", err)
+		}
 		return lead.settle(m)
 	}()
 	panes := h.paneCount(spec.id, lead.a)
+	var captured []capturedPane
+	if stepErr != nil {
+		c, notes := h.capturePanes(spec.id, lead.a, "")
+		captured = append(captured, c...)
+		lead.notes = append(lead.notes, notes...)
+	}
 	endErr := lead.end()
+	if endErr != nil {
+		c, notes := h.capturePanes(spec.id, lead.a, "-after-pause")
+		captured = append(captured, c...)
+		lead.notes = append(lead.notes, notes...)
+	}
+	debugFiles, debugNotes := h.keepDebugLogs(spec.id, debugFile, debugBefore)
 	_, obs, err := h.observe(file, lead)
 	if err != nil {
 		return rn9Scenario{ID: spec.id}, err
@@ -518,8 +552,19 @@ func (h *harness) runTeam(spec caseSpec, teamMode string) (rn9Scenario, error) {
 	sc := evalTeam(spec.id, teamMode, obs, leadIDs)
 	sc.Notes = append(lead.notes, sc.Notes...)
 	sc.Notes = append(sc.Notes, fmt.Sprintf("panes in the lead's tmux session before pause: %s (split panes are Claude's own)", panes))
+	sc.Notes = append(sc.Notes, debugNotes...)
+	for _, c := range captured {
+		sc.Artifacts = append(sc.Artifacts, c.File)
+	}
+	sc.Artifacts = append(sc.Artifacts, debugFiles...)
 	if stepErr != nil || endErr != nil {
 		sc.Notes = append(sc.Notes, "team run cut short: "+errText(stepErr, endErr))
+	}
+	if stepErr != nil && sc.Verdict == verdictInconclusive {
+		sc.Reason = "team run cut short: " + stepErr.Error() + "; " + sc.Reason
+		if len(captured) > 0 {
+			sc.Reason += "; pane text in " + captured[0].File
+		}
 	}
 	return sc, nil
 }

@@ -65,10 +65,13 @@ const (
 
 	// DefaultKillExitWaitMs is the default kill exit wait, in milliseconds
 	// (5000): how long kill, after killing the agent's pane, waits for the
-	// agent process to exit before it returns ErrTmuxKillFailed. No safe
-	// minimum: a value too low fails closed (SR-4.1, SR-6.1). The value is a
-	// placeholder until RN-6 (Epic 21) measures Claude's exit after a pane
-	// kill.
+	// agent process to exit before it returns ErrTmuxKillFailed. The value
+	// rests on RN-6's measurement of Claude's exit after a pane kill (Epic
+	// 21): it is at least 2x the largest exit time under Claude Code's
+	// default SessionEnd budget, rounded up to a whole second. An agent with
+	// a raised SessionEnd budget takes longer to exit, and the operator
+	// raises the setting for it. No safe minimum: a value too low fails
+	// closed with ErrTmuxKillFailed (SR-4.1, SR-6.1).
 	DefaultKillExitWaitMs = 5000
 )
 
@@ -150,7 +153,7 @@ type Tmux struct {
 
 	// KillExitWaitMs is how long kill waits for the agent process to exit
 	// after killing its pane, in milliseconds. Default DefaultKillExitWaitMs
-	// (5000, a placeholder until RN-6); minimum none: fails closed (SR-4.1,
+	// (5000, from RN-6's measurement); minimum none: fails closed (SR-4.1,
 	// SR-6.1).
 	KillExitWaitMs int64 `toml:"kill_exit_wait_ms"`
 }
@@ -409,8 +412,8 @@ func (t Tmux) EffectiveSweepBudget() time.Duration {
 
 // EffectiveKillExitWait returns how long kill waits for the agent process to
 // exit after killing its pane (kill_exit_wait_ms, milliseconds): the
-// configured value when positive, otherwise DefaultKillExitWaitMs (5000 ms, a
-// placeholder until RN-6); the largest duration when too large. Minimum
+// configured value when positive, otherwise DefaultKillExitWaitMs (5000 ms,
+// from RN-6's measurement); the largest duration when too large. Minimum
 // none: fails closed (SR-4.1, SR-6.1).
 func (t Tmux) EffectiveKillExitWait() time.Duration {
 	return t.Effective(TmuxKillExitWaitMs)

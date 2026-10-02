@@ -44,6 +44,25 @@
 #   SIGHUP          (pane killed) SessionEnd (reason other), output to
 #                   files, then exit
 #
+# Screen: after its start and after each line it handles, it draws an input
+# prompt the way Claude Code does (a "❯" line and the "? for shortcuts"
+# hint), which the harness's input-ready wait looks for (capture.go).
+# --debug-file PATH: it appends debug lines to PATH, as Claude Code's flag
+# does; a split-pane teammate writes its own under $HOME/.claude/debug/
+# (Claude Code's default place), so the harness's copy of both is exercised.
+#
+# MX_STUB_LEAD (set by the wrappers in lead-dialog/ and lead-late/, dry
+# runs of rn9.team-splitpane only) changes the agent after its startup
+# SessionStart:
+#   dialog  it draws a selection dialog and ignores every line typed,
+#           /exit included, until its pane is killed: the stall L2's
+#           split-pane lead showed, so the harness must record "input
+#           never ready" with the pane text, and pause times out
+#   late    it draws its prompt only after MX_STUB_LATE_S seconds (default
+#           4) and drops every line typed before then, as a TUI not yet
+#           ready loses keys; the harness's input-ready wait must hold the
+#           team prompt until the prompt shows
+#
 # Its own files go under $HOME/.mx-stub/<instance id>/<pid>/.
 
 set -u
@@ -67,10 +86,13 @@ prompt=""
 resume_id=""
 teammate_settings=""
 teammate_done=""
+debug_file=""
 while (($#)); do
     case "$1" in
         --settings) settings="${2:-}"; shift 2 || shift ;;
         --settings=*) settings="${1#*=}"; shift ;;
+        --debug-file) debug_file="${2:-}"; shift 2 || shift ;;
+        --debug-file=*) debug_file="${1#*=}"; shift ;;
         --resume) resume_id="${2:-}"; shift 2 || shift ;;
         --mx-teammate) teammate_settings="${2:-}"; shift 2 || shift ;;
         --mx-done) teammate_done="${2:-}"; shift 2 || shift ;;
@@ -93,6 +115,33 @@ tp=""
 now_ms() {
     local t="${EPOCHREALTIME/./}"
     printf '%s\n' "$((10#$t / 1000))"
+}
+
+# dbg appends one line to the --debug-file log, if one was given.
+dbg() {
+    [[ -n "$debug_file" ]] || return 0
+    printf '%s [DEBUG] mx-stub %s: %s\n' "$(now_ms)" "$$" "$*" >>"$debug_file" 2>/dev/null || true
+}
+
+# show_prompt draws the input prompt (its box edges, the prompt line and
+# the shortcuts hint).
+show_prompt() {
+    printf '%s\n' "────────────────────────────────────────" "❯ " "────────────────────────────────────────" "  ? for shortcuts"
+}
+
+# show_dialog draws a selection dialog that holds the screen.
+show_dialog() {
+    printf '%s\n' "" " measure-exit dry-run stub: a dialog holds the screen" "" " ❯ 1. Yes" "   2. No" "" \
+        " Enter to confirm · Esc to cancel"
+}
+
+# drain drops every line typed so far.
+drain() {
+    local dropped
+    while IFS= read -r -t 0.2 dropped; do
+        dbg "input dropped before the prompt was ready (${#dropped} bytes)"
+    done
+    return 0
 }
 
 # new_session starts a conversation: a new session id and its transcript.
@@ -266,6 +315,9 @@ handle_line() {
 run_teammate() {
     cp "$teammate_settings" "$state/settings.json" 2>/dev/null || : >"$state/settings.json"
     new_session
+    mkdir -p "$HOME/.claude/debug"
+    debug_file="$HOME/.claude/debug/$sid.txt"
+    dbg "split-pane teammate started in pane ${TMUX_PANE:-unknown}"
     fire SessionStart '{"source": "startup"}'
     fire PreToolUse '{"tool_name": "SendMessage", "tool_input": {"to": "lead"}, "tool_use_id": "stub"}'
     fire Stop '{"stop_hook_active": false}'
@@ -282,6 +334,10 @@ if [[ -n "$teammate_settings" ]]; then
 fi
 
 printf '%s' "$settings" >"$state/settings.json"
+dbg "started (team mode: $(team_mode); lead behaviour: ${MX_STUB_LEAD:-normal})"
+# A line naming a credential, as Claude Code's own debug log has: the
+# harness's kept copy must withhold it (dryrun.sh checks).
+dbg "auth check: no API token in a dry run"
 if [[ -n "$resume_id" ]]; then
     new_session "$resume_id"
     fire SessionStart '{"source": "resume"}'
@@ -294,9 +350,30 @@ if [[ -n "$prompt" ]]; then
     fire PreToolUse '{"tool_name": "Bash", "tool_input": {"command": "sleep 600"}, "tool_use_id": "stub"}'
 fi
 
+case "${MX_STUB_LEAD:-}" in
+    dialog)
+        show_dialog
+        dbg "dialog shown; every line typed is ignored"
+        while :; do
+            if IFS= read -r line; then
+                dbg "input ignored by the dialog (${#line} bytes)"
+                continue
+            fi
+            sleep 0.05
+        done
+        ;;
+    late)
+        sleep "${MX_STUB_LATE_S:-4}"
+        drain
+        dbg "input ready (late)"
+        ;;
+esac
+show_prompt
+
 while :; do
     if IFS= read -r line; then
         handle_line "$line"
+        show_prompt
         continue
     fi
     # End of input: Ctrl-D at the prompt, or the terminal hung up (then a

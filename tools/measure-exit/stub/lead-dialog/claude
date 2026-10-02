@@ -1,0 +1,7 @@
+#!/bin/bash
+# Dry-run stub `claude` (../claude) as an agent team lead that, after its
+# startup SessionStart, shows a selection dialog and ignores every line
+# typed, /exit included: the stall L2's split-pane lead showed. DRY RUNS
+# ONLY (dryrun.sh runs rn9.team-splitpane alone with it first on PATH).
+export MX_STUB_LEAD=dialog
+exec "$(dirname "$(readlink -f "$0")")/../claude" "$@"

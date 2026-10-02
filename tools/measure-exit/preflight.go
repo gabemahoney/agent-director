@@ -141,7 +141,7 @@ func checkEnvironment(c config, e environment, sampled bool) (home, passwdHome s
 		}
 	}
 	if c.mode == modeReal && credentialMode(e) == credNone {
-		return "", "", refuse(ruleCredential, "real mode needs a forwarded credential variable; none is set")
+		return "", "", refuse(ruleCredential, "real mode needs the gateway credential ANTHROPIC_AUTH_TOKEN; it is not set")
 	}
 	if c.mode == modeReal && e.getenv(modelEnv) == "" {
 		return "", "", refuse(ruleModelSet, "real mode needs %s (the model the runner pins for the run); it is not set", modelEnv)

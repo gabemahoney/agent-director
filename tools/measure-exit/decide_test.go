@@ -7,12 +7,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	adconfig "github.com/gabemahoney/agent-director/internal/config"
 )
 
 // curDefaults are the values in force that decide compares against.
-var curDefaults = currentDefaults{KillExitWaitMs: 5000, StoppingWindowSec: 90, MinStoppingWindowSec: 30, MinClaudeCode: "2.1.285"}
+var curDefaults = currentDefaults{KillExitWaitMs: 5000, StoppingWindowSec: 90, MinStoppingWindowSec: 30, MinClaudeCode: "2.1.280"}
 
 // repeat is n samples with outcome o, each ms long (ms < 0: no time).
 func repeat(n int, o outcome, ms int64) []sample {
@@ -94,7 +95,7 @@ func l2() decideInput {
 
 // standard is a decidable L0, L1 and L2 at the current values.
 func standard() []decideInput {
-	return []decideInput{l0("2.1.120:args_not_received", "2.1.285:args_received"), l1(2500, 10000), l2()}
+	return []decideInput{l0("2.1.120:args_not_received", "2.1.280:args_received"), l1(2500, 10000), l2()}
 }
 
 // caseIn edits case id of the L1 input.
@@ -163,11 +164,17 @@ func TestDecide(t *testing.T) {
 		{"the largest default case sets E", samplesIn("rn6.midturn", repeat(1, outcomeCompleted, 3000), repeat(19, outcomeCompleted, 1250)),
 			exitDecided, "Largest default-budget time: 3000 ms"},
 		{"raised times are reported, not used", standard(), exitDecided, "Largest default-budget time: 2500 ms"},
-		// samples: the first 20 usable, in recorded order
-		{"a larger completed sample past the 20th is dropped", samplesIn("rn6.idle", repeat(20, outcomeCompleted, 2500), repeat(2, outcomeCompleted, 9000)),
-			exitDecided, "- rn6.idle: 22 recorded (22 completed, did not exit 0, no ended_at 0, failed 0); used the first 20 completed, largest 2.5 s; dropped 2 (completed 2)"},
+		// samples: every usable one, in any position (NB-1)
+		{"a larger completed sample past the 20th is used", samplesIn("rn6.idle", repeat(20, outcomeCompleted, 2000), repeat(2, outcomeCompleted, 3000)),
+			exitDecided, "- rn6.idle: 22 recorded (22 completed, did not exit 0, no ended_at 0, failed 0); used all 22 completed, largest 3.0 s; dropped 0"},
+		{"a larger sample past the 20th sets E", samplesIn("rn6.idle", repeat(20, outcomeCompleted, 2000), repeat(2, outcomeCompleted, 3000)),
+			exitDecided, "Largest default-budget time: 3000 ms"},
 		{"failed and unready samples are dropped", samplesIn("rn6.idle", repeat(1, outcomeFailed, -1), repeat(1, outcomeNotReady, -1), repeat(20, outcomeCompleted, 2500)),
-			exitDecided, "22 recorded (20 completed, did not exit 0, no ended_at 0, failed 2); used the first 20 completed, largest 2.5 s; dropped 2 (did_not_reach_prompt 1, failed 1)"},
+			exitDecided, "22 recorded (20 completed, did not exit 0, no ended_at 0, failed 2); used all 20 completed, largest 2.5 s; dropped 2 (did_not_reach_prompt 1, failed 1)"},
+		{"no ended_at at the default budget", samplesIn("rn2.pause", repeat(21, outcomeCompleted, 10000), repeat(1, outcomeNoEndedAt, -1)),
+			exitInvalid, "case rn2.pause: 1 samples have no ended_at (no SessionEnd applied)"},
+		{"no ended_at at a raised budget", samplesIn("rn6.idle.raised-hook", repeat(21, outcomeCompleted, 9000), repeat(1, outcomeNoEndedAt, -1)),
+			exitInvalid, "case rn6.idle.raised-hook: 1 samples have no ended_at (no SessionEnd applied)"},
 		{"fewer than 20 completed", samplesIn("rn2.natural", repeat(19, outcomeCompleted, 10000), repeat(3, outcomeFailed, -1)),
 			exitInvalid, "case rn2.natural has 19 completed samples, fewer than 20"},
 		{"did not exit at the default budget", samplesIn("rn6.idle", repeat(1, outcomeDidNotExit, -1), repeat(20, outcomeCompleted, 2500)),
@@ -178,9 +185,9 @@ func TestDecide(t *testing.T) {
 			exitInvalid, "case rn2.pause has 19 completed samples, fewer than 20"},
 		{"did not exit at a raised budget", samplesIn("rn6.idle.raised-hook", repeat(19, outcomeCompleted, 9000), repeat(1, outcomeDidNotExit, -1)), exitDecided,
 			"rn6.idle.raised-hook: 1 agents did not exit within the sample ceiling under the raised budget (allowed; reported for the README)"},
-		{"a raised sample past the 20th measured is dropped", samplesIn("rn6.midturn.raised-env", repeat(19, outcomeCompleted, 9000),
+		{"a raised sample past the 20th measured is used", samplesIn("rn6.midturn.raised-env", repeat(19, outcomeCompleted, 9000),
 			repeat(1, outcomeDidNotExit, -1), repeat(1, outcomeCompleted, 9500), repeat(1, outcomeDidNotExit, -1)),
-			exitDecided, "used the first 20 measured, largest 9.0 s; dropped 2 (completed 1, did_not_exit 1)"},
+			exitDecided, "used all 22 measured, largest 9.5 s; dropped 0"},
 		{"19 measured at a raised budget", samplesIn("rn6.idle.raised-env", repeat(18, outcomeCompleted, 9000), repeat(1, outcomeDidNotExit, -1), repeat(3, outcomeFailed, -1)),
 			exitInvalid, "case rn6.idle.raised-env has 19 measured samples (18 completed, 1 did not exit), fewer than 20"},
 		{"stored counts that disagree with the samples", caseIn(standard(), "rn6.idle", func(c *caseResult) { c.Completed = 21 }),
@@ -221,7 +228,7 @@ func TestDecide(t *testing.T) {
 			ins := standard()
 			ins[1].Res.RN9 = &rn9Section{Scenarios: []rn9Scenario{{ID: rn9DriveID, Verdict: verdictPass}}}
 			return ins
-		}(), exitInvalid, "RN-9 scenario rn9.drive is in two inputs"},
+		}(), exitInvalid, "RN-9 scenario rn9.drive is in two inputs (decide -supersede rn9.drive lets"},
 		// RN-9
 		{"a missing scenario", func() []decideInput {
 			ins := standard()
@@ -238,18 +245,18 @@ func TestDecide(t *testing.T) {
 			exitStop, "STOP: RN-9 rn9.drive failed: seq 3 ignored"},
 		// probe
 		{"no probe", standard()[1:], exitInvalid, "the exec-form version probe (L0) is missing"},
-		{"a version that did not start", withL0("2.1.120:args_not_received", "2.1.200:did_not_start", "2.1.285:args_received"), exitInvalid, "probe: Claude Code 2.1.200 did_not_start"},
+		{"a version that did not start", withL0("2.1.120:args_not_received", "2.1.200:did_not_start", "2.1.280:args_received"), exitInvalid, "probe: Claude Code 2.1.200 did_not_start"},
 		{"no version ran args", withL0("2.1.120:args_not_received"), exitInvalid, "no probed version ran exec-form args"},
-		{"the minimum not bracketed", withL0("2.1.285:args_received"), exitInvalid, "the minimum is not bracketed"},
-		{"inconsistent versions", withL0("2.1.120:args_received", "2.1.285:args_not_received"), exitInvalid, "probe: inconsistent: 2.1.285 ignores args but the older 2.1.120 runs them"},
-		{"a minimum below the stated one", withL0("2.1.150:args_not_received", "2.1.200:args_received", "2.1.285:args_received"), exitStop,
-			"STOP: probe: the measured minimum 2.1.200 is below the stated 2.1.285"},
-		{"a minimum above the stated one", withL0("2.1.285:args_not_received", "2.1.290:args_received"), exitDecided, "raise the stated minimum from 2.1.285 to 2.1.290"},
+		{"the minimum not bracketed", withL0("2.1.280:args_received"), exitInvalid, "the minimum is not bracketed"},
+		{"inconsistent versions", withL0("2.1.120:args_received", "2.1.280:args_not_received"), exitInvalid, "probe: inconsistent: 2.1.280 ignores args but the older 2.1.120 runs them"},
+		{"a minimum below the stated one", withL0("2.1.150:args_not_received", "2.1.200:args_received", "2.1.280:args_received"), exitStop,
+			"STOP: probe: the measured minimum 2.1.200 is below the stated 2.1.280"},
+		{"a minimum above the stated one", withL0("2.1.280:args_not_received", "2.1.290:args_received"), exitDecided, "raise the stated minimum from 2.1.280 to 2.1.290"},
 		{"versions merged across L0 directories", func() []decideInput {
 			ins := standard()
-			a, b := l0("2.1.120:args_not_received"), l0("2.1.285:args_received")
+			a, b := l0("2.1.120:args_not_received"), l0("2.1.280:args_received")
 			return append([]decideInput{a, b}, ins[1:]...)
-		}(), exitDecided, "Decision: 2.1.285 stands."},
+		}(), exitDecided, "Decision: 2.1.280 stands."},
 		// precedence
 		{"invalid input wins over STOP", func() []decideInput {
 			ins := withL1(3501, 10000)
@@ -286,6 +293,96 @@ func TestKillCeilingAt(t *testing.T) {
 	}
 }
 
+// TestDecideStatedMinimum pins the stated Claude Code minimum (Gabe,
+// 2026-10-02: 2.1.280); L0's measured 2.1.139 below it stays a STOP.
+func TestDecideStatedMinimum(t *testing.T) {
+	ins := standard()
+	ins[0] = l0("2.1.138:args_not_received", "2.1.139:args_received", "2.1.280:args_received")
+	d := decide(ins, configDefaults())
+	want := "probe: the measured minimum 2.1.139 is below the stated 2.1.280; it is not applied without the user"
+	if d.exitCode() != exitStop || !strings.Contains(d.Record, want) {
+		t.Errorf("exit %d, want %d with %q:\n%s", d.exitCode(), exitStop, want, d.Record)
+	}
+}
+
+// l2b is a later run of rn9.team-splitpane alone, finished after at past
+// clockStart, with verdict.
+func l2b(dir string, after time.Duration, verdict string) decideInput {
+	in := finishedRun(dir, modeReal)
+	at := clockStart.Add(after)
+	in.Res.FinishedAt = &at
+	in.Res.RN9 = &rn9Section{Scenarios: []rn9Scenario{{ID: rn9TeamSplitPaneID, Verdict: verdict, Reason: "l2b " + verdict}}}
+	return in
+}
+
+// splitPaneIn is standard() with L2's rn9.team-splitpane at verdict.
+func splitPaneIn(verdict string) []decideInput {
+	return scenario(standard(), rn9TeamSplitPaneID, func(s *rn9Scenario) { s.Verdict, s.Reason = verdict, "no teammate" })
+}
+
+func TestDecideSupersede(t *testing.T) {
+	const sp = rn9TeamSplitPaneID
+	sup := decideOptions{Supersede: []string{sp}}
+	tests := []struct {
+		name string
+		ins  []decideInput
+		opts decideOptions
+		exit int
+		want []string // in the record
+		not  []string // never in the record
+	}{
+		{"a later pass replaces an earlier inconclusive result", append(splitPaneIn(verdictInconclusive), l2b("l2b", time.Hour, verdictPass)), sup, exitDecided,
+			[]string{"## Superseded\n- RN-9 rn9.team-splitpane: the inconclusive result of l2 (run mx-run-1, finished 2026-10-01T12:00:00Z: no teammate) " +
+				"is superseded by the result of l2b (run mx-run-1, finished 2026-10-01T13:00:00Z: pass)", "- rn9.team-splitpane: pass l2b pass"},
+			[]string{"two inputs", "NOT superseded"}},
+		{"the order of -in does not matter", append([]decideInput{l2b("l2b", time.Hour, verdictPass)}, splitPaneIn(verdictInconclusive)...), sup, exitDecided,
+			[]string{"is superseded by the result of l2b", "- rn9.team-splitpane: pass"}, nil},
+		{"every earlier inconclusive result is superseded", append(splitPaneIn(verdictInconclusive),
+			l2b("l2b", time.Hour, verdictInconclusive), l2b("l2c", 2*time.Hour, verdictPass)), sup, exitDecided,
+			[]string{"the inconclusive result of l2 (", "the inconclusive result of l2b (", "is superseded by the result of l2c"}, nil},
+		{"a later inconclusive result supersedes too, and stays invalid", append(splitPaneIn(verdictInconclusive), l2b("l2b", time.Hour, verdictInconclusive)), sup, exitInvalid,
+			[]string{"is superseded by the result of l2b", "RN-9 scenario rn9.team-splitpane is inconclusive: l2b inconclusive"}, nil},
+		{"an earlier pass is never dropped", append(splitPaneIn(verdictPass), l2b("l2b", time.Hour, verdictInconclusive)), sup, exitInvalid,
+			[]string{"-supersede refused: l2's earlier result is pass, not inconclusive, and a measured result is never dropped",
+				"- RN-9 rn9.team-splitpane: NOT superseded: it is in 2 inputs"}, []string{"is superseded by"}},
+		{"an earlier fail is never dropped", append(splitPaneIn(verdictFail), l2b("l2b", time.Hour, verdictPass)), sup, exitInvalid,
+			[]string{"l2's earlier result is fail, not inconclusive"}, []string{"is superseded by"}},
+		{"runs that finished at the same instant are refused", append(splitPaneIn(verdictInconclusive), l2b("l2b", 0, verdictPass)), sup, exitInvalid,
+			[]string{"RN-9 scenario rn9.team-splitpane: -supersede cannot order l2 and l2b by finished_at", "NOT superseded"}, []string{"is superseded by"}},
+		{"a run with no finished_at is refused", func() []decideInput {
+			late := l2b("l2b", time.Hour, verdictPass)
+			ins := splitPaneIn(verdictInconclusive)
+			ins[2].Res.FinishedAt = nil
+			return append(ins, late)
+		}(), sup, exitInvalid, []string{"-supersede cannot order l2 and l2b by finished_at"}, []string{"is superseded by"}},
+		{"without the flag a scenario in two inputs is invalid", append(splitPaneIn(verdictInconclusive), l2b("l2b", time.Hour, verdictPass)), decideOptions{}, exitInvalid,
+			[]string{"RN-9 scenario rn9.team-splitpane is in two inputs (decide -supersede rn9.team-splitpane lets"}, []string{"## Superseded"}},
+		{"another scenario's flag resolves nothing", append(splitPaneIn(verdictInconclusive), l2b("l2b", time.Hour, verdictPass)),
+			decideOptions{Supersede: []string{rn9DriveID}}, exitInvalid,
+			[]string{"RN-9 scenario rn9.team-splitpane is in two inputs", "- -supersede rn9.drive: nothing superseded (the scenario is in 1 input(s))"}, nil},
+		{"a flag that matches one input supersedes nothing", standard(), sup, exitDecided,
+			[]string{"## Superseded\n- -supersede rn9.team-splitpane: nothing superseded (the scenario is in 1 input(s))"}, nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			d := decideWith(tc.ins, curDefaults, tc.opts)
+			if got := d.exitCode(); got != tc.exit {
+				t.Fatalf("exit %d, want %d; invalid %q\n%s", got, tc.exit, d.Invalid, d.Record)
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(d.Record, w) {
+					t.Errorf("record lacks %q:\n%s", w, d.Record)
+				}
+			}
+			for _, n := range tc.not {
+				if strings.Contains(d.Record, n) {
+					t.Errorf("record has %q:\n%s", n, d.Record)
+				}
+			}
+		})
+	}
+}
+
 // writeInput writes in as a results directory under root.
 func writeInput(t *testing.T, root string, in decideInput, guard bool) string {
 	t.Helper()
@@ -319,6 +416,10 @@ func TestDecideCommand(t *testing.T) {
 	dry.Dir, dry.Res.DryRun, dry.Res.Banner = "dry", true, dryRunBanner
 	unguarded := standard()[2]
 	unguarded.Dir = "unguarded"
+	superseded := []string{"-supersede", rn9TeamSplitPaneID}
+	for _, in := range append(splitPaneIn(verdictInconclusive), l2b("l2b", time.Hour, verdictPass)) {
+		superseded = append(superseded, "-in", writeInput(t, filepath.Join(root, "supersede"), in, true))
+	}
 	for _, tc := range []struct {
 		name string
 		args []string
@@ -330,6 +431,8 @@ func TestDecideCommand(t *testing.T) {
 		{"no results file", []string{"-in", filepath.Join(root, "nowhere")}, exitInvalid, "no such file"},
 		{"a dry run", []string{"-in", writeInput(t, root, dry, true)}, exitInvalid, "dry: a dry run (stub claude) is not a measurement"},
 		{"no guard status", []string{"-in", writeInput(t, root, unguarded, false)}, exitInvalid, "the host guard did not pass (missing)"},
+		{"-supersede a later run", superseded, exitDecided, "is superseded by the result of " + filepath.Join(root, "supersede", "l2b")},
+		{"-supersede a case that is not an RN-9 scenario", []string{"-in", root, "-supersede", "rn6.idle"}, exitUsage, `-supersede "rn6.idle": want an RN-9 scenario id`},
 	} {
 		code, out := run(tc.args...)
 		if code != tc.exit || !strings.Contains(out, tc.text) {

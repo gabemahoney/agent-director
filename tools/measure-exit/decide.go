@@ -15,31 +15,39 @@ import (
 	adconfig "github.com/gabemahoney/agent-director/internal/config"
 )
 
-// `measure-exit decide -in DIR [-in DIR]...` applies the RN-6, RN-2 and
-// RN-9 decision rules (SRD Open Questions RN-2, RN-6, RN-9; SR-13.2; lead
-// decision 11) to the operator's results directories (L0, L1, L2) and
-// prints a markdown decision record that shows the arithmetic. It writes
-// nothing. Exit codes:
+// `measure-exit decide -in DIR [-in DIR]... [-supersede ID]...` applies the
+// RN-6, RN-2 and RN-9 decision rules (SRD Open Questions RN-2, RN-6, RN-9;
+// SR-13.2; lead decision 11) to the operator's results directories (L0,
+// L1, L2, and a re-run such as L2b) and prints a markdown decision record
+// that shows the arithmetic. It writes nothing. Exit codes:
 //
 //	0  decided
 //	2  invalid input: a dry run, an unfinished run, a failed or missing
-//	   guard, a missing case or scenario, a case whose counts disagree
-//	   with its samples, fewer than 20 completed samples under the default
-//	   budget (20 measured, completed or "did not exit", under a raised
-//	   one), a "did not exit" (in any position) or budgets not at their
-//	   defaults under the default budget, an incomplete or inconsistent
-//	   probe, an inconclusive RN-9 scenario
-//
-// A sampled case's rules read its first 20 usable samples in recorded
-// order (useSamples): L1 takes 22 per case as a buffer (user, 2026-10-02),
-// so one flaky sample forces no re-run; the record says how many were
-// recorded, used and dropped.
+//	   guard, a case in two inputs, an RN-9 scenario in two inputs that
+//	   -supersede does not resolve, a missing case or scenario, a case
+//	   whose counts disagree with its samples, fewer than 20 completed
+//	   samples under the default budget (20 measured, completed or "did
+//	   not exit", under a raised one), a "no ended_at" sample, a "did not
+//	   exit" or budgets not at their defaults under the default budget, an
+//	   incomplete or inconsistent probe, an inconclusive RN-9 scenario
 //	3  STOP for the user: E >= 8 s, a default lower than the current one,
 //	   an exec-form minimum below the stated one, any RN-9 STOP flag or
 //	   failed scenario
 //
 // Invalid input wins over STOP: the decisions of an invalid input are not
 // to be acted on.
+//
+// A sampled case's rules read the largest time over all its completed
+// samples, once at least 20 completed (useSamples; lead decision NB-1,
+// within the user's 2026-10-02 allowance): L1 takes 22 per case as a
+// buffer, so one flaky sample (a failed spawn, an agent that never
+// reported in) forces no re-run. The record states each case's counts by
+// outcome and how many samples were used and dropped.
+//
+// -supersede ID lets a re-run of one RN-9 scenario replace an earlier
+// inconclusive result of it (decideOptions; Gabe, 2026-10-02): the latest
+// run by finished_at is used, the record's "Superseded" section names
+// both, and an earlier pass or fail is never dropped.
 
 // Exit codes of decide.
 const (
@@ -151,18 +159,47 @@ func (d decision) exitCode() int {
 	}
 }
 
+// decideOptions are decide's choices beyond its inputs.
+type decideOptions struct {
+	// Supersede lists RN-9 scenario ids whose earlier inconclusive result
+	// a later run's result of the same scenario replaces (-supersede; Gabe,
+	// 2026-10-02: L2b's rn9.team-splitpane re-run supersedes L2's
+	// inconclusive one). "Later" is the run's finished_at. A pass or fail
+	// is never superseded: a scenario in two inputs whose earlier result is
+	// not inconclusive stays invalid. Without -supersede, any scenario in
+	// two inputs is invalid.
+	Supersede []string
+}
+
+// supersedes reports whether -supersede names id.
+func (o decideOptions) supersedes(id string) bool {
+	for _, s := range o.Supersede {
+		if s == id {
+			return true
+		}
+	}
+	return false
+}
+
 // decideCommand is the decide subcommand.
 func decideCommand(args []string, stdout, stderr io.Writer) int {
-	var dirs stringList
+	var dirs, supersede stringList
 	fs := flag.NewFlagSet("decide", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Var(&dirs, "in", "a results directory (results.json and the runner's guard-status.txt); repeat for L0, L1 and L2")
+	fs.Var(&supersede, "supersede", "an RN-9 scenario id whose earlier inconclusive result a later run's (by finished_at) replaces; repeatable")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
 	if fs.NArg() > 0 || len(dirs) == 0 {
-		fmt.Fprintln(stderr, "measure-exit decide: want one or more -in DIR and no other arguments")
+		fmt.Fprintln(stderr, "measure-exit decide: want one or more -in DIR, any -supersede ID, and no other arguments")
 		return exitUsage
+	}
+	for _, id := range supersede {
+		if !isRN9ScenarioID(id) {
+			fmt.Fprintf(stderr, "measure-exit decide: -supersede %q: want an RN-9 scenario id (%s)\n", id, strings.Join(rn9ScenarioIDs, ", "))
+			return exitUsage
+		}
 	}
 	var inputs []decideInput
 	for _, dir := range dirs {
@@ -173,9 +210,19 @@ func decideCommand(args []string, stdout, stderr io.Writer) int {
 		}
 		inputs = append(inputs, in)
 	}
-	d := decide(inputs, configDefaults())
+	d := decideWith(inputs, configDefaults(), decideOptions{Supersede: supersede})
 	fmt.Fprint(stdout, d.Record)
 	return d.exitCode()
+}
+
+// isRN9ScenarioID reports whether id is one of the RN-9 scenarios.
+func isRN9ScenarioID(id string) bool {
+	for _, s := range rn9ScenarioIDs {
+		if s == id {
+			return true
+		}
+	}
+	return false
 }
 
 // stringList is a repeatable string flag.
@@ -212,11 +259,19 @@ type mergedResults struct {
 	rn7   *rn7Record
 }
 
+// scenarioSource is one input's result of an RN-9 scenario.
+type scenarioSource struct {
+	in decideInput
+	s  rn9Scenario
+}
+
 // mergeInputs lists the inputs in the record, checks each is a finished,
-// guarded, non-dry real or probe run, and merges their sections; a case or
-// scenario in two inputs is invalid.
-func mergeInputs(b *strings.Builder, d *decision, inputs []decideInput) mergedResults {
+// guarded, non-dry real or probe run, and merges their sections; a case in
+// two inputs is invalid, and so is a scenario in two inputs unless
+// -supersede resolves it (mergeScenarios).
+func mergeInputs(b *strings.Builder, d *decision, inputs []decideInput, opts decideOptions) mergedResults {
 	m := mergedResults{cases: map[string]caseResult{}, scen: map[string]rn9Scenario{}}
+	sources := map[string][]scenarioSource{}
 	b.WriteString("## Inputs\n")
 	for _, in := range inputs {
 		r := in.Res
@@ -243,10 +298,7 @@ func mergeInputs(b *strings.Builder, d *decision, inputs []decideInput) mergedRe
 		}
 		if r.RN9 != nil {
 			for _, s := range r.RN9.Scenarios {
-				if _, dup := m.scen[s.ID]; dup {
-					d.Invalid = append(d.Invalid, "RN-9 scenario "+s.ID+" is in two inputs")
-				}
-				m.scen[s.ID] = s
+				sources[s.ID] = append(sources[s.ID], scenarioSource{in: in, s: s})
 			}
 		}
 		if r.Probe != nil {
@@ -257,18 +309,114 @@ func mergeInputs(b *strings.Builder, d *decision, inputs []decideInput) mergedRe
 		}
 	}
 	b.WriteString("\n")
+	mergeScenarios(b, d, m.scen, sources, opts)
 	return m
 }
 
-// decide applies every rule to the merged inputs. It is pure: the record
-// and the reasons depend only on its arguments.
+// mergeScenarios puts each RN-9 scenario's one result into scen. A
+// scenario in more than one input is invalid unless -supersede names it;
+// then its results are ordered by their run's finished_at and the latest
+// is used, provided every earlier one is inconclusive (a pass or a fail is
+// never dropped) and no two runs finished at the same instant. Every
+// superseded result, and every -supersede that found nothing to supersede,
+// is stated in the record's "Superseded" section.
+func mergeScenarios(b *strings.Builder, d *decision, scen map[string]rn9Scenario, sources map[string][]scenarioSource, opts decideOptions) {
+	ids := make([]string, 0, len(sources))
+	for id := range sources {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var lines []string
+	for _, id := range ids {
+		src := sources[id]
+		if len(src) == 1 {
+			scen[id] = src[0].s
+			continue
+		}
+		if !opts.supersedes(id) {
+			n := fmt.Sprint(len(src))
+			if len(src) == 2 {
+				n = "two"
+			}
+			d.Invalid = append(d.Invalid, fmt.Sprintf("RN-9 scenario %s is in %s inputs (decide -supersede %s lets a later run's result replace an earlier inconclusive one)", id, n, id))
+			scen[id] = src[len(src)-1].s
+			continue
+		}
+		sort.SliceStable(src, func(i, j int) bool { return finishedBefore(src[i].in, src[j].in) })
+		latest := src[len(src)-1]
+		var done []string
+		ok := true
+		for _, e := range src[:len(src)-1] {
+			switch {
+			case e.in.Res.FinishedAt == nil || latest.in.Res.FinishedAt == nil || !e.in.Res.FinishedAt.Before(*latest.in.Res.FinishedAt):
+				d.Invalid = append(d.Invalid, fmt.Sprintf("RN-9 scenario %s: -supersede cannot order %s and %s by finished_at", id, e.in.Dir, latest.in.Dir))
+				ok = false
+			case e.s.Verdict != verdictInconclusive:
+				d.Invalid = append(d.Invalid, fmt.Sprintf("RN-9 scenario %s: -supersede refused: %s's earlier result is %s, not inconclusive, and a measured result is never dropped", id, e.in.Dir, e.s.Verdict))
+				ok = false
+			default:
+				done = append(done, fmt.Sprintf("- RN-9 %s: the inconclusive result of %s (run %s, finished %s: %s) is superseded by the result of %s (run %s, finished %s: %s)",
+					id, e.in.Dir, e.in.Res.Isolation.RunID, finishedText(e.in), e.s.Reason,
+					latest.in.Dir, latest.in.Res.Isolation.RunID, finishedText(latest.in), latest.s.Verdict))
+			}
+		}
+		if !ok {
+			done = []string{fmt.Sprintf("- RN-9 %s: NOT superseded: it is in %d inputs and -supersede was refused (see the outcome)", id, len(src))}
+		}
+		lines = append(lines, done...)
+		scen[id] = latest.s
+	}
+	for _, id := range opts.Supersede {
+		if n := len(sources[id]); n < 2 {
+			lines = append(lines, fmt.Sprintf("- -supersede %s: nothing superseded (the scenario is in %d input(s))", id, n))
+		}
+	}
+	if len(lines) == 0 {
+		return
+	}
+	b.WriteString("## Superseded\n")
+	for _, l := range lines {
+		b.WriteString(l + "\n")
+	}
+	b.WriteString("\n")
+}
+
+// finishedBefore orders inputs by their run's finished_at; an unfinished
+// run sorts first (it is invalid anyway).
+func finishedBefore(a, b decideInput) bool {
+	fa, fb := a.Res.FinishedAt, b.Res.FinishedAt
+	switch {
+	case fa == nil:
+		return fb != nil
+	case fb == nil:
+		return false
+	default:
+		return fa.Before(*fb)
+	}
+}
+
+// finishedText is an input's finished_at for the record.
+func finishedText(in decideInput) string {
+	if in.Res.FinishedAt == nil {
+		return "never"
+	}
+	return in.Res.FinishedAt.UTC().Format("2006-01-02T15:04:05Z")
+}
+
+// decide applies every rule to the merged inputs, with no -supersede.
 func decide(inputs []decideInput, cur currentDefaults) decision {
+	return decideWith(inputs, cur, decideOptions{})
+}
+
+// decideWith applies every rule to the merged inputs. It is pure: the
+// record and the reasons depend only on its arguments.
+func decideWith(inputs []decideInput, cur currentDefaults, opts decideOptions) decision {
 	var (
 		d decision
 		b strings.Builder
 	)
 	b.WriteString("# measure-exit decision record\n\n")
-	m := mergeInputs(&b, &d, inputs)
+	m := mergeInputs(&b, &d, inputs, opts)
 	decideRN6(&b, &d, m.cases, cur)
 	decideRN2(&b, &d, m.cases, cur)
 	decideRN9(&b, &d, m.scen)
@@ -293,11 +441,9 @@ func decide(inputs []decideInput, cur currentDefaults) decision {
 	return d
 }
 
-// sampleUse is the samples decide reads from one case: the first
-// minSamples usable samples in recorded order, completed ones at the
-// default budget and completed or "did not exit" ones under a raised
-// budget. Every other sample (unusable, or usable past the first
-// minSamples) is dropped and counted by outcome.
+// sampleUse is the samples decide reads from one case: every completed
+// sample, and under a raised budget every "did not exit" one too. Every
+// other sample is dropped and counted by outcome.
 type sampleUse struct {
 	Used       int
 	DidNotExit int    // "did not exit" samples among the used
@@ -305,26 +451,26 @@ type sampleUse struct {
 	Dropped    map[outcome]int
 }
 
-// useSamples picks the samples a case's rule reads (sampleUse). The user's
-// 2026-10-02 decision allows all completed samples once there are at least
-// 20; decide takes the first 20, so a run's buffer never changes the rule's
-// sample count.
+// useSamples picks the samples a case's rule reads (sampleUse): all of
+// them that are usable, in any position. Lead decision NB-1 (within the
+// user's 2026-10-02 allowance: all completed samples once there are at
+// least 20) takes the largest time over every completed sample, so a
+// run's buffer can only add evidence, never hide a slower exit.
 func useSamples(samples []sample, atDefault bool) sampleUse {
 	u := sampleUse{Dropped: map[outcome]int{}}
 	for _, s := range samples {
-		usable := s.Outcome == outcomeCompleted || (!atDefault && s.Outcome == outcomeDidNotExit)
-		if !usable || u.Used == minSamples {
-			u.Dropped[s.Outcome]++
-			continue
-		}
-		u.Used++
-		if s.Outcome == outcomeDidNotExit {
+		switch {
+		case s.Outcome == outcomeCompleted:
+			u.Used++
+			if s.Millis != nil && (u.Largest == nil || *s.Millis > *u.Largest) {
+				v := *s.Millis
+				u.Largest = &v
+			}
+		case s.Outcome == outcomeDidNotExit && !atDefault:
+			u.Used++
 			u.DidNotExit++
-			continue
-		}
-		if s.Millis != nil && (u.Largest == nil || *s.Millis > *u.Largest) {
-			v := *s.Millis
-			u.Largest = &v
+		default:
+			u.Dropped[s.Outcome]++
 		}
 	}
 	return u
@@ -358,15 +504,16 @@ func countsDisagree(c caseResult) bool {
 }
 
 // checkSampledCase checks one RN-6 or RN-2 case the rules read: present,
-// with counts that agree with its samples, and, when atDefault, at least
-// minSamples completed, no "did not exit" and budgets at their defaults.
-// The rule reads only the first minSamples usable samples in recorded
-// order (useSamples); the rest are dropped, and the record says how many.
-// A "did not exit" under the default budget invalidates the case wherever
-// it falls, past the first minSamples included: SRD RN-6 sets E from the
-// largest time measured under the default budget, and an agent that
-// outlived the sample ceiling is such a time, unbounded, not a flaky
-// sample. A raised-budget case (reported for the README, not part of a
+// with counts that agree with its samples, no "no ended_at" sample, and,
+// when atDefault, at least minSamples completed, no "did not exit" and
+// budgets at their defaults. The rule reads every usable sample
+// (useSamples); the rest are dropped, and the record says how many. A
+// "did not exit" under the default budget invalidates the case: SRD RN-6
+// sets E from the largest time measured under the default budget, and an
+// agent that outlived the sample ceiling is such a time, unbounded, not a
+// flaky sample. A "no ended_at" sample (RN-2: no SessionEnd applied, so no
+// time can be taken) invalidates its case the same way (lead decision
+// NB-1). A raised-budget case (reported for the README, not part of a
 // rule) needs at least minSamples measured agents, completed or "did not
 // exit": SRD RN-6 asks for at least 20 agents per case and the largest
 // time per case, and a raised-budget agent that outlived the sample
@@ -391,11 +538,15 @@ func checkSampledCase(b *strings.Builder, d *decision, cases map[string]caseResu
 	if !atDefault {
 		usable = "measured"
 	}
-	fmt.Fprintf(b, "- %s: %d recorded (%d completed, did not exit %d, no ended_at %d, failed %d); used the first %d %s, largest %s; dropped %s; budgets: %s\n",
+	fmt.Fprintf(b, "- %s: %d recorded (%d completed, did not exit %d, no ended_at %d, failed %d); used all %d %s, largest %s; dropped %s; budgets: %s\n",
 		id, len(c.Samples), c.Completed, c.DidNotExit, c.NoEndedAt, c.Failed, u.Used, usable, millisText(u.Largest), u.droppedText(), c.Budgets.summary())
 	valid := true
 	if countsDisagree(c) {
 		d.Invalid = append(d.Invalid, fmt.Sprintf("case %s: its counts or largest time disagree with its %d samples", id, len(c.Samples)))
+		valid = false
+	}
+	if n := u.Dropped[outcomeNoEndedAt]; n > 0 {
+		d.Invalid = append(d.Invalid, fmt.Sprintf("case %s: %d samples have no ended_at (no SessionEnd applied)", id, n))
 		valid = false
 	}
 	switch {
@@ -448,7 +599,7 @@ func budgetsNotDefault(br budgetReport) string {
 func ceilSeconds(ms int64) int64 { return int64(math.Ceil(float64(ms) / 1000)) }
 
 // decideRN6 applies RN-6's rule: E = 2 x the largest default-budget time
-// (over each case's first 20 completed samples; checkSampledCase),
+// (over every completed sample of each case; checkSampledCase),
 // rounded up to a whole second; kill's ceiling at the defaults,
 // max(2Q + 2A + E + 4W, 3Q + 2A + 5W) from the config constants
 // (killCeilingAt), must stay within 15 s, and E >= 8 s is STOP; a value
@@ -494,8 +645,8 @@ func decideRN6(b *strings.Builder, d *decision, cases map[string]caseResult, cur
 }
 
 // decideRN2 applies RN-2's rule over every RN-2 case (all run under the
-// default budget; the largest time is over each case's first 20 completed
-// samples): the window stays unless the largest time exceeds half of
+// default budget; the largest time is over every completed sample of each
+// case): the window stays unless the largest time exceeds half of
 // it, the minimum stays unless the largest time exceeds half of it; either
 // is then raised to twice the largest time, rounded up to a whole second.
 // With no RN-2 case the current values stand.

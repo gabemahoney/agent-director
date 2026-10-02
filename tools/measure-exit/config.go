@@ -33,26 +33,29 @@ const (
 const minSamples = 20
 
 // sampleBuffer is how many samples per case a run takes beyond the floor
-// (user, 2026-10-02: L1 takes 22 per case): decide reads the first
-// minSamples usable samples in recorded order, so a flaky sample (a failed
-// spawn, an agent that never reported in) does not force a re-run.
+// (user, 2026-10-02: L1 takes 22 per case): decide reads every completed
+// sample once a case has minSamples, so a flaky sample (a failed spawn, an
+// agent that never reported in) does not force a re-run.
 const sampleBuffer = 2
 
 // defaultSamples is the per-case sample count when -samples is not given:
 // the floor plus the buffer.
 const defaultSamples = minSamples + sampleBuffer
 
-// minClaudeCodeVersion is the oldest Claude Code that runs exec-form hooks
-// (command + args), as the README's Prerequisites state it. decide compares
-// the probe's measured minimum against it.
-const minClaudeCodeVersion = "2.1.285"
+// minClaudeCodeVersion is the stated minimum Claude Code: the oldest that
+// agent-director supports with exec-form hooks (command + args), as the
+// README's Prerequisites state it. Gabe (2026-10-02) set it to 2.1.280, the
+// version this fleet's workers run, which L0 showed runs exec-form hooks.
+// decide compares the probe's measured minimum against it.
+const minClaudeCodeVersion = "2.1.280"
 
 // realModeMinClaudeCode is the oldest Claude Code real mode accepts: the
 // version this fleet's workers run (user, 2026-10-01), which L1 and L2
-// measure by default. It is older than the stated minimum on purpose; the
-// L0 probe tests it explicitly, and L1 and L2 go ahead only if it runs
-// exec-form hooks. Below it, hooks are expected to write no_exec_form and no
-// row would report in, so real mode refuses it.
+// measure by default. The L0 probe tests it explicitly. Below it, hooks are
+// expected to write no_exec_form and no row would report in, so real mode
+// refuses it. It equals the stated minimum (minClaudeCodeVersion) but is
+// its own constant: the floor is the measured fleet's version, the minimum
+// what the README states.
 const realModeMinClaudeCode = "2.1.280"
 
 // Defaults for the per-sample bounds. The ceiling must stay well above the
@@ -81,6 +84,16 @@ const (
 	// defaultSettleQuiet is how long an agent team must stay silent (no
 	// recorded hook) after the lead's Stop before the team counts as settled.
 	defaultSettleQuiet = 20 * time.Second
+	// defaultInputReadyTimeout bounds an agent team lead's wait for its
+	// prompt box (capture.go) before the team prompt is sent; past it the
+	// scenario records "input never ready" with the pane text.
+	defaultInputReadyTimeout = 60 * time.Second
+	// defaultPromptAcceptWait bounds the wait for the lead's own
+	// UserPromptSubmit after the team prompt; Claude Code fires it before
+	// any model call, so a lead that does not is not taking input, and the
+	// scenario stops there with the pane text instead of waiting out
+	// -step-timeout.
+	defaultPromptAcceptWait = 60 * time.Second
 )
 
 // defaultMidTurnPrompt is the mid-turn cases' initial prompt: a long text
@@ -102,6 +115,8 @@ var dryDefaults = map[string]string{
 	"step-timeout":          "30s",
 	"notification-wait":     "15s",
 	"settle-quiet":          "2s",
+	"input-ready-timeout":   "10s",
+	"prompt-accept-wait":    "10s",
 }
 
 // config is one run's settings, parsed from the run subcommand's flags.
@@ -152,6 +167,11 @@ type config struct {
 	stepTimeout      time.Duration
 	notificationWait time.Duration
 	settleQuiet      time.Duration
+	// inputReadyTimeout and promptAcceptWait bound an agent team lead's
+	// wait for its prompt box and for its UserPromptSubmit after the team
+	// prompt (see their defaults).
+	inputReadyTimeout time.Duration
+	promptAcceptWait  time.Duration
 }
 
 // errUsage marks a flag error; the run subcommand exits exitUsage for it.
@@ -190,6 +210,8 @@ func parseRunFlags(args []string, stderr io.Writer, newRunID func() string) (con
 	fs.DurationVar(&c.stepTimeout, "step-timeout", defaultStepTimeout, "bound on each RN-9 drive step and the version probe's hook")
 	fs.DurationVar(&c.notificationWait, "notification-wait", defaultNotificationWait, "bound on the RN-9 drive's wait for a Notification")
 	fs.DurationVar(&c.settleQuiet, "settle-quiet", defaultSettleQuiet, "silence after the lead's Stop before an agent team counts as settled")
+	fs.DurationVar(&c.inputReadyTimeout, "input-ready-timeout", defaultInputReadyTimeout, "bound on an agent team lead's prompt box showing before the team prompt is sent")
+	fs.DurationVar(&c.promptAcceptWait, "prompt-accept-wait", defaultPromptAcceptWait, "bound on the lead's UserPromptSubmit after the team prompt")
 	if err := fs.Parse(args); err != nil {
 		return c, fmt.Errorf("%w: %v", errUsage, err)
 	}
@@ -236,6 +258,9 @@ func (c config) validate() error {
 	}
 	if c.stepTimeout <= 0 || c.notificationWait < 0 || c.settleQuiet <= 0 {
 		return fmt.Errorf("%w: -step-timeout and -settle-quiet must be positive, -notification-wait not negative", errUsage)
+	}
+	if c.inputReadyTimeout <= 0 || c.promptAcceptWait <= 0 {
+		return fmt.Errorf("%w: -input-ready-timeout and -prompt-accept-wait must be positive", errUsage)
 	}
 	if c.raisedHookTimeoutSeconds < 1 || c.raisedEnvTimeoutMS < 1 || c.slowHookMS < 1 {
 		return fmt.Errorf("%w: the raised budgets and the slow hook's run time must be positive", errUsage)

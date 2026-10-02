@@ -38,12 +38,12 @@ SQLite file; everything else is tmux.
 
 ### Prerequisites
 
-- `claude` (Claude Code) 2.1.285 or later on PATH — install per
+- `claude` (Claude Code) 2.1.280 or later on PATH — install per
   <https://claude.com/claude-code>. agent-director launches only
   Claude Code; other agent CLIs are unsupported in this release. With an
-  older Claude Code the agent's hooks apply nothing, rows stay `pending`,
-  and the trail records `ad.hook.ignored` with reason `no_exec_form`:
-  upgrade Claude Code.
+  older Claude Code the agent's hooks may apply nothing: rows stay
+  `pending` and the trail records `ad.hook.ignored` with reason
+  `no_exec_form`; upgrade Claude Code.
 - `tmux` 3.2 or later on PATH. Verified: 3.2a (by a scripted one-off
   run and recorded replies) and 3.3a (by the test suites).
   - Keep `remain-on-exit` off, the tmux default. With it on, a finished
@@ -344,7 +344,7 @@ can be changed, but never below its safe minimum.
 | `create_timeout_ms` | ms | 5000 | none | The tmux call that creates a session (`spawn`, `resume`). |
 | `pipe_close_wait_ms` | ms | 100 | none | How long a tmux call waits for its output pipes after its process exits. |
 | `sweep_budget_seconds` | s | 15 | none | Total tmux time per run of `find-missing` and `expire`. |
-| `kill_exit_wait_ms` | ms | 5000 (provisional) | none | How long `kill` waits for the agent process to exit after killing its pane. |
+| `kill_exit_wait_ms` | ms | 5000 | none | How long `kill` waits for the agent process to exit after killing its pane. Set from measured exit times under Claude Code's default SessionEnd hook budget. |
 
 - **Validation.** A missing key, or 0, gives the default. A negative
   value, a positive value below the key's safe minimum, or a value that
@@ -384,6 +384,14 @@ can be changed, but never below its safe minimum.
   default 30 s call timeout, which then returns `ErrCallTimeout` while
   the verb may still complete — raise TypeScript callers' `callTimeoutMs`
   to match.
+- **Agents with a raised SessionEnd hook budget.** Such an agent exits
+  only once its SessionEnd hooks finish, so it can take up to the whole
+  budget. With a 4 s SessionEnd hook under a budget raised to 10 s,
+  agents took up to 4.2 s to exit when a hook's own `timeout` raised it,
+  and up to 4.4 s (idle) or 4.3 s (mid-turn) when
+  `CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS` did. For such agents, set
+  `kill_exit_wait_ms` to at least twice the budget, and keep
+  `stopping_window_seconds` at least twice the budget too.
 - Callers whose own waits use these values (waiting out the grace
   period, a retry cadence for "still stopping") need the configured
   values: tell them when you change one.
@@ -1263,14 +1271,14 @@ Never delete those rows: their history is what `resume` uses.
 
 ### A row stays `pending` and the trail shows `no_exec_form`
 
-The agent runs a Claude Code older than 2.1.285, so none of its hooks
+The agent runs a Claude Code older than 2.1.280, so none of its hooks
 apply. List the records:
 
 ```sh
 jq -c 'select(.event == "ad.hook.ignored" and .reason == "no_exec_form") | {ts, claude_instance_id, hook_event, parent_command}' ~/.agent-director/ad-trail.jsonl | tail -n 5
 ```
 
-Upgrade `claude` on PATH to 2.1.285 or later. Then end and relaunch each
+Upgrade `claude` on PATH to 2.1.280 or later. Then end and relaunch each
 row that stays `pending` as the [caller contract](#caller-contract) says.
 
 ### A row on a different tmux server

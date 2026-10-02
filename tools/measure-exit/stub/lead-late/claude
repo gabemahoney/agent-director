@@ -1,0 +1,7 @@
+#!/bin/bash
+# Dry-run stub `claude` (../claude) as an agent team lead whose input
+# prompt shows only after MX_STUB_LATE_S seconds (default 4), dropping
+# every line typed before then. DRY RUNS ONLY (dryrun.sh runs
+# rn9.team-splitpane alone with it first on PATH).
+export MX_STUB_LEAD=late
+exec "$(dirname "$(readlink -f "$0")")/../claude" "$@"

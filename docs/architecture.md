@@ -7533,21 +7533,76 @@ This section does not repeat it.
   - The RN-9 drive answers permission requests through `decide`, scoped per
     scenario (`rn9ExpectedTools`). It reads only the tool name from `get`,
     allows the scenario's expected tools and denies everything else.
+  - **Team-scenario evidence** (`capture.go`, used by `runTeam` in
+    `rn9.go`). Harness-only aids, with no production change:
+    - `waitInputReady` polls the lead's visible screen every 500 ms until
+      `inputReady` sees a prompt line or the `? for shortcuts` footer and
+      no selection dialog. It then waits `inputReadyGrace` (2 s) and sends
+      the team prompt. The bound is `-input-ready-timeout`. Past it, the
+      prompt is never sent and the error is `errInputNeverReady`, quoting
+      a scrubbed excerpt of the pane (`paneExcerpt`).
+    - After the send, `runTeam` waits up to `-prompt-accept-wait` for the
+      lead's own `UserPromptSubmit`.
+    - When a team step fails, `capturePanes` writes every pane of the
+      lead's session, and of any `claude-swarm-*` server under the private
+      socket directory, to `<case>-pane-<label>.txt`, before `pause`. It
+      captures again with `-after-pause` if `pause` fails.
+    - Each lead runs with `--debug-file` under the run's HOME.
+      `keepDebugLogs` copies it, and every file new or changed in
+      `$HOME/.claude/debug/` during the scenario, to
+      `<case>-claude-debug-*` (`copyScrubbed`; over `maxDebugCopyBytes`,
+      32 MiB, the tail from a whole line).
+    - The file names go to the scenario's `Artifacts` (`artifacts` in
+      `results.json`).
+  - **Scrubbing** (`env.go`, `scrubber`). `newScrubber` builds its parts,
+    lower-cased, from every set `credentialEnv` value (6 characters or
+    more, `minScrubLen`). The parts are the exact values; for
+    `ANTHROPIC_BASE_URL`, the URL, its host with and without the port, and
+    its path or query parts of 12 or more characters (`urlParts`); for
+    every other value, each 12-character piece (`minPartLen`).
+    - `scrub` replaces the exact values only. The input-ready check reads
+      text scrubbed this way, so a prompt line is still seen.
+    - `scrubParts` also replaces every part, without regard to case,
+      merging overlapping matches into one `<redacted>`. It covers all of
+      `results.json` (`writeJSON`), the table (`writeTable`) and run-log
+      argv (`runLog.record`). It replaces substrings only, so the JSON
+      stays valid.
+    - `scrubEvidence` is `scrubParts` plus line withholding: a line matching
+      `credentialWordRE` (auth, token, bearer, api key, cookie, secret,
+      passw) becomes `[line withheld: it names a credential]`. It covers
+      Claude's own text only: pane captures, debug-log copies and the pane
+      excerpt in an error, reason or note. It is never applied to
+      `results.json` or the table.
+    - Scrubbing removes what the driver knows to look for. It cannot prove
+      that nothing else secret is left, so a live run's command file also
+      runs a leak gate over every result file.
   - `decide` is pure. It reads results directories and prints the RN-6,
     RN-2 and RN-9 decision record. It exits 0 when decided, 2 on invalid
     input, and 3 for a STOP. It reads the current values from
-    `internal/config`.
-    - Each sampled case's rules read its first 20 usable samples in
-      recorded order (`useSamples`). The record shows the recorded, used
-      and dropped counts.
+    `internal/config`, including the stated Claude Code minimum
+    (`minClaudeCodeVersion`, 2.1.280).
+    - Each sampled case's rules read every usable sample, in any position,
+      once at least 20 are usable (`useSamples`, lead decision NB-1). The
+      largest time is the largest over all completed samples. The record
+      shows the recorded, used and dropped counts.
     - A default-budget "did not exit" is invalid in any position. Under a
       raised budget, a "did not exit" counts as a measured sample.
+    - A `no_ended_at` sample makes its case invalid under any budget.
     - A case whose stored counts disagree with its samples is invalid.
     - `killCeilingAt` derives kill's SR-13.2 ceiling from the
       `internal/config` constants, never from a literal. The record shows
       both paths and their max.
-- **The dry-run stubs** (`stub/claude`, plus the probe's `probe-args-kept`
-  and `probe-args-dropped`) and `dryrun.sh`, the sandbox dry run.
+    - `-supersede ID` (repeatable, RN-9 scenario ids only; `decideOptions`,
+      `decideWith`, `mergeScenarios`) lets a later run's result of one
+      scenario replace earlier inconclusive ones, ordered by `finished_at`.
+      An earlier pass or fail is refused, and equal or missing finish times
+      cannot be ordered; both stay invalid. The record gains a
+      `## Superseded` section. Without the flag, a scenario in two inputs
+      is invalid.
+- **The dry-run stubs** (`stub/claude`; the probe's `probe-args-kept` and
+  `probe-args-dropped`; the team leads `stub/lead-dialog`, whose dialog
+  never yields its input, and `stub/lead-late`, whose prompt shows late)
+  and `dryrun.sh`, the sandbox dry run.
 - **`guard.sh`**, the host-state guard (below).
 - **Makefile targets:**
   - `make measure-exit-dryrun`: the dry run, inside the sandbox. It needs
@@ -7570,6 +7625,11 @@ This section does not repeat it.
   that the deployed version runs exec-form hooks. That file, not make's
   exit status, is the success or STOP signal, because make reports every
   runner failure as exit 2.
+
+  These launch gates (L0's verdict and the earlier runs' guard status, the
+  shared lock, the no-reuse of a results directory, and the
+  `MX_ORCHESTRATOR_LAUNCH` override) live in the operator command files,
+  not in the repo. `run.sh` and the Makefile do not enforce them.
 
 **Isolation contract.**
 
@@ -7595,7 +7655,8 @@ This section does not repeat it.
   directory, `/tmp` and the engine socket are never mounted.
 - The driver never opens the store. Besides spawning its own agents, it
   makes only the measured exits and pane kills, the RN-9 drive's sends to
-  its own agents, and read-only calls (`get` and tmux `list-*`). Every call goes to `run-log.jsonl`, as argv only with
+  its own agents, and read-only calls (`get`, tmux `list-*` and
+  `capture-pane`). Every call goes to `run-log.jsonl`, as argv only with
   credentials scrubbed.
 
 **A second isolation boundary.** The real run's measurement container is a

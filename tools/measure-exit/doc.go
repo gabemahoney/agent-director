@@ -5,7 +5,7 @@
 // sample (a pane kill, pause's /exit or a natural-exit keystroke) and polls
 // until the exit is observed.
 //
-// The harness has three parts, all under tools/measure-exit/:
+// The harness has four parts, all under tools/measure-exit/:
 //
 //   - this Go driver, which runs only inside the measurement container (real
 //     mode) or the repo's Docker sandbox (dry mode). It never runs on a host:
@@ -24,7 +24,7 @@
 // The first argument names a subcommand from the commands table (main.go):
 //
 //	measure-exit run -mode real|dry|probe -out DIR [flags]
-//	measure-exit decide -in DIR [-in DIR]...
+//	measure-exit decide -in DIR [-in DIR]... [-supersede ID]...
 //	measure-exit record -out FILE      (a hook program; payload on stdin)
 //
 // run measures the selected cases: RN-6 (rn6.go) and RN-2 (rn2.go), sampled;
@@ -38,8 +38,9 @@
 // Before anything else, run's preflight (preflight.go) checks the container
 // marker, that TMUX is unset, that neither $HOME nor the passwd-entry home
 // holds a .agent-director, the per-case sample floor and (in real mode) the
-// Claude Code version floor (2.1.280), plus a credential and ANTHROPIC_MODEL (the
-// runner's pinned model) in real mode, which refuses ANTHROPIC_API_KEY, the
+// Claude Code version floor (2.1.280), plus the gateway's ANTHROPIC_AUTH_TOKEN
+// and ANTHROPIC_MODEL (the runner's pinned model) in real mode, which
+// refuses ANTHROPIC_API_KEY, the
 // OAuth token and the Bedrock/AWS variables (the gateway only) and runs only
 // the cases its -cases names; probe mode refuses any credential but
 // the runner's dummy token, and dry mode refuses a claude that is not the
@@ -50,8 +51,10 @@
 // Code session variables and AGENT_DIRECTOR_* never reach a child.
 //
 // The driver never opens the agent-director store. Store reads go through
-// the read-only verbs get and list; tmux reads are list-sessions and
-// list-panes on the private socket. Every agent-director and tmux call is
+// the read-only verb get; tmux reads are list-sessions, list-panes and
+// capture-pane (an agent team lead's input-ready check and the pane
+// captures of a cut-short team run, capture.go) on the private socket,
+// or on a claude-swarm server's socket beside it. Every agent-director and tmux call is
 // written to the run log (argv only, credential values scrubbed) with its
 // action kind, so the operator can audit that only the allowed actions ran.
 //

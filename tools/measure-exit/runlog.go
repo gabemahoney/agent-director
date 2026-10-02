@@ -21,7 +21,8 @@ type actionKind string
 const (
 	// actionVersion: the preflight's version reads.
 	actionVersion actionKind = "version"
-	// actionRead: read-only calls (get, list, tmux list-sessions/list-panes).
+	// actionRead: read-only calls (get, list, tmux list-sessions/list-panes,
+	// and an agent team lead's capture-pane).
 	actionRead actionKind = "read"
 	// actionSpawn: agent-director spawn.
 	actionSpawn actionKind = "spawn"
@@ -49,7 +50,8 @@ const (
 )
 
 // runLogEntry is one line of the run log. It carries argv, never an
-// environment value; credential values are scrubbed from argv too.
+// environment value; credential values and their parts are scrubbed from
+// argv too (scrubParts).
 type runLogEntry struct {
 	Seq      int        `json:"seq"`
 	Time     string     `json:"time"`
@@ -81,7 +83,7 @@ func (l *runLog) record(at time.Time, caseID string, kind actionKind, argv []str
 	l.seq++
 	clean := make([]string, len(argv))
 	for i, a := range argv {
-		clean[i] = l.scr.scrub(a)
+		clean[i] = l.scr.scrubParts(a)
 	}
 	b, err := json.Marshal(runLogEntry{
 		Seq: l.seq, Time: at.UTC().Format(time.RFC3339Nano), Case: caseID, Kind: kind,

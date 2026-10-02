@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/user"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -24,9 +25,11 @@ const sandboxMarkerEnv = "AGENT_DIRECTOR_TEST_SANDBOX"
 // hook budget for every hook (RN-6's env-raised variant).
 const sessionEndBudgetEnv = "CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS"
 
-// credentialEnv lists every credential-bearing variable the host runner may
-// forward (build-lead decision 8). Values of these never appear in any
-// output; ANTHROPIC_BASE_URL is here because a URL can embed a token.
+// credentialEnv lists every credential-bearing variable the driver knows
+// (build-lead decision 8). Values of these never appear in any output, and
+// dry mode hides them all; ANTHROPIC_BASE_URL is here because a URL can
+// embed a token. Only the gateway pair (ANTHROPIC_BASE_URL and
+// ANTHROPIC_AUTH_TOKEN) may be set in real mode (checkRealModeEnv).
 var credentialEnv = []string{
 	"ANTHROPIC_API_KEY",
 	"CLAUDE_CODE_OAUTH_TOKEN",
@@ -42,8 +45,7 @@ var credentialEnv = []string{
 // process may inherit from the driver. Everything else is dropped.
 var childEnvNames = []string{
 	"PATH", "HOME", "USER", "LOGNAME", "SHELL", "TERM", "LANG", "LC_ALL", "TZ", "TMPDIR",
-	"ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL", "CLAUDE_CODE_USE_BEDROCK",
-	"AWS_REGION", "AWS_PROFILE", "AWS_DEFAULT_REGION",
+	"ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL",
 	"CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "DISABLE_AUTOUPDATER",
 	sessionEndBudgetEnv,
 }
@@ -258,22 +260,111 @@ const minScrubLen = 6
 // scrubbedValue replaces a credential value in any output.
 const scrubbedValue = "<redacted>"
 
-// scrubber removes credential values from text before it is written
-// anywhere (run log, results, table, error messages).
+// minPartLen is the length of the credential pieces the results scrub
+// removes and the shortest URL path part it removes: the figures the leak
+// gate of a live run's command file checks every result file for.
+const minPartLen = 12
+
+// withheldLine replaces a line of Claude's text that names a credential.
+const withheldLine = "[line withheld: it names a credential]"
+
+// credentialWordRE matches a line that names a credential, whatever it
+// holds (the same words as that command file's withhold filter).
+var credentialWordRE = regexp.MustCompile(`(?i)(auth|token|bearer|api[ _-]?key|cookie|secret|passw)`)
+
+// scrubber removes credential text before it is written anywhere. scrub
+// replaces the exact values (run log, results, table, error messages, and
+// the pane text inputReady reads); scrubParts, for everything written to
+// the results directory, also replaces their parts; scrubEvidence, for
+// Claude's own text (pane captures, debug-log copies, pane excerpts in a
+// reason or note), also withholds every line naming a credential.
 type scrubber struct {
 	secrets []string
+	// parts are lower-cased (ASCII) and matched without regard to case:
+	// each value; for ANTHROPIC_BASE_URL also the URL without a trailing
+	// slash, its host with and without the port and its path and query
+	// parts of minPartLen or more; for every other value each piece of
+	// minPartLen characters.
+	parts []string
 }
 
 // newScrubber collects the values of every credentialEnv variable set in
-// the environment.
+// the environment, and their parts.
 func newScrubber(e environment) scrubber {
 	var s scrubber
+	seen := map[string]bool{}
+	addPart := func(p string) {
+		if p = asciiLower(p); len(p) >= minScrubLen && !seen[p] {
+			seen[p] = true
+			s.parts = append(s.parts, p)
+		}
+	}
 	for _, name := range credentialEnv {
-		if v := e.getenv(name); len(v) >= minScrubLen {
-			s.secrets = append(s.secrets, v)
+		v := e.getenv(name)
+		if len(v) < minScrubLen {
+			continue
+		}
+		s.secrets = append(s.secrets, v)
+		addPart(v)
+		if name == "ANTHROPIC_BASE_URL" {
+			for _, p := range urlParts(v) {
+				addPart(p)
+			}
+			continue
+		}
+		for i := 0; i+minPartLen <= len(v); i++ {
+			addPart(v[i : i+minPartLen])
 		}
 	}
 	return s
+}
+
+// urlParts are a URL's parts the results scrub removes besides the URL
+// itself: the URL without a trailing slash, its host with and without a
+// numeric port (any user info dropped), and every part of its path and
+// query of minPartLen or more characters (split at / ? & = # ;).
+func urlParts(u string) []string {
+	parts := []string{strings.TrimRight(u, "/")}
+	rest := u
+	if i := strings.Index(rest, "://"); i >= 0 {
+		rest = rest[i+len("://"):]
+	}
+	authority, tail := rest, ""
+	if i := strings.IndexAny(rest, "/?#"); i >= 0 {
+		authority, tail = rest[:i], rest[i:]
+	}
+	host := authority[strings.LastIndex(authority, "@")+1:]
+	parts = append(parts, host)
+	if i := strings.LastIndex(host, ":"); i >= 0 && isDigits(host[i+1:]) {
+		parts = append(parts, host[:i])
+	}
+	for _, p := range strings.FieldsFunc(tail, func(r rune) bool { return strings.ContainsRune("/?&=#;", r) }) {
+		if len(p) >= minPartLen {
+			parts = append(parts, p)
+		}
+	}
+	return parts
+}
+
+// isDigits reports whether s is one or more ASCII digits.
+func isDigits(s string) bool {
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return s != ""
+}
+
+// asciiLower lower-cases ASCII letters only, so byte offsets are kept.
+func asciiLower(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + 'a' - 'A'
+		}
+	}
+	return string(b)
 }
 
 // scrub returns text with every credential value replaced.
@@ -282,4 +373,63 @@ func (s scrubber) scrub(text string) string {
 		text = strings.ReplaceAll(text, v, scrubbedValue)
 	}
 	return text
+}
+
+// scrubParts returns text with every credential value and every part
+// (s.parts) replaced, matched without regard to ASCII case; overlapping or
+// adjacent matches become one scrubbedValue. It is for text written to the
+// results directory, never for the text inputReady reads.
+func (s scrubber) scrubParts(text string) string {
+	text = s.scrub(text)
+	if len(s.parts) == 0 {
+		return text
+	}
+	lower := asciiLower(text)
+	var hit []bool
+	for _, p := range s.parts {
+		for from := 0; ; {
+			i := strings.Index(lower[from:], p)
+			if i < 0 {
+				break
+			}
+			if hit == nil {
+				hit = make([]bool, len(text))
+			}
+			for k := from + i; k < from+i+len(p); k++ {
+				hit[k] = true
+			}
+			from += i + 1
+		}
+	}
+	if hit == nil {
+		return text
+	}
+	var b strings.Builder
+	for i := 0; i < len(text); {
+		j := i
+		for j < len(text) && hit[j] == hit[i] {
+			j++
+		}
+		if hit[i] {
+			b.WriteString(scrubbedValue)
+		} else {
+			b.WriteString(text[i:j])
+		}
+		i = j
+	}
+	return b.String()
+}
+
+// scrubEvidence is scrubParts, then every line naming a credential (auth,
+// token, bearer, api key, cookie, secret, passw; any case) is replaced by
+// withheldLine. It is for Claude's own text kept in the results: pane
+// captures, debug-log copies and the pane excerpt a reason or note quotes.
+func (s scrubber) scrubEvidence(text string) string {
+	lines := strings.Split(s.scrubParts(text), "\n")
+	for i, l := range lines {
+		if credentialWordRE.MatchString(l) {
+			lines[i] = withheldLine
+		}
+	}
+	return strings.Join(lines, "\n")
 }

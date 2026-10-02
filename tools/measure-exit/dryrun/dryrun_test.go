@@ -278,8 +278,9 @@ func TestDryRun(t *testing.T) {
 	})
 }
 
-// assertRunLog checks every logged call is an allowed action and every tmux
-// call names a socket under the private TMUX_TMPDIR.
+// assertRunLog checks every logged call is an allowed action (an agent team
+// lead's capture-pane is a read) and every tmux call names a socket under
+// the private TMUX_TMPDIR.
 func assertRunLog(t *testing.T, path, tmuxTmpdir string) {
 	t.Helper()
 	allowed := map[string]bool{"version": true, "read": true, "spawn": true, "measured": true, "drive": true, "teardown": true}
@@ -309,7 +310,8 @@ func assertRunLog(t *testing.T, path, tmuxTmpdir string) {
 		ok := allowed[e.Kind]
 		switch e.Kind {
 		case "read":
-			ok = verb == "get" || verb == "list" || verb == "list-sessions" || verb == "list-panes"
+			ok = verb == "get" || verb == "list" || verb == "list-sessions" || verb == "list-panes" ||
+				(verb == "capture-pane" && strings.HasPrefix(e.Case, "rn9.team-"))
 		case "measured":
 			ok = verb == "kill-pane" || verb == "send-keys" || verb == "pause"
 		case "drive":

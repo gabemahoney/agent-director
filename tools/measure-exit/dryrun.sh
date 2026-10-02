@@ -13,9 +13,21 @@
 #      RN-7's record, and the version probe; then the probe again with the
 #      args-keeping and the args-dropping stubs; and once with a non-stub
 #      `claude` first on PATH, which must be refused before anything runs;
+#   3a. runs rn9.team-splitpane alone twice: with a lead that shows a dialog
+#      and ignores all input (stub/lead-dialog), and with a lead whose prompt
+#      shows late and drops keys typed before it (stub/lead-late);
 #   4. checks the results (dry-run banner, every sample completed, every RN-9
-#      scenario passed, the probe's two results, the run log's action kinds)
-#      and that decide refuses a dry run;
+#      scenario passed, the probe's two results, the run log's action kinds,
+#      the team leads' input-ready wait and kept Claude debug logs, with a
+#      line naming a credential withheld) and that
+#      decide refuses a dry run;
+#   4a. checks the split-pane evidence: the dialog lead reads "input never
+#      ready" with its pane text quoted and captured, no team prompt sent,
+#      its debug log kept; the late lead passes because the prompt waited;
+#      then decide, on copies made to look like finished real runs, refuses
+#      the scenario in two inputs, lets -supersede replace the earlier
+#      inconclusive result with the later pass (stated in the record), and
+#      refuses to drop an earlier pass;
 #   4b. runs the host runner's real L0 path (run.sh probe --run) against a
 #      fake container engine that runs the driver in probe mode, with a
 #      throwaway HOME and per-version probe stubs (args kept from a set
@@ -133,6 +145,15 @@ run_driver probe-kept "$STUB_DIR/probe-args-kept" -cases probe.exec-form
 run_driver probe-dropped "$STUB_DIR/probe-args-dropped" -cases probe.exec-form
 [[ "$run_rc" -eq 0 ]] || fail "probe dry run (args dropped) exited $run_rc"
 
+# The split-pane lead's evidence (Gabe, 2026-10-02): rn9.team-splitpane
+# alone, once with a lead that shows a dialog and ignores all input (the
+# stall L2 saw) and once with a lead whose prompt shows late and drops
+# keys typed before it.
+run_driver splitpane-dialog "$STUB_DIR/lead-dialog" -cases rn9.team-splitpane
+[[ "$run_rc" -eq 0 ]] || fail "split-pane dry run (dialog lead) exited $run_rc"
+run_driver splitpane-late "$STUB_DIR/lead-late" -cases rn9.team-splitpane
+[[ "$run_rc" -eq 0 ]] || fail "split-pane dry run (late lead) exited $run_rc"
+
 fake="$tmp/fake-real-claude"
 mkdir -p "$fake"
 printf '#!/bin/sh\necho "2.1.285 (Claude Code)"\n' >"$fake/claude"
@@ -168,6 +189,28 @@ if [[ -r "$res" ]]; then
         || fail "the in-process teammate's SessionStart was not ignored as subagent_event"
     jq -e '[.rn9.scenarios[] | select(.id == "rn9.team-splitpane") | .hooks[] | select(.pid_match == false) | .reason] | index("pid_mismatch") != null' "$res" >/dev/null \
         || fail "no split-pane teammate hook was ignored as pid_mismatch"
+    # Claude's debug logs are kept for both team scenarios: the lead's
+    # --debug-file, and the split-pane teammate's own under ~/.claude/debug.
+    for id in rn9.team-inprocess rn9.team-splitpane; do
+        grep -q 'mx-stub' "$full/$id-claude-debug-lead.txt" 2>/dev/null \
+            && jq -e --arg id "$id" '.rn9.scenarios[] | select(.id == $id) | .artifacts | index($id + "-claude-debug-lead.txt") != null' "$res" >/dev/null \
+            && ok "$id: the lead's Claude debug log kept in the results" \
+            || fail "$id: the lead's Claude debug log was not kept: $(jq -c --arg id "$id" '.rn9.scenarios[] | select(.id == $id) | [.artifacts, .notes]' "$res")"
+        # The stub logs a line naming a credential; the kept copy withholds it.
+        grep -qF '[line withheld: it names a credential]' "$full/$id-claude-debug-lead.txt" 2>/dev/null \
+            && ! grep -q 'auth check' "$full/$id-claude-debug-lead.txt" \
+            && ok "$id: the debug log copy withholds the line naming a credential" \
+            || fail "$id: the debug log copy did not withhold the line naming a credential"
+    done
+    tm_debug="$(jq -r '.rn9.scenarios[] | select(.id == "rn9.team-splitpane") | .artifacts[]? | select(endswith("-lead.txt") | not)' "$res")"
+    if [[ -n "$tm_debug" ]] && grep -q 'split-pane teammate started' "$full/$tm_debug" 2>/dev/null; then
+        ok "rn9.team-splitpane: the teammate's default-place debug log kept ($tm_debug)"
+    else
+        fail "rn9.team-splitpane: the teammate's debug log under ~/.claude/debug was not kept (artifacts: $tm_debug)"
+    fi
+    compgen -G "$full/rn9.*-pane-*.txt" >/dev/null && fail "the full run captured panes, but no team run was cut short"
+    jq -e '[.rn9.scenarios[] | select(.id | startswith("rn9.team-")) | .notes[] | select(startswith("input ready after"))] | length == 2' "$res" >/dev/null \
+        || fail "the full run's team leads did not record their input-ready wait"
     jq -e '.rn7_record.rows | length > 0' "$res" >/dev/null && ok "RN-7 record present" || fail "RN-7 record missing"
     jq -e '.probe.versions[0].result == "args_received"' "$res" >/dev/null || fail "full run: the probe against the main stub did not receive args"
     bad_kinds="$(jq -r 'select(.kind != "version" and .kind != "read" and .kind != "spawn" and .kind != "measured" and .kind != "drive" and .kind != "teardown") | .kind' "$full/run-log.jsonl" | sort -u)"
@@ -197,6 +240,75 @@ else
     fail "decide on a dry run exited $decide_rc (want 2)"
 fi
 rm -f "$full/guard-status.txt"
+
+# ---- 4a. the split-pane lead's evidence, and decide's -supersede -----------------------
+# The dialog lead never shows its prompt: the scenario must read "input
+# never ready" with the pane text quoted and captured (before pause and
+# after the pause that fails), no team prompt sent, and the debug log kept.
+sp_id=rn9.team-splitpane
+dlg="$out_root/splitpane-dialog"
+if [[ -r "$dlg/results.json" ]]; then
+    jq -e --arg id "$sp_id" '.rn9.scenarios[] | select(.id == $id) | .verdict == "inconclusive"
+        and (.reason | test("input never ready")) and (.reason | test("Enter to confirm"))
+        and (.reason | test("pane text in " + $id + "-pane-lead.txt"))' "$dlg/results.json" >/dev/null \
+        && ok "dialog lead: inconclusive, \"input never ready\" with the pane text quoted" \
+        || fail "dialog lead: $(jq -c --arg id "$sp_id" '.rn9.scenarios[] | select(.id == $id) | [.verdict, .reason]' "$dlg/results.json")"
+    for f in "$sp_id-pane-lead.txt" "$sp_id-pane-lead-after-pause.txt"; do
+        grep -q 'a dialog holds the screen' "$dlg/$f" 2>/dev/null \
+            && jq -e --arg id "$sp_id" --arg f "$f" '.rn9.scenarios[] | select(.id == $id) | .artifacts | index($f) != null' "$dlg/results.json" >/dev/null \
+            && ok "dialog lead: pane text captured in $f" || fail "dialog lead: no pane capture $f showing the dialog"
+    done
+    grep -q 'dialog shown' "$dlg/$sp_id-claude-debug-lead.txt" 2>/dev/null \
+        && ok "dialog lead: its Claude debug log kept" || fail "dialog lead: its Claude debug log was not kept"
+    [[ -z "$(jq -r 'select(.kind == "drive" and .argv[1] == "send-keys") | .seq' "$dlg/run-log.jsonl")" ]] \
+        || fail "dialog lead: the team prompt was sent although the input never became ready"
+    jq -se '[.[] | select(.kind == "read" and (.argv | index("capture-pane") != null))] | length > 0' "$dlg/run-log.jsonl" >/dev/null \
+        || fail "dialog lead: the run log has no capture-pane read"
+else
+    fail "no results.json from the dialog-lead dry run"
+fi
+# The late lead drops keys typed before its prompt shows: the scenario
+# passes only because the team prompt waits for the prompt box.
+late="$out_root/splitpane-late"
+if [[ -r "$late/results.json" ]]; then
+    jq -e --arg id "$sp_id" '.rn9.scenarios[] | select(.id == $id) | .verdict == "pass"
+        and ([.notes[] | select(test("^input ready after ([3-9]|[1-9][0-9])(\\.[0-9])?s"))] | length == 1)' "$late/results.json" >/dev/null \
+        && ok "late lead: the team prompt waited for the prompt box, and the scenario passed" \
+        || fail "late lead: $(jq -c --arg id "$sp_id" '.rn9.scenarios[] | select(.id == $id) | [.verdict, .reason, .notes]' "$late/results.json")"
+    grep -q 'input dropped before the prompt was ready' "$late/$sp_id-claude-debug-lead.txt" 2>/dev/null \
+        && fail "late lead: a line was typed before its prompt showed"
+    compgen -G "$late/$sp_id-pane-*.txt" >/dev/null && fail "late lead: panes captured although the run was not cut short"
+else
+    fail "no results.json from the late-lead dry run"
+fi
+# decide -supersede: the two runs, made to look like finished real runs
+# (decide refuses dry runs), the inconclusive one finishing first.
+as_real() {
+    mkdir -p "$2"
+    jq --arg at "$3" '.dry_run = false | del(.banner) | .isolation.mode = "real" | .finished_at = $at' \
+        "$1/results.json" >"$2/results.json" && printf 'pass\n' >"$2/guard-status.txt"
+}
+sup="$tmp/supersede"
+as_real "$dlg" "$sup/l2" 2026-10-02T08:53:30Z || fail "supersede fixture (l2)"
+as_real "$late" "$sup/l2b" 2026-10-02T12:00:00Z || fail "supersede fixture (l2b)"
+"$bin/measure-exit" decide -in "$sup/l2" -in "$sup/l2b" >"$tmp/sup-none.md" 2>&1
+grep -qF -- "- RN-9 scenario $sp_id is in two inputs" "$tmp/sup-none.md" \
+    && ok "decide without -supersede refuses a scenario in two inputs" \
+    || fail "decide without -supersede: $(sed -n '/^## Outcome/,$p' "$tmp/sup-none.md")"
+"$bin/measure-exit" decide -in "$sup/l2" -in "$sup/l2b" -supersede "$sp_id" >"$tmp/sup.md" 2>&1
+if grep -qF -- "- RN-9 $sp_id: the inconclusive result of $sup/l2 (run " "$tmp/sup.md" \
+    && grep -qF -- "is superseded by the result of $sup/l2b (run " "$tmp/sup.md" \
+    && grep -qE -- "^- $sp_id: pass" "$tmp/sup.md" \
+    && ! grep -qE -- "^- (RN-9 scenario $sp_id |RN-9 $sp_id: NOT superseded)" "$tmp/sup.md"; then
+    ok "decide -supersede: the later pass replaces the earlier inconclusive result, stated in the record"
+else
+    fail "decide -supersede: $(cat "$tmp/sup.md")"
+fi
+as_real "$late" "$sup/pass-first" 2026-10-02T07:00:00Z || fail "supersede fixture (pass-first)"
+"$bin/measure-exit" decide -in "$sup/pass-first" -in "$sup/l2" -supersede "$sp_id" >"$tmp/sup-refused.md" 2>&1
+grep -qF -- "-supersede refused: $sup/pass-first's earlier result is pass, not inconclusive" "$tmp/sup-refused.md" \
+    && ok "decide -supersede never drops an earlier pass" \
+    || fail "decide -supersede dropped an earlier pass: $(cat "$tmp/sup-refused.md")"
 
 # ---- 4b. the runner's L0 layout, composed with decide ---------------------------------
 # The fake engine stands in for the container engine run.sh calls: `build`

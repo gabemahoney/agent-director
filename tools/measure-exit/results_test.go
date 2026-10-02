@@ -167,12 +167,21 @@ func TestOutputsCarryNoCredential(t *testing.T) {
 	}
 	c.Notes = append(notes, "base url "+credentialSentinels["ANTHROPIC_BASE_URL"])
 	r := resultsOf(modeReal, c)
-	r.Notes = sentinelValues()
+	tok := credentialSentinels["ANTHROPIC_AUTH_TOKEN"]
+	// Parts of a credential (the gateway host, a token piece in another
+	// case) are removed too; a line naming a credential is kept, unlike in
+	// Claude's evidence text.
+	keyword := "Authorization header sent; tokens=3"
+	r.Notes = append(sentinelValues(), "dial GATEWAY.invalid:443 failed", "piece "+strings.ToUpper(tok[3:15]), keyword)
 	table, js := render(t, r, scr)
+	if !json.Valid([]byte(js)) {
+		t.Fatalf("results.json is not valid JSON after scrubbing:\n%s", js)
+	}
 	for what, text := range map[string]string{"table": table, "results.json": js} {
 		assertAbsent(t, what, text, append(sentinelValues(), "mcp-arg-secret", "mcp-env-secret")...)
-		if !strings.Contains(text, "tools") || !strings.Contains(text, scrubbedValue) {
-			t.Errorf("%s lacks the server name or the redaction:\n%s", what, text)
+		assertAbsent(t, what+" (lower-cased)", strings.ToLower(text), "gateway.invalid", tok[3:15])
+		if !strings.Contains(text, "tools") || !strings.Contains(text, scrubbedValue) || !strings.Contains(text, keyword) {
+			t.Errorf("%s lacks the server name, the redaction or the kept keyword line:\n%s", what, text)
 		}
 	}
 }

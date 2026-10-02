@@ -127,7 +127,7 @@ func TestPreflightRules(t *testing.T) {
 		{"dry with a non-stub claude", modeDry, realCC, nil, ruleDryStubOnly},
 		{"real with Claude Code 2.1.120", modeReal, "2.1.120 (Claude Code)", nil, ruleVersionFloor},
 		{"real with Claude Code 2.1.279", modeReal, "2.1.279 (Claude Code)", nil, ruleVersionFloor},
-		{"real with Claude Code 2.1.284, below the stated minimum", modeReal, "2.1.284 (Claude Code)", nil, ""},
+		{"real with Claude Code 2.1.284", modeReal, "2.1.284 (Claude Code)", nil, ""},
 		{"real with an unparseable version", modeReal, "Claude Code", nil, ruleVersionFloor},
 		{"real with Claude Code 2.2.0", modeReal, "2.2.0 (Claude Code)", nil, ""},
 		{"probe with Claude Code 2.1.120", modeProbe, "2.1.120 (Claude Code)", nil, ""},
@@ -287,46 +287,47 @@ func TestDryModeCarriesNoCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.CredentialMode != credNone || rec.APIKeyApproved {
+	if rec.CredentialMode != credNone {
 		t.Errorf("dry seed record %+v", rec)
 	}
-	key := credentialSentinels["ANTHROPIC_API_KEY"]
-	assertAbsent(t, ".claude.json", readFile(t, rec.Path), key[len(key)-apiKeySuffixLen:])
+	assertAbsent(t, ".claude.json", readFile(t, rec.Path), sentinelValues()...)
 }
 
+// TestSeedClaudeState: the gateway token is the only credential mode, and
+// no credential or approval entry is ever written.
 func TestSeedClaudeState(t *testing.T) {
-	const key = "sk-ant-api03-0123456789-SUFFIX-abcdefghij0123"
 	for _, tc := range []struct {
-		name     string
-		vars     map[string]string
-		mode     string
-		approved bool
+		name string
+		vars map[string]string
+		mode string
 	}{
-		{"api key", map[string]string{"ANTHROPIC_API_KEY": key}, credAPIKey, true},
-		{"gateway", map[string]string{"ANTHROPIC_AUTH_TOKEN": "tok", "ANTHROPIC_BASE_URL": "https://g.invalid"}, credGateway, false},
-		{"bedrock", map[string]string{"CLAUDE_CODE_USE_BEDROCK": "1", "AWS_SECRET_ACCESS_KEY": "s"}, credBedrock, false},
-		{"oauth", map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "o"}, credOAuth, false},
-		{"none", map[string]string{"CLAUDE_CODE_USE_BEDROCK": "0"}, credNone, false},
+		{"gateway", map[string]string{"ANTHROPIC_AUTH_TOKEN": "gateway-token-0123456789", "ANTHROPIC_BASE_URL": "https://g.invalid"}, credGateway},
+		{"api key", map[string]string{"ANTHROPIC_API_KEY": "sk-ant-api03-0123456789-SUFFIX-abcdefghij0123"}, credNone},
+		{"bedrock", map[string]string{"CLAUDE_CODE_USE_BEDROCK": "1", "AWS_SECRET_ACCESS_KEY": "aws-secret-0123456789"}, credNone},
+		{"oauth", map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "oauth-token-0123456789"}, credNone},
+		{"none", nil, credNone},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
-			rec, err := seedClaudeState(home, fakeEnv(tc.vars, home), "2.1.285 (Claude Code)")
+			rec, err := seedClaudeState(home, fakeEnv(tc.vars, home), "2.1.280 (Claude Code)")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if rec.Path != filepath.Join(home, ".claude.json") || rec.CredentialMode != tc.mode || rec.APIKeyApproved != tc.approved {
+			if rec.Path != filepath.Join(home, ".claude.json") || rec.CredentialMode != tc.mode {
 				t.Fatalf("record %+v", rec)
 			}
 			fi, _ := os.Stat(rec.Path)
 			body := readFile(t, rec.Path)
-			if fi.Mode().Perm() != 0o600 || !strings.Contains(body, `"lastOnboardingVersion": "2.1.285"`) {
+			if fi.Mode().Perm() != 0o600 || !strings.Contains(body, `"lastOnboardingVersion": "2.1.280"`) {
 				t.Errorf("mode %v, body %s", fi.Mode(), body)
 			}
-			if strings.Contains(body, "customApiKeyResponses") != tc.approved {
-				t.Errorf("approval entry present=%t, want %t", !tc.approved, tc.approved)
+			if strings.Contains(body, "customApiKeyResponses") {
+				t.Errorf("an API-key approval entry was written: %s", body)
 			}
-			if tc.approved && (!strings.Contains(body, key[len(key)-20:]) || strings.Contains(body, key)) {
-				t.Errorf("approval must hold exactly the key's last 20 characters: %s", body)
+			for _, v := range tc.vars {
+				if len(v) > 4 {
+					assertAbsent(t, ".claude.json", body, v[len(v)-12:])
+				}
 			}
 		})
 	}
@@ -337,15 +338,6 @@ func TestSeedClaudeState(t *testing.T) {
 		assertRefused(t, err, ruleClaudeStateFresh)
 		if readFile(t, filepath.Join(home, ".claude.json")) != "{\"mine\":1}" {
 			t.Error("the existing file was changed")
-		}
-	})
-	t.Run("a key too short to suffix is refused", func(t *testing.T) {
-		home := t.TempDir()
-		if _, err := seedClaudeState(home, fakeEnv(map[string]string{"ANTHROPIC_API_KEY": "short-key"}, home), "2.1.285"); err == nil {
-			t.Fatal("want an error")
-		}
-		if _, err := os.Stat(filepath.Join(home, ".claude.json")); err == nil {
-			t.Error("a state file was written")
 		}
 	})
 }
@@ -359,16 +351,18 @@ func TestParseRunFlags(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if c.samples != 22 || c.sampleCeiling != 120*time.Second || c.runID != "generated-id" || c.raisedHookTimeoutSeconds != 10 {
+		if c.samples != 22 || c.sampleCeiling != 120*time.Second || c.runID != "generated-id" || c.raisedHookTimeoutSeconds != 10 ||
+			c.inputReadyTimeout != 60*time.Second || c.promptAcceptWait != 60*time.Second {
 			t.Errorf("config %+v", c)
 		}
 	})
 	t.Run("dry defaults apply only to flags not given", func(t *testing.T) {
-		c, err := parse("-mode", "dry", "-out", "/r", "-samples", "5", "-run-id", "mine")
+		c, err := parse("-mode", "dry", "-out", "/r", "-samples", "5", "-run-id", "mine", "-prompt-accept-wait", "3s")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if c.samples != 5 || c.runID != "mine" || c.sampleCeiling != 15*time.Second || c.raisedEnvTimeoutMS != 3000 || c.slowHookMS != 2000 {
+		if c.samples != 5 || c.runID != "mine" || c.sampleCeiling != 15*time.Second || c.raisedEnvTimeoutMS != 3000 || c.slowHookMS != 2000 ||
+			c.inputReadyTimeout != 10*time.Second || c.promptAcceptWait != 3*time.Second {
 			t.Errorf("config %+v", c)
 		}
 	})
@@ -380,6 +374,8 @@ func TestParseRunFlags(t *testing.T) {
 		{"-mode", "real", "-out", "/r", "-mcp-config", "relative.json"},
 		{"-mode", "real", "-out", "/r", "-slow-hook-ms", "10000"},
 		{"-mode", "real", "-out", "/r", "-sample-ceiling", "10s"},
+		{"-mode", "real", "-out", "/r", "-input-ready-timeout", "0s"},
+		{"-mode", "dry", "-out", "/r", "-prompt-accept-wait", "-1s"},
 		{"-mode", "real", "-out", "/r", "extra"},
 		{"-mode", "real", "-out", "/r", "-no-such-flag"},
 	} {

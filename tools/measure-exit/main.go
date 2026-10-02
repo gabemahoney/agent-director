@@ -18,7 +18,7 @@ type command struct {
 // (case probe.exec-form); the host runner bisects across versions.
 var commands = map[string]command{
 	"run":    {summary: "preflight, then measure the selected cases (-mode real|dry|probe)", run: runCommand},
-	"decide": {summary: "print the RN-6, RN-2 and RN-9 decision record from results directories (-in DIR ...)", run: decideCommand},
+	"decide": {summary: "print the RN-6, RN-2 and RN-9 decision record from results directories (-in DIR ... [-supersede ID])", run: decideCommand},
 	"record": {summary: "RN-9 hook recorder (registered by the harness; reads a hook payload on stdin)", run: recordCommand},
 }
 

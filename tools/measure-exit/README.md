@@ -45,7 +45,8 @@ no API call.
   with `TMUX` unset. Nothing touches the host's `~/.agent-director`,
   `~/.claude.json` or tmux server. Besides spawning its own agents, the
   harness makes only the measured exits and pane kills, the RN-9 drive's
-  sends to its own agents, and read-only calls (`get` and tmux `list-*`).
+  sends to its own agents, and read-only calls (`get`, tmux `list-*` and
+  `capture-pane`).
   Nothing built runs on the host. The
   driver refuses to start outside the container.
 - **The release-candidate tree.** Run from the release-candidate tree or
@@ -239,7 +240,13 @@ make measure-exit-dryrun
 
 It runs in the repo's Docker sandbox with the stub `claude`, a fixture home,
 no credential and no network. It covers every case, the RN-9 scenarios, the
-probe stubs, the guard in both modes, and print-only. A pass prints
+probe stubs, the guard in both modes, and print-only. It also runs
+`rn9.team-splitpane` alone with two problem leads: `stub/lead-dialog`, whose
+dialog never yields its input ("input never ready", with the panes captured
+and no prompt sent), and `stub/lead-late`, whose prompt shows late (a pass,
+because the prompt waits). It checks that a line naming a credential is
+withheld from the kept debug logs, and it runs decide's `-supersede` on
+copies of those two runs. A pass prints
 `DRY RUN PASSED`, the guard's identical before-and-after checksums, and
 tables headed with the dry-run banner. **Dry-run numbers are not
 measurements.** `decide` refuses them.
@@ -260,16 +267,28 @@ and verifies.
 
 **Order.** Run L0, then L1, then L2, one after the other and never at the
 same time. L1 and L2 run only when L0's `deployed-verdict.txt` reads exactly
-`deployed 2.1.280: RUNS exec-form hooks (args_received)`. Each run's launch
-command file enforces this:
+`deployed 2.1.280: RUNS exec-form hooks (args_received)`.
 
-- it refuses unless L0's verdict file reads exactly that line;
-- all three take one shared lock, `.live-run.lock` under the results root,
-  and refuse while another run holds it;
-- it refuses when its results directory already exists, so a stale verdict
-  is never re-read;
-- it refuses inside a Claude Code session unless the orchestrator sets
+**The launch gates are not in this repo.** They live in each run's operator
+command file, the reviewed launch script the user or the orchestrator runs.
+`run.sh` and `make measure-exit` do not enforce them. Each command file:
+
+- refuses unless L0's verdict file reads exactly that line, and, for a later
+  run, unless the earlier runs' `guard-status.txt` files read `pass`;
+- takes one shared lock, `.live-run.lock` under the results root, and
+  refuses while another run holds it;
+- refuses when its results directory already exists, so a stale verdict is
+  never re-read;
+- refuses inside a Claude Code session unless the orchestrator sets
   `MX_ORCHESTRATOR_LAUNCH=1`.
+
+A launch that skips the command file skips these gates too.
+
+**Re-running one scenario.** A run may take a single RN-9 scenario under a
+new run id, for example after an inconclusive team result:
+`MEASURE_MODE=rn9 MEASURE_ARGS="--run-id mx-l2b-splitpane --cases rn9.team-splitpane --host-network"`.
+Its command file keeps the same gates. decide then needs `-supersede` (see
+[Deciding](#deciding-decide)).
 
 **Read the verdict file, not make's exit status.** make reports every runner
 failure as its own exit 2, the probe's STOP (exit 3) included. L0's success
@@ -288,9 +307,10 @@ the path and removes its staging directory.
 |---|---|
 | `results.json` | every sample and section (the raw samples) |
 | `results-table.txt` | the tables below |
-| `run-log.jsonl` | every agent-director and tmux call: argv only, credentials scrubbed |
+| `run-log.jsonl` | every agent-director and tmux call: argv only, credentials scrubbed (see [Scrubbing](#scrubbing)) |
 | `harness-ids.txt` | the identifiers the busy-host guard scans for |
 | `rn9.*-hooks.jsonl` | the RN-9 recorder's keys-only lines |
+| `<case>-pane-*.txt`, `<case>-claude-debug-*` | agent team scenarios only: pane captures and Claude debug-log copies (see [Team-scenario evidence](#team-scenario-evidence)) |
 | `guard-verify.txt`, `guard-status.txt`, `container-status.txt` | the guard's output and verdict, and the container's exit status |
 | `probe-summary.txt`, `deployed-verdict.txt`, `<version>/` | L0 only: the per-version lines, the deployed verdict, one directory per probed version holding its `results.json` and a copy of the run's `guard-status.txt` |
 
@@ -343,6 +363,100 @@ inconclusive. The recorder keeps key names and
 id-shaped values only, never prompt text, tool input or other payload
 content.
 
+### Team-scenario evidence
+
+The two agent team scenarios (`rn9.team-inprocess`, `rn9.team-splitpane`)
+keep evidence, so a team that does not settle says why.
+
+**The input-ready wait.** The team prompt is sent only once the lead's pane
+shows its input:
+
+- Every 500 ms the driver reads the lead's visible screen
+  (`capture-pane -p -J`, no history).
+- **Ready:** a prompt line (`❯`, or `>` in older versions, then a space or
+  the end of the line, optionally inside a box edge), or the idle footer
+  `? for shortcuts`.
+- **Not ready:** a `❯` on a numbered option, or a dialog footer ("Enter to
+  confirm", "Esc to cancel", "Esc to exit", "Press Enter to continue").
+- When ready, the driver waits 2 s more and then sends. The scenario's note
+  says `input ready after Xs (<signal>); team prompt sent 2s later`.
+- If the input is not ready within `-input-ready-timeout`, the prompt is
+  never sent, so nothing is spent on it. The reason reads `input never
+  ready: …` and quotes the pane's last 6 non-empty lines.
+- After the send, the driver waits up to `-prompt-accept-wait` for the
+  lead's own `UserPromptSubmit`. Without it the reason reads `the team prompt
+  was not accepted: …`, instead of a stall until the step timeout.
+
+| Flag | Real-mode default | Dry-mode default |
+|---|---|---|
+| `-input-ready-timeout` | 60 s | 10 s |
+| `-prompt-accept-wait` | 60 s | 10 s |
+
+Both must be positive.
+
+**Evidence files**, all in the results directory and listed in the
+scenario's `artifacts` in `results.json`. The table prints each as
+`evidence file: <name>`, and `run.sh` prints an `evidence: <path>` line for
+each after an `rn9` run.
+
+- **Pane captures**, `<case>-pane-<label>.txt`. They are written when a team
+  scenario is cut short (input never ready, prompt not accepted, team not
+  settled), before `pause`. Each holds a pane's whole history
+  (`capture-pane -p -J -S -`). The labels:
+  - `lead`: the lead's pane;
+  - `teammate-pN`: any other pane in the lead's session;
+  - `claude-swarm-<pid>-pN`: each pane on a `claude-swarm-*` tmux server
+    beside the private socket, which Claude Code starts for split-pane
+    teammates when it is not inside tmux.
+
+  If `pause` then fails, every pane is captured again with the suffix
+  `-after-pause`. The reason ends `pane text in <case>-pane-lead.txt`.
+- **Debug-log copies**, `<case>-claude-debug-*`. Each team lead runs with
+  `--debug-file` under the run's HOME, never under the results directory.
+  After the scenario, whatever its result, the driver copies that log to
+  `<case>-claude-debug-lead.txt`. It also copies every file in
+  `$HOME/.claude/debug/` that is new or changed during the scenario, such as
+  a split-pane teammate's own log, to `<case>-claude-debug-<name>`. A copy
+  over 32 MiB keeps its tail, starting at a whole line.
+
+**These files hold Claude's own content:** screen text, prompts and log
+lines. They are unlike the recorder's keys-only lines. Every one is
+scrubbed as evidence before it is written (below). So are the pane lines a
+reason or note quotes.
+
+### Scrubbing
+
+The driver builds its scrub list from the credential variables set in its
+environment. Only parts of 6 or more characters are used, matched without
+regard to case:
+
+- every credential value, exactly;
+- for `ANTHROPIC_BASE_URL`: the URL without its trailing slash, the host
+  (user info dropped) with and without its port, and every path or query
+  part of 12 or more characters;
+- for every other credential variable: each 12-character piece of its
+  value.
+
+Each match becomes `<redacted>`, and overlapping matches merge into one.
+
+| Output | Parts replaced | Keyword lines withheld |
+|---|---|---|
+| pane captures, debug-log copies, the pane excerpt in a reason or note | yes | yes |
+| `results.json`, `results-table.txt` and its stdout copy, `run-log.jsonl` argv | yes | no |
+
+A **keyword line** is any line that matches `auth`, `token`, `bearer`,
+`api key` (also `api_key`, `api-key`, `apikey`), `cookie`, `secret` or
+`passw`, in any case. In evidence it is replaced whole by
+`[line withheld: it names a credential]`. `results.json` and the table only
+get the substring replacement, which keeps the JSON valid and keeps
+legitimate notes.
+
+The input-ready check reads pane text with only the exact values replaced,
+so a prompt line is still seen. Scrubbing removes what the driver knows to
+look for. It cannot prove that no other secret Claude shows or logs is
+gone. That is why a live run's command file checks every result file for
+leaks before it prints anything.
+
 **RN-7 table:** per event, `transcript_path` presence and basename,
 `session_id` and the payload's top-level keys. It is a record only and
 blocks nothing.
@@ -369,35 +483,55 @@ ignores args and one that runs them, so a single L0 version is invalid
 each probed version's directory, so each one can be passed on its own. The
 current values come from the agent-director tree the image was built from.
 
+**`-supersede ID`** (repeatable) lets a re-run of one RN-9 scenario replace
+an earlier inconclusive result of it. Add the re-run's directory as another
+`-in`, for example `-in /in/mx-l2b-splitpane -supersede rn9.team-splitpane`.
+
+- Only RN-9 scenario ids are accepted. Any other id is a usage error
+  (exit 2).
+- Without the flag, a scenario found in two inputs is invalid, and the
+  message names `-supersede`.
+- With it, the scenario's results are ordered by their run's `finished_at`
+  and the latest is used. Every earlier result must be `inconclusive`. An
+  earlier `pass` or `fail` is refused ("a measured result is never
+  dropped"), and two runs that finished at the same instant, or without a
+  `finished_at`, "cannot order". Both leave the input invalid.
+- The record gains a `## Superseded` section after its inputs. It names the
+  earlier and later directories, runs, finish times and results, or says
+  "NOT superseded" or "nothing superseded".
+
 **Expect exit 3 from a complete run.** The main README's
 [Prerequisites](../../README.md#prerequisites) state the minimum Claude Code
-version (2.1.285). With complete L0, L1 and L2 inputs, decide exits 3 (STOP
+version (2.1.280). With complete L0, L1 and L2 inputs, decide exits 3 (STOP
 for the user) whenever the measured minimum is below that stated minimum.
-That is the case whenever the deployed 2.1.280 runs exec-form hooks. The
-stated minimum is never lowered without the user.
+L0 measured 2.1.139, so the probe's STOP fires on every complete record.
+The stated minimum is never lowered without the user.
 
 | Exit | Meaning |
 |---|---|
 | 0 | decided: apply the record |
-| 2 | invalid input; nothing in it may be applied. Causes include a dry run, an unfinished run, a missing or failed guard, a missing case or scenario, fewer than 20 usable samples, a case whose counts disagree with its samples, a did-not-exit or non-default budgets under the default budget, an incomplete probe, or an inconclusive scenario |
+| 2 | invalid input; nothing in it may be applied. Causes include a dry run, an unfinished run, a missing or failed guard, a missing case or scenario, an RN-9 scenario in two inputs that `-supersede` does not resolve, fewer than 20 usable samples, a `no ended_at` sample, a case whose counts disagree with its samples, a did-not-exit or non-default budgets under the default budget, an incomplete probe, or an inconclusive scenario |
 | 3 | STOP for the user. Causes include a kill ceiling past its limit, a default that would go lower, a probed minimum below the stated one, or any RN-9 STOP flag or failed scenario |
 
 Invalid input wins over STOP.
 
-**Which samples count.** Each RN-6 and RN-2 case uses its first 20 usable
-samples, in recorded order. Its largest time comes from those 20 only. The
-record shows each case as recorded, used and dropped, with the dropped
-samples counted by outcome, for example `22 recorded (…); used the first 20
-completed, largest 2.5 s; dropped 2 (completed 1, failed 1)`.
+**Which samples count.** Each RN-6 and RN-2 case uses every usable sample,
+in any position, once there are at least 20. Its largest time is the
+largest over all its completed samples, so the buffer past 20 can only add
+evidence, never hide a slower exit. The record shows each case as recorded,
+used and dropped, with the dropped samples counted by outcome, for example
+`22 recorded (…); used all 21 completed, largest 2.5 s; dropped 1 (failed 1)`.
 
 - **Default budget.** A usable sample is a completed one. Fewer than 20
-  completed is invalid. A "did not exit" is invalid in any position, even
-  past the 20th completed sample. It is a real, unbounded time, not a flaky
-  sample, and dropping it would understate the largest time.
+  completed is invalid. A "did not exit" is invalid in any position. It is
+  a real, unbounded time, not a flaky sample, and dropping it would
+  understate the largest time.
 - **Raised budget.** A usable sample is completed or "did not exit", so 20
-  measured samples are needed. A "did not exit" among the 20 is allowed and
-  gets its own record line, reported for the README. One past the 20th is
-  dropped and shown in the dropped counts.
+  measured samples are needed. A "did not exit" is allowed and gets its own
+  record line, reported for the README.
+- **`no ended_at`.** A sample whose row never recorded an end makes its
+  case invalid, under any budget. No time can be taken from it.
+- **Failed samples** (setup failures) are dropped and counted.
 - **Counts check.** decide reads the samples, not the stored counts. A case
   whose stored counts or largest time disagree with its samples is invalid.
 

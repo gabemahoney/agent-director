@@ -143,8 +143,17 @@ type rn9Scenario struct {
 	// Stop lists the STOP flags this scenario raised (decide exits 3 on any).
 	Stop []string `json:"stop,omitempty"`
 	// Notes record what the drive did and saw (session ids read with get,
-	// the permission answers, Claude's own split panes); never content.
+	// the permission answers, Claude's own split panes, the input-ready
+	// wait). They are not free of Claude's content: when a team run is cut
+	// short, the note (and the reason) quotes the last lines of the lead's
+	// pane, passed through scrubEvidence (capture.go).
 	Notes []string `json:"notes,omitempty"`
+	// Artifacts name the scenario's evidence files in the results
+	// directory, beside results.json: an agent team's pane captures (when
+	// it was cut short) and Claude's debug logs (capture.go). Their text
+	// is Claude's whole screen and log content, passed through
+	// scrubEvidence.
+	Artifacts []string `json:"artifacts,omitempty"`
 }
 
 // rn9Section is the RN-9 results.
@@ -192,7 +201,6 @@ type seedRecord struct {
 	Path           string   `json:"path"`
 	Keys           []string `json:"keys"`
 	CredentialMode string   `json:"credential_mode"`
-	APIKeyApproved bool     `json:"api_key_approved"`
 }
 
 // results is a run's whole output. RN9, RN7 and Probe are nil when the run
@@ -223,21 +231,22 @@ func newResults(iso isolation, startedAt time.Time) *results {
 }
 
 // writeJSON writes results.json atomically (a temp file renamed into
-// place), scrubbing credential values from the encoded text.
+// place), scrubbing credential values and their parts (scrubParts) from
+// the encoded text.
 func (r *results) writeJSON(path string, scr scrubber) error {
 	b, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
 		return err
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(scr.scrub(string(b))+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(tmp, []byte(scr.scrubParts(string(b))+"\n"), 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)
 }
 
-// writeTable renders the human-readable table. A dry run's table starts and
-// ends with the banner.
+// writeTable renders the human-readable table, through scrubParts. A dry
+// run's table starts and ends with the banner.
 func (r *results) writeTable(w io.Writer, scr scrubber) error {
 	var b strings.Builder
 	if r.DryRun {
@@ -255,7 +264,7 @@ func (r *results) writeTable(w io.Writer, scr scrubber) error {
 	if r.DryRun {
 		b.WriteString("\n*** " + dryRunBanner + " ***\n")
 	}
-	_, err := io.WriteString(w, scr.scrub(b.String()))
+	_, err := io.WriteString(w, scr.scrubParts(b.String()))
 	return err
 }
 
@@ -350,6 +359,9 @@ func (r *results) writeRN9(b *strings.Builder) {
 	for _, s := range r.RN9.Scenarios {
 		for _, n := range s.Notes {
 			fmt.Fprintf(b, "[%s] note: %s\n", s.ID, n)
+		}
+		for _, a := range s.Artifacts {
+			fmt.Fprintf(b, "[%s] evidence file: %s\n", s.ID, a)
 		}
 		if len(s.Hooks) == 0 {
 			continue

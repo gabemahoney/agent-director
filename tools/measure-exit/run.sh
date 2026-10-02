@@ -44,8 +44,9 @@
 #   --engine NAME             container engine (default docker, as test-image)
 #   --samples N               measure: samples per case (default 22: the
 #                             driver's 20-sample floor plus a buffer of 2;
-#                             decide reads the first 20 usable samples per
-#                             case, so one flaky sample forces no re-run)
+#                             decide reads every completed sample once a
+#                             case has 20, so one flaky sample forces no
+#                             re-run)
 #   --cases LIST              driver case ids, comma-separated, each one of the
 #                             mode's (default: all of the mode's ids, the MCP
 #                             cases included, which read "not run" without
@@ -721,6 +722,14 @@ run_real() {
         cat -- "$results/results-table.txt"
     fi
     printf 'results: %s\n' "$results"
+    if [[ "$mode" == rn9 ]]; then
+        # The agent team scenarios' evidence (the driver's capture.go): pane
+        # captures of a cut-short team run and Claude's debug logs, kept in
+        # the results because the container runs with --rm.
+        for f in "$results"/rn9.*-pane-*.txt "$results"/rn9.*-claude-debug-*; do
+            if [[ -e "$f" ]]; then printf 'evidence: %s\n' "$f"; fi
+        done
+    fi
     if [[ "$mode" == probe ]]; then
         cat -- "$results/deployed-verdict.txt"
         if [[ "$deployed_status" == stop ]]; then
