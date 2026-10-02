@@ -9692,7 +9692,7 @@ each file's doc comments carry the detail.
     refusal classes" heading of this document included.
 
   Each of its test names contains `README`, so `-run README` runs them.
-  Four sibling files check sections on the same parser:
+  Five sibling files check sections on the same parser:
   - `readme_optin_test.go` (SR-6.8, SR-18.15, SR-18.17): `kill`'s
     finished-row opt-in is spelled only in the README's "Operator actions"
     and in no doc under `docs/` or either package README. It holds the
@@ -9741,6 +9741,28 @@ each file's doc comments carry the detail.
     a temp dir holding a fresh store, closed and held open, and checks it
     prints `Store.StoreID`. A missing `sqlite3` fails inside the sandbox
     and skips only outside it.
+  - `readme_timing_values_test.go` (Epic 21): pins documented `[tmux]`
+    timing values to the `internal/config` constants, recomputing each
+    from them, so a changed constant or a changed pinned value fails.
+    `TestReadmeTimingValuesStatements` checks the listed prose statements
+    in `docTimingStatements()` (a `docStatement` names the doc, the
+    section, a pattern whose groups capture the stated values, and the
+    values the constants give): the defaults, safe minimums and the `kill`
+    and `pause` worst cases in the README's
+    [Timing settings](../README.md#timing-settings-tmux) and caller
+    contract and in this document's [Stop semantics](#stop-semantics),
+    caller contract, package inventory and kill fixture entries. Each
+    must match exactly once in its section. Other worst-case statements
+    in this document are not pinned. `TestReadmeTimingValuesExampleBlock`
+    and `TestReadmeTimingValuesTable` check the README's commented
+    `[tmux]` example block and its timing table: one entry per key in
+    `config.TmuxKeys()` order, at its default, with its unit and safe
+    minimum (or "none"). `TestReadmeTimingValuesClaudeCodeMinimum` checks
+    that the README's Claude Code minimum statements (Prerequisites and
+    the `no_exec_form` item, found through `operatorActionsItem`) state
+    one version. Key names come from `config.TmuxKey`, never spelled.
+    Run it with `go test ./pkg/api/ -run TestReadmeTimingValues -count=1`
+    (in the sandbox).
 - **Recovery wording scan** (`pkg/api/recovery_wording_test.go`, Epic 17;
   SR-18.4, SR-18.9, SR-18.16):
   - `TestRecoveryWordingScan` runs `apitest.AssertMustNot` with
@@ -9814,10 +9836,10 @@ a pointer names it, a section's text says something) is built on
 `readMD` / `mdDoc` / `mdAnchor` and the pointer collector, in
 `readme_sections_test.go` or a sibling `readme_*_test.go`
 (`readme_optin_test.go`, `readme_operator_actions_test.go`,
-`readme_operator_actions_more_test.go`, `readme_store_id_test.go`), never a
-second Markdown heading parser or pointer scan. It finds "Operator
-actions" through `operatorActions`, an item inside it through
-`operatorActionsItem` (never `d.titled` and its own range check), and a
+`readme_operator_actions_more_test.go`, `readme_store_id_test.go`,
+`readme_timing_values_test.go`), never a second Markdown heading parser or
+pointer scan. It finds "Operator actions" through `operatorActions`, an
+item inside it through `operatorActionsItem` (never `d.titled` and its own range check), and a
 section's lines through `sectionLines`; a check of the tmux commands or
 numbered steps of a README section goes through `tmuxCommands` and
 `numberedSteps`, never a second extractor, and a check of a numbered
@@ -9833,6 +9855,11 @@ run of the "This store's id" command reads it through
 `storeIDItemCommands`, never its own scan of that item's code blocks; only
 `readme_store_id_test.go` runs it, and only after `runnableStoreIDLine`'s
 `-readonly` check.
+
+**Must use:** a new doc statement of a `[tmux]` default, safe minimum or
+worst case (in the README or this document) gets an entry in
+`docTimingStatements()` in `readme_timing_values_test.go`, never a second
+scan of the docs for timing values.
 
 **Must use:** a later check that reads every Go source or every manifest
 text (a wording scan, a pointer scan) walks them through `walkGoSources`
