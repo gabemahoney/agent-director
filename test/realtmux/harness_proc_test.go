@@ -1,7 +1,9 @@
 package realtmux_test
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -106,6 +108,21 @@ func procEnviron(t testing.TB, pid int) []string {
 func procCmdline(t testing.TB, pid int) []string {
 	t.Helper()
 	return procNulList(t, pid, "cmdline")
+}
+
+// waitExeced waits until pid's argv[0] has base name argv0: until a freshly
+// forked pane process execs, /proc shows the tmux server's argv and environment.
+func waitExeced(t testing.TB, pid int, argv0 string) {
+	t.Helper()
+	waitFor(t, "pid "+strconv.Itoa(pid)+" execs "+argv0,
+		func() bool {
+			argv := procCmdline(t, pid)
+			return len(argv) > 0 && filepath.Base(argv[0]) == argv0
+		},
+		func() string {
+			argv, _ := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline")
+			return fmt.Sprintf("%s, cmdline %q", procState(pid), argv)
+		})
 }
 
 // procNulList reads a NUL-separated /proc/<pid>/<file>.

@@ -44,17 +44,18 @@ const defaultSamples = minSamples + sampleBuffer
 
 // minClaudeCodeVersion is the stated minimum Claude Code: the oldest that
 // agent-director supports with exec-form hooks (command + args), as the
-// README's Prerequisites state it. Gabe (2026-10-02) set it to 2.1.280, the
-// version this fleet's workers run, which L0 showed runs exec-form hooks.
-// decide compares the probe's measured minimum against it.
+// README's Prerequisites state it. The project owner set it to 2.1.280, the
+// deployed version, which L0 showed runs exec-form hooks. decide compares
+// the probe's measured minimum against it.
 const minClaudeCodeVersion = "2.1.280"
 
 // realModeMinClaudeCode is the oldest Claude Code real mode accepts: the
-// version this fleet's workers run (user, 2026-10-01), which L1 and L2
-// measure by default. The L0 probe tests it explicitly. Below it, hooks are
-// expected to write no_exec_form and no row would report in, so real mode
-// refuses it. It equals the stated minimum (minClaudeCodeVersion) but is
-// its own constant: the floor is the measured fleet's version, the minimum
+// deployed version, which L1 and L2 measure by default. The L0 probe tests
+// it explicitly. A Claude Code that does not run exec-form hooks writes
+// no_exec_form, and no row would report in. L0 found that 2.1.139 already
+// runs them; 2.1.280 is the supported minimum, so real mode refuses an
+// older one. It equals the stated minimum (minClaudeCodeVersion) but is its
+// own constant: the floor is the measured deployed version, the minimum
 // what the README states.
 const realModeMinClaudeCode = "2.1.280"
 

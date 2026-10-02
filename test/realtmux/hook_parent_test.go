@@ -178,6 +178,7 @@ func TestHookAppliesOnlyFromThePaneProcess(t *testing.T) {
 				t.Fatalf("after spawn: pane_pid %v (tmux says %d), state %v; want the pane recorded on a pending row",
 					s.Row.PanePID, panePID, s.Row.State)
 			}
+			waitExeced(t, panePID, "bash")
 			if argv := procCmdline(t, panePID); len(argv) < 2 || filepath.Base(argv[0]) != "bash" || argv[1] != stub {
 				t.Fatalf("pane %d runs %q, want the stand-in claude under bash", panePID, argv)
 			}
@@ -190,15 +191,10 @@ func TestHookAppliesOnlyFromThePaneProcess(t *testing.T) {
 					t.Fatalf("split-window reply %q is not a pane pid", out)
 				}
 				s.rt.trackPane(second)
-				// split-window -P replies once tmux has forked the pane; until
-				// the child execs, /proc/<pid>/environ still shows the tmux
-				// server's environment. Wait for the exec before reading it.
-				waitFor(t, "the second pane execs the stand-in",
-					func() bool {
-						argv := procCmdline(t, second)
-						return len(argv) >= 2 && filepath.Base(argv[0]) == "bash" && argv[1] == stub
-					},
-					func() string { return fmt.Sprintf("%s, argv %q", procState(second), procCmdline(t, second)) })
+				waitExeced(t, second, "bash")
+				if argv := procCmdline(t, second); len(argv) < 2 || argv[1] != stub {
+					t.Fatalf("second pane %d runs %q, want the stand-in claude under bash", second, argv)
+				}
 				if v, _ := envValue(procEnviron(t, second), "AGENT_DIRECTOR_INSTANCE_ID"); v != s.ID {
 					t.Fatalf("second pane AGENT_DIRECTOR_INSTANCE_ID = %q, want the row's id %q", v, s.ID)
 				}

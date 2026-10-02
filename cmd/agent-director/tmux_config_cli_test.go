@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,26 +26,20 @@ const surfaceDeadline = 10 * time.Second
 const mcpInitialize = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05",` +
 	`"capabilities":{},"clientInfo":{"name":"tmux-config-test","version":"0"}}}` + "\n"
 
-// tmuxRefusal is one refused [tmux] config: the settings written, the phrases
-// its err_description must contain (nil: malformed type, only err_name and
-// path are asserted) and the settings that fix the file.
+// tmuxRefusal is one refused [tmux] config: the settings written, the values
+// its err_description must state as refused (nil: malformed type, only
+// err_name and path are asserted) and the settings that fix the file.
 type tmuxRefusal struct {
 	name    string
 	bad     []apitest.TmuxSetting
-	phrases []string
+	refused []apitest.ConfigRefusal
 	fix     []apitest.TmuxSetting
 }
 
 // tmuxRefusals is the one table of refused values driving every surface check.
 func tmuxRefusals() []tmuxRefusal {
 	window, bound, grace := config.TmuxStoppingWindowSeconds, config.TmuxStartingSessionSeconds, config.TmuxPendingGraceSeconds
-	create, pipe, kill := config.TmuxCreateTimeoutMs, config.TmuxPipeCloseWaitMs, config.TmuxKillExitWaitMs
-	key := func(k config.TmuxKey) string { return "[tmux] " + k.Name() }
-	below := func(k config.TmuxKey, minimum int64) string {
-		return fmt.Sprintf("below its safe minimum %d %s", minimum, k.Unit())
-	}
-	effective := func(k config.TmuxKey, v int64) string { return fmt.Sprintf("%s %d", k.Name(), v) }
-	const tail = "A missing key, or 0, gives the default."
+	create, kill := config.TmuxCreateTimeoutMs, config.TmuxKillExitWaitMs
 
 	// A raised create timeout lifts the grace minimum above the grace floor.
 	const raisedCreate = 15000
@@ -59,18 +52,19 @@ func tmuxRefusals() []tmuxRefusal {
 		{
 			name:    "stopping_window_below_minimum",
 			bad:     []apitest.TmuxSetting{apitest.TmuxInt(window, 10)},
-			phrases: []string{key(window) + " = 10", below(window, config.MinStoppingWindowSeconds), tail},
+			refused: []apitest.ConfigRefusal{{Key: window, Value: 10, Minimum: config.MinStoppingWindowSeconds}},
 			fix:     []apitest.TmuxSetting{apitest.TmuxInt(window, 0)},
 		},
 		{
-			name:    "starting_session_bound_below_minimum",
-			bad:     []apitest.TmuxSetting{apitest.TmuxInt(bound, config.MinStartingSessionSeconds-1)},
-			phrases: []string{fmt.Sprintf("%s = %d", key(bound), config.MinStartingSessionSeconds-1), below(bound, config.MinStartingSessionSeconds), tail},
+			name: "starting_session_bound_below_minimum",
+			bad:  []apitest.TmuxSetting{apitest.TmuxInt(bound, config.MinStartingSessionSeconds-1)},
+			refused: []apitest.ConfigRefusal{{Key: bound, Value: config.MinStartingSessionSeconds - 1,
+				Minimum: config.MinStartingSessionSeconds}},
 		},
 		{
 			name:    "negative_without_minimum",
 			bad:     []apitest.TmuxSetting{apitest.TmuxInt(kill, -1)},
-			phrases: []string{key(kill) + " = -1, which must be positive", tail},
+			refused: []apitest.ConfigRefusal{{Key: kill, Value: -1}},
 			fix:     []apitest.TmuxSetting{apitest.TmuxInt(kill, 0)},
 		},
 		{
@@ -78,19 +72,14 @@ func tmuxRefusals() []tmuxRefusal {
 			bad: []apitest.TmuxSetting{
 				apitest.TmuxInt(create, raisedCreate), apitest.TmuxInt(grace, config.PendingGraceFloorSeconds),
 			},
-			phrases: []string{
-				fmt.Sprintf("%s = %d", key(grace), config.PendingGraceFloorSeconds), below(grace, raisedGraceMin),
-				effective(create, raisedCreate), effective(pipe, config.DefaultPipeCloseWaitMs), tail,
-			},
+			refused: []apitest.ConfigRefusal{{Key: grace, Value: config.PendingGraceFloorSeconds, Minimum: raisedGraceMin,
+				Derived: true, Create: raisedCreate, Pipe: config.DefaultPipeCloseWaitMs}},
 		},
 		{
 			name: "grace_default_below_derived_minimum",
 			bad:  []apitest.TmuxSetting{apitest.TmuxInt(create, defaultBreakingCreate)},
-			phrases: []string{
-				key(grace) + " is missing or 0", fmt.Sprintf("its default, %d,", config.DefaultPendingGraceSeconds),
-				below(grace, defaultGraceMin), effective(create, defaultBreakingCreate),
-				effective(pipe, config.DefaultPipeCloseWaitMs), tail,
-			},
+			refused: []apitest.ConfigRefusal{{Key: grace, Minimum: defaultGraceMin,
+				Derived: true, Create: defaultBreakingCreate, Pipe: config.DefaultPipeCloseWaitMs}},
 			fix: []apitest.TmuxSetting{apitest.TmuxInt(create, 0)},
 		},
 		{
@@ -134,7 +123,7 @@ func (h refusedHome) repair(t *testing.T, rc tmuxRefusal) {
 }
 
 // assertConfigRefused checks a non-zero exit, empty stdout and a single
-// ErrConfigMalformed envelope naming the config path and the row's phrases.
+// ErrConfigMalformed envelope naming the config path and the row's refused values.
 func assertConfigRefused(t *testing.T, rc tmuxRefusal, h refusedHome, stdout, stderr string, code int) {
 	t.Helper()
 	if code == 0 {
@@ -147,11 +136,7 @@ func assertConfigRefused(t *testing.T, rc tmuxRefusal, h refusedHome, stdout, st
 	if env.ErrName != "ErrConfigMalformed" {
 		t.Errorf("err_name=%q want ErrConfigMalformed", env.ErrName)
 	}
-	for _, want := range append([]string{h.cfgPath}, rc.phrases...) {
-		if !strings.Contains(env.ErrDescription, want) {
-			t.Errorf("err_description missing %q\ngot: %s", want, env.ErrDescription)
-		}
-	}
+	apitest.AssertDescription(t, env.ErrDescription, apitest.DescConfigRefused(h.cfgPath, rc.refused...))
 }
 
 // runBounded runs the binary in home with env, writing stdin and closing it

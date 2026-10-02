@@ -27,13 +27,12 @@ const (
 	timingSettingsTitle   = "Timing settings (`[tmux]`)"
 	stopSemanticsTitle    = "Stop semantics"
 	packageInventoryTitle = "Package inventory"
-	killFixtureTitle      = "pkg/api kill fixture and shared verb tables (reusable test fixtures)"
 	prerequisitesTitle    = "Prerequisites"
 	noExecFormItemTitle   = "A row stays `pending` and the trail shows `no_exec_form`"
 )
 
-// docNum is one stated number in a statement pattern: whole or decimal.
-const docNum = `([0-9]+(?:\.[0-9]+)?)`
+// docNumRe is one stated number: whole or decimal, not part of a word ("2Q").
+var docNumRe = regexp.MustCompile(`\b[0-9]+(?:\.[0-9]+)?\b`)
 
 // leadingNumRe takes the leading number of a table cell, bold or not, so
 // trailing text such as "(provisional)" or "or more" does not matter.
@@ -49,8 +48,8 @@ func docSeconds(d time.Duration) string { return strconv.FormatFloat(d.Seconds()
 // itoa formats a whole value as the docs state it.
 func itoa(v int64) string { return strconv.FormatInt(v, 10) }
 
-// keyCode is key k's name as a quoted regexp of its code span.
-func keyCode(k config.TmuxKey) string { return regexp.QuoteMeta("`" + k.Name() + "`") }
+// keyCode is key k's name as its code span.
+func keyCode(k config.TmuxKey) string { return "`" + k.Name() + "`" }
 
 // killPaths returns SR-13.2's two kill paths at the defaults, recomputed from
 // the constants: path (i) 2Q + 2A + E + 4W, path (ii) 3Q + 2A + 5W (which is
@@ -78,16 +77,38 @@ func normalisedSection(t *testing.T, d mdDoc, title string) string {
 	return normalised(d.body(hs[0]))
 }
 
-// docStatement is one stated value or set of values in a doc. Each group of
-// pattern captures one value; want gives the value each group must state,
-// from the constants (and, for a worked example, from the example's own
-// input in got).
+// docStatement is one stated value or set of values in a doc. Value i is the
+// first number after anchors[i] (a key's code span, a formula or a short
+// term), searched from the end of value i-1; an empty anchor takes the next
+// number. want gives the value each must state, from the constants (and, for
+// a worked example, from the example's own input in got).
 type docStatement struct {
 	name    string
 	path    string
 	section string
-	pattern string
+	anchors []string
 	want    func(got []string) []string
+}
+
+// statedNumbers returns, for each anchor in turn, the first number after it
+// in text, searching from the end of the previous number.
+func statedNumbers(text string, anchors []string) ([]string, error) {
+	var got []string
+	pos := 0
+	for _, a := range anchors {
+		i := strings.Index(text[pos:], a)
+		if i < 0 {
+			return got, fmt.Errorf("no %q after the values %q", a, got)
+		}
+		pos += i + len(a)
+		loc := docNumRe.FindStringIndex(text[pos:])
+		if loc == nil {
+			return got, fmt.Errorf("no number after %q", a)
+		}
+		got = append(got, text[pos+loc[0]:pos+loc[1]])
+		pos += loc[1]
+	}
+	return got, nil
 }
 
 // docTimingStatements lists the pinned prose statements of the timing
@@ -95,19 +116,19 @@ type docStatement struct {
 // architecture doc.
 func docTimingStatements() []docStatement {
 	start, window := config.TmuxStartingSessionSeconds, config.TmuxStoppingWindowSeconds
-	grace, budget := config.TmuxPendingGraceSeconds, config.TmuxSweepBudgetSeconds
+	grace := config.TmuxPendingGraceSeconds
 	create, pipe, exitWait := config.TmuxCreateTimeoutMs, config.TmuxPipeCloseWaitMs, config.TmuxKillExitWaitMs
 	fixed := func(vals ...string) func([]string) []string { return func([]string) []string { return vals } }
 	p1, p2 := killPaths()
 	return []docStatement{
 		{
 			name: "architecture Stop semantics: kill exit wait default", path: mdArchitecture, section: stopSemanticsTitle,
-			pattern: `\(` + keyCode(exitWait) + `, ` + docNum + ` s by default\)`,
+			anchors: []string{keyCode(exitWait)},
 			want:    fixed(docSeconds(tmuxDefault(exitWait))),
 		},
 		{
 			name: "architecture Stop semantics: kill ceiling, path (i) the larger, and path (ii)", path: mdArchitecture, section: stopSemanticsTitle,
-			pattern: `max\(2Q \+ 2A \+ E \+ 4W, 3Q \+ 2A \+ 5W\): \*\*` + docNum + ` s\*\* at the defaults on path \(i\) .*?, and ` + docNum + ` s on path \(ii\)`,
+			anchors: []string{"max(2Q + 2A + E + 4W, 3Q + 2A + 5W)", ""},
 			want: func([]string) []string {
 				if p1 < p2 {
 					return []string{"(none: path (ii), " + docSeconds(p2) + " s, is now the larger)", docSeconds(p2)}
@@ -117,63 +138,54 @@ func docTimingStatements() []docStatement {
 		},
 		{
 			name: "architecture Stop semantics: kill's time on tmux alone", path: mdArchitecture, section: stopSemanticsTitle,
-			pattern: `Its time waiting on tmux alone is at most 3Q \+ 2A \+ 5W \(` + docNum + ` s\)`,
+			anchors: []string{"at most 3Q + 2A + 5W"},
 			want:    fixed(docSeconds(p2)),
 		},
 		{
 			name: "architecture Stop semantics: pause's tmux phase", path: mdArchitecture, section: stopSemanticsTitle,
-			pattern: `3Q \+ 2A \+ 5W, \*\*` + docNum + ` s\*\* at the defaults`,
+			anchors: []string{"3Q + 2A + 5W,"},
 			want:    fixed(docSeconds(p2)),
 		},
 		{
 			name: "architecture Stop semantics: pause wait default", path: mdArchitecture, section: stopSemanticsTitle,
-			pattern: "`pause\\.timeout_seconds`, default " + docNum + ` s`,
+			anchors: []string{"`pause.timeout_seconds`, default"},
 			want:    fixed(strconv.Itoa(config.Default().Pause.TimeoutSeconds)),
 		},
 		{
 			name: "architecture caller contract: stopping window and starting-session bound", path: mdArchitecture, section: callerContractClassesTitle,
-			pattern: `The stopping window is ` + docNum + ` s by default \(` + keyCode(window) + `, safe minimum ` + docNum +
-				` s\) and the starting-session bound ` + docNum + ` s by default \(` + keyCode(start) + `, safe minimum ` + docNum + ` s\)`,
+			anchors: []string{"stopping window is", keyCode(window), "bound", keyCode(start)},
 			want: fixed(itoa(config.DefaultStoppingWindowSeconds), itoa(config.MinStoppingWindowSeconds),
 				itoa(config.DefaultStartingSessionSeconds), itoa(config.MinStartingSessionSeconds)),
 		},
 		{
 			name: "architecture caller contract: pending grace period default", path: mdArchitecture, section: callerContractClassesTitle,
-			pattern: `The pending grace period is ` + docNum + ` s by default and configurable \(` + keyCode(grace) + `\)`,
+			anchors: []string{"grace period is"},
 			want:    fixed(itoa(config.DefaultPendingGraceSeconds)),
 		},
 		{
 			name: "architecture caller contract: sweep budget default", path: mdArchitecture, section: callerContractClassesTitle,
-			pattern: `per-run tmux time budget is ` + docNum + ` s by default and configurable \(` + keyCode(budget) + `\)`,
+			anchors: []string{"time budget is"},
 			want:    fixed(itoa(config.DefaultSweepBudgetSeconds)),
 		},
 		{
 			name: "architecture package inventory: safe minimums", path: mdArchitecture, section: packageInventoryTitle,
-			pattern: `Safe minimums: bound ` + docNum + ` s, stopping window ` + docNum + ` s, grace period ` + docNum +
-				` s or ⌈\(create timeout \+ pipe-close wait\) / 1000⌉ \+ ` + docNum + ` s when larger`,
+			anchors: []string{"Safe minimums: bound", "stopping window", "grace period", "⌉ +"},
 			want: fixed(itoa(config.MinStartingSessionSeconds), itoa(config.MinStoppingWindowSeconds),
 				itoa(config.PendingGraceFloorSeconds), itoa(config.PendingGraceMarginSeconds)),
 		},
 		{
-			name: "architecture kill fixture: starting-session bound and stopping window defaults", path: mdArchitecture, section: killFixtureTitle,
-			pattern: "`defBound` / `defWindow`: the configured defaults \\(" + docNum + ` s, ` + docNum + ` s\)`,
-			want:    fixed(itoa(config.DefaultStartingSessionSeconds), itoa(config.DefaultStoppingWindowSeconds)),
-		},
-		{
 			name: "README caller contract: pending grace period default", path: mdTopREADME, section: callerContractTitle,
-			pattern: `pending grace period \(` + docNum + ` s unless the operator configured another value\)`,
+			anchors: []string{"pending grace period ("},
 			want:    fixed(itoa(config.DefaultPendingGraceSeconds)),
 		},
 		{
 			name: "README timing settings: grace period minimum rule", path: mdTopREADME, section: timingSettingsTitle,
-			pattern: `its minimum: ` + docNum + ` s, or ` + keyCode(create) + ` \+ ` + keyCode(pipe) + ` \+ ` + docNum +
-				` s \(rounded up to whole seconds\) when that is larger`,
-			want: fixed(itoa(config.PendingGraceFloorSeconds), itoa(config.PendingGraceMarginSeconds)),
+			anchors: []string{"its minimum:", keyCode(pipe)},
+			want:    fixed(itoa(config.PendingGraceFloorSeconds), itoa(config.PendingGraceMarginSeconds)),
 		},
 		{
 			name: "README timing settings: grace period worked example", path: mdTopREADME, section: timingSettingsTitle,
-			pattern: "`" + regexp.QuoteMeta(create.Name()) + ` = ` + docNum + "` raises the minimum to " + docNum +
-				`, so the default ` + docNum + ` is refused until ` + keyCode(grace) + ` is set to ` + docNum + ` or more`,
+			anchors: []string{"`" + create.Name() + " =", "minimum to", "default", keyCode(grace)},
 			want: func(got []string) []string {
 				in, _ := strconv.ParseInt(got[0], 10, 64)
 				m := config.PendingGraceMinimumSeconds(in, 0)
@@ -187,9 +199,9 @@ func docTimingStatements() []docStatement {
 	}
 }
 
-// TestReadmeTimingValuesStatements: each listed prose statement of a timing
-// default, minimum or worst case appears exactly once in its section and
-// states the value recomputed from the internal/config constants.
+// TestReadmeTimingValuesStatements: each listed statement of a timing
+// default, minimum or worst case states, after its anchors, the value
+// recomputed from the internal/config constants.
 func TestReadmeTimingValuesStatements(t *testing.T) {
 	docs := map[string]mdDoc{}
 	for _, s := range docTimingStatements() {
@@ -199,17 +211,15 @@ func TestReadmeTimingValuesStatements(t *testing.T) {
 				d = readMD(t, s.path)
 				docs[s.path] = d
 			}
-			text := normalisedSection(t, d, s.section)
-			ms := regexp.MustCompile(s.pattern).FindAllStringSubmatch(text, -1)
-			if len(ms) != 1 {
-				t.Fatalf("%s section %q: %d statements match %q; want 1", s.path, s.section, len(ms), s.pattern)
+			got, err := statedNumbers(normalisedSection(t, d, s.section), s.anchors)
+			if err != nil {
+				t.Fatalf("%s section %q: %v", s.path, s.section, err)
 			}
-			got := ms[0][1:]
 			want := s.want(got)
 			for i := range want {
 				if got[i] != want[i] {
-					t.Errorf("%s section %q, value %d of %q: the doc states %s; the constants give %s",
-						s.path, s.section, i+1, ms[0][0], got[i], want[i])
+					t.Errorf("%s section %q, the number after %q: the doc states %s; the constants give %s",
+						s.path, s.section, s.anchors[i], got[i], want[i])
 				}
 			}
 		})
@@ -327,7 +337,7 @@ var claudeMinimumStatements = []struct {
 	pattern string
 }{
 	{prerequisitesTitle, false, "`claude` \\(Claude Code\\) " + claudeVersionRe + ` or later`},
-	{noExecFormItemTitle, true, `runs a Claude Code older than ` + claudeVersionRe + `, so none of its hooks apply`},
+	{noExecFormItemTitle, true, `the supported minimum is ` + claudeVersionRe},
 	{noExecFormItemTitle, true, "Upgrade `claude` on PATH to " + claudeVersionRe + ` or later`},
 }
 

@@ -293,8 +293,8 @@ func TestKillCeilingAt(t *testing.T) {
 	}
 }
 
-// TestDecideStatedMinimum pins the stated Claude Code minimum (Gabe,
-// 2026-10-02: 2.1.280); L0's measured 2.1.139 below it stays a STOP.
+// TestDecideStatedMinimum pins the stated Claude Code minimum (2.1.280, the
+// deployed version); L0's measured 2.1.139 below it stays a STOP.
 func TestDecideStatedMinimum(t *testing.T) {
 	ins := standard()
 	ins[0] = l0("2.1.138:args_not_received", "2.1.139:args_received", "2.1.280:args_received")

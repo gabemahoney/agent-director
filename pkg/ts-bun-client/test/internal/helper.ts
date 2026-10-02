@@ -84,3 +84,55 @@ export function privateTmuxSocket(dir: string): string {
   fs.mkdirSync(sockDir, { recursive: true, mode: 0o700 });
   return path.join(sockDir, "default");
 }
+
+/** The argv (argv[0] included) of each fake-tmux invocation in a FAKE_TMUX_LOG file; [] when nothing was logged. */
+export function fakeTmuxCalls(logPath: string): string[][] {
+  if (!fs.existsSync(logPath)) return [];
+  return fs
+    .readFileSync(logPath, "utf8")
+    .split("---\n")
+    .filter((rec) => rec !== "")
+    .map((rec) => rec.split("\n").slice(0, -1));
+}
+
+/**
+ * Runs fn with each process.env variable set (undefined unsets it) and puts
+ * the prior values back afterwards; a Client's CLI inherits process.env per call.
+ */
+export async function withProcessEnv<T>(
+  vars: Record<string, string | undefined>,
+  fn: () => T | Promise<T>
+): Promise<T> {
+  const prior: Record<string, string | undefined> = {};
+  for (const [k, v] of Object.entries(vars)) {
+    prior[k] = process.env[k];
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+  try {
+    return await fn();
+  } finally {
+    for (const [k, v] of Object.entries(prior)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+}
+
+/** A temp HOME's .claude.json as planted before a launch: no trust entry for any folder. */
+export const CLAUDE_JSON = '{"projects": {}}\n';
+
+/** projects[cwd].hasTrustDialogAccepted in claudeJsonPath (undefined when absent). */
+export function trustEntry(claudeJsonPath: string, cwd: string): unknown {
+  return JSON.parse(fs.readFileSync(claudeJsonPath, "utf8")).projects?.[cwd]?.hasTrustDialogAccepted;
+}
+
+/**
+ * Seeds the outer agent's row (when the tests run inside an agent, whose
+ * AGENT_DIRECTOR_INSTANCE_ID a launch records as parent_id) so the FK holds.
+ */
+export function seedOuterParent(storePath: string): void {
+  const outer = process.env.AGENT_DIRECTOR_INSTANCE_ID;
+  if (!outer) return;
+  runHelper("seed-spawn", { store: storePath, id: outer, state: "working", "create-store": true });
+}

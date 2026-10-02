@@ -26,20 +26,20 @@ There are three runs, each a separate `make measure-exit` call:
 **L1 and L2 spend money.** They start real, paid Claude Code agents. L0 makes
 no API call.
 
-- **Approval.** No live run starts without explicit approval. Gabe approves
-  the spend. First send a plan that names:
+- **Approval.** No live run starts without explicit approval. The project
+  owner approves the spend. First send a plan that names:
   - the billing: the InferenceHub gateway only;
   - the session count, from the print-only output;
   - the estimated cost. Opus-class list prices come to roughly $10 each for
     L1 and L2. Gateway billing may differ.
   - the location: a Docker container on a named host.
-- **Who launches.** L0, L1 and L2 are launched by the user from their own
-  shell, or by the orchestrator with explicit approval. Gabe approves the
-  spend. The orchestrator then sets `MX_ORCHESTRATOR_LAUNCH=1` and runs the
-  launch from its own shell, which holds the real InferenceHub values.
-  Workers never launch them, and never run `make measure-image` or
-  `make measure-exit`. Both targets chain through `make test-image` to the
-  host `make build`, a Go build on the host.
+- **Who launches.** The operator launches L0, L1 and L2 from their own
+  shell, which holds the real InferenceHub values, once the spend is
+  approved. A launch from inside a Claude Code session needs
+  `MX_ORCHESTRATOR_LAUNCH=1` (see [Live runs](#live-runs)). Nobody else
+  runs `make measure-image` or `make measure-exit`: both targets chain
+  through `make test-image` to the host `make build`, a Go build on the
+  host.
 - **Docker only.** Agents run only inside a throwaway container with its own
   HOME, its own store and a private tmux server: a private `TMUX_TMPDIR`,
   with `TMUX` unset. Nothing touches the host's `~/.agent-director`,
@@ -74,7 +74,18 @@ even empty: `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`,
 or `AWS_DEFAULT_REGION`. The refusal names the variable, never its value.
 These variables are also dropped from every child's environment.
 
-Credentials never come from the Enterprise seat or from `~/.claude`. The
+The same rule covers the settings and MCP layer files the agents load. The
+driver's preflight reads the managed layer
+(`/etc/claude-code/managed-settings.json`), the user layer
+(`$HOME/.claude/settings.json`) and any project, local or MCP layer it is
+given, and refuses real mode with `real-gateway-only` when an `env` object
+in one of them breaks the layer env rule below (see
+[Settings layers and MCP servers](#settings-layers-and-mcp-servers)). A
+missing file is skipped; one that cannot be read or is not JSON is refused.
+The refusal names the layer, its path and the key, never a value. Dry and
+probe mode do not run this check.
+
+Credentials never come from a Claude account login or from `~/.claude`. The
 runner never forwards `ANTHROPIC_API_KEY`, `TMUX`, `CLAUDE_CONFIG_DIR`,
 `CLAUDECODE` or any other host Claude Code session variable. L0 forwards
 nothing: its container has no network and gets a dummy token literal that is
@@ -82,8 +93,8 @@ not a secret.
 
 ## Claude Code version
 
-L1 and L2 measure Claude Code **2.1.280** by default, the version deployed on
-this fleet. `MEASURE_CLAUDE_CODE_VERSION` sets the version. It becomes the
+L1 and L2 measure Claude Code **2.1.280** by default, the deployed version.
+`MEASURE_CLAUDE_CODE_VERSION` sets the version. It becomes the
 Dockerfile's `CLAUDE_CODE_VERSION` build argument and the image tag
 `agent-director-measure:cc-<version>`. Match it to the deployment. The
 driver's real mode refuses anything older than 2.1.280.
@@ -95,7 +106,7 @@ verdict for the deployed version is the `deployed` line of
 
 - `deployed 2.1.280: RUNS exec-form hooks`: L1 and L2 may run at 2.1.280.
 - `deployed 2.1.280: does NOT run exec-form hooks`: **STOP and tell the user
-  at once.** agent-director's hooks are ignored on this fleet, and L1 and L2
+  at once.** agent-director's hooks are ignored at the deployed version, and L1 and L2
   must not run at that version. L0 ends right after the guard verify, with
   no bisection and no further build. `probe-summary.txt` gets
   `bisect skipped: the deployed 2.1.280 does NOT run exec-form hooks (STOP)`,
@@ -124,9 +135,10 @@ image records `native` or `not native: <why>` in
 why. The probe's per-version builds pass `0`, because older versions ship
 JS and the probe reads only hook `args`.
 
-A Claude Code too old for exec-form hooks writes `no_exec_form` to the trail,
-and its agents never report in. The fix is to upgrade Claude Code. The main
-README's [Prerequisites](../../README.md#prerequisites) state the minimum.
+A Claude Code that does not run exec-form hooks writes `no_exec_form` to the
+trail, and its agents never report in. The fix is to upgrade Claude Code. The
+main README's [Prerequisites](../../README.md#prerequisites) state the
+supported minimum.
 
 ## Host guard
 
@@ -173,7 +185,19 @@ make measure-exit-print MEASURE_MODE=measure MEASURE_ARGS="--user-settings /path
   - any key anywhere in it looks like a credential (`KEY`, `TOKEN`,
     `SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`, `OAUTH`, `AUTHORIZATION`,
     `COOKIE`). That covers `env` blocks, MCP server `env` and `headers`, and
-    helpers such as `apiKeyHelper`.
+    helpers such as `apiKeyHelper`;
+  - an `env` object at any depth (the settings `env`, an MCP server's
+    `env`) breaks the **layer env rule**: it sets, in any case,
+    `ANTHROPIC_BASE_URL`, `ANTHROPIC_CUSTOM_HEADERS`, any `CLAUDE_CODE_USE_*`
+    name or any name real mode refuses in the environment (see
+    [Credentials](#credentials)), or it sets any name to a value that
+    looks like a URL or an authorization header (`://`, `Bearer `,
+    `Authorization:`). Any of these would take the agents off the gateway.
+    The value test runs inside `jq`, so values never reach the shell.
+    `run.sh`'s `LAYER_REFUSED_ENV` list and the driver's `layerenv.go`
+    hold the same names and must stay in step with `realModeRefusedEnv`;
+    the driver repeats this check in its preflight (above), so a container
+    started by hand is covered too.
 - The driver reports every hook program missing from the container.
 - `--local-settings` is refused in real mode when a selected case needs the
   harness's generated layer.
@@ -270,7 +294,7 @@ same time. L1 and L2 run only when L0's `deployed-verdict.txt` reads exactly
 `deployed 2.1.280: RUNS exec-form hooks (args_received)`.
 
 **The launch gates are not in this repo.** They live in each run's operator
-command file, the reviewed launch script the user or the orchestrator runs.
+command file, the reviewed launch script the operator runs.
 `run.sh` and `make measure-exit` do not enforce them. Each command file:
 
 - refuses unless L0's verdict file reads exactly that line, and, for a later
@@ -279,8 +303,8 @@ command file, the reviewed launch script the user or the orchestrator runs.
   refuses while another run holds it;
 - refuses when its results directory already exists, so a stale verdict is
   never re-read;
-- refuses inside a Claude Code session unless the orchestrator sets
-  `MX_ORCHESTRATOR_LAUNCH=1`.
+- refuses inside a Claude Code session unless the operator sets
+  `MX_ORCHESTRATOR_LAUNCH=1` for an approved launch.
 
 A launch that skips the command file skips these gates too.
 

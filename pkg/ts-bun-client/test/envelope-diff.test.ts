@@ -26,7 +26,15 @@ import * as fs from "fs";
 import * as os from "os";
 
 import { Client, AgentDirectorError } from "../src/index.js";
-import { runHelper, privateTmuxSocket } from "./internal/helper.js";
+import {
+  runHelper,
+  privateTmuxSocket,
+  fakeTmuxCalls,
+  withProcessEnv,
+  CLAUDE_JSON,
+  trustEntry,
+  seedOuterParent,
+} from "./internal/helper.js";
 import { runCli } from "./internal/cliRunner.js";
 import { assertEnvelopesEqual } from "./internal/structuralDiff.js";
 import { loadIgnorePathsForVerb } from "./internal/loadIgnorePaths.js";
@@ -46,11 +54,6 @@ const FAKE_TMUX_DIR =
   process.env.FAKE_TMUX_DIR ??
   path.resolve(import.meta.dir, "../../../test/fake-tmux");
 const FAKE_TMUX_BIN = path.join(FAKE_TMUX_DIR, "tmux");
-
-// If tests run inside a Claude session, AGENT_DIRECTOR_INSTANCE_ID is set
-// as the outer parent.  Spawn and resume need a parent row in the store or
-// the FK constraint fires.
-const OUTER_INSTANCE_ID = process.env.AGENT_DIRECTOR_INSTANCE_ID;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -131,9 +134,6 @@ function slugifyCwd(cwd: string): string {
   return cwd.replace(/[^A-Za-z0-9-]/g, "-");
 }
 
-/** A .claude.json lacking any trust entry, planted identically in both homes. */
-const CLAUDE_JSON = '{"projects": {}}\n';
-
 /** plantClaudeJson writes CLAUDE_JSON into each temp home so both sides pre-trust alike. */
 function plantClaudeJson(...homes: string[]): void {
   for (const home of homes) fs.writeFileSync(path.join(home, ".claude.json"), CLAUDE_JSON);
@@ -147,8 +147,7 @@ function assertPreTrustOk(cli: unknown, ts: unknown, cwd: string, ...homes: stri
   expect((cli as { pre_trust?: unknown }).pre_trust).toBe("ok");
   expect((ts as { pre_trust?: unknown }).pre_trust).toBe("ok");
   for (const home of homes) {
-    const cfg = JSON.parse(fs.readFileSync(path.join(home, ".claude.json"), "utf8"));
-    expect(cfg.projects?.[cwd]?.hasTrustDialogAccepted).toBe(true);
+    expect(trustEntry(path.join(home, ".claude.json"), cwd)).toBe(true);
   }
 }
 
@@ -198,16 +197,6 @@ function assertErrorEnvelopes(cliStderr: string, tsErr: unknown): void {
   );
 }
 
-/** The argv of each fake-tmux invocation logged to logPath ([] when nothing was logged). */
-function fakeTmuxCalls(logPath: string): string[][] {
-  if (!fs.existsSync(logPath)) return [];
-  return fs
-    .readFileSync(logPath, "utf8")
-    .split("---\n")
-    .filter((rec) => rec !== "")
-    .map((rec) => rec.split("\n").slice(0, -1));
-}
-
 // ── per-verb tests ────────────────────────────────────────────────────────────
 
 // ── spawn ─────────────────────────────────────────────────────────────────────
@@ -218,14 +207,7 @@ describe("spawn", () => {
     async () => {
       const { homeA, homeB, storeB, cleanup } = prepareStores((store) => {
         runHelper("seed-empty-store", { store });
-        // If running inside a Claude session, seed the parent row so FK passes.
-        if (OUTER_INSTANCE_ID) {
-          runHelper("seed-spawn", {
-            store,
-            id: OUTER_INSTANCE_ID,
-            state: "working",
-          });
-        }
+        seedOuterParent(store);
       });
       plantClaudeJson(homeA, homeB);
       try {
@@ -438,8 +420,6 @@ describe("send-keys", () => {
       expect(paneIds[0]).toBe(paneIds[1]);
       const paneId = paneIds[0];
 
-      const priorLog = process.env.FAKE_TMUX_LOG;
-      const priorTables = process.env.FAKE_TMUX_TABLES;
       try {
         const cli = runCli(
           ["send-keys", "--claude-instance-id", id, "--text", "hello"],
@@ -448,15 +428,15 @@ describe("send-keys", () => {
         expect(cli.exitCode).toBe(0);
 
         // The Client's CLI subprocess inherits process.env.
-        process.env.FAKE_TMUX_TABLES = tablesClient;
-        process.env.FAKE_TMUX_LOG = logClient;
-        using client = await Client.create({
-          storePath: storeB,
-          tmuxCommand: FAKE_TMUX_BIN, _cliPath: process.env.CLI_PATH
-        } as any);
-        const ts = await client.sendKeys({
-          claude_instance_id: id,
-          text: "hello",
+        const ts = await withProcessEnv({ FAKE_TMUX_TABLES: tablesClient, FAKE_TMUX_LOG: logClient }, async () => {
+          using client = await Client.create({
+            storePath: storeB,
+            tmuxCommand: FAKE_TMUX_BIN, _cliPath: process.env.CLI_PATH
+          } as any);
+          return await client.sendKeys({
+            claude_instance_id: id,
+            text: "hello",
+          });
         });
 
         assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
@@ -477,10 +457,6 @@ describe("send-keys", () => {
           expect(calls[3].slice(4)).toEqual(["send-keys", "-t", paneId, "Enter"]);
         }
       } finally {
-        if (priorLog === undefined) delete process.env.FAKE_TMUX_LOG;
-        else process.env.FAKE_TMUX_LOG = priorLog;
-        if (priorTables === undefined) delete process.env.FAKE_TMUX_TABLES;
-        else process.env.FAKE_TMUX_TABLES = priorTables;
         cleanup();
         fs.rmSync(tmuxDir, { recursive: true, force: true });
       }
@@ -567,8 +543,6 @@ describe("read-pane", () => {
       expect(paneIds[0]).toBe(paneIds[1]);
       const paneId = paneIds[0];
 
-      const priorLog = process.env.FAKE_TMUX_LOG;
-      const priorTables = process.env.FAKE_TMUX_TABLES;
       try {
         const cli = runCli(
           ["read-pane", "--claude-instance-id", id],
@@ -577,13 +551,13 @@ describe("read-pane", () => {
         expect(cli.exitCode).toBe(0);
 
         // The Client's CLI subprocess inherits process.env.
-        process.env.FAKE_TMUX_TABLES = tablesClient;
-        process.env.FAKE_TMUX_LOG = logClient;
-        using client = await Client.create({
-          storePath: storeB,
-          tmuxCommand: FAKE_TMUX_BIN, _cliPath: process.env.CLI_PATH
-        } as any);
-        const ts = await client.readPane({ claude_instance_id: id });
+        const ts = await withProcessEnv({ FAKE_TMUX_TABLES: tablesClient, FAKE_TMUX_LOG: logClient }, async () => {
+          using client = await Client.create({
+            storePath: storeB,
+            tmuxCommand: FAKE_TMUX_BIN, _cliPath: process.env.CLI_PATH
+          } as any);
+          return await client.readPane({ claude_instance_id: id });
+        });
 
         const cliEnvelope = JSON.parse(cli.stdout) as { pane?: unknown };
         assertEnvelopesEqual(cliEnvelope, ts, {
@@ -606,10 +580,6 @@ describe("read-pane", () => {
           expect(capture.slice(target, target + 2)).toEqual(["-t", paneId]);
         }
       } finally {
-        if (priorLog === undefined) delete process.env.FAKE_TMUX_LOG;
-        else process.env.FAKE_TMUX_LOG = priorLog;
-        if (priorTables === undefined) delete process.env.FAKE_TMUX_TABLES;
-        else process.env.FAKE_TMUX_TABLES = priorTables;
         cleanup();
         fs.rmSync(tmuxDir, { recursive: true, force: true });
       }
@@ -669,7 +639,6 @@ describe("kill", () => {
           socket,
         });
       });
-      const priorLog = process.env.FAKE_TMUX_LOG;
       try {
         const cli = runCli(
           ["kill", "--claude-instance-id", killId],
@@ -678,12 +647,13 @@ describe("kill", () => {
         expect(cli.exitCode).toBe(0);
 
         // The Client's CLI subprocess inherits process.env.
-        process.env.FAKE_TMUX_LOG = logClient;
-        using client = await Client.create({
-          storePath: storeB,
-          tmuxCommand: FAKE_TMUX_BIN, _cliPath: process.env.CLI_PATH
-        } as any);
-        const ts = await client.kill({ claude_instance_id: killId });
+        const ts = await withProcessEnv({ FAKE_TMUX_LOG: logClient }, async () => {
+          using client = await Client.create({
+            storePath: storeB,
+            tmuxCommand: FAKE_TMUX_BIN, _cliPath: process.env.CLI_PATH
+          } as any);
+          return await client.kill({ claude_instance_id: killId });
+        });
 
         const cliEnvelope = JSON.parse(cli.stdout) as unknown;
         assertEnvelopesEqual(cliEnvelope, ts, {
@@ -698,8 +668,6 @@ describe("kill", () => {
           expect(calls.filter((argv) => argv.includes("kill-pane") || argv.includes("kill-session"))).toEqual([]);
         }
       } finally {
-        if (priorLog === undefined) delete process.env.FAKE_TMUX_LOG;
-        else process.env.FAKE_TMUX_LOG = priorLog;
         cleanup();
         fs.rmSync(tmuxDir, { recursive: true, force: true });
       }
@@ -941,13 +909,7 @@ describe("resume", () => {
           "create-store": true,
           socket,
         });
-        if (OUTER_INSTANCE_ID) {
-          runHelper("seed-spawn", {
-            store,
-            id: OUTER_INSTANCE_ID,
-            state: "working",
-          });
-        }
+        seedOuterParent(store);
       });
 
       // JSONL for CLI (HOME=homeA)
@@ -962,7 +924,6 @@ describe("resume", () => {
       fs.writeFileSync(path.join(jsonlDirB, `${sessId}.jsonl`), "{}\n");
       plantClaudeJson(homeA, homeB);
 
-      const priorTables = process.env.FAKE_TMUX_TABLES;
       try {
         const cli = runCli(
           ["resume", "--claude-instance-id", resumeId],
@@ -971,13 +932,14 @@ describe("resume", () => {
         expect(cli.exitCode).toBe(0);
 
         // The Client's CLI subprocess inherits process.env.
-        process.env.FAKE_TMUX_TABLES = path.join(tmuxDir, "tables-client");
-        using client = await Client.create({
-          storePath: storeB,
-          home: homeB,
-          tmuxCommand: FAKE_TMUX_BIN, _cliPath: process.env.CLI_PATH
-        } as any);
-        const ts = await client.resume({ claude_instance_id: resumeId });
+        const ts = await withProcessEnv({ FAKE_TMUX_TABLES: path.join(tmuxDir, "tables-client") }, async () => {
+          using client = await Client.create({
+            storePath: storeB,
+            home: homeB,
+            tmuxCommand: FAKE_TMUX_BIN, _cliPath: process.env.CLI_PATH
+          } as any);
+          return await client.resume({ claude_instance_id: resumeId });
+        });
 
         const cliEnvelope = JSON.parse(cli.stdout) as unknown;
         assertEnvelopesEqual(cliEnvelope, ts, {
@@ -985,8 +947,6 @@ describe("resume", () => {
         });
         assertPreTrustOk(cliEnvelope, ts, cwd, homeA, homeB);
       } finally {
-        if (priorTables === undefined) delete process.env.FAKE_TMUX_TABLES;
-        else process.env.FAKE_TMUX_TABLES = priorTables;
         cleanup();
         fs.rmSync(tmuxDir, { recursive: true, force: true });
       }
@@ -1116,8 +1076,6 @@ describe("expire", () => {
         expect(seeded["socket"]).toBe(socket);
       }
 
-      const priorLog = process.env.FAKE_TMUX_LOG;
-      const priorTables = process.env.FAKE_TMUX_TABLES;
       try {
         const cli = runCli(
           ["expire", "--older-than", "0d"],
@@ -1126,13 +1084,13 @@ describe("expire", () => {
         expect(cli.exitCode).toBe(0);
 
         // The Client's CLI subprocess inherits process.env.
-        process.env.FAKE_TMUX_TABLES = tablesClient;
-        process.env.FAKE_TMUX_LOG = logClient;
-        using client = await Client.create({
-          storePath: storeB,
-          tmuxCommand: FAKE_TMUX_BIN, _cliPath: process.env.CLI_PATH
-        } as any);
-        const ts = await client.expire({ older_than: "0d" });
+        const ts = await withProcessEnv({ FAKE_TMUX_TABLES: tablesClient, FAKE_TMUX_LOG: logClient }, async () => {
+          using client = await Client.create({
+            storePath: storeB,
+            tmuxCommand: FAKE_TMUX_BIN, _cliPath: process.env.CLI_PATH
+          } as any);
+          return await client.expire({ older_than: "0d" });
+        });
 
         const cliEnvelope = JSON.parse(cli.stdout) as unknown;
         assertEnvelopesEqual(cliEnvelope, ts, {
@@ -1160,10 +1118,6 @@ describe("expire", () => {
           ]);
         }
       } finally {
-        if (priorLog === undefined) delete process.env.FAKE_TMUX_LOG;
-        else process.env.FAKE_TMUX_LOG = priorLog;
-        if (priorTables === undefined) delete process.env.FAKE_TMUX_TABLES;
-        else process.env.FAKE_TMUX_TABLES = priorTables;
         cleanup();
         fs.rmSync(tmuxDir, { recursive: true, force: true });
       }

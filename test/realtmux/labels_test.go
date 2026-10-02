@@ -1,6 +1,7 @@
 package realtmux_test
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -95,6 +96,7 @@ func validLabelShapes(t testing.TB) []tmuxfix.LabelShape {
 // untargeted call resolves to c's session (later clients run inside that pane).
 func (r *realTmux) enterPane(t testing.TB, c created) {
 	t.Helper()
+	waitExeced(t, c.Reply.PanePID, filepath.Base(c.Command[0]))
 	env := procEnviron(t, c.Reply.PanePID)
 	tmuxVar, ok1 := envValue(env, "TMUX")
 	paneVar, ok2 := envValue(env, "TMUX_PANE")

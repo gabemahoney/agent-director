@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -510,6 +511,83 @@ func TestRunnerLayerReport(t *testing.T) {
 			t.Errorf("no vanilla label:\n%s", out)
 		}
 	})
+}
+
+// TestRunnerLayerEnv: a staged layer whose env object (any depth) sets a
+// LAYER_REFUSED_ENV or CLAUDE_CODE_USE_* name, or any name to a URL or an
+// authorization header, is refused in print-only, naming the key and never
+// the value; other values and URLs outside an env object pass.
+func TestRunnerLayerEnv(t *testing.T) {
+	const secret = "layer-env-runner-sentinel-0123456789"
+	const nameText, valueText = ", which would take the agents off the gateway", " to a value that looks like a URL or an authorization header"
+	env := func(name, value string) string { return `{"env": {"` + name + `": "` + value + `"}}` }
+	for _, tc := range []struct {
+		name, flag, body, key, text string // text "" passes
+	}{
+		{"ANTHROPIC_BASE_URL", "--user-settings", env("ANTHROPIC_BASE_URL", secret), "ANTHROPIC_BASE_URL", nameText},
+		{"ANTHROPIC_CUSTOM_HEADERS", "--managed-settings", env("ANTHROPIC_CUSTOM_HEADERS", secret), "ANTHROPIC_CUSTOM_HEADERS", nameText},
+		{"a CLAUDE_CODE_USE_ name not listed", "--project-settings", env("CLAUDE_CODE_USE_VERTEX", secret), "CLAUDE_CODE_USE_VERTEX", nameText},
+		{"a lower-case provider switch", "--local-settings", env("claude_code_use_bedrock", secret), "claude_code_use_bedrock", nameText},
+		{"CLAUDE_CODE_USE_BEDROCK", "--user-settings", env("CLAUDE_CODE_USE_BEDROCK", secret), "CLAUDE_CODE_USE_BEDROCK", nameText},
+		{"AWS_REGION", "--user-settings", env("AWS_REGION", secret), "AWS_REGION", nameText},
+		{"AWS_PROFILE", "--user-settings", env("AWS_PROFILE", secret), "AWS_PROFILE", nameText},
+		{"AWS_DEFAULT_REGION", "--user-settings", env("AWS_DEFAULT_REGION", secret), "AWS_DEFAULT_REGION", nameText},
+		{"a URL value", "--user-settings", env("PLAIN", "http://"+secret), "PLAIN", valueText},
+		{"a Bearer value", "--managed-settings", env("PLAIN", "Bearer "+secret), "PLAIN", valueText},
+		{"a bearer value after a tab", "--project-settings", env("PLAIN", `bearer\t`+secret), "PLAIN", valueText},
+		{"an Authorization header value", "--local-settings", env("PLAIN", "Authorization: "+secret), "PLAIN", valueText},
+		{"a Proxy-Authorization header value", "--user-settings", env("PLAIN", "Proxy-Authorization: "+secret), "PLAIN", valueText},
+		{"an MCP server env URL", "--mcp-config", `{"mcpServers": {"s": {"command": "true", "env": {"UPSTREAM": "https://` + secret + `"}}}}`, "UPSTREAM", valueText},
+		{"a plain value", "--user-settings", env("PLAIN", secret), "", ""},
+		{"a URL outside an env object", "--user-settings", `{"apiUrl": "https://` + secret + `"}`, "", ""},
+		{"a non-object env", "--user-settings", `{"env": "https://` + secret + `"}`, "", ""},
+		{"a numeric value", "--user-settings", `{"env": {"PLAIN": 5}}`, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRunnerRig(t)
+			path := filepath.Join(t.TempDir(), "layer.json")
+			writeFile(t, path, tc.body)
+			code, out := r.run(t, nil, "measure", tc.flag, path)
+			assertAbsent(t, "output", out, secret)
+			r.assertNoToolCalls(t)
+			if tc.text == "" {
+				if code != 0 {
+					t.Fatalf("exit %d, want 0:\n%s", code, out)
+				}
+				return
+			}
+			if want := "an env object in it sets " + tc.key + tc.text; code != 2 || !strings.Contains(out, want) {
+				t.Fatalf("exit %d, want 2 with %q:\n%s", code, want, out)
+			}
+			if _, err := os.Stat(r.engineLog); err == nil {
+				t.Errorf("a refused layer reached the engine: %v", r.engineCalls())
+			}
+			if entries, _ := os.ReadDir(r.resultsRoot); len(entries) != 0 {
+				t.Errorf("a refused layer left %d entries in the results root", len(entries))
+			}
+		})
+	}
+}
+
+// TestRunnerLayerRefusedEnvInStep: run.sh's LAYER_REFUSED_ENV holds every
+// realModeRefusedEnv name and the gateway's two routing names, and the driver
+// refuses each of its names too.
+func TestRunnerLayerRefusedEnvInStep(t *testing.T) {
+	m := regexp.MustCompile(`(?m)^readonly LAYER_REFUSED_ENV=\(([^)]*)\)`).FindStringSubmatch(readFile(t, "run.sh"))
+	if m == nil {
+		t.Fatal("run.sh has no readonly LAYER_REFUSED_ENV=(...) array")
+	}
+	listed := strings.Fields(m[1])
+	for _, name := range append([]string{"ANTHROPIC_BASE_URL", "ANTHROPIC_CUSTOM_HEADERS"}, realModeRefusedEnv...) {
+		if !slices.Contains(listed, name) {
+			t.Errorf("run.sh LAYER_REFUSED_ENV lacks %s", name)
+		}
+	}
+	for _, name := range listed {
+		if !layerEnvNameRefused(name) {
+			t.Errorf("run.sh refuses %s in a layer env; the driver does not", name)
+		}
+	}
 }
 
 func TestRunnerRefusals(t *testing.T) {

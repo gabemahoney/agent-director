@@ -628,6 +628,14 @@ installing.
   `readStoreMetaRaw`, `deleteStoreIDRow`, `setStoreIDRaw`, `preAddStoreMeta`,
   `breakV5StoreMetaStep`, and `applyV5ToV4Recipe` (with
   `v5ToV4RecipeStatements`, which must match the v5 → v4 recipe statement for
-  statement).
+  statement), and `seedV5DowngradeRows` (a v5 store with a row reused twice
+  and a row with pre-trust turned off, for the downgrade test).
+- `internal/store/schema_v5_downgrade_test.go` — the v5 → v4 downgrade tests:
+  `TestDowngradeRecipe_MatchesGuide` parses the "v5 → v4" SQL block of §5
+  and fails when it differs from `v5ToV4RecipeStatements`, so the recipe here
+  and the test copy cannot drift; `TestDowngradeRecipe_KeepsRowsThenRemigratesToDefaults`
+  applies the recipe to `seedV5DowngradeRows`, checks every v4 column and
+  history entry survives, then re-migrates and checks the v5 columns take
+  their defaults (pre-trust opt-out and life numbers are lost).
 - `internal/store/testdata/schema_v1.sql` — the version-N fixture pattern.
 - docs/engineering-guide.md §10 — sandboxed execution, the b.8dr incident.

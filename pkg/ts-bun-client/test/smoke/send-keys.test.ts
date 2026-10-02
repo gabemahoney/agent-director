@@ -11,9 +11,8 @@
 
 import { test, expect } from "bun:test";
 import * as path from "path";
-import * as fs from "fs";
 import { withTempHome } from "../internal/tempHome.js";
-import { runHelper, privateTmuxSocket } from "../internal/helper.js";
+import { runHelper, privateTmuxSocket, fakeTmuxCalls, withProcessEnv } from "../internal/helper.js";
 import { Client, ErrSpawnNotFound, AgentDirectorError } from "../../src/index.js";
 
 // Pass tmuxCommand explicitly — the FFI worker's PATH snapshot does not reflect
@@ -42,9 +41,7 @@ test("send-keys: happy path — sends the text, then Enter, to the row's pane by
     const paneId = seeded["pane_id"] as string;
 
     // The client's CLI subprocess inherits process.env on each call.
-    const priorLog = process.env.FAKE_TMUX_LOG;
-    process.env.FAKE_TMUX_LOG = logPath;
-    try {
+    await withProcessEnv({ FAKE_TMUX_LOG: logPath }, async () => {
       using client = await Client.create({ storePath, createIfMissing: true, tmuxCommand: fakeTmuxBin , _cliPath: process.env.CLI_PATH } as any);
       const result = await client.sendKeys({
         claude_instance_id: spawnId,
@@ -52,15 +49,9 @@ test("send-keys: happy path — sends the text, then Enter, to the row's pane by
       });
       // SendKeysResult is {} — an object, not an error envelope.
       expect(typeof result).toBe("object");
-    } finally {
-      if (priorLog !== undefined) process.env.FAKE_TMUX_LOG = priorLog;
-      else delete process.env.FAKE_TMUX_LOG;
-    }
+    });
 
-    const sends = fs
-      .readFileSync(logPath, "utf8")
-      .split("---\n")
-      .map((rec) => rec.split("\n").slice(0, -1))
+    const sends = fakeTmuxCalls(logPath)
       .filter((argv) => argv.includes("send-keys"))
       .map((argv) => argv.slice(argv.indexOf("send-keys")));
     expect(sends).toEqual([

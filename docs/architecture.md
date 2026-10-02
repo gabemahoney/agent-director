@@ -58,7 +58,7 @@ still holds: nothing in `internal/` imports `pkg/api`.
 | `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, etc.), params/result types, and error sentinels (the seven tmux sentinels of SR-1.1 are all re-exported in `aliases.go`). Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director` and `internal/mcp`. **`kill` seams** (`kill.go`): `KillStore` (`GetSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`; `*store.Store` satisfies it), `KillTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `KillPane`, `KillSessionID`; `TmuxClient` satisfies it) and the start-time reader `ProcChecker`; `Kill` also takes the three `[tmux]` durations, the clock and the sleep, and has no logger. **`find-missing` seams** (`find_missing.go`): `FindMissingStore` (the live-row read, the four same-life guarded writes, `CloseOrphanedPermissionRequests`, `ListProvisionalTranscripts`, `HealJsonlPath`, `StoreID`; `*store.Store` satisfies it), `FindMissingTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`) and `ProcChecker`; the exported `FindMissing` also takes the pending grace period, the sweep budget, the clock and a `FindMissingLogger` (see [`find-missing`](#find-missing)). **Pane-verb seams** (`readpane.go`, `sendkeys.go`, `pause.go`; see [Interact](#interact-send-keys--read-pane) and [`pause`](#pause)): `ReadPaneStore` (`GetSpawn`, `StoreID`; no write) and `ReadPaneTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `CapturePaneID`); `SendKeysStore` (`GetSpawn`, `PermissionRequestsForSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`) and `SendKeysTmux` (`Lookup`, `ListPanes`, `SendKeysPane`); `PauseStore` (`GetSpawn`, `GetSpawnState`, `AdoptIdentityIfUnchanged`, `StoreID`) and `PauseTmux` (`Lookup`, `ListPanes`, `SendKeysPane`). `*store.Store` and `TmuxClient` satisfy them. `SendKeys` and `Pause` take the start-time reader `ProcChecker`; the exported `ReadPane` uses `probe.NewProcChecker()` and `Client.ReadPane` the Client's reader. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the eight socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the one name-based method left, `HasSession`, which is kept but no verb uses, and none may; the name-based send and capture are gone. `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`; it also re-exports the start-time reader interface as `ProcChecker` (`= tmux.ProcChecker`). The Client holds its clock (`time.Now`), its sleep (`time.Sleep`, the pause of `kill`'s process wait) and its start-time reader (`probe.NewProcChecker()`), all set in `New`; plain spawn uses the clock and reader for the launch start and the identity write, and `kill` uses all three for its lookup, adoption and process wait; `find-missing` measures the pending grace period on the same clock, with the value from `EffectivePendingGrace`. The label scan of a plain spawn lives in `spawn_scan.go`, its held-name path after "duplicate session" (the end write, one re-lookup, the classified error) in `spawn_held.go`, the shared held-name error builder in `held_name.go` and the one `ad.launch.name_held` emitter in `name_held_trail.go` (see [Launch identity](#launch-identity)). **`resume` seams** (`resume.go`): `ResumeStore` and `ResumeTmux` (`TmuxLookup`'s `Lookup` plus `NewSession`, `SetLabel` and `KillSessionID`; no pane listing, since `resume` adopts nothing, and no name-based method; `TmuxClient` satisfies it), with the start-time reader `ProcChecker`, the configuration, the store id, the clock and the logger. Its pre-launch lookup's decision lives in `resume_lookup.go` (`decidePreLaunch`), the launch outcome, restore and path after "duplicate session" it shares with reuse in `finished_launch.go` (`finishedLaunch`) and the shared starting-session refusal in `starting_session.go` (see [Resume](#resume) and [Starting-session rule](#starting-session-rule-starting_sessiongo)). **Reuse** (`spawn` with `ReuseFinished` and an explicit id whose row is finished; `spawn_reuse.go`): the unexported `reuseStore` (`ReadForReuse`, `ResetForReuse`, `RestoreAfterFailedReuse`, `RecordLaunchIdentity`; `*store.Store` satisfies it), injected through `runSpawnWithReuseStore` (`runSpawn` passes its store), and its own descriptions in `spawn_reuse_errors.go` (see [Reuse of a finished id](#reuse-of-a-finished-id)). `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`. | Direct `database/sql`; raw SQL strings; MCP framing. |
 | `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v5; see "Schema v5" below), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). The pending grace period bounds both `find-missing`'s hands-off window for a `pending` row and a SessionStart hook's wait for its launch's identity write, each measured from the launch start (SR-13.4, SR-22.9); it has no maximum. The hook's wait is also capped at 540 s after it began (`sessionStartWaitCap` in `internal/hook`; WD 2026-09-30c), so a grace above 540 s lengthens only `find-missing`'s window, which is unchanged. Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default; a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
-| `pkg/api/apitest` | Test seed helpers extracted from `pkg/api/*_test.go` for cross-package importing. Provides `Seed*` functions (`SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`) that set up fixture DB rows and filesystem state for `test/envelope-diff` and future Epic 4/5 smoke tests. Also provides the config writer `WriteTmuxConfig` (settings built with `TmuxInt`, or `TmuxFloat` / `TmuxString` / `TmuxBool` for malformed values, keyed by `config.TmuxKey`): `pkg/api`, CLI and MCP tests write `[tmux]` settings only through it, so no test outside `internal/config` spells a `[tmux]` key (rules: Test Harness, "apitest `[tmux]` config writer"). Provides `SeedSpawn`'s trailing `SpawnOption`s for the v5 columns, timestamps and raw text (`WithTmuxSessionName`, `WithStartedAt` / `WithEndedAt` / `WithNoEndedAt`, `WithLaunchStartedAt`, `WithRawLaunchStartedAt`, `WithNoLaunchStartedAt`, `WithLifeNumber`, `WithRowVersion`, `WithNoPreTrust`, `WithRawNoPreTrust`, `WithLaunchIdentity`, `WithTmuxSocket`, `WithNoLaunchToken`, `WithNoPane`, `WithNoPID`, `WithRawLabels`, `WithRawClaudeArgs`, `WithRawExtraEnv`) and archived session history (`WithSessionHistory`), the default socket `TestSocket`, the default pane `TestPaneID` / `TestPanePID` that `SeedSpawn` gives a live row (both re-exported from `internal/testsupport/launchfix`; a terminal row gets no pane), the store-read helper `ReadSpawnColumns`, the every-life history-read helper `ReadSessionHistoryAllLives`, and the store-id helpers `ReadStoreID`, `SeedStoreID` and `OtherStoreID` (with `ErrNoStoreID`): new tests seed rows and read columns no verb shows only through these (rules: Test Harness, "apitest Seed* factory contract"). To place a seeded row's own labelled session in the Recorder, tests use `tmuxfix.Recorder.SeedRowSession` (in `internal/testsupport/tmuxfix`, not this package). Provides the shared description helper (`descriptions.go`: `AssertDescription`, `AssertAgentText`, `AssertAgentTextCase` and the `Desc*` cases; `descriptions_resume.go`: resume's `DescResume*` cases and `DescCase.AfterResumeRestore` (with `ResumeRestore.Launch`, a `LaunchKind`: `LaunchResume` or `LaunchReuse`); `descriptions_reuse.go`: reuse's `DescReuseLostRace`, `DescReuseArchiveFailure` and `DescReuseChangeFailure`, `LaunchKind`, and the row-reset rules of `DescLaunchTimeout`'s `RowReset`; `descriptions_reuse_docs.go`: reuse's documentation cases `DescReuseFinishedParam`, `DescReuseHistoryByLife`, `DescDeleteDeprecated`, `DescInstanceIDCollision` (with `CollisionSite`), `DescReuseRecourse` (with `RecourseSite`: `RecourseGoDoc` / `RecourseTSREADME`) and `DescReuseDocsForbidden`, and the must-not-only check `AssertMustNot` for Go source and Markdown; `descriptions_lookup.go`: lookup's `DescConflictingLabels` and `DescDifferentServer`; `descriptions_kill.go`: kill's `DescKill*` and `DescSocketDirNothingDone` cases and `DescCase.AfterKillSent`; `descriptions_unusable.go`: the unusable recorded name's `DescUnusableName*` cases (the three refusals, `DescUnusableNameTrigger`, `DescUnusableNamePointer`, `DescUnusableNameFindMissingField`, `DescUnusableNameExpireField`); `descriptions_kill_optin.go`: the cases of `kill`'s finished-row opt-in, `DescKillOptInLiveRow`, `DescKillOptInNeverReportedIn` and `DescKillOptInNeverReportedInLeftover`; `descriptions_live_row.go`: the live-row sequence's short form and pointer, `DescLiveRowSequence`, `DescLiveRowPointer`, `LiveRowPointer`, `LiveRowSequenceCount` and `LiveRowPointerCount`; `descriptions_find_missing.go`: `DescFindMissingGrace`, `DescFindMissingManifest`, `DescFindMissingField` (`FindMissingIDs` / `FindMissingUnverifiedIDs`), `DescMissingNotProof` (full statement), `DescMissingNotProofShort` (short form) and `FindMissingOwnText`; `descriptions_expire.go`: `DescExpireManifest`, `DescExpireField` (`ExpireCount` / `ExpireIDs` / `ExpireKept` / `ExpireKeptIDs`), and SR-18.7's cleanup guidance as `DescCleanupGuidance` (full form, `expire` only) and `DescCleanupPointer` (the pointer at `kill` and `find-missing`, which rejects the full sentence so the help size cap holds), applied by `pkg/api/manifest/manifest_expire_description_test.go`; `descriptions_held.go`: the held-name cases `DescHeldLeftover`, `DescHeldNoValidID`, `DescHeldDifferentID`, `DescHeldOtherStore`, `DescHeldAmbiguous`, the overlay `DescCase.AfterHeldName` with `HeldName` (`Row` as a `HeldRow`: `HeldRowEnded` / `HeldRowLeftAsIs` / `HeldRowStoreError`; `BeforeLaunch` for resume's pre-launch lookup; `Restore` for resume after "duplicate session"), and spawn's manifest cases `DescSpawnHeldName` and `DescSpawnSessionNameParam`; `descriptions_starting.go`: the shared starting-session refusal's cases `DescStillStopping`, `DescStillStarting` and `DescOwnOldSession` with `StartingSession`; `descriptions_resume_lookup.go`: resume's pre-launch Leftover case `DescPreLaunchLeftover` and the `BeforeLaunch` overlay): every Go test that checks an error or manifest description for required phrases or forbidden forms uses it (rules: Test Harness, "apitest description helper"). Non-test package (regular `.go` files) so it can be imported by harnesses outside `pkg/api`. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `internal/tmux` (the `tmux.Call` names the description cases use); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
+| `pkg/api/apitest` | Test helpers shared across packages (non-test `.go` files, so harnesses outside `pkg/api` import them). Families: the `Seed*` fixtures (`SeedSpawn`, `SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`), `SeedSpawn`'s `With*` options, the store-read and store-id helpers (see [apitest Seed* factory contract](#apitest-seed-factory-contract-reusable-test-fixtures)); the `[tmux]` config writer `WriteTmuxConfig` (see [apitest `[tmux]` config writer](#apitest-tmux-config-writer-reusable-test-fixture)); and the description helper, `AssertDescription` with the `Desc*` cases in `descriptions*.go` (see [apitest description helper](#apitest-description-helper-reusable-test-fixture)). Each section states the must-use rule. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `internal/tmux` (the `tmux.Call` names the description cases use); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
 | `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. The `Catalog` is consumed by `cmd/agent-director`'s envelope writer and `internal/mcp`'s `classifyDispatchError`. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
 | `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. `classifyDispatchError` delegates to `errnames.Classify`. | stdlib; `pkg/api`; `pkg/api/manifest`; `pkg/api/errnames`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
 | `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
@@ -1259,7 +1259,7 @@ newly measured count in the same commit that changes the size (SR-20.6,
 decision-0930e):
 
 - Downward, after a trim: free, no approval needed.
-- Upward: only with the orchestrator's approval given before the commit,
+- Upward: only with the user's approval given before the commit,
   and a reason recorded in the commit message (what grew, by how many
   bytes, and why it cannot be shorter). An upward re-record never lifts
   the hard cap.
@@ -2024,7 +2024,7 @@ hook` directly, with no `sh` between them. The hook's parent
 entry would put an `sh` there (dash does not exec its last command), and
 the parent would be that shell.
 
-A Claude Code older than the exec-form minimum ignores `args` and runs
+A Claude Code that does not run exec-form hooks ignores `args` and runs
 `command`, the bare binary, through `/bin/sh`, so each of its hooks runs
 `agent-director` with no verb and the payload on stdin; no hook applies.
 The no-verb run detects this (`noVerbHookIgnored`,
@@ -6733,12 +6733,13 @@ the section that describes it in detail.
   - An agent slower to exit than the stopping window: a `resume` or reuse
     after the window, whose session is at least the starting-session bound
     old, gets `ErrTmuxSessionConflict`. One example is an agent whose
-    SessionEnd hook budget is raised past 60 s by
+    SessionEnd hook budget is raised past half the stopping window by
     `CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS`, which has no stated cap and
     can come from the host environment, a settings `env` block or a
     spawn's `extra_env` (agent-director reserves only
     `AGENT_DIRECTOR_`-prefixed keys there). An operator covers it by
-    configuring a longer window (see
+    keeping the window at least twice the budget, as the README's
+    [Timing settings](../README.md#timing-settings-tmux) say (see also
     [`[tmux]` timing settings](#tmux-timing-settings)).
   - A server-scope `@ad_pane` value, which only a deliberate
     `set-option -s` sets, hides every pane's own value, so a lost reply's
@@ -6876,6 +6877,16 @@ meaning and links to the section that describes it in detail.
   current launch's session, found by the `@ad_owner` label with its launch
   token that every created session now carries; otherwise
   `ErrSpawnNotInteractive` (see [Launch pending](#launch-pending)).
+- **Hooks move only their own agent's row.** A hook moves a row only when
+  its parent process is the row's recorded pane process. A nested
+  `claude`'s and a teammate pane's hooks no longer move the row, and rows
+  of agents on a Claude Code that does not run exec-form hooks stay
+  `pending` (see
+  [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)).
+- **A refused `[tmux]` value fails store verbs.** A negative value, a
+  positive value below a safe minimum or a non-integer in `[tmux]` makes
+  store-backed verbs return `ErrConfigMalformed` instead of running on a
+  clamped value (see [`[tmux]` timing settings](#tmux-timing-settings)).
 - **A different tmux server.** A row whose recorded server differs gets
   `ErrTmuxNotAvailable` instead of a false "gone", and every call for a row
   goes to its recorded socket (see [The lookup rule](#the-lookup-rule)).
@@ -7492,8 +7503,10 @@ This section does not repeat it.
   - For `measure` and `rn9` it always passes `-cases`: the mode's ids by
     default, and it refuses (exit 2) a `--cases` id from another mode.
   - It refuses (exit 2) a staged layer that is or links to `.claude.json`
-    or `.credentials.json`, is not JSON, or holds a credential-like key.
-    The refusal applies in print-only too, and names the key, never a value.
+    or `.credentials.json`, is not JSON, or holds a credential-like key, or
+    whose `env` objects break the layer env rule (`LAYER_REFUSED_ENV`; see
+    the isolation contract below). The refusal applies in print-only too,
+    and names the key, never a value.
   - The probe takes its candidate versions from `npm view` in a
     credential-free base-image container on the host network, or from
     `--versions` / `--versions-file`. A failed or empty listing stops the
@@ -7578,9 +7591,9 @@ This section does not repeat it.
       runs a leak gate over every result file.
   - `decide` is pure. It reads results directories and prints the RN-6,
     RN-2 and RN-9 decision record. It exits 0 when decided, 2 on invalid
-    input, and 3 for a STOP. It reads the current values from
-    `internal/config`, including the stated Claude Code minimum
-    (`minClaudeCodeVersion`, 2.1.280).
+    input, and 3 for a STOP. It reads the current timing values from
+    `internal/config`, and the stated Claude Code minimum from the tool's
+    own `minClaudeCodeVersion` (2.1.280, in `tools/measure-exit/config.go`).
     - Each sampled case's rules read every usable sample, in any position,
       once at least 20 are usable (`useSamples`, lead decision NB-1). The
       largest time is the largest over all completed samples. The record
@@ -7614,22 +7627,13 @@ This section does not repeat it.
     `measure` or `rn9`). It needs approval and credentials.
 
   `measure-image` and `measure-exit` chain through `test-image` to the host
-  `make build`, the same as `make test-image`. The live runs L0, L1 and L2
-  are launched by the user from their own shell, or by the orchestrator
-  with explicit approval. Gabe approves the spend, and the orchestrator sets
-  `MX_ORCHESTRATOR_LAUNCH=1` and runs from its own shell, which holds the
-  real InferenceHub values. Workers never launch them.
-
-  The launch order is L0, then L1, then L2, one after the other under one
-  shared lock. L1 and L2 refuse unless L0's `deployed-verdict.txt` reads
-  that the deployed version runs exec-form hooks. That file, not make's
-  exit status, is the success or STOP signal, because make reports every
-  runner failure as exit 2.
-
-  These launch gates (L0's verdict and the earlier runs' guard status, the
-  shared lock, the no-reuse of a results directory, and the
-  `MX_ORCHESTRATOR_LAUNCH` override) live in the operator command files,
-  not in the repo. `run.sh` and the Makefile do not enforce them.
+  `make build`, the same as `make test-image`. Who launches the live runs
+  L0, L1 and L2, the approval they need, their order and their launch
+  gates are in the tool's README
+  ([Before any live run](../tools/measure-exit/README.md#before-any-live-run)
+  and [Live runs](../tools/measure-exit/README.md#live-runs)). The gates
+  live in the operator command files, not in the repo; `run.sh` and the
+  Makefile do not enforce them.
 
 **Isolation contract.**
 
@@ -7649,7 +7653,22 @@ This section does not repeat it.
 - Real mode is gateway-only. `checkRealModeEnv` refuses with rule
   `real-gateway-only` when any variable in `realModeRefusedEnv` (an API
   key, an OAuth token, the Bedrock and AWS variables) is set, even empty.
-  `realModeEnv` also drops them from every child.
+  `realModeEnv` also drops them from every child. The same rule covers the
+  layer files the agents load: `checkLayerFilesEnv` (`layerenv.go`), called
+  from `checkEnvironment` right after `checkRealModeEnv`, reads the files
+  `realModeLayerFiles` lists (the managed and user layers, plus the
+  project, local and MCP layers when given) and refuses with
+  `real-gateway-only` when an `env` object at any depth sets a name
+  `layerEnvNameRefused` refuses (any `CLAUDE_CODE_USE_*`, a
+  `realModeRefusedEnv` or `credentialEnv` name, `ANTHROPIC_CUSTOM_HEADERS`;
+  case ignored) or a value `layerEnvValueRE` matches (a URL, a bearer
+  token, an authorization header). A missing file is skipped; an
+  unreadable or non-JSON one is refused. The refusal names the layer kind,
+  path and key, never the value. It runs in real mode only, before
+  anything is written. `run.sh`'s `refuse_credential_layer` runs the same
+  check (its `LAYER_REFUSED_ENV` list, the value test inside `jq`) when it
+  stages a layer, in print-only too; the two lists must stay in step with
+  `realModeRefusedEnv` (`TestRunnerLayerRefusedEnvInStep`).
 - Mounts are staged settings copies (read-only) and one results directory.
   The host home, `~/.agent-director`, `~/.claude*`, a tmux socket
   directory, `/tmp` and the engine socket are never mounted.
@@ -7852,48 +7871,37 @@ reached, and a residual to violate its property.
 | AC-KILL-17 and AC-KILL-18 (the strict `kill`; PRD Traceability row "PO 2026-09-27 REVIEW") | <ul><li>`HandsOff`, `KillHonest` and `KillPendingOnlyCurrent` in the safety runs `ci_S1o_*` (fast), `ci_S1b_*` and `ci_S1h_*` (`_lab` fast, the rest full), and `ci_smoke_*` (fast): pass.</li><li>Control `ci_C5` (session kill only, with a grouped viewer) (fast): a violation.</li><li>Probes `ci_V_KillFailed` and `ci_V_KillWithViewer` (fast).</li></ul> |
 | The LABEL lookup's mechanisms from the PRD Traceability row "PO 2026-09-27 LABEL": the label as proof of launch and the four verdicts, the recorded socket, and process-only liveness. The row's other criteria (for example AC-CFG-01's timing defaults, AC-TEST-02 and AC-EXP-08) are not covered. | <ul><li>`VerdictSound` and the safety properties in `ci_S1o_*`, `ci_S3o` and `ci_smoke_*` (fast), `ci_S1b_*` and `ci_S1h_*` (`_lab` fast, the rest full), `ci_S3b` (full) and `ci_G3b_*` (`ci_G3b_lab` fast, the rest full): pass.</li><li>`PendingResolves` and `StuckHeals` in `ci_L5o`, `ci_L5b_*` and `ci_L1` (`ci_L5o`, `ci_L5b_lab` and `ci_L1` fast, the rest full): pass.</li><li>Controls `ci_C1` (token cleared at report-in), `ci_C2` (lookup by name), `ci_C3` (`$` name chained), `ci_C4` (failed label step), `ci_C6` (the caller's server, no adoption) and `ci_C7` (session presence as liveness) (fast): a violation.</li><li>The verdict probes `ci_V_*` (fast).</li></ul> |
 
-The PRD's "to be modelled" notes predate the suite. They stand on the
-criteria of the last three rows, on AC-HOOK-03's own text, and on the
-Traceability rows "WD 2026-09-29 HOOK and STORE" and "WD 2026-09-29c".
-
-**Not covered.** The model does not cover:
-
-- the `agent_id` guard (`subagent_event`), or subagents' and in-process
-  teammates' other events moving the row;
-- `no_exec_form`;
-- the 540 s cap on the SessionStart wait;
-- an unreadable parent start time;
-- kill's exit-wait value, its skip of a pane process whose start time is
-  unreadable, and the retry-after-survivors residual;
-- the store id's creation, migration and restore;
-- the `@ad_owner` scope-value check;
-- locale, unusable names, timing settings, pre-trust and schema migration.
-
-**Model-vs-built gaps (for b.zuj, which owns the model; nothing here changes it).**
+**Not covered, and model-vs-built gaps (for b.zuj, which owns the model;
+nothing here changes it).**
 
 1. Phase4's hook gate is the superseded one. The built gate is narrower,
    so Phase4's safety results carry over only by argument. Phase4's
    liveness runs assume the wider gate. No run composes the built gate
    with the label lookup.
-2. An unreadable parent start time is not modelled. The built rule, under
-   which the hook never applies, is safety-conservative. For liveness the
-   row stays `pending`, like a lost reply.
-3. The SessionStart wait's 540 s cap (`sessionStartWaitCap` in
-   `internal/hook/handler.go`, AC-HOOK-05) is not modelled. It binds when
-   the grace period is over 540 s, and also when the recorded launch start
-   is in the future or the clock steps. `ci_H_Lrep_slow` covers it in
-   spirit.
-4. Subagents and in-process teammates are not modelled: no `agent_id` and
-   no in-process actors. The SRD says they need no model.
-5. `no_exec_form` is not modelled. The SRD says it needs no model.
-6. The model's kill is one atomic step. The built 5 s exit wait, the skip
-   of a pane process whose start time is unreadable, and the retry after
-   survivors are not modelled.
-7. The model's spawn scan covers "a plain spawn". The built scan
+2. Not modelled:
+   - subagents and in-process teammates (no `agent_id`, no in-process
+     actors), so neither the `agent_id` guard (`subagent_event`) nor their
+     other events moving the row; the SRD says they need no model;
+   - `no_exec_form`; the SRD says it needs no model;
+   - an unreadable parent start time. The built rule, under which the hook
+     never applies, is safety-conservative. For liveness the row stays
+     `pending`, like a lost reply;
+   - the SessionStart wait's 540 s cap (`sessionStartWaitCap` in
+     `internal/hook/handler.go`, AC-HOOK-05). It binds when the grace
+     period is over 540 s, and also when the recorded launch start is in
+     the future or the clock steps. `ci_H_Lrep_slow` covers it in spirit;
+   - kill's exit wait, its skip of a pane process whose start time is
+     unreadable, and the retry after survivors: the model's kill is one
+     atomic step;
+   - the store id's creation, migration and restore;
+   - the `@ad_owner` scope-value check;
+   - locale, unusable names, timing settings, pre-trust and schema
+     migration.
+3. The model's spawn scan covers "a plain spawn". The built scan
    (`scanForLeftover` in `pkg/api/spawn_scan.go`) covers a caller-supplied id
    with no row. Its Can't-tell refusal on an unreadable lookup is not in
    the model.
-8. Environment assumptions:
+4. Environment assumptions:
    - the jobs need a scheduler timeout of at least the group budget plus
      margin, and at least 24 GiB;
    - `tlcjob.sh`'s comment about the scheduler timeout is stale;
@@ -7985,23 +7993,9 @@ Job contexts, logs and the per-run directory:
 
 The logs are always kept.
 
-**Evidence.** No repo `make tla` run is recorded. Gabe skipped the live
-acceptance runs on 2026-10-02 (fast tier, falsifiability and full tier),
-with the job scheduler shut down on purpose. The evidence is b.zuj CI run
-4 (2026-09-30):
-
-- it ended PASS, 92/92 runs ok in 364 min, on the full tier, which
-  contains the fast tier;
-- its job-context inputs are byte-identical to the vendored files: the
-  three specs, all 92 cfgs, the jar and the Dockerfile;
-- `tlcjob.sh` differs only in the budget and disk-cap lines the runner
-  patches;
-- `PROVENANCE.txt` records the run's job ids and every SHA-256.
-
-The suite's own controls, such as `ci_H_Ctop`, `ci_H_Cpane` and `ci_Chook`,
-were expected to violate their properties and did so in that run. That
-shows the checks catch a broken gate. The Epic itself is accepted on its
-offline runner tests.
+**Evidence.** b.zuj CI run 4 (full tier, 92/92 ok, controls violating as
+expected), whose job ids and SHA-256s
+[`PROVENANCE.txt`](../spec/tla/PROVENANCE.txt) records.
 
 **Runner tests (`test/tla/`, reusable test fixtures).** Package `tla_test`
 calls `sandboxguard.Require()` from `TestMain`. It runs the real runner
@@ -8612,9 +8606,19 @@ written.
 **Build helper.** `faketmuxfix.Binary(t)` builds the fake once per test
 binary and returns the path of a file named `tmux`; `faketmuxfix.Dir(t)`
 returns its directory for a `PATH` prepend. **Must use:** new Go tests get
-the fake only through `faketmuxfix.Binary` / `Dir`. The existing builders
-(`buildFakeTmux` in `test/envelope-diff/harness.go` and in
-`cmd/agent-director/spawn_cli_test.go`) stay as they are. The Makefile's
+the fake only through `faketmuxfix.Binary` / `Dir`.
+`cmd/agent-director/spawn_cli_test.go`'s `buildFakeTmux` is a one-line
+wrapper over `faketmuxfix.Dir`; the older builder `buildFakeTmux` in
+`test/envelope-diff/harness.go` stays as it is.
+
+**Log reader.** `faketmuxfix.ReadLog(t, path)` parses a `FAKE_TMUX_LOG`
+file into one argv per invocation, in call order, `argv[0]` included; it
+returns nil when the file does not exist and fails the test on a record
+with no `---` terminator. `test/fake-tmux`'s `readLog`,
+`cmd/agent-director`'s `fakeTmuxInvocations` and `pkg/api`'s
+`fakeTmuxArgvs` go through it. **Must use:** every Go test that reads the
+fake's invocation log uses `faketmuxfix.ReadLog`; never parse the log
+format by hand. The Makefile's
 `test/fake-tmux/tmux` rule (`make fake-tmux`) lists as prerequisites every
 non-test source of the packages the fake links (`FAKE_TMUX_SRCS`,
 including `faketmuxfix`, `tmuxfix` and `internal/tmux`), so a change to the
@@ -8632,7 +8636,18 @@ files. The package doc comment is in `main_test.go`. The shared helpers are in
 `harness_test.go` (isolation, raw runner, cleanup), `harness_client_test.go`
 (production client, recording, creates, starters, generators, assertions)
 and `harness_proc_test.go` (polling, `/proc` readers). The shared lookup
-fixture is in `lookup_helpers_test.go`. tmux 3.2a is covered
+fixture is in `lookup_helpers_test.go`.
+
+**Exec wait.** `waitExeced(t, pid, argv0)` (`harness_proc_test.go`) polls
+until the process's `argv[0]` has base name `argv0`; until a freshly forked
+pane process execs, `/proc` shows the tmux server's argv and environment.
+Its timeout dump never fails the test on a vanished pid. **Must use:**
+every test that reads a pane process's `/proc` (argv, environment,
+locale) or relies on what the pane's program set up after it started (a
+signal trap, for example) calls `waitExeced` first; never read `/proc`
+right after a create, and never write another exec poll.
+
+tmux 3.2a is covered
 only by the replay catalogue; the real-tmux tests run on the sandbox image's
 3.3a (SR-20.8, AC-TEST-03).
 
@@ -9311,7 +9326,19 @@ history-by-life forbidden forms) and `AssertMustNot`;
 holds the cases of `kill`'s finished-row opt-in;
 `descriptions_unusable.go` holds the cases of a row whose recorded tmux
 session name cannot be used (every verb's refusal, the trigger, the
-manifest pointer and the sweeps' result fields).
+manifest pointer and the sweeps' result fields);
+`descriptions_config.go` holds `ErrConfigMalformed`'s case for a config
+file refused for its `[tmux]` values, `DescConfigRefused(path,
+refusals...)` with one `ConfigRefusal{Key, Value, Minimum, Derived,
+Create, Pipe}` per refused value. It builds each refused-value phrase from
+the key's name, unit, default and safe minimum (a derived minimum from the
+given create timeout and pipe-close wait), plus the closing sentence that
+a missing key or 0 gives the default; with no refusals (a value of the
+wrong type) only the path is required. **Must use:** every test that
+checks a `[tmux]` config refusal's description asserts it with
+`AssertDescription` on `DescConfigRefused`, never with its own phrases
+(`cmd/agent-director/tmux_config_cli_test.go`, and the serve test through
+its `assertConfigRefused`).
 It holds, as code, the required phrases of each SR-1.4 error
 description case and the forms no agent-facing text may contain. The
 package doc comment (`doc.go`, "# Description helper") says the same.
@@ -10082,7 +10109,9 @@ each file's doc comments carry the detail.
 - **Starting-row fixture** (`starting_row_fixture_test.go`, no tests;
   SR-4.2, SR-6.7), a finished row as the starting-session rule and kill's
   reported-in rule see it, on the kill fixture:
-  - `defBound` / `defWindow`: the configured defaults (300 s, 90 s).
+  - `defBound` / `defWindow`: the configured defaults, read from
+    `config.DefaultStartingSessionSeconds` and
+    `config.DefaultStoppingWindowSeconds`.
   - `startingRow{state, endedAgo, noEndedAt, agent, noPID, noSessionID,
     noSession, age}`: `endedAgo` and `age` count back from `ruleInstant`,
     the instant both rules read. A session counts as reported in when the
@@ -10315,14 +10344,16 @@ each file's doc comments carry the detail.
     from them, so a changed constant or a changed pinned value fails.
     `TestReadmeTimingValuesStatements` checks the listed prose statements
     in `docTimingStatements()` (a `docStatement` names the doc, the
-    section, a pattern whose groups capture the stated values, and the
-    values the constants give): the defaults, safe minimums and the `kill`
-    and `pause` worst cases in the README's
+    section, its `anchors` and the values the constants give; value i is
+    the first whole number after anchors[i], searched from the end of
+    value i-1, and an empty anchor takes the next number): the defaults,
+    safe minimums and the `kill` and `pause` worst cases in the README's
     [Timing settings](../README.md#timing-settings-tmux) and caller
     contract and in this document's [Stop semantics](#stop-semantics),
-    caller contract, package inventory and kill fixture entries. Each
-    must match exactly once in its section. Other worst-case statements
-    in this document are not pinned. `TestReadmeTimingValuesExampleBlock`
+    caller contract and package inventory. Anchors are key code spans,
+    the worst-case formulas or short terms such as "stopping window is";
+    the first occurrence after an anchor counts. Other timing statements
+    in this document, the kill fixture's included, are not pinned. `TestReadmeTimingValuesExampleBlock`
     and `TestReadmeTimingValuesTable` check the README's commented
     `[tmux]` example block and its timing table: one entry per key in
     `config.TmuxKeys()` order, at its default, with its unit and safe
@@ -10712,7 +10743,7 @@ test/
     version.test.ts
   internal/
     tempHome.ts              # withTempHome() helper
-    helper.ts                # runHelper() wrapper for ts-helper subprocess; privateTmuxSocket()
+    helper.ts                # runHelper() wrapper for ts-helper subprocess; privateTmuxSocket(); fakeTmuxCalls(), withProcessEnv(), CLAUDE_JSON, trustEntry(), seedOuterParent()
 ```
 
 **`withTempHome` helper.**
@@ -10801,6 +10832,31 @@ a row a resume launches on: resume uses the row's recorded socket and refuses
 one whose directory is missing. The resume happy paths in
 `smoke/resume.test.ts` and `subprocess-smoke.test.ts` pass the temp HOME, so
 the socket and the fake-tmux tables beside it are removed with it.
+
+Its other shared helpers, each with its must-use rule:
+
+- `fakeTmuxCalls(logPath)` returns the argv (`argv[0]` included) of each
+  fake-tmux invocation in a `FAKE_TMUX_LOG` file, `[]` when nothing was
+  logged. **Must use:** every TS test that reads the fake's log goes
+  through it; never split the log format by hand (the Go side's
+  counterpart is `faketmuxfix.ReadLog`).
+- `withProcessEnv(vars, fn)` runs `fn` with each `process.env` variable set
+  (`undefined` unsets it) and restores the prior values afterwards, even
+  on a throw; a `Client`'s CLI inherits `process.env` per call. **Must
+  use:** a new test that sets `FAKE_TMUX_*` (or any variable the CLI child
+  must see) for one call uses it, never its own save/restore block. Some
+  older files still save and restore other variables by hand
+  (`subprocess-client`, `version-resolution`, the `tempHome` helpers).
+- `CLAUDE_JSON`, a temp HOME's `.claude.json` as planted before a launch
+  (no trust entry for any folder), and `trustEntry(claudeJsonPath, cwd)`,
+  which reads `projects[cwd].hasTrustDialogAccepted` (undefined when
+  absent). **Must use:** pre-trust tests plant and read `.claude.json`
+  through these, never their own literal or parser.
+- `seedOuterParent(storePath)` seeds the outer agent's row when the tests
+  run inside an agent (whose `AGENT_DIRECTOR_INSTANCE_ID` a launch records
+  as `parent_id`), so the foreign key holds; it does nothing otherwise.
+  **Must use:** a TS test that launches into a fresh store seeds the outer
+  parent through it, never its own seed.
 
 **`smoke-invariants.test.ts` meta-test.**
 

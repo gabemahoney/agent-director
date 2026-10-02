@@ -176,9 +176,7 @@ func (f *spawnFix) assertSpawned(t *testing.T, s spawned, wantSocket string, wan
 		}
 	}
 
-	if argv := procCmdline(t, panePID); len(argv) == 0 || argv[0] != "sleep" {
-		t.Errorf("pane %d runs %q, want the stand-in claude (sleep)", panePID, argv)
-	}
+	waitExeced(t, panePID, "sleep") // the stand-in claude execs sleep
 	if v, _ := envValue(procEnviron(t, panePID), "AGENT_DIRECTOR_INSTANCE_ID"); v != s.ID {
 		t.Errorf("pane AGENT_DIRECTOR_INSTANCE_ID = %q, want %q", v, s.ID)
 	}
@@ -221,6 +219,7 @@ func TestSpawnLabelsSessionWithStoreToken(t *testing.T) {
 			var otherLabel, otherPane string
 			if tc.inPane {
 				other = f.agentOn(t, f.fresh(t), createSpec{StoreID: f.storeID(t)})
+				waitExeced(t, other.Reply.PanePID, stubCommand()[0])
 				env := procEnviron(t, other.Reply.PanePID)
 				tmuxVar, ok1 := envValue(env, "TMUX")
 				tmuxPane, ok2 := envValue(env, "TMUX_PANE")

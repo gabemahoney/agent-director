@@ -13,7 +13,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -26,14 +25,6 @@ import (
 
 // killOursCalls is the Ours kill sequence whose agent can be checked.
 var killOursCalls = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallKillPane, tmux.CallKillSession}
-
-// killAssertRowUnchanged fails when id's row no longer reads as before.
-func killAssertRowUnchanged(t *testing.T, e *killEnv, id string, before apitest.SpawnColumns) {
-	t.Helper()
-	if got := e.columns(t, id); !reflect.DeepEqual(got, before) {
-		t.Errorf("row %s = %+v; want unchanged %+v", id, got, before)
-	}
-}
 
 // killAssertOutcome fails unless id's one new ad.kill.called record (after
 // the before already written) carries outcome.
@@ -106,7 +97,7 @@ func TestKillNonLookupRows(t *testing.T) {
 			}
 			e.assertKillCalls(t)
 			if tc.id == "" {
-				killAssertRowUnchanged(t, e, id, before)
+				e.assertRowUnchanged(t, id, before)
 			}
 		})
 	}
@@ -142,7 +133,7 @@ func TestKillUnusableSocketDirectory(t *testing.T) {
 		t.Error("kill_sent = true; want false")
 	}
 	e.assertKillCalls(t)
-	killAssertRowUnchanged(t, e, r.ID, before)
+	e.assertRowUnchanged(t, r.ID, before)
 }
 
 // TestKillSwallowsTmuxFailure (SR-20.6, inverted): failed kills whose
@@ -181,7 +172,7 @@ func TestKillSwallowsTmuxFailure(t *testing.T) {
 					apitest.DescKillUncheckable(r.ID, r.Name, apitest.KillSent{Pane: true, Session: true}))
 			}
 			e.assertKillCalls(t, append(killOursCalls, tmux.CallLookup)...)
-			killAssertRowUnchanged(t, e, r.ID, before)
+			e.assertRowUnchanged(t, r.ID, before)
 		})
 	}
 }
@@ -255,7 +246,7 @@ func TestKillIsIdempotentAcrossRepeatedCalls(t *testing.T) {
 		if res.KillSent != sent {
 			t.Errorf("Kill %d: kill_sent = %v; want %v", i+1, res.KillSent, sent)
 		}
-		killAssertRowUnchanged(t, e, r.ID, before)
+		e.assertRowUnchanged(t, r.ID, before)
 	}
 	e.assertKillCalls(t, append(killOursCalls, tmux.CallLookup, tmux.CallLookup)...)
 }
@@ -285,7 +276,7 @@ func TestKillLiveRowInvokesTmux(t *testing.T) {
 			t.Errorf("%v calls = %+v; want one on %s targeting %s", want.Call, got, want.Socket, want.Target)
 		}
 	}
-	killAssertRowUnchanged(t, e, r.ID, before)
+	e.assertRowUnchanged(t, r.ID, before)
 }
 
 // TestKillClient: Client.Kill with the Recorder as Options.TmuxClient kills a

@@ -24,7 +24,6 @@ import {
   mkdirSync,
   existsSync,
   rmSync,
-  readFileSync,
   writeFileSync,
   chmodSync,
   symlinkSync,
@@ -33,6 +32,7 @@ import {
 } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
+import { fakeTmuxCalls } from "./internal/helper.js";
 
 const cliPath = process.env.CLI_PATH;
 const fakeTmuxDir = process.env.FAKE_TMUX_DIR;
@@ -71,22 +71,15 @@ function runSpawn(opts: {
   };
 }
 
-/**
- * Parse the JSON value that followed `--settings` in the fake-tmux argv log.
- * The log records one argv element per line, with "---" separators between
- * invocations.  Look for "--settings" followed by the JSON string.
- */
+/** Parse the JSON value that followed `--settings` in the fake-tmux argv log. */
 function extractSettingsJson(logPath: string): SettingsJson | null {
-  const raw = readFileSync(logPath, "utf8");
-  const lines = raw.split("\n");
-  for (let i = 0; i < lines.length - 1; i++) {
-    if (lines[i] === "--settings") {
-      const jsonLine = lines[i + 1];
-      try {
-        return JSON.parse(jsonLine) as SettingsJson;
-      } catch {
-        return null;
-      }
+  for (const argv of fakeTmuxCalls(logPath)) {
+    const i = argv.indexOf("--settings");
+    if (i < 0 || i + 1 >= argv.length) continue;
+    try {
+      return JSON.parse(argv[i + 1]) as SettingsJson;
+    } catch {
+      return null;
     }
   }
   return null;

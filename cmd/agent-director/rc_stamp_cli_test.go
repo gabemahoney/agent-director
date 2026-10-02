@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 )
 
@@ -27,7 +28,7 @@ func rcStampValue(t *testing.T, root string) string {
 }
 
 // buildRCBinary stamps value through the Makefile's version override into a
-// temp dir (never ./bin) and returns this host's linux binary.
+// temp dir (never ./bin) and returns this host's binary.
 func buildRCBinary(t *testing.T, root, value string) string {
 	t.Helper()
 	dist := t.TempDir()
@@ -37,8 +38,11 @@ func buildRCBinary(t *testing.T, root, value string) string {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("make release-binaries (AGENT_DIRECTOR_BUILD_VERSION=%s): %v\n%s", value, err, out)
 	}
-	return filepath.Join(dist, "agent-director-linux-"+runtime.GOARCH)
+	return filepath.Join(dist, "agent-director-"+runtime.GOOS+"-"+runtime.GOARCH)
 }
+
+// releaseTargets are the GOOS/GOARCH pairs `make release-binaries` builds.
+var releaseTargets = []string{"linux/amd64", "linux/arm64", "darwin/arm64"}
 
 // decodeVersion parses a `version` result and returns its version field.
 func decodeVersion(t *testing.T, raw string) string {
@@ -58,8 +62,8 @@ func TestRCStampReportedByVersionVerbAndMCPTool(t *testing.T) {
 	if testing.Short() {
 		t.Skip("slow: runs make release-binaries")
 	}
-	if runtime.GOOS != "linux" || (runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64") {
-		t.Skipf("release-binaries builds linux/amd64 and linux/arm64 only; host is %s/%s", runtime.GOOS, runtime.GOARCH)
+	if host := runtime.GOOS + "/" + runtime.GOARCH; !slices.Contains(releaseTargets, host) {
+		t.Skipf("release-binaries builds %v only; host is %s", releaseTargets, host)
 	}
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {

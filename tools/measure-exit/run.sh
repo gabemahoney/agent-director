@@ -65,7 +65,13 @@
 #                             .credentials.json, when it is not JSON, or when
 #                             any key in it looks like a credential (KEY, TOKEN,
 #                             SECRET, PASSWORD, CREDENTIAL, OAUTH, AUTHORIZATION,
-#                             COOKIE); the refusal names the key, never a value.
+#                             COOKIE), or when an env object in it sets
+#                             ANTHROPIC_BASE_URL, ANTHROPIC_CUSTOM_HEADERS, a
+#                             CLAUDE_CODE_USE_* name or a name real mode refuses,
+#                             or sets any name to a value that looks like a URL
+#                             or an authorization header; the refusal names the
+#                             key, never a value. The driver repeats the env
+#                             check over the layer files in real mode.
 #   --host-network            opt in to host networking (hosts with the bridge
 #                             MTU problem, b.rx8); printed as a warning
 #   --guard-mode busy|quiet   guard.sh mode (default busy: user decision)
@@ -78,7 +84,7 @@
 #                               bridge network stalls on b.rx8 hosts)
 #   --known-bad V             newest version known to ignore args (2.1.120)
 #   --known-good V            oldest version known to run them (2.1.285)
-#   --deployed V              the fleet's version, probed explicitly before the
+#   --deployed V              the deployed version, probed explicitly before the
 #                             bisection (default 2.1.280); its verdict is the
 #                             first "deployed" line of probe-summary.txt, and
 #                             it narrows the bisection
@@ -102,10 +108,21 @@ readonly PROBE_DUMMY_TOKEN="mx-probe-dummy-token-not-a-secret"
 readonly CONTAINER_HOME=/home/tester
 readonly LAYER_DIR=/opt/measure-exit/layers
 readonly RESULTS_MOUNT=/results
-# DEPLOYED_CLAUDE_CODE is the version this fleet's workers run (user,
-# 2026-10-01): the default measurement image, and the version L0 probes
-# explicitly.
+# DEPLOYED_CLAUDE_CODE is the deployed version: the default measurement
+# image, and the version L0 probes explicitly.
 readonly DEPLOYED_CLAUDE_CODE=2.1.280
+# LAYER_REFUSED_ENV are the names a staged layer's env object may not set:
+# the gateway's own routing (ANTHROPIC_BASE_URL, ANTHROPIC_CUSTOM_HEADERS),
+# which a layer would override, and every name in the driver's
+# realModeRefusedEnv (env.go; keep the two in step, and in step with
+# layerenv.go's layerEnvNameRefused). Any CLAUDE_CODE_USE_* name (a provider
+# switch) is refused as well, and the key check refuses the other
+# credential names (ANTHROPIC_AUTH_TOKEN and the like) first
+# (refuse_credential_layer).
+readonly LAYER_REFUSED_ENV=(ANTHROPIC_BASE_URL ANTHROPIC_CUSTOM_HEADERS
+    ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_USE_BEDROCK
+    AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_BEARER_TOKEN_BEDROCK
+    AWS_REGION AWS_PROFILE AWS_DEFAULT_REGION)
 
 # Case ids per mode (the driver's registry: rn6.go, rn2.go, rn9.go). Session
 # counts below are computed from them.
@@ -236,10 +253,17 @@ layer_target() {
 # credentials file (.credentials.json), when it is not JSON, or when any key
 # anywhere in it looks like a credential: env blocks, MCP server env and
 # headers, and helpers such as apiKeyHelper. Its value would be mounted into
-# the container, and the run bills to the gateway only. The refusal names
-# the key, never a value.
+# the container, and the run bills to the gateway only. It also refuses a
+# layer with an env object (at any depth: settings env, MCP server env) that
+# sets a LAYER_REFUSED_ENV or CLAUDE_CODE_USE_* name, which would take the
+# agents off the gateway, or that sets any name to a value that looks like a
+# URL or an authorization header (://, "bearer ", "authorization:", any
+# case). The value test runs inside jq, so no value reaches the shell. The
+# refusal names the key, never a value. The driver repeats the env check
+# over the layer files in real mode (layerenv.go), for a container started
+# by hand.
 refuse_credential_layer() {
-    local k="$1" src="$2" real base key keys
+    local k="$1" src="$2" real base key keys entries flag name refused n
     real="$(readlink -f -- "$src" 2>/dev/null || printf '%s' "$src")"
     for base in "${src##*/}" "${real##*/}"; do
         case "$base" in
@@ -257,6 +281,28 @@ refuse_credential_layer() {
                 die 2 "refusing the $k layer $src: it holds the credential-like key $key (its value would be mounted into the container; values are never printed); remove it from the copy you stage (nothing was built or run)" ;;
         esac
     done <<<"$keys"
+    # One line per env entry: "url" or "-" (whether its value looks like a
+    # URL or an authorization header), a tab, then the name.
+    entries="$(jq -r '.. | objects | select(has("env")) | .env | objects | to_entries[]
+        | "\(if (.value | tostring | test("://|\\bbearer\\s|authorization\\s*:"; "i")) then "url" else "-" end)\t\(.key | gsub("[\\t\\r\\n]"; " "))"' \
+        <"$src" 2>/dev/null)" \
+        || die 2 "refusing the $k layer $src: its env objects could not be read, so it cannot be checked (nothing was built or run)"
+    while IFS=$'\t' read -r flag name; do
+        refused=0
+        case "${name^^}" in
+            CLAUDE_CODE_USE_*) refused=1 ;;
+            *)
+                for n in "${LAYER_REFUSED_ENV[@]}"; do
+                    if [[ "${name^^}" == "$n" ]]; then refused=1; fi
+                done ;;
+        esac
+        if [[ "$refused" -eq 1 ]]; then
+            die 2 "refusing the $k layer $src: an env object in it sets $name, which would take the agents off the gateway (the run bills to the gateway only; values are never printed); remove it from the copy you stage (nothing was built or run)"
+        fi
+        if [[ "$flag" == url ]]; then
+            die 2 "refusing the $k layer $src: an env object in it sets $name to a value that looks like a URL or an authorization header (values are never printed); remove it from the copy you stage (nothing was built or run)"
+        fi
+    done <<<"$entries"
 }
 
 # report_layers lists each layer as staged or missing, and refuses (exit 2)

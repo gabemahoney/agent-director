@@ -60,7 +60,7 @@ func TestKillUnusableNameMissingWithoutOptIn(t *testing.T) {
 				t.Fatalf("kill = %+v, %v; want kill_sent false, nil", res, err)
 			}
 			e.assertKillCalls(t)
-			killAssertRowUnchanged(t, e, r.ID, before)
+			e.assertRowUnchanged(t, r.ID, before)
 			kolAssertCalled(t, r.ID, map[string]any{"include_finished": false, "outcome": "ok",
 				"lookup_outcome": tmux.TokenNotRun, "kill_sent": false})
 		})

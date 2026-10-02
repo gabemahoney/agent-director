@@ -98,6 +98,8 @@ func TestKillSurvivorIsKillFailed(t *testing.T) {
 			} else {
 				want.AgentPID = survivor
 			}
+			// Only once sh has run the trap and exec'd sleep does it ignore SIGHUP.
+			waitExeced(t, survivor, "sleep")
 
 			k := f.kill(t, r.InstanceID, wait)
 			k.assertRefused(t, "ErrTmuxKillFailed", apitest.DescKillWaitExpired(want), r.Token, f.StoreID)

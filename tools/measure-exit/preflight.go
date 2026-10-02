@@ -105,9 +105,10 @@ type versionReader interface {
 }
 
 // checkEnvironment runs the checks that need no file system change: the
-// container marker, TMUX, $HOME, both homes free of .agent-director, and the
-// sample floor when sampled is true (an RN-6 or RN-2 case is selected). It
-// returns the two homes.
+// container marker, TMUX, $HOME, both homes free of .agent-director, the
+// sample floor when sampled is true (an RN-6 or RN-2 case is selected) and,
+// in real mode, the gateway-only environment and the layer files' env
+// objects (checkLayerFilesEnv; it only reads them). It returns the two homes.
 func checkEnvironment(c config, e environment, sampled bool) (home, passwdHome string, err error) {
 	if e.getenv(containerMarkerEnv) == "" {
 		if c.mode != modeDry || e.getenv(sandboxMarkerEnv) == "" {
@@ -137,6 +138,9 @@ func checkEnvironment(c config, e environment, sampled bool) (home, passwdHome s
 	}
 	if c.mode == modeReal {
 		if err := checkRealModeEnv(e); err != nil {
+			return "", "", err
+		}
+		if err := checkLayerFilesEnv(realModeLayerFiles(c, home)); err != nil {
 			return "", "", err
 		}
 	}
@@ -262,7 +266,7 @@ func preflight(c config, e environment, vr versionReader, sampled bool) (isolati
 		iso.ClaudeVersionFloor = realModeMinClaudeCode
 		if !versionAtLeast(iso.ClaudeCode, realModeMinClaudeCode) {
 			return iso, refuse(ruleVersionFloor,
-				"Claude Code %q is older than %s, the deployed version and the oldest a real run accepts; older versions are expected to ignore exec-form hooks, which would write no_exec_form so that no agent reports in",
+				"Claude Code %q is older than %s, the deployed version, the supported minimum and the oldest a real run accepts (a Claude Code that does not run exec-form hooks writes no_exec_form, so that no agent reports in)",
 				iso.ClaudeCode, realModeMinClaudeCode)
 		}
 	}

@@ -1,7 +1,6 @@
 package main_test
 
 import (
-	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -43,10 +42,7 @@ func TestSocketlessArgvRefused(t *testing.T) {
 				t.Errorf("exit %d stdout %q stderr %q, want %d %q %q",
 					code, stdout.String(), stderr.String(), tc.want.Exit, tc.want.Stdout, tc.want.Stderr)
 			}
-			var recs [][]string
-			if _, err := os.Stat(logPath); err == nil {
-				recs = readLog(t, logPath)
-			}
+			recs := readLog(t, logPath)
 			switch {
 			case !tc.logged && len(recs) != 0:
 				t.Errorf("log = %q, want nothing logged", recs)

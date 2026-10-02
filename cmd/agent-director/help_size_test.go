@@ -48,7 +48,7 @@ func TestHelpSizeGuard(t *testing.T) {
 	t.Logf("help stdout %d bytes; recorded %d, limit %d; hard cap %d", got, helpStdoutBytes, limit, helpHardCap)
 	if got > limit {
 		t.Errorf("help stdout is %d bytes; recorded %d, limit %d (recorded + 10%%). "+
-			"Trim help; raising helpStdoutBytes needs the orchestrator's approval and a recorded reason (SR-20.6).",
+			"Trim help; raising helpStdoutBytes needs the user's approval and a recorded reason (SR-20.6).",
 			got, helpStdoutBytes, limit)
 	}
 	if got > helpHardCap {

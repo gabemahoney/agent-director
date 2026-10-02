@@ -934,6 +934,57 @@ func applyV5ToV4Recipe(t *testing.T, path string) {
 	}
 }
 
+// v5DowngradeRows names the rows seedV5DowngradeRows seeds.
+type v5DowngradeRows struct {
+	reused, optedOut string
+	reusedHistory    int // entries across the reused row's three lives
+}
+
+// seedV5DowngradeRows seeds a closed v5 store with a row reused twice (life 2,
+// history in lives 0, 1 and 2, a launch identity) and a row whose spawn turned
+// pre-trust off (no_pre_trust 1), for the v5 → v4 recipe case (SR-5.4).
+func seedV5DowngradeRows(t *testing.T, path string) v5DowngradeRows {
+	t.Helper()
+	r := v5DowngradeRows{reused: "v5-reused", optedOut: "v5-opted-out", reusedHistory: 4}
+	db := openExistingRaw(t, "seedV5DowngradeRows", path)
+	defer func() { _ = db.Close() }()
+	// Columns: id, state, cwd, tmux name, relay, jsonl, session, started, ended,
+	// row version, launch start, life, no_pre_trust, token, socket, server
+	// pid / started / starttime, pane id / pid / starttime.
+	spawnRows := [][]any{
+		{r.reused, "ended", "/work/reused", "ad-reused", "off", "/t/r-2.jsonl", "sess-r-2",
+			"2026-02-01 10:00:00", "2026-02-03 10:00:00",
+			7, nil, 2, 0, "0123456789abcdef", "/tmp/ad-sock", 4100, 1767225600, "123", "%3", 4200, "456"},
+		{r.optedOut, "waiting", "/work/opted-out", "ad-opted-out", "on", "/t/o.jsonl", "sess-o",
+			"2026-02-04 10:00:00", nil,
+			3, nil, 0, 1, "fedcba9876543210", "/tmp/ad-sock", 4100, 1767225600, "123", "%4", 4300, "789"},
+	}
+	for _, s := range spawnRows {
+		if _, err := db.Exec(`INSERT INTO spawns (claude_instance_id, state, cwd, tmux_session_name,
+			relay_mode, jsonl_path, claude_session_id, started_at, ended_at,
+			row_version, launch_started_at, life_number, no_pre_trust, launch_token, tmux_socket,
+			tmux_server_pid, tmux_server_started, tmux_server_starttime, pane_id, pane_pid, pane_starttime)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, s...); err != nil {
+			t.Fatalf("seedV5DowngradeRows: insert spawn %v: %v", s[0], err)
+		}
+	}
+	// Columns: instance id, session id, jsonl path, recorded_at, life.
+	historyRows := [][]any{
+		{r.reused, "sess-r-0a", "/t/r-0a.jsonl", "2026-02-01 11:00:00", 0},
+		{r.reused, "sess-r-0b", nil, "2026-02-01 12:00:00", 0},
+		{r.reused, "sess-r-1", "/t/r-1.jsonl", "2026-02-02 11:00:00", 1},
+		{r.reused, "sess-r-2-prior", "/t/r-2p.jsonl", "2026-02-03 09:00:00", 2},
+		{r.optedOut, "sess-o-prior", "/t/o-prior.jsonl", "2026-02-04 11:00:00", 0},
+	}
+	for _, h := range historyRows {
+		if _, err := db.Exec(`INSERT INTO session_history
+			(claude_instance_id, claude_session_id, jsonl_path, recorded_at, life_number) VALUES (?,?,?,?,?)`, h...); err != nil {
+			t.Fatalf("seedV5DowngradeRows: insert history %v: %v", h, err)
+		}
+	}
+	return r
+}
+
 // injectWriteFailure makes kind's writes to instanceID's rows fail on s, via
 // writefailfix (the single trigger source); the test's cleanup removes it.
 // Seed the row first: several kinds also match seeding writes.

@@ -23,7 +23,7 @@ import { test, expect, describe } from "bun:test";
 import * as path from "path";
 import * as fs from "fs";
 import { withTempHome } from "./internal/tempHome.js";
-import { runHelper, privateTmuxSocket } from "./internal/helper.js";
+import { runHelper, privateTmuxSocket, seedOuterParent } from "./internal/helper.js";
 import { VERBS } from "../src/internal/verbs.js";
 import {
   Client,
@@ -47,24 +47,11 @@ const FAKE_TMUX_BIN = path.join(
   "tmux"
 );
 
-const OUTER_INSTANCE_ID = process.env.AGENT_DIRECTOR_INSTANCE_ID;
 const BOGUS_ID = "subprocess-smoke-bogus-id";
 
 /** Mirrors Go's slugifyCwd: every non-[A-Za-z0-9-] rune becomes '-'. */
 function slugifyCwd(cwd: string): string {
   return cwd.replace(/[^A-Za-z0-9-]/g, "-");
-}
-
-/** Seed the outer-instance parent row when running inside a Claude session. */
-function maybeSeedOuterParent(storePath: string): void {
-  if (OUTER_INSTANCE_ID) {
-    runHelper("seed-spawn", {
-      store: storePath,
-      id: OUTER_INSTANCE_ID,
-      state: "working",
-      "create-store": true,
-    });
-  }
 }
 
 // ── happy paths: one per verb ────────────────────────────────────────────────
@@ -73,7 +60,7 @@ describe("subprocess-smoke / happy paths (SR-10.3)", () => {
   test("spawn — returns claude_instance_id", async () => {
     await withTempHome(async (homeDir) => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
-      maybeSeedOuterParent(storePath);
+      seedOuterParent(storePath);
       using client = await Client.create({ storePath, createIfMissing: true, tmuxCommand: FAKE_TMUX_BIN , _cliPath: process.env.CLI_PATH } as any);
       const r: SpawnResult = await client.spawn({ cwd: homeDir });
       expect(typeof r.claude_instance_id).toBe("string");
@@ -188,7 +175,7 @@ describe("subprocess-smoke / happy paths (SR-10.3)", () => {
       const id = "subsmoke-resume";
       const cwd = "/tmp";
       const sessionId = `sess-${id}`;
-      maybeSeedOuterParent(storePath);
+      seedOuterParent(storePath);
       runHelper("seed-spawn", {
         store: storePath, id, state: "ended", cwd,
         "session-id": sessionId, "create-store": true,

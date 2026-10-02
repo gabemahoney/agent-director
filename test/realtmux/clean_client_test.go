@@ -97,6 +97,7 @@ func TestCleanClientServerEnvironment(t *testing.T) {
 			if got := rt.showADEnv(t, "-t", sessionID); !maps.Equal(got, wantSession) {
 				t.Errorf("session %s environment AGENT_DIRECTOR_* = %v, want %v", sessionID, got, wantSession)
 			}
+			waitExeced(t, panePID, stubCommand()[0])
 			if got := cleanADVars(procEnviron(t, panePID)); !maps.Equal(got, wantPane) {
 				t.Errorf("pane process %d environment AGENT_DIRECTOR_* = %v, want %v", panePID, got, wantPane)
 			}

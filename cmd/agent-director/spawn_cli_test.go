@@ -10,37 +10,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// fakeTmuxBin is the path to the fake-tmux helper compiled by buildFakeTmux.
-// Holding it as a package-level var lets each test reach the same binary
-// without rebuilding it per test.
-var fakeTmuxBin string
-
-// buildFakeTmux compiles test/fake-tmux into a temp dir and returns the
-// directory so callers can prepend it to PATH for the spawn-CLI tests.
-// Cached across tests via the fakeTmuxBin var.
+// buildFakeTmux returns the directory of faketmuxfix's fake "tmux", built
+// once per test binary, for a PATH prepend.
 func buildFakeTmux(t *testing.T) string {
 	t.Helper()
-	if fakeTmuxBin != "" {
-		return filepath.Dir(fakeTmuxBin)
-	}
-	tmp, err := os.MkdirTemp("", "fake-tmux-")
-	if err != nil {
-		t.Fatalf("mkdtemp: %v", err)
-	}
-	// The fake binary must be named exactly "tmux" so exec.LookPath finds
-	// it ahead of the system tmux on a PATH prepend.
-	out := filepath.Join(tmp, "tmux")
-	build := exec.Command("go", "build", "-o", out, "../../test/fake-tmux")
-	build.Stderr = os.Stderr
-	build.Stdout = os.Stderr
-	if err := build.Run(); err != nil {
-		t.Fatalf("build fake-tmux: %v", err)
-	}
-	fakeTmuxBin = out
-	return tmp
+	return faketmuxfix.Dir(t)
 }
 
 // runSpawnCLI is a thin wrapper around exec.Command that runs the built

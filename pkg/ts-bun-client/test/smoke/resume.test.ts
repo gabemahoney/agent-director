@@ -27,15 +27,9 @@ import { test, expect } from "bun:test";
 import * as path from "path";
 import * as fs from "fs";
 import { withTempHome } from "../internal/tempHome.js";
-import { runHelper, privateTmuxSocket } from "../internal/helper.js";
+import { runHelper, privateTmuxSocket, CLAUDE_JSON, trustEntry, seedOuterParent } from "../internal/helper.js";
 import { Client, ErrSpawnNotFound, AgentDirectorError } from "../../src/index.js";
 import type { ResumeResult } from "../../src/index.js";
-
-// When running inside a Claude session, AGENT_DIRECTOR_INSTANCE_ID is set in the
-// OS environment. The subprocess CLI reads it as parent_id for SetParentID.
-// Seed the parent row in any resume test store so the FOREIGN KEY constraint
-// is satisfied.
-const OUTER_INSTANCE_ID = process.env.AGENT_DIRECTOR_INSTANCE_ID;
 
 const BOGUS_ID = "smoke-bogus-id-does-not-exist";
 
@@ -52,14 +46,6 @@ function slugifyCwd(cwd: string): string {
   return out;
 }
 
-/** The temp HOME's .claude.json as planted before the resume: no trust entry for any folder. */
-const CLAUDE_JSON = '{"projects": {}}\n';
-
-/** projects[cwd].hasTrustDialogAccepted in claudeJsonPath (undefined when absent). */
-function trustEntry(claudeJsonPath: string, cwd: string): unknown {
-  return JSON.parse(fs.readFileSync(claudeJsonPath, "utf8")).projects?.[cwd]?.hasTrustDialogAccepted;
-}
-
 test.each([
   ["ok", "an allowed row", false],
   ["skipped", "an opted-out row", true],
@@ -74,16 +60,8 @@ test.each([
       const claudeJson = path.join(homeDir, ".claude.json");
       fs.writeFileSync(claudeJson, CLAUDE_JSON);
 
-      // Pre-seed the parent row so the FK constraint is satisfied when the worker
-      // sets parent_id = OUTER_INSTANCE_ID via SetParentID in resumeImpl.
-      if (OUTER_INSTANCE_ID) {
-        runHelper("seed-spawn", {
-          store: storePath,
-          id: OUTER_INSTANCE_ID,
-          state: "working",
-          "create-store": true,
-        });
-      }
+      // The resume records the outer agent's id as parent_id; its row must exist.
+      seedOuterParent(storePath);
 
       // Seed a spawn in ended state with a claude_session_id set, recorded on
       // a socket whose directory exists (resume launches on that socket).

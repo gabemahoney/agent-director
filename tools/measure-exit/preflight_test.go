@@ -86,8 +86,15 @@ func assertRefused(t *testing.T, err error, rule string) {
 }
 
 func TestPreflightRules(t *testing.T) {
-	// realCC is the fleet's deployed version, real mode's floor.
+	// realCC is the deployed version, real mode's floor.
 	const realCC, stubCC = "2.1.280 (Claude Code)", "2.1.285 (measure-exit dry-run stub)"
+	// layer writes a layer file holding body and returns its path.
+	layer := func(body string) string {
+		path := filepath.Join(t.TempDir(), "layer.json")
+		writeFile(t, path, body)
+		return path
+	}
+	const offending = `{"env": {"AWS_REGION": "us-east-1"}}`
 	// envRules refuse before the private TMUX_TMPDIR is made: nothing is written.
 	envRules := map[string]bool{ruleContainerOnly: true, ruleTmuxUnset: true, ruleHomeSet: true, ruleHomeHasStore: true,
 		ruleSampleFloor: true, ruleCredential: true, ruleModelSet: true, ruleProbeCredential: true, ruleRealGatewayOnly: true}
@@ -132,6 +139,20 @@ func TestPreflightRules(t *testing.T) {
 		{"real with Claude Code 2.2.0", modeReal, "2.2.0 (Claude Code)", nil, ""},
 		{"probe with Claude Code 2.1.120", modeProbe, "2.1.120 (Claude Code)", nil, ""},
 		{"dry with a 2.1.120 stub", modeDry, "2.1.120 (measure-exit dry-run stub: exec-form args dropped)", nil, ""},
+		{"real with a refused env name in the project layer", modeReal, realCC, func(p *pfSetup) { p.cfg.projectSettings = layer(offending) }, ruleRealGatewayOnly},
+		{"real with a refused env name in the local layer", modeReal, realCC, func(p *pfSetup) { p.cfg.localSettings = layer(offending) }, ruleRealGatewayOnly},
+		{"real with a URL in the MCP layer's server env", modeReal, realCC, func(p *pfSetup) {
+			p.cfg.mcpConfig = layer(`{"mcpServers": {"s": {"env": {"UPSTREAM": "https://x.invalid"}}}}`)
+		}, ruleRealGatewayOnly},
+		{"real with a refused env name in the user layer", modeReal, realCC, func(p *pfSetup) {
+			writeFile(t, filepath.Join(p.home, ".claude", "settings.json"), offending)
+		}, ruleRealGatewayOnly},
+		{"real with a non-JSON project layer", modeReal, realCC, func(p *pfSetup) { p.cfg.projectSettings = layer("not json") }, ruleRealGatewayOnly},
+		{"real with a missing project layer", modeReal, realCC, func(p *pfSetup) { p.cfg.projectSettings = "/nonexistent/project.json" }, ""},
+		{"dry with a refused env name in the project layer", modeDry, stubCC, func(p *pfSetup) { p.cfg.projectSettings = layer(offending) }, ""},
+		{"probe with a refused env name in the user layer", modeProbe, realCC, func(p *pfSetup) {
+			writeFile(t, filepath.Join(p.home, ".claude", "settings.json"), offending)
+		}, ""},
 	}
 	for _, name := range []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL", "AWS_ACCESS_KEY_ID",
 		"AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_BEARER_TOKEN_BEDROCK"} {

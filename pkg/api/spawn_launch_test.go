@@ -151,15 +151,9 @@ func TestSpawnRecordsLaunchAndIdentity(t *testing.T) {
 // fakeTmuxArgvs reads fake-tmux's argv log: one argv per invocation, program name dropped.
 func fakeTmuxArgvs(t *testing.T, path string) [][]string {
 	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read fake-tmux log: %v", err)
-	}
 	var out [][]string
-	for _, rec := range strings.SplitAfter(string(data), "---\n") {
-		if rec != "" {
-			out = append(out, strings.Split(strings.TrimSuffix(rec, "\n---\n"), "\n")[1:])
-		}
+	for _, argv := range faketmuxfix.ReadLog(t, path) {
+		out = append(out, argv[1:])
 	}
 	return out
 }

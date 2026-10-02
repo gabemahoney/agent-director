@@ -7,7 +7,6 @@ package main_test
 
 import (
 	"errors"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -188,21 +187,7 @@ func ids[X any](xs []X, id func(X) string) []string {
 // readLog parses a FAKE_TMUX_LOG file into records of argv elements.
 func readLog(t *testing.T, path string) [][]string {
 	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read log: %v", err)
-	}
-	var recs [][]string
-	for _, rec := range strings.SplitAfter(string(data), "---\n") {
-		if rec == "" {
-			continue
-		}
-		if !strings.HasSuffix(rec, "\n---\n") {
-			t.Fatalf("log record not terminated by ---: %q", rec)
-		}
-		recs = append(recs, strings.Split(strings.TrimSuffix(rec, "\n---\n"), "\n"))
-	}
-	return recs
+	return faketmuxfix.ReadLog(t, path)
 }
 
 // TestEveryCallKindSucceeds makes each of the nine calls against a seeded table.

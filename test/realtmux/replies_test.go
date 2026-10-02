@@ -162,6 +162,7 @@ func TestRepliesCreateReplyFields(t *testing.T) {
 	if c.Reply != reported {
 		t.Errorf("create reply = %+v, tmux reports %+v", c.Reply, reported)
 	}
+	waitExeced(t, c.Reply.PanePID, stubCommand()[0])
 	if got := procCmdline(t, c.Reply.PanePID); !reflect.DeepEqual(got, stubCommand()) {
 		t.Errorf("pane pid %d runs %q, want the stub %q", c.Reply.PanePID, got, stubCommand())
 	}

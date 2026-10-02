@@ -19,9 +19,9 @@ var (
 // Binary compiles test/fake-tmux once per test binary and returns the path
 // of the result, a file named "tmux" (so its directory can go first on PATH;
 // see Dir). Pass the path to tmux.New or api.Options.TmuxCommand. The build
-// runs `go build`, so call it only in the sandbox, as every test runs. The
-// existing per-package builders (cmd/agent-director's and
-// test/envelope-diff's buildFakeTmux) stay; new tests use this one.
+// runs `go build`, so call it only in the sandbox, as every test runs.
+// cmd/agent-director's buildFakeTmux wraps Dir; test/envelope-diff's own
+// builder stays. New tests use this one.
 func Binary(t TB) string {
 	t.Helper()
 	buildOnce.Do(func() { buildPath, buildErr = build() })

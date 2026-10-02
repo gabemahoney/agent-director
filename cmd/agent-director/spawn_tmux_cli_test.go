@@ -55,18 +55,9 @@ func spawnSocket(t *testing.T, home string) string {
 // argv[0], in call order; nil when the fake was never run.
 func fakeTmuxInvocations(t *testing.T, home string) [][]string {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(home, "fake-tmux.log"))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		t.Fatalf("read fake-tmux log: %v", err)
-	}
 	var out [][]string
-	for _, rec := range strings.Split(string(raw), "---\n") {
-		if lines := strings.Split(strings.TrimSuffix(rec, "\n"), "\n"); len(lines) > 1 {
-			out = append(out, lines[1:])
-		}
+	for _, argv := range faketmuxfix.ReadLog(t, filepath.Join(home, "fake-tmux.log")) {
+		out = append(out, argv[1:])
 	}
 	return out
 }

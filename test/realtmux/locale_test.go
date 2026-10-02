@@ -124,6 +124,7 @@ func TestLocaleNamesAndIDsCompareExactly(t *testing.T) {
 			// environments hold exactly the case's; the session's holds none.
 			wantVars := slices.Clone(tc.set)
 			slices.Sort(wantVars)
+			waitExeced(t, c.Reply.PanePID, stubCommand()[0])
 			for _, env := range []struct {
 				what          string
 				entries, want []string

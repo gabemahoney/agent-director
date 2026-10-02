@@ -1,7 +1,9 @@
 package faketmuxfix
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -198,4 +200,29 @@ func StoredForm(raw string) string {
 		}
 	}
 	return strings.NewReplacer(".", "_", ":", "_").Replace(raw)
+}
+
+// ReadLog parses the EnvLog file at path into one argv per invocation, in
+// call order, argv[0] included; nil when the file does not exist (no
+// invocation was logged). A record not ended by a "---" line fails the test.
+func ReadLog(t TB, path string) [][]string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		t.Fatalf("faketmuxfix: read %s: %v", EnvLog, err)
+	}
+	var recs [][]string
+	for _, rec := range strings.SplitAfter(string(data), "---\n") {
+		if rec == "" {
+			continue
+		}
+		if !strings.HasSuffix(rec, "\n---\n") {
+			t.Fatalf("faketmuxfix: %s record not ended by ---: %q", EnvLog, rec)
+		}
+		recs = append(recs, strings.Split(strings.TrimSuffix(rec, "\n---\n"), "\n"))
+	}
+	return recs
 }

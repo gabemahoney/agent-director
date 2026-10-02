@@ -27,7 +27,7 @@
 import { test, expect, describe } from "bun:test";
 import * as path from "path";
 import { withTempHome } from "./internal/tempHome.js";
-import { runHelper } from "./internal/helper.js";
+import { seedOuterParent } from "./internal/helper.js";
 import { Client } from "../src/index.js";
 import type { SpawnResult, ListResult } from "../src/index.js";
 
@@ -36,18 +36,6 @@ const FAKE_TMUX_BIN = path.join(
   "tmux"
 );
 
-const OUTER_INSTANCE_ID = process.env.AGENT_DIRECTOR_INSTANCE_ID;
-
-function maybeSeedOuterParent(storePath: string): void {
-  if (OUTER_INSTANCE_ID) {
-    runHelper("seed-spawn", {
-      store: storePath,
-      id: OUTER_INSTANCE_ID,
-      state: "working",
-      "create-store": true,
-    });
-  }
-}
 
 describe("Per-Client serialization (SR-10.4 / SR-3)", () => {
   test(
@@ -55,7 +43,7 @@ describe("Per-Client serialization (SR-10.4 / SR-3)", () => {
     async () => {
       await withTempHome(async (homeDir) => {
         const storePath = path.join(homeDir, ".agent-director", "state.db");
-        maybeSeedOuterParent(storePath);
+        seedOuterParent(storePath);
 
         using client = await Client.create({
           storePath,
@@ -141,7 +129,7 @@ describe("Per-Client serialization (SR-10.4 / SR-3)", () => {
     async () => {
       await withTempHome(async (homeDir) => {
         const storePath = path.join(homeDir, ".agent-director", "state.db");
-        maybeSeedOuterParent(storePath);
+        seedOuterParent(storePath);
 
         // Two clients, same store. Each has its own private queue.
         using clientA = await Client.create({

@@ -44,6 +44,14 @@ SQLite file; everything else is tmux.
   older Claude Code the agent's hooks may apply nothing: rows stay
   `pending` and the trail records `ad.hook.ignored` with reason
   `no_exec_form`; upgrade Claude Code.
+  - The `claude` on PATH must be the agent process itself: Claude Code's
+    native binary, or a wrapper that `exec`s it. A hook moves a row only
+    when its parent process is the pane's own process, so a launcher or
+    shim that runs Claude Code as a child (for example a JS launcher left
+    by an install that skipped its scripts, or a version-manager shim)
+    makes every hook `ad.hook.ignored` with reason `pid_mismatch`, and the
+    rows stay `pending` (see
+    [A row stays `pending` and the trail shows `pid_mismatch`](#a-row-stays-pending-and-the-trail-shows-pid_mismatch)).
 - `tmux` 3.2 or later on PATH. Verified: 3.2a (by a scripted one-off
   run and recorded replies) and 3.3a (by the test suites).
   - Keep `remain-on-exit` off, the tmux default. With it on, a finished
@@ -52,6 +60,11 @@ SQLite file; everything else is tmux.
     `ErrTmuxSessionConflict`, and `expire` keeps the row on every run.
     `find-missing` still marks a row whose agent process is dead,
     whatever tmux shows.
+  - Keep `exit-empty` on, the tmux default. With it off, a server left
+    with no sessions keeps running and reads to agent-director as "a
+    different server" (`ErrTmuxNotAvailable`) until a session is created
+    on it again; until then `resume`, reuse and `kill` of a `pending` row
+    refuse, and `expire` keeps rows.
   - No tmux server needs to be running: agent-director starts one when
     it launches an agent.
 - `jq`, `sqlite3` and `file` on PATH (the installer checks for them).
@@ -611,6 +624,14 @@ downgrade recipe or by restoring a copy from before the install, gets a new
 id when it is migrated again; trail records written before then carry the
 old one.
 
+**Checking a label.** A valid `@ad_owner` label has five fields: `ad1`, a
+launch token, the session's own id (`$N`), the row's id and, last, the
+store id. Compare that last field with the id above. A label whose last
+field is a different id belongs to another agent-director store's agent,
+even when it names this row's id: never end it from this store (see "A
+session of another agent-director store"). Every item below that checks a
+label applies this rule.
+
 ### A finished row's own old session
 
 `resume`, or a `spawn` with `--reuse-finished`, refuses with
@@ -745,13 +766,10 @@ with no valid label may be a person's own, so look before acting.
    tmux -u -S '<socket>' show-options -t '<session id>' -v @ad_owner
    ```
 
-   A valid label has five fields: `ad1`, a launch token, the session's own
-   id, the row's id and, last, the store id. Every leftover `kill` names
-   carries this store's id, which [This store's id](#this-stores-id) shows
-   (as does the `store_id` of an `ad.launch.name_held` record); a label
-   whose last field is a different id
-   belongs to another agent-director store's agent: never end it from this
-   store. A session with no label prints nothing
+   Read it as [This store's id](#this-stores-id) says: its last field must
+   be this store's id (the `store_id` of an `ad.launch.name_held` record),
+   as in every leftover `kill` names. A session with no label prints
+   nothing
    (`invalid option: @ad_owner` on tmux 3.3a); an invalid label prints
    something malformed. `no such session` means it has gone.
 3. Look at it read-only (detach with the tmux prefix key, then `d`):
@@ -807,7 +825,7 @@ agent-director spawn --cwd <dir> --claude-instance-id <id> --reuse-finished
 
 A row's recorded tmux session name cannot be used when it is empty, holds a
 control character, or holds `.`, `:` or bytes that are not valid UTF-8.
-This includes a default name made before the b.gqe fix, which kept a `.`
+This includes a default name made by releases before 2026-05-27, which kept a `.`
 from its id: the id `b.18k-fix` gave `<folder>-b.18k-fi`. agent-director
 never touches such a row's session: every verb that would look the row up
 returns `ErrInternal` with no tmux call, `find-missing` leaves a live row
@@ -864,16 +882,11 @@ working as the agents' user and against their tmux server, in this order:
    If it prints nothing, or `invalid option: @ad_owner` (tmux 3.3a), the
    session has no label.
 
-   A label marks the session as this row's only if it is the five-field
-   label of step 2 of "A leftover, or a session with no valid label, or one
-   that never reported in on a finished row": `ad1`, a launch token, the
-   session's own id (the `$N` you passed to `-t`), this row's id and, last,
-   this store's id (compare it with the id
-   [This store's id](#this-stores-id) prints, or with the `store_id` of the
-   `ad.launch.name_held` record, as "A session of another agent-director
-   store" says). A label whose last field is a different id belongs to
-   another agent-director store's agent, even when it names this row's id:
-   never end it from this store. For a session with no label, its
+   A label marks the session as this row's only if it is a valid label (see
+   [This store's id](#this-stores-id)) whose session id is the `$N` you
+   passed to `-t`, whose row id is this row's and whose last field is this
+   store's id (the `store_id` of an `ad.launch.name_held` record). For a
+   session with no label, its
    environment is a hint only, because environments are inherited:
 
    ```sh
@@ -912,8 +925,7 @@ working as the agents' user and against their tmux server, in this order:
    and clears it as the parent of any other row; it touches no tmux session
    and no transcript. `delete` is deprecated for agents, but stays as the
    operator-only way to remove such a row, because `resume` and reuse refuse
-   it and `expire` keeps it. b.tep, which removes `delete`, must give this
-   case another route.
+   it and `expire` keeps it.
 
 ### A spawn refused as "left over from an earlier life"
 
@@ -980,9 +992,9 @@ spawn has already ended its own row, so spawning the same
 ### A session of another agent-director store
 
 `ErrTmuxSessionConflict` ("another agent-director store"), or a label whose
-last field is not this store's id (compare it with the id
-[This store's id](#this-stores-id) prints, or with the `store_id` of the
-`ad.launch.name_held` record): another store on the same tmux server (a
+last field is not this store's id (see [This store's id](#this-stores-id);
+the `store_id` of an `ad.launch.name_held` record is the same value):
+another store on the same tmux server (a
 test sandbox, a second `HOME`, a CI container using the host's socket) owns
 the session. Never end it from this store. Find which store it belongs to
 (its `HOME`) and stop or move that store's agents with that store's own
@@ -1057,11 +1069,8 @@ pane was not adopted, see the next item.
 
 1. Find the labelled session and read its label (steps 1 and 2 of the
    leftover item) for the session the error quotes, and for others if it
-   was renamed. The agent's session prints the five-field label with this
-   row's id and this store's id (compare it with the id
-   [This store's id](#this-stores-id) prints, or with the `store_id` of the
-   `ad.launch.name_held` record); a label with another store's id is
-   another store's agent: never end it.
+   was renamed. The agent's session prints a valid label with this row's id
+   and this store's id (see [This store's id](#this-stores-id)).
 2. Look at what runs in it, and look read-only as above:
 
    ```sh
@@ -1271,8 +1280,8 @@ Never delete those rows: their history is what `resume` uses.
 
 ### A row stays `pending` and the trail shows `no_exec_form`
 
-The agent runs a Claude Code older than 2.1.280, so none of its hooks
-apply. List the records:
+The agent runs a Claude Code that does not run exec-form hooks, so none
+of its hooks apply; the supported minimum is 2.1.280. List the records:
 
 ```sh
 jq -c 'select(.event == "ad.hook.ignored" and .reason == "no_exec_form") | {ts, claude_instance_id, hook_event, parent_command}' ~/.agent-director/ad-trail.jsonl | tail -n 5
@@ -1280,6 +1289,29 @@ jq -c 'select(.event == "ad.hook.ignored" and .reason == "no_exec_form") | {ts, 
 
 Upgrade `claude` on PATH to 2.1.280 or later. Then end and relaunch each
 row that stays `pending` as the [caller contract](#caller-contract) says.
+
+### A row stays `pending` and the trail shows `pid_mismatch`
+
+A hook moves a row only when its parent process is the row's recorded pane
+process. When the `claude` on PATH is a launcher or shim that runs Claude
+Code as a child instead of `exec`ing it, the pane process is the launcher,
+so every hook of every agent is ignored and rows stay `pending`. List the
+records:
+
+```sh
+jq -c 'select(.event == "ad.hook.ignored" and .reason == "pid_mismatch") | {ts, claude_instance_id, hook_event, parent_pid, parent_command, row_pane_pid}' ~/.agent-director/ad-trail.jsonl | tail -n 5
+```
+
+`parent_command` is the command name of the process that fired the hook,
+which is Claude Code itself. A few such records are expected and need no
+action: a nested `claude`, a teammate pane or a leftover session carrying
+the id is never the row's own agent. When every row's hooks are refused,
+and the pane process (`row_pane_pid`) is a launcher rather than Claude Code
+(compare `ps -o pid,comm -p <row_pane_pid>` with `parent_command`), replace
+the `claude` on PATH with Claude Code's native binary or a wrapper that
+`exec`s it (see [Prerequisites](#prerequisites)). Then end and relaunch
+each row that stays `pending` as the [caller contract](#caller-contract)
+says.
 
 ### A row on a different tmux server
 

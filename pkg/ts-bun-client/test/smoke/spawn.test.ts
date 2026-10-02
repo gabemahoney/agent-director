@@ -19,7 +19,15 @@ import { test, expect } from "bun:test";
 import * as path from "path";
 import * as fs from "fs";
 import { withTempHome } from "../internal/tempHome.js";
-import { runHelper, privateTmuxSocket } from "../internal/helper.js";
+import {
+  runHelper,
+  privateTmuxSocket,
+  fakeTmuxCalls,
+  withProcessEnv,
+  CLAUDE_JSON,
+  trustEntry,
+  seedOuterParent,
+} from "../internal/helper.js";
 import { Client, ErrCwdMissing, ErrInvalidFlags, ErrInstanceIdCollision, AgentDirectorError } from "../../src/index.js";
 import type { SpawnResult } from "../../src/index.js";
 
@@ -31,50 +39,14 @@ const fakeTmuxBin = path.join(
   "tmux"
 );
 
-// When running inside a Claude session, AGENT_DIRECTOR_INSTANCE_ID is set in the
-// OS environment. The FFI worker (which always inherits the ORIGINAL OS env) reads
-// it as parent_id for InsertPending. The test store must contain a parent row with
-// that ID or the FOREIGN KEY constraint will fail. We seed it conditionally here.
-const OUTER_INSTANCE_ID = process.env.AGENT_DIRECTOR_INSTANCE_ID;
-
-/** Seeds the outer parent row (when set) so a successful spawn's FK holds. */
-function seedOuterParent(storePath: string): void {
-  if (!OUTER_INSTANCE_ID) return;
-  runHelper("seed-spawn", {
-    store: storePath,
-    id: OUTER_INSTANCE_ID,
-    state: "working",
-    "create-store": true,
-  });
-}
-
 /** Runs fn with FAKE_TMUX_LOG set to logPath (the client's CLI inherits process.env per call). */
 async function withFakeTmuxLog(logPath: string, fn: () => Promise<void>): Promise<void> {
-  const prior = process.env.FAKE_TMUX_LOG;
-  process.env.FAKE_TMUX_LOG = logPath;
-  try {
-    await fn();
-  } finally {
-    if (prior !== undefined) process.env.FAKE_TMUX_LOG = prior;
-    else delete process.env.FAKE_TMUX_LOG;
-  }
+  await withProcessEnv({ FAKE_TMUX_LOG: logPath }, fn);
 }
 
 /** Counts fake-tmux invocations whose argv includes new-session. */
 function newSessionCount(logPath: string): number {
-  if (!fs.existsSync(logPath)) return 0;
-  return fs
-    .readFileSync(logPath, "utf8")
-    .split("---\n")
-    .filter((rec) => rec.split("\n").includes("new-session")).length;
-}
-
-/** The temp HOME's .claude.json as planted before the spawn: no trust entry for any folder. */
-const CLAUDE_JSON = '{"projects": {}}\n';
-
-/** projects[cwd].hasTrustDialogAccepted in claudeJsonPath (undefined when absent). */
-function trustEntry(claudeJsonPath: string, cwd: string): unknown {
-  return JSON.parse(fs.readFileSync(claudeJsonPath, "utf8")).projects?.[cwd]?.hasTrustDialogAccepted;
+  return fakeTmuxCalls(logPath).filter((argv) => argv.includes("new-session")).length;
 }
 
 test.each([
@@ -89,7 +61,7 @@ test.each([
       fs.writeFileSync(claudeJson, CLAUDE_JSON);
 
       // Pre-seed the parent row so the FK constraint is satisfied when the worker
-      // sets parent_id = OUTER_INSTANCE_ID on the new spawn row.
+      // sets parent_id = the outer agent's id on the new spawn row.
       seedOuterParent(storePath);
 
       using client = await Client.create({ storePath, createIfMissing: true, tmuxCommand: fakeTmuxBin , _cliPath: process.env.CLI_PATH } as any);
