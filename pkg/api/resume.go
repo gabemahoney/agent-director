@@ -727,11 +727,12 @@ func launchInProgressError(row Spawn) error {
 //     after the pre-launch check found a left-over session; nothing
 //     launched).
 //   - [ErrSpawnNotResumable]: state is not ended or missing (a live Spawn
-//     must be killed or paused before it can be resumed); a pending row is a
-//     launch in progress whose agent has not reported in. Also a lost race:
-//     the row changed after resume examined it (found by the move, or by the
-//     one re-read after the pre-launch check found a left-over session), and
-//     nothing was written.
+//     must be paused, or killed and then marked by find-missing, before it
+//     can be resumed: follow the live-row sequence in kill's description); a
+//     pending row is a launch in progress whose agent has not reported in.
+//     Also a lost race: the row changed after resume examined it (found by
+//     the move, or by the one re-read after the pre-launch check found a
+//     left-over session), and nothing was written.
 //   - [ErrNoSessionId]: claude_session_id is empty — the Spawn was killed
 //     before its first SessionStart hook. Recourse: spawn again with the
 //     same id, opting in to reuse (SpawnParams.ReuseFinished); the reused id

@@ -8,6 +8,7 @@ package api_test
 // that does not work as written is gated by knownBrokenAdvice.
 
 import (
+	"context"
 	"errors"
 	"os"
 	"reflect"
@@ -28,7 +29,7 @@ const (
 	advResumeLaunchInProgress = "if the agent reports in, the row becomes live, and if the launch was abandoned or failed, find-missing marks the row missing once the pending grace period has passed since its launch start; nothing was written"
 	advResumeLostRaceChanged  = "the row changed after resume examined it and nothing was written; nothing was launched"
 	advResumeLostRaceRemoved  = "was removed after resume examined it; nothing was written and nothing was launched"
-	advResumeLiveDoc          = "a live Spawn must be killed or paused before it can be resumed"
+	advResumeLiveDoc          = "a live Spawn must be paused, or killed and then marked by find-missing, before it can be resumed: follow the live-row sequence in kill's description"
 	advResumeReuseRecourse    = "recourse is to spawn again with the same id, opting in to reuse (SpawnParams.ReuseFinished, --reuse-finished)"
 )
 
@@ -175,21 +176,30 @@ func TestAdviceFollow_B1_LaunchInProgressFindMissing(t *testing.T) {
 	}
 }
 
-// TestAdviceFollow_B2_KillOrPauseThenResume: kill, or pause, a live row, then resume it.
-// B2 (Go doc of Resume): "a live Spawn must be killed or paused before it can be resumed"
+// TestAdviceFollow_B2_KillOrPauseThenResume: pause a live row, or kill it and run find-missing, then resume it.
+// B2 (Go doc of Resume): "a live Spawn must be paused, or killed and then marked by find-missing, before it can be resumed: follow the live-row sequence in kill's description"
 func TestAdviceFollow_B2_KillOrPauseThenResume(t *testing.T) {
 	adviceAssertGoDoc(t, "resume.go", "Resume", advResumeLiveDoc)
 	cases := []struct {
-		name   string
-		stop   func(t *testing.T, e *killEnv, r resumeRow)
-		broken string
+		name string
+		stop func(t *testing.T, e *killEnv, r resumeRow)
 	}{
 		{"kill", func(t *testing.T, e *killEnv, r resumeRow) {
+			c, _ := e.client(t)
 			e.setAfterCall(tmux.CallKillPane, procfix.Gone(), r.AgentPID)
 			if _, err := e.kill(r.ID); err != nil {
 				t.Fatalf("kill: %v", err)
 			}
-		}, "kill never changes the row's state, so the killed row stays live and resume refuses it again (ErrSpawnNotResumable); find-missing is not in the advice"},
+			// Killed but not yet marked: the row is still live, so resume is refused and writes nothing.
+			before := e.snapshotResume(t, r)
+			_, err := e.resume(r.ID)
+			assertOneSentinel(t, err, api.ErrSpawnNotResumable)
+			e.assertResumeWroteNothing(t, before)
+			if _, err := c.FindMissing(context.Background()); err != nil {
+				t.Fatalf("find-missing: %v", err)
+			}
+			advResumeAssertState(t, c, r.ID, store.StateMissing)
+		}},
 		{"pause", func(t *testing.T, e *killEnv, r resumeRow) {
 			fastPausePolls(t)
 			e.endAfterEnter(t, r.killRow)
@@ -203,7 +213,7 @@ func TestAdviceFollow_B2_KillOrPauseThenResume(t *testing.T) {
 			if _, err := e.pause(pauseParams(r.killRow)); err != nil {
 				t.Fatalf("pause: %v", err)
 			}
-		}, ""},
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -216,9 +226,6 @@ func TestAdviceFollow_B2_KillOrPauseThenResume(t *testing.T) {
 
 			tc.stop(t, e, r)
 
-			if tc.broken != "" {
-				knownBrokenAdvice(t, "B2", tc.broken)
-			}
 			advResumeLaunches(t, e, r.ID)
 		})
 	}
