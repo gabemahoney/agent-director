@@ -9,13 +9,17 @@ import (
 )
 
 // PauseTmux is the narrow tmux surface Pause needs (SRD Appendix F.3): the
-// lookup, the pane listing and the keys sent to one pane by its pane id.
-// TmuxClient, *tmux.Client and tmuxfix.Recorder satisfy it. Every method
-// takes the row's socket (SR-3.3) and reports a failure as *TmuxCallError.
+// lookup, the pane listing, the line-clearing key and the keys sent to one
+// pane by its pane id. TmuxClient, *tmux.Client and tmuxfix.Recorder satisfy
+// it. Every method takes the row's socket (SR-3.3) and reports a failure as
+// *TmuxCallError.
 type PauseTmux interface {
 	TmuxLookup
 	// ListPanes lists every pane of the server at socket.
 	ListPanes(socket string) ([]TmuxPane, error)
+	// SendKeyPane sends one key, by its tmux key name and never typed
+	// literally, to the pane paneID on socket (key send): pause's C-u.
+	SendKeyPane(socket, paneID, key string) error
 	// SendKeysPane types text literally into the pane paneID on socket and
 	// then, only if that succeeded and pressEnter is set, sends Enter; the
 	// failed call is named on the *TmuxCallError (text send or Enter send).
@@ -71,10 +75,11 @@ var pausePollInterval = 200 * time.Millisecond
 // without spinning real wall-clock time. Production uses time.Sleep.
 var pauseSleep = time.Sleep
 
-// Pause politely shuts down a live Spawn by typing `/exit` into the agent's
-// own pane of the row's current launch, by pane id, then Enter, and waiting
-// up to timeoutSeconds for the row to reach `ended` (SRD SR-7.2, SR-7.3,
-// SR-3.6, SR-3.7, SR-13.2). Behavior:
+// Pause politely shuts down a live Spawn by clearing the input line of the
+// agent's own pane of the row's current launch (C-u: it clears a one-line
+// leftover, not a multi-line input), by pane id, then typing `/exit` and
+// Enter, and waiting up to timeoutSeconds for the row to reach `ended` (SRD
+// SR-7.2, SR-7.3, SR-3.6, SR-3.7, SR-13.2; b.9o4). Behavior:
 //
 //   - Unknown id: ErrSpawnNotFound from the store.
 //   - State ended or missing: no-op success, with no tmux call; the desired
@@ -89,14 +94,18 @@ var pauseSleep = time.Sleep
 //
 // The lookup's outcomes on a waiting row:
 //
-//   - Ours: one pane listing, then `/exit` and Enter to the agent's pane (the
-//     entry with the row's recorded pane id and pid, wherever it now is),
-//     then the wait. For a row that records no server identity or no pane (a
-//     lost create reply), what the lookup and the pane whose @ad_pane names
-//     the row's launch token show is used for this call and written once,
-//     guarded on the row as read; the write's outcome never changes the
-//     result (SR-3.6). No agent's pane: ErrTmuxSessionConflict ("the agent's
-//     pane was not found"), nothing sent.
+//   - Ours: one pane listing, then C-u, `/exit` and Enter to the agent's pane
+//     (the entry with the row's recorded pane id and pid, wherever it now
+//     is), then the wait. C-u, sent as a key, deletes from the cursor back to
+//     the start of its line, not earlier lines of a multi-line input, so a
+//     one-line leftover with the cursor at its end (the unsubmitted `/exit` a
+//     failed pause left, or a one-line draft) is cleared and the agent gets
+//     `/exit` alone, never `/exit/exit`. For a row that records no server
+//     identity or no pane (a lost create reply), what the lookup and the pane
+//     whose @ad_pane names the row's launch token show is used for this call
+//     and written once, guarded on the row as read; the write's outcome never
+//     changes the result (SR-3.6). No agent's pane: ErrTmuxSessionConflict
+//     ("the agent's pane was not found"), nothing sent.
 //   - Leftover: ErrTmuxSessionConflict ("not this launch's session"),
 //     nothing sent.
 //   - Gone (another agent-director store's sessions included):
@@ -106,26 +115,31 @@ var pauseSleep = time.Sleep
 //     (ErrTmuxNotAvailable, ErrTmuxSessionConflict "conflicting labels",
 //     ErrTmuxUnresponsive), nothing sent. A listing that shows no server is
 //     Gone.
-//   - A failed text or Enter call: a timeout is ErrTmuxUnresponsive saying
-//     the keys may have been delivered, with no further call; any other
-//     failure makes one follow-up lookup, whose Gone or Leftover gives
+//   - A failed C-u, text or Enter call: a timeout is ErrTmuxUnresponsive
+//     saying the keys may have been delivered, with no further call; any
+//     other failure makes one follow-up lookup, whose Gone or Leftover gives
 //     ErrTmuxSendKeys and whose other outcomes give ErrTmuxUnresponsive, or
 //     ErrTmuxNotAvailable for a different server or tmux unavailable
 //     (SR-7.3). Once the text call went through, every description says the
-//     text may be typed but not submitted, never that nothing was sent.
+//     text may be typed but not submitted, never that nothing was sent. A
+//     failed C-u types nothing and ends the call before `/exit`: it is
+//     described as a failed text call is, naming the key send. Every
+//     ErrTmuxUnresponsive ends "retry later": a retried pause clears the line
+//     before typing, so it submits a clean `/exit` whatever its own failed
+//     attempt left typed.
 //
 // Every tmux call uses the row's socket and every action targets a pane id.
-// The calls are at most one lookup, one pane listing, the text call, the
-// Enter call and, only after an action failure other than a timeout, one
-// follow-up lookup (SR-13.2); the wait is not counted. On any error the wait
-// does not start.
+// The calls are at most one lookup, one pane listing, the C-u, the text
+// call, the Enter call and, only after an action failure other than a
+// timeout, one follow-up lookup (SR-13.2); the wait is not counted. On any
+// error the wait does not start.
 //
-// The wait, once `/exit` and Enter went through: the row's state is polled
-// at pausePollInterval until it is `ended` (nil) or timeoutSeconds elapse on
-// the real clock (ErrPauseTimeout); ctx.Done() during the wait returns
-// ctx.Err() so the caller's cancel-on-signal handler can cut a long wait
-// short. Pause never writes the row's state; the adoption is its only store
-// write.
+// The wait, once C-u, `/exit` and Enter went through: the row's state is
+// polled at pausePollInterval until it is `ended` (nil) or timeoutSeconds
+// elapse on the real clock (ErrPauseTimeout); ctx.Done() during the wait
+// returns ctx.Err() so the caller's cancel-on-signal handler can cut a long
+// wait short. Pause never writes the row's state; the adoption is its only
+// store write.
 //
 // Pause is one-shot: it returns when the row reaches `ended`, when the
 // timeout expires, or when ctx is cancelled. There is no incremental
@@ -139,8 +153,8 @@ var pauseSleep = time.Sleep
 // the wait's outcome neither adds nor removes one. Each record's action is
 // what the call typed, as for send-keys: keys_sent (`/exit` and Enter both
 // went through), text_sent (the `/exit` call timed out, or it went through
-// and the Enter call failed or timed out) or nothing_sent. Pause writes no
-// other trail event.
+// and the Enter call failed or timed out) or nothing_sent (a failed C-u
+// included: it types no text). Pause writes no other trail event.
 //
 // pc is the start-time reader that judges the lookup's server (SR-3.3) and
 // an adopted pane (SR-3.6).
@@ -175,7 +189,8 @@ type pauseRun struct {
 	caller caller
 }
 
-// exit is pause's row read, state rules and tmux phase. It reports whether
+// exit is pause's row read, state rules and tmux phase, which clears the
+// agent's input line before typing (keysRun.clear). It reports whether C-u,
 // `/exit` and Enter went through, so the wait is due; a finished row is
 // (false, nil). Every refusal before the lookup makes no tmux call.
 func (r *pauseRun) exit(t PauseTmux, pc ProcChecker, params PauseParams) (bool, error) {
@@ -203,6 +218,7 @@ func (r *pauseRun) exit(t PauseTmux, pc ProcChecker, params PauseParams) (bool, 
 		return false, fmt.Errorf("instance %s: %w", row.ClaudeInstanceID, err)
 	}
 	r.keysRun = newKeysRun(t, pc, row, r.s.StoreID(), socket, r.s)
+	r.clear = t
 	if err := r.deliver("/exit"); err != nil {
 		return false, err
 	}
@@ -248,12 +264,15 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 	}
 }
 
-// Pause politely shuts down a waiting Spawn by sending `/exit` and Enter to
-// the agent's own pane of the row's current launch, by pane id, and polling
-// until the row reaches ended, or until the configured timeout
+// Pause politely shuts down a waiting Spawn by sending C-u (which deletes the
+// agent's input from the cursor back to the start of its line, clearing a
+// one-line leftover such as the `/exit` a failed pause left typed), `/exit`
+// and Enter to the agent's own pane of the row's current launch, by pane id,
+// and polling until the row reaches ended, or until the configured timeout
 // (pause.timeout_seconds in config.toml) elapses. Terminal states
-// (ended/missing) are treated as no-op success. Pause is one-shot — no
-// incremental progress callback; ctx cancellation short-circuits the poll.
+// (ended/missing) are treated as no-op success.
+// Pause is one-shot — no incremental progress callback; ctx cancellation
+// short-circuits the poll.
 //
 // A waiting row whose recorded tmux session name cannot be used (it is empty,
 // contains a control character, or contains a character tmux stores
@@ -274,9 +293,11 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 //     earlier launch left behind is there, or tmux holds conflicting labels;
 //     nothing was sent.
 //   - [ErrTmuxUnresponsive]: tmux did not answer, or gave a reply that could
-//     not be recognised; when the `/exit` or Enter call timed out, `/exit`
-//     may have been delivered, and when the Enter call failed after it,
-//     `/exit` may be typed but not submitted.
+//     not be recognised; when the C-u, `/exit` or Enter call timed out, the
+//     keys may have been delivered, and when the Enter call failed after
+//     `/exit`, `/exit` may be typed but not submitted. Retry later: a retried
+//     pause clears the one-line `/exit` its failed attempt left before typing
+//     `/exit`.
 //   - [ErrTmuxNotAvailable]: the tmux binary could not be run, the socket is
 //     not accessible to this user, or this is not the tmux server the agent
 //     was launched on.

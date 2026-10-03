@@ -166,14 +166,15 @@ func idtFails(t testing.TB, rt *realTmux, err error, call tmux.Call, entry strin
 
 // idtAllFail makes every id-targeted call with a session id and a pane id
 // that exist on no session or pane of the server, and checks each fails:
-// session kill and label by sessionID; pane kill, text (with Enter) and
-// capture by paneID.
+// session kill and label by sessionID; pane kill, text (with Enter), key send
+// and capture by paneID.
 func idtAllFail(t testing.TB, rt *realTmux, cl *tmux.Client, sessionID, paneID string) {
 	t.Helper()
 	idtFails(t, rt, cl.KillSessionID(rt.Socket, sessionID), tmux.CallKillSession, "reply/cant-find-session")
 	idtFails(t, rt, cl.SetLabel(rt.Socket, sessionID, paneID, newToken(t), newInstanceID("agent"), tmuxfix.StoreID), tmux.CallSetLabel, "reply/no-such-session")
 	idtFails(t, rt, cl.KillPane(rt.Socket, paneID), tmux.CallKillPane, "") // no catalogue entry
 	idtFails(t, rt, cl.SendKeysPane(rt.Socket, paneID, "idt-never-typed", true), tmux.CallSendText, "reply/cant-find-pane")
+	idtFails(t, rt, cl.SendKeyPane(rt.Socket, paneID, "C-u"), tmux.CallSendKey, "reply/cant-find-pane")
 	got, err := cl.CapturePaneID(rt.Socket, paneID, idtCapLines, false)
 	idtFails(t, rt, err, tmux.CallCapture, "reply/cant-find-pane")
 	if got != "" {

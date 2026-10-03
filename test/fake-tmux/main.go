@@ -42,8 +42,10 @@
 //     into the pane's table entry as the text tmux would list.
 //   - kill-pane -t <%N>: removes the pane; the last pane removes its session.
 //   - kill-session -t <$N>: removes the session.
-//   - send-keys -t <%N> -l -- <text> and send-keys -t <%N> Enter: no effect
-//     beyond the log.
+//   - send-keys -t <%N> -l -- <text>, send-keys -t <%N> Enter and another
+//     key send such as pause's send-keys -t <%N> C-u: no effect beyond the
+//     log. Each is its own call kind for injections (text send, Enter send,
+//     key send), so an Enter injection never hits pause's C-u.
 //   - capture-pane -p [-e] -t <%N> -S -<n>: the pane's capture text, else
 //     FAKE_TMUX_PANE_OUTPUT, else a fixed two-line stub.
 //   - new-session -d -s <name> -c <cwd> [-e K=V ...] -P -F <fmt> -- <argv>:
@@ -88,8 +90,8 @@
 //
 // A table's injections (faketmuxfix.Injection) replace or delay the answer
 // to one call kind (tmux.Call: lookup, pane listing, pane kill, session
-// kill, text send, Enter send, capture, session creation, label by id) on
-// that socket, for every call or the next N: a catalogue entry's exact
+// kill, text send, Enter send, key send, capture, session creation, label
+// by id) on that socket, for every call or the next N: a catalogue entry's exact
 // bytes and exit status (reply), a bare exit status (exit), a hang the
 // client's timeout must end (hang; the fake exits 1 on its own after a
 // bound), a normal answer and exit while a child holds the output pipes open

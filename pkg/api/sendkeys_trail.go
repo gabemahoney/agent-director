@@ -17,8 +17,9 @@ import (
 //   - sendKeysActionTextSent: the text may have been typed with no submit
 //     known to have gone through: the text call timed out, or it went through
 //     and the Enter call then failed or timed out.
-//   - sendKeysActionNothingSent: no keys call was made, or the text call
-//     failed other than by timing out.
+//   - sendKeysActionNothingSent: no text call was made (after a failed line
+//     clear of pause's too: C-u types no text), or the text call failed
+//     other than by timing out.
 const (
 	sendKeysActionKeysSent    = "keys_sent"
 	sendKeysActionTextSent    = "text_sent"
@@ -26,7 +27,8 @@ const (
 )
 
 // sendKeysAction is the call's action value from whether SendKeysPane was
-// called (sent) and its error (sendErr).
+// called (sent; a failed line clear before it leaves sent false) and its
+// error (sendErr).
 func sendKeysAction(sent bool, sendErr error) string {
 	if !sent {
 		return sendKeysActionNothingSent

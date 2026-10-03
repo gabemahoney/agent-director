@@ -52,14 +52,23 @@ func itoa(v int64) string { return strconv.FormatInt(v, 10) }
 func keyCode(k config.TmuxKey) string { return "`" + k.Name() + "`" }
 
 // killPaths returns SR-13.2's two kill paths at the defaults, recomputed from
-// the constants: path (i) 2Q + 2A + E + 4W, path (ii) 3Q + 2A + 5W (which is
-// also pause's tmux phase).
+// the constants: path (i) 2Q + 2A + E + 4W, path (ii) 3Q + 2A + 5W.
 func killPaths() (p1, p2 time.Duration) {
 	q := tmuxDefault(config.TmuxQueryTimeoutMs)
 	a := tmuxDefault(config.TmuxActionTimeoutMs)
 	e := tmuxDefault(config.TmuxKillExitWaitMs)
 	w := tmuxDefault(config.TmuxPipeCloseWaitMs)
 	return 2*q + 2*a + e + 4*w, 3*q + 2*a + 5*w
+}
+
+// pauseTmuxPhase returns pause's tmux phase at the defaults, recomputed from
+// the constants: 3Q + 3A + 6W, its line clear (C-u, b.9o4) one action call
+// more than kill's path (ii).
+func pauseTmuxPhase() time.Duration {
+	q := tmuxDefault(config.TmuxQueryTimeoutMs)
+	a := tmuxDefault(config.TmuxActionTimeoutMs)
+	w := tmuxDefault(config.TmuxPipeCloseWaitMs)
+	return 3*q + 3*a + 6*w
 }
 
 // normalised collapses each run of whitespace in text to one space, so a
@@ -143,8 +152,8 @@ func docTimingStatements() []docStatement {
 		},
 		{
 			name: "architecture Stop semantics: pause's tmux phase", path: mdArchitecture, section: stopSemanticsTitle,
-			anchors: []string{"3Q + 2A + 5W,"},
-			want:    fixed(docSeconds(p2)),
+			anchors: []string{"3Q + 3A + 6W,"},
+			want:    fixed(docSeconds(pauseTmuxPhase())),
 		},
 		{
 			name: "architecture Stop semantics: pause wait default", path: mdArchitecture, section: stopSemanticsTitle,

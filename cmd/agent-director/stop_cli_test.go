@@ -14,6 +14,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -248,6 +249,67 @@ func TestPauseCLIEndedRowIsNoop(t *testing.T) {
 	logBytes, _ := os.ReadFile(filepath.Join(home, "fake-tmux.log"))
 	if strings.Contains(string(logBytes), "send-keys") {
 		t.Errorf("ended row should not trigger send-keys: %s", string(logBytes))
+	}
+}
+
+// TestPauseCLIClearsInputLineBeforeExit (b.9o4): on a waiting row pause sends
+// C-u to the agent's pane by id as a key (send-keys -t <pane id> C-u), then
+// /exit literally and Enter; nothing ends the row, so its 1 s wait times out.
+func TestPauseCLIClearsInputLineBeforeExit(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	home, id, socket := seedKillRow(t, store.StateWaiting)
+	faketmuxfix.Tables{}.Write(t, socket, killTable(ownSession(t, home, id)))
+	if err := os.WriteFile(filepath.Join(directorDir(home), "config.toml"), []byte("[pause]\ntimeout_seconds = 1\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "pause", "--claude-instance-id", id)
+
+	if code == 0 || stdout != "" {
+		t.Fatalf("pause exit = %d, stdout = %q; want 1 and empty, the wait timed out (stderr=%q)", code, stdout, stderr)
+	}
+	if env := parseEnvelope(t, stderr); env.ErrName != "ErrPauseTimeout" {
+		t.Errorf("err_name = %q (%s); want ErrPauseTimeout", env.ErrName, env.ErrDescription)
+	}
+	invs := assertInvocationKinds(t, home, "list-sessions", "list-panes", "send-keys", "send-keys", "send-keys")
+	target := []string{"-u", "-S", socket, "send-keys", "-t", apitest.TestPaneID}
+	for i, want := range [][]string{append(slices.Clone(target), "C-u"), append(slices.Clone(target), "-l", "--", "/exit"),
+		append(slices.Clone(target), "Enter")} {
+		if !slices.Equal(invs[2+i], want) {
+			t.Errorf("invocation %d = %q; want %q", 2+i, invs[2+i], want)
+		}
+	}
+}
+
+// TestPauseCLILineClearFails (b.9o4): a failed C-u key send ends pause with
+// ErrTmuxUnresponsive naming the key send, "nothing was done; retry later";
+// no /exit or Enter follows and the row stays waiting.
+func TestPauseCLILineClearFails(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	home, id, socket := seedKillRow(t, store.StateWaiting)
+	token, _, storeID := launchIdentity(t, home, id)
+	faketmuxfix.Tables{}.Write(t, socket, killTable(ownSession(t, home, id)))
+	noPane := tmuxfix.Find(tmuxfix.Replies(socket), "reply/cant-find-pane")
+	faketmuxfix.Tables{}.Inject(t, socket, faketmuxfix.Reply(tmux.CallSendKey, noPane))
+
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "pause", "--claude-instance-id", id)
+
+	if code != 1 || stdout != "" {
+		t.Fatalf("pause exit = %d, stdout = %q; want 1 and empty (stderr=%q)", code, stdout, stderr)
+	}
+	env := parseEnvelope(t, stderr)
+	if env.ErrName != "ErrTmuxUnresponsive" {
+		t.Errorf("err_name = %q (%s); want ErrTmuxUnresponsive", env.ErrName, env.ErrDescription)
+	}
+	desc := apitest.DescUnrecognisedReply(tmux.CallSendKey, noPane.FirstLine).AfterTextFailed()
+	desc.Require = append(desc.Require, "tmux key send failed")
+	apitest.AssertDescription(t, env.ErrDescription, desc, token, storeID)
+	invs := assertInvocationKinds(t, home, "list-sessions", "list-panes", "send-keys", "list-sessions")
+	if want := []string{"-u", "-S", socket, "send-keys", "-t", apitest.TestPaneID, "C-u"}; !slices.Equal(invs[2], want) {
+		t.Errorf("key send invocation = %q; want %q", invs[2], want)
+	}
+	if st := rowColumns(t, home, id).State; st != store.StateWaiting {
+		t.Errorf("row state after pause = %v; want %s unchanged", st, store.StateWaiting)
 	}
 }
 

@@ -2,9 +2,10 @@ package api_test
 
 // pause_ceiling_test.go proves pause's SR-13.2 ceiling in virtual time (the
 // Recorder charges every call its full timeout and no pipe-close wait W, so
-// SR-13.2's 3Q + 2A + 5W is 3Q + 2A here; the configured wait is excluded):
-// the longest path is 3Q + 2A, an /exit timeout 2Q + A, an Enter timeout
-// 2Q + 2A, and none enters the wait. Nothing waits in real time.
+// a ceiling's W terms drop out here; the configured wait is excluded). The
+// line clear before /exit (b.9o4) is one more action call, so pause's
+// longest path is 3Q + 3A (3Q + 3A + 6W with W), an /exit timeout 2Q + 2A,
+// an Enter timeout 2Q + 3A, and none enters the wait. Nothing waits in real time.
 
 import (
 	"errors"
@@ -19,11 +20,11 @@ import (
 )
 
 // TestPauseCeilingVirtualTime: a failed Enter whose follow-up lookup times out
-// charges 3Q + 2A in five calls; the timeouts charge less, with no follow-up.
+// charges 3Q + 3A in six calls; the timeouts charge less, with no follow-up.
 func TestPauseCeilingVirtualTime(t *testing.T) {
 	q, a, _ := ceilDefaults()
-	if got := 3*q + 2*a; got != 8500*time.Millisecond {
-		t.Fatalf("3Q + 2A at the defaults = %v; SR-13.2 says 8.5 s without W", got)
+	if got := 3*q + 3*a; got != 10500*time.Millisecond {
+		t.Fatalf("3Q + 3A at the defaults = %v; want 10.5 s without W", got)
 	}
 	raised := config.Tmux{QueryTimeoutMs: 2*config.DefaultActionTimeoutMs + config.DefaultQueryTimeoutMs,
 		ActionTimeoutMs: config.DefaultActionTimeoutMs}
@@ -50,17 +51,21 @@ func TestPauseCeilingVirtualTime(t *testing.T) {
 		desc     func(a time.Duration) apitest.DescCase
 	}{
 		{"Enter fails, follow-up lookup times out", tmux.CallSendEnter, tmux.FailUnrecognized,
-			skaFollowUpLookup(tmuxfix.Script{Failure: tmux.FailTimeout}), withFollowUp(paneSendCalls),
-			func(q, a time.Duration) time.Duration { return 3*q + 2*a },
+			skaFollowUpLookup(tmuxfix.Script{Failure: tmux.FailTimeout}), withFollowUp(pauseSendCalls),
+			func(q, a time.Duration) time.Duration { return 3*q + 3*a },
 			func(time.Duration) apitest.DescCase {
-				return apitest.DescUnrecognisedReply(tmux.CallSendEnter, "").AfterEnterFailed()
+				return apitest.DescUnrecognisedReply(tmux.CallSendEnter, "").AfterEnterFailed(apitest.PanePause)
 			}},
-		{"exit text times out", tmux.CallSendText, tmux.FailTimeout, nil, paneTextCalls,
-			func(q, a time.Duration) time.Duration { return 2*q + a },
-			func(a time.Duration) apitest.DescCase { return apitest.DescKeysTimeout(tmux.CallSendText, a) }},
-		{"Enter times out", tmux.CallSendEnter, tmux.FailTimeout, nil, paneSendCalls,
+		{"exit text times out", tmux.CallSendText, tmux.FailTimeout, nil, pauseTextCalls,
 			func(q, a time.Duration) time.Duration { return 2*q + 2*a },
-			func(a time.Duration) apitest.DescCase { return apitest.DescKeysTimeout(tmux.CallSendEnter, a) }},
+			func(a time.Duration) apitest.DescCase {
+				return apitest.DescKeysTimeout(apitest.PanePause, tmux.CallSendText, a)
+			}},
+		{"Enter times out", tmux.CallSendEnter, tmux.FailTimeout, nil, pauseSendCalls,
+			func(q, a time.Duration) time.Duration { return 2*q + 3*a },
+			func(a time.Duration) apitest.DescCase {
+				return apitest.DescKeysTimeout(apitest.PanePause, tmux.CallSendEnter, a)
+			}},
 	}
 	for _, sc := range settings {
 		for _, pc := range paths {
@@ -78,8 +83,8 @@ func TestPauseCeilingVirtualTime(t *testing.T) {
 				if elapsed != want {
 					t.Errorf("virtual time = %v; want %v", elapsed, want)
 				}
-				if ceiling := 3*sc.q + 2*sc.a; elapsed > ceiling {
-					t.Errorf("virtual time = %v; above the 3Q + 2A ceiling %v", elapsed, ceiling)
+				if ceiling := 3*sc.q + 3*sc.a; elapsed > ceiling {
+					t.Errorf("virtual time = %v; above the 3Q + 3A ceiling %v", elapsed, ceiling)
 				}
 				// The wait would poll a row nothing ends until ErrPauseTimeout.
 				if !errors.Is(err, api.ErrTmuxUnresponsive) {

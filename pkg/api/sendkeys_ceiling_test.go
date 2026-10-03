@@ -49,14 +49,18 @@ func TestSendKeysCeilingVirtualTime(t *testing.T) {
 		{"Enter fails, follow-up finds Ours", tmux.CallSendEnter, tmux.FailUnrecognized, withFollowUp(paneSendCalls),
 			func(q, a time.Duration) time.Duration { return 3*q + 2*a },
 			func(time.Duration) apitest.DescCase {
-				return apitest.DescUnrecognisedReply(tmux.CallSendEnter, "").AfterEnterFailed()
+				return apitest.DescUnrecognisedReply(tmux.CallSendEnter, "").AfterEnterFailed(apitest.PaneSendKeys)
 			}},
 		{"text times out", tmux.CallSendText, tmux.FailTimeout, paneTextCalls,
 			func(q, a time.Duration) time.Duration { return 2*q + a },
-			func(a time.Duration) apitest.DescCase { return apitest.DescKeysTimeout(tmux.CallSendText, a) }},
+			func(a time.Duration) apitest.DescCase {
+				return apitest.DescKeysTimeout(apitest.PaneSendKeys, tmux.CallSendText, a)
+			}},
 		{"Enter times out", tmux.CallSendEnter, tmux.FailTimeout, paneSendCalls,
 			func(q, a time.Duration) time.Duration { return 2*q + 2*a },
-			func(a time.Duration) apitest.DescCase { return apitest.DescKeysTimeout(tmux.CallSendEnter, a) }},
+			func(a time.Duration) apitest.DescCase {
+				return apitest.DescKeysTimeout(apitest.PaneSendKeys, tmux.CallSendEnter, a)
+			}},
 	}
 	for _, sc := range settings {
 		for _, pc := range paths {

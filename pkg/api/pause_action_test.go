@@ -1,7 +1,8 @@
 package api_test
 
 // pause_action_test.go: on waiting rows, which pane pause types /exit into
-// (SR-3.7), its failed pane listing and /exit or Enter call (SR-7.3, SR-1.4)
+// (SR-3.7), its failed pane listing and line clear (C-u, b.9o4), /exit or
+// Enter call (SR-7.3, SR-1.4)
 // and the adoption write after a lost create reply (SR-3.6). Only a
 // delivered /exit starts the wait.
 
@@ -227,11 +228,18 @@ func TestPauseListingFails(t *testing.T) {
 	}
 }
 
-// pfAssertTyped fails unless /exit was typed into r's agent pane and Enter
-// sent to it exactly when action is the Enter call.
+// pfAssertTyped fails unless r's agent pane's line was cleared and, when
+// action (the failed call) is not that line clear, /exit typed into it, with
+// Enter sent to it exactly when action is the Enter call; a failed line
+// clear is followed by no text or Enter call.
 func pfAssertTyped(t *testing.T, e *killEnv, r killRow, action tmux.Call) {
 	t.Helper()
 	pane := r.Spawn.Identity.PaneID
+	if action == tmux.CallSendKey {
+		e.assertLineCleared(t, r.Socket, pane)
+		e.assertNoCalls(t, tmux.CallSendText, tmux.CallSendEnter)
+		return
+	}
 	e.assertExitTyped(t, r.Socket, pane)
 	enters := e.rec.SocketCallsOf(tmux.CallSendEnter)
 	if want := action == tmux.CallSendEnter; want != (len(enters) == 1) || len(enters) > 1 ||
@@ -240,10 +248,11 @@ func pfAssertTyped(t *testing.T, e *killEnv, r killRow, action tmux.Call) {
 	}
 }
 
-// TestPauseActionTimeout: a timed-out /exit or Enter is ErrTmuxUnresponsive,
-// the keys may have been delivered; no follow-up lookup, no wait.
+// TestPauseActionTimeout: a timed-out line clear (C-u), /exit or Enter is
+// ErrTmuxUnresponsive naming the call, the keys may have been delivered,
+// retry later; no follow-up lookup, no later keys call, no wait.
 func TestPauseActionTimeout(t *testing.T) {
-	for _, a := range skaActions {
+	for _, a := range pauseActions {
 		t.Run(string(a.call), func(t *testing.T) {
 			e := newKillEnv(t)
 			r := e.seedRow(t, killRowSpec{})
@@ -253,8 +262,8 @@ func TestPauseActionTimeout(t *testing.T) {
 			run := pfPause(e, r)
 
 			run.assertFailed(t, "ErrTmuxUnresponsive")
-			apitest.AssertDescription(t, run.err.Error(), apitest.DescKeysTimeout(a.call, e.cfg.EffectiveActionTimeout()),
-				r.Token, r.StoreID)
+			apitest.AssertDescription(t, run.err.Error(),
+				apitest.DescKeysTimeout(apitest.PanePause, a.call, e.cfg.EffectiveActionTimeout()), r.Token, r.StoreID)
 			e.assertPaneCalls(t, a.calls...)
 			pfAssertTyped(t, e, r, a.call)
 			e.assertRowUnchanged(t, r.ID, before)
@@ -262,9 +271,11 @@ func TestPauseActionTimeout(t *testing.T) {
 	}
 }
 
-// TestPauseActionFailureFollowUp: a /exit or Enter call failing other than by
-// timeout makes one follow-up lookup whose outcome picks the error (SR-7.3);
-// after Enter, /exit may be typed but not submitted. No wait.
+// TestPauseActionFailureFollowUp: a line clear (C-u), /exit or Enter call
+// failing other than by timeout makes one follow-up lookup whose outcome
+// picks the error (SR-7.3); a failed line clear is described as a failed
+// /exit call is, naming the key send (b.9o4); after Enter, /exit may be typed
+// but not submitted. No wait.
 func TestPauseActionFailureFollowUp(t *testing.T) {
 	gone := func(r killRow, action tmux.Call) apitest.DescCase {
 		return apitest.DescPaneGone(apitest.PaneGone{Verb: apitest.PanePause, InstanceID: r.ID, Name: r.Name,
@@ -311,7 +322,7 @@ func TestPauseActionFailureFollowUp(t *testing.T) {
 		{"tmux unavailable, socket permission", noServer, skaFollowUpLookup(tmuxfix.Script{Failure: tmux.FailSocketDenied}),
 			"ErrTmuxNotAvailable", func(r killRow, _ tmux.Call) apitest.DescCase { return apitest.DescSocketPermission(r.Socket) }},
 	}
-	for _, a := range skaActions {
+	for _, a := range pauseActions {
 		for _, tc := range cases {
 			t.Run(string(a.call)+"/"+tc.name, func(t *testing.T) {
 				e := newKillEnv(t)
@@ -328,7 +339,7 @@ func TestPauseActionFailureFollowUp(t *testing.T) {
 				run.assertFailed(t, tc.errName)
 				desc := tc.desc(r, a.call).AfterTextFailed()
 				if a.call == tmux.CallSendEnter {
-					desc = tc.desc(r, a.call).AfterEnterFailed()
+					desc = tc.desc(r, a.call).AfterEnterFailed(apitest.PanePause)
 				}
 				apitest.AssertDescription(t, run.err.Error(), desc, r.Token, r.StoreID, apitest.OtherStoreID(r.StoreID))
 				e.assertPaneCalls(t, withFollowUp(a.calls)...)

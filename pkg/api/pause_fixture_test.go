@@ -1,9 +1,10 @@
 package api_test
 
 // pause_fixture_test.go extends the kill and pane-verb fixtures for pause
-// (SR-20.2, SR-20.3): its invocations, the wait's poll seam, the /exit
-// assertions, the SessionEnd that ends the row after Enter, the failing state
-// read and pause's disagree reader. It holds no tests. A later verb that
+// (SR-20.2, SR-20.3): its invocations, its call sequences (the line cleared
+// before /exit, b.9o4), the wait's poll seam, the /exit assertions, the
+// SessionEnd that ends the row after Enter, the failing state read and
+// pause's disagree reader. It holds no tests. A later verb that
 // acts on the agent's pane must extend this fixture and
 // pane_verb_fixture_test.go, not copy them.
 
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
@@ -36,6 +38,28 @@ func (w *killStore) failStateReads(err error) { w.stateErr = orInjected(err) }
 
 // exitText is what pause types into the agent's pane.
 const exitText = "/exit"
+
+// pause's call sequences (b.9o4): it clears the agent's input line
+// (callClearLine) before typing /exit, so a delivery is lookup, listing,
+// line clear, /exit and Enter, a failed line clear types nothing after it,
+// and a failed /exit call makes no Enter.
+var (
+	pauseSendCalls  = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, callClearLine, tmux.CallSendText, tmux.CallSendEnter}
+	pauseTextCalls  = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, callClearLine, tmux.CallSendText}
+	pauseClearCalls = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, callClearLine}
+)
+
+// pauseActions are pause's keys calls a failure can hit, with the calls made
+// up to and including it: the line clear (nothing typed after it), the /exit
+// call (no Enter), or Enter after it.
+var pauseActions = []struct {
+	call  tmux.Call
+	calls []tmux.Call
+}{
+	{tmux.CallSendKey, pauseClearCalls},
+	{tmux.CallSendText, pauseTextCalls},
+	{tmux.CallSendEnter, pauseSendCalls},
+}
 
 // pauseTimeoutSeconds is the wait e.pause allows: a row nothing ends stays
 // waiting and the wait ends in ErrPauseTimeout after this real-time second.
@@ -94,18 +118,50 @@ func (e *killEnv) endAfterEnter(t *testing.T, r killRow) {
 	})
 }
 
-// assertExitDelivered fails unless the calls were exactly paneSendCalls:
-// exitText typed into paneID on socket, then one Enter to paneID.
+// assertExitDelivered fails unless the calls were exactly pauseSendCalls:
+// paneID's input line cleared on socket (assertLineCleared), exitText typed
+// into it, then one Enter to it.
 func (e *killEnv) assertExitDelivered(t *testing.T, socket, paneID string) {
 	t.Helper()
-	e.assertDelivered(t, socket, paneID, exitText)
+	e.assertPaneCalls(t, pauseSendCalls...)
+	e.assertExitTyped(t, socket, paneID)
+	if got := e.rec.SocketCallsOf(tmux.CallSendEnter); len(got) != 1 || got[0].Socket != socket || got[0].Target != paneID {
+		t.Errorf("Enter calls = %+v; want one to %s on %s", got, paneID, socket)
+	}
 }
 
-// assertExitTyped fails unless exactly one text call typed exitText into
-// paneID on socket, with Enter asked for (the failed-action cases).
+// assertExitTyped fails unless paneID's input line was cleared on socket
+// (assertLineCleared) and exactly one text call then typed exitText into
+// it, with Enter asked for (the failed-action cases too).
 func (e *killEnv) assertExitTyped(t *testing.T, socket, paneID string) {
 	t.Helper()
+	e.assertLineCleared(t, socket, paneID)
 	e.assertTextSent(t, socket, paneID, exitText)
+}
+
+// assertLineCleared fails unless exactly one key send was made, paneClearKey
+// to paneID on socket, and it came before every text call (b.9o4).
+func (e *killEnv) assertLineCleared(t *testing.T, socket, paneID string) {
+	t.Helper()
+	var keys []tmuxfix.SocketCall
+	textFirst := false
+	for _, c := range e.rec.SocketCalls() {
+		switch {
+		case c.Key != "":
+			keys = append(keys, c)
+		case c.Call == tmux.CallSendText && len(keys) == 0:
+			textFirst = true
+		}
+	}
+	if len(keys) != 1 {
+		t.Fatalf("key sends = %+v; want one, %s to %s on %s", keys, paneClearKey, paneID, socket)
+	}
+	if c := keys[0]; c.Key != paneClearKey || c.Socket != socket || c.Target != paneID {
+		t.Errorf("key send %q to %q on %s; want %s to %s on %s", c.Key, c.Target, c.Socket, paneClearKey, paneID, socket)
+	}
+	if textFirst {
+		t.Errorf("a text call came before the line was cleared; want %s first", paneClearKey)
+	}
 }
 
 // pauseDisagrees returns id's ad.provenance.disagree records written by pause.

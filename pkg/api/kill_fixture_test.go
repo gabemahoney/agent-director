@@ -231,13 +231,13 @@ func killDisagrees(t *testing.T, id string) []map[string]any {
 }
 
 // assertKillCalls fails unless the Recorder's socket-taking calls are
-// exactly want in order, no name-based call was made and every kill
-// targets an id (assertKillsByID).
+// exactly want in order (as recordedCall gives them), no name-based call was
+// made and every kill targets an id (assertKillsByID).
 func (e *killEnv) assertKillCalls(t *testing.T, want ...tmux.Call) {
 	t.Helper()
 	var got []tmux.Call
 	for _, c := range e.rec.SocketCalls() {
-		got = append(got, c.Call)
+		got = append(got, recordedCall(c))
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("tmux calls = %v; want %v", got, want)

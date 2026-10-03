@@ -115,6 +115,8 @@ func invoke(t *testing.T, c *tmux.Client, socket string, call tmux.Call) error {
 		err = c.SendKeysPane(socket, "%0", "hello", false)
 	case tmux.CallSendEnter:
 		err = c.SendKeysPane(socket, "%0", "hello", true)
+	case tmux.CallSendKey:
+		err = c.SendKeyPane(socket, "%0", "C-u")
 	case tmux.CallCapture:
 		_, err = c.CapturePaneID(socket, "%0", 24, false)
 	case tmux.CallCreate:
@@ -190,7 +192,8 @@ func readLog(t *testing.T, path string) [][]string {
 	return faketmuxfix.ReadLog(t, path)
 }
 
-// TestEveryCallKindSucceeds makes each of the nine calls against a seeded table.
+// TestEveryCallKindSucceeds makes each call kind (tmuxfix.AllCalls) against a
+// seeded table.
 func TestEveryCallKindSucceeds(t *testing.T) {
 	c := newClient(t, callTimeout)
 	for _, call := range tmuxfix.AllCalls() {

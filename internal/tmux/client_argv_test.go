@@ -89,6 +89,15 @@ func argvCases() []argvCase {
 			want:    [][]string{{"send-keys", "-t", "%3", "-l", "--", "C-c"}, {"send-keys", "-t", "%3", "Enter"}},
 			timeout: testTimeouts.Action,
 		},
+		{
+			// b.9o4: pause's line clear names the key, without -l, so tmux
+			// sends C-u rather than typing it.
+			name:    "key send",
+			script:  []tmux.RunResult{exitZero("")},
+			call:    func(c *tmux.Client) error { return c.SendKeyPane(testSocket, "%3", "C-u") },
+			want:    [][]string{{"send-keys", "-t", "%3", "C-u"}},
+			timeout: testTimeouts.Action,
+		},
 	}, argvDashTextCases(), argvSemicolonTextCases(), []argvCase{
 		{
 			name:   "capture",
@@ -232,11 +241,11 @@ func argvTextCases(rows []argvTextRow) []argvCase {
 }
 
 // argvDashTextCases: a text that looks like tmux flags (or is an ordinary
-// text) is sent unchanged after "-l --" (SR-2.1 "Text" row, SR-20.7).
-// "-t%5" must not retarget to %5.
+// text, or empty: send-keys' Enter-only send, b.9o4) is sent unchanged after
+// "-l --" (SR-2.1 "Text" row, SR-20.7). "-t%5" must not retarget to %5.
 func argvDashTextCases() []argvCase {
 	var rows []argvTextRow
-	for _, text := range []string{"-x", "--", "-l", "-t%5", "plain text"} {
+	for _, text := range []string{"-x", "--", "-l", "-t%5", "plain text", ""} {
 		rows = append(rows, argvTextRow{text, text})
 	}
 	return argvTextCases(rows)

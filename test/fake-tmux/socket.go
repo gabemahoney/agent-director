@@ -202,7 +202,12 @@ func classify(cmd []string) tmux.Call {
 				return tmux.CallSendText
 			}
 		}
-		return tmux.CallSendEnter
+		// Only the Enter send is the Enter call; another key send (pause's
+		// C-u, b.9o4) is the key send, so an Enter injection never hits it.
+		if cmd[len(cmd)-1] == "Enter" {
+			return tmux.CallSendEnter
+		}
+		return tmux.CallSendKey
 	case "capture-pane":
 		return tmux.CallCapture
 	case "new-session":

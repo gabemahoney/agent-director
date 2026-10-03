@@ -26,7 +26,7 @@ import (
 // SocketCall is one recorded socket-taking call.
 type SocketCall struct {
 	// Call is the call kind; SendKeysPane records CallSendText and, when it
-	// makes one, CallSendEnter.
+	// makes one, CallSendEnter; SendKeyPane records CallSendKey.
 	Call tmux.Call
 	// Socket is the socket the call names.
 	Socket string
@@ -40,6 +40,11 @@ type SocketCall struct {
 	// Text and PressEnter are SendKeysPane's arguments (on the text call).
 	Text       string
 	PressEnter bool
+	// Key is the key a key send names, which tmux reads as a key and never
+	// types literally (send-keys -t <pane id> <key>), for example pause's
+	// C-u before /exit (b.9o4); "" on every other call. A key send is
+	// recorded under its own call kind, never the text or Enter call's.
+	Key string
 	// NLines and ANSI are CapturePaneID's arguments.
 	NLines int
 	ANSI   bool
@@ -183,23 +188,35 @@ func (r *Recorder) KillSessionID(socket, sessionID string) error {
 	return err
 }
 
+// sendEffect is a send's table effect: the pane paneID must be in the
+// socket's table, else call fails as not found.
+func sendEffect(paneID string, call tmux.Call) effect {
+	return func(st *socketState, _ Script) (any, *tmux.CallError) {
+		if _, s := st.server.findPane(paneID); s == nil {
+			return nil, notFound(call)
+		}
+		return nil, nil
+	}
+}
+
 // SendKeysPane records the text call and, when pressEnter is set and the
 // text call succeeded, the Enter call, mirroring the production client. The
 // pane must be in socket's table.
 func (r *Recorder) SendKeysPane(socket, paneID, text string, pressEnter bool) error {
-	send := func(call tmux.Call) effect {
-		return func(st *socketState, _ Script) (any, *tmux.CallError) {
-			if _, s := st.server.findPane(paneID); s == nil {
-				return nil, notFound(call)
-			}
-			return nil, nil
-		}
-	}
 	textCall := SocketCall{Call: tmux.CallSendText, Socket: socket, Target: paneID, Text: text, PressEnter: pressEnter}
-	if _, err := r.do(textCall, send(tmux.CallSendText)); err != nil || !pressEnter {
+	if _, err := r.do(textCall, sendEffect(paneID, tmux.CallSendText)); err != nil || !pressEnter {
 		return err
 	}
-	_, err := r.do(SocketCall{Call: tmux.CallSendEnter, Socket: socket, Target: paneID}, send(tmux.CallSendEnter))
+	_, err := r.do(SocketCall{Call: tmux.CallSendEnter, Socket: socket, Target: paneID}, sendEffect(paneID, tmux.CallSendEnter))
+	return err
+}
+
+// SendKeyPane records one key send, tmux.CallSendKey with Key key (pause's
+// C-u before /exit, b.9o4), mirroring the production client. The pane must
+// be in socket's table.
+func (r *Recorder) SendKeyPane(socket, paneID, key string) error {
+	_, err := r.do(SocketCall{Call: tmux.CallSendKey, Socket: socket, Target: paneID, Key: key},
+		sendEffect(paneID, tmux.CallSendKey))
 	return err
 }
 

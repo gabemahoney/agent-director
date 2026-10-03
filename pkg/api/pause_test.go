@@ -25,7 +25,7 @@ import (
 )
 
 // pauDeliver pauses r with its row ended by its agent after Enter and fails
-// unless /exit went to r's agent pane by id, then Enter, and the row ended.
+// unless C-u and /exit went to r's agent pane by id, then Enter, and the row ended.
 func pauDeliver(t *testing.T, e *killEnv, r killRow) {
 	t.Helper()
 	fastPausePolls(t)
@@ -155,8 +155,8 @@ func pauSeedState(state string) func(t *testing.T, e *killEnv) killRow {
 	return func(t *testing.T, e *killEnv) killRow { return e.seedRow(t, killRowSpec{State: state}) }
 }
 
-// TestPauseDelivers: on Ours, one lookup and one listing, then /exit and
-// Enter to the agent's pane by id; the row ended by its agent is success.
+// TestPauseDelivers: on Ours, one lookup and one listing, then C-u, /exit
+// and Enter to the agent's pane by id; the row ended by its agent is success.
 func TestPauseDelivers(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -183,6 +183,32 @@ func TestPauseDelivers(t *testing.T) {
 				t.Fatalf("Pause: %v", err)
 			}
 			e.assertExitDelivered(t, r.Socket, r.Spawn.Identity.PaneID)
+			pauAssertState(t, e, r.ID, store.StateEnded)
+		})
+	}
+}
+
+// TestPauseClearsInputLineFirst (b.9o4): pause sends C-u to the agent's pane
+// as a key before typing /exit, so a line left typed (a failed /exit, a
+// draft) is cleared and the agent gets /exit alone, submitted once.
+func TestPauseClearsInputLineFirst(t *testing.T) {
+	for _, tc := range []struct{ name, typed string }{
+		{"an unsubmitted /exit typed", exitText},
+		{"a draft typed", "/mcp reconnect github"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fastPausePolls(t)
+			e := newKillEnv(t)
+			r := e.seedRow(t, killRowSpec{})
+			in := paneAgentExiting(t, e, r, false, 1)
+			in.box = tc.typed
+
+			if _, err := e.pause(pauseParams(r)); err != nil {
+				t.Fatalf("Pause: %v; want the row ended (agent got %q, %q left typed)", err, in.submitted, in.box)
+			}
+
+			e.assertExitDelivered(t, r.Socket, r.Spawn.Identity.PaneID)
+			in.assertSubmittedOnce(t, exitText)
 			pauAssertState(t, e, r.ID, store.StateEnded)
 		})
 	}

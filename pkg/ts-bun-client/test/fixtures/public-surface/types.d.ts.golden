@@ -273,7 +273,11 @@ export interface GetResult {
 export interface SendKeysParams {
     /** Id of the Spawn whose pane will receive the text. */
     claude_instance_id: string;
-    /** Text to deliver to the pane. CR bytes stripped; LF preserved; Enter appended. */
+    /**
+     * Text to deliver to the pane. CR bytes stripped; LF preserved; Enter
+     * appended. Empty text sends Enter only: it submits what is already typed,
+     * such as a text a failed sendKeys left unsubmitted.
+     */
     text: string;
     /**
      * When true, also allows a pending row: a launch (spawn, reuse or resume)

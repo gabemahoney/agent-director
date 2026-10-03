@@ -44,6 +44,9 @@ type TmuxClient interface {
 	KillSessionID(socket, sessionID string) error
 	// SendKeysPane types text into the pane paneID on socket, then Enter when pressEnter is set.
 	SendKeysPane(socket, paneID, text string, pressEnter bool) error
+	// SendKeyPane sends one key, by its tmux key name and never typed
+	// literally, to the pane paneID on socket (pause's C-u).
+	SendKeyPane(socket, paneID, key string) error
 	// CapturePaneID returns the last nLines lines of the pane paneID on socket.
 	CapturePaneID(socket, paneID string, nLines int, ansi bool) (string, error)
 	// NewSession creates the session name on socket with its chained labels,

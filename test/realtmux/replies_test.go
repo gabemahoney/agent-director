@@ -233,6 +233,10 @@ func TestRepliesSuccessfulCallStreams(t *testing.T) {
 			func(t *testing.T, cl *tmux.Client, c *created) error {
 				return cl.SendKeysPane(rt.Socket, c.Reply.PaneID, c.Name, true)
 			}, nil},
+		{"key send", []tmux.Call{tmux.CallSendKey},
+			func(t *testing.T, cl *tmux.Client, c *created) error {
+				return cl.SendKeyPane(rt.Socket, c.Reply.PaneID, "C-u")
+			}, nil},
 		{"pane kill", []tmux.Call{tmux.CallKillPane},
 			func(t *testing.T, cl *tmux.Client, c *created) error { return cl.KillPane(rt.Socket, c.Reply.PaneID) },
 			func(t *testing.T, c created) { waitPidGone(t, c.Reply.PanePID) }},

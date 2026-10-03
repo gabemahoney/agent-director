@@ -1,12 +1,13 @@
 // Package tmux is the client over the tmux binary, used by internal/spawn and
 // pkg/api. It carries the Phase 1 call set (SRD SR-2.1, Appendix F.1): the
 // one-call Lookup, the pane listing, the pane and session kills by id, text,
-// Enter and capture by pane id, the create with its chained @ad_owner label,
-// and the label by id. Every such call takes the socket, passes -u first and
-// -S <socket> next, is bounded by its class's timeout and the pipe-close wait
-// handed in through New, runs with every AGENT_DIRECTOR_* variable removed
-// from the client's environment, and reports failures as *CallError. The
-// name-based HasSession stays (SR-2.1); no other name-based method remains.
+// Enter, one named key (pause's C-u; b.9o4) and capture by pane id, the
+// create with its chained @ad_owner label, and the label by id. Every such
+// call takes the socket, passes -u first and -S <socket> next, is bounded by
+// its class's timeout and the pipe-close wait handed in through New, runs
+// with every AGENT_DIRECTOR_* variable removed from the client's environment,
+// and reports failures as *CallError. The name-based HasSession stays
+// (SR-2.1); no other name-based method remains.
 //
 // The package also holds the shared lookup (SR-3.3, SR-3.4, SR-3.10,
 // Appendix F.2; lookup.go): Lookup and Classify turn one lookup answer and a

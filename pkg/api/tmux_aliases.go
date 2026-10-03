@@ -65,6 +65,9 @@ const (
 	TmuxCallSendText = tmux.CallSendText
 	// TmuxCallSendEnter is tmux.CallSendEnter: the Enter send.
 	TmuxCallSendEnter = tmux.CallSendEnter
+	// TmuxCallSendKey is tmux.CallSendKey: a key send by pane id (pause's
+	// C-u).
+	TmuxCallSendKey = tmux.CallSendKey
 	// TmuxCallCapture is tmux.CallCapture: the capture by pane id.
 	TmuxCallCapture = tmux.CallCapture
 	// TmuxCallCreate is tmux.CallCreate: the create with its chained labels.

@@ -217,7 +217,8 @@ func skaAssertTyped(t *testing.T, e *killEnv, r killRow, action tmux.Call) {
 }
 
 // TestSendKeysActionTimeout: a timed-out text or Enter call is
-// ErrTmuxUnresponsive, the keys may have been delivered, with no follow-up.
+// ErrTmuxUnresponsive, the keys may have been delivered, with send-keys'
+// next step (b.9o4) and no follow-up.
 func TestSendKeysActionTimeout(t *testing.T) {
 	for _, a := range skaActions {
 		t.Run(string(a.call), func(t *testing.T) {
@@ -228,8 +229,8 @@ func TestSendKeysActionTimeout(t *testing.T) {
 			_, err := e.sendKeys(skaParams(r))
 
 			assertOneName(t, err, "ErrTmuxUnresponsive")
-			apitest.AssertDescription(t, err.Error(), apitest.DescKeysTimeout(a.call, e.cfg.EffectiveActionTimeout()),
-				r.Token, r.StoreID)
+			apitest.AssertDescription(t, err.Error(),
+				apitest.DescKeysTimeout(apitest.PaneSendKeys, a.call, e.cfg.EffectiveActionTimeout()), r.Token, r.StoreID)
 			e.assertPaneCalls(t, a.calls...)
 			skaAssertTyped(t, e, r, a.call)
 		})
@@ -251,7 +252,9 @@ func skaFollowUpLookup(s tmuxfix.Script) func(*testing.T, *killEnv, killRow, tmu
 
 // TestSendKeysActionFailureFollowUp: a text or Enter call failing other than
 // by timeout makes one follow-up lookup whose outcome picks the error (SR-7.3);
-// after Enter the text may be typed but not submitted. Reply text never classifies.
+// after Enter the text may be typed but not submitted, and an
+// ErrTmuxUnresponsive says send-keys with empty text submits it (b.9o4).
+// Reply text never classifies.
 func TestSendKeysActionFailureFollowUp(t *testing.T) {
 	gone := func(r killRow, action tmux.Call) apitest.DescCase {
 		return apitest.DescPaneGone(apitest.PaneGone{Verb: apitest.PaneSendKeys, InstanceID: r.ID, Name: r.Name,
@@ -319,7 +322,7 @@ func TestSendKeysActionFailureFollowUp(t *testing.T) {
 				assertOneName(t, err, tc.errName)
 				desc := tc.desc(r, a.call).AfterTextFailed()
 				if a.call == tmux.CallSendEnter {
-					desc = tc.desc(r, a.call).AfterEnterFailed()
+					desc = tc.desc(r, a.call).AfterEnterFailed(apitest.PaneSendKeys)
 				}
 				apitest.AssertDescription(t, err.Error(), desc, r.Token, r.StoreID, apitest.OtherStoreID(r.StoreID))
 				e.assertPaneCalls(t, withFollowUp(a.calls)...)

@@ -74,7 +74,7 @@ func callTableSendKeys() callTableVerb {
 			}},
 		ctActionTimeout: {errName: "ErrTmuxUnresponsive", sent: true, calls: paneTextCalls,
 			desc: func(e *killEnv, _ killRow) apitest.DescCase {
-				return apitest.DescKeysTimeout(tmux.CallSendText, e.cfg.EffectiveActionTimeout())
+				return apitest.DescKeysTimeout(apitest.PaneSendKeys, tmux.CallSendText, e.cfg.EffectiveActionTimeout())
 			}},
 	})
 	maps.Copy(cells, callTableUnusableRefused())

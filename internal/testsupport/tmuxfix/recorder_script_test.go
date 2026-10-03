@@ -315,7 +315,8 @@ func TestRecorder_AppliedCreate(t *testing.T) {
 }
 
 // TestRecorder_RecordsCalls: each call is recorded with its kind, socket,
-// target and (SetLabel only) pane id; Reset discards the records.
+// target, (SetLabel only) pane id and (key send only) key; Reset discards the
+// records.
 func TestRecorder_RecordsCalls(t *testing.T) {
 	for _, inv := range invokers {
 		t.Run(string(inv.call), func(t *testing.T) {
@@ -323,12 +324,16 @@ func TestRecorder_RecordsCalls(t *testing.T) {
 			_ = inv.do(r, sockA)
 			calls := r.SocketCalls()
 			last := calls[len(calls)-1]
-			wantPane := ""
-			if inv.call == tmux.CallSetLabel {
+			wantPane, wantKey := "", ""
+			switch inv.call {
+			case tmux.CallSetLabel:
 				wantPane = "%0"
+			case tmux.CallSendKey:
+				wantKey = "C-u"
 			}
-			if last.Call != inv.call || last.Socket != sockA || last.Target != inv.target || last.PaneID != wantPane {
-				t.Errorf("recorded %+v, want %s on %s at %q pane %q", last, inv.call, sockA, inv.target, wantPane)
+			if last.Call != inv.call || last.Socket != sockA || last.Target != inv.target || last.PaneID != wantPane ||
+				last.Key != wantKey {
+				t.Errorf("recorded %+v, want %s on %s at %q pane %q key %q", last, inv.call, sockA, inv.target, wantPane, wantKey)
 			}
 			if got := r.SocketCallsOf(inv.call); len(got) != 1 || !reflect.DeepEqual(got[0], last) {
 				t.Errorf("SocketCallsOf = %+v", got)

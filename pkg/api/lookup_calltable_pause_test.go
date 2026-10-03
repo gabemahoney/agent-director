@@ -2,8 +2,9 @@ package api_test
 
 // lookup_calltable_pause_test.go is pause's rows of the call-site table
 // (lookup_calltable_test.go; SR-7.2, SR-7.3, SR-20.6): the waiting row, whose
-// Ours cell types /exit and Enter into the agent's pane by id and then waits
-// for the row to end, plus a pending and an ended row, whose state guards
+// Ours cell clears the input line (C-u, b.9o4), types /exit and Enter into
+// the agent's pane by id and then waits for the row to end, plus a pending
+// and an ended row, whose state guards
 // answer before any tmux call in every column. Only the /exit call is failed
 // in the action columns. The agent's pane, lost replies, adoption, the Enter
 // failures and the other follow-up outcomes are pause's per-verb files'.
@@ -76,7 +77,7 @@ func callTablePause() callTableVerb {
 	}}
 	cells := callTableLookupRefusals()
 	maps.Copy(cells, map[callTableOutcome]callTableCell{
-		ctOurs: {sent: true, calls: paneSendCalls},
+		ctOurs: {sent: true, calls: pauseSendCalls},
 		ctLeftover: {errName: "ErrTmuxSessionConflict", calls: lookup, desc: func(_ *killEnv, r killRow) apitest.DescCase {
 			return apitest.DescPaneLeftover(apitest.PaneLeftover{Verb: apitest.PanePause, InstanceID: r.ID,
 				Sessions: []apitest.DescSession{{Name: r.Session.Name, ID: r.Session.ID}}})
@@ -89,13 +90,13 @@ func callTablePause() callTableVerb {
 		ctGoneServerRestarted:      gone,
 		ctGoneNoServer:             gone,
 		ctGoneNoSocket:             gone,
-		ctActionRecognised: {errName: "ErrTmuxUnresponsive", sent: true, calls: withFollowUp(paneTextCalls),
+		ctActionRecognised: {errName: "ErrTmuxUnresponsive", sent: true, calls: withFollowUp(pauseTextCalls),
 			desc: func(*killEnv, killRow) apitest.DescCase {
 				return apitest.DescUnrecognisedReply(tmux.CallSendText, "").AfterTextFailed()
 			}},
-		ctActionTimeout: {errName: "ErrTmuxUnresponsive", sent: true, calls: paneTextCalls,
+		ctActionTimeout: {errName: "ErrTmuxUnresponsive", sent: true, calls: pauseTextCalls,
 			desc: func(e *killEnv, _ killRow) apitest.DescCase {
-				return apitest.DescKeysTimeout(tmux.CallSendText, e.cfg.EffectiveActionTimeout())
+				return apitest.DescKeysTimeout(apitest.PanePause, tmux.CallSendText, e.cfg.EffectiveActionTimeout())
 			}},
 	})
 	maps.Copy(cells, callTableUnusableRefused())
@@ -103,7 +104,7 @@ func callTablePause() callTableVerb {
 		name:        "pause",
 		invoke:      pauseCallTableInvoke,
 		firstAction: tmux.CallSendText,
-		actions:     []tmux.Call{tmux.CallSendText, tmux.CallSendEnter},
+		actions:     []tmux.Call{callClearLine, tmux.CallSendText, tmux.CallSendEnter},
 		cells:       cells,
 		run:         runCallTablePause,
 	}

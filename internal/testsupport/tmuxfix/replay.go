@@ -66,10 +66,11 @@ func (e Entry) Calls() []tmux.Call {
 	return out
 }
 
-// AllCalls returns the nine call kinds of SR-2.1.
+// AllCalls returns every call kind the production client makes: the nine of
+// SR-2.1 and the key send (pause's C-u, b.9o4).
 func AllCalls() []tmux.Call {
 	return []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallKillPane, tmux.CallKillSession,
-		tmux.CallSendText, tmux.CallSendEnter, tmux.CallCapture, tmux.CallCreate, tmux.CallSetLabel}
+		tmux.CallSendText, tmux.CallSendEnter, tmux.CallSendKey, tmux.CallCapture, tmux.CallCreate, tmux.CallSetLabel}
 }
 
 // Find returns the entry named name; it panics when the catalogue has none.
@@ -84,8 +85,9 @@ func Find(entries []Entry, name string) Entry {
 
 // everyCall maps every call kind to f.
 func everyCall(f tmux.Failure) map[tmux.Call]tmux.Failure {
-	m := make(map[tmux.Call]tmux.Failure, 9)
-	for _, c := range AllCalls() {
+	calls := AllCalls()
+	m := make(map[tmux.Call]tmux.Failure, len(calls))
+	for _, c := range calls {
 		m[c] = f
 	}
 	return m
@@ -116,7 +118,7 @@ const (
 	wordNoSocket  = " (No such file or directory)"
 	wordDenied    = " (Permission denied)"
 	wordDuplicate = "duplicate session: "
-	wordNoPane    = "can't find pane: %0"        // E.10 O4: send, Enter or capture on a vanished pane
+	wordNoPane    = "can't find pane: %0"        // E.10 O4: send, Enter, key send or capture on a vanished pane
 	wordExited    = "server exited unexpectedly" // E.3 I1: a create racing an exiting server
 )
 
@@ -140,8 +142,8 @@ func NoSocket(socket string) Entry {
 }
 
 // SocketDenied is "error connecting to <socket> (Permission denied)",
-// recorded for every call kind (E.9 S6, E.10 O2): FailSocketDenied on all
-// nine (AC-CLS-02).
+// recorded for every call kind (E.9 S6, E.10 O2): FailSocketDenied on every
+// call kind (AC-CLS-02).
 func SocketDenied(socket string) Entry {
 	return Entry{Name: "reply/permission-denied", Source: "E.9 S6; E.10 O2; E.3 R3",
 		Stderr: wordConnect + socket + wordDenied + "\n", Exit: 1,
@@ -187,8 +189,8 @@ func Replies(socket string) []Entry {
 		Duplicate("proj-abc123"), // E.3 D2
 		Duplicate("dot_x"),       // E.10 N6: the stored form of dot.x
 		Duplicate(`a\$b`),        // E.3 N1: the stored form of a$b after the D2 prefix
-		unrecognized("reply/cant-find-pane", "E.10 O4; E.3 D1", wordNoPane,
-			tmux.CallSendText, tmux.CallSendEnter, tmux.CallCapture),
+		unrecognized("reply/cant-find-pane", "E.10 O4; E.3 D1; the key send's on tmux 3.3a (b.9o4)", wordNoPane,
+			tmux.CallSendText, tmux.CallSendEnter, tmux.CallSendKey, tmux.CallCapture),
 		unrecognized("reply/cant-find-session", "E.10 O4; E.3 D1, D3", "can't find session: $0", tmux.CallKillSession),
 		unrecognized("reply/no-such-session", "E.10 O3; E.13 R1 (option reads of a vanished id)",
 			"no such session: $99", tmux.CallSetLabel),
@@ -221,7 +223,7 @@ func Replies(socket string) []Entry {
 }
 
 // Silent is a call that prints nothing and exits 0 (E.10 O4; E.3 I2): the
-// kills, text, Enter, label by id and the lookup of a server with no
+// kills, text, Enter and key sends, label by id and the lookup of a server with no
 // sessions succeed; a create with no reply is FailUnrecognized (SR-2.1).
 func Silent() Entry {
 	return Entry{Name: "reply/silent-success", Source: "E.10 O4; E.3 I2, D3, P1",

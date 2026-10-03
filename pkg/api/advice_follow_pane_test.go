@@ -3,13 +3,14 @@ package api_test
 // advice_follow_pane_test.go (b.fji E1-E9): each refusal of send-keys,
 // read-pane, pause and decide that says what to do next is followed
 // literally, on the kill and pane-verb fixtures (fake tmux, injected clock).
-// The agent's input box is modelled from the keys calls (advPaneInput), so a
-// retry that types or submits twice is seen.
+// The agent's input box is modelled from the keys calls (paneInput,
+// pane_input_fixture_test.go), so a retry that types or submits twice is seen.
 
 import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,69 +24,6 @@ import (
 
 // advPaneNothingRetry is the unreadable refusal's advice before any keys went (E1, E4).
 const advPaneNothingRetry = "nothing was done; retry later"
-
-// advPaneInput is the agent pane's input box as the keys calls left it: a
-// text call that reached the pane types its text, an Enter that reached it
-// submits the box. A failed call reached the pane only when it timed out and
-// timeoutsReach is set (the description's "may have been delivered").
-type advPaneInput struct {
-	timeoutsReach bool
-	box           string
-	submitted     []string
-	onSubmit      func(line string)
-}
-
-// advPaneWatch models the input box of pane on e's Recorder.
-func advPaneWatch(e *killEnv, pane string, timeoutsReach bool) *advPaneInput {
-	in := &advPaneInput{timeoutsReach: timeoutsReach}
-	e.rec.AfterCall(tmux.CallSendText, func(c tmuxfix.SocketCall, err error) {
-		if c.Target == pane && in.reached(err) {
-			in.box += c.Text
-		}
-	}).AfterCall(tmux.CallSendEnter, func(c tmuxfix.SocketCall, err error) {
-		if c.Target == pane && in.reached(err) {
-			line := in.box
-			in.submitted, in.box = append(in.submitted, line), ""
-			if in.onSubmit != nil {
-				in.onSubmit(line)
-			}
-		}
-	})
-	return in
-}
-
-// reached reports whether a keys call that returned err reached the pane.
-func (in *advPaneInput) reached(err error) bool {
-	var ce *tmux.CallError
-	return err == nil || (in.timeoutsReach && errors.As(err, &ce) && ce.Failure == tmux.FailTimeout)
-}
-
-// assertSubmittedOnce fails unless the agent got exactly text, submitted once, and nothing is left typed.
-func (in *advPaneInput) assertSubmittedOnce(t *testing.T, text string) {
-	t.Helper()
-	if !slices.Equal(in.submitted, []string{text}) || in.box != "" {
-		t.Errorf("agent got submissions %q with %q left typed; want %q submitted once", in.submitted, in.box, text)
-	}
-}
-
-// advPaneAgent is advPaneWatch on r's agent pane for an agent that ends its
-// row (SessionEnd) on its exitOn-th "/exit" submission (0: never).
-func advPaneAgent(t *testing.T, e *killEnv, r killRow, timeoutsReach bool, exitOn int) *advPaneInput {
-	t.Helper()
-	in := advPaneWatch(e, r.Spawn.Identity.PaneID, timeoutsReach)
-	exits := 0
-	in.onSubmit = func(line string) {
-		if line != exitText {
-			return
-		}
-		if exits++; exits == exitOn {
-			if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "SessionEnd", r.Spawn.ClaudeSessionID); !a.Applied {
-				t.Errorf("SessionEnd after /exit not applied: %s", a.Reason)
-			}
-		}
-	}
-	return in
-}
 
 // advPaneRetryLater follows "retry later" on call: refused with advice and
 // nothing sent, refused unchanged while the scripted condition holds, then
@@ -109,7 +47,7 @@ type advPaneVerb func(t *testing.T, e *killEnv, r killRow) (call func() error, d
 
 // advPaneSendKeys is send-keys of skaText; done: the agent got it submitted once.
 func advPaneSendKeys(_ *testing.T, e *killEnv, r killRow) (func() error, func(*testing.T)) {
-	in := advPaneWatch(e, r.Spawn.Identity.PaneID, false)
+	in := watchPaneInput(e, r.Spawn.Identity.PaneID, false)
 	return func() error { _, err := e.sendKeys(skaParams(r)); return err },
 		func(t *testing.T) { in.assertSubmittedOnce(t, skaText) }
 }
@@ -131,7 +69,7 @@ func advPaneReadPane(t *testing.T, e *killEnv, r killRow) (func() error, func(*t
 // advPanePause is pause on an agent that exits on its first /exit; done: /exit submitted once, row ended.
 func advPanePause(t *testing.T, e *killEnv, r killRow) (func() error, func(*testing.T)) {
 	fastPausePolls(t)
-	in := advPaneAgent(t, e, r, false, 1)
+	in := paneAgentExiting(t, e, r, false, 1)
 	return func() error { _, err := e.pause(pauseParams(r)); return err },
 		func(t *testing.T) {
 			in.assertSubmittedOnce(t, exitText)
@@ -197,79 +135,125 @@ func TestAdviceFollow_E4_ReadPaneCaptureFailedRetryLater(t *testing.T) {
 
 // advPaneKeysFailure is a failed keys call: the call scripted to fail once,
 // whether a timed-out call reached the pane, the advice its description
-// carries, and why a literal retry is known not to work ("" when it works).
+// carries and what the agent's input box holds before the first call.
 type advPaneKeysFailure struct {
 	name    string
 	call    tmux.Call
 	script  tmuxfix.Script
 	reached bool
 	advice  string
-	broken  string
+	typed   string
 }
 
-// The keys-failure advice sentences (SR-1.4, SR-7.3).
+// The keys-failure advice sentences (SR-1.4, SR-7.3; b.9o4): send-keys names
+// its follow-up (read-pane, and send-keys with empty text, which presses
+// Enter only); pause keeps "retry later", its retry clearing the line first.
 const (
-	advPaneKeysMayHaveRetry  = "the keys may have been delivered; retry later"
-	advPaneEnterTimeoutRetry = "the keys may have been delivered; the text may be typed but not submitted; retry later"
-	advPaneNotSubmittedRetry = "the text may be typed but not submitted; retry later"
+	advSendKeysTextTimeout    = "the keys may have been delivered; read-pane; if the text is typed, send-keys with empty text, otherwise the same send-keys"
+	advSendKeysEnterTimeout   = "the keys may have been delivered; the text may be typed but not submitted; send-keys with empty text submits it"
+	advSendKeysNotSubmitted   = "the text may be typed but not submitted; send-keys with empty text submits it"
+	advPauseKeysMayHaveRetry  = "the keys may have been delivered; retry later"
+	advPauseEnterTimeoutRetry = "the keys may have been delivered; the text may be typed but not submitted; retry later"
+	advPauseNotSubmittedRetry = "the text may be typed but not submitted; retry later"
 )
 
-// advPaneEnterFailures are a failed Enter after the text went through.
-func advPaneEnterFailures(broken string) []advPaneKeysFailure {
+// advSendKeysEmptyTextManifest is what send-keys' manifest text (help, MCP
+// tools/list) says empty text does, which "send-keys with empty text" relies on.
+const advSendKeysEmptyTextManifest = "(empty text: Enter only)"
+
+// pause's line clear (C-u) failing before /exit (b.9o4): its descriptions
+// name the key send, word for word at the default 2 s action timeout, and
+// end "retry later"; a draft the agent's input box holds then is cleared by
+// the retry's own line clear.
+const (
+	advPauseClearTimeout = "tmux key send failed: no answer within 2 s; the keys may have been delivered; retry later"
+	advPauseClearReply   = "key send: unexpected reply"
+	advPauseClearFailed  = "tmux key send failed: unrecognized reply: " + advPauseClearReply +
+		"; tmux gave a reply agent-director does not recognise; the follow-up lookup found this launch's session; " +
+		"nothing was done; retry later"
+	advPauseDraft = "/mcp reconnect github"
+)
+
+// advPaneEnterFailures are a failed Enter after the text went through, its
+// description carrying timedOut after a timeout and failed otherwise.
+func advPaneEnterFailures(timedOut, failed string) []advPaneKeysFailure {
 	once := func(f tmux.Failure) tmuxfix.Script { return tmuxfix.Script{Failure: f, Times: 1} }
 	return []advPaneKeysFailure{
 		{name: "Enter timed out before reaching the pane", call: tmux.CallSendEnter, script: once(tmux.FailTimeout),
-			advice: advPaneEnterTimeoutRetry, broken: broken},
+			advice: timedOut},
 		{name: "Enter failed, the follow-up lookup found the session", call: tmux.CallSendEnter,
-			script: once(tmux.FailNoServer), advice: advPaneNotSubmittedRetry, broken: broken},
+			script: once(tmux.FailNoServer), advice: failed},
 	}
 }
 
-// TestAdviceFollow_E2_SendKeysTimeoutRetryLater: E2 "the keys may have been
-// delivered; retry later" after the text call timed out; the same send-keys
-// re-issued must leave the agent with the text submitted once.
-func TestAdviceFollow_E2_SendKeysTimeoutRetryLater(t *testing.T) {
-	timeout := tmuxfix.Script{Failure: tmux.FailTimeout, Times: 1}
-	advPaneKeysRetry(t, "E2", []advPaneKeysFailure{
-		{name: "the timed-out text call did not reach the pane", call: tmux.CallSendText, script: timeout,
-			advice: advPaneKeysMayHaveRetry},
-		{name: "the timed-out text call typed the text", call: tmux.CallSendText, script: timeout, reached: true,
-			advice: advPaneKeysMayHaveRetry,
-			broken: "the retry types the whole text again after the unsubmitted copy and submits both as one message"},
-	})
+// advPaneEnterSubmitted is a timed-out Enter that submitted what was typed,
+// its description carrying advice.
+func advPaneEnterSubmitted(what, advice string) advPaneKeysFailure {
+	return advPaneKeysFailure{name: "Enter timed out after submitting " + what, call: tmux.CallSendEnter,
+		script: tmuxfix.Script{Failure: tmux.FailTimeout, Times: 1}, reached: true, advice: advice}
 }
 
-// TestAdviceFollow_E3_SendKeysEnterFailedRetryLater: E3 "the text may be
-// typed but not submitted; retry later" after the Enter call failed; the
-// same send-keys re-issued must leave the agent with the text submitted once.
-func TestAdviceFollow_E3_SendKeysEnterFailedRetryLater(t *testing.T) {
-	failures := append(advPaneEnterFailures("the retry types the whole text again after the typed, unsubmitted "+
-		"copy and submits both as one message; the description offers no Enter-only retry"),
-		advPaneKeysFailure{name: "Enter timed out after submitting the text", call: tmux.CallSendEnter,
-			script: tmuxfix.Script{Failure: tmux.FailTimeout, Times: 1}, reached: true, advice: advPaneEnterTimeoutRetry,
-			broken: "the text was submitted, and the retry submits it a second time"})
-	advPaneKeysRetry(t, "E3", failures)
-}
-
-// advPaneKeysRetry runs each send-keys keys failure: refused with its advice,
-// then re-issued, after which the agent must have the text submitted once.
-func advPaneKeysRetry(t *testing.T, id string, failures []advPaneKeysFailure) {
+// advPaneKeysRefused seeds a live row watching its agent's input box, fails
+// f's call once and sends skaText, which must be refused with f's advice.
+func advPaneKeysRefused(t *testing.T, f advPaneKeysFailure) (*killEnv, killRow, *paneInput) {
 	t.Helper()
+	e := newKillEnv(t)
+	r := e.seedRow(t, killRowSpec{})
+	in := watchPaneInput(e, r.Spawn.Identity.PaneID, f.reached)
+	e.rec.Script(r.Socket, f.script, f.call)
+	_, err := e.sendKeys(skaParams(r))
+	adviceAssertAdvice(t, err, api.ErrTmuxUnresponsive, f.advice)
+	return e, r, in
+}
+
+// TestAdviceFollow_E2_SendKeysTextTimeoutReadPaneThenEmptyText: E2 "the keys
+// may have been delivered; read-pane; if the text is typed, send-keys with
+// empty text, otherwise the same send-keys" after the text call timed out;
+// followed literally, the agent has the text submitted once.
+func TestAdviceFollow_E2_SendKeysTextTimeoutReadPaneThenEmptyText(t *testing.T) {
+	adviceAssertManifest(t, "send-keys", "", advSendKeysEmptyTextManifest)
+	timeout := tmuxfix.Script{Failure: tmux.FailTimeout, Times: 1}
+	for _, f := range []advPaneKeysFailure{
+		{name: "the timed-out text call did not reach the pane", call: tmux.CallSendText, script: timeout,
+			advice: advSendKeysTextTimeout},
+		{name: "the timed-out text call typed the text", call: tmux.CallSendText, script: timeout, reached: true,
+			advice: advSendKeysTextTimeout},
+	} {
+		t.Run(f.name, func(t *testing.T) {
+			e, r, in := advPaneKeysRefused(t, f)
+
+			read, err := e.readPaneClient(t, api.ReadPaneParams{ClaudeInstanceID: r.ID})
+			if err != nil {
+				t.Fatalf("read-pane: %v; want the agent's pane", err)
+			}
+			p := skaParams(r)
+			if strings.Contains(read.Pane, skaText) {
+				p.Text = ""
+			}
+			if _, err := e.sendKeys(p); err != nil {
+				t.Fatalf("send-keys of %q after read-pane: %v; want delivery", p.Text, err)
+			}
+			in.assertSubmittedOnce(t, skaText)
+		})
+	}
+}
+
+// TestAdviceFollow_E3_SendKeysEnterFailedEmptyTextSubmits: E3 "the text may
+// be typed but not submitted; send-keys with empty text submits it" (after a
+// timeout, "the keys may have been delivered; " first) after the Enter call
+// failed; send-keys with empty text must leave the text submitted once, also
+// when the timed-out Enter had submitted it (Enter on an empty input submits
+// nothing).
+func TestAdviceFollow_E3_SendKeysEnterFailedEmptyTextSubmits(t *testing.T) {
+	adviceAssertManifest(t, "send-keys", "", advSendKeysEmptyTextManifest)
+	failures := append(advPaneEnterFailures(advSendKeysEnterTimeout, advSendKeysNotSubmitted),
+		advPaneEnterSubmitted("the text", advSendKeysEnterTimeout))
 	for _, f := range failures {
 		t.Run(f.name, func(t *testing.T) {
-			e := newKillEnv(t)
-			r := e.seedRow(t, killRowSpec{})
-			in := advPaneWatch(e, r.Spawn.Identity.PaneID, f.reached)
-			e.rec.Script(r.Socket, f.script, f.call)
+			e, r, in := advPaneKeysRefused(t, f)
 
-			_, err := e.sendKeys(skaParams(r))
-			adviceAssertAdvice(t, err, api.ErrTmuxUnresponsive, f.advice)
-			if f.broken != "" {
-				knownBrokenAdvice(t, id, f.broken)
-			}
-
-			if _, err := e.sendKeys(skaParams(r)); err != nil {
-				t.Fatalf("re-issued send-keys: %v; want delivery", err)
+			if _, err := e.sendKeys(api.SendKeysParams{ClaudeInstanceID: r.ID}); err != nil {
+				t.Fatalf("send-keys with empty text: %v; want Enter delivered", err)
 			}
 			in.assertSubmittedOnce(t, skaText)
 		})
@@ -278,33 +262,38 @@ func advPaneKeysRetry(t *testing.T, id string, failures []advPaneKeysFailure) {
 
 // TestAdviceFollow_E5_PauseKeysFailedRetryLater: E5 "the keys may have been
 // delivered; retry later" (and pause's Enter failures, "the text may be typed
-// but not submitted; retry later"); pause re-issued must end the row: a no-op
-// on a finished row, else /exit submitted once.
+// but not submitted; retry later", and its line clear's, "tmux key send
+// failed: ... retry later"); pause re-issued must end the row and never
+// submit /exit/exit or /exit joined to a draft: a no-op on a finished row,
+// else /exit submitted once, the input line cleared before it is typed
+// (b.9o4).
 func TestAdviceFollow_E5_PauseKeysFailedRetryLater(t *testing.T) {
 	timeout := tmuxfix.Script{Failure: tmux.FailTimeout, Times: 1}
-	retypes := "the retry types /exit again after the typed, unsubmitted /exit and submits /exit/exit, " +
-		"which is not /exit; the agent keeps running and the retried pause times out"
 	failures := append([]advPaneKeysFailure{
+		{name: "the line clear timed out before reaching the pane, a draft typed", call: tmux.CallSendKey,
+			script: timeout, advice: advPauseClearTimeout, typed: advPauseDraft},
+		{name: "the line clear timed out after clearing a draft", call: tmux.CallSendKey, script: timeout,
+			reached: true, advice: advPauseClearTimeout, typed: advPauseDraft},
+		{name: "the line clear failed, the follow-up lookup found the session, a draft typed", call: tmux.CallSendKey,
+			script: tmuxfix.Script{Failure: tmux.FailUnrecognized, FirstLine: advPauseClearReply, ExitStatus: 1, Times: 1},
+			advice: advPauseClearFailed, typed: advPauseDraft},
 		{name: "the /exit text call timed out before reaching the pane", call: tmux.CallSendText, script: timeout,
-			advice: advPaneKeysMayHaveRetry},
+			advice: advPauseKeysMayHaveRetry},
 		{name: "the /exit text call timed out after typing /exit", call: tmux.CallSendText, script: timeout,
-			reached: true, advice: advPaneKeysMayHaveRetry, broken: retypes},
-		{name: "Enter timed out after submitting /exit", call: tmux.CallSendEnter, script: timeout, reached: true,
-			advice: advPaneEnterTimeoutRetry},
-	}, advPaneEnterFailures(retypes)...)
+			reached: true, advice: advPauseKeysMayHaveRetry},
+		advPaneEnterSubmitted("/exit", advPauseEnterTimeoutRetry),
+	}, advPaneEnterFailures(advPauseEnterTimeoutRetry, advPauseNotSubmittedRetry)...)
 	for _, f := range failures {
 		t.Run(f.name, func(t *testing.T) {
 			fastPausePolls(t)
 			e := newKillEnv(t)
 			r := e.seedRow(t, killRowSpec{})
-			in := advPaneAgent(t, e, r, f.reached, 1)
+			in := paneAgentExiting(t, e, r, f.reached, 1)
+			in.box = f.typed
 			e.rec.Script(r.Socket, f.script, f.call)
 
 			_, err := e.pause(pauseParams(r))
 			adviceAssertAdvice(t, err, api.ErrTmuxUnresponsive, f.advice)
-			if f.broken != "" {
-				knownBrokenAdvice(t, "E5", f.broken)
-			}
 
 			if _, err := e.pause(pauseParams(r)); err != nil {
 				t.Fatalf("re-issued pause: %v; want the row ended (agent got %q, %q left typed)", err, in.submitted, in.box)
@@ -413,7 +402,7 @@ func TestAdviceFollow_E8_PauseTimeoutRetryPause(t *testing.T) {
 	}{
 		{name: "the agent ended after the wait timed out", late: true, exits: []string{exitText}},
 		{name: "the agent ignored the first /exit", exitOn: 2, exits: []string{exitText, exitText},
-			calls: len(paneSendCalls)},
+			calls: len(pauseSendCalls)},
 	}
 	pause := func(e *killEnv, r killRow) (api.PauseResult, error) {
 		return e.pauseWithin(context.Background(), 0, pauseParams(r))
@@ -422,7 +411,7 @@ func TestAdviceFollow_E8_PauseTimeoutRetryPause(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newKillEnv(t)
 			r := e.seedRow(t, killRowSpec{})
-			in := advPaneAgent(t, e, r, false, tc.exitOn)
+			in := paneAgentExiting(t, e, r, false, tc.exitOn)
 
 			if _, err := pause(e, r); !errors.Is(err, api.ErrPauseTimeout) {
 				t.Fatalf("pause = %v; want ErrPauseTimeout", err)

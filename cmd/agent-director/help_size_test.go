@@ -18,14 +18,17 @@ import "testing"
 // 2026-10-01, Epic 19 Task 1 (unusable-name pointers on five verbs) was
 // fitted by wording trims and the user-approved removal of serve's
 // registration sentence and make-template's spawn --template clause; lowered
-// to 15125. The user's cap is 15160 B: help must stay at or under it.
+// to 15125. On 2026-10-03, re-recorded up to 15147 with the user's approval
+// for b.9o4: send-keys' description gained " (empty text: Enter only)"
+// (25 B), the shortest form that states empty text's Enter-only meaning. The
+// user's cap is 15160 B: help must stay at or under it.
 //
 // SR-20.6: this guard checks growth only. Re-recording it downward, to the
 // newly measured count after a trim, is free. Re-recording it upward needs
 // the orchestrator's approval before the commit and a recorded reason in the
 // commit message (what grew, by how many bytes, why it cannot be shorter);
 // never to make a failing guard pass.
-const helpStdoutBytes = 15125
+const helpStdoutBytes = 15147
 
 // helpHardCap is the user's hard cap on `agent-director help` stdout, in
 // bytes. Help stdout must stay at or under it, with no slack.

@@ -60,7 +60,9 @@ type SendKeysParams struct {
 	ClaudeInstanceID string `json:"claude_instance_id"`
 	// Text is the string to deliver to the agent's own pane. CR bytes (0x0D) are
 	// stripped before delivery; LF bytes (0x0A) are preserved as input newlines.
-	// A single Enter is always appended to submit the composed buffer.
+	// A single Enter is always appended to submit the composed buffer. Empty
+	// text types nothing, so the call sends Enter only: it submits what is
+	// already typed, such as a text a failed send-keys left unsubmitted.
 	Text string `json:"text"`
 	// AllowPending also allows a pending row: a launch (spawn, reuse or
 	// resume) whose agent has not reported in yet. Keys are delivered only to
@@ -122,6 +124,10 @@ type sendKeysGuard struct {
 //   - The text is typed literally, then a single Enter is sent to the same
 //     pane as a separate call, only if the text call succeeded. That is the
 //     single submit.
+//   - Empty text types nothing, so the call is an Enter-only send, on a
+//     pending row too with AllowPending: it submits a line already typed,
+//     such as a text a failed send-keys left unsubmitted, and on an empty
+//     Claude Code input it submits nothing.
 //
 // State precondition: the row must be in a live interactive state (waiting,
 // working, ask_user or check_permission). A finished row (ended or missing)
@@ -188,6 +194,14 @@ type sendKeysGuard struct {
 //     ErrTmuxNotAvailable for a different server or tmux unavailable
 //     (SR-7.3). Once the text call went through, every description says the
 //     text may be typed but not submitted, never that nothing was sent.
+//     Where the text may be in the pane, an ErrTmuxUnresponsive names the
+//     next step in place of "retry later", since a literal retry would type
+//     the text again after the unsubmitted copy (b.9o4): after a timed-out
+//     text call "read-pane; if the text is typed, send-keys with empty text,
+//     otherwise the same send-keys", and after a failed or timed-out Enter
+//     "send-keys with empty text submits it". A text call that failed other
+//     than by timing out typed nothing, and its refusals still end "retry
+//     later".
 //
 // Every tmux call uses the row's socket and every action targets a pane id.
 // The calls are at most one lookup, one pane listing, the text call, the
@@ -285,6 +299,7 @@ func (r *sendKeysRun) run(t SendKeysTmux, pc ProcChecker, effectiveWindow time.D
 		return fmt.Errorf("instance %s: %w", row.ClaudeInstanceID, err)
 	}
 	r.keysRun = newKeysRun(t, pc, row, r.s.StoreID(), socket, r.s)
+	r.next = sendKeysNext
 	if row.State == store.StatePending {
 		r.leftover = func(leftovers []tmux.Session) error {
 			return pendingLeftoverError(row.ClaudeInstanceID, leftovers)
@@ -377,7 +392,8 @@ func isInteractiveState(state string) bool {
 // row's label on its recorded socket and targeted by pane id. CR bytes
 // (0x0D) are stripped before delivery to prevent premature submission; LF
 // bytes (0x0A) are preserved as composed newlines in Claude's input box. A
-// single Enter is always appended to submit the composed buffer.
+// single Enter is always appended to submit the composed buffer; empty text
+// sends that Enter only.
 //
 // After the state and relay refusals, a row whose recorded tmux session name
 // cannot be used (it is empty, contains a control character, or contains a
@@ -406,7 +422,9 @@ func isInteractiveState(state string) bool {
 //     conflicting labels; nothing was sent.
 //   - [ErrTmuxUnresponsive]: tmux did not answer, or gave a reply that could
 //     not be recognised; after a text or Enter call the keys may have been
-//     delivered.
+//     delivered. Where the text may be typed, the description names the
+//     next step (read-pane, and send-keys with empty text, which sends Enter
+//     only) in place of a retry that would type the text twice.
 //   - [ErrTmuxNotAvailable]: the tmux binary could not be run, the socket is
 //     not accessible to this user, or this is not the tmux server the agent
 //     was launched on.

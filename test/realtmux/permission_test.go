@@ -42,6 +42,7 @@ func TestPermissionDeniedEveryCall(t *testing.T) {
 			chmodSocket(t, rt.Socket, 0o600)
 			return newDenyAtEnterClient(t, rt.Socket)
 		}, func(t *testing.T, cl *tmux.Client) error { return cl.SendKeysPane(rt.Socket, pane, "x", true) }},
+		tmux.CallSendKey: {nil, func(t *testing.T, cl *tmux.Client) error { return cl.SendKeyPane(rt.Socket, pane, "C-u") }},
 		tmux.CallCapture: {nil, func(t *testing.T, cl *tmux.Client) error {
 			_, err := cl.CapturePaneID(rt.Socket, pane, 10, false)
 			return err

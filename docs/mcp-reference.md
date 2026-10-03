@@ -119,7 +119,7 @@ Return a row in full (id, parent, state, cwd, session name, tmux socket, args, r
 
 ## Tool: send-keys
 
-Send text into the agent's own pane: `\r` stripped, `\n` kept as a newline in the input box, and one Enter appended to submit. tmux errors: ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE; after a timeout the keys may have been delivered), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).
+Send text into the agent's own pane: `\r` stripped, `\n` kept as a newline in the input box, and one Enter appended to submit (empty text: Enter only). tmux errors: ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE; after a timeout the keys may have been delivered), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).
 
 ### Input schema
 

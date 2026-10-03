@@ -95,6 +95,16 @@ func (c *Client) SendKeysPane(socket, paneID, text string, pressEnter bool) erro
 	return c.runAction(CallSendEnter, socket, []string{"send-keys", "-t", paneID, "Enter"})
 }
 
+// SendKeyPane sends one key to the pane paneID on socket, by its tmux key
+// name and never typed literally: send-keys -t <pane id> <key> (b.9o4). pause
+// sends C-u, which deletes the agent's input from the cursor back to the
+// start of its line, before typing /exit. key is a fixed key name the caller
+// chooses, never caller text. Action timeout. The error's Call is
+// CallSendKey.
+func (c *Client) SendKeyPane(socket, paneID, key string) error {
+	return c.runAction(CallSendKey, socket, []string{"send-keys", "-t", paneID, key})
+}
+
 // CapturePaneID returns the last nLines lines of the pane paneID on socket:
 // capture-pane -p [-e] -t <pane id> -S -<n>, -e when ansi is set (SR-2.1).
 // Action timeout. The text is the standard output of an exit-0 call.

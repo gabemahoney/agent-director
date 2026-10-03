@@ -23,10 +23,11 @@ import (
 // kill, so it uses DescCallTimeout, DescUnrecognisedReply,
 // DescDifferentServer, DescConflictingLabels (with NothingWasDone),
 // DescSocketPermission and DescTmuxNotRun unchanged. The keys actions
-// (send-keys' text and Enter, pause's) add what they may have done: a
-// timed-out text or Enter send (DescKeysTimeout), and any class after a
-// failed Enter send (DescCase.AfterEnterFailed) or text send
-// (DescCase.AfterTextFailed). send-keys' two pending-row refusals are
+// (send-keys' text and Enter, pause's) add what they may have done and
+// each verb's next step (b.9o4): a timed-out text or Enter send
+// (DescKeysTimeout), and any class after a failed Enter send
+// (DescCase.AfterEnterFailed) or text send (DescCase.AfterTextFailed,
+// "nothing was done; retry later"). send-keys' two pending-row refusals are
 // DescSendKeysPendingNoLaunch and DescSendKeysPendingLeftover. No pane-verb
 // case may give the retired "no pane 0.0" clause or a base-index hint
 // (WD 2026-09-29c). The pane verbs' manifest texts are here too: each
@@ -178,6 +179,17 @@ const (
 	noTmuxCallMade           = "no tmux call was made"
 )
 
+// send-keys' next steps after a keys failure, in place of "retry later"
+// (b.9o4): after a timed-out text call, read the pane and send empty text
+// (Enter only) if the text is typed; after a failed or timed-out Enter, send
+// empty text. pause keeps "retry later" (its retry clears the line first)
+// and must not name them.
+const (
+	sendKeysEmptyText        = "send-keys with empty text"
+	sendKeysTextTimeoutNext  = "read-pane; if the text is typed, " + sendKeysEmptyText + ", otherwise the same send-keys"
+	sendKeysEmptyTextSubmits = sendKeysEmptyText + " submits it"
+)
+
 // keysMustNot is what a description after a keys action that may have typed
 // keys must not say: that nothing was done or sent.
 var keysMustNot = []string{nothingWasDone, "nothing was sent"}
@@ -219,52 +231,105 @@ func DescSendKeysPendingLeftover(instanceID string, sessions []DescSession) Desc
 	}
 }
 
-// DescKeysTimeout is ErrTmuxUnresponsive for a timed-out keys action, call
-// tmux.CallSendText or tmux.CallSendEnter (SR-1.4, SR-7.3): DescCallTimeout's
-// call, effective timeout and "retry later", with "the keys may have been
-// delivered" in place of "nothing was done", which it must not say (nor
-// "nothing was sent"); for the Enter call also "the text may be typed but not
-// submitted", which a text call's timeout must not say. Never "dead" or
-// "gone". Any other call panics.
-func DescKeysTimeout(call tmux.Call, timeout time.Duration) DescCase {
+// DescKeysTimeout is ErrTmuxUnresponsive for verb v's timed-out keys action,
+// call tmux.CallSendText, tmux.CallSendEnter or, for pause, tmux.CallSendKey
+// (its line clear before /exit, b.9o4) (SR-1.4, SR-7.3): DescCallTimeout's
+// call and effective timeout, with "the keys may have been delivered" in
+// place of "nothing was done", which it must not say (nor "nothing was
+// sent"); for the Enter call also "the text may be typed but not submitted",
+// which a text call's or line clear's timeout must not say. The next step
+// (b.9o4): send-keys' text call "the keys may have been delivered; read-pane;
+// if the text is typed, send-keys with empty text, otherwise the same
+// send-keys", its Enter call "...; the text may be typed but not submitted;
+// send-keys with empty text submits it", never "retry later"; pause's
+// "retry later", never "send-keys with empty text". Never "dead" or "gone".
+// Any other call or verb, or the key send for send-keys, panics.
+func DescKeysTimeout(v PaneVerb, call tmux.Call, timeout time.Duration) DescCase {
 	c := DescCallTimeout(call, timeout)
 	c.Name += ", the keys may have been delivered"
 	c.Require = append(withoutPhrases(c.Require, nothingWasDone), keysMayHaveBeenDelivered)
 	c.MustNot = append(append([]string(nil), c.MustNot...), keysMustNot...)
+	consequence := keysMayHaveBeenDelivered
 	switch call {
 	case tmux.CallSendEnter:
 		c.Require = append(c.Require, textNotSubmitted)
+		consequence += "; " + textNotSubmitted
 	case tmux.CallSendText:
 		c.MustNot = append(c.MustNot, textNotSubmitted)
+	case tmux.CallSendKey:
+		if v != PanePause {
+			panic("apitest: DescKeysTimeout: only pause sends a key, not " + string(v))
+		}
+		c.MustNot = append(c.MustNot, textNotSubmitted)
 	default:
-		panic("apitest: DescKeysTimeout takes the text or Enter send, not " + strconv.Quote(string(call)))
+		panic("apitest: DescKeysTimeout takes the text, Enter or key send, not " + strconv.Quote(string(call)))
 	}
-	return c
+	return c.keysNextStep(v, call, consequence)
 }
 
-// AfterEnterFailed returns c as given after a keys action whose text call
-// went through and whose Enter call then failed other than by a timeout
+// AfterEnterFailed returns c as given after verb v's keys action whose text
+// call went through and whose Enter call then failed other than by a timeout
 // (SR-1.4, SR-7.3), in any class: "the text may be typed but not submitted"
 // in place of "nothing was done" and "nothing was sent", which it must not
 // say, and never "the keys may have been delivered" (DescKeysTimeout's
-// Enter case covers the timeout). Use it on DescPaneGone (FailedCall
-// tmux.CallSendEnter), DescUnrecognisedReply (tmux.CallSendEnter),
-// DescDifferentServer, DescSocketPermission or DescTmuxNotRun.
-func (c DescCase) AfterEnterFailed() DescCase {
+// Enter case covers the timeout). An ErrTmuxUnresponsive case
+// (DescUnrecognisedReply) also gives the next step after it (b.9o4):
+// send-keys' "send-keys with empty text submits it", never "retry later";
+// pause's "retry later", never "send-keys with empty text". Any other
+// class (the gone error, ErrTmuxNotAvailable) gives no next step: neither
+// "retry later" nor "send-keys with empty text". Use it on DescPaneGone
+// (FailedCall tmux.CallSendEnter), DescUnrecognisedReply
+// (tmux.CallSendEnter), DescDifferentServer, DescSocketPermission or
+// DescTmuxNotRun.
+func (c DescCase) AfterEnterFailed(v PaneVerb) DescCase {
 	c.Name += ", after the Enter send failed"
 	c.Require = append(withoutPhrases(c.Require, keysMustNot...), textNotSubmitted)
 	c.MustNot = append(append(append([]string(nil), c.MustNot...), keysMustNot...), keysMayHaveBeenDelivered)
+	if !c.unanswered {
+		c.MustNot = append(c.MustNot, retryLater, sendKeysEmptyText)
+		return c
+	}
+	return c.keysNextStep(v, tmux.CallSendEnter, textNotSubmitted)
+}
+
+// keysNextStep returns c, an ErrTmuxUnresponsive case after verb v's failed
+// keys call, requiring consequence followed by v's next step (b.9o4):
+// send-keys' (sendKeysTextTimeoutNext after a text call, else
+// sendKeysEmptyTextSubmits) in place of "retry later", which it must not
+// say; pause's "retry later", and never "send-keys with empty text".
+func (c DescCase) keysNextStep(v PaneVerb, call tmux.Call, consequence string) DescCase {
+	switch v {
+	case PaneSendKeys:
+		next := sendKeysEmptyTextSubmits
+		if call == tmux.CallSendText {
+			next = sendKeysTextTimeoutNext
+		}
+		c.Name += ", " + next
+		c.Require = append(withoutPhrases(c.Require, retryLater), consequence+"; "+next)
+		c.MustNot = append(append([]string(nil), c.MustNot...), retryLater)
+	case PanePause:
+		c.Require = append(withoutPhrases(c.Require, retryLater), consequence+"; "+retryLater)
+		c.MustNot = append(append([]string(nil), c.MustNot...), sendKeysEmptyText)
+	default:
+		panic("apitest: keys next step: " + string(v) + " types no keys")
+	}
 	return c
 }
 
 // AfterTextFailed returns c as given after a keys action whose text call
 // failed other than by a timeout, so no key was typed (SR-1.4, SR-7.3): c
-// unchanged but for its name, and never "the text may be typed but not
-// submitted" or "the keys may have been delivered". Use it on the cases
-// AfterEnterFailed takes, with tmux.CallSendText.
+// as given, never "the text may be typed but not submitted", "the keys may
+// have been delivered" or "send-keys with empty text"; an
+// ErrTmuxUnresponsive case (DescUnrecognisedReply) keeps the default next
+// step, "nothing was done; retry later", for both verbs (b.9o4). Use it on
+// the cases AfterEnterFailed takes, with tmux.CallSendText, or with
+// tmux.CallSendKey after pause's line clear failed the same way.
 func (c DescCase) AfterTextFailed() DescCase {
 	c.Name += ", after the text send failed"
-	c.MustNot = append(append([]string(nil), c.MustNot...), textNotSubmitted, keysMayHaveBeenDelivered)
+	c.MustNot = append(append([]string(nil), c.MustNot...), textNotSubmitted, keysMayHaveBeenDelivered, sendKeysEmptyText)
+	if c.unanswered {
+		c.Require = append(withoutPhrases(c.Require, retryLater), nothingWasDone+"; "+retryLater)
+	}
 	return c
 }
 

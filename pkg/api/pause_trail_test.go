@@ -164,12 +164,27 @@ func TestPauseTrailClosedClient(t *testing.T) {
 	e.assertNoTmuxCall(t)
 }
 
+// ptrLineClearDisagreeCases are pause's own rows of the keys verbs' disagree
+// table (b.9o4): a line clear (C-u) that timed out or failed types no text,
+// so the call's action is nothing_sent.
+func ptrLineClearDisagreeCases() []keysDisagreeCase {
+	type setups = []func(*testing.T, *killEnv, *killRow)
+	nothingSent := []disagreeWant{{reason: "server_restarted", server: "restarted", verdict: "ours", action: "nothing_sent",
+		ours: true}}
+	return []keysDisagreeCase{
+		{name: "server_restarted, line clear timed out",
+			setup: setups{ktrRestart, ktrScript(tmux.FailTimeout, tmux.CallSendKey)}, want: nothingSent},
+		{name: "server_restarted on the lookup and the follow-up, line clear failed",
+			setup: setups{ktrRestart, ktrScript(tmux.FailUnrecognized, tmux.CallSendKey)}, want: nothingSent},
+	}
+}
+
 // TestPauseTrailProvenanceDisagree: on both entry points each reason is written
 // once per call (verb pause, source ad_send_keys) with what was typed as its
 // action, never with a label value or another row's id; no other record.
 func TestPauseTrailProvenanceDisagree(t *testing.T) {
 	for _, entry := range ptrEntries {
-		for _, tc := range keysDisagreeCases() {
+		for _, tc := range append(keysDisagreeCases(), ptrLineClearDisagreeCases()...) {
 			t.Run(entry.name+"/"+tc.name, func(t *testing.T) {
 				e := newKillEnv(t)
 				r, other := e.seedKeysDisagreeCase(t, tc)

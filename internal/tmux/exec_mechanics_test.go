@@ -155,6 +155,7 @@ func TestExecPipeCloseWaitPerCallKind(t *testing.T) {
 		{name: "session kill", run: func(c *tmux.Client, s string) (any, error) { return noValue(c.KillSessionID(s, "$1")) }},
 		{name: "text", run: func(c *tmux.Client, s string) (any, error) { return noValue(c.SendKeysPane(s, "%1", "hi", false)) }},
 		{name: "text and Enter", run: func(c *tmux.Client, s string) (any, error) { return noValue(c.SendKeysPane(s, "%1", "hi", true)) }},
+		{name: "key send", run: func(c *tmux.Client, s string) (any, error) { return noValue(c.SendKeyPane(s, "%1", "C-u")) }},
 		{name: "label by id", run: func(c *tmux.Client, s string) (any, error) {
 			return noValue(c.SetLabel(s, "$1", "%1", execToken, "id-1", tmuxfix.StoreID))
 		}},

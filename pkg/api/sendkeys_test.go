@@ -38,13 +38,12 @@ func skDeliver(t *testing.T, e *killEnv, r killRow, text string) {
 }
 
 // TestSendKeysText: CR bytes are stripped, LF is kept, and one Enter
-// submits; an empty text submits Enter only.
+// submits. Empty text (Enter only) is TestSendKeysEmptyTextPressesEnterOnly's.
 func TestSendKeysText(t *testing.T) {
 	cases := []struct{ name, text, want string }{
 		{"single line", "hello", "hello"},
 		{"multi-line keeps LF", "line one\nline two", "line one\nline two"},
 		{"CR stripped", "ab\rcd\r\nef", "abcd\nef"},
-		{"empty text", "", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -55,7 +55,8 @@ type cantTellRefusal struct {
 	// retryLater. Only a caller whose retry of the same call cannot work
 	// sets it: plain spawn after "duplicate session", whose row is already
 	// ended or may still be pending (heldRetrySentences.Unanswered:
-	// heldRetryReuse, heldRetryWait).
+	// heldRetryReuse, heldRetryWait), and send-keys after a keys failure
+	// that may have left its text typed (keysReached, sendKeysNext).
 	Retry string
 }
 

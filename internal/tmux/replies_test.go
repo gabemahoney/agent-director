@@ -61,6 +61,8 @@ func replyCall(t *testing.T, k tmux.Call, name string, res tmux.RunResult) (*scr
 		err = c.SendKeysPane(testSocket, "%0", "hi", false)
 	case tmux.CallSendEnter:
 		err = c.SendKeysPane(testSocket, "%0", "hi", true)
+	case tmux.CallSendKey:
+		err = c.SendKeyPane(testSocket, "%0", "C-u")
 	case tmux.CallCapture:
 		_, err = c.CapturePaneID(testSocket, "%0", 10, false)
 	case tmux.CallCreate:
@@ -140,8 +142,9 @@ func TestReplayReplies(t *testing.T) {
 	}
 }
 
-// TestReplayEveryCallKind pins the outcomes that hold on all nine call kinds:
-// the permission reply (AC-CLS-02) and an exec failure of the binary.
+// TestReplayEveryCallKind pins the outcomes that hold on every call kind
+// (tmuxfix.AllCalls): the permission reply (AC-CLS-02) and an exec failure of
+// the binary.
 func TestReplayEveryCallKind(t *testing.T) {
 	cases := []struct {
 		name   string

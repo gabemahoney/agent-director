@@ -42,12 +42,32 @@ func (w *killStore) PermissionRequestsForSpawn(id string) ([]api.PermissionRow, 
 // (errInjectedStore when nil).
 func (w *killStore) failPermissionRequests(err error) { w.permErr = orInjected(err) }
 
+// paneClearKey is the key pause sends to the agent's pane before typing
+// /exit (b.9o4): C-u, by name (send-keys -t <pane id> C-u), which Claude
+// Code binds to deleting from the cursor to the start of the line.
+const paneClearKey = "C-u"
+
+// callClearLine stands, in the call lists below, for a key send of
+// paneClearKey, which the Recorder records as tmux.CallSendKey with Key
+// paneClearKey (recordedCall).
+const callClearLine = tmux.CallSendKey + " " + paneClearKey
+
+// recordedCall is c's kind as the call lists compare it: callClearLine for a
+// key send of paneClearKey (tmuxfix.SocketCall.Key), else c.Call.
+func recordedCall(c tmuxfix.SocketCall) tmux.Call {
+	if c.Key == paneClearKey {
+		return callClearLine
+	}
+	return c.Call
+}
+
 // paneWriteCalls are the call kinds that change tmux: sends, creates, kills and label writes.
-var paneWriteCalls = []tmux.Call{tmux.CallSendText, tmux.CallSendEnter, tmux.CallCreate, tmux.CallKillPane,
-	tmux.CallKillSession, tmux.CallSetLabel}
+var paneWriteCalls = []tmux.Call{tmux.CallSendText, tmux.CallSendEnter, callClearLine, tmux.CallCreate,
+	tmux.CallKillPane, tmux.CallKillSession, tmux.CallSetLabel}
 
 // The pane verbs' call sequences: a read (lookup, listing, capture), a
-// delivery (lookup, listing, text, Enter) and a text call that failed (no Enter).
+// delivery (lookup, listing, text, Enter) and a text call that failed (no
+// Enter). pause's, which clear the line first, are pause_fixture_test.go's.
 var (
 	paneReadCalls = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture}
 	paneSendCalls = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallSendText, tmux.CallSendEnter}
@@ -357,10 +377,10 @@ func (e *killEnv) assertPaneCalls(t *testing.T, want ...tmux.Call) {
 	t.Helper()
 	e.assertKillCalls(t, want...)
 	for _, c := range e.rec.SocketCalls() {
-		switch c.Call {
-		case tmux.CallCapture, tmux.CallSendText, tmux.CallSendEnter:
+		switch recordedCall(c) {
+		case tmux.CallCapture, tmux.CallSendText, tmux.CallSendEnter, callClearLine:
 			if !killPaneIDRe.MatchString(c.Target) {
-				t.Errorf("%v targets %q; want a pane id", c.Call, c.Target)
+				t.Errorf("%v targets %q; want a pane id", recordedCall(c), c.Target)
 			}
 		}
 	}
@@ -409,19 +429,40 @@ func (e *killEnv) assertDelivered(t *testing.T, socket, paneID, text string) {
 	}
 }
 
-// assertNothingSent fails when a text or Enter call was made (the Recorder
-// has no name-based send).
-func (e *killEnv) assertNothingSent(t *testing.T) {
+// assertEnterOnly fails unless the calls were the lookup, the pane listing
+// and one Enter to paneID on socket, with nothing typed: a text call, if
+// one is made, types "" into paneID (b.9o4, send-keys with empty text).
+func (e *killEnv) assertEnterOnly(t *testing.T, socket, paneID string) {
 	t.Helper()
-	e.assertNoCalls(t, tmux.CallSendText, tmux.CallSendEnter)
+	var got []tmux.Call
+	for _, c := range e.rec.SocketCalls() {
+		if c.Call == tmux.CallSendText && c.Text == "" && c.Socket == socket && c.Target == paneID {
+			continue
+		}
+		got = append(got, recordedCall(c))
+	}
+	if want := []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallSendEnter}; !slices.Equal(got, want) {
+		t.Errorf("tmux calls, an empty text call aside = %v; want %v", got, want)
+	}
+	if got := e.rec.SocketCallsOf(tmux.CallSendEnter); len(got) != 1 || got[0].Socket != socket || got[0].Target != paneID {
+		t.Errorf("Enter calls = %+v; want one to %s on %s", got, paneID, socket)
+	}
 }
 
-// assertNoCalls fails when a recorded socket-taking call is of any of kinds.
+// assertNothingSent fails when a text, Enter or line-clear call was made
+// (the Recorder has no name-based send).
+func (e *killEnv) assertNothingSent(t *testing.T) {
+	t.Helper()
+	e.assertNoCalls(t, tmux.CallSendText, tmux.CallSendEnter, callClearLine)
+}
+
+// assertNoCalls fails when a recorded socket-taking call is of any of kinds
+// (as recordedCall gives it).
 func (e *killEnv) assertNoCalls(t *testing.T, kinds ...tmux.Call) {
 	t.Helper()
 	for _, c := range e.rec.SocketCalls() {
-		if slices.Contains(kinds, c.Call) {
-			t.Errorf("recorded %v of %q; want no %v", c.Call, c.Target, kinds)
+		if slices.Contains(kinds, recordedCall(c)) {
+			t.Errorf("recorded %v of %q; want no %v", recordedCall(c), c.Target, kinds)
 		}
 	}
 }

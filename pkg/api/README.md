@@ -210,7 +210,8 @@ Send text into the agent's own pane. CR bytes (`\r`, `0x0D`) are
 stripped automatically before delivery to prevent premature buffer
 submission; LF bytes (`\n`, `0x0A`) are preserved as composed newlines
 in Claude's input box. A single Enter is always appended to submit the
-buffer. There is no flag to suppress CR stripping — the behavior is
+buffer; an empty `Text` sends that Enter only, submitting what is already
+typed. There is no flag to suppress CR stripping — the behavior is
 unconditional by design (SRD §4.3).
 
 ```bash
@@ -249,7 +250,12 @@ Most-likely sentinel errors:
   conflicting labels; nothing was sent.
 - `ErrTmuxUnresponsive`: tmux did not answer usably; after a timed-out
   send the keys may have been delivered, and after a failed Enter the
-  text may be typed but not submitted.
+  text may be typed but not submitted. Then the error names the next step
+  instead of "retry later", because the same call would type the text a
+  second time: after a timed-out text call, `ReadPane` and, if the text
+  is typed, `SendKeys` with empty `Text`, otherwise the same `SendKeys`;
+  after a failed or timed-out Enter, `SendKeys` with empty `Text`, which
+  submits it.
 - `ErrTmuxNotAvailable`: tmux could not be run, its socket is not
   accessible to this user, or this is not the tmux server the agent was
   launched on.

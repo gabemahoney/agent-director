@@ -51,6 +51,7 @@ var invokers = []invoker{
 	{tmux.CallKillSession, "$0", func(r *tmuxfix.Recorder, s string) error { return r.KillSessionID(s, "$0") }},
 	{tmux.CallSendText, "%0", func(r *tmuxfix.Recorder, s string) error { return r.SendKeysPane(s, "%0", "hi", false) }},
 	{tmux.CallSendEnter, "%0", func(r *tmuxfix.Recorder, s string) error { return r.SendKeysPane(s, "%0", "hi", true) }},
+	{tmux.CallSendKey, "%0", func(r *tmuxfix.Recorder, s string) error { return r.SendKeyPane(s, "%0", "C-u") }},
 	{tmux.CallCapture, "%0", func(r *tmuxfix.Recorder, s string) error { _, err := r.CapturePaneID(s, "%0", 10, false); return err }},
 	{tmux.CallCreate, "new", func(r *tmuxfix.Recorder, s string) error {
 		_, err := r.NewSession(s, "new", "/tmp", nil, []string{"claude"}, tmuxfix.Token, agent, tmuxfix.StoreID)

@@ -11,7 +11,15 @@ import (
 // adoption when due (paneRun), then the keys and Enter by the agent's pane
 // id, with a failed send mapped in the "keys may have reached the pane" mode
 // (paneActionFailure.Keys). The verbs differ only in their Leftover refusal
-// (keysRun.leftover) and the keys typed.
+// (keysRun.leftover), their next step after a keys failure (keysRun.next),
+// whether the input line is cleared first (keysRun.clear) and the keys typed.
+
+// lineClearKey is the key pause sends to the agent's pane before typing
+// /exit (b.9o4): C-u, which Claude Code's prompt input binds to deleting
+// from the cursor to the start of the line, and a tty to erasing the line.
+// It clears a one-line leftover such as an unsubmitted /exit, not a
+// multi-line text, so send-keys does not send it.
+const lineClearKey = "C-u"
 
 // keysTmux is the tmux surface of the pane verbs that type keys
 // (SendKeysTmux, PauseTmux): the lookup, the pane listing and the keys sent
@@ -21,6 +29,14 @@ type keysTmux interface {
 	// SendKeysPane types text literally into the pane paneID on socket and
 	// then, only if that succeeded and pressEnter is set, sends Enter.
 	SendKeysPane(socket, paneID, text string, pressEnter bool) error
+}
+
+// lineClearTmux is the key send of a keys verb that clears the agent's
+// input line before typing (PauseTmux).
+type lineClearTmux interface {
+	// SendKeyPane sends one key, by its tmux key name and never typed
+	// literally, to the pane paneID on socket.
+	SendKeyPane(socket, paneID, key string) error
 }
 
 // keysFacts is what one keys verb's tmux phase found and did, kept so the
@@ -43,7 +59,8 @@ type keysFacts struct {
 	Session tmux.Session
 	// Sent reports that SendKeysPane was called (keys may have reached the
 	// pane); SendErr is its error, nil when the keys and Enter both went
-	// through. enterFailedAfterText tells a failed Enter after the text.
+	// through. enterFailedAfterText tells a failed Enter after the text. A
+	// failed line clear (keysRun.clear) types no text and leaves both unset.
 	Sent    bool
 	SendErr error
 	// FollowUp is the follow-up lookup after a failed send (Ran false when
@@ -54,7 +71,8 @@ type keysFacts struct {
 // keysRun is one keys verb's tmux phase: the pane verbs' shared run (with
 // the verb's gone sentinel, what its refusals say was not done and, for the
 // adoption write, its store as adopter), the keys surface, the verb's
-// Leftover refusal and what the phase found.
+// Leftover refusal, its next step after a keys failure, its line clear and
+// what the phase found.
 type keysRun struct {
 	paneRun
 	kt keysTmux
@@ -63,6 +81,16 @@ type keysRun struct {
 	// verbs' paneLeftoverError (ErrTmuxSessionConflict, "not this launch's
 	// session").
 	leftover func(leftovers []tmux.Session) error
+	// next is the verb's next step after a keys failure that may have left
+	// its text in the pane (send-keys' sendKeysNext); the zero value keeps
+	// "retry later" (pause, whose retry first clears the one-line `/exit` its
+	// failed attempt left).
+	next keysNext
+	// clear, when set, sends lineClearKey to the agent's pane before the text
+	// (pause), so a one-line leftover is cleared, not joined onto (C-u
+	// deletes only back to the start of the cursor's line); nil sends none
+	// (send-keys).
+	clear lineClearTmux
 	// found is what the phase found and did.
 	found keysFacts
 }
@@ -82,13 +110,15 @@ func newKeysRun(t keysTmux, pc ProcChecker, row Spawn, storeID, socket string, a
 }
 
 // deliver types text into the agent's pane of the row's current launch, by
-// pane id, then Enter (SR-7.2), or returns the verb error. The calls are at
-// most one lookup, one pane listing, the text call, the Enter call and, only
-// after a send failure other than a timeout, one follow-up lookup (SR-13.2);
-// every call uses the row's socket. Nothing is sent before the lookup
-// returned Ours and the listing showed the agent's pane. A failed send is
-// mapped in the "keys may have reached the pane" mode (SR-7.3): once the
-// text call went through, no description says nothing was sent.
+// pane id, then Enter (SR-7.2), or returns the verb error; with r.clear set
+// it first sends lineClearKey to that pane (b.9o4). The calls are at most one
+// lookup, one pane listing, the line clear, the text call, the Enter call
+// and, only after a send failure other than a timeout, one follow-up lookup
+// (SR-13.2); every call uses the row's socket. Nothing is sent before the
+// lookup returned Ours and the listing showed the agent's pane. A failed
+// send is mapped in the "keys may have reached the pane" mode (SR-7.3): once
+// the text call went through, no description says nothing was sent. A
+// failed line clear types nothing, and nothing follows it.
 func (r *keysRun) deliver(text string) error {
 	r.found.Socket = r.socket
 	paneID, launch, err := r.target()
@@ -97,20 +127,35 @@ func (r *keysRun) deliver(text string) error {
 		return err
 	}
 
+	if r.clear != nil {
+		if err := r.clear.SendKeyPane(r.socket, paneID, lineClearKey); err != nil {
+			return r.sendFailed(err, tmux.CallSendKey, launch)
+		}
+	}
 	r.found.Sent = true
 	if err := r.kt.SendKeysPane(r.socket, paneID, text, true); err != nil {
 		r.found.SendErr = err
-		fu, verr := paneActionFailureError(err, paneActionFailure{
-			Call:    tmux.CallSendText,
-			Gone:    r.gone,
-			Pane:    r.refusal(r.row.TmuxSessionName),
-			Refusal: r.cantTellRefusal(tmux.CallSendText),
-			Keys:    true,
-		}, r.kt, r.pc, launch)
-		r.found.FollowUp = fu
-		return verr
+		return r.sendFailed(err, tmux.CallSendText, launch)
 	}
 	return nil
+}
+
+// sendFailed maps err, the failure of the keys call call (the line clear, or
+// the text and Enter calls, named tmux.CallSendText), to the verb error
+// through paneActionFailureError in Keys mode with the verb's next step, and
+// keeps the follow-up lookup it made. launch is the follow-up's view of the
+// row (target's).
+func (r *keysRun) sendFailed(err error, call tmux.Call, launch tmux.Launch) error {
+	fu, verr := paneActionFailureError(err, paneActionFailure{
+		Call:    call,
+		Gone:    r.gone,
+		Pane:    r.refusal(r.row.TmuxSessionName),
+		Refusal: r.cantTellRefusal(call),
+		Keys:    true,
+		Next:    r.next,
+	}, r.kt, r.pc, launch)
+	r.found.FollowUp = fu
+	return verr
 }
 
 // target makes the lookup (holder name the row's recorded name, as kill

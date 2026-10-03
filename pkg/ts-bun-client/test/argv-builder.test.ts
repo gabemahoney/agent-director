@@ -236,6 +236,18 @@ describe("argv builder — send-keys", () => {
     });
     expect(hasFlag(argv, "--allow-pending")).toBe(false);
   });
+
+  // b.9o4: empty text is the Enter-only send-keys, also on a pending row.
+  test("empty text → --text with an empty value, allow_pending kept", () => {
+    const argv = buildArgv(CLI, "send-keys", {
+      claude_instance_id: "id-sk",
+      text: "",
+      allow_pending: true,
+    });
+    expect(hasFlag(argv, "--text")).toBe(true);
+    expect(flagValue(argv, "--text")).toBe("");
+    expect(hasFlag(argv, "--allow-pending")).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

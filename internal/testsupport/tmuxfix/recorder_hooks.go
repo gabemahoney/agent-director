@@ -26,10 +26,15 @@ type afterHook struct {
 	fn   AfterCallHook
 }
 
-// AfterCall registers fn to run once per call of kind call, on any socket,
-// in registration order with other hooks for that kind, for example to
-// apply a SessionStart through the store's hook path when a verb's lookup
-// returns (AC-KILL-15).
+// AnyCall, as AfterCall's call, matches a call of every kind: one hook then
+// sees the calls in order across kinds (for example an agent's input box,
+// changed by text, Enter and key sends alike).
+const AnyCall tmux.Call = ""
+
+// AfterCall registers fn to run once per call of kind call (AnyCall for
+// every kind), on any socket, in registration order with the other hooks
+// that call matches, for example to apply a SessionStart through the store's
+// hook path when a verb's lookup returns (AC-KILL-15).
 func (r *Recorder) AfterCall(call tmux.Call, fn AfterCallHook) *Recorder {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -73,8 +78,8 @@ func (r *Recorder) RemoveSessionAfter(call tmux.Call, socket, sessionID string) 
 
 // WithVirtualTime binds the Recorder to c (Appendix F.5): every later
 // socket-taking call advances c by its class's timeout from t, whatever its
-// result (query: lookup and pane listing; action: kills, text, Enter,
-// capture, label by id; create: the create; SR-13.1), and a scripted
+// result (query: lookup and pane listing; action: kills, text, Enter and key
+// sends, capture, label by id; create: the create; SR-13.1), and a scripted
 // FailTimeout carries that same value. SendKeysPane's text and Enter calls
 // are charged separately; t.WaitDelay is never charged. A zero field of t
 // takes the internal/config default. Seeded sessions and servers take their
@@ -123,7 +128,7 @@ func (r *Recorder) afterCall(c SocketCall) []AfterCallHook {
 	r.changes = kept
 	var hooks []AfterCallHook
 	for _, h := range r.afterHooks {
-		if h.call == c.Call {
+		if h.call == c.Call || h.call == AnyCall {
 			hooks = append(hooks, h.fn)
 		}
 	}

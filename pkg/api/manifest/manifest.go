@@ -443,7 +443,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "send-keys",
-		Description: "Send text into the agent's own pane: `\\r` stripped, `\\n` kept as a newline in the input box, and one Enter appended to submit. tmux errors: ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE; after a timeout the keys may have been delivered), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
+		Description: "Send text into the agent's own pane: `\\r` stripped, `\\n` kept as a newline in the input box, and one Enter appended to submit (empty text: Enter only). tmux errors: ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE; after a timeout the keys may have been delivered), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -462,7 +462,7 @@ var Verbs = []VerbDef{
 				Description:   "Text to type into the Spawn's input. `\\r` stripped pre-send; `\\n` preserved as newline-in-input.",
 				Required:      true,
 				Nullable:      false,
-				AllowEmpty:    false,
+				AllowEmpty:    true,
 				AllowedValues: nil,
 			},
 			{

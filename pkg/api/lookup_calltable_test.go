@@ -279,8 +279,8 @@ func runCallTableRowCell(t *testing.T, v callTableVerb, col callTableColumn, cel
 	e.assertKillCalls(t, cell.calls...)
 	if !cell.sent {
 		for _, c := range e.rec.SocketCalls() {
-			if slices.Contains(v.actions, c.Call) {
-				t.Errorf("%v sent to %q; want nothing sent", c.Call, c.Target)
+			if slices.Contains(v.actions, recordedCall(c)) {
+				t.Errorf("%v sent to %q; want nothing sent", recordedCall(c), c.Target)
 			}
 		}
 		if after := e.rec.Sessions(r.Socket); !reflect.DeepEqual(after, sessionsBefore) {

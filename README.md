@@ -537,7 +537,15 @@ the class of every tmux error, is in
 - A call refused before anything was written or sent is safe to re-issue
   later; that is how a caller learns a condition has cleared. Retry
   `ErrTmuxUnresponsive` and `ErrTmuxKillFailed` with backoff and a cap, and alert at the cap
-  (a timed-out launch is the exception below).
+  (a timed-out launch and a `send-keys` whose text may be typed are the
+  exceptions below).
+- When `send-keys` returns `ErrTmuxUnresponsive` saying its keys may have
+  been delivered or its text may be typed, do the step the error names
+  instead of sending the same text again. `send-keys` with empty text
+  (`--text ""`) sends Enter only, submitting what is typed. A `pause` that
+  returns `ErrTmuxUnresponsive` is simply retried later: before typing
+  `/exit` it clears the line the agent's cursor is on, so an `/exit` the
+  failed `pause` left typed is not doubled.
 - A `resume` or `spawn --reuse-finished` refused because the row's own
   session or agent "appears to still be stopping" or "starting": wait and
   retry. Refused with "this row's own id": stop and surface the named

@@ -525,37 +525,45 @@ func TestNullableAndAllowEmptyAreExplicit(t *testing.T) {
 	}
 }
 
-// TestSpawnClaudeInstanceIDParamAllowsEmpty pins spawn's claude_instance_id
-// param as allow_empty in the manifest and surface.json: "" mints a fresh id.
-func TestSpawnClaudeInstanceIDParamAllowsEmpty(t *testing.T) {
-	sources := map[string]bool{}
-	sv, ok := manifest.Lookup("spawn")
-	if !ok {
-		t.Fatal("spawn not in manifest")
-	}
-	for _, p := range sv.Params {
-		if p.Name == "claude_instance_id" {
-			sources["manifest"] = p.AllowEmpty
-		}
-	}
+// TestParamsAllowEmpty pins params whose empty value means something as
+// allow_empty in the manifest and surface.json: spawn's claude_instance_id
+// ("" mints a fresh id) and send-keys' text ("" presses Enter only, b.9o4).
+func TestParamsAllowEmpty(t *testing.T) {
 	_, surface := readSurfaceJSON(t)
-	for _, v := range surface.Verbs {
-		if v.Name != "spawn" {
-			continue
-		}
-		for _, p := range v.Params {
-			if p.Name == "claude_instance_id" {
-				sources["surface.json"] = p.AllowEmpty
+	for _, tc := range []struct{ verb, param, why string }{
+		{"spawn", "claude_instance_id", "an empty id mints a fresh UUID4"},
+		{"send-keys", "text", "empty text presses Enter only"},
+	} {
+		t.Run(tc.verb+" "+tc.param, func(t *testing.T) {
+			sources := map[string]bool{}
+			v, ok := manifest.Lookup(tc.verb)
+			if !ok {
+				t.Fatalf("%s not in manifest", tc.verb)
 			}
-		}
-	}
-	for _, source := range []string{"manifest", "surface.json"} {
-		allowEmpty, found := sources[source]
-		if !found {
-			t.Errorf("%s: spawn has no claude_instance_id param", source)
-		} else if !allowEmpty {
-			t.Errorf("%s: spawn.claude_instance_id param allow_empty = false; want true (an empty id mints a fresh UUID4)", source)
-		}
+			for _, p := range v.Params {
+				if p.Name == tc.param {
+					sources["manifest"] = p.AllowEmpty
+				}
+			}
+			for _, sv := range surface.Verbs {
+				if sv.Name != tc.verb {
+					continue
+				}
+				for _, p := range sv.Params {
+					if p.Name == tc.param {
+						sources["surface.json"] = p.AllowEmpty
+					}
+				}
+			}
+			for _, source := range []string{"manifest", "surface.json"} {
+				allowEmpty, found := sources[source]
+				if !found {
+					t.Errorf("%s: %s has no %s param", source, tc.verb, tc.param)
+				} else if !allowEmpty {
+					t.Errorf("%s: %s.%s param allow_empty = false; want true (%s)", source, tc.verb, tc.param, tc.why)
+				}
+			}
+		})
 	}
 }
 

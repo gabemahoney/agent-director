@@ -233,6 +233,46 @@ func TestSendKeysCLIDeliversByPaneID(t *testing.T) {
 	}
 }
 
+// TestSendKeysCLIEmptyTextPressesEnterOnly (b.9o4): --text "" is accepted on
+// a live row and, with --allow-pending, a pending row: one lookup, one pane
+// listing and one Enter to the agent's pane by id, nothing typed (an empty
+// text call, if one is made, types "").
+func TestSendKeysCLIEmptyTextPressesEnterOnly(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	for _, tc := range []struct {
+		name  string
+		state string
+		flags []string
+	}{
+		{name: "live row", state: store.StateWaiting},
+		{name: "pending row with allow pending", state: store.StatePending, flags: []string{"--allow-pending"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, id, socket := seedKillRow(t, tc.state)
+			faketmuxfix.Tables{}.Write(t, socket, killTable(ownSession(t, home, id)))
+
+			stdout, stderr, code := runSendKeys(t, fakeDir, home, id, "", tc.flags...)
+
+			if code != 0 || stderr != "" || stdout != "{}\n" {
+				t.Fatalf("send-keys --text \"\" exit = %d, stdout = %q, stderr = %q; want 0, {} and empty", code, stdout, stderr)
+			}
+			target := []string{"-u", "-S", socket, "send-keys", "-t", apitest.TestPaneID}
+			var invs [][]string
+			for _, argv := range fakeTmuxInvocations(t, home) {
+				if !slices.Equal(argv, append(slices.Clone(target), "-l", "--", "")) {
+					invs = append(invs, argv)
+				}
+			}
+			if len(invs) != 3 || !slices.Contains(invs[0], "list-sessions") || !slices.Contains(invs[1], "list-panes") ||
+				!slices.Equal(invs[2], append(slices.Clone(target), "Enter")) {
+				t.Errorf("fake-tmux invocations, an empty text call aside = %q; want the lookup, the pane listing and %q",
+					invs, append(slices.Clone(target), "Enter"))
+			}
+			assertSendKeysCalled(t, home, "ok", tc.state)
+		})
+	}
+}
+
 // TestSendKeysCLIErrSpawnNotInteractive: finished rows, and pending rows
 // without --allow-pending or with no usable launch start or token, are
 // refused before any tmux call (SR-7.1, SR-22.8).

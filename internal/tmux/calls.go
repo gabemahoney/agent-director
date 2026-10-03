@@ -24,6 +24,10 @@ const (
 	CallSendText Call = "text send"
 	// CallSendEnter is the Enter send by pane id (SR-2.1).
 	CallSendEnter Call = "Enter send"
+	// CallSendKey is a key send by pane id: one key, named as tmux names
+	// keys and never typed literally, such as pause's C-u before /exit
+	// (b.9o4).
+	CallSendKey Call = "key send"
 	// CallCapture is the capture by pane id (SR-2.1).
 	CallCapture Call = "capture"
 	// CallCreate is the create invocation with its chained label (SR-3.5).
@@ -263,8 +267,8 @@ type Pane struct {
 type Timeouts struct {
 	// Query bounds the lookup and the pane listing.
 	Query time.Duration
-	// Action bounds the kills, the text and Enter sends, the capture and the
-	// label by id.
+	// Action bounds the kills, the text, Enter and key sends, the capture and
+	// the label by id.
 	Action time.Duration
 	// Create bounds the create invocation.
 	Create time.Duration

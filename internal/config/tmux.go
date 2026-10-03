@@ -42,8 +42,8 @@ const (
 	DefaultQueryTimeoutMs = 1500
 
 	// DefaultActionTimeoutMs is the default timeout of each tmux kill, text
-	// send, Enter send and capture, in milliseconds (2000). No safe minimum:
-	// a value too low fails closed (SR-4.1, SR-2.4).
+	// send, Enter send, key send and capture, in milliseconds (2000). No safe
+	// minimum: a value too low fails closed (SR-4.1, SR-2.4).
 	DefaultActionTimeoutMs = 2000
 
 	// DefaultCreateTimeoutMs is the default timeout of the session-creating
@@ -131,9 +131,9 @@ type Tmux struct {
 	// fails closed (SR-4.1, SR-2.4).
 	QueryTimeoutMs int64 `toml:"query_timeout_ms"`
 
-	// ActionTimeoutMs is the timeout of each tmux kill, text send, Enter send
-	// and capture, in milliseconds. Default DefaultActionTimeoutMs (2000);
-	// minimum none: fails closed (SR-4.1, SR-2.4).
+	// ActionTimeoutMs is the timeout of each tmux kill, text send, Enter send,
+	// key send and capture, in milliseconds. Default DefaultActionTimeoutMs
+	// (2000); minimum none: fails closed (SR-4.1, SR-2.4).
 	ActionTimeoutMs int64 `toml:"action_timeout_ms"`
 
 	// CreateTimeoutMs is the timeout of the session-creating tmux call, in
@@ -376,10 +376,10 @@ func (t Tmux) EffectiveQueryTimeout() time.Duration {
 }
 
 // EffectiveActionTimeout returns the timeout of each tmux kill, text send,
-// Enter send and capture (action_timeout_ms, milliseconds): the configured
-// value when positive, otherwise DefaultActionTimeoutMs (2000 ms); the
-// largest duration when too large. Minimum none: fails closed (SR-4.1,
-// SR-2.4).
+// Enter send, key send and capture (action_timeout_ms, milliseconds): the
+// configured value when positive, otherwise DefaultActionTimeoutMs (2000
+// ms); the largest duration when too large. Minimum none: fails closed
+// (SR-4.1, SR-2.4).
 func (t Tmux) EffectiveActionTimeout() time.Duration {
 	return t.Effective(TmuxActionTimeoutMs)
 }
