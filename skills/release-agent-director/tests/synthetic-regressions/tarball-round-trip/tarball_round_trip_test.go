@@ -45,11 +45,12 @@ import (
 
 // acquireDistPackLock serializes tests that read or write the real
 // pkg/ts-bun-client/dist/. These tests `bun pm pack` that dir (twice, via
-// pack-first.sh and repack-and-verify.sh); coverage-bun-test-fires rewrites it
-// via `bun run build`. Without serialization a concurrent rebuild makes the two
-// packs diverge (b.aur: "Only in package/dist: client.d.ts"). The lock lives
-// under the OS temp dir — shared across these packages within a single
-// `go test` run, and never touches the repo tree.
+// pack-first.sh and repack-and-verify.sh); the coverage.bun-test gate, which the
+// release coverage phase runs beside `go test ./...`, rewrites it via
+// `bun run build` under the same lock. Without serialization a concurrent
+// rebuild makes the two packs diverge (b.aur: "Only in package/dist:
+// client.d.ts"). The lock lives under the OS temp dir, where the gate opens the
+// same file, and never touches the repo tree.
 func acquireDistPackLock(t *testing.T) {
 	t.Helper()
 	lockPath := filepath.Join(os.TempDir(), "agent-director-ts-bun-dist-pack.lock")
@@ -102,8 +103,8 @@ func TestTarballRoundTripByteIdentical(t *testing.T) {
 	root := repoRoot(t)
 
 	// Both packs (pack-first.sh + repack-and-verify.sh) read the real
-	// pkg/ts-bun-client/dist/; serialize against coverage-bun-test-fires which
-	// rebuilds it (b.aur).
+	// pkg/ts-bun-client/dist/; serialize against the coverage.bun-test gate,
+	// which rebuilds it (b.aur).
 	acquireDistPackLock(t)
 
 	// ── 1. Pack the first tarball into an isolated output dir ─────────────
@@ -163,7 +164,7 @@ func TestTarballRoundTripMismatchDetected(t *testing.T) {
 	root := repoRoot(t)
 
 	// repack-and-verify.sh packs the real pkg/ts-bun-client/dist/ internally;
-	// serialize against coverage-bun-test-fires which rebuilds it (b.aur).
+	// serialize against the coverage.bun-test gate, which rebuilds it (b.aur).
 	acquireDistPackLock(t)
 
 	// This test builds a synthetic "first" tarball in t.TempDir() and passes it

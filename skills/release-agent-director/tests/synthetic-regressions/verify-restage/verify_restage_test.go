@@ -44,10 +44,11 @@ import (
 
 // acquireDistPackLock serializes tests that read or write the real
 // pkg/ts-bun-client/dist/. This test `bun pm pack`s that dir via pack-first.sh;
-// coverage-bun-test-fires rewrites it via `bun run build`. Without
+// the coverage.bun-test gate, which the release coverage phase runs beside
+// `go test ./...`, rewrites it via `bun run build` under the same lock. Without
 // serialization a concurrent rebuild races the pack (b.aur). The lock lives
-// under the OS temp dir — shared across these packages within a single
-// `go test` run, and never touches the repo tree.
+// under the OS temp dir, where the gate opens the same file, and never touches
+// the repo tree.
 func acquireDistPackLock(t *testing.T) {
 	t.Helper()
 	lockPath := filepath.Join(os.TempDir(), "agent-director-ts-bun-dist-pack.lock")
@@ -102,7 +103,7 @@ func TestVerifyRestageFires(t *testing.T) {
 	root := repoRoot(t)
 
 	// pack-first.sh packs the real pkg/ts-bun-client/dist/; serialize against
-	// coverage-bun-test-fires which rebuilds it (b.aur).
+	// the coverage.bun-test gate, which rebuilds it (b.aur).
 	acquireDistPackLock(t)
 
 	// ── 1. Pack a clean tarball via pack-first.sh into an isolated output

@@ -12,35 +12,34 @@
 //
 // DESIGN
 // ======
-// 1. Target file : pkg/api/apitest/seeds.go — the canonical b.n4v-relevant
-//    file created in this Epic.
-// 2. Mutation    : insert `_ = SeedSpawn("only-one-arg")` at the top of the
-//    InitStore function body.  SeedSpawn requires 7 string args plus a bool;
-//    calling it with a single string is a compile error — exactly the b.n4v
-//    bug class replayed.
-// 3. Cleanup     : original bytes are captured before mutation; t.Cleanup
-//    restores them unconditionally.  Go's testing framework guarantees
-//    t.Cleanup runs even on test failure and even when t.Fatalf is called
-//    (which calls runtime.Goexit, unwinding defers/cleanups in order).
-// 4. Build       : exec.Command("go", "build", "./...") from repo root;
-//    CombinedOutput captures stderr.
-// 5. Assertions  : non-zero exit code AND stderr contains "seeds.go".
-//
-// CLEANUP-ON-FAILURE EXPERIMENT (subtask 9r)
-// ==========================================
-// After the working test was complete, `t.Fatalf("force-fail for 9r experiment")`
-// was temporarily inserted immediately after the os.WriteFile mutation call.
-// The test reported FAIL as expected.  Running `git status pkg/api/apitest/seeds.go`
-// afterwards showed "nothing to commit, working tree clean" — t.Cleanup fired
-// correctly and restored the original bytes despite the early Fatalf.  The
-// forced failure was removed before this commit.
+//  1. Module copy : the root module is copied into t.TempDir() (copyModule).
+//     The test never writes to the shared worktree and never runs the go
+//     command over it, so it cannot race the other packages of a parallel
+//     `go test ./...` (b.jct).
+//  2. Mutation    : in the copy of pkg/api/apitest/seeds.go, insert
+//     `_ = SeedSpawn("only-one-arg")` at the top of the InitStore function
+//     body.  SeedSpawn takes six strings and a bool; calling it with a single
+//     string is a compile error — exactly the b.n4v bug class replayed.
+//  3. Build       : `go build -trimpath ./...` at the copy's root.  -trimpath
+//     keeps the copy's temporary directory out of the build cache keys, so
+//     repeated runs reuse cached packages.  Dependencies resolve as at the repo
+//     root (module cache first, then the configured GOPROXY).
+//  4. Assertions  : non-zero exit AND the compiler reports seeds.go at the
+//     injected line, so an incomplete copy, which fails elsewhere, cannot pass.
+//  5. Cleanup     : nothing outside t.TempDir() is written; the test fails if
+//     the real seeds.go is written (requireUnwritten).
 package helpertagreplay_test
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -64,43 +63,137 @@ func repoRoot(t *testing.T) string {
 		}
 		dir = parent
 	}
-	panic("unreachable")
 }
 
-// seedsMutationLockPath returns the path to the cross-process advisory lock
-// file used to serialize seeds.go mutations across parallel test packages.
-func seedsMutationLockPath(root string) string {
-	return filepath.Join(root, "pkg", "api", "apitest", ".seeds-mutation.lock")
+// skipCopyDir reports whether copyModule leaves out the directory at path
+// (named name): what `go build ./...` skips — names starting with "." or "_",
+// testdata, and nested modules (pkg/ts-bun-client is one) — plus node_modules:
+// the real one is inside that nested module, and a pkgcopy*/ that
+// TestPackFirstHonorsPkgDir is still copying may hold a half-written flatted.go.
+func skipCopyDir(path, name string) bool {
+	if name == "node_modules" || name == "testdata" ||
+		strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") {
+		return true
+	}
+	_, err := os.Stat(filepath.Join(path, "go.mod"))
+	return err == nil
 }
 
-// acquireSeedsLock grabs an exclusive flock on a shared lock file before any
-// test mutates seeds.go.  Two test packages (helper-tag-replay and
-// coverage-go-root-fires) both mutate that file; running them in parallel
-// without serialization causes a marker-not-found race.  The lock is released
-// after t.Cleanup restores the file (t.Cleanup is LIFO: register lock-release
-// first, then file-restore, so restore runs before unlock).
-//
-// NOTE: never call this inside a subprocess invoked by coverage-go-root-fires;
-// that test holds the same lock while running its gate, causing a deadlock.
-// coverage-go-root-fires sets COVERAGE_GO_ROOT_NESTED=1 in its subprocess env;
-// callers should call t.Skip when that variable is set (see TestHelperTagReplay).
-func acquireSeedsLock(t *testing.T, root string) {
-	t.Helper()
-	lockPath := seedsMutationLockPath(root)
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+// isGoSource reports whether name is a non-test Go source file name.
+func isGoSource(name string) bool {
+	return strings.HasSuffix(name, ".go") && !strings.HasSuffix(name, "_test.go")
+}
+
+// holdsGoSource reports whether dir directly contains a regular non-test Go
+// source file. A directory that is already gone holds none.
+func holdsGoSource(dir string) (bool, error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
 	if err != nil {
-		t.Fatalf("acquireSeedsLock: open %s: %v", lockPath, err)
+		return false, err
 	}
-	// LOCK_EX blocks until no other process holds the lock.
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		f.Close()
-		t.Fatalf("acquireSeedsLock: flock: %v", err)
+	for _, e := range entries {
+		if e.Type().IsRegular() && isGoSource(e.Name()) {
+			return true, nil
+		}
 	}
-	// Register lock-release FIRST so it runs AFTER the file-restore cleanup
-	// that the caller registers next (LIFO order).
+	return false, nil
+}
+
+// copyModule copies the module rooted at src into dst: go.mod, go.sum and, in
+// each directory that holds Go source, every regular file except _test.go files
+// (so a package's embedded, cgo, assembly and .syso inputs come along), outside
+// the directories skipCopyDir leaves out. Other processes create and remove
+// untracked trees while the walk runs, so an entry that is gone when the walk
+// reaches it is skipped.
+func copyModule(t *testing.T, src, dst string) {
+	t.Helper()
+	if err := copyModuleFiles(src, dst, nil); err != nil {
+		t.Fatalf("copy module %s to %s: %v", src, dst, err)
+	}
+}
+
+// copyModuleFiles is copyModule's walk. A non-nil reached is called with each
+// path the walk reaches, before the walk reads it.
+func copyModuleFiles(src, dst string, reached func(path string)) error {
+	src = filepath.Clean(src)
+	goDirs := map[string]bool{} // directories that hold Go source
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if reached != nil {
+			reached(path)
+		}
+		if d.IsDir() {
+			if path != src && skipCopyDir(path, d.Name()) {
+				return filepath.SkipDir
+			}
+			goDirs[path], err = holdsGoSource(path)
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		packageFile := goDirs[filepath.Dir(path)] && d.Type().IsRegular() && !strings.HasSuffix(d.Name(), "_test.go")
+		if !packageFile && rel != "go.mod" && rel != "go.sum" {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o644)
+	})
+}
+
+// fileSnapshot is what any write to a file changes: its content, mtime or inode.
+type fileSnapshot struct {
+	sha256  string
+	mtimeNs int64
+	inode   uint64
+}
+
+func snapshotFile(t *testing.T, path string) fileSnapshot {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatalf("stat %s: no inode in %T", path, info.Sys())
+	}
+	return fileSnapshot{fmt.Sprintf("%x", sha256.Sum256(data)), info.ModTime().UnixNano(), st.Ino}
+}
+
+// requireUnwritten fails the test if path is written after this call, including
+// by cleanups registered after it (b.jct: no test may rewrite a tracked file,
+// even to restore it).
+func requireUnwritten(t *testing.T, path string) {
+	t.Helper()
+	before := snapshotFile(t, path)
 	t.Cleanup(func() {
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		f.Close()
+		if after := snapshotFile(t, path); after != before {
+			t.Errorf("%s was written during the test:\nbefore %+v\nafter  %+v", path, before, after)
+		}
 	})
 }
 
@@ -108,71 +201,136 @@ func acquireSeedsLock(t *testing.T, root string) {
 // symbol is caught by `go build ./...` now that build-tagged helper files have
 // been retired (b.n4v incident, Epic E1).
 func TestHelperTagReplay(t *testing.T) {
-	// ── 0a. Skip when running inside coverage-go-root-fires' inner test run ─
-	// coverage-go-root-fires sets COVERAGE_GO_ROOT_NESTED=1 in the subprocess
-	// env before invoking the gate (which runs go test ./... internally).
-	// Without this skip, the inner TestHelperTagReplay would block on the flock
-	// held by the outer coverage-go-root-fires test, causing a deadlock.
-	if os.Getenv("COVERAGE_GO_ROOT_NESTED") == "1" {
-		t.Skip("skipping seeds.go mutation: running inside coverage.go-root gate inner test suite")
+	if testing.Short() {
+		t.Skip("slow: copies the module and runs `go build ./...` on the copy")
 	}
-
 	root := repoRoot(t)
-	targetFile := filepath.Join(root, "pkg", "api", "apitest", "seeds.go")
+	// Registered first, so it checks after every other cleanup has run.
+	requireUnwritten(t, filepath.Join(root, "pkg", "api", "apitest", "seeds.go"))
 
-	// ── 0b. Serialize access to seeds.go across parallel test packages ──────
-	acquireSeedsLock(t, root)
+	// ── 1. Copy the module ─────────────────────────────────────────────────
+	modCopy := t.TempDir()
+	copyModule(t, root, modCopy)
+	targetFile := filepath.Join(modCopy, "pkg", "api", "apitest", "seeds.go")
 
-	// ── 1. Read original bytes ──────────────────────────────────────────────
 	orig, err := os.ReadFile(targetFile)
 	if err != nil {
-		t.Fatalf("read seeds.go: %v", err)
-	}
-	origStat, err := os.Stat(targetFile)
-	if err != nil {
-		t.Fatalf("stat seeds.go: %v", err)
+		t.Fatalf("read the copy of seeds.go: %v", err)
 	}
 
-	// ── 2. Register cleanup BEFORE mutating ────────────────────────────────
-	// t.Cleanup is guaranteed to run even if the test calls t.Fatalf / panics.
-	t.Cleanup(func() {
-		if err := os.WriteFile(targetFile, orig, origStat.Mode()); err != nil {
-			t.Errorf("t.Cleanup: restore seeds.go: %v", err)
-		}
-	})
-
-	// ── 3. Inject mutation ─────────────────────────────────────────────────
-	// We replace the opening of InitStore's body with a version that contains
-	// a wrong-arity call to SeedSpawn.  The real signature is:
-	//   SeedSpawn(dbPath, id, state, cwd, relayMode, sessionID string, createStore bool)
+	// ── 2. Inject the mutation into the copy ───────────────────────────────
+	// The real signature is:
+	//   SeedSpawn(dbPath, id, state, cwd, relayMode, sessionID string, createStore bool, opts ...SpawnOption)
 	// Passing a single string arg is a compile error — the b.n4v bug class.
 	const marker = "func InitStore(dbPath string) (string, error) {\n\ts, err := store.OpenOrInit(dbPath)"
 	const mutated = "func InitStore(dbPath string) (string, error) {\n" +
-		"\t_ = SeedSpawn(\"only-one-arg\") // wrong-arity: SeedSpawn needs 7 args + bool (b.n4v replay)\n" +
+		"\t_ = SeedSpawn(\"only-one-arg\") // wrong-arity: SeedSpawn needs six strings and a bool (b.n4v replay)\n" +
 		"\ts, err := store.OpenOrInit(dbPath)"
 
-	if !bytes.Contains(orig, []byte(marker)) {
+	at := bytes.Index(orig, []byte(marker))
+	if at < 0 {
 		t.Fatalf("mutation marker not found in seeds.go — update the marker if InitStore was refactored")
 	}
+	// The injected call sits on the line after InitStore's signature.
+	injectedLine := bytes.Count(orig[:at], []byte("\n")) + 2
 
 	mutatedContent := bytes.Replace(orig, []byte(marker), []byte(mutated), 1)
-	if err := os.WriteFile(targetFile, mutatedContent, origStat.Mode()); err != nil {
-		t.Fatalf("write mutated seeds.go: %v", err)
-	}
-	// ── 4. Build: must fail ────────────────────────────────────────────────
-	cmd := exec.Command("go", "build", "./...")
-	cmd.Dir = root
-	output, _ := cmd.CombinedOutput() // non-zero exit is expected — ignore the error
-
-	// ── 5. Assertions ──────────────────────────────────────────────────────
-	if cmd.ProcessState.ExitCode() == 0 {
-		t.Fatalf("expected `go build ./...` to fail after wrong-arity mutation, but it succeeded")
+	if err := os.WriteFile(targetFile, mutatedContent, 0o644); err != nil {
+		t.Fatalf("write mutated seeds.go into the copy: %v", err)
 	}
 
-	if !strings.Contains(string(output), "seeds.go") {
-		t.Fatalf("expected compiler stderr to reference seeds.go; got:\n%s", output)
+	// ── 3. Build: must fail ────────────────────────────────────────────────
+	// -trimpath: see DESIGN step 3. GOFLAGS replaces any inherited flags (a
+	// -mod=vendor would find no vendor directory in the copy); GOWORK=off keeps
+	// an inherited workspace from redirecting module resolution.
+	cmd := exec.Command("go", "build", "-trimpath", "./...")
+	cmd.Dir = modCopy
+	cmd.Env = append(os.Environ(), "GOFLAGS=-mod=readonly", "GOWORK=off")
+	output, err := cmd.CombinedOutput()
+
+	// ── 4. Assertions ──────────────────────────────────────────────────────
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		if err == nil {
+			t.Fatalf("expected `go build ./...` to fail after wrong-arity mutation, but it succeeded")
+		}
+		t.Fatalf("run `go build ./...`: %v", err)
+	}
+
+	wantPos := fmt.Sprintf("seeds.go:%d:", injectedLine)
+	if !strings.Contains(string(output), wantPos) {
+		t.Fatalf("expected compiler stderr to report the injected call at %s; got:\n%s", wantPos, output)
 	}
 
 	// Green means the bug was detected — log the evidence.
 	t.Logf("AC-1 verified: `go build ./...` caught the wrong-arity mutation.\nCompiler output:\n%s", output)
+}
+
+// TestCopyModuleSkipsEntriesRemovedMidWalk pins b.jct: a tree removed after the
+// walk listed it (as a dist/ rebuild does) is skipped, not a copy failure, and
+// the walk stays out of node_modules (see skipCopyDir).
+// It tests a helper despite the no-meta-tests rule because without it, losing
+// either would show only as a rare flake of TestHelperTagReplay.
+func TestCopyModuleSkipsEntriesRemovedMidWalk(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	files := map[string]string{
+		"go.mod":              "module example.test/copyfixture\n\ngo 1.22\n",
+		"go.sum":              "",
+		"main.go":             "package main\n",
+		"main_test.go":        "package main\n",
+		"keep/keep.go":        "package keep\n",
+		"keep/embedded.txt":   "a file in a Go source directory\n",
+		"docs/notes.txt":      "a file in a directory with no Go source\n",
+		"node_modules/x/x.go": "package x\n",
+		"vanishing/a/a.go":    "package a\n",
+		"vanishing/z.go":      "package vanishing\n",
+	}
+	for rel, content := range files {
+		path := filepath.Join(src, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Once the walk has listed vanishing/ (a and z.go) and reaches a, remove
+	// the whole tree: the walk then fails to open a and to read z.go.
+	vanishing := filepath.Join(src, "vanishing")
+	removed := false
+	err := copyModuleFiles(src, dst, func(path string) {
+		if path == filepath.Join(vanishing, "a") {
+			removed = true
+			if err := os.RemoveAll(vanishing); err != nil {
+				t.Fatalf("remove %s mid-walk: %v", vanishing, err)
+			}
+		}
+	})
+	if err != nil {
+		t.Fatalf("copy failed on a tree removed mid-walk: %v", err)
+	}
+	if !removed {
+		t.Fatal("the walk never reached vanishing/a, so nothing was removed mid-walk")
+	}
+
+	var got []string
+	if err := filepath.WalkDir(dst, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, _ := filepath.Rel(dst, path)
+		rel = filepath.ToSlash(rel)
+		got = append(got, rel)
+		data, err := os.ReadFile(path)
+		if err == nil && string(data) != files[rel] {
+			t.Errorf("copied %s = %q, want %q", rel, data, files[rel])
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"go.mod", "go.sum", "keep/embedded.txt", "keep/keep.go", "main.go"}; !slices.Equal(got, want) {
+		t.Fatalf("copied files = %q, want %q", got, want)
+	}
 }

@@ -33,7 +33,9 @@ tickets/testplans/index.md
 # and out of git. Belt-and-suspenders for the mid-tar vanish race.
 pack-staging*/
 
-# Advisory lock file used by seeds.go mutation tests to prevent parallel races.
+# Advisory lock (b.2y5): tests that add paths to the repo tree hold it
+# exclusively, tree readers hold it while reading. Despite the name, no test
+# writes seeds.go.
 pkg/api/apitest/.seeds-mutation.lock
 
 # Advisory lock used by source-of-truth gate tests that mutate the repo tree.

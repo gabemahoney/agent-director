@@ -72,10 +72,9 @@
 //     nested run of THIS package nor mutated the shared seeds.go, so neither the
 //     nested-run skip guard nor the seeds flock was ever wired here.  There is
 //     accordingly no SR-5.3 removal question to record: nothing to remove.
-//     (helper-tag-replay retains its own copies of both, unaffected by this
-//     work.)  After this scope-down, this package spawns NO nested run of any
-//     real tree — the gate's nested `go test ./...` walks only the fixture
-//     module in t.TempDir().
+//     After this scope-down, this package spawns NO nested run of any real
+//     tree — the gate's nested `go test ./...` walks only the fixture module in
+//     t.TempDir().
 //   - -short skip guard (SR-4.3): KEPT.  The fixture stays -short-skipped in the
 //     outer `go test ./...` tree and runs via `make release-smoke`.  The stale
 //     "~45s" reasoning is rewritten below to seconds-scale, reflecting that the

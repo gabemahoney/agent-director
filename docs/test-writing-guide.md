@@ -197,12 +197,39 @@ skills/release-agent-director/tests/synthetic-regressions/
 
 Each directory is its own Go package. A separate `go.mod` is **not**
 required — sibling `_test.go` files under one directory share the
-same package declaration.
+same package declaration. Do not add one: `./...` skips a directory that
+holds its own `go.mod`, so the test would drop out of `go test ./...`.
 
-**Mandatory cleanup.** Every test that mutates a file on disk must use
-`t.Cleanup()` to restore the original content, even if the test fails.
-Never leave mutated files behind; a leaking mutation corrupts subsequent
-test runs.
+**Never write the shared worktree.** `go test ./...` runs every package in
+parallel against one worktree, and other packages parse, compile and pack it
+while a test runs. A test must never rewrite a tracked file, not even briefly
+with a `t.Cleanup()` restore: another package can read it half-written (b.jct).
+Copy what the test needs into `t.TempDir()` and change the copy, as
+`helper-tag-replay` (a copy of the Go module) and `coverage-bun-test-fires` (a
+fixture package) do. The same applies to build and install output that other
+packages read: a build, install or pack the test runs writes under
+`t.TempDir()` (e.g. `make release-binaries` with `RELEASE_DIST_DIR`,
+`pack-first.sh` with `PACK_OUTPUT_DIR`), never into the real tree's `bin/`,
+`pkg/ts-bun-client/dist/` or `node_modules/`. One known exception:
+`TestTarballRoundTripByteIdentical` (`tarball-round-trip`) runs
+`repack-and-verify.sh`, which hardcodes the repo-root `dist/` and writes
+`dist/sha256sums` there. That file is gitignored and no test reads it.
+
+**Mandatory cleanup.** A test that must add untracked paths to the real tree
+(a fixture a gate scans for) gives them unique names and registers a
+`t.Cleanup()` that removes them before it asserts anything, so a failing test
+leaves nothing behind. It holds the seeds-mutation lock
+(`pkg/api/apitest/.seeds-mutation.lock`, `syscall.Flock` with `LOCK_EX`) from
+before it creates the paths until they are removed, taking it before any other
+lock it needs, so tree readers such as the `coverage.docker-epics` gate's
+docker build context never see the paths appear or vanish.
+`preflight-sentinel-replay`, `worktree-pollution` and
+`TestPackFirstHonorsPkgDir` add paths without this lock and are known gaps. A
+test that reads `pkg/ts-bun-client/dist/` holds the dist-pack lock
+(`agent-director-ts-bun-dist-pack.lock` under `os.TempDir()`, `LOCK_EX`), which
+the `coverage.bun-test` gate holds for its whole run because it rebuilds
+`dist/`. See `skills/release-agent-director/gates/README.md` "Coverage phase
+(parallel)" for which processes read and which mutate under each lock.
 
 **Skip slow tests.** Guard any test that takes more than a second with
 `testing.Short()`:

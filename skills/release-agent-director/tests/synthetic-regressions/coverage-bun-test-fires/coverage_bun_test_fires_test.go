@@ -3,33 +3,39 @@
 //
 // BACKGROUND
 // ==========
-// The coverage.bun-test gate runs `bun install`, `bun run build`, and
-// `bun test` for pkg/ts-bun-client.  A failing bun test must cause the gate
-// to exit non-zero and emit a structured SR-14 JSON diagnostic to stderr
-// with "gate":"coverage.bun-test".  This test injects a forced assertion
-// failure into a small, self-contained test file and verifies the gate fires.
+// The coverage.bun-test gate runs `bun install --frozen-lockfile`,
+// `bun run build` and `bun test` in a worktree's pkg/ts-bun-client.  A failing
+// bun test must make the gate exit non-zero and emit a structured SR-14 JSON
+// diagnostic to stderr with "gate":"coverage.bun-test".  This test plants a
+// failing bun test and verifies the gate fires.
 //
 // DESIGN
 // ======
-// 1. Target file : pkg/ts-bun-client/test/setup.test.ts — smallest test in
-//    the suite (24 lines); touches only the fake-tmux stub check and has no
-//    interactions with other test files.
-// 2. Mutation    : append `expect(1).toBe(2); // forced failure` to the end
-//    of the existing test body (before the closing `}`), making the test
-//    unconditionally fail on any bun test run.
-// 3. Gate        : bash skills/release-agent-director/gates/coverage/bun-test.sh
-//    is run from repo root.  The gate's stderr must contain the JSON
-//    "gate":"coverage.bun-test" diagnostic on failure.
-// 4. Cleanup     : original bytes are captured before mutation; t.Cleanup
-//    restores them unconditionally even when t.Fatalf fires mid-test.
+//  1. Fixture worktree.  The test writes a tiny pkg/ts-bun-client into
+//     t.TempDir(): a package.json with no dependencies and a no-op `build`
+//     script, and one test that always fails.  It points the UNMODIFIED gate at
+//     it through the gate's optional worktree-root argument, so nothing outside
+//     t.TempDir() is written (b.jct).  With no dependencies,
+//     `bun install --frozen-lockfile` needs neither a lockfile nor the network.
+//  2. Assertions.  The gate exits non-zero with the diagnostic of its `bun test`
+//     step, which it reaches only after install and build pass, and the bun
+//     output names the fixture's test as the failure.  So the gate fired on the
+//     planted failure, not on a broken fixture.  The test also fails if the real
+//     setup.test.ts is written (requireUnwritten).
+//  3. Locking.  The test holds no lock.  The gate takes the dist-pack lock
+//     itself, so this test may wait for a pack-first test or another
+//     coverage.bun-test gate.
 //
 // SLOW TEST
 // =========
-// This test runs bun install + bun run build + bun test (≈12s).
-// It is skipped in -short mode to keep default `go test ./...` fast.
+// Runs bun three times over the fixture (about a second, plus any wait for the
+// dist-pack lock).  Skipped in -short mode.
 package coveragebuntestfires_test
 
 import (
+	"crypto/sha256"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,47 +44,51 @@ import (
 	"testing"
 )
 
-// acquireDistPackLock serializes tests that read or write the real
-// pkg/ts-bun-client/dist/. This test's gate runs `bun run build`, which
-// regenerates dist/ in place; the pack-first synthetic-regression tests
-// (tarball-round-trip, tarball-coherence-drift, pack-first-version-mismatch,
-// verify-restage) `bun pm pack` the same dir. Without serialization a rebuild
-// races a concurrent pack and the two packs diverge (b.aur:
-// TestTarballRoundTripByteIdentical saw "Only in package/dist: client.d.ts").
-// The lock lives under the OS temp dir — shared across these packages within a
-// single `go test` run, and never touches the repo tree.
-//
-// b.3jn — the lock's role widened. It no longer only serializes go test
-// PACKAGES against each other (b.aur). Under the b.2mt parallel coverage phase
-// the sibling coverage.bun-test GATE runs concurrently with this test, and it
-// was reading THIS test's planted `expect(1).toBe(2)` mutation of setup.test.ts
-// (verified 6/6 live sweep runs). So the gate itself (gates/coverage/bun-test.sh)
-// now takes this SAME lock EXCLUSIVE for its whole run — making this test's
-// setup.test.ts mutation window and dist/ rebuild invisible to the sibling gate.
-//
-// INVARIANT: any process that runs the bun-test gate while ALREADY holding this
-// dist-pack lock MUST set COVERAGE_BUN_TEST_NESTED=1 so the gate skips lock
-// acquisition; everything else MUST let the gate take the lock. This test is the
-// one nested caller — it holds the lock (acquireDistPackLock) before invoking the
-// gate, so without the guard the nested gate would deadlock on its ancestor's
-// lock. The COVERAGE_BUN_TEST_NESTED=1 guard (following b.2y5's
-// COVERAGE_GO_ROOT_NESTED precedent) is what lets the nested gate proceed while
-// this process holds the lock. TestCoverageBunTestFires sets it below.
-func acquireDistPackLock(t *testing.T) {
+const (
+	// gateKey is the SR-14 diagnostic field proving coverage.bun-test emitted
+	// the failure.
+	gateKey = `"gate":"coverage.bun-test"`
+	// testStepDiagnostic is the description the gate emits only when `bun test`
+	// fails; install and build failures carry their own descriptions.
+	testStepDiagnostic = `"description":"bun test failed"`
+	// fixtureTestName names the planted failing test, so the gate's output can
+	// be matched to it.
+	fixtureTestName = "planted failure (coverage-bun-test-fires)"
+)
+
+// fixturePackageJSON declares no dependencies, so the gate's
+// `bun install --frozen-lockfile` succeeds offline without a lockfile.
+const fixturePackageJSON = `{
+  "name": "coverage-bun-test-fixture",
+  "private": true,
+  "scripts": { "build": "true" }
+}
+`
+
+// fixtureFailingTest always fails: the planted failure the gate must report.
+const fixtureFailingTest = `import { expect, test } from "bun:test";
+
+test("` + fixtureTestName + `", () => {
+  expect(1).toBe(2);
+});
+`
+
+// materializeFixture writes the fixture pkg/ts-bun-client under worktreeRoot.
+func materializeFixture(t *testing.T, worktreeRoot string) {
 	t.Helper()
-	lockPath := filepath.Join(os.TempDir(), "agent-director-ts-bun-dist-pack.lock")
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		t.Fatalf("acquireDistPackLock: open %s: %v", lockPath, err)
+	pkgDir := filepath.Join(worktreeRoot, "pkg", "ts-bun-client")
+	if err := os.MkdirAll(filepath.Join(pkgDir, "test"), 0o755); err != nil {
+		t.Fatalf("mkdir fixture package: %v", err)
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		f.Close()
-		t.Fatalf("acquireDistPackLock: flock: %v", err)
+	writes := map[string]string{
+		filepath.Join(pkgDir, "package.json"):          fixturePackageJSON,
+		filepath.Join(pkgDir, "test", "fires.test.ts"): fixtureFailingTest,
 	}
-	t.Cleanup(func() {
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		f.Close()
-	})
+	for path, content := range writes {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write fixture %s: %v", path, err)
+		}
+	}
 }
 
 // repoRoot walks up from the package working directory until it finds go.mod.
@@ -98,89 +108,85 @@ func repoRoot(t *testing.T) string {
 		}
 		dir = parent
 	}
-	panic("unreachable")
+}
+
+// fileSnapshot is what any write to a file changes: its content, mtime or inode.
+type fileSnapshot struct {
+	sha256  string
+	mtimeNs int64
+	inode   uint64
+}
+
+func snapshotFile(t *testing.T, path string) fileSnapshot {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatalf("stat %s: no inode in %T", path, info.Sys())
+	}
+	return fileSnapshot{fmt.Sprintf("%x", sha256.Sum256(data)), info.ModTime().UnixNano(), st.Ino}
+}
+
+// requireUnwritten fails the test if path is written after this call, including
+// by cleanups registered after it (b.jct: no test may rewrite a tracked file,
+// even to restore it).
+func requireUnwritten(t *testing.T, path string) {
+	t.Helper()
+	before := snapshotFile(t, path)
+	t.Cleanup(func() {
+		if after := snapshotFile(t, path); after != before {
+			t.Errorf("%s was written during the test:\nbefore %+v\nafter  %+v", path, before, after)
+		}
+	})
 }
 
 // TestCoverageBunTestFires verifies that coverage.bun-test fires (exit != 0,
-// stderr contains "gate":"coverage.bun-test") when a bun test is broken.
+// stderr contains "gate":"coverage.bun-test") when a bun test fails.
 func TestCoverageBunTestFires(t *testing.T) {
 	if testing.Short() {
-		t.Skip("slow: runs full coverage suite (bun install + build + test)")
+		t.Skip("slow: runs the coverage.bun-test gate over a fixture package")
 	}
-
-	// Dependency guard
 	if _, err := exec.LookPath("bun"); err != nil {
 		t.Skip("bun not in PATH — skipping coverage.bun-test gate test")
 	}
 
 	root := repoRoot(t)
+	// The tracked file the test used to plant its failure in. Registered first,
+	// so it checks after every other cleanup has run.
+	requireUnwritten(t, filepath.Join(root, "pkg", "ts-bun-client", "test", "setup.test.ts"))
 
-	// This gate runs `bun run build`, rewriting pkg/ts-bun-client/dist/ in place;
-	// serialize against the pack-first tests that read it (b.aur).
-	acquireDistPackLock(t)
+	fixtureRoot := t.TempDir()
+	materializeFixture(t, fixtureRoot)
 
-	targetFile := filepath.Join(root, "pkg", "ts-bun-client", "test", "setup.test.ts")
-
-	// ── 1. Read original bytes ──────────────────────────────────────────────
-	orig, err := os.ReadFile(targetFile)
-	if err != nil {
-		t.Fatalf("read setup.test.ts: %v", err)
-	}
-	origStat, err := os.Stat(targetFile)
-	if err != nil {
-		t.Fatalf("stat setup.test.ts: %v", err)
-	}
-
-	// ── 2. Register cleanup BEFORE mutating ────────────────────────────────
-	t.Cleanup(func() {
-		if err := os.WriteFile(targetFile, orig, origStat.Mode()); err != nil {
-			t.Errorf("t.Cleanup: restore setup.test.ts: %v", err)
-		}
-	})
-
-	// ── 3. Inject mutation ─────────────────────────────────────────────────
-	// Append a forced failure assertion after the last line of the test body.
-	// We insert before the closing `});` so Bun parses the file correctly.
-	const marker = "  expect(mode & 0o111).toBeGreaterThan(0);\n});"
-	const mutated = "  expect(mode & 0o111).toBeGreaterThan(0);\n" +
-		"  expect(1).toBe(2); // forced failure for coverage.bun-test regression\n});"
-
-	origStr := string(orig)
-	if !strings.Contains(origStr, marker) {
-		t.Fatalf("mutation marker not found in setup.test.ts — update the marker if the file was refactored")
-	}
-
-	mutatedContent := strings.Replace(origStr, marker, mutated, 1)
-	if err := os.WriteFile(targetFile, []byte(mutatedContent), origStat.Mode()); err != nil {
-		t.Fatalf("write mutated setup.test.ts: %v", err)
-	}
-
-	// ── 4. Run coverage.bun-test gate ──────────────────────────────────────
 	gateScript := filepath.Join(root, "skills", "release-agent-director", "gates", "coverage", "bun-test.sh")
-	cmd := exec.Command("bash", gateScript)
-	// This test already holds the dist-pack lock (acquireDistPackLock, above),
-	// and the gate now takes the SAME lock EXCLUSIVE for its whole run (b.3jn).
-	// Re-acquiring it in the nested gate would self-deadlock. Set the guard so
-	// the nested gate skips lock acquisition and proceeds under our lock.
-	cmd.Env = append(os.Environ(), "COVERAGE_BUN_TEST_NESTED=1")
-	cmd.Dir = root
-	var stderrBuf strings.Builder
+	cmd := exec.Command("bash", gateScript, fixtureRoot)
+	var stdoutBuf, stderrBuf strings.Builder
+	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
-	// stdout flows to the test log for progress visibility
-	cmd.Stdout = os.Stdout
-	_ = cmd.Run() // non-zero exit is expected — ignore the returned error
+	err := cmd.Run()
+	stdout, stderr := stdoutBuf.String(), stderrBuf.String()
 
-	stderr := stderrBuf.String()
-
-	// ── 5. Assertions ──────────────────────────────────────────────────────
-	if cmd.ProcessState.ExitCode() == 0 {
-		t.Fatalf("expected coverage.bun-test gate to exit non-zero after forced bun test failure, but it exited 0")
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		if err == nil {
+			t.Fatalf("expected coverage.bun-test gate to exit non-zero on the planted bun test failure, but it exited 0\nstdout:\n%s", stdout)
+		}
+		t.Fatalf("run coverage.bun-test gate: %v", err)
+	}
+	if !strings.Contains(stderr, gateKey) || !strings.Contains(stderr, testStepDiagnostic) {
+		t.Fatalf("gate stderr is not the bun test step's diagnostic (want %s and %s)\nstderr:\n%s\nstdout:\n%s",
+			gateKey, testStepDiagnostic, stderr, stdout)
+	}
+	if want := "(fail) " + fixtureTestName; !strings.Contains(stdout, want) {
+		t.Fatalf("gate output does not report the planted failure %q\nstdout:\n%s", want, stdout)
 	}
 
-	const gateKey = `"gate":"coverage.bun-test"`
-	if !strings.Contains(stderr, gateKey) {
-		t.Fatalf("gate stderr does not contain %q;\nstderr:\n%s", gateKey, stderr)
-	}
-
-	t.Logf("coverage.bun-test fired correctly (exit %d).\nGate stderr: %s", cmd.ProcessState.ExitCode(), stderr)
+	t.Logf("coverage.bun-test fired correctly (exit %d).\nGate stderr: %s", exitErr.ExitCode(), stderr)
 }

@@ -1704,6 +1704,7 @@ pkg/ts-bun-client/
 ├── tsconfig.json         strict, ES2022 + ESNext.Disposable, declaration-only to dist/
 ├── .eslintrc.cjs         @typescript-eslint strict rules
 ├── build.ts              Bun.build (ESM, single entry) → tsc (declarations)
+├── go.mod                module-boundary stub, no Go code (see below)
 ├── src/
 │   ├── index.ts          public re-exports (client, errors, types)
 │   ├── client.ts         thin re-export: Client = SubprocessClient
@@ -1724,6 +1725,19 @@ pkg/ts-bun-client/
 ├── test/                 bun:test suite
 └── dist/                 build output (gitignored)
 ```
+
+`go.mod` makes `pkg/ts-bun-client/` a separate Go module, so every `./...`
+walk from the repo root (`go build`, `go test`, `go vet`, `go list`) skips this
+tree. bun rewrites `dist/` and `node_modules/` here while those walks can run,
+and `node_modules/` can hold stray Go packages (`flatted` ships one). Its module
+path, `agent-director.invalid/ts-bun-client`, lies outside the root module's
+path, so a root finder that matches the root module line
+(`test/envelope-diff/harness.go`) skips it. Most `repoRoot` helpers stop at the
+nearest `go.mod` and would stop here, so Go code that walks up that way must
+not run with its cwd inside `pkg/ts-bun-client/`; today nothing does (the only
+`go` command run there is the bun gates' `go env`, and the Go binaries bun tests
+run look for no `go.mod`). Keep the stub free of Go code; it is not in the npm
+package.
 
 ### Client lifecycle
 

@@ -56,7 +56,7 @@ import (
 
 // seedsMutationLockPath returns the path to the cross-process advisory lock
 // file (pkg/api/apitest/.seeds-mutation.lock) that serializes repo-tree
-// mutation against the repo-root package walkers. See acquireSeedsLock.
+// mutation against repo-tree readers. See acquireSeedsLock.
 func seedsMutationLockPath(root string) string {
 	return filepath.Join(root, "pkg", "api", "apitest", ".seeds-mutation.lock")
 }
@@ -65,27 +65,24 @@ func seedsMutationLockPath(root string) string {
 // creates/removes a directory under tools/ (a walk-reachable location: not
 // dot/underscore/testdata-prefixed). Sub-case B builds
 // tools/test-bvvv-<pid>/ and RemoveAll's it; that is the walk-reachable
-// mutation. (Sub-case A's .release-work/ subtree is dot-prefixed and skipped
-// by the walker, but the flock is held across the whole test for simplicity.)
+// mutation. (Sub-case A's .release-work/ subtree is dot-prefixed, which a Go
+// package walk skips but the docker build-context tar below does not; the flock
+// is held across the whole test.)
 //
-// b.2y5: helper-tag-replay's TestHelperTagReplay runs `go build ./...` from
-// the repo root while holding this same seeds-mutation flock. That walker
-// enumerates every package directory, including tools/. If our
-// tools/test-bvvv-<pid>/ directory is created and then RemoveAll'd mid-walk,
-// the walker races: it can observe the directory during enumeration and then
-// fail to open it, surfacing as
-// `pattern ./...: open /work/<dir>: no such file or directory`. The b.mgw
-// go-root fixture scope-down removed go-root's ~62s seeds-flock hold that had
-// incidentally serialized these, exposing the latent race. Holding the seeds
-// flock across our entire tree mutation window closes it.
+// b.2y5: readers of the repo tree hold this lock while they read it. The
+// coverage.docker-epics gate's `make test-docker` children take it shared:
+// their docker build context tars the repo root, and a directory that appears
+// and then vanishes mid-tar fails the build. Holding the lock exclusively
+// across our whole tree-mutation window keeps our fixture directories out of
+// their reads.
 //
 // LOCK ORDERING (b.2y5): this test also takes acquireSourceOfTruthLock (the
 // ts-bun-client scripts lock). To avoid deadlock, every package that holds
 // BOTH locks MUST acquire the seeds-mutation lock FIRST, then the
-// source-of-truth lock. This test observes that invariant. (The
-// seeds-lock-only holders — helper-tag-replay, coverage-go-root-fires — never
-// take the source-of-truth lock, so there is no reverse-order acquirer to
-// deadlock against.)
+// source-of-truth lock. This test observes that invariant. (The seeds-lock-only
+// holders — the docker-epics children and the pkg/ts-bun-client test preload's
+// builds — never take the source-of-truth lock, so there is no reverse-order
+// acquirer to deadlock against.)
 //
 // The lock is released after our subtests' RemoveAll cleanups run: t.Cleanup
 // is LIFO, and subtest cleanups run when each subtest returns (before this
@@ -161,16 +158,6 @@ func runGate(t *testing.T, root string) (int, string) {
 }
 
 func TestSourceOfTruthReleaseWorkPrune(t *testing.T) {
-	// b.2y5: skip when running inside coverage-go-root-fires' inner
-	// `go test ./... -race` run. That outer test holds the seeds-mutation flock
-	// (now that this test also takes it) and sets COVERAGE_GO_ROOT_NESTED=1 in
-	// the gate subprocess env. Without this guard, the inner instance of this
-	// test would block forever on acquireSeedsLock — a flock deadlock, the same
-	// hazard helper-tag-replay and coverage-go-root-fires already guard against.
-	if os.Getenv("COVERAGE_GO_ROOT_NESTED") == "1" {
-		t.Skip("skipping repo-tree mutation: running inside coverage.go-root gate inner test suite")
-	}
-
 	if _, err := exec.LookPath("bun"); err != nil {
 		t.Skip("bun not in PATH — skipping b.vvv regression test")
 	}
@@ -183,9 +170,8 @@ func TestSourceOfTruthReleaseWorkPrune(t *testing.T) {
 	// b.2y5: acquire the seeds-mutation flock FIRST (before the source-of-truth
 	// lock) so its LIFO cleanup releases LAST — after both this parent's and the
 	// subtests' tree-restoration cleanups. This serializes our tools/ mutation
-	// (sub-case B) against helper-tag-replay's repo-root `go build ./...`
-	// walker. See acquireSeedsLock for the race and the
-	// seeds-then-source-of-truth ordering.
+	// (sub-case B) against the repo-tree readers. See acquireSeedsLock for the
+	// race and the seeds-then-source-of-truth ordering.
 	acquireSeedsLock(t, root)
 
 	// Serialize against the other source-of-truth gate tests, which also

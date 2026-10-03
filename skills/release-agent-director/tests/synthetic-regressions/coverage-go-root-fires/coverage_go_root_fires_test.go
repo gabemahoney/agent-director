@@ -49,13 +49,13 @@
 //     mutation.  With the gate scoped to a self-contained fixture module, the
 //     nested `go test ./...` walks only the fixture tree in t.TempDir() and can
 //     never re-enter this package or the real repo — there is no recursion to
-//     guard.  helper-tag-replay's own skip check is untouched (SR-5.2).
+//     guard.
 //   - Seeds flock (acquireSeedsLock / .seeds-mutation.lock, SR-5.3): REMOVED as
 //     demonstrably obsolete.  It serialized concurrent mutations of the shared
 //     real file pkg/api/apitest/seeds.go across this package and
 //     helper-tag-replay.  This test no longer mutates seeds.go (or any tracked
 //     file) — it mutates only fixture files under t.TempDir() — so there is no
-//     shared state to serialize.  helper-tag-replay retains its own copy.
+//     shared state to serialize.
 //   - Skip CHECK at the top of the test (SR-5.2/5.3): REMOVED as demonstrably
 //     obsolete (disposition finalized in Epic t1.2mt.z4, where the s5 pin routed
 //     it).  The check existed to bail out when a nested full-tree run re-entered
@@ -69,7 +69,6 @@
 //     removed with the b.mgw scope-down (runGate now points the gate at a fixture
 //     module instead of the real tree).  Post-scope-down nothing sets the variable
 //     anywhere, so the guard is demonstrably obsolete under SR-5.3.
-//     helper-tag-replay keeps its own copy (SR-5.2).
 //
 // CLEANUP (SR-5.4)
 // ================

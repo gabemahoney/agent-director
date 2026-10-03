@@ -70,20 +70,15 @@ func acquireSourceOfTruthLock(t *testing.T, root string) {
 	})
 }
 
-// acquireSeedsMutationLock grabs the SAME advisory flock that helper-tag-replay
-// holds across its repo-root `go build ./...` (pkg/api/apitest/.seeds-mutation.lock).
-// This test creates and RemoveAll's paths directly under the repo root
-// (reference/, skills/) while helper-tag-replay walks the whole tree; if the two
-// overlap, the Go package walker hits reference/ mid-teardown and fails with
-// "pattern ./...: open <root>/reference: no such file or directory". The two
-// packages share no lock of their own — previously they were serialized only by
-// timing (coverage-go-root-fires held the seeds lock for its ≈57s nested
-// full-tree run, so helper-tag-replay blocked behind it). The b.mgw scope-down
-// of that nested run removed the incidental delay and unmasked this race, so we
-// serialize explicitly against the walker's lock. helper-tag-replay is
-// unchanged; its own copy of this acquire (and its SR-5 skip guard) is
-// untouched. Lock is released after this test's tree-mutation cleanups run
-// (t.Cleanup is LIFO: acquire this first so it unlocks last).
+// acquireSeedsMutationLock grabs the seeds-mutation flock
+// (pkg/api/apitest/.seeds-mutation.lock, LOCK_EX) that readers of the repo tree
+// hold while they read it. This test creates and RemoveAll's paths directly
+// under the repo root (reference/, skills/); a reader that sees one appear and
+// then vanish fails — the coverage.docker-epics gate's `make test-docker`
+// children (lock taken shared) tar the repo root as their docker build context
+// and fail with "file '.../reference' not found". Lock is released
+// after this test's tree-mutation cleanups run (t.Cleanup is LIFO: acquire this
+// first so it unlocks last).
 func acquireSeedsMutationLock(t *testing.T, root string) {
 	t.Helper()
 	lockPath := filepath.Join(root, "pkg", "api", "apitest", ".seeds-mutation.lock")
@@ -139,10 +134,10 @@ func TestSourceOfTruthReferencePrune(t *testing.T) {
 
 	root := repoRoot(t)
 
-	// Serialize against repo-root package walkers (helper-tag-replay's
-	// `go build ./...`) that fail if reference/ or skills/ is created/removed
-	// mid-walk (b.mgw). Acquired first so its cleanup unlocks LAST — after the
-	// sub-case tree mutations below are restored.
+	// Serialize against repo-tree readers (the docker-epics build-context tar)
+	// that fail if reference/ or skills/ is created/removed mid-read. Acquired
+	// first so its cleanup unlocks LAST — after the sub-case tree mutations
+	// below are restored.
 	acquireSeedsMutationLock(t, root)
 
 	// Serialize against the other source-of-truth gate test, which also

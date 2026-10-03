@@ -43,10 +43,11 @@ import (
 
 // acquireDistPackLock serializes tests that read or write the real
 // pkg/ts-bun-client/dist/. This test `bun pm pack`s that dir via pack-first.sh;
-// coverage-bun-test-fires rewrites it via `bun run build`. Without
+// the coverage.bun-test gate, which the release coverage phase runs beside
+// `go test ./...`, rewrites it via `bun run build` under the same lock. Without
 // serialization a concurrent rebuild races the pack (b.aur). The lock lives
-// under the OS temp dir — shared across these packages within a single
-// `go test` run, and never touches the repo tree.
+// under the OS temp dir, where the gate opens the same file, and never touches
+// the repo tree.
 func acquireDistPackLock(t *testing.T) {
 	t.Helper()
 	lockPath := filepath.Join(os.TempDir(), "agent-director-ts-bun-dist-pack.lock")
@@ -100,7 +101,7 @@ func TestPackFirstVersionMismatch(t *testing.T) {
 	root := repoRoot(t)
 
 	// pack-first.sh packs the real pkg/ts-bun-client/dist/; serialize against
-	// coverage-bun-test-fires which rebuilds it (b.aur).
+	// the coverage.bun-test gate, which rebuilds it (b.aur).
 	acquireDistPackLock(t)
 
 	// ── 1. Run the gate with a mismatched target version, writing into an
@@ -186,7 +187,7 @@ func TestPackFirstHonorsOutputDir(t *testing.T) {
 	root := repoRoot(t)
 
 	// pack-first.sh packs the real pkg/ts-bun-client/dist/; serialize against
-	// coverage-bun-test-fires which rebuilds it (b.aur).
+	// the coverage.bun-test gate, which rebuilds it (b.aur).
 	acquireDistPackLock(t)
 
 	// Isolated, absolute output dir. Auto-cleaned by the Go test runner.
@@ -239,7 +240,7 @@ func TestPackFirstHonorsOutputDir(t *testing.T) {
 // packs the isolated in-repo copy's own dist/, and `bun pm pack` on the copy
 // never touches the shared pkg/ts-bun-client/dist/. We DO hold the lock, but
 // only to protect the `cp -r pkg/ts-bun-client/. <copy>/` read of the shared
-// dist/ against coverage-bun-test-fires, which rebuilds it concurrently
+// dist/ against the coverage.bun-test gate, which rebuilds it concurrently
 // (b.aur); reading a half-rebuilt dist/ would produce a torn copy. Holding the
 // shared lock for the (fast) copy is the least-surprising way to serialize
 // that read.
@@ -266,6 +267,16 @@ func TestPackFirstHonorsPkgDir(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(pkgCopy) })
 
 	realPkg := filepath.Join(root, "pkg", "ts-bun-client")
+	// The go.mod stub goes in first, so the copy is a nested module before its
+	// node_modules (which holds a Go package) appears: other packages' walks of
+	// the repo then skip it (b.jct). The bulk cp rewrites it with the same bytes.
+	stub, err := os.ReadFile(filepath.Join(realPkg, "go.mod"))
+	if err != nil {
+		t.Fatalf("read the pkg/ts-bun-client go.mod stub: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgCopy, "go.mod"), stub, 0o644); err != nil {
+		t.Fatalf("write the go.mod stub into %s: %v", pkgCopy, err)
+	}
 	cpCmd := exec.Command("cp", "-r", realPkg+"/.", pkgCopy+"/")
 	if out, err := cpCmd.CombinedOutput(); err != nil {
 		t.Fatalf("copy %s -> %s: %v\n%s", realPkg, pkgCopy, err, out)

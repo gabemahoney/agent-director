@@ -104,10 +104,13 @@ gates in the order defined for that phase. For each gate:
 >   so the caches are still shared. This keeps each gate's `$HOME`-resolved
 >   writes (e.g. `~/.agent-director/ad-trail.jsonl`, templates) out of the real
 >   home that `coverage.go-root`'s smoke canary watches via `user.Current()`.
-> - The `pkg/ts-bun-client` test preload holds the b.2y5 seeds flock
->   (`pkg/api/apitest/.seeds-mutation.lock`) around its `make` invocations, so
->   it cannot read the tree while `coverage.go-root`'s helper-tag-replay mutates
->   `pkg/api/apitest/seeds.go`.
+> - The `pkg/ts-bun-client` test preload and `rc-stamp.test.ts` hold the b.2y5
+>   seeds flock (`pkg/api/apitest/.seeds-mutation.lock`, in `flock`'s default
+>   exclusive mode) around their `make` invocations, as readers of the tree. No
+>   test writes a tracked file (helper-tag-replay mutates a copy of the Go
+>   module under a temp dir). The lock's exclusive-lock mutators, the
+>   source-of-truth tests, create and remove only non-Go fixture paths, which
+>   these builds do not read.
 > - `no-leak.test.ts` scopes its process count to children of its own process
 >   (`pgrep -c -P $pid agent-director`) rather than the host-global
 >   `pgrep -c agent-director`, so sibling gates' binary spawns no longer break
@@ -123,18 +126,14 @@ gates in the order defined for that phase. For each gate:
 >   exclusive.
 > - `coverage.bun-test` holds an **exclusive** `flock` on
 >   `${TMPDIR:-/tmp}/agent-director-ts-bun-dist-pack.lock` for its entire run.
->   go-root's synthetic-regression test `coverage-bun-test-fires` plants a forced
->   failure in `pkg/ts-bun-client/test/setup.test.ts` and reruns the gate nested
->   under that same lock, and four pack-first tests read
->   `pkg/ts-bun-client/dist/` under it — while the gate both reads those test
->   sources and rewrites `dist/` via `bun run build`. The lock is exclusive
->   because the gate is a `dist/` **writer**, not merely a reader. To avoid
->   self-deadlock on the nested rerun, `coverage-bun-test-fires` sets the
->   `COVERAGE_BUN_TEST_NESTED=1` env guard (following b.2y5's
->   `COVERAGE_GO_ROOT_NESTED` precedent), which tells the gate to skip
->   re-acquiring the lock. The invariant is: any process running the bun-test
->   gate while **already** holding the dist-pack lock must set
->   `COVERAGE_BUN_TEST_NESTED=1`.
+>   go-root's four pack-first tests read `pkg/ts-bun-client/dist/` under that
+>   lock, while the gate rewrites `dist/` via `bun run build`. The lock is
+>   exclusive because the gate is a `dist/` **writer**, not merely a reader.
+>   Every run of the gate takes the lock, so nothing may run the gate while
+>   holding it: the gate would wait on its own caller. go-root's
+>   `coverage-bun-test-fires` runs the gate against a fixture package in a temp
+>   dir and holds no lock; it never touches the real test sources or `dist/`
+>   (b.jct).
 > - The pack gate scripts (`gates/pack/pack-first.sh`,
 >   `gates/pack/repack-and-verify.sh`) create their `pack-staging.XXXXXX` /
 >   `pack-staging2.XXXXXX` staging dirs under `${TMPDIR:-/tmp}` instead of at the
@@ -148,7 +147,25 @@ gates in the order defined for that phase. For each gate:
 >   has no `.dockerignore`; `pack-staging*/` is also gitignored as
 >   belt-and-suspenders.)
 >
-> A diagnosability companion fix (SR-14) rides alongside these six isolation
+> A module boundary, not a lock, keeps `coverage.go-root`'s
+> `go test ./... -race` walk out of `coverage.bun-test`'s way.
+> `pkg/ts-bun-client/go.mod` is a stub with no Go code. Go's `./...` patterns
+> skip a directory that holds its own `go.mod`, so the walk never enters
+> `pkg/ts-bun-client/`, where the gate's `bun install` rewrites `node_modules/`
+> and `bun run build` deletes and recreates `dist/`. Without the stub the walk
+> fails with `pattern ./...: open .../dist: no such file or directory` when
+> `dist/` vanishes mid-walk. Its module path,
+> `agent-director.invalid/ts-bun-client`, lies outside the root module's path,
+> so a root finder that matches the root module line
+> (`test/envelope-diff/harness.go`) skips it; finders that stop at the nearest
+> `go.mod` (most `repoRoot` helpers) would stop there, so Go code that walks up
+> that way must not run with its cwd inside `pkg/ts-bun-client/` (today the
+> only `go` command run there is `go env`, in `bun-test.sh` and
+> `bun-extra-scripts.sh`).
+> The stub is not in the npm package (`package.json` `files` lists only `dist/`
+> output and `README.md`).
+>
+> A diagnosability companion fix (SR-14) rides alongside these isolation
 > mechanisms but is not itself an isolation mechanism. `coverage/docker-epics.sh`
 > previously failed **silently** at the phase level: its child failures lived
 > only in the consolidated stdout JSON that the phase executor discards, so the
