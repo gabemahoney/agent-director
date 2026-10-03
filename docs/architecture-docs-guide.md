@@ -4,6 +4,11 @@
 
 `architecture.md` also describes a high level overview of the system for humans (and a reference guide for LLMs). 
 
+## Stay Generic
+Agent Director must not build bespoke functionality for CSCB or any of its clients. It supports many potential users and clients and must remain generic.
+
+Architecture docs describe agent-director's general contract, never one client's integration.
+
 ## Document Re-usable Components
 Any time you create a component that is meant to be re-usable, update architecture.md with a statement requiring future code authors use it. Be sure to describe what it does.
 

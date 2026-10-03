@@ -2,6 +2,13 @@
 
 A practical checklist for writing and reviewing code. Prioritize substance over style — focus on things that break, leak, or rot.
 
+## Core Principle: Stay Generic
+
+**Agent Director must not build bespoke functionality for CSCB or any of its clients.** It supports many potential users and clients and must remain generic.
+
+- **Design a client's request as a general capability.** Build what any caller could use, not what one client asked for.
+- **No client specifics in the product.** Client names, client-specific behaviour and client-specific wording never go into code, errors or the API.
+
 ## 1. Dead & Obsolete Code
 
 Remove it. Don't comment it out, don't leave it "just in case."
