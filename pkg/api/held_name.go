@@ -13,10 +13,11 @@ import (
 // session-creating call answered "duplicate session" (SR-1.2, SR-1.4,
 // SR-3.10, SR-9.4): the re-lookup's classified verb error and the holder
 // facts its ad.launch.name_held record needs. It is verb-agnostic: plain
-// spawn passes one of its three row sentences and one of its two retry
-// sentences below and no examined row; resume and reuse
-// (finishedLaunch.heldName) pass their restore's sentence, retryLater and the
-// row they examined before their move or reset (heldExaminedRow).
+// spawn passes one of its three row sentences, its retry sentences below
+// (heldRetrySentences) and no examined row; resume and reuse
+// (finishedLaunch.heldName) pass their restore's sentence, retryLater for an
+// unanswered re-lookup and the row they examined before their move or reset
+// (heldExaminedRow).
 // resume's pre-launch check (resume_lookup.go) builds its holder conflicts
 // with the same class wording (heldHolderError, ambiguousHolderError) under
 // heldBeforeLaunch, which makes no "duplicate session" claim.
@@ -38,18 +39,41 @@ const (
 
 // Plain spawn's retry sentences for an ErrTmuxUnresponsive after "duplicate
 // session" (the re-lookup could not answer: a timeout, an unrecognised reply,
-// or more than one session matching the name), in place of "retry later"
-// (SR-1.4 row "Every error a plain spawn returns after duplicate session";
-// WD 2026-09-30d (a)). A plain spawn of the same id cannot simply be retried:
-// its row is already ended, or may still be pending.
+// or more than one session matching the name), in place of "retry later",
+// and for the ErrTmuxSessionCreate of a holder that vanished before the
+// re-lookup (SR-1.4 row "Every error a plain spawn returns after duplicate
+// session"; WD 2026-09-30d (a); b.1qq). A plain spawn of the same id cannot
+// simply be retried: its row is already ended, or may still be pending, and
+// once finished it collides with a plain spawn of the id
+// (ErrInstanceIdCollision), so each names the opted-in retry.
 const (
-	// heldRetryReuse: the end write applied, so a plain spawn of the id now
-	// collides with its ended row.
+	// heldRetryReuse: the re-lookup could not answer and the end write
+	// applied, so a plain spawn of the id now collides with its ended row.
+	// It spells the opt-in "(reuse_finished)", one surface's spelling, so it
+	// differs from heldRetryFree only in that parenthetical; respelling it
+	// (spawn.ReuseOptIn) is b.c4u's.
 	heldRetryReuse = "a retry with this id uses the reuse opt-in (reuse_finished) once the name is free, since a plain spawn of the id now collides"
-	// heldRetryWait: the end write did not apply, or failed (the launch-timeout
-	// rule, SR-1.4).
-	heldRetryWait = "do not retry until get shows the row ended or missing"
+	// heldRetryFree: the holder vanished and the end write applied: the
+	// opted-in retry once the name is free, the opt-in in each surface's
+	// spelling (spawn.ReuseRetry).
+	heldRetryFree = spawn.ReuseRetry + " once the name is free, " + spawn.PlainSpawnCollides
+	// heldRetryWait: the end write did not apply, or failed: the
+	// launch-timeout rule (SR-1.4), then heldRetryFree's opted-in retry.
+	heldRetryWait = spawn.LaunchRetryRule + "; then " + heldRetryFree
 )
+
+// heldRetrySentences is a verb's retry sentences for heldNameOutcome's
+// errors, each following the row sentence: Unanswered for the
+// ErrTmuxUnresponsive errors (the re-lookup could not answer, or more than
+// one session matched the name), "" meaning "retry later" for the Can't tell
+// and none for the ambiguous holder; Vanished for the ErrTmuxSessionCreate of
+// a holder that vanished before the re-lookup, "" meaning none (set, the
+// description also names the instance id, which the sentence's "this id"
+// means).
+type heldRetrySentences struct {
+	Unanswered string
+	Vanished   string
+}
 
 // The label sentences of SR-1.4's "after duplicate session" row: whether the
 // holder's label names this agent's instance id, read only from the label
@@ -100,11 +124,11 @@ type heldExaminedRow struct {
 // store's id); socket is
 // that launch socket; rowSentence is the caller's row sentence (plain spawn:
 // heldRowEnded, heldRowLeftAsIs or heldRowStaysPending; resume and reuse: the
-// restore's, restoreResultOf); retry is the caller's retry
-// sentence for the ErrTmuxUnresponsive errors below, "" meaning the default
-// (plain spawn: heldRetryReuse when its end write applied, else
-// heldRetryWait; resume and reuse pass retryLater, so their ambiguous holder
-// also ends with "retry later"); examined is the row the verb examined before
+// restore's, restoreResultOf); retry is the caller's retry sentences
+// (heldRetrySentences; plain spawn: Unanswered heldRetryReuse and Vanished
+// heldRetryFree when its end write applied, else heldRetryWait for both;
+// resume and reuse: Unanswered retryLater, so their ambiguous holder also
+// ends with "retry later", and no Vanished); examined is the row the verb examined before
 // its move or reset (heldExaminedRow), nil for plain spawn, whose row did not
 // exist before. Each error matches exactly one catalogued
 // sentinel under errors.Is (SR-1.5) and carries the row sentence exactly once,
@@ -112,8 +136,8 @@ type heldExaminedRow struct {
 //
 //   - Can't tell, first, through the single-row verbs' shared cantTellError
 //     with the row sentence as its consequence (so no "nothing was done"):
-//     unreadable is tmux.ErrTmuxUnresponsive, ending with retry in place of
-//     "retry later" when retry is set ("retry later" otherwise);
+//     unreadable is tmux.ErrTmuxUnresponsive, ending with retry.Unanswered
+//     in place of "retry later" when it is set ("retry later" otherwise);
 //     provenance_conflict is tmux.ErrTmuxSessionConflict ("conflicting
 //     labels", no label sentence, since the holder's class cannot be
 //     trusted); a different server and tmux unavailable, socket permission
@@ -125,10 +149,17 @@ type heldExaminedRow struct {
 //   - More than one listing entry matching the name: Can't tell for the
 //     holder check (SR-3.10), tmux.ErrTmuxUnresponsive, saying the holder
 //     cannot be told, with no tmux id and no label sentence, followed by
-//     retry when it is set (by default no retry sentence).
+//     retry.Unanswered when it is set (by default no retry sentence).
 //   - No holder (the session vanished before the re-lookup):
 //     tmux.ErrTmuxSessionCreate through spawn.CreateFailedError ("session
-//     creation failed: duplicate session", the quoted name).
+//     creation failed: duplicate session", the quoted name) with the row
+//     sentence; resume and reuse set no retry.Vanished. Plain spawn sets
+//     one (b.1qq), since a plain spawn of the id collides with its row once
+//     it is finished: the description then goes through
+//     spawn.InstanceCreateFailedError, led by "instance <id>" as the
+//     unanswered re-lookup's is, so the id that sentence's "this id" means
+//     is named (a minted one included), and the row sentence is followed by
+//     retry.Vanished.
 //   - A holder, by its label class (SR-3.10): old ("left over from an
 //     earlier life"; its label names this instance id, no agent-director row
 //     described it before this spawn, ending it is a human's decision, the
@@ -161,7 +192,7 @@ type heldExaminedRow struct {
 // No description carries a label's value, the id a label names, another
 // row's id, a store id, a session-environment value, "dead" or "gone", or a
 // session-ending command (SR-1.4). It makes no call and writes nothing.
-func heldNameOutcome(res tmux.Result, instanceID, name, socket, rowSentence, retry string, examined *heldExaminedRow) (heldNameHolder, error) {
+func heldNameOutcome(res tmux.Result, instanceID, name, socket, rowSentence string, retry heldRetrySentences, examined *heldExaminedRow) (heldNameHolder, error) {
 	holder := heldHolderFacts(res)
 	if res.Verdict == tmux.CantTell {
 		return holder, cantTellError(res, cantTellRefusal{
@@ -169,19 +200,23 @@ func heldNameOutcome(res tmux.Result, instanceID, name, socket, rowSentence, ret
 			Socket:      socket,
 			Call:        tmux.CallLookup,
 			Consequence: heldNameClause(name, res.Holder) + "; " + rowSentence,
-			Retry:       retry,
+			Retry:       retry.Unanswered,
 		})
 	}
 	if res.HolderAmbiguous {
 		rest := rowSentence
-		if retry != "" {
-			rest += "; " + retry
+		if retry.Unanswered != "" {
+			rest += "; " + retry.Unanswered
 		}
 		return holder, ambiguousHolderError(heldAfterDuplicate, instanceID, name, rest)
 	}
 	if res.Holder == nil {
-		return holder, spawn.CreateFailedError(&tmux.CallError{Call: tmux.CallCreate, Failure: tmux.FailDuplicate}, name,
-			"no session held the name when it was looked up again; "+rowSentence)
+		ce := &tmux.CallError{Call: tmux.CallCreate, Failure: tmux.FailDuplicate}
+		consequence := "no session held the name when it was looked up again; " + rowSentence
+		if retry.Vanished == "" {
+			return holder, spawn.CreateFailedError(ce, name, consequence)
+		}
+		return holder, spawn.InstanceCreateFailedError(ce, instanceID, name, consequence+"; "+retry.Vanished)
 	}
 	if examined != nil {
 		switch res.HolderClass {

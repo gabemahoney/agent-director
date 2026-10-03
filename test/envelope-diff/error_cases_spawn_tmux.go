@@ -93,8 +93,9 @@ var spawnTmuxErrorCases = []errorCase{
 		},
 		desc: func(_ map[string]any) (apitest.DescCase, []string) {
 			return apitest.DescLaunchTimeout(apitest.LaunchTimeout{
-				InstanceID: hungID,
-				Timeout:    shortCreateTimeoutMs * time.Millisecond,
+				InstanceID:      hungID,
+				Timeout:         shortCreateTimeoutMs * time.Millisecond,
+				ExplicitSpawnID: true,
 			}), nil
 		},
 	},

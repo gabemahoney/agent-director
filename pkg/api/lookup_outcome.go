@@ -54,7 +54,8 @@ type cantTellRefusal struct {
 	// Retry is the unreadable refusal's closing retry sentence: "" means
 	// retryLater. Only a caller whose retry of the same call cannot work
 	// sets it: plain spawn after "duplicate session", whose row is already
-	// ended or may still be pending (heldRetryReuse, heldRetryWait).
+	// ended or may still be pending (heldRetrySentences.Unanswered:
+	// heldRetryReuse, heldRetryWait).
 	Retry string
 }
 

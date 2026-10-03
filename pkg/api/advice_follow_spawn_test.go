@@ -4,13 +4,13 @@ package api_test
 // error descriptions and spawn's manifest texts prescribe (b.fji, inventory
 // A1-A8): each test triggers the error, checks the advice phrase, does what it
 // says and checks the promised outcome. Reuse's (A9-A13) are in
-// advice_follow_spawn_reuse_test.go; knownBrokenAdvice gates a step that does
-// not work as written. It uses the held-name fixture (spawn_held_test.go) and
-// the shared helpers (advice_follow_helpers_test.go).
+// advice_follow_spawn_reuse_test.go. It uses the held-name fixture
+// (spawn_held_test.go) and the shared helpers (advice_follow_helpers_test.go).
 
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,16 +75,48 @@ func advSpawnNextLife(cols apitest.SpawnColumns) any {
 	return life + 1
 }
 
-// TestAdviceFollow_A1_LaunchTimeoutRetryAfterFinished: A1 "the session may have been created; the row stays pending; do not retry until get shows the row ended or missing".
+// Plain spawn's opted-in retry for an explicit id whose row is, or will be,
+// finished (b.1qq), the opt-in in each surface's spelling; after "duplicate
+// session" it waits for the name too, and an unended row waits first.
+const (
+	advSpawnReuseRetry = "a retry with this id uses the reuse opt-in (--reuse-finished on the CLI, reuse-finished over MCP, " +
+		"reuse_finished in TypeScript, ReuseFinished in Go)"
+	advSpawnReuseOnceFree = advSpawnReuseRetry + " once the name is free, since a plain spawn of the id now collides"
+	advSpawnWaitThenReuse = "do not retry until get shows the row ended or missing; then " + advSpawnReuseOnceFree
+)
+
+// advSpawnReuseAfterFinished follows the opted-in retry once id's row is
+// finished: the plain retry collides and changes nothing; with whileHeld set
+// the opted-in retry gets it, changing nothing, until the name is freed; then
+// the opted-in retry launches the row's next life.
+func advSpawnReuseAfterFinished(t *testing.T, e heldEnv, id string, p api.SpawnParams, whileHeld error) {
+	t.Helper()
+	finished := e.readRow(t, id)
+	_, err := e.c.Spawn(p)
+	assertOneSentinel(t, err, spawn.ErrInstanceIdCollision)
+	e.assertRowIs(t, id, "after the plain retry", finished)
+	if whileHeld != nil {
+		_, err = e.c.Spawn(advSpawnReuse(p))
+		assertOneSentinel(t, err, whileHeld)
+		e.assertRowIs(t, id, "after the opted-in retry while the name is held", finished)
+		advSpawnFreeName(t, e)
+	}
+
+	res, err := e.c.Spawn(advSpawnReuse(p))
+
+	advSpawnLaunched(t, e.dbPath, id, advSpawnNextLife(finished), res, err)
+}
+
+// TestAdviceFollow_A1_LaunchTimeoutRetryAfterFinished: A1 "the session may have been created; the row stays pending; do not retry until get shows
+// the row ended or missing", for an explicit id then "a retry with this id uses the reuse opt-in (...), since a plain spawn of the id now collides".
 func TestAdviceFollow_A1_LaunchTimeoutRetryAfterFinished(t *testing.T) {
-	const phrase = "the session may have been created; the row stays pending; do not retry until get shows the row ended or missing"
+	const rule = "the session may have been created; the row stays pending; do not retry until get shows the row ended or missing"
 	cases := []struct {
 		name, id string
-		broken   string // why the literal retry fails, gated by knownBrokenAdvice; "" = it works
+		advice   string // the description's end
 	}{
-		{name: "minted id"},
-		{name: "explicit id", id: heldID(), broken: "the identical plain spawn of an explicit id collides with its finished row (ErrInstanceIdCollision); " +
-			"only a retry with the reuse opt-in works, and the description does not name it"},
+		{name: "minted id", advice: rule},
+		{name: "explicit id", id: heldID(), advice: rule + "; then " + advSpawnReuseRetry + ", since a plain spawn of the id now collides"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -94,19 +126,24 @@ func TestAdviceFollow_A1_LaunchTimeoutRetryAfterFinished(t *testing.T) {
 
 			_, err := e.c.Spawn(p)
 
-			adviceAssertAdvice(t, err, api.ErrTmuxUnresponsive, phrase)
+			adviceAssertAdvice(t, err, api.ErrTmuxUnresponsive, tc.advice)
+			if err != nil && !strings.HasSuffix(err.Error(), tc.advice) {
+				t.Errorf("description %q\nwant it to end with %q", err.Error(), tc.advice)
+			}
+			adviceAssertManifest(t, "spawn", "", "do not retry until get shows the row ended or missing, since a retry without an explicit id "+
+				"would start a second agent; then retry an explicit id with the reuse opt-in")
+			adviceAssertGoDoc(t, "spawn.go", "Spawn", "do not retry until get shows the row ended or missing, since a retried spawn without an "+
+				"explicit id would start a second agent. Then retry an explicit ClaudeInstanceID with ReuseFinished")
 			id := e.rec.SocketCallsOf(tmux.CallCreate)[0].InstanceID
 			adviceAwaitFinished(t, e.c, e.clock, id, nil)
-			if tc.broken != "" {
-				knownBrokenAdvice(t, "A1", tc.broken)
+			if tc.id != "" {
+				advSpawnReuseAfterFinished(t, e, id, p, nil)
+				return
 			}
 
 			res, err := e.c.Spawn(p)
 
-			if err != nil {
-				t.Fatalf("identical spawn after get showed the row finished = %v; want it to launch", err)
-			}
-			if tc.id == "" && res.ClaudeInstanceID == id {
+			if err == nil && res.ClaudeInstanceID == id {
 				t.Errorf("retry's id = %s; want a newly minted one", id)
 			}
 			advSpawnLaunched(t, e.dbPath, res.ClaudeInstanceID, nil, res, err)
@@ -205,85 +242,142 @@ func TestAdviceFollow_A4_HeldUnreadableReuseOnceFree(t *testing.T) {
 			_, err := e.c.Spawn(p)
 
 			adviceAssertAdvice(t, err, api.ErrTmuxUnresponsive, phrase)
-			ended := e.readRow(t, id)
-			if ended.State != store.StateEnded {
-				t.Fatalf("row state = %v; want ended", ended.State)
+			if st := e.readRow(t, id).State; st != store.StateEnded {
+				t.Fatalf("row state = %v; want ended", st)
 			}
-			_, err = e.c.Spawn(p)
-			assertOneSentinel(t, err, spawn.ErrInstanceIdCollision)
-			_, err = e.c.Spawn(advSpawnReuse(p))
-			assertOneSentinel(t, err, tc.whileHeld)
-			e.assertRowIs(t, id, "after the opted-in retry while the name is held", ended)
-
-			advSpawnFreeName(t, e)
-			res, err := e.c.Spawn(advSpawnReuse(p))
-
-			advSpawnLaunched(t, e.dbPath, id, advSpawnNextLife(ended), res, err)
+			advSpawnReuseAfterFinished(t, e, id, p, tc.whileHeld)
 		})
 	}
 }
 
-// TestAdviceFollow_A5_HeldUnendedRowRetryAfterFinished: A5 "the new row changed after this spawn inserted it and was left as it is" / "the new row could not be ended and stays pending"; "do not retry until get shows the row ended or missing".
-func TestAdviceFollow_A5_HeldUnendedRowRetryAfterFinished(t *testing.T) {
-	cases := []struct {
-		name, row string
-		arrange   func(t *testing.T, e heldEnv, id string) // before the spawn, in the trigger's subtest
-	}{
-		{"end write not applied", "the new row changed after this spawn inserted it and was left as it is",
-			func(t *testing.T, e heldEnv, id string) {
-				adviceOnceAfter(e.rec, tmux.CallCreate, func() { apitest.SeedSessionID(t, e.dbPath, id, uuid.NewString()) })
-			}},
-		{"end write failed", "the new row could not be ended and stays pending", func(t *testing.T, e heldEnv, id string) {
-			storefix.InjectWriteFailure(t, e.dbPath, storefix.WriteFailReuseRestore, id)
+// advSpawnRow is an end-write result after "duplicate session": its row
+// sentence, and arrange, run before the spawn in the trigger's subtest (nil:
+// the end write applies).
+type advSpawnRow struct {
+	name, row string
+	arrange   func(t *testing.T, e heldEnv, id string)
+}
+
+// advSpawnEndWriteFails makes the end write of id's new row fail, until the
+// subtest it runs in ends.
+func advSpawnEndWriteFails(t *testing.T, e heldEnv, id string) {
+	storefix.InjectWriteFailure(t, e.dbPath, storefix.WriteFailReuseRestore, id)
+}
+
+// advSpawnUnendedRows are the end-write results that leave the new row unended.
+var advSpawnUnendedRows = []advSpawnRow{
+	{"end write not applied", "the new row changed after this spawn inserted it and was left as it is",
+		func(t *testing.T, e heldEnv, id string) {
+			adviceOnceAfter(e.rec, tmux.CallCreate, func() { apitest.SeedSessionID(t, e.dbPath, id, uuid.NewString()) })
 		}},
+	{"end write failed", "the new row could not be ended and stays pending", advSpawnEndWriteFails},
+}
+
+// advSpawnHeldTrigger runs plain spawn p in a "trigger" subtest (an injected
+// write failure is removed when it ends), after arrange(id) when arrange is
+// not nil, checks its error is want carrying advice and returns that error;
+// the test stops if it is not.
+func advSpawnHeldTrigger(t *testing.T, e heldEnv, id string, p api.SpawnParams, arrange func(*testing.T, heldEnv, string), want error, advice string) error {
+	t.Helper()
+	var err error
+	if !t.Run("trigger", func(t *testing.T) {
+		if arrange != nil {
+			arrange(t, e, id)
+		}
+		_, err = e.c.Spawn(p)
+		adviceAssertAdvice(t, err, want, advice)
+	}) {
+		t.FailNow()
 	}
-	for _, tc := range cases {
+	return err
+}
+
+// advSpawnGoDocRetry is Spawn's Go doc row sentence and retry sentence after
+// "duplicate session" whose re-lookup could not answer (A5) or whose holder
+// vanished (A6), following the clause that names the case.
+const advSpawnGoDocRetry = "; the new row is ended (the description says if it could not be), and a retry of the id (the description names it) " +
+	"uses ReuseFinished once get shows the row ended or missing and the name is free."
+
+// TestAdviceFollow_A5_HeldUnendedRowRetryAfterFinished: A5 "the new row changed after this spawn inserted it and was left as it is" / "the new row
+// could not be ended and stays pending"; "do not retry until get shows the row ended or missing; then a retry with this id uses the reuse opt-in
+// (...) once the name is free, since a plain spawn of the id now collides".
+func TestAdviceFollow_A5_HeldUnendedRowRetryAfterFinished(t *testing.T) {
+	adviceAssertGoDoc(t, "spawn.go", "Spawn", `Also, after "duplicate session", the re-lookup of the requested name could not be read`+advSpawnGoDocRetry)
+	for _, tc := range advSpawnUnendedRows {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newHeldEnv(t)
 			id := heldID()
 			e.rec.SeedSessions(e.socket, heldSession(advSpawnHeldName, "$4", tmux.Label{}, false))
 			advSpawnRelookupTimesOut(e)
 			p := advSpawnParams(t, id, advSpawnHeldName)
-			if !t.Run("trigger", func(t *testing.T) { // an injected write failure is removed when it ends
-				tc.arrange(t, e, id)
-				_, err := e.c.Spawn(p)
-				adviceAssertAdvice(t, err, api.ErrTmuxUnresponsive, tc.row+"; do not retry until get shows the row ended or missing")
-			}) {
-				t.FailNow()
-			}
-			advSpawnFreeName(t, e)
+			err := advSpawnHeldTrigger(t, e, id, p, tc.arrange, api.ErrTmuxUnresponsive, tc.row+"; "+advSpawnWaitThenReuse)
+			adviceAssertPhrase(t, err, "instance "+id+": ") // the id "this id" means
+
 			adviceAwaitFinished(t, e.c, e.clock, id, nil)
-			knownBrokenAdvice(t, "A5", "once get shows the row finished, the identical plain spawn of its explicit id collides with it "+
-				"(ErrInstanceIdCollision); only a retry with the reuse opt-in works, and the description does not name it")
-
-			res, err := e.c.Spawn(p)
-
-			advSpawnLaunched(t, e.dbPath, id, nil, res, err)
+			advSpawnReuseAfterFinished(t, e, id, p, api.ErrTmuxSessionConflict)
 		})
 	}
 }
 
-// TestAdviceFollow_A6_HolderVanishedReuseRetry: A6 "no session held the name when it was looked up again; the new row was ended" names no
-// retry; reuse-finished's "after a held-name refusal (duplicate session) the row is already ended unless the error says otherwise".
+// TestAdviceFollow_A6_HolderVanishedReuseRetry: A6 "instance <id>: tmux session "adv-held": ...: duplicate session; no session held the name
+// when it was looked up again; the new row was ended; a retry with this id uses the reuse opt-in (...) once the name is free, since a plain spawn
+// of the id now collides", an unended row's sentence and A5's wait instead; a minted id's description names the minted id.
 func TestAdviceFollow_A6_HolderVanishedReuseRetry(t *testing.T) {
-	e := newHeldEnv(t)
-	id := heldID()
-	e.rec.SeedSessions(e.socket, heldSession(advSpawnHeldName, "$4", tmux.Label{}, false))
-	e.rec.RemoveSessionAfter(tmux.CallCreate, e.socket, "$4")
-	p := advSpawnParams(t, id, advSpawnHeldName)
+	adviceAssertGoDoc(t, "spawn.go", "Spawn", `Also, after "duplicate session", the session holding the requested name was gone by the re-lookup`+
+		advSpawnGoDocRetry)
+	rowEnded := advSpawnRow{"row ended", "the new row was ended", nil}
+	cases := []struct {
+		advSpawnRow
+		minted bool // the spawn names no id: its description names the minted one
+	}{
+		{rowEnded, false},
+		{advSpawnUnendedRows[0], false},
+		{advSpawnUnendedRows[1], false},
+		{rowEnded, true},
+	}
+	for _, tc := range cases {
+		name := tc.name
+		if tc.minted {
+			name = "minted id, " + name
+		}
+		t.Run(name, func(t *testing.T) {
+			e := newHeldEnv(t)
+			id := ""
+			if !tc.minted {
+				id = heldID()
+			}
+			e.rec.SeedSessions(e.socket, heldSession(advSpawnHeldName, "$4", tmux.Label{}, false))
+			e.rec.RemoveSessionAfter(tmux.CallCreate, e.socket, "$4")
+			p := advSpawnParams(t, id, advSpawnHeldName)
+			retry := advSpawnWaitThenReuse
+			if tc.arrange == nil {
+				retry = advSpawnReuseOnceFree
+			}
+			advice := "no session held the name when it was looked up again; " + tc.row + "; " + retry
 
-	_, err := e.c.Spawn(p)
+			err := advSpawnHeldTrigger(t, e, id, p, tc.arrange, api.ErrTmuxSessionCreate, advice)
 
-	adviceAssertAdvice(t, err, api.ErrTmuxSessionCreate, "no session held the name when it was looked up again; the new row was ended")
-	adviceAssertManifest(t, "spawn", "reuse-finished", "after a held-name refusal (duplicate session) the row is already ended unless the error says otherwise, "+
-		"so the retry's lookup decides it at once")
-	ended := e.readRow(t, id)
-	res, rerr := e.c.Spawn(advSpawnReuse(p))
-	advSpawnLaunched(t, e.dbPath, id, advSpawnNextLife(ended), res, rerr)
-
-	knownBrokenAdvice(t, "A6", "the description names no next step, so a caller reading it alone has none (a plain retry collides "+
-		"with the ended row); b.fji wants the reuse-retry sentence on every plain-spawn error after \"duplicate session\"")
-	adviceAssertPhrase(t, err, "a retry with this id uses the reuse opt-in (reuse_finished) once the name is free")
+			if id == "" {
+				id = e.rec.SocketCallsOf(tmux.CallCreate)[0].InstanceID
+				p.ClaudeInstanceID = id // "a retry with this id": the minted id the description names
+			}
+			want := `tmux: new-session failed: instance ` + id + `: tmux session "` + advSpawnHeldName +
+				`": tmux session creation failed: duplicate session; ` + advice
+			if err.Error() != want {
+				t.Errorf("description %q\nwant exactly %q", err.Error(), want)
+			}
+			if tc.arrange == nil {
+				adviceAssertManifest(t, "spawn", "reuse-finished", "after a held-name refusal (duplicate session) the row is already ended "+
+					"unless the error says otherwise, so the retry's lookup decides it at once")
+				if row, gerr := e.c.Get(id); gerr != nil || row.State != store.StateEnded {
+					t.Fatalf("Get(%s) = state %q, %v; want ended", id, row.State, gerr)
+				}
+			} else {
+				adviceAwaitFinished(t, e.c, e.clock, id, nil)
+			}
+			advSpawnReuseAfterFinished(t, e, id, p, nil)
+		})
+	}
 }
 
 // TestAdviceFollow_A7_HeldConflictHumanEndsThenReuse: A7 "ending the session is a human's decision, ..." / "a human must look, ..." and spawn's
@@ -312,15 +406,11 @@ func TestAdviceFollow_A7_HeldConflictHumanEndsThenReuse(t *testing.T) {
 				e.rec.SeedSessions(e.socket, heldSession(advSpawnHeldName, "$4", tmux.Label{}, false))
 			}
 			p := advSpawnParams(t, id, advSpawnHeldName)
-			if !t.Run("trigger", func(t *testing.T) { // an injected write failure is removed when it ends
-				if tc.failEnd {
-					storefix.InjectWriteFailure(t, e.dbPath, storefix.WriteFailReuseRestore, id)
-				}
-				_, err := e.c.Spawn(p)
-				adviceAssertAdvice(t, err, api.ErrTmuxSessionConflict, tc.phrase)
-			}) {
-				t.FailNow()
+			var arrange func(*testing.T, heldEnv, string)
+			if tc.failEnd {
+				arrange = advSpawnEndWriteFails
 			}
+			advSpawnHeldTrigger(t, e, id, p, arrange, api.ErrTmuxSessionConflict, tc.phrase)
 			adviceAssertManifest(t, "spawn", "", "a leftover of an earlier life, or a session with no valid instance id, is a human's to end "+
 				`(see the README's "Operator actions"); then, if the refusal was for a held name, spawn the id again with --reuse-finished`)
 			advSpawnFreeName(t, e)

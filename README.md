@@ -544,7 +544,9 @@ the class of every tmux error, is in
   session to a human ([Operator actions](#operator-actions)); never end it
   yourself.
 - After a timed-out `spawn` or `resume` the row stays `pending`: do not
-  retry until `get` shows it `ended` or `missing`.
+  retry until `get` shows it `ended` or `missing`. Then retry a `spawn`
+  with `--claude-instance-id` by adding `--reuse-finished`; without it the
+  spawn collides with the finished row.
 - `pending` means a launch is in progress; `status`, `get` and `list` show
   its start (`launch_started_at`). `kill` on a `pending` row aborts a stuck
   launch.

@@ -131,7 +131,7 @@ func runSpawnWithReuseStore(s *store.Store, collisions spawn.CollisionChecker, r
 			return SpawnResult{}, err
 		}
 	}
-	id, preTrust, err := spawn.Launch(s, t, pc, r, cfg, now, lg)
+	id, preTrust, err := spawn.Launch(s, t, pc, r, idCheck == spawn.IDMinted, cfg, now, lg)
 	var held *spawn.HeldNameError
 	if errors.As(err, &held) {
 		return SpawnResult{}, spawnHeldName(s, t, pc, now, lg, held)
@@ -180,7 +180,9 @@ func hasControlChar(id string) bool {
 // Spawn returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may
 // have been created and the new row stays pending; do not retry until get
 // shows the row ended or missing, since a retried spawn without an explicit
-// id would start a second agent.
+// id would start a second agent. Then retry an explicit ClaudeInstanceID with
+// ReuseFinished: without it, the spawn collides with the id's finished row
+// (ErrInstanceIdCollision).
 //
 // With an explicit ClaudeInstanceID that has no row, Spawn first makes one
 // tmux lookup for a session of this agent-director store still labelled with
@@ -248,7 +250,9 @@ func hasControlChar(id string) bool {
 //     session could not be labelled; the row stays pending. Also, after
 //     "duplicate session", the session holding the requested name was gone
 //     by the re-lookup; the new row is ended (the description says if it
-//     could not be). With the reuse opt-in: after the row was reset, session
+//     could not be), and a retry of the id (the description names it) uses
+//     ReuseFinished once get shows the row ended or missing and the name is
+//     free. With the reuse opt-in: after the row was reset, session
 //     creation failed, a created session could not be labelled, or after
 //     "duplicate session" no session held the requested name when it was
 //     looked up again; then the row is restored (the description says what
@@ -256,15 +260,18 @@ func hasControlChar(id string) bool {
 //   - ErrTmuxUnresponsive: the session-creating call timed out or gave a
 //     reply that does not parse with a non-zero exit: the session may have
 //     been created and the row stays pending; do not retry until get shows
-//     the row ended or missing. Also, with an explicit ClaudeInstanceID
-//     that has no row, the label scan's lookup could not be read; nothing
-//     was written. Also, after "duplicate session", the re-lookup of the
-//     requested name could not be read; the new row is ended (the
-//     description says if it could not be). With the reuse opt-in: at the
-//     lookup, before anything is changed, the row's own session or agent
-//     appears to still be stopping (the row ended less than the stopping
-//     window ago) or still starting (younger than the starting-session
-//     bound), tmux's answer could not be read, or more than one session's
+//     the row ended or missing, then retry an explicit ClaudeInstanceID with
+//     ReuseFinished. Also, with an explicit ClaudeInstanceID that has no
+//     row, the label scan's lookup could not be read; nothing was written.
+//     Also, after "duplicate session", the re-lookup of the requested name
+//     could not be read; the new row is ended (the description says if it
+//     could not be), and a retry of the id (the description names it) uses
+//     ReuseFinished once get shows the row ended or missing and the name is
+//     free. With the reuse opt-in: at the lookup, before anything is
+//     changed, the row's own session or agent appears to still be stopping
+//     (the row ended less than the stopping window ago) or still starting
+//     (younger than the starting-session bound), tmux's answer could not be
+//     read, or more than one session's
 //     name matches the requested name; retry later. After "duplicate
 //     session", the same cases at the re-lookup, then the row is restored.
 //     Or the session-creating call timed out after the row was reset: the

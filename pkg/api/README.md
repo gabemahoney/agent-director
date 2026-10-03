@@ -114,7 +114,9 @@ godoc). Most-likely sentinel errors:
 `ErrCwdNotFound`, `ErrCwdNotADirectory`, `ErrRelayModeInvalid`,
 `ErrTmuxNotAvailable`, `ErrTmuxSessionCreate`, `ErrTmuxUnresponsive` (the
 session-creating call timed out, here or in `Resume`: the row stays
-`pending`; do not retry until `Get` shows it `ended` or `missing`) and `ErrTmuxSessionConflict`
+`pending`; do not retry until `Get` shows it `ended` or `missing`; then
+`Spawn` an explicit `ClaudeInstanceID` again with `ReuseFinished`, since
+without it the spawn collides with the id's finished row) and `ErrTmuxSessionConflict`
 (an explicit id with no row whose labelled session from an earlier life
 still runs, or conflicting labels; nothing is written. Also a held name:
 tmux answered "duplicate session" and the requested name is held by a
@@ -128,7 +130,11 @@ After "duplicate session" the new row is ended too when the holding
 session is gone by the re-lookup (`ErrTmuxSessionCreate`), the re-lookup
 cannot be read (`ErrTmuxUnresponsive`), or tmux cannot be run or the
 re-lookup found a different tmux server (`ErrTmuxNotAvailable`); in every
-case the error says if the new row was not ended.
+case the error says if the new row was not ended. The
+`ErrTmuxSessionCreate` and `ErrTmuxUnresponsive` errors also name the
+instance id (a minted one included) and the retry: that id with
+`ReuseFinished` once the name is free (and, if the row was not ended,
+once `Get` shows it `ended` or `missing`).
 The holding session is never ended, read or typed into.
 See `(*Client).Spawn` godoc for the full enumeration.
 

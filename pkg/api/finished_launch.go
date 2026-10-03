@@ -243,7 +243,8 @@ func (l finishedLaunch) restore(launchErr func(restored string) error) (restoreR
 //     (heldExaminedRow: req's name to quote, the examined ended_at, pid and
 //     session-id presence, the configured bound and window, the clock
 //     reading of step 1), with the restore's sentence as the row sentence
-//     and retryLater as the retry sentence, so the ambiguous holder's
+//     and retryLater as the unanswered re-lookup's retry sentence (none for
+//     a vanished holder, heldRetrySentences), so the ambiguous holder's
 //     ErrTmuxUnresponsive ends with "retry later" as the pre-launch one does
 //     (SR-18.1);
 //  4. writes the re-lookup's ad.provenance.disagree records (emitDisagree,
@@ -272,7 +273,7 @@ func (l finishedLaunch) heldName(req spawn.CreateRequest) error {
 	var holder heldNameHolder
 	restored, err := l.restore(func(sentence string) error {
 		var herr error
-		holder, herr = heldNameOutcome(res, req.InstanceID, req.Name, req.Socket, sentence, retryLater, &examined)
+		holder, herr = heldNameOutcome(res, req.InstanceID, req.Name, req.Socket, sentence, heldRetrySentences{Unanswered: retryLater}, &examined)
 		return herr
 	})
 

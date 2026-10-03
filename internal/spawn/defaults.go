@@ -68,7 +68,8 @@ func PreCheckReadError(err error) error {
 // collision check (the only validation step that needs DB access). The
 // function takes a CollisionChecker rather than the full store so tests
 // can drive it without spinning up SQLite. It returns what it found for the
-// instance id, which tells the caller whether the label scan applies.
+// instance id, which tells the caller whether the label scan applies and
+// whether to pass Launch minted (IDMinted).
 //
 // Behavior:
 //   - ClaudeInstanceID ← UUID4 if absent (IDMinted). UUID4 from

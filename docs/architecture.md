@@ -62,7 +62,7 @@ still holds: nothing in `internal/` imports `pkg/api`.
 | `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. The `Catalog` is consumed by `cmd/agent-director`'s envelope writer and `internal/mcp`'s `classifyDispatchError`. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
 | `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. `classifyDispatchError` delegates to `errnames.Classify`. | stdlib; `pkg/api`; `pkg/api/manifest`; `pkg/api/errnames`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
 | `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
-| `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). `ApplyDefaults` makes the collision pre-check's one `SpawnState` read and returns an `IDCheck`. Builds env maps and synthesizes `--settings` JSON. Plain spawn's `Launch` resolves the launch socket and mints the launch token (`launchid.go`: `ResolveLaunchSocket`, `ResolveScanSocket`, `NewLaunchToken`, and `ResolveQuerySocket` for a query on a row that records no socket), inserts the `pending` row with launch start, token and socket, creates and labels the session through the shared create-and-label step (`createlabel.go`: `LaunchTmux`, `CreateRequest`, `CreateAndLabel`, `CreateOutcome` / `CreateKind`), maps its failures in one place (`launch_errors.go`: `plainSpawnCreateError`, built from the exported description builders shared by every launch verb, `TmuxUnavailableError` (also the label scan's), `LaunchTimeoutError`, `UnlabelledSessionError`, `CreateFailedError` and the row sentence `RowStaysPending`; "duplicate session" is no verb error there but a `*HeldNameError` handed to `pkg/api`'s held-name path) and makes the conditional identity write (`RecordLaunchIdentity`, shared with resume and reuse). The one composition step for a resolved request is `ComposeLaunch` (`compose.go`): the `CreateRequest` and the row's request fields (`ComposedLaunch{Create, Row}`), with no write, tmux call or I/O, shared by plain spawn's insert and reuse's reset; the parent id comes from `ParentIDFromEnv()` (the caller's `AGENT_DIRECTOR_INSTANCE_ID`), the one derivation used by the insert, the reset and resume's move. Every launch pre-trusts its folder through the one shared step `PreTrust` (`pretrust.go`), which plain spawn runs before its insert, reuse before its reset and resume before its move to `pending`; see [Workspace-trust pre-write](#workspace-trust-pre-write). Resume's launch uses the same pieces: `ResolveRowLaunchSocket` (the row's recorded socket), `ComposeRelaunch` (the `CreateRequest`, with no tmux call or write) and `Relaunch` (`CreateAndLabel` on that request). Reuse's launch uses `ResolveRowLaunchSocket`, `ComposeLaunch` and `CreateAndLabel`. The clock and the start-time reader are passed in. See [Launch identity](#launch-identity) and [Reuse of a finished id](#reuse-of-a-finished-id). | stdlib; `internal/config`; `internal/store`; `internal/tmux`; `github.com/google/uuid` for UUID4 minting. | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
+| `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). `ApplyDefaults` makes the collision pre-check's one `SpawnState` read and returns an `IDCheck`. Builds env maps and synthesizes `--settings` JSON. Plain spawn's `Launch` resolves the launch socket and mints the launch token (`launchid.go`: `ResolveLaunchSocket`, `ResolveScanSocket`, `NewLaunchToken`, and `ResolveQuerySocket` for a query on a row that records no socket), inserts the `pending` row with launch start, token and socket, creates and labels the session through the shared create-and-label step (`createlabel.go`: `LaunchTmux`, `CreateRequest`, `CreateAndLabel`, `CreateOutcome` / `CreateKind`), maps its failures in one place (`launch_errors.go`: `plainSpawnCreateError`, built from the exported description builders shared by every launch verb, `TmuxUnavailableError` (also the label scan's), `LaunchTimeoutError`, `UnlabelledSessionError`, `CreateFailedError` (with `InstanceCreateFailedError`, its form led by the instance id, for plain spawn's held name whose holder vanished) and the row sentence `RowStaysPending`, with the retry sentences `LaunchRetryRule`, `ReuseRetry` and `PlainSpawnCollides` and `ReuseOptIn`, the reuse opt-in in every surface's spelling; "duplicate session" is no verb error there but a `*HeldNameError` handed to `pkg/api`'s held-name path) and makes the conditional identity write (`RecordLaunchIdentity`, shared with resume and reuse). The one composition step for a resolved request is `ComposeLaunch` (`compose.go`): the `CreateRequest` and the row's request fields (`ComposedLaunch{Create, Row}`), with no write, tmux call or I/O, shared by plain spawn's insert and reuse's reset; the parent id comes from `ParentIDFromEnv()` (the caller's `AGENT_DIRECTOR_INSTANCE_ID`), the one derivation used by the insert, the reset and resume's move. Every launch pre-trusts its folder through the one shared step `PreTrust` (`pretrust.go`), which plain spawn runs before its insert, reuse before its reset and resume before its move to `pending`; see [Workspace-trust pre-write](#workspace-trust-pre-write). Resume's launch uses the same pieces: `ResolveRowLaunchSocket` (the row's recorded socket), `ComposeRelaunch` (the `CreateRequest`, with no tmux call or write) and `Relaunch` (`CreateAndLabel` on that request). Reuse's launch uses `ResolveRowLaunchSocket`, `ComposeLaunch` and `CreateAndLabel`. The clock and the start-time reader are passed in. See [Launch identity](#launch-identity) and [Reuse of a finished id](#reuse-of-a-finished-id). | stdlib; `internal/config`; `internal/store`; `internal/tmux`; `github.com/google/uuid` for UUID4 minting. | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
 | `internal/tmux` | Thin client over the tmux binary, built only by `New(binary, Timeouts)` (`""` = tmux on `PATH`). **Phase 1 call set (SR-2.1, Appendix F.1)**, every call taking the socket: `Lookup` (the one-invocation lookup: session listing with labels plus the three `@ad_owner` scope reads), `ListPanes` (`list-panes -a`), `KillPane` (by pane id), `KillSessionID` (by session id), `SendKeysPane` (by pane id: the text call `send-keys -t <pane id> -l -- <text>`, then an optional separate `send-keys -t <pane id> Enter`; the `--` makes a text starting with `-` literal, never read as a send-keys flag; a text ending in `;` is typed whole, by the argv escape below), `CapturePaneID` (by pane id), `SetLabel` (label by id: the session label by session id and the pane label by pane id) and `NewSession` (the create with its chained `@ad_owner` and `@ad_pane` labels). **Label form (SR-3.4, SR-3.5):** `ad1 <token> <$N> <instance id> <store id>`, five fields. The store id is the writing store's `store_meta.store_id`, which callers pass from `(*store.Store).StoreID()`; it is the last field, so the instance id is everything between the third and the last space and may contain spaces. `NewSession` and `SetLabel` both take the token, the instance id and the store id; the chain passes only the instance id through the format escape below. **Pane label (SR-2.1, SR-3.5):** every created pane carries the per-pane user option `@ad_pane` = `<token> <pane id>`, so a launch whose create reply was lost can later find its own pane by token, whatever the base-index or window layout. The create sets it with a second chained step, `; set-option -p -F -t =<name>: @ad_pane '<token> #{pane_id}'`, after the `@ad_owner` step; each `;` is its own argv element, and a name for which `NeedsLabelByID` holds gets neither chained step. A failure of either chained step is the create's `FailLabel` (tmux stops the chain at the first failing step). `SetLabel(socket, sessionID, paneID, token, instanceID, storeID)` sets both labels in one invocation, `set-option -t <$N> @ad_owner '<label>' ; set-option -p -t <%N> @ad_pane '<token> <%N>'`, with the session and pane ids from the create reply; a failure may leave the session labelled and its pane not. Only the new session's one pane is labelled: a pane split from it later has no value. **Pane listing:** `ListPanes` reads `#{@ad_pane}` as the sixth and last field, the value being everything after the fifth tab, so a tab inside it cannot shift the other fields. `Pane.AdPane` is the token only when the value is exactly `<16 lowercase hex token> <pane id>` and that pane id equals the line's own `%N` (`classifyPaneLabel`); anything else gives `""`, so a window, session, global or server value borrowed through the format, which names another pane or none, never counts (the scope guard of SR-3.6). Caveat: on tmux 3.3a a server-scope `@ad_pane` (`set-option -s`) is listed on every pane in place of its own value, so while one exists only the pane that value names can report a token and every other pane reads `""`; no other pane is matched, but a pane reading `""` then does not show that its label is gone. The raw value never leaves the client, and a malformed listing's `CallError.FirstLine` is its first line cut before the pane label field (`paneListingFirstLine`). The lookup does not read `@ad_pane`. `kill`'s adoption of a lost create reply (SR-3.6) is its first reader; it also exists for the leftover-pane check (SR-3.7) and the no-pane row check (SR-11.3). A value in any other form, a four-field one included, parses as no label (`LabelNone`), except that a four-field value whose instance id ends in a space and 16 lowercase hex reads as a shorter id plus that word as its store id; and `Label.StoreID` is set only on a valid label. Typed results and failures: `Call`, `Failure`, `CallError`, `LookupAnswer`, `Session`, `Label` / `LabelKind`, `CreateReply`, `Pane`, `Timeouts`. **Argv escape (`invoke.go`):** tmux splits its argv into commands at every element ending in `;`, before any option parsing and so even after `--`: the `;` is dropped and the element ends its command, so a caller value ending in `;` followed by more elements would run those as a tmux command of the caller's choosing (`kill-server`, `run-shell <shell command>`). An element ending in `\;` is instead one argument with that backslash removed. `commandArgv(cmds ...[]string)` builds every call's argv after `-u -S <socket>` from a list of commands: a standalone `;` only between commands, and every element of every command passed through `escapeFinalSemicolon` (one backslash before a final `;`). So every value (session name, cwd, `-e` entry, the agent's command with its claude arguments at spawn and at resume, send-keys text, label values, targets) reaches its tmux command as one argument, a final `;` included, and never ends that command. The escape covers only this split: what the command then does with the argument is unchanged (format expansion is the format escape's job, below). The chain target `=<name>:` ends in `:`, so it is never escaped, and tmux matches it against the stored, unescaped name. The socket is not escaped: tmux's own option parsing consumes `-S <socket>` before the split. `HasSession` builds its argv the same way. **Must use:** every tmux call composes its argv through `commandArgv`, socket-taking calls by passing one `[]string` per command to `invoke` (`runAction`, `runData`); never put a `;` separator or a value into a tmux argv by hand. **Format escape (`create.go`):** tmux expands formats in some arguments before using them: `new-session`'s `-c` cwd (twice, by the command and again at the pane spawn, both times from the raw argument), its `-s` name, and every `set-option -F` value. In a format, `#(<cmd>)` runs `<cmd>` through the shell on the tmux server, and `#{…}` and aliases such as `#S` are replaced, so a raw cwd holding them would run a command, or start the agent in another directory, at spawn and on every resume. `escapeFormat(text)` returns text that expands back to exactly itself: each run of `#` is doubled (`##` expands to `#`), except a run directly before `[`, which tmux copies through unchanged as a style, so doubling it would add `#`. `createCommands` sends `-c` as `escapeFormat(cwd)` and the `@ad_owner` value's instance id through it, so spawn and resume start the agent in the cwd exactly as given and run nothing in it; the cwd stored on the row and reported by agent-director is the unescaped one. The two escapes compose: `escapeFormat` adds or removes no `;`, and tmux drops the argv escape's backslash before it expands the format, so a cwd `/a#;` is sent as `/a##\;` and expands to `/a#;`. Not escaped: the `-s` name, which never holds `#` (spawn refuses one, and a default name keeps only `[A-Za-z0-9_-]`); the `-e` entries and the agent's command, which tmux does not expand; and the client's own fixed formats (`#{session_id}`, `#{pane_id}`, the reply and listing formats). **Must use:** every caller-controlled value in a tmux argument that tmux format-expands goes through `escapeFormat`; never double `#` by hand. Mechanics: every call runs `-u -S <socket>` first; targets are ids only (never a name or pattern); each call class (query, action, create) has its own timeout, plus the pipe-close wait (`Timeouts.WaitDelay`); data is parsed only from standard output of an exit-0 call; replies are recognised only from the first line of standard error; the client's environment has every `AGENT_DIRECTOR_*` variable removed. Socket-taking calls fail only with `*CallError`. Labels reach callers only classified (the raw value never leaves the client) and recognised replies only as a `Failure`; the one exception is an unrecognised reply, whose first line (trimmed, at most 200 bytes) is carried in `CallError.FirstLine`. **Socket resolution (RN-5):** `ResolveSocket(create)` resolves the socket as tmux does (`TMUX`, then `TMUX_TMPDIR`, then `/tmp`, with tmux's per-user directory checks) and `EnsureSocketDir(socket)` creates only a missing per-user directory; refusals are `*SocketDirError` (with `SocketDirReason`), matching `ErrTmuxNotAvailable`. **Must use** `tmux.NeedsLabelByID(name)` to decide whether a session name (one containing `$` or `\`) must be labelled by id rather than by the chain; never re-implement that test. The client receives its timeouts and pipe-close wait from `pkg/api` at construction, never from `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); the package defines no defaults. The runner seam types (`Invocation`, `RunStatus`, `RunResult`, `Runner`) are exported for replay tests; tests install a runner only through the test-only `NewWithRunner` in `export_test.go`. The one name-based method left is `HasSession`; the name-based kill, send and capture are removed (every verb targets ids only). `HasSession` is kept on the client and on `api.TmuxClient` and matches by prefix; no verb uses it, and none may (`resume` judges its row with the lookup). `StripANSI` post-processes captures. **Shared lookup (SR-3.3, SR-3.4, SR-3.10, Appendix F.2):** `Lookup` / `Classify` in `lookup.go`, `lookup_class.go`, `lookup_holder.go` and `lookup_server.go` turn one lookup answer and a row's `Launch` into a verdict; see [Shared tmux lookup](#shared-tmux-lookup). Beside it: `unusable.go` (the unusable-name guard `Unusable`, and `RewrittenIn`), `agent_process.go` (agent-process selection `SelectAgentProcess`, judgement `JudgeProcess` and `KnownStartTime`), `pane_token.go` (`PaneByToken`, a pane found by its `@ad_pane` token), `sweep.go` (the multi-socket sweep `Sweep`, built by `NewSweep`, under one tmux budget) and `starting_session.go` (the session-age helper `SessionAge` and the starting-session rule `StartingSession`; see [Starting-session rule](#starting-session-rule-starting_sessiongo)). | stdlib (`bytes`, `context`, `errors`, `fmt`, `io/fs`, `os`, `os/exec`, `path/filepath`, `regexp`, `slices`, `sort`, `strconv`, `strings`, `syscall`, `time`, `unicode`, `unicode/utf8`). | `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); `internal/probe` (the lookup's `ProcChecker` is satisfied structurally); template and store packages; shell processes (`/bin/sh`); anything other than direct `exec.Command`. |
 | `internal/hook` | Reads payload JSON from stdin, classifies per SRD §5.2, and writes the row only through the gated store writes: a hook applies only when its parent process (`getppid()` and that pid's start time, captured once at entry) is the row's recorded pane process; otherwise it changes nothing and writes one `ad.hook.ignored` (SR-22.9; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). A subagent's or in-process teammate's SessionStart or SessionEnd (non-empty `agent_id`) is decided from the payload before any write and ignored as `subagent_event`. A SessionStart that arrives before its launch's identity write waits for it until the launch start plus the pending grace period or 540 s after it began waiting (`sessionStartWaitCap`), whichever comes first, re-reading the row every 250 ms on the injected clock, before its final gated write (`recordSessionStart`, `waitForLaunchIdentity` in `handler.go`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `HandleNoExecForm` (`noexec.go`) is the no-verb run's side: it takes the raw stdin bytes, writes `ad.hook.ignored` `no_exec_form` when they are a hook payload, and opens no store. Exits 0 (state-tracking fail-open). | stdlib; `internal/store`; `internal/trail`; `internal/config` (the `config.Relay` settings type only; the cmd-side wrapper loads config); `github.com/google/uuid`. The parent-process readers arrive as `HandleConfig.ParentPID` / `ParentProc`, and the wait's clock and grace period as `HandleConfig.Now` and `HandleConfig.PendingGrace` (a `time.Duration`, so the package reads no `[tmux]` setting), all wired by `cmd/agent-director`; the wait sleeps on `HandleConfig.Clock` (the relay poll's `PollClock`). | `internal/tmux`; `internal/spawn`; `internal/probe` (no tmux call and no ancestry walk on the hook path). |
 
@@ -2442,8 +2442,9 @@ For an explicit `claude_instance_id`, `spawn.ApplyDefaults`
 `CollisionChecker`: `SpawnState(id)` returns the row's state, or
 `exists` false when there is no row. The one read tells no row, a live
 row and a finished row apart. `ApplyDefaults` returns an `IDCheck`:
-`IDMinted` (no id supplied, nothing read), `IDNoRow` (the label scan
-runs, see [Launch identity](#launch-identity)), `IDFinishedRow` (not
+`IDMinted` (no id supplied, nothing read; `runSpawn` derives `Launch`'s
+`minted` from it), `IDNoRow` (the label scan runs; for both, see
+[Launch identity](#launch-identity)), `IDFinishedRow` (not
 scanned; without the reuse opt-in the insert collides, with it the
 [reuse path](#reuse-of-a-finished-id) runs) or `IDNotChecked` (no
 checker given). A read error is never "no row", whatever it wraps.
@@ -2671,6 +2672,21 @@ the session may have been created, the row stays `pending`, and the
 caller must not retry until `get` shows the row `ended` or `missing`. A
 retried spawn without an explicit id would start a second agent.
 
+For a caller-supplied id the description then names the retry that
+works (b.1qq): once the row is `ended` or `missing`, a plain spawn of the
+id collides with it (`ErrInstanceIdCollision`), so it ends "...; do not
+retry until get shows the row ended or missing; then a retry with this
+id uses the reuse opt-in (--reuse-finished on the CLI, reuse-finished
+over MCP, reuse_finished in TypeScript, ReuseFinished in Go), since a
+plain spawn of the id now collides". A minted id's description ends
+with the launch-timeout rule alone, since its retry mints a new id.
+`Launch` takes `minted` after the resolved request and passes it to
+`plainSpawnCreateError`, which picks the ending by it and by nothing
+else. `runSpawn` passes `idCheck == spawn.IDMinted`, so the `IDCheck`
+that `ApplyDefaults` returns is its only source; `minted` changes no
+behaviour. Resume's and reuse's timeouts end with the rule alone
+(`LaunchTimeoutError`): their retry of the same row works.
+
 **Held name** (SR-9.4, SR-1.4, SR-3.10, SR-5.8, SR-14, SR-22.3; PO
 2026-09-27 HELD and REVIEW). "duplicate session" proves the create made
 nothing. `Launch` returns a `*spawn.HeldNameError` at once, with no
@@ -2691,8 +2707,9 @@ launch start, and never reaches a caller. `runSpawn` hands it to
    and the requested name as the holder name.
 3. Builds the classified error with `heldNameOutcome`
    (`pkg/api/held_name.go`), carrying exactly one row sentence and, for
-   `ErrTmuxUnresponsive`, the retry sentence the end write's result
-   picks (below).
+   `ErrTmuxUnresponsive` and for the `ErrTmuxSessionCreate` of a holder
+   that vanished, the retry sentence the end write's result picks
+   (below).
 4. Writes the lookup's `ad.provenance.disagree` records (reason
    `scope_value` is the only one this lookup can give; `action` is the
    row result), then exactly one `ad.launch.name_held` (source
@@ -2719,25 +2736,40 @@ The re-lookup's outcome gives the error (each wraps one sentinel):
 | One holder, another store's label (WD 2026-09-29 STORE) | `ErrTmuxSessionConflict`, "another agent-director store": that store's agent, must not be ended; no pointer |
 | One holder, no valid label | `ErrTmuxSessionConflict`, "no valid instance id"; points to "Operator actions" |
 | Can't tell, `provenance_conflict` | `ErrTmuxSessionConflict`, "conflicting labels" (no label claim) |
-| No holder: the session vanished before the re-lookup | `ErrTmuxSessionCreate` (LAUNCH FAILURE), "session creation failed: duplicate session", naming the session |
+| No holder: the session vanished before the re-lookup | `ErrTmuxSessionCreate` (LAUNCH FAILURE), "session creation failed: duplicate session", led by "instance <id>: " (the new row's id, a minted one included) and naming the session, with the retry sentence below |
 | More than one listing entry matches the name, or Can't tell, unreadable (a timeout or an unrecognised reply) | `ErrTmuxUnresponsive` (UNAVAILABLE), with the retry sentence below in place of "retry later" |
 | Can't tell, tmux unavailable (socket permission included) | `ErrTmuxNotAvailable` (ENVIRONMENT) |
 
 `ErrTmuxUnresponsive` here never says "retry later" (WD 2026-09-30d
 (a), SR-1.4 row "Every error a plain spawn returns after 'duplicate
-session'"): a plain spawn of the same id cannot simply be retried. Its
-retry sentence comes from the end write's result:
+session'"): a plain spawn of the same id cannot simply be retried, since
+once its row is finished a plain spawn of the id collides with it
+(`ErrInstanceIdCollision`). It, and the `ErrTmuxSessionCreate` of a
+holder that vanished (b.1qq), carry a retry sentence that the end
+write's result picks (`heldRetrySentences{Unanswered, Vanished}`):
 
-| End write | Retry sentence |
-|---|---|
-| Applied (`ended`) | "a retry with this id uses the reuse opt-in (reuse_finished) once the name is free, since a plain spawn of the id now collides" (`heldRetryReuse`) |
-| Not applied or store error (`left_changed`, `still_pending`) | "do not retry until get shows the row ended or missing" (`heldRetryWait`, the launch-timeout rule) |
+| End write | `ErrTmuxUnresponsive` (`Unanswered`) | `ErrTmuxSessionCreate`, holder vanished (`Vanished`) |
+|---|---|---|
+| Applied (`ended`) | "a retry with this id uses the reuse opt-in (reuse_finished) once the name is free, since a plain spawn of the id now collides" (`heldRetryReuse`) | "a retry with this id uses the reuse opt-in (--reuse-finished on the CLI, reuse-finished over MCP, reuse_finished in TypeScript, ReuseFinished in Go) once the name is free, since a plain spawn of the id now collides" (`heldRetryFree`) |
+| Not applied or store error (`left_changed`, `still_pending`) | "do not retry until get shows the row ended or missing; then " followed by `heldRetryFree`'s sentence (`heldRetryWait`) | the same (`heldRetryWait`) |
 
-For a timeout or an unrecognised reply it ends the shared Can't tell
-text in place of "retry later"; for more than one matching entry it
-follows the row sentence, before the `list --tmux-session-name` hint.
-The conflict, `ErrTmuxNotAvailable` and `ErrTmuxSessionCreate` texts
-carry neither retry sentence.
+`heldRetryReuse` is the one sentence that still names the opt-in in a
+single surface's spelling (TypeScript's; b.c4u). The others name it
+through `spawn.ReuseOptIn`: `heldRetryFree` is built from
+`spawn.ReuseRetry` and `spawn.PlainSpawnCollides`, and `heldRetryWait`
+from `spawn.LaunchRetryRule` and `heldRetryFree`.
+
+For a timeout or an unrecognised reply the `Unanswered` sentence ends
+the shared Can't tell text in place of "retry later"; for more than one
+matching entry it follows the row sentence, before the
+`list --tmux-session-name` hint. The `Vanished` sentence follows the
+row sentence, and the description is then built by
+`spawn.InstanceCreateFailedError`, so it starts
+`tmux: new-session failed: instance <id>: tmux session "<name>":`. It
+names the id that the sentence's "this id" means, as the unanswered
+re-lookup's description does, so a caller whose id was minted can
+follow the retry. The conflict and `ErrTmuxNotAvailable` texts carry no
+retry sentence.
 
 Every description names the quoted requested name and, when one session
 holds it, its tmux id; a single holder's also says whether its label
@@ -2771,36 +2803,75 @@ exactly one sentinel:
 
 - `LaunchTimeoutError(ce, verb, instanceID, consequence)`:
   `ErrTmuxUnresponsive`, the launch-timeout description above, naming
-  the verb.
+  the verb and ending with `LaunchRetryRule`. Resume and reuse use it as
+  it is; `plainSpawnCreateError` goes through the unexported
+  `launchTimeoutError`, which takes the ending, to add the opted-in retry
+  for a caller-supplied id (`explicitIDTimeoutRetry`).
 - `TmuxUnavailableError(ce, socket, consequence)`: `ErrTmuxNotAvailable`.
 - `UnlabelledSessionError(outcome, name, consequence)`:
   `ErrTmuxSessionCreate` for `CreateUnlabelledEnded` /
   `CreateUnlabelledRunning`.
 - `CreateFailedError(ce, name, consequence)`: `ErrTmuxSessionCreate`
-  for every other failed create, and for a held name (plain spawn's or
-  resume's) whose holder vanished before the re-lookup.
+  for every other failed create, and for a held name (resume's or
+  reuse's) whose holder vanished before the re-lookup.
+- `InstanceCreateFailedError(ce, instanceID, name, consequence)`:
+  `CreateFailedError`'s description led by "instance <id>: ", from the
+  same format string (the unexported `createFailedError`). Plain spawn's
+  held name whose holder vanished before the re-lookup uses it: its
+  `consequence` ends with a retry sentence that refers to "this id", so
+  the description names the id, a minted one included (b.1qq).
+  `heldNameOutcome` uses it only when the verb gives a `Vanished` retry
+  sentence, which only plain spawn does.
 - `RowStaysPending` is the sentence "the row stays pending". Plain spawn
   uses it after every create failure but "duplicate session", `resume`
   after a timeout, and reuse after a timeout inside its own sentence
   `reuseRowResetStaysPending` ("the row was reset; the row stays
   pending").
+- `LaunchRetryRule` is the launch-timeout rule's sentence, "do not retry
+  until get shows the row ended or missing".
+- `ReuseOptIn` names the reuse opt-in in each surface's own spelling,
+  "the reuse opt-in (--reuse-finished on the CLI, reuse-finished over
+  MCP, reuse_finished in TypeScript, ReuseFinished in Go)", for a
+  description every surface shows: one surface's spelling does not work
+  on another (MCP silently ignores an unknown argument, and the CLI
+  refuses an unknown flag). `ReuseRetry` ("a retry with this id uses "
+  followed by `ReuseOptIn`) and its reason `PlainSpawnCollides` ("since
+  a plain spawn of the id now collides") make up the opted-in retry
+  sentence. Plain spawn's explicit-id timeout ending and `pkg/api`'s
+  held-name retry sentences (`heldRetryFree`, `heldRetryWait`) are built
+  from them.
 
 `plainSpawnCreateError` and the outcome mapping resume and reuse share
 (`finishedLaunch.outcome`, `pkg/api/finished_launch.go`) are both built
 from these.
 **Must use:** a launch verb builds its create-failure descriptions with
-these builders and never re-spells their text.
+these builders and never re-spells their text. A failed-create
+description whose consequence refers to "this id" is built with
+`InstanceCreateFailedError`, never by adding the instance id to
+`CreateFailedError`'s text or by a second format string. An error
+description that names the reuse opt-in builds it from
+`spawn.ReuseOptIn` (directly or through `ReuseRetry`), never writing one
+surface's spelling alone (`heldRetryReuse` is the one exception left,
+b.c4u).
 
 **Shared held-name components** (`pkg/api`):
 
 - `heldNameOutcome(res, instanceID, name, socket, rowSentence, retry,
   examined)` (`held_name.go`) classifies a re-lookup's holder after
   "duplicate session" and builds the SR-1.4 description around a
-  caller-supplied row sentence and retry sentence, returning the holder
+  caller-supplied row sentence and retry sentences, returning the holder
   facts (`heldNameHolder`) the trail record needs. It is verb-agnostic:
-  `retry` `""` keeps the default (unreadable ends with "retry later";
-  the ambiguous holder gets no retry sentence); resume passes
-  `retryLater`, so its ambiguous holder also ends with "retry later".
+  `retry` is a `heldRetrySentences{Unanswered, Vanished}`. `Unanswered`
+  follows the `ErrTmuxUnresponsive` errors, `""` keeping the default
+  (unreadable ends with "retry later"; the ambiguous holder gets no
+  retry sentence); `Vanished` follows the row sentence of a vanished
+  holder's `ErrTmuxSessionCreate`, `""` meaning none. With `Vanished`
+  set the description goes through `spawn.InstanceCreateFailedError`
+  and so names the instance id; with it empty it goes through
+  `spawn.CreateFailedError` and does not. Resume and reuse pass
+  `Unanswered: retryLater`, so their ambiguous holder also ends with
+  "retry later", and no `Vanished`, so their vanished holder's text is
+  unchanged.
   `examined` is nil for plain spawn, whose row did not exist before its
   create. A verb whose row existed before its create (resume and reuse,
   through `finishedLaunch.heldName`) passes a `heldExaminedRow`: the starting-session facts of the
@@ -2819,10 +2890,12 @@ these builders and never re-spells their text.
   `heldBeforeLaunch` ("already exists") at the pre-launch lookup of
   resume and reuse (reuse's new-name pre-check).
   Plain spawn's three row sentences (`heldRowEnded`, `heldRowLeftAsIs`,
-  `heldRowStaysPending`) and two retry sentences (`heldRetryReuse`,
-  `heldRetryWait`) are the unexported constants beside it, the single
-  source of that wording; `spawnHeldName` picks the retry sentence from
-  the end write's result. Resume's and reuse's row sentence is their
+  `heldRowStaysPending`) and three retry sentences (`heldRetryReuse`,
+  `heldRetryFree`, `heldRetryWait`) are the unexported constants beside
+  it, the single source of that wording; `spawnHeldName` picks the retry
+  sentences from the end write's result (applied: `Unanswered`
+  `heldRetryReuse` and `Vanished` `heldRetryFree`; otherwise
+  `heldRetryWait` for both). Resume's and reuse's row sentence is their
   restore's: `restoreResultOf` (`finished_launch.go`) is the one mapping
   from the restore's outcome to the sentence (`restoreSentence*`, and the
   changed and removed sentences built from the verb's launch write:
@@ -5187,7 +5260,7 @@ SR-8.5, SR-13.2 path (ii)), in this order:
 | One holder with the current label (the row's own session) | The [starting-session rule](#the-starting-session-rule-as-resume-applies-it) with the `ended_at` examined before the move: `ErrTmuxUnresponsive` "appears to still be stopping" or "appears to still be starting", retry later; else `ErrTmuxSessionConflict` "this row's own id" |
 | One holder with another instance id's, another store's or no valid label | `ErrTmuxSessionConflict` "a different instance id", "another agent-director store" or "no valid instance id", as at the pre-launch lookup, saying "already exists (duplicate session)" |
 | More than one listing entry matching the name | `ErrTmuxUnresponsive`: the holder cannot be told; retry later |
-| No holder: it vanished before the re-lookup | `ErrTmuxSessionCreate` (LAUNCH FAILURE): "session creation failed: duplicate session", no session held the name when it was looked up again |
+| No holder: it vanished before the re-lookup | `ErrTmuxSessionCreate` (LAUNCH FAILURE): "session creation failed: duplicate session", no session held the name when it was looked up again (`spawn.CreateFailedError`: no "instance <id>" lead and no retry sentence, unlike plain spawn's) |
 | Can't tell, a different server | `ErrTmuxNotAvailable` |
 | Can't tell, `provenance_conflict` | `ErrTmuxSessionConflict` "conflicting labels" |
 | Can't tell, unreadable | `ErrTmuxUnresponsive`; retry later |
@@ -6336,7 +6409,13 @@ adds it here.
   session, and another agent-director store's, is never ended. The
   description says what became of the new row: ended, left as it is
   because it changed after the spawn inserted it, or still `pending`
-  after a store error.
+  after a store error. When the re-lookup could not answer
+  (`ErrTmuxUnresponsive`) or the holder had vanished
+  (`ErrTmuxSessionCreate`), it also names the instance id ("instance
+  <id>", a minted one included) and the retry of that id: the reuse
+  opt-in once the name is free, and, when the row was not ended, only
+  after `get` shows it `ended` or `missing`; a plain spawn of the id
+  collides with the finished row.
 - The own-id conflict: `ErrTmuxSessionConflict` "this row's own id" means
   the row's own session, at least the starting-session bound old, on a
   row that ended at least the stopping window ago (or the row's agent
@@ -6406,7 +6485,10 @@ adds it here.
   do not retry until `get` shows the row `ended` or `missing`. A retried
   plain spawn without an explicit id would start a second agent, and a
   retried `resume` or reuse of the `pending` row is refused and changes
-  nothing.
+  nothing. Once the row is `ended` or `missing`, a plain spawn of an
+  explicit id is retried with the reuse opt-in, since a plain spawn of
+  the id collides with the finished row (`ErrInstanceIdCollision`); its
+  timeout description says so.
 - A caller retries no more often than it needs to; for UNAVAILABLE, with
   backoff and a cap, and it alerts when the cap is reached.
 
@@ -9519,11 +9601,17 @@ package doc comment (`doc.go`, "# Description helper") says the same.
   with a `Desc*` constructor:
   - `DescInstanceIDControlChar(id)`
   - `DescPreCheckRead()`
-  - `DescLaunchTimeout(LaunchTimeout{InstanceID, Timeout, Unrecognised, RowReset})`:
+  - `DescLaunchTimeout(LaunchTimeout{InstanceID, Timeout, Unrecognised, RowReset, ExplicitSpawnID})`:
     `RowReset` is reuse's timeout (`withRowReset` in
     `descriptions_reuse.go`): it also requires "the row was reset" and
     rejects any claim of the earlier life ("nothing was changed", "the row
     was restored", "earlier life", "stays ended" and the like).
+    `ExplicitSpawnID` is a plain spawn of a caller-supplied id: it also
+    requires the opted-in retry after the launch-timeout rule, the opt-in
+    in each surface's spelling (b.1qq). A minted id's plain spawn, resume
+    and reuse leave it unset, and the case then rejects "reuse opt-in"
+    (a minted id's retry mints a new one; resume and reuse retry as they
+    are).
   - `DescCallTimeout(call, timeout)`
   - `DescUnrecognisedReply(call, firstLine)`
   - `DescUnlabelledSession(UnlabelledSession{Name, SessionID, Ended, PlainSpawn, Restore})`:
@@ -9531,7 +9619,10 @@ package doc comment (`doc.go`, "# Description helper") says the same.
     `AfterResumeRestore`), not both.
   - `DescSessionCreateFailed(SessionCreateFailed{Name, Duplicate})`: the
     create failed without creating a session. With `Duplicate` it requires
-    the quoted name and "session creation failed". Without it, the case
+    the quoted name and "session creation failed", and plain spawn's
+    `AfterHeldName` overlay also requires its retry sentence and
+    "instance <id>" (`HeldName.InstanceID`; the vanished holder, below).
+    Without it, the case
     requires no phrase, because SR-1.4 has no row for the other create
     failures, and only the forbidden forms are checked.
   - `DescTmuxNotRun()`: `ErrTmuxNotAvailable` when the tmux binary could
@@ -9548,7 +9639,8 @@ package doc comment (`doc.go`, "# Description helper") says the same.
   - `DescScanLeftover(instanceID, []DescSession{{Name, ID}})`
   - `DescConflictingLabels(ConflictingLabels{InstanceID, Scope, Sessions})`
   - `DescSpawnLaunchTimeoutRule()` (the spawn manifest's launch-timeout
-    rule; check with `AssertAgentTextCase`)
+    rule, ending with "then retry an explicit id with the reuse opt-in";
+    check with `AssertAgentTextCase`)
   - `DescSpawnScanRefusal()` (the spawn manifest's label-scan refusal;
     check with `AssertAgentTextCase`)
   - `DescLaunchStartedAtField(listRow bool)`: the `launch_started_at`
@@ -9894,10 +9986,12 @@ package doc comment (`doc.go`, "# Description helper") says the same.
       `TestCleanupGuidanceInDescriptions` (full form at `expire`, pointer
       at `kill` and `find-missing`).
   - Held name (`descriptions_held.go`, SR-1.4, SR-9.4): `HeldName{Name,
-    SessionID, Row}` gives the requested name, the holder's `$N` (empty
-    when no single holder was identified) and the end write's result as a
-    `HeldRow`: `HeldRowEnded`, `HeldRowLeftAsIs` or `HeldRowStoreError`,
-    each mapped to exactly one of the three row sentences.
+    SessionID, Row, InstanceID}` gives the requested name, the holder's
+    `$N` (empty when no single holder was identified) and the end write's
+    result as a `HeldRow`: `HeldRowEnded`, `HeldRowLeftAsIs` or
+    `HeldRowStoreError`, each mapped to exactly one of the three row
+    sentences. `InstanceID` is plain spawn's new row's id, which only the
+    vanished holder's case checks (below); the other cases ignore it.
     - `DescHeldLeftover(p)` ("left over from an earlier life", its label
       names this instance id, a human's decision, the pointer),
       `DescHeldNoValidID(p)` ("no valid instance id", the pointer),
@@ -9916,11 +10010,19 @@ package doc comment (`doc.go`, "# Description helper") says the same.
       name, the `$N` when set and the chosen row sentence, forbids the
       other two and "retry later", and makes no label claim. An
       unanswered case (`DescCallTimeout`, `DescUnrecognisedReply`,
-      `DescHeldAmbiguous`) also requires the retry guidance by `HeldRow`:
-      for `HeldRowEnded`, "reuse_finished" and "once the name is free" and
-      not the launch-timeout rule; otherwise the launch-timeout rule ("do
-      not retry until get shows the row ended or missing") and not
-      "reuse_finished". Every other case must state neither.
+      `DescHeldAmbiguous`) and the vanished holder
+      (`DescSessionCreateFailed` with `Duplicate`) also require the retry
+      guidance by `HeldRow`: for `HeldRowEnded`, the reuse opt-in and
+      "once the name is free" and not the launch-timeout rule (an
+      unanswered case's opt-in spelled "reuse_finished", the vanished
+      holder's in each surface's spelling); otherwise the launch-timeout
+      rule ("do not retry until get shows the row ended or missing")
+      followed by the opted-in retry in each surface's spelling and "once
+      the name is free" (b.1qq). Every other case must state neither.
+      The vanished holder also requires "instance " followed by
+      `HeldName.InstanceID`, the id its retry sentence's "this id" means
+      (b.1qq); with `InstanceID` empty it requires the "instance " lead
+      alone.
     - `DescSpawnHeldName()` and `DescSpawnSessionNameParam()`: spawn's
       manifest description and `tmux-session-name` parameter text on a
       held name. `DescSpawnHeldName()` forbids the three row sentences;

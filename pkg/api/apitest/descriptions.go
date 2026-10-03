@@ -52,6 +52,7 @@ type DescCase struct {
 
 	allowRetryKill bool
 	unanswered     bool
+	heldRetry      bool     // after plain spawn's "duplicate session" carries its retry sentence like an unanswered case and names the instance id (the vanished holder, DescSessionCreateFailed with Duplicate; b.1qq)
 	transient      bool     // may say "retry later" (DescStillStopping, DescStillStarting)
 	requireFold    []string // required phrases matched case-insensitively (DescUnusableNamePointer)
 }
@@ -273,12 +274,16 @@ func DescPreCheckRead() DescCase {
 // LaunchTimeout parameterises DescLaunchTimeout. Timeout is the create call's
 // effective timeout; Unrecognised is a non-zero exit with an unparseable
 // reply instead; RowReset is reuse's "the row was reset" (Epic 17;
-// DescCase.withRowReset).
+// DescCase.withRowReset); ExplicitSpawnID is a plain spawn of a
+// caller-supplied id, whose description also names the opted-in retry after
+// the launch-timeout rule (b.1qq). A minted id's plain spawn, resume and
+// reuse leave it unset.
 type LaunchTimeout struct {
-	InstanceID   string
-	Timeout      time.Duration
-	Unrecognised bool
-	RowReset     bool
+	InstanceID      string
+	Timeout         time.Duration
+	Unrecognised    bool
+	RowReset        bool
+	ExplicitSpawnID bool
 }
 
 // rowStaysPending is the row sentence of a launch failure that leaves the
@@ -296,12 +301,30 @@ const (
 	scanLeftoverWord = "left over from an earlier life"
 )
 
+// The opted-in retry a plain spawn of a caller-supplied id names after the
+// launch-timeout rule (b.1qq): in its timeout description
+// (spawnTimeoutReuseRetry, with the opt-in in each surface's spelling) and in
+// the spawn manifest text (spawnManifestReuseRetry, surface-neutral).
+const (
+	spawnTimeoutReuseRetry  = launchRetryRule + "; then a retry with this id uses " + reuseOptInEverySurface
+	spawnManifestReuseRetry = "then retry an explicit id with the reuse opt-in"
+)
+
 // DescLaunchTimeout is ErrTmuxUnresponsive for a launch whose session
-// creation timed out or gave an unrecognised reply.
+// creation timed out or gave an unrecognised reply. With ExplicitSpawnID it
+// also requires the opted-in retry after the launch-timeout rule; without it
+// (a minted id's retry mints a new one, resume and reuse retry as they are)
+// the description must not name the reuse opt-in.
 func DescLaunchTimeout(p LaunchTimeout) DescCase {
 	req := []string{
 		p.InstanceID, string(tmux.CallCreate), sessionMayExist,
 		rowStaysPending, launchRetryRule,
+	}
+	mustNot := append([]string{"nothing was done", "retry later"}, unresponsiveMustNot...)
+	if p.ExplicitSpawnID {
+		req = append(req, spawnTimeoutReuseRetry)
+	} else {
+		mustNot = append(mustNot, "reuse opt-in")
 	}
 	if p.Unrecognised {
 		req = append(req, "tmux gave a reply agent-director does not recognise")
@@ -311,7 +334,7 @@ func DescLaunchTimeout(p LaunchTimeout) DescCase {
 	return DescCase{
 		Name:    "ErrTmuxUnresponsive, launch timeout",
 		Require: req,
-		MustNot: append([]string{"nothing was done", "retry later"}, unresponsiveMustNot...),
+		MustNot: mustNot,
 	}.withRowReset(p.RowReset)
 }
 
@@ -389,15 +412,18 @@ type SessionCreateFailed struct {
 // failed; Duplicate applies that row. SR-1.4 has no row for the other create
 // failures (SR-9.4: "Any other failure: ErrTmuxSessionCreate as today"), so
 // without Duplicate the case requires no phrase and AssertDescription checks
-// only the forbidden forms. A created session that could not be labelled is
-// DescUnlabelledSession.
+// only the forbidden forms. With Duplicate, plain spawn's overlay
+// (AfterHeldName) also requires its retry sentence and the instance id
+// (HeldName.InstanceID; b.1qq). A created session
+// that could not be labelled is DescUnlabelledSession.
 func DescSessionCreateFailed(p SessionCreateFailed) DescCase {
 	if !p.Duplicate {
 		return DescCase{Name: "ErrTmuxSessionCreate, create failed"}
 	}
 	return DescCase{
-		Name:    "ErrTmuxSessionCreate, duplicate session",
-		Require: []string{strconv.Quote(p.Name), "session creation failed"},
+		Name:      "ErrTmuxSessionCreate, duplicate session",
+		Require:   []string{strconv.Quote(p.Name), "session creation failed"},
+		heldRetry: true,
 	}
 }
 
@@ -470,15 +496,16 @@ func namedSessions(sessions []DescSession) (named, unnamed []string) {
 
 // DescSpawnLaunchTimeoutRule is the launch-timeout rule as the spawn manifest
 // description states it (SR-18.1): the create is bounded, a timeout returns
-// ErrTmuxUnresponsive, the session may exist, the new row stays pending, and
-// the caller does not retry until get shows the row ended or missing. Check
-// it with AssertAgentTextCase.
+// ErrTmuxUnresponsive, the session may exist, the new row stays pending, the
+// caller does not retry until get shows the row ended or missing, and then
+// retries an explicit id with the reuse opt-in (b.1qq). Check it with
+// AssertAgentTextCase.
 func DescSpawnLaunchTimeoutRule() DescCase {
 	return DescCase{
 		Name: "spawn manifest, launch-timeout rule",
 		Require: []string{
 			"bounded by the create timeout", "ErrTmuxUnresponsive", sessionMayExist,
-			"row stays pending", launchRetryRule, "would start a second agent",
+			"row stays pending", launchRetryRule, "would start a second agent", spawnManifestReuseRetry,
 		},
 		MustNot: append([]string{"retry later"}, unresponsiveMustNot...),
 	}

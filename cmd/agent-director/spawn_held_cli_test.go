@@ -123,8 +123,8 @@ func TestSpawnCLIHeldNameClassified(t *testing.T) {
 		holder   func(storeID string) []faketmuxfix.Session
 		env      map[string]string
 		wantErr  string
-		holderID string // the holder's $N; "" when none is listed
-		desc     func(storeID string) apitest.DescCase
+		holderID string                           // the holder's $N; "" when none is listed
+		desc     func(id string) apitest.DescCase // id: the new row's
 	}{
 		{
 			name:     "no valid label",
@@ -151,9 +151,9 @@ func TestSpawnCLIHeldNameClassified(t *testing.T) {
 			holder:  func(string) []faketmuxfix.Session { return nil },
 			env:     map[string]string{faketmuxfix.EnvFailNewSessionName: heldName},
 			wantErr: "ErrTmuxSessionCreate",
-			desc: func(string) apitest.DescCase {
+			desc: func(id string) apitest.DescCase {
 				return apitest.DescSessionCreateFailed(apitest.SessionCreateFailed{Name: heldName, Duplicate: true}).
-					AfterHeldName(apitest.HeldName{Name: heldName, Row: apitest.HeldRowEnded})
+					AfterHeldName(apitest.HeldName{Name: heldName, Row: apitest.HeldRowEnded, InstanceID: id})
 			},
 		},
 	}
@@ -170,7 +170,7 @@ func TestSpawnCLIHeldNameClassified(t *testing.T) {
 				t.Errorf("err_name = %q; want %q (desc=%q)", env.ErrName, tc.wantErr, env.ErrDescription)
 			}
 			token, _, _ := launchIdentity(t, home, id)
-			apitest.AssertDescription(t, env.ErrDescription, tc.desc(storeID), token, storeID, otherID, tmuxfix.OtherToken)
+			apitest.AssertDescription(t, env.ErrDescription, tc.desc(id), token, storeID, otherID, tmuxfix.OtherToken)
 			assertHeldRowEnded(t, home, fakeDir, id)
 			assertInvocationKinds(t, home, "new-session", "list-sessions")
 			if after := (faketmuxfix.Tables{}).Read(t, socket).Sessions; !reflect.DeepEqual(after, before) {

@@ -81,7 +81,7 @@ func runCallTableSpawn(t *testing.T, _ callTableVerb, _ callTableColumn, cell ca
 
 	assertOneName(t, run.err, cell.errName)
 	_, desc := errnames.Classify(run.err)
-	p := apitest.HeldName{Name: callTableHeldName, SessionID: h.holderID, Row: apitest.HeldRowEnded}
+	p := apitest.HeldName{Name: callTableHeldName, SessionID: h.holderID, Row: apitest.HeldRowEnded, InstanceID: w.id}
 	apitest.AssertDescription(t, desc, h.desc(w, p), append(w.forbid(w.id, w.seeded), w.token, w.other)...)
 	if got := callKinds(w.rec); !reflect.DeepEqual(got, cell.calls) {
 		t.Errorf("tmux calls = %v; want %v", got, cell.calls)

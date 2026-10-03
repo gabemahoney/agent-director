@@ -34,6 +34,7 @@ type launchEnv struct {
 	logs   bytes.Buffer
 	socket string // the socket Launch resolves in this environment
 	r      Resolved
+	minted bool // Launch's minted: whether the pre-check minted r's id (default: caller-supplied)
 	cfg    config.Config
 }
 
@@ -77,9 +78,9 @@ func isolateTmux(t *testing.T) string {
 	return filepath.Join(dir, fmt.Sprintf("tmux-%d", os.Getuid()), "default")
 }
 
-// launch runs Launch on e's store, Recorder, reader, config and clock.
+// launch runs Launch on e's store, Recorder, reader, minted, config and clock.
 func (e *launchEnv) launch() (string, PreTrustOutcome, error) {
-	return Launch(e.s, e.rec, e.pc, e.r, e.cfg, e.clock.Now, log.New(&e.logs, "", 0))
+	return Launch(e.s, e.rec, e.pc, e.r, e.minted, e.cfg, e.clock.Now, log.New(&e.logs, "", 0))
 }
 
 // mustLaunch runs launch, fails the test on an error and returns the id.

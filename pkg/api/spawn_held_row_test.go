@@ -5,8 +5,9 @@ package api_test
 // competing write or a delete-and-reinsert keeps from applying, a store
 // error that leaves the row pending with one WARN line, an ended row that
 // the leftover's hooks and find-missing leave as it is, what the id answers
-// afterwards, the retry guidance of an ErrTmuxUnresponsive when the end
-// write did not apply or failed, and no end write on a path without
+// afterwards, the retry guidance of an ErrTmuxUnresponsive or a vanished
+// holder's ErrTmuxSessionCreate when the end write did not apply or failed,
+// and no end write on a path without
 // "duplicate session". It
 // uses the held-name fixture of spawn_held_test.go.
 
@@ -162,15 +163,17 @@ func TestSpawnHeldEndStoreError(t *testing.T) {
 }
 
 // TestSpawnHeldUnansweredRow: when the re-lookup cannot answer (a timeout, or
-// more than one session matching the name) and the end write did not apply
-// or failed, the ErrTmuxUnresponsive says the row's sentence and, in place
-// of "retry later", not to retry until get shows the row ended or missing,
-// never the reuse opt-in (SR-1.4; WD 2026-09-30d (a)).
+// more than one session matching the name) or the holder vanished, and the
+// end write did not apply or failed, the error says the row's sentence and,
+// in place of "retry later", not to retry until get shows the row ended or
+// missing, then the opted-in retry once the name is free (SR-1.4; WD
+// 2026-09-30d (a); b.1qq).
 func TestSpawnHeldUnansweredRow(t *testing.T) {
 	relookups := []struct {
 		name    string
 		holders []tmuxfix.SeedSession
 		timeout bool // the re-lookup times out
+		vanish  bool // the holder is gone by the re-lookup: ErrTmuxSessionCreate
 		forbid  []string
 		desc    func(p apitest.HeldName) apitest.DescCase
 	}{
@@ -182,6 +185,10 @@ func TestSpawnHeldUnansweredRow(t *testing.T) {
 		{name: "ambiguous holder", holders: []tmuxfix.SeedSession{
 			heldSession(heldRowName, "$4", tmux.Label{}, false), heldSession(heldRowName, "$5", tmux.Label{}, false)},
 			forbid: []string{"$4", "$5"}, desc: apitest.DescHeldAmbiguous},
+		{name: "holder vanished", holders: []tmuxfix.SeedSession{heldSession(heldRowName, "$4", tmux.Label{}, false)},
+			vanish: true, desc: func(p apitest.HeldName) apitest.DescCase {
+				return apitest.DescSessionCreateFailed(apitest.SessionCreateFailed{Name: heldRowName, Duplicate: true}).AfterHeldName(p)
+			}},
 	}
 	rows := []struct {
 		name  string
@@ -211,6 +218,11 @@ func TestSpawnHeldUnansweredRow(t *testing.T) {
 						e.rec.Script(e.socket, tmuxfix.Script{Failure: tmux.FailTimeout, Times: 1}, tmux.CallLookup)
 					}
 				}
+				var want error = api.ErrTmuxUnresponsive
+				if rl.vanish {
+					e.rec.RemoveSessionAfter(tmux.CallCreate, e.socket, "$4")
+					want = api.ErrTmuxSessionCreate
+				}
 
 				run := e.spawnHeld(t, id, heldRowName, onScan)
 
@@ -219,11 +231,11 @@ func TestSpawnHeldUnansweredRow(t *testing.T) {
 					t.Errorf("row: state %v, ended_at %v; want pending, NULL (the end write wrote nothing)",
 						cols.State, cols.EndedAt)
 				}
-				assertOneSentinel(t, run.err, api.ErrTmuxUnresponsive)
+				assertOneSentinel(t, run.err, want)
 				if run.err != nil {
 					_, desc := errnames.Classify(run.err)
 					token, _ := cols.LaunchToken.(string)
-					p := apitest.HeldName{Name: heldRowName, Row: r.row}
+					p := apitest.HeldName{Name: heldRowName, Row: r.row, InstanceID: id}
 					forbid := append(e.forbid(id, rl.holders), append(rl.forbid, token)...)
 					apitest.AssertDescription(t, desc, rl.desc(p), forbid...)
 				}

@@ -12,6 +12,38 @@ import (
 // launch timeout (SR-8.5).
 const RowStaysPending = "the row stays pending"
 
+// LaunchRetryRule is the launch-timeout rule (SR-1.4, SR-18.1): the session
+// may have been created, so the caller does not retry until get shows the
+// row ended or missing. Every launch verb's timeout description ends with it
+// (LaunchTimeoutError), and plain spawn's retry sentences build on it.
+const LaunchRetryRule = "do not retry until get shows the row ended or missing"
+
+// ReuseOptIn names the reuse opt-in in each surface's own spelling, for a
+// description every surface shows: one surface's spelling does not work on
+// another (MCP silently ignores an unknown argument, the CLI refuses an
+// unknown flag). It is the one spelling the runtime error texts build on
+// (b.1qq), except pkg/api's heldRetryReuse, which still spells the opt-in
+// reuse_finished alone (b.c4u).
+const ReuseOptIn = "the reuse opt-in (--reuse-finished on the CLI, reuse-finished over MCP, reuse_finished in TypeScript, ReuseFinished in Go)"
+
+// ReuseRetry names the retry that works for a plain spawn whose row for this
+// id is, or will be, finished (b.1qq): a plain spawn of the id collides with
+// that row at the insert (ErrInstanceIdCollision), so the retry uses the
+// reuse opt-in (ReuseOptIn). Its reason follows it as PlainSpawnCollides.
+// pkg/api's held-name retry sentences build on both.
+const ReuseRetry = "a retry with this id uses " + ReuseOptIn
+
+// PlainSpawnCollides is ReuseRetry's reason: a plain spawn of the id
+// collides with its row.
+const PlainSpawnCollides = "since a plain spawn of the id now collides"
+
+// explicitIDTimeoutRetry is plain spawn's launch-timeout retry sentence for a
+// caller-supplied id (b.1qq): the launch-timeout rule, then the opted-in
+// retry, since once get shows the row ended or missing a plain spawn of the
+// id collides with it. A minted id keeps LaunchRetryRule alone: its retry
+// mints a new id.
+const explicitIDTimeoutRetry = LaunchRetryRule + "; then " + ReuseRetry + ", " + PlainSpawnCollides
+
 // TmuxUnavailableError is the one mapping of a "tmux unavailable" call
 // failure, the binary not run or the socket "Permission denied" reply, to
 // tmux.ErrTmuxNotAvailable (SR-1.8, SR-2.6), shared by the create and the
@@ -67,9 +99,13 @@ func (e *SocketDeniedError) Is(target error) bool {
 // error here: it becomes a *HeldNameError carrying req's instance id, name,
 // socket and token and launchStartMillis, the insert's launch start, for the
 // caller's held-name path. Every other error wraps exactly one catalogued
-// sentinel and ends with the row sentence. No description carries a label
-// value, a token, another row's id or a session-environment value.
-func plainSpawnCreateError(o CreateOutcome, req CreateRequest, launchStartMillis int64) error {
+// sentinel and ends with the row sentence; the launch timeout then ends with
+// its retry sentence, which minted picks: LaunchRetryRule for a minted id,
+// whose retry mints a new one, and for a caller-supplied id the same rule
+// followed by the opted-in retry (explicitIDTimeoutRetry, b.1qq). No
+// description carries a label value, a token, another row's id or a
+// session-environment value.
+func plainSpawnCreateError(o CreateOutcome, req CreateRequest, launchStartMillis int64, minted bool) error {
 	switch o.Kind {
 	case CreateLabelled, CreateLostReply:
 		return nil
@@ -82,7 +118,11 @@ func plainSpawnCreateError(o CreateOutcome, req CreateRequest, launchStartMillis
 			LaunchStartedAtMillis: launchStartMillis,
 		}
 	case CreateUnresponsive:
-		return LaunchTimeoutError(o.Cause, "spawn", req.InstanceID, RowStaysPending)
+		retry := explicitIDTimeoutRetry
+		if minted {
+			retry = LaunchRetryRule
+		}
+		return launchTimeoutError(o.Cause, "spawn", req.InstanceID, RowStaysPending, retry)
 	case CreateUnavailable:
 		return TmuxUnavailableError(o.Cause, req.Socket, RowStaysPending)
 	case CreateUnlabelledEnded, CreateUnlabelledRunning:
@@ -149,9 +189,27 @@ func UnlabelledSessionError(o CreateOutcome, name, consequence string) error {
 // reply, and "duplicate session" whose holder vanished before the re-lookup
 // (no session held the name any more). It carries the quoted name and the
 // create call's failure, then consequence, the verb's row sentence, and wraps
-// tmux.ErrTmuxSessionCreate only.
+// tmux.ErrTmuxSessionCreate only. Plain spawn's vanished holder uses
+// InstanceCreateFailedError instead.
 func CreateFailedError(ce *tmux.CallError, name, consequence string) error {
-	return fmt.Errorf("%w: tmux session %q: %s; %s", tmux.ErrTmuxSessionCreate, name, ce.Error(), consequence)
+	return createFailedError(ce, "", name, consequence)
+}
+
+// InstanceCreateFailedError is CreateFailedError led by "instance <id>: ",
+// as an unanswered re-lookup's description is led: plain spawn's after
+// "duplicate session" whose holder vanished before the re-lookup, whose
+// retry sentence in consequence refers to "this id", so the description
+// names the id, a minted one included (b.1qq). Resume and reuse use
+// CreateFailedError.
+func InstanceCreateFailedError(ce *tmux.CallError, instanceID, name, consequence string) error {
+	return createFailedError(ce, "instance "+instanceID+": ", name, consequence)
+}
+
+// createFailedError is the one format of CreateFailedError and
+// InstanceCreateFailedError: lead, "" or the instance id's, then the quoted
+// name.
+func createFailedError(ce *tmux.CallError, lead, name, consequence string) error {
+	return fmt.Errorf("%w: %stmux session %q: %s; %s", tmux.ErrTmuxSessionCreate, lead, name, ce.Error(), consequence)
 }
 
 // LaunchTimeoutError is the launch-timeout description of SR-1.4, shared by
@@ -160,13 +218,21 @@ func CreateFailedError(ce *tmux.CallError, name, consequence string) error {
 // agent-director does not recognise; that the session may have been created;
 // consequence, the verb's row sentence (for a plain spawn and resume, that the
 // row stays pending); and the rule not to retry until get shows the row ended
-// or missing (SR-18.1). It wraps tmux.ErrTmuxUnresponsive only and never says
-// that nothing was done or to retry later.
+// or missing (LaunchRetryRule, SR-18.1). It wraps tmux.ErrTmuxUnresponsive
+// only and never says that nothing was done or to retry later. Resume and
+// reuse use it as it is; plain spawn's (plainSpawnCreateError) adds the
+// opted-in retry for a caller-supplied id.
 func LaunchTimeoutError(ce *tmux.CallError, verb, instanceID, consequence string) error {
+	return launchTimeoutError(ce, verb, instanceID, consequence, LaunchRetryRule)
+}
+
+// launchTimeoutError is LaunchTimeoutError ending with retry, the verb's
+// retry sentence, in place of LaunchRetryRule alone.
+func launchTimeoutError(ce *tmux.CallError, verb, instanceID, consequence, retry string) error {
 	what := ce.Error()
 	if ce.Failure != tmux.FailTimeout {
 		what += "; tmux gave a reply agent-director does not recognise"
 	}
-	return fmt.Errorf("%w: %s of instance %s: %s; the session may have been created; %s; do not retry until get shows the row ended or missing",
-		tmux.ErrTmuxUnresponsive, verb, instanceID, what, consequence)
+	return fmt.Errorf("%w: %s of instance %s: %s; the session may have been created; %s; %s",
+		tmux.ErrTmuxUnresponsive, verb, instanceID, what, consequence, retry)
 }

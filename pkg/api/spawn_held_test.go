@@ -234,7 +234,7 @@ func TestSpawnHeldRelookupOutcomes(t *testing.T) {
 			}
 			if run.err != nil {
 				_, desc := errnames.Classify(run.err)
-				p := apitest.HeldName{Name: name, SessionID: tc.holderID, Row: apitest.HeldRowEnded}
+				p := apitest.HeldName{Name: name, SessionID: tc.holderID, Row: apitest.HeldRowEnded, InstanceID: id}
 				forbid := append(e.forbid(id, seeded), append(tc.forbid, token)...)
 				apitest.AssertDescription(t, desc, tc.desc(e, id, p), forbid...)
 			}

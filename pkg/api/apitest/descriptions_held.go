@@ -12,8 +12,10 @@ import (
 // (SR-9.4, SR-3.10; PO 2026-09-27 HELD): the overlay every such error carries
 // (DescCase.AfterHeldName: the quoted requested name, the holder's tmux id,
 // and exactly one row sentence by the end write's result, in place of
-// "nothing was done", never "retry later", and on an ErrTmuxUnresponsive the
-// retry sentence by the same result, WD 2026-09-30d (a)), the four holder
+// "nothing was done", never "retry later", and on an ErrTmuxUnresponsive or
+// a vanished holder's ErrTmuxSessionCreate the retry sentence by the same
+// result, WD 2026-09-30d (a), b.1qq, the vanished holder's also naming the
+// instance id), the four holder
 // conflicts (DescHeldLeftover,
 // DescHeldNoValidID, DescHeldDifferentID, DescHeldOtherStore), which also
 // state whether the holder's label names this instance id, and the
@@ -65,12 +67,26 @@ const (
 	heldLabelNotThisID
 )
 
+// reuseOptInEverySurface names the reuse opt-in in each surface's own
+// spelling (b.1qq): the spelling of every plain-spawn retry sentence b.1qq
+// added (the explicit id's launch timeout, and after "duplicate session" the
+// vanished holder's and the unended row's).
+const reuseOptInEverySurface = "the reuse opt-in (--reuse-finished on the CLI, reuse-finished over MCP, reuse_finished in TypeScript, ReuseFinished in Go)"
+
 // The retry guidance of SR-1.4's "after duplicate session" row for an
 // ErrTmuxUnresponsive (the re-lookup could not answer), in place of "retry
-// later", which no held-name description says: once the end write applied,
-// a retry uses the reuse opt-in once the name is free (heldRetryReuse);
-// otherwise the launch-timeout rule (launchRetryRule).
-var heldRetryReuse = []string{"reuse_finished", "once the name is free"}
+// later", which no held-name description says, and for the ErrTmuxSessionCreate
+// of a holder that vanished first (b.1qq): once the end write applied, a
+// retry uses the reuse opt-in once the name is free; otherwise the
+// launch-timeout rule (launchRetryRule) followed by the same opted-in retry,
+// since a plain spawn of the id collides with its row once it is finished.
+// heldRetryReuse is the unanswered re-lookup's after the end write applied,
+// which still spells the opt-in reuse_finished only (its respelling is
+// b.c4u's); heldRetryFree is every other one's, in each surface's spelling.
+var (
+	heldRetryReuse = []string{"reuse_finished", "once the name is free"}
+	heldRetryFree  = []string{reuseOptInEverySurface, "once the name is free"}
+)
 
 // retryLater is the default retry sentence a held-name description replaces.
 const retryLater = "retry later"
@@ -89,13 +105,18 @@ var heldNotPendingStatements = []string{"stays pending", "will heal"}
 // (Restore.Launch) error after "duplicate session" instead (SR-8.5, SR-10.4;
 // afterResumeHeld): Name is then the name the create asked for (resume's
 // recorded name, reuse's requested name), SessionID the holder's tmux id,
-// Restore the restore's result, and Row stays zero.
+// Restore the restore's result, and Row stays zero. InstanceID is plain
+// spawn's new row's id, which its vanished holder's description
+// (DescSessionCreateFailed with Duplicate) names as "instance <id>" (b.1qq);
+// left empty, that case requires the "instance " lead alone. The other cases
+// ignore it.
 type HeldName struct {
 	Name         string
 	SessionID    string
 	Row          HeldRow
 	BeforeLaunch bool
 	Restore      ResumeRestore
+	InstanceID   string
 }
 
 // AfterHeldName returns c as an error a plain spawn returns after "duplicate
@@ -105,10 +126,14 @@ type HeldName struct {
 // never that the row stays pending or will heal unless the end write failed;
 // a statement that the row was ended only when it was; never "retry later".
 // An unanswered case (DescCallTimeout, DescUnrecognisedReply,
-// DescHeldAmbiguous) also requires the retry guidance by p.Row: for
-// HeldRowEnded the reuse opt-in (reuse_finished) "once the name is free" and
-// not the launch-timeout rule; otherwise the launch-timeout rule and not
-// reuse_finished. Any other case states neither. Use it on
+// DescHeldAmbiguous) and the vanished holder (DescSessionCreateFailed with
+// Duplicate) also require the retry guidance by p.Row: for HeldRowEnded the
+// reuse opt-in "once the name is free" (an unanswered case's spelled
+// reuse_finished, the vanished holder's in each surface's spelling) and not
+// the launch-timeout rule; otherwise the launch-timeout rule followed by the
+// opted-in retry in each surface's spelling (b.1qq). Any other case states
+// neither. The vanished holder also requires "instance " and p.InstanceID,
+// the id that retry sentence's "this id" means (b.1qq). Use it on
 // DescSessionCreateFailed (Duplicate), DescConflictingLabels
 // (NothingWasDone), DescDifferentServer, DescCallTimeout,
 // DescUnrecognisedReply, DescSocketPermission and DescTmuxNotRun; the
@@ -154,11 +179,16 @@ func (c DescCase) afterHeldName(p HeldName, label heldLabel) DescCase {
 	case c.unanswered && p.Row == HeldRowEnded:
 		req = append(req, heldRetryReuse...)
 		mustNot = appendMissing(mustNot, launchRetryRule)
-	case c.unanswered:
-		req = append(req, launchRetryRule)
-		mustNot = appendMissing(mustNot, heldRetryReuse[0])
+	case c.heldRetry && p.Row == HeldRowEnded:
+		req = append(req, heldRetryFree...)
+		mustNot = appendMissing(mustNot, launchRetryRule)
+	case c.unanswered || c.heldRetry:
+		req = append(append(req, launchRetryRule), heldRetryFree...)
 	default:
 		mustNot = appendMissing(mustNot, launchRetryRule, heldRetryReuse[1])
+	}
+	if c.heldRetry {
+		req = append(req, "instance "+p.InstanceID)
 	}
 	if s := label.sentence(); s != "" {
 		req = append(req, s)

@@ -111,9 +111,11 @@
 //     errors after "duplicate session" (descriptions_held.go, whose
 //     DescCase.AfterHeldName adds the requested name, the holder's tmux id
 //     and the end write's row sentence, never "retry later", and on an
-//     unanswered re-lookup the retry guidance by the same result: the reuse
-//     opt-in once the name is free when the row was ended, else the
-//     launch-timeout rule; HeldName.BeforeLaunch makes the DescHeld* holder
+//     unanswered re-lookup or a vanished holder the retry guidance by the
+//     same result: the reuse opt-in once the name is free when the row was
+//     ended, else the launch-timeout rule followed by that opted-in retry,
+//     the vanished holder also naming the instance id (HeldName.InstanceID;
+//     b.1qq); HeldName.BeforeLaunch makes the DescHeld* holder
 //     cases resume's pre-launch holder refusals instead, with no
 //     "duplicate session" overlay (descriptions_resume_lookup.go); and
 //     HeldName.Restore makes AfterHeldName, and the DescHeld* cases that

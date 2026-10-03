@@ -18,7 +18,9 @@ var claudeBinary = "claude"
 
 // Launch is plain spawn's launch (SRD SR-3.3, SR-3.5, SR-3.6, SR-9.4,
 // SR-22.2). The caller has already run the collision pre-check (and, for a
-// caller-supplied id with no row, the label scan). In order:
+// caller-supplied id with no row, the label scan); minted is whether that
+// pre-check minted r's instance id (ApplyDefaults returned IDMinted), which
+// changes only the launch timeout's retry sentence. In order:
 //
 //  1. Resolves the launch socket as tmux would, creating a missing per-user
 //     directory (ResolveLaunchSocket), and mints a new launch token
@@ -51,7 +53,8 @@ var claudeBinary = "claude"
 // On every create failure the row stays pending and nothing else is
 // written; the error is plainSpawnCreateError's: ErrTmuxUnresponsive for a
 // timed-out create or a reply that does not parse with a non-zero exit (the
-// launch-timeout rule), ErrTmuxNotAvailable for tmux unavailable,
+// launch-timeout rule, followed for a caller-supplied id, minted unset, by
+// the opted-in retry), ErrTmuxNotAvailable for tmux unavailable,
 // ErrTmuxSessionCreate for a session that could not be labelled and every
 // other failure. "duplicate session" is not mapped to a verb error: Launch
 // returns a *HeldNameError at once (no store write, file or network I/O,
@@ -71,7 +74,7 @@ var claudeBinary = "claude"
 //
 // Launch does not wait for Claude to come up: the row stays pending until
 // the first SessionStart hook moves it.
-func Launch(s *store.Store, t LaunchTmux, pc tmux.ProcChecker, r Resolved, cfg config.Config, now func() time.Time, lg *log.Logger) (string, PreTrustOutcome, error) {
+func Launch(s *store.Store, t LaunchTmux, pc tmux.ProcChecker, r Resolved, minted bool, cfg config.Config, now func() time.Time, lg *log.Logger) (string, PreTrustOutcome, error) {
 	socket, err := ResolveLaunchSocket()
 	if err != nil {
 		return "", "", err
@@ -103,7 +106,7 @@ func Launch(s *store.Store, t LaunchTmux, pc tmux.ProcChecker, r Resolved, cfg c
 	req.Token = token
 	req.StoreID = s.StoreID()
 	out := CreateAndLabel(t, req)
-	if err := plainSpawnCreateError(out, req, launchStart); err != nil {
+	if err := plainSpawnCreateError(out, req, launchStart, minted); err != nil {
 		return "", "", err
 	}
 	if out.Kind == CreateLabelled {

@@ -33,9 +33,13 @@ import (
 //     the holder name;
 //  3. builds the classified error with heldNameOutcome, carrying exactly one
 //     row sentence and, for an ErrTmuxUnresponsive (the re-lookup could not
-//     answer), in place of "retry later", the retry sentence chosen by the
-//     end write's result: heldRetryReuse when it applied, else heldRetryWait
-//     (SR-1.4; WD 2026-09-30d (a));
+//     answer), in place of "retry later", and for the ErrTmuxSessionCreate of
+//     a holder that vanished first, the retry sentence chosen by the end
+//     write's result: when it applied, heldRetryReuse for the
+//     ErrTmuxUnresponsive and heldRetryFree for the vanished holder, else
+//     heldRetryWait for both (SR-1.4; WD 2026-09-30d (a); b.1qq); each of
+//     those descriptions names the instance id the sentence's "this id"
+//     means;
 //  4. writes the lookup's ad.provenance.disagree records (a scope value is
 //     the one reason this lookup can report: no server identity is recorded
 //     and no session carries the fresh token), then exactly one
@@ -55,9 +59,9 @@ func spawnHeldName(s *store.Store, t tmux.LookupClient, pc ProcChecker, now func
 		StoreID:    s.StoreID(),
 		Socket:     held.Socket,
 	}, held.Name)
-	retry := heldRetryWait
+	retry := heldRetrySentences{Unanswered: heldRetryWait, Vanished: heldRetryWait}
 	if rowResult == nameHeldRowEnded {
-		retry = heldRetryReuse
+		retry = heldRetrySentences{Unanswered: heldRetryReuse, Vanished: heldRetryFree}
 	}
 	holder, err := heldNameOutcome(res, held.InstanceID, held.Name, held.Socket, sentence, retry, nil)
 

@@ -222,7 +222,7 @@ func TestSpawnLaunchBoundLostReplyKeepsLabel(t *testing.T) {
 			if tc.unresponsive {
 				_, desc := errnames.Classify(err)
 				apitest.AssertDescription(t, desc, apitest.DescLaunchTimeout(apitest.LaunchTimeout{
-					InstanceID: id, Timeout: boundC, Unrecognised: tc.unrecognised,
+					InstanceID: id, Timeout: boundC, Unrecognised: tc.unrecognised, ExplicitSpawnID: true,
 				}), token, e.storeID, tmuxfix.LabelValue(token, s.ID, id, e.storeID))
 			}
 		})
