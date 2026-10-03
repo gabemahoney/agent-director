@@ -9,6 +9,11 @@ Agent Director must not build bespoke functionality for CSCB or any of its clien
 
 Architecture docs describe agent-director's general contract, never one client's integration.
 
+## Serve Human, Bot and Code Callers
+Agent Director must support human callers, bot callers and code callers. It cannot assume intelligence behind the caller, but it can optionally include information if such an intelligence happens to be present.
+
+Document the machine-readable contract (error names, fields, states) as the contract. Describe advice text as supplementary.
+
 ## Document Re-usable Components
 Any time you create a component that is meant to be re-usable, update architecture.md with a statement requiring future code authors use it. Be sure to describe what it does.
 

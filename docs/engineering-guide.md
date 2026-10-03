@@ -9,6 +9,14 @@ A practical checklist for writing and reviewing code. Prioritize substance over 
 - **Design a client's request as a general capability.** Build what any caller could use, not what one client asked for.
 - **No client specifics in the product.** Client names, client-specific behaviour and client-specific wording never go into code, errors or the API.
 
+## Core Principle: Serve Human, Bot and Code Callers
+
+**Agent Director must support human callers, bot callers and code callers.** It cannot assume intelligence behind the caller, but it can optionally include information if such an intelligence happens to be present.
+
+- **Every outcome a caller must act on is machine-readable** — an error name or a structured field.
+- **English advice is an optional extra.** Advice in a description helps humans and agents, but it is never the only way to learn the next step.
+- **Prefer behaviour that's safe to repeat over advice to follow.**
+
 ## 1. Dead & Obsolete Code
 
 Remove it. Don't comment it out, don't leave it "just in case."
