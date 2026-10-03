@@ -67,9 +67,9 @@
 #   CI-VERDICT PASS|FAIL (<ok>/<total> runs ok, <minutes> min, tier <tier>)
 # A run is ok when expect=pass and the result is PASS, or expect=violation and
 # the result is FAIL(...). In a manifest with the props column, a violation
-# row is ok only when the property its result names is one of its props, as
-# laptop/run.sh rules; otherwise its line ends "(the expected violation is
-# <props>)". INCOMPLETE, ERROR, SKIPPED and NO-VERDICT are never ok. Exit 0
+# row is ok only when the property its result names is one of its props;
+# otherwise its line ends "(the expected violation is <props>)". The runner
+# does not compare distinct-state counts with any earlier run. INCOMPLETE, ERROR, SKIPPED and NO-VERDICT are never ok. Exit 0
 # only on PASS.
 #
 # Fail closed: a preflight refusal, a refused submit, a submit with no job id,

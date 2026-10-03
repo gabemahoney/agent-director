@@ -17,8 +17,7 @@ import (
 
 // TestProvenancePinsEveryVendoredFile checks every pin line of PROVENANCE.txt
 // against the file's SHA-256, and that only the repo's own files are unpinned:
-// three named files plus the b.66h runs (launch/) and the laptop runner
-// (laptop/).
+// three named files plus the b.66h runs (launch/).
 func TestProvenancePinsEveryVendoredFile(t *testing.T) {
 	tree := filepath.Join(repoRoot(t), "spec", "tla")
 	prov := readFile(t, filepath.Join(tree, "PROVENANCE.txt"))
@@ -38,7 +37,7 @@ func TestProvenancePinsEveryVendoredFile(t *testing.T) {
 			return err
 		}
 		rel, _ := filepath.Rel(tree, p)
-		if _, ok := pins[rel]; !ok && !strings.HasPrefix(rel, "launch/") && !strings.HasPrefix(rel, "laptop/") {
+		if _, ok := pins[rel]; !ok && !strings.HasPrefix(rel, "launch/") {
 			unpinned = append(unpinned, rel)
 		}
 		return nil
@@ -84,10 +83,9 @@ func TestProvenancePinsEveryVendoredFile(t *testing.T) {
 	}
 }
 
-// TestLaunchRunsAndRun4Table: launch/cfg holds exactly the cfgs
-// launch/suite.tsv names, each row has the eight columns the laptop runner
-// reads, and laptop/run4.tsv has one row for every ci/suite.tsv cfg.
-func TestLaunchRunsAndRun4Table(t *testing.T) {
+// TestLaunchRuns: launch/cfg holds exactly the cfgs launch/suite.tsv names,
+// and each row has the eight columns ci/run_ci.sh reads.
+func TestLaunchRuns(t *testing.T) {
 	tree := filepath.Join(repoRoot(t), "spec", "tla")
 	var named []string
 	for _, line := range strings.Split(readFile(t, filepath.Join(tree, "launch", "suite.tsv")), "\n") {
@@ -116,26 +114,6 @@ func TestLaunchRunsAndRun4Table(t *testing.T) {
 	sort.Strings(named)
 	if len(named) == 0 || !reflect.DeepEqual(have, named) {
 		t.Errorf("launch/cfg holds %v; want exactly the launch/suite.tsv names %v", have, named)
-	}
-
-	var ci, run4 []string
-	for _, rw := range shipped(t) {
-		ci = append(ci, rw.cfg)
-	}
-	for _, line := range strings.Split(readFile(t, filepath.Join(tree, "laptop", "run4.tsv")), "\n") {
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		f := strings.Split(line, "\t")
-		if len(f) != 4 || f[2] == "" || !strings.HasPrefix(f[1], "PASS") && !strings.HasPrefix(f[1], "FAIL(") {
-			t.Errorf("laptop/run4.tsv: bad row %q", line)
-		}
-		run4 = append(run4, f[0])
-	}
-	sort.Strings(ci)
-	sort.Strings(run4)
-	if !reflect.DeepEqual(ci, run4) {
-		t.Errorf("laptop/run4.tsv names %d cfgs; want exactly the %d ci/suite.tsv names", len(run4), len(ci))
 	}
 }
 

@@ -125,7 +125,7 @@ func TestRunnerLaunchSuite(t *testing.T) {
 }
 
 // TestRunnerPropsRules: with the props column, a violation row is ok only
-// when its result names one of its props (the laptop runner's rule); a pass
+// when its result names one of its props; a pass
 // row is judged as without it.
 func TestRunnerPropsRules(t *testing.T) {
 	cases := []struct {

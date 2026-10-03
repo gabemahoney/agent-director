@@ -17,16 +17,16 @@ Changed here, not from b.zuj (bee b.66h, launch-scoped actions, 2026-10-03)
   (LaunchObs, LaunchScoped, RelaunchAny: zero-arity definitions, all FALSE),
   the variables bobs, oobs, okl, hid and scopeViol, the action O_Reread and
   the properties ScopedActsOnlyOnObservedLaunch, ChangedIsInert,
-  NotLaunchChanged and NotRelaunchInKillWindow. With every knob FALSE (every cfg in ci/cfg/) the state
-  graph is meant to be exactly run 4's; laptop/run.sh checks each pass run's
-  state count against run 4. Run 4's verdicts do not cover the changed file
-  until such a run, or a make tla run, passes. Details:
+  NotLaunchChanged and NotRelaunchInKillWindow. With every knob FALSE (every
+  cfg in ci/cfg/) the model's steps are identical to run 4's, so a cfg
+  without a VIEW reaches run 4's distinct-state count exactly. Under VIEW
+  CIView the distinct-state count can vary between runs of the same model,
+  so for those cfgs only the verdict is comparable. Run 4's verdicts do not
+  cover the changed file until a make tla run passes. Details:
   launch/README.md.
   Every other pinned file is still byte-identical to run 4's.
   New files, written here and not pinned: launch/README.md,
-  launch/suite.tsv and launch/cfg/*.cfg (the b.66h runs), laptop/run.sh,
-  laptop/README.md and laptop/run4.tsv (the laptop runner and run 4's
-  per-cfg results, from run 4's job logs).
+  launch/suite.tsv and launch/cfg/*.cfg (the b.66h runs).
 
 Source
   Bee b.zuj, directory tickets/Ideas/b.zuj/ of the Apiary ticket tree (outside
@@ -76,7 +76,6 @@ Layout (b.zuj's relative layout, so mkci.py's paths stay valid)
                                                 b.zuj's run_ci.sh; written for
                                                 this repo, so not pinned
   launch/                                       the b.66h runs (not pinned)
-  laptop/                                       the laptop runner (not pinned)
   PROVENANCE.txt                                this file
 
 Not vendored

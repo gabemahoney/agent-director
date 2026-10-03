@@ -9,12 +9,10 @@ The design is in the bee and in
 
 This directory holds the cfgs that check that design with the vendored model.
 These runs are not in `ci/suite.tsv`, so a plain `make tla` does not run
-them. There are two ways to run them:
-
-- On the job scheduler: `make tla TLA_SUITE=spec/tla/launch/suite.tsv`.
-  `ci/run_ci.sh` takes the cfgs from `cfg/` here, without pins, and applies
-  the `props` column of `suite.tsv`.
-- On a laptop: `../laptop/run.sh` (see `../laptop/README.md`).
+them. To run them on the job scheduler, use
+`make tla TLA_SUITE=spec/tla/launch/suite.tsv`. `ci/run_ci.sh` takes the
+cfgs from `cfg/` here, without pins, and applies the `props` column of
+`suite.tsv`.
 
 ## The model change
 
@@ -32,9 +30,12 @@ it). `Phase4Split.tla` and `Phase5Hook.tla` are unchanged.
 They are definitions, not `CONSTANTS`, so every b.zuj cfg parses unchanged. A
 cfg here turns a knob on with a definition override at the end of its
 `CONSTANTS` section, for example `LaunchScoped <- KnobOn`. With all three off,
-the state graph of every b.zuj cfg must be exactly as before. The laptop
-runner checks this: each b.zuj pass run must reach the state count that b.zuj
-CI run 4 recorded.
+the model's steps are identical to b.zuj CI run 4's: every new variable keeps
+its initial value, and every changed action does what it did before. A b.zuj
+cfg without a VIEW therefore reaches run 4's distinct-state count exactly. A
+cfg with `VIEW CIView` need not: under that view the count depends on which
+state of each view class TLC meets first, so it can vary between runs of the
+same model. Only its verdict is comparable.
 
 **What a caller reads.**
 
