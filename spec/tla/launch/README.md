@@ -8,8 +8,13 @@ The design is in the bee and in
 `tickets/Ideas/b.fmk/launch-scoped-actions.md` (outside this repo).
 
 This directory holds the cfgs that check that design with the vendored model.
-The runner is `../laptop/run.sh` (see `../laptop/README.md`). These runs are
-not in `ci/suite.tsv`, so `make tla` does not run them.
+These runs are not in `ci/suite.tsv`, so a plain `make tla` does not run
+them. There are two ways to run them:
+
+- On the job scheduler: `make tla TLA_SUITE=spec/tla/launch/suite.tsv`.
+  `ci/run_ci.sh` takes the cfgs from `cfg/` here, without pins, and applies
+  the `props` column of `suite.tsv`.
+- On a laptop: `../laptop/run.sh` (see `../laptop/README.md`).
 
 ## The model change
 

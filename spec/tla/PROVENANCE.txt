@@ -125,6 +125,9 @@ Pin list
   spec/tla/ (sha256sum format). ci/run_ci.sh checks every line before it
   builds or submits anything and fails closed on any difference, except the
   three specs when TLA_SPEC_DIR is set and ci/suite.tsv when TLA_SUITE is set.
+  A cfg in ci/cfg/ must have a pin line. When TLA_SUITE is set, a cfg that is
+  not in ci/cfg/ may come from the cfg/ folder beside that manifest (for
+  example launch/cfg/ for launch/suite.tsv); such cfgs are not pinned.
 
 eeae3852078522d7bda3e391b43d3af26c26c1767e2a83e72a906ad9cc441155  Phase4.tla
 257a0f1d79c73a0efb4897959c9ca0335e2b705695e7aaae2a48242760a1811e  Phase4Split.tla
