@@ -72,6 +72,7 @@ submit)
   ls "$(dirname "$ctx")" >"$s/ctxdir"
   grep -E '^(BUDGET|DISKCAP_MB)=' "$ctx/tlcjob.sh" >"$s/limits"
   (cd "$ctx" && sha256sum Phase4.tla Phase4Split.tla Phase5Hook.tla) >"$s/specs"
+  (cd "$ctx" && sha256sum ./*.cfg) >"$s/cfgs"
   hold submit
   answer "submit.$job" "0 {\"id\":\"$id\",\"dispatcher_running\":true,\"timeout_s\":10800,\"memory\":34359738368}" ;;
 status)
@@ -302,7 +303,8 @@ func (r *rig) submits(t *testing.T) []string {
 	return jobs
 }
 
-// seen is what the fake kept from job's submit (runs, ctx, ctxdir, limits, specs).
+// seen is what the fake kept from job's submit (runs, ctx, ctxdir, limits,
+// specs, cfgs).
 func (r *rig) seen(t *testing.T, job, name string) string {
 	t.Helper()
 	return readFile(t, filepath.Join(r.fake, "seen", job, name))

@@ -30,8 +30,11 @@
 #                 Phase5Hook.tla (default: spec/tla/). Specs read from an
 #                 override are not pinned.
 #   TLA_SUITE     the manifest (default: spec/tla/ci/suite.tsv). An override is
-#                 not pinned. The cfgs always come from spec/tla/ci/cfg/ and
-#                 must be pinned.
+#                 not pinned. A cfg in spec/tla/ci/cfg/ comes from there and
+#                 must be pinned. An override may also name cfgs in the cfg/
+#                 directory next to it (spec/tla/launch/cfg/ for
+#                 launch/suite.tsv); those are not pinned. A cfg in both is
+#                 refused.
 #   TLA_POLL_S    seconds between status polls (default 30).
 #   TMPDIR        the per-run directory is created under it (default /tmp);
 #                 it must lie outside this repo.
@@ -63,8 +66,11 @@
 # then
 #   CI-VERDICT PASS|FAIL (<ok>/<total> runs ok, <minutes> min, tier <tier>)
 # A run is ok when expect=pass and the result is PASS, or expect=violation and
-# the result is FAIL(...). INCOMPLETE, ERROR, SKIPPED and NO-VERDICT are never
-# ok. Exit 0 only on PASS.
+# the result is FAIL(...). In a manifest with the props column, a violation
+# row is ok only when the property its result names is one of its props, as
+# laptop/run.sh rules; otherwise its line ends "(the expected violation is
+# <props>)". INCOMPLETE, ERROR, SKIPPED and NO-VERDICT are never ok. Exit 0
+# only on PASS.
 #
 # Fail closed: a preflight refusal, a refused submit, a submit with no job id,
 # a failed status call (an unknown job), a dispatcher that is not running, an
@@ -281,12 +287,16 @@ if [ ! -f "$SUITE" ] || [ ! -r "$SUITE" ]; then
 fi
 
 # Each data row: group, spec, cfg, cap_s, expect, tier, what; seven non-empty
-# tab-separated fields. Lines starting with # and empty lines are skipped.
+# tab-separated fields. Lines starting with # and empty lines are skipped. A
+# manifest may add an eighth, props (as launch/suite.tsv): on a violation row
+# the comma-separated properties whose violation is the expected result, on a
+# pass row "-". The first data row sets the width; every row must have it.
 bad_rows=$(awk -F'\t' -v specs=" $SPECS " '
   /^#/ || /^$/ { next }
   {
     why = ""
-    if (NF != 7) why = "has " NF " fields, not 7"
+    if (!w) w = (NF == 8 ? 8 : 7)
+    if (NF != w) why = "has " NF " fields, not " w
     else if ($1 !~ /^[A-Za-z0-9][A-Za-z0-9_.-]*$/ || length($1) > 36) why = "bad group \"" $1 "\""
     else if (index(specs, " " $2 " ") == 0) why = "unknown spec \"" $2 "\""
     else if ($3 !~ /^[A-Za-z0-9_]+$/) why = "bad cfg \"" $3 "\""
@@ -294,26 +304,46 @@ bad_rows=$(awk -F'\t' -v specs=" $SPECS " '
     else if ($5 != "pass" && $5 != "violation") why = "bad expect \"" $5 "\""
     else if ($6 != "fast" && $6 != "full") why = "bad tier \"" $6 "\""
     else if ($7 == "") why = "empty what"
+    else if (w == 8 && $5 == "pass" && $8 != "-") why = "props \"" $8 "\" on a pass row, not \"-\""
+    else if (w == 8 && $5 == "violation" && $8 !~ /^[A-Za-z0-9_]+(,[A-Za-z0-9_]+)*$/) why = "bad props \"" $8 "\""
     else if (seen[$3]++) why = "duplicate cfg \"" $3 "\""
     if (why != "") print "line " NR ": " why
   }' "$SUITE")
 [ -z "$bad_rows" ] || die preflight "bad manifest" "manifest '$SUITE': $(echo "$bad_rows" | head -5 | tr '\n' ';' | sed 's/;$//'); nothing was submitted"
 
 # The tier's rows, in manifest order.
-R_GRP=(); R_SPEC=(); R_CFG=(); R_CAP=(); R_EXP=(); R_WHAT=()
+R_GRP=(); R_SPEC=(); R_CFG=(); R_CAP=(); R_EXP=(); R_WHAT=(); R_PROPS=()
 ALL_GROUPS=()
 declare -A HAS_GROUP=()
 while IFS= read -r line; do
-  IFS=$'\t' read -r grp spec c cap expect tier what <<<"$line"
+  props=
+  IFS=$'\t' read -r grp spec c cap expect tier what props <<<"$line"
   if [ -z "${HAS_GROUP[$grp]:-}" ]; then HAS_GROUP[$grp]=1; ALL_GROUPS+=("$grp"); fi
   [ "$TIER" = full ] || [ "$tier" = fast ] || continue
-  R_GRP+=("$grp"); R_SPEC+=("$spec"); R_CFG+=("$c"); R_CAP+=("$cap"); R_EXP+=("$expect"); R_WHAT+=("$what")
+  [ "$expect" = violation ] || props=
+  R_GRP+=("$grp"); R_SPEC+=("$spec"); R_CFG+=("$c"); R_CAP+=("$cap"); R_EXP+=("$expect"); R_WHAT+=("$what"); R_PROPS+=("$props")
 done < <(grep -v -e '^#' -e '^$' "$SUITE")
 
+# Where each cfg comes from: ci/cfg/ (pinned), else the cfg/ directory next to
+# an overriding manifest (not pinned).
+CI_CFG=$(cd "$HERE/cfg" && pwd -P)
+OWN_CFG=$(cd "$(dirname "$SUITE")/cfg" 2>/dev/null && pwd -P) || OWN_CFG=
+[ "$OWN_CFG" != "$CI_CFG" ] || OWN_CFG=
+declare -A CFG_PATH=()
+OWN_N=0
 for i in "${!R_CFG[@]}"; do
   c=${R_CFG[$i]}
-  [ -f "$HERE/cfg/$c.cfg" ] || die preflight "cfg missing" "ci/cfg/$c.cfg (manifest row for $c) does not exist; nothing was submitted"
+  if [ -n "$OWN_CFG" ] && [ -f "$OWN_CFG/$c.cfg" ]; then
+    [ ! -e "$CI_CFG/$c.cfg" ] || die preflight "cfg ambiguous" "$c.cfg is in both ci/cfg/ and $OWN_CFG/; nothing was submitted"
+    CFG_PATH[$c]="$OWN_CFG/$c.cfg"; OWN_N=$((OWN_N + 1))
+    continue
+  fi
+  if [ ! -f "$HERE/cfg/$c.cfg" ]; then
+    [ -z "$OWN_CFG" ] || die preflight "cfg missing" "$c.cfg (manifest row for $c) is in neither ci/cfg/ nor $OWN_CFG/; nothing was submitted"
+    die preflight "cfg missing" "ci/cfg/$c.cfg (manifest row for $c) does not exist; nothing was submitted"
+  fi
   [ -n "${PINNED[ci/cfg/$c.cfg]:-}" ] || die preflight "pin check failed" "ci/cfg/$c.cfg has no pin line in PROVENANCE.txt; nothing was submitted"
+  CFG_PATH[$c]="$HERE/cfg/$c.cfg"
 done
 
 if [ -n "${TLA_GROUPS:-}" ]; then
@@ -372,6 +402,7 @@ if [ "$PRINT" = yes ]; then
   if [ -n "${TLA_SPEC_DIR:-}" ]; then echo "  specs:      $SPEC_DIR (TLA_SPEC_DIR; not pinned)"; else echo "  specs:      $SPEC_DIR (pinned)"; fi
   if [ -n "${TLA_SUITE:-}" ]; then echo "  manifest:   $SUITE (TLA_SUITE; not pinned)"; else echo "  manifest:   $SUITE (pinned)"; fi
   echo "  pin check:  OK ($PIN_N files match PROVENANCE.txt; $PIN_SKIPPED overridden, not checked)"
+  [ "$OWN_N" -eq 0 ] || echo "  cfgs:       $OWN_N from $OWN_CFG (next to TLA_SUITE; not pinned)"
   echo "  jobs:       $((1 + ${#PLAN_GROUPS[@]})), one at a time, each with --network off and one notice to TLA_CHANNEL"
   echo "  runs:       $TOTAL_RUNS"
   echo "  job parse:  ${#PARSE_IDX[@]} runs (one cfg per spec module, simulation depth 1), budget $PARSE_BUDGET s"
@@ -413,6 +444,7 @@ RUN_DIR=$(mktemp -d "$TBASE_REAL/tla-run.XXXXXX") || die preflight "bad TMPDIR" 
 mkdir -p "$RUN_DIR/ctx" "$RUN_DIR/logs" "$RUN_DIR/runs" || die preflight "bad TMPDIR" "cannot populate $RUN_DIR; nothing was submitted"
 echo "# run dir: $RUN_DIR (job contexts are removed as their jobs end; logs are kept)" >&2
 echo "# tier $TIER: $TOTAL_RUNS runs in $((1 + ${#PLAN_GROUPS[@]})) jobs" >&2
+[ "$OWN_N" -eq 0 ] || echo "# $OWN_N cfgs from $OWN_CFG (next to TLA_SUITE; not pinned)" >&2
 
 # --- one job ----------------------------------------------------------------
 # build_ctx <job> <runs-file> <budget>
@@ -426,7 +458,7 @@ build_ctx() {
   # shellcheck disable=SC2016  # the literal line, not an expansion
   grep -qxF 'DISKCAP_MB=${DISKCAP_MB:-60000}' "$d/tlcjob.sh" || return 1
   cp "$2" "$d/runs" || return 1
-  while read -r s c _; do cp "$HERE/cfg/$c.cfg" "$d/" || return 1; done < "$2"
+  while read -r s c _; do cp "${CFG_PATH[$c]}" "$d/" || return 1; done < "$2"
 }
 
 # submit_job <job>: sets CUR_ID and SUB_JSON.
@@ -561,10 +593,20 @@ for k in "${!PLAN_GROUPS[@]}"; do
     res=$(sed -n 's/.* result=\([^ ]*\).*/\1/p' <<<"$v"); res=${res:-NO-VERDICT}
     dist=$(sed -n 's/.* distinct=\([^ ]*\).*/\1/p' <<<"$v")
     secs=$(sed -n 's/.* secs=\([^ ]*\).*/\1/p' <<<"$v")
-    good=no
+    good=no; why=
     case "${R_EXP[$i]}:$res" in pass:PASS) good=yes ;; violation:FAIL\(*) good=yes ;; esac
+    # A props row needs its result to name one of its props; a result naming
+    # no single property (empty name) matches none.
+    props=${R_PROPS[$i]}
+    if [ "$good" = yes ] && [ -n "$props" ]; then
+      name=$(sed -n -E 's/^FAIL\((Invariant|Action_property|Temporal_property)_([A-Za-z0-9_]+)_(is|was)_violated\)$/\2/p' <<<"$res")
+      case ",$props," in
+        *",$name,"*) ;;
+        *) good=no; why=" (the expected violation is $props)" ;;
+      esac
+    fi
     if [ "$good" = yes ]; then OK=$((OK + 1)); tag=PASS; else tag=FAIL; fi
-    printf '%s %-24s %-58s distinct=%s secs=%s -- %s\n' "$tag" "$c" "$res" "${dist:-?}" "${secs:-?}" "${R_WHAT[$i]}"
+    printf '%s %-24s %-58s distinct=%s secs=%s -- %s%s\n' "$tag" "$c" "$res" "${dist:-?}" "${secs:-?}" "${R_WHAT[$i]}" "$why"
   done
 done
 
