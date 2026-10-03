@@ -4,9 +4,29 @@ What this is
   Bee b.zuj's TLA+ model of the Phase 1 LABEL design and its on-demand
   model-check suite, vendored so `make tla` can submit it to the job
   scheduler (Epic 22, t1.h98.8p; subtask t3.h98.8p.q1.74). Bee b.zuj owns
-  the model and its results: nothing in this tree changes the specs, the
-  cfgs, the manifest or the expectations. To re-sync, copy the files from
-  b.zuj again and replace the pin lines at the end of this file.
+  the model and its results. One spec, Phase4.tla, has since been changed
+  here for bee b.66h (see "Changed here" below); nothing else changes b.zuj's
+  specs, cfgs, manifest or expectations. To re-sync, copy the files from
+  b.zuj again, re-apply the b.66h change (or take b.zuj's adoption of it)
+  and replace the pin lines at the end of this file.
+
+Changed here, not from b.zuj (bee b.66h, launch-scoped actions, 2026-10-03)
+  Phase4.tla differs from b.zuj CI run 4. Run 4's file had SHA-256
+  77c292490c2cb2fe40f363cacf6fd4008741fb225ff96f3ccc1dddaed4f3f45d; the pin
+  line below pins the changed file. The change adds three knobs
+  (LaunchObs, LaunchScoped, RelaunchAny: zero-arity definitions, all FALSE),
+  the variables bobs, oobs, okl, hid and scopeViol, the action O_Reread and
+  the properties ScopedActsOnlyOnObservedLaunch, ChangedIsInert,
+  NotLaunchChanged and NotRelaunchInKillWindow. With every knob FALSE (every cfg in ci/cfg/) the state
+  graph is meant to be exactly run 4's; laptop/run.sh checks each pass run's
+  state count against run 4. Run 4's verdicts do not cover the changed file
+  until such a run, or a make tla run, passes. Details:
+  launch/README.md.
+  Every other pinned file is still byte-identical to run 4's.
+  New files, written here and not pinned: launch/README.md,
+  launch/suite.tsv and launch/cfg/*.cfg (the b.66h runs), laptop/run.sh,
+  laptop/README.md and laptop/run4.tsv (the laptop runner and run 4's
+  per-cfg results, from run 4's job logs).
 
 Source
   Bee b.zuj, directory tickets/Ideas/b.zuj/ of the Apiary ticket tree (outside
@@ -55,6 +75,8 @@ Layout (b.zuj's relative layout, so mkci.py's paths stay valid)
   ci/run_ci.sh                                  the repo runner, adapted from
                                                 b.zuj's run_ci.sh; written for
                                                 this repo, so not pinned
+  launch/                                       the b.66h runs (not pinned)
+  laptop/                                       the laptop runner (not pinned)
   PROVENANCE.txt                                this file
 
 Not vendored
@@ -104,7 +126,7 @@ Pin list
   builds or submits anything and fails closed on any difference, except the
   three specs when TLA_SPEC_DIR is set and ci/suite.tsv when TLA_SUITE is set.
 
-77c292490c2cb2fe40f363cacf6fd4008741fb225ff96f3ccc1dddaed4f3f45d  Phase4.tla
+eeae3852078522d7bda3e391b43d3af26c26c1767e2a83e72a906ad9cc441155  Phase4.tla
 257a0f1d79c73a0efb4897959c9ca0335e2b705695e7aaae2a48242760a1811e  Phase4Split.tla
 e34dc7153b6c9d7230440f96c2b11a308e55a68608e46de75f37a236ed5f3a2e  Phase5Hook.tla
 320d5f022777a8194c194388bc7c39ba54c0570a0a6b40dcffd374e551057067  ci/cfg/ci_C1.cfg

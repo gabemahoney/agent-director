@@ -50,6 +50,17 @@
 (* step (the design's "milliseconds" window); FALSE = separate steps, so a *)
 (* server restart between them can hand the pane id to another process    *)
 (* (the if-shell guard was declined).                                      *)
+(*                                                                         *)
+(* b.66h LAUNCH-SCOPED ACTIONS (repo change, not from b.zuj; bee b.66h,    *)
+(* launch-scoped-actions.md section 3). kill and send-keys may carry the   *)
+(* launch id the caller read (from get, status, spawn or resume). Right    *)
+(* after the verb's one row read, before every other check, agent-director *)
+(* compares it with the row's current launch and refuses with              *)
+(* ErrLaunchChanged when they differ: result "changed", no tmux call, no   *)
+(* write. Knobs LaunchObs, LaunchScoped and RelaunchAny (below the         *)
+(* CONSTANTS) are definitions, all FALSE, so the b.zuj run-4 cfgs parse    *)
+(* unchanged and keep their state graphs; a b.66h cfg (spec/tla/launch/)  *)
+(* turns them on by definition override, e.g. `LaunchScoped <- KnobOn`.   *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets, TLC
 
@@ -72,6 +83,16 @@ CONSTANTS MaxSid, MaxLife, MaxFaults, ResumeEnabled, EnableExpire,
           StoreInLabel,       \* the label carries the store id; another store's label is foreign
           AllowOtherStore,    \* accident: another store's agent with the same id on this server
           LeftoverLabelled    \* FALSE: the leftover's session carries no label (pre-release)
+
+\* b.66h knobs (see the header). Override in a cfg's CONSTANTS section with
+\* `<name> <- KnobOn`.
+KnobOn       == TRUE
+KnobOff      == FALSE
+LaunchObs    == FALSE   \* record the launch each caller read; check ScopedActsOnlyOnObservedLaunch
+LaunchScoped == FALSE   \* the design: the compare (FALSE with LaunchObs: today's code, the control)
+RelaunchAny  == FALSE   \* the human relauncher may resume the orchestrator's row as well as the
+                        \* bot's (and the orchestrator's agent writes a transcript, Message), so a
+                        \* relaunch can fall between the orchestrator's kill lookup and its act
 
 Ids      == {"b", "o"}
 NoId     == "noid"
@@ -110,23 +131,29 @@ Max(S) == CHOOSE x \in S : \A y \in S : y <= x
 VARIABLES
   row, sess, procs, hist, nextSid, nextLife, faults, wall, strayUsed, leftUsed,
   srv, sbase, renameUsed, groupUsed, respawnUsed, restartUsed,
-  opc, otaint, oname, olife, okt, over, oreuse, osave,
-  bpc, btaint, blife, bver, latch, bconv, bsave,
+  opc, otaint, oname, olife, okt, over, oreuse, osave, oobs, okl,
+  bpc, btaint, blife, bver, latch, bconv, bsave, bobs,
   apc, atg,
-  hpc, hver, hconv, hsave,
+  hpc, hver, hconv, hsave, hid,
   kpc, kid, ktg,
   fpc, fsnap,
-  handsViol, inertViol, lifeViol, sendViol, histViol, botFinViol, hkViol, killViol, seen
+  handsViol, inertViol, lifeViol, sendViol, histViol, botFinViol, hkViol, killViol, scopeViol, seen
+\* b.66h: bobs / oobs, the launch the bot / orchestrator last read (an Obs
+\* record; NoObs unless LaunchObs); okl, the launch the orchestrator's kill
+\* lookup read (RelaunchAny only); hid, the row the human relauncher works
+\* on (always BotId unless RelaunchAny); scopeViol, the ghost of
+\* ScopedActsOnlyOnObservedLaunch (FALSE unless LaunchObs).
 
 TW        == <<sess, procs>>
 provVars  == <<srv, sbase, renameUsed, groupUsed, respawnUsed, restartUsed>>
 envVars   == <<wall, strayUsed, leftUsed, provVars>>
-orchVars  == <<opc, otaint, oname, olife, okt, over, oreuse, osave>>
-botVars   == <<bpc, btaint, blife, bver, latch, bconv, bsave>>
+orchVars  == <<opc, otaint, oname, olife, okt, over, oreuse, osave, oobs, okl>>
+botVars   == <<bpc, btaint, blife, bver, latch, bconv, bsave, bobs>>
 apprVars  == <<apc, atg>>
-humVars   == <<hpc, hver, hconv, hsave, kpc, kid, ktg>>
+humVars   == <<hpc, hver, hconv, hsave, kpc, kid, ktg, hid>>
 fmVars    == <<fpc, fsnap>>
-ghostVars == <<handsViol, inertViol, lifeViol, sendViol, histViol, botFinViol, hkViol, killViol, seen>>
+ghostVars == <<handsViol, inertViol, lifeViol, sendViol, histViol, botFinViol, hkViol, killViol, scopeViol,
+               seen>>
 vars == <<row, TW, hist, nextSid, nextLife, faults, envVars, orchVars, botVars, apprVars,
           humVars, fmVars, ghostVars>>
 
@@ -134,6 +161,17 @@ NewRow(nm, l, v) == [st |-> "pending", name |-> nm, life |-> l, pid |-> 0, sessI
              fresh |-> TRUE, ey |-> FALSE, tx |-> FALSE, ee |-> 0,
              lk |-> <<l, v>>, tok |-> <<l, v>>, sv |-> 0, pn |-> 0, ppid |-> 0]
 NoTarget == [pn |-> 0, pid |-> 0, tid |-> 0, sv |-> 0]
+\* b.66h: what a caller reads of row i: the launch (ground truth) and the
+\* launch token behind the launch_id it is shown. Observe rewrites v only
+\* when LaunchObs holds, so the b.zuj runs keep v = NoObs.
+NoObs         == [lk |-> NoTok, tok |-> NoTok]
+Obs(i)        == [lk |-> row[i].lk, tok |-> row[i].tok]
+Observe(v, i) == v' = IF LaunchObs THEN Obs(i) ELSE v
+ObsLaunch(i, ob) == <<i, ob.lk>>
+\* The compare: a scoped call whose launch is no longer the row's current one.
+Changed(i, ob) == LaunchScoped /\ LaunchObs /\ row[i].tok # ob.tok
+\* The rows the human relauncher may resume, and whose agents write a transcript.
+RelaunchIds == IF RelaunchAny THEN Ids ELSE {BotId}
 
 -----------------------------------------------------------------------------
 Note(tag)      == seen' = IF Probes THEN seen \cup {tag} ELSE seen
@@ -242,8 +280,11 @@ DupClass(i, nm) == IF Holder(i, nm) = "free" THEN "fail" ELSE "conflict"
 
 \* Honest kill (SR-6.1, amendment 5), bot side, atomic. r: ok | notfound |
 \* conflict | unavail | killfailed. S/P: the tmux world after.
-KillOut(i, g) ==
+\* b.66h: ob is the launch the caller read; "changed" comes right after the
+\* unknown-id check, in any row state.
+KillOut(i, g, ob) ==
   IF row[i].st = "none" THEN [r |-> "notfound", S |-> sess, P |-> procs]
+  ELSE IF Changed(i, ob) THEN [r |-> "changed", S |-> sess, P |-> procs]
   ELSE IF row[i].st \in Terminal THEN [r |-> "ok", S |-> sess, P |-> procs]
   ELSE LET lk == Lookup(i, IF g = "act" THEN "none" ELSE g)
            ap == AgentPid(i)
@@ -271,24 +312,35 @@ KillOut(i, g) ==
 \* Ground truth for "hands off": a process of the row's current launch, or
 \* anything in a pane that a session of that launch shows (e.g. a respawned
 \* program inside the agent's own session).
-InCurPane(i, p) == p.gl = CurLaunch(i) \/ \E s \in sess : s.gl = CurLaunch(i) /\ ~s.view /\ s.pn = p.pn
+\* b.66h: the same for any launch L = <<id, launch key>>.
+InLaunchPane(L, p) == p.gl = L \/ \E s \in sess : s.gl = L /\ ~s.view /\ s.pn = p.pn
+InCurPane(i, p) == InLaunchPane(CurLaunch(i), p)
 \* Ghosts for any kill: hands off; a reported success leaves no process of
-\* that launch.
-KillHands(i, P) == handsViol' = (handsViol \/ (Ghosts /\ (\E p \in procs \ P : ~InCurPane(i, p))))
-KillHonestG(i, r, P) == killViol' = (killViol \/ (Ghosts /\ ((r = "ok" /\ row[i].st \in Live /\
-                                    \E p \in P : p.gl = CurLaunch(i)))))
+\* that launch. b.66h: the L forms take the launch the kill's lookup read,
+\* which a split kill needs once a relaunch can fall between its lookup and
+\* its act (RelaunchAny); the i forms take the row's current launch.
+KillHandsL(L, P) == handsViol' = (handsViol \/ (Ghosts /\ (\E p \in procs \ P : ~InLaunchPane(L, p))))
+KillHands(i, P) == KillHandsL(CurLaunch(i), P)
+KillHonestL(i, L, r, P) == killViol' = (killViol \/ (Ghosts /\ ((r = "ok" /\ row[i].st \in Live /\
+                                       \E p \in P : p.gl = L))))
+KillHonestG(i, r, P) == KillHonestL(i, CurLaunch(i), r, P)
+\* b.66h ghost: a scoped kill or send reaches only the launch L its caller
+\* read (K: the processes it ends, or the processes of the pane it types to).
+ScopeG(L, K) == scopeViol' = (scopeViol \/ (Ghosts /\ LaunchObs /\ \E p \in K : ~InLaunchPane(L, p)))
 
 \* send-keys on a live row (SR-7, Table 2), lookup + deliver atomic: to the
-\* agent's pane (recorded pane id with its pid), never name:0.0.
-SendOut(i, g) ==
-  LET lk == Lookup(i, IF g = "act" THEN "none" ELSE g)
-      tp == PaneTarget(i, lk) IN
-  CASE lk.v = "ours" /\ g = "act" -> [r |-> "unavail", p |-> 0]
-    [] lk.v = "ours" /\ tp # 0     -> [r |-> "ok", p |-> tp]
-    [] lk.v = "ours"               -> [r |-> "conflict", p |-> 0]   \* the agent's pane was not found
-    [] lk.v = "leftover"           -> [r |-> "conflict", p |-> 0]
-    [] lk.v = "gone"               -> [r |-> "gone", p |-> 0]
-    [] OTHER                       -> [r |-> "unavail", p |-> 0]
+\* agent's pane (recorded pane id with its pid), never name:0.0. b.66h: ob
+\* is the launch the caller read; "changed" comes first.
+SendOut(i, g, ob) ==
+  IF Changed(i, ob) THEN [r |-> "changed", p |-> 0]
+  ELSE LET lk == Lookup(i, IF g = "act" THEN "none" ELSE g)
+           tp == PaneTarget(i, lk) IN
+       CASE lk.v = "ours" /\ g = "act" -> [r |-> "unavail", p |-> 0]
+         [] lk.v = "ours" /\ tp # 0     -> [r |-> "ok", p |-> tp]
+         [] lk.v = "ours"               -> [r |-> "conflict", p |-> 0]   \* the agent's pane was not found
+         [] lk.v = "leftover"           -> [r |-> "conflict", p |-> 0]
+         [] lk.v = "gone"               -> [r |-> "gone", p |-> 0]
+         [] OTHER                       -> [r |-> "unavail", p |-> 0]
 
 \* History (SR-8.7 + history-by-life).
 Cur(i)   == IF row[i].sessId THEN {row[i].life} ELSE {}
@@ -298,9 +350,11 @@ Sel(i)   == IF row[i].tx THEN row[i].life
             ELSE IF HistC(i) = {} THEN 0 ELSE Max(HistC(i))
 
 \* A launcher between its row write and its create call.
-InLaunch(i) == IF i = BotId THEN bpc \in {"launch", "retry_launch", "reuse_launch", "rlaunch"}
-                                 \/ hpc = "rlaunch"
-               ELSE opc = "launch"
+\* (b.66h: the human relauncher's launch counts for its row hid; hid is
+\* always BotId unless RelaunchAny.)
+InLaunch(i) == \/ IF i = BotId THEN bpc \in {"launch", "retry_launch", "reuse_launch", "rlaunch"}
+                  ELSE opc = "launch"
+               \/ hpc = "rlaunch" /\ hid = i
 \* find-missing (SR-11.1, SR-11.3; amendment 7).
 Evidence(i) ==
   LET ap == AgentPid(i) IN
@@ -384,6 +438,7 @@ Init ==
   /\ fpc = "idle" /\ fsnap = {}
   /\ handsViol = FALSE /\ inertViol = FALSE /\ lifeViol = FALSE /\ sendViol = FALSE
   /\ histViol = FALSE /\ botFinViol = FALSE /\ hkViol = FALSE /\ killViol = FALSE /\ seen = {}
+  /\ bobs = NoObs /\ oobs = NoObs /\ okl = NoObs /\ hid = BotId /\ scopeViol = FALSE   \* b.66h
 
 -----------------------------------------------------------------------------
 (* Environment: agents, hooks, time, accidents *)
@@ -408,7 +463,7 @@ StartOK(p) ==
 \* SessionEnd (an ordinary hook): only with the row's recorded session.
 EndOK(p) == ~HookGate \/ row[p.owner].st = "none" \/ row[p.owner].pid = p.pid
 EUn == <<hist, nextSid, nextLife, faults, envVars, orchVars, botVars, apprVars, humVars, fmVars,
-         handsViol, inertViol, lifeViol, sendViol, histViol, botFinViol, hkViol, killViol>>
+         handsViol, inertViol, lifeViol, sendViol, histViol, botFinViol, hkViol, killViol, scopeViol>>
 HookStartOf(p) ==
   /\ ~p.started /\ ~p.blocked /\ p.owner # NoId
   /\ procs' = (procs \ {p}) \cup {[p EXCEPT !.started = TRUE]}
@@ -431,11 +486,14 @@ HookEnd ==
     /\ UNCHANGED sess /\ UNCHANGED EUn
 ProcExit == \E p \in procs : p.ending /\ ProcGone(p) /\ UNCHANGED row /\ UNCHANGED EU
 Crash    == \E p \in procs : ProcGone(p) /\ UNCHANGED row /\ UNCHANGED EU
+\* (b.66h: under RelaunchAny the orchestrator's agent writes a transcript
+\* too, so its row can be resumed.)
 Message ==
-  /\ row[BotId].st = "live" /\ ~row[BotId].tx
-  /\ \E p \in procs : p.owner = BotId /\ p.started /\ ~p.ending
-  /\ row' = [row EXCEPT ![BotId].tx = TRUE]
-  /\ UNCHANGED TW /\ UNCHANGED EU
+  \E i \in RelaunchIds :
+    /\ row[i].st = "live" /\ ~row[i].tx
+    /\ \E p \in procs : p.owner = i /\ p.started /\ ~p.ending
+    /\ row' = [row EXCEPT ![i].tx = TRUE]
+    /\ UNCHANGED TW /\ UNCHANGED EU
 Age ==
   \E s \in sess :
     /\ s.young
@@ -501,7 +559,7 @@ Rename ==
   /\ UNCHANGED <<row, procs, nextSid, wall, strayUsed, leftUsed, srv, sbase, groupUsed, respawnUsed,
                  restartUsed>>
   /\ UNCHANGED <<hist, nextLife, faults, orchVars, botVars, apprVars, humVars, fmVars,
-                 handsViol, inertViol, lifeViol, sendViol, histViol, botFinViol, hkViol, killViol>>
+                 handsViol, inertViol, lifeViol, sendViol, histViol, botFinViol, hkViol, killViol, scopeViol>>
 \* A grouped (viewing) session: shares the pane, carries no label (B3).
 Group ==
   /\ AllowGroup /\ ~groupUsed /\ CanCreate
@@ -512,7 +570,7 @@ Group ==
   /\ nextSid' = nextSid + 1 /\ groupUsed' = TRUE /\ Note("grouped")
   /\ UNCHANGED <<row, procs, wall, strayUsed, leftUsed, srv, sbase, renameUsed, respawnUsed, restartUsed>>
   /\ UNCHANGED <<hist, nextLife, faults, orchVars, botVars, apprVars, humVars, fmVars,
-                 handsViol, inertViol, lifeViol, sendViol, histViol, botFinViol, hkViol, killViol>>
+                 handsViol, inertViol, lifeViol, sendViol, histViol, botFinViol, hkViol, killViol, scopeViol>>
 \* respawn-pane -k: a pane shown by some session now runs something else.
 Respawn ==
   /\ AllowRespawn /\ ~respawnUsed /\ CanCreate
@@ -524,7 +582,7 @@ Respawn ==
   /\ nextSid' = nextSid + 1 /\ respawnUsed' = TRUE /\ Note("respawned")
   /\ UNCHANGED <<row, sess, wall, strayUsed, leftUsed, srv, sbase, renameUsed, groupUsed, restartUsed>>
   /\ UNCHANGED <<hist, nextLife, faults, orchVars, botVars, apprVars, humVars, fmVars,
-                 handsViol, inertViol, lifeViol, sendViol, histViol, botFinViol, hkViol, killViol>>
+                 handsViol, inertViol, lifeViol, sendViol, histViol, botFinViol, hkViol, killViol, scopeViol>>
 \* The tmux server restarts: every session and every process in it dies;
 \* session and pane ids restart.
 ServerRestart ==
@@ -533,7 +591,7 @@ ServerRestart ==
   /\ Note("restarted")
   /\ UNCHANGED <<row, nextSid, wall, strayUsed, leftUsed, renameUsed, groupUsed, respawnUsed>>
   /\ UNCHANGED <<hist, nextLife, faults, orchVars, botVars, apprVars, humVars, fmVars,
-                 handsViol, inertViol, lifeViol, sendViol, histViol, botFinViol, hkViol, killViol>>
+                 handsViol, inertViol, lifeViol, sendViol, histViol, botFinViol, hkViol, killViol, scopeViol>>
 \* A lookup that finds the current label adopts a lost reply's server
 \* identity and pane (A6): the pane of the SessionStart pid, else the
 \* session's pane.
@@ -548,12 +606,12 @@ Adopt ==
   /\ Note("adopted")
   /\ UNCHANGED TW /\ UNCHANGED <<nextSid, envVars>>
   /\ UNCHANGED <<hist, nextLife, faults, orchVars, botVars, apprVars, humVars, fmVars,
-                 handsViol, inertViol, lifeViol, sendViol, histViol, botFinViol, hkViol, killViol>>
+                 handsViol, inertViol, lifeViol, sendViol, histViol, botFinViol, hkViol, killViol, scopeViol>>
 
 -----------------------------------------------------------------------------
 (* Orchestrator on id "o" *)
 OU == <<hist, envVars, botVars, apprVars, humVars, fmVars>>
-NoGk == <<handsViol, inertViol, lifeViol, sendViol, histViol, botFinViol, hkViol, killViol>>
+NoGk == <<handsViol, inertViol, lifeViol, sendViol, histViol, botFinViol, hkViol, killViol, scopeViol>>
 
 O_Spawn ==
   /\ EnableOrch /\ opc = "idle" /\ CanInsert(OrchId) /\ ~ScanBlocks(OrchId)
@@ -561,7 +619,7 @@ O_Spawn ==
        /\ InsertRow(OrchId, nm)
        /\ opc' = "launch" /\ oname' = nm /\ olife' = nextLife + 1
   /\ otaint' = FALSE /\ oreuse' = FALSE
-  /\ UNCHANGED <<TW, nextSid, faults, okt, over, osave, OU, ghostVars>>
+  /\ UNCHANGED <<TW, nextSid, faults, okt, over, osave, oobs, okl, OU, ghostVars>>
 
 O_ReuseLookup ==
   /\ EnableOrch /\ opc = "idle"
@@ -573,7 +631,7 @@ O_ReuseLookup ==
           THEN /\ opc' = "reuse_reset" /\ oname' = nm /\ over' = row[OrchId].ver
                /\ olife' = row[OrchId].life /\ otaint' = FALSE
           ELSE /\ opc' = "idle" /\ otaint' = (otaint \/ Ghosts) /\ UNCHANGED <<oname, over, olife>>
-  /\ UNCHANGED <<row, TW, nextSid, nextLife, okt, oreuse, osave, OU, ghostVars>>
+  /\ UNCHANGED <<row, TW, nextSid, nextLife, okt, oreuse, osave, oobs, okl, OU, ghostVars>>
 
 O_ReuseReset ==
   /\ opc = "reuse_reset"
@@ -586,8 +644,8 @@ O_ReuseReset ==
           /\ opc' = "launch" /\ oreuse' = TRUE
           /\ inertViol' = (inertViol \/ (Ghosts /\ (otaint)))
      ELSE /\ opc' = "idle" /\ UNCHANGED <<row, hist, nextLife, olife, over, oreuse, osave, inertViol>>
-  /\ UNCHANGED <<TW, nextSid, faults, otaint, oname, okt, envVars, botVars, apprVars, humVars, fmVars,
-                 handsViol, lifeViol, sendViol, histViol, botFinViol, hkViol, killViol, seen>>
+  /\ UNCHANGED <<TW, nextSid, faults, otaint, oname, okt, oobs, okl, envVars, botVars, apprVars, humVars,
+                 fmVars, handsViol, lifeViol, sendViol, histViol, botFinViol, hkViol, killViol, scopeViol, seen>>
 
 \* new-session. Plain spawn: "duplicate session" ends the row (HELD); a
 \* failure leaves it pending. Reuse: failure or duplicate -> restore.
@@ -609,32 +667,49 @@ O_Launch ==
                /\ UNCHANGED otaint
                /\ Note(IF o = "labfail" THEN "labfail" ELSE IF o = "tmo_made" THEN "lost_reply" ELSE "created")
   /\ opc' = "run" /\ osave' = NoRow
-  /\ UNCHANGED <<hist, nextLife, oname, olife, okt, over, oreuse, OU, NoGk>>
+  \* b.66h: the orchestrator reads the launch id its launch left on the row
+  \* (from spawn's result, or a get after a failure).
+  /\ oobs' = IF LaunchObs THEN [lk |-> row'[OrchId].lk, tok |-> row'[OrchId].tok] ELSE oobs
+  /\ UNCHANGED <<hist, nextLife, oname, olife, okt, over, oreuse, okl, OU, NoGk>>
 
 \* kill, step 1: the lookup (and the pane listing) -> a target, or an answer.
+\* b.66h: the compare first; "changed" makes no lookup and no tmux call.
 O_KillLookup ==
   /\ opc = "run" /\ row[OrchId].st # "none"
-  /\ \E k \in LChoicesK :
-       /\ SpendK(k)
-       /\ IF row[OrchId].st \in Terminal
-          THEN opc' = "killed" /\ UNCHANGED <<otaint, okt>>
-          ELSE LET lk == Lookup(OrchId, k)
-                   ap == AgentPid(OrchId) IN
-               CASE lk.v \in {"leftover", "cant"} ->                     \* P1 / Can't tell
-                        opc' = "run" /\ otaint' = (otaint \/ Ghosts) /\ UNCHANGED okt
-                 [] lk.v = "ours" ->
-                        opc' = "kill_act" /\ UNCHANGED otaint
-                        /\ okt' = [pn |-> PaneTarget(OrchId, lk), pid |-> KillPid(OrchId, lk), tid |-> lk.s.tid,
-                                   sv |-> srv]
-                 [] OTHER ->                                              \* Gone
-                        IF wall \/ ap = 0 \/ ~ProcAlive(ap)
-                        THEN opc' = "killed" /\ UNCHANGED <<otaint, okt>>
-                        ELSE IF A5PaneKill /\ RecPane(OrchId) /\ row[OrchId].sv = srv
-                        THEN opc' = "kill_act" /\ UNCHANGED otaint
-                             /\ okt' = [pn |-> row[OrchId].pn, pid |-> ap, tid |-> 0, sv |-> srv]
-                        ELSE IF A5PaneKill THEN opc' = "run" /\ otaint' = (otaint \/ Ghosts) /\ UNCHANGED okt
-                        ELSE opc' = "killed" /\ UNCHANGED <<otaint, okt>>
-  /\ UNCHANGED <<row, TW, hist, nextSid, nextLife, oname, olife, over, oreuse, osave, OU, ghostVars>>
+  /\ IF Changed(OrchId, oobs)
+     THEN /\ opc' = "reread" /\ Note("launch_changed")
+          /\ UNCHANGED <<faults, otaint, okt, okl>>
+     ELSE /\ \E k \in LChoicesK :
+               /\ SpendK(k)
+               /\ IF row[OrchId].st \in Terminal
+                  THEN opc' = "killed" /\ UNCHANGED <<otaint, okt>>
+                  ELSE LET lk == Lookup(OrchId, k)
+                           ap == AgentPid(OrchId) IN
+                       CASE lk.v \in {"leftover", "cant"} ->                     \* P1 / Can't tell
+                                opc' = "run" /\ otaint' = (otaint \/ Ghosts) /\ UNCHANGED okt
+                         [] lk.v = "ours" ->
+                                opc' = "kill_act" /\ UNCHANGED otaint
+                                /\ okt' = [pn |-> PaneTarget(OrchId, lk), pid |-> KillPid(OrchId, lk),
+                                           tid |-> lk.s.tid, sv |-> srv]
+                         [] OTHER ->                                              \* Gone
+                                IF wall \/ ap = 0 \/ ~ProcAlive(ap)
+                                THEN opc' = "killed" /\ UNCHANGED <<otaint, okt>>
+                                ELSE IF A5PaneKill /\ RecPane(OrchId) /\ row[OrchId].sv = srv
+                                THEN opc' = "kill_act" /\ UNCHANGED otaint
+                                     /\ okt' = [pn |-> row[OrchId].pn, pid |-> ap, tid |-> 0, sv |-> srv]
+                                ELSE IF A5PaneKill THEN opc' = "run" /\ otaint' = (otaint \/ Ghosts) /\ UNCHANGED okt
+                                ELSE opc' = "killed" /\ UNCHANGED <<otaint, okt>>
+          \* b.66h: the launch this lookup read, for the act's ghosts
+          /\ okl' = IF RelaunchAny THEN Obs(OrchId) ELSE okl
+          /\ UNCHANGED seen
+  /\ UNCHANGED <<row, TW, hist, nextSid, nextLife, oname, olife, over, oreuse, osave, oobs, OU, NoGk>>
+\* b.66h: after ErrLaunchChanged the orchestrator reads the row again, then
+\* decides again (O_KillLookup with the new launch, or O_Finished).
+O_Reread ==
+  /\ opc = "reread"
+  /\ opc' = "run" /\ Observe(oobs, OrchId)
+  /\ UNCHANGED <<row, TW, hist, nextSid, nextLife, faults, otaint, oname, olife, okt, over, oreuse, osave, okl,
+                 OU, ghostVars>>
 
 \* The act on a pane id / session id. ActPidCheck: the pane still shows the
 \* pid seen by the listing and the server is the same (one step).
@@ -647,31 +722,37 @@ ActWorld(t) ==
       W2 == IF t.tid # 0 /\ T # {} /\ (~ActPidCheck \/ srv = t.sv)
             THEN AfterSess(W1[1], W1[2], CHOOSE x \in T : TRUE) ELSE W1
   IN W2
+\* b.66h: the launch the kill's lookup read and its label (the row's
+\* current ones unless RelaunchAny, when a relaunch can fall in between).
+OKillL == IF RelaunchAny THEN <<OrchId, okl.lk>> ELSE CurLaunch(OrchId)
+OKillLabel(x) == IF RelaunchAny THEN LabValid(x) /\ StoreOK(x) /\ x.lab.id = OrchId /\ x.lab.tok = okl.tok
+                 ELSE CurLabel(OrchId, x)
 O_KillAct ==
   /\ opc = "kill_act"
   /\ \E f \in FaultChoices :
        LET W    == IF f THEN <<sess, procs>> ELSE ActWorld(okt)
            gone == IF ~A5PaneKill THEN TRUE
-                   ELSE IF wall \/ okt.pid = 0 THEN ~\E x \in W[1] : CurLabel(OrchId, x)
+                   ELSE IF wall \/ okt.pid = 0 THEN ~\E x \in W[1] : OKillLabel(x)
                    ELSE ~\E p \in W[2] : p.pid = okt.pid
            r    == IF gone THEN "ok" ELSE "killfailed"
        IN /\ Spend(f)
           /\ sess' = W[1] /\ procs' = W[2]
-          /\ KillHands(OrchId, W[2]) /\ KillHonestG(OrchId, r, W[2])
+          /\ KillHandsL(OKillL, W[2]) /\ KillHonestL(OrchId, OKillL, r, W[2])
+          /\ ScopeG(ObsLaunch(OrchId, oobs), procs \ W[2])
           /\ IF r = "ok" THEN opc' = "killed" /\ UNCHANGED otaint ELSE opc' = "run" /\ otaint' = (otaint \/ Ghosts)
-  /\ UNCHANGED <<row, hist, nextSid, nextLife, oname, olife, okt, over, oreuse, osave, OU,
+  /\ UNCHANGED <<row, hist, nextSid, nextLife, oname, olife, okt, over, oreuse, osave, oobs, okl, OU,
                  inertViol, lifeViol, sendViol, histViol, botFinViol, hkViol, seen>>
 
 O_AfterKill ==
   /\ opc = "killed"
   /\ row' = SweepRows /\ opc' = "idle"
   /\ UNCHANGED <<TW, hist, nextSid, nextLife, faults, otaint, oname, olife, okt, over, oreuse, osave,
-                 OU, ghostVars>>
+                 oobs, okl, OU, ghostVars>>
 O_Finished ==
   /\ opc = "run" /\ row[OrchId].st \in Terminal
   /\ opc' = "idle"
   /\ UNCHANGED <<row, TW, hist, nextSid, nextLife, faults, otaint, oname, olife, okt, over, oreuse, osave,
-                 OU, ghostVars>>
+                 oobs, okl, OU, ghostVars>>
 
 -----------------------------------------------------------------------------
 (* Bot server on id "b", name "n" *)
@@ -680,11 +761,11 @@ BK == <<envVars, orchVars, apprVars, humVars, fmVars>>
 B_Start ==
   /\ EnableBot /\ bpc = "idle" /\ ~latch
   /\ bpc' = "spawn" /\ btaint' = FALSE
-  /\ UNCHANGED <<row, TW, hist, nextSid, nextLife, faults, BK, blife, bver, latch, bconv, bsave, ghostVars>>
+  /\ UNCHANGED <<row, TW, hist, nextSid, nextLife, faults, BK, blife, bver, latch, bconv, bsave, bobs, ghostVars>>
 B_Unlatch ==
   /\ latch /\ row[BotId].st = "live"
   /\ latch' = FALSE
-  /\ UNCHANGED <<row, TW, hist, nextSid, nextLife, faults, BK, bpc, btaint, blife, bver, bconv, bsave, ghostVars>>
+  /\ UNCHANGED <<row, TW, hist, nextSid, nextLife, faults, BK, bpc, btaint, blife, bver, bconv, bsave, bobs, ghostVars>>
 B_SpawnAt(pc, onColl, onIns) ==
   /\ bpc = pc
   /\ IF CanInsert(BotId) /\ ~ScanBlocks(BotId)
@@ -693,7 +774,7 @@ B_SpawnAt(pc, onColl, onIns) ==
      THEN /\ bpc' = "idle" /\ UNCHANGED <<row, nextLife, blife>>           \* scan: CONFLICT
      ELSE /\ row[BotId].st # "none"
           /\ bpc' = onColl /\ UNCHANGED <<row, nextLife, blife>>
-  /\ UNCHANGED <<TW, hist, nextSid, faults, BK, btaint, bver, latch, bconv, bsave, ghostVars>>
+  /\ UNCHANGED <<TW, hist, nextSid, faults, BK, btaint, bver, latch, bconv, bsave, bobs, ghostVars>>
 B_Spawn      == B_SpawnAt("spawn", "get", "launch")
 B_RetrySpawn == B_SpawnAt("retry_spawn", "idle", "retry_launch")
 
@@ -717,41 +798,56 @@ B_LaunchAt(pc) ==
                /\ Note(IF o = "labfail" THEN (IF c.made THEN "labfail_left" ELSE "labfail_killed")
                        ELSE IF o = "tmo_made" THEN "lost_reply" ELSE "created")
   /\ bpc' = "idle"
-  /\ UNCHANGED <<hist, nextLife, BK, blife, bver, bconv, bsave, NoGk>>
+  /\ UNCHANGED <<hist, nextLife, BK, blife, bver, bconv, bsave, bobs, NoGk>>
 B_Launch      == B_LaunchAt("launch")
 B_RetryLaunch == B_LaunchAt("retry_launch")
 
+\* (b.66h: the bot reads the row's launch id here; it scopes the kill or
+\* the keys it then sends.)
 B_Get ==
   /\ bpc = "get"
   /\ bpc' \in CASE row[BotId].st = "none"     -> {"retry_spawn"}
                [] row[BotId].st \in Terminal -> {IF ResumeEnabled THEN "resume" ELSE "nr_kill"}
                [] row[BotId].st = "live"     -> {"reconnect"}
                [] row[BotId].st = "pending"  -> {"idle", "nr_kill"}
+  /\ Observe(bobs, BotId)
   /\ UNCHANGED <<row, TW, hist, nextSid, nextLife, faults, BK, btaint, blife, bver, latch, bconv, bsave, ghostVars>>
 
-\* reconnect over send-keys: keys go to the agent's pane.
+\* reconnect over send-keys: keys go to the agent's pane. b.66h: the keys
+\* carry the launch id the bot read; on "changed" no tmux call is made (so
+\* no tmux fault either) and the bot reads the row again (B_Get).
 B_Reconnect ==
   /\ bpc = "reconnect" /\ row[BotId].st = "live"
   /\ \E g \in GChoices :
-       LET k == SendOut(BotId, g) IN
+       LET k == SendOut(BotId, g, bobs) IN
+       /\ k.r = "changed" => g = "none"
        /\ SpendG(g)
-       /\ bpc' = IF k.r = "gone" THEN "fm_then_resume" ELSE "idle"
+       /\ bpc' = CASE k.r = "gone"    -> "fm_then_resume"
+                   [] k.r = "changed" -> "get"
+                   [] OTHER           -> "idle"
        /\ latch' = (latch \/ k.r = "conflict")
        /\ handsViol' = (handsViol \/ (Ghosts /\ ((k.r = "ok" /\ \E p \in PaneProcs(k.p) : ~InCurPane(BotId, p)))))
-  /\ UNCHANGED <<row, TW, hist, nextSid, nextLife, BK, btaint, blife, bver, bconv, bsave,
-                 inertViol, lifeViol, sendViol, histViol, botFinViol, hkViol, killViol, seen>>
+       /\ ScopeG(ObsLaunch(BotId, bobs), IF k.r = "ok" THEN PaneProcs(k.p) ELSE {})
+       /\ NoteIf(k.r = "changed", "launch_changed")
+  /\ UNCHANGED <<row, TW, hist, nextSid, nextLife, BK, btaint, blife, bver, bconv, bsave, bobs,
+                 inertViol, lifeViol, sendViol, histViol, botFinViol, hkViol, killViol>>
+\* (b.66h: the compare comes before send-keys' state guard, so a scoped send
+\* to a row that is no longer live and no longer the launch read is refused
+\* as "changed".)
 B_SendGuard ==
   /\ bpc = "reconnect" /\ row[BotId].st # "live"
-  /\ bpc' = "idle"
-  /\ UNCHANGED <<row, TW, hist, nextSid, nextLife, faults, BK, btaint, blife, bver, latch, bconv, bsave, ghostVars>>
+  /\ bpc' = IF Changed(BotId, bobs) THEN "get" ELSE "idle"
+  /\ NoteIf(Changed(BotId, bobs), "launch_changed")
+  /\ UNCHANGED <<row, TW, hist, nextSid, nextLife, faults, BK, btaint, blife, bver, latch, bconv, bsave, bobs, NoGk>>
 B_FindMissing ==
   /\ bpc = "fm_then_resume"
   /\ row' = SweepRows /\ bpc' = "resume"
-  /\ UNCHANGED <<TW, hist, nextSid, nextLife, faults, BK, btaint, blife, bver, latch, bconv, bsave, ghostVars>>
+  /\ UNCHANGED <<TW, hist, nextSid, nextLife, faults, BK, btaint, blife, bver, latch, bconv, bsave, bobs, ghostVars>>
 
 B_Resume ==
   /\ bpc = "resume"
   /\ blife' = row[BotId].life
+  /\ Observe(bobs, BotId)          \* b.66h: a live row goes to nr_kill, scoped to this launch
   /\ LET sel == Sel(BotId) IN
      CASE row[BotId].st = "none" ->
             bpc' = "retry_spawn" /\ UNCHANGED <<faults, btaint, bver, latch, bconv, histViol, seen>>
@@ -777,7 +873,7 @@ B_Resume ==
               /\ Note(IF lk.v = "ours" THEN "own_refused" ELSE IF lk.v = "leftover" THEN "leftover_refused"
                       ELSE "resume_other")
   /\ UNCHANGED <<row, TW, hist, nextSid, nextLife, BK, bsave,
-                 handsViol, inertViol, lifeViol, sendViol, botFinViol, hkViol, killViol>>
+                 handsViol, inertViol, lifeViol, sendViol, botFinViol, hkViol, killViol, scopeViol>>
 
 B_Claim ==
   /\ bpc = "claim"
@@ -785,19 +881,22 @@ B_Claim ==
      THEN /\ row' = Claim(BotId, bver) /\ bsave' = row[BotId] /\ bver' = bver + 1
           /\ bpc' = "rlaunch"
      ELSE /\ UNCHANGED <<row, bsave, bver>> /\ bpc' = "idle"
-  /\ UNCHANGED <<TW, hist, nextSid, nextLife, faults, BK, btaint, blife, latch, bconv, ghostVars>>
+  /\ UNCHANGED <<TW, hist, nextSid, nextLife, faults, BK, btaint, blife, latch, bconv, bobs, ghostVars>>
 
 \* resume's launch: ok / timeout -> stays pending; failure or duplicate ->
 \* conditional restore.
-ResumeLaunch(cv, save, v, l) ==
+\* (b.66h: ResumeLaunchI is the same for row i; the human relauncher's row
+\* may be the orchestrator's under RelaunchAny.)
+ResumeLaunchI(i, cv, save, v, l) ==
   \E o \in CChoices :
     /\ SpendC(o)
-    /\ IF Named(row[BotId].name) # {}
-       THEN /\ UNCHANGED <<TW, nextSid>> /\ row' = Restore(BotId, save, v, l)
-       ELSE LET c == Create(BotId, row[BotId].name, row[BotId].life, cv, TRUE, o) IN
+    /\ IF Named(row[i].name) # {}
+       THEN /\ UNCHANGED <<TW, nextSid>> /\ row' = Restore(i, save, v, l)
+       ELSE LET c == Create(i, row[i].name, row[i].life, cv, TRUE, o) IN
             /\ c.tick => CanCreate                  \* F1: creations within MaxSid (as v3)
             /\ DoCreate(c)
-            /\ row' = IF ~c.made /\ o # "tmo_none" THEN Restore(BotId, save, v, l) ELSE c.row
+            /\ row' = IF ~c.made /\ o # "tmo_none" THEN Restore(i, save, v, l) ELSE c.row
+ResumeLaunch(cv, save, v, l) == ResumeLaunchI(BotId, cv, save, v, l)
 ResumeDupLatch == Named(row[BotId].name) # {} /\ DupClass(BotId, row[BotId].name) = "conflict"
 B_RLaunch ==
   /\ bpc = "rlaunch"
@@ -806,7 +905,7 @@ B_RLaunch ==
   /\ bpc' = "idle" /\ bsave' = NoRow
   /\ Note(IF nextSid' > nextSid THEN "bot_resume_launched"
           ELSE IF row' # row THEN "resume_restored" ELSE "bot_resume_nolaunch")
-  /\ UNCHANGED <<hist, nextLife, BK, btaint, blife, bver, bconv, NoGk>>
+  /\ UNCHANGED <<hist, nextLife, BK, btaint, blife, bver, bconv, bobs, NoGk>>
 
 B_Crash ==
   /\ EnableCrash
@@ -814,19 +913,24 @@ B_Crash ==
   /\ faults < MaxFaults /\ faults' = faults + 1
   /\ bpc' = "idle" /\ bsave' = NoRow
   /\ NoteIf(bpc = "rlaunch", "resume_crashed")
-  /\ UNCHANGED <<row, TW, hist, nextSid, nextLife, BK, btaint, blife, bver, latch, bconv, NoGk>>
+  /\ UNCHANGED <<row, TW, hist, nextSid, nextLife, BK, btaint, blife, bver, latch, bconv, bobs, NoGk>>
 
+\* b.66h: the kill carries the launch id the bot read (B_Get or B_Resume);
+\* on "changed" no tmux call is made and the bot reads the row again.
 B_NrKill ==
   /\ bpc = "nr_kill"
   /\ \E g \in GChoices :
-       LET k == KillOut(BotId, g) IN
+       LET k == KillOut(BotId, g, bobs) IN
+       /\ k.r = "changed" => g = "none"
        /\ SpendG(g)
        /\ sess' = k.S /\ procs' = k.P
        /\ KillHands(BotId, k.P) /\ KillHonestG(BotId, k.r, k.P)
+       /\ ScopeG(ObsLaunch(BotId, bobs), procs \ k.P)
        /\ botFinViol' = (botFinViol \/ (Ghosts /\ (\E p \in procs \ k.P : p.owner \in Ids /\ row[p.owner].st \in Terminal)))
        /\ btaint' = (btaint \/ (Ghosts /\ (k.r \in {"unavail", "conflict", "killfailed"})))
        /\ bpc' = CASE k.r = "ok"       -> "nr_fm"
                    [] k.r = "notfound" -> "retry_spawn"
+                   [] k.r = "changed"  -> "get"
                    [] OTHER            -> "idle"
        /\ latch' = (latch \/ k.r = "conflict")
        /\ seen' = IF ~Probes THEN seen
@@ -834,18 +938,19 @@ B_NrKill ==
                             \cup (IF k.r = "killfailed" THEN {"kill_failed"} ELSE {})
                             \cup (IF k.r = "ok" /\ row[BotId].st \in Live /\ k.P # procs /\
                                      \E s \in sess : s.view THEN {"kill_with_viewer"} ELSE {})
-  /\ UNCHANGED <<row, hist, nextSid, nextLife, BK, blife, bver, bconv, bsave,
+                            \cup (IF k.r = "changed" THEN {"launch_changed"} ELSE {})
+  /\ UNCHANGED <<row, hist, nextSid, nextLife, BK, blife, bver, bconv, bsave, bobs,
                  inertViol, lifeViol, sendViol, histViol, hkViol>>
 B_NrFm ==
   /\ bpc = "nr_fm"
   /\ row' = SweepRows /\ bpc' = "nr_get"
-  /\ UNCHANGED <<TW, hist, nextSid, nextLife, faults, BK, btaint, blife, bver, latch, bconv, bsave, ghostVars>>
+  /\ UNCHANGED <<TW, hist, nextSid, nextLife, faults, BK, btaint, blife, bver, latch, bconv, bsave, bobs, ghostVars>>
 B_NrGet ==
   /\ bpc = "nr_get"
   /\ bpc' = CASE row[BotId].st \in Terminal -> "reuse"
               [] row[BotId].st = "none"     -> "retry_spawn"
               [] OTHER                      -> "idle"
-  /\ UNCHANGED <<row, TW, hist, nextSid, nextLife, faults, BK, btaint, blife, bver, latch, bconv, bsave, ghostVars>>
+  /\ UNCHANGED <<row, TW, hist, nextSid, nextLife, faults, BK, btaint, blife, bver, latch, bconv, bsave, bobs, ghostVars>>
 
 B_Reuse ==
   /\ bpc = "reuse"
@@ -865,7 +970,7 @@ B_Reuse ==
             /\ btaint' = (btaint \/ (Ghosts /\ (cls \in {"unavail", "conflict"})))
             /\ latch' = (latch \/ cls = "conflict")
             /\ UNCHANGED <<row, nextLife>>
-  /\ UNCHANGED <<TW, hist, nextSid, BK, bconv, bsave, ghostVars>>
+  /\ UNCHANGED <<TW, hist, nextSid, BK, bconv, bsave, bobs, ghostVars>>
 B_ReuseReset ==
   /\ bpc = "reuse_reset"
   /\ IF row[BotId].st \in Terminal /\ Snap(BotId) = <<bver, blife>> /\ nextLife < MaxLife
@@ -877,8 +982,8 @@ B_ReuseReset ==
           /\ bpc' = "reuse_launch"
           /\ inertViol' = (inertViol \/ (Ghosts /\ (btaint)))
      ELSE /\ bpc' = "idle" /\ UNCHANGED <<row, hist, nextLife, blife, bver, bsave, inertViol>>
-  /\ UNCHANGED <<TW, nextSid, faults, BK, btaint, latch, bconv,
-                 handsViol, lifeViol, sendViol, histViol, botFinViol, hkViol, killViol, seen>>
+  /\ UNCHANGED <<TW, nextSid, faults, BK, btaint, latch, bconv, bobs,
+                 handsViol, lifeViol, sendViol, histViol, botFinViol, hkViol, killViol, scopeViol, seen>>
 B_ReuseLaunch ==
   /\ bpc = "reuse_launch"
   /\ \E o \in CChoices :
@@ -895,7 +1000,7 @@ B_ReuseLaunch ==
                /\ row' = IF ~c.made /\ o # "tmo_none" THEN Restore(BotId, bsave, bver, blife) ELSE c.row
                /\ Note(IF ~c.made /\ o # "tmo_none" THEN "restored" ELSE "reuse_created")
   /\ bpc' = "idle" /\ bsave' = NoRow
-  /\ UNCHANGED <<hist, nextLife, BK, btaint, blife, bver, bconv, NoGk>>
+  /\ UNCHANGED <<hist, nextLife, BK, btaint, blife, bver, bconv, bobs, NoGk>>
 
 \* The startup-prompt approver: send-keys --allow-pending on the bot's
 \* pending row. Step 1: the lookup and the pane listing; step 2: the keys to
@@ -914,7 +1019,7 @@ B_ApproveLookup ==
         /\ sendViol' = (sendViol \/ (Ghosts /\ (~InCurPane(BotId, p) \/ (p.owner # NoId /\ (p.started \/ p.ending)))))
   /\ Note(IF row[BotId].sessId THEN "approve_resumed" ELSE "approve_pending")
   /\ UNCHANGED <<row, TW, hist, nextSid, nextLife, faults, envVars, orchVars, botVars, humVars, fmVars,
-                 handsViol, inertViol, lifeViol, histViol, botFinViol, hkViol, killViol>>
+                 handsViol, inertViol, lifeViol, histViol, botFinViol, hkViol, killViol, scopeViol>>
 B_ApproveAct ==
   /\ apc = "act"
   /\ LET ok == IF ActPidCheck THEN srv = atg.sv /\ \E p \in procs : p.pn = atg.pn /\ p.pid = atg.pid
@@ -925,40 +1030,49 @@ B_ApproveAct ==
      /\ NoteIf(\E p \in T : p.started, "approve_after_start")
   /\ apc' = "idle" /\ atg' = NoTarget
   /\ UNCHANGED <<row, sess, hist, nextSid, nextLife, faults, envVars, orchVars, botVars, humVars, fmVars,
-                 inertViol, lifeViol, sendViol, histViol, botFinViol, hkViol, killViol>>
+                 inertViol, lifeViol, sendViol, histViol, botFinViol, hkViol, killViol, scopeViol>>
 
 -----------------------------------------------------------------------------
 (* Humans *)
 HU == <<envVars, orchVars, botVars, apprVars, fmVars>>
 
+\* (b.66h: the human resumes row hid, chosen here; always BotId unless
+\* RelaunchAny.)
 H_Resume ==
   /\ EnableHumanResume /\ hpc = "idle"
-  /\ row[BotId].st \in Terminal /\ row[BotId].sessId /\ Sel(BotId) # 0
-  /\ PreLaunch(BotId, LookupN(BotId), row[BotId].name) = "proceed"
-  /\ hpc' = "claim" /\ hver' = Snap(BotId) /\ hconv' = IF Ghosts THEN Sel(BotId) ELSE 0
-  /\ histViol' = (histViol \/ (Ghosts /\ (Sel(BotId) # row[BotId].life)))
+  /\ \E i \in RelaunchIds :
+       /\ row[i].st \in Terminal /\ row[i].sessId /\ Sel(i) # 0
+       /\ PreLaunch(i, LookupN(i), row[i].name) = "proceed"
+       /\ hid' = i
+       /\ hpc' = "claim" /\ hver' = Snap(i) /\ hconv' = IF Ghosts THEN Sel(i) ELSE 0
+       /\ histViol' = (histViol \/ (Ghosts /\ (Sel(i) # row[i].life)))
   /\ UNCHANGED <<row, TW, hist, nextSid, nextLife, faults, HU, hsave, kpc, kid, ktg,
-                 handsViol, inertViol, lifeViol, sendViol, botFinViol, hkViol, killViol, seen>>
+                 handsViol, inertViol, lifeViol, sendViol, botFinViol, hkViol, killViol, scopeViol, seen>>
 H_Claim ==
   /\ hpc = "claim"
-  /\ IF row[BotId].st \in Terminal /\ Snap(BotId) = hver
-     THEN /\ row' = Claim(BotId, hver[1]) /\ hsave' = row[BotId]
+  /\ IF row[hid].st \in Terminal /\ Snap(hid) = hver
+     THEN /\ row' = Claim(hid, hver[1]) /\ hsave' = row[hid]
           /\ hver' = <<hver[1] + 1, hver[2]>> /\ hpc' = "rlaunch"
      ELSE /\ UNCHANGED <<row, hsave, hver>> /\ hpc' = "done"
-  /\ UNCHANGED <<TW, hist, nextSid, nextLife, faults, HU, hconv, kpc, kid, ktg, ghostVars>>
+  /\ UNCHANGED <<TW, hist, nextSid, nextLife, faults, HU, hconv, kpc, kid, ktg, hid, ghostVars>>
 H_RLaunch ==
   /\ hpc = "rlaunch"
-  /\ ResumeLaunch(hconv, hsave, hver[1], hver[2])
+  /\ ResumeLaunchI(hid, hconv, hsave, hver[1], hver[2])
   /\ hpc' = "done" /\ hsave' = NoRow
-  /\ Note(IF nextSid' > nextSid THEN "human_resumed"
-          ELSE IF row' # row THEN "resume_restored" ELSE "human_resume_nolaunch")
-  /\ UNCHANGED <<hist, nextLife, HU, hver, hconv, kpc, kid, ktg, NoGk>>
+  \* (b.66h tag: the relaunch lands between the orchestrator's kill lookup
+  \* and its act; never with RelaunchAny off, where hid is BotId.)
+  /\ seen' = IF ~Probes THEN seen
+             ELSE seen \cup {IF nextSid' > nextSid THEN "human_resumed"
+                             ELSE IF row' # row THEN "resume_restored" ELSE "human_resume_nolaunch"}
+                       \cup (IF hid = OrchId /\ opc = "kill_act" /\ nextSid' > nextSid
+                             THEN {"relaunch_in_kill_window"} ELSE {})
+  /\ UNCHANGED <<hist, nextLife, HU, hver, hconv, kpc, kid, ktg, hid, NoGk>>
 H_Crash ==
   /\ EnableCrash /\ hpc = "rlaunch"
   /\ faults < MaxFaults /\ faults' = faults + 1
   /\ hpc' = "done" /\ hsave' = NoRow
   /\ Note("resume_crashed")
-  /\ UNCHANGED <<row, TW, hist, nextSid, nextLife, HU, hver, hconv, kpc, kid, ktg, NoGk>>
+  /\ UNCHANGED <<row, TW, hist, nextSid, nextLife, HU, hver, hconv, kpc, kid, ktg, hid, NoGk>>
 
 \* kill --include-finished (operator only): Ours on a finished row past the
 \* stopping window and the starting bound, reported in to this row (SR-6.7:
@@ -973,7 +1087,7 @@ HK_Lookup ==
        /\ SpendK(k)
        /\ kpc' = "act" /\ kid' = i
        /\ ktg' = [pn |-> PaneTarget(i, lk), pid |-> KillPid(i, lk), tid |-> lk.s.tid, sv |-> srv]
-  /\ UNCHANGED <<row, TW, hist, nextSid, nextLife, HU, hpc, hver, hconv, hsave, ghostVars>>
+  /\ UNCHANGED <<row, TW, hist, nextSid, nextLife, HU, hpc, hver, hconv, hsave, hid, ghostVars>>
 HK_Act ==
   /\ kpc = "act"
   /\ \E f \in FaultChoices :
@@ -988,13 +1102,13 @@ HK_Act ==
                                        \/ (p.owner \in Ids /\ p.started /\ ~p.ending))))  \* a working agent
        /\ Note(IF K # {} THEN "human_kill_finished" ELSE "human_kill_nothing")
   /\ kpc' = "idle" /\ ktg' = NoTarget
-  /\ UNCHANGED <<row, hist, nextSid, nextLife, HU, hpc, hver, hconv, hsave, kid,
-                 inertViol, lifeViol, sendViol, histViol, botFinViol, killViol>>
+  /\ UNCHANGED <<row, hist, nextSid, nextLife, HU, hpc, hver, hconv, hsave, kid, hid,
+                 inertViol, lifeViol, sendViol, histViol, botFinViol, killViol, scopeViol>>
 H_Unlatch ==
   /\ EnableHumanKill /\ latch
   /\ latch' = FALSE
   /\ UNCHANGED <<row, TW, hist, nextSid, nextLife, faults, envVars, orchVars, apprVars, fmVars, humVars,
-                 bpc, btaint, blife, bver, bconv, bsave, ghostVars>>
+                 bpc, btaint, blife, bver, bconv, bsave, bobs, ghostVars>>
 
 -----------------------------------------------------------------------------
 (* find-missing cron sweep and expire *)
@@ -1022,7 +1136,7 @@ FM_Check ==
   /\ lifeViol' = (lifeViol \/ (Ghosts /\ (\E i \in Ids : row[i].st \in Live /\ row'[i].st = "missing"
                         /\ \A e \in fsnap : e.id = i => ~SameLife(e))))
   /\ UNCHANGED <<TW, hist, nextSid, nextLife, envVars, orchVars, botVars, apprVars, humVars,
-                 handsViol, inertViol, sendViol, histViol, botFinViol, hkViol, killViol>>
+                 handsViol, inertViol, sendViol, histViol, botFinViol, hkViol, killViol, scopeViol>>
 \* expire: keeps a row whose agent process runs; deletes only on Gone.
 Expire ==
   /\ EnableExpire
@@ -1038,7 +1152,7 @@ Expire ==
 Env  == HookStart \/ HookEnd \/ ProcExit \/ Crash \/ Message \/ Age \/ AgeEnd \/ AgeRow
         \/ Stray \/ Leftover \/ OtherStore \/ Rename \/ Group \/ Respawn \/ ServerRestart \/ Adopt
 Orch == O_Spawn \/ O_ReuseLookup \/ O_ReuseReset \/ O_Launch \/ O_KillLookup
-        \/ O_KillAct \/ O_AfterKill \/ O_Finished
+        \/ O_KillAct \/ O_AfterKill \/ O_Finished \/ O_Reread
 Bot  == B_Start \/ B_Unlatch \/ B_Spawn \/ B_Launch \/ B_Get \/ B_Reconnect \/ B_SendGuard
         \/ B_FindMissing \/ B_Resume \/ B_Claim \/ B_RLaunch \/ B_Crash \/ B_NrKill \/ B_NrFm
         \/ B_NrGet \/ B_Reuse \/ B_ReuseReset \/ B_ReuseLaunch \/ B_RetrySpawn \/ B_RetryLaunch
@@ -1091,9 +1205,24 @@ MarkedMissing(i) == row[i].st \in Live /\ row'[i].st = "missing" /\ row'[i].ver 
 NoFalseMissing ==
   [][\A i \in Ids : MarkedMissing(i) => ~(InLaunch(i) \/ CurProcs(i) # {})]_vars
 IsKill == (bpc = "nr_kill" /\ bpc' # "nr_kill") \/ (opc = "kill_act" /\ opc' # "kill_act")
+\* (b.66h: for the orchestrator's split kill, "current" is the launch its
+\* lookup read, OKillL; the same as the row's current launch unless
+\* RelaunchAny.)
+KLaunch(i) == IF i = OrchId /\ opc = "kill_act" THEN OKillL ELSE CurLaunch(i)
 KillPendingOnlyCurrent ==
   [][IsKill => \A p \in procs \ procs' :
-                 (p.owner \in Ids /\ row[p.owner].st = "pending") => InCurPane(p.owner, p)]_vars
+                 (p.owner \in Ids /\ row[p.owner].st = "pending") => InLaunchPane(KLaunch(p.owner), p)]_vars
+
+\* b.66h. A kill or send-keys scoped to the launch L its caller read acts on
+\* L or on nothing: every process a scoped kill ends, and every process in
+\* the pane a scoped send types to, belongs to L (ghost scopeViol, set in
+\* B_NrKill, B_Reconnect and O_KillAct). Checked only when LaunchObs.
+ScopedActsOnlyOnObservedLaunch == ~scopeViol
+\* A "changed" refusal touches neither tmux nor the store (action property).
+\* The bot leaves nr_kill / reconnect for get (B_NrKill, B_Reconnect,
+\* B_SendGuard), and the orchestrator leaves run for reread, only on "changed".
+ChangedStep == (bpc \in {"nr_kill", "reconnect"} /\ bpc' = "get") \/ (opc = "run" /\ opc' = "reread")
+ChangedIsInert == [][ChangedStep => UNCHANGED <<row, sess, procs>>]_vars
 
 (* Liveness *)
 StuckDead(i) == row[i].st = "live" /\ CurProcs(i) = {}
@@ -1109,14 +1238,22 @@ PendingResolves == \A i \in Ids :
 \* read after "done"; kid/ktg by HK_Lookup; okt by O_KillLookup; oname/olife/
 \* over/osave by O_Spawn, O_ReuseLookup, O_ReuseReset), and no invariant reads
 \* them, so merging such states changes no safety verdict.
+\* b.66h: hid is read only while hpc is claim or rlaunch (H_Resume writes
+\* it); bobs only in nr_kill and reconnect (B_Get and B_Resume, the only ways
+\* in, write it); oobs only in run and kill_act (O_Launch and O_Reread, the
+\* only ways in from elsewhere, write it); okl only in kill_act (O_KillLookup,
+\* the only way in, writes it). StaleL forgets each elsewhere.
 BIdle == bpc = "idle"
 StaleB == IF BIdle THEN <<0, 0, 0, NoRow>> ELSE <<bver, blife, bconv, bsave>>
-StaleH == IF hpc \in {"idle", "done"} THEN <<<<0, 0>>, 0, NoRow>> ELSE <<hver, hconv, hsave>>
+StaleH == IF hpc \in {"idle", "done"} THEN <<<<0, 0>>, 0, NoRow, BotId>> ELSE <<hver, hconv, hsave, hid>>
 StaleK == IF kpc = "idle" THEN <<BotId, NoTarget>> ELSE <<kid, ktg>>
 StaleO == IF opc = "idle" THEN <<"-", 0, 0, NoTarget, NoRow>> ELSE <<oname, olife, over, okt, osave>>
+StaleL == <<IF bpc \in {"nr_kill", "reconnect"} THEN bobs ELSE NoObs,
+            IF opc \in {"run", "kill_act"} THEN oobs ELSE NoObs,
+            IF opc = "kill_act" THEN okl ELSE NoObs>>
 CIView == <<row, sess, procs, hist, nextSid, nextLife, faults, envVars,
             opc, otaint, oreuse, StaleO, bpc, btaint, latch, StaleB, apprVars, hpc, StaleH, kpc, StaleK,
-            fmVars, ghostVars>>
+            fmVars, ghostVars, StaleL>>
 
 \* Review 2026-09-28 (unbounded-review.md): agents' creations stay within MaxSid.
 SidBound == nextSid <= MaxSid
@@ -1155,4 +1292,6 @@ NotApproveResumed == NotSeen("approve_resumed")
 NotHookIgnored   == NotSeen("hook_ignored")
 NotScanBlocks    == ~\E i \in Ids : row[i].st = "none" /\ ScanBlocks(i) /\ (IF i = BotId THEN EnableBot ELSE EnableOrch)
 NotOtherStore    == ~\E i \in Ids : row[i].st # "none" /\ \E s \in sess : s.lab.sto = "s2" /\ s.lab.id = i
+NotLaunchChanged == NotSeen("launch_changed")                  \* b.66h: a scoped call is refused
+NotRelaunchInKillWindow == NotSeen("relaunch_in_kill_window")  \* b.66h: lookup, relaunch, act
 =============================================================================

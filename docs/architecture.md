@@ -7991,11 +7991,21 @@ depends on it.
 
 `spec/tla/` holds bee b.zuj's TLA+ model of the Phase 1 LABEL design, its
 model-check suite and the runner. b.zuj owns the model and its results. The
-repo copy is vendored byte for byte under SHA-256 pins and is never edited
-here. [`spec/tla/PROVENANCE.txt`](../spec/tla/PROVENANCE.txt) records the
-source, the pin list, the delivering run, the layout and the TLC build:
-`tla2tools.jar` rev `4260e47`, committed because that nightly build has no
-immutable upstream URL.
+repo copy is vendored byte for byte under SHA-256 pins, with one exception:
+`Phase4.tla` carries bee b.66h's launch-scoped-actions change. Its knobs
+default to off, so every b.zuj cfg keeps its state graph.
+[`spec/tla/PROVENANCE.txt`](../spec/tla/PROVENANCE.txt) records the
+source, the pin list, the delivering run, the b.66h change, the layout and
+the TLC build: `tla2tools.jar` rev `4260e47`, committed because that nightly
+build has no immutable upstream URL.
+
+Two directories are written here and not pinned:
+
+- [`spec/tla/launch/`](../spec/tla/launch/README.md) holds the b.66h runs.
+  They are not in `ci/suite.tsv`, so `make tla` does not run them.
+- [`spec/tla/laptop/`](../spec/tla/laptop/README.md) holds a runner for an
+  operator's own machine. It runs TLC locally, so it is for a laptop only.
+  It refuses to start on a Horde dev VM, and no make target calls it.
 
 **What the suite checks.** The threat model is accidents only. Respawn and
 `remain-on-exit` are out of scope. The model's three actors are named here
@@ -8273,9 +8283,15 @@ scheduler. The suite's files:
 - **`runner_test.go`** covers the job order and tiers, the ok rules, the
   fail-closed paths and the overrides.
 - **`interrupt_test.go`** covers the interrupt cases above.
-- **`provenance_test.go`** has three tests:
+- **`laptop_test.go`** runs `spec/tla/laptop/run.sh` against a fake `java`
+  that answers from a verdict table. It covers the Java check, the parse
+  check, the plan and the ok rules, including the run-4 state-count check.
+- **`provenance_test.go`** has four tests:
   - every pin matches its file, and only `.gitattributes`,
-    `PROVENANCE.txt` and `ci/run_ci.sh` are unpinned;
+    `PROVENANCE.txt`, `ci/run_ci.sh`, `launch/` and `laptop/` are
+    unpinned;
+  - `launch/cfg/` holds exactly the cfgs `launch/suite.tsv` names, and
+    `laptop/run4.tsv` has a row for every `ci/suite.tsv` cfg;
   - the runner names no checker or container command;
   - `make -n tla` and `make -n tla-print` run only the runner, none of
     `all`, `test` and `test-sandbox` reaches it, and `make tla-print` contacts no scheduler.

@@ -1,0 +1,12 @@
+# b.66h launch-scoped actions (spec/tla/launch/README.md). Columns as ci/suite.tsv (group, spec, cfg,
+# cap_s, expect, tier, what), plus props: for a violation row, the properties whose violation counts
+# as the expected result (comma-separated); "-" for a pass row. Cfgs are in launch/cfg/.
+ls	Phase4Split	ls_V_bot	1800	violation	fast	probe: the bot's scoped kill or keys are refused (ErrLaunchChanged)	NotLaunchChanged
+ls	Phase4Split	ls_V_orch	1800	violation	fast	probe: the orchestrator's scoped kill is refused (ErrLaunchChanged)	NotLaunchChanged
+ls	Phase4Split	ls_V_window	1800	violation	fast	probe: a relaunch lands between the orchestrator's kill lookup and its act	NotRelaunchInKillWindow
+ls	Phase4Split	ls_C_S1h_lab	1800	violation	fast	control: LaunchScoped off, bot + human resume: the bot kills or types into a launch it never read	ScopedActsOnlyOnObservedLaunch
+ls	Phase4Split	ls_C_S1o_lab	1800	violation	fast	control: LaunchScoped off, orchestrator + human resume of its row: it kills a launch it never read	ScopedActsOnlyOnObservedLaunch
+ls	Phase4Split	ls_Cact	1800	violation	fast	accepted residual: as ci_Cact with the design on (listing and act as separate steps + restart)	HandsOff,ScopedActsOnlyOnObservedLaunch
+ls	Phase4Split	ls_S1o_lab	1800	pass	fast	design: orchestrator + human kill + human resume of its row, 3/3; failed label step	-
+ls	Phase4Split	ls_S1o_rst	1800	pass	fast	design: orchestrator + human kill + human resume of its row, 3/3; server restart	-
+ls	Phase4Split	ls_S1h_lab	1800	pass	fast	design: bot + human resume, 3 sessions / 2 lives; failed label step	-
