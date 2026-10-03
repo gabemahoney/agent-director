@@ -183,6 +183,85 @@ from the store schema and fixture conventions, masking regressions. The
 shared factories are exercised by their own tests AND by every consumer,
 so any schema break is caught early.
 
+## Literal-follow tests for error advice
+
+An error description, manifest text or `install.sh` message that tells the
+caller what to do next ("retry later", "do not retry until get shows the row
+ended or missing", "retry kill later", "spawn again with the reuse opt-in")
+needs a test that follows that advice (b.fji). Checking that the description
+contains the advice is not enough: Epic 13 found a "retry later" whose plain
+retry was certain to collide. When you add or change such a text, add or update
+its test. The test:
+
+1. triggers the error;
+2. checks the advice phrase word for word (`strings.Contains` on the exact
+   phrase, or `apitest.AssertDescription` where a `Desc*` case already pins
+   it), so a change to the advice turns the test red and someone re-checks the
+   follow;
+3. does what the advice says, literally, as an automated caller would: the
+   same verb and parameters, after the stated wait or check (advance the
+   injected clock, run `find-missing` or `get` when told);
+4. checks that the step succeeds, or that the promised outcome happens: the
+   row reads `ended` or `missing` after the stated `find-missing`, or the same
+   refusal comes back unchanged while the condition holds and the operation
+   succeeds once it clears.
+
+A human-only pointer (the README's "Operator actions") is not itself followed,
+but an `ErrTmuxSessionConflict` refusal that carries one gets a
+condition-clears test (`TestAdviceFollow_HO<n>_…` in
+`pkg/api/advice_follow_conflict_test.go`): re-issued while the condition
+holds, the call returns the same refusal unchanged and writes or sends nothing;
+re-issued once the condition is gone (a human cleared it, or the holder
+exited), it does its work. A caller that re-checks later relies on both.
+
+**Where they live.** `advice_follow_<area>_test.go` files in the package whose
+surface gives the advice: `pkg/api` (fake tmux and the injected clock; prefer
+this tier), `cmd/agent-director` (CLI-only texts and flag spellings, against the
+built binary), `internal/mcp` (MCP-only texts and parameter spellings),
+`internal/config`, and `test/realtmux` where only real tmux shows the outcome.
+The TS client's own advice is in `pkg/ts-bun-client/test/adviceFollow.test.ts`,
+and `install.sh`'s in `test/install-sh/advice_follow.sh`, which
+`test/install-sh/advice_follow_test.go` runs under `go test` (one subtest per
+`test_*`). In `pkg/api`, reuse the shared helpers in
+`advice_follow_helpers_test.go` rather than writing new ones:
+`adviceAssertAdvice`, `adviceAssertPhrase`, `adviceAssertGoDoc` and
+`adviceAssertManifest` for the word-for-word checks, `adviceAwaitFinished` for
+the pending-row wait, `adviceOnceAfter` for a one-shot hook on a tmux call,
+and the small seeds beside them.
+
+**Naming.** `TestAdviceFollow_<ID>_<Short>`, e.g.
+`TestAdviceFollow_A2_ScanUnreadableRetryLater`, with a one-line comment giving
+the ID and the quoted advice (`test_<ID>_<Short>` in `advice_follow.sh`; the TS
+test titles start with the ID). The ID is an area prefix and a number. The
+prefixes: A spawn and reuse, B resume, C kill, D find-missing, E pane verbs,
+F list, get, delete, expire and decide, G config, store and migration,
+H CLI-only, I MCP-only, J `install.sh`, K TS client, HO human-only pointers.
+Tests that follow the same advice share its ID. IDs are numbered within the
+repo: new advice takes the number after the highest one in use for its prefix
+(do not fill gaps), found by grepping the existing names, e.g. for kill
+`grep -rhoE 'TestAdviceFollow_C[0-9]+|test_C[0-9]+' . | sort -uV`. (The
+numbering started from b.fji's advice inventory, kept with that bug's ticket.)
+
+**Advice that does not work as written** is a product bug in the text or the
+behaviour; fix whichever is wrong. Until the fix lands, keep the test asserting
+that the advice works and call `knownBrokenAdvice(t, id, why)` (from the
+package's `advice_follow_gate_test.go`; `known_broken` in `advice_follow.sh`)
+just before the step that fails. It skips the rest of the test with
+"b.fji `<id>`: advice does not work as written …" unless
+`AGENT_DIRECTOR_RUN_KNOWN_BROKEN_ADVICE=1` is set, which runs it so you can see
+it fail. Delete the call when the bug is fixed. A package with no gate file gets
+a copy of it with its own package clause.
+
+**Running them.** `make test-sandbox` runs them all, the `install.sh` script
+included, with the known-broken ones skipped. `make test-install-sh-advice`
+runs the `install.sh` script alone (it refuses to run outside the sandbox).
+To run the known-broken ones and see them fail:
+
+```sh
+make sandbox CMD="env AGENT_DIRECTOR_RUN_KNOWN_BROKEN_ADVICE=1 go test ./pkg/api -run TestAdviceFollow_ -count=1 -v"
+make sandbox CMD="env AGENT_DIRECTOR_RUN_KNOWN_BROKEN_ADVICE=1 bash test/install-sh/advice_follow.sh"
+```
+
 ## Synthetic-regression test convention
 
 Synthetic-regression tests re-anchor known failure-classes so they can

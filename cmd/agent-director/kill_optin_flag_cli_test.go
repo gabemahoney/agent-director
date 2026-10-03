@@ -2,16 +2,21 @@ package main_test
 
 // kill_optin_flag_cli_test.go covers kill's operator-only --include-finished
 // through the built CLI (SR-6.5, SR-6.8): only the exact name parses, it
-// reaches Kill (a live row is refused with no tmux call), off is the default,
-// and no path prints usage text. Its finished-row effect is in
-// kill_optin_cli_test.go.
+// reaches Kill (a live row is refused with no tmux call, and the plain kill
+// the refusal points to then works: b.fji C10), off is the default, and no
+// path prints usage text. Its finished-row effect is in kill_optin_cli_test.go.
 
 import (
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // cliOptInRe matches the opt-in in any spelling (include-finished, ...).
@@ -118,25 +123,48 @@ func TestKillCLIOptInNearMissesAndHelp(t *testing.T) {
 
 // TestKillCLIIncludeFinishedOnLiveRow: with the flag a live row (pending
 // included) is refused with ErrSpawnNotResumable before any tmux call; without
-// it the same row takes the ordinary path, which starts with the lookup.
+// it the same row takes the ordinary path, lookup first, and its session ends.
 func TestKillCLIIncludeFinishedOnLiveRow(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	for _, state := range []string{store.StatePending, store.StateWaiting} {
 		t.Run(state, func(t *testing.T) {
-			home, id, _ := seedKillRow(t, state)
+			home, id, socket := seedKillRow(t, state)
+			token, _, storeID := launchIdentity(t, home, id)
 			before := rowColumns(t, home, id)
+			name, _ := before.TmuxSessionName.(string)
+			const sessionID = "$3"
+			faketmuxfix.Tables{}.Write(t, socket, killTable(faketmuxfix.Session{
+				ID: sessionID, Created: time.Now().Unix(), Name: name, Label: tmuxfix.LabelValue(token, sessionID, id, storeID),
+				Panes: []faketmuxfix.Pane{{ID: apitest.TestPaneID, PID: apitest.TestPanePID}},
+			}))
+
 			stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "kill", "--claude-instance-id", id, "--include-finished")
-			assertOnlyEnvelope(t, stdout, stderr, code, "ErrSpawnNotResumable")
+			env := assertOnlyEnvelope(t, stdout, stderr, code, "ErrSpawnNotResumable")
 			if m := cliOptInRe.FindString(stderr); m != "" {
 				t.Errorf("SR-6.8: the live-row refusal names the opt-in %q: %s", m, stderr)
 			}
 			assertInvocationKinds(t, home)
 			assertCLIRowUnchanged(t, home, id, before)
 
-			_, stderr, _ = runSpawnCLI(t, home, fakeDir, "kill", "--claude-instance-id", id)
+			// b.fji C10 literal follow: "the finished-row option applies only to an ended or missing row; no lookup was made and nothing was sent", so kill again without the flag.
+			const advice = "the finished-row option applies only to an ended or missing row; no lookup was made and nothing was sent"
+			if !strings.Contains(env.ErrDescription, advice) {
+				t.Errorf("description %q lacks the advice %q", env.ErrDescription, advice)
+			}
+			stdout, stderr, code = runSpawnCLI(t, home, fakeDir, "kill", "--claude-instance-id", id)
+			if code != 0 || stderr != "" {
+				t.Fatalf("kill without the flag: exit = %d, stderr = %q; want 0 and empty", code, stderr)
+			}
+			assertKillSent(t, stdout, true)
 			invs := fakeTmuxInvocations(t, home)
 			if len(invs) == 0 || !slices.Contains(invs[0], "list-sessions") {
-				t.Errorf("kill without the flag: tmux invocations = %q (stderr %q); want the lookup first", invs, stderr)
+				t.Errorf("kill without the flag: tmux invocations = %q; want the lookup first", invs)
+			}
+			if left := (faketmuxfix.Tables{}).Read(t, socket).Sessions; len(left) != 0 {
+				t.Errorf("sessions after the kill = %+v; want none", left)
+			}
+			if st := rowColumns(t, home, id).State; st != state {
+				t.Errorf("state = %v; want %s kept", st, state)
 			}
 		})
 	}

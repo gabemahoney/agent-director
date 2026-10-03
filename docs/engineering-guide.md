@@ -291,7 +291,12 @@ workflow runs it on every PR and push to `main`.
 make test-sandbox        # full suite: go test ./... AND bun test
 make sandbox-shell       # interactive bash inside the container + mounts
 make sandbox CMD="…"     # run an arbitrary command in the container + mounts
+make test-install-sh-advice  # install.sh's literal-follow tests alone (test-sandbox runs them too)
 ```
+
+The literal-follow tests for error advice skip the ones whose advice is known
+not to work as written; `AGENT_DIRECTOR_RUN_KNOWN_BROKEN_ADVICE=1` runs them
+(docs/test-writing-guide.md "Literal-follow tests for error advice").
 
 The suite exit code propagates to the caller; output streams live. The
 image is built on first use and cached by the engine's layer cache

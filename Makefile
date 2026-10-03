@@ -1,5 +1,5 @@
 .PHONY: all build test generate lint err-coherence nondet-coverage \
-        check-doccomments check-sandbox-bypass test-install-sh \
+        check-doccomments check-sandbox-bypass test-install-sh test-install-sh-advice \
         test-image test-image-smoke test-docker test-docker-install-mode list-test-docker-epics \
         test-sandbox sandbox-shell sandbox \
         release-binaries release-binaries-smoke \
@@ -76,6 +76,17 @@ test: envelope-diff-ts test-install-sh
 # and the scenarios pick small fail-first counts.
 test-install-sh:
 	bash test/install-sh/retry.sh
+
+# test-install-sh-advice follows each piece of advice install.sh prints on a
+# refusal and checks it works (b.fji, test/install-sh/advice_follow.sh). It
+# builds and runs agent-director binaries, so it runs in the sandbox only (the
+# script refuses anywhere else) and is not part of the host-run
+# test-install-sh; test-sandbox runs it too, through
+# test/install-sh/advice_follow_test.go. This target runs the script alone.
+# Add SANDBOX_FLAGS="-e AGENT_DIRECTOR_RUN_KNOWN_BROKEN_ADVICE=1" to run the
+# known-broken cases and see them fail.
+test-install-sh-advice: _sandbox-build
+	$(_SANDBOX_RUN) bash test/install-sh/advice_follow.sh
 
 generate:
 	go generate ./...

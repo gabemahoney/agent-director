@@ -10031,6 +10031,17 @@ package doc comment (`doc.go`, "# Description helper") says the same.
   or Markdown file goes through `AssertMustNot` with
   `DescReuseDocsForbidden` (or another `Desc*` case); never a hand-written
   `strings.Contains` loop.
+- **Exception: literal-follow tests** (`TestAdviceFollow_*`, b.fji). A test
+  that follows an error's or a manifest text's advice checks the advice it
+  follows word for word, so any change to the advice turns it red and the
+  follow is checked again: with `strings.Contains` on the exact phrase (the
+  live-row sequence's steps included), or with `apitest.AssertDescription`
+  where a `Desc*` case already pins it. That is the only case where a Go
+  test spells these texts itself. In `pkg/api`, **must use** the shared
+  helpers in `advice_follow_helpers_test.go` (`adviceAssertAdvice`,
+  `adviceAssertPhrase`, `adviceAssertGoDoc`, `adviceAssertManifest`,
+  `adviceAwaitFinished`, `adviceOnceAfter`, …) rather than new ones. See
+  docs/test-writing-guide.md "Literal-follow tests for error advice".
 - TypeScript tests cannot import the helper. They spell the phrases they
   check themselves.
 

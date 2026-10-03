@@ -72,6 +72,10 @@ make sandbox CMD='cd pkg/ts-bun-client && bun run build'
 inner quotes all work. Its exit code propagates. An interactive shell in the same
 container + mounts is available via `make sandbox-shell`.
 
+`make test-sandbox` runs `install.sh`'s literal-follow tests
+(`test/install-sh/advice_follow.sh`, through `test/install-sh/advice_follow_test.go`).
+To run them alone: `make test-install-sh-advice`.
+
 ### Quoting `CMD`
 
 `CMD` reaches the container **verbatim** (b.ay3): the bytes you pass are the
@@ -119,6 +123,12 @@ agent runs inside the container. Interpreting a run:
 
   Judge the run by whether the failures match this known set. Anything outside
   it is a real signal from the change under review.
+- **Known-broken advice skips are expected.** Literal-follow tests
+  (`TestAdviceFollow_*`, `advice_follow.sh`) whose advice is known not to work
+  as written skip with "b.fji `<ID>`: advice does not work as written …". To
+  run them and see them fail, set the gate in the container:
+  `make sandbox CMD="env AGENT_DIRECTOR_RUN_KNOWN_BROKEN_ADVICE=1 go test ./pkg/api -run TestAdviceFollow_ -count=1 -v"`.
+  See docs/test-writing-guide.md "Literal-follow tests for error advice".
 - **The `test/smoke/go` canary is NOT a known failure.** It guards against any
   test writing to the real `~/.agent-director` and must stay quiet on a clean
   tree. It used to fire intermittently (a trail-emitting test package that did
