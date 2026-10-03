@@ -69,7 +69,7 @@ type Store struct {
 // ErrStoreNotInitialized. Use OpenOrInit when create-if-missing behavior is
 // required (e.g. CLI first-run).
 //
-// A leading "~/" in path is expanded against the current user's home dir.
+// A leading "~/" in path is expanded against $HOME (see expandTilde).
 //
 // On any error the caller does not need to close anything — Open cleans up
 // the partially-opened *sql.DB before returning.
@@ -93,7 +93,7 @@ func Open(path string) (*Store, error) {
 // opening a single-connection pool, enabling WAL + foreign keys, and ensuring
 // the schema is at the current version.
 //
-// A leading "~/" in path is expanded against the current user's home dir.
+// A leading "~/" in path is expanded against $HOME (see expandTilde).
 //
 // On any error the caller does not need to close anything — OpenOrInit cleans
 // up the partially-opened *sql.DB before returning.
@@ -183,17 +183,27 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-// expandTilde resolves a leading "~/" against the current user's home dir.
-// Any other form of path is returned unchanged.
+// expandTilde resolves a leading "~/" against $HOME via os.UserHomeDir. When
+// HOME is set this is the same rule as pkg/api and internal/config, so a
+// caller that redirects HOME never reaches the real user's store through a
+// "~/" path (b.hvf). When HOME is unset or empty the three differ: pkg/api
+// returns an error and internal/config leaves the path unexpanded, while the
+// store falls back to user.Current().HomeDir (SRD §11), which keeps the
+// HOME-unset behaviour the store had before. Any other form of path is
+// returned unchanged.
 func expandTilde(path string) (string, error) {
 	if !strings.HasPrefix(path, "~/") {
 		return path, nil
 	}
-	u, err := user.Current()
+	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", err
+		u, uerr := user.Current()
+		if uerr != nil {
+			return "", fmt.Errorf("%w; %w", err, uerr)
+		}
+		home = u.HomeDir
 	}
-	return filepath.Join(u.HomeDir, strings.TrimPrefix(path, "~/")), nil
+	return filepath.Join(home, strings.TrimPrefix(path, "~/")), nil
 }
 
 // ensureJournalModeWAL sets journal_mode=WAL exactly once per DB file —

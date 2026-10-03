@@ -27,9 +27,9 @@
 #   guard.sh snapshot --state <file> [--home <dir>] [--busy-host] [--settle <secs>]
 #   guard.sh verify   --state <file> [--home <dir>] [--ids-file <file>]... [--id <value>]...
 #
-# The home is the invoking user's passwd-entry home (the store resolves its
-# home that way, not from $HOME; b.8dr). --home overrides it for dry runs and
-# tests only, and the output says so. The state file must lie outside
+# The home is the invoking user's passwd-entry home: the host's real store
+# lives under it, and a redirected $HOME cannot move it (b.8dr). --home
+# overrides it for dry runs and tests only, and the output says so. The state file must lie outside
 # <home>/.agent-director; snapshot refuses an existing one.
 #
 # Exit status: 0 pass; 1 the guard failed (a change, or an identifier found);

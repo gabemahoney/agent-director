@@ -1201,7 +1201,16 @@ a silent downgrade fails `Open` rather than yielding a half-broken Store.
 **File-system contract.** The parent directory (`~/.agent-director/` by
 default) is created with mode 0700, and the database file is chmodded to
 0600 on every `Open`. Repeated opens never widen permissions. A leading
-`~/` in the path is expanded via `os.UserHomeDir()`, which honours the `$HOME` environment variable.
+`~/` in the path given to `Open` or `OpenOrInit` is expanded against `$HOME`
+(`os.UserHomeDir()`). With `HOME` set this is the same rule `pkg/api` and
+`internal/config` use, so a caller that redirects `HOME` reaches the store
+under that home, not the real one. With `HOME` unset or empty the three
+differ: `pkg/api` returns an error, `internal/config` leaves the path
+unexpanded, and the store's `expandTilde` falls back to the passwd-entry home
+(`user.Current().HomeDir`, SRD §11). Any other path is used as given. With `HOME` set, the production callers (`pkg/api`, and `runHook`
+via `internal/config`) already expand `~/` before calling the store. With
+`HOME` unset, a `~/` store path from `internal/config` reaches the store
+unexpanded and the store's fallback resolves it.
 
 Cross-reference: SRD §4.2 (canonical DDL), §4.5 (layer boundaries), §13.3
 (single-writer + WAL rationale).
@@ -7790,9 +7799,12 @@ substitute for the sandbox for tests: tests still run only through
 `make sandbox*`.
 
 **The guard.** `guard.sh` reads only `state.db` and `ad-trail.jsonl` under
-the passwd-entry home, not `$HOME`, because the store resolves its home that
-way (b.8dr). It takes a snapshot before the run and verifies after it, even
-when the container fails. Quiet-host mode compares SHA-256 sums and fails on
+the passwd-entry home, not `$HOME`. The real host store lives under the home
+the operator's `HOME` normally points to, which is the passwd-entry home, and
+reading the passwd entry means a redirected `HOME` in the guard's own
+environment cannot point it at another directory (b.8dr). It takes a
+snapshot before the run and verifies after it, even when the container
+fails. Quiet-host mode compares SHA-256 sums and fails on
 any change. Busy-host mode, the runner's default, scans only the trail bytes
 appended since the snapshot for the run's identifiers (from
 `harness-ids.txt` and `--id`). It reports `state.db` as not checked, and it
@@ -11021,11 +11033,14 @@ otherwise (fail-closed, exit 1 with a message naming both):
 | `sandboxguard.EnvVar` | `AGENT_DIRECTOR_TEST_SANDBOX` | The process is inside the sandbox container. Exported by the `make sandbox*` targets; also checked by the bun preload `pkg/ts-bun-client/test/setup.ts`. |
 | `sandboxguard.BypassEnvVar` | `BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS` | The caller asserts there is **no real `~/.agent-director` to damage** — true only on an ephemeral GitHub-hosted runner. Go-only. |
 
-The guard defends against b.8dr: the store resolves `~` via `user.Current()`
-(`internal/store.expandTilde`), not `$HOME`, so a host-side `go test` can rewrite
-the real store no matter how `HOME` is set. The container is the only isolation
-boundary; the bypass is not isolation, it is an assertion that there is nothing
-to isolate from.
+The guard defends against b.8dr: a host-side `go test` can rewrite the real
+store no matter how `HOME` is set. Redirecting `HOME` does not hold as a
+boundary: a test that does not redirect it, an absolute path to the real
+store, a child binary started with the host's environment, or a home lookup
+that reads the passwd entry instead of `$HOME` (a spawn cwd's `~`, SRD §7.2)
+all still reach real state. The container is the only isolation boundary; the
+bypass is not isolation, it is an assertion that there is nothing to isolate
+from.
 
 The bypass is set **only at the `job:`/`step:` level** of the two
 GitHub-hosted-runner workflows (`go-smoke.yml`, `integration.yml`), each with an

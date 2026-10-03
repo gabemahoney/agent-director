@@ -231,10 +231,10 @@ test-docker-install-mode: test-image
 #
 # Every executed artifact — the full test suite, one-off builds, `go generate`,
 # bun scripts, ad-hoc binary runs — runs inside a container whose HOME has NO
-# .agent-director. This is the ONLY boundary that holds:
-# internal/store.expandTilde resolves the home via user.Current() (/etc/passwd),
-# so a host-side $HOME redirect does not stop the store from opening (and, on a
-# schema-bumping branch, silently auto-migrating) the real
+# .agent-director. This is the ONLY boundary that holds: a host-side $HOME
+# redirect does not stop a test that skips the redirect, an absolute path to
+# the real store, or a child binary started with the host's environment from
+# opening (and, on a schema-bumping branch, silently auto-migrating) the real
 # ~/.agent-director/state.db. b.8dr: a `bun test` run did exactly that,
 # breaking every consumer of the installed binary.
 #

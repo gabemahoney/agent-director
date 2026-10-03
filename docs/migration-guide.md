@@ -447,10 +447,11 @@ That is exactly the b.8dr incident. Running `bun test` on the b.aaj branch
 (schema v3 migration code) on the host migrated the real
 `~/.agent-director/state.db` from v2 to v3, breaking every consumer of the
 installed v0.7.8 binary (which only understands v2 and now hits
-`ErrSchemaMismatch`). Host `$HOME` redirection does **not** save you:
-`store.expandTilde` resolves the DB path through `user.Current()` (reading
-`/etc/passwd`), which ignores the `$HOME` env var entirely. A container whose
-HOME has no `.agent-director` is the only isolation boundary that holds.
+`ErrSchemaMismatch`). Host `$HOME` redirection does **not** save you: a test
+that does not redirect it, an absolute path to the real store, or a child
+binary started with the host's environment still opens the real
+`~/.agent-director/state.db`. A container whose HOME has no `.agent-director`
+is the only isolation boundary that holds.
 
 **The rule:** any branch that bumps `schemaVersion` or changes migration code
 must **only ever be executed in the sandbox** — never on the host. Editing on

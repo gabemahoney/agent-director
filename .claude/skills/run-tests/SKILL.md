@@ -9,8 +9,9 @@ description: Run this repo's tests and any built binary. Tests and artifacts mus
 
 **Edit on the host freely. Never execute on the host.** Every test run — and
 any built binary, `go run`, `go generate`, or bun script — can open the store,
-and the store resolves `~/.agent-director` via `user.Current()` (`/etc/passwd`),
-so a host `$HOME` redirect does NOT protect the real database. On a
+and a host `$HOME` redirect does NOT protect the real database: a test that
+does not redirect it, an absolute path to the real store, or a child binary
+started with the host's environment still opens it. On a
 schema-bumping branch a single host test run silently migrates the production
 `~/.agent-director/state.db` to an incompatible version and breaks every
 consumer of the installed binary. That is the b.8dr incident; it happened

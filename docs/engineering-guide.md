@@ -173,12 +173,13 @@ numeric ceiling (SR-6.9). Size is recorded in the release notes only.
 The b.8dr incident: running `bun test` on the b.aaj branch (schema v3
 migration code) auto-migrated the production `~/.agent-director/state.db`
 from v2 to v3, breaking all consumers of the installed v0.7.8 binary.
-Host-side `$HOME` redirection is not a reliable boundary because
-`internal/store.expandTilde` resolves the DB path via `user.Current()`
-(reading `/etc/passwd`), which bypasses the `$HOME` environment variable
-entirely. The store also chmods the DB 0600 on every open, preventing
-file-permission workarounds. A container whose HOME has no `.agent-director`
-is the only isolation boundary that holds.
+Host-side `$HOME` redirection is not a reliable boundary: a test that does
+not redirect it, an absolute path to the real store, a child binary started
+with the host's environment, or a home lookup that reads `/etc/passwd`
+instead of `$HOME` (a spawn cwd's `~` resolves that way, SRD §7.2) all still
+reach real host state. The store also chmods the DB 0600 on every open,
+preventing file-permission workarounds. A container whose HOME has no
+`.agent-director` is the only isolation boundary that holds.
 
 **The isolation invariant.** All agent-director state — both the store
 (`state.db`) and the trail (`ad-trail.jsonl`) — lives at `~/.agent-director`,
@@ -192,8 +193,8 @@ relocation mechanism, and the trail follows the effective home. Isolation is
 therefore not something you configure via redirection; it is achieved solely
 by the sandbox, a container whose HOME has no `.agent-director`. Inside that boundary tests
 isolate individual cases by redirecting `$HOME` to a temp directory; that
-`$HOME` redirection is never the outer boundary (it does not stop
-`user.Current()`), only per-test hygiene within the container.
+`$HOME` redirection is never the outer boundary (it does not stop the paths
+above), only per-test hygiene within the container.
 
 ### The rule: edit on the host, execute in the sandbox
 

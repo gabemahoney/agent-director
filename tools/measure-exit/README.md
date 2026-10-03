@@ -145,9 +145,10 @@ supported minimum.
 `guard.sh` wraps every live run. It takes a snapshot before the container
 starts and verifies afterwards, **even when the container run fails**. It
 reads only `state.db` and `ad-trail.jsonl` under the real home. That home
-comes from the passwd entry, not `$HOME`, because the store resolves its home
-the same way. It never opens the database and never runs agent-director or
-tmux.
+comes from the passwd entry, not `$HOME`: the host's own agent-director state
+lives under the home your `HOME` normally points to, which is the passwd-entry
+home, and a redirected `HOME` cannot point the guard elsewhere. It never
+opens the database and never runs agent-director or tmux.
 
 - **Busy-host mode** (default, `--guard-mode busy`). Use it on a host whose
   own agent-director sessions keep writing the store. Verify scans only the

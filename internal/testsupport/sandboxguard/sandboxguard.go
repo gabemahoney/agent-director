@@ -3,8 +3,11 @@
 //
 // Packages whose tests write agent-director state (open the store, emit trail
 // events) or exec built binaries can rewrite the developer's real
-// ~/.agent-director when run on the host — the store resolves the home via
-// user.Current() (/etc/passwd), so a $HOME redirect does not stop it (b.8dr).
+// ~/.agent-director when run on the host (b.8dr). Redirecting $HOME is not
+// enough to prevent that: a test that does not redirect it, an absolute path to
+// the real store, a child binary started with the host's environment, or a
+// home lookup that reads /etc/passwd instead of $HOME all still reach real
+// state. The container is the only isolation boundary.
 // The `make test-sandbox` / `make sandbox*` targets run those tests inside a
 // container whose HOME has no .agent-director and set
 // AGENT_DIRECTOR_TEST_SANDBOX=1. Require() checks that marker and aborts with a

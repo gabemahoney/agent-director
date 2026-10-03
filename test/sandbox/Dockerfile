@@ -4,9 +4,10 @@
 #
 # b.8dr incident: `bun test` on a schema-bumping branch opened and silently
 # auto-migrated the LIVE ~/.agent-director/state.db (v2→v3), breaking every
-# consumer of the installed binary. Host-side $HOME redirects don't hold —
-# internal/store.expandTilde resolves the home via user.Current() (/etc/passwd),
-# and the store chmods the DB 0600 on every open. A container whose HOME has
+# consumer of the installed binary. Host-side $HOME redirects don't hold — a
+# test that skips the redirect, an absolute path to the real store, or a child
+# binary started with the host's environment still opens the real store — and
+# the store chmods the DB 0600 on every open. A container whose HOME has
 # NO .agent-director is the only boundary that holds. See the "Sandboxed
 # execution" section of docs/engineering-guide.md.
 #

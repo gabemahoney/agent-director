@@ -159,9 +159,11 @@ func envAllowed(name string) bool {
 type environment struct {
 	lookupEnv func(string) (string, bool)
 	environ   func() []string
-	// passwdHome is the running user's home from the passwd entry, which
-	// agent-director's store resolution has used (b.8dr); it can differ
-	// from $HOME.
+	// passwdHome is the running user's home from the passwd entry; it can
+	// differ from $HOME. agent-director's store resolves "~/" against $HOME
+	// and falls back to this home only when HOME is unset or empty (b.hvf),
+	// but the host's real store lives under this home, and a redirected
+	// HOME cannot move it (b.8dr).
 	passwdHome func() (string, error)
 	getuid     func() int
 }

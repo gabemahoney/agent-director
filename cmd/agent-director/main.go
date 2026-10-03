@@ -450,12 +450,13 @@ func run() int {
 		return 1
 	}
 
-	// --home: set process HOME BEFORE config.Load runs. internal/config uses
-	// os.UserHomeDir() for tilde-expansion of cfg paths and pkg/api.expandTilde
-	// uses user.Current() for opts.StorePath/opts.TmuxCommand; both consult the
-	// HOME env var first on POSIX, so an os.Setenv here covers every downstream
-	// path-expansion site. Safe because the CLI process is short-lived and not
-	// multi-threaded at startup. b.32k.
+	// --home: set process HOME BEFORE config.Load runs. internal/config,
+	// pkg/api.expandTilde and internal/store.expandTilde all expand "~/" with
+	// os.UserHomeDir(), which reads the HOME env var on POSIX, so an os.Setenv
+	// here covers every downstream "~/" store/config path expansion. (A spawn
+	// cwd's "~" is not one of them: SRD §7.2 resolves it with
+	// user.Current().HomeDir, which ignores HOME.) Safe because the CLI process
+	// is short-lived and not multi-threaded at startup. b.32k, b.hvf.
 	if gOpts.homeSet {
 		expanded := expandTildeCLI(gOpts.home)
 		if err := os.Setenv("HOME", expanded); err != nil {
