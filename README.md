@@ -653,7 +653,7 @@ trail record, is a store's id. Read this store's own id directly, as the
 agents' user:
 
 ```sh
-sqlite3 -readonly ~/.agent-director/state.db "SELECT value FROM store_meta WHERE key = 'store_id'"
+sqlite3 -readonly -cmd ".timeout 10000" ~/.agent-director/state.db "SELECT value FROM store_meta WHERE key = 'store_id'"
 ```
 
 It prints 16 lowercase hexadecimal characters and changes nothing (if your

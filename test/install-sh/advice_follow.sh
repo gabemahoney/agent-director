@@ -246,15 +246,19 @@ chmod 0755 "$GH_FAKE"
 GH_DIR="$ROOT/gh-on-path" ON_PATH="$ROOT/ad-on-path"
 mkdir -p "$GH_DIR" "$ON_PATH"
 ln -s "$GH_FAKE" "$GH_DIR/gh" && ln -s "$BIN_OLD" "$ON_PATH/agent-director" || die "PATH_EXTRA dirs"
-# sqlite3 stand-in for J7: answers like sqlite3 under a lock on call number
-# FAKE_SQLITE3_FAIL_CALL, otherwise runs the real one.
+# sqlite3 stand-in for J7: on call number FAKE_SQLITE3_FAIL_CALL it prints
+# FAKE_SQLITE3_ANSWER when that is set (a readable, wrong user_version), and
+# otherwise fails like sqlite3 whose busy timeout ran out under a lock, with
+# SHIM_LOCK_ERR on stderr; every other call runs the real one.
+SHIM_LOCK_ERR="Error: in prepare, database is locked (5)"
 SQLITE_SHIM="$ROOT/sqlite3-shim"
 cat >"$SQLITE_SHIM" <<EOF
 #!/bin/bash
 n=\$(( \$(cat "\$FAKE_SQLITE3_COUNT" 2>/dev/null || echo 0) + 1 ))
 echo "\$n" >"\$FAKE_SQLITE3_COUNT"
 if [[ "\$n" == "\${FAKE_SQLITE3_FAIL_CALL:-0}" ]]; then
-    echo "Error: in prepare, database is locked (5)" >&2; exit 5
+    [[ -n "\${FAKE_SQLITE3_ANSWER:-}" ]] && { echo "\$FAKE_SQLITE3_ANSWER"; exit 0; }
+    echo "$SHIM_LOCK_ERR" >&2; exit 5
 fi
 exec "$SQLITE" "\$@"
 EOF
@@ -264,7 +268,8 @@ chmod 0755 "$SQLITE_SHIM"
 
 pass=0 fail=0 skip=0
 T_FAILED=0 T_SKIPPED=0 RUN_N=0 RC=0 OUT="" ERR=""
-FAKE_CURL_STATUS=200 FAKE_CURL_ADMIN_STATUS="" FAKE_CURL_API_TAG="" FAKE_SQLITE3_FAIL_CALL=0 PATH_EXTRA=""
+FAKE_CURL_STATUS=200 FAKE_CURL_ADMIN_STATUS="" FAKE_CURL_API_TAG="" FAKE_SQLITE3_FAIL_CALL=0 FAKE_SQLITE3_ANSWER=""
+PATH_EXTRA=""
 
 bad() { echo "    FAIL: $*"; T_FAILED=1; }
 
@@ -295,7 +300,8 @@ run_in() {
         INSTALL_SH_TEST_CURL_OVERRIDE="$TOOLBOX/curl" FAKE_CURL_BODY="$BIN" FAKE_CURL_ADMIN_BODY="$ADMIN" \
         FAKE_CURL_STATUS="$FAKE_CURL_STATUS" FAKE_CURL_ADMIN_STATUS="$FAKE_CURL_ADMIN_STATUS" \
         FAKE_CURL_API_TAG="$FAKE_CURL_API_TAG" \
-        FAKE_SQLITE3_FAIL_CALL="$FAKE_SQLITE3_FAIL_CALL" FAKE_SQLITE3_COUNT="$home.sqlite3-calls" \
+        FAKE_SQLITE3_FAIL_CALL="$FAKE_SQLITE3_FAIL_CALL" FAKE_SQLITE3_ANSWER="$FAKE_SQLITE3_ANSWER" \
+        FAKE_SQLITE3_COUNT="$home.sqlite3-calls" \
         "$@") >"$OUT" 2>"$ERR"
     RC=$?
 }
@@ -374,7 +380,7 @@ sentinel() { printf '%s' "$1/.agent-director/migrate-authorized"; }
 
 run_test() {
     T_FAILED=0 T_SKIPPED=0 FAKE_CURL_STATUS=200 FAKE_CURL_ADMIN_STATUS="" FAKE_CURL_API_TAG="" FAKE_SQLITE3_FAIL_CALL=0
-    PATH_EXTRA=""
+    FAKE_SQLITE3_ANSWER="" PATH_EXTRA=""
     echo "=== RUN   $1"
     "$1"
     if [[ "$T_FAILED" -ne 0 ]]; then
@@ -671,36 +677,81 @@ test_J6_NewerStoreInstallNewer() {
 
 # ---- J7: migration verification failed -----------------------------------------
 
-# j7_unverified: a valid one-version-older store, and an install whose
-# post-open user_version read fails (sqlite3 meets a lock); leaves HOME in J7H.
-j7_unverified() {
+# j7_verify_fails <answer>: a valid one-version-older store, and an install
+# whose post-open user_version read answers <answer>, or fails (a lock outlasts
+# sqlite3's busy timeout) when <answer> is empty: exit 5, step 5's failure and
+# no leftover step-5 sqlite3 error file in TMPDIR. Leaves HOME in J7H.
+j7_verify_fails() {
     J7H="$(new_home)"
     run "$J7H" bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-symlink
     expect_rc 0 "first install" || return 1
     "$SQLITE" "$J7H/.agent-director/state.db" "PRAGMA user_version = $((SCHEMA - 1));"
     J7ARGV=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-symlink)
     ln -sf "$SQLITE_SHIM" "$TOOLBOX/sqlite3"
-    FAKE_SQLITE3_FAIL_CALL=2 # 1: step-2 read, 2: step-5 verification read
+    FAKE_SQLITE3_FAIL_CALL=2 FAKE_SQLITE3_ANSWER="$1" # 1: step-2 read, 2: step-5 verification read
+    rm -f "$ROOT"/tmp/agent-director-sqlite3.* # so a leftover below is this run's
     run "$J7H" "${J7ARGV[@]}"
     ln -sf "$SQLITE" "$TOOLBOX/sqlite3"
-    FAKE_SQLITE3_FAIL_CALL=0
-    expect_rc 5 "verification read failed" || return 1
+    FAKE_SQLITE3_FAIL_CALL=0 FAKE_SQLITE3_ANSWER=""
+    expect_rc 5 "verification read answered \"$1\"" || return 1
     expect_advice "schema migration verification FAILED"
-    expect_advice "The migration sentinel (if written) has NOT been consumed; re-run this install to retry, or contact the maintainers."
+    if compgen -G "$ROOT/tmp/agent-director-sqlite3.*" >/dev/null; then
+        bad "step 5's sqlite3 error file left behind: $(compgen -G "$ROOT/tmp/agent-director-sqlite3.*")"
+    fi
 }
 
-# J7: "re-run this install to retry"
-test_J7_VerificationFailedRerun() {
-    j7_unverified || return
+# j7_unverified: j7_verify_fails with the verification read failing; checks
+# its advice and sqlite3's own error, indented under the <unreadable> line.
+j7_unverified() {
+    j7_verify_fails "" || return 1
+    expect_advice "actual user_version: <unreadable>"
+    local reason
+    reason="$(grep -xF -A1 "  actual   user_version: <unreadable>" "$ERR" | tail -n +2)"
+    [[ "$reason" == "    $SHIM_LOCK_ERR" ]] || bad "the line after \"<unreadable>\" is \"$reason\"; want sqlite3's error \"    $SHIM_LOCK_ERR\""
+    expect_advice "Reading state.db's user_version (sqlite3 PRAGMA user_version) failed, so the install could not check the migration. Re-running this install retries the read."
+    # A read that time resolves never sends the operator to a human (b.ady).
+    if grep -qF "contact the maintainers" "$ERR"; then
+        bad "the unreadable-version failure tells the operator to contact the maintainers"
+    fi
+}
+
+# j7_mismatch: j7_verify_fails with the verification read answering the
+# pre-migration version; checks its advice.
+j7_mismatch() {
+    j7_verify_fails "$((SCHEMA - 1))" || return 1
+    expect_advice "actual user_version: $((SCHEMA - 1))"
+    expect_advice "The store open did not migrate state.db to the target version. The migration sentinel (if written) has NOT been consumed; re-run this install to retry, or contact the maintainers."
+}
+
+# j7_rerun_verified: re-run J7ARGV with the real sqlite3; it reads and verifies
+# the migrated store.
+j7_rerun_verified() {
     run "$J7H" "${J7ARGV[@]}"
-    expect_rc 0 "re-run once the read works" || return
+    expect_rc 0 "$1" || return
+    grep -qF "(schema v$SCHEMA)" "$OUT" || bad "the re-run did not read the store's version: $(flat "$OUT")"
     [[ "$(db_version "$J7H")" == "$SCHEMA" ]] || bad "store at v$(db_version "$J7H"); want v$SCHEMA"
 }
 
-# J7: "The migration sentinel (if written) has NOT been consumed"
-test_J7_SentinelNotConsumed() {
+# J7: "Re-running this install retries the read."
+test_J7_VerificationFailedRerun() {
     j7_unverified || return
-    known_broken J7 "the open migrated the store and consumed the sentinel before the failed verification read" || return
+    j7_rerun_verified "re-run once the read works"
+}
+
+# J7: "re-run this install to retry, or contact the maintainers." (a readable
+# user_version != target). Contacting the maintainers is a human step; not followed.
+test_J7_VersionMismatchRerun() {
+    j7_mismatch || return
+    j7_rerun_verified "re-run once the read is right"
+}
+
+# J7: "The migration sentinel (if written) has NOT been consumed" (a readable
+# user_version != target; the unreadable failure no longer says it, b.ady).
+# Known broken, b.wt9: step 5 runs only after a successful open, which has
+# already consumed the sentinel.
+test_J7_SentinelNotConsumed() {
+    j7_mismatch || return
+    known_broken J7 "the open migrated the store and consumed the sentinel before the verification read" || return
     [[ -f "$(sentinel "$J7H")" ]] || bad "the sentinel was consumed, contrary to the text (store at v$(db_version "$J7H"))"
 }
 

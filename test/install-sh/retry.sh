@@ -30,6 +30,11 @@
 # ~/.local/bin on PATH, the directory gets agent-director and nothing else;
 # agent-director-admin is never put on PATH.
 #
+# Store lock (b.ady): an upgrade whose two user_version reads (before the
+# migrating open, and verifying it) each start while another sqlite3 process
+# briefly holds state.db's exclusive lock still authorizes, runs and verifies
+# the migration: both reads wait the lock out (each takes 0.5 s or more).
+#
 # The test passes an explicit tag (`v0.11.0-fake`, a release that ships
 # agent-director-admin) so install.sh skips the tag-resolve step and
 # nothing reaches the network.
@@ -268,6 +273,54 @@ PATH_PREFIX="$H/.local/bin"
 run_install 0 '*' --from-release v0.11.0-fake
 PATH_PREFIX=""
 symlinked symlink-default "$H/.local/bin"
+
+# locking_sqlite3 <db>: a sqlite3 in $ROOT/locking that first has another
+# sqlite3 process take <db>'s exclusive lock and hold it for 1 s, then runs the
+# real one; each call logs "held <ms>" (or "no lock <ms>") to $ROOT/locks.log,
+# <ms> being how long the real one took (b.ady). The holder runs with -bail, so
+# it marks the lock held only once BEGIN EXCLUSIVE has succeeded.
+locking_sqlite3() {
+    mkdir -p "$ROOT/locking"
+    {
+        printf '#!/bin/bash\nSQLITE=%q SLEEP=%q DB=%q LOG=%q\n' \
+            "$(type -P sqlite3)" "$(type -P sleep)" "$1" "$ROOT/locks.log"
+        cat <<'EOF'
+mark="$LOG.$$" lock=held
+{ printf 'PRAGMA locking_mode=EXCLUSIVE;\nBEGIN EXCLUSIVE;\nSELECT 1;\n.system touch %s\n' "$mark"; "$SLEEP" 1; echo 'COMMIT;'; } \
+    | "$SQLITE" -bail "$DB" >/dev/null 2>&1 &
+for _ in {1..300}; do [[ -e "$mark" ]] && break; "$SLEEP" 0.01; done
+[[ -e "$mark" ]] || lock="no lock"
+start="${EPOCHREALTIME//[!0-9]/}"
+"$SQLITE" "$@"
+rc=$?
+echo "$lock $(( (${EPOCHREALTIME//[!0-9]/} - start) / 1000 ))" >>"$LOG"
+exit "$rc"
+EOF
+    } >"$ROOT/locking/sqlite3"
+    chmod 0755 "$ROOT/locking/sqlite3"
+}
+
+# An upgrade (the store set one version back) whose user_version reads each
+# meet a briefly held store lock reads the right versions, before and after
+# the migrating open (b.ady).
+new_home locked-store
+db="$H/.agent-director/state.db"
+run_install 0 '*' --from-release v0.11.0-fake --no-symlink
+report locked-store-first-install-exit-code "$RC" "0"
+schema="$(sqlite3 "$db" 'PRAGMA user_version;')"
+sqlite3 "$db" "PRAGMA user_version = $((schema - 1));"
+locking_sqlite3 "$db"
+PATH_PREFIX="$ROOT/locking"
+run_install 0 '*' --from-release v0.11.0-fake --no-symlink
+PATH_PREFIX=""
+report locked-store-exit-code "$RC" "0"
+report locked-store-reads "$(sed 's/ [0-9]*$//' "$ROOT/locks.log" | paste -sd,)" "held,held"
+# Each read started with the lock held for about 1 s more, so one that returned
+# in under 0.5 s never waited for it.
+echo "  info  locked-store read times (ms): $(awk '{print $NF}' "$ROOT/locks.log" | paste -sd,)"
+report locked-store-reads-waited "$(awk '{print ($NF >= 500 ? "waited" : "returned after " $NF " ms")}' "$ROOT/locks.log" | paste -sd,)" "waited,waited"
+report locked-store-step2-read "$(grep -cF "authorized migration v$((schema - 1))→v$schema " "$OUT")" "1"
+report locked-store-step5-read "$(grep -cF "migration verified — state.db now at v$schema" "$OUT")" "1"
 
 echo "[b.kym install-sh retry] summary: $pass passed, $fail failed"
 

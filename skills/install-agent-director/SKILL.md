@@ -348,9 +348,10 @@ This skill runs `install.sh` from the same directory. The script:
       / `dnf install file`. `sqlite3` is mandatory for the
       schema-migration flow (below): the script reads state.db's
       ACTUAL `user_version` through the WAL with
-      `sqlite3 "PRAGMA user_version"` — raw header bytes are subtly
-      wrong for a WAL-mode DB — both to decide whether a migration
-      sentinel is needed and to verify the post-open version;
+      `sqlite3 -cmd ".timeout 10000" <db> "PRAGMA user_version;"` —
+      raw header bytes are subtly wrong for a WAL-mode DB — both to
+      decide whether a migration sentinel is needed and to verify the
+      post-open version;
       install via `apt install sqlite3` / `brew install sqlite` /
       `dnf install sqlite`. `curl` is also required when
       `--from-release` is supplied.
@@ -455,10 +456,10 @@ This skill runs `install.sh` from the same directory. The script:
    1. **Install the new binary** — already done by step 3/the atomic
       `mv` above.
    2. **Read the DB's ACTUAL `user_version`** via
-      `sqlite3 ~/.agent-director/state.db "PRAGMA user_version"`
-      (through the WAL — never assume the version, and never read raw
-      header bytes). No DB yet (fresh install) → nothing to authorize;
-      step 4 fresh-creates it.
+      `sqlite3 -cmd ".timeout 10000" ~/.agent-director/state.db "PRAGMA user_version;"`
+      (through the WAL, waiting up to 10 s for a lock — never assume the
+      version, and never read raw header bytes). No DB yet (fresh
+      install) → nothing to authorize; step 4 fresh-creates it.
    3. **Write the authorization sentinel** — a file
       `~/.agent-director/migrate-authorized` (a sibling of state.db)
       containing `{"from": <actual>, "to": <target>}`, where
@@ -476,7 +477,8 @@ This skill runs `install.sh` from the same directory. The script:
       confirms it equals the target. On any mismatch (or if state.db
       wasn't created) the install **aborts non-zero (exit 5)** with a
       clear message; the sentinel, if written, is left unconsumed so a
-      re-run retries the migration.
+      re-run retries the migration. An unreadable version also exits 5;
+      see "Recovering an older-than-binary DB" below.
    6. **Brief hook-failure window (accepted).** Between the binary
       swap (step 1/3) and the successful step-4 open there is a short
       (seconds, install-controlled) window in which a concurrently
@@ -672,8 +674,9 @@ administrator action, so the install writes the sentinel for you.
    `~/.agent-director/bin/`, and `agent-director-admin` into
    `~/.agent-director/admin/`).
 2. **Read the ACTUAL `user_version`** via
-   `sqlite3 ~/.agent-director/state.db "PRAGMA user_version"` (through
-   the WAL). No DB → fresh install, skip to step 4.
+   `sqlite3 -cmd ".timeout 10000" ~/.agent-director/state.db "PRAGMA user_version;"`
+   (through the WAL, waiting up to 10 s for a lock). No DB → fresh
+   install, skip to step 4.
 3. **Write the sentinel** `{"from":<actual>,"to":<target>}` beside
    state.db — **skipped when `from == to`** (already current) and on a
    fresh install. `<target>` is the schema version the new binary
@@ -685,7 +688,8 @@ administrator action, so the install writes the sentinel for you.
    install creates state.db at the current version.
 5. **Verify** the post-open `user_version` equals the target;
    otherwise **fail the install loudly** (exit 5), leaving any written
-   sentinel unconsumed for a retry.
+   sentinel unconsumed for a retry. An unreadable version also fails;
+   see below.
 6. **A brief hook-failure window is accepted.** For the few seconds
    between the binary swap and the successful step-4 open, a hook that
    opens the store sees the migration error; it clears once step 4
@@ -700,8 +704,12 @@ flags). The install reads the current version, writes the one-shot
 sentinel, opens the store to migrate, and verifies the result. There
 is no `rm state.db` step and no data loss: the migration preserves
 your Spawn history. If the install's step 5 fails verification, do NOT
-delete state.db — capture the error and the leftover
-`migrate-authorized` sentinel and contact the maintainers.
+delete state.db. If it reports `actual user_version: <unreadable>`,
+the install could not read the version; sqlite3's own error, printed
+indented under that line, shows why. Re-running the install retries
+the read. If it reports a readable version that differs from the
+expected one, capture the error and the leftover `migrate-authorized`
+sentinel and contact the maintainers.
 
 An operator can also author the sentinel by hand (write the JSON
 above, then run any store-opening verb once), but re-running the
@@ -747,7 +755,7 @@ store id.
 user_version=N, want M" with N greater than M). Migrations only run
 forward, and the install will not downgrade a DB.
 
-1. Inspect: `sqlite3 ~/.agent-director/state.db "PRAGMA user_version"`
+1. Inspect: `sqlite3 -cmd ".timeout 10000" ~/.agent-director/state.db "PRAGMA user_version"`
    and compare against the version the binary expects (shown in the
    error).
 2. **Install the agent-director release that matches this schema.**

@@ -73,7 +73,7 @@
 #      stamps differ or carry no commit stamp
 #   4  hook merge failure (~/.claude/settings.json malformed)
 #   5  store open / schema-migration failure (open failed, state.db not
-#      created, or post-open user_version != target)
+#      created, or post-open user_version != target or unreadable)
 #
 # Idempotent: re-running the script with no flags after a clean
 # install is a no-op (returns 0, prints "already installed at vX").
@@ -797,7 +797,7 @@ fi
 # replaces neither binary, rather than leaving a new agent-director
 # beside an old agent-director-admin. The EXIT trap removes a staged
 # copy that was never moved into place (and the --from-release
-# downloads, as before).
+# downloads, as before, and step 5's sqlite3 error file).
 #
 # The operator tool agent-director-admin goes into its own directory
 # (mode 0700, five digits to clear an inherited setgid bit as above),
@@ -805,7 +805,7 @@ fi
 # symlink for it. Its path is printed once, at the end.
 # --------------------------------------------------------------------
 
-trap 'rm -f "$TMP" "$ADMIN_TMP" ${tmp_bin:+"$tmp_bin"} ${tmp_admin:+"$tmp_admin"}' EXIT
+trap 'rm -f "$TMP" "$ADMIN_TMP" ${tmp_bin:+"$tmp_bin"} ${tmp_admin:+"$tmp_admin"} ${user_version_err:+"$user_version_err"}' EXIT
 
 mkdir -p "$DEFAULT_ADMIN_DIR"
 chmod 00700 "$DEFAULT_ADMIN_DIR"
@@ -868,12 +868,20 @@ fi
 
 state_db="${DEFAULT_INSTALL_ROOT}/state.db"
 
-# ad_user_version <db> — echo the DB's user_version through the WAL, or
-# empty if the file does not exist / cannot be read.
+# ad_user_version <db> [<err-file>] — echo the DB's user_version through
+# the WAL, or empty if the file does not exist / cannot be read. sqlite3's
+# stderr goes to <err-file> (default /dev/null), so a caller that reports a
+# failed read can show sqlite3's own reason.
+#
+# The read waits up to 10 s for a lock, the same busy_timeout every
+# agent-director connection uses (internal/store/store.go openDB). A plain
+# sqlite3 waits 0 ms, so any agent-director process briefly holding
+# state.db's locks (opening, exiting, checkpointing or recovering the WAL)
+# would fail the read at once and the install would misread the store (b.ady).
 ad_user_version() {
-    local db="$1"
+    local db="$1" err="${2:-/dev/null}"
     [[ -f "$db" ]] || return 0
-    sqlite3 "$db" "PRAGMA user_version;" 2>/dev/null || true
+    sqlite3 -cmd ".timeout 10000" "$db" "PRAGMA user_version;" 2>"$err" || true
 }
 
 # ad_target_version — the schema version THIS binary requires. There is
@@ -947,7 +955,10 @@ else
 fi
 
 # ---- Step 5: verify the post-open schema version, fail loudly on mismatch ----
-db_version_after="$(ad_user_version "$state_db")"
+# Keep this read's sqlite3 stderr so a failed read shows its reason. Only a
+# diagnostic: if mktemp fails, read without it rather than fail the install.
+user_version_err="$(mktemp -t agent-director-sqlite3.XXXXXX)" || user_version_err=""
+db_version_after="$(ad_user_version "$state_db" "$user_version_err")"
 
 if [[ -f "$state_db" ]]; then
     chmod 0600 "$state_db" 2>/dev/null || true
@@ -959,10 +970,26 @@ fi
 
 if [[ -n "$db_version_before" && -n "${target_version:-}" ]]; then
     # A migration was expected. Verify it actually landed.
-    if [[ "$db_version_after" != "$target_version" ]]; then
+    if [[ -z "$db_version_after" ]]; then
+        # The read itself failed, which says nothing about the migration.
+        # The script cannot tell why (a lock held past the 10 s busy
+        # timeout, a broken sqlite3, permissions, a corrupt file), so it
+        # shows sqlite3's own error and says that a re-run reads again; it
+        # does not send the operator to a human (b.ady).
         echo "install.sh: schema migration verification FAILED" >&2
         echo "  expected user_version: $target_version" >&2
-        echo "  actual   user_version: ${db_version_after:-<unreadable>}" >&2
+        echo "  actual   user_version: <unreadable>" >&2
+        if [[ -s "$user_version_err" ]]; then
+            sed 's/^/    /' "$user_version_err" >&2
+        fi
+        echo "  Reading state.db's user_version (sqlite3 PRAGMA user_version)" >&2
+        echo "  failed, so the install could not check the migration." >&2
+        echo "  Re-running this install retries the read." >&2
+        exit 5
+    elif [[ "$db_version_after" != "$target_version" ]]; then
+        echo "install.sh: schema migration verification FAILED" >&2
+        echo "  expected user_version: $target_version" >&2
+        echo "  actual   user_version: $db_version_after" >&2
         echo "  The store open did not migrate state.db to the target version." >&2
         echo "  The migration sentinel (if written) has NOT been consumed;" >&2
         echo "  re-run this install to retry, or contact the maintainers." >&2

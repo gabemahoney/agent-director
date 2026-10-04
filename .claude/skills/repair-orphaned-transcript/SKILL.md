@@ -50,14 +50,19 @@ session id and loses the current conversation.
   terminal, run `agent-director find-missing` (which marks the row `missing`
   when it judges the agent's process gone; `missing` is the sweep's judgement,
   not proof that the agent exited) or wait for it to end — do not force it.
-- **Do not migrate the schema by accident.** Open the DB with a plain `sqlite3`
-  client (below). Do not run agent-director test binaries or `go run` against
-  your real `$HOME` — see the `run-tests` skill for why (the b.8dr incident).
+- **Do not migrate the schema by accident.** Open the DB with the `sqlite3`
+  command-line client (below), not with agent-director. Do not run
+  agent-director test binaries or `go run` against your real `$HOME` — see the
+  `run-tests` skill for why (the b.8dr incident).
+- **Keep the busy timeout.** Every `sqlite3` command below sets
+  `.timeout 10000`, the same 10 s wait agent-director's own connections use.
+  Without it `sqlite3` waits 0 ms and fails at once with `database is locked`
+  whenever a running agent's hook briefly holds the store's lock.
 
 ## Step 1 — find the row and its current pair
 
 ```sh
-sqlite3 ~/.agent-director/state.db \
+sqlite3 -cmd ".timeout 10000" ~/.agent-director/state.db \
   "SELECT claude_instance_id, state, cwd, claude_session_id, jsonl_path,
           life_number, row_version, extra_env
      FROM spawns WHERE claude_instance_id = '<id>';"
@@ -123,6 +128,9 @@ Substitute your verified values for `<id>`, `<recovered-session-id>`, and
 
 ```sql
 -- run inside: sqlite3 ~/.agent-director/state.db
+-- First set the 10 s busy timeout (a sqlite3 dot-command; see "Keep the
+-- busy timeout" above), so BEGIN IMMEDIATE waits out a hook's brief lock.
+.timeout 10000
 BEGIN IMMEDIATE;
 
 -- 1. Archive the row's CURRENT (session id, jsonl_path) so the pointer being
@@ -171,7 +179,7 @@ is not repaired (see Step 1).
 ## Step 4 — verify, then resume
 
 ```sh
-sqlite3 ~/.agent-director/state.db \
+sqlite3 -cmd ".timeout 10000" ~/.agent-director/state.db \
   "SELECT claude_session_id, jsonl_path, life_number, row_version FROM spawns WHERE claude_instance_id='<id>';
    SELECT claude_session_id, jsonl_path, life_number, recorded_at FROM session_history WHERE claude_instance_id='<id>';"
 ```

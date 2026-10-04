@@ -7,6 +7,7 @@ package api_test
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,8 +35,41 @@ func runnableStoreIDLine(t *testing.T) string {
 	return cmds[0]
 }
 
+// holdStoreLock has a second connection take path's exclusive lock now and
+// release it after d, as a starting or exiting agent-director briefly does.
+func holdStoreLock(t *testing.T, path string, d time.Duration) {
+	t.Helper()
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open lock holder: %v", err)
+	}
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("lock holder conn: %v", err)
+	}
+	for _, q := range []string{"PRAGMA locking_mode=EXCLUSIVE", "BEGIN EXCLUSIVE"} {
+		if _, err := conn.ExecContext(ctx, q); err != nil {
+			t.Fatalf("lock holder %s: %v", q, err)
+		}
+	}
+	var n int
+	if err := conn.QueryRowContext(ctx, "SELECT count(*) FROM store_meta").Scan(&n); err != nil {
+		t.Fatalf("lock holder read: %v", err)
+	}
+	released := make(chan struct{})
+	time.AfterFunc(d, func() {
+		_, _ = conn.ExecContext(ctx, "COMMIT")
+		_ = conn.Close()
+		_ = db.Close()
+		close(released)
+	})
+	t.Cleanup(func() { <-released })
+}
+
 // TestReadmeStoreIDCommandPrintsStoreID runs the README's store-id line with
-// HOME at a temp dir holding a fresh store, closed and while held open.
+// HOME at a temp dir holding a fresh store: closed, held open, and while
+// another connection briefly holds its exclusive lock (b.ady).
 // A missing sqlite3 fails inside the sandbox (its image installs sqlite3, so a
 // skip there would hide a broken image) and skips only outside it.
 func TestReadmeStoreIDCommandPrintsStoreID(t *testing.T) {
@@ -49,13 +83,16 @@ func TestReadmeStoreIDCommandPrintsStoreID(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		keepOpen bool
+		lockFor  time.Duration // 0: no lock held
 	}{
-		{"store closed", false},
-		{"store held open", true},
+		{"store closed", false, 0},
+		{"store held open", true, 0},
+		{"store briefly locked", false, time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
-			st, err := store.OpenOrInit(filepath.Join(home, ".agent-director", "state.db"))
+			dbPath := filepath.Join(home, ".agent-director", "state.db")
+			st, err := store.OpenOrInit(dbPath)
 			if err != nil {
 				t.Fatalf("OpenOrInit: %v", err)
 			}
@@ -65,6 +102,9 @@ func TestReadmeStoreIDCommandPrintsStoreID(t *testing.T) {
 			} else if err := st.Close(); err != nil {
 				t.Fatalf("Close: %v", err)
 			}
+			if tc.lockFor > 0 {
+				holdStoreLock(t, dbPath, tc.lockFor)
+			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
@@ -72,12 +112,16 @@ func TestReadmeStoreIDCommandPrintsStoreID(t *testing.T) {
 			cmd.Env = append(os.Environ(), "HOME="+home) // the last HOME wins
 			var stderr strings.Builder
 			cmd.Stderr = &stderr
+			start := time.Now()
 			out, err := cmd.Output()
 			if err != nil {
 				t.Fatalf("README line %s: %v; stderr: %s", line, err, stderr.String())
 			}
 			if got := strings.TrimSpace(string(out)); got != want {
 				t.Errorf("README line %s printed %q; Store.StoreID() is %q", line, got, want)
+			}
+			if waited := time.Since(start); waited < tc.lockFor/2 {
+				t.Errorf("README line returned after %v, well before the %v lock was released: the lock never blocked it", waited, tc.lockFor)
 			}
 		})
 	}

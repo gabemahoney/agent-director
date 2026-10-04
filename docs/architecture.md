@@ -4091,17 +4091,21 @@ upgrade whose binary is newer than an existing `state.db`. `install.sh`
 runs on the end-user's machine as an *administrator* action, so it is
 the one legitimate place to authorize that migration — which it does
 with a one-shot `migrate-authorized` sentinel: it reads the DB's ACTUAL
-`user_version` (via `sqlite3 … "PRAGMA user_version"`, through the WAL —
+`user_version` (via `sqlite3 -cmd ".timeout 10000" … "PRAGMA user_version"`,
+through the WAL and with the store's own 10 s busy timeout, so a running
+agent-director's momentary lock delays the read instead of failing it —
 hence `sqlite3` is a preflight requirement), writes a
 `{"from":<actual>,"to":<target>}` sentinel beside `state.db` (skipped
 when already current or on a fresh install), opens the store once with a
 store-opening verb (`agent-director list`, deliberately not the DB-free
 `help`/`version`) to run the migration and consume the sentinel, then
 verifies the post-open `user_version` and aborts loudly (exit 5) on any
-mismatch. A brief hook-failure window between the binary swap and that
-open is accepted, not worked around. That same open gives the store its
-store id: the v4→v5 hop creates it on an upgrade, and `createSchema` on a
-fresh install. `install.sh` never reads or writes `store_meta`.
+mismatch. A version that still cannot be read exits 5 as `<unreadable>`,
+showing sqlite3's error; re-running the install retries the read. A brief
+hook-failure window between the binary swap and that open is accepted,
+not worked around. That same open gives the store its store id: the
+v4→v5 hop creates it on an upgrade, and `createSchema` on a fresh
+install. `install.sh` never reads or writes `store_meta`.
 
 The full ordered six-step flow — including how `<target>` is learned
 from the binary's own refusal message and why `list` rather than
