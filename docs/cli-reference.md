@@ -279,7 +279,7 @@ _None._
 
 ## expire
 
-Delete finished rows (ended/missing) whose ended_at is older than the retention window (defaults.expire_retention_days; --older-than overrides). It reads tmux to decide, deleting a row only if its agent's recorded process is not seen running and tmux shows no session of the agent. It never kills a session or touches transcripts. `missing` is not proof the agent exited (see find-missing). Finished rows are removed by an operator-scheduled expire at the default retention, run as the same user and in the same tmux environment as the agents; it keeps and reports rows whose session runs or cannot be checked. Agents never run it, least of all with a zero window. A run as another user, as root or against another tmux server can wrongly delete rows.
+Delete finished rows (ended/missing) whose ended_at is older than the retention window (defaults.expire_retention_days; older_than overrides). It reads tmux to decide, deleting a row only if its agent's recorded process is not seen running and tmux shows no session of the agent. It never kills a session or touches transcripts. `missing` is not proof the agent exited (see find-missing). Finished rows are removed by an operator-scheduled expire at the default retention, run as the same user and in the same tmux environment as the agents; it keeps and reports rows whose session runs or cannot be checked. Agents never run it, least of all with a zero window. A run as another user, as root or against another tmux server can wrongly delete rows.
 
 ### Parameters
 
@@ -303,14 +303,14 @@ Save a reusable spawn preset as ~/.agent-director/templates/NAME.toml. Per-invoc
 ### Parameters
 
 - `name` (string, required): Template name. Must be filename-safe (no path separators, no leading dot, no `..`).
-- `cwd` (string, optional): Bake a default cwd into the template. Per-call --cwd overrides.
+- `cwd` (string, optional): Bake a default cwd into the template. Per-call cwd overrides.
 - `relay_mode` (string, optional): Bake a default relay_mode (on/off). Per-call relay_mode (--relay-mode on the CLI) overrides.
-- `claude_args` ([]string, optional): Bake default Claude argv. Per-call --claude-args REPLACES the template's array wholesale (not concat).
+- `claude_args` ([]string, optional): Bake default Claude argv. Per-call claude_args (--claude-args on the CLI) REPLACES the template's array wholesale (not concat).
 - `extra_env` (map[string]string, optional): Bake env-var entries. Per-call extra_env (--extra-env on the CLI) merges by key; per-call wins on collision.
-- `label` ([]string, optional): Bake label k=v entries. Per-call --label merges by key; per-call wins on collision.
-- `allow` ([]string, optional): Bake permissions.allow entries. Per-call --allow CONCATENATES (does not replace).
-- `deny` ([]string, optional): Bake permissions.deny entries. Per-call --deny CONCATENATES.
-- `ask` ([]string, optional): Bake permissions.ask entries. Per-call --ask CONCATENATES.
+- `label` ([]string, optional): Bake label k=v entries. Per-call label merges by key; per-call wins on collision.
+- `allow` ([]string, optional): Bake permissions.allow entries. Per-call allow CONCATENATES (does not replace).
+- `deny` ([]string, optional): Bake permissions.deny entries. Per-call deny CONCATENATES.
+- `ask` ([]string, optional): Bake permissions.ask entries. Per-call ask CONCATENATES.
 - `overwrite` (bool, optional): Replace any existing template at this name atomically. Default false preserves O_EXCL create-only semantics.
 
 ### Result

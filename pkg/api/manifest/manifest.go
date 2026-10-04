@@ -81,6 +81,14 @@ var stateEnum = []string{
 // one surface's spelling only.
 const ReuseOptInSpelling = "reuse_finished (--reuse-finished on the CLI)"
 
+// TmuxSessionNameSpelling is the session-name param's one spelling in a
+// runtime text every surface shows (b.ro3, after ReuseOptInSpelling): its
+// param name, which MCP takes and the TypeScript client's field shares, then
+// its CLI flag. pkg/api's list hint (listSessionNameHint) and
+// internal/spawn's ErrTmuxSessionNameEmpty description build on it, so no
+// such text names the param in one surface's spelling only.
+const TmuxSessionNameSpelling = "tmux_session_name (--tmux-session-name on the CLI)"
+
 // liveRowSequence is SR-18.6's bounded, paced live-row sequence in its short
 // form (decision-0930b Q6): the same six steps and limits, with no rationale.
 // Only kill's Description states it (it ends killDescription); find-missing
@@ -136,8 +144,10 @@ const expireCleanupPointer = "Agents never run expire (operator-scheduled finish
 // SR-18.9; Epic 15 build-lead decision 1): only what SR-18 requires there,
 // plus the selection. Per-row detail (the deleted meaning, kept reasons,
 // sweep_budget_seconds, what fails the run) lives in the result-field texts,
-// which reach neither help nor MCP tools/list.
-const expireDescription = "Delete finished rows (ended/missing) whose ended_at is older than the retention window (defaults.expire_retention_days; --older-than overrides). " +
+// which reach neither help nor MCP tools/list. It names the window's override
+// by its bare param name (b.ro3), as make-template's param texts do, so an MCP
+// caller is not told a CLI-only spelling and help does not grow.
+const expireDescription = "Delete finished rows (ended/missing) whose ended_at is older than the retention window (defaults.expire_retention_days; older_than overrides). " +
 	"It reads tmux to decide, deleting a row only if its agent's recorded process is not seen running and tmux shows no session of the agent. " +
 	"It never kills a session or touches transcripts. " + missingNotProofShort + " " +
 	"Finished rows are removed by an operator-scheduled expire at the default retention, run as the same user and in the same tmux environment as the agents; it keeps and reports rows whose session runs or cannot be checked. " +
@@ -795,7 +805,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "cwd",
 				Type:          "string",
-				Description:   "Bake a default cwd into the template. Per-call --cwd overrides.",
+				Description:   "Bake a default cwd into the template. Per-call cwd overrides.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
@@ -813,7 +823,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "claude_args",
 				Type:          "[]string",
-				Description:   "Bake default Claude argv. Per-call --claude-args REPLACES the template's array wholesale (not concat).",
+				Description:   "Bake default Claude argv. Per-call claude_args (--claude-args on the CLI) REPLACES the template's array wholesale (not concat).",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -831,7 +841,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "label",
 				Type:          "[]string",
-				Description:   "Bake label k=v entries. Per-call --label merges by key; per-call wins on collision.",
+				Description:   "Bake label k=v entries. Per-call label merges by key; per-call wins on collision.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -840,7 +850,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "allow",
 				Type:          "[]string",
-				Description:   "Bake permissions.allow entries. Per-call --allow CONCATENATES (does not replace).",
+				Description:   "Bake permissions.allow entries. Per-call allow CONCATENATES (does not replace).",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -849,7 +859,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "deny",
 				Type:          "[]string",
-				Description:   "Bake permissions.deny entries. Per-call --deny CONCATENATES.",
+				Description:   "Bake permissions.deny entries. Per-call deny CONCATENATES.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -858,7 +868,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "ask",
 				Type:          "[]string",
-				Description:   "Bake permissions.ask entries. Per-call --ask CONCATENATES.",
+				Description:   "Bake permissions.ask entries. Per-call ask CONCATENATES.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,

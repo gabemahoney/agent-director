@@ -28,7 +28,7 @@ const killLeftoversNamed = 3
 // leftover session's quoted name and tmux id, lowest $N first, up to
 // killLeftoversNamed, then the rest as a count; "this row's own id"; that no
 // kill was sent; that ending the session is a human's decision, with the
-// pointer to "Operator actions"; and "list --tmux-session-name".
+// pointer to "Operator actions"; and "list tmux_session_name".
 func leftoverError(instanceID string, leftovers []tmux.Session) error {
 	return fmt.Errorf("%w: instance %s: not this launch's session: %s; no kill was sent; ending such a session is a human's decision, %s; %s",
 		tmux.ErrTmuxSessionConflict, instanceID, leftoverSessions(leftovers), operatorActionsPointer, listSessionNameHint)

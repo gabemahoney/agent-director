@@ -90,7 +90,7 @@ type PaneNotFound struct {
 // for what was not done; with LostReply, that the agent's pane was not
 // adopted because no pane carries this launch's pane label (which it must
 // not say otherwise); the "Operator actions" pointer; and "list
-// --tmux-session-name". It never says "not this launch's session" or that
+// tmux_session_name". It never says "not this launch's session" or that
 // more than one leftover session exists.
 func DescPaneNotFound(p PaneNotFound) DescCase {
 	req := []string{p.InstanceID, strconv.Quote(p.Name), thisRowsOwnID, paneNotFound, p.Verb.nothing(), listSessionName}
@@ -118,7 +118,7 @@ type PaneLeftover struct {
 // DescPaneLeftover is ErrTmuxSessionConflict for a pane verb on Leftover
 // (SR-1.4, SR-3.4): kill's Leftover blocks (each session's quoted name and
 // tmux id, "this row's own id", "not this launch's session", the "Operator
-// actions" pointer, "list --tmux-session-name"; leftoverCase), the instance
+// actions" pointer, "list tmux_session_name"; leftoverCase), the instance
 // id and the verb's sentence for what was not done. read-pane refuses only
 // more than one leftover (it reads a lone leftover's pane), so for it the
 // case requires "more than one leftover session exists" and panics on fewer

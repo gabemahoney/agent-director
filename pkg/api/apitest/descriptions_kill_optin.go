@@ -22,7 +22,8 @@ import (
 // id; "the row is live" and its state; that the finished-row option applies
 // only to an ended or missing row; that no lookup was made and nothing was
 // sent. It names no other command (SR-6.8), such as find-missing or list
-// --tmux-session-name, and needs no "Operator actions" pointer.
+// with the session-name param in either spelling, and needs no "Operator
+// actions" pointer.
 func DescKillOptInLiveRow(instanceID, state string) DescCase {
 	return DescCase{
 		Name: "ErrSpawnNotResumable, kill's finished-row opt-in on a live row",
@@ -31,7 +32,7 @@ func DescKillOptInLiveRow(instanceID, state string) DescCase {
 			"the finished-row option applies only to an ended or missing row",
 			"no lookup was made and nothing was sent",
 		},
-		MustNot: []string{"find-missing", listSessionName},
+		MustNot: []string{"find-missing", "tmux_session_name", "tmux-session-name"},
 	}
 }
 
@@ -51,7 +52,7 @@ var neverReportedInMustNot = []string{"dead", "gone", "a kill was sent", stillSt
 // neverReportedInCase is the part both "never reported in" cases share:
 // "this row's own id", "never reported in", that no kill was sent, that
 // send-keys refuses a finished row so ending the session is a human's
-// decision, "list --tmux-session-name" and the "Operator actions" pointer,
+// decision, "list tmux_session_name" and the "Operator actions" pointer,
 // plus the case's own req and mustNot phrases.
 func neverReportedInCase(name string, req, mustNot []string) DescCase {
 	return DescCase{

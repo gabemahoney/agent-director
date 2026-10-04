@@ -138,7 +138,7 @@ func DescKillNoPane(instanceID, name string, agentPID int) DescCase {
 // and tmux id, in the order the description names them (lowest $N first; up
 // to three, then their count); "this row's own id"; "not this launch's
 // session"; that no kill was sent; that ending the session is a human's
-// decision, with the "Operator actions" pointer; "list --tmux-session-name".
+// decision, with the "Operator actions" pointer; "list tmux_session_name".
 // Pass any other row's id as forbid.
 func DescKillLeftover(sessions []DescSession) DescCase {
 	return leftoverCase("ErrTmuxSessionConflict, kill of a Leftover", sessions,
@@ -149,7 +149,7 @@ func DescKillLeftover(sessions []DescSession) DescCase {
 // and the pane verbs' (DescPaneLeftover) share (SR-1.4, SR-3.4): each
 // leftover session's quoted name and tmux id as namedSessions gives them
 // (the rest's quoted names must not appear), "this row's own id", "not this
-// launch's session", "list --tmux-session-name" and the "Operator actions"
+// launch's session", "list tmux_session_name" and the "Operator actions"
 // pointer, plus the verb's own req and mustNot phrases.
 func leftoverCase(name string, sessions []DescSession, req, mustNot []string) DescCase {
 	named, unnamed := namedSessions(sessions)
@@ -161,10 +161,12 @@ func leftoverCase(name string, sessions []DescSession, req, mustNot []string) De
 }
 
 // The phrases every Leftover and pane-not-found refusal shares (SR-1.4).
+// listSessionName gives list's param in its one spelling, the CLI flag only
+// as an aside, so an MCP caller can copy it (b.ro3).
 const (
 	thisRowsOwnID   = "this row's own id"
 	notThisLaunch   = "not this launch's session"
-	listSessionName = "list --tmux-session-name"
+	listSessionName = "list tmux_session_name (--tmux-session-name on the CLI)"
 )
 
 // AfterKillSent returns c as a refusal given after a kill was sent, whose

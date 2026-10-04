@@ -8,6 +8,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/tmux"
+	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
 // This file holds the single-row verbs' shared mapping from a Can't tell
@@ -27,8 +28,10 @@ const nothingWasDone = "nothing was done"
 const operatorActionsPointer = `see "Operator actions" in the agent-director README`
 
 // listSessionNameHint names the command that shows whether a row uses a
-// session name (SR-1.4); it ends no session.
-const listSessionNameHint = "list --tmux-session-name <name> shows whether a row uses a session name"
+// session name (SR-1.4); it ends no session. It names list's session-name
+// param in its one spelling, manifest.TmuxSessionNameSpelling (b.ro3), so a
+// caller on any surface can copy it.
+const listSessionNameHint = "list " + manifest.TmuxSessionNameSpelling + " shows whether a row uses a session name"
 
 // cantTellRefusal holds the verb-specific parts of a Can't tell refusal, so
 // every single-row verb reuses cantTellError unchanged.
@@ -102,7 +105,7 @@ func (r cantTellRefusal) lead() string {
 //     labels", either the scope value or the quoted names and tmux ids of the
 //     sessions carrying this launch's label (Result.Conflicting), the
 //     consequence, that a human must look with the pointer to "Operator
-//     actions", and "list --tmux-session-name";
+//     actions", and "list tmux_session_name";
 //   - unreadable: tmux.ErrTmuxUnresponsive, which call timed out and its
 //     effective timeout in seconds, or which call gave a reply agent-director
 //     does not recognise with its first line (trimmed to 200 bytes by the

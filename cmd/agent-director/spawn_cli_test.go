@@ -461,6 +461,11 @@ func TestSpawnCLITmuxSessionNameValidationFailures(t *testing.T) {
 			if env.ErrName != tc.wantErr {
 				t.Errorf("err_name = %q; want %q (stderr=%q)", env.ErrName, tc.wantErr, stderr)
 			}
+			// b.ro3: the empty refusal names the param, with the CLI flag a caller here needs.
+			const emptyDesc = "tmux_session_name (--tmux-session-name on the CLI) was supplied with an empty value"
+			if tc.argEq && !strings.Contains(env.ErrDescription, emptyDesc) {
+				t.Errorf("err_description = %q; want it to carry %q", env.ErrDescription, emptyDesc)
+			}
 			assertNoRowNoSession(t, home, fakeDir)
 		})
 	}

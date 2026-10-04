@@ -357,11 +357,11 @@ These 42 classes are generated one-to-one from the shared `err_name` catalog ([`
 | `ErrReservedEnvKey` | `extra_env` contains an `AGENT_DIRECTOR_*` key (reserved prefix). |
 | `ErrInstanceIdCollision` | Without `reuse_finished`, a row already exists for the supplied `claude_instance_id`, in any state. With `reuse_finished: true`, the row is live (`pending` included), or it changed or was removed after this spawn examined it (a lost race); nothing was changed. |
 
-**tmux session naming** (bad `--tmux-session-name` — programmer error):
+**tmux session naming** (bad `tmux_session_name` — programmer error):
 
 | Error | When it fires |
 |---|---|
-| `ErrTmuxSessionNameEmpty` | `--tmux-session-name` was explicitly supplied but empty. |
+| `ErrTmuxSessionNameEmpty` | `tmux_session_name` was explicitly supplied but empty. |
 | `ErrTmuxSessionNameInvalid` | The name contains `#`, `:`, `.`, `$`, `\`, an ASCII control character, or is invalid UTF-8. |
 | `ErrTmuxSessionNameTooLong` | The name exceeds the app-layer byte cap. |
 

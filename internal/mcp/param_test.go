@@ -331,18 +331,21 @@ func TestMCPParamSpawnNoPreTrust(t *testing.T) {
 
 // TestMCPParamSpawnTmuxSessionName: an MCP spawn's tmux_session_name names the
 // created session and is stored; supplied empty or invalid it is refused before
-// anything is created; absent or null gives the default <basename(cwd)>-<id[:8]> (b.7or).
+// anything is created, the empty refusal naming the param as MCP spells it (b.ro3);
+// absent or null gives the default <basename(cwd)>-<id[:8]> (b.7or).
 func TestMCPParamSpawnTmuxSessionName(t *testing.T) {
 	const dir = "mcpwork"
 	cases := []struct {
-		name    string
-		absent  bool
-		value   any
-		wantErr string // the refusal; "" for a launch
-		want    string // the session name; "" for the default
+		name     string
+		absent   bool
+		value    any
+		wantErr  string // the refusal; "" for a launch
+		wantDesc string // a phrase the refusal's description carries
+		want     string // the session name; "" for the default
 	}{
 		{name: "explicit", value: "mcp-named-session", want: "mcp-named-session"},
-		{name: "empty", value: "", wantErr: "ErrTmuxSessionNameEmpty"},
+		{name: "empty", value: "", wantErr: "ErrTmuxSessionNameEmpty",
+			wantDesc: "tmux_session_name (--tmux-session-name on the CLI) was supplied with an empty value"},
 		{name: "invalid", value: "mcp:bad", wantErr: "ErrTmuxSessionNameInvalid"},
 		{name: "absent", absent: true},
 		{name: "null", value: nil},
@@ -364,6 +367,9 @@ func TestMCPParamSpawnTmuxSessionName(t *testing.T) {
 				data := toolErrorData(t, callTool(t, e.d, "spawn", paramJSON(t, args)))
 				if data.ErrName != tc.wantErr {
 					t.Errorf("err_name = %q (%s); want %s", data.ErrName, data.ErrDescription, tc.wantErr)
+				}
+				if !strings.Contains(data.ErrDescription, tc.wantDesc) {
+					t.Errorf("err_description = %q; want it to carry %q", data.ErrDescription, tc.wantDesc)
 				}
 				assertNothingCreated(t, e.d, e.rec)
 				return

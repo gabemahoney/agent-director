@@ -5,8 +5,10 @@ package manifest_test
 // references publish; CLI flags stay dashed), every verb Description, which
 // every surface shows, names the reuse opt-in in one spelling only, and a
 // param text naming another param gives its manifest name with the CLI flag.
+// b.ro3 adds that no verb or param text names a param by its CLI flag alone.
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -97,6 +99,41 @@ func TestManifestParamReuseOptInOneSpelling(t *testing.T) {
 			for _, other := range others {
 				if strings.Contains(rest, other) {
 					t.Errorf("%s: %s description names the reuse opt-in as %q outside %q:\n%s", source, v.Name, other, spelling, desc)
+				}
+			}
+		}
+	}
+}
+
+// TestManifestTextsNameParamsNotFlags: no verb or param Description names a
+// param by its CLI flag alone; a flag that is a param's dashed name appears
+// only as "<param> (--<flag> on the CLI)" (b.ro3), on the manifest and in
+// surface.json. Other programs' flags (claude's --settings) are not params.
+func TestManifestTextsNameParamsNotFlags(t *testing.T) {
+	params := map[string]bool{}
+	for _, v := range manifest.Verbs {
+		for _, p := range v.Params {
+			params[p.Name] = true
+		}
+	}
+	flag := regexp.MustCompile(`--[a-z][a-z0-9-]*`)
+	for _, v := range manifest.Verbs {
+		texts := verbDescriptionsBoth(t, v.Name)
+		for source, ps := range paramShapesBySource(t, v.Name) {
+			for _, p := range ps {
+				texts[source+" param "+p.name] = p.desc
+			}
+		}
+		for where, text := range texts {
+			for _, loc := range flag.FindAllStringIndex(text, -1) {
+				f := text[loc[0]:loc[1]]
+				name := strings.ReplaceAll(f[2:], "-", "_")
+				if !params[name] {
+					continue
+				}
+				aside := name + " (" + f + " on the CLI)"
+				if start := loc[0] - len(name+" ("); start < 0 || !strings.HasPrefix(text[start:], aside) {
+					t.Errorf("%s: %s names param %s as %q alone; want %q:\n%s", where, v.Name, name, f, aside, text)
 				}
 			}
 		}

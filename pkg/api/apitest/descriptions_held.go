@@ -254,7 +254,7 @@ func (c DescCase) withoutOperatorActions() DescCase {
 
 // heldConflict is an ErrTmuxSessionConflict for a single holder of the
 // requested name of class class: its case words (tmux.LabelClass.CaseWords),
-// req and "list --tmux-session-name", with p's overlay (holderOverlay) and,
+// req and "list tmux_session_name", with p's overlay (holderOverlay) and,
 // after "duplicate session", the label sentence.
 func heldConflict(class tmux.LabelClass, p HeldName, label heldLabel, req ...string) DescCase {
 	if p.SessionID == "" {
@@ -277,7 +277,7 @@ const spawnOnlyHolder = "no agent-director row described it before this spawn"
 // GAP 3; LFR S7): "left over from an earlier life", "its label names this
 // instance id", that no agent-director row described it before this spawn,
 // the holder's tmux id, that ending it is a human's decision with the
-// "Operator actions" pointer, and "list --tmux-session-name". Pass any other
+// "Operator actions" pointer, and "list tmux_session_name". Pass any other
 // row's id as forbid. With BeforeLaunch (a pre-launch holder, which the
 // lookup makes Leftover, so met only defensively) it never says that no row
 // described it. A Restore p panics: resume words an old holder after
@@ -297,7 +297,7 @@ func DescHeldLeftover(p HeldName) DescCase {
 // DescHeldNoValidID is ErrTmuxSessionConflict for a name held by a session
 // with no valid label (SR-1.4, SR-3.10): "no valid instance id", "its label
 // does not name this instance id" (agent-director reads only the label,
-// SR-3.12), the "Operator actions" pointer and "list --tmux-session-name".
+// SR-3.12), the "Operator actions" pointer and "list tmux_session_name".
 // Pass any id read from the session (its environment, a malformed label's)
 // as forbid.
 func DescHeldNoValidID(p HeldName) DescCase {
@@ -307,7 +307,7 @@ func DescHeldNoValidID(p HeldName) DescCase {
 // DescHeldDifferentID is ErrTmuxSessionConflict for a name held by another
 // row's session (a foreign label; SR-1.4, SR-3.10): "a different instance
 // id", "its label does not name this instance id", that the session is
-// another row's agent and must not be ended, "list --tmux-session-name", and
+// another row's agent and must not be ended, "list tmux_session_name", and
 // no "Operator actions" pointer. Pass the other id as forbid.
 func DescHeldDifferentID(p HeldName) DescCase {
 	return heldConflict(tmux.ClassForeign, p, heldLabelNotThisID,
@@ -318,7 +318,7 @@ func DescHeldDifferentID(p HeldName) DescCase {
 // of another agent-director store (SR-1.4, SR-3.10; WD 2026-09-29 STORE):
 // "another agent-director store", "its label does not name this instance id"
 // (even when it names the same id), that the session is another store's
-// agent and must not be ended, "list --tmux-session-name", and no
+// agent and must not be ended, "list tmux_session_name", and no
 // "Operator actions" pointer. storeID is this store's id: neither it nor the
 // other store's id (OtherStoreID) may appear. Pass any other id read from the
 // session as forbid.
@@ -333,7 +333,7 @@ func DescHeldOtherStore(p HeldName, storeID string) DescCase {
 // than one listing entry matches the requested name, so its holder cannot be
 // told (SR-3.10): the quoted name, "more than one tmux session's name
 // matches it", the row sentence, the retry guidance by p.Row (see
-// AfterHeldName) and "list --tmux-session-name"; no label sentence; never
+// AfterHeldName) and "list tmux_session_name"; no label sentence; never
 // "dead" or "gone". p.SessionID must be empty: pass the
 // matching sessions' tmux ids as forbid. With BeforeLaunch it requires
 // "nothing was done" and "retry later" instead of a row sentence and retry

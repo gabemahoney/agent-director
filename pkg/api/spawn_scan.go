@@ -79,7 +79,7 @@ func scanForLeftover(t tmux.LookupClient, pc ProcChecker, storeID, instanceID st
 // "left over from an earlier life"; the quoted name and tmux id of each
 // session found, up to three, then the rest as a count; that nothing was
 // written; that ending a session is a human's decision, with the pointer to
-// the README's "Operator actions"; and "list --tmux-session-name". It never
+// the README's "Operator actions"; and "list tmux_session_name". It never
 // carries a label value, a token or a store id.
 func scanLeftoverError(instanceID string, leftovers []tmux.Session) error {
 	found := namedSessions(leftovers, scanLeftoversNamed)

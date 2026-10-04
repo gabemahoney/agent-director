@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
 // MaxTmuxSessionNameBytes caps caller-supplied --tmux-session-name values
@@ -84,10 +86,12 @@ func Validate(r *Resolved) error {
 // session id $7, and a backslash goes through tmux's escaping (SR-9.2).
 // It does NOT silently rewrite — callers must pick a name they want
 // byte-for-byte (contrast with SanitizeSessionName, which is a
-// defaulting concern).
+// defaulting concern). The empty refusal names the param in its one
+// spelling, manifest.TmuxSessionNameSpelling (b.ro3), since MCP and the
+// TypeScript client reach it too.
 func validateTmuxSessionName(name string) error {
 	if name == "" {
-		return fmt.Errorf("%w: --tmux-session-name was supplied with an empty value", ErrTmuxSessionNameEmpty)
+		return fmt.Errorf("%w: %s was supplied with an empty value", ErrTmuxSessionNameEmpty, manifest.TmuxSessionNameSpelling)
 	}
 	if len(name) > MaxTmuxSessionNameBytes {
 		return fmt.Errorf("%w: %d bytes (max %d)", ErrTmuxSessionNameTooLong, len(name), MaxTmuxSessionNameBytes)

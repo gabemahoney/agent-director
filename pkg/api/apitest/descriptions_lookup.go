@@ -30,7 +30,7 @@ type ConflictingLabels struct {
 // DescConflictingLabels is ErrTmuxSessionConflict's "conflicting labels"
 // (provenance_conflict) case.
 func DescConflictingLabels(p ConflictingLabels) DescCase {
-	req := []string{p.InstanceID, "conflicting labels", "a human must look", "list --tmux-session-name"}
+	req := []string{p.InstanceID, "conflicting labels", "a human must look", listSessionName}
 	if p.Scope {
 		req = append(req, "@ad_owner value is set at the global, server or global-window scope")
 	} else if len(p.Sessions) > 0 {

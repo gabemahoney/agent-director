@@ -38,7 +38,7 @@ const (
 // (SR-1.4): the instance id, "left over from an earlier life", each session
 // named (namedSessions), written (what was not written), that ending such a
 // session is a human's decision with the "Operator actions" pointer, and
-// "list --tmux-session-name"; never that a row was ended, nor an unnamed
+// "list tmux_session_name"; never that a row was ended, nor an unnamed
 // session's name.
 func earlierLifeCase(name, instanceID string, sessions []DescSession, written string) DescCase {
 	named, unnamed := namedSessions(sessions)

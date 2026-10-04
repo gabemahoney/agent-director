@@ -138,7 +138,7 @@ func (c startingSessionCheck) unavailableError() error {
 // otherwise, SRD-RR2 T13); that the agent may be hung or running on a row
 // wrongly marked finished, no automated action on it is safe and a human must
 // look, with the pointer to "Operator actions"; when the row records a session
-// id, that the conversation stays resumable; and "list --tmux-session-name".
+// id, that the conversation stays resumable; and "list tmux_session_name".
 // Built on its own only past both.
 func (c startingSessionCheck) ownIDConflictError() error {
 	r := c.row

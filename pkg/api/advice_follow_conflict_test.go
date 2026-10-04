@@ -29,7 +29,7 @@ const adviceConflictLater = 2 * time.Minute
 // The pointers and sentences the conflicts carry (inventory HO1, HO3, HO5,
 // HO7, HO11; held_name.go for the holders with no pointer).
 const (
-	adviceLookLabels  = `a human must look, see "Operator actions" in the agent-director README; list --tmux-session-name <name> shows whether a row uses a session name`
+	adviceLookLabels  = `a human must look, see "Operator actions" in the agent-director README; list tmux_session_name (--tmux-session-name on the CLI) shows whether a row uses a session name`
 	adviceLook        = `a human must look, see "Operator actions" in the agent-director README`
 	adviceEndLeftover = `ending such a session is a human's decision, see "Operator actions" in the agent-director README`
 	adviceCanLook     = `a human can look, see "Operator actions" in the agent-director README`
@@ -245,7 +245,8 @@ func adviceLeftovers(n, end int) func(*testing.T, *killEnv, killRow) func() {
 
 // TestAdviceFollow_HO1_ConflictingLabelsClears: HO1 "conflicting labels" ...
 // "a human must look, see "Operator actions" in the agent-director README;
-// list --tmux-session-name <name> shows whether a row uses a session name".
+// list tmux_session_name (--tmux-session-name on the CLI) shows whether a row
+// uses a session name".
 func TestAdviceFollow_HO1_ConflictingLabelsClears(t *testing.T) {
 	var cases []adviceConflictCase
 	for _, v := range []adviceConflictVerb{adviceConflictResume, adviceConflictReuse, adviceConflictKill,

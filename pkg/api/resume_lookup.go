@@ -267,7 +267,7 @@ const preLaunchNothingWritten = "nothing was written"
 // (preLaunchNothingWritten at the pre-launch check; the restore's row
 // sentence for an old-label holder after "duplicate session",
 // heldNameOutcome); that ending such a session is a human's decision, with
-// the pointer to "Operator actions"; and "list --tmux-session-name". It never
+// the pointer to "Operator actions"; and "list tmux_session_name". It never
 // carries a label value, a token or a store id, and wraps only
 // tmux.ErrTmuxSessionConflict.
 func preLaunchLeftoverError(instanceID string, leftovers []tmux.Session, consequence string) error {

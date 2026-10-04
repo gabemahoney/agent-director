@@ -53,8 +53,9 @@ var ErrReservedEnvKey = errors.New("ErrReservedEnvKey")
 var ErrInstanceIdCollision = errors.New("ErrInstanceIdCollision")
 
 // ErrTmuxSessionNameEmpty is returned when the caller explicitly supplied
-// --tmux-session-name with an empty value. Omitting the flag entirely is
-// NOT equivalent (that path falls through to composeSessionName).
+// tmux_session_name (--tmux-session-name on the CLI) with an empty value.
+// Omitting it entirely is NOT equivalent (that path falls through to
+// composeSessionName).
 var ErrTmuxSessionNameEmpty = errors.New("ErrTmuxSessionNameEmpty")
 
 // ErrTmuxSessionNameInvalid is returned when the caller-supplied

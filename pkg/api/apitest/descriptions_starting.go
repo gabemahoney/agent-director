@@ -95,7 +95,7 @@ func DescStillStarting(p StartingSession) DescCase {
 // wrongly marked finished, that no automated action on it is safe and that a
 // human must look, with the "Operator actions" pointer; with SessionID, that
 // the conversation stays resumable (otherwise never "resumable"); "list
-// --tmux-session-name". Never a Leftover's "not this launch's session", "left
+// tmux_session_name". Never a Leftover's "not this launch's session", "left
 // over from an earlier life" or "nothing was written", nor that it is
 // stopping or starting. With the window skipped, "row ended" is forbidden as
 // well as "ended", so the check holds where a restore sentence's prior state

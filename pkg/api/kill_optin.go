@@ -43,7 +43,7 @@ func (c *Client) killFinished(claudeInstanceID string) (KillResult, error) {
 // neverReportedInTail ends both "never reported in" refusals (SR-1.4, SR-6.5):
 // that no kill was sent, that send-keys refuses a finished row so ending the
 // session is a human's decision, the "Operator actions" pointer and
-// "list --tmux-session-name".
+// "list tmux_session_name".
 const neverReportedInTail = "no kill was sent; send-keys refuses a finished row, so ending the session is a human's decision, " +
 	operatorActionsPointer + "; " + listSessionNameHint
 

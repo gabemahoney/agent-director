@@ -166,7 +166,7 @@ type heldExaminedRow struct {
 //     instance id"; a human must look, the pointer) are all
 //     tmux.ErrTmuxSessionConflict, naming the quoted requested name, the
 //     holder's tmux id and the label sentence, and ending with "list
-//     --tmux-session-name".
+//     tmux_session_name".
 //   - A holder with this launch's current label cannot occur for plain spawn
 //     (the token is new and the create made nothing); it is handled
 //     defensively, never as a success: tmux.ErrTmuxSessionConflict saying a
@@ -297,7 +297,7 @@ var heldBeforeLaunch = holderPhrasing{
 // entry matching name (Can't tell for the holder check, SR-3.10): the
 // instance id, the quoted name, that the session holding it cannot be told,
 // rest (the caller's consequence and retry sentences) and "list
-// --tmux-session-name". It names no tmux id and no label sentence.
+// tmux_session_name". It names no tmux id and no label sentence.
 func ambiguousHolderError(p holderPhrasing, instanceID, name, rest string) error {
 	return fmt.Errorf("%w: instance %s: tmux session %q %s, and more than one tmux session's name matches it, so the session holding it cannot be told; %s; %s",
 		tmux.ErrTmuxUnresponsive, instanceID, name, p.Exists, rest, listSessionNameHint)
@@ -310,7 +310,7 @@ func ambiguousHolderError(p holderPhrasing, instanceID, name, rest string) error
 // the label sentence; the class's own sentence; the row sentence (for a
 // pre-launch holder, what was done); for the old and no-valid-label cases (and
 // the defensive current one) the "Operator actions" pointer; and "list
-// --tmux-session-name". It wraps tmux.ErrTmuxSessionConflict only.
+// tmux_session_name". It wraps tmux.ErrTmuxSessionConflict only.
 func heldHolderError(p holderPhrasing, c tmux.LabelClass, instanceID, name, sessionID, rowSentence string) error {
 	var words, label, detail, human string
 	switch c {

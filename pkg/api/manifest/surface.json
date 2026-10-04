@@ -822,7 +822,7 @@
     },
     {
       "name": "expire",
-      "description": "Delete finished rows (ended/missing) whose ended_at is older than the retention window (defaults.expire_retention_days; --older-than overrides). It reads tmux to decide, deleting a row only if its agent's recorded process is not seen running and tmux shows no session of the agent. It never kills a session or touches transcripts. `missing` is not proof the agent exited (see find-missing). Finished rows are removed by an operator-scheduled expire at the default retention, run as the same user and in the same tmux environment as the agents; it keeps and reports rows whose session runs or cannot be checked. Agents never run it, least of all with a zero window. A run as another user, as root or against another tmux server can wrongly delete rows.",
+      "description": "Delete finished rows (ended/missing) whose ended_at is older than the retention window (defaults.expire_retention_days; older_than overrides). It reads tmux to decide, deleting a row only if its agent's recorded process is not seen running and tmux shows no session of the agent. It never kills a session or touches transcripts. `missing` is not proof the agent exited (see find-missing). Finished rows are removed by an operator-scheduled expire at the default retention, run as the same user and in the same tmux environment as the agents; it keeps and reports rows whose session runs or cannot be checked. Agents never run it, least of all with a zero window. A run as another user, as root or against another tmux server can wrongly delete rows.",
       "callable": true,
       "handle_free": false,
       "params": [
@@ -890,7 +890,7 @@
         {
           "name": "cwd",
           "type": "string",
-          "description": "Bake a default cwd into the template. Per-call --cwd overrides.",
+          "description": "Bake a default cwd into the template. Per-call cwd overrides.",
           "required": false,
           "nullable": false,
           "allow_empty": false,
@@ -912,7 +912,7 @@
         {
           "name": "claude_args",
           "type": "[]string",
-          "description": "Bake default Claude argv. Per-call --claude-args REPLACES the template's array wholesale (not concat).",
+          "description": "Bake default Claude argv. Per-call claude_args (--claude-args on the CLI) REPLACES the template's array wholesale (not concat).",
           "required": false,
           "nullable": false,
           "allow_empty": true,
@@ -930,7 +930,7 @@
         {
           "name": "label",
           "type": "[]string",
-          "description": "Bake label k=v entries. Per-call --label merges by key; per-call wins on collision.",
+          "description": "Bake label k=v entries. Per-call label merges by key; per-call wins on collision.",
           "required": false,
           "nullable": false,
           "allow_empty": true,
@@ -939,7 +939,7 @@
         {
           "name": "allow",
           "type": "[]string",
-          "description": "Bake permissions.allow entries. Per-call --allow CONCATENATES (does not replace).",
+          "description": "Bake permissions.allow entries. Per-call allow CONCATENATES (does not replace).",
           "required": false,
           "nullable": false,
           "allow_empty": true,
@@ -948,7 +948,7 @@
         {
           "name": "deny",
           "type": "[]string",
-          "description": "Bake permissions.deny entries. Per-call --deny CONCATENATES.",
+          "description": "Bake permissions.deny entries. Per-call deny CONCATENATES.",
           "required": false,
           "nullable": false,
           "allow_empty": true,
@@ -957,7 +957,7 @@
         {
           "name": "ask",
           "type": "[]string",
-          "description": "Bake permissions.ask entries. Per-call --ask CONCATENATES.",
+          "description": "Bake permissions.ask entries. Per-call ask CONCATENATES.",
           "required": false,
           "nullable": false,
           "allow_empty": true,

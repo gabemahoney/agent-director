@@ -272,7 +272,7 @@ func TestValidateTmuxSessionName(t *testing.T) {
 		{"omitted flag with stale value also bypasses", false, "anything", nil, ""},
 		{"omitted flag with stale dollar value bypasses", false, "bad$name", nil, ""},
 		{"omitted flag with stale backslash value bypasses", false, `bad\name`, nil, ""},
-		{"explicit empty trips Empty", true, "", ErrTmuxSessionNameEmpty, ""},
+		{"explicit empty trips Empty", true, "", ErrTmuxSessionNameEmpty, "tmux_session_name (--tmux-session-name on the CLI) was supplied with an empty value"},
 		{"reserved char colon", true, "bad:name", ErrTmuxSessionNameInvalid, "reserved character ':'"},
 		{"reserved char hash", true, "bad#name", ErrTmuxSessionNameInvalid, "reserved character '#'"},
 		{"reserved char dot", true, "bad.name", ErrTmuxSessionNameInvalid, "reserved character '.'"},

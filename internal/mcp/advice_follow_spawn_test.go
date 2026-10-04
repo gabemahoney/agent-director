@@ -5,7 +5,8 @@ package mcp_test
 // tools/list descriptions of spawn and kill (live-row step 6, inventory C11)
 // and the held-name ErrTmuxUnresponsive (A4) each say
 // "reuse_finished (--reuse-finished on the CLI)", and the name before the
-// parenthesis is the spawn tool's parameter.
+// parenthesis is the spawn tool's parameter. It copies the list hint's
+// session-name parameter the same way (I5, b.ro3).
 
 import (
 	"encoding/json"
@@ -20,6 +21,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // advSpawnDir is the base name of the spawn's cwd, so the default session
@@ -141,5 +143,61 @@ func TestAdviceFollow_I4_MCPLiteralReuseSpelling(t *testing.T) {
 				t.Errorf("row state = %v; want pending", cols.State)
 			}
 		})
+	}
+}
+
+// advListHintTail ends the list hint "list <param> ... shows whether a row
+// uses a session name" that every "a human must look" refusal closes with.
+const advListHintTail = " shows whether a row uses a session name"
+
+// advListParamName is the parameter the list hint in desc names: the word
+// just after its "list ".
+func advListParamName(t *testing.T, desc string) string {
+	t.Helper()
+	i := strings.Index(desc, advListHintTail)
+	j := strings.LastIndex(desc[:max(i, 0)], "list ")
+	if i < 0 || j < 0 {
+		t.Fatalf("description %q carries no list hint ending %q", desc, advListHintTail)
+	}
+	return strings.Fields(desc[j+len("list ") : i])[0]
+}
+
+// TestAdviceFollow_I5_MCPLiteralListSessionName: I5 "list tmux_session_name (--tmux-session-name on the CLI)
+// shows whether a row uses a session name", closing an MCP spawn's held-name ErrTmuxSessionConflict: the word
+// after "list", copied literally into an MCP list's arguments with the refused name, lists that spawn's row only.
+func TestAdviceFollow_I5_MCPLiteralListSessionName(t *testing.T) {
+	const phrase = "list tmux_session_name (--tmux-session-name on the CLI) shows whether a row uses a session name"
+	e, c := newReuseParamEnv(t)
+	id := "i5-" + uuid.NewString()[:8]
+	cwd := filepath.Join(t.TempDir(), advSpawnDir)
+	if err := os.Mkdir(cwd, 0o700); err != nil {
+		t.Fatalf("mkdir %s: %v", cwd, err)
+	}
+	name := advSpawnDir + "-" + id[:8]
+	e.rec.SeedSessions(e.socket, tmuxfix.SeedSession{ID: "$4", Name: name})
+	seedFinished(t, e, "i5-other", store.StateEnded, apitest.WithTmuxSessionName(name+"-other"))
+
+	data := toolErrorData(t, callTool(t, e.d, "spawn", spawnArgs(t, cwd, c, map[string]any{"claude_instance_id": id})))
+
+	if data.ErrName != "ErrTmuxSessionConflict" {
+		t.Fatalf("err_name = %q (%s); want ErrTmuxSessionConflict", data.ErrName, data.ErrDescription)
+	}
+	if !strings.Contains(data.ErrDescription, phrase) {
+		t.Errorf("advice %q\nwant it to carry %q", data.ErrDescription, phrase)
+	}
+	key := advListParamName(t, data.ErrDescription)
+
+	args := paramJSON(t, map[string]any{key: name})
+	if resp := callTool(t, e.d, "list", args); resp != nil && resp.Error != nil {
+		t.Fatalf("list %s = %s; want the rows using that session name", args, resp.Error.Message)
+	}
+	var rows []struct {
+		ID string `json:"claude_instance_id"`
+	}
+	if err := json.Unmarshal(callToolText(t, e.d, "list", args)["spawns"], &rows); err != nil {
+		t.Fatalf("parse list spawns: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ID != id {
+		t.Errorf("list %s=%q = %+v; want only %s", key, name, rows, id)
 	}
 }

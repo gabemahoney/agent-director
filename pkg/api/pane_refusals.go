@@ -68,7 +68,7 @@ const paneNotAdopted = "the agent's pane was not adopted (no pane carries this l
 // create reply whose pane findAdoption could not take: PaneNone or PaneMany),
 // "the agent's pane was not adopted (no pane carries this launch's pane
 // label)"; that a human can look, with the pointer to "Operator actions"
-// (SR-18.17); and "list --tmux-session-name". It wraps only
+// (SR-18.17); and "list tmux_session_name". It wraps only
 // ErrTmuxSessionConflict (SR-1.5).
 func paneNotFoundError(r paneRefusal, notAdopted bool) error {
 	what := "the agent's pane was not found"
@@ -85,7 +85,7 @@ func paneNotFoundError(r paneRefusal, notAdopted bool) error {
 // killLeftoversNamed, then the rest as a count (namedSessions); "this row's
 // own id"; when moreThanOne (read-pane, which reads a lone leftover's pane),
 // that more than one leftover session exists; what was not done; the pointer
-// to "Operator actions"; and "list --tmux-session-name". It never names a
+// to "Operator actions"; and "list tmux_session_name". It never names a
 // session-ending command and wraps only ErrTmuxSessionConflict (SR-1.5). A
 // lone leftover whose token no pane carries is paneNotFoundError's case, not
 // this one.
