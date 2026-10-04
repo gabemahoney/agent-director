@@ -39,6 +39,7 @@ import * as path from "node:path";
 
 import { Client } from "../src/client.js";
 import { ErrCallTimeout, ErrConsumerSignal } from "../src/errors.js";
+import { withProcessEnv } from "./internal/helper.js";
 // b.6o1: version() now overrides the CLI's version field with the npm
 // package version. Read at runtime (SR-3.2: no build-time JSON import).
 let pkgVersion: string;
@@ -137,10 +138,7 @@ describe("SubprocessClient — per-Client call serialization (SR-3)", () => {
     "5 concurrent version() calls execute strictly serially (no start/end overlap)",
     async () => {
       const logFile = path.join(makeTmpDir(), "serial.log");
-      const prevLogFile = process.env.LOG_FILE;
-      process.env.LOG_FILE = logFile;
-
-      try {
+      await withProcessEnv({ LOG_FILE: logFile }, async () => {
         const fixturePath = path.join(FIXTURES, "serialization-recorder.js");
         // The fixture has #!/usr/bin/env bun + chmod +x, so passing the path
         // directly is correct; Bun.spawn() will use the shebang interpreter.
@@ -153,13 +151,7 @@ describe("SubprocessClient — per-Client call serialization (SR-3)", () => {
           (client as unknown as { version(p: object): Promise<unknown> }).version({}),
           (client as unknown as { version(p: object): Promise<unknown> }).version({}),
         ]);
-      } finally {
-        if (prevLogFile === undefined) {
-          delete process.env.LOG_FILE;
-        } else {
-          process.env.LOG_FILE = prevLogFile;
-        }
-      }
+      });
 
       // Parse the log file: each call writes "T START" then "T END" lines.
       const lines = fs.readFileSync(logFile, "utf-8").trim().split("\n");
@@ -199,10 +191,7 @@ describe("SubprocessClient — rejection does not wedge queue", () => {
     "call N rejects (subprocess-crash) → call N+1 still succeeds",
     async () => {
       const markerFile = path.join(makeTmpDir(), "first-call-marker");
-      const prevMarker = process.env.CALL_MARKER_FILE;
-      process.env.CALL_MARKER_FILE = markerFile;
-
-      try {
+      await withProcessEnv({ CALL_MARKER_FILE: markerFile }, async () => {
         // Use "bun <script>" as the binary so the fixture JS runs.
         const fixturePath = path.join(FIXTURES, "first-call-fails.js");
         const client = await makeClient(fixturePath, { callTimeoutMs: 5000 });
@@ -229,13 +218,7 @@ describe("SubprocessClient — rejection does not wedge queue", () => {
         const r = result as Record<string, unknown>;
         expect(r["version"]).toBe(pkgVersion);
         expect(r["commit"]).toBe("abc123");
-      } finally {
-        if (prevMarker === undefined) {
-          delete process.env.CALL_MARKER_FILE;
-        } else {
-          process.env.CALL_MARKER_FILE = prevMarker;
-        }
-      }
+      });
     },
     { timeout: 15000 }
   );
@@ -248,26 +231,20 @@ describe("SubprocessClient — timeout", () => {
   test(
     "fixture sleeping > callTimeoutMs → rejects with ErrCallTimeout within callTimeoutMs + 4s",
     async () => {
-      const prevSleepMs = process.env.SLEEP_MS;
-      process.env.SLEEP_MS = "10000"; // 10 s — much longer than callTimeoutMs
-
       const start = Date.now();
       let caught: unknown;
 
-      try {
-        const fixturePath = path.join(FIXTURES, "sleep-and-respond.js");
-        const client = await makeClient(fixturePath, { callTimeoutMs: 300 });
-        type ClientV = { version(p: object): Promise<unknown> };
-        await (client as unknown as ClientV).version({});
-      } catch (e) {
-        caught = e;
-      } finally {
-        if (prevSleepMs === undefined) {
-          delete process.env.SLEEP_MS;
-        } else {
-          process.env.SLEEP_MS = prevSleepMs;
+      // The fixture sleeps 10 s — much longer than callTimeoutMs.
+      await withProcessEnv({ SLEEP_MS: "10000" }, async () => {
+        try {
+          const fixturePath = path.join(FIXTURES, "sleep-and-respond.js");
+          const client = await makeClient(fixturePath, { callTimeoutMs: 300 });
+          type ClientV = { version(p: object): Promise<unknown> };
+          await (client as unknown as ClientV).version({});
+        } catch (e) {
+          caught = e;
         }
-      }
+      });
 
       const elapsed = Date.now() - start;
 
@@ -331,10 +308,7 @@ describe("SubprocessClient — version() returns npm package version (b.6o1)", (
       // sleep-and-respond.js emits {"version":"fixture-1.0.0","commit":"aabbccddeeff"}.
       // With SLEEP_MS=0 it responds immediately, simulating a CLI build-stamp
       // version distinct from the npm package version.
-      const prevSleepMs = process.env.SLEEP_MS;
-      process.env.SLEEP_MS = "0";
-
-      try {
+      await withProcessEnv({ SLEEP_MS: "0" }, async () => {
         const fixturePath = path.join(FIXTURES, "sleep-and-respond.js");
         const client = await makeClient(fixturePath, { callTimeoutMs: 5000 });
         type ClientV = { version(p: object): Promise<{ version: string; commit: string }> };
@@ -346,13 +320,7 @@ describe("SubprocessClient — version() returns npm package version (b.6o1)", (
         expect(result.version).not.toBe("fixture-1.0.0");
         // commit is passed through unchanged from the CLI envelope.
         expect(result.commit).toBe("aabbccddeeff");
-      } finally {
-        if (prevSleepMs === undefined) {
-          delete process.env.SLEEP_MS;
-        } else {
-          process.env.SLEEP_MS = prevSleepMs;
-        }
-      }
+      });
     },
     { timeout: 10000 }
   );

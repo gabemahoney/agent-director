@@ -18,6 +18,7 @@ import * as path from "node:path";
 import { Client, resolveSystemBinary } from "../src/client.js";
 import { ErrCallerCwdUnreachable } from "../src/errors.js";
 import type { ClientOptions } from "../src/client.js";
+import { withProcessEnv } from "./internal/helper.js";
 
 // ---------------------------------------------------------------------------
 // Locate the CLI binary (same pattern as client-lifecycle.test.ts).
@@ -66,16 +67,12 @@ if (!cliMissing && systemUndiscoverable) {
  * Run `fn` with the repo binary's directory injected on PATH so
  * discoverSystemBinary()'s step-2 PATH lookup finds it. Restores PATH after.
  */
-async function withRepoBinaryOnPath<T>(fn: () => Promise<T>): Promise<T> {
+function withRepoBinaryOnPath<T>(fn: () => Promise<T>): Promise<T> {
   const origPath = process.env.PATH;
-  process.env.PATH =
-    origPath && origPath !== "" ? `${cliDir}${path.delimiter}${origPath}` : cliDir;
-  try {
-    return await fn();
-  } finally {
-    if (origPath === undefined) delete process.env.PATH;
-    else process.env.PATH = origPath;
-  }
+  return withProcessEnv(
+    { PATH: origPath ? `${cliDir}${path.delimiter}${origPath}` : cliDir },
+    fn
+  );
 }
 
 // ---------------------------------------------------------------------------

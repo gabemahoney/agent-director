@@ -7,12 +7,13 @@
  *
  * On success: removes the temp dir and restores env.
  * On failure: KEEPS the temp dir (prints its path for inspection), re-throws.
- * Always: restores HOME and PATH in the finally block.
+ * Always: restores HOME and PATH (via withProcessEnv).
  */
 
 import * as os from "os";
 import * as path from "path";
 import * as fs from "fs";
+import { withProcessEnv } from "./helper.js";
 
 // fake-tmux binary directory (built by `make fake-tmux`, set in setup.ts).
 // Falls back to the relative path from this file so tests can be run without
@@ -37,45 +38,27 @@ export async function withTempHome(
     path.join(os.tmpdir(), "agentdirector-bun-test-")
   );
 
-  // Save prior env values (undefined when not set).
-  const priorHome = process.env.HOME;
-  const priorPath = process.env.PATH;
+  // Override HOME + prepend fake-tmux directory to PATH; withProcessEnv
+  // restores both whether testFn resolves or throws.
+  const env = {
+    HOME: homeDir,
+    PATH: `${fakeTmuxDir()}:${process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin"}`,
+  };
 
-  // Override HOME + prepend fake-tmux directory to PATH.
-  process.env.HOME = homeDir;
-  const fakeTmux = fakeTmuxDir();
-  process.env.PATH = `${fakeTmux}:${priorPath ?? "/usr/local/bin:/usr/bin:/bin"}`;
-
-  let failed = false;
   try {
-    await testFn(homeDir);
+    await withProcessEnv(env, () => testFn(homeDir));
   } catch (err) {
-    failed = true;
     // Keep the temp dir for post-mortem inspection.
     console.error(
       `[withTempHome] test failed; temp HOME preserved at: ${homeDir}`
     );
     throw err;
-  } finally {
-    // Always restore env vars.
-    if (priorHome !== undefined) {
-      process.env.HOME = priorHome;
-    } else {
-      delete process.env.HOME;
-    }
-    if (priorPath !== undefined) {
-      process.env.PATH = priorPath;
-    } else {
-      delete process.env.PATH;
-    }
+  }
 
-    // Clean up temp dir only on success.
-    if (!failed) {
-      try {
-        fs.rmSync(homeDir, { recursive: true, force: true });
-      } catch {
-        // best-effort cleanup; never throw from finally
-      }
-    }
+  // Clean up temp dir only on success.
+  try {
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  } catch {
+    // best-effort cleanup; never throw on a passing test
   }
 }

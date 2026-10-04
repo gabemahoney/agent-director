@@ -19,6 +19,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { Client } from "../src/client.js";
+import { withProcessEnv } from "./internal/helper.js";
 
 const FIXTURES = path.resolve(import.meta.dir, "fixtures/epic-a");
 
@@ -99,10 +100,7 @@ describe("loadNpmPackageVersion cache (SR-3.3)", () => {
       const fixturePath = path.join(FIXTURES, "sleep-and-respond.js");
       const client = await makeClient(fixturePath);
 
-      const prevSleepMs = process.env.SLEEP_MS;
-      process.env.SLEEP_MS = "0";
-
-      try {
+      await withProcessEnv({ SLEEP_MS: "0" }, async () => {
         type ClientV = { version(p: object): Promise<{ version: string; commit: string }> };
         const c = client as unknown as ClientV;
 
@@ -125,13 +123,7 @@ describe("loadNpmPackageVersion cache (SR-3.3)", () => {
         // the first version() call and caches the result in #npmPkgVersion.
         // The second call skips loadNpmPackageVersion() entirely.
         expect(readFileCallCount).toBe(1);
-      } finally {
-        if (prevSleepMs === undefined) {
-          delete process.env.SLEEP_MS;
-        } else {
-          process.env.SLEEP_MS = prevSleepMs;
-        }
-      }
+      });
     },
     { timeout: 15000 }
   );
@@ -142,30 +134,24 @@ describe("loadNpmPackageVersion cache (SR-3.3)", () => {
       const fixturePath = path.join(FIXTURES, "sleep-and-respond.js");
       const client = await makeClient(fixturePath);
 
-      const prevSleepMs = process.env.SLEEP_MS;
-      process.env.SLEEP_MS = "0";
+      await withProcessEnv({ SLEEP_MS: "0" }, async () => {
+        try {
+          // Inject a real (non-MODULE_NOT_FOUND / non-ENOENT) error. Pre-fix the
+          // catch in loadNpmPackageVersion would swallow this and fall back; post-
+          // fix the catch is narrowed to import.meta.resolve() only and any
+          // readFile error must propagate.
+          const eacces = new Error("EACCES: permission denied");
+          (eacces as unknown as { code: string }).code = "EACCES";
+          throwOnNextReadFile = eacces;
 
-      try {
-        // Inject a real (non-MODULE_NOT_FOUND / non-ENOENT) error. Pre-fix the
-        // catch in loadNpmPackageVersion would swallow this and fall back; post-
-        // fix the catch is narrowed to import.meta.resolve() only and any
-        // readFile error must propagate.
-        const eacces = new Error("EACCES: permission denied");
-        (eacces as unknown as { code: string }).code = "EACCES";
-        throwOnNextReadFile = eacces;
+          type ClientV = { version(p: object): Promise<unknown> };
+          const c = client as unknown as ClientV;
 
-        type ClientV = { version(p: object): Promise<unknown> };
-        const c = client as unknown as ClientV;
-
-        await expect(c.version({})).rejects.toThrow(/EACCES/);
-      } finally {
-        throwOnNextReadFile = null;
-        if (prevSleepMs === undefined) {
-          delete process.env.SLEEP_MS;
-        } else {
-          process.env.SLEEP_MS = prevSleepMs;
+          await expect(c.version({})).rejects.toThrow(/EACCES/);
+        } finally {
+          throwOnNextReadFile = null;
         }
-      }
+      });
     },
     { timeout: 15000 }
   );
@@ -177,10 +163,7 @@ describe("loadNpmPackageVersion cache (SR-3.3)", () => {
       const c1 = (await makeClient(fixturePath)) as unknown as { version(p: object): Promise<{ version: string }> };
       const c2 = (await makeClient(fixturePath)) as unknown as { version(p: object): Promise<{ version: string }> };
 
-      const prevSleepMs = process.env.SLEEP_MS;
-      process.env.SLEEP_MS = "0";
-
-      try {
+      await withProcessEnv({ SLEEP_MS: "0" }, async () => {
         await c1.version({});
         await c1.version({}); // cache hit on c1
 
@@ -189,13 +172,7 @@ describe("loadNpmPackageVersion cache (SR-3.3)", () => {
 
         // Two instances, each reads once: total = 2.
         expect(readFileCallCount).toBe(2);
-      } finally {
-        if (prevSleepMs === undefined) {
-          delete process.env.SLEEP_MS;
-        } else {
-          process.env.SLEEP_MS = prevSleepMs;
-        }
-      }
+      });
     },
     { timeout: 15000 }
   );

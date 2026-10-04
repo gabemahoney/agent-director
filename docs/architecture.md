@@ -11740,8 +11740,9 @@ test/
 
 `test/internal/tempHome.ts` exports `withTempHome(testFn)`.  It creates a fresh
 `mkdtemp` directory, sets `process.env.HOME` and `process.env.PATH` in the main
-thread, runs `testFn(homeDir)`, then restores env and cleans up the temp dir (on
-success) or preserves it (on failure, for inspection).
+thread through `withProcessEnv` (below), runs `testFn(homeDir)`, then restores
+env and cleans up the temp dir (on success) or preserves it (on failure, for
+inspection).
 
 **Subprocess environment isolation caveat.** Each verb call spawns the
 CLI binary in a fresh subprocess. By default the subprocess inherits
@@ -11835,9 +11836,7 @@ Its other shared helpers, each with its must-use rule:
   (`undefined` unsets it) and restores the prior values afterwards, even
   on a throw; a `Client`'s CLI inherits `process.env` per call. **Must
   use:** a new test that sets `FAKE_TMUX_*` (or any variable the CLI child
-  must see) for one call uses it, never its own save/restore block. Some
-  older files still save and restore other variables by hand
-  (`subprocess-client`, `version-resolution`, the `tempHome` helpers).
+  must see) for one call uses it, never its own save/restore block.
 - `CLAUDE_JSON`, a temp HOME's `.claude.json` as planted before a launch
   (no trust entry for any folder), and `trustEntry(claudeJsonPath, cwd)`,
   which reads `projects[cwd].hasTrustDialogAccepted` (undefined when
