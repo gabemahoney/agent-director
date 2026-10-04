@@ -397,8 +397,9 @@ func (r *expireRun) deleteRow(row expireRow, cand ExpireCandidate) expireRow {
 // the retention window, and keeps any whose agent, own session or leftover
 // may still run, or for which it cannot tell. When olderThan is nil the window comes from defaults.expire_retention_days in
 // config.toml; a non-nil value overrides it, and a zero or negative duration
-// selects every finished row. Live rows and rows with a NULL ended_at are
-// never selected.
+// selects every finished row. The CLI and MCP parse their older_than with
+// ParseOlderThan, which refuses a negative value. Live rows and rows with a
+// NULL ended_at are never selected.
 //
 // A selected row whose recorded tmux session name cannot be used (it is
 // empty, contains a control character, or contains a character tmux stores

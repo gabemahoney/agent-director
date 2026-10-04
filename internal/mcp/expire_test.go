@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -38,15 +39,20 @@ var expireMCPCases = []expireMCPCase{
 // into an isolated store and returns a live dispatcher, the Recorder and the store path.
 func newExpireMCPServer(t *testing.T, ownSession bool) (mcp.Dispatcher, *tmuxfix.Recorder, string) {
 	t.Helper()
+	retention := time.Duration(config.Default().Defaults.ExpireRetentionDays) * 24 * time.Hour
+	return newExpireMCPServerEnded(t, ownSession, time.Now().Add(-retention-24*time.Hour))
+}
+
+// newExpireMCPServerEnded is newExpireMCPServer with the row ended at ended.
+func newExpireMCPServerEnded(t *testing.T, ownSession bool, ended time.Time) (mcp.Dispatcher, *tmuxfix.Recorder, string) {
+	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	storePath := filepath.Join(dir, "state.db")
 	cfgPath := filepath.Join(dir, "config.toml")
 	apitest.WriteTmuxConfig(t, cfgPath)
-	retention := time.Duration(config.Default().Defaults.ExpireRetentionDays) * 24 * time.Hour
-	old := time.Now().Add(-retention - 24*time.Hour)
 	if _, err := apitest.SeedSpawn(storePath, expireMCPID, store.StateEnded, "/tmp", "off", "", true,
-		apitest.WithEndedAt(old)); err != nil {
+		apitest.WithEndedAt(ended)); err != nil {
 		t.Fatalf("seed ended row: %v", err)
 	}
 	rec := tmuxfix.NewRecorder()
@@ -94,6 +100,54 @@ func TestExpireMCP(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestExpireMCPOlderThanSign pins b.hxn on a row that finished a minute ago: a
+// negative older_than is ErrInvalidFlags with no tmux call and the row kept;
+// "2h" keeps the row and "0d" and "0s" delete it, as before the fix.
+func TestExpireMCPOlderThanSign(t *testing.T) {
+	cases := []struct {
+		olderThan string
+		wantIDs   string // "" for a refusal
+	}{
+		{"-2h", ""},
+		{"-1s", ""},
+		{"2h", `[]`},
+		{"0d", `["` + expireMCPID + `"]`},
+		{"0s", `["` + expireMCPID + `"]`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.olderThan, func(t *testing.T) {
+			d, rec, storePath := newExpireMCPServerEnded(t, false, time.Now().Add(-time.Minute))
+			resp := callTool(t, d, "expire", paramJSON(t, map[string]any{"older_than": tc.olderThan}))
+			_, rowErr := apitest.ReadSpawnColumns(storePath, expireMCPID)
+			if tc.wantIDs == "" {
+				data := toolErrorData(t, resp)
+				if want := olderThanRefusal(tc.olderThan); data.ErrName != "ErrInvalidFlags" || data.ErrDescription != want {
+					t.Errorf("refusal = %s: %q; want ErrInvalidFlags: %q", data.ErrName, data.ErrDescription, want)
+				}
+				if rowErr != nil {
+					t.Errorf("row after the refusal: %v; want it kept", rowErr)
+				}
+				if n := len(rec.SocketCalls()) + len(rec.Calls()); n != 0 {
+					t.Errorf("tmux calls after the refusal = %d; want none", n)
+				}
+				return
+			}
+			if got := string(expireToolResult(t, resp)["ids"]); got != tc.wantIDs {
+				t.Errorf("ids = %s; want %s", got, tc.wantIDs)
+			}
+			if gone, wantGone := errors.Is(rowErr, store.ErrSpawnNotFound), tc.wantIDs != `[]`; gone != wantGone {
+				t.Errorf("row read after expire: err = %v; want deleted = %v", rowErr, wantGone)
+			}
+		})
+	}
+}
+
+// olderThanRefusal is MCP expire's description refusing older_than value v.
+func olderThanRefusal(v string) string {
+	return `ErrInvalidFlags: expire: parameter "older_than" value ` + strconv.Quote(v) +
+		` must be a non-negative Go duration like "12h" or trailing-d days like "7d"`
 }
 
 // expireToolResult checks resp is a successful tool result and returns its

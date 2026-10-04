@@ -17,6 +17,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/mcp"
 	"github.com/gabemahoney/agent-director/internal/tmux"
+	api "github.com/gabemahoney/agent-director/pkg/api"
 )
 
 // propSchema is the shape part of a tools/list property schema.
@@ -41,7 +42,7 @@ var paramShapes = map[string]struct {
 	want   string
 }{
 	"string":            {propSchema{Type: "string"}, "k=v", "a string"},
-	"duration":          {propSchema{Type: "string"}, "1h", `a string holding a Go duration like "12h" or trailing-d days like "7d"`},
+	"duration":          {propSchema{Type: "string"}, "1h", "a string holding " + api.OlderThanForm},
 	"bool":              {propSchema{Type: "boolean"}, true, "a boolean"},
 	"int":               {propSchema{Type: "integer"}, 1, "an integer"},
 	"[]string":          {propSchema{Type: "array", Items: &propSchema{Type: "string"}}, []string{"k=v"}, "an array of strings"},

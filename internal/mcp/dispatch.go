@@ -243,12 +243,15 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		if err := decodeParams(v, args, &raw); err != nil {
 			return nil, err
 		}
+		// older_than goes through api.ParseOlderThan, the parser the CLI's
+		// --older-than shares, so a value it rejects (neither form, or
+		// negative, b.hxn) is refused here and Expire never runs.
 		var older *time.Duration
 		if raw.OlderThan != "" {
-			dur, ok := parseDuration(raw.OlderThan)
+			dur, ok := api.ParseOlderThan(raw.OlderThan)
 			if !ok {
 				return nil, fmt.Errorf("%w: %s: parameter \"older_than\" value %q must be %s",
-					api.ErrInvalidFlags, v.Name, raw.OlderThan, durationForm)
+					api.ErrInvalidFlags, v.Name, raw.OlderThan, api.OlderThanForm)
 			}
 			older = &dur
 		}
@@ -389,29 +392,4 @@ func splitKV(kv string) (k, v string, ok bool) {
 		return "", "", false
 	}
 	return kv[:i], kv[i+1:], true
-}
-
-// durationForm describes the forms parseDuration accepts, for refusals.
-const durationForm = `a Go duration like "12h" or trailing-d days like "7d"`
-
-// parseDuration accepts Go's time.ParseDuration form plus a trailing-d
-// days form. Mirrors the cmd/-side helper of the same intent so MCP
-// callers can pass `7d` without knowing the underlying Go parser. ok is
-// false when s is in neither form.
-func parseDuration(s string) (d time.Duration, ok bool) {
-	if n := len(s); n > 1 && s[n-1] == 'd' {
-		var days int
-		for _, c := range s[:n-1] {
-			if c < '0' || c > '9' {
-				return 0, false
-			}
-			days = days*10 + int(c-'0')
-		}
-		return time.Duration(days) * 24 * time.Hour, true
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		return 0, false
-	}
-	return d, true
 }

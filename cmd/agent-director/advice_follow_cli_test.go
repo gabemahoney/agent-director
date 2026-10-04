@@ -1,6 +1,7 @@
 package main_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -11,6 +12,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // b.fji literal-follow tests for the CLI's own advice (inventory section H)
@@ -296,6 +298,41 @@ func TestAdviceFollow_H5_ServeUsageRegister(t *testing.T) {
 	}
 	if !strings.Contains(stdout, `"id":1`) || !strings.Contains(stdout, `"serverInfo"`) {
 		t.Errorf("registered command did not answer initialize: stdout=%q", stdout)
+	}
+}
+
+// TestAdviceFollow_H6_OlderThanDurationForm: H6 "--older-than: invalid duration:
+// %s (expected a non-negative Go duration like "12h" or trailing-d days like
+// "7d")", ErrInvalidFlags with no tmux call and nothing deleted (b.hxn).
+func TestAdviceFollow_H6_OlderThanDurationForm(t *testing.T) {
+	const form = `a non-negative Go duration like "12h" or trailing-d days like "7d"`
+	for _, follow := range []string{"12h", "7d"} {
+		t.Run(follow, func(t *testing.T) {
+			home, _ := seedExpireRows(t, []string{expireGoneID})
+			for _, bad := range []string{"-2h", "-7d", "soon"} {
+				stdout, stderr, code := advCLIRun(t, home, "expire", "--older-than", bad)
+				want := "--older-than: invalid duration: " + bad + " (expected " + form + ")"
+				if desc := assertOnlyEnvelope(t, stdout, stderr, code, "ErrInvalidFlags").ErrDescription; desc != want {
+					t.Errorf("--older-than %s description = %q; want %q", bad, desc, want)
+				}
+			}
+			if _, err := apitest.ReadSpawnColumns(stateDB(home), expireGoneID); err != nil {
+				t.Fatalf("row after the refusals: %v; want it kept", err)
+			}
+			assertInvocationKinds(t, home) // no tmux call
+
+			stdout, stderr, code := advCLIRun(t, home, "expire", "--older-than", follow)
+			if code != 0 {
+				t.Fatalf("expire --older-than %s exit = %d; want 0\nstderr=%s", follow, code, stderr)
+			}
+			var res map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+				t.Fatalf("parse stdout %q: %v", stdout, err)
+			}
+			if got, want := string(res["ids"]), `["`+expireGoneID+`"]`; got != want {
+				t.Errorf("expire --older-than %s ids = %s; want %s", follow, got, want)
+			}
+		})
 	}
 }
 

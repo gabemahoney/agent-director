@@ -174,17 +174,15 @@ func TestAdviceFollow_I3_InvalidLabelWantKeyValue(t *testing.T) {
 }
 
 // TestAdviceFollow_I6_OlderThanDurationForm: I6 "expire: parameter "older_than"
-// value %q must be a Go duration like "12h" or trailing-d days like "7d"",
-// ErrInvalidFlags with nothing deleted (b.anw).
+// value %q must be a non-negative Go duration like "12h" or trailing-d days like
+// "7d"", ErrInvalidFlags with nothing deleted (b.anw, b.hxn).
 func TestAdviceFollow_I6_OlderThanDurationForm(t *testing.T) {
 	for _, follow := range []string{"12h", "7d"} {
 		t.Run(follow, func(t *testing.T) {
 			d, rec, storePath := newExpireMCPServer(t, false)
-			for _, bad := range []string{"soon", "7days"} {
+			for _, bad := range []string{"soon", "7days", "-2h"} {
 				data := toolErrorData(t, callTool(t, d, "expire", paramJSON(t, map[string]any{"older_than": bad})))
-				want := `ErrInvalidFlags: expire: parameter "older_than" value ` + strconv.Quote(bad) +
-					` must be a Go duration like "12h" or trailing-d days like "7d"`
-				if data.ErrName != "ErrInvalidFlags" || data.ErrDescription != want {
+				if want := olderThanRefusal(bad); data.ErrName != "ErrInvalidFlags" || data.ErrDescription != want {
 					t.Errorf("older_than %q = %s: %q\nwant ErrInvalidFlags: %q", bad, data.ErrName, data.ErrDescription, want)
 				}
 			}

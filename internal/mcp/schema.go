@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	api "github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
@@ -66,11 +67,12 @@ func goTypeToJSONSchema(goType, description string) map[string]any {
 		out["type"] = "object"
 		out["additionalProperties"] = map[string]any{"type": "string"}
 	case "duration":
-		// Carried as a string in the JSON form (e.g. "12h", "7d");
-		// the verb's own parser handles the trailing-`d` extension.
+		// Carried as a string in the JSON form (e.g. "12h", "7d"). expire's
+		// older_than, the one duration param, is parsed by
+		// api.ParseOlderThan, so its accepted form is api.OlderThanForm.
 		out["type"] = "string"
 		out["description"] = appendDescription(out["description"],
-			"Duration in Go's time.ParseDuration form (e.g. \"12h\") or a trailing-d days form (e.g. \"7d\").")
+			"Must be "+api.OlderThanForm+".")
 	case "json":
 		// Free-form JSON. Used by the hook verb's stdin param; not
 		// MCP-exposed but kept for completeness.
@@ -100,7 +102,7 @@ func expectedValue(goType string) string {
 	case "map[string]string":
 		return "an object with string values"
 	case "duration":
-		return "a string holding " + durationForm
+		return "a string holding " + api.OlderThanForm
 	}
 	return ""
 }

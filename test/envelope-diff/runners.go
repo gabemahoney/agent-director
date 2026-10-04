@@ -440,13 +440,16 @@ func dispatchFindMissing(c *api.Client, _ map[string]any) ([]byte, bool) {
 }
 
 func dispatchExpire(c *api.Client, params map[string]any) ([]byte, bool) {
-	// "older_than" is an optional duration string like "7d", "2h", "0d".
-	// If absent or empty, pass nil so the Client uses the config default.
+	// "older_than" is an optional duration string like "7d", "2h", "0d",
+	// parsed by api.ParseOlderThan and refused as the CLI refuses
+	// --older-than (b.hxn). If absent or empty, pass nil so the Client uses
+	// the config default.
 	var olderThan *time.Duration
 	if raw := strParam(params, "older_than"); raw != "" {
-		d, err := parseDuration(raw)
-		if err != nil {
-			return marshalErrEnvelope(fmt.Errorf("expire: parse older_than %q: %w", raw, err)), true
+		d, ok := api.ParseOlderThan(raw)
+		if !ok {
+			return marshalErrEnvelope(fmt.Errorf("%w: --older-than: invalid duration: %s (expected %s)",
+				api.ErrInvalidFlags, raw, api.OlderThanForm)), true
 		}
 		olderThan = &d
 	}
@@ -455,19 +458,6 @@ func dispatchExpire(c *api.Client, params map[string]any) ([]byte, bool) {
 		return marshalErrEnvelope(err), true
 	}
 	return successEnvelope(res)
-}
-
-// parseDuration parses a duration string as accepted by the expire verb CLI.
-// Supports standard Go durations (e.g. "2h") plus day suffixes ("7d").
-func parseDuration(s string) (time.Duration, error) {
-	if len(s) > 0 && s[len(s)-1] == 'd' {
-		n := 0
-		if _, err := fmt.Sscanf(s[:len(s)-1], "%d", &n); err != nil {
-			return 0, fmt.Errorf("invalid day count: %q", s)
-		}
-		return time.Duration(n) * 24 * time.Hour, nil
-	}
-	return time.ParseDuration(s)
 }
 
 func dispatchMakeTemplate(c *api.Client, params map[string]any) ([]byte, bool) {
