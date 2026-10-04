@@ -146,6 +146,7 @@ func callTableFindMissing() callTableVerb {
 			ctGoneForeignLabel:         absent,
 			ctGoneNameUnlabelled:       nameHeld,
 			ctGoneServerRestarted:      absent,
+			ctGoneEmptyServer:          absent,
 			ctGoneNoServer:             absent,
 			ctGoneNoSocket:             absent,
 			ctDifferentRebound:         noted("tmux_server_changed", "tmux_server_changed"),

@@ -26,8 +26,8 @@ import (
 )
 
 // rlFakeServer gives r's socket in test/fake-tmux the row's recorded server
-// holding one unlabelled bystander session (an empty listing names no
-// server), as seedReusable leaves the Recorder.
+// holding one unlabelled bystander session, as seedReusable leaves the
+// Recorder.
 func (e *killEnv) rlFakeServer(t *testing.T, r reuseRow) {
 	t.Helper()
 	srv, _ := e.rec.Server(r.Socket)
@@ -118,7 +118,7 @@ func TestSpawnReuseCreateArgv(t *testing.T) {
 			if want := map[bool]int{false: 2, true: 3}[byID]; len(argvs) != want {
 				t.Fatalf("socket invocations = %q; want %d", argvs, want)
 			}
-			if !containsRun(argvs[0], []string{"-S", r.Socket, "list-sessions"}) {
+			if !isLookupOn(argvs[0], r.Socket) {
 				t.Errorf("first socket invocation %q; want the lookup on -S %s", argvs[0], r.Socket)
 			}
 			create, target := argvs[1], "="+name+":"

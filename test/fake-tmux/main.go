@@ -23,18 +23,23 @@
 // table, and the first that fails ends the invocation with its exit status,
 // as in tmux.
 // Answers go to standard output, replies to standard error (Appendix E.10).
-// The fake expands the -F formats the client sends (#{session_id},
+// The fake expands the formats the client sends (#{session_id},
 // #{session_created}, #{pid}, #{start_time}, #{session_name}, #{@ad_owner},
 // #{window_index}, #{pane_index}, #{pane_id}, #{pane_pid}, #{@ad_pane};
 // "##" is "#", but a run of two or more "#" before "[" stays as written).
 //
+//   - display-message -p <fmt>: the lookup's server identity read, the
+//     lookup's first command (LFR H5; b.47f): <fmt> expanded with the
+//     server's #{pid} and #{start_time}, with or without sessions, as tmux
+//     prints it with exit-empty off. A socket with no server fails it with
+//     the catalogue's no-socket reply (see below).
 //   - list-sessions -F <fmt>: one line per session, sorted by name. A
 //     session's #{@ad_owner} is the server or global-window scope value when
 //     one is set, else its own label, else the global value (as tmux
 //     resolves a user option in a format).
 //   - show-options -gqv|-sqv|-gwqv @ad_owner: the global, server or
 //     global-window value with a newline, nothing when unset. With the
-//     listing this is the lookup.
+//     identity read and the listing this is the lookup.
 //   - list-panes -a -F <fmt>: every pane of every session. A pane's
 //     #{@ad_pane} is its own value only (per-pane options; "" when unset,
 //     as on a pane split from a labelled one); the fake models no window,
@@ -71,8 +76,11 @@
 //
 // A target that matches nothing fails with the catalogue's reply for it
 // (reply/cant-find-pane, reply/cant-find-session, reply/no-such-session),
-// exit 1. A socket with no table answers as a server with no sessions: the
-// lookup and the pane listing are empty with exit 0.
+// exit 1. On a socket with no server (no table, or no create yet) the lookup
+// fails with the catalogue's no-socket reply, "error connecting to <socket>
+// (No such file or directory)" on standard error, exit 1, as tmux answers
+// there (reply/no-socket; b.47f): the fake never names a server that does
+// not run. The pane listing there is still empty with exit 0.
 //
 // Argv the fake does not understand exits 2 with no output; a table it
 // cannot read or write exits 3 with no output.

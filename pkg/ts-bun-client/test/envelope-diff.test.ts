@@ -448,7 +448,7 @@ describe("send-keys", () => {
         for (const log of [logCli, logClient]) {
           const calls = fakeTmuxCalls(log);
           expect(calls.map((argv) => argv.slice(1, 5))).toEqual([
-            ["-u", "-S", socket, "list-sessions"],
+            ["-u", "-S", socket, "display-message"], // the lookup: its server identity read first (b.47f)
             ["-u", "-S", socket, "list-panes"],
             ["-u", "-S", socket, "send-keys"],
             ["-u", "-S", socket, "send-keys"],
@@ -571,7 +571,7 @@ describe("read-pane", () => {
         for (const log of [logCli, logClient]) {
           const calls = fakeTmuxCalls(log);
           expect(calls.map((argv) => argv.slice(1, 5))).toEqual([
-            ["-u", "-S", socket, "list-sessions"],
+            ["-u", "-S", socket, "display-message"], // the lookup: its server identity read first (b.47f)
             ["-u", "-S", socket, "list-panes"],
             ["-u", "-S", socket, "capture-pane"],
           ]);
@@ -1114,7 +1114,7 @@ describe("expire", () => {
         // tmux call (expire never lists panes or kills) (SR-12.2, SR-5.8).
         for (const log of [logCli, logClient]) {
           expect(fakeTmuxCalls(log).map((argv) => argv.slice(1, 5))).toEqual([
-            ["-u", "-S", socket, "list-sessions"],
+            ["-u", "-S", socket, "display-message"], // the lookup: its server identity read first (b.47f)
           ]);
         }
       } finally {

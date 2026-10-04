@@ -1,6 +1,7 @@
 package main
 
 import (
+	"maps"
 	"strconv"
 	"strings"
 
@@ -52,6 +53,14 @@ func expand(format string, v vars) string {
 	return b.String()
 }
 
+// serverVars is the context of a command that names no session, the
+// lookup's server identity read (LFR H5; b.47f): srv's #{pid} and
+// #{start_time}. The caller has a running server: on a socket with none the
+// identity read fails, it never prints one.
+func serverVars(srv *faketmuxfix.Server) vars {
+	return vars{"pid": strconv.Itoa(srv.PID), "start_time": strconv.FormatInt(srv.Start, 10)}
+}
+
 // sessionVars is the context of session s on the table's server, its
 // active pane being its first.
 func sessionVars(tb *faketmuxfix.Table, s *faketmuxfix.Session) vars {
@@ -62,8 +71,7 @@ func sessionVars(tb *faketmuxfix.Table, s *faketmuxfix.Session) vars {
 		"@ad_owner":       ownerValue(tb, s),
 	}
 	if tb.Server != nil {
-		v["pid"] = strconv.Itoa(tb.Server.PID)
-		v["start_time"] = strconv.FormatInt(tb.Server.Start, 10)
+		maps.Copy(v, serverVars(tb.Server))
 	}
 	if len(s.Panes) > 0 {
 		for k, val := range paneVars(s.Panes[0]) {

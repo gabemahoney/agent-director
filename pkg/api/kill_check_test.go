@@ -228,8 +228,16 @@ func TestKillCheckFollowUp(t *testing.T) {
 			"ErrTmuxNotAvailable", func(_ *killEnv, r killRow) apitest.DescCase {
 				return apitest.DescSocketPermission(r.Socket).AfterKillSent()
 			}},
-		{"follow-up different server (empty server left bound)", agentUnreadable,
-			func(*testing.T, *killEnv, killRow) {}, "different_server", "ErrTmuxNotAvailable",
+		// b.47f: the recorded server stays up with no session (tmux's exit-empty off).
+		{"follow-up gone, the recorded server left with no session", agentUnreadable,
+			func(*testing.T, *killEnv, killRow) {}, "gone", "", nil},
+		{"follow-up different server, the socket rebound to an empty server", agentUnreadable,
+			func(_ *testing.T, e *killEnv, r killRow) {
+				e.rec.AfterCall(tmux.CallKillSession, func(tmuxfix.SocketCall, error) {
+					e.rec.RebindServer(r.Socket, tmuxfix.Server{})
+					e.syncServers()
+				})
+			}, "different_server", "ErrTmuxNotAvailable",
 			func(_ *killEnv, r killRow) apitest.DescCase { return apitest.DescDifferentServer(r.ID).AfterKillSent() }},
 	}
 	for _, tc := range cases {

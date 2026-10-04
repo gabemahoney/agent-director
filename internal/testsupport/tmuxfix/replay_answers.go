@@ -15,7 +15,10 @@ import (
 // names, server pid and start time and label structure, in SR-2.1's format
 // with 16-hex tokens and the ad1 label form, now five fields with StoreID
 // last (WD 2026-09-29 STORE). Session creation times not in a transcript are
-// the server's start time.
+// the server's start time. Every lookup answer begins with the server
+// identity line the lookup's display-message -p prints first, with or
+// without sessions (LFR H5; b.47f, run on tmux 3.2a and 3.3a with exit-empty
+// off, zero sessions and sessions).
 
 // Token and OtherToken are launch tokens: 16 lowercase hex characters
 // (SR-3.5), a row's current token and an earlier launch's.
@@ -41,6 +44,27 @@ const (
 	f1ServerStart = 1790549182
 	f9ServerStart = 1790549353
 )
+
+// identityPrefix is the first field of the lookup's server identity line
+// (LFR H5; b.47f).
+const identityPrefix = "ad-server"
+
+// The client's fixed FirstLine texts for a malformed lookup answer, one per
+// broken rule; none quotes a line, which can carry a label value (SR-2.3; LFR
+// H5, H6).
+const (
+	lookupBadIdentity     = "malformed lookup answer: the first line is not a server identity line"
+	lookupBadSessionLine  = "malformed lookup answer: a session line has a missing or unparseable field"
+	lookupSessionInScope  = "malformed lookup answer: a session line follows the scope section"
+	lookupServerDisagrees = "malformed lookup answer: a session line disagrees with the server identity line"
+)
+
+// IdentityLine builds the lookup's server identity line, without its
+// newline: "ad-server", the server's pid and its start time, tab separated,
+// as the lookup's display-message -p prints it first (LFR H5; b.47f).
+func IdentityLine(serverPID int, serverStart int64) string {
+	return strings.Join([]string{identityPrefix, strconv.Itoa(serverPID), strconv.FormatInt(serverStart, 10)}, "\t")
+}
 
 // SessionLine builds one lookup session line, without its newline:
 // id, created, server pid, server start, name and label value, tab separated
@@ -122,16 +146,18 @@ func Valid(token, instanceID, storeID string) tmux.Label {
 	return tmux.Label{Kind: tmux.LabelValid, Token: token, InstanceID: instanceID, StoreID: storeID}
 }
 
-// Answer builds a successful lookup entry: sessions on one server, then the
-// scope-section lines (each printed with its newline).
+// Answer builds a successful lookup entry: the identity line of the server
+// serverPID started at serverStart, its sessions, then the scope-section
+// lines (each printed with its newline). The answer carries the server's
+// identity with or without sessions (LFR H5; b.47f).
 func Answer(name, source string, serverPID int, serverStart int64, sessions []Listed, scope ...string) Entry {
 	var out strings.Builder
-	ans := tmux.LookupAnswer{}
+	out.WriteString(IdentityLine(serverPID, serverStart) + "\n")
+	ans := tmux.LookupAnswer{ServerPID: serverPID, ServerStart: serverStart}
 	var labels []string
 	for _, s := range sessions {
 		out.WriteString(SessionLine(s.ID, s.Created, serverPID, serverStart, s.Name, s.Label) + "\n")
 		ans.Sessions = append(ans.Sessions, tmux.Session{ID: s.ID, Created: s.Created, Name: s.Name, Label: s.Want})
-		ans.ServerPID, ans.ServerStart = serverPID, serverStart
 		if s.Label != "" {
 			labels = append(labels, s.Label)
 		}
@@ -147,16 +173,21 @@ func Answer(name, source string, serverPID int, serverStart int64, sessions []Li
 }
 
 // malformed builds a lookup answer the client must reject as FailUnrecognized
-// with a fixed description that quotes no line (SR-3.4, LFR H6).
-func malformed(name, source string, labels []string, lines ...string) Entry {
+// with FirstLine firstLine, a fixed description that quotes no line (SR-3.4,
+// LFR H5, H6): lines, each printed with its newline, the identity line
+// included only when given.
+func malformed(name, source, firstLine string, labels []string, lines ...string) Entry {
 	return Entry{Name: name, Source: source, Stdout: strings.Join(lines, "\n") + "\n",
-		Want: only(tmux.FailUnrecognized, tmux.CallLookup), LabelValues: labels}
+		Want: only(tmux.FailUnrecognized, tmux.CallLookup), FirstLine: firstLine, LabelValues: labels}
 }
 
 // LookupAnswers returns the one-call lookup's answers: F9a, F9b, F1, the F2
-// scope cases, I2's zero-session server, and the synthesised parse-rule
-// cases of LFR H6 (scope blank lines, a session line after a scope value,
-// session lines disagreeing on the server, unparseable numeric fields).
+// scope cases, I2's zero-session server with its identity line, and the
+// synthesised parse-rule cases of LFR H5 and H6 (scope blank lines, a scope
+// value shaped like an identity line, a session line after a scope value,
+// session lines disagreeing with the identity line, unparseable numeric
+// fields, and a missing, misplaced or unparseable identity line, empty
+// output included).
 func LookupAnswers() []Entry {
 	own0 := LabelValue(Token, "$0", "agent-x", StoreID) // F9's and F2's value, embedding $0
 	own1 := LabelValue(Token, "$1", "agent-x", StoreID)
@@ -175,6 +206,7 @@ func LookupAnswers() []Entry {
 		return strings.Join([]string{id, strconv.Itoa(f9ServerStart), pid, start, "a", label}, "\t")
 	}
 	pid, start := strconv.Itoa(serverPID), strconv.Itoa(f9ServerStart)
+	id := IdentityLine(serverPID, f9ServerStart)
 	return []Entry{
 		Answer("lookup/F9a", "provenance-fresh F9a (five-field form, WD 2026-09-29 STORE)", serverPID, f9ServerStart, []Listed{
 			{ID: "$0", Created: f9ServerStart, Name: "a", Label: own0, Want: x},
@@ -192,24 +224,44 @@ func LookupAnswers() []Entry {
 		f2("lookup/F2-global", own0, own0, own1, own2, x, x, y, own0),
 		f2("lookup/F2-server-or-global-window", own0, own0, own0, own0, x, none, none, own0),
 		f2("lookup/F2-window-or-pane", own0, "", own1, own2, none, x, y),
-		Answer("lookup/I2-zero-sessions", "E.3 I2; E.10 O4: exit-empty off, no sessions", 0, 0, nil),
+		Answer("lookup/I2-zero-sessions", "E.3 I2; E.10 O4: exit-empty off, no sessions; "+
+			"the identity line still answers (LFR H5; b.47f, tmux 3.2a and 3.3a)", serverPID, f9ServerStart, nil),
+		Answer("lookup/I2-identity-shaped-scope-value", "LFR H5, H6; b.47f: a scope value shaped like an identity line "+
+			"is a scope value, the identity line counting only in first place", serverPID, f9ServerStart, nil, id),
 		Answer("lookup/scope-blank-lines", "LFR H6: empty scope lines set no scope value", serverPID, f9ServerStart, []Listed{
 			{ID: "$0", Created: f9ServerStart, Name: "a", Label: own0, Want: x},
 		}, "", ""),
-		malformed("lookup/session-after-scope", "LFR H6", []string{own0},
-			line("$0", pid, start, own0), own0, line("$1", pid, start, "")),
-		malformed("lookup/server-pid-disagrees", "LFR H6", []string{own0},
-			line("$0", pid, start, own0), line("$1", "295", start, "")),
-		malformed("lookup/server-start-disagrees", "LFR H6", []string{own0},
-			line("$0", pid, start, own0), line("$1", pid, "1790549354", "")),
-		malformed("lookup/created-unparseable", "synthesised, not a tmux recording: SR-3.9 non-decimal creation field", []string{own0},
-			strings.Join([]string{"$0", "", pid, start, "a", own0}, "\t")),
-		malformed("lookup/pid-unparseable", "SR-3.4", []string{own0},
-			line("$0", "-294", start, own0)),
-		malformed("lookup/start-unparseable", "SR-3.4", []string{own0},
-			line("$0", pid, "17905e9", own0)),
-		malformed("lookup/missing-label-field", "SR-3.4: five fields", nil,
-			strings.Join([]string{"$0", start, pid, start, "a"}, "\t")),
+		malformed("lookup/session-after-scope", "LFR H6", lookupSessionInScope, []string{own0},
+			id, line("$0", pid, start, own0), own0, line("$1", pid, start, "")),
+		malformed("lookup/server-pid-disagrees", "LFR H6", lookupServerDisagrees, []string{own0},
+			id, line("$0", pid, start, own0), line("$1", "295", start, "")),
+		malformed("lookup/server-start-disagrees", "LFR H6", lookupServerDisagrees, []string{own0},
+			id, line("$0", pid, start, own0), line("$1", pid, "1790549354", "")),
+		malformed("lookup/identity-disagrees", "LFR H5, H6; b.47f: session lines that agree with each other "+
+			"but not with the identity line", lookupServerDisagrees, []string{own0},
+			IdentityLine(serverPID+1, f9ServerStart), line("$0", pid, start, own0), line("$1", pid, start, "")),
+		malformed("lookup/identity-missing", "LFR H5; b.47f: an answer with no identity line, the form before b.47f",
+			lookupBadIdentity, []string{own0}, line("$0", pid, start, own0)),
+		malformed("lookup/identity-after-session", "LFR H5; b.47f: a session line first, the identity line after it",
+			lookupBadIdentity, []string{own0}, line("$0", pid, start, own0), id),
+		malformed("lookup/identity-pid-unparseable", "LFR H5; b.47f", lookupBadIdentity, nil,
+			strings.Join([]string{identityPrefix, "-294", start}, "\t")),
+		malformed("lookup/identity-start-unparseable", "LFR H5; b.47f", lookupBadIdentity, nil,
+			strings.Join([]string{identityPrefix, pid, "17905e9"}, "\t")),
+		malformed("lookup/identity-missing-field", "LFR H5; b.47f: exactly three fields", lookupBadIdentity, nil,
+			strings.Join([]string{identityPrefix, pid}, "\t")),
+		malformed("lookup/identity-extra-field", "LFR H5; b.47f: exactly three fields", lookupBadIdentity, nil, id+"\t"),
+		{Name: "lookup/empty-output", Source: "LFR H5; b.47f: the lookup always prints its identity line, " +
+			"so an exit 0 with no output is not an answer", Want: only(tmux.FailUnrecognized, tmux.CallLookup),
+			FirstLine: lookupBadIdentity},
+		malformed("lookup/created-unparseable", "synthesised, not a tmux recording: SR-3.9 non-decimal creation field",
+			lookupBadSessionLine, []string{own0}, id, strings.Join([]string{"$0", "", pid, start, "a", own0}, "\t")),
+		malformed("lookup/pid-unparseable", "SR-3.4", lookupBadSessionLine, []string{own0},
+			id, line("$0", "-294", start, own0)),
+		malformed("lookup/start-unparseable", "SR-3.4", lookupBadSessionLine, []string{own0},
+			id, line("$0", pid, "17905e9", own0)),
+		malformed("lookup/missing-label-field", "SR-3.4: five fields", lookupBadSessionLine, nil,
+			id, strings.Join([]string{"$0", start, pid, start, "a"}, "\t")),
 	}
 }
 

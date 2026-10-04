@@ -88,6 +88,7 @@ func callTablePause() callTableVerb {
 		ctGoneForeignLabel:         gone,
 		ctGoneNameUnlabelled:       gone,
 		ctGoneServerRestarted:      gone,
+		ctGoneEmptyServer:          gone,
 		ctGoneNoServer:             gone,
 		ctGoneNoSocket:             gone,
 		ctActionRecognised: {errName: "ErrTmuxUnresponsive", sent: true, calls: withFollowUp(pauseTextCalls),

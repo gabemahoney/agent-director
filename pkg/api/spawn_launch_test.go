@@ -168,6 +168,12 @@ func containsRun(argv, seq []string) bool {
 	return false
 }
 
+// isLookupOn reports whether argv is the lookup on -S socket: its server
+// identity read first (b.47f), then the session listing.
+func isLookupOn(argv []string, socket string) bool {
+	return containsRun(argv, []string{"-S", socket, "display-message", "-p"}) && slices.Contains(argv, "list-sessions")
+}
+
 // TestSpawnCreateArgvCarriesChainedLabels: the one create invocation chains the
 // @ad_owner and @ad_pane steps on =<name>: and launches an argv of 2+ elements.
 func TestSpawnCreateArgvCarriesChainedLabels(t *testing.T) {

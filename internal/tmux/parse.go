@@ -8,7 +8,7 @@ import (
 )
 
 // This file holds the pure parsers of the Phase 1 call set: label
-// classification (SR-3.4, LFR G1), the lookup answer (SR-3.4, LFR H6), the
+// classification (SR-3.4, LFR G1), the lookup answer (SR-3.4, LFR H5, H6), the
 // pane listing with its pane labels (SR-2.1, WD 2026-09-29c) and the create
 // reply (SR-2.1), and reply recognition from the
 // first line of standard error (SR-2.3, SR-2.5). None reads the environment,
@@ -39,8 +39,9 @@ const (
 	replyDuplicatePrefix = "duplicate session: "
 )
 
-// Field counts of the parsed lines (SR-2.1, SR-3.4).
+// Field counts of the parsed lines (SR-2.1, SR-3.4; LFR H5).
 const (
+	identityFieldCount    = 3 // identityPrefix, pid, start_time
 	lookupFieldCount      = 6 // id, created, pid, start_time, name, label
 	paneFieldCount        = 6 // session id, window, pane index, pane id, pane pid, pane label
 	createReplyFieldCount = 5 // session id, pid, start_time, pane id, pane pid
@@ -49,9 +50,10 @@ const (
 // Fixed FirstLine texts for output whose lines must not be quoted: lookup
 // lines can carry label values (SR-2.3), and cut-short output is incomplete.
 const (
+	firstLineBadIdentity     = "malformed lookup answer: the first line is not a server identity line"
 	firstLineBadSessionLine  = "malformed lookup answer: a session line has a missing or unparseable field"
 	firstLineSessionInScope  = "malformed lookup answer: a session line follows the scope section"
-	firstLineServerDisagrees = "malformed lookup answer: session lines disagree on the server"
+	firstLineServerDisagrees = "malformed lookup answer: a session line disagrees with the server identity line"
 	firstLineOutputCut       = "output cut short: its pipes stayed open past the pipe-close wait"
 )
 
@@ -95,15 +97,25 @@ func classifyLabel(raw, sessionID string) Label {
 }
 
 // parseLookup parses the lookup's standard output by the rule of SR-3.4 (LFR
-// H6): session lines first; the scope section starts at the first line that
-// is not a session line and runs to the end; any non-empty scope line sets
-// ScopeValue. A session-shaped line with a field that does not parse, a
-// session-shaped line in the scope section, or session lines that disagree on
-// the server make the answer malformed: ok is false and firstLine is a fixed
+// H6), with the server identity line first (LFR H5; b.47f): the first line is
+// the identity line, which sets ServerPID and ServerStart; then the session
+// lines; the scope section starts at the first line that is not a session
+// line and runs to the end; any non-empty scope line sets ScopeValue. The
+// identity line is recognised only in first place, so a session line or a
+// scope value can never be taken for it, nor it for either. A first line
+// that is not an identity line (empty output included), a session-shaped
+// line with a field that does not parse, a session line whose server fields
+// differ from the identity line's, or a session-shaped line in the scope
+// section make the answer malformed: ok is false and firstLine is a fixed
 // description that quotes no line (a line can carry a label value).
 func parseLookup(out []byte) (ans LookupAnswer, ok bool, firstLine string) {
 	lines := strings.Split(string(out), "\n")
-	i := 0
+	pid, start, good := parseIdentityLine(lines[0])
+	if !good {
+		return LookupAnswer{}, false, firstLineBadIdentity
+	}
+	ans.ServerPID, ans.ServerStart = pid, start
+	i := 1
 	for ; i < len(lines); i++ {
 		if !isSessionShaped(lines[i]) {
 			break
@@ -112,10 +124,9 @@ func parseLookup(out []byte) (ans LookupAnswer, ok bool, firstLine string) {
 		if !good {
 			return LookupAnswer{}, false, firstLineBadSessionLine
 		}
-		if len(ans.Sessions) > 0 && (pid != ans.ServerPID || start != ans.ServerStart) {
+		if pid != ans.ServerPID || start != ans.ServerStart {
 			return LookupAnswer{}, false, firstLineServerDisagrees
 		}
-		ans.ServerPID, ans.ServerStart = pid, start
 		ans.Sessions = append(ans.Sessions, s)
 	}
 	for ; i < len(lines); i++ {
@@ -127,6 +138,22 @@ func parseLookup(out []byte) (ans LookupAnswer, ok bool, firstLine string) {
 		}
 	}
 	return ans, true, ""
+}
+
+// parseIdentityLine parses the lookup's server identity line: exactly
+// identityPrefix, the server's decimal #{pid} and its decimal #{start_time},
+// tab separated (LFR H5; b.47f).
+func parseIdentityLine(line string) (pid int, start int64, ok bool) {
+	f := strings.Split(line, "\t")
+	if len(f) != identityFieldCount || f[0] != identityPrefix {
+		return 0, 0, false
+	}
+	pid, ok1 := parseDecimalInt(f[1])
+	start, ok2 := parseDecimal64(f[2])
+	if !ok1 || !ok2 {
+		return 0, 0, false
+	}
+	return pid, start, true
 }
 
 // isSessionShaped reports whether line begins with a session id and a tab.

@@ -16,21 +16,33 @@ const ownerOption = "@ad_owner"
 // token> <pane id>" (SR-2.1, SR-3.5; WD 2026-09-29c).
 const paneOption = "@ad_pane"
 
-// The -F formats of the lookup and the pane listing (SR-2.1), tab separated.
-// Each ends with its label field, so a tab inside a label value cannot shift
-// the fields before it.
+// identityPrefix is the first field of the lookup's server identity line
+// (LFR H5; b.47f). It is not a session id, and holds no '#' or '%', which
+// display-message would expand.
+const identityPrefix = "ad-server"
+
+// The formats of the lookup's server identity read, the lookup and the pane
+// listing (SR-2.1), tab separated. The listing formats each end with their
+// label field, so a tab inside a label value cannot shift the fields before
+// it.
 const (
-	lookupFormat = "#{session_id}\t#{session_created}\t#{pid}\t#{start_time}\t#{session_name}\t#{@ad_owner}"
-	panesFormat  = "#{session_id}\t#{window_index}\t#{pane_index}\t#{pane_id}\t#{pane_pid}\t#{@ad_pane}"
+	identityFormat = identityPrefix + "\t#{pid}\t#{start_time}"
+	lookupFormat   = "#{session_id}\t#{session_created}\t#{pid}\t#{start_time}\t#{session_name}\t#{@ad_owner}"
+	panesFormat    = "#{session_id}\t#{window_index}\t#{pane_index}\t#{pane_id}\t#{pane_pid}\t#{@ad_pane}"
 )
 
 // Lookup makes the one-invocation lookup on socket (SR-2.1, SR-3.4): the
+// server identity read (display-message -p of identityFormat), then the
 // session listing with each session's label, then the global, server and
-// global-window @ad_owner reads, as one server step. Query timeout. Labels
-// are read only here, and are returned classified, never raw. Output that
-// does not parse by the rule of SR-3.4 is FailUnrecognized.
+// global-window @ad_owner reads, as one server step. The identity read
+// answers on a server with no session too (tmux's exit-empty off), so an
+// empty listing still says which server answered (LFR H5; b.47f; verified on
+// tmux 3.2a and 3.3a). Query timeout. Labels are read only here, and are
+// returned classified, never raw. Output that does not parse by the rule of
+// SR-3.4 (parseLookup) is FailUnrecognized.
 func (c *Client) Lookup(socket string) (LookupAnswer, error) {
 	out, err := c.runData(CallLookup, socket,
+		[]string{"display-message", "-p", identityFormat},
 		[]string{"list-sessions", "-F", lookupFormat},
 		[]string{"show-options", "-gqv", ownerOption},
 		[]string{"show-options", "-sqv", ownerOption},
@@ -40,7 +52,7 @@ func (c *Client) Lookup(socket string) (LookupAnswer, error) {
 	}
 	ans, ok, firstLine := parseLookup(out)
 	if !ok {
-		return LookupAnswer{}, unparseable(CallLookup, firstLine)
+		return LookupAnswer{}, unparseable(CallLookup, out, firstLine)
 	}
 	return ans, nil
 }
@@ -59,7 +71,7 @@ func (c *Client) ListPanes(socket string) ([]Pane, error) {
 	}
 	panes, ok, firstLine := parsePanes(out)
 	if !ok {
-		return nil, unparseable(CallListPanes, firstLine)
+		return nil, unparseable(CallListPanes, out, firstLine)
 	}
 	return panes, nil
 }

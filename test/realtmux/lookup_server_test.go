@@ -8,8 +8,9 @@ import (
 )
 
 // The lookup's server check against real tmux 3.3a (SRD SR-3.3, SR-3.4,
-// SR-20.7; AC-LKP-19): kill-server, a restart on the same socket and a
-// re-bound socket, judged by the production start-time reader.
+// SR-20.7; AC-LKP-19): kill-server, a restart on the same socket, a re-bound
+// socket and a server left with no session under exit-empty off (b.47f),
+// judged by the production start-time reader.
 
 // serverChange turns the socket of a's server into one case's state and
 // returns the session on the socket's new server ("" and a zero identity
@@ -59,8 +60,34 @@ func rebindServer(spec func(agent) createSpec) serverChange {
 	}
 }
 
-// TestLookup_ServerCheck: a no-server reply, a restarted server and a
-// re-bound socket read as SR-3.3 says, with and without a recorded identity.
+// leaveEmpty turns tmux's exit-empty off on the socket's server and kills its
+// session sessionID, so srv runs on with no session (b.47f).
+func (f *lookupFix) leaveEmpty(t *testing.T, sessionID string, srv serverIdentity) {
+	t.Helper()
+	f.must(t, "set-option", "-s", "exit-empty", "off")
+	f.must(t, "kill-session", "-t", sessionID)
+	if got := f.judge(tmux.ProcIdentity{PID: srv.PID, Starttime: srv.Starttime}); got != tmux.ProcAlive {
+		t.Fatalf("server %d after its last session ended with exit-empty off: %v, want alive", srv.PID, got)
+	}
+}
+
+// emptyServer leaves a's own server running with no session.
+func emptyServer(t *testing.T, f *lookupFix, a agent) (string, serverIdentity) {
+	f.leaveEmpty(t, a.Reply.SessionID, a.Server)
+	return "", a.Server
+}
+
+// rebindEmpty is rebindServer with another agent, its new server then left
+// with no session while a's keeps running on the moved socket.
+func rebindEmpty(t *testing.T, f *lookupFix, a agent) (string, serverIdentity) {
+	session, srv := rebindServer(func(agent) createSpec { return createSpec{} })(t, f, a)
+	f.leaveEmpty(t, session, srv)
+	return "", srv
+}
+
+// TestLookup_ServerCheck: a no-server reply, a restarted server, a re-bound
+// socket and a server left with no session (b.47f) read as SR-3.3 says, with
+// and without a recorded identity.
 func TestLookup_ServerCheck(t *testing.T) {
 	otherAgent := func(agent) createSpec { return createSpec{} }
 	sameLabel := func(a agent) createSpec { return createSpec{InstanceID: a.InstanceID, Token: a.Token} }
@@ -98,6 +125,17 @@ func TestLookup_ServerCheck(t *testing.T) {
 			name:     "re-bound socket, the row's current label",
 			change:   rebindServer(sameLabel),
 			labelled: true,
+			recorded: wantResult{Verdict: tmux.CantTell, CantTell: tmux.CantTellDifferentServer, Token: "different_server",
+				Server: tmux.ServerDiffers, Disagree: []string{tmux.ReasonServerMismatch}},
+		},
+		{
+			name:     "the recorded server left with no session, exit-empty off",
+			change:   emptyServer,
+			recorded: wantResult{Verdict: tmux.Gone, Token: "gone", Server: tmux.ServerMatch},
+		},
+		{
+			name:   "re-bound socket, the new server left with no session",
+			change: rebindEmpty,
 			recorded: wantResult{Verdict: tmux.CantTell, CantTell: tmux.CantTellDifferentServer, Token: "different_server",
 				Server: tmux.ServerDiffers, Disagree: []string{tmux.ReasonServerMismatch}},
 		},

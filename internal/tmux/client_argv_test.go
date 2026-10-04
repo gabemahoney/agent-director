@@ -16,9 +16,10 @@ import (
 // the socket-taking calls (SR-2.1, SR-2.2, SR-3.5, SR-3.12, SR-13.1).
 
 const (
-	argvLookupFormat = "#{session_id}\t#{session_created}\t#{pid}\t#{start_time}\t#{session_name}\t#{@ad_owner}"
-	argvPanesFormat  = "#{session_id}\t#{window_index}\t#{pane_index}\t#{pane_id}\t#{pane_pid}\t#{@ad_pane}"
-	argvCreateFormat = "#{session_id} #{pid} #{start_time} #{pane_id} #{pane_pid}"
+	argvIdentityFormat = "ad-server\t#{pid}\t#{start_time}"
+	argvLookupFormat   = "#{session_id}\t#{session_created}\t#{pid}\t#{start_time}\t#{session_name}\t#{@ad_owner}"
+	argvPanesFormat    = "#{session_id}\t#{window_index}\t#{pane_index}\t#{pane_id}\t#{pane_pid}\t#{@ad_pane}"
+	argvCreateFormat   = "#{session_id} #{pid} #{start_time} #{pane_id} #{pane_pid}"
 )
 
 // argvCase drives one client method and states the argv (after "-u -S
@@ -37,10 +38,14 @@ func argvCases() []argvCase {
 	createReply := exitZero(tmuxfix.CreateReplyLine(tmuxfix.RecordedCreate))
 	return slices.Concat([]argvCase{
 		{
-			name:   "lookup",
-			script: []tmux.RunResult{exitZero("")},
-			call:   func(c *tmux.Client) error { _, err := c.Lookup(testSocket); return err },
-			want: [][]string{{"list-sessions", "-F", argvLookupFormat,
+			// b.47f: the server identity read comes first, so even an empty
+			// listing names the server that answered.
+			name: "lookup",
+			script: []tmux.RunResult{exitZero(tmuxfix.IdentityLine(tmuxfix.RecordedCreate.ServerPID,
+				tmuxfix.RecordedCreate.ServerStart) + "\n")},
+			call: func(c *tmux.Client) error { _, err := c.Lookup(testSocket); return err },
+			want: [][]string{{"display-message", "-p", argvIdentityFormat,
+				";", "list-sessions", "-F", argvLookupFormat,
 				";", "show-options", "-gqv", "@ad_owner",
 				";", "show-options", "-sqv", "@ad_owner",
 				";", "show-options", "-gwqv", "@ad_owner"}},

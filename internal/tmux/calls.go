@@ -11,8 +11,9 @@ type Call string
 
 // The call kinds of SR-2.1. Their strings are the wordings of Appendix F.1.
 const (
-	// CallLookup is the one-invocation lookup: the listing with labels plus
-	// the three scope reads (SR-2.1, SR-3.4).
+	// CallLookup is the one-invocation lookup: the server identity read, the
+	// listing with labels and the three scope reads (SR-2.1, SR-3.4; LFR H5;
+	// b.47f).
 	CallLookup Call = "lookup"
 	// CallListPanes is the pane listing, list-panes -a (SR-3.7).
 	CallListPanes Call = "pane listing"
@@ -158,11 +159,12 @@ func formatSeconds(d time.Duration) string {
 type LookupAnswer struct {
 	// Sessions holds one entry per session line, in listing order.
 	Sessions []Session
-	// ServerPID is the server's #{pid}, the same on every line; 0 with no
-	// session lines, which carry no server identity (SR-3.3, LFR H5).
+	// ServerPID is the answering server's #{pid}, read by the identity line
+	// with or without session lines, and the same on every session line
+	// (SR-3.3; LFR H5; b.47f).
 	ServerPID int
-	// ServerStart is the server's #{start_time}, epoch seconds; 0 with no
-	// session lines.
+	// ServerStart is the answering server's #{start_time}, epoch seconds,
+	// read like ServerPID.
 	ServerStart int64
 	// ScopeValue reports a non-empty line in the scope section: a global,
 	// server or global-window @ad_owner value exists (SR-3.4 parse rule,

@@ -110,6 +110,15 @@ func only(f tmux.Failure, calls ...tmux.Call) map[tmux.Call]tmux.Failure {
 	return with(nil, f, calls...)
 }
 
+// without returns a copy of m without the given call kinds.
+func without(m map[tmux.Call]tmux.Failure, calls ...tmux.Call) map[tmux.Call]tmux.Failure {
+	out := with(m, 0)
+	for _, c := range calls {
+		delete(out, c)
+	}
+	return out
+}
+
 // The recorded reply wordings (SR-2.5; E.10 O1-O4, where every reply
 // arrives on standard error with exit status 1).
 const (
@@ -211,10 +220,13 @@ func Replies(socket string) []Entry {
 		{Name: "reply/surrounding-whitespace", Source: "composed: E.10 O1 wording, padded (SR-2.3 trim)",
 			Stderr: " \t" + wordNoServer + socket + " \r\n", Exit: 1,
 			Want: everyCall(tmux.FailNoServer), Socket: socket},
+		// Not a lookup entry: to the lookup this is an answer with no
+		// identity line, malformed with a fixed FirstLine of its own, as
+		// lookup/identity-missing (LFR H5; b.47f).
 		{Name: "reply/wording-on-stdout-exit0", Source: "SR-2.5: wording on stdout is data (E.10)",
 			Stdout:    wordNoServer + socket + "\n",
-			Want:      with(everyCall(0), tmux.FailUnrecognized, tmux.CallListPanes, tmux.CallCreate),
-			FirstLine: wordNoServer + socket, Lookup: tmux.LookupAnswer{ScopeValue: true}},
+			Want:      with(without(everyCall(0), tmux.CallLookup), tmux.FailUnrecognized, tmux.CallListPanes, tmux.CallCreate),
+			FirstLine: wordNoServer + socket},
 		{Name: "reply/wording-on-stdout-exit1", Source: "SR-2.3: replies only from stderr (E.10)",
 			Stdout: wordNoServer + socket + "\n", Exit: 1,
 			Want: everyCall(tmux.FailUnrecognized)},
@@ -222,10 +234,13 @@ func Replies(socket string) []Entry {
 	}
 }
 
-// Silent is a call that prints nothing and exits 0 (E.10 O4; E.3 I2): the
-// kills, text, Enter and key sends, label by id and the lookup of a server with no
-// sessions succeed; a create with no reply is FailUnrecognized (SR-2.1).
+// Silent is a call that prints nothing and exits 0 (E.10 O4; E.3 D3, P1):
+// the kills, text, Enter and key sends, label by id and a pane listing of a
+// server with no sessions succeed; a create with no reply is
+// FailUnrecognized (SR-2.1). It is not a lookup entry: the lookup always
+// prints its identity line, even with no sessions (lookup/I2-zero-sessions),
+// so its empty output is malformed (lookup/empty-output; LFR H5; b.47f).
 func Silent() Entry {
-	return Entry{Name: "reply/silent-success", Source: "E.10 O4; E.3 I2, D3, P1",
-		Want: with(everyCall(0), tmux.FailUnrecognized, tmux.CallCreate)}
+	return Entry{Name: "reply/silent-success", Source: "E.10 O4; E.3 D3, P1",
+		Want: with(without(everyCall(0), tmux.CallLookup), tmux.FailUnrecognized, tmux.CallCreate)}
 }

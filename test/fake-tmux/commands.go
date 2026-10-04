@@ -52,6 +52,8 @@ func (s *server) run(cmds [][]string) (output, error) {
 // exec runs one command and returns its exit status.
 func (s *server) exec(name string, args []string) (int, error) {
 	switch name {
+	case "display-message":
+		return s.displayMessage(args)
 	case "list-sessions":
 		return s.listSessions(args)
 	case "show-options":
@@ -102,6 +104,24 @@ func (s *server) sorted() []*faketmuxfix.Session {
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+// displayMessage prints display-message -p <fmt>, the lookup's server
+// identity read (LFR H5; b.47f): fmt expanded with the server's #{pid} and
+// #{start_time}, with or without sessions. On a socket with no server (no
+// table, or no create yet) nothing answers: it fails with the catalogue's
+// no-socket reply (exit 1), as tmux does there, so the fake never names a
+// server that does not run.
+func (s *server) displayMessage(args []string) (int, error) {
+	o, rest, ok := getopt(args, "", "p")
+	if !ok || len(rest) != 1 || !o.has('p') {
+		return 0, errBadArgv
+	}
+	if s.tb.Server == nil {
+		return s.reply(tmuxfix.NoSocket(s.socket)), nil
+	}
+	s.out.stdout += expand(rest[0], serverVars(s.tb.Server)) + "\n"
+	return 0, nil
 }
 
 func (s *server) listSessions(args []string) (int, error) {

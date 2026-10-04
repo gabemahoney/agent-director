@@ -261,8 +261,9 @@ func (c *Client) runData(call Call, socket string, cmds ...[]string) ([]byte, er
 	return res.Stdout, nil
 }
 
-// unparseable is the failure of a data call whose exit-0 output does not
-// parse.
-func unparseable(call Call, firstLine string) *CallError {
-	return &CallError{Call: call, Failure: FailUnrecognized, FirstLine: firstLine, HadStdout: true}
+// unparseable is the failure of a data call whose exit-0 output out does not
+// parse. out may be empty: a lookup always prints its server identity line,
+// so its empty output does not parse (b.47f).
+func unparseable(call Call, out []byte, firstLine string) *CallError {
+	return &CallError{Call: call, Failure: FailUnrecognized, FirstLine: firstLine, HadStdout: len(out) > 0}
 }

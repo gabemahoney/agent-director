@@ -12,9 +12,10 @@ import (
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
-// Raw-level parse tests of the one-call lookup (SR-3.4 with the LFR H6 parse
-// rule): session lines, scope values, malformed answers, label classes and
-// stored names, each answer from the replay catalogue or its builders.
+// Raw-level parse tests of the one-call lookup (SR-3.4 with the LFR H5 and H6
+// parse rule): the server identity line, session lines, scope values,
+// malformed answers, label classes and stored names, each answer from the
+// replay catalogue or its builders.
 
 // parseLookupOf runs one Lookup answered by e's recorded bytes and exit status.
 func parseLookupOf(t *testing.T, e tmuxfix.Entry) (tmux.LookupAnswer, error) {
@@ -48,26 +49,30 @@ func parseNoLeak(t *testing.T, ce *tmux.CallError, values []string) {
 }
 
 // parseScopeEmptyAnswer is a server with no sessions whose scope reads print a
-// value: no server identity, and a scope value.
+// value: its identity line, and a scope value.
 func parseScopeEmptyAnswer() tmuxfix.Entry {
 	return tmuxfix.Answer("composed/zero-sessions-scope-value", "LFR H5, H6", 294, 1790549353, nil,
 		tmuxfix.LabelValue(tmuxfix.Token, "$0", "agent-x", tmuxfix.StoreID))
 }
 
 // parseSessionAfterBlank is a session line after an empty line: the empty
-// line starts the scope section, so the answer is malformed. Both lines carry
-// five-field labels, the second another store's with a spaced id.
-func parseSessionAfterBlank() tmuxfix.Entry {
+// line starts the scope section, so the answer is malformed as
+// lookup/session-after-scope is. Both lines carry five-field labels, the
+// second another store's with a spaced id.
+func parseSessionAfterBlank(answers []tmuxfix.Entry) tmuxfix.Entry {
 	own := tmuxfix.LabelValue(tmuxfix.Token, "$0", "agent-x", tmuxfix.StoreID)
 	other := tmuxfix.LabelValue(tmuxfix.OtherToken, "$1", "agent x y", tmuxfix.OtherStoreID)
 	return tmuxfix.Entry{Name: "composed/session-after-blank", Source: "LFR H6",
-		Stdout: tmuxfix.SessionLine("$0", 1790549353, 294, 1790549353, "a", own) + "\n\n" +
+		Stdout: tmuxfix.IdentityLine(294, 1790549353) + "\n" +
+			tmuxfix.SessionLine("$0", 1790549353, 294, 1790549353, "a", own) + "\n\n" +
 			tmuxfix.SessionLine("$1", 1790549353, 294, 1790549353, "b", other) + "\n",
+		FirstLine:   tmuxfix.Find(answers, "lookup/session-after-scope").FirstLine,
 		LabelValues: []string{own, other}}
 }
 
-// TestParseLookupRule checks every catalogue lookup answer against the LFR H6
-// rule: parsed sessions and server fields, ScopeValue, or a malformed answer.
+// TestParseLookupRule checks every catalogue lookup answer against the LFR H5
+// and H6 rule: parsed sessions and server fields, ScopeValue, or a malformed
+// answer with the fixed FirstLine of the rule it breaks.
 func TestParseLookupRule(t *testing.T) {
 	answers := tmuxfix.LookupAnswers()
 	find := func(name string) tmuxfix.Entry { return tmuxfix.Find(answers, name) }
@@ -83,16 +88,25 @@ func TestParseLookupRule(t *testing.T) {
 		{entry: find("lookup/F2-server-or-global-window"), scope: true},
 		{entry: find("lookup/F2-window-or-pane")},
 		{entry: find("lookup/I2-zero-sessions")},
+		{entry: find("lookup/I2-identity-shaped-scope-value"), scope: true},
 		{entry: find("lookup/scope-blank-lines")},
 		{entry: parseScopeEmptyAnswer(), scope: true},
 		{entry: find("lookup/session-after-scope"), malformed: true},
 		{entry: find("lookup/server-pid-disagrees"), malformed: true},
 		{entry: find("lookup/server-start-disagrees"), malformed: true},
+		{entry: find("lookup/identity-disagrees"), malformed: true},
+		{entry: find("lookup/identity-missing"), malformed: true},
+		{entry: find("lookup/identity-after-session"), malformed: true},
+		{entry: find("lookup/identity-pid-unparseable"), malformed: true},
+		{entry: find("lookup/identity-start-unparseable"), malformed: true},
+		{entry: find("lookup/identity-missing-field"), malformed: true},
+		{entry: find("lookup/identity-extra-field"), malformed: true},
+		{entry: find("lookup/empty-output"), malformed: true},
 		{entry: find("lookup/created-unparseable"), malformed: true},
 		{entry: find("lookup/pid-unparseable"), malformed: true},
 		{entry: find("lookup/start-unparseable"), malformed: true},
 		{entry: find("lookup/missing-label-field"), malformed: true},
-		{entry: parseSessionAfterBlank(), malformed: true},
+		{entry: parseSessionAfterBlank(answers), malformed: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.entry.Name, func(t *testing.T) {
@@ -100,8 +114,14 @@ func TestParseLookupRule(t *testing.T) {
 			if tc.malformed {
 				ce := parseWantFailure(t, err, tmux.CallLookup, tmux.FailUnrecognized)
 				parseNoLeak(t, ce, tc.entry.LabelValues)
+				if tc.entry.FirstLine == "" || ce.FirstLine != tc.entry.FirstLine {
+					t.Errorf("FirstLine = %q, want %q", ce.FirstLine, tc.entry.FirstLine)
+				}
 				if !reflect.DeepEqual(ans, tmux.LookupAnswer{}) {
 					t.Errorf("malformed answer returned data: %+v", ans)
+				}
+				if want := tc.entry.Stdout != ""; ce.HadStdout != want {
+					t.Errorf("HadStdout = %v, want %v", ce.HadStdout, want)
 				}
 				return
 			}
@@ -111,8 +131,9 @@ func TestParseLookupRule(t *testing.T) {
 			if ans.ScopeValue != tc.scope {
 				t.Errorf("ScopeValue = %v, want %v", ans.ScopeValue, tc.scope)
 			}
-			if len(ans.Sessions) == 0 && (ans.ServerPID != 0 || ans.ServerStart != 0) {
-				t.Errorf("no session lines but server = %d/%d, want zero", ans.ServerPID, ans.ServerStart)
+			// b.47f: the identity line names the server with or without session lines.
+			if ans.ServerPID == 0 || ans.ServerStart == 0 {
+				t.Errorf("server = %d/%d, want the identity line's", ans.ServerPID, ans.ServerStart)
 			}
 			if !reflect.DeepEqual(ans, tc.entry.Lookup) {
 				t.Errorf("answer = %+v\nwant     %+v", ans, tc.entry.Lookup)

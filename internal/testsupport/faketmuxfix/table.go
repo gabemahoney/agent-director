@@ -47,7 +47,11 @@ type Table struct {
 	Socket string `json:"socket"`
 	// Server is the running server; nil means none. A create on a socket
 	// with no server starts one (PID: the fake's parent, the calling client;
-	// Start: the current time).
+	// Start: the current time). It stays when its last session goes, as a
+	// tmux server with exit-empty off does, and the lookup's identity line
+	// names it with or without sessions; with none, the fake fails the
+	// lookup with the catalogue's no-socket reply, as tmux does on a socket
+	// no server listens on (LFR H5; b.47f).
 	Server *Server `json:"server,omitempty"`
 	// Scope holds the @ad_owner values the lookup's three scope reads print
 	// and sessions inherit (SR-3.4).

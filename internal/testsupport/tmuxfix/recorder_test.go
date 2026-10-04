@@ -207,8 +207,9 @@ func TestRecorder_Servers(t *testing.T) {
 				}
 				return
 			}
-			if a := lookup(t, r, sockA); len(a.Sessions) != 0 || a.ServerPID != 0 || a.ScopeValue {
-				t.Errorf("lookup after %s = %+v, want an empty server with no scope value", tc.name, a)
+			// b.47f: an empty server's answer still names it.
+			if a := lookup(t, r, sockA); len(a.Sessions) != 0 || a.ServerPID != second.PID || a.ServerStart != second.Start || a.ScopeValue {
+				t.Errorf("lookup after %s = %+v, want the new server, empty, with no scope value", tc.name, a)
 			}
 			reply, err := r.NewSession(sockA, "n", "/tmp", nil, nil, tmuxfix.Token, agent, tmuxfix.StoreID)
 			if err != nil {

@@ -103,6 +103,7 @@ func callTableExpire() callTableVerb {
 			ctGoneForeignLabel:         deleted,
 			ctGoneNameUnlabelled:       deleted,
 			ctGoneServerRestarted:      deleted,
+			ctGoneEmptyServer:          deleted,
 			ctGoneNoServer:             deleted,
 			ctGoneNoSocket:             deleted,
 			ctDifferentRebound:         kept("tmux_server_changed", ""),

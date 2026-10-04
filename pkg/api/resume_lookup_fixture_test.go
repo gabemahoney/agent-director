@@ -79,8 +79,8 @@ func (e *killEnv) seedResumableRow(t *testing.T, spec killRowSpec) resumeRow {
 // GetSpawn refuses) with a cwd (when spec gives none), a config directory
 // whose .claude.json lacks the cwd's entry, its transcript there (when it has
 // a session id), e.defaultSocket as its socket, and its recorded server
-// running there with a bystander session (an empty listing names no server),
-// so a normal lookup reads Gone with no ad.provenance.disagree; spec.Opts
+// running there with a bystander session, so a normal lookup reads Gone with
+// no ad.provenance.disagree; spec.Opts
 // still go last.
 func (e *killEnv) seedOnServer(t *testing.T, spec killRowSpec, seed func(*testing.T, killRowSpec) killRow) resumeRow {
 	t.Helper()

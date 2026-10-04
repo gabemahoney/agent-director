@@ -64,11 +64,6 @@ SQLite file; everything else is tmux.
     `ErrTmuxSessionConflict`, and `expire` keeps the row on every run.
     `find-missing` still marks a row whose agent process is dead,
     whatever tmux shows.
-  - Keep `exit-empty` on, the tmux default. With it off, a server left
-    with no sessions keeps running and reads to agent-director as "a
-    different server" (`ErrTmuxNotAvailable`) until a session is created
-    on it again; until then `resume`, reuse and `kill` of a `pending` row
-    refuse, and `expire` keeps rows.
   - No tmux server needs to be running: agent-director starts one when
     it launches an agent.
 - `jq`, `sqlite3` and `file` on PATH (the installer checks for them).

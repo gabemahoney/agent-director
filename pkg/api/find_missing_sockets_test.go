@@ -247,7 +247,8 @@ func TestFindMissingSocketsAnswersThatStopNothing(t *testing.T) {
 }
 
 // TestFindMissingSocketsRecordedServerCheck: a no-server reply, an empty listing or another server's listing at
-// the recorded socket marks the row while the recorded server process is gone, else notes tmux_server_changed.
+// the recorded socket marks the row while the recorded server process is gone, else notes tmux_server_changed;
+// only a listing, empty or not, logs server_restarted (b.47f).
 func TestFindMissingSocketsRecordedServerCheck(t *testing.T) {
 	replies := []struct {
 		name     string
@@ -259,7 +260,7 @@ func TestFindMissingSocketsRecordedServerCheck(t *testing.T) {
 		}, nil},
 		{"empty listing", func() *tmuxfix.Recorder {
 			return tmuxfix.NewRecorder().StartServer(apitest.TestSocket, tmuxfix.Server{})
-		}, nil},
+		}, []string{tmux.ReasonServerRestarted}},
 		{"another server's listing", func() *tmuxfix.Recorder {
 			return tmuxfix.NewRecorder().SeedSessions(apitest.TestSocket, tmuxfix.SeedSession{Name: "other"})
 		}, []string{tmux.ReasonServerRestarted}},

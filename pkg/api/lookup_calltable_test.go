@@ -43,6 +43,7 @@ const (
 	ctGoneForeignLabel         callTableOutcome = "gone, only another row's label"
 	ctGoneNameUnlabelled       callTableOutcome = "gone, an unlabelled session holds the row's name"
 	ctGoneServerRestarted      callTableOutcome = "gone, server restarted"
+	ctGoneEmptyServer          callTableOutcome = "gone, the recorded server running with no session"
 	ctGoneNoServer             callTableOutcome = "gone, no server running and recorded server gone"
 	ctGoneNoSocket             callTableOutcome = "gone, socket missing and recorded server gone"
 	ctDifferentRebound         callTableOutcome = "different server, socket rebound while the recorded server runs"
@@ -125,6 +126,12 @@ func callTableLookupColumns() []callTableColumn {
 			e.rec.RestartServer(r.Socket, tmuxfix.Server{})
 			e.syncServers()
 			e.seedBystander(t, r.Socket)
+		}},
+		// b.47f: tmux's exit-empty off keeps the server up; its empty listing still names it.
+		{outcome: ctGoneEmptyServer, spec: goneNoSession, world: func(_ *testing.T, e *killEnv, r *killRow) {
+			e.ensureServer(r)
+			e.rec.EmptyServer(r.Socket)
+			e.syncServers()
 		}},
 		{outcome: ctGoneNoServer, spec: gone, world: callTableStop(tmux.FailNoServer, true)},
 		{outcome: ctGoneNoSocket, spec: gone, world: callTableStop(tmux.FailNoSocket, true)},
@@ -361,6 +368,7 @@ func callTableKill() callTableVerb {
 		ctGoneForeignLabel:         gone,
 		ctGoneNameUnlabelled:       gone,
 		ctGoneServerRestarted:      gone,
+		ctGoneEmptyServer:          gone,
 		ctGoneNoServer:             gone,
 		ctGoneNoSocket:             gone,
 		ctActionRecognised:         endedBy(tmux.CallKillSession),

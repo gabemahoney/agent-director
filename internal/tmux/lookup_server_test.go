@@ -7,19 +7,22 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/procstarttimefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
 // The clock-free server check of SR-3.3 with the u8 review amendments: match,
-// restarted, different server and no identity, over every reply shape.
+// restarted, different server and no identity, over every reply shape; an
+// empty listing names its server too (b.47f).
 
 // replyShape is what answers the row's socket in a server-check case.
 type replyShape struct {
 	name  string
 	setup func(f *lookupFixture)
-	// listed: the answer has session lines, from lookupOther.
-	listed bool
+	// answered: lookupOther answered, with or without session lines (its
+	// identity line names it either way; b.47f).
+	answered bool
 	// gone is the outcome when the recorded server process reads gone.
 	gone lookupWant
 }
@@ -38,14 +41,16 @@ func noReply(fl tmux.Failure) func(*lookupFixture) {
 }
 
 // replyShapes are the SR-3.3 reply shapes where the recorded identity is not
-// matched; a no-server or zero-session Gone logs no reason.
+// matched: a listing, empty or not, with another identity logs server_restarted
+// once the recorded process is gone (b.47f); a no-server or no-socket Gone
+// logs no reason.
 var replyShapes = []replyShape{
-	{name: "listing with the current label", setup: answeredBy(lblCurrent), listed: true,
+	{name: "listing with the current label", setup: answeredBy(lblCurrent), answered: true,
 		gone: lookupWant{Verdict: tmux.Ours, Token: "ours", Server: "restarted", Ours: at{0}, Disagree: []string{"server_restarted"}}},
-	{name: "listing with a foreign label", setup: answeredBy(lblForeign), listed: true,
+	{name: "listing with a foreign label", setup: answeredBy(lblForeign), answered: true,
 		gone: lookupWant{Verdict: tmux.Gone, Token: "gone", Server: "restarted", Disagree: []string{"server_restarted"}}},
-	{name: "zero-session listing", setup: answeredBy(),
-		gone: lookupWant{Verdict: tmux.Gone, Token: "gone", Server: "restarted"}},
+	{name: "zero-session listing", setup: answeredBy(), answered: true,
+		gone: lookupWant{Verdict: tmux.Gone, Token: "gone", Server: "restarted", Disagree: []string{"server_restarted"}}},
 	{name: "no-server reply", setup: noReply(tmux.FailNoServer),
 		gone: lookupWant{Verdict: tmux.Gone, Token: "gone", Server: "restarted"}},
 	{name: "no-socket reply", setup: noReply(tmux.FailNoSocket),
@@ -129,7 +134,7 @@ func TestLookupServer_RecordedIdentityNotMatched(t *testing.T) {
 						t.Errorf("start times asked of %v, want once of the recorded pid %d", f.Asked, lookupRecorded.PID)
 					}
 					var answering tmuxfix.Server
-					if shape.listed {
+					if shape.answered {
 						answering = lookupOther
 					}
 					checkAnswering(t, got, answering)
@@ -139,8 +144,9 @@ func TestLookupServer_RecordedIdentityNotMatched(t *testing.T) {
 	}
 }
 
-// A matched identity, or none recorded, is decided without the start-time
-// reader; with none recorded whichever server answers counts (Adopt on Ours).
+// A matched identity (an empty listing of the recorded server included;
+// b.47f), or none recorded, is decided without the start-time reader; with
+// none recorded whichever server answers counts (Adopt on Ours).
 func TestLookupServer_NoReaderCall(t *testing.T) {
 	onRecorded := func(k lbl) func(*lookupFixture) { return func(f *lookupFixture) { f.seed(k) } }
 	tests := []struct {
@@ -156,10 +162,12 @@ func TestLookupServer_NoReaderCall(t *testing.T) {
 			lookupWant{Verdict: tmux.Leftover, Token: "leftover", Server: "match", Leftovers: at{0}}, lookupRecorded},
 		{"match, foreign label", nil, onRecorded(lblForeign),
 			lookupWant{Verdict: tmux.Gone, Token: "gone", Server: "match"}, lookupRecorded},
+		{"match, zero-session listing", nil, func(*lookupFixture) {},
+			lookupWant{Verdict: tmux.Gone, Token: "gone", Server: "match"}, lookupRecorded},
 		{"no identity, listing with the current label", []lookupRowOpt{rowNoServer}, answeredBy(lblCurrent),
 			lookupWant{Verdict: tmux.Ours, Token: "ours", Server: "unknown", Ours: at{0}, Adopt: true}, lookupOther},
 		{"no identity, zero-session listing", []lookupRowOpt{rowNoServer}, answeredBy(),
-			lookupWant{Verdict: tmux.Gone, Token: "gone", Server: "unknown"}, tmuxfix.Server{}},
+			lookupWant{Verdict: tmux.Gone, Token: "gone", Server: "unknown"}, lookupOther},
 		{"no identity, no-server reply", []lookupRowOpt{rowNoServer}, noReply(tmux.FailNoServer),
 			lookupWant{Verdict: tmux.Gone, Token: "gone", Server: "unknown"}, tmuxfix.Server{}},
 		{"no identity, no-socket reply", []lookupRowOpt{rowNoServer}, noReply(tmux.FailNoSocket),
@@ -177,6 +185,38 @@ func TestLookupServer_NoReaderCall(t *testing.T) {
 				t.Errorf("start times asked of %v, want none", calls)
 			}
 			checkAnswering(t, got, tc.answering)
+		})
+	}
+}
+
+// TestLookupServer_ZeroSessionsReplay (b.47f): I2's recorded zero-session
+// answer, through the production parse, names its server: Gone on a match,
+// a different server while the recorded process runs, restarted (logging
+// server_restarted) once it is gone.
+func TestLookupServer_ZeroSessionsReplay(t *testing.T) {
+	e := tmuxfix.Find(tmuxfix.LookupAnswers(), "lookup/I2-zero-sessions")
+	i2 := tmuxfix.Server{PID: e.Lookup.ServerPID, Start: e.Lookup.ServerStart, ProcStart: procstarttimefix.LinuxProcStarttime}
+	cases := []struct {
+		name     string
+		recorded tmuxfix.Server
+		proc     procfix.Process
+		want     lookupWant
+	}{
+		{"the recorded server, running", i2, procfix.Alive(i2.ProcStart),
+			lookupWant{Verdict: tmux.Gone, Token: "gone", Server: "match"}},
+		{"another server, the recorded one running", lookupRecorded, procfix.Alive(lookupRecorded.ProcStart),
+			differentServer},
+		{"another server, the recorded one gone", lookupRecorded, procfix.Gone(),
+			lookupWant{Verdict: tmux.Gone, Token: "gone", Server: "restarted", Disagree: []string{"server_restarted"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newLookupFixture(t, rowServer(tc.recorded))
+			f.PC.Set(tc.recorded.PID, tc.proc)
+			c, _ := newReplay(t, e)
+			got := f.runOn(c, "")
+			f.check(got, tc.want)
+			checkAnswering(t, got, i2)
 		})
 	}
 }

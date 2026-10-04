@@ -120,7 +120,7 @@ func TestResumeClientUnreadableCreationTime(t *testing.T) {
 			calls = append(calls, a)
 		}
 	}
-	if len(calls) != 1 || !containsRun(calls[0], []string{"-S", r.Socket, "list-sessions"}) {
+	if len(calls) != 1 || !isLookupOn(calls[0], r.Socket) {
 		t.Errorf("fake-tmux socket calls = %q; want the one lookup on %s and no create", calls, r.Socket)
 	}
 }

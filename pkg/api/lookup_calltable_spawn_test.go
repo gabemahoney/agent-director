@@ -173,6 +173,7 @@ func callTableSpawn() callTableVerb {
 					return apitest.DescHeldDifferentID(p)
 				}}),
 			ctGoneServerRestarted: {na: noServerIdentity},
+			ctGoneEmptyServer:     {na: noServerIdentity},
 			ctGoneNoServer:        {na: noDuplicate},
 			ctGoneNoSocket:        {na: noDuplicate},
 			ctDifferentRebound:    {na: noServerIdentity},

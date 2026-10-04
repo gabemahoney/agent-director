@@ -32,8 +32,8 @@ const defaultStorePath = "~/.agent-director/state.db"
 // matches by prefix: no verb uses it, and none may.
 // *tmux.Client and tmuxfix.Recorder implement it.
 type TmuxClient interface {
-	// Lookup makes the one-call lookup on socket: sessions with labels and
-	// the scope reads.
+	// Lookup makes the one-call lookup on socket: the answering server's
+	// identity, sessions with labels and the scope reads.
 	Lookup(socket string) (TmuxLookupAnswer, error)
 	// ListPanes lists every pane of the server at socket, each with its pane
 	// label's token (TmuxPane.AdPane).

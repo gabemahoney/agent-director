@@ -150,8 +150,8 @@ func TestResumeCreateArgvChainsLabelOnRecordedSocket(t *testing.T) {
 			if want := map[bool]int{false: 2, true: 3}[byID]; len(argvs) != want {
 				t.Fatalf("socket invocations = %q; want %d", argvs, want)
 			}
-			if lookup := argvs[0]; !containsRun(lookup, []string{"-S", e.socket, "list-sessions"}) {
-				t.Errorf("first socket invocation %q; want the lookup, list-sessions on -S %s", lookup, e.socket)
+			if lookup := argvs[0]; !isLookupOn(lookup, e.socket) {
+				t.Errorf("first socket invocation %q; want the lookup on -S %s", lookup, e.socket)
 			}
 			create, target := argvs[1], "="+name+":"
 			if !containsRun(create, []string{"-u", "-S", e.socket, "new-session"}) || !containsRun(create, []string{"-s", name}) {

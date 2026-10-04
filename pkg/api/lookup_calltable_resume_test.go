@@ -141,6 +141,7 @@ func callTableResume() callTableVerb {
 			return apitest.DescHeldNoValidID(p)
 		}),
 		ctGoneServerRestarted: launch,
+		ctGoneEmptyServer:     launch,
 		ctGoneNoServer:        launch,
 		ctGoneNoSocket:        launch,
 		ctActionRecognised: {errName: "ErrTmuxSessionCreate", sent: true, calls: launched,
@@ -265,11 +266,13 @@ func callTableResumeHeld() callTableVerb {
 			ctGoneNameUnlabelled: held(heldSpec{Holder: holderNone}, noValidID),
 			// Judged on the answering server: restarted at both lookups, its recorded server gone.
 			ctGoneServerRestarted: held(heldSpec{Holder: holderNone, Server: heldServerRestarted}, noValidID),
-			ctGoneNoServer:        vanished(true),
-			ctGoneNoSocket:        vanished(true),
-			ctDifferentRebound:    differentServer(heldSpec{Holder: holderNone, Server: heldServerRebound}, false),
-			ctDifferentRestarted:  differentServer(heldSpec{Holder: holderVanished}, true),
-			ctDifferentNoServer:   differentServer(heldSpec{Holder: holderVanished}, true),
+			// The recorded server is left with no session as the create returns.
+			ctGoneEmptyServer:    vanished(true),
+			ctGoneNoServer:       vanished(true),
+			ctGoneNoSocket:       vanished(true),
+			ctDifferentRebound:   differentServer(heldSpec{Holder: holderNone, Server: heldServerRebound}, false),
+			ctDifferentRestarted: differentServer(heldSpec{Holder: holderVanished}, true),
+			ctDifferentNoServer:  differentServer(heldSpec{Holder: holderVanished}, true),
 			ctConflictScope: after("ErrTmuxSessionConflict", heldSpec{Holder: holderConflicting}, false, true,
 				func(_ *killEnv, sc *heldScene) apitest.DescCase {
 					return apitest.DescConflictingLabels(apitest.ConflictingLabels{InstanceID: sc.r.ID, Scope: true, NothingWasDone: true})

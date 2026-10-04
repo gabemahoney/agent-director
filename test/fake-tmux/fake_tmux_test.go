@@ -206,7 +206,9 @@ func TestEveryCallKindSucceeds(t *testing.T) {
 }
 
 // TestLookupAnswersFromTable checks sessions, typed labels, scope borrowing
-// and server fields; a socket with no table answers empty.
+// and server fields, a server with no session included; a socket with no
+// server (no table, or a table without one) fails with the no-socket reply
+// (b.47f).
 func TestLookupAnswersFromTable(t *testing.T) {
 	borrowed := func(set func(*faketmuxfix.Scope, string)) *faketmuxfix.Table {
 		tb := faketmuxfix.Table{
@@ -223,9 +225,15 @@ func TestLookupAnswersFromTable(t *testing.T) {
 		name  string
 		table *faketmuxfix.Table
 		want  tmux.LookupAnswer
+		// noServer: the lookup fails with the no-socket reply.
+		noServer bool
 	}
 	cases := []lookupCase{
-		{name: "no table", want: tmux.LookupAnswer{}},
+		{name: "no table", noServer: true},
+		{name: "table with no server", noServer: true,
+			table: &faketmuxfix.Table{Injections: []faketmuxfix.Injection{faketmuxfix.ExitCode(tmux.CallCreate, 1)}}},
+		{name: "server with no session", table: &faketmuxfix.Table{Server: &faketmuxfix.Server{PID: seedPID, Start: seedStart}},
+			want: tmux.LookupAnswer{ServerPID: seedPID, ServerStart: seedStart}},
 		{name: "sessions valid and none", table: &seededTable, want: tmux.LookupAnswer{
 			ServerPID: seedPID, ServerStart: seedStart, Sessions: []tmux.Session{
 				{ID: "$0", Created: seedStart + 1, Name: "alpha", Label: tmuxfix.Valid(tmuxfix.Token, "agent-a", tmuxfix.StoreID)},
@@ -253,6 +261,14 @@ func TestLookupAnswersFromTable(t *testing.T) {
 			socket := newSocket(t)
 			if tc.table != nil {
 				tables.Write(t, socket, *tc.table)
+			}
+			if tc.noServer {
+				got, err := c.Lookup(socket)
+				assertFailure(t, err, tmux.CallLookup, tmux.FailNoSocket, tmuxfix.NoSocket(socket))
+				if !reflect.DeepEqual(got, tmux.LookupAnswer{}) {
+					t.Errorf("Lookup = %+v, want no answer", got)
+				}
+				return
 			}
 			if got := lookup(t, c, socket); !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("Lookup = %+v, want %+v", got, tc.want)
@@ -347,7 +363,7 @@ func TestCreateByIDNameThenSetLabel(t *testing.T) {
 
 // TestCreateOutcomes checks the injected create outcomes through the client:
 // with the create's effect the lookup shows the labelled session, without it
-// nothing is created.
+// nothing is created, not even a server.
 func TestCreateOutcomes(t *testing.T) {
 	bare := tmuxfix.Find(tmuxfix.Replies(""), "reply/nonzero-empty-stderr")
 	unparseable := tmuxfix.Find(tmuxfix.CreateReplies(), "create/reply-unparseable")
@@ -359,7 +375,8 @@ func TestCreateOutcomes(t *testing.T) {
 		entry   tmuxfix.Entry
 		want    tmux.Failure
 		timeout time.Duration
-		// wantLabel is the created session's label; nil means no session.
+		// wantLabel is the created session's label; nil means no session and
+		// no server.
 		wantLabel *tmux.Label
 	}{
 		{name: "effect then hang", inj: faketmuxfix.Hang(tmux.CallCreate).WithEffect(),
@@ -384,11 +401,12 @@ func TestCreateOutcomes(t *testing.T) {
 			tables.Inject(t, socket, tc.inj)
 			_, err := create(t, c, socket, "agent-o", "agent-o")
 			assertFailure(t, err, tmux.CallCreate, tc.want, tc.entry)
-			ans := lookup(t, c, socket)
-			switch {
-			case tc.wantLabel == nil && len(ans.Sessions) != 0:
-				t.Errorf("Lookup sessions = %+v, want none", ans.Sessions)
-			case tc.wantLabel != nil && (len(ans.Sessions) != 1 || ans.Sessions[0].Label != *tc.wantLabel):
+			if tc.wantLabel == nil {
+				_, err := c.Lookup(socket)
+				assertFailure(t, err, tmux.CallLookup, tmux.FailNoSocket, tmuxfix.NoSocket(socket))
+				return
+			}
+			if ans := lookup(t, c, socket); len(ans.Sessions) != 1 || ans.Sessions[0].Label != *tc.wantLabel {
 				t.Errorf("Lookup sessions = %+v, want one labelled %+v", ans.Sessions, *tc.wantLabel)
 			}
 		})

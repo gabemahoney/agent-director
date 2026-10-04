@@ -116,16 +116,16 @@ func notFound(call tmux.Call) *tmux.CallError {
 	return &tmux.CallError{Call: call, Failure: tmux.FailUnrecognized, ExitStatus: 1}
 }
 
-// Lookup answers the one-call lookup from socket's table: the sessions in
-// listing order (by stored name) with each line's label under the scope
-// values, the server identity (zero with no sessions) and ScopeValue.
+// Lookup answers the one-call lookup from socket's table: the bound server's
+// identity, with or without sessions (the lookup's identity line; LFR H5;
+// b.47f), the sessions in listing order (by stored name) with each line's
+// label under the scope values, and ScopeValue.
 func (r *Recorder) Lookup(socket string) (tmux.LookupAnswer, error) {
 	ans, err := r.do(SocketCall{Call: tmux.CallLookup, Socket: socket}, func(st *socketState, _ Script) (any, *tmux.CallError) {
-		var a tmux.LookupAnswer
+		a := tmux.LookupAnswer{ServerPID: st.server.PID, ServerStart: st.server.Start}
 		for _, s := range st.server.listed() {
 			a.Sessions = append(a.Sessions, tmux.Session{ID: s.id, Created: s.created, Name: s.name,
 				Label: st.listedLabel(s)})
-			a.ServerPID, a.ServerStart = st.server.PID, st.server.Start
 		}
 		a.ScopeValue = len(st.scope) > 0
 		return a, nil

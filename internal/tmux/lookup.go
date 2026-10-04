@@ -77,11 +77,12 @@ const (
 	Ours Verdict = iota + 1
 	// Leftover: no current label, and one or more old labels of this row.
 	Leftover
-	// Gone: neither, on the recorded server, a restarted one, or (with no
-	// identity recorded) the server at the socket; also a no-server or
-	// no-socket reply, or an empty listing, whose recorded server process is
-	// gone; and, with no server identity recorded, an empty listing or a
-	// no-server reply (SR-3.3).
+	// Gone: neither, on the recorded server (an empty listing of it
+	// included; LFR H5; b.47f), a restarted one, or (with no identity
+	// recorded) the server at the socket; also a no-server or no-socket
+	// reply, or an empty listing of another server, whose recorded server
+	// process is gone; and, with no server identity recorded, an empty
+	// listing or a no-server reply (SR-3.3).
 	Gone
 	// CantTell: see CantTellKind.
 	CantTell
@@ -110,10 +111,10 @@ const (
 // The Result.Server values (SR-3.3; SR-14's server field).
 const (
 	// ServerMatch: the answering server's pid and start equal the recorded
-	// ones.
+	// ones, on a listing with or without sessions (LFR H5; b.47f).
 	ServerMatch = "match"
-	// ServerRestarted: the recorded server process is gone (a listing with
-	// another identity, an empty listing, or a no-server reply).
+	// ServerRestarted: the recorded server process is gone (a listing, empty
+	// or not, with another identity, or a no-server reply).
 	ServerRestarted = "restarted"
 	// ServerDiffers: every different-server outcome.
 	ServerDiffers = "differs"
@@ -127,8 +128,10 @@ const (
 // and name_changed (SR-3.4), and never write a literal for any of them.
 // pid_mismatch is retired as a disagree reason (SR-3.8; WD 2026-09-29c).
 const (
-	// ReasonServerRestarted: a listing carried another server identity and
-	// the recorded server process is gone (AC-LKP-19).
+	// ReasonServerRestarted: a listing, with or without session lines,
+	// carried another server identity and the recorded server process is
+	// gone (AC-LKP-19; LFR H5; b.47f). A no-server or no-socket reply logs
+	// none: nothing answered.
 	ReasonServerRestarted = "server_restarted"
 	// ReasonServerMismatch: every different_server outcome.
 	ReasonServerMismatch = "server_mismatch"
@@ -202,8 +205,9 @@ type Result struct {
 	// "" when no server check ran (unreadable, tmux unavailable).
 	Server string
 	// ServerPID and ServerStart are the answering server's #{pid} and
-	// #{start_time} from the lookup's lines, for adoption (SR-3.6); zero when
-	// no session line was read.
+	// #{start_time} from the lookup's identity line, for adoption (SR-3.6);
+	// set for an empty listing too (LFR H5; b.47f), zero when no answer was
+	// read.
 	ServerPID   int
 	ServerStart int64
 	// Adopt is true for Ours on a row with no recorded server identity
@@ -275,11 +279,7 @@ func Lookup(c LookupClient, pc ProcChecker, row Launch, holderName string) Resul
 // two or more are provenance_conflict; else one or more old is Leftover; else
 // Gone. Another store's sessions count toward Gone and are never listed.
 func Classify(ans LookupAnswer, pc ProcChecker, row Launch, holderName string) Result {
-	reply := replyListing
-	if len(ans.Sessions) == 0 {
-		reply = replyEmptyListing
-	}
-	sc := checkServer(row, pc, reply, ans)
+	sc := checkServer(row, pc, replyListing, ans)
 	r := Result{Server: sc.server, ServerPID: ans.ServerPID, ServerStart: ans.ServerStart}
 	r.Holder, r.HolderAmbiguous = matchHolder(ans.Sessions, holderName)
 	if r.Holder != nil {

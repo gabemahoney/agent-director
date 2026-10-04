@@ -188,7 +188,8 @@ func splitCommands(args []string) [][]string {
 // for a command outside the call set.
 func classify(cmd []string) tmux.Call {
 	switch cmd[0] {
-	case "list-sessions":
+	case "display-message", "list-sessions":
+		// The lookup starts with its server identity read (LFR H5; b.47f).
 		return tmux.CallLookup
 	case "list-panes":
 		return tmux.CallListPanes

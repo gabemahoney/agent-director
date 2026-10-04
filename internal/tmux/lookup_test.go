@@ -164,16 +164,19 @@ func TestLookupScopeValue(t *testing.T) {
 }
 
 // TestLookupScopeValueNoSessions: a zero-session listing with a scope value
-// is provenance_conflict too, with no identity recorded or a gone server.
+// is provenance_conflict too, with no identity recorded, on the recorded
+// server (b.47f) or on a restarted one, which also logs server_restarted.
 func TestLookupScopeValueNoSessions(t *testing.T) {
 	scoped := func(f *lookupFixture) { f.Rec.SetScope(testSocket, tmuxfix.ScopeGlobal, tmuxfix.ScopeValue{}) }
 	runLookupCases(t, []lookupCase{
 		{name: "no identity recorded", row: []lookupRowOpt{rowNoServer}, setup: scoped,
 			want: wantConflict(tmux.ServerUnknown, tmux.ReasonScopeValue)},
-		{name: "recorded server gone", setup: func(f *lookupFixture) {
+		{name: "recorded server", setup: scoped, want: wantConflict(tmux.ServerMatch, tmux.ReasonScopeValue)},
+		{name: "restarted, recorded server gone", setup: func(f *lookupFixture) {
+			f.Rec.RestartServer(testSocket, lookupOther)
+			f.syncProcs()
 			scoped(f)
-			f.PC.Set(lookupRecorded.PID, procfix.Gone())
-		}, want: wantConflict(tmux.ServerRestarted, tmux.ReasonScopeValue)},
+		}, want: wantConflict(tmux.ServerRestarted, tmux.ReasonServerRestarted, tmux.ReasonScopeValue)},
 	})
 }
 

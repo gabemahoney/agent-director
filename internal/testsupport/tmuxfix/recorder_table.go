@@ -273,6 +273,21 @@ func (r *Recorder) StopServer(socket string) *Recorder {
 	return r
 }
 
+// EmptyServer removes every session of socket's bound server, recording no
+// call: the server keeps running, bound, with its identity, scope values and
+// id counters, as a tmux server with exit-empty off does once its last session
+// ends (b.47f). It panics when no server is bound there.
+func (r *Recorder) EmptyServer(socket string) *Recorder {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	srv := r.socket(socket).server
+	if srv == nil {
+		panic("tmuxfix: EmptyServer: no server is bound to " + socket)
+	}
+	srv.sessions = nil
+	return r
+}
+
 // SetNoServerFailure sets the failure of a call on socket while no server is
 // bound there: tmux.FailNoSocket (the default: no socket file) or
 // tmux.FailNoServer (a stale socket file). Its CallError carries the socket.
