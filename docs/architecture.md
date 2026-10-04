@@ -4934,7 +4934,7 @@ relay-on Spawn still surfaces deny.
 
 ### The hook gate on the relay path
 
-(SR-22.9; build-lead decision A8.) A relayed PermissionRequest is gated
+(SR-22.9.) A relayed PermissionRequest is gated
 like every hook (see [Hooks move a row only for its own
 agent](#hooks-move-a-row-only-for-its-own-agent)), and a gate that does
 not hold is not a failure: it gets no deny envelope.
@@ -5277,7 +5277,7 @@ are also emitted but are not listed here.
 | Event | Source | Description |
 |-------|--------|-------------|
 | `ad.hook.fired` | `ad_hook` | One per `agent-director hook` invocation — records the hook payload and caller identity (SR-A-2.1, Epic 1) |
-| `ad.hook.ignored` | `ad_hook` | Exactly one per hook SR-22.9 did not apply (see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)), fail-open: a trail-write failure changes nothing and the hook still exits 0. Emitted by `emitIgnored` (`internal/hook/gate.go`) on the hook path and by `emitNoExecForm` (`internal/hook/noexec.go`, called from `cmd/agent-director`'s no-verb run through `hook.HandleNoExecForm`); both build the fields with `ignoredFields`. Carries `claude_instance_id`, `hook_event`, `reason` (one of four: `pid_mismatch`: the hook's parent process, with its start time, is not the row's recorded pane process; `no_pane_recorded`: the row records no pane, for a SessionStart only after its bounded wait for the launch's identity write; `subagent_event`: a SessionStart or SessionEnd whose payload carries a non-empty `agent_id`, decided before any write; `no_exec_form`: a no-verb run given a hook payload on stdin, from a Claude Code that does not run exec-form hooks, written with no store access, so `row_session_id` and `row_pane_pid` are always null and `claude_instance_id` is null when the environment has none or an invalid one), `parent_pid`, `parent_command` (the parent's command name from `probe.CommandNameReader`, read only for this record; null when unreadable), `hook_session_id` (null when the payload gives none), `row_session_id` and `row_pane_pid` (from one read of the row; null when the row records none or the read fails; `row_pane_pid` is build-lead decision A4). On the hook path, not written for a hook whose id has no row (`subagent_event` included), or for a SessionStart that lost to a changed row twice; `no_exec_form` reads no row and is always written. No `ad.hook.fired` accompanies a `no_exec_form` record. Never another row's id or any session-environment content (SR-14, SR-15) |
+| `ad.hook.ignored` | `ad_hook` | Exactly one per hook SR-22.9 did not apply (see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)), fail-open: a trail-write failure changes nothing and the hook still exits 0. Emitted by `emitIgnored` (`internal/hook/gate.go`) on the hook path and by `emitNoExecForm` (`internal/hook/noexec.go`, called from `cmd/agent-director`'s no-verb run through `hook.HandleNoExecForm`); both build the fields with `ignoredFields`. Carries `claude_instance_id`, `hook_event`, `reason` (one of four: `pid_mismatch`: the hook's parent process, with its start time, is not the row's recorded pane process; `no_pane_recorded`: the row records no pane, for a SessionStart only after its bounded wait for the launch's identity write; `subagent_event`: a SessionStart or SessionEnd whose payload carries a non-empty `agent_id`, decided before any write; `no_exec_form`: a no-verb run given a hook payload on stdin, from a Claude Code that does not run exec-form hooks, written with no store access, so `row_session_id` and `row_pane_pid` are always null and `claude_instance_id` is null when the environment has none or an invalid one), `parent_pid`, `parent_command` (the parent's command name from `probe.CommandNameReader`, read only for this record; null when unreadable), `hook_session_id` (null when the payload gives none), `row_session_id` and `row_pane_pid` (from one read of the row; null when the row records none or the read fails). On the hook path, not written for a hook whose id has no row (`subagent_event` included), or for a SessionStart that lost to a changed row twice; `no_exec_form` reads no row and is always written. No `ad.hook.fired` accompanies a `no_exec_form` record. Never another row's id or any session-environment content (SR-14, SR-15) |
 | `ad.spawn.state_transition` | `ad_spawn_store` | One per applied hook write (`ApplyHookTransition`, `RecordSessionStartIdentity`), including same-state writes, soft-refresh ticks and the gated `working` hold; a hook the gate did not apply emits none. SessionStart on a resumed row records `prior_state` `pending`. Hook-driven writes are the only ones that emit it: a spawn's insert and `find-missing`'s mark never did, `resume`'s move and restore do not (their own `ad.resume.*` events record them), and reuse's reset and restore do not (`ad.spawn.reused` and `ad.spawn.reuse_restored` record them) (SR-A-2.2, SR-14) |
 | `ad.row_mutation.committed` | `ad_store` | One per successful write to `permission_requests` (SR-A-2.6, Epic 3) |
 | `ad.decide.called` | `ad_decide` | One per `agent-director decide` invocation on every return path, carrying an `outcome` field set to the canonical err_name (or `ok`). Recognized failure outcomes include the no-op refusals `ErrAlreadyDecided` and `ErrRelayFallenBack` (a fallen-back refusal is a recognized outcome, not `ErrInternal`) (SR-A-2.4, Epic 4) |
@@ -8412,9 +8412,9 @@ This section does not repeat it.
     `internal/config`, and the stated Claude Code minimum from the tool's
     own `minClaudeCodeVersion` (2.1.280, in `tools/measure-exit/config.go`).
     - Each sampled case's rules read every usable sample, in any position,
-      once at least 20 are usable (`useSamples`, lead decision NB-1). The
-      largest time is the largest over all completed samples. The record
-      shows the recorded, used and dropped counts.
+      once at least 20 are usable (`useSamples`). The largest time is the
+      largest over all completed samples. The record shows the recorded,
+      used and dropped counts.
     - A default-budget "did not exit" is invalid in any position. Under a
       raised budget, a "did not exit" counts as a measured sample.
     - A `no_ended_at` sample makes its case invalid under any budget.
@@ -8936,9 +8936,9 @@ run in `make test-sandbox` (see
 
 ### Audit standard
 
-Per SRD §17, the orchestrator runs `make test-docker` first-hand, reads
-the per-case JSON stream, and signals "continue" only after confirming
-each case executed and passed.
+Per SRD §17, a Docker test plan is judged on the per-case JSON stream of
+a `make test-docker` run, read directly. The run is accepted only when
+that stream shows that each case executed and passed.
 
 ### Envelope-diff regression harness
 
@@ -10685,8 +10685,8 @@ package doc comment (`doc.go`, "# Description helper") says the same.
       default retention, same user and tmux environment, keeps and reports
       rows it cannot prove gone, agents never run it, "zero window").
     - `DescCleanupPointer()`: the short pointer (`expireCleanupPointer`)
-      the `kill` and `find-missing` Descriptions carry instead (Epic 15
-      build-lead decision 1). It requires "Agents never run expire" and
+      the `kill` and `find-missing` Descriptions carry instead. It
+      requires "Agents never run expire" and
       "operator-scheduled", and rejects the full sentence's phrases
       ("at the default retention", the keeps-and-reports phrase, "zero
       window"), so the full sentence cannot come back at those sites and

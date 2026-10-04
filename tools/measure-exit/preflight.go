@@ -175,7 +175,7 @@ func checkProbeCredentials(e environment) error {
 
 // checkLocalLayer refuses a real run that was given a deployment local
 // layer when a selected case needs the harness's generated layer, which is
-// the same file (lead decision 8): the two cannot sit side by side.
+// the same file: the two cannot sit side by side.
 func checkLocalLayer(c config, cases []caseSpec) error {
 	if c.mode != modeReal || c.localSettings == "" {
 		return nil

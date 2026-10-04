@@ -30,7 +30,7 @@ type pfSetup struct {
 }
 
 // gatewayOnlyRefused are the variables that would bill real mode somewhere
-// other than the gateway (user, 2026-10-01).
+// other than the gateway.
 var gatewayOnlyRefused = []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "AWS_ACCESS_KEY_ID",
 	"AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_BEARER_TOKEN_BEDROCK", "AWS_REGION", "AWS_PROFILE", "AWS_DEFAULT_REGION"}
 

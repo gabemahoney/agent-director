@@ -32,7 +32,7 @@ const (
 	verdictNotRun       = "not_run"
 )
 
-// RN-9 STOP flags (lead decision 11): decide exits 3 on any.
+// RN-9 STOP flags: decide exits 3 on any.
 const (
 	stopResumeNotApplied   = "resume-not-applied"
 	stopInProcessNoAgentID = "inprocess-teammate-lifecycle-without-agent-id"

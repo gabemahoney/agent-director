@@ -33,9 +33,9 @@ const (
 const minSamples = 20
 
 // sampleBuffer is how many samples per case a run takes beyond the floor
-// (user, 2026-10-02: L1 takes 22 per case): decide reads every completed
-// sample once a case has minSamples, so a flaky sample (a failed spawn, an
-// agent that never reported in) does not force a re-run.
+// (L1 takes 22 per case): decide reads every completed sample once a case
+// has minSamples, so a flaky sample (a failed spawn, an agent that never
+// reported in) does not force a re-run.
 const sampleBuffer = 2
 
 // defaultSamples is the per-case sample count when -samples is not given:

@@ -523,7 +523,7 @@ sandbox: _sandbox-build
 #                        own tag (the test image's pin stays).
 #   measure-exit         THE GATED LIVE RUN: it starts PAID real Claude Code
 #                        agents (MEASURE_MODE measure: L1, rn9: L2) through
-#                        the InferenceHub gateway, or the offline version
+#                        the configured gateway, or the offline version
 #                        probe (probe: L0). Run it only with the user's or the
 #                        operator's go-ahead. It refuses, before building
 #                        anything, unless ANTHROPIC_BASE_URL,
@@ -546,8 +546,8 @@ sandbox: _sandbox-build
 # The engine is docker, as test-image. Not a test plan: the harness is not in
 # test/docker-epics.txt. MEASURE_ARGS passes runner options (see the header
 # of tools/measure-exit/run.sh), e.g. MEASURE_ARGS="--mcp-config F".
-# MEASURE_CLAUDE_CODE_VERSION defaults to 2.1.280, the version this fleet's
-# workers run; L0 probes it explicitly (run.sh --deployed).
+# MEASURE_CLAUDE_CODE_VERSION defaults to 2.1.280, the deployed version; L0
+# probes it explicitly (run.sh --deployed).
 MEASURE_CLAUDE_CODE_VERSION ?= 2.1.280
 MEASURE_IMAGE ?= agent-director-measure:cc-$(MEASURE_CLAUDE_CODE_VERSION)
 MEASURE_MODE ?= measure

@@ -28,13 +28,13 @@ no API call.
 
 - **Approval.** No live run starts without explicit approval. The project
   owner approves the spend. First send a plan that names:
-  - the billing: the InferenceHub gateway only;
+  - the billing: the configured gateway only;
   - the session count, from the print-only output;
   - the estimated cost. Opus-class list prices come to roughly $10 each for
     L1 and L2. Gateway billing may differ.
   - the location: a Docker container on a named host.
 - **Who launches.** The operator launches L0, L1 and L2 from their own
-  shell, which holds the real InferenceHub values, once the spend is
+  shell, which holds the real gateway values, once the spend is
   approved. A launch from inside a Claude Code session needs
   `MX_ORCHESTRATOR_LAUNCH=1` (see [Live runs](#live-runs)). Nobody else
   runs `make measure-image` or `make measure-exit`: both targets chain
@@ -57,7 +57,8 @@ no API call.
 The runner forwards exactly four variables, **by name only** (`-e NAME`).
 Their values are never printed, logged, written to a file or mounted:
 
-- `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`: the InferenceHub gateway;
+- `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`: the gateway the run bills
+  to;
 - `ANTHROPIC_MODEL`: the model pinned for the run, the Opus id that
   production agents use;
 - `ANTHROPIC_SMALL_FAST_MODEL`: the background model.
@@ -110,9 +111,9 @@ verdict for the deployed version is the `deployed` line of
 
 - `deployed 2.1.280: RUNS exec-form hooks`: L1 and L2 may run at 2.1.280.
 - `deployed 2.1.280: does NOT run exec-form hooks`: **STOP and tell the user
-  at once.** agent-director's hooks are ignored at the deployed version, and L1 and L2
-  must not run at that version. L0 ends right after the guard verify, with
-  no bisection and no further build. `probe-summary.txt` gets
+  at once.** agent-director's hooks are ignored by the deployed version, and
+  L1 and L2 must not run at that version. L0 ends right after the guard
+  verify, with no bisection and no further build. `probe-summary.txt` gets
   `bisect skipped: the deployed 2.1.280 does NOT run exec-form hooks (STOP)`,
   and `run.sh` exits 3.
 - `UNDECIDED`: `run.sh` exits 1. Find out why before going on.
@@ -579,5 +580,6 @@ RN-2 and RN-9 entries. The keys are described in the main README's
 `kill_exit_wait_ms` is at least
 twice the largest default-budget time, rounded up to a whole second. RN-2
 may raise `stopping_window_seconds` or the stopping window's minimum. A
-default is never lowered without the user. RN-7 is reported only. The record goes back
-through the follow-up Task, never straight into the configuration.
+default is never lowered without the user. RN-7 is reported only. The
+record is applied in a separate change, never straight into the
+configuration.

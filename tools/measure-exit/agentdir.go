@@ -19,8 +19,7 @@ func projectLayerPath(cwd string) string {
 // operator's staged project layer, then either the harness's generated
 // layer (generated non-nil) or a copy of the staged local layer. The staged
 // copies are only read. A generated layer beside a staged local layer is
-// refused (lead decision 8; checkLocalLayer refuses it before a real run
-// starts).
+// refused (checkLocalLayer refuses it before a real run starts).
 func (h *harness) prepareAgentDir(caseID string, index int, generated map[string]any) (string, error) {
 	dir, err := h.sampleWorkDir(caseID, index)
 	if err != nil {

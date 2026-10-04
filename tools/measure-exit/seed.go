@@ -17,9 +17,8 @@ const claudeStateFile = ".claude.json"
 
 // Credential modes, recorded in the results for the operator. The gateway
 // (ANTHROPIC_AUTH_TOKEN, with ANTHROPIC_BASE_URL) is the only credential a
-// run may carry (user decisions 2026-10-01): real mode refuses every other
-// one (checkRealModeEnv) and probe mode allows only the runner's dummy
-// token (checkProbeCredentials).
+// run may carry: real mode refuses every other one (checkRealModeEnv) and
+// probe mode allows only the runner's dummy token (checkProbeCredentials).
 const (
 	credGateway = "auth_token"
 	credNone    = "none"

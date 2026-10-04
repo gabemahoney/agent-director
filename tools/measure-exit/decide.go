@@ -17,9 +17,9 @@ import (
 
 // `measure-exit decide -in DIR [-in DIR]... [-supersede ID]...` applies the
 // RN-6, RN-2 and RN-9 decision rules (SRD Open Questions RN-2, RN-6, RN-9;
-// SR-13.2; lead decision 11) to the operator's results directories (L0,
-// L1, L2, and a re-run such as L2b) and prints a markdown decision record
-// that shows the arithmetic. It writes nothing. Exit codes:
+// SR-13.2) to the operator's results directories (L0, L1, L2, and a
+// re-run such as L2b) and prints a markdown decision record that shows
+// the arithmetic. It writes nothing. Exit codes:
 //
 //	0  decided
 //	2  invalid input: a dry run, an unfinished run, a failed or missing
@@ -38,14 +38,14 @@ import (
 // to be acted on.
 //
 // A sampled case's rules read the largest time over all its completed
-// samples, once at least 20 completed (useSamples; lead decision NB-1,
-// within the user's 2026-10-02 allowance): L1 takes 22 per case as a
-// buffer, so one flaky sample (a failed spawn, an agent that never
-// reported in) forces no re-run. The record states each case's counts by
-// outcome and how many samples were used and dropped.
+// samples, once at least 20 completed (useSamples):
+// L1 takes 22 per case as a buffer, so one flaky sample (a failed spawn,
+// an agent that never reported in) forces no re-run. The record states
+// each case's counts by outcome and how many samples were used and
+// dropped.
 //
 // -supersede ID lets a re-run of one RN-9 scenario replace an earlier
-// inconclusive result of it (decideOptions; Gabe, 2026-10-02): the latest
+// inconclusive result of it (decideOptions): the latest
 // run by finished_at is used, the record's "Superseded" section names
 // both, and an earlier pass or fail is never dropped.
 
@@ -62,8 +62,8 @@ const guardStatusFile = "guard-status.txt"
 
 // killCeilingLimitMs is the bound kill's ceiling at the defaults must stay
 // within (SRD RN-6, SR-13.2), and rn6StopExitWaitSec the required E at or
-// above which decide stops for the user (lead decision 10; at today's
-// defaults the two agree: 7.4 s + 8 s = 15.4 s).
+// above which decide stops for the user (at today's defaults the two
+// agree: 7.4 s + 8 s = 15.4 s).
 const (
 	killCeilingLimitMs = 15000
 	rn6StopExitWaitSec = 8
@@ -162,12 +162,12 @@ func (d decision) exitCode() int {
 // decideOptions are decide's choices beyond its inputs.
 type decideOptions struct {
 	// Supersede lists RN-9 scenario ids whose earlier inconclusive result
-	// a later run's result of the same scenario replaces (-supersede; Gabe,
-	// 2026-10-02: L2b's rn9.team-splitpane re-run supersedes L2's
-	// inconclusive one). "Later" is the run's finished_at. A pass or fail
-	// is never superseded: a scenario in two inputs whose earlier result is
-	// not inconclusive stays invalid. Without -supersede, any scenario in
-	// two inputs is invalid.
+	// a later run's result of the same scenario replaces (-supersede; e.g.
+	// L2b's rn9.team-splitpane re-run supersedes L2's inconclusive one).
+	// "Later" is the run's finished_at. A pass or fail is never
+	// superseded: a scenario in two inputs whose earlier result is not
+	// inconclusive stays invalid. Without -supersede, any scenario in two
+	// inputs is invalid.
 	Supersede []string
 }
 
@@ -452,10 +452,10 @@ type sampleUse struct {
 }
 
 // useSamples picks the samples a case's rule reads (sampleUse): all of
-// them that are usable, in any position. Lead decision NB-1 (within the
-// user's 2026-10-02 allowance: all completed samples once there are at
-// least 20) takes the largest time over every completed sample, so a
-// run's buffer can only add evidence, never hide a slower exit.
+// them that are usable, in any position. The rule reads every completed
+// sample once there are at least 20 and takes the largest time over all
+// of them, so a run's buffer can only add evidence, never hide a slower
+// exit.
 func useSamples(samples []sample, atDefault bool) sampleUse {
 	u := sampleUse{Dropped: map[outcome]int{}}
 	for _, s := range samples {
@@ -512,10 +512,9 @@ func countsDisagree(c caseResult) bool {
 // sets E from the largest time measured under the default budget, and an
 // agent that outlived the sample ceiling is such a time, unbounded, not a
 // flaky sample. A "no ended_at" sample (RN-2: no SessionEnd applied, so no
-// time can be taken) invalidates its case the same way (lead decision
-// NB-1). A raised-budget case (reported for the README, not part of a
-// rule) needs at least minSamples measured agents, completed or "did not
-// exit": SRD RN-6 asks for at least 20 agents per case and the largest
+// time can be taken) invalidates its case the same way. A raised-budget
+// case (reported for the README, not part of a rule) needs at least
+// minSamples measured agents, completed or "did not exit": SRD RN-6 asks for at least 20 agents per case and the largest
 // time per case, and a raised-budget agent that outlived the sample
 // ceiling is a measurement of that budget, reported, not an invalid run.
 // An MCP case reported "not run" is allowed and noted. It returns the

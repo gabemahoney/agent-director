@@ -14,8 +14,8 @@ import (
 )
 
 // Evidence an agent team scenario keeps when it does not get its answer
-// (Gabe, 2026-10-02: the split-pane lead of L2 accepted no input and left
-// nothing that said why). Three harness-only aids, none a production change:
+// (the split-pane lead of L2 accepted no input and left nothing that said
+// why). Three harness-only aids, none a production change:
 //
 //   - the input-ready wait: the team prompt is sent only once the lead's
 //     pane shows its prompt box (inputReady), bounded by -input-ready-timeout;

@@ -3,9 +3,9 @@
 # carries the v-next agent-director, tmux, jq and procps), with Claude Code
 # reinstalled at CLAUDE_CODE_VERSION under its own tag. The test image's own
 # pin (2.1.120, which ignores exec-form hook args) stays as it is for the
-# Docker test plans. L1 and L2 measure 2.1.280 by default, the version this
-# fleet's workers run (user, 2026-10-01; the driver's real-mode floor), and
-# the version probe builds one image per probed version.
+# Docker test plans. L1 and L2 measure 2.1.280 by default, the deployed
+# version (the driver's real-mode floor), and the version probe builds one
+# image per probed version.
 #
 # The driver compiles in the build stage, so nothing runs Go on the host
 # beyond the test image's existing `make build`. The dry-run stub is NOT in

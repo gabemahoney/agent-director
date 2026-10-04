@@ -145,7 +145,7 @@ run_driver probe-kept "$STUB_DIR/probe-args-kept" -cases probe.exec-form
 run_driver probe-dropped "$STUB_DIR/probe-args-dropped" -cases probe.exec-form
 [[ "$run_rc" -eq 0 ]] || fail "probe dry run (args dropped) exited $run_rc"
 
-# The split-pane lead's evidence (Gabe, 2026-10-02): rn9.team-splitpane
+# The split-pane lead's evidence (capture.go): rn9.team-splitpane
 # alone, once with a lead that shows a dialog and ignores all input (the
 # stall L2 saw) and once with a lead whose prompt shows late and drops
 # keys typed before it.

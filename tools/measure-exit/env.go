@@ -25,9 +25,8 @@ const sandboxMarkerEnv = "AGENT_DIRECTOR_TEST_SANDBOX"
 // hook budget for every hook (RN-6's env-raised variant).
 const sessionEndBudgetEnv = "CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS"
 
-// credentialEnv lists every credential-bearing variable the driver knows
-// (build-lead decision 8). Values of these never appear in any output, and
-// dry mode hides them all; ANTHROPIC_BASE_URL is here because a URL can
+// credentialEnv lists every credential-bearing variable the driver knows.
+// Values of these never appear in any output, and dry mode hides them all; ANTHROPIC_BASE_URL is here because a URL can
 // embed a token. Only the gateway pair (ANTHROPIC_BASE_URL and
 // ANTHROPIC_AUTH_TOKEN) may be set in real mode (checkRealModeEnv).
 var credentialEnv = []string{
@@ -54,12 +53,12 @@ var childEnvNames = []string{
 var childEnvPrefixes = []string{"LC_"}
 
 // realModeRefusedEnv are the credential and provider variables real mode
-// refuses (user decisions 2026-10-01: L1 and L2 bill to the InferenceHub
-// gateway only, through ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN). An
-// API key, an OAuth token (a plan or Enterprise seat) or the Bedrock/AWS
-// variables would move the bill elsewhere, so the run stops before anything
-// is written, as probe mode refuses every real credential; they are also
-// dropped from real mode's child environment (realModeEnv).
+// refuses (L1 and L2 bill to the gateway only, through
+// ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN). An API key, an OAuth token
+// (a plan or Enterprise seat) or the Bedrock/AWS variables would move the
+// bill elsewhere, so the run stops before anything is written, as probe
+// mode refuses every real credential; they are also dropped from real
+// mode's child environment (realModeEnv).
 var realModeRefusedEnv = []string{
 	"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK",
 	"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_BEARER_TOKEN_BEDROCK",

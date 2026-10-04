@@ -16,8 +16,8 @@
 # executes nothing. --run is the gated live step: it starts PAID real Claude
 # Code agents (measure, rn9) and needs the user's go-ahead.
 #
-# Credentials (user decisions 2026-10-01): measure and rn9 forward exactly
-# ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN (the InferenceHub gateway),
+# Credentials: measure and rn9 forward exactly
+# ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN (the gateway pair),
 # ANTHROPIC_MODEL and ANTHROPIC_SMALL_FAST_MODEL (the models pinned for the
 # run), each by name (-e NAME), and refuse to run unless all four are set.
 # Their values are never printed. Nothing else is forwarded: never
@@ -74,7 +74,7 @@
 #                             checks over the layer files in real mode.
 #   --host-network            opt in to host networking (hosts with the bridge
 #                             MTU problem, b.rx8); printed as a warning
-#   --guard-mode busy|quiet   guard.sh mode (default busy: user decision)
+#   --guard-mode busy|quiet   guard.sh mode (default busy)
 #   --guard-home DIR          guard.sh --home override (dry runs and tests only)
 #   probe only:
 #   --versions "V ..."        pinned candidate Claude Code versions, X.Y.Z each
@@ -633,7 +633,7 @@ probe_deployed() {
             line="deployed $deployed: RUNS exec-form hooks ($r)" ;;
         args_not_received)
             deployed_status=stop
-            line="deployed $deployed: does NOT run exec-form hooks ($r). STOP: tell the user at once; rc.1's hooks are ignored on this fleet, and L1 and L2 must not run at $deployed" ;;
+            line="deployed $deployed: does NOT run exec-form hooks ($r). STOP: tell the user at once; rc.1's hooks are ignored by the deployed version, and L1 and L2 must not run at $deployed" ;;
         *)
             deployed_status=undecided
             line="deployed $deployed: UNDECIDED ($r); L0 has not shown whether $deployed runs exec-form hooks" ;;

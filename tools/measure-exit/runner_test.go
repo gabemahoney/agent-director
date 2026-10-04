@@ -730,7 +730,7 @@ func TestRunnerProbeBisects(t *testing.T) {
 	probe := func(v, res string) string { return "probe " + v + ": " + res }
 	runs := func(v string) string { return "deployed " + v + ": RUNS exec-form hooks (args_received)" }
 	const stop = "deployed 2.1.280: does NOT run exec-form hooks (args_not_received). STOP: tell the user at once; " +
-		"rc.1's hooks are ignored on this fleet, and L1 and L2 must not run at 2.1.280"
+		"rc.1's hooks are ignored by the deployed version, and L1 and L2 must not run at 2.1.280"
 	const min200 = "minimum: 2.1.200 (newest that ignores args: 2.1.150)"
 	narrows200 := []string{probe("2.1.280", "args_received"), runs("2.1.280"),
 		probe("2.1.120", "args_not_received"), probe("2.1.200", "args_received"), probe("2.1.150", "args_not_received"), min200}
