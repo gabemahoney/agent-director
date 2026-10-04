@@ -222,12 +222,12 @@ func TestPackFirstHonorsOutputDir(t *testing.T) {
 // repo-root pkg/ts-bun-client.
 //
 // Recipe (matches the TestSmokeHonorsDistDir isolation pattern):
-//   - Copy the real package to an isolated dir INSIDE the repo root
-//     (os.MkdirTemp(root, "pkgcopy") — not t.TempDir(), because `bun pm pack`'s
-//     file resolution assumes the in-repo layout). The copy includes the
-//     prebuilt dist/ so the pack has real content. Cleaned up via t.Cleanup.
+//   - Copy the real package to t.TempDir(), outside the repo tree: a copy
+//     inside it puts a versioned package.json where the source-of-truth gate
+//     scans (b.9qj). The copy includes the prebuilt dist/ so the pack has real
+//     content.
 //   - Rewrite the copy's package.json version to a distinctive 9.9.9.
-//   - Run pack-first.sh with RELEASE_PKG_DIR=<copy> and an isolated
+//   - Run pack-first.sh with RELEASE_PKG_DIR=<copy> (absolute) and an isolated
 //     PACK_OUTPUT_DIR=<t.TempDir()>, no --target-version so the gate derives it
 //     from the copy's package.json.
 //   - Assert the produced tarball embeds 9.9.9.
@@ -237,7 +237,7 @@ func TestPackFirstHonorsOutputDir(t *testing.T) {
 // Post-fix it packs the copy and 9.9.9 is embedded, so this passes.
 //
 // LOCK DECISION: no acquireDistPackLock needed for the pack itself — the gate
-// packs the isolated in-repo copy's own dist/, and `bun pm pack` on the copy
+// packs the isolated copy's own dist/, and `bun pm pack` on the copy
 // never touches the shared pkg/ts-bun-client/dist/. We DO hold the lock, but
 // only to protect the `cp -r pkg/ts-bun-client/. <copy>/` read of the shared
 // dist/ against the coverage.bun-test gate, which rebuilds it concurrently
@@ -258,25 +258,10 @@ func TestPackFirstHonorsPkgDir(t *testing.T) {
 	// (b.aur). See LOCK DECISION in the doc comment.
 	acquireDistPackLock(t)
 
-	// Copy the real package INTO the repo root so `bun pm pack`'s in-repo path
-	// resolution holds. Include the prebuilt dist/ (cp -r <src>/. <dst>/).
-	pkgCopy, err := os.MkdirTemp(root, "pkgcopy")
-	if err != nil {
-		t.Fatalf("MkdirTemp under repo root: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(pkgCopy) })
-
+	// Copy the real package, prebuilt dist/ included (cp -r <src>/. <dst>/), to
+	// a temp dir outside the repo tree (b.9qj).
+	pkgCopy := t.TempDir()
 	realPkg := filepath.Join(root, "pkg", "ts-bun-client")
-	// The go.mod stub goes in first, so the copy is a nested module before its
-	// node_modules (which holds a Go package) appears: other packages' walks of
-	// the repo then skip it (b.jct). The bulk cp rewrites it with the same bytes.
-	stub, err := os.ReadFile(filepath.Join(realPkg, "go.mod"))
-	if err != nil {
-		t.Fatalf("read the pkg/ts-bun-client go.mod stub: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(pkgCopy, "go.mod"), stub, 0o644); err != nil {
-		t.Fatalf("write the go.mod stub into %s: %v", pkgCopy, err)
-	}
 	cpCmd := exec.Command("cp", "-r", realPkg+"/.", pkgCopy+"/")
 	if out, err := cpCmd.CombinedOutput(); err != nil {
 		t.Fatalf("copy %s -> %s: %v\n%s", realPkg, pkgCopy, err, out)
@@ -302,19 +287,12 @@ func TestPackFirstHonorsPkgDir(t *testing.T) {
 		t.Fatalf("write copy package.json: %v", err)
 	}
 
-	// RELEASE_PKG_DIR is resolved relative to the worktree root (gateCmd.Dir),
-	// so pass the copy's path relative to root.
-	relPkgDir, err := filepath.Rel(root, pkgCopy)
-	if err != nil {
-		t.Fatalf("rel path of pkg copy: %v", err)
-	}
-
 	outDir := t.TempDir()
 	gateScript := filepath.Join(root, "skills", "release-agent-director", "gates", "pack", "pack-first.sh")
 	gateCmd := exec.Command("bash", gateScript)
 	gateCmd.Dir = root
 	gateCmd.Env = append(os.Environ(),
-		"RELEASE_PKG_DIR="+relPkgDir,
+		"RELEASE_PKG_DIR="+pkgCopy,
 		"PACK_OUTPUT_DIR="+outDir,
 	)
 	if out, err := gateCmd.CombinedOutput(); err != nil {
@@ -348,7 +326,7 @@ func TestPackFirstHonorsPkgDir(t *testing.T) {
 	// the real package (0.0.0 on main) and this fails.
 	if embeddedPkg.Version != wantVersion {
 		t.Errorf("embedded tarball version: got %q, want %q — pack-first.sh did not "+
-			"honor RELEASE_PKG_DIR=%s (b.aur)", embeddedPkg.Version, wantVersion, relPkgDir)
+			"honor RELEASE_PKG_DIR=%s (b.aur)", embeddedPkg.Version, wantVersion, pkgCopy)
 	}
 
 	t.Logf("pack-first.sh honored RELEASE_PKG_DIR: tarball %s embeds version %s", matches[0], embeddedPkg.Version)

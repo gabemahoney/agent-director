@@ -62,7 +62,7 @@ list below names each phase and its Epic owner.
    runs under its own scratch `HOME`, the no-leak process count is scoped to
    the children of the bun test process, `docker-epics.sh`'s children run
    under a shared (`flock -s`) seeds-mutation lock so they read the tree
-   without racing go-root's exclusive-lock mutators, and `coverage.bun-test`
+   without racing exclusive-lock tree mutators, and `coverage.bun-test`
    holds an exclusive `flock` on the dist-pack lock for its whole run. See
    `gates/README.md` "Coverage phase (parallel)"
    for the isolation model and the executor-to-report field mapping. Built

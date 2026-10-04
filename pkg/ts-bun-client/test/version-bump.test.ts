@@ -1,8 +1,9 @@
 /**
  * version-bump.test.ts — tests for scripts/version-bump.ts.
  *
- * Uses a staging-tree mirror pattern: makeStagingTree() builds a temp dir
- * that mirrors the relative layout the script expects (script lives at
+ * Uses a staging-tree mirror pattern: makeStagingTree() builds a dir under the
+ * OS temp dir (never the repo tree: b.9qj) that mirrors the relative layout
+ * the script expects (script lives at
  * <root>/pkg/ts-bun-client/scripts/version-bump.ts; the umbrella package.json
  * under <root>/pkg/ts-bun-client/). The script is copied from the real
  * source tree so import.meta.url resolves within the staging root — the same
@@ -19,7 +20,7 @@
  *       package.json               ← umbrella, seeded
  */
 
-import { test, expect, describe } from "bun:test";
+import { test, expect, describe, afterEach } from "bun:test";
 import {
   mkdirSync,
   writeFileSync,
@@ -28,10 +29,12 @@ import {
   readFileSync,
   cpSync,
 } from "node:fs";
-import { join, resolve, dirname } from "node:path";
+import { tmpdir } from "node:os";
+import { join, resolve, dirname, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const PKG_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const REPO_ROOT = resolve(PKG_DIR, "..", "..");
 const REAL_SCRIPT = join(PKG_DIR, "scripts", "version-bump.ts");
 
 // ---------------------------------------------------------------------------
@@ -52,9 +55,14 @@ interface StagingTree {
   scriptPath: string;
   /** Absolute path to the umbrella package.json. */
   umbrellaPkgPath: string;
-  /** Remove the temp directory. Best-effort; never throws. */
-  cleanup(): void;
 }
+
+// Staging roots live under the OS temp dir: inside the repo, their versioned
+// package.json files trip the source-of-truth gate a sibling run scans (b.9qj).
+const stagingRoots: string[] = [];
+afterEach(() => {
+  for (const root of stagingRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
 
 /**
  * Build a minimal staging tree that mirrors the layout version-bump.ts
@@ -62,7 +70,8 @@ interface StagingTree {
  * the staging root.
  */
 function makeStagingTree(): StagingTree {
-  const root = mkdtempSync(join(import.meta.dir, ".tmp-vbump-"));
+  const root = mkdtempSync(join(tmpdir(), "ad-vbump-"));
+  stagingRoots.push(root);
 
   const scriptsDir = join(root, "pkg", "ts-bun-client", "scripts");
   const pkgDir = join(root, "pkg", "ts-bun-client");
@@ -91,13 +100,6 @@ function makeStagingTree(): StagingTree {
     root,
     scriptPath,
     umbrellaPkgPath,
-    cleanup() {
-      try {
-        rmSync(root, { recursive: true, force: true });
-      } catch {
-        /* best-effort */
-      }
-    },
   };
 }
 
@@ -133,22 +135,26 @@ function readPkgVersion(pkgPath: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// 0. Staging isolation (b.9qj)
+// ---------------------------------------------------------------------------
+
+test("staging tree lives outside the repo tree (b.9qj)", () => {
+  expect(relative(REPO_ROOT, makeStagingTree().root).split(sep)[0]).toBe("..");
+});
+
+// ---------------------------------------------------------------------------
 // 1. Per-selector isolation
 // ---------------------------------------------------------------------------
 
 describe("version-bump --target isolation", () => {
   test("--target=umbrella-version: updates only the targeted site(s), leaves others untouched", () => {
     const tree = makeStagingTree();
-    try {
-      const r = runBump(tree.scriptPath, [
-        "--version", TARGET_VERSION,
-        "--target", "umbrella-version",
-      ]);
-      expect(r.exitCode).toBe(0);
-      expect(readPkgVersion(tree.umbrellaPkgPath)).toBe(TARGET_VERSION);
-    } finally {
-      tree.cleanup();
-    }
+    const r = runBump(tree.scriptPath, [
+      "--version", TARGET_VERSION,
+      "--target", "umbrella-version",
+    ]);
+    expect(r.exitCode).toBe(0);
+    expect(readPkgVersion(tree.umbrellaPkgPath)).toBe(TARGET_VERSION);
   });
 });
 
@@ -159,14 +165,10 @@ describe("version-bump --target isolation", () => {
 describe("version-bump (no --target): updates all live sites", () => {
   test("all sites reach the target version in a single invocation", () => {
     const tree = makeStagingTree();
-    try {
-      const r = runBump(tree.scriptPath, ["--version", TARGET_VERSION]);
-      expect(r.exitCode).toBe(0);
+    const r = runBump(tree.scriptPath, ["--version", TARGET_VERSION]);
+    expect(r.exitCode).toBe(0);
 
-      expect(readPkgVersion(tree.umbrellaPkgPath)).toBe(TARGET_VERSION);
-    } finally {
-      tree.cleanup();
-    }
+    expect(readPkgVersion(tree.umbrellaPkgPath)).toBe(TARGET_VERSION);
   });
 });
 
@@ -183,30 +185,26 @@ describe("version-bump idempotence", () => {
   for (const { label, extraArgs } of IDEMPOTENCE_CASES) {
     test(`${label}: second run with same version writes nothing`, () => {
       const tree = makeStagingTree();
-      try {
-        const baseArgs = ["--version", TARGET_VERSION, ...extraArgs];
+      const baseArgs = ["--version", TARGET_VERSION, ...extraArgs];
 
-        // First run must succeed.
-        const r1 = runBump(tree.scriptPath, baseArgs);
-        expect(r1.exitCode).toBe(0);
+      // First run must succeed.
+      const r1 = runBump(tree.scriptPath, baseArgs);
+      expect(r1.exitCode).toBe(0);
 
-        // Snapshot file contents after first run.
-        const snap = {
-          umbrella: readFileSync(tree.umbrellaPkgPath, "utf8"),
-        };
+      // Snapshot file contents after first run.
+      const snap = {
+        umbrella: readFileSync(tree.umbrellaPkgPath, "utf8"),
+      };
 
-        // Second run must also succeed.
-        const r2 = runBump(tree.scriptPath, baseArgs);
-        expect(r2.exitCode).toBe(0);
+      // Second run must also succeed.
+      const r2 = runBump(tree.scriptPath, baseArgs);
+      expect(r2.exitCode).toBe(0);
 
-        // All files must be byte-identical to the post-first-run snapshot.
-        expect(readFileSync(tree.umbrellaPkgPath, "utf8")).toBe(snap.umbrella);
+      // All files must be byte-identical to the post-first-run snapshot.
+      expect(readFileSync(tree.umbrellaPkgPath, "utf8")).toBe(snap.umbrella);
 
-        // Second-run output must acknowledge the no-op with a "skipped" message.
-        expect(r2.stdout + r2.stderr).toMatch(/skipped/i);
-      } finally {
-        tree.cleanup();
-      }
+      // Second-run output must acknowledge the no-op with a "skipped" message.
+      expect(r2.stdout + r2.stderr).toMatch(/skipped/i);
     });
   }
 });
@@ -218,20 +216,16 @@ describe("version-bump idempotence", () => {
 describe("version-bump unknown --target selector", () => {
   test("exits non-zero and lists valid selectors in the error output", () => {
     const tree = makeStagingTree();
-    try {
-      const r = runBump(tree.scriptPath, [
-        "--version", TARGET_VERSION,
-        "--target", "totally-invalid-xyz",
-      ]);
-      expect(r.exitCode).not.toBe(0);
+    const r = runBump(tree.scriptPath, [
+      "--version", TARGET_VERSION,
+      "--target", "totally-invalid-xyz",
+    ]);
+    expect(r.exitCode).not.toBe(0);
 
-      const output = r.stderr + r.stdout;
-      // Must mention the bad value.
-      expect(output).toContain("totally-invalid-xyz");
-      // Must name at least one valid selector (usage message).
-      expect(output).toMatch(/umbrella-version/);
-    } finally {
-      tree.cleanup();
-    }
+    const output = r.stderr + r.stdout;
+    // Must mention the bad value.
+    expect(output).toContain("totally-invalid-xyz");
+    // Must name at least one valid selector (usage message).
+    expect(output).toMatch(/umbrella-version/);
   });
 });

@@ -3,7 +3,7 @@
  *
  * Staging layout mirrors the path-resolution in check-version-coherence.ts
  * (script lives at <root>/pkg/ts-bun-client/scripts/; paths anchored via ../):
- *   <root>/
+ *   <root>/                                  ← under the OS temp dir (b.9qj)
  *     pkg/ts-bun-client/
  *       scripts/check-version-coherence.ts  ← copied from real source
  *       package.json                         ← umbrella, seeded
@@ -12,20 +12,23 @@
  *         darwin-arm64/ bin/agent-director (shell stub), package.json
  */
 
-import { test, expect, describe } from "bun:test";
+import { test, expect, describe, afterEach } from "bun:test";
 import {
   mkdirSync,
   writeFileSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
   chmodSync,
   cpSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
-import { join, resolve, dirname } from "node:path";
+import { tmpdir } from "node:os";
+import { join, resolve, dirname, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const PKG_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const REPO_ROOT = resolve(PKG_DIR, "..", "..");
 const REAL_SCRIPT = join(PKG_DIR, "scripts", "check-version-coherence.ts");
 
 const EXPECTED = "9.9.9";
@@ -58,7 +61,6 @@ interface StagingTree {
   distIndexJsPath: string;
   /** Path to the tarball-shasums.txt manifest for --scope publish tests (Epic 4 / SR-1.3). */
   shasumsPath: string;
-  cleanup(): void;
 }
 
 interface StagingTreeOpts {
@@ -86,6 +88,13 @@ const DEFAULT_DIST_INDEX_JS =
 const DEFAULT_VERSION_FLOOR_JSON =
   `{\n  "min_binary_version": "${DEFAULT_FLOOR_VALUE}"\n}\n`;
 
+// Staging roots live under the OS temp dir: inside the repo, their versioned
+// package.json files trip the source-of-truth gate a sibling run scans (b.9qj).
+const stagingRoots: string[] = [];
+afterEach(() => {
+  for (const root of stagingRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
 function makeStagingTree(opts: StagingTreeOpts = {}): StagingTree {
   const {
     site1Version = EXPECTED,
@@ -96,7 +105,9 @@ function makeStagingTree(opts: StagingTreeOpts = {}): StagingTree {
     distIndexJsContent = DEFAULT_DIST_INDEX_JS,
   } = opts;
 
-  const root = mkdtempSync(join(import.meta.dir, ".tmp-cvc-"));
+  // realpath: the copied script reports paths from its resolved location.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ad-cvc-")));
+  stagingRoots.push(root);
   const pkgDir = join(root, "pkg", "ts-bun-client");
   const scriptsDir = join(pkgDir, "scripts");
   const linuxDir = join(pkgDir, "platforms", "linux-x64");
@@ -199,13 +210,6 @@ function makeStagingTree(opts: StagingTreeOpts = {}): StagingTree {
     darwinBinPath,
     distIndexJsPath,
     shasumsPath,
-    cleanup() {
-      try {
-        rmSync(root, { recursive: true, force: true });
-      } catch {
-        /* best-effort */
-      }
-    },
   };
 }
 
@@ -237,37 +241,37 @@ function runCheck(
 }
 
 // ---------------------------------------------------------------------------
+// 0. Staging isolation (b.9qj)
+// ---------------------------------------------------------------------------
+
+test("staging tree lives outside the repo tree (b.9qj)", () => {
+  expect(relative(REPO_ROOT, makeStagingTree().root).split(sep)[0]).toBe("..");
+});
+
+// ---------------------------------------------------------------------------
 // 1. Happy paths
 // ---------------------------------------------------------------------------
 
 describe("check-version-coherence happy path", () => {
   test("--scope publish: site 3a stamped + floor lockstep + tarball SHA → exit 0, empty stderr", () => {
     const tree = makeStagingTree();
-    try {
-      const r = runCheck(
-        tree.scriptPath,
-        ["--scope", "publish", "--expected-version", EXPECTED],
-        { AGENT_DIRECTOR_RELEASE_SHASUMS: tree.shasumsPath }
-      );
-      expect(r.exitCode).toBe(0);
-      expect(r.stderr).toBe("");
-    } finally {
-      tree.cleanup();
-    }
+    const r = runCheck(
+      tree.scriptPath,
+      ["--scope", "publish", "--expected-version", EXPECTED],
+      { AGENT_DIRECTOR_RELEASE_SHASUMS: tree.shasumsPath }
+    );
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toBe("");
   });
 
   test("--scope verify: site 3a stamped → exit 0", () => {
     const tree = makeStagingTree();
-    try {
-      const r = runCheck(tree.scriptPath, [
-        "--scope", "verify",
-        "--expected-version", EXPECTED,
-      ]);
-      expect(r.exitCode).toBe(0);
-      expect(r.stderr).toBe("");
-    } finally {
-      tree.cleanup();
-    }
+    const r = runCheck(tree.scriptPath, [
+      "--scope", "verify",
+      "--expected-version", EXPECTED,
+    ]);
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toBe("");
   });
 });
 
@@ -298,18 +302,14 @@ describe("check-version-coherence per-site failures", () => {
   for (const c of PER_SITE_CASES) {
     test(`${c.label} → exit 1, stderr contains file path + actual + expected`, () => {
       const tree = makeStagingTree(c.opts);
-      try {
-        const r = runCheck(tree.scriptPath, [
-          "--scope", c.scope,
-          "--expected-version", EXPECTED,
-        ]);
-        expect(r.exitCode).not.toBe(0);
-        expect(r.stderr).toContain(c.filePath(tree));
-        expect(r.stderr).toContain(c.actual);
-        expect(r.stderr).toContain(c.expected);
-      } finally {
-        tree.cleanup();
-      }
+      const r = runCheck(tree.scriptPath, [
+        "--scope", c.scope,
+        "--expected-version", EXPECTED,
+      ]);
+      expect(r.exitCode).not.toBe(0);
+      expect(r.stderr).toContain(c.filePath(tree));
+      expect(r.stderr).toContain(c.actual);
+      expect(r.stderr).toContain(c.expected);
     });
   }
 });
@@ -321,41 +321,29 @@ describe("check-version-coherence per-site failures", () => {
 describe("check-version-coherence bad flags", () => {
   test("--scope foo → exit 1, stderr mentions the bad value", () => {
     const tree = makeStagingTree();
-    try {
-      const r = runCheck(tree.scriptPath, [
-        "--scope", "foo",
-        "--expected-version", EXPECTED,
-      ]);
-      expect(r.exitCode).not.toBe(0);
-      expect(r.stderr).toContain("foo");
-    } finally {
-      tree.cleanup();
-    }
+    const r = runCheck(tree.scriptPath, [
+      "--scope", "foo",
+      "--expected-version", EXPECTED,
+    ]);
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toContain("foo");
   });
 
   test("--expected-version with leading v → exit 1", () => {
     const tree = makeStagingTree();
-    try {
-      const r = runCheck(tree.scriptPath, [
-        "--scope", "publish",
-        "--expected-version", `v${EXPECTED}`,
-      ]);
-      expect(r.exitCode).not.toBe(0);
-      expect(r.stderr).toContain(`v${EXPECTED}`);
-    } finally {
-      tree.cleanup();
-    }
+    const r = runCheck(tree.scriptPath, [
+      "--scope", "publish",
+      "--expected-version", `v${EXPECTED}`,
+    ]);
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toContain(`v${EXPECTED}`);
   });
 
   test("missing --expected-version → exit 1, stderr mentions the flag", () => {
     const tree = makeStagingTree();
-    try {
-      const r = runCheck(tree.scriptPath, ["--scope", "publish"]);
-      expect(r.exitCode).not.toBe(0);
-      expect(r.stderr).toContain("--expected-version");
-    } finally {
-      tree.cleanup();
-    }
+    const r = runCheck(tree.scriptPath, ["--scope", "publish"]);
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toContain("--expected-version");
   });
 });
 
@@ -368,48 +356,36 @@ describe("check-version-coherence site-dist-no-inline (SR-2.3)", () => {
     const tree = makeStagingTree({
       distIndexJsContent: 'const NPM_PACKAGE_VERSION = "1.2.3";',
     });
-    try {
-      const r = runCheck(tree.scriptPath, [
-        "--scope", "verify",
-        "--expected-version", EXPECTED,
-      ]);
-      expect(r.exitCode).not.toBe(0);
-      expect(r.stderr).toContain("NPM_PACKAGE_VERSION");
-    } finally {
-      tree.cleanup();
-    }
+    const r = runCheck(tree.scriptPath, [
+      "--scope", "verify",
+      "--expected-version", EXPECTED,
+    ]);
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toContain("NPM_PACKAGE_VERSION");
   });
 
   test('dist/index.js contains "0.0.0" → exit 1, stderr names the literal', () => {
     const tree = makeStagingTree({
       distIndexJsContent: 'const version = "0.0.0";',
     });
-    try {
-      const r = runCheck(tree.scriptPath, [
-        "--scope", "verify",
-        "--expected-version", EXPECTED,
-      ]);
-      expect(r.exitCode).not.toBe(0);
-      expect(r.stderr).toContain('"0.0.0"');
-    } finally {
-      tree.cleanup();
-    }
+    const r = runCheck(tree.scriptPath, [
+      "--scope", "verify",
+      "--expected-version", EXPECTED,
+    ]);
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toContain('"0.0.0"');
   });
 
   test("dist/index.js absent → exit 1, stderr contains the missing path", () => {
     const tree = makeStagingTree();
     // Remove the dist file after staging to simulate a missing bun build output.
     rmSync(tree.distIndexJsPath);
-    try {
-      const r = runCheck(tree.scriptPath, [
-        "--scope", "verify",
-        "--expected-version", EXPECTED,
-      ]);
-      expect(r.exitCode).not.toBe(0);
-      expect(r.stderr).toContain(tree.distIndexJsPath);
-    } finally {
-      tree.cleanup();
-    }
+    const r = runCheck(tree.scriptPath, [
+      "--scope", "verify",
+      "--expected-version", EXPECTED,
+    ]);
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toContain(tree.distIndexJsPath);
   });
 
   // SR-2.2: publish ⊇ verify — dist-no-inline must also fire under --scope publish.
@@ -419,17 +395,13 @@ describe("check-version-coherence site-dist-no-inline (SR-2.3)", () => {
       distIndexJsContent: 'const NPM_PACKAGE_VERSION = "1.2.3";',
       site4Mode: "pin",
     });
-    try {
-      const r = runCheck(
-        tree.scriptPath,
-        ["--scope", "publish", "--expected-version", EXPECTED],
-        { AGENT_DIRECTOR_RELEASE_SHASUMS: tree.shasumsPath }
-      );
-      expect(r.exitCode).not.toBe(0);
-      expect(r.stderr).toContain("NPM_PACKAGE_VERSION");
-    } finally {
-      tree.cleanup();
-    }
+    const r = runCheck(
+      tree.scriptPath,
+      ["--scope", "publish", "--expected-version", EXPECTED],
+      { AGENT_DIRECTOR_RELEASE_SHASUMS: tree.shasumsPath }
+    );
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toContain("NPM_PACKAGE_VERSION");
   });
 
   test('--scope publish: dist/index.js contains "0.0.0" → exit 1, stderr names the literal', () => {
@@ -437,16 +409,12 @@ describe("check-version-coherence site-dist-no-inline (SR-2.3)", () => {
       distIndexJsContent: 'const version = "0.0.0";',
       site4Mode: "pin",
     });
-    try {
-      const r = runCheck(
-        tree.scriptPath,
-        ["--scope", "publish", "--expected-version", EXPECTED],
-        { AGENT_DIRECTOR_RELEASE_SHASUMS: tree.shasumsPath }
-      );
-      expect(r.exitCode).not.toBe(0);
-      expect(r.stderr).toContain('"0.0.0"');
-    } finally {
-      tree.cleanup();
-    }
+    const r = runCheck(
+      tree.scriptPath,
+      ["--scope", "publish", "--expected-version", EXPECTED],
+      { AGENT_DIRECTOR_RELEASE_SHASUMS: tree.shasumsPath }
+    );
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toContain('"0.0.0"');
   });
 });

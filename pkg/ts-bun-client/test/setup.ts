@@ -47,7 +47,7 @@ const cliBin = resolve(repoRoot, "bin/agent-director");
 // ── Seeds flock (b.3jn / b.2y5 seeds-flock protocol) ───────────────────────
 // Each `make` below is a cross-package builder that reads tree sources, so it
 // holds the seeds flock as the protocol's reader side; see
-// test/internal/seedsLock.ts for what that lock still excludes since b.jct. One
+// test/internal/seedsLock.ts for what that lock still excludes since b.9qj. One
 // short flock per make call (three holds), not one long hold.
 const flockMake = (target: string) =>
   Bun.spawnSync(underSeedsLock(["make", "-C", repoRoot, target]), {

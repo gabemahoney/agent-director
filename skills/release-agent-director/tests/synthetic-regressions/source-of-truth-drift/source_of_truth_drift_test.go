@@ -17,27 +17,22 @@
 //
 // DESIGN
 // ======
+// Each sub-case runs the real gate script in its own throwaway git repo
+// (gateRepo): a copy of check-source-of-truth.ts and the authoritative
+// package.json under t.TempDir(). The gate scans the repo its own copy sits
+// in, so the fixtures never enter the real tree, where a sibling test or
+// release gate scanning it would see them (b.9qj).
+//
 //  Sub-case A (drift):
-//   1. Create a temporary tools/test-violation-{rand}/package.json with
+//   1. Create tools/test-violation/package.json with
 //      {"name":"violation","version":"9.9.9"}.
-//   2. Register t.Cleanup that os.RemoveAll()s the temp directory.
-//   3. Run bun run pkg/ts-bun-client/scripts/check-source-of-truth.ts from
-//      repo root; capture stderr.
-//   4. Assert exit code != 0.
-//   5. Assert stderr contains the offending file path AND the gate key
-//      "invariant.source-of-truth".
+//   2. Run the gate from the repo root; capture stderr.
+//   3. Assert exit code != 0, and that stderr names the offending file and
+//      carries the gate key "invariant.source-of-truth".
 //
 //  Sub-case B (false positive):
-//   1. Create a temporary docs/_test-fixture-{rand}.md with prose mentioning
-//      "version 9.9.9".
-//   2. Register t.Cleanup that os.Remove()s the file.
-//   3. Run the gate; assert exit 0 and that stderr is empty.
-//
-// CLEANUP-ON-FAILURE PATTERN
-// ==========================
-// t.Cleanup is registered before any mutation, so it fires unconditionally
-// even when t.Fatalf (which calls runtime.Goexit) is hit mid-test.  After
-// a test run, `git status` must show a clean tree.
+//   1. Create docs/_test-fixture.md with prose mentioning "version 9.9.9".
+//   2. Run the gate; assert exit 0 and that stderr is empty.
 //
 // DEPENDENCY
 // ==========
@@ -47,84 +42,12 @@ package sourceoftruthdrift_test
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 )
-
-// seedsMutationLockPath returns the path to the cross-process advisory lock
-// file (pkg/api/apitest/.seeds-mutation.lock) that serializes repo-tree
-// mutation against repo-tree readers. See acquireSeedsLock.
-func seedsMutationLockPath(root string) string {
-	return filepath.Join(root, "pkg", "api", "apitest", ".seeds-mutation.lock")
-}
-
-// acquireSeedsLock grabs the seeds-mutation flock (LOCK_EX) before this test
-// creates/removes a directory under tools/ (a walk-reachable location: not
-// dot/underscore/testdata-prefixed).
-//
-// b.2y5: readers of the repo tree hold this lock while they read it. The
-// coverage.docker-epics gate's `make test-docker` children take it shared:
-// their docker build context tars the repo root, and a directory that appears
-// and then vanishes mid-tar fails the build. Holding the lock exclusively
-// across our whole tree-mutation window keeps tools/test-violation-<pid>/ out
-// of their reads.
-//
-// LOCK ORDERING (b.2y5): this test also takes acquireSourceOfTruthLock (the
-// ts-bun-client scripts lock). To avoid deadlock, every package that holds
-// BOTH locks MUST acquire the seeds-mutation lock FIRST, then the
-// source-of-truth lock. This test observes that invariant. (The seeds-lock-only
-// holders — the docker-epics children and the pkg/ts-bun-client test preload's
-// builds — never take the source-of-truth lock, so there is no reverse-order
-// acquirer to deadlock against.)
-//
-// The lock is released after our subtests' RemoveAll cleanups run: t.Cleanup
-// is LIFO, and subtest cleanups run when each subtest returns (before this
-// parent function's cleanups), so restoring the tree happens before we unlock.
-// The lock file is gitignored.
-func acquireSeedsLock(t *testing.T, root string) {
-	t.Helper()
-	lockPath := seedsMutationLockPath(root)
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		t.Fatalf("acquireSeedsLock: open %s: %v", lockPath, err)
-	}
-	// LOCK_EX blocks until no other process holds the lock.
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		f.Close()
-		t.Fatalf("acquireSeedsLock: flock: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		f.Close()
-	})
-}
-
-// acquireSourceOfTruthLock serializes tests that mutate the repo tree and
-// then run the source-of-truth gate. The companion test in
-// source-of-truth-reference-prune/ also writes fixture files at the repo
-// root; without serialization the two tests observe each other's fixtures
-// and produce flaky results. The lock file is gitignored.
-func acquireSourceOfTruthLock(t *testing.T, root string) {
-	t.Helper()
-	lockPath := filepath.Join(root, "pkg", "ts-bun-client", "scripts", ".source-of-truth-mutation.lock")
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		t.Fatalf("acquireSourceOfTruthLock: open %s: %v", lockPath, err)
-	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		f.Close()
-		t.Fatalf("acquireSourceOfTruthLock: flock: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		f.Close()
-	})
-}
 
 // repoRoot walks up from the package's working directory (set by `go test` to
 // the package directory) until it finds a go.mod file.
@@ -144,14 +67,48 @@ func repoRoot(t *testing.T) string {
 		}
 		dir = parent
 	}
-	panic("unreachable")
 }
 
-// runGate runs the SR-16 gate from repoRoot and returns (exitCode, stderr).
-func runGate(t *testing.T, root string) (int, string) {
+// writeFile writes content to rel (slash-separated) under dir, creating
+// parent directories.
+func writeFile(t *testing.T, dir, rel string, content []byte) {
+	t.Helper()
+	path := filepath.Join(dir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll %s: %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("WriteFile %s: %v", path, err)
+	}
+}
+
+// gateRepo stages a git repo under t.TempDir() holding the real gate script and
+// the authoritative package.json, and returns its root (b.9qj).
+func gateRepo(t *testing.T) string {
+	t.Helper()
+	root := repoRoot(t)
+	dir := t.TempDir()
+	for _, rel := range []string{
+		"pkg/ts-bun-client/scripts/check-source-of-truth.ts",
+		"pkg/ts-bun-client/package.json",
+	} {
+		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatalf("read %s: %v", rel, err)
+		}
+		writeFile(t, dir, rel, data)
+	}
+	if out, err := exec.Command("git", "init", "-q", dir).CombinedOutput(); err != nil {
+		t.Fatalf("git init %s: %v\n%s", dir, err, out)
+	}
+	return dir
+}
+
+// runGate runs the SR-16 gate from gateRoot and returns (exitCode, stderr).
+func runGate(t *testing.T, gateRoot string) (int, string) {
 	t.Helper()
 	cmd := exec.Command("bun", "run", "pkg/ts-bun-client/scripts/check-source-of-truth.ts")
-	cmd.Dir = root
+	cmd.Dir = gateRoot
 	// Capture stdout and stderr separately: the gate writes violations to stderr
 	// and is silent on stdout.
 	var stderrBuf strings.Builder
@@ -170,60 +127,29 @@ func TestSourceOfTruthDrift(t *testing.T) {
 		t.Skip("git not in PATH — skipping SR-16 gate test")
 	}
 
-	root := repoRoot(t)
-
-	// b.2y5: acquire the seeds-mutation flock FIRST (before the source-of-truth
-	// lock) so its LIFO cleanup releases LAST — after both this parent's and the
-	// subtests' tree-restoration cleanups. This serializes our tools/ mutation
-	// against the repo-tree readers. See acquireSeedsLock for the race and the
-	// seeds-then-source-of-truth ordering.
-	acquireSeedsLock(t, root)
-
-	// Serialize against the companion source-of-truth-reference-prune test,
-	// which also mutates the repo tree.
-	acquireSourceOfTruthLock(t, root)
-
 	// ── Sub-case A: drift detection ───────────────────────────────────────────
 	t.Run("A_drift_detected", func(t *testing.T) {
-		// 1. Create a temporary package.json in tools/ that introduces a second
-		//    authoritative version site.  The suffix makes it unique per run and
-		//    avoids collisions when tests run in parallel.
-		suffix := fmt.Sprintf("%d", os.Getpid())
-		violationDir := filepath.Join(root, "tools", "test-violation-"+suffix)
-		violationPkg := filepath.Join(violationDir, "package.json")
+		gateRoot := gateRepo(t)
 
-		if err := os.MkdirAll(violationDir, 0o755); err != nil {
-			t.Fatalf("MkdirAll %s: %v", violationDir, err)
-		}
+		// 1. A package.json in tools/ introduces a second authoritative version
+		//    site.
+		relPath := filepath.Join("tools", "test-violation", "package.json")
+		writeFile(t, gateRoot, relPath, []byte(`{"name":"violation","version":"9.9.9"}`+"\n"))
 
-		// 2. Register cleanup BEFORE writing, so the directory is removed even if
-		//    a later t.Fatalf fires.
-		t.Cleanup(func() {
-			if err := os.RemoveAll(violationDir); err != nil {
-				t.Errorf("t.Cleanup: RemoveAll %s: %v", violationDir, err)
-			}
-		})
+		// 2. Run the SR-16 gate.
+		exitCode, stderr := runGate(t, gateRoot)
 
-		pkgContent := `{"name":"violation","version":"9.9.9"}` + "\n"
-		if err := os.WriteFile(violationPkg, []byte(pkgContent), 0o644); err != nil {
-			t.Fatalf("WriteFile %s: %v", violationPkg, err)
-		}
-
-		// 3. Run the SR-16 gate.
-		exitCode, stderr := runGate(t, root)
-
-		// 4. Assert non-zero exit.
+		// 3. Assert non-zero exit.
 		if exitCode == 0 {
-			t.Fatalf("gate exited 0 — expected non-zero after introducing drift file %s", violationPkg)
+			t.Fatalf("gate exited 0 — expected non-zero after introducing drift file %s", relPath)
 		}
 
-		// 5a. Assert stderr references the offending file.
-		relPath := filepath.Join("tools", "test-violation-"+suffix, "package.json")
+		// 4a. Assert stderr references the offending file.
 		if !strings.Contains(stderr, relPath) {
 			t.Fatalf("gate stderr does not name the offending file %q;\nstderr:\n%s", relPath, stderr)
 		}
 
-		// 5b. Assert stderr contains the gate key.
+		// 4b. Assert stderr contains the gate key.
 		const gateKey = "invariant.source-of-truth"
 		if !strings.Contains(stderr, gateKey) {
 			t.Fatalf("gate stderr does not contain %q;\nstderr:\n%s", gateKey, stderr)
@@ -244,33 +170,23 @@ func TestSourceOfTruthDrift(t *testing.T) {
 
 	// ── Sub-case B: false-positive guard ─────────────────────────────────────
 	t.Run("B_false_positive_not_triggered", func(t *testing.T) {
-		// 1. Create a temporary markdown file in docs/ with prose that mentions a
-		//    version string.  The gate must NOT fire for docs/ content.
-		suffix := fmt.Sprintf("%d", os.Getpid())
-		fixtureFile := filepath.Join(root, "docs", "_test-fixture-"+suffix+".md")
+		gateRoot := gateRepo(t)
 
+		// 1. A markdown file in docs/ with prose that mentions a version string.
+		//    The gate must NOT fire for docs/ content.
 		content := "# Test fixture\n\nThis document mentions version 9.9.9 in prose.\n" +
 			"It also refers to version: 9.9.9 in a YAML-like comment for good measure.\n"
-		if err := os.WriteFile(fixtureFile, []byte(content), 0o644); err != nil {
-			t.Fatalf("WriteFile %s: %v", fixtureFile, err)
-		}
+		writeFile(t, gateRoot, "docs/_test-fixture.md", []byte(content))
 
-		// 2. Register cleanup before any assertion.
-		t.Cleanup(func() {
-			if err := os.Remove(fixtureFile); err != nil && !os.IsNotExist(err) {
-				t.Errorf("t.Cleanup: Remove %s: %v", fixtureFile, err)
-			}
-		})
+		// 2. Run the SR-16 gate.
+		exitCode, stderr := runGate(t, gateRoot)
 
-		// 3. Run the SR-16 gate.
-		exitCode, stderr := runGate(t, root)
-
-		// 4. Assert exit 0 (clean).
+		// 3. Assert exit 0 (clean).
 		if exitCode != 0 {
 			t.Fatalf("gate exited %d for docs-only prose mention — false positive;\nstderr:\n%s", exitCode, stderr)
 		}
 
-		// 5. Assert stderr is silent (no violation lines).
+		// 4. Assert stderr is silent (no violation lines).
 		if strings.TrimSpace(stderr) != "" {
 			t.Fatalf("gate produced unexpected stderr for docs-only prose mention;\nstderr:\n%s", stderr)
 		}

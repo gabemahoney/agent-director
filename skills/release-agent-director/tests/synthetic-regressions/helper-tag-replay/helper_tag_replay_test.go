@@ -67,9 +67,10 @@ func repoRoot(t *testing.T) string {
 
 // skipCopyDir reports whether copyModule leaves out the directory at path
 // (named name): what `go build ./...` skips — names starting with "." or "_",
-// testdata, and nested modules (pkg/ts-bun-client is one) — plus node_modules:
-// the real one is inside that nested module, and a pkgcopy*/ that
-// TestPackFirstHonorsPkgDir is still copying may hold a half-written flatted.go.
+// testdata, and nested modules (pkg/ts-bun-client is one) — plus node_modules,
+// whose packages can ship Go source (flatted ships flatted.go). The real one is
+// inside that nested module, so this check matters only for a node_modules
+// elsewhere in the tree.
 func skipCopyDir(path, name string) bool {
 	if name == "node_modules" || name == "testdata" ||
 		strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") {

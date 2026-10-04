@@ -26,7 +26,10 @@
 // Cleanup: pack-first.sh writes into a per-test t.TempDir() (via
 // PACK_OUTPUT_DIR) rather than the shared repo-root dist/, so concurrent
 // tests never collide and all temporary tarballs/dirs are cleaned up by the
-// Go test runner automatically — no dist/ removal needed.
+// Go test runner automatically — no dist/ removal needed. Test 1 runs both
+// gates against a copy of the package in a temp worktree root
+// (--worktree-root), so repack-and-verify.sh writes its dist/sha256sums there,
+// not into the real tree (b.9qj).
 //
 // SLOW TEST
 // =========
@@ -44,8 +47,8 @@ import (
 )
 
 // acquireDistPackLock serializes tests that read or write the real
-// pkg/ts-bun-client/dist/. These tests `bun pm pack` that dir (twice, via
-// pack-first.sh and repack-and-verify.sh); the coverage.bun-test gate, which the
+// pkg/ts-bun-client/dist/. These tests copy that dir or `bun pm pack` it (via
+// repack-and-verify.sh); the coverage.bun-test gate, which the
 // release coverage phase runs beside `go test ./...`, rewrites it via
 // `bun run build` under the same lock. Without serialization a concurrent
 // rebuild makes the two packs diverge (b.aur: "Only in package/dist:
@@ -88,10 +91,28 @@ func repoRoot(t *testing.T) string {
 	panic("unreachable")
 }
 
+// stageWorktree copies pkg/ts-bun-client, prebuilt dist/ included, into a
+// worktree root under t.TempDir() and returns that root (b.9qj).
+func stageWorktree(t *testing.T, root string) string {
+	t.Helper()
+	wt := t.TempDir()
+	dst := filepath.Join(wt, "pkg", "ts-bun-client")
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dst, err)
+	}
+	src := filepath.Join(root, "pkg", "ts-bun-client")
+	if out, err := exec.Command("cp", "-r", src+"/.", dst+"/").CombinedOutput(); err != nil {
+		t.Fatalf("copy %s -> %s: %v\n%s", src, dst, err, out)
+	}
+	return wt
+}
+
 // TestTarballRoundTripByteIdentical verifies that packing the same source
 // twice produces byte-identical tarballs: pack-first.sh writes the first
 // tarball, then repack-and-verify.sh packs a second time internally and diffs
-// both; the gate must exit 0.
+// both; the gate must exit 0 and write its sha256 manifest. Both run against a
+// copy of the package in a temp worktree root, keeping the manifest out of the
+// real tree (b.9qj).
 func TestTarballRoundTripByteIdentical(t *testing.T) {
 	if testing.Short() {
 		t.Skip("slow: runs bun pm pack twice")
@@ -102,10 +123,10 @@ func TestTarballRoundTripByteIdentical(t *testing.T) {
 
 	root := repoRoot(t)
 
-	// Both packs (pack-first.sh + repack-and-verify.sh) read the real
-	// pkg/ts-bun-client/dist/; serialize against the coverage.bun-test gate,
-	// which rebuilds it (b.aur).
+	// The copy reads the real pkg/ts-bun-client/dist/; serialize against the
+	// coverage.bun-test gate, which rebuilds it (b.aur).
 	acquireDistPackLock(t)
+	worktree := stageWorktree(t, root)
 
 	// ── 1. Pack the first tarball into an isolated output dir ─────────────
 	// An absolute t.TempDir() path is used because a relative PACK_OUTPUT_DIR
@@ -113,7 +134,7 @@ func TestTarballRoundTripByteIdentical(t *testing.T) {
 	// tests. t.TempDir() also auto-cleans, so no dist/ cleanup is needed.
 	outDir := t.TempDir()
 	packScript := filepath.Join(root, "skills", "release-agent-director", "gates", "pack", "pack-first.sh")
-	packCmd := exec.Command("bash", packScript)
+	packCmd := exec.Command("bash", packScript, "--worktree-root", worktree)
 	packCmd.Dir = root
 	packCmd.Env = append(os.Environ(), "PACK_OUTPUT_DIR="+outDir)
 	packOut, err := packCmd.CombinedOutput()
@@ -131,7 +152,7 @@ func TestTarballRoundTripByteIdentical(t *testing.T) {
 
 	// ── 3. Run repack-and-verify.sh — expects exit 0 ──────────────────────
 	repackScript := filepath.Join(root, "skills", "release-agent-director", "gates", "pack", "repack-and-verify.sh")
-	repackCmd := exec.Command("bash", repackScript, "--first", firstTarball)
+	repackCmd := exec.Command("bash", repackScript, "--first", firstTarball, "--worktree-root", worktree)
 	repackCmd.Dir = root
 	var stderrBuf strings.Builder
 	repackCmd.Stdout = os.Stdout
@@ -143,6 +164,13 @@ func TestTarballRoundTripByteIdentical(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("repack-and-verify.sh should exit 0 for identical source packs; got exit %d\nstderr:\n%s",
 			exitCode, stderrBuf.String())
+	}
+	manifest, err := os.ReadFile(filepath.Join(worktree, "dist", "sha256sums"))
+	if err != nil {
+		t.Fatalf("repack-and-verify.sh wrote no sha256 manifest under --worktree-root %s: %v", worktree, err)
+	}
+	if !strings.Contains(string(manifest), firstTarball) {
+		t.Fatalf("sha256 manifest does not list the first tarball %s:\n%s", firstTarball, manifest)
 	}
 
 	t.Logf("pack.byte-identical-normalized passed (exit 0). Two packs of identical source are byte-identical.")

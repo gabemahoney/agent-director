@@ -17,26 +17,25 @@
 //
 // DESIGN
 // ======
+// Each sub-case runs the real gate script in its own throwaway git repo
+// (gateRepo): a copy of check-source-of-truth.ts and the authoritative
+// package.json under t.TempDir(). The gate scans the repo its own copy sits
+// in, so the .release-work/ and tools/ fixtures never enter the real tree,
+// where a sibling test or release gate scanning it would see them (b.9qj).
+//
 // Sub-case A (.release-work/ pruned, no false positive):
 //   1. Create .release-work/release-v9.9.9/pkg/ts-bun-client/package.json
 //      with a "version" field (this is exactly what the release skill's
 //      bump commit produces inside the worktree — would have triggered P1
 //      pre-fix).
-//   2. Run the gate from repo root; assert exit 0 and silent stderr.
+//   2. Run the gate from the repo root; assert exit 0 and silent stderr.
 //
 // Sub-case B (sibling violation OUTSIDE .release-work/ still fires):
-//   1. Create tools/test-bvvv-{pid}/package.json with a "version" field
+//   1. Create tools/test-bvvv/package.json with a "version" field
 //      (this is OUTSIDE .release-work/, so the gate MUST still fire).
 //   2. Run the gate; assert non-zero exit, stderr names the offending
 //      relative path, stderr contains "invariant.source-of-truth", and the
 //      first stderr line is valid JSON with gate == that key.
-//
-// CLEANUP-ON-FAILURE PATTERN
-// ==========================
-// t.Cleanup is registered before any mutation so it fires unconditionally
-// even when t.Fatalf (which calls runtime.Goexit) is hit mid-test. Sub-case
-// A only removes the .release-work/ root if this test was the one that
-// created it (check existence FIRST, then mkdir, then register cleanup).
 //
 // DEPENDENCY
 // ==========
@@ -45,89 +44,12 @@ package sourceoftruthreleaseworkprune_test
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 )
-
-// seedsMutationLockPath returns the path to the cross-process advisory lock
-// file (pkg/api/apitest/.seeds-mutation.lock) that serializes repo-tree
-// mutation against repo-tree readers. See acquireSeedsLock.
-func seedsMutationLockPath(root string) string {
-	return filepath.Join(root, "pkg", "api", "apitest", ".seeds-mutation.lock")
-}
-
-// acquireSeedsLock grabs the seeds-mutation flock (LOCK_EX) before this test
-// creates/removes a directory under tools/ (a walk-reachable location: not
-// dot/underscore/testdata-prefixed). Sub-case B builds
-// tools/test-bvvv-<pid>/ and RemoveAll's it; that is the walk-reachable
-// mutation. (Sub-case A's .release-work/ subtree is dot-prefixed, which a Go
-// package walk skips but the docker build-context tar below does not; the flock
-// is held across the whole test.)
-//
-// b.2y5: readers of the repo tree hold this lock while they read it. The
-// coverage.docker-epics gate's `make test-docker` children take it shared:
-// their docker build context tars the repo root, and a directory that appears
-// and then vanishes mid-tar fails the build. Holding the lock exclusively
-// across our whole tree-mutation window keeps our fixture directories out of
-// their reads.
-//
-// LOCK ORDERING (b.2y5): this test also takes acquireSourceOfTruthLock (the
-// ts-bun-client scripts lock). To avoid deadlock, every package that holds
-// BOTH locks MUST acquire the seeds-mutation lock FIRST, then the
-// source-of-truth lock. This test observes that invariant. (The seeds-lock-only
-// holders — the docker-epics children and the pkg/ts-bun-client test preload's
-// builds — never take the source-of-truth lock, so there is no reverse-order
-// acquirer to deadlock against.)
-//
-// The lock is released after our subtests' RemoveAll cleanups run: t.Cleanup
-// is LIFO, and subtest cleanups run when each subtest returns (before this
-// parent function's cleanups), so restoring the tree happens before we unlock.
-// The lock file is gitignored.
-func acquireSeedsLock(t *testing.T, root string) {
-	t.Helper()
-	lockPath := seedsMutationLockPath(root)
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		t.Fatalf("acquireSeedsLock: open %s: %v", lockPath, err)
-	}
-	// LOCK_EX blocks until no other process holds the lock.
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		f.Close()
-		t.Fatalf("acquireSeedsLock: flock: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		f.Close()
-	})
-}
-
-// acquireSourceOfTruthLock serializes tests that mutate the repo tree and
-// then run the source-of-truth gate. Multiple tests under
-// synthetic-regressions/ create fixture files (under tools/, skills/,
-// reference/, .release-work/) and invoke the gate — without serialization
-// they observe each other's fixtures and produce false positives/negatives.
-// The lock file is gitignored.
-func acquireSourceOfTruthLock(t *testing.T, root string) {
-	t.Helper()
-	lockPath := filepath.Join(root, "pkg", "ts-bun-client", "scripts", ".source-of-truth-mutation.lock")
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		t.Fatalf("acquireSourceOfTruthLock: open %s: %v", lockPath, err)
-	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		f.Close()
-		t.Fatalf("acquireSourceOfTruthLock: flock: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		f.Close()
-	})
-}
 
 func repoRoot(t *testing.T) string {
 	t.Helper()
@@ -147,10 +69,45 @@ func repoRoot(t *testing.T) string {
 	}
 }
 
-func runGate(t *testing.T, root string) (int, string) {
+// writeFile writes content to rel (slash-separated) under dir, creating
+// parent directories.
+func writeFile(t *testing.T, dir, rel string, content []byte) {
+	t.Helper()
+	path := filepath.Join(dir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll %s: %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("WriteFile %s: %v", path, err)
+	}
+}
+
+// gateRepo stages a git repo under t.TempDir() holding the real gate script and
+// the authoritative package.json, and returns its root (b.9qj).
+func gateRepo(t *testing.T) string {
+	t.Helper()
+	root := repoRoot(t)
+	dir := t.TempDir()
+	for _, rel := range []string{
+		"pkg/ts-bun-client/scripts/check-source-of-truth.ts",
+		"pkg/ts-bun-client/package.json",
+	} {
+		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatalf("read %s: %v", rel, err)
+		}
+		writeFile(t, dir, rel, data)
+	}
+	if out, err := exec.Command("git", "init", "-q", dir).CombinedOutput(); err != nil {
+		t.Fatalf("git init %s: %v\n%s", dir, err, out)
+	}
+	return dir
+}
+
+func runGate(t *testing.T, gateRoot string) (int, string) {
 	t.Helper()
 	cmd := exec.Command("bun", "run", "pkg/ts-bun-client/scripts/check-source-of-truth.ts")
-	cmd.Dir = root
+	cmd.Dir = gateRoot
 	var stderrBuf strings.Builder
 	cmd.Stderr = &stderrBuf
 	_ = cmd.Run() // non-zero is expected in sub-case B
@@ -165,63 +122,14 @@ func TestSourceOfTruthReleaseWorkPrune(t *testing.T) {
 		t.Skip("git not in PATH — skipping b.vvv regression test")
 	}
 
-	root := repoRoot(t)
-
-	// b.2y5: acquire the seeds-mutation flock FIRST (before the source-of-truth
-	// lock) so its LIFO cleanup releases LAST — after both this parent's and the
-	// subtests' tree-restoration cleanups. This serializes our tools/ mutation
-	// (sub-case B) against the repo-tree readers. See acquireSeedsLock for the
-	// race and the seeds-then-source-of-truth ordering.
-	acquireSeedsLock(t, root)
-
-	// Serialize against the other source-of-truth gate tests, which also
-	// mutate the repo tree.
-	acquireSourceOfTruthLock(t, root)
-
 	// ── Sub-case A: .release-work/ subtree must be pruned ────────────────────
 	t.Run("A_release_work_subtree_pruned", func(t *testing.T) {
-		releaseWorkRoot := filepath.Join(root, ".release-work")
+		gateRoot := gateRepo(t)
 
-		// Decide whether this test is the creator of .release-work/ BEFORE
-		// any mutation, so cleanup can safely remove the root iff we own it.
-		var preExisted bool
-		if _, err := os.Stat(releaseWorkRoot); err == nil {
-			preExisted = true
-		} else if !os.IsNotExist(err) {
-			t.Fatalf("Stat %s: %v", releaseWorkRoot, err)
-		}
+		writeFile(t, gateRoot, ".release-work/release-v9.9.9/pkg/ts-bun-client/package.json",
+			[]byte(`{"name":"agent-director-bumped","version":"9.9.9"}`+"\n"))
 
-		bumpDir := filepath.Join(releaseWorkRoot, "release-v9.9.9", "pkg", "ts-bun-client")
-
-		// Register cleanup BEFORE any mutation so it fires even if
-		// MkdirAll/WriteFile/t.Fatalf trips mid-way.
-		t.Cleanup(func() {
-			if preExisted {
-				// Only remove the bump subtree we created; the rest of
-				// .release-work/ belongs to whoever was here first.
-				ourSubtree := filepath.Join(releaseWorkRoot, "release-v9.9.9")
-				if err := os.RemoveAll(ourSubtree); err != nil {
-					t.Errorf("t.Cleanup: RemoveAll %s: %v", ourSubtree, err)
-				}
-				return
-			}
-			// We created .release-work/ from nothing → remove the whole root.
-			if err := os.RemoveAll(releaseWorkRoot); err != nil {
-				t.Errorf("t.Cleanup: RemoveAll %s: %v", releaseWorkRoot, err)
-			}
-		})
-
-		if err := os.MkdirAll(bumpDir, 0o755); err != nil {
-			t.Fatalf("MkdirAll %s: %v", bumpDir, err)
-		}
-
-		pkgPath := filepath.Join(bumpDir, "package.json")
-		pkgContent := `{"name":"agent-director-bumped","version":"9.9.9"}` + "\n"
-		if err := os.WriteFile(pkgPath, []byte(pkgContent), 0o644); err != nil {
-			t.Fatalf("WriteFile %s: %v", pkgPath, err)
-		}
-
-		exitCode, stderr := runGate(t, root)
+		exitCode, stderr := runGate(t, gateRoot)
 
 		if exitCode != 0 {
 			t.Fatalf("gate exited %d for files under .release-work/ — expected 0 (pruned);\nstderr:\n%s", exitCode, stderr)
@@ -235,33 +143,17 @@ func TestSourceOfTruthReleaseWorkPrune(t *testing.T) {
 
 	// ── Sub-case B: sibling violation OUTSIDE .release-work/ still fires ────
 	t.Run("B_sibling_violation_outside_release_work_still_fires", func(t *testing.T) {
-		suffix := fmt.Sprintf("%d", os.Getpid())
-		violationDir := filepath.Join(root, "tools", "test-bvvv-"+suffix)
+		gateRoot := gateRepo(t)
 
-		// Register cleanup BEFORE mutation.
-		t.Cleanup(func() {
-			if err := os.RemoveAll(violationDir); err != nil {
-				t.Errorf("t.Cleanup: RemoveAll %s: %v", violationDir, err)
-			}
-		})
+		relPath := filepath.Join("tools", "test-bvvv", "package.json")
+		writeFile(t, gateRoot, relPath, []byte(`{"name":"sibling","version":"9.9.9"}`+"\n"))
 
-		if err := os.MkdirAll(violationDir, 0o755); err != nil {
-			t.Fatalf("MkdirAll %s: %v", violationDir, err)
-		}
-
-		pkgPath := filepath.Join(violationDir, "package.json")
-		pkgContent := `{"name":"sibling","version":"9.9.9"}` + "\n"
-		if err := os.WriteFile(pkgPath, []byte(pkgContent), 0o644); err != nil {
-			t.Fatalf("WriteFile %s: %v", pkgPath, err)
-		}
-
-		exitCode, stderr := runGate(t, root)
+		exitCode, stderr := runGate(t, gateRoot)
 
 		if exitCode == 0 {
-			t.Fatalf("gate exited 0 — expected non-zero for sibling package.json with version at %s", pkgPath)
+			t.Fatalf("gate exited 0 — expected non-zero for sibling package.json with version at %s", relPath)
 		}
 
-		relPath := filepath.Join("tools", "test-bvvv-"+suffix, "package.json")
 		if !strings.Contains(stderr, relPath) {
 			t.Fatalf("gate stderr does not name the offending file %q;\nstderr:\n%s", relPath, stderr)
 		}

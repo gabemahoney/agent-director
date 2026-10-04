@@ -108,9 +108,11 @@ gates in the order defined for that phase. For each gate:
 >   seeds flock (`pkg/api/apitest/.seeds-mutation.lock`, in `flock`'s default
 >   exclusive mode) around their `make` invocations, as readers of the tree. No
 >   test writes a tracked file (helper-tag-replay mutates a copy of the Go
->   module under a temp dir). The lock's exclusive-lock mutators, the
->   source-of-truth tests, create and remove only non-Go fixture paths, which
->   these builds do not read.
+>   module under a temp dir). No Go test takes the lock: since b.9qj the
+>   source-of-truth tests run the gate in temp git repos, and
+>   `check-version-coherence.test.ts` and `version-bump.test.ts` stage their
+>   versioned `package.json` fixtures under the OS temp dir, so no version
+>   fixture appears in the real tree for a source-of-truth scan to report.
 > - `no-leak.test.ts` scopes its process count to children of its own process
 >   (`pgrep -c -P $pid agent-director`) rather than the host-global
 >   `pgrep -c agent-director`, so sibling gates' binary spawns no longer break
@@ -120,9 +122,11 @@ gates in the order defined for that phase. For each gate:
 >   `make test-docker EPIC=<slug>`. Those children are tree *readers* — the
 >   docker build-context tar plus a read-only bind mount of the live worktree —
 >   so they take the lock shared and run concurrently with one another, while
->   still excluding `coverage.go-root`'s exclusive-lock tree *mutators* (e.g.
+>   any exclusive holder (such as the bun builds above) excludes all of them.
+>   The source-of-truth tests once took it exclusively as tree *mutators* (e.g.
 >   `source-of-truth-reference-prune` creating/removing `reference/` at the repo
->   root mid-context-tar). The invariant is: reader takes shared, mutator takes
+>   root mid-context-tar); since b.9qj they stage their fixtures outside the
+>   tree and take no lock. The invariant is: reader takes shared, mutator takes
 >   exclusive.
 > - `coverage.bun-test` holds an **exclusive** `flock` on
 >   `${TMPDIR:-/tmp}/agent-director-ts-bun-dist-pack.lock` for its entire run.

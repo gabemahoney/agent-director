@@ -14,22 +14,23 @@
 //
 // DESIGN
 // ======
+// Each sub-case runs the real gate script in its own throwaway git repo
+// (gateRepo): a copy of check-source-of-truth.ts and the authoritative
+// package.json under t.TempDir(). The gate scans the repo its own copy sits
+// in, so the reference/ and skills/ fixtures never enter the real tree, where
+// a sibling test or release gate scanning it would see them (b.9qj).
+//
 // Sub-case A (reference/ pruned, no false positive):
-//  1. Create reference/test-clone-{rand}/package.json with a "version" field
+//  1. Create reference/test-clone/package.json with a "version" field
 //     (would have triggered P1 pre-fix).
-//  2. Create reference/test-clone-{rand}/SKILL.md with `version:` in YAML
+//  2. Create reference/test-clone/SKILL.md with `version:` in YAML
 //     frontmatter (would have triggered P2 pre-fix).
-//  3. Run the gate from repo root; assert exit 0 and silent stderr.
+//  3. Run the gate from the repo root; assert exit 0 and silent stderr.
 //
 // Sub-case B (real in-tree SKILL.md still fires):
-//  1. Create skills/test-skill-{rand}/SKILL.md with `version:` frontmatter
+//  1. Create skills/test-skill/SKILL.md with `version:` frontmatter
 //     (this is OUTSIDE reference/, so the gate MUST still fire).
 //  2. Run the gate; assert non-zero exit and that stderr names the file.
-//
-// CLEANUP-ON-FAILURE PATTERN
-// ==========================
-// t.Cleanup is registered before any mutation so it fires unconditionally
-// even when t.Fatalf (which calls runtime.Goexit) is hit mid-test.
 //
 // DEPENDENCY
 // ==========
@@ -38,63 +39,12 @@ package sourceoftruthreferenceprune_test
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 )
-
-// acquireSourceOfTruthLock serializes tests that mutate the repo tree and
-// then run the source-of-truth gate. Multiple tests under
-// synthetic-regressions/ create fixture files (under tools/, skills/,
-// reference/) and invoke the gate — without serialization they observe each
-// other's fixtures and produce false positives/negatives. The lock file is
-// gitignored.
-func acquireSourceOfTruthLock(t *testing.T, root string) {
-	t.Helper()
-	lockPath := filepath.Join(root, "pkg", "ts-bun-client", "scripts", ".source-of-truth-mutation.lock")
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		t.Fatalf("acquireSourceOfTruthLock: open %s: %v", lockPath, err)
-	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		f.Close()
-		t.Fatalf("acquireSourceOfTruthLock: flock: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		f.Close()
-	})
-}
-
-// acquireSeedsMutationLock grabs the seeds-mutation flock
-// (pkg/api/apitest/.seeds-mutation.lock, LOCK_EX) that readers of the repo tree
-// hold while they read it. This test creates and RemoveAll's paths directly
-// under the repo root (reference/, skills/); a reader that sees one appear and
-// then vanish fails — the coverage.docker-epics gate's `make test-docker`
-// children (lock taken shared) tar the repo root as their docker build context
-// and fail with "file '.../reference' not found". Lock is released
-// after this test's tree-mutation cleanups run (t.Cleanup is LIFO: acquire this
-// first so it unlocks last).
-func acquireSeedsMutationLock(t *testing.T, root string) {
-	t.Helper()
-	lockPath := filepath.Join(root, "pkg", "api", "apitest", ".seeds-mutation.lock")
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		t.Fatalf("acquireSeedsMutationLock: open %s: %v", lockPath, err)
-	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		f.Close()
-		t.Fatalf("acquireSeedsMutationLock: flock: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		f.Close()
-	})
-}
 
 func repoRoot(t *testing.T) string {
 	t.Helper()
@@ -114,10 +64,45 @@ func repoRoot(t *testing.T) string {
 	}
 }
 
-func runGate(t *testing.T, root string) (int, string) {
+// writeFile writes content to rel (slash-separated) under dir, creating
+// parent directories.
+func writeFile(t *testing.T, dir, rel string, content []byte) {
+	t.Helper()
+	path := filepath.Join(dir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll %s: %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("WriteFile %s: %v", path, err)
+	}
+}
+
+// gateRepo stages a git repo under t.TempDir() holding the real gate script and
+// the authoritative package.json, and returns its root (b.9qj).
+func gateRepo(t *testing.T) string {
+	t.Helper()
+	root := repoRoot(t)
+	dir := t.TempDir()
+	for _, rel := range []string{
+		"pkg/ts-bun-client/scripts/check-source-of-truth.ts",
+		"pkg/ts-bun-client/package.json",
+	} {
+		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatalf("read %s: %v", rel, err)
+		}
+		writeFile(t, dir, rel, data)
+	}
+	if out, err := exec.Command("git", "init", "-q", dir).CombinedOutput(); err != nil {
+		t.Fatalf("git init %s: %v\n%s", dir, err, out)
+	}
+	return dir
+}
+
+func runGate(t *testing.T, gateRoot string) (int, string) {
 	t.Helper()
 	cmd := exec.Command("bun", "run", "pkg/ts-bun-client/scripts/check-source-of-truth.ts")
-	cmd.Dir = root
+	cmd.Dir = gateRoot
 	var stderrBuf strings.Builder
 	cmd.Stderr = &stderrBuf
 	_ = cmd.Run() // non-zero is expected in sub-case B
@@ -132,55 +117,16 @@ func TestSourceOfTruthReferencePrune(t *testing.T) {
 		t.Skip("git not in PATH — skipping b.7v4 regression test")
 	}
 
-	root := repoRoot(t)
-
-	// Serialize against repo-tree readers (the docker-epics build-context tar)
-	// that fail if reference/ or skills/ is created/removed mid-read. Acquired
-	// first so its cleanup unlocks LAST — after the sub-case tree mutations
-	// below are restored.
-	acquireSeedsMutationLock(t, root)
-
-	// Serialize against the other source-of-truth gate test, which also
-	// mutates the repo tree.
-	acquireSourceOfTruthLock(t, root)
-
 	// ── Sub-case A: reference/ subtree must be pruned ────────────────────────
 	t.Run("A_reference_subtree_pruned", func(t *testing.T) {
-		suffix := fmt.Sprintf("%d", os.Getpid())
-		refDir := filepath.Join(root, "reference", "test-clone-"+suffix)
+		gateRoot := gateRepo(t)
 
-		if err := os.MkdirAll(refDir, 0o755); err != nil {
-			t.Fatalf("MkdirAll %s: %v", refDir, err)
-		}
+		writeFile(t, gateRoot, "reference/test-clone/package.json",
+			[]byte(`{"name":"vendored","version":"9.9.9"}`+"\n"))
+		writeFile(t, gateRoot, "reference/test-clone/SKILL.md",
+			[]byte("---\nname: vendored-skill\nversion: 1.0.0\n---\n\n# Vendored\n"))
 
-		// Cleanup removes the whole reference/ root if we created it, so the
-		// tree is clean even if the test aborts mid-way. Use RemoveAll on the
-		// nearest ancestor we own (refDir, not reference/ itself).
-		t.Cleanup(func() {
-			if err := os.RemoveAll(refDir); err != nil {
-				t.Errorf("t.Cleanup: RemoveAll %s: %v", refDir, err)
-			}
-			// If reference/ is now empty, remove it too — it didn't exist
-			// before this test ran and we shouldn't leave it behind.
-			referenceRoot := filepath.Join(root, "reference")
-			if entries, err := os.ReadDir(referenceRoot); err == nil && len(entries) == 0 {
-				_ = os.Remove(referenceRoot)
-			}
-		})
-
-		pkgPath := filepath.Join(refDir, "package.json")
-		pkgContent := `{"name":"vendored","version":"9.9.9"}` + "\n"
-		if err := os.WriteFile(pkgPath, []byte(pkgContent), 0o644); err != nil {
-			t.Fatalf("WriteFile %s: %v", pkgPath, err)
-		}
-
-		skillPath := filepath.Join(refDir, "SKILL.md")
-		skillContent := "---\nname: vendored-skill\nversion: 1.0.0\n---\n\n# Vendored\n"
-		if err := os.WriteFile(skillPath, []byte(skillContent), 0o644); err != nil {
-			t.Fatalf("WriteFile %s: %v", skillPath, err)
-		}
-
-		exitCode, stderr := runGate(t, root)
+		exitCode, stderr := runGate(t, gateRoot)
 
 		if exitCode != 0 {
 			t.Fatalf("gate exited %d for files under reference/ — expected 0 (pruned);\nstderr:\n%s", exitCode, stderr)
@@ -194,32 +140,18 @@ func TestSourceOfTruthReferencePrune(t *testing.T) {
 
 	// ── Sub-case B: real in-tree SKILL.md must still fire ───────────────────
 	t.Run("B_in_tree_skill_still_fires", func(t *testing.T) {
-		suffix := fmt.Sprintf("%d", os.Getpid())
-		skillDir := filepath.Join(root, "skills", "test-skill-"+suffix)
+		gateRoot := gateRepo(t)
 
-		if err := os.MkdirAll(skillDir, 0o755); err != nil {
-			t.Fatalf("MkdirAll %s: %v", skillDir, err)
-		}
+		relPath := filepath.Join("skills", "test-skill", "SKILL.md")
+		writeFile(t, gateRoot, relPath,
+			[]byte("---\nname: in-tree-skill\nversion: 9.9.9\n---\n\n# In-tree\n"))
 
-		t.Cleanup(func() {
-			if err := os.RemoveAll(skillDir); err != nil {
-				t.Errorf("t.Cleanup: RemoveAll %s: %v", skillDir, err)
-			}
-		})
-
-		skillPath := filepath.Join(skillDir, "SKILL.md")
-		skillContent := "---\nname: in-tree-skill\nversion: 9.9.9\n---\n\n# In-tree\n"
-		if err := os.WriteFile(skillPath, []byte(skillContent), 0o644); err != nil {
-			t.Fatalf("WriteFile %s: %v", skillPath, err)
-		}
-
-		exitCode, stderr := runGate(t, root)
+		exitCode, stderr := runGate(t, gateRoot)
 
 		if exitCode == 0 {
-			t.Fatalf("gate exited 0 — expected non-zero for in-tree SKILL.md with version frontmatter at %s", skillPath)
+			t.Fatalf("gate exited 0 — expected non-zero for in-tree SKILL.md with version frontmatter at %s", relPath)
 		}
 
-		relPath := filepath.Join("skills", "test-skill-"+suffix, "SKILL.md")
 		if !strings.Contains(stderr, relPath) {
 			t.Fatalf("gate stderr does not name the offending file %q;\nstderr:\n%s", relPath, stderr)
 		}

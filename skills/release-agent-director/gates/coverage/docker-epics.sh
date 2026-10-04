@@ -68,17 +68,20 @@ fi
 #
 # b.3jn: the `make test-docker` child (a) tars the whole repo tree as the docker
 # build CONTEXT and (b) bind-mounts the live worktree read-only at /work/source —
-# both are tree READS. Sibling gate coverage.go-root's synthetic-regression tests
-# MUTATE walk-reachable repo-root paths under an EXCLUSIVE flock on
-# pkg/api/apitest/.seeds-mutation.lock (b.2y5 protocol) — e.g.
-# source-of-truth-reference-prune create/RemoveAll's reference/ at the repo root.
-# Without the shared lock, the context enumeration can see reference/ and then
-# have it vanish mid-tar ("checking context: file '.../reference' not found or
-# excluded by .dockerignore"). We take the SAME lock file as b.2y5's
-# acquireSeedsLock, but in SHARED mode (-s) because these children are tree
-# READERS: shared holders overlap each other (preserving max_parallel:4 fan-out)
-# while go-root's LOCK_EX mutators exclude all of them. cwd is "." = repo root, so
-# the relative lock path resolves; /usr/bin/flock exists in the sandbox image.
+# both are tree READS. Under the b.2y5 protocol, a test that creates and removes
+# walk-reachable repo-tree paths holds an EXCLUSIVE flock on
+# pkg/api/apitest/.seeds-mutation.lock; without it, the context enumeration can
+# see such a path and then have it vanish mid-tar ("checking context: file
+# '.../<path>' not found or excluded by .dockerignore"). Since b.9qj no Go test
+# takes the lock: the source-of-truth tests that did (e.g.
+# source-of-truth-reference-prune creating and removing reference/ at the repo
+# root) stage their fixtures in temp git repos instead. The pkg/ts-bun-client
+# test preload and rc-stamp.test.ts still take it, in flock's default exclusive
+# mode, around their `make` builds. We take the SAME lock file, but in SHARED
+# mode (-s) because these children are tree READERS: shared holders overlap each
+# other (preserving max_parallel:4 fan-out) while any exclusive holder excludes
+# all of them. cwd is "." = repo root, so the relative lock path resolves;
+# /usr/bin/flock exists in the sandbox image.
 # (Rule: readers take -s; mutators take exclusive; same lock file as b.2y5.)
 GATES_JSON=$(
   printf '%s\n' "$SLUG_LIST" | while IFS= read -r slug; do

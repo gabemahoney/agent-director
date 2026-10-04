@@ -290,10 +290,7 @@ fixture package) do. The same applies to build and install output that other
 packages read: a build, install or pack the test runs writes under
 `t.TempDir()` (e.g. `make release-binaries` with `RELEASE_DIST_DIR`,
 `pack-first.sh` with `PACK_OUTPUT_DIR`), never into the real tree's `bin/`,
-`pkg/ts-bun-client/dist/` or `node_modules/`. One known exception:
-`TestTarballRoundTripByteIdentical` (`tarball-round-trip`) runs
-`repack-and-verify.sh`, which hardcodes the repo-root `dist/` and writes
-`dist/sha256sums` there. That file is gitignored and no test reads it.
+`pkg/ts-bun-client/dist/` or `node_modules/`.
 
 **Mandatory cleanup.** A test that must add untracked paths to the real tree
 (a fixture a gate scans for) gives them unique names and registers a
@@ -303,8 +300,7 @@ leaves nothing behind. It holds the seeds-mutation lock
 before it creates the paths until they are removed, taking it before any other
 lock it needs, so tree readers such as the `coverage.docker-epics` gate's
 docker build context never see the paths appear or vanish.
-`preflight-sentinel-replay`, `worktree-pollution` and
-`TestPackFirstHonorsPkgDir` add paths without this lock and are known gaps. A
+`worktree-pollution` adds a path without this lock and is a known gap. A
 test that reads `pkg/ts-bun-client/dist/` holds the dist-pack lock
 (`agent-director-ts-bun-dist-pack.lock` under `os.TempDir()`, `LOCK_EX`), which
 the `coverage.bun-test` gate holds for its whole run because it rebuilds
