@@ -21,6 +21,10 @@ export interface Logger {
  * Tilde expansion is handled TS-side by `src/internal/tilde.ts` before paths
  * are forwarded to the CLI subprocess, so the subprocess never receives a
  * leading `~`.
+ *
+ * An empty `storePath`, `home` or `tmuxCommand` is forwarded as given (e.g.
+ * `--store-path ""`); the CLI rejects it on every verb call, which then
+ * rejects with `ErrInvalidFlags`. It never falls back to the default. b.pu2.
  */
 export interface ClientOptions {
     /**

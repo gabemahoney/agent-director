@@ -29,6 +29,10 @@ func TestAdminRefusesUnknownVerbsAndFlags(t *testing.T) {
 		{"global flag with an empty value", func(id string) []string {
 			return []string{"--home=", "kill-finished", "--claude-instance-id", id}
 		}, "ErrInvalidFlags"},
+		// b.pu2: `--store-path ""` once opened HOME's default store, this row's.
+		{"global flag with an empty two-token value", func(id string) []string {
+			return []string{"--store-path", "", "kill-finished", "--claude-instance-id", id}
+		}, "ErrInvalidFlags"},
 		{"kill-finished unknown flag", func(id string) []string {
 			return []string{"kill-finished", "--claude-instance-id", id, "--bogus"}
 		}, "ErrInvalidFlags"},

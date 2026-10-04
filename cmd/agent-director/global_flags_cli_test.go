@@ -1,9 +1,13 @@
 package main_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -176,6 +180,60 @@ func TestGlobalFlag_TmuxCommand_AcceptedByVersionVerb(t *testing.T) {
 	)
 	if code != 0 {
 		t.Fatalf("exit=%d want 0; stderr=%q", code, stderr)
+	}
+}
+
+// runInHome runs the binary with HOME and cwd set to home and a hook payload on
+// stdin; cwd=home keeps a HOME="" trail write out of the package dir.
+func runInHome(t *testing.T, home string, args ...string) (string, string, int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), noExecFormDeadline)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binaryPath, args...)
+	cmd.Dir = home
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home}
+	cmd.Stdin = strings.NewReader(`{"hook_event_name":"SessionStart"}`)
+	var out, errOut strings.Builder
+	cmd.Stdout, cmd.Stderr = &out, &errOut
+	err := cmd.Run()
+	if ctx.Err() != nil {
+		t.Fatalf("%q still running after %s", args, noExecFormDeadline)
+	}
+	var exitErr *exec.ExitError
+	if err != nil && !errors.As(err, &exitErr) {
+		t.Fatalf("run %q: %v", args, err)
+	}
+	return out.String(), errOut.String(), cmd.ProcessState.ExitCode()
+}
+
+// TestGlobalFlag_EmptyTwoTokenValue_Refused: `--flag ""` for each global flag
+// exits 1 with the `--flag=` form's envelope and creates nothing under HOME
+// (no store, config or trail), whatever the verb (b.pu2).
+func TestGlobalFlag_EmptyTwoTokenValue_Refused(t *testing.T) {
+	verbs := []struct {
+		name string
+		argv []string
+	}{
+		// The hook payload on stdin would make a no-verb run write a trail record.
+		{"no verb", nil},
+		{"help", []string{"help"}},
+		{"version", []string{"version"}},
+		{"list", []string{"list"}},
+		{"trail-emit", []string{"trail-emit", "relay-attempt", "--token", "5b3c8f0e-2d4a-4c6b-9e1f-7a8b9c0d1e2f",
+			"--endpoint", "http://127.0.0.1:9/r", "--outcome", "200", "--instance-id", "pu2-x"}},
+	}
+	for _, flag := range []string{"--store-path", "--home", "--tmux-command"} {
+		for _, v := range verbs {
+			t.Run(flag+"/"+v.name, func(t *testing.T) {
+				home := t.TempDir()
+				stdout, stderr, code := runInHome(t, home, append([]string{flag, ""}, v.argv...)...)
+				env := assertOnlyEnvelope(t, stdout, stderr, code, "ErrInvalidFlags")
+				if want := flag + " requires a value"; env.ErrDescription != want {
+					t.Errorf("err_description = %q; want %q", env.ErrDescription, want)
+				}
+				assertHomeTree(t, home)
+			})
+		}
 	}
 }
 

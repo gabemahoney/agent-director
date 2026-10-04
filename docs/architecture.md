@@ -1891,7 +1891,7 @@ each verb call is a one-shot subprocess.
 
 **Construction.** `new Client(opts)` is synchronous. All `ClientOptions` fields are optional; omitted fields fall through to the CLI's own default-resolution (the CLI is the single source of truth — the TS Client provides no fallback values, b.32k). The constructor:
 
-1. Applies tilde expansion (TS-side, via `src/internal/tilde.ts`) to `storePath`, `home`, and `tmuxCommand` so the CLI subprocess always receives absolute paths.
+1. Applies tilde expansion (TS-side, via `src/internal/tilde.ts`) to `storePath`, `home`, and `tmuxCommand` so the CLI subprocess never receives a leading `~`.
 2. Calls `resolveCliPath()` eagerly to surface platform/install errors at construction time (ErrUnsupportedPlatform, ErrPlatformPackageMissing, ErrCliNotExecutable, ErrBunVersionTooOld), but does **not** cache the result. Each verb call re-resolves the binary path fresh so that a binary replacement between construction and spawn (e.g. a background `bun install` upgrading the global package) does not cause ENOENT failures on long-lived clients.
 3. Stores the caller-supplied options for forwarding on each verb call. No subprocess is spawned at construction time; `client.version({})` is the canonical "is the binary functional" smoke.
 4. Initializes `#npmPkgVersion` to `undefined`. The npm package version is loaded lazily on the first `version()` call and cached for the lifetime of the instance (see `loadNpmPackageVersion()` below).
@@ -1937,7 +1937,11 @@ Every verb call from `Client` follows this four-step recipe inside
    (`clisetup.ParseGlobalFlags` in `internal/clisetup/globalflags.go`,
    which `run()` in `cmd/agent-director/main.go` calls) strips them prior to
    per-verb dispatch. Each is emitted only when the corresponding
-   `ClientOptions` field was set by the caller (b.32k). JSON-only
+   `ClientOptions` field was set by the caller (b.32k). An empty
+   string counts as set and is forwarded as given (e.g.
+   `--store-path ""`); the pre-scan rejects it, so every verb call
+   rejects with `ErrInvalidFlags` (`<flag> requires a value`) and the
+   CLI never falls back to its default (b.pu2). JSON-only
    fields go through `--params-json` for verbs that accept it.
 2. **Spawn the CLI.** `resolveCliPath()` is called fresh to obtain the
    binary path (production) or the `_cliPath` DI override is used verbatim

@@ -64,7 +64,8 @@ func TestParseGlobalFlags(t *testing.T) {
 }
 
 // TestParseGlobalFlagsMissingValue: a global flag with no value, at the end
-// of argv or as `--flag=`, is an error naming the flag, never a silent no-op.
+// of argv, as `--flag=` or as `--flag ""` (b.pu2), is an error naming the
+// flag, never a silent no-op.
 func TestParseGlobalFlagsMissingValue(t *testing.T) {
 	cases := []struct {
 		argv []string
@@ -78,6 +79,9 @@ func TestParseGlobalFlagsMissingValue(t *testing.T) {
 		{[]string{"--home="}, "--home"},
 		{[]string{"--tmux-command="}, "--tmux-command"},
 		{[]string{"--store-path=", "version"}, "--store-path"},
+		{[]string{"--store-path", ""}, "--store-path"},
+		{[]string{"--home", "", "version"}, "--home"},
+		{[]string{"spawn", "--cwd", "/x", "--tmux-command", ""}, "--tmux-command"},
 	}
 	for _, tc := range cases {
 		t.Run(strings.Join(tc.argv, "_"), func(t *testing.T) {

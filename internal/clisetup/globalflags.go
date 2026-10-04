@@ -22,7 +22,9 @@ import (
 // defaults (b.32k).
 //
 // A value is set iff its "<flag>Set" field is true, so callers can tell "not
-// provided" from "explicitly empty".
+// provided" from "provided". A set value is never empty: ParseGlobalFlags
+// rejects an empty value in both the `--flag value` and `--flag=value` forms
+// (b.pu2).
 type GlobalFlags struct {
 	// StorePath is --store-path's value, set when StorePathSet.
 	StorePath    string
@@ -43,9 +45,11 @@ type GlobalFlags struct {
 // argv, so the per-verb dispatch operates on it unchanged. Both `--flag value`
 // and `--flag=value` forms are accepted, anywhere in argv.
 //
-// Errors are returned for malformed flag inputs (e.g. `--store-path` with no
-// following value, or `--store-path=` with an empty value via the `=` form).
-// Callers should write an ErrInvalidFlags envelope and exit non-zero.
+// Errors are returned for malformed flag inputs: `--store-path` with no
+// following value, or an empty value in either form (`--store-path ""` or
+// `--store-path=`). Both forms give the same "<flag> requires a value" error
+// (b.pu2). Callers should write an ErrInvalidFlags envelope and exit non-zero
+// before any store, config or trail access.
 //
 // Caveat: the pre-scan recognizes flag tokens anywhere in argv and does NOT
 // treat `--` as an end-of-options sentinel. If a caller intentionally passes
@@ -79,12 +83,13 @@ func ParseGlobalFlags(argv []string) (GlobalFlags, []string, error) {
 			name := tok[:eq]
 			if s, ok := recognized[name]; ok {
 				val := tok[eq+1:]
-				// Reject `--flag=` with empty value. Without this guard the
-				// empty string would silently fall through downstream
-				// resolution (e.g. resolveStorePath's `!= ""` check) and
-				// behave identically to omitting the flag — a footgun where
-				// the user thinks they set it but didn't. Mirror the
-				// missing-value error from the two-token form below.
+				// Reject `--flag=` with an empty value, as the two-token form
+				// below rejects `--flag ""`. Without these guards the empty
+				// string would silently fall through downstream resolution
+				// (e.g. resolveStorePath's `!= ""` check) and behave
+				// identically to omitting the flag — a footgun where the user
+				// thinks they set it but didn't (b.pu2: `--store-path ""`
+				// opened the default store).
 				if val == "" {
 					return GlobalFlags{}, nil, fmt.Errorf("%s requires a value", name)
 				}
@@ -94,9 +99,10 @@ func ParseGlobalFlags(argv []string) (GlobalFlags, []string, error) {
 			}
 		}
 
-		// `--flag value` form: consume the next argv element.
+		// `--flag value` form: consume the next argv element. A missing or
+		// empty value gets the same error as `--flag=` above (b.pu2).
 		if s, ok := recognized[tok]; ok {
-			if i+1 >= len(argv) {
+			if i+1 >= len(argv) || argv[i+1] == "" {
 				return GlobalFlags{}, nil, fmt.Errorf("%s requires a value", tok)
 			}
 			*s.val = argv[i+1]
