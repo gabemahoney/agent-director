@@ -173,6 +173,15 @@ describe("argv builder — spawn", () => {
     expect(labelValues).toContain("env=prod");
     expect(labelValues).toContain("team=backend");
   });
+
+  test("extra_env object → repeated --extra-env K=V entries (b.pti)", () => {
+    const argv = buildArgv(CLI, "spawn", {
+      cwd: "/ws",
+      extra_env: { FOO: "bar", CLAUDE_CONFIG_DIR: "/cfg" },
+    });
+    const envValues = argv.filter((_v, i) => argv[i - 1] === "--extra-env");
+    expect(envValues.sort()).toEqual(["CLAUDE_CONFIG_DIR=/cfg", "FOO=bar"]);
+  });
 });
 
 // ---------------------------------------------------------------------------

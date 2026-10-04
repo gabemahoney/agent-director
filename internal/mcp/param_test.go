@@ -125,6 +125,13 @@ func paramWrongValue(typ string) any {
 	return 7
 }
 
+// paramShapeRefused reports whether data is MCP's refusal of an argument whose
+// JSON shape does not fit its param. TestMCPParamParity requires it and
+// TestMCPParamTypesAgree forbids it, so a rewording (b.ewa) updates both.
+func paramShapeRefused(data mcp.ToolErrorData) bool {
+	return strings.Contains(data.ErrDescription, "cannot unmarshal")
+}
+
 // TestMCPParamParity: every manifest param of every MCP tool is decoded: a
 // wrong-typed value is a decode error naming the param, and nothing runs (b.7or).
 func TestMCPParamParity(t *testing.T) {
@@ -138,7 +145,7 @@ func TestMCPParamParity(t *testing.T) {
 				resp := callTool(t, e.d, mcp.ToolName(v.Name), paramJSON(t, map[string]any{p.Name: paramWrongValue(p.Type)}))
 
 				data := toolErrorData(t, resp)
-				if !strings.Contains(data.ErrDescription, "cannot unmarshal") || !strings.Contains(data.ErrDescription, p.Name) {
+				if !paramShapeRefused(data) || !strings.Contains(data.ErrDescription, p.Name) {
 					t.Errorf("%s with a wrong-typed %s = %s: %q; want a decode error naming %s (the param is not decoded)",
 						v.Name, p.Name, data.ErrName, data.ErrDescription, p.Name)
 				}

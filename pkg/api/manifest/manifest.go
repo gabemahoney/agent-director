@@ -274,8 +274,8 @@ var Verbs = []VerbDef{
 			},
 			{
 				Name:          "label",
-				Type:          "[]string (k=v)",
-				Description:   "Repeated KEY=VALUE pairs. Each becomes AGENT_DIRECTOR_LABEL_<UPPER_KEY> on the session env and persists in labels.",
+				Type:          "[]string",
+				Description:   "Label k=v entries, one per array element (on the CLI, a repeatable flag). Each becomes AGENT_DIRECTOR_LABEL_<UPPER_KEY> on the session env and persists in labels.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -319,8 +319,8 @@ var Verbs = []VerbDef{
 			},
 			{
 				Name:          "extra_env",
-				Type:          "[]string (K=V)",
-				Description:   "Repeated KEY=VALUE pairs injected on the tmux session env. Reserved keys (AGENT_DIRECTOR_*) rejected; auth env vars (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN) allowed. " + olderServeRenamed("extra-env", "extra_env") + ", so its variables (CLAUDE_CONFIG_DIR included) are not set.",
+				Type:          "map[string]string",
+				Description:   "Env-var entries injected on the tmux session env, as an object mapping each variable name to its value (on the CLI, a repeatable KEY=VALUE flag). Reserved keys (AGENT_DIRECTOR_*) rejected; auth env vars (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN) allowed. " + olderServeRenamed("extra-env", "extra_env") + ", so its variables (CLAUDE_CONFIG_DIR included) are not set.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -328,8 +328,8 @@ var Verbs = []VerbDef{
 			},
 			{
 				Name:          "claude_args",
-				Type:          "[]string (after --)",
-				Description:   "Pass-through argv to `claude` after the supervisor's own flags. Denied: --settings, --resume, --continue, --print, --output-format.",
+				Type:          "[]string",
+				Description:   "Pass-through argv to `claude` after the supervisor's own flags, one argument per array element (on the CLI, the arguments after --). Denied: --settings, --resume, --continue, --print, --output-format.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,

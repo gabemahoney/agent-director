@@ -5,7 +5,8 @@ package manifest_test
 // references publish; CLI flags stay dashed), every verb Description, which
 // every surface shows, names the reuse opt-in in one spelling only, and a
 // param text naming another param gives its manifest name with the CLI flag.
-// b.ro3 adds that no verb or param text names a param by its CLI flag alone.
+// b.ro3 adds that no verb or param text names a param by its CLI flag alone;
+// b.pti that a param spawn and make-template share has one Type on both.
 
 import (
 	"regexp"
@@ -27,6 +28,32 @@ func TestManifestParamNamesHaveNoDash(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// TestManifestSpawnTemplateParamsOneType: every param spawn and make-template
+// both take has the same Type on both, as a template supplies spawn's values
+// (b.pti: spawn's extra_env was "[]string (K=V)", make-template's a map).
+func TestManifestSpawnTemplateParamsOneType(t *testing.T) {
+	spawn, _ := manifest.Lookup("spawn")
+	tpl, _ := manifest.Lookup("make-template")
+	spawnTypes := map[string]string{}
+	for _, p := range spawn.Params {
+		spawnTypes[p.Name] = p.Type
+	}
+	shared := 0
+	for _, p := range tpl.Params {
+		typ, ok := spawnTypes[p.Name]
+		if !ok {
+			continue
+		}
+		shared++
+		if typ != p.Type {
+			t.Errorf("%s: spawn Type %q, make-template Type %q; want one Type", p.Name, typ, p.Type)
+		}
+	}
+	if shared == 0 {
+		t.Fatal("spawn and make-template share no param")
 	}
 }
 

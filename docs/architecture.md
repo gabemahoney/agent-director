@@ -1390,6 +1390,12 @@ checked.
 - Do not add an MCP-exposed param without decoding it in
   `LiveDispatcher.Call`: `TestMCPParamParity` fails for a param the
   dispatcher drops.
+- Do not give an MCP-exposed param a manifest `Type` that
+  `goTypeToJSONSchema` does not map, such as an annotated
+  `[]string (k=v)`; state an entry's form in the Description instead.
+  Such a param gets no type in `tools/list`, and `TestMCPParamTypesAgree`
+  fails for it (see
+  [Parameter names and unknown arguments](#parameter-names-and-unknown-arguments)).
 - Do not hand-write MCP tool schemas. The MCP server reads from `Verbs`.
 - Do not have `pkg/api/manifest` import `internal/store`,
   `internal/config`, or anything under `cmd/`. The package is stdlib-only
@@ -4459,6 +4465,25 @@ value and requires a decode error naming the param, so a param a `case`
 does not decode fails the test. Every exposed verb has a `case`,
 `get-permission` included; `ErrUnknownTool` is only for a tool name that
 is not exposed.
+
+**Declared, listed and decoded shapes agree.** `goTypeToJSONSchema`
+(`internal/mcp/schema.go`) turns each param's manifest `Type` into its
+`tools/list` property schema: `string` and `duration` a string, `bool` a
+boolean, `int` an integer, `[]string` an array of strings, and
+`map[string]string` an object whose values are strings. A Type it does not
+know gets no `type`, so `tools/list` would neither show nor check the
+shape. Each `case` decodes a param into the Go type its manifest Type
+names, so a call that sends the declared shape is never refused for its
+shape; a value of another shape is a decode error (`ErrInternal`). Spawn's
+`label` and `claude_args` are arrays of strings and its `extra_env` is an
+object mapping each variable name to its value
+(`{"CLAUDE_CONFIG_DIR": "/cfg"}`), the same shapes as `make_template`'s;
+the CLI spells the same values as repeated `--label k=v` and
+`--extra-env K=V` flags and the arguments after `--`.
+`TestMCPParamTypesAgree` (`internal/mcp/param_type_test.go`) checks every
+param of every exposed tool: its manifest Type has a JSON Schema shape,
+`tools/list` gives it that shape, and the decode accepts a value of it.
+`TestMCPParamParity` is the wrong-shape half.
 
 **Older `serve` processes.** A `serve` process from before 0.11.0, or
 0.11.0-rc.1 (which reports 0.11.0, so the version check cannot tell it

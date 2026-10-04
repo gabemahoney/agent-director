@@ -54,8 +54,8 @@
         },
         {
           "name": "label",
-          "type": "[]string (k=v)",
-          "description": "Repeated KEY=VALUE pairs. Each becomes AGENT_DIRECTOR_LABEL_\u003cUPPER_KEY\u003e on the session env and persists in labels.",
+          "type": "[]string",
+          "description": "Label k=v entries, one per array element (on the CLI, a repeatable flag). Each becomes AGENT_DIRECTOR_LABEL_\u003cUPPER_KEY\u003e on the session env and persists in labels.",
           "required": false,
           "nullable": false,
           "allow_empty": true,
@@ -103,8 +103,8 @@
         },
         {
           "name": "extra_env",
-          "type": "[]string (K=V)",
-          "description": "Repeated KEY=VALUE pairs injected on the tmux session env. Reserved keys (AGENT_DIRECTOR_*) rejected; auth env vars (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN) allowed. Over MCP, a serve process from before the rename (0.10.x and earlier, or 0.11.0-rc.1, which counts as 0.11.0) knows this parameter only as extra-env and silently ignores extra_env, so its variables (CLAUDE_CONFIG_DIR included) are not set.",
+          "type": "map[string]string",
+          "description": "Env-var entries injected on the tmux session env, as an object mapping each variable name to its value (on the CLI, a repeatable KEY=VALUE flag). Reserved keys (AGENT_DIRECTOR_*) rejected; auth env vars (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN) allowed. Over MCP, a serve process from before the rename (0.10.x and earlier, or 0.11.0-rc.1, which counts as 0.11.0) knows this parameter only as extra-env and silently ignores extra_env, so its variables (CLAUDE_CONFIG_DIR included) are not set.",
           "required": false,
           "nullable": false,
           "allow_empty": true,
@@ -112,8 +112,8 @@
         },
         {
           "name": "claude_args",
-          "type": "[]string (after --)",
-          "description": "Pass-through argv to `claude` after the supervisor's own flags. Denied: --settings, --resume, --continue, --print, --output-format.",
+          "type": "[]string",
+          "description": "Pass-through argv to `claude` after the supervisor's own flags, one argument per array element (on the CLI, the arguments after --). Denied: --settings, --resume, --continue, --print, --output-format.",
           "required": false,
           "nullable": false,
           "allow_empty": true,

@@ -1,0 +1,170 @@
+package mcp_test
+
+// param_type_test.go pins b.pti: every MCP tool param's manifest Type, its
+// tools/list schema and the MCP decode agree, so a caller sending the declared
+// shape is not refused for its shape; spawn's label, claude_args and extra_env
+// in those shapes reach the launch. (TestManifestSpawnTemplateParamsOneType
+// pins spawn's and make-template's shared params to one Type.)
+
+import (
+	"encoding/json"
+	"path/filepath"
+	"reflect"
+	"slices"
+	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/gabemahoney/agent-director/internal/mcp"
+	"github.com/gabemahoney/agent-director/internal/tmux"
+)
+
+// propSchema is the shape part of a tools/list property schema.
+type propSchema struct {
+	Type                 string      `json:"type"`
+	Items                *propSchema `json:"items,omitempty"`
+	AdditionalProperties *propSchema `json:"additionalProperties,omitempty"`
+}
+
+// String renders s as JSON, so failures show the nested shape.
+func (s propSchema) String() string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+// paramShapes maps each manifest param Type an MCP tool may take to the
+// tools/list schema it must get and a well-formed value of that shape.
+var paramShapes = map[string]struct {
+	schema propSchema
+	sample any
+}{
+	"string":            {propSchema{Type: "string"}, "k=v"},
+	"duration":          {propSchema{Type: "string"}, "1h"},
+	"bool":              {propSchema{Type: "boolean"}, true},
+	"int":               {propSchema{Type: "integer"}, 1},
+	"[]string":          {propSchema{Type: "array", Items: &propSchema{Type: "string"}}, []string{"k=v"}},
+	"map[string]string": {propSchema{Type: "object", AdditionalProperties: &propSchema{Type: "string"}}, map[string]string{"MCP_SAMPLE": "v"}},
+}
+
+// toolSchemas returns each tool's property schemas, by param, from tools/list.
+func toolSchemas(t *testing.T) map[string]map[string]propSchema {
+	t.Helper()
+	resp := runOne(t, &fakeDispatcher{}, mcp.Request{JSONRPC: "2.0", ID: json.RawMessage(`1`), Method: "tools/list"})
+	if resp == nil || resp.Error != nil {
+		t.Fatalf("tools/list failed: %+v", resp)
+	}
+	var got struct {
+		Tools []struct {
+			Name        string `json:"name"`
+			InputSchema struct {
+				Properties map[string]propSchema `json:"properties"`
+			} `json:"inputSchema"`
+		} `json:"tools"`
+	}
+	body, _ := json.Marshal(resp.Result)
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("parse tools/list: %v", err)
+	}
+	out := map[string]map[string]propSchema{}
+	for _, tool := range got.Tools {
+		out[tool.Name] = tool.InputSchema.Properties
+	}
+	return out
+}
+
+// TestMCPParamTypesAgree: every param of every MCP tool has a manifest Type
+// with a JSON Schema shape, tools/list gives it that shape, and the MCP decode
+// accepts a value of it (b.pti). TestMCPParamParity is the wrong-shape half.
+func TestMCPParamTypesAgree(t *testing.T) {
+	schemas := toolSchemas(t)
+	e, _ := newReuseParamEnv(t)
+	for _, v := range exposedVerbs() {
+		for _, p := range v.Params {
+			t.Run(v.Name+"/"+p.Name, func(t *testing.T) {
+				shape, ok := paramShapes[p.Type]
+				if !ok {
+					t.Fatalf("manifest Type %q has no JSON Schema shape; tools/list gives %s %v", p.Type, p.Name, schemas[mcp.ToolName(v.Name)][p.Name])
+				}
+				if got := schemas[mcp.ToolName(v.Name)][p.Name]; !reflect.DeepEqual(got, shape.schema) {
+					t.Errorf("tools/list schema = %v; want %v for manifest Type %q", got, shape.schema, p.Type)
+				}
+
+				args := paramJSON(t, map[string]any{p.Name: shape.sample})
+
+				// The call may still be refused (a required param is absent); only a shape refusal fails here.
+				if resp := callTool(t, e.d, mcp.ToolName(v.Name), args); resp.Error != nil {
+					if data := toolErrorData(t, resp); paramShapeRefused(data) {
+						t.Errorf("%s %s = %s: %q; want the declared %s shape decoded", v.Name, args, data.ErrName, data.ErrDescription, p.Type)
+					}
+				}
+			})
+		}
+	}
+}
+
+// TestMCPSpawnDeclaredShapesReachLaunch: an MCP spawn sending label,
+// claude_args and extra_env in their declared shapes launches with them: the
+// labels and variables on the session env (CLAUDE_CONFIG_DIR steering
+// pre-trust), the args after claude's own, and all three on the row (b.pti).
+func TestMCPSpawnDeclaredShapesReachLaunch(t *testing.T) {
+	e, c := newReuseParamEnv(t)
+	cwd, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	id := "mcp-shapes-" + uuid.NewString()[:8]
+	env := c.env()
+	env["MCP_SHAPE_ENV"] = "set"
+	args := []string{"--model", "opus"}
+
+	obj := callToolText(t, e.d, "spawn", paramJSON(t, map[string]any{"cwd": cwd, "claude_instance_id": id,
+		"label": []string{"role=worker", "team=core"}, "claude_args": args, "extra_env": env}))
+
+	assertPreTrust(t, obj, "ok")
+	c.check(t, cwd, true)
+	creates := e.rec.SocketCallsOf(tmux.CallCreate)
+	if len(creates) != 1 {
+		t.Fatalf("creates = %+v; want one", creates)
+	}
+	for k, want := range map[string]string{"CLAUDE_CONFIG_DIR": c.dir, "MCP_SHAPE_ENV": "set",
+		"AGENT_DIRECTOR_LABEL_ROLE": "worker", "AGENT_DIRECTOR_LABEL_TEAM": "core"} {
+		if got, ok := creates[0].Envs[k]; !ok || got != want {
+			t.Errorf("session env %s = %q (present=%v); want %q", k, got, ok, want)
+		}
+	}
+	if cmd := creates[0].Command; len(cmd) < len(args) || !slices.Equal(cmd[len(cmd)-len(args):], args) {
+		t.Errorf("command = %q; want it to end with claude_args %q", cmd, args)
+	}
+	type stored struct {
+		Labels     map[string]string
+		ClaudeArgs []string
+		ExtraEnv   map[string]string
+	}
+	var row stored
+	cols := readColumns(t, e.storePath, id)
+	for _, col := range []struct{ raw, into any }{
+		{cols.Labels, &row.Labels}, {cols.ClaudeArgs, &row.ClaudeArgs}, {cols.ExtraEnv, &row.ExtraEnv},
+	} {
+		if s, _ := col.raw.(string); json.Unmarshal([]byte(s), col.into) != nil {
+			t.Errorf("row column %v is not JSON", col.raw)
+		}
+	}
+	if want := (stored{map[string]string{"role": "worker", "team": "core"}, args, env}); !reflect.DeepEqual(row, want) {
+		t.Errorf("row labels, claude_args, extra_env = %+v; want %+v", row, want)
+	}
+}
+
+// TestMCPSpawnReservedEnvKey: an object extra_env with an AGENT_DIRECTOR_* key
+// is refused with ErrReservedEnvKey and nothing is created, as on the CLI.
+func TestMCPSpawnReservedEnvKey(t *testing.T) {
+	e, c := newReuseParamEnv(t)
+	env := c.env()
+	env["AGENT_DIRECTOR_FOO"] = "bar"
+
+	data := toolErrorData(t, callTool(t, e.d, "spawn", paramJSON(t, map[string]any{"cwd": t.TempDir(), "extra_env": env})))
+
+	if data.ErrName != "ErrReservedEnvKey" {
+		t.Errorf("err_name = %q (%s); want ErrReservedEnvKey", data.ErrName, data.ErrDescription)
+	}
+	assertNothingCreated(t, e.d, e.rec)
+}

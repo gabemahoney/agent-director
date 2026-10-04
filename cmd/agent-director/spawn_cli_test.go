@@ -87,7 +87,7 @@ func TestSpawnCLIHappyPath(t *testing.T) {
 	home := t.TempDir()
 	cwd := t.TempDir()
 	stdout, stderr, code := runSpawnCLI(t, home, fakeDir,
-		"spawn", "--cwd", cwd, "--label", "role=worker", "--", "--model", "opus")
+		"spawn", "--cwd", cwd, "--label", "role=worker", "--extra-env", "AD_CLI_EXTRA=set", "--", "--model", "opus")
 	if code != 0 {
 		t.Fatalf("exit = %d; stderr=%s", code, stderr)
 	}
@@ -162,6 +162,9 @@ func TestSpawnCLIHappyPath(t *testing.T) {
 	}
 	if !strings.Contains(logContent, "AGENT_DIRECTOR_LABEL_ROLE=worker") {
 		t.Errorf("fake-tmux log missing label env: %s", logContent)
+	}
+	if !strings.Contains(logContent, "AD_CLI_EXTRA=set") {
+		t.Errorf("fake-tmux log missing --extra-env env: %s", logContent)
 	}
 }
 
