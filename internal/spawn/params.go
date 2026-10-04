@@ -21,8 +21,9 @@ type SpawnParams struct {
 
 	// TmuxSessionNameSupplied distinguishes "caller explicitly passed
 	// --tmux-session-name (possibly empty)" from "caller omitted the
-	// flag". The CLI parser sets this via flag.FlagSet.Visit; an
-	// explicit empty supplied value trips ErrTmuxSessionNameEmpty,
+	// flag". The CLI parser sets this via flag.FlagSet.Visit; the MCP
+	// dispatcher sets it when tmux_session_name is present and not null
+	// (b.7or). An explicit empty supplied value trips ErrTmuxSessionNameEmpty,
 	// while a bare omission falls through to composeSessionName.
 	// Templates never set this — templates cannot supply
 	// tmux_session_name (SR-5.2).
@@ -82,7 +83,7 @@ type SpawnParams struct {
 	// resumed through agent-director afterwards. Go callers link the
 	// library, so the field exists at compile time; CLI, MCP and TypeScript
 	// callers detect it by the binary's version (the manifest's
-	// reuse-finished text gives each surface's source).
+	// reuse_finished text gives each surface's source).
 	ReuseFinished bool
 }
 

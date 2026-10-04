@@ -106,16 +106,18 @@ func DescReuseHistoryByLife() DescCase {
 	return DescCase{Name: "history by life, reuse claims", MustNot: append([]string(nil), historyByLifeClaims...)}
 }
 
-// DescReuseFinishedParam is spawn's reuse-finished parameter text (SR-18.10,
+// DescReuseFinishedParam is spawn's reuse_finished parameter text (SR-18.10,
 // SR-10.7, SR-18.7), by key phrase: finished rows only, explicit id, this
 // call only, default unchanged, silent success, no memory of earlier lives,
 // the failed-plain-spawn retry with the pending grace default, feature
-// detection per surface, development builds and older binaries, and the same
+// detection per surface, development builds and older binaries, serve
+// processes from before the rename (DescOlderServeParam, b.c4u), and the same
 // environment with SR-18.7's two consequences; plus DescReuseHistoryByLife.
 // Check it with AssertAgentTextCase.
 func DescReuseFinishedParam() DescCase {
+	olderServe := DescOlderServeParam("spawn", "reuse_finished")
 	return DescCase{
-		Name: "spawn manifest, reuse-finished parameter",
+		Name: "spawn manifest, reuse_finished parameter",
 		Require: []string{
 			"whose row is finished (ended or missing)", "A live row (pending included) still collides",
 			"No effect without an explicit claude_instance_id", "Applies to this call only",
@@ -132,17 +134,19 @@ func DescReuseFinishedParam() DescCase {
 			"X.Y.Z-rc.N counts as X.Y.Z", "0.0.0-dev", "dev (a plain go build)",
 			"returns ErrInvalidFlags on the CLI and in the TypeScript client",
 			"over MCP silently ignores the parameter",
+			olderServe.Require[0],
 			"same user and in the same tmux environment as the agents",
 			finishedRowNotVerification, wrongServerSecondAgent,
 		},
-		MustNot: append([]string(nil), historyByLifeClaims...),
+		MustNot: concatStrings(historyByLifeClaims, olderServe.MustNot),
 	}
 }
 
 // DescDeleteDeprecated is delete's deprecation notice as its manifest
 // description states it in compact form (SR-18.8, AC-DOC-07): DEPRECATED,
-// b.tep, not for cleanup or recovery, expire, spawn --reuse-finished, kill
-// then find-missing, never after a failed kill or on an assumed exit; never
+// b.tep, not for cleanup or recovery, expire, spawn with the reuse opt-in in
+// its one spelling (reuseOptInSpelling, b.c4u), kill then find-missing, never
+// after a failed kill or on an assumed exit; never
 // the operator-only unusable-name removal or its "Operator actions" pointer,
 // nor delete-then-spawn. Check it with AssertAgentTextCase.
 func DescDeleteDeprecated() DescCase {
@@ -150,7 +154,7 @@ func DescDeleteDeprecated() DescCase {
 		Name: "delete manifest, deprecation notice",
 		Require: []string{
 			"DEPRECATED", "removal planned (b.tep)", "Not for cleanup or recovery",
-			"expire removes finished rows", "respawn with spawn --reuse-finished",
+			"expire removes finished rows", "respawn with spawn " + reuseOptInSpelling,
 			"for a stuck live row, kill then find-missing", "Never delete after a failed kill",
 			"assuming a finished row's agent exited",
 		},

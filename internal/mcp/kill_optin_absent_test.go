@@ -1,8 +1,9 @@
 package mcp_test
 
 // kill_optin_absent_test.go pins SR-6.8 and SR-6.6 over MCP: kill has no
-// finished-row opt-in, so a call sending it in any spelling behaves exactly
-// as the same call without it.
+// finished-row opt-in, so a call sending it in any spelling is refused as an
+// unknown parameter (b.c4u) and does nothing, while the call without it
+// behaves as kill does.
 
 import (
 	"bufio"
@@ -21,14 +22,14 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// optInKeys are the opt-in's spellings a caller might send; Go's decoder
-// matches keys case-insensitively, so includefinished is covered too.
+// optInKeys are the opt-in's spellings a caller might send, case variants
+// included: Go's decoder would match those case-insensitively, the
+// unknown-parameter check must not.
 var optInKeys = []string{"include-finished", "include_finished", "IncludeFinished", "includefinished"}
 
 // mcpKillCall is what one kill tool call, on a fresh fixture, showed.
 type mcpKillCall struct {
 	r         *mcp.Response
-	resp      []byte // r marshalled whole
 	calls     []tmuxfix.SocketCall
 	nameCalls int
 	sessions  []tmuxfix.SeedSession
@@ -61,8 +62,7 @@ func callKillOnce(t *testing.T, tc killMCPCase, key string) mcpKillCall {
 	if after := readColumns(t, dbPath, killMCPID); !reflect.DeepEqual(after, before) {
 		t.Errorf("kill %s changed the row:\n got %+v\nwant %+v", body, after, before)
 	}
-	raw, _ := json.Marshal(resp)
-	return mcpKillCall{r: resp, resp: raw, calls: rec.SocketCalls(), nameCalls: len(rec.Calls()),
+	return mcpKillCall{r: resp, calls: rec.SocketCalls(), nameCalls: len(rec.Calls()),
 		sessions: rec.Sessions(apitest.TestSocket), trail: killCalledLines(t)[seen:]}
 }
 
@@ -101,11 +101,12 @@ func seedUnrelated(_ *testing.T, rec *tmuxfix.Recorder, _ string) {
 	rec.SeedSessions(apitest.TestSocket, tmuxfix.SeedSession{Name: "unrelated"})
 }
 
-// TestMCPKillIgnoresOptInKeys: on a finished row whose own reported-in old
+// TestMCPKillRefusesOptInKeys: on a finished row whose own reported-in old
 // session still runs (one the CLI opt-in would end) and on a live row, a kill
-// sending any opt-in spelling gives the same response, tmux calls and trail as
-// without it, and never the opt-in's live-row refusal (SR-6.8, SR-6.6).
-func TestMCPKillIgnoresOptInKeys(t *testing.T) {
+// sending any opt-in spelling is ErrInvalidFlags with no tmux call, no trail
+// line and the session kept, never the opt-in's live-row refusal; without it
+// kill runs as usual (SR-6.8, SR-6.6; b.c4u).
+func TestMCPKillRefusesOptInKeys(t *testing.T) {
 	window := time.Duration(config.DefaultStoppingWindowSeconds) * time.Second
 	bound := time.Duration(config.DefaultStartingSessionSeconds) * time.Second
 	endedAt := time.Now().Add(-window - time.Minute)
@@ -126,33 +127,34 @@ func TestMCPKillIgnoresOptInKeys(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.tc.name, func(t *testing.T) {
-			var base mcpKillCall
-			for _, key := range append([]string{""}, optInKeys...) {
+			base := callKillOnce(t, c.tc, "")
+			assertKillSent(t, base.r, false)
+			if c.finished {
+				if base.nameCalls != 0 || len(base.calls) != 0 {
+					t.Errorf("finished row: tmux calls = %d name-based, %+v; want none", base.nameCalls, base.calls)
+				}
+				if len(base.sessions) != 1 {
+					t.Errorf("finished row: sessions = %+v; want the row's own old session still there", base.sessions)
+				}
+			} else if !slices.ContainsFunc(base.calls, func(c tmuxfix.SocketCall) bool { return c.Call == tmux.CallLookup }) {
+				t.Errorf("live row: tmux calls = %+v; want the lookup", base.calls)
+			}
+			if len(base.trail) != 1 || base.trail[0]["include_finished"] != false {
+				t.Errorf("SR-6.8: kill wrote ad.kill.called %+v; want one line with include_finished false", base.trail)
+			}
+			for _, key := range optInKeys {
 				got := callKillOnce(t, c.tc, key)
-				assertKillSent(t, got.r, false)
-				if c.finished {
-					if got.nameCalls != 0 || len(got.calls) != 0 {
-						t.Errorf("finished row, key %q: tmux calls = %d name-based, %+v; want none", key, got.nameCalls, got.calls)
-					}
-					if len(got.sessions) != 1 {
-						t.Errorf("finished row, key %q: sessions = %+v; want the row's own old session still there", key, got.sessions)
-					}
-				} else if !slices.ContainsFunc(got.calls, func(c tmuxfix.SocketCall) bool { return c.Call == tmux.CallLookup }) {
-					t.Errorf("live row, key %q: tmux calls = %+v; want the lookup (the opt-in's refusal makes none)", key, got.calls)
+				if data := toolErrorData(t, got.r); data.ErrName != "ErrInvalidFlags" {
+					t.Errorf("kill with %q: error %+v; want ErrInvalidFlags (an unknown parameter)", key, data)
 				}
-				if len(got.trail) != 1 || got.trail[0]["include_finished"] != false {
-					t.Errorf("SR-6.8: kill with %q wrote ad.kill.called %+v; want one line with include_finished false", key, got.trail)
+				if got.nameCalls != 0 || len(got.calls) != 0 {
+					t.Errorf("kill with %q: tmux calls = %d name-based, %+v; want none", key, got.nameCalls, got.calls)
 				}
-				if key == "" {
-					base = got
-					continue
+				if len(got.trail) != 0 {
+					t.Errorf("kill with %q wrote ad.kill.called %+v; want none (kill did not run)", key, got.trail)
 				}
-				if string(got.resp) != string(base.resp) {
-					t.Errorf("SR-6.8: kill with %q = %s; want %s, as without it", key, got.resp, base.resp)
-				}
-				if !reflect.DeepEqual(got.calls, base.calls) || got.nameCalls != base.nameCalls {
-					t.Errorf("SR-6.8: kill with %q made tmux calls %+v (%d name-based); want %+v (%d), as without it",
-						key, got.calls, got.nameCalls, base.calls, base.nameCalls)
+				if len(got.sessions) != len(base.sessions) {
+					t.Errorf("kill with %q: sessions = %+v; want them as seeded (%+v)", key, got.sessions, base.sessions)
 				}
 			}
 		})

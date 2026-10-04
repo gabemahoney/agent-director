@@ -301,9 +301,9 @@ func TestAdviceFollow_H5_ServeUsageRegister(t *testing.T) {
 }
 
 // TestAdviceFollow_I4_CLILiteralReuseSpelling: I4 (CLI half) A4's "a retry with this id uses the reuse opt-in
-// (reuse_finished) once the name is free", copied literally onto the CLI as --reuse_finished.
+// reuse_finished (--reuse-finished on the CLI) once the name is free", the flag in the parenthesis copied literally.
 func TestAdviceFollow_I4_CLILiteralReuseSpelling(t *testing.T) {
-	const advice = "a retry with this id uses the reuse opt-in (reuse_finished) once the name is free"
+	const advice = "a retry with this id uses the reuse opt-in reuse_finished (--reuse-finished on the CLI) once the name is free"
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
 	socket, _ := heldHome(t, home)
@@ -320,13 +320,12 @@ func TestAdviceFollow_I4_CLILiteralReuseSpelling(t *testing.T) {
 	id := heldRowID(t, home, fakeDir)
 	assertHeldRowEnded(t, home, fakeDir, id)
 	writeHolders(t, socket) // the holder exits: the name is free
+	flag := advCLIQuoted(t, env.ErrDescription, "the reuse opt-in reuse_finished (", " on the CLI)")
 
-	knownBrokenAdvice(t, "I4", "the CLI flag is --reuse-finished, so --reuse_finished is refused with ErrInvalidFlags "+
-		"(flag provided but not defined) and nothing is launched")
 	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "spawn", "--claude-instance-id", id, "--cwd", t.TempDir(),
-		"--tmux-session-name", heldName, "--no-pre-trust", "--reuse_finished")
+		"--tmux-session-name", heldName, "--no-pre-trust", flag)
 	if code != 0 {
-		t.Fatalf("spawn --reuse_finished: exit=%d stdout=%q stderr=%q; want the reuse to launch", code, stdout, stderr)
+		t.Fatalf("spawn %s: exit=%d stdout=%q stderr=%q; want the reuse to launch", flag, code, stdout, stderr)
 	}
 	if st := statusOf(t, home, fakeDir, id); st != string(store.StatePending) {
 		t.Errorf("status = %q; want pending", st)

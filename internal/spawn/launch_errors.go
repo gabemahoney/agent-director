@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/gabemahoney/agent-director/internal/tmux"
+	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
 // RowStaysPending is the row sentence after a launch failure that leaves the
@@ -18,13 +19,12 @@ const RowStaysPending = "the row stays pending"
 // (LaunchTimeoutError), and plain spawn's retry sentences build on it.
 const LaunchRetryRule = "do not retry until get shows the row ended or missing"
 
-// ReuseOptIn names the reuse opt-in in each surface's own spelling, for a
-// description every surface shows: one surface's spelling does not work on
-// another (MCP silently ignores an unknown argument, the CLI refuses an
-// unknown flag). It is the one spelling the runtime error texts build on
-// (b.1qq), except pkg/api's heldRetryReuse, which still spells the opt-in
-// reuse_finished alone (b.c4u).
-const ReuseOptIn = "the reuse opt-in (--reuse-finished on the CLI, reuse-finished over MCP, reuse_finished in TypeScript, ReuseFinished in Go)"
+// ReuseOptIn names the reuse opt-in in its one spelling for a description
+// every surface shows, manifest.ReuseOptInSpelling (b.c4u): the param name
+// MCP and the TypeScript client take, then the CLI flag, which the manifest's
+// spawn, kill and delete Descriptions use too. It is the one spelling the
+// runtime error texts build on (b.1qq, b.c4u).
+const ReuseOptIn = "the reuse opt-in " + manifest.ReuseOptInSpelling
 
 // ReuseRetry names the retry that works for a plain spawn whose row for this
 // id is, or will be, finished (b.1qq): a plain spawn of the id collides with

@@ -35,9 +35,8 @@ import (
 //     row sentence and, for an ErrTmuxUnresponsive (the re-lookup could not
 //     answer), in place of "retry later", and for the ErrTmuxSessionCreate of
 //     a holder that vanished first, the retry sentence chosen by the end
-//     write's result: when it applied, heldRetryReuse for the
-//     ErrTmuxUnresponsive and heldRetryFree for the vanished holder, else
-//     heldRetryWait for both (SR-1.4; WD 2026-09-30d (a); b.1qq); each of
+//     write's result: when it applied, heldRetryFree for both, else
+//     heldRetryWait for both (SR-1.4; WD 2026-09-30d (a); b.1qq, b.c4u); each of
 //     those descriptions names the instance id the sentence's "this id"
 //     means;
 //  4. writes the lookup's ad.provenance.disagree records (a scope value is
@@ -61,7 +60,7 @@ func spawnHeldName(s *store.Store, t tmux.LookupClient, pc ProcChecker, now func
 	}, held.Name)
 	retry := heldRetrySentences{Unanswered: heldRetryWait, Vanished: heldRetryWait}
 	if rowResult == nameHeldRowEnded {
-		retry = heldRetrySentences{Unanswered: heldRetryReuse, Vanished: heldRetryFree}
+		retry = heldRetrySentences{Unanswered: heldRetryFree, Vanished: heldRetryFree}
 	}
 	holder, err := heldNameOutcome(res, held.InstanceID, held.Name, held.Socket, sentence, retry, nil)
 

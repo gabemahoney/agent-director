@@ -158,6 +158,20 @@ func TestToolsCallDispatchMatrix(t *testing.T) {
 
 			_, err = d.Call(context.Background(), mcp.ToolName(v.Name), json.RawMessage(tc.args))
 
+			// An args key that is not one of the verb's params is refused
+			// before any decode (b.c4u), which would leave this case
+			// exercising nothing.
+			if errors.Is(err, api.ErrInvalidFlags) && strings.Contains(err.Error(), "unknown parameter") {
+				t.Fatalf("dispatcher refused verb %q's matrix args before decoding them; use its manifest param names: %v", v.Name, err)
+			}
+
+			// tools/list advertises every exposed verb, so each needs a
+			// dispatch case; a missing one answers ErrUnknownTool, as
+			// get_permission did before b.c4u.
+			if errors.Is(err, mcp.ErrUnknownTool) {
+				t.Fatalf("dispatcher has no case for MCP-exposed verb %q (tool %q): %v", v.Name, mcp.ToolName(v.Name), err)
+			}
+
 			// Round-trip proof for verbs taking claude_instance_id: the
 			// store was seeded at matrixID, so a healthy decode finds
 			// the row. A dropped json tag silently leaves the id empty

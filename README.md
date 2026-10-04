@@ -248,6 +248,11 @@ Install with `--register-mcp`. Inside the orchestrating Claude the
 verbs appear as `mcp__agent-director__spawn`,
 `mcp__agent-director__send_keys`, etc.
 
+Tool arguments are the parameter names with underscores
+(`--claude-instance-id` → `claude_instance_id`, `--reuse-finished` →
+`reuse_finished`). A tool refuses any other argument with
+`ErrInvalidFlags` and does nothing.
+
 ### Intercept permission prompts
 
 ```sh
@@ -726,7 +731,8 @@ jq -c 'select(.event == "ad.kill.called" and .claude_instance_id == "<id>") | {i
 
 The opt-in exists on the CLI and in the Go (`KillParams.IncludeFinished`)
 and TypeScript (`include_finished`) client libraries, not over MCP: an MCP
-`kill` on a finished row is always the no-op success. Detect it by the
+`kill` that sends it is refused with `ErrInvalidFlags` and does nothing,
+and one on a finished row without it is the no-op success. Detect it by the
 version of the binary that serves you. CLI: the `version` verb. TypeScript:
 `binaryVersion` from `Client.create()` or the `version` that
 `resolveSystemBinary()` returns, never `version()` (the npm package's

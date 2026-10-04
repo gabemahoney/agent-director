@@ -303,10 +303,10 @@ const (
 
 // The opted-in retry a plain spawn of a caller-supplied id names after the
 // launch-timeout rule (b.1qq): in its timeout description
-// (spawnTimeoutReuseRetry, with the opt-in in each surface's spelling) and in
-// the spawn manifest text (spawnManifestReuseRetry, surface-neutral).
+// (spawnTimeoutReuseRetry, with the opt-in in its one spelling, reuseOptIn)
+// and in the spawn manifest text (spawnManifestReuseRetry, surface-neutral).
 const (
-	spawnTimeoutReuseRetry  = launchRetryRule + "; then a retry with this id uses " + reuseOptInEverySurface
+	spawnTimeoutReuseRetry  = launchRetryRule + "; then a retry with this id uses " + reuseOptIn
 	spawnManifestReuseRetry = "then retry an explicit id with the reuse opt-in"
 )
 

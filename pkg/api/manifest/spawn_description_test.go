@@ -58,7 +58,7 @@ func TestSpawnDescriptionStatesLaunchRules(t *testing.T) {
 		{"", apitest.DescSpawnLaunchTimeoutRule()},
 		{"", apitest.DescSpawnScanRefusal()},
 		{"", apitest.DescSpawnHeldName()},
-		{"tmux-session-name", apitest.DescSpawnSessionNameParam()},
+		{"tmux_session_name", apitest.DescSpawnSessionNameParam()},
 	} {
 		t.Run(tc.c.Name, func(t *testing.T) {
 			for source, text := range spawnTexts(t, tc.param) {

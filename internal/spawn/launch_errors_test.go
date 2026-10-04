@@ -25,8 +25,8 @@ func TestLaunchTimeoutRetrySentence(t *testing.T) {
 		minted bool
 		ending string
 	}{
-		{"caller-supplied id", false, rule + "; then a retry with this id uses the reuse opt-in (--reuse-finished on the CLI, " +
-			"reuse-finished over MCP, reuse_finished in TypeScript, ReuseFinished in Go), since a plain spawn of the id now collides"},
+		{"caller-supplied id", false, rule + "; then a retry with this id uses the reuse opt-in reuse_finished " +
+			"(--reuse-finished on the CLI), since a plain spawn of the id now collides"},
 		{"minted id", true, rule},
 	}
 	for _, f := range failures {

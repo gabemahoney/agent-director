@@ -11,7 +11,9 @@ import (
 //
 // Each ParamDef.Type maps to a JSON Schema primitive per
 // goTypeToJSONSchema below. Required params end up in the
-// `required` array.
+// `required` array. additionalProperties is false: the dispatcher
+// refuses any argument that is not one of the verb's params with
+// ErrInvalidFlags (b.c4u), so the schema states what the server enforces.
 //
 // The schema is deliberately permissive — it ONLY pins the types,
 // not the deeper validation (e.g. relay_mode ∈ {on, off}). The api
@@ -30,8 +32,9 @@ func buildInputSchema(v manifest.VerbDef) map[string]any {
 	}
 
 	schema := map[string]any{
-		"type":       "object",
-		"properties": properties,
+		"type":                 "object",
+		"properties":           properties,
+		"additionalProperties": false,
 	}
 	if len(required) > 0 {
 		schema["required"] = required

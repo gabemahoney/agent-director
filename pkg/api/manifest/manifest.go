@@ -73,6 +73,14 @@ var stateEnum = []string{
 	"ended", "missing",
 }
 
+// ReuseOptInSpelling is the reuse opt-in's one spelling in advice every
+// surface shows (b.c4u): its param name, which MCP takes and the TypeScript
+// client's field shares, then its CLI flag. The spawn, kill (live-row step 6)
+// and delete Descriptions name the opt-in by it, and internal/spawn.ReuseOptIn
+// builds the runtime retry sentences on it, so no shared text names the
+// opt-in in one surface's spelling only.
+const ReuseOptInSpelling = "reuse_finished (--reuse-finished on the CLI)"
+
 // liveRowSequence is SR-18.6's bounded, paced live-row sequence in its short
 // form (decision-0930b Q6): the same six steps and limits, with no rationale.
 // Only kill's Description states it (it ends killDescription); find-missing
@@ -88,7 +96,7 @@ const liveRowSequence = "Live-row sequence (a pending row included): " +
 	"3. Run find-missing, then check status; repeat about 5 s apart until the row is ended or missing, at most three runs. " +
 	"4. Still live: kill once more, wait about 5 s, run find-missing once more and check. " +
 	"5. Still live: escalate to a human. " +
-	"6. Then resume the row if it has a session id and the caller wants the conversation back; otherwise spawn with --reuse-finished (callers whose ids agent-director mints spawn fresh)."
+	"6. Then resume the row if it has a session id and the caller wants the conversation back; otherwise spawn with " + ReuseOptInSpelling + "; callers whose ids agent-director mints spawn fresh."
 
 // liveRowSequencePointer is SR-18.6's one-sentence pointer to the live-row
 // sequence, verbatim. It ends the find-missing and spawn Descriptions (after
@@ -143,11 +151,34 @@ const expireDescription = "Delete finished rows (ended/missing) whose ended_at i
 const sameEnvConsequences = "Two consequences: kill's success on a finished row is not verification that the agent exited; " +
 	"and on the wrong tmux server, a row wrongly marked missing, kill's no-op success and a reuse together start a second agent for the same id."
 
-// reuseFinishedDescription is spawn's reuse-finished parameter text
+// olderServeReleases names the releases whose MCP serve process predates
+// b.c4u/b.7or: their spawn decoded only the dashed relay-mode and extra-env
+// (0.11.0-rc.1 also the dashed reuse-finished; 0.10.x had no reuse
+// parameter), and neither spawn nor list decoded tmux-session-name or
+// no-pre-trust under any spelling. 0.11.0-rc.1 reports 0.11.0, so the
+// version check cannot tell it from the fixed release. The older-serve
+// sentences of the renamed spawn and list parameter texts name them by it.
+const olderServeReleases = "0.10.x and earlier, or 0.11.0-rc.1, which counts as 0.11.0"
+
+// olderServeRenamed is the older-serve sentence of a spawn parameter whose
+// MCP name lost its dashes (b.c4u); it ends that parameter's text.
+func olderServeRenamed(dashed, name string) string {
+	return "Over MCP, a serve process from before the rename (" + olderServeReleases + ") knows this parameter only as " + dashed + " and silently ignores " + name
+}
+
+// olderServeUndecoded is the older-serve sentence of a parameter the MCP
+// serve process did not decode before b.7or; it ends that parameter's text.
+// Like olderServeRenamed it carries no closing period, so a site can append
+// the consequence of the ignored parameter.
+const olderServeUndecoded = "Over MCP, a serve process from before the fix (" + olderServeReleases + ") silently ignores this parameter under either spelling"
+
+// reuseFinishedDescription is spawn's reuse_finished parameter text
 // (SR-18.10, SR-10.7, SR-18.7, SR-18.16). Parameter texts reach MCP
 // tools/list, surface.json and the generated references, never help. The Go
 // (SpawnParams.ReuseFinished), CLI (--reuse-finished) and TypeScript
-// (reuse_finished) texts are short forms of it.
+// (reuse_finished) texts are short forms of it. Its older-serve sentence
+// (b.c4u) covers the serve processes from before the param's rename to
+// reuse_finished, which the version check cannot always tell apart.
 const reuseFinishedDescription = "Opt in to reusing an explicit claude_instance_id whose row is finished (ended or missing): the id starts again on that row. " +
 	"A live row (pending included) still collides with ErrInstanceIdCollision, as does a row that changed or was removed after this spawn examined it; nothing is changed then. " +
 	"No effect without an explicit claude_instance_id (a minted id cannot collide). " +
@@ -158,6 +189,7 @@ const reuseFinishedDescription = "Opt in to reusing an explicit claude_instance_
 	"Feature detection: read the version of the binary that serves the caller: on the CLI the version verb; over MCP the version tool, which reports the running serve process's version until that process restarts; in the TypeScript client binaryVersion (from Client.create() or resolveSystemBinary()), never version(), which is the npm package's version. " +
 	"A release candidate X.Y.Z-rc.N counts as X.Y.Z. A build without a release stamp reports 0.0.0-dev (a make build) or dev (a plain go build); a caller cannot compare it and relies on the older-binary behaviour: " +
 	"an older binary returns ErrInvalidFlags on the CLI and in the TypeScript client, and over MCP silently ignores the parameter, so a finished row gives ErrInstanceIdCollision. " +
+	"Over MCP, a serve process from before the rename (" + olderServeReleases + " and knows this parameter only as reuse-finished) silently ignores reuse_finished, so a finished row gives ErrInstanceIdCollision. " +
 	"Use it as the same user and in the same tmux environment as the agents. " + sameEnvConsequences
 
 // killDescription is kill's Description (SR-6.1, SR-1.7, SR-18.1, SR-18.2,
@@ -199,7 +231,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "spawn",
-		Description: "Launch a tracked Claude Code agent in a new tmux session. Returns the claude_instance_id and pre_trust (ok, skipped or failed) without waiting for the agent; the row is pending from its insert until the agent reports in, then waiting. Creating its labelled session is bounded by the create timeout; on a timeout spawn returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may have been created and the new row stays pending; do not retry until get shows the row ended or missing, since a retry without an explicit id would start a second agent; then retry an explicit id with the reuse opt-in. With an explicit id that has no row, a session of this store labelled with that id, left over from an earlier life, refuses the spawn with ErrTmuxSessionConflict and nothing is written. If the session name is already held, spawn ends its new row at once (unless the error says otherwise) and returns ErrTmuxSessionConflict naming the holder's tmux id and whether its label names this id; ErrTmuxSessionCreate if the holder vanished first, ErrTmuxUnresponsive or ErrTmuxNotAvailable if tmux could not be read or run. ErrTmuxSessionConflict is CONFLICT (permanent until a human looks): another row's or another agent-director store's session is another agent and must not be ended; a leftover of an earlier life, or a session with no valid instance id, is a human's to end (see the README's \"Operator actions\"); then, if the refusal was for a held name, spawn the id again with --reuse-finished. ErrTmuxNotAvailable is ENVIRONMENT and ErrTmuxSessionCreate a LAUNCH FAILURE. ErrInternal, nothing created or changed: the collision pre-check could not read the store (which says nothing about whether the id is in use), or a reuse's archive of the previous session or its change failed (a busy store included), or a reused row's recorded name is unusable (see kill). " + liveRowSequencePointer,
+		Description: "Launch a tracked Claude Code agent in a new tmux session. Returns the claude_instance_id and pre_trust (ok, skipped or failed) without waiting for the agent; the row is pending from its insert until the agent reports in, then waiting. Creating its labelled session is bounded by the create timeout; on a timeout spawn returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may have been created and the new row stays pending; do not retry until get shows the row ended or missing, since a retry without an explicit id would start a second agent; then retry an explicit id with the reuse opt-in. With an explicit id that has no row, a session of this store labelled with that id, left over from an earlier life, refuses the spawn with ErrTmuxSessionConflict and nothing is written. If the session name is already held, spawn ends its new row at once (unless the error says otherwise) and returns ErrTmuxSessionConflict naming the holder's tmux id and whether its label names this id; ErrTmuxSessionCreate if the holder vanished first, ErrTmuxUnresponsive or ErrTmuxNotAvailable if tmux could not be read or run. ErrTmuxSessionConflict is CONFLICT (permanent until a human looks): another row's or another agent-director store's session is another agent and must not be ended; a leftover of an earlier life, or a session with no valid instance id, is a human's to end (see the README's \"Operator actions\"); then, if the refusal was for a held name, spawn the id again with " + ReuseOptInSpelling + ". ErrTmuxNotAvailable is ENVIRONMENT and ErrTmuxSessionCreate a LAUNCH FAILURE. ErrInternal, nothing created or changed: the collision pre-check could not read the store (which says nothing about whether the id is in use), or a reuse's archive of the previous session or its change failed (a busy store included), or a reused row's recorded name is unusable (see kill). " + liveRowSequencePointer,
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -267,18 +299,18 @@ var Verbs = []VerbDef{
 				AllowedValues: nil,
 			},
 			{
-				Name:          "relay-mode",
+				Name:          "relay_mode",
 				Type:          "string",
-				Description:   "on / off. Empty falls back to config defaults.relay_mode (default off).",
+				Description:   "on / off. Empty falls back to config defaults.relay_mode (default off). " + olderServeRenamed("relay-mode", "relay_mode") + ".",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
 				AllowedValues: []string{"on", "off", ""},
 			},
 			{
-				Name:          "extra-env",
+				Name:          "extra_env",
 				Type:          "[]string (K=V)",
-				Description:   "Repeated KEY=VALUE pairs injected on the tmux session env. Reserved keys (AGENT_DIRECTOR_*) rejected; auth env vars (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN) allowed.",
+				Description:   "Repeated KEY=VALUE pairs injected on the tmux session env. Reserved keys (AGENT_DIRECTOR_*) rejected; auth env vars (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN) allowed. " + olderServeRenamed("extra-env", "extra_env") + ", so its variables (CLAUDE_CONFIG_DIR included) are not set.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -294,25 +326,25 @@ var Verbs = []VerbDef{
 				AllowedValues: nil,
 			},
 			{
-				Name:          "no-pre-trust",
+				Name:          "no_pre_trust",
 				Type:          "bool",
-				Description:   "Skip pre-writing projects.<cwd>.hasTrustDialogAccepted=true into the spawn's .claude.json (resolves to <CLAUDE_CONFIG_DIR>/.claude.json if CLAUDE_CONFIG_DIR is set in extra-env, otherwise ~/.claude.json). Default off (pre-trust IS performed so Claude Code skips its workspace-trust dialog and the Spawn becomes interactive immediately). The choice is recorded on the row for its life, and every resume of that life follows it: no pre-trust is attempted over an opt-out.",
+				Description:   "Skip pre-writing projects.<cwd>.hasTrustDialogAccepted=true into the spawn's .claude.json (resolves to <CLAUDE_CONFIG_DIR>/.claude.json if CLAUDE_CONFIG_DIR is set in extra_env, otherwise ~/.claude.json). Default off (pre-trust IS performed so Claude Code skips its workspace-trust dialog and the Spawn becomes interactive immediately). The choice is recorded on the row for its life, and every resume of that life follows it: no pre-trust is attempted over an opt-out. " + olderServeUndecoded + ".",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
 				AllowedValues: nil,
 			},
 			{
-				Name:          "tmux-session-name",
+				Name:          "tmux_session_name",
 				Type:          "string",
-				Description:   "Optional explicit tmux session name. Empty/omitted falls back to <basename(cwd)>-<id[:8]>. Validated app-side: rejects empty (when supplied), '#' ':' '.' '$' '\\' (backslash), ASCII control chars, non-UTF-8, and >64 bytes. NO DB uniqueness check; a name already held by a tmux session when spawn creates its session ends the new row at once and returns the classified error spawn's description states (ErrTmuxSessionConflict naming the holding session), unless spawn refused earlier and wrote nothing. Name reuse across ended spawns is supported.",
+				Description:   "Optional explicit tmux session name. Empty/omitted falls back to <basename(cwd)>-<id[:8]>. Validated app-side: rejects empty (when supplied), '#' ':' '.' '$' '\\' (backslash), ASCII control chars, non-UTF-8, and >64 bytes. NO DB uniqueness check; a name already held by a tmux session when spawn creates its session ends the new row at once and returns the classified error spawn's description states (ErrTmuxSessionConflict naming the holding session), unless spawn refused earlier and wrote nothing. Name reuse across ended spawns is supported. " + olderServeUndecoded + ".",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
 				AllowedValues: nil,
 			},
 			{
-				Name:          "reuse-finished",
+				Name:          "reuse_finished",
 				Type:          "bool",
 				Description:   reuseFinishedDescription,
 				Required:      false,
@@ -333,7 +365,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "pre_trust",
 				Type:          "string",
-				Description:   "What the launch's folder-trust pre-trust did. ok = the folder-trust entry was written; skipped = pre-trust was off for this launch because the caller passed no-pre-trust, so nothing was attempted; failed = pre-trust was attempted and the entry was not written (the .claude.json file is missing, or could not be read, parsed or written); the launch still proceeds and the agent may stop at Claude Code's folder-trust prompt.",
+				Description:   "What the launch's folder-trust pre-trust did. ok = the folder-trust entry was written; skipped = pre-trust was off for this launch because the caller passed no_pre_trust, so nothing was attempted; failed = pre-trust was attempted and the entry was not written (the .claude.json file is missing, or could not be read, parsed or written); the launch still proceeds and the agent may stop at Claude Code's folder-trust prompt.",
 				Nullable:      false,
 				AllowEmpty:    false,
 				AllowedValues: []string{"ok", "skipped", "failed"},
@@ -668,7 +700,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "resume",
-		Description: "Relaunch a finished (ended/missing) row via `claude --resume`. " + missingNotProofShort + " Same id and JSONL transcript, fresh tmux session. Before its launch, resume runs spawn's best-effort pre-trust for the row's cwd, unless the spawn that began the row's life turned it off with no-pre-trust; a pre-trust failure never fails the resume. Returns the claude_instance_id and pre_trust (ok, skipped or failed). Before creating the session, resume moves the row to pending, keeping its session id and history, and writes parent_id from the caller's AGENT_DIRECTOR_INSTANCE_ID. The row stays pending until the agent reports in, then waiting. If the launch fails other than by timing out (ErrTmuxNotAvailable is ENVIRONMENT and ErrTmuxSessionCreate a LAUNCH FAILURE), resume restores the row to its prior ended or missing state; if the restore cannot be applied, the error says so. Creating the session is bounded by the create timeout; on a timeout resume returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may have been created and the row stays pending; do not retry until get shows the row ended or missing. A refusal before the move writes nothing; resume can be re-issued. A session in the way (holding the name, left over, or this row's own) is never touched: ErrTmuxSessionConflict (CONFLICT, until a human looks; see the README's \"Operator actions\"), or ErrTmuxUnresponsive while it appears to still be stopping or starting. A name held at the create is refused likewise, after the restore. A pending row (a launch in progress, a resumed one included) is refused with ErrSpawnNotResumable. A row whose instance id contains a control character (its session could never be labelled) or whose recorded name is unusable (see kill) is refused with ErrInternal and no tmux call. If the store cannot record the launch, resume returns ErrInternal and launches nothing.",
+		Description: "Relaunch a finished (ended/missing) row via `claude --resume`. " + missingNotProofShort + " Same id and JSONL transcript, fresh tmux session. Before its launch, resume runs spawn's best-effort pre-trust for the row's cwd, unless the spawn that began the row's life turned it off with no_pre_trust; a pre-trust failure never fails the resume. Returns the claude_instance_id and pre_trust (ok, skipped or failed). Before creating the session, resume moves the row to pending, keeping its session id and history, and writes parent_id from the caller's AGENT_DIRECTOR_INSTANCE_ID. The row stays pending until the agent reports in, then waiting. If the launch fails other than by timing out (ErrTmuxNotAvailable is ENVIRONMENT and ErrTmuxSessionCreate a LAUNCH FAILURE), resume restores the row to its prior ended or missing state; if the restore cannot be applied, the error says so. Creating the session is bounded by the create timeout; on a timeout resume returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may have been created and the row stays pending; do not retry until get shows the row ended or missing. A refusal before the move writes nothing; resume can be re-issued. A session in the way (holding the name, left over, or this row's own) is never touched: ErrTmuxSessionConflict (CONFLICT, until a human looks; see the README's \"Operator actions\"), or ErrTmuxUnresponsive while it appears to still be stopping or starting. A name held at the create is refused likewise, after the restore. A pending row (a launch in progress, a resumed one included) is refused with ErrSpawnNotResumable. A row whose instance id contains a control character (its session could never be labelled) or whose recorded name is unusable (see kill) is refused with ErrInternal and no tmux call. If the store cannot record the launch, resume returns ErrInternal and launches nothing.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -687,7 +719,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "pre_trust",
 				Type:          "string",
-				Description:   "What the launch's folder-trust pre-trust did. ok = the folder-trust entry was written; skipped = pre-trust was off for this launch because the spawn that began the row's life turned it off with no-pre-trust, so nothing was attempted; failed = pre-trust was attempted and the entry was not written (the .claude.json file is missing, or could not be read, parsed or written); the launch still proceeds and the agent may stop at Claude Code's folder-trust prompt.",
+				Description:   "What the launch's folder-trust pre-trust did. ok = the folder-trust entry was written; skipped = pre-trust was off for this launch because the spawn that began the row's life turned it off with no_pre_trust, so nothing was attempted; failed = pre-trust was attempted and the entry was not written (the .claude.json file is missing, or could not be read, parsed or written); the launch still proceeds and the agent may stop at Claude Code's folder-trust prompt.",
 				Nullable:      false,
 				AllowEmpty:    false,
 				AllowedValues: []string{"ok", "skipped", "failed"},
@@ -747,7 +779,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "delete",
-		Description: "DEPRECATED, removal planned (b.tep). Not for cleanup or recovery: expire removes finished rows; respawn with spawn --reuse-finished; for a stuck live row, kill then find-missing. Never delete after a failed kill, or assuming a finished row's agent exited. Batch removal by claude_instance_id, bypassing all guards; touches no tmux session or transcript. Per-id result map (ok or an error); a partial failure never aborts the batch. " + missingNotProofShort,
+		Description: "DEPRECATED, removal planned (b.tep). Not for cleanup or recovery: expire removes finished rows; respawn with spawn " + ReuseOptInSpelling + "; for a stuck live row, kill then find-missing. Never delete after a failed kill, or assuming a finished row's agent exited. Batch removal by id, bypassing all guards; touches no tmux session or transcript. " + missingNotProofShort,
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -762,7 +794,7 @@ var Verbs = []VerbDef{
 			},
 		},
 		ResultFields: []FieldDef{
-			{Name: "results", Type: "map[string]string", Description: "Per-id result: \"ok\" on success, an err_name string on failure.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "results", Type: "map[string]string", Description: "Per-id result: \"ok\" on success, an err_name string on failure; a partial failure never aborts the batch.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 		},
 		ErrorNames: []string{},
 	},
@@ -793,7 +825,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "relay_mode",
 				Type:          "string",
-				Description:   "Bake a default relay_mode (on/off). Per-call --relay-mode overrides.",
+				Description:   "Bake a default relay_mode (on/off). Per-call relay_mode (--relay-mode on the CLI) overrides.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -811,7 +843,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "extra_env",
 				Type:          "map[string]string",
-				Description:   "Bake env-var entries. Per-call --extra-env merges by key; per-call wins on collision.",
+				Description:   "Bake env-var entries. Per-call extra_env (--extra-env on the CLI) merges by key; per-call wins on collision.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -915,9 +947,9 @@ var Verbs = []VerbDef{
 				AllowedValues: nil,
 			},
 			{
-				Name:          "tmux-session-name",
+				Name:          "tmux_session_name",
 				Type:          "string",
-				Description:   "Filter by tmux session name exact match. Returns any live or ended row whose tmux_session_name equals the value byte-for-byte; correlation across re-uses, not uniqueness enforcement.",
+				Description:   "Filter by tmux session name exact match. Returns any live or ended row whose tmux_session_name equals the value byte-for-byte; correlation across re-uses, not uniqueness enforcement. " + olderServeUndecoded + ", so list is not filtered by session name.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,

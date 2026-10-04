@@ -83,7 +83,7 @@ func (c DescCase) beforeLaunch(p HeldName, label heldLabel) DescCase {
 		req = append(req, p.SessionID)
 	}
 	mustNot := appendMissing(append([]string(nil), c.MustNot...),
-		duplicateSession, newRow, heldRetryReuse[0], launchRetryRule, spawnOnlyHolder)
+		duplicateSession, newRow, reuseOptInName, launchRetryRule, spawnOnlyHolder)
 	mustNot = appendMissing(mustNot, rowEndedStatements...)
 	mustNot = appendMissing(mustNot, heldNotPendingStatements...)
 	mustNot = appendMissing(mustNot, label.wrong()...)

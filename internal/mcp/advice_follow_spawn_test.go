@@ -1,11 +1,11 @@
 package mcp_test
 
 // advice_follow_spawn_test.go copies, over MCP and literally, the reuse
-// opt-in spelling that advice an MCP caller sees names (b.fji I4): the
+// opt-in name that advice an MCP caller sees gives (b.fji I4, b.c4u): the
 // tools/list descriptions of spawn, kill (live-row step 6, inventory C11) and
-// delete (F1) say "--reuse-finished" and the held-name ErrTmuxUnresponsive
-// (A4) says "reuse_finished", while the spawn tool's parameter is
-// reuse-finished.
+// delete (F1) and the held-name ErrTmuxUnresponsive (A4) each say
+// "reuse_finished (--reuse-finished on the CLI)", and the name before the
+// parenthesis is the spawn tool's parameter.
 
 import (
 	"encoding/json"
@@ -52,25 +52,44 @@ func advToolDescription(t *testing.T, d mcp.Dispatcher, tool string) string {
 	return ""
 }
 
-// TestAdviceFollow_I4_MCPLiteralReuseSpelling: I4 spawn's "spawn the id again with --reuse-finished", kill's (C11 step 6)
-// "otherwise spawn with --reuse-finished", delete's (F1) "respawn with spawn --reuse-finished" and A4's "(reuse_finished)",
-// copied literally into an MCP spawn's arguments once the held name is free and the row ended (no session id).
+// advReuseCLIParen is what follows the reuse opt-in's MCP name in shared advice.
+const advReuseCLIParen = " (--reuse-finished on the CLI)"
+
+// advOptInName is the name the advice gives the reuse opt-in: the word just
+// before advReuseCLIParen.
+func advOptInName(t *testing.T, advice string) string {
+	t.Helper()
+	i := strings.Index(advice, advReuseCLIParen)
+	if i < 0 {
+		t.Fatalf("advice %q names no opt-in before %q", advice, advReuseCLIParen)
+	}
+	words := strings.Fields(advice[:i])
+	return words[len(words)-1]
+}
+
+// TestAdviceFollow_I4_MCPLiteralReuseSpelling: I4 spawn's "spawn the id again with reuse_finished (--reuse-finished on the CLI)",
+// kill's (C11 step 6) "otherwise spawn with reuse_finished (--reuse-finished on the CLI)", delete's (F1) "respawn with spawn
+// reuse_finished (--reuse-finished on the CLI)" and A4's "the reuse opt-in reuse_finished (--reuse-finished on the CLI)", the name
+// before the parenthesis copied literally into an MCP spawn's arguments once the held name is free and the row ended (no session id).
 func TestAdviceFollow_I4_MCPLiteralReuseSpelling(t *testing.T) {
 	cases := []struct {
-		name, key, phrase string
-		relookupTimeout   bool   // the re-lookup times out (A4's ErrTmuxUnresponsive); else the no-valid-id conflict
-		wantErr           string // the held-name refusal
-		tool              string // the tool whose tools/list description carries phrase; "" for the error's description
+		name, phrase    string
+		relookupTimeout bool   // the re-lookup times out (A4's ErrTmuxUnresponsive); else the no-valid-id conflict
+		wantErr         string // the held-name refusal
+		tool            string // the tool whose tools/list description carries phrase; "" for the error's description
 	}{
-		{"spawn description's --reuse-finished", "--reuse-finished",
-			"then, if the refusal was for a held name, spawn the id again with --reuse-finished", false, "ErrTmuxSessionConflict", "spawn"},
-		{"kill description's live-row step 6 --reuse-finished", "--reuse-finished",
-			"6. Then resume the row if it has a session id and the caller wants the conversation back; otherwise spawn with --reuse-finished",
+		{"spawn description",
+			"then, if the refusal was for a held name, spawn the id again with reuse_finished (--reuse-finished on the CLI)",
+			false, "ErrTmuxSessionConflict", "spawn"},
+		{"kill description's live-row step 6",
+			"6. Then resume the row if it has a session id and the caller wants the conversation back; otherwise spawn with " +
+				"reuse_finished (--reuse-finished on the CLI); callers whose ids agent-director mints spawn fresh.",
 			false, "ErrTmuxSessionConflict", "kill"},
-		{"delete description's --reuse-finished", "--reuse-finished",
-			"respawn with spawn --reuse-finished", false, "ErrTmuxSessionConflict", "delete"},
-		{"held-name error's reuse_finished", "reuse_finished",
-			"a retry with this id uses the reuse opt-in (reuse_finished) once the name is free", true, "ErrTmuxUnresponsive", ""},
+		{"delete description", "respawn with spawn reuse_finished (--reuse-finished on the CLI)",
+			false, "ErrTmuxSessionConflict", "delete"},
+		{"held-name error",
+			"a retry with this id uses the reuse opt-in reuse_finished (--reuse-finished on the CLI) once the name is free",
+			true, "ErrTmuxUnresponsive", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -101,8 +120,9 @@ func TestAdviceFollow_I4_MCPLiteralReuseSpelling(t *testing.T) {
 				advice = advToolDescription(t, e.d, tc.tool)
 			}
 			if !strings.Contains(advice, tc.phrase) {
-				t.Errorf("advice %q\nwant it to carry %q", advice, tc.phrase)
+				t.Fatalf("advice %q\nwant it to carry %q", advice, tc.phrase)
 			}
+			key := advOptInName(t, advice)
 			if cols := readColumns(t, e.storePath, id); cols.State != store.StateEnded {
 				t.Fatalf("row state = %v; want ended", cols.State)
 			}
@@ -110,16 +130,14 @@ func TestAdviceFollow_I4_MCPLiteralReuseSpelling(t *testing.T) {
 				t.Fatalf("KillSessionID(%s): %v", holder, err)
 			}
 
-			resp := callTool(t, e.d, "spawn", spawnArgs(t, cwd, c, map[string]any{"claude_instance_id": id, tc.key: true}))
+			resp := callTool(t, e.d, "spawn", spawnArgs(t, cwd, c, map[string]any{"claude_instance_id": id, key: true}))
 
-			knownBrokenAdvice(t, "I4", "the spawn tool's parameter is reuse-finished; MCP ignores the unknown "+tc.key+
-				", so the literal retry is a plain spawn that collides with the ended row (ErrInstanceIdCollision)")
 			if resp == nil || resp.Error != nil {
 				got := "no response"
 				if resp != nil {
 					got = resp.Error.Message
 				}
-				t.Fatalf("spawn with %q: true = %s; want the reuse to launch", tc.key, got)
+				t.Fatalf("spawn with %q: true = %s; want the reuse to launch", key, got)
 			}
 			if cols := readColumns(t, e.storePath, id); cols.State != store.StatePending {
 				t.Errorf("row state = %v; want pending", cols.State)

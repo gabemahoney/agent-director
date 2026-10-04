@@ -1,7 +1,7 @@
 package manifest_test
 
 // manifest_reuse_docs_test.go pins reuse's documentation (Epic 17 Task 4;
-// SR-18.9, SR-18.10, SR-18.16): the reuse-finished parameter text, the
+// SR-18.9, SR-18.10, SR-18.16): the reuse_finished parameter text, the
 // reserved lists of make-template and docs/settings.md, and the collision
 // text on claude_instance_id and Client.Spawn's ErrInstanceIdCollision line.
 
@@ -15,11 +15,11 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// reuseParam is the reuse opt-in's manifest name, the key T1 pins it under.
-const reuseParam = "reuse-finished"
+// reuseParam is the reuse opt-in's manifest name (b.c4u), the key T1 pins it under.
+const reuseParam = "reuse_finished"
 
 // TestReuseFinishedParamText pins SR-18.10's points and SR-18.16's
-// forbidden claims on the reuse-finished text, manifest and surface.json.
+// forbidden claims on the reuse_finished text, manifest and surface.json.
 func TestReuseFinishedParamText(t *testing.T) {
 	for source, text := range spawnTexts(t, reuseParam) {
 		apitest.AssertAgentTextCase(t, source+": spawn param "+reuseParam, text, apitest.DescReuseFinishedParam())
@@ -27,9 +27,9 @@ func TestReuseFinishedParamText(t *testing.T) {
 }
 
 // TestReuseReservedLists: make-template's Description (both surfaces) and
-// docs/settings.md's reserved section name the opt-in, underscore-spelled.
+// docs/settings.md's reserved section name the opt-in by its manifest name.
 func TestReuseReservedLists(t *testing.T) {
-	name := strings.ReplaceAll(reuseParam, "-", "_")
+	name := reuseParam
 	spawnTexts(t, reuseParam) // fails unless spawn has the param on both surfaces
 	for source, desc := range verbDescriptionsBoth(t, "make-template") {
 		if !strings.Contains(desc, name) {

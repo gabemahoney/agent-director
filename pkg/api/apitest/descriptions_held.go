@@ -67,26 +67,27 @@ const (
 	heldLabelNotThisID
 )
 
-// reuseOptInEverySurface names the reuse opt-in in each surface's own
-// spelling (b.1qq): the spelling of every plain-spawn retry sentence b.1qq
-// added (the explicit id's launch timeout, and after "duplicate session" the
-// vanished holder's and the unended row's).
-const reuseOptInEverySurface = "the reuse opt-in (--reuse-finished on the CLI, reuse-finished over MCP, reuse_finished in TypeScript, ReuseFinished in Go)"
-
-// The retry guidance of SR-1.4's "after duplicate session" row for an
-// ErrTmuxUnresponsive (the re-lookup could not answer), in place of "retry
-// later", which no held-name description says, and for the ErrTmuxSessionCreate
-// of a holder that vanished first (b.1qq): once the end write applied, a
-// retry uses the reuse opt-in once the name is free; otherwise the
-// launch-timeout rule (launchRetryRule) followed by the same opted-in retry,
-// since a plain spawn of the id collides with its row once it is finished.
-// heldRetryReuse is the unanswered re-lookup's after the end write applied,
-// which still spells the opt-in reuse_finished only (its respelling is
-// b.c4u's); heldRetryFree is every other one's, in each surface's spelling.
-var (
-	heldRetryReuse = []string{"reuse_finished", "once the name is free"}
-	heldRetryFree  = []string{reuseOptInEverySurface, "once the name is free"}
+// The reuse opt-in's one spelling in advice every surface shows (b.c4u): its
+// MCP and TypeScript name, then its CLI flag. reuseOptIn is how every
+// plain-spawn retry sentence names it (the explicit id's launch timeout, and
+// after "duplicate session" the unanswered re-lookup's, the vanished
+// holder's and the unended row's); no resume, reuse or pre-launch
+// description names reuseOptInName at all.
+const (
+	reuseOptInName     = "reuse_finished"
+	reuseOptInSpelling = reuseOptInName + " (--reuse-finished on the CLI)"
+	reuseOptIn         = "the reuse opt-in " + reuseOptInSpelling
 )
+
+// heldRetryFree is the retry guidance of SR-1.4's "after duplicate session"
+// row for an ErrTmuxUnresponsive (the re-lookup could not answer), in place
+// of "retry later", which no held-name description says, and for the
+// ErrTmuxSessionCreate of a holder that vanished first (b.1qq): once the end
+// write applied, a retry uses the reuse opt-in once the name is free;
+// otherwise the launch-timeout rule (launchRetryRule) followed by the same
+// opted-in retry, since a plain spawn of the id collides with its row once it
+// is finished.
+var heldRetryFree = []string{reuseOptIn, "once the name is free"}
 
 // retryLater is the default retry sentence a held-name description replaces.
 const retryLater = "retry later"
@@ -128,12 +129,11 @@ type HeldName struct {
 // An unanswered case (DescCallTimeout, DescUnrecognisedReply,
 // DescHeldAmbiguous) and the vanished holder (DescSessionCreateFailed with
 // Duplicate) also require the retry guidance by p.Row: for HeldRowEnded the
-// reuse opt-in "once the name is free" (an unanswered case's spelled
-// reuse_finished, the vanished holder's in each surface's spelling) and not
-// the launch-timeout rule; otherwise the launch-timeout rule followed by the
-// opted-in retry in each surface's spelling (b.1qq). Any other case states
-// neither. The vanished holder also requires "instance " and p.InstanceID,
-// the id that retry sentence's "this id" means (b.1qq). Use it on
+// reuse opt-in (reuseOptIn) "once the name is free" and not the
+// launch-timeout rule; otherwise the launch-timeout rule followed by the same
+// opted-in retry (b.1qq, b.c4u). Any other case states neither. The vanished
+// holder also requires "instance " and p.InstanceID, the id that retry
+// sentence's "this id" means (b.1qq). Use it on
 // DescSessionCreateFailed (Duplicate), DescConflictingLabels
 // (NothingWasDone), DescDifferentServer, DescCallTimeout,
 // DescUnrecognisedReply, DescSocketPermission and DescTmuxNotRun; the
@@ -176,16 +176,13 @@ func (c DescCase) afterHeldName(p HeldName, label heldLabel) DescCase {
 		}
 	}
 	switch {
-	case c.unanswered && p.Row == HeldRowEnded:
-		req = append(req, heldRetryReuse...)
-		mustNot = appendMissing(mustNot, launchRetryRule)
-	case c.heldRetry && p.Row == HeldRowEnded:
+	case (c.unanswered || c.heldRetry) && p.Row == HeldRowEnded:
 		req = append(req, heldRetryFree...)
 		mustNot = appendMissing(mustNot, launchRetryRule)
 	case c.unanswered || c.heldRetry:
 		req = append(append(req, launchRetryRule), heldRetryFree...)
 	default:
-		mustNot = appendMissing(mustNot, launchRetryRule, heldRetryReuse[1])
+		mustNot = appendMissing(mustNot, launchRetryRule, heldRetryFree[1])
 	}
 	if c.heldRetry {
 		req = append(req, "instance "+p.InstanceID)
@@ -361,9 +358,9 @@ func DescHeldAmbiguous(p HeldName) DescCase {
 // description states it (SR-9.4, SR-18; WD 2026-09-29 STORE): a held name
 // ends the new row at once, ErrTmuxSessionConflict names the holder, the
 // class statement, another row's or store's session must not be ended, the
-// "Operator actions" pointer and spawning the id again with reuse-finished.
-// It never quotes a held-name error's row sentence. Check it with
-// AssertAgentTextCase.
+// "Operator actions" pointer and spawning the id again with the reuse opt-in
+// in its one spelling (reuseOptInSpelling, b.c4u). It never quotes a
+// held-name error's row sentence. Check it with AssertAgentTextCase.
 func DescSpawnHeldName() DescCase {
 	return DescCase{
 		Name: "spawn manifest, held name",
@@ -371,7 +368,7 @@ func DescSpawnHeldName() DescCase {
 			"already held", "ends its new row at once", "ErrTmuxSessionConflict naming the holder",
 			"holder vanished", "ErrTmuxSessionConflict is CONFLICT (permanent until a human looks)",
 			"another row's", "another agent-director store", "must not be ended", "no valid instance id",
-			strconv.Quote(OperatorActionsTitle), "spawn the id again", "--reuse-finished",
+			strconv.Quote(OperatorActionsTitle), "spawn the id again with " + reuseOptInSpelling,
 		},
 		MustNot: []string{
 			heldRowSentences[HeldRowEnded], heldRowSentences[HeldRowLeftAsIs], heldRowSentences[HeldRowStoreError],
@@ -379,13 +376,13 @@ func DescSpawnHeldName() DescCase {
 	}
 }
 
-// DescSpawnSessionNameParam is spawn's tmux-session-name parameter text on a
+// DescSpawnSessionNameParam is spawn's tmux_session_name parameter text on a
 // held name (SR-9.4): it ends the new row and names ErrTmuxSessionConflict,
 // never the old claim that a live collision surfaces as the wrapped tmux
 // new-session error. Check it with AssertAgentTextCase.
 func DescSpawnSessionNameParam() DescCase {
 	return DescCase{
-		Name:    "spawn manifest, tmux-session-name param, held name",
+		Name:    "spawn manifest, tmux_session_name param, held name",
 		Require: []string{"already held", "ends the new row at once", "ErrTmuxSessionConflict"},
 		MustNot: []string{"live-collision", "wrapped tmux new-session error"},
 	}

@@ -179,9 +179,9 @@ A template MUST NOT bake any of:
 - `reuse_finished` (applies to one `spawn` call only, and only with an
   explicit `claude_instance_id`)
 
-`make-template` on the CLI rejects these flags; over MCP it ignores
-these parameters. A hand-edited template carrying any of them surfaces
-`ErrTemplateMalformed` on load.
+`make-template` refuses them with `ErrInvalidFlags`: on the CLI as
+undefined flags, over MCP as unknown parameters. A hand-edited template
+carrying any of them surfaces `ErrTemplateMalformed` on load.
 
 ### Example
 

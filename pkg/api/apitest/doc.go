@@ -160,15 +160,18 @@
 //     DescCleanupGuidance, SR-18.7's cleanup guidance in full at expire, and
 //     DescCleanupPointer, its short pointer at kill and find-missing), or of
 //     reuse's documentation (descriptions_reuse_docs.go:
-//     DescReuseFinishedParam, spawn's reuse-finished parameter text;
+//     DescReuseFinishedParam, spawn's reuse_finished parameter text;
 //     DescReuseHistoryByLife, SR-18.16's forbidden history-by-life claims;
 //     DescDeleteDeprecated, delete's deprecation notice;
 //     DescInstanceIDCollision, SR-18.9's collision text, parameterised by
 //     CollisionSite; DescReuseRecourse, SR-18.4's recovery recourse,
 //     parameterised by RecourseSite; and DescReuseDocsForbidden, the
 //     recovery, collision and history-by-life forbidden forms together, for
-//     AssertMustNot), or of a row whose recorded tmux session name is
-//     unusable (descriptions_unusable.go: DescUnusableNameEmpty,
+//     AssertMustNot), or of the older-serve sentence ending each spawn and
+//     list parameter text b.c4u renamed or b.7or made MCP decode
+//     (descriptions_older_serve.go: DescOlderServeParam), or of a row whose
+//     recorded tmux session name is unusable (descriptions_unusable.go:
+//     DescUnusableNameEmpty,
 //     DescUnusableNameControlChar and DescUnusableNameRewritten, the
 //     ErrInternal refusal every verb gives; DescUnusableNameTrigger, the
 //     full trigger sentence of kill's manifest Description and a Client

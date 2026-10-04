@@ -76,11 +76,10 @@ func advSpawnNextLife(cols apitest.SpawnColumns) any {
 }
 
 // Plain spawn's opted-in retry for an explicit id whose row is, or will be,
-// finished (b.1qq), the opt-in in each surface's spelling; after "duplicate
+// finished (b.1qq), the opt-in in its one spelling (b.c4u); after "duplicate
 // session" it waits for the name too, and an unended row waits first.
 const (
-	advSpawnReuseRetry = "a retry with this id uses the reuse opt-in (--reuse-finished on the CLI, reuse-finished over MCP, " +
-		"reuse_finished in TypeScript, ReuseFinished in Go)"
+	advSpawnReuseRetry    = "a retry with this id uses the reuse opt-in reuse_finished (--reuse-finished on the CLI)"
 	advSpawnReuseOnceFree = advSpawnReuseRetry + " once the name is free, since a plain spawn of the id now collides"
 	advSpawnWaitThenReuse = "do not retry until get shows the row ended or missing; then " + advSpawnReuseOnceFree
 )
@@ -216,9 +215,10 @@ func advSpawnFreeName(t *testing.T, e heldEnv) {
 	}
 }
 
-// TestAdviceFollow_A4_HeldUnreadableReuseOnceFree: A4 "the new row was ended; a retry with this id uses the reuse opt-in (reuse_finished) once the name is free, since a plain spawn of the id now collides".
+// TestAdviceFollow_A4_HeldUnreadableReuseOnceFree: A4 "the new row was ended; a retry with this id uses the reuse opt-in reuse_finished
+// (--reuse-finished on the CLI) once the name is free, since a plain spawn of the id now collides".
 func TestAdviceFollow_A4_HeldUnreadableReuseOnceFree(t *testing.T) {
-	const phrase = "the new row was ended; a retry with this id uses the reuse opt-in (reuse_finished) once the name is free, since a plain spawn of the id now collides"
+	const phrase = "the new row was ended; " + advSpawnReuseOnceFree
 	holder := func(id string) tmuxfix.SeedSession { return heldSession(advSpawnHeldName, id, tmux.Label{}, false) }
 	cases := []struct {
 		name      string
@@ -367,7 +367,7 @@ func TestAdviceFollow_A6_HolderVanishedReuseRetry(t *testing.T) {
 				t.Errorf("description %q\nwant exactly %q", err.Error(), want)
 			}
 			if tc.arrange == nil {
-				adviceAssertManifest(t, "spawn", "reuse-finished", "after a held-name refusal (duplicate session) the row is already ended "+
+				adviceAssertManifest(t, "spawn", "reuse_finished", "after a held-name refusal (duplicate session) the row is already ended "+
 					"unless the error says otherwise, so the retry's lookup decides it at once")
 				if row, gerr := e.c.Get(id); gerr != nil || row.State != store.StateEnded {
 					t.Fatalf("Get(%s) = state %q, %v; want ended", id, row.State, gerr)
@@ -381,7 +381,7 @@ func TestAdviceFollow_A6_HolderVanishedReuseRetry(t *testing.T) {
 }
 
 // TestAdviceFollow_A7_HeldConflictHumanEndsThenReuse: A7 "ending the session is a human's decision, ..." / "a human must look, ..." and spawn's
-// "then, if the refusal was for a held name, spawn the id again with --reuse-finished".
+// "then, if the refusal was for a held name, spawn the id again with reuse_finished (--reuse-finished on the CLI)".
 func TestAdviceFollow_A7_HeldConflictHumanEndsThenReuse(t *testing.T) {
 	const (
 		decision = `ending the session is a human's decision, see "Operator actions" in the agent-director README`
@@ -412,11 +412,11 @@ func TestAdviceFollow_A7_HeldConflictHumanEndsThenReuse(t *testing.T) {
 			}
 			advSpawnHeldTrigger(t, e, id, p, arrange, api.ErrTmuxSessionConflict, tc.phrase)
 			adviceAssertManifest(t, "spawn", "", "a leftover of an earlier life, or a session with no valid instance id, is a human's to end "+
-				`(see the README's "Operator actions"); then, if the refusal was for a held name, spawn the id again with --reuse-finished`)
+				`(see the README's "Operator actions"); then, if the refusal was for a held name, spawn the id again with reuse_finished (--reuse-finished on the CLI)`)
 			advSpawnFreeName(t, e)
 			before := e.readRow(t, id)
 			if tc.failEnd {
-				// reuse-finished: a pending row collides until find-missing marks it missing past the pending grace period.
+				// reuse_finished: a pending row collides until find-missing marks it missing past the pending grace period.
 				_, err := e.c.Spawn(advSpawnReuse(p))
 				assertOneSentinel(t, err, spawn.ErrInstanceIdCollision)
 				e.assertRowIs(t, id, "after the opted-in retry of the pending row", before)
@@ -457,7 +457,7 @@ func TestAdviceFollow_A8_PendingRowReuseAfterGrace(t *testing.T) {
 			_, err := e.c.Spawn(p)
 
 			adviceAssertAdvice(t, err, tc.want, "the row stays pending")
-			adviceAssertManifest(t, "spawn", "reuse-finished", "after any other failed launch the row stays pending and an opted-in retry collides "+
+			adviceAssertManifest(t, "spawn", "reuse_finished", "after any other failed launch the row stays pending and an opted-in retry collides "+
 				"until find-missing marks it missing, which happens only after the pending grace period (60 s by default)")
 			pending := e.readRow(t, id)
 			launch, _ := pending.LaunchStartedAt.(int64)

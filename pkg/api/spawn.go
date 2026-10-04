@@ -202,7 +202,8 @@ func hasControlChar(id string) bool {
 // of another agent-director store, is another agent and must not be ended; a
 // session left over from an earlier life of this id, or one with no valid
 // instance id, is for a human to end (README "Operator actions"), after
-// which the id is spawned again with reuse-finished (--reuse-finished).
+// which the id is spawned again with ReuseFinished (reuse_finished over MCP,
+// --reuse-finished on the CLI).
 //
 // With ReuseFinished, a finished row whose recorded tmux session name cannot
 // be used (it is empty, contains a control character, or contains a

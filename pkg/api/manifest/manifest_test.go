@@ -731,16 +731,15 @@ func TestGetLivenessFieldsInSurfaceJSON(t *testing.T) {
 //     projections most at risk of accidentally gaining the column.
 func TestExtraEnvIsInputOnlyNotOutput(t *testing.T) {
 	// Input-param pole: the env-injection param must exist where it legitimately
-	// belongs. The verb-param spelling differs (spawn's CLI flag is "extra-env",
-	// make-template's json key is "extra_env"); accept either kebab/snake form so
-	// the guard tracks the param regardless of the surface's flag convention.
+	// belongs, under its one manifest name on both verbs (b.c4u; the CLI flag
+	// stays --extra-env).
 	hasEnvParam := func(verb string) bool {
 		v, ok := manifest.Lookup(verb)
 		if !ok {
 			t.Fatalf("%s not in manifest", verb)
 		}
 		for _, p := range v.Params {
-			if p.Name == "extra_env" || p.Name == "extra-env" {
+			if p.Name == "extra_env" {
 				return true
 			}
 		}
@@ -748,7 +747,7 @@ func TestExtraEnvIsInputOnlyNotOutput(t *testing.T) {
 	}
 	for _, verb := range []string{"spawn", "make-template"} {
 		if !hasEnvParam(verb) {
-			t.Errorf("%s is missing the extra-env/extra_env INPUT param; env-injection surface regressed", verb)
+			t.Errorf("%s is missing the extra_env INPUT param; env-injection surface regressed", verb)
 		}
 	}
 
@@ -787,7 +786,7 @@ func TestExtraEnvAbsentFromOutputSurfaceJSON(t *testing.T) {
 	inputParamVerbs := map[string]bool{}
 	for _, v := range surface.Verbs {
 		for _, p := range v.Params {
-			if p.Name == "extra_env" || p.Name == "extra-env" {
+			if p.Name == "extra_env" {
 				inputParamVerbs[v.Name] = true
 			}
 		}
@@ -797,11 +796,11 @@ func TestExtraEnvAbsentFromOutputSurfaceJSON(t *testing.T) {
 			}
 		}
 	}
-	// The INPUT param must still be present on spawn + make-template (either
-	// kebab/snake spelling).
+	// The INPUT param must still be present on spawn + make-template, under its
+	// one manifest name (b.c4u).
 	for _, verb := range []string{"spawn", "make-template"} {
 		if !inputParamVerbs[verb] {
-			t.Errorf("surface.json %s is missing the extra-env/extra_env INPUT param; env-injection surface regressed in the golden", verb)
+			t.Errorf("surface.json %s is missing the extra_env INPUT param; env-injection surface regressed in the golden", verb)
 		}
 	}
 }
@@ -852,10 +851,10 @@ func TestListSpawnsDescriptionNamesLivenessFields(t *testing.T) {
 
 // TestSpawnParamDescriptionsPinValidationRules pins the load-bearing tokens of
 // three spawn param descriptions, on the manifest source of truth AND in the
-// committed surface.json: the tmux-session-name text must name '$' and '\'
+// committed surface.json: the tmux_session_name text must name '$' and '\'
 // among the rejected characters (SR-9.2), the claude_instance_id text must
 // state that an id with a control character is rejected with ErrInvalidFlags
-// (SR-18.9), and the no-pre-trust text must state that the choice is recorded
+// (SR-18.9), and the no_pre_trust text must state that the choice is recorded
 // for the row's life and followed by every resume of it (SR-22.6).
 // Only tokens are asserted, never full sentences, so wording edits
 // do not break the test. The claude_instance_id collision sentence is
@@ -885,9 +884,9 @@ func TestSpawnParamDescriptionsPinValidationRules(t *testing.T) {
 		param  string
 		tokens []string
 	}{
-		{"session name rejects dollar and backslash", "tmux-session-name", []string{`'$'`, `'\'`}},
+		{"session name rejects dollar and backslash", "tmux_session_name", []string{`'$'`, `'\'`}},
 		{"instance id rejects control characters", "claude_instance_id", []string{"control character", "ErrInvalidFlags"}},
-		{"no-pre-trust is recorded for the life", "no-pre-trust", []string{"recorded on the row for its life", "every resume of that life follows it"}},
+		{"no_pre_trust is recorded for the life", "no_pre_trust", []string{"recorded on the row for its life", "every resume of that life follows it"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -958,7 +957,7 @@ func TestSpawnDescriptionStatesPreCheckErrInternal(t *testing.T) {
 }
 
 // TestResumeDescriptionStatesPreTrust pins SR-22.6 on resume's Description:
-// resume pre-trusts unless the row's spawn opted out with no-pre-trust, and a
+// resume pre-trusts unless the row's spawn opted out with no_pre_trust, and a
 // pre-trust failure never fails the resume. Tokens only, on the manifest and in
 // surface.json (help shows this same description).
 func TestResumeDescriptionStatesPreTrust(t *testing.T) {
@@ -978,7 +977,7 @@ func TestResumeDescriptionStatesPreTrust(t *testing.T) {
 	}
 	for source, desc := range descs {
 		for _, tok := range []string{"best-effort pre-trust", "unless the spawn that began the row's life",
-			"no-pre-trust", "pre-trust failure never fails the resume"} {
+			"no_pre_trust", "pre-trust failure never fails the resume"} {
 			if !strings.Contains(desc, tok) {
 				t.Errorf("%s: resume description does not contain %q; got %q", source, tok, desc)
 			}
@@ -1076,8 +1075,8 @@ func TestPreTrustResultField(t *testing.T) {
 		verb       string
 		skippedWhy string // why pre-trust was off for this launch
 	}{
-		{"spawn", "the caller passed no-pre-trust"},
-		{"resume", "the spawn that began the row's life turned it off with no-pre-trust"},
+		{"spawn", "the caller passed no_pre_trust"},
+		{"resume", "the spawn that began the row's life turned it off with no_pre_trust"},
 	}
 	wantEnum := []string{"failed", "ok", "skipped"}
 	for _, tc := range cases {

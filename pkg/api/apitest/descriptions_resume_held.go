@@ -54,7 +54,7 @@ func (c DescCase) afterResumeHeld(p HeldName, label heldLabel) DescCase {
 		req = append(req, s)
 	}
 	mustNot := appendMissing(append([]string(nil), c.MustNot...), nothingWasDone, nothingWritten, rowStaysPending,
-		newRow, heldRetryReuse[0], launchRetryRule, spawnOnlyHolder)
+		newRow, reuseOptInName, launchRetryRule, spawnOnlyHolder)
 	mustNot = appendMissing(mustNot, heldNotPendingStatements...)
 	mustNot = appendMissing(mustNot, label.wrong()...)
 	mustNot = appendMissing(mustNot, p.Restore.otherRestorePhrases()...)

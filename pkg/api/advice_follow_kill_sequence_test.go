@@ -32,7 +32,7 @@ var advKillSteps = []string{
 	"3. Run find-missing, then check status; repeat about 5 s apart until the row is ended or missing, at most three runs.",
 	"4. Still live: kill once more, wait about 5 s, run find-missing once more and check.",
 	"5. Still live: escalate to a human.",
-	"6. Then resume the row if it has a session id and the caller wants the conversation back; otherwise spawn with --reuse-finished (callers whose ids agent-director mints spawn fresh).",
+	"6. Then resume the row if it has a session id and the caller wants the conversation back; otherwise spawn with reuse_finished (--reuse-finished on the CLI); callers whose ids agent-director mints spawn fresh.",
 }
 
 // advKillScene is a row to end and relaunch: its id and what happens in the
@@ -251,7 +251,8 @@ func (s *advKillSeq) run(t *testing.T, wantConversation bool, afterFirstKill fun
 // TestAdviceFollow_C11_LiveRowSequence: the six steps taken literally end
 // every live or pending row resumable or reusable, within the stated bounds.
 func TestAdviceFollow_C11_LiveRowSequence(t *testing.T) {
-	// C11 kill Description's live-row sequence, its six steps quoted in advKillSteps: "1. kill and check the result; ... otherwise spawn with --reuse-finished".
+	// C11 kill Description's live-row sequence, its six steps quoted in advKillSteps: "1. kill and check the result; ... otherwise spawn with
+	// reuse_finished (--reuse-finished on the CLI); ...".
 	adviceAssertManifest(t, "kill", "", advKillSteps...)
 	cases := []struct {
 		name         string
@@ -302,8 +303,8 @@ func TestAdviceFollow_C11_LiveRowSequence(t *testing.T) {
 // find-missing marks a stuck live row missing, and the respawn with the
 // reuse opt-in starts it again.
 func TestAdviceFollow_F1_DeleteDescriptionKillThenFindMissing(t *testing.T) {
-	// F1 delete Description: "respawn with spawn --reuse-finished; for a stuck live row, kill then find-missing."
-	adviceAssertManifest(t, "delete", "", "respawn with spawn --reuse-finished; for a stuck live row, kill then find-missing.")
+	// F1 delete Description: "respawn with spawn reuse_finished (--reuse-finished on the CLI); for a stuck live row, kill then find-missing."
+	adviceAssertManifest(t, "delete", "", "respawn with spawn reuse_finished (--reuse-finished on the CLI); for a stuck live row, kill then find-missing.")
 	grace := config.Default().Tmux.EffectivePendingGrace()
 	cases := []struct {
 		name   string

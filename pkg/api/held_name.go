@@ -47,15 +47,10 @@ const (
 // once finished it collides with a plain spawn of the id
 // (ErrInstanceIdCollision), so each names the opted-in retry.
 const (
-	// heldRetryReuse: the re-lookup could not answer and the end write
-	// applied, so a plain spawn of the id now collides with its ended row.
-	// It spells the opt-in "(reuse_finished)", one surface's spelling, so it
-	// differs from heldRetryFree only in that parenthetical; respelling it
-	// (spawn.ReuseOptIn) is b.c4u's.
-	heldRetryReuse = "a retry with this id uses the reuse opt-in (reuse_finished) once the name is free, since a plain spawn of the id now collides"
-	// heldRetryFree: the holder vanished and the end write applied: the
-	// opted-in retry once the name is free, the opt-in in each surface's
-	// spelling (spawn.ReuseRetry).
+	// heldRetryFree: the end write applied, and either the re-lookup could
+	// not answer or the holder vanished, so a plain spawn of the id now
+	// collides with its ended row: the opted-in retry once the name is free,
+	// the opt-in in its one spelling (spawn.ReuseRetry; b.c4u).
 	heldRetryFree = spawn.ReuseRetry + " once the name is free, " + spawn.PlainSpawnCollides
 	// heldRetryWait: the end write did not apply, or failed: the
 	// launch-timeout rule (SR-1.4), then heldRetryFree's opted-in retry.
@@ -125,8 +120,8 @@ type heldExaminedRow struct {
 // that launch socket; rowSentence is the caller's row sentence (plain spawn:
 // heldRowEnded, heldRowLeftAsIs or heldRowStaysPending; resume and reuse: the
 // restore's, restoreResultOf); retry is the caller's retry sentences
-// (heldRetrySentences; plain spawn: Unanswered heldRetryReuse and Vanished
-// heldRetryFree when its end write applied, else heldRetryWait for both;
+// (heldRetrySentences; plain spawn: heldRetryFree for both when its end
+// write applied, else heldRetryWait for both;
 // resume and reuse: Unanswered retryLater, so their ambiguous holder also
 // ends with "retry later", and no Vanished); examined is the row the verb examined before
 // its move or reset (heldExaminedRow), nil for plain spawn, whose row did not

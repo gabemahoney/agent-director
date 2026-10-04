@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,13 +31,22 @@ func NewLiveDispatcher(client *api.Client) *LiveDispatcher {
 // (underscores); we convert to the verb form (hyphens) before
 // dispatching to the Client.
 //
-// Each tool decodes the MCP arguments map into its typed params
-// struct via json.Unmarshal round-trip; the manifest's per-param
-// types match the struct field tags so the decode is trivial.
+// Every exposed tool first checks the top-level keys of its arguments
+// against its verb's manifest params (checkParamNames): any other key is
+// refused with ErrInvalidFlags before anything is decoded or run (b.c4u).
+// Each tool then decodes the arguments into its typed params struct via a
+// json.Unmarshal round-trip: every manifest param has a typed field
+// tagged with its manifest name (b.7or), so a wrong-typed value is a decode
+// error naming the param and nothing runs.
 func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.RawMessage) (any, error) {
 	verbName := VerbNameFromTool(toolName)
 	if args == nil || len(args) == 0 {
 		args = json.RawMessage("{}")
+	}
+	if v, ok := manifest.Lookup(verbName); ok && ExposedVerb(verbName) {
+		if err := checkParamNames(v, args); err != nil {
+			return nil, err
+		}
 	}
 
 	switch verbName {
@@ -57,6 +68,9 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		// (and what docs/mcp-reference.md advertises). Labels arrive as
 		// a []string of "k=v" entries; permissions arrive as three
 		// independent allow/deny/ask arrays, not a nested object.
+		// tmux_session_name is a pointer so a present key is supplied,
+		// even when empty (ErrTmuxSessionNameEmpty), while an absent or
+		// null one is not, as with the CLI's --tmux-session-name.
 		var raw struct {
 			CWD              string            `json:"cwd"`
 			Template         string            `json:"template"`
@@ -65,10 +79,12 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 			Allow            []string          `json:"allow"`
 			Deny             []string          `json:"deny"`
 			Ask              []string          `json:"ask"`
-			RelayMode        string            `json:"relay-mode"`
-			ExtraEnv         map[string]string `json:"extra-env"`
+			RelayMode        string            `json:"relay_mode"`
+			ExtraEnv         map[string]string `json:"extra_env"`
 			ClaudeArgs       []string          `json:"claude_args"`
-			ReuseFinished    bool              `json:"reuse-finished"`
+			NoPreTrust       bool              `json:"no_pre_trust"`
+			TmuxSessionName  *string           `json:"tmux_session_name"`
+			ReuseFinished    bool              `json:"reuse_finished"`
 		}
 		if err := json.Unmarshal(args, &raw); err != nil {
 			return nil, fmt.Errorf("decode spawn params: %w", err)
@@ -89,7 +105,12 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 			AgentDirectorLabels: labels,
 			ClaudeArgs:          raw.ClaudeArgs,
 			RelayMode:           raw.RelayMode,
+			NoPreTrust:          raw.NoPreTrust,
 			ReuseFinished:       raw.ReuseFinished,
+		}
+		if raw.TmuxSessionName != nil {
+			p.TmuxSessionName = *raw.TmuxSessionName
+			p.TmuxSessionNameSupplied = true
 		}
 		if len(raw.Allow) > 0 || len(raw.Deny) > 0 || len(raw.Ask) > 0 {
 			p.Permissions = &api.Permissions{
@@ -156,21 +177,23 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 
 	case "list":
 		var raw struct {
-			State  []string `json:"state"`
-			Label  []string `json:"label"`
-			Parent string   `json:"parent"`
-			Cwd    string   `json:"cwd"`
-			Limit  int      `json:"limit"`
+			State           []string `json:"state"`
+			Label           []string `json:"label"`
+			Parent          string   `json:"parent"`
+			Cwd             string   `json:"cwd"`
+			TmuxSessionName string   `json:"tmux_session_name"`
+			Limit           int      `json:"limit"`
 		}
 		if err := json.Unmarshal(args, &raw); err != nil {
 			return nil, fmt.Errorf("decode list params: %w", err)
 		}
 		return d.client.List(api.ListParams{
-			State:  raw.State,
-			Labels: raw.Label,
-			Parent: raw.Parent,
-			Cwd:    raw.Cwd,
-			Limit:  raw.Limit,
+			State:           raw.State,
+			Labels:          raw.Label,
+			Parent:          raw.Parent,
+			Cwd:             raw.Cwd,
+			TmuxSessionName: raw.TmuxSessionName,
+			Limit:           raw.Limit,
 		})
 
 	case "make-template":
@@ -254,9 +277,58 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		}
 		return d.client.Decide(p)
 
+	case "get-permission":
+		var p api.GetPermissionParams
+		if err := unmarshalSnake(args, &p); err != nil {
+			return nil, err
+		}
+		return d.client.GetPermission(p)
+
 	default:
 		return nil, fmt.Errorf("%w: %s", ErrUnknownTool, toolName)
 	}
+}
+
+// checkParamNames refuses an arguments object with a top-level key that is
+// not one of v's manifest param names (b.c4u). Keys match exactly, case
+// included: Go's decoder would match a key case-insensitively, and MCP
+// would otherwise silently ignore an unknown or misspelt key, such as an old
+// dashed name. The refusal wraps api.ErrInvalidFlags (the CLI's error for a
+// flag that is not defined), names every unknown key as the caller sent it,
+// sorted, and lists v's valid param names in manifest order. It runs before
+// any decode, so nothing runs on a refusal. Arguments that are not a JSON
+// object are a decode error.
+func checkParamNames(v manifest.VerbDef, args json.RawMessage) error {
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(args, &keys); err != nil {
+		return fmt.Errorf("decode %s params: %w", v.Name, err)
+	}
+	valid := make([]string, 0, len(v.Params))
+	known := make(map[string]bool, len(v.Params))
+	for _, p := range v.Params {
+		valid = append(valid, p.Name)
+		known[p.Name] = true
+	}
+	var unknown []string
+	for k := range keys {
+		if !known[k] {
+			unknown = append(unknown, strconv.Quote(k))
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	sort.Strings(unknown)
+	noun := "parameter"
+	if len(unknown) > 1 {
+		noun = "parameters"
+	}
+	list := "none"
+	if len(valid) > 0 {
+		list = strings.Join(valid, ", ")
+	}
+	return fmt.Errorf("%w: %s: unknown %s %s; valid parameters: %s",
+		api.ErrInvalidFlags, v.Name, noun, strings.Join(unknown, ", "), list)
 }
 
 // unmarshalSnake is a small shim that decodes a JSON object into a

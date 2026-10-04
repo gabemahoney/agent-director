@@ -12,6 +12,11 @@
 // MCP on next server start with no source changes here. The
 // drift-by-construction invariant is pinned by a test that compares
 // the tools/list output against `len(manifest.Verbs)`.
+//
+// Tool arguments use the manifest param names exactly (underscores, never
+// the CLI's dashed flag spellings). A tool call with any other argument key
+// is refused with ErrInvalidFlags before anything runs, and every manifest
+// param of every tool is decoded (b.c4u, b.7or; see LiveDispatcher.Call).
 package mcp
 
 import (
@@ -111,7 +116,7 @@ func New(d Dispatcher, logger *log.Logger) *Server {
 // message doesn't tear down the session.
 func (s *Server) Serve(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 	// The scanner's default buffer is 64KB — tool args can include
-	// large JSON blobs (e.g. a spawn with many --extra-env entries),
+	// large JSON blobs (e.g. a spawn with many extra_env entries),
 	// so we bump the cap to 1MB which matches the hook handler's
 	// MaxPayloadBytes.
 	scanner := bufio.NewScanner(stdin)

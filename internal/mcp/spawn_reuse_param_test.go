@@ -1,11 +1,11 @@
 package mcp_test
 
-// spawn_reuse_param_test.go pins the MCP side of spawn's reuse-finished opt-in
-// (SR-10.1, AC-REUSE-13): tools/list advertises it on spawn only, the spawn
-// decoder knows the field, without the opt-in a finished row still collides
-// (with the Go client's envelope), and with it the row is reused through the
-// live dispatcher. make_template ignores it. No case here relies on
-// tmux-session-name or no-pre-trust (b.7or).
+// spawn_reuse_param_test.go pins the MCP side of spawn's reuse_finished opt-in
+// (SR-10.1, AC-REUSE-13; b.c4u's name): tools/list advertises it on spawn
+// only, the spawn decoder knows the field, without the opt-in a finished row
+// still collides (with the Go client's envelope), and with it the row is
+// reused through the live dispatcher. make_template refuses it, and the other
+// per-invocation params its description names, as unknown parameters.
 
 import (
 	"encoding/json"
@@ -17,7 +17,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/BurntSushi/toml"
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/mcp"
 	"github.com/gabemahoney/agent-director/internal/spawn"
@@ -30,18 +29,18 @@ import (
 )
 
 // newReuseParamEnv is a pre-trust env under a temp HOME, plus a per-test
-// CLAUDE_CONFIG_DIR (with a .claude.json) for the spawn's extra-env.
+// CLAUDE_CONFIG_DIR (with a .claude.json) for the spawn's extra_env.
 func newReuseParamEnv(t *testing.T) (*ptEnv, ptConfig) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	return newPreTrustEnv(t), ptSeedConfig(t, true)
 }
 
-// spawnArgs marshals spawn's arguments: cwd, the config dir's extra-env, then
-// extra (an explicit id, reuse-finished) on top.
+// spawnArgs marshals spawn's arguments: cwd, the config dir's extra_env, then
+// extra (an explicit id, reuse_finished) on top.
 func spawnArgs(t *testing.T, cwd string, c ptConfig, extra map[string]any) string {
 	t.Helper()
-	args := map[string]any{"cwd": cwd, "extra-env": c.env()}
+	args := map[string]any{"cwd": cwd, "extra_env": c.env()}
 	for k, v := range extra {
 		args[k] = v
 	}
@@ -126,7 +125,7 @@ func readColumns(t *testing.T, dbPath, id string) apitest.SpawnColumns {
 }
 
 // TestToolsListAdvertisesReuseFinished: spawn's schema has an optional boolean
-// reuse-finished; make_template's has no reuse property under either spelling.
+// reuse_finished; make_template's has no reuse property under either spelling.
 func TestToolsListAdvertisesReuseFinished(t *testing.T) {
 	resp := runOne(t, &fakeDispatcher{}, mcp.Request{JSONRPC: "2.0", ID: json.RawMessage(`1`), Method: "tools/list"})
 	if resp == nil || resp.Error != nil {
@@ -153,12 +152,12 @@ func TestToolsListAdvertisesReuseFinished(t *testing.T) {
 		switch tool.Name {
 		case "spawn":
 			seen["spawn"] = true
-			if p, ok := props["reuse-finished"]; !ok || p.Type != "boolean" {
-				t.Errorf("spawn reuse-finished = %+v (present=%v); want type boolean", p, ok)
+			if p, ok := props["reuse_finished"]; !ok || p.Type != "boolean" {
+				t.Errorf("spawn reuse_finished = %+v (present=%v); want type boolean", p, ok)
 			}
 			for _, r := range tool.InputSchema.Required {
-				if r == "reuse-finished" {
-					t.Error("spawn schema requires reuse-finished; want optional")
+				if r == "reuse_finished" {
+					t.Error("spawn schema requires reuse_finished; want optional")
 				}
 			}
 		case mcp.ToolName("make-template"):
@@ -181,7 +180,7 @@ func TestMCPSpawnReuseFinishedWithoutIDIsFreshSpawn(t *testing.T) {
 	e, c := newReuseParamEnv(t)
 	other := seedFinished(t, e, "mcp-reuse-other", store.StateEnded)
 
-	obj := callToolText(t, e.d, "spawn", spawnArgs(t, t.TempDir(), c, map[string]any{"reuse-finished": true}))
+	obj := callToolText(t, e.d, "spawn", spawnArgs(t, t.TempDir(), c, map[string]any{"reuse_finished": true}))
 
 	var minted string
 	if err := json.Unmarshal(obj["claude_instance_id"], &minted); err != nil || minted == "" || minted == "mcp-reuse-other" {
@@ -211,7 +210,7 @@ func TestMCPSpawnRejectsNonBoolReuseFinished(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e, c := newReuseParamEnv(t)
-			toolErrorData(t, callTool(t, e.d, "spawn", spawnArgs(t, t.TempDir(), c, map[string]any{"reuse-finished": tc.value})))
+			toolErrorData(t, callTool(t, e.d, "spawn", spawnArgs(t, t.TempDir(), c, map[string]any{"reuse_finished": tc.value})))
 			assertNothingCreated(t, e.d, e.rec)
 		})
 	}
@@ -227,7 +226,7 @@ func TestMCPSpawnReuseFinishedControlCharacterID(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e, c := newReuseParamEnv(t)
-			args := spawnArgs(t, t.TempDir(), c, map[string]any{"claude_instance_id": tc.id, "reuse-finished": true})
+			args := spawnArgs(t, t.TempDir(), c, map[string]any{"claude_instance_id": tc.id, "reuse_finished": true})
 			if data := toolErrorData(t, callTool(t, e.d, "spawn", args)); data.ErrName != "ErrInvalidFlags" {
 				t.Errorf("err_name = %q (%s); want ErrInvalidFlags", data.ErrName, data.ErrDescription)
 			}
@@ -236,7 +235,7 @@ func TestMCPSpawnReuseFinishedControlCharacterID(t *testing.T) {
 	}
 }
 
-// TestMCPSpawnFinishedRowCollidesWithoutOptIn: with reuse-finished absent or
+// TestMCPSpawnFinishedRowCollidesWithoutOptIn: with reuse_finished absent or
 // false, an ended or missing row's id collides; the row is unchanged and no
 // session is created.
 func TestMCPSpawnFinishedRowCollidesWithoutOptIn(t *testing.T) {
@@ -247,7 +246,7 @@ func TestMCPSpawnFinishedRowCollidesWithoutOptIn(t *testing.T) {
 			extra map[string]any
 		}{
 			{"absent", map[string]any{"claude_instance_id": id}},
-			{"false", map[string]any{"claude_instance_id": id, "reuse-finished": false}},
+			{"false", map[string]any{"claude_instance_id": id, "reuse_finished": false}},
 		} {
 			t.Run(state+"/"+form.name, func(t *testing.T) {
 				e, c := newReuseParamEnv(t)
@@ -268,7 +267,7 @@ func TestMCPSpawnFinishedRowCollidesWithoutOptIn(t *testing.T) {
 	}
 }
 
-// TestSpawnReuseMCPFinishedRow: with reuse-finished an ended or missing row
+// TestSpawnReuseMCPFinishedRow: with reuse_finished an ended or missing row
 // whose session is gone is reused: pending at life + 1 with a new launch.
 func TestSpawnReuseMCPFinishedRow(t *testing.T) {
 	const id = "mcp-reuse-finished-row"
@@ -278,7 +277,7 @@ func TestSpawnReuseMCPFinishedRow(t *testing.T) {
 			before := seedFinished(t, e, id, state, apitest.WithLifeNumber(2))
 
 			obj := callToolText(t, e.d, "spawn", spawnArgs(t, t.TempDir(), c,
-				map[string]any{"claude_instance_id": id, "reuse-finished": true}))
+				map[string]any{"claude_instance_id": id, "reuse_finished": true}))
 
 			if got := string(obj["claude_instance_id"]); got != strconv.Quote(id) {
 				t.Errorf("claude_instance_id = %s; want %q", got, id)
@@ -313,7 +312,7 @@ func TestSpawnReuseMCPCollisionMatchesGoClient(t *testing.T) {
 		extra map[string]any
 	}{
 		{"absent", map[string]any{"claude_instance_id": id}},
-		{"false", map[string]any{"claude_instance_id": id, "reuse-finished": false}},
+		{"false", map[string]any{"claude_instance_id": id, "reuse_finished": false}},
 	} {
 		t.Run(form.name, func(t *testing.T) {
 			e, c := newReuseParamEnv(t)
@@ -355,33 +354,40 @@ func goClientSpawn(t *testing.T, dbPath string, p api.SpawnParams) error {
 	return err
 }
 
-// TestMCPMakeTemplateIgnoresReuseFinished: make_template accepts either
-// spelling, writes no reuse key, and the template loads cleanly.
-func TestMCPMakeTemplateIgnoresReuseFinished(t *testing.T) {
-	for _, key := range []string{"reuse-finished", "reuse_finished"} {
+// TestMCPMakeTemplateRefusesPerInvocationParams: make_template's description
+// says its per-invocation params are refused, and over MCP each (the reuse
+// opt-in in either spelling included) is an unknown parameter (ErrInvalidFlags
+// naming it) and no template is written; the same call without it writes one.
+func TestMCPMakeTemplateRefusesPerInvocationParams(t *testing.T) {
+	const refused = "Per-invocation params (template, claude_instance_id, tmux_session_name, reuse_finished) are refused."
+	if desc := advToolDescription(t, &fakeDispatcher{}, mcp.ToolName("make-template")); !strings.Contains(desc, refused) {
+		t.Fatalf("make_template description %q lacks %q", desc, refused)
+	}
+	for key, value := range map[string]any{
+		"template": "tpl", "claude_instance_id": "tpl-id", "tmux_session_name": "tpl-session",
+		"reuse_finished": true, "reuse-finished": true,
+	} {
 		t.Run(key, func(t *testing.T) {
 			e, _ := newReuseParamEnv(t)
-			args, err := json.Marshal(map[string]any{"name": "reuse-tpl", "cwd": t.TempDir(), key: true})
+			args := map[string]any{"name": "reuse-tpl", "cwd": t.TempDir(), key: value}
+			body, err := json.Marshal(args)
 			if err != nil {
 				t.Fatalf("marshal args: %v", err)
 			}
 
-			obj := callToolText(t, e.d, mcp.ToolName("make-template"), string(args))
-			var path string
-			if err := json.Unmarshal(obj["path"], &path); err != nil || path == "" {
-				t.Fatalf("make_template path = %s (%v); want the written file", obj["path"], err)
+			data := toolErrorData(t, callTool(t, e.d, mcp.ToolName("make-template"), string(body)))
+
+			if data.ErrName != "ErrInvalidFlags" || !strings.Contains(data.ErrDescription, strconv.Quote(key)) {
+				t.Errorf("error = %+v; want ErrInvalidFlags naming %q", data, key)
 			}
-			var keys map[string]any
-			if _, err := toml.DecodeFile(path, &keys); err != nil {
-				t.Fatalf("decode template %s: %v", path, err)
+			if _, err := config.LoadTemplate("reuse-tpl"); err == nil {
+				t.Fatalf("LoadTemplate found a template; want none written by the refused call")
 			}
-			for k := range keys {
-				if strings.Contains(strings.ToLower(k), "reuse") {
-					t.Errorf("template %s records key %q; want no reuse key", path, k)
-				}
-			}
+			delete(args, key)
+			body, _ = json.Marshal(args)
+			callToolText(t, e.d, mcp.ToolName("make-template"), string(body))
 			if _, err := config.LoadTemplate("reuse-tpl"); err != nil {
-				t.Errorf("LoadTemplate: %v", err)
+				t.Errorf("LoadTemplate after the call without %s: %v", key, err)
 			}
 		})
 	}

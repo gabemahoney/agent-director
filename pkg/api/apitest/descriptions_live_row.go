@@ -18,7 +18,7 @@ const (
 	// liveRowShortOpening opens the short form.
 	liveRowShortOpening = "Live-row sequence (a pending row included):"
 	// liveRowShortClosing is the short form's last phrase (step 6's).
-	liveRowShortClosing = "callers whose ids agent-director mints spawn fresh)."
+	liveRowShortClosing = "; callers whose ids agent-director mints spawn fresh."
 	// liveRowOpening opens the pointer, and opened the long form the manifest
 	// stated before the short form; LiveRowSequenceCount counts a long-form
 	// statement by it.
@@ -68,10 +68,10 @@ func liveRowSteps() []liveRowStep {
 		{
 			phrases: []string{
 				"Then resume the row if it has a session id and the caller wants the conversation back",
-				"otherwise spawn with --reuse-finished",
+				"otherwise spawn with " + reuseOptInSpelling,
 				liveRowShortClosing,
 			},
-			keys: []string{"if it has a session id", "wants the conversation back", "otherwise spawn with --reuse-finished", "spawn fresh"},
+			keys: []string{"if it has a session id", "wants the conversation back", "otherwise spawn with " + reuseOptInName, "spawn fresh"},
 		},
 	}
 }
@@ -84,7 +84,8 @@ func liveRowSteps() []liveRowStep {
 // inside it wait and check again, never escalate; (3) up to three find-missing
 // runs about 5 s apart, each checked with status; (4) one more kill, "wait
 // about 5 s" and a last find-missing; (5) a human; (6) resume or spawn with
-// --reuse-finished, and a caller whose ids agent-director mints spawns fresh.
+// the reuse opt-in in its one spelling (reuseOptInSpelling, b.c4u), and a
+// caller whose ids agent-director mints spawns fresh.
 // It must not carry the rationale the README keeps ("history belongs to a
 // life", "unreachable for good", SR/OFR citations), the long form's or the
 // pointer's opening, or the pointer. Check it with AssertAgentTextCase.

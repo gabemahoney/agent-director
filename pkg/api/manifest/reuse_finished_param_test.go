@@ -51,23 +51,23 @@ func paramShapesBySource(t *testing.T, verb string) map[string][]paramShape {
 	return out
 }
 
-// TestSpawnHasReuseFinishedParam pins spawn's reuse-finished entry (SR-10.1,
-// AC-REUSE-13): exactly one, bool, optional, described; the text is Task 4's.
+// TestSpawnHasReuseFinishedParam pins spawn's reuse_finished entry (SR-10.1,
+// AC-REUSE-13; b.c4u's name): exactly one, bool, optional, described.
 func TestSpawnHasReuseFinishedParam(t *testing.T) {
 	for source, params := range paramShapesBySource(t, "spawn") {
 		var found []paramShape
 		for _, p := range params {
-			if p.name == "reuse-finished" {
+			if p.name == "reuse_finished" {
 				found = append(found, p)
 			}
 		}
 		if len(found) != 1 {
-			t.Errorf("%s: spawn has %d reuse-finished params; want exactly 1", source, len(found))
+			t.Errorf("%s: spawn has %d reuse_finished params; want exactly 1", source, len(found))
 			continue
 		}
 		p := found[0]
 		if p.typ != "bool" || p.required || p.desc == "" {
-			t.Errorf("%s: spawn reuse-finished type %q required %v description %q; want bool, optional, non-empty",
+			t.Errorf("%s: spawn reuse_finished type %q required %v description %q; want bool, optional, non-empty",
 				source, p.typ, p.required, p.desc)
 		}
 	}

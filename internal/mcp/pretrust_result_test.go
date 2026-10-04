@@ -6,8 +6,8 @@ package mcp_test
 // was written, failed when the .claude.json is missing (the launch still
 // succeeds) and, for resume, skipped when the row records the opt-out. Every
 // case points CLAUDE_CONFIG_DIR at a per-test directory, so the real
-// ~/.claude.json is never read or written. MCP spawn never sends no-pre-trust
-// (bug b.7or is out of scope).
+// ~/.claude.json is never read or written. MCP spawn's no_pre_trust is in
+// param_test.go (b.7or).
 
 import (
 	"encoding/json"
@@ -136,7 +136,7 @@ func assertCreates(t *testing.T, rec *tmuxfix.Recorder) {
 	}
 }
 
-// TestPreTrustMCPSpawnResult: an MCP spawn with only cwd and extra-env reports
+// TestPreTrustMCPSpawnResult: an MCP spawn with only cwd and extra_env reports
 // ok and writes the entry when the .claude.json lacks it, and reports failed
 // and still spawns when the file is missing.
 func TestPreTrustMCPSpawnResult(t *testing.T) {
@@ -157,7 +157,7 @@ func TestPreTrustMCPSpawnResult(t *testing.T) {
 			if err != nil {
 				t.Fatalf("EvalSymlinks: %v", err)
 			}
-			args, err := json.Marshal(map[string]any{"cwd": cwd, "extra-env": c.env()})
+			args, err := json.Marshal(map[string]any{"cwd": cwd, "extra_env": c.env()})
 			if err != nil {
 				t.Fatalf("marshal args: %v", err)
 			}
