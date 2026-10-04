@@ -1,5 +1,5 @@
-// Package probe reads facts about a single process by pid. It holds two
-// readers, both selected by build tags at compile time:
+// Package probe reads facts about a single process by pid. It holds three
+// readers, all selected by build tags at compile time:
 //
 //   - The start-time reader (ProcChecker / NewProcChecker, starttime.go;
 //     SR-3.8, LFR C1): the one process reader every process judgement uses —
@@ -10,12 +10,15 @@
 //   - The command-name reader (CommandNameReader / NewCommandNameReader,
 //     commname.go): fills `parent_command` in the `ad.hook.ignored` trail
 //     record only, never evidence.
+//   - The parent-pid reader (ParentPIDReader / NewParentPIDReader, ppid.go):
+//     feeds the hook's launcher warning only (`ad.hook.launcher_detected`
+//     and `ad.hook.ignored`'s `launcher_pid`), never evidence.
 //
 // Per OS: Linux reads <procRoot>/<pid>/stat and /comm (default root /proc);
 // darwin reads the pid's single KERN_PROC_PID kinfo_proc entry; any other OS
 // gets readers that answer unreadable for every pid.
 //
-// Neither reader reads a process environment, and neither reads the clock.
+// No reader reads a process environment, and none reads the clock.
 // Liveness is judged only by a process's start time (SR-11.1): this package
 // has no environment scan and no environment tiebreaker.
 package probe

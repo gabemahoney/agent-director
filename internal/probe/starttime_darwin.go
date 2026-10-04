@@ -9,7 +9,8 @@ import "golang.org/x/sys/unix"
 // exactly one kinfoProcSize entry; a gone pid yields an empty buffer or
 // ESRCH. The RAW bytes flow straight into the entry-granular kinfo parsers
 // (parse_kinfo.go), which apply the fail-open ErrKinfoLayoutDrift guard. The
-// start-time reader and the command-name reader both use it.
+// start-time reader, the command-name reader and the parent-pid reader all
+// use it.
 func fetchKinfoPID(pid int) ([]byte, error) {
 	return unix.SysctlRaw("kern.proc.pid", pid)
 }

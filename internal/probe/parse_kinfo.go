@@ -131,8 +131,8 @@ const maxPlausiblePID = 4_194_304
 // kinfoProcStart*Offset / kinfoProcStatOffset / kinfoProcCommOffset) have
 // drifted under us, e.g. after a macOS major bump resized struct kinfo_proc.
 //
-// Drift is fail-OPEN: the start-time reader and the command-name reader
-// answer unreadable, never gone. It is a distinct sentinel that wraps nothing,
+// Drift is fail-OPEN: the start-time reader, the command-name reader and the
+// parent-pid reader answer unreadable, never gone. It is a distinct sentinel that wraps nothing,
 // so callers that need to branch on drift test
 // errors.Is(err, ErrKinfoLayoutDrift).
 var ErrKinfoLayoutDrift = errors.New("ErrKinfoLayoutDrift")

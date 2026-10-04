@@ -238,7 +238,10 @@ func TestHookGateCLIOwnPaneApplies(t *testing.T) {
 // TestHookGateCLIForeignPaneIgnored: a row whose pane process is another live
 // process (this test's own parent, with its real start time) ignores the
 // test's hooks. SR-22.9/SR-14: nothing changes, exit 0, empty stdout, and one
-// ad.hook.ignored naming the hook's real parent (this test process).
+// ad.hook.ignored naming the hook's real parent (this test process). The pane
+// process started that parent as a child, as a `claude` launcher that does not
+// exec does (b.9n6): launcher_pid names it, and the pending row's SessionStart
+// also writes one ad.hook.launcher_detected.
 func TestHookGateCLIForeignPaneIgnored(t *testing.T) {
 	pid := os.Getpid()
 	other := os.Getppid()
@@ -250,13 +253,18 @@ func TestHookGateCLIForeignPaneIgnored(t *testing.T) {
 	if !ok || wantCommand == "" {
 		t.Fatalf("CommandName(test pid %d) = (%q, %v); want the test process's name", pid, wantCommand, ok)
 	}
+	var launcherCommand any // the pane process's name; null when unreadable
+	if name, ok := probe.NewCommandNameReader().CommandName(other); ok {
+		launcherCommand = name
+	}
 	cases := []struct {
 		name          string
 		event         string
 		transcript    bool
-		wantHookSessn any // hook_session_id: the payload's, nil when none
+		wantHookSessn any  // hook_session_id: the payload's, nil when none
+		wantDetected  bool // one ad.hook.launcher_detected (a SessionStart on the pending row)
 	}{
-		{name: "SessionStart", event: "SessionStart", transcript: true, wantHookSessn: "gate-foreign-uuid"},
+		{name: "SessionStart", event: "SessionStart", transcript: true, wantHookSessn: "gate-foreign-uuid", wantDetected: true},
 		{name: "Stop", event: "Stop", wantHookSessn: nil},
 	}
 	for _, tc := range cases {
@@ -295,12 +303,38 @@ func TestHookGateCLIForeignPaneIgnored(t *testing.T) {
 				"hook_session_id":    tc.wantHookSessn,
 				"row_session_id":     nil,
 				"row_pane_pid":       float64(other),
+				"launcher_pid":       float64(other),
 				"source":             "ad_hook",
 			}
 			for k, v := range want {
 				got, present := ign[0][k]
 				if !present || got != v {
 					t.Errorf("ad.hook.ignored %s = %v (present=%v); want %v", k, got, present, v)
+				}
+			}
+			detected := trailEvents(t, h.home, "ad.hook.launcher_detected")
+			if !tc.wantDetected {
+				if len(detected) != 0 {
+					t.Errorf("ad.hook.launcher_detected = %v; want none", detected)
+				}
+			} else if len(detected) != 1 {
+				t.Errorf("ad.hook.launcher_detected lines = %d; want exactly 1: %v", len(detected), detected)
+			} else {
+				want := map[string]any{
+					"claude_instance_id": id,
+					"launcher_pid":       float64(other),
+					"launcher_command":   launcherCommand,
+					"parent_pid":         float64(pid),
+					"parent_command":     wantCommand,
+					"source":             "ad_hook",
+				}
+				for k, v := range want {
+					if got, present := detected[0][k]; !present || got != v {
+						t.Errorf("ad.hook.launcher_detected %s = %v (present=%v); want %v", k, got, present, v)
+					}
+				}
+				if advice, _ := detected[0]["advice"].(string); !strings.Contains(advice, "a wrapper that execs it") {
+					t.Errorf("ad.hook.launcher_detected advice = %q; want the launcher advice", advice)
 				}
 			}
 			// A11: the ignored hook's ad.hook.fired reports no_change.

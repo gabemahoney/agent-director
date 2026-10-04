@@ -14,7 +14,8 @@ package hook_test
 //     SessionStart's wait for its launch's identity write never sleeps in real time.
 //   - hookClock: that virtual clock, for its recorded sleeps.
 //   - identityAtSleep: the launch's identity write, landing at the Nth sleep.
-//   - fakeParentProc: the hook.ParentProc double (procfix.Checker + name table).
+//   - fakeParentProc: the hook.ParentProc double (procfix.Checker + name and
+//     parent-pid tables).
 //   - hookIgnoredAfter: the ad.hook.ignored lines one row got after a checkpoint.
 
 import (
@@ -39,10 +40,11 @@ type hookParent struct {
 }
 
 // fakeParentProc is a hook.ParentProc double: StartTime comes from
-// procfix.Checker's process table, CommandName from names.
+// procfix.Checker's process table, CommandName from names, PPID from ppids.
 type fakeParentProc struct {
 	*procfix.Checker
 	names map[int]string
+	ppids map[int]int
 }
 
 // CommandName answers from the name table; an unlisted or empty name is unreadable.
@@ -51,10 +53,17 @@ func (p *fakeParentProc) CommandName(pid int) (string, bool) {
 	return n, n != ""
 }
 
+// PPID answers from the parent-pid table; an unlisted or non-positive entry is
+// unreadable, so by default no hook reports a launcher.
+func (p *fakeParentProc) PPID(pid int) (int, bool) {
+	ppid := p.ppids[pid]
+	return ppid, ppid > 0
+}
+
 // newParentProc returns a fakeParentProc holding each parent: alive with its
 // start time, or unreadable when Start is "". Tests may Set more pids later.
 func newParentProc(parents ...hookParent) *fakeParentProc {
-	p := &fakeParentProc{Checker: procfix.New(), names: map[int]string{}}
+	p := &fakeParentProc{Checker: procfix.New(), names: map[int]string{}, ppids: map[int]int{}}
 	for _, hp := range parents {
 		if hp.Start == "" {
 			p.Set(hp.PID, procfix.Unreadable())

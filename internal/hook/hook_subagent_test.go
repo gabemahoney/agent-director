@@ -128,7 +128,8 @@ func TestSubagentLifecycleHookIgnored(t *testing.T) {
 			want := map[string]any{
 				"claude_instance_id": id, "hook_event": tc.event, "reason": store.HookReasonSubagentEvent,
 				"parent_pid": float64(parent.PID), "parent_command": "claude", "hook_session_id": sessionID,
-				"row_session_id": tc.rowSession, "row_pane_pid": float64(ssgFreshPane.PanePID), "source": "ad_hook",
+				"row_session_id": tc.rowSession, "row_pane_pid": float64(ssgFreshPane.PanePID), "launcher_pid": nil,
+				"source": "ad_hook",
 			}
 			for k, v := range want {
 				if line[k] != v {

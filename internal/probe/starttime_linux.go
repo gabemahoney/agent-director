@@ -3,9 +3,9 @@
 package probe
 
 // defaultProcRoot is the kernel procfs mount the production Linux readers
-// (the start-time reader and the command-name reader) read through. Each
-// reader takes its root as an injectable seam, so tests substitute a
-// fabricated tree.
+// (the start-time reader, the command-name reader and the parent-pid reader)
+// read through. Each reader takes its root as an injectable seam, so tests
+// substitute a fabricated tree.
 const defaultProcRoot = "/proc"
 
 // newProcChecker returns the production Linux start-time reader (SR-3.8) over

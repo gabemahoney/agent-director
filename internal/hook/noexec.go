@@ -60,8 +60,8 @@ func noExecFormPayload(raw []byte) (event, transcriptPath string, ok bool) {
 // builder emitIgnored uses: claude_instance_id from the environment (null when
 // absent or invalid, ResolveInstanceID), hook_event, reason, parent_pid
 // (hc.ParentPID; 0 when nil) and parent_command, hook_session_id (the
-// transcript_path basename, or null), and null row_session_id and
-// row_pane_pid.
+// transcript_path basename, or null), and null row_session_id, row_pane_pid
+// and launcher_pid.
 func emitNoExecForm(ctx context.Context, hc HandleConfig, event, sessionID string) {
 	env := hc.Env
 	if env == nil {

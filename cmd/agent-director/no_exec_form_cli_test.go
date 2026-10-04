@@ -185,6 +185,7 @@ func TestNoExecFormCLIHookPayloadIgnored(t *testing.T) {
 				"hook_session_id":    tc.wantHookSessn,
 				"row_session_id":     nil,
 				"row_pane_pid":       nil,
+				"launcher_pid":       nil,
 				"source":             "ad_hook",
 			}
 			for k, v := range want {
