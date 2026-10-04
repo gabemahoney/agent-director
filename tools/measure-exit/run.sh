@@ -64,14 +64,14 @@
 #                             too) when it is, or links to, a .claude.json or a
 #                             .credentials.json, when it is not JSON, or when
 #                             any key in it looks like a credential (KEY, TOKEN,
-#                             SECRET, PASSWORD, CREDENTIAL, OAUTH, AUTHORIZATION,
-#                             COOKIE), or when an env object in it sets
-#                             ANTHROPIC_BASE_URL, ANTHROPIC_CUSTOM_HEADERS, a
+#                             SECRET, PASSWORD, PASSWD, CREDENTIAL, OAUTH,
+#                             AUTHORIZATION, COOKIE), or when an env object in it
+#                             sets ANTHROPIC_BASE_URL, ANTHROPIC_CUSTOM_HEADERS, a
 #                             CLAUDE_CODE_USE_* name or a name real mode refuses,
 #                             or sets any name to a value that looks like a URL
 #                             or an authorization header; the refusal names the
-#                             key, never a value. The driver repeats the env
-#                             check over the layer files in real mode.
+#                             key, never a value. The driver repeats all of these
+#                             checks over the layer files in real mode.
 #   --host-network            opt in to host networking (hosts with the bridge
 #                             MTU problem, b.rx8); printed as a warning
 #   --guard-mode busy|quiet   guard.sh mode (default busy: user decision)
@@ -259,9 +259,11 @@ layer_target() {
 # agents off the gateway, or that sets any name to a value that looks like a
 # URL or an authorization header (://, "bearer ", "authorization:", any
 # case). The value test runs inside jq, so no value reaches the shell. The
-# refusal names the key, never a value. The driver repeats the env check
-# over the layer files in real mode (layerenv.go), for a container started
-# by hand.
+# refusal names the key, never a value. The driver repeats every one of
+# these checks over the layer files in real mode (layerenv.go's
+# checkLayerFiles), for a container started by hand; the file names and the
+# key pattern below are kept in step with its layerRefusedFileNames and
+# layerCredentialKeyParts.
 refuse_credential_layer() {
     local k="$1" src="$2" real base key keys entries flag name refused n
     real="$(readlink -f -- "$src" 2>/dev/null || printf '%s' "$src")"

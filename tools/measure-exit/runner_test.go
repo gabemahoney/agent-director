@@ -101,13 +101,17 @@ func newRunnerRig(t *testing.T) *runnerRig {
 func (r *runnerRig) layerArgs(kinds ...string) []string {
 	var args []string
 	for _, k := range kinds {
-		flag := map[string]string{"mcp": "--mcp-config"}[k]
-		if flag == "" {
-			flag = "--" + k + "-settings"
-		}
-		args = append(args, flag, filepath.Join(r.layers, k+".json"))
+		args = append(args, layerFlag(k), filepath.Join(r.layers, k+".json"))
 	}
 	return args
+}
+
+// layerFlag is run.sh's flag staging a layer of kind k.
+func layerFlag(k string) string {
+	if k == "mcp" {
+		return "--mcp-config"
+	}
+	return "--" + k + "-settings"
 }
 
 // run runs run.sh mode with args, the rig's base options and env added to a
@@ -442,69 +446,45 @@ func TestRunnerSessionCounts(t *testing.T) {
 // state or credentials file, is not JSON, or holds a credential-like key is
 // refused before anything runs, naming the key and never a value.
 func TestRunnerLayerReport(t *testing.T) {
-	const secret = "layer-sentinel-value-0123456789"
-	envKey := `{"env": {"MY_API_TOKEN": "` + secret + `", "PLAIN": "x"}}`
-	for _, tc := range []struct {
-		name, flag, file, link, body, text string
-		run                                bool
-	}{
-		{"an env key", "--user-settings", "user.json", "", envKey, "credential-like key MY_API_TOKEN", false},
-		{"an env key under --run", "--user-settings", "user.json", "", envKey, "credential-like key MY_API_TOKEN", true},
-		{"apiKeyHelper", "--managed-settings", "managed.json", "", `{"apiKeyHelper": "/bin/echo ` + secret + `"}`, "credential-like key apiKeyHelper", false},
-		{"an MCP header", "--mcp-config", "mcp.json", "",
-			`{"mcpServers": {"api": {"type": "http", "url": "https://mcp.invalid", "headers": {"Authorization": "Bearer ` + secret + `"}}}}`,
-			"credential-like key Authorization", false},
-		{"Claude Code's state file", "--user-settings", ".claude.json", "", `{"oauthAccount": {"emailAddress": "` + secret + `"}}`,
-			"it is (or links to) Claude Code's .claude.json", false},
-		{"Claude Code's credentials file", "--project-settings", ".credentials.json", "", `{"claudeAiOauth": {"accessToken": "` + secret + `"}}`,
-			"it is (or links to) Claude Code's .credentials.json", false},
-		{"a link to the credentials file", "--local-settings", "local.json", ".credentials.json", `{"claudeAiOauth": {"accessToken": "` + secret + `"}}`,
-			"it is (or links to) Claude Code's .credentials.json", false},
-		{"not JSON", "--user-settings", "user.json", "", "token=" + secret, "not a JSON document", false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			r := newRunnerRig(t)
-			path := filepath.Join(t.TempDir(), tc.file)
-			if tc.link == "" {
-				writeFile(t, path, tc.body)
-			} else {
-				target := filepath.Join(t.TempDir(), tc.link)
-				writeFile(t, target, tc.body)
-				if err := os.Symlink(target, path); err != nil {
-					t.Fatal(err)
-				}
-			}
-			args := []string{tc.flag, path}
-			if tc.run {
-				args = append(args, "--run")
-			}
-			code, out := r.run(t, credsEnv(), "measure", args...)
-			if code != 2 || !strings.Contains(out, "refusing the") || !strings.Contains(out, tc.text) {
-				t.Fatalf("exit %d, want 2 with %q:\n%s", code, tc.text, out)
-			}
-			assertAbsent(t, "output", out, append(sentinelTexts(), secret)...)
-			if _, err := os.Stat(r.engineLog); err == nil {
-				t.Errorf("a refused layer reached the engine: %v", r.engineCalls())
-			}
-			if entries, _ := os.ReadDir(r.resultsRoot); len(entries) != 0 {
-				t.Errorf("a refused layer left %d entries in the results root", len(entries))
-			}
-			r.assertNoToolCalls(t)
-		})
+	refused := func(t *testing.T, tc credentialLayerCase, extra ...string) {
+		r := newRunnerRig(t)
+		code, out := r.run(t, credsEnv(), "measure", append([]string{layerFlag(tc.kind), tc.write(t)}, extra...)...)
+		if code != 2 || !strings.Contains(out, "refusing the "+tc.kind+" layer") || !strings.Contains(out, tc.text) {
+			t.Fatalf("exit %d, want 2 with %q:\n%s", code, tc.text, out)
+		}
+		assertAbsent(t, "output", out, append(sentinelTexts(), layerSecret)...)
+		if _, err := os.Stat(r.engineLog); err == nil {
+			t.Errorf("a refused layer reached the engine: %v", r.engineCalls())
+		}
+		if entries, _ := os.ReadDir(r.resultsRoot); len(entries) != 0 {
+			t.Errorf("a refused layer left %d entries in the results root", len(entries))
+		}
+		r.assertNoToolCalls(t)
 	}
+	for _, tc := range credentialLayerCases {
+		t.Run(tc.name, func(t *testing.T) { refused(t, tc) })
+	}
+	t.Run(credentialLayerCases[0].name+" under --run", func(t *testing.T) { refused(t, credentialLayerCases[0], "--run") })
 	t.Run("a clean layer is staged and a missing one reported", func(t *testing.T) {
 		r := newRunnerRig(t)
 		writeFile(t, filepath.Join(r.layers, "user.json"), `{"env": {"PLAIN": "x"}}`)
-		code, out := r.run(t, nil, "measure", "--user-settings", filepath.Join(r.layers, "user.json"), "--project-settings", "/nonexistent/project.json")
+		// A dangling link is missing too: run.sh never stages what the driver refuses (b.vyb).
+		dangling := filepath.Join(r.layers, "dangling.json")
+		if err := os.Symlink(filepath.Join(r.layers, "later", ".claude.json"), dangling); err != nil {
+			t.Fatal(err)
+		}
+		code, out := r.run(t, nil, "measure", "--user-settings", filepath.Join(r.layers, "user.json"), "--project-settings", "/nonexistent/project.json",
+			"--local-settings", dangling)
 		if code != 0 {
 			t.Fatalf("exit %d:\n%s", code, out)
 		}
-		for _, want := range []string{"layer user     staged from " + filepath.Join(r.layers, "user.json"), "layer project  MISSING: /nonexistent/project.json (not staged)"} {
+		for _, want := range []string{"layer user     staged from " + filepath.Join(r.layers, "user.json"), "layer project  MISSING: /nonexistent/project.json (not staged)",
+			"layer local    MISSING: " + dangling + " (not staged)"} {
 			if !strings.Contains(out, want) {
 				t.Errorf("output lacks %q:\n%s", want, out)
 			}
 		}
-		if strings.Contains(strings.Join(flagValues(containerLine(t, out), "-v"), " "), "project") {
+		if mounts := strings.Join(flagValues(containerLine(t, out), "-v"), " "); strings.Contains(mounts, "project") || strings.Contains(mounts, "local.json") {
 			t.Error("a missing layer was mounted")
 		}
 		if _, out := r.run(t, nil, "measure"); !strings.Contains(out, `settings: vanilla (no deployment layer staged); label the results "vanilla settings"`) {
@@ -586,6 +566,59 @@ func TestRunnerLayerRefusedEnvInStep(t *testing.T) {
 	for _, name := range listed {
 		if !layerEnvNameRefused(name) {
 			t.Errorf("run.sh refuses %s in a layer env; the driver does not", name)
+		}
+	}
+}
+
+// TestRunnerCredentialLayerInStep: run.sh's refuse_credential_layer case
+// arms list exactly the driver's layerRefusedFileNames and
+// layerCredentialKeyParts, and the driver refuses a layer for each (b.vyb).
+func TestRunnerCredentialLayerInStep(t *testing.T) {
+	fn := regexp.MustCompile(`(?ms)^refuse_credential_layer\(\) \{\n(.*?)^\}`).FindStringSubmatch(readFile(t, "run.sh"))
+	if fn == nil {
+		t.Fatal("run.sh has no refuse_credential_layer() function")
+	}
+	arm := func(re string) []string {
+		m := regexp.MustCompile(re).FindStringSubmatch(fn[1])
+		if m == nil {
+			t.Fatalf("refuse_credential_layer has no case arm matching %s", re)
+		}
+		var out []string
+		for _, p := range strings.Split(m[1], "|") {
+			out = append(out, strings.Trim(strings.TrimSpace(p), "*"))
+		}
+		return out
+	}
+	names := arm(`(?m)^[ \t]*(\.[^\s|)]+(?:[ \t]*\|[ \t]*\.[^\s|)]+)*)\)`)
+	parts := arm(`(?m)^[ \t]*(\*[A-Z]+\*(?:[ \t]*\|[ \t]*\*[A-Z]+\*)*)\)`)
+	dir := t.TempDir()
+	refusal := func(name, body string) string {
+		path := filepath.Join(dir, name)
+		writeFile(t, path, body)
+		if err := checkLayerFiles([]layerFile{{"user", path}}); err != nil {
+			return err.Error()
+		}
+		return ""
+	}
+	for _, n := range names {
+		if !strings.Contains(refusal(n, "{}"), "Claude Code's "+n) {
+			t.Errorf("run.sh refuses a layer named %s; the driver does not", n)
+		}
+	}
+	for _, p := range parts {
+		key := "my_" + strings.ToLower(p)
+		if !strings.Contains(refusal("key-"+p+".json", `{"`+key+`": 1}`), "credential-like key "+key) {
+			t.Errorf("run.sh refuses a key holding %s; the driver does not", p)
+		}
+	}
+	for _, n := range layerRefusedFileNames {
+		if !slices.Contains(names, n) {
+			t.Errorf("the driver refuses a layer named %s; run.sh does not", n)
+		}
+	}
+	for _, p := range layerCredentialKeyParts {
+		if !slices.Contains(parts, p) {
+			t.Errorf("the driver refuses a key holding %s; run.sh does not", p)
 		}
 	}
 }

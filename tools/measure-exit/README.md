@@ -78,12 +78,16 @@ The same rule covers the settings and MCP layer files the agents load. The
 driver's preflight reads the managed layer
 (`/etc/claude-code/managed-settings.json`), the user layer
 (`$HOME/.claude/settings.json`) and any project, local or MCP layer it is
-given, and refuses real mode with `real-gateway-only` when an `env` object
-in one of them breaks the layer env rule below (see
-[Settings layers and MCP servers](#settings-layers-and-mcp-servers)). A
-missing file is skipped; one that cannot be read or is not JSON is refused.
-The refusal names the layer, its path and the key, never a value. Dry and
-probe mode do not run this check.
+given. It refuses real mode with `real-gateway-only` when one of them
+would be refused by the runner (see
+[Settings layers and MCP servers](#settings-layers-and-mcp-servers)): it
+is, or links to, a `.claude.json` or a `.credentials.json`, it cannot be
+read or is not JSON, a key in it looks like a credential, or an `env`
+object in it breaks the layer env rule. A missing file is skipped, but a
+dangling link is refused, because its target could appear later in the
+run. The runner never stages a dangling link. The refusal names the layer,
+its path and the key, never a value. Dry and probe mode do not run this
+check.
 
 Credentials never come from a Claude account login or from `~/.claude`. The
 runner never forwards `ANTHROPIC_API_KEY`, `TMUX`, `CLAUDE_CONFIG_DIR`,
@@ -177,7 +181,8 @@ make measure-exit-print MEASURE_MODE=measure MEASURE_ARGS="--user-settings /path
 ```
 
 - Each copy is staged and mounted read-only. The originals and the copies are
-  never edited. A missing file is reported and not staged.
+  never edited. A missing file, a dangling link included, is reported and
+  not staged.
 - A layer that carries credentials is refused with exit 2, in print-only
   too, so you see it before launching. The refusal names the key or file,
   never a value. A layer is refused when:
@@ -196,9 +201,11 @@ make measure-exit-print MEASURE_MODE=measure MEASURE_ARGS="--user-settings /path
     `Authorization:`). Any of these would take the agents off the gateway.
     The value test runs inside `jq`, so values never reach the shell.
     `run.sh`'s `LAYER_REFUSED_ENV` list and the driver's `layerenv.go`
-    hold the same names and must stay in step with `realModeRefusedEnv`;
-    the driver repeats this check in its preflight (above), so a container
-    started by hand is covered too.
+    hold the same names and must stay in step with `realModeRefusedEnv`.
+- In real mode the driver repeats all of these refusals in its preflight,
+  except the missing-`jq` one, since it does not use `jq` (see
+  [Credentials](#credentials)). A container started by hand is held to
+  them too.
 - The driver reports every hook program missing from the container.
 - `--local-settings` is refused in real mode when a selected case needs the
   harness's generated layer.

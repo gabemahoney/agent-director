@@ -147,7 +147,14 @@ func TestPreflightRules(t *testing.T) {
 		{"real with a refused env name in the user layer", modeReal, realCC, func(p *pfSetup) {
 			writeFile(t, filepath.Join(p.home, ".claude", "settings.json"), offending)
 		}, ruleRealGatewayOnly},
-		{"real with a non-JSON project layer", modeReal, realCC, func(p *pfSetup) { p.cfg.projectSettings = layer("not json") }, ruleRealGatewayOnly},
+		{"real with the user layer a dangling link to the state file", modeReal, realCC, func(p *pfSetup) {
+			if err := os.MkdirAll(filepath.Join(p.home, ".claude"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Join(p.home, claudeStateFile), filepath.Join(p.home, ".claude", "settings.json")); err != nil {
+				t.Fatal(err)
+			}
+		}, ruleRealGatewayOnly},
 		{"real with a missing project layer", modeReal, realCC, func(p *pfSetup) { p.cfg.projectSettings = "/nonexistent/project.json" }, ""},
 		{"dry with a refused env name in the project layer", modeDry, stubCC, func(p *pfSetup) { p.cfg.projectSettings = layer(offending) }, ""},
 		{"probe with a refused env name in the user layer", modeProbe, realCC, func(p *pfSetup) {
@@ -175,6 +182,15 @@ func TestPreflightRules(t *testing.T) {
 			rule   string
 		}{"real with " + name + " set, even empty", modeReal, realCC, func(p *pfSetup) { p.vars[name] = "" }, ruleRealGatewayOnly})
 	}
+	for _, lc := range credentialLayerCases {
+		tests = append(tests, struct {
+			name   string
+			mode   mode
+			claude string
+			edit   func(p *pfSetup)
+			rule   string
+		}{"real with a project layer run.sh refuses: " + lc.name, modeReal, realCC, func(p *pfSetup) { p.cfg.projectSettings = lc.write(t) }, ruleRealGatewayOnly})
+	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			p := newPF(t, tc.mode)
@@ -189,6 +205,7 @@ func TestPreflightRules(t *testing.T) {
 				return
 			}
 			assertRefused(t, err, tc.rule)
+			assertAbsent(t, "refusal", err.Error(), layerSecret)
 			if envRules[tc.rule] {
 				if entries, _ := os.ReadDir(p.tmuxBase); len(entries) != 0 {
 					t.Errorf("an environment refusal created %d entries under the tmux base", len(entries))

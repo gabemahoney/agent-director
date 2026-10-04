@@ -8470,22 +8470,59 @@ This section does not repeat it.
 - Real mode is gateway-only. `checkRealModeEnv` refuses with rule
   `real-gateway-only` when any variable in `realModeRefusedEnv` (an API
   key, an OAuth token, the Bedrock and AWS variables) is set, even empty.
-  `realModeEnv` also drops them from every child. The same rule covers the
-  layer files the agents load: `checkLayerFilesEnv` (`layerenv.go`), called
-  from `checkEnvironment` right after `checkRealModeEnv`, reads the files
-  `realModeLayerFiles` lists (the managed and user layers, plus the
-  project, local and MCP layers when given) and refuses with
-  `real-gateway-only` when an `env` object at any depth sets a name
-  `layerEnvNameRefused` refuses (any `CLAUDE_CODE_USE_*`, a
-  `realModeRefusedEnv` or `credentialEnv` name, `ANTHROPIC_CUSTOM_HEADERS`;
-  case ignored) or a value `layerEnvValueRE` matches (a URL, a bearer
-  token, an authorization header). A missing file is skipped; an
-  unreadable or non-JSON one is refused. The refusal names the layer kind,
-  path and key, never the value. It runs in real mode only, before
-  anything is written. `run.sh`'s `refuse_credential_layer` runs the same
-  check (its `LAYER_REFUSED_ENV` list, the value test inside `jq`) when it
-  stages a layer, in print-only too; the two lists must stay in step with
-  `realModeRefusedEnv` (`TestRunnerLayerRefusedEnvInStep`).
+  `realModeEnv` also drops them from every child.
+- The same rule covers the layer files the agents load, in real mode only
+  and before anything is written. `checkLayerFiles` (`layerenv.go`), called
+  from `checkEnvironment` right after `checkRealModeEnv`, runs
+  `checkLayerFile` on each file `realModeLayerFiles` lists (the managed and
+  user layers, plus the project, local and MCP layers when given). The
+  first refusal stops the run. The refusal names the layer kind, path and
+  key, never the value. A file is refused with `real-gateway-only` when,
+  checked in this order:
+  - its path as given is named after a `layerRefusedFileNames` file
+    (`.claude.json`, `.credentials.json`). This is checked even when
+    nothing is there yet, because the driver writes its own `.claude.json`
+    after the preflight (`seedClaudeState`). After this check, a path with
+    nothing at it (`os.Lstat` finds nothing) is no layer, and the checks
+    below are skipped;
+  - something is at its path but does not resolve: a dangling symlink, or
+    a chain ending in one. It is refused whatever its target is named,
+    because the target cannot be checked and may be created later in the
+    run. `run.sh`'s `report_layers` reports a dangling source as `MISSING`
+    and never stages it, so this refuses nothing a run started by `run.sh`
+    would load;
+  - it does not resolve for any other reason (a symlink loop, a directory
+    it cannot search);
+  - the path it resolves to through every symlink is named after a
+    `layerRefusedFileNames` file;
+  - it cannot be read, or is not one JSON document. An empty file and
+    concatenated documents are refused too, which is stricter than
+    `run.sh`'s `jq`;
+  - a key at any depth (arrays included) is credential-like: its
+    upper-cased name contains a `layerCredentialKeyParts` part (`KEY`,
+    `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`, `OAUTH`,
+    `AUTHORIZATION`, `COOKIE`). That catches `apiKeyHelper`, an env name
+    such as `MY_API_TOKEN` and an `Authorization` header in an MCP
+    server's `headers`. The first such key in sorted order is named
+    (`findCredentialKey`);
+  - an `env` object at any depth sets a name `layerEnvNameRefused`
+    refuses (any `CLAUDE_CODE_USE_*`, a `realModeRefusedEnv` or
+    `credentialEnv` name, `ANTHROPIC_CUSTOM_HEADERS`; case ignored) or a
+    value `layerEnvValueRE` matches (a URL, a bearer token, an
+    authorization header) (`findLayerEnv`).
+- `run.sh`'s `refuse_credential_layer` makes the same layer refusals, in
+  the same order, bar the dangling-link one above, when it stages a layer,
+  in print-only too (its key and value tests run inside `jq`). The driver
+  repeats them so a container started by hand is held to the same rule.
+  Two tests keep the runner and the driver in step:
+  `TestRunnerLayerRefusedEnvInStep` (`LAYER_REFUSED_ENV`, the driver's
+  refused names and `realModeRefusedEnv`) and
+  `TestRunnerCredentialLayerInStep` (`refuse_credential_layer`'s file-name
+  and key-pattern case arms against `layerRefusedFileNames` and
+  `layerCredentialKeyParts`, both ways). The shared `credentialLayerCases`
+  table runs the same refused layers through both `run.sh` and the driver.
+  `TestRunnerLayerReport` checks that `run.sh` reports a dangling layer
+  link as `MISSING` and does not stage it.
 - Mounts are staged settings copies (read-only) and one results directory.
   The host home, `~/.agent-director`, `~/.claude*`, a tmux socket
   directory, `/tmp` and the engine socket are never mounted.
