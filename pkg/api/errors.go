@@ -132,11 +132,17 @@ var ErrSendKeysWhileRelayed = errors.New("ErrSendKeysWhileRelayed")
 //     member, etc.), the handlers in cmd/agent-director/*.go write it as the
 //     err_name string literal in the JSON error envelope via
 //     writeApiErrorAndDispatch("ErrInvalidFlags", …).
-//   - MCP argument checking, for every tool: an `arguments` key that is not
-//     one of the verb's manifest param names (an old dashed name such as
-//     reuse-finished included) is refused before anything is decoded or
-//     run; the description names the unknown key(s) and lists the valid
-//     param names (internal/mcp, b.c4u).
+//   - MCP argument checking, for every tool, before anything runs
+//     (internal/mcp): an `arguments` key that is not one of the verb's
+//     manifest param names (an old dashed name such as reuse-finished
+//     included), refused before anything is decoded, with a description
+//     naming the unknown key(s) and listing the valid param names (b.c4u);
+//     an `arguments` value that is not a JSON object, or a param value of
+//     the wrong JSON type, with a description naming the param and its
+//     expected type, such as "an integer" or "an array of strings" (b.ewa);
+//     and a `label` entry that is not key=value (spawn, make_template) or
+//     an `older_than` that is not a duration (expire), with a description
+//     naming the param and the expected form (b.anw).
 //   - The shared verb layer, for spawn only: runSpawn returns it (wrapped)
 //     when an explicit instance id contains an ASCII control character
 //     (0x00-0x1f or 0x7f), so the CLI, MCP, the Go client and the TypeScript

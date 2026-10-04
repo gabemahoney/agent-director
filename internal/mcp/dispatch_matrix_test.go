@@ -187,21 +187,14 @@ func TestToolsCallDispatchMatrix(t *testing.T) {
 				t.Fatalf("dispatcher returned ErrCwdMissing — the cwd field did not round-trip from JSON to the dispatcher's spawn params struct (check the json:\"cwd\" tag on the dispatcher's local struct): %v", err)
 			}
 
-			// Catch direct decode errors too — if a future refactor
-			// outright breaks json.Unmarshal (e.g. by typing a struct
-			// field as a non-decodable type) we want a loud failure.
-			if err != nil {
-				msg := err.Error()
-				if strings.Contains(msg, "decode params") ||
-					strings.Contains(msg, "decode spawn params") ||
-					strings.Contains(msg, "decode status params") ||
-					strings.Contains(msg, "decode get params") ||
-					strings.Contains(msg, "decode list params") ||
-					strings.Contains(msg, "decode make-template params") ||
-					strings.Contains(msg, "decode expire params") ||
-					strings.Contains(msg, "json: cannot unmarshal") {
-					t.Fatalf("dispatcher decode failure on verb %q: %v", v.Name, err)
-				}
+			// Catch decode failures too — if a future refactor types a
+			// struct field so the matrix args no longer decode, we want a
+			// loud failure. A refusal of the args themselves (a value of
+			// the wrong type, a malformed label or duration) is
+			// ErrInvalidFlags (b.ewa, b.anw); any other decode failure is
+			// "decode <verb> params" (ErrInternal).
+			if errors.Is(err, api.ErrInvalidFlags) || err != nil && strings.Contains(err.Error(), "decode "+v.Name+" params") {
+				t.Fatalf("dispatcher refused verb %q's matrix args at decode: %v", v.Name, err)
 			}
 		})
 	}

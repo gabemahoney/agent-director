@@ -2,7 +2,7 @@ package mcp_test
 
 // spawn_reuse_param_test.go pins the MCP side of spawn's reuse_finished opt-in
 // (SR-10.1, AC-REUSE-13; b.c4u's name): tools/list advertises it on spawn
-// only, the spawn decoder knows the field, without the opt-in a finished row
+// only (TestMCPParamParity pins its decode), without the opt-in a finished row
 // still collides (with the Go client's envelope), and with it the row is
 // reused through the live dispatcher. make_template refuses it, and the other
 // per-invocation params its description names, as unknown parameters.
@@ -195,24 +195,6 @@ func TestMCPSpawnReuseFinishedWithoutIDIsFreshSpawn(t *testing.T) {
 	assertCreates(t, e.rec)
 	if got := readColumns(t, e.storePath, "mcp-reuse-other"); !reflect.DeepEqual(got, other) {
 		t.Errorf("other finished row changed:\n got %+v\nwant %+v", got, other)
-	}
-}
-
-// TestMCPSpawnRejectsNonBoolReuseFinished: the decoder knows the field, so a
-// non-boolean value is an error with no row and no tmux call.
-func TestMCPSpawnRejectsNonBoolReuseFinished(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		value any
-	}{
-		{"string", "true"},
-		{"number", 1},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			e, c := newReuseParamEnv(t)
-			toolErrorData(t, callTool(t, e.d, "spawn", spawnArgs(t, t.TempDir(), c, map[string]any{"reuse_finished": tc.value})))
-			assertNothingCreated(t, e.d, e.rec)
-		})
 	}
 }
 

@@ -83,6 +83,28 @@ func goTypeToJSONSchema(goType, description string) map[string]any {
 	return out
 }
 
+// expectedValue describes, for a refusal (paramDecodeError), the JSON value
+// a param of manifest type goType takes, in the terms goTypeToJSONSchema
+// declares for it; keep the two in step. It is "" for a type
+// goTypeToJSONSchema leaves unconstrained.
+func expectedValue(goType string) string {
+	switch goType {
+	case "string":
+		return "a string"
+	case "bool":
+		return "a boolean"
+	case "int":
+		return "an integer"
+	case "[]string":
+		return "an array of strings"
+	case "map[string]string":
+		return "an object with string values"
+	case "duration":
+		return "a string holding " + durationForm
+	}
+	return ""
+}
+
 // appendDescription tacks on an extra sentence to an existing
 // description field. Used to layer per-type help on top of the
 // manifest's per-param description.

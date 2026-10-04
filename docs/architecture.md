@@ -76,7 +76,7 @@ in `init`. The verb registry
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). The pending grace period bounds both `find-missing`'s hands-off window for a `pending` row and a SessionStart hook's wait for its launch's identity write, each measured from the launch start (SR-13.4, SR-22.9); it has no maximum. The hook's wait is also capped at 540 s after it began (`sessionStartWaitCap` in `internal/hook`; WD 2026-09-30c), so a grace above 540 s lengthens only `find-missing`'s window, which is unchanged. Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default; a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
 | `pkg/api/apitest` | Test helpers shared across packages (non-test `.go` files, so harnesses outside `pkg/api` import them). Families: the `Seed*` fixtures (`SeedSpawn`, `SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`), `SeedSpawn`'s `With*` options, the store-read and store-id helpers (see [apitest Seed* factory contract](#apitest-seed-factory-contract-reusable-test-fixtures)); the `[tmux]` config writer `WriteTmuxConfig` (see [apitest `[tmux]` config writer](#apitest-tmux-config-writer-reusable-test-fixture)); and the description helper, `AssertDescription` with the `Desc*` cases in `descriptions*.go` (see [apitest description helper](#apitest-description-helper-reusable-test-fixture)). Each section states the must-use rule. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `internal/tmux` (the `tmux.Call` names the description cases use); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
 | `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. The `Catalog` is consumed by `cmd/agent-director`'s envelope writer and `internal/mcp`'s `classifyDispatchError`. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
-| `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. Before routing, `checkParamNames` refuses an argument that is not one of the verb's manifest params with `ErrInvalidFlags`; every manifest param of every exposed verb is decoded (see [Parameter names and unknown arguments](#parameter-names-and-unknown-arguments)). `classifyDispatchError` delegates to `errnames.Classify`. | stdlib; `pkg/api`; `pkg/api/manifest`; `pkg/api/errnames`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
+| `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. Before routing, `checkParamNames` refuses an argument that is not one of the verb's manifest params with `ErrInvalidFlags`; every manifest param of every exposed verb is decoded through `decodeParams`, which refuses a wrongly typed value with `ErrInvalidFlags` too (see [Parameter names and unknown arguments](#parameter-names-and-unknown-arguments)). `classifyDispatchError` delegates to `errnames.Classify`. | stdlib; `pkg/api`; `pkg/api/manifest`; `pkg/api/errnames`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
 | `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. Also holds `ReuseOptInSpelling`, the reuse opt-in's one spelling in shared advice, which `internal/spawn` builds its retry sentences on, and `TmuxSessionNameSpelling`, the session-name param's, which `pkg/api`'s list hint and `internal/spawn`'s `ErrTmuxSessionNameEmpty` description build on (see [`pkg/api/manifest` — Verb Registry](#pkgapimanifest--verb-registry)). | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
 | `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). `ApplyDefaults` makes the collision pre-check's one `SpawnState` read and returns an `IDCheck`. Builds env maps and synthesizes `--settings` JSON. Plain spawn's `Launch` resolves the launch socket and mints the launch token (`launchid.go`: `ResolveLaunchSocket`, `ResolveScanSocket`, `NewLaunchToken`, and `ResolveQuerySocket` for a query on a row that records no socket), inserts the `pending` row with launch start, token and socket, creates and labels the session through the shared create-and-label step (`createlabel.go`: `LaunchTmux`, `CreateRequest`, `CreateAndLabel`, `CreateOutcome` / `CreateKind`), maps its failures in one place (`launch_errors.go`: `plainSpawnCreateError`, built from the exported description builders shared by every launch verb, `TmuxUnavailableError` (also the label scan's), `LaunchTimeoutError`, `UnlabelledSessionError`, `CreateFailedError` (with `InstanceCreateFailedError`, its form led by the instance id, for plain spawn's held name whose holder vanished) and the row sentence `RowStaysPending`, with the retry sentences `LaunchRetryRule`, `ReuseRetry` and `PlainSpawnCollides` and `ReuseOptIn`, the reuse opt-in in its one spelling, built on `manifest.ReuseOptInSpelling`; "duplicate session" is no verb error there but a `*HeldNameError` handed to `pkg/api`'s held-name path) and makes the conditional identity write (`RecordLaunchIdentity`, shared with resume and reuse). The one composition step for a resolved request is `ComposeLaunch` (`compose.go`): the `CreateRequest` and the row's request fields (`ComposedLaunch{Create, Row}`), with no write, tmux call or I/O, shared by plain spawn's insert and reuse's reset; the parent id comes from `ParentIDFromEnv()` (the caller's `AGENT_DIRECTOR_INSTANCE_ID`), the one derivation used by the insert, the reset and resume's move. Every launch pre-trusts its folder through the one shared step `PreTrust` (`pretrust.go`), which plain spawn runs before its insert, reuse before its reset and resume before its move to `pending`; see [Workspace-trust pre-write](#workspace-trust-pre-write). Resume's launch uses the same pieces: `ResolveRowLaunchSocket` (the row's recorded socket), `ComposeRelaunch` (the `CreateRequest`, with no tmux call or write) and `Relaunch` (`CreateAndLabel` on that request). Reuse's launch uses `ResolveRowLaunchSocket`, `ComposeLaunch` and `CreateAndLabel`. The clock and the start-time reader are passed in. See [Launch identity](#launch-identity) and [Reuse of a finished id](#reuse-of-a-finished-id). | stdlib; `internal/config`; `internal/store`; `internal/tmux`; `pkg/api/manifest` (`ReuseOptInSpelling` and `TmuxSessionNameSpelling` only); `github.com/google/uuid` for UUID4 minting. | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
 | `internal/tmux` | Thin client over the tmux binary, built only by `New(binary, Timeouts)` (`""` = tmux on `PATH`). **Phase 1 call set (SR-2.1, Appendix F.1)**, every call taking the socket: `Lookup` (the one-invocation lookup: session listing with labels plus the three `@ad_owner` scope reads), `ListPanes` (`list-panes -a`), `KillPane` (by pane id), `KillSessionID` (by session id), `SendKeysPane` (by pane id: the text call `send-keys -t <pane id> -l -- <text>`, then an optional separate `send-keys -t <pane id> Enter`; the `--` makes a text starting with `-` literal, never read as a send-keys flag; a text ending in `;` is typed whole, by the argv escape below), `CapturePaneID` (by pane id), `SetLabel` (label by id: the session label by session id and the pane label by pane id) and `NewSession` (the create with its chained `@ad_owner` and `@ad_pane` labels). **Key send (b.9o4)**, an addition beside the SR-2.1 calls, not one of them, also taking the socket: `SendKeyPane` (by pane id: `send-keys -t <pane id> <key>`, one key by its tmux key name, never typed literally, call kind `CallSendKey`, "key send"; `pause`'s `C-u`; the key is a fixed name the caller chooses, never caller text). **Label form (SR-3.4, SR-3.5):** `ad1 <token> <$N> <instance id> <store id>`, five fields. The store id is the writing store's `store_meta.store_id`, which callers pass from `(*store.Store).StoreID()`; it is the last field, so the instance id is everything between the third and the last space and may contain spaces. `NewSession` and `SetLabel` both take the token, the instance id and the store id; the chain passes only the instance id through the format escape below. **Pane label (SR-2.1, SR-3.5):** every created pane carries the per-pane user option `@ad_pane` = `<token> <pane id>`, so a launch whose create reply was lost can later find its own pane by token, whatever the base-index or window layout. The create sets it with a second chained step, `; set-option -p -F -t =<name>: @ad_pane '<token> #{pane_id}'`, after the `@ad_owner` step; each `;` is its own argv element, and a name for which `NeedsLabelByID` holds gets neither chained step. A failure of either chained step is the create's `FailLabel` (tmux stops the chain at the first failing step). `SetLabel(socket, sessionID, paneID, token, instanceID, storeID)` sets both labels in one invocation, `set-option -t <$N> @ad_owner '<label>' ; set-option -p -t <%N> @ad_pane '<token> <%N>'`, with the session and pane ids from the create reply; a failure may leave the session labelled and its pane not. Only the new session's one pane is labelled: a pane split from it later has no value. **Pane listing:** `ListPanes` reads `#{@ad_pane}` as the sixth and last field, the value being everything after the fifth tab, so a tab inside it cannot shift the other fields. `Pane.AdPane` is the token only when the value is exactly `<16 lowercase hex token> <pane id>` and that pane id equals the line's own `%N` (`classifyPaneLabel`); anything else gives `""`, so a window, session, global or server value borrowed through the format, which names another pane or none, never counts (the scope guard of SR-3.6). Caveat: on tmux 3.3a a server-scope `@ad_pane` (`set-option -s`) is listed on every pane in place of its own value, so while one exists only the pane that value names can report a token and every other pane reads `""`; no other pane is matched, but a pane reading `""` then does not show that its label is gone. The raw value never leaves the client, and a malformed listing's `CallError.FirstLine` is its first line cut before the pane label field (`paneListingFirstLine`). The lookup does not read `@ad_pane`. `kill`'s adoption of a lost create reply (SR-3.6) is its first reader; it also exists for the leftover-pane check (SR-3.7) and the no-pane row check (SR-11.3). A value in any other form, a four-field one included, parses as no label (`LabelNone`), except that a four-field value whose instance id ends in a space and 16 lowercase hex reads as a shorter id plus that word as its store id; and `Label.StoreID` is set only on a valid label. Typed results and failures: `Call`, `Failure`, `CallError`, `LookupAnswer`, `Session`, `Label` / `LabelKind`, `CreateReply`, `Pane`, `Timeouts`. **Argv escape (`invoke.go`):** tmux splits its argv into commands at every element ending in `;`, before any option parsing and so even after `--`: the `;` is dropped and the element ends its command, so a caller value ending in `;` followed by more elements would run those as a tmux command of the caller's choosing (`kill-server`, `run-shell <shell command>`). An element ending in `\;` is instead one argument with that backslash removed. `commandArgv(cmds ...[]string)` builds every call's argv after `-u -S <socket>` from a list of commands: a standalone `;` only between commands, and every element of every command passed through `escapeFinalSemicolon` (one backslash before a final `;`). So every value (session name, cwd, `-e` entry, the agent's command with its claude arguments at spawn and at resume, send-keys text, label values, targets) reaches its tmux command as one argument, a final `;` included, and never ends that command. The escape covers only this split: what the command then does with the argument is unchanged (format expansion is the format escape's job, below). The chain target `=<name>:` ends in `:`, so it is never escaped, and tmux matches it against the stored, unescaped name. The socket is not escaped: tmux's own option parsing consumes `-S <socket>` before the split. `HasSession` builds its argv the same way. **Must use:** every tmux call composes its argv through `commandArgv`, socket-taking calls by passing one `[]string` per command to `invoke` (`runAction`, `runData`); never put a `;` separator or a value into a tmux argv by hand. **Format escape (`create.go`):** tmux expands formats in some arguments before using them: `new-session`'s `-c` cwd (twice, by the command and again at the pane spawn, both times from the raw argument), its `-s` name, and every `set-option -F` value. In a format, `#(<cmd>)` runs `<cmd>` through the shell on the tmux server, and `#{…}` and aliases such as `#S` are replaced, so a raw cwd holding them would run a command, or start the agent in another directory, at spawn and on every resume. `escapeFormat(text)` returns text that expands back to exactly itself: each run of `#` is doubled (`##` expands to `#`), except a run directly before `[`, which tmux copies through unchanged as a style, so doubling it would add `#`. `createCommands` sends `-c` as `escapeFormat(cwd)` and the `@ad_owner` value's instance id through it, so spawn and resume start the agent in the cwd exactly as given and run nothing in it; the cwd stored on the row and reported by agent-director is the unescaped one. The two escapes compose: `escapeFormat` adds or removes no `;`, and tmux drops the argv escape's backslash before it expands the format, so a cwd `/a#;` is sent as `/a##\;` and expands to `/a#;`. Not escaped: the `-s` name, which never holds `#` (spawn refuses one, and a default name keeps only `[A-Za-z0-9_-]`); the `-e` entries and the agent's command, which tmux does not expand; and the client's own fixed formats (`#{session_id}`, `#{pane_id}`, the reply and listing formats). **Must use:** every caller-controlled value in a tmux argument that tmux format-expands goes through `escapeFormat`; never double `#` by hand. Mechanics: every call runs `-u -S <socket>` first; targets are ids only (never a name or pattern); each call class (query, action, create) has its own timeout, plus the pipe-close wait (`Timeouts.WaitDelay`); data is parsed only from standard output of an exit-0 call; replies are recognised only from the first line of standard error; the client's environment has every `AGENT_DIRECTOR_*` variable removed. Socket-taking calls fail only with `*CallError`. Labels reach callers only classified (the raw value never leaves the client) and recognised replies only as a `Failure`; the one exception is an unrecognised reply, whose first line (trimmed, at most 200 bytes) is carried in `CallError.FirstLine`. **Socket resolution (RN-5):** `ResolveSocket(create)` resolves the socket as tmux does (`TMUX`, then `TMUX_TMPDIR`, then `/tmp`, with tmux's per-user directory checks) and `EnsureSocketDir(socket)` creates only a missing per-user directory; refusals are `*SocketDirError` (with `SocketDirReason`), matching `ErrTmuxNotAvailable`. **Must use** `tmux.NeedsLabelByID(name)` to decide whether a session name (one containing `$` or `\`) must be labelled by id rather than by the chain; never re-implement that test. The client receives its timeouts and pipe-close wait from `pkg/api` at construction, never from `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); the package defines no defaults. The runner seam types (`Invocation`, `RunStatus`, `RunResult`, `Runner`) are exported for replay tests; tests install a runner only through the test-only `NewWithRunner` in `export_test.go`. The one name-based method left is `HasSession`; the name-based kill, send and capture are removed (every verb targets ids only). `HasSession` is kept on the client and on `api.TmuxClient` and matches by prefix; no verb uses it, and none may (`resume` judges its row with the lookup). `StripANSI` post-processes captures. **Shared lookup (SR-3.3, SR-3.4, SR-3.10, Appendix F.2):** `Lookup` / `Classify` in `lookup.go`, `lookup_class.go`, `lookup_holder.go` and `lookup_server.go` turn one lookup answer and a row's `Launch` into a verdict; see [Shared tmux lookup](#shared-tmux-lookup). Beside it: `unusable.go` (the unusable-name guard `Unusable`, and `RewrittenIn`), `agent_process.go` (agent-process selection `SelectAgentProcess`, judgement `JudgeProcess` and `KnownStartTime`), `pane_token.go` (`PaneByToken`, a pane found by its `@ad_pane` token), `sweep.go` (the multi-socket sweep `Sweep`, built by `NewSweep`, under one tmux budget) and `starting_session.go` (the session-age helper `SessionAge` and the starting-session rule `StartingSession`; see [Starting-session rule](#starting-session-rule-starting_sessiongo)). | stdlib (`bytes`, `context`, `errors`, `fmt`, `io/fs`, `os`, `os/exec`, `path/filepath`, `regexp`, `slices`, `sort`, `strconv`, `strings`, `syscall`, `time`, `unicode`, `unicode/utf8`). | `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); `internal/probe` (the lookup's `ProcChecker` is satisfied structurally); template and store packages; shell processes (`/bin/sh`); anything other than direct `exec.Command`. |
@@ -1388,8 +1388,9 @@ checked.
 - Do not define CLI flags outside the manifest. New params go in the
   matching `VerbDef.Params` literal, named with underscores, never a dash.
 - Do not add an MCP-exposed param without decoding it in
-  `LiveDispatcher.Call`: `TestMCPParamParity` fails for a param the
-  dispatcher drops.
+  `LiveDispatcher.Call` through `decodeParams`: `TestMCPParamParity` fails
+  for a param the dispatcher drops or whose wrongly typed value is not
+  refused with `ErrInvalidFlags`.
 - Do not give an MCP-exposed param a manifest `Type` that
   `goTypeToJSONSchema` does not map, such as an annotated
   `[]string (k=v)`; state an entry's form in the Description instead.
@@ -4349,7 +4350,8 @@ isn't filtered automatically extends the test.
 Both the CLI and the MCP server dispatch through the same `pkg/api.Client`
 facade. `LiveDispatcher` holds a single `*pkg/api.Client`; once
 `checkParamNames` has accepted the argument names, each tool `case` in
-`LiveDispatcher.Call` decodes the MCP JSON args and calls `client.X(…)`.
+`LiveDispatcher.Call` decodes the MCP JSON args (`decodeParams`) and calls
+`client.X(…)`.
 There is no longer a parallel dispatch path mirroring the CLI's — both
 surfaces share the same facade. Every verb call from CLI or MCP routes
 through the same Client method, so behavioral divergence between CLI and MCP
@@ -4446,25 +4448,69 @@ ErrInvalidFlags: spawn: unknown parameter "reuse-finished"; valid parameters: cw
 ```
 
 Several unknown keys read "unknown parameters"; a tool with no params
-lists "valid parameters: none". `arguments` that is not a JSON object is
-a decode error (`ErrInternal`). No error name is added: `spawn` stays the
-only MCP tool whose `ErrorNames` lists `ErrInvalidFlags` (see the
-`ErrInvalidFlags` exclusion under
+lists "valid parameters: none". `arguments` that is not a JSON object (an
+array, a string, a number or a boolean) is refused with `ErrInvalidFlags`
+too, on every tool, and nothing runs:
+
+```
+ErrInvalidFlags: spawn: arguments must be a JSON object
+```
+
+`arguments` that is absent or JSON `null` is no arguments. No error name is
+added: `spawn` stays the only MCP tool whose `ErrorNames` lists
+`ErrInvalidFlags` (see the `ErrInvalidFlags` exclusion under
 [Err-name five-way coherence](#err-name-five-way-coherence)).
 `TestMCPParamUnknownRefused` and `TestMCPParamUnknownRefusalText`
-(`internal/mcp/param_test.go`) pin the refusal.
+(`internal/mcp/param_test.go`) pin both refusals.
 
-**Every param is decoded.** Each tool's `case` decodes its arguments into a
-typed struct with one field per manifest param, tagged with the manifest
-name. `spawn` decodes `no_pre_trust` and `tmux_session_name` as the CLI
-does: `tmux_session_name` is supplied when its key is present, even
-empty (`ErrTmuxSessionNameEmpty`), and not supplied when absent or `null`.
-`list` decodes `tmux_session_name` as its filter. `TestMCPParamParity`
-sends every manifest param of every exposed verb with a wrongly typed
-value and requires a decode error naming the param, so a param a `case`
-does not decode fails the test. Every exposed verb has a `case`,
-`get-permission` included; `ErrUnknownTool` is only for a tool name that
-is not exposed.
+**Every param is decoded.** Each tool's `case` decodes its arguments with
+`decodeParams` (`internal/mcp/dispatch.go`) into a typed struct with one
+field per manifest param, tagged with the manifest name. `spawn` decodes
+`no_pre_trust` and `tmux_session_name` as the CLI does:
+`tmux_session_name` is supplied when its key is present, even empty
+(`ErrTmuxSessionNameEmpty`), and not supplied when absent or `null`.
+`list` decodes `tmux_session_name` as its filter. Every exposed verb has a
+`case`, `get-permission` included; `ErrUnknownTool` is only for a tool
+name that is not exposed.
+
+**A wrongly typed value is refused.** When the decode fails because a
+param's value has the wrong JSON type (a wrong element inside an array or
+object included), `decodeParams` refuses the call with `ErrInvalidFlags`,
+the CLI's error for a bad flag value, and nothing runs. The description
+names the verb (its manifest name, such as `make-template`, as the
+unknown-parameter refusal does), the param as sent and the value it takes,
+in the terms `tools/list` declares, never a Go type:
+
+```
+ErrInvalidFlags: list: parameter "limit" must be an integer
+```
+
+The value reads "a string", "a boolean", "an integer", "an array of
+strings" or "an object with string values"; for a `duration` param
+(`expire`'s `older_than`) it reads "a string holding a Go duration like
+"12h" or trailing-d days like "7d"". Two value checks after the decode
+refuse the same way: a `label` entry with no `=` or an empty key on
+`spawn` and `make_template` (`labelMap`), and an `older_than` in neither
+duration form on `expire`:
+
+```
+ErrInvalidFlags: spawn: parameter "label" entry "nokv" must be key=value
+ErrInvalidFlags: expire: parameter "older_than" value "soon" must be a Go duration like "12h" or trailing-d days like "7d"
+```
+
+Any other decode failure is agent-director's own fault and stays
+`ErrInternal` (`decode <verb> params: …`). **Must use:** every tool `case`
+decodes with `decodeParams` and parses `label` entries with `labelMap`,
+never a bare `json.Unmarshal` or its own split, so a wrongly typed value
+or a malformed label is `ErrInvalidFlags` in one wording on every tool.
+`TestMCPParamParity` sends, for every manifest param of every exposed
+verb, values of the wrong shape alongside the verb's required params, and
+requires exactly that refusal with nothing changed, so a param a `case`
+does not decode, or decodes another way, fails the test.
+`TestAdviceFollow_I3_InvalidLabelWantKeyValue` and
+`TestAdviceFollow_I6_OlderThanDurationForm`
+(`internal/mcp/advice_follow_mcp_test.go`) pin the `label` and
+`older_than` refusals and follow them.
 
 **Declared, listed and decoded shapes agree.** `goTypeToJSONSchema`
 (`internal/mcp/schema.go`) turns each param's manifest `Type` into its
@@ -4474,7 +4520,10 @@ boolean, `int` an integer, `[]string` an array of strings, and
 know gets no `type`, so `tools/list` would neither show nor check the
 shape. Each `case` decodes a param into the Go type its manifest Type
 names, so a call that sends the declared shape is never refused for its
-shape; a value of another shape is a decode error (`ErrInternal`). Spawn's
+shape; a value of another shape is refused with `ErrInvalidFlags` (above).
+`expectedValue` (`internal/mcp/schema.go`) words each shape for that
+refusal and is kept in step with `goTypeToJSONSchema`: a Type mapped in one
+is mapped in the other. Spawn's
 `label` and `claude_args` are arrays of strings and its `extra_env` is an
 object mapping each variable name to its value
 (`{"CLAUDE_CONFIG_DIR": "/cfg"}`), the same shapes as `make_template`'s;
@@ -4645,13 +4694,17 @@ or catalog Go source requires regenerating the corresponding JSON file.
 - `ErrInvalidFlags` has three sources. First, CLI flag parsing emits it for every verb: the
   `cmd/agent-director` flag handlers write it as a string literal in the error envelope.
   Second, the MCP server returns it for every tool whose `arguments` carry a key that is
-  not one of the verb's manifest params (`checkParamNames`; see
-  [Parameter names and unknown arguments](#parameter-names-and-unknown-arguments)).
+  not one of the verb's manifest params or are not a JSON object (`checkParamNames`), or
+  carry a param value of the wrong JSON type (`decodeParams`), and for a `label` entry
+  that is not key=value (`spawn`, `make_template`) or an `older_than` in neither
+  duration form (`expire`); see
+  [Parameter names and unknown arguments](#parameter-names-and-unknown-arguments).
   Third, the shared verb layer returns it for `spawn` only, from the explicit-id check in
   `runSpawn` (see [Explicit-id check](#explicit-id-check)). It is in the Catalog. It is
   listed in `spawn`'s manifest `ErrorNames` and its Go "Errors:" list, because spawn is the
   only verb whose shared verb layer emits it. No other callable verb lists it, because the
-  CLI flag-parse and MCP argument emissions are not specific to any verb. It stays in `check3Exceptions` in
+  CLI flag-parse and MCP argument emissions are the surfaces' checks of the caller's
+  arguments, which every verb gets, not emissions of a verb's shared layer. It stays in `check3Exceptions` in
   `pkg/api/errnames/coherence_diff_test.go`, next to `ErrInternal`; that list feeds the
   (b) ⊆ (c) check ("Check 3" in that file). Because `spawn` lists it, that check passes
   without the exception; the exception stays (SR-1.7). `TestDiffExclusionErrInvalidFlags` proves that the exception alone keeps that check quiet.
@@ -7388,7 +7441,13 @@ meaning and links to the section that describes it in detail.
   argument that is not one of its params, an old dashed name included,
   with `ErrInvalidFlags` naming it and listing the valid params, and runs
   nothing; before, MCP ignored such an argument. `tools/list` schemas set
-  `additionalProperties: false`.
+  `additionalProperties: false`. A param value of the wrong JSON type,
+  `arguments` that are not a JSON object, a `label` entry that is not
+  key=value (`spawn`, `make_template`) and an `older_than` in neither
+  duration form (`expire`) are now `ErrInvalidFlags` too, with a
+  description saying what was expected, and nothing runs; before, they were
+  `ErrInternal` (see
+  [Parameter names and unknown arguments](#parameter-names-and-unknown-arguments)).
 - **The reuse opt-in in shared advice** is spelled `reuse_finished
   (--reuse-finished on the CLI)` on every surface: in the spawn and kill
   (live-row step 6) descriptions and in plain spawn's retry

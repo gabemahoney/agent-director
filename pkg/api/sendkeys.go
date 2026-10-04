@@ -54,7 +54,7 @@ var (
 
 // SendKeysParams is the typed parameter shape for the send-keys verb.
 // JSON tags use snake_case so MCP clients can decode into the struct
-// directly via the dispatcher's unmarshalSnake helper.
+// directly via the dispatcher's decodeParams helper.
 type SendKeysParams struct {
 	// ClaudeInstanceID identifies the Spawn whose pane will receive the text.
 	ClaudeInstanceID string `json:"claude_instance_id"`

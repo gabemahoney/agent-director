@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -105,15 +106,16 @@ func TestAdviceFollow_I1_ToolsCallNameRequired(t *testing.T) {
 	}
 }
 
-// TestAdviceFollow_I3_InvalidLabelWantKeyValue: I3 "invalid label %q (want key=value)".
+// TestAdviceFollow_I3_InvalidLabelWantKeyValue: I3 "%s: parameter "label" entry
+// %q must be key=value", ErrInvalidFlags with nothing written (b.anw).
 func TestAdviceFollow_I3_InvalidLabelWantKeyValue(t *testing.T) {
 	cases := []struct {
-		tool  string
-		args  func(t *testing.T) map[string]any
-		check func(t *testing.T, client *api.Client, resp *mcp.Response)
+		tool, verb string
+		args       func(t *testing.T) map[string]any
+		check      func(t *testing.T, client *api.Client, resp *mcp.Response)
 	}{
 		{
-			tool: "spawn",
+			tool: "spawn", verb: "spawn",
 			args: func(t *testing.T) map[string]any {
 				return map[string]any{"cwd": t.TempDir(), "claude_instance_id": "advcli-labelled"}
 			},
@@ -130,7 +132,7 @@ func TestAdviceFollow_I3_InvalidLabelWantKeyValue(t *testing.T) {
 			},
 		},
 		{
-			tool: "make_template",
+			tool: "make_template", verb: "make-template",
 			args: func(*testing.T) map[string]any { return map[string]any{"name": "advcli-labelled"} },
 			check: func(t *testing.T, _ *api.Client, resp *mcp.Response) {
 				var res api.MakeTemplateResult
@@ -149,12 +151,54 @@ func TestAdviceFollow_I3_InvalidLabelWantKeyValue(t *testing.T) {
 		t.Run(tc.tool, func(t *testing.T) {
 			d, client := advCLIServer(t)
 			args := tc.args(t)
-			args["label"] = []string{"foo"}
 			params := map[string]any{"name": tc.tool, "arguments": args}
-			advCLIRefused(t, advCLICall(t, d, params), `invalid label "foo" (want key=value)`)
+			for bad, labels := range map[string][]string{"foo": {"foo"}, "=v": {"k=v", "=v"}} {
+				args["label"] = labels
+				resp := advCLICall(t, d, params)
+				advCLIRefused(t, resp, `ErrInvalidFlags: `+tc.verb+`: parameter "label" entry `+strconv.Quote(bad)+` must be key=value`)
+				if data := toolErrorData(t, resp); data.ErrName != "ErrInvalidFlags" {
+					t.Errorf("label %q: err_name = %q; want ErrInvalidFlags", labels, data.ErrName)
+				}
+			}
+			if ids := rowIDs(t, d); len(ids) != 0 {
+				t.Errorf("rows after the refusals = %v; want none", ids)
+			}
+			if tpls, _ := os.ReadDir(filepath.Join(os.Getenv("HOME"), ".agent-director", "templates")); len(tpls) != 0 {
+				t.Errorf("templates after the refusals = %v; want none", tpls)
+			}
 
 			args["label"] = []string{"foo=bar"}
 			tc.check(t, client, advCLICall(t, d, params))
+		})
+	}
+}
+
+// TestAdviceFollow_I6_OlderThanDurationForm: I6 "expire: parameter "older_than"
+// value %q must be a Go duration like "12h" or trailing-d days like "7d"",
+// ErrInvalidFlags with nothing deleted (b.anw).
+func TestAdviceFollow_I6_OlderThanDurationForm(t *testing.T) {
+	for _, follow := range []string{"12h", "7d"} {
+		t.Run(follow, func(t *testing.T) {
+			d, rec, storePath := newExpireMCPServer(t, false)
+			for _, bad := range []string{"soon", "7days"} {
+				data := toolErrorData(t, callTool(t, d, "expire", paramJSON(t, map[string]any{"older_than": bad})))
+				want := `ErrInvalidFlags: expire: parameter "older_than" value ` + strconv.Quote(bad) +
+					` must be a Go duration like "12h" or trailing-d days like "7d"`
+				if data.ErrName != "ErrInvalidFlags" || data.ErrDescription != want {
+					t.Errorf("older_than %q = %s: %q\nwant ErrInvalidFlags: %q", bad, data.ErrName, data.ErrDescription, want)
+				}
+			}
+			if _, err := apitest.ReadSpawnColumns(storePath, expireMCPID); err != nil {
+				t.Fatalf("row after the refusals: %v; want it kept", err)
+			}
+			if n := len(rec.SocketCalls()) + len(rec.Calls()); n != 0 {
+				t.Errorf("tmux calls after the refusals = %d; want none", n)
+			}
+
+			obj := expireToolResult(t, callTool(t, d, "expire", paramJSON(t, map[string]any{"older_than": follow})))
+			if got, want := string(obj["ids"]), `["`+expireMCPID+`"]`; got != want {
+				t.Errorf("expire older_than %q ids = %s; want %s", follow, got, want)
+			}
 		})
 	}
 }

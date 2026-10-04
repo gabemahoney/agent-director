@@ -14,8 +14,8 @@ import (
 // `{"claude_instance_id":"x"}` silently FAILS to populate the
 // `ClaudeInstanceID` field — the field stays empty and the verb sees
 // "missing id" instead of "unknown id". This test catches that
-// regression for every params struct the dispatcher touches via the
-// unmarshalSnake path.
+// regression for every params struct the dispatcher decodes directly via
+// its decodeParams helper.
 func TestParamsStructsDecodeSnakeCaseJSON(t *testing.T) {
 	t.Run("SendKeysParams", func(t *testing.T) {
 		var p api.SendKeysParams

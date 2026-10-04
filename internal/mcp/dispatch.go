@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -34,16 +35,18 @@ func NewLiveDispatcher(client *api.Client) *LiveDispatcher {
 // Every exposed tool first checks the top-level keys of its arguments
 // against its verb's manifest params (checkParamNames): any other key is
 // refused with ErrInvalidFlags before anything is decoded or run (b.c4u).
-// Each tool then decodes the arguments into its typed params struct via a
-// json.Unmarshal round-trip: every manifest param has a typed field
-// tagged with its manifest name (b.7or), so a wrong-typed value is a decode
-// error naming the param and nothing runs.
+// Each tool then decodes the arguments into its typed params struct
+// (decodeParams): every manifest param has a typed field tagged with its
+// manifest name (b.7or), so a wrong-typed value is refused with
+// ErrInvalidFlags naming the param and its expected type, and nothing runs
+// (b.ewa).
 func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.RawMessage) (any, error) {
 	verbName := VerbNameFromTool(toolName)
 	if args == nil || len(args) == 0 {
 		args = json.RawMessage("{}")
 	}
-	if v, ok := manifest.Lookup(verbName); ok && ExposedVerb(verbName) {
+	v, inManifest := manifest.Lookup(verbName)
+	if inManifest && ExposedVerb(verbName) {
 		if err := checkParamNames(v, args); err != nil {
 			return nil, err
 		}
@@ -86,16 +89,12 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 			TmuxSessionName  *string           `json:"tmux_session_name"`
 			ReuseFinished    bool              `json:"reuse_finished"`
 		}
-		if err := json.Unmarshal(args, &raw); err != nil {
-			return nil, fmt.Errorf("decode spawn params: %w", err)
+		if err := decodeParams(v, args, &raw); err != nil {
+			return nil, err
 		}
-		labels := make(map[string]string, len(raw.Label))
-		for _, kv := range raw.Label {
-			k, v, ok := splitKV(kv)
-			if !ok {
-				return nil, fmt.Errorf("invalid label %q (want key=value)", kv)
-			}
-			labels[k] = v
+		labels, err := labelMap(v, raw.Label)
+		if err != nil {
+			return nil, err
 		}
 		p := api.SpawnParams{
 			CWD:                 raw.CWD,
@@ -125,8 +124,8 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		var p struct {
 			ClaudeInstanceID string `json:"claude_instance_id"`
 		}
-		if err := json.Unmarshal(args, &p); err != nil {
-			return nil, fmt.Errorf("decode status params: %w", err)
+		if err := decodeParams(v, args, &p); err != nil {
+			return nil, err
 		}
 		return d.client.Status(p.ClaudeInstanceID)
 
@@ -134,28 +133,28 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		var p struct {
 			ClaudeInstanceID string `json:"claude_instance_id"`
 		}
-		if err := json.Unmarshal(args, &p); err != nil {
-			return nil, fmt.Errorf("decode get params: %w", err)
+		if err := decodeParams(v, args, &p); err != nil {
+			return nil, err
 		}
 		return d.client.Get(p.ClaudeInstanceID)
 
 	case "send-keys":
 		var p api.SendKeysParams
-		if err := unmarshalSnake(args, &p); err != nil {
+		if err := decodeParams(v, args, &p); err != nil {
 			return nil, err
 		}
 		return d.client.SendKeys(p)
 
 	case "read-pane":
 		var p api.ReadPaneParams
-		if err := unmarshalSnake(args, &p); err != nil {
+		if err := decodeParams(v, args, &p); err != nil {
 			return nil, err
 		}
 		return d.client.ReadPane(p)
 
 	case "kill":
 		var p api.KillParams
-		if err := unmarshalSnake(args, &p); err != nil {
+		if err := decodeParams(v, args, &p); err != nil {
 			return nil, err
 		}
 		// The MCP caller gets kill's result or named error through the envelope; kill has no logger path (SR-6.3).
@@ -163,14 +162,14 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 
 	case "pause":
 		var p api.PauseParams
-		if err := unmarshalSnake(args, &p); err != nil {
+		if err := decodeParams(v, args, &p); err != nil {
 			return nil, err
 		}
 		return d.client.Pause(ctx, p)
 
 	case "resume":
 		var p api.ResumeParams
-		if err := unmarshalSnake(args, &p); err != nil {
+		if err := decodeParams(v, args, &p); err != nil {
 			return nil, err
 		}
 		return d.client.Resume(p)
@@ -184,8 +183,8 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 			TmuxSessionName string   `json:"tmux_session_name"`
 			Limit           int      `json:"limit"`
 		}
-		if err := json.Unmarshal(args, &raw); err != nil {
-			return nil, fmt.Errorf("decode list params: %w", err)
+		if err := decodeParams(v, args, &raw); err != nil {
+			return nil, err
 		}
 		return d.client.List(api.ListParams{
 			State:           raw.State,
@@ -209,16 +208,12 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 			Ask        []string          `json:"ask"`
 			Overwrite  bool              `json:"overwrite"`
 		}
-		if err := json.Unmarshal(args, &raw); err != nil {
-			return nil, fmt.Errorf("decode make-template params: %w", err)
+		if err := decodeParams(v, args, &raw); err != nil {
+			return nil, err
 		}
-		labels := make(map[string]string, len(raw.Label))
-		for _, kv := range raw.Label {
-			k, v, ok := splitKV(kv)
-			if !ok {
-				return nil, fmt.Errorf("invalid label %q (want key=value)", kv)
-			}
-			labels[k] = v
+		labels, err := labelMap(v, raw.Label)
+		if err != nil {
+			return nil, err
 		}
 		p := api.MakeTemplateParams{
 			Name:                raw.Name,
@@ -245,14 +240,15 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		var raw struct {
 			OlderThan string `json:"older_than"`
 		}
-		if err := json.Unmarshal(args, &raw); err != nil {
-			return nil, fmt.Errorf("decode expire params: %w", err)
+		if err := decodeParams(v, args, &raw); err != nil {
+			return nil, err
 		}
 		var older *time.Duration
 		if raw.OlderThan != "" {
-			dur, err := parseDuration(raw.OlderThan)
-			if err != nil {
-				return nil, fmt.Errorf("expire older_than: %w", err)
+			dur, ok := parseDuration(raw.OlderThan)
+			if !ok {
+				return nil, fmt.Errorf("%w: %s: parameter \"older_than\" value %q must be %s",
+					api.ErrInvalidFlags, v.Name, raw.OlderThan, durationForm)
 			}
 			older = &dur
 		}
@@ -260,14 +256,14 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 
 	case "decide":
 		var p api.DecideParams
-		if err := unmarshalSnake(args, &p); err != nil {
+		if err := decodeParams(v, args, &p); err != nil {
 			return nil, err
 		}
 		return d.client.Decide(p)
 
 	case "get-permission":
 		var p api.GetPermissionParams
-		if err := unmarshalSnake(args, &p); err != nil {
+		if err := decodeParams(v, args, &p); err != nil {
 			return nil, err
 		}
 		return d.client.GetPermission(p)
@@ -285,11 +281,11 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 // flag that is not defined), names every unknown key as the caller sent it,
 // sorted, and lists v's valid param names in manifest order. It runs before
 // any decode, so nothing runs on a refusal. Arguments that are not a JSON
-// object are a decode error.
+// object are refused with ErrInvalidFlags too (paramDecodeError, b.ewa).
 func checkParamNames(v manifest.VerbDef, args json.RawMessage) error {
 	var keys map[string]json.RawMessage
 	if err := json.Unmarshal(args, &keys); err != nil {
-		return fmt.Errorf("decode %s params: %w", v.Name, err)
+		return paramDecodeError(v, err)
 	}
 	valid := make([]string, 0, len(v.Params))
 	known := make(map[string]bool, len(v.Params))
@@ -319,16 +315,70 @@ func checkParamNames(v manifest.VerbDef, args json.RawMessage) error {
 		api.ErrInvalidFlags, v.Name, noun, strings.Join(unknown, ", "), list)
 }
 
-// unmarshalSnake is a small shim that decodes a JSON object into a
-// struct whose field tags use snake_case keys. The api package's
-// params structs already carry json: tags matching the SRD wire
-// shape; this helper exists so future verbs that want to override
-// per-field handling have one place to hook in.
-func unmarshalSnake(args json.RawMessage, into any) error {
+// decodeParams decodes args into into, verb v's typed params struct, whose
+// json tags are v's manifest param names. A decode failure is refused per
+// paramDecodeError.
+func decodeParams(v manifest.VerbDef, args json.RawMessage, into any) error {
 	if err := json.Unmarshal(args, into); err != nil {
-		return fmt.Errorf("decode params: %w", err)
+		return paramDecodeError(v, err)
 	}
 	return nil
+}
+
+// paramDecodeError classifies a failure to decode verb v's arguments
+// (b.ewa). A value of the wrong JSON type is the caller's error: it wraps
+// api.ErrInvalidFlags, names the verb as checkParamNames does, names the
+// param as sent (checkParamNames has refused any key that is not exactly a
+// manifest param name) and states the param's expected type in the JSON
+// Schema terms tools/list declares, never a Go type. Arguments that are not
+// a JSON object (or not JSON) are ErrInvalidFlags too. Any other failure is
+// agent-director's own fault and stays unclassified (ErrInternal).
+func paramDecodeError(v manifest.VerbDef, err error) error {
+	var typeErr *json.UnmarshalTypeError
+	var syntaxErr *json.SyntaxError
+	switch {
+	case errors.As(err, &typeErr) && typeErr.Field != "":
+		// Field is the dotted path to the bad value; its first segment is
+		// the top-level key, which is the param.
+		name, _, _ := strings.Cut(typeErr.Field, ".")
+		if want := expectedParamValue(v, name); want != "" {
+			return fmt.Errorf("%w: %s: parameter %q must be %s", api.ErrInvalidFlags, v.Name, name, want)
+		}
+		return fmt.Errorf("%w: %s: parameter %q has the wrong type", api.ErrInvalidFlags, v.Name, name)
+	case errors.As(err, &typeErr), errors.As(err, &syntaxErr):
+		// A type error with no field is the arguments value itself.
+		return fmt.Errorf("%w: %s: arguments must be a JSON object", api.ErrInvalidFlags, v.Name)
+	default:
+		return fmt.Errorf("decode %s params: %w", v.Name, err)
+	}
+}
+
+// expectedParamValue is expectedValue for v's param name, or "" when v has
+// no such param or its type has no JSON Schema constraint.
+func expectedParamValue(v manifest.VerbDef, name string) string {
+	for _, p := range v.Params {
+		if p.Name == name {
+			return expectedValue(p.Type)
+		}
+	}
+	return ""
+}
+
+// labelMap parses verb v's `label` entries, each "key=value", into a map.
+// An entry with no "=" or an empty key is refused with api.ErrInvalidFlags
+// naming the verb, the param and the entry, as the CLI refuses the same
+// --label value (b.anw).
+func labelMap(v manifest.VerbDef, entries []string) (map[string]string, error) {
+	labels := make(map[string]string, len(entries))
+	for _, kv := range entries {
+		k, val, ok := splitKV(kv)
+		if !ok {
+			return nil, fmt.Errorf("%w: %s: parameter \"label\" entry %q must be key=value",
+				api.ErrInvalidFlags, v.Name, kv)
+		}
+		labels[k] = val
+	}
+	return labels, nil
 }
 
 // splitKV parses a "key=value" string. Returns ok=false when there is
@@ -341,23 +391,27 @@ func splitKV(kv string) (k, v string, ok bool) {
 	return kv[:i], kv[i+1:], true
 }
 
+// durationForm describes the forms parseDuration accepts, for refusals.
+const durationForm = `a Go duration like "12h" or trailing-d days like "7d"`
+
 // parseDuration accepts Go's time.ParseDuration form plus a trailing-d
 // days form. Mirrors the cmd/-side helper of the same intent so MCP
-// callers can pass `7d` without knowing the underlying Go parser.
-func parseDuration(s string) (time.Duration, error) {
+// callers can pass `7d` without knowing the underlying Go parser. ok is
+// false when s is in neither form.
+func parseDuration(s string) (d time.Duration, ok bool) {
 	if n := len(s); n > 1 && s[n-1] == 'd' {
 		var days int
 		for _, c := range s[:n-1] {
 			if c < '0' || c > '9' {
-				return 0, fmt.Errorf("invalid duration: %s", s)
+				return 0, false
 			}
 			days = days*10 + int(c-'0')
 		}
-		return time.Duration(days) * 24 * time.Hour, nil
+		return time.Duration(days) * 24 * time.Hour, true
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil {
-		return 0, fmt.Errorf("invalid duration: %s", s)
+		return 0, false
 	}
-	return d, nil
+	return d, true
 }

@@ -270,8 +270,8 @@ verbs appear as `mcp__agent-director__spawn`,
 
 Tool arguments are the parameter names with underscores
 (`--claude-instance-id` → `claude_instance_id`, `--reuse-finished` →
-`reuse_finished`). A tool refuses any other argument with
-`ErrInvalidFlags` and does nothing.
+`reuse_finished`). A tool refuses any other argument, or a value of the
+wrong type, with `ErrInvalidFlags` and does nothing.
 
 ### Intercept permission prompts
 

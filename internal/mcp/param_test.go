@@ -1,9 +1,10 @@
 package mcp_test
 
-// param_test.go pins b.c4u's and b.7or's MCP side: every manifest param of
-// every MCP tool is decoded under its one (underscore) name, every tool
-// refuses a key that is not one of its params with ErrInvalidFlags, in one
-// wording, and runs nothing, spawn honours relay_mode, extra_env,
+// param_test.go pins b.c4u's, b.7or's and b.ewa's MCP side: every manifest
+// param of every MCP tool is decoded under its one (underscore) name, every
+// tool refuses a key that is not one of its params, a value of the wrong
+// shape and arguments that are not an object with ErrInvalidFlags, in one
+// wording each, and runs nothing, spawn honours relay_mode, extra_env,
 // no_pre_trust and tmux_session_name and list
 // tmux_session_name as the CLI does, tools/list advertises exactly that, and
 // get_permission answers.
@@ -116,41 +117,67 @@ func readParamState(t *testing.T, e *ptEnv) paramState {
 	return s
 }
 
-// paramWrongValue is a JSON value of the wrong type for a param of manifest
-// type typ: a string for a bool or int, else a number.
-func paramWrongValue(typ string) any {
-	if typ == "bool" || typ == "int" {
-		return "not-a-" + typ
+// paramWrongValues are JSON values of the wrong shape for a param of manifest
+// type typ, a wrong element or object value among them.
+func paramWrongValues(typ string) []any {
+	switch typ {
+	case "bool":
+		return []any{"yes", 1}
+	case "int":
+		return []any{"5", 1.5}
+	case "[]string":
+		return []any{7, "k=v", []any{"k=v", 1}}
+	case "map[string]string":
+		return []any{7, []string{"FOO=bar"}, map[string]any{"FOO": 1}}
 	}
-	return 7
+	return []any{7, []string{"k=v"}}
 }
 
-// paramShapeRefused reports whether data is MCP's refusal of an argument whose
-// JSON shape does not fit its param. TestMCPParamParity requires it and
-// TestMCPParamTypesAgree forbids it, so a rewording (b.ewa) updates both.
-func paramShapeRefused(data mcp.ToolErrorData) bool {
-	return strings.Contains(data.ErrDescription, "cannot unmarshal")
+// paramRefusalPrefix is how MCP's refusal of v's param p's value begins, in
+// every wording (b.ewa, b.anw). paramShapeRefusal and paramShapeRefused both
+// build on it, so a rewording TestMCPParamParity catches updates
+// TestMCPParamTypesAgree too.
+func paramRefusalPrefix(v manifest.VerbDef, p manifest.ParamDef) string {
+	return fmt.Sprintf("ErrInvalidFlags: %s: parameter %q ", v.Name, p.Name)
+}
+
+// paramShapeRefusal is MCP's refusal of a value of the wrong JSON shape for
+// v's param p: ErrInvalidFlags naming the verb, p as sent and p's expected
+// value (b.ewa).
+func paramShapeRefusal(v manifest.VerbDef, p manifest.ParamDef) string {
+	return paramRefusalPrefix(v, p) + "must be " + paramShapes[p.Type].want
+}
+
+// paramShapeRefused reports whether data is ErrInvalidFlags refusing v's param
+// p's value in any wording (paramShapeRefusal, the "has the wrong type"
+// fallback, a label entry's or duration's form).
+func paramShapeRefused(data mcp.ToolErrorData, v manifest.VerbDef, p manifest.ParamDef) bool {
+	return data.ErrName == "ErrInvalidFlags" && strings.HasPrefix(data.ErrDescription, paramRefusalPrefix(v, p))
 }
 
 // TestMCPParamParity: every manifest param of every MCP tool is decoded: a
-// wrong-typed value is a decode error naming the param, and nothing runs (b.7or).
+// value of the wrong shape, sent with the verb's required params, is refused
+// with ErrInvalidFlags naming the verb, the param and its expected value, and
+// nothing runs (b.7or, b.ewa).
 func TestMCPParamParity(t *testing.T) {
 	for _, v := range exposedVerbs() {
 		for _, p := range v.Params {
 			t.Run(v.Name+"/"+p.Name, func(t *testing.T) {
 				e, _ := newReuseParamEnv(t)
-				seedFinished(t, e, paramRow, store.StateEnded)
+				args := paramRequiredArgs(t, e, v)
 				before := readParamState(t, e)
+				want := paramShapeRefusal(v, p)
 
-				resp := callTool(t, e.d, mcp.ToolName(v.Name), paramJSON(t, map[string]any{p.Name: paramWrongValue(p.Type)}))
-
-				data := toolErrorData(t, resp)
-				if !paramShapeRefused(data) || !strings.Contains(data.ErrDescription, p.Name) {
-					t.Errorf("%s with a wrong-typed %s = %s: %q; want a decode error naming %s (the param is not decoded)",
-						v.Name, p.Name, data.ErrName, data.ErrDescription, p.Name)
+				for _, wrong := range paramWrongValues(p.Type) {
+					args[p.Name] = wrong
+					body := paramJSON(t, args)
+					data := toolErrorData(t, callTool(t, e.d, mcp.ToolName(v.Name), body))
+					if data.ErrName != "ErrInvalidFlags" || data.ErrDescription != want {
+						t.Errorf("%s %s = %s: %q\nwant ErrInvalidFlags: %q", v.Name, body, data.ErrName, data.ErrDescription, want)
+					}
 				}
 				if after := readParamState(t, e); !reflect.DeepEqual(after, before) {
-					t.Errorf("the refused call changed state:\n got %+v\nwant %+v", after, before)
+					t.Errorf("the refused calls changed state:\n got %+v\nwant %+v", after, before)
 				}
 			})
 		}
@@ -223,25 +250,27 @@ func TestMCPParamUnknownRefused(t *testing.T) {
 // TestMCPParamUnknownRefusalText pins the refusal's wording past one unknown
 // key (TestMCPParamUnknownRefused): several unknown keys are each quoted as
 // sent, sorted, after "parameters"; keys match case included, so a param's
-// case variant is unknown; arguments that are not an object are a decode
-// error. Nothing runs (b.c4u).
+// case variant is unknown (b.c4u). Arguments that are not an object are
+// ErrInvalidFlags on every tool (b.ewa). Nothing runs.
 func TestMCPParamUnknownRefusalText(t *testing.T) {
-	cases := []struct {
+	type refusal struct {
 		name, verb string
 		extra      map[string]any // added to the verb's required args
 		raw        string         // the arguments as sent instead, when set
-		wantName   string
-		want       string // the description; {valid} is the verb's params in manifest order
-		prefix     bool   // want is only the description's start
-	}{
+		want       string         // the description; {valid} is the verb's params in manifest order
+	}
+	cases := []refusal{
 		{name: "several keys, sorted", verb: "list", extra: map[string]any{"zeta": 1, "Alpha": 1, "tmux-session-name": "x"},
-			wantName: "ErrInvalidFlags",
-			want:     `ErrInvalidFlags: list: unknown parameters "Alpha", "tmux-session-name", "zeta"; valid parameters: {valid}`},
-		{name: "a param's case variant", verb: "spawn", extra: map[string]any{"Reuse_Finished": true}, wantName: "ErrInvalidFlags",
+			want: `ErrInvalidFlags: list: unknown parameters "Alpha", "tmux-session-name", "zeta"; valid parameters: {valid}`},
+		{name: "a param's case variant", verb: "spawn", extra: map[string]any{"Reuse_Finished": true},
 			want: `ErrInvalidFlags: spawn: unknown parameter "Reuse_Finished"; valid parameters: {valid}`},
-		// ErrInternal is today's class of any MCP decode error.
-		{name: "not an object", verb: "spawn", raw: `["reuse_finished"]`, wantName: "ErrInternal",
-			want: "decode spawn params: ", prefix: true},
+		{name: "spawn, a string", verb: "spawn", raw: `"reuse_finished"`, want: "ErrInvalidFlags: spawn: arguments must be a JSON object"},
+		{name: "spawn, a number", verb: "spawn", raw: `7`, want: "ErrInvalidFlags: spawn: arguments must be a JSON object"},
+		{name: "spawn, a boolean", verb: "spawn", raw: `true`, want: "ErrInvalidFlags: spawn: arguments must be a JSON object"},
+	}
+	for _, v := range exposedVerbs() {
+		cases = append(cases, refusal{name: v.Name + ", an array", verb: v.Name, raw: `["reuse_finished"]`,
+			want: "ErrInvalidFlags: " + v.Name + ": arguments must be a JSON object"})
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -263,11 +292,11 @@ func TestMCPParamUnknownRefusalText(t *testing.T) {
 
 			data := toolErrorData(t, callTool(t, e.d, mcp.ToolName(tc.verb), body))
 
-			if data.ErrName != tc.wantName {
-				t.Errorf("err_name = %q (%s); want %s", data.ErrName, data.ErrDescription, tc.wantName)
+			if data.ErrName != "ErrInvalidFlags" {
+				t.Errorf("err_name = %q (%s); want ErrInvalidFlags", data.ErrName, data.ErrDescription)
 			}
-			if got := data.ErrDescription; tc.prefix && !strings.HasPrefix(got, want) || !tc.prefix && got != want {
-				t.Errorf("description = %q\nwant %q (prefix only: %v)", got, want, tc.prefix)
+			if data.ErrDescription != want {
+				t.Errorf("description = %q\nwant %q", data.ErrDescription, want)
 			}
 			if after := readParamState(t, e); !reflect.DeepEqual(after, before) {
 				t.Errorf("the refused call changed state:\n got %+v\nwant %+v", after, before)

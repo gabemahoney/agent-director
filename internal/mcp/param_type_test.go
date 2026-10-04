@@ -33,17 +33,19 @@ func (s propSchema) String() string {
 }
 
 // paramShapes maps each manifest param Type an MCP tool may take to the
-// tools/list schema it must get and a well-formed value of that shape.
+// tools/list schema it must get, a well-formed value of that shape and the
+// expected value a refusal of another shape states (b.ewa).
 var paramShapes = map[string]struct {
 	schema propSchema
 	sample any
+	want   string
 }{
-	"string":            {propSchema{Type: "string"}, "k=v"},
-	"duration":          {propSchema{Type: "string"}, "1h"},
-	"bool":              {propSchema{Type: "boolean"}, true},
-	"int":               {propSchema{Type: "integer"}, 1},
-	"[]string":          {propSchema{Type: "array", Items: &propSchema{Type: "string"}}, []string{"k=v"}},
-	"map[string]string": {propSchema{Type: "object", AdditionalProperties: &propSchema{Type: "string"}}, map[string]string{"MCP_SAMPLE": "v"}},
+	"string":            {propSchema{Type: "string"}, "k=v", "a string"},
+	"duration":          {propSchema{Type: "string"}, "1h", `a string holding a Go duration like "12h" or trailing-d days like "7d"`},
+	"bool":              {propSchema{Type: "boolean"}, true, "a boolean"},
+	"int":               {propSchema{Type: "integer"}, 1, "an integer"},
+	"[]string":          {propSchema{Type: "array", Items: &propSchema{Type: "string"}}, []string{"k=v"}, "an array of strings"},
+	"map[string]string": {propSchema{Type: "object", AdditionalProperties: &propSchema{Type: "string"}}, map[string]string{"MCP_SAMPLE": "v"}, "an object with string values"},
 }
 
 // toolSchemas returns each tool's property schemas, by param, from tools/list.
@@ -93,7 +95,7 @@ func TestMCPParamTypesAgree(t *testing.T) {
 
 				// The call may still be refused (a required param is absent); only a shape refusal fails here.
 				if resp := callTool(t, e.d, mcp.ToolName(v.Name), args); resp.Error != nil {
-					if data := toolErrorData(t, resp); paramShapeRefused(data) {
+					if data := toolErrorData(t, resp); paramShapeRefused(data, v, p) {
 						t.Errorf("%s %s = %s: %q; want the declared %s shape decoded", v.Name, args, data.ErrName, data.ErrDescription, p.Type)
 					}
 				}
