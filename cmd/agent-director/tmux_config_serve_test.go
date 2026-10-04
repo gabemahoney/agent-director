@@ -151,16 +151,16 @@ func (s *serveSession) stop(t *testing.T) {
 	}
 }
 
-// refusalNamed returns the tmuxRefusals row called name.
-func refusalNamed(t *testing.T, name string) tmuxRefusal {
+// refusalNamed returns the configRefusals row called name.
+func refusalNamed(t *testing.T, name string) configRefusal {
 	t.Helper()
-	for _, rc := range tmuxRefusals() {
+	for _, rc := range configRefusals() {
 		if rc.name == name {
 			return rc
 		}
 	}
-	t.Fatalf("no tmuxRefusals row %q", name)
-	return tmuxRefusal{}
+	t.Fatalf("no configRefusals row %q", name)
+	return configRefusal{}
 }
 
 // TestTmuxConfigServeReadsAtStartup pins that `serve --stdio` reads [tmux] once

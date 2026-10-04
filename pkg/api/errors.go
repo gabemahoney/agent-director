@@ -141,8 +141,9 @@ var ErrSendKeysWhileRelayed = errors.New("ErrSendKeysWhileRelayed")
 //     the wrong JSON type, with a description naming the param and its
 //     expected type, such as "an integer" or "an array of strings" (b.ewa);
 //     and a `label` entry that is not key=value (spawn, make_template) or
-//     an `older_than` that is not a non-negative duration (expire), with a
-//     description naming the param and the expected form (b.anw, b.hxn).
+//     an `older_than` that is not a non-negative duration, or whose day
+//     count is above 106751 (expire), with a description naming the param
+//     and the expected form (b.anw, b.hxn, b.sgw).
 //   - The shared verb layer, for spawn only: runSpawn returns it (wrapped)
 //     when an explicit instance id contains an ASCII control character
 //     (0x00-0x1f or 0x7f), so the CLI, MCP, the Go client and the TypeScript

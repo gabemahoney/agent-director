@@ -1,8 +1,9 @@
 package config_test
 
 // advice_follow_config_test.go (b.fji G2): a refused [tmux] table's
-// description ends "A missing key, or 0, gives the default."; following it
-// literally (drop each refused key, or set it to 0) must make the file load.
+// description, or a refused [defaults] expire_retention_days's (b.sgw), ends
+// "A missing key, or 0, gives the default."; following it literally (drop
+// each refused key, or set it to 0) must make the file load.
 
 import (
 	"errors"
@@ -34,15 +35,17 @@ func advPaneRefusedKeys(desc string) ([]config.TmuxKey, []string) {
 }
 
 // advPaneFollows are the two literal readings of the tail, applied to the
-// refused keys only: drop each from the file, or set each to 0.
+// refused keys only: drop each from the file, or set each to 0. days is what
+// the follow writes for a refused [defaults] expire_retention_days ("" drops it).
 var advPaneFollows = []struct {
 	name  string
+	days  string
 	apply func(file []tmuxSetting, refused []config.TmuxKey) []tmuxSetting
 }{
-	{"drop the refused key", func(file []tmuxSetting, refused []config.TmuxKey) []tmuxSetting {
+	{"drop the refused key", "", func(file []tmuxSetting, refused []config.TmuxKey) []tmuxSetting {
 		return slices.DeleteFunc(slices.Clone(file), func(s tmuxSetting) bool { return slices.Contains(refused, s.key) })
 	}},
-	{"set the refused key to 0", func(file []tmuxSetting, refused []config.TmuxKey) []tmuxSetting {
+	{"set the refused key to 0", "0", func(file []tmuxSetting, refused []config.TmuxKey) []tmuxSetting {
 		out := slices.DeleteFunc(slices.Clone(file), func(s tmuxSetting) bool { return slices.Contains(refused, s.key) })
 		for _, k := range refused {
 			out = append(out, tmuxSetting{k, 0})
@@ -106,6 +109,52 @@ func TestAdviceFollow_G2_TmuxRefusalMissingOrZeroGivesDefault(t *testing.T) {
 					if got, want := cfg.Tmux.Effective(k), (config.Tmux{}).Effective(k); got != want {
 						t.Errorf("%s = %v after the follow; want its default %v", k.Name(), got, want)
 					}
+				}
+			})
+		}
+	}
+}
+
+// TestAdviceFollow_G2_DefaultsRefusalMissingOrZeroGivesDefault: G2 "refused
+// [defaults] values: ... . A missing key, or 0, gives the default." (b.sgw).
+// Each refused file is rewritten as the tail says and must then load with the
+// default retention.
+func TestAdviceFollow_G2_DefaultsRefusalMissingOrZeroGivesDefault(t *testing.T) {
+	cases := []struct {
+		name string
+		days string
+		tmux []tmuxSetting
+	}{
+		{"negative", "-1", nil},
+		{"above the largest", "106752", nil},
+		{"above the largest, beside a refused [tmux] value", "365000",
+			[]tmuxSetting{{config.TmuxKillExitWaitMs, -1}}},
+	}
+	for _, tc := range cases {
+		for _, f := range advPaneFollows {
+			t.Run(tc.name+"/"+f.name, func(t *testing.T) {
+				_, err := config.Load(configFile(t, tc.days, tc.tmux...))
+				var ce *config.ConfigError
+				if !errors.As(err, &ce) {
+					t.Fatalf("Load = %v; want a *config.ConfigError refusing expire_retention_days", err)
+				}
+				desc := ce.Err.Error()
+				if !strings.Contains(desc, advPaneTail) {
+					t.Fatalf("description %q does not end with the advice %q", desc, advPaneTail)
+				}
+				if !strings.Contains(desc, "[defaults] expire_retention_days ") {
+					t.Fatalf("description %q does not name [defaults] expire_retention_days", desc)
+				}
+				refused, _ := advPaneRefusedKeys(desc)
+
+				cfg, err := config.Load(configFile(t, f.days, f.apply(tc.tmux, refused)...))
+
+				if err != nil {
+					t.Fatalf("after following %q (%s), Load: %v", advPaneTail, f.name, err)
+				}
+				if got := cfg.Defaults.EffectiveExpireRetentionDays(); got != config.DefaultExpireRetentionDays {
+					t.Errorf("effective expire_retention_days = %d after the follow; want its default %d",
+						got, config.DefaultExpireRetentionDays)
 				}
 			})
 		}

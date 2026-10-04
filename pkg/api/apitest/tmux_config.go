@@ -65,18 +65,43 @@ func TmuxBool(k config.TmuxKey, v bool) TmuxSetting {
 // instead of silently testing the wrong key.
 func WriteTmuxConfig(t testing.TB, path string, settings ...TmuxSetting) {
 	t.Helper()
+	writeConfig(t, path, map[string]any{"tmux": tmuxTable(settings)})
+}
+
+// WriteRetentionConfig is WriteTmuxConfig with [defaults]
+// expire_retention_days set to the TOML integer days as well (b.sgw), for
+// the accepted and the refused (negative, above config.MaxExpireRetentionDays)
+// values alike. It is the only way pkg/api, CLI and MCP tests write that key.
+func WriteRetentionConfig(t testing.TB, path string, days int64, settings ...TmuxSetting) {
+	t.Helper()
+	writeConfig(t, path, map[string]any{
+		"defaults": map[string]any{"expire_retention_days": days},
+		"tmux":     tmuxTable(settings),
+	})
+}
+
+// tmuxTable is the [tmux] table holding settings, a later setting of a key
+// replacing an earlier one.
+func tmuxTable(settings []TmuxSetting) map[string]any {
 	table := make(map[string]any, len(settings))
 	for _, s := range settings {
 		table[s.key.Name()] = s.value
 	}
+	return table
+}
+
+// writeConfig encodes tables as TOML and writes them to path as
+// WriteTmuxConfig describes.
+func writeConfig(t testing.TB, path string, tables map[string]any) {
+	t.Helper()
 	var buf bytes.Buffer
-	if err := toml.NewEncoder(&buf).Encode(map[string]any{"tmux": table}); err != nil {
-		t.Fatalf("WriteTmuxConfig: encode: %v", err)
+	if err := toml.NewEncoder(&buf).Encode(tables); err != nil {
+		t.Fatalf("write config: encode: %v", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatalf("WriteTmuxConfig: MkdirAll: %v", err)
+		t.Fatalf("write config: MkdirAll: %v", err)
 	}
 	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
-		t.Fatalf("WriteTmuxConfig: WriteFile: %v", err)
+		t.Fatalf("write config: WriteFile: %v", err)
 	}
 }

@@ -12,14 +12,21 @@
 // pending grace period's minimum rule (SR-4.1). A missing key or 0 gives the
 // default; Load refuses a negative value and a positive value below a key's
 // safe minimum exactly as it refuses a malformed file.
+//
+// [defaults] expire_retention_days, expire's default window in whole days,
+// follows the same rule (b.sgw): a missing key or 0 gives
+// DefaultExpireRetentionDays, and Load refuses a negative value and one above
+// MaxExpireRetentionDays the same way.
 package config
 
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -36,9 +43,14 @@ type Config struct {
 
 // Defaults holds per-invocation default behavior toggles.
 type Defaults struct {
-	RelayMode              string `toml:"relay_mode"`
-	ExpireRetentionDays    int    `toml:"expire_retention_days"`
-	DisableAskUserQuestion bool   `toml:"disable_askuserquestion"`
+	RelayMode string `toml:"relay_mode"`
+	// ExpireRetentionDays is expire's default window, in whole days: the
+	// file's value when the key is set (0 included), otherwise
+	// DefaultExpireRetentionDays. Read it only through
+	// EffectiveExpireRetentionDays, which gives the default for 0. Load
+	// refuses a negative value and one above MaxExpireRetentionDays.
+	ExpireRetentionDays    int  `toml:"expire_retention_days"`
+	DisableAskUserQuestion bool `toml:"disable_askuserquestion"`
 	// InjectHelpHook controls dynamic per-Spawn injection of a
 	// SessionStart hook that runs `agent-director help`. Off by
 	// default — operators opt in via install.sh (Q4=yes) so a Spawn's
@@ -46,6 +58,44 @@ type Defaults struct {
 	// statically. See docs/settings.md and architecture.md "Spawn
 	// launch" for the merge implications.
 	InjectHelpHook bool `toml:"inject_help_hook,omitempty"`
+}
+
+// DefaultExpireRetentionDays is the default of expire_retention_days, in
+// whole days (31). It is the value Default() seeds into
+// Defaults.ExpireRetentionDays AND the fallback EffectiveExpireRetentionDays
+// returns for a missing or 0 key, so the two never drift.
+const DefaultExpireRetentionDays = 31
+
+// MaxExpireRetentionDays is the largest whole number of days a time.Duration
+// holds (106751): the upper limit of expire_retention_days, which Load
+// refuses above it, and of older_than's day count, which pkg/api's
+// ParseOlderThan refuses above it (b.sgw). A larger count would wrap expire's
+// window, at worst to zero or below, which selects every finished row.
+const MaxExpireRetentionDays = int(math.MaxInt64 / int64(24*time.Hour))
+
+// EffectiveExpireRetentionDays returns expire's default window in whole
+// days (expire_retention_days): the configured value when positive,
+// otherwise DefaultExpireRetentionDays (31). It never returns 0 or a
+// negative count, so a default expire run never selects every finished row.
+// It performs no maximum check; Load refuses a value above
+// MaxExpireRetentionDays.
+func (d Defaults) EffectiveExpireRetentionDays() int {
+	if d.ExpireRetentionDays > 0 {
+		return d.ExpireRetentionDays
+	}
+	return DefaultExpireRetentionDays
+}
+
+// refusals returns the description of each refused [defaults] value, in
+// table order, or nil when every value loads. Only expire_retention_days is
+// checked: a negative value and one above MaxExpireRetentionDays are refused,
+// never replaced by the default or capped; 0 gives the default.
+func (d Defaults) refusals() []string {
+	if v := d.ExpireRetentionDays; v < 0 || v > MaxExpireRetentionDays {
+		return []string{fmt.Sprintf("[defaults] expire_retention_days = %d, outside its range 1 to %d days",
+			v, MaxExpireRetentionDays)}
+	}
+	return nil
 }
 
 // DefaultRelayTimeoutSeconds is the canonical relay window (24h). It is
@@ -97,7 +147,7 @@ func Default() Config {
 	return Config{
 		Defaults: Defaults{
 			RelayMode:              "off",
-			ExpireRetentionDays:    31,
+			ExpireRetentionDays:    DefaultExpireRetentionDays,
 			DisableAskUserQuestion: false,
 			InjectHelpHook:         false,
 		},
@@ -156,12 +206,15 @@ func (e *ConfigError) Unwrap() error {
 // negative value of any key, and a positive value below its key's safe
 // minimum (for the pending grace period, the default too when its key is
 // missing or 0 and the default is below the derived minimum), are refused,
-// never raised to the minimum or replaced by the default. A refusal behaves
-// exactly like a malformed file: Load returns a *ConfigError for the file
-// whose Err describes every refused key. A value that is not a TOML integer
-// already fails the parse. The Config returned alongside any *ConfigError
-// exists only to mirror the parse-failure contract pinned by
-// TestLoadMalformedReturnsTypedError; no caller may run with it.
+// never raised to the minimum or replaced by the default. It validates
+// [defaults] expire_retention_days the same way (b.sgw): a negative value
+// and one above MaxExpireRetentionDays are refused, never replaced by the
+// default or capped. A refusal behaves exactly like a malformed file: Load
+// returns a *ConfigError for the file whose Err describes every refused key
+// (validate). A value that is not a TOML integer already fails the parse.
+// The Config returned alongside any *ConfigError exists only to mirror the
+// parse-failure contract pinned by TestLoadMalformedReturnsTypedError; no
+// caller may run with it.
 //
 // Path fields (Store.DbPath, Log.ErrorLogPath) are post-processed:
 //   - A leading "~/" is expanded to the current user's home directory.
@@ -181,7 +234,7 @@ func Load(path string) (Config, error) {
 		if err != nil {
 			return resolvePaths(Default(), home), &ConfigError{Path: path, Err: err}
 		}
-		if err := validateTmux(cfg.Tmux, meta); err != nil {
+		if err := validate(cfg, meta); err != nil {
 			return resolvePaths(Default(), home), &ConfigError{Path: path, Err: err}
 		}
 	case errors.Is(err, os.ErrNotExist):
@@ -192,6 +245,30 @@ func Load(path string) (Config, error) {
 	}
 
 	return resolvePaths(cfg, home), nil
+}
+
+// validate applies Load's refusal rules to cfg, decoded from a file whose
+// metadata meta says which keys it sets. It returns nil when every value
+// loads, otherwise an error whose text names the tables with a refused value
+// ("refused [defaults] values: ", "refused [tmux] values: ", or "refused
+// [defaults] and [tmux] values: " when both have one), then every refused
+// key's description, [defaults] before [tmux] and each table in its own
+// order, then that a missing key, or 0, gives the default. A file refused
+// only for [tmux] values gets the SR-4.1 description unchanged. Values are
+// never changed.
+func validate(cfg Config, meta toml.MetaData) error {
+	var tables, refused []string
+	if r := cfg.Defaults.refusals(); len(r) > 0 {
+		tables, refused = append(tables, "[defaults]"), append(refused, r...)
+	}
+	if r := tmuxRefusals(cfg.Tmux, meta); len(r) > 0 {
+		tables, refused = append(tables, "[tmux]"), append(refused, r...)
+	}
+	if len(refused) == 0 {
+		return nil
+	}
+	return errors.New("refused " + strings.Join(tables, " and ") + " values: " + strings.Join(refused, "; ") +
+		". A missing key, or 0, gives the default.")
 }
 
 // resolvePaths applies the SRD §11 path rules to every filesystem-bearing

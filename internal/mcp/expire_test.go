@@ -147,7 +147,7 @@ func TestExpireMCPOlderThanSign(t *testing.T) {
 // olderThanRefusal is MCP expire's description refusing older_than value v.
 func olderThanRefusal(v string) string {
 	return `ErrInvalidFlags: expire: parameter "older_than" value ` + strconv.Quote(v) +
-		` must be a non-negative Go duration like "12h" or trailing-d days like "7d"`
+		` must be a non-negative Go duration like "12h" or trailing-d days like "7d" up to "106751d"`
 }
 
 // expireToolResult checks resp is a successful tool result and returns its

@@ -328,7 +328,7 @@ optional):
 ```toml
 [defaults]
 relay_mode = "off"
-expire_retention_days = 31
+expire_retention_days = 31   # 1 to 106751; 0 = use default (31)
 disable_askuserquestion = false
 
 [relay]
@@ -358,16 +358,23 @@ error_log_path = "~/.agent-director/errors.log"
 # kill_exit_wait_ms = 5000
 ```
 
+> **Warning:** a refused or malformed value stops agent-director — the
+> CLI from its next call, each hook from its next fire, the MCP server
+> from its next start (a server already running keeps its old values).
+> After editing the file, check it at once with `agent-director list`.
+
+`expire_retention_days` is how many days ago a finished row must have
+ended before `expire` without `--older-than` may delete it: a whole number
+from 1 to 106751. A missing key, or 0, gives the default (31). A negative
+value or one above 106751 is refused, never replaced by the default or
+capped, with the same effect as a refused timing setting (see
+**Validation** under [Timing settings](#timing-settings-tmux)).
+
 Env vars passed at spawn time (via `--extra-env`) are stored in
 `state.db` so `resume` can restore them. The file is owner-only (`0600`
 in a `0700` directory).
 
 ### Timing settings (`[tmux]`)
-
-> **Warning:** a refused or malformed value stops agent-director — the
-> CLI from its next call, each hook from its next fire, the MCP server
-> from its next start (a server already running keeps its old values).
-> After editing the file, check it at once with `agent-director list`.
 
 Each value is a whole integer in the unit its key names. Every default
 can be changed, but never below its safe minimum.
@@ -1220,7 +1227,7 @@ hand-edit or migrate `state.db` to stop agents, and never delete a row.
    `ErrSchemaMigrationRequired`, the store is older: use the previous
    binary. Keep a copy of the previous binary before any install, because
    a rollback needs it too. If it refuses with `ErrConfigMalformed`, first
-   fix the `[tmux]` value it names.
+   fix the config value it names.
 3. Note every row of the set in a live state (`pending`, `waiting`,
    `working`, `ask_user` or `check_permission`).
 4. Only with a binary from before this release (0.11.0): its `kill`,

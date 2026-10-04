@@ -175,12 +175,18 @@ func TestAdviceFollow_I3_InvalidLabelWantKeyValue(t *testing.T) {
 
 // TestAdviceFollow_I6_OlderThanDurationForm: I6 "expire: parameter "older_than"
 // value %q must be a non-negative Go duration like "12h" or trailing-d days like
-// "7d"", ErrInvalidFlags with nothing deleted (b.anw, b.hxn).
+// "7d" up to "106751d"", ErrInvalidFlags with nothing deleted (b.anw, b.hxn,
+// b.sgw). The row ended past the default retention, so only "106751d" keeps it.
 func TestAdviceFollow_I6_OlderThanDurationForm(t *testing.T) {
-	for _, follow := range []string{"12h", "7d"} {
-		t.Run(follow, func(t *testing.T) {
+	follows := []struct{ value, wantIDs string }{
+		{"12h", `["` + expireMCPID + `"]`},
+		{"7d", `["` + expireMCPID + `"]`},
+		{"106751d", `[]`},
+	}
+	for _, follow := range follows {
+		t.Run(follow.value, func(t *testing.T) {
 			d, rec, storePath := newExpireMCPServer(t, false)
-			for _, bad := range []string{"soon", "7days", "-2h"} {
+			for _, bad := range []string{"soon", "7days", "-2h", "106752d", "365000d"} {
 				data := toolErrorData(t, callTool(t, d, "expire", paramJSON(t, map[string]any{"older_than": bad})))
 				if want := olderThanRefusal(bad); data.ErrName != "ErrInvalidFlags" || data.ErrDescription != want {
 					t.Errorf("older_than %q = %s: %q\nwant ErrInvalidFlags: %q", bad, data.ErrName, data.ErrDescription, want)
@@ -193,9 +199,9 @@ func TestAdviceFollow_I6_OlderThanDurationForm(t *testing.T) {
 				t.Errorf("tmux calls after the refusals = %d; want none", n)
 			}
 
-			obj := expireToolResult(t, callTool(t, d, "expire", paramJSON(t, map[string]any{"older_than": follow})))
-			if got, want := string(obj["ids"]), `["`+expireMCPID+`"]`; got != want {
-				t.Errorf("expire older_than %q ids = %s; want %s", follow, got, want)
+			obj := expireToolResult(t, callTool(t, d, "expire", paramJSON(t, map[string]any{"older_than": follow.value})))
+			if got := string(obj["ids"]); got != follow.wantIDs {
+				t.Errorf("expire older_than %q ids = %s; want %s", follow.value, got, follow.wantIDs)
 			}
 		})
 	}

@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -9,7 +10,8 @@ import (
 
 // TestParseOlderThan pins the older_than forms the CLI and MCP share (b.hxn):
 // trailing-d days and Go durations at or above zero parse; a negative value,
-// which Expire would read as "every finished row", and junk are refused.
+// which Expire would read as "every finished row", and junk are refused, and
+// so is a day count above 106751, which would wrap the window (b.sgw).
 func TestParseOlderThan(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -23,6 +25,7 @@ func TestParseOlderThan(t *testing.T) {
 		{"12h", 12 * time.Hour, true},
 		{"30m", 30 * time.Minute, true},
 		{"1h30m", 90 * time.Minute, true},
+		{"106751d", 106751 * 24 * time.Hour, true},
 		{"-2h", 0, false},
 		{"-1s", 0, false},
 		{"-1h30m", 0, false},
@@ -34,6 +37,11 @@ func TestParseOlderThan(t *testing.T) {
 		{"d", 0, false},
 		{"5x", 0, false},
 		{"soon", 0, false},
+		{"106752d", 0, false},
+		{"213504d", 0, false},
+		{"365000d", 0, false},
+		{"9223372036854775808d", 0, false},
+		{strings.Repeat("9", 40) + "d", 0, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {

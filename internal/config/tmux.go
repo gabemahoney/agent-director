@@ -1,10 +1,8 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"math"
-	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -419,12 +417,12 @@ func (t Tmux) EffectiveKillExitWait() time.Duration {
 	return t.Effective(TmuxKillExitWaitMs)
 }
 
-// validateTmux applies the SR-4.1 refusal rules to the [tmux] table decoded
-// into t, whose metadata meta says which keys the file sets. It returns nil
-// when every value loads, otherwise an error whose text is the SR-4.1
-// description: every refused key in table order, then that a missing key, or
-// 0, gives the default. Values are never changed.
-func validateTmux(t Tmux, meta toml.MetaData) error {
+// tmuxRefusals applies the SR-4.1 refusal rules to the [tmux] table decoded
+// into t, whose metadata meta says which keys the file sets. It returns the
+// SR-4.1 description of every refused key in table order, or nil when every
+// value loads; Load's validate words the refusal from them. Values are never
+// changed.
+func tmuxRefusals(t Tmux, meta toml.MetaData) []string {
 	configured := t
 	for _, k := range TmuxKeys() {
 		if !meta.IsDefined("tmux", k.Name()) {
@@ -437,11 +435,7 @@ func validateTmux(t Tmux, meta toml.MetaData) error {
 			refused = append(refused, msg)
 		}
 	}
-	if len(refused) == 0 {
-		return nil
-	}
-	return errors.New("refused [tmux] values: " + strings.Join(refused, "; ") +
-		". A missing key, or 0, gives the default.")
+	return refused
 }
 
 // refusal returns the SR-4.1 description of key k's refused value and true,

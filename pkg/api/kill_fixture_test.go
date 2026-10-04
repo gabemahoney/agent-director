@@ -153,17 +153,28 @@ func (e *killEnv) client(t *testing.T, settings ...apitest.TmuxSetting) (*api.Cl
 	t.Helper()
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	apitest.WriteTmuxConfig(t, cfgPath, settings...)
+	c, logs, err := e.clientFor(t, cfgPath)
+	if err != nil {
+		t.Fatalf("api.New: %v", err)
+	}
+	return c, logs
+}
+
+// clientFor is client with the config file already at cfgPath; it returns
+// api.New's error, with no Client, instead of failing the test.
+func (e *killEnv) clientFor(t *testing.T, cfgPath string) (*api.Client, *bytes.Buffer, error) {
+	t.Helper()
 	logs := &bytes.Buffer{}
 	c, err := api.New(api.Options{StorePath: e.dbPath, ConfigPath: cfgPath, Logger: log.New(logs, "", 0),
 		TmuxClient: e.rec})
 	if err != nil {
-		t.Fatalf("api.New: %v", err)
+		return nil, logs, err
 	}
 	t.Cleanup(func() { _ = c.Close() })
 	api.SetClockForTest(c, e.clock.Now)
 	api.SetProcCheckerForTest(c, e.pc)
 	api.SetSleepForTest(c, func(d time.Duration) { e.sleep(d) })
-	return c, logs
+	return c, logs, nil
 }
 
 // columns reads id's row raw through apitest.ReadSpawnColumns.

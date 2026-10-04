@@ -7,21 +7,24 @@ import (
 )
 
 // descriptions_config.go holds the shared description helper's case for a
-// config file refused for its [tmux] values (SR-4.1): ErrConfigMalformed's
-// description names the file and states each refused value, then that a
-// missing key, or 0, gives the default.
+// config file refused for its [tmux] values (SR-4.1) or its [defaults]
+// expire_retention_days (b.sgw): ErrConfigMalformed's description names the
+// file and states each refused value, then that a missing key, or 0, gives
+// the default.
 
 // ConfigRefusal is one refused [tmux] value: Key and its configured Value (0
 // for a missing or 0 key whose default is below the minimum); Minimum, the
 // safe minimum it is below (0 for a key without one, refused as negative);
 // and, for a derived minimum, the effective Create timeout and Pipe-close
-// wait it was computed from.
+// wait it was computed from. With Retention set it is instead the refused
+// [defaults] expire_retention_days Value, and Key is unused.
 type ConfigRefusal struct {
 	Key          config.TmuxKey
 	Value        int64
 	Minimum      int64
 	Derived      bool
 	Create, Pipe int64
+	Retention    bool
 }
 
 // DescConfigRefused is ErrConfigMalformed's description for the config file
@@ -33,6 +36,9 @@ func DescConfigRefused(path string, refusals ...ConfigRefusal) DescCase {
 		k := r.Key
 		var msg string
 		switch {
+		case r.Retention:
+			msg = fmt.Sprintf("[defaults] expire_retention_days = %d, outside its range 1 to %d days",
+				r.Value, config.MaxExpireRetentionDays)
 		case r.Minimum == 0:
 			msg = fmt.Sprintf("[tmux] %s = %d, which must be positive", k.Name(), r.Value)
 		case r.Value == 0:

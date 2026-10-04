@@ -8,6 +8,7 @@ package api_test
 // state that is not alive for a row the lookup must decide.
 
 import (
+	"path/filepath"
 	"slices"
 	"sort"
 	"testing"
@@ -102,13 +103,17 @@ func (e *killEnv) expire(over *time.Duration) (api.ExpireResult, *recordingLogge
 	return e.expireWith(e.st, over)
 }
 
-// expireWith runs the exported api.Expire with s, e.rec, e.pc, config's
-// default retention, over, e.cfg's effective sweep budget, e.clock.Now and a
-// new recordingLogger (returned).
+// expireWith runs expireWithDays at config's default retention.
 func (e *killEnv) expireWith(s api.ExpireStore, over *time.Duration) (api.ExpireResult, *recordingLogger, error) {
+	return e.expireWithDays(s, config.DefaultExpireRetentionDays, over)
+}
+
+// expireWithDays runs the exported api.Expire with s, e.rec, e.pc, a retention
+// of days, over, e.cfg's effective sweep budget, e.clock.Now and a new
+// recordingLogger (returned).
+func (e *killEnv) expireWithDays(s api.ExpireStore, days int, over *time.Duration) (api.ExpireResult, *recordingLogger, error) {
 	lg := &recordingLogger{}
-	res, err := api.Expire(s, e.rec, e.pc, config.Default().Defaults.ExpireRetentionDays, over,
-		e.cfg.EffectiveSweepBudget(), e.clock.Now, lg)
+	res, err := api.Expire(s, e.rec, e.pc, days, over, e.cfg.EffectiveSweepBudget(), e.clock.Now, lg)
 	return res, lg, err
 }
 
@@ -118,6 +123,20 @@ func (e *killEnv) expireClient(t *testing.T, over *time.Duration, settings ...ap
 	t.Helper()
 	c, buf := e.client(t, settings...)
 	res, err = c.Expire(over)
+	return res, buf.String(), err
+}
+
+// expireClientDays runs Client.Expire(nil) on a new e.clientFor whose config
+// apitest.WriteRetentionConfig wrote with days; logs is the Client's captured log.
+func (e *killEnv) expireClientDays(t *testing.T, days int64) (res api.ExpireResult, logs string, err error) {
+	t.Helper()
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	apitest.WriteRetentionConfig(t, cfgPath, days)
+	c, buf, err := e.clientFor(t, cfgPath)
+	if err != nil {
+		t.Fatalf("api.New: %v", err)
+	}
+	res, err = c.Expire(nil)
 	return res, buf.String(), err
 }
 

@@ -65,7 +65,18 @@ type tmuxSetting struct {
 // tmuxConfigFile writes a config file whose [tmux] table holds settings.
 func tmuxConfigFile(t *testing.T, settings ...tmuxSetting) string {
 	t.Helper()
+	return configFile(t, "", settings...)
+}
+
+// configFile writes a config file whose [defaults] table sets
+// expire_retention_days to the TOML integer days (no [defaults] table when
+// days is ""), then a [tmux] table holding settings.
+func configFile(t *testing.T, days string, settings ...tmuxSetting) string {
+	t.Helper()
 	var b strings.Builder
+	if days != "" {
+		fmt.Fprintf(&b, "[defaults]\nexpire_retention_days = %s\n", days)
+	}
 	b.WriteString("[tmux]\n")
 	for _, s := range settings {
 		fmt.Fprintf(&b, "%s = %d\n", s.key.Name(), s.value)

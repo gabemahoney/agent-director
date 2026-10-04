@@ -1,10 +1,12 @@
 package api
 
 import (
+	"math"
 	"slices"
 	"sort"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
@@ -195,7 +197,9 @@ func (r expireRow) verdict() string {
 // logger.
 //
 // Selection (SR-12.1): the cutoff is now() minus the retention window, which
-// is olderThan when it is non-nil and retentionDays days otherwise; a zero or
+// is olderThan when it is non-nil and retentionDays days otherwise
+// (retentionWindow: never wrapped, so a day count above
+// config.MaxExpireRetentionDays gives the largest window); a zero or
 // negative window selects every finished row with an ended_at. The one
 // candidate read (ExpireStore.ListExpireCandidates) is the only call that can
 // fail the verb: its error is logged on lg and returned, with no tmux call.
@@ -246,7 +250,7 @@ func (r expireRow) verdict() string {
 // rows tmux_skipped, and a non-positive one makes no tmux call. s, t, pc and
 // now must not be nil; a nil lg writes no log line.
 func Expire(s ExpireStore, t ExpireTmux, pc ProcChecker, retentionDays int, olderThan *time.Duration, sweepBudget time.Duration, now func() time.Time, lg ExpireLogger) (ExpireResult, error) {
-	window := time.Duration(retentionDays) * 24 * time.Hour
+	window := retentionWindow(retentionDays)
 	if olderThan != nil {
 		window = *olderThan
 	}
@@ -284,6 +288,24 @@ func Expire(s ExpireStore, t ExpireTmux, pc ProcChecker, retentionDays int, olde
 	sort.Strings(deleted)
 	sort.Strings(kept)
 	return ExpireResult{Count: len(deleted), IDs: deleted, Kept: len(kept), KeptIDs: kept}, nil
+}
+
+// retentionWindow returns days whole days as expire's window, computed
+// without overflow (b.sgw): a count above config.MaxExpireRetentionDays
+// gives the largest duration instead of a wrapped, possibly zero or negative,
+// window; a count at or below zero gives zero, which selects every finished
+// row as any window at or below zero does. Load refuses both a negative
+// count and one above the maximum, and Client.Expire passes
+// EffectiveExpireRetentionDays, never below one, so only an in-process
+// caller of Expire reaches either case.
+func retentionWindow(days int) time.Duration {
+	switch {
+	case days <= 0:
+		return 0
+	case days > config.MaxExpireRetentionDays:
+		return time.Duration(math.MaxInt64)
+	}
+	return time.Duration(days) * 24 * time.Hour
 }
 
 // expireRun is one expire run's state: the store, the start-time reader, the
@@ -396,10 +418,12 @@ func (r *expireRun) deleteRow(row expireRow, cand ExpireCandidate) expireRow {
 // Expire removes finished rows (ended or missing) whose ended_at is older than
 // the retention window, and keeps any whose agent, own session or leftover
 // may still run, or for which it cannot tell. When olderThan is nil the window comes from defaults.expire_retention_days in
-// config.toml; a non-nil value overrides it, and a zero or negative duration
-// selects every finished row. The CLI and MCP parse their older_than with
-// ParseOlderThan, which refuses a negative value. Live rows and rows with a
-// NULL ended_at are never selected.
+// config.toml (31 days when the key is missing or 0; the configuration
+// refuses a negative value and one above 106751); a non-nil value overrides
+// it, and a zero or negative duration selects every finished row. The CLI and
+// MCP parse their older_than with ParseOlderThan, which refuses a negative
+// value and a day count above 106751. Live rows and rows with a NULL ended_at
+// are never selected.
 //
 // A selected row whose recorded tmux session name cannot be used (it is
 // empty, contains a control character, or contains a character tmux stores
@@ -444,5 +468,5 @@ func (c *Client) Expire(olderThan *time.Duration) (ExpireResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return ExpireResult{}, err
 	}
-	return Expire(c.st, c.tmuxClient, c.procChecker, c.cfg.Defaults.ExpireRetentionDays, olderThan, c.cfg.Tmux.EffectiveSweepBudget(), c.now, c.logger)
+	return Expire(c.st, c.tmuxClient, c.procChecker, c.cfg.Defaults.EffectiveExpireRetentionDays(), olderThan, c.cfg.Tmux.EffectiveSweepBudget(), c.now, c.logger)
 }

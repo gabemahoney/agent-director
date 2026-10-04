@@ -71,10 +71,10 @@ in `init`. The verb registry
 | `cmd/agent-director-admin` | The operator tool (b.vqr), a thin shim like `cmd/agent-director` with no business logic: verbs `kill-finished` (kill's finished-row opt-in), `delete`, `help` (also `--help`, `-h` and the no-verb run) and `version`, taken from `internal/adminapi.Verbs`, never from `pkg/api/manifest`. It parses and applies the main CLI's global flags (`--store-path`, `--home`, `--tmux-command`, before or after the verb) with `internal/clisetup`, opens the Client with `clisetup.Open` (the same store, config, logger and schema checks as `agent-director`), calls `adminapi.KillFinished` / `adminapi.Delete`, and prints JSON on stdout, or one `{err_name, err_description}` envelope on stderr with exit 1 (`errnames.Classify`). `help`, every verb's `--help` / `-h` and `version` open no store and load no config, and every help opens with `adminapi.ApprovalStatement`. See [Operator tool `agent-director-admin`](#operator-tool-agent-director-admin). | stdlib; `internal/adminapi`; `internal/clisetup`; `pkg/api` (`Client`, `Version`); `pkg/api/errnames`. | `pkg/api/manifest` (its verbs are not manifest verbs); direct `database/sql`; `store.Open` / `config.Load` / `tmux.New`; business logic. |
 | `internal/adminapi` | The admin binary's door into `pkg/api` (b.vqr). Declares the hooks `KillFinished(c any, id) (KillResult, error)` and `Delete(c any, ids) (DeleteResult, error)` as function variables, which `pkg/api`'s `init` (`pkg/api/admin.go`) sets to the unexported `Client.killFinished` (`kill_optin.go`) and `Client.deleteRows` (`delete.go`); a `c` that is not a non-nil `*api.Client` is an error and nothing runs. Also holds the admin binary's own verb list (`Verbs`, `Lookup`), global-flag list (`GlobalFlags`, `GlobalFlagsText`) and `ApprovalStatement`, from which its help and the generated `docs/admin-reference.md` are built. Being under `internal/`, no other module can import it, so neither action has a public Go entry point. | stdlib only (it imports nothing). | `pkg/api` (`pkg/api` imports it: a cycle); `pkg/api/manifest`. |
 | `internal/clisetup` | Client setup shared by both command binaries (b.vqr). `Open(Overrides)` builds the `pkg/api.Client` every store-backed CLI verb and admin verb uses (the design pins: `CreateIfMissing`, the store-path precedence, the recovery logger `NewRecoveryLogger`, the returned `config.Config`) and returns an `*OpenError` naming `ErrConfigMalformed`, `ErrSchemaMismatch`, `ErrSchemaMigrationRequired` or `ErrStoreOpen`. `globalflags.go` holds the only global-flag parser, the pre-scan `ParseGlobalFlags`, with `GlobalFlags.Apply` (`--home` sets HOME before any config load; `--store-path` and `--tmux-command` become `Overrides`) and `ExpandTilde`; `globalflags_test.go` tests them. **Must use:** a command binary opens its Client through `Open` and parses its global flags through `ParseGlobalFlags` / `Apply`; never a second setup or flag parser. | stdlib; `pkg/api`; `internal/config`; `internal/store` (error sentinels only). | `internal/mcp`; `cmd/*`; direct `database/sql`. |
-| `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, etc.), params/result types, and error sentinels (the seven tmux sentinels of SR-1.1 are all re-exported in `aliases.go`). Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director`, `internal/mcp`, `internal/clisetup` and `cmd/agent-director-admin`. **Operator-only actions (b.vqr):** the finished-row kill and delete are unexported (`Client.killFinished` in `kill_optin.go`, `Client.deleteRows` in `delete.go`) and reached only through the `internal/adminapi` hooks that `admin.go`'s `init` sets, so no exported method, type or field offers them. **`kill` seams** (`kill.go`): `KillStore` (`GetSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`; `*store.Store` satisfies it), `KillTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `KillPane`, `KillSessionID`; `TmuxClient` satisfies it) and the start-time reader `ProcChecker`; `Kill` also takes the three `[tmux]` durations, the clock and the sleep, and has no logger. **`find-missing` seams** (`find_missing.go`): `FindMissingStore` (the live-row read, the four same-life guarded writes, `CloseOrphanedPermissionRequests`, `ListProvisionalTranscripts`, `HealJsonlPath`, `StoreID`; `*store.Store` satisfies it), `FindMissingTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`) and `ProcChecker`; the exported `FindMissing` also takes the pending grace period, the sweep budget, the clock and a `FindMissingLogger` (see [`find-missing`](#find-missing)). **Pane-verb seams** (`readpane.go`, `sendkeys.go`, `pause.go`; see [Interact](#interact-send-keys--read-pane) and [`pause`](#pause)): `ReadPaneStore` (`GetSpawn`, `StoreID`; no write) and `ReadPaneTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `CapturePaneID`); `SendKeysStore` (`GetSpawn`, `PermissionRequestsForSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`) and `SendKeysTmux` (`Lookup`, `ListPanes`, `SendKeysPane`); `PauseStore` (`GetSpawn`, `GetSpawnState`, `AdoptIdentityIfUnchanged`, `StoreID`) and `PauseTmux` (`Lookup`, `ListPanes`, `SendKeyPane` for `pause`'s line clear, `C-u`, `SendKeysPane`). `*store.Store` and `TmuxClient` satisfy them. `SendKeys` and `Pause` take the start-time reader `ProcChecker`; the exported `ReadPane` uses `probe.NewProcChecker()` and `Client.ReadPane` the Client's reader. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the nine socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `SendKeyPane`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the one name-based method left, `HasSession`, which is kept but no verb uses, and none may; the name-based send and capture are gone. `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxCallSendKey`, "key send", included; `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`; it also re-exports the start-time reader interface as `ProcChecker` (`= tmux.ProcChecker`). The Client holds its clock (`time.Now`), its sleep (`time.Sleep`, the pause of `kill`'s process wait) and its start-time reader (`probe.NewProcChecker()`), all set in `New`; plain spawn uses the clock and reader for the launch start and the identity write, and `kill` uses all three for its lookup, adoption and process wait; `find-missing` measures the pending grace period on the same clock, with the value from `EffectivePendingGrace`. The label scan of a plain spawn lives in `spawn_scan.go`, its held-name path after "duplicate session" (the end write, one re-lookup, the classified error) in `spawn_held.go`, the shared held-name error builder in `held_name.go` and the one `ad.launch.name_held` emitter in `name_held_trail.go` (see [Launch identity](#launch-identity)). **`resume` seams** (`resume.go`): `ResumeStore` and `ResumeTmux` (`TmuxLookup`'s `Lookup` plus `NewSession`, `SetLabel` and `KillSessionID`; no pane listing, since `resume` adopts nothing, and no name-based method; `TmuxClient` satisfies it), with the start-time reader `ProcChecker`, the configuration, the store id, the clock and the logger. Its pre-launch lookup's decision lives in `resume_lookup.go` (`decidePreLaunch`), the launch outcome, restore and path after "duplicate session" it shares with reuse in `finished_launch.go` (`finishedLaunch`) and the shared starting-session refusal in `starting_session.go` (see [Resume](#resume) and [Starting-session rule](#starting-session-rule-starting_sessiongo)). **Reuse** (`spawn` with `ReuseFinished` and an explicit id whose row is finished; `spawn_reuse.go`): the unexported `reuseStore` (`ReadForReuse`, `ResetForReuse`, `RestoreAfterFailedReuse`, `RecordLaunchIdentity`; `*store.Store` satisfies it), injected through `runSpawnWithReuseStore` (`runSpawn` passes its store), and its own descriptions in `spawn_reuse_errors.go` (see [Reuse of a finished id](#reuse-of-a-finished-id)). **`expire`'s window parser** (`older_than.go`, b.hxn): `ParseOlderThan(s) (time.Duration, bool)` takes a Go duration or decimal digits followed by `d` for days, and rejects a value in neither form and a negative Go duration; `OlderThanForm` words the accepted form for the refusals and for MCP's `tools/list` (see [`expire`](#expire)). `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`; `internal/adminapi` (to set its hooks); `pkg/api/manifest` (the verb list for `help`, and `TmuxSessionNameSpelling` for the list hint). | Direct `database/sql`; raw SQL strings; MCP framing. |
+| `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, etc.), params/result types, and error sentinels (the seven tmux sentinels of SR-1.1 are all re-exported in `aliases.go`). Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director`, `internal/mcp`, `internal/clisetup` and `cmd/agent-director-admin`. **Operator-only actions (b.vqr):** the finished-row kill and delete are unexported (`Client.killFinished` in `kill_optin.go`, `Client.deleteRows` in `delete.go`) and reached only through the `internal/adminapi` hooks that `admin.go`'s `init` sets, so no exported method, type or field offers them. **`kill` seams** (`kill.go`): `KillStore` (`GetSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`; `*store.Store` satisfies it), `KillTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `KillPane`, `KillSessionID`; `TmuxClient` satisfies it) and the start-time reader `ProcChecker`; `Kill` also takes the three `[tmux]` durations, the clock and the sleep, and has no logger. **`find-missing` seams** (`find_missing.go`): `FindMissingStore` (the live-row read, the four same-life guarded writes, `CloseOrphanedPermissionRequests`, `ListProvisionalTranscripts`, `HealJsonlPath`, `StoreID`; `*store.Store` satisfies it), `FindMissingTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`) and `ProcChecker`; the exported `FindMissing` also takes the pending grace period, the sweep budget, the clock and a `FindMissingLogger` (see [`find-missing`](#find-missing)). **Pane-verb seams** (`readpane.go`, `sendkeys.go`, `pause.go`; see [Interact](#interact-send-keys--read-pane) and [`pause`](#pause)): `ReadPaneStore` (`GetSpawn`, `StoreID`; no write) and `ReadPaneTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `CapturePaneID`); `SendKeysStore` (`GetSpawn`, `PermissionRequestsForSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`) and `SendKeysTmux` (`Lookup`, `ListPanes`, `SendKeysPane`); `PauseStore` (`GetSpawn`, `GetSpawnState`, `AdoptIdentityIfUnchanged`, `StoreID`) and `PauseTmux` (`Lookup`, `ListPanes`, `SendKeyPane` for `pause`'s line clear, `C-u`, `SendKeysPane`). `*store.Store` and `TmuxClient` satisfy them. `SendKeys` and `Pause` take the start-time reader `ProcChecker`; the exported `ReadPane` uses `probe.NewProcChecker()` and `Client.ReadPane` the Client's reader. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the nine socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `SendKeyPane`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the one name-based method left, `HasSession`, which is kept but no verb uses, and none may; the name-based send and capture are gone. `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxCallSendKey`, "key send", included; `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`; it also re-exports the start-time reader interface as `ProcChecker` (`= tmux.ProcChecker`). The Client holds its clock (`time.Now`), its sleep (`time.Sleep`, the pause of `kill`'s process wait) and its start-time reader (`probe.NewProcChecker()`), all set in `New`; plain spawn uses the clock and reader for the launch start and the identity write, and `kill` uses all three for its lookup, adoption and process wait; `find-missing` measures the pending grace period on the same clock, with the value from `EffectivePendingGrace`. The label scan of a plain spawn lives in `spawn_scan.go`, its held-name path after "duplicate session" (the end write, one re-lookup, the classified error) in `spawn_held.go`, the shared held-name error builder in `held_name.go` and the one `ad.launch.name_held` emitter in `name_held_trail.go` (see [Launch identity](#launch-identity)). **`resume` seams** (`resume.go`): `ResumeStore` and `ResumeTmux` (`TmuxLookup`'s `Lookup` plus `NewSession`, `SetLabel` and `KillSessionID`; no pane listing, since `resume` adopts nothing, and no name-based method; `TmuxClient` satisfies it), with the start-time reader `ProcChecker`, the configuration, the store id, the clock and the logger. Its pre-launch lookup's decision lives in `resume_lookup.go` (`decidePreLaunch`), the launch outcome, restore and path after "duplicate session" it shares with reuse in `finished_launch.go` (`finishedLaunch`) and the shared starting-session refusal in `starting_session.go` (see [Resume](#resume) and [Starting-session rule](#starting-session-rule-starting_sessiongo)). **Reuse** (`spawn` with `ReuseFinished` and an explicit id whose row is finished; `spawn_reuse.go`): the unexported `reuseStore` (`ReadForReuse`, `ResetForReuse`, `RestoreAfterFailedReuse`, `RecordLaunchIdentity`; `*store.Store` satisfies it), injected through `runSpawnWithReuseStore` (`runSpawn` passes its store), and its own descriptions in `spawn_reuse_errors.go` (see [Reuse of a finished id](#reuse-of-a-finished-id)). **`expire`'s window parser** (`older_than.go`, b.hxn): `ParseOlderThan(s) (time.Duration, bool)` takes a Go duration or decimal digits followed by `d` for days, and rejects a value in neither form, a negative Go duration and a day count above `config.MaxExpireRetentionDays` (106751); `OlderThanForm` words the accepted form for the refusals and for MCP's `tools/list` (see [`expire`](#expire)). `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`; `internal/adminapi` (to set its hooks); `pkg/api/manifest` (the verb list for `help`, and `TmuxSessionNameSpelling` for the list hint). | Direct `database/sql`; raw SQL strings; MCP framing. |
 | `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v5; see "Schema v5" below), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
-| `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). The pending grace period bounds both `find-missing`'s hands-off window for a `pending` row and a SessionStart hook's wait for its launch's identity write, each measured from the launch start (SR-13.4, SR-22.9); it has no maximum. The hook's wait is also capped at 540 s after it began (`sessionStartWaitCap` in `internal/hook`; WD 2026-09-30c), so a grace above 540 s lengthens only `find-missing`'s window, which is unchanged. Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default; a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
-| `pkg/api/apitest` | Test helpers shared across packages (non-test `.go` files, so harnesses outside `pkg/api` import them). Families: the `Seed*` fixtures (`SeedSpawn`, `SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`), `SeedSpawn`'s `With*` options, the store-read and store-id helpers (see [apitest Seed* factory contract](#apitest-seed-factory-contract-reusable-test-fixtures)); the `[tmux]` config writer `WriteTmuxConfig` (see [apitest `[tmux]` config writer](#apitest-tmux-config-writer-reusable-test-fixture)); and the description helper, `AssertDescription` with the `Desc*` cases in `descriptions*.go` (see [apitest description helper](#apitest-description-helper-reusable-test-fixture)). Each section states the must-use rule. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `internal/tmux` (the `tmux.Call` names the description cases use); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
+| `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). The pending grace period bounds both `find-missing`'s hands-off window for a `pending` row and a SessionStart hook's wait for its launch's identity write, each measured from the launch start (SR-13.4, SR-22.9); it has no maximum. The hook's wait is also capped at 540 s after it began (`sessionStartWaitCap` in `internal/hook`; WD 2026-09-30c), so a grace above 540 s lengthens only `find-missing`'s window, which is unchanged. Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default; a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). Also owns `[defaults] expire_retention_days`, `expire`'s default window in whole days: `DefaultExpireRetentionDays` (31), `MaxExpireRetentionDays` (106751, the largest whole number of days a `time.Duration` holds, which is also `older_than`'s day limit in `pkg/api`'s `ParseOlderThan`) and `Defaults.EffectiveExpireRetentionDays()` (the configured value when positive, else 31). A missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` as the `[tmux]` refusals, never replaced by the default or capped. **Must use:** read the setting only through `EffectiveExpireRetentionDays` and the day limit only from `MaxExpireRetentionDays` (see [`expire`](#expire)). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
+| `pkg/api/apitest` | Test helpers shared across packages (non-test `.go` files, so harnesses outside `pkg/api` import them). Families: the `Seed*` fixtures (`SeedSpawn`, `SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`), `SeedSpawn`'s `With*` options, the store-read and store-id helpers (see [apitest Seed* factory contract](#apitest-seed-factory-contract-reusable-test-fixtures)); the config writers `WriteTmuxConfig` and `WriteRetentionConfig` (see [apitest `[tmux]` config writer](#apitest-tmux-config-writer-reusable-test-fixture)); and the description helper, `AssertDescription` with the `Desc*` cases in `descriptions*.go` (see [apitest description helper](#apitest-description-helper-reusable-test-fixture)). Each section states the must-use rule. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `internal/tmux` (the `tmux.Call` names the description cases use); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
 | `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. The `Catalog` is consumed by `cmd/agent-director`'s envelope writer and `internal/mcp`'s `classifyDispatchError`. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
 | `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. Before routing, `checkParamNames` refuses an argument that is not one of the verb's manifest params with `ErrInvalidFlags`; every manifest param of every exposed verb is decoded through `decodeParams`, which refuses a wrongly typed value with `ErrInvalidFlags` too (see [Parameter names and unknown arguments](#parameter-names-and-unknown-arguments)). `expire`'s `older_than` is parsed with `pkg/api.ParseOlderThan`, the parser the CLI shares, and a value it rejects is `ErrInvalidFlags`. `classifyDispatchError` delegates to `errnames.Classify`. | stdlib; `pkg/api`; `pkg/api/manifest`; `pkg/api/errnames`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
 | `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. Also holds `ReuseOptInSpelling`, the reuse opt-in's one spelling in shared advice, which `internal/spawn` builds its retry sentences on, and `TmuxSessionNameSpelling`, the session-name param's, which `pkg/api`'s list hint and `internal/spawn`'s `ErrTmuxSessionNameEmpty` description build on (see [`pkg/api/manifest` — Verb Registry](#pkgapimanifest--verb-registry)). | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
@@ -115,9 +115,11 @@ truth for them, following the `Relay.EffectiveTimeoutSeconds` pattern:
   `Name`, `Unit`, `DefaultValue`, `MinimumKind`); outside `internal/config`
   and its own tests, no code or test spells a `[tmux]` key name (SR-20.2).
 - **Refuse, never clamp.** `config.Load` validates the table after
-  decoding; every refused key, in table order, is described in one
-  `*config.ConfigError`. No verb, server or hook runs with a minimum or
-  default in place of a refused value.
+  decoding, together with `[defaults] expire_retention_days` (see
+  [`expire`](#expire)); every refused key is described in one
+  `*config.ConfigError`, `[defaults]` first, then `[tmux]` in table
+  order. No verb, server or hook runs with a minimum or default in place
+  of a refused value.
 - **`internal/tmux` never imports `internal/config`** and reads no
   configuration (its row's prohibited imports).
 
@@ -4488,18 +4490,21 @@ ErrInvalidFlags: list: parameter "limit" must be an integer
 The value reads "a string", "a boolean", "an integer", "an array of
 strings" or "an object with string values"; for a `duration` param
 (`expire`'s `older_than`) it reads "a string holding a non-negative Go
-duration like "12h" or trailing-d days like "7d"" (`api.OlderThanForm`).
+duration like "12h" or trailing-d days like "7d" up to "106751d""
+(`api.OlderThanForm`).
 Two value checks after the decode refuse the same way: a `label` entry
 with no `=` or an empty key on `spawn` and `make_template` (`labelMap`),
 and an `older_than` on `expire` that `api.ParseOlderThan` rejects, which
-is one in neither duration form or a negative Go duration such as
-`"-2h"` (`Expire` would take a negative window as selecting every
+is one in neither duration form, a negative Go duration such as `"-2h"`,
+or a day count above 106751 such as `"365000d"` (`Expire` would take a
+negative window, or the one such a count wraps to, as selecting every
 finished row):
 
 ```
 ErrInvalidFlags: spawn: parameter "label" entry "nokv" must be key=value
-ErrInvalidFlags: expire: parameter "older_than" value "soon" must be a non-negative Go duration like "12h" or trailing-d days like "7d"
-ErrInvalidFlags: expire: parameter "older_than" value "-2h" must be a non-negative Go duration like "12h" or trailing-d days like "7d"
+ErrInvalidFlags: expire: parameter "older_than" value "soon" must be a non-negative Go duration like "12h" or trailing-d days like "7d" up to "106751d"
+ErrInvalidFlags: expire: parameter "older_than" value "-2h" must be a non-negative Go duration like "12h" or trailing-d days like "7d" up to "106751d"
+ErrInvalidFlags: expire: parameter "older_than" value "365000d" must be a non-negative Go duration like "12h" or trailing-d days like "7d" up to "106751d"
 ```
 
 Any other decode failure is agent-director's own fault and stays
@@ -4516,10 +4521,14 @@ does not decode, or decodes another way, fails the test.
 `TestAdviceFollow_I3_InvalidLabelWantKeyValue` and
 `TestAdviceFollow_I6_OlderThanDurationForm`
 (`internal/mcp/advice_follow_mcp_test.go`) pin the `label` and
-`older_than` refusals and follow them. `TestExpireMCPOlderThanSign`
-(`internal/mcp/expire_test.go`) pins that a negative `older_than` keeps a
-row that finished a minute ago, with no tmux call, while `"0d"` and
-`"0s"` still delete it.
+`older_than` refusals and follow them; the `older_than` one refuses, among
+others, `"-2h"`, `"106752d"` and `"365000d"` with nothing deleted and no
+tmux call, and its `"106751d"` follow keeps a row that `"12h"` and `"7d"`
+delete. `TestExpireMCPOlderThanSign` (`internal/mcp/expire_test.go`) pins
+that a negative `older_than` keeps a row that finished a minute ago, with
+no tmux call, while `"0d"` and `"0s"` still delete it. The refusal of a
+day count past an `int`'s range, such as `"9223372036854775808d"`, is
+pinned only by `TestParseOlderThan` (`pkg/api/older_than_test.go`).
 
 **Declared, listed and decoded shapes agree.** `goTypeToJSONSchema`
 (`internal/mcp/schema.go`) turns each param's manifest `Type` into its
@@ -4706,7 +4715,7 @@ or catalog Go source requires regenerating the corresponding JSON file.
   not one of the verb's manifest params or are not a JSON object (`checkParamNames`), or
   carry a param value of the wrong JSON type (`decodeParams`), and for a `label` entry
   that is not key=value (`spawn`, `make_template`) or an `older_than` that is in
-  neither duration form or is negative (`expire`); see
+  neither duration form, is negative or is a day count above 106751 (`expire`); see
   [Parameter names and unknown arguments](#parameter-names-and-unknown-arguments).
   Third, the shared verb layer returns it for `spawn` only, from the explicit-id check in
   `runSpawn` (see [Explicit-id check](#explicit-id-check)). It is in the Catalog. It is
@@ -6540,18 +6549,34 @@ the agent has exited, and neither `ended` nor `missing` makes a row safe to
 delete by itself (SR-18.2).
 
 **Selection (SR-12.1).** The window is `older_than` (`--older-than` on the
-CLI) when given, else
-`defaults.expire_retention_days` (31 days by default) times 24 h; the cutoff
-is the injected clock's `now` minus the window. A zero or negative window
-selects every finished row with an `ended_at`: the cutoff is then the fixed
-`farFutureCutoff` (9999-12-31 23:59:59 UTC) and the clock is not read.
-The CLI and MCP parse `older_than` with `ParseOlderThan`
-(`pkg/api/older_than.go`): a Go duration, or decimal digits followed by
-`d` for days. It rejects a value in neither form and a negative Go
-duration, and each surface refuses such a value with `ErrInvalidFlags`
-stating `OlderThanForm` before `Expire` runs, so a sign slip such as
-`-2h` deletes nothing. A caller that means every finished row passes `0d`
-or `0s`.
+CLI) when given, else `defaults.expire_retention_days` days of 24 h; the
+cutoff is the injected clock's `now` minus the window. A zero or negative
+window selects every finished row with an `ended_at`: the cutoff is then
+the fixed `farFutureCutoff` (9999-12-31 23:59:59 UTC) and the clock is not
+read.
+
+- **The retention setting** is a whole number of days from 1 to 106751
+  (`config.MaxExpireRetentionDays`, the largest whole number of days a
+  `time.Duration` holds). A missing key, or 0, gives the default, 31 days
+  (`config.DefaultExpireRetentionDays`); `Client.Expire` passes
+  `config.Defaults.EffectiveExpireRetentionDays()`, so a default run never
+  has a zero or negative window. `config.Load` refuses a negative value
+  and one above 106751 exactly as it refuses a `[tmux]` value (see
+  [`[tmux]` timing settings](#tmux-timing-settings)), so store-backed verbs
+  fail with `ErrConfigMalformed`, and no verb, server or hook runs on it,
+  until the file is fixed. `Expire` turns the day count into the window with
+  `retentionWindow`, which never wraps: a count above 106751 gives the
+  largest duration and one at or below zero gives zero (every finished
+  row), cases only an in-process caller of `Expire` reaches.
+- **`older_than`.** The CLI and MCP parse it with `ParseOlderThan`
+  (`pkg/api/older_than.go`): a Go duration, or decimal digits followed by
+  `d` for days. It rejects a value in neither form, a negative Go duration
+  and a day count above 106751 (checked digit by digit, so no count wraps,
+  however long), and each surface refuses such a value with
+  `ErrInvalidFlags` stating `OlderThanForm` before `Expire` runs, so a
+  sign slip such as `-2h` or a count such as `365000d` deletes nothing. A
+  caller that means every finished row passes `0d` or `0s`.
+
 `ListExpireCandidates(cutoff)` is the one read: rows in `ended` or
 `missing` whose `ended_at` is set and older than the cutoff (compared as
 stored text in the `storeTimestamp` layout), in instance-id order, each an
@@ -6642,15 +6667,16 @@ transcripts, and reads no process environment.
 - `Expire(s ExpireStore, t ExpireTmux, pc ProcChecker, retentionDays int,
   olderThan *time.Duration, sweepBudget time.Duration, now func()
   time.Time, lg ExpireLogger) (ExpireResult, error)` is exported. It never
-  reads `time.Now`.
+  reads `time.Now`. It turns `retentionDays` into the window with
+  `retentionWindow` (see Selection above).
 - `ExpireStore`: `ListExpireCandidates`, `DeleteFinishedIfSameLife` and
   `StoreID`; `*store.Store` satisfies it. `ExpireCandidate` is an alias of
   `store.ExpireCandidate`.
 - `ExpireTmux`: `TmuxLookup` only; `TmuxClient`, `*tmux.Client` and
   `tmuxfix.Recorder` satisfy it.
 - `Client.Expire(olderThan)` passes the Client's store, tmux client,
-  start-time reader, retention setting, `EffectiveSweepBudget`, clock and
-  logger.
+  start-time reader, retention setting (`EffectiveExpireRetentionDays`),
+  `EffectiveSweepBudget`, clock and logger.
 - `ParseOlderThan(s string) (time.Duration, bool)` and `OlderThanForm`
   (`older_than.go`) are exported: the `older_than` parser and the words
   for the form it accepts (see Selection above).
@@ -6662,6 +6688,14 @@ without the examined snapshot. A kept reason is mapped only in
 `expireKeptReason` (and the steps before it), never per caller. Every
 surface parses `older_than` with `ParseOlderThan` and states
 `OlderThanForm` in its refusal, never with a duration parser of its own.
+The default window is read only through `EffectiveExpireRetentionDays` and
+turned into a duration only by `retentionWindow`; the day limit of both
+inputs is `config.MaxExpireRetentionDays`. `OlderThanForm` spells that
+limit as the literal `"106751d"`: `TestParseOlderThan` pins the parser's
+limit at 106751, and the exact-wording refusal tests
+(`TestAdviceFollow_H6_OlderThanDurationForm` on the CLI,
+`TestAdviceFollow_I6_OlderThanDurationForm` with `olderThanRefusal` over
+MCP) pin the text.
 
 ### `delete`
 
@@ -6931,9 +6965,11 @@ adds it here.
   0.11.0-rc.1, which counts as 0.11.0 but knows the opt-in only as
   `reuse-finished`.
 - `ErrConfigMalformed` from a store-backed verb means agent-director cannot
-  use its config file: it does not parse, or a `[tmux]` timing setting is
+  use its config file: it does not parse, a `[tmux]` timing setting is
   negative or below its safe minimum (see
-  [`[tmux]` timing settings](#tmux-timing-settings)). Every store-backed
+  [`[tmux]` timing settings](#tmux-timing-settings)), or
+  `[defaults] expire_retention_days` is negative or above 106751 (see
+  [`expire`](#expire)). Every store-backed
   call fails until an operator fixes the file. A caller takes no action,
   alerts once and never reads it as "dead".
 
@@ -7528,6 +7564,18 @@ meaning and links to the section that describes it in detail.
   positive value below a safe minimum or a non-integer in `[tmux]` makes
   store-backed verbs return `ErrConfigMalformed` instead of running on a
   clamped value (see [`[tmux]` timing settings](#tmux-timing-settings)).
+- **`expire_retention_days` of 0 keeps 31 days.** A default `expire` run
+  (no `older_than`) under `[defaults] expire_retention_days = 0` keeps
+  finished rows for the default 31 days; before, it deleted every finished
+  row on each run. A negative value, which did the same, and one above
+  106751, which wrapped to another window that could select every
+  finished row, are now refused like a refused `[tmux]` value:
+  store-backed verbs return `ErrConfigMalformed` until the file is fixed
+  (see [`expire`](#expire)).
+- **An `older_than` day count above 106751** (`--older-than` on the CLI)
+  is now `ErrInvalidFlags` on the CLI and over MCP, and nothing runs;
+  before, the count wrapped to another window, which could select every
+  finished row (see [`expire`](#expire)).
 - **A different tmux server.** A row whose recorded server differs gets
   `ErrTmuxNotAvailable` instead of a false "gone", and every call for a row
   goes to its recorded socket (see [The lookup rule](#the-lookup-rule)).
@@ -9859,10 +9907,13 @@ feature's shared fixture.
 ### apitest `[tmux]` config writer (reusable test fixture)
 
 `pkg/api/apitest.WriteTmuxConfig(t, path, settings...)` is the ONLY way
-`pkg/api`, CLI and MCP tests write `[tmux]` settings. Build each setting
-with `TmuxInt(k, v)`, or `TmuxFloat` / `TmuxString` / `TmuxBool` for
-malformed-value cases, keyed by a `config.TmuxKey`; iterate every key
-with `config.TmuxKeys()` (table order).
+`pkg/api`, CLI and MCP tests write `[tmux]` settings, beside
+`WriteRetentionConfig(t, path, days, settings...)`, which writes the same
+and sets `[defaults] expire_retention_days` to `days` too (accepted and
+refused values alike) and is the ONLY way those tests write that key.
+Build each setting with `TmuxInt(k, v)`, or `TmuxFloat` / `TmuxString` /
+`TmuxBool` for malformed-value cases, keyed by a `config.TmuxKey`; iterate
+every key with `config.TmuxKeys()` (table order).
 
 - Outside `internal/config` and its own tests, no test spells a `[tmux]`
   key string or writes `[tmux]` TOML by hand. Key names come from
@@ -10157,17 +10208,22 @@ holds the cases of `kill`'s finished-row opt-in;
 session name cannot be used (every verb's refusal, the trigger, the
 manifest pointer and the sweeps' result fields);
 `descriptions_config.go` holds `ErrConfigMalformed`'s case for a config
-file refused for its `[tmux]` values, `DescConfigRefused(path,
-refusals...)` with one `ConfigRefusal{Key, Value, Minimum, Derived,
-Create, Pipe}` per refused value. It builds each refused-value phrase from
-the key's name, unit, default and safe minimum (a derived minimum from the
-given create timeout and pipe-close wait), plus the closing sentence that
-a missing key or 0 gives the default; with no refusals (a value of the
-wrong type) only the path is required. **Must use:** every test that
-checks a `[tmux]` config refusal's description asserts it with
-`AssertDescription` on `DescConfigRefused`, never with its own phrases
-(`cmd/agent-director/tmux_config_cli_test.go`, and the serve test through
-its `assertConfigRefused`).
+file refused for its `[tmux]` values or its `[defaults]
+expire_retention_days`, `DescConfigRefused(path, refusals...)` with one
+`ConfigRefusal{Key, Value, Minimum, Derived, Create, Pipe, Retention}` per
+refused value. It builds each `[tmux]` refused-value phrase from the key's
+name, unit, default and safe minimum (a derived minimum from the given
+create timeout and pipe-close wait), and, with `Retention` set, the
+`expire_retention_days` phrase from `Value` and its range 1 to
+`config.MaxExpireRetentionDays`, plus the closing sentence that a missing
+key or 0 gives the default; with no refusals (a value of the wrong type)
+only the path is required. **Must use:** every test outside
+`internal/config`'s own tests (which pin the exact text) that checks a
+config refusal's description asserts it with `AssertDescription` on
+`DescConfigRefused`, never with its own phrases
+(`cmd/agent-director/tmux_config_cli_test.go`,
+`pkg/api/expire_retention_test.go`, and the serve test through its
+`assertConfigRefused`).
 It holds, as code, the required phrases of each SR-1.4 error
 description case and the forms no agent-facing text may contain. The
 package doc comment (`doc.go`, "# Description helper") says the same.
@@ -10965,7 +11021,10 @@ each file's doc comments carry the detail.
   defaults (`e.cfg`), `kill`'s sleep (`e.sleep`, the clock's `Advance`) and a
   per-test `TMUX_TMPDIR` (so no `t.Parallel`). `e.kill(id)` calls the
   exported `api.Kill`; `e.client(t, settings...)` gives an `api.Client` on
-  the same store with a config written by `apitest.WriteTmuxConfig`.
+  the same store with a config written by `apitest.WriteTmuxConfig`, and
+  `e.clientFor(t, cfgPath)` the same on a config file already written,
+  returning `api.New`'s error (a refused config) instead of failing the
+  test.
   `e.seedRow(t, killRowSpec{...})` seeds a live row with a full launch
   identity, its own labelled session and its agent process (options for a
   lost reply, no session, teammate split panes, the agent's process state,
@@ -11401,11 +11460,16 @@ comments carry the detail.
   options (a no-label name holder, another store's session,
   `WithRowSessionName` for `name_changed`).
 - **Runs.** `olderThan(d)` is the override pointer (0 selects every
-  finished row). `e.expire(over)` / `e.expireWith(s, over)` call the
-  exported `api.Expire` with the Recorder, the checker, the default
-  retention, `e.cfg`'s effective budget, the fixture clock and a fresh
-  `recordingLogger` (returned for its lines); `e.expireClient(t, over,
-  settings...)` calls `Client.Expire` and returns the client's log.
+  finished row). `e.expireWithDays(s, days, over)` calls the exported
+  `api.Expire` with the Recorder, the checker, a retention of `days`,
+  `e.cfg`'s effective budget, the fixture clock and a fresh
+  `recordingLogger` (returned for its lines); `e.expire(over)` (on `e.st`)
+  and `e.expireWith(s, over)` run it at `config.DefaultExpireRetentionDays`.
+  `e.expireClient(t, over, settings...)` calls `Client.Expire` on an
+  `e.client` and returns the client's log; `e.expireClientDays(t, days)`
+  calls `Client.Expire(nil)` on an `e.clientFor` whose config
+  `apitest.WriteRetentionConfig` wrote with `days`, and returns the
+  client's log.
 - **Readers and assertions.** `expireKeptSince(t, mark)` and
   `expireDisagreesSince(t, mark, id)` read the run's `ad.expire.kept` and
   `ad.provenance.disagree` records after `trailMark`; pair the second with
@@ -11427,6 +11491,14 @@ different server, the no-socket rule), `expire_rows_test.go` (malformed
 rows, names holding `$` or `\`, a non-ASCII name under a hostile locale) and `expire_trail_test.go` (both events,
 every run, fail-open through the re-exec child). Beside them:
 
+- **Retention** (`expire_retention_test.go`): no retention day count wraps
+  the window (exported `Expire` through `e.expireWithDays`, at 106751, at
+  106752 and up to `math.MaxInt`), and `Client.Expire` under each accepted
+  `expire_retention_days` (0, 1, 106751) through `e.expireClientDays`, or,
+  through `e.clientFor`, its load refusal (negative, above 106751), which
+  touches no row. Its rows are `finishedSpec` rows seeded with
+  `e.seedRow`. A missing key is `TestClientExpireDefaultRetention`'s case
+  (`expire_test.go`).
 - **Call-site table** (`lookup_calltable_expire_test.go`): `expire`'s
   adapter in `callTableVerbs()`, run under two agent states (process gone
   and not recorded). `callTableCell.kept` is the expected kept reason (`""`
@@ -11448,7 +11520,8 @@ every run, fail-open through the re-exec child). Beside them:
 
 **Must use:** a new `expire` test in `pkg/api` seeds through
 `seedFinished` / `finishedSpec`, runs through `e.expire` / `e.expireWith` /
-`e.expireClient`, injects store faults through `expireStore`, and checks
+`e.expireWithDays` / `e.expireClient` / `e.expireClientDays`, injects
+store faults through `expireStore`, and checks
 through `assertExpired` and `assertLookupsOn`. Never seed with
 `apitest.SeedExpireFixture` there: it backdates by wall time and records no
 socket.

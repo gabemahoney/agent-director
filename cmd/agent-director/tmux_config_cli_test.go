@@ -26,18 +26,22 @@ const surfaceDeadline = 10 * time.Second
 const mcpInitialize = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05",` +
 	`"capabilities":{},"clientInfo":{"name":"tmux-config-test","version":"0"}}}` + "\n"
 
-// tmuxRefusal is one refused [tmux] config: the settings written, the values
-// its err_description must state as refused (nil: malformed type, only
-// err_name and path are asserted) and the settings that fix the file.
-type tmuxRefusal struct {
+// configRefusal is one refused config: the [tmux] settings and [defaults]
+// expire_retention_days (days, written when non-zero; b.sgw) written, the
+// values its err_description must state as refused (nil: malformed type, only
+// err_name and path are asserted) and the [tmux] settings that fix the file
+// (the retention key dropped).
+type configRefusal struct {
 	name    string
+	days    int64
 	bad     []apitest.TmuxSetting
 	refused []apitest.ConfigRefusal
 	fix     []apitest.TmuxSetting
 }
 
-// tmuxRefusals is the one table of refused values driving every surface check.
-func tmuxRefusals() []tmuxRefusal {
+// configRefusals is the one table of refused [tmux] and [defaults] values
+// driving every surface check.
+func configRefusals() []configRefusal {
 	window, bound, grace := config.TmuxStoppingWindowSeconds, config.TmuxStartingSessionSeconds, config.TmuxPendingGraceSeconds
 	create, kill := config.TmuxCreateTimeoutMs, config.TmuxKillExitWaitMs
 
@@ -48,7 +52,7 @@ func tmuxRefusals() []tmuxRefusal {
 	defaultBreakingCreate := int64(config.DefaultPendingGraceSeconds-config.PendingGraceMarginSeconds+1) * 1000
 	defaultGraceMin := config.PendingGraceMinimumSeconds(defaultBreakingCreate, 0)
 
-	return []tmuxRefusal{
+	return []configRefusal{
 		{
 			name:    "stopping_window_below_minimum",
 			bad:     []apitest.TmuxSetting{apitest.TmuxInt(window, 10)},
@@ -83,6 +87,11 @@ func tmuxRefusals() []tmuxRefusal {
 			fix: []apitest.TmuxSetting{apitest.TmuxInt(create, 0)},
 		},
 		{
+			name:    "retention_days_negative",
+			days:    -1,
+			refused: []apitest.ConfigRefusal{{Retention: true, Value: -1}},
+		},
+		{
 			name: "float_starting_session_bound",
 			bad:  []apitest.TmuxSetting{apitest.TmuxFloat(bound, float64(config.MinStartingSessionSeconds)+0.5)},
 		},
@@ -104,7 +113,7 @@ type refusedHome struct {
 	home, cfgPath, instanceID string
 }
 
-func newRefusedHome(t *testing.T, rc tmuxRefusal) refusedHome {
+func newRefusedHome(t *testing.T, rc configRefusal) refusedHome {
 	t.Helper()
 	home := t.TempDir()
 	id, err := apitest.SeedSpawn(stateDB(home), "", store.StatePending, "", hook.RelayModeOn, "", true, withTestProcessPane(t))
@@ -112,19 +121,23 @@ func newRefusedHome(t *testing.T, rc tmuxRefusal) refusedHome {
 		t.Fatalf("SeedSpawn: %v", err)
 	}
 	h := refusedHome{home: home, cfgPath: filepath.Join(directorDir(home), "config.toml"), instanceID: id}
-	apitest.WriteTmuxConfig(t, h.cfgPath, rc.bad...)
+	if rc.days != 0 {
+		apitest.WriteRetentionConfig(t, h.cfgPath, rc.days, rc.bad...)
+	} else {
+		apitest.WriteTmuxConfig(t, h.cfgPath, rc.bad...)
+	}
 	return h
 }
 
 // repair rewrites the config to the row's valid state.
-func (h refusedHome) repair(t *testing.T, rc tmuxRefusal) {
+func (h refusedHome) repair(t *testing.T, rc configRefusal) {
 	t.Helper()
 	apitest.WriteTmuxConfig(t, h.cfgPath, rc.fix...)
 }
 
 // assertConfigRefused checks a non-zero exit, empty stdout and a single
 // ErrConfigMalformed envelope naming the config path and the row's refused values.
-func assertConfigRefused(t *testing.T, rc tmuxRefusal, h refusedHome, stdout, stderr string, code int) {
+func assertConfigRefused(t *testing.T, rc configRefusal, h refusedHome, stdout, stderr string, code int) {
 	t.Helper()
 	if code == 0 {
 		t.Fatalf("exit=0 want non-zero; stdout=%q stderr=%q", stdout, stderr)
@@ -210,28 +223,29 @@ func assertRowUntouched(t *testing.T, h refusedHome) {
 	}
 }
 
-// TestTmuxConfigRefusalStopsEverySurface drives each refused [tmux] value
-// through every surface (SR-4.1; AC-CFG-03/04, loading half of AC-RES-05).
-func TestTmuxConfigRefusalStopsEverySurface(t *testing.T) {
+// TestConfigRefusalStopsEverySurface drives each refused config, [tmux] values
+// and [defaults] expire_retention_days (b.sgw), through every surface (SR-4.1;
+// AC-CFG-03/04, loading half of AC-RES-05).
+func TestConfigRefusalStopsEverySurface(t *testing.T) {
 	surfaces := []struct {
 		name string
-		run  func(t *testing.T, rc tmuxRefusal, h refusedHome)
+		run  func(t *testing.T, rc configRefusal, h refusedHome)
 	}{
-		{"list", func(t *testing.T, rc tmuxRefusal, h refusedHome) {
+		{"list", func(t *testing.T, rc configRefusal, h refusedHome) {
 			stdout, stderr, code := runCLIWithHome(t, h.home, "list")
 			if code != 1 {
 				t.Errorf("exit=%d want 1", code)
 			}
 			assertConfigRefused(t, rc, h, stdout, stderr, code)
 		}},
-		{"serve_stdio", func(t *testing.T, rc tmuxRefusal, h refusedHome) {
+		{"serve_stdio", func(t *testing.T, rc configRefusal, h refusedHome) {
 			stdout, stderr, code, timedOut := runBounded(t, h.home, nil, mcpInitialize, true, surfaceDeadline, "serve", "--stdio")
 			if timedOut {
 				t.Fatalf("serve --stdio still running after %v with stdin open; stdout=%q", surfaceDeadline, stdout)
 			}
 			assertConfigRefused(t, rc, h, stdout, stderr, code)
 		}},
-		{"hook_session_start", func(t *testing.T, rc tmuxRefusal, h refusedHome) {
+		{"hook_session_start", func(t *testing.T, rc configRefusal, h refusedHome) {
 			payload := `{"hook_event_name":"SessionStart","transcript_path":"/x/tmux-config-session.jsonl"}`
 			// Bounded: a refusal that let SessionStart reach the handler could
 			// sit in its identity wait up to the pending grace (SR-13.4).
@@ -246,7 +260,7 @@ func TestTmuxConfigRefusalStopsEverySurface(t *testing.T) {
 			h.repair(t, rc)
 			assertRowUntouched(t, h)
 		}},
-		{"hook_relayed_permission_denied", func(t *testing.T, rc tmuxRefusal, h refusedHome) {
+		{"hook_relayed_permission_denied", func(t *testing.T, rc configRefusal, h refusedHome) {
 			bound := min(surfaceDeadline, time.Duration(config.DefaultRelayTimeoutSeconds)*time.Second/10)
 			env := map[string]string{probe.EnvKey: h.instanceID, hook.EnvRelayMode: hook.RelayModeOn}
 			payload := `{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"ls"}}`
@@ -263,7 +277,7 @@ func TestTmuxConfigRefusalStopsEverySurface(t *testing.T) {
 			h.repair(t, rc)
 			assertRowUntouched(t, h)
 		}},
-		{"db_free_verbs_run", func(t *testing.T, _ tmuxRefusal, h refusedHome) {
+		{"db_free_verbs_run", func(t *testing.T, _ configRefusal, h refusedHome) {
 			for _, shape := range dbFreeShapes {
 				stdout, stderr, code := runCLIWithHome(t, h.home, shape.argv...)
 				var payload map[string]any
@@ -273,7 +287,7 @@ func TestTmuxConfigRefusalStopsEverySurface(t *testing.T) {
 				}
 			}
 		}},
-		{"fixed_file_recovers", func(t *testing.T, rc tmuxRefusal, h refusedHome) {
+		{"fixed_file_recovers", func(t *testing.T, rc configRefusal, h refusedHome) {
 			stdout, stderr, code := runCLIWithHome(t, h.home, "list")
 			assertConfigRefused(t, rc, h, stdout, stderr, code)
 			h.repair(t, rc)
@@ -291,7 +305,7 @@ func TestTmuxConfigRefusalStopsEverySurface(t *testing.T) {
 		}},
 	}
 
-	for _, rc := range tmuxRefusals() {
+	for _, rc := range configRefusals() {
 		t.Run(rc.name, func(t *testing.T) {
 			t.Parallel()
 			for _, s := range surfaces {

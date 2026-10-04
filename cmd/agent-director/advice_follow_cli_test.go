@@ -303,13 +303,19 @@ func TestAdviceFollow_H5_ServeUsageRegister(t *testing.T) {
 
 // TestAdviceFollow_H6_OlderThanDurationForm: H6 "--older-than: invalid duration:
 // %s (expected a non-negative Go duration like "12h" or trailing-d days like
-// "7d")", ErrInvalidFlags with no tmux call and nothing deleted (b.hxn).
+// "7d" up to "106751d")", ErrInvalidFlags with no tmux call and nothing deleted
+// (b.hxn, b.sgw). The row ended in January, so only "106751d" keeps it.
 func TestAdviceFollow_H6_OlderThanDurationForm(t *testing.T) {
-	const form = `a non-negative Go duration like "12h" or trailing-d days like "7d"`
-	for _, follow := range []string{"12h", "7d"} {
-		t.Run(follow, func(t *testing.T) {
+	const form = `a non-negative Go duration like "12h" or trailing-d days like "7d" up to "106751d"`
+	follows := []struct{ value, wantIDs string }{
+		{"12h", `["` + expireGoneID + `"]`},
+		{"7d", `["` + expireGoneID + `"]`},
+		{"106751d", `[]`},
+	}
+	for _, follow := range follows {
+		t.Run(follow.value, func(t *testing.T) {
 			home, _ := seedExpireRows(t, []string{expireGoneID})
-			for _, bad := range []string{"-2h", "-7d", "soon"} {
+			for _, bad := range []string{"-2h", "-7d", "soon", "106752d", "365000d"} {
 				stdout, stderr, code := advCLIRun(t, home, "expire", "--older-than", bad)
 				want := "--older-than: invalid duration: " + bad + " (expected " + form + ")"
 				if desc := assertOnlyEnvelope(t, stdout, stderr, code, "ErrInvalidFlags").ErrDescription; desc != want {
@@ -321,16 +327,16 @@ func TestAdviceFollow_H6_OlderThanDurationForm(t *testing.T) {
 			}
 			assertInvocationKinds(t, home) // no tmux call
 
-			stdout, stderr, code := advCLIRun(t, home, "expire", "--older-than", follow)
+			stdout, stderr, code := advCLIRun(t, home, "expire", "--older-than", follow.value)
 			if code != 0 {
-				t.Fatalf("expire --older-than %s exit = %d; want 0\nstderr=%s", follow, code, stderr)
+				t.Fatalf("expire --older-than %s exit = %d; want 0\nstderr=%s", follow.value, code, stderr)
 			}
 			var res map[string]json.RawMessage
 			if err := json.Unmarshal([]byte(stdout), &res); err != nil {
 				t.Fatalf("parse stdout %q: %v", stdout, err)
 			}
-			if got, want := string(res["ids"]), `["`+expireGoneID+`"]`; got != want {
-				t.Errorf("expire --older-than %s ids = %s; want %s", follow, got, want)
+			if got := string(res["ids"]); got != follow.wantIDs {
+				t.Errorf("expire --older-than %s ids = %s; want %s", follow.value, got, follow.wantIDs)
 			}
 		})
 	}
