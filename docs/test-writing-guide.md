@@ -233,8 +233,9 @@ and the small seeds beside them.
 `TestAdviceFollow_A2_ScanUnreadableRetryLater`, with a one-line comment giving
 the ID and the quoted advice (`test_<ID>_<Short>` in `advice_follow.sh`; the TS
 test titles start with the ID). The ID is an area prefix and a number. The
-prefixes: A spawn and reuse, B resume, C kill, D find-missing, E pane verbs,
-F list, get, delete, expire and decide, G config, store and migration,
+prefixes: A spawn and reuse, B resume, C kill (and `agent-director-admin
+kill-finished`), D find-missing, E pane verbs, F list, get, expire and decide
+(and `agent-director-admin delete`), G config, store and migration,
 H CLI-only, I MCP-only, J `install.sh`, K TS client, HO human-only pointers.
 Tests that follow the same advice share its ID. IDs are numbered within the
 repo: new advice takes the number after the highest one in use for its prefix

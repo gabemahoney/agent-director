@@ -44,8 +44,8 @@
 (*                   session's presence counts as alive).                  *)
 (* Kept: the strict kill P1 (Leftover -> CONFLICT), the held-name end     *)
 (* (plain spawn "duplicate session" ends the row; resume/reuse restore),   *)
-(* the squat rule as the ordinary Gone rule, SR-6.7 for kill              *)
-(* --include-finished, launch pending, history by life.                    *)
+(* the squat rule as the ordinary Gone rule, SR-6.7 for                   *)
+(* agent-director-admin kill-finished, launch pending, history by life.    *)
 (* ActPidCheck: TRUE = a pane listing and the act on that pane id are one *)
 (* step (the design's "milliseconds" window); FALSE = separate steps, so a *)
 (* server restart between them can hand the pane id to another process    *)
@@ -1074,9 +1074,9 @@ H_Crash ==
   /\ Note("resume_crashed")
   /\ UNCHANGED <<row, TW, hist, nextSid, nextLife, HU, hver, hconv, kpc, kid, ktg, hid, NoGk>>
 
-\* kill --include-finished (operator only): Ours on a finished row past the
-\* stopping window and the starting bound, reported in to this row (SR-6.7:
-\* the row has a pid and the session was made before the end).
+\* agent-director-admin kill-finished (operator only): Ours on a finished
+\* row past the stopping window and the starting bound, reported in to this
+\* row (SR-6.7: the row has a pid and the session was made before the end).
 HK_Lookup ==
   /\ EnableHumanKill /\ kpc = "idle"
   /\ \E i \in Ids, k \in LChoicesK :

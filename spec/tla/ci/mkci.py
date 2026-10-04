@@ -244,7 +244,7 @@ FAST_PASS = {
     "ci_S3o",          # orchestrator safety, every accident, and shared names [11 min in all]
     "ci_S1b_lab",      # bot + human kill safety [4 min]
     "ci_S1h_lab",      # bot + human resume safety [7 min]
-    "ci_G3b_lab",      # kill --include-finished with a leftover [9 min]
+    "ci_G3b_lab",      # agent-director-admin kill-finished with a leftover [9 min]
     "ci_S_store",      # another store's agent [1 min]
     "ci_smoke_win", "ci_smoke_lab", "ci_smoke_srv",   # unsplit cross-check [1 min]
     "ci_H_Sns",        # hook gate: RowOnlyByAgent, KillAllGone [3 min]

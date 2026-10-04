@@ -8422,14 +8422,17 @@ depends on it.
 
 `spec/tla/` holds bee b.zuj's TLA+ model of the Phase 1 LABEL design, its
 model-check suite and the runner. b.zuj owns the model and its results. The
-repo copy is vendored byte for byte under SHA-256 pins, with one exception:
-`Phase4.tla` carries bee b.66h's launch-scoped-actions change. Its knobs
-default to off. With them off, the model's steps are identical to b.zuj CI
-run 4, but distinct-state counts under `VIEW CIView` can vary between runs.
+repo copy is vendored byte for byte under SHA-256 pins, with two exceptions,
+`Phase4.tla` and `ci/mkci.py`. `Phase4.tla` carries bee b.66h's
+launch-scoped-actions change. Its knobs default to off. With them off, the
+model's steps are identical to b.zuj CI run 4, but distinct-state counts
+under `VIEW CIView` can vary between runs. Bee b.y88 then changed only
+comments in both files, which now name `agent-director-admin kill-finished`.
+Neither the model's steps nor `mkci.py`'s output changed.
 [`spec/tla/PROVENANCE.txt`](../spec/tla/PROVENANCE.txt) records the
-source, the pin list, the delivering run, the b.66h change, the layout and
-the TLC build: `tla2tools.jar` rev `4260e47`, committed because that nightly
-build has no immutable upstream URL.
+source, the pin list, the delivering run, the b.66h and b.y88 changes, the
+layout and the TLC build: `tla2tools.jar` rev `4260e47`, committed because
+that nightly build has no immutable upstream URL.
 
 [`spec/tla/launch/`](../spec/tla/launch/README.md) holds the b.66h runs. It
 is written here and not pinned. Its runs are not in `ci/suite.tsv`, so a
