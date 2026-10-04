@@ -12,7 +12,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 )
+
+// worldPID is the world's agent process, the pid of its labelled pane.
+const worldPID = 4242
 
 // world answers a rig's agent-director and tmux calls for one fake agent
 // per spawn: the row, its labelled session and pane, and the process that
@@ -24,17 +29,17 @@ type world struct {
 	preTrust   string
 	spawnCode  int
 	endedAt    *time.Time
-	listedFor  int // session-listing polls that still list the session
+	listedFor  int           // session-listing polls that still list the session
+	exitAfter  time.Duration // sleep after kill-pane before the process is gone
 	spawns     int
-	killed     bool
 	sessionsOK int
 }
 
-// newWorld wires a world into r.
+// newWorld wires a world into r, its agent process alive in r's process fake.
 func newWorld(r *rig) *world {
 	w := &world{r: r, socket: privateSocket(r.h.iso.TmuxTmpdir), state: stateWaiting, preTrust: "ok"}
 	r.ex.reply = w.reply
-	r.h.procs = fakeProcs(func(int) (string, bool, bool) { return "start-1", !w.killed, true })
+	r.pc.Set(worldPID, procfix.Alive(agentStart))
 	return w
 }
 
@@ -56,9 +61,9 @@ func (w *world) reply(argv []string) (string, string, int) {
 	case strings.Contains(joined, "list-sessions -F #{session_id}\t#{@ad_owner}"):
 		return "$9\tad1 other $9 id-other store-x\n$1\tad1 tok1 $1 " + w.id() + " store-abc123\n", "", 0
 	case strings.Contains(joined, "list-panes"):
-		return "%0\t111\tother %0\n%1\t4242\ttok1 %1\n", "", 0
+		return fmt.Sprintf("%%0\t111\tother %%0\n%%1\t%d\ttok1 %%1\n", worldPID), "", 0
 	case strings.Contains(joined, "kill-pane"):
-		w.killed = true
+		w.r.setAfterSleep(w.exitAfter, worldPID, procfix.Gone())
 		return "", "", 0
 	case strings.Contains(joined, "list-sessions -F #{session_id}"):
 		if w.sessionsOK < w.listedFor {
@@ -122,7 +127,7 @@ func TestIdentifyFindsTheLabelledPane(t *testing.T) {
 	if err := r.h.identify("rn6.idle", &a); err != nil {
 		t.Fatal(err)
 	}
-	if a.TmuxSessionID != "$1" || a.PaneID != "%1" || a.PID != 4242 || a.StartTime != "start-1" || a.StoreID != "store-abc123" {
+	if a.TmuxSessionID != "$1" || a.PaneID != "%1" || a.PID != worldPID || a.StartTime != agentStart || a.StoreID != "store-abc123" {
 		t.Errorf("agent %+v", a)
 	}
 	if !strings.Contains(r.ids.String(), "store_id store-abc123\n") {
@@ -133,12 +138,8 @@ func TestIdentifyFindsTheLabelledPane(t *testing.T) {
 func TestMeasureKill(t *testing.T) {
 	r := newRig(t, modeDry)
 	w := newWorld(r)
-	polls := 0
-	r.h.procs = fakeProcs(func(int) (string, bool, bool) {
-		polls++
-		return "start-1", polls <= 2 || !w.killed, true
-	})
-	a := agentRef{InstanceID: "id-1", Socket: w.socket, PaneID: "%1", PID: 4242, StartTime: "start-1"}
+	w.exitAfter = 200 * time.Millisecond
+	a := agentRef{InstanceID: "id-1", Socket: w.socket, PaneID: "%1", PID: worldPID, StartTime: agentStart}
 	var s sample
 	measureKill(r.h, "rn6.idle", a, &s)
 	if s.Outcome != outcomeCompleted || *s.Millis != 200 || s.Polls != 3 {

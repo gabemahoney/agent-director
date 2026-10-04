@@ -10,7 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/procstarttimefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard"
+	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 )
 
 // TestMain refuses to run outside the sandbox: the script tests read the
@@ -23,11 +26,26 @@ func TestMain(m *testing.M) {
 // clockStart is the virtual clock's first instant.
 var clockStart = time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 
-// virtualClock advances only when Sleep is called.
-type virtualClock struct{ now time.Time }
+// The fake agent's start time and another process's, for a reused pid.
+const (
+	agentStart = procstarttimefix.LinuxProcStarttime
+	otherStart = procstarttimefix.DarwinProcStarttime
+)
 
-func (c *virtualClock) Now() time.Time        { return c.now }
-func (c *virtualClock) Sleep(d time.Duration) { c.now = c.now.Add(d) }
+// sleepClock is the harness's clock over the shared tmuxfix.Clock: Sleep
+// calls sleep, which is the clock's Advance unless a test wraps it.
+type sleepClock struct {
+	*tmuxfix.Clock
+	sleep func(time.Duration)
+}
+
+func (c *sleepClock) Sleep(d time.Duration) { c.sleep(d) }
+
+// newSleepClock returns a sleepClock at clockStart.
+func newSleepClock() *sleepClock {
+	c := tmuxfix.NewClock(clockStart)
+	return &sleepClock{Clock: c, sleep: c.Advance}
+}
 
 // fakeEnv is an environment over vars, with passwdHome as the passwd entry.
 func fakeEnv(vars map[string]string, passwdHome string) environment {
@@ -77,19 +95,32 @@ func (f *fakeExec) count(words ...string) int {
 	return n
 }
 
-// fakeProcs answers start-time reads.
-type fakeProcs func(pid int) (start string, alive, known bool)
-
-func (f fakeProcs) StartTime(pid int) (string, bool, bool) { return f(pid) }
-
-// rig is a harness on a temp tree with a fake exec, a virtual clock and a
-// recorded run log and identifiers file.
+// rig is a harness on a temp tree with a fake exec, a virtual clock, an
+// empty process fake (every pid gone) and a recorded run log and
+// identifiers file.
 type rig struct {
 	h   *harness
 	ex  *fakeExec
-	clk *virtualClock
+	clk *sleepClock
+	pc  *procfix.Checker
 	log *bytes.Buffer
 	ids *bytes.Buffer
+}
+
+// setAfterSleep sets pid to p in the process fake once d of sleep has
+// passed in total from now, or at once when d is zero.
+func (r *rig) setAfterSleep(d time.Duration, pid int, p procfix.Process) {
+	if d <= 0 {
+		r.pc.Set(pid, p)
+		return
+	}
+	prev, slept := r.clk.sleep, time.Duration(0)
+	r.clk.sleep = func(x time.Duration) {
+		prev(x)
+		if slept += x; slept >= d {
+			r.pc.Set(pid, p)
+		}
+	}
 }
 
 // newRig builds a rig in mode m; the private socket is <tmux>/tmux-1000/default.
@@ -104,7 +135,7 @@ func newRig(t *testing.T, m mode) *rig {
 		}
 	}
 	env := fakeEnv(map[string]string{"PATH": os.Getenv("PATH"), "HOME": home}, home)
-	r := &rig{ex: &fakeExec{}, clk: &virtualClock{now: clockStart}, log: &bytes.Buffer{}, ids: &bytes.Buffer{}}
+	r := &rig{ex: &fakeExec{}, clk: newSleepClock(), pc: procfix.New(), log: &bytes.Buffer{}, ids: &bytes.Buffer{}}
 	scr := newScrubber(env)
 	cfg := config{mode: m, samples: 2, outDir: filepath.Join(dir, "out"), midTurnPrompt: defaultMidTurnPrompt,
 		raisedHookTimeoutSeconds: 3, raisedEnvTimeoutMS: 3000, slowHookMS: 2000,
@@ -112,8 +143,7 @@ func newRig(t *testing.T, m mode) *rig {
 	iso := isolation{RunID: "mx-test-run", Mode: m, Home: home, TmuxTmpdir: tmuxDir,
 		ExpectedSocket: privateSocket(tmuxDir), WorkDir: filepath.Join(dir, "work"), ClaudeCode: "2.1.285"}
 	r.h = &harness{cfg: cfg, env: env, iso: iso, clock: r.clk, ids: newIDWriter(r.ids), scr: scr,
-		res: newResults(iso, clockStart), out: &bytes.Buffer{},
-		procs: fakeProcs(func(int) (string, bool, bool) { return "start-1", true, true })}
+		res: newResults(iso, clockStart), out: &bytes.Buffer{}, procs: r.pc}
 	r.h.inv = &invoker{log: newRunLog(r.log, scr), exec: r.ex.exec, clock: r.clk, scr: scr,
 		agentDirector: "agent-director", tmux: "tmux"}
 	return r

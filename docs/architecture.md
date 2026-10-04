@@ -8524,13 +8524,26 @@ never opens a live database.
   stub". They follow the stand-in pattern above: the stub is the pane
   process and fires each hook as its direct child. Docker cases keep using
   `test/driver/stand-in-claude` and `early-hook-claude`.
-- **Test helpers (must use within the package):**
-  `tools/measure-exit/helpers_test.go` holds the package's doubles:
-  - `fakeEnv`, the `environment` seam;
-  - `virtualClock`, which drives `pollUntilGone` without sleeping;
-  - `fakeExec`, which records agent-director and tmux argv;
-  - `fakeProcs`, for start-time reads;
-  - `newRig`, a harness on a temp tree;
+- **Test helpers (must use within the package):** the package follows the
+  shared rule: timing tests use `tmuxfix.Clock`
+  ([tmux test doubles](#tmux-test-doubles-replay-catalogue-recorder-and-clock-reusable-test-fixtures))
+  and code that takes a `ProcChecker` gets a `procfix.Checker`
+  ([procfix](#procfix-the-process-checker-fake-reusable-test-fixture)).
+  `tools/measure-exit/helpers_test.go` holds the package's helpers:
+  - `sleepClock` (`newSleepClock()`, at `clockStart`), the harness clock
+    over the shared clock. It embeds a `*tmuxfix.Clock` and adds `Sleep`,
+    which calls the clock's `Advance` unless a test wraps it, so every
+    wait and poll runs on virtual time and never sleeps;
+  - `agentStart` and `otherStart`, the agent's start time and a reused
+    pid's, from `procstarttimefix`;
+  - `fakeEnv`, the `environment` seam, and `fakeExec`, which records
+    agent-director and tmux argv. No shared fixture covers these seams;
+  - `newRig`, a harness on a temp tree with a `fakeExec`, a `sleepClock`
+    and an empty `procfix.Checker` (`r.pc`, every pid gone). A test scripts
+    the agent process with `r.pc.Set`; `setAfterSleep(d, pid, p)` sets
+    `pid` to `p` once `d` of virtual sleep has passed, as the kill fixture's
+    `setAfterWaiting` does
+    ([kill fixture](#pkgapi-kill-fixture-and-shared-verb-tables-reusable-test-fixtures));
   - `credentialSentinels` with `assertAbsent`, for no-leak checks.
 
   New tests in `tools/measure-exit` must use these. Do not add another

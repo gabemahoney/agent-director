@@ -64,7 +64,7 @@ func screenRig(t *testing.T, screen func(elapsed time.Duration) (string, int)) (
 	r.h.cfg.inputReadyTimeout = 10 * time.Second
 	r.ex.reply = func(argv []string) (string, string, int) {
 		if slices.Contains(argv, "capture-pane") {
-			out, code := screen(r.clk.now.Sub(clockStart))
+			out, code := screen(r.clk.Now().Sub(clockStart))
 			return out, "capture failed", code
 		}
 		return `{"claude_instance_id":"id-1"}`, "", 0
@@ -80,8 +80,8 @@ func TestWaitInputReady(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := []string{"tmux", "-S", d.a.Socket, "capture-pane", "-p", "-J", "-t", "%1"}
-		if !reflect.DeepEqual(r.ex.calls[0], want) || r.clk.now.Sub(clockStart) != inputReadyGrace {
-			t.Errorf("first call %q, elapsed %s", r.ex.calls[0], r.clk.now.Sub(clockStart))
+		if !reflect.DeepEqual(r.ex.calls[0], want) || r.clk.Now().Sub(clockStart) != inputReadyGrace {
+			t.Errorf("first call %q, elapsed %s", r.ex.calls[0], r.clk.Now().Sub(clockStart))
 		}
 		if !reflect.DeepEqual(d.notes, []string{`input ready after 0s (prompt line and "? for shortcuts" seen); team prompt sent 2s later`}) {
 			t.Errorf("notes %q", d.notes)
@@ -97,8 +97,8 @@ func TestWaitInputReady(t *testing.T) {
 		if err := d.waitInputReady(); err != nil {
 			t.Fatal(err)
 		}
-		if r.clk.now.Sub(clockStart) != 3*time.Second+inputReadyGrace || !strings.HasPrefix(d.notes[0], "input ready after 3s (") {
-			t.Errorf("elapsed %s, notes %q", r.clk.now.Sub(clockStart), d.notes)
+		if r.clk.Now().Sub(clockStart) != 3*time.Second+inputReadyGrace || !strings.HasPrefix(d.notes[0], "input ready after 3s (") {
+			t.Errorf("elapsed %s, notes %q", r.clk.Now().Sub(clockStart), d.notes)
 		}
 	})
 	// The check reads text with only the exact values replaced: a prompt
@@ -124,8 +124,8 @@ func TestWaitInputReady(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r, d := screenRig(t, func(time.Duration) (string, int) { return tc.screen, tc.code })
 			err := d.waitInputReady()
-			if !errors.Is(err, errInputNeverReady) || r.clk.now.Sub(clockStart) != 10*time.Second {
-				t.Fatalf("err %v after %s", err, r.clk.now.Sub(clockStart))
+			if !errors.Is(err, errInputNeverReady) || r.clk.Now().Sub(clockStart) != 10*time.Second {
+				t.Fatalf("err %v after %s", err, r.clk.Now().Sub(clockStart))
 			}
 			for _, w := range tc.want {
 				if !strings.Contains(err.Error(), w) {

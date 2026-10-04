@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 )
 
 // scripted answers polls in order: "present", "gone" or "error"; the last
@@ -50,7 +52,7 @@ func TestPollUntilGone(t *testing.T) {
 		{"an early error, present at the ceiling", []string{"error", "present"}, outcomeDidNotExit, time.Second, 11, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			clk := &virtualClock{now: clockStart}
+			clk := newSleepClock()
 			p, _ := scripted(tc.answers...)
 			r := pollUntilGone(clk, clockStart, time.Second, p)
 			if r.Outcome != tc.outcome || r.Elapsed != tc.elapsed || r.Polls != tc.polls || r.ProbeErrors != tc.errs {
@@ -65,18 +67,18 @@ func TestPollUntilGone(t *testing.T) {
 
 func TestProcessGone(t *testing.T) {
 	for _, tc := range []struct {
-		name               string
-		start              string
-		alive, known, gone bool
-		err                bool
+		name      string
+		proc      procfix.Process
+		gone, err bool
 	}{
-		{"alive with its start time", "s1", true, true, false, false},
-		{"exited or a zombie", "", false, true, true, false},
-		{"pid reused by another process", "s2", true, true, true, false},
-		{"unreadable", "", false, false, false, true},
+		{"alive with its start time", procfix.Alive(agentStart), false, false},
+		{"exited or a zombie", procfix.Gone(), true, false},
+		{"pid reused by another process", procfix.Alive(otherStart), true, false},
+		{"unreadable", procfix.Unreadable(), false, true},
 	} {
-		procs := fakeProcs(func(int) (string, bool, bool) { return tc.start, tc.alive, tc.known })
-		gone, err := processGone(procs, 42, "s1")()
+		pc := procfix.New()
+		pc.Set(42, tc.proc)
+		gone, err := processGone(pc, 42, agentStart)()
 		if gone != tc.gone || (err != nil) != tc.err {
 			t.Errorf("%s: gone=%t err=%v", tc.name, gone, err)
 		}
@@ -150,7 +152,7 @@ func TestWaitStateNotReadyNamesTrailReasons(t *testing.T) {
 	if !errors.Is(err, errNotReady) || !strings.Contains(err.Error(), "ignored hooks: no_exec_form") || strings.Contains(err.Error(), "pid_mismatch") {
 		t.Fatalf("got %v", err)
 	}
-	if got := r.clk.now.Sub(clockStart); got != r.h.cfg.readyTimeout {
+	if got := r.clk.Now().Sub(clockStart); got != r.h.cfg.readyTimeout {
 		t.Errorf("waited %s of virtual time, want the ready timeout %s", got, r.h.cfg.readyTimeout)
 	}
 	r.ex.reply = func([]string) (string, string, int) { return `{"state":"ended"}`, "", 0 }
