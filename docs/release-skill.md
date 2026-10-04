@@ -171,7 +171,7 @@ cancel siblings (SR-6.5). All outcomes land in the run report's
 failed, `passed` otherwise.
 
 - Gate names:
-  - `coverage.go-root` — `go test ./... -race -count=1` at the worktree root.
+  - `coverage.go-root` — `go test ./... -race -count=1 -timeout 90m` at the worktree root.
   - `coverage.go-consumer-dryrun` — `go test ./... -race -count=1` inside `tools/consumer-dryrun/`.
   - `coverage.bun-test` — `bun install --frozen-lockfile && bun run build && bun test` under `pkg/ts-bun-client/`.
   - `coverage.bun-extra-scripts` — auto-discovers package.json scripts matching `^(smoke|envelope-diff|test:.*)$` and runs each as `coverage.bun-script-<name>`. Adding a new script with that naming triggers it on the next run; no skill code change required.

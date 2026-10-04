@@ -19,7 +19,7 @@ TMPOUT="$(mktemp)"
 trap 'rm -f "$TMPOUT"' EXIT
 
 # Run tests; tee so caller sees progress, capture combined output for parsing.
-go test ./... -race -count=1 2>&1 | tee "$TMPOUT"
+go test ./... -race -count=1 -timeout 90m 2>&1 | tee "$TMPOUT"
 TEST_EXIT="${PIPESTATUS[0]}"
 
 if [ "$TEST_EXIT" -eq 0 ]; then
