@@ -19,7 +19,9 @@ export function expandTilde(p: string): string {
   if (p === "") return "";
   if (p !== "~" && !p.startsWith("~/")) return p;
 
-  const home = process.env["HOME"] ?? os.homedir();
+  // `||`, not `??`: treat an empty HOME as unset and fall back to
+  // os.homedir() (the passwd home under Bun) (b.vqj).
+  const home = process.env["HOME"] || os.homedir();
 
   if (p === "~") return home;
   // p starts with "~/" — strip the leading "~" and prepend home.

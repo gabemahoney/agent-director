@@ -45,7 +45,7 @@ for (const bad of [0, -1]) {
     delete opts.callTimeoutMs;
     const client = await Client.create(opts as unknown as CreateOpts);
     try {
-      await expect(client.version()).resolves.toBeDefined();
+      await expect(client.version({})).resolves.toBeDefined();
     } finally {
       client.close();
     }

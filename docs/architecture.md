@@ -1913,9 +1913,13 @@ each verb call is a one-shot subprocess.
 
 **`_assertOpen()`** is called at the top of every verb method. It throws `ErrClientClosed` (a TS-only error subclass, not in the shared Go catalog) if the client has already been closed.
 
-**Tilde expansion** is handled entirely on the TS side, in
-`src/internal/tilde.ts`, before any path value is forwarded to the CLI
-subprocess. The subprocess never receives a leading `~`.
+**Tilde expansion** of `storePath`, `home` and `tmuxCommand` is done on the
+TS side, in `src/internal/tilde.ts`, before the value is forwarded to the CLI
+subprocess. A bare `~` or a leading `~/` is expanded against `HOME`, or
+against `os.homedir()` when `HOME` is unset or empty (b.vqj). Every other
+value, relative paths included, is forwarded unchanged and the CLI resolves
+it. Verb parameters such as spawn's `cwd` are not expanded here; they are
+forwarded as given.
 
 **`loadNpmPackageVersion()`** — runtime npm package version resolver (b.6o1). `version()` calls this on its first invocation and caches the result in `#npmPkgVersion` — one disk read per `Client` instance. Not called at construction time. Internal to `subprocessClient.ts`; not re-exported. Code that needs the npm package version must go through `client.version()`.
 

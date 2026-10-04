@@ -19,9 +19,11 @@ export interface Logger {
  * does NOT provide a fallback; it forwards user input verbatim to keep the
  * CLI as the single source of truth for default resolution. See bug b.32k.
  *
- * Tilde expansion is handled TS-side by `src/internal/tilde.ts` before paths
- * are forwarded to the CLI subprocess, so the subprocess never receives a
- * leading `~`.
+ * Tilde expansion is handled TS-side by `src/internal/tilde.ts`: in
+ * `storePath`, `home` and `tmuxCommand`, a bare `~` or a leading `~/` is
+ * expanded against `HOME` (or `os.homedir()` when `HOME` is unset or empty)
+ * before the value is forwarded to the CLI subprocess. Other values, relative
+ * paths included, are forwarded unchanged and the CLI resolves them.
  *
  * An empty `storePath`, `home` or `tmuxCommand` is forwarded as given (e.g.
  * `--store-path ""`); the CLI rejects it on every verb call, which then

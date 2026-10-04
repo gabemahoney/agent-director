@@ -1,65 +1,81 @@
-import { test, expect, describe, beforeAll, afterAll } from "bun:test";
+import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import * as os from "node:os";
 import { expandTilde } from "../../src/internal/tilde.js";
 
-describe("expandTilde", () => {
-  test("bare ~ expands to home directory", () => {
-    const home = process.env["HOME"] ?? os.homedir();
-    expect(expandTilde("~")).toBe(home);
-  });
+const FAKE_HOME = "/fake/home";
 
-  test("~/foo expands to ${HOME}/foo", () => {
-    const home = process.env["HOME"] ?? os.homedir();
-    expect(expandTilde("~/foo")).toBe(`${home}/foo`);
-  });
-
-  test("~/a/b/c expands to ${HOME}/a/b/c", () => {
-    const home = process.env["HOME"] ?? os.homedir();
-    expect(expandTilde("~/a/b/c")).toBe(`${home}/a/b/c`);
-  });
-
-  test("absolute path is returned unchanged", () => {
-    expect(expandTilde("/abs/path")).toBe("/abs/path");
-  });
-
-  test("empty string returns empty string", () => {
-    expect(expandTilde("")).toBe("");
-  });
-
-  test("relative path is returned unchanged", () => {
-    expect(expandTilde("relative/path")).toBe("relative/path");
-  });
-
-  test("tilde not at start is returned unchanged", () => {
-    expect(expandTilde("foo~bar")).toBe("foo~bar");
-  });
-
-  describe("HOME fallback to os.homedir()", () => {
-    let savedHome: string | undefined;
-
-    beforeAll(() => {
-      savedHome = process.env["HOME"];
-      // Clear HOME to force the os.homedir() fallback path.
+// Each HOME state expandTilde must handle. A set, non-empty HOME is used
+// as-is; an unset or empty HOME falls back to os.homedir() (b.vqj: an empty
+// HOME used to expand "~/x" to "/x" and "~" to ""). `expectedHome` runs after
+// `apply`, so os.homedir() sees the same HOME as the code under test.
+const homeStates = [
+  {
+    id: "HOME set",
+    apply: () => {
+      process.env["HOME"] = FAKE_HOME;
+    },
+    expectedHome: () => FAKE_HOME,
+  },
+  {
+    id: "HOME unset",
+    apply: () => {
       delete process.env["HOME"];
-    });
+    },
+    expectedHome: () => os.homedir(),
+  },
+  {
+    id: 'HOME=""',
+    apply: () => {
+      process.env["HOME"] = "";
+    },
+    expectedHome: () => os.homedir(),
+  },
+];
 
-    afterAll(() => {
-      // Always restore HOME, even if the test throws.
-      if (savedHome !== undefined) {
-        process.env["HOME"] = savedHome;
-      } else {
-        delete process.env["HOME"];
-      }
-    });
+// [input, suffix appended to the home directory]
+const tildeInputs = [
+  ["~", ""],
+  ["~/x", "/x"],
+  ["~/a/b/c", "/a/b/c"],
+] as const;
 
-    test("bare ~ falls back to os.homedir() when HOME is unset", () => {
-      const expected = os.homedir();
-      expect(expandTilde("~")).toBe(expected);
-    });
+describe("expandTilde: leading ~ resolves to HOME, else os.homedir()", () => {
+  let savedHome: string | undefined;
 
-    test("~/foo falls back to os.homedir()/foo when HOME is unset", () => {
-      const expected = `${os.homedir()}/foo`;
-      expect(expandTilde("~/foo")).toBe(expected);
-    });
+  beforeEach(() => {
+    savedHome = process.env["HOME"];
+  });
+
+  afterEach(() => {
+    // Restore HOME exactly, including when it was originally unset. afterEach
+    // runs even when the test fails.
+    if (savedHome === undefined) {
+      delete process.env["HOME"];
+    } else {
+      process.env["HOME"] = savedHome;
+    }
+  });
+
+  for (const state of homeStates) {
+    for (const [input, suffix] of tildeInputs) {
+      test(`${state.id}: ${JSON.stringify(input)} → home${suffix}`, () => {
+        state.apply();
+        const home = state.expectedHome();
+        // An empty fallback would make the expectation below vacuous.
+        expect(home).not.toBe("");
+        expect(expandTilde(input)).toBe(home + suffix);
+      });
+    }
+  }
+});
+
+describe("expandTilde: values without a leading ~ or ~/ are unchanged", () => {
+  test.each([
+    ["absolute path", "/abs/path"],
+    ["empty string", ""],
+    ["relative path", "relative/path"],
+    ["tilde not at start", "foo~bar"],
+  ])("%s", (_label, input) => {
+    expect(expandTilde(input)).toBe(input);
   });
 });
