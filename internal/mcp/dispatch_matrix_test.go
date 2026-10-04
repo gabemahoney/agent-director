@@ -86,8 +86,6 @@ func matrixCases() map[string]matrixCase {
 		// per-subtest t.Setenv handles that.
 		"make-template": {args: `{"name":"dispatch-matrix-test"}`},
 
-		"delete": {args: `{"claude_instance_id":["` + matrixID + `"]}`, setup: seedEnded("off")},
-
 		// No entry for trail-emit (nor hook/serve): ExposedVerb excludes
 		// those verbs from the MCP surface (server.go:318), so the matrix
 		// walk skips them (see the !mcp.ExposedVerb continue below) and
@@ -201,7 +199,6 @@ func TestToolsCallDispatchMatrix(t *testing.T) {
 					strings.Contains(msg, "decode list params") ||
 					strings.Contains(msg, "decode make-template params") ||
 					strings.Contains(msg, "decode expire params") ||
-					strings.Contains(msg, "decode delete params") ||
 					strings.Contains(msg, "json: cannot unmarshal") {
 					t.Fatalf("dispatcher decode failure on verb %q: %v", v.Name, err)
 				}

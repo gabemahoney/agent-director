@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/adminapi"
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -137,7 +138,8 @@ func TestAllVerbsReturnErrClientClosedAfterClose(t *testing.T) {
 		{"Resume", func() error { _, err := c.Resume(api.ResumeParams{}); return err }},
 		{"FindMissing", func() error { _, err := c.FindMissing(ctx); return err }},
 		{"Expire", func() error { _, err := c.Expire(nil); return err }},
-		{"Delete", func() error { _, err := c.Delete(nil); return err }},
+		{"Delete", func() error { _, err := adminapi.Delete(c, nil); return err }},
+		{"KillFinished", func() error { _, err := adminapi.KillFinished(c, ""); return err }},
 		{"MakeTemplate", func() error { _, err := c.MakeTemplate(api.MakeTemplateParams{}); return err }},
 	}
 
@@ -147,6 +149,24 @@ func TestAllVerbsReturnErrClientClosedAfterClose(t *testing.T) {
 			err := tc.call()
 			if !errors.Is(err, api.ErrClientClosed) {
 				t.Errorf("%s on closed client: got %v; want ErrClientClosed", tc.name, err)
+			}
+		})
+	}
+}
+
+// TestAdminHooksRefuseNonClient: pkg/api sets internal/adminapi's hooks, and
+// each refuses any value but a non-nil *api.Client without running (b.vqr).
+func TestAdminHooksRefuseNonClient(t *testing.T) {
+	if adminapi.KillFinished == nil || adminapi.Delete == nil {
+		t.Fatal("importing pkg/api left an internal/adminapi hook unset")
+	}
+	for name, c := range map[string]any{"nil": nil, "nil *Client": (*api.Client)(nil), "string": "client"} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := adminapi.KillFinished(c, "id"); err == nil {
+				t.Error("KillFinished: nil error; want a refusal")
+			}
+			if res, err := adminapi.Delete(c, []string{"id"}); err == nil || res.Results != nil {
+				t.Errorf("Delete = %v, %v; want a refusal and no results", res, err)
 			}
 		})
 	}
@@ -348,7 +368,7 @@ func TestExpireNilOlderThanHappy(t *testing.T) {
 // error and a non-nil empty map. This is the degenerate-input defence.
 func TestDeleteEmptySliceHappy(t *testing.T) {
 	c, _ := newTestClient(t)
-	res, err := c.Delete([]string{})
+	res, err := adminapi.Delete(c, []string{})
 	if err != nil {
 		t.Fatalf("Delete([]): %v", err)
 	}

@@ -78,13 +78,19 @@ RUN apt-get update \
 
 # Pre-built binary + driver assets are produced by the host Makefile.
 COPY bin/agent-director /usr/local/bin/agent-director
+# The operator tool agent-director-admin (b.vqr), from the same `make build`
+# so its version stamp matches, kept off PATH as install.sh keeps it. At
+# /opt/bin, install.sh's in-repo fallback (<script dir>/../../bin) finds it
+# for the bundled /opt/skills copy, as /work/source/bin holds it for the
+# source mount's; test plans run it by this full path.
+COPY bin/agent-director-admin /opt/bin/agent-director-admin
 COPY test/driver /opt/driver
 # The install skill ships alongside the binary so the epic-12-install
 # testplan can exercise it without a separate mount. Path mirrors the
 # repo layout (`skills/install-agent-director/`) so test scripts can
 # reference it portably.
 COPY skills /opt/skills
-RUN chmod 0755 /usr/local/bin/agent-director \
+RUN chmod 0755 /usr/local/bin/agent-director /opt/bin/agent-director-admin \
  && chmod -R 0755 /opt/driver \
  && chown -R tester:tester /opt/driver \
  && chmod -R 0755 /opt/skills \

@@ -71,9 +71,6 @@ func main() {
 	// Decide — will return ErrInvalidDecision (decision="" is invalid).
 	_, _ = c.Decide(api.DecideParams{ClaudeInstanceID: "absent-id"})
 
-	// Delete — empty slice is a no-op.
-	_, _ = c.Delete([]string{})
-
 	// Expire — zero retentionDays overrides via nil olderThan means use default.
 	_, _ = c.Expire(nil)
 

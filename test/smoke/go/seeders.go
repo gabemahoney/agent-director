@@ -62,10 +62,6 @@ const (
 	// make-template).
 	seedNone seedKind = iota
 
-	// seedLive seeds a spawn in StateWorking — a live, interactive row
-	// with no tmux session in the Recorder. Used by delete.
-	seedLive
-
 	// seedCheckPermission seeds a spawn in StateCheckPermission with
 	// relay_mode=on and an open permission_requests row. Used by decide.
 	seedCheckPermission

@@ -13,7 +13,6 @@
  *     Allow-list verbs have no triggerable verb-level errors:
  *       - version      — no ErrorNames in manifest
  *       - expire       — no ErrorNames in manifest
- *       - delete       — errors in DeleteResult.results map, not verb-level
  *       - find-missing — lists only ErrProbeUnsupported, which it no longer
  *                        returns (kept by SR-1.7)
  *
@@ -44,7 +43,6 @@ const envelopeDiffFile = path.join(testDir, "envelope-diff.test.ts");
 const NO_ERROR_CASE_ALLOWLIST: ReadonlySet<string> = new Set([
   "version", // no ErrorNames in manifest
   "expire", // no ErrorNames in manifest
-  "delete", // errors in DeleteResult.results map, not verb-level
   "find-missing", // lists only ErrProbeUnsupported; no longer returns it (kept by SR-1.7)
 ]);
 

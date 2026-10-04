@@ -5,7 +5,10 @@
 # /opt/install-mode). Each scenario invokes the bundled install.sh
 # under a per-scenario sandbox $HOME, then asserts the canonical
 # ~/.agent-director/bin/agent-director ends up at literal mode 0755
-# via `stat -c %a`.
+# via `stat -c %a`, and the operator tool
+# ~/.agent-director/admin/agent-director-admin at 0755 in a 0700
+# directory (b.vqr). install.sh finds the admin binary through its
+# in-repo fallback, the image's /opt/bin/agent-director-admin.
 #
 # Background: b.r3j reported the installed binary landing at 0644 on
 # a fresh Horde DGXC VM despite install.sh's `chmod 0755 "$TMP"`
@@ -21,9 +24,11 @@
 set -euo pipefail
 
 SOURCE_BINARY=/usr/local/bin/agent-director
+ADMIN_SOURCE=/opt/bin/agent-director-admin
 INSTALL_SH=/opt/skills/install-agent-director/install.sh
 
 [[ -x "$SOURCE_BINARY" ]] || { echo "FAIL: source not executable: $SOURCE_BINARY" >&2; exit 1; }
+[[ -x "$ADMIN_SOURCE" ]]  || { echo "FAIL: admin source not executable: $ADMIN_SOURCE" >&2; exit 1; }
 [[ -r "$INSTALL_SH" ]]    || { echo "FAIL: install.sh missing: $INSTALL_SH" >&2; exit 1; }
 
 # Sanity: confirm the harness-staged source is 0755 going in.
@@ -59,12 +64,25 @@ install_canonical_mode() {
     stat -c '%a' "$home/.agent-director/bin/agent-director"
 }
 
+# admin_modes <home>: "<dir mode>/<binary mode>" of the installed
+# agent-director-admin, or "not-installed" when it is missing or is not
+# the image's admin binary.
+admin_modes() {
+    local a="$1/.agent-director/admin/agent-director-admin"
+    if ! cmp -s "$a" "$ADMIN_SOURCE"; then
+        echo "not-installed"
+        return
+    fi
+    echo "$(stat -c '%a' "${a%/*}")/$(stat -c '%a' "$a")"
+}
+
 echo "[b.r3j install-mode] start"
 
 # -- scenario 1: default umask 022, fresh install ------------------------
 H=$(mktemp -d)
 m=$(install_canonical_mode "$H" 022)
 report "fresh-umask-022" "$m" "755"
+report "fresh-umask-022-admin" "$(admin_modes "$H")" "700/755"
 
 # -- scenario 2: restrictive umask 077, fresh install --------------------
 # install.sh uses cp + chmod 0755; the chmod is an absolute mode set, so
@@ -72,6 +90,7 @@ report "fresh-umask-022" "$m" "755"
 H=$(mktemp -d)
 m=$(install_canonical_mode "$H" 077)
 report "fresh-umask-077" "$m" "755"
+report "fresh-umask-077-admin" "$(admin_modes "$H")" "700/755"
 
 # -- scenario 3: paranoid umask 0777, fresh install ----------------------
 # Extreme case: cp's default newly-created file would land at 000 absent
@@ -79,6 +98,7 @@ report "fresh-umask-077" "$m" "755"
 H=$(mktemp -d)
 m=$(install_canonical_mode "$H" 0777)
 report "fresh-umask-0777" "$m" "755"
+report "fresh-umask-0777-admin" "$(admin_modes "$H")" "700/755"
 
 # -- scenario 4: --keep-prior upgrade flow -------------------------------
 # First a fresh install (with no --keep-prior, so no .prior yet), then a
@@ -90,6 +110,7 @@ H=$(mktemp -d)
 HOME="$H" bash "$INSTALL_SH" --binary "$SOURCE_BINARY" --no-hooks --no-symlink >/dev/null
 m=$(install_canonical_mode "$H" 022 --keep-prior)
 report "keep-prior-canonical" "$m" "755"
+report "keep-prior-admin" "$(admin_modes "$H")" "700/755"
 if [[ -f "$H/.agent-director/bin/agent-director.prior" ]]; then
     mp=$(stat -c '%a' "$H/.agent-director/bin/agent-director.prior")
     report "keep-prior-snapshot" "$mp" "755"
@@ -121,9 +142,9 @@ else
     printf '  FAIL  %-40s exit=%s  want=3\n' "0644-source-refused" "$rc"
 fi
 # Canonical must NOT exist after a refused install (no partial write).
-if [[ -e "$H/.agent-director/bin/agent-director" ]]; then
+if [[ -e "$H/.agent-director/bin/agent-director" || -e "$H/.agent-director/admin/agent-director-admin" ]]; then
     fail=$((fail+1))
-    echo "  FAIL  0644-source-no-partial-write    canonical exists after exit 3"
+    echo "  FAIL  0644-source-no-partial-write    canonical or admin binary exists after exit 3"
 else
     pass=$((pass+1))
     echo "  PASS  0644-source-no-partial-write    no canonical written"

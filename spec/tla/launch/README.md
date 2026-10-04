@@ -86,7 +86,8 @@ does: it acts on the label and tmux ids from its one row read. Without
 - `pause`'s wait.
 - The startup-prompt approver (`send-keys --allow-pending`): it reads and
   acts in two steps of its own and is not scoped here.
-- Operator kill with `--include-finished` (`HK_*`) is not scoped.
+- The operator's finished-row kill, `agent-director-admin kill-finished`
+  (`HK_*`), is not scoped.
 
 ## The runs
 

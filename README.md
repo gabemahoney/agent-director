@@ -33,6 +33,9 @@ SQLite file; everything else is tmux.
   judgement on the evidence available to it, not proof that the agent has
   exited. `expire` removes old finished rows whose agent is gone and keeps
   those it cannot prove gone.
+- An **operator tool** (`agent-director-admin`) — a separate binary for
+  the few actions only a human may take, installed off PATH (see
+  [Operator actions](#operator-actions)). Agents and scripts never run it.
 
 ## 5-minute install
 
@@ -71,8 +74,9 @@ SQLite file; everything else is tmux.
 
 ### Install the CLI
 
-agent-director is a single Go binary. Install it on a fresh machine
-with one copy-pasteable command:
+agent-director is a Go binary, shipped with its operator tool
+`agent-director-admin` from the same build. Install both on a fresh
+machine with one copy-pasteable command:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/skills/install-agent-director/install.sh | bash -s -- --from-release
@@ -80,8 +84,10 @@ curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/ski
 
 That fetches `install.sh` from `main`, then runs it with
 `--from-release` so it auto-detects your OS/arch, downloads the
-matching binary from the [latest GitHub release](https://github.com/gabemahoney/agent-director/releases/latest),
-sets up `~/.agent-director/`, drops a PATH symlink, brings
+matching binaries from the [latest GitHub release](https://github.com/gabemahoney/agent-director/releases/latest),
+sets up `~/.agent-director/`, drops a PATH symlink for
+`agent-director`, installs `agent-director-admin` at
+`~/.agent-director/admin/agent-director-admin` (never on PATH), brings
 `state.db` to the current schema (creating it on a fresh host,
 or upgrading it in place; a schema problem fails the install
 loudly rather than half-installing), and installs the
@@ -90,21 +96,27 @@ SessionStart/SessionEnd help hooks.
 Optionally pass `--register-mcp` to also register the stdio MCP
 server, or `--no-hooks` to leave `~/.claude/settings.json` untouched.
 
-If you'd rather download the binary yourself first (and then point
-the installer at it), grab the asset for your platform from the
+If you'd rather download the binaries yourself first (and then point
+the installer at them), grab both assets for your platform from the
 [latest release](https://github.com/gabemahoney/agent-director/releases/latest):
 
 ```sh
 # Linux amd64:
 curl -L -o agent-director https://github.com/gabemahoney/agent-director/releases/latest/download/agent-director-linux-amd64
+curl -L -o agent-director-admin https://github.com/gabemahoney/agent-director/releases/latest/download/agent-director-admin-linux-amd64
 # Linux arm64:
 curl -L -o agent-director https://github.com/gabemahoney/agent-director/releases/latest/download/agent-director-linux-arm64
+curl -L -o agent-director-admin https://github.com/gabemahoney/agent-director/releases/latest/download/agent-director-admin-linux-arm64
 # macOS Apple Silicon:
 curl -L -o agent-director https://github.com/gabemahoney/agent-director/releases/latest/download/agent-director-darwin-arm64
+curl -L -o agent-director-admin https://github.com/gabemahoney/agent-director/releases/latest/download/agent-director-admin-darwin-arm64
 
-chmod +x agent-director
-bash skills/install-agent-director/install.sh --binary ./agent-director
+chmod +x agent-director agent-director-admin
+bash skills/install-agent-director/install.sh --binary ./agent-director --admin-binary ./agent-director-admin
 ```
+
+The two binaries must come from the same release: `install.sh` refuses
+a pair whose `version` stamps differ or carry no commit.
 
 Optional flags:
 
@@ -114,9 +126,13 @@ Optional flags:
   (or give the path of your binary).
 - `--symlink-dir <dir>` — override the default PATH-symlink directory.
 - `--binary <path>` — install from an explicit source binary.
-- `--from-release [tag]` — download a pre-built binary for this host's
-  OS/arch from GitHub Releases (latest, or a specific tag) and install
-  it. Pair with `--sha256 <hex>` to verify the download.
+- `--admin-binary <path>` — install `agent-director-admin` from an
+  explicit source binary, from the same build as `--binary`.
+- `--from-release [tag]` — download pre-built binaries for this host's
+  OS/arch from GitHub Releases (latest, or a specific tag, 0.11.0 or
+  later) and install them. To verify the downloads, pass both
+  `--sha256 <hex>` and `--admin-sha256 <hex>`; one without the other is
+  refused.
 
 #### From inside Claude Code
 
@@ -160,18 +176,22 @@ native or optional platform dependencies.
 
 #### From source (contributors)
 
-If you've cloned this repo and want to install the binary you just
-built:
+If you've cloned this repo and want to install the binaries you just
+built (`make build` builds both `bin/agent-director` and
+`bin/agent-director-admin`):
 
 ```sh
 make build
-bash skills/install-agent-director/install.sh --binary ./bin/agent-director
+bash skills/install-agent-director/install.sh --binary ./bin/agent-director --admin-binary ./bin/agent-director-admin
 ```
 
 `install.sh` uses `agent-director version` (its `{version, commit}`
 stamp) to compare the local binary with the source tree: it checks the
 binary's commit against `git rev-parse HEAD` and refuses option
 `--binary` if the artifact is stale — re-run `make build` to refresh it.
+It also refuses unless `agent-director-admin version` reports the same
+stamp, with a real commit: `make build` in a git checkout stamps both,
+a plain `go build` does not.
 
 To run the test suite without touching your `~/.agent-director`:
 
@@ -446,12 +466,12 @@ and `get`. `missing` is the sweep's judgement on the evidence available to
 it, not proof that the agent has exited. A run as another user, as root or
 against another tmux server can mark live rows `missing`.
 
-Finished rows (`ended` or `missing`) are never removed on their own: an
-`expire` you schedule removes them at the default retention, and the
-deprecated `delete` (not a cleanup or recovery step) removes one row when
-asked; a row's state alone never gets it deleted. `expire` first keeps
-every row whose recorded tmux session name cannot be used, on every run,
-without reading its process or asking tmux (see "A row whose recorded name
+Finished rows (`ended` or `missing`) are never removed on their own: no
+`agent-director` verb removes a row you name, and only an `expire` you
+schedule removes finished rows, at the default retention; a row's state
+alone never gets it deleted. `expire` first keeps every row whose
+recorded tmux session name cannot be used, on every run, without reading
+its process or asking tmux (see "A row whose recorded name
 cannot be used" under [Operator actions](#operator-actions)). For every
 other row it checks the agent process and, unless it runs, asks tmux on the
 row's recorded socket (else yours): it deletes the row only when the process
@@ -511,8 +531,7 @@ spawn the id again, opting in to reuse:
 agent-director spawn --cwd <dir> --claude-instance-id <id> --reuse-finished
 ```
 
-The new agent starts with no memory of the old conversation. `delete` is
-not a recovery step.
+The new agent starts with no memory of the old conversation.
 
 agent-director does not restart sessions for you. Deciding when to run
 `find-missing` then `resume` after a boot — from a startup script,
@@ -526,7 +545,8 @@ the class of every tmux error, is in
 
 - Only a GONE answer means a row's session is not there. Every other tmux
   error means "don't know", never "dead".
-- Never `delete` a row after a `kill` that did not succeed.
+- No `agent-director` verb removes a row you name; only a scheduled
+  `expire` removes finished rows (agents never run it).
 - The row state, kept honest by `find-missing`, is the liveness authority;
   there is no liveness verb.
 - `read-pane` changes nothing and is not a liveness check; a caller polling
@@ -581,7 +601,7 @@ To end a live row (`pending` included) and relaunch its id, a caller
 follows this bounded, paced sequence:
 
 1. `agent-director kill --claude-instance-id <id>`, and check the result;
-   on any error follow its class and never delete the row.
+   on any error follow its class.
 2. If the row is `pending`, wait until its launch start
    (`launch_started_at`, shown by
    `agent-director status --claude-instance-id <id>`) plus the pending
@@ -611,6 +631,12 @@ follows this bounded, paced sequence:
 These actions are for humans only: automated callers (programs, scripts,
 agents, MCP clients) must not perform them.
 
+Two of them run on the operator tool `agent-director-admin`, which
+`install.sh` puts at `~/.agent-director/admin/agent-director-admin`, never
+on PATH; run it by that full path. Its help opens with its rule: do not run
+any of its commands without explicit approval from a human for that
+specific run, and agents and automated callers must not run it.
+
 Run every command as the agents' user. Every tmux command names the row's
 socket with `-S '<socket>'`: the `tmux_socket` that
 `agent-director get --claude-instance-id <id>` shows (a row that records
@@ -618,7 +644,7 @@ none uses the socket of your tmux environment, by default
 `/tmp/tmux-<uid>/default`). Keep the single quotes, so the shell leaves the
 `$` of a session id alone. A session's environment is never evidence of
 whose it is. Trail records are lines of `~/.agent-director/ad-trail.jsonl`.
-Never `delete` a row after a `kill` that did not succeed.
+Never remove a row after a `kill` that did not succeed.
 
 ### This store's id
 
@@ -655,10 +681,10 @@ label applies this rule.
 starting-session bound, or no session of it is found while its agent
 process still runs. If, after looking at it (steps 1 to 3 of the
 leftover item below), you want that session or agent gone, end it with the
-finished-row opt-in on `kill`:
+operator tool's `kill-finished`:
 
 ```sh
-agent-director kill --include-finished --claude-instance-id <id>
+~/.agent-director/admin/agent-director-admin kill-finished --claude-instance-id <id>
 ```
 
 It ends the agent's pane and the row's labelled session, then waits for the
@@ -677,7 +703,7 @@ records the agent's process id (the agent's SessionStart reached
 agent-director for the row's latest launch) and the session was created, in
 whole seconds, before the row finished. A session created in the same
 second, a row with no finish time, and an agent whose SessionStart could not
-record its process are refused too. A row the opt-in acts on was finished by
+record its process are refused too. A row `kill-finished` acts on was finished by
 its own agent, by `find-missing`, a restore, a plain spawn's end write or a
 hand edit, never by a leftover or a nested `claude` carrying the id:
 agent-director ignores hooks that do not come from the row's own agent, so a
@@ -688,7 +714,7 @@ Every other answer sends no kill and changes nothing:
 - `ErrSpawnNotResumable` ("the row is live"): the row is live (`pending`
   included); no lookup was made. To end a live agent, or to abort a launch
   stuck at a startup prompt, run `agent-director kill --claude-instance-id <id>`
-  without the opt-in.
+  instead.
 - `ErrInternal`: the row's recorded tmux session name cannot be used; no
   lookup and no tmux call were made. See "A row whose recorded name cannot
   be used".
@@ -721,37 +747,33 @@ surviving agent pane is ended and the process waited for; otherwise
 pane of its launch", which also covers a process that outlives the kill).
 
 `kill_sent` is true exactly when a pane or session kill was sent. The
-`ad.kill.called` trail record shows whether the opt-in was set
-(`include_finished`); a refusal records `kill_sent` false, except an error
-that follows a sent kill:
+`ad.kill.called` trail record of a `kill-finished` run carries
+`include_finished` true and `caller_process` `agent-director-admin`; a
+refusal records `kill_sent` false, except an error that follows a sent
+kill:
 
 ```sh
 jq -c 'select(.event == "ad.kill.called" and .claude_instance_id == "<id>") | {include_finished, kill_sent, lookup_outcome, outcome}' ~/.agent-director/ad-trail.jsonl | tail -n 1
 ```
 
-The opt-in exists on the CLI and in the Go (`KillParams.IncludeFinished`)
-and TypeScript (`include_finished`) client libraries, not over MCP: an MCP
-`kill` that sends it is refused with `ErrInvalidFlags` and does nothing,
-and one on a finished row without it is the no-op success. Detect it by the
-version of the binary that serves you. CLI: the `version` verb. TypeScript:
-`binaryVersion` from `Client.create()` or the `version` that
-`resolveSystemBinary()` returns, never `version()` (the npm package's
-version). Go: at compile time. Over MCP the opt-in never exists, whatever
-the MCP `version` tool (the running `serve` process's own version) reports.
-It exists from 0.11.0 on; a release candidate `0.11.0-rc.N` sorts before
-0.11.0 but counts as 0.11.0. Development builds (`0.0.0-dev` from `make`,
-which the TypeScript client accepts as its sentinel; `dev` from a plain
-`go build`, which it rejects) cannot be compared, so expect the
-older-binary answer: `ErrInvalidFlags` on the CLI and in the TypeScript
-client.
+Only `kill-finished` ends a finished row's session: the `agent-director`
+CLI, its MCP tools and the Go and TypeScript clients have no way to, and
+their `kill` on a finished row is the no-op success. `kill-finished` exists
+on `agent-director-admin` from 0.11.0, the release that first ships the
+operator tool. Check with
+`~/.agent-director/admin/agent-director-admin version`; a release
+candidate `0.11.0-rc.N` sorts before 0.11.0 but counts as 0.11.0. Every
+development build of the operator tool (`0.0.0-dev` from `make`, `dev`
+from a plain `go build`) has it.
 
 Accepted risks: on a row wrongly marked `missing` (a hand edit of the
 store, or an agent-director process from before the install) it ends a
 healthy agent whose row says finished; the conversation stays resumable,
 and you chose it. The checks above fail closed, so some sessions you may
-want gone are refused and left to you. A live row is always refused. An
-agent that learns of the opt-in, for example from this README, could run
-it; nothing enforces that only humans do.
+want gone are refused and left to you. A live row is always refused.
+`agent-director-admin` is off PATH, not locked: agents run as your user,
+so an agent that learns of it, for example from this README, could run it
+by its full path; nothing but its human-approval rule stops it.
 
 ### A leftover, or a session with no valid label, or one that never reported in on a finished row
 
@@ -765,10 +787,11 @@ leftover's pane if there is one leftover (not the agent's), and answers
 `ErrTmuxSessionConflict` if there are several. The leftover never keeps the
 row live: its hooks change nothing on the row, and `find-missing` judges
 the row by its own agent's process. On an `ended` or `missing` row,
-`kill --include-finished` answers a leftover, or the row's own session that
-never reported in to it, with `ErrTmuxSessionConflict` ("never reported
-in") and sends no kill; these steps end such a session by hand. A session
-with no valid label may be a person's own, so look before acting.
+`agent-director-admin kill-finished` answers a leftover, or the row's own
+session that never reported in to it, with `ErrTmuxSessionConflict`
+("never reported in") and sends no kill; these steps end such a session by
+hand. A session with no valid label may be a person's own, so look before
+acting.
 
 1. Find the session and note its `session_created`:
 
@@ -931,17 +954,16 @@ working as the agents' user and against their tmux server, in this order:
    recorded name is not the name tmux holds, tmux reads `.` and `:` in a
    target as window and pane separators, and the stored form can be another
    session's name.
-5. Remove the row:
+5. Remove the row with the operator tool's `delete`:
 
    ```sh
-   agent-director delete --claude-instance-id <id>
+   ~/.agent-director/admin/agent-director-admin delete --claude-instance-id <id>
    ```
 
    This also removes the row's permission requests and session history,
    and clears it as the parent of any other row; it touches no tmux session
-   and no transcript. `delete` is deprecated for agents, but stays as the
-   operator-only way to remove such a row, because `resume` and reuse refuse
-   it and `expire` keeps it.
+   and no transcript. It is the only way to remove such a row, because
+   `resume` and reuse refuse it and `expire` keeps it.
 
 ### A spawn refused as "left over from an earlier life"
 
@@ -967,7 +989,7 @@ jq -c 'select(.event == "ad.launch.name_held" and .claude_instance_id == "<id>")
 ```
 
 In the second case the leftover never reported in to the row the spawn
-ended, so `kill --include-finished` answers "never reported in" and sends
+ended, so `kill-finished` answers "never reported in" and sends
 no kill: end the leftover by hand by its session id, as the leftover item
 above describes.
 
@@ -1374,6 +1396,7 @@ skills/install-agent-director/uninstall.sh --purge   # remove everything
 
 Releases are cut via the `/release` skill — see [docs/release-skill.md](docs/release-skill.md)
 for the operator runbook. The skill discovers and runs every test surface,
-cross-compiles the three CLI binaries, packs and install-verifies the npm
+cross-compiles the six binaries (`agent-director` and `agent-director-admin`
+for each of three platforms), packs and install-verifies the npm
 tarball, generates release notes, and only after all gates pass executes the
 irreversible publish sequence. Defaults to dry-run.

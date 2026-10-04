@@ -1,6 +1,5 @@
 {
   "decide": [],
-  "delete": [],
   "expire": [
     ".ids"
   ],

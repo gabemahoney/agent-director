@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # advice_follow.sh — b.fji literal-follow tests for install.sh's own advice
-# (advice inventory J1-J8). Each test triggers one install.sh refusal, checks
+# (advice inventory J1-J12). Each test triggers one install.sh refusal, checks
 # the advice text word for word, does exactly what the text says (re-runs the
 # same command, runs the advised command, puts the missing tool on PATH) and
 # checks the promised outcome.
@@ -69,18 +69,53 @@ esac
 # ---- binaries -------------------------------------------------------------
 
 mkdir -p "$ROOT/bin" "$ROOT/tmp" "$ROOT/runs" "$ROOT/aside"
+# The fake release --from-release installs: from 0.11.0 on, so it ships
+# agent-director-admin (b.vqr).
+REL_TAG=v0.11.0-fake
 BIN="$ROOT/bin/agent-director"
 BIN_OLD="$ROOT/bin/agent-director-old"
 BIN_NEWER="$ROOT/bin/agent-director-newer"
 WRONG_ARCH="$ROOT/bin/agent-director-$WRONG_NAME"
+# The operator tool agent-director-admin (b.vqr), built from the same source
+# with the same stamps (version and commit), as one build stamps both:
+# ADMIN pairs with BIN (and BIN_NEWER, whose stamp is BIN's), ADMIN_OLD with
+# BIN_OLD; install.sh installs a pair only when the stamps match and carry a
+# commit. ADMIN_OTHER_COMMIT has BIN's version and another commit; NO_VERSION
+# is a binary for this host with no version verb; BIN_PLAIN and ADMIN_PLAIN
+# are plain `go build`s, stamped commit "unknown".
+ADMIN="$ROOT/bin/agent-director-admin"
+ADMIN_OLD="$ROOT/bin/agent-director-admin-old"
+ADMIN_OTHER_COMMIT="$ROOT/bin/agent-director-admin-other-commit"
+NO_VERSION="$ROOT/bin/no-version-verb"
+BIN_PLAIN="$ROOT/bin/agent-director-plain"
+ADMIN_PLAIN="$ROOT/bin/agent-director-admin-plain"
+WRONG_ARCH_ADMIN="$ROOT/bin/agent-director-admin-$WRONG_NAME"
 VERSION_PKG=github.com/gabemahoney/agent-director/internal/version
-(cd "$REPO_ROOT" && CGO_ENABLED=0 go build -o "$BIN" ./cmd/agent-director) || die "go build"
-(cd "$REPO_ROOT" && CGO_ENABLED=0 go build -ldflags "-X $VERSION_PKG.Version=0.0.1-advice-old" \
-    -o "$BIN_OLD" ./cmd/agent-director) || die "go build (old)"
+CUR_COMMIT=c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0
+OLD_COMMIT=01d01d01d01d01d01d01d01d01d01d01d01d01d0
+OTHER_COMMIT=0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e
+STAMP="-X $VERSION_PKG.Version=0.0.2-advice -X $VERSION_PKG.Commit=$CUR_COMMIT"
+STAMP_OLD="-X $VERSION_PKG.Version=0.0.1-advice-old -X $VERSION_PKG.Commit=$OLD_COMMIT"
+STAMP_OTHER="-X $VERSION_PKG.Version=0.0.2-advice -X $VERSION_PKG.Commit=$OTHER_COMMIT"
+# go_build <ldflags> <out> <package>: CGO_ENABLED=0 go build in the repo.
+go_build() { (cd "$REPO_ROOT" && CGO_ENABLED=0 go build -ldflags "$1" -o "$2" "$3") || die "go build $2"; }
+go_build "$STAMP" "$BIN" ./cmd/agent-director
+go_build "$STAMP_OLD" "$BIN_OLD" ./cmd/agent-director
 cmp -s "$BIN" "$BIN_OLD" && die "old and current binaries are identical"
+go_build "$STAMP" "$ADMIN" ./cmd/agent-director-admin
+go_build "$STAMP_OLD" "$ADMIN_OLD" ./cmd/agent-director-admin
+go_build "$STAMP_OTHER" "$ADMIN_OTHER_COMMIT" ./cmd/agent-director-admin
+go_build "" "$BIN_PLAIN" ./cmd/agent-director
+go_build "" "$ADMIN_PLAIN" ./cmd/agent-director-admin
+cp "$(type -P true)" "$NO_VERSION" || die "copy true(1)"
+BIN_SHA="$(sha256sum "$BIN" | cut -d' ' -f1)"
+ADMIN_SHA="$(sha256sum "$ADMIN" | cut -d' ' -f1)"
+[[ "$BIN_SHA" =~ ^[0-9a-f]{64}$ && "$ADMIN_SHA" =~ ^[0-9a-f]{64}$ ]] || die "sha256sum the release assets"
 # A wrong-arch binary as file(1) sees it: the ELF machine field says $WRONG_NAME.
 cp "$BIN" "$WRONG_ARCH"
 printf "$WRONG_MACHINE" | dd of="$WRONG_ARCH" bs=1 seek=18 conv=notrunc status=none || die "patch e_machine"
+cp "$ADMIN" "$WRONG_ARCH_ADMIN"
+printf "$WRONG_MACHINE" | dd of="$WRONG_ARCH_ADMIN" bs=1 seek=18 conv=notrunc status=none || die "patch e_machine (admin)"
 
 # SCHEMA is the schema version $BIN writes; BIN_NEWER is the same source with
 # one more (store.go swapped in through a build overlay, the tree untouched).
@@ -92,7 +127,7 @@ sed -E "s/^const schemaVersion = [0-9]+$/const schemaVersion = $((SCHEMA + 1))/"
     "$REPO_ROOT/internal/store/store.go" >"$ROOT/store-newer.go"
 grep -qx "const schemaVersion = $((SCHEMA + 1))" "$ROOT/store-newer.go" || die "no schemaVersion const in store.go"
 printf '{"Replace":{"%s":"%s"}}\n' "$REPO_ROOT/internal/store/store.go" "$ROOT/store-newer.go" >"$ROOT/overlay.json"
-(cd "$REPO_ROOT" && CGO_ENABLED=0 go build -overlay "$ROOT/overlay.json" -o "$BIN_NEWER" ./cmd/agent-director) \
+(cd "$REPO_ROOT" && CGO_ENABLED=0 go build -overlay "$ROOT/overlay.json" -ldflags "$STAMP" -o "$BIN_NEWER" ./cmd/agent-director) \
     || die "go build (newer)"
 
 # ---- install.sh copies ----------------------------------------------------
@@ -144,7 +179,9 @@ fake sleep <<'EOF'
 exit 0
 EOF
 # curl: install.sh's download wrapper (-w ... -o) answers FAKE_CURL_STATUS with
-# FAKE_CURL_BODY on 200; the latest-release API answers FAKE_CURL_API_TAG or
+# FAKE_CURL_BODY on 200, and for the agent-director-admin asset
+# FAKE_CURL_ADMIN_STATUS (FAKE_CURL_STATUS when empty) with
+# FAKE_CURL_ADMIN_BODY; the latest-release API answers FAKE_CURL_API_TAG or
 # 404s. Nothing reaches the network.
 fake curl <<'EOF'
 #!/bin/bash
@@ -159,8 +196,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 if [[ "$has_w" -eq 1 ]]; then
-    status="${FAKE_CURL_STATUS:-200}"
-    if [[ "$status" == 200 ]]; then cp "$FAKE_CURL_BODY" "$out"; printf 200; exit 0; fi
+    status="${FAKE_CURL_STATUS:-200}" body="$FAKE_CURL_BODY"
+    if [[ "${url##*/}" == agent-director-admin-* ]]; then
+        status="${FAKE_CURL_ADMIN_STATUS:-$status}" body="$FAKE_CURL_ADMIN_BODY"
+    fi
+    if [[ "$status" == 200 ]]; then cp "$body" "$out"; printf 200; exit 0; fi
     : >"$out"; printf '%s' "$status"; exit 22
 fi
 case "$url" in
@@ -193,11 +233,19 @@ GH_FAKE="$ROOT/gh-fake"
 cat >"$GH_FAKE" <<'EOF'
 #!/bin/bash
 [[ "${1:-} ${2:-}" == "release download" ]] || { echo "fake gh: unsupported: $*" >&2; exit 1; }
-out=""
-while [[ $# -gt 0 ]]; do case "$1" in -O) out="$2"; shift 2 ;; *) shift ;; esac; done
-cp "$FAKE_CURL_BODY" "$out"
+out="" pattern=""
+while [[ $# -gt 0 ]]; do case "$1" in -O) out="$2"; shift 2 ;; -p) pattern="$2"; shift 2 ;; *) shift ;; esac; done
+body="$FAKE_CURL_BODY"
+[[ "$pattern" == agent-director-admin-* ]] && body="$FAKE_CURL_ADMIN_BODY"
+cp "$body" "$out"
 EOF
 chmod 0755 "$GH_FAKE"
+# Directories a test puts before the toolbox on PATH (PATH_EXTRA): one with
+# the fake gh, one with an agent-director (the old one) and no
+# agent-director-admin, which is never on PATH (b.vqr).
+GH_DIR="$ROOT/gh-on-path" ON_PATH="$ROOT/ad-on-path"
+mkdir -p "$GH_DIR" "$ON_PATH"
+ln -s "$GH_FAKE" "$GH_DIR/gh" && ln -s "$BIN_OLD" "$ON_PATH/agent-director" || die "PATH_EXTRA dirs"
 # sqlite3 stand-in for J7: answers like sqlite3 under a lock on call number
 # FAKE_SQLITE3_FAIL_CALL, otherwise runs the real one.
 SQLITE_SHIM="$ROOT/sqlite3-shim"
@@ -216,7 +264,7 @@ chmod 0755 "$SQLITE_SHIM"
 
 pass=0 fail=0 skip=0
 T_FAILED=0 T_SKIPPED=0 RUN_N=0 RC=0 OUT="" ERR=""
-FAKE_CURL_STATUS=200 FAKE_CURL_API_TAG="" FAKE_SQLITE3_FAIL_CALL=0
+FAKE_CURL_STATUS=200 FAKE_CURL_ADMIN_STATUS="" FAKE_CURL_API_TAG="" FAKE_SQLITE3_FAIL_CALL=0 PATH_EXTRA=""
 
 bad() { echo "    FAIL: $*"; T_FAILED=1; }
 
@@ -235,16 +283,18 @@ new_home() {
     printf '%s' "$h"
 }
 
-# run_in <home> <cwd> <cmd...>: run cmd with only the install env; sets RC,
-# OUT and ERR. Refuses any HOME outside the private root.
+# run_in <home> <cwd> <cmd...>: run cmd with only the install env (PATH the
+# toolbox, after PATH_EXTRA when set); sets RC, OUT and ERR. Refuses any HOME
+# outside the private root.
 run_in() {
     local home="$1" cwd="$2"; shift 2
     [[ "$home" == "$ROOT"/home.* ]] || { echo "refusing HOME outside the test root: $home" >&2; exit 1; }
     RUN_N=$((RUN_N + 1))
     OUT="$ROOT/runs/$RUN_N.out" ERR="$ROOT/runs/$RUN_N.err"
-    (cd "$cwd" && env -i HOME="$home" PATH="$TOOLBOX" TMPDIR="$ROOT/tmp" \
-        INSTALL_SH_TEST_CURL_OVERRIDE="$TOOLBOX/curl" FAKE_CURL_BODY="$BIN" \
-        FAKE_CURL_STATUS="$FAKE_CURL_STATUS" FAKE_CURL_API_TAG="$FAKE_CURL_API_TAG" \
+    (cd "$cwd" && env -i HOME="$home" PATH="${PATH_EXTRA:+$PATH_EXTRA:}$TOOLBOX" TMPDIR="$ROOT/tmp" \
+        INSTALL_SH_TEST_CURL_OVERRIDE="$TOOLBOX/curl" FAKE_CURL_BODY="$BIN" FAKE_CURL_ADMIN_BODY="$ADMIN" \
+        FAKE_CURL_STATUS="$FAKE_CURL_STATUS" FAKE_CURL_ADMIN_STATUS="$FAKE_CURL_ADMIN_STATUS" \
+        FAKE_CURL_API_TAG="$FAKE_CURL_API_TAG" \
         FAKE_SQLITE3_FAIL_CALL="$FAKE_SQLITE3_FAIL_CALL" FAKE_SQLITE3_COUNT="$home.sqlite3-calls" \
         "$@") >"$OUT" 2>"$ERR"
     RC=$?
@@ -299,17 +349,32 @@ line_after() {
     printf '%s' "$line"
 }
 
+# expect_installed <home> <src> <admin-src>: src installed as agent-director,
+# admin-src as agent-director-admin in its own 0700 directory (b.vqr), and a
+# state.db.
 expect_installed() {
-    local home="$1" src="$2" c="$1/.agent-director/bin/agent-director"
+    local home="$1" src="$2" admin_src="$3" c="$1/.agent-director/bin/agent-director"
+    local a="$1/.agent-director/admin/agent-director-admin"
     [[ -x "$c" ]] || { bad "no installed binary at $c"; return; }
     cmp -s "$c" "$src" || bad "installed binary is not $src"
+    [[ -x "$a" ]] || { bad "no installed agent-director-admin at $a"; return; }
+    cmp -s "$a" "$admin_src" || bad "installed agent-director-admin is not $admin_src"
+    [[ "$(stat -c %a "${a%/*}")" == 700 ]] || bad "${a%/*} has mode $(stat -c %a "${a%/*}"); want 700"
+    [[ "$(stat -c %a "$a")" == 755 ]] || bad "$a has mode $(stat -c %a "$a"); want 755"
     [[ -f "$home/.agent-director/state.db" ]] || bad "no state.db after install"
+}
+
+# expect_nothing_installed <home>: neither binary was installed.
+expect_nothing_installed() {
+    [[ ! -e "$1/.agent-director/bin/agent-director" ]] || bad "agent-director installed after the refusal"
+    [[ ! -e "$1/.agent-director/admin/agent-director-admin" ]] || bad "agent-director-admin installed after the refusal"
 }
 db_version() { "$SQLITE" "$1/.agent-director/state.db" 'PRAGMA user_version;'; }
 sentinel() { printf '%s' "$1/.agent-director/migrate-authorized"; }
 
 run_test() {
-    T_FAILED=0 T_SKIPPED=0 FAKE_CURL_STATUS=200 FAKE_CURL_API_TAG="" FAKE_SQLITE3_FAIL_CALL=0
+    T_FAILED=0 T_SKIPPED=0 FAKE_CURL_STATUS=200 FAKE_CURL_ADMIN_STATUS="" FAKE_CURL_API_TAG="" FAKE_SQLITE3_FAIL_CALL=0
+    PATH_EXTRA=""
     echo "=== RUN   $1"
     "$1"
     if [[ "$T_FAILED" -ne 0 ]]; then
@@ -323,15 +388,16 @@ run_test() {
 
 # ---- J1: --from-release, no release published -------------------------------
 
-# J1: "point at a local binary: bash $0 --binary <path>"
-test_J1_NoReleasePointAtLocalBinary() {
+# J1: "point at local binaries: bash $0 --binary <path> --admin-binary <path>"
+test_J1_NoReleasePointAtLocalBinaries() {
     local h; h="$(new_home)"
     run "$h" bash "$LOOSE" --from-release --no-hooks --no-symlink
     expect_rc 3 "no release published" || return
-    expect_advice "point at a local binary: bash $LOOSE --binary <path>"
-    local cmd; cmd="$(advice_after "point at a local binary: ")" || { bad "no advised command"; return; }
-    run_advised "$h" "$ROOT" "${cmd//<path>/$BIN}"
-    expect_rc 0 "advised: $cmd" && expect_installed "$h" "$BIN"
+    expect_advice "point at local binaries: bash $LOOSE --binary <path> --admin-binary <path>"
+    local cmd; cmd="$(advice_after "point at local binaries: ")" || { bad "no advised command"; return; }
+    cmd="${cmd/--binary <path>/--binary $BIN}"
+    run_advised "$h" "$ROOT" "${cmd/--admin-binary <path>/--admin-binary $ADMIN}"
+    expect_rc 0 "advised: $cmd" && expect_installed "$h" "$BIN" "$ADMIN"
 }
 
 # J1: "build from source: make build && bash $0"
@@ -342,14 +408,14 @@ test_J1_NoReleaseBuildFromSource() {
     expect_advice "build from source: make build && bash $TREE_SH"
     local cmd; cmd="$(advice_after "build from source: ")" || { bad "no advised command"; return; }
     run_advised "$h" "$TREE" "$cmd"
-    expect_rc 0 "advised: $cmd" && expect_installed "$h" "$TREE/bin/agent-director"
+    expect_rc 0 "advised: $cmd" && expect_installed "$h" "$TREE/bin/agent-director" "$TREE/bin/agent-director-admin"
 }
 
 # ---- J2: --from-release download failed after retries ------------------------
 
 # J2: "wait a few minutes and re-run this command"
 test_J2_DownloadFailedWaitAndRerun() {
-    local h argv=(bash "$LOOSE" --from-release v0.0.0-fake --no-hooks --no-symlink)
+    local h argv=(bash "$LOOSE" --from-release "$REL_TAG" --no-hooks --no-symlink)
     h="$(new_home)"
     FAKE_CURL_STATUS=404
     run "$h" "${argv[@]}"
@@ -357,12 +423,29 @@ test_J2_DownloadFailedWaitAndRerun() {
     expect_advice "wait a few minutes and re-run this command"
     FAKE_CURL_STATUS=200 # the CDN caught up
     run "$h" "${argv[@]}"
-    expect_rc 0 "re-run after the asset appeared" && expect_installed "$h" "$BIN"
+    expect_rc 0 "re-run after the asset appeared" && expect_installed "$h" "$BIN" "$ADMIN"
+}
+
+# J2: "wait a few minutes and re-run this command" when only the
+# agent-director-admin asset of a release from 0.11.0 on is not there yet:
+# nothing is installed, and the re-run once it appears installs both (b.vqr).
+test_J2_AdminAssetMissingWaitAndRerun() {
+    local h argv=(bash "$LOOSE" --from-release "$REL_TAG" --no-hooks --no-symlink)
+    h="$(new_home)"
+    FAKE_CURL_ADMIN_STATUS=404
+    run "$h" "${argv[@]}"
+    expect_rc 3 "admin asset 404 on every attempt" || return
+    expect_advice "asset : agent-director-admin-"
+    expect_advice "wait a few minutes and re-run this command"
+    expect_nothing_installed "$h"
+    FAKE_CURL_ADMIN_STATUS="" # the CDN caught up
+    run "$h" "${argv[@]}"
+    expect_rc 0 "re-run after the admin asset appeared" && expect_installed "$h" "$BIN" "$ADMIN"
 }
 
 # J2: "install `gh` and re-run (gh's auth path propagates faster)"
 test_J2_DownloadFailedInstallGhAndRerun() {
-    local h argv=(bash "$LOOSE" --from-release v0.0.0-fake --no-hooks --no-symlink)
+    local h argv=(bash "$LOOSE" --from-release "$REL_TAG" --no-hooks --no-symlink)
     h="$(new_home)"
     FAKE_CURL_STATUS=404
     run "$h" "${argv[@]}"
@@ -371,42 +454,103 @@ test_J2_DownloadFailedInstallGhAndRerun() {
     ln -s "$GH_FAKE" "$TOOLBOX/gh"
     run "$h" "${argv[@]}" # curl still gets 404
     rm -f "$TOOLBOX/gh"
-    expect_rc 0 "re-run with gh on PATH" && expect_installed "$h" "$BIN"
+    expect_rc 0 "re-run with gh on PATH" && expect_installed "$h" "$BIN" "$ADMIN"
     expect_advice 'trying `gh release download` fallback'
 }
 
-# J2: "run: bash $0 --binary <path-to-downloaded-binary>" (404/403) and
-# "Suggested fallback: ... bash $0 --binary <path-to-downloaded-binary>" (other).
-test_J2_DownloadFailedRunWithBinary() {
+# J2: "run: bash $0 --binary <path-to-downloaded-agent-director> --admin-binary
+# <path-to-downloaded-agent-director-admin>" (404/403) and "Suggested fallback:
+# ... bash $0 --binary <...> --admin-binary <...>" (other).
+test_J2_DownloadFailedRunWithBinaries() {
     local status h cmd
+    local advised="bash $LOOSE --binary <path-to-downloaded-agent-director> --admin-binary <path-to-downloaded-agent-director-admin>"
     for status in 404 500; do
         h="$(new_home)"
         FAKE_CURL_STATUS=$status
-        run "$h" bash "$LOOSE" --from-release v0.0.0-fake --no-hooks --no-symlink
+        run "$h" bash "$LOOSE" --from-release "$REL_TAG" --no-hooks --no-symlink
         expect_rc 3 "asset HTTP $status" || return
         if [[ "$status" == 404 ]]; then
-            expect_advice "and run: bash $LOOSE --binary <path-to-downloaded-binary>"
+            expect_advice "download the binaries manually from"
+            expect_advice "and run: $advised"
             cmd="$(advice_after "and run: ")" || { bad "no advised command"; return; }
         else
-            expect_advice "Suggested fallback: download the asset manually and re-run with bash $LOOSE --binary <path-to-downloaded-binary>"
-            cmd="$(line_after "Suggested fallback: download the asset manually and re-run with")"
+            expect_advice "Suggested fallback: download the assets manually and re-run with $advised"
+            cmd="$(line_after "Suggested fallback: download the assets manually and re-run with")"
         fi
-        run_advised "$h" "$ROOT" "${cmd//<path-to-downloaded-binary>/$BIN}"
-        expect_rc 0 "HTTP $status advised: $cmd" && expect_installed "$h" "$BIN"
+        cmd="${cmd//<path-to-downloaded-agent-director-admin>/$ADMIN}"
+        run_advised "$h" "$ROOT" "${cmd//<path-to-downloaded-agent-director>/$BIN}"
+        expect_rc 0 "HTTP $status advised: $cmd" && expect_installed "$h" "$BIN" "$ADMIN"
     done
 }
 
 # ---- J3: no source binary ------------------------------------------------------
 
-# J3: "Pass --binary <path> to override."
+# J3: "Pass --binary <path> to override." when only agent-director is missing
+# (--admin-binary given; none beside the script or on PATH).
 test_J3_NoSourceBinaryPassBinary() {
+    local h argv=(bash "$LOOSE" --admin-binary "$ADMIN" --no-hooks --no-symlink)
+    h="$(new_home)"
+    run "$h" "${argv[@]}"
+    expect_rc 3 "no agent-director source binary" || return
+    expect_advice "install.sh: no source binary found."
+    expect_advice "Pass --binary <path> to override."
+    expect_nothing_installed "$h"
+    run "$h" "${argv[@]}" --binary "$BIN"
+    expect_rc 0 "re-run with --binary" && expect_installed "$h" "$BIN" "$ADMIN"
+}
+
+# j3_pass_both <home> <cmd...>: check the one refusal for both missing
+# binaries advises "Pass --binary <path> --admin-binary <path> (both from the
+# same build) to override.", re-run cmd with those flags, the paths one build's,
+# and check both are installed (b.vqr).
+j3_pass_both() {
+    local h="$1" flags extra; shift
+    expect_advice "Pass --binary <path> --admin-binary <path> (both from the same build) to override."
+    expect_nothing_installed "$h"
+    flags="$(advice_after "Pass ")" || { bad "no advised flags"; return; }
+    flags="${flags% (both from the same build) to override.}"
+    flags="${flags/--binary <path>/--binary $BIN}"
+    read -r -a extra <<<"${flags/--admin-binary <path>/--admin-binary $ADMIN}"
+    run "$h" "$@" "${extra[@]}"
+    expect_rc 0 "re-run with ${extra[*]}" && expect_installed "$h" "$BIN" "$ADMIN"
+}
+
+# J3: neither binary beside the script and none on PATH: one refusal names
+# both (b.vqr).
+test_J3_NoSourceBinariesPassBoth() {
     local h argv=(bash "$LOOSE" --no-hooks --no-symlink)
     h="$(new_home)"
     run "$h" "${argv[@]}"
-    expect_rc 3 "no source binary" || return
-    expect_advice "Pass --binary <path> to override."
-    run "$h" "${argv[@]}" --binary "$BIN"
-    expect_rc 0 "re-run with --binary" && expect_installed "$h" "$BIN"
+    expect_rc 3 "no source binaries" || return
+    expect_advice "install.sh: no source binaries found: neither agent-director nor agent-director-admin is beside the script."
+    expect_advice "Tried: command -v agent-director"
+    j3_pass_both "$h" "${argv[@]}"
+}
+
+# J3: the same refusal when agent-director is found only on PATH, which is
+# not used: agent-director-admin is never on PATH to pair with it (b.vqr).
+test_J3_PathOnlyPassBoth() {
+    local h argv=(bash "$LOOSE" --no-hooks --no-symlink)
+    h="$(new_home)"
+    PATH_EXTRA="$ON_PATH"
+    run "$h" "${argv[@]}"
+    expect_rc 3 "agent-director on PATH only" || return
+    expect_advice "install.sh: no source binaries found: neither agent-director nor agent-director-admin is beside the script."
+    expect_advice "Found on PATH, not used: $ON_PATH/agent-director (agent-director-admin is never on PATH to pair with it)"
+    j3_pass_both "$h" "${argv[@]}"
+}
+
+# J3: "Pass --admin-binary <path> to override." (b.vqr)
+test_J3_NoAdminBinaryPassAdminBinary() {
+    local h argv=(bash "$LOOSE" --binary "$BIN" --no-hooks --no-symlink)
+    h="$(new_home)"
+    run "$h" "${argv[@]}"
+    expect_rc 3 "no agent-director-admin source binary" || return
+    expect_advice "install.sh: no agent-director-admin source binary found."
+    expect_advice "Pass --admin-binary <path> to override."
+    expect_nothing_installed "$h"
+    run "$h" "${argv[@]}" --admin-binary "$ADMIN"
+    expect_rc 0 "re-run with --admin-binary" && expect_installed "$h" "$BIN" "$ADMIN"
 }
 
 # ---- J4: wrong-architecture --binary ---------------------------------------------
@@ -414,11 +558,23 @@ test_J3_NoSourceBinaryPassBinary() {
 # J4: "Did you pass the wrong --binary?"
 test_J4_ArchMismatchRightBinary() {
     local h; h="$(new_home)"
-    run "$h" bash "$LOOSE" --binary "$WRONG_ARCH" --no-hooks --no-symlink
+    run "$h" bash "$LOOSE" --binary "$WRONG_ARCH" --admin-binary "$ADMIN" --no-hooks --no-symlink
     expect_rc 2 "$WRONG_NAME binary on $HOST_ARCH" || return
     expect_advice "Did you pass the wrong --binary?"
-    run "$h" bash "$LOOSE" --binary "$BIN" --no-hooks --no-symlink
-    expect_rc 0 "re-run with the right --binary" && expect_installed "$h" "$BIN"
+    run "$h" bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-symlink
+    expect_rc 0 "re-run with the right --binary" && expect_installed "$h" "$BIN" "$ADMIN"
+}
+
+# J4: "Did you pass the wrong --admin-binary?" (b.vqr)
+test_J4_ArchMismatchRightAdminBinary() {
+    local h; h="$(new_home)"
+    run "$h" bash "$LOOSE" --binary "$BIN" --admin-binary "$WRONG_ARCH_ADMIN" --no-hooks --no-symlink
+    expect_rc 2 "$WRONG_NAME agent-director-admin on $HOST_ARCH" || return
+    expect_advice "install.sh: --admin-binary $WRONG_ARCH_ADMIN: architecture mismatch"
+    expect_advice "Did you pass the wrong --admin-binary?"
+    expect_nothing_installed "$h"
+    run "$h" bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-symlink
+    expect_rc 0 "re-run with the right --admin-binary" && expect_installed "$h" "$BIN" "$ADMIN"
 }
 
 # ---- J5: source-tree version check -------------------------------------------------
@@ -426,7 +582,7 @@ test_J4_ArchMismatchRightBinary() {
 # j5_stale: put a binary not built from the tree's HEAD at the tree's bin/ and
 # run install.sh on it; leaves the J5 refusal in RC/ERR.
 j5_stale() {
-    mkdir -p "$TREE/bin" && cp "$BIN" "$TREE/bin/agent-director"
+    mkdir -p "$TREE/bin" && cp "$BIN" "$TREE/bin/agent-director" && cp "$ADMIN" "$TREE/bin/agent-director-admin"
     run_in "$1" "$TREE" bash "$TREE_SH" --binary "$TREE/bin/agent-director" --no-hooks --no-symlink
     expect_rc 3 "stale binary" || return 1
     expect_advice "rebuild it first: make build"
@@ -441,16 +597,16 @@ test_J5_StaleBinaryMakeBuild() {
     run_advised "$h" "$TREE" "$cmd"
     expect_rc 0 "advised: $cmd" || return
     run_in "$h" "$TREE" bash "$TREE_SH" --binary "$TREE/bin/agent-director" --no-hooks --no-symlink
-    expect_rc 0 "re-run after make build" && expect_installed "$h" "$TREE/bin/agent-director"
+    expect_rc 0 "re-run after make build" && expect_installed "$h" "$TREE/bin/agent-director" "$TREE/bin/agent-director-admin"
 }
 
 # J5: "or download release: rerun with --from-release (omit --binary)"
 test_J5_StaleBinaryFromRelease() {
     local h; h="$(new_home)"
     j5_stale "$h" || return
-    FAKE_CURL_API_TAG=v0.0.0-fake
+    FAKE_CURL_API_TAG="$REL_TAG"
     run_in "$h" "$TREE" bash "$TREE_SH" --no-hooks --no-symlink --from-release
-    expect_rc 0 "rerun with --from-release, no --binary" && expect_installed "$h" "$BIN"
+    expect_rc 0 "rerun with --from-release, no --binary" && expect_installed "$h" "$BIN" "$ADMIN"
 }
 
 # ---- J6: store open failed after install ------------------------------------------
@@ -459,11 +615,11 @@ test_J5_StaleBinaryFromRelease() {
 # with a store_meta table the migration cannot write; leaves HOME in J6H.
 j6_failing_migration() {
     J6H="$(new_home)"
-    run "$J6H" bash "$LOOSE" --binary "$BIN_OLD" --no-hooks --no-symlink
+    run "$J6H" bash "$LOOSE" --binary "$BIN_OLD" --admin-binary "$ADMIN_OLD" --no-hooks --no-symlink
     expect_rc 0 "first install" || return 1
     "$SQLITE" "$J6H/.agent-director/state.db" "PRAGMA user_version = $((SCHEMA - 1));
         DROP TABLE store_meta; CREATE TABLE store_meta (bogus TEXT);" || { bad "damage store"; return 1; }
-    J6ARGV=(bash "$LOOSE" --binary "$BIN" --keep-prior --no-hooks --no-symlink)
+    J6ARGV=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --keep-prior --no-hooks --no-symlink)
     run "$J6H" "${J6ARGV[@]}"
     expect_rc 5 "migration step fails" || return 1
     expect_advice "If a migration was authorized above it was NOT consumed; re-running this install will retry it."
@@ -500,15 +656,15 @@ test_J6_RerunKeepsPriorRollbackCopy() {
 # newer agent-director instead."
 test_J6_NewerStoreInstallNewer() {
     local h; h="$(new_home)"
-    run "$h" bash "$LOOSE" --binary "$BIN" --no-hooks --no-symlink
+    run "$h" bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-symlink
     expect_rc 0 "first install" || return
     "$SQLITE" "$h/.agent-director/state.db" "PRAGMA user_version = $((SCHEMA + 1));"
-    run "$h" bash "$LOOSE" --binary "$BIN" --no-hooks --no-symlink
+    run "$h" bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-symlink
     expect_rc 5 "store newer than the binary" || return
     expect_advice "ErrSchemaMismatch"
     expect_advice "If state.db is NEWER than this binary (ErrSchemaMismatch), install a newer agent-director instead."
-    run "$h" bash "$LOOSE" --binary "$BIN_NEWER" --no-hooks --no-symlink
-    expect_rc 0 "install a newer agent-director" && expect_installed "$h" "$BIN_NEWER"
+    run "$h" bash "$LOOSE" --binary "$BIN_NEWER" --admin-binary "$ADMIN" --no-hooks --no-symlink
+    expect_rc 0 "install a newer agent-director" && expect_installed "$h" "$BIN_NEWER" "$ADMIN"
     run "$h" "$h/.agent-director/bin/agent-director" list
     expect_rc 0 "list with the newer binary"
 }
@@ -519,10 +675,10 @@ test_J6_NewerStoreInstallNewer() {
 # post-open user_version read fails (sqlite3 meets a lock); leaves HOME in J7H.
 j7_unverified() {
     J7H="$(new_home)"
-    run "$J7H" bash "$LOOSE" --binary "$BIN" --no-hooks --no-symlink
+    run "$J7H" bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-symlink
     expect_rc 0 "first install" || return 1
     "$SQLITE" "$J7H/.agent-director/state.db" "PRAGMA user_version = $((SCHEMA - 1));"
-    J7ARGV=(bash "$LOOSE" --binary "$BIN" --no-hooks --no-symlink)
+    J7ARGV=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-symlink)
     ln -sf "$SQLITE_SHIM" "$TOOLBOX/sqlite3"
     FAKE_SQLITE3_FAIL_CALL=2 # 1: step-2 read, 2: step-5 verification read
     run "$J7H" "${J7ARGV[@]}"
@@ -556,8 +712,8 @@ test_J8_MissingToolProvideAndRerun() {
     local tool want h argv
     while IFS='|' read -r tool want; do
         h="$(new_home)"
-        argv=(bash "$LOOSE" --binary "$BIN" --no-hooks --no-symlink)
-        [[ "$tool" == curl ]] && argv=(bash "$LOOSE" --from-release v0.0.0-fake --no-hooks --no-symlink)
+        argv=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-symlink)
+        [[ "$tool" == curl ]] && argv=(bash "$LOOSE" --from-release "$REL_TAG" --no-hooks --no-symlink)
         mv "$TOOLBOX/$tool" "$ROOT/aside/$tool"
         run "$h" "${argv[@]}"
         mv "$ROOT/aside/$tool" "$TOOLBOX/$tool"
@@ -567,7 +723,7 @@ test_J8_MissingToolProvideAndRerun() {
         run "$h" "${argv[@]}"
         expect_rc 0 "re-run with $tool on PATH" || continue
         grep -qx "install.sh: pre-flight OK" "$OUT" || bad "$tool: no \"pre-flight OK\" after the re-run"
-        expect_installed "$h" "$BIN"
+        expect_installed "$h" "$BIN" "$ADMIN"
     done <<'EOF'
 claude|Install Claude Code first: https://claude.com/claude-code
 tmux|Install tmux via your package manager (apt/brew/dnf/etc.).
@@ -576,6 +732,213 @@ file|Install file via your package manager (apt install file / brew install file
 sqlite3|Install sqlite3 via your package manager (apt install sqlite3 / brew install sqlite / dnf install sqlite). Required to read state.db's schema version for the migration flow.
 curl|--from-release downloads via curl; install it via your package manager.
 EOF
+}
+
+# ---- J9: agent-director and agent-director-admin stamps differ or carry no commit (b.vqr)
+
+# J9: "rebuild both first:  make build": a fresh agent-director beside a stale
+# agent-director-admin in the tree's bin/.
+test_J9_StampMismatchMakeBuild() {
+    local h; h="$(new_home)"
+    run_advised "$h" "$TREE" "make build"
+    expect_rc 0 "make build in the tree" || return
+    cp "$ADMIN_OLD" "$TREE/bin/agent-director-admin"
+    local argv=(bash "$TREE_SH" --binary "$TREE/bin/agent-director" --no-hooks --no-symlink)
+    run_in "$h" "$TREE" "${argv[@]}"
+    expect_rc 3 "stale agent-director-admin" || return
+    expect_advice "install.sh: agent-director and agent-director-admin version stamps differ; refusing to install."
+    expect_advice "(0.0.1-advice-old $OLD_COMMIT)"
+    expect_advice "rebuild both first: make build"
+    expect_nothing_installed "$h"
+    local cmd; cmd="$(advice_after "rebuild both first:")" || { bad "no advised command"; return; }
+    run_advised "$h" "$TREE" "$cmd"
+    expect_rc 0 "advised: $cmd" || return
+    run_in "$h" "$TREE" "${argv[@]}"
+    expect_rc 0 "re-run after make build" && expect_installed "$h" "$TREE/bin/agent-director" "$TREE/bin/agent-director-admin"
+}
+
+# J9: "or download release: rerun with --from-release (omit --binary and
+# --admin-binary)", for an agent-director-admin whose stamp differs from
+# agent-director's in version and commit, in commit only, or that has no
+# version verb at all: each refused, naming both stamps, with nothing
+# installed.
+test_J9_StampMismatchFromRelease() {
+    local h i admins=("$ADMIN_OLD" "$ADMIN_OTHER_COMMIT" "$NO_VERSION")
+    local stamps=("0.0.1-advice-old $OLD_COMMIT" "0.0.2-advice $OTHER_COMMIT" "<no version stamp>")
+    for i in "${!admins[@]}"; do
+        h="$(new_home)"
+        FAKE_CURL_API_TAG=""
+        run "$h" bash "$LOOSE" --binary "$BIN" --admin-binary "${admins[$i]}" --no-hooks --no-symlink
+        expect_rc 3 "agent-director-admin stamped (${stamps[$i]})" || continue
+        expect_advice "install.sh: agent-director and agent-director-admin version stamps differ; refusing to install."
+        expect_advice "agent-director : $BIN (0.0.2-advice $CUR_COMMIT)"
+        expect_advice "agent-director-admin: ${admins[$i]} (${stamps[$i]})"
+        expect_advice "or download release: rerun with --from-release (omit --binary and --admin-binary)"
+        expect_nothing_installed "$h"
+        FAKE_CURL_API_TAG="$REL_TAG"
+        run "$h" bash "$LOOSE" --no-hooks --no-symlink --from-release
+        expect_rc 0 "(${stamps[$i]}) rerun with --from-release, no --binary or --admin-binary" && expect_installed "$h" "$BIN" "$ADMIN"
+    done
+}
+
+# J9: "rebuild both first:  make build" when both binaries are plain `go
+# build`s (commit "unknown"), which nothing shows come from one build: refused
+# with nothing installed; make build in their checkout stamps both, and the
+# same command then installs them.
+test_J9_NoCommitStampMakeBuild() {
+    local h; h="$(new_home)"
+    mkdir -p "$TREE/bin" && cp "$BIN_PLAIN" "$TREE/bin/agent-director" && cp "$ADMIN_PLAIN" "$TREE/bin/agent-director-admin" \
+        || { bad "put the plain builds in the tree's bin/"; return; }
+    local argv=(bash "$LOOSE" --binary "$TREE/bin/agent-director" --admin-binary "$TREE/bin/agent-director-admin" --no-hooks --no-symlink)
+    run "$h" "${argv[@]}"
+    expect_rc 3 "no commit stamp" || return
+    local want="install.sh: agent-director and agent-director-admin carry no commit stamp, so they cannot be shown to come from the same build; refusing to install."
+    [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
+    expect_advice "agent-director-admin: $TREE/bin/agent-director-admin (dev unknown)"
+    expect_advice "rebuild both first: make build"
+    expect_nothing_installed "$h"
+    local cmd; cmd="$(advice_after "rebuild both first:")" || { bad "no advised command"; return; }
+    run_advised "$h" "$TREE" "$cmd"
+    expect_rc 0 "advised: $cmd" || return
+    run "$h" "${argv[@]}"
+    expect_rc 0 "re-run after make build" && expect_installed "$h" "$TREE/bin/agent-director" "$TREE/bin/agent-director-admin"
+}
+
+# ---- J10: --from-release of a release before 0.11.0 (b.vqr) ------------------
+
+# J10: "install release 0.11.0 or later: bash $0 --from-release <tag of v0.11.0
+# or later>": the missing agent-director-admin asset of a release before 0.11.0
+# is refused at once, with no retry and no gh fallback (gh on PATH) and nothing
+# installed; the advised release installs both.
+test_J10_PreAdminReleaseInstallNewer() {
+    local h cmd tag=v0.10.0
+    h="$(new_home)"
+    PATH_EXTRA="$GH_DIR"
+    FAKE_CURL_ADMIN_STATUS=404
+    run "$h" bash "$LOOSE" --from-release "$tag" --no-hooks --no-symlink
+    expect_rc 3 "release $tag, no agent-director-admin asset" || return
+    local want="install.sh: --from-release: release $tag has no agent-director-admin binary; refusing to install."
+    [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
+    grep -qF "asset not yet available" "$ERR" && bad "the agent-director-admin asset was retried"
+    grep -qF "gh release download" "$ERR" && bad "the gh fallback was tried"
+    expect_advice "install release 0.11.0 or later: bash $LOOSE --from-release <tag of v0.11.0 or later>"
+    expect_nothing_installed "$h"
+    cmd="$(advice_after "install release 0.11.0 or later: ")" || { bad "no advised command"; return; }
+    FAKE_CURL_ADMIN_STATUS="" # a release from 0.11.0 on ships agent-director-admin
+    run_advised "$h" "$ROOT" "${cmd/<tag of v0.11.0 or later>/$REL_TAG}"
+    expect_rc 0 "advised: $cmd" && expect_installed "$h" "$BIN" "$ADMIN"
+}
+
+# ---- J11: --keep-prior rollback (b.vqr) ------------------------------------------
+
+# j11_paths <home>: set J11C and J11A, the installed agent-director and
+# agent-director-admin under home.
+j11_paths() {
+    J11C="$1/.agent-director/bin/agent-director" J11A="$1/.agent-director/admin/agent-director-admin"
+}
+
+# J11: "Roll back with `mv <target>.prior <target>`" (--keep-prior, install.sh
+# --help): an upgrade with --keep-prior snapshots both binaries, and rolling
+# both back restores the old pair, whose version stamps match.
+test_J11_KeepPriorRollBackBoth() {
+    local h t stamp; h="$(new_home)"; j11_paths "$h"
+    run "$h" bash "$LOOSE" --help
+    expect_rc 0 "install.sh --help" || return
+    [[ "$(flat "$OUT")" == *'Roll back with `mv <target>.prior <target>`.'* ]] || bad "--help lacks the rollback advice: $(flat "$OUT")"
+    run "$h" bash "$LOOSE" --binary "$BIN_OLD" --admin-binary "$ADMIN_OLD" --no-hooks --no-symlink
+    expect_rc 0 "install the old pair" || return
+    run "$h" bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --keep-prior --no-hooks --no-symlink
+    expect_rc 0 "upgrade with --keep-prior" || return
+    grep -qxF "  prior   : snapshotted to $J11C.prior" "$OUT" || bad "no agent-director prior line: $(flat "$OUT")"
+    grep -qxF "  admin prior: snapshotted to $J11A.prior" "$OUT" || bad "no agent-director-admin prior line: $(flat "$OUT")"
+    for t in "$J11C" "$J11A"; do
+        [[ "$(stat -c %a "$t.prior")" == 755 ]] || bad "$t.prior has mode $(stat -c %a "$t.prior"); want 755"
+        mv "$t.prior" "$t" || bad "mv $t.prior $t"
+    done
+    cmp -s "$J11C" "$BIN_OLD" || bad "rolled-back agent-director is not the old one"
+    cmp -s "$J11A" "$ADMIN_OLD" || bad "rolled-back agent-director-admin is not the old one"
+    run "$h" "$J11C" version
+    stamp="$(cat "$OUT")"
+    [[ "$stamp" == *'"0.0.1-advice-old"'* ]] || bad "rolled-back agent-director version: $stamp"
+    run "$h" "$J11A" version
+    [[ "$(cat "$OUT")" == "$stamp" ]] || bad "rolled-back stamps differ: agent-director $stamp, agent-director-admin $(cat "$OUT")"
+}
+
+# J11: "to roll back, remove <agent-director-admin>" (--keep-prior on an
+# upgrade from before 0.11.0, with no agent-director-admin installed): a stale
+# agent-director-admin.prior is removed, and rolling back as printed restores
+# the old agent-director with no agent-director-admin.
+test_J11_KeepPriorNoAdminRemoveIt() {
+    local h line got; h="$(new_home)"; j11_paths "$h"
+    run "$h" bash "$LOOSE" --binary "$BIN_OLD" --admin-binary "$ADMIN_OLD" --no-hooks --no-symlink
+    expect_rc 0 "install the old pair" || return
+    rm -f "$J11A" && cp "$ADMIN" "$J11A.prior" || { bad "make the pre-0.11.0 install"; return; }
+    run "$h" bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --keep-prior --no-hooks --no-symlink
+    expect_rc 0 "upgrade with --keep-prior" || return
+    expect_installed "$h" "$BIN" "$ADMIN"
+    [[ ! -e "$J11A.prior" ]] || bad "the stale $J11A.prior is still there"
+    line="  admin prior: none (no agent-director-admin was installed); to roll back, remove $J11A"
+    grep -qxF "$line" "$OUT" || bad "no \"$line\" line: $(flat "$OUT")"
+    got="$(grep -m1 -F "to roll back, remove " "$OUT")" || return
+    mv "$J11C.prior" "$J11C" || bad "mv $J11C.prior $J11C"
+    rm "${got##*to roll back, remove }" || bad "remove ${got##*to roll back, remove }"
+    cmp -s "$J11C" "$BIN_OLD" || bad "rolled-back agent-director is not the old one"
+    [[ ! -e "$J11A" ]] || bad "agent-director-admin left after the rollback"
+}
+
+# ---- J12: one of --sha256 and --admin-sha256 (b.vqr) -----------------------------
+
+# j12_one_hash <home> <flag>: --from-release with only <flag> (the right hash):
+# exit 2 with the refusal and its advice, and nothing installed. Leaves the
+# command in J12ARGV.
+j12_one_hash() {
+    local h="$1" flag="$2" other=--sha256 unverified=agent-director hex="$ADMIN_SHA"
+    if [[ "$flag" == --sha256 ]]; then
+        other=--admin-sha256 unverified=agent-director-admin hex="$BIN_SHA"
+    fi
+    J12ARGV=(bash "$LOOSE" --from-release "$REL_TAG" --no-hooks --no-symlink "$flag" "$hex")
+    run "$h" "${J12ARGV[@]}"
+    expect_rc 2 "$flag alone" || return 1
+    local want="install.sh: $flag without $other would install $unverified unverified; refusing to install."
+    [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
+    expect_advice "Pass $other <hex> too (the sha256 of the $unverified release asset), or neither flag to skip verification."
+    expect_nothing_installed "$h"
+}
+
+# J12: "Pass --admin-sha256 <hex> too (the sha256 of the agent-director-admin
+# release asset)" (and the mirror for --sha256): re-run with the advised flag
+# and the named asset's sha256; both are verified and installed.
+test_J12_OneHashPassTheOther() {
+    local flag h rest asset hex
+    for flag in --sha256 --admin-sha256; do
+        h="$(new_home)"
+        j12_one_hash "$h" "$flag" || continue
+        rest="$(advice_after "Pass ")" || { bad "no advised flag"; continue; }
+        asset="${rest#*(the sha256 of the }"
+        case "${asset%% release asset)*}" in
+            agent-director) hex="$BIN_SHA" ;;
+            agent-director-admin) hex="$ADMIN_SHA" ;;
+            *) bad "the advice names no release asset: $rest"; continue ;;
+        esac
+        run "$h" "${J12ARGV[@]}" "${rest%% *}" "$hex"
+        expect_rc 0 "$flag, then the advised ${rest%% *}" || continue
+        expect_installed "$h" "$BIN" "$ADMIN"
+        [[ "$(grep -cxE '  (sha256  |admin sha256): verified' "$OUT")" == 2 ]] || bad "$flag: both assets not verified: $(flat "$OUT")"
+    done
+}
+
+# J12: "or neither flag to skip verification": re-run without the hash flag;
+# both are installed, unverified.
+test_J12_OneHashPassNeither() {
+    local flag h
+    for flag in --sha256 --admin-sha256; do
+        h="$(new_home)"
+        j12_one_hash "$h" "$flag" || continue
+        run "$h" "${J12ARGV[@]:0:${#J12ARGV[@]}-2}"
+        expect_rc 0 "$flag dropped" || continue
+        expect_installed "$h" "$BIN" "$ADMIN"
+        grep -q ": verified$" "$OUT" && bad "$flag dropped: a verified line with no hash given: $(flat "$OUT")"
+    done
 }
 
 echo "[b.fji install-sh advice-follow] start (schema v$SCHEMA)"

@@ -163,7 +163,6 @@ func TestAdviceFollow_H3_FlagIsRequired(t *testing.T) {
 		{"kill", []string{"kill"}, "--claude-instance-id is required", id},
 		{"get", []string{"get"}, "--claude-instance-id is required", id},
 		{"get-permission", []string{"get-permission"}, "--request-token is required", token},
-		{"delete", []string{"delete"}, "--claude-instance-id is required (≥1)", id},
 		{"trail-emit token", append(relay, "--endpoint", "http://127.0.0.1:9/r", "--outcome", "200", "--instance-id", id), "--token is required", token},
 		{"trail-emit endpoint", append(relay, "--token", token, "--outcome", "200", "--instance-id", id), "--endpoint is required", "http://127.0.0.1:9/r"},
 		{"trail-emit outcome", append(relay, "--token", token, "--endpoint", "http://127.0.0.1:9/r", "--instance-id", id), "--outcome is required", "200"},

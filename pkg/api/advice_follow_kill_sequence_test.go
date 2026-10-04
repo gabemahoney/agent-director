@@ -1,9 +1,8 @@
 package api_test
 
 // advice_follow_kill_sequence_test.go: b.fji literal-follow tests for the
-// live-row sequence in kill's Description (advice inventory C11) and delete's
-// recovery pointer (F1), run through one Client on the kill fixture's
-// virtual clock: rows made by real spawns and resumes where a launch matters,
+// live-row sequence in kill's Description (advice inventory C11), run
+// through one Client on the kill fixture's virtual clock: rows made by real spawns and resumes where a launch matters,
 // each sequence step taken as written.
 
 import (
@@ -14,7 +13,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
@@ -27,7 +25,7 @@ const advKillPace = 5 * time.Second
 
 // advKillSteps are the six steps of the live-row sequence, word for word.
 var advKillSteps = []string{
-	"1. kill and check the result; on an error follow its class, never delete the row.",
+	"1. kill and check the result; on an error follow its class.",
 	"2. If the row is pending, wait until its launch start (status) plus the pending grace period (60 s unless configured); inside it, wait and check again, never escalate.",
 	"3. Run find-missing, then check status; repeat about 5 s apart until the row is ended or missing, at most three runs.",
 	"4. Still live: kill once more, wait about 5 s, run find-missing once more and check.",
@@ -294,60 +292,6 @@ func TestAdviceFollow_C11_LiveRowSequence(t *testing.T) {
 			}
 			if s.sweeps > limit {
 				t.Errorf("find-missing runs = %d; want at most %d", s.sweeps, limit)
-			}
-		})
-	}
-}
-
-// TestAdviceFollow_F1_DeleteDescriptionKillThenFindMissing: kill then
-// find-missing marks a stuck live row missing, and the respawn with the
-// reuse opt-in starts it again.
-func TestAdviceFollow_F1_DeleteDescriptionKillThenFindMissing(t *testing.T) {
-	// F1 delete Description: "respawn with spawn reuse_finished (--reuse-finished on the CLI); for a stuck live row, kill then find-missing."
-	adviceAssertManifest(t, "delete", "", "respawn with spawn reuse_finished (--reuse-finished on the CLI); for a stuck live row, kill then find-missing.")
-	grace := config.Default().Tmux.EffectivePendingGrace()
-	cases := []struct {
-		name   string
-		scene  func(*testing.T, *killEnv, *api.Client) advKillScene
-		stuck  time.Duration // how long the row has been stuck when the caller acts
-		broken string        // why the follow fails ("": it works)
-	}{
-		{"live row", advKillLive, 0, ""},
-		{"pending row stuck past the pending grace period", advKillPendingSpawn, grace + time.Second, ""},
-		{"pending row inside the pending grace period", advKillPendingSpawn, 0,
-			"kill then find-missing leaves a pending row inside the pending grace period pending (find-missing " +
-				"does not judge it), so the respawn with the reuse opt-in collides; the text omits the live-row " +
-				"sequence's step 2 wait"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			e := newKillEnv(t)
-			c, _ := e.client(t)
-			sc := tc.scene(t, e, c)
-			e.clock.Advance(tc.stuck)
-
-			if _, err := c.Kill(api.KillParams{ClaudeInstanceID: sc.id}); err != nil {
-				t.Fatalf("kill: %v; want success", err)
-			}
-			if _, err := c.FindMissing(context.Background()); err != nil {
-				t.Fatalf("find-missing: %v", err)
-			}
-			if tc.broken != "" {
-				knownBrokenAdvice(t, "F1", tc.broken)
-			}
-			if st, _ := c.Status(sc.id); st.State != store.StateMissing {
-				t.Errorf("state after kill then find-missing = %v; want missing", st.State)
-			}
-			row, err := c.Get(sc.id)
-			if err != nil {
-				t.Fatalf("get: %v", err)
-			}
-			if _, err := c.Spawn(api.SpawnParams{ClaudeInstanceID: sc.id, ReuseFinished: true, CWD: row.CWD,
-				ExtraEnv: advKillTrust(t)}); err != nil {
-				t.Fatalf("respawn with the reuse opt-in: %v; want a new launch", err)
-			}
-			if st, _ := c.Status(sc.id); st.State != store.StatePending {
-				t.Errorf("state after the respawn = %v; want pending", st.State)
 			}
 		})
 	}

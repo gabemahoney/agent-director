@@ -16,7 +16,7 @@
  *     are only appended when the field is explicitly true.
  *   - Global flags (b.32k: --store-path, --home, --tmux-command) appear
  *     BEFORE the verb token so the CLI's global-flag parser in
- *     cmd/agent-director/global_flags.go strips them prior to verb dispatch.
+ *     internal/clisetup/globalflags.go strips them prior to verb dispatch.
  *
  * Implements SRD SR-1.2 (argv construction is verb-driven and shell-free).
  *
@@ -35,7 +35,6 @@ import type {
   GetPermissionParams,
   ResumeParams,
   ExpireParams,
-  DeleteParams,
   MakeTemplateParams,
   ListParams,
   PauseParams,
@@ -69,8 +68,8 @@ export interface GlobalArgvOptions {
  *   [cliPath, ...globalFlags, verbName, ...verbFlags]
  *
  * Global flags are inserted BEFORE the verb token because the CLI's
- * `parseGlobalFlags` pre-scan operates on os.Args[1:] before verb dispatch
- * (see cmd/agent-director/global_flags.go). b.32k.
+ * `ParseGlobalFlags` pre-scan operates on os.Args[1:] before verb dispatch
+ * (see internal/clisetup/globalflags.go). b.32k.
  *
  * @param cliPath    The absolute path to the CLI binary (argv[0]).
  * @param verb       The kebab-case verb name (must be a VerbName).
@@ -136,8 +135,6 @@ function buildVerbFlags(verb: VerbName, params: unknown): string[] {
       return buildFindMissing();
     case "expire":
       return buildExpire(params as ExpireParams);
-    case "delete":
-      return buildDelete(params as DeleteParams);
     case "make-template":
       return buildMakeTemplate(params as MakeTemplateParams);
     case "list":
@@ -236,9 +233,7 @@ function buildReadPane(p: ReadPaneParams): string[] {
 }
 
 function buildKill(p: KillParams): string[] {
-  const f: string[] = ["kill", "--claude-instance-id", p.claude_instance_id];
-  if (p.include_finished === true) f.push("--include-finished");
-  return f;
+  return ["kill", "--claude-instance-id", p.claude_instance_id];
 }
 
 function buildDecide(p: DecideParams): string[] {
@@ -270,12 +265,6 @@ function buildFindMissing(): string[] {
 function buildExpire(p: ExpireParams): string[] {
   const f: string[] = ["expire"];
   if (p.older_than !== undefined) f.push("--older-than", p.older_than);
-  return f;
-}
-
-function buildDelete(p: DeleteParams): string[] {
-  const f: string[] = ["delete"];
-  for (const id of p.claude_instance_id) f.push("--claude-instance-id", id);
   return f;
 }
 

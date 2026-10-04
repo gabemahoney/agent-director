@@ -120,28 +120,9 @@ func TestHelpVerbSurfaceTrailReadRemoved(t *testing.T) {
 	}
 }
 
-// TestHelpShowsDeleteDeprecated checks that help's delete description carries
-// SR-18.8's deprecation notice (AC-DOC-07).
-func TestHelpShowsDeleteDeprecated(t *testing.T) {
-	stdout, stderr, code := runCLI(t, "help")
-	if code != 0 {
-		t.Fatalf("exit=%d want 0; stderr=%q", code, stderr)
-	}
-	var parsed helpStdout
-	if err := json.Unmarshal([]byte(stdout), &parsed); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	for _, v := range parsed.Verbs {
-		if v.Name == "delete" {
-			apitest.AssertAgentTextCase(t, "help: delete description", v.Description, apitest.DescDeleteDeprecated())
-			return
-		}
-	}
-	t.Fatal("help lists no delete verb")
-}
-
 // TestHelpOmitsKillOptIn: help and --help, which agents are shown, list kill
-// and never name its operator-only opt-in (SR-6.8).
+// and no delete verb, and never name kill's former opt-in, the admin binary or
+// its kill-finished verb (SR-6.8, b.vqr).
 func TestHelpOmitsKillOptIn(t *testing.T) {
 	for _, arg := range []string{"help", "--help"} {
 		t.Run(arg, func(t *testing.T) {
@@ -150,20 +131,24 @@ func TestHelpOmitsKillOptIn(t *testing.T) {
 				t.Fatalf("exit=%d want 0; stderr=%q", code, stderr)
 			}
 			for stream, out := range map[string]string{"stdout": stdout, "stderr": stderr} {
-				if m := cliOptInRe.FindString(out); m != "" {
-					t.Errorf("SR-6.8: %s %s names the operator-only kill opt-in %q", arg, stream, m)
+				if m := apitest.OperatorActionNames.FindString(out); m != "" {
+					t.Errorf("SR-6.8: %s %s names %q; nothing the main CLI prints may name an operator action", arg, stream, m)
 				}
 			}
 			var parsed helpStdout
 			if err := json.Unmarshal([]byte(stdout), &parsed); err != nil {
 				t.Fatalf("unmarshal: %v", err)
 			}
+			var hasKill bool
 			for _, v := range parsed.Verbs {
-				if v.Name == "kill" {
-					return
+				hasKill = hasKill || v.Name == "kill"
+				if v.Name == "delete" {
+					t.Errorf("%s lists a delete verb; delete is an agent-director-admin verb only", arg)
 				}
 			}
-			t.Errorf("%s does not list kill; the SR-6.8 check would pass vacuously", arg)
+			if !hasKill {
+				t.Errorf("%s does not list kill; the checks above would pass vacuously", arg)
+			}
 		})
 	}
 }

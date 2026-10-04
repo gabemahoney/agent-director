@@ -7,7 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/adminapi"
 	"github.com/gabemahoney/agent-director/internal/mcp"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
@@ -188,13 +190,11 @@ func TestGenerate_PendingMeaning(t *testing.T) {
 	}
 }
 
-// killOptIn matches kill's operator-only finished-row opt-in in any spelling
-// (include-finished, include_finished, IncludeFinished, ...).
-var killOptIn = regexp.MustCompile(`(?i)include.?finished`)
-
-// TestGenerate_KillOptInAbsent: neither generated nor committed reference names
-// the kill opt-in (SR-6.8), and each still documents kill with kill_sent.
-func TestGenerate_KillOptInAbsent(t *testing.T) {
+// TestGenerate_OperatorActionsAbsent: neither generated nor committed agent
+// reference names the kill opt-in, the admin binary or its kill-finished verb,
+// or has a delete section (SR-6.8, b.vqr), and each still documents kill with
+// kill_sent.
+func TestGenerate_OperatorActionsAbsent(t *testing.T) {
 	tmp := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(tmp, "docs"), 0o755); err != nil {
 		t.Fatalf("mkdir docs: %v", err)
@@ -202,9 +202,9 @@ func TestGenerate_KillOptInAbsent(t *testing.T) {
 	if err := generate(tmp); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
-	sections := map[string]string{"cli-reference.md": "## kill\n", "mcp-reference.md": "## Tool: kill\n"}
+	sections := map[string]string{"cli-reference.md": "## ", "mcp-reference.md": "## Tool: "}
 	for _, dir := range []string{filepath.Join(tmp, "docs"), filepath.Join("..", "..", "docs")} {
-		for name, heading := range sections {
+		for name, prefix := range sections {
 			path := filepath.Join(dir, name)
 			t.Run(path, func(t *testing.T) {
 				raw, err := os.ReadFile(path)
@@ -213,18 +213,66 @@ func TestGenerate_KillOptInAbsent(t *testing.T) {
 				}
 				got := string(raw)
 				for i, line := range strings.Split(got, "\n") {
-					if m := killOptIn.FindString(line); m != "" {
-						t.Errorf("SR-6.8: %s:%d names the operator-only kill opt-in %q: %s", path, i+1, m, line)
+					if m := apitest.OperatorActionNames.FindString(line); m != "" {
+						t.Errorf("%s:%d names %q; nothing shown to agents may name the kill opt-in or agent-director-admin: %s", path, i+1, m, line)
+					}
+					if line == prefix+"delete" {
+						t.Errorf("%s:%d has a delete section; delete is an agent-director-admin verb only", path, i+1)
 					}
 				}
-				_, section, ok := strings.Cut(got, heading)
+				_, section, ok := strings.Cut(got, prefix+"kill\n")
 				if !ok {
-					t.Fatalf("%s has no %q section; the SR-6.8 absence check would pass vacuously", path, strings.TrimSpace(heading))
+					t.Fatalf("%s has no %q section; the absence checks would pass vacuously", path, prefix+"kill")
 				}
 				section, _, _ = strings.Cut(section, "\n## ")
 				mustContain(t, path+" kill section", section, "kill_sent")
 			})
 		}
+	}
+}
+
+// TestGenerate_AdminReference: the generated and the committed
+// docs/admin-reference.md open, after the do-not-edit header, with the
+// human-approval statement and document the global flags and every
+// agent-director-admin verb.
+func TestGenerate_AdminReference(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmp, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+	if err := generate(tmp); err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	for _, path := range []string{filepath.Join(tmp, "docs", "admin-reference.md"), filepath.Join("..", "..", "docs", "admin-reference.md")} {
+		t.Run(path, func(t *testing.T) {
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read %s: %v", path, err)
+			}
+			lines := strings.Split(string(raw), "\n")
+			if lines[0] != genHeader {
+				t.Errorf("%s: first line = %q; want the do-not-edit header", path, lines[0])
+			}
+			var content []string
+			for _, l := range lines[1:] {
+				if l != "" {
+					content = append(content, l)
+				}
+			}
+			if len(content) == 0 || content[0] != adminapi.ApprovalStatement {
+				t.Errorf("%s: first content line = %q; want the human-approval statement %q", path, content, adminapi.ApprovalStatement)
+			}
+			if len(adminapi.Verbs) == 0 || len(adminapi.GlobalFlags) == 0 {
+				t.Fatal("adminapi.Verbs or adminapi.GlobalFlags is empty; the per-item checks would pass vacuously")
+			}
+			mustContain(t, path, string(raw), "\n## Global flags\n")
+			for _, f := range adminapi.GlobalFlags {
+				mustContain(t, path, string(raw), "\n- `"+f.Name+"`: "+f.Description+"\n")
+			}
+			for _, v := range adminapi.Verbs {
+				mustContain(t, path, string(raw), "\n## "+v.Name+"\n")
+			}
+		})
 	}
 }
 

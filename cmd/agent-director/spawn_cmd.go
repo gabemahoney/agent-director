@@ -390,9 +390,6 @@ func killHandlerWith(client *pkgapi.Client, args []string) error {
 	fs := flag.NewFlagSet("kill", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&p.ClaudeInstanceID, "claude-instance-id", "", "id of the Spawn to kill")
-	// The operator-only opt-in (SR-6.5): hand-defined, not from the manifest,
-	// with no usage text, since nothing shown to agents may name it (SR-6.8).
-	fs.BoolVar(&p.IncludeFinished, "include-finished", false, "")
 	if err := fs.Parse(args); err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}

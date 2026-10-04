@@ -164,7 +164,7 @@ func DescMissingNotProof() DescCase {
 
 // DescMissingNotProofShort is SR-18.2's short form (decision-0930e) for the
 // verb Descriptions that reach help and MCP but do not produce missing (kill,
-// resume, pause, expire, delete): "`missing` is not proof the agent exited
+// resume, pause, expire): "`missing` is not proof the agent exited
 // (see find-missing).", verbatim. Such a text must not carry the full
 // statement (DescMissingNotProof) instead or as well, nor the claims that
 // present ended or missing as dead or safe to delete. Check it with

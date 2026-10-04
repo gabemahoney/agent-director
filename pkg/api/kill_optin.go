@@ -3,17 +3,42 @@ package api
 import (
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
-// This file holds kill's operator-only finished-row opt-in (SR-6.5): the
-// live-row refusal, the start of the finished-row path, its Ours rows
-// (SR-4.2 steps 1 and 2, then the reported-in rule of SR-6.7) and its two
-// "never reported in" refusals. Nothing here is named in any text shown to
-// agents (SR-6.8, SR-18.15): no description carries the opt-in's flag or a
-// session-ending command (SR-1.4).
+// This file holds kill's operator-only finished-row opt-in (SR-6.5): its
+// entry points (killFinished, run only by agent-director-admin's
+// kill-finished through internal/adminapi, b.vqr), the live-row refusal, the
+// start of the finished-row path, its Ours rows (SR-4.2 steps 1 and 2, then
+// the reported-in rule of SR-6.7) and its two "never reported in" refusals.
+// Nothing here is exported or named in any text shown to agents (SR-6.8,
+// SR-18.15): no description carries the opt-in or a session-ending command
+// (SR-1.4).
+
+// killFinished is Kill with the finished-row opt-in set (SR-6.5): on a
+// finished row (ended, missing) it ends the row's own old session, if that
+// session reported in to the row; a live row, pending included, gets
+// liveRowRefusal. Its ad.kill.called record carries include_finished true.
+// The parameters are Kill's, with the row's id in place of KillParams.
+func killFinished(s KillStore, t KillTmux, pc ProcChecker, startingSession, stoppingWindow, exitWait time.Duration,
+	now func() time.Time, sleep func(time.Duration), claudeInstanceID string) (KillResult, error) {
+	return runKill(s, t, pc, startingSession, stoppingWindow, exitWait, now, sleep, claudeInstanceID, true)
+}
+
+// killFinished runs killFinished on c's store, tmux client, start-time
+// reader, clock and sleep with c's configured durations, as Client.Kill runs
+// Kill.
+func (c *Client) killFinished(claudeInstanceID string) (KillResult, error) {
+	if err := c.checkClosed(); err != nil {
+		return KillResult{}, err
+	}
+	t := c.cfg.Tmux
+	return killFinished(c.st, c.tmuxClient, c.procChecker, t.EffectiveStartingSession(), t.EffectiveStoppingWindow(),
+		t.EffectiveKillExitWait(), c.now, c.sleep, claudeInstanceID)
+}
 
 // neverReportedInTail ends both "never reported in" refusals (SR-1.4, SR-6.5):
 // that no kill was sent, that send-keys refuses a finished row so ending the

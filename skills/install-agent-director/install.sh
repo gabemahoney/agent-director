@@ -5,20 +5,42 @@
 # coreutils — no Go, no exotic deps. The Apiary skill harness invokes
 # it; an operator can also run it directly from a checked-out tree.
 #
+# It installs two binaries from the same build: agent-director at
+# ~/.agent-director/bin/agent-director, and the operator tool
+# agent-director-admin at ~/.agent-director/admin/agent-director-admin
+# (directory mode 0700), which is never put on PATH under any option
+# (b.vqr). It refuses to install when the two binaries' version stamps
+# (version and commit) differ, or carry no commit stamp (a plain
+# `go build` reports commit "unknown"), since both open the same store.
+#
 # Flags:
 #   --binary <path>      Source binary to install. Defaults to looking
 #                        next to the script first, then to whatever
 #                        `command -v agent-director` resolves to.
-#   --from-release [tag] Download a pre-built binary for this host's
-#                        OS/arch from GitHub Releases and install it.
+#   --admin-binary <path>
+#                        Source agent-director-admin binary to install.
+#                        Defaults to bin/agent-director-admin of the
+#                        checkout the script sits in (`make build`
+#                        builds both binaries). Mutually exclusive with
+#                        --from-release.
+#   --from-release [tag] Download pre-built agent-director and
+#                        agent-director-admin binaries for this host's
+#                        OS/arch from GitHub Releases and install them.
 #                        With no tag, resolves the latest release via
 #                        `gh release view` (if available) or
 #                        `curl + jq` against api.github.com. Mutually
-#                        exclusive with --binary.
-#   --sha256 <hex>       Verify the downloaded asset against this
-#                        sha256 (lowercase hex, 64 chars). Only
-#                        meaningful with --from-release. Optional —
-#                        omit to skip verification.
+#                        exclusive with --binary and --admin-binary.
+#                        Releases before 0.11.0 have no
+#                        agent-director-admin binary and are refused.
+#   --sha256 <hex>       Verify the downloaded agent-director asset
+#                        against this sha256 (lowercase hex, 64 chars).
+#                        Only meaningful with --from-release, and only
+#                        together with --admin-sha256: pass both or
+#                        neither (neither skips verification).
+#   --admin-sha256 <hex> Verify the downloaded agent-director-admin
+#                        asset against this sha256, as --sha256 does for
+#                        agent-director. Only meaningful with
+#                        --from-release, and only together with --sha256.
 #   --symlink-dir <dir>  Drop a PATH symlink at <dir>/agent-director.
 #                        Default: ~/.local/bin if on PATH; otherwise
 #                        no symlink.
@@ -34,11 +56,21 @@
 #                        snapshot it to <target>.prior (overwriting
 #                        any previous .prior). Roll back with
 #                        `mv <target>.prior <target>`. Default OFF.
+#                        Both binaries are snapshotted, agent-director
+#                        and agent-director-admin, so rolling back both
+#                        restores a matching pair; when no
+#                        agent-director-admin was installed before (an
+#                        upgrade from a release before 0.11.0), roll it
+#                        back by removing it.
 #
 # Exit codes:
 #   0  success
-#   2  pre-flight failure (claude/tmux missing, whitespace in path)
-#   3  binary source not found / not executable
+#   2  pre-flight failure (claude/tmux missing, whitespace in path, a
+#      bad flag, or only one of --sha256 and --admin-sha256)
+#   3  binary source not found / not executable (including a
+#      --from-release release before 0.11.0, which has no
+#      agent-director-admin binary), or the two binaries' version
+#      stamps differ or carry no commit stamp
 #   4  hook merge failure (~/.claude/settings.json malformed)
 #   5  store open / schema-migration failure (open failed, state.db not
 #      created, or post-open user_version != target)
@@ -54,12 +86,16 @@ set -euo pipefail
 
 readonly DEFAULT_INSTALL_ROOT="${HOME}/.agent-director"
 readonly DEFAULT_BIN_DIR="${DEFAULT_INSTALL_ROOT}/bin"
+# The operator tool's own directory, never on PATH (b.vqr).
+readonly DEFAULT_ADMIN_DIR="${DEFAULT_INSTALL_ROOT}/admin"
 readonly DEFAULT_SETTINGS_PATH="${HOME}/.claude/settings.json"
 
 BINARY_SRC=""
+ADMIN_SRC=""
 FROM_RELEASE=0
 FROM_RELEASE_TAG=""
 SHA256_EXPECTED=""
+ADMIN_SHA256_EXPECTED=""
 SYMLINK_DIR=""
 SYMLINK_DEFAULT=""
 NO_SYMLINK=0
@@ -80,6 +116,8 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --binary)
             BINARY_SRC="$2"; shift 2 ;;
+        --admin-binary)
+            ADMIN_SRC="$2"; shift 2 ;;
         --from-release)
             FROM_RELEASE=1
             # Optional tag argument: accept only if the next arg
@@ -92,6 +130,8 @@ while [[ $# -gt 0 ]]; do
             ;;
         --sha256)
             SHA256_EXPECTED="$2"; shift 2 ;;
+        --admin-sha256)
+            ADMIN_SHA256_EXPECTED="$2"; shift 2 ;;
         --symlink-dir)
             SYMLINK_DIR="$2"; shift 2 ;;
         --no-symlink)
@@ -123,6 +163,30 @@ if [[ -n "$SHA256_EXPECTED" && "$FROM_RELEASE" -eq 0 ]]; then
 fi
 if [[ -n "$SHA256_EXPECTED" && ! "$SHA256_EXPECTED" =~ ^[0-9a-f]{64}$ ]]; then
     echo "install.sh: --sha256 must be 64 lowercase hex characters" >&2
+    exit 2
+fi
+if [[ "$FROM_RELEASE" -eq 1 && -n "$ADMIN_SRC" ]]; then
+    echo "install.sh: --from-release and --admin-binary are mutually exclusive" >&2
+    exit 2
+fi
+if [[ -n "$ADMIN_SHA256_EXPECTED" && "$FROM_RELEASE" -eq 0 ]]; then
+    echo "install.sh: --admin-sha256 only applies with --from-release" >&2
+    exit 2
+fi
+if [[ -n "$ADMIN_SHA256_EXPECTED" && ! "$ADMIN_SHA256_EXPECTED" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "install.sh: --admin-sha256 must be 64 lowercase hex characters" >&2
+    exit 2
+fi
+# --sha256 and --admin-sha256 go together (b.vqr): asking to verify one
+# asset must not install the other unverified.
+if [[ -n "$SHA256_EXPECTED" && -z "$ADMIN_SHA256_EXPECTED" ]]; then
+    echo "install.sh: --sha256 without --admin-sha256 would install agent-director-admin unverified; refusing to install." >&2
+    echo "  Pass --admin-sha256 <hex> too (the sha256 of the agent-director-admin release asset), or neither flag to skip verification." >&2
+    exit 2
+fi
+if [[ -n "$ADMIN_SHA256_EXPECTED" && -z "$SHA256_EXPECTED" ]]; then
+    echo "install.sh: --admin-sha256 without --sha256 would install agent-director unverified; refusing to install." >&2
+    echo "  Pass --sha256 <hex> too (the sha256 of the agent-director release asset), or neither flag to skip verification." >&2
     exit 2
 fi
 
@@ -209,6 +273,7 @@ if [[ "$FROM_RELEASE" -eq 1 ]]; then
             exit 3 ;;
     esac
     asset="agent-director-${rel_os}-${rel_arch}"
+    admin_asset="agent-director-admin-${rel_os}-${rel_arch}"
 
     # Resolve the tag if the operator didn't supply one. Prefer `gh`
     # (carries the operator's auth, avoids the unauthenticated API
@@ -227,19 +292,18 @@ if [[ "$FROM_RELEASE" -eq 1 ]]; then
             echo "install.sh: --from-release: no releases published for $RELEASE_REPO_SLUG yet" >&2
             echo "  options:" >&2
             echo "    - build from source: make build && bash $0" >&2
-            echo "    - point at a local binary: bash $0 --binary <path>" >&2
+            echo "    - point at local binaries: bash $0 --binary <path> --admin-binary <path>" >&2
             exit 3
         fi
     fi
-    echo "  release : $RELEASE_REPO_SLUG @ $FROM_RELEASE_TAG ($asset)"
+    echo "  release : $RELEASE_REPO_SLUG @ $FROM_RELEASE_TAG ($asset, $admin_asset)"
 
-    asset_url="https://github.com/${RELEASE_REPO_SLUG}/releases/download/${FROM_RELEASE_TAG}/${asset}"
     tmp_bin="$(mktemp -t agent-director.XXXXXX)"
-    # Defer-cleanup the tempfile on any exit path that doesn't move
-    # past the BINARY_SRC assignment. install -m 0755 later in the
-    # script copies the contents into place, so the tempfile being
-    # cleaned up at script exit is fine.
-    trap 'rm -f "$tmp_bin"' EXIT
+    tmp_admin="$(mktemp -t agent-director-admin.XXXXXX)"
+    # Defer-cleanup the tempfiles on any exit path. The install steps
+    # later in the script copy their contents into place, so the
+    # tempfiles being cleaned up at script exit is fine.
+    trap 'rm -f "$tmp_bin" "$tmp_admin"' EXIT
 
     # ----------------------------------------------------------------
     # CDN-propagation retry (b.kym).
@@ -261,6 +325,10 @@ if [[ "$FROM_RELEASE" -eq 1 ]]; then
     #     `gh` is on PATH (auth path uses different URL surface that
     #     typically propagates faster); if `gh` is unavailable or
     #     fails, emit the improved failure message and exit 3.
+    #   - except for the agent-director-admin asset of a release before
+    #     0.11.0 (b.vqr): such a release has none and never will, so
+    #     waiting cannot help. Its 404/403 is refused at once, with no
+    #     retry or gh fallback and no wait-and-retry advice (exit 3).
     #
     # INSTALL_SH_TEST_CURL_OVERRIDE: test-only escape hatch. When set,
     # the named executable replaces real `curl` for this download
@@ -275,103 +343,153 @@ if [[ "$FROM_RELEASE" -eq 1 ]]; then
         _ad_curl_cmd="$INSTALL_SH_TEST_CURL_OVERRIDE"
     fi
 
-    download_ok=0
-    attempt=1
-    max_attempts=5
-    backoff_delays=(2 4 8 16 32)
-    last_http_code=""
-    last_curl_exit=0
-    while [[ "$attempt" -le "$max_attempts" ]]; do
-        # -w '%{http_code}' surfaces the HTTP status even on -f's
-        # 22-exit; -o writes the body (or nothing, on 4xx with -f).
-        http_code=$("$_ad_curl_cmd" -sSL --retry 0 \
-            -w '%{http_code}' -o "$tmp_bin" \
-            "$asset_url" 2>/dev/null || true)
-        last_curl_exit=$?
-        last_http_code="$http_code"
+    # ad_release_predates_admin: succeed when $FROM_RELEASE_TAG names a
+    # release before 0.11.0, the first that ships agent-director-admin
+    # (b.vqr): its X.Y.Z (after an optional leading "v"; a -prerelease
+    # or +build suffix ignored) is below 0.11.0. A tag of any other
+    # shape is not judged to predate it.
+    ad_release_predates_admin() {
+        [[ "$FROM_RELEASE_TAG" =~ ^v?([0-9]+)\.([0-9]+)\.([0-9]+)([-+].*)?$ ]] || return 1
+        (( 10#${BASH_REMATCH[1]} == 0 && 10#${BASH_REMATCH[2]} < 11 ))
+    }
 
-        if [[ "$http_code" == "200" ]]; then
-            download_ok=1
-            break
-        fi
-
-        if [[ "$http_code" != "404" && "$http_code" != "403" ]]; then
-            # DNS/network/TLS/etc. — fail fast, do not retry.
-            break
-        fi
-
-        if [[ "$attempt" -lt "$max_attempts" ]]; then
-            delay=${backoff_delays[$((attempt-1))]}
-            echo "install.sh: --from-release: asset not yet available (HTTP $http_code), retrying in ${delay}s (attempt $attempt/$max_attempts)" >&2
-            sleep "$delay"
-        fi
-        attempt=$((attempt+1))
-    done
-
-    if [[ "$download_ok" -ne 1 ]]; then
-        # gh-fallback: the API path uses different URL surface that
-        # propagates faster after a fresh release. Only attempt if
-        # `gh` is on PATH; failure here falls through to the original
-        # error message so the operator sees what actually broke.
-        if command -v gh >/dev/null 2>&1; then
-            echo "install.sh: --from-release: curl path exhausted retries; trying \`gh release download\` fallback" >&2
-            if gh release download "$FROM_RELEASE_TAG" \
-                    -R "$RELEASE_REPO_SLUG" \
-                    -p "$asset" \
-                    -O "$tmp_bin" \
-                    --clobber 2>/dev/null; then
-                download_ok=1
-            else
-                echo "install.sh: --from-release: gh release download fallback also failed (gh may not be authenticated for $RELEASE_REPO_SLUG)" >&2
-            fi
-        fi
-    fi
-
-    if [[ "$download_ok" -ne 1 ]]; then
-        echo "install.sh: --from-release: failed to download asset after ${max_attempts} attempts" >&2
-        echo "  asset   : $asset" >&2
-        echo "  url     : $asset_url" >&2
+    # ad_refuse_admin_absent <asset> <url> <HTTP status>: refuse a
+    # release before 0.11.0, whose agent-director-admin asset <asset> is
+    # missing because the release has none, and exit 3. Re-running can
+    # never find it, so the advice is another release, not waiting.
+    ad_refuse_admin_absent() {
+        echo "install.sh: --from-release: release $FROM_RELEASE_TAG has no agent-director-admin binary; refusing to install." >&2
+        echo "  asset   : $1" >&2
+        echo "  url     : $2" >&2
         echo "  tag     : $FROM_RELEASE_TAG" >&2
         echo "  repo    : $RELEASE_REPO_SLUG" >&2
-        if [[ -n "$last_http_code" && "$last_http_code" != "000" ]]; then
-            echo "  last HTTP status: $last_http_code" >&2
-        fi
-        if [[ "$last_http_code" == "404" || "$last_http_code" == "403" ]]; then
-            echo "" >&2
-            echo "  GitHub's release-asset CDN can return 404/403 for ~30 minutes" >&2
-            echo "  after a fresh release while the asset propagates. Options:" >&2
-            echo "    - wait a few minutes and re-run this command" >&2
-            echo "    - install \`gh\` and re-run (gh's auth path propagates faster)" >&2
-            echo "    - download the binary manually from $RELEASE_REPO_SLUG's releases page" >&2
-            echo "      and run: bash $0 --binary <path-to-downloaded-binary>" >&2
-        else
-            echo "" >&2
-            echo "  Suggested fallback: download the asset manually and re-run with" >&2
-            echo "    bash $0 --binary <path-to-downloaded-binary>" >&2
-        fi
+        echo "  last HTTP status: $3" >&2
+        echo "" >&2
+        echo "  Releases before 0.11.0 ship no agent-director-admin binary, so" >&2
+        echo "  re-running this command will never find one. Instead:" >&2
+        echo "    - install release 0.11.0 or later: bash $0 --from-release <tag of v0.11.0 or later>" >&2
         exit 3
-    fi
+    }
 
-    if [[ -n "$SHA256_EXPECTED" ]]; then
-        if command -v sha256sum >/dev/null 2>&1; then
-            actual=$(sha256sum "$tmp_bin" | awk '{print $1}')
-        elif command -v shasum >/dev/null 2>&1; then
-            actual=$(shasum -a 256 "$tmp_bin" | awk '{print $1}')
-        else
-            echo "install.sh: --sha256: neither sha256sum nor shasum available" >&2
+    # ad_download_asset <asset> <dest> <manual-install advice> [<admin>]:
+    # download the release asset <asset> to <dest> with the retry and gh
+    # fallback above; on failure print the diagnosis and exit 3. <admin>
+    # is 1 for the agent-director-admin asset: a 404/403 for it from a
+    # release before 0.11.0 goes to ad_refuse_admin_absent at once.
+    ad_download_asset() {
+        local asset="$1" dest="$2" manual_advice="$3" is_admin="${4:-0}"
+        local asset_url="https://github.com/${RELEASE_REPO_SLUG}/releases/download/${FROM_RELEASE_TAG}/${asset}"
+        local download_ok=0 attempt=1 max_attempts=5
+        local backoff_delays=(2 4 8 16 32)
+        local last_http_code="" http_code delay
+        while [[ "$attempt" -le "$max_attempts" ]]; do
+            # -w '%{http_code}' surfaces the HTTP status even on -f's
+            # 22-exit; -o writes the body (or nothing, on 4xx with -f).
+            http_code=$("$_ad_curl_cmd" -sSL --retry 0 \
+                -w '%{http_code}' -o "$dest" \
+                "$asset_url" 2>/dev/null || true)
+            last_http_code="$http_code"
+
+            if [[ "$http_code" == "200" ]]; then
+                download_ok=1
+                break
+            fi
+
+            if [[ "$http_code" != "404" && "$http_code" != "403" ]]; then
+                # DNS/network/TLS/etc. — fail fast, do not retry.
+                break
+            fi
+
+            if [[ "$is_admin" -eq 1 ]] && ad_release_predates_admin; then
+                # Not propagation lag: the release has no such asset.
+                ad_refuse_admin_absent "$asset" "$asset_url" "$http_code"
+            fi
+
+            if [[ "$attempt" -lt "$max_attempts" ]]; then
+                delay=${backoff_delays[$((attempt-1))]}
+                echo "install.sh: --from-release: asset not yet available (HTTP $http_code), retrying in ${delay}s (attempt $attempt/$max_attempts)" >&2
+                sleep "$delay"
+            fi
+            attempt=$((attempt+1))
+        done
+
+        if [[ "$download_ok" -ne 1 ]]; then
+            # gh-fallback: the API path uses different URL surface that
+            # propagates faster after a fresh release. Only attempt if
+            # `gh` is on PATH; failure here falls through to the original
+            # error message so the operator sees what actually broke.
+            if command -v gh >/dev/null 2>&1; then
+                echo "install.sh: --from-release: curl path exhausted retries; trying \`gh release download\` fallback" >&2
+                if gh release download "$FROM_RELEASE_TAG" \
+                        -R "$RELEASE_REPO_SLUG" \
+                        -p "$asset" \
+                        -O "$dest" \
+                        --clobber 2>/dev/null; then
+                    download_ok=1
+                else
+                    echo "install.sh: --from-release: gh release download fallback also failed (gh may not be authenticated for $RELEASE_REPO_SLUG)" >&2
+                fi
+            fi
+        fi
+
+        if [[ "$download_ok" -ne 1 ]]; then
+            echo "install.sh: --from-release: failed to download asset after ${max_attempts} attempts" >&2
+            echo "  asset   : $asset" >&2
+            echo "  url     : $asset_url" >&2
+            echo "  tag     : $FROM_RELEASE_TAG" >&2
+            echo "  repo    : $RELEASE_REPO_SLUG" >&2
+            if [[ -n "$last_http_code" && "$last_http_code" != "000" ]]; then
+                echo "  last HTTP status: $last_http_code" >&2
+            fi
+            if [[ "$last_http_code" == "404" || "$last_http_code" == "403" ]]; then
+                echo "" >&2
+                echo "  GitHub's release-asset CDN can return 404/403 for ~30 minutes" >&2
+                echo "  after a fresh release while the asset propagates. Options:" >&2
+                echo "    - wait a few minutes and re-run this command" >&2
+                echo "    - install \`gh\` and re-run (gh's auth path propagates faster)" >&2
+                echo "    - download the binaries manually from $RELEASE_REPO_SLUG's releases page" >&2
+                echo "      and run: $manual_advice" >&2
+            else
+                echo "" >&2
+                echo "  Suggested fallback: download the assets manually and re-run with" >&2
+                echo "    $manual_advice" >&2
+            fi
             exit 3
         fi
-        if [[ "$actual" != "$SHA256_EXPECTED" ]]; then
-            echo "install.sh: --from-release: sha256 mismatch" >&2
-            echo "  expected: $SHA256_EXPECTED" >&2
+    }
+
+    # ad_verify_sha256 <file> <expected> <flag> <label>: when <expected>
+    # is set, check <file>'s sha256 against it, naming the check <label>
+    # in the output; exit 3 on a mismatch.
+    ad_verify_sha256() {
+        local file="$1" expected="$2" flag="$3" label="$4" actual
+        [[ -n "$expected" ]] || return 0
+        if command -v sha256sum >/dev/null 2>&1; then
+            actual=$(sha256sum "$file" | awk '{print $1}')
+        elif command -v shasum >/dev/null 2>&1; then
+            actual=$(shasum -a 256 "$file" | awk '{print $1}')
+        else
+            echo "install.sh: $flag: neither sha256sum nor shasum available" >&2
+            exit 3
+        fi
+        if [[ "$actual" != "$expected" ]]; then
+            echo "install.sh: --from-release: $label mismatch" >&2
+            echo "  expected: $expected" >&2
             echo "  actual  : $actual" >&2
             exit 3
         fi
-        echo "  sha256  : verified"
-    fi
+        printf '  %-8s: verified\n' "$label"
+    }
 
-    chmod +x "$tmp_bin"
+    manual_advice="bash $0 --binary <path-to-downloaded-agent-director> --admin-binary <path-to-downloaded-agent-director-admin>"
+    ad_download_asset "$asset" "$tmp_bin" "$manual_advice"
+    ad_verify_sha256 "$tmp_bin" "$SHA256_EXPECTED" "--sha256" "sha256"
+    ad_download_asset "$admin_asset" "$tmp_admin" "$manual_advice" 1
+    ad_verify_sha256 "$tmp_admin" "$ADMIN_SHA256_EXPECTED" "--admin-sha256" "admin sha256"
+
+    chmod +x "$tmp_bin" "$tmp_admin"
     BINARY_SRC="$tmp_bin"
+    ADMIN_SRC="$tmp_admin"
 fi
 
 # --------------------------------------------------------------------
@@ -385,38 +503,76 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # operator's source tree.
 VERSION_CHECK_REQUIRED=1
 
+# Prefer the in-repo builds (skills/install-agent-director sits two
+# levels under the repo root; bin/ is at the root).
+candidate="${SCRIPT_DIR}/../../bin/agent-director"
+admin_candidate="${SCRIPT_DIR}/../../bin/agent-director-admin"
+
 if [[ -z "$BINARY_SRC" ]]; then
-    # Prefer the in-repo build (skills/install-agent-director sits two
-    # levels under the repo root; bin/ is at the root).
-    candidate="${SCRIPT_DIR}/../../bin/agent-director"
     if [[ -x "$candidate" ]]; then
         BINARY_SRC="$candidate"
     elif command -v agent-director >/dev/null 2>&1; then
         BINARY_SRC="$(command -v agent-director)"
         VERSION_CHECK_REQUIRED=0
-    else
+    fi
+fi
+if [[ -n "$BINARY_SRC" && ! -x "$BINARY_SRC" ]]; then
+    echo "install.sh: source binary not executable: $BINARY_SRC" >&2
+    exit 3
+fi
+
+# The operator tool agent-director-admin (b.vqr): --admin-binary, the
+# downloaded release asset, or the in-repo build beside
+# bin/agent-director. It is never looked up on PATH, where it is never
+# installed.
+if [[ -z "$ADMIN_SRC" && -x "$admin_candidate" ]]; then
+    ADMIN_SRC="$admin_candidate"
+fi
+
+# A missing source is refused once, naming every option the re-run
+# needs (b.vqr): with neither binary beside the script, both --binary
+# and --admin-binary, never one refusal per binary. An agent-director
+# found only on PATH counts as missing then, since agent-director-admin
+# is never on PATH to pair with it.
+if [[ -z "$BINARY_SRC" || -z "$ADMIN_SRC" ]]; then
+    if [[ -n "$ADMIN_SRC" ]]; then
         echo "install.sh: no source binary found." >&2
         echo "  Tried: $candidate" >&2
         echo "  Tried: command -v agent-director" >&2
         echo "  Pass --binary <path> to override." >&2
-        exit 3
+    elif [[ -n "$BINARY_SRC" && "$VERSION_CHECK_REQUIRED" -eq 1 ]]; then
+        echo "install.sh: no agent-director-admin source binary found." >&2
+        echo "  Tried: $admin_candidate" >&2
+        echo "  Pass --admin-binary <path> to override." >&2
+    else
+        echo "install.sh: no source binaries found: neither agent-director nor agent-director-admin is beside the script." >&2
+        echo "  Tried: $candidate" >&2
+        if [[ -n "$BINARY_SRC" ]]; then
+            echo "  Found on PATH, not used: $BINARY_SRC (agent-director-admin is never on PATH to pair with it)" >&2
+        else
+            echo "  Tried: command -v agent-director" >&2
+        fi
+        echo "  Tried: $admin_candidate" >&2
+        echo "  Pass --binary <path> --admin-binary <path> (both from the same build) to override." >&2
     fi
-fi
-if [[ ! -x "$BINARY_SRC" ]]; then
-    echo "install.sh: source binary not executable: $BINARY_SRC" >&2
     exit 3
 fi
 echo "  source  : $BINARY_SRC"
+if [[ ! -x "$ADMIN_SRC" ]]; then
+    echo "install.sh: admin source binary not executable: $ADMIN_SRC" >&2
+    exit 3
+fi
+echo "  admin source: $ADMIN_SRC"
 
 # --------------------------------------------------------------------
 # --binary architecture probe (SR-2.2, preflight step 6)
 #
 # Catches the case where a supported host receives a wrong-arch binary
 # (e.g. operator passes a darwin-arm64 artifact on a Linux/x86_64 host).
-# Runs file(1) against $BINARY_SRC and pattern-matches against the
-# host pair captured by the OS/CPU gate (T1). On mismatch: exit 2 with
-# the SR-2.2 message. file(1) is a hard preflight requirement (T2 +
-# required_tools); never silent-skip.
+# Runs file(1) against $BINARY_SRC, and against $ADMIN_SRC (b.vqr), and
+# pattern-matches against the host pair captured by the OS/CPU gate (T1).
+# On mismatch: exit 2 with the SR-2.2 message. file(1) is a hard
+# preflight requirement (T2 + required_tools); never silent-skip.
 #
 # Multiple substring matches joined by && rather than a single regex —
 # file's output format varies subtly across distros (`x86-64` vs
@@ -424,30 +580,37 @@ echo "  source  : $BINARY_SRC"
 # binary on a future toolchain.
 # --------------------------------------------------------------------
 
-file_out="$(file -L -b "$BINARY_SRC")"
-arch_ok=0
-case "${uname_s}/${uname_m}" in
-    Linux/x86_64)
-        if grep -q "ELF 64-bit LSB" <<<"$file_out" \
-            && { grep -q "x86-64" <<<"$file_out" || grep -q "x86_64" <<<"$file_out"; }; then
-            arch_ok=1
-        fi
-        ;;
-    Darwin/arm64)
-        if grep -q "Mach-O" <<<"$file_out" \
-            && { grep -q "arm64e" <<<"$file_out" || grep -q "arm64" <<<"$file_out"; }; then
-            arch_ok=1
-        fi
-        ;;
-esac
+# ad_arch_probe <path> <flag>: exit 2 with the SR-2.2 message, naming
+# <flag>, unless file(1) shows <path> is a binary for this host pair.
+ad_arch_probe() {
+    local path="$1" flag="$2" file_out detected arch_ok=0
+    file_out="$(file -L -b "$path")"
+    case "${uname_s}/${uname_m}" in
+        Linux/x86_64)
+            if grep -q "ELF 64-bit LSB" <<<"$file_out" \
+                && { grep -q "x86-64" <<<"$file_out" || grep -q "x86_64" <<<"$file_out"; }; then
+                arch_ok=1
+            fi
+            ;;
+        Darwin/arm64)
+            if grep -q "Mach-O" <<<"$file_out" \
+                && { grep -q "arm64e" <<<"$file_out" || grep -q "arm64" <<<"$file_out"; }; then
+                arch_ok=1
+            fi
+            ;;
+    esac
 
-if [[ "$arch_ok" -ne 1 ]]; then
-    # Distil the diagnostic excerpt from file's output — first ~60 chars
-    # is plenty to surface "Mach-O arm64" or "ELF 64-bit LSB x86-64".
-    detected="$(printf '%s' "$file_out" | head -c 80 | tr '\n' ' ')"
-    echo "install.sh: --binary $BINARY_SRC: architecture mismatch (binary appears to be ${detected}; host is ${uname_s}/${uname_m}). Did you pass the wrong --binary?" >&2
-    exit 2
-fi
+    if [[ "$arch_ok" -ne 1 ]]; then
+        # Distil the diagnostic excerpt from file's output — first ~60 chars
+        # is plenty to surface "Mach-O arm64" or "ELF 64-bit LSB x86-64".
+        detected="$(printf '%s' "$file_out" | head -c 80 | tr '\n' ' ')"
+        echo "install.sh: $flag $path: architecture mismatch (binary appears to be ${detected}; host is ${uname_s}/${uname_m}). Did you pass the wrong $flag?" >&2
+        exit 2
+    fi
+}
+
+ad_arch_probe "$BINARY_SRC" "--binary"
+ad_arch_probe "$ADMIN_SRC" "--admin-binary"
 
 # --------------------------------------------------------------------
 # Source-tree version check
@@ -515,6 +678,59 @@ if [[ "$FROM_RELEASE" -eq 0 && "${VERSION_CHECK_REQUIRED:-1}" -eq 1 ]]; then
 fi
 
 # --------------------------------------------------------------------
+# Version-stamp pairing (b.vqr)
+#
+# agent-director and agent-director-admin open the same store, so they
+# must come from the same build: refuse to install unless both
+# binaries' `version` verbs report the same version and commit, and
+# that commit is a real one. A binary with no readable stamp (no
+# `version` verb, or no version or commit in its output) cannot be
+# shown to match and is refused too. So is a pair whose commit is
+# empty or "unknown", as the source-tree check above treats it: a
+# plain `go build` reports {"version":"dev","commit":"unknown"}, so two
+# such builds from different trees would otherwise count as a pair.
+# --------------------------------------------------------------------
+
+# ad_version_stamp <binary>: print "<version> <commit>" from the
+# binary's `version` verb, or nothing when either is missing.
+ad_version_stamp() {
+    "$1" version 2>/dev/null \
+        | jq -er 'select((.version | type) == "string" and (.commit | type) == "string") | "\(.version) \(.commit)"' 2>/dev/null \
+        || true
+}
+
+main_stamp="$(ad_version_stamp "$BINARY_SRC")"
+admin_stamp="$(ad_version_stamp "$ADMIN_SRC")"
+if [[ "$main_stamp" != "$admin_stamp" ]]; then
+    echo "install.sh: agent-director and agent-director-admin version stamps differ; refusing to install." >&2
+    echo "  agent-director      : $BINARY_SRC (${main_stamp:-<no version stamp>})" >&2
+    echo "  agent-director-admin: $ADMIN_SRC (${admin_stamp:-<no version stamp>})" >&2
+    echo "" >&2
+    echo "  Both binaries open the same store, so they must come from the same" >&2
+    echo "  build (the same version and commit). Either:" >&2
+    echo "    - rebuild both first:  make build" >&2
+    echo "    - or download release: rerun with --from-release (omit --binary and --admin-binary)" >&2
+    exit 3
+fi
+# The stamps are equal; the commit is the stamp's last word.
+stamp_commit="${main_stamp##* }"
+if [[ -z "$main_stamp" || -z "$stamp_commit" || "$stamp_commit" == "unknown" ]]; then
+    echo "install.sh: agent-director and agent-director-admin carry no commit stamp, so they cannot be shown to come from the same build; refusing to install." >&2
+    echo "  agent-director      : $BINARY_SRC (${main_stamp:-<no version stamp>})" >&2
+    echo "  agent-director-admin: $ADMIN_SRC (${admin_stamp:-<no version stamp>})" >&2
+    echo "" >&2
+    echo "  Both binaries open the same store, so they must come from the same" >&2
+    echo "  build, and only a commit stamp can show that: binaries built without" >&2
+    echo "  one (a plain 'go build' reports commit \"unknown\") match any other" >&2
+    echo "  such build, from any tree. 'make build' in a git checkout stamps" >&2
+    echo "  both with the checkout's commit. Either:" >&2
+    echo "    - rebuild both first:  make build" >&2
+    echo "    - or download release: rerun with --from-release (omit --binary and --admin-binary)" >&2
+    exit 3
+fi
+echo "  version-check: agent-director-admin stamp matches ($main_stamp)"
+
+# --------------------------------------------------------------------
 # Create install root + bin dir
 # --------------------------------------------------------------------
 
@@ -546,6 +762,9 @@ chmod 00755 "$DEFAULT_BIN_DIR"
 CANONICAL="${DEFAULT_BIN_DIR}/agent-director"
 PRIOR="${CANONICAL}.prior"
 TMP="${CANONICAL}.tmp.$$"
+ADMIN_CANONICAL="${DEFAULT_ADMIN_DIR}/agent-director-admin"
+ADMIN_PRIOR="${ADMIN_CANONICAL}.prior"
+ADMIN_TMP="${ADMIN_CANONICAL}.tmp.$$"
 
 if [[ "$KEEP_PRIOR" -eq 1 && -f "$CANONICAL" ]]; then
     cp -f "$CANONICAL" "$PRIOR"
@@ -553,14 +772,55 @@ if [[ "$KEEP_PRIOR" -eq 1 && -f "$CANONICAL" ]]; then
     echo "  prior   : snapshotted to $PRIOR"
 fi
 
+# --keep-prior snapshots agent-director-admin too (b.vqr), before either
+# binary is replaced, so rolling both back restores a matching pair.
+# With no agent-director-admin installed yet but an agent-director
+# being replaced (an upgrade from a release before 0.11.0), there is
+# nothing to snapshot: a stale .prior, which would pair wrongly, is
+# removed, and the rollback is removing agent-director-admin.
+if [[ "$KEEP_PRIOR" -eq 1 ]]; then
+    if [[ -f "$ADMIN_CANONICAL" ]]; then
+        cp -f "$ADMIN_CANONICAL" "$ADMIN_PRIOR"
+        chmod 0755 "$ADMIN_PRIOR"
+        echo "  admin prior: snapshotted to $ADMIN_PRIOR"
+    elif [[ -f "$CANONICAL" ]]; then
+        rm -f "$ADMIN_PRIOR"
+        echo "  admin prior: none (no agent-director-admin was installed); to roll back, remove $ADMIN_CANONICAL"
+    fi
+fi
+
+# --------------------------------------------------------------------
+# Both binaries are staged before either is replaced (b.vqr): the
+# admin directory is created and both temp copies made, with their
+# modes, first; only then do the two mvs run, back to back. A failure
+# while staging (a full disk, an unwritable admin directory) so
+# replaces neither binary, rather than leaving a new agent-director
+# beside an old agent-director-admin. The EXIT trap removes a staged
+# copy that was never moved into place (and the --from-release
+# downloads, as before).
+#
+# The operator tool agent-director-admin goes into its own directory
+# (mode 0700, five digits to clear an inherited setgid bit as above),
+# never ~/.agent-director/bin/ and never on PATH: no option creates a
+# symlink for it. Its path is printed once, at the end.
+# --------------------------------------------------------------------
+
+trap 'rm -f "$TMP" "$ADMIN_TMP" ${tmp_bin:+"$tmp_bin"} ${tmp_admin:+"$tmp_admin"}' EXIT
+
+mkdir -p "$DEFAULT_ADMIN_DIR"
+chmod 00700 "$DEFAULT_ADMIN_DIR"
 cp "$BINARY_SRC" "$TMP"
 chmod 0755 "$TMP"
+cp "$ADMIN_SRC" "$ADMIN_TMP"
+chmod 0755 "$ADMIN_TMP"
 mv "$TMP" "$CANONICAL"
+mv "$ADMIN_TMP" "$ADMIN_CANONICAL"
 
 echo "  binary  : $CANONICAL"
 
 # --------------------------------------------------------------------
-# Optional PATH symlink
+# Optional PATH symlink — agent-director only. agent-director-admin never
+# gets one, under any option (b.vqr).
 # --------------------------------------------------------------------
 
 if [[ "$NO_SYMLINK" -eq 0 && -n "$SYMLINK_DIR" ]]; then
@@ -857,4 +1117,5 @@ if [[ "$REGISTER_MCP" -eq 1 ]]; then
     fi
 fi
 
+echo "  admin   : $ADMIN_CANONICAL (operator tool, not on PATH; run it only with a human's explicit approval for that run)"
 echo "install.sh: done. Try: $CANONICAL help"

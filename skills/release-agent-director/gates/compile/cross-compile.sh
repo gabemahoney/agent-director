@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # gate:        compile (cross-platform)
-# checks:      make release-binaries produces 3 cross-compiled binaries
+# checks:      make release-binaries produces 6 cross-compiled binaries:
+#              agent-director and agent-director-admin (b.vqr) per target
 # usage:       bash cross-compile.sh [--worktree-root <path>]
 # env:         RELEASE_PKG_DIR — dir holding the canonical package.json used for
 #                   version derivation (default: pkg/ts-bun-client).
@@ -64,9 +65,14 @@ export AGENT_DIRECTOR_BUILD_VERSION
 # ─── targets ──────────────────────────────────────────────────────────────────
 # DIST_DIR must match the RELEASE_DIST_DIR passed through to `make` below.
 DIST_DIR="${RELEASE_DIST_DIR:-dist}"
-TARGETS=("linux/amd64" "linux/arm64" "darwin/arm64")
-BINARIES=("${DIST_DIR}/agent-director-linux-amd64" "${DIST_DIR}/agent-director-linux-arm64" "${DIST_DIR}/agent-director-darwin-arm64")
-GATE_NAMES=("compile.linux-amd64" "compile.linux-arm64" "compile.darwin-arm64")
+# Parallel arrays, one entry per binary: agent-director, then
+# agent-director-admin (b.vqr), for each of the three targets.
+TARGETS=("linux/amd64" "linux/arm64" "darwin/arm64"
+         "linux/amd64" "linux/arm64" "darwin/arm64")
+BINARIES=("${DIST_DIR}/agent-director-linux-amd64" "${DIST_DIR}/agent-director-linux-arm64" "${DIST_DIR}/agent-director-darwin-arm64"
+          "${DIST_DIR}/agent-director-admin-linux-amd64" "${DIST_DIR}/agent-director-admin-linux-arm64" "${DIST_DIR}/agent-director-admin-darwin-arm64")
+GATE_NAMES=("compile.linux-amd64" "compile.linux-arm64" "compile.darwin-arm64"
+            "compile.admin-linux-amd64" "compile.admin-linux-arm64" "compile.admin-darwin-arm64")
 
 # ─── run make release-binaries ────────────────────────────────────────────────
 MAKE_START_S=$(date +%s)
@@ -92,7 +98,7 @@ _mtime() {
 overall_outcome="passed"
 sub_check_jsons=()
 
-for i in 0 1 2; do
+for i in "${!BINARIES[@]}"; do
   binary="${BINARIES[$i]}"
   gate="${GATE_NAMES[$i]}"
   target="${TARGETS[$i]}"

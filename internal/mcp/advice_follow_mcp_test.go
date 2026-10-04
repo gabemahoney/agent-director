@@ -2,7 +2,6 @@ package mcp_test
 
 import (
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -103,34 +102,6 @@ func TestAdviceFollow_I1_ToolsCallNameRequired(t *testing.T) {
 	advCLIResult(t, advCLICall(t, d, params), &list)
 	if len(list.Spawns) != 1 || list.Spawns[0].ClaudeInstanceID != "advcli-listed" {
 		t.Errorf("list = %+v; want the one seeded row", list.Spawns)
-	}
-}
-
-// TestAdviceFollow_I2_DeleteIDsRequired: I2 "delete: claude_instance_id is required (≥1)".
-func TestAdviceFollow_I2_DeleteIDsRequired(t *testing.T) {
-	const id = "advcli-delete-me"
-	for name, args := range map[string]map[string]any{
-		"absent": {},
-		"empty":  {"claude_instance_id": []string{}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			d, client := advCLIServer(t, id)
-			params := map[string]any{"name": "delete", "arguments": args}
-			advCLIRefused(t, advCLICall(t, d, params), "delete: claude_instance_id is required (≥1)")
-			if _, err := client.Get(id); err != nil {
-				t.Fatalf("refused delete touched the row: Get: %v", err)
-			}
-
-			args["claude_instance_id"] = []string{id}
-			var res api.DeleteResult
-			advCLIResult(t, advCLICall(t, d, params), &res)
-			if res.Results[id] != "ok" {
-				t.Errorf("results = %v; want %s: ok", res.Results, id)
-			}
-			if _, err := client.Get(id); !errors.Is(err, api.ErrSpawnNotFound) {
-				t.Errorf("Get after delete: %v; want ErrSpawnNotFound", err)
-			}
-		})
 	}
 }
 

@@ -64,14 +64,13 @@ When a verb fails, the harness compares the error envelope fields as follows:
 
 ## Per-verb summary
 
-Every callable verb in `manifest.CallableVerbs()` is a key (16 total). Verbs whose output is entirely fixture-derived carry `[]` and are diffed in full.
+Every callable verb in `manifest.CallableVerbs()` is a key (15 total). Verbs whose output is entirely fixture-derived carry `[]` and are diffed in full.
 
 | Verb | Non-deterministic selectors | Reason |
 |---|---|---|
 | `spawn` | `.claude_instance_id` | UUID generated per call |
 | `version` | `.version`, `.commit` | CLI stamped with -ldflags; `pkg/api.Version()` returns package default |
 | `decide` | — | all values fixture-derived |
-| `delete` | — | all values fixture-derived |
 | `expire` | `.ids` | which rows are selected depends on the call-time cutoff (now minus the window); `count`, `kept` and `kept_ids` are diffed; both cases in `success_expire.go` pin `kept` and `kept_ids` through `want`, and `TestEnvelopeDiff_Success/expire/kept` pins `ids` as well |
 | `find-missing` | — | all values fixture-derived |
 | `get` | — | all values fixture-derived |

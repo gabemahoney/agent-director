@@ -11,9 +11,8 @@ import (
 // descriptions_reuse_docs.go holds the shared description helper's cases for
 // reuse's documentation (Epic 17 Task 4): the reuse parameter text
 // (DescReuseFinishedParam, SR-18.10), the history-by-life forbidden forms
-// (DescReuseHistoryByLife, SR-18.16), delete's deprecation notice
-// (DescDeleteDeprecated, SR-18.8), the collision text (DescInstanceIDCollision,
-// SR-18.9), the recovery recourse (DescReuseRecourse, SR-18.4), and the
+// (DescReuseHistoryByLife, SR-18.16), the collision text
+// (DescInstanceIDCollision, SR-18.9), the recovery recourse (DescReuseRecourse, SR-18.4), and the
 // three forbidden lists together (DescReuseDocsForbidden), which
 // AssertMustNot checks over any text, Go source and Markdown included.
 
@@ -139,28 +138,6 @@ func DescReuseFinishedParam() DescCase {
 			finishedRowNotVerification, wrongServerSecondAgent,
 		},
 		MustNot: concatStrings(historyByLifeClaims, olderServe.MustNot),
-	}
-}
-
-// DescDeleteDeprecated is delete's deprecation notice as its manifest
-// description states it in compact form (SR-18.8, AC-DOC-07): DEPRECATED,
-// b.tep, not for cleanup or recovery, expire, spawn with the reuse opt-in in
-// its one spelling (reuseOptInSpelling, b.c4u), kill then find-missing, never
-// after a failed kill or on an assumed exit; never
-// the operator-only unusable-name removal or its "Operator actions" pointer,
-// nor delete-then-spawn. Check it with AssertAgentTextCase.
-func DescDeleteDeprecated() DescCase {
-	return DescCase{
-		Name: "delete manifest, deprecation notice",
-		Require: []string{
-			"DEPRECATED", "removal planned (b.tep)", "Not for cleanup or recovery",
-			"expire removes finished rows", "respawn with spawn " + reuseOptInSpelling,
-			"for a stuck live row, kill then find-missing", "Never delete after a failed kill",
-			"assuming a finished row's agent exited",
-		},
-		MustNot: append([]string{
-			OperatorActionsTitle, "name cannot be used", "unusable", "recorded tmux session name", "recorded name",
-		}, deleteThenSpawn...),
 	}
 }
 

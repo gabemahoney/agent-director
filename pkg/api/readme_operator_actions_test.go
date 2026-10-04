@@ -219,7 +219,7 @@ func unusableNameSteps() []stepSpec {
 			{sub: "kill-session", want: []string{socket, byID}},
 			listing,
 		}},
-		{"remove the row", []string{"agent-director delete"}, nil},
+		{"remove the row", []string{"agent-director-admin delete"}, nil},
 	}
 }
 

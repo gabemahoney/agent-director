@@ -343,27 +343,6 @@ var successCases = append([]successCase{
 
 	// ── expire: see success_expire.go ────────────────────────────────────
 
-	// ── delete ────────────────────────────────────────────────────────────
-	// delete one ended row; result is {results:{"row-ended":"ok"}}.
-	{
-		verb: "delete",
-		seed: func(t *testing.T) (string, map[string]any) {
-			t.Helper()
-			_, dbPath := apitest.SeedDeleteFixture(t)
-			return filepath.Dir(dbPath), map[string]any{"id": "row-ended"}
-		},
-		params: func(ctx map[string]any) map[string]any {
-			return map[string]any{
-				"claude_instance_id": []string{ctx["id"].(string)},
-			}
-		},
-		cliArgv: func(ctx map[string]any) []string {
-			return []string{"delete",
-				"--claude-instance-id", ctx["id"].(string),
-			}
-		},
-	},
-
 	// ── make-template ─────────────────────────────────────────────────────
 	// make-template overwrite-existing: SeedErrTemplateExists pre-populates
 	// HOME/.agent-director/templates/<name>.toml so the --overwrite path

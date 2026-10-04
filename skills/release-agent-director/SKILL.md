@@ -3,7 +3,8 @@ name: release-agent-director
 description: |-
   LLM-driven /release pipeline for agent-director. Invoke as `/release patch`,
   `/release minor`, or `/release major` to cut a coordinated release: discover
-  every test surface, cross-compile three CLI binaries, pack and install-verify
+  every test surface, cross-compile six binaries (agent-director and the
+  operator tool agent-director-admin per platform), pack and install-verify
   the npm tarball, generate release notes, then publish to npm + GitHub (only
   after every gate passes). Defaults to dry-run; pass `--release` to execute
   irreversible steps (npm publish, git tag, GitHub Release, fast-forward main,
@@ -67,8 +68,13 @@ list below names each phase and its Epic owner.
    for the isolation model and the executor-to-report field mapping. Built
    in E5.
 
-4. **`compile`** — Cross-compile three CLI binaries; per-binary smoke;
-   binary-version coherence. Built in E6.
+4. **`compile`** — Cross-compile six binaries: `agent-director-<os>-<arch>`
+   and the operator tool `agent-director-admin-<os>-<arch>` for linux/amd64,
+   linux/arm64 and darwin/arm64; per-binary smoke (the admin binary's `help`
+   must open with its human-approval statement); binary-version coherence
+   for both. The sha256 manifest covers all six, and the publish preflight
+   refuses an `agent-director` or `agent-director-admin` asset without its
+   pair. Built in E6.
 
 5. **`pack`** — `bun pm pack` of umbrella; install-verify the tarball into a
    temp HOME; tarball-coherence check (no inline version constants, etc.).

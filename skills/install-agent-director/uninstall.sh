@@ -6,6 +6,9 @@
 #     (preserving any other user hooks).
 #   - Remove the canonical binary and any `.prior` rollback snapshot
 #     under ~/.agent-director/bin/.
+#   - Remove the operator tool ~/.agent-director/admin/agent-director-admin,
+#     any `.prior` rollback snapshot of it, and its ~/.agent-director/admin/
+#     directory (b.vqr).
 #   - Remove the PATH symlink (if found at any of the standard
 #     locations or at --symlink-dir).
 #   - Leave ~/.agent-director/ intact (the operator may want to
@@ -24,6 +27,7 @@ set -euo pipefail
 
 readonly DEFAULT_INSTALL_ROOT="${HOME}/.agent-director"
 readonly DEFAULT_BIN_DIR="${DEFAULT_INSTALL_ROOT}/bin"
+readonly DEFAULT_ADMIN_DIR="${DEFAULT_INSTALL_ROOT}/admin"
 readonly DEFAULT_SETTINGS_PATH="${HOME}/.claude/settings.json"
 
 PURGE=0
@@ -168,6 +172,25 @@ if [[ -d "$DEFAULT_BIN_DIR" ]]; then
         rm -f "$f"
     done
     echo "uninstall.sh: removed binaries under $DEFAULT_BIN_DIR"
+fi
+
+# --------------------------------------------------------------------
+# Remove the operator tool agent-director-admin (and its .prior
+# rollback snapshot and any install tempfile beside it), then its
+# directory (b.vqr). A directory someone put other files in is left in
+# place, with a note.
+# --------------------------------------------------------------------
+
+if [[ -d "$DEFAULT_ADMIN_DIR" ]]; then
+    for f in "$DEFAULT_ADMIN_DIR"/agent-director-admin "$DEFAULT_ADMIN_DIR"/agent-director-admin.*; do
+        [[ -e "$f" || -L "$f" ]] || continue
+        rm -f "$f"
+    done
+    if rmdir "$DEFAULT_ADMIN_DIR" 2>/dev/null; then
+        echo "uninstall.sh: removed $DEFAULT_ADMIN_DIR"
+    else
+        echo "uninstall.sh: removed agent-director-admin; left $DEFAULT_ADMIN_DIR, which holds other files"
+    fi
 fi
 
 # --------------------------------------------------------------------

@@ -101,7 +101,6 @@ export type {
   ResumeParams, ResumeResult,
   FindMissingParams, FindMissingResult,
   ExpireParams, ExpireResult,
-  DeleteParams, DeleteResult,
   MakeTemplateParams, MakeTemplateResult,
   ListParams, ListResult,
   PauseParams, PauseResult,

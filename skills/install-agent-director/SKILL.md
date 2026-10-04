@@ -1,6 +1,6 @@
 ---
 name: install-agent-director
-description: Install (or upgrade) agent-director on this machine. Runs the bundled install.sh against the user's ~/ — creates ~/.agent-director/ with the binary, migrates and opens state.db (authorizing any older-schema upgrade via a one-shot sentinel), and injects two persistent `agent-director help` hooks into ~/.claude/settings.json (SessionStart + SessionEnd reason=compact). Use this skill when the user says "install agent-director", "set up agent-director", or "upgrade agent-director on this machine".
+description: Install (or upgrade) agent-director on this machine. Runs the bundled install.sh against the user's ~/ — creates ~/.agent-director/ with the binary and the off-PATH operator tool agent-director-admin, migrates and opens state.db (authorizing any older-schema upgrade via a one-shot sentinel), and injects two persistent `agent-director help` hooks into ~/.claude/settings.json (SessionStart + SessionEnd reason=compact). Use this skill when the user says "install agent-director", "set up agent-director", or "upgrade agent-director on this machine".
 ---
 
 ## First-time install on a brand-new machine
@@ -50,59 +50,117 @@ If a question reads like "Binary source (`--binary <path>`): use this,
 or point elsewhere?" you have failed. That is a question for someone
 who already knows what the script does. Rewrite it.
 
-### How the install writes the binary
+### How the install writes the binaries
 
-The install script copies the new binary into a sibling temp file
-under `~/.agent-director/bin/`, then `mv`s it over the canonical
-`~/.agent-director/bin/agent-director`. `mv` within one filesystem
-is atomic at the inode level, so concurrent readers see either the
-old binary or the new — never a half-written file. A running process
-(say, an in-flight Spawn whose hooks reference this binary) holds the
-old inode, so its current exec is unaffected by the swap.
+Every install writes two binaries from the same build, because both
+open the same store:
 
-The previous binary is *not* retained by default. Pass `--keep-prior`
-on upgrade to have install.sh snapshot the existing binary to
-`~/.agent-director/bin/agent-director.prior` before the swap. That
-gives you a one-step rollback (`mv .prior canonical`); without it,
-re-install the previous tag via `install.sh --from-release v<old>`.
+- `agent-director`, at `~/.agent-director/bin/agent-director` (and,
+  optionally, on PATH through a symlink; question 2);
+- the operator tool `agent-director-admin`, at
+  `~/.agent-director/admin/agent-director-admin` (directory mode 0700,
+  binary 0755). It is **never** put on PATH and never symlinked, under
+  any option. It is for a human's repair actions only; its help opens
+  with the rule that nobody runs it without a human's explicit approval
+  for that run, and agents never run it. **Never run it yourself while
+  installing**: install.sh checks its version stamp on its own. Tell the
+  operator where it is (install.sh prints its path once, at the end).
+
+install.sh refuses to install (exit 3) unless both binaries' `version`
+stamps (version and commit) are the same and carry a real commit. A
+plain `go build` stamps commit `unknown`, which cannot show that two
+binaries come from one build, so such a pair is refused even when the
+stamps match; `make build` in a git checkout stamps both with the
+checkout's commit, and release assets are stamped.
+
+The install script first copies both new binaries into sibling temp
+files in their directories (staging), and only once both are staged
+`mv`s each over its canonical path, back to back. A failure while
+staging (a full disk, an unwritable admin directory) replaces neither
+binary, so an install never leaves a new `agent-director` beside an old
+`agent-director-admin`. `mv` within one filesystem is atomic at the
+inode level, so concurrent readers see either the old binary or the
+new — never a half-written file. A running process (say, an in-flight
+Spawn whose hooks reference this binary) holds the old inode, so its
+current exec is unaffected by the swap.
+
+The previous binaries are *not* retained by default. Pass `--keep-prior`
+on upgrade to have install.sh snapshot both existing binaries before
+either new one is staged, to `~/.agent-director/bin/agent-director.prior` and
+`~/.agent-director/admin/agent-director-admin.prior`. That gives you a
+one-step rollback of the matching pair (`mv .prior canonical` for
+each). On an upgrade from a release before 0.11.0 there is no
+agent-director-admin to snapshot: install.sh removes any stale admin
+`.prior`, prints an `admin prior: none` line, and rolling back means
+removing `~/.agent-director/admin/agent-director-admin`. Without
+`--keep-prior`, re-install the previous tag via
+`install.sh --from-release v<old>` (this install.sh refuses a tag before
+0.11.0, which has no agent-director-admin).
 
 ### The four questions
 
-1. **Where should the binary come from? (`--from-release` / `--binary <path>`)**
+1. **Where should the binaries come from? (`--from-release` / `--binary <path>` with `--admin-binary <path>`)**
 
-   - *What this is:* agent-director is a single Go binary. The
-     install script copies that binary into `~/.agent-director/bin/`
-     and adds it to your PATH. We need to know where to copy *from*.
+   - *What this is:* agent-director is a Go binary that comes with a
+     second one from the same build, the operator tool
+     `agent-director-admin`. The install script copies
+     `agent-director` into `~/.agent-director/bin/` (and onto your
+     PATH) and `agent-director-admin` into
+     `~/.agent-director/admin/`, never on PATH. We need to know where to
+     copy both *from*; they must come from the same build.
    - *Four options:*
      - **(a) Download a pre-built release from GitHub** *(recommended
-       for new users)*. The script `curl -L`s the right asset for
-       your OS/arch from
+       for new users)*. The script `curl -L`s both assets for your
+       OS/arch (`agent-director-<os>-<arch>` and
+       `agent-director-admin-<os>-<arch>`) from
        `https://github.com/gabemahoney/agent-director/releases/latest`.
-       No Go toolchain needed. Flag: `--from-release`.
-     - **(b) Use a binary already built or downloaded locally.** If
-       you've run `make build` in a checkout, point at `./bin/agent-director`.
-       If you downloaded a tarball yourself, point at that. Flag:
-       `--binary <path>`.
+       No Go toolchain needed. Flag: `--from-release [tag]`. To verify
+       the two downloads, pass both `--sha256 <hex>` (the
+       `agent-director` asset) and `--admin-sha256 <hex>` (the
+       `agent-director-admin` asset), or neither: exactly one is refused
+       before anything is downloaded (exit 2, "--sha256 without
+       --admin-sha256 would install agent-director-admin unverified;
+       refusing to install.", or the mirror), so ask for both hashes or
+       none. Only releases 0.11.0 and later ship
+       `agent-director-admin`: a tag before 0.11.0 is refused at once
+       (exit 3, "release <tag> has no agent-director-admin binary"),
+       with no retry; pick 0.11.0 or later.
+     - **(b) Use binaries already built or downloaded locally.** If
+       you've run `make build` in a checkout, point at
+       `./bin/agent-director` and `./bin/agent-director-admin` (`make
+       build` builds both; install.sh also finds the admin binary
+       there on its own). If you downloaded the two release assets
+       yourself, point at both. Flags: `--binary <path>
+       --admin-binary <path>`.
      - **(c) Use whatever `agent-director` is on `PATH` today.** Only
-       makes sense if you're re-installing or upgrading an existing
-       install. The script falls back to this automatically if
-       neither (a) nor (b) is specified.
+       makes sense if you're re-installing an existing install, and
+       only together with a matching admin binary
+       (`--admin-binary ~/.agent-director/admin/agent-director-admin`
+       for a re-install): `agent-director-admin` is never looked up on
+       PATH, so it must come from `--admin-binary` (or the checkout's
+       `bin/`). With no admin binary given and neither binary beside
+       the script, install.sh refuses once (exit 3), naming both
+       `--binary` and `--admin-binary`.
      - **(d) Build from source now, then install.** Run `make build` in
-       this checkout to produce a fresh `./bin/agent-director`, then
-       point install.sh at it. No install.sh change needed: the
-       orchestrator runs `make build` first, then
-       `install.sh --binary ./bin/agent-director`. Prereq: Go 1.22+ on
-       PATH.
+       this checkout to produce fresh `./bin/agent-director` and
+       `./bin/agent-director-admin`, then point install.sh at them. No
+       install.sh change needed: the orchestrator runs `make build`
+       first, then
+       `install.sh --binary ./bin/agent-director --admin-binary ./bin/agent-director-admin`.
+       Prereq: Go 1.22+ on PATH.
    - *Default:* depends on what the orchestrator detects about the
      launch environment. As of b.q3b, install.sh refuses option (b)
      when `./bin/agent-director`'s embedded commit doesn't match
      `git rev-parse HEAD` — so "use the local binary" is only proposed
      when it's provably fresh.
      - **In a checked-out tree, Go available, `./bin/agent-director`
-       exists AND `agent-director version` reports a `commit` that
+       and `./bin/agent-director-admin` both exist AND
+       `./bin/agent-director version` reports a `commit` that
        matches `git rev-parse HEAD`** → propose **(b)** *use the
-       local binary*. It's the artifact of this exact source tree;
-       no rebuild needed.
+       local binaries*. They're the artifacts of this exact source
+       tree; no rebuild needed. (Read the stamp with
+       `./bin/agent-director version` only; install.sh compares the
+       admin binary's stamp itself.)
      - **In a checked-out tree with Go available but no fresh local
        binary** (missing, or `commit` doesn't match HEAD) → propose
        **(d)** *build from source*. The orchestrator runs `make build`
@@ -123,6 +181,15 @@ re-install the previous tag via `install.sh --from-release v<old>`.
    the binary's `version` verb and refuses option (b) unless the
    embedded commit matches HEAD — so the orchestrator can safely
    default to (b) when fresh, and falls through to (d)/(a) when not.
+   Separately, for every option, install.sh refuses (exit 3) unless
+   `agent-director` and `agent-director-admin` report the same
+   `version` stamp (version and commit), with a real commit: mixing
+   binaries from two builds, which both open the same store, is never
+   installed ("version stamps differ"), and neither is a pair whose
+   commit is `unknown` or empty, as a plain `go build` reports ("carry
+   no commit stamp, so they cannot be shown to come from the same
+   build"). The fix for both is `make build` in a git checkout (both
+   binaries again, stamped) or `--from-release`.
 
    - *Reversibility:* picking wrong is cheap. The next
      `uninstall.sh --purge` resets to a clean slate, and you can
@@ -130,7 +197,7 @@ re-install the previous tag via `install.sh --from-release v<old>`.
 
    If `--from-release` is selected but the repo has no releases yet,
    the script exits with a clear error. Don't paper over that —
-   surface it to the operator and loop back to (b) or (c).
+   surface it to the operator and loop back to (b) or (d).
 
 2. **Should the binary go on `PATH` via a symlink? (`--symlink-dir <dir>` or `--no-symlink`)**
 
@@ -139,7 +206,10 @@ re-install the previous tag via `install.sh --from-release v<old>`.
      `agent-director` from any shell, that directory needs to be on
      `PATH`, **or** we need to drop a symlink somewhere that already
      is. A symlink is a file that points at another file — running it
-     runs the target.
+     runs the target. This question is about `agent-director` only:
+     `agent-director-admin` never gets a symlink and is never put on
+     PATH, whatever you pick; don't add `~/.agent-director/admin/` to
+     PATH either.
    - *Options:*
      - **(a) Drop a symlink in `~/.local/bin`** *(recommended if it
        exists and is on PATH)*. This is the standard place for
@@ -235,8 +305,12 @@ re-install the previous tag via `install.sh --from-release v<old>`.
      "yes" execute the script. A "no" or any modification answer means
      loop back to the relevant question, not silently re-pick.
    - If this is an upgrade and the operator wants a single-step
-     rollback path, add `--keep-prior`. Otherwise leave it off;
+     rollback path, add `--keep-prior` (it snapshots both binaries, so
+     the rollback restores a matching pair). Otherwise leave it off;
      a re-install with `--from-release v<old>` is the fallback.
+   - After the run, tell the operator where `agent-director-admin` was
+     installed (install.sh's `admin   :` line, just before
+     `install.sh: done`) and that it is not on PATH. Do not run it.
 
 Do NOT skip this dialog because flags "look obvious from context".
 The operator may want a non-default path, MCP off, or a `--keep-prior`
@@ -247,8 +321,15 @@ exists to prevent.
 
 This skill runs `install.sh` from the same directory. The script:
 
-1. **Pre-flights.** Runs the following checks in order; any failure
-   aborts with exit code `2` and a clear message:
+1. **Pre-flights.** First, while parsing flags, it refuses (exit `2`)
+   an unknown flag; `--from-release` with `--binary` or
+   `--admin-binary`; `--sha256` or `--admin-sha256` without
+   `--from-release` ("only applies with --from-release") or not 64
+   lowercase hex characters; and exactly one of `--sha256` and
+   `--admin-sha256` ("would install <the other binary> unverified;
+   refusing to install"). Then it runs the
+   following checks in order; any failure aborts with a clear message
+   and exit code `2`, or `3` where noted:
 
    1. **Whitespace-in-install-path** — `$HOME` must not contain
       whitespace (SRD §4.3; tmux's direct-argv invocation requires
@@ -274,15 +355,25 @@ This skill runs `install.sh` from the same directory. The script:
       `dnf install sqlite`. `curl` is also required when
       `--from-release` is supplied.
    4. **`--from-release` resolution** (if applicable) — downloads
-      the matching asset for `$(uname -s)`/`$(uname -m)` from GitHub
-      Releases; optional `--sha256` verifies the asset.
-   5. **`--binary` path/executability resolution** — settles
-      `BINARY_SRC` from `--binary <path>`, the in-repo build, or
-      `command -v agent-director`; verifies it is an executable
-      regular file.
-   6. **`--binary` architecture probe (SR-2.2).** Runs `file(1)`
-      against `BINARY_SRC` and pattern-matches against the host
-      pair captured by step 2:
+      both matching assets for `$(uname -s)`/`$(uname -m)` from GitHub
+      Releases (`agent-director-<os>-<arch>` and
+      `agent-director-admin-<os>-<arch>`); `--sha256` verifies the first
+      and `--admin-sha256` the second (both or neither, as above), and a
+      mismatch aborts with exit 3, installing nothing. A release before
+      0.11.0 has no `agent-director-admin` asset and is refused at once
+      (exit 3), with no CDN retry: install 0.11.0 or later.
+   5. **`--binary` / `--admin-binary` path/executability resolution** —
+      settles `BINARY_SRC` from `--binary <path>`, the in-repo build, or
+      `command -v agent-director`, and `ADMIN_SRC` from
+      `--admin-binary <path>`, the downloaded release asset, or the
+      in-repo `bin/agent-director-admin` (never from PATH); verifies
+      each is an executable regular file. A missing binary is refused
+      with exit 3; with neither binary beside the script, one combined
+      refusal names both `--binary` and `--admin-binary`.
+   6. **Architecture probe (SR-2.2)**, for `--binary` and
+      `--admin-binary` alike. Runs `file(1)` against `BINARY_SRC` and
+      `ADMIN_SRC` and pattern-matches against the host pair captured by
+      step 2:
       - `Linux/x86_64`: file output must contain `ELF 64-bit LSB`
         AND (`x86-64` OR `x86_64`).
       - `Darwin/arm64`: file output must contain `Mach-O` AND
@@ -290,7 +381,8 @@ This skill runs `install.sh` from the same directory. The script:
 
       Mismatch (e.g. operator passes a darwin-arm64 artifact on
       Linux/x86_64) aborts with exit `2` and a message naming the
-      binary, the detected architecture excerpt, and the host pair.
+      flag, the binary, the detected architecture excerpt, and the
+      host pair.
       The probe is independent of the OS/CPU gate above: even on a
       supported host, a wrong-arch binary is refused here.
    7. **Source-tree version check** — when the binary came from a
@@ -298,9 +390,21 @@ This skill runs `install.sh` from the same directory. The script:
       lives inside a git checkout, the binary's embedded commit
       must match `HEAD`. Catches the "operator forgot to
       `make build` after pulling new code" footgun.
+   8. **Version-stamp pairing** — `agent-director version` and
+      `agent-director-admin version` must report the same version and
+      commit; otherwise (or when one stamp cannot be read) the install
+      is refused with exit 3 ("version stamps differ"). Equal stamps
+      whose commit is `unknown` or empty (a plain `go build`), or two
+      unreadable stamps, are refused with exit 3 too ("carry no commit
+      stamp, so they cannot be shown to come from the same build").
+      Both refusals advise `make build` (in a git checkout it stamps
+      both binaries with the checkout's commit) or `--from-release`.
+      Both binaries open the same store, so they must come from one
+      build.
 
 2. **Creates `~/.agent-director/`** (mode 0700) if missing, plus
-   `~/.agent-director/bin/` for the binary.
+   `~/.agent-director/bin/` for the binary and
+   `~/.agent-director/admin/` (mode 0700) for the operator tool.
 
 3. **Copies the binary** to `~/.agent-director/bin/agent-director`
    (mode 0755). The source is determined by:
@@ -312,17 +416,28 @@ This skill runs `install.sh` from the same directory. The script:
      this skill was invoked from a checked-out tree, OR
    - the currently-running `agent-director` resolved via `command -v`.
 
-   With `--from-release`, an optional `--sha256 <hex>` flag verifies
-   the downloaded asset against an expected hash before install.
+   With `--from-release`, `--sha256 <hex>` and `--admin-sha256 <hex>`
+   (both or neither) verify the two downloaded assets against their
+   expected hashes before install.
 
-   On upgrade (existing binary detected), the new binary is written
-   to a sibling temp file (`agent-director.tmp.$$`) and `mv`'d over
-   the canonical path. `mv` within one filesystem is atomic at the
-   inode level — concurrent readers see either the old binary or
+   It then copies `agent-director-admin` to
+   `~/.agent-director/admin/agent-director-admin` (mode 0755) the same
+   way, from the source step 5 of the pre-flights settled. It is never
+   put on PATH.
+
+   Both new binaries are staged first: each is written to a sibling
+   temp file (`agent-director.tmp.$$`, `agent-director-admin.tmp.$$`)
+   with its mode, and only once both are staged is each `mv`'d over
+   its canonical path, back to back. A failure while staging leaves
+   both old binaries in place. `mv` within one filesystem is atomic at
+   the inode level — concurrent readers see either the old binary or
    the new, never half; a running process holds the old inode, so an
-   in-flight exec is unaffected by the swap. With `--keep-prior` the
-   prior binary is snapshotted to `agent-director.prior` before the
-   swap for a one-step rollback.
+   in-flight exec is unaffected by the swap. With `--keep-prior` both
+   prior binaries are snapshotted (`agent-director.prior`,
+   `agent-director-admin.prior`) before either new binary is staged,
+   for a one-step rollback of the pair; on an upgrade from a release
+   before 0.11.0, which installed no admin binary, a stale admin
+   `.prior` is removed instead.
 
 4. **Rejects whitespace in the install path.** Per SRD §4.3 tmux's
    direct-argv invocation does not tolerate spaces in the binary
@@ -398,7 +513,12 @@ This skill runs `install.sh` from the same directory. The script:
    symlink at `<dir>/agent-director` pointing at the canonical
    binary. Default: `~/.local/bin` if it exists and is on PATH;
    otherwise no symlink (the operator can invoke the full path or
-   add `~/.agent-director/bin` to PATH manually).
+   add `~/.agent-director/bin` to PATH manually). `agent-director-admin`
+   never gets a symlink, under any option.
+
+9. **Prints the operator tool's path** once, at the end
+   (`admin   : ~/.agent-director/admin/agent-director-admin (operator
+   tool, not on PATH; ...)`), for the human.
 
 ## What this skill does NOT do
 
@@ -427,7 +547,9 @@ which deletes are recoverable from the filesystem and which are not.
 What the script removes *unconditionally* (the operator does not need
 to opt into these): the two help-hooks injected into
 `~/.claude/settings.json`, the binary under
-`~/.agent-director/bin/`, and the PATH symlink if one exists. State
+`~/.agent-director/bin/`, the operator tool
+`~/.agent-director/admin/agent-director-admin` with its `admin/`
+directory, and the PATH symlink if one exists. State
 the baseline up front so the questions are only about the
 destructive *additions*.
 
@@ -502,6 +624,9 @@ destructive *additions*.
   added; other user hooks are preserved).
 - Removes the binary at `~/.agent-director/bin/agent-director` and
   the `.prior` snapshot if one is present.
+- Removes `~/.agent-director/admin/agent-director-admin`, its `.prior`
+  snapshot if one is present, and the `~/.agent-director/admin/`
+  directory (left in place, with a note, if it holds other files).
 - Unlinks the PATH symlink if one was created.
 - With `--purge`: also removes `~/.agent-director/` entirely
   (including state.db + templates). Requires confirmation unless
@@ -543,8 +668,9 @@ administrator action, so the install writes the sentinel for you.
 
 ### The six steps `install.sh` performs
 
-1. **Install the new binary** (atomic `mv` into
-   `~/.agent-director/bin/`).
+1. **Install the new binaries** (atomic `mv` into
+   `~/.agent-director/bin/`, and `agent-director-admin` into
+   `~/.agent-director/admin/`).
 2. **Read the ACTUAL `user_version`** via
    `sqlite3 ~/.agent-director/state.db "PRAGMA user_version"` (through
    the WAL). No DB → fresh install, skip to step 4.
@@ -585,14 +711,22 @@ verification for you.
 ## Upgrade rollback
 
 If you used `install.sh --keep-prior` on the previous install, the
-previous binary is at `~/.agent-director/bin/agent-director.prior`.
-To roll back the *binary*:
+previous binaries are at `~/.agent-director/bin/agent-director.prior`
+and `~/.agent-director/admin/agent-director-admin.prior`. To roll back
+the *binaries*, roll back both, so the pair still matches:
 
     mv ~/.agent-director/bin/agent-director.prior \
        ~/.agent-director/bin/agent-director
+    mv ~/.agent-director/admin/agent-director-admin.prior \
+       ~/.agent-director/admin/agent-director-admin
+
+If the previous install was a release before 0.11.0, there is no
+`agent-director-admin.prior` (install.sh said `admin prior: none`):
+roll back by removing `~/.agent-director/admin/agent-director-admin`.
 
 If you didn't pass `--keep-prior`, re-install the previous version via
-`install.sh --from-release v<old-tag>`.
+`install.sh --from-release v<old-tag>` (0.11.0 or later: this install.sh
+refuses an older tag, which has no agent-director-admin).
 
 Note a caveat that did not exist before schema migrations: once an
 upgrade has migrated state.db forward (newer `user_version`), rolling

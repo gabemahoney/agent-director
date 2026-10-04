@@ -64,25 +64,33 @@ release-binaries: VERSION_LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION_STR) -X
 
 all: generate build
 
+# build builds both binaries with the same version stamp: agent-director and
+# the operator tool agent-director-admin (b.vqr), which install.sh installs
+# off PATH and only alongside an agent-director with the same stamp.
 build:
 	CGO_ENABLED=0 go build -ldflags="$(VERSION_LDFLAGS)" -o ./bin/agent-director ./cmd/agent-director
+	CGO_ENABLED=0 go build -ldflags="$(VERSION_LDFLAGS)" -o ./bin/agent-director-admin ./cmd/agent-director-admin
 
 test: envelope-diff-ts test-install-sh
 	go test ./...
 
 # test-install-sh exercises install.sh's --from-release CDN-propagation
-# retry path against a fake curl (b.kym). Pure shell; no docker, no
-# network. Fast — total wall time is bounded by the in-script sleeps,
-# and the scenarios pick small fail-first counts.
-test-install-sh:
-	bash test/install-sh/retry.sh
+# retry path against a fake curl (b.kym), for both release assets
+# (b.vqr). It builds and runs agent-director and agent-director-admin
+# binaries, so it runs in the sandbox only (retry.sh refuses anywhere
+# else, b.8dr); no network. test-sandbox runs it too, through
+# test/install-sh/retry_test.go. This target runs the script alone. Fast —
+# a fake sleep makes the backoffs cost no wall time, and the scenarios pick
+# small fail-first counts.
+test-install-sh: _sandbox-build
+	$(_SANDBOX_RUN) bash test/install-sh/retry.sh
 
 # test-install-sh-advice follows each piece of advice install.sh prints on a
 # refusal and checks it works (b.fji, test/install-sh/advice_follow.sh). It
 # builds and runs agent-director binaries, so it runs in the sandbox only (the
-# script refuses anywhere else) and is not part of the host-run
-# test-install-sh; test-sandbox runs it too, through
-# test/install-sh/advice_follow_test.go. This target runs the script alone.
+# script refuses anywhere else); it is not part of test-install-sh, and
+# test-sandbox runs it too, through test/install-sh/advice_follow_test.go.
+# This target runs the script alone.
 # Add SANDBOX_FLAGS="-e AGENT_DIRECTOR_RUN_KNOWN_BROKEN_ADVICE=1" to run the
 # known-broken cases and see them fail.
 test-install-sh-advice: _sandbox-build
@@ -641,8 +649,10 @@ tla:
 tla-print:
 	bash spec/tla/ci/run_ci.sh --print
 
-# release-binaries cross-compiles the three supported targets into
-# $(RELEASE_DIST_DIR) (default ./dist/; override for test isolation — b.aur).
+# release-binaries cross-compiles both binaries, agent-director and
+# agent-director-admin (b.vqr), for each of the three supported targets into
+# $(RELEASE_DIST_DIR) (default ./dist/; override for test isolation — b.aur):
+# six binaries, agent-director-<os>-<arch> and agent-director-admin-<os>-<arch>.
 # CGO_ENABLED=0 + modernc.org/sqlite (pure Go SQLite) yields fully static
 # binaries on linux/* and standalone Mach-O on darwin/*. The -s -w
 # ldflags strip the symbol + debug tables to halve the artifact size.
@@ -651,14 +661,16 @@ tla-print:
 # darwin/amd64 was dropped from v1 on 2026-05-24.
 release-binaries:
 	@mkdir -p "$(RELEASE_DIST_DIR)"
-	@echo "[release] building 3 binaries into $(RELEASE_DIST_DIR)/"
+	@echo "[release] building 6 binaries into $(RELEASE_DIST_DIR)/"
 	@for target in linux/amd64 linux/arm64 darwin/arm64; do \
 		os=$${target%/*}; arch=$${target#*/}; \
-		out="$(RELEASE_DIST_DIR)/agent-director-$${os}-$${arch}"; \
-		echo "  -> $${out}"; \
-		CGO_ENABLED=0 GOOS=$${os} GOARCH=$${arch} \
-			go build -trimpath -ldflags="-s -w $(VERSION_LDFLAGS)" \
-			-o "$${out}" ./cmd/agent-director || exit 1; \
+		for bin in agent-director agent-director-admin; do \
+			out="$(RELEASE_DIST_DIR)/$${bin}-$${os}-$${arch}"; \
+			echo "  -> $${out}"; \
+			CGO_ENABLED=0 GOOS=$${os} GOARCH=$${arch} \
+				go build -trimpath -ldflags="-s -w $(VERSION_LDFLAGS)" \
+				-o "$${out}" ./cmd/$${bin} || exit 1; \
+		done; \
 	done
 	@echo "[release] sizes:"
 	@du -h "$(RELEASE_DIST_DIR)"/agent-director-* | sed 's/^/  /'
@@ -678,30 +690,37 @@ release-binaries-smoke: release-binaries
 	echo "[smoke] magic-byte check on each artifact"; \
 	for target in linux/amd64 linux/arm64 darwin/arm64; do \
 		os=$${target%/*}; arch=$${target#*/}; \
-		out="$(RELEASE_DIST_DIR)/agent-director-$${os}-$${arch}"; \
-		magic=$$(od -A n -t x1 -N 4 "$${out}" | tr -d ' '); \
-		case "$${os}_$${magic}" in \
-			linux_7f454c46)  echo "  $${out}: ELF (OK)" ;; \
-			darwin_cffaedfe) echo "  $${out}: Mach-O 64 LE (OK)" ;; \
-			darwin_feedfacf) echo "  $${out}: Mach-O 64 BE (OK)" ;; \
-			*) echo "  FAIL: unexpected magic $${magic} for $${out} (os=$${os})"; exit 1 ;; \
-		esac; \
+		for bin in agent-director agent-director-admin; do \
+			out="$(RELEASE_DIST_DIR)/$${bin}-$${os}-$${arch}"; \
+			magic=$$(od -A n -t x1 -N 4 "$${out}" | tr -d ' '); \
+			case "$${os}_$${magic}" in \
+				linux_7f454c46)  echo "  $${out}: ELF (OK)" ;; \
+				darwin_cffaedfe) echo "  $${out}: Mach-O 64 LE (OK)" ;; \
+				darwin_feedfacf) echo "  $${out}: Mach-O 64 BE (OK)" ;; \
+				*) echo "  FAIL: unexpected magic $${magic} for $${out} (os=$${os})"; exit 1 ;; \
+			esac; \
+		done; \
 	done; \
 	echo "[smoke] static-link check on linux binaries (ldd → 'not a dynamic executable')"; \
 	for arch in amd64 arm64; do \
-		out="$(RELEASE_DIST_DIR)/agent-director-linux-$${arch}"; \
-		if ldd "$${out}" 2>&1 | grep -q "not a dynamic executable"; then \
-			echo "  $${out}: statically linked"; \
-		else \
-			echo "  FAIL: $${out} is not statically linked"; \
-			ldd "$${out}" 2>&1 | sed 's/^/    /'; \
-			exit 1; \
-		fi; \
+		for bin in agent-director agent-director-admin; do \
+			out="$(RELEASE_DIST_DIR)/$${bin}-linux-$${arch}"; \
+			if ldd "$${out}" 2>&1 | grep -q "not a dynamic executable"; then \
+				echo "  $${out}: statically linked"; \
+			else \
+				echo "  FAIL: $${out} is not statically linked"; \
+				ldd "$${out}" 2>&1 | sed 's/^/    /'; \
+				exit 1; \
+			fi; \
+		done; \
 	done; \
 	echo "[smoke] host-arch exec (linux-amd64 help)"; \
 	"$(RELEASE_DIST_DIR)/agent-director-linux-amd64" help | jq -e '.verbs | length > 0' >/dev/null \
 		|| { echo "FAIL: linux-amd64 help did not return a non-empty verb list"; exit 1; }; \
-	echo "[smoke] OK — all 3 binaries built, linked, and the host-arch one runs"
+	"$(RELEASE_DIST_DIR)/agent-director-admin-linux-amd64" help | head -n 1 \
+		| grep -q '^agent-director-admin is an operator tool\. Do not run any of its commands without explicit approval from a human for this specific run\. Agents and automated callers must not run it\.$$' \
+		|| { echo "FAIL: agent-director-admin-linux-amd64 help does not open with the human-approval statement"; exit 1; }; \
+	echo "[smoke] OK — all 6 binaries built, linked, and the host-arch ones run"
 
 # consumer-dryrun builds the tools/consumer-dryrun mini-module, which imports
 # pkg/api from a separate Go module via a replace directive. A clean build

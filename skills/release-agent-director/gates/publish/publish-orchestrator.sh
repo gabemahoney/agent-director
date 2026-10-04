@@ -503,10 +503,14 @@ run_substep() {
 #   - NOTES         → gh release --notes-file (_do_gh_release, substep 3)
 #   - BINARY_PATHS  → gh release assets       (_do_gh_release, substep 3)
 #
-# All three are absolute by this point (resolved at parse time). On failure it
-# emits an SR-14 diagnostic, writes the report, prints the terminal summary, and
-# exits 1 — matching the substep-failure exit path, but with no substep having
-# run (SUCCEEDED_SUBSTEPS is empty, so prior_substeps_succeeded is []).
+# All three are absolute by this point (resolved at parse time). The release
+# assets come in pairs (b.vqr): every agent-director-<os>-<arch> in
+# BINARY_PATHS needs agent-director-admin-<os>-<arch> beside it in the list,
+# and the other way round, so a release never ships one binary of a platform
+# without the other (unpaired_release_binary). On failure it emits an SR-14
+# diagnostic, writes the report, prints the terminal summary, and exits 1 —
+# matching the substep-failure exit path, but with no substep having run
+# (SUCCEEDED_SUBSTEPS is empty, so prior_substeps_succeeded is []).
 validate_publish_artifacts() {
   local bad_path="" bad_kind=""
 
@@ -524,14 +528,58 @@ validate_publish_artifacts() {
     done
   fi
 
-  [[ -z "${bad_path}" ]] && return 0
+  if [[ -n "${bad_path}" ]]; then
+    fail_publish_artifacts "${bad_path}" \
+      "preflight.publish-artifacts: ${bad_kind} path is not a readable file: ${bad_path}. Relative --tarball/--notes/--binaries inputs are resolved against the caller's working directory (${CALLER_CWD}), so this is the absolute path that was checked. Halting before any irreversible substep (push-branch/create-tag/gh-release) runs." \
+      "Ensure the ${bad_kind} artifact exists and is readable at ${bad_path}. Relative inputs resolve against the caller's CWD (${CALLER_CWD}), NOT the worktree root — if you passed a worktree-relative path from outside the worktree, either cd into the worktree first or pass an absolute path, then re-run the publish phase. No release actions have been taken." \
+      "artifact path does not resolve to a readable file: ${bad_path}"
+  fi
 
-  local description corrective
-  description="preflight.publish-artifacts: ${bad_kind} path is not a readable file: ${bad_path}. Relative --tarball/--notes/--binaries inputs are resolved against the caller's working directory (${CALLER_CWD}), so this is the absolute path that was checked. Halting before any irreversible substep (push-branch/create-tag/gh-release) runs."
-  corrective="Ensure the ${bad_kind} artifact exists and is readable at ${bad_path}. Relative inputs resolve against the caller's CWD (${CALLER_CWD}), NOT the worktree root — if you passed a worktree-relative path from outside the worktree, either cd into the worktree first or pass an absolute path, then re-run the publish phase. No release actions have been taken."
-  printf '[preflight.publish-artifacts] FAILED: %s (resolved against caller CWD %s)\n' "${bad_path}" "${CALLER_CWD}" >&2
-  emit_publish_diagnostic "preflight-publish-artifacts" "${description}" "${corrective}" "artifact path does not resolve to a readable file: ${bad_path}" "${bad_path}"
-  record_substep "publish.preflight-publish-artifacts" "failed" "validate publish artifact paths" "$(_now_iso)" "artifact path does not resolve to a readable file: ${bad_path}"
+  local unpaired sibling
+  unpaired="$(unpaired_release_binary)"
+  [[ -z "${unpaired}" ]] && return 0
+  sibling="${unpaired#*|}"; unpaired="${unpaired%%|*}"
+  fail_publish_artifacts "${unpaired}" \
+    "preflight.publish-artifacts: --binaries lists ${unpaired} but not its pair ${sibling}: every release uploads agent-director and agent-director-admin for each platform it ships. Halting before any irreversible substep (push-branch/create-tag/gh-release) runs." \
+    "Pass both ${unpaired##*/} and ${sibling} in --binaries ('make release-binaries' builds both), then re-run the publish phase. No release actions have been taken." \
+    "release binary without its pair: ${unpaired} (missing ${sibling})"
+}
+
+# unpaired_release_binary prints "<path>|<pair basename>" for the first
+# BINARY_PATHS entry named agent-director-<os>-<arch> or
+# agent-director-admin-<os>-<arch> whose pair (the other binary of the same
+# platform) no entry is named, and prints nothing when every such entry has
+# its pair. Entries with other names are not release binaries and are skipped.
+unpaired_release_binary() {
+  local b base pair names=" "
+  for b in "${BINARY_PATHS[@]}"; do
+    names+="${b##*/} "
+  done
+  for b in "${BINARY_PATHS[@]}"; do
+    base="${b##*/}"
+    if [[ "${base}" =~ ^agent-director-admin-([a-z0-9]+-[a-z0-9]+)$ ]]; then
+      pair="agent-director-${BASH_REMATCH[1]}"
+    elif [[ "${base}" =~ ^agent-director-([a-z0-9]+-[a-z0-9]+)$ ]]; then
+      pair="agent-director-admin-${BASH_REMATCH[1]}"
+    else
+      continue
+    fi
+    if [[ "${names}" != *" ${pair} "* ]]; then
+      printf '%s|%s' "${b}" "${pair}"
+      return 0
+    fi
+  done
+}
+
+# fail_publish_artifacts <offending> <description> <corrective> <upstream>
+# halts the publish phase on a bad artifact input: it prints the FAILED line,
+# emits the SR-14 diagnostic, records the failed preflight substep, writes the
+# report, prints the terminal summary and exits 1.
+fail_publish_artifacts() {
+  local offending="$1" description="$2" corrective="$3" upstream="$4"
+  printf '[preflight.publish-artifacts] FAILED: %s (resolved against caller CWD %s)\n' "${offending}" "${CALLER_CWD}" >&2
+  emit_publish_diagnostic "preflight-publish-artifacts" "${description}" "${corrective}" "${upstream}" "${offending}"
+  record_substep "publish.preflight-publish-artifacts" "failed" "validate publish artifact paths" "$(_now_iso)" "${upstream}"
   local elapsed=$(( $(date +%s) - START_EPOCH ))
   write_report "${elapsed}"
   emit_terminal_summary "${elapsed}"

@@ -24,7 +24,7 @@ type VerbDef struct {
 	// Callable is true when the verb is exposed as a synchronous method on
 	// pkg/api.Client. help (informational/CLI-side), serve (long-running MCP
 	// server), and hook (SRD §3.2 fail-open) are Callable: false.
-	// 16 verbs are Callable: true.
+	// 15 verbs are Callable: true.
 	Callable bool
 
 	// HandleFree is true when the verb can be invoked without a Client handle
@@ -75,10 +75,10 @@ var stateEnum = []string{
 
 // ReuseOptInSpelling is the reuse opt-in's one spelling in advice every
 // surface shows (b.c4u): its param name, which MCP takes and the TypeScript
-// client's field shares, then its CLI flag. The spawn, kill (live-row step 6)
-// and delete Descriptions name the opt-in by it, and internal/spawn.ReuseOptIn
-// builds the runtime retry sentences on it, so no shared text names the
-// opt-in in one surface's spelling only.
+// client's field shares, then its CLI flag. The spawn and kill (live-row step
+// 6) Descriptions name the opt-in by it, and internal/spawn.ReuseOptIn builds
+// the runtime retry sentences on it, so no shared text names the opt-in in
+// one surface's spelling only.
 const ReuseOptInSpelling = "reuse_finished (--reuse-finished on the CLI)"
 
 // liveRowSequence is SR-18.6's bounded, paced live-row sequence in its short
@@ -91,7 +91,7 @@ const ReuseOptInSpelling = "reuse_finished (--reuse-finished on the CLI)"
 // no timeout other than the pending grace default and the wait between
 // find-missing runs (SR-13.2 is the one source of the ceilings).
 const liveRowSequence = "Live-row sequence (a pending row included): " +
-	"1. kill and check the result; on an error follow its class, never delete the row. " +
+	"1. kill and check the result; on an error follow its class. " +
 	"2. If the row is pending, wait until its launch start (status) plus the pending grace period (60 s unless configured); inside it, wait and check again, never escalate. " +
 	"3. Run find-missing, then check status; repeat about 5 s apart until the row is ended or missing, at most three runs. " +
 	"4. Still live: kill once more, wait about 5 s, run find-missing once more and check. " +
@@ -108,8 +108,8 @@ const liveRowSequence = "Live-row sequence (a pending row included): " +
 const liveRowSequencePointer = "To end a live row (pending included) and relaunch its id, follow the live-row sequence in kill's description."
 
 // missingNotProofShort is SR-18.2's short form (decision-0930e), carried by
-// the kill, resume, pause, expire and delete Descriptions in place of the
-// full sentence, since every verb Description reaches help and MCP. The full
+// the kill, resume, pause and expire Descriptions in place of the full
+// sentence, since every verb Description reaches help and MCP. The full
 // sentence ("`missing` is the sweep's judgement on the evidence available to
 // it, not proof that the agent has exited") stays in find-missing's
 // Description, where missing is produced, and in the status/get state, list
@@ -201,7 +201,7 @@ const killDescription = "End the agent of a live row's current launch (pending i
 	"kill never changes the row's state: find-missing marks the row once its agent process is gone. kill never signals a process itself; success means the agent process exited, not every process it started. " +
 	"On a pending row kill aborts only the current launch; before the launch created its session it returns kill_sent false and does not stop the launch. kill never ends an earlier launch's session. " +
 	"Success is judged per call: kill succeeds when the agent process and every other process it found in the session's panes are gone. If ErrTmuxKillFailed named another process that outlived the kill (by pid), it is not the agent and later calls do not track it: a retried kill checks only the agent process. A retry's success means only that the agent is gone; the named process needs a human (see the README's \"Operator actions\"). If the row finishes while kill waits and the agent outlives the wait, kill returns ErrTmuxKillFailed, and a retried kill is a finished-row no-op. " +
-	"Errors (for kill, GONE is success): ErrTmuxKillFailed (UNAVAILABLE): after a kill the agent process, or another process of the session's panes, ran past the kill exit wait, or the process cannot be checked and its labelled session remains, or no session or pane of this launch was found while the agent process runs; retry later. ErrTmuxUnresponsive (UNAVAILABLE): tmux did not answer usably, before or after a kill was sent; retry later with backoff. ErrTmuxSessionConflict (CONFLICT, permanent until a human looks): the session found is not this launch's session, or tmux holds conflicting labels; no kill was sent (see the README's \"Operator actions\"). ErrTmuxNotAvailable (ENVIRONMENT): tmux could not be run, its socket is not accessible to this user, or this is not the tmux server the agent was launched on; an operator must fix it. A repeated kill right after the last session on its tmux server ends can get ErrTmuxUnresponsive or ErrTmuxNotAvailable while the server exits; the caller waits and checks again. ErrSpawnNotFound: no row has this id. None of these errors means that the agent is dead. Never delete a row after a kill that did not succeed. " +
+	"Errors (for kill, GONE is success): ErrTmuxKillFailed (UNAVAILABLE): after a kill the agent process, or another process of the session's panes, ran past the kill exit wait, or the process cannot be checked and its labelled session remains, or no session or pane of this launch was found while the agent process runs; retry later. ErrTmuxUnresponsive (UNAVAILABLE): tmux did not answer usably, before or after a kill was sent; retry later with backoff. ErrTmuxSessionConflict (CONFLICT, permanent until a human looks): the session found is not this launch's session, or tmux holds conflicting labels; no kill was sent (see the README's \"Operator actions\"). ErrTmuxNotAvailable (ENVIRONMENT): tmux could not be run, its socket is not accessible to this user, or this is not the tmux server the agent was launched on; an operator must fix it. A repeated kill right after the last session on its tmux server ends can get ErrTmuxUnresponsive or ErrTmuxNotAvailable while the server exits; the caller waits and checks again. ErrSpawnNotFound: no row has this id. None of these errors means that the agent is dead. " +
 	"kill must run as the same user and in the same tmux environment as the agents. " + sameEnvConsequences + " " + expireCleanupPointer + " " +
 	"A live row whose recorded tmux session name cannot be used (it is empty, contains a control character, or contains a character tmux stores differently) gets ErrInternal with no tmux call; removing the row is a human's decision (see \"Operator actions\" in the agent-director README). " +
 	liveRowSequence
@@ -774,27 +774,6 @@ var Verbs = []VerbDef{
 			{Name: "ids", Type: "[]string", Description: "Sorted IDs of the rows deleted after tmux showed no session of the agent (Gone) and its recorded process was not seen running, each only while the row was unchanged since expire examined it. Never null; [] when none.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "kept", Type: "int", Description: "Number of selected rows kept rather than deleted (the length of kept_ids), for example because the agent's process or a session of the agent (its own, or a leftover of an earlier launch) may still run, tmux could not be checked or answered from a different server, the run's tmux time budget (sweep_budget_seconds) was spent, the row changed after it was examined, or its recorded tmux session name cannot be used (kept on every run, before any other check, with no tmux call).", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "kept_ids", Type: "[]string", Description: "Sorted IDs of the selected rows kept rather than deleted, each reported with its reason in the trail (ad.expire.kept). A row whose recorded tmux session name cannot be used (empty, a control character, or a character tmux stores differently) is kept on every run, before any other check, with no tmux call and a reason of its own; removing it is a human's decision (see \"Operator actions\" in the agent-director README). tmux problems and a failed delete of one row never fail the run: the row is kept. A failed read of the selected rows fails the run. A row another caller removed first is in neither list. Never null; [] when none.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
-		},
-		ErrorNames: []string{},
-	},
-	{
-		Name:        "delete",
-		Description: "DEPRECATED, removal planned (b.tep). Not for cleanup or recovery: expire removes finished rows; respawn with spawn " + ReuseOptInSpelling + "; for a stuck live row, kill then find-missing. Never delete after a failed kill, or assuming a finished row's agent exited. Batch removal by id, bypassing all guards; touches no tmux session or transcript. " + missingNotProofShort,
-		Callable:    true,
-		HandleFree:  false,
-		Params: []ParamDef{
-			{
-				Name:          "claude_instance_id",
-				Type:          "[]string",
-				Description:   "Id(s) to delete. Repeatable on CLI; JSON array via MCP.",
-				Required:      true,
-				Nullable:      false,
-				AllowEmpty:    false,
-				AllowedValues: nil,
-			},
-		},
-		ResultFields: []FieldDef{
-			{Name: "results", Type: "map[string]string", Description: "Per-id result: \"ok\" on success, an err_name string on failure; a partial failure never aborts the batch.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 		},
 		ErrorNames: []string{},
 	},

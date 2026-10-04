@@ -162,7 +162,6 @@
 //     reuse's documentation (descriptions_reuse_docs.go:
 //     DescReuseFinishedParam, spawn's reuse_finished parameter text;
 //     DescReuseHistoryByLife, SR-18.16's forbidden history-by-life claims;
-//     DescDeleteDeprecated, delete's deprecation notice;
 //     DescInstanceIDCollision, SR-18.9's collision text, parameterised by
 //     CollisionSite; DescReuseRecourse, SR-18.4's recovery recourse,
 //     parameterised by RecourseSite; and DescReuseDocsForbidden, the

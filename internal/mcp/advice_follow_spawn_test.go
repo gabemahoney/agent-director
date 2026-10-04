@@ -2,8 +2,8 @@ package mcp_test
 
 // advice_follow_spawn_test.go copies, over MCP and literally, the reuse
 // opt-in name that advice an MCP caller sees gives (b.fji I4, b.c4u): the
-// tools/list descriptions of spawn, kill (live-row step 6, inventory C11) and
-// delete (F1) and the held-name ErrTmuxUnresponsive (A4) each say
+// tools/list descriptions of spawn and kill (live-row step 6, inventory C11)
+// and the held-name ErrTmuxUnresponsive (A4) each say
 // "reuse_finished (--reuse-finished on the CLI)", and the name before the
 // parenthesis is the spawn tool's parameter.
 
@@ -68,9 +68,9 @@ func advOptInName(t *testing.T, advice string) string {
 }
 
 // TestAdviceFollow_I4_MCPLiteralReuseSpelling: I4 spawn's "spawn the id again with reuse_finished (--reuse-finished on the CLI)",
-// kill's (C11 step 6) "otherwise spawn with reuse_finished (--reuse-finished on the CLI)", delete's (F1) "respawn with spawn
-// reuse_finished (--reuse-finished on the CLI)" and A4's "the reuse opt-in reuse_finished (--reuse-finished on the CLI)", the name
-// before the parenthesis copied literally into an MCP spawn's arguments once the held name is free and the row ended (no session id).
+// kill's (C11 step 6) "otherwise spawn with reuse_finished (--reuse-finished on the CLI)" and A4's "the reuse opt-in
+// reuse_finished (--reuse-finished on the CLI)", the name before the parenthesis copied literally into an MCP spawn's
+// arguments once the held name is free and the row ended (no session id). delete's F1 text left with delete (b.vqr).
 func TestAdviceFollow_I4_MCPLiteralReuseSpelling(t *testing.T) {
 	cases := []struct {
 		name, phrase    string
@@ -85,8 +85,6 @@ func TestAdviceFollow_I4_MCPLiteralReuseSpelling(t *testing.T) {
 			"6. Then resume the row if it has a session id and the caller wants the conversation back; otherwise spawn with " +
 				"reuse_finished (--reuse-finished on the CLI); callers whose ids agent-director mints spawn fresh.",
 			false, "ErrTmuxSessionConflict", "kill"},
-		{"delete description", "respawn with spawn reuse_finished (--reuse-finished on the CLI)",
-			false, "ErrTmuxSessionConflict", "delete"},
 		{"held-name error",
 			"a retry with this id uses the reuse opt-in reuse_finished (--reuse-finished on the CLI) once the name is free",
 			true, "ErrTmuxUnresponsive", ""},

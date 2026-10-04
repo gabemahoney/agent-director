@@ -87,6 +87,16 @@ type form struct {
 	re   *regexp.Regexp
 }
 
+// OperatorActionNames matches every name of an operator-only action that no
+// agent-facing text may carry (SR-6.8, b.vqr): kill's former finished-row
+// opt-in in any spelling (--include-finished, include_finished,
+// IncludeFinished, ...), and the off-PATH operator tool agent-director-admin
+// and its kill-finished verb. optInForms checks it in descriptions and agent
+// texts; tests of whole agent-facing outputs (help, tools/list, the manifest,
+// surface.json, generated agent docs) match it directly, so every check
+// shares this one pattern.
+var OperatorActionNames = regexp.MustCompile(`(?i)include.?finished|kill.?finished|agent-director-admin`)
+
 // tmuxEndingForms, tmuxAttachForms and optInForms are forbidden in every
 // agent-facing text; commandForms (kill or pause named as a command to run)
 // only in error descriptions (SR-1.4, SR-6.8, SR-20.2). tmuxAttachForms keeps
@@ -105,7 +115,7 @@ var (
 		{"the tmux command tmux attach", regexp.MustCompile(`(?i)\btmux\s+attach\b`)},
 	}
 	optInForms = []form{
-		{"the opt-in's flag (--include-finished, include-finished, include_finished, IncludeFinished)", regexp.MustCompile(`(?i)include[-_]?finished`)},
+		{"kill's former finished-row opt-in, the operator tool agent-director-admin or its kill-finished verb (SR-6.8, b.vqr)", OperatorActionNames},
 	}
 	commandForms = []form{
 		{"kill or pause as an agent-director command", regexp.MustCompile(`(?i)\bagent-director\s+(kill|pause)\b`)},

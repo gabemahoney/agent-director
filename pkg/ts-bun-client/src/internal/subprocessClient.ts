@@ -51,7 +51,6 @@ import type {
   ResumeParams, ResumeResult,
   FindMissingParams, FindMissingResult,
   ExpireParams, ExpireResult,
-  DeleteParams, DeleteResult,
   MakeTemplateParams, MakeTemplateResult,
   ListParams, ListResult,
   PauseParams, PauseResult,
@@ -460,12 +459,6 @@ export class SubprocessClient {
   async expire(params: ExpireParams): Promise<ExpireResult> {
     this.#assertOpen();
     return this.#enqueue<ExpireResult>("expire", params);
-  }
-
-  /** delete — hard-delete Spawn rows by id. */
-  async delete(params: DeleteParams): Promise<DeleteResult> {
-    this.#assertOpen();
-    return this.#enqueue<DeleteResult>("delete", params);
   }
 
   /** makeTemplate — save a reusable spawn preset. */

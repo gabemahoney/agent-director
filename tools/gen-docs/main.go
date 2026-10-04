@@ -1,5 +1,7 @@
 // Command gen-docs regenerates docs/cli-reference.md and docs/mcp-reference.md
-// from the canonical verb manifest in pkg/api/manifest.
+// from the canonical verb manifest in pkg/api/manifest, and
+// docs/admin-reference.md from agent-director-admin's own verb list in
+// internal/adminapi (b.vqr), which the agent-facing manifest never names.
 //
 // Invoked by:
 //
@@ -22,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/gabemahoney/agent-director/internal/adminapi"
 	"github.com/gabemahoney/agent-director/internal/mcp"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
@@ -42,9 +45,9 @@ func main() {
 	}
 }
 
-// generate writes docs/cli-reference.md and docs/mcp-reference.md under
-// rootDir. rootDir must contain a docs/ subdirectory (the function creates
-// it if missing). Exposed for tests.
+// generate writes docs/cli-reference.md, docs/mcp-reference.md and
+// docs/admin-reference.md under rootDir. rootDir must contain a docs/
+// subdirectory (the function creates it if missing). Exposed for tests.
 func generate(rootDir string) error {
 	docsDir := filepath.Join(rootDir, "docs")
 	if err := os.MkdirAll(docsDir, 0o755); err != nil {
@@ -58,7 +61,7 @@ func generate(rootDir string) error {
 	if err := writeAtomic(filepath.Join(docsDir, "mcp-reference.md"), mcp); err != nil {
 		return err
 	}
-	return nil
+	return writeAtomic(filepath.Join(docsDir, "admin-reference.md"), renderAdmin(adminapi.GlobalFlags, adminapi.Verbs))
 }
 
 // findRepoRoot walks up from CWD until it finds a directory containing
@@ -210,6 +213,52 @@ func renderMCP(verbs []manifest.VerbDef) []byte {
 				fmt.Fprintf(&b, "- `%s`\n", e)
 			}
 		}
+	}
+	return b.Bytes()
+}
+
+// renderAdmin emits agent-director-admin's reference: after the generated-file
+// header, the human-approval statement opens the content, as it opens every
+// help the binary prints; then the global flags globals, and per verb its
+// usage, description, flags and output.
+func renderAdmin(globals []adminapi.Flag, verbs []adminapi.Verb) []byte {
+	var b bytes.Buffer
+	fmt.Fprintln(&b, genHeader)
+	fmt.Fprintln(&b)
+	fmt.Fprintln(&b, adminapi.ApprovalStatement)
+	fmt.Fprintln(&b)
+	fmt.Fprintln(&b, "# agent-director-admin reference")
+	fmt.Fprintln(&b)
+	fmt.Fprintln(&b, "install.sh installs agent-director-admin at `~/.agent-director/admin/agent-director-admin` and never on PATH. It opens the same store, with the same config, as agent-director.")
+	fmt.Fprintln(&b)
+	fmt.Fprintln(&b, "## Global flags")
+	fmt.Fprintln(&b)
+	fmt.Fprintln(&b, adminapi.GlobalFlagsText)
+	fmt.Fprintln(&b)
+	for _, f := range globals {
+		fmt.Fprintf(&b, "- `%s`: %s\n", f.Name, f.Description)
+	}
+	for _, v := range verbs {
+		fmt.Fprintln(&b)
+		fmt.Fprintf(&b, "## %s\n", v.Name)
+		fmt.Fprintln(&b)
+		fmt.Fprintf(&b, "`%s`\n", v.Usage)
+		fmt.Fprintln(&b)
+		fmt.Fprintln(&b, v.Description)
+		fmt.Fprintln(&b)
+		fmt.Fprintln(&b, "### Flags")
+		fmt.Fprintln(&b)
+		if len(v.Flags) == 0 {
+			fmt.Fprintln(&b, "_None._")
+		} else {
+			for _, f := range v.Flags {
+				fmt.Fprintf(&b, "- `%s`: %s\n", f.Name, f.Description)
+			}
+		}
+		fmt.Fprintln(&b)
+		fmt.Fprintln(&b, "### Output")
+		fmt.Fprintln(&b)
+		fmt.Fprintln(&b, v.Output)
 	}
 	return b.Bytes()
 }

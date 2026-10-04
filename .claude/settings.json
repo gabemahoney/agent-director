@@ -6,6 +6,8 @@
       "Bash(go run:*)",
       "Bash(./bin/agent-director:*)",
       "Bash(bin/agent-director:*)",
+      "Bash(./bin/agent-director-admin:*)",
+      "Bash(bin/agent-director-admin:*)",
       "Bash(./bin/ts-helper:*)",
       "Bash(bin/ts-helper:*)"
     ]

@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/gabemahoney/agent-director/internal/adminapi"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
@@ -29,7 +30,8 @@ var securityKillOptInVerbs = []securityVerb{{
 	verb:  "kill with the opt-in",
 	event: "ad.kill.called",
 	call: func(_ *testing.T, c *api.Client, s *securityScene) (any, error) {
-		return c.Kill(api.KillParams{ClaudeInstanceID: s.subject, IncludeFinished: true})
+		r, err := adminapi.KillFinished(c, s.subject)
+		return api.KillResult{KillSent: r.KillSent}, err
 	},
 	cases: securityKillOptInCases,
 }}

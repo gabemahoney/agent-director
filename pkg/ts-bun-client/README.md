@@ -29,8 +29,8 @@ curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/ski
 `Client.create()` discovers the installed binary at construction time
 (either at `~/.agent-director/bin/agent-director` or anywhere on
 `$PATH`) and rejects if it cannot find one. Other supported install
-mechanisms — `install.sh --binary <path>` with a locally-staged
-artifact, or any drop-in copy onto `$PATH` — are documented in the
+mechanisms — `install.sh --binary <path> --admin-binary <path>` with
+locally-staged artifacts, or any drop-in copy onto `$PATH` — are documented in the
 [repo README](https://github.com/gabemahoney/agent-director#install-the-cli).
 
 ## Supported platforms
@@ -191,9 +191,8 @@ console.log(kill_sent);
 Errors to catch: `ErrTmuxKillFailed` and `ErrTmuxUnresponsive` (UNAVAILABLE:
 retry later), `ErrTmuxSessionConflict` (CONFLICT: a human must look),
 `ErrTmuxNotAvailable` (ENVIRONMENT: an operator must fix the environment) and
-`ErrSpawnNotFound`. None of these means the agent is dead, and a caller never
-`delete`s a row after a `kill` that did not succeed. The caller must run as the
-same user and in the same tmux environment as the agents. See the "tmux
+`ErrSpawnNotFound`. None of these means the agent is dead. The caller must run
+as the same user and in the same tmux environment as the agents. See the "tmux
 transport" table under [Errors](#errors).
 
 ### makeTemplate

@@ -77,38 +77,3 @@ func TestParamsStructsDecodeSnakeCaseJSON(t *testing.T) {
 		}
 	})
 }
-
-// TestKillParamsJSONNeverSetsIncludeFinished pins SR-6.8: no JSON key, in any
-// spelling, sets the operator-only opt-in, and encoding never carries it.
-func TestKillParamsJSONNeverSetsIncludeFinished(t *testing.T) {
-	for _, key := range []string{"include-finished", "include_finished", "IncludeFinished", "includefinished"} {
-		for _, withID := range []bool{false, true} {
-			body, wantID := `{"`+key+`":true}`, ""
-			if withID {
-				body, wantID = `{"claude_instance_id":"id-k","`+key+`":true}`, "id-k"
-			}
-			t.Run(body, func(t *testing.T) {
-				var p api.KillParams
-				if err := json.Unmarshal([]byte(body), &p); err != nil {
-					t.Fatalf("unmarshal: %v", err)
-				}
-				if p.IncludeFinished || p.ClaudeInstanceID != wantID {
-					t.Errorf("SR-6.8: decoded %s = %+v; want IncludeFinished false and ClaudeInstanceID %q", body, p, wantID)
-				}
-			})
-		}
-	}
-
-	on, err := json.Marshal(api.KillParams{ClaudeInstanceID: "id-k", IncludeFinished: true})
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	off, _ := json.Marshal(api.KillParams{ClaudeInstanceID: "id-k"})
-	if string(on) != string(off) {
-		t.Errorf("SR-6.8: KillParams with the opt-in encodes as %s; want %s, as without it", on, off)
-	}
-	var back api.KillParams
-	if err := json.Unmarshal(on, &back); err != nil || back.IncludeFinished {
-		t.Errorf("SR-6.8: re-decoding %s = %+v (err %v); want IncludeFinished false", on, back, err)
-	}
-}

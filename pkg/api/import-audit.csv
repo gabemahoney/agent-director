@@ -1,9 +1,11 @@
 file,internal_import,disposition,rationale
+pkg/api/admin.go,internal/adminapi,clean,"init sets the adminapi.KillFinished and adminapi.Delete hooks for agent-director-admin (b.vqr); adminapi types appear in unexported closures only; no internal type in any exported signature"
 pkg/api/client.go,internal/config,clean,"Used only in unexported struct field (cfg config.Config) and unexported helper resolveStorePath; no public signature exposure"
 pkg/api/client.go,internal/store,clean,"Used only in unexported struct field (st *store.Store); no public signature exposure"
 pkg/api/client.go,internal/tmux,clean,"Used only in unexported struct field (tmuxClient *tmux.Client); no public signature exposure"
 pkg/api/decide.go,internal/store,export,"store.Spawn in DecideStore.GetSpawn return; store.PermissionRow in DecideStore.GetPermissionRequest return; store.ErrNoOpenPermissionRequest and store.ErrAlreadyDecided returned via %w; add type aliases Spawn and PermissionRow; rewrite interface methods to use pkg/api alias names"
-pkg/api/delete.go,internal/store,clean,"DeleteStore interface uses no internal types; store.ErrSpawnNotFound used in function body only via errors.Is; no internal type in any exported signature"
+pkg/api/delete.go,internal/adminapi,clean,"adminapi.DeleteResult is the return type of the unexported deleteRows and Client.deleteRows only (b.vqr); nothing in delete.go is exported"
+pkg/api/delete.go,internal/store,clean,"deleteStore interface uses no internal types; store.ErrSpawnNotFound used in function body only via errors.Is; nothing in delete.go is exported (b.vqr)"
 pkg/api/doc.go,,clean,"No internal/* imports"
 pkg/api/errors.go,,clean,"No internal/* imports; error sentinels defined with stdlib errors.New"
 pkg/api/expire.go,internal/config,hide,"config.Config in exported Expire(s ExpireStore, cfg config.Config, ...) function signature; resolved by scalar extraction — replaced cfg config.Config with retentionDays int; Client method reads c.cfg.Defaults.ExpireRetentionDays and passes the int, keeping standalone Expire exported and config-free"

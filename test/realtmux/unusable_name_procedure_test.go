@@ -8,6 +8,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/gabemahoney/agent-director/internal/adminapi"
 	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
@@ -19,7 +20,8 @@ import (
 // used" on real tmux (SRD SR-18.17 steps 2-5, SR-20.7 last bullet, Appendix
 // E.10 N6; PRD AC-DOC-18): tmux's rewriting of '.', ':' and invalid UTF-8 in
 // a new session's name, and the procedure's by-id tmux steps followed by
-// Client.Delete. Label values are compared, never printed.
+// agent-director-admin's delete (adminapi.Delete, b.vqr). Label values are
+// compared, never printed.
 
 // n6Names returns the catalogue's E.10 N6 names, which between them hold
 // '.', ':' and a byte that is not valid UTF-8.
@@ -88,7 +90,7 @@ type procCandidate struct {
 // procedureRemove runs the README steps 2 to 5 for row (recorded name n) by
 // session id only: it ends each candidate whose label, or with no label
 // whose environment, names row's id, checks it left the listing, then
-// deletes the row through Client.Delete and checks it left the store.
+// deletes the row through adminapi.Delete and checks it left the store.
 // Later README procedure tests run their steps with it, never their own copy.
 func (f *killFix) procedureRemove(t *testing.T, row tmux.Launch, n tmuxfix.StoredName) []procCandidate {
 	t.Helper()
@@ -127,7 +129,7 @@ func (f *killFix) procedureRemove(t *testing.T, row tmux.Launch, n tmuxfix.Store
 
 	cl := f.open(t, 0, "")
 	defer cl.Close() //nolint:errcheck
-	res, err := cl.Delete([]string{row.InstanceID})
+	res, err := adminapi.Delete(cl, []string{row.InstanceID})
 	if err != nil || res.Results[row.InstanceID] != "ok" {
 		t.Fatalf("Delete %s: results %v, error %s; want ok", row.InstanceID, res.Results, describe(err))
 	}

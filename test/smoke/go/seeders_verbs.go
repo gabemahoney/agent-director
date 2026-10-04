@@ -169,19 +169,6 @@ func init() {
 		},
 	}
 
-	// ── delete ────────────────────────────────────────────────────────────
-	seeders["delete"] = seederSpec{
-		Manifest: mustVerb("delete"),
-		SeedKind: seedLive,
-		SeedID:   "smoke-delete-id",
-		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
-			return c.Delete([]string{id})
-		},
-		// delete declares no ErrorNames — missing ids are reported in
-		// the per-row results map, not as a verb-level error.
-		Error: nil,
-	}
-
 	// ── make-template ─────────────────────────────────────────────────────
 	seeders["make-template"] = seederSpec{
 		Manifest: mustVerb("make-template"),

@@ -1,17 +1,19 @@
 package manifest_test
 
+// manifest_optin_absent_test.go pins SR-6.8 and b.vqr on the agent-facing
+// manifest and its committed surface.json: no delete verb, and no string naming
+// kill's former finished-row opt-in, the off-PATH admin binary
+// agent-director-admin or its kill-finished verb, while kill keeps only its
+// claude_instance_id parameter and its kill_sent result.
+
 import (
 	"fmt"
 	"reflect"
-	"regexp"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
-
-// optInRe matches kill's operator-only finished-row opt-in in any spelling
-// (include-finished, include_finished, IncludeFinished, ...).
-var optInRe = regexp.MustCompile(`(?i)include.?finished`)
 
 // manifestStrings returns every string manifest.Verbs carries, keyed by its
 // path (verb, field, index), walking every struct field, slice and map so a
@@ -47,23 +49,27 @@ func manifestStrings() map[string]string {
 	return out
 }
 
-// TestKillOptInAbsentFromManifest: no manifest string (verb, parameter or
-// result-field name, description, allowed value) names the opt-in (SR-6.8),
-// while kill still carries kill_sent and its claude_instance_id parameter.
-func TestKillOptInAbsentFromManifest(t *testing.T) {
+// TestManifestHasNoOperatorActions: the manifest has no delete verb and no
+// string (verb, parameter or result-field name, description, allowed value)
+// naming an operator action, while kill has only claude_instance_id and still
+// returns kill_sent.
+func TestManifestHasNoOperatorActions(t *testing.T) {
 	strs := manifestStrings()
 	if len(strs) == 0 {
 		t.Fatal("manifest walk found no strings (precondition)")
 	}
 	for path, s := range strs {
-		if m := optInRe.FindString(s); m != "" {
-			t.Errorf("SR-6.8: manifest %s names the operator-only kill opt-in (%q); nothing shown to agents may: %q", path, m, s)
+		if m := apitest.OperatorActionNames.FindString(s); m != "" {
+			t.Errorf("SR-6.8: manifest %s names %q; nothing shown to agents may: %q", path, m, s)
 		}
+	}
+	if _, ok := manifest.Lookup("delete"); ok {
+		t.Error("manifest has a delete verb; delete is an agent-director-admin verb only")
 	}
 
 	kill, ok := manifest.Lookup("kill")
 	if !ok {
-		t.Fatal("kill not in manifest")
+		t.Fatal("kill not in manifest; the checks above would pass vacuously")
 	}
 	var params []string
 	for _, p := range kill.Params {
@@ -77,24 +83,29 @@ func TestKillOptInAbsentFromManifest(t *testing.T) {
 	}
 }
 
-// TestKillOptInAbsentFromSurfaceJSON is the golden-side twin: the committed
-// surface.json names the opt-in nowhere, and kill still carries kill_sent.
-func TestKillOptInAbsentFromSurfaceJSON(t *testing.T) {
+// TestSurfaceJSONHasNoOperatorActions is the golden-side twin: the committed
+// surface.json has no delete verb and names no operator action anywhere, while
+// kill still returns kill_sent.
+func TestSurfaceJSONHasNoOperatorActions(t *testing.T) {
 	raw, surface := readSurfaceJSON(t)
-	for _, loc := range optInRe.FindAllIndex(raw, -1) {
-		t.Errorf("SR-6.8: surface.json names the operator-only kill opt-in at byte offset %d: %q", loc[0], raw[loc[0]:loc[1]])
+	for _, loc := range apitest.OperatorActionNames.FindAllIndex(raw, -1) {
+		t.Errorf("SR-6.8: surface.json names %q at byte offset %d", raw[loc[0]:loc[1]], loc[0])
 	}
+	var killSent bool
 	for _, v := range surface.Verbs {
+		if v.Name == "delete" {
+			t.Error("surface.json has a delete verb; delete is an agent-director-admin verb only")
+		}
 		if v.Name != "kill" {
 			continue
 		}
 		for _, f := range v.ResultFields {
-			if f.Name == "kill_sent" {
-				return
-			}
+			killSent = killSent || f.Name == "kill_sent"
 		}
 	}
-	t.Error("surface.json kill lacks result field kill_sent; the SR-6.8 absence check above would pass vacuously")
+	if !killSent {
+		t.Error("surface.json kill lacks result field kill_sent; the checks above would pass vacuously")
+	}
 }
 
 // hasField reports whether fields holds one named name.

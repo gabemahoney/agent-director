@@ -344,8 +344,6 @@ export interface ReadPaneResult {
 export interface KillParams {
   /** Id of the Spawn to kill. */
   claude_instance_id: string;
-  /** Operator-only: see "Operator actions" in the agent-director README. */
-  include_finished?: boolean;
 }
 
 /** Mirrors pkg/api/kill.go::KillResult (json tags). */
@@ -505,18 +503,6 @@ export interface ExpireResult {
    * first is in neither list. Never null; `[]` when none.
    */
   kept_ids: string[];
-}
-
-/** Mirrors the `delete` CLI verb's --claude-instance-id flag(s) (pkg/api.Client.Delete arg). */
-export interface DeleteParams {
-  /** Id(s) to delete. */
-  claude_instance_id: string[];
-}
-
-/** Mirrors pkg/api/delete.go::DeleteResult */
-export interface DeleteResult {
-  /** Per-id outcome: "ok" on success, err_name on failure. */
-  results: Record<string, string>;
 }
 
 /** Mirrors pkg/api.MakeTemplateParams (json tags). */

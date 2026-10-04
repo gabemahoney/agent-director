@@ -23,7 +23,7 @@ const (
 // recoveryWordingSites are sources the scan must reach, or it is vacuous.
 var recoveryWordingSites = []string{
 	"pkg/api/errors.go", "pkg/api/resume.go", "pkg/api/spawn.go", "internal/store/spawns.go",
-	"internal/spawn/params.go", "internal/spawn/errors.go", "manifest delete Description",
+	"internal/spawn/params.go", "internal/spawn/errors.go", "manifest kill Description",
 	"manifest spawn param claude_instance_id", mdAPIREADME, mdTSREADME,
 }
 

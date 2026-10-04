@@ -14,7 +14,6 @@
  *     Allow-list:
  *       - "version"      — no ErrorNames in manifest
  *       - "expire"       — no ErrorNames in manifest
- *       - "delete"       — no verb-level ErrorNames; errors in result map
  *       - "find-missing" — lists only ErrProbeUnsupported, which it no longer
  *                          returns (kept by SR-1.7)
  */
@@ -30,7 +29,6 @@ import { VERBS } from "../src/internal/verbs.js";
 const NO_ERROR_CASE_ALLOWLIST: ReadonlySet<string> = new Set([
   "version",      // manifest ErrorNames: []
   "expire",       // manifest ErrorNames: []
-  "delete",       // manifest ErrorNames: [] — errors in DeleteResult.results map
   "find-missing", // manifest ErrorNames: ["ErrProbeUnsupported"], never returned (kept by SR-1.7)
 ]);
 

@@ -27,7 +27,6 @@ var notProofSites = []notProofSite{
 	{verb: "find-missing"},
 	{verb: "find-missing", field: "ids"},
 	{verb: "expire", short: true},
-	{verb: "delete", short: true},
 }
 
 // notProofTexts returns the site's text keyed by source ("manifest",

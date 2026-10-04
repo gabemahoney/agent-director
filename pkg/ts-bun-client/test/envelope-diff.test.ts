@@ -1129,45 +1129,6 @@ describe("expire", () => {
   // It is in the NO_ERROR_CASE_ALLOWLIST in envelope-diff-invariants.test.ts.
 });
 
-// ── delete ────────────────────────────────────────────────────────────────────
-
-describe("delete", () => {
-  test(
-    "success path",
-    async () => {
-      const { homeA, storeB, cleanup } = prepareStores((store) => {
-        // Seed an ended row to delete
-        runHelper("seed-spawn", {
-          store,
-          id: "row-ended",
-          state: "ended",
-          "create-store": true,
-        });
-      });
-      try {
-        const cli = runCli(
-          ["delete", "--claude-instance-id", "row-ended"],
-          cliEnv(homeA)
-        );
-        expect(cli.exitCode).toBe(0);
-
-        using client = await Client.create({ storePath: storeB, _cliPath: process.env.CLI_PATH } as any);
-        const ts = await client.delete({ claude_instance_id: ["row-ended"] });
-
-        assertEnvelopesEqual(JSON.parse(cli.stdout) as unknown, ts, {
-          ignorePaths: loadIgnorePathsForVerb("delete"),
-        });
-      } finally {
-        cleanup();
-      }
-    },
-    TIMEOUT
-  );
-
-  // delete has no verb-level ErrorNames (errors are per-id in results map).
-  // It is in the NO_ERROR_CASE_ALLOWLIST in envelope-diff-invariants.test.ts.
-});
-
 // ── make-template ─────────────────────────────────────────────────────────────
 
 describe("make-template", () => {

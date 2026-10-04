@@ -77,7 +77,6 @@ var dispatch = map[string]clientDispatchFn{
 	"resume":         dispatchResume,
 	"find-missing":   dispatchFindMissing,
 	"expire":         dispatchExpire,
-	"delete":         dispatchDelete,
 	"make-template":  dispatchMakeTemplate,
 	"list":           dispatchList,
 	"pause":          dispatchPause,
@@ -469,18 +468,6 @@ func parseDuration(s string) (time.Duration, error) {
 		return time.Duration(n) * 24 * time.Hour, nil
 	}
 	return time.ParseDuration(s)
-}
-
-func dispatchDelete(c *api.Client, params map[string]any) ([]byte, bool) {
-	ids := strSliceParam(params, "claude_instance_id")
-	if ids == nil {
-		ids = strSliceParam(params, "ids")
-	}
-	res, err := c.Delete(ids)
-	if err != nil {
-		return marshalErrEnvelope(err), true
-	}
-	return successEnvelope(res)
 }
 
 func dispatchMakeTemplate(c *api.Client, params map[string]any) ([]byte, bool) {

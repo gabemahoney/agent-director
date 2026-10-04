@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/gabemahoney/agent-director/internal/adminapi"
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -90,7 +91,7 @@ func TestSpawnHeldEndNotApplied(t *testing.T) {
 			}
 		}},
 		{"deleted and inserted again", func(t *testing.T, e heldEnv, id string) {
-			if res, _ := e.c.Delete([]string{id}); res.Results[id] != "ok" {
+			if res, _ := adminapi.Delete(e.c, []string{id}); res.Results[id] != "ok" {
 				t.Fatalf("Delete(%s) = %v; want ok", id, res.Results)
 			}
 			launch := e.start.Add(-time.Hour).UnixMilli()

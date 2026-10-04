@@ -20,7 +20,9 @@ import "testing"
 // registration sentence and make-template's spawn --template clause; lowered
 // to 15125. On 2026-10-03, re-recorded up to 15147 with the user's approval
 // for b.9o4: send-keys' description gained " (empty text: Enter only)"
-// (25 B), the shortest form that states empty text's Enter-only meaning. The
+// (25 B), the shortest form that states empty text's Enter-only meaning. On
+// 2026-10-03 b.vqr lowered it to 14600 when delete left the agent-facing
+// manifest for agent-director-admin and kill's "never delete" texts went. The
 // user's cap is 15160 B: help must stay at or under it.
 //
 // SR-20.6: this guard checks growth only. Re-recording it downward, to the
@@ -28,7 +30,7 @@ import "testing"
 // the orchestrator's approval before the commit and a recorded reason in the
 // commit message (what grew, by how many bytes, why it cannot be shorter);
 // never to make a failing guard pass.
-const helpStdoutBytes = 15147
+const helpStdoutBytes = 14600
 
 // helpHardCap is the user's hard cap on `agent-director help` stdout, in
 // bytes. Help stdout must stay at or under it, with no slack.

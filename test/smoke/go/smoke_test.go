@@ -112,8 +112,6 @@ func runVerbSubtest(t *testing.T, vd manifest.VerbDef, spec seederSpec) {
 	switch spec.SeedKind {
 	case seedNone:
 		// no row needed (spawn, find-missing, make-template, version)
-	case seedLive:
-		storefix.SeedLiveSpawn(t, st, spec.SeedID)
 	case seedCheckPermission:
 		storefix.SeedCheckPermission(t, st, spec.SeedID)
 	case seedResumable:

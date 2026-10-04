@@ -3,6 +3,7 @@
 # checks:   repacks the ts-bun-client tarball a second time and verifies the
 #           two packs contain byte-identical file contents; then writes
 #           dist/sha256sums covering the tarball + available platform binaries
+#           (agent-director and agent-director-admin, b.vqr, per platform)
 # usage:    bash repack-and-verify.sh --first <path-to-first-tarball> [--worktree-root <path>]
 # pass:     dist/sha256sums written, exit 0
 # fail:     SR-14 diagnostic to stderr, exit 1
@@ -111,6 +112,9 @@ BINARIES=(
   dist/agent-director-linux-amd64
   dist/agent-director-linux-arm64
   dist/agent-director-darwin-arm64
+  dist/agent-director-admin-linux-amd64
+  dist/agent-director-admin-linux-arm64
+  dist/agent-director-admin-darwin-arm64
 )
 
 for BIN in "${BINARIES[@]}"; do

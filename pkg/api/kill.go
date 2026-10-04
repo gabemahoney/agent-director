@@ -56,8 +56,6 @@ var (
 type KillParams struct {
 	// ClaudeInstanceID identifies the Spawn whose agent kill ends.
 	ClaudeInstanceID string `json:"claude_instance_id"`
-	// Operator-only: see "Operator actions" in the agent-director README.
-	IncludeFinished bool `json:"-"`
 }
 
 // KillResult is the typed return shape of the kill verb (SR-6.6).
@@ -121,12 +119,21 @@ const (
 // sleep must advance the clock now reads: the wait ends only once now shows
 // exitWait has passed, so a sleep that does not advance now loops forever.
 func Kill(s KillStore, t KillTmux, pc ProcChecker, startingSession, stoppingWindow, exitWait time.Duration,
-	now func() time.Time, sleep func(time.Duration), params KillParams) (result KillResult, err error) {
+	now func() time.Time, sleep func(time.Duration), params KillParams) (KillResult, error) {
+	return runKill(s, t, pc, startingSession, stoppingWindow, exitWait, now, sleep, params.ClaudeInstanceID, false)
+}
+
+// runKill is one kill call on the row id, as Kill describes, with the
+// operator-only finished-row option (SR-6.5) set when optIn is: Kill runs it
+// with optIn false, agent-director-admin's kill-finished (killFinished) with
+// optIn true. It writes the call's trail events on every return path.
+func runKill(s KillStore, t KillTmux, pc ProcChecker, startingSession, stoppingWindow, exitWait time.Duration,
+	now func() time.Time, sleep func(time.Duration), id string, optIn bool) (result KillResult, err error) {
 	k := &killRun{
 		s: s, t: t, pc: pc, exitWait: exitWait, now: now, sleep: sleep,
 		startingSession: startingSession, stoppingWindow: stoppingWindow,
-		id:           params.ClaudeInstanceID,
-		optIn:        params.IncludeFinished,
+		id:           id,
+		optIn:        optIn,
 		lookup:       tmux.TokenNotRun,
 		followup:     tmux.TokenNotRun,
 		processCheck: tmux.TokenNotRun,
@@ -452,8 +459,7 @@ func sessionProcesses(pc ProcChecker, panes []tmux.Pane, sessionID string, agent
 // Kill right after the last session on its tmux server ends can get
 // ErrTmuxUnresponsive or ErrTmuxNotAvailable while the server exits; the
 // caller waits and checks again. None of these errors means that the agent is
-// dead, and a caller never deletes a row after a Kill that did not succeed.
-// The live-row sequence in the agent-director README's caller-contract
+// dead. The live-row sequence in the agent-director README's caller-contract
 // summary says what a caller does next.
 //
 // The caller must run as the same user and in the same tmux environment as

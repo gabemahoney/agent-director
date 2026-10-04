@@ -5,8 +5,7 @@ package api_test
 // the kill fixture, checks the advice phrase, follows it as an automated
 // caller would on the virtual clock and checks the promised outcome. The
 // finished-row opt-in (C9, C10) is advice_follow_kill_optin_test.go's; the
-// live-row sequence and delete's pointer (C11, F1)
-// advice_follow_kill_sequence_test.go's.
+// live-row sequence (C11) advice_follow_kill_sequence_test.go's.
 
 import (
 	"fmt"

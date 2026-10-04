@@ -15,9 +15,9 @@ import (
 	"io"
 	"log"
 	"os"
-	"strings"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/clisetup"
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/probe"
@@ -38,10 +38,8 @@ type errorEnvelope struct {
 // These names signal startup/dispatch failures of the CLI itself and are
 // kept distinct from any future API error names.
 const (
-	errUnknownVerb     = "ErrUnknownVerb"
-	errJSONMarshal     = "ErrJSONMarshal"
-	errConfigMalformed = "ErrConfigMalformed"
-	errStoreOpen       = "ErrStoreOpen"
+	errUnknownVerb = "ErrUnknownVerb"
+	errJSONMarshal = "ErrJSONMarshal"
 )
 
 // errDispatch is a sentinel returned by handlers when they have already
@@ -50,7 +48,7 @@ const (
 var errDispatch = errors.New("dispatch error")
 
 // configPath is the canonical TOML config location.
-const configPath = "~/.agent-director/config.toml"
+const configPath = clisetup.ConfigPath
 
 // handlers maps verb names to their implementations. `help` and `--help`
 // route to the same function so their stdout is byte-identical (SRD §12.3).
@@ -87,7 +85,6 @@ func handlers(client *pkgapi.Client, cfg config.Config) map[string]func([]string
 		"resume":         func(args []string) error { return resumeHandlerWith(client, args) },
 		"find-missing":   func(args []string) error { return findMissingHandlerWith(client, args) },
 		"expire":         func(args []string) error { return expireHandlerWith(client, args) },
-		"delete":         func(args []string) error { return deleteHandlerWith(client, args) },
 		"serve":          func(args []string) error { return serveHandlerWith(cfg, args) },
 		"trail-emit":     func(args []string) error { return trailEmitHandlerWith(args) },
 	}
@@ -328,73 +325,24 @@ func dispatch(argv []string, table map[string]func([]string) error) error {
 	return handler(argv[1:])
 }
 
-// setupClient constructs the pkg/api.Client used by every non-hook verb.
+// setupClient constructs the pkg/api.Client used by every non-hook verb,
+// through clisetup.Open (whose comment holds the design pins), which
+// agent-director-admin shares so both binaries open the store alike.
 //
-// Design pins (see Task 3 spec):
-//   - Pin 1 (CreateIfMissing=true): the CLI is the one place that opts in to
-//     first-run store creation; library callers get the strict default.
-//   - Pin 2 (StorePath omitted by default): leaving StorePath="" lets the
-//     three-tier precedence in pkg/api.New honor cfg.Store.DbPath, so users
-//     who set a custom [store] db_path in their TOML get that path
-//     byte-identical to pre-refactor behavior. When the global --store-path
-//     flag is set (gOpts.storePathSet), tier 1 of the precedence kicks in and
-//     overrides the config-file value.
-//   - Pin 3 (Logger=newRecoveryLogger): SRD §14.6 and §5 WARN messages must
-//     reach cfg.Log.ErrorLogPath. We call config.Load once here to build the
-//     logger BEFORE calling pkg/api.New, which also loads config internally.
-//     The duplicate load is intentional — the alternative would require a
-//     circular bootstrap. See Task 3 subtask vk for rationale.
-//   - Pin H6 (no Client.Config() accessor): cfg is returned directly so
-//     serveHandlerWith can pass it to newMCPLogger without a pkg/api accessor
-//     that would leak internal/config.Config into the library's public surface.
-//
-// b.32k: gOpts carries the three global-flag overrides parsed in run() before
-// dispatch. --store-path and --tmux-command thread through to pkgapi.Options;
-// --home is handled in run() via os.Setenv BEFORE this function runs, so any
-// "~/" expansion below sees the override.
+// b.32k: o carries the --store-path and --tmux-command overrides of the
+// global flags run() parsed and applied before dispatch; --home was applied
+// there (os.Setenv) BEFORE this function runs, so every "~/" expansion of the
+// config and store paths sees the override.
 //
 // On any error it writes the JSON envelope to stderr and returns errDispatch
 // so run() can exit non-zero without double-printing.
-func setupClient(gOpts globalOptions) (*pkgapi.Client, config.Config, error) {
-	// Preliminary config load to construct the recovery logger (Pin 3).
-	// pkg/api.New will load config again internally; this duplicate is
-	// acceptable — see Pin 3 comment above.
-	cfg, err := config.Load(configPath)
+func setupClient(o clisetup.Overrides) (*pkgapi.Client, config.Config, error) {
+	client, cfg, err := clisetup.Open(o)
 	if err != nil {
-		if werr := writeError(os.Stderr, errConfigMalformed, err.Error()); werr != nil {
-			return nil, config.Config{}, werr
-		}
-		return nil, config.Config{}, errDispatch
-	}
-	logger := newRecoveryLogger(cfg)
-
-	apiOpts := pkgapi.Options{
-		ConfigPath:      configPath,
-		CreateIfMissing: true, // Pin 1
-		// StorePath optionally set from --store-path; otherwise Pin 2 applies.
-		Logger: logger, // Pin 3
-	}
-	if gOpts.storePathSet {
-		// pkgapi.New tilde-expands StorePath internally.
-		apiOpts.StorePath = gOpts.storePath
-	}
-	if gOpts.tmuxCommandSet {
-		// pkg/api.Client uses opts.TmuxCommand directly when non-empty
-		// (see pkg/api/client.go step 5); CLI-side tilde-expand for
-		// parity with --store-path so a `~/bin/tmux` argument works.
-		apiOpts.TmuxCommand = expandTildeCLI(gOpts.tmuxCommand)
-	}
-
-	client, err := pkgapi.New(apiOpts)
-	if err != nil {
-		name := errStoreOpen
-		switch {
-		case errors.Is(err, store.ErrSchemaMismatch):
-			name = "ErrSchemaMismatch"
-		case errors.Is(err, store.ErrSchemaMigrationRequired):
-			name = "ErrSchemaMigrationRequired"
-		case errors.Is(err, store.ErrStoreNotInitialized):
-			name = errStoreOpen
+		name := "ErrStoreOpen"
+		var oe *clisetup.OpenError
+		if errors.As(err, &oe) {
+			name = oe.Name
 		}
 		if werr := writeError(os.Stderr, name, err.Error()); werr != nil {
 			return nil, config.Config{}, werr
@@ -432,17 +380,18 @@ func setupClient(gOpts globalOptions) (*pkgapi.Client, config.Config, error) {
 // blocking failure mode on the hook hot path.
 //
 // b.32k: after the hook short-circuit, run() pre-scans argv for the three
-// global flags (--store-path, --home, --tmux-command) and strips them
-// before per-verb dispatch sees argv. When --home is set we os.Setenv
-// HOME immediately so config.Load's tilde-expansion picks it up — the CLI
-// binary is short-lived and single-threaded at startup, so process-wide
-// env mutation is safe.
+// global flags (--store-path, --home, --tmux-command) with
+// clisetup.ParseGlobalFlags, which agent-director-admin shares (b.vqr), and
+// strips them before per-verb dispatch sees argv. GlobalFlags.Apply then sets
+// HOME when --home is given, so config.Load's tilde-expansion picks it up —
+// the CLI binary is short-lived and single-threaded at startup, so
+// process-wide env mutation is safe.
 func run() int {
 	if len(os.Args) > 1 && os.Args[1] == "hook" {
 		return runHook()
 	}
 
-	gOpts, strippedArgv, err := parseGlobalFlags(os.Args[1:])
+	globals, strippedArgv, err := clisetup.ParseGlobalFlags(os.Args[1:])
 	if err != nil {
 		if werr := writeError(os.Stderr, "ErrInvalidFlags", err.Error()); werr != nil {
 			fmt.Fprintln(os.Stderr, werr)
@@ -450,22 +399,16 @@ func run() int {
 		return 1
 	}
 
-	// --home: set process HOME BEFORE config.Load runs. internal/config,
-	// pkg/api.expandTilde and internal/store.expandTilde all expand "~/" with
-	// os.UserHomeDir(), which reads the HOME env var on POSIX, so an os.Setenv
-	// here covers every downstream "~/" store/config path expansion. (A spawn
-	// cwd's "~" is not one of them: SRD §7.2 resolves it with
-	// user.Current().HomeDir, which ignores HOME.) Safe because the CLI process
-	// is short-lived and not multi-threaded at startup. b.32k, b.hvf.
-	if gOpts.homeSet {
-		expanded := expandTildeCLI(gOpts.home)
-		if err := os.Setenv("HOME", expanded); err != nil {
-			if werr := writeError(os.Stderr, "ErrInvalidFlags",
-				fmt.Sprintf("set HOME: %v", err)); werr != nil {
-				fmt.Fprintln(os.Stderr, werr)
-			}
-			return 1
+	// --home: set process HOME BEFORE config.Load runs (clisetup's
+	// GlobalFlags.Apply says why that covers every "~/" store/config path
+	// expansion); overrides carries --store-path and --tmux-command to
+	// setupClient. b.32k, b.hvf.
+	overrides, err := globals.Apply()
+	if err != nil {
+		if werr := writeError(os.Stderr, "ErrInvalidFlags", err.Error()); werr != nil {
+			fmt.Fprintln(os.Stderr, werr)
 		}
+		return 1
 	}
 
 	// trail-emit: DB-free verb — special-cased before setupClient so it works
@@ -521,7 +464,7 @@ func run() int {
 		return 0
 	}
 
-	client, cfg, err := setupClient(gOpts)
+	client, cfg, err := setupClient(overrides)
 	if err != nil {
 		if errors.Is(err, errDispatch) {
 			return 1
@@ -539,25 +482,6 @@ func run() int {
 		return 1
 	}
 	return 0
-}
-
-// expandTildeCLI expands a leading "~/" against the current HOME (env, then
-// os.UserHomeDir). Used by --store-path / --tmux-command / --home value
-// resolution before forwarding to pkg/api. Mirrors pkg/api.expandTilde but
-// is duplicated here to keep cmd/agent-director independent of that helper.
-func expandTildeCLI(p string) string {
-	if !strings.HasPrefix(p, "~/") {
-		return p
-	}
-	home := os.Getenv("HOME")
-	if home == "" {
-		var err error
-		home, err = os.UserHomeDir()
-		if err != nil || home == "" {
-			return p
-		}
-	}
-	return home + p[1:]
 }
 
 func main() {

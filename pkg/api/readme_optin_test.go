@@ -1,8 +1,9 @@
 package api_test
 
 // readme_optin_test.go checks that kill's operator-only finished-row opt-in is
-// documented only in the README's "Operator actions" (SR-6.8, SR-18.15,
-// SR-18.17), on readme_sections_test.go's shared mdDoc parser.
+// documented only in the README's "Operator actions" and in
+// agent-director-admin's generated docs/admin-reference.md (SR-6.8, SR-18.15,
+// SR-18.17, b.vqr), on readme_sections_test.go's shared mdDoc parser.
 
 import (
 	"fmt"
@@ -15,9 +16,16 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// optInRe matches any spelling of the opt-in: the flag, the Go field and the
-// TypeScript field and trail field.
+// optInRe matches any spelling of the opt-in: the former flag, Go field and
+// TypeScript field, and the trail field.
 var optInRe = regexp.MustCompile(`(?i)include.?finished`)
+
+// adminKillVerbRe matches agent-director-admin's verb that runs the opt-in.
+var adminKillVerbRe = regexp.MustCompile(`(?i)kill.?finished`)
+
+// mdAdminReference is agent-director-admin's generated reference, the one doc
+// besides the README's "Operator actions" that names the opt-in (b.vqr).
+const mdAdminReference = "../../docs/admin-reference.md"
 
 // sectionLines returns the 0-based line range [from, to) of h's body. Later
 // README tests use it, never their own line counting.
@@ -38,15 +46,16 @@ func operatorActions(t *testing.T, d mdDoc) mdHeading {
 	return hs[0]
 }
 
-// TestREADMEOptInOnlyInOperatorActions checks every spelling of the opt-in in
-// the README lies inside "Operator actions", which names it and its key facts.
+// TestREADMEOptInOnlyInOperatorActions checks every spelling of the opt-in, and
+// of agent-director-admin's kill-finished, in the README lies inside "Operator
+// actions", which names one of them and the opt-in's key facts.
 func TestREADMEOptInOnlyInOperatorActions(t *testing.T) {
 	d := readMD(t, mdTopREADME)
 	h := operatorActions(t, d)
 	from, to := sectionLines(d, h)
 	inside := 0
 	for i, line := range d.lines {
-		if !optInRe.MatchString(line) {
+		if !optInRe.MatchString(line) && !adminKillVerbRe.MatchString(line) {
 			continue
 		}
 		if i >= from && i < to {
@@ -56,7 +65,7 @@ func TestREADMEOptInOnlyInOperatorActions(t *testing.T) {
 		t.Errorf("%s:%d names the opt-in outside %q: %s", d.path, i+1, apitest.OperatorActionsTitle, strings.TrimSpace(line))
 	}
 	if inside == 0 {
-		t.Errorf("%s %q never names the opt-in (include-finished)", d.path, apitest.OperatorActionsTitle)
+		t.Errorf("%s %q never names the opt-in (include-finished or kill-finished)", d.path, apitest.OperatorActionsTitle)
 	}
 
 	body := strings.Join(strings.Fields(d.body(h)), " ")
@@ -67,8 +76,9 @@ func TestREADMEOptInOnlyInOperatorActions(t *testing.T) {
 	}
 }
 
-// TestREADMEOptInAbsentFromOtherDocs checks no doc under docs/ or either package README
-// names the opt-in, bar the architecture doc's ad.kill.called trail field.
+// TestREADMEOptInAbsentFromOtherDocs checks no doc under docs/ or either package
+// README names the opt-in, bar the architecture doc's ad.kill.called trail field
+// and docs/admin-reference.md, the admin binary's own reference (b.vqr).
 func TestREADMEOptInAbsentFromOtherDocs(t *testing.T) {
 	paths, err := filepath.Glob(filepath.Join(mdRepoRoot, "docs", "*.md"))
 	if err != nil {
@@ -77,9 +87,15 @@ func TestREADMEOptInAbsentFromOtherDocs(t *testing.T) {
 	if !slices.Contains(paths, mdArchitecture) {
 		t.Fatalf("docs glob %v misses %s; the scan is vacuous", paths, mdArchitecture)
 	}
+	if !slices.Contains(paths, mdAdminReference) {
+		t.Fatalf("docs glob %v misses %s; the exemption below names no file", paths, mdAdminReference)
+	}
 	paths = append(paths, "README.md", filepath.Join(mdRepoRoot, "pkg", "ts-bun-client", "README.md"))
 
 	for _, path := range paths {
+		if path == mdAdminReference {
+			continue
+		}
 		for i, line := range readMD(t, path).lines {
 			for _, m := range optInRe.FindAllStringIndex(line, -1) {
 				if path == mdArchitecture && isKillTrailField(line, m) {

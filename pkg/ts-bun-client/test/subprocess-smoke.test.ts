@@ -12,7 +12,7 @@
  * duplicate catalog literal lives here.
  *
  * Verbs in the no-error-path allow-list mirror smoke-invariants.test.ts:
- *   - version, expire, delete, find-missing — no triggerable verb-level errors.
+ *   - version, expire, find-missing — no triggerable verb-level errors.
  *
  * Scenarios are intentionally narrower than the per-verb files under
  * test/smoke/<verb>.test.ts so this file remains scannable as a single audit
@@ -39,7 +39,7 @@ import {
 import type {
   SpawnResult, StatusResult, GetResult, SendKeysResult, ReadPaneResult,
   KillResult, DecideResult, GetPermissionResult, ResumeResult, FindMissingResult, ExpireResult,
-  DeleteResult, MakeTemplateResult, ListResult, PauseResult, VersionResult,
+  MakeTemplateResult, ListResult, PauseResult, VersionResult,
 } from "../src/index.js";
 
 const FAKE_TMUX_BIN = path.join(
@@ -209,15 +209,6 @@ describe("subprocess-smoke / happy paths (SR-10.3)", () => {
     });
   }, 10_000);
 
-  test("delete — returns results map", async () => {
-    await withTempHome(async (homeDir) => {
-      const storePath = path.join(homeDir, ".agent-director", "state.db");
-      using client = await Client.create({ storePath, createIfMissing: true , _cliPath: process.env.CLI_PATH } as any);
-      const r: DeleteResult = await client.delete({ claude_instance_id: ["nonexistent"] });
-      expect(typeof r.results).toBe("object");
-    });
-  }, 10_000);
-
   test("make-template — creates and reports name", async () => {
     await withTempHome(async (homeDir) => {
       const storePath = path.join(homeDir, ".agent-director", "state.db");
@@ -264,7 +255,7 @@ describe("subprocess-smoke / happy paths (SR-10.3)", () => {
 // ── error paths: at least one per non-allow-listed verb ──────────────────────
 
 const NO_ERROR_CASE_ALLOWLIST: ReadonlySet<string> = new Set([
-  "version", "expire", "delete", "find-missing",
+  "version", "expire", "find-missing",
 ]);
 
 describe("subprocess-smoke / error paths (SR-10.3)", () => {

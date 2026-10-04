@@ -258,18 +258,6 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		}
 		return d.client.Expire(older)
 
-	case "delete":
-		var raw struct {
-			ClaudeInstanceID []string `json:"claude_instance_id"`
-		}
-		if err := json.Unmarshal(args, &raw); err != nil {
-			return nil, fmt.Errorf("decode delete params: %w", err)
-		}
-		if len(raw.ClaudeInstanceID) == 0 {
-			return nil, fmt.Errorf("delete: claude_instance_id is required (≥1)")
-		}
-		return d.client.Delete(raw.ClaudeInstanceID)
-
 	case "decide":
 		var p api.DecideParams
 		if err := unmarshalSnake(args, &p); err != nil {

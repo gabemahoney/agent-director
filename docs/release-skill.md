@@ -3,7 +3,9 @@
 ## Overview
 
 The `/release` skill is an LLM-driven release pipeline for `agent-director`. It
-discovers every test surface, cross-compiles the three CLI binaries, packs and
+discovers every test surface, cross-compiles the six release binaries
+(`agent-director` and the operator tool `agent-director-admin` for each of the
+three platforms), packs and
 install-verifies the npm tarball, generates release notes, and — once every gate
 passes — executes the irreversible publish sequence (npm publish, git tag push,
 GitHub Release create, fast-forward `main`, delete remote release branch).
@@ -195,22 +197,22 @@ Each slug can be invoked individually via `make test-docker EPIC=<slug>` to
 run that EPIC's testplan in the harness container.
 
 ### Cross-compile phase (`compile.<plat>`)
-- The Makefile's `release-binaries` recipe loops over linux/amd64, linux/arm64, darwin/arm64 (the SR-7.1 supported platform set; verified by the preflight invariant gate).
+- The Makefile's `release-binaries` recipe loops over linux/amd64, linux/arm64, darwin/arm64 (the SR-7.1 supported platform set; verified by the preflight invariant gate) and builds both binaries for each: `dist/agent-director-<os>-<arch>` and `dist/agent-director-admin-<os>-<arch>`, six in all.
 - Each binary is stamped with the target version via `-X $(VERSION_PKG).Version=<target>` ldflags. `cross-compile.sh` reads the target version from `pkg/ts-bun-client/package.json` via `jq` and exports it as `AGENT_DIRECTOR_BUILD_VERSION` before invoking `make release-binaries`; a caller-supplied `AGENT_DIRECTOR_BUILD_VERSION` is honored without overwrite.
-- The gate `compile.<plat>` produces one sub-check per platform (compile.linux-amd64, compile.linux-arm64, compile.darwin-arm64).
+- The gate `compile.<plat>` produces one sub-check per binary: compile.linux-amd64, compile.linux-arm64, compile.darwin-arm64 for `agent-director`, and compile.admin-linux-amd64, compile.admin-linux-arm64, compile.admin-darwin-arm64 for `agent-director-admin`.
 - SR-7.2: No Go source file may carry a literal release-version constant. The `compile.no-literal-version-constant` gate enforces this — `internal/version/version.go`'s `var Version = "dev"` is the only allowed default; anything matching a SemVer literal fires the gate.
 - Subprocess: `skills/release-agent-director/gates/compile/cross-compile.sh`.
 
 ### Smoke phase (`smoke.<plat>.<check>`)
-- Three sub-checks per binary:
+- Three sub-checks per binary, for all six (an `agent-director-admin` binary's `<plat>` carries an `admin-` prefix, e.g. `smoke.admin-linux-amd64.magic-bytes`):
   - `smoke.<plat>.magic-bytes` — first 4 bytes match ELF (linux: 7f454c46) or Mach-O 64-bit LE (darwin: cffaedfe) signature.
   - `smoke.<plat>.static-linkage` — `ldd` on linux binaries reports "not a dynamic executable"; darwin binaries skip on a linux host (`host-cannot-introspect`).
-  - `smoke.<plat>.host-exec` — runs ONLY the binary matching the host triple (`<binary> help`); other platforms skip with reason `host-cannot-exec`.
+  - `smoke.<plat>.host-exec` — runs ONLY the binaries matching the host triple (`<binary> help`); other platforms skip with reason `host-cannot-exec`. For `agent-director-admin` it also asserts that `help` exits 0 and its first line is the human-approval statement ("agent-director-admin is an operator tool. Do not run any of its commands without explicit approval from a human for this specific run. Agents and automated callers must not run it.").
 - Skipped is distinct from failed — only failed contributes to phase outcome.
 - Subprocess: `skills/release-agent-director/gates/smoke/per-binary-smoke.sh`.
 
 ### Coherence phase (`coherence.binary-version.<plat>`)
-- For the host-executable binary (matching the host triple), runs `<binary> version` and asserts the JSON envelope's `version` field equals the target (string compare). Non-host platforms skip with reason `host-cannot-exec`.
+- For each host-executable binary (`agent-director` and `agent-director-admin` matching the host triple), runs `<binary> version` and asserts the JSON envelope's `version` field equals the target (string compare). Non-host platforms skip with reason `host-cannot-exec`. The admin binaries' gates are `coherence.binary-version.admin-<plat>`.
 - This is the b.b3h failure-class anchor: a binary stamped with the wrong version (or a literal default that overrode the ldflags) is caught here.
 - Subprocess: `skills/release-agent-director/gates/coherence/binary-version.sh`.
 
@@ -226,7 +228,7 @@ Three sub-phase blocks fire sequentially:
 - `pack.first` — invokes `bun pm pack` in a fresh staging dir; produces `dist/agent-director-<target>.tgz`. Asserts the embedded `package.json` version equals `<target>`.
 - `pack.second` — packs again into a separate staging dir.
 - `pack.byte-identical-normalized` — extracts both tarballs and runs `diff -rq` on the contents. Catches nondeterministic packaging.
-- `pack.sha256-manifest` — writes `dist/sha256sums` covering the tarball + the three SR-7 binaries.
+- `pack.sha256-manifest` — writes `dist/sha256sums` covering the tarball + the six SR-7 binaries (`agent-director-<plat>` and `agent-director-admin-<plat>`). The npm tarball itself ships neither binary.
 
 Subprocesses: `skills/release-agent-director/gates/pack/pack-first.sh`,
 `skills/release-agent-director/gates/pack/repack-and-verify.sh`.
@@ -322,7 +324,10 @@ irreversible substep if any is not. It runs in **both** `--release` and
 mode. On failure it emits the SR-14 diagnostic, records the failed substep
 `publish.preflight-publish-artifacts` (no substep having run, so the report's
 prior-succeeded list is empty), writes `dist/release-report.json`, prints the
-terminal summary, and exits 1. This guards against a relative `--tarball` (the
+terminal summary, and exits 1. The same preflight refuses an unpaired release
+binary: every `agent-director-<os>-<arch>` in `--binaries` needs its
+`agent-director-admin-<os>-<arch>` beside it, and the other way round, so a
+release never uploads one binary of a platform without the other. This guards against a relative `--tarball` (the
 form the `pack` phase emits, e.g. `dist/agent-director-<target>.tgz`) being
 resolved against the wrong directory inside the `pkg/ts-bun-client` subshell
 and failing at `npm-publish` — substep 4 — only after the tag and GitHub
@@ -362,7 +367,7 @@ Use this table to find the recovery procedure:
 
 | Failed at | Prior succeeded | Recovery commands |
 |-----------|-----------------|-------------------|
-| `preflight-publish-artifacts` | (none) | No state to undo — this runs before any irreversible substep. Fix the offending `--tarball` / `--notes` / `--binaries` path (see the diagnostic's `offending_file_or_artifact`) and re-run. |
+| `preflight-publish-artifacts` | (none) | No state to undo — this runs before any irreversible substep. Fix the offending `--tarball` / `--notes` / `--binaries` path (see the diagnostic's `offending_file_or_artifact`), or add the missing pair of an unpaired release binary to `--binaries`, and re-run. |
 | `push-branch` | (none) | No state to undo. Fix the cause, re-run. |
 | `create-tag` | push-branch | `git push origin --delete v<target>` (if tag was pushed); `git tag -d v<target>` (locally); `git push origin --delete release/v<target>` |
 | `gh-release` | push-branch, create-tag | `gh release delete v<target> --yes` (if release was created); `git push origin --delete v<target>`; `git tag -d v<target>`; `git push origin --delete release/v<target>` |

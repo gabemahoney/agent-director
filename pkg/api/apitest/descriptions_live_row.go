@@ -42,8 +42,8 @@ type liveRowStep struct {
 func liveRowSteps() []liveRowStep {
 	return []liveRowStep{
 		{
-			phrases: []string{"kill and check the result; on an error follow its class, never delete the row"},
-			keys:    []string{"kill and check the result", "never delete the row"},
+			phrases: []string{"kill and check the result; on an error follow its class."},
+			keys:    []string{"kill and check the result", "on an error follow its class"},
 		},
 		{
 			phrases: []string{
@@ -77,8 +77,8 @@ func liveRowSteps() []liveRowStep {
 }
 
 // DescLiveRowSequence is SR-18.6's live-row sequence in its short form, as
-// kill's manifest description states it, by key phrase: its opening; (1) kill,
-// follow the error's class and never delete; (2) for a pending row, wait out
+// kill's manifest description states it, by key phrase: its opening; (1) kill
+// and follow the error's class (callers cannot delete a row, b.vqr); (2) for a pending row, wait out
 // its launch start plus the pending grace period
 // (config.DefaultPendingGraceSeconds, a default the operator can change), and
 // inside it wait and check again, never escalate; (3) up to three find-missing
@@ -100,7 +100,7 @@ func DescLiveRowSequence() DescCase {
 		Require: req,
 		MustNot: []string{
 			"history belongs to a life", "unreachable for good", "SR-", "OFR",
-			liveRowOpening, LiveRowPointer,
+			liveRowOpening, LiveRowPointer, "never delete",
 		},
 	}
 }

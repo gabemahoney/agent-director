@@ -4,14 +4,14 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
-	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 func TestDeleteSingleValidIdReturnsOk(t *testing.T) {
 	s, _ := apitest.SeedDeleteFixture(t)
-	res, err := api.Delete(s, []string{"row-ended"})
+	res, err := api.DeleteRows(s, []string{"row-ended"})
 	if err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
@@ -25,7 +25,7 @@ func TestDeleteSingleValidIdReturnsOk(t *testing.T) {
 
 func TestDeleteBatchOfValidIdsAllReportOk(t *testing.T) {
 	s, _ := apitest.SeedDeleteFixture(t)
-	res, err := api.Delete(s, []string{"row-live", "row-ended"})
+	res, err := api.DeleteRows(s, []string{"row-live", "row-ended"})
 	if err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestDeleteMixedValidAndBogusReportsPerRow(t *testing.T) {
 	// Per Epic 8 AC #3: partial-failure batch returns the per-row
 	// map; the batch DOES NOT abort on the bogus id.
 	s, _ := apitest.SeedDeleteFixture(t)
-	res, err := api.Delete(s, []string{"row-live", "absent", "row-ended"})
+	res, err := api.DeleteRows(s, []string{"row-live", "absent", "row-ended"})
 	if err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestDeleteOnLiveRowBypassesGuards(t *testing.T) {
 	// tmux session (if any) is left running; the verb makes no claim
 	// about it.
 	s, _ := apitest.SeedDeleteFixture(t)
-	res, err := api.Delete(s, []string{"row-live"})
+	res, err := api.DeleteRows(s, []string{"row-live"})
 	if err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestDeleteEmptyIdSliceReturnsEmptyMap(t *testing.T) {
 	// (--claude-instance-id is required ≥1), but a future MCP caller
 	// could in principle pass [].
 	s, _ := apitest.SeedDeleteFixture(t)
-	res, err := api.Delete(s, []string{})
+	res, err := api.DeleteRows(s, []string{})
 	if err != nil {
 		t.Fatalf("Delete: %v", err)
 	}

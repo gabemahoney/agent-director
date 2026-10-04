@@ -3,32 +3,28 @@ package api
 import (
 	"errors"
 
+	"github.com/gabemahoney/agent-director/internal/adminapi"
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
-// DeleteStore is the narrow store surface Delete needs.
-type DeleteStore interface {
+// This file holds the operator-only delete (SRD §12), run only by
+// agent-director-admin's delete through internal/adminapi (b.vqr). Nothing
+// here is exported: no agent-facing surface (the CLI, MCP, the Go and
+// TypeScript clients) can delete a row.
+
+// deleteStore is the narrow store surface deleteRows needs.
+type deleteStore interface {
 	DeleteSpawn(instanceID string) error
 }
 
-// DeleteResult is the typed return shape. Results maps each input id
-// to either "ok" (deleted) or the canonical err_name from the CLI's
-// errCatalog. Always non-nil so JSON encodes deterministically.
-type DeleteResult struct {
-	// Results maps each requested id to its outcome: "ok" on success,
-	// or an err_name string (e.g. "ErrSpawnNotFound") on failure.
-	// The map is always non-nil and contains one entry per input id.
-	Results map[string]string `json:"results"`
-}
-
-// Delete removes one or more rows by id (SRD §12). Behavior:
+// deleteRows removes one or more rows by id (SRD §12). Behavior:
 //
 //   - Each id is processed independently. A miss on one id does NOT
 //     abort the batch — the result map records ErrSpawnNotFound for
 //     the offending id and continues.
-//   - The verb does NOT touch tmux sessions or JSONL transcripts: a
-//     delete on a live-state row removes the DB row and leaves its
-//     session and agent running, untracked.
+//   - It does NOT touch tmux sessions or JSONL transcripts: a delete
+//     on a live-state row removes the DB row and leaves its session and
+//     agent running, untracked.
 //   - Bypasses all state-precondition guards by design.
 //
 // Returns nil error unconditionally; the per-row map is the canonical
@@ -36,7 +32,7 @@ type DeleteResult struct {
 // any row from being attempted (e.g. DB unreachable) would surface
 // as an error from DeleteSpawn on the FIRST id; that error is
 // recorded in the map per the same convention.
-func Delete(s DeleteStore, ids []string) (DeleteResult, error) {
+func deleteRows(s deleteStore, ids []string) (adminapi.DeleteResult, error) {
 	results := make(map[string]string, len(ids))
 	for _, id := range ids {
 		err := s.DeleteSpawn(id)
@@ -52,23 +48,14 @@ func Delete(s DeleteStore, ids []string) (DeleteResult, error) {
 			results[id] = "ErrInternal"
 		}
 	}
-	return DeleteResult{Results: results}, nil
+	return adminapi.DeleteResult{Results: results}, nil
 }
 
-// Delete removes one or more Spawn rows by id, bypassing all state guards.
-// The verb is deprecated (see the delete manifest description); it is not a
-// cleanup or recovery step. Each id is processed independently; a missing id records ErrSpawnNotFound in
-// the result map rather than aborting the batch. Does not touch tmux sessions
-// or JSONL transcripts. Per-row outcomes are in DeleteResult.Results.
-//
-// CLI: agent-director delete
-//
-// Errors: none at the verb level; per-row outcomes are in DeleteResult.Results.
-//
-// Nondeterminism: none.
-func (c *Client) Delete(claudeInstanceIDs []string) (DeleteResult, error) {
+// deleteRows runs deleteRows on c's store: the rows claudeInstanceIDs are
+// removed, bypassing all state guards, with per-row outcomes in Results.
+func (c *Client) deleteRows(claudeInstanceIDs []string) (adminapi.DeleteResult, error) {
 	if err := c.checkClosed(); err != nil {
-		return DeleteResult{}, err
+		return adminapi.DeleteResult{}, err
 	}
-	return Delete(c.st, claudeInstanceIDs)
+	return deleteRows(c.st, claudeInstanceIDs)
 }

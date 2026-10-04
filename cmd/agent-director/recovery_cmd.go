@@ -4,11 +4,9 @@ import (
 	"context"
 	"flag"
 	"io"
-	"log"
 	"os"
 	"time"
 
-	"github.com/gabemahoney/agent-director/internal/config"
 	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 )
@@ -18,7 +16,7 @@ import (
 // start time, read by the Client's start-time reader (probe.NewProcChecker,
 // selected by build tags). Per-row store warnings route through the
 // configured error log — the Client was constructed with a
-// recovery logger (setupClient Pin 3) so cron operators see them in their
+// recovery logger (clisetup.Open Pin 3) so cron operators see them in their
 // usual monitoring stream.
 func findMissingHandlerWith(client *pkgapi.Client, args []string) error {
 	fs := flag.NewFlagSet("find-missing", flag.ContinueOnError)
@@ -69,28 +67,6 @@ func expireHandlerWith(client *pkgapi.Client, args []string) error {
 	return writeJSON(os.Stdout, result)
 }
 
-// deleteHandlerWith implements `agent-director delete`. --claude-instance-id
-// is repeatable; at least one is required. The per-row result map is
-// the entire JSON envelope.
-func deleteHandlerWith(client *pkgapi.Client, args []string) error {
-	var ids []string
-	fs := flag.NewFlagSet("delete", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	fs.Var(newStringSlice(&ids), "claude-instance-id", "id to delete (repeatable; ≥1 required)")
-	if err := fs.Parse(args); err != nil {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
-	}
-	if len(ids) == 0 {
-		return writeApiErrorAndDispatch("ErrInvalidFlags", "--claude-instance-id is required (≥1)")
-	}
-	result, err := client.Delete(ids)
-	if err != nil {
-		name, desc := errnames.Classify(err)
-		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
-	}
-	return writeJSON(os.Stdout, result)
-}
-
 // parseDaysOrDuration accepts either Go's standard time.ParseDuration
 // format or a trailing `d` for days. SRD §11 uses days for retention
 // because the user-facing config is days; this keeps `--older-than`
@@ -129,23 +105,4 @@ type durationParseError struct{ Raw string }
 
 func (e *durationParseError) Error() string {
 	return "invalid duration: " + e.Raw + " (expected Go duration form like \"12h\" or trailing-d days like \"7d\")"
-}
-
-// newRecoveryLogger returns the *log.Logger used by setupClient (Pin 3) to
-// construct the recovery logger injected into the pkg/api.Client at startup.
-// The Client's verb methods that still log (Spawn, Resume, FindMissing,
-// Expire) surface WARN messages via c.logger — SRD §14.6 and §5. Kill writes
-// no log lines: its errors are returned and its audit is the ad.kill.called
-// trail event (SR-6.3). The destination is the configured
-// error log path, falling back to stderr if the file can't be opened.
-// Best-effort: file is leaked for the lifetime of the CLI process; the OS
-// reclaims on exit.
-func newRecoveryLogger(cfg config.Config) *log.Logger {
-	dest := io.Writer(os.Stderr)
-	if cfg.Log.ErrorLogPath != "" {
-		if f, err := os.OpenFile(cfg.Log.ErrorLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
-			dest = f
-		}
-	}
-	return log.New(dest, "agent-director ", log.LstdFlags)
 }

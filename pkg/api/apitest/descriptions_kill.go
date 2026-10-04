@@ -328,13 +328,12 @@ func DescKillManifest() DescCase {
 	require = append(require, DescKillRepeatedAfterLastSession("kill").Require...)
 	require = append(require,
 		"None of these errors means that the agent is dead",
-		"Never delete a row after a kill that did not succeed",
 		"kill must run as the same user and in the same tmux environment as the agents",
 		finishedRowNotVerification, wrongServerSecondAgent,
 	)
 	return DescCase{
 		Name:    "kill manifest description",
 		Require: append(require, trigger.Require...),
-		MustNot: append([]string{"Terminate the Spawn's tmux session"}, trigger.MustNot...),
+		MustNot: append([]string{"Terminate the Spawn's tmux session", "never delete"}, trigger.MustNot...),
 	}
 }

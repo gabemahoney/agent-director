@@ -8,6 +8,7 @@ tools/consumer-dryrun/agent-director-consumer-dryrun
 # Repo-root `go build ./...` drops the main-package binaries next to go.mod.
 # These are build artifacts (not source) — installable via `make install`.
 /agent-director
+/agent-director-admin
 /cabi
 /check-doccomments
 /measure-exit

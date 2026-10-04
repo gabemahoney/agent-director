@@ -59,6 +59,13 @@ func SetPauseTestKnobs(interval time.Duration, sleeper func(time.Duration)) {
 // so a SetPauseTestKnobs caller restores them without spelling the default.
 func PauseTestKnobs() (time.Duration, func(time.Duration)) { return pausePollInterval, pauseSleep }
 
+// KillFinished and DeleteRows expose the operator-only actions that only
+// agent-director-admin reaches, through internal/adminapi (b.vqr).
+var (
+	KillFinished = killFinished
+	DeleteRows   = deleteRows
+)
+
 // TmuxClientOf returns the tmux client c was built with, so package api_test
 // can drive the production client api.New wired from the [tmux] config.
 func TmuxClientOf(c *Client) TmuxClient { return c.tmuxClient }

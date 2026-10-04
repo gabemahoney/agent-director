@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # gate:     smoke (per-binary)
-# checks:   magic-bytes, static-linkage, host-exec — for each release binary
+# checks:   magic-bytes, static-linkage, host-exec — for each release binary:
+#           agent-director and agent-director-admin (b.vqr) per target. The
+#           admin binary's host-exec check also asserts its help opens with the
+#           human-approval statement.
 # usage:    bash per-binary-smoke.sh [<worktree-root>]
 # env:      SMOKE_DIST_DIR — directory holding the release binaries, relative to
 #           the worktree root (default: dist). Point it at an isolated path
@@ -45,11 +48,23 @@ HOST_TRIPLE="${HOST_OS_NORM}-${HOST_ARCH_NORM}"
 DIST_DIR="${SMOKE_DIST_DIR:-dist}"
 
 # ─── binary table ─────────────────────────────────────────────────────────────
-# Parallel arrays: PLATS[i], FILES[i], EXPECTED_MAGIC[i], IS_LINUX[i]
-PLATS=("linux-amd64"  "linux-arm64"  "darwin-arm64")
-FILES=("${DIST_DIR}/agent-director-linux-amd64" "${DIST_DIR}/agent-director-linux-arm64" "${DIST_DIR}/agent-director-darwin-arm64")
-MAGICS=("7f454c46"    "7f454c46"     "cffaedfe")
-OS_FOR=("linux"       "linux"        "darwin")
+# Parallel arrays: PLATS[i] (the check-name label), TRIPLES[i] (the binary's
+# platform), FILES[i], MAGICS[i], OS_FOR[i], ADMIN[i] (1 for agent-director-admin)
+PLATS=("linux-amd64"  "linux-arm64"  "darwin-arm64"
+       "admin-linux-amd64" "admin-linux-arm64" "admin-darwin-arm64")
+TRIPLES=("linux-amd64" "linux-arm64" "darwin-arm64"
+         "linux-amd64" "linux-arm64" "darwin-arm64")
+FILES=("${DIST_DIR}/agent-director-linux-amd64" "${DIST_DIR}/agent-director-linux-arm64" "${DIST_DIR}/agent-director-darwin-arm64"
+       "${DIST_DIR}/agent-director-admin-linux-amd64" "${DIST_DIR}/agent-director-admin-linux-arm64" "${DIST_DIR}/agent-director-admin-darwin-arm64")
+MAGICS=("7f454c46"    "7f454c46"     "cffaedfe"
+        "7f454c46"    "7f454c46"     "cffaedfe")
+OS_FOR=("linux"       "linux"        "darwin"
+        "linux"       "linux"        "darwin")
+ADMIN=(0 0 0 1 1 1)
+
+# ADMIN_HELP_FIRST_LINE is the human-approval statement every help of
+# agent-director-admin opens with (internal/adminapi.ApprovalStatement).
+ADMIN_HELP_FIRST_LINE="agent-director-admin is an operator tool. Do not run any of its commands without explicit approval from a human for this specific run. Agents and automated callers must not run it."
 
 # ─── helpers ──────────────────────────────────────────────────────────────────
 _esc_json() {
@@ -93,11 +108,13 @@ _sub_check_json() {
 overall_outcome="passed"
 sub_check_jsons=()
 
-for i in 0 1 2; do
+for i in "${!FILES[@]}"; do
   plat="${PLATS[$i]}"
+  triple="${TRIPLES[$i]}"
   file="${FILES[$i]}"
   expected_magic="${MAGICS[$i]}"
   binary_os="${OS_FOR[$i]}"
+  is_admin="${ADMIN[$i]}"
 
   # ── 1. magic-bytes ──────────────────────────────────────────────────────────
   check_name="smoke.${plat}.magic-bytes"
@@ -161,7 +178,7 @@ for i in 0 1 2; do
   check_name="smoke.${plat}.host-exec"
   t0=$(date +%s)
 
-  if [[ "${plat}" != "${HOST_TRIPLE}" ]]; then
+  if [[ "${triple}" != "${HOST_TRIPLE}" ]]; then
     sub_check_jsons+=("$(_sub_check_json "$check_name" "skipped" 0 "$(_ms_since "$t0")" "host-cannot-exec")")
   elif [[ ! -f "$file" ]]; then
     overall_outcome="failed"
@@ -171,6 +188,23 @@ for i in 0 1 2; do
       "Binary not found: ${file}" \
       "Run 'make release-binaries' to produce the artifact."
     sub_check_jsons+=("$(_sub_check_json "$check_name" "failed" 1 "$(_ms_since "$t0")" "" "file not found")")
+  elif [[ "$is_admin" -eq 1 ]]; then
+    # Capture the whole help, then its first line: no pipe into head, so a
+    # SIGPIPE cannot turn a good run into a failure under pipefail.
+    exec_out=$("$file" help 2>&1)
+    exec_rc=$?
+    exec_out="${exec_out%%$'\n'*}"
+    if [[ "$exec_rc" -eq 0 && "$exec_out" == "$ADMIN_HELP_FIRST_LINE" ]]; then
+      sub_check_jsons+=("$(_sub_check_json "$check_name" "passed" 0 "$(_ms_since "$t0")")")
+    else
+      overall_outcome="failed"
+      emit_diagnostic \
+        "$check_name" \
+        "$file" \
+        "Host-exec check failed: '${file} help' exited ${exec_rc} or does not open with the human-approval statement." \
+        "Ensure the binary runs on this host and every help it prints opens with internal/adminapi.ApprovalStatement."
+      sub_check_jsons+=("$(_sub_check_json "$check_name" "failed" "$exec_rc" "$(_ms_since "$t0")" "" "$(_esc_json "$exec_out")")")
+    fi
   else
     exec_out=$("$file" help 2>&1 | head -5)
     exec_rc=$?

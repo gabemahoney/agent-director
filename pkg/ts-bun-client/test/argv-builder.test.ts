@@ -307,16 +307,6 @@ describe("argv builder — kill", () => {
     assertBase(argv, "kill");
     expect(flagValue(argv, "--claude-instance-id")).toBe("id-kill");
   });
-
-  test.each([
-    ["true", { include_finished: true }, ["--include-finished"]],
-    ["false", { include_finished: false }, []],
-    ["absent", {}, []],
-  ] as const)("include_finished %s → one bare --include-finished only when true (SR-6.5)", (_l, extra, want) => {
-    const argv = buildArgv(CLI, "kill", { claude_instance_id: "id-kill", ...extra });
-    expect(argv).toEqual([CLI, "kill", "--claude-instance-id", "id-kill", ...want]);
-    expect(argv.filter((a) => /include.?finished/i.test(a))).toEqual([...want]);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -415,23 +405,6 @@ describe("argv builder — expire", () => {
   test("empty params → no flags", () => {
     const argv = buildArgv(CLI, "expire", {});
     expect(argv.length).toBe(2);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// delete
-// ---------------------------------------------------------------------------
-describe("argv builder — delete", () => {
-  test("claude_instance_id array → repeated --claude-instance-id flags", () => {
-    const argv = buildArgv(CLI, "delete", {
-      claude_instance_id: ["id-del-1", "id-del-2"],
-    });
-    assertBase(argv, "delete");
-    const idValues = argv
-      .map((v, i) => (argv[i - 1] === "--claude-instance-id" ? v : null))
-      .filter(Boolean);
-    expect(idValues).toContain("id-del-1");
-    expect(idValues).toContain("id-del-2");
   });
 });
 

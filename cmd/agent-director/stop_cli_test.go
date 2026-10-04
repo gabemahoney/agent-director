@@ -121,20 +121,6 @@ func TestKillCLIErrSpawnNotFound(t *testing.T) {
 	assertInvocationKinds(t, home)
 }
 
-// TestKillCLIEndedRowIsNoop: a finished row succeeds with kill_sent false and
-// no tmux invocation at all (SR-6.1).
-func TestKillCLIEndedRowIsNoop(t *testing.T) {
-	fakeDir := buildFakeTmux(t)
-	home, id, _ := seedKillRow(t, store.StateEnded)
-
-	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "kill", "--claude-instance-id", id)
-	if code != 0 || stderr != "" {
-		t.Fatalf("kill exit = %d, stderr = %q; want 0 and empty", code, stderr)
-	}
-	assertKillSent(t, stdout, false)
-	assertInvocationKinds(t, home)
-}
-
 // liveChild starts a real child process of the test, stopped at cleanup, and
 // returns its pid and start time as the production reader reads them.
 func liveChild(t *testing.T) (int, string) {

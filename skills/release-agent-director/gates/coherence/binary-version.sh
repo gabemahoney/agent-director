@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # gate:        coherence.binary-version.<plat>
-# checks:      each host-executable binary reports a version field matching target
+# checks:      each host-executable binary (agent-director and agent-director-admin,
+#              b.vqr) reports a version field matching target
 # usage:       bash binary-version.sh [<target-version>]
 #              $1 — expected version string; if omitted, derived from
 #                   <RELEASE_PKG_DIR>/package.json
@@ -71,23 +72,32 @@ HOST_PLAT="${HOST_OS}-${HOST_ARCH}"
 DIST_DIR="${COHERENCE_DIST_DIR:-dist}"
 
 # ─── platform table ───────────────────────────────────────────────────────────
-PLATFORMS=("linux-amd64" "linux-arm64" "darwin-arm64")
+# Parallel arrays, one entry per binary: agent-director, then
+# agent-director-admin (b.vqr), for each of the three platforms.
+PLATFORMS=("linux-amd64" "linux-arm64" "darwin-arm64"
+           "linux-amd64" "linux-arm64" "darwin-arm64")
 BINARIES=(
   "${DIST_DIR}/agent-director-linux-amd64"
   "${DIST_DIR}/agent-director-linux-arm64"
   "${DIST_DIR}/agent-director-darwin-arm64"
+  "${DIST_DIR}/agent-director-admin-linux-amd64"
+  "${DIST_DIR}/agent-director-admin-linux-arm64"
+  "${DIST_DIR}/agent-director-admin-darwin-arm64"
 )
 GATE_NAMES=(
   "coherence.binary-version.linux-amd64"
   "coherence.binary-version.linux-arm64"
   "coherence.binary-version.darwin-arm64"
+  "coherence.binary-version.admin-linux-amd64"
+  "coherence.binary-version.admin-linux-arm64"
+  "coherence.binary-version.admin-darwin-arm64"
 )
 
 # ─── per-platform checks ──────────────────────────────────────────────────────
 overall_outcome="passed"
 sub_check_jsons=()
 
-for i in 0 1 2; do
+for i in "${!BINARIES[@]}"; do
   plat="${PLATFORMS[$i]}"
   binary="${BINARIES[$i]}"
   gate="${GATE_NAMES[$i]}"
