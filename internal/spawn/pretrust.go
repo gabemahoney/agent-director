@@ -23,7 +23,8 @@ const (
 	PreTrustSkipped PreTrustOutcome = "skipped"
 	// PreTrustFailed: pre-trust was attempted and did not write the entry
 	// (the .claude.json file is missing, or could not be read, parsed or
-	// written). The launch proceeds; the agent may stop at the prompt.
+	// written, its lock held by another process included). The launch
+	// proceeds; the agent may stop at the prompt.
 	PreTrustFailed PreTrustOutcome = "failed"
 )
 
@@ -108,17 +109,26 @@ var ErrClaudeJSONMissing = errors.New("ErrClaudeJSONMissing")
 //   - If extraEnv["CLAUDE_CONFIG_DIR"] is non-empty → <CLAUDE_CONFIG_DIR>/.claude.json
 //   - Otherwise → $HOME/.claude.json (via claudeJSONPath, stubbed by tests)
 //
-// Behavior (per bug b.f75):
+// Behavior (per bugs b.f75 and b.zjm):
 //
-//   - Read the entire file, mutate the projects map, write the entire
-//     file via temp+rename. The window for a torn write against the
-//     operator's own Claude Code is small but real; last-writer wins
-//     is acceptable per the bug's concurrency note.
+//   - The read-modify-write runs under Claude Code's own lock on the file
+//     (lockConfig, configlock.go): take the lock, read the entire file
+//     under it, mutate the projects map, write the entire file via
+//     temp+rename, release the lock. Claude Code saves the same file under
+//     that lock and re-reads it under the lock before each save, so
+//     neither side's update is lost to the other, and concurrent
+//     agent-director pre-trusts of one file run one at a time. The wait
+//     for a held lock is bounded (configLockWait); when it runs out, or
+//     the lock cannot be taken at all, nothing is written and the error
+//     makes PreTrust report failed. The same holds when, just before the
+//     write, lock.checkHold finds the lock held too long or taken over
+//     by another process.
 //   - If the file does not exist (truly-fresh Claude Code install, or a
 //     fresh CLAUDE_CONFIG_DIR), return ErrClaudeJSONMissing wrapped with
-//     the path; PreTrust reports that as failed and the launch proceeds,
-//     so the agent may stop at the folder-trust prompt. Not our problem to
-//     materialize the file out of thin air.
+//     the path, before taking the lock, so neither the file nor the lock
+//     dir is created; PreTrust reports that as failed and the launch
+//     proceeds, so the agent may stop at the folder-trust prompt. Not our
+//     problem to materialize the file out of thin air.
 //   - Only the single key hasTrustDialogAccepted is set. We don't touch
 //     hasCompletedProjectOnboarding or any other workspace-init keys
 //     because those have semantics beyond trust.
@@ -134,28 +144,64 @@ func preTrustCwd(cwd string, extraEnv map[string]string) error {
 		return fmt.Errorf("pre-trust: resolve home: %w", err)
 	}
 
+	if _, err := os.Stat(path); err != nil {
+		return claudeJSONReadError(path, err)
+	}
+	lock, err := lockConfig(path)
+	if err != nil {
+		return fmt.Errorf("pre-trust: %w", err)
+	}
+	defer lock.unlock()
+
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("%w: %s", ErrClaudeJSONMissing, path)
-		}
-		return fmt.Errorf("pre-trust: read %s: %w", path, err)
+		return claudeJSONReadError(path, err)
 	}
+	out, err := withTrustedCwd(raw, cwd, path)
+	if err != nil {
+		return err
+	}
+	preTrustBeforeCommit()
+	if err := lock.checkHold(); err != nil {
+		return fmt.Errorf("pre-trust: %w", err)
+	}
+	return writeFileAtomic(path, out, 0o600)
+}
 
+// preTrustBeforeCommit runs in preTrustCwd under the lock, after the new
+// content is built and just before lock.checkHold. It does nothing; tests
+// swap it to stand in for another process breaking or taking over the lock
+// at that point.
+var preTrustBeforeCommit = func() {}
+
+// claudeJSONReadError is preTrustCwd's error for a failed stat or read of the
+// .claude.json file at path: ErrClaudeJSONMissing wrapped with the path when
+// the file does not exist, else the read error with context.
+func claudeJSONReadError(path string, err error) error {
+	if errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%w: %s", ErrClaudeJSONMissing, path)
+	}
+	return fmt.Errorf("pre-trust: read %s: %w", path, err)
+}
+
+// withTrustedCwd returns the .claude.json content raw (read from path, named
+// in errors) with projects[cwd].hasTrustDialogAccepted set to true and every
+// other key kept. Empty content is treated as an empty object.
+func withTrustedCwd(raw []byte, cwd, path string) ([]byte, error) {
 	// Decode into a permissive shape: top-level keys are kept as
 	// json.RawMessage so we don't have to enumerate Claude Code's full
 	// schema. projects is the only key we actually mutate.
 	top := map[string]json.RawMessage{}
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &top); err != nil {
-			return fmt.Errorf("pre-trust: parse %s: %w", path, err)
+			return nil, fmt.Errorf("pre-trust: parse %s: %w", path, err)
 		}
 	}
 
 	projects := map[string]map[string]json.RawMessage{}
 	if pj, ok := top["projects"]; ok && len(pj) > 0 {
 		if err := json.Unmarshal(pj, &projects); err != nil {
-			return fmt.Errorf("pre-trust: parse projects: %w", err)
+			return nil, fmt.Errorf("pre-trust: parse projects: %w", err)
 		}
 	}
 
@@ -168,16 +214,15 @@ func preTrustCwd(cwd string, extraEnv map[string]string) error {
 
 	pjOut, err := json.Marshal(projects)
 	if err != nil {
-		return fmt.Errorf("pre-trust: marshal projects: %w", err)
+		return nil, fmt.Errorf("pre-trust: marshal projects: %w", err)
 	}
 	top["projects"] = pjOut
 
 	out, err := json.MarshalIndent(top, "", "  ")
 	if err != nil {
-		return fmt.Errorf("pre-trust: marshal top: %w", err)
+		return nil, fmt.Errorf("pre-trust: marshal top: %w", err)
 	}
-
-	return writeFileAtomic(path, out, 0o600)
+	return out, nil
 }
 
 // writeFileAtomic writes data to path via a temp file in the same

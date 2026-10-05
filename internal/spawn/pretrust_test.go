@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -130,61 +132,45 @@ func TestPreTrustAtomicRenameLeavesNoTempFile(t *testing.T) {
 	if err := preTrustCwd("/tmp/x", nil); err != nil {
 		t.Fatalf("preTrustCwd: %v", err)
 	}
-
-	entries, err := os.ReadDir(filepath.Dir(path))
-	if err != nil {
-		t.Fatalf("ReadDir: %v", err)
-	}
-	for _, e := range entries {
-		if e.Name() != ".claude.json" {
-			t.Errorf("stray file after atomic rename: %s", e.Name())
-		}
-	}
+	assertNoStray(t, filepath.Dir(path))
 }
 
-// TestPreTrustConcurrentSpawnsDoNotCorrupt pins AC #4: concurrent
-// pre-trust calls for different cwds end with all of those cwds
-// flipped to true and the file still parseable. The bug spec allows
-// last-writer-wins for the file as a whole, so we cannot assert
-// "every concurrent caller's value wins" — we assert that *at least
-// one* of the racing keys lands (i.e. the file is parseable and
-// contains real entries), and that the file is never torn.
+// TestPreTrustConcurrentSpawnsDoNotCorrupt pins AC #4 and b.zjm: concurrent
+// pre-trusts of one file take its lock in turn, so every cwd's entry lands.
 func TestPreTrustConcurrentSpawnsDoNotCorrupt(t *testing.T) {
-	path := withStubClaudeJSON(t)
-	if err := os.WriteFile(path, []byte(`{"projects":{}}`), 0o600); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
+	env, path := seedConfigDir(t)
 
 	const N = 20
+	errs := make([]error, N)
 	var wg sync.WaitGroup
-	wg.Add(N)
-	for i := 0; i < N; i++ {
-		i := i
+	for i := range errs {
+		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_ = preTrustCwd(filepath.Join("/tmp/concurrent", string(rune('a'+i))), nil)
+			errs[i] = preTrustCwd(fmt.Sprintf("/tmp/concurrent/%d", i), env)
 		}()
 	}
 	wg.Wait()
 
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("preTrustCwd #%d: %v", i, err)
+		}
+	}
 	got := readClaudeJSON(t, path)
-	projects, ok := got["projects"].(map[string]any)
-	if !ok {
-		t.Fatalf("projects missing or wrong shape after concurrent writes: %T", got["projects"])
-	}
-	if len(projects) == 0 {
-		t.Errorf("no projects landed after %d concurrent pre-trusts; last-writer-wins should leave at least one", N)
-	}
-	for k, v := range projects {
-		entry, ok := v.(map[string]any)
-		if !ok {
-			t.Errorf("projects[%q] not an object: %T", k, v)
-			continue
-		}
-		if b, _ := entry["hasTrustDialogAccepted"].(bool); !b {
-			t.Errorf("projects[%q].hasTrustDialogAccepted not true: %v", k, entry["hasTrustDialogAccepted"])
+	var lost []string
+	for i := range errs {
+		if cwd := fmt.Sprintf("/tmp/concurrent/%d", i); !trusts(got, cwd) {
+			lost = append(lost, cwd)
 		}
 	}
+	if len(lost) > 0 {
+		t.Errorf("%d of %d concurrent pre-trusts lost their entry: %v", len(lost), N, lost)
+	}
+	if got["userID"] != "u" {
+		t.Errorf("userID = %v; want the seeded \"u\" kept", got["userID"])
+	}
+	assertNoStray(t, filepath.Dir(path))
 }
 
 // TestPreTrustEmptyFileTreatedAsEmptyObject pins the edge case where
@@ -301,7 +287,8 @@ func TestPreTrustEmptyClaudeConfigDirFallsBack(t *testing.T) {
 
 // TestPreTrustOutcome pins SR-22.6's shared step on a CLAUDE_CONFIG_DIR target:
 // ok writes silently, off attempts nothing, and each failure reports failed with
-// one warning line; no temp file is left and the home file is never touched.
+// one warning line; no temp file or lock dir is left and the home file is never
+// touched.
 func TestPreTrustOutcome(t *testing.T) {
 	const cwd = "/tmp/pretrust-outcome-cwd"
 	const seed = `{"projects":{},"userID":"u"}`
@@ -319,7 +306,7 @@ func TestPreTrustOutcome(t *testing.T) {
 		{name: "off creates no missing file", missing: true, off: true, want: PreTrustSkipped},
 		{name: "missing file", missing: true, want: PreTrustFailed, reason: "file does not exist"},
 		{name: "unparseable file", seed: "{not json", want: PreTrustFailed},
-		{name: "unwritable config dir", seed: seed, readOnly: true, want: PreTrustFailed},
+		{name: "unwritable config dir", seed: seed, readOnly: true, want: PreTrustFailed, reason: "take lock"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -361,15 +348,7 @@ func TestPreTrustOutcome(t *testing.T) {
 					t.Errorf("claude.json = %q; want byte-identical %q", got, tc.seed)
 				}
 			}
-			entries, err := os.ReadDir(dir)
-			if err != nil {
-				t.Fatalf("ReadDir: %v", err)
-			}
-			for _, e := range entries {
-				if e.Name() != ".claude.json" {
-					t.Errorf("stray file in config dir: %s", e.Name())
-				}
-			}
+			assertNoStray(t, dir)
 
 			if tc.want == PreTrustFailed {
 				assertOneFailedLine(t, warn.String(), path, tc.reason)
@@ -430,6 +409,42 @@ func assertOneFailedLine(t *testing.T, warn string, wants ...string) {
 	}
 	if !ok {
 		t.Errorf("warning = %q; want one \"pre-trust failed\" line containing %q", warn, wants)
+	}
+}
+
+// seedConfigDir returns the extra env of a fresh CLAUDE_CONFIG_DIR and its
+// .claude.json, seeded with lockTestSeed.
+func seedConfigDir(t *testing.T) (map[string]string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".claude.json")
+	seedFile(t, path, lockTestSeed)
+	return map[string]string{"CLAUDE_CONFIG_DIR": dir}, path
+}
+
+// lockTestSeed is the .claude.json seedConfigDir writes.
+const lockTestSeed = `{"projects":{},"userID":"u"}`
+
+// trusts reports whether the parsed .claude.json cfg has
+// projects[cwd].hasTrustDialogAccepted true.
+func trusts(cfg map[string]any, cwd string) bool {
+	entry, _ := cfg["projects"].(map[string]any)[cwd].(map[string]any)
+	b, _ := entry["hasTrustDialogAccepted"].(bool)
+	return b
+}
+
+// assertNoStray fails for each entry of dir other than .claude.json and the
+// names in keep, such as a temp file or a lock dir left behind.
+func assertNoStray(t *testing.T, dir string, keep ...string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	for _, e := range entries {
+		if e.Name() != ".claude.json" && !slices.Contains(keep, e.Name()) {
+			t.Errorf("stray entry in %s: %s", dir, e.Name())
+		}
 	}
 }
 
