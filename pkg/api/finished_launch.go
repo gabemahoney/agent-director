@@ -39,11 +39,16 @@ type finishedLaunchVerb struct {
 	// (spawn.LaunchTimeoutError): what the write left, since the row stays
 	// pending.
 	TimeoutConsequence string
+	// RemovedRetry is the retry sentence of an ErrTmuxUnresponsive after
+	// "duplicate session" when the restore found the row removed
+	// (restoreResultOf; b.gu6): what a retry of the verb meets with no row.
+	RemovedRetry string
 }
 
 // resumeLaunchVerb is resume's (SR-8.5, SR-14): verb resume, source
 // ad_resume, ad.resume.restored, launch resume, "resume moved it to
-// pending", and "the row stays pending" on a timeout.
+// pending", "the row stays pending" on a timeout, and resumeRemovedRetry
+// after "duplicate session" once the row was removed.
 var resumeLaunchVerb = finishedLaunchVerb{
 	Verb:               "resume",
 	Source:             nameHeldSourceResume,
@@ -51,11 +56,14 @@ var resumeLaunchVerb = finishedLaunchVerb{
 	NameHeldLaunch:     nameHeldLaunchResume,
 	LaunchWrite:        "resume moved it to pending",
 	TimeoutConsequence: spawn.RowStaysPending,
+	RemovedRetry:       resumeRemovedRetry,
 }
 
 // reuseLaunchVerb is reuse's (SR-10.4, SR-10.6, SR-14): verb spawn, source
 // ad_spawn, ad.spawn.reuse_restored, launch reuse, "this spawn reset it",
-// and reuseRowResetStaysPending on a timeout.
+// reuseRowResetStaysPending on a timeout, and "retry later" after
+// "duplicate session" once the row was removed, since the opted-in retry
+// then inserts the id afresh.
 var reuseLaunchVerb = finishedLaunchVerb{
 	Verb:               "spawn",
 	Source:             nameHeldSourceSpawn,
@@ -63,7 +71,16 @@ var reuseLaunchVerb = finishedLaunchVerb{
 	NameHeldLaunch:     nameHeldLaunchReuse,
 	LaunchWrite:        "this spawn reset it",
 	TimeoutConsequence: reuseRowResetStaysPending,
+	RemovedRetry:       retryLater,
 }
+
+// resumeRemovedRetry is resume's RemovedRetry (b.gu6): a retried resume finds
+// no row (ErrSpawnNotFound), so in place of "retry later" it says what is
+// left: no row to resume, and later a spawn of the id starts afresh. "later"
+// because the condition behind the ErrTmuxUnresponsive (a session still
+// stopping, an unanswered re-lookup) may persist, and an immediate spawn
+// could meet it as a name conflict.
+const resumeRemovedRetry = "there is no row left to resume; later, a spawn of the id starts afresh"
 
 // finishedLaunch is one launch onto a row examined as finished, after the
 // write that began it applied and the create returned: the verb's values;
@@ -129,15 +146,15 @@ func (l finishedLaunch) outcome(out spawn.CreateOutcome, req spawn.CreateRequest
 		return l.heldName(req)
 	}
 
-	_, err := l.restore(func(restored string) error {
+	_, err := l.restore(func(restored restoreResult) error {
 		switch out.Kind {
 		case spawn.CreateUnavailable:
-			return spawn.TmuxUnavailableError(out.Cause, req.Socket, restored)
+			return spawn.TmuxUnavailableError(out.Cause, req.Socket, restored.Sentence)
 		case spawn.CreateUnlabelledEnded, spawn.CreateUnlabelledRunning:
-			return spawn.UnlabelledSessionError(out, req.Name, restored)
+			return spawn.UnlabelledSessionError(out, req.Name, restored.Sentence)
 		}
 		// CreateFailed.
-		return spawn.CreateFailedError(out.Cause, req.Name, restored)
+		return spawn.CreateFailedError(out.Cause, req.Name, restored.Sentence)
 	})
 	return err
 }
@@ -155,60 +172,67 @@ const (
 )
 
 // restoreResult is one restore attempt's result as the verb reports it:
-// Sentence, the row sentence of the launch error; RowResult, the
-// ad.launch.name_held row_result and the re-lookup's ad.provenance.disagree
-// action (SR-14: nameHeldRowRestored, nameHeldRowLeftChanged or
-// nameHeldRowStillPending); and StoreErr, the restore's store error (nil
-// unless the write failed).
+// Sentence, the row sentence of the launch error; Retry, the retry sentence
+// that follows it in an ErrTmuxUnresponsive after "duplicate session"
+// (heldName; b.gu6); RowResult, the ad.launch.name_held row_result and the
+// re-lookup's ad.provenance.disagree action (SR-14: nameHeldRowRestored,
+// nameHeldRowLeftChanged or nameHeldRowStillPending); and StoreErr, the
+// restore's store error (nil unless the write failed).
 type restoreResult struct {
 	Sentence  string
+	Retry     string
 	RowResult string
 	StoreErr  error
 }
 
 // restoreResultOf maps the restore's outcome (res and its store error rerr,
-// as the restore write returned them) to its restoreResult, the one mapping
-// of the restore's result (SR-1.4, SR-8.5, SR-10.4, SR-14): applied gives
-// restoreSentenceApplied with priorState, and restored; changed gives "the row
-// changed after <launchWrite> and was left as it is" and absent "the row was
-// removed after <launchWrite>, so nothing was restored", both left_changed; a
-// store error gives restoreSentenceStaysPending, still_pending and the error.
-// launchWrite names the write that began the launch ("resume moved it to
-// pending", "this spawn reset it"). It makes no call, writes nothing and logs
-// nothing.
-func restoreResultOf(res CondResult, rerr error, priorState, launchWrite string) restoreResult {
+// as the restore write returned them) to its restoreResult for verb v, the
+// one mapping of the restore's result (SR-1.4, SR-8.5, SR-10.4, SR-14):
+// applied gives restoreSentenceApplied with priorState, "retry later" and
+// restored; changed gives "the row changed after <launchWrite> and was left
+// as it is" and absent "the row was removed after <launchWrite>, so nothing
+// was restored", both left_changed; a store error gives
+// restoreSentenceStaysPending, still_pending and the error. launchWrite is
+// v.LaunchWrite, the write that began the launch ("resume moved it to
+// pending", "this spawn reset it"). The retry sentence follows the result
+// (b.gu6): a row that stays pending, or changed after the write, may still be
+// pending, and a retry is refused (resume's launch in progress, reuse's
+// collision) until get shows it ended or missing, so both give the
+// launch-timeout rule (spawn.LaunchRetryRule); a removed row gives
+// v.RemovedRetry. It makes no call, writes nothing and logs nothing.
+func restoreResultOf(res CondResult, rerr error, priorState string, v finishedLaunchVerb) restoreResult {
 	switch {
 	case rerr != nil:
-		return restoreResult{Sentence: restoreSentenceStaysPending, RowResult: nameHeldRowStillPending, StoreErr: rerr}
+		return restoreResult{Sentence: restoreSentenceStaysPending, Retry: spawn.LaunchRetryRule, RowResult: nameHeldRowStillPending, StoreErr: rerr}
 	case res == CondApplied:
-		return restoreResult{Sentence: restoreSentenceApplied + priorState, RowResult: nameHeldRowRestored}
+		return restoreResult{Sentence: restoreSentenceApplied + priorState, Retry: retryLater, RowResult: nameHeldRowRestored}
 	case res == CondAbsent:
-		return restoreResult{Sentence: "the row was removed after " + launchWrite + ", so nothing was restored", RowResult: nameHeldRowLeftChanged}
+		return restoreResult{Sentence: "the row was removed after " + v.LaunchWrite + ", so nothing was restored", Retry: v.RemovedRetry, RowResult: nameHeldRowLeftChanged}
 	}
-	return restoreResult{Sentence: "the row changed after " + launchWrite + " and was left as it is", RowResult: nameHeldRowLeftChanged}
+	return restoreResult{Sentence: "the row changed after " + v.LaunchWrite + " and was left as it is", Retry: spawn.LaunchRetryRule, RowResult: nameHeldRowLeftChanged}
 }
 
 // restore makes the one restore attempt after a failed launch (SR-8.5,
 // SR-10.4): l.restoreWrite, conditional on the row being pending at the
 // version the write produced. It returns the launch error launchErr builds
-// from the restore's row sentence (restoreResultOf): restored to the prior
-// state; left as it is because the row changed or was removed (nothing
-// written); or, on a store error, that the row could not be restored and
-// stays pending, with one WARN line on the client logger naming the verb and
-// the instance id (no token, label or environment value). It then emits the
-// verb's restore event (ad.resume.restored or ad.spawn.reuse_restored:
-// claude_instance_id, applied, launch_error named through errorName,
-// restore_error, source), fail-open, and returns the restore's result too,
-// for a trail record that follows it (ad.launch.name_held after "duplicate
-// session").
-func (l finishedLaunch) restore(launchErr func(restored string) error) (restoreResult, error) {
+// from the restore's result (restoreResultOf), whose row sentence says the
+// row was restored to the prior state; left as it is because the row changed
+// or was removed (nothing written); or, on a store error, that the row could
+// not be restored and stays pending, with one WARN line on the client logger
+// naming the verb and the instance id (no token, label or environment
+// value). It then emits the verb's restore event (ad.resume.restored or
+// ad.spawn.reuse_restored: claude_instance_id, applied, launch_error named
+// through errorName, restore_error, source), fail-open, and returns the
+// restore's result too, for a trail record that follows it
+// (ad.launch.name_held after "duplicate session").
+func (l finishedLaunch) restore(launchErr func(restored restoreResult) error) (restoreResult, error) {
 	id := l.row.ClaudeInstanceID
 	res, rerr := l.restoreWrite()
 	if rerr != nil {
 		l.lg.Printf("WARN: %s: restoring instance %s to its prior state after a failed launch failed: %v", l.v.Verb, id, rerr)
 	}
-	restored := restoreResultOf(res, rerr, l.row.State, l.v.LaunchWrite)
-	err := launchErr(restored.Sentence)
+	restored := restoreResultOf(res, rerr, l.row.State, l.v)
+	err := launchErr(restored)
 
 	var restoreError any
 	if rerr != nil {
@@ -243,10 +267,15 @@ func (l finishedLaunch) restore(launchErr func(restored string) error) (restoreR
 //     (heldExaminedRow: req's name to quote, the examined ended_at, pid and
 //     session-id presence, the configured bound and window, the clock
 //     reading of step 1), with the restore's sentence as the row sentence
-//     and retryLater as the unanswered re-lookup's retry sentence (none for
-//     a vanished holder, heldRetrySentences), so the ambiguous holder's
-//     ErrTmuxUnresponsive ends with "retry later" as the pre-launch one does
-//     (SR-18.1);
+//     and the restore's retry sentence (restoreResult.Retry) as the retry
+//     sentence of every ErrTmuxUnresponsive (an unanswered re-lookup, an
+//     ambiguous holder, the row's own session still stopping or starting;
+//     none for a vanished holder, heldRetrySentences). It ends with "retry
+//     later", as the pre-launch refusals do (SR-18.1), only when the
+//     restore applied; when the row stays pending or changed, with the
+//     launch-timeout rule, since a retry is refused until get shows the row
+//     ended or missing; when the row was removed, with the verb's
+//     RemovedRetry (b.gu6);
 //  4. writes the re-lookup's ad.provenance.disagree records (emitDisagree,
 //     action the restore's row result), name_changed compared against the
 //     recorded name, skipping every reason the pre-launch lookup already
@@ -271,9 +300,9 @@ func (l finishedLaunch) heldName(req spawn.CreateRequest) error {
 	}
 
 	var holder heldNameHolder
-	restored, err := l.restore(func(sentence string) error {
+	restored, err := l.restore(func(r restoreResult) error {
 		var herr error
-		holder, herr = heldNameOutcome(res, req.InstanceID, req.Name, req.Socket, sentence, heldRetrySentences{Unanswered: retryLater}, &examined)
+		holder, herr = heldNameOutcome(res, req.InstanceID, req.Name, req.Socket, r.Sentence, heldRetrySentences{Unanswered: r.Retry}, &examined)
 		return herr
 	})
 

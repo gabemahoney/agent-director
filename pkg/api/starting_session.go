@@ -13,7 +13,8 @@ import (
 // SR-1.4): it runs tmux.StartingSession on a row the verb examined as
 // finished and builds the refusal for its outcome. resume's pre-launch check
 // (decidePreLaunch) and its re-lookup after "duplicate session"
-// (heldNameOutcome, with the restore's sentence as the row's Consequence) use
+// (heldNameOutcome, with the restore's sentence as the row's Consequence and
+// its retry sentence as the row's Retry) use
 // it, and so do reuse (the old row's lookup and its re-lookup) and kill's
 // finished-row opt-in, which takes steps 1 and 2 (unavailableError) and
 // replaces step 3 with its reported-in rule (SR-6.5, SR-6.7). It makes no
@@ -60,6 +61,11 @@ type startingSessionRow struct {
 	// instead: resume and reuse after "duplicate session" pass their
 	// restore's row sentence (restoreResultOf).
 	Consequence string
+	// Retry is the retry sentence that ends the still-stopping and
+	// still-starting refusals: "" means retryLater. Resume and reuse after
+	// "duplicate session" pass their restore's (restoreResult.Retry), which
+	// is "retry later" only when the restore applied (b.gu6).
+	Retry string
 }
 
 // consequence returns r's consequence sentence, nothingWasDone by default.
@@ -68,6 +74,14 @@ func (r startingSessionRow) consequence() string {
 		return nothingWasDone
 	}
 	return r.Consequence
+}
+
+// retry returns r's retry sentence, retryLater by default.
+func (r startingSessionRow) retry() string {
+	if r.Retry == "" {
+		return retryLater
+	}
+	return r.Retry
 }
 
 // startingSessionCheck is a classified row: the facts, and the rule's
@@ -103,28 +117,29 @@ func (c startingSessionCheck) refusal() error {
 }
 
 // unavailableError is steps 1 and 2's tmux.ErrTmuxUnresponsive (SR-1.4), nil
-// past both, so kill's opt-in never builds the own-id conflict:
+// past both, so kill's opt-in never builds the own-id conflict. Each ends
+// with the consequence and the row's retry sentence ("retry later" unless
+// the caller sets startingSessionRow.Retry):
 //
 //   - still stopping, session present: the quoted name; "appears to still be
 //     stopping"; that the row ended less than the stopping window ago (its
 //     effective value in seconds) and its agent has not yet exited;
-//     "retry later";
 //   - still stopping, no session: the instance id; "appears to still be
 //     stopping"; that the agent process still runs although no session of
-//     its launch was found; "retry later";
+//     its launch was found;
 //   - still starting: the quoted name; "appears to still be starting".
 func (c startingSessionCheck) unavailableError() error {
 	r := c.row
 	switch {
 	case c.class.Outcome == tmux.StillStopping && c.class.SessionPresent:
 		return fmt.Errorf("%w: instance %s: its session %s appears to still be stopping: the row ended less than the stopping window of %s ago and its agent has not yet exited; %s; %s",
-			tmux.ErrTmuxUnresponsive, r.InstanceID, strconv.Quote(r.Name), inSeconds(c.class.Window), r.consequence(), retryLater)
+			tmux.ErrTmuxUnresponsive, r.InstanceID, strconv.Quote(r.Name), inSeconds(c.class.Window), r.consequence(), r.retry())
 	case c.class.Outcome == tmux.StillStopping:
 		return fmt.Errorf("%w: instance %s appears to still be stopping: the row ended less than the stopping window of %s ago and its agent process still runs although no session of its launch was found; %s; %s",
-			tmux.ErrTmuxUnresponsive, r.InstanceID, inSeconds(c.class.Window), r.consequence(), retryLater)
+			tmux.ErrTmuxUnresponsive, r.InstanceID, inSeconds(c.class.Window), r.consequence(), r.retry())
 	case c.class.Outcome == tmux.StillStarting:
 		return fmt.Errorf("%w: instance %s: its session %s appears to still be starting: it has run for less than the starting-session bound of %s; %s; %s",
-			tmux.ErrTmuxUnresponsive, r.InstanceID, strconv.Quote(r.Name), inSeconds(c.class.Bound), r.consequence(), retryLater)
+			tmux.ErrTmuxUnresponsive, r.InstanceID, strconv.Quote(r.Name), inSeconds(c.class.Bound), r.consequence(), r.retry())
 	}
 	return nil
 }

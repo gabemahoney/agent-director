@@ -185,6 +185,69 @@ func rhdCases() []rhdCase {
 	}
 }
 
+// rhdNotApplied is each restore result other than applied after "duplicate session".
+var rhdNotApplied = []struct {
+	name    string
+	outcome apitest.RestoreOutcome
+}{{"changed", apitest.RestoreRowChanged}, {"removed", apitest.RestoreRowRemoved}, {"store error", apitest.RestoreStoreError}}
+
+// rhdSpoilRestore makes the restore after id's "duplicate session" give outcome: as the create returns, a
+// write of parent other (changed) or the row's removal (removed); else failRestore's store error. Call it after arrangeHeld.
+func rhdSpoilRestore(t *testing.T, e *killEnv, id, other string, outcome apitest.RestoreOutcome, failRestore func()) {
+	t.Helper()
+	var write func() error
+	switch outcome {
+	case apitest.RestoreRowChanged:
+		write = func() error { return e.st.SetParentID(id, other) }
+	case apitest.RestoreRowRemoved:
+		write = func() error { return e.st.DeleteSpawn(id) }
+	default:
+		failRestore()
+		return
+	}
+	adviceOnceAfter(e.rec, tmux.CallCreate, func() {
+		if err := write(); err != nil {
+			t.Errorf("write to %s as the create returned: %v", id, err)
+		}
+	})
+}
+
+// TestResumeHeldRetryFollowsRestore (b.gu6): an ErrTmuxUnresponsive after "duplicate session" (unreadable,
+// ambiguous, still stopping or starting) whose restore did not apply ends with the retry sentence its result picks.
+func TestResumeHeldRetryFollowsRestore(t *testing.T) {
+	for _, tc := range rhdCases() {
+		if tc.want != api.ErrTmuxUnresponsive {
+			continue
+		}
+		for _, o := range rhdNotApplied {
+			t.Run(tc.name+"/"+o.name, func(t *testing.T) {
+				e := newKillEnv(t)
+				other := adviceOtherRow(t, e)
+				age := rlkSettled(e)
+				if tc.stopping {
+					age = e.cfg.EffectiveStoppingWindow() / 2
+				}
+				r := e.seedHeldResumable(t, age, agentGone)
+				if tc.old {
+					tc.spec.Created = rlkSettled(e)
+				}
+				sc := e.arrangeHeld(t, r, tc.spec)
+				w := &hookedResumeStore{st: e.st}
+				rhdSpoilRestore(t, e, r.ID, other, o.outcome, func() { w.failRestore(nil) })
+
+				_, err := e.resumeWith(w, r.ID)
+
+				assertOneSentinel(t, err, api.ErrTmuxUnresponsive)
+				if err == nil {
+					t.Fatal("resume err = nil; want the held-name refusal")
+				}
+				p := apitest.HeldName{Name: r.Name, Restore: apitest.ResumeRestore{Outcome: o.outcome}}
+				apitest.AssertDescription(t, err.Error(), tc.desc(e, sc, p), rhdForbid(e, sc)...)
+			})
+		}
+	}
+}
+
 // TestResumeHeldRelookupOutcomes: per re-lookup outcome and prior state, one
 // classified error with the applied restore sentence, the row restored, the holder untouched.
 func TestResumeHeldRelookupOutcomes(t *testing.T) {

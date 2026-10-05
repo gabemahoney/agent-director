@@ -149,6 +149,43 @@ func TestSpawnReuseHeldRelookupOutcomes(t *testing.T) {
 	}
 }
 
+// TestSpawnReuseHeldRetryFollowsRestore (b.gu6): an ErrTmuxUnresponsive after reuse's "duplicate session" (unreadable,
+// ambiguous, still stopping or starting) whose restore did not apply ends with the retry sentence its result picks.
+func TestSpawnReuseHeldRetryFollowsRestore(t *testing.T) {
+	for _, tc := range rhdCases() {
+		if tc.want != api.ErrTmuxUnresponsive {
+			continue
+		}
+		for _, o := range rhdNotApplied {
+			t.Run(tc.name+"/"+o.name, func(t *testing.T) {
+				e := newKillEnv(t)
+				other := adviceOtherRow(t, e)
+				age := rlkSettled(e)
+				if tc.stopping {
+					age = e.cfg.EffectiveStoppingWindow() / 2
+				}
+				if tc.old {
+					tc.spec.Created = rlkSettled(e)
+				}
+				s := e.ruhArrange(t, store.StateEnded, age, tc.spec)
+				rhdSpoilRestore(t, e, s.r.ID, other, o.outcome, func() {
+					storefix.InjectWriteFailure(t, e.dbPath, storefix.WriteFailReuseRestore, s.r.ID)
+				})
+
+				_, _, err := e.reuse(t, s.p)
+
+				assertOneSentinel(t, err, api.ErrTmuxUnresponsive)
+				if err == nil {
+					t.Fatal("reuse err = nil; want the held-name refusal")
+				}
+				p := apitest.HeldName{Name: s.p.TmuxSessionName,
+					Restore: apitest.ResumeRestore{Outcome: o.outcome, Launch: apitest.LaunchReuse}}
+				apitest.AssertDescription(t, err.Error(), tc.desc(e, s.sc, p), ruhForbid(e, s)...)
+			})
+		}
+	}
+}
+
 // TestSpawnReuseHeldRowResult: the description's row sentence follows the
 // restore: changed after the reset, removed at the create, or a failed write.
 func TestSpawnReuseHeldRowResult(t *testing.T) {

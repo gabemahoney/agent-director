@@ -3,7 +3,8 @@ package api_test
 // advice_follow_helpers_test.go holds the helpers b.fji's literal-follow
 // tests (advice_follow_*_test.go) share: the advice checks (an error's
 // description, a Go doc comment, a manifest text), the wait the pending-row
-// advice prescribes, a one-shot hook on a tmux call and small seeds.
+// advice prescribes, the "duplicate session" arrangements B10 and A12 follow,
+// a one-shot hook on a tmux call and small seeds.
 
 import (
 	"context"
@@ -140,6 +141,26 @@ func adviceAwaitFinished(t *testing.T, c *api.Client, clock *tmuxfix.Clock, id s
 		t.Fatalf("Get(%s) after find-missing past grace = %q; want ended or missing", id, st)
 	}
 	return st
+}
+
+// adviceHeldFollow is a "duplicate session" whose refusal B10 and A12 follow: the re-lookup's arrangement, the words
+// of its refusal, whether only a restore that leaves the row pending is tried, and whether the holder outlives the wait.
+type adviceHeldFollow struct {
+	name, words string
+	spec        heldSpec
+	pendingOnly bool
+	keeps       bool
+}
+
+// adviceHeldFollows: the re-lookup times out; or the row's own young session appears to still be starting (b.gu6),
+// and goes during the wait or keeps running.
+func adviceHeldFollows() []adviceHeldFollow {
+	starting := heldSpec{Holder: holderCurrent}
+	return []adviceHeldFollow{
+		{"", "no answer within", heldSpec{Holder: holderNone, Relookup: tmuxfix.Script{Failure: tmux.FailTimeout}}, false, false},
+		{"still starting, the session goes/", "appears to still be starting", starting, true, false},
+		{"still starting, the session keeps running/", "appears to still be starting", starting, true, true},
+	}
 }
 
 // adviceOnceAfter runs fn once, when the next call of kind call on rec returns.

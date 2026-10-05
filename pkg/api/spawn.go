@@ -277,7 +277,10 @@ func hasControlChar(id string) bool {
 //     (younger than the starting-session bound), tmux's answer could not be
 //     read, or more than one session's
 //     name matches the requested name; retry later. After "duplicate
-//     session", the same cases at the re-lookup, then the row is restored.
+//     session", the same cases at the re-lookup, then the row is restored:
+//     retry later if it was restored or removed; if it could not be
+//     restored, or changed after the reset, do not retry until get shows
+//     the row ended or missing.
 //     Or the session-creating call timed out after the row was reset: the
 //     session may have been created, the row was reset and stays pending; do
 //     not retry until get shows the row ended or missing.

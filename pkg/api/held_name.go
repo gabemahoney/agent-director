@@ -15,9 +15,9 @@ import (
 // facts its ad.launch.name_held record needs. It is verb-agnostic: plain
 // spawn passes one of its three row sentences, its retry sentences below
 // (heldRetrySentences) and no examined row; resume and reuse
-// (finishedLaunch.heldName) pass their restore's sentence, retryLater for an
-// unanswered re-lookup and the row they examined before their move or reset
-// (heldExaminedRow).
+// (finishedLaunch.heldName) pass their restore's sentence, its retry sentence
+// (restoreResult.Retry) for every ErrTmuxUnresponsive and the row they
+// examined before their move or reset (heldExaminedRow).
 // resume's pre-launch check (resume_lookup.go) builds its holder conflicts
 // with the same class wording (heldHolderError, ambiguousHolderError) under
 // heldBeforeLaunch, which makes no "duplicate session" claim.
@@ -60,8 +60,10 @@ const (
 // heldRetrySentences is a verb's retry sentences for heldNameOutcome's
 // errors, each following the row sentence: Unanswered for the
 // ErrTmuxUnresponsive errors (the re-lookup could not answer, or more than
-// one session matched the name), "" meaning "retry later" for the Can't tell
-// and none for the ambiguous holder; Vanished for the ErrTmuxSessionCreate of
+// one session matched the name, or, with an examined row, its own session
+// appears to still be stopping or starting), "" meaning "retry later" for the
+// Can't tell and the starting-session refusals and none for the ambiguous
+// holder; Vanished for the ErrTmuxSessionCreate of
 // a holder that vanished before the re-lookup, "" meaning none (set, the
 // description also names the instance id, which the sentence's "this id"
 // means).
@@ -122,8 +124,9 @@ type heldExaminedRow struct {
 // restore's, restoreResultOf); retry is the caller's retry sentences
 // (heldRetrySentences; plain spawn: heldRetryFree for both when its end
 // write applied, else heldRetryWait for both;
-// resume and reuse: Unanswered retryLater, so their ambiguous holder also
-// ends with "retry later", and no Vanished); examined is the row the verb examined before
+// resume and reuse: Unanswered the restore's retry sentence,
+// restoreResult.Retry, which is "retry later" only when the restore applied,
+// and no Vanished); examined is the row the verb examined before
 // its move or reset (heldExaminedRow), nil for plain spawn, whose row did not
 // exist before. Each error matches exactly one catalogued
 // sentinel under errors.Is (SR-1.5) and carries the row sentence exactly once,
@@ -178,11 +181,12 @@ type heldExaminedRow struct {
 //     spawn-only sentence; a current label (the row's own session for the
 //     examined token) gets the starting-session rule with the holder's
 //     creation time, stopping window first (checkStartingSession(...).
-//     refusal() with the row sentence as Consequence): "appears to still be
-//     stopping" or "appears to still be starting" (tmux.ErrTmuxUnresponsive),
-//     else "this row's own id" (tmux.ErrTmuxSessionConflict, with the
-//     pointer). Foreign, other-store and no-valid-label holders are worded as
-//     above.
+//     refusal() with the row sentence as Consequence and retry.Unanswered as
+//     Retry): "appears to still be stopping" or "appears to still be
+//     starting" (tmux.ErrTmuxUnresponsive, ending with retry.Unanswered,
+//     "retry later" when it is not set), else "this row's own id"
+//     (tmux.ErrTmuxSessionConflict, with the pointer). Foreign, other-store
+//     and no-valid-label holders are worded as above.
 //
 // No description carries a label's value, the id a label names, another
 // row's id, a store id, a session-environment value, "dead" or "gone", or a
@@ -222,6 +226,7 @@ func heldNameOutcome(res tmux.Result, instanceID, name, socket, rowSentence stri
 		case tmux.ClassCurrent:
 			row := examined.startingSessionRow
 			row.Consequence = rowSentence
+			row.Retry = retry.Unanswered
 			session := *res.Holder
 			return holder, checkStartingSession(examined.Limits, examined.Now, row, &session).refusal()
 		}

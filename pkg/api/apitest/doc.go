@@ -123,7 +123,11 @@
 //     (descriptions_resume_held.go: the restore's row sentence,
 //     ResumeRestore, in place of "nothing was done" or "nothing was
 //     written", also over DescPreLaunchLeftover for an old holder and over
-//     the starting-session cases for the row's own session; DescHeldLeftover
+//     the starting-session cases for the row's own session; on an
+//     unanswered or transient case, the retry sentence the restore picks
+//     (ResumeRestore.heldRetry; b.gu6): "retry later" when the row was
+//     restored or for reuse's removed row, resume's removed-row sentence,
+//     else the launch-timeout rule; DescHeldLeftover
 //     stays plain spawn's wording only; ResumeRestore.Launch, LaunchReuse,
 //     words it for reuse), of reuse's own cases (descriptions_reuse.go:
 //     DescReuseLostRace, DescReuseArchiveFailure, DescReuseChangeFailure;

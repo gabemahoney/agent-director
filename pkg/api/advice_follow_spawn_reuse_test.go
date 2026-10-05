@@ -17,6 +17,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // advSpawnGetThenAct follows a failed reuse p by reading its row with get and
@@ -214,37 +215,63 @@ func TestAdviceFollow_A11_ReuseRestoreSentenceGetThenAct(t *testing.T) {
 	}
 }
 
-// TestAdviceFollow_A12_ReuseHeldUnreadableRetryLater: A12 "<restore sentence>; retry later" after reuse's "duplicate session" whose
-// re-lookup timed out; retried long after, with the name free and tmux answering.
+// TestAdviceFollow_A12_ReuseHeldUnreadableRetryLater: A12 "<restore sentence>; retry later" (restored, removed) or "<restore
+// sentence>; do not retry until get shows the row ended or missing" (changed, stays pending; b.gu6) after reuse's "duplicate
+// session" whose re-lookup timed out or met the row's own session still starting; retried long after, or once find-missing
+// past grace shows it missing, with the name free. A starting session that outlives the wait is a leftover until it goes.
 func TestAdviceFollow_A12_ReuseHeldUnreadableRetryLater(t *testing.T) {
-	const broken = "the row is still pending (the restore did not apply), so the opted-in retry collides with it (ErrInstanceIdCollision) " +
-		"until find-missing marks it missing; \"retry later\" does not name that step"
-	for _, tc := range advSpawnRestoreCases() {
-		t.Run(tc.name, func(t *testing.T) {
-			e := newKillEnv(t)
-			s := e.ruhArrange(t, store.StateEnded, rlkSettled(e), heldSpec{Holder: holderNone,
-				Relookup: tmuxfix.Script{Failure: tmux.FailTimeout}})
-			rs := &hookedReuseStore{st: e.st}
-			if !t.Run("trigger", func(t *testing.T) { // an injected write failure is removed when it ends
-				if tc.arrange != nil {
-					tc.arrange(t, e, s.r.ID, rs)
+	adviceAssertGoDoc(t, "spawn.go", "Spawn", "then the row is restored: retry later if it was restored or removed; if it could not be "+
+		"restored, or changed after the reset, do not retry until get shows the row ended or missing")
+	for _, h := range adviceHeldFollows() {
+		for _, tc := range advSpawnRestoreCases() {
+			if h.pendingOnly && tc.shown != store.StatePending {
+				continue
+			}
+			t.Run(h.name+tc.name, func(t *testing.T) {
+				e := newKillEnv(t)
+				s := e.ruhArrange(t, store.StateEnded, rlkSettled(e), h.spec)
+				rs := &hookedReuseStore{st: e.st}
+				retry := "retry later"
+				if tc.shown == store.StatePending {
+					retry = "do not retry until get shows the row ended or missing"
 				}
-				_, _, err := e.reuseWith(t, rs, s.p)
-				assertOneName(t, err, "ErrTmuxUnresponsive")
-				adviceAssertPhrase(t, err, tc.sentence+"; retry later")
-			}) {
-				t.FailNow()
-			}
-			e.clock.Advance(hnPast)
-			e.removeHolders(t, s.sc)
-			if tc.shown == store.StatePending {
-				knownBrokenAdvice(t, "A12", broken)
-			}
+				if !t.Run("trigger", func(t *testing.T) { // an injected write failure is removed when it ends
+					if tc.arrange != nil {
+						tc.arrange(t, e, s.r.ID, rs)
+					}
+					_, _, err := e.reuseWith(t, rs, s.p)
+					assertOneName(t, err, "ErrTmuxUnresponsive")
+					adviceAssertPhrase(t, err, tc.sentence+"; "+retry)
+					adviceAssertPhrase(t, err, h.words)
+				}) {
+					t.FailNow()
+				}
+				if !h.keeps {
+					e.removeHolders(t, s.sc)
+				}
+				if tc.shown == store.StatePending {
+					c, _ := e.client(t)
+					adviceAwaitFinished(t, c, e.clock, s.r.ID, nil)
+				} else {
+					e.clock.Advance(hnPast)
+				}
+				if h.keeps { // the row now carries the reset's token, so its old session is a leftover until it goes
+					s.r.Trust.reset(t)
+					before := e.snapshotReuse(t, s.r)
+					_, _, err := e.reuse(t, s.p)
+					assertOneName(t, err, "ErrTmuxSessionConflict")
+					if err != nil {
+						apitest.AssertDescription(t, err.Error(), apitest.DescPreLaunchLeftover(s.r.ID, rhdHolders(s.sc)), ruhForbid(e, s)...)
+					}
+					e.assertWroteNothing(t, before)
+					e.removeHolders(t, s.sc)
+				}
 
-			res, _, err := e.reuse(t, s.p)
+				res, _, err := e.reuse(t, s.p)
 
-			advSpawnLaunched(t, e.dbPath, s.r.ID, tc.life, res, err)
-		})
+				advSpawnLaunched(t, e.dbPath, s.r.ID, tc.life, res, err)
+			})
+		}
 	}
 }
 

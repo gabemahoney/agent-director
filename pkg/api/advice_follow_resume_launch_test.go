@@ -7,6 +7,7 @@ package api_test
 // advice_follow_resume_test.go.
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -17,10 +18,13 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// The advice B7 and B8 pin, exactly as the description words it.
+// The advice B7, B8 and B10 pin, exactly as the description or the Go doc words it.
 const (
-	advResumeRetryLater = "nothing was done; retry later"
-	advResumeLaunchRule = "the session may have been created; the row stays pending; do not retry until get shows the row ended or missing"
+	advResumeRetryLater   = "nothing was done; retry later"
+	advResumeWaitRule     = "do not retry until get shows the row ended or missing"
+	advResumeLaunchRule   = "the session may have been created; the row stays pending; " + advResumeWaitRule
+	advResumeRemovedRetry = "there is no row left to resume; later, a spawn of the id starts afresh"
+	advResumeHeldRetryDoc = "followed by the restore: retry later if the row was restored; if it could not be restored, or changed after the move, " + advResumeWaitRule + "; if it was removed, there is no row to resume, and later a spawn of the id starts afresh"
 )
 
 // advResumeConditionEnds ends what kept r from launching: its agent process exits
@@ -157,13 +161,13 @@ func TestAdviceFollow_B8_LaunchTimeoutWaitForGet(t *testing.T) {
 // advResumeRestore is one result of the restore after a failed resume launch:
 // arrange makes it happen (through the resume's store, or once on the create),
 // sentence is the error's row sentence, after the state get then shows ("":
-// no row), and heldBroken why "retry later" after it fails (B10).
+// no row), and retry the sentence that follows it after "duplicate session" (B10).
 type advResumeRestore struct {
-	name       string
-	arrange    func(t *testing.T, e *killEnv, s *hookedResumeStore, id, other string)
-	sentence   string
-	after      string
-	heldBroken string
+	name     string
+	arrange  func(t *testing.T, e *killEnv, s *hookedResumeStore, id, other string)
+	sentence string
+	after    string
+	retry    string
 }
 
 // advResumeOnCreate runs write once, when the next create returns.
@@ -179,16 +183,14 @@ func advResumeOnCreate(write func(e *killEnv, id, other string) error) func(*tes
 
 // advResumeRestores is every restore result for a row whose prior state is prior.
 func advResumeRestores(prior string) []advResumeRestore {
-	const stillPending = "the row stays pending, so the retried resume is refused as a launch in progress (ErrSpawnNotResumable) until find-missing marks it missing, which \"retry later\" does not say"
 	return []advResumeRestore{
-		{"restored", nil, "the row was restored to its prior state, " + prior, prior, ""},
+		{"restored", nil, "the row was restored to its prior state, " + prior, prior, "retry later"},
 		{"changed", advResumeOnCreate(func(e *killEnv, id, other string) error { return e.st.SetParentID(id, other) }),
-			"the row changed after resume moved it to pending and was left as it is", store.StatePending, stillPending},
+			"the row changed after resume moved it to pending and was left as it is", store.StatePending, advResumeWaitRule},
 		{"removed", advResumeOnCreate(func(e *killEnv, id, _ string) error { return e.st.DeleteSpawn(id) }),
-			"the row was removed after resume moved it to pending, so nothing was restored", "",
-			"the row is gone, so every retried resume returns ErrSpawnNotFound"},
+			"the row was removed after resume moved it to pending, so nothing was restored", "", advResumeRemovedRetry},
 		{"stays pending", func(_ *testing.T, _ *killEnv, s *hookedResumeStore, _, _ string) { s.failRestore(nil) },
-			"the row could not be restored and stays pending", store.StatePending, stillPending},
+			"the row could not be restored and stays pending", store.StatePending, advResumeWaitRule},
 	}
 }
 
@@ -229,31 +231,65 @@ func TestAdviceFollow_B9_RestoreSentenceNextStep(t *testing.T) {
 	}
 }
 
-// TestAdviceFollow_B10_HeldRetryLater: after "duplicate session" (re-lookup timed out) the holder goes; wait, re-issue.
-// B10: "<restore sentence>; retry later"
+// TestAdviceFollow_B10_HeldRetryLater: after "duplicate session" (re-lookup timed out, or the row's own session still
+// starting) follow the retry sentence the restore picks (b.gu6): wait and re-issue; find-missing past grace, then
+// re-issue; or, later, spawn the id. A starting session that outlives the wait is then a leftover until it goes.
+// B10: "<restore sentence>; retry later" / "...; do not retry until get shows the row ended or missing" /
+// "...; there is no row left to resume; later, a spawn of the id starts afresh"
 func TestAdviceFollow_B10_HeldRetryLater(t *testing.T) {
-	for _, rs := range advResumeRestores(store.StateEnded) {
-		t.Run(rs.name, func(t *testing.T) {
-			e := newKillEnv(t)
-			c, _ := e.client(t)
-			other := adviceOtherRow(t, e)
-			r := e.seedHeldResumable(t, rlkSettled(e), agentGone)
-			s := &hookedResumeStore{st: e.st}
-			sc := e.arrangeHeld(t, r, heldSpec{Holder: holderNone, Relookup: tmuxfix.Script{Failure: tmux.FailTimeout}})
-			if rs.arrange != nil {
-				rs.arrange(t, e, s, r.ID, other)
+	adviceAssertGoDoc(t, "resume.go", "Resume", advResumeHeldRetryDoc)
+	for _, h := range adviceHeldFollows() {
+		for _, rs := range advResumeRestores(store.StateEnded) {
+			if h.pendingOnly && rs.after != store.StatePending {
+				continue
 			}
+			t.Run(h.name+rs.name, func(t *testing.T) {
+				e := newKillEnv(t)
+				c, _ := e.client(t)
+				other := adviceOtherRow(t, e)
+				r := e.seedHeldResumable(t, rlkSettled(e), agentGone)
+				s := &hookedResumeStore{st: e.st}
+				sc := e.arrangeHeld(t, r, h.spec)
+				if rs.arrange != nil {
+					rs.arrange(t, e, s, r.ID, other)
+				}
 
-			_, err := e.resumeWith(s, r.ID)
+				_, err := e.resumeWith(s, r.ID)
 
-			adviceAssertAdvice(t, err, api.ErrTmuxUnresponsive, rs.sentence+"; retry later")
-			advResumeAssertState(t, c, r.ID, rs.after)
-			e.removeHolders(t, sc)
-			e.clock.Advance(rlkSettled(e))
-			if rs.heldBroken != "" {
-				knownBrokenAdvice(t, "B10", rs.heldBroken)
-			}
-			advResumeLaunches(t, e, r.ID)
-		})
+				adviceAssertAdvice(t, err, api.ErrTmuxUnresponsive, rs.sentence+"; "+rs.retry)
+				adviceAssertPhrase(t, err, h.words)
+				advResumeAssertState(t, c, r.ID, rs.after)
+				if !h.keeps {
+					e.removeHolders(t, sc)
+				}
+				switch rs.after {
+				case "": // no row left to resume (resume refuses ErrSpawnNotFound); later, a spawn of the id starts afresh
+					if strings.Contains(err.Error(), "retry later") {
+						t.Errorf("description %q says \"retry later\" with no row left to resume", err)
+					}
+					e.clock.Advance(rlkSettled(e))
+					advResumeNextStep(t, e, c, r.ID)
+					return
+				case store.StatePending: // no retry until get shows the row ended or missing
+					if st := adviceAwaitFinished(t, c, e.clock, r.ID, nil); st != store.StateMissing {
+						t.Fatalf("get %s past the pending grace period: state %q; want missing", r.ID, st)
+					}
+				default:
+					e.clock.Advance(rlkSettled(e))
+				}
+				if h.keeps { // the row now carries the move's token, so its old session is a leftover until it goes
+					r.Trust.reset(t)
+					before := e.snapshotResume(t, r)
+					_, err := e.resume(r.ID)
+					assertOneSentinel(t, err, api.ErrTmuxSessionConflict)
+					if err != nil {
+						apitest.AssertDescription(t, err.Error(), apitest.DescPreLaunchLeftover(r.ID, rhdHolders(sc)), rhdForbid(e, sc)...)
+					}
+					e.assertResumeWroteNothing(t, before)
+					e.removeHolders(t, sc)
+				}
+				advResumeLaunches(t, e, r.ID)
+			})
+		}
 	}
 }

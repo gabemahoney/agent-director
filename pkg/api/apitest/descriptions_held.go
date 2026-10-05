@@ -338,18 +338,15 @@ func DescHeldOtherStore(p HeldName, storeID string) DescCase {
 // "dead" or "gone". p.SessionID must be empty: pass the
 // matching sessions' tmux ids as forbid. With BeforeLaunch it requires
 // "nothing was done" and "retry later" instead of a row sentence and retry
-// guidance; with Restore, the restore's sentence and "retry later".
+// guidance; with Restore, the restore's sentence and its retry sentence
+// (afterResumeHeld).
 func DescHeldAmbiguous(p HeldName) DescCase {
 	if p.SessionID != "" {
 		panic("apitest: DescHeldAmbiguous names no holder")
 	}
-	req := []string{"more than one tmux session's name matches it", listSessionName}
-	if p.Restore.Outcome != RestoreNone {
-		req = append(req, retryLater)
-	}
 	return DescCase{
 		Name:       "ErrTmuxUnresponsive, held name, ambiguous holder",
-		Require:    req,
+		Require:    []string{"more than one tmux session's name matches it", listSessionName},
 		MustNot:    unresponsiveMustNot,
 		unanswered: true,
 	}.holderOverlay(p, heldLabelNoClaim)

@@ -817,10 +817,13 @@ func launchInProgressError(row Spawn) error {
 //     could not be read, or more than one session's name matches the recorded
 //     name; retry later. After "duplicate session" at the create, the same
 //     cases for the re-lookup and the session holding the name, followed by
-//     the restore. Or the session-creating call timed out or gave a
-//     reply that does not parse with a non-zero exit: the session may have
-//     been created and the row stays pending; do not retry until get shows
-//     the row ended or missing.
+//     the restore: retry later if the row was restored; if it could not be
+//     restored, or changed after the move, do not retry until get shows the
+//     row ended or missing; if it was removed, there is no row to resume,
+//     and later a spawn of the id starts afresh. Or the session-creating call
+//     timed out or gave a reply that does not parse with a non-zero exit:
+//     the session may have been created and the row stays pending; do not
+//     retry until get shows the row ended or missing.
 //
 // Nondeterminism: none.
 func (c *Client) Resume(params ResumeParams) (ResumeResult, error) {
