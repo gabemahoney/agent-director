@@ -5218,7 +5218,18 @@ decide allow/deny out-of-band. Conceptually:
   each caller safe. All four are pure, time-only functions of stored row
   state, the resolved window, and an injected clock — never dialog- or
   state-derived. Any code needing either boundary MUST consult these
-  functions rather than re-derive it.
+  functions rather than re-derive it. The same file holds the advice
+  text for the guard's release point: `relayGuardReleaseAdvice` ("1 s
+  after every request's delivery window elapses", rendered from
+  `RelayKillSafetyMargin`) and `relayFallenBackMaxGuardWait` (twice the
+  margin, 2 s: the longest the guard can still hold on the account of a
+  request `decide` has just refused as fallen back). The
+  `ErrSendKeysWhileRelayed` and `ErrRelayFallenBack` messages use them,
+  so a caller retrying at the stated instant is not refused again; any
+  new text stating when the guard releases MUST use them too, never a
+  restated margin. `decide`'s manifest Description states no timing — it
+  says only "(answer at the pane)" — so the timing lives in the runtime
+  error messages alone.
 
 - **`pkg/api/decide.go`** — verb wrapper. State guards
   (`ErrRelayModeOff`, `ErrSpawnNotFound`, `ErrInvalidDecision`)
@@ -5230,10 +5241,18 @@ decide allow/deny out-of-band. Conceptually:
   the decision is deliverable — never a recorded success against a dead
   relay hook. The RowsAffected==0 case is three-way disambiguated via a
   follow-up SELECT with pinned precedence: `ErrAlreadyDecided` wins for
-  decided rows; `ErrRelayFallenBack` (the "too late — answer at the
-  pane" sentinel) applies ONLY to open rows whose window has elapsed;
-  otherwise `ErrNoOpenPermissionRequest`. A fallen-back refusal leaves
-  `decision` NULL.
+  decided rows; `ErrRelayFallenBack` applies ONLY to open rows past
+  the fail-early cutoff (`elapsed ≥ window − margin`); otherwise
+  `ErrNoOpenPermissionRequest`. A fallen-back refusal leaves `decision`
+  NULL. Its message (advice; the error name is the contract) says to
+  answer at the pane with `send-keys` once the send-keys relay guard
+  releases, `RelayKillSafetyMargin` after every request's window, at
+  most 2 s after the refusal on the refused request's account. It does
+  not promise that `send-keys` refuses until then: the guard applies only
+  while the row is `check_permission`, and a relay hook still alive at
+  its poll deadline writes the `timeout` deny and moves the row to
+  `working` before the guard's release point, after which `send-keys`
+  is not guarded.
 
 - **`pkg/api/get_permission.go`** — verb wrapper. Read-only: delegates to
   `GetPermissionRequestByToken` and projects the row onto the SR-7.4 wire
@@ -5325,8 +5344,10 @@ fails late (`window + margin`), so the guard never frees while a live
 poller could still emit. It refuses while any row might still be delivered
 (and refuses on the zero-row transient — no signal, no authority to
 release), and **releases only when every row's window plus the safety
-margin has elapsed**. Once released, the delivering hook is provably dead,
-so send-keys is the sanctioned recovery of a fallen-back relay — see the
+margin has elapsed**; the refusal's message states that release point,
+margin included (`relayGuardReleaseAdvice`). Once released, the
+delivering hook is provably dead, so send-keys is the sanctioned
+recovery of a fallen-back relay — see the
 invariant below and the `ad.send_keys.called` audit event. (If the store
 read fails, the guard records `guard_evaluation="error"` — distinct from
 the ordinary-send `"not-applicable"` — and the send fails with the store
@@ -5348,9 +5369,12 @@ listener-gone/decision-NULL state is not a stranded dead end. Once every
 guard-release mirror (`RelayRequestGuardReleasable`) of the same time-based
 authority whose fail-early form (`RelayRequestUndeliverable`) makes `decide`
 return `ErrRelayFallenBack` — the send-keys relay guard *releases* (see
-"Send-keys interaction" above). The guard holds a margin longer than
-`decide` refuses (`window + margin` vs `window − margin`), so by the time it
-releases `decide` has long since returned `ErrRelayFallenBack`. The operator answers Claude Code's still-displayed native
+"Send-keys interaction" above). The guard releases two margins after
+`decide` starts refusing (`window + margin` vs `window − margin`), so on
+the refused request's account `send-keys` may still refuse with
+`ErrSendKeysWhileRelayed` for up to 2 s after `decide`'s
+`ErrRelayFallenBack`; both messages state the release point. Once the
+guard releases, the operator answers Claude Code's still-displayed native
 permission dialog through `send-keys` (no dedicated verb, never raw tmux), and
 the recovery is audited as `ad.send_keys.called` with
 `guard_evaluation=released`. So the terminal state of a fallen-back relay is a

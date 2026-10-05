@@ -445,84 +445,49 @@ func TestDecideDeliverabilityBoundary(t *testing.T) {
 	//
 	//   - refused: now = T0 + window, so cutoff = T0 + margin > T0 (undeliverable).
 	//   - accepted: now = T0, cutoff = T0 - (window - margin) << T0 (deliverable).
+	//
+	// T0 is read back from the second-truncated column, so the equality case is
+	// exact. just_before_boundary_accepted makes window - margin decide's
+	// earliest refusal, which bounds ErrRelayFallenBack's "at most 2 s" (b.2b8).
 	const window = 10 * time.Second
-
-	t.Run("aged_at_boundary_refused", func(t *testing.T) {
-		s, _ := apitest.SeedDecideFixture(t, "on")
-		apitest.SeedPermissionRow(t, s, "id-d-1")
-		// Read the actual stored created_at so the boundary math is exact
-		// against the second-truncated column, avoiding a flaky epsilon.
-		row, err := s.GetPermissionRequest("id-d-1", storefix.TestRequestTokenA)
-		if err != nil {
-			t.Fatalf("GetPermissionRequest: %v", err)
-		}
-		// now just past the boundary: cutoff = now - (window-margin) lands one
-		// second after created_at, so created_at is NOT strictly after cutoff.
-		now := row.CreatedAt.Add(window - api.RelayKillSafetyMargin + time.Second)
-		_, err = api.Decide(s, window, now, api.DecideParams{
-			ClaudeInstanceID: "id-d-1",
-			RequestToken:     storefix.TestRequestTokenA,
-			Decision:         "allow",
+	cases := []struct {
+		name    string
+		age     time.Duration // now - T0
+		refused bool
+	}{
+		{"aged_at_boundary_refused", window - api.RelayKillSafetyMargin + time.Second, true},
+		{"exact_equality_refused", window - api.RelayKillSafetyMargin, true}, // cutoff == T0: not strictly after
+		{"just_before_boundary_accepted", window - api.RelayKillSafetyMargin - time.Nanosecond, false},
+		{"comfortably_in_window_accepted", 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := apitest.SeedDecideFixture(t, "on")
+			apitest.SeedPermissionRow(t, s, "id-d-1")
+			row, err := s.GetPermissionRequest("id-d-1", storefix.TestRequestTokenA)
+			if err != nil {
+				t.Fatalf("GetPermissionRequest: %v", err)
+			}
+			_, err = api.Decide(s, window, row.CreatedAt.Add(tc.age), api.DecideParams{
+				ClaudeInstanceID: "id-d-1",
+				RequestToken:     storefix.TestRequestTokenA,
+				Decision:         "allow",
+			})
+			want := "allow"
+			if tc.refused {
+				want = ""
+				if !errors.Is(err, api.ErrRelayFallenBack) {
+					t.Fatalf("err = %v; want ErrRelayFallenBack", err)
+				}
+			} else if err != nil {
+				t.Fatalf("Decide: %v; want the verdict recorded", err)
+			}
+			row, _ = s.GetPermissionRequest("id-d-1", storefix.TestRequestTokenA)
+			if row.Decision != want {
+				t.Errorf("decision = %q; want %q", row.Decision, want)
+			}
 		})
-		if !errors.Is(err, api.ErrRelayFallenBack) {
-			t.Fatalf("err = %v; want ErrRelayFallenBack at boundary", err)
-		}
-		row, _ = s.GetPermissionRequest("id-d-1", storefix.TestRequestTokenA)
-		if row.Decision != "" {
-			t.Errorf("decision = %q at refused boundary; want NULL/empty", row.Decision)
-		}
-	})
-
-	t.Run("exact_equality_refused", func(t *testing.T) {
-		// The exact-equality boundary: now = created_at + window - margin, so
-		// cutoff = now - (window - margin) == created_at exactly. A row is
-		// deliverable iff created_at is STRICTLY after the cutoff, so a row whose
-		// created_at equals the cutoff is undeliverable — Decide must REFUSE.
-		// Deterministic because created_at is second-truncated in the column, so
-		// the equality holds exactly against the read-back value.
-		s, _ := apitest.SeedDecideFixture(t, "on")
-		apitest.SeedPermissionRow(t, s, "id-d-1")
-		row, err := s.GetPermissionRequest("id-d-1", storefix.TestRequestTokenA)
-		if err != nil {
-			t.Fatalf("GetPermissionRequest: %v", err)
-		}
-		// cutoff == created_at exactly.
-		now := row.CreatedAt.Add(window - api.RelayKillSafetyMargin)
-		_, err = api.Decide(s, window, now, api.DecideParams{
-			ClaudeInstanceID: "id-d-1",
-			RequestToken:     storefix.TestRequestTokenA,
-			Decision:         "allow",
-		})
-		if !errors.Is(err, api.ErrRelayFallenBack) {
-			t.Fatalf("err = %v; want ErrRelayFallenBack at exact-equality boundary (cutoff == created_at)", err)
-		}
-		row, _ = s.GetPermissionRequest("id-d-1", storefix.TestRequestTokenA)
-		if row.Decision != "" {
-			t.Errorf("decision = %q at exact-equality boundary; want NULL/empty", row.Decision)
-		}
-	})
-
-	t.Run("comfortably_in_window_accepted", func(t *testing.T) {
-		s, _ := apitest.SeedDecideFixture(t, "on")
-		apitest.SeedPermissionRow(t, s, "id-d-1")
-		row, err := s.GetPermissionRequest("id-d-1", storefix.TestRequestTokenA)
-		if err != nil {
-			t.Fatalf("GetPermissionRequest: %v", err)
-		}
-		// now = created_at: cutoff is a full window in the past; row is well
-		// inside the deliverability window.
-		if _, err := api.Decide(s, window, row.CreatedAt, api.DecideParams{
-			ClaudeInstanceID: "id-d-1",
-			RequestToken:     storefix.TestRequestTokenA,
-			Decision:         "allow",
-		}); err != nil {
-			t.Fatalf("Decide (in-window): %v", err)
-		}
-		row, _ = s.GetPermissionRequest("id-d-1", storefix.TestRequestTokenA)
-		if row.Decision != "allow" {
-			t.Errorf("decision = %q comfortably in-window; want allow", row.Decision)
-		}
-	})
+	}
 }
 
 func TestDecideAlreadyDecidedBeatsFallenBack(t *testing.T) {

@@ -290,33 +290,47 @@ the decision envelope. There is no silent-absorption path where
 `decide` reports success but the verdict goes to a dead hook that can
 never emit it. Success and delivery are the same event.
 
-When the request's relay window has already elapsed, `decide` refuses
-rather than record a doomed verdict. The typed error is
-**`ErrRelayFallenBack`** ("too late — answer at the pane"). It fires
-when the target row is still open (undecided) but its relay window has
-run out, including the small safety margin applied at the per-hook kill
-boundary so a verdict is never recorded for a request Claude Code is
-about to — or has just — killed.
+When the request's relay window has elapsed, or is about to, `decide`
+refuses rather than record a doomed verdict. The typed error is
+**`ErrRelayFallenBack`**. It fires when the target row is still open
+(undecided) and the time since its `created_at` has reached the relay
+window less a safety margin (`RelayKillSafetyMargin`, 1 s): `decide`
+refuses from 1 s *before* the window ends, so a verdict is never
+recorded for a request Claude Code is about to — or has just — killed.
+The error's message tells the caller to answer at the pane with
+`send-keys` once the send-keys relay guard releases, and when that is.
 
 Guarantees when `ErrRelayFallenBack` is returned:
 
 - **The decision was NOT recorded.** The row's `decision` stays NULL;
   no verdict is written into a void. Nothing about the request is lost.
-- **Recourse is the pane.** Because the relay hook can no longer
-  deliver a decision, the operator answers Claude Code's native
-  permission dialog directly — through the sanctioned, audited
-  `send-keys` recovery path (its guard has released by the same
-  time-based signal), never raw tmux. See "Send-keys interaction" below.
+- **Recourse is the pane, once the send-keys guard releases.** Because
+  the relay hook can no longer deliver a decision, the operator answers
+  Claude Code's native permission dialog directly — through the
+  sanctioned, audited `send-keys` recovery path, never raw tmux. That
+  path opens on the same time-based signal with the margin's sign
+  reversed: the send-keys relay guard releases 1 s *after* every one of
+  the spawn's requests' windows has elapsed. On the refused request's
+  account the gap is at most 2 s (from window − 1 s to window + 1 s).
+  While the row is still `check_permission`, `send-keys` may refuse
+  with `ErrSendKeysWhileRelayed` until the guard releases, and a
+  `send-keys` retried once it has released is not refused by the guard.
+  The guard applies only in `check_permission`: a relay hook still
+  alive at its poll deadline writes the fail-closed timeout deny and
+  moves the row to `working`, after which the guard no longer applies.
+  A request of the same spawn opened later holds the guard until its
+  own window plus 1 s. See "Send-keys interaction" below.
 
 **The undeliverability signal is time-based, never dialog-based.** A
 request is undeliverable once the elapsed time since its
-`created_at` exceeds the configured per-hook timeout
-(`relay.timeout_seconds`) — a pure function of stored row state, the
-configured window, and the clock. It never consults whether the native
-permission dialog is on screen: dialog visibility carries no
-information about relay-hook liveness (see "The native dialog is not a
-hook-death signal" above). The same time-only signal that the guarded
-write applies is the one that classifies the refusal.
+`created_at` reaches the configured per-hook timeout
+(`relay.timeout_seconds`) less the safety margin — a pure function of
+stored row state, the configured window, and the clock. It never
+consults whether the native permission dialog is on screen: dialog
+visibility carries no information about relay-hook liveness (see "The
+native dialog is not a hook-death signal" above). The same time-only
+signal that the guarded write applies is the one that classifies the
+refusal.
 
 **Precedence.** `ErrRelayFallenBack` applies **only to open rows**. A
 row that already carries a decision returns `ErrAlreadyDecided`
@@ -354,9 +368,10 @@ Concretely:
 - **Refuse while any row might still be delivered** — the relay can
   still deliver, so send-keys stays out of the way.
 - **Release only once every row's window plus the safety margin has
-  elapsed** — at that point no poller can deliver any decision, the
-  guard would be pure denial of service, and send-keys is the
-  sanctioned recovery surface (below).
+  elapsed** (1 s after the last window ends) — at that point no poller
+  can deliver any decision, the guard would be pure denial of service,
+  and send-keys is the sanctioned recovery surface (below). The
+  refusal's message states this release point, margin included.
 - **Zero rows keep the guard held.** With no row there is no signal and
   no authority to release; the state is a real mid-insert transient, so
   the guard refuses rather than open a race.
@@ -368,13 +383,15 @@ killed at its per-hook timeout and can no longer deliver — the operator
 recovers it end-to-end through sanctioned AD surface, with no dedicated
 answer-the-dialog verb and **without ever touching raw tmux**:
 
-1. `decide` returns the typed `ErrRelayFallenBack` ("too late — answer
-   at the pane"): the verdict was not recorded, and delivery is no
-   longer possible.
-2. Because every row's window plus the safety margin has elapsed, the
-   send-keys guard has *already released* by the same time-based
-   authority (which holds a margin longer than `decide` refuses — see
-   the asymmetric-margin note above).
+1. `decide` returns the typed `ErrRelayFallenBack`: the verdict was not
+   recorded, and delivery is no longer possible. `decide` refuses from
+   1 s before the request's window ends.
+2. The send-keys guard releases by the same time-based authority, but
+   only once every row's window plus the safety margin has elapsed —
+   1 s after the last window ends (see the asymmetric-margin note
+   above). So, on that request's account, `send-keys` may still refuse
+   with `ErrSendKeysWhileRelayed` for up to 2 s after `decide`'s
+   refusal; the operator sends once the guard has released.
 3. `send-keys` answers the still-displayed native permission dialog
    directly (the dialog is still on screen precisely because nothing
    answered it).

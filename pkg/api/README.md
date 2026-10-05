@@ -239,11 +239,13 @@ Most-likely sentinel errors:
   was sent.
 - `ErrSendKeysWhileRelayed`: relay_mode=on and state is `check_permission`
   **and** at least one of the row's permission requests is still within its
-  relay window — or the row has zero request rows; the relay still owns the
-  answer. This guard is **time-bounded**: once every request row's window
-  has elapsed the delivering hook is dead and the guard releases, letting
-  the caller recover the wedged row through this sanctioned, audited
-  surface.
+  relay window plus 1 s (`RelayKillSafetyMargin`) — or the row has zero
+  request rows; the relay still owns the answer. This guard is
+  **time-bounded**: it releases 1 s after every request row's window has
+  elapsed, when the delivering hook is dead, letting the caller recover the
+  wedged row through this sanctioned, audited surface. `Decide`'s
+  `ErrRelayFallenBack` points here; on the refused request's account the
+  guard can still hold for up to 2 s after that refusal.
 - `ErrTmuxSendKeys`: the row's session or pane is not there.
 - `ErrTmuxSessionConflict`: the agent's pane was not found, a session an
   earlier launch left behind is there on a live row, or tmux holds
@@ -480,7 +482,7 @@ Common sentinels across verbs:
 | `ErrStoreNotInitialized` | Store file absent and `CreateIfMissing` is false |
 | `ErrSchemaMismatch` | DB schema is newer than the binary, or the store has no valid store id — install the matching binary for a newer store; restore the pre-install copy of `state.db` for a store with no valid id. Never delete `state.db` |
 | `ErrSpawnNotInteractive` | State is not a live conversational state; with `AllowPending`, a `pending` row is refused when its launch start or token is not recorded or only a session of an earlier launch is found |
-| `ErrSendKeysWhileRelayed` | Relay path still owns the `check_permission` answer — refused while any request window is live; releases once every window has elapsed |
+| `ErrSendKeysWhileRelayed` | Relay path still owns the `check_permission` answer — refused until 1 s (`RelayKillSafetyMargin`) after every request window has elapsed |
 | `ErrListInvalidLabel` | Label filter not in `key=value` form |
 
 ---

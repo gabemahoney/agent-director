@@ -124,3 +124,19 @@ func RelayGuardReleaseCutoff(now time.Time, effectiveWindow time.Duration) time.
 func RelayRequestGuardReleasable(createdAt time.Time, effectiveWindow time.Duration, now time.Time) bool {
 	return !createdAt.After(RelayGuardReleaseCutoff(now, effectiveWindow))
 }
+
+// relayGuardReleaseAdvice states when the send_keys relay guard releases —
+// RelayKillSafetyMargin after every request's delivery window elapses, the
+// point RelayRequestGuardReleasable applies — in the words the
+// ErrSendKeysWhileRelayed and ErrRelayFallenBack descriptions share, so a
+// caller retrying at the stated instant is not refused again (b.2b8). The
+// margin is rendered from the constant, never restated.
+var relayGuardReleaseAdvice = inSeconds(RelayKillSafetyMargin) + " after every request's delivery window elapses"
+
+// relayFallenBackMaxGuardWait is the longest the send_keys guard can still
+// hold on a request's account once Decide has refused that request as fallen
+// back: Decide refuses from window - margin and the guard releases at
+// window + margin, so the gap is twice RelayKillSafetyMargin.
+// ErrRelayFallenBack's description states it, so the pane answer's brief
+// refusal is expected.
+const relayFallenBackMaxGuardWait = 2 * RelayKillSafetyMargin

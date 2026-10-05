@@ -397,7 +397,8 @@ Only a GONE error means the row's session is not there (for `kill`, GONE is succ
 
 | Error | When it fires |
 |---|---|
-| `ErrSendKeysWhileRelayed` | `send-keys` was attempted against a spawn sitting on a `check_permission` row with `relay_mode=on`. |
+| `ErrSendKeysWhileRelayed` | `send-keys` was attempted against a spawn sitting on a `check_permission` row with `relay_mode=on`. Time-bounded: refused until 1 s after every one of the spawn's permission requests' relay windows has elapsed; from then this guard lets `send-keys` through. |
+| `ErrRelayFallenBack` | `decide` was called on an open request whose relay window has run out (from 1 s before it ends); no verdict was recorded. Answer at the pane with `send-keys` once its relay guard releases, 1 s after every request's window (for this request, at most 2 s after the refusal); until then `send-keys` may throw `ErrSendKeysWhileRelayed`. |
 | `ErrRelayModeOff` | `decide` was called on a spawn whose `relay_mode` is not `on`. |
 | `ErrInvalidDecision` | `--decision` was neither `allow` nor `deny`. |
 | `ErrMissingRequestToken` | `decide` was called with an empty `request_token`. |

@@ -84,11 +84,12 @@ type SendKeysResult struct{}
 //     or state != check_permission); this is the ordinary send path.
 //   - guardHeld — relay_mode=on + check_permission and at least one of the
 //     Spawn's permission-request rows is still within its delivery window
-//     (or there are zero rows). The send was refused with
-//     ErrSendKeysWhileRelayed.
+//     plus RelayKillSafetyMargin (or there are zero rows). The send was
+//     refused with ErrSendKeysWhileRelayed.
 //   - guardReleased — relay_mode=on + check_permission and every row's
-//     window has elapsed; the guard released and keys were delivered. This is
-//     the audited recovery of a fallen-back relay.
+//     window plus RelayKillSafetyMargin has elapsed; the guard released and
+//     keys were delivered. This is the audited recovery of a fallen-back
+//     relay.
 //   - guardError — relay_mode=on + check_permission but the store read that
 //     the guard needs (PermissionRequestsForSpawn) failed, so deliverability
 //     could not be evaluated. Distinct from guardNotApplicable so a store
@@ -286,8 +287,8 @@ func (r *sendKeysRun) run(t SendKeysTmux, pc ProcChecker, effectiveWindow time.D
 	}
 	if guard.refuse {
 		return fmt.Errorf(
-			"%w: spawn %s is awaiting a relayed permission decision (guard releases once every request's delivery window elapses)",
-			ErrSendKeysWhileRelayed, params.ClaudeInstanceID)
+			"%w: spawn %s is awaiting a relayed permission decision (guard releases %s)",
+			ErrSendKeysWhileRelayed, params.ClaudeInstanceID, relayGuardReleaseAdvice)
 	}
 
 	if err := unusableNameError(row.TmuxSessionName); err != nil {
@@ -336,8 +337,9 @@ func sendKeysStateGuard(row Spawn, params SendKeysParams) error {
 // Otherwise it consults the guard-release signal across every one of the
 // Spawn's permission_requests rows and returns guardHeld (refuse) while any row
 // might still be delivered (including the zero-rows state), or guardReleased
-// (deliver) once every row's window has provably elapsed. If the store read
-// fails it returns guardError with the underlying error (the send fails).
+// (deliver) once every row's window plus RelayKillSafetyMargin has provably
+// elapsed. If the store read fails it returns guardError with the underlying
+// error (the send fails).
 //
 // The guard releases LATE — at elapsed >= window + margin — so it never frees
 // while a live poller could still emit a decision. That is the deliberate
@@ -412,10 +414,11 @@ func isInteractiveState(state string) bool {
 //     sent.
 //   - [ErrSendKeysWhileRelayed]: relay_mode is on and state is
 //     check_permission and at least one of the Spawn's permission requests is
-//     still within its relay delivery window (or the Spawn has zero request
-//     rows). The refusal is time-bounded: once every request row's window has
-//     elapsed the delivering hook is dead and the guard releases, letting the
-//     operator recover the wedged Spawn through this sanctioned surface.
+//     still within its relay delivery window plus [RelayKillSafetyMargin] (or
+//     the Spawn has zero request rows). The refusal is time-bounded: the guard
+//     releases that margin (1 s) after every request row's window elapses,
+//     when the delivering hook is dead, letting the operator recover the
+//     wedged Spawn through this sanctioned surface.
 //   - [ErrTmuxSendKeys]: the row's tmux session is not there.
 //   - [ErrTmuxSessionConflict]: the agent's pane was not found, a session an
 //     earlier launch left behind is there on a live row, or tmux holds

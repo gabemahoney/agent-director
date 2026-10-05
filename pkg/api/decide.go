@@ -32,9 +32,14 @@ var ErrMissingRequestToken = errors.New("ErrMissingRequestToken")
 // has been — or is about to be — killed at Claude Code's per-hook timeout, so
 // recording a verdict would write success into a void. The message conveys
 // "too late — answer at the pane": the operator's recourse is to answer the
-// native permission dialog directly. The row's decision stays NULL; recovery
-// of decided-but-undelivered rows is Epic 3's guard release (no information is
-// lost). Callers detect it with errors.Is.
+// native permission dialog directly, with send-keys. Decide refuses from
+// window - RelayKillSafetyMargin but the send-keys relay guard releases only
+// RelayKillSafetyMargin (1 s) after every request's delivery window elapses,
+// so for this request send-keys may refuse with ErrSendKeysWhileRelayed for
+// up to twice the margin (2 s) after this refusal. The pane answer is
+// accepted once the guard releases, and the message says when. The row's
+// decision stays NULL; recovery of decided-but-undelivered rows is Epic 3's
+// guard release (no information is lost). Callers detect it with errors.Is.
 var ErrRelayFallenBack = errors.New("ErrRelayFallenBack")
 
 // DecideStore is the narrow store surface Decide needs.
@@ -157,8 +162,8 @@ func Decide(s DecideStore, effectiveWindow time.Duration, now time.Time, params 
 	// predicate. Re-confirm via the shared single-authority signal (no second
 	// inline time comparison) and surface the typed fallen-back error.
 	if RelayRequestUndeliverable(pr.CreatedAt, effectiveWindow, now) {
-		return DecideResult{}, fmt.Errorf("%w: %s request %s fell back — too late, answer at the pane",
-			ErrRelayFallenBack, params.ClaudeInstanceID, params.RequestToken)
+		return DecideResult{}, fmt.Errorf("%w: %s request %s fell back — too late; answer at the pane with send-keys once its relay guard releases, %s (for this request, at most %s after this refusal)",
+			ErrRelayFallenBack, params.ClaudeInstanceID, params.RequestToken, relayGuardReleaseAdvice, inSeconds(relayFallenBackMaxGuardWait))
 	}
 	// Unreachable in practice — the row exists, decision is NULL, is within the
 	// window, yet UPDATE didn't affect it. The only way to land here is a SQL
@@ -217,7 +222,10 @@ func decideOutcome(err error) string {
 //   - [ErrNoOpenPermissionRequest]: no undecided permission request exists.
 //   - [ErrAlreadyDecided]: a concurrent caller already wrote a verdict.
 //   - [ErrRelayFallenBack]: the request is still open but its relay window has
-//     elapsed (the delivering hook is dead); answer at the pane instead.
+//     elapsed (the delivering hook is dead); answer at the pane instead, with
+//     SendKeys once its relay guard releases, [RelayKillSafetyMargin] (1 s)
+//     after every request's delivery window elapses (for this request, at most
+//     2 s after the refusal).
 //   - [ErrInvalidDecision]: Decision is not "allow" or "deny".
 //
 // Nondeterminism: none.

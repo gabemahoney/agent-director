@@ -102,42 +102,6 @@ func TestSendKeysGuardHoldsForDecidedInWindowRow(t *testing.T) {
 	e.assertNoTmuxCall(t)
 }
 
-// TestSendKeysGuardDeadBandAsymmetry pins the Decide/SendKeys asymmetry at the
-// window boundary (SR-4.2, SR-4.4): in the dead band Decide refuses while the
-// guard holds; aged to window + margin the guard releases and the keys are delivered.
-func TestSendKeysGuardDeadBandAsymmetry(t *testing.T) {
-	e := newKillEnv(t)
-	r := seedRelayRow(t, e, storefix.TestRequestTokenA)
-	row, err := e.st.GetPermissionRequest(r.ID, storefix.TestRequestTokenA)
-	if err != nil {
-		t.Fatalf("GetPermissionRequest: %v", err)
-	}
-	// Elapsed == window: past Decide's cutoff (window - margin), short of the
-	// guard's release (window + margin).
-	deadBandNow := row.CreatedAt.Add(relayGuardWindow)
-
-	_, err = api.Decide(e.st, relayGuardWindow, deadBandNow, api.DecideParams{
-		ClaudeInstanceID: r.ID, RequestToken: storefix.TestRequestTokenA, Decision: "allow"})
-	if !errors.Is(err, api.ErrRelayFallenBack) {
-		t.Fatalf("Decide err = %v; want ErrRelayFallenBack in dead band", err)
-	}
-	if row, _ = e.st.GetPermissionRequest(r.ID, storefix.TestRequestTokenA); row.Decision != "" {
-		t.Errorf("decision = %q after dead-band Decide refusal; want none", row.Decision)
-	}
-
-	_, err = e.sendKeysAt(relayGuardWindow, deadBandNow, api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "1"})
-	if !errors.Is(err, api.ErrSendKeysWhileRelayed) {
-		t.Fatalf("SendKeys err = %v; want ErrSendKeysWhileRelayed (guard holds in dead band)", err)
-	}
-	e.assertNoTmuxCall(t)
-
-	releasedNow := row.CreatedAt.Add(relayGuardWindow + api.RelayKillSafetyMargin + time.Second)
-	if _, err := e.sendKeysAt(relayGuardWindow, releasedNow, api.SendKeysParams{ClaudeInstanceID: r.ID, Text: "1"}); err != nil {
-		t.Fatalf("SendKeys err = %v; want release past window + margin", err)
-	}
-	e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, "1")
-}
-
 // TestSendKeysGuardReleasesForDecidedAgedRow pins SR-4.2's "whether or not a
 // decision was recorded": a sole decided row aged past window + margin releases the guard.
 func TestSendKeysGuardReleasesForDecidedAgedRow(t *testing.T) {

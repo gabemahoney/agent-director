@@ -127,12 +127,14 @@ var ErrJsonlNeverWritten = errors.New("ErrJsonlNeverWritten")
 //
 // The refusal is time-bounded, not unconditional: Claude Code kills the relay
 // hook at its per-hook timeout, after which the poller can no longer deliver a
-// decision. The guard consults the shared deliverability signal across every
-// one of the Spawn's permission-request rows and RELEASES once every request's
-// delivery window has elapsed — at that point send-keys is the sanctioned
-// recovery surface for a Spawn wedged in check_permission behind a dead relay.
-// The refusal stands only while at least one request row is still within its
-// window (or the Spawn has zero request rows).
+// decision. The guard consults the shared guard-release signal
+// (RelayRequestGuardReleasable) across every one of the Spawn's
+// permission-request rows and RELEASES RelayKillSafetyMargin (1 s) after every
+// request's delivery window elapses — at that point send-keys is the
+// sanctioned recovery surface for a Spawn wedged in check_permission behind a
+// dead relay. The refusal stands only while at least one request row is still
+// within its window plus that margin (or the Spawn has zero request rows), and
+// its message states the release point, margin included.
 var ErrSendKeysWhileRelayed = errors.New("ErrSendKeysWhileRelayed")
 
 // ErrInvalidFlags is returned when a flag or parameter value fails basic
