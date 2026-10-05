@@ -10,8 +10,11 @@ import (
 	"database/sql"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -67,9 +70,54 @@ func holdStoreLock(t *testing.T, path string, d time.Duration) {
 	t.Cleanup(func() { <-released })
 }
 
+// operatorSQLiteRC has every sqlite3 started with the returned env entry run
+// rc as its ~/.sqliterc until t ends (b.hk7). sqlite3 looks in the passwd home
+// before $HOME, so this writes that file, gated on the entry so the sqlite3 of
+// other test packages sees no change, under the lock test/install-sh/retry.sh
+// takes too. Sandbox only; it never replaces an existing file.
+func operatorSQLiteRC(t *testing.T, rc string) string {
+	t.Helper()
+	if os.Getenv(sandboxguard.EnvVar) != "1" {
+		t.Skipf("writes the passwd home's ~/.sqliterc: sandbox only (%s=1)", sandboxguard.EnvVar)
+	}
+	// The passwd entry alone, as sqlite3 reads it: user.Current can fall back
+	// to $HOME, and an empty home would put the file in the working directory.
+	uid := strconv.Itoa(os.Getuid())
+	u, err := user.LookupId(uid)
+	if err != nil {
+		t.Fatalf("passwd entry of uid %s: %v", uid, err)
+	}
+	if u.HomeDir == "" {
+		t.Fatalf("passwd entry of uid %s has no home directory; sqlite3 reads ~/.sqliterc from it", uid)
+	}
+	lock, err := os.OpenFile(filepath.Join(os.TempDir(), "agent-director-sqliterc.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatalf("~/.sqliterc lock: %v", err)
+	}
+	t.Cleanup(func() { lock.Close() }) // releases the lock, after the file's removal below
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatalf("~/.sqliterc lock: %v", err)
+	}
+	path := filepath.Join(u.HomeDir, ".sqliterc")
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatalf("cannot create %s (it exists, which this never replaces, or cannot be written): %v", path, err)
+	}
+	t.Cleanup(func() { os.Remove(path) })
+	_, err = f.WriteString(`.read '|printf "%s\n" "$AGENT_DIRECTOR_TEST_SQLITERC"'` + "\n")
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+	return "AGENT_DIRECTOR_TEST_SQLITERC=" + rc
+}
+
 // TestReadmeStoreIDCommandPrintsStoreID runs the README's store-id line with
-// HOME at a temp dir holding a fresh store: closed, held open, and while
-// another connection briefly holds its exclusive lock (b.ady).
+// HOME at a temp dir holding a fresh store: closed, held open, while another
+// connection briefly holds its exclusive lock (b.ady), and under an operator
+// ~/.sqliterc that turns headers on (b.hk7).
 // A missing sqlite3 fails inside the sandbox (its image installs sqlite3, so a
 // skip there would hide a broken image) and skips only outside it.
 func TestReadmeStoreIDCommandPrintsStoreID(t *testing.T) {
@@ -84,13 +132,20 @@ func TestReadmeStoreIDCommandPrintsStoreID(t *testing.T) {
 		name     string
 		keepOpen bool
 		lockFor  time.Duration // 0: no lock held
+		rc       string        // ~/.sqliterc; "": none
 	}{
-		{"store closed", false, 0},
-		{"store held open", true, 0},
-		{"store briefly locked", false, time.Second},
+		{"store closed", false, 0, ""},
+		{"store held open", true, 0, ""},
+		{"store briefly locked", false, time.Second, ""},
+		{"sqliterc headers on", false, 0, ".headers on"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			env := os.Environ()
+			if tc.rc != "" {
+				env = append(env, operatorSQLiteRC(t, tc.rc))
+			}
 			home := t.TempDir()
+			env = append(env, "HOME="+home) // the last HOME wins
 			dbPath := filepath.Join(home, ".agent-director", "state.db")
 			st, err := store.OpenOrInit(dbPath)
 			if err != nil {
@@ -105,11 +160,18 @@ func TestReadmeStoreIDCommandPrintsStoreID(t *testing.T) {
 			if tc.lockFor > 0 {
 				holdStoreLock(t, dbPath, tc.lockFor)
 			}
+			if tc.rc != "" { // a plain read shows the rc file takes effect
+				plain := exec.Command("sqlite3", "-readonly", dbPath, "SELECT value FROM store_meta WHERE key = 'store_id'")
+				plain.Env = env
+				if out, err := plain.Output(); err != nil || strings.TrimSpace(string(out)) == want {
+					t.Fatalf("plain sqlite3 read under ~/.sqliterc %q printed %q (err %v); want it changed by the rc file", tc.rc, out, err)
+				}
+			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, "sh", "-c", line)
-			cmd.Env = append(os.Environ(), "HOME="+home) // the last HOME wins
+			cmd.Env = env
 			var stderr strings.Builder
 			cmd.Stderr = &stderr
 			start := time.Now()

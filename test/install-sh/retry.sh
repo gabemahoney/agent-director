@@ -35,6 +35,11 @@
 # briefly holds state.db's exclusive lock still authorizes, runs and verifies
 # the migration: both reads wait the lock out (each takes 0.5 s or more).
 #
+# ~/.sqliterc (b.hk7): an upgrade under an rc file that changes how sqlite3
+# prints (.headers on, .mode json) still authorizes, runs and verifies the
+# migration. A step-3 mv that cannot move the migration sentinel into place
+# leaves no sentinel temp file behind.
+#
 # The test passes an explicit tag (`v0.11.0-fake`, a release that ships
 # agent-director-admin) so install.sh skips the tag-resolve step and
 # nothing reaches the network.
@@ -61,7 +66,7 @@ REPO_ROOT="$(cd "$HERE/../.." && pwd)"
 INSTALL_SH="${REPO_ROOT}/skills/install-agent-director/install.sh"
 FAKE_CURL="${HERE}/fake-curl.sh"
 ROOT="$(mktemp -d -t ad-install-retry.XXXXXX)"
-trap 'rm -rf "$ROOT"' EXIT
+trap 'rm -rf "$ROOT"; [[ -z "${SQLITERC_OURS:-}" ]] || rm -f "$PW_SQLITERC"' EXIT
 
 die() { echo "retry.sh: setup failed: $*" >&2; exit 1; }
 
@@ -134,7 +139,7 @@ report() {
 
 # new_home <name>: a fresh HOME in H, and the files of the run named <name>:
 # ERR (its stderr), OUT (its stdout) and STATE (the download count).
-H="" RC=0 ERR="" OUT="" STATE="" PATH_PREFIX=""
+H="" RC=0 ERR="" OUT="" STATE="" PATH_PREFIX="" SQLITERC=""
 new_home() {
     H="$(mktemp -d "$ROOT/home.XXXXXX")"
     STATE="$ROOT/$1.count" ERR="$ROOT/$1.err" OUT="$ROOT/$1.out"
@@ -142,11 +147,13 @@ new_home() {
 
 # run_install <fail-first> <fail-match> <install.sh args...>: install.sh
 # --no-hooks <args> under H, with the first <fail-first> downloads of the
-# assets whose name matches the glob <fail-match> answering 404, and
-# PATH_PREFIX (when set) first on its PATH; sets RC.
+# assets whose name matches the glob <fail-match> answering 404,
+# PATH_PREFIX (when set) first on its PATH, and SQLITERC (when set) as the
+# ~/.sqliterc its sqlite3 sees (sqliterc_on); sets RC.
 run_install() {
     local fail_first="$1" fail_match="$2"; shift 2
     env -i HOME="$H" PATH="${PATH_PREFIX:+$PATH_PREFIX:}$FAKES:$PATH" TMPDIR="$ROOT/tmp" \
+        ${SQLITERC:+"AGENT_DIRECTOR_TEST_SQLITERC=$SQLITERC"} \
         INSTALL_SH_TEST_CURL_OVERRIDE="$FAKE_CURL" \
         FAKE_CURL_STATE_FILE="$STATE" \
         FAKE_CURL_FAIL_FIRST="$fail_first" \
@@ -300,27 +307,100 @@ EOF
     chmod 0755 "$ROOT/locking/sqlite3"
 }
 
+# older_store <name>: a first install under a new HOME, then its store set one
+# version back so the next install migrates it; sets db and schema (the
+# version this build writes).
+older_store() {
+    new_home "$1"
+    db="$H/.agent-director/state.db"
+    run_install 0 '*' --from-release v0.11.0-fake --no-symlink
+    report "$1-first-install-exit-code" "$RC" "0"
+    schema="$(sqlite3 "$db" 'PRAGMA user_version;')"
+    sqlite3 "$db" "PRAGMA user_version = $((schema - 1));"
+}
+
+# report_upgraded <name>: the upgrade of an older_store exited 0, its step-2
+# read authorized v<schema-1>→v<schema>, its step-5 read verified v<schema>,
+# and no migrate-authorized file is left.
+report_upgraded() {
+    report "$1-exit-code" "$RC" "0"
+    report "$1-step2-read" "$(grep -cF "authorized migration v$((schema - 1))→v$schema " "$OUT")" "1"
+    report "$1-step5-read" "$(grep -cF "migration verified — state.db now at v$schema" "$OUT")" "1"
+    report "$1-no-sentinel-left" "$(ls -A "$H/.agent-director" | grep '^migrate-authorized')" ""
+}
+
 # An upgrade (the store set one version back) whose user_version reads each
 # meet a briefly held store lock reads the right versions, before and after
 # the migrating open (b.ady).
-new_home locked-store
-db="$H/.agent-director/state.db"
-run_install 0 '*' --from-release v0.11.0-fake --no-symlink
-report locked-store-first-install-exit-code "$RC" "0"
-schema="$(sqlite3 "$db" 'PRAGMA user_version;')"
-sqlite3 "$db" "PRAGMA user_version = $((schema - 1));"
+older_store locked-store
 locking_sqlite3 "$db"
 PATH_PREFIX="$ROOT/locking"
 run_install 0 '*' --from-release v0.11.0-fake --no-symlink
 PATH_PREFIX=""
-report locked-store-exit-code "$RC" "0"
 report locked-store-reads "$(sed 's/ [0-9]*$//' "$ROOT/locks.log" | paste -sd,)" "held,held"
 # Each read started with the lock held for about 1 s more, so one that returned
 # in under 0.5 s never waited for it.
 echo "  info  locked-store read times (ms): $(awk '{print $NF}' "$ROOT/locks.log" | paste -sd,)"
 report locked-store-reads-waited "$(awk '{print ($NF >= 500 ? "waited" : "returned after " $NF " ms")}' "$ROOT/locks.log" | paste -sd,)" "waited,waited"
-report locked-store-step2-read "$(grep -cF "authorized migration v$((schema - 1))→v$schema " "$OUT")" "1"
-report locked-store-step5-read "$(grep -cF "migration verified — state.db now at v$schema" "$OUT")" "1"
+report_upgraded locked-store
+
+# The sandbox user's ~/.sqliterc: sqlite3 looks for it in the passwd home
+# before $HOME, so no test HOME hides it (b.hk7).
+pw_home="$(getent passwd "$(id -u)" | cut -d: -f6)"
+[[ -n "$pw_home" ]] || die "uid $(id -u) has no passwd entry, or one with no home directory (getent passwd); the ~/.sqliterc checks need the passwd home sqlite3 reads"
+PW_SQLITERC="$pw_home/.sqliterc"
+SQLITERC_OURS=""
+
+# sqliterc_on: under the lock readme_store_id_test.go also takes, write
+# PW_SQLITERC so that it runs $AGENT_DIRECTOR_TEST_SQLITERC; a sqlite3 started
+# without that variable (in the test packages running beside this one) sees no
+# change. Never replaces a file already there. sqliterc_off undoes it.
+sqliterc_on() {
+    exec {SQLITERC_LOCK}>>"${TMPDIR:-/tmp}/agent-director-sqliterc.lock" && flock "$SQLITERC_LOCK" \
+        || die "lock ${TMPDIR:-/tmp}/agent-director-sqliterc.lock"
+    (set -o noclobber; cat >"$PW_SQLITERC") <<'EOF' || die "cannot create $PW_SQLITERC (it exists, which this never replaces, or cannot be written; reason above)"
+.read '|printf "%s\n" "$AGENT_DIRECTOR_TEST_SQLITERC"'
+EOF
+    SQLITERC_OURS=1
+}
+sqliterc_off() {
+    rm -f "$PW_SQLITERC"
+    SQLITERC_OURS=""
+    exec {SQLITERC_LOCK}>&-
+}
+
+# An upgrade under a ~/.sqliterc that changes what sqlite3 prints reads the
+# right versions, before and after the migrating open (b.hk7). <bare> is what
+# a plain sqlite3 read prints under it (V the version), showing it applies.
+for spec in '.headers on|user_version,V' '.mode json|[{"user_version":V}]'; do
+    rc="${spec%%|*}" bare="${spec#*|}"
+    name="${rc#.}" && name="sqliterc-${name// /-}"
+    older_store "$name"
+    sqliterc_on
+    SQLITERC="$rc"
+    report "$name-bare-read" "$(AGENT_DIRECTOR_TEST_SQLITERC="$rc" sqlite3 "$db" 'PRAGMA user_version;' | paste -sd,)" \
+        "${bare//V/$((schema - 1))}"
+    run_install 0 '*' --from-release v0.11.0-fake --no-symlink
+    SQLITERC=""
+    sqliterc_off
+    report_upgraded "$name"
+done
+
+# An upgrade whose step-3 mv cannot move the migration sentinel into place
+# stops there, and leaves no sentinel temp file behind (b.hk7).
+older_store sentinel-mv-fails
+mkdir -p "$ROOT/mv-fails"
+cat >"$ROOT/mv-fails/mv" <<EOF
+#!/bin/bash
+[[ "\${!#}" == */migrate-authorized ]] && { echo "mv: b.hk7 stand-in cannot move to \${!#}" >&2; exit 1; }
+exec $(type -P mv) "\$@"
+EOF
+chmod 0755 "$ROOT/mv-fails/mv"
+PATH_PREFIX="$ROOT/mv-fails"
+run_install 0 '*' --from-release v0.11.0-fake --no-symlink
+PATH_PREFIX=""
+report sentinel-mv-fails-stopped-at-mv "$RC $(grep -c "b.hk7 stand-in" "$ERR")" "1 1"
+report sentinel-mv-fails-nothing-left "$(ls -A "$H/.agent-director" | grep '^migrate-authorized')" ""
 
 echo "[b.kym install-sh retry] summary: $pass passed, $fail failed"
 

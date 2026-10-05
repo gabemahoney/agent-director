@@ -348,10 +348,11 @@ This skill runs `install.sh` from the same directory. The script:
       / `dnf install file`. `sqlite3` is mandatory for the
       schema-migration flow (below): the script reads state.db's
       ACTUAL `user_version` through the WAL with
-      `sqlite3 -cmd ".timeout 10000" <db> "PRAGMA user_version;"` —
-      raw header bytes are subtly wrong for a WAL-mode DB — both to
-      decide whether a migration sentinel is needed and to verify the
-      post-open version;
+      `sqlite3 -batch -init /dev/null -cmd ".timeout 10000" <db> "PRAGMA user_version;"` —
+      raw header bytes are subtly wrong for a WAL-mode DB, and
+      `-init /dev/null` keeps your `~/.sqliterc` from changing the
+      output — both to decide whether a migration sentinel is needed
+      and to verify the post-open version;
       install via `apt install sqlite3` / `brew install sqlite` /
       `dnf install sqlite`. `curl` is also required when
       `--from-release` is supplied.
@@ -456,13 +457,15 @@ This skill runs `install.sh` from the same directory. The script:
    1. **Install the new binary** — already done by step 3/the atomic
       `mv` above.
    2. **Read the DB's ACTUAL `user_version`** via
-      `sqlite3 -cmd ".timeout 10000" ~/.agent-director/state.db "PRAGMA user_version;"`
-      (through the WAL, waiting up to 10 s for a lock — never assume the
-      version, and never read raw header bytes). No `state.db` on disk
-      (fresh install) → nothing to authorize; step 4 fresh-creates it.
-      A `state.db` that exists but whose version cannot be read stops
-      the install here (**exit 5**): no sentinel is written and the
-      store is not opened. See "An unreadable schema version" below.
+      `sqlite3 -batch -init /dev/null -cmd ".timeout 10000" ~/.agent-director/state.db "PRAGMA user_version;"`
+      (through the WAL, waiting up to 10 s for a lock, ignoring
+      `~/.sqliterc` — never assume the version, and never read raw
+      header bytes). No `state.db` on disk (fresh install) → nothing to
+      authorize; step 4 fresh-creates it. A `state.db` that exists but
+      whose version cannot be read, or reads as anything but a whole
+      number (0 or more), stops the install here (**exit 5**): no
+      sentinel is written and the store is not opened. See "An
+      unreadable schema version" below.
    3. **Write the authorization sentinel** — a file
       `~/.agent-director/migrate-authorized` (a sibling of state.db)
       containing `{"from": <actual>, "to": <target>}`, where
@@ -679,11 +682,13 @@ administrator action, so the install writes the sentinel for you.
    `~/.agent-director/bin/`, and `agent-director-admin` into
    `~/.agent-director/admin/`).
 2. **Read the ACTUAL `user_version`** via
-   `sqlite3 -cmd ".timeout 10000" ~/.agent-director/state.db "PRAGMA user_version;"`
-   (through the WAL, waiting up to 10 s for a lock). No `state.db` on
-   disk → fresh install, skip to step 4. An existing `state.db` whose
-   version cannot be read fails the install (exit 5) before any
-   sentinel is written or the store is opened; see below.
+   `sqlite3 -batch -init /dev/null -cmd ".timeout 10000" ~/.agent-director/state.db "PRAGMA user_version;"`
+   (through the WAL, waiting up to 10 s for a lock, ignoring
+   `~/.sqliterc`). No `state.db` on disk → fresh install, skip to
+   step 4. An existing `state.db` whose version cannot be read, or
+   reads as anything but a whole number (0 or more), fails the install
+   (exit 5) before any sentinel is written or the store is opened; see
+   below.
 3. **Write the sentinel** `{"from":<actual>,"to":<target>}` beside
    state.db — **skipped when `from == to`** (already current) and on a
    fresh install. `<target>` is the schema version the new binary
@@ -724,11 +729,24 @@ verification for you.
 ### An unreadable schema version
 
 The install reads state.db's `user_version` twice: at step 2, before
-the store open, and at step 5, after it. If either read fails, the
-install exits 5 and reports `actual user_version: <unreadable>`, with
-sqlite3's own error indented under that line to show why (for example
-a lock held longer than the 10 s wait). Do NOT delete state.db.
-Re-running the install retries the read.
+the store open, and at step 5, after it. If either read fails, or
+prints anything but a whole number (0 or more), the install exits 5
+and reports `actual user_version: <unreadable>`. Do NOT delete
+state.db. The rest of the report depends on which happened:
+
+- **The read failed** (it printed nothing): sqlite3's own error,
+  indented under that line, shows why (for example a lock held longer
+  than the 10 s wait). Re-running the install retries the read.
+- **The read printed something else** ("printed the output above,
+  not a whole number (0 or more)"): that output, then any sqlite3
+  error, is indented under that line, and the report names the
+  `sqlite3 on PATH: <path>`. The read ignores `~/.sqliterc`, so the
+  sqlite3 at that path printed it for this state.db: for example a
+  wrapper that changes sqlite3's output, or a `user_version` below 0.
+  A re-run gets the same output unless that sqlite3 or state.db
+  changes.
+
+Which read it was:
 
 - **Step 2** (`reading state.db's schema version FAILED`, naming
   `state.db`): the install could not tell whether state.db needs a

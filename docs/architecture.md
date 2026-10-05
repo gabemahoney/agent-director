@@ -4312,21 +4312,29 @@ upgrade whose binary is newer than an existing `state.db`. `install.sh`
 runs on the end-user's machine as an *administrator* action, so it is
 the one legitimate place to authorize that migration — which it does
 with a one-shot `migrate-authorized` sentinel: it reads the DB's ACTUAL
-`user_version` (via `sqlite3 -cmd ".timeout 10000" … "PRAGMA user_version"`,
+`user_version` (via `sqlite3 -batch -init /dev/null -cmd ".timeout 10000" … "PRAGMA user_version"`,
 through the WAL and with the store's own 10 s busy timeout, so a running
-agent-director's momentary lock delays the read instead of failing it —
-hence `sqlite3` is a preflight requirement), writes a
+agent-director's momentary lock delays the read instead of failing it;
+`-init /dev/null` keeps the operator's `~/.sqliterc` from changing the
+output, and `-batch` keeps sqlite3 from announcing that init file on a
+terminal — hence `sqlite3` is a preflight requirement), writes a
 `{"from":<actual>,"to":<target>}` sentinel beside `state.db` (skipped
 when already current or on a fresh install), opens the store once with a
 store-opening verb (`agent-director list`, deliberately not the DB-free
 `help`/`version`) to run the migration and consume the sentinel, then
 verifies the post-open `user_version` and aborts loudly (exit 5) on any
 mismatch. A fresh install is one with no `state.db` on disk, never one
-whose version read failed. A read that fails exits 5 as
-`<unreadable>`, showing sqlite3's error, and re-running the install
-retries the read. A failed first read stops the install before any
-sentinel is written or the store is opened; a failed post-open read
-stops it whether or not a migration was expected. A brief
+whose version read failed. Every version read must print a whole number
+(0 or more) before it reaches the sentinel's `printf %d` or the version
+compare. A read that fails exits 5 as `<unreadable>`, showing sqlite3's
+error, and re-running the install retries the read. A read that prints
+anything else also exits 5 as `<unreadable>`, showing that output and
+naming the sqlite3 on PATH; a re-run gets the same output unless that
+sqlite3 or state.db changes. Either kind at the first read stops the
+install before any sentinel is written or the store is opened; at the
+post-open read it stops the install whether or not a migration was
+expected. The sentinel is written to a temp file and moved into place;
+the EXIT trap removes a temp file that was never moved. A brief
 hook-failure window between the binary swap and that open is accepted,
 not worked around. That same open gives the store its store id: the
 v4→v5 hop creates it on an upgrade, and `createSchema` on a fresh

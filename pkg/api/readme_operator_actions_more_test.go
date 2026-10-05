@@ -27,7 +27,7 @@ const (
 )
 
 // storeIDCommand is the documented read-only lookup of this store's id.
-const storeIDCommand = `sqlite3 -readonly -cmd ".timeout 10000" ~/.agent-director/state.db "SELECT value FROM store_meta WHERE key = 'store_id'"`
+const storeIDCommand = `sqlite3 -readonly -batch -init /dev/null -cmd ".timeout 10000" ~/.agent-director/state.db "SELECT value FROM store_meta WHERE key = 'store_id'"`
 
 // storeIDItemCommands returns the trimmed lines starting "sqlite3" in the
 // fenced blocks of the "This store's id" item. Both the command's pinned

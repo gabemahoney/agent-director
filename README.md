@@ -656,17 +656,17 @@ trail record, is a store's id. Read this store's own id directly, as the
 agents' user:
 
 ```sh
-sqlite3 -readonly -cmd ".timeout 10000" ~/.agent-director/state.db "SELECT value FROM store_meta WHERE key = 'store_id'"
+sqlite3 -readonly -batch -init /dev/null -cmd ".timeout 10000" ~/.agent-director/state.db "SELECT value FROM store_meta WHERE key = 'store_id'"
 ```
 
-It prints 16 lowercase hexadecimal characters and changes nothing (if your
-config sets another `db_path`, use that file). `sqlite3` is already a
-prerequisite of `install.sh`. This works in a store that has no
-`ad.launch.name_held` record; where one exists, its `store_id` is the same
-value. No verb changes the id. A store taken back to schema v4, by the
-downgrade recipe or by restoring a copy from before the install, gets a new
-id when it is migrated again; trail records written before then carry the
-old one.
+It prints 16 lowercase hexadecimal characters, whatever your `~/.sqliterc`
+sets, and changes nothing (if your config sets another `db_path`, use that
+file). `sqlite3` is already a prerequisite of `install.sh`. This works in a
+store that has no `ad.launch.name_held` record; where one exists, its
+`store_id` is the same value. No verb changes the id. A store taken back to
+schema v4, by the downgrade recipe or by restoring a copy from before the
+install, gets a new id when it is migrated again; trail records written
+before then carry the old one.
 
 **Checking a label.** A valid `@ad_owner` label has five fields: `ad1`, a
 launch token, the session's own id (`$N`), the row's id and, last, the

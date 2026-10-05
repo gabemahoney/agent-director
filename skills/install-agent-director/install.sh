@@ -798,7 +798,8 @@ fi
 # replaces neither binary, rather than leaving a new agent-director
 # beside an old agent-director-admin. The EXIT trap removes a staged
 # copy that was never moved into place (and the --from-release
-# downloads, as before, and the sqlite3 error file of steps 2 and 5).
+# downloads, as before, the sqlite3 error file of steps 2 and 5, and a
+# migration sentinel's temp file that step 3 never moved into place).
 #
 # The operator tool agent-director-admin goes into its own directory
 # (mode 0700, five digits to clear an inherited setgid bit as above),
@@ -806,7 +807,7 @@ fi
 # symlink for it. Its path is printed once, at the end.
 # --------------------------------------------------------------------
 
-trap 'rm -f "$TMP" "$ADMIN_TMP" ${tmp_bin:+"$tmp_bin"} ${tmp_admin:+"$tmp_admin"} ${user_version_err:+"$user_version_err"}' EXIT
+trap 'rm -f "$TMP" "$ADMIN_TMP" ${tmp_bin:+"$tmp_bin"} ${tmp_admin:+"$tmp_admin"} ${user_version_err:+"$user_version_err"} ${tmp_sentinel:+"$tmp_sentinel"}' EXIT
 
 mkdir -p "$DEFAULT_ADMIN_DIR"
 chmod 00700 "$DEFAULT_ADMIN_DIR"
@@ -851,9 +852,10 @@ fi
 #            `sqlite3 PRAGMA user_version` (reads through the WAL; raw
 #            header bytes are wrong for a WAL-mode DB). Fresh install →
 #            no DB yet → nothing to authorize; step 4 fresh-creates it.
-#            An existing DB whose version cannot be read stops the
-#            install (exit 5) before any migration is authorized and
-#            before agent-director opens the store.
+#            An existing DB whose version cannot be read, or reads as
+#            anything but a whole number, stops the install (exit 5)
+#            before any migration is authorized and before
+#            agent-director opens the store.
 #   Step 3 — write the sentinel {"from":<actual>,"to":<target>} beside
 #            state.db, SKIPPING when from==target (already current).
 #   Step 4 — trigger exactly one store-opening open (`$CANONICAL list`)
@@ -877,42 +879,75 @@ state_db="${DEFAULT_INSTALL_ROOT}/state.db"
 # the WAL; empty output means the read failed. sqlite3's stderr goes to
 # <err-file> (default /dev/null), so the caller can show sqlite3's own
 # reason. Call it only on a DB that exists: an empty result never means
-# "no DB" (b.n5a).
+# "no DB" (b.n5a). Check the result with ad_is_version before using it.
 #
 # The read waits up to 10 s for a lock, the same busy_timeout every
 # agent-director connection uses (internal/store/store.go openDB). A plain
 # sqlite3 waits 0 ms, so any agent-director process briefly holding
 # state.db's locks (opening, exiting, checkpointing or recovering the WAL)
 # would fail the read at once and the install would misread the store (b.ady).
+#
+# -init /dev/null: the sqlite3 shell otherwise runs the operator's
+# ~/.sqliterc first, and a `.headers on` or `.mode` there changes the
+# output (b.hk7). -batch: with a terminal on stdin, -init makes sqlite3
+# print "-- Loading resources from /dev/null" to stderr, which a failed
+# read would show as sqlite3's error.
 ad_user_version() {
     local db="$1" err="${2:-/dev/null}"
-    sqlite3 -cmd ".timeout 10000" "$db" "PRAGMA user_version;" 2>"$err" || true
+    sqlite3 -batch -init /dev/null -cmd ".timeout 10000" "$db" "PRAGMA user_version;" 2>"$err" || true
 }
 
-# ad_fail_unreadable_version <what the install could not do> [<line>...] —
-# finish a failed user_version read's report and exit 5. The caller has
-# already printed the headline. This prints the <unreadable> line,
+# ad_is_version <value> — true when <value> is a user_version as sqlite3
+# prints one: a whole number, 0 or more, with no leading zero. Nothing else
+# may reach a printf %d or a version compare (b.hk7). A leading zero would:
+# printf %d reads "010" as octal 8 and fails on "08", and the step-5 string
+# compare holds "04" and "4" different.
+ad_is_version() {
+    [[ "$1" =~ ^(0|[1-9][0-9]*)$ ]]
+}
+
+# ad_fail_unreadable_version <output> <what the install could not do>
+# [<line>...] — finish a user_version read's failure report and exit 5.
+# <output> is what the read printed: empty when the read failed, otherwise
+# output that is not a version (ad_is_version). The caller has already
+# printed the headline. This prints the <unreadable> line, <output> and
 # sqlite3's own error indented under it, the cause, any further <line>s,
 # and the advice.
 #
-# The script cannot tell why the read failed (a lock held past the 10 s
+# The script cannot tell why a read failed (a lock held past the 10 s
 # busy timeout, a broken sqlite3, permissions, a corrupt file), so it shows
 # sqlite3's error and says that a re-run reads again. A lock is a
 # condition time may resolve, so this never sends the operator to a human
-# (b.ady, b.n5a).
+# (b.ady, b.n5a). Output that is not a version is no lock or timing
+# failure, and ~/.sqliterc cannot cause it (ad_user_version): the sqlite3
+# on PATH printed it for this state.db, so a re-run gets the same output
+# until one of the two changes (b.hk7).
 ad_fail_unreadable_version() {
-    local could_not="$1" line
-    shift
+    local output="$1" could_not="$2" line
+    shift 2
     echo "  actual   user_version: <unreadable>" >&2
+    if [[ -n "$output" ]]; then
+        printf '%s\n' "$output" | sed 's/^/    /' >&2
+    fi
     if [[ -s "$user_version_err" ]]; then
         sed 's/^/    /' "$user_version_err" >&2
     fi
     echo "  Reading state.db's user_version (sqlite3 PRAGMA user_version)" >&2
-    echo "  failed, so the install could not ${could_not}." >&2
+    if [[ -z "$output" ]]; then
+        echo "  failed, so the install could not ${could_not}." >&2
+    else
+        echo "  printed the output above, not a whole number (0 or more), so" >&2
+        echo "  the install could not ${could_not}." >&2
+    fi
     for line in "$@"; do
         echo "  $line" >&2
     done
-    echo "  Re-running this install retries the read." >&2
+    if [[ -z "$output" ]]; then
+        echo "  Re-running this install retries the read." >&2
+    else
+        echo "  sqlite3 on PATH: $(command -v sqlite3)" >&2
+        echo "  A re-run gets the same output unless that sqlite3 or state.db changes." >&2
+    fi
     exit 5
 }
 
@@ -947,12 +982,13 @@ if [[ ! -e "$state_db" ]]; then
     echo "  schema  : no existing state.db — fresh create on first open"
 else
     db_version_before="$(ad_user_version "$state_db" "$user_version_err")"
-    if [[ -z "$db_version_before" ]]; then
+    if ! ad_is_version "$db_version_before"; then
         # Without the version no migration can be authorized, and the
         # step-4 open would refuse an older store anyway: stop here.
         echo "install.sh: reading state.db's schema version FAILED" >&2
         echo "  state.db: $state_db" >&2
-        ad_fail_unreadable_version "tell whether state.db needs a migration" \
+        ad_fail_unreadable_version "$db_version_before" \
+            "tell whether state.db needs a migration" \
             "No migration was authorized."
     fi
 
@@ -1008,22 +1044,22 @@ fi
 chmod 0600 "$state_db" 2>/dev/null || true
 db_version_after="$(ad_user_version "$state_db" "$user_version_err")"
 schema_shown="v${db_version_after}"
-[[ -n "$db_version_after" ]] || schema_shown="<unreadable>"
+ad_is_version "$db_version_after" || schema_shown="<unreadable>"
 echo "  state.db: $(stat -c '%a' "$state_db" 2>/dev/null || stat -f '%Lp' "$state_db") at $state_db (schema ${schema_shown})"
 
 migration_expected=0
 [[ -n "$db_version_before" && -n "${target_version:-}" ]] && migration_expected=1
 
-if [[ -z "$db_version_after" ]]; then
-    # The read itself failed, which says nothing about the store: the
+if ! ad_is_version "$db_version_after"; then
+    # The read gave no version, which says nothing about the store: the
     # step-4 open succeeded. Never silent, migration expected or not.
     if [[ "$migration_expected" -eq 1 ]]; then
         echo "install.sh: schema migration verification FAILED" >&2
         echo "  expected user_version: $target_version" >&2
-        ad_fail_unreadable_version "check the migration"
+        ad_fail_unreadable_version "$db_version_after" "check the migration"
     fi
     echo "install.sh: reading state.db's schema version after the store open FAILED" >&2
-    ad_fail_unreadable_version "check state.db's schema version"
+    ad_fail_unreadable_version "$db_version_after" "check state.db's schema version"
 fi
 
 if [[ "$migration_expected" -eq 1 ]]; then
