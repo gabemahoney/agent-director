@@ -51,6 +51,8 @@ func configRefusals() []configRefusal {
 	// A create timeout whose derived grace minimum exceeds the grace default.
 	defaultBreakingCreate := int64(config.DefaultPendingGraceSeconds-config.PendingGraceMarginSeconds+1) * 1000
 	defaultGraceMin := config.PendingGraceMinimumSeconds(defaultBreakingCreate, 0)
+	// The largest create_timeout_ms plus pipe_close_wait_ms at which the grace default loads (b.n4q).
+	defaultGraceTotal := int64(config.DefaultPendingGraceSeconds-config.PendingGraceMarginSeconds) * 1000
 
 	return []configRefusal{
 		{
@@ -83,7 +85,7 @@ func configRefusals() []configRefusal {
 			name: "grace_default_below_derived_minimum",
 			bad:  []apitest.TmuxSetting{apitest.TmuxInt(create, defaultBreakingCreate)},
 			refused: []apitest.ConfigRefusal{{Key: grace, Minimum: defaultGraceMin,
-				Derived: true, Create: defaultBreakingCreate, Pipe: config.DefaultPipeCloseWaitMs}},
+				Derived: true, Create: defaultBreakingCreate, Pipe: config.DefaultPipeCloseWaitMs, Total: defaultGraceTotal}},
 			fix: []apitest.TmuxSetting{apitest.TmuxInt(create, 0)},
 		},
 		{

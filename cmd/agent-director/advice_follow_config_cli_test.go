@@ -2,8 +2,9 @@ package main_test
 
 // advice_follow_config_cli_test.go (b.fji G2, CLI half): a refused [tmux]
 // config reaches a CLI caller as an error envelope carrying the advice, and
-// following it lets the verb run. The drop-or-zero matrix, its known-broken
-// case included, is internal/config's TestAdviceFollow_G2_TmuxRefusalMissingOrZeroGivesDefault.
+// following it lets the verb run. The drop-or-zero matrix is internal/config's
+// TestAdviceFollow_G2_TmuxRefusalMissingOrZeroGivesDefault; a key whose default
+// is below its minimum (b.n4q) is followed by the G2 tests beside it.
 
 import (
 	"path/filepath"

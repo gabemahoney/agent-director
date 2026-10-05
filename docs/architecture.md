@@ -119,7 +119,25 @@ truth for them, following the `Relay.EffectiveTimeoutSeconds` pattern:
   [`expire`](#expire)); every refused key is described in one
   `*config.ConfigError`, `[defaults]` first, then `[tmux]` in table
   order. No verb, server or hook runs with a minimum or default in place
-  of a refused value.
+  of a refused value. The description's advice is supplementary to
+  `ErrConfigMalformed`: it closes with "A missing key, or 0, gives the
+  default.", which holds for every refused key but one whose default is
+  itself below its safe minimum. Only `pending_grace_seconds` can be one,
+  when its derived minimum is above its default. Its own phrase then ends
+  with a change that loads (`defaultRefusedFix`): "so set it to at least"
+  the minimum, then "or lower the effective create_timeout_ms and
+  pipe_close_wait_ms to a total of" the largest total whose minimum is at
+  most the key's value (its default when missing or 0), keeping the key as
+  it is (`pendingGraceTotalLimitMs`, the inverse of
+  `PendingGraceMinimumSeconds`), then "ms or less (a missing or 0 key
+  counts as its default)", so a caller who adds up only the keys in the
+  file is not refused again. That second change is left out for a
+  negative value, a value below `PendingGraceFloorSeconds`, or a total
+  that does not fit an `int64`. The
+  closing sentence (`missingKeyAdvice`) then becomes "For every refused key
+  other than [tmux] pending_grace_seconds, a missing key, or 0, gives the
+  default." when other keys are refused too, and is left out when that key
+  is the only one refused (b.n4q).
 - **`internal/tmux` never imports `internal/config`** and reads no
   configuration (its row's prohibited imports).
 
@@ -10823,14 +10841,24 @@ manifest pointer and the sweeps' result fields);
 `descriptions_config.go` holds `ErrConfigMalformed`'s case for a config
 file refused for its `[tmux]` values or its `[defaults]
 expire_retention_days`, `DescConfigRefused(path, refusals...)` with one
-`ConfigRefusal{Key, Value, Minimum, Derived, Create, Pipe, Retention}` per
-refused value. It builds each `[tmux]` refused-value phrase from the key's
-name, unit, default and safe minimum (a derived minimum from the given
-create timeout and pipe-close wait), and, with `Retention` set, the
+`ConfigRefusal{Key, Value, Minimum, Derived, Create, Pipe, Total, Retention}`
+per refused value. It builds each `[tmux]` refused-value phrase from the
+key's name, unit, default and safe minimum (a derived minimum from the
+given create timeout and pipe-close wait), and, with `Retention` set, the
 `expire_retention_days` phrase from `Value` and its range 1 to
-`config.MaxExpireRetentionDays`, plus the closing sentence that a missing
-key or 0 gives the default; with no refusals (a value of the wrong type)
-only the path is required. **Must use:** every test outside
+`config.MaxExpireRetentionDays`. For a `[tmux]` key whose default is below
+`Minimum`, the phrase ends with "so set it to at least" the minimum and,
+when `Total` is not 0, "or lower the effective create_timeout_ms and
+pipe_close_wait_ms to a total of" `Total` "ms or less (a missing or 0 key
+counts as its default)"; with `Total` 0 that lowering must be absent. The
+closing sentence follows `config.Load`'s rule (see
+[`[tmux]` timing settings](#tmux-timing-settings)): "A missing key, or 0,
+gives the default." is required, and "so set it to at least" forbidden,
+when no refused key's default is below its minimum, the "For every
+refused key other than …" form naming those keys when only some are, and
+no "gives the default" when all are. With no refusals (a value of the
+wrong type) only the path is required.
+**Must use:** every test outside
 `internal/config`'s own tests (which pin the exact text) that checks a
 config refusal's description asserts it with `AssertDescription` on
 `DescConfigRefused`, never with its own phrases

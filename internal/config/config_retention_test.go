@@ -45,7 +45,9 @@ func TestExpireRetentionDaysLoads(t *testing.T) {
 }
 
 // TestDefaultsRefusalDescription pins each out-of-range expire_retention_days's
-// exact refusal, alone and beside a [tmux] one; a [tmux]-only refusal is unchanged.
+// exact refusal, alone and beside a [tmux] one; a [tmux]-only refusal is
+// unchanged. Beside a [tmux] key whose default is below its minimum, the
+// closing sentence leaves that key out (b.n4q).
 func TestDefaultsRefusalDescription(t *testing.T) {
 	const tail = ". A missing key, or 0, gives the default."
 	retention := func(v string) string {
@@ -53,6 +55,12 @@ func TestDefaultsRefusalDescription(t *testing.T) {
 	}
 	const killNegative = "[tmux] kill_exit_wait_ms = -1, which must be positive"
 	kill := []tmuxSetting{{config.TmuxKillExitWaitMs, -1}}
+	const graceAtDefault = "[tmux] pending_grace_seconds is missing or 0, and its default, 60, is below its safe " +
+		"minimum 81 s (computed from the effective create_timeout_ms 60000 and pipe_close_wait_ms 100), so set it " +
+		"to at least 81, or lower the effective create_timeout_ms and pipe_close_wait_ms to a total of 40000 ms " +
+		"or less (a missing or 0 key counts as its default)"
+	const graceLeftOut = ". For every refused key other than [tmux] pending_grace_seconds, a missing key, or 0, " +
+		"gives the default."
 	cases := []struct {
 		name string
 		days string
@@ -69,6 +77,8 @@ func TestDefaultsRefusalDescription(t *testing.T) {
 		{"with_tmux_refusal", "-1", kill,
 			"refused [defaults] and [tmux] values: " + retention("-1") + "; " + killNegative + tail},
 		{"tmux_only_unchanged", "31", kill, "refused [tmux] values: " + killNegative + tail},
+		{"with_tmux_default_below_minimum", "-1", []tmuxSetting{{config.TmuxCreateTimeoutMs, 60000}},
+			"refused [defaults] and [tmux] values: " + retention("-1") + "; " + graceAtDefault + graceLeftOut},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

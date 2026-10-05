@@ -253,22 +253,47 @@ func Load(path string) (Config, error) {
 // ("refused [defaults] values: ", "refused [tmux] values: ", or "refused
 // [defaults] and [tmux] values: " when both have one), then every refused
 // key's description, [defaults] before [tmux] and each table in its own
-// order, then that a missing key, or 0, gives the default. A file refused
-// only for [tmux] values gets the SR-4.1 description unchanged. Values are
-// never changed.
+// order, then missingKeyAdvice. A file refused only for [tmux] values gets
+// the SR-4.1 description unchanged. Values are never changed.
 func validate(cfg Config, meta toml.MetaData) error {
-	var tables, refused []string
+	var tables, refused, defaultRefused []string
 	if r := cfg.Defaults.refusals(); len(r) > 0 {
 		tables, refused = append(tables, "[defaults]"), append(refused, r...)
 	}
 	if r := tmuxRefusals(cfg.Tmux, meta); len(r) > 0 {
-		tables, refused = append(tables, "[tmux]"), append(refused, r...)
+		tables = append(tables, "[tmux]")
+		for _, x := range r {
+			refused = append(refused, x.text)
+			if x.defaultRefused {
+				defaultRefused = append(defaultRefused, "[tmux] "+x.key.Name())
+			}
+		}
 	}
 	if len(refused) == 0 {
 		return nil
 	}
-	return errors.New("refused " + strings.Join(tables, " and ") + " values: " + strings.Join(refused, "; ") +
-		". A missing key, or 0, gives the default.")
+	return errors.New("refused " + strings.Join(tables, " and ") + " values: " + strings.Join(refused, "; ") + "." +
+		missingKeyAdvice(len(refused), defaultRefused))
+}
+
+// missingKeyAdvice is the refusal's closing sentence, with its leading space.
+// refused counts the refused keys; defaultRefused names those among them
+// whose default is below their safe minimum (b.n4q). A missing key, or 0,
+// gives the default, which loads for every refused key but those, whose own
+// descriptions state a change that loads. So the sentence is the plain "A
+// missing key, or 0, gives the default." when defaultRefused is empty, names
+// the keys it leaves out when only some refused keys are in it, and is empty
+// when every refused key is.
+func missingKeyAdvice(refused int, defaultRefused []string) string {
+	switch len(defaultRefused) {
+	case 0:
+		return " A missing key, or 0, gives the default."
+	case refused:
+		return ""
+	default:
+		return " For every refused key other than " + strings.Join(defaultRefused, " and ") +
+			", a missing key, or 0, gives the default."
+	}
 }
 
 // resolvePaths applies the SRD §11 path rules to every filesystem-bearing

@@ -102,7 +102,9 @@ const (
 // value. Only a Tmux built in Go has 0 for an unset field. The accessors
 // treat 0 as "use the default"; read the values only through them. A Tmux
 // built in Go with zero fields yields every default. Load refuses a negative
-// value and a positive value below a key's safe minimum.
+// value and a positive value below a key's safe minimum, and, for
+// pending_grace_seconds, a missing or 0 key whose default is below the derived
+// minimum.
 type Tmux struct {
 	// StartingSessionSeconds is the starting-session bound, in whole seconds.
 	// Default DefaultStartingSessionSeconds (300); safe minimum
@@ -326,6 +328,21 @@ func PendingGraceMinimumSeconds(createTimeoutMs, pipeCloseWaitMs int64) int64 {
 	return max(PendingGraceFloorSeconds, seconds+PendingGraceMarginSeconds)
 }
 
+// pendingGraceTotalLimitMs returns the largest effective create_timeout_ms
+// plus pipe_close_wait_ms, in milliseconds, at which
+// PendingGraceMinimumSeconds is at most graceSeconds, and true; or 0 and false
+// when no total gives so low a minimum (graceSeconds below
+// PendingGraceFloorSeconds) or the total does not fit an int64. It is the
+// rule's inverse, used only to word a refusal (b.n4q): for
+// graceSeconds >= PendingGraceFloorSeconds, ⌈T / 1000⌉ + margin <= graceSeconds
+// holds exactly when T <= (graceSeconds - margin) × 1000.
+func pendingGraceTotalLimitMs(graceSeconds int64) (int64, bool) {
+	if graceSeconds < PendingGraceFloorSeconds || graceSeconds-PendingGraceMarginSeconds > math.MaxInt64/1000 {
+		return 0, false
+	}
+	return (graceSeconds - PendingGraceMarginSeconds) * 1000, true
+}
+
 // positiveOr returns v when positive, otherwise def.
 func positiveOr(v, def int64) int64 {
 	if v > 0 {
@@ -417,56 +434,94 @@ func (t Tmux) EffectiveKillExitWait() time.Duration {
 	return t.Effective(TmuxKillExitWaitMs)
 }
 
+// tmuxRefusal is one refused [tmux] key: its SR-4.1 description, and whether
+// the key's default is itself below its safe minimum (defaultRefused). For
+// such a key a missing key or 0 is refused too, so its description ends with
+// a change that loads, and the refusal's closing sentence that a missing key,
+// or 0, gives the default must not cover it (b.n4q).
+type tmuxRefusal struct {
+	key            TmuxKey
+	text           string
+	defaultRefused bool
+}
+
 // tmuxRefusals applies the SR-4.1 refusal rules to the [tmux] table decoded
-// into t, whose metadata meta says which keys the file sets. It returns the
-// SR-4.1 description of every refused key in table order, or nil when every
-// value loads; Load's validate words the refusal from them. Values are never
-// changed.
-func tmuxRefusals(t Tmux, meta toml.MetaData) []string {
+// into t, whose metadata meta says which keys the file sets. It returns every
+// refused key in table order, or nil when every value loads; Load's validate
+// words the refusal from them. Values are never changed.
+func tmuxRefusals(t Tmux, meta toml.MetaData) []tmuxRefusal {
 	configured := t
 	for _, k := range TmuxKeys() {
 		if !meta.IsDefined("tmux", k.Name()) {
 			*tmuxKeyDefs[k].field(&configured) = 0
 		}
 	}
-	var refused []string
+	var refused []tmuxRefusal
 	for _, k := range TmuxKeys() {
-		if msg, ok := configured.refusal(k); ok {
-			refused = append(refused, msg)
+		if r, ok := configured.refusal(k); ok {
+			refused = append(refused, r)
 		}
 	}
 	return refused
 }
 
-// refusal returns the SR-4.1 description of key k's refused value and true,
-// or "" and false when the value loads. t holds the configured values, 0
-// standing for a missing key. A negative value is refused; so is a value, or
-// for a missing or 0 key the default, below the key's safe minimum.
-func (t Tmux) refusal(k TmuxKey) (string, bool) {
+// refusal returns key k's refusal and true, or a zero tmuxRefusal and false
+// when the value loads. t holds the configured values, 0 standing for a
+// missing key. A negative value is refused; so is a value, or for a missing
+// or 0 key the default, below the key's safe minimum. When the default is
+// below the minimum, the description ends with defaultRefusedFix.
+func (t Tmux) refusal(k TmuxKey) (tmuxRefusal, bool) {
 	v := t.Value(k)
 	minimum, hasMinimum := t.Minimum(k)
 	if !hasMinimum {
 		if v < 0 {
-			return fmt.Sprintf("[tmux] %s = %d, which must be positive", k.Name(), v), true
+			return tmuxRefusal{key: k, text: fmt.Sprintf("[tmux] %s = %d, which must be positive", k.Name(), v)}, true
 		}
-		return "", false
+		return tmuxRefusal{}, false
 	}
+	defaultRefused := k.DefaultValue() < minimum
 	var msg string
 	switch {
-	case v == 0 && k.DefaultValue() < minimum:
+	case v == 0 && defaultRefused:
 		msg = fmt.Sprintf("[tmux] %s is missing or 0, and its default, %d, is below its safe minimum %d %s",
 			k.Name(), k.DefaultValue(), minimum, k.Unit())
 	case v != 0 && v < minimum:
 		msg = fmt.Sprintf("[tmux] %s = %d, below its safe minimum %d %s", k.Name(), v, minimum, k.Unit())
 	default:
-		return "", false
+		return tmuxRefusal{}, false
 	}
 	if k.MinimumKind() == TmuxMinimumDerived {
 		msg += fmt.Sprintf(" (computed from the effective %s %d and %s %d)",
 			TmuxCreateTimeoutMs.Name(), t.effectiveValue(TmuxCreateTimeoutMs),
 			TmuxPipeCloseWaitMs.Name(), t.effectiveValue(TmuxPipeCloseWaitMs))
 	}
-	return msg, true
+	if defaultRefused {
+		msg += defaultRefusedFix(k, v, minimum)
+	}
+	return tmuxRefusal{key: k, text: msg, defaultRefused: defaultRefused}, true
+}
+
+// defaultRefusedFix words the change that loads for key k, whose configured
+// value v (0 for a missing key) is refused and whose default is below its safe
+// minimum, so neither dropping the key nor setting it to 0 loads (b.n4q): set
+// the key to at least the minimum, or, for the derived minimum, lower the
+// effective create_timeout_ms and pipe_close_wait_ms to the largest total
+// whose minimum is at most v (the default for a missing or 0 key), keeping
+// the key as it is. The wording says the total is of the effective values, a
+// missing or 0 key counting as its default, so a follower who counts only the
+// keys in the file is not refused again. The second change is left out when v
+// is negative (still refused) or pendingGraceTotalLimitMs has no total for it.
+func defaultRefusedFix(k TmuxKey, v, minimum int64) string {
+	fix := fmt.Sprintf(", so set it to at least %d", minimum)
+	if k.MinimumKind() != TmuxMinimumDerived || v < 0 {
+		return fix
+	}
+	if total, ok := pendingGraceTotalLimitMs(positiveOr(v, k.DefaultValue())); ok {
+		fix += fmt.Sprintf(", or lower the effective %s and %s to a total of %d ms or less"+
+			" (a missing or 0 key counts as its default)",
+			TmuxCreateTimeoutMs.Name(), TmuxPipeCloseWaitMs.Name(), total)
+	}
+	return fix
 }
 
 // effectiveValue returns key k's effective value in its unit: the configured

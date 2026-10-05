@@ -3,13 +3,15 @@ package config_test
 // advice_follow_config_test.go (b.fji G2): a refused [tmux] table's
 // description, or a refused [defaults] expire_retention_days's (b.sgw), ends
 // "A missing key, or 0, gives the default."; following it literally (drop
-// each refused key, or set it to 0) must make the file load.
+// each refused key, or set it to 0) must make the file load. A key whose
+// default is itself below its minimum states its own change that loads
+// instead, and the closing sentence leaves it out (b.n4q).
 
 import (
-	"errors"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/config"
 )
@@ -17,9 +19,18 @@ import (
 // advPaneTail is the [tmux] refusal's closing advice (G2).
 const advPaneTail = "A missing key, or 0, gives the default."
 
-// advPaneRaisedCreate is a create timeout whose derived grace minimum (81 s)
-// is above the 60 s grace default.
-const advPaneRaisedCreate = 60000
+// advPaneMixedTail is the closing advice beside a pending_grace_seconds whose
+// default is below its minimum (b.n4q).
+const advPaneMixedTail = "For every refused key other than [tmux] pending_grace_seconds, a missing key, or 0, " +
+	"gives the default."
+
+// advPaneRaisedCreate is a create timeout whose derived grace minimum,
+// advPaneRaisedMinimum (⌈(60000 + 100) / 1000⌉ + 20 s), is above the 60 s
+// grace default.
+const (
+	advPaneRaisedCreate  = 60000
+	advPaneRaisedMinimum = 81
+)
 
 // advPaneRefusedKeys returns the keys desc names as refused ("[tmux] <name> "),
 // as a caller reading the description finds them, and their names.
@@ -32,6 +43,15 @@ func advPaneRefusedKeys(desc string) ([]config.TmuxKey, []string) {
 		}
 	}
 	return keys, names
+}
+
+// advPaneWith returns file with each of set in place of its key's setting.
+func advPaneWith(file []tmuxSetting, set ...tmuxSetting) []tmuxSetting {
+	out := slices.Clone(file)
+	for _, s := range set {
+		out = append(slices.DeleteFunc(out, func(o tmuxSetting) bool { return o.key == s.key }), s)
+	}
+	return out
 }
 
 // advPaneFollows are the two literal readings of the tail, applied to the
@@ -58,46 +78,28 @@ var advPaneFollows = []struct {
 // [tmux] values: ... . A missing key, or 0, gives the default." Each refused
 // file is rewritten as the tail says and must then load with the default.
 func TestAdviceFollow_G2_TmuxRefusalMissingOrZeroGivesDefault(t *testing.T) {
-	grace, create := config.TmuxPendingGraceSeconds, config.TmuxCreateTimeoutMs
-	const raisedBroken = "the raised create_timeout_ms lifts the derived pending_grace_seconds minimum above its " +
-		"60 s default, so a missing or 0 key is refused again; only a grace above the minimum or a lower " +
-		"create_timeout_ms/pipe_close_wait_ms loads"
 	cases := []struct {
-		name   string
-		file   []tmuxSetting
-		broken string // non-empty: the follow is known not to load (why)
+		name string
+		file []tmuxSetting
 	}{
-		{name: "fixed minimum, starting_session_seconds below it",
-			file: []tmuxSetting{{config.TmuxStartingSessionSeconds, config.MinStartingSessionSeconds - 1}}},
-		{name: "fixed minimum, stopping_window_seconds below it",
-			file: []tmuxSetting{{config.TmuxStoppingWindowSeconds, config.MinStoppingWindowSeconds - 1}}},
-		{name: "no minimum, kill_exit_wait_ms negative", file: []tmuxSetting{{config.TmuxKillExitWaitMs, -1}}},
-		{name: "derived minimum at the defaults, pending_grace_seconds below it",
-			file: []tmuxSetting{{grace, config.PendingGraceFloorSeconds - 1}}},
-		{name: "derived minimum raised past the default, pending_grace_seconds below it",
-			file:   []tmuxSetting{{create, advPaneRaisedCreate}, {grace, config.DefaultPendingGraceSeconds - 10}},
-			broken: raisedBroken},
-		{name: "derived minimum raised past the default, pending_grace_seconds missing",
-			file: []tmuxSetting{{create, advPaneRaisedCreate}}, broken: raisedBroken},
+		{"fixed minimum, starting_session_seconds below it",
+			[]tmuxSetting{{config.TmuxStartingSessionSeconds, config.MinStartingSessionSeconds - 1}}},
+		{"fixed minimum, stopping_window_seconds below it",
+			[]tmuxSetting{{config.TmuxStoppingWindowSeconds, config.MinStoppingWindowSeconds - 1}}},
+		{"no minimum, kill_exit_wait_ms negative", []tmuxSetting{{config.TmuxKillExitWaitMs, -1}}},
+		{"derived minimum at the defaults, pending_grace_seconds below it",
+			[]tmuxSetting{{config.TmuxPendingGraceSeconds, config.PendingGraceFloorSeconds - 1}}},
 	}
 	for _, tc := range cases {
 		for _, f := range advPaneFollows {
 			t.Run(tc.name+"/"+f.name, func(t *testing.T) {
-				_, err := config.Load(tmuxConfigFile(t, tc.file...))
-				var ce *config.ConfigError
-				if !errors.As(err, &ce) {
-					t.Fatalf("Load = %v; want a *config.ConfigError refusing the [tmux] table", err)
-				}
-				desc := ce.Err.Error()
+				desc := loadConfigError(t, tmuxConfigFile(t, tc.file...)).Err.Error()
 				if !strings.Contains(desc, advPaneTail) {
 					t.Fatalf("description %q does not end with the advice %q", desc, advPaneTail)
 				}
 				refused, names := advPaneRefusedKeys(desc)
 				if len(refused) == 0 {
 					t.Fatalf("description %q names no refused [tmux] key", desc)
-				}
-				if tc.broken != "" {
-					knownBrokenAdvice(t, "G2", tc.broken)
 				}
 
 				cfg, err := config.Load(tmuxConfigFile(t, f.apply(tc.file, refused)...))
@@ -109,6 +111,134 @@ func TestAdviceFollow_G2_TmuxRefusalMissingOrZeroGivesDefault(t *testing.T) {
 					if got, want := cfg.Tmux.Effective(k), (config.Tmux{}).Effective(k); got != want {
 						t.Errorf("%s = %v after the follow; want its default %v", k.Name(), got, want)
 					}
+				}
+			})
+		}
+	}
+}
+
+// TestAdviceFollow_G2_TmuxRefusalDefaultBelowMinimumSetOrLower: G2 (b.n4q)
+// "[tmux] pending_grace_seconds ..., so set it to at least 81, or lower the
+// effective create_timeout_ms and pipe_close_wait_ms to a total of T ms or less
+// (a missing or 0 key counts as its default)." Each change, made alone, loads;
+// an effective total over T (a missing or 0 pipe_close_wait_ms counted as its
+// 100) is still refused.
+func TestAdviceFollow_G2_TmuxRefusalDefaultBelowMinimumSetOrLower(t *testing.T) {
+	grace, create, pipe := config.TmuxPendingGraceSeconds, config.TmuxCreateTimeoutMs, config.TmuxPipeCloseWaitMs
+	cases := []struct {
+		name  string
+		file  []tmuxSetting
+		total int64 // T, (the grace, or its 60 s default, - 20 s) × 1000; 0 below the 30 s floor, where none loads
+	}{
+		{"derived minimum raised past the default, pending_grace_seconds missing",
+			[]tmuxSetting{{create, advPaneRaisedCreate}}, 40000},
+		{"derived minimum raised past the default, pending_grace_seconds below it",
+			[]tmuxSetting{{create, advPaneRaisedCreate}, {grace, config.DefaultPendingGraceSeconds - 10}}, 30000},
+		{"derived minimum raised past the default, pending_grace_seconds below the floor",
+			[]tmuxSetting{{create, advPaneRaisedCreate}, {grace, config.PendingGraceFloorSeconds - 1}}, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			desc := loadConfigError(t, tmuxConfigFile(t, tc.file...)).Err.Error()
+			advice := graceFix(advPaneRaisedMinimum, tc.total) + "."
+			if !strings.HasSuffix(desc, advice) {
+				t.Fatalf("description %q does not end with the advice %q", desc, advice)
+			}
+
+			t.Run("set it to at least the minimum", func(t *testing.T) {
+				cfg, err := config.Load(tmuxConfigFile(t, advPaneWith(tc.file, tmuxSetting{grace, advPaneRaisedMinimum})...))
+				if err != nil {
+					t.Fatalf("after following %q, Load: %v", advice, err)
+				}
+				if got, want := cfg.Tmux.EffectivePendingGrace(), advPaneRaisedMinimum*time.Second; got != want {
+					t.Errorf("pending_grace_seconds = %v after the follow; want %v", got, want)
+				}
+			})
+			if tc.total == 0 {
+				return
+			}
+			// The file leaves pipe_close_wait_ms out, or sets it to 0, so it counts
+			// as its default 100 in the effective total.
+			rest := tc.total - config.DefaultPipeCloseWaitMs
+			lowers := []struct {
+				name  string
+				set   []tmuxSetting
+				loads bool
+			}{
+				{"lower the total, pipe_close_wait_ms missing, create_timeout_ms the rest of it",
+					[]tmuxSetting{{create, rest}}, true},
+				{"lower the total, pipe_close_wait_ms missing, create_timeout_ms 1 ms over the rest of it",
+					[]tmuxSetting{{create, rest + 1}}, false},
+				{"lower the total, pipe_close_wait_ms missing, create_timeout_ms all of it",
+					[]tmuxSetting{{create, tc.total}}, false},
+				{"lower the total, pipe_close_wait_ms 0, create_timeout_ms all of it",
+					[]tmuxSetting{{create, tc.total}, {pipe, 0}}, false},
+			}
+			for _, l := range lowers {
+				t.Run(l.name, func(t *testing.T) {
+					path := tmuxConfigFile(t, advPaneWith(tc.file, l.set...)...)
+					if l.loads {
+						if _, err := config.Load(path); err != nil {
+							t.Fatalf("after following %q, Load: %v", advice, err)
+						}
+						return
+					}
+					if desc := loadConfigError(t, path).Err.Error(); !strings.Contains(desc, "[tmux] "+grace.Name()+" ") {
+						t.Errorf("an effective total over %d is refused, but not for %s: %q", tc.total, grace.Name(), desc)
+					}
+				})
+			}
+		})
+	}
+}
+
+// TestAdviceFollow_G2_MixedRefusalOtherKeysGiveDefault: G2 (b.n4q) "For every
+// refused key other than [tmux] pending_grace_seconds, a missing key, or 0,
+// gives the default." beside that key's own "so set it to at least 81".
+// Following both, the file loads.
+func TestAdviceFollow_G2_MixedRefusalOtherKeysGiveDefault(t *testing.T) {
+	grace, create := config.TmuxPendingGraceSeconds, config.TmuxCreateTimeoutMs
+	cases := []struct {
+		name string
+		days string // [defaults] expire_retention_days; "" writes no [defaults] table
+		tmux []tmuxSetting
+	}{
+		{"beside a [tmux] key below its fixed minimum", "", []tmuxSetting{
+			{config.TmuxStartingSessionSeconds, config.MinStartingSessionSeconds - 1}, {create, advPaneRaisedCreate}}},
+		{"beside a refused [defaults] expire_retention_days", "-1", []tmuxSetting{{create, advPaneRaisedCreate}}},
+	}
+	for _, tc := range cases {
+		for _, f := range advPaneFollows {
+			t.Run(tc.name+"/"+f.name, func(t *testing.T) {
+				desc := loadConfigError(t, configFile(t, tc.days, tc.tmux...)).Err.Error()
+				fix := graceFix(advPaneRaisedMinimum, 40000)
+				if !strings.Contains(desc, fix) || !strings.HasSuffix(desc, ". "+advPaneMixedTail) {
+					t.Fatalf("description %q does not state %q and end with %q", desc, fix, advPaneMixedTail)
+				}
+				refused, _ := advPaneRefusedKeys(desc)
+				others := slices.DeleteFunc(refused, func(k config.TmuxKey) bool { return k == grace })
+				days := ""
+				if tc.days != "" {
+					days = f.days
+				}
+
+				cfg, err := config.Load(configFile(t, days,
+					advPaneWith(f.apply(tc.tmux, others), tmuxSetting{grace, advPaneRaisedMinimum})...))
+
+				if err != nil {
+					t.Fatalf("after following %q (%s) and %q, Load: %v", advPaneMixedTail, f.name, fix, err)
+				}
+				if got, want := cfg.Tmux.EffectivePendingGrace(), advPaneRaisedMinimum*time.Second; got != want {
+					t.Errorf("pending_grace_seconds = %v after the follow; want %v", got, want)
+				}
+				for _, k := range others {
+					if got, want := cfg.Tmux.Effective(k), (config.Tmux{}).Effective(k); got != want {
+						t.Errorf("%s = %v after the follow; want its default %v", k.Name(), got, want)
+					}
+				}
+				if got := cfg.Defaults.EffectiveExpireRetentionDays(); got != config.DefaultExpireRetentionDays {
+					t.Errorf("effective expire_retention_days = %d after the follow; want its default %d",
+						got, config.DefaultExpireRetentionDays)
 				}
 			})
 		}
@@ -133,12 +263,7 @@ func TestAdviceFollow_G2_DefaultsRefusalMissingOrZeroGivesDefault(t *testing.T) 
 	for _, tc := range cases {
 		for _, f := range advPaneFollows {
 			t.Run(tc.name+"/"+f.name, func(t *testing.T) {
-				_, err := config.Load(configFile(t, tc.days, tc.tmux...))
-				var ce *config.ConfigError
-				if !errors.As(err, &ce) {
-					t.Fatalf("Load = %v; want a *config.ConfigError refusing expire_retention_days", err)
-				}
-				desc := ce.Err.Error()
+				desc := loadConfigError(t, configFile(t, tc.days, tc.tmux...)).Err.Error()
 				if !strings.Contains(desc, advPaneTail) {
 					t.Fatalf("description %q does not end with the advice %q", desc, advPaneTail)
 				}
