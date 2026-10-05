@@ -458,8 +458,11 @@ This skill runs `install.sh` from the same directory. The script:
    2. **Read the DB's ACTUAL `user_version`** via
       `sqlite3 -cmd ".timeout 10000" ~/.agent-director/state.db "PRAGMA user_version;"`
       (through the WAL, waiting up to 10 s for a lock — never assume the
-      version, and never read raw header bytes). No DB yet (fresh
-      install) → nothing to authorize; step 4 fresh-creates it.
+      version, and never read raw header bytes). No `state.db` on disk
+      (fresh install) → nothing to authorize; step 4 fresh-creates it.
+      A `state.db` that exists but whose version cannot be read stops
+      the install here (**exit 5**): no sentinel is written and the
+      store is not opened. See "An unreadable schema version" below.
    3. **Write the authorization sentinel** — a file
       `~/.agent-director/migrate-authorized` (a sibling of state.db)
       containing `{"from": <actual>, "to": <target>}`, where
@@ -477,8 +480,10 @@ This skill runs `install.sh` from the same directory. The script:
       confirms it equals the target. On any mismatch (or if state.db
       wasn't created) the install **aborts non-zero (exit 5)** with a
       clear message; the sentinel, if written, is left unconsumed so a
-      re-run retries the migration. An unreadable version also exits 5;
-      see "Recovering an older-than-binary DB" below.
+      re-run retries the migration. An unreadable version also exits 5,
+      whether or not a migration was expected (a fresh install or an
+      already-current store included); see "An unreadable schema
+      version" below.
    6. **Brief hook-failure window (accepted).** Between the binary
       swap (step 1/3) and the successful step-4 open there is a short
       (seconds, install-controlled) window in which a concurrently
@@ -675,8 +680,10 @@ administrator action, so the install writes the sentinel for you.
    `~/.agent-director/admin/`).
 2. **Read the ACTUAL `user_version`** via
    `sqlite3 -cmd ".timeout 10000" ~/.agent-director/state.db "PRAGMA user_version;"`
-   (through the WAL, waiting up to 10 s for a lock). No DB → fresh
-   install, skip to step 4.
+   (through the WAL, waiting up to 10 s for a lock). No `state.db` on
+   disk → fresh install, skip to step 4. An existing `state.db` whose
+   version cannot be read fails the install (exit 5) before any
+   sentinel is written or the store is opened; see below.
 3. **Write the sentinel** `{"from":<actual>,"to":<target>}` beside
    state.db — **skipped when `from == to`** (already current) and on a
    fresh install. `<target>` is the schema version the new binary
@@ -688,8 +695,8 @@ administrator action, so the install writes the sentinel for you.
    install creates state.db at the current version.
 5. **Verify** the post-open `user_version` equals the target;
    otherwise **fail the install loudly** (exit 5), leaving any written
-   sentinel unconsumed for a retry. An unreadable version also fails;
-   see below.
+   sentinel unconsumed for a retry. An unreadable version also fails
+   (exit 5), whether or not a migration was expected; see below.
 6. **A brief hook-failure window is accepted.** For the few seconds
    between the binary swap and the successful step-4 open, a hook that
    opens the store sees the migration error; it clears once step 4
@@ -705,16 +712,34 @@ sentinel, opens the store to migrate, and verifies the result. There
 is no `rm state.db` step and no data loss: the migration preserves
 your Spawn history. If the install's step 5 fails verification, do NOT
 delete state.db. If it reports `actual user_version: <unreadable>`,
-the install could not read the version; sqlite3's own error, printed
-indented under that line, shows why. Re-running the install retries
-the read. If it reports a readable version that differs from the
-expected one, capture the error and the leftover `migrate-authorized`
-sentinel and contact the maintainers.
+see "An unreadable schema version" below. If it reports a readable
+version that differs from the expected one, capture the error and the
+leftover `migrate-authorized` sentinel and contact the maintainers.
 
 An operator can also author the sentinel by hand (write the JSON
 above, then run any store-opening verb once), but re-running the
 install is the supported path and does the version reads and
 verification for you.
+
+### An unreadable schema version
+
+The install reads state.db's `user_version` twice: at step 2, before
+the store open, and at step 5, after it. If either read fails, the
+install exits 5 and reports `actual user_version: <unreadable>`, with
+sqlite3's own error indented under that line to show why (for example
+a lock held longer than the 10 s wait). Do NOT delete state.db.
+Re-running the install retries the read.
+
+- **Step 2** (`reading state.db's schema version FAILED`, naming
+  `state.db`): the install could not tell whether state.db needs a
+  migration, so it authorized none and did not open the store;
+  state.db is as it was. The new binaries are already in place, so an
+  older state.db is refused with `ErrSchemaMigrationRequired` until a
+  re-run succeeds.
+- **Step 5** (`schema migration verification FAILED` when a migration
+  was expected, otherwise `reading state.db's schema version after
+  the store open FAILED`): the store open succeeded, and the install's
+  `state.db:` status line shows `(schema <unreadable>)`.
 
 ## Upgrade rollback
 

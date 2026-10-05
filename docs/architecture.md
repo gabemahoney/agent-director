@@ -4321,8 +4321,12 @@ when already current or on a fresh install), opens the store once with a
 store-opening verb (`agent-director list`, deliberately not the DB-free
 `help`/`version`) to run the migration and consume the sentinel, then
 verifies the post-open `user_version` and aborts loudly (exit 5) on any
-mismatch. A version that still cannot be read exits 5 as `<unreadable>`,
-showing sqlite3's error; re-running the install retries the read. A brief
+mismatch. A fresh install is one with no `state.db` on disk, never one
+whose version read failed. A read that fails exits 5 as
+`<unreadable>`, showing sqlite3's error, and re-running the install
+retries the read. A failed first read stops the install before any
+sentinel is written or the store is opened; a failed post-open read
+stops it whether or not a migration was expected. A brief
 hook-failure window between the binary swap and that open is accepted,
 not worked around. That same open gives the store its store id: the
 v4→v5 hop creates it on an upgrade, and `createSchema` on a fresh
