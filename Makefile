@@ -88,6 +88,14 @@ test: envelope-diff-ts test-install-sh
 #     install's new ~/.claude and settings.json get the owner's access and the
 #     umask's group/other bits (b.7j2)
 #   - step-3 sentinel: a failed mv leaves no temp file behind (b.hk7)
+#   - [store] db_path: with the store moved out of ~/.agent-director (written
+#     with ~/, as an unclean absolute path, or relative), a fresh install and
+#     an upgrade that migrates read, authorize and verify that store, the
+#     sentinel beside it; a stale default state.db beside a moved store is
+#     left alone; the default store reads and is named as before; a db_path
+#     install.sh cannot read stops the install in pre-flight (exit 5), on a
+#     fresh HOME and over an installed store, before anything on disk changes
+#     (b.2io)
 # It builds and runs agent-director and agent-director-admin binaries, so it
 # runs in the sandbox only (retry.sh refuses anywhere else, b.8dr); no
 # network. test-sandbox runs it too, through test/install-sh/retry_test.go.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # advice_follow.sh — b.fji literal-follow tests for install.sh's own advice
-# (advice inventory J1-J13). Each test triggers one install.sh refusal, checks
+# (advice inventory J1-J15). Each test triggers one install.sh refusal, checks
 # the advice text word for word, does exactly what the text says (re-runs the
 # same command, runs the advised command, puts the missing tool on PATH) and
 # checks the promised outcome.
@@ -270,22 +270,30 @@ fi
 exec "$SQLITE" "\$@"
 EOF
 chmod 0755 "$SQLITE_SHIM"
-# mktemp stand-in for J7 (a test puts MKTEMP_FAILS on PATH_EXTRA): for the
-# template of install.sh's sqlite3 error file it fails as mktemp does in a full
-# TMPDIR, logging the template to MKTEMP_REFUSALS; every other call runs the
-# real one (b.wfe).
-MKTEMP_FAILS="$ROOT/mktemp-fails" MKTEMP_REFUSALS="$ROOT/mktemp-refusals"
-mkdir -p "$MKTEMP_FAILS" || die "mkdir $MKTEMP_FAILS"
-cat >"$MKTEMP_FAILS/mktemp" <<EOF
+# mktemp_fails <dir> <glob> <error>: a mktemp stand-in in <dir> (a test puts
+# <dir> on PATH_EXTRA) that, for a template matching <glob>, logs the template
+# to <dir>.refusals and fails as mktemp does with <error>; every other call
+# runs the real one.
+mktemp_fails() {
+    mkdir -p "$1" || die "mkdir $1"
+    cat >"$1/mktemp" <<EOF
 #!/bin/bash
-if [[ "\${!#}" == agent-director-sqlite3.* ]]; then
-    echo "\${!#}" >>"$MKTEMP_REFUSALS"
-    echo "mktemp: failed to create file via template '\${!#}': No space left on device" >&2
+if [[ "\${!#}" == $2 ]]; then
+    echo "\${!#}" >>"$1.refusals"
+    echo "mktemp: failed to create file via template '\${!#}': $3" >&2
     exit 1
 fi
 exec "$(type -P mktemp)" "\$@"
 EOF
-chmod 0755 "$MKTEMP_FAILS/mktemp"
+    chmod 0755 "$1/mktemp" || die "chmod $1/mktemp"
+}
+# J7: install.sh's sqlite3 error file, as in a full TMPDIR (b.wfe).
+MKTEMP_FAILS="$ROOT/mktemp-fails" MKTEMP_REFUSALS="$ROOT/mktemp-fails.refusals"
+mktemp_fails "$MKTEMP_FAILS" 'agent-director-sqlite3.*' "No space left on device"
+# J15: the step-3 sentinel's temp file, as in a store directory one cannot write
+# (b.2io).
+SENTINEL_MKTEMP_FAILS="$ROOT/mktemp-sentinel-fails"
+mktemp_fails "$SENTINEL_MKTEMP_FAILS" '*/migrate-authorized.tmp.*' "Permission denied"
 
 # ---- harness ---------------------------------------------------------------
 
@@ -1412,7 +1420,9 @@ test_J12_OneHashPassNeither() {
 # refused value, so does 0." contradicted it and is gone (b.xbh). A fresh, older or
 # current store: the refusal speaks only of the config and authorizes nothing;
 # fixing what the envelope names at the printed path and re-running installs,
-# migrating an older store.
+# migrating an older store. The syntax error is a bad value, which install.sh's
+# own [store] db_path reader passes over (b.2io), so the binary's refusal is the
+# one reached.
 test_J13_ConfigRefusedFixAndRerun() {
     local spec store config named fix before path key gone
     local want="install.sh: agent-director refused its config file (ErrConfigMalformed)"
@@ -1421,7 +1431,7 @@ test_J13_ConfigRefusedFixAndRerun() {
         "fresh|[defaults]\nexpire_retention_days = -1|[defaults] expire_retention_days = -1|remove" \
         "older|[defaults]\nexpire_retention_days = -1|[defaults] expire_retention_days = -1|zero" \
         "current|[tmux]\nquery_timeout_ms = -5|[tmux] query_timeout_ms = -5|zero" \
-        "older|[defaults|toml: line|syntax"; do
+        "older|[defaults]\nrelay_mode = off|toml: line 2 (last key|syntax"; do
         IFS='|' read -r store config named fix <<<"$spec"
         case "$store" in
             fresh) J7H="$(new_home)" before=none; mkdir -p "$J7H/.agent-director" ;;
@@ -1459,7 +1469,7 @@ test_J13_ConfigRefusedFixAndRerun() {
         case "$fix" in
             remove) sed -i "/^$key = /d" "$path" ;;
             zero) sed -i "s/^$key = .*/$key = 0/" "$path" ;;
-            syntax) sed -i 's/^\[defaults$/[defaults]/' "$path" ;;
+            syntax) sed -i 's/^relay_mode = off$/relay_mode = "off"/' "$path" ;;
         esac
         j7_rerun_verified "$store store, re-run after the $fix fix of \"$named\"" || continue
         expect_installed "$J7H" "$BIN" "$ADMIN"
@@ -1471,6 +1481,260 @@ test_J13_ConfigRefusedFixAndRerun() {
             # The probe opened the store (no err_name): step 3 says nothing to authorize.
             grep -qxF "$none" "$OUT" || bad "$store, \"$named\": no \"$none\" line: $(grep -F "  schema  : " "$OUT")"
         fi
+    done
+}
+
+# ---- J14: [store] db_path install.sh cannot read (b.2io) ---------------------------
+
+# j14_snap <home>: every path under home with its type, mode, size and mtime,
+# and every file's sha256.
+j14_snap() {
+    (cd "$1" && find . -printf '%p %y %m %s %T@\n' | sort && find . -type f -exec sha256sum {} + | sort)
+}
+
+# j14_config <home> <config> <fixed>: write home's config.toml: <config>
+# through printf %b, or a directory for <directory>, or for <unreadable> <fixed>
+# with no read permission.
+j14_config() {
+    local cfg="$1/.agent-director/config.toml"
+    case "$2" in
+        '<directory>') mkdir "$cfg" ;;
+        '<unreadable>') printf '%b\n' "$3" >"$cfg" && chmod 000 "$cfg" ;;
+        *) printf '%b\n' "$2" >"$cfg" ;;
+    esac
+}
+
+# keep_older <db>: mark the store at <db>, so a later check can tell it is the
+# same one, and set it one version back.
+keep_older() {
+    "$SQLITE" "$1" "CREATE TABLE kept_store (x); PRAGMA user_version = $((SCHEMA - 1));" || bad "mark the store at $1"
+}
+# is_kept <db>: 1 when the store at <db> is one keep_older marked, else 0.
+is_kept() { "$SQLITE" "$1" "SELECT count(*) FROM sqlite_master WHERE name = 'kept_store';"; }
+
+# expect_store <home> <db> <context> [migrated]: after a successful install, the
+# store at <db> is at v$SCHEMA and the only one under <home>, with no sentinel
+# left beside it or in ~/.agent-director; with "migrated", it is the one
+# keep_older marked, migrated in place by a migration the run authorized beside it.
+expect_store() {
+    local h="$1" db="$2" ctx="$3" dir="${2%/*}"
+    [[ "$("$SQLITE" "$db" 'PRAGMA user_version;')" == "$SCHEMA" ]] || bad "$ctx: no store at v$SCHEMA at $db"
+    [[ "$(find "$h" -type f -name '*.db')" == "$db" ]] || bad "$ctx: stores under HOME: $(find "$h" -type f -name '*.db' | tr '\n' ' '); want only $db"
+    if compgen -G "$dir/migrate-authorized*" >/dev/null || compgen -G "$h/.agent-director/migrate-authorized*" >/dev/null; then
+        bad "$ctx: sentinel left: $(compgen -G "$dir/migrate-authorized*"; compgen -G "$h/.agent-director/migrate-authorized*")"
+    fi
+    [[ "${4:-}" == migrated ]] || return 0
+    [[ "$(is_kept "$db")" == 1 ]] || bad "$ctx: the store at $db is not the one there before"
+    grep -qxF "  schema  : authorized migration v$((SCHEMA - 1))→v$SCHEMA (sentinel $dir/migrate-authorized)" "$OUT" \
+        || bad "$ctx: the run did not authorize the migration beside $db: $(flat "$OUT")"
+}
+
+# J14: each reason install.sh gives for a config.toml its [store] db_path
+# reader cannot read, word for word, then "Nothing was installed or changed.
+# Re-run this install after the change.": the refusal changes nothing under
+# HOME; making the change the reason names (one row per alternative it offers)
+# and re-running installs, with the store at <db> and no other. A row's store:
+#   fresh       none before the refusal;
+#   older       one version back, installed under the changed config (for a
+#               config agent-director refuses);
+#   kept        the store agent-director itself made under the refused config,
+#               set one version back: the change must keep it there, migrated
+#               in place;
+#   kept:<path> as kept, made at <path> (printf %b), where the reason says
+#               the change leaves it: it stays as it was, and <db> is new.
+test_J14_DbPathRefusedFixAndRerun() {
+    local store broken advice fixed db h cfg before kept kept_sum
+    local want="install.sh: cannot tell which store database agent-director opens; refusing to install."
+    while IFS='|' read -r store broken advice fixed db <&3; do
+        h="$(new_home)" cfg="$h/.agent-director/config.toml" db="$h/$db" kept=""
+        mkdir -p "$h/.agent-director"
+        case "$store" in
+            older)
+                printf '%b\n' "$fixed" >"$cfg"
+                run "$h" "${J7ARGV[@]}"
+                expect_rc 0 "\"$broken\": first install" || continue
+                kept="$db" ;;
+            kept|kept:*)
+                j14_config "$h" "$broken" "$fixed"
+                run "$h" "$BIN" list
+                expect_rc 0 "\"$broken\": agent-director list under the refused config" || continue
+                kept="$db"
+                [[ "$store" == kept ]] || kept="$h/$(printf '%b' "${store#kept:}")"
+                if [[ ! -f "$kept" ]]; then
+                    bad "\"$broken\": under the refused config agent-director made no store at $kept: $(cd "$h" && find . -type f | tr '\n' ' ')"
+                    continue
+                fi ;;
+        esac
+        if [[ -n "$kept" ]]; then
+            keep_older "$kept"
+            kept_sum="$(sha256sum "$kept")"
+        fi
+        j14_config "$h" "$broken" "$fixed"
+        if [[ "$broken" == '<unreadable>' && -r "$cfg" ]]; then
+            bad "\"$broken\": a mode-000 config.toml is readable here (running as root?); the row cannot run"
+            continue
+        fi
+        before="$(j14_snap "$h")"
+        run "$h" "${J7ARGV[@]}"
+        expect_rc 5 "config \"$broken\"" || continue
+        [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "\"$broken\": first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
+        expect_advice "$advice"
+        expect_advice "Nothing was installed or changed. Re-run this install after the change."
+        [[ "$(j14_snap "$h")" == "$before" ]] || bad "\"$broken\": the refusal changed $h: $(diff <(echo "$before") <(j14_snap "$h"))"
+        case "$broken" in
+            '<directory>') rmdir "$cfg" && printf '%b\n' "$fixed" >"$cfg" ;;
+            '<unreadable>') chmod 600 "$cfg" ;;
+            *) printf '%b\n' "$fixed" >"$cfg" ;;
+        esac
+        run "$h" "${J7ARGV[@]}"
+        expect_rc 0 "\"$broken\": re-run after the change to \"$fixed\"" || continue
+        if [[ -n "$kept" && "$kept" == "$db" ]]; then
+            expect_store "$h" "$db" "\"$broken\"" migrated
+            continue
+        fi
+        expect_store "$h" "$db" "\"$broken\""
+        if [[ -n "$kept" ]]; then
+            [[ "$(sha256sum "$kept")" == "$kept_sum" ]] || bad "\"$broken\": the store agent-director kept at $kept changed"
+            [[ "$(is_kept "$db")" == 0 ]] || bad "\"$broken\": the store at $db is the one kept at $kept"
+        fi
+    done 3<<'EOF'
+kept|[store]\ndb_path = """~/custom/s.db"""|This line holds """ or ''', which install.sh reads as the start of a multi-line string. Write each value on one line, as a "..." or '...' string, with no """ or ''' anywhere on the line.|[store]\ndb_path = "~/custom/s.db"|custom/s.db
+kept|\xff\xfe[store]\ndb_path = "~/custom/s.db"|This line starts with the bytes FF FE or FE FF, a UTF-16 byte-order mark, which install.sh does not read. Remove those two bytes: agent-director skips them, so it reads the file the same without them.|[store]\ndb_path = "~/custom/s.db"|custom/s.db
+kept|[Store]\ndb_path = "~/custom/s.db"|agent-director reads this header as [store]: its TOML decoder matches names regardless of letter case. Write it as [store].|[store]\ndb_path = "~/custom/s.db"|custom/s.db
+fresh|[store]\n[defaults]\nrelay_mode = "off"\n[store]\ndb_path = "~/custom/s.db"|This is a second [store] header, and agent-director refuses a table defined twice. Move the lines under it, up to the next header, to under the first [store] header, then remove this header.|[store]\ndb_path = "~/custom/s.db"\n[defaults]\nrelay_mode = "off"|custom/s.db
+fresh|[[store]]\ndb_path = "~/custom/s.db"|This makes store an array of tables ([[name]]), and agent-director reads [store] only as one table, so it refuses the file. Write it as [store].|[store]\ndb_path = "~/custom/s.db"|custom/s.db
+kept|[store]\n[[hooks]]\ndb_path = "~/custom/s.db"\n[defaults]\nrelay_mode = "off"|This is an array of tables ([[name]]), which agent-director does not read: it ignores the lines under this header, or refuses the file. Remove the header and the lines under it, up to the next header.|[store]\n[defaults]\nrelay_mode = "off"|.agent-director/state.db
+kept|["store"]\ndb_path = "~/custom/s.db"|agent-director reads this header as [store]: a quoted name is the same as the bare one, and its TOML decoder matches names regardless of letter case. Write it as [store].|[store]\ndb_path = "~/custom/s.db"|custom/s.db
+kept|["defaults"]\nrelay_mode = "off"\n[store]\ndb_path = "~/custom/s.db"|A quoted table name is the same as the bare one. Write it as [defaults], without the quotes.|[defaults]\nrelay_mode = "off"\n[store]\ndb_path = "~/custom/s.db"|custom/s.db
+kept|[store]\n["a b"]\ndb_path = "~/custom/s.db"\n[defaults]\nrelay_mode = "off"|agent-director reads no table with this name, so it ignores the lines under this header. Remove the header and the lines under it, up to the next header.|[store]\n[defaults]\nrelay_mode = "off"|.agent-director/state.db
+kept|[store]\n[store.extra]\ndb_path = "~/custom/s.db"|This header names a table within a table ([a.b]), which agent-director does not read: it ignores the lines under this header, or refuses the file. Remove the header and the lines under it, up to the next header.|[store]|.agent-director/state.db
+older|[defaults\nrelay_mode = "off"\n[store]\ndb_path = "~/custom/s.db"|This line starts with [ but is not a table header install.sh can read: a missing ], say, a quoted name holding an escape (\), or part of an array value that spans lines. Correct the header to [name], with the name bare, or write the array on one line.|[defaults]\nrelay_mode = "off"\n[store]\ndb_path = "~/custom/s.db"|custom/s.db
+kept|["st\\u006fre"]\ndb_path = "~/custom/s.db"|This line starts with [ but is not a table header install.sh can read: a missing ], say, a quoted name holding an escape (\), or part of an array value that spans lines. Correct the header to [name], with the name bare, or write the array on one line.|[store]\ndb_path = "~/custom/s.db"|custom/s.db
+kept|[defaults]\nnotes = [\n  ["a"],\n]\n[store]\ndb_path = "~/custom/s.db"|This line starts with [ but is not a table header install.sh can read: a missing ], say, a quoted name holding an escape (\), or part of an array value that spans lines. Correct the header to [name], with the name bare, or write the array on one line.|[defaults]\nnotes = [["a"]]\n[store]\ndb_path = "~/custom/s.db"|custom/s.db
+kept|"store" = { db_path = "~/custom/s.db" }|This sets store as a key (an inline table, say) rather than under a [store] header. Remove this line. If it sets db_path, set db_path under the file's [store] header instead, adding that header at the end of the file if the file has none. Add no header in this line's place: the lines below it, up to the next header, would fall under that header too.|[store]\ndb_path = "~/custom/s.db"|custom/s.db
+kept|[store]\n"db_path" = "~/custom/s.db"|agent-director reads this key as db_path: a quoted key is the same as the bare one, and its TOML decoder matches names regardless of letter case. Write it as db_path.|[store]\ndb_path = "~/custom/s.db"|custom/s.db
+kept|[defaults]\n"relay_mode" = "off"\n[store]\ndb_path = "~/custom/s.db"|A quoted key is the same as the bare one. Write it as relay_mode, without the quotes.|[defaults]\nrelay_mode = "off"\n[store]\ndb_path = "~/custom/s.db"|custom/s.db
+kept|[store]\n"db path" = "~/custom/s.db"|agent-director reads no key with this name, so it ignores this line. Remove it.|[store]|.agent-director/state.db
+kept|store.db_path = "~/custom/s.db"|This sets a store key as a dotted key (store.db_path = ..., say) rather than under a [store] header. Move this line, without the store. prefix, to under the file's [store] header, adding that header at the end of the file if the file has none. Add no header in this line's place: the lines below it, up to the next header, would fall under that header too.|[store]\ndb_path = "~/custom/s.db"|custom/s.db
+kept|defaults.relay_mode = "off"\n[store]\ndb_path = "~/custom/s.db"|Before any header, a dotted key a.b = value sets b under [a]. Move this line, without the defaults. prefix, to under the file's [defaults] header, adding that header at the end of the file if the file has none. Add no header in this line's place: the lines below it, up to the next header, would fall under that header too.|[store]\ndb_path = "~/custom/s.db"\n[defaults]\nrelay_mode = "off"|custom/s.db
+kept|"a b".c = 1\n[store]\ndb_path = "~/custom/s.db"|agent-director reads no table with this key's first name, so it ignores this line. Remove it.|[store]\ndb_path = "~/custom/s.db"|custom/s.db
+kept|[store]\nx.db_path = "~/custom/s.db"|This dotted key sets a key in a table within a table, which agent-director does not read: it ignores this line, or refuses the file. Remove it.|[store]|.agent-director/state.db
+kept|[defaults]\nnotes = [\n  "a",\n]\n[store]\ndb_path = "~/custom/s.db"|This line is not a blank line, a # comment, a [name] header or a name = value line: part of a value that spans lines (an array, say), a quoted name holding an escape (\), or a typo. Write each value on one line, write the name bare, without quotes or escapes, or correct the typo.|[defaults]\nnotes = ["a"]\n[store]\ndb_path = "~/custom/s.db"|custom/s.db
+kept|[store]\n"db\\u005fpath" = "~/custom/s.db"|This line is not a blank line, a # comment, a [name] header or a name = value line: part of a value that spans lines (an array, say), a quoted name holding an escape (\), or a typo. Write each value on one line, write the name bare, without quotes or escapes, or correct the typo.|[store]\ndb_path = "~/custom/s.db"|custom/s.db
+fresh|[store]\ndb_path "~/custom/s.db"|This line is not a blank line, a # comment, a [name] header or a name = value line: part of a value that spans lines (an array, say), a quoted name holding an escape (\), or a typo. Write each value on one line, write the name bare, without quotes or escapes, or correct the typo.|[store]\ndb_path = "~/custom/s.db"|custom/s.db
+kept|store = { db_path = "~/custom/s.db" }|This sets store as a key (an inline table, say) rather than under a [store] header. Remove this line. If it sets db_path, set db_path under the file's [store] header instead, adding that header at the end of the file if the file has none. Add no header in this line's place: the lines below it, up to the next header, would fall under that header too.|[store]\ndb_path = "~/custom/s.db"|custom/s.db
+kept|[store]\nDB_PATH = "~/custom/s.db"|agent-director reads this key as db_path: its TOML decoder matches names regardless of letter case. Write it as db_path.|[store]\ndb_path = "~/custom/s.db"|custom/s.db
+fresh|[store]\ndb_path = "~/custom/s.db"\ndb_path = "~/other/s.db"|This sets db_path a second time. Keep one.|[store]\ndb_path = "~/custom/s.db"|custom/s.db
+kept|[store]\ndb_path = "~/custom/\\u0073.db"|db_path's "..." value holds a backslash, which starts an escape. Write the path without escapes; in single quotes ('...') a backslash or a double quote is literal.|[store]\ndb_path = "~/custom/s.db"|custom/s.db
+kept|[store]\ndb_path = "~/cus\\\\tom/s.db"|db_path's "..." value holds a backslash, which starts an escape. Write the path without escapes; in single quotes ('...') a backslash or a double quote is literal.|[store]\ndb_path = '~/cus\\tom/s.db'|cus\tom/s.db
+fresh|[store]\ndb_path = ~/custom/s.db|db_path's value is not a one-line "..." or '...' string, optionally followed by a # comment. Write it in that form.|[store]\ndb_path = '~/custom/s.db' # moved|custom/s.db
+kept:custom/s.db\t|[store]\ndb_path = "~/custom/s.db\t"|db_path's value holds a control character, such as a tab. install.sh cannot install with one in the store path, so remove it. agent-director then opens the path without it, not any store it already keeps at this one.|[store]\ndb_path = "~/custom/s.db"|custom/s.db
+fresh|[store]\ndb_path = "~/custom/s.db?mode=ro"|db_path's value holds a '?'. agent-director's store open reads everything from the first '?' on as SQLite options, so it would not open this path. Use a path without '?'.|[store]\ndb_path = "~/custom/s.db"|custom/s.db
+fresh|<directory>|It is not a readable file (a directory, say, or a file without read permission), so agent-director cannot load it either. Make it one.|[store]\ndb_path = "~/custom/s.db"|custom/s.db
+fresh|<unreadable>|It is not a readable file (a directory, say, or a file without read permission), so agent-director cannot load it either. Make it one.|[store]\ndb_path = "~/custom/s.db"|custom/s.db
+EOF
+}
+
+# j14_move_line <config>: do to <config> what ERR's "Move this line, without
+# the <a>. prefix, to under the file's [<t>] header, adding that header at the
+# end of the file if the file has none. Add no header in this line's place"
+# says, for the line ERR names: take it out, drop <a>., and put the rest right
+# after the [<t>] header, or after a [<t>] added at the end of the file.
+j14_move_line() {
+    local cfg="$1" n prefix table line moved placed=0
+    local -a lines
+    local re="Move this line, without the ([^ ]+) prefix, to under the file's \\[([^]]+)\\] header, adding that header at the end of the file if the file has none\\. Add no header in this line's place"
+    [[ "$(flat "$ERR")" =~ $re ]] || { bad "no move-this-line advice: $(flat "$ERR")"; return 1; }
+    prefix="${BASH_REMATCH[1]}" table="${BASH_REMATCH[2]}"
+    n="$(sed -n 's/^  line \([0-9][0-9]*\)  : .*/\1/p' "$ERR")"
+    [[ "$n" =~ ^[0-9]+$ ]] || { bad "the refusal names no line: $(flat "$ERR")"; return 1; }
+    mapfile -t lines <"$cfg"
+    line="${lines[n - 1]}" moved="${line#"$prefix"}"
+    [[ "$moved" != "$line" ]] || { bad "line $n, \"$line\", does not start with $prefix"; return 1; }
+    unset 'lines[n - 1]'
+    for line in "${lines[@]}"; do
+        printf '%s\n' "$line"
+        if [[ "$placed" -eq 0 && "$line" == "[$table]" ]]; then
+            printf '%s\n' "$moved"
+            placed=1
+        fi
+    done >"$cfg"
+    [[ "$placed" -eq 1 ]] || printf '[%s]\n%s\n' "$table" "$moved" >>"$cfg"
+}
+
+# J14: "Move this line, without the <a>. prefix, to under the file's [<a>]
+# header, adding that header at the end of the file if the file has none. Add
+# no header in this line's place ..." followed in turn for two dotted keys
+# before any header, defaults.relay_mode then store.db_path, over the older
+# store agent-director keeps at that db_path. Each refusal changes nothing; the
+# install after the last move migrates that store in place, and makes no
+# default store.
+test_J14_DottedKeysMoveInTurn() {
+    local h cfg db line advice before
+    h="$(new_home)" cfg="$h/.agent-director/config.toml" db="$h/custom/s.db"
+    mkdir -p "$h/.agent-director"
+    printf '%s\n' 'defaults.relay_mode = "on"' 'store.db_path = "~/custom/s.db"' >"$cfg"
+    run "$h" "$BIN" list
+    expect_rc 0 "agent-director list under the refused config" || return
+    [[ -f "$db" ]] || { bad "under the refused config agent-director made no store at $db"; return; }
+    keep_older "$db"
+    while IFS='|' read -r line advice <&3; do
+        before="$(j14_snap "$h")"
+        run "$h" "${J7ARGV[@]}"
+        expect_rc 5 "config line 1 \"$line\"" || return
+        expect_advice "line 1 : $line"
+        expect_advice "$advice"
+        [[ "$(j14_snap "$h")" == "$before" ]] || bad "\"$line\": the refusal changed $h: $(diff <(echo "$before") <(j14_snap "$h"))"
+        j14_move_line "$cfg" || return
+    done 3<<'EOF'
+defaults.relay_mode = "on"|Before any header, a dotted key a.b = value sets b under [a]. Move this line, without the defaults. prefix, to under the file's [defaults] header, adding that header at the end of the file if the file has none. Add no header in this line's place: the lines below it, up to the next header, would fall under that header too.
+store.db_path = "~/custom/s.db"|This sets a store key as a dotted key (store.db_path = ..., say) rather than under a [store] header. Move this line, without the store. prefix, to under the file's [store] header, adding that header at the end of the file if the file has none. Add no header in this line's place: the lines below it, up to the next header, would fall under that header too.
+EOF
+    run "$h" "${J7ARGV[@]}"
+    expect_rc 0 "re-run after both moves, config: $(flat "$cfg")" || return
+    expect_store "$h" "$db" "after both moves" migrated
+}
+
+# ---- J15: no temp file for the migration sentinel (b.2io) -------------------------
+
+# J15: "Fix what mktemp's error names (a directory you cannot write, say, or a
+# full disk), then re-run this install: it authorizes the migration again." An
+# upgrade of the default store, and of one [store] db_path moves, whose mktemp
+# cannot create the sentinel's temp file beside the store: nothing authorized,
+# nothing left beside the store and the store unchanged; with mktemp working
+# again, the re-run migrates it.
+test_J15_SentinelTempFailedFixAndRerun() {
+    local spec h db shown sentinel sum
+    for spec in '|.agent-director/state.db' '[store]\ndb_path = "~/custom/s.db"|custom/s.db'; do
+        PATH_EXTRA=""
+        h="$(new_home)" db="$h/${spec#*|}" shown=state.db
+        sentinel="${db%/*}/migrate-authorized"
+        mkdir -p "$h/.agent-director"
+        if [[ -n "${spec%%|*}" ]]; then
+            printf '%b\n' "${spec%%|*}" >"$h/.agent-director/config.toml"
+            shown="$db"
+        fi
+        run "$h" "${J7ARGV[@]}"
+        expect_rc 0 "$shown: first install" || continue
+        keep_older "$db"
+        sum="$(sha256sum "$db")"
+        PATH_EXTRA="$SENTINEL_MKTEMP_FAILS"
+        run "$h" "${J7ARGV[@]}"
+        expect_rc 5 "$shown: mktemp fails beside the sentinel" || continue
+        # Its error is above: mktemp's own, naming a template no one can predict.
+        [[ "$(head -n 2 "$ERR")" == "mktemp: failed to create file via template '$sentinel.tmp.XXXXXX': Permission denied"$'\n'"install.sh: writing the migration sentinel FAILED" ]] \
+            || bad "$shown: stderr does not open with mktemp's error for $sentinel.tmp.XXXXXX, then the failure: $(head -n 2 "$ERR" | tr '\n' '|')"
+        expect_advice "sentinel: $sentinel mktemp could not create a temp file beside it (its error is above), so no migration was authorized: $shown is still at v$((SCHEMA - 1)). The new agent-director does not open it until it is at v$SCHEMA. Fix what mktemp's error names (a directory you cannot write, say, or a full disk), then re-run this install: it authorizes the migration again."
+        if compgen -G "$sentinel*" >/dev/null; then
+            bad "$shown: left beside the store: $(compgen -G "$sentinel*")"
+        fi
+        [[ "$(sha256sum "$db")" == "$sum" ]] || bad "$shown: the store changed"
+        PATH_EXTRA="" # what mktemp's error named is fixed
+        run "$h" "${J7ARGV[@]}"
+        expect_rc 0 "$shown: re-run with mktemp working" || continue
+        expect_store "$h" "$db" "$shown" migrated
+        grep -qxF "  schema  : migration verified — $shown now at v$SCHEMA" "$OUT" \
+            || bad "$shown: the re-run did not verify the migration: $(flat "$OUT")"
     done
 }
 

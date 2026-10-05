@@ -374,6 +374,10 @@ seconds from 1 to 9223372036. For each, a missing key, or 0, gives the
 default, and a negative value or one above its range is refused the same
 way as `expire_retention_days`.
 
+`db_path` moves the store, and `install.sh` follows it. Keep the file in
+the one-line form shown; `install.sh` refuses anything else and says
+what to fix.
+
 Env vars passed at spawn time (via `--extra-env`) are stored in
 `state.db` so `resume` can restore them. The file is owner-only (`0600`
 in a `0700` directory).

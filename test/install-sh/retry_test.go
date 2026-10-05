@@ -13,14 +13,16 @@ import (
 // retrySkipLine matches retry.sh's host-skip line; the group is the reason.
 var retrySkipLine = regexp.MustCompile(`(?m)^retry\.sh: SKIP: (.+)$`)
 
-// TestInstallShRetry runs retry.sh (b.kym, b.vqr, b.ady, b.hk7, b.7j2):
+// TestInstallShRetry runs retry.sh (b.kym, b.vqr, b.ady, b.hk7, b.7j2, b.2io):
 // install.sh's --from-release download retries for both release assets end in
 // a full install, a wrong --sha256 or --admin-sha256 installs nothing, the
 // PATH symlink is agent-director's only, an upgrade's user_version reads wait
 // out a brief store lock and ignore ~/.sqliterc, a failed sentinel mv leaves
-// no temp file, an install or upgrade under umask 0777 or 0222 succeeds, and
+// no temp file, an install or upgrade under umask 0777 or 0222 succeeds,
 // a hooks-on install's new ~/.claude and settings.json get the owner's access
-// and the umask's group/other bits. On a host install.sh refuses, it skips
+// and the umask's group/other bits, and an install or upgrade reads, migrates
+// and verifies the store [store] db_path names, or stops before changing
+// anything on a db_path it cannot read. On a host install.sh refuses, it skips
 // with the script's reason.
 func TestInstallShRetry(t *testing.T) {
 	if os.Getenv(sandboxguard.EnvVar) != "1" {

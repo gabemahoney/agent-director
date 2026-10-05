@@ -335,7 +335,7 @@ This skill runs `install.sh` from the same directory. The script:
    `--admin-sha256` ("would install <the other binary> unverified;
    refusing to install"). Then it runs the
    following checks in order; any failure aborts with a clear message
-   and exit code `2`, or `3` where noted:
+   and exit code `2`, or `3` or `5` where noted:
 
    1. **Whitespace-in-install-path** — `$HOME` must not contain
       whitespace (SRD §4.3; tmux's direct-argv invocation requires
@@ -348,7 +348,7 @@ This skill runs `install.sh` from the same directory. The script:
       cross-platform expansion status.
    3. **Required tools on PATH.** `claude`, `tmux`, `jq`, `file`,
       and `sqlite3` must all resolve via `command -v`. The `file(1)`
-      tool is mandatory because step 6 below relies on it to probe
+      tool is mandatory because step 7 below relies on it to probe
       `--binary` artifacts (never silent-skip per SR-2.2);
       install via `apt install file` / `brew install file-formula`
       / `dnf install file`. `sqlite3` is mandatory for the
@@ -362,7 +362,17 @@ This skill runs `install.sh` from the same directory. The script:
       install via `apt install sqlite3` / `brew install sqlite` /
       `dnf install sqlite`. `curl` is also required when
       `--from-release` is supplied.
-   4. **`--from-release` resolution** (if applicable) — downloads
+   4. **Store database (`[store] db_path`)** — reads `[store] db_path`
+      from `~/.agent-director/config.toml` to find the database
+      agent-director opens, the one the schema-migration flow (below)
+      reads, authorizes and verifies. When `db_path` moves the store, the
+      `pre-flight OK` block gains a line
+      `store   : <path> ([store] db_path in <config>)`; with the default
+      store the output is unchanged. A config file whose `db_path` the
+      script cannot read stops the install here (exit `5`), before
+      anything is installed or changed. See "Which database install.sh
+      checks" below for the accepted form and the refusal.
+   5. **`--from-release` resolution** (if applicable) — downloads
       both matching assets for `$(uname -s)`/`$(uname -m)` from GitHub
       Releases (`agent-director-<os>-<arch>` and
       `agent-director-admin-<os>-<arch>`); `--sha256` verifies the first
@@ -370,7 +380,7 @@ This skill runs `install.sh` from the same directory. The script:
       mismatch aborts with exit 3, installing nothing. A release before
       0.11.0 has no `agent-director-admin` asset and is refused at once
       (exit 3), with no CDN retry: install 0.11.0 or later.
-   5. **`--binary` / `--admin-binary` path/executability resolution** —
+   6. **`--binary` / `--admin-binary` path/executability resolution** —
       settles `BINARY_SRC` from `--binary <path>`, the in-repo build, or
       `command -v agent-director`, and `ADMIN_SRC` from
       `--admin-binary <path>`, the downloaded release asset, or the
@@ -378,7 +388,7 @@ This skill runs `install.sh` from the same directory. The script:
       each is an executable regular file. A missing binary is refused
       with exit 3; with neither binary beside the script, one combined
       refusal names both `--binary` and `--admin-binary`.
-   6. **Architecture probe (SR-2.2)**, for `--binary` and
+   7. **Architecture probe (SR-2.2)**, for `--binary` and
       `--admin-binary` alike. Runs `file(1)` against `BINARY_SRC` and
       `ADMIN_SRC` and pattern-matches against the host pair captured by
       step 2:
@@ -393,12 +403,12 @@ This skill runs `install.sh` from the same directory. The script:
       host pair.
       The probe is independent of the OS/CPU gate above: even on a
       supported host, a wrong-arch binary is refused here.
-   7. **Source-tree version check** — when the binary came from a
+   8. **Source-tree version check** — when the binary came from a
       local source (`--binary` or the in-repo build) AND install.sh
       lives inside a git checkout, the binary's embedded commit
       must match `HEAD`. Catches the "operator forgot to
       `make build` after pulling new code" footgun.
-   8. **Version-stamp pairing** — `agent-director version` and
+   9. **Version-stamp pairing** — `agent-director version` and
       `agent-director-admin version` must report the same version and
       commit; otherwise (or when one stamp cannot be read) the install
       is refused with exit 3 ("version stamps differ"). Equal stamps
@@ -430,7 +440,7 @@ This skill runs `install.sh` from the same directory. The script:
 
    It then copies `agent-director-admin` to
    `~/.agent-director/admin/agent-director-admin` (mode 0755) the same
-   way, from the source step 5 of the pre-flights settled. It is never
+   way, from the source step 6 of the pre-flights settled. It is never
    put on PATH.
 
    Both new binaries are staged first: each is written to a sibling
@@ -461,13 +471,17 @@ This skill runs `install.sh` from the same directory. The script:
    administrator has authorized exactly that schema transition; the
    install runs on the end-user's machine as an admin action, so it
    is the legitimate authorizer. See the **"Schema migration: the
-   six-step sentinel flow"** section below for the full detail. In
-   brief, in order:
+   six-step sentinel flow"** section below for the full detail.
+   `state.db` here is the database agent-director opens:
+   `~/.agent-director/state.db`, or wherever `[store] db_path` puts it
+   (step 4 of the pre-flights); the install's messages call it
+   `state.db` for the default store and name it by its path otherwise.
+   In brief, in order:
 
    1. **Install the new binary** — already done by step 3/the atomic
       `mv` above.
    2. **Read the DB's ACTUAL `user_version`** via
-      `sqlite3 -batch -init /dev/null -cmd ".timeout 10000" ~/.agent-director/state.db "PRAGMA user_version;"`
+      `sqlite3 -batch -init /dev/null -cmd ".timeout 10000" <state.db> "PRAGMA user_version;"`
       (through the WAL, waiting up to 10 s for a lock, ignoring
       `~/.sqliterc` — never assume the version, and never read raw
       header bytes). No `state.db` on disk (fresh install) → nothing to
@@ -477,7 +491,8 @@ This skill runs `install.sh` from the same directory. The script:
       sentinel is written and the store is not opened. See "An
       unreadable schema version" below.
    3. **Write the authorization sentinel** — a file
-      `~/.agent-director/migrate-authorized` (a sibling of state.db)
+      `migrate-authorized` beside state.db
+      (`~/.agent-director/migrate-authorized` for the default store)
       containing `{"from": <actual>, "to": <target>}`, where
       `<target>` is the schema version this binary requires. **Skipped
       when `from == target`** (the DB is already current) and on a
@@ -499,6 +514,13 @@ This skill runs `install.sh` from the same directory. The script:
         err_name>` when the probe's output holds no error envelope)
         and goes on to step 4, which reports the failure if it
         persists.
+
+      The sentinel is written to a temp file that `mktemp` creates
+      beside it (`migrate-authorized.tmp.XXXXXX`), then moved into
+      place. If `mktemp` cannot create that file, the install stops here
+      (**exit 5**, `install.sh: writing the migration sentinel FAILED`)
+      with no migration authorized; see "No temp file for the sentinel"
+      below.
    4. **Trigger exactly one store-opening open** — runs
       `agent-director list` once. `list` opens the store, so the
       authorized migration runs and the sentinel is consumed on
@@ -625,6 +647,9 @@ destructive *additions*.
      `~/.claude/projects/` and survive — but their mapping to
      claude_instance_ids is in `state.db`, so a purge means you'd
      have to grep transcripts by hand to find a specific session.
+     `uninstall.sh` does not read `[store] db_path`: a store that
+     `db_path` puts outside `~/.agent-director/` survives `--purge`,
+     and the operator deletes it by hand if they want it gone.
 
 2. **Skip the script's `[y/N]` safety prompt? (`--force`)** *(only ask if (b) above was chosen)*
 
@@ -680,7 +705,8 @@ destructive *additions*.
 - Unlinks the PATH symlink if one was created.
 - With `--purge`: also removes `~/.agent-director/` entirely
   (including state.db + templates). Requires confirmation unless
-  `--force` is supplied.
+  `--force` is supplied. A store `[store] db_path` puts outside
+  `~/.agent-director/` is not removed.
 - With `--mcp-also`: runs `claude mcp remove agent-director`.
 
 ## Schema migration: the six-step sentinel flow
@@ -702,9 +728,11 @@ administrator action, so the install writes the sentinel for you.
 
 ### The sentinel
 
-- **Path:** `~/.agent-director/migrate-authorized` — always a *sibling
-  of state.db*, so a custom `--store-path` install authorizes the
-  right DB.
+- **Path:** always a *sibling of state.db*, the database
+  agent-director opens: `~/.agent-director/migrate-authorized` for the
+  default store, or `migrate-authorized` in the directory of the file
+  `[store] db_path` names (see "Which database install.sh checks"
+  below), so the install authorizes the right DB.
 - **Shape:** a single JSON object, exactly
   `{"from": <current user_version>, "to": <target schema version>}`.
   It authorizes precisely that one `from → to` transition and nothing
@@ -716,13 +744,99 @@ administrator action, so the install writes the sentinel for you.
   malformed, or mismatched sentinel) executes zero DDL and leaves both
   state.db and the sentinel byte-identical, as admin evidence.
 
+### Which database install.sh checks
+
+install.sh reads, authorizes and verifies the database agent-director
+itself opens. That is `~/.agent-director/state.db` unless `[store]
+db_path` in `~/.agent-director/config.toml` moves it. install.sh reads
+`db_path` itself, in pre-flight, and resolves it as agent-director
+does:
+
+| `db_path` | Store database |
+|---|---|
+| unset, or `""` | `~/.agent-director/state.db` |
+| `"~/x"` | `x` under `$HOME` |
+| `"/abs/x"` | `/abs/x`, as written |
+| anything else (`"x"`, `"./x"`, `"../x"`, `"~"`, `"~user/x"`) | relative to `~/.agent-director/` |
+
+`$VAR` is not expanded: `"$HOME/x"` is a relative path. Step 2 below
+reads that database's `user_version`, step 3 writes the sentinel beside
+it, and step 5 verifies it. When it is not the default, the pre-flight
+block names it:
+
+    install.sh: pre-flight OK
+      claude  : ...
+      tmux    : ...
+      store   : /home/<you>/custom/state.db ([store] db_path in /home/<you>/.agent-director/config.toml)
+
+and later messages name it by that path where they would say
+`state.db`. With the default store there is no `store` line and the
+output is unchanged. A `~/.agent-director/state.db` left behind after
+`db_path` moved the store is neither read nor changed. No
+agent-director command prints the store path; the `store` line is where
+the install shows it.
+
+**The form install.sh reads.** The reader is narrow and fails closed.
+It accepts only blank lines, `#` comment lines, `[name]` table headers
+and `name = value` lines, a name being letters, digits, `_` and `-`,
+written bare. It reads no value but `db_path`'s, which must be under
+`[store]`, on one line, as a `"..."` holding no backslash or a `'...'`,
+optionally followed by a `#` comment:
+
+```toml
+[store]
+db_path = "~/custom/state.db"   # optional comment
+```
+
+Anything else stops the install with **exit 5** before anything is
+installed or changed, even a line that would not move the store: the
+reader never guesses. For example: a dotted key
+(`store.db_path = "..."`), a quoted key or table name
+(`"db_path" = ...`, `["store"]`), `[[name]]`, a table within a table (`[store.x]`),
+an inline table (`store = { db_path = "..." }`), a value spanning lines
+(a `"""` or `'''` string, a multi-line array), `[Store]` or `DB_PATH`
+(agent-director matches names regardless of letter case), a second
+`[store]` or `db_path`, a `db_path` value holding an escape, a control
+character (a tab, say) or a `?`, a UTF-16 byte-order mark, or a
+`config.toml` that is not a readable file. The report names the file,
+the line (none for a file it cannot read) and what to change:
+
+    install.sh: cannot tell which store database agent-director opens; refusing to install.
+      config  : /home/<you>/.agent-director/config.toml
+      line 1  : store.db_path = "~/custom/state.db"
+      This sets a store key as a dotted key (store.db_path = ..., say)
+      rather than under a [store] header. Move this line, without the
+      store. prefix, to under the file's [store] header, adding that header
+      at the end of the file if the file has none.
+      Add no header in this line's place: the lines below it, up to the next
+      header, would fall under that header too.
+      install.sh reads [store] db_path itself, to check, migrate and verify
+      the database agent-director opens, and reads only this form of the
+      file: ...
+      Nothing was installed or changed. Re-run this install after the change.
+
+Make the change it names, then re-run the install with the same flags.
+Followed as written, the change keeps the store where agent-director
+puts it for the refused file. A setting written outside its table's
+header (a dotted `store.db_path`, say) moves to under the file's header
+for that table, which you add at the end of the file if it has none,
+never in the line's place, where the header would take in the lines
+below it too. A header agent-director ignores is removed with the lines under
+it, never alone, so they cannot fall under another header (`[store]`,
+say). The one change that moves the store, removing a control character
+from `db_path`, says so. A file the reader accepts but agent-director
+refuses (a bad value elsewhere in it) passes pre-flight and stops at
+step 3 or 4 instead; see "A refused config file" below.
+
 ### The six steps `install.sh` performs
+
+`state.db` below is the database the section above names.
 
 1. **Install the new binaries** (atomic `mv` into
    `~/.agent-director/bin/`, and `agent-director-admin` into
    `~/.agent-director/admin/`).
 2. **Read the ACTUAL `user_version`** via
-   `sqlite3 -batch -init /dev/null -cmd ".timeout 10000" ~/.agent-director/state.db "PRAGMA user_version;"`
+   `sqlite3 -batch -init /dev/null -cmd ".timeout 10000" <state.db> "PRAGMA user_version;"`
    (through the WAL, waiting up to 10 s for a lock, ignoring
    `~/.sqliterc`). No `state.db` on disk → fresh install, skip to
    step 4. An existing `state.db` whose version cannot be read, or
@@ -740,7 +854,11 @@ administrator action, so the install writes the sentinel for you.
    install (exit 5, no sentinel; see "A refused config file" below);
    any other error writes no sentinel, prints `could not tell whether a
    migration is needed (agent-director list failed: <err_name>)` and
-   goes on to step 4.
+   goes on to step 4. The sentinel goes through a temp file that
+   `mktemp` creates beside it (`migrate-authorized.tmp.XXXXXX`) and is
+   moved into place; if `mktemp` cannot create that file, the install
+   stops (exit 5, no migration authorized; see "No temp file for the
+   sentinel" below).
 4. **Open the store once** with `agent-director list` (a store-opening
    verb — *not* `help`/`version`, which are DB-free per SR-4). The
    authorized migration runs and the sentinel is consumed; a fresh
@@ -823,6 +941,32 @@ Which read it was:
   exits 0 unless a later step fails; its `state.db:` status line shows
   `(schema <unreadable>)`.
 
+### No temp file for the sentinel
+
+At step 3 the install has `mktemp` create the sentinel's temp file
+beside state.db. If it cannot (a directory you cannot write, say, or a
+full disk), mktemp's own error comes first, then the install exits 5
+with:
+
+    install.sh: writing the migration sentinel FAILED
+      sentinel: /home/<you>/.agent-director/migrate-authorized
+      mktemp could not create a temp file beside it (its error is above), so
+      no migration was authorized: state.db is still at v<N>.
+      The new agent-director does not open it until it is at v<T>.
+      Fix what mktemp's error names (a directory you cannot write, say, or a
+      full disk), then re-run this install: it authorizes the migration again.
+
+Nothing was done to state.db, and no sentinel or temp file is left
+beside it. The new binaries are already in place (and the PATH symlink,
+if any), but the hooks were not merged and MCP was not registered.
+
+1. Fix what mktemp's error names.
+2. Re-run the install with the same flags. It authorizes the migration
+   again, migrates state.db and verifies it.
+
+Until the re-run, an older state.db is refused with
+`ErrSchemaMigrationRequired`.
+
 ### A version mismatch after the store open
 
 When a migration was expected and step 5's read gives a whole number
@@ -834,7 +978,8 @@ migration this install authorized has run, and its sentinel is
 consumed. Yet the read after the open gives `v<A>`, so state.db changed
 after the open, or the read is wrong. Do NOT delete state.db.
 
-1. Check its version now, with the command the report prints:
+1. Check its version now, with the command the report prints (it names
+   your store's path; this is the default store):
 
        sqlite3 -batch -init /dev/null -cmd ".timeout 10000" ~/.agent-director/state.db "PRAGMA user_version;"
 
@@ -851,10 +996,13 @@ after the open, or the read is wrong. Do NOT delete state.db.
 agent-director loads `~/.agent-director/config.toml` before it opens
 state.db, so a config it refuses (`ErrConfigMalformed`: for example a
 refused `[tmux]` timing or `[defaults] expire_retention_days` value, or
-a TOML syntax error) fails every store-opening verb, the install's own
-included. The install stops (exit 5) at its first store-opening verb:
-step 3's probe when state.db exists, step 4's open on a fresh install.
-It reports:
+a TOML syntax error in a value, such as `relay_mode = off` unquoted)
+fails every store-opening verb, the install's own included. The install
+stops (exit 5) at its first store-opening verb: step 3's probe when
+state.db exists, step 4's open on a fresh install. (A line install.sh's
+own `db_path` reader cannot read, an unclosed `[header]` say, stops the
+install earlier, in pre-flight; see "Which database install.sh checks"
+above.) It reports:
 
     install.sh: agent-director refused its config file (ErrConfigMalformed)
       config  : /home/<you>/.agent-director/config.toml
@@ -930,8 +1078,9 @@ user_version=N, want M" with N greater than M). Migrations only run
 forward, and the install will not downgrade a DB.
 
 1. Inspect: `sqlite3 -cmd ".timeout 10000" ~/.agent-director/state.db "PRAGMA user_version"`
-   and compare against the version the binary expects (shown in the
-   error).
+   (with `[store] db_path` set, use the path install.sh's `store` line
+   shows) and compare against the version the binary expects (shown in
+   the error).
 2. **Install the agent-director release that matches this schema.**
    This loses nothing; you likely rolled the binary back below the DB.
    Re-run this install skill with `--from-release` (latest) or point

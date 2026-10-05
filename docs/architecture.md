@@ -633,7 +633,9 @@ release with `Close()`.
 
 This preserves existing CLI behavior: a user with a custom `[store] db_path`
 in `config.toml` continues to hit that path without any extra flags or env
-vars.
+vars. `install.sh` resolves tiers 2 and 3 on its own, in bash, to find the
+store it migrates; a drift guard holds the two resolutions together (see
+[Schema migration at install-time](#schema-migration-at-install-time)).
 
 **No usable home.** With `HOME` unset or empty, a `~/` path from any tier
 (or a `~/` `ConfigPath`) is never resolved against another home: `New`
@@ -4352,6 +4354,9 @@ claude /install-agent-director (or `bash install.sh`)
     together (exactly one → exit 2)
   → install.sh preflight gates (whitespace-free install path, OS/CPU,
     required tools on PATH incl. sqlite3)
+  → resolve the store database from [store] db_path in
+    ~/.agent-director/config.toml (a form the reader cannot read → exit
+    5, nothing on disk changed)
   → with --from-release: download both assets, checking each hash when
     given (a mismatch → exit 3, nothing installed)
   → find both source binaries; --binary and --admin-binary arch probes
@@ -4481,12 +4486,73 @@ install.sh prints the same `<unreadable>` lines as a stderr warning
 (`ad_show_unreadable_version`, shared with the failure report), then the
 command to read the version later, and the install carries on to the
 hooks, the config merge and MCP registration (b.xd9). The sentinel is
-written to a temp file and moved into place;
-the EXIT trap removes a temp file that was never moved. A brief
+written to a temp file that `mktemp "<sentinel>.tmp.XXXXXX"` creates
+beside it, then moved into place; the EXIT trap removes a temp file that
+was never moved. A mktemp failure stops the install (exit 5,
+`install.sh: writing the migration sentinel FAILED`) with no migration
+authorized; the advice is to fix what mktemp's error names and re-run. A
+brief
 hook-failure window between the binary swap and that open is accepted,
 not worked around. That same open gives the store its store id: the
 v4→v5 hop creates it on an upgrade, and `createSchema` on a fresh
 install. `install.sh` never reads or writes `store_meta`.
+
+**Which store: `[store] db_path` (b.2io).** `state.db` in this flow is the
+database the binary opens: `~/.agent-director/state.db`, or the `[store]
+db_path` of `~/.agent-director/config.toml` (`pkg/api`'s `resolveStorePath`,
+tiers 2 and 3; `install.sh` passes no `--store-path`). `install.sh` reads
+`db_path` itself in pre-flight, with `ad_store_db_path` (the
+self-contained block between the `# >>> ad_store_db_path` and
+`# <<< ad_store_db_path` lines; bash builtins only), and keeps the result
+in `$state_db`. It resolves as Go does (`internal/config`'s
+`resolvePathField`, then `resolveStorePath`): unset, empty or no config
+gives `~/.agent-director/state.db`; a leading `~/` is joined onto `$HOME`;
+an absolute path is used unchanged; anything else (`~`, `~user/x`, `./x`,
+`../x`) is joined onto `~/.agent-director/`; every join is cleaned as
+`filepath.Join` cleans it (`ad_clean_path`); `$VAR` stays literal. Step 2
+reads `$state_db`, step 3 writes the sentinel at
+`ad_sentinel_path "$state_db"` (the store's `sentinelPath`,
+`filepath.Join(filepath.Dir(db), "migrate-authorized")`), and step 5
+verifies `$state_db`. Messages name the store `state.db` when it is the
+default and by its path otherwise (`$state_db_name`); a moved store adds
+`store   : <path> ([store] db_path in <config>)` to the pre-flight block.
+
+The reader fails closed:
+
+- **Accepted:** blank lines, `#` comments, `[name]` headers and
+  `name = value` lines, each name one bare key (letters, digits, `_`,
+  `-`). The one value read is `db_path`'s under `[store]`: a single-line
+  `"..."` holding no backslash, or `'...'`, with an optional trailing `#`
+  comment.
+- **Refused:** everything else, for example a dotted or quoted key or
+  table name, `[[name]]`, a top-level `store` key (`store = { ... }`), a
+  line continuing a value from an earlier line, any `"""` or `'''`,
+  `[store]` or `db_path` in another letter case, a second `[store]` or
+  `db_path`, a control character or `?` in the value, a UTF-16 byte-order
+  mark, and a config that exists but is not a readable regular file.
+- **A refusal** is exit 5 in pre-flight, before anything on disk changes.
+  Stderr: first line
+  `install.sh: cannot tell which store database agent-director opens; refusing to install.`,
+  then `config  : <path>`, `line <n>  : <line>` (none for a config that is
+  not a readable file), the advice, and
+  `Nothing was installed or changed. Re-run this install after the change.`
+- **The advice**, followed as written, keeps the store where
+  agent-director puts it for the refused file. A setting written outside
+  its table's header (a dotted `store.db_path`, say) moves to under the
+  file's header for that table, added at the end of the file if the file
+  has none, never in the line's place; a header agent-director ignores is
+  removed with the lines under it. The one exception, a control character
+  in `db_path`, says that removing it moves the store.
+- A file the reader accepts but `config.Load` refuses (a bad value) passes
+  pre-flight and stops at step 3 or 4 with `ErrConfigMalformed` (below).
+
+Drift guards and their matrix: see
+[dbpathfix](#dbpathfix-the-installsh-store-path-matrix-reusable-test-fixture).
+**Must use:** `install.sh` code that needs the store's path uses
+`$state_db`, and its sentinel `ad_sentinel_path`, never
+`~/.agent-director/state.db`; a change to the store-path rules on either
+side (`resolvePathField`, `resolveStorePath`, `sentinelPath`, or the
+reader) adds its cases to the `dbpathfix` matrix.
 
 **The probe, and a refused config (b.7b4).** On an existing `state.db`,
 the install learns whether a migration is pending from one probe open
@@ -4584,6 +4650,10 @@ agent-director with one script.
     └── SessionEnd    → [{matcher: "compact", hooks: [{type: command, command: "<bin> help"}]}]
 ```
 
+With `[store] db_path` set, `state.db` (with its `-wal` and `-shm`) is at
+that path instead, and `migrate-authorized` beside it (see
+[Schema migration at install-time](#schema-migration-at-install-time)).
+
 ### Upgrade-safety pattern
 
 Two concerns compose here: swapping the binary safely, and migrating
@@ -4663,7 +4733,9 @@ frequently want to keep templates and state.db across reinstalls.
 `--purge` is the explicit nuke path: a full `rm -rf
 ~/.agent-director` with an interactive confirmation
 (`--force` skips the prompt). State, templates, and any local
-edits to `config.toml` are lost.
+edits to `config.toml` are lost. `uninstall.sh` does not read `[store]
+db_path`, so a store that `db_path` puts outside `~/.agent-director`
+survives `--purge`.
 
 ### ErrSchemaMismatch recovery
 
@@ -9714,6 +9786,42 @@ directory calls `cwdfix.Temp`; do not hand-roll `os.Chdir` with a
 restore. Two earlier tests still do: `chdirFor` in
 `test/realtmux/socket_resolution_test.go` and the "relative
 TMUX_TMPDIR" case in `pkg/api/spawn_launch_test.go`.
+
+### dbpathfix: the install.sh store-path matrix (reusable test fixture)
+
+`internal/testsupport/dbpathfix` (b.2io) runs `install.sh`'s `[store]
+db_path` reader on its own and holds the one matrix of configs that the
+drift guards run through it and through Go's own store-path resolution (see
+[Schema migration at install-time](#schema-migration-at-install-time)). The
+package doc comment carries the detail.
+
+- `NewReader(t, installSh)` extracts the block between `install.sh`'s
+  `# >>> ad_store_db_path` and `# <<< ad_store_db_path` lines into a temp
+  file, failing the test when the block is missing or unterminated.
+  `Reader.Resolve(t, config, home)` runs `ad_store_db_path` under
+  `bash -uo pipefail`, as `install.sh` runs it, and returns stdout, stderr
+  and status; `Reader.Sentinel(t, db)` runs `ad_sentinel_path`.
+- `Cases` is the matrix: each `Case` is a `config.toml` (`Form`: a file, no
+  file, or a directory in its place) and what it gives (`Expect`): `Same`
+  (the reader prints the path Go resolves), `ReaderRefuses` (status 1,
+  nothing on stdout) or `GoRefuses` (the reader passes it and `config.Load`
+  refuses it). `Homes` is the `HOME` values every case runs under, some
+  needing cleaning. `WriteConfig` puts one case on disk.
+- Users: `TestInstallShDbPathMatchesGo` (`pkg/api/install_sh_db_path_test.go`,
+  against `config.Load` and `resolveStorePath`) and
+  `TestInstallShSentinelPathMatchesStore`
+  (`internal/store/install_sh_sentinel_path_test.go`, against
+  `sentinelPath`).
+
+It is a leaf package (standard library only; it imports nothing from
+agent-director), so any test package can use it. The extraction works only
+while the marker block stays self-contained: everything it calls is
+defined inside it, with bash builtins only.
+
+**Must use:** a test of `install.sh`'s store-path reader, or of a Go
+store-path rule it mirrors, gets the reader through `dbpathfix.NewReader`
+and adds its configs to `dbpathfix.Cases`; never a second matrix or a
+second extraction of the block.
 
 ### Which tmux test double to use
 

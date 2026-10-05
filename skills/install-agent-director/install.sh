@@ -79,9 +79,14 @@
 #   4  hook merge failure (~/.claude/settings.json malformed)
 #   5  store open / schema-migration failure (open failed, the config
 #      file refused with ErrConfigMalformed, state.db not created, an
-#      existing state.db's user_version unreadable before the open, or
-#      post-open user_version unreadable or != target when a migration
-#      was expected)
+#      existing state.db's user_version unreadable before the open, no
+#      temp file for the migration sentinel (mktemp failed), or post-open
+#      user_version unreadable or != target when a migration was
+#      expected), or a config file
+#      whose [store] db_path install.sh cannot read (refused in
+#      pre-flight, before anything on disk changes). state.db here is
+#      the store database agent-director opens: ~/.agent-director/state.db,
+#      or wherever [store] db_path in ~/.agent-director/config.toml puts it.
 #
 # Idempotent: re-running the script with no flags after a clean
 # install is a no-op (returns 0, prints "already installed at vX").
@@ -269,9 +274,427 @@ for tool in "${required_tools[@]}"; do
     fi
 done
 
+# --------------------------------------------------------------------
+# Store database: [store] db_path (b.2io)
+#
+# agent-director opens the store at [store] db_path in
+# ~/.agent-director/config.toml when that is set (pkg/api
+# resolveStorePath), and looks for the migration sentinel beside it
+# (internal/store sentinelPath). The schema-migration steps below must
+# read, authorize and verify that same database, so install.sh reads
+# db_path itself; no agent-director verb prints the path. The reader is
+# narrow and fails closed: on anything but the common form it stops the
+# install (exit 5) here, before anything on disk changes.
+#
+# It reads config.toml line by line and accepts only:
+#   - blank lines and # comment lines;
+#   - table headers naming one bare key, [name] (spaces inside the
+#     brackets and a trailing # comment allowed);
+#   - name = value lines whose name is one bare key. Values are not
+#     read, except db_path's under [store]: a single-line "..." holding
+#     no backslash, or '...', optionally followed by a # comment.
+# A bare key is letters, digits, _ and -. Everything else is refused,
+# naming the line: a dotted or quoted key or table name, [[name]], a
+# top-level store key (store = { ... }), a line continuing a value
+# from an earlier line (a multi-line array or inline table; any """ or
+# ''' is refused as a multi-line string), [store] or db_path in other
+# letter case (agent-director's TOML decoder matches names regardless of
+# case), a second [store] or db_path, a db_path value holding a control
+# character, and one holding a '?' (the store's SQLite driver reads
+# everything from the first '?' on as options, so agent-director would
+# open a different file). Some refused lines would not move the store;
+# refusing them is the price of never guessing. Each refusal says what to
+# change, in words that, followed as written, keep the store where
+# agent-director puts it for the refused file: a dotted store.db_path key
+# becomes db_path under [store], never a top-level db_path agent-director
+# ignores; a line before any header that belongs under one moves to its
+# table's header, or to one added at the end of the file, never to one added
+# in its place, which would take in the lines after it too; and lines
+# agent-director ignores are removed with their header, never left to fall
+# under another one. Where that cannot be done (a control character in
+# db_path), the refusal says so. A line that is not TOML at
+# all (an unclosed [header], say) is refused here too, before
+# agent-director sees it; a file the reader accepts but agent-director
+# refuses (a bad value) still stops at step 3 or 4 (ErrConfigMalformed).
+#
+# The value resolves exactly as Go resolves it (internal/config
+# resolvePathField, pkg/api resolveStorePath): empty or unset gives
+# ~/.agent-director/state.db, a leading ~/ is joined onto $HOME, an
+# absolute path is used unchanged, and anything else (~, ~user/x, ./x,
+# ../x) is joined onto ~/.agent-director. Every join is cleaned as Go's
+# filepath.Join cleans it (ad_clean_path); an absolute path is not.
+# $VAR stays literal.
+#
+# The block between the >>> and <<< marker lines is self-contained (bash
+# 3.2 or later, builtins only), so a test can extract it with sed and
+# call ad_store_db_path alone.
+# --------------------------------------------------------------------
+
+# >>> ad_store_db_path (b.2io) >>>
+
+# ad_clean_path <path> — print <path> cleaned as Go's filepath.Clean cleans
+# it on Unix: repeated slashes and . elements go, each .. removes the
+# element before it (and is dropped at the root), a trailing slash goes,
+# and an empty result is ".".
+ad_clean_path() {
+    local rest="$1" out="" seg root=""
+    if [[ "$rest" == /* ]]; then
+        root=/
+    fi
+    while [[ -n "$rest" ]]; do
+        seg="${rest%%/*}"
+        if [[ "$seg" == "$rest" ]]; then rest=""; else rest="${rest#*/}"; fi
+        case "$seg" in
+            ""|.) ;;
+            ..)
+                if [[ -n "$out" && "$out" != .. && "$out" != */.. ]]; then
+                    if [[ "$out" == */* ]]; then out="${out%/*}"; else out=""; fi
+                elif [[ -z "$root" ]]; then
+                    out="${out:+$out/}.."
+                fi
+                ;;
+            *) out="${out:+$out/}$seg" ;;
+        esac
+    done
+    out="${root}${out}"
+    printf '%s\n' "${out:-.}"
+}
+
+# ad_sentinel_path <db> — print where the store looks for the migration
+# sentinel that authorizes <db>: Go's filepath.Join(filepath.Dir(<db>),
+# "migrate-authorized") (internal/store sentinelPath). Unlike dirname, both
+# clean the directory, which matters for an absolute db_path that is not
+# clean.
+ad_sentinel_path() {
+    if [[ "$1" == */* ]]; then
+        ad_clean_path "${1%/*}/migrate-authorized"
+    else
+        printf '%s\n' migrate-authorized
+    fi
+}
+
+# ad_toml_name <part> — print the name agent-director's TOML decoder matches
+# for one key or table-name part, bare, "..." or '...' (re_part below): the
+# part without its quotes, with each U+017F (long s) and U+212A (Kelvin sign)
+# written as the s and k they match, since the decoder compares names with
+# Go's strings.EqualFold. Called only inside ad_store_db_path's subshell.
+ad_toml_name() {
+    local name="$1" long_s=$'\xc5\xbf' kelvin=$'\xe2\x84\xaa'
+    case "$name" in
+        \"*\"|\'*\') name="${name:1:$((${#name} - 2))}" ;;
+    esac
+    name="${name//$long_s/s}"
+    name="${name//$kelvin/k}"
+    printf '%s\n' "$name"
+}
+
+# ad_db_path_refuse <config> <line number> <line> <reason>... — report a
+# config file the reader cannot read, with the offending line (none when
+# <line number> is 0) and <reason>s saying what to change, then exit 1.
+# Called only inside ad_store_db_path's subshell.
+ad_db_path_refuse() {
+    local config="$1" n="$2" line="$3" reason
+    shift 3
+    echo "install.sh: cannot tell which store database agent-director opens; refusing to install." >&2
+    echo "  config  : $config" >&2
+    if [[ "$n" -gt 0 ]]; then
+        printf '  line %s  : %s\n' "$n" "$line" >&2
+    fi
+    for reason in "$@"; do
+        echo "  $reason" >&2
+    done
+    if [[ "$n" -gt 0 ]]; then
+        echo "  install.sh reads [store] db_path itself, to check, migrate and verify" >&2
+        echo "  the database agent-director opens, and reads only this form of the" >&2
+        echo "  file: blank lines, # comments, [name] headers and name = value lines," >&2
+        echo "  a name being letters, digits, _ and -, with db_path under [store] set" >&2
+        echo "  to a one-line \"...\" holding no backslash, or '...', and an optional" >&2
+        echo "  # comment after it." >&2
+    fi
+    echo "  Nothing was installed or changed. Re-run this install after the change." >&2
+    exit 1
+}
+
+# ad_store_db_path <config> <home> — print the store database agent-director
+# opens for config file <config> and home directory <home> (non-empty),
+# resolved as above; a missing <config> gives the default. On a file the
+# reader cannot read, print why on stderr and return 1, printing nothing on
+# stdout. The body is a subshell under the C locale, so the matching is
+# bytewise whatever the caller's locale.
+ad_store_db_path() (
+    LC_ALL=C
+    local config="$1" home="$2" n=0 line table="" seen_store=0 have_value=0
+    local value="" key rest resolved name
+    local re_skip='^[[:blank:]]*(#.*)?$'
+    local re_header='^[[:blank:]]*\[[[:blank:]]*([A-Za-z0-9_-]+)[[:blank:]]*\][[:blank:]]*(#.*)?$'
+    local re_bracket='^[[:blank:]]*\['
+    local re_keyval='^[[:blank:]]*([A-Za-z0-9_-]+)[[:blank:]]*=[[:blank:]]*(.*)$'
+    # A "..." value's body runs to the next unescaped ", so a backslash
+    # before the first " after the opening one is an escape.
+    local re_escape='^[[:blank:]]*"[^"]*\\'
+    local re_basic='^[[:blank:]]*"([^"]*)"[[:blank:]]*(#.*)?$'
+    local re_literal="^[[:blank:]]*'([^']*)'[[:blank:]]*(#.*)?\$"
+    local re_store='^[Ss][Tt][Oo][Rr][Ee]$'
+    local re_db_path='^[Dd][Bb]_[Pp][Aa][Tt][Hh]$'
+    local re_cntrl='[[:cntrl:]]'
+    # Only to word a refusal: the line forms the reader refuses, as TOML
+    # writes them. A key or table-name part is a bare name, a "..." holding no
+    # backslash, or a '...' (first part in BASH_REMATCH[1]).
+    local re_part='([A-Za-z0-9_-]+|"[^"\\]*"|'"'[^']*'"')'
+    local re_dot='[[:blank:]]*\.[[:blank:]]*'
+    local re_end='[[:blank:]]*(#.*)?$'
+    local re_bare='^[A-Za-z0-9_-]+$'
+    local re_aot='^[[:blank:]]*\[\[[[:blank:]]*'"$re_part"'('"$re_dot$re_part"')*[[:blank:]]*\]\]'"$re_end"
+    local re_aot_one='^[[:blank:]]*\[\[[[:blank:]]*'"$re_part"'[[:blank:]]*\]\]'"$re_end"
+    local re_header_one='^[[:blank:]]*\[[[:blank:]]*'"$re_part"'[[:blank:]]*\]'"$re_end"
+    local re_header_dotted='^[[:blank:]]*\[[[:blank:]]*'"$re_part"'('"$re_dot$re_part"')+[[:blank:]]*\]'"$re_end"
+    local re_key_one='^[[:blank:]]*'"$re_part"'[[:blank:]]*='
+    local re_key_two='^[[:blank:]]*'"$re_part$re_dot$re_part"'[[:blank:]]*='
+    local re_key_dotted='^[[:blank:]]*'"$re_part"'('"$re_dot$re_part"')+[[:blank:]]*='
+    # Ends the advice for a line before any header that belongs under one. The
+    # line goes under its table's header, or under one added at the end of the
+    # file: a header added in its place would take in every line after it, up
+    # to the next header, and agent-director would then read those lines
+    # differently (ignore a store.db_path = ... line under [defaults], say).
+    local -a not_here=(
+        "Add no header in this line's place: the lines below it, up to the next"
+        "header, would fall under that header too."
+    )
+    # The advice for a store key before any header (store = { ... }), bare or
+    # quoted.
+    local -a refuse_top_store=(
+        "This sets store as a key (an inline table, say) rather than under a"
+        "[store] header. Remove this line. If it sets db_path, set db_path under"
+        "the file's [store] header instead, adding that header at the end of the"
+        "file if the file has none."
+        "${not_here[@]}"
+    )
+
+    if [[ -e "$config" ]]; then
+        if [[ ! -f "$config" || ! -r "$config" ]]; then
+            ad_db_path_refuse "$config" 0 "" \
+                "It is not a readable file (a directory, say, or a file without read" \
+                "permission), so agent-director cannot load it either. Make it one."
+        fi
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            n=$((n + 1))
+            # The TOML decoder skips a UTF-8 byte-order mark and a CRLF's CR too.
+            if [[ "$n" -eq 1 ]]; then
+                line="${line#$'\xef\xbb\xbf'}"
+            fi
+            line="${line%$'\r'}"
+            if [[ "$line" =~ $re_skip ]]; then
+                continue
+            fi
+            # The decoder also skips a UTF-16 byte-order mark; the reader
+            # does not.
+            if [[ "$n" -eq 1 && ( "$line" == $'\xff\xfe'* || "$line" == $'\xfe\xff'* ) ]]; then
+                ad_db_path_refuse "$config" "$n" "$line" \
+                    "This line starts with the bytes FF FE or FE FF, a UTF-16 byte-order" \
+                    "mark, which install.sh does not read. Remove those two bytes:" \
+                    "agent-director skips them, so it reads the file the same without them."
+            fi
+            if [[ "$line" == *'"""'* || "$line" == *"'''"* ]]; then
+                ad_db_path_refuse "$config" "$n" "$line" \
+                    "This line holds \"\"\" or ''', which install.sh reads as the start of a" \
+                    "multi-line string. Write each value on one line, as a \"...\" or '...'" \
+                    "string, with no \"\"\" or ''' anywhere on the line."
+            fi
+            if [[ "$line" =~ $re_header ]]; then
+                table="${BASH_REMATCH[1]}"
+                if [[ "$table" =~ $re_store ]]; then
+                    if [[ "$table" != store ]]; then
+                        ad_db_path_refuse "$config" "$n" "$line" \
+                            "agent-director reads this header as [store]: its TOML decoder matches" \
+                            "names regardless of letter case. Write it as [store]."
+                    fi
+                    if [[ "$seen_store" -eq 1 ]]; then
+                        ad_db_path_refuse "$config" "$n" "$line" \
+                            "This is a second [store] header, and agent-director refuses a table" \
+                            "defined twice. Move the lines under it, up to the next header, to" \
+                            "under the first [store] header, then remove this header."
+                    fi
+                    seen_store=1
+                fi
+                continue
+            fi
+            # A refused header is never to be removed alone: the lines under it
+            # would fall under the header before it, [store] perhaps.
+            if [[ "$line" =~ $re_bracket ]]; then
+                if [[ "$line" =~ $re_aot ]]; then
+                    name="$(ad_toml_name "${BASH_REMATCH[1]}")"
+                    if [[ "$line" =~ $re_aot_one && "$name" =~ $re_store ]]; then
+                        ad_db_path_refuse "$config" "$n" "$line" \
+                            "This makes store an array of tables ([[name]]), and agent-director" \
+                            "reads [store] only as one table, so it refuses the file. Write it" \
+                            "as [store]."
+                    fi
+                    ad_db_path_refuse "$config" "$n" "$line" \
+                        "This is an array of tables ([[name]]), which agent-director does not" \
+                        "read: it ignores the lines under this header, or refuses the file." \
+                        "Remove the header and the lines under it, up to the next header."
+                fi
+                if [[ "$line" =~ $re_header_one ]]; then
+                    name="$(ad_toml_name "${BASH_REMATCH[1]}")"
+                    if [[ "$name" =~ $re_store ]]; then
+                        ad_db_path_refuse "$config" "$n" "$line" \
+                            "agent-director reads this header as [store]: a quoted name is the" \
+                            "same as the bare one, and its TOML decoder matches names regardless" \
+                            "of letter case. Write it as [store]."
+                    fi
+                    if [[ "$name" =~ $re_bare ]]; then
+                        ad_db_path_refuse "$config" "$n" "$line" \
+                            "A quoted table name is the same as the bare one. Write it as" \
+                            "[$name], without the quotes."
+                    fi
+                    ad_db_path_refuse "$config" "$n" "$line" \
+                        "agent-director reads no table with this name, so it ignores the lines" \
+                        "under this header. Remove the header and the lines under it, up to" \
+                        "the next header."
+                fi
+                if [[ "$line" =~ $re_header_dotted ]]; then
+                    ad_db_path_refuse "$config" "$n" "$line" \
+                        "This header names a table within a table ([a.b]), which" \
+                        "agent-director does not read: it ignores the lines under this header," \
+                        "or refuses the file. Remove the header and the lines under it, up to" \
+                        "the next header."
+                fi
+                ad_db_path_refuse "$config" "$n" "$line" \
+                    "This line starts with [ but is not a table header install.sh can read:" \
+                    "a missing ], say, a quoted name holding an escape (\\), or part of an" \
+                    "array value that spans lines. Correct the header to [name], with the" \
+                    "name bare, or write the array on one line."
+            fi
+            if [[ ! "$line" =~ $re_keyval ]]; then
+                if [[ "$line" =~ $re_key_one ]]; then
+                    name="$(ad_toml_name "${BASH_REMATCH[1]}")"
+                    if [[ -z "$table" && "$name" =~ $re_store ]]; then
+                        ad_db_path_refuse "$config" "$n" "$line" "${refuse_top_store[@]}"
+                    fi
+                    if [[ "$table" == store && "$name" =~ $re_db_path ]]; then
+                        ad_db_path_refuse "$config" "$n" "$line" \
+                            "agent-director reads this key as db_path: a quoted key is the same" \
+                            "as the bare one, and its TOML decoder matches names regardless of" \
+                            "letter case. Write it as db_path."
+                    fi
+                    if [[ "$name" =~ $re_bare ]]; then
+                        ad_db_path_refuse "$config" "$n" "$line" \
+                            "A quoted key is the same as the bare one. Write it as $name, without" \
+                            "the quotes."
+                    fi
+                    ad_db_path_refuse "$config" "$n" "$line" \
+                        "agent-director reads no key with this name, so it ignores this line." \
+                        "Remove it."
+                fi
+                # Before any header, a.b = value sets b under [a]; under one, a
+                # dotted key sets a key in a table within that table.
+                if [[ -z "$table" && "$line" =~ $re_key_two ]]; then
+                    name="$(ad_toml_name "${BASH_REMATCH[1]}")"
+                    if [[ "$name" =~ $re_store ]]; then
+                        ad_db_path_refuse "$config" "$n" "$line" \
+                            "This sets a store key as a dotted key (store.db_path = ..., say)" \
+                            "rather than under a [store] header. Move this line, without the" \
+                            "store. prefix, to under the file's [store] header, adding that header" \
+                            "at the end of the file if the file has none." \
+                            "${not_here[@]}"
+                    fi
+                    if [[ "$name" =~ $re_bare ]]; then
+                        ad_db_path_refuse "$config" "$n" "$line" \
+                            "Before any header, a dotted key a.b = value sets b under [a]. Move this" \
+                            "line, without the $name. prefix, to under the file's [$name] header," \
+                            "adding that header at the end of the file if the file has none." \
+                            "${not_here[@]}"
+                    fi
+                    ad_db_path_refuse "$config" "$n" "$line" \
+                        "agent-director reads no table with this key's first name, so it" \
+                        "ignores this line. Remove it."
+                fi
+                if [[ "$line" =~ $re_key_dotted ]]; then
+                    ad_db_path_refuse "$config" "$n" "$line" \
+                        "This dotted key sets a key in a table within a table, which" \
+                        "agent-director does not read: it ignores this line, or refuses the" \
+                        "file. Remove it."
+                fi
+                ad_db_path_refuse "$config" "$n" "$line" \
+                    "This line is not a blank line, a # comment, a [name] header or a" \
+                    "name = value line: part of a value that spans lines (an array, say), a" \
+                    "quoted name holding an escape (\\), or a typo. Write each value on one" \
+                    "line, write the name bare, without quotes or escapes, or correct the" \
+                    "typo."
+            fi
+            key="${BASH_REMATCH[1]}"
+            rest="${BASH_REMATCH[2]}"
+            if [[ -z "$table" && "$key" =~ $re_store ]]; then
+                ad_db_path_refuse "$config" "$n" "$line" "${refuse_top_store[@]}"
+            fi
+            if [[ "$table" != store || ! "$key" =~ $re_db_path ]]; then
+                continue
+            fi
+            if [[ "$key" != db_path ]]; then
+                ad_db_path_refuse "$config" "$n" "$line" \
+                    "agent-director reads this key as db_path: its TOML decoder matches" \
+                    "names regardless of letter case. Write it as db_path."
+            fi
+            if [[ "$have_value" -eq 1 ]]; then
+                ad_db_path_refuse "$config" "$n" "$line" \
+                    "This sets db_path a second time. Keep one."
+            fi
+            if [[ "$rest" =~ $re_escape ]]; then
+                ad_db_path_refuse "$config" "$n" "$line" \
+                    "db_path's \"...\" value holds a backslash, which starts an escape." \
+                    "Write the path without escapes; in single quotes ('...') a backslash" \
+                    "or a double quote is literal."
+            elif [[ "$rest" =~ $re_basic || "$rest" =~ $re_literal ]]; then
+                value="${BASH_REMATCH[1]}"
+            else
+                ad_db_path_refuse "$config" "$n" "$line" \
+                    "db_path's value is not a one-line \"...\" or '...' string, optionally" \
+                    "followed by a # comment. Write it in that form."
+            fi
+            if [[ "$value" =~ $re_cntrl ]]; then
+                ad_db_path_refuse "$config" "$n" "$line" \
+                    "db_path's value holds a control character, such as a tab. install.sh" \
+                    "cannot install with one in the store path, so remove it. agent-director" \
+                    "then opens the path without it, not any store it already keeps at this" \
+                    "one."
+            fi
+            if [[ "$value" == *\?* ]]; then
+                ad_db_path_refuse "$config" "$n" "$line" \
+                    "db_path's value holds a '?'. agent-director's store open reads" \
+                    "everything from the first '?' on as SQLite options, so it would not" \
+                    "open this path. Use a path without '?'."
+            fi
+            have_value=1
+        done <"$config"
+    fi
+
+    case "$value" in
+        "")    resolved="$(ad_clean_path "${home}/.agent-director/state.db")" ;;
+        "~/"*) resolved="$(ad_clean_path "${home}/${value:2}")" ;;
+        /*)    resolved="$value" ;;
+        *)     resolved="$(ad_clean_path "${home}/.agent-director/${value}")" ;;
+    esac
+    printf '%s\n' "$resolved"
+)
+
+# <<< ad_store_db_path (b.2io) <<<
+
+if ! state_db="$(ad_store_db_path "${DEFAULT_INSTALL_ROOT}/config.toml" "$HOME")"; then
+    exit 5
+fi
+# Messages name the store "state.db" when it is the default one, as
+# before, and by its path when [store] db_path moves it.
+state_db_name="state.db"
+if [[ "$state_db" != "$(ad_clean_path "${HOME}/.agent-director/state.db")" ]]; then
+    state_db_name="$state_db"
+fi
+
 echo "install.sh: pre-flight OK"
 echo "  claude  : $(claude --version 2>/dev/null || echo '<unknown>')"
 echo "  tmux    : $(tmux -V 2>/dev/null || echo '<unknown>')"
+if [[ "$state_db_name" != state.db ]]; then
+    echo "  store   : $state_db ([store] db_path in ${DEFAULT_INSTALL_ROOT}/config.toml)"
+fi
 
 # --------------------------------------------------------------------
 # --from-release: resolve tag, download asset for this OS/arch, hand
@@ -906,6 +1329,12 @@ fi
 # successful migration. install.sh runs on the end-user's machine as an
 # admin action, so it is the legitimate writer of that sentinel.
 #
+# state.db is the store database agent-director opens, $state_db:
+# ~/.agent-director/state.db, or wherever [store] db_path puts it (read in
+# pre-flight, b.2io). Its sentinel is a sibling of that database
+# (ad_sentinel_path), wherever it is. Messages call it $state_db_name:
+# "state.db" for the default, otherwise its path.
+#
 #   Step 2 — read the DB's ACTUAL user_version via
 #            `sqlite3 PRAGMA user_version` (reads through the WAL; raw
 #            header bytes are wrong for a WAL-mode DB). Fresh install →
@@ -937,8 +1366,6 @@ fi
 #            migrated DB gets the admin migration error. This is accepted;
 #            it is documented in SKILL.md, not worked around in code.
 # --------------------------------------------------------------------
-
-state_db="${DEFAULT_INSTALL_ROOT}/state.db"
 
 # ad_user_version <db> [<err-file>] — echo the DB's user_version through
 # the WAL; empty output means the read failed. sqlite3's stderr goes to
@@ -1005,7 +1432,7 @@ ad_fail_unreadable_version() {
     local output="$1" could_not="$2" line
     shift 2
     ad_show_unreadable_version "$output"
-    echo "  Reading state.db's user_version (sqlite3 PRAGMA user_version)" >&2
+    echo "  Reading ${state_db_name}'s user_version (sqlite3 PRAGMA user_version)" >&2
     if [[ -z "$output" ]]; then
         echo "  failed, so the install could not ${could_not}." >&2
     else
@@ -1019,7 +1446,7 @@ ad_fail_unreadable_version() {
         echo "  Re-running this install retries the read." >&2
     else
         echo "  sqlite3 on PATH: $(command -v sqlite3)" >&2
-        echo "  A re-run gets the same output unless that sqlite3 or state.db changes." >&2
+        echo "  A re-run gets the same output unless that sqlite3 or ${state_db_name} changes." >&2
     fi
     exit 5
 }
@@ -1074,16 +1501,16 @@ if [[ ! -e "$state_db" ]]; then
     # Fresh install: no DB on disk. No sentinel is needed — the step-4
     # open fresh-creates state.db at the binary's current schemaVersion.
     db_version_before=""
-    echo "  schema  : no existing state.db — fresh create on first open"
+    echo "  schema  : no existing ${state_db_name} — fresh create on first open"
 else
     db_version_before="$(ad_user_version "$state_db" "$user_version_err")"
     if ! ad_is_version "$db_version_before"; then
         # Without the version no migration can be authorized, and the
         # step-4 open would refuse an older store anyway: stop here.
-        echo "install.sh: reading state.db's schema version FAILED" >&2
+        echo "install.sh: reading ${state_db_name}'s schema version FAILED" >&2
         echo "  state.db: $state_db" >&2
         ad_fail_unreadable_version "$db_version_before" \
-            "tell whether state.db needs a migration" \
+            "tell whether ${state_db_name} needs a migration" \
             "No migration was authorized."
     fi
 
@@ -1114,15 +1541,32 @@ else
     fi
 
     if [[ -z "$probe_name" || "$probe_name" == ErrSchemaMismatch ]]; then
-        echo "  schema  : state.db at v${db_version_before}; no migration authorization needed"
+        echo "  schema  : ${state_db_name} at v${db_version_before}; no migration authorization needed"
     elif [[ -z "$target_version" ]]; then
-        echo "  schema  : state.db at v${db_version_before}; could not tell whether a migration is needed (agent-director list failed: ${probe_name})"
+        echo "  schema  : ${state_db_name} at v${db_version_before}; could not tell whether a migration is needed (agent-director list failed: ${probe_name})"
     elif [[ "$db_version_before" == "$target_version" ]]; then
         # Defensive: probe reported a target equal to current. Nothing to do.
-        echo "  schema  : state.db already at target v${target_version}; no sentinel written"
+        echo "  schema  : ${state_db_name} already at target v${target_version}; no sentinel written"
     else
-        sentinel="${DEFAULT_INSTALL_ROOT}/migrate-authorized"
-        tmp_sentinel="${sentinel}.tmp.$$"
+        sentinel="$(ad_sentinel_path "$state_db")"
+        # The temp file sits beside the sentinel, in the store's directory,
+        # which [store] db_path may put in a directory other users can write.
+        # mktemp gives it a name no one can predict and creates it itself
+        # (mode 0600, refusing any file or symlink already at that name), so
+        # nothing planted there in advance receives the write below. A
+        # failure stops the install (exit 5) rather than fall back to a
+        # predictable name.
+        if ! tmp_sentinel="$(mktemp "${sentinel}.tmp.XXXXXX")"; then
+            tmp_sentinel=""
+            echo "install.sh: writing the migration sentinel FAILED" >&2
+            echo "  sentinel: $sentinel" >&2
+            echo "  mktemp could not create a temp file beside it (its error is above), so" >&2
+            echo "  no migration was authorized: ${state_db_name} is still at v${db_version_before}." >&2
+            echo "  The new agent-director does not open it until it is at v${target_version}." >&2
+            echo "  Fix what mktemp's error names (a directory you cannot write, say, or a" >&2
+            echo "  full disk), then re-run this install: it authorizes the migration again." >&2
+            exit 5
+        fi
         printf '{"from": %d, "to": %d}\n' "$db_version_before" "$target_version" > "$tmp_sentinel"
         chmod 0600 "$tmp_sentinel" 2>/dev/null || true
         mv -f "$tmp_sentinel" "$sentinel"
@@ -1151,16 +1595,16 @@ else
     if [[ -n "$open_err" ]]; then
         printf '  %s\n' "$open_err" >&2
     fi
-    echo "  The new binary could not open state.db. If a migration was" >&2
+    echo "  The new binary could not open ${state_db_name}. If a migration was" >&2
     echo "  authorized above it was NOT consumed; re-running this install" >&2
-    echo "  will retry it. If state.db is NEWER than this binary" >&2
+    echo "  will retry it. If ${state_db_name} is NEWER than this binary" >&2
     echo "  (ErrSchemaMismatch), install a newer agent-director instead." >&2
     exit 5
 fi
 
 # ---- Step 5: verify the post-open schema version, fail loudly on mismatch ----
 if [[ ! -f "$state_db" ]]; then
-    echo "install.sh: state.db was not created by the store open" >&2
+    echo "install.sh: ${state_db_name} was not created by the store open" >&2
     exit 5
 fi
 chmod 0600 "$state_db" 2>/dev/null || true
@@ -1184,7 +1628,7 @@ if ! ad_is_version "$db_version_after"; then
         echo "  expected user_version: $target_version" >&2
         ad_fail_unreadable_version "$db_version_after" "check the migration"
     fi
-    echo "install.sh: warning: state.db's schema version is unreadable after the store open" >&2
+    echo "install.sh: warning: ${state_db_name}'s schema version is unreadable after the store open" >&2
     ad_show_unreadable_version "$db_version_after"
     echo "  The store open (agent-director list) succeeded and no migration was" >&2
     echo "  authorized, so the install carries on. Check the version later with:" >&2
@@ -1225,18 +1669,18 @@ if [[ "$migration_expected" -eq 1 ]]; then
         echo "  expected user_version: $target_version" >&2
         echo "  actual   user_version: $db_version_after" >&2
         echo "  The store open (agent-director list) succeeded, and a successful" >&2
-        echo "  open leaves state.db at v${target_version}: any migration this install" >&2
+        echo "  open leaves ${state_db_name} at v${target_version}: any migration this install" >&2
         echo "  authorized has run, and its sentinel is consumed. Yet the read after" >&2
-        echo "  the open gives v${db_version_after}: state.db changed after the open, or" >&2
+        echo "  the open gives v${db_version_after}: ${state_db_name} changed after the open, or" >&2
         echo "  the read is wrong. Check its version now:" >&2
         printf '    sqlite3 -batch -init /dev/null -cmd ".timeout 10000" %q "PRAGMA user_version;"\n' "$state_db" >&2
         echo "  A re-run of this install reads the version again: below v${target_version} it" >&2
-        echo "  brings state.db to v${target_version} again, above v${target_version} it stops" >&2
+        echo "  brings ${state_db_name} to v${target_version} again, above v${target_version} it stops" >&2
         echo "  at the store open (ErrSchemaMismatch), and at v${target_version} it finishes" >&2
         echo "  the install. If a re-run fails this same way, contact the maintainers." >&2
         exit 5
     fi
-    echo "  schema  : migration verified — state.db now at v${db_version_after}"
+    echo "  schema  : migration verified — ${state_db_name} now at v${db_version_after}"
 fi
 
 # --------------------------------------------------------------------

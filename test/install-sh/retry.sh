@@ -46,6 +46,14 @@
 # leave no temp file. A hooks-on install that creates ~/.claude gives it and
 # settings.json the owner's access, and group/other bits as the umask allows.
 #
+# [store] db_path (b.2io): with the store moved out of ~/.agent-director
+# (written with ~/, as an absolute path that is not clean, or relative), a
+# fresh install and an upgrade that migrates read, authorize and verify that
+# store, the sentinel written beside it and consumed. A stale default state.db
+# beside a moved store is left alone. The default store reads, and is named, as
+# before. A db_path install.sh cannot read stops the install (exit 5) before
+# anything on disk changes, on a fresh HOME and over an installed store.
+#
 # The test passes an explicit tag (`v0.11.0-fake`, a release that ships
 # agent-director-admin) so install.sh skips the tag-resolve step and
 # nothing reaches the network.
@@ -459,6 +467,122 @@ run_install 0 '*' --from-release v0.11.0-fake --no-symlink
 PATH_PREFIX=""
 report sentinel-mv-fails-stopped-at-mv "$RC $(grep -c "b.hk7 stand-in" "$ERR")" "1 1"
 report sentinel-mv-fails-nothing-left "$(ls -A "$H/.agent-director" | grep '^migrate-authorized')" ""
+
+# with_config <content>: H's ~/.agent-director/config.toml holds <content>
+# (printf %b).
+with_config() {
+    mkdir -p "$H/.agent-director"
+    printf '%b\n' "$1" >"$H/.agent-director/config.toml"
+}
+
+# local_install: install BIN and ADMIN under H; sets RC.
+local_install() { run_install 0 '*' --binary "$BIN" --admin-binary "$ADMIN" --no-symlink "$@"; }
+
+# db_path_upgrade <name> <db> <shown> <dir>: under H's config, a fresh install
+# then an upgrade with the store one version back; <db> is the store install.sh
+# must read, authorize and verify (b.2io), <shown> how its messages name it
+# ("state.db" for the default, otherwise its path) and <dir> the clean directory
+# whose migrate-authorized authorizes it. Only a store outside the default
+# prints a "store" pre-flight line, and no other state.db appears.
+db_path_upgrade() {
+    local name="$1" db="$2" shown="$3" dir="$4" v store_line="" default="$H/.agent-director/state.db"
+    [[ "$shown" == state.db ]] || store_line="  store   : $db ([store] db_path in $H/.agent-director/config.toml)"
+    local_install
+    report "$name-fresh-exit-code" "$RC" "0"
+    report "$name-fresh-store-line" "$(grep '^  store   : ' "$OUT")" "$store_line"
+    report "$name-fresh-create-read" "$(grep -cxF "  schema  : no existing $shown — fresh create on first open" "$OUT")" "1"
+    v="$(sqlite3 "$db" 'PRAGMA user_version;')"
+    report "$name-fresh-read" "$(grep '^  state\.db: ' "$OUT" | sed 's/^  state\.db: [0-7]* at //')" "$db (schema v$v)"
+    sqlite3 "$db" "PRAGMA user_version = $((v - 1));"
+    local_install
+    report "$name-upgrade-exit-code" "$RC" "0"
+    report "$name-upgrade-store-line" "$(grep '^  store   : ' "$OUT")" "$store_line"
+    report "$name-upgrade-sentinel-beside-db" \
+        "$(grep -cxF "  schema  : authorized migration v$((v - 1))→v$v (sentinel $dir/migrate-authorized)" "$OUT")" "1"
+    report "$name-upgrade-verified" "$(grep -cxF "  schema  : migration verified — $shown now at v$v" "$OUT")" "1"
+    report "$name-upgrade-user-version" "$(sqlite3 "$db" 'PRAGMA user_version;')" "$v"
+    report "$name-upgrade-sentinel-consumed" "$(compgen -G "$dir/migrate-authorized*"; compgen -G "$H/.agent-director/migrate-authorized*")" ""
+    if [[ "$db" -ef "$default" ]]; then
+        report "$name-store-is-default" "$(compgen -G "$H/.agent-director/*.db")" "$default"
+    else
+        report "$name-no-default-store" "$(compgen -G "$default*")" ""
+    fi
+}
+
+# [store] db_path moves the store out of ~/.agent-director (b.2io): written
+# with ~/, as an absolute path that is not clean (used as written, as the
+# binary does), or relative to ~/.agent-director; each installs fresh and
+# then upgrades with a migration authorized beside that store.
+new_home db-path-tilde
+with_config '[store]\ndb_path = "~/custom/agents.db"'
+db_path_upgrade db-path-tilde "$H/custom/agents.db" "$H/custom/agents.db" "$H/custom"
+new_home db-path-absolute
+with_config "[store]\ndb_path = '$H//custom/./agents.db' # moved"
+db_path_upgrade db-path-absolute "$H//custom/./agents.db" "$H//custom/./agents.db" "$H/custom"
+new_home db-path-relative
+with_config '[defaults]\nrelay_mode = "off"\n\n[store]\ndb_path = "../custom/agents.db"'
+db_path_upgrade db-path-relative "$H/custom/agents.db" "$H/custom/agents.db" "$H/custom"
+# The default store reads, and is named, as before, with no config, an empty
+# db_path or one that cleans to the default.
+for spec in "none|" 'empty|[store]\ndb_path = ""' 'unclean|[store]\ndb_path = "~/.agent-director/./state.db"'; do
+    new_home "db-path-default-${spec%%|*}"
+    [[ "${spec%%|*}" == none ]] || with_config "${spec#*|}"
+    db_path_upgrade "db-path-default-${spec%%|*}" "$H/.agent-director/state.db" state.db "$H/.agent-director"
+done
+
+# A stale default state.db beside the db_path store (b.2io): the upgrade
+# migrates the db_path store and verifies it, and leaves state.db alone.
+new_home db-path-stale-default
+with_config '[store]\ndb_path = "real.db"'
+local_install
+report db-path-stale-default-first-install-exit-code "$RC" "0"
+real="$H/.agent-director/real.db" stale="$H/.agent-director/state.db"
+v="$(sqlite3 "$real" 'PRAGMA user_version;')"
+sqlite3 "$real" "PRAGMA user_version = $((v - 1));"
+sqlite3 "$stale" "CREATE TABLE stale (x); PRAGMA user_version = $((v - 1));"
+stale_sum="$(sha256sum "$stale")"
+local_install
+report db-path-stale-default-exit-code "$RC" "0"
+report db-path-stale-default-no-false-failure "$(grep -c "FAILED" "$ERR")" "0"
+report db-path-stale-default-verified "$(grep -cxF "  schema  : migration verified — $real now at v$v" "$OUT")" "1"
+report db-path-stale-default-real-version "$(sqlite3 "$real" 'PRAGMA user_version;')" "$v"
+report db-path-stale-default-stale-untouched "$(sha256sum "$stale")" "$stale_sum"
+report db-path-stale-default-sentinel-consumed "$(compgen -G "$H/.agent-director/migrate-authorized*")" ""
+
+# snap: every path under H with its type, mode, size and mtime, and every
+# file's sha256.
+snap() {
+    (cd "$H" && find . -printf '%p %y %m %s %T@\n' | sort && find . -type f -exec sha256sum {} + | sort)
+}
+
+# db_path_refused <name> <config> <line>: install.sh (hooks on, --keep-prior)
+# under H's <config> stops in pre-flight with exit 5, naming the config file
+# and its line <line>, and leaves H and TMPDIR as they were (b.2io).
+db_path_refused() {
+    local name="$1" before
+    with_config "$2"
+    before="$(snap)"
+    HOOKS=1
+    local_install --keep-prior
+    HOOKS=""
+    report "$name-exit-code" "$RC" "5"
+    report "$name-first-stderr-line" "$(head -n 1 "$ERR")" \
+        "install.sh: cannot tell which store database agent-director opens; refusing to install."
+    report "$name-names-config" "$(grep -cxF "  config  : $H/.agent-director/config.toml" "$ERR")" "1"
+    report "$name-names-line" "$(grep -cxF "  line $3" "$ERR")" "1"
+    report "$name-no-pre-flight-ok" "$(grep -c "pre-flight OK" "$OUT")" "0"
+    report "$name-home-unchanged" "$(diff <(echo "$before") <(snap) >/dev/null && echo same)" "same"
+    report "$name-no-temp-left" "$(compgen -G "$ROOT/tmp/agent-director*")" ""
+}
+
+# A db_path install.sh cannot read stops the install before anything on disk
+# changes: on a fresh HOME, and over an installed store (b.2io).
+new_home db-path-refused-fresh
+db_path_refused db-path-refused-fresh '[store]\ndb_path = "C:\\\\agents\\\\state.db"' '2  : db_path = "C:\\agents\\state.db"'
+new_home db-path-refused-installed
+local_install
+report db-path-refused-installed-first-install-exit-code "$RC" "0"
+db_path_refused db-path-refused-installed '[defaults]\nrelay_mode = "off"\n[Store]\ndb_path = "/elsewhere/agents.db"' '3  : [Store]'
 
 echo "[b.kym install-sh retry] summary: $pass passed, $fail failed"
 
