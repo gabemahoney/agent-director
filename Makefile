@@ -231,8 +231,11 @@ list-test-docker-epics:
 # inside the harness container. Each scenario invokes install.sh under a
 # per-scenario sandbox $HOME (and umask/--keep-prior variations) and
 # asserts the canonical ~/.agent-director/bin/agent-director lands at
-# literal mode 0755 via `stat -c %a` — not just `-x`. Also pins
-# install.sh's defensive exit 3 on a 0644 source.
+# literal mode 0755 via `stat -c %a` — not just `-x` — and
+# ~/.agent-director/admin/agent-director-admin at 0755 in a 0700
+# directory. Each install that should succeed must also exit 0 with no
+# "Permission denied" on its stderr (b.7j2). Also pins install.sh's
+# defensive exit 3 on a 0644 source.
 #
 # Mounted read-only from the host so editing the script doesn't require
 # an image rebuild. The script itself depends only on the bundled

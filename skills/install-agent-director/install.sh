@@ -87,6 +87,21 @@
 
 set -euo pipefail
 
+# A umask that removes the owner's own bits (0777, 0222, 0200, ...) also
+# strips them from every file and directory this script creates without a
+# chmod. mktemp's sqlite3 error file comes out unwritable, so the redirect
+# to it fails before sqlite3 runs and every user_version read fails
+# (exit 5). The --from-release downloads fail too (curl cannot write its
+# mktemp file), and so does settings.json when ~/.claude is missing (the
+# new directory is not writable; exit 1). settings.json in an existing
+# ~/.claude and a merged config.toml are written, but come out missing the
+# same owner bits (mode 000, unreadable by their owner, under 0777). So
+# allow the owner rwx. The group and other bits stay
+# as the operator set them, and a umask that leaves the owner's bits alone
+# is unchanged. The agent-director runs below inherit it, so the files they
+# create in ~/.agent-director are usable by their owner too (b.7j2).
+umask u=rwx
+
 # --------------------------------------------------------------------
 # Defaults + flag parsing
 # --------------------------------------------------------------------

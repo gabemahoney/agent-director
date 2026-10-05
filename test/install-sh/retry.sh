@@ -40,6 +40,12 @@
 # migration. A step-3 mv that cannot move the migration sentinel into place
 # leaves no sentinel temp file behind.
 #
+# umask (b.7j2): under a umask that takes away the owner's own bits (0777,
+# 0222), a --from-release install and an upgrade that migrates still exit 0,
+# read and print state.db's schema version, print no "Permission denied", and
+# leave no temp file. A hooks-on install that creates ~/.claude gives it and
+# settings.json the owner's access, and group/other bits as the umask allows.
+#
 # The test passes an explicit tag (`v0.11.0-fake`, a release that ships
 # agent-director-admin) so install.sh skips the tag-resolve step and
 # nothing reaches the network.
@@ -66,7 +72,7 @@ REPO_ROOT="$(cd "$HERE/../.." && pwd)"
 INSTALL_SH="${REPO_ROOT}/skills/install-agent-director/install.sh"
 FAKE_CURL="${HERE}/fake-curl.sh"
 ROOT="$(mktemp -d -t ad-install-retry.XXXXXX)"
-trap 'rm -rf "$ROOT"; [[ -z "${SQLITERC_OURS:-}" ]] || rm -f "$PW_SQLITERC"' EXIT
+trap 'chmod -R u+rwX "$ROOT" 2>/dev/null; rm -rf "$ROOT"; [[ -z "${SQLITERC_OURS:-}" ]] || rm -f "$PW_SQLITERC"' EXIT
 
 die() { echo "retry.sh: setup failed: $*" >&2; exit 1; }
 
@@ -139,28 +145,33 @@ report() {
 
 # new_home <name>: a fresh HOME in H, and the files of the run named <name>:
 # ERR (its stderr), OUT (its stdout) and STATE (the download count).
-H="" RC=0 ERR="" OUT="" STATE="" PATH_PREFIX="" SQLITERC=""
+H="" RC=0 ERR="" OUT="" STATE="" PATH_PREFIX="" SQLITERC="" UMASK="" HOOKS=""
 new_home() {
     H="$(mktemp -d "$ROOT/home.XXXXXX")"
     STATE="$ROOT/$1.count" ERR="$ROOT/$1.err" OUT="$ROOT/$1.out"
 }
 
 # run_install <fail-first> <fail-match> <install.sh args...>: install.sh
-# --no-hooks <args> under H, with the first <fail-first> downloads of the
-# assets whose name matches the glob <fail-match> answering 404,
-# PATH_PREFIX (when set) first on its PATH, and SQLITERC (when set) as the
-# ~/.sqliterc its sqlite3 sees (sqliterc_on); sets RC.
+# <args> under H, with --no-hooks unless HOOKS is set, the first <fail-first>
+# downloads of the assets whose name matches the glob <fail-match> answering
+# 404, PATH_PREFIX (when set) first on its PATH, SQLITERC (when set) as the
+# ~/.sqliterc its sqlite3 sees (sqliterc_on), and UMASK (when set) as its
+# umask; sets RC. OUT and ERR are created before UMASK applies.
 run_install() {
     local fail_first="$1" fail_match="$2"; shift 2
-    env -i HOME="$H" PATH="${PATH_PREFIX:+$PATH_PREFIX:}$FAKES:$PATH" TMPDIR="$ROOT/tmp" \
-        ${SQLITERC:+"AGENT_DIRECTOR_TEST_SQLITERC=$SQLITERC"} \
-        INSTALL_SH_TEST_CURL_OVERRIDE="$FAKE_CURL" \
-        FAKE_CURL_STATE_FILE="$STATE" \
-        FAKE_CURL_FAIL_FIRST="$fail_first" \
-        FAKE_CURL_FAIL_MATCH="$fail_match" \
-        FAKE_CURL_BODY_SOURCE="$BIN" \
-        FAKE_CURL_ADMIN_BODY_SOURCE="$ADMIN" \
-        bash "$INSTALL_SH" --no-hooks "$@" >"$OUT" 2>"$ERR"
+    [[ -n "$HOOKS" ]] || set -- --no-hooks "$@"
+    (
+        [[ -z "$UMASK" ]] || umask "$UMASK"
+        env -i HOME="$H" PATH="${PATH_PREFIX:+$PATH_PREFIX:}$FAKES:$PATH" TMPDIR="$ROOT/tmp" \
+            ${SQLITERC:+"AGENT_DIRECTOR_TEST_SQLITERC=$SQLITERC"} \
+            INSTALL_SH_TEST_CURL_OVERRIDE="$FAKE_CURL" \
+            FAKE_CURL_STATE_FILE="$STATE" \
+            FAKE_CURL_FAIL_FIRST="$fail_first" \
+            FAKE_CURL_FAIL_MATCH="$fail_match" \
+            FAKE_CURL_BODY_SOURCE="$BIN" \
+            FAKE_CURL_ADMIN_BODY_SOURCE="$ADMIN" \
+            bash "$INSTALL_SH" "$@"
+    ) >"$OUT" 2>"$ERR"
     RC=$?
 }
 
@@ -385,6 +396,53 @@ for spec in '.headers on|user_version,V' '.mode json|[{"user_version":V}]'; do
     sqliterc_off
     report_upgraded "$name"
 done
+
+# report_clean_run <name>: the last run printed state.db's schema version as
+# v<schema>, no "Permission denied", and left no temp file (b.7j2).
+report_clean_run() {
+    report "$1-schema-shown" "$(grep -c "^  state.db: .* (schema v$schema)\$" "$OUT")" "1"
+    report "$1-permission-denied" "$(grep -c "Permission denied" "$ERR")" "0"
+    report "$1-no-temp-left" "$(compgen -G "$ROOT/tmp/agent-director*")" ""
+}
+
+# Under a umask that takes away the owner's own bits, a fresh --from-release
+# install and an upgrade that migrates both succeed: the downloads land, and
+# steps 2 and 5 read state.db's version (b.7j2).
+for mask in 0777 0222; do
+    older_store "umask-$mask-upgrade"
+    UMASK="$mask"
+    run_install 0 '*' --binary "$BIN" --admin-binary "$ADMIN" --no-symlink
+    UMASK=""
+    report_upgraded "umask-$mask-upgrade"
+    report "umask-$mask-upgrade-user-version" "$(sqlite3 "$db" 'PRAGMA user_version;')" "$schema"
+    report_clean_run "umask-$mask-upgrade"
+
+    new_home "umask-$mask-fresh"
+    UMASK="$mask"
+    run_install 0 '*' --from-release v0.11.0-fake --no-symlink
+    UMASK=""
+    report "umask-$mask-fresh-exit-code" "$RC" "0"
+    report_installed "umask-$mask-fresh"
+    report_clean_run "umask-$mask-fresh"
+done
+
+# A hooks-on install with no ~/.claude creates it and settings.json with the
+# owner's access under any umask, and group/other bits as the operator's umask
+# allows: <umask>:<~/.claude mode>/<settings.json mode> (b.7j2). Only the
+# permission bits count: ~/.claude inherits a setgid bit from a setgid TMPDIR.
+HOOKS=1
+for spec in 0777:700/600 077:700/600 0227:750/640; do
+    mask="${spec%%:*}"
+    new_home "umask-$mask-hooks"
+    UMASK="$mask"
+    run_install 0 '*' --binary "$BIN" --admin-binary "$ADMIN" --no-symlink
+    UMASK=""
+    report "umask-$mask-hooks-exit-code" "$RC" "0"
+    report "umask-$mask-hooks-claude-modes" \
+        "$(stat -c %a "$H/.claude" "$H/.claude/settings.json" 2>/dev/null | sed 's/^.*\(...\)$/\1/' | paste -sd/)" \
+        "${spec#*:}"
+done
+HOOKS=""
 
 # An upgrade whose step-3 mv cannot move the migration sentinel into place
 # stops there, and leaves no sentinel temp file behind (b.hk7).

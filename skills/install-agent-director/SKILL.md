@@ -561,6 +561,15 @@ This skill runs `install.sh` from the same directory. The script:
    (`admin   : ~/.agent-director/admin/agent-director-admin (operator
    tool, not on PATH; ...)`), for the human.
 
+**Your umask (b.7j2).** install.sh runs `umask u=rwx` before anything
+else, so your umask never takes away the owner's own permission bits
+on what the install creates. That covers files the install's own
+`agent-director` runs create in `~/.agent-director/`, since they
+inherit the umask. The group and other bits stay as your umask sets
+them, so an ordinary umask (022, 077, 027, 002) is unchanged. The
+modes above are set with explicit `chmod`s and do not depend on the
+umask.
+
 ## What this skill does NOT do
 
 - It does NOT modify any per-Spawn hooks. Those are injected inline

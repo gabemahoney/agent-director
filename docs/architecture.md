@@ -4230,7 +4230,8 @@ runs the skill body Pattern A copied), or directly via
 
 ```
 claude /install-agent-director (or `bash install.sh`)
-  → flag checks, before anything else: --sha256 and --admin-sha256 go
+  → umask u=rwx, first of all (see "The operator's umask" below)
+  → flag checks, before any other check: --sha256 and --admin-sha256 go
     together (exactly one → exit 2)
   → install.sh preflight gates (whitespace-free install path, OS/CPU,
     required tools on PATH incl. sqlite3)
@@ -4305,6 +4306,20 @@ cannot be paired with it.
   without the CDN retry, because such a release has no admin asset
   ("release <tag> has no agent-director-admin binary"; the advice is a
   release of 0.11.0 or later).
+
+**The operator's umask (b.7j2).** install.sh runs `umask u=rwx` right
+after `set -euo pipefail`. That clears the owner's bits from the umask
+and keeps its group and other bits, so the umask never takes away the
+owner's own permission bits on a file or directory install.sh creates,
+or that an `agent-director` it runs creates in `~/.agent-director/`
+(each run inherits the umask). A umask like 0777 therefore cannot make
+mktemp's sqlite3 error file or the `--from-release` downloads
+unwritable. The group and other bits follow the operator's umask, and
+an ordinary umask (022, 077, 027, 002) is unchanged. The umask
+guarantees only the owner's access; the exact modes install.sh gives
+(the two binaries, `~/.agent-director/`, `admin/`, `state.db`, the
+sentinel; see [On-disk shape](#on-disk-shape)) come from explicit
+`chmod`s.
 
 #### Schema migration at install-time
 
