@@ -1370,12 +1370,15 @@ test_J12_OneHashPassNeither() {
 # ---- J13: config file refused (b.7b4) ---------------------------------------------
 
 # J13: "Fix what the error above names in the config file, then re-run this
-# install. A missing key gives that key's default; for a refused value, so does
-# 0." A fresh, older or current store: the refusal speaks only of the config and
-# authorizes nothing; fixing what the envelope names at the printed path and
-# re-running installs, migrating an older store.
+# install." The envelope is the only per-key advice ("A missing key, or 0, gives
+# the default." for a refused value), which the remove and zero fixes follow;
+# install.sh's own blanket "A missing key gives that key's default; for a
+# refused value, so does 0." contradicted it and is gone (b.xbh). A fresh, older or
+# current store: the refusal speaks only of the config and authorizes nothing;
+# fixing what the envelope names at the printed path and re-running installs,
+# migrating an older store.
 test_J13_ConfigRefusedFixAndRerun() {
-    local spec store config named fix before path key
+    local spec store config named fix before path key gone
     local want="install.sh: agent-director refused its config file (ErrConfigMalformed)"
     local none="  schema  : state.db at v$SCHEMA; no migration authorization needed"
     for spec in \
@@ -1395,7 +1398,12 @@ test_J13_ConfigRefusedFixAndRerun() {
         [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "$store, \"$named\": first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
         grep -qF '  {"err_name":"ErrConfigMalformed",' "$ERR" || bad "$store, \"$named\": no ErrConfigMalformed envelope: $(flat "$ERR")"
         expect_advice "$named"
-        expect_advice "Fix what the error above names in the config file, then re-run this install. A missing key gives that key's default; for a refused value, so does 0."
+        expect_advice "Fix what the error above names in the config file, then re-run this install."
+        # The remove and zero fixes follow the envelope's own per-key sentence.
+        [[ "$fix" == syntax ]] || expect_advice "A missing key, or 0, gives the default."
+        for gone in "A missing key gives that key's default" "so does 0"; do
+            [[ "$(flat "$ERR")" != *"$gone"* ]] || bad "$store, \"$named\": install.sh's removed advice \"$gone\" is back: $(flat "$ERR")"
+        done
         if grep -qiE 'state\.db|migrat|ErrSchemaMismatch' "$ERR"; then
             bad "$store, \"$named\": the config refusal speaks of the store: $(flat "$ERR")"
         fi

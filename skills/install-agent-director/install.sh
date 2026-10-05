@@ -1050,8 +1050,7 @@ ad_fail_config_refused() {
     echo "  config  : ${DEFAULT_INSTALL_ROOT}/config.toml" >&2
     printf '%s\n' "$1" | sed 's/^/  /' >&2
     echo "  Fix what the error above names in the config file, then re-run this" >&2
-    echo "  install. A missing key gives that key's default; for a refused value," >&2
-    echo "  so does 0." >&2
+    echo "  install." >&2
     exit 5
 }
 

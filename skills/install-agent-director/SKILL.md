@@ -848,8 +848,7 @@ It reports:
       config  : /home/<you>/.agent-director/config.toml
       {"err_name":"ErrConfigMalformed","err_description":"config <path>: refused [defaults] values: ..."}
       Fix what the error above names in the config file, then re-run this
-      install. A missing key gives that key's default; for a refused value,
-      so does 0.
+      install.
 
 Nothing was done to state.db: no sentinel was written, no migration
 ran, and a fresh install created no state.db. The new binaries are
