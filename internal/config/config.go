@@ -16,7 +16,10 @@
 // [defaults] expire_retention_days, expire's default window in whole days,
 // follows the same rule (b.sgw): a missing key or 0 gives
 // DefaultExpireRetentionDays, and Load refuses a negative value and one above
-// MaxExpireRetentionDays the same way.
+// MaxExpireRetentionDays the same way. So do [relay] timeout_seconds and
+// [pause] timeout_seconds (b.8q2), with DefaultRelayTimeoutSeconds and
+// MaxRelayTimeoutSeconds, and DefaultPauseTimeoutSeconds and
+// MaxPauseTimeoutSeconds.
 package config
 
 import (
@@ -100,26 +103,43 @@ func (d Defaults) refusals() []string {
 
 // DefaultRelayTimeoutSeconds is the canonical relay window (24h). It is
 // the value Default() seeds into Relay.TimeoutSeconds AND the fallback
-// EffectiveTimeoutSeconds returns for a non-positive configured value, so
+// EffectiveTimeoutSeconds returns for a missing or 0 configured value, so
 // the two never drift.
 const DefaultRelayTimeoutSeconds = 86400
 
+// MaxRelayTimeoutSeconds is the largest relay.timeout_seconds Load accepts
+// (2147483): the largest per-hook `timeout` Claude Code honours. Claude Code
+// arms a hook's timeout as a JavaScript setTimeout of timeout × 1000 ms, and
+// the runtime replaces a delay above 2^31-1 ms (math.MaxInt32) with 1 ms, so a
+// larger value would have Claude Code cancel the relay hooks about 1 ms after
+// they start (b.8q2). The same value is the hook's poll deadline, decide's
+// window and the send-keys guard window; at this size none of the window, the
+// window plus or minus api.RelayKillSafetyMargin, or now plus the window can
+// overflow a time.Duration or time.Time.
+const MaxRelayTimeoutSeconds = math.MaxInt32 / 1000
+
 // Relay holds polling and timeout knobs for the relay loop.
 type Relay struct {
-	PollBaseMs           int `toml:"poll_base_ms"`
-	PollJitterMs         int `toml:"poll_jitter_ms"`
+	PollBaseMs   int `toml:"poll_base_ms"`
+	PollJitterMs int `toml:"poll_jitter_ms"`
+	// TimeoutSeconds is the relay window, in whole seconds: the file's value
+	// when the key is set (0 included), otherwise DefaultRelayTimeoutSeconds.
+	// Read it only through EffectiveTimeoutSeconds, which gives the default
+	// for 0. Load refuses a negative value and one above
+	// MaxRelayTimeoutSeconds (b.8q2).
 	TimeoutSeconds       int `toml:"timeout_seconds"`
 	PermissionRequestCap int `toml:"permission_request_cap"`
 }
 
-// EffectiveTimeoutSeconds returns the relay window that both the hook poll
-// loop's deadline and the synthesized per-hook `timeout` must use: the
-// configured TimeoutSeconds when positive, and DefaultRelayTimeoutSeconds
-// (86400) otherwise. It is the single source of truth for the "non-positive
-// falls back to the default" rule so the poll deadline and Claude Code's
-// per-hook kill boundary can never disagree (SR-1.3). A misconfigured
-// `timeout_seconds` of 0 or negative therefore yields 86400 everywhere,
-// never a zero/omitted window. See b.p48 for the original guard.
+// EffectiveTimeoutSeconds returns the relay window that the hook poll loop's
+// deadline, decide's window, the send-keys guard window and the synthesized
+// per-hook `timeout` must all use: the configured TimeoutSeconds when
+// positive, and DefaultRelayTimeoutSeconds (86400) otherwise. It is the single
+// source of truth for the window so those boundaries can never disagree
+// (SR-1.3), and it never returns a zero or negative window (b.p48). It
+// performs no maximum check; Load refuses a negative value and one above
+// MaxRelayTimeoutSeconds (b.8q2), so a loaded config's window is always
+// between 1 and MaxRelayTimeoutSeconds.
 func (r Relay) EffectiveTimeoutSeconds() int {
 	if r.TimeoutSeconds > 0 {
 		return r.TimeoutSeconds
@@ -127,9 +147,65 @@ func (r Relay) EffectiveTimeoutSeconds() int {
 	return DefaultRelayTimeoutSeconds
 }
 
+// refusals returns the description of each refused [relay] value, in table
+// order, or nil when every value loads. Only timeout_seconds is checked: a
+// negative value and one above MaxRelayTimeoutSeconds are refused, never
+// replaced by the default or capped; 0 gives the default (b.8q2).
+func (r Relay) refusals() []string {
+	if v := r.TimeoutSeconds; v < 0 || v > MaxRelayTimeoutSeconds {
+		return []string{fmt.Sprintf("[relay] timeout_seconds = %d, outside its range 1 to %d seconds",
+			v, MaxRelayTimeoutSeconds)}
+	}
+	return nil
+}
+
+// DefaultPauseTimeoutSeconds is the default pause wait, in whole seconds
+// (30). It is the value Default() seeds into Pause.TimeoutSeconds AND the
+// fallback Pause.EffectiveTimeoutSeconds returns for a missing or 0
+// configured value, so the two never drift.
+const DefaultPauseTimeoutSeconds = 30
+
+// MaxPauseTimeoutSeconds is the largest whole number of seconds a
+// time.Duration holds (9223372036): the upper limit of pause.timeout_seconds,
+// which Load refuses above it (b.8q2). A larger count would wrap pause's
+// wait, at worst to zero or below, which reports ErrPauseTimeout at once. It
+// is an int64, not an int: the value does not fit a 32-bit int, and the
+// package must build where int is 32 bits (GOARCH=386), where no int is above
+// it.
+const MaxPauseTimeoutSeconds = math.MaxInt64 / int64(time.Second)
+
 // Pause holds the pause-verb timeout.
 type Pause struct {
+	// TimeoutSeconds is pause's wait for the row to reach ended, in whole
+	// seconds: the file's value when the key is set (0 included), otherwise
+	// DefaultPauseTimeoutSeconds. Read it only through
+	// EffectiveTimeoutSeconds, which gives the default for 0. Load refuses a
+	// negative value and one above MaxPauseTimeoutSeconds (b.8q2).
 	TimeoutSeconds int `toml:"timeout_seconds"`
+}
+
+// EffectiveTimeoutSeconds returns pause's wait in whole seconds
+// (pause.timeout_seconds): the configured value when positive, otherwise
+// DefaultPauseTimeoutSeconds (30). It never returns 0 or a negative count, so
+// a configured pause never times out before its first wait. It performs no
+// maximum check; Load refuses a value above MaxPauseTimeoutSeconds.
+func (p Pause) EffectiveTimeoutSeconds() int {
+	if p.TimeoutSeconds > 0 {
+		return p.TimeoutSeconds
+	}
+	return DefaultPauseTimeoutSeconds
+}
+
+// refusals returns the description of each refused [pause] value, in table
+// order, or nil when every value loads. Only timeout_seconds is checked: a
+// negative value and one above MaxPauseTimeoutSeconds are refused, never
+// replaced by the default or capped; 0 gives the default (b.8q2).
+func (p Pause) refusals() []string {
+	if v := p.TimeoutSeconds; v < 0 || int64(v) > MaxPauseTimeoutSeconds {
+		return []string{fmt.Sprintf("[pause] timeout_seconds = %d, outside its range 1 to %d seconds",
+			v, MaxPauseTimeoutSeconds)}
+	}
+	return nil
 }
 
 // Store holds storage backend paths.
@@ -158,7 +234,7 @@ func Default() Config {
 			PermissionRequestCap: 1000,
 		},
 		Pause: Pause{
-			TimeoutSeconds: 30,
+			TimeoutSeconds: DefaultPauseTimeoutSeconds,
 		},
 		Store: Store{
 			DbPath: "~/.agent-director/state.db",
@@ -207,11 +283,14 @@ func (e *ConfigError) Unwrap() error {
 // minimum (for the pending grace period, the default too when its key is
 // missing or 0 and the default is below the derived minimum), are refused,
 // never raised to the minimum or replaced by the default. It validates
-// [defaults] expire_retention_days the same way (b.sgw): a negative value
-// and one above MaxExpireRetentionDays are refused, never replaced by the
-// default or capped. A refusal behaves exactly like a malformed file: Load
-// returns a *ConfigError for the file whose Err describes every refused key
-// (validate). A value that is not a TOML integer already fails the parse.
+// [defaults] expire_retention_days the same way (b.sgw), and [relay]
+// timeout_seconds and [pause] timeout_seconds too (b.8q2): a negative value
+// and one above the key's maximum (MaxExpireRetentionDays,
+// MaxRelayTimeoutSeconds, MaxPauseTimeoutSeconds) are refused, never
+// replaced by the default or capped. A refusal behaves exactly like a
+// malformed file: Load returns a *ConfigError for the file whose Err
+// describes every refused key (validate). A value that is not a TOML integer
+// already fails the parse.
 // The Config returned alongside any *ConfigError exists only to mirror the
 // parse-failure contract pinned by TestLoadMalformedReturnsTypedError; no
 // caller may run with it.
@@ -250,15 +329,25 @@ func Load(path string) (Config, error) {
 // validate applies Load's refusal rules to cfg, decoded from a file whose
 // metadata meta says which keys it sets. It returns nil when every value
 // loads, otherwise an error whose text names the tables with a refused value
-// ("refused [defaults] values: ", "refused [tmux] values: ", or "refused
-// [defaults] and [tmux] values: " when both have one), then every refused
-// key's description, [defaults] before [tmux] and each table in its own
-// order, then missingKeyAdvice. A file refused only for [tmux] values gets
-// the SR-4.1 description unchanged. Values are never changed.
+// as a list (tableList: "refused [tmux] values: ", "refused [defaults] and
+// [tmux] values: ", "refused [defaults], [relay] and [tmux] values: "), then
+// every refused key's description, tables in the order [defaults], [relay],
+// [pause], [tmux] and each table in its own order, then missingKeyAdvice. A
+// file refused only for [tmux] values gets the SR-4.1 description unchanged.
+// Values are never changed.
 func validate(cfg Config, meta toml.MetaData) error {
 	var tables, refused, defaultRefused []string
-	if r := cfg.Defaults.refusals(); len(r) > 0 {
-		tables, refused = append(tables, "[defaults]"), append(refused, r...)
+	for _, t := range []struct {
+		name     string
+		refusals []string
+	}{
+		{"[defaults]", cfg.Defaults.refusals()},
+		{"[relay]", cfg.Relay.refusals()},
+		{"[pause]", cfg.Pause.refusals()},
+	} {
+		if len(t.refusals) > 0 {
+			tables, refused = append(tables, t.name), append(refused, t.refusals...)
+		}
 	}
 	if r := tmuxRefusals(cfg.Tmux, meta); len(r) > 0 {
 		tables = append(tables, "[tmux]")
@@ -272,8 +361,18 @@ func validate(cfg Config, meta toml.MetaData) error {
 	if len(refused) == 0 {
 		return nil
 	}
-	return errors.New("refused " + strings.Join(tables, " and ") + " values: " + strings.Join(refused, "; ") + "." +
+	return errors.New("refused " + tableList(tables) + " values: " + strings.Join(refused, "; ") + "." +
 		missingKeyAdvice(len(refused), defaultRefused))
+}
+
+// tableList joins the refused tables' names as a list: one name alone, two
+// joined by " and ", more separated by ", " with " and " before the last
+// ("[defaults], [relay] and [tmux]").
+func tableList(tables []string) string {
+	if len(tables) <= 2 {
+		return strings.Join(tables, " and ")
+	}
+	return strings.Join(tables[:len(tables)-1], ", ") + " and " + tables[len(tables)-1]
 }
 
 // missingKeyAdvice is the refusal's closing sentence, with its leading space.

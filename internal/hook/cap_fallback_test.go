@@ -19,11 +19,9 @@ import (
 
 // TestRelayConfigNegativeCapUsesDefault pins SR-11.2's negative-cap fallback and
 // Epic AC #10. A PermissionRequestCap < 0 in config.Relay silently falls back to
-// the default of 1000 at the runRelay call site (internal/hook/permission.go:108-116).
-//
-// This mirrors the TimeoutSeconds <= 0 guard at internal/hook/polling.go:89-94
-// (introduced for b.p48): both are silent fallbacks to the production-safe default
-// when the configured value is out of the valid positive range.
+// the default of 1000 at the runRelay call site (internal/hook/permission.go).
+// Unlike timeout_seconds, which config.Load refuses when negative (b.8q2), the
+// cap is not validated at load.
 func TestRelayConfigNegativeCapUsesDefault(t *testing.T) {
 	for _, negativeCap := range []int{-1, -1000} {
 		negativeCap := negativeCap
@@ -53,7 +51,6 @@ func TestRelayConfigNegativeCapUsesDefault(t *testing.T) {
 				PollBaseMs:     0,
 				PollJitterMs:   0,
 				// The runRelay call site applies: cap < 0 → fallback to 1000.
-				// Mirror of internal/hook/polling.go:89-94 TimeoutSeconds <= 0 guard.
 				PermissionRequestCap: negativeCap,
 			}
 

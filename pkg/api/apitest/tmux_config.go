@@ -71,13 +71,43 @@ func WriteTmuxConfig(t testing.TB, path string, settings ...TmuxSetting) {
 // WriteRetentionConfig is WriteTmuxConfig with [defaults]
 // expire_retention_days set to the TOML integer days as well (b.sgw), for
 // the accepted and the refused (negative, above config.MaxExpireRetentionDays)
-// values alike. It is the only way pkg/api, CLI and MCP tests write that key.
+// values alike. Unlike WriteKeysConfig, which leaves a 0 field's key out, it
+// writes an explicit 0 too.
 func WriteRetentionConfig(t testing.TB, path string, days int64, settings ...TmuxSetting) {
 	t.Helper()
 	writeConfig(t, path, map[string]any{
 		"defaults": map[string]any{"expire_retention_days": days},
 		"tmux":     tmuxTable(settings),
 	})
+}
+
+// ConfigKeys are the keys outside [tmux] with a range that WriteKeysConfig
+// sets: [defaults] expire_retention_days (b.sgw), [relay] timeout_seconds and
+// [pause] timeout_seconds (b.8q2). A 0 field leaves its key out, which loads
+// as a written 0 does: the key's default.
+type ConfigKeys struct {
+	RetentionDays, RelayTimeoutSeconds, PauseTimeoutSeconds int64
+}
+
+// WriteKeysConfig is WriteTmuxConfig with keys' non-zero fields set as well,
+// to TOML integers, for the accepted and the refused values alike. It is the
+// way CLI tests combine those keys with [tmux] settings in one file.
+func WriteKeysConfig(t testing.TB, path string, keys ConfigKeys, settings ...TmuxSetting) {
+	t.Helper()
+	tables := map[string]any{"tmux": tmuxTable(settings)}
+	for _, k := range []struct {
+		table, key string
+		value      int64
+	}{
+		{"defaults", "expire_retention_days", keys.RetentionDays},
+		{"relay", "timeout_seconds", keys.RelayTimeoutSeconds},
+		{"pause", "timeout_seconds", keys.PauseTimeoutSeconds},
+	} {
+		if k.value != 0 {
+			tables[k.table] = map[string]any{k.key: k.value}
+		}
+	}
+	writeConfig(t, path, tables)
 }
 
 // tmuxTable is the [tmux] table holding settings, a later setting of a key

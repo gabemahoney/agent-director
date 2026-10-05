@@ -238,8 +238,8 @@ func TestDefault_RelayTimeoutAtLeastOneDay(t *testing.T) {
 
 // TestRelayEffectiveTimeoutSeconds verifies the single source of truth the
 // poll loop and synthesized hook timeout both consume: a positive configured
-// value passes through; a non-positive value (0 or negative) falls back to
-// DefaultRelayTimeoutSeconds (86400), never 0.
+// value passes through; 0 gives DefaultRelayTimeoutSeconds (86400), never 0.
+// Load refuses a negative value (b.8q2); a Go caller's gets the default too.
 func TestRelayEffectiveTimeoutSeconds(t *testing.T) {
 	cases := []struct {
 		name       string

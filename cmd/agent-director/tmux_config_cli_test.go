@@ -26,21 +26,22 @@ const surfaceDeadline = 10 * time.Second
 const mcpInitialize = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05",` +
 	`"capabilities":{},"clientInfo":{"name":"tmux-config-test","version":"0"}}}` + "\n"
 
-// configRefusal is one refused config: the [tmux] settings and [defaults]
-// expire_retention_days (days, written when non-zero; b.sgw) written, the
+// configRefusal is one refused config: the [tmux] settings and the keys
+// outside [tmux] (keys: [defaults] expire_retention_days, b.sgw; [relay] and
+// [pause] timeout_seconds, b.8q2; each written when non-zero) written, the
 // values its err_description must state as refused (nil: malformed type, only
 // err_name and path are asserted) and the [tmux] settings that fix the file
-// (the retention key dropped).
+// (the keys outside [tmux] dropped).
 type configRefusal struct {
 	name    string
-	days    int64
+	keys    apitest.ConfigKeys
 	bad     []apitest.TmuxSetting
 	refused []apitest.ConfigRefusal
 	fix     []apitest.TmuxSetting
 }
 
-// configRefusals is the one table of refused [tmux] and [defaults] values
-// driving every surface check.
+// configRefusals is the one table of refused [tmux], [defaults], [relay] and
+// [pause] values driving every surface check.
 func configRefusals() []configRefusal {
 	window, bound, grace := config.TmuxStoppingWindowSeconds, config.TmuxStartingSessionSeconds, config.TmuxPendingGraceSeconds
 	create, kill := config.TmuxCreateTimeoutMs, config.TmuxKillExitWaitMs
@@ -90,8 +91,23 @@ func configRefusals() []configRefusal {
 		},
 		{
 			name:    "retention_days_negative",
-			days:    -1,
+			keys:    apitest.ConfigKeys{RetentionDays: -1},
 			refused: []apitest.ConfigRefusal{{Retention: true, Value: -1}},
+		},
+		{
+			// One second past the largest per-hook timeout Claude Code honours (b.8q2).
+			name:    "relay_timeout_above_largest",
+			keys:    apitest.ConfigKeys{RelayTimeoutSeconds: config.MaxRelayTimeoutSeconds + 1},
+			refused: []apitest.ConfigRefusal{{RelayTimeout: true, Value: config.MaxRelayTimeoutSeconds + 1}},
+		},
+		{
+			name: "every_table_refused",
+			keys: apitest.ConfigKeys{RetentionDays: -1, RelayTimeoutSeconds: -1,
+				PauseTimeoutSeconds: int64(config.MaxPauseTimeoutSeconds) + 1},
+			bad: []apitest.TmuxSetting{apitest.TmuxInt(kill, -1)},
+			refused: []apitest.ConfigRefusal{{Retention: true, Value: -1}, {RelayTimeout: true, Value: -1},
+				{PauseTimeout: true, Value: int64(config.MaxPauseTimeoutSeconds) + 1}, {Key: kill, Value: -1}},
+			fix: []apitest.TmuxSetting{apitest.TmuxInt(kill, 0)},
 		},
 		{
 			name: "float_starting_session_bound",
@@ -123,11 +139,7 @@ func newRefusedHome(t *testing.T, rc configRefusal) refusedHome {
 		t.Fatalf("SeedSpawn: %v", err)
 	}
 	h := refusedHome{home: home, cfgPath: filepath.Join(directorDir(home), "config.toml"), instanceID: id}
-	if rc.days != 0 {
-		apitest.WriteRetentionConfig(t, h.cfgPath, rc.days, rc.bad...)
-	} else {
-		apitest.WriteTmuxConfig(t, h.cfgPath, rc.bad...)
-	}
+	apitest.WriteKeysConfig(t, h.cfgPath, rc.keys, rc.bad...)
 	return h
 }
 
@@ -235,9 +247,10 @@ func assertRowUntouched(t *testing.T, h refusedHome) {
 	}
 }
 
-// TestConfigRefusalStopsEverySurface drives each refused config, [tmux] values
-// and [defaults] expire_retention_days (b.sgw), through every surface (SR-4.1;
-// AC-CFG-03/04, loading half of AC-RES-05).
+// TestConfigRefusalStopsEverySurface drives each refused config, [tmux] values,
+// [defaults] expire_retention_days (b.sgw) and [relay] and [pause]
+// timeout_seconds (b.8q2), through every surface (SR-4.1; AC-CFG-03/04,
+// loading half of AC-RES-05).
 func TestConfigRefusalStopsEverySurface(t *testing.T) {
 	surfaces := []struct {
 		name string

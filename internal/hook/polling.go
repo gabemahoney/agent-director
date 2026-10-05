@@ -102,7 +102,9 @@ func Poll(ctx context.Context, s PollStore, clock PollClock, cfg config.Relay, i
 	// EffectiveTimeoutSeconds is the single source of truth for the relay
 	// window: it applies the "non-positive falls back to the 86400 default"
 	// rule (see b.p48) so the poll deadline and the per-hook `timeout`
-	// emitted into synthesized settings can never disagree (SR-1.3).
+	// emitted into synthesized settings can never disagree (SR-1.3). A
+	// loaded config's window is at most config.MaxRelayTimeoutSeconds
+	// (b.8q2), so neither the conversion nor the deadline overflows.
 	timeout := time.Duration(cfg.EffectiveTimeoutSeconds()) * time.Second
 	deadline := nowFunc().Add(timeout)
 

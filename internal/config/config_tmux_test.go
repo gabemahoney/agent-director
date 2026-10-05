@@ -73,9 +73,26 @@ func tmuxConfigFile(t *testing.T, settings ...tmuxSetting) string {
 // days is ""), then a [tmux] table holding settings.
 func configFile(t *testing.T, days string, settings ...tmuxSetting) string {
 	t.Helper()
+	return keysFile(t, rangeKeys{days: days}, settings...)
+}
+
+// rangeKeys are the TOML integers a config file sets for the keys outside
+// [tmux] with a range: [defaults] expire_retention_days (b.sgw), [relay]
+// timeout_seconds and [pause] timeout_seconds (b.8q2). "" leaves the table out.
+type rangeKeys struct{ days, relay, pause string }
+
+// keysFile writes a config file setting k's keys, then a [tmux] table holding settings.
+func keysFile(t *testing.T, k rangeKeys, settings ...tmuxSetting) string {
+	t.Helper()
 	var b strings.Builder
-	if days != "" {
-		fmt.Fprintf(&b, "[defaults]\nexpire_retention_days = %s\n", days)
+	for _, kv := range []struct{ table, key, value string }{
+		{"defaults", "expire_retention_days", k.days},
+		{"relay", "timeout_seconds", k.relay},
+		{"pause", "timeout_seconds", k.pause},
+	} {
+		if kv.value != "" {
+			fmt.Fprintf(&b, "[%s]\n%s = %s\n", kv.table, kv.key, kv.value)
+		}
 	}
 	b.WriteString("[tmux]\n")
 	for _, s := range settings {

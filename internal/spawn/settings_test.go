@@ -2,6 +2,7 @@ package spawn
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -396,8 +397,10 @@ func innerCommand(t *testing.T, top map[string]any, evt string) map[string]any {
 // object of both relay hook entries (PermissionRequest, PreToolUse) carries
 // a "timeout" equal to cfg.Relay.EffectiveTimeoutSeconds() — the same value
 // the poll loop's deadline uses. Default is 86400; a positive override flows
-// through verbatim; a non-positive config falls back to 86400 (never 0,
-// never an omitted key). In every case SessionStart's timeout stays at
+// through verbatim, up to the largest value Load accepts, whose milliseconds
+// still fit Claude Code's 32-bit hook timer (b.8q2); 0 gives 86400 (never 0,
+// never an omitted key), and so does a Go caller's negative value, which Load
+// refuses. In every case SessionStart's timeout stays at
 // sessionStartHookTimeoutSeconds: it does not move with relay settings.
 func TestSynthesizeSettingsRelayTimeout(t *testing.T) {
 	cases := []struct {
@@ -407,6 +410,7 @@ func TestSynthesizeSettingsRelayTimeout(t *testing.T) {
 	}{
 		{"default", config.DefaultRelayTimeoutSeconds, 86400},
 		{"override", 3600, 3600},
+		{"largest", config.MaxRelayTimeoutSeconds, 2147483},
 		{"zero_falls_back", 0, 86400},
 		{"negative_falls_back", -5, 86400},
 	}
@@ -424,6 +428,9 @@ func TestSynthesizeSettingsRelayTimeout(t *testing.T) {
 				// json.Unmarshal into any yields float64 for numbers.
 				if got != tc.want {
 					t.Errorf("%s: timeout = %v; want %v", evt, got, tc.want)
+				}
+				if secs, _ := got.(float64); secs*1000 > math.MaxInt32 {
+					t.Errorf("%s: timeout = %v s; its milliseconds overflow Claude Code's 32-bit hook timer", evt, got)
 				}
 			}
 			ss := innerCommand(t, top, "SessionStart")

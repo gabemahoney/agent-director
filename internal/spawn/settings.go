@@ -90,8 +90,10 @@ const sessionStartHookTimeoutSeconds = 600
 // the effective relay window via cfg.Relay.EffectiveTimeoutSeconds() — the
 // same single source of truth the poll loop's deadline uses — so Claude
 // Code's per-hook kill boundary and the poll loop's fail-closed deny move in
-// lockstep (SR-1.2 / SR-1.3). A non-positive `relay.timeout_seconds` still
-// emits 86400 (never 0 or an omitted key). The SessionStart agent-director
+// lockstep (SR-1.2 / SR-1.3). A missing or 0 `relay.timeout_seconds` emits
+// 86400 (never 0 or an omitted key); config.Load refuses a negative value and
+// one above config.MaxRelayTimeoutSeconds, the largest per-hook `timeout`
+// Claude Code honours (b.8q2). The SessionStart agent-director
 // hook entry carries sessionStartHookTimeoutSeconds (600), which does not
 // move with the relay settings: it keeps Claude Code's kill boundary above
 // the internal/hook SessionStart wait cap (SR-22.9). The other five events

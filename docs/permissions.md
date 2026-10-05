@@ -197,6 +197,21 @@ tighter bound can override it in `~/.agent-director/config.toml`:
 timeout_seconds = 3600   # example: 1-hour window
 ```
 
+**Range.** The value is whole seconds from 1 to 2147483 (about 24.8 days).
+A missing key, or 0, gives the default. A negative value or one above
+2147483 is refused when the config loads, never replaced by the default
+or capped: every store-backed verb fails with `ErrConfigMalformed` naming
+the key, its value and its range, `serve` does not start, and the hook
+denies every relayed PermissionRequest (the `Config load failure` row
+above) until the file is fixed. The maximum is the largest per-hook
+`timeout` Claude Code honours: Claude Code arms a hook's timeout as a
+JavaScript timer of `timeout` × 1000 ms, and the runtime replaces a delay
+above 2^31−1 ms with 1 ms, so a larger value would have Claude Code cancel
+the relay hook about 1 ms after it starts. A window of 1 s loads, but
+`decide` refuses from 1 s before the window ends (see "Deliver-or-refuse
+contract" below), so under it every `decide` on an open request returns
+`ErrRelayFallenBack`.
+
 **How the window is enforced.** The window is real because agent-director
 emits it into the per-Spawn synthesized settings. Each PermissionRequest and
 PreToolUse hook entry carries an explicit per-hook `timeout` field — placed on
@@ -208,8 +223,13 @@ equal to the window agent-director polls against.
 
 **Override moves both boundaries in lockstep.** `relay.timeout_seconds` is a
 single value read through one accessor, so overriding it changes the poll
-loop's deadline and Claude Code's per-hook kill boundary together — they can
-never disagree. Because the two boundaries are identical, the poll loop's
+loop's deadline and Claude Code's per-hook kill boundary together, and with
+them `decide`'s window and the send-keys guard's — they can never disagree.
+That holds because the config load bounds the value: inside the range,
+Claude Code applies the per-hook `timeout` as written, and neither the
+window, the window plus or minus the 1 s safety margin, nor the poll
+deadline overflows, so no boundary silently becomes a different window.
+Because the two boundaries are identical, the poll loop's
 fail-closed timeout deny (the `Polling timeout` row above) is the intended
 in-band terminator: when the
 window elapses the hook writes a deny envelope and exits on its own, rather

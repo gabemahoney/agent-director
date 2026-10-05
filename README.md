@@ -330,11 +330,11 @@ disable_askuserquestion = false
 [relay]
 poll_base_ms = 100
 poll_jitter_ms = 100
-timeout_seconds = 86400
+timeout_seconds = 86400   # 1 to 2147483; 0 = use default (86400)
 permission_request_cap = 1000   # 0 = unbounded; negative = use default (1000)
 
 [pause]
-timeout_seconds = 30
+timeout_seconds = 30   # 1 to 9223372036; 0 = use default (30)
 
 [store]
 db_path = "~/.agent-director/state.db"
@@ -366,6 +366,14 @@ value or one above 106751 is refused, never replaced by the default or
 capped, with the same effect as a refused timing setting (see
 **Validation** under [Timing settings](#timing-settings-tmux)).
 
+`[relay] timeout_seconds` is how long a relayed permission request waits
+for `decide` before it is denied: whole seconds from 1 to 2147483 (about
+24.8 days, the longest hook timeout Claude Code honours). `[pause]
+timeout_seconds` is how long `pause` waits for the agent to exit: whole
+seconds from 1 to 9223372036. For each, a missing key, or 0, gives the
+default, and a negative value or one above its range is refused the same
+way as `expire_retention_days`.
+
 Env vars passed at spawn time (via `--extra-env`) are stored in
 `state.db` so `resume` can restore them. The file is owner-only (`0600`
 in a `0700` directory).
@@ -391,8 +399,8 @@ can be changed, but never below its safe minimum.
   value, a positive value below the key's safe minimum, or a value that
   is not an integer is refused — never raised to the minimum or replaced
   by the default. Until the file is fixed, every store-backed verb fails
-  with `ErrConfigMalformed` naming each refused key, its value and its
-  minimum; `serve` does not start; hooks record nothing and relayed
+  with `ErrConfigMalformed` naming each refused key, its value and the
+  values it allows; `serve` does not start; hooks record nothing and relayed
   permission requests are denied. `help` and `version` still run. A
   misspelt key is ignored, so its default stays in force.
 - **Grace period.** Separate from the bound and the stopping window. It

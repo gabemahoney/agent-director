@@ -3,9 +3,9 @@ package api_test
 // pause_fixture_test.go extends the kill and pane-verb fixtures for pause
 // (SR-20.2, SR-20.3): its invocations, its call sequences (the line cleared
 // before /exit, b.9o4), the wait's poll seam, the /exit assertions, the
-// SessionEnd that ends the row after Enter, the failing state read and
-// pause's disagree reader. It holds no tests. A later verb that
-// acts on the agent's pane must extend this fixture and
+// SessionEnd that ends the row after Enter or at the wait's first sleep, the
+// failing state read and pause's disagree reader. It holds no tests. A later
+// verb that acts on the agent's pane must extend this fixture and
 // pane_verb_fixture_test.go, not copy them.
 
 import (
@@ -102,19 +102,49 @@ func (e *killEnv) pauseClient(t *testing.T, p api.PauseParams, settings ...apite
 	return res, buf.String(), err
 }
 
-// endAfterEnter ends r's row as its own agent (a SessionEnd through
-// apitest.ApplyAgentHook, the row's claude_session_id; SR-22.9) when the
-// first Enter call returns. The row must record its pane by then (seeded or
-// adopted). The test fails unless it ran and applied.
+// endAsAgent ends r's row as its own agent (a SessionEnd through
+// apitest.ApplyAgentHook, the row's claude_session_id; SR-22.9) and reports
+// whether it applied, and why not. The row must record its pane by then.
+func (e *killEnv) endAsAgent(t *testing.T, r killRow) (bool, string) {
+	t.Helper()
+	row, err := e.st.GetSpawn(r.ID)
+	if err != nil {
+		return false, err.Error()
+	}
+	a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "SessionEnd", row.ClaudeSessionID)
+	return a.Applied, a.Reason
+}
+
+// endAfterEnter ends r's row as its own agent (endAsAgent) when the first
+// Enter call returns. The test fails unless it ran and applied.
 func (e *killEnv) endAfterEnter(t *testing.T, r killRow) {
 	t.Helper()
-	e.onceAfter(t, tmux.CallSendEnter, "SessionEnd", func() (bool, string) {
-		row, err := e.st.GetSpawn(r.ID)
-		if err != nil {
-			return false, err.Error()
+	e.onceAfter(t, tmux.CallSendEnter, "SessionEnd", func() (bool, string) { return e.endAsAgent(t, r) })
+}
+
+// endAtFirstWait ends r's row as its own agent (endAsAgent) at the pause
+// wait's first sleep (api.SetPauseTestKnobs), so only a wait that sleeps sees
+// it; cleanup restores the knobs and fails the test unless it ran and
+// applied. Not for parallel tests.
+func (e *killEnv) endAtFirstWait(t *testing.T, r killRow) {
+	t.Helper()
+	interval, sleep := api.PauseTestKnobs()
+	ran := false
+	api.SetPauseTestKnobs(time.Millisecond, func(d time.Duration) {
+		if ran {
+			time.Sleep(d)
+			return
 		}
-		a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "SessionEnd", row.ClaudeSessionID)
-		return a.Applied, a.Reason
+		ran = true
+		if applied, why := e.endAsAgent(t, r); !applied {
+			t.Errorf("SessionEnd at the wait's first sleep not applied: %s", why)
+		}
+	})
+	t.Cleanup(func() {
+		api.SetPauseTestKnobs(interval, sleep)
+		if !ran {
+			t.Errorf("SessionEnd at the wait's first sleep never ran: the wait never slept")
+		}
 	})
 }
 

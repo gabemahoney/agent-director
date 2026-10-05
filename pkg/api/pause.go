@@ -138,8 +138,11 @@ var pauseSleep = time.Sleep
 // polled at pausePollInterval until it is `ended` (nil) or timeoutSeconds
 // elapse on the real clock (ErrPauseTimeout); ctx.Done() during the wait
 // returns ctx.Err() so the caller's cancel-on-signal handler can cut a long
-// wait short. Pause never writes the row's state; the adoption is its only
-// store write.
+// wait short. timeoutSeconds is used as given, with no default applied: 0 or
+// less times out at the first state check that does not find `ended`.
+// Client.Pause passes pause.timeout_seconds through
+// config.Pause.EffectiveTimeoutSeconds. Pause never writes the row's state;
+// the adoption is its only store write.
 //
 // Pause is one-shot: it returns when the row reaches `ended`, when the
 // timeout expires, or when ctx is cancelled. There is no incremental
@@ -269,8 +272,8 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 // one-line leftover such as the `/exit` a failed pause left typed), `/exit`
 // and Enter to the agent's own pane of the row's current launch, by pane id,
 // and polling until the row reaches ended, or until the configured timeout
-// (pause.timeout_seconds in config.toml) elapses. Terminal states
-// (ended/missing) are treated as no-op success.
+// (pause.timeout_seconds in config.toml; a missing key or 0 gives the default,
+// 30 s) elapses. Terminal states (ended/missing) are treated as no-op success.
 // Pause is one-shot — no incremental progress callback; ctx cancellation
 // short-circuits the poll.
 //
@@ -307,5 +310,9 @@ func (c *Client) Pause(ctx context.Context, params PauseParams) (PauseResult, er
 	if err := c.checkClosed(); err != nil {
 		return PauseResult{}, err
 	}
-	return Pause(ctx, c.st, c.tmuxClient, c.procChecker, c.cfg.Pause.TimeoutSeconds, params)
+	// The effective pause wait (b.8q2): the configured value when positive,
+	// otherwise the default; Load has refused a negative value and one too
+	// large for a time.Duration. The exported Pause takes the timeout as
+	// given, 0 included.
+	return Pause(ctx, c.st, c.tmuxClient, c.procChecker, c.cfg.Pause.EffectiveTimeoutSeconds(), params)
 }

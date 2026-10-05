@@ -76,10 +76,14 @@ var statedMinimum = regexp.MustCompile(`safe minimum (\d+) `)
 // is below the safe minimum its clause states has its own "so set it to at
 // least" change, no other key has one, and the closing sentence gives the
 // default for exactly the other refused keys: all of them, all but those
-// named, or, when none is left, there is no closing sentence.
+// named, or, when none is left, there is no closing sentence. The refused
+// keys outside [tmux] (b.sgw, b.8q2) all have a default that loads.
 func checkAdvice(t *testing.T, desc string) {
 	t.Helper()
-	refused := strings.Count(desc, "[defaults] expire_retention_days ")
+	refused := 0
+	for _, k := range []string{"[defaults] expire_retention_days ", "[relay] timeout_seconds ", "[pause] timeout_seconds "} {
+		refused += strings.Count(desc, k)
+	}
 	var own []string
 	for _, k := range config.TmuxKeys() {
 		if !strings.Contains(desc, "[tmux] "+k.Name()+" ") {

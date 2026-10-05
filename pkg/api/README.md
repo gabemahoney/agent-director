@@ -300,8 +300,10 @@ conditional adoption write and the store id; `SendKeysTmux` is the lookup,
 the pane listing and the send by pane id; `ProcChecker` checks the agent
 process. The `Client` method passes its store, tmux client and process
 checker, resolves `effectiveWindow` via
-`cfg.Relay.EffectiveTimeoutSeconds()` (the single source for the
-non-positive → default fallback) and passes its own clock as `now`, then
+`cfg.Relay.EffectiveTimeoutSeconds()` (the single source for the window: a
+missing or 0 `relay.timeout_seconds` gives the default, and `New` refuses a
+config whose value is negative or above 2147483) and passes its own clock as
+`now`, then
 records the call on the `ad.send_keys.called` trail event. Most callers use
 the `Client` method; the pure function is for tests and callers that need to
 control the window and clock.
