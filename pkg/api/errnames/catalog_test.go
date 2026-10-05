@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/clisetup"
 	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 )
 
@@ -36,6 +37,19 @@ func TestClassifyUnknown(t *testing.T) {
 	}
 	if desc != err.Error() {
 		t.Errorf("Classify(unknown): description = %q, want %q", desc, err.Error())
+	}
+}
+
+// TestClassifyOpenError: a clisetup.OpenError named ErrConfigMalformed or
+// ErrStoreOpen classifies as its Name, with its cause's text (b.vma).
+func TestClassifyOpenError(t *testing.T) {
+	for _, want := range []string{"ErrConfigMalformed", "ErrStoreOpen"} {
+		t.Run(want, func(t *testing.T) {
+			name, desc := errnames.Classify(&clisetup.OpenError{Name: want, Err: errors.New("the cause")})
+			if name != want || desc != "the cause" {
+				t.Errorf("Classify = (%q, %q), want (%q, %q)", name, desc, want, "the cause")
+			}
+		})
 	}
 }
 

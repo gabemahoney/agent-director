@@ -22,6 +22,9 @@
  * b.fmk Epic 10 additions:
  *  13. ErrTmuxKillFailed joins the Case 12 table; errorFromEnvelope for verb
  *      "kill" builds ErrTmuxKillFailed and ErrTmuxSessionConflict.
+ *
+ * b.vma addition:
+ *  14. errorFromEnvelope builds ErrStoreOpen and ErrConfigMalformed (Case 4).
  */
 
 import { test, expect, describe, spyOn } from "bun:test";
@@ -48,6 +51,9 @@ import {
   ErrTmuxSessionConflict,
   // b.fmk Epic 10: the tmux class kill returns when the agent process outlives it.
   ErrTmuxKillFailed,
+  // b.vma: the CLI's config and store-open refusals.
+  ErrConfigMalformed,
+  ErrStoreOpen,
 } from "../src/errors.js";
 
 // ---------------------------------------------------------------------------
@@ -154,6 +160,16 @@ describe("errorFromEnvelope factory", () => {
     const err = errorFromEnvelope("spawn", "ErrCwdMissing", "cwd missing");
     expect(err).toBeInstanceOf(AgentDirectorError);
     expect(err).toBeInstanceOf(Error);
+  });
+
+  // b.vma: the CLI's config and store-open refusals are in ERROR_TABLE.
+  test.each([
+    ["ErrStoreOpen", ErrStoreOpen],
+    ["ErrConfigMalformed", ErrConfigMalformed],
+  ] as const)("returns %s for its err_name", (name, cls) => {
+    const err = errorFromEnvelope("list", name, `synthetic description for ${name}`);
+    expect(err).toBeInstanceOf(cls);
+    expect(err.errDescription).toBe(`synthetic description for ${name}`);
   });
 
   test("ErrClientClosed (TS-only) is NOT in factory table — returns base class", () => {

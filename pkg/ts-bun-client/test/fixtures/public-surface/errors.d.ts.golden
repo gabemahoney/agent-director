@@ -69,8 +69,10 @@ export declare class ErrCallTimeout extends AgentDirectorError {
 /**
  * ErrUnknownErrorName — thrown when a subprocess JSON envelope contains an
  * `err_name` field that is not present in the static catalog-derived error map.
- * This indicates the Go-side catalog has a new entry that the TS catalog has
- * not yet been regenerated to include.
+ * Either the binary is newer than this client, or the name is one the binary
+ * emits but the shared catalog leaves out (for example ErrInternal or
+ * ErrSchemaMismatch; cross-ref: b.cm7). Read `unknownName` for the
+ * real err_name.
  *
  * Constructor: `new ErrUnknownErrorName(unknownName, envelope)`
  *   - `unknownName` — the unrecognised err_name string from the envelope.
@@ -314,6 +316,12 @@ export declare class ErrMissingRequestToken extends AgentDirectorError {
 }
 /** Mirrors ErrInvalidFlags (package: api) */
 export declare class ErrInvalidFlags extends AgentDirectorError {
+}
+/** Mirrors ErrConfigMalformed (package: clisetup) */
+export declare class ErrConfigMalformed extends AgentDirectorError {
+}
+/** Mirrors ErrStoreOpen (package: clisetup) */
+export declare class ErrStoreOpen extends AgentDirectorError {
 }
 /**
  * errorFromEnvelope creates a typed AgentDirectorError subclass from the

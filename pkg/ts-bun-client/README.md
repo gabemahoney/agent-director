@@ -78,8 +78,8 @@ else (never the passwd entry's home). It applies `home` first, so with `home`
 set, a `~/` in `storePath` or `tmuxCommand` resolves under `home`. With
 `HOME` unset or empty, a `home` of `~` or `~/…` rejects every call with
 `ErrInvalidFlags`, and with no `home` either, every call that opens the store
-is refused, whatever `storePath` is, because the CLI cannot expand its config
-path `~/.agent-director/config.toml`.
+is refused with `ErrStoreOpen`, whatever `storePath` is, because the CLI cannot
+expand its config path `~/.agent-director/config.toml`.
 
 Set them only when the consumer needs to override the CLI's default for that field.
 
@@ -301,7 +301,7 @@ The public typed-error surface falls into four groups. Every class named below i
 
 ### Realistic catch-site shortlist
 
-Most services only need to route on the "agent-director is sick" set. Alert on these six and let everything else propagate:
+Most services only need to route on the "agent-director is sick" set. Alert on these eight:
 
 - `ErrSystemInstallNotFound`
 - `ErrSystemInstallTooOld`
@@ -309,6 +309,10 @@ Most services only need to route on the "agent-director is sick" set. Alert on t
 - `ErrCallerCwdUnreachable`
 - `ErrSystemInstallDisappeared`
 - `ErrCallTimeout`
+- `ErrStoreOpen`
+- `ErrConfigMalformed`
+
+Also alert on an `ErrUnknownErrorName` whose `unknownName` is `ErrSchemaMismatch` or `ErrSchemaMigrationRequired`: the store needs an operator (see the per-call infrastructure table below). Let everything else propagate.
 
 Everything else is either **programmer error** (bad arguments — fix the call site, do not retry) or a **normal operational signal** (an expected verb outcome you branch on, like "no such spawn" or "already decided"). `ErrConsumerSignal` sits in between: it is a runtime infrastructure failure, but a routine one during shutdown, so treat it as an operational signal rather than a page.
 
@@ -341,11 +345,11 @@ Thrown per verb call by the subprocess transport, not by the CLI's own validatio
 |---|---|---|
 | `ErrCallTimeout` | The subprocess did not complete within the configured per-call timeout. Carries `verb`, `elapsedMs`, `timeoutMs`. | Operational — include in your "AD is sick" alert set. |
 | `ErrConsumerSignal` | The subprocess was killed by an OS signal (e.g. `SIGTERM`, `SIGINT`) before producing a result. Carries `verb`, `signal`. | Operational — routine during shutdown. |
-| `ErrUnknownErrorName` | The CLI returned an error envelope whose `err_name` this client version does not recognize (client older than the binary). Carries `unknownName`, `envelope`. | Programmer/version error — upgrade the client. |
+| `ErrUnknownErrorName` | The CLI returned an error envelope whose `err_name` this client has no class for: either the binary is newer than the client, or the name is one the binary emits but the shared catalog leaves out (for example `ErrInternal`, `ErrSchemaMismatch` or `ErrSchemaMigrationRequired`). Carries `unknownName` (the real `err_name`) and `envelope`. | Read `unknownName`. `ErrSchemaMismatch` or `ErrSchemaMigrationRequired`: operational — the store needs an operator and no verb ran, so alert, as for `ErrStoreOpen`. A name the binary has and this client lacks because the binary is newer: version error — upgrade the client. |
 
 ### 4. Catalog-derived (CLI-side validation)
 
-These 42 classes are generated one-to-one from the shared `err_name` catalog ([`../../pkg/api/errnames/catalog.json`](../../pkg/api/errnames/catalog.json), the canonical source). They surface bad input or a verb's own state preconditions — almost all are either **programmer error** or a **normal operational signal**, so few catch sites need to name them individually. They are grouped by domain below.
+These 44 classes are generated one-to-one from the shared `err_name` catalog ([`../../pkg/api/errnames/catalog.json`](../../pkg/api/errnames/catalog.json), the canonical source). They surface bad input, a verb's own state preconditions, or a config or store the CLI cannot open — almost all are either **programmer error** or a **normal operational signal**, so few catch sites need to name them individually. They are grouped by domain below.
 
 **cwd validation** (bad `cwd` argument to `spawn` — programmer error):
 
@@ -429,6 +433,13 @@ Only a GONE error means the row's session is not there (for `kill`, GONE is succ
 | Error | When it fires |
 |---|---|
 | `ErrInvalidFlags` | CLI flag parsing rejected the invocation, or `spawn` was given an explicit `claude_instance_id` containing an ASCII control character (0x00–0x1f or 0x7f). |
+
+**CLI setup** (the CLI could not load its config or open its store, so no verb ran — operational; both are in the "AD is sick" alert set):
+
+| Error | When it fires |
+|---|---|
+| `ErrConfigMalformed` | The CLI refused its config file, `~/.agent-director/config.toml`: it cannot be read, does not parse as TOML, or sets a value agent-director refuses (for example a negative `[pause] timeout_seconds`). The description names the file and why: the parse error, or every refused key with its value and the values it allows. Every call that opens the store fails this way until an operator fixes the file. Do not retry or act on any agent; alert an operator once, and never read it as an agent being dead. |
+| `ErrStoreOpen` | The CLI could not open its store; the description says what failed. This includes `HOME` unset or empty with no `home` option (`api: expand config path: …`): every call that opens the store is then refused, whatever `storePath` is. It says nothing about any agent. |
 
 ## Architecture
 

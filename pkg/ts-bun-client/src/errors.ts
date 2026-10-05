@@ -147,8 +147,10 @@ export class ErrCallTimeout extends AgentDirectorError {
 /**
  * ErrUnknownErrorName — thrown when a subprocess JSON envelope contains an
  * `err_name` field that is not present in the static catalog-derived error map.
- * This indicates the Go-side catalog has a new entry that the TS catalog has
- * not yet been regenerated to include.
+ * Either the binary is newer than this client, or the name is one the binary
+ * emits but the shared catalog leaves out (for example ErrInternal or
+ * ErrSchemaMismatch; cross-ref: b.cm7). Read `unknownName` for the
+ * real err_name.
  *
  * Constructor: `new ErrUnknownErrorName(unknownName, envelope)`
  *   - `unknownName` — the unrecognised err_name string from the envelope.
@@ -388,7 +390,7 @@ export class ErrSystemInstallDisappeared extends AgentDirectorError {
 // ---------------------------------------------------------------------------
 // Catalog-derived error subclasses
 //
-// One subclass per entry in pkg/api/errnames/catalog.json (42 entries).
+// One subclass per entry in pkg/api/errnames/catalog.json (44 entries).
 // Bodies are empty: subclass identity is the sole value-add over the base class.
 // The factory (errorFromEnvelope) at the bottom of this file maps err_name
 // strings to these constructors.
@@ -478,6 +480,10 @@ export class ErrAmbiguousRequest extends AgentDirectorError {}
 export class ErrMissingRequestToken extends AgentDirectorError {}
 /** Mirrors ErrInvalidFlags (package: api) */
 export class ErrInvalidFlags extends AgentDirectorError {}
+/** Mirrors ErrConfigMalformed (package: clisetup) */
+export class ErrConfigMalformed extends AgentDirectorError {}
+/** Mirrors ErrStoreOpen (package: clisetup) */
+export class ErrStoreOpen extends AgentDirectorError {}
 
 // ---------------------------------------------------------------------------
 // errorFromEnvelope — catalog-aware factory
@@ -491,7 +497,7 @@ type ErrConstructor = new (
 
 /**
  * Lookup table from err_name strings (from the agent-director error envelope)
- * to their typed constructor. Derived from pkg/api/errnames/catalog.json — 42
+ * to their typed constructor. Derived from pkg/api/errnames/catalog.json — 44
  * entries.
  *
  * This is the most-grepped table in the project; keep it readable and in
@@ -546,6 +552,9 @@ const ERROR_TABLE = {
   ErrTemplateExists,
   // probe package
   ErrProbeUnsupported,
+  // clisetup package
+  ErrConfigMalformed,
+  ErrStoreOpen,
 } as const satisfies Readonly<Record<string, ErrConstructor>>;
 
 /**

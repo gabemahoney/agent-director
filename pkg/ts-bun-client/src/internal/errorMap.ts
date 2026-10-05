@@ -2,7 +2,7 @@
  * errorMap.ts — catalog-driven static error map for the subprocess Client.
  *
  * Builds a `Map<string, ErrConstructor>` at module load time by iterating
- * `pkg/api/errnames/catalog.json` (37 entries as of 2026-05-31). The map
+ * `pkg/api/errnames/catalog.json` (44 entries). The map
  * keys are the canonical `err_name` strings (e.g. "ErrSpawnNotFound");
  * values are the typed constructors already exported from `src/errors.ts`.
  *
@@ -10,8 +10,11 @@
  *   - Looks up `envelope.err_name` in the static map.
  *   - Throws the typed subclass when found (carrying verb + envelope fields).
  *   - Throws `ErrUnknownErrorName` when the err_name is not in the map
- *     (SRD SR-4.3 — defensive against Go-side catalog additions that race
- *     the TS-side regen).
+ *     (SRD SR-4.3): either a Go-side catalog addition that races the TS-side
+ *     regen, or a name the binary emits but the catalog leaves out —
+ *     currently ErrInternal, ErrSchemaMismatch, ErrSchemaMigrationRequired,
+ *     ErrUnknownVerb, ErrJSONMarshal and ErrTrailWrite (tracked in b.cm7).
+ *     Callers read `unknownName` for the real err_name.
  *
  * Implements SRD SR-4.1 (static module-load-time map), SR-4.2 (throw by
  * constructor with envelope fields), SR-4.3 (ErrUnknownErrorName for
@@ -128,6 +131,8 @@ export function throwFromEnvelope(verb: string, envelope: unknown): never {
     throw new Ctor(verb, errName, errDescription);
   }
 
-  // Unknown err_name — Go catalog ahead of TS catalog regen (SRD SR-4.3).
+  // Unknown err_name (SRD SR-4.3): Go catalog ahead of TS catalog regen, or an
+  // emitted name the catalog leaves out (see the header; b.cm7). The caller
+  // reads unknownName for the real err_name.
   throw new errors.ErrUnknownErrorName(errName, envelope);
 }

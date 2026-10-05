@@ -18,7 +18,7 @@
 // - name        — the err_name string (matches Catalog[i].Name exactly).
 // - package     — short package suffix of the sentinel's origin package
 //                 (e.g. "spawn", "store", "tmux", "config", "probe", "api",
-//                 "errnames").
+//                 "clisetup").
 // - description — canonical message text (empty for now; downstream Epics
 //                 may fill from doc-strings later). Key is locked in schema.
 //
@@ -110,6 +110,10 @@ var packageOf = map[string]string{
 	"ErrInvalidDecision":      "api",
 	"ErrInvalidFlags":         "api",
 	"ErrMissingRequestToken":  "api",
+
+	// internal/clisetup (b.vma): named by clisetup.Open, before any verb runs.
+	"ErrConfigMalformed": "clisetup",
+	"ErrStoreOpen":       "clisetup",
 
 	// ErrUnknownTool is intentionally absent: it was moved from pkg/api/errnames
 	// to internal/mcp in Task 7 (dispatch-level error, not a verb-surface error).

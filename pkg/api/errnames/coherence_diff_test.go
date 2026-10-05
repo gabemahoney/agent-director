@@ -80,7 +80,7 @@ func computeCoherenceDiff(
 		}
 	}
 
-	// ── Check 3: (b) ⊆ (c) (ErrInternal and ErrInvalidFlags excepted) ─────────
+	// ── Check 3: (b) ⊆ (c) (the check3Exceptions names excepted) ─────────────
 	// Every Catalog entry must appear in at least one callable verb's ErrorNames.
 	// Exceptions:
 	//   • "ErrInternal"    — the Classify fallback; intentionally absent from manifest.
@@ -89,9 +89,13 @@ func computeCoherenceDiff(
 	//                         (spawn), per SR-1.7. Check 3 requires a name in at
 	//                         least one callable verb's list, so spawn's listing
 	//                         already satisfies it; the exception stays per SR-1.7.
+	//   • "ErrConfigMalformed", "ErrStoreOpen" — clisetup.Open names them before
+	//                         any verb runs, so no verb lists them (b.vma).
 	check3Exceptions := map[string]struct{}{
-		"ErrInternal":     {},
-		"ErrInvalidFlags": {},
+		"ErrInternal":        {},
+		"ErrInvalidFlags":    {},
+		"ErrConfigMalformed": {},
+		"ErrStoreOpen":       {},
 	}
 	for _, name := range catalogNames {
 		if _, excepted := check3Exceptions[name]; excepted {
@@ -250,6 +254,15 @@ func TestDiffExclusionErrInvalidFlags(t *testing.T) {
 	)
 	if len(findings) != 0 {
 		t.Errorf("want 0 findings for ErrInvalidFlags exclusion, got %d: %v", len(findings), findings)
+	}
+}
+
+// TestDiffExclusionCLISetupNames — ErrConfigMalformed and ErrStoreOpen are
+// catalogued but listed by no verb (clisetup.Open names them, b.vma): check 3 skips them.
+func TestDiffExclusionCLISetupNames(t *testing.T) {
+	names := []string{"ErrConfigMalformed", "ErrStoreOpen"}
+	if findings := computeCoherenceDiff(nil, names, nil, nil); len(findings) != 0 {
+		t.Errorf("want 0 findings for the clisetup-name exclusions, got %d: %v", len(findings), findings)
 	}
 }
 

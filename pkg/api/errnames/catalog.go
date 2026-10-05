@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/gabemahoney/agent-director/internal/clisetup"
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/spawn"
@@ -93,6 +94,15 @@ var Catalog = []Entry{
 	{Name: "ErrAlreadyDecided", Err: store.ErrAlreadyDecided},
 	{Name: "ErrPermissionRequestNotFound", Err: store.ErrPermissionRequestNotFound},
 	{Name: "ErrAmbiguousRequest", Err: store.ErrAmbiguousRequest},
+	// ErrConfigMalformed and ErrStoreOpen come from no verb handler:
+	// clisetup.Open names them when the CLI cannot open its Client, before any
+	// verb runs (the config cannot be loaded; the store cannot be opened).
+	// They are catalogued so the surfaces built from this Catalog, the TS
+	// client's error classes among them, know them (b.vma). Only a
+	// clisetup.OpenError carries their sentinels (OpenError.Is), so no verb
+	// error's name changes.
+	{Name: "ErrConfigMalformed", Err: clisetup.ErrConfigMalformed},
+	{Name: "ErrStoreOpen", Err: clisetup.ErrStoreOpen},
 	// ErrUnknownTool is intentionally absent from this Catalog: it is a
 	// dispatch-level MCP error (not a verb-surface error) declared and handled
 	// directly in internal/mcp. internal/mcp.classifyDispatchError checks for

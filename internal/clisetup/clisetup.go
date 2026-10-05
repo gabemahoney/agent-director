@@ -26,6 +26,15 @@ const (
 	errSchemaMigrationRequired = "ErrSchemaMigrationRequired"
 )
 
+// ErrConfigMalformed and ErrStoreOpen are the sentinels pkg/api/errnames.Catalog
+// pairs with the err_names of the same names (b.vma); errors.Is matches an
+// OpenError with the one its Name names (OpenError.Is). ErrSchemaMismatch and
+// ErrSchemaMigrationRequired are not catalogued and have no sentinel here.
+var (
+	ErrConfigMalformed = errors.New(errConfigMalformed)
+	ErrStoreOpen       = errors.New(errStoreOpen)
+)
+
 // Overrides are one run's overrides of the store path and the tmux command,
 // from the global flags (GlobalFlags.Apply); an empty field is not set.
 type Overrides struct {
@@ -48,6 +57,13 @@ func (e *OpenError) Error() string { return e.Err.Error() }
 
 // Unwrap returns the cause.
 func (e *OpenError) Unwrap() error { return e.Err }
+
+// Is reports whether target is the sentinel of e's Name: ErrConfigMalformed
+// or ErrStoreOpen. errors.Is goes on to the cause when it is not.
+func (e *OpenError) Is(target error) bool {
+	return (target == ErrConfigMalformed && e.Name == errConfigMalformed) ||
+		(target == ErrStoreOpen && e.Name == errStoreOpen)
+}
 
 // Open constructs the pkg/api.Client every store-backed CLI verb uses, and
 // returns the loaded config with it. On failure the error is an *OpenError:
