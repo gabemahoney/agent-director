@@ -176,7 +176,7 @@ failure modes:
 |---|---|
 | `AGENT_DIRECTOR_INSTANCE_ID` missing / invalid | deny envelope |
 | Config load failure | deny envelope |
-| Store open failure | deny envelope |
+| Store open failure (including no usable `HOME`: unset or empty) | deny envelope |
 | stdin payload read failure | silent exit 0 (event name unknowable — b.45p) |
 | Classify failure (unparseable payload) | silent exit 0 (event name unknowable — b.45p) |
 | UPSERT failure | deny envelope |

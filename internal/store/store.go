@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/user"
 	"path/filepath"
 	"strings"
 
@@ -43,6 +42,11 @@ var ErrSchemaMigrationRequired = errors.New("store: schema migration required")
 // user. Callers should use errors.Is to detect it.
 var ErrStoreNotInitialized = errors.New("store: database not initialized")
 
+// errNoHome is returned, wrapped, by Open and OpenOrInit when path starts
+// with "~/" and no home directory can be determined (HOME unset or empty);
+// see expandTilde. Nothing is opened or created.
+var errNoHome = errors.New("no home directory")
+
 // schemaVersion is the current schema version this package writes and reads.
 // Bump (and add a migration) whenever the DDL in schema.go changes.
 const schemaVersion = 5
@@ -69,7 +73,8 @@ type Store struct {
 // ErrStoreNotInitialized. Use OpenOrInit when create-if-missing behavior is
 // required (e.g. CLI first-run).
 //
-// A leading "~/" in path is expanded against $HOME (see expandTilde).
+// A leading "~/" in path is expanded against $HOME; with HOME unset or empty
+// it is refused, never resolved against another home (see expandTilde).
 //
 // On any error the caller does not need to close anything — Open cleans up
 // the partially-opened *sql.DB before returning.
@@ -93,7 +98,8 @@ func Open(path string) (*Store, error) {
 // opening a single-connection pool, enabling WAL + foreign keys, and ensuring
 // the schema is at the current version.
 //
-// A leading "~/" in path is expanded against $HOME (see expandTilde).
+// A leading "~/" in path is expanded against $HOME; with HOME unset or empty
+// it is refused, never resolved against another home (see expandTilde).
 //
 // On any error the caller does not need to close anything — OpenOrInit cleans
 // up the partially-opened *sql.DB before returning.
@@ -183,25 +189,24 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-// expandTilde resolves a leading "~/" against $HOME via os.UserHomeDir. When
-// HOME is set this is the same rule as pkg/api and internal/config, so a
-// caller that redirects HOME never reaches the real user's store through a
-// "~/" path (b.hvf). When HOME is unset or empty the three differ: pkg/api
-// returns an error and internal/config leaves the path unexpanded, while the
-// store falls back to user.Current().HomeDir (SRD §11), which keeps the
-// HOME-unset behaviour the store had before. Any other form of path is
-// returned unchanged.
+// expandTilde resolves a leading "~/" against $HOME via os.UserHomeDir. This
+// is the same rule as pkg/api and internal/config, so a caller that redirects
+// HOME never reaches the real user's store through a "~/" path (b.hvf).
+//
+// When os.UserHomeDir fails (on Unix, HOME unset or empty) it returns "" and
+// an error wrapping errNoHome, so Open and OpenOrInit open and create nothing.
+// It deliberately does not fall back to another home source such as the
+// passwd entry: an empty HOME is usually deliberate isolation (test
+// sandboxes, CI), and the passwd home holds the real ~/.agent-director (the
+// b.8dr incident class, b.4uz). pkg/api refuses the same case and the trail
+// writes nothing in it (b.iin). Any other form of path is returned unchanged.
 func expandTilde(path string) (string, error) {
 	if !strings.HasPrefix(path, "~/") {
 		return path, nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		u, uerr := user.Current()
-		if uerr != nil {
-			return "", fmt.Errorf("%w; %w", err, uerr)
-		}
-		home = u.HomeDir
+		return "", fmt.Errorf("%w for %q: %w", errNoHome, path, err)
 	}
 	return filepath.Join(home, strings.TrimPrefix(path, "~/")), nil
 }

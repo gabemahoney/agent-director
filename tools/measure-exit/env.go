@@ -160,9 +160,9 @@ type environment struct {
 	environ   func() []string
 	// passwdHome is the running user's home from the passwd entry; it can
 	// differ from $HOME. agent-director's store resolves "~/" against $HOME
-	// and falls back to this home only when HOME is unset or empty (b.hvf),
-	// but the host's real store lives under this home, and a redirected
-	// HOME cannot move it (b.8dr).
+	// (b.hvf) and refuses it when HOME is unset or empty (b.4uz), but the
+	// host's real store lives under this home, and a redirected HOME cannot
+	// move it (b.8dr).
 	passwdHome func() (string, error)
 	getuid     func() int
 }

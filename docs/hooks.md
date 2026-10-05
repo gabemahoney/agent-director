@@ -240,6 +240,11 @@ it does not apply:
 - Payload over 1 MiB → exit 0, log entry.
 - Config malformed → exit 0, log entry.
 - Store open failure → exit 0, log entry.
+- No usable `HOME` (unset or empty) → exit 0, log entry (normally on
+  stderr), and no store opened or created anywhere: the store path `~/…`
+  is refused, never resolved against another home such as the passwd
+  entry, and no trail record is written. A relayed PermissionRequest
+  still gets its deny envelope (see below).
 - DB write failure → exit 0, log entry.
 - Unknown event name → exit 0, soft refresh, log entry.
 - Hook from a process other than the row's recorded pane process, or for
@@ -261,7 +266,8 @@ it does not apply:
 - Hook for an id with no row → exit 0, nothing written.
 
 All log entries land in `~/.agent-director/errors.log` (configurable
-via `[log] error_log_path` in `config.toml`). A missed state update is
+via `[log] error_log_path` in `config.toml`), or on stderr when that
+file cannot be opened. A missed state update is
 annoying but never breaks a Claude session.
 
 SessionStart's wait for the launch's identity write is the one case

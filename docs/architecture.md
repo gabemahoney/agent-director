@@ -72,7 +72,7 @@ in `init`. The verb registry
 | `internal/adminapi` | The admin binary's door into `pkg/api` (b.vqr). Declares the hooks `KillFinished(c any, id) (KillResult, error)` and `Delete(c any, ids) (DeleteResult, error)` as function variables, which `pkg/api`'s `init` (`pkg/api/admin.go`) sets to the unexported `Client.killFinished` (`kill_optin.go`) and `Client.deleteRows` (`delete.go`); a `c` that is not a non-nil `*api.Client` is an error and nothing runs. Also holds the admin binary's own verb list (`Verbs`, `Lookup`), global-flag list (`GlobalFlags`, `GlobalFlagsText`) and `ApprovalStatement`, from which its help and the generated `docs/admin-reference.md` are built. Being under `internal/`, no other module can import it, so neither action has a public Go entry point. | stdlib only (it imports nothing). | `pkg/api` (`pkg/api` imports it: a cycle); `pkg/api/manifest`. |
 | `internal/clisetup` | Client setup shared by both command binaries (b.vqr). `Open(Overrides)` builds the `pkg/api.Client` every store-backed CLI verb and admin verb uses (the design pins: `CreateIfMissing`, the store-path precedence, the recovery logger `NewRecoveryLogger`, the returned `config.Config`) and returns an `*OpenError` naming `ErrConfigMalformed`, `ErrSchemaMismatch`, `ErrSchemaMigrationRequired` or `ErrStoreOpen`. `globalflags.go` holds the only global-flag parser, the pre-scan `ParseGlobalFlags`, with `GlobalFlags.Apply` (`--home` sets HOME before any config load; `--store-path` and `--tmux-command` become `Overrides`) and `ExpandTilde`; `globalflags_test.go` tests them. **Must use:** a command binary opens its Client through `Open` and parses its global flags through `ParseGlobalFlags` / `Apply`; never a second setup or flag parser. | stdlib; `pkg/api`; `internal/config`; `internal/store` (error sentinels only). | `internal/mcp`; `cmd/*`; direct `database/sql`. |
 | `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, etc.), params/result types, and error sentinels (the seven tmux sentinels of SR-1.1 are all re-exported in `aliases.go`). Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director`, `internal/mcp`, `internal/clisetup` and `cmd/agent-director-admin`. **Operator-only actions (b.vqr):** the finished-row kill and delete are unexported (`Client.killFinished` in `kill_optin.go`, `Client.deleteRows` in `delete.go`) and reached only through the `internal/adminapi` hooks that `admin.go`'s `init` sets, so no exported method, type or field offers them. **`kill` seams** (`kill.go`): `KillStore` (`GetSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`; `*store.Store` satisfies it), `KillTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `KillPane`, `KillSessionID`; `TmuxClient` satisfies it) and the start-time reader `ProcChecker`; `Kill` also takes the three `[tmux]` durations, the clock and the sleep, and has no logger. **`find-missing` seams** (`find_missing.go`): `FindMissingStore` (the live-row read, the four same-life guarded writes, `CloseOrphanedPermissionRequests`, `ListProvisionalTranscripts`, `HealJsonlPath`, `StoreID`; `*store.Store` satisfies it), `FindMissingTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`) and `ProcChecker`; the exported `FindMissing` also takes the pending grace period, the sweep budget, the clock and a `FindMissingLogger` (see [`find-missing`](#find-missing)). **Pane-verb seams** (`readpane.go`, `sendkeys.go`, `pause.go`; see [Interact](#interact-send-keys--read-pane) and [`pause`](#pause)): `ReadPaneStore` (`GetSpawn`, `StoreID`; no write) and `ReadPaneTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `CapturePaneID`); `SendKeysStore` (`GetSpawn`, `PermissionRequestsForSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`) and `SendKeysTmux` (`Lookup`, `ListPanes`, `SendKeysPane`); `PauseStore` (`GetSpawn`, `GetSpawnState`, `AdoptIdentityIfUnchanged`, `StoreID`) and `PauseTmux` (`Lookup`, `ListPanes`, `SendKeyPane` for `pause`'s line clear, `C-u`, `SendKeysPane`). `*store.Store` and `TmuxClient` satisfy them. `SendKeys` and `Pause` take the start-time reader `ProcChecker`; the exported `ReadPane` uses `probe.NewProcChecker()` and `Client.ReadPane` the Client's reader. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the nine socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `SendKeyPane`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the one name-based method left, `HasSession`, which is kept but no verb uses, and none may; the name-based send and capture are gone. `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxCallSendKey`, "key send", included; `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`; it also re-exports the start-time reader interface as `ProcChecker` (`= tmux.ProcChecker`). The Client holds its clock (`time.Now`), its sleep (`time.Sleep`, the pause of `kill`'s process wait) and its start-time reader (`probe.NewProcChecker()`), all set in `New`; plain spawn uses the clock and reader for the launch start and the identity write, and `kill` uses all three for its lookup, adoption and process wait; `find-missing` measures the pending grace period on the same clock, with the value from `EffectivePendingGrace`. The label scan of a plain spawn lives in `spawn_scan.go`, its held-name path after "duplicate session" (the end write, one re-lookup, the classified error) in `spawn_held.go`, the shared held-name error builder in `held_name.go` and the one `ad.launch.name_held` emitter in `name_held_trail.go` (see [Launch identity](#launch-identity)). **`resume` seams** (`resume.go`): `ResumeStore` and `ResumeTmux` (`TmuxLookup`'s `Lookup` plus `NewSession`, `SetLabel` and `KillSessionID`; no pane listing, since `resume` adopts nothing, and no name-based method; `TmuxClient` satisfies it), with the start-time reader `ProcChecker`, the configuration, the store id, the clock and the logger. Its pre-launch lookup's decision lives in `resume_lookup.go` (`decidePreLaunch`), the launch outcome, restore and path after "duplicate session" it shares with reuse in `finished_launch.go` (`finishedLaunch`) and the shared starting-session refusal in `starting_session.go` (see [Resume](#resume) and [Starting-session rule](#starting-session-rule-starting_sessiongo)). **Reuse** (`spawn` with `ReuseFinished` and an explicit id whose row is finished; `spawn_reuse.go`): the unexported `reuseStore` (`ReadForReuse`, `ResetForReuse`, `RestoreAfterFailedReuse`, `RecordLaunchIdentity`; `*store.Store` satisfies it), injected through `runSpawnWithReuseStore` (`runSpawn` passes its store), and its own descriptions in `spawn_reuse_errors.go` (see [Reuse of a finished id](#reuse-of-a-finished-id)). **`expire`'s window parser** (`older_than.go`, b.hxn): `ParseOlderThan(s) (time.Duration, bool)` takes a Go duration or decimal digits followed by `d` for days, and rejects a value in neither form, a negative Go duration and a day count above `config.MaxExpireRetentionDays` (106751); `OlderThanForm` words the accepted form for the refusals and for MCP's `tools/list` (see [`expire`](#expire)). `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`; `internal/adminapi` (to set its hooks); `pkg/api/manifest` (the verb list for `help`, and `TmuxSessionNameSpelling` for the list hint). | Direct `database/sql`; raw SQL strings; MCP framing. |
-| `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v5; see "Schema v5" below), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `os/user`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
+| `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v5; see "Schema v5" below), exposes typed CRUD primitives (added in later Tasks). | stdlib (`database/sql`, `os`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.agent-director/config.toml`. Read-only after load. Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). The pending grace period bounds both `find-missing`'s hands-off window for a `pending` row and a SessionStart hook's wait for its launch's identity write, each measured from the launch start (SR-13.4, SR-22.9); it has no maximum. The hook's wait is also capped at 540 s after it began (`sessionStartWaitCap` in `internal/hook`; WD 2026-09-30c), so a grace above 540 s lengthens only `find-missing`'s window, which is unchanged. Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default; a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). Also owns `[defaults] expire_retention_days`, `expire`'s default window in whole days: `DefaultExpireRetentionDays` (31), `MaxExpireRetentionDays` (106751, the largest whole number of days a `time.Duration` holds, which is also `older_than`'s day limit in `pkg/api`'s `ParseOlderThan`) and `Defaults.EffectiveExpireRetentionDays()` (the configured value when positive, else 31). A missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` as the `[tmux]` refusals, never replaced by the default or capped. **Must use:** read the setting only through `EffectiveExpireRetentionDays` and the day limit only from `MaxExpireRetentionDays` (see [`expire`](#expire)). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
 | `pkg/api/apitest` | Test helpers shared across packages (non-test `.go` files, so harnesses outside `pkg/api` import them). Families: the `Seed*` fixtures (`SeedSpawn`, `SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture`, `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`), `SeedSpawn`'s `With*` options, the store-read and store-id helpers (see [apitest Seed* factory contract](#apitest-seed-factory-contract-reusable-test-fixtures)); the config writers `WriteTmuxConfig` and `WriteRetentionConfig` (see [apitest `[tmux]` config writer](#apitest-tmux-config-writer-reusable-test-fixture)); and the description helper, `AssertDescription` with the `Desc*` cases in `descriptions*.go` (see [apitest description helper](#apitest-description-helper-reusable-test-fixture)). Each section states the must-use rule. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `internal/tmux` (the `tmux.Call` names the description cases use); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
 | `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. The `Catalog` is consumed by `cmd/agent-director`'s envelope writer and `internal/mcp`'s `classifyDispatchError`. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
@@ -603,6 +603,17 @@ release with `Close()`.
 This preserves existing CLI behavior: a user with a custom `[store] db_path`
 in `config.toml` continues to hit that path without any extra flags or env
 vars.
+
+**No usable home.** With `HOME` unset or empty, a `~/` path from any tier
+(or a `~/` `ConfigPath`) is never resolved against another home: `New`
+fails instead (the store's rule is "No usable home" under
+[internal/store](#internalstore)). A `~/` `ConfigPath` (the default, and the
+one the CLI and admin binaries pass) is refused first
+(`api: expand config path: …`), so those binaries fail with `ErrStoreOpen`.
+A library caller that passes an absolute `ConfigPath` and no `StorePath`
+gets past that, but a `~/` `db_path` (the default) stays unexpanded,
+reaches the store and is refused: `New` fails with `api: open store: …`
+wrapping the store's `errNoHome`.
 
 **No schema-init side effects — the key invariant** (kept here verbatim for
 code review):
@@ -1231,18 +1242,26 @@ a silent downgrade fails `Open` rather than yielding a half-broken Store.
 default) is created with mode 0700, and the database file is chmodded to
 0600 on every `Open`. Repeated opens never widen permissions. A leading
 `~/` in the path given to `Open` or `OpenOrInit` is expanded against `$HOME`
-(`os.UserHomeDir()`). With `HOME` set this is the same rule `pkg/api` and
-`internal/config` use, so a caller that redirects `HOME` reaches the store
-under that home, not the real one. With `HOME` unset or empty the three
-differ: `pkg/api` returns an error, `internal/config` leaves the path
-unexpanded, and the store's `expandTilde` falls back to the passwd-entry home
-(`user.Current().HomeDir`, SRD §11). Any other path is used as given. With
-`HOME` set, the production callers (`pkg/api`, and `runHook` via
-`internal/config`) already expand `~/` before calling the store. With `HOME`
-unset, a `~/` store path from `internal/config` reaches the store unexpanded
-and the store's fallback resolves it. The audit trail (`internal/trail`) has
-none of these fallbacks: with no absolute home it writes nothing (see
-[Location](#location)).
+(`os.UserHomeDir()`). This is the same rule `pkg/api` and `internal/config`
+use, so a caller that redirects `HOME` reaches the store under that home, not
+the real one. Any other path is used as given. With `HOME` set, the
+production callers (`pkg/api`, and `runHook` via `internal/config`) already
+expand `~/` before calling the store.
+
+**No usable home.** With `HOME` unset or empty, `os.UserHomeDir()` fails and
+none of the three resolves `~/`: `pkg/api` returns an error,
+`internal/config` leaves the path unexpanded, and the store's `expandTilde`
+refuses it. `Open` and `OpenOrInit` then return an error wrapping the
+unexported `errNoHome` (`store: resolve path: no home directory for
+"~/…": $HOME is not defined`) and open or create nothing. There is no
+fallback to another home source such as the passwd entry,
+`user.Current().HomeDir` (b.8dr incident class, b.4uz). What `runHook`
+does then is under [Fail-closed boundary](#fail-closed-boundary), and what
+`pkg/api.New` returns under
+[`pkg/api` Client lifecycle](#pkgapi-client-lifecycle).
+
+The audit trail (`internal/trail`) also writes nothing when there is no
+absolute home (see [Location](#location)).
 
 Cross-reference: SRD §4.2 (canonical DDL), §4.5 (layer boundaries), §13.3
 (single-writer + WAL rationale).
@@ -5100,6 +5119,16 @@ config can't be loaded or the store can't be opened, runHook itself
 writes the deny envelope before returning. This is the SRD §6.5
 "env-var, not DB" guarantee — even a store-open failure on a
 relay-on Spawn still surfaces deny.
+
+With `HOME` unset or empty, `store.OpenOrInit` refuses the hook's `~/`
+store path (the config's default `~/.agent-director/state.db`, left
+unexpanded; see "No usable home" under [internal/store](#internalstore),
+b.4uz), so the hook takes this path: it opens and creates no store
+anywhere, logs one `hook: open store: …` line, exits 0, and writes the
+deny envelope only for a PermissionRequest with relay on; every other
+event leaves stdout empty.
+The line normally goes to stderr: the default `errors.log` path stays
+unexpanded too, so the hook logger cannot open it.
 
 ### The hook gate on the relay path
 
@@ -9387,7 +9416,10 @@ detail.
   (`internal/spawn/pretrust_test.go`) and `seedRelativeTrustConfig`
   (see [pkg/api pre-trust fixture](#pkgapi-pre-trust-fixture-package-internal-test-fixture)),
   which check that a relative `CLAUDE_CONFIG_DIR` touches nothing where
-  it would resolve from the process cwd.
+  it would resolve from the process cwd, and
+  `TestTildeStorePathWithoutHOMERefused`
+  (`internal/store/expand_tilde_test.go`), which checks that a `~/` store
+  path refused for an unset or empty `HOME` creates nothing in the cwd.
 
 It is a leaf package (standard library only; it imports nothing from
 agent-director), so any test package can use it.

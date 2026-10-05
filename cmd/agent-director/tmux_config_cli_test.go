@@ -157,13 +157,23 @@ func assertConfigRefused(t *testing.T, rc configRefusal, h refusedHome, stdout, 
 func runBounded(t *testing.T, home string, env map[string]string, stdin string, holdOpen bool,
 	deadline time.Duration, args ...string) (stdout, stderr string, code int, timedOut bool) {
 	t.Helper()
+	environ := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home}
+	for k, v := range env {
+		environ = append(environ, k+"="+v)
+	}
+	return runBoundedIn(t, "", environ, stdin, holdOpen, deadline, args...)
+}
+
+// runBoundedIn is runBounded with cwd dir ("" keeps the test's) and exactly
+// the environment environ, so a caller can leave HOME out.
+func runBoundedIn(t *testing.T, dir string, environ []string, stdin string, holdOpen bool,
+	deadline time.Duration, args ...string) (stdout, stderr string, code int, timedOut bool) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), deadline)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, binaryPath, args...)
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home}
-	for k, v := range env {
-		cmd.Env = append(cmd.Env, k+"="+v)
-	}
+	cmd.Dir = dir
+	cmd.Env = environ
 	cmd.WaitDelay = time.Second
 	var out, errOut strings.Builder
 	cmd.Stdout, cmd.Stderr = &out, &errOut
